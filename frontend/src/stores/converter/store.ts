@@ -5334,6 +5334,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           use_lut_constrained: state.use_lut_constrained,
           auto_dynamic_range: state.auto_dynamic_range,
           is_dark: useSettingsStore.getState().theme === "dark",
+          large_format_enabled: state.largeFormatEnabled,
         };
         _logPreviewTimer("request sent");
         _previewClientLog("preview: request sent", {
@@ -5723,7 +5724,14 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
         if (state.largeFormatEnabled) {
           const lfResponse = await apiConvertGenerateLargeFormat(sessionId, {
-            target_height_mm: state.target_height_mm,
+            // Let the backend derive height from the preview cache aspect
+            // ratio. SVG files can report slightly different browser and
+            // server dimensions (CSS width/height vs viewBox/content), and
+            // sending both values makes the backend reject large-format
+            // generation with 422 when they differ by more than 1 mm.
+            // 大画幅只提交宽度，让后端按预览缓存比例推导高度。SVG 的浏览器
+            // 预览比例与后端解析比例可能不完全一致；同时提交宽高会触发后端
+            // 1mm 容差校验并返回 422。
             tile_width_mm: state.tileWidthMm,
             tile_height_mm: state.tileHeightMm,
             params: baseParams,
