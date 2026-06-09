@@ -392,6 +392,26 @@ def test_material_registry_catalog_cache_invalidates_when_package_file_changes(
     assert [entry["material_id"] for entry in second["materials"]] == ["mat_after"]
 
 
+def test_material_registry_catalog_ignores_tmp_packages(
+    tmp_path: Path,
+) -> None:
+    packages_dir = tmp_path / "registry-packages"
+    _write_v2_registry_package(
+        packages_dir / "_tmp" / "material_registry_package_tmp.zip",
+        material_id="mat_tmp_leak",
+        revision_id="rev_tmp_leak",
+        channel="official",
+    )
+
+    catalog = material_registry_module.build_material_registry_catalog(
+        channels=["official"],
+        packages_dir=str(packages_dir),
+    )
+
+    assert catalog["count"] == 0
+    assert catalog["materials"] == []
+
+
 def test_material_registry_team_channel_requires_bearer_token(
     monkeypatch,
     tmp_path: Path,
@@ -460,6 +480,26 @@ def test_material_registry_package_download_rejects_traversal(
 
     response = _client().get(
         "/api/material-registry/v1/packages/%2e%2e/secret.zip"
+    )
+
+    assert response.status_code == 422
+
+
+def test_material_registry_package_download_rejects_tmp_path(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    packages_dir = tmp_path / "registry-packages"
+    _write_v2_registry_package(
+        packages_dir / "_tmp" / "material_registry_package_tmp.zip",
+        material_id="mat_tmp_download",
+        revision_id="rev_tmp_download",
+        channel="official",
+    )
+    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_PACKAGES_DIR", str(packages_dir))
+
+    response = _client().get(
+        "/api/material-registry/v1/packages/_tmp/material_registry_package_tmp.zip"
     )
 
     assert response.status_code == 422

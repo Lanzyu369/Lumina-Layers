@@ -13,12 +13,13 @@ import threading
 import time
 import zipfile
 from pathlib import Path, PureWindowsPath
-from typing import Any, Sequence
+from typing import Any, Iterator, Sequence
 from urllib.parse import quote
 
 _MATERIAL_BUNDLE_MANIFEST_FILENAME = "lumina_material_bundle.json"
 _MATERIAL_REGISTRY_CATALOG_SCHEMA_VERSION = "1.0"
 _MATERIAL_REGISTRY_PACKAGE_URL_PREFIX = "/api/material-registry/v1/packages"
+_MATERIAL_REGISTRY_TMP_DIRNAME = "_tmp"
 _MATERIAL_REGISTRY_CATALOG_CACHE_TTL_S = 5 * 60
 _MATERIAL_REGISTRY_CATALOG_CACHE_LOCK = threading.RLock()
 _MATERIAL_REGISTRY_CATALOG_CACHE: dict[tuple[str, tuple[str, ...]], dict[str, Any]] = {}
@@ -213,15 +214,31 @@ def _material_registry_catalog_cache_key(
     return str(root), tuple(channels)
 
 
-def _material_registry_package_marker(root: Path) -> tuple[tuple[str, int, int], ...]:
-    marker: list[tuple[str, int, int]] = []
+def _is_material_registry_tmp_relative_path(relative_path: Path) -> bool:
+    return _MATERIAL_REGISTRY_TMP_DIRNAME in relative_path.parts
+
+
+def _iter_material_registry_package_paths(root: Path) -> Iterator[tuple[Path, Path]]:
     for zip_path in sorted(root.rglob("*.zip"), key=lambda path: path.as_posix()):
         try:
-            stat = zip_path.stat()
-            relative = zip_path.resolve().relative_to(root).as_posix()
-        except (OSError, ValueError):
+            relative = zip_path.resolve().relative_to(root)
+        except ValueError:
             continue
-        marker.append((relative, int(stat.st_size), int(stat.st_mtime_ns)))
+        if _is_material_registry_tmp_relative_path(relative):
+            continue
+        yield zip_path, relative
+
+
+def _material_registry_package_marker(root: Path) -> tuple[tuple[str, int, int], ...]:
+    marker: list[tuple[str, int, int]] = []
+    for zip_path, relative_path in _iter_material_registry_package_paths(root):
+        try:
+            stat = zip_path.stat()
+        except OSError:
+            continue
+        marker.append(
+            (relative_path.as_posix(), int(stat.st_size), int(stat.st_mtime_ns))
+        )
     return tuple(marker)
 
 
@@ -660,7 +677,7 @@ def build_material_registry_catalog(
         )
 
     materials: list[dict[str, Any]] = []
-    for zip_path in sorted(root.rglob("*.zip"), key=lambda path: path.as_posix()):
+    for zip_path, _relative_path in _iter_material_registry_package_paths(root):
         manifest = _load_bundle_manifest(zip_path)
         if manifest is None:
             continue
@@ -755,6 +772,8 @@ def resolve_material_registry_package_path(
         raise ValueError(f"Unsafe material registry package path: {package_path}")
     parts = [part for part in raw_path.split("/") if part]
     if not parts or any(part in {".", ".."} for part in parts):
+        raise ValueError(f"Unsafe material registry package path: {package_path}")
+    if _MATERIAL_REGISTRY_TMP_DIRNAME in parts:
         raise ValueError(f"Unsafe material registry package path: {package_path}")
     relative = Path(*parts)
     if relative.suffix.lower() != ".zip":
