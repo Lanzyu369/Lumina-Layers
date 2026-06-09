@@ -12,7 +12,8 @@ Locks in:
     * ``solver_path == "cache"`` with ``cache_mode == "candidate_hybrid"``;
     * ``load_solver_runtime`` is invoked exactly once;
     * the old ``build_material_solver_cache`` fallback is not invoked;
-    * the cross-N fallback helper is NOT invoked for the bounded runtime path;
+    * the cross-N fallback helper is invoked only for fully-covered small
+      runtimes, not approximate bounded runtimes;
     * ``material_matrix`` still carries correct Top2Bottom recipes after reversal.
 """
 
@@ -95,12 +96,12 @@ def _make_ctx(image_path: Path, *, layer_count: int = 6) -> dict:
 class _FakeCache:
     """Minimal stub that mimics MaterialSolverCache for P03 on-the-fly path."""
 
-    def __init__(self, matched_rgb, recipes, delta_e, layer_count):
+    def __init__(self, matched_rgb, recipes, delta_e, layer_count, *, valid_cell_count=1):
         self._matched_rgb = matched_rgb
         self._recipes = recipes
         self._delta_e = delta_e
         self._layer_count = layer_count
-        self.valid_cell_count = 1
+        self.valid_cell_count = int(valid_cell_count)
         self.mode = "candidate_hybrid"
         self.metadata = {
             "palette_hash": "test",
@@ -225,10 +226,10 @@ class TestP03BoundedRuntimeFallback:
 
 
 class TestP03BoundedRuntimeGuards:
-    def test_cross_n_fallback_is_not_invoked(
+    def test_cross_n_fallback_is_not_invoked_for_partial_runtime(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``ensure_not_worse_than_smaller_N`` must NOT be called for runtime lookup."""
+        """Approximate runtimes must not call the expensive cross-N fallback."""
         image_path = _write_solid_color_png(tmp_path / "red.png", (220, 40, 30))
         ctx = _make_ctx(image_path, layer_count=6)
 
@@ -267,6 +268,95 @@ class TestP03BoundedRuntimeGuards:
         result = _run_material_archive_branch(ctx)
         assert call_counter["n"] == 0
         assert "not_worse_fallback" not in result["material_solver_info"]
+
+    def test_cross_n_fallback_runs_for_full_coverage_runtime(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Small runtimes that cover every recipe keep the not-worse guard."""
+        image_path = _write_solid_color_png(tmp_path / "red.png", (220, 40, 30))
+        ctx = _make_ctx(image_path, layer_count=6)
+
+        red_idx = PALETTE_WITH_WHITE.index(RED)
+        blue_idx = PALETTE_WITH_WHITE.index(BLUE)
+        white_idx = PALETTE_WITH_WHITE.index(WHITE)
+        baseline_recipe = np.full((1, 6), red_idx, dtype=np.int32)
+        improved_recipe_b2t = np.asarray(
+            [[white_idx, white_idx, blue_idx, blue_idx, red_idx, red_idx]],
+            dtype=np.int32,
+        )
+        fake_cache = _FakeCache(
+            np.asarray([[180, 30, 25]], dtype=np.uint8),
+            baseline_recipe,
+            np.asarray([12.0], dtype=np.float64),
+            6,
+            valid_cell_count=len(PALETTE_WITH_WHITE) ** 6,
+        )
+
+        monkeypatch.setattr(
+            "core.material_cache.build_material_solver_cache",
+            lambda **kwargs: (_ for _ in ()).throw(
+                AssertionError("old temporary exhaustive cache must not build")
+            ),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "core.material_lut_provider.load_solver_runtime",
+            lambda **kwargs: (fake_cache, 64),
+        )
+
+        call_counter = {"n": 0}
+
+        def _mock_fallback(
+            unique_colors,
+            materials,
+            baseline_matched_rgb,
+            baseline_recipes,
+            baseline_delta_e,
+            **kwargs,
+        ):
+            call_counter["n"] += 1
+            assert kwargs["target_layer_count"] == 6
+            assert unique_colors.shape == (1, 3)
+            assert baseline_recipes.shape == (1, 6)
+            return (
+                np.asarray([[220, 40, 30]], dtype=np.uint8),
+                improved_recipe_b2t,
+                np.asarray([0.25], dtype=np.float64),
+                {
+                    "white_material_index": white_idx,
+                    "applied": True,
+                    "improved_pixels": 1,
+                    "per_k_improved": {5: 1},
+                    "mean_delta_e_before": 12.0,
+                    "max_delta_e_before": 12.0,
+                    "mean_delta_e_after": 0.25,
+                    "max_delta_e_after": 0.25,
+                },
+            )
+
+        monkeypatch.setattr(
+            "core.material_lut_synthesis.ensure_not_worse_than_smaller_N",
+            _mock_fallback,
+        )
+
+        result = _run_material_archive_branch(ctx)
+
+        assert call_counter["n"] == 1
+        assert result["material_solver_info"]["not_worse_fallback"][
+            "improved_pixels"
+        ] == 1
+        material_matrix = result["material_matrix"]
+        mask_solid = result["mask_solid"]
+        expected_top_to_bottom = [
+            red_idx,
+            red_idx,
+            blue_idx,
+            blue_idx,
+            white_idx,
+            white_idx,
+        ]
+        for y, x in np.argwhere(mask_solid):
+            assert material_matrix[y, x].tolist() == expected_top_to_bottom
 
     def test_load_solver_runtime_is_invoked_exactly_once(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

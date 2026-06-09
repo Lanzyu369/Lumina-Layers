@@ -363,6 +363,47 @@ class MaterialVectorMatcher:
                 self.materials,
                 **lookup_kwargs,
             )
+            fallback_stats = None
+            try:
+                from core.material_layer_fallback_policy import (
+                    should_run_cross_n_fallback,
+                )
+                from core.material_lut_synthesis import (
+                    ensure_not_worse_than_smaller_N,
+                )
+
+                if should_run_cross_n_fallback(
+                    solver_path="cache",
+                    runtime=self._solver_cache,
+                    unique_color_count=int(new_arr.shape[0]),
+                    material_count=len(self.materials),
+                    layer_count=self.layer_count,
+                ):
+                    matched_rgb_unique, recipes_b2t, delta_e, fallback_stats = (
+                        ensure_not_worse_than_smaller_N(
+                            new_arr,
+                            self.materials,
+                            matched_rgb_unique,
+                            recipes_b2t,
+                            delta_e,
+                            target_layer_count=self.layer_count,
+                            layer_height_mm=self.layer_height_mm,
+                            substrate=self.substrate,
+                        )
+                    )
+            except (ValueError, TypeError, RuntimeError) as exc:
+                _log.warning(
+                    "Not-worse fallback failed for vector material solve (%s); "
+                    "keeping baseline recipes",
+                    exc,
+                    extra={
+                        "event": "material_vector_not_worse_fallback_failed",
+                        "error_type": type(exc).__name__,
+                        "error_message": str(exc),
+                        "color_count": int(new_arr.shape[0]),
+                        "layer_count": int(self.layer_count),
+                    },
+                )
             recipes_t2b = self._normalise_recipes(recipes_b2t)
             for i in range(new_arr.shape[0]):
                 key = tuple(int(c) for c in new_arr[i])
@@ -420,6 +461,15 @@ class MaterialVectorMatcher:
                     "layer_count": int(self.layer_count),
                     "substrate": str(self.substrate),
                     "grid_resolution": int(self.actual_grid_resolution),
+                    "not_worse_fallback_checked": fallback_stats is not None,
+                    "not_worse_fallback_applied": bool(
+                        fallback_stats and fallback_stats.get("applied")
+                    ),
+                    "not_worse_fallback_improved_pixels": int(
+                        fallback_stats.get("improved_pixels", 0)
+                        if fallback_stats
+                        else 0
+                    ),
                 },
             )
 
