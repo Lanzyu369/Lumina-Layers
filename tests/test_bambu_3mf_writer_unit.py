@@ -59,6 +59,70 @@ def _make_anycubic_writer(tmp_path) -> BambuStudio3MFWriter:
     return writer
 
 
+def test_load_printer_template_prefers_registry_device_profile(tmp_path, monkeypatch) -> None:
+    registry_root = tmp_path / "machine_registry"
+    template_path = (
+        registry_root
+        / "slicers"
+        / "BambuStudio"
+        / "02.07.01.57"
+        / "metadata_templates"
+        / "h2d_0_4.json"
+    )
+    template_path.parent.mkdir(parents=True)
+    template_path.write_text(
+        '{"printer_model": "Bambu Lab H2D", "layer_height": "0.08"}',
+        encoding="utf-8",
+    )
+    (registry_root / "registry.json").write_text(
+        """
+        {
+          "schema_version": 1,
+          "generated_at": "2026-06-09T00:00:00+08:00",
+          "slicers": [{
+            "slicer_id": "BambuStudio",
+            "display_name": "Bambu Studio",
+            "source_kind": "local_install",
+            "source_version": "02.07.01.57",
+            "profile_format": "bambu_orca",
+            "application_metadata": "BambuStudio-02.07.01.57",
+            "sidecar_policy": "bambu_studio",
+            "machines": [{
+              "machine_profile_id": "BambuStudio:bbl:bambu-lab-h2d",
+              "display_name": "Bambu Lab H2D",
+              "brand": "Bambu Lab",
+              "vendor_key": "BBL",
+              "bed_width": 350,
+              "bed_depth": 320,
+              "bed_height": 325,
+              "thumbnail": "",
+              "nozzles": [{
+                "device_profile_id": "BambuStudio:bbl:bambu-lab-h2d:0.4",
+                "nozzle_size": "0.4",
+                "source_profile_name": "Bambu Lab H2D 0.4 nozzle",
+                "template": "slicers/BambuStudio/02.07.01.57/metadata_templates/h2d_0_4.json",
+                "revision": "sha256:abc",
+                "supported": true
+              }]
+            }]
+          }]
+        }
+        """,
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
+
+    template = load_printer_template(
+        "bambu-h2d",
+        slicer="BambuStudio",
+        nozzle_size="0.4",
+        device_profile_id="BambuStudio:bbl:bambu-lab-h2d:0.4",
+    )
+
+    assert template["printer_model"] == "Bambu Lab H2D"
+    assert template["layer_height"] == "0.08"
+
+
 class TestAnycubicWriterMetadata:
     def test_writer_base_template_uses_selected_nozzle_size_variant(self) -> None:
         writer = BambuStudio3MFWriter(

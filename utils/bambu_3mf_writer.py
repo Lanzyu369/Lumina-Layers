@@ -387,19 +387,23 @@ def load_printer_template(
     printer_id: str,
     slicer: str = "BambuStudio",
     nozzle_size: Optional[str | float] = None,
+    device_profile_id: Optional[str] = None,
 ) -> dict:
     """Load printer config template JSON for the given printer ID and slicer.
     加载指定机型和切片器的配置模板 JSON。
 
-    Priority: printer_profiles/ directory first (matched via PrinterProfile.get_template_file),
-    falls back to bambu_config_template.json for backward compatibility.
-    优先从 printer_profiles/ 目录加载，找不到时回退到 bambu_config_template.json。
+    Priority: generated machine registry when device_profile_id is provided,
+    then printer_profiles/ directory, then bambu_config_template.json.
+    优先使用指定 device_profile_id 对应的机器注册表模板，然后回退到
+    printer_profiles/ 目录，最后回退到 bambu_config_template.json。
 
     Args:
         printer_id (str): Printer identifier, e.g. "bambu-h2d". (打印机标识)
         slicer (str): Slicer software identifier, e.g. "BambuStudio" or "OrcaSlicer". (切片器标识)
         nozzle_size (Optional[str | float]): Optional nozzle size variant, e.g. 0.2.
             Falls back to the base template when omitted or unavailable. (可选喷嘴尺寸变体)
+        device_profile_id (Optional[str]): Slicer-scoped generated registry device profile ID.
+            (可选的切片器作用域机器注册表设备配置 ID)
 
     Returns:
         dict: Parsed JSON configuration template. (解析后的 JSON 配置模板)
@@ -409,9 +413,42 @@ def load_printer_template(
     from config import get_printer_profile, normalize_nozzle_size
 
     normalized_nozzle_size = normalize_nozzle_size(nozzle_size) or "0.4"
-    cache_key = f"{printer_id}:{slicer}:{normalized_nozzle_size}"
+    cache_profile_id = device_profile_id or "legacy"
+    cache_key = f"{printer_id}:{slicer}:{normalized_nozzle_size}:{cache_profile_id}"
     if cache_key in _PRINTER_TEMPLATE_CACHE:
         return copy.deepcopy(_PRINTER_TEMPLATE_CACHE[cache_key])
+
+    if device_profile_id:
+        registry_root = os.environ.get("LUMINA_MACHINE_REGISTRY_DIR")
+        if registry_root:
+            registry_path = os.path.join(registry_root, "registry.json")
+            if os.path.exists(registry_path):
+                from core.machine_registry import load_machine_registry
+
+                registry = load_machine_registry(registry_path)
+                profile = registry.get_device_profile(device_profile_id)
+                template_path = os.path.normpath(os.path.join(registry_root, profile.template))
+                registry_root_abs = os.path.abspath(registry_root)
+                template_path_abs = os.path.abspath(template_path)
+                if (
+                    os.path.commonpath([registry_root_abs, template_path_abs]) == registry_root_abs
+                    and os.path.exists(template_path_abs)
+                ):
+                    with open(template_path_abs, "r", encoding="utf-8") as f:
+                        template = json.load(f)
+                    _PRINTER_TEMPLATE_CACHE[cache_key] = template
+                    log.debug(
+                        "Loaded printer template from machine registry",
+                        extra={
+                            "event": "bambu_printer_template_registry_loaded",
+                            "path": template_path_abs,
+                            "printer_id": printer_id,
+                            "slicer": slicer,
+                            "nozzle_size": normalized_nozzle_size,
+                            "device_profile_id": device_profile_id,
+                        },
+                    )
+                    return copy.deepcopy(template)
 
     profile = get_printer_profile(printer_id)
     template_file = profile.get_template_file(slicer, nozzle_size=normalized_nozzle_size)
