@@ -74,7 +74,7 @@ def build_device_registry_entry(
     machine_profile_id = f"{provider.slicer_id}:{vendor_slug}:{machine_slug}"
     device_profile_id = f"{machine_profile_id}:{nozzle}"
     source_hashes = [item.sha256 for item in profile.source_files]
-    template = apply_lumina_process_overlay(settings)
+    template = apply_lumina_process_overlay(settings, source_profile_name=profile.name)
     revision = _content_revision(template, source_hashes)
     bed_width, bed_depth = _bed_size(settings)
 

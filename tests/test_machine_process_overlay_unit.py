@@ -33,3 +33,35 @@ def test_lumina_overlay_preserves_temperature_array_shape():
     assert merged["nozzle_temperature"] == ["220"] * 8
     assert merged["bed_temperature"] == ["60"] * 8
     assert merged["filament_type"] == ["PLA"] * 8
+
+
+def test_lumina_overlay_fills_missing_profile_id_and_line_widths():
+    native = {
+        "printer_model": "Bambu Lab H2D",
+        "printer_settings_id": "",
+        "nozzle_diameter": ["0.4", "0.4"],
+    }
+
+    merged = apply_lumina_process_overlay(
+        native,
+        source_profile_name="Bambu Lab H2D 0.4 nozzle",
+    )
+
+    assert merged["printer_settings_id"] == "Bambu Lab H2D 0.4 nozzle"
+    assert merged["line_width"] == "0.42"
+    assert merged["initial_layer_line_width"] == "0.42"
+
+
+def test_lumina_overlay_uses_safe_initial_line_width_for_0_2_nozzle():
+    native = {
+        "printer_settings_id": "",
+        "nozzle_diameter": ["0.2"],
+    }
+
+    merged = apply_lumina_process_overlay(
+        native,
+        source_profile_name="Bambu Lab H2D 0.2 nozzle",
+    )
+
+    assert merged["line_width"] == "0.22"
+    assert merged["initial_layer_line_width"] == "0.25"

@@ -132,6 +132,7 @@ export type ConvertGenerateRequest = ConvertPreviewRequest & {
   printer_id?: string;
   slicer?: string;
   nozzle_size?: string;
+  device_profile_id?: string;
   enable_base_layer_height_modifier?: boolean;
   use_cached_matched_rgb?: boolean;
 };
@@ -1483,6 +1484,7 @@ export interface BatchConvertParams {
   printer_id?: string;
   slicer?: string;
   nozzle_size?: string;
+  device_profile_id?: string;
   enable_base_layer_height_modifier?: boolean;
 }
 

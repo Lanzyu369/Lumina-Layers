@@ -5701,6 +5701,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           printer_id: useSettingsStore.getState().printerModel,
           slicer: useSettingsStore.getState().slicerSoftware,
           nozzle_size: useSettingsStore.getState().nozzleSize,
+          device_profile_id: useSettingsStore.getState().deviceProfileId,
           enable_base_layer_height_modifier:
             useSettingsStore.getState().enableBaseLayerHeightModifier,
           use_cached_matched_rgb: state.regionReplacementCount > 0,
@@ -6291,6 +6292,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           printer_id: settings.printerModel,
           slicer: settings.slicerSoftware,
           nozzle_size: settings.nozzleSize,
+          device_profile_id: settings.deviceProfileId,
           enable_base_layer_height_modifier:
             settings.enableBaseLayerHeightModifier,
           ...(state.enable_relief

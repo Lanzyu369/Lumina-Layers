@@ -413,7 +413,11 @@ def load_printer_template(
     from config import get_printer_profile, normalize_nozzle_size
 
     normalized_nozzle_size = normalize_nozzle_size(nozzle_size) or "0.4"
-    cache_profile_id = device_profile_id or "legacy"
+    registry_root_for_cache = ""
+    if device_profile_id:
+        raw_registry_root = os.environ.get("LUMINA_MACHINE_REGISTRY_DIR", "")
+        registry_root_for_cache = os.path.abspath(raw_registry_root) if raw_registry_root else ""
+    cache_profile_id = f"{device_profile_id}:{registry_root_for_cache}" if device_profile_id else "legacy"
     cache_key = f"{printer_id}:{slicer}:{normalized_nozzle_size}:{cache_profile_id}"
     if cache_key in _PRINTER_TEMPLATE_CACHE:
         return copy.deepcopy(_PRINTER_TEMPLATE_CACHE[cache_key])
@@ -556,6 +560,7 @@ class BambuStudio3MFWriter:
         color_height_mm: float = 0.0,
         face_orientation: str = "down",
         cover_source: "str | bytes | Image.Image | None" = None,
+        device_profile_id: Optional[str] = None,
     ):
         """Initialize 3MF writer with printer-specific template support.
         初始化 3MF 写入器，支持机型和切片器专属配置模板。
@@ -583,6 +588,9 @@ class BambuStudio3MFWriter:
                 ``PIL.Image.Image`` as a decoded image. Decode failures fall
                 back to placeholder bytes plus one WARNING log per export.
                 （封面缩略图图像源；``None`` 走静默占位）
+            device_profile_id (Optional[str]): Slicer-scoped generated registry
+                device profile ID used to select native machine metadata.
+                （切片软件维度的注册表设备配置 ID，用于选择原生机型元数据）
         """
         from config import normalize_nozzle_size, normalize_slicer_software_id
 
@@ -593,6 +601,7 @@ class BambuStudio3MFWriter:
         self.printer_id = printer_id
         self.slicer = normalize_slicer_software_id(slicer)
         self.nozzle_size = normalize_nozzle_size(nozzle_size) or "0.4"
+        self.device_profile_id = str(device_profile_id or "").strip() or None
         self.watermark = watermark
         self.enable_base_layer_height_modifier = bool(enable_base_layer_height_modifier)
         self.base_height_mm = float(base_height_mm)
@@ -1491,6 +1500,7 @@ class BambuStudio3MFWriter:
             self.printer_id,
             slicer=self.slicer,
             nozzle_size=self.nozzle_size,
+            device_profile_id=self.device_profile_id,
         )
         if template:
             return template
@@ -1580,6 +1590,7 @@ def export_scene_with_bambu_metadata(
     color_height_mm: float = 0.0,
     face_orientation: str = "down",
     cover_source: "str | bytes | Image.Image | None" = None,
+    device_profile_id: Optional[str] = None,
 ):
     """Export a Trimesh scene to BambuStudio/OrcaSlicer-compatible 3MF with metadata.
     将 Trimesh 场景导出为 BambuStudio/OrcaSlicer 兼容的 3MF 文件（含元数据）。
@@ -1612,6 +1623,9 @@ def export_scene_with_bambu_metadata(
             ``PIL.Image.Image`` is a decoded image. Decode failures fall back
             to placeholder bytes plus one WARNING log per export.
             （封面缩略图图像源；``None`` 走静默占位，保持既有调用方零侵入）
+        device_profile_id (Optional[str]): Slicer-scoped generated registry
+            device profile ID used to select native machine metadata.
+            （切片软件维度的注册表设备配置 ID，用于选择原生机型元数据）
 
     Returns:
         str: Path to the exported 3MF file. (导出的 3MF 文件路径)
@@ -1653,6 +1667,7 @@ def export_scene_with_bambu_metadata(
         "nozzle_size": nozzle_size,
         "watermark": watermark,
         "cover_source": cover_source,
+        "device_profile_id": device_profile_id,
     }
     writer = BambuStudio3MFWriter(**writer_kwargs)
     writer.enable_base_layer_height_modifier = bool(enable_base_layer_height_modifier)

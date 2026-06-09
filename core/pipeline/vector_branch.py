@@ -2104,6 +2104,7 @@ def _run_vector_branch(ctx: dict) -> dict:
             color_height_mm=float(ctx.get("bambu_color_height_mm", 0.0)),
             face_orientation=str(ctx.get("bambu_face_orientation", "down")),
             cover_source=vector_cover_source,
+            device_profile_id=ctx.get("device_profile_id") or None,
         )
         vector_timing["export_3mf_s"] = time.perf_counter() - export_t0
         log.info(

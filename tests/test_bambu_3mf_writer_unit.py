@@ -123,6 +123,74 @@ def test_load_printer_template_prefers_registry_device_profile(tmp_path, monkeyp
     assert template["layer_height"] == "0.08"
 
 
+def test_writer_base_template_uses_registry_device_profile(tmp_path, monkeypatch) -> None:
+    registry_root = tmp_path / "machine_registry"
+    template_path = (
+        registry_root
+        / "slicers"
+        / "BambuStudio"
+        / "02.07.01.57"
+        / "metadata_templates"
+        / "h2d_0_4.json"
+    )
+    template_path.parent.mkdir(parents=True)
+    template_path.write_text(
+        '{"printer_model": "Bambu Lab H2D", "printer_settings_id": "Bambu Lab H2D 0.4 nozzle"}',
+        encoding="utf-8",
+    )
+    (registry_root / "registry.json").write_text(
+        """
+        {
+          "schema_version": 1,
+          "generated_at": "2026-06-09T00:00:00+08:00",
+          "slicers": [{
+            "slicer_id": "BambuStudio",
+            "display_name": "Bambu Studio",
+            "source_kind": "local_install",
+            "source_version": "02.07.01.57",
+            "profile_format": "bambu_orca",
+            "application_metadata": "BambuStudio-02.07.01.57",
+            "sidecar_policy": "bambu_studio",
+            "machines": [{
+              "machine_profile_id": "BambuStudio:bbl:bambu-lab-h2d",
+              "display_name": "Bambu Lab H2D",
+              "brand": "Bambu Lab",
+              "vendor_key": "BBL",
+              "bed_width": 350,
+              "bed_depth": 320,
+              "bed_height": 325,
+              "thumbnail": "",
+              "nozzles": [{
+                "device_profile_id": "BambuStudio:bbl:bambu-lab-h2d:0.4",
+                "nozzle_size": "0.4",
+                "source_profile_name": "Bambu Lab H2D 0.4 nozzle",
+                "template": "slicers/BambuStudio/02.07.01.57/metadata_templates/h2d_0_4.json",
+                "revision": "sha256:abc",
+                "supported": true
+              }]
+            }]
+          }]
+        }
+        """,
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
+
+    writer = BambuStudio3MFWriter(
+        "registry-device-profile.3mf",
+        settings={},
+        color_mode="4-Color",
+        printer_id="bambu-h2d",
+        slicer="BambuStudio",
+        nozzle_size="0.4",
+        device_profile_id="BambuStudio:bbl:bambu-lab-h2d:0.4",
+    )
+
+    settings = writer._get_base_config_template()
+    assert settings["printer_model"] == "Bambu Lab H2D"
+    assert settings["printer_settings_id"] == "Bambu Lab H2D 0.4 nozzle"
+
+
 class TestAnycubicWriterMetadata:
     def test_writer_base_template_uses_selected_nozzle_size_variant(self) -> None:
         writer = BambuStudio3MFWriter(
@@ -472,6 +540,53 @@ class TestAnycubicWriterMetadata:
             "#FFE600",
         ]
         assert len(captured_settings["filament_ids"]) == 8
+
+    def test_export_scene_forwards_registry_device_profile_id(self, monkeypatch) -> None:
+        captured: dict[str, object] = {}
+
+        class _FakeWriter:
+            def __init__(
+                self,
+                output_path: str,
+                settings=None,
+                color_mode: str = "4-Color",
+                printer_id: str = "bambu-h2d",
+                slicer: str = "BambuStudio",
+                nozzle_size: str | None = None,
+                watermark: str = "LuminaStudio",
+                *,
+                device_profile_id: str | None = None,
+                **kwargs,
+            ) -> None:
+                self.output_path = output_path
+                captured["device_profile_id"] = device_profile_id
+
+            def add_mesh(self, mesh, name: str, color_rgb: tuple[int, int, int]) -> None:
+                return None
+
+            def export(self) -> str:
+                return self.output_path
+
+        monkeypatch.setattr(writer_module, "BambuStudio3MFWriter", _FakeWriter)
+
+        scene = trimesh.Scene()
+        scene.add_geometry(trimesh.creation.box(extents=[1, 1, 1]), geom_name="Slot 1 (White)")
+
+        out_path = writer_module.export_scene_with_bambu_metadata(
+            scene=scene,
+            output_path="registry-export.3mf",
+            slot_names=["Slot 1 (White)"],
+            preview_colors={0: (255, 255, 255, 255)},
+            settings={},
+            color_mode="4-Color",
+            printer_id="bambu-h2d",
+            slicer="BambuStudio",
+            nozzle_size="0.4",
+            device_profile_id="BambuStudio:bbl:bambu-lab-h2d:0.4",
+        )
+
+        assert out_path == "registry-export.3mf"
+        assert captured["device_profile_id"] == "BambuStudio:bbl:bambu-lab-h2d:0.4"
 
     def test_anycubic_slice_info_and_custom_parts_use_acnext_layout(
         self,

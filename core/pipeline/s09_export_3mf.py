@@ -75,6 +75,7 @@ def run(ctx: dict) -> dict:
         - bambu_color_height_mm (float): Bambu 彩色层高度，缺省为 0.0
         - bambu_face_orientation (str): Bambu 朝向，缺省为 "down"
         - enable_base_layer_height_modifier (bool): 是否启用底板粗层高覆盖，缺省为 True
+        - device_profile_id (str | None): 机器适配 V2 生成的切片器维度设备配置 ID
 
     PipelineContext 输出键 / Output keys:
         - out_path (str): 导出的 3MF 文件路径
@@ -196,6 +197,7 @@ def run(ctx: dict) -> dict:
             color_height_mm=float(ctx.get("bambu_color_height_mm", 0.0)),
             face_orientation=str(ctx.get("bambu_face_orientation", "down")),
             cover_source=ctx.get("cover_source_path") or ctx.get("image_path"),
+            device_profile_id=ctx.get("device_profile_id") or None,
         )
         if _bench_enabled and _export_t0 is not None:
             _export_elapsed = time.perf_counter() - _export_t0
