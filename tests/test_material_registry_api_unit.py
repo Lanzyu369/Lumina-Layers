@@ -371,8 +371,9 @@ def test_material_registry_upload_stores_package_as_pending(
         channel="manual",
     )
     monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_PACKAGES_DIR", str(packages_dir))
+    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_OFFICIAL_PASSWORD", "approve-secret")
 
-    response = _client().post(
+    unauthorized = _client().post(
         "/api/material-registry/v1/packages/upload",
         files={
             "archive": (
@@ -382,7 +383,19 @@ def test_material_registry_upload_stores_package_as_pending(
             )
         },
     )
+    response = _client().post(
+        "/api/material-registry/v1/packages/upload",
+        headers={"X-Lumina-Material-Registry-Official-Password": "approve-secret"},
+        files={
+            "archive": (
+                "upload.zip",
+                source_package.read_bytes(),
+                "application/zip",
+            )
+        },
+    )
 
+    assert unauthorized.status_code == 403
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "ok"

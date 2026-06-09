@@ -11,7 +11,7 @@ from contextlib import suppress
 from typing import Any
 
 from api.structured_logging import get_logger
-from core.single_stage import list_material_registry_catalog
+from core.single_stage import refresh_material_sync_from_registry
 
 log = get_logger(__name__)
 
@@ -61,16 +61,16 @@ def material_sync_refresh_interval_s() -> float:
 
 
 async def run_material_sync_refresh_once(*, reason: str) -> dict[str, Any] | None:
-    """Run one non-overlapping material Registry catalog refresh.
-    执行一次不会重叠的耗材 Registry catalog 刷新。
+    """Run one non-overlapping material Registry package refresh.
+    执行一次不会重叠的耗材 Registry 包同步刷新。
 
     Args:
         reason: Operational reason, for example ``startup`` or ``scheduled``.
             触发原因，例如 ``startup`` 或 ``scheduled``。
 
     Returns:
-        dict[str, Any] | None: Catalog summary on success; ``None`` when
-            skipped or failed. 成功时返回 catalog 摘要；跳过或失败时返回 ``None``。
+        dict[str, Any] | None: Refresh summary on success; ``None`` when
+            skipped or failed. 成功时返回同步摘要；跳过或失败时返回 ``None``。
     """
     if not _REFRESH_LOCK.acquire(blocking=False):
         log.debug(
@@ -84,7 +84,7 @@ async def run_material_sync_refresh_once(*, reason: str) -> dict[str, Any] | Non
         return None
 
     try:
-        result = await asyncio.to_thread(list_material_registry_catalog)
+        result = await asyncio.to_thread(refresh_material_sync_from_registry)
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
         log.warning(
             "Material sync auto refresh failed",
@@ -105,7 +105,10 @@ async def run_material_sync_refresh_once(*, reason: str) -> dict[str, Any] | Non
             "event": "material_sync_auto_refresh_done",
             "reason": reason,
             "channels": result.get("channels"),
-            "material_count": result.get("count"),
+            "checked_count": result.get("checked_count"),
+            "installed_count": result.get("installed_count"),
+            "skipped_count": result.get("skipped_count"),
+            "failed_count": result.get("failed_count"),
         },
     )
     return result

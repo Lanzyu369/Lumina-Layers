@@ -95,6 +95,20 @@ def verify_material_registry_read_access(
         raise PermissionError("Material registry channel requires a team token")
 
 
+def verify_material_registry_write_access(*, official_password: str | None) -> None:
+    """Enforce server-side Registry write access for upload/approval flows.
+    执行服务端 Registry 写入接口的权限校验。
+    """
+    expected_password = os.environ.get(
+        "LUMINA_MATERIAL_REGISTRY_OFFICIAL_PASSWORD",
+        "",
+    ).strip()
+    if not expected_password:
+        raise PermissionError("Material registry official password is not configured")
+    if str(official_password or "").strip() != expected_password:
+        raise PermissionError("Material registry official password is invalid")
+
+
 def _load_bundle_manifest(zip_path: Path) -> dict[str, Any] | None:
     try:
         with zipfile.ZipFile(zip_path, "r") as archive:
@@ -444,14 +458,7 @@ def approve_material_registry_package(
     """Approve a Registry package into the public official channel.
     将 Registry 包审批为公开 official 频道。
     """
-    expected_password = os.environ.get(
-        "LUMINA_MATERIAL_REGISTRY_OFFICIAL_PASSWORD",
-        "",
-    ).strip()
-    if not expected_password:
-        raise PermissionError("Material registry official approval password is not configured")
-    if str(official_password or "").strip() != expected_password:
-        raise PermissionError("Material registry official approval password is invalid")
+    verify_material_registry_write_access(official_password=official_password)
     source_path = resolve_material_registry_package_path(
         package_path=package_path,
         packages_dir=packages_dir,

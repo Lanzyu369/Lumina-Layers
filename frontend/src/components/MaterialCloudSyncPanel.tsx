@@ -365,11 +365,15 @@ export default function MaterialCloudSyncPanel() {
     if (!file) {
       return;
     }
+    const password = officialPassword.trim();
+    if (!password) {
+      return;
+    }
     setIsUploading(true);
     setError(null);
     setSuccess(null);
     try {
-      const response = await uploadMaterialRegistryPackage(file);
+      const response = await uploadMaterialRegistryPackage(file, password);
       setLastUploaded(response);
       setSuccess(response.message || t("mat_sync_upload_success"));
     } catch (err) {
@@ -377,7 +381,7 @@ export default function MaterialCloudSyncPanel() {
     } finally {
       setIsUploading(false);
     }
-  }, [t]);
+  }, [officialPassword, t]);
 
   const handleApproveOfficial = useCallback(async () => {
     if (!lastUploaded || !officialPassword.trim()) {
@@ -826,7 +830,7 @@ export default function MaterialCloudSyncPanel() {
               label={t("mat_sync_upload_btn")}
               variant="secondary"
               onClick={() => uploadInputRef.current?.click()}
-              disabled={isUploading || isApproving}
+              disabled={!officialPassword.trim() || isUploading || isApproving}
               loading={isUploading}
               className="w-full"
             />

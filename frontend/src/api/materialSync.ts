@@ -101,6 +101,7 @@ export async function rollbackMaterialSyncRevision(
  */
 export async function uploadMaterialRegistryPackage(
   file: File,
+  officialPassword: string,
 ): Promise<MaterialRegistryPackageMutationResponse> {
   const formData = new FormData();
   formData.append("archive", file);
@@ -108,7 +109,10 @@ export async function uploadMaterialRegistryPackage(
     "/material-registry/v1/packages/upload",
     formData,
     {
-      headers: { "Content-Type": "multipart/form-data" },
+      headers: {
+        "Content-Type": "multipart/form-data",
+        "X-Lumina-Material-Registry-Official-Password": officialPassword,
+      },
       timeout: 3_600_000,
     },
   );

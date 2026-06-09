@@ -151,7 +151,7 @@ _MATERIAL_SYNC_STATUS_CACHE_LOCK = threading.RLock()
 _MATERIAL_SYNC_STATUS_CACHE: dict[str, dict[str, Any]] = {}
 _MATERIAL_REGISTRY_REMOTE_CATALOG_CACHE_LOCK = threading.RLock()
 _MATERIAL_REGISTRY_REMOTE_CATALOG_CACHE: dict[
-    tuple[str, tuple[str, ...], str, int | None, int | None, int, str],
+    tuple[str, tuple[str, ...], str, Any, int | None, int, str],
     dict[str, Any],
 ] = {}
 _WARP_PIXELS_PER_MM = 20.0
@@ -2390,9 +2390,9 @@ def _material_registry_remote_catalog_cache_key(
     limit: int | None,
     offset: int,
     query: str,
-) -> tuple[str, tuple[str, ...], str, int | None, int | None, int, str]:
+) -> tuple[str, tuple[str, ...], str, Any, int | None, int, str]:
     token_fingerprint = _sha256_bytes(token.encode("utf-8")) if token else ""
-    transport_identity = id(transport) if transport is not None else None
+    transport_identity = transport if transport is not None else None
     return (
         registry_url,
         tuple(channels),

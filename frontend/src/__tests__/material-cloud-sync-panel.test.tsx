@@ -563,19 +563,22 @@ describe("MaterialCloudSyncPanel", () => {
     render(<MaterialCloudSyncPanel />);
 
     await screen.findByTestId("material-cloud-sync-panel");
+    expect(screen.getByRole("button", { name: /上传耗材包|upload material package/i })).toBeDisabled();
+
+    fireEvent.change(screen.getByTestId("material-cloud-official-password-input"), {
+      target: { value: "approve-secret" },
+    });
+
     const file = new File(["zip"], "material.zip", { type: "application/zip" });
     fireEvent.change(screen.getByTestId("material-cloud-upload-input"), {
       target: { files: [file] },
     });
 
     await waitFor(() => {
-      expect(uploadMaterialRegistryPackage).toHaveBeenCalledWith(file);
+      expect(uploadMaterialRegistryPackage).toHaveBeenCalledWith(file, "approve-secret");
     });
     expect(screen.getByText("pending/mat_test/rev_new.zip")).toBeInTheDocument();
 
-    fireEvent.change(screen.getByTestId("material-cloud-official-password-input"), {
-      target: { value: "approve-secret" },
-    });
     fireEvent.click(screen.getByRole("button", { name: /批准为官方耗材|approve as official/i }));
 
     await waitFor(() => {

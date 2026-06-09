@@ -1,5 +1,5 @@
-"""Read-only material Registry API routes.
-只读耗材 Registry API 路由。
+"""Material Registry API routes.
+耗材 Registry API 路由。
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ from core.material_registry import (
     resolve_material_registry_package_path,
     upload_material_registry_package,
     verify_material_registry_read_access,
+    verify_material_registry_write_access,
 )
 from core.single_stage import invalidate_material_registry_remote_catalog_cache
 
@@ -79,6 +80,10 @@ async def material_registry_catalog(
 @router.post("/packages/upload", response_model=MaterialRegistryPackageMutationResponse)
 async def material_registry_package_upload(
     archive: UploadFile = File(...),
+    official_password: Annotated[
+        str | None,
+        Header(alias="X-Lumina-Material-Registry-Official-Password"),
+    ] = None,
 ) -> MaterialRegistryPackageMutationResponse:
     """Upload one package into the pending Registry channel.
     上传一个耗材包到 Registry pending 频道。
@@ -91,9 +96,12 @@ async def material_registry_package_upload(
         )
     archive_path: str | None = None
     try:
+        verify_material_registry_write_access(official_password=official_password)
         archive_path = await upload_to_tempfile(archive, suffix=".zip")
         result = upload_material_registry_package(archive_path=archive_path)
         invalidate_material_registry_remote_catalog_cache()
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except (ValueError, OSError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     finally:

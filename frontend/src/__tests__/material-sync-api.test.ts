@@ -201,13 +201,16 @@ describe("material sync API client", () => {
     });
     const file = new File(["zip"], "material.zip", { type: "application/zip" });
 
-    const response = await uploadMaterialRegistryPackage(file);
+    const response = await uploadMaterialRegistryPackage(file, "approve-secret");
 
     expect(mockPost).toHaveBeenCalledWith(
       "/material-registry/v1/packages/upload",
       expect.any(FormData),
       {
-        headers: { "Content-Type": "multipart/form-data" },
+        headers: {
+          "Content-Type": "multipart/form-data",
+          "X-Lumina-Material-Registry-Official-Password": "approve-secret",
+        },
         timeout: 3_600_000,
       },
     );

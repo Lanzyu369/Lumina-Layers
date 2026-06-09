@@ -67,18 +67,25 @@ def test_material_sync_startup_refresh_schedules_one_refresh(monkeypatch) -> Non
     asyncio.run(_run())
 
 
-def test_material_sync_refresh_lock_skips_overlapping_catalog_refresh(monkeypatch) -> None:
+def test_material_sync_refresh_lock_skips_overlapping_registry_refresh(monkeypatch) -> None:
     calls = 0
 
     def _blocking_refresh() -> dict[str, Any]:
         nonlocal calls
         calls += 1
         time.sleep(0.05)
-        return {"count": 1, "materials": [], "channels": ["official"]}
+        return {
+            "checked_count": 1,
+            "installed_count": 1,
+            "skipped_count": 0,
+            "failed_count": 0,
+            "channels": ["official"],
+        }
 
     monkeypatch.setattr(
-        "api.material_sync_scheduler.list_material_registry_catalog",
+        "api.material_sync_scheduler.refresh_material_sync_from_registry",
         _blocking_refresh,
+        raising=False,
     )
 
     async def _run() -> None:
@@ -91,7 +98,7 @@ def test_material_sync_refresh_lock_skips_overlapping_catalog_refresh(monkeypatc
         assert calls == 1
         assert any(result is None for result in results)
         assert any(
-            isinstance(result, dict) and result["count"] == 1
+            isinstance(result, dict) and result["installed_count"] == 1
             for result in results
         )
 
@@ -125,13 +132,47 @@ def test_material_sync_interval_refresh_schedules_repeated_refresh(monkeypatch) 
     asyncio.run(_run())
 
 
-def test_material_sync_refresh_returns_none_when_catalog_refresh_fails(monkeypatch) -> None:
+def test_material_sync_refresh_once_uses_installing_registry_refresh(monkeypatch) -> None:
+    def _forbidden_catalog_refresh() -> dict[str, Any]:
+        raise AssertionError("auto refresh must not only load catalog")
+
+    def _registry_refresh() -> dict[str, Any]:
+        return {
+            "checked_count": 1,
+            "installed_count": 1,
+            "skipped_count": 0,
+            "failed_count": 0,
+            "channels": ["official"],
+        }
+
+    monkeypatch.setattr(
+        "api.material_sync_scheduler.list_material_registry_catalog",
+        _forbidden_catalog_refresh,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "api.material_sync_scheduler.refresh_material_sync_from_registry",
+        _registry_refresh,
+        raising=False,
+    )
+
+    async def _run() -> None:
+        result = await run_material_sync_refresh_once(reason="startup")
+
+        assert result is not None
+        assert result["installed_count"] == 1
+
+    asyncio.run(_run())
+
+
+def test_material_sync_refresh_returns_none_when_registry_refresh_fails(monkeypatch) -> None:
     def _failing_refresh() -> dict[str, Any]:
         raise RuntimeError("registry unavailable")
 
     monkeypatch.setattr(
-        "api.material_sync_scheduler.list_material_registry_catalog",
+        "api.material_sync_scheduler.refresh_material_sync_from_registry",
         _failing_refresh,
+        raising=False,
     )
 
     async def _run() -> None:
