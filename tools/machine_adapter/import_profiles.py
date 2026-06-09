@@ -4,7 +4,11 @@ import argparse
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import sys
 from typing import Any
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from tools.machine_adapter.emitter import build_device_registry_entry
 from tools.machine_adapter.providers import get_provider
