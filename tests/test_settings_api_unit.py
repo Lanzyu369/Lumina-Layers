@@ -173,3 +173,68 @@ class TestGetPrinters:
         assert "supported_nozzle_sizes" in first
         assert "nozzle_count" not in first
         assert "is_dual_head" not in first
+
+    def test_get_printers_attaches_registry_device_profiles(self, tmp_path, monkeypatch) -> None:
+        registry_root = tmp_path / "machine_registry"
+        registry_root.mkdir()
+        (registry_root / "registry.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "generated_at": "2026-06-09T00:00:00+08:00",
+                    "slicers": [
+                        {
+                            "slicer_id": "BambuStudio",
+                            "display_name": "Bambu Studio",
+                            "source_kind": "local_install",
+                            "source_version": "02.07.01.57",
+                            "profile_format": "bambu_orca",
+                            "application_metadata": "BambuStudio-02.07.01.57",
+                            "sidecar_policy": "bambu_studio",
+                            "machines": [
+                                {
+                                    "machine_profile_id": "BambuStudio:bbl:bambu-lab-h2d",
+                                    "display_name": "Bambu Lab H2D",
+                                    "brand": "Bambu Lab",
+                                    "vendor_key": "BBL",
+                                    "bed_width": 350,
+                                    "bed_depth": 320,
+                                    "bed_height": 325,
+                                    "thumbnail": "slicers/BambuStudio/assets/h2d.png",
+                                    "nozzles": [
+                                        {
+                                            "device_profile_id": "BambuStudio:bbl:bambu-lab-h2d:0.4",
+                                            "nozzle_size": "0.4",
+                                            "source_profile_name": "Bambu Lab H2D 0.4 nozzle",
+                                            "template": "slicers/BambuStudio/templates/h2d_0_4.json",
+                                            "revision": "sha256:abc",
+                                            "supported": True,
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
+
+        response = client.get("/api/system/printers")
+
+        assert response.status_code == 200
+        printers = response.json()["printers"]
+        h2d = next(printer for printer in printers if printer["id"] == "bambu-h2d")
+        assert h2d["thumbnail"] == "slicers/BambuStudio/assets/h2d.png"
+        assert h2d["device_profiles"] == [
+            {
+                "device_profile_id": "BambuStudio:bbl:bambu-lab-h2d:0.4",
+                "slicer_id": "BambuStudio",
+                "nozzle_size": "0.4",
+                "source_profile_name": "Bambu Lab H2D 0.4 nozzle",
+                "revision": "sha256:abc",
+                "supported": True,
+            }
+        ]

@@ -28,6 +28,7 @@ from api.schemas.system import (
     CacheCleanupDetails,
     ClearCacheResponse,
     ClearCacheResult,
+    DeviceProfileInfo,
     PrinterInfo,
     PrinterListResponse,
     SaveSettingsResponse,
@@ -46,6 +47,61 @@ log = get_logger(__name__)
 CLEANABLE_EXTENSIONS: set[str] = {".3mf", ".glb", ".png", ".jpg", ".txt"}
 PROTECTED_FILES: set[str] = {"lumina_stats.txt", "lumina_lut.json"}
 EPHEMERAL_PREVIEW_TTL_SECONDS = 600
+
+
+def _try_load_machine_registry():
+    """Load optional generated machine registry, returning None on absence/failure.
+    加载可选的生成机器注册表；不存在或读取失败时返回 None。
+    """
+    registry_root = Path(os.environ.get("LUMINA_MACHINE_REGISTRY_DIR", "machine_registry"))
+    registry_path = registry_root / "registry.json"
+    if not registry_path.exists():
+        return None
+    try:
+        from core.machine_registry import load_machine_registry
+
+        return load_machine_registry(registry_path)
+    except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        log.warning(
+            "Machine registry could not be loaded; using legacy printer profiles",
+            extra={
+                "event": "system_machine_registry_load_failed",
+                "path": str(registry_path),
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+        return None
+
+
+def _registry_device_profiles_by_machine() -> tuple[
+    dict[tuple[str, str], list[DeviceProfileInfo]],
+    dict[tuple[str, str], str],
+]:
+    registry = _try_load_machine_registry()
+    if registry is None:
+        return {}, {}
+
+    profiles_by_machine: dict[tuple[str, str], list[DeviceProfileInfo]] = {}
+    thumbnails_by_machine: dict[tuple[str, str], str] = {}
+    for device in sorted(
+        registry.devices_by_id.values(),
+        key=lambda item: (item.display_name, item.brand, item.slicer_id, item.nozzle_size),
+    ):
+        key = (device.display_name.casefold(), device.brand.casefold())
+        profiles_by_machine.setdefault(key, []).append(
+            DeviceProfileInfo(
+                device_profile_id=device.device_profile_id,
+                slicer_id=device.slicer_id,
+                nozzle_size=device.nozzle_size,
+                source_profile_name=device.source_profile_name,
+                revision=device.revision,
+                supported=device.supported,
+            )
+        )
+        if device.thumbnail and key not in thumbnails_by_machine:
+            thumbnails_by_machine[key] = device.thumbnail
+    return profiles_by_machine, thumbnails_by_machine
 
 
 def _purge_subdir(subdir: str) -> tuple[int, int]:
@@ -291,6 +347,7 @@ def get_printers() -> PrinterListResponse:
         PrinterListResponse: List of printer metadata. (打印机元数据列表)
     """
     profiles = config.list_printer_profiles()
+    registry_profiles, registry_thumbnails = _registry_device_profiles_by_machine()
     printers = []
     for p in profiles:
         # Build supported slicer list: default template → BambuStudio, plus slicer_templates keys
@@ -316,6 +373,8 @@ def get_printers() -> PrinterListResponse:
                 bed_height=p.bed_height,
                 supported_nozzle_sizes=list(p.supported_nozzle_sizes),
                 supported_slicers=unique_slicers,
+                thumbnail=registry_thumbnails.get((p.display_name.casefold(), p.brand.casefold()), p.thumbnail),
+                device_profiles=registry_profiles.get((p.display_name.casefold(), p.brand.casefold()), []),
             )
         )
     return PrinterListResponse(status="success", printers=printers)
