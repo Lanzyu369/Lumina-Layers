@@ -1,0 +1,5 @@
+{
+  "type": "machine",
+  "name": "Bambu Lab H2D 0.4 nozzle template machine_start_gcode",
+  "machine_start_gcode": "G28 ; home"
+}
