@@ -1548,6 +1548,11 @@ def _run_vector_branch(ctx: dict) -> dict:
         vec_processor.fridge_magnets = list(fridge_magnets)
         vec_processor.enable_coating = bool(ctx.get("enable_coating", False))
         vec_processor.coating_height_mm = float(ctx.get("coating_height_mm", 0.08))
+        vec_processor.enable_outline = bool(ctx.get("enable_outline", False))
+        try:
+            vec_processor.outline_width_mm = float(ctx.get("outline_width", 2.0) or 2.0)
+        except (TypeError, ValueError):
+            vec_processor.outline_width_mm = 2.0
         vec_processor.auto_dynamic_range = bool(ctx.get("auto_dynamic_range", False))
         if hasattr(vec_processor, "backing_color_id"):
             vec_processor.backing_color_id = backing_channel_idx
