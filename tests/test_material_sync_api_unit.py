@@ -1021,6 +1021,39 @@ def test_install_material_registry_package_rejects_cross_origin_package_url(
     assert requested_urls == []
 
 
+def test_install_material_registry_package_rejects_cross_origin_redirect(
+    tmp_path: Path,
+) -> None:
+    requested_urls: list[str] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        if request.url.host == "registry.test":
+            return httpx.Response(
+                302,
+                headers={"Location": "http://169.254.169.254/latest/meta-data/"},
+            )
+        return httpx.Response(200, content=b"unexpected redirected request")
+
+    try:
+        install_material_registry_package(
+            registry_url="https://registry.test/v1",
+            package_url="/v1/packages/redirect.zip",
+            package_sha256="a" * 64,
+            material_id="mat_cloud_test",
+            revision_id="rev_cloud_test",
+            materials_dir=str(tmp_path / "materials"),
+            token="team-token",
+            transport=httpx.MockTransport(_handler),
+        )
+    except ValueError as exc:
+        assert "redirects" in str(exc)
+    else:
+        raise AssertionError("Expected redirected package download to be rejected")
+
+    assert requested_urls == ["https://registry.test/v1/packages/redirect.zip"]
+
+
 def test_refresh_material_sync_from_registry_installs_new_revision_and_skips_same_revision(
     tmp_path: Path,
 ) -> None:
@@ -1135,6 +1168,56 @@ def test_refresh_material_sync_from_registry_rejects_cross_origin_package_url(
     assert result["installed_count"] == 0
     assert result["failed_count"] == 1
     assert "same origin" in result["failures"][0]["error"]
+    assert (materials_root / "BrandA" / "pla-basic" / "material.json").exists() is False
+
+
+def test_refresh_material_sync_from_registry_rejects_cross_origin_redirect(
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    requested_urls: list[str] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        if request.url.path == "/v1/materials/catalog":
+            return httpx.Response(
+                200,
+                json={
+                    "schema_version": "1.0",
+                    "materials": [
+                        {
+                            "material_id": "mat_registry_test",
+                            "revision_id": "rev_registry_test",
+                            "content_hash": "sha256:abc",
+                            "channel": "official",
+                            "package_url": "/v1/packages/redirect.zip",
+                            "package_sha256": "a" * 64,
+                        }
+                    ],
+                },
+            )
+        if request.url.host == "registry.test":
+            return httpx.Response(
+                302,
+                headers={"Location": "http://169.254.169.254/latest/meta-data/"},
+            )
+        return httpx.Response(200, content=b"unexpected redirected request")
+
+    result = refresh_material_sync_from_registry(
+        registry_url="https://registry.test/v1",
+        token="team-token",
+        materials_dir=str(materials_root),
+        transport=httpx.MockTransport(_handler),
+    )
+
+    assert requested_urls == [
+        "https://registry.test/v1/materials/catalog?channel=official",
+        "https://registry.test/v1/packages/redirect.zip",
+    ]
+    assert result["checked_count"] == 1
+    assert result["installed_count"] == 0
+    assert result["failed_count"] == 1
+    assert "redirects" in result["failures"][0]["error"]
     assert (materials_root / "BrandA" / "pla-basic" / "material.json").exists() is False
 
 

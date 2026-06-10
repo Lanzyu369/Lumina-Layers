@@ -2547,6 +2547,11 @@ def _material_registry_package_url(registry_url: str, raw_package_url: Any) -> s
     return resolved_url
 
 
+def _reject_material_registry_package_redirect(response: Any) -> None:
+    if bool(getattr(response, "is_redirect", False)):
+        raise ValueError("Material registry package redirects are not allowed")
+
+
 def _write_temp_material_registry_package(package_bytes: bytes) -> Path:
     temp_root = Path(TEMP_DIR)
     temp_root.mkdir(parents=True, exist_ok=True)
@@ -3032,7 +3037,12 @@ def install_material_registry_package(
     with _MaterialSyncRefreshFileLock(target_root):
         with httpx.Client(**client_kwargs) as client:
             try:
-                package_response = client.get(resolved_package_url, headers=headers)
+                package_response = client.get(
+                    resolved_package_url,
+                    headers=headers,
+                    follow_redirects=False,
+                )
+                _reject_material_registry_package_redirect(package_response)
                 package_response.raise_for_status()
             except httpx.HTTPError as exc:
                 raise RuntimeError("Material registry package request failed") from exc
@@ -5227,7 +5237,12 @@ def refresh_material_sync_from_registry(
                     expected_package_sha256 = _sha256_hex_from_catalog(
                         entry.get("package_sha256")
                     )
-                    package_response = client.get(resolved_package_url, headers=headers)
+                    package_response = client.get(
+                        resolved_package_url,
+                        headers=headers,
+                        follow_redirects=False,
+                    )
+                    _reject_material_registry_package_redirect(package_response)
                     package_response.raise_for_status()
                     package_bytes = package_response.content
                     actual_package_sha256 = _sha256_bytes(package_bytes)
