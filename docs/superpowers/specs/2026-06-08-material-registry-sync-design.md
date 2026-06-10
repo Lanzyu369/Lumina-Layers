@@ -1,7 +1,7 @@
 # 耗材 Registry 云同步与分享设计
 
-状态：设计评审稿  
-日期：2026-06-08  
+状态：设计评审稿
+日期：2026-06-08
 建议审阅人：@Cat-By-Cat @Lanzyu369 @Neroued @sandboxdream
 
 ## 背景
@@ -305,25 +305,25 @@ Registry 里有四个容易混淆的字段：`material_id`、`revision_id`、`co
 
 这些是云端 API，不要求复用当前本地 `/api/extractor/...` 路由命名。
 
-- `GET /v1/materials/catalog?channel=team&since=<cursor>`  
+- `GET /v1/materials/catalog?channel=team&since=<cursor>`
   返回可见耗材摘要、最新 revision、hash、大小、更新时间和分页 cursor。
 
-- `GET /v1/materials/{material_id}`  
+- `GET /v1/materials/{material_id}`
   返回耗材详情、可见 revision 列表、审核状态和兼容性信息。
 
-- `GET /v1/materials/{material_id}/revisions/{revision_id}/download`  
+- `GET /v1/materials/{material_id}/revisions/{revision_id}/download`
   返回短期有效的对象存储下载 URL、package hash 和签名。
 
-- `POST /v1/materials`  
+- `POST /v1/materials`
   创建新 material，并上传初始 revision。可拆成“申请上传 URL + 完成发布”两步。
 
-- `POST /v1/materials/{material_id}/revisions`  
+- `POST /v1/materials/{material_id}/revisions`
   发布新 revision。
 
-- `POST /v1/materials/{material_id}/share-links`  
+- `POST /v1/materials/{material_id}/share-links`
   生成私有或 unlisted 分享链接。
 
-- `POST /v1/reviews/{revision_id}`  
+- `POST /v1/reviews/{revision_id}`
   团队审核通过、拒绝或要求修改。
 
 本地应用仍保留现有导入/导出 API。后续可以在本地 API 增加：

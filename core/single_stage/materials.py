@@ -1541,8 +1541,18 @@ def _safe_extract_material_zip(zip_path: str, dest_dir: Path) -> Path:
     try:
         with zipfile.ZipFile(zip_path, "r") as archive:
             for member in archive.infolist():
-                member_name = Path(member.filename)
-                if member_name.is_absolute() or ".." in member_name.parts:
+                raw_member_name = member.filename.strip()
+                normalized_member_name = raw_member_name.replace("\\", "/")
+                windows_member_name = PureWindowsPath(raw_member_name)
+                member_name = Path(normalized_member_name)
+                if (
+                    windows_member_name.is_absolute()
+                    or windows_member_name.drive
+                    or windows_member_name.anchor
+                    or normalized_member_name.startswith("/")
+                    or member_name.is_absolute()
+                    or ".." in member_name.parts
+                ):
                     raise ValueError(f"Unsafe zip entry: {member.filename}")
                 member_path = (resolved_dest_dir / member_name).resolve()
                 try:

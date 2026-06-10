@@ -3158,6 +3158,23 @@ def test_import_saved_stage_a_material_archives_rejects_v2_drive_relative_manife
     assert (materials_root / "_sync" / "index.json").exists() is False
 
 
+def test_import_saved_stage_a_material_archives_rejects_drive_relative_zip_member(
+    tmp_path: Path,
+) -> None:
+    exported_zip = tmp_path / "materials_import_drive_relative_member.zip"
+    with zipfile.ZipFile(exported_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("C:evil.txt", "x")
+
+    materials_root = tmp_path / "materials"
+    with pytest.raises(ValueError, match="Unsafe zip entry"):
+        import_saved_stage_a_material_archives(
+            archive_path=str(exported_zip),
+            materials_dir=str(materials_root),
+        )
+
+    assert (materials_root / "evil.txt").exists() is False
+
+
 def test_material_bundle_manifest_rejects_windows_drive_relative_path_under_posix_semantics(
     monkeypatch,
 ) -> None:
