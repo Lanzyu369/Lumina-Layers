@@ -34,6 +34,7 @@ from .materials import (
     rollback_material_sync_revision,
     save_stage_a_material_archive,
     update_saved_stage_a_material_archive_metadata,
+    validate_material_bundle_archive,
 )
 from .processing import (
     StageAFitResult,
@@ -75,5 +76,6 @@ __all__ = [
     "rollback_material_sync_revision",
     "save_stage_a_material_archive",
     "update_saved_stage_a_material_archive_metadata",
+    "validate_material_bundle_archive",
     "resolve_single_stage_colorchecker_assets",
 ]

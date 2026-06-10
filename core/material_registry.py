@@ -16,6 +16,8 @@ from pathlib import Path, PureWindowsPath
 from typing import Any, Iterator, Sequence
 from urllib.parse import quote
 
+from core.single_stage.materials import validate_material_bundle_archive
+
 _MATERIAL_BUNDLE_MANIFEST_FILENAME = "lumina_material_bundle.json"
 _MATERIAL_REGISTRY_CATALOG_SCHEMA_VERSION = "1.0"
 _MATERIAL_REGISTRY_PACKAGE_URL_PREFIX = "/api/material-registry/v1/packages"
@@ -470,9 +472,7 @@ def _store_material_registry_package(
 ) -> dict[str, Any]:
     normalized_channel = normalize_material_registry_channels([channel])[0]
     root = _registry_packages_root(packages_dir, create=True)
-    manifest = _load_bundle_manifest(source_zip_path)
-    if manifest is None:
-        raise ValueError("Material registry package manifest is invalid")
+    manifest = validate_material_bundle_archive(archive_path=str(source_zip_path))
     packages = manifest.get("packages")
     if not isinstance(packages, list) or not packages or not isinstance(packages[0], dict):
         raise ValueError("Material registry package manifest is invalid")
@@ -541,6 +541,7 @@ def upload_material_registry_package(
     """Store an uploaded material package in the Registry package root.
     将上传的耗材包保存到 Registry 包目录。
     """
+    validate_material_bundle_archive(archive_path=archive_path)
     if reject_duplicates:
         assert_material_registry_package_not_duplicate(
             archive_path=archive_path,

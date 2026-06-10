@@ -1716,6 +1716,41 @@ def _verify_material_bundle_package(
         raise ValueError(f"Material bundle content hash mismatch: {material_id}")
 
 
+def validate_material_bundle_archive(*, archive_path: str) -> dict[str, Any]:
+    """Validate a v2 material bundle ZIP without importing its contents.
+    校验 v2 耗材 bundle ZIP，但不导入其中内容。
+
+    Args:
+        archive_path: ZIP archive path to validate. (要校验的 ZIP 路径)
+
+    Returns:
+        dict[str, Any]: Parsed bundle manifest. (解析后的 bundle manifest)
+    """
+    extract_root = Path(
+        tempfile.mkdtemp(prefix="material_bundle_validate_", dir=TEMP_DIR)
+    )
+    try:
+        extracted_root = _safe_extract_material_zip(archive_path, extract_root)
+        manifest_root = extracted_root
+        if not (manifest_root / _MATERIAL_BUNDLE_MANIFEST_FILENAME).is_file():
+            if (extract_root / _MATERIAL_BUNDLE_MANIFEST_FILENAME).is_file():
+                manifest_root = extract_root
+        bundle_manifest = _load_material_bundle_manifest(manifest_root)
+        if bundle_manifest is None:
+            raise ValueError("Material bundle manifest is invalid")
+        raw_packages = bundle_manifest["packages"]
+        for raw_package in raw_packages:
+            if not isinstance(raw_package, dict):
+                raise ValueError("Material bundle manifest contains invalid package")
+            _verify_material_bundle_package(
+                extracted_root=manifest_root,
+                package=raw_package,
+            )
+        return json.loads(json.dumps(bundle_manifest, ensure_ascii=False))
+    finally:
+        shutil.rmtree(extract_root, ignore_errors=True)
+
+
 def _empty_material_sync_index() -> dict[str, Any]:
     return {
         "schema_version": _MATERIAL_SYNC_INDEX_SCHEMA_VERSION,

@@ -39,6 +39,7 @@ from core.single_stage import (
     list_saved_stage_a_material_archives,
     save_stage_a_material_archive,
     update_saved_stage_a_material_archive_metadata,
+    validate_material_bundle_archive,
 )
 from core.single_stage.kit import SingleStageSpec, _build_stage_matrix, _build_stage_scene
 from core.single_stage.processing import _safe_extract_zip
@@ -2200,6 +2201,38 @@ def test_export_saved_stage_a_material_archives_writes_v2_bundle_manifest_and_ex
     assert file_hashes["materials/BrandA/pla-basic/stage_A_parameters.json"] == (
         hashlib.sha256(stage_a_bytes).hexdigest()
     )
+
+
+def test_validate_material_bundle_archive_rejects_tampered_file(
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    _write_updatable_material_archive(
+        materials_root,
+        "BrandA/pla-basic",
+        material_name="PLA Basic",
+        brand="BrandA",
+    )
+    zip_output = tmp_path / "materials_export.zip"
+    export_saved_stage_a_material_archives(
+        directory_names=["BrandA/pla-basic"],
+        materials_dir=str(materials_root),
+        output_path=str(zip_output),
+    )
+    tampered_output = tmp_path / "materials_export_tampered.zip"
+    with zipfile.ZipFile(zip_output, "r") as source:
+        with zipfile.ZipFile(tampered_output, "w", compression=zipfile.ZIP_DEFLATED) as target:
+            for member in source.infolist():
+                if member.filename == "materials/BrandA/pla-basic/material.json":
+                    target.writestr(
+                        member,
+                        b'{"brand":"BrandA","material_name":"Tampered"}',
+                    )
+                else:
+                    target.writestr(member, source.read(member.filename))
+
+    with pytest.raises(ValueError, match="mismatch"):
+        validate_material_bundle_archive(archive_path=str(tampered_output))
 
 
 def test_export_saved_stage_a_material_archives_keeps_material_id_stable_across_revisions(

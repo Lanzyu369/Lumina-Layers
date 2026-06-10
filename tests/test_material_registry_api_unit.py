@@ -97,6 +97,18 @@ def _write_v2_registry_package(
     return hashlib.sha256(zip_path.read_bytes()).hexdigest()
 
 
+def _replace_zip_member(zip_path: Path, member_name: str, payload: bytes) -> None:
+    tmp_path = zip_path.with_name(f"{zip_path.stem}.tampered.zip")
+    with zipfile.ZipFile(zip_path, "r") as source:
+        with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as target:
+            for member in source.infolist():
+                if member.filename == member_name:
+                    target.writestr(member, payload)
+                else:
+                    target.writestr(member, source.read(member.filename))
+    tmp_path.replace(zip_path)
+
+
 def _write_saved_material(
     materials_root: Path,
     directory_name: str = "BrandA/pla-basic",
@@ -559,6 +571,43 @@ def test_material_registry_upload_stores_package_as_pending(
     assert catalog.status_code == 403
 
 
+def test_material_registry_upload_rejects_tampered_package(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    packages_dir = tmp_path / "registry-packages"
+    source_package = tmp_path / "upload.zip"
+    _write_v2_registry_package(
+        source_package,
+        material_id="mat_tampered_upload",
+        revision_id="rev_tampered_upload",
+        channel="manual",
+    )
+    _replace_zip_member(
+        source_package,
+        "materials/BrandA/pla-basic/material.json",
+        b'{"brand":"BrandA","material_name":"Tampered"}',
+    )
+    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_PACKAGES_DIR", str(packages_dir))
+    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_OFFICIAL_PASSWORD", "approve-secret")
+
+    response = _client().post(
+        "/api/material-registry/v1/packages/upload",
+        headers={"X-Lumina-Material-Registry-Official-Password": "approve-secret"},
+        files={
+            "archive": (
+                "upload.zip",
+                source_package.read_bytes(),
+                "application/zip",
+            )
+        },
+    )
+
+    assert response.status_code == 422
+    assert "mismatch" in response.json()["detail"]
+    assert not packages_dir.exists() or not any(packages_dir.rglob("*.zip"))
+
+
 def test_material_registry_approve_requires_official_password(
     monkeypatch,
     tmp_path: Path,
@@ -599,6 +648,37 @@ def test_material_registry_approve_requires_official_password(
     entries = catalog.json()["materials"]
     assert entries[0]["material_id"] == "mat_approve_test"
     assert entries[0]["channel"] == "official"
+
+
+def test_material_registry_approve_revalidates_pending_package(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    packages_dir = tmp_path / "registry-packages"
+    pending_path = packages_dir / "pending" / "upload.zip"
+    _write_v2_registry_package(
+        pending_path,
+        material_id="mat_tampered_approve",
+        revision_id="rev_tampered_approve",
+        channel="pending",
+    )
+    _replace_zip_member(
+        pending_path,
+        "materials/BrandA/pla-basic/material.json",
+        b'{"brand":"BrandA","material_name":"Tampered"}',
+    )
+    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_PACKAGES_DIR", str(packages_dir))
+    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_OFFICIAL_PASSWORD", "approve-secret")
+
+    response = _client().post(
+        "/api/material-registry/v1/packages/pending/upload.zip/approve",
+        json={"official_password": "approve-secret"},
+    )
+
+    assert response.status_code == 422
+    assert "mismatch" in response.json()["detail"]
+    assert not (packages_dir / "official").exists()
+    assert pending_path.is_file()
 
 
 def test_material_registry_upload_local_material_exports_and_stores_pending_package(
