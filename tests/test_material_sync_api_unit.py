@@ -211,6 +211,7 @@ def _write_v2_multi_material_package(zip_path: Path) -> dict[str, str]:
     return {
         "selected_material_id": "mat_selected",
         "selected_revision_id": "rev_selected",
+        "selected_content_hash": str(package_records[0]["content_hash"]),
         "package_sha256": hashlib.sha256(zip_path.read_bytes()).hexdigest(),
     }
 
@@ -943,6 +944,50 @@ def test_install_material_registry_package_imports_only_selected_material(
     )
 
     assert result["installed_count"] == 1
+    assert result["installed_materials"][0]["directory_name"] == "BrandA/pla-selected"
+    assert (materials_root / "BrandA" / "pla-selected" / "material.json").is_file()
+    assert (materials_root / "BrandA" / "pla-other" / "material.json").exists() is False
+
+
+def test_refresh_material_sync_from_registry_imports_only_catalog_revision(
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    package_path = tmp_path / "multi_material_package.zip"
+    package_info = _write_v2_multi_material_package(package_path)
+    package_bytes = package_path.read_bytes()
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/materials/catalog":
+            return httpx.Response(
+                200,
+                json={
+                    "schema_version": "1.0",
+                    "materials": [
+                        {
+                            "material_id": package_info["selected_material_id"],
+                            "revision_id": package_info["selected_revision_id"],
+                            "content_hash": package_info["selected_content_hash"],
+                            "channel": "official",
+                            "visibility": "official",
+                            "package_url": "/v1/packages/multi_material_package.zip",
+                            "package_sha256": package_info["package_sha256"],
+                        }
+                    ],
+                },
+            )
+        if request.url.path == "/v1/packages/multi_material_package.zip":
+            return httpx.Response(200, content=package_bytes)
+        return httpx.Response(404)
+
+    result = refresh_material_sync_from_registry(
+        registry_url="https://registry.test/v1",
+        materials_dir=str(materials_root),
+        transport=httpx.MockTransport(_handler),
+    )
+
+    assert result["installed_count"] == 1
+    assert result["failed_count"] == 0
     assert result["installed_materials"][0]["directory_name"] == "BrandA/pla-selected"
     assert (materials_root / "BrandA" / "pla-selected" / "material.json").is_file()
     assert (materials_root / "BrandA" / "pla-other" / "material.json").exists() is False

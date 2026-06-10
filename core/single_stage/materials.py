@@ -5231,6 +5231,8 @@ def refresh_material_sync_from_registry(
                         import_result = import_saved_stage_a_material_archives(
                             archive_path=str(temp_package_path),
                             materials_dir=str(target_root),
+                            selected_material_id=material_id,
+                            selected_revision_id=revision_id,
                         )
                     finally:
                         try:
