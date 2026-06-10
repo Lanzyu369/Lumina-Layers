@@ -416,17 +416,24 @@ export default function MaterialCloudSyncPanel() {
   }, [catalog, catalogQuery, isLoadingAll, isLoadingMore, t]);
 
   const handleInstall = useCallback(async (entry: MaterialRegistryCatalogEntry) => {
+    const password = officialPassword.trim();
+    if (!password) {
+      return;
+    }
     const installKey = `${entry.material_id}:${entry.revision_id}`;
     setPendingInstall(installKey);
     setError(null);
     setSuccess(null);
     try {
-      const response = await installMaterialRegistryCatalogEntry({
-        material_id: entry.material_id,
-        revision_id: entry.revision_id,
-        package_url: entry.package_url,
-        package_sha256: entry.package_sha256,
-      });
+      const response = await installMaterialRegistryCatalogEntry(
+        {
+          material_id: entry.material_id,
+          revision_id: entry.revision_id,
+          package_url: entry.package_url,
+          package_sha256: entry.package_sha256,
+        },
+        password,
+      );
       await loadCatalogAndStatus();
       setSuccess(response.message || t("mat_sync_install_success"));
     } catch (err) {
@@ -434,15 +441,23 @@ export default function MaterialCloudSyncPanel() {
     } finally {
       setPendingInstall(null);
     }
-  }, [loadCatalogAndStatus, t]);
+  }, [loadCatalogAndStatus, officialPassword, t]);
 
   const handleRollback = useCallback(async (entry: MaterialSyncInstalledEntry, revisionId: string) => {
+    const password = officialPassword.trim();
+    if (!password) {
+      return;
+    }
     const rollbackKey = `${entry.material_id}:${revisionId}`;
     setPendingRollback(rollbackKey);
     setError(null);
     setSuccess(null);
     try {
-      const response = await rollbackMaterialSyncRevision(entry.material_id, revisionId);
+      const response = await rollbackMaterialSyncRevision(
+        entry.material_id,
+        revisionId,
+        password,
+      );
       await loadCatalogAndStatus();
       setSuccess(response.message || t("mat_sync_rollback_success"));
     } catch (err) {
@@ -450,7 +465,7 @@ export default function MaterialCloudSyncPanel() {
     } finally {
       setPendingRollback(null);
     }
-  }, [loadCatalogAndStatus, t]);
+  }, [loadCatalogAndStatus, officialPassword, t]);
 
   const handleUploadPackage = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0] ?? null;
@@ -597,6 +612,7 @@ export default function MaterialCloudSyncPanel() {
   ) => {
     const installKey = `${entry.material_id}:${entry.revision_id}`;
     const isPending = pendingInstall === installKey;
+    const hasOfficialPassword = Boolean(officialPassword.trim());
     if (installState === "installed") {
       return (
         <Button
@@ -622,9 +638,9 @@ export default function MaterialCloudSyncPanel() {
       : t("mat_sync_install_btn");
     return (
       <Button
-        label={label}
+        label={hasOfficialPassword ? label : t("mat_sync_official_password_required_btn")}
         onClick={() => void handleInstall(entry)}
-        disabled={pendingInstall !== null}
+        disabled={!hasOfficialPassword || pendingInstall !== null}
         loading={isPending}
         className="w-full"
       />
@@ -814,7 +830,7 @@ export default function MaterialCloudSyncPanel() {
                         label={tRuntime("mat_sync_rollback_btn", { revisionId })}
                         variant="secondary"
                         onClick={() => void handleRollback(installed, revisionId)}
-                        disabled={pendingRollback !== null}
+                        disabled={!officialPassword.trim() || pendingRollback !== null}
                         loading={pendingRollback === `${installed.material_id}:${revisionId}`}
                         className="w-full"
                       />

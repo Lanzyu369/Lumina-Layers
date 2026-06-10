@@ -67,12 +67,17 @@ describe("material sync API client", () => {
       },
     });
 
-    const response = await refreshMaterialSyncFromRegistry();
+    const response = await refreshMaterialSyncFromRegistry("approve-secret");
 
     expect(mockPost).toHaveBeenCalledWith(
       "/material-sync/refresh",
       {},
-      { timeout: 3_600_000 },
+      {
+        headers: {
+          "X-Lumina-Material-Registry-Official-Password": "approve-secret",
+        },
+        timeout: 3_600_000,
+      },
     );
     expect(response.installed_count).toBe(1);
   });
@@ -145,12 +150,15 @@ describe("material sync API client", () => {
       },
     });
 
-    await installMaterialRegistryCatalogEntry({
-      material_id: "mat_cloud",
-      revision_id: "rev_cloud",
-      package_url: "/v1/packages/material.zip",
-      package_sha256: "a".repeat(64),
-    });
+    await installMaterialRegistryCatalogEntry(
+      {
+        material_id: "mat_cloud",
+        revision_id: "rev_cloud",
+        package_url: "/v1/packages/material.zip",
+        package_sha256: "a".repeat(64),
+      },
+      "approve-secret",
+    );
 
     expect(mockPost).toHaveBeenCalledWith(
       "/material-sync/install-from-registry",
@@ -160,7 +168,12 @@ describe("material sync API client", () => {
         package_url: "/v1/packages/material.zip",
         package_sha256: "a".repeat(64),
       },
-      { timeout: 3_600_000 },
+      {
+        headers: {
+          "X-Lumina-Material-Registry-Official-Password": "approve-secret",
+        },
+        timeout: 3_600_000,
+      },
     );
   });
 
@@ -177,12 +190,21 @@ describe("material sync API client", () => {
       },
     });
 
-    const response = await rollbackMaterialSyncRevision("mat_test", "rev_old");
+    const response = await rollbackMaterialSyncRevision(
+      "mat_test",
+      "rev_old",
+      "approve-secret",
+    );
 
     expect(mockPost).toHaveBeenCalledWith(
       "/material-sync/rollback",
       { material_id: "mat_test", revision_id: "rev_old" },
-      { timeout: 60_000 },
+      {
+        headers: {
+          "X-Lumina-Material-Registry-Official-Password": "approve-secret",
+        },
+        timeout: 60_000,
+      },
     );
     expect(response.revision_id).toBe("rev_old");
   });

@@ -6751,6 +6751,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "本地已有版本",
     en: "Local revision available",
   },
+  mat_sync_official_password_required_btn: {
+    zh: "需要官方密码",
+    en: "Official password required",
+  },
   mat_sync_install_success: {
     zh: "耗材已下载并安装到本地。",
     en: "Material downloaded and installed locally.",

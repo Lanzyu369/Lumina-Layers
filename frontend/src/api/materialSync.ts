@@ -10,6 +10,11 @@ import type {
 } from "./types";
 
 const MATERIAL_SYNC_READ_TIMEOUT_MS = 120_000;
+const OFFICIAL_PASSWORD_HEADER = "X-Lumina-Material-Registry-Official-Password";
+
+const officialPasswordHeaders = (officialPassword: string) => ({
+  [OFFICIAL_PASSWORD_HEADER]: officialPassword,
+});
 
 export interface MaterialRegistryCatalogQuery {
   limit?: number;
@@ -33,11 +38,16 @@ export async function fetchMaterialSyncStatus(): Promise<MaterialSyncStatusRespo
  * Pull read-only material package updates from the configured Registry.
  * 从已配置的只读 Registry 拉取耗材包更新。
  */
-export async function refreshMaterialSyncFromRegistry(): Promise<MaterialSyncRefreshResponse> {
+export async function refreshMaterialSyncFromRegistry(
+  officialPassword: string,
+): Promise<MaterialSyncRefreshResponse> {
   const response = await apiClient.post<MaterialSyncRefreshResponse>(
     "/material-sync/refresh",
     {},
-    { timeout: 3_600_000 },
+    {
+      headers: officialPasswordHeaders(officialPassword),
+      timeout: 3_600_000,
+    },
   );
   return response.data;
 }
@@ -65,6 +75,7 @@ export async function fetchMaterialRegistryCatalog(
  */
 export async function installMaterialRegistryCatalogEntry(
   entry: MaterialRegistryInstallRequest,
+  officialPassword: string,
 ): Promise<MaterialSyncInstallResponse> {
   const response = await apiClient.post<MaterialSyncInstallResponse>(
     "/material-sync/install-from-registry",
@@ -74,7 +85,10 @@ export async function installMaterialRegistryCatalogEntry(
       package_url: entry.package_url,
       package_sha256: entry.package_sha256,
     },
-    { timeout: 3_600_000 },
+    {
+      headers: officialPasswordHeaders(officialPassword),
+      timeout: 3_600_000,
+    },
   );
   return response.data;
 }
@@ -86,11 +100,15 @@ export async function installMaterialRegistryCatalogEntry(
 export async function rollbackMaterialSyncRevision(
   materialId: string,
   revisionId: string,
+  officialPassword: string,
 ): Promise<MaterialSyncRollbackResponse> {
   const response = await apiClient.post<MaterialSyncRollbackResponse>(
     "/material-sync/rollback",
     { material_id: materialId, revision_id: revisionId },
-    { timeout: 60_000 },
+    {
+      headers: officialPasswordHeaders(officialPassword),
+      timeout: 60_000,
+    },
   );
   return response.data;
 }
@@ -111,7 +129,7 @@ export async function uploadMaterialRegistryPackage(
     {
       headers: {
         "Content-Type": "multipart/form-data",
-        "X-Lumina-Material-Registry-Official-Password": officialPassword,
+        ...officialPasswordHeaders(officialPassword),
       },
       timeout: 3_600_000,
     },
@@ -131,9 +149,7 @@ export async function uploadLocalMaterialRegistryPackage(
     "/material-registry/v1/packages/upload-local",
     { directory_name: directoryName.trim() },
     {
-      headers: {
-        "X-Lumina-Material-Registry-Official-Password": officialPassword,
-      },
+      headers: officialPasswordHeaders(officialPassword),
       timeout: 3_600_000,
     },
   );

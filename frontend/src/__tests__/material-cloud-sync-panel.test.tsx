@@ -21,6 +21,12 @@ vi.mock("../api/materialSync", () => ({
 }));
 
 describe("MaterialCloudSyncPanel", () => {
+  const enterOfficialPassword = () => {
+    fireEvent.change(screen.getByTestId("material-cloud-official-password-input"), {
+      target: { value: "approve-secret" },
+    });
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(fetchMaterialSyncStatus).mockResolvedValue({
@@ -175,15 +181,24 @@ describe("MaterialCloudSyncPanel", () => {
     });
     expect(within(screen.getAllByTestId("material-cloud-catalog-card")[0]).getByText("Silk PETG")).toBeInTheDocument();
 
+    const blockedInstallButton = screen.getByRole("button", {
+      name: /需要官方密码|official password required/i,
+    });
+    expect(blockedInstallButton).toBeDisabled();
+
+    enterOfficialPassword();
     fireEvent.click(screen.getByRole("button", { name: /下载到本地|download/i }));
 
     await waitFor(() => {
-      expect(installMaterialRegistryCatalogEntry).toHaveBeenCalledWith({
-        material_id: "mat_cloud",
-        revision_id: "rev_cloud",
-        package_url: "/v1/packages/mat_cloud/rev_cloud.zip",
-        package_sha256: "c".repeat(64),
-      });
+      expect(installMaterialRegistryCatalogEntry).toHaveBeenCalledWith(
+        {
+          material_id: "mat_cloud",
+          revision_id: "rev_cloud",
+          package_url: "/v1/packages/mat_cloud/rev_cloud.zip",
+          package_sha256: "c".repeat(64),
+        },
+        "approve-secret",
+      );
     });
     expect(fetchMaterialRegistryCatalog).toHaveBeenCalledTimes(3);
     expect(fetchMaterialSyncStatus).toHaveBeenCalledTimes(3);
@@ -444,16 +459,23 @@ describe("MaterialCloudSyncPanel", () => {
     render(<MaterialCloudSyncPanel />);
 
     expect((await screen.findAllByText("PLA Pro")).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("button", {
+      name: /需要官方密码|official password required/i,
+    }).some((button) => button.hasAttribute("disabled"))).toBe(true);
 
+    enterOfficialPassword();
     fireEvent.click(screen.getByRole("button", { name: /更新到 newer|update to newer/i }));
 
     await waitFor(() => {
-      expect(installMaterialRegistryCatalogEntry).toHaveBeenCalledWith({
-        material_id: "mat_update",
-        revision_id: "rev_2",
-        package_url: "/v1/packages/mat_update/rev_2.zip",
-        package_sha256: "b".repeat(64),
-      });
+      expect(installMaterialRegistryCatalogEntry).toHaveBeenCalledWith(
+        {
+          material_id: "mat_update",
+          revision_id: "rev_2",
+          package_url: "/v1/packages/mat_update/rev_2.zip",
+          package_sha256: "b".repeat(64),
+        },
+        "approve-secret",
+      );
     });
   });
 
@@ -514,6 +536,7 @@ describe("MaterialCloudSyncPanel", () => {
     expect(screen.getByTestId("material-cloud-update-count")).toHaveTextContent("1");
     expect(screen.getByTestId("material-cloud-state-mat_test")).not.toHaveTextContent(/有新版本|update available/i);
     expect(screen.queryByRole("button", { name: /更新到 old|update to old/i })).not.toBeInTheDocument();
+    enterOfficialPassword();
     expect(screen.getByRole("button", { name: /更新到 newer|update to newer/i })).toBeInTheDocument();
   });
 
@@ -642,10 +665,15 @@ describe("MaterialCloudSyncPanel", () => {
     });
     expect(within(screen.getAllByTestId("material-cloud-catalog-card")[0]).getByText("Silk PETG")).toBeInTheDocument();
 
+    enterOfficialPassword();
     fireEvent.click(screen.getByRole("button", { name: /回滚到 rev_old|rollback to rev_old/i }));
 
     await waitFor(() => {
-      expect(rollbackMaterialSyncRevision).toHaveBeenCalledWith("mat_test", "rev_old");
+      expect(rollbackMaterialSyncRevision).toHaveBeenCalledWith(
+        "mat_test",
+        "rev_old",
+        "approve-secret",
+      );
     });
   });
 
@@ -656,10 +684,15 @@ describe("MaterialCloudSyncPanel", () => {
 
     expect(await screen.findByTestId("material-cloud-sync-error")).toHaveTextContent("catalog unavailable");
 
+    enterOfficialPassword();
     fireEvent.click(screen.getByRole("button", { name: /回滚到 rev_old|rollback to rev_old/i }));
 
     await waitFor(() => {
-      expect(rollbackMaterialSyncRevision).toHaveBeenCalledWith("mat_test", "rev_old");
+      expect(rollbackMaterialSyncRevision).toHaveBeenCalledWith(
+        "mat_test",
+        "rev_old",
+        "approve-secret",
+      );
     });
   });
 
@@ -674,10 +707,19 @@ describe("MaterialCloudSyncPanel", () => {
       screen.getAllByRole("button", { name: /已安装|installed/i }).some((button) => button.hasAttribute("disabled")),
     ).toBe(true);
 
+    expect(screen.getByRole("button", {
+      name: /回滚到 rev_old|rollback to rev_old/i,
+    })).toBeDisabled();
+
+    enterOfficialPassword();
     fireEvent.click(screen.getByRole("button", { name: /回滚到 rev_old|rollback to rev_old/i }));
 
     await waitFor(() => {
-      expect(rollbackMaterialSyncRevision).toHaveBeenCalledWith("mat_test", "rev_old");
+      expect(rollbackMaterialSyncRevision).toHaveBeenCalledWith(
+        "mat_test",
+        "rev_old",
+        "approve-secret",
+      );
     });
     expect(fetchMaterialSyncStatus).toHaveBeenCalledTimes(2);
     expect(fetchMaterialRegistryCatalog).toHaveBeenCalledTimes(2);
