@@ -11,6 +11,10 @@ param(
     [int]$WorkerMaxTasksPerChild = 3,
     [int]$MallocArenaMax = 2,
     [int]$SolverCacheBuildMemoryLimitMb = 8192,
+    [ValidateSet("v1", "v2", "auto", "shapely_v1", "rasterio_manifold3d")]
+    [string]$GlbKernel = "v2",
+    [ValidateSet("v1", "v2", "trimesh_v1", "rasterio_manifold3d")]
+    [string]$VectorGlbKernel = "v2",
     [ValidateSet("http", "https")]
     [string]$PublicScheme = "http",
     [switch]$SkipBuild,
@@ -52,15 +56,50 @@ function Ensure-SeededDirectory {
     return (Resolve-Path $Target).Path
 }
 
+function Read-EnvFile {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $values = @{}
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return $values
+    }
+
+    Get-Content -LiteralPath $Path -Encoding UTF8 | ForEach-Object {
+        $line = $_.Trim()
+        if (-not $line -or $line.StartsWith("#")) {
+            return
+        }
+
+        $separator = $line.IndexOf("=")
+        if ($separator -lt 1) {
+            return
+        }
+
+        $key = $line.Substring(0, $separator).Trim()
+        $value = $line.Substring($separator + 1).Trim()
+        if (
+            ($value.StartsWith('"') -and $value.EndsWith('"')) -or
+            ($value.StartsWith("'") -and $value.EndsWith("'"))
+        ) {
+            $value = $value.Substring(1, $value.Length - 2)
+        }
+        $values[$key] = $value
+    }
+
+    return $values
+}
+
 if (-not $RepoRoot.Trim()) {
     $RepoRoot = (Resolve-Path (Join-Path $ScriptDir "..")).Path
 }
 $RepoRoot = (Resolve-Path $RepoRoot).Path
+$localEnv = Read-EnvFile (Join-Path $RepoRoot ".env.local")
 $RuntimeRoot = Ensure-Directory $RuntimeRoot
 $outputDir = Ensure-Directory (Join-Path $RuntimeRoot "output")
 $logsDir = Ensure-Directory (Join-Path $RuntimeRoot "logs")
 $feedbackDir = Ensure-Directory (Join-Path $RuntimeRoot "feedback")
 $lutPresetDir = Ensure-SeededDirectory (Join-Path $RepoRoot "lut-preset") (Join-Path $RuntimeRoot "lut-preset")
+$materialsDir = Ensure-SeededDirectory (Join-Path $RepoRoot "materials") (Join-Path $RuntimeRoot "materials")
 $settingsFile = Join-Path $RuntimeRoot "user_settings.json"
 if (-not (Test-Path -LiteralPath $settingsFile)) {
     Set-Content -LiteralPath $settingsFile -Value "{}" -Encoding UTF8
@@ -108,13 +147,16 @@ if ($existingContainer) {
 $runArgs = @(
     "run", "-d",
     "--name", $ContainerName,
-    "-p", "${PublicFrontendPort}:4174",
+    "-p", "${PublicFrontendPort}:8000",
     "-p", "${PublicBackendPort}:8000",
     "-v", "${outputDir}:/app/output",
     "-v", "${logsDir}:/app/logs",
     "-v", "${feedbackDir}:/app/feedback",
     "-v", "${lutPresetDir}:/app/lut-preset",
+    "-v", "${materialsDir}:/app/materials",
     "-v", "${settingsFile}:/app/user_settings.json",
+    "-e", "LUMINA_SERVE_FRONTEND_DIST=1",
+    "-e", "LUMINA_FRONTEND_DIST_DIR=/app/frontend/dist",
     "-e", "VITE_ALLOW_ALL_HOSTS=true",
     "-e", "VITE_DEV_HOST=0.0.0.0",
     "-e", "LUMINA_LOG_DIR=/app/logs",
@@ -123,6 +165,8 @@ $runArgs = @(
     "-e", "LUMINA_MAX_WORKERS=$MaxWorkers",
     "-e", "LUMINA_WORKER_MAX_TASKS_PER_CHILD=$WorkerMaxTasksPerChild",
     "-e", "LUMINA_SOLVER_CACHE_BUILD_MEMORY_LIMIT_MB=$SolverCacheBuildMemoryLimitMb",
+    "-e", "LUMINA_GLB_KERNEL=$GlbKernel",
+    "-e", "LUMINA_VECTOR_GLB_KERNEL=$VectorGlbKernel",
     "-e", "MALLOC_ARENA_MAX=$MallocArenaMax",
     "-e", "OMP_NUM_THREADS=1",
     "-e", "OPENBLAS_NUM_THREADS=1",
@@ -130,6 +174,25 @@ $runArgs = @(
     "-e", "VECLIB_MAXIMUM_THREADS=1",
     "-e", "NUMEXPR_NUM_THREADS=1"
 )
+
+$feedbackEnvKeys = @(
+    "LUMINA_FEEDBACK_SMTP_HOST",
+    "LUMINA_FEEDBACK_SMTP_PORT",
+    "LUMINA_FEEDBACK_SMTP_USER",
+    "LUMINA_FEEDBACK_SMTP_PASSWORD",
+    "LUMINA_FEEDBACK_SMTP_FROM",
+    "LUMINA_FEEDBACK_TO",
+    "LUMINA_FEEDBACK_SMTP_USE_TLS",
+    "LUMINA_FEEDBACK_SMTP_TIMEOUT_S",
+    "LUMINA_FEEDBACK_RELAY_URL",
+    "LUMINA_FEEDBACK_RELAY_TOKEN",
+    "LUMINA_FEEDBACK_RELAY_TIMEOUT_S"
+)
+foreach ($key in $feedbackEnvKeys) {
+    if ($localEnv.ContainsKey($key) -and $localEnv[$key]) {
+        $runArgs += @("-e", "${key}=$($localEnv[$key])")
+    }
+}
 
 $runArgs += $ImageName
 Invoke-Checked "docker" $runArgs
@@ -140,8 +203,11 @@ Write-Host "Main frontend : ${PublicScheme}://${PublicHost}:$PublicFrontendPort"
 Write-Host "Main backend  : ${PublicScheme}://${PublicHost}:$PublicBackendPort/api/health"
 Write-Host "Runtime root  : $RuntimeRoot"
 Write-Host "Container     : $ContainerName"
+Write-Host "Materials    : $materialsDir"
 Write-Host "Workers       : max=$MaxWorkers recycle=$WorkerMaxTasksPerChild arena=$MallocArenaMax"
 Write-Host "Cache budget  : ${SolverCacheBuildMemoryLimitMb}MB"
+Write-Host "GLB kernel   : $GlbKernel"
+Write-Host "Vector GLB   : $VectorGlbKernel"
 Write-Host ""
 Write-Host "Useful commands:"
 Write-Host "  docker logs -f $ContainerName"

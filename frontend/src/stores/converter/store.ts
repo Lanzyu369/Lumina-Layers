@@ -102,6 +102,23 @@ type LuminaWindow = Window & {
 
 const BATCH_PREVIEW_BROWSER_SAFE_LIMIT = 96;
 
+function looksLikeWhiteMaterialLabel(label: string | null | undefined): boolean {
+  const text = String(label ?? "").trim().toLowerCase();
+  if (!text) return false;
+  if (text.includes("白")) return true;
+  const tokens = text
+    .replace(/\\/g, "/")
+    .replace(/\//g, " ")
+    .replace(/[-_]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+  return tokens.includes("white") || tokens.includes("w");
+}
+
+export function inferDefaultMaterialBackingDirName(names: string[]): string | null {
+  return names.find((name) => looksLikeWhiteMaterialLabel(name)) ?? names[0] ?? null;
+}
+
 // ===========================================================================
 // Material-archive achievable-color suggestion helpers (module-local state)
 // 材料档案可达色建议的模块级辅助状态（LRU + AbortController）
@@ -234,6 +251,30 @@ export function buildLayerImagesSourceKey(
     state.sessionId,
     state.previewGlbUrl ?? "",
     state.previewBaseImageUrl ?? state.previewImageUrl ?? "",
+  ].join("|");
+}
+
+function buildPuzzlePreviewSourceKey(
+  state: Pick<
+    ConverterState,
+    | "sessionId"
+    | "previewGlbUrl"
+    | "previewBaseImageUrl"
+    | "previewImageUrl"
+    | "previewPixelWidth"
+    | "previewPixelHeight"
+  >,
+): string | null {
+  if (!state.sessionId) {
+    return null;
+  }
+
+  return [
+    state.sessionId,
+    state.previewGlbUrl ?? "",
+    state.previewBaseImageUrl ?? state.previewImageUrl ?? "",
+    state.previewPixelWidth ?? "",
+    state.previewPixelHeight ?? "",
   ].join("|");
 }
 
@@ -1076,11 +1117,14 @@ function buildMaterialSourceParams(
   const materialGridResolution = settingsState.enableSolverCacheGridSelection
     ? settingsState.solverCacheGridResolution
     : undefined;
-  const backingMaterialIndex = state.materialBackingMaterialDirName
-    ? state.selectedMaterialDirNames.indexOf(
-        state.materialBackingMaterialDirName,
-      )
-    : 0;
+  const resolvedBackingDirName =
+    state.materialBackingMaterialDirName &&
+    state.selectedMaterialDirNames.includes(state.materialBackingMaterialDirName)
+      ? state.materialBackingMaterialDirName
+      : inferDefaultMaterialBackingDirName(state.selectedMaterialDirNames);
+  const backingMaterialIndex = resolvedBackingDirName
+    ? state.selectedMaterialDirNames.indexOf(resolvedBackingDirName)
+    : -1;
   return {
     source_kind: "legacy_single" as const,
     lut_name: "__material_archive__",
@@ -2707,7 +2751,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         const nextBacking =
           currentBacking && names.includes(currentBacking)
             ? currentBacking
-            : (names[0] ?? null);
+            : inferDefaultMaterialBackingDirName(names);
         persistMaterialBackingMaterialDirName(nextBacking);
         return {
           selectedMaterialDirNames: names,
@@ -3371,6 +3415,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
       const requestedSessionId = state.sessionId;
       const requestedParams = buildPuzzlePreviewParams(state);
+      const requestedSourceKey = buildPuzzlePreviewSourceKey(state);
 
       try {
         const response = await apiConvertPuzzleLayoutPreview(
@@ -3379,10 +3424,12 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         );
         const latestState = _get();
         const latestParams = buildPuzzlePreviewParams(latestState);
+        const latestSourceKey = buildPuzzlePreviewSourceKey(latestState);
         if (
           latestState.sessionId !== requestedSessionId ||
           !latestState.puzzleEnabled ||
-          JSON.stringify(latestParams) !== JSON.stringify(requestedParams)
+          JSON.stringify(latestParams) !== JSON.stringify(requestedParams) ||
+          latestSourceKey !== requestedSourceKey
         ) {
           return false;
         }
@@ -3401,10 +3448,12 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       } catch (err) {
         const latestState = _get();
         const latestParams = buildPuzzlePreviewParams(latestState);
+        const latestSourceKey = buildPuzzlePreviewSourceKey(latestState);
         if (
           latestState.sessionId !== requestedSessionId ||
           !latestState.puzzleEnabled ||
-          JSON.stringify(latestParams) !== JSON.stringify(requestedParams)
+          JSON.stringify(latestParams) !== JSON.stringify(requestedParams) ||
+          latestSourceKey !== requestedSourceKey
         ) {
           return false;
         }
@@ -5314,6 +5363,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           use_lut_constrained: state.use_lut_constrained,
           auto_dynamic_range: state.auto_dynamic_range,
           is_dark: useSettingsStore.getState().theme === "dark",
+          large_format_enabled: state.largeFormatEnabled,
         };
         _logPreviewTimer("request sent");
         _previewClientLog("preview: request sent", {
@@ -5703,7 +5753,14 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
         if (state.largeFormatEnabled) {
           const lfResponse = await apiConvertGenerateLargeFormat(sessionId, {
-            target_height_mm: state.target_height_mm,
+            // Let the backend derive height from the preview cache aspect
+            // ratio. SVG files can report slightly different browser and
+            // server dimensions (CSS width/height vs viewBox/content), and
+            // sending both values makes the backend reject large-format
+            // generation with 422 when they differ by more than 1 mm.
+            // 大画幅只提交宽度，让后端按预览缓存比例推导高度。SVG 的浏览器
+            // 预览比例与后端解析比例可能不完全一致；同时提交宽高会触发后端
+            // 1mm 容差校验并返回 422。
             tile_width_mm: state.tileWidthMm,
             tile_height_mm: state.tileHeightMm,
             params: baseParams,
@@ -5947,17 +6004,19 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           regionData: null,
           selectedRegions: [],
           batchMode: false,
+          batchResult: null,
           hasManualPreview: false,
         });
       } else {
         // Still in BatchMode with multiple files
-        set({ batchFiles: remaining });
+        set({ batchFiles: remaining, batchResult: null });
       }
     },
 
     clearBatchFiles: () =>
       set({
         batchFiles: [],
+        batchResult: null,
         ...EMPTY_LUT_MATCH_STATE,
         puzzleEnabled: false,
         threemfDiskPath: null,
@@ -5983,6 +6042,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         set({
           batchFiles: [...state.batchFiles, ...validFiles],
           batchMode: true,
+          batchResult: null,
         });
         return;
       }
@@ -5991,6 +6051,37 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         const singleFile = validFiles[0];
         const isSvg = isSvgFile(singleFile);
         const autoModelingMode = isSvg ? ModelingModeEnum.VECTOR : undefined;
+
+        if (state.imageFile) {
+          const prev = state.imagePreviewUrl;
+          if (prev) URL.revokeObjectURL(prev);
+
+          set({
+            batchFiles: [state.imageFile, singleFile],
+            imageFile: null,
+            imagePreviewUrl: null,
+            aspectRatio: null,
+            previewImageUrl: null,
+            previewBaseImageUrl: null,
+            sessionId: null,
+            previewGlbUrl: null,
+            modelUrl: null,
+            batchPreviewItems: [],
+            threemfDiskPath: null,
+            downloadUrl: null,
+            previewWarnings: [],
+            largeFormatWarnings: [],
+            ...EMPTY_LUT_MATCH_STATE,
+            puzzleEnabled: false,
+            ...DEFAULT_PUZZLE_PREVIEW_STATE,
+            batchMode: true,
+            hasManualPreview: false,
+            layerImages: [],
+            layerImagesOpen: false,
+            batchResult: null,
+          });
+          return;
+        }
 
         if (isRawFileConverter(singleFile)) {
           const prev = state.imagePreviewUrl;
@@ -6017,6 +6108,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             cropModalOpen: state.enableCrop,
             layerImages: [],
             layerImagesOpen: false,
+            batchResult: null,
           });
           uploadImagePreview(singleFile)
             .then(({ preview_url, width, height }) => {
@@ -6031,72 +6123,37 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           return;
         }
 
-        if (state.imageFile) {
-          const prev = state.imagePreviewUrl;
-          if (prev && prev.startsWith("blob:")) URL.revokeObjectURL(prev);
+        const previewUrl = URL.createObjectURL(singleFile);
+        const img = new Image();
+        img.onload = () => {
+          set({ aspectRatio: img.naturalWidth / img.naturalHeight });
+        };
+        img.src = previewUrl;
 
-          const previewUrl = URL.createObjectURL(singleFile);
-          const img = new Image();
-          img.onload = () => {
-            set({ aspectRatio: img.naturalWidth / img.naturalHeight });
-          };
-          img.src = previewUrl;
-
-          set({
-            imageFile: singleFile,
-            imagePreviewUrl: previewUrl,
-            previewImageUrl: null,
-            previewBaseImageUrl: null,
-            sessionId: null,
-            previewGlbUrl: null,
-            modelUrl: null,
-            batchPreviewItems: [],
-            threemfDiskPath: null,
-            downloadUrl: null,
-            previewWarnings: [],
-            largeFormatWarnings: [],
-            ...EMPTY_LUT_MATCH_STATE,
-            puzzleEnabled: false,
-            ...DEFAULT_PUZZLE_PREVIEW_STATE,
-            batchMode: false,
-            hasManualPreview: false,
-            cropModalOpen: isSvg ? false : state.enableCrop,
-            layerImages: [],
-            layerImagesOpen: false,
-            ...(autoModelingMode ? { modeling_mode: autoModelingMode } : {}),
-          });
-        } else {
-          const previewUrl = URL.createObjectURL(singleFile);
-          const img = new Image();
-          img.onload = () => {
-            set({ aspectRatio: img.naturalWidth / img.naturalHeight });
-          };
-          img.src = previewUrl;
-
-          set({
-            imageFile: singleFile,
-            imagePreviewUrl: previewUrl,
-            previewImageUrl: null,
-            previewBaseImageUrl: null,
-            sessionId: null,
-            previewGlbUrl: null,
-            modelUrl: null,
-            batchPreviewItems: [],
-            threemfDiskPath: null,
-            downloadUrl: null,
-            previewWarnings: [],
-            largeFormatWarnings: [],
-            ...EMPTY_LUT_MATCH_STATE,
-            puzzleEnabled: false,
-            ...DEFAULT_PUZZLE_PREVIEW_STATE,
-            batchMode: false,
-            hasManualPreview: false,
-            cropModalOpen: isSvg ? false : state.enableCrop,
-            layerImages: [],
-            layerImagesOpen: false,
-            ...(autoModelingMode ? { modeling_mode: autoModelingMode } : {}),
-          });
-        }
+        set({
+          imageFile: singleFile,
+          imagePreviewUrl: previewUrl,
+          previewImageUrl: null,
+          previewBaseImageUrl: null,
+          sessionId: null,
+          previewGlbUrl: null,
+          modelUrl: null,
+          batchPreviewItems: [],
+          threemfDiskPath: null,
+          downloadUrl: null,
+          previewWarnings: [],
+          largeFormatWarnings: [],
+          ...EMPTY_LUT_MATCH_STATE,
+          puzzleEnabled: false,
+          ...DEFAULT_PUZZLE_PREVIEW_STATE,
+          batchMode: false,
+          hasManualPreview: false,
+          cropModalOpen: isSvg ? false : state.enableCrop,
+          layerImages: [],
+          layerImagesOpen: false,
+          batchResult: null,
+          ...(autoModelingMode ? { modeling_mode: autoModelingMode } : {}),
+        });
         return;
       }
 
@@ -6132,8 +6189,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         hasManualPreview: false,
         layerImages: [],
         layerImagesOpen: false,
+        batchResult: null,
       });
-      console.log("[DEBUG] handleFilesSelect (batch): cleared layerImages");
     },
 
     submitBatch: async () => {

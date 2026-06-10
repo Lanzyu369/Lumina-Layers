@@ -35,13 +35,17 @@ export function computePuzzleOverlayPlacement(
   enableOutline: boolean,
   enableCloisonne: boolean,
   wireHeightMm: number,
+  previewCanvasBounds: PuzzleOverlayBounds | null = null,
 ): PuzzleOverlayPlacement | null {
   if (!modelBounds) {
     return null;
   }
 
-  const width = modelBounds.maxX - modelBounds.minX;
-  const height = modelBounds.maxY - modelBounds.minY;
+  const overlayBounds = isValidPuzzleOverlayBounds(previewCanvasBounds)
+    ? previewCanvasBounds
+    : modelBounds;
+  const width = overlayBounds.maxX - overlayBounds.minX;
+  const height = overlayBounds.maxY - overlayBounds.minY;
   if (width <= 0 || height <= 0) {
     return null;
   }
@@ -61,12 +65,26 @@ export function computePuzzleOverlayPlacement(
     : colorTopZ;
 
   return {
-    centerX: (modelBounds.minX + modelBounds.maxX) / 2,
-    centerY: (modelBounds.minY + modelBounds.maxY) / 2,
+    centerX: (overlayBounds.minX + overlayBounds.maxX) / 2,
+    centerY: (overlayBounds.minY + overlayBounds.maxY) / 2,
     width,
     height,
     z: Math.max(colorTopZ, cloisonneTopZ, outlineTopZ) + OVERLAY_ELEVATION_MM,
   };
+}
+
+function isValidPuzzleOverlayBounds(
+  bounds: PuzzleOverlayBounds | null,
+): bounds is PuzzleOverlayBounds {
+  return Boolean(
+    bounds
+      && Number.isFinite(bounds.minX)
+      && Number.isFinite(bounds.maxX)
+      && Number.isFinite(bounds.minY)
+      && Number.isFinite(bounds.maxY)
+      && bounds.maxX > bounds.minX
+      && bounds.maxY > bounds.minY,
+  );
 }
 
 /**

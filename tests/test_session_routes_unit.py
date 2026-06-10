@@ -255,6 +255,89 @@ def test_serve_file_renews_ttl_file_on_access(
             os.unlink(path)
 
 
+def test_serve_large_glb_uses_gzip_when_client_accepts_it(
+    client_with_stores: tuple[TestClient, SessionStore, FileRegistry],
+) -> None:
+    """GET /api/files/{file_id} should gzip large GLB previews for transport."""
+    client, store, registry = client_with_stores
+    session_id = store.create()
+    payload = b"glTF" + (b"preview-model-payload" * 512)
+    path = _create_temp_file(payload)
+    glb_path = f"{path}.glb"
+    os.replace(path, glb_path)
+    file_id = registry.register_path(session_id, glb_path, "preview.glb")
+
+    try:
+        response = client.get(
+            f"/api/files/{file_id}",
+            headers={"Accept-Encoding": "gzip"},
+        )
+
+        assert response.status_code == 200
+        assert response.headers["content-encoding"] == "gzip"
+        assert response.headers["vary"] == "Accept-Encoding"
+        assert response.headers["content-type"].startswith("model/gltf-binary")
+        assert "content-length" not in response.headers
+        assert response.content == payload
+    finally:
+        if os.path.exists(glb_path):
+            os.unlink(glb_path)
+
+
+def test_serve_glb_without_gzip_accept_encoding_uses_plain_file_response(
+    client_with_stores: tuple[TestClient, SessionStore, FileRegistry],
+) -> None:
+    """GET /api/files/{file_id} should keep plain GLB responses when gzip is not accepted."""
+    client, store, registry = client_with_stores
+    session_id = store.create()
+    payload = b"glTF" + (b"preview-model-payload" * 512)
+    path = _create_temp_file(payload)
+    glb_path = f"{path}.glb"
+    os.replace(path, glb_path)
+    file_id = registry.register_path(session_id, glb_path, "preview.glb")
+
+    try:
+        response = client.get(
+            f"/api/files/{file_id}",
+            headers={"Accept-Encoding": "identity"},
+        )
+
+        assert response.status_code == 200
+        assert "content-encoding" not in response.headers
+        assert response.headers["content-length"] == str(len(payload))
+        assert response.content == payload
+    finally:
+        if os.path.exists(glb_path):
+            os.unlink(glb_path)
+
+
+def test_serve_non_glb_file_does_not_use_preview_gzip_path(
+    client_with_stores: tuple[TestClient, SessionStore, FileRegistry],
+) -> None:
+    """GET /api/files/{file_id} should not gzip regular downloads through the GLB path."""
+    client, store, registry = client_with_stores
+    session_id = store.create()
+    payload = b"3mf" + (b"download-payload" * 512)
+    path = _create_temp_file(payload)
+    model_path = f"{path}.3mf"
+    os.replace(path, model_path)
+    file_id = registry.register_path(session_id, model_path, "download.3mf")
+
+    try:
+        response = client.get(
+            f"/api/files/{file_id}",
+            headers={"Accept-Encoding": "gzip"},
+        )
+
+        assert response.status_code == 200
+        assert "content-encoding" not in response.headers
+        assert response.headers["content-length"] == str(len(payload))
+        assert response.content == payload
+    finally:
+        if os.path.exists(model_path):
+            os.unlink(model_path)
+
+
 def test_cleanup_session_files_route_preserves_session_and_kept_registry_file(
     client_with_stores: tuple[TestClient, SessionStore, FileRegistry],
 ) -> None:

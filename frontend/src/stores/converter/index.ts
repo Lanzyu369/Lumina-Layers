@@ -7,6 +7,7 @@ export {
   DEFAULT_STATE,
   buildLayerImagesSourceKey,
   collectConverterKeepFileIds,
+  inferDefaultMaterialBackingDirName,
   resolveConverterSourceSelection,
 } from "./store";
 

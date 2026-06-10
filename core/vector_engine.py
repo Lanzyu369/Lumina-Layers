@@ -19,19 +19,25 @@ Key changes from v1:
 import os
 import re
 import json
+import io
 import numpy as np
 import time
 import xml.etree.ElementTree as ET
 import trimesh
 import cv2
 from dataclasses import dataclass, field
-from svgelements import SVG, Path, Shape, Move, Line, Close, CubicBezier, QuadraticBezier, Color
+from svgelements import SVG, Path, Shape, Move, Line, Close, CubicBezier, QuadraticBezier, Arc, Color
 from shapely.geometry import Polygon, MultiPolygon, LineString, Point, box
 from shapely import affinity
 from shapely.ops import polygonize, unary_union
 from shapely.strtree import STRtree
 from shapely.validation import make_valid
 from shapely import set_precision
+from shapely.errors import ShapelyError
+try:
+    from shapely import disjoint_subset_union_all
+except ImportError:  # Shapely < 2.1; keep the old union path available.
+    disjoint_subset_union_all = None
 
 from api.structured_logging import get_logger
 from config import PrinterConfig, ColorSystem, VectorConfig
@@ -53,6 +59,19 @@ _MAX_BEZIER_DEPTH = 16
 # only sub-pixel boundary jitter (<1px) while keeping cost ~shape_area*16.
 # 外观面归属掩膜的超采样倍率：修复 fillPoly 整数截断导致的 1px 缝。
 _MASK_SUPERSAMPLE = 4
+_ARC_SAMPLE_POSITIONS_10 = np.linspace(0.1, 1.0, 10)
+_ARC_SAMPLE_POSITIONS_10.setflags(write=False)
+
+
+def _union_run_group_geometries(geometries):
+    """Union run-group geometries using Shapely's sparse-geometry fast path."""
+
+    if disjoint_subset_union_all is not None:
+        try:
+            return disjoint_subset_union_all(geometries)
+        except VECTOR_HANDLED_ERRORS:
+            pass
+    return unary_union(geometries)
 
 
 def _color_object_to_hex(color_obj):
@@ -261,7 +280,178 @@ VECTOR_HANDLED_ERRORS = (
     ImportError,
     ModuleNotFoundError,
     ArithmeticError,
+    ShapelyError,
 )
+
+
+def _tag_local_name(elem):
+    """Return an XML element's local tag name without its namespace."""
+
+    return str(getattr(elem, "tag", "")).split("}")[-1]
+
+
+def _filtered_svg_source_for_vector_parse(svg_path, parse_expand_stroke_to_fill):
+    """Return a filtered SVG source that omits stroke-only paths when safe."""
+
+    try:
+        tree = ET.parse(svg_path)
+        root = tree.getroot()
+    except VECTOR_HANDLED_ERRORS:
+        return None, None
+
+    if parse_expand_stroke_to_fill:
+        return root, None
+
+    reference_tags = {
+        "defs",
+        "clipPath",
+        "mask",
+        "pattern",
+        "linearGradient",
+        "radialGradient",
+        "symbol",
+        "style",
+        "use",
+    }
+    if any(_tag_local_name(elem) in reference_tags for elem in root.iter()):
+        return root, None
+
+    removed_count = 0
+
+    def _remove_ignored_paths(parent):
+        nonlocal removed_count
+        for child in list(parent):
+            tag = _tag_local_name(child)
+            if tag == "path":
+                fill_value = str(child.get("fill", "")).strip().lower()
+                has_id = child.get("id") is not None
+                if fill_value == "none" and not has_id:
+                    parent.remove(child)
+                    removed_count += 1
+                    continue
+            _remove_ignored_paths(child)
+
+    _remove_ignored_paths(root)
+    if removed_count <= 0:
+        return root, None
+
+    return root, io.BytesIO(ET.tostring(root, encoding="utf-8"))
+
+
+def _sample_arc_segment_points(segment, sample_count=10):
+    """Sample an SVG Arc segment using svgelements' vectorized path."""
+
+    try:
+        count = int(sample_count)
+        positions = _ARC_SAMPLE_POSITIONS_10 if count == 10 else np.linspace(0.1, 1.0, count)
+        points = segment.npoint(positions)
+        arr = np.asarray(points, dtype=float)
+        if arr.ndim == 2 and arr.shape[1] >= 2:
+            return [(float(x), float(y)) for x, y in arr[:, :2]]
+    except VECTOR_HANDLED_ERRORS:
+        pass
+    try:
+        return [(float(segment.end.x), float(segment.end.y))]
+    except VECTOR_HANDLED_ERRORS:
+        return []
+
+
+def _signed_area_for_coords(coords):
+    """Return signed XY area for an open polygon coordinate array."""
+
+    if coords is None or len(coords) < 3:
+        return 0.0
+    x = coords[:, 0]
+    y = coords[:, 1]
+    return float(0.5 * np.sum(x * np.roll(y, -1) - np.roll(x, -1) * y))
+
+
+def _convex_polygon_exterior_coords(poly):
+    """Return CCW exterior coordinates for a convex no-hole polygon, else None."""
+
+    if poly is None or poly.is_empty or not hasattr(poly, "exterior"):
+        return None
+    try:
+        if len(poly.interiors) > 0:
+            return None
+    except VECTOR_HANDLED_ERRORS:
+        return None
+
+    coords = np.asarray(poly.exterior.coords[:-1], dtype=np.float64)
+    if coords.ndim != 2 or coords.shape[0] < 3 or coords.shape[1] < 2:
+        return None
+    coords = coords[:, :2]
+    area = _signed_area_for_coords(coords)
+    if abs(area) < 1e-12:
+        return None
+
+    sign = 0
+    count = coords.shape[0]
+    for idx in range(count):
+        p0 = coords[idx]
+        p1 = coords[(idx + 1) % count]
+        p2 = coords[(idx + 2) % count]
+        edge_a = p1 - p0
+        edge_b = p2 - p1
+        cross = float(edge_a[0] * edge_b[1] - edge_a[1] * edge_b[0])
+        if abs(cross) < 1e-9:
+            return None
+        current = 1 if cross > 0 else -1
+        if sign and current != sign:
+            return None
+        sign = current
+
+    if area < 0:
+        coords = coords[::-1].copy()
+    return coords
+
+
+def _direct_convex_extrusion_base(poly, scale):
+    """Build a unit-height extrusion for convex no-hole polygons."""
+
+    coords = _convex_polygon_exterior_coords(poly)
+    if coords is None:
+        return None
+
+    scale_value = float(scale)
+    if not np.isfinite(scale_value) or scale_value <= 0:
+        return None
+
+    xy = coords * scale_value
+    count = xy.shape[0]
+    bottom = np.column_stack((xy, np.zeros(count, dtype=np.float64)))
+    top = np.column_stack((xy, np.ones(count, dtype=np.float64)))
+    vertices = np.vstack((bottom, top)).astype(np.float64, copy=False)
+
+    faces = []
+    for idx in range(1, count - 1):
+        faces.append((count, count + idx, count + idx + 1))
+        faces.append((0, idx + 1, idx))
+    for idx in range(count):
+        next_idx = (idx + 1) % count
+        faces.append((idx, next_idx, count + next_idx))
+        faces.append((idx, count + next_idx, count + idx))
+
+    return vertices, np.asarray(faces, dtype=np.int64)
+
+
+def _normalize_contours_cached(cache, geom, close_delta_mm=0.03):
+    """Normalize contours with a per-call-site identity cache."""
+
+    if cache is None or geom is None:
+        return VectorProcessor._normalize_contours(geom, close_delta_mm=close_delta_mm)
+    key = (id(geom), round(float(close_delta_mm), 8))
+    cached = cache.get(key)
+    if isinstance(cached, tuple) and len(cached) == 2:
+        cached_geom, cached_result = cached
+        if cached_geom is geom:
+            return cached_result
+    result = VectorProcessor._normalize_contours(
+        geom,
+        close_delta_mm=close_delta_mm,
+    )
+    cache[key] = (geom, result)
+    return result
 
 
 # Lazy import to avoid circular dependency at module load time
@@ -1239,12 +1429,25 @@ class VectorProcessor:
         if geom is None or geom.is_empty:
             return geom
         try:
-            inflated = geom.buffer(close_delta_mm, join_style="mitre", mitre_limit=2.0)
+            inflated = geom.buffer(
+                close_delta_mm,
+                quad_segs=1,
+                join_style="mitre",
+                mitre_limit=2.0,
+            )
             if inflated.is_empty:
                 return geom
-            deflated = inflated.buffer(-close_delta_mm, join_style="mitre", mitre_limit=2.0)
+            deflated = inflated.buffer(
+                -close_delta_mm,
+                quad_segs=1,
+                join_style="mitre",
+                mitre_limit=2.0,
+            )
             if deflated.is_empty:
                 return geom
+            if deflated.is_valid and deflated.geom_type in ("Polygon", "MultiPolygon"):
+                return deflated
+
             result = make_valid(deflated)
             # If make_valid returned GeometryCollection with non-polygon
             # elements only (e.g. LineString, Point from degenerate geometry),
@@ -1920,13 +2123,7 @@ class VectorProcessor:
                 (_clip_area / _pre_area * 100) if _pre_area > 0 else 0.0,
             )
 
-            post_clip = []
-            for item in clipped_shapes:
-                g = item["geometry"]
-                g = VectorProcessor._normalize_contours(g)
-                if g is not None and not g.is_empty:
-                    item["geometry"] = g
-                    post_clip.append(item)
+            post_clip = VectorProcessor._postprocess_clipped_shapes(clipped_shapes)
             _norm_area = sum(it["geometry"].area for it in post_clip if it["geometry"] is not None)
             _log.debug(
                 "post-clip normalize: %s -> %s shapes, area %.1f -> %.1f",
@@ -2930,10 +3127,20 @@ class VectorProcessor:
                 continue
 
             occluders = []
+            predicate_filtered = False
             try:
-                candidate_refs = tree.query(geom)
-            except Exception:
-                candidate_refs = []
+                candidate_refs = tree.query(geom, predicate="intersects")
+                predicate_filtered = True
+            except TypeError:
+                try:
+                    candidate_refs = tree.query(geom)
+                except VECTOR_HANDLED_ERRORS:
+                    candidate_refs = []
+            except VECTOR_HANDLED_ERRORS:
+                try:
+                    candidate_refs = tree.query(geom)
+                except VECTOR_HANDLED_ERRORS:
+                    candidate_refs = []
 
             for ref in candidate_refs:
                 if isinstance(ref, (int, np.integer)):
@@ -2945,25 +3152,30 @@ class VectorProcessor:
                 if orders[idx] <= i:
                     continue
                 cand = geoms[idx]
+                if predicate_filtered:
+                    occluders.append(cand)
+                    continue
                 try:
                     if cand.intersects(geom):
                         occluders.append(cand)
-                except Exception:
+                except VECTOR_HANDLED_ERRORS:
                     continue
 
+            geometry_normalized = False
             if not occluders:
                 clipped = geom
+                geometry_normalized = bool(item.get("geometry_normalized"))
             else:
                 occ = occluders[0] if len(occluders) == 1 else unary_union(occluders)
                 try:
                     clipped = geom.difference(occ)
-                except Exception:
+                except VECTOR_HANDLED_ERRORS:
                     # First attempt failed — repair both geometries and retry.
                     try:
                         fixed_geom = geom if geom.is_valid else geom.buffer(0)
                         fixed_occ = occ if occ.is_valid else occ.buffer(0)
                         clipped = fixed_geom.difference(fixed_occ)
-                    except Exception:
+                    except VECTOR_HANDLED_ERRORS:
                         # Cannot compute difference — drop shape to avoid
                         # overlapping geometry that breaks the mesh.
                         clipped = None
@@ -2977,6 +3189,7 @@ class VectorProcessor:
                             "geometry": clipped,
                             "color": item["color"],
                             "draw_order": i,
+                            "geometry_normalized": geometry_normalized,
                         }
                     )
 
@@ -2984,10 +3197,24 @@ class VectorProcessor:
         if return_silhouette:
             try:
                 silhouette = unary_union(geoms)
-            except Exception:
+            except VECTOR_HANDLED_ERRORS:
                 silhouette = None
             return result, silhouette
         return result
+
+    @staticmethod
+    def _postprocess_clipped_shapes(clipped_shapes):
+        post_clip = []
+        for item in clipped_shapes:
+            g = item["geometry"]
+            if item.get("geometry_normalized") is not True:
+                g = VectorProcessor._normalize_contours(g)
+            if g is not None and not g.is_empty:
+                updated = dict(item)
+                updated["geometry"] = g
+                updated["geometry_normalized"] = True
+                post_clip.append(updated)
+        return post_clip
 
     # ── Stage 4: Color matching with per-color cache ─────────────────────
 
@@ -3295,6 +3522,7 @@ class VectorProcessor:
 
         meshes_by_slot = {}
         stage_d_hist: dict[int, dict[int, int]] = {}
+        precision_cache = {}
         for (ch, run_start, run_end), geoms in run_groups.items():
             slot_name = slot_names[ch]
             if slot_name not in meshes_by_slot:
@@ -3315,13 +3543,18 @@ class VectorProcessor:
                 snapped_geoms = []
                 for g in geoms:
                     if g is not None and not g.is_empty:
-                        g_snapped = set_precision(g, grid_size=0.001)
+                        snap_key = (id(g), 0.001)
+                        if snap_key in precision_cache:
+                            g_snapped = precision_cache[snap_key]
+                        else:
+                            g_snapped = set_precision(g, grid_size=0.001)
+                            precision_cache[snap_key] = g_snapped
                         if g_snapped is not None and not g_snapped.is_empty:
                             snapped_geoms.append(g_snapped)
                 if snapped_geoms:
                     geoms = snapped_geoms
                 try:
-                    unioned = unary_union(geoms)
+                    unioned = _union_run_group_geometries(geoms)
                     union_area = float(unioned.area) if unioned is not None and not unioned.is_empty else 0.0
                     if pre_union_area > 0 and union_area < pre_union_area * 0.98:
                         _log.debug(
@@ -3468,14 +3701,28 @@ class VectorProcessor:
             ``(shape_list, scale_factor, bbox_tuple)``
             where each shape item is ``{'poly': Polygon, 'color': (r,g,b)}``.
         """
+        parse_expand_stroke_to_fill = bool(getattr(self, "_parse_expand_stroke_to_fill", True))
+        parsed_root, svg_parse_source = _filtered_svg_source_for_vector_parse(
+            svg_path,
+            parse_expand_stroke_to_fill=parse_expand_stroke_to_fill,
+        )
+        if svg_parse_source is None:
+            svg_parse_source = svg_path
         try:
-            svg = SVG.parse(svg_path)
-        except Exception as e:
-            raise ValueError(f"Failed to parse SVG: {e}")
+            svg = SVG.parse(svg_parse_source)
+        except VECTOR_HANDLED_ERRORS as e:
+            if svg_parse_source is not svg_path:
+                try:
+                    svg = SVG.parse(svg_path)
+                    parsed_root = None
+                except VECTOR_HANDLED_ERRORS as fallback_error:
+                    raise ValueError(f"Failed to parse SVG: {fallback_error}") from fallback_error
+            else:
+                raise ValueError(f"Failed to parse SVG: {e}") from e
 
         image_vectorizer_origin = False
         try:
-            root = ET.parse(svg_path).getroot()
+            root = parsed_root if parsed_root is not None else ET.parse(svg_path).getroot()
             image_vectorizer_origin = root.get("data-lumina-origin") == "image-vectorizer"
         except VECTOR_HANDLED_ERRORS:
             image_vectorizer_origin = False
@@ -3484,7 +3731,6 @@ class VectorProcessor:
         _url_re = re.compile(r"url\(#([^)]+)\)")
 
         tol_svg = self.sampling_precision / max(target_width_mm / 100.0, 0.01)
-        parse_expand_stroke_to_fill = bool(getattr(self, "_parse_expand_stroke_to_fill", True))
 
         def _sample_path_coords(path_obj):
             try:
@@ -3719,6 +3965,11 @@ class VectorProcessor:
                         coords,
                         0,
                     )
+                elif isinstance(seg, Arc):
+                    start_pt = (seg.start.x, seg.start.y)
+                    if not coords or coords[-1] != start_pt:
+                        coords.append(start_pt)
+                    coords.extend(_sample_arc_segment_points(seg, sample_count=10))
                 else:
                     coords.append((seg.start.x, seg.start.y))
                     try:
@@ -3746,6 +3997,7 @@ class VectorProcessor:
         skipped_types = {}
         skipped_gradient_count = 0
         skipped_polygon_count = 0
+        normalize_cache = {}
         _log.debug("Parsing SVG geometry...")
 
         def _sample_stroke_geometry(path_obj, stroke_width_svg, cap_style_name="round", join_style_name="round"):
@@ -3793,7 +4045,7 @@ class VectorProcessor:
             stroke_rgb = None
             stroke_hex = None
             stroke_width = 0.0
-            if has_stroke:
+            if has_stroke and parse_expand_stroke_to_fill:
                 stroke_hex = _color_object_to_hex(getattr(element, "stroke", None))
                 try:
                     stroke_rgb = (element.stroke.red, element.stroke.green, element.stroke.blue)
@@ -3951,7 +4203,13 @@ class VectorProcessor:
                     if p is not None and not p.is_empty:
                         p = VectorProcessor._normalize_contours(p)
                         if p is not None and not p.is_empty:
-                            raw_shapes.append({"poly": p, "color": gs["color"]})
+                            raw_shapes.append(
+                                {
+                                    "poly": p,
+                                    "color": gs["color"],
+                                    "geometry_normalized": True,
+                                }
+                            )
                 if not grad_shapes:
                     skipped_gradient_count += 1
                 continue
@@ -4038,10 +4296,10 @@ class VectorProcessor:
                         if expanded is not None and not expanded.is_empty:
                             result_poly = expanded
                             same_color_stroke_double_buffer = True
-                    except Exception:
+                    except VECTOR_HANDLED_ERRORS:
                         pass
 
-            result_poly = VectorProcessor._normalize_contours(result_poly)
+            result_poly = _normalize_contours_cached(normalize_cache, result_poly)
             if result_poly is None or result_poly.is_empty:
                 skipped_polygon_count += 1
                 continue
@@ -4054,6 +4312,7 @@ class VectorProcessor:
                     "same_color_stroke": bool(has_stroke and stroke_hex == fill_hex and stroke_width > 0.0),
                     "same_color_stroke_double_buffer": same_color_stroke_double_buffer,
                     "stroke_width_svg": float(stroke_width) if has_stroke else 0.0,
+                    "geometry_normalized": True,
                 }
             )
 
@@ -4137,14 +4396,20 @@ class VectorProcessor:
         final_shapes = []
         for item in raw_shapes:
             shifted = affinity.translate(item["poly"], xoff=-gx0, yoff=-gy0)
+            geometry_normalized = bool(item.get("geometry_normalized"))
             if simplify_tol_svg > 0.0:
+                before_simplify = shifted
                 try:
                     shifted = shifted.simplify(simplify_tol_svg, preserve_topology=True)
+                    if geometry_normalized and not shifted.equals_exact(before_simplify, tolerance=0.0):
+                        geometry_normalized = False
                 except VECTOR_HANDLED_ERRORS:
+                    geometry_normalized = False
                     pass
 
             if not shifted.is_valid:
                 shifted = make_valid(shifted)
+                geometry_normalized = False
 
             if shifted.is_empty or shifted.area <= min_area_svg:
                 continue
@@ -4157,6 +4422,8 @@ class VectorProcessor:
             ):
                 if key in item:
                     final_item[key] = item[key]
+            if geometry_normalized:
+                final_item["geometry_normalized"] = True
             final_shapes.append(final_item)
 
         return final_shapes, scale_factor, (gx0, gy0, real_w, real_h)
@@ -4235,24 +4502,42 @@ class VectorProcessor:
             try:
                 cache_key = None
                 cached_base = None
+                base_vertices = None
+                base_faces = None
                 if extrude_cache is not None:
                     # Key excludes height: cache unit-height (h=1) base mesh,
-                    # then scale Z per call. Avoids re-triangulating the same
-                    # polygon when it appears in multiple layers at different heights.
-                    cache_key = (poly.wkb, round(float(scale), 8))
+                    # then scale Z per call. Avoids re-triangulating equal
+                    # polygons that appear in multiple layer runs.
+                    cache_key = (poly, round(float(scale), 8))
                     cached_base = extrude_cache.get(cache_key)
 
                 if cached_base is None:
-                    m_base = trimesh.creation.extrude_polygon(poly, height=1.0)
-                    m_base.apply_scale([scale, scale, 1.0])
+                    direct_base = _direct_convex_extrusion_base(poly, scale)
+                    if direct_base is not None:
+                        base_vertices, base_faces = direct_base
+                    else:
+                        m_base = trimesh.creation.extrude_polygon(poly, height=1.0)
+                        base_vertices = np.asarray(m_base.vertices, dtype=np.float64).copy()
+                        if base_vertices.ndim == 2 and base_vertices.shape[1] >= 2:
+                            base_vertices[:, 0] *= float(scale)
+                            base_vertices[:, 1] *= float(scale)
+                        base_faces = np.asarray(m_base.faces, dtype=np.int64).copy()
                     if extrude_cache is not None and cache_key is not None:
-                        extrude_cache[cache_key] = m_base.copy()
+                        extrude_cache[cache_key] = (base_vertices, base_faces)
                 else:
-                    m_base = cached_base
+                    if isinstance(cached_base, tuple) and len(cached_base) == 2:
+                        base_vertices, base_faces = cached_base
+                    else:
+                        # Backward-compatible with any in-process cache entries
+                        # created before the array-payload optimization.
+                        base_vertices = np.asarray(cached_base.vertices, dtype=np.float64)
+                        base_faces = np.asarray(cached_base.faces, dtype=np.int64)
 
-                m = m_base.copy()
-                m.apply_scale([1.0, 1.0, float(height)])
-                m.apply_translation([0, 0, z_offset])
+                vertices = np.asarray(base_vertices, dtype=np.float64).copy()
+                if vertices.ndim == 2 and vertices.shape[1] >= 3:
+                    vertices[:, 2] = vertices[:, 2] * float(height) + float(z_offset)
+                faces = np.asarray(base_faces, dtype=np.int64).copy()
+                m = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
                 meshes.append(m)
             except VECTOR_HANDLED_ERRORS as e:
                 _log.warning(

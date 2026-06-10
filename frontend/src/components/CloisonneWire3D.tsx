@@ -79,9 +79,11 @@ export function rasterizeColorMeshesToGrid(
 ): Int16Array {
   const grid = new Int16Array(gridW * gridH);
   grid.fill(-1);
+  const colorIndexByKey = new Map<string, number>();
 
   for (let i = 0; i < colorMeshes.length; i++) {
     const mesh = colorMeshes[i];
+    const colorIndex = resolveColorGridIndex(mesh, i, colorIndexByKey);
     const geometry = mesh.geometry;
     const posAttr = geometry.getAttribute("position") as THREE.BufferAttribute;
     const index = geometry.getIndex();
@@ -118,7 +120,7 @@ export function rasterizeColorMeshesToGrid(
           posAttr.getX(b), posAttr.getY(b),
           posAttr.getX(c), posAttr.getY(c),
           grid, gridW, gridH,
-          originX, originY, cellSize, i,
+          originX, originY, cellSize, colorIndex,
         );
       }
     }
@@ -129,6 +131,22 @@ export function rasterizeColorMeshesToGrid(
 
 
 // ========== Internal helpers ==========
+
+function resolveColorGridIndex(
+  mesh: THREE.Mesh,
+  fallbackIndex: number,
+  colorIndexByKey: Map<string, number>,
+): number {
+  const match = /^color_([0-9a-fA-F]{6})/.exec(mesh.name);
+  const key = match ? `color_${match[1].toLowerCase()}` : `mesh_${fallbackIndex}`;
+  const existing = colorIndexByKey.get(key);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const nextIndex = colorIndexByKey.size;
+  colorIndexByKey.set(key, nextIndex);
+  return nextIndex;
+}
 
 /**
  * Rasterize a single triangle into the color grid, writing the given color index.

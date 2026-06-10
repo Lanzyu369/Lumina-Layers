@@ -15,6 +15,10 @@ param(
     [int]$WorkerMaxTasksPerChild = 3,
     [int]$MallocArenaMax = 2,
     [int]$SolverCacheBuildMemoryLimitMb = 8192,
+    [ValidateSet("v1", "v2", "auto", "shapely_v1", "rasterio_manifold3d")]
+    [string]$GlbKernel = "v2",
+    [ValidateSet("v1", "v2", "trimesh_v1", "rasterio_manifold3d")]
+    [string]$VectorGlbKernel = "v2",
     [ValidateSet("http", "https")]
     [string]$PublicScheme = "http"
 )
@@ -76,6 +80,8 @@ function Invoke-Deploy {
         "-WorkerMaxTasksPerChild", $WorkerMaxTasksPerChild,
         "-MallocArenaMax", $MallocArenaMax,
         "-SolverCacheBuildMemoryLimitMb", $SolverCacheBuildMemoryLimitMb,
+        "-GlbKernel", $GlbKernel,
+        "-VectorGlbKernel", $VectorGlbKernel,
         "-PublicScheme", $PublicScheme
     )
     $powershellArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $deployScript)

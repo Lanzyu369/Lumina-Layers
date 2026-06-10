@@ -181,6 +181,33 @@ class TestS01InputValidation:
         assert result["material_base_channel_idx"] == 1
         assert result["backing_color_id"] == 1
 
+    def test_material_archive_explicit_backing_channel_is_preserved(self):
+        from core.pipeline.s01_input_validation import run
+
+        ctx = self._make_valid_ctx()
+        ctx["material_source"] = "material_archive"
+        ctx["selected_materials"] = ["PLA Green", "PLA White"]
+        ctx["backing_color_id"] = 0
+        ctx["material_backing_material_index"] = 0
+
+        with patch(
+            "core.pipeline._input_validation_common.load_materials",
+            return_value=[object(), object()],
+        ), patch(
+            "core.pipeline._input_validation_common.build_material_slot_names",
+            return_value=["PLA Green", "PLA White"],
+        ), patch(
+            "core.pipeline._input_validation_common.build_material_preview_colors",
+            return_value={
+                0: [0, 180, 0, 255],
+                1: [248, 248, 245, 255],
+            },
+        ):
+            result = run(ctx)
+
+        assert result["material_base_channel_idx"] == 1
+        assert result["backing_color_id"] == 0
+
     def test_empty_dict_raises_key_error(self):
         """空 dict 应抛出 KeyError。"""
         from core.pipeline.s01_input_validation import run
@@ -945,6 +972,32 @@ class TestP04CacheBuilding:
         ]
         for key in expected_keys:
             assert key in cache, f"cache 缺少键: {key}"
+
+    def test_pixel_mode_uses_quantize_colors_as_glb_mesh_budget(self):
+        """Pixel previews should keep the user's high colour budget in GLB."""
+        from core.pipeline.p04_cache_building import run
+
+        ctx = self._make_valid_ctx()
+        ctx["modeling_mode"] = ModelingMode.PIXEL
+        ctx["quantize_colors"] = 256
+
+        cache = run(ctx)["cache"]
+
+        assert cache["modeling_mode"] == ModelingMode.PIXEL
+        assert cache["glb_max_meshes"] == 256
+
+    def test_high_fidelity_does_not_raise_glb_mesh_budget_from_quantize_colors(self):
+        """Only pixel mode should opt into the higher GLB colour budget."""
+        from core.pipeline.p04_cache_building import run
+
+        ctx = self._make_valid_ctx()
+        ctx["modeling_mode"] = ModelingMode.HIGH_FIDELITY
+        ctx["quantize_colors"] = 256
+
+        cache = run(ctx)["cache"]
+
+        assert cache["modeling_mode"] == ModelingMode.HIGH_FIDELITY
+        assert "glb_max_meshes" not in cache
 
     def test_missing_matched_rgb_raises_key_error(self):
         """缺失 matched_rgb 键应抛出 KeyError。"""

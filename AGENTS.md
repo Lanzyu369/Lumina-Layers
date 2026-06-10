@@ -8,8 +8,9 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 
 - 与用户沟通时默认使用中文，除非用户明确要求使用其他语言
 - 默认假设用户不了解项目内部结构、历史背景、模块职责和术语；解释时先说明结论，再补充必要背景和关键术语含义
+- 用户并不理解软件中的所有模块、函数、变量等实现细节；任何技术沟通都必须先给总结概述，再解释必要细节，不应出现纯模块名、函数名、变量名堆砌式沟通
 - 解释问题原因、修改方案或测试结果时，优先使用清晰的步骤、因果关系和可验证结果，不要使用比喻
-- 不要只说“已修复”或“改了某文件”；总结时应说明用户能看到的变化、风险点、是否已验证，以及还需要用户做什么
+- 不要只说"已修复"或"改了某文件"；总结时应说明用户能看到的变化、风险点、是否已验证，以及还需要用户做什么
 - 如果需要用户做决定，给出少量明确选项，并说明每个选项的影响；避免让用户先理解完整技术背景才能选择
 - 如果任务涉及风险、限制或不确定性，应直接说明，不要用过度专业化措辞掩盖不确定性
 
@@ -25,7 +26,7 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 
 - `pip install -r requirements.txt`
 - Frontend setup: from `frontend/`, run `pnpm install` (the project uses **pnpm**; do not use `npm`/`yarn`. pnpm version is pinned via the `packageManager` field — enable it with `corepack enable`)
-- Start the backend: `python api_server.py` or `python start_dev.py`
+- Start the backend: `python api_server.py` or `python start_all.py`
 - Frontend scripts: from `frontend/`, run `pnpm dev`, `pnpm build`, or `pnpm lint`
 - `python -m pytest tests/ -v`
 - `python -m pytest tests/ --hypothesis-show-statistics`
@@ -39,7 +40,7 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 - `python scripts/log_quality_check.py --mode fast`
 - `python scripts/log_quality_check.py --mode full`
 - Docker build: `docker build -t lumina-layers .`
-- Docker run: `docker run -p 7860:7860 lumina-layers`
+- Docker run: `docker run -p 4174:4174 -p 8000:8000 lumina-layers`
 
 ## Engineering Rules
 
@@ -184,3 +185,11 @@ Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow b
 
 - Read `docs/bug-report-reproducibility.md` before changing `/api/feedback/bug-report`, feedback ticket assembly, attachment collection, cleanup, email attachment handling, `scripts/load_bug_repro.py`, or any converter generation parameter captured for reproduction
 - Preserve ticket-based reproducibility under `feedback/<YYYY-MM>/<ticket_id>/`; update schemas, frontend/backend tests, and structured logging whitelists when bug-report payloads or assembly steps change
+
+## Agent Process Hygiene
+
+- Any agent that starts a long-running local process must stop it before finishing the task. This includes `python start_all.py`, `python api_server.py`, Vite dev servers, Docker containers, preview servers, Vitest watch mode, and ad-hoc subprocesses.
+- Prefer project cleanup wrappers instead of raw commands. Use `python start_all.py --kill` to clear Lumina launcher leftovers, and use `python scripts/run_vitest.py ...` for non-watch frontend tests so the test wrapper can manage Windows Job Object cleanup.
+- Do not call raw watch-mode commands unless the task explicitly requires them. If watch mode or a dev server must stay running for the user, say so explicitly and include the stop command.
+- After launcher/manual/browser verification, check for leftover Lumina backend/frontend/test helper processes before reporting completion. On Windows, inspect command lines for `api_server.py`, `start_all.py`, `vite`, `vitest`, `esbuild`, `node_modules`, and this project path.
+- If leftover processes are found, clean them up before summarizing the task, unless the user explicitly asked to keep them running.

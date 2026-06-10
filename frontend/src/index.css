@@ -104,6 +104,10 @@ body {
     color 200ms ease;
 }
 
+body.lumina-canvas-orbiting [data-widget-id] {
+  pointer-events: none !important;
+}
+
 :where([class*="shadow-"], [style*="box-shadow"]) {
   box-shadow: none !important;
 }

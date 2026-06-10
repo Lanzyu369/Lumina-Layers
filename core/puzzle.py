@@ -810,19 +810,20 @@ def render_puzzle_overlay(
     overlay = Image.new("RGBA", (layout.width_px, layout.height_px), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
     font = ImageFont.load_default()
+    line_width = max(1, layout.width_px // 320)
 
     for piece in layout.pieces:
-        points = [(x, y) for x, y in piece.polygon_px]
+        points = _clamp_overlay_points(piece.polygon_px, layout.width_px, layout.height_px)
         if len(points) < 2:
             continue
-        draw.line(points + [points[0]], fill=(20, 184, 166, 255), width=max(1, layout.width_px // 320))
+        draw.line(points + [points[0]], fill=(20, 184, 166, 255), width=line_width)
         for hole in piece.holes_px:
-            hole_points = [(x, y) for x, y in hole]
+            hole_points = _clamp_overlay_points(hole, layout.width_px, layout.height_px)
             if len(hole_points) >= 2:
                 draw.line(
                     hole_points + [hole_points[0]],
                     fill=(20, 184, 166, 255),
-                    width=max(1, layout.width_px // 320),
+                    width=line_width,
                 )
         if labels_enabled:
             cx = piece.centroid_mm[0] * layout.width_px / max(layout.total_width_mm, 1e-6)
@@ -851,11 +852,34 @@ def render_puzzle_overlay(
         if mask_array.shape != (layout.height_px, layout.width_px):
             raise ValueError("Puzzle overlay visibility mask shape does not match layout dimensions.")
         overlay_array = np.array(overlay, copy=True)
-        solid_alpha = np.where(mask_array.astype(bool), 255, 0).astype(np.uint8, copy=False)
+        visible_mask = mask_array.astype(bool, copy=False)
+        if layout.layout_mode == "mask_aware":
+            radius_px = max(1, int(math.ceil(line_width / 2)))
+            mask_u8 = np.where(visible_mask, 255, 0).astype(np.uint8, copy=False)
+            visible_mask = cv2.dilate(
+                mask_u8,
+                np.ones((3, 3), dtype=np.uint8),
+                iterations=radius_px,
+            ).astype(bool)
+        solid_alpha = np.where(visible_mask, 255, 0).astype(np.uint8, copy=False)
         overlay_array[..., 3] = np.minimum(overlay_array[..., 3], solid_alpha)
         overlay = Image.fromarray(overlay_array, mode="RGBA")
 
     return overlay
+
+
+def _clamp_overlay_points(points: tuple[_Point, ...] | list[_Point], width_px: int, height_px: int) -> list[_Point]:
+    """Clamp preview overlay coordinates into the drawable pixel canvas."""
+
+    max_x = max(0.0, float(width_px - 1))
+    max_y = max(0.0, float(height_px - 1))
+    return [
+        (
+            min(max(float(x), 0.0), max_x),
+            min(max(float(y), 0.0), max_y),
+        )
+        for x, y in points
+    ]
 
 
 def _format_piece_label(row_index: int, col_index: int) -> str:

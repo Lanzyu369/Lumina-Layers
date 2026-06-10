@@ -17,13 +17,15 @@ import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from math import isfinite
+from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.responses import JSONResponse, Response
+from starlette.responses import FileResponse, JSONResponse, Response
+from starlette.staticfiles import StaticFiles
 
 from api.env_loader import load_env_local
 from api.runtime_limits import configure_blas_thread_limits
@@ -90,6 +92,7 @@ from api.routers import (
 
 log = get_logger(__name__)
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 _REQUEST_COMPLETED_SLOW_MS = 1000.0
 _VALIDATION_LOG_MESSAGE_LIMIT = 1200
 _CLIENT_LOG_FIELD_LIMIT = 256
@@ -151,6 +154,52 @@ def _coerce_client_log_duration(value: Any) -> float | None:
     if isinstance(value, (int, float)) and isfinite(float(value)):
         return round(float(value), 3)
     return None
+
+
+def _env_enabled(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _configure_frontend_dist(app: FastAPI) -> None:
+    """Serve the built React SPA from FastAPI when local Docker enables it.
+    本地 Docker 开启时，由 FastAPI 服务已构建的 React SPA。
+    """
+    if not _env_enabled("LUMINA_SERVE_FRONTEND_DIST"):
+        return
+
+    dist_dir = Path(
+        os.environ.get("LUMINA_FRONTEND_DIST_DIR") or _REPO_ROOT / "frontend" / "dist"
+    ).resolve()
+    index_path = dist_dir / "index.html"
+    assets_dir = dist_dir / "assets"
+    if not index_path.is_file():
+        log.warning(
+            "Frontend dist index missing",
+            extra={
+                "event": "frontend_dist_missing",
+                "path": str(index_path),
+            },
+        )
+        return
+
+    if assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="frontend-assets")
+
+    @app.get("/", include_in_schema=False)
+    async def frontend_index() -> FileResponse:
+        return FileResponse(index_path)
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def frontend_spa_fallback(request: Request, full_path: str) -> FileResponse:
+        if request.url.path.startswith("/api"):
+            raise HTTPException(status_code=404, detail="Not Found")
+        requested_path = (dist_dir / full_path).resolve()
+        if (
+            requested_path.is_file()
+            and (requested_path == dist_dir or dist_dir in requested_path.parents)
+        ):
+            return FileResponse(requested_path)
+        return FileResponse(index_path)
 
 
 def _run_cleanup_pass(
@@ -386,6 +435,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/files/{file_id}")
     def serve_file(
+        request: Request,
         file_id: str,
         registry=Depends(get_file_registry),
         store=Depends(get_session_store),
@@ -407,7 +457,12 @@ def create_app() -> FastAPI:
                 raise HTTPException(status_code=404, detail="File not found or expired")
 
         path, filename = result
-        return file_to_response(path, filename)
+        return file_to_response(
+            path,
+            filename,
+            accept_encoding=request.headers.get("accept-encoding"),
+            range_header=request.headers.get("range"),
+        )
 
     @app.post("/api/client-log")
     async def client_log(payload: dict[str, Any]):
@@ -441,6 +496,8 @@ def create_app() -> FastAPI:
             }),
         )
         return {"ok": True}
+
+    _configure_frontend_dist(app)
 
     return app
 

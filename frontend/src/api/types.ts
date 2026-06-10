@@ -97,6 +97,7 @@ export type ConvertPreviewRequest = ConvertSourceSelection & {
   material_layer_height_mm?: number;
   material_grid_resolution?: number;
   material_backing_material_index?: number;
+  large_format_enabled?: boolean;
 };
 
 export type ConvertGenerateRequest = ConvertPreviewRequest & {

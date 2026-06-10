@@ -73,6 +73,28 @@ function createMockGl() {
   };
 }
 
+type MockControlEvent = "start" | "change" | "end";
+
+function createMockControls() {
+  const listeners: Record<MockControlEvent, Set<() => void>> = {
+    start: new Set(),
+    change: new Set(),
+    end: new Set(),
+  };
+
+  return {
+    addEventListener: vi.fn((type: MockControlEvent, listener: () => void) => {
+      listeners[type].add(listener);
+    }),
+    removeEventListener: vi.fn((type: MockControlEvent, listener: () => void) => {
+      listeners[type].delete(listener);
+    }),
+    emit: (type: MockControlEvent) => {
+      listeners[type].forEach((listener) => listener());
+    },
+  };
+}
+
 // Shared mock state so every ``useThree`` call inside a single test returns
 // the SAME references. Helpers like ``ScreenshotHelper`` and ``ThemeUpdater``
 // depend on ``gl`` in their effect-deps; if the mock returned a fresh object
@@ -89,7 +111,7 @@ type MockThreeState = {
   gl: ReturnType<typeof createMockGl>;
   scene: { children: THREE.Object3D[] };
   camera: { position: { x: number; y: number; z: number } };
-  controls: null;
+  controls: ReturnType<typeof createMockControls> | null;
   invalidate: ReturnType<typeof vi.fn>;
 };
 let mockThreeState: MockThreeState | null = null;
@@ -126,6 +148,7 @@ beforeEach(() => {
     capturedCanvasProps = {};
     capturedInteractiveViewerProps = null;
     capturedFridgeMagnet3DProps = null;
+    document.body.classList.remove("lumina-canvas-orbiting");
     // Reset the shared useThree state so each test gets a fresh renderer /
     // scene snapshot while every hook call within that test still sees
     // stable references.
@@ -225,6 +248,59 @@ beforeEach(() => {
       });
 
       expect(useConverterStore.getState().selectedFridgeMagnetId).toBeNull();
+    });
+  });
+
+  describe("orbit demand rendering", () => {
+    it("uses a temporary body class and invalidates frames during OrbitControls interaction", () => {
+      const controls = createMockControls();
+      const threeState = getMockThreeState();
+      threeState.controls = controls;
+
+      render(
+        <>
+          <div data-widget-id="basic-settings" />
+          <Scene3D />
+        </>,
+      );
+
+      const widgetPanel = document.querySelector("[data-widget-id='basic-settings']") as HTMLElement;
+      expect(widgetPanel.style.pointerEvents).toBe("");
+      expect(document.body.classList.contains("lumina-canvas-orbiting")).toBe(false);
+
+      act(() => {
+        controls.emit("start");
+      });
+
+      expect(threeState.invalidate).toHaveBeenCalled();
+      expect(document.body.classList.contains("lumina-canvas-orbiting")).toBe(true);
+
+      act(() => {
+        controls.emit("end");
+      });
+
+      expect(document.body.classList.contains("lumina-canvas-orbiting")).toBe(false);
+      expect(widgetPanel.style.pointerEvents).toBe("");
+    });
+
+    it("restores widget interaction on pointerup even if OrbitControls end is missed", () => {
+      const controls = createMockControls();
+      const threeState = getMockThreeState();
+      threeState.controls = controls;
+
+      render(<Scene3D />);
+
+      act(() => {
+        controls.emit("start");
+      });
+
+      expect(document.body.classList.contains("lumina-canvas-orbiting")).toBe(true);
+
+      act(() => {
+        window.dispatchEvent(new Event("pointerup"));
+      });
+
+      expect(document.body.classList.contains("lumina-canvas-orbiting")).toBe(false);
     });
   });
 
