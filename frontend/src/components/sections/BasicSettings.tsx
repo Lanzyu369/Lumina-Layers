@@ -281,7 +281,7 @@ export default function BasicSettings() {
 
   const handleImportConfirm = useCallback(() => {
     if (!importPreview) return;
-    applyImport(importPreview.restoreResult);
+    applyImport(importPreview.restoreResult, importPreview.printerOptions ?? []);
     revokeImportCoverUrl(importPreview.coverUrl);
     setImportDialogOpen(false);
     setImportPreview(null);

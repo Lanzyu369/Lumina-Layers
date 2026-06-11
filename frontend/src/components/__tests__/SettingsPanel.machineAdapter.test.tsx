@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 vi.mock("../../api/system", () => ({
   clearCache: vi.fn(),
@@ -29,10 +29,18 @@ const PRINTERS: PrinterInfo[] = [
     bed_width: 350,
     bed_depth: 320,
     bed_height: 325,
-    supported_nozzle_sizes: ["0.2", "0.4"],
+    supported_nozzle_sizes: ["0.2", "0.4", "0.6", "0.8"],
     supported_slicers: ["BambuStudio", "OrcaSlicer"],
     thumbnail: "slicers/BambuStudio/02.07.01.57/assets/bambu-lab-h2d_cover.png",
     device_profiles: [
+      {
+        device_profile_id: "BambuStudio:bbl:bambu-lab-h2d:0.2",
+        slicer_id: "BambuStudio",
+        nozzle_size: "0.2",
+        source_profile_name: "Bambu Lab H2D 0.2 nozzle",
+        revision: "sha256:bambu-02",
+        supported: true,
+      },
       {
         device_profile_id: "BambuStudio:bbl:bambu-lab-h2d:0.4",
         slicer_id: "BambuStudio",
@@ -42,11 +50,48 @@ const PRINTERS: PrinterInfo[] = [
         supported: true,
       },
       {
+        device_profile_id: "BambuStudio:bbl:bambu-lab-h2d:0.6",
+        slicer_id: "BambuStudio",
+        nozzle_size: "0.6",
+        source_profile_name: "Bambu Lab H2D 0.6 nozzle",
+        revision: "sha256:bambu-06",
+        supported: true,
+      },
+      {
+        device_profile_id: "BambuStudio:bbl:bambu-lab-h2d:0.8",
+        slicer_id: "BambuStudio",
+        nozzle_size: "0.8",
+        source_profile_name: "Bambu Lab H2D 0.8 nozzle",
+        revision: "sha256:bambu-08",
+        supported: true,
+      },
+      {
         device_profile_id: "OrcaSlicer:bbl:bambu-lab-h2d:0.2",
         slicer_id: "OrcaSlicer",
         nozzle_size: "0.2",
         source_profile_name: "Bambu Lab H2D 0.2 nozzle",
         revision: "sha256:orca",
+        supported: true,
+      },
+    ],
+  },
+  {
+    id: "bambu-p1s",
+    display_name: "Bambu Lab P1S",
+    brand: "Bambu Lab",
+    bed_width: 256,
+    bed_depth: 256,
+    bed_height: 250,
+    supported_nozzle_sizes: ["0.4"],
+    supported_slicers: ["BambuStudio"],
+    thumbnail: "slicers/BambuStudio/02.07.01.57/assets/bambu-lab-p1s_cover.png",
+    device_profiles: [
+      {
+        device_profile_id: "BambuStudio:bbl:bambu-lab-p1s:0.4",
+        slicer_id: "BambuStudio",
+        nozzle_size: "0.4",
+        source_profile_name: "Bambu Lab P1S 0.4 nozzle",
+        revision: "sha256:p1s",
         supported: true,
       },
     ],
@@ -105,7 +150,8 @@ describe("SettingsPanel machine adapter registry UI", () => {
   it("renders registry thumbnail and normalizes selected device profile", async () => {
     renderPanel();
 
-    const image = await screen.findByAltText("Bambu Lab H2D");
+    const h2dCard = await screen.findByTestId("machine-adapter-card-bambu-h2d");
+    const image = within(h2dCard).getByAltText("Bambu Lab H2D");
     expect(image).toHaveAttribute(
       "src",
       "/api/system/machine-registry/assets/slicers/BambuStudio/02.07.01.57/assets/bambu-lab-h2d_cover.png",
@@ -117,5 +163,55 @@ describe("SettingsPanel machine adapter registry UI", () => {
         "BambuStudio:bbl:bambu-lab-h2d:0.4",
       );
     });
+  });
+
+  it("renders visual printer cards and selecting one updates the active machine", async () => {
+    renderPanel();
+
+    const h2dCard = await screen.findByTestId("machine-adapter-card-bambu-h2d");
+    const p1sCard = await screen.findByTestId("machine-adapter-card-bambu-p1s");
+
+    expect(h2dCard).toHaveAttribute("aria-pressed", "true");
+    expect(
+      screen.getByAltText("Bambu Lab P1S"),
+    ).toHaveAttribute(
+      "src",
+      "/api/system/machine-registry/assets/slicers/BambuStudio/02.07.01.57/assets/bambu-lab-p1s_cover.png",
+    );
+
+    fireEvent.click(p1sCard);
+
+    await waitFor(() => {
+      expect(useSettingsStore.getState().printerModel).toBe("bambu-p1s");
+      expect(useSettingsStore.getState().deviceProfileId).toBe(
+        "BambuStudio:bbl:bambu-lab-p1s:0.4",
+      );
+    });
+    expect(p1sCard).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("lets users pick supported nozzles inside machine cards without showing 0.6 or 0.8", async () => {
+    renderPanel();
+
+    await screen.findByTestId("machine-adapter-card-bambu-h2d");
+
+    const h2dNozzle02 = await screen.findByTestId("machine-adapter-nozzle-bambu-h2d-0_2");
+    const h2dNozzle04 = await screen.findByTestId("machine-adapter-nozzle-bambu-h2d-0_4");
+    expect(h2dNozzle02).toHaveTextContent(/0\.2\s*(mm|毫米)/);
+    expect(h2dNozzle04).toHaveTextContent(/0\.4\s*(mm|毫米)/);
+    expect(screen.queryByTestId("machine-adapter-nozzle-bambu-h2d-0_6")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("machine-adapter-nozzle-bambu-h2d-0_8")).not.toBeInTheDocument();
+
+    fireEvent.click(h2dNozzle02);
+
+    await waitFor(() => {
+      expect(useSettingsStore.getState().printerModel).toBe("bambu-h2d");
+      expect(useSettingsStore.getState().nozzleSize).toBe("0.2");
+      expect(useSettingsStore.getState().deviceProfileId).toBe(
+        "BambuStudio:bbl:bambu-lab-h2d:0.2",
+      );
+    });
+    expect(h2dNozzle02).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByRole("combobox", { name: "喷嘴尺寸" })).not.toBeInTheDocument();
   });
 });

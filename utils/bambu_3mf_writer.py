@@ -19,7 +19,7 @@ import zipfile
 import json
 import copy
 import re
-from typing import List, Dict, Optional
+from typing import Any, Iterable, List, Dict, Optional
 import numpy as np
 from PIL import Image
 
@@ -62,6 +62,85 @@ def _get_n3mf():
 _CONFIG_TEMPLATE_CACHE = None
 _PRINTER_TEMPLATE_CACHE: dict[str, dict] = {}
 _VALID_LAYER_CONFIG_FACES = frozenset({"up", "down", "double"})
+_REGISTRY_PROJECT_TEMPLATE_OVERLAY_KEYS = frozenset(
+    {
+        "printer_settings_id",
+        "printer_variant",
+        "nozzle_diameter",
+        "printable_area",
+        "printable_height",
+        "bed_exclude_area",
+    }
+)
+_REGISTRY_MACHINE_PROJECT_OVERLAY_EXACT_KEYS = frozenset(
+    {
+        "best_object_pos",
+        "change_filament_gcode",
+        "default_filament_profile",
+        "default_nozzle_volume_type",
+        "default_print_profile",
+        "default_wipe_tower_pos",
+        "deretract_speed_extruder_change",
+        "deretraction_speed",
+        "extruder_colour",
+        "fan_direction",
+        "gcode_flavor",
+        "grab_length",
+        "group_algo_with_time",
+        "head_wrap_detect_zone",
+        "hotend_cooling_rate",
+        "hotend_heating_rate",
+        "layer_change_gcode",
+        "long_retractions_when_cut",
+        "master_extruder_id",
+        "nozzle_diameter",
+        "nozzle_flush_dataset",
+        "nozzle_height",
+        "nozzle_type",
+        "nozzle_volume",
+        "physical_extruder_map",
+        "printable_area",
+        "printable_height",
+        "printer_extruder_id",
+        "printer_extruder_variant",
+        "printer_model",
+        "printer_settings_id",
+        "printer_structure",
+        "printer_technology",
+        "printer_variant",
+        "retract_before_wipe",
+        "retract_length_toolchange",
+        "retract_lift_above",
+        "retract_lift_below",
+        "retract_restart_extra",
+        "retract_restart_extra_toolchange",
+        "retract_when_changing_layer",
+        "retraction_distances_when_cut",
+        "retraction_length",
+        "retraction_minimum_travel",
+        "retraction_speed",
+        "scan_first_layer",
+        "silent_mode",
+        "single_extruder_multi_material",
+        "support_air_filtration",
+        "support_chamber_temp_control",
+        "support_cooling_filter",
+        "support_fast_purge_mode",
+        "support_object_skip_flush",
+        "time_lapse_gcode",
+        "upward_compatible_machine",
+        "wipe",
+        "wipe_distance",
+        "wrapping_detection_gcode",
+        "wrapping_exclude_area",
+        "z_hop",
+        "z_hop_types",
+    }
+)
+_REGISTRY_MACHINE_PROJECT_OVERLAY_PREFIXES = (
+    "extruder_",
+    "machine_",
+)
 
 
 @dataclass(frozen=True)
@@ -90,6 +169,282 @@ class _FilamentProfile:
     family: str
     preset_label: str
     type_value: str
+
+
+def _resolve_machine_registry_root() -> str:
+    """Return configured machine registry root, defaulting to cwd/machine_registry.
+
+    返回机器注册表根目录；未配置环境变量时使用当前工作目录下的
+    ``machine_registry``，与系统设置 API 的默认读取位置保持一致。
+    """
+    raw_root = os.environ.get("LUMINA_MACHINE_REGISTRY_DIR", "").strip()
+    return os.path.abspath(raw_root or "machine_registry")
+
+
+def _registry_printer_slug(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-")
+
+
+def _version_tuple(value: object) -> tuple[int, ...]:
+    parts: list[int] = []
+    for token in str(value or "").split("."):
+        if not token.isdigit():
+            return ()
+        parts.append(int(token))
+    return tuple(parts)
+
+
+def _should_use_registry_source_version(current_version: object, source_version: object) -> bool:
+    current = _version_tuple(current_version)
+    source = _version_tuple(source_version)
+    if not source:
+        return False
+    if not current:
+        return True
+    return source >= current
+
+
+def _clean_registry_project_overlay_value(key: str, value: object) -> object:
+    if key == "printable_area" and isinstance(value, list):
+        return [str(item).strip() for item in value]
+    return copy.deepcopy(value)
+
+
+def _resource_base_dir() -> str:
+    """Return the application resource root for bundled profile JSON files.
+
+    返回内置配置资源根目录，用于读取 ``printer_profiles`` 等 JSON 文件。
+    """
+
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return sys._MEIPASS
+    return os.path.join(os.path.dirname(__file__), "..")
+
+
+def _load_legacy_project_template_if_available(
+    printer_id: str,
+    slicer: str,
+    nozzle_size: str,
+) -> tuple[dict, str] | None:
+    """Load the built-in project-level template for known Lumina printers.
+
+    加载 Lumina 已内置机型的 project 级模板。该模板包含切片器打开 3MF 所需
+    的打印、耗材与项目元数据；机器注册表的裸 machine preset 不能直接替代它。
+    """
+
+    from config import PRINTER_PROFILES, normalize_printer_profile_id
+
+    normalized_printer_id = normalize_printer_profile_id(str(printer_id or ""))
+    profile = PRINTER_PROFILES.get(normalized_printer_id)
+    if profile is None:
+        return None
+
+    template_file = profile.get_template_file(slicer, nozzle_size=nozzle_size)
+    profile_path = os.path.join(_resource_base_dir(), "printer_profiles", template_file)
+    if not os.path.exists(profile_path):
+        return None
+
+    with open(profile_path, "r", encoding="utf-8") as f:
+        return json.load(f), profile_path
+
+
+def _align_registry_default_filament_settings_id(
+    merged: dict[str, Any],
+    registry_template: dict[str, Any],
+) -> None:
+    default_profiles = registry_template.get("default_filament_profile")
+    if isinstance(default_profiles, list) and default_profiles:
+        default_profile = str(default_profiles[0] or "").strip()
+    elif isinstance(default_profiles, str):
+        default_profile = default_profiles.strip()
+    else:
+        default_profile = ""
+    if not default_profile:
+        return
+
+    existing = merged.get("filament_settings_id")
+    if isinstance(existing, list) and existing:
+        merged["filament_settings_id"] = [default_profile] * len(existing)
+    elif isinstance(existing, str) and existing.strip():
+        merged["filament_settings_id"] = default_profile
+
+
+def _merge_registry_machine_template_into_project_template(
+    legacy_template: dict[str, Any],
+    registry_template: dict[str, Any],
+    *,
+    source_version: str,
+    overlay_printer_model: bool = False,
+    overlay_machine_settings: bool = False,
+) -> dict[str, Any]:
+    """Merge native machine identity into a Lumina project-level template.
+
+    将原生切片器 machine preset 中的机型身份信息合入 Lumina 旧 project 模板。
+    这样保留 Bambu/Orca 期望的 3MF project 元数据，同时允许机器注册表更新
+    机型、喷嘴和版本。
+    """
+
+    merged = copy.deepcopy(legacy_template)
+    for key in _REGISTRY_PROJECT_TEMPLATE_OVERLAY_KEYS:
+        if key in registry_template:
+            merged[key] = _clean_registry_project_overlay_value(key, registry_template[key])
+    if overlay_machine_settings:
+        for key, value in registry_template.items():
+            if (
+                key in _REGISTRY_MACHINE_PROJECT_OVERLAY_EXACT_KEYS
+                or key.startswith(_REGISTRY_MACHINE_PROJECT_OVERLAY_PREFIXES)
+            ):
+                merged[key] = _clean_registry_project_overlay_value(key, value)
+        if "different_settings_to_system" in registry_template:
+            merged["different_settings_to_system"] = _normalize_difference_index(
+                merged.get("different_settings_to_system"),
+                _iter_difference_index_keys(registry_template.get("different_settings_to_system")),
+            )
+        _align_registry_default_filament_settings_id(merged, registry_template)
+    if overlay_printer_model and "printer_model" in registry_template:
+        merged["printer_model"] = copy.deepcopy(registry_template["printer_model"])
+
+    if source_version and (
+        overlay_machine_settings
+        or _should_use_registry_source_version(merged.get("version"), source_version)
+    ):
+        merged["version"] = source_version
+
+    # A project_settings.config embedded in a 3MF must remain a project preset.
+    # Native slicer machine JSON often carries system-preset-only markers; keep
+    # those out of exported 3MF metadata because they can make Bambu Studio reject
+    # the package as an invalid configuration file.
+    for system_only_key in ("type", "instantiation", "inherits"):
+        merged.pop(system_only_key, None)
+    merged["name"] = "project_settings"
+    merged["from"] = "project"
+    return merged
+
+
+def _load_registry_compatibility_project_template_if_available(
+    profile: Any,
+    slicer: str,
+    nozzle_size: str,
+) -> tuple[dict, str] | None:
+    """Load a project-compatible base template for registry-only machines.
+
+    为 registry-only 机型选择一个兼容的 project 级基底。避免把裸
+    machine preset 直接写入 3MF，同时让新机型继承对应系列的 project
+    工艺、擦料塔、耗材数组和切片器侧边栏元数据。
+    """
+
+    if str(getattr(profile, "brand", "")).casefold() != "bambu lab":
+        return None
+
+    display_name = str(getattr(profile, "display_name", "")).casefold()
+    machine_profile_id = str(getattr(profile, "machine_profile_id", "")).casefold()
+    if not any(token in display_name or token in machine_profile_id for token in ("h2", "x2")):
+        if any(token in display_name or token in machine_profile_id for token in ("a2", "a1")):
+            return _load_legacy_project_template_if_available(
+                "bambu-a1-mini" if "mini" in display_name or "mini" in machine_profile_id else "bambu-a1",
+                slicer,
+                nozzle_size,
+            )
+        return None
+
+    return _load_legacy_project_template_if_available(
+        "bambu-h2d",
+        slicer,
+        nozzle_size,
+    )
+
+
+def _validate_registry_device_profile(
+    *,
+    device_profile_id: str,
+    printer_id: str,
+    slicer: str,
+    nozzle_size: str,
+    registry_path: str,
+):
+    """Load and validate a generated registry device profile.
+
+    加载并校验生成的机器注册表设备配置，避免选择的切片器/喷嘴与实际
+    3MF 模板混用。
+    """
+    from config import PRINTER_PROFILES, normalize_printer_profile_id, normalize_slicer_software_id
+    from core.machine_registry import load_machine_registry
+
+    normalized_printer_id = normalize_printer_profile_id(str(printer_id or ""))
+    requested_printer = PRINTER_PROFILES.get(normalized_printer_id)
+    normalized_slicer = normalize_slicer_software_id(str(slicer or ""))
+    registry = load_machine_registry(registry_path)
+    try:
+        profile = registry.get_device_profile(device_profile_id)
+    except KeyError as exc:
+        raise ValueError(f"Unknown machine registry device profile: {device_profile_id}") from exc
+
+    if not profile.supported:
+        raise ValueError(f"Machine registry device profile is not supported: {device_profile_id}")
+
+    if profile.slicer_id != normalized_slicer or profile.nozzle_size != nozzle_size:
+        raise ValueError(
+            "Machine registry device profile does not match requested slicer/nozzle: "
+            f"{device_profile_id} != {normalized_slicer}/{nozzle_size}"
+        )
+    if requested_printer is not None and (
+        profile.display_name.casefold() != requested_printer.display_name.casefold()
+        or profile.brand.casefold() != requested_printer.brand.casefold()
+    ):
+        raise ValueError(
+            "Machine registry device profile does not match requested printer: "
+            f"{device_profile_id} != {requested_printer.brand}/{requested_printer.display_name}"
+        )
+    if requested_printer is None:
+        registry_printer_ids = {
+            _registry_printer_slug(profile.display_name),
+            _registry_printer_slug(f"{profile.brand}-{profile.display_name}"),
+            profile.machine_profile_id.casefold(),
+        }
+        if normalized_printer_id not in registry_printer_ids:
+            raise ValueError(
+                "Machine registry device profile does not match requested printer: "
+                f"{device_profile_id} != {printer_id}"
+            )
+    return profile
+
+
+def _load_registry_device_profile_if_available(
+    *,
+    device_profile_id: str,
+    printer_id: str,
+    slicer: str,
+    nozzle_size: str,
+):
+    """Return a validated registry device profile when registry data exists.
+
+    存在机器注册表时返回已校验的设备配置；未显式配置环境变量且默认
+    ``machine_registry`` 不存在时返回 ``None``，保持旧模板回退兼容。
+    """
+    registry_root = _resolve_machine_registry_root()
+    registry_path = os.path.join(registry_root, "registry.json")
+    if not os.path.exists(registry_path):
+        if os.environ.get("LUMINA_MACHINE_REGISTRY_DIR"):
+            raise ValueError(f"Machine registry not found: {registry_path}")
+        return None
+    return _validate_registry_device_profile(
+        device_profile_id=device_profile_id,
+        printer_id=printer_id,
+        slicer=slicer,
+        nozzle_size=nozzle_size,
+        registry_path=registry_path,
+    )
+
+
+def _resolve_registry_template_path(*, registry_root: str, template: str) -> str:
+    """Resolve a registry template path while rejecting path traversal."""
+    registry_root_abs = os.path.abspath(registry_root)
+    template_path_abs = os.path.abspath(os.path.normpath(os.path.join(registry_root_abs, template)))
+    if os.path.commonpath([registry_root_abs, template_path_abs]) != registry_root_abs:
+        raise ValueError(f"Machine registry template escapes registry root: {template}")
+    if not os.path.exists(template_path_abs):
+        raise ValueError(f"Machine registry template not found: {template}")
+    return template_path_abs
 
 
 _FILAMENT_RESIZABLE_ARRAY_KEYS = frozenset(
@@ -209,6 +564,86 @@ def _template_default_list_value(values: list, template_settings: dict) -> objec
     if resolved is not None:
         return resolved
     return values[0] if values else "0"
+
+
+def _should_preserve_template_filament_slots(
+    registry_profile: Any,
+    template_settings: dict,
+    material_count: int,
+) -> bool:
+    """Return whether registry exports should keep the slicer's native slot shape."""
+
+    if registry_profile is None:
+        return False
+    return _template_filament_count(template_settings) > material_count
+
+
+def _apply_filament_array_overrides(
+    settings: dict,
+    arrays: dict[str, list],
+    *,
+    preserve_template_slots: bool,
+) -> None:
+    if not preserve_template_slots:
+        settings.update(arrays)
+        return
+
+    for key, values in arrays.items():
+        existing = settings.get(key)
+        if isinstance(existing, list) and len(existing) >= len(values):
+            merged = list(existing)
+            merged[: len(values)] = values
+            settings[key] = merged
+        else:
+            settings[key] = values
+
+        if key == "filament_colour":
+            multi_colour = settings.get("filament_multi_colour")
+            if isinstance(multi_colour, list) and len(multi_colour) >= len(values):
+                merged_multi = list(multi_colour)
+                merged_multi[: len(values)] = values
+                settings["filament_multi_colour"] = merged_multi
+
+
+def _iter_difference_index_keys(value: Any) -> list[str]:
+    if isinstance(value, list):
+        raw_items = value
+    elif value is None:
+        raw_items = []
+    else:
+        raw_items = [value]
+
+    keys: list[str] = []
+    for raw_item in raw_items:
+        for token in str(raw_item).split(";"):
+            normalized = token.strip()
+            if normalized:
+                keys.append(normalized)
+    return keys
+
+
+def _normalize_difference_index(value: Any, extra_keys: Iterable[str] = ()) -> list[str]:
+    normalized_extra_keys = {str(key).strip() for key in extra_keys if str(key).strip()}
+    if isinstance(value, list):
+        normalized_slots = [str(item or "") for item in value]
+        if not normalized_slots and not normalized_extra_keys:
+            return []
+        if not normalized_slots:
+            normalized_slots = [""]
+        first_slot_keys = {
+            token.strip()
+            for token in normalized_slots[0].split(";")
+            if token.strip()
+        }
+        first_slot_keys.update(normalized_extra_keys)
+        normalized_slots[0] = ";".join(sorted(first_slot_keys)) if first_slot_keys else ""
+        return normalized_slots
+
+    keys = set(_iter_difference_index_keys(value))
+    keys.update(normalized_extra_keys)
+    if not keys:
+        return []
+    return [";".join(sorted(keys))]
 
 
 def _derive_filament_settings_id(existing: object, profile: _FilamentProfile) -> str:
@@ -410,58 +845,101 @@ def load_printer_template(
     """
     global _PRINTER_TEMPLATE_CACHE
 
-    from config import get_printer_profile, normalize_nozzle_size
+    from config import (
+        format_native_nozzle_size,
+        get_printer_profile,
+        normalize_nozzle_size,
+        normalize_slicer_software_id,
+    )
 
+    normalized_slicer = normalize_slicer_software_id(str(slicer or ""))
     normalized_nozzle_size = normalize_nozzle_size(nozzle_size) or "0.4"
-    registry_root_for_cache = ""
+    registry_nozzle_size = format_native_nozzle_size(nozzle_size) or normalized_nozzle_size
     if device_profile_id:
-        raw_registry_root = os.environ.get("LUMINA_MACHINE_REGISTRY_DIR", "")
-        registry_root_for_cache = os.path.abspath(raw_registry_root) if raw_registry_root else ""
-    cache_profile_id = f"{device_profile_id}:{registry_root_for_cache}" if device_profile_id else "legacy"
-    cache_key = f"{printer_id}:{slicer}:{normalized_nozzle_size}:{cache_profile_id}"
+        registry_root = _resolve_machine_registry_root()
+        registry_path = os.path.join(registry_root, "registry.json")
+        if os.path.exists(registry_path):
+            profile = _validate_registry_device_profile(
+                device_profile_id=device_profile_id,
+                printer_id=printer_id,
+                slicer=normalized_slicer,
+                nozzle_size=registry_nozzle_size,
+                registry_path=registry_path,
+            )
+            template_path_abs = _resolve_registry_template_path(
+                registry_root=registry_root,
+                template=profile.template,
+            )
+            template_stat = os.stat(template_path_abs)
+            cache_key = (
+                f"{printer_id}:{normalized_slicer}:{registry_nozzle_size}:registry:"
+                f"{registry_root}:{device_profile_id}:{profile.revision}:"
+                f"{template_path_abs}:{template_stat.st_mtime_ns}"
+            )
+            if cache_key in _PRINTER_TEMPLATE_CACHE:
+                return copy.deepcopy(_PRINTER_TEMPLATE_CACHE[cache_key])
+
+            with open(template_path_abs, "r", encoding="utf-8") as f:
+                registry_template = json.load(f)
+            legacy_template_entry = _load_legacy_project_template_if_available(
+                printer_id,
+                normalized_slicer,
+                normalized_nozzle_size,
+            )
+            overlay_printer_model = False
+            overlay_machine_settings = False
+            if legacy_template_entry is None:
+                legacy_template_entry = _load_registry_compatibility_project_template_if_available(
+                    profile,
+                    normalized_slicer,
+                    registry_nozzle_size,
+                )
+                overlay_printer_model = legacy_template_entry is not None
+                overlay_machine_settings = legacy_template_entry is not None
+            if legacy_template_entry is not None:
+                legacy_template, legacy_template_path = legacy_template_entry
+                legacy_stat = os.stat(legacy_template_path)
+                cache_key = (
+                    f"{cache_key}:legacy_project:"
+                    f"{legacy_template_path}:{legacy_stat.st_mtime_ns}"
+                )
+                if cache_key in _PRINTER_TEMPLATE_CACHE:
+                    return copy.deepcopy(_PRINTER_TEMPLATE_CACHE[cache_key])
+                template = _merge_registry_machine_template_into_project_template(
+                    legacy_template,
+                    registry_template,
+                    source_version=profile.source_version,
+                    overlay_printer_model=overlay_printer_model,
+                    overlay_machine_settings=overlay_machine_settings,
+                )
+            else:
+                template = registry_template
+            _PRINTER_TEMPLATE_CACHE[cache_key] = template
+            log.debug(
+                "Loaded printer template from machine registry",
+                extra={
+                    "event": "bambu_printer_template_registry_loaded",
+                    "path": template_path_abs,
+                    "printer_id": printer_id,
+                    "slicer": normalized_slicer,
+                    "nozzle_size": registry_nozzle_size,
+                    "device_profile_id": device_profile_id,
+                    "revision": profile.revision,
+                },
+            )
+            return copy.deepcopy(template)
+        if os.environ.get("LUMINA_MACHINE_REGISTRY_DIR"):
+            raise ValueError(f"Machine registry not found: {registry_path}")
+
+    cache_key = f"{printer_id}:{normalized_slicer}:{normalized_nozzle_size}:legacy"
     if cache_key in _PRINTER_TEMPLATE_CACHE:
         return copy.deepcopy(_PRINTER_TEMPLATE_CACHE[cache_key])
 
-    if device_profile_id:
-        registry_root = os.environ.get("LUMINA_MACHINE_REGISTRY_DIR")
-        if registry_root:
-            registry_path = os.path.join(registry_root, "registry.json")
-            if os.path.exists(registry_path):
-                from core.machine_registry import load_machine_registry
-
-                registry = load_machine_registry(registry_path)
-                profile = registry.get_device_profile(device_profile_id)
-                template_path = os.path.normpath(os.path.join(registry_root, profile.template))
-                registry_root_abs = os.path.abspath(registry_root)
-                template_path_abs = os.path.abspath(template_path)
-                if (
-                    os.path.commonpath([registry_root_abs, template_path_abs]) == registry_root_abs
-                    and os.path.exists(template_path_abs)
-                ):
-                    with open(template_path_abs, "r", encoding="utf-8") as f:
-                        template = json.load(f)
-                    _PRINTER_TEMPLATE_CACHE[cache_key] = template
-                    log.debug(
-                        "Loaded printer template from machine registry",
-                        extra={
-                            "event": "bambu_printer_template_registry_loaded",
-                            "path": template_path_abs,
-                            "printer_id": printer_id,
-                            "slicer": slicer,
-                            "nozzle_size": normalized_nozzle_size,
-                            "device_profile_id": device_profile_id,
-                        },
-                    )
-                    return copy.deepcopy(template)
-
     profile = get_printer_profile(printer_id)
-    template_file = profile.get_template_file(slicer, nozzle_size=normalized_nozzle_size)
+    template_file = profile.get_template_file(normalized_slicer, nozzle_size=normalized_nozzle_size)
 
     # Resolve printer_profiles/ directory
-    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        base_dir = sys._MEIPASS
-    else:
-        base_dir = os.path.join(os.path.dirname(__file__), "..")
+    base_dir = _resource_base_dir()
 
     profile_path = os.path.join(base_dir, "printer_profiles", template_file)
 
@@ -475,7 +953,7 @@ def load_printer_template(
                 "event": "bambu_printer_template_loaded",
                 "path": profile_path,
                 "printer_id": printer_id,
-                "slicer": slicer,
+                "slicer": normalized_slicer,
                 "nozzle_size": normalized_nozzle_size,
             },
         )
@@ -493,7 +971,7 @@ def load_printer_template(
                 "event": "bambu_printer_template_fallback_used",
                 "path": fallback_path,
                 "printer_id": printer_id,
-                "slicer": slicer,
+                "slicer": normalized_slicer,
                 "nozzle_size": normalized_nozzle_size,
                 "template_file": template_file,
             },
@@ -506,7 +984,7 @@ def load_printer_template(
             "event": "bambu_printer_template_missing",
             "path": profile_path,
             "printer_id": printer_id,
-            "slicer": slicer,
+            "slicer": normalized_slicer,
             "nozzle_size": normalized_nozzle_size,
             "template_file": template_file,
         },
@@ -592,7 +1070,7 @@ class BambuStudio3MFWriter:
                 device profile ID used to select native machine metadata.
                 （切片软件维度的注册表设备配置 ID，用于选择原生机型元数据）
         """
-        from config import normalize_nozzle_size, normalize_slicer_software_id
+        from config import format_native_nozzle_size, normalize_nozzle_size, normalize_slicer_software_id
 
         self.output_path = output_path
         self.settings = {**self.DEFAULT_SETTINGS, **(settings or {})}
@@ -600,8 +1078,23 @@ class BambuStudio3MFWriter:
         self.color_mode = color_mode
         self.printer_id = printer_id
         self.slicer = normalize_slicer_software_id(slicer)
-        self.nozzle_size = normalize_nozzle_size(nozzle_size) or "0.4"
         self.device_profile_id = str(device_profile_id or "").strip() or None
+        legacy_nozzle_size = normalize_nozzle_size(nozzle_size) or "0.4"
+        self.nozzle_size = (
+            format_native_nozzle_size(nozzle_size) or legacy_nozzle_size
+            if self.device_profile_id
+            else legacy_nozzle_size
+        )
+        self._registry_device_profile = (
+            _load_registry_device_profile_if_available(
+                device_profile_id=self.device_profile_id,
+                printer_id=self.printer_id,
+                slicer=self.slicer,
+                nozzle_size=self.nozzle_size,
+            )
+            if self.device_profile_id
+            else None
+        )
         self.watermark = watermark
         self.enable_base_layer_height_modifier = bool(enable_base_layer_height_modifier)
         self.base_height_mm = float(base_height_mm)
@@ -828,6 +1321,11 @@ class BambuStudio3MFWriter:
         """Return slicer-appropriate Application version string.
         返回适配不同切片器的 Application 版本字符串。
         """
+        registry_profile = getattr(self, "_registry_device_profile", None)
+        if registry_profile is not None:
+            application_metadata = str(registry_profile.application_metadata or "").strip()
+            if application_metadata:
+                return application_metadata
         _VERSION_MAP = {
             "SnapmakerOrca": "BambuStudio-2.2.4",
             "ElegooSlicer": "ElegooSlicer-1.3.2.9",
@@ -846,6 +1344,39 @@ class BambuStudio3MFWriter:
         if self.printer_id in h2_family:
             return "02.05.00.66"
         return "02.04.00.70"
+
+    def _get_registry_source_version(self) -> str | None:
+        """Return source slicer version from generated machine registry if present."""
+        registry_profile = getattr(self, "_registry_device_profile", None)
+        if registry_profile is None:
+            return None
+        source_version = str(registry_profile.source_version or "").strip()
+        if source_version:
+            return source_version
+        application_metadata = str(registry_profile.application_metadata or "").strip()
+        if "-" in application_metadata:
+            return application_metadata.split("-", 1)[1]
+        return None
+
+    def _get_registry_client_version(self) -> str | None:
+        """Return exact slicer client-version stamp from machine registry if present."""
+        registry_profile = getattr(self, "_registry_device_profile", None)
+        if registry_profile is None:
+            return None
+        client_version = str(getattr(registry_profile, "client_version", "") or "").strip()
+        return client_version or None
+
+    def _get_anycubic_client_version(self) -> str:
+        """Return the ACNext client-version stamp expected by Anycubic metadata."""
+        registry_client_version = self._get_registry_client_version()
+        if registry_client_version:
+            return registry_client_version
+        registry_source_version = self._get_registry_source_version()
+        if registry_source_version and " " in registry_source_version:
+            return registry_source_version
+        if registry_source_version == "1.3.9.4" or not registry_source_version:
+            return "1.3.9.4 20260319225535"
+        return registry_source_version
 
     def _is_anycubic_slicer(self) -> bool:
         """Return whether the current export targets Anycubic Slicer Next.
@@ -1318,17 +1849,33 @@ class BambuStudio3MFWriter:
 
         settings = self._get_base_config_template()
         template_settings = copy.deepcopy(settings)
+        preserve_template_filament_slots = _should_preserve_template_filament_slots(
+            self._registry_device_profile,
+            template_settings,
+            num_colors,
+        )
+        if "different_settings_to_system" in settings:
+            settings["different_settings_to_system"] = _normalize_difference_index(
+                settings.get("different_settings_to_system")
+            )
 
         for key, value in settings.items():
             if isinstance(value, list) and len(value) > 0:
                 if key.startswith("filament_") or key in _FILAMENT_RESIZABLE_ARRAY_KEYS:
+                    if preserve_template_filament_slots:
+                        continue
                     if len(value) != num_colors:
                         template_value = _template_default_list_value(value, template_settings)
                         settings[key] = [template_value] * num_colors
 
-        settings.update(self._build_filament_arrays(material_palette))
+        _apply_filament_array_overrides(
+            settings,
+            self._build_filament_arrays(material_palette),
+            preserve_template_slots=preserve_template_filament_slots,
+        )
         _apply_material_filament_metadata(settings, template_settings, material_palette)
-        _disable_cut_retraction_filament_overrides(settings, num_colors)
+        if not preserve_template_filament_slots:
+            _disable_cut_retraction_filament_overrides(settings, num_colors)
 
         settings.setdefault("single_extruder_multi_material", "1")
         settings.setdefault("enable_prime_tower", "1")
@@ -1363,12 +1910,10 @@ class BambuStudio3MFWriter:
         # 确保切片器的 "与系统默认不同" 索引包含所有被覆盖的 key，
         # 否则打开 3mf 时切片器可能会静默把覆盖值回退到预设默认值。
         if applied_override_keys:
-            diffs = settings.get("different_settings_to_system")
-            if isinstance(diffs, list) and diffs and isinstance(diffs[0], str):
-                existing = [s for s in diffs[0].split(";") if s]
-                merged = sorted(set(existing) | set(applied_override_keys))
-                diffs[0] = ";".join(merged)
-                settings["different_settings_to_system"] = diffs
+            settings["different_settings_to_system"] = _normalize_difference_index(
+                settings.get("different_settings_to_system"),
+                applied_override_keys,
+            )
 
         return json.dumps(settings, indent=4, ensure_ascii=False).encode("utf-8")
 
@@ -1378,21 +1923,36 @@ class BambuStudio3MFWriter:
         """
         config = ET.Element("config")
         header = ET.SubElement(config, "header")
+        registry_source_version = self._get_registry_source_version()
+        registry_client_version = self._get_registry_client_version() or registry_source_version
         if self._is_anycubic_slicer():
             ET.SubElement(header, "header_item", attrib={"key": "X-ACNext-Client-Type", "value": "slicer"})
             ET.SubElement(
-                header, "header_item", attrib={"key": "X-ACNext-Client-Version", "value": "1.3.9.4 20260319225535"}
+                header,
+                "header_item",
+                attrib={
+                    "key": "X-ACNext-Client-Version",
+                    "value": self._get_anycubic_client_version(),
+                },
             )
         else:
             ET.SubElement(header, "header_item", attrib={"key": "X-BBL-Client-Type", "value": "slicer"})
             if self.slicer == "BambuStudio":
-                client_version = self._get_bambu_client_version()
+                client_version = registry_client_version or self._get_bambu_client_version()
                 ET.SubElement(header, "header_item", attrib={"key": "X-BBL-Client-Version", "value": client_version})
             elif self.slicer == "ElegooSlicer":
-                ET.SubElement(header, "header_item", attrib={"key": "X-BBL-Client-Version", "value": "01.03.02.09"})
+                ET.SubElement(
+                    header,
+                    "header_item",
+                    attrib={"key": "X-BBL-Client-Version", "value": registry_client_version or "01.03.02.09"},
+                )
                 ET.SubElement(header, "header_item", attrib={"key": "X-BBL-Client-Name", "value": "ElegooSlicer"})
             else:
-                ET.SubElement(header, "header_item", attrib={"key": "X-BBL-Client-Version", "value": ""})
+                ET.SubElement(
+                    header,
+                    "header_item",
+                    attrib={"key": "X-BBL-Client-Version", "value": registry_client_version or ""},
+                )
 
         tree = ET.ElementTree(config)
         ET.indent(tree, space="  ")

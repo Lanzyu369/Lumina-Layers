@@ -4,6 +4,7 @@ import {
   resolveConverterSourceSelection,
   useConverterStore,
 } from "../../stores/converter";
+import { useSettingsStore } from "../../stores/settingsStore";
 import * as lutApi from "../../api/lut";
 import { ColorMode, ModelingMode, StructureMode } from "../../api/types";
 
@@ -966,6 +967,9 @@ describe("native bundle converter flow", () => {
       irregularityStrength: 0.35,
       minNeckWidthMm: 1.2,
     } as never);
+    useSettingsStore.setState({
+      deviceProfileId: "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
+    } as never);
 
     const result = await useConverterStore.getState().submitGenerate();
 
@@ -983,6 +987,7 @@ describe("native bundle converter flow", () => {
     expect(params.params).toMatchObject({
       lut_name: "legacy-lut",
       target_width_mm: 90,
+      device_profile_id: "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
     });
     expect(result).toBeNull();
     expect(useConverterStore.getState().downloadUrl).toBe("/api/files/puzzle-model");

@@ -43,6 +43,7 @@ class TestGetSettings:
         assert settings["last_slicer"] == ""
         assert settings["palette_mode"] == "swatch"
         assert settings["enable_crop_modal"] is True
+        assert settings["device_profile_id"] == "BambuStudio:bbl:bambu-lab-h2d:0.4"
         assert settings["nozzle_size"] == "0.4"
 
     def test_get_settings_file_exists(self) -> None:
@@ -54,6 +55,7 @@ class TestGetSettings:
             "last_slicer": "bambu",
             "palette_mode": "grid",
             "enable_crop_modal": False,
+            "device_profile_id": "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
             "nozzle_size": "0.2",
         }
         mock_file = MagicMock()
@@ -73,6 +75,7 @@ class TestGetSettings:
         assert settings["last_slicer"] == "bambu"
         assert settings["palette_mode"] == "grid"
         assert settings["enable_crop_modal"] is False
+        assert settings["device_profile_id"] == "OrcaSlicer:bbl:bambu-lab-p1s:0.2"
         assert settings["nozzle_size"] == "0.2"
 
 
@@ -93,6 +96,7 @@ class TestPostSettings:
             "last_slicer": "orca",
             "palette_mode": "swatch",
             "enable_crop_modal": True,
+            "device_profile_id": "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
             "nozzle_size": "0.2",
         }
         mock_file = MagicMock()
@@ -104,6 +108,8 @@ class TestPostSettings:
         assert data["status"] == "success"
         assert data["message"] == "Settings saved"
         mock_file.write_text.assert_called_once()
+        written = json.loads(mock_file.write_text.call_args.args[0])
+        assert written["device_profile_id"] == "OrcaSlicer:bbl:bambu-lab-p1s:0.2"
 
     def test_post_settings_io_error(self) -> None:
         """I/O 错误返回 500。"""
@@ -238,6 +244,71 @@ class TestGetPrinters:
                 "supported": True,
             }
         ]
+
+    def test_get_printers_includes_registry_only_orca_multicolor_machine(
+        self,
+        tmp_path,
+        monkeypatch,
+    ) -> None:
+        registry_root = tmp_path / "machine_registry"
+        registry_root.mkdir()
+        (registry_root / "registry.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "generated_at": "2026-06-09T00:00:00+08:00",
+                    "slicers": [
+                        {
+                            "slicer_id": "OrcaSlicer",
+                            "display_name": "OrcaSlicer",
+                            "source_kind": "local_install",
+                            "source_version": "02.04.00.00",
+                            "profile_format": "bambu_orca",
+                            "application_metadata": "OrcaSlicer-02.04.00.00",
+                            "sidecar_policy": "orca_like",
+                            "machines": [
+                                {
+                                    "machine_profile_id": "OrcaSlicer:snapmaker:snapmaker-artisan",
+                                    "display_name": "Snapmaker Artisan",
+                                    "brand": "Snapmaker",
+                                    "vendor_key": "Snapmaker",
+                                    "bed_width": 400,
+                                    "bed_depth": 400,
+                                    "bed_height": 400,
+                                    "thumbnail": "slicers/OrcaSlicer/assets/snapmaker-artisan.png",
+                                    "nozzles": [
+                                        {
+                                            "device_profile_id": "OrcaSlicer:snapmaker:snapmaker-artisan:0.4",
+                                            "nozzle_size": "0.4",
+                                            "source_profile_name": "Snapmaker Artisan 0.4 nozzle",
+                                            "template": "slicers/OrcaSlicer/templates/snapmaker-artisan_0_4.json",
+                                            "revision": "sha256:artisan",
+                                            "supported": True,
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
+
+        response = client.get("/api/system/printers")
+
+        assert response.status_code == 200
+        printers = response.json()["printers"]
+        snapmaker_artisan = next(printer for printer in printers if printer["id"] == "snapmaker-artisan")
+        assert snapmaker_artisan["display_name"] == "Snapmaker Artisan"
+        assert snapmaker_artisan["supported_slicers"] == ["OrcaSlicer"]
+        assert snapmaker_artisan["supported_nozzle_sizes"] == ["0.4"]
+        assert snapmaker_artisan["thumbnail"] == "slicers/OrcaSlicer/assets/snapmaker-artisan.png"
+        assert snapmaker_artisan["device_profiles"][0]["device_profile_id"] == (
+            "OrcaSlicer:snapmaker:snapmaker-artisan:0.4"
+        )
 
     def test_machine_registry_asset_serves_thumbnail_inside_registry(self, tmp_path, monkeypatch) -> None:
         registry_root = tmp_path / "machine_registry"

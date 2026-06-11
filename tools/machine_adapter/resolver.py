@@ -22,7 +22,7 @@ class ResolvedMachineProfile:
 
 
 def _read_json(path: Path) -> dict[str, Any]:
-    data = json.loads(path.read_text(encoding="utf-8"))
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
     if not isinstance(data, dict):
         raise ValueError(f"Profile JSON must be an object: {path}")
     return data
@@ -37,7 +37,7 @@ def _index_machine_json(machine_dir: Path) -> dict[str, Path]:
         raise FileNotFoundError(f"Machine profile directory not found: {machine_dir}")
 
     index: dict[str, Path] = {}
-    for path in sorted(machine_dir.glob("*.json"), key=lambda item: item.as_posix()):
+    for path in sorted(machine_dir.rglob("*.json"), key=lambda item: item.as_posix()):
         data = _read_json(path)
         name = str(data.get("name") or path.stem)
         index[name] = path

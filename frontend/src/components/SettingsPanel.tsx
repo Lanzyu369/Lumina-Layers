@@ -35,6 +35,7 @@ import Slider from "./ui/Slider";
 import Switch from "./ui/Switch";
 import WikiTooltip from "./ui/WikiTooltip";
 import {
+  cx,
   PanelIntro,
   StatusBanner,
   resolvePanelSurfaceClass,
@@ -44,6 +45,11 @@ import {
 
 const SETTINGS_OPTIONS_RETRY_ATTEMPTS = 6;
 const SETTINGS_OPTIONS_RETRY_DELAY_MS = 1000;
+
+function getMachinePlaceholderLabel(printer: PrinterInfo): string {
+  const compactBrand = printer.brand.replace(/\s+/g, "");
+  return (compactBrand || printer.display_name).slice(0, 2).toUpperCase();
+}
 
 export default function SettingsPanel() {
   const { t } = useI18n();
@@ -297,11 +303,17 @@ export default function SettingsPanel() {
     syncToBackend();
   };
 
-  const handleNozzleSizeChange = (value: string) => {
-    setNozzleSize(value as "0.2" | "0.4");
+  const handlePrinterNozzleChange = (printer: PrinterInfo, value: string) => {
+    if (printer.id !== printerModel) {
+      setPrinterModel(printer.id);
+      setLastBedLabel(`${printer.bed_width}×${printer.bed_depth} mm`);
+    }
+    if (value !== nozzleSize) {
+      setNozzleSize(value as "0.2" | "0.4");
+    }
     const nextDeviceProfileId = resolveDeviceProfileOptionId(
       deviceProfileId,
-      selectedPrinter,
+      printer,
       resolvedSlicerSoftware,
       value,
     );
@@ -363,7 +375,7 @@ export default function SettingsPanel() {
             {t("settings.printer_model")}
           </h4>
         </div>
-        <div className={`grid gap-4 ${workspace.isCompact ? "" : "xl:grid-cols-3"}`}>
+        <div className="grid gap-4">
           <div>
             <Dropdown
               label={t("settings.slicer_software")}
@@ -376,29 +388,94 @@ export default function SettingsPanel() {
               }))}
             />
           </div>
-          <div>
-            <Dropdown
-              label={t("settings.printer_model")}
-              value={resolvedPrinterModel}
-              onChange={handlePrinterChange}
-              disabled={printersLoading}
-              options={filteredPrinters.map((p) => ({
-                label: p.display_name,
-                value: p.id,
-              }))}
-            />
-          </div>
-          <div>
-            <Dropdown
-              label={t("settings.nozzle_size")}
-              value={resolvedNozzleSize}
-              onChange={handleNozzleSizeChange}
-              disabled={printersLoading || !selectedPrinter}
-              options={getPrinterNozzleSizeOptions(selectedPrinter, resolvedSlicerSoftware).map((size) => ({
-                label: `${size} mm`,
-                value: size,
-              }))}
-            />
+        </div>
+        <div className="flex min-w-0 flex-col gap-2">
+          <label className="text-sm font-medium text-slate-700 dark:text-slate-200">
+            {t("settings.printer_model")}
+          </label>
+          <div
+            data-testid="machine-adapter-grid"
+            className="grid max-h-[28rem] gap-3 overflow-y-auto pr-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4"
+          >
+            {filteredPrinters.map((printer) => {
+              const isSelected = printer.id === resolvedPrinterModel;
+              const thumbnailUrl = getMachineRegistryAssetUrl(printer.thumbnail);
+              const nozzleOptions = getPrinterNozzleSizeOptions(printer, resolvedSlicerSoftware);
+
+              return (
+                <div
+                  key={printer.id}
+                  className={cx(
+                    "group rounded-lg border bg-white/72 p-3 shadow-[var(--shadow-control)] transition-all duration-200 hover:border-blue-300 hover:bg-white/92 dark:bg-slate-900/60 dark:hover:bg-slate-900/82",
+                    isSelected
+                      ? "border-blue-400 ring-2 ring-blue-200/80 dark:border-blue-300 dark:ring-blue-500/20"
+                      : "border-slate-200/80 dark:border-slate-700/80",
+                  )}
+                >
+                  <button
+                    type="button"
+                    aria-pressed={isSelected}
+                    data-testid={`machine-adapter-card-${printer.id}`}
+                    onClick={() => handlePrinterChange(printer.id)}
+                    disabled={printersLoading}
+                    className="grid w-full min-h-[7.25rem] grid-cols-[5.5rem_minmax(0,1fr)] gap-3 text-left outline-none transition-opacity disabled:cursor-not-allowed disabled:opacity-45"
+                  >
+                    <span className="flex h-24 w-[5.5rem] items-center justify-center overflow-hidden rounded-md border border-slate-200/70 bg-slate-100/80 dark:border-slate-700/70 dark:bg-slate-800/70">
+                      {thumbnailUrl ? (
+                        <img
+                          src={thumbnailUrl}
+                          alt={printer.display_name}
+                          className="h-full w-full object-contain p-1.5"
+                          loading="lazy"
+                        />
+                      ) : (
+                        <span className="text-lg font-semibold text-slate-400 dark:text-slate-500">
+                          {getMachinePlaceholderLabel(printer)}
+                        </span>
+                      )}
+                    </span>
+                    <span className="flex min-w-0 flex-col gap-1.5">
+                      <span className="truncate text-sm font-semibold text-slate-900 dark:text-slate-50">
+                        {printer.display_name}
+                      </span>
+                      <span className="text-xs text-slate-500 dark:text-slate-400">
+                        {printer.brand}
+                      </span>
+                      <span className="text-xs text-slate-500 dark:text-slate-400">
+                        {t("settings.bed_size")}: {printer.bed_width}&times;{printer.bed_depth} {t("common_unit_mm")}
+                      </span>
+                      <span className="text-xs text-slate-500 dark:text-slate-400">
+                        {t("settings.nozzle_size")}: {nozzleOptions.map((size) => `${size} ${t("common_unit_mm")}`).join(", ")}
+                      </span>
+                    </span>
+                  </button>
+                  <div className="mt-3 flex flex-wrap gap-1.5 border-t border-slate-200/70 pt-3 dark:border-slate-700/70">
+                    {nozzleOptions.map((size) => {
+                      const isNozzleSelected = isSelected && size === resolvedNozzleSize;
+                      return (
+                        <button
+                          key={size}
+                          type="button"
+                          aria-pressed={isNozzleSelected}
+                          aria-label={`${printer.display_name} ${size} ${t("common_unit_mm")}`}
+                          data-testid={`machine-adapter-nozzle-${printer.id}-${size.replace(/\./g, "_")}`}
+                          onClick={() => handlePrinterNozzleChange(printer, size)}
+                          disabled={printersLoading}
+                          className={cx(
+                            "min-h-8 rounded-md border px-2.5 text-xs font-medium transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-45",
+                            isNozzleSelected
+                              ? "border-blue-400 bg-blue-50 text-blue-700 dark:border-blue-300 dark:bg-blue-500/15 dark:text-blue-200"
+                              : "border-slate-200/80 bg-slate-50/80 text-slate-600 hover:border-blue-300 hover:text-blue-600 dark:border-slate-700/80 dark:bg-slate-800/72 dark:text-slate-300 dark:hover:border-blue-400 dark:hover:text-blue-200",
+                          )}
+                        >
+                          {size} {t("common_unit_mm")}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
         {selectedPrinter && (
@@ -409,7 +486,7 @@ export default function SettingsPanel() {
             {selectedPrinterThumbnailUrl && (
               <img
                 src={selectedPrinterThumbnailUrl}
-                alt={selectedPrinter.display_name}
+                alt=""
                 className="h-16 w-16 shrink-0 object-contain"
                 loading="lazy"
               />

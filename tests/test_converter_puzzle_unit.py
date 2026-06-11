@@ -319,6 +319,7 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
         printer_id: str,
         slicer: str,
         nozzle_size: str = "0.4",
+        device_profile_id: str | None = None,
         overview_png_bytes: bytes | None = None,
     ) -> str:
         assembled_calls.append(
@@ -491,6 +492,7 @@ def test_generate_puzzle_resizes_heightmap_crop_to_worker_grid() -> None:
         printer_id: str,
         slicer: str,
         nozzle_size: str = "0.4",
+        device_profile_id: str | None = None,
         overview_png_bytes: bytes | None = None,
     ) -> str:
         with open(output_path, "wb") as handle:
@@ -566,6 +568,7 @@ def test_generate_puzzle_emits_hybrid_boundary_log_for_each_piece() -> None:
         printer_id: str,
         slicer: str,
         nozzle_size: str = "0.4",
+        device_profile_id: str | None = None,
         overview_png_bytes: bytes | None = None,
     ) -> str:
         with open(output_path, "wb") as handle:
@@ -652,6 +655,7 @@ def test_generate_puzzle_reuses_cached_layout_after_preview() -> None:
         printer_id: str,
         slicer: str,
         nozzle_size: str = "0.4",
+        device_profile_id: str | None = None,
         overview_png_bytes: bytes | None = None,
     ) -> str:
         with open(output_path, "wb") as handle:
@@ -801,6 +805,7 @@ def test_generate_puzzle_filters_fully_transparent_pieces_during_layout() -> Non
         printer_id: str,
         slicer: str,
         nozzle_size: str = "0.4",
+        device_profile_id: str | None = None,
         overview_png_bytes: bytes | None = None,
     ) -> str:
         with open(output_path, "wb") as handle:

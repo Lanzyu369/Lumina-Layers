@@ -32,11 +32,13 @@ def test_legacy_calibration_board_forwards_device_settings_to_writer(
         printer_id="bambu-p1s",
         slicer="OrcaSlicer",
         nozzle_size="0.2",
+        device_profile_id="OrcaSlicer:bbl:bambu-lab-p1s:0.2",
     )
 
     assert captured["printer_id"] == "bambu-p1s"
     assert captured["slicer"] == "OrcaSlicer"
     assert captured["nozzle_size"] == "0.2"
+    assert captured["device_profile_id"] == "OrcaSlicer:bbl:bambu-lab-p1s:0.2"
 
 
 def test_legacy_calibration_board_manifest_uses_selected_template(
@@ -97,8 +99,10 @@ def test_single_stage_kit_forwards_device_settings_to_writer(
         printer_id="bambu-p1s",
         slicer="OrcaSlicer",
         nozzle_size="0.2",
+        device_profile_id="OrcaSlicer:bbl:bambu-lab-p1s:0.2",
     )
 
     assert captured["printer_id"] == "bambu-p1s"
     assert captured["slicer"] == "OrcaSlicer"
     assert captured["nozzle_size"] == "0.2"
+    assert captured["device_profile_id"] == "OrcaSlicer:bbl:bambu-lab-p1s:0.2"

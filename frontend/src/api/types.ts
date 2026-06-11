@@ -463,6 +463,7 @@ export interface CalibrationGenerateRequest {
   printer_id?: string;
   slicer?: string;
   nozzle_size?: string;
+  device_profile_id?: string;
 }
 
 // ========== Calibration Response Models ==========
@@ -494,6 +495,7 @@ export interface SingleStageKitGenerateRequest {
   printer_id?: string;
   slicer?: string;
   nozzle_size?: string;
+  device_profile_id?: string;
 }
 
 export interface SingleStageKitResponse {
@@ -1594,6 +1596,7 @@ export interface RecipeSwatchRequest {
   printer_id?: string;
   slicer?: string;
   nozzle_size?: string;
+  device_profile_id?: string;
 }
 
 export interface RecipeSwatchResponse {
@@ -1622,6 +1625,7 @@ export interface MaterialRecipeSwatchRequest {
   printer_id?: string;
   slicer?: string;
   nozzle_size?: string;
+  device_profile_id?: string;
 }
 
 export interface MaterialRecipeSwatchResponse {
@@ -1723,6 +1727,7 @@ export interface UserSettings {
   enable_crop_modal: boolean;
   printer_model: string;
   slicer_software: string;
+  device_profile_id: string;
   custom_slicer_path: string;
   custom_slicer_id: string;
   nozzle_size: string;

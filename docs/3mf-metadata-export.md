@@ -24,6 +24,10 @@ At the time of writing:
 
 ## Core Files
 
+- `machine_registry/`
+  Generated Machine Adapter V2 registry and slicer-native metadata templates.
+  For upgrade/update operations, use `docs/machine-adapter-v2-maintenance.md`
+  as the maintenance checklist.
 - `config.py`
   Resolves printer profiles, supported slicers, and nozzle-size-aware template paths.
 - `printer_profiles/*.json`

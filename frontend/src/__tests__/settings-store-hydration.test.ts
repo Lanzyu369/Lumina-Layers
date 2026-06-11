@@ -136,6 +136,33 @@ describe("settings store hydration and base-layer modifier wiring", () => {
     expect(state.theme).toBe("dark");
   });
 
+  it("does not pair legacy persisted device settings with the default H2D device profile", async () => {
+    localStorage.setItem(
+      "lumina-settings",
+      JSON.stringify({
+        state: {
+          printerModel: "bambu-p1s",
+          slicerSoftware: "OrcaSlicer",
+          nozzleSize: "0.2",
+        },
+        version: 1,
+      }),
+    );
+
+    const settingsStoreModule = await import("../stores/settingsStore");
+
+    expect(settingsStoreModule.useSettingsStore.getState().printerModel).toBe(
+      "bambu-p1s",
+    );
+    expect(settingsStoreModule.useSettingsStore.getState().slicerSoftware).toBe(
+      "OrcaSlicer",
+    );
+    expect(settingsStoreModule.useSettingsStore.getState().nozzleSize).toBe(
+      "0.2",
+    );
+    expect(settingsStoreModule.useSettingsStore.getState().deviceProfileId).toBe("");
+  });
+
   it("setSolverCacheGridResolution accepts whitelisted tiers and rejects others", async () => {
     const { settingsStoreModule } = await loadStores();
     const { useSettingsStore } = settingsStoreModule;
@@ -206,6 +233,7 @@ describe("settings store hydration and base-layer modifier wiring", () => {
       enableBaseLayerHeightModifier: false,
       customSlicerPath: "/Applications/Bambu Studio.app",
       customSlicerId: "bambu_studio",
+      deviceProfileId: "BambuStudio:bbl:bambu-lab-h2d:0.2",
     });
 
     await settingsStoreModule.useSettingsStore.getState().syncToBackend();
@@ -215,7 +243,22 @@ describe("settings store hydration and base-layer modifier wiring", () => {
         enable_base_layer_height_modifier: false,
         custom_slicer_path: "/Applications/Bambu Studio.app",
         custom_slicer_id: "bambu_studio",
+        device_profile_id: "BambuStudio:bbl:bambu-lab-h2d:0.2",
       }),
+    );
+  });
+
+  it("hydrates backend device_profile_id when there is no persisted choice", async () => {
+    const { settingsStoreModule } = await loadStores();
+
+    settingsStoreModule.useSettingsStore
+      .getState()
+      .hydrateDeviceSettingsFromBackend({
+        device_profile_id: "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
+      });
+
+    expect(settingsStoreModule.useSettingsStore.getState().deviceProfileId).toBe(
+      "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
     );
   });
 

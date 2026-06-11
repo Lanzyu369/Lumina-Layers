@@ -16,6 +16,7 @@ class DeviceProfile:
     slicer_display_name: str
     source_version: str
     application_metadata: str
+    client_version: str
     sidecar_policy: str
     display_name: str
     brand: str
@@ -76,6 +77,7 @@ def load_machine_registry(path: str | Path) -> MachineRegistry:
                     slicer_display_name=str(slicer["display_name"]),
                     source_version=str(slicer["source_version"]),
                     application_metadata=str(slicer["application_metadata"]),
+                    client_version=str(slicer.get("client_version") or ""),
                     sidecar_policy=str(slicer["sidecar_policy"]),
                     display_name=str(machine["display_name"]),
                     brand=str(machine["brand"]),
@@ -90,6 +92,11 @@ def load_machine_registry(path: str | Path) -> MachineRegistry:
                     revision=str(nozzle["revision"]),
                     supported=bool(nozzle.get("supported", True)),
                 )
+                if device.device_profile_id in devices:
+                    raise ValueError(
+                        "Duplicate machine registry device profile: "
+                        f"{device.device_profile_id}"
+                    )
                 devices[device.device_profile_id] = device
 
     return MachineRegistry(

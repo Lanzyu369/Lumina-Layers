@@ -77,6 +77,7 @@ class UserSettings(BaseModel):
     enable_crop_modal: StrictBool = True
     printer_model: str = "bambu-h2d"
     slicer_software: str = "BambuStudio"
+    device_profile_id: str = "BambuStudio:bbl:bambu-lab-h2d:0.4"
     custom_slicer_path: str = ""
     custom_slicer_id: str = ""
     nozzle_size: str = "0.4"

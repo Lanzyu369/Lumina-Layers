@@ -196,11 +196,17 @@ describe("setSelectedSlicerId", () => {
   });
 
   it("同步更新 settingsStore 中的 slicerSoftware 以驱动生成请求", () => {
+    useSettingsStore.setState({
+      ...DEFAULT_SETTINGS,
+      deviceProfileId: "BambuStudio:bbl:bambu-lab-h2d:0.4",
+    });
+
     useSlicerStore.getState().setSelectedSlicerId("orca_slicer");
 
     expect(useSlicerStore.getState().selectedSlicerId).toBe("orca_slicer");
     expect(useSettingsStore.getState().slicerSoftware).toBe("OrcaSlicer");
     expect(useSettingsStore.getState().lastSlicerId).toBe("orca_slicer");
+    expect(useSettingsStore.getState().deviceProfileId).toBe("");
   });
 });
 

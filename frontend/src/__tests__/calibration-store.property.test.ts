@@ -320,6 +320,7 @@ describe("Feature: calibration-tab-integration, Property 6: API 请求载荷与 
       printerModel: "bambu-p1s",
       slicerSoftware: "OrcaSlicer",
       nozzleSize: "0.2",
+      deviceProfileId: "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
     });
     useCalibrationStore.setState({
       workflow: "legacy",
@@ -412,6 +413,7 @@ describe("Feature: calibration-tab-integration, Property 6: API 请求载荷与 
           callArgs.printer_id === "bambu-p1s" &&
           callArgs.slicer === "OrcaSlicer" &&
           callArgs.nozzle_size === "0.2" &&
+          callArgs.device_profile_id === "OrcaSlicer:bbl:bambu-lab-p1s:0.2" &&
           useCalibrationStore.getState().threemfDiskPath === "/tmp/test.3mf"
         );
       }),
@@ -448,6 +450,7 @@ describe("Feature: calibration-tab-integration, Property 6: API 请求载荷与 
     expect(callArgs.printer_id).toBe("bambu-p1s");
     expect(callArgs.slicer).toBe("OrcaSlicer");
     expect(callArgs.nozzle_size).toBe("0.2");
+    expect(callArgs.device_profile_id).toBe("OrcaSlicer:bbl:bambu-lab-p1s:0.2");
     expect(callArgs.palette.map((entry) => entry.color_name)).toEqual([
       "Sample",
     ]);

@@ -143,6 +143,8 @@ export interface ConverterRecipeDevice {
   printer_id: string;
   slicer: string;
   nozzle_size: string;
+  /** V2 generated machine-registry device profile ID. */
+  device_profile_id?: string;
 }
 
 export interface ConverterRecipeFridgeMagnet {

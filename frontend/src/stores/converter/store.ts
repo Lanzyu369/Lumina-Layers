@@ -1193,6 +1193,7 @@ export function collectConverterKeepFileIds(state: {
   previewBaseImageUrl: string | null;
   originalPreviewUrl: string | null;
   previewGlbUrl: string | null;
+  modelUrl: string | null;
   puzzleOverlayUrl: string | null;
   batchPreviewItems: Array<{ url: string | null }>;
   regionData: { previewUrl: string | null } | null;
@@ -1205,6 +1206,7 @@ export function collectConverterKeepFileIds(state: {
     state.previewBaseImageUrl,
     state.originalPreviewUrl,
     state.previewGlbUrl,
+    state.modelUrl,
     state.puzzleOverlayUrl,
     ...state.batchPreviewItems.map((item) => item.url),
     state.regionData?.previewUrl ?? null,

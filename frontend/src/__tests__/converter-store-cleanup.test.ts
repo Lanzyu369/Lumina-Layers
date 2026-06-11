@@ -147,6 +147,28 @@ describe("converter store cleanup behavior", () => {
     expect(useConverterStore.getState().downloadUrl).toBe("/api/files/download-close");
   });
 
+  it("preserves generated modelUrl during cleanup after slicer launch", async () => {
+    const useConverterStore = await loadStore();
+
+    useConverterStore.setState({
+      sessionId: "sess-generated-glb",
+      downloadUrl: "/api/files/download-generated",
+      modelUrl: "/api/files/generated-glb",
+      previewGlbUrl: null,
+    });
+
+    useConverterStore.getState().cleanupAfterDownload();
+
+    expect(cleanupSessionFilesMock).toHaveBeenCalledWith(
+      "sess-generated-glb",
+      expect.arrayContaining(["download-generated", "generated-glb"]),
+    );
+    expect(closeSessionMock).toHaveBeenCalledWith(
+      "sess-generated-glb",
+      expect.arrayContaining(["download-generated", "generated-glb"]),
+    );
+  });
+
   it("ignores stale layer image responses after the session changes", async () => {
     const useConverterStore = await loadStore();
     let resolveFetch: ((value: LayerImagesPayload) => void) | undefined;

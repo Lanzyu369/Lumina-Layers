@@ -34,6 +34,7 @@ class SingleStageKitGenerateRequest(BaseModel):
     printer_id: str = Field(DEFAULT_PRINTER_ID, description="Printer profile ID.")
     slicer: str = Field(DEFAULT_SLICER_ID, description="Slicer software ID.")
     nozzle_size: str = Field("0.4", description="Nozzle size.")
+    device_profile_id: str | None = Field(None, description="Machine registry device profile ID.")
 
 
 class StageAFitRequest(BaseModel):
@@ -193,6 +194,7 @@ class MaterialRecipeSwatchRequest(BaseModel):
     printer_id: str = Field("bambu-h2d", description="Printer profile ID.")
     slicer: str = Field("BambuStudio", description="Slicer software ID.")
     nozzle_size: str = Field("0.4", description="Nozzle size.")
+    device_profile_id: str | None = Field(None, description="Machine registry device profile ID.")
 
 
 class MaterialRecipeSwatchResponse(BaseModel):

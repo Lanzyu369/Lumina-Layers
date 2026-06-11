@@ -19,10 +19,13 @@ export function getMachineRegistryAssetUrl(path: string | null | undefined): str
     return "";
   }
   const normalized = trimmed.replace(/^\/+/, "");
-  return `/api/system/machine-registry/assets/${normalized
+  const encodedPath = normalized
     .split("/")
     .map((segment) => encodeURIComponent(segment))
-    .join("/")}`;
+    .join("/");
+  const baseURL = apiClient.defaults.baseURL?.trim() || "/api";
+  const normalizedBaseURL = baseURL.replace(/\/+$/, "");
+  return `${normalizedBaseURL}/system/machine-registry/assets/${encodedPath}`;
 }
 
 /** 调用后端清除系统缓存，返回清理统计信息 */
