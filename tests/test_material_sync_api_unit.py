@@ -8,6 +8,7 @@ import zipfile
 from pathlib import Path
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from api.app import create_app
@@ -598,6 +599,31 @@ def test_list_material_registry_catalog_requests_remote_search() -> None:
     assert catalog["count"] == 1
     assert catalog["total_count"] == 1
     assert catalog["materials"][0]["material_id"] == "mat_petg"
+
+
+def test_list_material_registry_catalog_rejects_cross_origin_redirect() -> None:
+    requested_urls: list[str] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        if request.url.path == "/v1/materials/catalog":
+            return httpx.Response(
+                302,
+                headers={"Location": "http://169.254.169.254/latest/meta-data/"},
+            )
+        return httpx.Response(200, json={"schema_version": "1.0", "materials": []})
+
+    with pytest.raises(RuntimeError, match="catalog redirects are not allowed"):
+        list_material_registry_catalog(
+            registry_url="https://registry.test/v1",
+            channels=["official"],
+            transport=httpx.MockTransport(_handler),
+            use_cache=False,
+        )
+
+    assert requested_urls == [
+        "https://registry.test/v1/materials/catalog?channel=official"
+    ]
 
 
 def test_list_material_registry_catalog_reuses_full_cache_for_legacy_paging() -> None:
@@ -1218,6 +1244,35 @@ def test_refresh_material_sync_from_registry_rejects_cross_origin_redirect(
     assert result["installed_count"] == 0
     assert result["failed_count"] == 1
     assert "redirects" in result["failures"][0]["error"]
+    assert (materials_root / "BrandA" / "pla-basic" / "material.json").exists() is False
+
+
+def test_refresh_material_sync_from_registry_rejects_catalog_cross_origin_redirect(
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    requested_urls: list[str] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        requested_urls.append(str(request.url))
+        if request.url.path == "/v1/materials/catalog":
+            return httpx.Response(
+                302,
+                headers={"Location": "http://169.254.169.254/latest/meta-data/"},
+            )
+        return httpx.Response(200, json={"schema_version": "1.0", "materials": []})
+
+    with pytest.raises(RuntimeError, match="catalog redirects are not allowed"):
+        refresh_material_sync_from_registry(
+            registry_url="https://registry.test/v1",
+            token="team-token",
+            materials_dir=str(materials_root),
+            transport=httpx.MockTransport(_handler),
+        )
+
+    assert requested_urls == [
+        "https://registry.test/v1/materials/catalog?channel=official"
+    ]
     assert (materials_root / "BrandA" / "pla-basic" / "material.json").exists() is False
 
 

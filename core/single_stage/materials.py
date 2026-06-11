@@ -2552,6 +2552,11 @@ def _reject_material_registry_package_redirect(response: Any) -> None:
         raise ValueError("Material registry package redirects are not allowed")
 
 
+def _reject_material_registry_catalog_redirect(response: Any) -> None:
+    if bool(getattr(response, "is_redirect", False)):
+        raise RuntimeError("Material registry catalog redirects are not allowed")
+
+
 def _write_temp_material_registry_package(package_bytes: bytes) -> Path:
     temp_root = Path(TEMP_DIR)
     temp_root.mkdir(parents=True, exist_ok=True)
@@ -2894,7 +2899,9 @@ def list_material_registry_catalog(
                 _material_registry_catalog_url(normalized_registry_url),
                 params=catalog_params,
                 headers=headers,
+                follow_redirects=False,
             )
+            _reject_material_registry_catalog_redirect(catalog_response)
             catalog_response.raise_for_status()
             catalog_payload = catalog_response.json()
             catalog_entries = _material_registry_catalog_entries(catalog_payload)
@@ -5196,7 +5203,9 @@ def refresh_material_sync_from_registry(
                     _material_registry_catalog_url(normalized_registry_url),
                     params=[("channel", channel) for channel in normalized_channels],
                     headers=headers,
+                    follow_redirects=False,
                 )
+                _reject_material_registry_catalog_redirect(catalog_response)
                 catalog_response.raise_for_status()
                 catalog_payload = catalog_response.json()
                 catalog_entries = _material_registry_catalog_entries(catalog_payload)
