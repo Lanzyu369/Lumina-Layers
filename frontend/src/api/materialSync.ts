@@ -16,6 +16,11 @@ const officialPasswordHeaders = (officialPassword: string) => ({
   [OFFICIAL_PASSWORD_HEADER]: officialPassword,
 });
 
+const optionalOfficialPasswordHeaders = (officialPassword = "") => {
+  const trimmedPassword = officialPassword.trim();
+  return trimmedPassword ? officialPasswordHeaders(trimmedPassword) : undefined;
+};
+
 export interface MaterialRegistryCatalogQuery {
   limit?: number;
   offset?: number;
@@ -58,11 +63,14 @@ export async function refreshMaterialSyncFromRegistry(
  */
 export async function fetchMaterialRegistryCatalog(
   query: MaterialRegistryCatalogQuery = {},
+  officialPassword = "",
 ): Promise<MaterialRegistryCatalogResponse> {
+  const headers = optionalOfficialPasswordHeaders(officialPassword);
   const response = await apiClient.get<MaterialRegistryCatalogResponse>(
     "/material-sync/catalog",
     {
       params: query,
+      ...(headers ? { headers } : {}),
       timeout: MATERIAL_SYNC_READ_TIMEOUT_MS,
     },
   );

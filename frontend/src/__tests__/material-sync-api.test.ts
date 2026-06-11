@@ -140,6 +140,30 @@ describe("material sync API client", () => {
     expect(response.limit).toBe(1);
   });
 
+  it("sends the official password header when fetching a protected remote material catalog", async () => {
+    mockGet.mockResolvedValueOnce({
+      data: {
+        schema_version: "1.0",
+        channels: ["team"],
+        count: 0,
+        total_count: 0,
+        offset: 0,
+        limit: 50,
+        materials: [],
+      },
+    });
+
+    await fetchMaterialRegistryCatalog({ limit: 50, offset: 0 }, " approve-secret ");
+
+    expect(mockGet).toHaveBeenCalledWith("/material-sync/catalog", {
+      params: { limit: 50, offset: 0 },
+      headers: {
+        "X-Lumina-Material-Registry-Official-Password": "approve-secret",
+      },
+      timeout: 120_000,
+    });
+  });
+
   it("installs one selected remote material catalog entry", async () => {
     mockPost.mockResolvedValueOnce({
       data: {

@@ -204,6 +204,32 @@ describe("MaterialCloudSyncPanel", () => {
     expect(fetchMaterialSyncStatus).toHaveBeenCalledTimes(3);
   });
 
+  it("passes the official password when reloading a protected cloud catalog", async () => {
+    render(<MaterialCloudSyncPanel />);
+
+    expect(await screen.findByTestId("material-cloud-sync-panel")).toBeInTheDocument();
+    enterOfficialPassword();
+    fireEvent.click(screen.getByRole("button", { name: /刷新云端目录|refresh catalog/i }));
+
+    await waitFor(() => {
+      expect(fetchMaterialRegistryCatalog).toHaveBeenCalledWith(
+        { limit: 50, offset: 0 },
+        "approve-secret",
+      );
+    });
+
+    fireEvent.change(screen.getByTestId("material-cloud-search-input"), {
+      target: { value: "PETG" },
+    });
+
+    await waitFor(() => {
+      expect(fetchMaterialRegistryCatalog).toHaveBeenCalledWith(
+        { limit: 50, offset: 0, q: "PETG" },
+        "approve-secret",
+      );
+    });
+  });
+
   it("renders cloud catalog cards with the local material card template", async () => {
     render(<MaterialCloudSyncPanel />);
 
@@ -287,10 +313,14 @@ describe("MaterialCloudSyncPanel", () => {
     expect(fetchMaterialRegistryCatalog).toHaveBeenCalledWith({ limit: 50, offset: 0 });
     expect(screen.queryByText("Page One PETG")).not.toBeInTheDocument();
 
+    enterOfficialPassword();
     fireEvent.click(screen.getByRole("button", { name: /加载更多|load more/i }));
 
     await waitFor(() => {
-      expect(fetchMaterialRegistryCatalog).toHaveBeenCalledWith({ limit: 50, offset: 1 });
+      expect(fetchMaterialRegistryCatalog).toHaveBeenCalledWith(
+        { limit: 50, offset: 1 },
+        "approve-secret",
+      );
     });
     expect(await screen.findByText("Page One PETG")).toBeInTheDocument();
     expect(screen.getAllByTestId("material-cloud-catalog-card")).toHaveLength(2);
@@ -371,11 +401,18 @@ describe("MaterialCloudSyncPanel", () => {
     render(<MaterialCloudSyncPanel />);
 
     expect(await screen.findByText("Page Zero PLA")).toBeInTheDocument();
+    enterOfficialPassword();
     fireEvent.click(screen.getByRole("button", { name: /加载全部|load all/i }));
 
     await waitFor(() => {
-      expect(fetchMaterialRegistryCatalog).toHaveBeenCalledWith({ limit: 50, offset: 1 });
-      expect(fetchMaterialRegistryCatalog).toHaveBeenCalledWith({ limit: 50, offset: 2 });
+      expect(fetchMaterialRegistryCatalog).toHaveBeenCalledWith(
+        { limit: 50, offset: 1 },
+        "approve-secret",
+      );
+      expect(fetchMaterialRegistryCatalog).toHaveBeenCalledWith(
+        { limit: 50, offset: 2 },
+        "approve-secret",
+      );
     });
     expect(await screen.findByText("Page Two PLA")).toBeInTheDocument();
     expect(screen.getAllByTestId("material-cloud-catalog-card")).toHaveLength(3);

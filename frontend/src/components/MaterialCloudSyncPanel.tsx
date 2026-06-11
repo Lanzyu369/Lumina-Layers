@@ -10,6 +10,7 @@ import {
   rollbackMaterialSyncRevision,
   uploadMaterialRegistryPackage,
 } from "../api/materialSync";
+import type { MaterialRegistryCatalogQuery } from "../api/materialSync";
 import type {
   MaterialRegistryCatalogEntry,
   MaterialRegistryCatalogResponse,
@@ -243,6 +244,19 @@ export default function MaterialCloudSyncPanel() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const catalogQuery = searchQuery.trim();
+  const officialPasswordRef = useRef("");
+
+  const updateOfficialPassword = useCallback((value: string) => {
+    officialPasswordRef.current = value;
+    setOfficialPassword(value);
+  }, []);
+
+  const fetchCatalogPage = useCallback((query: MaterialRegistryCatalogQuery) => {
+    const password = officialPasswordRef.current.trim();
+    return password
+      ? fetchMaterialRegistryCatalog(query, password)
+      : fetchMaterialRegistryCatalog(query);
+  }, []);
 
   const dateFormatter = useMemo(
     () => new Intl.DateTimeFormat(lang === "zh" ? "zh-CN" : "en-US", {
@@ -308,7 +322,7 @@ export default function MaterialCloudSyncPanel() {
     setError(null);
     const [statusResult, catalogResult] = await Promise.allSettled([
       fetchMaterialSyncStatus(),
-      fetchMaterialRegistryCatalog({
+      fetchCatalogPage({
         limit: MATERIAL_CATALOG_PAGE_SIZE,
         offset: 0,
         ...(catalogQuery ? { q: catalogQuery } : {}),
@@ -340,7 +354,7 @@ export default function MaterialCloudSyncPanel() {
     } finally {
       setIsLoading(false);
     }
-  }, [catalogQuery, t]);
+  }, [catalogQuery, fetchCatalogPage, t]);
 
   useEffect(() => {
     void loadCatalogAndStatus();
@@ -369,7 +383,7 @@ export default function MaterialCloudSyncPanel() {
     setIsLoadingMore(true);
     setError(null);
     try {
-      const nextPage = await fetchMaterialRegistryCatalog({
+      const nextPage = await fetchCatalogPage({
         limit: MATERIAL_CATALOG_PAGE_SIZE,
         offset: loadedCount,
         ...(catalogQuery ? { q: catalogQuery } : {}),
@@ -380,7 +394,7 @@ export default function MaterialCloudSyncPanel() {
     } finally {
       setIsLoadingMore(false);
     }
-  }, [catalog, catalogQuery, isLoadingAll, isLoadingMore, t]);
+  }, [catalog, catalogQuery, fetchCatalogPage, isLoadingAll, isLoadingMore, t]);
 
   const loadAllCatalog = useCallback(async () => {
     const loadedCount = catalog?.materials.length ?? 0;
@@ -394,7 +408,7 @@ export default function MaterialCloudSyncPanel() {
       let mergedCatalog = catalog;
       let nextOffset = loadedCount;
       while (nextOffset < totalCount) {
-        const nextPage = await fetchMaterialRegistryCatalog({
+        const nextPage = await fetchCatalogPage({
           limit: MATERIAL_CATALOG_PAGE_SIZE,
           offset: nextOffset,
           ...(catalogQuery ? { q: catalogQuery } : {}),
@@ -413,7 +427,7 @@ export default function MaterialCloudSyncPanel() {
     } finally {
       setIsLoadingAll(false);
     }
-  }, [catalog, catalogQuery, isLoadingAll, isLoadingMore, t]);
+  }, [catalog, catalogQuery, fetchCatalogPage, isLoadingAll, isLoadingMore, t]);
 
   const handleInstall = useCallback(async (entry: MaterialRegistryCatalogEntry) => {
     const password = officialPassword.trim();
@@ -504,15 +518,15 @@ export default function MaterialCloudSyncPanel() {
         officialPassword.trim(),
       );
       setLastUploaded(response);
-      setOfficialPassword("");
       await loadCatalogAndStatus();
+      updateOfficialPassword("");
       setSuccess(response.message || t("mat_sync_approve_success"));
     } catch (err) {
       setError(err instanceof Error ? err.message : t("mat_sync_approve_failed"));
     } finally {
       setIsApproving(false);
     }
-  }, [lastUploaded, officialPassword, loadCatalogAndStatus, t]);
+  }, [lastUploaded, officialPassword, loadCatalogAndStatus, t, updateOfficialPassword]);
 
   const toggleCatalogPackageSelection = useCallback((entry: MaterialRegistryCatalogEntry) => {
     const key = catalogPackageKey(entry);
@@ -565,15 +579,15 @@ export default function MaterialCloudSyncPanel() {
       }
       const approvedCount = selectedCatalogEntries.length;
       setSelectedCatalogPackageKeys([]);
-      setOfficialPassword("");
       await loadCatalogAndStatus();
+      updateOfficialPassword("");
       setSuccess(tRuntime("mat_sync_approve_selected_success", { count: approvedCount }));
     } catch (err) {
       setError(err instanceof Error ? err.message : t("mat_sync_approve_failed"));
     } finally {
       setIsApproving(false);
     }
-  }, [loadCatalogAndStatus, officialPassword, selectedCatalogEntries, t]);
+  }, [loadCatalogAndStatus, officialPassword, selectedCatalogEntries, t, updateOfficialPassword]);
 
   const filteredCatalogEntries = useMemo(() => {
     const normalizedQuery = searchQuery.trim().toLowerCase();
@@ -1018,7 +1032,7 @@ export default function MaterialCloudSyncPanel() {
               data-testid="material-cloud-official-password-input"
               type="password"
               value={officialPassword}
-              onChange={(event) => setOfficialPassword(event.target.value)}
+              onChange={(event) => updateOfficialPassword(event.target.value)}
               placeholder={t("mat_sync_official_password_placeholder")}
               className="min-h-10 rounded-2xl border border-slate-200/80 bg-[var(--surface-panel)] px-3 py-2 text-sm text-slate-800 outline-none shadow-[var(--shadow-control)] focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:text-slate-100"
             />
