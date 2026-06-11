@@ -25,9 +25,9 @@ const mockLaunch = vi.mocked(apiLaunchSlicer);
 const mockValidateCustomPath = vi.mocked(apiValidateCustomSlicerPath);
 
 const MOCK_SLICERS: SlicerInfo[] = [
-  { id: "bambu_studio", display_name: "Bambu Studio", exe_path: "C:\\bambu.exe" },
-  { id: "orca_slicer", display_name: "OrcaSlicer", exe_path: "C:\\orca.exe" },
-  { id: "anycubic_slicer_next", display_name: "Anycubic Slicer Next", exe_path: "C:\\anycubic.exe" },
+  { id: "bambu_studio", display_name: "Bambu Studio", exe_path: "mock-bambu.exe" },
+  { id: "orca_slicer", display_name: "OrcaSlicer", exe_path: "mock-orca.exe" },
+  { id: "anycubic_slicer_next", display_name: "Anycubic Slicer Next", exe_path: "mock-anycubic.exe" },
 ];
 
 function resetStore(): void {

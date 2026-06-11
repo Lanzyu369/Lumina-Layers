@@ -65,11 +65,11 @@ Lumina 目前的 3MF 元数据适配主要散落在这些位置：
 
 | 切片软件 | 本机版本 | 安装路径 |
 | --- | --- | --- |
-| Bambu Studio | `02.07.01.57` | `F:\3D Print F\Bambu Studio` |
-| OrcaSlicer | `2.4.0` | `F:\3D Print F\ORCA\OrcaSlicer` |
-| Snapmaker Orca | `2.3.3` | `F:\3D Print F\Snapmaker_Orca` |
-| ElegooSlicer | `1.5.0.7` | `F:\3D Print F\ElegooSlicer` |
-| AnycubicSlicerNext | `1.3.9.4` | `F:\3D Print F\AnycubicSlicerNext` |
+| Bambu Studio | `02.07.01.57` | `<local slicer install>/Bambu Studio` |
+| OrcaSlicer | `2.4.0` | `<local slicer install>/OrcaSlicer` |
+| Snapmaker Orca | `2.3.3` | `<local slicer install>/Snapmaker_Orca` |
+| ElegooSlicer | `1.5.0.7` | `<local slicer install>/ElegooSlicer` |
+| AnycubicSlicerNext | `1.3.9.4` | `<local slicer install>/AnycubicSlicerNext` |
 
 这些安装目录都存在 Orca/Bambu 系的资源布局：
 

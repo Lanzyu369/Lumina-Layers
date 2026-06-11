@@ -15,7 +15,7 @@
 Work in the isolated worktree:
 
 ```powershell
-E:\Lumina-Layers\LL-1296\Lumina-Layers\.worktrees\machine-adapter-v2
+<local repo>\.worktrees\machine-adapter-v2
 ```
 
 Branch:
