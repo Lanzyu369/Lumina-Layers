@@ -25,6 +25,7 @@ _MATERIAL_REGISTRY_TMP_DIRNAME = "_tmp"
 _MATERIAL_REGISTRY_CATALOG_CACHE_TTL_S = 5 * 60
 _MATERIAL_REGISTRY_CATALOG_CACHE_LOCK = threading.RLock()
 _MATERIAL_REGISTRY_CATALOG_CACHE: dict[tuple[str, tuple[str, ...]], dict[str, Any]] = {}
+_MATERIAL_REGISTRY_PUBLIC_CHANNELS = frozenset({"official", "community"})
 
 
 class MaterialRegistryDuplicateError(ValueError):
@@ -85,6 +86,13 @@ def normalize_material_registry_channels(channels: Sequence[str] | None = None) 
     return normalized or ["official"]
 
 
+def is_material_registry_public_channel(channel: str) -> bool:
+    """Return whether a Registry channel is safe for anonymous read access.
+    判断 Registry 频道是否允许匿名只读访问。
+    """
+    return str(channel or "").strip() in _MATERIAL_REGISTRY_PUBLIC_CHANNELS
+
+
 def verify_material_registry_read_access(
     *,
     channels: Sequence[str],
@@ -93,7 +101,9 @@ def verify_material_registry_read_access(
     """Enforce MVP read-only channel access.
     执行 MVP 阶段只读频道访问控制。
     """
-    private_channels = [channel for channel in channels if channel != "official"]
+    private_channels = [
+        channel for channel in channels if not is_material_registry_public_channel(channel)
+    ]
     if not private_channels:
         return
     expected_token = os.environ.get("LUMINA_MATERIAL_REGISTRY_TEAM_TOKEN", "").strip()

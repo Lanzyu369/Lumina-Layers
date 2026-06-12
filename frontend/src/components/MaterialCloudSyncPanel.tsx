@@ -430,10 +430,6 @@ export default function MaterialCloudSyncPanel() {
   }, [catalog, catalogQuery, fetchCatalogPage, isLoadingAll, isLoadingMore, t]);
 
   const handleInstall = useCallback(async (entry: MaterialRegistryCatalogEntry) => {
-    const password = officialPassword.trim();
-    if (!password) {
-      return;
-    }
     const installKey = `${entry.material_id}:${entry.revision_id}`;
     setPendingInstall(installKey);
     setError(null);
@@ -445,8 +441,7 @@ export default function MaterialCloudSyncPanel() {
           revision_id: entry.revision_id,
           package_url: entry.package_url,
           package_sha256: entry.package_sha256,
-        },
-        password,
+        }
       );
       await loadCatalogAndStatus();
       setSuccess(response.message || t("mat_sync_install_success"));
@@ -455,7 +450,7 @@ export default function MaterialCloudSyncPanel() {
     } finally {
       setPendingInstall(null);
     }
-  }, [loadCatalogAndStatus, officialPassword, t]);
+  }, [loadCatalogAndStatus, t]);
 
   const handleRollback = useCallback(async (entry: MaterialSyncInstalledEntry, revisionId: string) => {
     const password = officialPassword.trim();
@@ -626,7 +621,6 @@ export default function MaterialCloudSyncPanel() {
   ) => {
     const installKey = `${entry.material_id}:${entry.revision_id}`;
     const isPending = pendingInstall === installKey;
-    const hasOfficialPassword = Boolean(officialPassword.trim());
     if (installState === "installed") {
       return (
         <Button
@@ -652,9 +646,9 @@ export default function MaterialCloudSyncPanel() {
       : t("mat_sync_install_btn");
     return (
       <Button
-        label={hasOfficialPassword ? label : t("mat_sync_official_password_required_btn")}
+        label={label}
         onClick={() => void handleInstall(entry)}
-        disabled={!hasOfficialPassword || pendingInstall !== null}
+        disabled={pendingInstall !== null}
         loading={isPending}
         className="w-full"
       />

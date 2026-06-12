@@ -405,10 +405,11 @@ def test_material_sync_catalog_endpoint_returns_remote_catalog_without_installin
     assert body["materials"][0]["material_id"] == "mat_cloud_test"
 
 
-def test_material_sync_catalog_requires_password_for_token_backed_proxy(
+def test_material_sync_catalog_allows_public_channels_without_password(
     monkeypatch,
 ) -> None:
     called = False
+    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_CHANNELS", "official,community")
     monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_TOKEN", "team-token")
     monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_OFFICIAL_PASSWORD", _OFFICIAL_PASSWORD)
 
@@ -417,7 +418,37 @@ def test_material_sync_catalog_requires_password_for_token_backed_proxy(
         called = True
         return {
             "schema_version": "1.0",
-            "channels": ["official"],
+            "channels": ["official", "community"],
+            "count": 0,
+            "materials": [],
+        }
+
+    monkeypatch.setattr(
+        "api.routers.material_sync.list_material_registry_catalog",
+        _fake_list_material_registry_catalog,
+    )
+
+    response = _client().get("/api/material-sync/catalog")
+
+    assert response.status_code == 200
+    assert called is True
+    assert response.json()["channels"] == ["official", "community"]
+
+
+def test_material_sync_catalog_requires_password_for_private_proxy(
+    monkeypatch,
+) -> None:
+    called = False
+    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_CHANNELS", "official,team")
+    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_TOKEN", "team-token")
+    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_OFFICIAL_PASSWORD", _OFFICIAL_PASSWORD)
+
+    def _fake_list_material_registry_catalog(**_: object) -> dict[str, object]:
+        nonlocal called
+        called = True
+        return {
+            "schema_version": "1.0",
+            "channels": ["official", "team"],
             "count": 0,
             "materials": [],
         }
@@ -730,8 +761,6 @@ def test_list_material_registry_catalog_filters_legacy_remote_search_locally() -
 def test_material_sync_install_from_registry_endpoint_installs_selected_package(
     monkeypatch,
 ) -> None:
-    _enable_material_registry_password(monkeypatch)
-
     def _fake_list_material_registry_catalog() -> dict[str, object]:
         return {
             "schema_version": "1.0",
@@ -800,7 +829,6 @@ def test_material_sync_install_from_registry_endpoint_installs_selected_package(
             "material_id": "mat_cloud_test",
             "revision_id": "rev_cloud_test",
         },
-        headers=_AUTH_HEADERS,
     )
 
     assert response.status_code == 200
@@ -928,10 +956,19 @@ def test_material_sync_install_from_registry_maps_invalid_package_to_502(
     assert "Saved material archive" in response.json()["detail"]
 
 
-def test_material_sync_install_from_registry_requires_official_password(
+def test_material_sync_install_from_registry_rejects_missing_catalog_entry_without_password(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_OFFICIAL_PASSWORD", _OFFICIAL_PASSWORD)
+    monkeypatch.setattr(
+        "api.routers.material_sync.list_material_registry_catalog",
+        lambda: {
+            "schema_version": "1.0",
+            "channels": ["official"],
+            "count": 0,
+            "materials": [],
+        },
+    )
 
     response = _client().post(
         "/api/material-sync/install-from-registry",
@@ -943,7 +980,7 @@ def test_material_sync_install_from_registry_requires_official_password(
         },
     )
 
-    assert response.status_code == 403
+    assert response.status_code == 422
 
 
 def test_install_material_registry_package_imports_only_selected_material(

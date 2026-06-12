@@ -181,12 +181,6 @@ describe("MaterialCloudSyncPanel", () => {
     });
     expect(within(screen.getAllByTestId("material-cloud-catalog-card")[0]).getByText("Silk PETG")).toBeInTheDocument();
 
-    const blockedInstallButton = screen.getByRole("button", {
-      name: /需要官方密码|official password required/i,
-    });
-    expect(blockedInstallButton).toBeDisabled();
-
-    enterOfficialPassword();
     fireEvent.click(screen.getByRole("button", { name: /下载到本地|download/i }));
 
     await waitFor(() => {
@@ -196,8 +190,7 @@ describe("MaterialCloudSyncPanel", () => {
           revision_id: "rev_cloud",
           package_url: "/v1/packages/mat_cloud/rev_cloud.zip",
           package_sha256: "c".repeat(64),
-        },
-        "approve-secret",
+        }
       );
     });
     expect(fetchMaterialRegistryCatalog).toHaveBeenCalledTimes(3);
@@ -496,11 +489,7 @@ describe("MaterialCloudSyncPanel", () => {
     render(<MaterialCloudSyncPanel />);
 
     expect((await screen.findAllByText("PLA Pro")).length).toBeGreaterThan(0);
-    expect(screen.getAllByRole("button", {
-      name: /需要官方密码|official password required/i,
-    }).some((button) => button.hasAttribute("disabled"))).toBe(true);
 
-    enterOfficialPassword();
     fireEvent.click(screen.getByRole("button", { name: /更新到 newer|update to newer/i }));
 
     await waitFor(() => {
@@ -511,7 +500,6 @@ describe("MaterialCloudSyncPanel", () => {
           package_url: "/v1/packages/mat_update/rev_2.zip",
           package_sha256: "b".repeat(64),
         },
-        "approve-secret",
       );
     });
   });

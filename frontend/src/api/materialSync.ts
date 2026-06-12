@@ -83,7 +83,6 @@ export async function fetchMaterialRegistryCatalog(
  */
 export async function installMaterialRegistryCatalogEntry(
   entry: MaterialRegistryInstallRequest,
-  officialPassword: string,
 ): Promise<MaterialSyncInstallResponse> {
   const response = await apiClient.post<MaterialSyncInstallResponse>(
     "/material-sync/install-from-registry",
@@ -94,7 +93,6 @@ export async function installMaterialRegistryCatalogEntry(
       package_sha256: entry.package_sha256,
     },
     {
-      headers: officialPasswordHeaders(officialPassword),
       timeout: 3_600_000,
     },
   );

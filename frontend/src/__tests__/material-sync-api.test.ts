@@ -164,7 +164,7 @@ describe("material sync API client", () => {
     });
   });
 
-  it("installs one selected remote material catalog entry", async () => {
+  it("installs one selected remote material catalog entry without an official password", async () => {
     mockPost.mockResolvedValueOnce({
       data: {
         status: "ok",
@@ -181,7 +181,6 @@ describe("material sync API client", () => {
         package_url: "/v1/packages/material.zip",
         package_sha256: "a".repeat(64),
       },
-      "approve-secret",
     );
 
     expect(mockPost).toHaveBeenCalledWith(
@@ -193,9 +192,6 @@ describe("material sync API client", () => {
         package_sha256: "a".repeat(64),
       },
       {
-        headers: {
-          "X-Lumina-Material-Registry-Official-Password": "approve-secret",
-        },
         timeout: 3_600_000,
       },
     );

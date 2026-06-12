@@ -23,7 +23,10 @@ from api.schemas.responses import (
     MaterialSyncStatusResponse,
 )
 from api.structured_logging import get_logger
-from core.material_registry import verify_material_registry_write_access
+from core.material_registry import (
+    is_material_registry_public_channel,
+    verify_material_registry_write_access,
+)
 from core.single_stage import (
     get_material_sync_status,
     import_saved_stage_a_material_archives,
@@ -48,9 +51,10 @@ def _require_material_registry_write_access(official_password: str | None) -> No
 def _material_sync_catalog_requires_write_access() -> bool:
     raw_channels = os.environ.get("LUMINA_MATERIAL_REGISTRY_CHANNELS", "official")
     channels = [channel.strip() for channel in raw_channels.split(",") if channel.strip()]
-    has_private_channel = any(channel != "official" for channel in (channels or ["official"]))
-    has_registry_token = bool(os.environ.get("LUMINA_MATERIAL_REGISTRY_TOKEN", "").strip())
-    return has_private_channel or has_registry_token
+    return any(
+        not is_material_registry_public_channel(channel)
+        for channel in (channels or ["official"])
+    )
 
 
 def _canonical_package_sha256(value: object) -> str:
@@ -223,16 +227,10 @@ async def material_sync_install(
 @router.post("/install-from-registry", response_model=MaterialSyncInstallResponse)
 async def material_sync_install_from_registry(
     payload: MaterialRegistryInstallRequest,
-    official_password: Annotated[
-        str | None,
-        Header(alias=_OFFICIAL_PASSWORD_HEADER),
-    ] = None,
 ) -> MaterialSyncInstallResponse:
     """Install one selected remote Registry package into the local library.
     将用户选中的单个远程 Registry 耗材包安装到本地耗材库。
     """
-    _require_material_registry_write_access(official_password)
-
     try:
         catalog = list_material_registry_catalog()
         catalog_entry = _select_catalog_install_entry(catalog, payload)

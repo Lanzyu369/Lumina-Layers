@@ -183,6 +183,36 @@ def test_material_registry_catalog_lists_official_package_and_serves_zip(
     assert download.content == package_path.read_bytes()
 
 
+def test_material_registry_catalog_lists_community_package_and_serves_zip_without_token(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    packages_dir = tmp_path / "registry-packages"
+    package_path = packages_dir / "community-pla.zip"
+    package_sha256 = _write_v2_registry_package(package_path, channel="community")
+    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_PACKAGES_DIR", str(packages_dir))
+    monkeypatch.delenv("LUMINA_MATERIAL_REGISTRY_TEAM_TOKEN", raising=False)
+
+    response = _client().get(
+        "/api/material-registry/v1/materials/catalog",
+        params={"channel": "community"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["channels"] == ["community"]
+    assert body["count"] == 1
+    entry = body["materials"][0]
+    assert entry["channel"] == "community"
+    assert entry["package_sha256"] == package_sha256
+    assert entry["package_url"] == "/api/material-registry/v1/packages/community-pla.zip"
+
+    download = _client().get(entry["package_url"])
+
+    assert download.status_code == 200
+    assert download.content == package_path.read_bytes()
+
+
 def test_material_registry_catalog_paginates_after_channel_filter(
     monkeypatch,
     tmp_path: Path,
