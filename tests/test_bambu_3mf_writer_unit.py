@@ -677,6 +677,57 @@ def test_load_printer_template_cache_changes_when_registry_revision_changes(tmp_
     assert second["from"] == "project"
 
 
+def test_load_printer_template_preserves_registry_native_quarter_nozzle_project_profiles(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    registry_root = tmp_path / "machine_registry"
+    _write_registry_fixture(
+        registry_root,
+        template_payload={
+            "printer_model": "Anycubic Kobra X",
+            "printer_settings_id": "Anycubic Kobra X 0.25 nozzle",
+            "printer_variant": "0.25",
+            "nozzle_diameter": ["0.25"],
+            "print_settings_id": "0.08mm Standard @Anycubic Kobra X 0.25 nozzle",
+            "default_print_profile": "0.10mm Standard @Anycubic Kobra X 0.25 nozzle",
+            "default_filament_profile": [
+                "Anycubic PLA @Anycubic Kobra X 0.25 nozzle",
+            ],
+            "filament_settings_id": [
+                "Anycubic PLA @Anycubic Kobra X 0.25 nozzle",
+            ],
+        },
+        device_profile_id="AnycubicSlicerNext:anycubic:anycubic-kobra-x:0.25",
+        machine_profile_id="AnycubicSlicerNext:anycubic:anycubic-kobra-x",
+        slicer_id="AnycubicSlicerNext",
+        nozzle_size="0.25",
+        display_name="Anycubic Kobra X",
+        brand="Anycubic",
+        vendor_key="Anycubic",
+    )
+    monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
+    writer_module._PRINTER_TEMPLATE_CACHE.clear()
+
+    template = load_printer_template(
+        "anycubic-kobra-x",
+        slicer="AnycubicSlicerNext",
+        nozzle_size="0.25",
+        device_profile_id="AnycubicSlicerNext:anycubic:anycubic-kobra-x:0.25",
+    )
+
+    assert template["printer_settings_id"] == "Anycubic Kobra X 0.25 nozzle"
+    assert template["print_settings_id"] == "0.08mm Standard @Anycubic Kobra X 0.25 nozzle"
+    assert template["default_print_profile"] == "0.10mm Standard @Anycubic Kobra X 0.25 nozzle"
+    assert template["default_filament_profile"] == [
+        "Anycubic PLA @Anycubic Kobra X 0.25 nozzle",
+    ]
+    assert template["filament_settings_id"] == [
+        "Anycubic PLA @Anycubic Kobra X 0.25 nozzle",
+    ] * 8
+    assert "0.2 nozzle" not in json.dumps(template)
+
+
 def test_writer_uses_registry_application_metadata_for_slice_info(tmp_path, monkeypatch) -> None:
     registry_root = tmp_path / "machine_registry"
     _write_registry_fixture(

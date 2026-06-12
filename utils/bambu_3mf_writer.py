@@ -141,6 +141,24 @@ _REGISTRY_MACHINE_PROJECT_OVERLAY_PREFIXES = (
     "extruder_",
     "machine_",
 )
+_REGISTRY_PROJECT_PROFILE_EXACT_KEYS = frozenset(
+    {
+        "default_filament_profile",
+        "default_print_profile",
+    }
+)
+_REGISTRY_PROJECT_PROFILE_NOZZLE_LABEL_KEYS = frozenset(
+    {
+        "compatible_printers",
+        "default_filament_profile",
+        "default_print_profile",
+        "filament_compatible_printers",
+        "filament_settings_id",
+        "inherits_group",
+        "print_compatible_printers",
+        "print_settings_id",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -269,6 +287,46 @@ def _align_registry_default_filament_settings_id(
         merged["filament_settings_id"] = default_profile
 
 
+def _replace_nozzle_label(value: object, old_label: str, new_label: str) -> object:
+    if isinstance(value, str):
+        return value.replace(old_label, new_label)
+    if isinstance(value, list):
+        return [_replace_nozzle_label(item, old_label, new_label) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _replace_nozzle_label(item, old_label, new_label)
+            for key, item in value.items()
+        }
+    return copy.deepcopy(value)
+
+
+def _retarget_registry_project_profile_nozzle_labels(
+    merged: dict[str, Any],
+    registry_template: dict[str, Any],
+    *,
+    legacy_nozzle_size: str,
+    registry_nozzle_size: str,
+) -> None:
+    if legacy_nozzle_size == registry_nozzle_size:
+        return
+    printer_model = str(
+        registry_template.get("printer_model") or merged.get("printer_model") or ""
+    ).strip()
+    if not printer_model:
+        return
+
+    for key in _REGISTRY_PROJECT_PROFILE_EXACT_KEYS:
+        if key in registry_template:
+            merged[key] = _clean_registry_project_overlay_value(key, registry_template[key])
+
+    old_label = f"{printer_model} {legacy_nozzle_size} nozzle"
+    new_label = f"{printer_model} {registry_nozzle_size} nozzle"
+    for key in _REGISTRY_PROJECT_PROFILE_NOZZLE_LABEL_KEYS:
+        if key in merged:
+            merged[key] = _replace_nozzle_label(merged[key], old_label, new_label)
+    _align_registry_default_filament_settings_id(merged, registry_template)
+
+
 def _merge_registry_machine_template_into_project_template(
     legacy_template: dict[str, Any],
     registry_template: dict[str, Any],
@@ -276,6 +334,9 @@ def _merge_registry_machine_template_into_project_template(
     source_version: str,
     overlay_printer_model: bool = False,
     overlay_machine_settings: bool = False,
+    retarget_profile_nozzle_labels: bool = False,
+    legacy_nozzle_size: str = "",
+    registry_nozzle_size: str = "",
 ) -> dict[str, Any]:
     """Merge native machine identity into a Lumina project-level template.
 
@@ -301,6 +362,13 @@ def _merge_registry_machine_template_into_project_template(
                 _iter_difference_index_keys(registry_template.get("different_settings_to_system")),
             )
         _align_registry_default_filament_settings_id(merged, registry_template)
+    if retarget_profile_nozzle_labels:
+        _retarget_registry_project_profile_nozzle_labels(
+            merged,
+            registry_template,
+            legacy_nozzle_size=legacy_nozzle_size,
+            registry_nozzle_size=registry_nozzle_size,
+        )
     if overlay_printer_model and "printer_model" in registry_template:
         merged["printer_model"] = copy.deepcopy(registry_template["printer_model"])
 
@@ -911,6 +979,11 @@ def load_printer_template(
                     source_version=profile.source_version,
                     overlay_printer_model=overlay_printer_model,
                     overlay_machine_settings=overlay_machine_settings,
+                    retarget_profile_nozzle_labels=(
+                        registry_nozzle_size != normalized_nozzle_size
+                    ),
+                    legacy_nozzle_size=normalized_nozzle_size,
+                    registry_nozzle_size=registry_nozzle_size,
                 )
             else:
                 template = registry_template
