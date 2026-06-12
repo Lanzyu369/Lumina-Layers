@@ -191,6 +191,50 @@ describe("MaterialPickerDialog", () => {
     expect(within(groups[1]).getByText("Legacy PLA")).toBeInTheDocument();
   });
 
+  it("force-expands matching groups while searching, then restores collapse state", () => {
+    const materials = [
+      makeMaterial({
+        material_name: "Red PLA",
+        directory_name: "瑞贝思/red-pla",
+        brand: "瑞贝思",
+      }),
+      makeMaterial({
+        material_name: "White PLA",
+        directory_name: "瑞贝思/white-pla",
+        brand: "瑞贝思",
+      }),
+    ];
+    render(
+      <MaterialPickerDialog
+        open={true}
+        materials={materials}
+        loading={false}
+        initialSelected={[]}
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    // Groups start collapsed; the matching row is hidden.
+    const groupToggle = screen.getByTestId("material-picker-brand-group-toggle");
+    expect(groupToggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Red PLA")).not.toBeInTheDocument();
+
+    // Searching reveals the matching row even though the group was collapsed.
+    fireEvent.change(screen.getByTestId("material-picker-search-input"), {
+      target: { value: "Red" },
+    });
+    expect(screen.getByText("Red PLA")).toBeInTheDocument();
+    expect(screen.queryByText("White PLA")).not.toBeInTheDocument();
+
+    // Clearing the search restores the user's collapsed state.
+    fireEvent.change(screen.getByTestId("material-picker-search-input"), {
+      target: { value: "" },
+    });
+    expect(screen.getByTestId("material-picker-brand-group-toggle")).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Red PLA")).not.toBeInTheDocument();
+  });
+
   it("select-all toggles to clear-all once everything is selected", () => {
     const onConfirm = vi.fn();
     render(

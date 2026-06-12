@@ -252,7 +252,7 @@ export default function MaterialPickerDialog({
               {groupedVisibleMaterials.map(({ brand, items }) => {
                 const groupKey = getMaterialBrandGroupKey(brand);
                 const groupLabel = brand ?? t("basic_material_picker_brand_unassigned");
-                const isExpanded = expandedBrandGroupKeys.includes(groupKey);
+                const isExpanded = filterActive || expandedBrandGroupKeys.includes(groupKey);
                 const isCollapsed = !isExpanded;
                 return (
                   <section
