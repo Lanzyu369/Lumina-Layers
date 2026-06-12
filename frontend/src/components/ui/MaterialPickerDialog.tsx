@@ -54,14 +54,14 @@ export default function MaterialPickerDialog({
   const { t } = useI18n();
   const [staged, setStaged] = useState<string[]>(initialSelected);
   const [query, setQuery] = useState<string>("");
-  const [collapsedBrandGroupKeys, setCollapsedBrandGroupKeys] = useState<string[]>([]);
+  const [expandedBrandGroupKeys, setExpandedBrandGroupKeys] = useState<string[]>([]);
 
   // Re-sync staged selection whenever the dialog opens or upstream changes.
   useEffect(() => {
     if (open) {
       setStaged(initialSelected);
       setQuery("");
-      setCollapsedBrandGroupKeys([]);
+      setExpandedBrandGroupKeys([]);
     }
   }, [open, initialSelected]);
 
@@ -115,6 +115,7 @@ export default function MaterialPickerDialog({
     }
     return result;
   }, [visibleMaterials]);
+
   const allVisibleSelected =
     visibleDirNames.length > 0 &&
     visibleDirNames.every((name) => stagedSet.has(name));
@@ -127,7 +128,7 @@ export default function MaterialPickerDialog({
     );
   };
   const toggleBrandGroupCollapsed = (groupKey: string) => {
-    setCollapsedBrandGroupKeys((previous) =>
+    setExpandedBrandGroupKeys((previous) =>
       previous.includes(groupKey)
         ? previous.filter((item) => item !== groupKey)
         : [...previous, groupKey],
@@ -147,6 +148,9 @@ export default function MaterialPickerDialog({
   const clearAllVisible = () => {
     const visibleSet = new Set(visibleDirNames);
     setStaged((previous) => previous.filter((name) => !visibleSet.has(name)));
+  };
+  const deselectAll = () => {
+    setStaged([]);
   };
   const handleConfirm = () => onConfirm(staged);
 
@@ -248,7 +252,8 @@ export default function MaterialPickerDialog({
               {groupedVisibleMaterials.map(({ brand, items }) => {
                 const groupKey = getMaterialBrandGroupKey(brand);
                 const groupLabel = brand ?? t("basic_material_picker_brand_unassigned");
-                const isCollapsed = collapsedBrandGroupKeys.includes(groupKey);
+                const isExpanded = expandedBrandGroupKeys.includes(groupKey);
+                const isCollapsed = !isExpanded;
                 return (
                   <section
                     key={groupKey}
@@ -373,9 +378,10 @@ export default function MaterialPickerDialog({
           </div>
           <div className="flex items-center gap-2">
             <Button
-              label={t("basic_material_picker_close")}
+              label={t("basic_material_picker_deselect_all")}
               variant="secondary"
-              onClick={onCancel}
+              onClick={deselectAll}
+              disabled={staged.length === 0}
               className="px-4"
             />
             <Button
