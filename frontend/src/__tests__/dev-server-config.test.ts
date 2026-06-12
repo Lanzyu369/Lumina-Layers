@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_DEV_PORT, resolveDevServerConfig } from "../../devServerConfig";
+import {
+  DEFAULT_API_PROXY_TARGET,
+  DEFAULT_DEV_PORT,
+  resolveApiProxyTarget,
+  resolveDevServerConfig,
+} from "../../devServerConfig";
 
 describe("devServerConfig", () => {
   it("uses a safe default dev port instead of the blocked 5174", () => {
@@ -16,6 +21,16 @@ describe("devServerConfig", () => {
     expect(resolveDevServerConfig({ VITE_DEV_PORT: "6123" })).toMatchObject({
       port: 6123,
     });
+  });
+
+  it("allows pointing the dev API proxy at a non-default backend", () => {
+    expect(DEFAULT_API_PROXY_TARGET).toBe("http://localhost:8000");
+    expect(resolveApiProxyTarget({})).toBe("http://localhost:8000");
+    expect(
+      resolveApiProxyTarget({
+        VITE_API_PROXY_TARGET: " http://127.0.0.1:8001 ",
+      }),
+    ).toBe("http://127.0.0.1:8001");
   });
 
   it("allows all hosts only when explicitly requested", () => {

@@ -183,6 +183,7 @@ export default function MaterialRecipeQueryPanel() {
         printer_id: settings.printerModel,
         slicer: settings.slicerSoftware,
         nozzle_size: settings.nozzleSize,
+        device_profile_id: settings.deviceProfileId,
       });
       setSwatchDownloadUrl(response.download_url);
       setSwatchPreviewUrl(response.preview_url ?? null);

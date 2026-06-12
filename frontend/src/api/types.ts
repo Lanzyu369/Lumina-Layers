@@ -132,6 +132,7 @@ export type ConvertGenerateRequest = ConvertPreviewRequest & {
   printer_id?: string;
   slicer?: string;
   nozzle_size?: string;
+  device_profile_id?: string;
   enable_base_layer_height_modifier?: boolean;
   use_cached_matched_rgb?: boolean;
 };
@@ -462,6 +463,7 @@ export interface CalibrationGenerateRequest {
   printer_id?: string;
   slicer?: string;
   nozzle_size?: string;
+  device_profile_id?: string;
 }
 
 // ========== Calibration Response Models ==========
@@ -493,6 +495,7 @@ export interface SingleStageKitGenerateRequest {
   printer_id?: string;
   slicer?: string;
   nozzle_size?: string;
+  device_profile_id?: string;
 }
 
 export interface SingleStageKitResponse {
@@ -1483,6 +1486,7 @@ export interface BatchConvertParams {
   printer_id?: string;
   slicer?: string;
   nozzle_size?: string;
+  device_profile_id?: string;
   enable_base_layer_height_modifier?: boolean;
 }
 
@@ -1592,6 +1596,7 @@ export interface RecipeSwatchRequest {
   printer_id?: string;
   slicer?: string;
   nozzle_size?: string;
+  device_profile_id?: string;
 }
 
 export interface RecipeSwatchResponse {
@@ -1620,6 +1625,7 @@ export interface MaterialRecipeSwatchRequest {
   printer_id?: string;
   slicer?: string;
   nozzle_size?: string;
+  device_profile_id?: string;
 }
 
 export interface MaterialRecipeSwatchResponse {
@@ -1683,6 +1689,15 @@ export interface RegionReplaceResponse {
 
 // ========== Printer Models ==========
 
+export interface DeviceProfileInfo {
+  device_profile_id: string;
+  slicer_id: string;
+  nozzle_size: string;
+  source_profile_name: string;
+  revision: string;
+  supported: boolean;
+}
+
 export interface PrinterInfo {
   id: string;
   display_name: string;
@@ -1692,6 +1707,8 @@ export interface PrinterInfo {
   bed_height: number;
   supported_nozzle_sizes: string[];
   supported_slicers: string[];
+  thumbnail?: string;
+  device_profiles?: DeviceProfileInfo[];
 }
 
 export interface PrinterListResponse {
@@ -1710,6 +1727,7 @@ export interface UserSettings {
   enable_crop_modal: boolean;
   printer_model: string;
   slicer_software: string;
+  device_profile_id: string;
   custom_slicer_path: string;
   custom_slicer_id: string;
   nozzle_size: string;

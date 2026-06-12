@@ -1025,6 +1025,7 @@ def worker_batch_convert_item(
     material_backing_material_index: int | None = None,
     use_lut_constrained: bool = False,
     auto_dynamic_range: bool = False,
+    device_profile_id: str | None = None,
 ) -> dict:
     """Execute a single batch conversion item in a worker process.
     在工作进程中执行单个批量转换项。
@@ -1068,6 +1069,9 @@ def worker_batch_convert_item(
         printer_id / slicer / nozzle_size: Device preset fields forwarded
             to the canonical single-item 3MF writer. (透传到单件 3MF
             writer 的设备预设字段)
+        device_profile_id: Generated machine registry device profile ID
+            forwarded to the canonical single-item 3MF writer.
+            (透传到单件 3MF writer 的机器注册表设备配置 ID)
         enable_base_layer_height_modifier: Whether to keep the Bambu-family
             coarse base-layer setting from user settings. (是否沿用设置页
             的底板粗层高开关)
@@ -1128,6 +1132,7 @@ def worker_batch_convert_item(
         printer_id=printer_id,
         slicer=slicer,
         nozzle_size=nozzle_size,
+        device_profile_id=device_profile_id,
         enable_base_layer_height_modifier=enable_base_layer_height_modifier,
         material_source=material_source,
         selected_materials=selected_materials,
@@ -1599,6 +1604,7 @@ def worker_generate_large_format_svg_native(
                 slicer=params.get("slicer", "BambuStudio"),
                 nozzle_size=params.get("nozzle_size", "0.4"),
                 cover_source=tile_cover,
+                device_profile_id=params.get("device_profile_id") or None,
             )
             successful_paths.append(
                 (

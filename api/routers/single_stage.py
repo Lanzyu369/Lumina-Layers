@@ -1146,6 +1146,7 @@ async def generate_material_swatch(
         printer_id=payload.printer_id,
         slicer=payload.slicer,
         nozzle_size=payload.nozzle_size,
+        device_profile_id=payload.device_profile_id,
     )
 
     if not output_path:

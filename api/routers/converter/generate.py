@@ -1040,6 +1040,7 @@ async def convert_generate(
         "printer_id": request.printer_id,
         "slicer": request.slicer,
         "nozzle_size": request.nozzle_size,
+        "device_profile_id": request.device_profile_id,
         "enable_base_layer_height_modifier": request.enable_base_layer_height_modifier,
         "material_source": session_material_source,
     }
@@ -1293,6 +1294,7 @@ def _resolve_large_format_shared_params(
         "printer_id": request.printer_id,
         "slicer": request.slicer,
         "nozzle_size": request.nozzle_size,
+        "device_profile_id": request.device_profile_id,
         "enable_base_layer_height_modifier": request.enable_base_layer_height_modifier,
         "relief_global_max_height": relief_global_max_height,
     }
@@ -1925,6 +1927,7 @@ async def convert_batch(
     printer_id: str = Form("bambu-h2d", description="打印机配置 ID"),
     slicer: str = Form("BambuStudio", description="切片器"),
     nozzle_size: str = Form("0.4", description="喷嘴直径"),
+    device_profile_id: str | None = Form(None, description="机器注册表设备配置 ID"),
     enable_base_layer_height_modifier: bool = Form(
         True,
         description="启用底板粗层高优化",
@@ -2097,6 +2100,7 @@ async def convert_batch(
                 material_backing_material_index,
                 use_lut_constrained,
                 auto_dynamic_range,
+                device_profile_id,
             )
 
             # 3. Result processing (main thread)

@@ -131,6 +131,7 @@ class TestVectorBranchExport:
             loop_pos="Top",
             modeling_mode=ModelingMode.VECTOR,
             nozzle_size="0.2",
+            device_profile_id="BambuStudio:bbl:bambu-lab-h2d:0.2",
         )
 
         _, kwargs = mock_bambu_export.call_args
@@ -138,6 +139,7 @@ class TestVectorBranchExport:
         assert kwargs["project_slot_names"] == ["White", "Red", "Yellow", "Blue"]
         assert kwargs["settings"]["line_width"] == "0.22"
         assert kwargs["settings"]["initial_layer_line_width"] == "0.22"
+        assert kwargs["device_profile_id"] == "BambuStudio:bbl:bambu-lab-h2d:0.2"
 
     @patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata")
     @patch("core.vector_engine.VectorProcessor")

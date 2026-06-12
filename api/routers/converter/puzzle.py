@@ -818,6 +818,7 @@ async def generate_puzzle(
             "printer_id": generate_params.printer_id,
             "slicer": generate_params.slicer,
             "nozzle_size": generate_params.nozzle_size,
+            "device_profile_id": generate_params.device_profile_id,
             "relief_global_max_height": relief_global_max_height,
         }
         if session_material_source == "material_archive":
@@ -946,6 +947,7 @@ async def generate_puzzle(
             printer_id=generate_params.printer_id,
             slicer=generate_params.slicer,
             nozzle_size=generate_params.nozzle_size,
+            device_profile_id=generate_params.device_profile_id,
             overview_png_bytes=overview_png_bytes,
         )
     except ROUTER_HANDLED_ERRORS as exc:

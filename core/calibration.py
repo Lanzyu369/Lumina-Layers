@@ -100,11 +100,13 @@ def _export_device_kwargs(
     printer_id: str = DEFAULT_PRINTER_ID,
     slicer: str = DEFAULT_SLICER_ID,
     nozzle_size: Optional[str | float] = None,
+    device_profile_id: Optional[str] = None,
 ) -> dict:
     return {
         "printer_id": printer_id,
         "slicer": slicer,
         "nozzle_size": nozzle_size,
+        "device_profile_id": device_profile_id,
     }
 
 
@@ -217,6 +219,7 @@ def generate_calibration_board(
     printer_id: str = DEFAULT_PRINTER_ID,
     slicer: str = DEFAULT_SLICER_ID,
     nozzle_size: Optional[str | float] = None,
+    device_profile_id: Optional[str] = None,
 ):
     """
     Generate a 1024-color calibration board as 3MF.
@@ -325,7 +328,7 @@ def generate_calibration_board(
         },
         color_mode=color_mode,
         cover_source=None,
-        **_export_device_kwargs(printer_id, slicer, nozzle_size),
+        **_export_device_kwargs(printer_id, slicer, nozzle_size, device_profile_id),
     )
 
     # Generate preview images
@@ -473,6 +476,7 @@ def generate_smart_board(
     printer_id: str = DEFAULT_PRINTER_ID,
     slicer: str = DEFAULT_SLICER_ID,
     nozzle_size: Optional[str | float] = None,
+    device_profile_id: Optional[str] = None,
 ):
     """Generate Lumina Smart 1296 (6-Color) calibration board with 38x38 border layout.
     生成 Lumina Smart 1296（6色）校准板（38×38 边框布局）。
@@ -634,7 +638,7 @@ def generate_smart_board(
         },
         color_mode=color_mode_label,
         cover_source=None,
-        **_export_device_kwargs(printer_id, slicer, nozzle_size),
+        **_export_device_kwargs(printer_id, slicer, nozzle_size, device_profile_id),
     )
 
     # Generate preview images
@@ -679,6 +683,7 @@ def generate_smart_board_rybw(
     printer_id: str = DEFAULT_PRINTER_ID,
     slicer: str = DEFAULT_SLICER_ID,
     nozzle_size: Optional[str | float] = None,
+    device_profile_id: Optional[str] = None,
 ):
     """Generate RYBW 6-Color Smart1296 board with RYBW slot names and corner markers.
     生成 RYBW 6 色 Smart1296 校准板，使用 RYBW 色槽名和角标。
@@ -711,6 +716,7 @@ def generate_smart_board_rybw(
         printer_id=printer_id,
         slicer=slicer,
         nozzle_size=nozzle_size,
+        device_profile_id=device_profile_id,
     )
 
 
@@ -826,6 +832,7 @@ def _generate_8color_board_artifacts(
     printer_id: str = DEFAULT_PRINTER_ID,
     slicer: str = DEFAULT_SLICER_ID,
     nozzle_size: Optional[str | float] = None,
+    device_profile_id: Optional[str] = None,
 ):
     page_layout = resolve_extraction_page_layout(
         "8-Color Max",
@@ -885,7 +892,7 @@ def _generate_8color_board_artifacts(
         },
         color_mode="8-Color",
         cover_source=None,
-        **_export_device_kwargs(printer_id, slicer, nozzle_size),
+        **_export_device_kwargs(printer_id, slicer, nozzle_size, device_profile_id),
     )
     preview_imgs = _generate_layer_previews(full_matrix, conf["preview"], v_w, v_w)
     json_path = _save_8color_recipe_json(
@@ -909,6 +916,7 @@ def generate_8color_full_batch_zip(
     printer_id: str = DEFAULT_PRINTER_ID,
     slicer: str = DEFAULT_SLICER_ID,
     nozzle_size: Optional[str | float] = None,
+    device_profile_id: Optional[str] = None,
 ):
     """Generate the exhaustive 8-color calibration set as a multi-page ZIP.
     将全量 8 色校准配方导出为多页 ZIP。
@@ -941,6 +949,7 @@ def generate_8color_full_batch_zip(
             printer_id=printer_id,
             slicer=slicer,
             nozzle_size=nozzle_size,
+            device_profile_id=device_profile_id,
         )
         artifacts.append((out_path, json_path))
         if preview is None:
@@ -961,6 +970,7 @@ def generate_8color_board(
     printer_id: str = DEFAULT_PRINTER_ID,
     slicer: str = DEFAULT_SLICER_ID,
     nozzle_size: Optional[str | float] = None,
+    device_profile_id: Optional[str] = None,
 ):
     """Generate 8-color calibration board page as 3MF.
     生成 8 色校准板单页 3MF 模型。
@@ -996,6 +1006,7 @@ def generate_8color_board(
         printer_id=printer_id,
         slicer=slicer,
         nozzle_size=nozzle_size,
+        device_profile_id=device_profile_id,
     )
     return out_path, preview, "OK"
 
@@ -1007,6 +1018,7 @@ def generate_8color_batch_zip(
     printer_id: str = DEFAULT_PRINTER_ID,
     slicer: str = DEFAULT_SLICER_ID,
     nozzle_size: Optional[str | float] = None,
+    device_profile_id: Optional[str] = None,
 ):
     """Generate both compact 8-color pages and zip them with recipe JSON files.
     生成两页精简 8 色校准板，并连同配方 JSON 一起打包为 ZIP。
@@ -1026,6 +1038,7 @@ def generate_8color_batch_zip(
         printer_id=printer_id,
         slicer=slicer,
         nozzle_size=nozzle_size,
+        device_profile_id=device_profile_id,
     )
     f2, _, _ = generate_8color_board(
         1,
@@ -1035,6 +1048,7 @@ def generate_8color_batch_zip(
         printer_id=printer_id,
         slicer=slicer,
         nozzle_size=nozzle_size,
+        device_profile_id=device_profile_id,
     )
 
     if not f1 or not f2:
@@ -1063,6 +1077,7 @@ def generate_bw_calibration_board(
     printer_id: str = DEFAULT_PRINTER_ID,
     slicer: str = DEFAULT_SLICER_ID,
     nozzle_size: Optional[str | float] = None,
+    device_profile_id: Optional[str] = None,
 ):
     """
     Generate Black & White (2-Color) calibration board with 8x8 border layout.
@@ -1219,7 +1234,7 @@ def generate_bw_calibration_board(
         },
         color_mode="BW",
         cover_source=None,
-        **_export_device_kwargs(printer_id, slicer, nozzle_size),
+        **_export_device_kwargs(printer_id, slicer, nozzle_size, device_profile_id),
     )
 
     # Generate preview images
@@ -1575,6 +1590,7 @@ def generate_5color_extended_board(
     printer_id: str = DEFAULT_PRINTER_ID,
     slicer: str = DEFAULT_SLICER_ID,
     nozzle_size: Optional[str | float] = None,
+    device_profile_id: Optional[str] = None,
 ):
     """
     Generate 5-Color Extended calibration board with dual-page support.
@@ -1618,26 +1634,28 @@ def generate_5color_extended_board(
     if page_index == 0:
         # Page 1: Base 1024 colors (5-layer, similar to 4-color mode)
         return _generate_5color_base_page(
-            block_size_mm,
-            gap_mm,
-            preview_colors,
-            slot_names,
-            backing_thickness_mm,
-            printer_id,
-            slicer,
-            nozzle_size,
+            block_size_mm=block_size_mm,
+            gap_mm=gap_mm,
+            preview_colors=preview_colors,
+            slot_names=slot_names,
+            backing_thickness_mm=backing_thickness_mm,
+            printer_id=printer_id,
+            slicer=slicer,
+            nozzle_size=nozzle_size,
+            device_profile_id=device_profile_id,
         )
     else:
         # Page 2: Extended 1444 colors (6-layer)
         return _generate_5color_extended_page(
-            block_size_mm,
-            gap_mm,
-            preview_colors,
-            slot_names,
-            backing_thickness_mm,
-            printer_id,
-            slicer,
-            nozzle_size,
+            block_size_mm=block_size_mm,
+            gap_mm=gap_mm,
+            preview_colors=preview_colors,
+            slot_names=slot_names,
+            backing_thickness_mm=backing_thickness_mm,
+            printer_id=printer_id,
+            slicer=slicer,
+            nozzle_size=nozzle_size,
+            device_profile_id=device_profile_id,
         )
 
 
@@ -1650,6 +1668,7 @@ def _generate_5color_base_page(
     printer_id: str = DEFAULT_PRINTER_ID,
     slicer: str = DEFAULT_SLICER_ID,
     nozzle_size: Optional[str | float] = None,
+    device_profile_id: Optional[str] = None,
 ):
     """Generate Page 1: Base 1024 colors (5-layer RYBW combinations)."""
     _log.info(
@@ -1751,7 +1770,7 @@ def _generate_5color_base_page(
         },
         color_mode="5-Color Extended",
         cover_source=None,
-        **_export_device_kwargs(printer_id, slicer, nozzle_size),
+        **_export_device_kwargs(printer_id, slicer, nozzle_size, device_profile_id),
     )
 
     # Generate preview images
@@ -1775,6 +1794,7 @@ def _generate_5color_extended_page(
     printer_id: str = DEFAULT_PRINTER_ID,
     slicer: str = DEFAULT_SLICER_ID,
     nozzle_size: Optional[str | float] = None,
+    device_profile_id: Optional[str] = None,
 ):
     """Generate Page 2: Extended 1444 colors (6-layer with Black).
 
@@ -1888,7 +1908,7 @@ def _generate_5color_extended_page(
         },
         color_mode="5-Color Extended",
         cover_source=None,
-        **_export_device_kwargs(printer_id, slicer, nozzle_size),
+        **_export_device_kwargs(printer_id, slicer, nozzle_size, device_profile_id),
     )
 
     # Generate preview images
@@ -1910,6 +1930,7 @@ def generate_5color_extended_batch_zip(
     printer_id: str = DEFAULT_PRINTER_ID,
     slicer: str = DEFAULT_SLICER_ID,
     nozzle_size: Optional[str | float] = None,
+    device_profile_id: Optional[str] = None,
 ):
     """Generate both 5-color extended pages and zip them.
     生成两页 5 色扩展校准板并打包为 ZIP。
@@ -1929,6 +1950,7 @@ def generate_5color_extended_batch_zip(
         printer_id=printer_id,
         slicer=slicer,
         nozzle_size=nozzle_size,
+        device_profile_id=device_profile_id,
     )
     f2, _, _ = generate_5color_extended_board(
         block_size_mm=block_size_mm,
@@ -1938,6 +1960,7 @@ def generate_5color_extended_batch_zip(
         printer_id=printer_id,
         slicer=slicer,
         nozzle_size=nozzle_size,
+        device_profile_id=device_profile_id,
     )
 
     if not f1 or not f2:
@@ -1956,5 +1979,6 @@ def generate_5color_extended_batch_zip(
         printer_id=printer_id,
         slicer=slicer,
         nozzle_size=nozzle_size,
+        device_profile_id=device_profile_id,
     )  # Show Page 1 as preview
     return zip_path, prev, "✅ 5-Color Extended Kit (Page 1 & 2) Generated!"

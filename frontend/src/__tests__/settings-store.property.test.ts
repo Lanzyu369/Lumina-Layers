@@ -1,4 +1,4 @@
-import { describe, it, beforeEach } from "vitest";
+import { describe, it, beforeEach, expect } from "vitest";
 import * as fc from "fast-check";
 import { useSettingsStore, DEFAULT_SETTINGS } from "../stores/settingsStore";
 import type { SettingsState } from "../stores/settingsStore";
@@ -30,6 +30,25 @@ const arbSettings = fc.record({
 describe("Feature: global-settings, Property 1: Settings persist round-trip", () => {
   beforeEach(() => {
     resetStore();
+  });
+
+  it("persists deviceProfileId independently from legacy printer fields", () => {
+    useSettingsStore
+      .getState()
+      .setDeviceProfileId("BambuStudio:bbl:bambu-lab-h2d:0.4");
+
+    const state = useSettingsStore.getState();
+    expect(state.deviceProfileId).toBe("BambuStudio:bbl:bambu-lab-h2d:0.4");
+    expect(state.printerModel).toBe(DEFAULT_SETTINGS.printerModel);
+    expect(state.slicerSoftware).toBe(DEFAULT_SETTINGS.slicerSoftware);
+    expect(state.nozzleSize).toBe(DEFAULT_SETTINGS.nozzleSize);
+
+    const raw = localStorage.getItem("lumina-settings");
+    expect(raw).toBeTruthy();
+    const persisted: { state: SettingsState } = JSON.parse(raw ?? "{}");
+    expect(persisted.state.deviceProfileId).toBe(
+      "BambuStudio:bbl:bambu-lab-h2d:0.4",
+    );
   });
 
   it("writing settings to store persists them to localStorage and can be read back", () => {

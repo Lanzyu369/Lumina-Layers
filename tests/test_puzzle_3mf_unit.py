@@ -204,6 +204,55 @@ def test_assemble_puzzle_3mf_refreshes_metadata_files_and_preview_assets() -> No
         _cleanup_temp_paths(piece_path, output_path)
 
 
+def test_assemble_puzzle_3mf_uses_registry_device_profile_metadata(tmp_path, monkeypatch) -> None:
+    """Combined puzzle 3MF should keep selected machine-registry metadata."""
+
+    registry_root = tmp_path / "machine_registry"
+    _write_machine_registry_fixture(
+        registry_root,
+        source_version="98.76.54.32",
+        application_metadata="BambuStudio-98.76.54.32",
+    )
+    monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
+
+    piece_path = _reserve_temp_path(".3mf")
+    output_path = _reserve_temp_path(".3mf")
+    try:
+        _write_piece_package(piece_path, width=10.0, height=8.0)
+
+        assemble_puzzle_3mf(
+            piece_sources=[
+                PuzzlePiece3MFSource(label="A1", threemf_path=str(piece_path), offset_x_mm=0.0, offset_y_mm=0.0),
+            ],
+            output_path=str(output_path),
+            preview_colors=None,
+            slot_names=["Slot 1 (White)"],
+            printer_id="bambu-h2d",
+            slicer="BambuStudio",
+            nozzle_size="0.4",
+            device_profile_id="BambuStudio:bbl:bambu-lab-h2d:0.4",
+        )
+
+        with zipfile.ZipFile(output_path, "r") as archive:
+            root_model = ET.fromstring(archive.read("3D/3dmodel.model"))
+            slice_info = ET.fromstring(archive.read("Metadata/slice_info.config"))
+    finally:
+        _cleanup_temp_paths(piece_path, output_path)
+
+    root_metadata = {
+        node.attrib["name"]: (node.text or "")
+        for node in root_model.findall("m:metadata", {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"})
+    }
+    assert root_metadata["Application"] == "BambuStudio-98.76.54.32"
+    header = slice_info.find("header")
+    assert header is not None
+    values = {
+        item.attrib["key"]: item.attrib["value"]
+        for item in header.findall("header_item")
+    }
+    assert values["X-BBL-Client-Version"] == "98.76.54.32"
+
+
 def test_assemble_puzzle_3mf_excludes_layer_config_ranges_xml() -> None:
     """Combined puzzle package should not carry the single-piece layer-config modifier file."""
 
@@ -283,6 +332,70 @@ def _write_sparse_piece_package(path, *, materials: list[tuple[str, str]], filam
         archive.writestr("3D/_rels/3dmodel.model.rels", _relationships_bytes())
         archive.writestr("_rels/.rels", _root_relationships_bytes())
         archive.writestr("[Content_Types].xml", b"<Types/>")
+
+
+def _write_machine_registry_fixture(
+    registry_root: Path,
+    *,
+    source_version: str,
+    application_metadata: str,
+) -> None:
+    template_path = (
+        registry_root
+        / "slicers"
+        / "BambuStudio"
+        / source_version
+        / "metadata_templates"
+        / "h2d_0_4.json"
+    )
+    template_path.parent.mkdir(parents=True, exist_ok=True)
+    template_path.write_text(
+        json.dumps({"printer_model": "Bambu Lab H2D"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (registry_root / "registry.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "generated_at": "2026-06-09T00:00:00+08:00",
+                "slicers": [
+                    {
+                        "slicer_id": "BambuStudio",
+                        "display_name": "Bambu Studio",
+                        "source_kind": "local_install",
+                        "source_version": source_version,
+                        "profile_format": "bambu_orca",
+                        "application_metadata": application_metadata,
+                        "sidecar_policy": "bambu_studio",
+                        "machines": [
+                            {
+                                "machine_profile_id": "BambuStudio:bbl:bambu-lab-h2d",
+                                "display_name": "Bambu Lab H2D",
+                                "brand": "Bambu Lab",
+                                "vendor_key": "BBL",
+                                "bed_width": 350,
+                                "bed_depth": 320,
+                                "bed_height": 325,
+                                "thumbnail": "",
+                                "nozzles": [
+                                    {
+                                        "device_profile_id": "BambuStudio:bbl:bambu-lab-h2d:0.4",
+                                        "nozzle_size": "0.4",
+                                        "source_profile_name": "Bambu Lab H2D 0.4 nozzle",
+                                        "template": template_path.relative_to(registry_root).as_posix(),
+                                        "revision": "sha256:abc",
+                                        "supported": True,
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
 
 
 def _piece_root_model_bytes() -> bytes:

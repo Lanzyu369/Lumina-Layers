@@ -431,6 +431,7 @@ def generate_single_stage_kit(
     printer_id: str = DEFAULT_PRINTER_ID,
     slicer: str = DEFAULT_SLICER_ID,
     nozzle_size: str | float | None = None,
+    device_profile_id: str | None = None,
 ) -> SingleStageKitResult:
     """Generate a ChromaPrint3D-aligned single-stage kit zip."""
     if not palette:
@@ -485,6 +486,7 @@ def generate_single_stage_kit(
             printer_id=printer_id,
             slicer=slicer,
             nozzle_size=nozzle_size,
+            device_profile_id=device_profile_id,
             cover_source=None,
         )
 

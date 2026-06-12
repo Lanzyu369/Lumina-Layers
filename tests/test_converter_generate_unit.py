@@ -326,6 +326,7 @@ class TestGenerateParameterCompleteness:
                 "printer_id": "orca-p1s",
                 "slicer": "OrcaSlicer",
                 "nozzle_size": "0.2",
+                "device_profile_id": "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
             },
         }
 
@@ -377,6 +378,7 @@ class TestGenerateParameterCompleteness:
         assert submitted_params["enable_cleanup"] is False
         assert submitted_params["separate_backing"] is True
         assert submitted_params["nozzle_size"] == "0.2"
+        assert submitted_params["device_profile_id"] == "OrcaSlicer:bbl:bambu-lab-p1s:0.2"
 
         # Verify modeling_mode is converted to core enum
         assert submitted_params["modeling_mode"] == CoreModelingMode("high-fidelity")

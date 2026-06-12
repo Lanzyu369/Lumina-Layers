@@ -102,6 +102,7 @@ describe("recipe/exportRecipe", () => {
         printerModel: "custom-printer",
         slicerSoftware: "OrcaSlicer",
         nozzleSize: "0.2",
+        deviceProfileId: "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
         svgPixelsPerMm: 18.5,
       });
 
@@ -109,6 +110,7 @@ describe("recipe/exportRecipe", () => {
       expect(recipe.device.printer_id).toBe("custom-printer");
       expect(recipe.device.slicer).toBe("OrcaSlicer");
       expect(recipe.device.nozzle_size).toBe("0.2");
+      expect(recipe.device.device_profile_id).toBe("OrcaSlicer:bbl:bambu-lab-p1s:0.2");
       expect(recipe.base.svg_pixels_per_mm).toBe(18.5);
     });
 

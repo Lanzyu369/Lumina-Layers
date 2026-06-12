@@ -210,6 +210,7 @@ export function exportConverterRecipe(
       printer_id: settings.printerModel,
       slicer: settings.slicerSoftware,
       nozzle_size: settings.nozzleSize,
+      device_profile_id: settings.deviceProfileId,
     },
   };
 }

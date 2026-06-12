@@ -354,6 +354,7 @@ def test_worker_batch_convert_item_forwards_relief_params_intact() -> None:
             material_source="material_archive",
             selected_materials=["brand/red", "brand/white"],
             material_backing_material_index=1,
+            device_profile_id="BambuStudio:bbl:bambu-lab-h2d:0.4",
         )
 
     assert result == {
@@ -372,6 +373,7 @@ def test_worker_batch_convert_item_forwards_relief_params_intact() -> None:
     assert call_kwargs["material_source"] == "material_archive"
     assert call_kwargs["selected_materials"] == ["brand/red", "brand/white"]
     assert call_kwargs["material_backing_material_index"] == 1
+    assert call_kwargs["device_profile_id"] == "BambuStudio:bbl:bambu-lab-h2d:0.4"
 
 
 def test_worker_generate_preview_accepts_numpy_preview_image(tmp_path) -> None:
@@ -441,7 +443,10 @@ def test_worker_generate_large_format_svg_native_uses_sanitized_tile_prefix_in_z
         ),
     )
 
-    def _fake_export_scene_with_bambu_metadata(*, output_path: str, **_kwargs) -> None:
+    captured_export_kwargs: list[dict[str, object]] = []
+
+    def _fake_export_scene_with_bambu_metadata(*, output_path: str, **kwargs) -> None:
+        captured_export_kwargs.append(dict(kwargs))
         with open(output_path, "wb") as handle:
             handle.write(b"3mf")
 
@@ -456,6 +461,7 @@ def test_worker_generate_large_format_svg_native_uses_sanitized_tile_prefix_in_z
         "color_mode": "4-Color",
         "replacement_regions": [],
         "separate_backing": False,
+        "device_profile_id": "BambuStudio:bbl:bambu-lab-h2d:0.4",
     }
 
     with (
@@ -470,6 +476,11 @@ def test_worker_generate_large_format_svg_native_uses_sanitized_tile_prefix_in_z
     try:
         with zipfile.ZipFile(result["zip_path"], "r") as archive:
             assert archive.namelist() == ["bad_name_R1C1.3mf"]
+        assert captured_export_kwargs
+        assert (
+            captured_export_kwargs[0]["device_profile_id"]
+            == "BambuStudio:bbl:bambu-lab-h2d:0.4"
+        )
     finally:
         if os.path.exists(result["zip_path"]):
             os.unlink(result["zip_path"])

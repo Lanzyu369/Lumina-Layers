@@ -6,10 +6,17 @@
 import { useConverterStore } from "../stores/converter";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useWidgetStore } from "../stores/widgetStore";
+import { getPrinters } from "../api/system";
+import type { PrinterInfo } from "../api/types";
 import { parseRecipeFile, restoreConverterRecipe } from "./importRecipe";
 import { hasLuminaRecipe } from "./pngMetadata";
 import type { LuminaRecipe } from "./types";
 import type { RestoreResult } from "./importRecipe";
+import {
+  normalizeSlicerOptionId,
+  resolveDeviceProfileOptionId,
+  resolvePrinterOptionId,
+} from "../utils/settingsOptionIds";
 
 // ========== Share card detection ==========
 
@@ -44,6 +51,8 @@ export interface ImportPreview {
   restoreResult: RestoreResult;
   /** Blob URL for the cover image preview (must be revoked after use). */
   coverUrl: string | null;
+  /** Printer registry snapshot used to reconcile older share cards. */
+  printerOptions?: PrinterInfo[];
 }
 
 /**
@@ -75,7 +84,14 @@ export async function prepareImport(file: File): Promise<ImportPreview> {
     coverUrl = URL.createObjectURL(file);
   }
 
-  return { recipe, restoreResult, coverUrl };
+  let printerOptions: PrinterInfo[] = [];
+  try {
+    printerOptions = await getPrinters();
+  } catch {
+    printerOptions = [];
+  }
+
+  return { recipe, restoreResult, coverUrl, printerOptions };
 }
 
 /**
@@ -95,7 +111,10 @@ export function revokeImportCoverUrl(coverUrl: string | null): void {
  * This restores all parameters and sets the image file, triggering the
  * normal preview pipeline.
  */
-export function applyImport(restoreResult: RestoreResult): void {
+export function applyImport(
+  restoreResult: RestoreResult,
+  printerOptions: PrinterInfo[] = [],
+): void {
   const store = useConverterStore.getState();
 
   // 1. Use the named importRecipeState action (handles crop suppression internally)
@@ -109,14 +128,41 @@ export function applyImport(restoreResult: RestoreResult): void {
   const conv = restoreResult.recipe.recipe.converter;
   if (conv) {
     const settingsState = useSettingsStore.getState();
-    if (conv.device.printer_id && conv.device.printer_id !== settingsState.printerModel) {
-      settingsState.setPrinterModel(conv.device.printer_id);
+    const nextSlicer = conv.device.slicer
+      ? normalizeSlicerOptionId(conv.device.slicer)
+      : settingsState.slicerSoftware;
+    const nextPrinter = conv.device.printer_id
+      ? resolvePrinterOptionId(conv.device.printer_id, printerOptions, nextSlicer)
+      : settingsState.printerModel;
+    const nextNozzle = conv.device.nozzle_size ?? settingsState.nozzleSize;
+    const selectedPrinter = printerOptions.find((printer) => printer.id === nextPrinter);
+
+    if (nextPrinter && nextPrinter !== settingsState.printerModel) {
+      settingsState.setPrinterModel(nextPrinter);
     }
-    if (conv.device.slicer && conv.device.slicer !== settingsState.slicerSoftware) {
-      settingsState.setSlicerSoftware(conv.device.slicer);
+    if (nextSlicer && nextSlicer !== settingsState.slicerSoftware) {
+      settingsState.setSlicerSoftware(nextSlicer);
     }
-    if (conv.device.nozzle_size && conv.device.nozzle_size !== settingsState.nozzleSize) {
-      settingsState.setNozzleSize(conv.device.nozzle_size as "0.2" | "0.4");
+    if (nextNozzle && nextNozzle !== settingsState.nozzleSize) {
+      settingsState.setNozzleSize(nextNozzle as "0.2" | "0.4");
+    }
+    const nextDeviceProfileId =
+      conv.device.device_profile_id ||
+      resolveDeviceProfileOptionId(
+        settingsState.deviceProfileId,
+        selectedPrinter,
+        nextSlicer,
+        nextNozzle,
+      );
+    if (nextDeviceProfileId !== settingsState.deviceProfileId) {
+      settingsState.setDeviceProfileId(nextDeviceProfileId);
+    } else if (
+      !conv.device.device_profile_id &&
+      !selectedPrinter?.device_profiles?.some(
+        (profile) => profile.device_profile_id === settingsState.deviceProfileId,
+      )
+    ) {
+      settingsState.setDeviceProfileId("");
     }
     if (
       typeof conv.base.svg_pixels_per_mm === "number" &&

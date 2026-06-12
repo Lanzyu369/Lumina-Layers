@@ -508,6 +508,10 @@ class ConvertGenerateRequest(LutSourceSelection):
     printer_id: str = Field("bambu-h2d", description="Printer profile ID")
     slicer: str = Field("BambuStudio", description="Slicer software name")
     nozzle_size: str = Field("0.4", description="Printer nozzle size")
+    device_profile_id: Optional[str] = Field(
+        None,
+        description="Generated machine registry device profile ID",
+    )
     enable_base_layer_height_modifier: bool = Field(
         True,
         description="Bambu 切片器：底板层高修改器开关（底板用 nozzle×0.5 粗层高打印）",

@@ -289,6 +289,7 @@ def generate_recipe_swatch(
     printer_id: str = "bambu-h2d",
     slicer: str = "BambuStudio",
     nozzle_size: str = "0.4",
+    device_profile_id: str | None = None,
 ) -> tuple[Optional[str], Optional[Image.Image], str]:
     """Generate a 3MF file with colored swatch blocks for recipe verification.
     生成包含彩色色块的 3MF 文件，用于配方验证。
@@ -312,6 +313,8 @@ def generate_recipe_swatch(
         printer_id: Printer profile identifier. (打印机配置 ID)
         slicer: Slicer software identifier. (切片软件 ID)
         nozzle_size: Nozzle size variant for template selection. (模板选择使用的喷嘴尺寸)
+        device_profile_id: Optional generated machine registry device profile ID.
+            (可选的机器注册表设备配置 ID)
 
     Returns:
         (output_path, preview_image, status_message).
@@ -481,6 +484,7 @@ def generate_recipe_swatch(
             printer_id=printer_id,
             slicer=slicer,
             nozzle_size=nozzle_size,
+            device_profile_id=device_profile_id,
             cover_source=None,
         )
     except (ValueError, TypeError, RuntimeError, OSError) as e:

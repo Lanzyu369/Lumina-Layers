@@ -31,6 +31,7 @@ function resetStore(): void {
     printerModel: "bambu-p1s",
     slicerSoftware: "OrcaSlicer",
     nozzleSize: "0.2",
+    deviceProfileId: "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
     enableBaseLayerHeightModifier: false,
     svgPixelsPerMm: 10,
   });
@@ -132,6 +133,7 @@ describe("submitBatch API 调用和状态管理", () => {
       printer_id: "bambu-p1s",
       slicer: "OrcaSlicer",
       nozzle_size: "0.2",
+      device_profile_id: "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
       enable_base_layer_height_modifier: false,
     });
   });
