@@ -10,6 +10,7 @@ beforeEach(() => {
     hue_enable: false,
     use_lut_constrained: false,
     auto_dynamic_range: false,
+    high_precision_3d_preview: false,
     chroma_gate: 15,
     quantize_colors_unlocked: false,
   } as never);
@@ -81,6 +82,21 @@ describe("AdvancedSettings — LUT-Constrained K-Means toggle", () => {
 
     fireEvent.click(checkbox);
     expect(useConverterStore.getState().auto_dynamic_range).toBe(false);
+  });
+
+  it("toggles high-precision 3D preview store state on click", () => {
+    render(<AdvancedSettings />);
+    const checkbox = screen.getByRole("checkbox", {
+      name: /3D高精度颜色预览/,
+    });
+
+    expect(checkbox).not.toBeChecked();
+
+    fireEvent.click(checkbox);
+    expect(useConverterStore.getState().high_precision_3d_preview).toBe(true);
+
+    fireEvent.click(checkbox);
+    expect(useConverterStore.getState().high_precision_3d_preview).toBe(false);
   });
 
   it("hides chroma gate slider when precise matching is enabled", () => {

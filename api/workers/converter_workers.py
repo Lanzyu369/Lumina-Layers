@@ -477,6 +477,7 @@ def worker_generate_preview(
     material_layer_height_mm: float | None = None,
     material_grid_resolution: int | None = None,
     auto_dynamic_range: bool = False,
+    high_precision_3d_preview: bool = False,
     svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
 ) -> dict:
     """Execute preview generation in a worker process.
@@ -549,6 +550,7 @@ def worker_generate_preview(
             "material_grid_resolution": material_grid_resolution,
             "model_enable": model_enable,
             "model_only": model_only,
+            "high_precision_3d_preview": high_precision_3d_preview,
         },
     )
     try:
@@ -574,6 +576,7 @@ def worker_generate_preview(
             chroma_gate=chroma_gate,
             use_lut_constrained=use_lut_constrained,
             auto_dynamic_range=auto_dynamic_range,
+            high_precision_3d_preview=high_precision_3d_preview,
             material_source=material_source,
             selected_materials=selected_materials,
             material_layer_count=material_layer_count,

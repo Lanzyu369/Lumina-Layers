@@ -3838,6 +3838,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "根据所选 LUT 或耗材档案的可达亮度范围，对原图 L* 进行压缩映射；高光与阴影使用软滚降以保留局部对比度，色度通道保持不变。",
     en: "Compresses the source image's L* into the luminance range achievable by the selected LUT or material profile, using soft roll-offs in highlights and shadows to preserve local contrast while leaving chroma channels untouched.",
   },
+  adv_high_precision_3d_preview: {
+    zh: "3D\u9ad8\u7cbe\u5ea6\u989c\u8272\u9884\u89c8",
+    en: "High-precision 3D colour preview",
+  },
+  adv_high_precision_3d_preview_hint: {
+    zh: "\u5f00\u542f\u540e\uff0c3D \u9884\u89c8\u7684\u989c\u8272\u7f51\u683c\u4e0a\u9650\u4f1a\u63d0\u5347\u5230\u5f53\u524d\u91cf\u5316\u989c\u8272\u6570\uff1b\u53ef\u51cf\u5c11\u4f4e\u9891\u989c\u8272\u88ab\u5408\u5e76\u6210\u7070\u8272\uff0c\u4f46 GLB \u751f\u6210\u548c\u6d4f\u89c8\u5668\u6e32\u67d3\u4f1a\u66f4\u6162\u3002",
+    en: "When enabled, the 3D preview colour mesh limit is raised to the current quantized colour count. This reduces low-frequency colours being merged into greys, but GLB generation and browser rendering may be slower.",
+  },
 
   // ==================== Relief Settings ====================
   relief_enable: {

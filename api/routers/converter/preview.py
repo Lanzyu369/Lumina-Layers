@@ -578,6 +578,7 @@ async def convert_preview(
     chroma_gate: float = Form(15.0, description="暗色彩度门槛"),
     use_lut_constrained: bool = Form(False, description="高精度LUT约束匹配"),
     auto_dynamic_range: bool = Form(False, description="自动动态范围压缩（实验性）"),
+    high_precision_3d_preview: bool = Form(False, description="High precision 3D color preview"),
     is_dark: bool = Form(True, description="深色主题"),
     material_source: str = Form("lut", description="颜色来源: lut | material_archive"),
     selected_materials: list[str] | str | None = Form(None, description="已选耗材目录名列表"),
@@ -774,6 +775,7 @@ async def convert_preview(
             material_layer_height_mm,
             material_grid_resolution,
             auto_dynamic_range,
+            high_precision_3d_preview,
             svg_pixels_per_mm,
         )
         _t_worker = time.perf_counter() - _t

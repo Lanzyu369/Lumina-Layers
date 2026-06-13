@@ -1292,6 +1292,7 @@ export interface ConverterState {
   // 高级设置
   quantize_colors: number;
   quantize_colors_unlocked: boolean;
+  high_precision_3d_preview: boolean;
   enable_cleanup: boolean;
   hue_enable: boolean;
   use_lut_constrained: boolean;
@@ -1537,6 +1538,7 @@ export interface ConverterActions {
   setModelMargin: (value: number | null) => void;
   setQuantizeColors: (colors: number) => void;
   setQuantizeColorsUnlocked: (unlocked: boolean) => void;
+  setHighPrecision3dPreview: (enabled: boolean) => void;
   setEnableCleanup: (enabled: boolean) => void;
   setHueEnable: (enabled: boolean) => void;
   setUseLutConstrained: (enabled: boolean) => void;
@@ -2099,6 +2101,7 @@ export const DEFAULT_STATE: ConverterState = {
   materialBackingMaterialDirName: loadMaterialBackingMaterialDirName(),
   quantize_colors: 48,
   quantize_colors_unlocked: false,
+  high_precision_3d_preview: false,
   enable_cleanup: true,
   hue_enable: false,
   use_lut_constrained: false,
@@ -3012,6 +3015,14 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         downloadUrl: null,
       });
     },
+    setHighPrecision3dPreview: (enabled: boolean) =>
+      set({
+        high_precision_3d_preview: enabled,
+        previewGlbUrl: null,
+        modelUrl: null,
+        threemfDiskPath: null,
+        downloadUrl: null,
+      }),
     setEnableCleanup: (enabled: boolean) =>
       set({
         enable_cleanup: enabled,
@@ -5322,6 +5333,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         color_mode: state.color_mode,
         modeling_mode: state.modeling_mode,
         quantize_colors: state.quantize_colors,
+        high_precision_3d_preview: state.high_precision_3d_preview,
         enable_cleanup: state.enable_cleanup,
         hue_enable: state.hue_enable,
       });
@@ -5377,6 +5389,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           color_mode: colorMode,
           modeling_mode: state.modeling_mode,
           quantize_colors: state.quantize_colors,
+          high_precision_3d_preview: state.high_precision_3d_preview,
           enable_cleanup: state.enable_cleanup,
           enable_outline: state.enable_outline,
           outline_width: state.outline_width,
@@ -5623,6 +5636,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         color_mode: state.color_mode,
         modeling_mode: state.modeling_mode,
         quantize_colors: state.quantize_colors,
+        high_precision_3d_preview: state.high_precision_3d_preview,
         enable_cleanup: state.enable_cleanup,
         enable_relief: state.enable_relief,
         enable_outline: state.enable_outline,
@@ -5687,6 +5701,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           color_mode: colorMode,
           modeling_mode: state.modeling_mode,
           quantize_colors: state.quantize_colors,
+          high_precision_3d_preview: state.high_precision_3d_preview,
           enable_cleanup: state.enable_cleanup,
           svg_pixels_per_mm: useSettingsStore.getState().svgPixelsPerMm,
           hue_weight: state.hue_enable ? 0.5 : 0.0,
@@ -6366,6 +6381,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
                 ? (sourceParams.layer_height_mm ?? undefined)
                 : (state.layer_height_mm ?? undefined),
           quantize_colors: state.quantize_colors,
+          high_precision_3d_preview: state.high_precision_3d_preview,
           enable_cleanup: state.enable_cleanup,
           svg_pixels_per_mm: settings.svgPixelsPerMm,
           hue_weight: state.hue_enable ? 0.5 : 0.0,

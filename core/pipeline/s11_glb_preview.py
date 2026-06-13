@@ -1027,7 +1027,7 @@ def generate_empty_bed_glb(
 def generate_segmented_glb(
     cache: dict,
     output_path: str,
-    max_meshes: int = 64,
+    max_meshes: int = 128,
 ) -> Optional[str]:
     """Generate a color-segmented GLB preview with one named Mesh per color.
     生成按颜色分段的 GLB 预览，每种颜色一个独立 Mesh。
@@ -1046,9 +1046,9 @@ def generate_segmented_glb(
               the merge cap above the function default. Set by edit
               endpoints (e.g. ``/region-requantize``) that intentionally
               add many low-frequency colours which would otherwise be
-              wiped out by the default 64-mesh merge.
+              wiped out by the default 128-mesh merge.
               可选：调用方写入的 mesh 数上限覆盖。例如二次量化会引入
-              大量低频新色，若按默认 64 合并它们会被丢回原色，导致 GLB
+              大量低频新色，若按默认 128 合并它们会被丢回原色，导致 GLB
               和 2D 预览不一致。
         output_path (str): Required absolute path the exported GLB is written to.
             Callers MUST pass a session-scoped, collision-free path (typically
@@ -1063,7 +1063,7 @@ def generate_segmented_glb(
             表现为“3D 预览串联”；详见
             ``progress/glb-internals-audit-2026-04-30.md``。
         max_meshes (int): Default Mesh count before merging when no cache
-            override is present (default 64).
+            override is present (default 128).
 
     Returns:
         str: Path to the exported GLB file (== ``output_path`` on success),
@@ -1481,6 +1481,13 @@ def run(ctx: dict) -> dict:
         "target_h": height,
         "target_width_mm": target_width_mm,
     }
+    if bool(ctx.get("high_precision_3d_preview", False)):
+        try:
+            glb_mesh_budget = int(ctx.get("quantize_colors") or 0)
+        except (TypeError, ValueError):
+            glb_mesh_budget = 0
+        if glb_mesh_budget > 128:
+            cache["glb_max_meshes"] = glb_mesh_budget
     glb_path = generate_segmented_glb(cache, output_path=out_path)
 
     ctx["glb_path"] = glb_path

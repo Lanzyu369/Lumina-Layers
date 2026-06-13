@@ -169,6 +169,7 @@ function installActionHistoryBridge(): () => void {
     "enable_outline",
     "enable_cloisonne",
     "enable_fridge_magnet",
+    "high_precision_3d_preview",
     "puzzleEnabled",
     "largeFormatEnabled",
   ] as const;
