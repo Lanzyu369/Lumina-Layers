@@ -43,10 +43,10 @@ import {
 import { postClientLog } from "../utils/clientLog";
 import {
   ActivityIcon,
-  BarChartIcon,
   CameraIcon,
   MaximizeIcon,
   MinimizeIcon,
+  StopwatchIcon,
 } from "./ui/icons";
 import type { BatchPreviewItem, PerformanceTiming } from "../api/types";
 
@@ -1265,7 +1265,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
           data-testid="scene3d-performance-toggle"
           className="ghost-control inline-flex h-7 w-7 items-center justify-center rounded-full text-slate-600 dark:text-slate-300"
         >
-          <BarChartIcon className="h-4 w-4" />
+          <StopwatchIcon className="h-4 w-4" />
         </button>
         <button
           onClick={toggleDiagnostics}
