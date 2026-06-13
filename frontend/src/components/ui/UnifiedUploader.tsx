@@ -13,6 +13,8 @@ interface UnifiedUploaderProps {
   isBatchMode: boolean;
   /** 处理文件选择（单张或多张） */
   onFilesSelect: (files: File[]) => void;
+  /** 替换当前单图 */
+  onFileReplace?: (file: File) => void;
   /** 删除批量文件 */
   onBatchFileRemove: (index: number) => void;
   /** 接受的文件格式 */
@@ -26,6 +28,7 @@ export default function UnifiedUploader({
   batchFiles,
   isBatchMode,
   onFilesSelect,
+  onFileReplace,
   onBatchFileRemove,
   accept,
   onShareCardDetected,
@@ -40,7 +43,7 @@ export default function UnifiedUploader({
    * If a single file is a share card (.lumina.json or PNG with recipe), route it.
    */
   const filterShareCards = useCallback(
-    async (files: File[]) => {
+    async (files: File[], mode: "select" | "replace" = "select") => {
       if (files.length === 1 && onShareCardDetected) {
         const file = files[0];
         const name = file.name.toLowerCase();
@@ -62,10 +65,14 @@ export default function UnifiedUploader({
           }
         }
       }
+      if (mode === "replace" && files[0] && onFileReplace) {
+        onFileReplace(files[0]);
+        return;
+      }
       // Not a share card — pass through normally
       onFilesSelect(files);
     },
-    [onFilesSelect, onShareCardDetected],
+    [onFileReplace, onFilesSelect, onShareCardDetected],
   );
 
   const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
@@ -93,6 +100,19 @@ export default function UnifiedUploader({
     [filterShareCards],
   );
 
+  const handleReplaceDrop = useCallback(
+    (e: React.DragEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsDragging(false);
+      const files = Array.from(e.dataTransfer.files);
+      if (files.length > 0) {
+        void filterShareCards(files, "replace");
+      }
+    },
+    [filterShareCards],
+  );
+
   const handleClick = useCallback(() => {
     inputRef.current?.click();
   }, []);
@@ -102,6 +122,17 @@ export default function UnifiedUploader({
       const files = Array.from(e.target.files ?? []);
       if (files.length > 0) {
         void filterShareCards(files);
+      }
+      e.target.value = "";
+    },
+    [filterShareCards],
+  );
+
+  const handleReplaceChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const files = Array.from(e.target.files ?? []);
+      if (files.length > 0) {
+        void filterShareCards(files, "replace");
       }
       e.target.value = "";
     },
@@ -201,6 +232,69 @@ export default function UnifiedUploader({
     );
   }
 
+  if (singlePreview) {
+    return (
+      <div className="flex flex-col gap-2">
+        <div
+          role="button"
+          tabIndex={0}
+          aria-label={t("upload_replace_current")}
+          onClick={handleClick}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") handleClick();
+          }}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleReplaceDrop}
+          className={`flex min-h-[120px] items-center justify-center rounded-2xl border-2 cursor-pointer transition-colors ${borderClass}`}
+        >
+          <input
+            ref={inputRef}
+            type="file"
+            accept={accept}
+            onChange={handleReplaceChange}
+            className="hidden"
+            aria-hidden="true"
+          />
+          <div className="flex w-full items-center justify-center rounded-2xl p-2 bg-[length:16px_16px] bg-[image:linear-gradient(45deg,_#e0e0e0_25%,_transparent_25%),linear-gradient(-45deg,_#e0e0e0_25%,_transparent_25%),linear-gradient(45deg,_transparent_75%,_#e0e0e0_75%),linear-gradient(-45deg,_transparent_75%,_#e0e0e0_75%)] dark:bg-[image:linear-gradient(45deg,_#374151_25%,_transparent_25%),linear-gradient(-45deg,_#374151_25%,_transparent_25%),linear-gradient(45deg,_transparent_75%,_#374151_75%),linear-gradient(-45deg,_transparent_75%,_#374151_75%)] bg-[position:0_0,0_8px,8px_-8px,-8px_0px]">
+            <img
+              src={singlePreview}
+              alt={t("common_preview_alt")}
+              className="block max-w-full rounded-2xl object-contain"
+              style={{ maxHeight: "clamp(10rem, 22vh, 18rem)" }}
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={handleClick}
+            className="min-h-9 rounded-xl border border-slate-200/80 bg-white/70 px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-white dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-200 dark:hover:bg-slate-900"
+          >
+            {t("upload_replace_current")}
+          </button>
+          <button
+            type="button"
+            onClick={handleAddMoreClick}
+            className="min-h-9 rounded-xl border border-slate-200/80 bg-white/70 px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-white dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-200 dark:hover:bg-slate-900"
+          >
+            {t("upload_add_more")}
+          </button>
+          <input
+            ref={addMoreInputRef}
+            type="file"
+            accept={accept}
+            multiple
+            onChange={handleAddMoreChange}
+            className="hidden"
+            aria-hidden="true"
+          />
+        </div>
+      </div>
+    );
+  }
+
   // Empty state or SingleMode: main drop zone
   return (
     <div
@@ -225,20 +319,9 @@ export default function UnifiedUploader({
         className="hidden"
         aria-hidden="true"
       />
-      {singlePreview ? (
-        <div className="flex w-full items-center justify-center rounded-2xl p-2 bg-[length:16px_16px] bg-[image:linear-gradient(45deg,_#e0e0e0_25%,_transparent_25%),linear-gradient(-45deg,_#e0e0e0_25%,_transparent_25%),linear-gradient(45deg,_transparent_75%,_#e0e0e0_75%),linear-gradient(-45deg,_transparent_75%,_#e0e0e0_75%)] dark:bg-[image:linear-gradient(45deg,_#374151_25%,_transparent_25%),linear-gradient(-45deg,_#374151_25%,_transparent_25%),linear-gradient(45deg,_transparent_75%,_#374151_75%),linear-gradient(-45deg,_transparent_75%,_#374151_75%)] bg-[position:0_0,0_8px,8px_-8px,-8px_0px]">
-          <img
-            src={singlePreview}
-            alt={t("common_preview_alt")}
-            className="block max-w-full rounded-2xl object-contain"
-            style={{ maxHeight: "clamp(10rem, 22vh, 18rem)" }}
-          />
-        </div>
-      ) : (
-        <span className="text-sm text-slate-500 dark:text-slate-400 select-none">
-          {t("upload_unified_hint")}
-        </span>
-      )}
+      <span className="text-sm text-slate-500 dark:text-slate-400 select-none">
+        {t("upload_unified_hint")}
+      </span>
     </div>
   );
 }
