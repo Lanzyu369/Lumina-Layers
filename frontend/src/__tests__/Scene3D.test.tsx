@@ -160,6 +160,8 @@ beforeEach(() => {
       useConverterStore.setState({
         isLoading: false,
         previewGlbUrl: null,
+        previewPerformanceTiming: null,
+        generatePerformanceTiming: null,
         previewImageUrl: null,
         previewBaseImageUrl: null,
         puzzleEnabled: false,
@@ -227,6 +229,49 @@ beforeEach(() => {
       fireEvent.click(screen.getByTestId("scene3d-diagnostics-toggle"));
 
       expect(screen.getByTestId("scene3d-diagnostics-panel")).toBeInTheDocument();
+    });
+  });
+
+  describe("performance overlay", () => {
+    it("opens the performance panel when the performance button is clicked", () => {
+      render(<Scene3D />);
+
+      expect(screen.queryByTestId("scene3d-performance-panel")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByTestId("scene3d-performance-toggle"));
+
+      expect(screen.getByTestId("scene3d-performance-panel")).toBeInTheDocument();
+      expect(screen.getByTestId("scene3d-performance-empty")).toHaveTextContent(
+        "viewer_performance_empty",
+      );
+    });
+
+    it("renders preview and model timing rows when timing data exists", () => {
+      useConverterStore.setState({
+        previewPerformanceTiming: {
+          total_ms: 1234.5,
+          upload_ms: 12,
+          worker_ms: 900,
+          pickle_load_ms: 3,
+          segmented_glb_ms: 250,
+          palette_ms: 4,
+        },
+        generatePerformanceTiming: {
+          total_ms: 2500,
+          worker_ms: 2200,
+          overhead_ms: 300,
+        },
+      });
+
+      render(<Scene3D />);
+
+      fireEvent.click(screen.getByTestId("scene3d-performance-toggle"));
+
+      expect(screen.getByText("viewer_performance_preview_title")).toBeInTheDocument();
+      expect(screen.getByText("viewer_performance_generate_title")).toBeInTheDocument();
+      expect(screen.getAllByText("1.23 s").length).toBeGreaterThan(0);
+      expect(screen.getByText("2.50 s")).toBeInTheDocument();
+      expect(screen.queryByTestId("scene3d-performance-empty")).not.toBeInTheDocument();
     });
   });
 

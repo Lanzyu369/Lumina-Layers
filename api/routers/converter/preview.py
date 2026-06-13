@@ -578,7 +578,7 @@ async def convert_preview(
     chroma_gate: float = Form(15.0, description="暗色彩度门槛"),
     use_lut_constrained: bool = Form(False, description="高精度LUT约束匹配"),
     auto_dynamic_range: bool = Form(False, description="自动动态范围压缩（实验性）"),
-    high_precision_3d_preview: bool = Form(False, description="High precision 3D color preview"),
+    high_precision_3d_preview: bool = Form(False, description="3D高精度颜色预览"),
     is_dark: bool = Form(True, description="深色主题"),
     material_source: str = Form("lut", description="颜色来源: lut | material_archive"),
     selected_materials: list[str] | str | None = Form(None, description="已选耗材目录名列表"),
@@ -1081,16 +1081,24 @@ async def convert_preview(
         contours_data = cache_data["color_contours"]
 
     _t_api_total = time.perf_counter() - _api_t0
+    performance_timing = {
+        "total_ms": round(_t_api_total * 1000, 3),
+        "upload_ms": round(_t_upload * 1000, 3),
+        "worker_ms": round(_t_worker * 1000, 3),
+        "pickle_load_ms": round(_t_pickle_load * 1000, 3),
+        "segmented_glb_ms": round(_t_glb * 1000, 3),
+        "palette_ms": round(_t_palette * 1000, 3),
+    }
     log.info(
         "Preview endpoint timing",
         extra={
             "event": "converter_preview_timing",
-            "duration_ms": round(_t_api_total * 1000, 3),
-            "upload_ms": round(_t_upload * 1000, 3),
-            "worker_ms": round(_t_worker * 1000, 3),
-            "pickle_load_ms": round(_t_pickle_load * 1000, 3),
-            "segmented_glb_ms": round(_t_glb * 1000, 3),
-            "palette_ms": round(_t_palette * 1000, 3),
+            "duration_ms": performance_timing["total_ms"],
+            "upload_ms": performance_timing["upload_ms"],
+            "worker_ms": performance_timing["worker_ms"],
+            "pickle_load_ms": performance_timing["pickle_load_ms"],
+            "segmented_glb_ms": performance_timing["segmented_glb_ms"],
+            "palette_ms": performance_timing["palette_ms"],
         },
     )
 
@@ -1106,6 +1114,7 @@ async def convert_preview(
         dimensions=dimensions,
         contours=contours_data,
         warnings=list((svg_large_format_policy or {}).get("warnings", [])),
+        performance_timing=performance_timing,
     )
 
 

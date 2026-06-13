@@ -43,6 +43,14 @@ export const ActivityIcon = (props: SVGProps<SVGSVGElement>) => (
   </svg>
 );
 
+export const BarChartIcon = (props: SVGProps<SVGSVGElement>) => (
+  <svg {...baseProps} className={sizeClass} {...props}>
+    <line x1="12" y1="20" x2="12" y2="10" />
+    <line x1="18" y1="20" x2="18" y2="4" />
+    <line x1="6" y1="20" x2="6" y2="16" />
+  </svg>
+);
+
 export const MaximizeIcon = (props: SVGProps<SVGSVGElement>) => (
   <svg {...baseProps} className={sizeClass} {...props}>
     <path d="M8 3H5a2 2 0 0 0-2 2v3" />
