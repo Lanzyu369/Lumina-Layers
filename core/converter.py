@@ -271,6 +271,7 @@ def convert_image_to_3d(
     material_backing_material_index: Optional[int] = None,
     use_lut_constrained: bool = False,
     auto_dynamic_range: bool = False,
+    high_precision_3d_preview: bool = False,
     svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
     *,
     cover_source_path: Optional[str] = None,
@@ -349,6 +350,7 @@ def generate_preview_cached(
     material_grid_resolution: Optional[int] = None,
     use_lut_constrained: bool = False,
     auto_dynamic_range: bool = False,
+    high_precision_3d_preview: bool = False,
     svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
 ):
     """Generate preview and cache data. Thin wrapper, delegates to coordinator.
@@ -467,6 +469,7 @@ def generate_final_model(
     material_grid_resolution: Optional[int] = None,
     use_lut_constrained: bool = False,
     auto_dynamic_range: bool = False,
+    high_precision_3d_preview: bool = False,
     material_backing_material_index: Optional[int] = None,
     svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
     *,
@@ -615,6 +618,7 @@ def generate_final_model(
         material_backing_material_index=material_backing_material_index,
         use_lut_constrained=use_lut_constrained,
         auto_dynamic_range=auto_dynamic_range,
+        high_precision_3d_preview=high_precision_3d_preview,
         cover_source_path=cover_source_path,
     )
 

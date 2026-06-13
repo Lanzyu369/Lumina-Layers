@@ -986,8 +986,8 @@ class TestP04CacheBuilding:
         assert cache["modeling_mode"] == ModelingMode.PIXEL
         assert cache["glb_max_meshes"] == 256
 
-    def test_high_fidelity_does_not_raise_glb_mesh_budget_from_quantize_colors(self):
-        """Only pixel mode should opt into the higher GLB colour budget."""
+    def test_high_fidelity_does_not_raise_glb_mesh_budget_by_default(self):
+        """High-fidelity mode keeps the default GLB cap unless opted in."""
         from core.pipeline.p04_cache_building import run
 
         ctx = self._make_valid_ctx()
@@ -998,6 +998,20 @@ class TestP04CacheBuilding:
 
         assert cache["modeling_mode"] == ModelingMode.HIGH_FIDELITY
         assert "glb_max_meshes" not in cache
+
+    def test_high_precision_3d_preview_uses_quantize_colors_as_glb_mesh_budget(self):
+        """The advanced 3D preview switch should unlock GLB colours."""
+        from core.pipeline.p04_cache_building import run
+
+        ctx = self._make_valid_ctx()
+        ctx["modeling_mode"] = ModelingMode.HIGH_FIDELITY
+        ctx["quantize_colors"] = 256
+        ctx["high_precision_3d_preview"] = True
+
+        cache = run(ctx)["cache"]
+
+        assert cache["modeling_mode"] == ModelingMode.HIGH_FIDELITY
+        assert cache["glb_max_meshes"] == 256
 
     def test_missing_matched_rgb_raises_key_error(self):
         """缺失 matched_rgb 键应抛出 KeyError。"""
