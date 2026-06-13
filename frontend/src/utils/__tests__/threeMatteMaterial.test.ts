@@ -3,7 +3,7 @@ import * as THREE from "three";
 import { createMatteMaterialFromStandard } from "../threeMatteMaterial";
 
 describe("createMatteMaterialFromStandard", () => {
-  it("preserves vertex colors without tone mapping and renders both sides", () => {
+  it("preserves vertex colors and renders both sides, unlit", () => {
     const source = new THREE.MeshStandardMaterial({
       color: new THREE.Color("#336699"),
       vertexColors: true,
@@ -14,7 +14,7 @@ describe("createMatteMaterialFromStandard", () => {
 
     const material = createMatteMaterialFromStandard(source);
 
-    expect(material).toBeInstanceOf(THREE.MeshLambertMaterial);
+    expect(material).toBeInstanceOf(THREE.MeshBasicMaterial);
     expect(material.vertexColors).toBe(true);
     expect(material.color.getHexString()).toBe("ffffff");
     expect(material.transparent).toBe(true);
@@ -24,7 +24,7 @@ describe("createMatteMaterialFromStandard", () => {
     expect(material.name).toBe("color_336699");
   });
 
-  it("preserves plain material color while disabling washed-out preview rendering", () => {
+  it("preserves plain material color exactly, unlit and not tone mapped", () => {
     const source = new THREE.MeshStandardMaterial({
       color: new THREE.Color("#cc4400"),
       vertexColors: false,
@@ -32,6 +32,7 @@ describe("createMatteMaterialFromStandard", () => {
 
     const material = createMatteMaterialFromStandard(source);
 
+    expect(material).toBeInstanceOf(THREE.MeshBasicMaterial);
     expect(material.vertexColors).toBe(false);
     expect(material.color.getHexString()).toBe("cc4400");
     expect(material.side).toBe(THREE.DoubleSide);

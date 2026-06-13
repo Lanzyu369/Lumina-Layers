@@ -728,7 +728,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
       <Canvas
         frameloop="demand"
         camera={{ position: [0, -57, 474], fov: 45 }}
-        gl={{ preserveDrawingBuffer: true }}
+        gl={{ preserveDrawingBuffer: true, toneMapping: THREE.NeutralToneMapping }}
         onPointerMissed={() => {
           if (enableFridgeMagnet) {
             selectFridgeMagnet(null);

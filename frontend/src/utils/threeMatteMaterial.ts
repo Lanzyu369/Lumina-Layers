@@ -1,7 +1,7 @@
 /**
- * Matte material conversion helper for 3D model viewers.
+ * Unlit material conversion helper for 3D model viewers.
  *
- * Converts MeshStandardMaterial to MeshLambertMaterial while preserving
+ * Converts MeshStandardMaterial to MeshBasicMaterial while preserving
  * visual properties that would otherwise be lost (vertexColors, map, etc.).
  *
  * LUM-20260519-002 Issue A: previous code only copied `color`, causing
@@ -11,18 +11,20 @@
 import * as THREE from "three";
 
 /**
- * Create a MeshLambertMaterial from a MeshStandardMaterial, preserving
+ * Create a MeshBasicMaterial from a MeshStandardMaterial, preserving
  * all visual properties needed for correct rendering.
  *
  * Properties preserved: color, vertexColors, map, alphaMap, transparent,
- * opacity, name. Preview materials are forced to DoubleSide and
- * toneMapped=false so flat color chips stay saturated and remain visible
- * from the back side.
+ * opacity, name. Preview color chips are unlit (MeshBasicMaterial) so their
+ * on-screen colour equals the source hex exactly — matching the 2D preview —
+ * and brightness is decoupled from scene lighting. They are forced to
+ * DoubleSide to stay visible from the back, and toneMapped=false so the exact
+ * hex is not altered by the scene's tone mapping.
  */
 export function createMatteMaterialFromStandard(
   mat: THREE.MeshStandardMaterial,
-): THREE.MeshLambertMaterial {
-  return new THREE.MeshLambertMaterial({
+): THREE.MeshBasicMaterial {
+  return new THREE.MeshBasicMaterial({
     // When vertexColors is true, the material color multiplies with vertex
     // colors. Use white (1,1,1) to avoid washing out / tinting the vertex
     // colors. When vertexColors is false, preserve the original color.

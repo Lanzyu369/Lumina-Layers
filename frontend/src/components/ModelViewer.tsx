@@ -115,10 +115,11 @@ function ModelViewer({
     });
     toRemove.forEach((obj) => obj.removeFromParent());
 
-    // Convert all mesh materials to pure diffuse (no specular reflections).
+    // Convert all mesh materials to unlit (no lighting, no specular).
     // Trimesh-exported GLB uses MeshStandardMaterial which reflects the HDR
     // environment map, causing unwanted glare on the color surfaces.
-    // We replace them with MeshLambertMaterial for a completely matte finish.
+    // We replace them with MeshBasicMaterial so chip colours equal the source
+    // hex exactly and stay decoupled from scene lighting.
     clone.traverse((child) => {
       if (child instanceof THREE.Mesh && child.material) {
         const previousMaterial = child.material;
