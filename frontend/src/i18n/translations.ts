@@ -3310,6 +3310,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "\u5168\u9009",
     en: "Select all",
   },
+  basic_material_picker_deselect_all: {
+    zh: "\u6e05\u7a7a\u9009\u62e9",
+    en: "Deselect all",
+  },
   basic_material_picker_close: {
     zh: "\u5173\u95ed",
     en: "Close",
