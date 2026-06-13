@@ -43,6 +43,7 @@ export interface ConverterRecipeBase {
   /** @deprecated removed; kept optional for legacy recipe parsing only */
   bg_tol?: number;
   quantize_colors: number;
+  high_precision_3d_preview?: boolean;
   enable_cleanup: boolean;
   svg_pixels_per_mm?: number;
   hue_enable: boolean;

@@ -1922,6 +1922,7 @@ async def convert_batch(
     model_margin: float | None = Form(None, description="模型回退边距"),
     use_lut_constrained: bool = Form(False, description="高精度 LUT 约束匹配"),
     auto_dynamic_range: bool = Form(False, description="自动动态范围压缩"),
+    high_precision_3d_preview: bool = Form(False, description="3D 高精度颜色预览"),
     enable_relief: bool = Form(False, description="启用 2.5D 浮雕模式"),
     height_mode: str = Form("color", description="浮雕高度模式"),
     color_height_map: str | None = Form(None, description="颜色高度映射 JSON"),
@@ -2102,6 +2103,7 @@ async def convert_batch(
                 material_backing_material_index,
                 use_lut_constrained,
                 auto_dynamic_range,
+                high_precision_3d_preview,
                 device_profile_id,
             )
 

@@ -335,6 +335,7 @@ export function restoreConverterRecipe(
     target_width_mm: conv.base.target_width_mm,
     target_height_mm: conv.base.target_height_mm,
     quantize_colors: conv.base.quantize_colors,
+    high_precision_3d_preview: Boolean(conv.base.high_precision_3d_preview),
     enable_cleanup: conv.base.enable_cleanup,
     hue_enable: conv.base.hue_enable,
     chroma_gate: conv.base.chroma_gate,

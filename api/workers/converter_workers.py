@@ -1028,6 +1028,7 @@ def worker_batch_convert_item(
     material_backing_material_index: int | None = None,
     use_lut_constrained: bool = False,
     auto_dynamic_range: bool = False,
+    high_precision_3d_preview: bool = False,
     device_profile_id: str | None = None,
 ) -> dict:
     """Execute a single batch conversion item in a worker process.
@@ -1145,6 +1146,7 @@ def worker_batch_convert_item(
         material_backing_material_index=material_backing_material_index,
         use_lut_constrained=use_lut_constrained,
         auto_dynamic_range=auto_dynamic_range,
+        high_precision_3d_preview=high_precision_3d_preview,
     )
 
     # Conversion failure surfaces as no 3MF; keep the legacy contract
