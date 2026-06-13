@@ -22,6 +22,7 @@ import type {
   LutSupportedMode,
   LutDetailsCatalogGroup,
   LutColorsCard,
+  PerformanceTiming,
 } from "../../api/types";
 import {
   ColorMode as ColorModeEnum,
@@ -1380,6 +1381,8 @@ export interface ConverterState {
 
   // 3D 预览
   previewGlbUrl: string | null;
+  previewPerformanceTiming: PerformanceTiming | null;
+  generatePerformanceTiming: PerformanceTiming | null;
   lutMatchMode: string | null;
   lutMatchInfo: Record<string, unknown> | null;
 
@@ -1934,6 +1937,8 @@ function buildPreviewSessionResetState(): Partial<ConverterState> {
     previewBaseImageUrl: null,
     previewGlbUrl: null,
     modelUrl: null,
+    previewPerformanceTiming: null,
+    generatePerformanceTiming: null,
     batchPreviewItems: [],
     threemfDiskPath: null,
     downloadUrl: null,
@@ -2160,6 +2165,8 @@ export const DEFAULT_STATE: ConverterState = {
   heightmapFile: null,
   heightmapThumbnailUrl: null,
   previewGlbUrl: null,
+  previewPerformanceTiming: null,
+  generatePerformanceTiming: null,
   lutMatchMode: null,
   lutMatchInfo: null,
   preview_width_mm: null,
@@ -5477,6 +5484,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             : {}),
           colorContours: response.contours ?? {},
           previewGlbUrl: glbUrl,
+          previewPerformanceTiming: response.performance_timing ?? null,
+          generatePerformanceTiming: null,
           colorRemapMap: {},
           remapHistory: [],
           replacement_regions: [],
@@ -5625,7 +5634,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         return null;
       }
 
-      set({ isGenerating: true, error: null });
+      set({ isGenerating: true, error: null, generatePerformanceTiming: null });
       _generateStartTime = performance.now();
       (window as LuminaWindow).__luminaGenerateStart = _generateStartTime;
       _clientLog("generate: click", {
@@ -5898,6 +5907,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           downloadUrl: response.download_url
             ? `${response.download_url}`
             : null,
+          generatePerformanceTiming: response.performance_timing ?? null,
           largeFormatWarnings: [],
         });
         _logGenerateTimer("UI unlocked (isGenerating=false, modelUrl set)");
@@ -6094,6 +6104,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           previewBaseImageUrl: null,
           sessionId: null,
           previewGlbUrl: null,
+          previewPerformanceTiming: null,
+          generatePerformanceTiming: null,
           batchPreviewItems: [],
           ...EMPTY_LUT_MATCH_STATE,
           selectedColor: null,
@@ -6119,6 +6131,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         threemfDiskPath: null,
         downloadUrl: null,
         batchPreviewItems: [],
+        modelUrl: null,
+        previewGlbUrl: null,
+        previewPerformanceTiming: null,
+        generatePerformanceTiming: null,
         previewWarnings: [],
         largeFormatWarnings: [],
         ...DEFAULT_PUZZLE_PREVIEW_STATE,
@@ -6163,6 +6179,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             sessionId: null,
             previewGlbUrl: null,
             modelUrl: null,
+            previewPerformanceTiming: null,
+            generatePerformanceTiming: null,
             batchPreviewItems: [],
             threemfDiskPath: null,
             downloadUrl: null,
@@ -6192,6 +6210,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             sessionId: null,
             previewGlbUrl: null,
             modelUrl: null,
+            previewPerformanceTiming: null,
+            generatePerformanceTiming: null,
             batchPreviewItems: [],
             threemfDiskPath: null,
             downloadUrl: null,
@@ -6235,6 +6255,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           sessionId: null,
           previewGlbUrl: null,
           modelUrl: null,
+          previewPerformanceTiming: null,
+          generatePerformanceTiming: null,
           batchPreviewItems: [],
           threemfDiskPath: null,
           downloadUrl: null,
@@ -6274,6 +6296,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         sessionId: null,
         previewGlbUrl: null,
         modelUrl: null,
+        previewPerformanceTiming: null,
+        generatePerformanceTiming: null,
         batchPreviewItems: [],
         threemfDiskPath: null,
         downloadUrl: null,
@@ -6331,6 +6355,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         batchPreviewItems: [],
         modelUrl: null,
         previewGlbUrl: null,
+        generatePerformanceTiming: null,
         threemfDiskPath: null,
         downloadUrl: null,
         error: null,
@@ -6418,6 +6443,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           // 合并 GLB，颜色与背面显示不可靠，因此不再作为 UI 兜底。
           modelUrl: null,
           previewGlbUrl: null,
+          previewPerformanceTiming: null,
+          generatePerformanceTiming: null,
           threemfDiskPath: result.threemf_disk_path ?? null,
           downloadUrl: result.download_url ? `${result.download_url}` : null,
         });

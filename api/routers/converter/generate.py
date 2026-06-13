@@ -1100,13 +1100,18 @@ async def convert_generate(
         preview_3d_url = f"/api/files/{glb_id}"
 
     api_total = time.perf_counter() - api_t0
+    performance_timing = {
+        "total_ms": round(api_total * 1000, 3),
+        "worker_ms": round(worker_elapsed * 1000, 3),
+        "overhead_ms": round((api_total - worker_elapsed) * 1000, 3),
+    }
     log.info(
         "Generate endpoint timing",
         extra={
             "event": "converter_generate_timing",
-            "duration_ms": round(api_total * 1000, 3),
-            "worker_ms": round(worker_elapsed * 1000, 3),
-            "overhead_ms": round((api_total - worker_elapsed) * 1000, 3),
+            "duration_ms": performance_timing["total_ms"],
+            "worker_ms": performance_timing["worker_ms"],
+            "overhead_ms": performance_timing["overhead_ms"],
         },
     )
 
@@ -1122,6 +1127,7 @@ async def convert_generate(
         download_url=f"/api/files/{download_id}",
         preview_3d_url=preview_3d_url,
         threemf_disk_path=threemf_path,
+        performance_timing=performance_timing,
     )
 
 

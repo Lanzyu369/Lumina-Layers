@@ -686,7 +686,7 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Screenshot",
   },
   viewer_diagnostics_toggle: {
-    zh: "性能",
+    zh: "3D 诊断",
     en: "Diagnostics",
   },
   viewer_diagnostics_title: {
@@ -748,6 +748,54 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   viewer_diagnostics_canvas: {
     zh: "画布",
     en: "Canvas",
+  },
+  viewer_performance_toggle: {
+    zh: "性能统计",
+    en: "Performance",
+  },
+  viewer_performance_title: {
+    zh: "性能统计",
+    en: "Performance Stats",
+  },
+  viewer_performance_empty: {
+    zh: "暂无性能数据",
+    en: "No performance data yet",
+  },
+  viewer_performance_preview_title: {
+    zh: "预览生成",
+    en: "Preview Generation",
+  },
+  viewer_performance_generate_title: {
+    zh: "模型生成",
+    en: "Model Generation",
+  },
+  viewer_performance_total: {
+    zh: "总耗时",
+    en: "Total",
+  },
+  viewer_performance_upload: {
+    zh: "上传处理",
+    en: "Upload",
+  },
+  viewer_performance_worker: {
+    zh: "核心计算",
+    en: "Worker",
+  },
+  viewer_performance_pickle_load: {
+    zh: "缓存读取",
+    en: "Cache Load",
+  },
+  viewer_performance_segmented_glb: {
+    zh: "预览 GLB",
+    en: "Preview GLB",
+  },
+  viewer_performance_palette: {
+    zh: "调色板",
+    en: "Palette",
+  },
+  viewer_performance_overhead: {
+    zh: "接口开销",
+    en: "API Overhead",
   },
   viewer_hover_magnifier: {
     zh: "放大镜",
@@ -3843,11 +3891,11 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Compresses the source image's L* into the luminance range achievable by the selected LUT or material profile, using soft roll-offs in highlights and shadows to preserve local contrast while leaving chroma channels untouched.",
   },
   adv_high_precision_3d_preview: {
-    zh: "3D\u9ad8\u7cbe\u5ea6\u989c\u8272\u9884\u89c8",
+    zh: "3D高精度颜色预览",
     en: "High-precision 3D colour preview",
   },
   adv_high_precision_3d_preview_hint: {
-    zh: "\u5f00\u542f\u540e\uff0c3D \u9884\u89c8\u7684\u989c\u8272\u7f51\u683c\u4e0a\u9650\u4f1a\u63d0\u5347\u5230\u5f53\u524d\u91cf\u5316\u989c\u8272\u6570\uff1b\u53ef\u51cf\u5c11\u4f4e\u9891\u989c\u8272\u88ab\u5408\u5e76\u6210\u7070\u8272\uff0c\u4f46 GLB \u751f\u6210\u548c\u6d4f\u89c8\u5668\u6e32\u67d3\u4f1a\u66f4\u6162\u3002",
+    zh: "开启后，3D 预览的颜色网格上限会提升到当前量化颜色数；可减少低频颜色被合并成灰色，但 GLB 生成和浏览器渲染会更慢。",
     en: "When enabled, the 3D preview colour mesh limit is raised to the current quantized colour count. This reduces low-frequency colours being merged into greys, but GLB generation and browser rendering may be slower.",
   },
 

@@ -74,6 +74,7 @@ from api.schemas.responses import (
     LUTListResponse,
     ManualFixResponse,
     MergePreviewResponse,
+    PerformanceTimingResponse,
     PreviewResponse,
     SingleStageExtractResponse,
     SingleStageKitResponse,
@@ -137,6 +138,7 @@ __all__ = [
     "FiveColorQueryResponse",
     # --- Response models ---
     "CalibrationResponse",
+    "PerformanceTimingResponse",
     "PreviewResponse",
     "ColorReplaceResponse",
     "MergePreviewResponse",

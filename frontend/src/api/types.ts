@@ -297,6 +297,17 @@ export interface AutoDetectColorsResponse {
 
 // ========== Response Models ==========
 
+/** 接口性能耗时统计，单位毫秒。 Endpoint timing stats in milliseconds. */
+export interface PerformanceTiming {
+  total_ms?: number | null;
+  upload_ms?: number | null;
+  worker_ms?: number | null;
+  pickle_load_ms?: number | null;
+  segmented_glb_ms?: number | null;
+  palette_ms?: number | null;
+  overhead_ms?: number | null;
+}
+
 /** 预览接口响应，包含 session_id 和预览图 URL */
 export interface PreviewResponse {
   session_id: string;
@@ -314,6 +325,7 @@ export interface PreviewResponse {
   };
   contours?: Record<string, number[][][]> | null; // hex -> list of contour polygons (world coords mm)
   warnings: string[];
+  performance_timing?: PerformanceTiming | null;
 }
 
 /** 大画幅生成请求，嵌套 ConvertGenerateRequest + 切片参数 */
@@ -349,6 +361,7 @@ export interface GenerateResponse {
   download_url: string;
   preview_3d_url?: string;
   threemf_disk_path?: string;
+  performance_timing?: PerformanceTiming | null;
 }
 
 export interface LutListResponse {
