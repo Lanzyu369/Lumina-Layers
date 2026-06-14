@@ -262,6 +262,26 @@ describe("settings store hydration and base-layer modifier wiring", () => {
     );
   });
 
+  it("keeps backend device_profile_id after hydrating related device fields", async () => {
+    const { settingsStoreModule } = await loadStores();
+
+    settingsStoreModule.useSettingsStore
+      .getState()
+      .hydrateDeviceSettingsFromBackend({
+        printer_model: "bambu-p1s",
+        slicer_software: "BambuStudio",
+        nozzle_size: "0.2",
+        device_profile_id: "BambuStudio:bbl:bambu-lab-p1s:0.2",
+      });
+
+    expect(settingsStoreModule.useSettingsStore.getState()).toMatchObject({
+      printerModel: "bambu-p1s",
+      slicerSoftware: "BambuStudio",
+      nozzleSize: "0.2",
+      deviceProfileId: "BambuStudio:bbl:bambu-lab-p1s:0.2",
+    });
+  });
+
   it("hydrates backend custom slicer path fields into the store", async () => {
     const { settingsStoreModule } = await loadStores();
 
