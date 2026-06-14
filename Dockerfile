@@ -17,7 +17,7 @@ ENV PYTHONUNBUFFERED=1 \
 
 # System dependencies:
 # - cairo/pkg-config/OpenGL libs are required by the image and mesh pipeline.
-# - node/npm/pnpm are required because start_all.py launches the Vite frontend.
+# - node/npm/pnpm are required to build the frontend dist during image build.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
@@ -34,15 +34,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && npm install -g pnpm@10.33.2 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt /app/
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.txt requirements-glb-v2.txt /app/
+RUN pip install --no-cache-dir -r requirements.txt -r requirements-glb-v2.txt
 
 COPY frontend/package.json frontend/pnpm-lock.yaml /app/frontend/
 RUN cd frontend && pnpm install --frozen-lockfile
 
 COPY . /app/
+RUN cd frontend && pnpm build
+ENV LUMINA_SERVE_FRONTEND_DIST=1 \
+    LUMINA_FRONTEND_DIST_DIR=/app/frontend/dist
 RUN mkdir -p /app/output /app/logs /app/feedback
 
-EXPOSE 4174 8000
+EXPOSE 8000
 
-CMD ["python", "start_all.py"]
+CMD ["python", "api_server.py"]

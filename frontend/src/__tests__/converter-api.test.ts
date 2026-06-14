@@ -240,6 +240,7 @@ describe("convertBatch", () => {
       model_margin: 0.1,
       use_lut_constrained: true,
       auto_dynamic_range: true,
+      high_precision_3d_preview: true,
     });
 
     const [url, rawFormData] = mockPost.mock.calls[0];
@@ -257,6 +258,7 @@ describe("convertBatch", () => {
     expect(formData.get("model_margin")).toBe("0.1");
     expect(formData.get("use_lut_constrained")).toBe("true");
     expect(formData.get("auto_dynamic_range")).toBe("true");
+    expect(formData.get("high_precision_3d_preview")).toBe("true");
   });
 });
 

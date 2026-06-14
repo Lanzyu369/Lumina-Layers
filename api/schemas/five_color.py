@@ -158,6 +158,7 @@ class RecipeSwatchRequest(BaseModel):
     printer_id: str = Field("bambu-h2d", description="打印机配置 ID")
     slicer: str = Field("BambuStudio", description="切片软件 ID")
     nozzle_size: str = Field("0.4", description="喷嘴尺寸")
+    device_profile_id: str | None = Field(None, description="机器注册表设备配置 ID")
 
 
 class RecipeSwatchResponse(BaseModel):

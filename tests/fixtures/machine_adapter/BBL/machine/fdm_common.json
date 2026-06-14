@@ -1,0 +1,8 @@
+{
+  "type": "machine",
+  "name": "fdm_common",
+  "instantiation": "false",
+  "printable_height": "325",
+  "printable_area": ["0x0", "350x0", "350x320", "0x320"],
+  "layer_height": "0.20"
+}

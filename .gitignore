@@ -159,6 +159,7 @@ celerybeat.pid
 .env
 .env.local
 .envrc
+dev/machine_registry.sources.local.json
 .venv
 env/
 venv/
@@ -314,6 +315,7 @@ materials_backup*/
 # AI IDE local config
 .claude/
 .codex/
+.scratch/
 .idea/
 *.3mf
 output/temp/*.svg

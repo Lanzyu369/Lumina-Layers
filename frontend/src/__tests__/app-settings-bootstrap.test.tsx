@@ -121,6 +121,7 @@ describe("App settings bootstrap", () => {
         printer_model: "bambu-p1s",
         slicer_software: "BambuStudio",
         nozzle_size: "0.2",
+        device_profile_id: "BambuStudio:bbl:bambu-lab-p1s:0.2",
       },
     } as never);
 
@@ -136,6 +137,9 @@ describe("App settings bootstrap", () => {
       expect(settingsStore.useSettingsStore.getState().printerModel).toBe("bambu-p1s");
       expect(settingsStore.useSettingsStore.getState().slicerSoftware).toBe("BambuStudio");
       expect(settingsStore.useSettingsStore.getState().nozzleSize).toBe("0.2");
+      expect(settingsStore.useSettingsStore.getState().deviceProfileId).toBe(
+        "BambuStudio:bbl:bambu-lab-p1s:0.2",
+      );
     });
   });
 });

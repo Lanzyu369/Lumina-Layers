@@ -176,6 +176,7 @@ export const useCalibrationStore = create<
         printer_id: settings.printerModel,
         slicer: settings.slicerSoftware,
         nozzle_size: settings.nozzleSize,
+        device_profile_id: settings.deviceProfileId,
       });
       set({
         downloadUrl: response.download_url,
@@ -215,6 +216,7 @@ export const useCalibrationStore = create<
         printer_id: settings.printerModel,
         slicer: settings.slicerSoftware,
         nozzle_size: settings.nozzleSize,
+        device_profile_id: settings.deviceProfileId,
       });
       set({
         downloadUrl: response.kit_download_url,

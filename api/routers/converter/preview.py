@@ -77,6 +77,23 @@ from .common import (
 
 router = APIRouter()
 log = get_logger(__name__)
+LARGE_FORMAT_SVG_PREVIEW_CACHE_MAX_BYTES_ENV = (
+    "LUMINA_LARGE_FORMAT_SVG_PREVIEW_CACHE_MAX_BYTES"
+)
+DEFAULT_LARGE_FORMAT_SVG_PREVIEW_CACHE_MAX_BYTES = 1024 * 1024 * 1024
+
+
+def _get_large_format_svg_preview_cache_max_bytes() -> int:
+    """Return the cache guardrail for full-resolution large-format SVG previews."""
+
+    raw = os.getenv(LARGE_FORMAT_SVG_PREVIEW_CACHE_MAX_BYTES_ENV)
+    if raw is None or raw.strip() == "":
+        return DEFAULT_LARGE_FORMAT_SVG_PREVIEW_CACHE_MAX_BYTES
+    try:
+        parsed = int(raw)
+    except ValueError:
+        return DEFAULT_LARGE_FORMAT_SVG_PREVIEW_CACHE_MAX_BYTES
+    return max(1, parsed)
 _DEFAULT_GENERATE_SEGMENTED_GLB = generate_segmented_glb
 
 
@@ -240,6 +257,7 @@ def _enforce_preview_cache_size_limit(
     color_layers: int | None,
     material_layer_count: int | None,
     material_source: str,
+    max_bytes: int | None = None,
 ) -> None:
     """Reject previews whose estimated cache arrays exceed the guardrail.
 
@@ -266,8 +284,8 @@ def _enforce_preview_cache_size_limit(
         layers,
         include_original=True,
     )
-    max_bytes = get_preview_cache_max_bytes()
-    if estimate_bytes <= max_bytes:
+    resolved_max_bytes = max_bytes if max_bytes is not None else get_preview_cache_max_bytes()
+    if estimate_bytes <= resolved_max_bytes:
         return
 
     raise HTTPException(
@@ -278,7 +296,7 @@ def _enforce_preview_cache_size_limit(
                 "Estimated preview cache arrays exceed the configured limit."
             ),
             "estimate_bytes": estimate_bytes,
-            "max_bytes": max_bytes,
+            "max_bytes": resolved_max_bytes,
             "estimated_width": width,
             "estimated_height": height,
             "estimated_layers": layers,
@@ -560,6 +578,7 @@ async def convert_preview(
     chroma_gate: float = Form(15.0, description="暗色彩度门槛"),
     use_lut_constrained: bool = Form(False, description="高精度LUT约束匹配"),
     auto_dynamic_range: bool = Form(False, description="自动动态范围压缩（实验性）"),
+    high_precision_3d_preview: bool = Form(False, description="3D高精度颜色预览"),
     is_dark: bool = Form(True, description="深色主题"),
     material_source: str = Form("lut", description="颜色来源: lut | material_archive"),
     selected_materials: list[str] | str | None = Form(None, description="已选耗材目录名列表"),
@@ -578,6 +597,7 @@ async def convert_preview(
         None,
         description="耗材档案模式底板耗材索引（基于 selected_materials 的 0-based 索引）",
     ),
+    large_format_enabled: bool = Form(False, description="是否处于大画幅模式"),
     store: SessionStore = Depends(get_session_store),
     registry: FileRegistry = Depends(get_file_registry),
     pool: WorkerPoolManager = Depends(get_worker_pool),
@@ -660,6 +680,11 @@ async def convert_preview(
         temp_path = await ensure_png_tempfile(image)
         _t_upload = time.perf_counter() - _t
         is_svg_upload = str(temp_path).lower().endswith(".svg")
+        use_large_format_svg_guard = (
+            large_format_enabled
+            and modeling_mode == "vector"
+            and is_svg_upload
+        )
         _enforce_preview_cache_size_limit(
             image_path=temp_path,
             target_width_mm=target_width_mm,
@@ -668,6 +693,11 @@ async def convert_preview(
             color_layers=color_layers,
             material_layer_count=material_layer_count,
             material_source=material_source,
+            max_bytes=(
+                _get_large_format_svg_preview_cache_max_bytes()
+                if use_large_format_svg_guard
+                else None
+            ),
         )
         if modeling_mode == "vector" and is_svg_upload:
             svg_large_format_policy = {
@@ -745,6 +775,7 @@ async def convert_preview(
             material_layer_height_mm,
             material_grid_resolution,
             auto_dynamic_range,
+            high_precision_3d_preview,
             svg_pixels_per_mm,
         )
         _t_worker = time.perf_counter() - _t
@@ -1050,16 +1081,24 @@ async def convert_preview(
         contours_data = cache_data["color_contours"]
 
     _t_api_total = time.perf_counter() - _api_t0
+    performance_timing = {
+        "total_ms": round(_t_api_total * 1000, 3),
+        "upload_ms": round(_t_upload * 1000, 3),
+        "worker_ms": round(_t_worker * 1000, 3),
+        "pickle_load_ms": round(_t_pickle_load * 1000, 3),
+        "segmented_glb_ms": round(_t_glb * 1000, 3),
+        "palette_ms": round(_t_palette * 1000, 3),
+    }
     log.info(
         "Preview endpoint timing",
         extra={
             "event": "converter_preview_timing",
-            "duration_ms": round(_t_api_total * 1000, 3),
-            "upload_ms": round(_t_upload * 1000, 3),
-            "worker_ms": round(_t_worker * 1000, 3),
-            "pickle_load_ms": round(_t_pickle_load * 1000, 3),
-            "segmented_glb_ms": round(_t_glb * 1000, 3),
-            "palette_ms": round(_t_palette * 1000, 3),
+            "duration_ms": performance_timing["total_ms"],
+            "upload_ms": performance_timing["upload_ms"],
+            "worker_ms": performance_timing["worker_ms"],
+            "pickle_load_ms": performance_timing["pickle_load_ms"],
+            "segmented_glb_ms": performance_timing["segmented_glb_ms"],
+            "palette_ms": performance_timing["palette_ms"],
         },
     )
 
@@ -1075,6 +1114,7 @@ async def convert_preview(
         dimensions=dimensions,
         contours=contours_data,
         warnings=list((svg_large_format_policy or {}).get("warnings", [])),
+        performance_timing=performance_timing,
     )
 
 

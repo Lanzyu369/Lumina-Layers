@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+import core.vector_engine as vector_engine
 from core.vector_engine import VectorProcessor
 
 
@@ -94,6 +95,20 @@ def test_fill_eq_stroke_default_matches_b2_no_stroke_bounds(processor: VectorPro
         item["bounds_mm"] for item in expected_manifest["geometries"] if item["name"] == "Yellow"
     )
     _assert_bounds_close(actual_bounds, expected_bounds, _pixel_tolerance_mm(expected_meta))
+
+
+def test_default_stroke_disabled_does_not_resolve_stroke_color(
+    processor: VectorProcessor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_on_stroke_color(_color_obj):
+        raise AssertionError("default stroke-disabled parse should not resolve stroke color")
+
+    monkeypatch.setattr(vector_engine, "_color_object_to_hex", fail_on_stroke_color)
+
+    analysis = processor.analyze_svg(_fixture_svg("fill_eq_stroke.svg"), target_width_mm=TARGET_WIDTH_MM)
+
+    assert analysis.shape_data
 
 
 def test_fill_eq_stroke_legacy_mode_matches_b2_baseline_bounds(processor: VectorProcessor) -> None:

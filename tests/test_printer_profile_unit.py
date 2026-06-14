@@ -157,6 +157,25 @@ class TestLoadPrinterTemplate:
         assert template["top_surface_line_width"] == "0.22"
         assert template["support_line_width"] == "0.22"
 
+    @pytest.mark.parametrize(
+        ("printer_id", "process_id"),
+        [
+            ("bambu-lab-a2l", "0.08mm High Quality @BBL A2L 0.2 nozzle"),
+            ("bambu-lab-x2d", "0.08mm High Quality @BBL X2D 0.2 nozzle"),
+        ],
+    )
+    def test_new_bambu_0_2_templates_keep_official_process_identity(
+        self,
+        printer_id: str,
+        process_id: str,
+    ) -> None:
+        template = load_printer_template(printer_id, nozzle_size="0.2")
+
+        assert template["print_settings_id"] == process_id
+        assert template["inherits_group"][0] == process_id
+        assert "0.2 nozzle" in template["default_print_profile"]
+        assert template["print_compatible_printers"] == [template["printer_settings_id"]]
+
 
 # ====================================================================
 # Task 7.2 — 3MF export uses correct template

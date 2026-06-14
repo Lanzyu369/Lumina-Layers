@@ -448,6 +448,7 @@ export const useFiveColorStore = create<FiveColorState & FiveColorActions>()(
             printer_id: useSettingsStore.getState().printerModel,
             slicer: useSettingsStore.getState().slicerSoftware,
             nozzle_size: useSettingsStore.getState().nozzleSize,
+            device_profile_id: useSettingsStore.getState().deviceProfileId,
           });
           set({
             swatchDownloadUrl: response.download_url,

@@ -7,6 +7,7 @@ import {
   listGradientCardMaterials,
   previewMaterialRecipe,
 } from "../api/extractor";
+import { DEFAULT_SETTINGS, useSettingsStore } from "../stores/settingsStore";
 
 vi.mock("../api/extractor", () => ({
   colorcheckerConfirm: vi.fn(),
@@ -40,6 +41,13 @@ const buildLibraryResponse = (count: number) => ({
 describe("MaterialRecipeQueryPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    useSettingsStore.setState({
+      ...DEFAULT_SETTINGS,
+      printerModel: "bambu-h2d",
+      slicerSoftware: "BambuStudio",
+      nozzleSize: "0.2",
+      deviceProfileId: "BambuStudio:bbl:bambu-lab-h2d:0.2",
+    });
     vi.mocked(generateMaterialRecipeSwatch).mockResolvedValue({
       status: "ok",
       message: "Generated",
@@ -258,6 +266,7 @@ describe("MaterialRecipeQueryPanel", () => {
     });
     const callArgs = vi.mocked(generateMaterialRecipeSwatch).mock.calls[0][0];
     expect(callArgs.recipes[0].directory_names).toEqual(["mat-1", "mat-0"]);
+    expect(callArgs.device_profile_id).toBe("BambuStudio:bbl:bambu-lab-h2d:0.2");
   });
 
   it("disables reverse button when fewer than two layers are present", async () => {

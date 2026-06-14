@@ -115,6 +115,7 @@ def assemble_puzzle_3mf(
     slicer: str,
     nozzle_size: str = "0.4",
     overview_png_bytes: bytes | None = None,
+    device_profile_id: str | None = None,
 ) -> str:
     """Assemble multiple puzzle piece 3MF files into one grouped 3MF.
     将多个拼图单块 3MF 组装为一个按块分组的统一 3MF。
@@ -136,6 +137,8 @@ def assemble_puzzle_3mf(
             喷嘴尺寸变体，用于模板选择。
         overview_png_bytes: Combined assembly preview PNG reused for package thumbnails.
             （组合总览 PNG，可复用于包内缩略图资源）
+        device_profile_id: Optional generated machine registry profile ID.
+            可选的生成式机器注册表设备配置 ID。
 
     Returns:
         str: Output 3MF path.
@@ -256,8 +259,12 @@ def assemble_puzzle_3mf(
         printer_id=printer_id,
         slicer=slicer,
         nozzle_size=nozzle_size,
+        device_profile_id=device_profile_id,
         enable_base_layer_height_modifier=False,
     )
+    _set_root_model_metadata(combined_root, "Application", writer._get_app_version_str())
+    _set_root_model_metadata(combined_root, "BambuStudio:3mfVersion", "1")
+    base_files["3D/3dmodel.model"] = _to_xml_bytes(combined_root)
     base_files.pop("Metadata/layer_config_ranges.xml", None)
     if writer._should_emit_bambu_aux_parts():
         base_files["Metadata/cut_information.xml"] = _build_cut_information_bytes(len(piece_packages))
@@ -277,17 +284,20 @@ def assemble_puzzle_3mf(
         printer_id=printer_id,
         slicer=slicer,
         nozzle_size=nozzle_size,
+        device_profile_id=device_profile_id,
     )
     base_files["Metadata/slice_info.config"] = _build_combined_slice_info_bytes(
         printer_id=printer_id,
         slicer=slicer,
         nozzle_size=nozzle_size,
+        device_profile_id=device_profile_id,
     )
     _update_combined_filament_sequence(
         base_files=base_files,
         printer_id=printer_id,
         slicer=slicer,
         nozzle_size=nozzle_size,
+        device_profile_id=device_profile_id,
     )
     if overview_png_bytes is not None:
         for preview_asset_path in (
@@ -307,6 +317,17 @@ def assemble_puzzle_3mf(
         for name, data in base_files.items():
             archive.writestr(name, data)
     return output_path
+
+
+def _set_root_model_metadata(root: ET.Element, name: str, value: str) -> None:
+    """Set model-level 3MF metadata under the root model element."""
+    for metadata_node in root.findall("m:metadata", _NS):
+        if metadata_node.get("name") == name:
+            metadata_node.text = value
+            return
+    metadata_node = ET.Element(f"{{{_CORE_NS}}}metadata", attrib={"name": name})
+    metadata_node.text = value
+    root.insert(0, metadata_node)
 
 
 def _load_piece_package(piece_source: PuzzlePiece3MFSource) -> _LoadedPiecePackage:
@@ -513,6 +534,7 @@ def _build_combined_project_settings_bytes(
     printer_id: str,
     slicer: str,
     nozzle_size: str,
+    device_profile_id: str | None,
 ) -> bytes:
     """Build combined ``project_settings.config`` with a stable global palette.
 
@@ -538,6 +560,7 @@ def _build_combined_project_settings_bytes(
             printer_id=printer_id,
             slicer=slicer,
             nozzle_size=nozzle_size,
+            device_profile_id=device_profile_id,
             enable_base_layer_height_modifier=False,
         )
         settings = writer._get_base_config_template()
@@ -567,6 +590,7 @@ def _build_combined_slice_info_bytes(
     printer_id: str,
     slicer: str,
     nozzle_size: str,
+    device_profile_id: str | None,
 ) -> bytes:
     """Build fresh ``slice_info.config`` bytes for the combined package.
 
@@ -580,6 +604,7 @@ def _build_combined_slice_info_bytes(
         printer_id=printer_id,
         slicer=slicer,
         nozzle_size=nozzle_size,
+        device_profile_id=device_profile_id,
         enable_base_layer_height_modifier=False,
     )
     return writer._build_slice_info_bytes()
@@ -591,6 +616,7 @@ def _update_combined_filament_sequence(
     printer_id: str,
     slicer: str,
     nozzle_size: str,
+    device_profile_id: str | None,
 ) -> None:
     """Refresh slicer-specific filament-sequence metadata for the combined package.
 
@@ -604,6 +630,7 @@ def _update_combined_filament_sequence(
         printer_id=printer_id,
         slicer=slicer,
         nozzle_size=nozzle_size,
+        device_profile_id=device_profile_id,
         enable_base_layer_height_modifier=False,
     )
     if not writer._should_emit_bambu_aux_parts():

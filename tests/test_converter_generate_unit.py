@@ -326,6 +326,7 @@ class TestGenerateParameterCompleteness:
                 "printer_id": "orca-p1s",
                 "slicer": "OrcaSlicer",
                 "nozzle_size": "0.2",
+                "device_profile_id": "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
             },
         }
 
@@ -377,6 +378,7 @@ class TestGenerateParameterCompleteness:
         assert submitted_params["enable_cleanup"] is False
         assert submitted_params["separate_backing"] is True
         assert submitted_params["nozzle_size"] == "0.2"
+        assert submitted_params["device_profile_id"] == "OrcaSlicer:bbl:bambu-lab-p1s:0.2"
 
         # Verify modeling_mode is converted to core enum
         assert submitted_params["modeling_mode"] == CoreModelingMode("high-fidelity")
@@ -2114,8 +2116,61 @@ def test_recover_virtual_materials_from_material_archive_preview_cache() -> None
 def test_material_archive_backing_color_id_uses_requested_index() -> None:
     assert _resolve_material_archive_backing_color_id(["mat-a", "mat-b", "mat-c"], 2) == 2
     assert _resolve_material_archive_backing_color_id(["mat-a"], None) == 0
+    assert _resolve_material_archive_backing_color_id(["mat-green", "mat-white"], None) == 1
+    assert _resolve_material_archive_backing_color_id(["brand/PLA 绿", "brand/PLA 白"], None) == 1
     with pytest.raises(ValueError, match="outside selected_materials"):
         _resolve_material_archive_backing_color_id(["mat-a"], 1)
+
+
+def test_generate_route_infers_material_archive_white_backing_when_unspecified(tmp_path) -> None:
+    _test_store.clear_all()
+    image_path = tmp_path / "input.png"
+    out_path = tmp_path / "out.3mf"
+    Image.fromarray(np.zeros((4, 4, 3), dtype=np.uint8)).save(image_path)
+    out_path.write_bytes(b"3mf")
+
+    session_id = _test_store.create()
+    _test_store.put(session_id, "image_path", str(image_path))
+    _test_store.put(session_id, "lut_path", "__material_archive__")
+    _test_store.put(session_id, "material_source", "material_archive")
+    _test_store.put(
+        session_id,
+        "selected_materials",
+        ["brand/pla-green", "brand/pla-yellow", "brand/pla-white"],
+    )
+    _test_store.put(session_id, "material_layer_count", 7)
+    _test_store.put(session_id, "material_layer_height_mm", 0.08)
+    _test_store.put(session_id, "replacement_regions", [])
+    _test_store.put(session_id, "free_color_set", set())
+    _test_store.put(
+        session_id,
+        "preview_cache",
+        {
+            "target_w": 4,
+            "target_h": 4,
+            "target_width_mm": 40.0,
+            "matched_rgb": np.zeros((4, 4, 3), dtype=np.uint8),
+            "mask_solid": np.ones((4, 4), dtype=bool),
+            "material_matrix": np.zeros((4, 4, 7), dtype=np.uint8),
+        },
+    )
+
+    _mock_pool.submit = AsyncMock(
+        return_value={
+            "threemf_path": str(out_path),
+            "glb_path": None,
+            "status_msg": "OK",
+        }
+    )
+
+    response = client.post(
+        "/api/convert/generate",
+        json={"session_id": session_id, "params": {"lut_name": "__material_archive__"}},
+    )
+
+    assert response.status_code == 200, response.text
+    submitted_params = _mock_pool.submit.call_args.args[3]
+    assert submitted_params["material_backing_material_index"] == 2
 
 
 def test_generate_route_forwards_material_archive_backing_index(tmp_path) -> None:

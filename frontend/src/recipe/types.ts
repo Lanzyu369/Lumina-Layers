@@ -43,6 +43,7 @@ export interface ConverterRecipeBase {
   /** @deprecated removed; kept optional for legacy recipe parsing only */
   bg_tol?: number;
   quantize_colors: number;
+  high_precision_3d_preview?: boolean;
   enable_cleanup: boolean;
   svg_pixels_per_mm?: number;
   hue_enable: boolean;
@@ -143,6 +144,8 @@ export interface ConverterRecipeDevice {
   printer_id: string;
   slicer: string;
   nozzle_size: string;
+  /** V2 generated machine-registry device profile ID. */
+  device_profile_id?: string;
 }
 
 export interface ConverterRecipeFridgeMagnet {

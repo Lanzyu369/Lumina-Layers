@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 
 from helpers_threemf_manifest import (
@@ -13,6 +14,23 @@ from helpers_threemf_manifest import (
     manifest_sidecar_flags,
     supported_printer_slicer_pairs,
 )
+
+
+def test_template_matrix_script_imports_expected_helpers() -> None:
+    module = importlib.import_module("scripts.verify_3mf_template_matrix")
+
+    assert callable(module.main)
+
+
+def test_template_matrix_helper_exposes_expected_template_loader() -> None:
+    template = load_expected_template_direct(
+        printer_id="bambu-h2d",
+        slicer="BambuStudio",
+        nozzle_size="0.4",
+    )
+
+    assert template["printer_model"]
+    assert template["layer_height"] == "0.08"
 
 
 def test_3mf_template_matrix_matches_selected_template_and_family_rules() -> None:

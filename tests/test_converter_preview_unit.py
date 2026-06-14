@@ -31,6 +31,7 @@ from api.preview_cache_artifacts import (
     is_preview_cache_artifact_ref,
 )
 from api.routers.converter.preview import (
+    _enforce_preview_cache_size_limit,
     _parse_selected_materials,
     _resolve_upload_source_basename,
     convert_preview,
@@ -1195,3 +1196,59 @@ class TestParseSelectedMaterials:
     def test_malformed_json_falls_back_to_string(self):
         """Invalid JSON is treated as a single literal name."""
         assert _parse_selected_materials("[not-json") == ["[not-json"]
+
+
+class TestLargeFormatSvgPreviewCacheSizing:
+    """Regression coverage for tall SVG + material archive preview guard."""
+
+    def test_uncapped_tall_svg_preview_exceeds_limit(self, tmp_path) -> None:
+        svg_path = tmp_path / "tall.svg"
+        svg_path.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" '
+            'width="647.179993" height="4091" viewBox="0 0 647.179993 4091">'
+            '<path d="M0 0H647.179993V4091H0Z" fill="#ffffff"/>'
+            '</svg>',
+            encoding="utf-8",
+        )
+
+        with patch(
+            "api.routers.converter.preview.get_preview_cache_max_bytes",
+            return_value=512 * 1024 * 1024,
+        ):
+            try:
+                _enforce_preview_cache_size_limit(
+                    image_path=str(svg_path),
+                    target_width_mm=170,
+                    modeling_mode="vector",
+                    svg_pixels_per_mm=10,
+                    color_layers=None,
+                    material_layer_count=5,
+                    material_source="material_archive",
+                )
+            except Exception as exc:
+                assert getattr(exc, "status_code", None) == 422
+                assert exc.detail["error"] == "preview_cache_size_limit_exceeded"
+            else:
+                raise AssertionError("uncapped tall SVG preview should exceed the cache guardrail")
+
+    def test_large_format_svg_preview_uses_higher_guardrail(self, tmp_path) -> None:
+        """Tall large-format SVG previews can run full-res without removing all guardrails."""
+        svg_path = tmp_path / "tall.svg"
+        svg_path.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" '
+            'width="647.179993" height="4091" viewBox="0 0 647.179993 4091">'
+            '<path d="M0 0H647.179993V4091H0Z" fill="#ffffff"/>'
+            '</svg>',
+            encoding="utf-8",
+        )
+
+        _enforce_preview_cache_size_limit(
+            image_path=str(svg_path),
+            target_width_mm=170,
+            modeling_mode="vector",
+            svg_pixels_per_mm=10,
+            color_layers=None,
+            material_layer_count=5,
+            material_source="material_archive",
+            max_bytes=1024 * 1024 * 1024,
+        )

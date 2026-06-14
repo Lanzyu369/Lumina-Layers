@@ -10,6 +10,7 @@ export default function AdvancedSettings() {
   const hue_enable = useConverterStore((s) => s.hue_enable);
   const use_lut_constrained = useConverterStore((s) => s.use_lut_constrained);
   const auto_dynamic_range = useConverterStore((s) => s.auto_dynamic_range);
+  const high_precision_3d_preview = useConverterStore((s) => s.high_precision_3d_preview);
   const chroma_gate = useConverterStore((s) => s.chroma_gate);
   const quantize_colors_unlocked = useConverterStore((s) => s.quantize_colors_unlocked);
   const setEnableCleanup = useConverterStore((s) => s.setEnableCleanup);
@@ -17,6 +18,7 @@ export default function AdvancedSettings() {
   const setHueEnable = useConverterStore((s) => s.setHueEnable);
   const setUseLutConstrained = useConverterStore((s) => s.setUseLutConstrained);
   const setAutoDynamicRange = useConverterStore((s) => s.setAutoDynamicRange);
+  const setHighPrecision3dPreview = useConverterStore((s) => s.setHighPrecision3dPreview);
   const setChromaGate = useConverterStore((s) => s.setChromaGate);
   const setQuantizeColorsUnlocked = useConverterStore((s) => s.setQuantizeColorsUnlocked);
 
@@ -45,6 +47,12 @@ export default function AdvancedSettings() {
         tooltip={t("adv_auto_dynamic_range_hint")}
         checked={auto_dynamic_range}
         onChange={setAutoDynamicRange}
+      />
+      <Checkbox
+        label={t("adv_high_precision_3d_preview")}
+        tooltip={t("adv_high_precision_3d_preview_hint")}
+        checked={high_precision_3d_preview}
+        onChange={setHighPrecision3dPreview}
       />
       <Checkbox
         label={t("adv_hue_protection")}

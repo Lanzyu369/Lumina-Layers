@@ -36,7 +36,7 @@ from shapely.validation import make_valid
 
 from api.structured_logging import get_logger
 from config import BedManager, PrinterConfig, normalize_nozzle_size
-from core.pipeline import p06_bed_rendering, s09_export_3mf
+from core.pipeline import p06_bed_rendering, s09_export_3mf, vector_glb_preview
 from core.pipeline.pipeline_utils import extract_color_palette
 from core.pipeline.s03_color_replacement import _normalize_color_replacements_input
 from core.pipeline.processing_ops.svg_rasterizer import rasterize_svg
@@ -629,12 +629,95 @@ def _clip_vector_outline_buffer_to_expected_bounds(expanded, union, width_units:
     return clipped
 
 
+def _resolve_vector_outline_export_size_mm(
+    analysis,
+    scale_factor: float,
+) -> tuple[float, float] | None:
+    """Return the vector export width/height in millimetres, if available.
+    返回 vector 导出宽高（毫米），不可可靠解析时返回 ``None``。
+
+    ``VectorProcessor.build_mesh`` derives its final coordinate transforms
+    from ``analysis.bbox[2:4] * analysis.scale_factor``. The outline helper
+    must use the same source so auxiliary outline geometry lands in the same
+    XY coordinate system as the colour and backing meshes.
+
+    ``VectorProcessor.build_mesh`` 使用 ``analysis.bbox[2:4] *
+    analysis.scale_factor`` 计算最终坐标变换；Outline 必须使用同一来源，
+    才能与主体色块和底板落在同一个 XY 坐标系。
+    """
+    bbox_raw = getattr(analysis, "bbox", None)
+    if not isinstance(bbox_raw, (list, tuple, np.ndarray)) or len(bbox_raw) < 4:
+        return None
+    try:
+        width_mm = float(bbox_raw[2]) * float(scale_factor)
+        height_mm = float(bbox_raw[3]) * float(scale_factor)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(width_mm) or not np.isfinite(height_mm):
+        return None
+    if width_mm <= 0 or height_mm <= 0:
+        return None
+    return width_mm, height_mm
+
+
+def _apply_vector_outline_export_transform(
+    outline_mesh: trimesh.Trimesh,
+    *,
+    analysis,
+    ctx: dict,
+    scale_factor: float,
+    export_color_mode: object | None = None,
+) -> None:
+    """Apply the same XY export transform used by vector body meshes.
+    对 Outline 应用与 vector 主体网格一致的 XY 导出变换。
+
+    Body meshes are normalised in ``VectorProcessor.build_mesh`` after
+    extrusion: SVG's Y-down coordinates are flipped into printer Y-up space,
+    and non-5-colour single-sided exports are mirrored on X. The Outline mesh
+    is generated outside ``build_mesh``, so it must repeat those two transforms
+    explicitly.
+
+    主体网格在 ``VectorProcessor.build_mesh`` 里完成坐标归一：先把 SVG 的
+    Y-down 坐标翻到打印坐标，再对非 5 色单面导出做 X 镜像。Outline 是在
+    ``build_mesh`` 外部生成的，因此这里显式复用同一组变换。
+    """
+    size_mm = _resolve_vector_outline_export_size_mm(analysis, scale_factor)
+    if size_mm is None:
+        return
+    width_mm, height_mm = size_mm
+
+    y_flip = np.eye(4)
+    y_flip[1, 1] = -1.0
+    y_flip[1, 3] = float(height_mm)
+    outline_mesh.apply_transform(y_flip)
+
+    structure_mode_text = str(ctx.get("structure_mode", "") or "")
+    # Match VectorProcessor.build_mesh(), which uses the processor's
+    # color_mode for the single-sided X mirror decision. In material-archive
+    # mode that value is "Material Archive", not the UI color_mode stored in
+    # ctx.
+    color_mode_source = (
+        export_color_mode
+        if export_color_mode is not None
+        else ctx.get("color_mode", "")
+    )
+    color_mode_text = str(color_mode_source or "")
+    is_single_sided = "单面" in structure_mode_text or "Single" in structure_mode_text
+    is_5color = "5-Color Extended" in color_mode_text
+    if is_single_sided and not is_5color:
+        mirror_x = np.eye(4)
+        mirror_x[0, 0] = -1.0
+        mirror_x[0, 3] = float(width_mm)
+        outline_mesh.apply_transform(mirror_x)
+
+
 def _generate_vector_outline_mesh(
     analysis,
     outline_width_mm: float,
     base_aux_color: list[int],
     base_aux_material_name: str | None,
     ctx: dict,
+    export_color_mode: object | None = None,
 ) -> "trimesh.Trimesh | None":
     """Build a ring-shaped Outline mesh from ``analysis.matched_shapes``.
     从 ``analysis.matched_shapes`` 生成环形 Outline mesh。
@@ -850,6 +933,14 @@ def _generate_vector_outline_mesh(
         outline_mesh = meshes[0]
     else:
         outline_mesh = trimesh.util.concatenate(meshes)
+
+    _apply_vector_outline_export_transform(
+        outline_mesh,
+        analysis=analysis,
+        ctx=ctx,
+        scale_factor=scale_factor,
+        export_color_mode=export_color_mode,
+    )
 
     rgba = list(base_aux_color)
     if len(rgba) < 4:
@@ -1292,11 +1383,11 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
         ctx["preview_colors"] = dict(analysis.preview_colors)
         ctx["slot_names"] = list(analysis.slot_names)
 
-        # Inject outline geometry into the preview cache as metadata only.
-        # User-visible 2D / GLB preview rendering consumes this in the
-        # follow-up scope tracked by the SVG vector outline acceptance notes.
-        # preview 分支只暴露 outline 元数据；用户可见的 2D / GLB 像素渲染
-        # 归 SVG vector outline 验收归档里的 OQ-6 follow-up 处理。
+        # Inject outline geometry into the preview cache. The SVG/vector shape
+        # union stays the declared geometry source; S11 copies this mesh into
+        # the preview GLB instead of deriving outline from backing/fridge masks.
+        # preview 分支负责生成来自矢量 shape union 的 outline mesh；S11 复用
+        # 这个 mesh 导出 GLB，避免从 backing / 冰箱贴 mask 重新推断轮廓。
         if bool(ctx.get("enable_outline", False)):
             try:
                 outline_width_mm = float(ctx.get("outline_width", 2.0) or 2.0)
@@ -1326,6 +1417,7 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
                 base_aux_color=outline_color,
                 base_aux_material_name=outline_material_name,
                 ctx=ctx,
+                export_color_mode=getattr(vec_processor, "color_mode", color_mode),
             )
             if outline_mesh is not None:
                 cache["outline_geometry"] = outline_mesh
@@ -1456,6 +1548,11 @@ def _run_vector_branch(ctx: dict) -> dict:
         vec_processor.fridge_magnets = list(fridge_magnets)
         vec_processor.enable_coating = bool(ctx.get("enable_coating", False))
         vec_processor.coating_height_mm = float(ctx.get("coating_height_mm", 0.08))
+        vec_processor.enable_outline = bool(ctx.get("enable_outline", False))
+        try:
+            vec_processor.outline_width_mm = float(ctx.get("outline_width", 2.0) or 2.0)
+        except (TypeError, ValueError):
+            vec_processor.outline_width_mm = 2.0
         vec_processor.auto_dynamic_range = bool(ctx.get("auto_dynamic_range", False))
         if hasattr(vec_processor, "backing_color_id"):
             vec_processor.backing_color_id = backing_channel_idx
@@ -1821,6 +1918,7 @@ def _run_vector_branch(ctx: dict) -> dict:
                 base_aux_color=outline_color,
                 base_aux_material_name=outline_material_name,
                 ctx=ctx,
+                export_color_mode=vec_processor.color_mode,
             )
             if outline_mesh is not None:
                 outline_name = "Outline"
@@ -2011,6 +2109,7 @@ def _run_vector_branch(ctx: dict) -> dict:
             color_height_mm=float(ctx.get("bambu_color_height_mm", 0.0)),
             face_orientation=str(ctx.get("bambu_face_orientation", "down")),
             cover_source=vector_cover_source,
+            device_profile_id=ctx.get("device_profile_id") or None,
         )
         vector_timing["export_3mf_s"] = time.perf_counter() - export_t0
         log.info(
@@ -2029,110 +2128,22 @@ def _run_vector_branch(ctx: dict) -> dict:
         glb_path = None
         glb_t0 = time.perf_counter()
         try:
-            import trimesh as _trimesh
-
             glb_path = os.path.join(OUTPUT_DIR, generate_preview_filename(base_name))
-            glb_scene = _trimesh.Scene()
             glb_source_scene = _make_vector_glb_preview_scene(
                 scene,
                 structure_mode=structure_mode,
                 color_mode=vec_color_mode,
             )
-
-            def _coerce_preview_rgba(value: object) -> np.ndarray | None:
-                """Return a safe uint8 RGBA preview color, or ``None``.
-
-                Convert vector preview colors without touching source mesh
-                visuals. Some vector meshes carry malformed visual arrays
-                whose length does not match faces; GLB preview export rebuilds
-                visuals from the authoritative slot color table instead.
-
-                将矢量预览颜色转换为安全的 uint8 RGBA。这里故意不读取源
-                mesh 的 visual，避免有问题的颜色数组在 GLB 导出时触发维度
-                不匹配。
-                """
-
-                if value is None:
-                    return None
-                try:
-                    rgba = np.asarray(value, dtype=float).reshape(-1)
-                except (TypeError, ValueError):
-                    return None
-                if rgba.size < 3:
-                    return None
-                if rgba.max(initial=0.0) <= 1.0:
-                    rgba = rgba * 255.0
-                if rgba.size < 4:
-                    rgba = np.concatenate([rgba[:3], np.array([255.0])])
-                return np.clip(rgba[:4], 0, 255).astype(np.uint8)
-
-            def _color_for_geometry(geom_name: object) -> np.ndarray:
-                """Resolve preview color from vector slot metadata.
-
-                先按几何名查，再按几何名在 slot 列表里的位置查；都没有时
-                使用稳定的中性灰，保证预览 GLB 至少能导出。
-                """
-
-                for key in (geom_name, str(geom_name)):
-                    if key in vec_preview_colors:
-                        rgba = _coerce_preview_rgba(vec_preview_colors.get(key))
-                        if rgba is not None:
-                            return rgba
-
-                try:
-                    slot_index = list(vec_slot_list).index(str(geom_name))
-                except ValueError:
-                    slot_index = -1
-                if slot_index >= 0:
-                    rgba = _coerce_preview_rgba(vec_preview_colors.get(slot_index))
-                    if rgba is not None:
-                        return rgba
-
-                return np.array([200, 200, 200, 255], dtype=np.uint8)
-
-            for geom_name, source_geom in glb_source_scene.geometry.items():
-                vertices = getattr(source_geom, "vertices", None)
-                faces = getattr(source_geom, "faces", None)
-                if vertices is None or faces is None:
-                    continue
-                vertices_arr = np.asarray(vertices, dtype=np.float64)
-                faces_arr = np.asarray(faces, dtype=np.int64)
-                if vertices_arr.size == 0 or faces_arr.size == 0:
-                    continue
-                face_count = int(len(faces_arr))
-                if face_count <= 0:
-                    continue
-
-                geom = _trimesh.Trimesh(
-                    vertices=vertices_arr.copy(),
-                    faces=faces_arr.copy(),
-                    process=False,
-                )
-                rgba = _color_for_geometry(geom_name)
-                geom.visual = _trimesh.visual.ColorVisuals(
-                    mesh=geom,
-                    face_colors=np.tile(rgba, (face_count, 1)),
-                )
-                # Use "color_RRGGBB" naming so InteractiveModelViewer can
-                # identify colour layers via the `color_` prefix convention.
-                # Append a suffix when duplicate hex values occur (two slots
-                # may share an RGB, e.g. Board merged into White).
-                # 使用 "color_RRGGBB" 命名，让 InteractiveModelViewer 能通过
-                # `color_` 前缀识别颜色层。相同 hex 时追加后缀防止冲突。
-                _hex = f"{int(rgba[0]):02x}{int(rgba[1]):02x}{int(rgba[2]):02x}"
-                _candidate = f"color_{_hex}"
-                _n = 0
-                while _candidate in glb_scene.geometry:
-                    _n += 1
-                    _candidate = f"color_{_hex}_{_n}"
-                glb_scene.add_geometry(geom, geom_name=_candidate)
-
-            exported_glb = glb_scene.export(glb_path, file_type="glb")
-            if isinstance(exported_glb, (bytes, bytearray)):
-                with open(glb_path, "wb") as glb_file:
-                    glb_file.write(exported_glb)
-            if not os.path.exists(glb_path):
-                raise RuntimeError(f"Vector GLB export did not create file: {glb_path}")
+            vector_glb_preview.export_vector_glb_preview(
+                scene=glb_source_scene,
+                output_path=glb_path,
+                structure_mode=structure_mode,
+                color_mode=vec_color_mode,
+                preview_colors=vec_preview_colors,
+                slot_list=list(vec_slot_list),
+                analysis=analysis,
+                ctx=ctx,
+            )
             log.debug(
                 "Vector preview GLB exported",
                 extra={
@@ -2188,6 +2199,7 @@ def _run_vector_branch(ctx: dict) -> dict:
         # 5. Stats & timing
         Stats.increment("conversions")
         vector_timing["vector_branch_total_s"] = time.perf_counter() - vector_total_t0
+        ctx["vector_timing"] = dict(vector_timing)
         _log_vector_timings(vector_timing)
 
         msg = "Vector conversion complete! Objects merged by material."

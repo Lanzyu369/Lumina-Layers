@@ -24,6 +24,14 @@ vi.mock("../api/extractor", () => ({
 }));
 
 describe("MaterialLibraryPanel", () => {
+  const expandAllMaterialLibraryGroups = () => {
+    for (const toggle of screen.getAllByTestId("material-library-brand-group-toggle")) {
+      if (toggle.getAttribute("aria-expanded") === "false") {
+        fireEvent.click(toggle);
+      }
+    }
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
     useWidgetStore.setState({ activeTab: "material-library" });
@@ -78,6 +86,12 @@ describe("MaterialLibraryPanel", () => {
       expect(screen.getByTestId("material-library-panel")).toBeInTheDocument();
     });
 
+    await waitFor(() => {
+      expect(screen.getByTestId("material-library-brand-group-toggle")).toHaveAttribute("aria-expanded", "false");
+    });
+    expect(screen.queryByText("PLA Basic")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("material-library-brand-group-toggle"));
     expect(screen.getByText("PLA Basic")).toBeInTheDocument();
     expect(screen.queryByText(/下载 material\.json|download material\.json/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/下载 stage_A_parameters\.json|download stage_a_parameters\.json/i)).not.toBeInTheDocument();
@@ -156,7 +170,7 @@ describe("MaterialLibraryPanel", () => {
     render(<MaterialLibraryPanel />);
 
     await waitFor(() => {
-      expect(screen.getByText("PLA Red")).toBeInTheDocument();
+      expect(screen.getAllByTestId("material-library-brand-group")).toHaveLength(3);
     });
 
     const groups = screen.getAllByTestId("material-library-brand-group");
@@ -166,6 +180,19 @@ describe("MaterialLibraryPanel", () => {
       "Brand B",
       "",
     ]);
+
+    const firstGroupToggle = within(groups[0]).getByTestId("material-library-brand-group-toggle");
+    const secondGroupToggle = within(groups[1]).getByTestId("material-library-brand-group-toggle");
+    const unassignedToggle = within(groups[2]).getByTestId("material-library-brand-group-toggle");
+    expect(firstGroupToggle).toHaveAttribute("aria-expanded", "false");
+    expect(secondGroupToggle).toHaveAttribute("aria-expanded", "false");
+    expect(unassignedToggle).toHaveAttribute("aria-expanded", "false");
+    expect(within(groups[0]).queryByText("PLA Red")).not.toBeInTheDocument();
+
+    fireEvent.click(firstGroupToggle);
+    fireEvent.click(secondGroupToggle);
+    fireEvent.click(unassignedToggle);
+
     expect(within(groups[0]).getByText("PLA Red")).toBeInTheDocument();
     expect(within(groups[0]).getByText("PLA Yellow")).toBeInTheDocument();
     expect(within(groups[1]).getByText("PLA Blue")).toBeInTheDocument();
@@ -179,8 +206,6 @@ describe("MaterialLibraryPanel", () => {
       expect.stringMatching(/未分组|Unassigned/),
     ]);
 
-    const firstGroupToggle = within(groups[0]).getByTestId("material-library-brand-group-toggle");
-    expect(firstGroupToggle).toHaveAttribute("aria-expanded", "true");
     fireEvent.click(firstGroupToggle);
     expect(firstGroupToggle).toHaveAttribute("aria-expanded", "false");
     expect(within(groups[0]).queryByText("PLA Red")).not.toBeInTheDocument();
@@ -239,6 +264,12 @@ describe("MaterialLibraryPanel", () => {
     render(<MaterialLibraryPanel />);
 
     await waitFor(() => {
+      expect(screen.getByTestId("material-library-brand-group")).toBeInTheDocument();
+    });
+
+    expandAllMaterialLibraryGroups();
+
+    await waitFor(() => {
       expect(screen.getByText("PLA Basic")).toBeInTheDocument();
     });
 
@@ -260,6 +291,9 @@ describe("MaterialLibraryPanel", () => {
         estimatedRgb: [100, 120, 140],
       });
     });
+
+    expandAllMaterialLibraryGroups();
+
     await waitFor(() => {
       expect(screen.getByText("PLA Matte")).toBeInTheDocument();
     });
@@ -312,6 +346,12 @@ describe("MaterialLibraryPanel", () => {
     render(<MaterialLibraryPanel />);
 
     await waitFor(() => {
+      expect(screen.getByTestId("material-library-brand-group")).toBeInTheDocument();
+    });
+
+    expandAllMaterialLibraryGroups();
+
+    await waitFor(() => {
       expect(screen.getByText("PLA Basic")).toBeInTheDocument();
     });
 
@@ -360,6 +400,12 @@ describe("MaterialLibraryPanel", () => {
     });
 
     render(<MaterialLibraryPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("material-library-brand-group")).toBeInTheDocument();
+    });
+
+    expandAllMaterialLibraryGroups();
 
     await waitFor(() => {
       expect(screen.getByText("PLA Basic")).toBeInTheDocument();
@@ -414,6 +460,12 @@ describe("MaterialLibraryPanel", () => {
     render(<MaterialLibraryPanel />);
 
     await waitFor(() => {
+      expect(screen.getByTestId("material-library-brand-group")).toBeInTheDocument();
+    });
+
+    expandAllMaterialLibraryGroups();
+
+    await waitFor(() => {
       expect(screen.getByText("PLA Basic")).toBeInTheDocument();
     });
 
@@ -457,6 +509,12 @@ describe("MaterialLibraryPanel", () => {
     render(<MaterialLibraryPanel />);
 
     await waitFor(() => {
+      expect(screen.getByTestId("material-library-brand-group")).toBeInTheDocument();
+    });
+
+    expandAllMaterialLibraryGroups();
+
+    await waitFor(() => {
       expect(screen.getByText("PLA Basic")).toBeInTheDocument();
     });
 
@@ -498,6 +556,12 @@ describe("MaterialLibraryPanel", () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
 
     render(<MaterialLibraryPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("material-library-brand-group")).toBeInTheDocument();
+    });
+
+    expandAllMaterialLibraryGroups();
 
     await waitFor(() => {
       expect(screen.getByText("PLA Basic")).toBeInTheDocument();
@@ -559,6 +623,12 @@ describe("MaterialLibraryPanel", () => {
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
 
     render(<MaterialLibraryPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("material-library-brand-group")).toBeInTheDocument();
+    });
+
+    expandAllMaterialLibraryGroups();
 
     await waitFor(() => {
       expect(screen.getByText("PLA Basic")).toBeInTheDocument();
@@ -632,6 +702,13 @@ describe("MaterialLibraryPanel", () => {
     await waitFor(() => {
       expect(importGradientCardMaterials).toHaveBeenCalledWith([zipA, zipB]);
     });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("material-library-brand-group")).toBeInTheDocument();
+    });
+
+    expandAllMaterialLibraryGroups();
+
     await waitFor(() => {
       expect(screen.getByText("PLA Basic")).toBeInTheDocument();
     });

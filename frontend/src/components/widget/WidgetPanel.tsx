@@ -103,7 +103,6 @@ export const WidgetPanel = React.memo(function WidgetPanel({
   const toggleCollapse = useWidgetStore((s) => s.toggleCollapse);
   const setExpandedHeight = useWidgetStore((s) => s.setExpandedHeight);
   const isActiveDragWidget = useWidgetStore((s) => s.activeWidgetId === widgetId);
-  const canvasInteracting = useWidgetStore((s) => s.canvasInteracting);
 
   // Content area ref — used by ResizeObserver to measure expanded height
   const contentRef = useRef<HTMLDivElement>(null);
@@ -150,7 +149,6 @@ export const WidgetPanel = React.memo(function WidgetPanel({
   if (!widget.visible) return null;
 
   const isBeingDragged = isActiveDragWidget && !!transform;
-  const shouldPassthrough = isBeingDragged || canvasInteracting;
   const targetHeight = isBeingDragged
     ? COLLAPSED_HEIGHT
     : (widget.collapsed ? COLLAPSED_HEIGHT : widget.expandedHeight);
@@ -169,7 +167,7 @@ export const WidgetPanel = React.memo(function WidgetPanel({
     position: 'absolute',
     width,
     borderRadius: WIDGET_PANEL_RADIUS,
-    pointerEvents: shouldPassthrough ? 'none' : 'auto',
+    pointerEvents: isBeingDragged ? 'none' : 'auto',
     zIndex: isBeingDragged ? 50 : 30,
     overflow: 'hidden',
     contain: 'content',

@@ -93,9 +93,6 @@ export interface WidgetStore {
   color2DOverlayOpen: boolean;
   openColor2DOverlay: () => void;
   closeColor2DOverlay: () => void;
-
-  canvasInteracting: boolean;
-  setCanvasInteracting: (interacting: boolean) => void;
 }
 
 // ===== 吸附计算 =====

@@ -2238,6 +2238,10 @@ def test_generate_swatch_uses_canonical_lut_metadata_instead_of_client_payload()
                         "base_color_hexes": ["#000000"] * 6,
                     }
                 ],
+                "printer_id": "bambu-p1s",
+                "slicer": "OrcaSlicer",
+                "nozzle_size": "0.2",
+                "device_profile_id": "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
             },
         )
 
@@ -2254,6 +2258,10 @@ def test_generate_swatch_uses_canonical_lut_metadata_instead_of_client_payload()
         "#FF00FF",
         "#00FFFF",
     ]
+    assert captured["kwargs"]["printer_id"] == "bambu-p1s"
+    assert captured["kwargs"]["slicer"] == "OrcaSlicer"
+    assert captured["kwargs"]["nozzle_size"] == "0.2"
+    assert captured["kwargs"]["device_profile_id"] == "OrcaSlicer:bbl:bambu-lab-p1s:0.2"
 
 
 def test_generate_swatch_rejects_selected_indices_out_of_range():
