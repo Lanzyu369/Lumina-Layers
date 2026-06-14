@@ -573,6 +573,85 @@ def test_vector_outline_material_archive_uses_processor_export_color_mode() -> N
     assert float(outline_mesh.bounds[1, 1]) == pytest.approx(70.0)
 
 
+def test_vector_coating_covers_outline_expanded_footprint() -> None:
+    """Vector coating must cover the same XY envelope as enabled outline.
+
+    Regression for #251: in vector/SVG mode ``VectorProcessor.build_mesh``
+    creates the transparent coating before the pipeline injects the separate
+    ``Outline`` mesh. If the processor does not know outline is enabled, the
+    coating footprint stays on the original backing and leaves the outward
+    outline ring uncovered/misaligned.
+    """
+    from core.pipeline.vector_branch import _generate_vector_outline_mesh
+    from core.vector_engine import VectorProcessor
+
+    shape = box(10.0, 15.0, 70.0, 60.0)
+    matched_shapes = [
+        {
+            "geometry": shape,
+            "color": (255, 0, 0),
+            "matched_rgb": (255, 0, 0),
+            "recipe": [1, 0],
+            "draw_order": 0,
+        }
+    ]
+    analysis = MagicMock()
+    analysis.matched_shapes = matched_shapes
+    analysis.clipped_shapes = matched_shapes
+    analysis.silhouette = shape
+    analysis.image_vectorizer_bounds = None
+    analysis.scale_factor = 1.0
+    analysis.bbox = (0.0, 0.0, 100.0, 80.0)
+    analysis.slot_names = ["White", "Red"]
+    analysis.num_channels = 2
+    analysis.num_layers = 2
+    analysis.preview_colors = {
+        0: [255, 255, 255, 255],
+        1: [255, 0, 0, 255],
+    }
+    analysis.stage_timings = {}
+
+    processor = VectorProcessor.__new__(VectorProcessor)
+    processor.color_mode = "Material Archive"
+    processor._init_runtime_defaults()
+    processor.enable_coating = True
+    processor.coating_height_mm = 0.08
+    processor.enable_outline = True
+    processor.outline_width_mm = 5.0
+
+    scene = processor.build_mesh(
+        analysis,
+        thickness_mm=1.6,
+        structure_mode="Single-sided",
+        backing_color_id=0,
+    )
+    outline_mesh = _generate_vector_outline_mesh(
+        analysis=analysis,
+        outline_width_mm=5.0,
+        base_aux_color=[255, 255, 255, 255],
+        base_aux_material_name="White",
+        ctx={
+            "spacer_thick": 1.6,
+            "structure_mode": "Single-sided",
+            "color_mode": "Material Archive",
+            "enable_coating": True,
+            "coating_height_mm": 0.08,
+        },
+        export_color_mode="Material Archive",
+    )
+
+    assert "Coating" in scene.geometry
+    assert outline_mesh is not None
+    coating = scene.geometry["Coating"]
+    eps = 1e-6
+    assert float(coating.bounds[0, 0]) <= float(outline_mesh.bounds[0, 0]) + eps
+    assert float(coating.bounds[0, 1]) <= float(outline_mesh.bounds[0, 1]) + eps
+    assert float(coating.bounds[1, 0]) >= float(outline_mesh.bounds[1, 0]) - eps
+    assert float(coating.bounds[1, 1]) >= float(outline_mesh.bounds[1, 1]) - eps
+    assert float(outline_mesh.bounds[0, 2]) <= float(coating.bounds[0, 2]) + eps
+    assert float(outline_mesh.bounds[1, 2]) >= float(coating.bounds[1, 2]) - eps
+
+
 def test_vector_preview_material_archive_passes_processor_export_color_mode(
     tmp_path,
 ) -> None:
