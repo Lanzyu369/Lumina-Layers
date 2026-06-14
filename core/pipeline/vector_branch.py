@@ -1383,11 +1383,11 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
         ctx["preview_colors"] = dict(analysis.preview_colors)
         ctx["slot_names"] = list(analysis.slot_names)
 
-        # Inject outline geometry into the preview cache as metadata only.
-        # User-visible 2D / GLB preview rendering consumes this in the
-        # follow-up scope tracked by the SVG vector outline acceptance notes.
-        # preview 分支只暴露 outline 元数据；用户可见的 2D / GLB 像素渲染
-        # 归 SVG vector outline 验收归档里的 OQ-6 follow-up 处理。
+        # Inject outline geometry into the preview cache. The SVG/vector shape
+        # union stays the declared geometry source; S11 copies this mesh into
+        # the preview GLB instead of deriving outline from backing/fridge masks.
+        # preview 分支负责生成来自矢量 shape union 的 outline mesh；S11 复用
+        # 这个 mesh 导出 GLB，避免从 backing / 冰箱贴 mask 重新推断轮廓。
         if bool(ctx.get("enable_outline", False)):
             try:
                 outline_width_mm = float(ctx.get("outline_width", 2.0) or 2.0)
