@@ -4754,6 +4754,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "点击更换或追加",
     en: "Change or add",
   },
+  upload_replace_current: {
+    zh: "更换当前图片",
+    en: "Replace current image",
+  },
   upload_unified_aria: {
     zh: "拖拽图片或点击上传文件",
     en: "Drag images or click to upload files",

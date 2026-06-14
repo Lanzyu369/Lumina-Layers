@@ -285,10 +285,13 @@ describe("BasicSettings", () => {
       expect(screen.getByText("点击更换或追加")).toBeInTheDocument();
     });
     fireEvent.click(screen.getByText("点击更换或追加").closest("button")!);
+    fireEvent.click(screen.getByText("添加更多图片"));
 
-    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const input = Array.from(
+      document.querySelectorAll<HTMLInputElement>('input[type="file"]'),
+    ).find((candidate) => candidate.multiple);
     expect(input).toBeTruthy();
-    fireEvent.change(input, { target: { files: [newFile] } });
+    fireEvent.change(input!, { target: { files: [newFile] } });
 
     await waitFor(() => {
       const state = useConverterStore.getState();

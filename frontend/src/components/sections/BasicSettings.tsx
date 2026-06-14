@@ -4,6 +4,7 @@ import {
   useConverterStore,
   ACCEPT_IMAGE_FORMATS,
   inferDefaultMaterialBackingDirName,
+  isValidImageType,
   resolveConverterSourceSelection,
 } from "../../stores/converter";
 import {
@@ -303,6 +304,7 @@ export default function BasicSettings() {
 
   // Action 函数单独提取（函数引用稳定，不需要 shallow）
   const handleFilesSelect = useConverterStore((s) => s.handleFilesSelect);
+  const setImageFile = useConverterStore((s) => s.setImageFile);
   const setLutName = useConverterStore((s) => s.setLutName);
   const setTargetWidthMm = useConverterStore((s) => s.setTargetWidthMm);
   const setTargetHeightMm = useConverterStore((s) => s.setTargetHeightMm);
@@ -318,6 +320,14 @@ export default function BasicSettings() {
   const setLargeFormatEnabled = useConverterStore((s) => s.setLargeFormatEnabled);
   const setTileWidthMm = useConverterStore((s) => s.setTileWidthMm);
   const setTileHeightMm = useConverterStore((s) => s.setTileHeightMm);
+
+  const handleFileReplace = useCallback(
+    (file: File) => {
+      if (!isValidImageType(file.type, file.name)) return;
+      setImageFile(file);
+    },
+    [setImageFile],
+  );
 
   const sourceVersionOptions = [
     { label: t("basic_source_version_legacy"), value: "legacy" },
@@ -614,6 +624,7 @@ export default function BasicSettings() {
           batchFiles={batchFiles}
           isBatchMode={batchMode}
           onFilesSelect={handleFilesSelect}
+          onFileReplace={handleFileReplace}
           onBatchFileRemove={removeBatchFile}
           accept={ACCEPT_IMAGE_FORMATS}
           onShareCardDetected={(file) => void handleShareCardDetected(file)}
