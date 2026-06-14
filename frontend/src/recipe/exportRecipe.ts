@@ -100,6 +100,7 @@ export function exportConverterRecipe(
       target_width_mm: state.target_width_mm,
       target_height_mm: state.target_height_mm,
       quantize_colors: state.quantize_colors,
+      high_precision_3d_preview: state.high_precision_3d_preview,
       enable_cleanup: state.enable_cleanup,
       svg_pixels_per_mm: settings.svgPixelsPerMm,
       hue_enable: state.hue_enable,

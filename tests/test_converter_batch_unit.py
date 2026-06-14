@@ -402,6 +402,7 @@ class TestBatchWorkerPoolSubmit:
                     "slicer": "OrcaSlicer",
                     "nozzle_size": "0.2",
                     "enable_base_layer_height_modifier": "false",
+                    "high_precision_3d_preview": "true",
                 },
             )
 
@@ -445,6 +446,7 @@ class TestBatchWorkerPoolSubmit:
         assert call_args[0][21] == "OrcaSlicer"
         assert call_args[0][22] == "0.2"
         assert call_args[0][23] is False
+        assert call_args[0][36] is True
 
     def test_batch_submits_material_archive_source_to_worker(self) -> None:
         """Batch endpoint forwards material-archive source params to worker."""

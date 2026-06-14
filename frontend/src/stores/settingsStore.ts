@@ -494,9 +494,6 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
         if (patch.slicerSoftware) {
           actions.setSlicerSoftware(patch.slicerSoftware);
         }
-        if (typeof patch.deviceProfileId === "string") {
-          actions.setDeviceProfileId(patch.deviceProfileId);
-        }
         if (typeof patch.customSlicerPath === "string") {
           actions.setCustomSlicerPath(patch.customSlicerPath);
         }
@@ -510,6 +507,9 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
           actions.setEnableBaseLayerHeightModifier(
             patch.enableBaseLayerHeightModifier,
           );
+        }
+        if (typeof patch.deviceProfileId === "string") {
+          actions.setDeviceProfileId(patch.deviceProfileId);
         }
       },
 

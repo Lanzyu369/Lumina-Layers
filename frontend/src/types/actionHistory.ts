@@ -95,6 +95,7 @@ export interface AdvancedParamsGeneration {
   model_margin: number | null;
   quantize_colors: number;
   quantize_colors_unlocked: boolean;
+  high_precision_3d_preview: boolean;
   enable_cleanup: boolean;
   svg_pixels_per_mm: number;
   hue_enable: boolean;

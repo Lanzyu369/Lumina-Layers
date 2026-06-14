@@ -22,6 +22,7 @@ import type {
   LutSupportedMode,
   LutDetailsCatalogGroup,
   LutColorsCard,
+  PerformanceTiming,
 } from "../../api/types";
 import {
   ColorMode as ColorModeEnum,
@@ -1292,6 +1293,7 @@ export interface ConverterState {
   // 高级设置
   quantize_colors: number;
   quantize_colors_unlocked: boolean;
+  high_precision_3d_preview: boolean;
   enable_cleanup: boolean;
   hue_enable: boolean;
   use_lut_constrained: boolean;
@@ -1379,6 +1381,8 @@ export interface ConverterState {
 
   // 3D 预览
   previewGlbUrl: string | null;
+  previewPerformanceTiming: PerformanceTiming | null;
+  generatePerformanceTiming: PerformanceTiming | null;
   lutMatchMode: string | null;
   lutMatchInfo: Record<string, unknown> | null;
 
@@ -1537,6 +1541,7 @@ export interface ConverterActions {
   setModelMargin: (value: number | null) => void;
   setQuantizeColors: (colors: number) => void;
   setQuantizeColorsUnlocked: (unlocked: boolean) => void;
+  setHighPrecision3dPreview: (enabled: boolean) => void;
   setEnableCleanup: (enabled: boolean) => void;
   setHueEnable: (enabled: boolean) => void;
   setUseLutConstrained: (enabled: boolean) => void;
@@ -1932,6 +1937,8 @@ function buildPreviewSessionResetState(): Partial<ConverterState> {
     previewBaseImageUrl: null,
     previewGlbUrl: null,
     modelUrl: null,
+    previewPerformanceTiming: null,
+    generatePerformanceTiming: null,
     batchPreviewItems: [],
     threemfDiskPath: null,
     downloadUrl: null,
@@ -2099,6 +2106,7 @@ export const DEFAULT_STATE: ConverterState = {
   materialBackingMaterialDirName: loadMaterialBackingMaterialDirName(),
   quantize_colors: 48,
   quantize_colors_unlocked: false,
+  high_precision_3d_preview: false,
   enable_cleanup: true,
   hue_enable: false,
   use_lut_constrained: false,
@@ -2157,6 +2165,8 @@ export const DEFAULT_STATE: ConverterState = {
   heightmapFile: null,
   heightmapThumbnailUrl: null,
   previewGlbUrl: null,
+  previewPerformanceTiming: null,
+  generatePerformanceTiming: null,
   lutMatchMode: null,
   lutMatchInfo: null,
   preview_width_mm: null,
@@ -3012,6 +3022,14 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         downloadUrl: null,
       });
     },
+    setHighPrecision3dPreview: (enabled: boolean) =>
+      set({
+        high_precision_3d_preview: enabled,
+        previewGlbUrl: null,
+        modelUrl: null,
+        threemfDiskPath: null,
+        downloadUrl: null,
+      }),
     setEnableCleanup: (enabled: boolean) =>
       set({
         enable_cleanup: enabled,
@@ -5322,6 +5340,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         color_mode: state.color_mode,
         modeling_mode: state.modeling_mode,
         quantize_colors: state.quantize_colors,
+        high_precision_3d_preview: state.high_precision_3d_preview,
         enable_cleanup: state.enable_cleanup,
         hue_enable: state.hue_enable,
       });
@@ -5377,6 +5396,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           color_mode: colorMode,
           modeling_mode: state.modeling_mode,
           quantize_colors: state.quantize_colors,
+          high_precision_3d_preview: state.high_precision_3d_preview,
           enable_cleanup: state.enable_cleanup,
           enable_outline: state.enable_outline,
           outline_width: state.outline_width,
@@ -5464,6 +5484,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             : {}),
           colorContours: response.contours ?? {},
           previewGlbUrl: glbUrl,
+          previewPerformanceTiming: response.performance_timing ?? null,
+          generatePerformanceTiming: null,
           colorRemapMap: {},
           remapHistory: [],
           replacement_regions: [],
@@ -5612,7 +5634,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         return null;
       }
 
-      set({ isGenerating: true, error: null });
+      set({ isGenerating: true, error: null, generatePerformanceTiming: null });
       _generateStartTime = performance.now();
       (window as LuminaWindow).__luminaGenerateStart = _generateStartTime;
       _clientLog("generate: click", {
@@ -5623,6 +5645,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         color_mode: state.color_mode,
         modeling_mode: state.modeling_mode,
         quantize_colors: state.quantize_colors,
+        high_precision_3d_preview: state.high_precision_3d_preview,
         enable_cleanup: state.enable_cleanup,
         enable_relief: state.enable_relief,
         enable_outline: state.enable_outline,
@@ -5687,6 +5710,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           color_mode: colorMode,
           modeling_mode: state.modeling_mode,
           quantize_colors: state.quantize_colors,
+          high_precision_3d_preview: state.high_precision_3d_preview,
           enable_cleanup: state.enable_cleanup,
           svg_pixels_per_mm: useSettingsStore.getState().svgPixelsPerMm,
           hue_weight: state.hue_enable ? 0.5 : 0.0,
@@ -5883,6 +5907,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           downloadUrl: response.download_url
             ? `${response.download_url}`
             : null,
+          generatePerformanceTiming: response.performance_timing ?? null,
           largeFormatWarnings: [],
         });
         _logGenerateTimer("UI unlocked (isGenerating=false, modelUrl set)");
@@ -6079,6 +6104,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           previewBaseImageUrl: null,
           sessionId: null,
           previewGlbUrl: null,
+          previewPerformanceTiming: null,
+          generatePerformanceTiming: null,
           batchPreviewItems: [],
           ...EMPTY_LUT_MATCH_STATE,
           selectedColor: null,
@@ -6104,6 +6131,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         threemfDiskPath: null,
         downloadUrl: null,
         batchPreviewItems: [],
+        modelUrl: null,
+        previewGlbUrl: null,
+        previewPerformanceTiming: null,
+        generatePerformanceTiming: null,
         previewWarnings: [],
         largeFormatWarnings: [],
         ...DEFAULT_PUZZLE_PREVIEW_STATE,
@@ -6148,6 +6179,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             sessionId: null,
             previewGlbUrl: null,
             modelUrl: null,
+            previewPerformanceTiming: null,
+            generatePerformanceTiming: null,
             batchPreviewItems: [],
             threemfDiskPath: null,
             downloadUrl: null,
@@ -6177,6 +6210,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             sessionId: null,
             previewGlbUrl: null,
             modelUrl: null,
+            previewPerformanceTiming: null,
+            generatePerformanceTiming: null,
             batchPreviewItems: [],
             threemfDiskPath: null,
             downloadUrl: null,
@@ -6220,6 +6255,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           sessionId: null,
           previewGlbUrl: null,
           modelUrl: null,
+          previewPerformanceTiming: null,
+          generatePerformanceTiming: null,
           batchPreviewItems: [],
           threemfDiskPath: null,
           downloadUrl: null,
@@ -6259,6 +6296,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         sessionId: null,
         previewGlbUrl: null,
         modelUrl: null,
+        previewPerformanceTiming: null,
+        generatePerformanceTiming: null,
         batchPreviewItems: [],
         threemfDiskPath: null,
         downloadUrl: null,
@@ -6316,6 +6355,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         batchPreviewItems: [],
         modelUrl: null,
         previewGlbUrl: null,
+        generatePerformanceTiming: null,
         threemfDiskPath: null,
         downloadUrl: null,
         error: null,
@@ -6366,6 +6406,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
                 ? (sourceParams.layer_height_mm ?? undefined)
                 : (state.layer_height_mm ?? undefined),
           quantize_colors: state.quantize_colors,
+          high_precision_3d_preview: state.high_precision_3d_preview,
           enable_cleanup: state.enable_cleanup,
           svg_pixels_per_mm: settings.svgPixelsPerMm,
           hue_weight: state.hue_enable ? 0.5 : 0.0,
@@ -6402,6 +6443,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           // 合并 GLB，颜色与背面显示不可靠，因此不再作为 UI 兜底。
           modelUrl: null,
           previewGlbUrl: null,
+          previewPerformanceTiming: null,
+          generatePerformanceTiming: null,
           threemfDiskPath: result.threemf_disk_path ?? null,
           downloadUrl: result.download_url ? `${result.download_url}` : null,
         });

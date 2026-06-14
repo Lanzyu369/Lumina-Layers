@@ -133,8 +133,13 @@ def _has_cover_assets(vendor_root: Path) -> bool:
 
 
 def _has_loose_cover_assets(asset_root: Path) -> bool:
-    for pattern in ("*cover*.png", "*cover*.jpg", "*cover*.jpeg", "*cover*.webp", "*cover*.svg"):
-        if next(asset_root.glob(pattern), None) is not None:
+    cover_suffixes = {".png", ".jpg", ".jpeg", ".webp", ".svg"}
+    for item in asset_root.iterdir():
+        if (
+            item.is_file()
+            and item.suffix.casefold() in cover_suffixes
+            and "cover" in item.name.casefold()
+        ):
             return True
     return False
 

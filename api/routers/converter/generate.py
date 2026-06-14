@@ -1034,6 +1034,7 @@ async def convert_generate(
         "chroma_gate": request.chroma_gate,
         "use_lut_constrained": request.use_lut_constrained,
         "auto_dynamic_range": request.auto_dynamic_range,
+        "high_precision_3d_preview": request.high_precision_3d_preview,
         "matched_rgb_path": matched_rgb_path,
         "mask_solid_path": mask_solid_path,
         "material_matrix_path": material_matrix_path,
@@ -1099,13 +1100,18 @@ async def convert_generate(
         preview_3d_url = f"/api/files/{glb_id}"
 
     api_total = time.perf_counter() - api_t0
+    performance_timing = {
+        "total_ms": round(api_total * 1000, 3),
+        "worker_ms": round(worker_elapsed * 1000, 3),
+        "overhead_ms": round((api_total - worker_elapsed) * 1000, 3),
+    }
     log.info(
         "Generate endpoint timing",
         extra={
             "event": "converter_generate_timing",
-            "duration_ms": round(api_total * 1000, 3),
-            "worker_ms": round(worker_elapsed * 1000, 3),
-            "overhead_ms": round((api_total - worker_elapsed) * 1000, 3),
+            "duration_ms": performance_timing["total_ms"],
+            "worker_ms": performance_timing["worker_ms"],
+            "overhead_ms": performance_timing["overhead_ms"],
         },
     )
 
@@ -1121,6 +1127,7 @@ async def convert_generate(
         download_url=f"/api/files/{download_id}",
         preview_3d_url=preview_3d_url,
         threemf_disk_path=threemf_path,
+        performance_timing=performance_timing,
     )
 
 
@@ -1290,6 +1297,7 @@ def _resolve_large_format_shared_params(
         "chroma_gate": request.chroma_gate,
         "use_lut_constrained": request.use_lut_constrained,
         "auto_dynamic_range": request.auto_dynamic_range,
+        "high_precision_3d_preview": request.high_precision_3d_preview,
         "material_matrix_path": material_matrix_path,
         "printer_id": request.printer_id,
         "slicer": request.slicer,
@@ -1920,6 +1928,7 @@ async def convert_batch(
     model_margin: float | None = Form(None, description="模型回退边距"),
     use_lut_constrained: bool = Form(False, description="高精度 LUT 约束匹配"),
     auto_dynamic_range: bool = Form(False, description="自动动态范围压缩"),
+    high_precision_3d_preview: bool = Form(False, description="3D 高精度颜色预览"),
     enable_relief: bool = Form(False, description="启用 2.5D 浮雕模式"),
     height_mode: str = Form("color", description="浮雕高度模式"),
     color_height_map: str | None = Form(None, description="颜色高度映射 JSON"),
@@ -2100,6 +2109,7 @@ async def convert_batch(
                 material_backing_material_index,
                 use_lut_constrained,
                 auto_dynamic_range,
+                high_precision_3d_preview,
                 device_profile_id,
             )
 

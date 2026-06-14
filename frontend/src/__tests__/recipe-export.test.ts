@@ -23,6 +23,7 @@ describe("recipe/exportRecipe", () => {
         target_width_mm: 100,
         target_height_mm: 75,
         quantize_colors: 64,
+        high_precision_3d_preview: true,
         enable_cleanup: true,
         hue_enable: true,
         chroma_gate: 20,
@@ -35,6 +36,7 @@ describe("recipe/exportRecipe", () => {
       expect(recipe.base.color_mode).toBe("4-Color (RYBW)");
       expect(recipe.base.target_width_mm).toBe(100);
       expect(recipe.base.target_height_mm).toBe(75);
+      expect(recipe.base.high_precision_3d_preview).toBe(true);
       expect(recipe.base.hue_enable).toBe(true);
       expect(recipe.base.chroma_gate).toBe(20);
       expect(recipe.base.svg_pixels_per_mm).toBe(10);

@@ -20,6 +20,7 @@ from config import (
     ModelingMode,
     normalize_svg_pixels_per_mm,
 )
+from core.material_layer_fallback_policy import should_run_cross_n_fallback
 
 _log = get_logger(__name__)
 
@@ -429,14 +430,18 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     )
 
     # ---- Enforce "N-layer recipe not worse than smaller-N + white padding" ----
-    # Only run the cross-N fallback when the solver ran exhaustively on-the-fly.
-    # When a cache was loaded, the exhaustive grid already encodes globally-optimal
-    # N-layer solutions; re-solving k<N via the MITM solver would be redundant and
-    # catastrophically expensive for large palettes (e.g. M=8, k≥8 creates multi-GB
-    # MITM tables that OOM the worker process).
-    # (仅在走了在线穷举路径时才做跨 N 比较。缓存命中时网格已全局最优，且大调色板
-    # k≥8 的 MITM 求解会产生数 GB 表引发 OOM。)
-    _run_cross_n = unique_colors.shape[0] > 0 and solver_path not in ("cache", "cache_built_on_the_fly")
+    # Run the cross-N fallback for small runtimes that fully cover the M**N
+    # recipe space. Approximate candidate runtimes and bucketed caches still
+    # skip this expensive pass, preserving the large-palette OOM guard.
+    # 仅当 runtime 已完整覆盖 M**N 且组合数很小时才做跨 N 保底；近似候选
+    # runtime 和分桶缓存仍跳过，避免回到大调色板 OOM 路径。
+    _run_cross_n = should_run_cross_n_fallback(
+        solver_path=solver_path,
+        runtime=cache,
+        unique_color_count=int(unique_colors.shape[0]),
+        material_count=len(materials),
+        layer_count=layer_count,
+    )
     if _run_cross_n:
         fallback_t0 = time.perf_counter()
         matched_rgb_unique, recipes_unique, delta_e, fallback_stats = (

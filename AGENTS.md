@@ -4,6 +4,20 @@
 
 Lumina Studio is a Python + React/TypeScript multi-material FDM color workflow built around `api/` + `api_server.py` + `frontend/` (FastAPI `:8000` + Vite `:5174`).
 
+## Agent skills
+
+### Issue tracker
+
+Default to local Markdown issues under `.scratch/`; use GitHub Issues only when the user explicitly asks for collaboration development. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the default five-label triage vocabulary. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Use a multi-context layout organized by business system or workflow: root `CONTEXT-MAP.md` points to `docs/context/<domain>/CONTEXT.md`. See `docs/agents/domain.md`.
+
 ## Communication & Explanation
 
 - 与用户沟通时默认使用中文，除非用户明确要求使用其他语言

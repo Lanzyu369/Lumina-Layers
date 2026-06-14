@@ -153,7 +153,7 @@ class TestParameterAnnotations:
     def test_preview_has_expected_param_count(self) -> None:
         """worker_generate_preview should expose the full preview parameter set."""
         sig = inspect.signature(worker_generate_preview)
-        assert len(sig.parameters) == 26
+        assert len(sig.parameters) == 27
 
     def test_model_has_expected_param_count(self) -> None:
         """worker_generate_model should have 3 parameters."""
@@ -179,6 +179,7 @@ class TestParameterAnnotations:
             "material_source", "selected_materials",
             "material_layer_count", "material_layer_height_mm",
             "material_grid_resolution", "auto_dynamic_range",
+            "high_precision_3d_preview",
         }
         assert set(sig.parameters.keys()) == expected
 
@@ -354,6 +355,7 @@ def test_worker_batch_convert_item_forwards_relief_params_intact() -> None:
             material_source="material_archive",
             selected_materials=["brand/red", "brand/white"],
             material_backing_material_index=1,
+            high_precision_3d_preview=True,
             device_profile_id="BambuStudio:bbl:bambu-lab-h2d:0.4",
         )
 
@@ -373,6 +375,7 @@ def test_worker_batch_convert_item_forwards_relief_params_intact() -> None:
     assert call_kwargs["material_source"] == "material_archive"
     assert call_kwargs["selected_materials"] == ["brand/red", "brand/white"]
     assert call_kwargs["material_backing_material_index"] == 1
+    assert call_kwargs["high_precision_3d_preview"] is True
     assert call_kwargs["device_profile_id"] == "BambuStudio:bbl:bambu-lab-h2d:0.4"
 
 

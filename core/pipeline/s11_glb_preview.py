@@ -115,6 +115,50 @@ def _get_v2_mesh_kernel_modules():
     return rio_shapes, m3d
 
 
+def _clone_outline_geometry_for_glb(outline_geometry: object) -> Optional[trimesh.Trimesh]:
+    """Return a safe GLB-export copy of cached vector outline geometry.
+    返回可安全导出到 GLB 的矢量外轮廓网格副本。
+
+    Vector preview caches store the outline as a ``trimesh.Trimesh`` generated
+    from SVG shape geometry. ``generate_segmented_glb`` owns the preview GLB
+    scene, so it must copy that mesh instead of mutating cache state shared by
+    downstream preview/generate code.
+    矢量预览缓存中的外轮廓来自 SVG 几何；这里复制后再加入 GLB，避免修改缓存。
+    """
+    if outline_geometry is None:
+        return None
+
+    try:
+        if isinstance(outline_geometry, trimesh.Trimesh):
+            outline_mesh = outline_geometry.copy()
+        else:
+            vertices = np.asarray(getattr(outline_geometry, "vertices"), dtype=float)
+            faces = np.asarray(getattr(outline_geometry, "faces"), dtype=np.int64)
+            outline_mesh = trimesh.Trimesh(
+                vertices=vertices.copy(),
+                faces=faces.copy(),
+                process=False,
+            )
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+    if len(outline_mesh.vertices) == 0 or len(outline_mesh.faces) == 0:
+        return None
+
+    try:
+        face_colors = np.asarray(outline_mesh.visual.face_colors, dtype=np.uint8)
+    except (AttributeError, TypeError, ValueError):
+        face_colors = np.empty((0, 4), dtype=np.uint8)
+    if face_colors.ndim != 2 or face_colors.shape[0] != len(outline_mesh.faces):
+        outline_mesh.visual.face_colors = np.tile(
+            np.array([245, 245, 245, 255], dtype=np.uint8),
+            (len(outline_mesh.faces), 1),
+        )
+
+    outline_mesh.metadata["name"] = "Outline"
+    return outline_mesh
+
+
 def _v2_available(log_warning: bool = True) -> bool:
     """Return True if the v2 stack (``rasterio.features`` + ``manifold3d``) imports.
 
@@ -1027,7 +1071,7 @@ def generate_empty_bed_glb(
 def generate_segmented_glb(
     cache: dict,
     output_path: str,
-    max_meshes: int = 64,
+    max_meshes: int = 128,
 ) -> Optional[str]:
     """Generate a color-segmented GLB preview with one named Mesh per color.
     生成按颜色分段的 GLB 预览，每种颜色一个独立 Mesh。
@@ -1040,15 +1084,19 @@ def generate_segmented_glb(
               that differs from the visible colour pixels. SVG/vector preview
               caches use this to keep the GLB backing aligned with the native
               vector ``Board`` mesh.
+            - outline_geometry: optional ``trimesh.Trimesh`` generated from
+              SVG/vector shape geometry. When present, it is copied into the
+              preview GLB as the ``Outline`` node so the user-visible 3D
+              preview matches the requested outline setting.
             - target_w, target_h: pixel dimensions
             - target_width_mm: physical width in mm
             - glb_max_meshes (optional): per-session override that bumps
               the merge cap above the function default. Set by edit
               endpoints (e.g. ``/region-requantize``) that intentionally
               add many low-frequency colours which would otherwise be
-              wiped out by the default 64-mesh merge.
+              wiped out by the default 128-mesh merge.
               可选：调用方写入的 mesh 数上限覆盖。例如二次量化会引入
-              大量低频新色，若按默认 64 合并它们会被丢回原色，导致 GLB
+              大量低频新色，若按默认 128 合并它们会被丢回原色，导致 GLB
               和 2D 预览不一致。
         output_path (str): Required absolute path the exported GLB is written to.
             Callers MUST pass a session-scoped, collision-free path (typically
@@ -1063,7 +1111,7 @@ def generate_segmented_glb(
             表现为“3D 预览串联”；详见
             ``progress/glb-internals-audit-2026-04-30.md``。
         max_meshes (int): Default Mesh count before merging when no cache
-            override is present (default 64).
+            override is present (default 128).
 
     Returns:
         str: Path to the exported GLB file (== ``output_path`` on success),
@@ -1318,6 +1366,30 @@ def generate_segmented_glb(
             _log.debug(f"Backing plate added ({backing_mesh.vertices.shape[0]} vertices)")
         _t_backing = time.perf_counter() - _t
 
+        # 4.6 Add vector outline geometry when the preview branch supplied it.
+        # The outline source remains the SVG shape union created upstream; S11
+        # only copies that mesh into the GLB scene so the 3D preview reflects
+        # the same outline the generate/export branch already uses.
+        # 若矢量预览分支提供了 outline mesh，这里只复制进 GLB，不重新推断几何来源。
+        _t = time.perf_counter()
+        outline_mesh = _clone_outline_geometry_for_glb(cache.get("outline_geometry"))
+        if outline_mesh is not None:
+            scene.add_geometry(
+                outline_mesh,
+                node_name="Outline",
+                geom_name="Outline",
+            )
+            _log.debug(
+                "Vector outline added to segmented GLB preview",
+                extra={
+                    "event": "segmented_glb_outline_added",
+                    "vertex_count": int(len(outline_mesh.vertices)),
+                    "face_count": int(len(outline_mesh.faces)),
+                },
+            )
+        _t_outline = time.perf_counter() - _t
+
+        _t = time.perf_counter()
         canvas_bounds_mesh = _build_preview_canvas_bounds_mesh(
             width=width,
             height=height,
@@ -1328,6 +1400,7 @@ def generate_segmented_glb(
                 canvas_bounds_mesh,
                 node_name=PREVIEW_CANVAS_BOUNDS_NODE_NAME,
             )
+        _t_canvas_bounds = time.perf_counter() - _t
 
         cache["color_contours"] = contours_data
         _log.debug(f"Extracted contours for {len(contours_data)} colors")
@@ -1349,6 +1422,8 @@ def generate_segmented_glb(
             "mask_build_s": _t_mask_build,
             "mesh_loop_s": _t_mesh_loop,
             "backing_s": _t_backing,
+            "outline_s": _t_outline,
+            "canvas_bounds_s": _t_canvas_bounds,
             "export_s": _t_export,
             "total_s": _t_glb_total,
         }
@@ -1357,6 +1432,7 @@ def generate_segmented_glb(
             f"Timing: downsample={_t_downsample:.2f}s, "
             f"unique={_t_unique:.2f}s, merge={_t_merge:.2f}s, mask_build={_t_mask_build:.2f}s, "
             f"mesh_loop={_t_mesh_loop:.2f}s, backing={_t_backing:.2f}s, "
+            f"outline={_t_outline:.2f}s, canvas_bounds={_t_canvas_bounds:.2f}s, "
             f"export={_t_export:.2f}s, total={_t_glb_total:.2f}s"
         )
         return glb_path
@@ -1481,6 +1557,13 @@ def run(ctx: dict) -> dict:
         "target_h": height,
         "target_width_mm": target_width_mm,
     }
+    if bool(ctx.get("high_precision_3d_preview", False)):
+        try:
+            glb_mesh_budget = int(ctx.get("quantize_colors") or 0)
+        except (TypeError, ValueError):
+            glb_mesh_budget = 0
+        if glb_mesh_budget > 128:
+            cache["glb_max_meshes"] = glb_mesh_budget
     glb_path = generate_segmented_glb(cache, output_path=out_path)
 
     ctx["glb_path"] = glb_path

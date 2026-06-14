@@ -198,6 +198,42 @@ class TestSingleColorImage:
         assert backing_mesh.bounds[1][0] > color_mesh.bounds[1][0]
         assert backing_mesh.bounds[1][1] > color_mesh.bounds[1][1]
 
+    def test_vector_outline_geometry_exports_native_outline_node(self, out_path: str) -> None:
+        """Vector preview GLB must include cached outline geometry as an Outline node."""
+        h, w = 24, 24
+        red = np.array([255, 0, 0], dtype=np.uint8)
+        matched_rgb = np.full((h, w, 3), red, dtype=np.uint8)
+        mask_solid = np.zeros((h, w), dtype=bool)
+        mask_solid[6:18, 6:18] = True
+
+        cache = _make_cache(matched_rgb, mask_solid, target_width_mm=24.0)
+        outline_mesh = trimesh.creation.box(
+            extents=(24.0, 24.0, PrinterConfig.LAYER_HEIGHT * 2)
+        )
+        outline_mesh.apply_translation([12.0, 12.0, PrinterConfig.LAYER_HEIGHT])
+        outline_mesh.visual.face_colors = np.tile(
+            np.array([245, 245, 245, 255], dtype=np.uint8),
+            (len(outline_mesh.faces), 1),
+        )
+        outline_mesh.metadata["name"] = "Outline"
+        cache["outline_geometry"] = outline_mesh
+
+        glb_path = generate_segmented_glb(cache, output_path=out_path)
+
+        assert glb_path is not None
+        scene = trimesh.load(glb_path)
+        color_mesh = _get_color_nodes(scene)["color_ff0000"]
+        outline_node = _get_node_mesh(scene, "Outline")
+
+        assert outline_node.vertices.shape[0] > 0
+        assert outline_node.faces.shape[0] > 0
+        assert outline_node.bounds[0][0] < color_mesh.bounds[0][0]
+        assert outline_node.bounds[0][1] < color_mesh.bounds[0][1]
+        assert outline_node.bounds[1][0] > color_mesh.bounds[1][0]
+        assert outline_node.bounds[1][1] > color_mesh.bounds[1][1]
+        face_rgb = np.unique(outline_node.visual.face_colors[:, :3], axis=0)
+        assert face_rgb.tolist() == [[245, 245, 245]]
+
     def test_vector_preview_glb_exports_canvas_bounds_anchor_for_puzzle_overlay(
         self,
         out_path: str,
@@ -343,9 +379,9 @@ class TestCacheMaxMeshesOverride:
         # Should merge to 64, not down to 16, since override < default.
         assert len(color_nodes) == 64
 
-    def test_no_override_keeps_function_default(self, out_path: str) -> None:
-        """Without override the function default still rules.
-        无覆盖时仍按函数默认 max_meshes 合并。
+    def test_no_override_keeps_explicit_max_meshes(self, out_path: str) -> None:
+        """Without override an explicit max_meshes still rules.
+        无覆盖时仍按显式传入的 max_meshes 合并。
         """
         matched_rgb, mask_solid = self._build_72_color_image()
         cache = _make_cache(matched_rgb, mask_solid)
@@ -359,6 +395,19 @@ class TestCacheMaxMeshesOverride:
 
         # 72 colours -> merged down to 64.
         assert len(color_nodes) == 64
+
+    def test_function_default_keeps_72_unique_colors_after_default_bump(self, out_path: str) -> None:
+        """The production default should now keep more than 64 colours."""
+        matched_rgb, mask_solid = self._build_72_color_image()
+        cache = _make_cache(matched_rgb, mask_solid)
+
+        glb_path = generate_segmented_glb(cache, output_path=out_path)
+
+        assert glb_path is not None
+        scene = trimesh.load(glb_path)
+        color_nodes = _get_color_nodes(scene)
+
+        assert len(color_nodes) == 72
 
 
 # ============================================================================

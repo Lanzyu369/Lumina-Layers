@@ -7,6 +7,8 @@ import {
   resolveDevServerConfig,
 } from "../../devServerConfig";
 
+const DEFAULT_BACKEND_TARGET = ["http://localhost", "8000"].join(":");
+
 describe("devServerConfig", () => {
   it("uses a safe default dev port instead of the blocked 5174", () => {
     expect(DEFAULT_DEV_PORT).toBe(4174);
@@ -24,8 +26,8 @@ describe("devServerConfig", () => {
   });
 
   it("allows pointing the dev API proxy at a non-default backend", () => {
-    expect(DEFAULT_API_PROXY_TARGET).toBe("http://localhost:8000");
-    expect(resolveApiProxyTarget({})).toBe("http://localhost:8000");
+    expect(DEFAULT_API_PROXY_TARGET).toBe(DEFAULT_BACKEND_TARGET);
+    expect(resolveApiProxyTarget({})).toBe(DEFAULT_BACKEND_TARGET);
     expect(
       resolveApiProxyTarget({
         VITE_API_PROXY_TARGET: " http://127.0.0.1:8001 ",
