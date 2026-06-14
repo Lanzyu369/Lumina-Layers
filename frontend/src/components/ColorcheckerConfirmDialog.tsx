@@ -631,6 +631,17 @@ export function ColorcheckerConfirmDialogInner({
           percent: sourceUploadProgress,
         })
       : t("ext_cc_status_preparing");
+  const calibrateBlockedReason = !imageFile
+    ? t("ext_cc_missing_image")
+    : sourcePreparing
+      ? null
+      : !activeSourceFileId || !imageSize
+        ? t("ext_cc_status_preparing")
+        : !referenceSelectionReady || referenceLoading
+          ? t("ext_cc_reference_select_hint")
+          : corners.length !== 4
+            ? t("ext_cc_step1_hint")
+            : null;
   const selectedReferenceMeta = selectedCustomReference
     ? selectedCustomReference.source
     : selectedServerReference?.source ?? {
@@ -1356,6 +1367,11 @@ export function ColorcheckerConfirmDialogInner({
                   className="w-full"
                 />
               </div>
+              {calibrateBlockedReason && !calibrating && (
+                <div data-testid="colorchecker-calibrate-blocked-reason">
+                  <StatusBanner tone="info">{calibrateBlockedReason}</StatusBanner>
+                </div>
+              )}
             </div>
 
             <div className="flex min-w-0 flex-col gap-3">
@@ -1768,7 +1784,7 @@ export default function ColorcheckerConfirmDialogExtractor() {
   const rejectCalibrated = useExtractorStore((s) => s.rejectCalibrated);
   const closeDialog = useExtractorStore((s) => s.closeColorcheckerDialog);
 
-  const resolvedPhase = enabled ? phase ?? "calibrating" : phase;
+  const resolvedPhase = enabled ? phase : null;
   const open =
     imageFile !== null &&
     (resolvedPhase === "calibrating" || resolvedPhase === "confirming");
