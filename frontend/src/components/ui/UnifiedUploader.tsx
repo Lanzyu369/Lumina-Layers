@@ -3,6 +3,8 @@ import { useI18n } from "../../i18n/context";
 import { isShareCardFile } from "../../recipe/importFlow";
 
 const VISIBLE_BATCH_FILE_LIMIT = 40;
+const SINGLE_PREVIEW_ACTION_BUTTON_CLASS =
+  "min-h-9 rounded-xl border border-[color:var(--surface-outline)] bg-[color:var(--surface-section-muted)] px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-[color:var(--surface-panel-strong)] dark:text-slate-200";
 
 interface UnifiedUploaderProps {
   /** 当前单图模式的预览 URL */
@@ -270,14 +272,14 @@ export default function UnifiedUploader({
           <button
             type="button"
             onClick={handleClick}
-            className="min-h-9 rounded-xl border border-slate-200/80 bg-white/70 px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-white dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-200 dark:hover:bg-slate-900"
+            className={SINGLE_PREVIEW_ACTION_BUTTON_CLASS}
           >
             {t("upload_replace_current")}
           </button>
           <button
             type="button"
             onClick={handleAddMoreClick}
-            className="min-h-9 rounded-xl border border-slate-200/80 bg-white/70 px-3 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-white dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-200 dark:hover:bg-slate-900"
+            className={SINGLE_PREVIEW_ACTION_BUTTON_CLASS}
           >
             {t("upload_add_more")}
           </button>
