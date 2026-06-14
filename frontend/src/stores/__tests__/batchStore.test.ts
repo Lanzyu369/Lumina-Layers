@@ -123,6 +123,7 @@ describe("submitBatch API 调用和状态管理", () => {
       color_layers: 5,
       layer_height_mm: 0.08,
       quantize_colors: 48,
+      high_precision_3d_preview: false,
       enable_cleanup: true,
       svg_pixels_per_mm: 10,
       hue_weight: 0,
