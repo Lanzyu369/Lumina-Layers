@@ -1,7 +1,7 @@
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import { readFileSync } from 'fs'
-import { resolveDevServerConfig } from './devServerConfig'
+import { resolveApiProxyTarget, resolveDevServerConfig } from './devServerConfig'
 
 const pkg = JSON.parse(readFileSync('./package.json', 'utf-8'))
 
@@ -65,7 +65,7 @@ export default defineConfig({
     ...resolveDevServerConfig(process.env),
     proxy: {
       "/api": {
-        target: "http://localhost:8000",
+        target: resolveApiProxyTarget(process.env),
         changeOrigin: true,
       },
     },

@@ -20,6 +20,7 @@ coverage.xml
 .env.*.local
 user_settings.json
 .git
+.worktrees/
 .mypy_cache
 .pytest_cache
 .hypotheses

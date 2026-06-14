@@ -40,10 +40,12 @@ STRING_REPLACEMENTS = (
 )
 
 OFFICIAL_BAMBU_0_2_PROCESS_PRESETS = {
+    "bambu_a2l": "0.08mm High Quality @BBL A2L 0.2 nozzle",
     "bambu_h2d": "0.08mm Extra Fine @BBL H2D 0.2 nozzle",
     "bambu_h2c": "0.08mm High Quality @BBL H2C 0.2 nozzle",
     "bambu_h2s": "0.08mm High Quality @BBL H2S 0.2 nozzle",
     "bambu_h2d_pro": "0.08mm Extra Fine @BBL H2DP 0.2 nozzle",
+    "bambu_x2d": "0.08mm High Quality @BBL X2D 0.2 nozzle",
 }
 
 OFFICIAL_BAMBU_0_2_DEFAULT_PROFILES = {
@@ -167,8 +169,11 @@ def derive_template(
     official_process_preset = OFFICIAL_BAMBU_0_2_PROCESS_PRESETS.get(base_stem)
     if official_process_preset:
         derived["print_settings_id"] = official_process_preset
-        if isinstance(derived.get("inherits_group"), list) and derived["inherits_group"]:
-            derived["inherits_group"][0] = official_process_preset
+        inherits_group = derived.get("inherits_group")
+        if isinstance(inherits_group, list) and inherits_group:
+            inherits_group[0] = official_process_preset
+        else:
+            derived["inherits_group"] = [official_process_preset, "", "", "", "", ""]
 
     official_filament_profile = OFFICIAL_BAMBU_0_2_FILAMENT_PROFILES.get(base_stem)
     if official_filament_profile:

@@ -11,6 +11,11 @@ const MAX_PUZZLE_PREVIEW_RETRIES = 1;
 export function usePuzzleLayoutPreview(): void {
   const puzzleEnabled = useConverterStore((s) => s.puzzleEnabled ?? false);
   const sessionId = useConverterStore((s) => s.sessionId);
+  const previewGlbUrl = useConverterStore((s) => s.previewGlbUrl);
+  const previewImageUrl = useConverterStore((s) => s.previewImageUrl);
+  const previewBaseImageUrl = useConverterStore((s) => s.previewBaseImageUrl);
+  const previewPixelWidth = useConverterStore((s) => s.previewPixelWidth);
+  const previewPixelHeight = useConverterStore((s) => s.previewPixelHeight);
   const targetHeightMm = useConverterStore((s) => s.target_height_mm);
   const puzzleStyle = useConverterStore((s) => s.puzzleStyle ?? "regular");
   const puzzleSizingMode = useConverterStore((s) => s.puzzleSizingMode ?? "piece_size");
@@ -42,6 +47,11 @@ export function usePuzzleLayoutPreview(): void {
     () =>
       JSON.stringify({
         sessionId,
+        previewGlbUrl,
+        previewImageUrl,
+        previewBaseImageUrl,
+        previewPixelWidth,
+        previewPixelHeight,
         targetHeightMm,
         puzzleStyle,
         puzzleSizingMode,
@@ -58,6 +68,11 @@ export function usePuzzleLayoutPreview(): void {
       }),
     [
       sessionId,
+      previewGlbUrl,
+      previewImageUrl,
+      previewBaseImageUrl,
+      previewPixelWidth,
+      previewPixelHeight,
       targetHeightMm,
       puzzleStyle,
       puzzleSizingMode,
@@ -75,10 +90,19 @@ export function usePuzzleLayoutPreview(): void {
   );
 
   useEffect(() => {
+    const previousRequestKey = currentRequestKeyRef.current;
     currentRequestKeyRef.current = requestKey;
     retryCountRef.current = 0;
     inFlightKeyRef.current = null;
-  }, [requestKey]);
+    if (
+      previousRequestKey
+      && previousRequestKey !== requestKey
+      && typeof clearPuzzleLayoutPreview === "function"
+    ) {
+      lastAppliedKeyRef.current = "";
+      clearPuzzleLayoutPreview();
+    }
+  }, [clearPuzzleLayoutPreview, requestKey]);
 
   useEffect(() => {
     if (timerRef.current !== null) {

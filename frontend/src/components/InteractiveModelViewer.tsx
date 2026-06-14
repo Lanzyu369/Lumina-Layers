@@ -21,6 +21,8 @@ import { postClientLog } from "../utils/clientLog";
 import { createMatteMaterialFromStandard } from "../utils/threeMatteMaterial";
 import PuzzleOverlay3D from "./PuzzleOverlay3D";
 import { useGltfCacheLifecycle } from "./useGltfCacheLifecycle";
+import { materializePositionAttributeForGeometryBake } from "../utils/threeQuantizedGeometry";
+import type { PuzzleOverlayBounds } from "./puzzleOverlay3DUtils";
 
 type LuminaWindow = Window & { __luminaPreviewStart?: number };
 
@@ -38,9 +40,8 @@ function _getPreviewStartTime(): number | null {
  * @returns The hex string without prefix, e.g. "ff0000". (不含前缀的 hex 字符串)
  */
 export function extractHexFromMeshName(meshName: string): string {
-  return meshName.slice(6);
+  return meshName.slice(6, 12);
 }
-
 
 // ========== Component ==========
 
@@ -67,6 +68,7 @@ export interface InteractiveModelViewerProps {
 
 /** Color layer thickness in mm (5 layers × 0.08mm). */
 const COLOR_LAYER_HEIGHT = 0.4;
+const PREVIEW_CANVAS_BOUNDS_NODE_NAME = "preview_canvas_bounds";
 
 export function computeOutlinePreviewHeight(
   spacerThick: number,
@@ -152,7 +154,15 @@ function InteractiveModelViewer({
   // Clone scene once per URL load, apply rotation/centering,
   // and clone each color mesh's material to avoid shared-material mutations.
   // Also separate color_ meshes from non-color children for individual JSX rendering.
-  const { nonColorObject, colorMeshes, modelBounds, sceneCenter, backingPlateMesh, buildSummary } = useMemo(() => {
+  const {
+    nonColorObject,
+    colorMeshes,
+    modelBounds,
+    sceneCenter,
+    backingPlateMesh,
+    puzzleOverlayBounds,
+    buildSummary,
+  } = useMemo(() => {
     const buildStart = performance.now();
     const clone = cloneObjectTreeWithOwnedResources(scene);
 
@@ -165,13 +175,19 @@ function InteractiveModelViewer({
     });
     toRemove.forEach((obj) => obj.removeFromParent());
 
-    // Convert all mesh materials to pure diffuse (no specular reflections).
+    // Convert all mesh materials to unlit (no lighting, no specular).
     // Trimesh-exported GLB uses MeshStandardMaterial which reflects the HDR
     // environment map, causing unwanted glare on the color surfaces.
-    // We replace them with MeshLambertMaterial for a completely matte finish.
+    // We replace them with MeshBasicMaterial so chip colours equal the source
+    // hex exactly and stay decoupled from scene lighting.
     // Skip backing_plate — it gets its own independent material below.
     clone.traverse((child) => {
-      if (child instanceof THREE.Mesh && child.material && child.name !== "backing_plate") {
+      if (
+        child instanceof THREE.Mesh
+        && child.material
+        && child.name !== "backing_plate"
+        && child.name !== PREVIEW_CANVAS_BOUNDS_NODE_NAME
+      ) {
         const previousMaterial = child.material;
         const mats = Array.isArray(previousMaterial)
           ? previousMaterial
@@ -200,8 +216,23 @@ function InteractiveModelViewer({
     // since Three.js XY plane is the screen plane.
     clone.updateMatrixWorld(true);
 
-    // Compute bounding box
-    const box = new THREE.Box3().setFromObject(clone);
+    // Compute the centering box from visible model geometry. The optional
+    // preview-canvas anchor is only for overlay placement and must not change
+    // legacy modelBounds used by keychain/fridge-magnet controls.
+    const box = new THREE.Box3();
+    const childBox = new THREE.Box3();
+    clone.traverse((child) => {
+      if (
+        child instanceof THREE.Mesh
+        && child.name !== PREVIEW_CANVAS_BOUNDS_NODE_NAME
+      ) {
+        childBox.setFromObject(child);
+        box.union(childBox);
+      }
+    });
+    if (box.isEmpty()) {
+      box.setFromObject(clone);
+    }
 
     // Center on X and Y (model centered on bed), but place bottom at Z=0
     // so the model sits on top of the bed platform (Z = -0.1).
@@ -209,6 +240,39 @@ function InteractiveModelViewer({
     box.getCenter(center);
     clone.position.set(-center.x, -center.y, -box.min.z);
     clone.updateMatrixWorld(true);
+
+    // --- Extract full preview-canvas bounds anchor from GLB scene ---
+    let extractedPreviewCanvasBounds: THREE.Mesh | null = null;
+    clone.traverse((child) => {
+      if (child instanceof THREE.Mesh && child.name === PREVIEW_CANVAS_BOUNDS_NODE_NAME) {
+        extractedPreviewCanvasBounds = child;
+      }
+    });
+    let resolvedPuzzleOverlayBounds: PuzzleOverlayBounds | null = null;
+    if (extractedPreviewCanvasBounds !== null) {
+      const canvasBoundsMesh = extractedPreviewCanvasBounds as THREE.Mesh;
+      canvasBoundsMesh.updateWorldMatrix(true, false);
+      materializePositionAttributeForGeometryBake(canvasBoundsMesh.geometry);
+      canvasBoundsMesh.geometry.applyMatrix4(canvasBoundsMesh.matrixWorld);
+      canvasBoundsMesh.position.set(0, 0, 0);
+      canvasBoundsMesh.rotation.set(0, 0, 0);
+      canvasBoundsMesh.scale.set(1, 1, 1);
+      canvasBoundsMesh.updateMatrixWorld(true);
+      canvasBoundsMesh.removeFromParent();
+
+      canvasBoundsMesh.geometry.computeBoundingBox();
+      const canvasBox = canvasBoundsMesh.geometry.boundingBox;
+      if (canvasBox && !canvasBox.isEmpty()) {
+        resolvedPuzzleOverlayBounds = {
+          minX: canvasBox.min.x,
+          maxX: canvasBox.max.x,
+          minY: canvasBox.min.y,
+          maxY: canvasBox.max.y,
+          maxZ: canvasBox.max.z,
+        };
+      }
+      disposeMeshResources(canvasBoundsMesh);
+    }
 
     // --- Extract backing_plate mesh from GLB scene ---
     let extractedBackingPlate: THREE.Mesh | null = null;
@@ -222,6 +286,7 @@ function InteractiveModelViewer({
       const bp = extractedBackingPlate as THREE.Mesh;
       // Bake world matrix so geometry is in centered world space
       bp.updateWorldMatrix(true, false);
+      materializePositionAttributeForGeometryBake(bp.geometry);
       bp.geometry.applyMatrix4(bp.matrixWorld);
       bp.position.set(0, 0, 0);
       bp.rotation.set(0, 0, 0);
@@ -236,7 +301,7 @@ function InteractiveModelViewer({
       const backingMat = new THREE.MeshLambertMaterial({
         color: 0xf5f5f5,
         side: THREE.DoubleSide,
-        toneMapped: false,
+        toneMapped: true,
       });
       bp.material = backingMat;
       disposeMaterial(previousBackingMaterial);
@@ -258,6 +323,7 @@ function InteractiveModelViewer({
     // Bake the parent's centering offset into each color mesh's geometry
     // so they remain centered after detachment from the clone tree.
     for (const mesh of colorMeshList) {
+      materializePositionAttributeForGeometryBake(mesh.geometry);
       mesh.geometry.applyMatrix4(mesh.matrixWorld);
       mesh.position.set(0, 0, 0);
       mesh.rotation.set(0, 0, 0);
@@ -308,6 +374,7 @@ function InteractiveModelViewer({
       backing_plate: summarizeMeshList(
         extractedBackingPlate ? [extractedBackingPlate as THREE.Mesh] : [],
       ),
+      puzzle_overlay_bounds: resolvedPuzzleOverlayBounds,
       model_bounds: bounds,
       scene_center: {
         x: +center.x.toFixed(3),
@@ -323,6 +390,7 @@ function InteractiveModelViewer({
       modelBounds: bounds,
       sceneCenter: center,
       backingPlateMesh: extractedBackingPlate as THREE.Mesh | null,
+      puzzleOverlayBounds: resolvedPuzzleOverlayBounds,
       buildSummary,
     };
   }, [scene, url]);
@@ -386,7 +454,7 @@ function InteractiveModelViewer({
     const mat = new THREE.MeshLambertMaterial({
       color: 0xf5f5f5,
       side: THREE.DoubleSide,
-      toneMapped: false,
+      toneMapped: true,
     });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.name = "__backing_plate_fallback";
@@ -444,14 +512,20 @@ function InteractiveModelViewer({
 
     for (const mesh of colorMeshes) {
       const origHex = extractHexFromMeshName(mesh.name);
-      const mat = mesh.material as THREE.MeshLambertMaterial;
+      const mat = mesh.material as THREE.MeshBasicMaterial;
 
-      // Color replacement — always apply
+      // Color replacement — drive the colour solely from mat.color.
+      // Each color_<hex> mesh is single-colour, and the GLB also bakes that
+      // same hex into per-vertex colors. With vertexColors enabled, three.js
+      // multiplies mat.color × vertex colour, applying the hex twice (white
+      // stays white, but mid/dark tones get squared → far darker, higher
+      // contrast than the 2D preview). Disable vertexColors so the chip
+      // shows the exact hex once, matching 2D and supporting colour remap.
+      mat.vertexColors = false;
       const remappedHex = colorRemapMap[origHex] || origHex;
       mat.color.set(`#${remappedHex}`);
 
       // Keep all meshes fully opaque and unchanged
-      mat.emissive.set(0x000000);
       mat.opacity = 1.0;
       mat.transparent = false;
       mat.side = THREE.DoubleSide;
@@ -527,6 +601,7 @@ function InteractiveModelViewer({
         enabled={puzzleOverlayEnabled}
         overlayUrl={puzzleOverlayUrl}
         modelBounds={modelBounds}
+        previewCanvasBounds={puzzleOverlayBounds}
         spacerThick={spacerThick}
         enableRelief={enableRelief}
         colorHeightMap={colorHeightMap}

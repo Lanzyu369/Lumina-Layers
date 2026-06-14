@@ -147,6 +147,28 @@ describe("converter store cleanup behavior", () => {
     expect(useConverterStore.getState().downloadUrl).toBe("/api/files/download-close");
   });
 
+  it("preserves generated modelUrl during cleanup after slicer launch", async () => {
+    const useConverterStore = await loadStore();
+
+    useConverterStore.setState({
+      sessionId: "sess-generated-glb",
+      downloadUrl: "/api/files/download-generated",
+      modelUrl: "/api/files/generated-glb",
+      previewGlbUrl: null,
+    });
+
+    useConverterStore.getState().cleanupAfterDownload();
+
+    expect(cleanupSessionFilesMock).toHaveBeenCalledWith(
+      "sess-generated-glb",
+      expect.arrayContaining(["download-generated", "generated-glb"]),
+    );
+    expect(closeSessionMock).toHaveBeenCalledWith(
+      "sess-generated-glb",
+      expect.arrayContaining(["download-generated", "generated-glb"]),
+    );
+  });
+
   it("ignores stale layer image responses after the session changes", async () => {
     const useConverterStore = await loadStore();
     let resolveFetch: ((value: LayerImagesPayload) => void) | undefined;
@@ -460,6 +482,100 @@ describe("converter store cleanup behavior", () => {
     expect(state.error).toBeNull();
   });
 
+  it("ignores stale puzzle overlay responses after the preview source changes", async () => {
+    const useConverterStore = await loadStore();
+    let resolveFirst: ((value: PuzzlePreviewPayload) => void) | undefined;
+    let resolveSecond: ((value: PuzzlePreviewPayload) => void) | undefined;
+
+    convertPuzzleLayoutPreviewMock
+      .mockImplementationOnce(
+        () =>
+          new Promise<PuzzlePreviewPayload>((resolve) => {
+            resolveFirst = resolve as (value: PuzzlePreviewPayload) => void;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<PuzzlePreviewPayload>((resolve) => {
+            resolveSecond = resolve as (value: PuzzlePreviewPayload) => void;
+          }),
+      );
+
+    useConverterStore.setState({
+      sessionId: "session-source",
+      previewGlbUrl: "/api/files/preview-old.glb",
+      previewImageUrl: "/api/files/preview-old.png",
+      previewBaseImageUrl: "/api/files/preview-old.png",
+      previewPixelWidth: 600,
+      previewPixelHeight: 451,
+      puzzleEnabled: true,
+      target_height_mm: 138.4375,
+      puzzleStyle: "regular",
+      puzzleSizingMode: "grid",
+      pieceWidthMm: 20,
+      pieceHeightMm: 20,
+      puzzleRows: 3,
+      puzzleCols: 3,
+      targetPieceCount: 9,
+      connectorStyle: "classic",
+      labelsEnabled: false,
+      engraveBackLabels: false,
+      irregularityStrength: 0.35,
+      minNeckWidthMm: 1.2,
+      puzzleOverlayUrl: null,
+      puzzleWarnings: [],
+      puzzleResolvedRows: null,
+      puzzleResolvedCols: null,
+      puzzleResolvedPieceCount: null,
+      puzzleDerivedPieceWidthMm: null,
+      puzzleDerivedPieceHeightMm: null,
+    });
+
+    const firstPromise = useConverterStore.getState().submitPuzzleLayoutPreview();
+
+    useConverterStore.setState({
+      previewGlbUrl: "/api/files/preview-fresh.glb",
+      previewImageUrl: "/api/files/preview-fresh.png",
+      previewBaseImageUrl: "/api/files/preview-fresh.png",
+      previewPixelWidth: 1600,
+      previewPixelHeight: 887,
+    });
+    const secondPromise = useConverterStore.getState().submitPuzzleLayoutPreview();
+
+    const secondResolver = resolveSecond as (value: PuzzlePreviewPayload) => void;
+    if (secondResolver) {
+      secondResolver({
+        overlay_url: "/api/files/fresh-puzzle-overlay",
+        warnings: ["fresh"],
+        grid_rows: 3,
+        grid_cols: 3,
+        piece_count: 9,
+        derived_piece_width_mm: 83.3333,
+        derived_piece_height_mm: 46.1458,
+      });
+    }
+    await secondPromise;
+
+    const firstResolver = resolveFirst as (value: PuzzlePreviewPayload) => void;
+    if (firstResolver) {
+      firstResolver({
+        overlay_url: "/api/files/stale-puzzle-overlay",
+        warnings: ["stale"],
+        grid_rows: 3,
+        grid_cols: 3,
+        piece_count: 9,
+        derived_piece_width_mm: 20,
+        derived_piece_height_mm: 20,
+      });
+    }
+    await firstPromise;
+
+    const state = useConverterStore.getState();
+    expect(state.previewGlbUrl).toBe("/api/files/preview-fresh.glb");
+    expect(state.puzzleOverlayUrl).toBe("/api/files/fresh-puzzle-overlay");
+    expect(state.puzzleWarnings).toEqual(["fresh"]);
+  });
+
   it("retries one failed puzzle preview request for the same params", async () => {
     vi.useFakeTimers();
     const useConverterStore = await loadStore();
@@ -519,6 +635,94 @@ describe("converter store cleanup behavior", () => {
     const state = useConverterStore.getState();
     expect(state.puzzleOverlayUrl).toBe("/api/files/retried-puzzle-overlay");
     expect(state.error).toBeNull();
+  });
+
+  it("refreshes puzzle overlay when the preview GLB source changes in the same session", async () => {
+    vi.useFakeTimers();
+    const useConverterStore = await loadStore();
+    const usePuzzleLayoutPreview = await loadPuzzlePreviewHook();
+
+    convertPuzzleLayoutPreviewMock
+      .mockResolvedValueOnce({
+        overlay_url: "/api/files/old-puzzle-overlay",
+        warnings: [],
+        grid_rows: 3,
+        grid_cols: 3,
+        piece_count: 9,
+        derived_piece_width_mm: 20,
+        derived_piece_height_mm: 20,
+      })
+      .mockResolvedValueOnce({
+        overlay_url: "/api/files/fresh-puzzle-overlay",
+        warnings: [],
+        grid_rows: 3,
+        grid_cols: 3,
+        piece_count: 9,
+        derived_piece_width_mm: 83.3333,
+        derived_piece_height_mm: 46.1458,
+      });
+
+    useConverterStore.setState({
+      sessionId: "session-same",
+      previewGlbUrl: "/api/files/preview-old.glb",
+      previewImageUrl: "/api/files/preview-old.png",
+      previewBaseImageUrl: "/api/files/preview-old.png",
+      previewPixelWidth: 600,
+      previewPixelHeight: 451,
+      puzzleEnabled: true,
+      target_height_mm: 138.4375,
+      puzzleStyle: "regular",
+      puzzleSizingMode: "grid",
+      pieceWidthMm: 20,
+      pieceHeightMm: 20,
+      puzzleRows: 3,
+      puzzleCols: 3,
+      targetPieceCount: 9,
+      connectorStyle: "classic",
+      labelsEnabled: false,
+      engraveBackLabels: false,
+      irregularityStrength: 0.35,
+      minNeckWidthMm: 1.2,
+      puzzleOverlayUrl: null,
+      puzzleWarnings: [],
+      puzzleResolvedRows: null,
+      puzzleResolvedCols: null,
+      puzzleResolvedPieceCount: null,
+      puzzleDerivedPieceWidthMm: null,
+      puzzleDerivedPieceHeightMm: null,
+    });
+
+    renderHook(() => usePuzzleLayoutPreview());
+
+    await act(async () => {
+      vi.advanceTimersByTime(250);
+      await Promise.resolve();
+    });
+    expect(convertPuzzleLayoutPreviewMock).toHaveBeenCalledTimes(1);
+    expect(useConverterStore.getState().puzzleOverlayUrl).toBe(
+      "/api/files/old-puzzle-overlay",
+    );
+
+    await act(async () => {
+      useConverterStore.setState({
+        previewGlbUrl: "/api/files/preview-fresh.glb",
+        previewImageUrl: "/api/files/preview-fresh.png",
+        previewBaseImageUrl: "/api/files/preview-fresh.png",
+        previewPixelWidth: 1600,
+        previewPixelHeight: 887,
+      });
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(250);
+      await Promise.resolve();
+    });
+
+    expect(convertPuzzleLayoutPreviewMock).toHaveBeenCalledTimes(2);
+    expect(useConverterStore.getState().puzzleOverlayUrl).toBe(
+      "/api/files/fresh-puzzle-overlay",
+    );
   });
 
   it("clears back-label engraving when piece labels are turned off", async () => {

@@ -1,7 +1,9 @@
 import io
 import os
 import tempfile
+import zlib
 from typing import Optional
+from urllib.parse import quote
 
 import numpy as np
 from fastapi import HTTPException, UploadFile
@@ -51,6 +53,8 @@ RAW_EXTENSIONS: set[str] = {
     ".srw",
     ".raw",
 }
+_GZIP_CHUNK_SIZE = 1024 * 1024
+_GLB_GZIP_MIN_BYTES = 1024
 
 
 def _decode_raw_to_pil(data: bytes) -> Image.Image:
@@ -216,15 +220,110 @@ def pil_to_streaming_response(img: Image.Image, fmt: str = "PNG") -> StreamingRe
     return StreamingResponse(buf, media_type=media_type)
 
 
-def file_to_response(path: str, filename: Optional[str] = None) -> FileResponse:
-    """将文件路径包装为 FileResponse。"""
+def file_to_response(
+    path: str,
+    filename: Optional[str] = None,
+    *,
+    accept_encoding: str | None = None,
+    range_header: str | None = None,
+) -> FileResponse | StreamingResponse:
+    """Wrap a file path as an HTTP response.
+    将文件路径包装为 HTTP 响应。
+    """
     if filename is None:
         filename = os.path.basename(path)
     media_type = _guess_media_type(path)
     # Disable browser caching for image previews to ensure fresh content
     # after color replacement / reset operations.
     headers = {"Cache-Control": "no-cache, no-store, must-revalidate"}
+    if _should_gzip_glb_response(
+        path,
+        filename,
+        accept_encoding=accept_encoding,
+        range_header=range_header,
+    ):
+        return StreamingResponse(
+            _iter_gzip_file(path),
+            media_type=media_type,
+            headers={
+                **headers,
+                "Content-Encoding": "gzip",
+                "Vary": "Accept-Encoding",
+                "Content-Disposition": _content_disposition(filename),
+            },
+        )
     return FileResponse(path=path, filename=filename, media_type=media_type, headers=headers)
+
+
+def _should_gzip_glb_response(
+    path: str,
+    filename: str,
+    *,
+    accept_encoding: str | None,
+    range_header: str | None,
+) -> bool:
+    if range_header:
+        return False
+    if not _accepts_gzip(accept_encoding):
+        return False
+    if (
+        os.path.splitext(filename)[1].lower() != ".glb"
+        and os.path.splitext(path)[1].lower() != ".glb"
+    ):
+        return False
+    try:
+        return os.path.getsize(path) >= _GLB_GZIP_MIN_BYTES
+    except OSError:
+        return False
+
+
+def _accepts_gzip(accept_encoding: str | None) -> bool:
+    if not accept_encoding:
+        return False
+    for raw_item in accept_encoding.split(","):
+        item = raw_item.strip()
+        if not item:
+            continue
+        token, *params = item.split(";")
+        token = token.strip().lower()
+        if token not in {"gzip", "*"}:
+            continue
+        q_value = 1.0
+        for param in params:
+            key, sep, value = param.strip().partition("=")
+            if sep and key.lower() == "q":
+                try:
+                    q_value = float(value)
+                except ValueError:
+                    q_value = 0.0
+        return q_value > 0.0
+    return False
+
+
+def _iter_gzip_file(path: str):
+    compressor = zlib.compressobj(
+        level=6,
+        method=zlib.DEFLATED,
+        wbits=16 + zlib.MAX_WBITS,
+    )
+    with open(path, "rb") as handle:
+        while True:
+            chunk = handle.read(_GZIP_CHUNK_SIZE)
+            if not chunk:
+                break
+            compressed = compressor.compress(chunk)
+            if compressed:
+                yield compressed
+    tail = compressor.flush()
+    if tail:
+        yield tail
+
+
+def _content_disposition(filename: str) -> str:
+    content_disposition_filename = quote(filename)
+    if content_disposition_filename != filename:
+        return f"attachment; filename*=utf-8''{content_disposition_filename}"
+    return f'attachment; filename="{filename}"'
 
 
 def _guess_media_type(path: str) -> str:

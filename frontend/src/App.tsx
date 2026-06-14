@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, Suspense, Component } from "react";
 import type { ReactNode } from "react";
 import apiClient from "./api/client";
 import type { HealthResponse } from "./api/types";
+import { trackLuminaEvent } from "./analytics/umami";
 import { useAutoPreview } from "./hooks/useAutoPreview";
 import { useAnnouncement } from "./hooks/useAnnouncement";
 import { usePuzzleLayoutPreview } from "./hooks/usePuzzleLayoutPreview";
@@ -233,6 +234,7 @@ function AppContent() {
   const [announcementReady, setAnnouncementReady] = useState(false);
   const [bugReportOpen, setBugReportOpen] = useState(false);
   const activeTab = useWidgetStore((s) => s.activeTab);
+  const activeConverterSubTab = useWidgetStore((s) => s.activeConverterSubTab);
   const setActiveTab = useWidgetStore((s) => s.setActiveTab);
   const extractorColorcheckerFullIds = useExtractorStore(
     useShallow((s) => [
@@ -290,6 +292,15 @@ function AppContent() {
     },
     [setActiveTab, clearMaterialVerification],
   );
+
+  useEffect(() => {
+    trackLuminaEvent("lumina_tab_view", {
+      active_tab: activeTab,
+      converter_sub_tab:
+        activeTab === "converter" ? activeConverterSubTab : null,
+      workspace_mode: workspace.mode,
+    });
+  }, [activeTab, activeConverterSubTab, workspace.mode]);
 
   useEffect(() => {
     apiClient

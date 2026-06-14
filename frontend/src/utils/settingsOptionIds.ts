@@ -66,6 +66,21 @@ const BAMBU_FAMILY_SLICER_IDS: ReadonlySet<string> = new Set([
   "AnycubicSlicerNext",
 ]);
 
+const DEFAULT_NOZZLE_SIZE = "0.4";
+const LUMINA_SUPPORTED_NOZZLE_SIZES = ["0.2", "0.25", DEFAULT_NOZZLE_SIZE] as const;
+const LUMINA_SUPPORTED_NOZZLE_SIZE_SET: ReadonlySet<string> = new Set(
+  LUMINA_SUPPORTED_NOZZLE_SIZES,
+);
+
+function normalizeSupportedNozzleOptions(nozzleSizes: string[]): string[] {
+  const available = new Set(
+    nozzleSizes
+      .map((size) => size.trim())
+      .filter((size) => LUMINA_SUPPORTED_NOZZLE_SIZE_SET.has(size)),
+  );
+  return LUMINA_SUPPORTED_NOZZLE_SIZES.filter((size) => available.has(size));
+}
+
 export function normalizeSlicerOptionId(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) return "";
@@ -116,6 +131,51 @@ export function filterCompatiblePrinters(
   return printers.filter((printer) => supportsSlicer(printer, slicerId));
 }
 
+export function getPrinterNozzleSizeOptions(
+  printer: PrinterInfo | undefined,
+  slicerId: string,
+): string[] {
+  const registryNozzles =
+    printer?.device_profiles
+      ?.filter((profile) => profile.supported !== false && profile.slicer_id === slicerId)
+      .map((profile) => profile.nozzle_size) ?? [];
+  const uniqueRegistryNozzles = normalizeSupportedNozzleOptions(registryNozzles);
+  if (uniqueRegistryNozzles.length > 0) {
+    return uniqueRegistryNozzles;
+  }
+  const declaredNozzles = normalizeSupportedNozzleOptions(
+    printer?.supported_nozzle_sizes ?? [...LUMINA_SUPPORTED_NOZZLE_SIZES],
+  );
+  return declaredNozzles.length > 0 ? declaredNozzles : [DEFAULT_NOZZLE_SIZE];
+}
+
+export function resolveDeviceProfileOptionId(
+  currentValue: string,
+  printer: PrinterInfo | undefined,
+  slicerId: string,
+  nozzleSize: string,
+): string {
+  const profiles =
+    printer?.device_profiles?.filter(
+      (profile) =>
+        profile.supported !== false &&
+        profile.slicer_id === slicerId &&
+        LUMINA_SUPPORTED_NOZZLE_SIZE_SET.has(profile.nozzle_size.trim()),
+    ) ?? [];
+  if (profiles.length === 0) {
+    return "";
+  }
+  const exactCurrent = profiles.find(
+    (profile) =>
+      profile.device_profile_id === currentValue && profile.nozzle_size === nozzleSize,
+  );
+  if (exactCurrent) {
+    return exactCurrent.device_profile_id;
+  }
+  const matchingNozzle = profiles.find((profile) => profile.nozzle_size === nozzleSize);
+  return matchingNozzle?.device_profile_id ?? profiles[0].device_profile_id;
+}
+
 export function resolveSlicerOptionId(
   currentValue: string,
   slicers: SlicerOption[],
@@ -144,12 +204,17 @@ export function resolvePrinterOptionId(
 export function resolveNozzleSizeOption(
   currentValue: string,
   printer: PrinterInfo | undefined,
+  slicerId = "",
 ): string {
   const normalized = currentValue.trim() || "0.4";
-  const supported = printer?.supported_nozzle_sizes ?? ["0.2", "0.4"];
+  const supported = slicerId
+    ? getPrinterNozzleSizeOptions(printer, slicerId)
+    : printer?.supported_nozzle_sizes ?? ["0.2", "0.4"];
 
   if (supported.includes(normalized)) {
     return normalized;
   }
-  return supported[0] ?? normalized;
+  return supported.includes(DEFAULT_NOZZLE_SIZE)
+    ? DEFAULT_NOZZLE_SIZE
+    : supported[0] ?? DEFAULT_NOZZLE_SIZE;
 }

@@ -119,6 +119,71 @@ def test_render_puzzle_overlay_respects_visibility_mask() -> None:
     assert np.any(overlay_rgba[:, 60:, 3] > 0)
 
 
+def test_render_puzzle_overlay_keeps_mask_boundary_line_visible() -> None:
+    """Visibility mask must not shave the line drawn on the solid boundary."""
+
+    visibility_mask = np.zeros((320, 640), dtype=bool)
+    visibility_mask[40:280, 60:580] = True
+
+    layout = build_puzzle_layout(
+        PuzzleLayoutConfig(
+            width_px=640,
+            height_px=320,
+            total_width_mm=120.0,
+            total_height_mm=60.0,
+            style="regular",
+            sizing_mode="grid",
+            rows=1,
+            cols=1,
+            seed=5,
+            connector_style="classic",
+            irregularity_strength=0.35,
+            min_neck_width_mm=1.2,
+            solid_mask=visibility_mask,
+        )
+    )
+
+    overlay = render_puzzle_overlay(layout, visibility_mask=visibility_mask)
+    overlay_rgba = np.array(overlay)
+
+    assert layout.layout_mode == "mask_aware"
+    assert np.any(overlay_rgba[39, 60:580, 3] > 0)
+    assert np.any(overlay_rgba[280, 60:580, 3] > 0)
+    assert np.any(overlay_rgba[40:280, 60, 3] > 0)
+    assert np.any(overlay_rgba[40:280, 579, 3] > 0)
+    assert np.all(overlay_rgba[:37, :, 3] == 0)
+    assert np.all(overlay_rgba[:, :57, 3] == 0)
+
+
+def test_render_puzzle_overlay_keeps_rectangular_outer_edges_visible() -> None:
+    """Rectangular puzzle overlay should keep all four outer edges on-canvas."""
+
+    layout = build_puzzle_layout(
+        PuzzleLayoutConfig(
+            width_px=600,
+            height_px=600,
+            total_width_mm=60.0,
+            total_height_mm=60.0,
+            style="regular",
+            sizing_mode="grid",
+            rows=3,
+            cols=3,
+            seed=5,
+            connector_style="classic",
+            irregularity_strength=0.35,
+            min_neck_width_mm=1.2,
+        )
+    )
+
+    overlay = render_puzzle_overlay(layout)
+    alpha = np.array(overlay)[..., 3] > 0
+
+    assert alpha[0, :].sum() == 600
+    assert alpha[-1, :].sum() == 600
+    assert alpha[:, 0].sum() == 600
+    assert alpha[:, -1].sum() == 600
+
+
 def test_export_piece_boundary_geometry_round_trips_absolute_coordinates() -> None:
     """Boundary export should preserve the original absolute polygon after roundtrip."""
 

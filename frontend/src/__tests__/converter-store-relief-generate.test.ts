@@ -61,6 +61,14 @@ function previewResponse(palette: PaletteEntry[] = PREVIEW_PALETTE) {
     message: "Preview generated",
     preview_url: "/api/files/preview.png",
     preview_glb_url: null,
+    performance_timing: {
+      total_ms: 101,
+      upload_ms: 2,
+      worker_ms: 90,
+      pickle_load_ms: 3,
+      segmented_glb_ms: 4,
+      palette_ms: 2,
+    },
     palette,
     contours: {},
     dimensions: {
@@ -77,6 +85,11 @@ function generateResponse() {
     message: "Model generated",
     download_url: "/api/files/model.3mf",
     preview_3d_url: "/api/files/model.glb",
+    performance_timing: {
+      total_ms: 202,
+      worker_ms: 180,
+      overhead_ms: 22,
+    },
   };
 }
 
@@ -205,6 +218,31 @@ describe("converter store relief generate flow", () => {
     });
   });
 
+  it("stores preview and generate performance timing from successful responses", async () => {
+    const useConverterStore = await loadStore();
+    useConverterStore.setState({
+      ...baseReadyState(),
+      sessionId: null,
+      palette: [],
+    });
+
+    await useConverterStore.getState().submitFullPipeline();
+
+    expect(useConverterStore.getState().previewPerformanceTiming).toMatchObject({
+      total_ms: 101,
+      segmented_glb_ms: 4,
+    });
+    expect(useConverterStore.getState().generatePerformanceTiming).toMatchObject({
+      total_ms: 202,
+      overhead_ms: 22,
+    });
+
+    useConverterStore.getState().setImageFile(null);
+
+    expect(useConverterStore.getState().previewPerformanceTiming).toBeNull();
+    expect(useConverterStore.getState().generatePerformanceTiming).toBeNull();
+  });
+
   it("sends auto-built relief heights as store values plus spacer thickness", async () => {
     const useConverterStore = await loadStore();
     useConverterStore.setState({
@@ -300,6 +338,7 @@ describe("converter store relief generate flow", () => {
 
     expect(mocks.convertGenerateLargeFormat).toHaveBeenCalledOnce();
     const [, largeFormatRequest] = mocks.convertGenerateLargeFormat.mock.calls[0];
+    expect(largeFormatRequest.target_height_mm).toBeUndefined();
     expect(largeFormatRequest.params.color_height_map).toEqual({
       "111111": 2.88,
     });

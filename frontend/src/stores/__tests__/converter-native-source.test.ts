@@ -4,6 +4,7 @@ import {
   resolveConverterSourceSelection,
   useConverterStore,
 } from "../../stores/converter";
+import { useSettingsStore } from "../../stores/settingsStore";
 import * as lutApi from "../../api/lut";
 import { ColorMode, ModelingMode, StructureMode } from "../../api/types";
 
@@ -285,6 +286,7 @@ describe("native bundle converter flow", () => {
     const state = useConverterStore.getState();
     expect(mocks.convertGenerateLargeFormat).toHaveBeenCalledOnce();
     const [, request] = mocks.convertGenerateLargeFormat.mock.calls[0];
+    expect(request.target_height_mm).toBeUndefined();
     expect(request.params.model_threshold).toBe(0.42);
     expect(request.params.model_margin).toBe(1.25);
     expect(state.isGenerating).toBe(false);
@@ -714,6 +716,7 @@ describe("native bundle converter flow", () => {
       model_only: false,
       selectedNativeBrandKey: "brand-a",
       selectedNativeDbNames: ["A2"],
+      largeFormatEnabled: true,
       nativeBrandGroups: [
         makePredictiveBrand(),
       ],
@@ -739,6 +742,7 @@ describe("native bundle converter flow", () => {
       model_threshold: 6.5,
       model_margin: 0.9,
       target_width_mm: 90,
+      large_format_enabled: true,
     });
     expect(params).not.toHaveProperty("lut_name");
     expect(useConverterStore.getState().sessionId).toBe("session-native");
@@ -963,6 +967,9 @@ describe("native bundle converter flow", () => {
       irregularityStrength: 0.35,
       minNeckWidthMm: 1.2,
     } as never);
+    useSettingsStore.setState({
+      deviceProfileId: "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
+    } as never);
 
     const result = await useConverterStore.getState().submitGenerate();
 
@@ -980,6 +987,7 @@ describe("native bundle converter flow", () => {
     expect(params.params).toMatchObject({
       lut_name: "legacy-lut",
       target_width_mm: 90,
+      device_profile_id: "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
     });
     expect(result).toBeNull();
     expect(useConverterStore.getState().downloadUrl).toBe("/api/files/puzzle-model");

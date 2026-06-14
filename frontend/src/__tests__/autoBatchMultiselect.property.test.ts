@@ -2,6 +2,7 @@ import { describe, it, beforeEach, expect } from "vitest";
 import * as fc from "fast-check";
 import { useConverterStore } from "../stores/converter";
 import { isValidImageType } from "../stores/converter";
+import type { BatchResponse } from "../api/types";
 
 // ========== Generators ==========
 
@@ -40,6 +41,18 @@ function resetStore(): void {
     enableCrop: false,
     cropModalOpen: false,
   });
+}
+
+function makeBatchResult(): BatchResponse {
+  return {
+    status: "success",
+    message: "old batch result",
+    download_url: "/old.zip",
+    threemf_disk_path: "/old.3mf",
+    preview_3d_url: "/old.glb",
+    results: [],
+    warnings: [],
+  };
 }
 
 // ========== Operation type for random sequences ==========
@@ -115,7 +128,7 @@ describe("Auto-Batch Multiselect Property-Based Tests", () => {
       );
     });
 
-    it("single file from SingleMode replaces imageFile and stays in SingleMode", () => {
+    it("single file from SingleMode appends to the current list and switches to BatchMode", () => {
       fc.assert(
         fc.property(arbValidFile, arbValidFile, (existingFile, newFile) => {
           resetStore();
@@ -129,12 +142,52 @@ describe("Auto-Batch Multiselect Property-Based Tests", () => {
           useConverterStore.getState().handleFilesSelect([newFile]);
 
           const state = useConverterStore.getState();
-          expect(state.imageFile).toBe(newFile);
-          expect(state.batchFiles).toEqual([]);
-          expect(state.batchMode).toBe(false);
+          expect(state.imageFile).toBeNull();
+          expect(state.batchFiles).toEqual([existingFile, newFile]);
+          expect(state.batchMode).toBe(true);
+          expect(state.previewImageUrl).toBeNull();
+          expect(state.sessionId).toBeNull();
+          expect(state.previewGlbUrl).toBeNull();
         }),
         { numRuns: 100 },
       );
+    });
+
+    it("clears stale batch results when appending from SingleMode", () => {
+      resetStore();
+      const existingFile = new File(["a"], "existing.png", { type: "image/png" });
+      const newFile = new File(["b"], "new.png", { type: "image/png" });
+
+      useConverterStore.setState({
+        imageFile: existingFile,
+        batchResult: makeBatchResult(),
+      });
+      useConverterStore.getState().handleFilesSelect([newFile]);
+
+      expect(useConverterStore.getState().batchFiles).toEqual([
+        existingFile,
+        newFile,
+      ]);
+      expect(useConverterStore.getState().batchResult).toBeNull();
+    });
+
+    it("clears stale batch results when appending while already in BatchMode", () => {
+      resetStore();
+      const existingFile = new File(["a"], "existing.png", { type: "image/png" });
+      const newFile = new File(["b"], "new.png", { type: "image/png" });
+
+      useConverterStore.setState({
+        batchFiles: [existingFile],
+        batchMode: true,
+        batchResult: makeBatchResult(),
+      });
+      useConverterStore.getState().handleFilesSelect([newFile]);
+
+      expect(useConverterStore.getState().batchFiles).toEqual([
+        existingFile,
+        newFile,
+      ]);
+      expect(useConverterStore.getState().batchResult).toBeNull();
     });
   });
 
@@ -281,14 +334,11 @@ describe("Auto-Batch Multiselect Property-Based Tests", () => {
 
   // **Validates: Requirements 6.1, 6.2**
   describe("Property 6: 单图模式合并到批量模式", () => {
-    it("selecting 2+ new files in SingleMode merges existing imageFile into batchFiles and switches to BatchMode", () => {
-      // Note: When only 1 new file is selected in SingleMode, handleFilesSelect
-      // replaces imageFile (design doc point 4). The merge to BatchMode only
-      // triggers with ≥2 new files (design doc point 5).
+    it("selecting new files in SingleMode merges existing imageFile into batchFiles and switches to BatchMode", () => {
       fc.assert(
         fc.property(
           arbValidFile,
-          fc.array(arbValidFile, { minLength: 2, maxLength: 10 }),
+          fc.array(arbValidFile, { minLength: 1, maxLength: 10 }),
           (existingFile, newFiles) => {
             resetStore();
 

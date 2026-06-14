@@ -37,6 +37,8 @@ class _StubSolverCache:
 
     def __init__(self, layer_count: int):
         self.layer_count = int(layer_count)
+        self.mode = "stub"
+        self.valid_cell_count = 0
         self.metadata = {"mean_delta_e": 0.0, "max_delta_e": 0.0}
 
     def lookup(self, unique_colors: np.ndarray, materials, *, hue_weight: float = 0.0):
@@ -191,6 +193,59 @@ class TestMaterialVectorMatcherSolveForFills:
             lab = MaterialVectorMatcher._rgb_to_lab(np.array([rgb], dtype=np.uint8))
             _dist, idx = m.kdtree.query(lab)
             assert int(idx[0]) == expected_idx
+
+    def test_full_coverage_runtime_applies_not_worse_fallback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        m = _build_matcher(layer_count=6, materials_count=3)
+        m._solver_cache.mode = "candidate_hybrid"  # noqa: SLF001
+        m._solver_cache.valid_cell_count = 3**6  # noqa: SLF001
+
+        improved_b2t = np.asarray([[2, 2, 1, 1, 0, 0]], dtype=np.int32)
+        calls = {"n": 0}
+
+        def fake_fallback(
+            unique_colors,
+            materials,
+            baseline_matched_rgb,
+            baseline_recipes,
+            baseline_delta_e,
+            **kwargs,
+        ):
+            calls["n"] += 1
+            assert kwargs["target_layer_count"] == 6
+            assert unique_colors.tolist() == [[10, 20, 30]]
+            assert baseline_recipes.shape == (1, 6)
+            return (
+                np.asarray([[11, 21, 31]], dtype=np.uint8),
+                improved_b2t,
+                np.asarray([0.5], dtype=np.float64),
+                {
+                    "applied": True,
+                    "improved_pixels": 1,
+                    "mean_delta_e_before": 4.0,
+                    "max_delta_e_before": 4.0,
+                    "mean_delta_e_after": 0.5,
+                    "max_delta_e_after": 0.5,
+                },
+            )
+
+        monkeypatch.setattr(
+            "core.material_lut_synthesis.ensure_not_worse_than_smaller_N",
+            fake_fallback,
+        )
+
+        m.solve_for_fills([(10, 20, 30)])
+
+        assert calls["n"] == 1
+        np.testing.assert_array_equal(
+            m.lut_rgb[0],
+            np.asarray([11, 21, 31], dtype=np.uint8),
+        )
+        np.testing.assert_array_equal(
+            m.ref_stacks[0],
+            np.asarray([0, 0, 1, 1, 2, 2], dtype=np.int32),
+        )
 
 
 class TestMaterialVectorMatcherIgnoresInvalidInput:

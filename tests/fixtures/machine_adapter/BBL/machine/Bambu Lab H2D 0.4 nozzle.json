@@ -1,0 +1,11 @@
+{
+  "type": "machine",
+  "name": "Bambu Lab H2D 0.4 nozzle",
+  "inherits": "fdm_common",
+  "instantiation": "true",
+  "setting_id": "GM033",
+  "printer_model": "Bambu Lab H2D",
+  "printer_variant": "0.4",
+  "nozzle_diameter": ["0.4", "0.4"],
+  "include": ["Bambu Lab H2D 0.4 nozzle template machine_start_gcode"]
+}

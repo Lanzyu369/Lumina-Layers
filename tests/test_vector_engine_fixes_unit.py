@@ -15,16 +15,23 @@ Covers:
 import math
 import tempfile
 import os
+import io
+import xml.etree.ElementTree as ET
+from unittest import mock
 import numpy as np
 import pytest
+from svgelements import Arc, Path as SvgPath
 from shapely.geometry import Polygon, MultiPolygon, GeometryCollection, LineString
+from shapely.ops import unary_union as shapely_unary_union
 
+import core.vector_engine as vector_engine
 from core.vector_engine import (
     _flatten_cubic,
     _flatten_quadratic,
     _sample_gradient_stops,
     _parse_svg_transform,
     _parse_gradient_length,
+    _union_run_group_geometries,
     VectorProcessor,
     MIN_SHAPE_AREA_MM2,
 )
@@ -80,6 +87,46 @@ class TestFlattenQuadraticBezier:
         _flatten_quadratic(0, 0, 5, 10, 10, 0, tolerance=0.1, out=out, depth=0)
         assert len(out) > 2
         assert out[-1] == pytest.approx((10.0, 0.0))
+
+
+class TestFlattenArcSegments:
+    """Verify SVG arc segments use vectorized sampling."""
+
+    def test_arc_sampling_uses_single_vectorized_npoint_call(self, monkeypatch):
+        path = SvgPath("M 10,50 A 40,40 0 0 1 90,50")
+        arc = next(seg for seg in path.segments() if isinstance(seg, Arc))
+        calls = []
+        real_npoint = Arc.npoint
+
+        def spy_npoint(self, positions):
+            calls.append(len(positions))
+            return real_npoint(self, positions)
+
+        def fail_point(self, _position):
+            raise AssertionError("arc sampling should not call Arc.point per sample")
+
+        monkeypatch.setattr(Arc, "npoint", spy_npoint)
+        monkeypatch.setattr(Arc, "point", fail_point)
+
+        points = vector_engine._sample_arc_segment_points(arc, sample_count=10)
+
+        assert calls == [10]
+        assert len(points) == 10
+        assert points[-1] == pytest.approx((arc.end.x, arc.end.y))
+
+    def test_default_arc_sampling_reuses_precomputed_positions(self, monkeypatch):
+        path = SvgPath("M 10,50 A 40,40 0 0 1 90,50")
+        arc = next(seg for seg in path.segments() if isinstance(seg, Arc))
+
+        def fail_linspace(*_args, **_kwargs):
+            raise RuntimeError("default arc sampling should not allocate linspace")
+
+        monkeypatch.setattr(vector_engine.np, "linspace", fail_linspace)
+
+        points = vector_engine._sample_arc_segment_points(arc, sample_count=10)
+
+        assert len(points) == 10
+        assert points[-1] == pytest.approx((arc.end.x, arc.end.y))
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +189,271 @@ class TestNormalizeContours:
         empty = Polygon()
         result = VectorProcessor._normalize_contours(empty)
         assert result.is_empty
+
+    def test_cached_normalize_reuses_same_geometry_and_delta(self, monkeypatch):
+        geom = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])
+        calls = []
+        original = VectorProcessor._normalize_contours
+
+        def spy_normalize(input_geom, close_delta_mm=0.03):
+            calls.append((id(input_geom), close_delta_mm))
+            return original(input_geom, close_delta_mm=close_delta_mm)
+
+        monkeypatch.setattr(VectorProcessor, "_normalize_contours", staticmethod(spy_normalize))
+        cache = {}
+
+        first = vector_engine._normalize_contours_cached(cache, geom, close_delta_mm=0.03)
+        second = vector_engine._normalize_contours_cached(cache, geom, close_delta_mm=0.03)
+        third = vector_engine._normalize_contours_cached(cache, geom, close_delta_mm=0.05)
+
+        assert first is second
+        assert third is not first
+        assert calls == [(id(geom), 0.03), (id(geom), 0.05)]
+
+    def test_cached_normalize_rejects_stale_id_collision(self, monkeypatch):
+        geom = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])
+        stale_geom = Polygon([(20, 0), (30, 0), (30, 10), (20, 10)])
+        stale_result = stale_geom.buffer(0)
+        calls = []
+        original = VectorProcessor._normalize_contours
+
+        def spy_normalize(input_geom, close_delta_mm=0.03):
+            calls.append((id(input_geom), close_delta_mm))
+            return original(input_geom, close_delta_mm=close_delta_mm)
+
+        monkeypatch.setattr(VectorProcessor, "_normalize_contours", staticmethod(spy_normalize))
+        cache = {(id(geom), 0.03): stale_result}
+
+        result = vector_engine._normalize_contours_cached(cache, geom, close_delta_mm=0.03)
+
+        assert result is not stale_result
+        assert result.bounds == pytest.approx(geom.bounds)
+        assert calls == [(id(geom), 0.03)]
+
+    def test_clip_occlusion_preserves_normalized_flag_for_unchanged_geometry(self):
+        first = Polygon([(0, 0), (5, 0), (5, 5), (0, 5)])
+        second = Polygon([(10, 0), (15, 0), (15, 5), (10, 5)])
+        shape_data = [
+            {"poly": first, "color": (255, 255, 255), "geometry_normalized": True},
+            {"poly": second, "color": (255, 0, 0), "geometry_normalized": True},
+        ]
+
+        result = VectorProcessor._clip_occlusion(shape_data)
+
+        assert result[0]["geometry"] is first
+        assert result[0]["geometry_normalized"] is True
+        assert result[1]["geometry"] is second
+        assert result[1]["geometry_normalized"] is True
+
+    def test_clip_occlusion_uses_strtree_intersects_predicate_when_available(self, monkeypatch):
+        bottom = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])
+        top = Polygon([(5, 0), (15, 0), (15, 10), (5, 10)])
+        seen_predicates = []
+
+        class FakeSTRtree:
+            def __init__(self, geoms):
+                self.geoms = list(geoms)
+
+            def query(self, geom, predicate=None):
+                seen_predicates.append(predicate)
+                if predicate == "intersects":
+                    return [
+                        idx
+                        for idx, candidate in enumerate(self.geoms)
+                        if candidate.intersects(geom)
+                    ]
+                return list(range(len(self.geoms)))
+
+        monkeypatch.setattr(vector_engine, "STRtree", FakeSTRtree)
+
+        result = VectorProcessor._clip_occlusion(
+            [
+                {"poly": bottom, "color": (255, 255, 255)},
+                {"poly": top, "color": (255, 0, 0)},
+            ]
+        )
+
+        assert seen_predicates
+        assert set(seen_predicates) == {"intersects"}
+        assert sum(item["geometry"].area for item in result) == pytest.approx(150.0)
+
+    def test_postprocess_clipped_shapes_skips_known_normalized_geometry(self, monkeypatch):
+        normalized = Polygon([(0, 0), (5, 0), (5, 5), (0, 5)])
+        clipped = Polygon([(10, 0), (15, 0), (15, 5), (10, 5)])
+        calls = []
+        original = VectorProcessor._normalize_contours
+
+        def spy_normalize(input_geom, close_delta_mm=0.03):
+            calls.append(id(input_geom))
+            return original(input_geom, close_delta_mm=close_delta_mm)
+
+        monkeypatch.setattr(VectorProcessor, "_normalize_contours", staticmethod(spy_normalize))
+
+        result = VectorProcessor._postprocess_clipped_shapes(
+            [
+                {
+                    "geometry": normalized,
+                    "color": (255, 255, 255),
+                    "geometry_normalized": True,
+                },
+                {"geometry": clipped, "color": (255, 0, 0)},
+            ]
+        )
+
+        assert result[0]["geometry"] is normalized
+        assert calls == [id(clipped)]
+
+    def test_parse_svg_preserves_normalized_marker_on_final_shapes(self):
+        svg = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">'
+            '  <rect x="1" y="1" width="10" height="10" fill="rgb(255,0,0)"/>'
+            "</svg>"
+        )
+        fd, path = tempfile.mkstemp(suffix=".svg")
+        try:
+            with os.fdopen(fd, "w") as handle:
+                handle.write(svg)
+            vp = VectorProcessor.__new__(VectorProcessor)
+            vp.sampling_precision = 0.02
+
+            shapes, _scale, _bbox = vp._parse_svg(path, target_width_mm=20.0)
+        finally:
+            os.unlink(path)
+
+        assert shapes
+        assert shapes[0]["geometry_normalized"] is True
+
+    def test_parse_svg_drops_normalized_marker_when_simplify_changes_shape(self):
+        svg = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">'
+            '  <path fill="rgb(255,0,0)" '
+            'd="M 1 1 L 10 1 L 10 10 L 5 10.001 L 1 10 Z"/>'
+            "</svg>"
+        )
+        fd, path = tempfile.mkstemp(suffix=".svg")
+        try:
+            with os.fdopen(fd, "w") as handle:
+                handle.write(svg)
+            vp = VectorProcessor.__new__(VectorProcessor)
+            vp.sampling_precision = 0.02
+
+            shapes, _scale, _bbox = vp._parse_svg(path, target_width_mm=20.0)
+        finally:
+            os.unlink(path)
+
+        assert shapes
+        assert "geometry_normalized" not in shapes[0]
+
+    def test_parse_svg_filters_ignored_stroke_only_paths_before_svg_parse(self, monkeypatch):
+        svg = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">'
+            '  <path d="M 0 10 L 20 10" fill="none" stroke="#0000ff" stroke-width="2"/>'
+            '  <path d="M 1 1 L 10 1 L 10 10 L 1 10 Z" fill="#ff0000" stroke="none"/>'
+            "</svg>"
+        )
+        fd, path = tempfile.mkstemp(suffix=".svg")
+        original_parse = vector_engine.SVG.parse
+        parsed_fill_none_counts = []
+
+        def spy_parse(source, *args, **kwargs):
+            if hasattr(source, "read"):
+                payload = source.read()
+                if isinstance(payload, str):
+                    payload_bytes = payload.encode("utf-8")
+                else:
+                    payload_bytes = payload
+                parse_source = io.BytesIO(payload_bytes)
+            else:
+                payload_bytes = open(source, "rb").read()
+                parse_source = io.BytesIO(payload_bytes)
+            root = ET.fromstring(payload_bytes)
+            parsed_fill_none_counts.append(
+                sum(
+                    1
+                    for elem in root.iter()
+                    if elem.tag.split("}")[-1] == "path"
+                    and str(elem.get("fill", "")).strip().lower() == "none"
+                )
+            )
+            return original_parse(parse_source, *args, **kwargs)
+
+        try:
+            with os.fdopen(fd, "w") as handle:
+                handle.write(svg)
+            vp = VectorProcessor.__new__(VectorProcessor)
+            vp.sampling_precision = 0.02
+            vp._parse_expand_stroke_to_fill = False
+            monkeypatch.setattr(vector_engine.SVG, "parse", spy_parse)
+
+            shapes, _scale, _bbox = vp._parse_svg(path, target_width_mm=20.0)
+        finally:
+            os.unlink(path)
+
+        assert parsed_fill_none_counts == [0]
+        assert [shape["color"] for shape in shapes] == [(255, 0, 0)]
+
+    def test_normalize_contours_skips_make_valid_for_valid_polygon(self, monkeypatch):
+        geom = Polygon([(0, 0), (20, 0), (20, 20), (0, 20)])
+        calls = []
+
+        def spy_make_valid(input_geom):
+            calls.append(input_geom)
+            return input_geom
+
+        monkeypatch.setattr(vector_engine, "make_valid", spy_make_valid)
+
+        result = VectorProcessor._normalize_contours(geom, close_delta_mm=0.03)
+
+        assert result is not None
+        assert result.is_valid
+        assert result.geom_type == "Polygon"
+        assert calls == []
+
+    def test_normalize_contours_uses_single_segment_mitre_buffers(self):
+        class _FakeGeometry:
+            def __init__(self, name):
+                self.name = name
+                self.is_empty = False
+                self.is_valid = True
+                self.geom_type = "Polygon"
+                self.buffer_calls = []
+
+            def buffer(self, distance, **kwargs):
+                self.buffer_calls.append((distance, kwargs))
+                if self.name == "source":
+                    return inflated
+                return deflated
+
+        source = _FakeGeometry("source")
+        inflated = _FakeGeometry("inflated")
+        deflated = _FakeGeometry("deflated")
+
+        result = VectorProcessor._normalize_contours(source, close_delta_mm=0.03)
+
+        assert result is deflated
+        assert source.buffer_calls == [
+            (
+                0.03,
+                {
+                    "quad_segs": 1,
+                    "join_style": "mitre",
+                    "mitre_limit": 2.0,
+                },
+            )
+        ]
+        assert inflated.buffer_calls == [
+            (
+                -0.03,
+                {
+                    "quad_segs": 1,
+                    "join_style": "mitre",
+                    "mitre_limit": 2.0,
+                },
+            )
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -542,6 +854,92 @@ class TestRunLengthExtrudeMerging:
         )
         assert "White" in result
         assert "Cyan" in result
+
+    def test_same_run_group_uses_disjoint_subset_union_when_available(self):
+        geoms = [
+            Polygon([(0, 0), (5, 0), (5, 5), (0, 5)]),
+            Polygon([(10, 0), (15, 0), (15, 5), (10, 5)]),
+            Polygon([(20, 0), (25, 0), (25, 5), (20, 5)]),
+        ]
+        matched = [
+            {"geometry": geom, "recipe": [0, 0, 0, 0, 0], "color": (255, 255, 255)}
+            for geom in geoms
+        ]
+
+        def fake_disjoint_subset_union_all(items):
+            return shapely_unary_union(list(items))
+
+        fast_union = mock.Mock(side_effect=fake_disjoint_subset_union_all)
+        with (
+            mock.patch.dict(
+                _union_run_group_geometries.__globals__,
+                {"disjoint_subset_union_all": fast_union},
+            ),
+            mock.patch.object(VectorProcessor, "_extrude_geometry", return_value=["mesh"]),
+        ):
+            result = VectorProcessor._run_length_extrude(
+                matched,
+                num_layers=5,
+                layer_h=0.08,
+                num_channels=4,
+                slot_names=["White", "Cyan", "Magenta", "Yellow"],
+                scale_factor=1.0,
+                extrude_cache={},
+            )
+
+        assert "White" in result
+        assert fast_union.call_count == 1
+
+    def test_reuses_precision_snaps_for_geometry_across_run_groups(self):
+        sq1 = Polygon([(0, 0), (5, 0), (5, 5), (0, 5)])
+        sq2 = Polygon([(10, 0), (15, 0), (15, 5), (10, 5)])
+        matched = [
+            {"geometry": sq1, "recipe": [0, 1, 0], "color": (255, 255, 255)},
+            {"geometry": sq2, "recipe": [0, 1, 0], "color": (0, 255, 255)},
+        ]
+        snap_calls = []
+
+        def spy_set_precision(geom, grid_size):
+            snap_calls.append((id(geom), grid_size))
+            return geom
+
+        with (
+            mock.patch.dict(
+                VectorProcessor._run_length_extrude.__globals__,
+                {"set_precision": spy_set_precision},
+            ),
+            mock.patch.object(VectorProcessor, "_extrude_geometry", return_value=["mesh"]),
+        ):
+            result = VectorProcessor._run_length_extrude(
+                matched,
+                num_layers=3,
+                layer_h=0.08,
+                num_channels=4,
+                slot_names=["White", "Cyan", "Magenta", "Yellow"],
+                scale_factor=1.0,
+                extrude_cache={},
+            )
+
+        assert "White" in result
+        assert "Cyan" in result
+        assert len(snap_calls) == 2
+        assert {call[0] for call in snap_calls} == {id(sq1), id(sq2)}
+
+    def test_run_group_union_falls_back_when_disjoint_subset_union_fails(self):
+        geoms = [
+            Polygon([(0, 0), (5, 0), (5, 5), (0, 5)]),
+            Polygon([(10, 0), (15, 0), (15, 5), (10, 5)]),
+        ]
+
+        fast_union = mock.Mock(side_effect=RuntimeError("fast union failed"))
+        with mock.patch.dict(
+            _union_run_group_geometries.__globals__,
+            {"disjoint_subset_union_all": fast_union},
+        ):
+            result = _union_run_group_geometries(geoms)
+
+        assert fast_union.call_count == 1
+        assert result.area == pytest.approx(50.0)
 
 
 # ---------------------------------------------------------------------------

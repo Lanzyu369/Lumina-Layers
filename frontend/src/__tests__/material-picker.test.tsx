@@ -37,6 +37,14 @@ const SAMPLE_MATERIALS: SavedMaterialLibraryItem[] = [
   makeMaterial({ material_name: "Blue PLA", directory_name: "blue-pla", estimated_rgb: [40, 80, 200] }),
 ];
 
+const expandAllMaterialPickerGroups = () => {
+  for (const toggle of screen.getAllByTestId("material-picker-brand-group-toggle")) {
+    if (toggle.getAttribute("aria-expanded") === "false") {
+      fireEvent.click(toggle);
+    }
+  }
+};
+
 describe("MaterialPickerDialog", () => {
   it("renders nothing when closed", () => {
     const { container } = render(
@@ -63,6 +71,11 @@ describe("MaterialPickerDialog", () => {
         onCancel={vi.fn()}
       />,
     );
+    const groupToggle = screen.getByTestId("material-picker-brand-group-toggle");
+    expect(groupToggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Red PLA")).not.toBeInTheDocument();
+
+    fireEvent.click(groupToggle);
     expect(screen.getByText("Red PLA")).toBeInTheDocument();
     expect(screen.getByText("Yellow PLA")).toBeInTheDocument();
     expect(screen.getByText("Blue PLA")).toBeInTheDocument();
@@ -80,6 +93,8 @@ describe("MaterialPickerDialog", () => {
         onCancel={vi.fn()}
       />,
     );
+
+    expandAllMaterialPickerGroups();
 
     // Toggle Yellow (add) and Red (remove)
     fireEvent.click(screen.getByText("Yellow PLA"));
@@ -102,8 +117,9 @@ describe("MaterialPickerDialog", () => {
         onCancel={onCancel}
       />,
     );
+    expandAllMaterialPickerGroups();
     fireEvent.click(screen.getByText("Red PLA"));
-    fireEvent.click(screen.getByText("关闭"));
+    fireEvent.click(screen.getByRole("button", { name: "关闭" }));
     expect(onCancel).toHaveBeenCalled();
     expect(onConfirm).not.toHaveBeenCalled();
   });
@@ -142,13 +158,24 @@ describe("MaterialPickerDialog", () => {
     expect(groups[0].getAttribute("data-brand")).toBe("瑞贝思");
     expect(groups[1].getAttribute("data-brand")).toBe("");
 
-    // Brand header + 2 branded materials under that group
+    // Brand headers are visible, but material rows start collapsed.
     expect(groups[0].textContent).toContain("瑞贝思");
-    expect(groups[0].textContent).toContain("Red PLA");
-    expect(groups[0].textContent).toContain("White PLA");
+    expect(groups[0].textContent).not.toContain("Red PLA");
+    expect(groups[0].textContent).not.toContain("White PLA");
+    expect(groups[1].textContent).not.toContain("Legacy PLA");
 
-    // Unassigned header + legacy entry at the end
-    expect(groups[1].textContent).toContain("Legacy PLA");
+    const firstGroupToggle = within(groups[0]).getByTestId("material-picker-brand-group-toggle");
+    const unassignedGroupToggle = within(groups[1]).getByTestId("material-picker-brand-group-toggle");
+    expect(firstGroupToggle).toHaveAttribute("aria-expanded", "false");
+    expect(unassignedGroupToggle).toHaveAttribute("aria-expanded", "false");
+
+    fireEvent.click(firstGroupToggle);
+    fireEvent.click(unassignedGroupToggle);
+
+    expect(firstGroupToggle).toHaveAttribute("aria-expanded", "true");
+    expect(within(groups[0]).getByText("Red PLA")).toBeInTheDocument();
+    expect(within(groups[0]).getByText("White PLA")).toBeInTheDocument();
+    expect(within(groups[1]).getByText("Legacy PLA")).toBeInTheDocument();
 
     const brandTags = screen.getAllByTestId("material-picker-brand-tag");
     expect(brandTags.map((tag) => tag.textContent)).toEqual([
@@ -157,18 +184,55 @@ describe("MaterialPickerDialog", () => {
       expect.stringMatching(/未分组|Unassigned/),
     ]);
 
-    const firstGroupToggle = within(groups[0]).getByTestId("material-picker-brand-group-toggle");
-    expect(firstGroupToggle).toHaveAttribute("aria-expanded", "true");
     fireEvent.click(firstGroupToggle);
     expect(firstGroupToggle).toHaveAttribute("aria-expanded", "false");
     expect(within(groups[0]).queryByText("Red PLA")).not.toBeInTheDocument();
     expect(within(groups[0]).queryByText("White PLA")).not.toBeInTheDocument();
     expect(within(groups[1]).getByText("Legacy PLA")).toBeInTheDocument();
+  });
 
-    fireEvent.click(firstGroupToggle);
-    expect(firstGroupToggle).toHaveAttribute("aria-expanded", "true");
-    expect(within(groups[0]).getByText("Red PLA")).toBeInTheDocument();
-    expect(within(groups[0]).getByText("White PLA")).toBeInTheDocument();
+  it("force-expands matching groups while searching, then restores collapse state", () => {
+    const materials = [
+      makeMaterial({
+        material_name: "Red PLA",
+        directory_name: "瑞贝思/red-pla",
+        brand: "瑞贝思",
+      }),
+      makeMaterial({
+        material_name: "White PLA",
+        directory_name: "瑞贝思/white-pla",
+        brand: "瑞贝思",
+      }),
+    ];
+    render(
+      <MaterialPickerDialog
+        open={true}
+        materials={materials}
+        loading={false}
+        initialSelected={[]}
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    // Groups start collapsed; the matching row is hidden.
+    const groupToggle = screen.getByTestId("material-picker-brand-group-toggle");
+    expect(groupToggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Red PLA")).not.toBeInTheDocument();
+
+    // Searching reveals the matching row even though the group was collapsed.
+    fireEvent.change(screen.getByTestId("material-picker-search-input"), {
+      target: { value: "Red" },
+    });
+    expect(screen.getByText("Red PLA")).toBeInTheDocument();
+    expect(screen.queryByText("White PLA")).not.toBeInTheDocument();
+
+    // Clearing the search restores the user's collapsed state.
+    fireEvent.change(screen.getByTestId("material-picker-search-input"), {
+      target: { value: "" },
+    });
+    expect(screen.getByTestId("material-picker-brand-group-toggle")).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Red PLA")).not.toBeInTheDocument();
   });
 
   it("select-all toggles to clear-all once everything is selected", () => {
@@ -238,6 +302,8 @@ describe("MaterialPickerDialog", () => {
     expect(scrollArea).toHaveClass("overscroll-contain");
     expect(scrollArea).toHaveClass("[overflow-anchor:none]");
 
+    expandAllMaterialPickerGroups();
+
     fireEvent.click(screen.getByText("Brand A Red PLA"));
     fireEvent.click(screen.getByText("Brand A Yellow PLA"));
     fireEvent.click(screen.getByText("Brand B Blue PLA"));
@@ -294,6 +360,26 @@ describe("converter store — selectedMaterialDirNames persistence", () => {
 
     expect(useConverterStore.getState().materialBackingMaterialDirName).toBe("mat-c");
     expect(localStorage.getItem(BACKING_KEY)).toBe("mat-c");
+  });
+
+  it("defaults the base plate material to a selected white material", () => {
+    useConverterStore.getState().setSelectedMaterialDirNames([
+      "brand/pla-green",
+      "brand/pla-yellow",
+      "brand/pla-white",
+    ]);
+
+    expect(useConverterStore.getState().materialBackingMaterialDirName).toBe("brand/pla-white");
+    expect(localStorage.getItem(BACKING_KEY)).toBe("brand/pla-white");
+  });
+
+  it("detects Chinese white material names for the base plate default", () => {
+    useConverterStore.getState().setSelectedMaterialDirNames([
+      "瑞贝思/瑞贝思 PLA 绿",
+      "瑞贝思/瑞贝思 PLA 白",
+    ]);
+
+    expect(useConverterStore.getState().materialBackingMaterialDirName).toBe("瑞贝思/瑞贝思 PLA 白");
   });
 
   it("changing only the base plate material preserves preview state", () => {

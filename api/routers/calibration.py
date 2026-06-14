@@ -70,6 +70,7 @@ def calibration_generate(
         "printer_id": request.printer_id,
         "slicer": request.slicer,
         "nozzle_size": request.nozzle_size,
+        "device_profile_id": request.device_profile_id,
     }
     try:
         if mode == "BW (Black & White)":
@@ -239,6 +240,7 @@ def calibration_generate_single_stage_kit(
             printer_id=request.printer_id,
             slicer=request.slicer,
             nozzle_size=request.nozzle_size,
+            device_profile_id=request.device_profile_id,
         )
     except (OSError, RuntimeError, TypeError, ValueError) as e:
         _handle_core_error(e, "Single-stage kit generation")

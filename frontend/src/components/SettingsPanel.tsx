@@ -7,7 +7,7 @@ import { motion } from "framer-motion";
 import { useState, useEffect } from "react";
 import { useI18n } from "../i18n/context";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
-import { clearCache, getPrinters, getSlicers } from "../api/system";
+import { clearCache, getMachineRegistryAssetUrl, getPrinters, getSlicers } from "../api/system";
 import {
   SVG_PIXELS_PER_MM_DEFAULT,
   SVG_PIXELS_PER_MM_MAX,
@@ -21,7 +21,9 @@ import { useSlicerStore } from "../stores/slicerStore";
 import type { PrinterInfo, SlicerOption } from "../api/types";
 import {
   filterCompatiblePrinters,
+  getPrinterNozzleSizeOptions,
   isBambuFamilySlicer,
+  resolveDeviceProfileOptionId,
   resolveNozzleSizeOption,
   resolvePrinterOptionId,
   resolveSlicerOptionId,
@@ -33,6 +35,7 @@ import Slider from "./ui/Slider";
 import Switch from "./ui/Switch";
 import WikiTooltip from "./ui/WikiTooltip";
 import {
+  cx,
   PanelIntro,
   StatusBanner,
   resolvePanelSurfaceClass,
@@ -42,6 +45,11 @@ import {
 
 const SETTINGS_OPTIONS_RETRY_ATTEMPTS = 6;
 const SETTINGS_OPTIONS_RETRY_DELAY_MS = 1000;
+
+function getMachinePlaceholderLabel(printer: PrinterInfo): string {
+  const compactBrand = printer.brand.replace(/\s+/g, "");
+  return (compactBrand || printer.display_name).slice(0, 2).toUpperCase();
+}
 
 export default function SettingsPanel() {
   const { t } = useI18n();
@@ -64,6 +72,8 @@ export default function SettingsPanel() {
   const setPrinterModel = useSettingsStore((s) => s.setPrinterModel);
   const slicerSoftware = useSettingsStore((s) => s.slicerSoftware);
   const setSlicerSoftware = useSettingsStore((s) => s.setSlicerSoftware);
+  const deviceProfileId = useSettingsStore((s) => s.deviceProfileId);
+  const setDeviceProfileId = useSettingsStore((s) => s.setDeviceProfileId);
   const customSlicerPath = useSettingsStore((s) => s.customSlicerPath);
   const nozzleSize = useSettingsStore((s) => s.nozzleSize);
   const setNozzleSize = useSettingsStore((s) => s.setNozzleSize);
@@ -157,6 +167,23 @@ export default function SettingsPanel() {
     printers,
     resolvedSlicerSoftware
   );
+  const selectedPrinter = printers.find((p) => p.id === resolvedPrinterModel);
+  const resolvedNozzleSize = resolveNozzleSizeOption(
+    nozzleSize,
+    selectedPrinter,
+    resolvedSlicerSoftware,
+  );
+  const resolvedDeviceProfileId = resolveDeviceProfileOptionId(
+    deviceProfileId,
+    selectedPrinter,
+    resolvedSlicerSoftware,
+    resolvedNozzleSize,
+  );
+  const selectedDeviceProfile =
+    selectedPrinter?.device_profiles?.find(
+      (profile) => profile.device_profile_id === resolvedDeviceProfileId,
+    ) ?? null;
+  const selectedPrinterThumbnailUrl = getMachineRegistryAssetUrl(selectedPrinter?.thumbnail);
 
   useEffect(() => {
     if (slicersLoading || printersLoading || slicers.length === 0 || printers.length === 0) {
@@ -166,7 +193,13 @@ export default function SettingsPanel() {
     const nextSlicer = resolveSlicerOptionId(slicerSoftware, slicers);
     const nextPrinter = resolvePrinterOptionId(printerModel, printers, nextSlicer);
     const nextPrinterInfo = printers.find((printer) => printer.id === nextPrinter);
-    const nextNozzleSize = resolveNozzleSizeOption(nozzleSize, nextPrinterInfo);
+    const nextNozzleSize = resolveNozzleSizeOption(nozzleSize, nextPrinterInfo, nextSlicer);
+    const nextDeviceProfileId = resolveDeviceProfileOptionId(
+      deviceProfileId,
+      nextPrinterInfo,
+      nextSlicer,
+      nextNozzleSize,
+    );
 
     let didNormalize = false;
 
@@ -188,13 +221,20 @@ export default function SettingsPanel() {
       didNormalize = true;
     }
 
+    if (nextDeviceProfileId !== deviceProfileId) {
+      setDeviceProfileId(nextDeviceProfileId);
+      didNormalize = true;
+    }
+
     if (didNormalize) {
       void syncToBackend();
     }
   }, [
+    deviceProfileId,
     printerModel,
     printers,
     printersLoading,
+    setDeviceProfileId,
     setLastBedLabel,
     setPrinterModel,
     setNozzleSize,
@@ -215,9 +255,18 @@ export default function SettingsPanel() {
     const selected = printers.find((p) => p.id === id);
     if (selected) {
       setLastBedLabel(`${selected.bed_width}×${selected.bed_depth} mm`);
-      const nextNozzleSize = resolveNozzleSizeOption(nozzleSize, selected);
+      const nextNozzleSize = resolveNozzleSizeOption(nozzleSize, selected, resolvedSlicerSoftware);
       if (nextNozzleSize !== nozzleSize) {
         setNozzleSize(nextNozzleSize as "0.2" | "0.4");
+      }
+      const nextDeviceProfileId = resolveDeviceProfileOptionId(
+        deviceProfileId,
+        selected,
+        resolvedSlicerSoftware,
+        nextNozzleSize,
+      );
+      if (nextDeviceProfileId !== deviceProfileId) {
+        setDeviceProfileId(nextDeviceProfileId);
       }
     }
     syncToBackend();
@@ -229,23 +278,48 @@ export default function SettingsPanel() {
     // If current printer doesn't support the new slicer, switch to first compatible
     const compatible = filterCompatiblePrinters(printers, id);
     const currentStillValid = compatible.some((p) => p.id === resolvedPrinterModel);
+    let resolvedPrinter =
+      compatible.find((p) => p.id === resolvedPrinterModel) ?? compatible[0];
     if (!currentStillValid && compatible.length > 0) {
       setPrinterModel(compatible[0].id);
       setLastBedLabel(
         `${compatible[0].bed_width}×${compatible[0].bed_depth} mm`
       );
+      resolvedPrinter = compatible[0];
     }
-    const resolvedPrinter =
-      compatible.find((p) => p.id === resolvedPrinterModel) ?? compatible[0];
-    const nextNozzleSize = resolveNozzleSizeOption(nozzleSize, resolvedPrinter);
+    const nextNozzleSize = resolveNozzleSizeOption(nozzleSize, resolvedPrinter, id);
     if (nextNozzleSize !== nozzleSize) {
       setNozzleSize(nextNozzleSize as "0.2" | "0.4");
+    }
+    const nextDeviceProfileId = resolveDeviceProfileOptionId(
+      deviceProfileId,
+      resolvedPrinter,
+      id,
+      nextNozzleSize,
+    );
+    if (nextDeviceProfileId !== deviceProfileId) {
+      setDeviceProfileId(nextDeviceProfileId);
     }
     syncToBackend();
   };
 
-  const handleNozzleSizeChange = (value: string) => {
-    setNozzleSize(value as "0.2" | "0.4");
+  const handlePrinterNozzleChange = (printer: PrinterInfo, value: string) => {
+    if (printer.id !== printerModel) {
+      setPrinterModel(printer.id);
+      setLastBedLabel(`${printer.bed_width}×${printer.bed_depth} mm`);
+    }
+    if (value !== nozzleSize) {
+      setNozzleSize(value as "0.2" | "0.4");
+    }
+    const nextDeviceProfileId = resolveDeviceProfileOptionId(
+      deviceProfileId,
+      printer,
+      resolvedSlicerSoftware,
+      value,
+    );
+    if (nextDeviceProfileId !== deviceProfileId) {
+      setDeviceProfileId(nextDeviceProfileId);
+    }
     void syncToBackend();
   };
 
@@ -257,8 +331,6 @@ export default function SettingsPanel() {
     setCustomSlicerPathInput("");
     clearCustomSlicerPath();
   };
-
-  const selectedPrinter = printers.find((p) => p.id === resolvedPrinterModel);
 
   const handleClearCache = async () => {
     setClearing(true);
@@ -303,7 +375,7 @@ export default function SettingsPanel() {
             {t("settings.printer_model")}
           </h4>
         </div>
-        <div className={`grid gap-4 ${workspace.isCompact ? "" : "xl:grid-cols-3"}`}>
+        <div className="grid gap-4">
           <div>
             <Dropdown
               label={t("settings.slicer_software")}
@@ -316,40 +388,127 @@ export default function SettingsPanel() {
               }))}
             />
           </div>
-          <div>
-            <Dropdown
-              label={t("settings.printer_model")}
-              value={resolvedPrinterModel}
-              onChange={handlePrinterChange}
-              disabled={printersLoading}
-              options={filteredPrinters.map((p) => ({
-                label: p.display_name,
-                value: p.id,
-              }))}
-            />
-          </div>
-          <div>
-            <Dropdown
-              label={t("settings.nozzle_size")}
-              value={resolveNozzleSizeOption(nozzleSize, selectedPrinter)}
-              onChange={handleNozzleSizeChange}
-              disabled={printersLoading || !selectedPrinter}
-              options={(selectedPrinter?.supported_nozzle_sizes ?? ["0.2", "0.4"]).map((size) => ({
-                label: `${size} mm`,
-                value: size,
-              }))}
-            />
+        </div>
+        <div className="flex min-w-0 flex-col gap-2">
+          <label className="text-sm font-medium text-slate-700 dark:text-slate-200">
+            {t("settings.printer_model")}
+          </label>
+          <div
+            data-testid="machine-adapter-grid"
+            className="grid max-h-[28rem] gap-3 overflow-y-auto pr-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4"
+          >
+            {filteredPrinters.map((printer) => {
+              const isSelected = printer.id === resolvedPrinterModel;
+              const thumbnailUrl = getMachineRegistryAssetUrl(printer.thumbnail);
+              const nozzleOptions = getPrinterNozzleSizeOptions(printer, resolvedSlicerSoftware);
+
+              return (
+                <div
+                  key={printer.id}
+                  className={cx(
+                    "group rounded-lg border bg-white/72 p-3 shadow-[var(--shadow-control)] transition-all duration-200 hover:border-blue-300 hover:bg-white/92 dark:bg-slate-900/60 dark:hover:bg-slate-900/82",
+                    isSelected
+                      ? "border-blue-400 ring-2 ring-blue-200/80 dark:border-blue-300 dark:ring-blue-500/20"
+                      : "border-slate-200/80 dark:border-slate-700/80",
+                  )}
+                >
+                  <button
+                    type="button"
+                    aria-pressed={isSelected}
+                    data-testid={`machine-adapter-card-${printer.id}`}
+                    onClick={() => handlePrinterChange(printer.id)}
+                    disabled={printersLoading}
+                    className="grid w-full min-h-[7.25rem] grid-cols-[5.5rem_minmax(0,1fr)] gap-3 text-left outline-none transition-opacity disabled:cursor-not-allowed disabled:opacity-45"
+                  >
+                    <span className="flex h-24 w-[5.5rem] items-center justify-center overflow-hidden rounded-md border border-slate-200/70 bg-slate-100/80 dark:border-slate-700/70 dark:bg-slate-800/70">
+                      {thumbnailUrl ? (
+                        <img
+                          src={thumbnailUrl}
+                          alt={printer.display_name}
+                          className="h-full w-full object-contain p-1.5"
+                          loading="lazy"
+                        />
+                      ) : (
+                        <span className="text-lg font-semibold text-slate-400 dark:text-slate-500">
+                          {getMachinePlaceholderLabel(printer)}
+                        </span>
+                      )}
+                    </span>
+                    <span className="flex min-w-0 flex-col gap-1.5">
+                      <span className="truncate text-sm font-semibold text-slate-900 dark:text-slate-50">
+                        {printer.display_name}
+                      </span>
+                      <span className="text-xs text-slate-500 dark:text-slate-400">
+                        {printer.brand}
+                      </span>
+                      <span className="text-xs text-slate-500 dark:text-slate-400">
+                        {t("settings.bed_size")}: {printer.bed_width}&times;{printer.bed_depth} {t("common_unit_mm")}
+                      </span>
+                      <span className="text-xs text-slate-500 dark:text-slate-400">
+                        {t("settings.nozzle_size")}: {nozzleOptions.map((size) => `${size} ${t("common_unit_mm")}`).join(", ")}
+                      </span>
+                    </span>
+                  </button>
+                  <div className="mt-3 flex flex-wrap gap-1.5 border-t border-slate-200/70 pt-3 dark:border-slate-700/70">
+                    {nozzleOptions.map((size) => {
+                      const isNozzleSelected = isSelected && size === resolvedNozzleSize;
+                      return (
+                        <button
+                          key={size}
+                          type="button"
+                          aria-pressed={isNozzleSelected}
+                          aria-label={`${printer.display_name} ${size} ${t("common_unit_mm")}`}
+                          data-testid={`machine-adapter-nozzle-${printer.id}-${size.replace(/\./g, "_")}`}
+                          onClick={() => handlePrinterNozzleChange(printer, size)}
+                          disabled={printersLoading}
+                          className={cx(
+                            "min-h-8 rounded-md border px-2.5 text-xs font-medium transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-45",
+                            isNozzleSelected
+                              ? "border-blue-400 bg-blue-50 text-blue-700 dark:border-blue-300 dark:bg-blue-500/15 dark:text-blue-200"
+                              : "border-slate-200/80 bg-slate-50/80 text-slate-600 hover:border-blue-300 hover:text-blue-600 dark:border-slate-700/80 dark:bg-slate-800/72 dark:text-slate-300 dark:hover:border-blue-400 dark:hover:text-blue-200",
+                          )}
+                        >
+                          {size} {t("common_unit_mm")}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
         {selectedPrinter && (
-          <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
-            <span>
-              {t("settings.bed_size")}: {selectedPrinter.bed_width}&times;{selectedPrinter.bed_depth} {t("common_unit_mm")}
-            </span>
-            <span className="text-slate-300 dark:text-slate-600">|</span>
-            <span>
-              {t("settings.nozzle_size")}: {resolveNozzleSizeOption(nozzleSize, selectedPrinter)} {t("common_unit_mm")}
-            </span>
+          <div
+            data-testid="machine-adapter-summary"
+            className="flex min-w-0 items-center gap-3 text-xs text-slate-500 dark:text-slate-400"
+          >
+            {selectedPrinterThumbnailUrl && (
+              <img
+                src={selectedPrinterThumbnailUrl}
+                alt=""
+                className="h-16 w-16 shrink-0 object-contain"
+                loading="lazy"
+              />
+            )}
+            <div className="flex min-w-0 flex-col gap-1">
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="font-medium text-slate-700 dark:text-slate-200">
+                  {selectedPrinter.display_name}
+                </span>
+                <span>
+                  {t("settings.bed_size")}: {selectedPrinter.bed_width}&times;{selectedPrinter.bed_depth} {t("common_unit_mm")}
+                </span>
+                <span>
+                  {t("settings.nozzle_size")}: {resolvedNozzleSize} {t("common_unit_mm")}
+                </span>
+              </div>
+              {selectedDeviceProfile && (
+                <span className="truncate">
+                  {t("settings.device_profile")}: {selectedDeviceProfile.source_profile_name}
+                </span>
+              )}
+            </div>
           </div>
         )}
         <div className="flex flex-col gap-3 border-t border-slate-200/60 pt-4 dark:border-slate-700/60">

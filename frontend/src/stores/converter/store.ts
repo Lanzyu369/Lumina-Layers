@@ -22,6 +22,7 @@ import type {
   LutSupportedMode,
   LutDetailsCatalogGroup,
   LutColorsCard,
+  PerformanceTiming,
 } from "../../api/types";
 import {
   ColorMode as ColorModeEnum,
@@ -81,6 +82,7 @@ import {
   summarizeErrorForLog,
   summarizeFileForLog,
 } from "../../utils/clientLog";
+import { trackLuminaEvent } from "../../analytics/umami";
 import { registerGeneratedArtifactInvalidator } from "../generatedArtifactInvalidation";
 import { uploadImagePreview } from "../../api/system";
 import { fetchMaterialColorSuggestions } from "../../api/materialCache";
@@ -101,6 +103,23 @@ type LuminaWindow = Window & {
 };
 
 const BATCH_PREVIEW_BROWSER_SAFE_LIMIT = 96;
+
+function looksLikeWhiteMaterialLabel(label: string | null | undefined): boolean {
+  const text = String(label ?? "").trim().toLowerCase();
+  if (!text) return false;
+  if (text.includes("白")) return true;
+  const tokens = text
+    .replace(/\\/g, "/")
+    .replace(/\//g, " ")
+    .replace(/[-_]/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+  return tokens.includes("white") || tokens.includes("w");
+}
+
+export function inferDefaultMaterialBackingDirName(names: string[]): string | null {
+  return names.find((name) => looksLikeWhiteMaterialLabel(name)) ?? names[0] ?? null;
+}
 
 // ===========================================================================
 // Material-archive achievable-color suggestion helpers (module-local state)
@@ -234,6 +253,30 @@ export function buildLayerImagesSourceKey(
     state.sessionId,
     state.previewGlbUrl ?? "",
     state.previewBaseImageUrl ?? state.previewImageUrl ?? "",
+  ].join("|");
+}
+
+function buildPuzzlePreviewSourceKey(
+  state: Pick<
+    ConverterState,
+    | "sessionId"
+    | "previewGlbUrl"
+    | "previewBaseImageUrl"
+    | "previewImageUrl"
+    | "previewPixelWidth"
+    | "previewPixelHeight"
+  >,
+): string | null {
+  if (!state.sessionId) {
+    return null;
+  }
+
+  return [
+    state.sessionId,
+    state.previewGlbUrl ?? "",
+    state.previewBaseImageUrl ?? state.previewImageUrl ?? "",
+    state.previewPixelWidth ?? "",
+    state.previewPixelHeight ?? "",
   ].join("|");
 }
 
@@ -1076,11 +1119,14 @@ function buildMaterialSourceParams(
   const materialGridResolution = settingsState.enableSolverCacheGridSelection
     ? settingsState.solverCacheGridResolution
     : undefined;
-  const backingMaterialIndex = state.materialBackingMaterialDirName
-    ? state.selectedMaterialDirNames.indexOf(
-        state.materialBackingMaterialDirName,
-      )
-    : 0;
+  const resolvedBackingDirName =
+    state.materialBackingMaterialDirName &&
+    state.selectedMaterialDirNames.includes(state.materialBackingMaterialDirName)
+      ? state.materialBackingMaterialDirName
+      : inferDefaultMaterialBackingDirName(state.selectedMaterialDirNames);
+  const backingMaterialIndex = resolvedBackingDirName
+    ? state.selectedMaterialDirNames.indexOf(resolvedBackingDirName)
+    : -1;
   return {
     source_kind: "legacy_single" as const,
     lut_name: "__material_archive__",
@@ -1149,6 +1195,7 @@ export function collectConverterKeepFileIds(state: {
   previewBaseImageUrl: string | null;
   originalPreviewUrl: string | null;
   previewGlbUrl: string | null;
+  modelUrl: string | null;
   puzzleOverlayUrl: string | null;
   batchPreviewItems: Array<{ url: string | null }>;
   regionData: { previewUrl: string | null } | null;
@@ -1161,6 +1208,7 @@ export function collectConverterKeepFileIds(state: {
     state.previewBaseImageUrl,
     state.originalPreviewUrl,
     state.previewGlbUrl,
+    state.modelUrl,
     state.puzzleOverlayUrl,
     ...state.batchPreviewItems.map((item) => item.url),
     state.regionData?.previewUrl ?? null,
@@ -1245,6 +1293,7 @@ export interface ConverterState {
   // 高级设置
   quantize_colors: number;
   quantize_colors_unlocked: boolean;
+  high_precision_3d_preview: boolean;
   enable_cleanup: boolean;
   hue_enable: boolean;
   use_lut_constrained: boolean;
@@ -1332,6 +1381,8 @@ export interface ConverterState {
 
   // 3D 预览
   previewGlbUrl: string | null;
+  previewPerformanceTiming: PerformanceTiming | null;
+  generatePerformanceTiming: PerformanceTiming | null;
   lutMatchMode: string | null;
   lutMatchInfo: Record<string, unknown> | null;
 
@@ -1490,6 +1541,7 @@ export interface ConverterActions {
   setModelMargin: (value: number | null) => void;
   setQuantizeColors: (colors: number) => void;
   setQuantizeColorsUnlocked: (unlocked: boolean) => void;
+  setHighPrecision3dPreview: (enabled: boolean) => void;
   setEnableCleanup: (enabled: boolean) => void;
   setHueEnable: (enabled: boolean) => void;
   setUseLutConstrained: (enabled: boolean) => void;
@@ -1885,6 +1937,8 @@ function buildPreviewSessionResetState(): Partial<ConverterState> {
     previewBaseImageUrl: null,
     previewGlbUrl: null,
     modelUrl: null,
+    previewPerformanceTiming: null,
+    generatePerformanceTiming: null,
     batchPreviewItems: [],
     threemfDiskPath: null,
     downloadUrl: null,
@@ -2052,6 +2106,7 @@ export const DEFAULT_STATE: ConverterState = {
   materialBackingMaterialDirName: loadMaterialBackingMaterialDirName(),
   quantize_colors: 48,
   quantize_colors_unlocked: false,
+  high_precision_3d_preview: false,
   enable_cleanup: true,
   hue_enable: false,
   use_lut_constrained: false,
@@ -2110,6 +2165,8 @@ export const DEFAULT_STATE: ConverterState = {
   heightmapFile: null,
   heightmapThumbnailUrl: null,
   previewGlbUrl: null,
+  previewPerformanceTiming: null,
+  generatePerformanceTiming: null,
   lutMatchMode: null,
   lutMatchInfo: null,
   preview_width_mm: null,
@@ -2272,6 +2329,26 @@ function _clientLog(
     phase: label,
     method,
   });
+}
+
+function getElapsedMsSince(startTime: number | null): number | null {
+  if (startTime == null || typeof performance === "undefined") {
+    return null;
+  }
+  return Math.round(performance.now() - startTime);
+}
+
+function getFileCountBucket(count: number): string {
+  if (count <= 0) return "0";
+  if (count === 1) return "1";
+  if (count <= 5) return "2-5";
+  if (count <= 10) return "6-10";
+  if (count <= 25) return "11-25";
+  return "26+";
+}
+
+function getErrorType(error: unknown): string {
+  return error instanceof Error ? error.name : typeof error;
 }
 
 function buildPuzzlePreviewParams(
@@ -2707,7 +2784,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         const nextBacking =
           currentBacking && names.includes(currentBacking)
             ? currentBacking
-            : (names[0] ?? null);
+            : inferDefaultMaterialBackingDirName(names);
         persistMaterialBackingMaterialDirName(nextBacking);
         return {
           selectedMaterialDirNames: names,
@@ -2945,6 +3022,14 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         downloadUrl: null,
       });
     },
+    setHighPrecision3dPreview: (enabled: boolean) =>
+      set({
+        high_precision_3d_preview: enabled,
+        previewGlbUrl: null,
+        modelUrl: null,
+        threemfDiskPath: null,
+        downloadUrl: null,
+      }),
     setEnableCleanup: (enabled: boolean) =>
       set({
         enable_cleanup: enabled,
@@ -3371,6 +3456,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
       const requestedSessionId = state.sessionId;
       const requestedParams = buildPuzzlePreviewParams(state);
+      const requestedSourceKey = buildPuzzlePreviewSourceKey(state);
 
       try {
         const response = await apiConvertPuzzleLayoutPreview(
@@ -3379,10 +3465,12 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         );
         const latestState = _get();
         const latestParams = buildPuzzlePreviewParams(latestState);
+        const latestSourceKey = buildPuzzlePreviewSourceKey(latestState);
         if (
           latestState.sessionId !== requestedSessionId ||
           !latestState.puzzleEnabled ||
-          JSON.stringify(latestParams) !== JSON.stringify(requestedParams)
+          JSON.stringify(latestParams) !== JSON.stringify(requestedParams) ||
+          latestSourceKey !== requestedSourceKey
         ) {
           return false;
         }
@@ -3401,10 +3489,12 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       } catch (err) {
         const latestState = _get();
         const latestParams = buildPuzzlePreviewParams(latestState);
+        const latestSourceKey = buildPuzzlePreviewSourceKey(latestState);
         if (
           latestState.sessionId !== requestedSessionId ||
           !latestState.puzzleEnabled ||
-          JSON.stringify(latestParams) !== JSON.stringify(requestedParams)
+          JSON.stringify(latestParams) !== JSON.stringify(requestedParams) ||
+          latestSourceKey !== requestedSourceKey
         ) {
           return false;
         }
@@ -5250,6 +5340,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         color_mode: state.color_mode,
         modeling_mode: state.modeling_mode,
         quantize_colors: state.quantize_colors,
+        high_precision_3d_preview: state.high_precision_3d_preview,
         enable_cleanup: state.enable_cleanup,
         hue_enable: state.hue_enable,
       });
@@ -5305,6 +5396,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           color_mode: colorMode,
           modeling_mode: state.modeling_mode,
           quantize_colors: state.quantize_colors,
+          high_precision_3d_preview: state.high_precision_3d_preview,
           enable_cleanup: state.enable_cleanup,
           enable_outline: state.enable_outline,
           outline_width: state.outline_width,
@@ -5314,6 +5406,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           use_lut_constrained: state.use_lut_constrained,
           auto_dynamic_range: state.auto_dynamic_range,
           is_dark: useSettingsStore.getState().theme === "dark",
+          large_format_enabled: state.largeFormatEnabled,
         };
         _logPreviewTimer("request sent");
         _previewClientLog("preview: request sent", {
@@ -5391,6 +5484,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             : {}),
           colorContours: response.contours ?? {},
           previewGlbUrl: glbUrl,
+          previewPerformanceTiming: response.performance_timing ?? null,
+          generatePerformanceTiming: null,
           colorRemapMap: {},
           remapHistory: [],
           replacement_regions: [],
@@ -5440,6 +5535,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           preview_pixel_height: response.dimensions?.height ?? null,
           warning_count: (response.warnings ?? []).length,
         });
+        trackLuminaEvent("lumina_converter_preview_done", {
+          source_version: state.source_version,
+          source_kind: sourceParams.source_kind,
+          color_mode: colorMode,
+          modeling_mode: state.modeling_mode,
+          elapsed_ms: getElapsedMsSince(_previewStartTime),
+          warning_count: (response.warnings ?? []).length,
+          palette_count: normalizedPalette.length,
+        });
         // 预览绑定会话后，拉取会话所绑定 LUT 的通道调色板，便于自定义配方编辑器
         // 在材料档案 / 原生打包流程里也能显示按通道顺序的耗材列表。
         // After the preview binds a session, refresh the channel palette for
@@ -5474,6 +5578,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         set({
           isLoading: false,
           error: err instanceof Error ? err.message : "预览失败",
+        });
+        trackLuminaEvent("lumina_converter_preview_failed", {
+          source_version: state.source_version,
+          color_mode: state.color_mode,
+          modeling_mode: state.modeling_mode,
+          elapsed_ms: getElapsedMsSince(_previewStartTime),
+          error_type: getErrorType(err),
         });
         _previewClientLog(
           "preview: failed",
@@ -5523,7 +5634,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         return null;
       }
 
-      set({ isGenerating: true, error: null });
+      set({ isGenerating: true, error: null, generatePerformanceTiming: null });
       _generateStartTime = performance.now();
       (window as LuminaWindow).__luminaGenerateStart = _generateStartTime;
       _clientLog("generate: click", {
@@ -5534,6 +5645,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         color_mode: state.color_mode,
         modeling_mode: state.modeling_mode,
         quantize_colors: state.quantize_colors,
+        high_precision_3d_preview: state.high_precision_3d_preview,
         enable_cleanup: state.enable_cleanup,
         enable_relief: state.enable_relief,
         enable_outline: state.enable_outline,
@@ -5598,6 +5710,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           color_mode: colorMode,
           modeling_mode: state.modeling_mode,
           quantize_colors: state.quantize_colors,
+          high_precision_3d_preview: state.high_precision_3d_preview,
           enable_cleanup: state.enable_cleanup,
           svg_pixels_per_mm: useSettingsStore.getState().svgPixelsPerMm,
           hue_weight: state.hue_enable ? 0.5 : 0.0,
@@ -5651,6 +5764,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           printer_id: useSettingsStore.getState().printerModel,
           slicer: useSettingsStore.getState().slicerSoftware,
           nozzle_size: useSettingsStore.getState().nozzleSize,
+          device_profile_id: useSettingsStore.getState().deviceProfileId,
           enable_base_layer_height_modifier:
             useSettingsStore.getState().enableBaseLayerHeightModifier,
           use_cached_matched_rgb: state.regionReplacementCount > 0,
@@ -5698,12 +5812,30 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             grid_cols: puzzleResponse.grid_cols ?? null,
             piece_count: puzzleResponse.piece_count ?? null,
           });
+          trackLuminaEvent("lumina_converter_generate_done", {
+            source_version: state.source_version,
+            source_kind: sourceParams.source_kind,
+            color_mode: colorMode,
+            modeling_mode: state.modeling_mode,
+            output_kind: "puzzle_3mf",
+            puzzle: true,
+            large_format: false,
+            elapsed_ms: getElapsedMsSince(_generateStartTime),
+            warning_count: (puzzleResponse.warnings ?? []).length,
+          });
           return null;
         }
 
         if (state.largeFormatEnabled) {
           const lfResponse = await apiConvertGenerateLargeFormat(sessionId, {
-            target_height_mm: state.target_height_mm,
+            // Let the backend derive height from the preview cache aspect
+            // ratio. SVG files can report slightly different browser and
+            // server dimensions (CSS width/height vs viewBox/content), and
+            // sending both values makes the backend reject large-format
+            // generation with 422 when they differ by more than 1 mm.
+            // 大画幅只提交宽度，让后端按预览缓存比例推导高度。SVG 的浏览器
+            // 预览比例与后端解析比例可能不完全一致；同时提交宽高会触发后端
+            // 1mm 容差校验并返回 422。
             tile_width_mm: state.tileWidthMm,
             tile_height_mm: state.tileHeightMm,
             params: baseParams,
@@ -5724,6 +5856,17 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             target_height_mm: state.target_height_mm,
             tile_width_mm: state.tileWidthMm,
             tile_height_mm: state.tileHeightMm,
+          });
+          trackLuminaEvent("lumina_converter_generate_done", {
+            source_version: state.source_version,
+            source_kind: sourceParams.source_kind,
+            color_mode: colorMode,
+            modeling_mode: state.modeling_mode,
+            output_kind: "large_format_zip",
+            puzzle: false,
+            large_format: true,
+            elapsed_ms: getElapsedMsSince(_generateStartTime),
+            warning_count: (lfResponse.warnings ?? []).length,
           });
           return null;
         }
@@ -5764,6 +5907,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           downloadUrl: response.download_url
             ? `${response.download_url}`
             : null,
+          generatePerformanceTiming: response.performance_timing ?? null,
           largeFormatWarnings: [],
         });
         _logGenerateTimer("UI unlocked (isGenerating=false, modelUrl set)");
@@ -5772,11 +5916,31 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           download_url: response.download_url ?? null,
           threemf_disk_path: response.threemf_disk_path ?? null,
         });
+        trackLuminaEvent("lumina_converter_generate_done", {
+          source_version: state.source_version,
+          source_kind: sourceParams.source_kind,
+          color_mode: colorMode,
+          modeling_mode: state.modeling_mode,
+          output_kind: "threemf",
+          puzzle: false,
+          large_format: false,
+          elapsed_ms: getElapsedMsSince(_generateStartTime),
+          warning_count: 0,
+        });
         return modelUrl;
       } catch (err) {
         set({
           isGenerating: false,
           error: err instanceof Error ? err.message : "生成失败",
+        });
+        trackLuminaEvent("lumina_converter_generate_failed", {
+          source_version: state.source_version,
+          color_mode: state.color_mode,
+          modeling_mode: state.modeling_mode,
+          puzzle: state.puzzleEnabled,
+          large_format: state.largeFormatEnabled,
+          elapsed_ms: getElapsedMsSince(_generateStartTime),
+          error_type: getErrorType(err),
         });
         _clientLog("generate: failed", summarizeErrorForLog(err), "error");
         return null;
@@ -5940,6 +6104,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           previewBaseImageUrl: null,
           sessionId: null,
           previewGlbUrl: null,
+          previewPerformanceTiming: null,
+          generatePerformanceTiming: null,
           batchPreviewItems: [],
           ...EMPTY_LUT_MATCH_STATE,
           selectedColor: null,
@@ -5947,22 +6113,28 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           regionData: null,
           selectedRegions: [],
           batchMode: false,
+          batchResult: null,
           hasManualPreview: false,
         });
       } else {
         // Still in BatchMode with multiple files
-        set({ batchFiles: remaining });
+        set({ batchFiles: remaining, batchResult: null });
       }
     },
 
     clearBatchFiles: () =>
       set({
         batchFiles: [],
+        batchResult: null,
         ...EMPTY_LUT_MATCH_STATE,
         puzzleEnabled: false,
         threemfDiskPath: null,
         downloadUrl: null,
         batchPreviewItems: [],
+        modelUrl: null,
+        previewGlbUrl: null,
+        previewPerformanceTiming: null,
+        generatePerformanceTiming: null,
         previewWarnings: [],
         largeFormatWarnings: [],
         ...DEFAULT_PUZZLE_PREVIEW_STATE,
@@ -5983,6 +6155,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         set({
           batchFiles: [...state.batchFiles, ...validFiles],
           batchMode: true,
+          batchResult: null,
         });
         return;
       }
@@ -5991,6 +6164,39 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         const singleFile = validFiles[0];
         const isSvg = isSvgFile(singleFile);
         const autoModelingMode = isSvg ? ModelingModeEnum.VECTOR : undefined;
+
+        if (state.imageFile) {
+          const prev = state.imagePreviewUrl;
+          if (prev) URL.revokeObjectURL(prev);
+
+          set({
+            batchFiles: [state.imageFile, singleFile],
+            imageFile: null,
+            imagePreviewUrl: null,
+            aspectRatio: null,
+            previewImageUrl: null,
+            previewBaseImageUrl: null,
+            sessionId: null,
+            previewGlbUrl: null,
+            modelUrl: null,
+            previewPerformanceTiming: null,
+            generatePerformanceTiming: null,
+            batchPreviewItems: [],
+            threemfDiskPath: null,
+            downloadUrl: null,
+            previewWarnings: [],
+            largeFormatWarnings: [],
+            ...EMPTY_LUT_MATCH_STATE,
+            puzzleEnabled: false,
+            ...DEFAULT_PUZZLE_PREVIEW_STATE,
+            batchMode: true,
+            hasManualPreview: false,
+            layerImages: [],
+            layerImagesOpen: false,
+            batchResult: null,
+          });
+          return;
+        }
 
         if (isRawFileConverter(singleFile)) {
           const prev = state.imagePreviewUrl;
@@ -6004,6 +6210,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             sessionId: null,
             previewGlbUrl: null,
             modelUrl: null,
+            previewPerformanceTiming: null,
+            generatePerformanceTiming: null,
             batchPreviewItems: [],
             threemfDiskPath: null,
             downloadUrl: null,
@@ -6017,6 +6225,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             cropModalOpen: state.enableCrop,
             layerImages: [],
             layerImagesOpen: false,
+            batchResult: null,
           });
           uploadImagePreview(singleFile)
             .then(({ preview_url, width, height }) => {
@@ -6031,72 +6240,39 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           return;
         }
 
-        if (state.imageFile) {
-          const prev = state.imagePreviewUrl;
-          if (prev && prev.startsWith("blob:")) URL.revokeObjectURL(prev);
+        const previewUrl = URL.createObjectURL(singleFile);
+        const img = new Image();
+        img.onload = () => {
+          set({ aspectRatio: img.naturalWidth / img.naturalHeight });
+        };
+        img.src = previewUrl;
 
-          const previewUrl = URL.createObjectURL(singleFile);
-          const img = new Image();
-          img.onload = () => {
-            set({ aspectRatio: img.naturalWidth / img.naturalHeight });
-          };
-          img.src = previewUrl;
-
-          set({
-            imageFile: singleFile,
-            imagePreviewUrl: previewUrl,
-            previewImageUrl: null,
-            previewBaseImageUrl: null,
-            sessionId: null,
-            previewGlbUrl: null,
-            modelUrl: null,
-            batchPreviewItems: [],
-            threemfDiskPath: null,
-            downloadUrl: null,
-            previewWarnings: [],
-            largeFormatWarnings: [],
-            ...EMPTY_LUT_MATCH_STATE,
-            puzzleEnabled: false,
-            ...DEFAULT_PUZZLE_PREVIEW_STATE,
-            batchMode: false,
-            hasManualPreview: false,
-            cropModalOpen: isSvg ? false : state.enableCrop,
-            layerImages: [],
-            layerImagesOpen: false,
-            ...(autoModelingMode ? { modeling_mode: autoModelingMode } : {}),
-          });
-        } else {
-          const previewUrl = URL.createObjectURL(singleFile);
-          const img = new Image();
-          img.onload = () => {
-            set({ aspectRatio: img.naturalWidth / img.naturalHeight });
-          };
-          img.src = previewUrl;
-
-          set({
-            imageFile: singleFile,
-            imagePreviewUrl: previewUrl,
-            previewImageUrl: null,
-            previewBaseImageUrl: null,
-            sessionId: null,
-            previewGlbUrl: null,
-            modelUrl: null,
-            batchPreviewItems: [],
-            threemfDiskPath: null,
-            downloadUrl: null,
-            previewWarnings: [],
-            largeFormatWarnings: [],
-            ...EMPTY_LUT_MATCH_STATE,
-            puzzleEnabled: false,
-            ...DEFAULT_PUZZLE_PREVIEW_STATE,
-            batchMode: false,
-            hasManualPreview: false,
-            cropModalOpen: isSvg ? false : state.enableCrop,
-            layerImages: [],
-            layerImagesOpen: false,
-            ...(autoModelingMode ? { modeling_mode: autoModelingMode } : {}),
-          });
-        }
+        set({
+          imageFile: singleFile,
+          imagePreviewUrl: previewUrl,
+          previewImageUrl: null,
+          previewBaseImageUrl: null,
+          sessionId: null,
+          previewGlbUrl: null,
+          modelUrl: null,
+          previewPerformanceTiming: null,
+          generatePerformanceTiming: null,
+          batchPreviewItems: [],
+          threemfDiskPath: null,
+          downloadUrl: null,
+          previewWarnings: [],
+          largeFormatWarnings: [],
+          ...EMPTY_LUT_MATCH_STATE,
+          puzzleEnabled: false,
+          ...DEFAULT_PUZZLE_PREVIEW_STATE,
+          batchMode: false,
+          hasManualPreview: false,
+          cropModalOpen: isSvg ? false : state.enableCrop,
+          layerImages: [],
+          layerImagesOpen: false,
+          batchResult: null,
+          ...(autoModelingMode ? { modeling_mode: autoModelingMode } : {}),
+        });
         return;
       }
 
@@ -6120,6 +6296,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         sessionId: null,
         previewGlbUrl: null,
         modelUrl: null,
+        previewPerformanceTiming: null,
+        generatePerformanceTiming: null,
         batchPreviewItems: [],
         threemfDiskPath: null,
         downloadUrl: null,
@@ -6132,12 +6310,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         hasManualPreview: false,
         layerImages: [],
         layerImagesOpen: false,
+        batchResult: null,
       });
-      console.log("[DEBUG] handleFilesSelect (batch): cleared layerImages");
     },
 
     submitBatch: async () => {
       let state = _get();
+      const batchStartTime =
+        typeof performance !== "undefined" ? performance.now() : null;
+      const batchFileCount = state.batchFiles.length;
       const sourceSelection = resolveConverterSourceSelection(state);
       if (!sourceSelection.isReady) {
         set({
@@ -6174,6 +6355,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         batchPreviewItems: [],
         modelUrl: null,
         previewGlbUrl: null,
+        generatePerformanceTiming: null,
         threemfDiskPath: null,
         downloadUrl: null,
         error: null,
@@ -6224,6 +6406,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
                 ? (sourceParams.layer_height_mm ?? undefined)
                 : (state.layer_height_mm ?? undefined),
           quantize_colors: state.quantize_colors,
+          high_precision_3d_preview: state.high_precision_3d_preview,
           enable_cleanup: state.enable_cleanup,
           svg_pixels_per_mm: settings.svgPixelsPerMm,
           hue_weight: state.hue_enable ? 0.5 : 0.0,
@@ -6234,6 +6417,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           printer_id: settings.printerModel,
           slicer: settings.slicerSoftware,
           nozzle_size: settings.nozzleSize,
+          device_profile_id: settings.deviceProfileId,
           enable_base_layer_height_modifier:
             settings.enableBaseLayerHeightModifier,
           ...(state.enable_relief
@@ -6259,13 +6443,32 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           // 合并 GLB，颜色与背面显示不可靠，因此不再作为 UI 兜底。
           modelUrl: null,
           previewGlbUrl: null,
+          previewPerformanceTiming: null,
+          generatePerformanceTiming: null,
           threemfDiskPath: result.threemf_disk_path ?? null,
           downloadUrl: result.download_url ? `${result.download_url}` : null,
+        });
+        trackLuminaEvent("lumina_batch_convert_done", {
+          source_version: state.source_version,
+          source_kind: sourceParams.source_kind,
+          color_mode: state.color_mode,
+          modeling_mode: state.modeling_mode,
+          file_count_bucket: getFileCountBucket(batchFileCount),
+          elapsed_ms: getElapsedMsSince(batchStartTime),
+          preview_item_count: previewItems.length,
         });
       } catch (err) {
         set({
           batchLoading: false,
           error: err instanceof Error ? err.message : "批量处理失败",
+        });
+        trackLuminaEvent("lumina_batch_convert_failed", {
+          source_version: state.source_version,
+          color_mode: state.color_mode,
+          modeling_mode: state.modeling_mode,
+          file_count_bucket: getFileCountBucket(batchFileCount),
+          elapsed_ms: getElapsedMsSince(batchStartTime),
+          error_type: getErrorType(err),
         });
       }
     },

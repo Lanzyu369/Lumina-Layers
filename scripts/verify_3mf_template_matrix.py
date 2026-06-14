@@ -14,7 +14,7 @@ from helpers_threemf_manifest import (  # noqa: E402
     extract_manifest,
     extract_project_subset,
     list_printer_profiles,
-    load_printer_template,
+    load_expected_template_direct,
     manifest_sidecar_flags,
     supported_printer_slicer_pairs,
 )
@@ -27,9 +27,13 @@ def main() -> int:
     for printer_id, slicer in supported_printer_slicer_pairs():
         profile = profile_map[printer_id]
         for nozzle_size in profile.supported_nozzle_sizes:
-            template = load_printer_template(printer_id, slicer=slicer, nozzle_size=nozzle_size)
+            template = load_expected_template_direct(
+                printer_id=printer_id,
+                slicer=slicer,
+                nozzle_size=nozzle_size,
+            )
             expected_subset = extract_project_subset(template)
-            family = expected_family_signature(slicer, nozzle_size)
+            family = expected_family_signature(printer_id, slicer, nozzle_size)
 
             for case_name in ("full_palette", "sparse_palette"):
                 output_path = export_fixture_3mf(
@@ -40,8 +44,13 @@ def main() -> int:
                 )
                 try:
                     manifest = extract_manifest(output_path)
-                    if extract_project_subset(manifest["project_settings"]) != expected_subset:  # type: ignore[index]
+                    project_settings = manifest["project_settings"]  # type: ignore[index]
+                    if extract_project_subset(project_settings) != expected_subset:
                         failures.append(f"{printer_id}/{slicer}/{nozzle_size}/{case_name}: project subset mismatch")
+                    if project_settings.get("layer_height") != "0.08":
+                        failures.append(f"{printer_id}/{slicer}/{nozzle_size}/{case_name}: layer_height changed")
+                    if project_settings.get("initial_layer_height") != "0.08":
+                        failures.append(f"{printer_id}/{slicer}/{nozzle_size}/{case_name}: initial_layer_height changed")
                     root_metadata = manifest["root_metadata"]  # type: ignore[index]
                     if root_metadata.get("Application") != family["application"]:
                         failures.append(f"{printer_id}/{slicer}/{nozzle_size}/{case_name}: application mismatch")

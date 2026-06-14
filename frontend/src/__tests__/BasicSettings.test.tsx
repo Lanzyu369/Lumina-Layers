@@ -3,12 +3,13 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import BasicSettings from "../components/sections/BasicSettings";
 import { useConverterStore } from "../stores/converter";
 import * as lutApi from "../api/lut";
+import * as extractorApi from "../api/extractor";
 import {
   ColorMode as ColorModeEnum,
   StructureMode as StructureModeEnum,
   ModelingMode as ModelingModeEnum,
 } from "../api/types";
-import type { LutDetailsCatalogGroup } from "../api/types";
+import type { LutDetailsCatalogGroup, SavedMaterialLibraryItem } from "../api/types";
 
 vi.mock("../api/lut", async () => {
   const actual = await vi.importActual<typeof import("../api/lut")>(
@@ -19,6 +20,16 @@ vi.mock("../api/lut", async () => {
     fetchLutInfo: vi.fn(),
     fetchLutCatalog: vi.fn(),
     fetchLutDetailsCatalog: vi.fn(),
+  };
+});
+
+vi.mock("../api/extractor", async () => {
+  const actual = await vi.importActual<typeof import("../api/extractor")>(
+    "../api/extractor",
+  );
+  return {
+    ...actual,
+    listGradientCardMaterials: vi.fn(),
   };
 });
 
@@ -103,6 +114,11 @@ beforeEach(() => {
     name: "A 4C",
     color_mode: ColorModeEnum.FOUR_COLOR_RYBW,
     color_count: 4,
+  });
+  vi.mocked(extractorApi.listGradientCardMaterials).mockResolvedValue({
+    status: "success",
+    message: "ok",
+    materials: [],
   });
   useConverterStore.setState({
     imageFile: null,
@@ -191,6 +207,19 @@ function makePredictiveBrand() {
   };
 }
 
+function makeMaterial(
+  directoryName: string,
+  materialName: string,
+): SavedMaterialLibraryItem {
+  return {
+    material_name: materialName,
+    directory_name: directoryName,
+    archive_path: `${directoryName}/material.json`,
+    material_file_url: `/materials/${directoryName}/material.json`,
+    estimated_rgb: [255, 255, 255],
+  };
+}
+
 function isMultipleOfStep(value: number, step: number): boolean {
   const ratio = value / step;
   return Math.abs(ratio - Math.round(ratio)) < 1e-9;
@@ -239,6 +268,38 @@ describe("BasicSettings", () => {
     expect(screen.getByText("拖拽图片或点击上传（支持多选）")).toBeInTheDocument();
   });
 
+  it("lets users append one more image after a single image has a preview", async () => {
+    const existingFile = new File(["existing"], "existing.jpg", { type: "image/jpeg" });
+    const newFile = new File(["new"], "new.jpg", { type: "image/jpeg" });
+    useConverterStore.setState({
+      imageFile: existingFile,
+      imagePreviewUrl: "data:image/jpeg;base64,fake",
+      previewImageUrl: "/api/files/preview.png",
+      batchMode: false,
+      batchFiles: [],
+    });
+
+    render(<BasicSettings />);
+
+    await waitFor(() => {
+      expect(screen.getByText("点击更换或追加")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText("点击更换或追加").closest("button")!);
+
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    expect(input).toBeTruthy();
+    fireEvent.change(input, { target: { files: [newFile] } });
+
+    await waitFor(() => {
+      const state = useConverterStore.getState();
+      expect(state.imageFile).toBeNull();
+      expect(state.batchMode).toBe(true);
+      expect(state.batchFiles).toEqual([existingFile, newFile]);
+    });
+    expect(screen.getByText("existing.jpg")).toBeInTheDocument();
+    expect(screen.getByText("new.jpg")).toBeInTheDocument();
+  });
+
   it("renders large-format warnings when present", () => {
     useConverterStore.setState({
       largeFormatEnabled: false,
@@ -268,6 +329,34 @@ describe("BasicSettings", () => {
     expect(screen.getByRole("radio", { name: "反推LUT" })).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "品牌" })).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "LUT" })).toBeInTheDocument();
+  });
+
+  it("shows the inferred white material as the base plate when no backing is persisted", async () => {
+    vi.mocked(extractorApi.listGradientCardMaterials).mockResolvedValueOnce({
+      status: "success",
+      message: "ok",
+      materials: [
+        makeMaterial("brand/pla-green", "Green PLA"),
+        makeMaterial("brand/pla-yellow", "Yellow PLA"),
+        makeMaterial("brand/pla-white", "White PLA"),
+      ],
+    });
+    useConverterStore.setState({
+      source_version: "material",
+      selectedMaterialDirNames: [
+        "brand/pla-green",
+        "brand/pla-yellow",
+        "brand/pla-white",
+      ],
+      materialBackingMaterialDirName: null,
+    });
+
+    render(<BasicSettings />);
+
+    const backingDropdown = screen.getByRole("combobox", { name: "底板耗材" });
+    await waitFor(() => {
+      expect(backingDropdown).toHaveTextContent("3. White PLA");
+    });
   });
 
   it("shows brand options from the loaded legacy details catalog", () => {

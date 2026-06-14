@@ -313,7 +313,7 @@ class TestExtrudeGeometry:
 
     def test_extrude_cache_reuses_base_mesh(self):
         """Same polygon/height/scale should hit cache and only extrude once."""
-        poly = box(0, 0, 10, 10)
+        poly = Polygon([(0, 0), (10, 0), (10, 4), (4, 4), (4, 10), (0, 10)])
         cache = {}
 
         call_count = {"n": 0}
@@ -331,6 +331,114 @@ class TestExtrudeGeometry:
         assert len(meshes1) == 1
         assert len(meshes2) == 1
         assert call_count["n"] == 1
+
+    def test_extrude_cache_hit_builds_mesh_without_trimesh_copy(self):
+        """Cached extrusions should avoid Trimesh.copy on the hot path."""
+        poly = box(0, 0, 10, 10)
+        cache = {}
+
+        VectorProcessor._extrude_geometry(
+            poly,
+            height=1.0,
+            z_offset=0.0,
+            scale=1.5,
+            extrude_cache=cache,
+        )
+        assert len(cache) == 1
+
+        with patch.object(
+            _ve.trimesh.Trimesh,
+            "copy",
+            side_effect=AssertionError("cached extrusion should not call Trimesh.copy"),
+        ):
+            meshes = VectorProcessor._extrude_geometry(
+                poly,
+                height=2.5,
+                z_offset=3.0,
+                scale=1.5,
+                extrude_cache=cache,
+            )
+
+        assert len(meshes) == 1
+        z_min, z_max = meshes[0].bounds[:, 2]
+        assert z_min == pytest.approx(3.0)
+        assert z_max == pytest.approx(5.5)
+
+    def test_extrude_cache_hit_uses_object_key_without_wkb_serialization(self, monkeypatch):
+        poly = box(0, 0, 10, 10)
+        base_vertices = np.asarray(
+            [
+                [0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0],
+                [1.0, 1.0, 1.0],
+            ],
+            dtype=np.float64,
+        )
+        base_faces = np.asarray([[0, 1, 2]], dtype=np.int64)
+        cache = {(poly, 1.0): (base_vertices, base_faces)}
+
+        monkeypatch.setattr(
+            type(poly),
+            "wkb",
+            property(lambda _self: (_ for _ in ()).throw(RuntimeError("wkb should not be read on cache hit"))),
+        )
+
+        meshes = VectorProcessor._extrude_geometry(
+            poly,
+            height=2.0,
+            z_offset=3.0,
+            scale=1.0,
+            extrude_cache=cache,
+        )
+
+        assert len(meshes) == 1
+        assert meshes[0].bounds[:, 2].tolist() == pytest.approx([3.0, 5.0])
+
+    def test_convex_polygon_extrudes_without_trimesh_triangulation(self):
+        """Convex no-hole polygons should use the direct extrusion path."""
+        poly = box(0, 0, 10, 10)
+
+        with patch.object(
+            _ve.trimesh.creation,
+            "extrude_polygon",
+            side_effect=AssertionError("convex no-hole polygons should not call trimesh extrusion"),
+        ):
+            meshes = VectorProcessor._extrude_geometry(
+                poly,
+                height=2.0,
+                z_offset=3.0,
+                scale=0.5,
+                extrude_cache={},
+            )
+
+        assert len(meshes) == 1
+        mesh = meshes[0]
+        assert mesh.is_watertight
+        assert mesh.bounds[0].tolist() == pytest.approx([0.0, 0.0, 3.0])
+        assert mesh.bounds[1].tolist() == pytest.approx([5.0, 5.0, 5.0])
+        assert abs(mesh.volume) == pytest.approx(50.0)
+
+    def test_nonconvex_polygon_keeps_trimesh_fallback(self):
+        """Non-convex polygons should keep the robust trimesh path."""
+        poly = Polygon([(0, 0), (10, 0), (10, 4), (4, 4), (4, 10), (0, 10)])
+        calls = []
+        original = _ve.trimesh.creation.extrude_polygon
+
+        def spy_extrude_polygon(*args, **kwargs):
+            calls.append(args[0])
+            return original(*args, **kwargs)
+
+        with patch.object(_ve.trimesh.creation, "extrude_polygon", side_effect=spy_extrude_polygon):
+            meshes = VectorProcessor._extrude_geometry(
+                poly,
+                height=1.0,
+                z_offset=0.0,
+                scale=1.0,
+                extrude_cache={},
+            )
+
+        assert len(meshes) == 1
+        assert calls == [poly]
 
 
 # =====================================================================

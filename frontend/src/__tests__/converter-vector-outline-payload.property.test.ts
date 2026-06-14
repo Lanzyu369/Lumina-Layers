@@ -17,6 +17,7 @@ import * as fc from "fast-check";
 import * as converterApi from "../api/converter";
 import * as lutApi from "../api/lut";
 import { useConverterStore } from "../stores/converter";
+import { useSettingsStore } from "../stores/settingsStore";
 import { ColorMode, ModelingMode, StructureMode } from "../api/types";
 
 /**
@@ -29,6 +30,9 @@ import { ColorMode, ModelingMode, StructureMode } from "../api/types";
  */
 function seedVectorGenerateState(outlineWidth: number): void {
   const file = new File(["<svg/>"], "anchor.svg", { type: "image/svg+xml" });
+  useSettingsStore.setState({
+    deviceProfileId: "BambuStudio:bbl:bambu-lab-h2d:0.4",
+  } as never);
   // Merge update (do NOT pass `replace=true` — that would wipe the
   // store's action methods including submitGenerate).
   // 合并更新；不能用 replace=true，否则会把 submitGenerate 等 actions 一起抹掉。
@@ -112,6 +116,7 @@ describe("submitGenerate vector outline payload anchor (Task 1.2)", () => {
           expect(paramsArg.modeling_mode).toBe(ModelingMode.VECTOR);
           expect(paramsArg.enable_outline).toBe(true);
           expect(paramsArg.outline_width).toBe(outlineWidth);
+          expect(paramsArg.device_profile_id).toBe("BambuStudio:bbl:bambu-lab-h2d:0.4");
 
           generateSpy.mockRestore();
         },
@@ -138,6 +143,7 @@ describe("submitGenerate vector outline payload anchor (Task 1.2)", () => {
     expect(paramsArg.color_mode).toBe(ColorMode.EIGHT_COLOR);
     expect(paramsArg.enable_outline).toBe(true);
     expect(paramsArg.outline_width).toBe(2.0);
+    expect(paramsArg.device_profile_id).toBe("BambuStudio:bbl:bambu-lab-h2d:0.4");
 
     generateSpy.mockRestore();
   });

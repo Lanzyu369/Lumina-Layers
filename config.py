@@ -628,6 +628,41 @@ def normalize_nozzle_size(nozzle_size: Any) -> Optional[str]:
         return None
 
 
+def format_native_nozzle_size(nozzle_size: Any) -> Optional[str]:
+    """Format a slicer-native nozzle size without rounding it to Lumina slots.
+    格式化切片软件原生喷嘴尺寸，不归并到 Lumina 的 0.2/0.4 档位。
+
+    Args:
+        nozzle_size (Any): Raw nozzle size, e.g. "0.25mm" or "0.40".
+                           (原始喷嘴尺寸)
+
+    Returns:
+        Optional[str]: Stable decimal text like "0.25" or "0.4", or None
+                       when absent/invalid. (稳定小数字符串，缺失或无效时返回 None)
+    """
+    if nozzle_size is None:
+        return None
+
+    if isinstance(nozzle_size, str):
+        candidate = nozzle_size.strip().lower().replace("mm", "")
+        if not candidate:
+            return None
+    else:
+        candidate = str(nozzle_size)
+
+    try:
+        value = Decimal(candidate)
+    except (InvalidOperation, ValueError):
+        return None
+
+    text = format(value.normalize(), "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    if not text:
+        return None
+    return f"{text}.0" if "." not in text else text
+
+
 @dataclass
 class PrinterProfile:
     """Printer hardware profile for 3MF export template selection.
@@ -771,6 +806,28 @@ PRINTER_PROFILES: dict[str, PrinterProfile] = {
         is_dual_head=False,
         template_file="bambu_x1e.json",
         slicer_templates={"OrcaSlicer": "orca_x1e.json"},
+    ),
+    "bambu-lab-x2d": PrinterProfile(
+        id="bambu-lab-x2d",
+        display_name="Bambu Lab X2D",
+        brand="Bambu Lab",
+        bed_width=256,
+        bed_depth=256,
+        bed_height=261,
+        nozzle_count=2,
+        is_dual_head=True,
+        template_file="bambu_x2d.json",
+    ),
+    "bambu-lab-a2l": PrinterProfile(
+        id="bambu-lab-a2l",
+        display_name="Bambu Lab A2L",
+        brand="Bambu Lab",
+        bed_width=330,
+        bed_depth=320,
+        bed_height=325,
+        nozzle_count=1,
+        is_dual_head=False,
+        template_file="bambu_a2l.json",
     ),
     "bambu-h2d": PrinterProfile(
         id="bambu-h2d",

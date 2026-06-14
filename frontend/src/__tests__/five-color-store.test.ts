@@ -156,6 +156,7 @@ describe("fiveColorStore LUT switching", () => {
       printerModel: "bambu-h2d",
       slicerSoftware: "BambuStudio",
       nozzleSize: "0.2",
+      deviceProfileId: "BambuStudio:bbl:bambu-lab-h2d:0.2",
     });
     useFiveColorStore.setState({
       lutName: "test-lut",
@@ -177,6 +178,7 @@ describe("fiveColorStore LUT switching", () => {
         printer_id: "bambu-h2d",
         slicer: "BambuStudio",
         nozzle_size: "0.2",
+        device_profile_id: "BambuStudio:bbl:bambu-lab-h2d:0.2",
       }),
     );
   });

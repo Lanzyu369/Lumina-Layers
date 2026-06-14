@@ -686,7 +686,7 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Screenshot",
   },
   viewer_diagnostics_toggle: {
-    zh: "性能",
+    zh: "3D 诊断",
     en: "Diagnostics",
   },
   viewer_diagnostics_title: {
@@ -748,6 +748,54 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   viewer_diagnostics_canvas: {
     zh: "画布",
     en: "Canvas",
+  },
+  viewer_performance_toggle: {
+    zh: "性能统计",
+    en: "Performance",
+  },
+  viewer_performance_title: {
+    zh: "性能统计",
+    en: "Performance Stats",
+  },
+  viewer_performance_empty: {
+    zh: "暂无性能数据",
+    en: "No performance data yet",
+  },
+  viewer_performance_preview_title: {
+    zh: "预览生成",
+    en: "Preview Generation",
+  },
+  viewer_performance_generate_title: {
+    zh: "模型生成",
+    en: "Model Generation",
+  },
+  viewer_performance_total: {
+    zh: "总耗时",
+    en: "Total",
+  },
+  viewer_performance_upload: {
+    zh: "上传处理",
+    en: "Upload",
+  },
+  viewer_performance_worker: {
+    zh: "核心计算",
+    en: "Worker",
+  },
+  viewer_performance_pickle_load: {
+    zh: "缓存读取",
+    en: "Cache Load",
+  },
+  viewer_performance_segmented_glb: {
+    zh: "预览 GLB",
+    en: "Preview GLB",
+  },
+  viewer_performance_palette: {
+    zh: "调色板",
+    en: "Palette",
+  },
+  viewer_performance_overhead: {
+    zh: "接口开销",
+    en: "API Overhead",
   },
   viewer_hover_magnifier: {
     zh: "放大镜",
@@ -1720,6 +1768,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   "settings.nozzle_size": {
     zh: "喷嘴尺寸",
     en: "Nozzle Size",
+  },
+  "settings.device_profile": {
+    zh: "设备配置",
+    en: "Device Profile",
   },
   "settings.base_layer_height_modifier": {
     zh: "底板层高修改器",
@@ -3306,6 +3358,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "\u5168\u9009",
     en: "Select all",
   },
+  basic_material_picker_deselect_all: {
+    zh: "\u6e05\u7a7a\u9009\u62e9",
+    en: "Deselect all",
+  },
   basic_material_picker_close: {
     zh: "\u5173\u95ed",
     en: "Close",
@@ -3833,6 +3889,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   adv_auto_dynamic_range_hint: {
     zh: "根据所选 LUT 或耗材档案的可达亮度范围，对原图 L* 进行压缩映射；高光与阴影使用软滚降以保留局部对比度，色度通道保持不变。",
     en: "Compresses the source image's L* into the luminance range achievable by the selected LUT or material profile, using soft roll-offs in highlights and shadows to preserve local contrast while leaving chroma channels untouched.",
+  },
+  adv_high_precision_3d_preview: {
+    zh: "3D高精度颜色预览",
+    en: "High-precision 3D colour preview",
+  },
+  adv_high_precision_3d_preview_hint: {
+    zh: "开启后，3D 预览的颜色网格上限会提升到当前量化颜色数；可减少低频颜色被合并成灰色，但 GLB 生成和浏览器渲染会更慢。",
+    en: "When enabled, the 3D preview colour mesh limit is raised to the current quantized colour count. This reduces low-frequency colours being merged into greys, but GLB generation and browser rendering may be slower.",
   },
 
   // ==================== Relief Settings ====================
@@ -4687,8 +4751,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Drag & drop or click to upload (multi-select)",
   },
   upload_tap_to_change: {
-    zh: "点击更换",
-    en: "Tap to change",
+    zh: "点击更换或追加",
+    en: "Change or add",
   },
   upload_unified_aria: {
     zh: "拖拽图片或点击上传文件",

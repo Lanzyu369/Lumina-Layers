@@ -1,35 +1,17 @@
 #!/usr/bin/env python3
-"""Lumina Studio main-app dev launcher.
-Lumina Studio 主应用开发启动器。
+"""Unified Lumina Studio launcher.
 
-Starts the main backend and main frontend as child processes and streams their
-logs with a colored, per-service prefix. Supports restarting either service
-with a single keypress.
-
-把主后端与主前端作为子进程一起启动，按服务前缀汇总彩色日志输出。支持用单个
-按键重启任意服务。
-
-Services (服务):
-    [1] main-backend   python api_server.py                     -> :8000
-    [2] main-frontend  pnpm dev (frontend/)                     -> :4174
-
-Hotkeys (热键, press the key then Enter):
-    1 / 2          restart that service          重启对应服务
-    b              restart backend               重启后端
-    f              restart frontend              重启前端
-    r              restart everything            重启全部
-    s              show status                   查看状态
-    q              quit (stop all)               退出并停止全部
-
-Usage (用法):
-    python start_all.py
+Starts the backend and frontend, supports selective startup/restart, and cleans
+child processes on startup and shutdown.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
+import re
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -38,17 +20,22 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent.resolve()
 FRONTEND_DIR = ROOT / "frontend"
+BACKEND_PORT = 8000
+FRONTEND_PORT = 4174
+FRONTEND_PORT_RANGE = [FRONTEND_PORT + i for i in range(6)]
 
-# ── ANSI colors ──────────────────────────────────────────────────────────
 _R = "\033[0m"
 _B = "\033[1m"
 _DIM = "\033[2m"
 _COLORS = {
-    "main-backend": "\033[36m",   # cyan
-    "main-frontend": "\033[34m",  # blue
-    "SYS": "\033[33m",            # yellow
-    "ERR": "\033[31m",            # red
+    "main-backend": "\033[36m",
+    "main-frontend": "\033[34m",
+    "SYS": "\033[33m",
+    "OK": "\033[32m",
+    "ERR": "\033[31m",
 }
+
+_job = None
 
 
 def _ts() -> str:
@@ -64,17 +51,115 @@ def _sys(msg: str) -> None:
     _log("SYS", msg)
 
 
+def _ok(msg: str) -> None:
+    _log("OK", msg)
+
+
 def _err(msg: str) -> None:
     _log("ERR", msg)
 
 
-def _find_python() -> str:
-    """Resolve the interpreter to run the Python backends.
-    解析运行 Python 后端所用的解释器。
+def _enable_ansi() -> None:
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        ctypes.windll.kernel32.SetConsoleMode(
+            ctypes.windll.kernel32.GetStdHandle(-11), 7
+        )
+    except Exception:
+        pass
 
-    Prefers the project virtualenvs, then the current interpreter.
-    优先项目内虚拟环境，其次当前解释器。
-    """
+
+def _init_job() -> None:
+    global _job
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel = ctypes.windll.kernel32
+        kernel.CreateJobObjectW.restype = wintypes.HANDLE
+        kernel.OpenProcess.restype = wintypes.HANDLE
+
+        job = kernel.CreateJobObjectW(None, None)
+        if not job:
+            return
+
+        class _BasicLimitInfo(ctypes.Structure):
+            _fields_ = [
+                ("PerProcessUserTimeLimit", ctypes.c_int64),
+                ("PerJobUserTimeLimit", ctypes.c_int64),
+                ("LimitFlags", wintypes.DWORD),
+                ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t),
+                ("ActiveProcessLimit", wintypes.DWORD),
+                ("Affinity", ctypes.c_void_p),
+                ("PriorityClass", wintypes.DWORD),
+                ("SchedulingClass", wintypes.DWORD),
+            ]
+
+        class _IoCounters(ctypes.Structure):
+            _fields_ = [
+                ("ReadOperationCount", ctypes.c_uint64),
+                ("WriteOperationCount", ctypes.c_uint64),
+                ("OtherOperationCount", ctypes.c_uint64),
+                ("ReadTransferCount", ctypes.c_uint64),
+                ("WriteTransferCount", ctypes.c_uint64),
+                ("OtherTransferCount", ctypes.c_uint64),
+            ]
+
+        class _ExtendedLimitInfo(ctypes.Structure):
+            _fields_ = [
+                ("BasicLimitInformation", _BasicLimitInfo),
+                ("IoInfo", _IoCounters),
+                ("ProcessMemoryLimit", ctypes.c_size_t),
+                ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                ("PeakJobMemoryUsed", ctypes.c_size_t),
+            ]
+
+        info = _ExtendedLimitInfo()
+        info.BasicLimitInformation.LimitFlags = 0x2000
+        if kernel.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)):
+            _job = job
+        else:
+            kernel.CloseHandle(job)
+    except Exception as exc:
+        _err(f"failed to initialize Windows Job Object: {exc}")
+
+
+def _assign_to_job(pid: int) -> None:
+    if os.name != "nt" or not _job:
+        return
+    try:
+        import ctypes
+        kernel = ctypes.windll.kernel32
+        handle = kernel.OpenProcess(0x0201, False, pid)
+        if handle:
+            kernel.AssignProcessToJobObject(_job, handle)
+            kernel.CloseHandle(handle)
+    except Exception:
+        pass
+
+
+def _kill_job() -> None:
+    global _job
+    if os.name != "nt" or not _job:
+        return
+    try:
+        import ctypes
+        ctypes.windll.kernel32.TerminateJobObject(_job, 1)
+        ctypes.windll.kernel32.CloseHandle(_job)
+    except Exception:
+        pass
+    _job = None
+
+
+def _find_python() -> str:
+    if sys.prefix != getattr(sys, "base_prefix", sys.prefix):
+        return sys.executable
     candidates = [
         ROOT / ".venv312" / "bin" / "python",
         ROOT / ".venv" / "bin" / "python",
@@ -89,72 +174,302 @@ def _find_python() -> str:
     return sys.executable
 
 
-PYTHON = _find_python()
-
-
 def _find_node() -> str:
-    """Resolve a ``node`` executable. (解析 node 可执行文件)"""
     from shutil import which
 
     return which("node") or "node"
 
 
-def _frontend_cmd(frontend_dir: Path) -> list[str]:
-    """Resolve the command to run a Vite dev server for ``frontend_dir``.
-    解析在 ``frontend_dir`` 启动 Vite 开发服务器的命令。
+PYTHON = _find_python()
 
-    Prefers running ``node node_modules/vite/bin/vite.js`` directly so the
-    process we spawn *is* Vite — a single SIGTERM to its process group then
-    reliably stops it. ``pnpm dev`` adds a wrapper child that can outlive a
-    group signal and orphan the Vite server (leaving its port bound).
-    优先用 ``node`` 直接跑 ``vite.js``，使启动的进程本身就是 Vite，便于一次进程组
-    信号可靠停止；``pnpm dev`` 会多一层包装子进程。
-    """
-    vite_js = frontend_dir / "node_modules" / "vite" / "bin" / "vite.js"
+
+def _frontend_cmd() -> list[str]:
+    vite_args = ["--host", "0.0.0.0", "--port", str(FRONTEND_PORT)]
+    vite_js = FRONTEND_DIR / "node_modules" / "vite" / "bin" / "vite.js"
     if vite_js.exists():
-        return [_find_node(), str(vite_js)]
-    # Fallback: pnpm wrapper (less clean shutdown, see docstring above).
-    # 回退：pnpm 包装（关闭不够干净，见上文）。
-    return ["pnpm", "dev"]
+        return [_find_node(), str(vite_js), *vite_args]
+    return ["npm", "run", "dev", "--", *vite_args]
+
+
+def _port_in_use(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.3)
+        return sock.connect_ex(("127.0.0.1", port)) == 0
+
+
+def _wait_port_free(port: int, timeout: float = 10.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _port_in_use(port):
+            return True
+        time.sleep(0.3)
+    return not _port_in_use(port)
+
+
+def _get_process_cmdline(pid: int) -> str:
+    if os.name != "nt":
+        return ""
+    script = (
+        "$ErrorActionPreference='SilentlyContinue';"
+        f"$p = Get-CimInstance Win32_Process -Filter 'ProcessId={pid}';"
+        "if (-not $p) { $p = Get-WmiObject Win32_Process -Filter "
+        f"'ProcessId={pid}' }};"
+        "if ($p) { Write-Output $p.CommandLine }"
+    )
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            creationflags=0x08000000,
+            timeout=5,
+        ).stdout
+        if out.strip():
+            return out.strip()
+    except Exception:
+        pass
+    try:
+        out = subprocess.run(
+            ["wmic", "process", "where", f"ProcessId={pid}", "get", "CommandLine", "/VALUE"],
+            capture_output=True,
+            text=True,
+            creationflags=0x08000000,
+            timeout=5,
+        ).stdout
+        for line in out.splitlines():
+            if line.startswith("CommandLine="):
+                return line[12:]
+    except Exception:
+        pass
+    return ""
+
+
+def _get_posix_cmdline(pid: int) -> str:
+    if os.name == "nt":
+        return ""
+    try:
+        return subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def _is_project_process(pid: int) -> bool:
+    cmdline = (_get_process_cmdline(pid) if os.name == "nt" else _get_posix_cmdline(pid))
+    if not cmdline:
+        return False
+    markers = [
+        "api_server.py",
+        str(ROOT),
+        str(FRONTEND_DIR),
+        "Lumina-Layers",
+    ]
+    return any(marker and marker in cmdline for marker in markers)
+
+
+def _kill_pid_tree(pid: int) -> None:
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/T", "/F", "/PID", str(pid)],
+            capture_output=True,
+            creationflags=0x08000000,
+        )
+        return
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGTERM)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+
+
+def _windows_listening_pids(ports: list[int]) -> list[tuple[int, int]]:
+    if os.name != "nt":
+        return []
+    try:
+        out = subprocess.run(
+            "netstat -ano",
+            shell=True,
+            capture_output=True,
+            encoding="gbk",
+            errors="ignore",
+            creationflags=0x08000000,
+            timeout=10,
+        ).stdout
+    except Exception as exc:
+        _err(f"failed to scan listening ports: {exc}")
+        return []
+
+    wanted = "|".join(str(port) for port in ports)
+    matches: list[tuple[int, int]] = []
+    for line in out.splitlines():
+        match = re.search(rf"\s+TCP\s+[\d\.\[\]:]+:({wanted})\s+\S+\s+LISTENING\s+(\d+)", line)
+        if match:
+            matches.append((int(match.group(2)), int(match.group(1))))
+    return matches
+
+
+def _sweep_windows_ports(ports: list[int], force: bool = False) -> None:
+    seen: set[int] = set()
+    for pid, port in _windows_listening_pids(ports):
+        if pid == os.getpid() or pid in seen:
+            continue
+        seen.add(pid)
+        if force or _is_project_process(pid):
+            _kill_pid_tree(pid)
+            _sys(f"terminated leftover PID {pid} on port {port}")
+        else:
+            _sys(f"skipped PID {pid} on port {port}; not a Lumina process")
+
+
+def _sweep_posix_port(port: int, force: bool = False) -> None:
+    if os.name == "nt":
+        return
+    try:
+        out = subprocess.run(
+            ["lsof", "-tiTCP:" + str(port), "-sTCP:LISTEN"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return
+    for pid_str in out.split():
+        try:
+            pid = int(pid_str)
+        except ValueError:
+            continue
+        if pid == os.getpid():
+            continue
+        if not force and not _is_project_process(pid):
+            _sys(f"skipped PID {pid} on port {port}; not a Lumina process")
+            continue
+        try:
+            os.kill(pid, signal.SIGKILL)
+            _sys(f"killed leftover listener PID {pid} on port {port}")
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+
+
+def _clean_startup_ports(run_backend: bool, run_frontend: bool, force: bool = False) -> None:
+    ports: list[int] = []
+    if run_backend:
+        ports.append(BACKEND_PORT)
+    if run_frontend:
+        ports.extend(FRONTEND_PORT_RANGE)
+    if not ports:
+        return
+    _sys("cleaning leftover Lumina processes...")
+    if os.name == "nt":
+        _sweep_windows_ports(ports, force=force)
+    else:
+        for port in ports:
+            _sweep_posix_port(port, force=force)
+    _kill_lumina_node_orphans()
+    if run_backend:
+        _wait_port_free(BACKEND_PORT, timeout=10)
+    _ok("cleanup complete")
+
+
+def _kill_lumina_node_orphans() -> None:
+    """Kill leftover frontend/test helper processes that belong to this repo.
+
+    Port listeners catch the active Vite server, but wrapper parents such as
+    pnpm/npm/cmd and helper children such as esbuild may not be LISTENing when
+    cleanup runs.  Scan command lines and kill only processes clearly tied to
+    this project.
+    """
+    if os.name != "nt":
+        return
+    try:
+        script = (
+            "$ErrorActionPreference='SilentlyContinue';"
+            "Get-CimInstance Win32_Process | "
+            "ForEach-Object { \"$($_.ProcessId)|$($_.Name)|$($_.CommandLine)\" }"
+        )
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            creationflags=0x08000000,
+            timeout=10,
+        ).stdout
+    except Exception as exc:
+        _err(f"failed to scan project helper processes: {exc}")
+        return
+
+    root = str(ROOT).lower()
+    frontend = str(FRONTEND_DIR).lower()
+    killed: set[int] = set()
+    for line in out.splitlines():
+        parts = line.split("|", 2)
+        if len(parts) != 3:
+            continue
+        try:
+            pid = int(parts[0])
+        except ValueError:
+            continue
+        if pid == os.getpid() or pid in killed:
+            continue
+        name = (parts[1] or "").lower()
+        cmdline = (parts[2] or "").lower()
+        belongs_here = root in cmdline or frontend in cmdline or "lumina-layers" in cmdline
+        if not belongs_here:
+            continue
+        is_helper = (
+            name in {"node.exe", "cmd.exe", "esbuild.exe"}
+            and any(token in cmdline for token in (
+                "vite", "vitest", "esbuild", "pnpm", "npm", "node_modules",
+            ))
+        )
+        if not is_helper:
+            continue
+        _kill_pid_tree(pid)
+        killed.add(pid)
+        _sys(f"terminated Lumina helper leftover PID {pid}")
+    if killed:
+        _ok(f"helper cleanup complete ({len(killed)} process trees)")
 
 
 class Service:
-    """A single managed dev process with restart support.
-    单个受管理的开发进程，支持重启。
-    """
-
     def __init__(
         self,
         key: str,
         name: str,
         cmd: list[str],
         cwd: Path,
-        url: str | None,
-        port: int | None = None,
+        url: str,
+        port: int,
         vite_cache_dir: Path | None = None,
     ) -> None:
-        self.key = key          # hotkey digit, e.g. "1"
-        self.name = name        # log tag, e.g. "main-backend"
+        self.key = key
+        self.name = name
         self.cmd = cmd
         self.cwd = cwd
         self.url = url
-        self.port = port        # bound TCP port, for a stop-time sweep fallback
-        # Vite-only field. Absolute path of the cache directory the Vite config
-        # writes to (``frontend/node_modules/.vite``). When set,
-        # restart() wipes it before relaunching so the new dev server boots
-        # with a clean pre-bundle.
-        # Vite 专用字段。Vite 配置写入的缓存目录绝对路径
-        # ``frontend/node_modules/.vite``。设置后，restart() 在再次启动前清掉该目录。
+        self.port = port
         self.vite_cache_dir = vite_cache_dir
         self.proc: subprocess.Popen | None = None
-        self._reader: threading.Thread | None = None
+        self.actual_port = port
+        self._port_seen = threading.Event()
 
-    def start(self) -> None:
-        """Spawn the process and begin streaming its output. (启动并转发输出)"""
-        if self.proc is not None and self.proc.poll() is None:
+    def start(self) -> bool:
+        if self.alive:
             _sys(f"{self.name} already running (pid={self.proc.pid})")
-            return
+            return True
         try:
+            flags = 0
+            if os.name == "nt":
+                flags = subprocess.CREATE_NEW_PROCESS_GROUP | 0x08000000
             self.proc = subprocess.Popen(
                 self.cmd,
                 cwd=str(self.cwd),
@@ -164,176 +479,95 @@ class Service:
                 encoding="utf-8",
                 errors="replace",
                 bufsize=1,
-                # New process group so we can signal the whole tree on POSIX.
-                # 新建进程组，便于在 POSIX 上向整棵进程树发信号。
+                creationflags=flags,
                 start_new_session=(os.name != "nt"),
             )
         except FileNotFoundError as exc:
             _err(f"{self.name} failed to start: {exc}")
-            return
-        self._reader = threading.Thread(target=self._pump, daemon=True)
-        self._reader.start()
+            return False
+        except Exception as exc:
+            _err(f"{self.name} failed to start: {exc}")
+            return False
+        _assign_to_job(self.proc.pid)
+        threading.Thread(target=self._pump, daemon=True).start()
         _log(self.name, f"started (pid={self.proc.pid})")
+        return True
 
     def _pump(self) -> None:
         assert self.proc is not None and self.proc.stdout is not None
         try:
             for raw in self.proc.stdout:
                 line = raw.rstrip("\n")
-                if line:
-                    _log(self.name, line)
+                if not line:
+                    continue
+                _log(self.name, line)
+                if self.vite_cache_dir is not None and not self._port_seen.is_set():
+                    clean = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", line)
+                    match = re.search(r"http://(?:localhost|127\.0\.0\.1):(\d+)", clean)
+                    if match:
+                        self.actual_port = int(match.group(1))
+                        self._port_seen.set()
         except (ValueError, OSError):
             pass
 
     def stop(self) -> None:
-        """Terminate the process tree, then sweep the port. (终止进程树并清扫端口)"""
         if self.proc is None or self.proc.poll() is not None:
             self.proc = None
             self._sweep_port()
             return
         _log(self.name, "stopping...")
-
-        def _signal_group(sig: int) -> None:
-            try:
-                if os.name == "nt":
-                    self.proc.terminate() if sig == signal.SIGTERM else self.proc.kill()
-                else:
-                    os.killpg(os.getpgid(self.proc.pid), sig)
-            except (ProcessLookupError, PermissionError, OSError):
-                try:
-                    self.proc.terminate() if sig == signal.SIGTERM else self.proc.kill()
-                except OSError:
-                    pass
-
-        # Graceful first, then a fast hard kill — node/vite can ignore SIGTERM
-        # while still booting, so we don't wait long before escalating.
-        # 先优雅后强杀——node/vite 启动期可能忽略 SIGTERM，故不长等即升级。
-        _signal_group(signal.SIGTERM)
-        try:
-            self.proc.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            _signal_group(signal.SIGKILL)
+        if os.name == "nt":
+            _kill_pid_tree(self.proc.pid)
+        else:
+            self._signal_posix(signal.SIGTERM)
             try:
                 self.proc.wait(timeout=3)
             except subprocess.TimeoutExpired:
-                pass
+                self._signal_posix(signal.SIGKILL)
+        try:
+            self.proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            pass
         self.proc = None
         self._sweep_port()
 
-    def _sweep_port(self) -> None:
-        """Best-effort kill of any leftover process still LISTENing on our port.
-        尽力清理仍在本服务端口上 LISTEN 的残留进程。
-
-        A safety net for cases where a wrapper/grandchild (e.g. a detached
-        Vite server) escapes the process-group signal and keeps the port bound,
-        which would otherwise make the next restart fail with "address in use".
-        Escalates straight to SIGKILL: by the time we sweep, the tracked process
-        has already been waited on, so anything still LISTENing on the port is
-        an orphan.
-
-        Crucially we filter ``lsof`` to ``-sTCP:LISTEN`` so we only target
-        the server-side listener — *not* established or CLOSE_WAIT connections
-        from clients that happen to be talking to that port (a browser tab
-        open on http://localhost:<port> shows up here as the Chrome
-        NetworkService process). Without this filter we'd SIGKILL Chrome's
-        NetworkService every time the user restarted the frontend, dropping
-        every tab and showing a blank page after each restart.
-
-        当包装/孙子进程（如脱离的 Vite）逃过进程组信号、仍 LISTEN 端口时兜底
-        清理，避免下次重启因端口占用失败。被跟踪进程已 wait 结束，仍在 LISTEN
-        的进程即为孤儿，直接 SIGKILL。
-
-        关键：``lsof`` 必须加 ``-sTCP:LISTEN`` 过滤，只针对服务端监听，
-        **不要**误杀客户端连接（浏览器里打开 http://localhost:<port> 时，
-        ``lsof -ti tcp:<port>`` 会同时列出 Chrome NetworkService 进程）。
-        没有该过滤会导致每次重启前端都把 Chrome NetworkService 杀掉，
-        所有标签页瞬间断网、显示白屏。
-        """
-        if self.port is None or os.name == "nt":
+    def _signal_posix(self, sig: int) -> None:
+        if self.proc is None:
             return
-        for attempt in range(3):
+        try:
+            os.killpg(os.getpgid(self.proc.pid), sig)
+        except (ProcessLookupError, PermissionError, OSError):
             try:
-                out = subprocess.run(
-                    # ``-sTCP:LISTEN`` restricts the match to processes that
-                    # have the port in LISTEN state — i.e. the dev server
-                    # itself, never the browser that's connected to it.
-                    # ``-sTCP:LISTEN`` 仅匹配处于 LISTEN 状态的进程，即开发
-                    # 服务器本身，绝不包含连接到它的浏览器。
-                    ["lsof", "-tiTCP:" + str(self.port), "-sTCP:LISTEN"],
-                    capture_output=True, text=True, timeout=5,
-                ).stdout
-            except (OSError, subprocess.TimeoutExpired):
-                return
-            pids = []
-            for pid_str in out.split():
-                try:
-                    pid = int(pid_str)
-                except ValueError:
-                    continue
-                if pid == os.getpid():
-                    continue
-                pids.append(pid)
-            if not pids:
-                return
-            for pid in pids:
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                except (ProcessLookupError, PermissionError, OSError):
-                    pass
-            if attempt < 2:
-                time.sleep(0.4)
+                os.kill(self.proc.pid, sig)
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+
+    def _sweep_port(self) -> None:
+        ports = [self.port]
+        if self.vite_cache_dir is not None:
+            ports = sorted(set(FRONTEND_PORT_RANGE + [self.actual_port]))
+        if os.name == "nt":
+            _sweep_windows_ports(ports, force=False)
+        else:
+            for port in ports:
+                _sweep_posix_port(port, force=False)
 
     def restart(self) -> None:
-        """Stop, clean Vite's pre-bundle cache (if any), then start.
-        先停后启；若是 Vite 服务，启动前清掉它的预打包缓存。
-
-        Why the cache wipe: Vite's dep optimizer writes
-        ``node_modules/.vite/deps/*.js`` with a content hash and notes that
-        hash in the page's ``?v=<hash>`` query strings. When the user
-        presses ``r`` to restart while a browser tab is still open, the
-        browser holds module references with the *previous* hash. If the
-        new dev server's pre-bundle ends up with a different hash (or
-        worse, a different file set — Vite's auto-scanner has been
-        observed to drop entries between starts), the browser's cached
-        module URLs no longer resolve. Vite either returns 504 (waiting
-        for an in-flight optimization that never targets the right file)
-        or its SPA HTML fallback (which the browser then fails to parse
-        as a module), and the page goes blank.
-
-        Wiping the cache before the fresh start guarantees the new server
-        builds a fresh pre-bundle every time. The browser's stale module
-        URLs will all 404 against the new bundle, but the HMR client's
-        WebSocket reconnect detects "server restarted" and forces a full
-        page reload, which re-fetches the entry HTML and picks up the
-        new ``?v=<new hash>`` references. The end result is an
-        always-clean restart cycle.
-
-        清缓存的原因：Vite 的依赖优化器把 ``node_modules/.vite/deps/*.js`` 按
-        内容 hash 写入，并把该 hash 标进页面的 ``?v=<hash>`` 查询串。当用户按
-        ``r`` 重启时，浏览器仍持旧 hash 的模块引用；新 dev server 若产出不同
-        hash 或不同文件集（Vite 自动扫描在不同启动间可能漏扫），浏览器请求的
-        旧 URL 就找不到——要么 504（等优化但等不到目标文件），要么落到 SPA
-        HTML 兜底（浏览器把 HTML 当 JS 模块解析失败）→ 白屏。重启前清缓存
-        保证新 server 每次都从空开始；浏览器旧 URL 全 404，HMR 客户端的
-        WebSocket 重连会探测到「服务器已重启」并强制整页刷新，从入口 HTML
-        重新拿到新 hash 的引用。最终形成稳定的重启循环。
-        """
         _log(self.name, "restarting...")
         self.stop()
         if self.vite_cache_dir is not None:
             self._clean_vite_cache()
+        if self.port == BACKEND_PORT:
+            _wait_port_free(BACKEND_PORT, timeout=10)
+        elif self.vite_cache_dir is not None:
+            for port in sorted(set(FRONTEND_PORT_RANGE + [self.actual_port])):
+                _wait_port_free(port, timeout=3)
         time.sleep(0.5)
+        self._port_seen.clear()
+        self.actual_port = self.port
         self.start()
 
     def _clean_vite_cache(self) -> None:
-        """Best-effort wipe of the configured Vite cache directory.
-        尽力清空所配置的 Vite 缓存目录。
-
-        Failures (missing directory, permission errors) are logged at
-        SYS level and ignored — Vite will rebuild the cache anyway, and
-        a stale leftover is the very thing we're trying to avoid.
-        缺失目录或权限错误仅记录、不抛错；Vite 会自行重建，残留正是要避免的。
-        """
         if self.vite_cache_dir is None or not self.vite_cache_dir.exists():
             return
         try:
@@ -348,30 +582,45 @@ class Service:
         return self.proc is not None and self.proc.poll() is None
 
 
-def build_services() -> list[Service]:
-    """Build the main-app service list. (构建主应用服务列表)"""
+def build_services(run_backend: bool, run_frontend: bool) -> list[Service]:
     services: list[Service] = []
-    main_vite_cache = FRONTEND_DIR / "node_modules" / ".vite"
-    services.append(Service(
-        "1", "main-backend",
-        [PYTHON, "api_server.py"], ROOT, "http://localhost:8000", port=8000,
-    ))
-    services.append(Service(
-        "2", "main-frontend",
-        _frontend_cmd(FRONTEND_DIR), FRONTEND_DIR, "http://localhost:4174", port=4174,
-        vite_cache_dir=main_vite_cache,
-    ))
+    if run_backend:
+        services.append(Service(
+            "1", "main-backend", [PYTHON, "api_server.py"], ROOT,
+            f"http://localhost:{BACKEND_PORT}", BACKEND_PORT,
+        ))
+    if run_frontend:
+        services.append(Service(
+            "2", "main-frontend", _frontend_cmd(), FRONTEND_DIR,
+            f"http://localhost:{FRONTEND_PORT}", FRONTEND_PORT,
+            vite_cache_dir=FRONTEND_DIR / "node_modules" / ".vite",
+        ))
     return services
 
 
+def restart_all_services(services: list[Service], run_backend: bool, run_frontend: bool) -> None:
+    """Stop everything, run one cleanup pass, then start everything again."""
+    _sys("restarting all services...")
+    for svc in services:
+        svc.stop()
+    _clean_startup_ports(run_backend, run_frontend, force=False)
+    for svc in services:
+        if svc.vite_cache_dir is not None:
+            svc._clean_vite_cache()
+        svc._port_seen.clear()
+        svc.actual_port = svc.port
+    time.sleep(0.5)
+    for svc in services:
+        svc.start()
+
+
 def print_banner(services: list[Service]) -> None:
-    print(f"\n{_B}  Lumina Studio — Dev Launcher{_R}")
+    print(f"\n{_B}  Lumina Studio — Unified Launcher{_R}")
     print(f"{_DIM}  python: {PYTHON}{_R}")
     print(f"{_DIM}  ──────────────────────────────────────────────{_R}")
     for svc in services:
         color = _COLORS.get(svc.name, "")
-        url = svc.url or ""
-        print(f"   {color}[{svc.key}] {svc.name:<14}{_R} {url}")
+        print(f"   {color}[{svc.key}] {svc.name:<14}{_R} {svc.url}")
     print(f"{_DIM}  ──────────────────────────────────────────────{_R}")
     print(
         f"   {_B}1-2{_R}=restart one  {_B}b{_R}=backend  {_B}f{_R}=frontend  "
@@ -381,48 +630,80 @@ def print_banner(services: list[Service]) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Dev launcher for the Lumina main app")
-    parser.parse_args()
+    parser = argparse.ArgumentParser(description="Unified launcher for Lumina Studio")
+    parser.add_argument("--backend", action="store_true", help="start only the backend")
+    parser.add_argument("--frontend", action="store_true", help="start only the frontend")
+    parser.add_argument("--kill", action="store_true", help="clean leftover Lumina processes and exit")
+    parser.add_argument("--force", "-f", action="store_true", help="with --kill, kill any listener on Lumina ports")
+    args = parser.parse_args()
 
-    # Enable ANSI on Windows terminals.
-    if os.name == "nt":
-        try:
-            import ctypes
-            ctypes.windll.kernel32.SetConsoleMode(
-                ctypes.windll.kernel32.GetStdHandle(-11), 7
-            )
-        except Exception:
-            pass
+    _enable_ansi()
+    run_backend = args.backend or not args.frontend
+    run_frontend = args.frontend or not args.backend
 
-    services = build_services()
+    if args.kill:
+        if args.force:
+            _sys("force cleanup: terminating any listener on Lumina ports...")
+        else:
+            _sys("cleanup: terminating only Lumina project leftovers...")
+        _clean_startup_ports(True, True, force=args.force)
+        return
+
+    _init_job()
+    _clean_startup_ports(run_backend, run_frontend, force=False)
+
+    services = build_services(run_backend, run_frontend)
     by_key = {svc.key: svc for svc in services}
+    stopping = threading.Event()
 
     print_banner(services)
-
     for svc in services:
         svc.start()
-
-    stopping = threading.Event()
 
     def shutdown() -> None:
         if stopping.is_set():
             return
         stopping.set()
-        _sys("shutting down all services...")
+        _sys("shutting down services...")
         for svc in services:
             svc.stop()
+        _clean_startup_ports(run_backend, run_frontend, force=False)
+        _kill_job()
+
+    def exit_now(code: int = 0) -> None:
+        shutdown()
+        os._exit(code)
 
     def on_signal(_signum, _frame) -> None:
-        shutdown()
-        os._exit(0)
+        exit_now(0)
 
     signal.signal(signal.SIGINT, on_signal)
     signal.signal(signal.SIGTERM, on_signal)
 
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            handler_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.DWORD)
+
+            def on_console(ctrl: int) -> bool:
+                if ctrl in (2, 5, 6):
+                    shutdown()
+                    os._exit(0)
+                return False
+
+            console_handler = handler_type(on_console)
+            ctypes.windll.kernel32.SetConsoleCtrlHandler(console_handler, True)
+            setattr(shutdown, "_console_handler", console_handler)
+        except Exception:
+            pass
+
     def show_status() -> None:
         for svc in services:
-            state = f"{_COLORS['main-backend']}running{_R}" if svc.alive else f"{_COLORS['ERR']}stopped{_R}"
-            _log(svc.name, f"[{svc.key}] {state}")
+            state = f"{_COLORS['OK']}running{_R}" if svc.alive else f"{_COLORS['ERR']}stopped{_R}"
+            url = f"http://localhost:{svc.actual_port}" if svc.vite_cache_dir is not None else svc.url
+            _log(svc.name, f"[{svc.key}] {state} {url}")
 
     def input_loop() -> None:
         while not stopping.is_set():
@@ -443,29 +724,23 @@ def main() -> None:
                     if svc.name.endswith("frontend"):
                         svc.restart()
             elif cmd == "r":
-                for svc in services:
-                    svc.restart()
+                restart_all_services(services, run_backend, run_frontend)
             elif cmd == "s":
                 show_status()
             elif cmd in ("q", "quit", "exit"):
-                shutdown()
-                os._exit(0)
+                exit_now(0)
             else:
                 _sys(f"unknown command: {cmd!r} (use 1-2 / b / f / r / s / q)")
 
     threading.Thread(target=input_loop, daemon=True).start()
 
-    # Main loop: just keep the launcher alive. Crashed children are reported
-    # but NOT auto-restarted, so the operator decides via the hotkeys.
-    # 主循环：保持启动器存活。子进程崩溃只报告、不自动重启，由操作者按键决定。
     reported: set[str] = set()
     try:
         while not stopping.is_set():
             time.sleep(1)
             for svc in services:
                 if svc.proc is not None and not svc.alive and svc.name not in reported:
-                    code = svc.proc.returncode
-                    _err(f"{svc.name} exited (code={code}). Press [{svc.key}] to restart.")
+                    _err(f"{svc.name} exited (code={svc.proc.returncode}). Press [{svc.key}] to restart.")
                     reported.add(svc.name)
                 elif svc.alive and svc.name in reported:
                     reported.discard(svc.name)
