@@ -238,7 +238,6 @@ def test_material_sync_install_imports_v2_package_and_updates_status(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    _enable_material_registry_password(monkeypatch)
     materials_root = tmp_path / "materials"
     monkeypatch.setattr("core.single_stage.materials.MATERIALS_DIR", str(materials_root))
     package_path = tmp_path / "material_package.zip"
@@ -253,7 +252,6 @@ def test_material_sync_install_imports_v2_package_and_updates_status(
                 "application/zip",
             )
         },
-        headers=_AUTH_HEADERS,
     )
 
     assert install_response.status_code == 200
@@ -274,18 +272,44 @@ def test_material_sync_install_imports_v2_package_and_updates_status(
     assert status_body["installed"][0]["material_file_exists"] is True
 
 
-def test_material_sync_install_rejects_non_zip_upload(monkeypatch, tmp_path: Path) -> None:
-    _enable_material_registry_password(monkeypatch)
+def test_material_sync_install_rejects_non_zip_upload(tmp_path: Path) -> None:
     response = _client().post(
         "/api/material-sync/install",
         files={"archive": ("not-a-package.txt", b"plain text", "text/plain")},
-        headers=_AUTH_HEADERS,
     )
 
     assert response.status_code == 422
 
 
-def test_material_sync_install_requires_official_password(tmp_path: Path) -> None:
+def test_material_sync_install_rejects_oversized_upload(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    package_path = tmp_path / "material_package.zip"
+    _write_v2_material_package(package_path)
+    monkeypatch.setenv("LUMINA_MATERIAL_PACKAGE_MAX_ARCHIVE_BYTES", "32")
+
+    response = _client().post(
+        "/api/material-sync/install",
+        files={
+            "archive": (
+                "material_package.zip",
+                package_path.read_bytes(),
+                "application/zip",
+            )
+        },
+    )
+
+    assert response.status_code == 413
+    assert "exceeds maximum size" in response.json()["detail"]
+
+
+def test_material_sync_install_is_local_import_without_official_password(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    monkeypatch.setattr("core.single_stage.materials.MATERIALS_DIR", str(materials_root))
     package_path = tmp_path / "material_package.zip"
     _write_v2_material_package(package_path)
 
@@ -300,27 +324,40 @@ def test_material_sync_install_requires_official_password(tmp_path: Path) -> Non
         },
     )
 
-    assert response.status_code == 403
+    assert response.status_code == 200
+    assert response.json()["installed_count"] == 1
 
 
 def test_material_sync_refresh_requires_registry_url(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    _enable_material_registry_password(monkeypatch)
     materials_root = tmp_path / "materials"
     monkeypatch.setattr("core.single_stage.materials.MATERIALS_DIR", str(materials_root))
     monkeypatch.delenv("LUMINA_MATERIAL_REGISTRY_URL", raising=False)
 
-    response = _client().post("/api/material-sync/refresh", headers=_AUTH_HEADERS)
+    response = _client().post("/api/material-sync/refresh")
 
     assert response.status_code == 422
     assert "Material registry URL is not configured" in response.json()["detail"]
 
 
-def test_material_sync_refresh_endpoint_returns_core_summary(monkeypatch) -> None:
-    _enable_material_registry_password(monkeypatch)
+def test_material_sync_refresh_registry_unavailable_returns_502(monkeypatch) -> None:
+    def _fake_refresh_material_sync_from_registry() -> dict[str, object]:
+        raise RuntimeError("Material registry catalog request failed")
 
+    monkeypatch.setattr(
+        "api.routers.material_sync.refresh_material_sync_from_registry",
+        _fake_refresh_material_sync_from_registry,
+    )
+
+    response = _client().post("/api/material-sync/refresh")
+
+    assert response.status_code == 502
+    assert "Material registry catalog request failed" in response.json()["detail"]
+
+
+def test_material_sync_refresh_endpoint_returns_core_summary(monkeypatch) -> None:
     def _fake_refresh_material_sync_from_registry() -> dict[str, object]:
         return {
             "registry_url": "https://registry.test/v1",
@@ -348,7 +385,7 @@ def test_material_sync_refresh_endpoint_returns_core_summary(monkeypatch) -> Non
         _fake_refresh_material_sync_from_registry,
     )
 
-    response = _client().post("/api/material-sync/refresh", headers=_AUTH_HEADERS)
+    response = _client().post("/api/material-sync/refresh")
 
     assert response.status_code == 200
     body = response.json()
@@ -357,14 +394,6 @@ def test_material_sync_refresh_endpoint_returns_core_summary(monkeypatch) -> Non
     assert body["channels"] == ["official"]
     assert body["installed_count"] == 1
     assert body["installed_materials"][0]["directory_name"] == "BrandA/pla-basic"
-
-
-def test_material_sync_refresh_requires_official_password(monkeypatch) -> None:
-    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_OFFICIAL_PASSWORD", _OFFICIAL_PASSWORD)
-
-    response = _client().post("/api/material-sync/refresh")
-
-    assert response.status_code == 403
 
 
 def test_material_sync_catalog_endpoint_returns_remote_catalog_without_installing(
@@ -435,13 +464,12 @@ def test_material_sync_catalog_allows_public_channels_without_password(
     assert response.json()["channels"] == ["official", "community"]
 
 
-def test_material_sync_catalog_requires_password_for_private_proxy(
+def test_material_sync_catalog_allows_private_proxy_without_official_password(
     monkeypatch,
 ) -> None:
     called = False
     monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_CHANNELS", "official,team")
     monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_TOKEN", "team-token")
-    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_OFFICIAL_PASSWORD", _OFFICIAL_PASSWORD)
 
     def _fake_list_material_registry_catalog(**_: object) -> dict[str, object]:
         nonlocal called
@@ -460,11 +488,12 @@ def test_material_sync_catalog_requires_password_for_private_proxy(
 
     response = _client().get("/api/material-sync/catalog")
 
-    assert response.status_code == 403
-    assert called is False
+    assert response.status_code == 200
+    assert called is True
+    assert response.json()["channels"] == ["official", "team"]
 
 
-def test_material_sync_catalog_allows_password_for_private_proxy(
+def test_material_sync_catalog_ignores_legacy_official_password_header(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_CHANNELS", "official,team")
@@ -1117,6 +1146,72 @@ def test_install_material_registry_package_rejects_cross_origin_redirect(
     assert requested_urls == ["https://registry.test/v1/packages/redirect.zip"]
 
 
+def test_material_package_import_rejects_zip_entry_count_limit(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    package_path = tmp_path / "material_package.zip"
+    _write_v2_material_package(package_path)
+    monkeypatch.setenv("LUMINA_MATERIAL_PACKAGE_MAX_ZIP_ENTRIES", "2")
+
+    with pytest.raises(ValueError, match="too many entries"):
+        materials_module.import_saved_stage_a_material_archives(
+            archive_path=str(package_path),
+            materials_dir=str(tmp_path / "materials"),
+        )
+
+
+def test_refresh_material_sync_from_registry_rejects_oversized_package(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    package_path = tmp_path / "material_package.zip"
+    content_hash = _write_v2_material_package(package_path)
+    package_bytes = package_path.read_bytes()
+    monkeypatch.setenv(
+        "LUMINA_MATERIAL_PACKAGE_MAX_ARCHIVE_BYTES",
+        str(len(package_bytes) - 1),
+    )
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/materials/catalog":
+            return httpx.Response(
+                200,
+                json={
+                    "schema_version": "1.0",
+                    "materials": [
+                        {
+                            "material_id": "mat_sync_test",
+                            "revision_id": "rev_sync_test",
+                            "content_hash": content_hash,
+                            "channel": "official",
+                            "package_url": "/v1/packages/material_package.zip",
+                            "package_sha256": hashlib.sha256(package_bytes).hexdigest(),
+                        }
+                    ],
+                },
+            )
+        if request.url.path == "/v1/packages/material_package.zip":
+            return httpx.Response(
+                200,
+                content=package_bytes,
+                headers={"content-length": str(len(package_bytes))},
+            )
+        return httpx.Response(404)
+
+    result = refresh_material_sync_from_registry(
+        registry_url="https://registry.test/v1",
+        materials_dir=str(materials_root),
+        transport=httpx.MockTransport(_handler),
+    )
+
+    assert result["installed_count"] == 0
+    assert result["failed_count"] == 1
+    assert "exceeds maximum size" in result["failures"][0]["error"]
+    assert (materials_root / "BrandA" / "pla-basic" / "material.json").exists() is False
+
+
 def test_refresh_material_sync_from_registry_installs_new_revision_and_skips_same_revision(
     tmp_path: Path,
 ) -> None:
@@ -1407,6 +1502,61 @@ def test_refresh_material_sync_from_registry_preserves_local_rollback(
     assert index["installed"]["mat_test"]["revision_id"] == "rev_old"
 
 
+def test_refresh_material_sync_from_registry_preserves_index_when_catalog_unavailable(
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    material_dir = materials_root / "BrandA" / "pla-basic"
+    material_dir.mkdir(parents=True)
+    (material_dir / "material.json").write_text("{}", encoding="utf-8")
+    sync_dir = materials_root / "_sync"
+    sync_dir.mkdir()
+    index_path = sync_dir / "index.json"
+    index_payload = {
+        "schema_version": "1.0",
+        "installed": {
+            "mat_test": {
+                "revision_id": "rev_old",
+                "content_hash": "sha256:old",
+                "channel": "official",
+                "source": "package",
+                "local_directory": "BrandA/pla-basic",
+                "display_brand": "BrandA",
+                "display_name": "PLA Basic",
+            }
+        },
+        "revisions": {
+            "mat_test": {
+                "rev_old": {
+                    "revision_id": "rev_old",
+                    "content_hash": "sha256:old",
+                    "channel": "official",
+                    "source": "package",
+                    "local_directory": "BrandA/pla-basic",
+                    "display_brand": "BrandA",
+                    "display_name": "PLA Basic",
+                }
+            }
+        },
+    }
+    index_path.write_text(json.dumps(index_payload, ensure_ascii=False), encoding="utf-8")
+    before_index = index_path.read_text(encoding="utf-8")
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/materials/catalog"
+        return httpx.Response(503, json={"detail": "temporarily unavailable"})
+
+    with pytest.raises(RuntimeError, match="catalog request failed"):
+        refresh_material_sync_from_registry(
+            registry_url="https://registry.test/v1",
+            materials_dir=str(materials_root),
+            transport=httpx.MockTransport(_handler),
+        )
+
+    assert index_path.read_text(encoding="utf-8") == before_index
+    assert (material_dir / "material.json").is_file()
+
+
 def test_refresh_material_sync_from_registry_reports_corrupt_package_without_install(
     tmp_path: Path,
 ) -> None:
@@ -1663,7 +1813,6 @@ def test_material_sync_rollback_switches_installed_revision(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    _enable_material_registry_password(monkeypatch)
     materials_root = tmp_path / "materials"
     old_dir = materials_root / "BrandA" / "pla-basic"
     new_dir = materials_root / "BrandA" / "pla-basic-new"
@@ -1714,7 +1863,6 @@ def test_material_sync_rollback_switches_installed_revision(
     response = _client().post(
         "/api/material-sync/rollback",
         json={"material_id": "mat_test", "revision_id": "rev_old"},
-        headers=_AUTH_HEADERS,
     )
 
     assert response.status_code == 200
@@ -1729,17 +1877,46 @@ def test_material_sync_rollback_switches_installed_revision(
     assert "rev_new" in index["revisions"]["mat_test"]
 
 
-def test_material_sync_rollback_requires_official_password(
+def test_material_sync_rollback_is_local_without_official_password(
     monkeypatch,
+    tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_OFFICIAL_PASSWORD", _OFFICIAL_PASSWORD)
+    materials_root = tmp_path / "materials"
+    material_dir = materials_root / "BrandA" / "pla-basic"
+    material_dir.mkdir(parents=True)
+    (material_dir / "material.json").write_text("{}", encoding="utf-8")
+    (materials_root / "_sync").mkdir()
+    (materials_root / "_sync" / "index.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "installed": {},
+                "revisions": {
+                    "mat_test": {
+                        "rev_old": {
+                            "revision_id": "rev_old",
+                            "content_hash": "sha256:old",
+                            "channel": "official",
+                            "source": "package",
+                            "local_directory": "BrandA/pla-basic",
+                        }
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("core.single_stage.materials.MATERIALS_DIR", str(materials_root))
 
     response = _client().post(
         "/api/material-sync/rollback",
         json={"material_id": "mat_test", "revision_id": "rev_old"},
     )
 
-    assert response.status_code == 403
+    assert response.status_code == 200
+    assert response.json()["revision_id"] == "rev_old"
 
 
 def test_rollback_material_sync_revision_rejects_missing_local_files(

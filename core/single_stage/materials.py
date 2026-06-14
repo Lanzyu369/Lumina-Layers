@@ -23,6 +23,13 @@ from scipy.optimize import least_squares
 from config import MATERIALS_DIR, TEMP_DIR
 from .kit import SINGLE_STAGE_SPEC, SingleStageSpec
 
+DEFAULT_MATERIAL_PACKAGE_MAX_ARCHIVE_BYTES = 100 * 1024 * 1024
+DEFAULT_MATERIAL_PACKAGE_MAX_ZIP_ENTRIES = 512
+DEFAULT_MATERIAL_PACKAGE_MAX_ZIP_ENTRY_BYTES = 50 * 1024 * 1024
+DEFAULT_MATERIAL_PACKAGE_MAX_UNCOMPRESSED_BYTES = 150 * 1024 * 1024
+DEFAULT_MATERIAL_PACKAGE_MAX_COMPRESSION_RATIO = 100
+_MATERIAL_PACKAGE_DOWNLOAD_CHUNK_BYTES = 1024 * 1024
+
 
 @dataclass(frozen=True)
 class GradientCardStageAResult:
@@ -1381,6 +1388,85 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _positive_int_env(name: str, default: int) -> int:
+    raw_value = os.environ.get(name, "").strip()
+    if not raw_value:
+        return default
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    if value < 1:
+        raise ValueError(f"{name} must be positive")
+    return value
+
+
+def material_package_max_archive_bytes() -> int:
+    """Return the compressed material-package byte limit.
+    返回耗材包压缩归档的字节上限。
+    """
+    return _positive_int_env(
+        "LUMINA_MATERIAL_PACKAGE_MAX_ARCHIVE_BYTES",
+        DEFAULT_MATERIAL_PACKAGE_MAX_ARCHIVE_BYTES,
+    )
+
+
+def _material_package_zip_limits() -> dict[str, int]:
+    return {
+        "max_entries": _positive_int_env(
+            "LUMINA_MATERIAL_PACKAGE_MAX_ZIP_ENTRIES",
+            DEFAULT_MATERIAL_PACKAGE_MAX_ZIP_ENTRIES,
+        ),
+        "max_entry_bytes": _positive_int_env(
+            "LUMINA_MATERIAL_PACKAGE_MAX_ZIP_ENTRY_BYTES",
+            DEFAULT_MATERIAL_PACKAGE_MAX_ZIP_ENTRY_BYTES,
+        ),
+        "max_uncompressed_bytes": _positive_int_env(
+            "LUMINA_MATERIAL_PACKAGE_MAX_UNCOMPRESSED_BYTES",
+            DEFAULT_MATERIAL_PACKAGE_MAX_UNCOMPRESSED_BYTES,
+        ),
+        "max_compression_ratio": _positive_int_env(
+            "LUMINA_MATERIAL_PACKAGE_MAX_COMPRESSION_RATIO",
+            DEFAULT_MATERIAL_PACKAGE_MAX_COMPRESSION_RATIO,
+        ),
+    }
+
+
+def _validate_material_zip_resource_limits(
+    archive: zipfile.ZipFile,
+    *,
+    archive_path: str,
+) -> None:
+    limits = _material_package_zip_limits()
+    infos = archive.infolist()
+    if len(infos) > limits["max_entries"]:
+        raise ValueError(
+            "Material package ZIP has too many entries: "
+            f"{len(infos)} > {limits['max_entries']}"
+        )
+    total_uncompressed_bytes = 0
+    for member in infos:
+        if member.is_dir():
+            continue
+        if member.file_size > limits["max_entry_bytes"]:
+            raise ValueError(
+                "Material package ZIP entry exceeds maximum size: "
+                f"{member.filename}"
+            )
+        total_uncompressed_bytes += member.file_size
+        if total_uncompressed_bytes > limits["max_uncompressed_bytes"]:
+            raise ValueError(
+                "Material package ZIP uncompressed size exceeds maximum: "
+                f"{archive_path}"
+            )
+        compressed_size = max(int(member.compress_size or 0), 1)
+        if member.file_size / compressed_size > limits["max_compression_ratio"]:
+            raise ValueError(
+                "Material package ZIP compression ratio is too high: "
+                f"{member.filename}"
+            )
+
+
 def _is_local_only_material_file(relative_path: Path) -> bool:
     if relative_path.name in _MATERIAL_LOCAL_ONLY_FILENAMES:
         return True
@@ -1536,10 +1622,21 @@ def _build_material_bundle_package_manifest(
 
 
 def _safe_extract_material_zip(zip_path: str, dest_dir: Path) -> Path:
+    archive_size = Path(zip_path).stat().st_size
+    max_archive_bytes = material_package_max_archive_bytes()
+    if archive_size > max_archive_bytes:
+        raise ValueError(
+            "Material package ZIP exceeds maximum size: "
+            f"{archive_size} > {max_archive_bytes}"
+        )
     resolved_dest_dir = dest_dir.resolve()
     dest_dir.mkdir(parents=True, exist_ok=True)
     try:
         with zipfile.ZipFile(zip_path, "r") as archive:
+            _validate_material_zip_resource_limits(
+                archive,
+                archive_path=zip_path,
+            )
             for member in archive.infolist():
                 raw_member_name = member.filename.strip()
                 normalized_member_name = raw_member_name.replace("\\", "/")
@@ -2557,7 +2654,7 @@ def _reject_material_registry_catalog_redirect(response: Any) -> None:
         raise RuntimeError("Material registry catalog redirects are not allowed")
 
 
-def _write_temp_material_registry_package(package_bytes: bytes) -> Path:
+def _new_temp_material_registry_package_path() -> tuple[int, Path]:
     temp_root = Path(TEMP_DIR)
     temp_root.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(
@@ -2565,10 +2662,70 @@ def _write_temp_material_registry_package(package_bytes: bytes) -> Path:
         suffix=".zip",
         dir=temp_root,
     )
-    with os.fdopen(fd, "wb") as handle:
-        handle.write(package_bytes)
-    return Path(temp_name)
+    return fd, Path(temp_name)
 
+
+def _download_material_registry_package_to_tempfile(
+    *,
+    client: Any,
+    package_url: str,
+    headers: dict[str, str],
+    expected_package_sha256: str,
+    identity_label: str,
+    max_archive_bytes: int | None = None,
+) -> Path:
+    if max_archive_bytes is None:
+        max_archive_bytes = material_package_max_archive_bytes()
+    with client.stream(
+        "GET",
+        package_url,
+        headers=headers,
+        follow_redirects=False,
+    ) as response:
+        _reject_material_registry_package_redirect(response)
+        response.raise_for_status()
+        content_length = str(response.headers.get("content-length") or "").strip()
+        if content_length:
+            try:
+                declared_length = int(content_length)
+            except ValueError:
+                declared_length = 0
+            if declared_length > max_archive_bytes:
+                raise ValueError(
+                    "Material registry package exceeds maximum size: "
+                    f"{declared_length} > {max_archive_bytes}"
+                )
+        fd, temp_package_path = _new_temp_material_registry_package_path()
+        digest = hashlib.sha256()
+        total_bytes = 0
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                for chunk in response.iter_bytes(
+                    chunk_size=_MATERIAL_PACKAGE_DOWNLOAD_CHUNK_BYTES
+                ):
+                    if not chunk:
+                        continue
+                    total_bytes += len(chunk)
+                    if total_bytes > max_archive_bytes:
+                        raise ValueError(
+                            "Material registry package exceeds maximum size: "
+                            f"{total_bytes} > {max_archive_bytes}"
+                        )
+                    digest.update(chunk)
+                    handle.write(chunk)
+            actual_package_sha256 = digest.hexdigest()
+            if actual_package_sha256 != expected_package_sha256:
+                raise ValueError(
+                    "Material registry package_sha256 mismatch: "
+                    f"{identity_label}"
+                )
+            return temp_package_path
+        except Exception:
+            try:
+                temp_package_path.unlink()
+            except OSError:
+                pass
+            raise
 
 def _material_registry_remote_catalog_cache_key(
     *,
@@ -3044,23 +3201,15 @@ def install_material_registry_package(
     with _MaterialSyncRefreshFileLock(target_root):
         with httpx.Client(**client_kwargs) as client:
             try:
-                package_response = client.get(
-                    resolved_package_url,
+                temp_package_path = _download_material_registry_package_to_tempfile(
+                    client=client,
+                    package_url=resolved_package_url,
                     headers=headers,
-                    follow_redirects=False,
+                    expected_package_sha256=expected_package_sha256,
+                    identity_label=f"{material_id}/{revision_id}",
                 )
-                _reject_material_registry_package_redirect(package_response)
-                package_response.raise_for_status()
             except httpx.HTTPError as exc:
                 raise RuntimeError("Material registry package request failed") from exc
-            package_bytes = package_response.content
-        actual_package_sha256 = _sha256_bytes(package_bytes)
-        if actual_package_sha256 != expected_package_sha256:
-            raise ValueError(
-                "Material registry package_sha256 mismatch: "
-                f"{material_id}/{revision_id}"
-            )
-        temp_package_path = _write_temp_material_registry_package(package_bytes)
         try:
             import_result = import_saved_stage_a_material_archives(
                 archive_path=str(temp_package_path),
@@ -5246,21 +5395,13 @@ def refresh_material_sync_from_registry(
                     expected_package_sha256 = _sha256_hex_from_catalog(
                         entry.get("package_sha256")
                     )
-                    package_response = client.get(
-                        resolved_package_url,
+                    temp_package_path = _download_material_registry_package_to_tempfile(
+                        client=client,
+                        package_url=resolved_package_url,
                         headers=headers,
-                        follow_redirects=False,
+                        expected_package_sha256=expected_package_sha256,
+                        identity_label=f"{material_id}/{revision_id}",
                     )
-                    _reject_material_registry_package_redirect(package_response)
-                    package_response.raise_for_status()
-                    package_bytes = package_response.content
-                    actual_package_sha256 = _sha256_bytes(package_bytes)
-                    if actual_package_sha256 != expected_package_sha256:
-                        raise ValueError(
-                            "Material registry package_sha256 mismatch: "
-                            f"{material_id}/{revision_id}"
-                        )
-                    temp_package_path = _write_temp_material_registry_package(package_bytes)
                     try:
                         import_result = import_saved_stage_a_material_archives(
                             archive_path=str(temp_package_path),

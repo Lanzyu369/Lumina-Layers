@@ -4,13 +4,11 @@
 
 from __future__ import annotations
 
-from typing import Annotated
-
 import os
 
-from fastapi import APIRouter, File, Header, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 
-from api.file_bridge import upload_to_tempfile
+from api.file_bridge import UploadTooLargeError, upload_to_tempfile
 from api.schemas.single_stage import (
     MaterialRegistryInstallRequest,
     MaterialSyncRollbackRequest,
@@ -23,38 +21,18 @@ from api.schemas.responses import (
     MaterialSyncStatusResponse,
 )
 from api.structured_logging import get_logger
-from core.material_registry import (
-    is_material_registry_public_channel,
-    verify_material_registry_write_access,
-)
 from core.single_stage import (
     get_material_sync_status,
     import_saved_stage_a_material_archives,
     install_material_registry_package,
     list_material_registry_catalog,
+    material_package_max_archive_bytes,
     refresh_material_sync_from_registry,
     rollback_material_sync_revision,
 )
 
 router = APIRouter(prefix="/api/material-sync", tags=["Material Sync"])
 log = get_logger(__name__)
-_OFFICIAL_PASSWORD_HEADER = "X-Lumina-Material-Registry-Official-Password"
-
-
-def _require_material_registry_write_access(official_password: str | None) -> None:
-    try:
-        verify_material_registry_write_access(official_password=official_password)
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
-
-
-def _material_sync_catalog_requires_write_access() -> bool:
-    raw_channels = os.environ.get("LUMINA_MATERIAL_REGISTRY_CHANNELS", "official")
-    channels = [channel.strip() for channel in raw_channels.split(",") if channel.strip()]
-    return any(
-        not is_material_registry_public_channel(channel)
-        for channel in (channels or ["official"])
-    )
 
 
 def _canonical_package_sha256(value: object) -> str:
@@ -129,17 +107,10 @@ async def material_sync_catalog(
     q: str | None = Query(default=None, max_length=200),
     limit: int | None = Query(default=None, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
-    official_password: Annotated[
-        str | None,
-        Header(alias=_OFFICIAL_PASSWORD_HEADER),
-    ] = None,
 ) -> MaterialRegistryCatalogResponse:
     """Return the configured remote Registry catalog without installing.
     返回已配置远程 Registry catalog，不安装耗材。
     """
-    if _material_sync_catalog_requires_write_access():
-        _require_material_registry_write_access(official_password)
-
     try:
         catalog = list_material_registry_catalog(query=q, limit=limit, offset=offset)
     except ValueError as exc:
@@ -170,10 +141,6 @@ async def material_sync_catalog(
 @router.post("/install", response_model=MaterialSyncInstallResponse)
 async def material_sync_install(
     archive: UploadFile = File(...),
-    official_password: Annotated[
-        str | None,
-        Header(alias=_OFFICIAL_PASSWORD_HEADER),
-    ] = None,
 ) -> MaterialSyncInstallResponse:
     """Install one uploaded material package into the local material library.
     将上传的耗材包安装到本地耗材库。
@@ -192,14 +159,18 @@ async def material_sync_install(
             status_code=422,
             detail=f"Uploaded file must be a ZIP archive: {filename or '<unnamed>'}",
         )
-    _require_material_registry_write_access(official_password)
-
     archive_path: str | None = None
     try:
-        archive_path = await upload_to_tempfile(archive, suffix=".zip")
+        archive_path = await upload_to_tempfile(
+            archive,
+            suffix=".zip",
+            max_bytes=material_package_max_archive_bytes(),
+        )
         result = import_saved_stage_a_material_archives(archive_path=archive_path)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except UploadTooLargeError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
     except (ValueError, TypeError, OSError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     finally:
@@ -269,10 +240,6 @@ async def material_sync_install_from_registry(
 
 @router.post("/refresh", response_model=MaterialSyncRefreshResponse)
 async def material_sync_refresh(
-    official_password: Annotated[
-        str | None,
-        Header(alias=_OFFICIAL_PASSWORD_HEADER),
-    ] = None,
 ) -> MaterialSyncRefreshResponse:
     """Pull read-only material package updates from the configured Registry.
     从已配置 Registry 只读拉取耗材包更新。
@@ -281,8 +248,6 @@ async def material_sync_refresh(
         MaterialSyncRefreshResponse: Refresh summary and per-package failures.
             （刷新摘要与包级失败明细）
     """
-    _require_material_registry_write_access(official_password)
-
     try:
         result = refresh_material_sync_from_registry()
     except ValueError as exc:
@@ -317,16 +282,10 @@ async def material_sync_refresh(
 @router.post("/rollback", response_model=MaterialSyncRollbackResponse)
 async def material_sync_rollback(
     payload: MaterialSyncRollbackRequest,
-    official_password: Annotated[
-        str | None,
-        Header(alias=_OFFICIAL_PASSWORD_HEADER),
-    ] = None,
 ) -> MaterialSyncRollbackResponse:
     """Rollback one synced material to a previously installed revision.
     将一个已同步耗材回滚到历史 revision。
     """
-    _require_material_registry_write_access(official_password)
-
     try:
         result = rollback_material_sync_revision(
             material_id=payload.material_id,
