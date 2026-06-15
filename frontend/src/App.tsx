@@ -46,6 +46,8 @@ import { useElectronLanguageSync } from "./integrations/electron";
 
 import LutDetailsPanel from "./components/LutDetailsPanel";
 
+const HEALTH_RECHECK_MS = 5_000;
+
 /* ---------- Error Boundary ---------- */
 
 interface ErrorBoundaryProps {
@@ -303,10 +305,35 @@ function AppContent() {
   }, [activeTab, activeConverterSubTab, workspace.mode]);
 
   useEffect(() => {
-    apiClient
-      .get<HealthResponse>("/health")
-      .then((res) => setConnected(res.data.status === "ok"))
-      .catch(() => setConnected(false));
+    let cancelled = false;
+    let checking = false;
+
+    const checkHealth = () => {
+      if (checking) return;
+      checking = true;
+      apiClient
+        .get<HealthResponse>("/health")
+        .then((res) => {
+          if (!cancelled) {
+            setConnected(res.data.status === "ok");
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setConnected(false);
+          }
+        })
+        .finally(() => {
+          checking = false;
+        });
+    };
+
+    checkHealth();
+    const intervalId = window.setInterval(checkHealth, HEALTH_RECHECK_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
   }, []);
 
   useEffect(() => {
