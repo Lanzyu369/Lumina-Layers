@@ -11,6 +11,7 @@ import json
 import os
 import re
 import uuid
+from contextlib import suppress
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -272,8 +273,14 @@ async def image_preview(
     try:
         with Image.open(png_path) as img:
             width, height = img.size
-    except (OSError, ValueError) as e:
-        raise HTTPException(status_code=422, detail=f"无法读取图片尺寸: {e}")
+    except (OSError, ValueError) as exc:
+        with suppress(OSError):
+            if os.path.exists(png_path):
+                os.unlink(png_path)
+        raise HTTPException(
+            status_code=422,
+            detail="无法读取图片尺寸：无效或损坏的图片文件",
+        ) from exc
     file_id = file_registry.register_path(
         str(uuid.uuid4()),
         png_path,
