@@ -27,6 +27,7 @@ def _update_bambu_base_layer_ctx_from_voxels(
     structure_mode: str,
     num_layers: int,
     thickness_mm: float,
+    face_orientation_override: str | None = None,
 ) -> None:
     """Populate Bambu base-layer modifier values from voxel-stage inputs.
     根据体素阶段输入填充 Bambu 底板粗层高相关上下文值。
@@ -61,7 +62,9 @@ def _update_bambu_base_layer_ctx_from_voxels(
     is_double = "双面" in structure_mode_text or "Double" in structure_mode_text
     is_5color = "5-Color Extended" in color_mode_text
 
-    if is_double:
+    if face_orientation_override in {"up", "down", "double"}:
+        face_orientation = face_orientation_override
+    elif is_double:
         face_orientation = "double"
     elif is_5color:
         face_orientation = "up"
@@ -896,12 +899,18 @@ def run(ctx: dict) -> dict:
     # Update structure_mode in case it was forced
     ctx["structure_mode"] = structure_mode
     ctx["spacer_thick"] = spacer_thick
+    face_orientation_override = (
+        "up"
+        if backing_metadata.get("is_relief") or backing_metadata.get("is_cloisonne")
+        else None
+    )
     _update_bambu_base_layer_ctx_from_voxels(
         ctx,
         color_mode=color_mode,
         structure_mode=structure_mode,
         num_layers=material_matrix.shape[2],
         thickness_mm=spacer_thick,
+        face_orientation_override=face_orientation_override,
     )
 
     _elapsed = time.perf_counter() - _t0
