@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import tempfile
 import time
 import uuid
@@ -83,6 +84,7 @@ from utils.lut_manager import LUTManager
 
 router = APIRouter(prefix="/api/extractor", tags=["Extractor"])
 EPHEMERAL_PREVIEW_TTL_SECONDS = 600
+EXTRACTOR_LUT_DOWNLOAD_TTL_SECONDS = 8 * 60 * 60
 log = get_logger(__name__)
 
 EXTRACTOR_HANDLED_ERRORS = (
@@ -130,6 +132,37 @@ def _handle_core_error(e: Exception, context: str) -> None:
         },
     )
     raise to_http_exception(e, context)
+
+
+def _register_final_lut_download(
+    *,
+    registry: FileRegistry,
+    lut_path: str,
+) -> tuple[str, str]:
+    """Create a stable TTL-managed copy for user-facing LUT downloads."""
+    suffix = os.path.splitext(lut_path)[1] or ".json"
+    fd, download_path = tempfile.mkstemp(
+        prefix="extractor_lut_",
+        suffix=suffix,
+        dir=TEMP_DIR,
+    )
+    os.close(fd)
+    try:
+        shutil.copy2(lut_path, download_path)
+    except OSError:
+        try:
+            os.remove(download_path)
+        except OSError:
+            pass
+        raise
+
+    download_id = registry.register_path(
+        f"extractor-lut:{uuid.uuid4().hex}",
+        download_path,
+        filename=os.path.basename(lut_path) or "lumina_lut.json",
+        ttl_seconds=EXTRACTOR_LUT_DOWNLOAD_TTL_SECONDS,
+    )
+    return download_id, download_path
 
 
 def _resize_bgr_for_colorchecker_preview(image_bgr: np.ndarray) -> np.ndarray:
@@ -1362,8 +1395,16 @@ async def extractor_extract(
                 },
             )
 
-    # Register LUT file (already in Keyed JSON format from run_extraction)
-    lut_download_id = registry.register_path(session_id, lut_path)
+    # Register a stable final LUT download while keeping the active session
+    # pointed at the same immutable snapshot for follow-up palette operations.
+    try:
+        lut_download_id, lut_download_path = _register_final_lut_download(
+            registry=registry,
+            lut_path=lut_path,
+        )
+    except OSError as e:
+        _handle_core_error(e, "Extractor LUT download registration")
+    store.put(session_id, "lut_path", lut_download_path)
     try:
         layout_rgb, _layout_stacks, _layout_metadata = LUTManager.load_lut_with_metadata(lut_path)
         lut_layout = _resolve_session_lut_layout(
@@ -1586,10 +1627,15 @@ def extractor_merge_5color_extended(
 
     # Create session for merged result
     session_id = store.create()
-    store.put(session_id, "lut_path", LUT_FILE_PATH)
+    try:
+        lut_download_id, lut_download_path = _register_final_lut_download(
+            registry=registry,
+            lut_path=LUT_FILE_PATH,
+        )
+    except OSError as e:
+        _handle_core_error(e, "5-Color Extended LUT download registration")
+    store.put(session_id, "lut_path", lut_download_path)
     store.put(session_id, "color_mode", "5-Color Extended")
-
-    lut_download_id = registry.register_path(session_id, LUT_FILE_PATH)
 
     log.info(
         "Extractor 5-Color Extended merge completed",
@@ -1690,10 +1736,15 @@ def extractor_merge_8color(
 
     # Create session for merged result
     session_id = store.create()
-    store.put(session_id, "lut_path", LUT_FILE_PATH)
+    try:
+        lut_download_id, lut_download_path = _register_final_lut_download(
+            registry=registry,
+            lut_path=LUT_FILE_PATH,
+        )
+    except OSError as e:
+        _handle_core_error(e, "8-Color LUT download registration")
+    store.put(session_id, "lut_path", lut_download_path)
     store.put(session_id, "color_mode", "8-Color Max")
-
-    lut_download_id = registry.register_path(session_id, LUT_FILE_PATH)
 
     log.info(
         "Extractor 8-Color merge completed",
