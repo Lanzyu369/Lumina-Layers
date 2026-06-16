@@ -258,6 +258,36 @@ def _rollback_imported_materials(directory_names: list[str]) -> None:
             pass
 
 
+def _remove_path_safely(path: str | None) -> None:
+    if not path:
+        return
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+def _close_session_safely(store: SessionStore, session_id: str | None) -> None:
+    if not session_id:
+        return
+    try:
+        store.close(session_id)
+    except (ValueError, TypeError, OSError, RuntimeError):
+        pass
+
+
+def _cleanup_registry_session_safely(
+    registry: FileRegistry,
+    session_id: str | None,
+) -> None:
+    if not session_id:
+        return
+    try:
+        registry.cleanup_session(session_id)
+    except Exception:
+        pass
+
+
 @router.post("/extract-single-stage")
 async def extractor_extract_single_stage(
     dataset_zip: UploadFile = File(..., description="Single-stage dataset ZIP"),
@@ -295,7 +325,12 @@ async def extractor_extract_single_stage(
             except OSError:
                 pass
 
-    stage_json_id = registry.register_path(session_id, result.stage_json_path)
+    try:
+        stage_json_id = registry.register_path(session_id, result.stage_json_path)
+    except Exception:
+        _cleanup_registry_session_safely(registry, session_id)
+        _close_session_safely(store, session_id)
+        raise
     log.info(
         "Single-stage dataset extracted",
         extra={
@@ -331,6 +366,7 @@ async def extractor_fit_stage_a(
     stage_json_path: str | None = None
     sid_for_registry: str | None = None
     source_mode: str
+    created_session_for_upload = False
 
     if session_id:
         bind_session_id(session_id)
@@ -348,6 +384,7 @@ async def extractor_fit_stage_a(
     elif stage_json is not None:
         stage_json_path = await upload_to_tempfile(stage_json, suffix=".json")
         sid_for_registry = store.create()
+        created_session_for_upload = True
         store.register_temp_file(sid_for_registry, stage_json_path)
         store.put(sid_for_registry, "single_stage_stage_json_path", stage_json_path)
         source_mode = "upload"
@@ -360,15 +397,27 @@ async def extractor_fit_stage_a(
     try:
         result = fit_stage_a_from_stage_json(stage_json_path)
     except FileNotFoundError as e:
+        if created_session_for_upload:
+            _close_session_safely(store, sid_for_registry)
         raise HTTPException(status_code=500, detail=str(e))
     except (ValueError, TypeError, OSError, RuntimeError) as e:
+        if created_session_for_upload:
+            _close_session_safely(store, sid_for_registry)
         raise HTTPException(status_code=422, detail=str(e))
+
+    try:
+        params_id = registry.register_path(sid_for_registry, result.params_path)
+    except Exception:
+        _remove_path_safely(result.params_path)
+        if created_session_for_upload:
+            _cleanup_registry_session_safely(registry, sid_for_registry)
+            _close_session_safely(store, sid_for_registry)
+        raise
 
     store.register_temp_file(sid_for_registry, result.params_path)
     store.put(sid_for_registry, "stage_a_params_path", result.params_path)
     store.put(sid_for_registry, "stage_a_fit_summary", result.fit_summary)
 
-    params_id = registry.register_path(sid_for_registry, result.params_path)
     log.info(
         "Stage A parameters fitted",
         extra={
