@@ -80,6 +80,7 @@ from .common import (
     ROUTER_HANDLED_ERRORS,
     _require_session,
     _resolve_material_backing_index,
+    _validate_material_source,
 )
 
 router = APIRouter()
@@ -1974,6 +1975,7 @@ async def convert_batch(
     # reverse-LUT bundle, or material archives.
     # 解析颜色来源；批量模式应与单图预览/生成一致支持传统 LUT、反推 LUT
     # 和耗材档案。
+    material_source = _validate_material_source(material_source)
     image_count = len(images)
     selected_material_names: list[str] = []
     temp_native_bundle_path: str | None = None

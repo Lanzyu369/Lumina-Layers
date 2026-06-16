@@ -72,6 +72,7 @@ from .common import (
     _require_preview_cache,
     _require_session,
     _resolve_material_backing_index,
+    _validate_material_source,
     recompute_gradient_groups_into_session,
 )
 
@@ -643,6 +644,7 @@ async def convert_preview(
     worker_preview_png_path: str | None = None
     worker_cache_data_path: str | None = None
     svg_large_format_policy = None
+    material_source = _validate_material_source(material_source)
     try:
         svg_pixels_per_mm = normalize_svg_pixels_per_mm(svg_pixels_per_mm)
     except ValueError as exc:

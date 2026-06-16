@@ -29,6 +29,7 @@ from core.gradient_group_analyzer import (
 EPHEMERAL_PREVIEW_TTL_SECONDS = 600
 BATCH_DOWNLOAD_TTL_SECONDS = 3600
 log = get_logger(__name__)
+_VALID_MATERIAL_SOURCES = {"lut", "material_archive"}
 
 # Shared error tuples for except clauses across converter router modules.
 # replace.py extends ROUTER_HANDLED_ERRORS with IndexError for array-index
@@ -49,6 +50,21 @@ NON_FATAL_GLB_ERRORS = (
     RuntimeError,
     cv2.error,
 )
+
+
+def _validate_material_source(material_source: str) -> str:
+    """Validate converter color-source selector from API form inputs."""
+
+    if material_source not in _VALID_MATERIAL_SOURCES:
+        expected = ", ".join(sorted(_VALID_MATERIAL_SOURCES))
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Invalid material_source: {material_source}. "
+                f"Expected one of: {expected}."
+            ),
+        )
+    return material_source
 
 
 def _handle_core_error(e: Exception, context: str) -> NoReturn:
