@@ -1,6 +1,18 @@
-import { describe, it, beforeEach } from "vitest";
+import { describe, it, beforeEach, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
 import * as fc from "fast-check";
 import { useConverterStore } from "../stores/converter";
+
+const STORE_MOJIBAKE_MARKERS: ReadonlyArray<{ char: string; why: string }> = [
+  { char: "脳", why: "known corruption of multiplication sign in bed label" },
+  { char: "锟", why: "classic GBK-as-UTF-8 replacement glyph" },
+  { char: "锛", why: "classic GBK-as-UTF-8 punctuation corruption" },
+  { char: "鎷", why: "classic GBK-as-UTF-8 replacement glyph" },
+  { char: "鍙", why: "classic GBK-as-UTF-8 replacement glyph" },
+  { char: "涓", why: "classic GBK-as-UTF-8 replacement glyph" },
+];
 
 // ========== Helpers ==========
 
@@ -17,6 +29,27 @@ function resetStore(): void {
 }
 
 // ========== Tests ==========
+
+describe("Bed size source encoding", () => {
+  it("keeps converter store defaults free of known mojibake", () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const source = readFileSync(
+      resolve(here, "../stores/converter/store.ts"),
+      "utf-8",
+    );
+
+    const hits = STORE_MOJIBAKE_MARKERS.filter((m) =>
+      source.includes(m.char),
+    );
+    expect(
+      hits,
+      `Mojibake markers found in store.ts: ${hits
+        .map((h) => `${h.char} (${h.why})`)
+        .join(", ")}`,
+    ).toEqual([]);
+    expect(source).toContain('bed_label: "256×256 mm"');
+  });
+});
 
 describe("BedSizeSelector Property-Based Tests", () => {
   beforeEach(() => {
