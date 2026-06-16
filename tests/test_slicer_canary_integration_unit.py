@@ -79,9 +79,17 @@ class TestSlicerLaunchCanary:
     def test_launch_slicer_emits_sessionless_contract_canary(
         self,
         tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        source_path = tmp_path / "model.3mf"
+        import api.routers.slicer as slicer_router
+
+        output_root = tmp_path / "output"
+        temp_root = output_root / "temp"
+        temp_root.mkdir(parents=True)
+        monkeypatch.setattr(slicer_router, "OUTPUT_DIR", str(output_root))
+        monkeypatch.setattr(slicer_router, "TEMP_DIR", str(temp_root))
+        source_path = output_root / "model.3mf"
         source_path.write_bytes(b"placeholder-3mf")
         fake_slicer = DetectedSlicer(
             id="bambu-studio",
