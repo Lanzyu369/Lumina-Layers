@@ -166,6 +166,26 @@ def _npz_bytes(**arrays: np.ndarray) -> bytes:
     return buffer.getvalue()
 
 
+def _post_lut_upload_with_raw_filename(
+    client: TestClient,
+    *,
+    filename: str,
+    payload: bytes,
+    content_type: str,
+):
+    boundary = "----lumina-lut-upload-boundary"
+    body = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+        f"Content-Type: {content_type}\r\n\r\n"
+    ).encode("utf-8") + payload + f"\r\n--{boundary}--\r\n".encode("utf-8")
+    return client.post(
+        "/api/lut/upload",
+        content=body,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+    )
+
+
 def _native_model_package_msgpack_bytes() -> bytes:
     payload = {
         "schema_version": 2,
@@ -543,6 +563,114 @@ class TestLutUploadCanary:
 
 
 class TestLutUploadValidation:
+    @pytest.mark.parametrize(
+        ("filename", "payload_factory", "content_type", "expected_outside_name"),
+        [
+            ("../escaped.json", _keyed_json_bytes, "application/json", "escaped.json"),
+            ("nested/escaped.json", _keyed_json_bytes, "application/json", None),
+            ("C:escaped.json", _keyed_json_bytes, "application/json", None),
+            ("\\\\server\\share\\escaped.json", _keyed_json_bytes, "application/json", None),
+            ("\\escaped.json", _keyed_json_bytes, "application/json", None),
+            ("../rgb.npy", lambda: _npy_bytes(np.asarray([[255, 255, 255]], dtype=np.uint8)), "application/octet-stream", "rgb.json"),
+        ],
+    )
+    def test_upload_lut_rejects_path_like_filenames_without_persisting(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+        filename: str,
+        payload_factory,
+        content_type: str,
+        expected_outside_name: str | None,
+    ) -> None:
+        client = _client()
+        monkeypatch.setattr(LUTManager, "LUT_PRESET_DIR", str(tmp_path))
+        target_logger = _capture_lut_logger(caplog)
+        outside_probe = (
+            (tmp_path / expected_outside_name)
+            if expected_outside_name is not None
+            else None
+        )
+        if outside_probe is not None:
+            outside_probe.unlink(missing_ok=True)
+
+        try:
+            response = _post_lut_upload_with_raw_filename(
+                client,
+                filename=filename,
+                payload=payload_factory(),
+                content_type=content_type,
+            )
+        finally:
+            target_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 422
+        assert "filename" in response.json()["detail"].lower()
+        if outside_probe is not None:
+            assert not outside_probe.exists()
+        assert not any((tmp_path / "Custom").glob("*escaped*"))
+        assert not any((tmp_path / "Custom").glob("rgb*"))
+        assert _records_for_event(caplog, "lut_upload_done") == []
+
+    def test_upload_lut_rejects_absolute_filename_without_persisting(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        client = _client()
+        monkeypatch.setattr(LUTManager, "LUT_PRESET_DIR", str(tmp_path))
+        target_logger = _capture_lut_logger(caplog)
+        absolute_probe = tmp_path.parent / f"{tmp_path.name}_absolute_escape.json"
+        absolute_probe.unlink(missing_ok=True)
+
+        try:
+            response = _post_lut_upload_with_raw_filename(
+                client,
+                filename=str(absolute_probe),
+                payload=_keyed_json_bytes(),
+                content_type="application/json",
+            )
+        finally:
+            target_logger.removeHandler(caplog.handler)
+            absolute_probe.unlink(missing_ok=True)
+
+        assert response.status_code == 422
+        assert "filename" in response.json()["detail"].lower()
+        assert not absolute_probe.exists()
+        assert not (tmp_path / "Custom" / absolute_probe.name).exists()
+        assert _records_for_event(caplog, "lut_upload_done") == []
+
+    def test_upload_lut_accepts_safe_visible_filename_characters(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        client = _client()
+        monkeypatch.setattr(LUTManager, "LUT_PRESET_DIR", str(tmp_path))
+
+        response = client.post(
+            "/api/lut/upload",
+            files={
+                "file": (
+                    "Bambulab&PLA&红 黄(1).json",
+                    _keyed_json_bytes(),
+                    "application/json",
+                )
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json()["name"] == "Custom - Bambulab&PLA&红 黄(1)"
+        assert (tmp_path / "Custom" / "Bambulab&PLA&红 黄(1).json").exists()
+
+    def test_upload_lut_filename_validator_rejects_windows_absolute_path(self) -> None:
+        from api.routers import lut as lut_router
+
+        with pytest.raises(ValueError):
+            lut_router._validate_uploaded_lut_filename("C:\\temp\\escaped.json")
+
     def test_upload_lut_rejects_invalid_json_without_persisting(
         self,
         monkeypatch: pytest.MonkeyPatch,
