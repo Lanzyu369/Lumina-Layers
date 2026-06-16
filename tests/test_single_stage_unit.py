@@ -50,6 +50,21 @@ def _client_with_state() -> tuple[TestClient, SessionStore, FileRegistry]:
     return TestClient(app), store, registry
 
 
+class _MaterialExportRegisterPathFailingRegistry(FileRegistry):
+    """Registry stub that records the export archive path before failing."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.archive_path: str | None = None
+
+    def register_path(self, *args: object, **kwargs: object) -> str:
+        path = kwargs.get("path")
+        if path is None and len(args) >= 2:
+            path = args[1]
+        self.archive_path = str(path) if path is not None else None
+        raise RuntimeError("registry backend unavailable")
+
+
 def _linear_to_srgb_uint8(arr: np.ndarray) -> np.ndarray:
     clipped = np.clip(arr.astype(np.float64), 0.0, 1.0)
     srgb = np.where(
@@ -2121,6 +2136,36 @@ def test_gradient_card_material_export_route_returns_download_url(
     resolved = registry.resolve(body["download_url"].split("/")[-1])
     assert resolved is not None
     assert resolved[0] == str(exported_zip)
+
+
+def test_gradient_card_material_export_cleans_archive_when_registry_fails(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    app = create_app()
+    registry = _MaterialExportRegisterPathFailingRegistry()
+    app.dependency_overrides[get_file_registry] = lambda: registry
+    client = TestClient(app, raise_server_exceptions=False)
+    exported_zip = tmp_path / "exported-materials.zip"
+    exported_zip.write_bytes(b"zip")
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.export_saved_stage_a_material_archives",
+        lambda directory_names: MaterialArchiveExportResult(
+            archive_path=str(exported_zip),
+            download_filename="materials.zip",
+            exported_directory_names=list(directory_names),
+        ),
+    )
+
+    response = client.post(
+        "/api/extractor/gradient-card-materials/export",
+        json={"directory_names": ["pla-basic"]},
+    )
+
+    assert response.status_code == 500
+    assert registry.archive_path == str(exported_zip)
+    assert not exported_zip.exists()
 
 
 def test_gradient_card_material_import_route_imports_multiple_archives(
