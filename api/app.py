@@ -441,12 +441,39 @@ def create_app() -> FastAPI:
         if result is None:
             raise HTTPException(status_code=404, detail="File not found or expired")
 
-        if entry.get("lifecycle") == "session_bound":
-            session_id = entry.get("session_id")
-            if not session_id or store.touch(session_id) is None:
-                raise HTTPException(status_code=404, detail="File not found or expired")
-
         path, filename = result
+        current_entry = registry.get_entry(file_id)
+        if (
+            current_entry is None
+            or current_entry.get("is_public") is False
+            or current_entry.get("path") != path
+        ):
+            raise HTTPException(status_code=404, detail="File not found or expired")
+
+        if current_entry.get("lifecycle") == "session_bound":
+            session_id = current_entry.get("session_id")
+            if not session_id or store.touch(session_id) is None:
+                recovered_entry = registry.get_entry(file_id)
+                if (
+                    recovered_entry is None
+                    or recovered_entry.get("is_public") is False
+                    or recovered_entry.get("lifecycle") != "ephemeral"
+                    or recovered_entry.get("path") != path
+                ):
+                    raise HTTPException(status_code=404, detail="File not found or expired")
+                recovered_result = registry.resolve(file_id)
+                if recovered_result is None:
+                    raise HTTPException(status_code=404, detail="File not found or expired")
+                path, filename = recovered_result
+                recovered_entry = registry.get_entry(file_id)
+                if (
+                    recovered_entry is None
+                    or recovered_entry.get("is_public") is False
+                    or recovered_entry.get("lifecycle") != "ephemeral"
+                    or recovered_entry.get("path") != path
+                ):
+                    raise HTTPException(status_code=404, detail="File not found or expired")
+
         return file_to_response(
             path,
             filename,
