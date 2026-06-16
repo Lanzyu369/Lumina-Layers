@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -461,6 +462,28 @@ class TestVectorizeImageCanary:
         assert record.height == 64
         assert record.palette_size == 3
         assert "session_id" not in record.__dict__
+
+    @pytest.mark.parametrize("params_value", [[], None, "bad", True, 123])
+    def test_non_object_params_return_422_before_worker(
+        self,
+        params_value: object,
+    ) -> None:
+        mock_pool = SimpleNamespace(submit=AsyncMock())
+        app = create_app()
+        app.dependency_overrides[get_worker_pool] = lambda: mock_pool
+        client = TestClient(app, raise_server_exceptions=False)
+        try:
+            response = client.post(
+                "/api/vectorize",
+                files={"image": ("input.png", _png_bytes(), "image/png")},
+                data={"params": json.dumps(params_value)},
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 422
+        assert "params" in response.text
+        mock_pool.submit.assert_not_called()
 
     def test_timeout_returns_504_and_cleans_upload_temp_file(
         self,

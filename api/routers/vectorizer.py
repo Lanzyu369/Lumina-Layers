@@ -113,6 +113,8 @@ async def vectorize_image(
         params_dict = json.loads(params)
     except json.JSONDecodeError as e:
         raise HTTPException(status_code=422, detail=f"Invalid params JSON: {e}")
+    if not isinstance(params_dict, dict):
+        raise HTTPException(status_code=422, detail="params must be a JSON object")
 
     try:
         validated = VectorizeParams(**params_dict)
