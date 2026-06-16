@@ -170,6 +170,41 @@ def test_s09_passes_face_up_for_five_color(tmp_path) -> None:
     assert mock_export.call_args.kwargs["face_orientation"] == "up"
 
 
+def test_s09_does_not_x_mirror_face_up_single_sided_exports(tmp_path) -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_export_scene_with_bambu_metadata(**kwargs) -> str:
+        captured.update(kwargs)
+        return kwargs["output_path"]
+
+    scene = trimesh.Scene()
+    scene.add_geometry(trimesh.creation.box(extents=[20, 10, 1]), geom_name="Slot 1")
+
+    with patch.object(s09_export_3mf, "MODELS_DIR", str(tmp_path)), patch.object(
+        s09_export_3mf,
+        "generate_model_filename",
+        lambda *_args: "face-up-local.3mf",
+    ), patch.object(
+        s09_export_3mf,
+        "export_scene_with_bambu_metadata",
+        _fake_export_scene_with_bambu_metadata,
+    ):
+        s09_export_3mf.run(
+            _make_minimal_s09_ctx(
+                tmp_path,
+                scene=scene,
+                bambu_face_orientation="up",
+                center_on_bed=False,
+            )
+        )
+
+    exported_scene = captured["scene"]
+    bounds = exported_scene.bounds
+    center_x = (bounds[0][0] + bounds[1][0]) / 2
+    assert center_x == 0
+    assert captured["face_orientation"] == "up"
+
+
 def test_s09_passes_face_double_for_doublesided(tmp_path) -> None:
     with patch.object(s09_export_3mf, "MODELS_DIR", str(tmp_path)), patch.object(
         s09_export_3mf,
