@@ -791,12 +791,21 @@ async def extractor_export_gradient_card_materials(
         raise HTTPException(status_code=422, detail=str(exc))
 
     persistent_registry_session = f"material-export:{uuid.uuid4().hex}"
-    download_id = registry.register_path(
-        persistent_registry_session,
-        result.archive_path,
-        filename=result.download_filename,
-        ttl_seconds=MATERIAL_LIBRARY_FILE_TTL_SECONDS,
-    )
+    archive_registered = False
+    try:
+        download_id = registry.register_path(
+            persistent_registry_session,
+            result.archive_path,
+            filename=result.download_filename,
+            ttl_seconds=MATERIAL_LIBRARY_FILE_TTL_SECONDS,
+        )
+        archive_registered = True
+    finally:
+        if not archive_registered:
+            try:
+                os.unlink(result.archive_path)
+            except OSError:
+                pass
     log.info(
         "Gradient card materials exported",
         extra={
