@@ -70,6 +70,35 @@ def _with_cache_metadata(cache: dict, metadata: dict[str, object]) -> dict:
     return cache
 
 
+def _cleanup_unregistered_glb(
+    path: str | None,
+    *,
+    session_id: str,
+    job_token: str,
+    reason: str,
+) -> None:
+    """Best-effort cleanup for GLB files not adopted by FileRegistry."""
+
+    if not path:
+        return
+    try:
+        if os.path.isfile(path):
+            os.remove(path)
+    except OSError as exc:
+        log.warning(
+            "Failed to clean unregistered GLB output",
+            extra={
+                "event": "converter_glb_unregistered_cleanup_failed",
+                "session_id": session_id,
+                "job_token": job_token,
+                "path": path,
+                "reason": reason,
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+
+
 # Module-level executor shared by every session. ``max_workers=2`` keeps the
 # pool small so a single browser tab hammering replace endpoints can't
 # starve genuinely concurrent sessions; values larger than the number of
@@ -169,6 +198,7 @@ def _run_glb_build_job(
     """
 
     t_start = time.perf_counter()
+    glb_path: str | None = None
     try:
         session_data = store.get(session_id)
         if session_data is None:
@@ -223,6 +253,12 @@ def _run_glb_build_job(
         session_data = store.get(session_id)
         latest_cache = session_data.get("preview_cache") if session_data else None
         if latest_cache is None:
+            _cleanup_unregistered_glb(
+                glb_path,
+                session_id=session_id,
+                job_token=job_token,
+                reason="session_missing_after_build",
+            )
             return
         if _cache_value(latest_cache, "glb_job_token") != job_token:
             log.debug(
@@ -234,11 +270,26 @@ def _run_glb_build_job(
                     "current_job_token": _cache_value(latest_cache, "glb_job_token"),
                 },
             )
+            _cleanup_unregistered_glb(
+                glb_path,
+                session_id=session_id,
+                job_token=job_token,
+                reason="superseded_after_build",
+            )
             return
 
         cache_updates: dict[str, object] = {}
         if glb_path and os.path.exists(glb_path):
-            glb_id = registry.register_path(session_id, glb_path)
+            try:
+                glb_id = registry.register_path(session_id, glb_path)
+            except NON_FATAL_GLB_ERRORS:
+                _cleanup_unregistered_glb(
+                    glb_path,
+                    session_id=session_id,
+                    job_token=job_token,
+                    reason="registry_failed",
+                )
+                raise
             cache_updates["glb_url"] = f"/api/files/{glb_id}"
             cache_updates["glb_error"] = None
             # color_contours is populated as a side effect of

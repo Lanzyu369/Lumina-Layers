@@ -226,7 +226,7 @@ export interface RegionData {
 // ========== Pending Replacement Types ==========
 
 export interface PendingReplacement {
-  sourceHex: string; // 原色 hex锛堜笉甯?#锛?
+  sourceHex: string; // Original color hex without #.
   targetHex: string; // 目标色 hex（不带 #）
   mode: SelectionMode; // 触发时的选择模式
   sourceColors?: string[]; // select-all 批量模式下的多个源色
@@ -2206,7 +2206,7 @@ export const DEFAULT_STATE: ConverterState = {
   gradientGroupsSessionId: null,
   gradientSelection: null,
   selectedGradientRegions: [],
-  bed_label: "256脳256 mm",
+  bed_label: "256×256 mm",
   bedSizes: [],
   bedSizesLoading: false,
   batchMode: false,

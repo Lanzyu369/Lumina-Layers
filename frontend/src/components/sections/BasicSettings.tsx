@@ -57,6 +57,7 @@ const DOT_CLS = "inline-block size-2 rounded-full shrink-0 ring-1 ring-black/10 
 const THICKNESS_LAYER_STEP_MM = 0.08;
 const THICKNESS_SLIDER_MIN_MM = 0.24;
 const THICKNESS_SLIDER_MAX_MM = 3.44;
+const STARTUP_LUT_RETRY_DELAY_MS = 5_000;
 
 const LEGACY_BUCKET_I18N_KEY: Record<ColorModeBucket, string> = {
   BW: "basic_lut_color_mode_bw",
@@ -257,6 +258,11 @@ export default function BasicSettings() {
   );
 
   const [uploaderExpanded, setUploaderExpanded] = useState(true);
+  const startupRetryMountedRef = useRef(false);
+  const legacyCatalogRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const legacyCatalogLoadPendingRef = useRef(false);
+  const lutListRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lutListLoadPendingRef = useRef(false);
 
   // --- Share card import state ---
   const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
@@ -335,34 +341,119 @@ export default function BasicSettings() {
     { label: t("basic_source_version_material"), value: "material" },
   ];
 
+  const clearLegacyCatalogRetry = useCallback(() => {
+    if (legacyCatalogRetryTimerRef.current === null) return;
+    clearTimeout(legacyCatalogRetryTimerRef.current);
+    legacyCatalogRetryTimerRef.current = null;
+  }, []);
+
+  const clearLutListRetry = useCallback(() => {
+    if (lutListRetryTimerRef.current === null) return;
+    clearTimeout(lutListRetryTimerRef.current);
+    lutListRetryTimerRef.current = null;
+  }, []);
+
   useEffect(() => {
-    if (
-      source_version === "legacy" &&
-      legacyCatalogGroups.length === 0 &&
-      !legacyCatalogLoading
-    ) {
-      void fetchLegacyCatalog();
+    startupRetryMountedRef.current = true;
+    return () => {
+      startupRetryMountedRef.current = false;
+      clearLegacyCatalogRetry();
+      clearLutListRetry();
+    };
+  }, [clearLegacyCatalogRetry, clearLutListRetry]);
+
+  const startLegacyCatalogLoad = useCallback(() => {
+    if (legacyCatalogLoadPendingRef.current) return;
+    legacyCatalogLoadPendingRef.current = true;
+
+    void fetchLegacyCatalog()
+      .catch(() => undefined)
+      .then(() => {
+        legacyCatalogLoadPendingRef.current = false;
+        if (!startupRetryMountedRef.current) return;
+
+        const state = useConverterStore.getState();
+        if (
+          state.source_version === "legacy" &&
+          state.legacyCatalogGroups.length === 0 &&
+          !state.legacyCatalogLoading &&
+          legacyCatalogRetryTimerRef.current === null
+        ) {
+          legacyCatalogRetryTimerRef.current = setTimeout(() => {
+            legacyCatalogRetryTimerRef.current = null;
+            startLegacyCatalogLoad();
+          }, STARTUP_LUT_RETRY_DELAY_MS);
+        }
+      });
+  }, [fetchLegacyCatalog]);
+
+  const startLutListLoad = useCallback(() => {
+    if (lutListLoadPendingRef.current) return;
+    lutListLoadPendingRef.current = true;
+
+    void fetchLutList()
+      .catch(() => undefined)
+      .then(() => {
+        lutListLoadPendingRef.current = false;
+        if (!startupRetryMountedRef.current) return;
+
+        const state = useConverterStore.getState();
+        if (
+          state.source_version === "legacy" &&
+          state.lutListFull.length === 0 &&
+          !state.lutListLoading &&
+          lutListRetryTimerRef.current === null
+        ) {
+          lutListRetryTimerRef.current = setTimeout(() => {
+            lutListRetryTimerRef.current = null;
+            startLutListLoad();
+          }, STARTUP_LUT_RETRY_DELAY_MS);
+        }
+      });
+  }, [fetchLutList]);
+
+  useEffect(() => {
+    if (source_version !== "legacy" || legacyCatalogGroups.length > 0) {
+      clearLegacyCatalogRetry();
+      return;
     }
+    if (
+      legacyCatalogLoading ||
+      legacyCatalogRetryTimerRef.current !== null ||
+      legacyCatalogLoadPendingRef.current
+    ) {
+      return;
+    }
+
+    startLegacyCatalogLoad();
   }, [
     source_version,
     legacyCatalogGroups.length,
     legacyCatalogLoading,
-    fetchLegacyCatalog,
+    clearLegacyCatalogRetry,
+    startLegacyCatalogLoad,
   ]);
 
   useEffect(() => {
-    if (
-      source_version === "legacy" &&
-      lutListFull.length === 0 &&
-      !lutListLoading
-    ) {
-      void fetchLutList();
+    if (source_version !== "legacy" || lutListFull.length > 0) {
+      clearLutListRetry();
+      return;
     }
+    if (
+      lutListLoading ||
+      lutListRetryTimerRef.current !== null ||
+      lutListLoadPendingRef.current
+    ) {
+      return;
+    }
+
+    startLutListLoad();
   }, [
     source_version,
     lutListFull.length,
     lutListLoading,
-    fetchLutList,
+    clearLutListRetry,
+    startLutListLoad,
   ]);
 
   const lutIndex = useMemo(

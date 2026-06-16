@@ -36,6 +36,13 @@ log = get_logger(__name__)
 _SLICER_LAUNCH_COPY_TTL_SECONDS = 60 * 60
 
 
+def _remove_launch_copy(path: str) -> None:
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
 def _create_launch_copy(file_path: str, registry: FileRegistry) -> str:
     """Create an isolated launch copy so slicers cannot mutate the canonical output."""
     stem, ext = os.path.splitext(os.path.basename(file_path))
@@ -48,18 +55,19 @@ def _create_launch_copy(file_path: str, registry: FileRegistry) -> str:
     try:
         shutil.copy2(file_path, launch_copy_path)
     except OSError:
-        try:
-            os.unlink(launch_copy_path)
-        except OSError:
-            pass
+        _remove_launch_copy(launch_copy_path)
         raise
 
-    registry.register_path(
-        session_id=f"slicer-launch:{uuid.uuid4().hex}",
-        path=launch_copy_path,
-        filename=os.path.basename(launch_copy_path),
-        ttl_seconds=_SLICER_LAUNCH_COPY_TTL_SECONDS,
-    )
+    try:
+        registry.register_path(
+            session_id=f"slicer-launch:{uuid.uuid4().hex}",
+            path=launch_copy_path,
+            filename=os.path.basename(launch_copy_path),
+            ttl_seconds=_SLICER_LAUNCH_COPY_TTL_SECONDS,
+        )
+    except Exception:
+        _remove_launch_copy(launch_copy_path)
+        raise
     return launch_copy_path
 
 
@@ -137,7 +145,7 @@ def launch_slicer_endpoint(
         )
     try:
         launch_file_path = _create_launch_copy(request.file_path, registry)
-    except OSError as exc:
+    except Exception as exc:
         return JSONResponse(
             status_code=500,
             content=SlicerLaunchResponse(

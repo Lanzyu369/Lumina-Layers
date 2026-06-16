@@ -218,11 +218,15 @@ export default function MaterialColorPicker() {
                   className={
                     suggestions.source === "cache"
                       ? "text-emerald-500"
+                      : suggestions.source === "runtime"
+                        ? "text-sky-500"
                       : "text-amber-500"
                   }
                 >
                   {suggestions.source === "cache"
                     ? t("material_picker_source_cache")
+                    : suggestions.source === "runtime"
+                      ? t("material_picker_source_runtime")
                     : t("material_picker_source_mitm")}
                 </span>
               </p>

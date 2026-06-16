@@ -2201,13 +2201,15 @@ async def material_solver_cache_suggest_colors(
     Fast path: when a persisted :class:`core.material_cache.MaterialSolverCache`
     matches the ``(palette, N, t, substrate)`` parameters the response is
     served from the KDTree-over-Lab-buckets lookup (microseconds per query).
-    Fallback: no cache available → runs
+    Runtime path: when the exact cache is absent but a persisted hybrid
+    candidate runtime exists, query that bounded runtime instead of falling
+    back to exhaustive MITM. Fallback: no reusable solver data available → runs
     :func:`core.material_color_solver.suggest_colors_for_target` in a worker
     thread, bounded by ``max_combinations`` to keep interactive UX responsive.
 
-    The frontend reports ``source`` in the response so it can surface a
-    "build cache for instant suggestions" hint when the MITM fallback runs.
-    前端会根据 ``source`` 判断是否提示用户构建缓存以获得毫秒级响应。
+    The frontend reports ``source`` in the response so it can explain whether
+    the suggestion came from exact cache, hybrid runtime, or live MITM fallback.
+    前端会根据 ``source`` 判断结果来自精确缓存、hybrid runtime 还是实时 MITM。
     """
     dir_names = _parse_material_directory_names(material_directory_names)
     _validate_cache_parameters(layer_count, layer_height_mm, substrate)
@@ -2239,35 +2241,59 @@ async def material_solver_cache_suggest_colors(
             f"(via solver cache, {cache.valid_cell_count} cells)."
         )
     else:
-        def _run_suggest() -> list[ColorSuggestion]:
-            return suggest_colors_for_target(
-                target_rgb_arr,
-                materials,
-                layer_count=layer_count,
-                layer_height_mm=layer_height_mm,
-                substrate=substrate,
-                top_k=top_k,
-                min_spacing=min_spacing,
-                max_combinations=max_combinations,
-            )
-
-        try:
-            suggestions = await anyio.to_thread.run_sync(_run_suggest)
-        except OverflowError as exc:
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    f"{exc}. Please build the material solver cache first to "
-                    "enable interactive suggestions for this palette."
-                ),
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc))
-        source = "mitm"
-        message = (
-            f"Returned {len(suggestions)} achievable colors "
-            f"(via MITM fallback)."
+        runtime = load_material_candidate_runtime(
+            materials,
+            layer_count,
+            layer_height_mm,
+            substrate,
+            candidate_budget=DEFAULT_PERSISTED_CANDIDATE_BUDGET,
         )
+        if runtime is not None:
+            try:
+                suggestions = runtime.lookup_top_k(
+                    target_rgb_arr,
+                    materials,
+                    top_k=top_k,
+                    min_spacing=min_spacing,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc))
+            source = "runtime"
+            message = (
+                f"Returned {len(suggestions)} achievable colors "
+                f"(via hybrid runtime, {runtime.valid_cell_count} candidates)."
+            )
+        else:
+            def _run_suggest() -> list[ColorSuggestion]:
+                return suggest_colors_for_target(
+                    target_rgb_arr,
+                    materials,
+                    layer_count=layer_count,
+                    layer_height_mm=layer_height_mm,
+                    substrate=substrate,
+                    top_k=top_k,
+                    min_spacing=min_spacing,
+                    max_combinations=max_combinations,
+                )
+
+            try:
+                suggestions = await anyio.to_thread.run_sync(_run_suggest)
+            except OverflowError as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"{exc}. Please build the material solver cache or "
+                        "hybrid runtime first to enable interactive suggestions "
+                        "for this palette."
+                    ),
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc))
+            source = "mitm"
+            message = (
+                f"Returned {len(suggestions)} achievable colors "
+                f"(via MITM fallback)."
+            )
 
     log.info(
         "Material solver cache color suggestions returned",

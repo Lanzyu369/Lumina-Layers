@@ -51,6 +51,22 @@ def _client_with_state() -> tuple[TestClient, SessionStore, FileRegistry]:
     return TestClient(app), store, registry
 
 
+class _RegisterPathFailingRegistry(FileRegistry):
+    """Registry stub that fails before taking ownership of any path."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.paths: list[str] = []
+
+    def register_path(self, *args: object, **kwargs: object) -> str:
+        path = kwargs.get("path")
+        if path is None and len(args) >= 2:
+            path = args[1]
+        if path is not None:
+            self.paths.append(str(path))
+        raise RuntimeError("registry backend unavailable")
+
+
 class _SwatchRegisterPathFailingRegistry(FileRegistry):
     """Registry stub that records the swatch path before failing."""
 
@@ -64,6 +80,22 @@ class _SwatchRegisterPathFailingRegistry(FileRegistry):
             path = args[1]
         self.generated_path = str(path) if path is not None else None
         raise RuntimeError("registry backend unavailable")
+
+
+class _SecondPathFailingRegistry(FileRegistry):
+    """Registry stub that fails after the first path is registered."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.register_calls = 0
+        self.first_file_id: str | None = None
+
+    def register_path(self, *args: object, **kwargs: object) -> str:
+        self.register_calls += 1
+        if self.register_calls > 1:
+            raise RuntimeError("registry backend unavailable after first file")
+        self.first_file_id = super().register_path(*args, **kwargs)
+        return self.first_file_id
 
 
 def _linear_to_srgb_uint8(arr: np.ndarray) -> np.ndarray:
@@ -192,6 +224,101 @@ def test_generate_single_stage_kit_route(monkeypatch, tmp_path: Path) -> None:
     assert captured["printer_id"] == "bambu-p1s"
     assert captured["slicer"] == "OrcaSlicer"
     assert captured["nozzle_size"] == "0.2"
+
+
+def test_generate_single_stage_kit_cleans_zip_when_first_registration_fails(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    app = create_app()
+    registry = _RegisterPathFailingRegistry()
+    app.dependency_overrides[get_file_registry] = lambda: registry
+    client = TestClient(app, raise_server_exceptions=False)
+    kit_path = tmp_path / "kit.zip"
+    manifest_path = tmp_path / "manifest.json"
+    kit_path.write_bytes(b"zip")
+    manifest_path.write_text("{}", encoding="utf-8")
+
+    def _fake_generate_single_stage_kit(*args, **kwargs):
+        return SingleStageKitResult(
+            zip_path=str(kit_path),
+            manifest_path=str(manifest_path),
+            preview_image=Image.new("RGB", (32, 32), (255, 255, 255)),
+            jobs=[],
+            message="ok",
+        )
+
+    monkeypatch.setattr(
+        "api.routers.calibration.generate_single_stage_kit",
+        _fake_generate_single_stage_kit,
+    )
+
+    response = client.post(
+        "/api/calibration/generate-single-stage-kit",
+        json={
+            "palette": [
+                {
+                    "color": "White",
+                    "material": "PLA Basic",
+                    "hex_color": "#FFFFFF",
+                    "color_name": "White",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 500
+    assert registry.paths == [str(kit_path)]
+    assert not kit_path.exists()
+    assert not manifest_path.exists()
+
+
+def test_generate_single_stage_kit_cleans_manifest_when_second_registration_fails(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    app = create_app()
+    registry = _SecondPathFailingRegistry()
+    app.dependency_overrides[get_file_registry] = lambda: registry
+    client = TestClient(app, raise_server_exceptions=False)
+    kit_path = tmp_path / "kit.zip"
+    manifest_path = tmp_path / "manifest.json"
+    kit_path.write_bytes(b"zip")
+    manifest_path.write_text("{}", encoding="utf-8")
+
+    def _fake_generate_single_stage_kit(*args, **kwargs):
+        return SingleStageKitResult(
+            zip_path=str(kit_path),
+            manifest_path=str(manifest_path),
+            preview_image=Image.new("RGB", (32, 32), (255, 255, 255)),
+            jobs=[],
+            message="ok",
+        )
+
+    monkeypatch.setattr(
+        "api.routers.calibration.generate_single_stage_kit",
+        _fake_generate_single_stage_kit,
+    )
+
+    response = client.post(
+        "/api/calibration/generate-single-stage-kit",
+        json={
+            "palette": [
+                {
+                    "color": "White",
+                    "material": "PLA Basic",
+                    "hex_color": "#FFFFFF",
+                    "color_name": "White",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 500
+    assert registry.first_file_id is not None
+    assert registry.get_entry(registry.first_file_id) is not None
+    assert kit_path.exists()
+    assert not manifest_path.exists()
 
 
 def test_calibration_generate_registers_stateless_outputs_with_ttl(

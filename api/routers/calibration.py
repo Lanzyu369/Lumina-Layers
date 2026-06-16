@@ -4,6 +4,7 @@ Calibration 领域 API 路由模块。
 
 from __future__ import annotations
 
+import os
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -30,6 +31,16 @@ from core.single_stage import generate_single_stage_kit
 router = APIRouter(prefix="/api/calibration", tags=["Calibration"])
 STATELESS_EXPORT_TTL_SECONDS = 8 * 60 * 60
 log = get_logger(__name__)
+
+
+def _remove_generated_path(path: str | None) -> None:
+    """Best-effort delete for route-owned generated exports."""
+    if not path:
+        return
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
 
 
 def _handle_core_error(e: Exception, context: str) -> None:
@@ -146,42 +157,48 @@ def calibration_generate(
 
     # Register files via FileRegistry
     sid = _new_stateless_export_sid("calibration")
-    download_id = registry.register_path(
-        sid,
-        path,
-        ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
-    )
     preview_url = None
     preview_id = None
     layer_urls = []
-
-    if isinstance(preview_imgs, list) and len(preview_imgs) > 0:
-        main_preview = preview_imgs[0]
-        preview_id = registry.register_bytes(
+    download_registered = False
+    try:
+        download_id = registry.register_path(
             sid,
-            pil_to_png_bytes(main_preview),
-            "preview.png",
+            path,
             ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
         )
-        preview_url = f"/api/files/{preview_id}"
+        download_registered = True
 
-        for idx, layer_img in enumerate(preview_imgs[1:]):
-            layer_id = registry.register_bytes(
+        if isinstance(preview_imgs, list) and len(preview_imgs) > 0:
+            main_preview = preview_imgs[0]
+            preview_id = registry.register_bytes(
                 sid,
-                pil_to_png_bytes(layer_img),
-                f"layer_{idx+1}.png",
+                pil_to_png_bytes(main_preview),
+                "preview.png",
                 ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
             )
-            layer_urls.append(f"/api/files/{layer_id}")
-    elif preview_imgs is not None:
-        # Fallback for single image
-        preview_id = registry.register_bytes(
-            sid,
-            pil_to_png_bytes(preview_imgs),
-            "preview.png",
-            ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
-        )
-        preview_url = f"/api/files/{preview_id}"
+            preview_url = f"/api/files/{preview_id}"
+
+            for idx, layer_img in enumerate(preview_imgs[1:]):
+                layer_id = registry.register_bytes(
+                    sid,
+                    pil_to_png_bytes(layer_img),
+                    f"layer_{idx+1}.png",
+                    ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
+                )
+                layer_urls.append(f"/api/files/{layer_id}")
+        elif preview_imgs is not None:
+            # Fallback for single image
+            preview_id = registry.register_bytes(
+                sid,
+                pil_to_png_bytes(preview_imgs),
+                "preview.png",
+                ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
+            )
+            preview_url = f"/api/files/{preview_id}"
+    finally:
+        if not download_registered:
+            _remove_generated_path(path)
 
     backing_color_for_log = (
         "White"
@@ -246,22 +263,32 @@ def calibration_generate_single_stage_kit(
         _handle_core_error(e, "Single-stage kit generation")
 
     sid = _new_stateless_export_sid("single-stage-kit")
-    kit_id = registry.register_path(
-        sid,
-        result.zip_path,
-        ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
-    )
-    manifest_id = registry.register_path(
-        sid,
-        result.manifest_path,
-        ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
-    )
-    preview_id = registry.register_bytes(
-        sid,
-        pil_to_png_bytes(result.preview_image),
-        "single_stage_preview.png",
-        ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
-    )
+    kit_registered = False
+    manifest_registered = False
+    try:
+        kit_id = registry.register_path(
+            sid,
+            result.zip_path,
+            ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
+        )
+        kit_registered = True
+        manifest_id = registry.register_path(
+            sid,
+            result.manifest_path,
+            ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
+        )
+        manifest_registered = True
+        preview_id = registry.register_bytes(
+            sid,
+            pil_to_png_bytes(result.preview_image),
+            "single_stage_preview.png",
+            ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
+        )
+    finally:
+        if not kit_registered:
+            _remove_generated_path(result.zip_path)
+        if not manifest_registered:
+            _remove_generated_path(result.manifest_path)
     log.info(
         "Single-stage calibration kit generated",
         extra={

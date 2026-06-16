@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import BasicSettings from "../components/sections/BasicSettings";
 import { useConverterStore } from "../stores/converter";
+import * as converterApi from "../api/converter";
 import * as lutApi from "../api/lut";
 import * as extractorApi from "../api/extractor";
 import {
@@ -20,6 +21,16 @@ vi.mock("../api/lut", async () => {
     fetchLutInfo: vi.fn(),
     fetchLutCatalog: vi.fn(),
     fetchLutDetailsCatalog: vi.fn(),
+  };
+});
+
+vi.mock("../api/converter", async () => {
+  const actual = await vi.importActual<typeof import("../api/converter")>(
+    "../api/converter",
+  );
+  return {
+    ...actual,
+    fetchLutList: vi.fn(),
   };
 });
 
@@ -103,6 +114,16 @@ function makeLegacyCatalogGroups(): LutDetailsCatalogGroup[] {
 
 // Reset store to a clean state before each test
 beforeEach(() => {
+  vi.mocked(converterApi.fetchLutList).mockResolvedValue({
+    luts: [
+      {
+        name: "Brand A - A4",
+        color_mode: ColorModeEnum.FOUR_COLOR_RYBW,
+        path: "/a4.npy",
+        fingerprint: "fp-a4",
+      },
+    ],
+  });
   vi.mocked(lutApi.fetchLutDetailsCatalog).mockResolvedValue({
     groups: makeLegacyCatalogGroups(),
   });
@@ -178,6 +199,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -226,6 +248,61 @@ function isMultipleOfStep(value: number, step: number): boolean {
 }
 
 describe("BasicSettings", () => {
+  it("backs off failed startup LUT loads instead of retrying immediately", async () => {
+    vi.useFakeTimers();
+    vi.mocked(converterApi.fetchLutList)
+      .mockRejectedValueOnce(new Error("backend offline"))
+      .mockResolvedValue({
+        luts: [
+          {
+            name: "Recovered LUT",
+            color_mode: ColorModeEnum.FOUR_COLOR_RYBW,
+            path: "/recovered.npy",
+            fingerprint: "fp-recovered",
+          },
+        ],
+      });
+    vi.mocked(lutApi.fetchLutDetailsCatalog)
+      .mockRejectedValueOnce(new Error("backend offline"))
+      .mockResolvedValue({ groups: makeLegacyCatalogGroups() });
+    useConverterStore.setState({
+      source_version: "legacy",
+      lutList: [],
+      lutListFull: [],
+      lutListLoading: false,
+      legacyCatalogGroups: [],
+      legacyCatalogLoading: false,
+    });
+
+    try {
+      render(<BasicSettings />);
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+        await Promise.resolve();
+      });
+
+      expect(converterApi.fetchLutList).toHaveBeenCalledTimes(1);
+      expect(lutApi.fetchLutDetailsCatalog).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(4_000);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(converterApi.fetchLutList).toHaveBeenCalledTimes(2);
+      expect(lutApi.fetchLutDetailsCatalog).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // Req 2.1: "批量模式" checkbox removed
   it("does NOT render the batch mode checkbox", () => {
     render(<BasicSettings />);

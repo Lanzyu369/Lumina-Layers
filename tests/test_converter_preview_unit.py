@@ -133,6 +133,78 @@ def _make_test_image_buf() -> io.BytesIO:
     return buf
 
 
+class TestBedPreviewRegistrationCleanup:
+    """Verify empty-bed preview GLB ownership across registry outcomes."""
+
+    def test_bed_preview_keeps_glb_when_registration_succeeds(self, tmp_path) -> None:
+        """Successful registration should preserve the generated GLB file."""
+        glb_path = tmp_path / "empty_bed.glb"
+        previous_registry_override = app.dependency_overrides.get(get_file_registry)
+
+        class RecordingRegistry:
+            def __init__(self) -> None:
+                self.registered_path: str | None = None
+
+            def register_path(self, _session_id: str, path: str, **_kwargs) -> str:
+                self.registered_path = path
+                assert os.path.exists(path)
+                return "bed-preview-file"
+
+        registry = RecordingRegistry()
+
+        def fake_generate_empty_bed_glb(_bed_w: int, _bed_h: int) -> str:
+            glb_path.write_bytes(b"glb")
+            return str(glb_path)
+
+        try:
+            app.dependency_overrides[get_file_registry] = lambda: registry
+            with patch(
+                "api.routers.converter.preview.generate_empty_bed_glb",
+                side_effect=fake_generate_empty_bed_glb,
+            ):
+                response = client.get("/api/convert/bed-preview")
+        finally:
+            if previous_registry_override is None:
+                app.dependency_overrides.pop(get_file_registry, None)
+            else:
+                app.dependency_overrides[get_file_registry] = previous_registry_override
+
+        assert response.status_code == 200
+        assert response.json() == {"preview_3d_url": "/api/files/bed-preview-file"}
+        assert registry.registered_path == str(glb_path)
+        assert glb_path.exists()
+
+    def test_bed_preview_cleans_glb_when_registration_fails(self, tmp_path) -> None:
+        """Failed registration should not leave an unowned empty-bed GLB."""
+        glb_path = tmp_path / "empty_bed.glb"
+        previous_registry_override = app.dependency_overrides.get(get_file_registry)
+
+        class FailingRegistry:
+            def register_path(self, *_args, **_kwargs) -> str:
+                raise RuntimeError("forced registry failure")
+
+        def fake_generate_empty_bed_glb(_bed_w: int, _bed_h: int) -> str:
+            glb_path.write_bytes(b"glb")
+            return str(glb_path)
+
+        try:
+            app.dependency_overrides[get_file_registry] = lambda: FailingRegistry()
+            with patch(
+                "api.routers.converter.preview.generate_empty_bed_glb",
+                side_effect=fake_generate_empty_bed_glb,
+            ):
+                failing_client = TestClient(app, raise_server_exceptions=False)
+                response = failing_client.get("/api/convert/bed-preview")
+        finally:
+            if previous_registry_override is None:
+                app.dependency_overrides.pop(get_file_registry, None)
+            else:
+                app.dependency_overrides[get_file_registry] = previous_registry_override
+
+        assert response.status_code == 500
+        assert not glb_path.exists()
+
+
 # =========================================================================
 # 1. LUT name resolution failure returns 404 - Requirement 5.4
 # =========================================================================

@@ -14,6 +14,7 @@ import tempfile
 import uuid
 from unittest.mock import patch
 
+import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
@@ -56,6 +57,19 @@ def _create_temp_file() -> str:
     finally:
         os.close(fd)
     return path
+
+
+class _RegisterPathFailingRegistry(FileRegistry):
+    """Registry stub that records the byte temp path before failing."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.temp_path: str | None = None
+
+    def register_path(self, *args: object, **kwargs: object) -> str:
+        path = kwargs.get("path")
+        self.temp_path = str(path) if path is not None else None
+        raise RuntimeError("registry backend unavailable")
 
 
 # ---------------------------------------------------------------------------
@@ -192,6 +206,22 @@ def test_ttl_entry_under_materials_dir_expires_without_deleting_file(
         assert registry.resolve(file_id) is None
 
     assert material_path.exists() is True
+
+
+def test_register_bytes_removes_temp_file_when_register_path_fails() -> None:
+    """Byte registration should not leak the temp file if metadata registration fails."""
+    registry = _RegisterPathFailingRegistry()
+
+    with pytest.raises(RuntimeError, match="registry backend unavailable"):
+        registry.register_bytes(
+            "session-1",
+            b"preview-bytes",
+            "preview.png",
+            ttl_seconds=1,
+        )
+
+    assert registry.temp_path is not None
+    assert not os.path.exists(registry.temp_path)
 
 
 # **Validates: Requirements 1.2**
