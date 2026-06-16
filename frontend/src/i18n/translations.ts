@@ -4448,6 +4448,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "缓存命中（毫秒级返回）",
     en: "Cache hit (millisecond response)",
   },
+  material_picker_source_runtime: {
+    zh: "运行时命中（适合大耗材组合）",
+    en: "Runtime hit (large-palette solve)",
+  },
   material_picker_source_mitm: {
     zh: "MITM 实时求解（构建持久化缓存可显著加速）",
     en: "MITM live solve (build a persisted cache to accelerate)",

@@ -482,8 +482,9 @@ class MaterialColorSuggestionsResponse(BaseModel):
     "为目标色推荐可达近似色" 接口的响应。
 
     ``source`` is ``"cache"`` when a persisted ``MaterialSolverCache`` served
-    the query, ``"mitm"`` when the MITM fallback ran in-process. The frontend
-    uses this to decide whether to nudge the user to build a cache.
+    the query, ``"runtime"`` when the persisted hybrid candidate runtime served
+    it, or ``"mitm"`` when the MITM fallback ran in-process. The frontend uses
+    this to decide whether to nudge the user to build reusable solver data.
     """
 
     status: str

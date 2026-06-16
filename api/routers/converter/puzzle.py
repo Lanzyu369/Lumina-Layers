@@ -14,6 +14,7 @@ import io
 import json
 import os
 import tempfile
+import uuid
 from typing import Any
 
 import numpy as np
@@ -55,6 +56,7 @@ from core.puzzle import (
 from core.puzzle_3mf import PuzzlePiece3MFSource, assemble_puzzle_3mf
 
 from .common import (
+    BATCH_DOWNLOAD_TTL_SECONDS,
     ROUTER_HANDLED_ERRORS,
     _handle_core_error,
     _require_session,
@@ -548,6 +550,17 @@ def _save_json_payload(session_id: str, store: SessionStore, payload: dict[str, 
     return path
 
 
+def _remove_temp_path(path: str | None) -> None:
+    """Best-effort removal for route-local temp files not owned by a session."""
+
+    if not path:
+        return
+    try:
+        os.remove(path)
+    except (FileNotFoundError, OSError):
+        return
+
+
 def _resolve_free_color_set(session_data: dict[str, Any], request: ConvertGenerateRequest) -> set[str] | None:
     free_color_set = session_data.get("free_color_set") or None
     if request.free_color_set is not None:
@@ -921,7 +934,7 @@ async def generate_puzzle(
 
     fd, combined_3mf_path = tempfile.mkstemp(prefix="puzzle_", suffix=".3mf", dir=TEMP_DIR)
     os.close(fd)
-    store.register_temp_file(sid, combined_3mf_path)
+    combined_registered = False
 
     preview_colors = cache.get("preview_colors")
     slot_names = cache.get("slot_names")
@@ -950,6 +963,13 @@ async def generate_puzzle(
             device_profile_id=generate_params.device_profile_id,
             overview_png_bytes=overview_png_bytes,
         )
+        download_id = registry.register_path(
+            str(uuid.uuid4()),
+            combined_3mf_path,
+            filename=f"{base_name}_puzzle.3mf",
+            ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
+        )
+        combined_registered = True
     except ROUTER_HANDLED_ERRORS as exc:
         log.error(
             "Puzzle 3MF assembly failed",
@@ -961,8 +981,10 @@ async def generate_puzzle(
             },
         )
         raise HTTPException(status_code=500, detail=f"Puzzle 3MF assembly failed: {exc}")
+    finally:
+        if not combined_registered:
+            _remove_temp_path(combined_3mf_path)
 
-    download_id = registry.register_path(sid, combined_3mf_path, filename=f"{base_name}_puzzle.3mf")
     log.info(
         "Puzzle 3MF generated",
         extra={

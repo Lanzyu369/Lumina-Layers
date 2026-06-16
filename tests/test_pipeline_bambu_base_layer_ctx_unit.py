@@ -88,6 +88,33 @@ def test_voxel_pipeline_ctx_includes_transparent_coating_height() -> None:
     assert ctx["bambu_face_orientation"] == "double"
 
 
+def test_voxel_pipeline_marks_relief_exports_face_up() -> None:
+    material_matrix = np.zeros((3, 3, 5), dtype=int)
+    mask_solid = np.ones((3, 3), dtype=bool)
+    matched_rgb = np.zeros((3, 3, 3), dtype=np.uint8)
+    ctx = {
+        "material_matrix": material_matrix,
+        "mask_solid": mask_solid,
+        "spacer_thick": 0.8,
+        "structure_mode": "单面",
+        "backing_color_id": 0,
+        "color_mode": "4-Color",
+        "enable_cloisonne": False,
+        "enable_relief": True,
+        "color_height_map": {"#000000": 1.2},
+        "height_mode": "color",
+        "heightmap_path": None,
+        "heightmap_max_height": None,
+        "matched_rgb": matched_rgb,
+        "pixel_scale": 0.1,
+    }
+
+    result = s06_voxel_building.run(ctx)
+
+    assert result["backing_metadata"]["is_relief"] is True
+    assert result["bambu_face_orientation"] == "up"
+
+
 @pytest.mark.parametrize(
     ("color_mode", "structure_mode", "num_layers", "thickness_mm", "expected_base", "expected_color", "expected_face"),
     _EXPECTED_CASES,
