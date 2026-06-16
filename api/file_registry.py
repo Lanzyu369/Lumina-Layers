@@ -5,6 +5,18 @@ import uuid
 from typing import Optional, Tuple
 from config import MATERIALS_DIR, TEMP_DIR
 
+
+def _write_all(fd: int, data: bytes) -> None:
+    """Write all bytes to a raw file descriptor, retrying short writes."""
+    view = memoryview(data)
+    offset = 0
+    while offset < len(view):
+        written = os.write(fd, view[offset:])
+        if written <= 0:
+            raise OSError("Failed to write file registry bytes")
+        offset += written
+
+
 class FileRegistry:
     """文件注册表，管理生成文件的 UUID 映射。
 
@@ -85,7 +97,7 @@ class FileRegistry:
         fd, path = tempfile.mkstemp(suffix=suffix, dir=TEMP_DIR)
         try:
             try:
-                os.write(fd, data)
+                _write_all(fd, data)
             finally:
                 os.close(fd)
             return self.register_path(
