@@ -438,11 +438,27 @@ def get_bed_preview(
     if glb_path is None:
         raise HTTPException(status_code=500, detail="Failed to generate bed preview")
 
-    glb_id = registry.register_path(
-        str(uuid.uuid4()),
-        glb_path,
-        ttl_seconds=EPHEMERAL_PREVIEW_TTL_SECONDS,
-    )
+    try:
+        glb_id = registry.register_path(
+            str(uuid.uuid4()),
+            glb_path,
+            ttl_seconds=EPHEMERAL_PREVIEW_TTL_SECONDS,
+        )
+    except Exception:
+        try:
+            if os.path.isfile(glb_path):
+                os.remove(glb_path)
+        except OSError as cleanup_exc:
+            log.warning(
+                "Failed to clean unregistered bed preview GLB",
+                extra={
+                    "event": "converter_bed_preview_cleanup_failed",
+                    "path": glb_path,
+                    "error_type": type(cleanup_exc).__name__,
+                    "error_message": str(cleanup_exc),
+                },
+            )
+        raise
     return {"preview_3d_url": f"/api/files/{glb_id}"}
 
 
