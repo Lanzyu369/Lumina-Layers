@@ -142,6 +142,46 @@ function flushGlbPoll(timerStep = 600): Promise<void> {
   return Promise.resolve().then(() => Promise.resolve());
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+function seedLegacyGenerateState(
+  sessionId: string,
+  overrides: Partial<ReturnType<typeof useConverterStore.getState>> = {},
+): void {
+  useConverterStore.setState({
+    ...DEFAULT_STATE,
+    source_version: "legacy",
+    lut_name: "legacy-lut",
+    sessionId,
+    color_mode: ColorMode.FOUR_COLOR_RYBW,
+    modeling_mode: ModelingMode.HIGH_FIDELITY,
+    structure_mode: StructureMode.DOUBLE_SIDED,
+    enable_relief: false,
+    color_height_map: {},
+    autoHeightMode: null,
+    puzzleEnabled: false,
+    largeFormatEnabled: false,
+    enable_cloisonne: false,
+    enable_coating: false,
+    enable_fridge_magnet: false,
+    fridge_magnets: [],
+    replacement_regions: [],
+    recipe_overrides: [],
+    free_color_set: new Set<string>(),
+    colorRemapMap: {},
+    regionReplacementCount: 0,
+    ...overrides,
+  } as never);
+}
+
 describe("native bundle converter flow", () => {
   beforeEach(() => {
     resetStore();
@@ -316,6 +356,252 @@ describe("native bundle converter flow", () => {
 
     const [, params] = mocks.convertGenerate.mock.calls.at(-1)!;
     expect(params.recipe_overrides).toBeUndefined();
+  });
+
+  it("ignores a stale regular generate response after the session changes", async () => {
+    const stale = deferred<{
+      status: string;
+      message: string;
+      download_url: string;
+      threemf_disk_path: string;
+      preview_3d_url: string;
+    }>();
+    mocks.convertGenerate
+      .mockReturnValueOnce(stale.promise)
+      .mockResolvedValueOnce({
+        status: "ok",
+        message: "fresh",
+        download_url: "/api/files/fresh.3mf",
+        threemf_disk_path: "/tmp/fresh.3mf",
+        preview_3d_url: "/api/files/fresh.glb",
+      });
+
+    seedLegacyGenerateState("session-old");
+    const oldRequest = useConverterStore.getState().submitGenerate();
+
+    seedLegacyGenerateState("session-fresh");
+    const freshRequest = useConverterStore.getState().submitGenerate();
+    await freshRequest;
+
+    expect(useConverterStore.getState().downloadUrl).toBe("/api/files/fresh.3mf");
+
+    stale.resolve({
+      status: "ok",
+      message: "stale",
+      download_url: "/api/files/stale.3mf",
+      threemf_disk_path: "/tmp/stale.3mf",
+      preview_3d_url: "/api/files/stale.glb",
+    });
+    await oldRequest;
+
+    const state = useConverterStore.getState();
+    expect(state.sessionId).toBe("session-fresh");
+    expect(state.downloadUrl).toBe("/api/files/fresh.3mf");
+    expect(state.threemfDiskPath).toBe("/tmp/fresh.3mf");
+    expect(state.modelUrl).toBe("/api/files/fresh.glb");
+    expect(state.isGenerating).toBe(false);
+    expect(state.error).toBeNull();
+  });
+
+  it("clears loading without applying a stale generate response after only the session changes", async () => {
+    const stale = deferred<{
+      status: string;
+      message: string;
+      download_url: string;
+      threemf_disk_path: string;
+      preview_3d_url: string;
+    }>();
+    mocks.convertGenerate.mockReturnValueOnce(stale.promise);
+
+    seedLegacyGenerateState("session-old");
+    const oldRequest = useConverterStore.getState().submitGenerate();
+
+    useConverterStore.setState({
+      sessionId: "session-new",
+      downloadUrl: null,
+      threemfDiskPath: null,
+      modelUrl: null,
+      previewGlbUrl: null,
+    });
+
+    stale.resolve({
+      status: "ok",
+      message: "stale",
+      download_url: "/api/files/stale-only.3mf",
+      threemf_disk_path: "/tmp/stale-only.3mf",
+      preview_3d_url: "/api/files/stale-only.glb",
+    });
+    await oldRequest;
+
+    const state = useConverterStore.getState();
+    expect(state.sessionId).toBe("session-new");
+    expect(state.downloadUrl).toBeNull();
+    expect(state.threemfDiskPath).toBeNull();
+    expect(state.modelUrl).toBeNull();
+    expect(state.isGenerating).toBe(false);
+    expect(state.error).toBeNull();
+  });
+
+  it("ignores a stale regular generate response from an older request in the same session", async () => {
+    const stale = deferred<{
+      status: string;
+      message: string;
+      download_url: string;
+      threemf_disk_path: string;
+      preview_3d_url: string;
+    }>();
+    mocks.convertGenerate
+      .mockReturnValueOnce(stale.promise)
+      .mockResolvedValueOnce({
+        status: "ok",
+        message: "second",
+        download_url: "/api/files/second.3mf",
+        threemf_disk_path: "/tmp/second.3mf",
+        preview_3d_url: "/api/files/second.glb",
+      });
+
+    seedLegacyGenerateState("session-same");
+    const firstRequest = useConverterStore.getState().submitGenerate();
+    const secondRequest = useConverterStore.getState().submitGenerate();
+    await secondRequest;
+
+    stale.resolve({
+      status: "ok",
+      message: "first",
+      download_url: "/api/files/first.3mf",
+      threemf_disk_path: "/tmp/first.3mf",
+      preview_3d_url: "/api/files/first.glb",
+    });
+    await firstRequest;
+
+    const state = useConverterStore.getState();
+    expect(state.downloadUrl).toBe("/api/files/second.3mf");
+    expect(state.threemfDiskPath).toBe("/tmp/second.3mf");
+    expect(state.modelUrl).toBe("/api/files/second.glb");
+    expect(state.error).toBeNull();
+  });
+
+  it("ignores stale generate failures after a newer generate succeeds", async () => {
+    const stale = deferred<never>();
+    mocks.convertGenerate
+      .mockReturnValueOnce(stale.promise)
+      .mockResolvedValueOnce({
+        status: "ok",
+        message: "fresh",
+        download_url: "/api/files/fresh-after-error.3mf",
+        threemf_disk_path: "/tmp/fresh-after-error.3mf",
+        preview_3d_url: "/api/files/fresh-after-error.glb",
+      });
+
+    seedLegacyGenerateState("session-error");
+    const staleRequest = useConverterStore.getState().submitGenerate();
+    const freshRequest = useConverterStore.getState().submitGenerate();
+    await freshRequest;
+
+    stale.reject(new Error("old generate failed"));
+    await staleRequest;
+
+    const state = useConverterStore.getState();
+    expect(state.downloadUrl).toBe("/api/files/fresh-after-error.3mf");
+    expect(state.error).toBeNull();
+    expect(state.isGenerating).toBe(false);
+  });
+
+  it("ignores a stale puzzle generate response after the session changes", async () => {
+    const stale = deferred<{
+      status: string;
+      message: string;
+      download_url: string;
+      threemf_disk_path: string;
+      piece_count: number;
+      grid_cols: number;
+      grid_rows: number;
+      warnings: string[];
+    }>();
+    mocks.convertGeneratePuzzle
+      .mockReturnValueOnce(stale.promise)
+      .mockResolvedValueOnce({
+        status: "ok",
+        message: "fresh puzzle",
+        download_url: "/api/files/fresh-puzzle.3mf",
+        threemf_disk_path: "/tmp/fresh-puzzle.3mf",
+        piece_count: 4,
+        grid_cols: 2,
+        grid_rows: 2,
+        warnings: [],
+      });
+
+    seedLegacyGenerateState("puzzle-old", { puzzleEnabled: true });
+    const oldRequest = useConverterStore.getState().submitGenerate();
+
+    seedLegacyGenerateState("puzzle-fresh", { puzzleEnabled: true });
+    const freshRequest = useConverterStore.getState().submitGenerate();
+    await freshRequest;
+
+    stale.resolve({
+      status: "ok",
+      message: "stale puzzle",
+      download_url: "/api/files/stale-puzzle.3mf",
+      threemf_disk_path: "/tmp/stale-puzzle.3mf",
+      piece_count: 9,
+      grid_cols: 3,
+      grid_rows: 3,
+      warnings: ["stale"],
+    });
+    await oldRequest;
+
+    const state = useConverterStore.getState();
+    expect(state.sessionId).toBe("puzzle-fresh");
+    expect(state.downloadUrl).toBe("/api/files/fresh-puzzle.3mf");
+    expect(state.threemfDiskPath).toBe("/tmp/fresh-puzzle.3mf");
+    expect(state.puzzleResolvedPieceCount).toBe(4);
+    expect(state.puzzleWarnings).toEqual([]);
+  });
+
+  it("ignores a stale large-format generate response after the session changes", async () => {
+    const stale = deferred<{
+      status: string;
+      message: string;
+      download_url: string;
+      tile_count: number;
+      grid_cols: number;
+      grid_rows: number;
+      warnings: string[];
+    }>();
+    mocks.convertGenerateLargeFormat
+      .mockReturnValueOnce(stale.promise)
+      .mockResolvedValueOnce({
+        status: "ok",
+        message: "fresh large-format",
+        download_url: "/api/files/fresh-large.zip",
+        tile_count: 4,
+        grid_cols: 2,
+        grid_rows: 2,
+        warnings: [],
+      });
+
+    seedLegacyGenerateState("large-old", { largeFormatEnabled: true });
+    const oldRequest = useConverterStore.getState().submitGenerate();
+
+    seedLegacyGenerateState("large-fresh", { largeFormatEnabled: true });
+    const freshRequest = useConverterStore.getState().submitGenerate();
+    await freshRequest;
+
+    stale.resolve({
+      status: "ok",
+      message: "stale large-format",
+      download_url: "/api/files/stale-large.zip",
+      tile_count: 9,
+      grid_cols: 3,
+      grid_rows: 3,
+      warnings: ["stale"],
+    });
+    await oldRequest;
+
+    const state = useConverterStore.getState();
+    expect(state.sessionId).toBe("large-fresh");
+    expect(state.downloadUrl).toBe("/api/files/fresh-large.zip");
+    expect(state.largeFormatWarnings).toEqual([]);
   });
 
   it("defaults native layer count to 5 when entering native mode without a valid current selection", () => {
