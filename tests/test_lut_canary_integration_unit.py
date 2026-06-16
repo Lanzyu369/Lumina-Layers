@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import io
+import json
 import logging
 from pathlib import Path
 from types import SimpleNamespace
 
+import msgpack
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
@@ -138,6 +141,56 @@ def _keyed_json_bytes() -> bytes:
         b'"Red":{"material":"PLA","hex_color":"#FF0000"}},'
         b'"entries":[{"rgb":[255,255,255],"recipe":["White"]}]}'
     )
+
+
+def _legacy_flat_list_json_bytes() -> bytes:
+    return json.dumps(
+        [
+            {
+                "rgb": [255, 255, 255],
+                "recipe": [0, 0, 0, 0, 0],
+            }
+        ]
+    ).encode("utf-8")
+
+
+def _npy_bytes(array: np.ndarray) -> bytes:
+    buffer = io.BytesIO()
+    np.save(buffer, array)
+    return buffer.getvalue()
+
+
+def _npz_bytes(**arrays: np.ndarray) -> bytes:
+    buffer = io.BytesIO()
+    np.savez(buffer, **arrays)
+    return buffer.getvalue()
+
+
+def _native_model_package_msgpack_bytes() -> bytes:
+    payload = {
+        "schema_version": 2,
+        "name": "TestPackage",
+        "scope": {"vendor": "BambuLab", "material_type": "PLA"},
+        "channel_keys": ["White|PLA Basic", "Black|PLA Basic"],
+        "defaults": {"threshold": 5.0, "margin": 0.7},
+        "modes": [
+            {
+                "color_layers": 5,
+                "layer_height_mm": 0.08,
+                "layer_order": "Top2Bottom",
+                "num_candidates": 2,
+                "candidate_recipes": np.asarray(
+                    [[0, 0, 0, 0, 0], [1, 1, 1, 1, 1]],
+                    dtype=np.uint8,
+                ).tobytes(),
+                "pred_lab": np.asarray(
+                    [[255, 128, 128], [0, 128, 128]],
+                    dtype="<f4",
+                ).tobytes(),
+            }
+        ],
+    }
+    return msgpack.packb(payload, use_bin_type=True)
 
 
 def _lut_info(*, source_kind: str = "lut") -> LutInfoResponseV2:
@@ -487,6 +540,285 @@ class TestLutUploadCanary:
         assert record.display_name == "Custom - synthetic_lut"
         assert record.file_size_bytes == len(payload)
         assert record.was_converted is False
+
+
+class TestLutUploadValidation:
+    def test_upload_lut_rejects_invalid_json_without_persisting(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        client = _client()
+        monkeypatch.setattr(LUTManager, "LUT_PRESET_DIR", str(tmp_path))
+        target_logger = _capture_lut_logger(caplog)
+
+        try:
+            response = client.post(
+                "/api/lut/upload",
+                files={"file": ("bad.json", b"{not-json", "application/json")},
+            )
+        finally:
+            target_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 422
+        assert "LUT" in response.json()["detail"]
+        assert not (tmp_path / "Custom" / "bad.json").exists()
+        assert _records_for_event(caplog, "lut_upload_done") == []
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            b'{"entries":[]}',
+            b'{"entries":[{"rgb":["x",0,0]}]}',
+            b'[{"recipe":[0,0,0,0,0]}]',
+        ],
+    )
+    def test_upload_lut_rejects_json_without_usable_color_rows(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        payload: bytes,
+    ) -> None:
+        client = _client()
+        monkeypatch.setattr(LUTManager, "LUT_PRESET_DIR", str(tmp_path))
+
+        response = client.post(
+            "/api/lut/upload",
+            files={"file": ("empty.json", payload, "application/json")},
+        )
+
+        assert response.status_code == 422
+        assert not (tmp_path / "Custom" / "empty.json").exists()
+
+    @pytest.mark.parametrize(
+        ("filename", "payload", "content_type"),
+        [
+            ("bad.npz", b"not-an-npz", "application/octet-stream"),
+            ("bad.msgpack", b"\xc1", "application/x-msgpack"),
+        ],
+    )
+    def test_upload_lut_rejects_unparseable_binary_lut_without_persisting(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        filename: str,
+        payload: bytes,
+        content_type: str,
+    ) -> None:
+        client = _client()
+        monkeypatch.setattr(LUTManager, "LUT_PRESET_DIR", str(tmp_path))
+
+        response = client.post(
+            "/api/lut/upload",
+            files={"file": (filename, payload, content_type)},
+        )
+
+        assert response.status_code == 422
+        assert not (tmp_path / "Custom" / filename).exists()
+
+    def test_upload_lut_rejects_semantic_bad_npz_without_persisting(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        client = _client()
+        monkeypatch.setattr(LUTManager, "LUT_PRESET_DIR", str(tmp_path))
+        payload = _npz_bytes(
+            rgb=np.asarray([1, 2], dtype=np.uint8),
+            stacks=np.zeros((1, 5), dtype=np.int32),
+        )
+
+        response = client.post(
+            "/api/lut/upload",
+            files={
+                "file": (
+                    "bad-shape.npz",
+                    payload,
+                    "application/octet-stream",
+                )
+            },
+        )
+
+        assert response.status_code == 422
+        assert not (tmp_path / "Custom" / "bad-shape.npz").exists()
+
+    def test_upload_lut_rejects_npz_stack_row_mismatch_without_persisting(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        client = _client()
+        monkeypatch.setattr(LUTManager, "LUT_PRESET_DIR", str(tmp_path))
+        payload = _npz_bytes(
+            rgb=np.asarray([[255, 255, 255]], dtype=np.uint8),
+            stacks=np.zeros((2, 5), dtype=np.int32),
+        )
+
+        response = client.post(
+            "/api/lut/upload",
+            files={
+                "file": (
+                    "bad-stacks.npz",
+                    payload,
+                    "application/octet-stream",
+                )
+            },
+        )
+
+        assert response.status_code == 422
+        assert not (tmp_path / "Custom" / "bad-stacks.npz").exists()
+
+    def test_upload_lut_rejects_bad_npy_as_client_error_without_persisting(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        client = _client()
+        monkeypatch.setattr(LUTManager, "LUT_PRESET_DIR", str(tmp_path))
+
+        response = client.post(
+            "/api/lut/upload",
+            files={
+                "file": (
+                    "bad.npy",
+                    b"not-a-valid-npy",
+                    "application/octet-stream",
+                )
+            },
+        )
+
+        assert response.status_code == 422
+        assert not (tmp_path / "Custom" / "bad.json").exists()
+
+    def test_upload_lut_rejects_npy_with_non_rgb_2d_shape(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        client = _client()
+        monkeypatch.setattr(LUTManager, "LUT_PRESET_DIR", str(tmp_path))
+
+        response = client.post(
+            "/api/lut/upload",
+            files={
+                "file": (
+                    "bad-matrix.npy",
+                    _npy_bytes(np.asarray([[1], [2], [3]], dtype=np.uint8)),
+                    "application/octet-stream",
+                )
+            },
+        )
+
+        assert response.status_code == 422
+        assert not (tmp_path / "Custom" / "bad-matrix.json").exists()
+
+    @pytest.mark.parametrize(
+        ("filename", "payload", "content_type"),
+        [
+            (
+                "empty-runtime.json",
+                b'{"runtime_package":{}}',
+                "application/json",
+            ),
+            (
+                "empty-runtime.msgpack",
+                msgpack.packb({"runtime_package": {}}, use_bin_type=True),
+                "application/x-msgpack",
+            ),
+        ],
+    )
+    def test_upload_lut_rejects_empty_runtime_package_without_color_rows(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        filename: str,
+        payload: bytes,
+        content_type: str,
+    ) -> None:
+        client = _client()
+        monkeypatch.setattr(LUTManager, "LUT_PRESET_DIR", str(tmp_path))
+
+        response = client.post(
+            "/api/lut/upload",
+            files={"file": (filename, payload, content_type)},
+        )
+
+        assert response.status_code == 422
+        assert not (tmp_path / "Custom" / filename).exists()
+
+    def test_upload_lut_accepts_legacy_flat_list_json(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        client = _client()
+        monkeypatch.setattr(LUTManager, "LUT_PRESET_DIR", str(tmp_path))
+
+        response = client.post(
+            "/api/lut/upload",
+            files={
+                "file": (
+                    "legacy.json",
+                    _legacy_flat_list_json_bytes(),
+                    "application/json",
+                )
+            },
+        )
+
+        assert response.status_code == 200
+        assert (tmp_path / "Custom" / "legacy.json").exists()
+
+    def test_upload_lut_accepts_valid_npy_conversion(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        client = _client()
+        monkeypatch.setattr(LUTManager, "LUT_PRESET_DIR", str(tmp_path))
+
+        response = client.post(
+            "/api/lut/upload",
+            files={
+                "file": (
+                    "rgb.npy",
+                    _npy_bytes(np.asarray([[255, 255, 255]], dtype=np.uint8)),
+                    "application/octet-stream",
+                )
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json()["name"] == "Custom - rgb"
+        assert (tmp_path / "Custom" / "rgb.json").exists()
+
+    def test_upload_lut_accepts_native_model_package_msgpack(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        client = _client()
+        monkeypatch.setattr(LUTManager, "LUT_PRESET_DIR", str(tmp_path))
+        target_logger = _capture_lut_logger(caplog)
+
+        try:
+            response = client.post(
+                "/api/lut/upload",
+                files={
+                    "file": (
+                        "native.msgpack",
+                        _native_model_package_msgpack_bytes(),
+                        "application/x-msgpack",
+                    )
+                },
+            )
+        finally:
+            target_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 200
+        assert (tmp_path / "Custom" / "native.msgpack").exists()
+        assert len(_records_for_event(caplog, "lut_upload_done")) == 1
 
 
 class TestLutSessionInfoCanary:
