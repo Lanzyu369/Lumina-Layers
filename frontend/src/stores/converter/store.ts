@@ -2409,6 +2409,15 @@ const GLB_POLL_MAX_MS = 5 * 60_000;
 // 单调递增的 token：新轮询/切换 session 都会自增，旧循环下一轮检测到 token
 // 变了就退出，避免多路 polling 互相覆盖 previewGlbUrl。
 let _glbPollSequence = 0;
+let _generateRequestSequence = 0;
+
+function _isCurrentGenerateRequest(
+  sequence: number,
+  sessionId: string,
+  getCurrentSessionId: () => string | null,
+): boolean {
+  return _generateRequestSequence === sequence && getCurrentSessionId() === sessionId;
+}
 
 function _startGlbStatusPolling(
   sessionId: string,
@@ -5635,6 +5644,29 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       }
 
       set({ isGenerating: true, error: null, generatePerformanceTiming: null });
+      _generateRequestSequence += 1;
+      const generateSequence = _generateRequestSequence;
+      const shouldIgnoreStaleGenerateResponse = (): boolean => {
+        if (
+          _isCurrentGenerateRequest(
+            generateSequence,
+            sessionId,
+            () => useConverterStore.getState().sessionId,
+          )
+        ) {
+          return false;
+        }
+
+        const latestState = useConverterStore.getState();
+        if (
+          _generateRequestSequence === generateSequence &&
+          latestState.sessionId !== sessionId &&
+          latestState.isGenerating
+        ) {
+          set({ isGenerating: false });
+        }
+        return true;
+      };
       _generateStartTime = performance.now();
       (window as LuminaWindow).__luminaGenerateStart = _generateStartTime;
       _clientLog("generate: click", {
@@ -5790,6 +5822,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             ...buildPuzzlePreviewParams(state),
             params: baseParams,
           });
+          if (shouldIgnoreStaleGenerateResponse()) {
+            return null;
+          }
           set({
             isGenerating: false,
             modelUrl: null,
@@ -5840,6 +5875,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             tile_height_mm: state.tileHeightMm,
             params: baseParams,
           });
+          if (shouldIgnoreStaleGenerateResponse()) {
+            return null;
+          }
           set({
             isGenerating: false,
             modelUrl: null,
@@ -5880,6 +5918,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           free_color_count: state.free_color_set.size,
         });
         const response = await apiConvertGenerate(sessionId, baseParams);
+        if (shouldIgnoreStaleGenerateResponse()) {
+          return null;
+        }
         _logGenerateTimer("response received");
         _clientLog("generate: response received", {
           preview_3d_url: response.preview_3d_url ?? null,
@@ -5929,6 +5970,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         });
         return modelUrl;
       } catch (err) {
+        if (shouldIgnoreStaleGenerateResponse()) {
+          return null;
+        }
         set({
           isGenerating: false,
           error: err instanceof Error ? err.message : "生成失败",

@@ -232,6 +232,41 @@ class TestLutNotFoundReturns404:
         assert "LUT" in response.json()["detail"]
 
 
+class TestPreviewMaterialSourceValidation:
+    """Verify preview rejects unsupported material source values early."""
+
+    def test_preview_rejects_invalid_material_source_before_io(self) -> None:
+        """Invalid material_source should not resolve LUTs, upload, or submit work."""
+        buf = _make_test_image_buf()
+        worker_result = _create_worker_result_files()
+        _mock_pool.submit = AsyncMock(return_value=worker_result)
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.resolve_source_selection",
+                return_value=("/tmp/fake.npy", "Fake LUT"),
+            ) as resolve_source,
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ) as ensure_png,
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": ("test.png", buf, "image/png")},
+                data={
+                    "lut_name": "test_lut",
+                    "material_source": "bad-source",
+                },
+            )
+
+        assert response.status_code == 422
+        assert "material_source" in response.json()["detail"]
+        resolve_source.assert_not_called()
+        ensure_png.assert_not_called()
+        _mock_pool.submit.assert_not_called()
+
+
 # =========================================================================
 # 2. Session contains preview_cache - Requirement 5.2
 # =========================================================================
@@ -853,6 +888,7 @@ class TestSvgLargeFormatWarnings:
                     hue_weight=0.0,
                     chroma_gate=15.0,
                     is_dark=True,
+                    material_source="lut",
                     store=_test_store,
                     registry=_test_registry,
                     pool=pool,

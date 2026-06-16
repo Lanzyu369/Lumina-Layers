@@ -11,7 +11,7 @@ import shutil
 import threading
 import tempfile
 import time
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 import msgpack
@@ -81,6 +81,7 @@ _lut_list_cache_checked_at: float | None = None
 _lut_list_cache_file_map: tuple[tuple[str, str], ...] | None = None
 _lut_list_cache_signature: tuple[tuple[str, str, int, int], ...] | None = None
 _lut_list_cache_response: LUTListResponse | None = None
+_ALLOWED_LUT_EXTENSIONS = {".npy", ".json", ".npz", ".msgpack"}
 
 
 def _build_lut_list_file_map(lut_dict: dict[str, str]) -> tuple[tuple[str, str], ...]:
@@ -119,6 +120,50 @@ def _clear_lut_list_cache() -> None:
         _lut_list_cache_file_map = None
         _lut_list_cache_signature = None
         _lut_list_cache_response = None
+
+
+def _validate_uploaded_lut_filename(filename: str) -> tuple[str, str]:
+    """Return safe upload stem and extension for a Custom LUT filename.
+    返回可用于 Custom LUT 目录的安全上传文件名主干与扩展名。
+    """
+    raw_filename = filename.strip()
+    if not raw_filename:
+        raise ValueError("Invalid LUT filename")
+    if (
+        "/" in raw_filename
+        or "\\" in raw_filename
+        or raw_filename in {".", ".."}
+        or Path(raw_filename).is_absolute()
+        or PureWindowsPath(raw_filename).drive
+    ):
+        raise ValueError("Invalid LUT filename: path components are not allowed")
+
+    path = Path(raw_filename)
+    stem = path.stem
+    ext = path.suffix.lower()
+    if not stem or stem in {".", ".."}:
+        raise ValueError("Invalid LUT filename")
+    if ext not in _ALLOWED_LUT_EXTENSIONS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"不支持的文件类型: {ext}，仅支持 .npy/.json/.npz/.msgpack",
+        )
+    return stem, ext
+
+
+def _custom_lut_destination(custom_dir: str, stem: str, ext: str) -> Path:
+    custom_root = Path(custom_dir).resolve()
+    counter = 0
+    while True:
+        suffix = "" if counter == 0 else f"_{counter}"
+        dest_path = (custom_root / f"{stem}{suffix}{ext}").resolve(strict=False)
+        try:
+            dest_path.relative_to(custom_root)
+        except ValueError as exc:
+            raise RuntimeError("Resolved LUT destination escaped Custom directory") from exc
+        if not dest_path.exists():
+            return dest_path
+        counter += 1
 
 
 def _resolve_lut_details_service():
@@ -252,9 +297,6 @@ def get_lut_details_catalog() -> LutDetailsCatalogResponse:
             for group in catalog.groups
         ]
     )
-
-
-_ALLOWED_LUT_EXTENSIONS = {".npy", ".json", ".npz", ".msgpack"}
 
 
 class _UploadedLutValidationError(ValueError):
@@ -449,12 +491,13 @@ async def upload_lut(file: UploadFile = File(..., description="LUT 文件 (.npy/
     上传 LUT 文件到 Custom 预设目录。
     """
     filename = file.filename or "unknown"
-    ext = Path(filename).suffix.lower()
-    if ext not in _ALLOWED_LUT_EXTENSIONS:
+    try:
+        stem, ext = _validate_uploaded_lut_filename(filename)
+    except ValueError as exc:
         raise HTTPException(
             status_code=422,
-            detail=f"不支持的文件类型: {ext}，仅支持 .npy/.json/.npz/.msgpack",
-        )
+            detail=str(exc),
+        ) from exc
 
     # Save to temp file first (chunked read with size limit)
     from config import TEMP_DIR
@@ -480,7 +523,6 @@ async def upload_lut(file: UploadFile = File(..., description="LUT 文件 (.npy/
     try:
         _validate_uploaded_lut_file(tmp_path, ext)
 
-        stem = Path(filename).stem
         custom_dir = os.path.join(LUTManager.LUT_PRESET_DIR, "Custom")
         os.makedirs(custom_dir, exist_ok=True)
 
@@ -494,18 +536,10 @@ async def upload_lut(file: UploadFile = File(..., description="LUT 文件 (.npy/
                 rgb = rgb.reshape(-1, 3)
             metadata = LUTManager.infer_default_metadata(stem, tmp_path, len(rgb))
             stacks = np.zeros((len(rgb), 0), dtype=np.int32)
-            dest_path = os.path.join(custom_dir, f"{stem}{dest_ext}")
-            counter = 1
-            while os.path.exists(dest_path):
-                dest_path = os.path.join(custom_dir, f"{stem}_{counter}{dest_ext}")
-                counter += 1
-            LUTManager.save_keyed_json(dest_path, rgb, stacks, metadata)
+            dest_path = _custom_lut_destination(custom_dir, stem, dest_ext)
+            LUTManager.save_keyed_json(str(dest_path), rgb, stacks, metadata)
         else:
-            dest_path = os.path.join(custom_dir, filename)
-            counter = 1
-            while os.path.exists(dest_path):
-                dest_path = os.path.join(custom_dir, f"{stem}_{counter}{ext}")
-                counter += 1
+            dest_path = _custom_lut_destination(custom_dir, stem, ext)
             shutil.copy2(tmp_path, dest_path)
 
         _invalidate_lut_details_service_cache()

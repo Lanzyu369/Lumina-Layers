@@ -435,6 +435,26 @@ class TestApplyColorcheckerCalibration:
 
         assert captured_kwargs["patch_points"] == manual_points
 
+    @pytest.mark.parametrize(
+        "patch_points",
+        [
+            [{"x": 1.0} for _ in range(24)],
+            [{"x": "bad", "y": 0.0} for _ in range(24)],
+            [[1.0] for _ in range(24)],
+            [{"x": float("nan"), "y": 0.0} for _ in range(24)],
+        ],
+    )
+    def test_invalid_manual_patch_points_raise_calibration_error(
+        self,
+        patch_points,
+    ) -> None:
+        with pytest.raises(ColorCheckerCalibrationError, match="patch_points"):
+            apply_colorchecker_calibration(
+                self._make_image(),
+                self._make_corners(),
+                patch_points=patch_points,
+            )
+
     def test_calibrate_exception_wraps_as_calibration_error(
         self,
         monkeypatch: pytest.MonkeyPatch,

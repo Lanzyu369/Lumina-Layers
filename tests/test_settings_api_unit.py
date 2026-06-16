@@ -12,6 +12,7 @@ Validates:
 import json
 from unittest.mock import patch, MagicMock
 
+import pytest
 from fastapi.testclient import TestClient
 
 from api.app import app
@@ -77,6 +78,26 @@ class TestGetSettings:
         assert settings["enable_crop_modal"] is False
         assert settings["device_profile_id"] == "OrcaSlicer:bbl:bambu-lab-p1s:0.2"
         assert settings["nozzle_size"] == "0.2"
+
+    @pytest.mark.parametrize("raw_json", ["[]", "null", '"oops"', "123", "true", "1.5"])
+    def test_get_settings_non_object_json_returns_defaults(self, raw_json: str) -> None:
+        """合法 JSON 但顶层不是对象时返回默认值，不让设置 API 500。"""
+        mock_file = MagicMock()
+        mock_file.exists.return_value = True
+        mock_file.read_text.return_value = raw_json
+        client_no_raise = TestClient(app, raise_server_exceptions=False)
+
+        with patch("api.routers.system.SETTINGS_FILE", mock_file):
+            response = client_no_raise.get("/api/system/settings")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+        settings = data["settings"]
+        assert settings["last_lut"] == ""
+        assert settings["last_modeling_mode"] == "high-fidelity"
+        assert settings["last_color_mode"] == "4-Color (RYBW)"
+        assert settings["device_profile_id"] == "BambuStudio:bbl:bambu-lab-h2d:0.4"
 
 
 # =========================================================================

@@ -190,6 +190,7 @@ These files **must not** change unless the canonical workflow legitimately chang
 2. Common causes:
    - INFO budget exceeded → either consolidate two `*_done` events into one or demote an intermediate trace to DEBUG.
    - Per-endpoint cap hit → your new endpoint emits more than 8 INFO records on a single call; the same fix applies.
+   - WARNING/ERROR missing actionable fields → add a diagnostic field such as `error_type`, `error_message`, `path`, `dependency`, `status_code`, or `fallback_action`; correlation IDs alone are not enough.
    - Missing canary on a `TARGETS` file → see §7 below.
 3. Re-run targeted: `python -m pytest tests/test_logging_exception_governance_unit.py -v` to read the exact failing assertion.
 

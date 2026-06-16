@@ -563,6 +563,63 @@ def test_collect_final_artifact_uses_download_url_for_ttl_zip(
     assert (ticket_dir / "final.zip").read_bytes() == b"PK\x03\x04LARGE_FORMAT"
 
 
+def test_collect_final_artifact_prefers_download_url_over_stale_session_entry(
+    tmp_path: Path,
+) -> None:
+    """The exact download URL represents the user's current final artifact.
+
+    精确下载链接代表用户当前看到的最终产物，不能被同 session 下的旧产物覆盖。
+    """
+    stale_path = tmp_path / "stale_model.3mf"
+    stale_path.write_bytes(b"OLD_3MF")
+    current_path = tmp_path / "current_tiles.zip"
+    current_path.write_bytes(b"CURRENT_ZIP")
+    registry = _MockFileRegistry(
+        {
+            "sess-current": {
+                "old-3mf-id": _make_entry(
+                    str(stale_path),
+                    "stale_model.3mf",
+                    created_at=8.0,
+                ),
+            },
+            "ttl-owner": {
+                "current-zip-id": _make_entry(
+                    str(current_path),
+                    "current_tiles.zip",
+                    created_at=9.0,
+                ),
+            },
+        }
+    )
+    ticket_dir = tmp_path / "LUM-20260524-009"
+    ticket_dir.mkdir()
+    payload = {
+        "ticket_id": "LUM-20260524-009",
+        "context": {
+            "active_original_image_ref": None,
+            "active_final_artifact_ref": {
+                "session_id": "sess-current",
+                "download_url": "/api/files/current-zip-id",
+                "artifact_type": "zip",
+                "disk_path": None,
+            },
+            "source_version": "legacy",
+            "lut_name": None,
+        },
+    }
+
+    result = collect_sync_attachments(ticket_dir, payload, registry, now_beijing())
+
+    assert result.final_artifact["status"] == "attached"
+    assert result.final_artifact["filename"] == "final.zip"
+    assert result.final_artifact["artifact_type"] == "zip"
+    assert result.final_artifact["source_session_id"] == "sess-current"
+    assert result.final_artifact["history_count"] == 1
+    assert (ticket_dir / "final.zip").read_bytes() == b"CURRENT_ZIP"
+    assert not (ticket_dir / "final.3mf").exists()
+
+
 def test_collect_final_artifact_download_url_must_be_api_files_path(
     tmp_path: Path,
 ) -> None:
@@ -887,3 +944,104 @@ def test_collect_final_artifact_registry_hit_takes_priority_over_disk_path(
         assert (ticket_dir / "final.3mf").read_bytes() == b"REGISTRY_3MF"
     finally:
         disk_3mf.unlink(missing_ok=True)
+
+
+def test_collect_final_artifact_stale_registry_rejects_disk_path_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stale FileRegistry hit must not authorize client disk_path fallback.
+
+    FileRegistry 命中但磁盘文件已清理时，客户端 disk_path 仍不能授权复制。
+    """
+    monkeypatch.setattr("api.feedback_assembler.REPO_ROOT", tmp_path)
+
+    output_dir = tmp_path / "output" / "models"
+    output_dir.mkdir(parents=True)
+    fallback_3mf = output_dir / "fallback_model.3mf"
+    fallback_3mf.write_bytes(b"FALLBACK_3MF")
+
+    registry = _MockFileRegistry(
+        {
+            "sess-final": {
+                "stale": _make_entry(
+                    str(tmp_path / "missing_registry_model.3mf"),
+                    "missing_registry_model.3mf",
+                    created_at=10.0,
+                ),
+            },
+        }
+    )
+    ticket_dir = tmp_path / "LUM-20260616-020"
+    ticket_dir.mkdir()
+    payload = {
+        "ticket_id": "LUM-20260616-020",
+        "context": {
+            "active_original_image_ref": None,
+            "active_final_artifact_ref": {
+                "session_id": "sess-final",
+                "artifact_type": "3mf",
+                "disk_path": str(fallback_3mf),
+            },
+            "source_version": "legacy",
+            "lut_name": None,
+        },
+    }
+
+    result = collect_sync_attachments(ticket_dir, payload, registry, now_beijing())
+
+    assert result.final_artifact["status"] == "expired_ttl"
+    assert result.final_artifact["filename"] is None
+    assert not (ticket_dir / "final.3mf").exists()
+
+
+def test_collect_final_artifact_stale_registry_falls_back_to_download_url(
+    tmp_path: Path,
+) -> None:
+    """A stale session artifact should not block exact download URL recovery.
+
+    session 里的旧产物条目失效时，不应阻断精确下载 URL 回收。
+    """
+    stale_path = tmp_path / "missing_session_model.3mf"
+    ttl_zip_path = tmp_path / "large_format_tiles.zip"
+    ttl_zip_path.write_bytes(b"PK\x03\x04TTL_ZIP")
+    registry = _MockFileRegistry(
+        {
+            "sess-final": {
+                "stale": _make_entry(
+                    str(stale_path),
+                    "missing_session_model.3mf",
+                    created_at=10.0,
+                ),
+            },
+            "ttl-owner": {
+                "zip-file-id": _make_entry(
+                    str(ttl_zip_path),
+                    "large_format_tiles.zip",
+                    created_at=11.0,
+                ),
+            },
+        }
+    )
+    ticket_dir = tmp_path / "LUM-20260616-021"
+    ticket_dir.mkdir()
+    payload = {
+        "ticket_id": "LUM-20260616-021",
+        "context": {
+            "active_original_image_ref": None,
+            "active_final_artifact_ref": {
+                "session_id": "sess-final",
+                "download_url": "/api/files/zip-file-id?download=1",
+                "artifact_type": "zip",
+            },
+            "source_version": "legacy",
+            "lut_name": None,
+        },
+    }
+
+    result = collect_sync_attachments(ticket_dir, payload, registry, now_beijing())
+
+    assert result.final_artifact["status"] == "attached"
+    assert result.final_artifact["filename"] == "final.zip"
+    assert result.final_artifact["artifact_type"] == "zip"
+    assert (ticket_dir / "final.zip").read_bytes() == b"PK\x03\x04TTL_ZIP"

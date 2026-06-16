@@ -12,6 +12,7 @@ Uses Hypothesis to verify:
 import os
 import tempfile
 import uuid
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -222,6 +223,51 @@ def test_register_bytes_removes_temp_file_when_register_path_fails() -> None:
 
     assert registry.temp_path is not None
     assert not os.path.exists(registry.temp_path)
+
+
+def test_register_bytes_retries_short_os_write(monkeypatch) -> None:
+    """Byte registration should persist the full payload across short writes."""
+    registry = FileRegistry()
+    payload = b"0123456789abcdef" * 4096
+    original_write = os.write
+    write_lengths: list[int] = []
+    file_id: str | None = None
+
+    def short_write(fd: int, data) -> int:  # noqa: ANN001
+        chunk = bytes(data)[: max(1, min(7, len(data)))]
+        written = original_write(fd, chunk)
+        write_lengths.append(written)
+        return written
+
+    monkeypatch.setattr("api.file_registry.os.write", short_write)
+
+    try:
+        file_id = registry.register_bytes("session-1", payload, "preview.png")
+        resolved = registry.resolve(file_id)
+        assert resolved is not None
+        path, filename = resolved
+        assert filename == "preview.png"
+        assert Path(path).read_bytes() == payload
+        assert len(write_lengths) > 1
+    finally:
+        if file_id is not None:
+            registry.cleanup_file(file_id)
+
+
+def test_register_bytes_removes_temp_file_when_os_write_returns_zero(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Zero-byte raw writes should fail and remove the created temp file."""
+    registry = FileRegistry()
+
+    monkeypatch.setattr("api.file_registry.TEMP_DIR", str(tmp_path))
+    monkeypatch.setattr("api.file_registry.os.write", lambda _fd, _data: 0)
+
+    with pytest.raises(OSError, match="Failed to write file registry bytes"):
+        registry.register_bytes("session-1", b"preview-bytes", "preview.png")
+
+    assert list(tmp_path.iterdir()) == []
 
 
 # **Validates: Requirements 1.2**
