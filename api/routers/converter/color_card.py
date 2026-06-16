@@ -42,6 +42,16 @@ router = APIRouter()
 log = get_logger(__name__)
 
 
+def _remove_temp_path(path: str | None) -> None:
+    """Best-effort delete for route-owned temporary files."""
+    if not path:
+        return
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
 def _require_color_card_cache_metadata(session_data: dict) -> dict:
     """Return preview-cache metadata needed for color-card generation.
 
@@ -251,16 +261,26 @@ async def generate_color_card(
             detail=status_msg or "Color card 3MF generation failed.",
         )
 
-    download_id = registry.register_path(
-        str(uuid.uuid4()),
-        threemf_path,
-        ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
-    )
-
     preview_3d_url: str | None = None
-    if glb_path and os.path.exists(glb_path):
-        glb_id = registry.register_path(body.session_id, glb_path)
-        preview_3d_url = f"/api/files/{glb_id}"
+    threemf_registered = False
+    glb_registered = False
+    try:
+        download_id = registry.register_path(
+            str(uuid.uuid4()),
+            threemf_path,
+            ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
+        )
+        threemf_registered = True
+
+        if glb_path and os.path.exists(glb_path):
+            glb_id = registry.register_path(body.session_id, glb_path)
+            glb_registered = True
+            preview_3d_url = f"/api/files/{glb_id}"
+    finally:
+        if not threemf_registered:
+            _remove_temp_path(threemf_path)
+        if glb_path and not glb_registered:
+            _remove_temp_path(glb_path)
 
     api_total = time.perf_counter() - api_t0
     log.info(
