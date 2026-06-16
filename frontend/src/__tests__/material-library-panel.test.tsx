@@ -9,7 +9,6 @@ import {
   listGradientCardMaterials,
   updateGradientCardMaterial,
 } from "../api/extractor";
-import { uploadLocalMaterialRegistryPackage } from "../api/materialSync";
 import { useSingleStageStore } from "../stores/singleStageStore";
 import { useWidgetStore } from "../stores/widgetStore";
 
@@ -22,10 +21,6 @@ vi.mock("../api/extractor", () => ({
   importGradientCardMaterials: vi.fn(),
   listGradientCardMaterials: vi.fn(),
   updateGradientCardMaterial: vi.fn(),
-}));
-
-vi.mock("../api/materialSync", () => ({
-  uploadLocalMaterialRegistryPackage: vi.fn(),
 }));
 
 describe("MaterialLibraryPanel", () => {
@@ -583,7 +578,7 @@ describe("MaterialLibraryPanel", () => {
     expect(screen.getByTestId("material-library-success")).toBeInTheDocument();
   });
 
-  it("uploads one local material card to the cloud registry with the official password", async () => {
+  it("does not expose cloud upload controls in the distribution UI", async () => {
     vi.mocked(listGradientCardMaterials).mockResolvedValue({
       status: "ok",
       message: "Loaded 1 saved materials",
@@ -605,17 +600,6 @@ describe("MaterialLibraryPanel", () => {
         },
       ],
     });
-    vi.mocked(uploadLocalMaterialRegistryPackage).mockResolvedValue({
-      status: "ok",
-      message: "Local material package uploaded for review",
-      channel: "pending",
-      package_path: "pending/mat/rev.zip",
-      package_url: "/api/material-registry/v1/packages/pending/mat/rev.zip",
-      package_sha256: "abc",
-      package_bytes: 10,
-      materials: [],
-    });
-    vi.spyOn(window, "prompt").mockReturnValue("approve-secret");
 
     render(<MaterialLibraryPanel />);
 
@@ -623,59 +607,7 @@ describe("MaterialLibraryPanel", () => {
       expect(screen.getByText("PLA Basic")).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /上传到云端|upload to cloud/i }));
-
-    await waitFor(() => {
-      expect(uploadLocalMaterialRegistryPackage).toHaveBeenCalledWith(
-        "BrandA/pla-basic",
-        "approve-secret",
-      );
-    });
-    expect(screen.getByTestId("material-library-success")).toHaveTextContent(
-      /uploaded for review|已提交/i,
-    );
-  });
-
-  it("shows duplicate upload errors from the cloud registry", async () => {
-    vi.mocked(listGradientCardMaterials).mockResolvedValue({
-      status: "ok",
-      message: "Loaded 1 saved materials",
-      materials: [
-        {
-          material_name: "PLA Basic",
-          directory_name: "BrandA/pla-basic",
-          brand: "BrandA",
-          created_at: "2026-04-16T10:00:00Z",
-          updated_at: "2026-04-16T11:00:00Z",
-          archive_path: "materials/BrandA/pla-basic/material.json",
-          stage_a_params_path: "materials/BrandA/pla-basic/stage_A_parameters.json",
-          material_file_url: "/api/files/material-json",
-          stage_a_params_url: "/api/files/stage-a-json",
-          estimated_rgb: [100, 120, 140],
-          layer_height_mm: 0.04,
-          mean_delta_e: 1.23,
-          verification_count: 3,
-        },
-      ],
-    });
-    vi.mocked(uploadLocalMaterialRegistryPackage).mockRejectedValue(
-      new Error("Material registry package already exists"),
-    );
-    vi.spyOn(window, "prompt").mockReturnValue("approve-secret");
-
-    render(<MaterialLibraryPanel />);
-
-    await waitFor(() => {
-      expect(screen.getByText("PLA Basic")).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: /上传到云端|upload to cloud/i }));
-
-    await waitFor(() => {
-      expect(screen.getByTestId("material-library-error")).toHaveTextContent(
-        "already exists",
-      );
-    });
+    expect(screen.queryByRole("button", { name: /上传到云端|upload to cloud/i })).not.toBeInTheDocument();
   });
 
   it("imports multiple ZIP archives and selects newly imported materials", async () => {

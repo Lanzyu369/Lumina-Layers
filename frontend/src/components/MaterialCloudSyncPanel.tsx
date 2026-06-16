@@ -1,20 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ChangeEvent } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 
 import {
-  approveMaterialRegistryPackage,
   fetchMaterialRegistryCatalog,
   fetchMaterialSyncStatus,
   installMaterialRegistryCatalogEntry,
   rollbackMaterialSyncRevision,
-  uploadMaterialRegistryPackage,
 } from "../api/materialSync";
 import type { MaterialRegistryCatalogQuery } from "../api/materialSync";
 import type {
   MaterialRegistryCatalogEntry,
   MaterialRegistryCatalogResponse,
-  MaterialRegistryPackageMutationResponse,
   MaterialSyncInstalledEntry,
   MaterialSyncStatusResponse,
 } from "../api/types";
@@ -119,30 +115,6 @@ const shortContentFingerprint = (entry: MaterialRegistryCatalogEntry): string =>
   return normalized ? normalized.slice(0, 12) : "-";
 };
 
-const catalogPackageKey = (entry: MaterialRegistryCatalogEntry): string =>
-  `${entry.package_url}\n${entry.package_sha256}`;
-
-const resolvePackagePathFromUrl = (packageUrl: string): string | null => {
-  const rawUrl = packageUrl.trim();
-  const marker = "/packages/";
-  const markerIndex = rawUrl.indexOf(marker);
-  const rawPath = markerIndex >= 0 ? rawUrl.slice(markerIndex + marker.length) : rawUrl;
-  const normalized = rawPath.replace(/^\/+/, "").split(/[?#]/)[0] ?? "";
-  if (!normalized || !normalized.toLowerCase().endsWith(".zip")) {
-    return null;
-  }
-  return normalized
-    .split("/")
-    .map((segment) => {
-      try {
-        return decodeURIComponent(segment);
-      } catch {
-        return segment;
-      }
-    })
-    .join("/");
-};
-
 const materialLocalSignatureKey = (
   localDirectory: string | null | undefined,
   contentHash: string | null | undefined,
@@ -225,37 +197,22 @@ const mergeCatalogPage = (
 export default function MaterialCloudSyncPanel() {
   const { t, lang } = useI18n();
   const workspace = useWorkspaceMode();
-  const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const [status, setStatus] = useState<MaterialSyncStatusResponse | null>(null);
   const [catalog, setCatalog] = useState<MaterialRegistryCatalogResponse | null>(null);
-  const [lastUploaded, setLastUploaded] = useState<MaterialRegistryPackageMutationResponse | null>(null);
-  const [officialPassword, setOfficialPassword] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [activeFilter, setActiveFilter] = useState<CatalogFilter>("all");
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isLoadingAll, setIsLoadingAll] = useState(false);
-  const [isUploading, setIsUploading] = useState(false);
-  const [isApproving, setIsApproving] = useState(false);
   const [pendingInstall, setPendingInstall] = useState<string | null>(null);
   const [pendingRollback, setPendingRollback] = useState<string | null>(null);
-  const [selectedCatalogPackageKeys, setSelectedCatalogPackageKeys] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const catalogQuery = searchQuery.trim();
-  const officialPasswordRef = useRef("");
-
-  const updateOfficialPassword = useCallback((value: string) => {
-    officialPasswordRef.current = value;
-    setOfficialPassword(value);
-  }, []);
 
   const fetchCatalogPage = useCallback((query: MaterialRegistryCatalogQuery) => {
-    const password = officialPasswordRef.current.trim();
-    return password
-      ? fetchMaterialRegistryCatalog(query, password)
-      : fetchMaterialRegistryCatalog(query);
+    return fetchMaterialRegistryCatalog(query);
   }, []);
 
   const dateFormatter = useMemo(
@@ -367,7 +324,6 @@ export default function MaterialCloudSyncPanel() {
       const result = await loadCatalogAndStatus();
       if (!result.hasError) {
         setSuccess(t("mat_sync_catalog_refresh_success"));
-        setSelectedCatalogPackageKeys([]);
       }
     } finally {
       setIsRefreshing(false);
@@ -453,10 +409,6 @@ export default function MaterialCloudSyncPanel() {
   }, [loadCatalogAndStatus, t]);
 
   const handleRollback = useCallback(async (entry: MaterialSyncInstalledEntry, revisionId: string) => {
-    const password = officialPassword.trim();
-    if (!password) {
-      return;
-    }
     const rollbackKey = `${entry.material_id}:${revisionId}`;
     setPendingRollback(rollbackKey);
     setError(null);
@@ -465,7 +417,6 @@ export default function MaterialCloudSyncPanel() {
       const response = await rollbackMaterialSyncRevision(
         entry.material_id,
         revisionId,
-        password,
       );
       await loadCatalogAndStatus();
       setSuccess(response.message || t("mat_sync_rollback_success"));
@@ -474,63 +425,7 @@ export default function MaterialCloudSyncPanel() {
     } finally {
       setPendingRollback(null);
     }
-  }, [loadCatalogAndStatus, officialPassword, t]);
-
-  const handleUploadPackage = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0] ?? null;
-    event.target.value = "";
-    if (!file) {
-      return;
-    }
-    const password = officialPassword.trim();
-    if (!password) {
-      return;
-    }
-    setIsUploading(true);
-    setError(null);
-    setSuccess(null);
-    try {
-      const response = await uploadMaterialRegistryPackage(file, password);
-      setLastUploaded(response);
-      setSuccess(response.message || t("mat_sync_upload_success"));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t("mat_sync_upload_failed"));
-    } finally {
-      setIsUploading(false);
-    }
-  }, [officialPassword, t]);
-
-  const handleApproveOfficial = useCallback(async () => {
-    if (!lastUploaded || !officialPassword.trim()) {
-      return;
-    }
-    setIsApproving(true);
-    setError(null);
-    setSuccess(null);
-    try {
-      const response = await approveMaterialRegistryPackage(
-        lastUploaded.package_path,
-        officialPassword.trim(),
-      );
-      setLastUploaded(response);
-      await loadCatalogAndStatus();
-      updateOfficialPassword("");
-      setSuccess(response.message || t("mat_sync_approve_success"));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t("mat_sync_approve_failed"));
-    } finally {
-      setIsApproving(false);
-    }
-  }, [lastUploaded, officialPassword, loadCatalogAndStatus, t, updateOfficialPassword]);
-
-  const toggleCatalogPackageSelection = useCallback((entry: MaterialRegistryCatalogEntry) => {
-    const key = catalogPackageKey(entry);
-    setSelectedCatalogPackageKeys((current) => (
-      current.includes(key)
-        ? current.filter((selectedKey) => selectedKey !== key)
-        : [...current, key]
-    ));
-  }, []);
+  }, [loadCatalogAndStatus, t]);
 
   const syncIndexStateLabel = status
     ? t(`mat_sync_state_${status.index_state}`)
@@ -548,41 +443,6 @@ export default function MaterialCloudSyncPanel() {
   const catalogLoadedCount = catalog?.materials.length ?? 0;
   const catalogTotalCount = catalog?.total_count ?? catalog?.count ?? catalogLoadedCount;
   const hasMoreCatalogEntries = catalogLoadedCount < catalogTotalCount;
-
-  const selectedCatalogEntries = useMemo(() => {
-    const selectedKeys = new Set(selectedCatalogPackageKeys);
-    return (catalog?.materials ?? []).filter((entry) => (
-      selectedKeys.has(catalogPackageKey(entry)) && entry.channel !== "official"
-    ));
-  }, [catalog, selectedCatalogPackageKeys]);
-
-  const handleApproveSelectedCatalogEntries = useCallback(async () => {
-    const password = officialPassword.trim();
-    if (!password || selectedCatalogEntries.length <= 0) {
-      return;
-    }
-    setIsApproving(true);
-    setError(null);
-    setSuccess(null);
-    try {
-      for (const entry of selectedCatalogEntries) {
-        const packagePath = resolvePackagePathFromUrl(entry.package_url);
-        if (!packagePath) {
-          throw new Error(t("mat_sync_approve_package_path_invalid"));
-        }
-        await approveMaterialRegistryPackage(packagePath, password);
-      }
-      const approvedCount = selectedCatalogEntries.length;
-      setSelectedCatalogPackageKeys([]);
-      await loadCatalogAndStatus();
-      updateOfficialPassword("");
-      setSuccess(tRuntime("mat_sync_approve_selected_success", { count: approvedCount }));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t("mat_sync_approve_failed"));
-    } finally {
-      setIsApproving(false);
-    }
-  }, [loadCatalogAndStatus, officialPassword, selectedCatalogEntries, t, updateOfficialPassword]);
 
   const filteredCatalogEntries = useMemo(() => {
     const normalizedQuery = searchQuery.trim().toLowerCase();
@@ -663,15 +523,6 @@ export default function MaterialCloudSyncPanel() {
       data-testid="material-cloud-sync-panel"
       className={`${resolvePanelSurfaceClass(workspace.mode)} flex flex-col gap-5`}
     >
-      <input
-        ref={uploadInputRef}
-        type="file"
-        accept=".zip,application/zip"
-        className="hidden"
-        data-testid="material-cloud-upload-input"
-        onChange={(event) => void handleUploadPackage(event)}
-      />
-
       <section className={`${mutedSectionCardClass} grid gap-4 px-4 py-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center`}>
         <div className="min-w-0">
           <p className="text-sm font-semibold text-slate-900 dark:text-slate-50">
@@ -838,7 +689,7 @@ export default function MaterialCloudSyncPanel() {
                         label={tRuntime("mat_sync_rollback_btn", { revisionId })}
                         variant="secondary"
                         onClick={() => void handleRollback(installed, revisionId)}
-                        disabled={!officialPassword.trim() || pendingRollback !== null}
+                        disabled={pendingRollback !== null}
                         loading={pendingRollback === `${installed.material_id}:${revisionId}`}
                         className="w-full"
                       />
@@ -865,9 +716,6 @@ export default function MaterialCloudSyncPanel() {
             const installed = resolveCatalogInstalledEntry(entry);
             const installState = resolveInstallState(entry, installed);
             const display = resolveCatalogDisplay(entry);
-            const packageKey = catalogPackageKey(entry);
-            const isCatalogPackageSelected = selectedCatalogPackageKeys.includes(packageKey);
-            const canApproveAsOfficial = entry.channel !== "official";
             return (
               <section
                 key={`${entry.material_id}:${entry.revision_id}`}
@@ -883,15 +731,6 @@ export default function MaterialCloudSyncPanel() {
                   </span>
                 ) : null}
                 <div className="flex min-w-0 items-start gap-4">
-                  <input
-                    type="checkbox"
-                    data-testid="material-cloud-catalog-select"
-                    aria-label={tRuntime("mat_sync_select_catalog_item_label", { materialName: display.name })}
-                    checked={isCatalogPackageSelected}
-                    disabled={!canApproveAsOfficial || isApproving}
-                    onChange={() => toggleCatalogPackageSelection(entry)}
-                    className="mt-1 h-4 w-4 shrink-0 rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:opacity-40 dark:border-slate-600"
-                  />
                   <div
                     data-testid="material-cloud-catalog-swatch"
                     className={cx(
@@ -998,75 +837,6 @@ export default function MaterialCloudSyncPanel() {
         </section>
       )}
 
-      <details className={`${resolveSectionCardClass(workspace.mode)} group`}>
-        <summary className="cursor-pointer text-base font-semibold text-slate-900 dark:text-slate-50">
-          {t("mat_sync_admin_section_title")}
-        </summary>
-        <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
-          <div className="min-w-0">
-            {lastUploaded ? (
-              <dl className="grid gap-2 text-sm text-slate-600 dark:text-slate-300">
-                <div className="flex min-w-0 flex-wrap items-center gap-2">
-                  <dt className="font-semibold">{t("mat_sync_package_path_label")}</dt>
-                  <dd className="break-all font-mono text-xs">{lastUploaded.package_path}</dd>
-                </div>
-                <div className="flex min-w-0 flex-wrap items-center gap-2">
-                  <dt className="font-semibold">{t("mat_sync_package_size_label")}</dt>
-                  <dd>{formatBytes(lastUploaded.package_bytes)}</dd>
-                </div>
-              </dl>
-            ) : (
-              <p className="text-sm text-slate-500 dark:text-slate-400">
-                {t("mat_sync_upload_empty")}
-              </p>
-            )}
-          </div>
-          <div className="grid gap-3 sm:grid-cols-[minmax(0,14rem)_auto_auto]">
-            <input
-              data-testid="material-cloud-official-password-input"
-              type="password"
-              value={officialPassword}
-              onChange={(event) => updateOfficialPassword(event.target.value)}
-              placeholder={t("mat_sync_official_password_placeholder")}
-              className="min-h-10 rounded-2xl border border-slate-200/80 bg-[var(--surface-panel)] px-3 py-2 text-sm text-slate-800 outline-none shadow-[var(--shadow-control)] focus:border-blue-400 focus:ring-4 focus:ring-[var(--focus-ring)] dark:border-slate-700/80 dark:text-slate-100"
-            />
-            <Button
-              label={t("mat_sync_upload_btn")}
-              variant="secondary"
-              onClick={() => uploadInputRef.current?.click()}
-              disabled={!officialPassword.trim() || isUploading || isApproving}
-              loading={isUploading}
-              className="w-full"
-            />
-            <Button
-              label={t("mat_sync_approve_official_btn")}
-              onClick={() => void handleApproveOfficial()}
-              disabled={!lastUploaded || !officialPassword.trim() || isApproving || isUploading}
-              loading={isApproving}
-              className="w-full"
-            />
-          </div>
-        </div>
-        <div className="mt-4 grid gap-4 border-t border-slate-200/70 pt-4 dark:border-slate-700/70 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
-          <div className="min-w-0">
-            <p className="text-sm font-semibold text-slate-900 dark:text-slate-50">
-              {t("mat_sync_approve_existing_title")}
-            </p>
-            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              {selectedCatalogEntries.length > 0
-                ? tRuntime("mat_sync_approve_selected_summary", { count: selectedCatalogEntries.length })
-                : t("mat_sync_approve_existing_empty")}
-            </p>
-          </div>
-          <Button
-            label={t("mat_sync_approve_selected_btn")}
-            onClick={() => void handleApproveSelectedCatalogEntries()}
-            disabled={selectedCatalogEntries.length <= 0 || !officialPassword.trim() || isApproving || isUploading}
-            loading={isApproving && selectedCatalogEntries.length > 0}
-            className="w-full lg:w-auto"
-          />
-        </div>
-      </details>
     </motion.aside>
   );
 }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import zipfile
 from pathlib import Path
 
@@ -15,7 +16,15 @@ import core.single_stage.materials as single_stage_materials_module
 
 
 def _client() -> TestClient:
-    return TestClient(create_app())
+    previous = os.environ.get("LUMINA_ENABLE_MATERIAL_REGISTRY_SERVICE")
+    os.environ["LUMINA_ENABLE_MATERIAL_REGISTRY_SERVICE"] = "1"
+    try:
+        return TestClient(create_app())
+    finally:
+        if previous is None:
+            os.environ.pop("LUMINA_ENABLE_MATERIAL_REGISTRY_SERVICE", None)
+        else:
+            os.environ["LUMINA_ENABLE_MATERIAL_REGISTRY_SERVICE"] = previous
 
 
 def _write_v2_registry_package(

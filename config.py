@@ -35,7 +35,49 @@ COLORCHECKER_TEMP_TTL_SECONDS = 600
 MODELS_DIR = os.path.join(OUTPUT_DIR, "models")
 os.makedirs(MODELS_DIR, exist_ok=True)
 
-MATERIALS_DIR = os.path.join(_BASE_DIR, "materials")
+
+def _desktop_user_data_dir() -> str:
+    """Return a platform user-data directory for mutable desktop files.
+    返回桌面端可写用户数据目录。
+    """
+    if os.name == "nt":
+        root = os.environ.get("APPDATA") or os.path.join(
+            os.path.expanduser("~"),
+            "AppData",
+            "Roaming",
+        )
+        return os.path.join(root, "Lumina Studio")
+    if sys.platform == "darwin":
+        return os.path.join(
+            os.path.expanduser("~"),
+            "Library",
+            "Application Support",
+            "Lumina Studio",
+        )
+    xdg_data_home = os.environ.get("XDG_DATA_HOME")
+    root = xdg_data_home or os.path.join(os.path.expanduser("~"), ".local", "share")
+    return os.path.join(root, "lumina-studio")
+
+
+def _resolve_materials_dir() -> str:
+    """Resolve the writable material library root.
+    解析可写耗材库根目录。
+
+    Distribution builds can point this at a runtime data directory through
+    ``LUMINA_MATERIALS_DIR``. Frozen desktop builds default to the user's app
+    data directory so upgrades do not overwrite local materials.
+    分发版可通过 ``LUMINA_MATERIALS_DIR`` 指向运行时数据目录。桌面打包版默认
+    使用用户数据目录，避免应用升级覆盖本地耗材。
+    """
+    override = os.environ.get("LUMINA_MATERIALS_DIR", "").strip()
+    if override:
+        return os.path.abspath(os.path.expanduser(override))
+    if getattr(sys, "frozen", False):
+        return os.path.join(_desktop_user_data_dir(), "materials")
+    return os.path.join(_BASE_DIR, "materials")
+
+
+MATERIALS_DIR = _resolve_materials_dir()
 os.makedirs(MATERIALS_DIR, exist_ok=True)
 
 

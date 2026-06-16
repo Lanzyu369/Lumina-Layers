@@ -183,6 +183,8 @@ EXTRACTOR_STRUCTURED_EVENTS = {
     "material_solver_runtime_details_done",
 }
 MATERIAL_SYNC_STRUCTURED_EVENTS = {
+    "material_seed_install_done",
+    "material_seed_install_failed",
     "material_sync_status_done",
     "material_sync_catalog_done",
     "material_sync_install_done",

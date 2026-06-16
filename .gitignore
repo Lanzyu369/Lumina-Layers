@@ -50,9 +50,8 @@ test.png
 *.zip
 *.7z
 
-# Seed Material Registry packages are small reviewed test-library fixtures.
-!material-registry-packages/
-!material-registry-packages/**
+# Material Registry package collections live in the sibling Lumina-materials repo.
+material-registry-packages/
 
 # Old version folders
 Lumina-Layers-*/

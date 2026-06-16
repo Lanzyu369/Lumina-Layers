@@ -10,7 +10,6 @@ import {
   listGradientCardMaterials,
   updateGradientCardMaterial,
 } from "../api/extractor";
-import { uploadLocalMaterialRegistryPackage } from "../api/materialSync";
 import type { SavedMaterialLibraryItem } from "../api/types";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
 import { useI18n } from "../i18n/context";
@@ -119,7 +118,6 @@ export default function MaterialLibraryPanel() {
   const [success, setSuccess] = useState<string | null>(null);
   const [pendingDeleteDirectoryName, setPendingDeleteDirectoryName] = useState<string | null>(null);
   const [pendingUpdateDirectoryName, setPendingUpdateDirectoryName] = useState<string | null>(null);
-  const [pendingCloudUploadDirectoryName, setPendingCloudUploadDirectoryName] = useState<string | null>(null);
   const [historyMaterial, setHistoryMaterial] = useState<SavedMaterialLibraryItem | null>(null);
   const [selectedDirectoryNames, setSelectedDirectoryNames] = useState<string[]>([]);
   const [editingMaterial, setEditingMaterial] = useState<SavedMaterialLibraryItem | null>(null);
@@ -294,28 +292,6 @@ export default function MaterialLibraryPanel() {
       setError(err instanceof Error ? err.message : t("mat_gradient_library_load_failed"));
     } finally {
       setPendingDeleteDirectoryName(null);
-    }
-  }, [t]);
-
-  const handleUploadLocalMaterialToCloud = useCallback(async (item: SavedMaterialLibraryItem) => {
-    const password = window.prompt(t("mat_gradient_library_cloud_upload_password_prompt"));
-    const officialPassword = password?.trim();
-    if (!officialPassword) {
-      return;
-    }
-    setPendingCloudUploadDirectoryName(item.directory_name);
-    setError(null);
-    setSuccess(null);
-    try {
-      const response = await uploadLocalMaterialRegistryPackage(
-        item.directory_name,
-        officialPassword,
-      );
-      setSuccess(response.message || t("mat_gradient_library_cloud_upload_success"));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t("mat_gradient_library_cloud_upload_failed"));
-    } finally {
-      setPendingCloudUploadDirectoryName(null);
     }
   }, [t]);
 
@@ -892,18 +868,6 @@ export default function MaterialLibraryPanel() {
                     variant="secondary"
                     onClick={() => handleOpenHistoryDialog(item)}
                     disabled={pendingDeleteDirectoryName === item.directory_name || pendingUpdateDirectoryName === item.directory_name}
-                    className="w-full"
-                  />
-                  <Button
-                    label={t("mat_gradient_library_cloud_upload_btn")}
-                    variant="secondary"
-                    onClick={() => void handleUploadLocalMaterialToCloud(item)}
-                    disabled={
-                      pendingDeleteDirectoryName === item.directory_name ||
-                      pendingUpdateDirectoryName === item.directory_name ||
-                      pendingCloudUploadDirectoryName !== null
-                    }
-                    loading={pendingCloudUploadDirectoryName === item.directory_name}
                     className="w-full"
                   />
                   <Button

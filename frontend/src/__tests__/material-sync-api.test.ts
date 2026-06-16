@@ -2,14 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import apiClient from "../api/client";
 import {
-  approveMaterialRegistryPackage,
   fetchMaterialRegistryCatalog,
   fetchMaterialSyncStatus,
   installMaterialRegistryCatalogEntry,
   refreshMaterialSyncFromRegistry,
   rollbackMaterialSyncRevision,
-  uploadLocalMaterialRegistryPackage,
-  uploadMaterialRegistryPackage,
 } from "../api/materialSync";
 
 vi.mock("../api/client", () => ({
@@ -67,15 +64,12 @@ describe("material sync API client", () => {
       },
     });
 
-    const response = await refreshMaterialSyncFromRegistry("approve-secret");
+    const response = await refreshMaterialSyncFromRegistry();
 
     expect(mockPost).toHaveBeenCalledWith(
       "/material-sync/refresh",
       {},
       {
-        headers: {
-          "X-Lumina-Material-Registry-Official-Password": "approve-secret",
-        },
         timeout: 3_600_000,
       },
     );
@@ -140,30 +134,6 @@ describe("material sync API client", () => {
     expect(response.limit).toBe(1);
   });
 
-  it("sends the official password header when fetching a protected remote material catalog", async () => {
-    mockGet.mockResolvedValueOnce({
-      data: {
-        schema_version: "1.0",
-        channels: ["team"],
-        count: 0,
-        total_count: 0,
-        offset: 0,
-        limit: 50,
-        materials: [],
-      },
-    });
-
-    await fetchMaterialRegistryCatalog({ limit: 50, offset: 0 }, " approve-secret ");
-
-    expect(mockGet).toHaveBeenCalledWith("/material-sync/catalog", {
-      params: { limit: 50, offset: 0 },
-      headers: {
-        "X-Lumina-Material-Registry-Official-Password": "approve-secret",
-      },
-      timeout: 120_000,
-    });
-  });
-
   it("installs one selected remote material catalog entry without an official password", async () => {
     mockPost.mockResolvedValueOnce({
       data: {
@@ -213,109 +183,15 @@ describe("material sync API client", () => {
     const response = await rollbackMaterialSyncRevision(
       "mat_test",
       "rev_old",
-      "approve-secret",
     );
 
     expect(mockPost).toHaveBeenCalledWith(
       "/material-sync/rollback",
       { material_id: "mat_test", revision_id: "rev_old" },
       {
-        headers: {
-          "X-Lumina-Material-Registry-Official-Password": "approve-secret",
-        },
         timeout: 60_000,
       },
     );
     expect(response.revision_id).toBe("rev_old");
-  });
-
-  it("uploads a material registry package as multipart form data", async () => {
-    mockPost.mockResolvedValueOnce({
-      data: {
-        status: "ok",
-        message: "uploaded",
-        channel: "pending",
-        package_path: "pending/mat/rev.zip",
-        package_url: "/api/material-registry/v1/packages/pending/mat/rev.zip",
-        package_sha256: "abc",
-        package_bytes: 10,
-        materials: [],
-      },
-    });
-    const file = new File(["zip"], "material.zip", { type: "application/zip" });
-
-    const response = await uploadMaterialRegistryPackage(file, "approve-secret");
-
-    expect(mockPost).toHaveBeenCalledWith(
-      "/material-registry/v1/packages/upload",
-      expect.any(FormData),
-      {
-        headers: {
-          "Content-Type": "multipart/form-data",
-          "X-Lumina-Material-Registry-Official-Password": "approve-secret",
-        },
-        timeout: 3_600_000,
-      },
-    );
-    expect(response.channel).toBe("pending");
-  });
-
-  it("uploads one local material directory to the registry review queue", async () => {
-    mockPost.mockResolvedValueOnce({
-      data: {
-        status: "ok",
-        message: "uploaded",
-        channel: "pending",
-        package_path: "pending/mat/rev.zip",
-        package_url: "/api/material-registry/v1/packages/pending/mat/rev.zip",
-        package_sha256: "abc",
-        package_bytes: 10,
-        materials: [],
-      },
-    });
-
-    const response = await uploadLocalMaterialRegistryPackage(
-      "BrandA/pla-basic",
-      "approve-secret",
-    );
-
-    expect(mockPost).toHaveBeenCalledWith(
-      "/material-registry/v1/packages/upload-local",
-      { directory_name: "BrandA/pla-basic" },
-      {
-        headers: {
-          "X-Lumina-Material-Registry-Official-Password": "approve-secret",
-        },
-        timeout: 3_600_000,
-      },
-    );
-    expect(response.channel).toBe("pending");
-  });
-
-  it("approves a registry package with the official password", async () => {
-    mockPost.mockResolvedValueOnce({
-      data: {
-        status: "ok",
-        message: "approved",
-        channel: "official",
-        package_path: "official/mat/rev.zip",
-        package_url: "/api/material-registry/v1/packages/official/mat/rev.zip",
-        package_sha256: "abc",
-        package_bytes: 10,
-        materials: [],
-      },
-    });
-
-    const response = await approveMaterialRegistryPackage(
-      "pending/mat/rev.zip",
-      "approve-secret",
-    );
-
-    expect(mockPost).toHaveBeenCalledWith(
-      "/material-registry/v1/packages/pending/mat/rev.zip/approve",
-      { official_password: "approve-secret" },
-      { timeout: 60_000 },
-    );
-    expect(response.channel).toBe("official");
   });
 });

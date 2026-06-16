@@ -28,6 +28,11 @@ const isDev = !app.isPackaged;
 const ROOT_DIR = path.join(__dirname, "..");
 const IS_WIN = process.platform === "win32";
 const IS_MAC = process.platform === "darwin";
+const MATERIALS_SEED_RESOURCE = path.join(
+  process.resourcesPath || ROOT_DIR,
+  "materials",
+  "lumina-materials-seed.zip",
+);
 
 // Platform-aware icon paths.
 //   - Windows: 仍用仓库根目录的 icon.ico（任务栏 / 安装包用）
@@ -100,12 +105,13 @@ function logFe(m) { log("  F", m); }
 
 const children = [];
 
-function spawnChild(name, cmd, args, cwd) {
+function spawnChild(name, cmd, args, cwd, envExtra = {}) {
   return new Promise((resolve, reject) => {
     const logFn = name.includes("Backend") ? logBe : logFe;
     try {
       const proc = spawn(cmd, args, {
         cwd,
+        env: { ...process.env, ...envExtra },
         windowsHide: true,
         stdio: ["ignore", "pipe", "pipe"],
         // mac/linux: detach 让子进程拥有独立进程组，退出时一并 kill 整个组，
@@ -337,6 +343,16 @@ function findNode() {
     if (lines.length > 0 && lines[0].trim()) return lines[0].trim();
   } catch (_) {}
   return "node";
+}
+
+function backendRuntimeEnv() {
+  const env = {
+    LUMINA_MATERIALS_DIR: path.join(app.getPath("userData"), "materials"),
+  };
+  if (fs.existsSync(MATERIALS_SEED_RESOURCE)) {
+    env.LUMINA_MATERIALS_SEED_PATH = MATERIALS_SEED_RESOURCE;
+  }
+  return env;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -573,7 +589,7 @@ app.whenReady().then(async () => {
     );
     logSys(`Starting backend: ${backendExe}`);
     try {
-      backendProc = await spawnChild("Backend", backendExe, [], ROOT_DIR);
+      backendProc = await spawnChild("Backend", backendExe, [], ROOT_DIR, backendRuntimeEnv());
     } catch (err) {
       dialog.showErrorBox(
         "Backend Start Failed",

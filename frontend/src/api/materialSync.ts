@@ -2,7 +2,6 @@ import apiClient from "./client";
 import type {
   MaterialRegistryCatalogResponse,
   MaterialRegistryInstallRequest,
-  MaterialRegistryPackageMutationResponse,
   MaterialSyncInstallResponse,
   MaterialSyncRefreshResponse,
   MaterialSyncRollbackResponse,
@@ -10,16 +9,6 @@ import type {
 } from "./types";
 
 const MATERIAL_SYNC_READ_TIMEOUT_MS = 120_000;
-const OFFICIAL_PASSWORD_HEADER = "X-Lumina-Material-Registry-Official-Password";
-
-const officialPasswordHeaders = (officialPassword: string) => ({
-  [OFFICIAL_PASSWORD_HEADER]: officialPassword,
-});
-
-const optionalOfficialPasswordHeaders = (officialPassword = "") => {
-  const trimmedPassword = officialPassword.trim();
-  return trimmedPassword ? officialPasswordHeaders(trimmedPassword) : undefined;
-};
 
 export interface MaterialRegistryCatalogQuery {
   limit?: number;
@@ -43,14 +32,11 @@ export async function fetchMaterialSyncStatus(): Promise<MaterialSyncStatusRespo
  * Pull read-only material package updates from the configured Registry.
  * 从已配置的只读 Registry 拉取耗材包更新。
  */
-export async function refreshMaterialSyncFromRegistry(
-  officialPassword: string,
-): Promise<MaterialSyncRefreshResponse> {
+export async function refreshMaterialSyncFromRegistry(): Promise<MaterialSyncRefreshResponse> {
   const response = await apiClient.post<MaterialSyncRefreshResponse>(
     "/material-sync/refresh",
     {},
     {
-      headers: officialPasswordHeaders(officialPassword),
       timeout: 3_600_000,
     },
   );
@@ -63,14 +49,11 @@ export async function refreshMaterialSyncFromRegistry(
  */
 export async function fetchMaterialRegistryCatalog(
   query: MaterialRegistryCatalogQuery = {},
-  officialPassword = "",
 ): Promise<MaterialRegistryCatalogResponse> {
-  const headers = optionalOfficialPasswordHeaders(officialPassword);
   const response = await apiClient.get<MaterialRegistryCatalogResponse>(
     "/material-sync/catalog",
     {
       params: query,
-      ...(headers ? { headers } : {}),
       timeout: MATERIAL_SYNC_READ_TIMEOUT_MS,
     },
   );
@@ -106,80 +89,13 @@ export async function installMaterialRegistryCatalogEntry(
 export async function rollbackMaterialSyncRevision(
   materialId: string,
   revisionId: string,
-  officialPassword: string,
 ): Promise<MaterialSyncRollbackResponse> {
   const response = await apiClient.post<MaterialSyncRollbackResponse>(
     "/material-sync/rollback",
     { material_id: materialId, revision_id: revisionId },
     {
-      headers: officialPasswordHeaders(officialPassword),
       timeout: 60_000,
     },
-  );
-  return response.data;
-}
-
-/**
- * Upload one material package ZIP to the server-side Registry review queue.
- * 上传一个耗材包 ZIP 到服务器端 Registry 待审核队列。
- */
-export async function uploadMaterialRegistryPackage(
-  file: File,
-  officialPassword: string,
-): Promise<MaterialRegistryPackageMutationResponse> {
-  const formData = new FormData();
-  formData.append("archive", file);
-  const response = await apiClient.post<MaterialRegistryPackageMutationResponse>(
-    "/material-registry/v1/packages/upload",
-    formData,
-    {
-      headers: {
-        "Content-Type": "multipart/form-data",
-        ...officialPasswordHeaders(officialPassword),
-      },
-      timeout: 3_600_000,
-    },
-  );
-  return response.data;
-}
-
-/**
- * Export one saved local material and upload it to the Registry review queue.
- * 导出一个本地已保存耗材并上传到 Registry 待审核队列。
- */
-export async function uploadLocalMaterialRegistryPackage(
-  directoryName: string,
-  officialPassword: string,
-): Promise<MaterialRegistryPackageMutationResponse> {
-  const response = await apiClient.post<MaterialRegistryPackageMutationResponse>(
-    "/material-registry/v1/packages/upload-local",
-    { directory_name: directoryName.trim() },
-    {
-      headers: officialPasswordHeaders(officialPassword),
-      timeout: 3_600_000,
-    },
-  );
-  return response.data;
-}
-
-const encodePackagePathForRoute = (packagePath: string): string =>
-  packagePath
-    .split("/")
-    .map((segment) => encodeURIComponent(segment))
-    .join("/");
-
-/**
- * Approve a pending Registry package into the public official channel.
- * 将待审核 Registry 耗材包审批为公开 official 频道。
- */
-export async function approveMaterialRegistryPackage(
-  packagePath: string,
-  officialPassword: string,
-): Promise<MaterialRegistryPackageMutationResponse> {
-  const response = await apiClient.post<MaterialRegistryPackageMutationResponse>(
-    `/material-registry/v1/packages/${encodePackagePathForRoute(packagePath)}/approve`,
-    { official_password: officialPassword },
-    { timeout: 60_000 },
   );
   return response.data;
 }

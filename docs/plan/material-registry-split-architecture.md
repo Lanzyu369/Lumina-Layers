@@ -6,11 +6,11 @@
 
 ## 结论
 
-确认采用“分发版 Lumina 只读同步，独立耗材库服务负责上传、审批、发布与多地同步”的架构。
+确认采用“分发版 Lumina 只读同步，独立耗材库服务负责上传、审批、发布和单节点 catalog/package 分发”的架构。当前阶段不建设 replica 只读节点，也不要求 Lumina 客户端支持多个 Registry fallback URL。
 
 分发版 Lumina 可以完全离线运行。用户不连接官方耗材库时，仍可使用本地耗材库完成校准、保存、导入、导出和生成。远端耗材库只是一个可选的官方/团队耗材来源，用于下载已发布的耗材包并同步到本地。
 
-耗材库服务不随 Lumina 分发。它是独立部署的动态服务，负责账号、权限、上传、审批、发布、catalog 生成、package 分发和多地节点同步。
+耗材库服务不随 Lumina 分发。它是独立部署的动态服务，负责角色 token 鉴权、上传、审批、发布、catalog 生成、package 分发、下架和审计。
 
 ## 角色边界
 
@@ -62,7 +62,7 @@
 - 审批 pending revision 并发布到 official/team/community 等 channel。
 - 提供只读 catalog 和 package 下载。
 - 提供管理端 UI 或 API 给维护者执行上传、审批、回滚发布状态、下架和审计查看。
-- 多地部署时完成权限验证后的节点同步。
+- 可使用角色 token 作为第一阶段鉴权方式，但 token 原文不得写入日志、审计记录、catalog 或错误响应。
 
 ### 独立耗材内容仓库
 
@@ -71,7 +71,7 @@
 已确认拆成两个独立仓库：
 
 - `Lumina-materials`：耗材内容仓库，只存耗材源数据、package、seed、构建脚本和内容 CI。
-- `Lumina-material-registry`：动态服务仓库，只存上传/审批服务、管理端 UI、权限、数据库迁移、catalog/package 下载服务和多地同步逻辑。
+- `Lumina-material-registry`：动态服务仓库，只存上传/审批服务、管理端 UI 或管理 API、权限、持久化模型、catalog/package 下载服务和单节点发布可靠性逻辑。
 
 不要把服务代码、主应用代码和大规模内容数据长期混在一个仓库。
 
@@ -174,56 +174,51 @@ Lumina 主仓库构建时消费某个固定版本的耗材 release artifact。
 - Electron/PyInstaller 打包脚本需要引入 seed artifact，而不是直接依赖仓库内完整 `materials/`。
 - `.gitignore` 和 PR #242 当前把 `material-registry-packages/` 放进主仓库的策略需要调整：主仓库不应长期持有官方耗材包集合。
 
-## 多地部署与同步
+## 单 Registry 发布与读取
 
-第一阶段推荐“单主写入 + 多地只读/缓存节点”。
+第一阶段推荐“单独 Registry 服务 + 单读端点”。不建设多地只读/缓存节点。
 
 原因：
 
 - 上传、审批和发布需要强一致的写边界。
 - `material_id/revision_id` 和 channel 状态不能被多个节点并发改写。
-- package 是不可变内容，适合复制到多地节点。
-- 分发版 Lumina 只需要稳定下载，不需要知道写入节点在哪里。
+- package 是不可变内容；修正内容必须生成新 revision。
+- 分发版 Lumina 只需要稳定读取一个已配置 Registry，不需要知道写入实现细节。
 
-推荐拓扑：
+当前推荐拓扑：
 
 ```text
 maintainer/admin
-  -> primary registry service
-       -> object storage primary bucket
-       -> append-only event log
-       -> catalog snapshot
-       -> replica node A
-       -> replica node B
-       -> replica node C
+  -> registry service
+       -> package storage
+       -> registry persistence
+       -> audit log
+       -> active catalog snapshot
 
 Lumina clients
-  -> nearest read endpoint
-  -> fallback endpoint
+  -> configured registry read endpoint
   -> local materials/_sync/index.json
 ```
 
 写入规则：
 
-- 所有上传、审批、发布、下架默认只进入 primary。
-- 非 primary 节点如果暴露管理入口，也只做鉴权后转发到 primary，不直接提交本地写入。
+- 所有上传、审批、发布、下架只进入独立 Registry 服务。
 - package 发布后不可变；修正内容必须生成新 revision。
-- channel 状态变化通过事件同步，不直接覆盖远端磁盘目录。
+- 审批只能从 pending revision 转为已发布 revision；改 channel、下架、回滚发布状态必须走独立管理接口并写审计。
+- catalog 更新必须基于已校验、已发布状态生成，并以原子方式切换 active snapshot，避免客户端读到半成品。
 
 读取规则：
 
 - official/community approved 可以公开读取。
 - team/private/unlisted 需要 token 或登录态。
-- catalog 可以按 channel、权限、cursor 和分页返回。
+- catalog 可以按 channel、权限和分页返回。
 - package 下载 URL 必须和 catalog 受同一权限体系保护。
 
-同步规则：
+当前不做的事情：
 
-- primary 生成 append-only event log，例如 `revision_published`、`channel_changed`、`revision_deprecated`。
-- replica 按 cursor 拉事件和 package。
-- replica 校验 package hash 后再切换本地 catalog。
-- replica 未同步完成时继续提供上一版 catalog。
-- 权限配置必须随事件或配置快照同步，不能靠各节点手工改环境变量。
+- 不建设 replica 只读节点。
+- 不要求 event cursor、跨节点 package 同步或 replica catalog 原子切换。
+- 不要求 Lumina 客户端支持多个 Registry fallback URL。
 
 ## 边界条件
 
@@ -314,8 +309,12 @@ Lumina clients
 - 以 PR #242 的 `api/routers/material_registry.py` 和 `core/material_registry.py` 为服务端起点。
 - 独立服务保留 catalog、package download、upload、approve。
 - 补齐动态服务需要的持久化模型：materials、revisions、channels、audit_events。
-- 写入接口从简单 password 迁移到明确的账号/角色鉴权。
+- 写入接口从简单 password 迁移到明确的角色 token 鉴权；第一阶段不强制账号系统，但必须区分 maintainer、approver、team/private read token。
 - 管理 UI 从 Lumina 分发前端中移出。
+- 上传接口必须设置请求体大小、ZIP entry 数量、单文件大小、总解压大小和压缩比上限。
+- Registry 服务端必须重新计算并验证 `content_hash`，不能只信任 manifest 中声明的值。
+- 审计日志只能记录 actor id、角色、token id 或 token 摘要，不能记录原始 token、Authorization header 或其可复原前缀。
+- 审批只能作用于 pending revision；下架、改 channel、回滚发布状态必须使用独立接口和独立审计事件。
 
 服务端第一阶段可以仍用文件系统 package root，但必须把 package root、catalog cache、audit log 和权限配置从主应用运行目录中剥离。
 
@@ -325,6 +324,9 @@ Lumina clients
 - 管理员能审批为 official。
 - Lumina 分发版只通过 read endpoint 安装 package。
 - 审计日志能追踪上传和审批。
+- 上传大文件、ZIP bomb、路径逃逸、hash mismatch、`content_hash` mismatch、local-only 文件入包都会失败。
+- audit 记录不包含 token 原文或 Authorization header 前缀。
+- 重复 `material_id + revision_id` 不会留下可发布的孤儿 pending package。
 
 ### 阶段 3：建立独立耗材内容仓库
 
@@ -358,21 +360,22 @@ Lumina clients
 - 用户删除/修改本地耗材后，应用升级不会静默恢复覆盖。
 - 未配置远端 Registry 时，本地校准保存流程仍通过。
 
-### 阶段 5：多地只读节点与同步
+### 阶段 5：单 Registry 发布可靠性
 
 修改方向：
 
-- 独立 Registry primary 生成 event log 和 catalog snapshot。
-- replica 节点按 cursor 同步 event 和 package。
-- replica 校验完成后原子切换 catalog。
-- Lumina 客户端支持主 URL 和 fallback URL。
+- 独立 Registry 生成 active catalog snapshot。
+- catalog snapshot 只包含已发布、已校验通过且 package 文件存在的 revision。
+- 审批、下架、改 channel、回滚发布状态后，catalog 以原子方式切换。
+- Lumina 客户端继续使用单个 `LUMINA_MATERIAL_REGISTRY_URL`。
+- 远端 Registry 不可用、catalog 失败或 package 下载失败时，Lumina 本地耗材库继续可用，不删除已有 revision。
 
 验收：
 
-- primary 发布新 revision 后 replica 能同步到同一 `material_id/revision_id/content_hash`。
-- replica 同步中断时继续服务上一版 catalog。
-- package hash mismatch 时 replica 拒绝发布新 catalog。
-- Lumina 客户端在首选节点失败后可切换 fallback。
+- 发布新 revision 后，catalog 返回同一 `material_id/revision_id/content_hash/package_sha256`。
+- 下架或回滚发布状态后，catalog 不再返回对应 revision，但已发布 package 文件不可被静默改写。
+- catalog 生成中断或 package hash mismatch 时，服务继续返回上一版有效 catalog。
+- Lumina 客户端在单 Registry 不可用时返回确定错误，并继续保留本地已有耗材与 `_sync/index.json`。
 
 ## 验证步骤
 
@@ -381,7 +384,7 @@ Lumina clients
 ```powershell
 python -m pytest tests/test_material_sync_api_unit.py -v
 python -m pytest tests/test_material_sync_scheduler_unit.py -v
-python scripts/run_vitest.py run frontend/src/__tests__/material-cloud-sync-panel.test.tsx frontend/src/__tests__/material-sync-api.test.ts
+python scripts/run_vitest.py run src/__tests__/material-cloud-sync-panel.test.tsx src/__tests__/material-sync-api.test.ts
 ```
 
 需要新增或调整的断言：
@@ -404,7 +407,10 @@ python -m pytest tests/test_material_sync_api_unit.py::test_refresh_material_syn
 - approve 需要审批权限。
 - catalog read 按 channel 和 token 过滤。
 - package download 权限与 catalog 一致。
-- audit event 记录上传和审批。
+- audit event 记录上传和审批，但不泄露 token。
+- upload 对 ZIP bomb、超大文件、超多 entry、hash mismatch 和 content_hash mismatch 失败。
+- approve 只能审批 pending revision；重复审批、跨 channel 改写或直接审批已发布 package 失败。
+- catalog 生成只包含已发布且文件仍存在的 revision。
 
 ### 独立耗材内容仓库验证
 
@@ -447,7 +453,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\docker_local_deploy.
 状态：已确认，分开。
 
 - `Lumina-materials`：只存耗材源数据、package、seed、构建脚本和内容 CI。
-- `Lumina-material-registry`：存动态服务、管理端 UI、权限、数据库迁移和多地同步逻辑。
+- `Lumina-material-registry`：存动态服务、管理端 UI 或管理 API、权限、持久化模型和单节点发布可靠性逻辑。
 
 理由：内容仓库需要频繁 review 数据和 package；服务仓库需要部署、鉴权、数据库和运维。放在一起会让内容 PR、服务发布和安全边界互相干扰。
 
@@ -457,8 +463,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\docker_local_deploy.
 
 理由：分发版的离线默认耗材应稳定、可解释、体积可控。community 可通过远端下载。
 
-### 问题 3：多地部署是否接受单主写入？
+### 问题 3：是否需要多地只读节点？
 
-状态：已确认，第一阶段只做单主写入，多地只读/缓存。
+状态：已确认，当前阶段不需要 replica 只读节点，也不需要 Lumina 客户端 fallback URL。
 
-理由：这是避免审批冲突、revision 冲突和权限状态分裂的最低风险路径。
+理由：单 Registry 服务已经能满足当前耗材发布与读取需求；去掉 replica 后，工程重点收敛到上传/审批安全、catalog 原子更新、下架/回滚发布状态和客户端单 URL 失败降级。
