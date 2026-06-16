@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
+import api.file_bridge as file_bridge
 from api.app import create_app
 from api.dependencies import get_file_registry, get_session_store
 from api.file_registry import FileRegistry
@@ -711,6 +712,59 @@ def test_extract_single_stage_route_creates_session(monkeypatch, tmp_path: Path)
     session = store.get(body["session_id"])
     assert session is not None
     assert session["single_stage_stage_json_path"] == str(stage_json_path)
+
+
+def test_extract_single_stage_route_preserves_upload_after_short_write(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    client, store, _ = _client_with_state()
+    payload = b"single-stage zip bytes that require several writes"
+    stage_json_path = tmp_path / "1_single_stage.json"
+    extract_root = tmp_path / "dataset"
+    stage_json_path.write_text("{}", encoding="utf-8")
+    extract_root.mkdir()
+    original_write = file_bridge.os.write
+    written_lengths: list[int] = []
+
+    def short_write(fd: int, data) -> int:  # noqa: ANN001
+        chunk = bytes(data[:7])
+        written_lengths.append(len(chunk))
+        return original_write(fd, chunk)
+
+    def _fake_extract_single_stage_dataset(zip_path: str) -> SingleStageExtractResult:
+        assert Path(zip_path).read_bytes() == payload
+        return SingleStageExtractResult(
+            stage_json_path=str(stage_json_path),
+            dataset_summary={
+                "substrate_count": 1,
+                "color_count": 1,
+                "dataset_count": 1,
+                "image_count": 2,
+                "substrates": ["white"],
+                "coverage": [{"substrate_id": "white", "colors": ["White"]}],
+                "datasets": [],
+            },
+            warnings=[],
+            extracted_root=str(extract_root),
+        )
+
+    monkeypatch.setattr("config.TEMP_DIR", str(tmp_path))
+    monkeypatch.setattr(file_bridge.os, "write", short_write)
+    monkeypatch.setattr(
+        "api.routers.single_stage.extract_single_stage_dataset",
+        _fake_extract_single_stage_dataset,
+    )
+
+    response = client.post(
+        "/api/extractor/extract-single-stage",
+        files={"dataset_zip": ("dataset.zip", payload, "application/zip")},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["stage_json_url"].startswith("/api/files/")
+    assert len(written_lengths) > 1
+    assert store.get(response.json()["session_id"]) is not None
 
 
 def test_fit_stage_a_route_uses_session(monkeypatch, tmp_path: Path) -> None:

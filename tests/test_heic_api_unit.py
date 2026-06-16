@@ -14,10 +14,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
+import api.file_bridge as file_bridge
 from api.file_bridge import (
     HAS_HEIF,
     _guess_media_type,
     ensure_png_tempfile,
+    upload_to_tempfile,
 )
 
 
@@ -29,6 +31,68 @@ def _make_upload_file(filename: str, content: bytes = b"fake") -> MagicMock:
     mock.filename = filename
     mock.read = AsyncMock(return_value=content)
     return mock
+
+
+class TestUploadToTempfileWriteSafety:
+    """Shared upload persistence should write complete files or clean up."""
+
+    def test_short_os_write_is_retried_until_payload_is_complete(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
+    ) -> None:
+        payload = b"abcdefghijklmnopqrstuvwxyz"
+        original_write = file_bridge.os.write
+        written_lengths: list[int] = []
+
+        def short_write(fd: int, data) -> int:  # noqa: ANN001
+            chunk = bytes(data[:5])
+            written_lengths.append(len(chunk))
+            return original_write(fd, chunk)
+
+        monkeypatch.setattr("config.TEMP_DIR", str(tmp_path))
+        monkeypatch.setattr(file_bridge.os, "write", short_write)
+
+        path = asyncio.run(upload_to_tempfile(_make_upload_file("sample.bin", payload)))
+        try:
+            with open(path, "rb") as saved:
+                assert saved.read() == payload
+            assert len(written_lengths) > 1
+        finally:
+            if os.path.exists(path):
+                os.unlink(path)
+
+    def test_write_failure_removes_created_temp_file(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
+    ) -> None:
+        def raise_write_error(fd: int, data: bytes) -> int:
+            raise OSError("simulated short write failure")
+
+        monkeypatch.setattr("config.TEMP_DIR", str(tmp_path))
+        monkeypatch.setattr(file_bridge.os, "write", raise_write_error)
+
+        with pytest.raises(OSError, match="simulated short write failure"):
+            asyncio.run(upload_to_tempfile(_make_upload_file("sample.bin", b"payload")))
+
+        assert list(tmp_path.iterdir()) == []
+
+    def test_zero_byte_write_removes_created_temp_file(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
+    ) -> None:
+        def write_zero_bytes(fd: int, data: bytes) -> int:
+            return 0
+
+        monkeypatch.setattr("config.TEMP_DIR", str(tmp_path))
+        monkeypatch.setattr(file_bridge.os, "write", write_zero_bytes)
+
+        with pytest.raises(OSError, match="Failed to write uploaded file chunk"):
+            asyncio.run(upload_to_tempfile(_make_upload_file("sample.bin", b"payload")))
+
+        assert list(tmp_path.iterdir()) == []
 
 
 # ── Test 1: ensure_png_tempfile raises 422 when HAS_HEIF=False ────────
