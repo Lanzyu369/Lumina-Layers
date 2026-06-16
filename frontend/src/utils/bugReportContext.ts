@@ -21,7 +21,10 @@ declare const __LUMINA_VERSION__: string | undefined;
  * 最近一次生成的产物引用：converter store 在生成成功后写入 downloadUrl /
  * threemfDiskPath；任一存在即视为最近产物。
  */
-function deriveFinalArtifact(): FinalArtifactRef | null {
+function deriveFinalArtifact(isConverterActive: boolean): FinalArtifactRef | null {
+  if (!isConverterActive) {
+    return null;
+  }
   const converter = useConverterStore.getState();
   const downloadUrl = converter.downloadUrl ?? null;
   const diskPath = converter.threemfDiskPath ?? null;
@@ -138,7 +141,7 @@ export function collectBugReportContext(): BugReportContextPayload {
       isConverterActive,
       converter.sessionId ?? null,
     ),
-    active_final_artifact_ref: deriveFinalArtifact(),
+    active_final_artifact_ref: deriveFinalArtifact(isConverterActive),
     advanced_params: buildAdvancedParams(converter, widget.activeTab, {
       maxBytes: 8192,
       svgPixelsPerMm: settings.svgPixelsPerMm,
