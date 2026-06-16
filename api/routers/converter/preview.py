@@ -511,37 +511,48 @@ async def crop_image(
     Returns:
         CropResponse: 包含裁剪后图片 URL 和尺寸
     """
-    # 1. Save uploaded file to temp path
-    temp_path = await ensure_png_tempfile(image)
-
-    # 2. Validate that the file is a readable image
+    temp_path: str | None = None
+    cropped_path: str | None = None
+    registered_result = False
     try:
-        ImagePreprocessor.get_image_dimensions(temp_path)
-    except ValueError:
-        raise HTTPException(status_code=422, detail="Invalid image file")
+        # 1. Save uploaded file to temp path
+        temp_path = await ensure_png_tempfile(image)
 
-    # 3. Crop image (CropRegion.clamp is called internally)
-    try:
-        cropped_path = ImagePreprocessor.crop_image(temp_path, x, y, width, height)
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        # 2. Validate that the file is a readable image
+        try:
+            ImagePreprocessor.get_image_dimensions(temp_path)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="Invalid image file")
 
-    # 4. Get cropped image dimensions
-    w, h = ImagePreprocessor.get_image_dimensions(cropped_path)
+        # 3. Crop image (CropRegion.clamp is called internally)
+        try:
+            cropped_path = ImagePreprocessor.crop_image(temp_path, x, y, width, height)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
 
-    # 5. Register cropped file and return response
-    file_id = registry.register_path(
-        str(uuid.uuid4()),
-        cropped_path,
-        ttl_seconds=EPHEMERAL_PREVIEW_TTL_SECONDS,
-    )
-    return CropResponse(
-        status="ok",
-        message="Image cropped successfully",
-        cropped_url=f"/api/files/{file_id}",
-        width=w,
-        height=h,
-    )
+        # 4. Get cropped image dimensions
+        w, h = ImagePreprocessor.get_image_dimensions(cropped_path)
+
+        # 5. Register cropped file and return response
+        file_id = registry.register_path(
+            str(uuid.uuid4()),
+            cropped_path,
+            ttl_seconds=EPHEMERAL_PREVIEW_TTL_SECONDS,
+        )
+        registered_result = True
+        return CropResponse(
+            status="ok",
+            message="Image cropped successfully",
+            cropped_url=f"/api/files/{file_id}",
+            width=w,
+            height=h,
+        )
+    finally:
+        if registered_result:
+            if temp_path != cropped_path:
+                _cleanup_pre_session_temp_paths(temp_path)
+        else:
+            _cleanup_pre_session_temp_paths(temp_path, cropped_path)
 
 
 @router.post("/preview")
