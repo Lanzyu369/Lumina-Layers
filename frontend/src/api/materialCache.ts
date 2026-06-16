@@ -288,10 +288,9 @@ export interface MaterialColorSuggestOptions {
  * Suggest achievable colors close to ``targetHex`` for a given material palette.
  * 为指定目标颜色返回可达近似色建议。
  *
- * The backend prefers the persisted solver cache when available (microsecond
- * lookups) and transparently falls back to the MITM enumeration otherwise.
- * The ``source`` field on the response tells the UI which path ran so it can
- * nudge the user to build a cache for instant future queries.
+ * The backend prefers the exact solver cache, then the persisted hybrid
+ * runtime, and only falls back to live MITM enumeration when no reusable
+ * solver data exists. The ``source`` field tells the UI which path ran.
  */
 export async function fetchMaterialColorSuggestions(
   key: MaterialSolverCacheKey,

@@ -1083,8 +1083,11 @@ export interface MaterialColorSuggestionItem {
 export interface MaterialColorSuggestionsResponse {
   status: string;
   message: string;
-  /** ``"cache"`` when served from the persisted cache, ``"mitm"`` otherwise. */
-  source: "cache" | "mitm";
+  /**
+   * ``"cache"`` for exact cache, ``"runtime"`` for hybrid runtime,
+   * ``"mitm"`` otherwise.
+   */
+  source: "cache" | "runtime" | "mitm";
   palette_hash: string;
   layer_count: number;
   layer_height_mm: number;
