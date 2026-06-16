@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -63,6 +64,21 @@ class _RegisterPathFailingRegistry(FileRegistry):
             path = args[1]
         if path is not None:
             self.paths.append(str(path))
+        raise RuntimeError("registry backend unavailable")
+
+
+class _SwatchRegisterPathFailingRegistry(FileRegistry):
+    """Registry stub that records the swatch path before failing."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.generated_path: str | None = None
+
+    def register_path(self, *args: object, **kwargs: object) -> str:
+        path = kwargs.get("path")
+        if path is None and len(args) >= 2:
+            path = args[1]
+        self.generated_path = str(path) if path is not None else None
         raise RuntimeError("registry backend unavailable")
 
 
@@ -2248,6 +2264,55 @@ def test_gradient_card_material_export_route_returns_download_url(
     resolved = registry.resolve(body["download_url"].split("/")[-1])
     assert resolved is not None
     assert resolved[0] == str(exported_zip)
+
+
+def test_generate_material_swatch_cleans_output_when_registry_fails(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    app = create_app()
+    registry = _SwatchRegisterPathFailingRegistry()
+    app.dependency_overrides[get_file_registry] = lambda: registry
+    client = TestClient(app, raise_server_exceptions=False)
+    swatch_path = tmp_path / "material-swatch.3mf"
+    swatch_path.write_bytes(b"3mf")
+
+    monkeypatch.setattr(
+        "api.routers.single_stage._load_palette_or_raise",
+        lambda directory_names: [
+            SimpleNamespace(
+                directory_name="pla-basic",
+                name="PLA Basic",
+                estimated_rgb=np.array([255, 255, 255], dtype=np.uint8),
+            )
+        ],
+    )
+
+    def _fake_generate_material_recipe_swatch(*, recipes, **kwargs):
+        return str(swatch_path), None, "ok"
+
+    monkeypatch.setattr(
+        "core.material_recipe_swatch.generate_material_recipe_swatch",
+        _fake_generate_material_recipe_swatch,
+    )
+
+    response = client.post(
+        "/api/extractor/generate-material-swatch",
+        json={
+            "recipes": [
+                {
+                    "directory_names": ["pla-basic"],
+                    "result_hex": "#FFFFFF",
+                    "layer_height_mm": 0.08,
+                    "substrate": "white",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 500
+    assert registry.generated_path == str(swatch_path)
+    assert not swatch_path.exists()
 
 
 def test_gradient_card_material_import_route_imports_multiple_archives(
