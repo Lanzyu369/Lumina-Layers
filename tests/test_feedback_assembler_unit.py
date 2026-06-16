@@ -441,13 +441,13 @@ def test_run_startup_cleanup_missing_root_returns_zero(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_collect_final_artifact_falls_back_to_disk_path_when_registry_empty(
+def test_collect_final_artifact_rejects_unregistered_disk_path_when_registry_empty(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """FileRegistry has no matching entry, but disk_path points to a real .3mf.
+    """Client-provided disk_path must not authorize final-artifact attachment.
 
-    FileRegistry 找不到产物，但 disk_path 指向存在的 .3mf 时，应成功复制。
+    客户端传来的 disk_path 不能作为最终产物附件的授权来源。
     """
     from api.feedback_assembler import REPO_ROOT
 
@@ -478,11 +478,10 @@ def test_collect_final_artifact_falls_back_to_disk_path_when_registry_empty(
 
         result = collect_sync_attachments(ticket_dir, payload, registry, now_beijing())
 
-        assert result.final_artifact["status"] == "attached"
-        assert result.final_artifact["filename"] == "final.3mf"
+        assert result.final_artifact["status"] == "expired_ttl"
+        assert result.final_artifact["filename"] is None
         assert result.final_artifact["artifact_type"] == "3mf"
-        assert (ticket_dir / "final.3mf").exists()
-        assert (ticket_dir / "final.3mf").stat().st_size == fake_3mf.stat().st_size
+        assert not (ticket_dir / "final.3mf").exists()
     finally:
         fake_3mf.unlink(missing_ok=True)
         # Clean up the test file but leave the directory structure.
