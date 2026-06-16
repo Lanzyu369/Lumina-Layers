@@ -592,21 +592,29 @@ def _collect_final_artifact(
             fid, entry, history_count = _pick_final_artifact_entry(entries)
             if fid:
                 src_path = Path(entry["path"])
-                suffix = src_path.suffix.lower() or ".3mf"
-                dst = ticket_dir / f"final{suffix}"
-                shutil.copy2(src_path, dst)
-                size = dst.stat().st_size
-                sha = file_sha256(dst)
-                return {
-                    "status": "attached",
-                    "filename": dst.name,
-                    "sha256": sha,
-                    "size_bytes": size,
-                    "artifact_type": suffix.lstrip(".") or artifact_type,
-                    "source_session_id": session_id,
-                    "generated_at": _format_created_at(entry.get("created_at")),
-                    "history_count": history_count,
-                }
+                if src_path.is_file():
+                    suffix = src_path.suffix.lower() or ".3mf"
+                    dst = ticket_dir / f"final{suffix}"
+                    try:
+                        shutil.copy2(src_path, dst)
+                        size = dst.stat().st_size
+                        sha = file_sha256(dst)
+                    except OSError:
+                        try:
+                            dst.unlink()
+                        except OSError:
+                            pass
+                    else:
+                        return {
+                            "status": "attached",
+                            "filename": dst.name,
+                            "sha256": sha,
+                            "size_bytes": size,
+                            "artifact_type": suffix.lstrip(".") or artifact_type,
+                            "source_session_id": session_id,
+                            "generated_at": _format_created_at(entry.get("created_at")),
+                            "history_count": history_count,
+                        }
 
     # --- Fallback: exact /api/files/<id> from frontend ref ---
     if download_url:
