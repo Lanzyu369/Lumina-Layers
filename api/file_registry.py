@@ -58,23 +58,50 @@ class FileRegistry:
         is_public: bool = True,
         purpose: Optional[str] = None,
     ) -> str:
-        """注册字节流（写入临时文件），返回 file_id。"""
+        """Register bytes as a temporary file and return its file id.
+
+        将字节流写入临时文件并注册，返回对应的 file_id。
+
+        Args:
+            session_id: Owner session or stateless export id.
+                所属 session 或无状态导出的归属 id。
+            data: File bytes to persist temporarily.
+                需要临时保存的文件字节。
+            filename: Download filename exposed through ``/api/files``.
+                通过 ``/api/files`` 暴露的下载文件名。
+            ttl_seconds: Optional TTL for ephemeral files.
+                可选的临时文件存活时间。
+            is_public: Whether the registered file is publicly downloadable.
+                注册文件是否可公开下载。
+            purpose: Optional semantic purpose label for the file.
+                可选的文件用途标签。
+
+        Returns:
+            str: Registered file id. (注册后的 file_id。)
+        """
         import tempfile
 
         suffix = os.path.splitext(filename)[1] or ".bin"
         fd, path = tempfile.mkstemp(suffix=suffix, dir=TEMP_DIR)
         try:
-            os.write(fd, data)
-        finally:
-            os.close(fd)
-        return self.register_path(
-            session_id=session_id,
-            path=path,
-            filename=filename,
-            ttl_seconds=ttl_seconds,
-            is_public=is_public,
-            purpose=purpose,
-        )
+            try:
+                os.write(fd, data)
+            finally:
+                os.close(fd)
+            return self.register_path(
+                session_id=session_id,
+                path=path,
+                filename=filename,
+                ttl_seconds=ttl_seconds,
+                is_public=is_public,
+                purpose=purpose,
+            )
+        except Exception:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+            raise
 
     def resolve(self, file_id: str) -> Optional[Tuple[str, str]]:
         """解析 file_id，返回 (path, filename) 或 None。"""
