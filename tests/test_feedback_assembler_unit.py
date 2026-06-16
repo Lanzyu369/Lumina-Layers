@@ -564,6 +564,63 @@ def test_collect_final_artifact_uses_download_url_for_ttl_zip(
     assert (ticket_dir / "final.zip").read_bytes() == b"PK\x03\x04LARGE_FORMAT"
 
 
+def test_collect_final_artifact_prefers_download_url_over_stale_session_entry(
+    tmp_path: Path,
+) -> None:
+    """The exact download URL represents the user's current final artifact.
+
+    精确下载链接代表用户当前看到的最终产物，不能被同 session 下的旧产物覆盖。
+    """
+    stale_path = tmp_path / "stale_model.3mf"
+    stale_path.write_bytes(b"OLD_3MF")
+    current_path = tmp_path / "current_tiles.zip"
+    current_path.write_bytes(b"CURRENT_ZIP")
+    registry = _MockFileRegistry(
+        {
+            "sess-current": {
+                "old-3mf-id": _make_entry(
+                    str(stale_path),
+                    "stale_model.3mf",
+                    created_at=8.0,
+                ),
+            },
+            "ttl-owner": {
+                "current-zip-id": _make_entry(
+                    str(current_path),
+                    "current_tiles.zip",
+                    created_at=9.0,
+                ),
+            },
+        }
+    )
+    ticket_dir = tmp_path / "LUM-20260524-009"
+    ticket_dir.mkdir()
+    payload = {
+        "ticket_id": "LUM-20260524-009",
+        "context": {
+            "active_original_image_ref": None,
+            "active_final_artifact_ref": {
+                "session_id": "sess-current",
+                "download_url": "/api/files/current-zip-id",
+                "artifact_type": "zip",
+                "disk_path": None,
+            },
+            "source_version": "legacy",
+            "lut_name": None,
+        },
+    }
+
+    result = collect_sync_attachments(ticket_dir, payload, registry, now_beijing())
+
+    assert result.final_artifact["status"] == "attached"
+    assert result.final_artifact["filename"] == "final.zip"
+    assert result.final_artifact["artifact_type"] == "zip"
+    assert result.final_artifact["source_session_id"] == "sess-current"
+    assert result.final_artifact["history_count"] == 1
+    assert (ticket_dir / "final.zip").read_bytes() == b"CURRENT_ZIP"
+    assert not (ticket_dir / "final.3mf").exists()
+
+
 def test_collect_final_artifact_download_url_must_be_api_files_path(
     tmp_path: Path,
 ) -> None:

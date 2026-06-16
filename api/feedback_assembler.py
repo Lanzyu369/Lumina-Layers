@@ -560,17 +560,17 @@ def _collect_final_artifact(
 ) -> dict[str, Any]:
     """Build the ``final_artifact`` attachment dict.
 
-    First attempts to locate the artifact via FileRegistry (by session_id).
-    If that fails (e.g. a TTL artifact is registered outside the live
-    session), falls back to the exact ``download_url`` file id and then to
-    ``disk_path`` from the frontend ref — but only if the disk path is a
-    regular file with an allowed extension (.3mf / .zip) and resolves inside
-    ``REPO_ROOT/output``.
+    First attempts the exact ``download_url`` file id because it represents
+    the artifact the user is currently offered for download. If that fails
+    (e.g. the URL is invalid, expired, private, or not a final artifact), it
+    falls back to FileRegistry by ``session_id`` and then to ``disk_path`` from
+    the frontend ref — but only if the disk path is a regular file with an
+    allowed extension (.3mf / .zip) and resolves inside ``REPO_ROOT/output``.
 
-    先通过 FileRegistry（按 session_id）查找产物。如果找不到（例如 TTL
-    产物没有挂在当前业务 session 下），再按 ``download_url`` 精确解析文件
-    id，最后回退到前端 ref 中的 ``disk_path``。磁盘路径回退仍要求扩展名
-    允许且 resolve 后位于 ``REPO_ROOT/output`` 内。
+    优先按 ``download_url`` 精确解析文件 id，因为它代表用户当前看到的下载产物。
+    如果失败（例如 URL 无效、已过期、私有或不是最终产物），再通过
+    FileRegistry（按 session_id）查找，最后回退到前端 ref 中的 ``disk_path``。
+    磁盘路径回退仍要求扩展名允许且 resolve 后位于 ``REPO_ROOT/output`` 内。
     """
     base = {
         "status": "not_applicable",
@@ -585,7 +585,15 @@ def _collect_final_artifact(
     if not session_id and not disk_path and not download_url:
         return base
 
-    # --- Primary path: FileRegistry lookup by session_id ---
+    # --- Primary path: exact /api/files/<id> from frontend ref ---
+    if download_url:
+        attached = _collect_final_artifact_from_download_url(
+            ticket_dir, file_registry, download_url, artifact_type, session_id,
+        )
+        if attached is not None:
+            return attached
+
+    # --- Fallback: FileRegistry lookup by session_id ---
     if session_id:
         entries = _file_registry_entries_for(file_registry, session_id)
         if entries:
@@ -607,14 +615,6 @@ def _collect_final_artifact(
                     "generated_at": _format_created_at(entry.get("created_at")),
                     "history_count": history_count,
                 }
-
-    # --- Fallback: exact /api/files/<id> from frontend ref ---
-    if download_url:
-        attached = _collect_final_artifact_from_download_url(
-            ticket_dir, file_registry, download_url, artifact_type, session_id,
-        )
-        if attached is not None:
-            return attached
 
     # --- Fallback: disk_path from frontend ref ---
     if disk_path:
