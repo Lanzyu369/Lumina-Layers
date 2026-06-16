@@ -3,7 +3,7 @@
  * 配方导入适配器：解析配方文件并映射回 converter store 状态。
  */
 
-import type { LuminaRecipe } from "./types";
+import type { AssetEntry, LuminaRecipe } from "./types";
 import type { ConverterState } from "../stores/converter/store";
 import type {
   ColorReplacementItem,
@@ -13,7 +13,7 @@ import type {
 } from "../api/types";
 import { extractRecipeFromPng } from "./pngMetadata";
 import { migrateRecipe } from "./migration";
-import { base64ToFile } from "./utils";
+import { base64ToFile, sha256Hex, sha256String } from "./utils";
 import {
   normalizeFridgeMagnetItems,
   resolveFridgeMagnetSpacerThick,
@@ -46,6 +46,11 @@ export const RECIPE_IMPORT_WARNING_PUZZLE_CONFLICT_LOOP =
   "recipe_import_warning_puzzle_conflict_loop";
 export const RECIPE_IMPORT_WARNING_BACK_LABELS_UNAVAILABLE =
   "recipe_import_warning_back_labels_unavailable";
+
+const RECIPE_INTEGRITY_ERROR =
+  "Integrity check failed — recipe data may be corrupted";
+const RECIPE_ASSET_CORRUPT_ERROR =
+  "Asset data is corrupted — unable to restore original file";
 
 /**
  * Detect whether a file is a Lumina share card PNG or a .lumina.json sidecar.
@@ -85,6 +90,7 @@ export async function parseRecipeFile(file: File): Promise<ParsedRecipe> {
       throw new Error("Invalid .lumina.json: failed to parse JSON");
     }
     const recipe = migrateRecipe(raw);
+    await validateRecipeIntegrity(recipe);
     return { recipe, source: "json" };
   }
 
@@ -94,10 +100,71 @@ export async function parseRecipeFile(file: File): Promise<ParsedRecipe> {
       throw new Error("PNG file does not contain Lumina recipe metadata");
     }
     const migrated = migrateRecipe(recipe);
+    await validateRecipeIntegrity(migrated);
     return { recipe: migrated, source: "png" };
   }
 
   throw new Error(`Unsupported file type: ${file.name}`);
+}
+
+async function validateRecipeIntegrity(recipe: LuminaRecipe): Promise<void> {
+  const integrity = recipe.integrity;
+  if (
+    !integrity ||
+    typeof integrity.recipe_sha256 !== "string" ||
+    !integrity.asset_checksums ||
+    typeof integrity.asset_checksums !== "object"
+  ) {
+    throw new Error(RECIPE_INTEGRITY_ERROR);
+  }
+
+  const expectedRecipeHash = await sha256String(JSON.stringify(recipe.recipe));
+  if (expectedRecipeHash !== integrity.recipe_sha256) {
+    throw new Error(RECIPE_INTEGRITY_ERROR);
+  }
+
+  const assetEntries = recipe.asset;
+  await validateAssetIntegrity("primary", assetEntries?.primary, integrity.asset_checksums);
+  if (assetEntries?.heightmap) {
+    await validateAssetIntegrity("heightmap", assetEntries.heightmap, integrity.asset_checksums);
+  }
+}
+
+async function validateAssetIntegrity(
+  key: "primary" | "heightmap",
+  asset: AssetEntry | undefined,
+  checksums: Record<string, string>,
+): Promise<void> {
+  if (
+    !asset ||
+    asset.encoding !== "base64" ||
+    typeof asset.payload_b64 !== "string" ||
+    typeof asset.sha256 !== "string" ||
+    typeof asset.byte_size !== "number" ||
+    typeof checksums[key] !== "string"
+  ) {
+    throw new Error(RECIPE_ASSET_CORRUPT_ERROR);
+  }
+
+  let bytes: ArrayBuffer;
+  try {
+    bytes = await base64ToFile(
+      asset.payload_b64,
+      asset.filename,
+      asset.mime_type,
+    ).arrayBuffer();
+  } catch {
+    throw new Error(RECIPE_ASSET_CORRUPT_ERROR);
+  }
+
+  if (bytes.byteLength !== asset.byte_size) {
+    throw new Error(RECIPE_ASSET_CORRUPT_ERROR);
+  }
+
+  const actualHash = await sha256Hex(bytes);
+  if (actualHash !== asset.sha256 || actualHash !== checksums[key]) {
+    throw new Error(RECIPE_ASSET_CORRUPT_ERROR);
+  }
 }
 
 // ========== LUT matching ==========
