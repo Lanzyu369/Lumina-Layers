@@ -27,6 +27,9 @@ describe("collectBugReportContext", () => {
       selectedMaterialDirNames: [],
       materialLayerCount: 5,
       materialLayerHeightMm: 0.08,
+      downloadUrl: null,
+      threemfDiskPath: null,
+      largeFormatEnabled: false,
     });
     useSettingsStore.setState({
       language: "en",
@@ -327,6 +330,22 @@ describe("collectBugReportContext", () => {
     expect(context.advanced_params).toBeNull();
   });
 
+  it("does not attach stale converter final artifacts when activeTab is not converter", () => {
+    useWidgetStore.setState({ activeTab: "settings" });
+    useConverterStore.setState({
+      sessionId: "old-converter-session",
+      downloadUrl: "/api/files/old-3mf",
+      threemfDiskPath: "/tmp/old-model.3mf",
+      largeFormatEnabled: false,
+    });
+
+    const context = collectBugReportContext();
+
+    expect(context.active_original_image_ref).toBeNull();
+    expect(context.advanced_params).toBeNull();
+    expect(context.active_final_artifact_ref).toBeNull();
+  });
+
   it("preserves every other payload field when advanced_params is added (non-regression)", () => {
     // Adding advanced_params must not drop, rename, or reorder any
     // existing bug-report context field. Guard the representative fields
@@ -400,6 +419,26 @@ describe("collectBugReportContext", () => {
       download_url: "/api/files/large-format-download-id",
       artifact_type: "zip",
       disk_path: null,
+      source: "converter",
+    });
+  });
+
+  it("captures converter 3mf final artifacts on the converter tab", () => {
+    useWidgetStore.setState({ activeTab: "converter" });
+    useConverterStore.setState({
+      sessionId: "converter-3mf",
+      downloadUrl: "/api/files/model-3mf-download-id",
+      threemfDiskPath: "/tmp/model.3mf",
+      largeFormatEnabled: false,
+    });
+
+    const context = collectBugReportContext();
+
+    expect(context.active_final_artifact_ref).toEqual({
+      session_id: "converter-3mf",
+      download_url: "/api/files/model-3mf-download-id",
+      artifact_type: "3mf",
+      disk_path: "/tmp/model.3mf",
       source: "converter",
     });
   });
