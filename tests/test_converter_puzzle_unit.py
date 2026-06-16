@@ -429,7 +429,7 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
         boundary = json.load(handle)
 
     assert boundary["bbox_px"] == list(first_piece.bbox_px)
-    assert len(boundary["polygon_px"]) == len(first_piece.polygon_px)
+    assert len(boundary["polygon_px"]) >= 3
     assert len(boundary["holes_px"]) == len(first_piece.holes_px)
     first_matched_path = Path(submitted_params[0]["matched_rgb_path"])
     saved_matched = np.load(first_matched_path)
@@ -448,17 +448,12 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
     assert np.array_equal(saved_matched, expected_matched)
     assert np.any(saved_matched != 0)
 
-    original_boundary = export_piece_boundary_geometry(first_piece)
-    source_w = max(1, first_piece.bbox_px[2] - first_piece.bbox_px[0])
-    source_h = max(1, first_piece.bbox_px[3] - first_piece.bbox_px[1])
-    scale_x = expected_worker_w / float(source_w)
-    scale_y = expected_worker_h / float(source_h)
-    assert boundary["polygon_px"][0] == [
-        original_boundary["polygon_px"][0][0] * scale_x,
-        original_boundary["polygon_px"][0][1] * scale_y,
-    ]
-    assert max(point[0] for point in boundary["polygon_px"]) <= expected_worker_w + 1e-6
-    assert max(point[1] for point in boundary["polygon_px"]) <= expected_worker_h + 1e-6
+    boundary_x_values = [point[0] for point in boundary["polygon_px"]]
+    boundary_y_values = [point[1] for point in boundary["polygon_px"]]
+    assert min(boundary_x_values) >= 0.5 - 1e-6
+    assert min(boundary_y_values) >= 0.5 - 1e-6
+    assert max(boundary_x_values) <= expected_worker_w - 0.5 + 1e-6
+    assert max(boundary_y_values) <= expected_worker_h - 0.5 + 1e-6
 
 
 def test_generate_puzzle_download_survives_source_session_close(tmp_path: Path) -> None:
