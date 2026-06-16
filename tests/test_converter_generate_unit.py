@@ -33,6 +33,7 @@ from api.dependencies import get_file_registry, get_session_store, get_worker_po
 from api.file_registry import FileRegistry
 from api.preview_cache_artifacts import externalize_preview_cache
 from api.routers.converter.generate import _generate_large_format_raster
+from api.routers.converter.generate import _generate_large_format_svg_native
 from api.routers.converter.generate import _recover_virtual_materials_from_preview_cache
 from api.routers.converter.generate import _resolve_recipe_overrides
 from api.routers.converter.generate import _resolve_large_format_source_basename
@@ -70,6 +71,29 @@ setup_module(None)
 
 
 client: TestClient = TestClient(app)
+
+
+class _FailingRegistry(FileRegistry):
+    """Registry stub that simulates registration backend failure."""
+
+    def register_path(self, *args: object, **kwargs: object) -> str:
+        raise RuntimeError("registry unavailable")
+
+
+class _SecondRegistrationFailingRegistry(FileRegistry):
+    """Registry stub that fails after the first path is owned."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.register_calls = 0
+        self.first_file_id: str | None = None
+
+    def register_path(self, *args: object, **kwargs: object) -> str:
+        self.register_calls += 1
+        if self.register_calls > 1:
+            raise RuntimeError("registry unavailable after first file")
+        self.first_file_id = super().register_path(*args, **kwargs)
+        return self.first_file_id
 
 
 def _create_session_with_preview_and_files(store: SessionStore) -> str:
@@ -854,6 +878,237 @@ class TestGenerateWorkerException:
 
         assert response.status_code == 500
         assert "Worker crashed" in response.json()["detail"]
+
+
+class TestGenerateRegistryFailureCleanup:
+    """Final worker outputs should not leak when registry ownership fails."""
+
+    def test_generate_registry_failure_cleans_unregistered_worker_outputs(self) -> None:
+        paths: list[str] = []
+
+        def _make_file(suffix: str, payload: bytes) -> str:
+            fd, path = tempfile.mkstemp(suffix=suffix)
+            paths.append(path)
+            os.write(fd, payload)
+            os.close(fd)
+            return path
+
+        image_path = _make_file(".png", b"img")
+        lut_path = _make_file(".npy", b"lut")
+        threemf_path = _make_file(".3mf", b"3mf")
+        glb_path = _make_file(".glb", b"glb")
+
+        sid = _test_store.create()
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {"target_w": 10, "target_h": 10, "target_width_mm": 10.0},
+        )
+        _test_store.put(sid, "image_path", image_path)
+        _test_store.put(sid, "lut_path", lut_path)
+        _test_store.put(sid, "replacement_regions", [])
+        _test_store.put(sid, "free_color_set", set())
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": threemf_path,
+                "glb_path": glb_path,
+                "status_msg": "OK",
+            }
+        )
+
+        original_registry_override = app.dependency_overrides[get_file_registry]
+        app.dependency_overrides[get_file_registry] = lambda: _FailingRegistry()
+        failing_client = TestClient(app, raise_server_exceptions=False)
+        try:
+            response = failing_client.post(
+                "/api/convert/generate",
+                json={"session_id": sid, "params": {"lut_name": "test_lut"}},
+            )
+
+            assert response.status_code == 500
+            assert not os.path.exists(threemf_path)
+            assert not os.path.exists(glb_path)
+            assert os.path.exists(image_path)
+            assert os.path.exists(lut_path)
+        finally:
+            app.dependency_overrides[get_file_registry] = original_registry_override
+            for path in paths:
+                if os.path.exists(path):
+                    os.unlink(path)
+            _test_store.close(sid)
+
+    def test_color_card_registry_failure_cleans_unregistered_worker_outputs(
+        self,
+        tmp_path,
+    ) -> None:
+        lut_path = tmp_path / "source.npy"
+        threemf_path = tmp_path / "card.3mf"
+        glb_path = tmp_path / "card.glb"
+        lut_path.write_bytes(b"lut")
+        threemf_path.write_bytes(b"3mf")
+        glb_path.write_bytes(b"glb")
+
+        sid = _test_store.create()
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {
+                "target_w": 4,
+                "target_h": 4,
+                "target_width_mm": 40.0,
+                "color_palette": [{"hex": "#ff0000"}, {"hex": "#00ff00"}],
+            },
+        )
+        _test_store.put(sid, "lut_path", str(lut_path))
+        _test_store.put(sid, "material_source", "lut")
+
+        def _fake_generate_color_card_svg(hex_colors, **_kwargs):
+            svg_path = tmp_path / "card.svg"
+            svg_path.write_text("<svg></svg>", encoding="utf-8")
+            return str(svg_path)
+
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": str(threemf_path),
+                "glb_path": str(glb_path),
+                "status_msg": "OK",
+            }
+        )
+        original_registry_override = app.dependency_overrides[get_file_registry]
+        app.dependency_overrides[get_file_registry] = lambda: _FailingRegistry()
+        failing_client = TestClient(app, raise_server_exceptions=False)
+        try:
+            with patch(
+                "core.color_card.generate_color_card_svg",
+                _fake_generate_color_card_svg,
+            ):
+                response = failing_client.post(
+                    "/api/convert/color-card",
+                    json={"session_id": sid},
+                )
+
+            assert response.status_code == 500
+            assert not threemf_path.exists()
+            assert not glb_path.exists()
+            assert lut_path.exists()
+        finally:
+            app.dependency_overrides[get_file_registry] = original_registry_override
+            for path in (threemf_path, glb_path, tmp_path / "card.svg"):
+                if path.exists():
+                    path.unlink()
+            _test_store.close(sid)
+
+    def test_generate_glb_registry_failure_keeps_registered_3mf_and_cleans_glb(self) -> None:
+        paths: list[str] = []
+
+        def _make_file(suffix: str, payload: bytes) -> str:
+            fd, path = tempfile.mkstemp(suffix=suffix)
+            paths.append(path)
+            os.write(fd, payload)
+            os.close(fd)
+            return path
+
+        image_path = _make_file(".png", b"img")
+        lut_path = _make_file(".npy", b"lut")
+        threemf_path = _make_file(".3mf", b"3mf")
+        glb_path = _make_file(".glb", b"glb")
+        registry = _SecondRegistrationFailingRegistry()
+
+        sid = _test_store.create()
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {"target_w": 10, "target_h": 10, "target_width_mm": 10.0},
+        )
+        _test_store.put(sid, "image_path", image_path)
+        _test_store.put(sid, "lut_path", lut_path)
+        _test_store.put(sid, "replacement_regions", [])
+        _test_store.put(sid, "free_color_set", set())
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": threemf_path,
+                "glb_path": glb_path,
+                "status_msg": "OK",
+            }
+        )
+
+        original_registry_override = app.dependency_overrides[get_file_registry]
+        app.dependency_overrides[get_file_registry] = lambda: registry
+        failing_client = TestClient(app, raise_server_exceptions=False)
+        try:
+            response = failing_client.post(
+                "/api/convert/generate",
+                json={"session_id": sid, "params": {"lut_name": "test_lut"}},
+            )
+
+            assert response.status_code == 500
+            assert os.path.exists(threemf_path)
+            assert not os.path.exists(glb_path)
+            assert registry.first_file_id is not None
+            entry = registry.get_entry(registry.first_file_id)
+            assert entry is not None
+            assert entry["path"] == threemf_path
+        finally:
+            app.dependency_overrides[get_file_registry] = original_registry_override
+            registry.cleanup_expired()
+            for path in paths:
+                if os.path.exists(path):
+                    os.unlink(path)
+            _test_store.close(sid)
+
+    @pytest.mark.asyncio
+    async def test_large_format_svg_registry_failure_cleans_unregistered_zip(
+        self,
+        tmp_path,
+    ) -> None:
+        image_path = tmp_path / "source.svg"
+        lut_path = tmp_path / "source.npy"
+        zip_path = tmp_path / "tiles.zip"
+        image_path.write_text("<svg/>", encoding="utf-8")
+        lut_path.write_bytes(b"lut")
+        zip_path.write_bytes(b"zip")
+
+        mock_pool = SimpleNamespace(
+            submit=AsyncMock(
+                return_value={
+                    "zip_path": str(zip_path),
+                    "tile_count": 1,
+                    "grid_cols": 1,
+                    "grid_rows": 1,
+                    "warnings": [],
+                }
+            )
+        )
+        request = LargeFormatConvertGenerateRequest(
+            total_width_mm=20.0,
+            total_height_mm=20.0,
+            tile_width_mm=20.0,
+            tile_height_mm=20.0,
+            lut_name="test_lut",
+        )
+
+        with pytest.raises(RuntimeError, match="registry unavailable"):
+            await _generate_large_format_svg_native(
+                image_path=str(image_path),
+                lut_path=str(lut_path),
+                source_basename="source",
+                recipe_overrides=None,
+                recipe_override_masks_path=None,
+                material_matrix_path=None,
+                total_width_mm=20.0,
+                total_height_mm=20.0,
+                tile_width_mm=20.0,
+                tile_height_mm=20.0,
+                request=request,
+                session_data={},
+                sid="session-1",
+                store=_test_store,
+                registry=_FailingRegistry(),
+                pool=mock_pool,
+                warnings=[],
+            )
+
+        assert not zip_path.exists()
 
 
 class TestLargeFormatFridgeMagnetValidation:
