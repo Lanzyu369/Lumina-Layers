@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 import scripts.log_quality_check as log_quality_check
-from scripts.audit_logs import event_from_line, parse_json_object
+from scripts.audit_logs import audit_files, event_from_line, parse_json_object
 from scripts.log_quality_check import (
     CheckResult,
     WORKFLOW_ORDER,
@@ -25,6 +25,18 @@ def _write_json_lines(path: Path, payloads: list[dict[str, object]]) -> None:
     path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
 
 
+def _build_report_for_log(path: Path) -> log_quality_check.QualityReport:
+    audit_result = audit_files([path], label="unit")
+    return log_quality_check.build_quality_report(
+        mode="fast",
+        workflow=[],
+        log_path=path,
+        audit_result=audit_result,
+        max_info=30,
+        max_info_per_endpoint=8,
+    )
+
+
 def test_scan_empty_file_returns_zero_metrics(tmp_path: Path) -> None:
     log_path = tmp_path / "empty.log"
     log_path.write_text("", encoding="utf-8")
@@ -38,6 +50,7 @@ def test_scan_empty_file_returns_zero_metrics(tmp_path: Path) -> None:
     assert metrics["ansi_field_count"] == 0
     assert metrics["bracket_tag_message_count"] == 0
     assert metrics["log_file_configured_count"] == 0
+    assert metrics["warning_error_missing_actionable_fields"] == 0
 
 
 def test_scan_counts_catch_all_request_log_event(tmp_path: Path) -> None:
@@ -99,6 +112,109 @@ def test_scan_allows_client_log_event(tmp_path: Path) -> None:
     metrics = _scan_log_file_for_governance_metrics(log_path)
 
     assert metrics["catch_all_event_count"] == 0
+
+
+def test_quality_report_fails_warning_without_actionable_fields(tmp_path: Path) -> None:
+    log_path = tmp_path / "warning-missing-fields.log"
+    _write_json_lines(
+        log_path,
+        [
+            {"level": "INFO", "event": "log_file_configured", "message": "configured"},
+            {
+                "level": "WARNING",
+                "event": "converter_generate_failed",
+                "message": "generation failed",
+            },
+        ],
+    )
+
+    report = _build_report_for_log(log_path)
+
+    assert report.warning_lines == 1
+    assert report.warning_error_missing_actionable_fields == 1
+    assert report.overall_passed is False
+    failed_checks = {check.name for check in report.checks if not check.passed}
+    assert "no_warning_error_missing_actionable_fields" in failed_checks
+
+
+def test_quality_report_rejects_only_request_or_session_ids_on_warning(
+    tmp_path: Path,
+) -> None:
+    log_path = tmp_path / "warning-only-correlation-fields.log"
+    _write_json_lines(
+        log_path,
+        [
+            {"level": "INFO", "event": "log_file_configured", "message": "configured"},
+            {
+                "level": "WARNING",
+                "event": "converter_generate_failed",
+                "message": "generation failed",
+                "request_id": "req-1",
+                "session_id": "session-1",
+            },
+        ],
+    )
+
+    report = _build_report_for_log(log_path)
+
+    assert report.warning_error_missing_actionable_fields == 1
+    assert report.overall_passed is False
+
+
+def test_quality_report_rejects_empty_actionable_fields(tmp_path: Path) -> None:
+    log_path = tmp_path / "warning-empty-actionable-fields.log"
+    _write_json_lines(
+        log_path,
+        [
+            {"level": "INFO", "event": "log_file_configured", "message": "configured"},
+            {
+                "level": "WARNING",
+                "event": "converter_generate_failed",
+                "message": "generation failed",
+                "error_type": "  ",
+                "error_message": "",
+                "path": [],
+                "status_code": 0,
+            },
+        ],
+    )
+
+    report = _build_report_for_log(log_path)
+
+    assert report.warning_error_missing_actionable_fields == 1
+    assert report.overall_passed is False
+
+
+def test_quality_report_allows_warning_and_error_with_diagnostic_fields(
+    tmp_path: Path,
+) -> None:
+    log_path = tmp_path / "warning-error-diagnostic-fields.log"
+    _write_json_lines(
+        log_path,
+        [
+            {"level": "INFO", "event": "log_file_configured", "message": "configured"},
+            {
+                "level": "WARNING",
+                "event": "preview_resource_missing",
+                "message": "resource missing",
+                "path": "/tmp/missing.glb",
+            },
+            {
+                "level": "ERROR",
+                "event": "converter_generate_failed",
+                "message": "generation failed",
+                "error_type": "RuntimeError",
+                "error_message": "mesh export failed",
+            },
+        ],
+    )
+
+    report = _build_report_for_log(log_path)
+
+    assert report.warning_lines == 1
+    assert report.error_lines == 1
+    assert report.warning_error_missing_actionable_fields == 0
+    assert report.overall_passed is True
 
 
 def test_vector_workflow_step_is_first_class() -> None:
