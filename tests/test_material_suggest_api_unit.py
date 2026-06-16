@@ -80,9 +80,19 @@ def stub_cache_miss(monkeypatch: pytest.MonkeyPatch):
     )
 
 
+@pytest.fixture
+def stub_runtime_miss(monkeypatch: pytest.MonkeyPatch):
+    """Force the exact MITM fallback by pretending no hybrid runtime exists."""
+    monkeypatch.setattr(
+        "api.routers.single_stage.load_material_candidate_runtime",
+        lambda *args, **kwargs: None,
+        raising=False,
+    )
+
+
 class TestSuggestColorsMitmPath:
     def test_happy_path_returns_suggestions(
-        self, stub_palette_loader, stub_cache_miss
+        self, stub_palette_loader, stub_cache_miss, stub_runtime_miss
     ):
         client, *_ = _client_with_state()
         response = client.post(
@@ -124,7 +134,9 @@ class TestSuggestColorsMitmPath:
         delta_e_values = [item["delta_e"] for item in body["suggestions"]]
         assert delta_e_values == sorted(delta_e_values)
 
-    def test_accepts_short_hex(self, stub_palette_loader, stub_cache_miss):
+    def test_accepts_short_hex(
+        self, stub_palette_loader, stub_cache_miss, stub_runtime_miss
+    ):
         client, *_ = _client_with_state()
         response = client.post(
             "/api/extractor/material-solver-cache/suggest-colors",
@@ -143,7 +155,7 @@ class TestSuggestColorsMitmPath:
         assert body["target_rgb"] == [170, 187, 204]
 
     def test_overflow_guard_returns_422_with_hint(
-        self, stub_palette_loader, stub_cache_miss
+        self, stub_palette_loader, stub_cache_miss, stub_runtime_miss
     ):
         client, *_ = _client_with_state()
         response = client.post(
@@ -185,6 +197,13 @@ class TestSuggestColorsCachePath:
             "api.routers.single_stage.load_material_solver_cache",
             lambda *args, **kwargs: _StubCache(),
         )
+        monkeypatch.setattr(
+            "api.routers.single_stage.load_material_candidate_runtime",
+            lambda *args, **kwargs: pytest.fail(
+                "runtime must not be loaded when exact cache hits"
+            ),
+            raising=False,
+        )
 
         client, *_ = _client_with_state()
         response = client.post(
@@ -209,6 +228,69 @@ class TestSuggestColorsCachePath:
                 "delta_e": 2.5,
                 "recipe": [0, 1, 2, 1, 0],
                 "recipe_display": "[0,1,2,1,0]",
+            }
+        ]
+
+
+class TestSuggestColorsRuntimePath:
+    def test_runtime_hit_reports_source_runtime(
+        self,
+        stub_palette_loader,
+        stub_cache_miss,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        stub_suggestion = ColorSuggestion(
+            matched_rgb=np.asarray([128, 96, 72], dtype=np.uint8),
+            recipe=np.asarray([0, 1, 2, 0, 1, 2, 0, 1, 2, 0], dtype=np.int32),
+            delta_e=3.25,
+        )
+
+        class _StubRuntime:
+            valid_cell_count = 4096
+
+            def lookup_top_k(self, target_rgb, materials, *, top_k, min_spacing):
+                assert target_rgb.tolist() == [130, 98, 70]
+                assert len(materials) == 12
+                assert top_k == 3
+                assert min_spacing == 1.5
+                return [stub_suggestion]
+
+        monkeypatch.setattr(
+            "api.routers.single_stage.load_material_candidate_runtime",
+            lambda *args, **kwargs: _StubRuntime(),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "api.routers.single_stage.suggest_colors_for_target",
+            lambda *args, **kwargs: pytest.fail("MITM fallback should not run"),
+        )
+
+        client, *_ = _client_with_state()
+        response = client.post(
+            "/api/extractor/material-solver-cache/suggest-colors",
+            data={
+                "material_directory_names": json.dumps(
+                    [f"mat-{idx}" for idx in range(12)]
+                ),
+                "layer_count": 10,
+                "layer_height_mm": 0.08,
+                "substrate": "white",
+                "target_hex": "#826246",
+                "top_k": 3,
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["source"] == "runtime"
+        assert "hybrid runtime" in body["message"]
+        assert body["suggestions"] == [
+            {
+                "hex": "#806048",
+                "rgb": [128, 96, 72],
+                "delta_e": 3.25,
+                "recipe": [0, 1, 2, 0, 1, 2, 0, 1, 2, 0],
+                "recipe_display": "[0,1,2,0,1,2,0,1,2,0]",
             }
         ]
 

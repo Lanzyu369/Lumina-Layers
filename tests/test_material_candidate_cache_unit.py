@@ -320,6 +320,35 @@ def test_candidate_runtime_lookup_returns_solver_cache_shaped_values() -> None:
     assert delta_e.dtype == np.float64
 
 
+def test_candidate_runtime_lookup_top_k_returns_ranked_suggestions() -> None:
+    runtime = build_material_candidate_runtime(
+        materials=SMALL_PALETTE,
+        layer_count=5,
+        layer_height_mm=0.08,
+        substrate="white",
+        config=MaterialCandidateCacheConfig(candidate_budget=64, seed=77),
+    )
+
+    suggestions = runtime.lookup_top_k(
+        np.asarray([180, 80, 60], dtype=np.uint8),
+        SMALL_PALETTE,
+        top_k=5,
+        min_spacing=0.0,
+    )
+
+    assert 1 <= len(suggestions) <= 5
+    assert [item.delta_e for item in suggestions] == sorted(
+        item.delta_e for item in suggestions
+    )
+    for item in suggestions:
+        assert item.matched_rgb.shape == (3,)
+        assert item.matched_rgb.dtype == np.uint8
+        assert item.recipe.shape == (5,)
+        assert item.recipe.dtype == np.int32
+        assert np.all(item.recipe >= 0)
+        assert np.all(item.recipe < len(SMALL_PALETTE))
+
+
 def test_candidate_runtime_lookup_honors_hue_reranking(monkeypatch) -> None:
     import core.material_candidate_cache as candidate_cache
 
