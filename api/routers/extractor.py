@@ -1395,16 +1395,16 @@ async def extractor_extract(
                 },
             )
 
-    # Register a stable final LUT download while keeping the active session
-    # pointed at the same immutable snapshot for follow-up palette operations.
+    # Register a stable final LUT download separately from the editable
+    # session LUT. Paged manual-fix flows must keep editing the temp page that
+    # merge endpoints consume.
     try:
-        lut_download_id, lut_download_path = _register_final_lut_download(
+        lut_download_id, _lut_download_path = _register_final_lut_download(
             registry=registry,
             lut_path=lut_path,
         )
     except OSError as e:
         _handle_core_error(e, "Extractor LUT download registration")
-    store.put(session_id, "lut_path", lut_download_path)
     try:
         layout_rgb, _layout_stacks, _layout_metadata = LUTManager.load_lut_with_metadata(lut_path)
         lut_layout = _resolve_session_lut_layout(

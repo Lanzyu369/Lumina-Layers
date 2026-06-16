@@ -301,6 +301,70 @@ class TestSessionStatePersistence:
 
         assert client.get(first_url).content == first_bytes
 
+    def test_merge_5color_preserves_manual_fix_after_download_snapshot(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """Manual fixes on an extracted page must be included in the merged LUT."""
+        merged_lut_path = tmp_path / "lumina_lut.json"
+        page_1_lut_path = tmp_path / "page-1-source.json"
+        page_2_lut_path = tmp_path / "page-2-source.json"
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("config.LUT_FILE_PATH", str(merged_lut_path))
+        _write_keyed_lut(
+            page_1_lut_path,
+            [[10, 10, 10], [20, 20, 20]],
+            color_mode="5-Color Extended",
+        )
+        _write_keyed_lut(
+            page_2_lut_path,
+            [[30, 30, 30], [40, 40, 40]],
+            color_mode="5-Color Extended",
+        )
+
+        def _extract_page(lut_path: Path) -> str:
+            buf = _make_test_image_buf()
+            with patch(
+                "api.routers.extractor.run_extraction",
+                return_value=(_mock_vis, _mock_preview, str(lut_path), "OK"),
+            ):
+                response = client.post(
+                    "/api/extractor/extract",
+                    files={"image": ("test.png", buf, "image/png")},
+                    data={
+                        "corner_points": json.dumps(
+                            [[0, 0], [100, 0], [100, 100], [0, 100]]
+                        ),
+                        "color_mode": "5-Color Extended",
+                        "page": "Page 1" if lut_path == page_1_lut_path else "Page 2",
+                        "distortion": "0.0",
+                        "vignette_correction": "false",
+                    },
+                )
+            assert response.status_code == 200
+            return str(response.json()["session_id"])
+
+        page_1_session_id = _extract_page(page_1_lut_path)
+        _extract_page(page_2_lut_path)
+
+        manual_response = client.post(
+            "/api/extractor/manual-fix",
+            json={
+                "session_id": page_1_session_id,
+                "row_index": 0,
+                "override_color": "#010203",
+            },
+        )
+        assert manual_response.status_code == 200
+
+        merge_response = client.post("/api/extractor/merge-5color-extended", json={})
+        assert merge_response.status_code == 200
+        merged_rgb, _merged_stacks, _metadata = LUTManager.load_lut_with_metadata(
+            str(merged_lut_path)
+        )
+        assert merged_rgb.reshape(-1, 3)[0].tolist() == [1, 2, 3]
+
     def test_extract_endpoint_emits_canary_on_success(
         self,
         caplog: pytest.LogCaptureFixture,
