@@ -6,6 +6,7 @@ Validates:
 - Core exception returns HTTP 500 (Requirement 3.6)
 """
 
+from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
@@ -13,6 +14,8 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from api.app import create_app
+from api.dependencies import get_file_registry
+from api.file_registry import FileRegistry
 from config import DEFAULT_PRINTER_ID, DEFAULT_SLICER_ID
 
 client: TestClient = TestClient(create_app())
@@ -22,6 +25,21 @@ _mock_preview: Image.Image = Image.fromarray(
     np.zeros((10, 10, 3), dtype=np.uint8)
 )
 _mock_return = ("/tmp/fake.3mf", _mock_preview, "OK")
+
+
+class _RegisterPathFailingRegistry(FileRegistry):
+    """Registry stub that records the generated path before failing."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.generated_path: str | None = None
+
+    def register_path(self, *args: object, **kwargs: object) -> str:
+        if "path" in kwargs:
+            self.generated_path = str(kwargs["path"])
+        elif len(args) >= 2:
+            self.generated_path = str(args[1])
+        raise RuntimeError("registry backend unavailable")
 
 
 def _assert_default_device_kwargs(kwargs: dict) -> None:
@@ -37,6 +55,35 @@ def _assert_default_device_kwargs(kwargs: dict) -> None:
 
 class TestColorModeRouting:
     """Verify each color_mode dispatches to the correct core function."""
+
+    def test_generate_cleans_output_when_registry_fails(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        output_path = tmp_path / "calibration.3mf"
+        output_path.write_bytes(b"placeholder-3mf")
+        registry = _RegisterPathFailingRegistry()
+        app = create_app()
+        app.dependency_overrides[get_file_registry] = lambda: registry
+        failing_client = TestClient(app, raise_server_exceptions=False)
+
+        with patch(
+            "api.routers.calibration.generate_bw_calibration_board",
+            return_value=(str(output_path), None, "OK"),
+        ):
+            response = failing_client.post(
+                "/api/calibration/generate",
+                json={
+                    "color_mode": "BW (Black & White)",
+                    "block_size": 5,
+                    "gap": 0.84,
+                    "backing_thickness": 1.6,
+                },
+            )
+
+        assert response.status_code == 500
+        assert registry.generated_path == str(output_path)
+        assert not output_path.exists()
 
     def test_bw_mode_routes_to_generate_bw(self) -> None:
         with patch(
