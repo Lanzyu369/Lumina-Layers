@@ -2,6 +2,7 @@ import io
 import os
 import tempfile
 import zlib
+from contextlib import suppress
 from typing import Optional
 from urllib.parse import quote
 
@@ -55,6 +56,18 @@ RAW_EXTENSIONS: set[str] = {
 }
 _GZIP_CHUNK_SIZE = 1024 * 1024
 _GLB_GZIP_MIN_BYTES = 1024
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    """Write every byte to ``fd``, retrying POSIX short writes."""
+
+    view = memoryview(data)
+    offset = 0
+    while offset < len(view):
+        written = os.write(fd, view[offset:])
+        if written <= 0:
+            raise OSError("Failed to write uploaded file chunk")
+        offset += written
 
 
 def _decode_raw_to_pil(data: bytes) -> Image.Image:
@@ -131,9 +144,14 @@ async def upload_to_tempfile(file: UploadFile, suffix: Optional[str] = None) -> 
 
     fd, path = tempfile.mkstemp(suffix=suffix, dir=TEMP_DIR)
     try:
-        os.write(fd, contents)
-    finally:
+        _write_all(fd, contents)
         os.close(fd)
+    except OSError:
+        with suppress(OSError):
+            os.close(fd)
+        with suppress(OSError):
+            os.unlink(path)
+        raise
     return path
 
 
