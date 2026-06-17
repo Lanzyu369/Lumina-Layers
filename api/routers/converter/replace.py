@@ -119,13 +119,22 @@ def _require_preview_cache_fields(
     if not is_preview_cache_artifact_ref(cache):
         return cache
     loaded = get_preview_cache_metadata(cache)
-    loaded.update(
-        hydrate_preview_cache(
-            cache,
-            fields=fields,
-            mmap_mode="r",
+    try:
+        loaded.update(
+            hydrate_preview_cache(
+                cache,
+                fields=fields,
+                mmap_mode="r",
+            )
         )
-    )
+    except (OSError, ValueError, TypeError, KeyError, EOFError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Preview cache is unavailable. "
+                "Re-run preview before using replacement tools."
+            ),
+        ) from exc
     return loaded
 
 
