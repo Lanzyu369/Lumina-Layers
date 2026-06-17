@@ -107,29 +107,67 @@ def _cache_material_matrix_depth(cache: dict | None) -> int | None:
     return None
 
 
+def _positive_int(value: object | None) -> int | None:
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        return None
+    return count if count > 0 else None
+
+
+def _recipe_override_layer_count(recipe_overrides: list[dict[str, object]] | None) -> int | None:
+    if not recipe_overrides:
+        return None
+
+    counts: list[int] = []
+    for item in recipe_overrides:
+        if not isinstance(item, dict):
+            continue
+        recipe = item.get("recipe")
+        try:
+            count = len(recipe)  # type: ignore[arg-type]
+        except TypeError:
+            continue
+        if count > 0:
+            counts.append(count)
+    return max(counts) if counts else None
+
+
 def _resolve_material_archive_optical_layer_count(
     *,
     session_data: dict | None = None,
     cache: dict | None = None,
     cache_ref: dict | None = None,
     material_layer_count: object | None = None,
+    requested_color_layers: object | None = None,
+    recipe_overrides: list[dict[str, object]] | None = None,
 ) -> int | None:
+    candidates: list[int] = []
+
     cache_ref_depth = _cache_material_matrix_depth(cache_ref)
     if cache_ref_depth is not None:
-        return cache_ref_depth
+        candidates.append(cache_ref_depth)
 
     cache_depth = _cache_material_matrix_depth(cache)
     if cache_depth is not None:
-        return cache_depth
+        candidates.append(cache_depth)
 
     raw_count = material_layer_count
     if raw_count is None and session_data is not None:
         raw_count = session_data.get("material_layer_count")
-    try:
-        count = int(raw_count)
-    except (TypeError, ValueError):
-        return None
-    return count if count > 0 else None
+    session_count = _positive_int(raw_count)
+    if session_count is not None:
+        candidates.append(session_count)
+
+    request_count = _positive_int(requested_color_layers)
+    if request_count is not None:
+        candidates.append(request_count)
+
+    override_count = _recipe_override_layer_count(recipe_overrides)
+    if override_count is not None:
+        candidates.append(override_count)
+
+    return max(candidates) if candidates else None
 
 
 def _format_mm(value: float) -> str:
@@ -147,6 +185,8 @@ def _validate_material_archive_relief_minimum_height(
     cache: dict | None = None,
     cache_ref: dict | None = None,
     material_layer_count: object | None = None,
+    requested_color_layers: object | None = None,
+    recipe_overrides: list[dict[str, object]] | None = None,
 ) -> None:
     """Reject material-archive relief heights below the optical stack depth."""
 
@@ -158,6 +198,8 @@ def _validate_material_archive_relief_minimum_height(
         cache=cache,
         cache_ref=cache_ref,
         material_layer_count=material_layer_count,
+        requested_color_layers=requested_color_layers,
+        recipe_overrides=recipe_overrides,
     )
     if optical_layers is None:
         return

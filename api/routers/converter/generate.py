@@ -869,6 +869,8 @@ async def convert_generate(
         session_data=session_data,
         cache=cache,
         cache_ref=cache_ref,
+        requested_color_layers=request.color_layers,
+        recipe_overrides=recipe_overrides,
     )
 
     # If heightmap mode, save session heightmap to temp file for worker process
@@ -1666,6 +1668,7 @@ async def convert_generate_large_format(
     elif not lut_path or not os.path.exists(lut_path):
         raise HTTPException(status_code=409, detail="LUT file missing. Call POST /api/convert/preview first.")
     _require_heightmap_for_relief(session_data, request)
+    recipe_overrides = _resolve_recipe_overrides(session_data, request)
     _validate_material_archive_relief_minimum_height(
         enable_relief=request.enable_relief,
         material_source=str(session_material_source or "lut"),
@@ -1675,12 +1678,13 @@ async def convert_generate_large_format(
         session_data=session_data,
         cache=cache,
         cache_ref=cache_ref,
+        requested_color_layers=request.color_layers,
+        recipe_overrides=recipe_overrides,
     )
 
     sid = body.session_id
     total_w_mm, total_h_mm = _resolve_large_format_dimensions(cache, request, lf.target_height_mm)
     source_basename = _resolve_large_format_source_basename(session_data, image_path)
-    recipe_overrides = _resolve_recipe_overrides(session_data, request)
     material_matrix_path, recipe_override_masks_path = _prepare_recipe_override_worker_inputs(
         cache=cache,
         cache_ref=cache_ref,
@@ -2100,6 +2104,7 @@ async def convert_batch(
         color_height_map=parsed_color_height_map,
         heightmap_max_height=heightmap_max_height,
         material_layer_count=material_layer_count,
+        requested_color_layers=color_layers,
     )
 
     # --- batch_run_id: unique per-request identifier for structured logging
