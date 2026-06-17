@@ -8,6 +8,10 @@ from fastapi import APIRouter, Depends
 
 from api.dependencies import get_file_registry, get_session_store
 from api.file_registry import FileRegistry
+from api.preview_cache_artifacts import (
+    get_preview_cache_field_path,
+    is_preview_cache_artifact_ref,
+)
 from api.schemas.converter import (
     CleanupSessionFilesRequest,
     CleanupSessionFilesResponse,
@@ -18,13 +22,34 @@ from api.structured_logging import get_logger
 router = APIRouter()
 log = get_logger(__name__)
 
+_GENERATE_PREVIEW_CACHE_ARTIFACT_FIELDS = frozenset(
+    ("matched_rgb", "mask_solid", "material_matrix")
+)
+
+
+def _collect_preview_cache_artifact_paths(session_data: dict | None) -> set[str]:
+    """Return current preview-cache artifact paths required by generate."""
+
+    if not session_data:
+        return set()
+    preview_cache = session_data.get("preview_cache")
+    if not is_preview_cache_artifact_ref(preview_cache):
+        return set()
+
+    keep_paths: set[str] = set()
+    for field_name in _GENERATE_PREVIEW_CACHE_ARTIFACT_FIELDS:
+        path = get_preview_cache_field_path(preview_cache, field_name)
+        if path and os.path.exists(path):
+            keep_paths.add(path)
+    return keep_paths
+
 
 def _collect_regeneration_input_paths(session_data: dict | None) -> set[str]:
     """Return temp-file paths required for another generate call."""
 
     if not session_data:
         return set()
-    keep_paths: set[str] = set()
+    keep_paths: set[str] = _collect_preview_cache_artifact_paths(session_data)
     for key in ("image_path", "lut_path"):
         path = session_data.get(key)
         if not isinstance(path, str) or not path:

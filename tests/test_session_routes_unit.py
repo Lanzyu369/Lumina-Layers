@@ -8,12 +8,17 @@ from datetime import datetime, timezone
 from typing import Iterator
 from unittest.mock import patch
 
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
 from api.app import create_app
 from api.dependencies import get_file_registry, get_session_store
 from api.file_registry import FileRegistry
+from api.preview_cache_artifacts import (
+    externalize_preview_cache,
+    save_preview_cache_fields,
+)
 from api.session_store import SessionStore
 
 
@@ -474,11 +479,32 @@ def test_cleanup_session_files_preserves_regeneration_input_paths(
     image_path = _create_temp_file(b"image")
     lut_path = _create_temp_file(b"lut")
     intermediate_path = _create_temp_file(b"intermediate")
+    preview_cache = {
+        "matched_rgb": np.zeros((2, 2, 3), dtype=np.uint8),
+        "mask_solid": np.ones((2, 2), dtype=bool),
+        "material_matrix": np.zeros((2, 2, 2), dtype=np.int16),
+        "preview_rgba": np.zeros((2, 2, 4), dtype=np.uint8),
+        "target_w": 2,
+        "target_h": 2,
+    }
     store.put(session_id, "image_path", image_path)
     store.put(session_id, "lut_path", lut_path)
     store.register_temp_file(session_id, image_path)
     store.register_temp_file(session_id, lut_path)
     store.register_temp_file(session_id, intermediate_path)
+    cache_ref = externalize_preview_cache(session_id, store, preview_cache)
+    old_matched_rgb_path = cache_ref["fields"]["matched_rgb"]["path"]
+    cache_ref = save_preview_cache_fields(
+        session_id,
+        store,
+        cache_ref,
+        {"matched_rgb": np.full((2, 2, 3), 7, dtype=np.uint8)},
+    )
+    store.put(session_id, "preview_cache", cache_ref)
+    current_artifact_paths = {
+        field_name: field_ref["path"]
+        for field_name, field_ref in cache_ref["fields"].items()
+    }
 
     try:
         response = client.post(
@@ -493,8 +519,25 @@ def test_cleanup_session_files_preserves_regeneration_input_paths(
         assert os.path.exists(intermediate_path) is False
         assert image_path in store.get_temp_file_paths(session_id)
         assert lut_path in store.get_temp_file_paths(session_id)
+        remaining_temp_paths = set(store.get_temp_file_paths(session_id))
+        for field_name in ("matched_rgb", "mask_solid", "material_matrix"):
+            field_path = current_artifact_paths[field_name]
+            assert os.path.exists(field_path) is True
+            assert field_path in remaining_temp_paths
+        assert os.path.exists(old_matched_rgb_path) is False
+        assert old_matched_rgb_path not in remaining_temp_paths
+        non_generate_path = current_artifact_paths["preview_rgba"]
+        assert os.path.exists(non_generate_path) is False
+        assert non_generate_path not in remaining_temp_paths
     finally:
-        for path in (image_path, lut_path, intermediate_path):
+        cleanup_paths = {
+            image_path,
+            lut_path,
+            intermediate_path,
+            old_matched_rgb_path,
+            *current_artifact_paths.values(),
+        }
+        for path in cleanup_paths:
             if os.path.exists(path):
                 os.unlink(path)
 
