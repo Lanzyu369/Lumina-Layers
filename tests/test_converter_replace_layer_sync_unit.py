@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
@@ -498,7 +499,7 @@ class TestLayerImagesCache:
         from unittest.mock import patch
 
         with patch(
-            "api.routers.converter.common.hydrate_preview_cache",
+            "api.routers.converter.preview.hydrate_preview_cache",
             side_effect=AssertionError("cache hit must not hydrate artifact arrays"),
         ):
             second = get_layer_images(
@@ -506,6 +507,54 @@ class TestLayerImagesCache:
             )
 
         second_bytes = [_read_bytes(entry["url"]) for entry in second["layers"]]
+        assert first_bytes == second_bytes
+
+    @staticmethod
+    def _delete_preview_cache_field_file(sid: str, field_name: str) -> str:
+        cache_ref = _test_store.get(sid)["preview_cache"]
+        field_path = cache_ref["fields"][field_name]["path"]
+        Path(field_path).unlink()
+        return field_path
+
+    @pytest.mark.parametrize("field_name", ["material_matrix", "mask_solid"])
+    def test_artifact_cache_stale_field_returns_repreview_error(
+        self,
+        field_name: str,
+        tmp_path: Path,
+    ) -> None:
+        sid = _create_artifact_lut_session(tmp_path)
+        stale_path = self._delete_preview_cache_field_file(sid, field_name)
+
+        response = client.get(f"/api/convert/layer-images/{sid}")
+
+        assert response.status_code == 409
+        detail = response.json()["detail"]
+        assert "Re-run preview" in detail
+        assert stale_path not in detail
+
+    def test_artifact_cache_hit_survives_stale_source_fields(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        sid = _create_artifact_lut_session(tmp_path)
+
+        first = get_layer_images(
+            session_id=sid, store=_test_store, registry=_test_registry
+        )
+        first_bytes = [_read_bytes(entry["url"]) for entry in first["layers"]]
+        self._delete_preview_cache_field_file(sid, "material_matrix")
+        self._delete_preview_cache_field_file(sid, "mask_solid")
+
+        from unittest.mock import patch
+
+        with patch(
+            "api.routers.converter.preview.hydrate_preview_cache",
+            side_effect=AssertionError("cache hit must not hydrate artifact arrays"),
+        ):
+            second = client.get(f"/api/convert/layer-images/{sid}")
+
+        assert second.status_code == 200
+        second_bytes = [_read_bytes(entry["url"]) for entry in second.json()["layers"]]
         assert first_bytes == second_bytes
 
     def test_artifact_material_matrix_revision_invalidates_layer_cache(
