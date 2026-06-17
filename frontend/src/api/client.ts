@@ -81,11 +81,23 @@ function extractReadableDetail(data: unknown): string | null {
     }
   }
 
+  let detailErrorCode: string | null = null;
+  if (isRecord(detail)) {
+    const detailMessage = detail.message;
+    if (typeof detailMessage === "string" && detailMessage.trim()) {
+      return detailMessage.trim();
+    }
+    const errorCode = detail.error;
+    if (typeof errorCode === "string" && errorCode.trim()) {
+      detailErrorCode = errorCode.trim();
+    }
+  }
+
   const message = data.message;
   if (typeof message === "string" && message.trim()) {
     return message.trim();
   }
-  return null;
+  return detailErrorCode;
 }
 
 function isGenericHttpDetail(detail: string, statusCode: number | null): boolean {
