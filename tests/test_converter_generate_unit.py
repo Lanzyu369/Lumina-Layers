@@ -998,7 +998,7 @@ class TestGenerateRegistryFailureCleanup:
                     path.unlink()
             _test_store.close(sid)
 
-    def test_generate_glb_registry_failure_keeps_registered_3mf_and_cleans_glb(self) -> None:
+    def test_generate_glb_registry_failure_rolls_back_registered_3mf(self) -> None:
         paths: list[str] = []
 
         def _make_file(suffix: str, payload: bytes) -> str:
@@ -1042,18 +1042,88 @@ class TestGenerateRegistryFailureCleanup:
             )
 
             assert response.status_code == 500
-            assert os.path.exists(threemf_path)
+            assert not os.path.exists(threemf_path)
             assert not os.path.exists(glb_path)
+            assert os.path.exists(image_path)
+            assert os.path.exists(lut_path)
+            assert registry.register_calls == 2
             assert registry.first_file_id is not None
             entry = registry.get_entry(registry.first_file_id)
-            assert entry is not None
-            assert entry["path"] == threemf_path
+            assert entry is None
         finally:
             app.dependency_overrides[get_file_registry] = original_registry_override
             registry.cleanup_expired()
             for path in paths:
                 if os.path.exists(path):
                     os.unlink(path)
+            _test_store.close(sid)
+
+    def test_color_card_glb_registry_failure_rolls_back_registered_3mf(
+        self,
+        tmp_path,
+    ) -> None:
+        lut_path = tmp_path / "source.npy"
+        threemf_path = tmp_path / "card.3mf"
+        glb_path = tmp_path / "card.glb"
+        svg_path = tmp_path / "card.svg"
+        lut_path.write_bytes(b"lut")
+        threemf_path.write_bytes(b"3mf")
+        glb_path.write_bytes(b"glb")
+        registry = _SecondRegistrationFailingRegistry()
+
+        sid = _test_store.create()
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {
+                "target_w": 4,
+                "target_h": 4,
+                "target_width_mm": 40.0,
+                "color_palette": [{"hex": "#ff0000"}, {"hex": "#00ff00"}],
+            },
+        )
+        _test_store.put(sid, "lut_path", str(lut_path))
+        _test_store.put(sid, "material_source", "lut")
+
+        def _fake_generate_color_card_svg(hex_colors, **_kwargs):
+            svg_path.write_text("<svg></svg>", encoding="utf-8")
+            return str(svg_path)
+
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": str(threemf_path),
+                "glb_path": str(glb_path),
+                "status_msg": "OK",
+            }
+        )
+        original_registry_override = app.dependency_overrides[get_file_registry]
+        app.dependency_overrides[get_file_registry] = lambda: registry
+        failing_client = TestClient(app, raise_server_exceptions=False)
+        try:
+            with patch(
+                "core.color_card.generate_color_card_svg",
+                _fake_generate_color_card_svg,
+            ):
+                response = failing_client.post(
+                    "/api/convert/color-card",
+                    json={"session_id": sid},
+                )
+
+            assert response.status_code == 500
+            assert not threemf_path.exists()
+            assert not glb_path.exists()
+            assert lut_path.exists()
+            assert svg_path.exists()
+            assert registry.register_calls == 2
+            assert registry.first_file_id is not None
+            entry = registry.get_entry(registry.first_file_id)
+            assert entry is None
+        finally:
+            app.dependency_overrides[get_file_registry] = original_registry_override
+            registry.cleanup_expired()
+            for path in (threemf_path, glb_path, svg_path):
+                if path.exists():
+                    path.unlink()
             _test_store.close(sid)
 
     @pytest.mark.asyncio
