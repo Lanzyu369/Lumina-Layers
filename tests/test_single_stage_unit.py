@@ -885,6 +885,84 @@ def test_fit_stage_a_route_uses_session(monkeypatch, tmp_path: Path) -> None:
     assert body["fit_summary"]["channel_count"] == 6
 
 
+def test_fit_stage_a_session_route_rejects_expired_stage_json(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    client, store, _ = _client_with_state()
+    session_id = store.create()
+    stage_json_path = tmp_path / "expired_single_stage.json"
+    store.put(session_id, "single_stage_stage_json_path", str(stage_json_path))
+    fit_called = False
+
+    def _fake_fit_stage_a_from_stage_json(path: str, output_path: str | None = None):
+        nonlocal fit_called
+        fit_called = True
+        raise FileNotFoundError(f"Stage JSON not found: {path}")
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.fit_stage_a_from_stage_json",
+        _fake_fit_stage_a_from_stage_json,
+    )
+
+    response = client.post(
+        "/api/extractor/fit-stage-a",
+        data={"session_id": session_id},
+    )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert "expired" in detail
+    assert str(stage_json_path) not in detail
+    assert fit_called is False
+
+
+def test_fit_stage_a_session_route_maps_stage_json_race_to_expired(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    client, store, _ = _client_with_state()
+    session_id = store.create()
+    stage_json_path = tmp_path / "1_single_stage.json"
+    stage_json_path.write_text("{}", encoding="utf-8")
+    store.put(session_id, "single_stage_stage_json_path", str(stage_json_path))
+
+    def _fake_fit_stage_a_from_stage_json(path: str, output_path: str | None = None):
+        assert path == str(stage_json_path)
+        stage_json_path.unlink()
+        raise FileNotFoundError(f"Stage JSON not found: {path}")
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.fit_stage_a_from_stage_json",
+        _fake_fit_stage_a_from_stage_json,
+    )
+
+    response = client.post(
+        "/api/extractor/fit-stage-a",
+        data={"session_id": session_id},
+    )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert "expired" in detail
+    assert str(stage_json_path) not in detail
+
+
+def test_fit_stage_a_session_route_requires_extracted_dataset() -> None:
+    client, store, _ = _client_with_state()
+    session_id = store.create()
+
+    response = client.post(
+        "/api/extractor/fit-stage-a",
+        data={"session_id": session_id},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "Session does not contain an extracted single-stage dataset"
+    )
+
+
 def test_fit_stage_a_route_requires_input() -> None:
     client, _, _ = _client_with_state()
     response = client.post("/api/extractor/fit-stage-a", data={})

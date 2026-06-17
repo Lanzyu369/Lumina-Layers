@@ -119,6 +119,10 @@ log = get_logger(__name__)
 GRADIENT_CARD_PREVIEW_TTL_SECONDS = 600
 MATERIAL_LIBRARY_FILE_TTL_SECONDS = 600
 MATERIAL_SWATCH_EXPORT_TTL_SECONDS = 8 * 60 * 60
+FIT_STAGE_A_EXPIRED_STAGE_JSON_DETAIL = (
+    "Extracted single-stage dataset has expired. "
+    "Re-run extraction before fitting Stage A."
+)
 MaterialCacheEvictor = Callable[[str], int]
 _RUNTIME_BUILD_LOCKS_GUARD = threading.Lock()
 _RUNTIME_BUILD_LOCKS: dict[tuple[str, int, str, str, int], threading.Lock] = {}
@@ -130,6 +134,14 @@ def _noop_material_cache_evictor(_directory_name: str) -> int:
     主应用默认的耗材缓存失效回调。
     """
     return 0
+
+
+def _is_missing_stage_json_path(path: str | None) -> bool:
+    return not isinstance(path, str) or not path.strip() or not os.path.exists(path)
+
+
+def _expired_stage_json_exception() -> HTTPException:
+    return HTTPException(status_code=409, detail=FIT_STAGE_A_EXPIRED_STAGE_JSON_DETAIL)
 
 
 def get_material_cache_evictor() -> MaterialCacheEvictor:
@@ -379,6 +391,8 @@ async def extractor_fit_stage_a(
                 status_code=400,
                 detail="Session does not contain an extracted single-stage dataset",
             )
+        if _is_missing_stage_json_path(stage_json_path):
+            raise _expired_stage_json_exception()
         sid_for_registry = session_id
         source_mode = "session"
     elif stage_json is not None:
@@ -397,9 +411,11 @@ async def extractor_fit_stage_a(
     try:
         result = fit_stage_a_from_stage_json(stage_json_path)
     except FileNotFoundError as e:
+        if source_mode == "session" and _is_missing_stage_json_path(stage_json_path):
+            raise _expired_stage_json_exception() from e
         if created_session_for_upload:
             _close_session_safely(store, sid_for_registry)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
     except (ValueError, TypeError, OSError, RuntimeError) as e:
         if created_session_for_upload:
             _close_session_safely(store, sid_for_registry)
