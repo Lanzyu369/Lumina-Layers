@@ -186,6 +186,61 @@ describe("SlicerSelector settings linkage", () => {
     }
   });
 
+  it("shows a readable message when direct 3MF download validation cannot reach the server", async () => {
+    assertResourceDownloadAvailableMock.mockRejectedValueOnce(
+      new Error("API request failed before the server returned a response."),
+    );
+    useSlicerStore.setState({
+      slicers: [],
+      selectedSlicerId: null,
+    });
+    const onArtifactAction = vi.fn();
+    const anchorClick = vi.fn();
+    const originalCreateElement = document.createElement.bind(document);
+    const createElementSpy = vi
+      .spyOn(document, "createElement")
+      .mockImplementation((tagName: string, options?: ElementCreationOptions) => {
+        if (tagName.toLowerCase() === "a") {
+          return {
+            href: "",
+            download: "",
+            click: anchorClick,
+          } as unknown as HTMLAnchorElement;
+        }
+        return originalCreateElement(tagName, options);
+      });
+
+    try {
+      render(
+        <I18nProvider>
+          <SlicerSelector
+            threemfDiskPath="/tmp/model.3mf"
+            downloadUrl="/api/files/model"
+            canSubmit
+            onAutoGenerate={async () => "/tmp/model.3mf"}
+            onArtifactAction={onArtifactAction}
+          />
+        </I18nProvider>,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "下载 3MF" }));
+
+      expect(
+        await screen.findByText(
+          "API request failed before the server returned a response.",
+        ),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/Failed to fetch/)).not.toBeInTheDocument();
+      expect(assertResourceDownloadAvailableMock).toHaveBeenCalledWith(
+        "/api/files/model",
+      );
+      expect(anchorClick).not.toHaveBeenCalled();
+      expect(onArtifactAction).not.toHaveBeenCalled();
+    } finally {
+      createElementSpy.mockRestore();
+    }
+  });
+
   it("cleans up only after a direct 3MF download URL validates successfully", async () => {
     assertResourceDownloadAvailableMock.mockResolvedValueOnce(undefined);
     useSlicerStore.setState({

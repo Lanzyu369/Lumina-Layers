@@ -102,6 +102,84 @@ describe("apiClient", () => {
     );
   });
 
+  it("uses structured detail object messages before HTTP status fallbacks", async () => {
+    const error = new Error("Request failed with status code 422");
+    Object.assign(error, {
+      config: { method: "post", url: "/convert/preview" },
+      response: {
+        status: 422,
+        data: {
+          detail: {
+            error: "preview_cache_size_limit_exceeded",
+            message:
+              "Estimated preview cache arrays exceed the configured limit.",
+            estimate_bytes: 640_000_000,
+            max_bytes: 536_870_912,
+            estimated_width: 2000,
+            estimated_height: 2000,
+            estimated_layers: 5,
+          },
+        },
+      },
+    });
+    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+    await expect(apiClient.post("/convert/preview", {})).rejects.toMatchObject({
+      message: expect.stringContaining(
+        "Estimated preview cache arrays exceed the configured limit.",
+      ),
+    });
+
+    expect(postClientLog).toHaveBeenCalledWith(
+      "api: request failed",
+      expect.objectContaining({
+        details: expect.objectContaining({
+          status_code: 422,
+          error_message: expect.stringContaining(
+            "Estimated preview cache arrays exceed the configured limit.",
+          ),
+        }),
+      }),
+    );
+  });
+
+  it("uses a top-level message before a structured detail error code", async () => {
+    const error = new Error("Request failed with status code 409");
+    Object.assign(error, {
+      config: { method: "post", url: "/convert/generate" },
+      response: {
+        status: 409,
+        data: {
+          detail: { error: "preview_cache_missing" },
+          message: "Preview cache is missing. Run preview again.",
+        },
+      },
+    });
+    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+    await expect(apiClient.post("/convert/generate", {})).rejects.toMatchObject({
+      message: "Preview cache is missing. Run preview again.",
+    });
+  });
+
+  it("uses structured detail error codes when no readable message exists", async () => {
+    const error = new Error("Request failed with status code 409");
+    Object.assign(error, {
+      config: { method: "post", url: "/convert/generate" },
+      response: {
+        status: 409,
+        data: {
+          detail: { error: "preview_cache_missing" },
+        },
+      },
+    });
+    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+    await expect(apiClient.post("/convert/generate", {})).rejects.toMatchObject({
+      message: "preview_cache_missing",
+    });
+  });
+
   it("uses a readable HTTP fallback when the response has no detail", async () => {
     const error = new Error("Request failed with status code 503");
     Object.assign(error, {
@@ -272,6 +350,105 @@ describe("apiClient", () => {
     }
   });
 
+  it("uses structured detail object messages for failed resource downloads", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValueOnce({
+      ok: false,
+      status: 422,
+      headers: { get: () => "application/json" },
+      json: () =>
+        Promise.resolve({
+          detail: {
+            error: "preview_cache_size_limit_exceeded",
+            message:
+              "Estimated preview cache arrays exceed the configured limit.",
+          },
+        }),
+    }) as unknown as typeof fetch;
+
+    try {
+      await expect(downloadResourceBlob("/api/files/preview")).rejects.toThrow(
+        "Estimated preview cache arrays exceed the configured limit.",
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("turns resource download network failures into readable errors", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("Failed to fetch")) as unknown as typeof fetch;
+
+    try {
+      let caught: unknown;
+      try {
+        await downloadResourceBlob("/api/files/model");
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).message).toBe(
+        "API request failed before the server returned a response.",
+      );
+      expect((caught as Error).message).not.toContain("Failed to fetch");
+      expect((caught as Error).cause).toBeInstanceOf(TypeError);
+      expect(
+        (caught as Error & { response?: { status: number | null } }).response
+          ?.status,
+      ).toBeNull();
+      expect(
+        (
+          (caught as Error & { response?: { data: { detail?: unknown } } })
+            .response?.data.detail
+        ),
+      ).toBe("API request failed before the server returned a response.");
+      expect(
+        (
+          (caught as Error & { response?: { data: { url?: unknown } } })
+            .response?.data.url
+        ),
+      ).toBe("/api/files/model");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("turns interrupted resource body reads into readable errors", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      headers: { get: () => "application/octet-stream" },
+      blob: () =>
+        Promise.reject(
+          new TypeError("NetworkError when attempting to fetch resource."),
+        ),
+    }) as unknown as typeof fetch;
+
+    try {
+      let caught: unknown;
+      try {
+        await downloadResourceBlob("/api/files/model");
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).message).toBe(
+        "API request failed before the server returned a response.",
+      );
+      expect((caught as Error).message).not.toContain("NetworkError");
+      expect((caught as Error).cause).toBeInstanceOf(TypeError);
+      expect(
+        (caught as Error & { response?: { status: number | null } }).response
+          ?.status,
+      ).toBeNull();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("preserves detailed backend messages for failed resource downloads", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = vi.fn().mockResolvedValueOnce({
@@ -313,6 +490,34 @@ describe("apiClient", () => {
       const init = vi.mocked(globalThis.fetch).mock.calls[0]?.[1] as RequestInit;
       expect((init.headers as Headers).get("Range")).toBe("bytes=0-0");
       expect(cancel).toHaveBeenCalledOnce();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("turns resource validation network failures into readable errors", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("Failed to fetch")) as unknown as typeof fetch;
+
+    try {
+      let caught: unknown;
+      try {
+        await assertResourceDownloadAvailable("/api/files/model");
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).message).toBe(
+        "API request failed before the server returned a response.",
+      );
+      expect((caught as Error).message).not.toContain("Failed to fetch");
+      expect((caught as Error).cause).toBeInstanceOf(TypeError);
+      expect(
+        (caught as Error & { response?: { status: number | null } }).response
+          ?.status,
+      ).toBeNull();
     } finally {
       globalThis.fetch = originalFetch;
     }
