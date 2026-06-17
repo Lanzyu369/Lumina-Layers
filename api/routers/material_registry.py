@@ -11,7 +11,7 @@ import os
 from fastapi import APIRouter, File, Header, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 
-from api.file_bridge import upload_to_tempfile
+from api.file_bridge import UploadTooLargeError, upload_to_tempfile
 from api.schemas.responses import (
     MaterialRegistryCatalogResponse,
     MaterialRegistryPackageMutationResponse,
@@ -36,6 +36,7 @@ from core.single_stage import (
     export_saved_stage_a_material_archives,
     invalidate_material_library_cache,
     invalidate_material_registry_remote_catalog_cache,
+    material_package_max_archive_bytes,
 )
 
 router = APIRouter(prefix="/api/material-registry/v1", tags=["Material Registry"])
@@ -105,11 +106,17 @@ async def material_registry_package_upload(
     archive_path: str | None = None
     try:
         verify_material_registry_write_access(official_password=official_password)
-        archive_path = await upload_to_tempfile(archive, suffix=".zip")
+        archive_path = await upload_to_tempfile(
+            archive,
+            suffix=".zip",
+            max_bytes=material_package_max_archive_bytes(),
+        )
         result = upload_material_registry_package(archive_path=archive_path)
         invalidate_material_registry_remote_catalog_cache()
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except UploadTooLargeError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
     except (ValueError, OSError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     finally:

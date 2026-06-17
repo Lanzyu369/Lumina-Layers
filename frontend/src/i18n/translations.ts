@@ -6691,6 +6691,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "读取云端耗材库失败",
     en: "Failed to load cloud material library",
   },
+  mat_sync_catalog_not_configured: {
+    zh: "尚未配置云端耗材库。本地耗材库仍可离线使用；配置 LUMINA_MATERIAL_REGISTRY_URL 后会显示云端耗材。",
+    en: "Cloud material registry is not configured. The local material library remains available offline; configure LUMINA_MATERIAL_REGISTRY_URL to show cloud materials.",
+  },
   mat_sync_catalog_refresh_success: {
     zh: "云端耗材目录已刷新。",
     en: "Cloud material catalog refreshed.",

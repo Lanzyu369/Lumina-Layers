@@ -671,6 +671,32 @@ describe("MaterialCloudSyncPanel", () => {
     });
   });
 
+  it("shows an offline notice when the cloud registry URL is not configured", async () => {
+    const notConfiguredError = Object.assign(
+      new Error("Request failed with status code 422"),
+      {
+        response: {
+          status: 422,
+          data: { detail: "Material registry URL is not configured" },
+        },
+      },
+    );
+    vi.mocked(fetchMaterialRegistryCatalog).mockRejectedValue(notConfiguredError);
+
+    render(<MaterialCloudSyncPanel />);
+
+    expect(await screen.findByTestId("material-cloud-sync-notice")).toHaveTextContent(
+      /未配置|not configured/i,
+    );
+    expect(screen.queryByTestId("material-cloud-sync-error")).not.toBeInTheDocument();
+    expect(screen.queryByText("Request failed with status code 422")).not.toBeInTheDocument();
+    expect(screen.getByTestId("material-cloud-catalog-count")).toHaveTextContent("0");
+    expect(screen.getByText(/没有匹配的云端耗材|No matching cloud materials/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", {
+      name: /回滚到 rev_old|rollback to rev_old/i,
+    })).toBeEnabled();
+  });
+
   it("renders installed catalog status and rolls back a previous revision", async () => {
     render(<MaterialCloudSyncPanel />);
 

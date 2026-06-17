@@ -1,7 +1,7 @@
 # 独立耗材库服务与 Lumina 分发版拆分计划
 
-日期：2026-06-12  
-基线分支：PR #242 `Min/feat/material-registry-package-v2`  
+日期：2026-06-12
+基线分支：PR #242 `Min/feat/material-registry-package-v2`
 当前本仓库规划分支：`shmx/feat/material-registry-split-plan`
 
 ## 结论

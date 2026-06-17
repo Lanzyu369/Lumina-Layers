@@ -39,6 +39,7 @@ interface LoadCatalogAndStatusResult {
   statusResponse: MaterialSyncStatusResponse | null;
   catalogResponse: MaterialRegistryCatalogResponse | null;
   hasError: boolean;
+  hasNotice: boolean;
 }
 
 const catalogFilters: CatalogFilter[] = [
@@ -48,6 +49,7 @@ const catalogFilters: CatalogFilter[] = [
   "installed",
 ];
 const MATERIAL_CATALOG_PAGE_SIZE = 50;
+const MATERIAL_REGISTRY_NOT_CONFIGURED_DETAIL = "Material registry URL is not configured";
 
 const formatBytes = (bytes: number): string => {
   if (!Number.isFinite(bytes) || bytes <= 0) {
@@ -160,8 +162,34 @@ const resolveRollbackRevisions = (installed: MaterialSyncInstalledEntry): string
     (revisionId) => revisionId && revisionId !== installed.revision_id,
   )));
 
+const readApiErrorDetail = (err: unknown): string | null => {
+  if (!err || typeof err !== "object" || !("response" in err)) {
+    return null;
+  }
+  const response = (err as { response?: { data?: unknown } }).response;
+  const data = response?.data;
+  if (!data || typeof data !== "object" || !("detail" in data)) {
+    return null;
+  }
+  const detail = (data as { detail?: unknown }).detail;
+  return typeof detail === "string" && detail.trim() ? detail.trim() : null;
+};
+
+const isMaterialRegistryNotConfiguredError = (err: unknown): boolean =>
+  readApiErrorDetail(err) === MATERIAL_REGISTRY_NOT_CONFIGURED_DETAIL;
+
 const resolveErrorMessage = (err: unknown, fallback: string): string =>
-  err instanceof Error ? err.message : fallback;
+  readApiErrorDetail(err) ?? (err instanceof Error ? err.message : fallback);
+
+const emptyMaterialRegistryCatalog = (): MaterialRegistryCatalogResponse => ({
+  schema_version: "1.0",
+  channels: [],
+  count: 0,
+  total_count: 0,
+  offset: 0,
+  limit: MATERIAL_CATALOG_PAGE_SIZE,
+  materials: [],
+});
 
 const mergeCatalogPage = (
   current: MaterialRegistryCatalogResponse | null,
@@ -208,6 +236,7 @@ export default function MaterialCloudSyncPanel() {
   const [pendingInstall, setPendingInstall] = useState<string | null>(null);
   const [pendingRollback, setPendingRollback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const catalogQuery = searchQuery.trim();
 
@@ -277,6 +306,7 @@ export default function MaterialCloudSyncPanel() {
   const loadCatalogAndStatus = useCallback(async (): Promise<LoadCatalogAndStatusResult> => {
     setIsLoading(true);
     setError(null);
+    setNotice(null);
     const [statusResult, catalogResult] = await Promise.allSettled([
       fetchMaterialSyncStatus(),
       fetchCatalogPage({
@@ -287,18 +317,25 @@ export default function MaterialCloudSyncPanel() {
     ] as const);
 
     const statusResponse = statusResult.status === "fulfilled" ? statusResult.value : null;
-    const catalogResponse = catalogResult.status === "fulfilled" ? catalogResult.value : null;
+    let catalogResponse = catalogResult.status === "fulfilled" ? catalogResult.value : null;
     const failures: string[] = [];
+    let nextNotice: string | null = null;
 
     if (statusResult.status === "rejected") {
       failures.push(resolveErrorMessage(statusResult.reason, t("mat_sync_status_failed")));
     }
     if (catalogResult.status === "rejected") {
-      failures.push(resolveErrorMessage(catalogResult.reason, t("mat_sync_status_failed")));
+      if (isMaterialRegistryNotConfiguredError(catalogResult.reason)) {
+        catalogResponse = emptyMaterialRegistryCatalog();
+        nextNotice = t("mat_sync_catalog_not_configured");
+      } else {
+        failures.push(resolveErrorMessage(catalogResult.reason, t("mat_sync_status_failed")));
+      }
     }
 
     setStatus(statusResponse);
     setCatalog(catalogResponse ? mergeCatalogPage(null, catalogResponse) : null);
+    setNotice(nextNotice);
     if (failures.length > 0) {
       setError(failures.join(" / "));
     }
@@ -307,6 +344,7 @@ export default function MaterialCloudSyncPanel() {
         statusResponse,
         catalogResponse,
         hasError: failures.length > 0,
+        hasNotice: nextNotice !== null,
       };
     } finally {
       setIsLoading(false);
@@ -322,7 +360,7 @@ export default function MaterialCloudSyncPanel() {
     setSuccess(null);
     try {
       const result = await loadCatalogAndStatus();
-      if (!result.hasError) {
+      if (!result.hasError && !result.hasNotice) {
         setSuccess(t("mat_sync_catalog_refresh_success"));
       }
     } finally {
@@ -620,6 +658,11 @@ export default function MaterialCloudSyncPanel() {
       {error ? (
         <StatusBanner data-testid="material-cloud-sync-error" tone="error">
           {error}
+        </StatusBanner>
+      ) : null}
+      {notice ? (
+        <StatusBanner data-testid="material-cloud-sync-notice" tone="info">
+          {notice}
         </StatusBanner>
       ) : null}
       {success ? (

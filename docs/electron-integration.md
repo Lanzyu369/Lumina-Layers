@@ -37,7 +37,7 @@
 - **不**引入新的 i18n 源；退出弹窗文案在主进程内置 `{ zh:{...}, en:{...} }` 常量，避免跨进程读取 translations。后续若加语种，只需同步该常量。
 
 ## 5. 生产打包（electron-builder）
-- `electron/package.json` 添加 `electron-builder` 作为 devDependency，`build.extraResources` 把 `resources/backend/`（PyInstaller 产物）与 `resources/app/dist/`（`vite build` 产物）打包；`build.win.target = 'nsis'`，`nsis.oneClick = false` 允许用户选择安装路径。
+- `electron/package.json` 添加 `electron-builder` 作为 devDependency，`build.extraResources` 把 `resources/backend/`（PyInstaller 产物）、`resources/app/dist/`（`vite build` 产物）与 `resources/materials/`（可选耗材 seed）打包；`build.win.target = 'nsis'`，`nsis.oneClick = false` 允许用户选择安装路径。
 - 新增 `scripts/build_desktop.py`（或纯 npm script 串）串联：
   1. `cd frontend && npm run build`（环境变量 `VITE_API_BASE_URL=http://127.0.0.1:8000/api` 使打包后的前端指向本地后端，替代 dev 代理）。
   2. `pyinstaller lumina_studio.spec`（已存在 spec；**核对 `console=False` / `--windowed`**，否则后端启动瞬间会闪黑框；核对入口为 `api_server.py` 并命名 `lumina-backend`）。

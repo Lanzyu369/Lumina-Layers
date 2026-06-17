@@ -610,6 +610,39 @@ def test_material_registry_upload_stores_package_as_pending(
     assert catalog.status_code == 403
 
 
+def test_material_registry_upload_rejects_oversized_upload(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    packages_dir = tmp_path / "registry-packages"
+    source_package = tmp_path / "upload.zip"
+    _write_v2_registry_package(
+        source_package,
+        material_id="mat_upload_big",
+        revision_id="rev_upload_big",
+        channel="manual",
+    )
+    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_PACKAGES_DIR", str(packages_dir))
+    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_OFFICIAL_PASSWORD", "approve-secret")
+    monkeypatch.setenv("LUMINA_MATERIAL_PACKAGE_MAX_ARCHIVE_BYTES", "32")
+
+    response = _client().post(
+        "/api/material-registry/v1/packages/upload",
+        headers={"X-Lumina-Material-Registry-Official-Password": "approve-secret"},
+        files={
+            "archive": (
+                "upload.zip",
+                source_package.read_bytes(),
+                "application/zip",
+            )
+        },
+    )
+
+    assert response.status_code == 413
+    assert "Uploaded file exceeds maximum size" in response.json()["detail"]
+    assert not packages_dir.exists() or not any(packages_dir.rglob("*.zip"))
+
+
 def test_material_registry_upload_rejects_tampered_package(
     monkeypatch,
     tmp_path: Path,
