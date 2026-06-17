@@ -89,6 +89,7 @@ def _compute_sampling_geometry(
     offset_y: float,
     roi_frac: float = _ROI_FRAC,
     min_half_roi: int = _MIN_HALF_ROI,
+    padding: int | float = 1,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Pre-compute corrected cell centers and per-cell adaptive ROI sizes.
     预计算校正后的色块中心坐标和逐色块自适应 ROI 尺寸。
@@ -112,6 +113,8 @@ def _compute_sampling_geometry(
             sizing (default 4).  The actual per-cell value may be smaller
             when local spacing requires it; the absolute floor is 1 px.
             (名义半 ROI 期望下限；实际值受局部间距约束，绝对下限为 1px)
+        padding: Physical padding cells before the data grid.
+            (数据区前的物理 padding 格数)
 
     Returns:
         Tuple of (centers_x, centers_y, half_roi_map), each shaped
@@ -125,8 +128,9 @@ def _compute_sampling_geometry(
     cs = np.arange(grid_size)
     rr, cc = np.meshgrid(rs, cs, indexing="ij")
 
-    phys_r = rr + 1.0
-    phys_c = cc + 1.0
+    physical_padding = max(0.0, float(padding))
+    phys_r = rr + physical_padding
+    phys_c = cc + physical_padding
     nx = (phys_c + 0.5) / physical_grid * 2 - 1
     ny = (phys_r + 0.5) / physical_grid * 2 - 1
 
@@ -629,7 +633,13 @@ def run_extraction(
     vis = warped.copy()
 
     centers_x, centers_y, half_roi_map = _compute_sampling_geometry(
-        grid_size, physical_grid, zoom, barrel, offset_x, offset_y,
+        grid_size,
+        physical_grid,
+        zoom,
+        barrel,
+        offset_x,
+        offset_y,
+        padding=page_layout.padding,
     )
     cell_px = DST_SIZE / physical_grid
     marker_size = max(8, int(cell_px * 0.3))

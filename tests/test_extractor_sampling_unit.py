@@ -10,7 +10,13 @@ from __future__ import annotations
 
 import numpy as np
 
-from core.extractor import _srgb_to_linear, _linear_to_srgb, _draw_dashed_rect
+from core.extractor import (
+    DST_SIZE,
+    _compute_sampling_geometry,
+    _draw_dashed_rect,
+    _linear_to_srgb,
+    _srgb_to_linear,
+)
 
 
 # =========================================================================
@@ -70,7 +76,31 @@ class TestLinearLightMean:
 
 
 # =========================================================================
-# 3. _draw_dashed_rect
+# 3. Sampling geometry honors physical padding
+# =========================================================================
+
+
+class TestSamplingGeometry:
+    """Verify data-cell centers follow the page layout padding."""
+
+    def test_uses_page_padding_for_first_cell_center(self) -> None:
+        centers_x, centers_y, _ = _compute_sampling_geometry(
+            grid_size=32,
+            physical_grid=40,
+            padding=4,
+            zoom=1.0,
+            barrel=0.0,
+            offset_x=0.0,
+            offset_y=0.0,
+        )
+
+        expected = (4.5 / 40.0) * DST_SIZE
+        assert np.isclose(centers_x[0, 0], expected)
+        assert np.isclose(centers_y[0, 0], expected)
+
+
+# =========================================================================
+# 4. _draw_dashed_rect
 # =========================================================================
 
 

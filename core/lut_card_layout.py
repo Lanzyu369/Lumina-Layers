@@ -247,6 +247,7 @@ def resolve_lut_layout(color_mode: str | None, total_count: int) -> LutCardLayou
                 item_count=1024,
                 data_rows=32,
                 data_cols=32,
+                padding=4,
             ),
             _make_page(
                 page_index=1,
