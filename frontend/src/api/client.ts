@@ -95,7 +95,10 @@ function isGenericHttpDetail(detail: string, statusCode: number | null): boolean
   }
   if (
     typeof statusCode === "number" &&
-    new RegExp(`\\b(http|status code|status)\\s*${statusCode}\\b`).test(normalized)
+    new RegExp(
+      `^(?:request\\s+failed\\s+with\\s+status\\s+code\\s+|` +
+        `(?:http\\s*)?(?:error|status(?:\\s+code)?)\\s*)?${statusCode}$`,
+    ).test(normalized)
   ) {
     return true;
   }
@@ -182,6 +185,22 @@ function readableApiErrorMessage(
     return fallback;
   }
   return error instanceof Error ? error.message : String(error ?? "API request failed");
+}
+
+function replaceGenericResponseDetail(
+  response: { data?: unknown } | null | undefined,
+  statusCode: number | null,
+  readableMessage: string,
+): void {
+  const data = response?.data;
+  if (!isRecord(data)) {
+    return;
+  }
+  const detail = data.detail;
+  if (typeof detail !== "string" || !isGenericHttpDetail(detail, statusCode)) {
+    return;
+  }
+  response.data = { ...data, detail: readableMessage };
 }
 
 function getResponseHeaderValue(
@@ -312,11 +331,13 @@ apiClient.interceptors.response.use(
     const url = config?.url ?? null;
     const statusCode: number | null = response?.status ?? null;
     const requestId = getResponseHeaderValue(response?.headers, "x-request-id");
+    const responseDetailForLog = summarizeApiErrorData(response?.data);
     const readableMessage = readableApiErrorMessage(
       response?.data,
       statusCode,
       error,
     );
+    replaceGenericResponseDetail(response, statusCode, readableMessage);
     if (error && typeof error === "object") {
       try {
         (error as { message?: string }).message = readableMessage;
@@ -334,7 +355,7 @@ apiClient.interceptors.response.use(
         url,
         status_code: statusCode,
         request_id: requestId,
-        response_detail: summarizeApiErrorData(response?.data),
+        response_detail: responseDetailForLog,
         ...summarizeErrorForLog(error),
         error_message: readableMessage,
       },

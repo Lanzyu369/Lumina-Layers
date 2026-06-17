@@ -129,6 +129,104 @@ describe("apiClient", () => {
     });
   });
 
+  it("replaces numeric-only backend details with readable HTTP fallbacks", async () => {
+    const error = new Error("Request failed with status code 500");
+    Object.assign(error, {
+      config: { method: "post", url: "/convert/generate" },
+      response: { status: 500, data: { detail: "500" } },
+    });
+    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+    const expectedMessage =
+      "The server hit an internal error. Check the log for the request ID.";
+    const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
+    expect(rejected).toMatchObject({ message: expectedMessage });
+    expect(rejected.response?.data?.detail).toBe(expectedMessage);
+    expect(postClientLog).toHaveBeenCalledWith(
+      "api: request failed",
+      expect.objectContaining({
+        details: expect.objectContaining({
+          status_code: 500,
+          response_detail: { detail: "500" },
+          error_message: expectedMessage,
+        }),
+      }),
+    );
+    expect(useActionHistoryStore.getState().history.at(-1)?.error).toEqual(
+      expect.objectContaining({
+        status_code: 500,
+        path: "/convert/generate",
+        error_message: expectedMessage,
+      }),
+    );
+  });
+
+  it("replaces code-only backend details with readable HTTP fallbacks", async () => {
+    const error = new Error("Request failed with status code 402");
+    Object.assign(error, {
+      config: { method: "post", url: "/convert/generate" },
+      response: { status: 402, data: { detail: "HTTP error 402" } },
+    });
+    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+    const expectedMessage =
+      "This action requires an available quota or payment before it can continue.";
+    const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
+    expect(rejected).toMatchObject({ message: expectedMessage });
+    expect(rejected.response?.data?.detail).toBe(expectedMessage);
+  });
+
+  it("keeps backend details where numbers are part of the real message", async () => {
+    const error = new Error("Request failed with status code 422");
+    Object.assign(error, {
+      config: { method: "post", url: "/convert/generate" },
+      response: { status: 422, data: { detail: "value must be <= 500" } },
+    });
+    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+    const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
+    expect(rejected).toMatchObject({
+      message: "value must be <= 500",
+    });
+    expect(rejected.response?.data?.detail).toBe("value must be <= 500");
+  });
+
+  it("keeps backend details that explain an upstream status failure", async () => {
+    const error = new Error("Request failed with status code 500");
+    Object.assign(error, {
+      config: { method: "post", url: "/convert/generate" },
+      response: {
+        status: 500,
+        data: { detail: "upstream dependency returned status 500 while slicing" },
+      },
+    });
+    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+    const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
+    expect(rejected).toMatchObject({
+      message: "upstream dependency returned status 500 while slicing",
+    });
+    expect(rejected.response?.data?.detail).toBe(
+      "upstream dependency returned status 500 while slicing",
+    );
+  });
+
+  it("still replaces generic request-failed status details", async () => {
+    const error = new Error("Request failed with status code 500");
+    Object.assign(error, {
+      config: { method: "post", url: "/convert/generate" },
+      response: {
+        status: 500,
+        data: { detail: "Request failed with status code 500" },
+      },
+    });
+    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+    await expect(apiClient.post("/convert/generate", {})).rejects.toMatchObject({
+      message: "The server hit an internal error. Check the log for the request ID.",
+    });
+  });
+
   it("replaces generic framework details with a real user-facing reason", async () => {
     const error = new Error("Request failed with status code 404");
     Object.assign(error, {
