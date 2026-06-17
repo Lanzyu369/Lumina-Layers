@@ -1288,11 +1288,20 @@ def _require_preview_cache_for_heightmap(session_data: dict) -> dict:
     cache, cache_ref = _require_preview_cache_for_layer_images(session_data)
     if cache_ref is None:
         return cache
-    hydrated = hydrate_preview_cache(
-        cache_ref,
-        fields={"matched_rgb", "mask_solid"},
-        mmap_mode="r",
-    )
+    try:
+        hydrated = hydrate_preview_cache(
+            cache_ref,
+            fields={"matched_rgb", "mask_solid"},
+            mmap_mode="r",
+        )
+    except (OSError, ValueError, TypeError, KeyError, EOFError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Preview cache is unavailable. "
+                "Re-run preview before uploading a heightmap."
+            ),
+        ) from exc
     cache.update(hydrated)
     return cache
 
