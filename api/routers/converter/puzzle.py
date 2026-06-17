@@ -716,6 +716,7 @@ async def generate_puzzle(
     """
 
     session_data = _require_session(store, body.session_id)
+    preview_cache_ref = session_data.get("preview_cache")
     cache = _require_puzzle_cache(
         session_data,
         fields={"matched_rgb", "mask_solid", "preview_rgba"},
@@ -775,6 +776,7 @@ async def generate_puzzle(
         heightmap_max_height=generate_params.heightmap_max_height,
         session_data=session_data,
         cache=cache,
+        cache_ref=preview_cache_ref if isinstance(preview_cache_ref, dict) else None,
     )
     heightmap_grayscale = session_data.get("heightmap_grayscale")
 

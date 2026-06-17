@@ -868,6 +868,7 @@ async def convert_generate(
         heightmap_max_height=request.heightmap_max_height,
         session_data=session_data,
         cache=cache,
+        cache_ref=cache_ref,
     )
 
     # If heightmap mode, save session heightmap to temp file for worker process
@@ -1673,6 +1674,7 @@ async def convert_generate_large_format(
         heightmap_max_height=request.heightmap_max_height,
         session_data=session_data,
         cache=cache,
+        cache_ref=cache_ref,
     )
 
     sid = body.session_id

@@ -69,28 +69,55 @@ def _validate_material_source(material_source: str) -> str:
     return material_source
 
 
-def _cache_material_matrix_depth(cache: dict | None) -> int | None:
-    if not cache:
-        return None
-    material_matrix = cache.get("material_matrix")
-    shape = getattr(material_matrix, "shape", None)
-    if shape is None and isinstance(material_matrix, dict):
-        shape = material_matrix.get("shape")
-    if shape is None or len(shape) < 3:
+def _material_matrix_depth_from_shape(shape: object | None) -> int | None:
+    if shape is None:
         return None
     try:
-        depth = int(shape[2])
+        shape_values = list(shape)
+    except TypeError:
+        return None
+    if len(shape_values) < 3:
+        return None
+    try:
+        depth = int(shape_values[2])
     except (TypeError, ValueError):
         return None
     return depth if depth > 0 else None
+
+
+def _material_matrix_depth_from_value(material_matrix: object | None) -> int | None:
+    shape = getattr(material_matrix, "shape", None)
+    if shape is None and isinstance(material_matrix, dict):
+        shape = material_matrix.get("shape")
+    return _material_matrix_depth_from_shape(shape)
+
+
+def _cache_material_matrix_depth(cache: dict | None) -> int | None:
+    if not cache:
+        return None
+    depth = _material_matrix_depth_from_value(cache.get("material_matrix"))
+    if depth is not None:
+        return depth
+
+    fields = cache.get("fields")
+    if isinstance(fields, dict):
+        material_matrix_ref = fields.get("material_matrix")
+        if isinstance(material_matrix_ref, dict):
+            return _material_matrix_depth_from_shape(material_matrix_ref.get("shape"))
+    return None
 
 
 def _resolve_material_archive_optical_layer_count(
     *,
     session_data: dict | None = None,
     cache: dict | None = None,
+    cache_ref: dict | None = None,
     material_layer_count: object | None = None,
 ) -> int | None:
+    cache_ref_depth = _cache_material_matrix_depth(cache_ref)
+    if cache_ref_depth is not None:
+        return cache_ref_depth
+
     cache_depth = _cache_material_matrix_depth(cache)
     if cache_depth is not None:
         return cache_depth
@@ -118,6 +145,7 @@ def _validate_material_archive_relief_minimum_height(
     heightmap_max_height: float | None,
     session_data: dict | None = None,
     cache: dict | None = None,
+    cache_ref: dict | None = None,
     material_layer_count: object | None = None,
 ) -> None:
     """Reject material-archive relief heights below the optical stack depth."""
@@ -128,6 +156,7 @@ def _validate_material_archive_relief_minimum_height(
     optical_layers = _resolve_material_archive_optical_layer_count(
         session_data=session_data,
         cache=cache,
+        cache_ref=cache_ref,
         material_layer_count=material_layer_count,
     )
     if optical_layers is None:
