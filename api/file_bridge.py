@@ -175,19 +175,22 @@ async def ensure_png_tempfile(file: UploadFile) -> str:
         return raw_path
 
     if ext in HEIC_EXTENSIONS and not HAS_HEIF:
-        os.unlink(raw_path)
+        with suppress(OSError):
+            os.unlink(raw_path)
         raise HTTPException(
             status_code=422,
             detail="HEIC/HEIF 格式需要 pillow-heif 库。请执行: pip install pillow-heif",
         )
 
     if ext in RAW_EXTENSIONS and not HAS_RAW:
-        os.unlink(raw_path)
+        with suppress(OSError):
+            os.unlink(raw_path)
         raise HTTPException(
             status_code=422,
             detail="RAW 格式需要 rawpy 库。请执行: pip install rawpy",
         )
 
+    png_path: str | None = None
     try:
         if ext in RAW_EXTENSIONS:
             with open(raw_path, "rb") as f:
@@ -204,11 +207,22 @@ async def ensure_png_tempfile(file: UploadFile) -> str:
         os.close(fd)
         img.save(png_path, "PNG")
         os.unlink(raw_path)
-        return png_path
+        converted_path = png_path
+        png_path = None
+        return converted_path
     except HTTPException:
+        with suppress(OSError):
+            os.unlink(raw_path)
+        if png_path is not None:
+            with suppress(OSError):
+                os.unlink(png_path)
         raise
     except (UnidentifiedImageError, OSError, ValueError, RuntimeError) as e:
-        os.unlink(raw_path)
+        with suppress(OSError):
+            os.unlink(raw_path)
+        if png_path is not None:
+            with suppress(OSError):
+                os.unlink(png_path)
         fmt = "RAW" if ext in RAW_EXTENSIONS else "HEIC/HEIF"
         raise HTTPException(
             status_code=422,

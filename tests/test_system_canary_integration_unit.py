@@ -105,6 +105,31 @@ class TestSystemImagePreviewCanary:
         assert list(tmp_path.iterdir()) == []
         assert registry.get_session_entries("preview.png") == {}
 
+    def test_heic_conversion_failure_cleans_temp_files_at_api_boundary(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        payload = _png_bytes()
+
+        def fail_save(self, path, *args, **kwargs):  # noqa: ANN001
+            raise RuntimeError("simulated conversion save failure")
+
+        monkeypatch.setattr("config.TEMP_DIR", str(tmp_path))
+        monkeypatch.setattr("api.file_bridge.HAS_HEIF", True)
+        monkeypatch.setattr(Image.Image, "save", fail_save)
+        client, registry = _client_with_registry()
+
+        response = client.post(
+            "/api/system/image-preview",
+            files={"file": ("photo.heic", payload, "image/heic")},
+        )
+
+        assert response.status_code == 422, response.text
+        assert "HEIC/HEIF 文件解码失败" in response.json()["detail"]
+        assert list(tmp_path.iterdir()) == []
+        assert registry.get_session_entries("preview.png") == {}
+
 
 class TestSystemSaveSettingsCanary:
     """Settings persistence canary isolates the real user settings file."""
