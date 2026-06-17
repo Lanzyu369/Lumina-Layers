@@ -2813,6 +2813,79 @@ def test_generate_route_forwards_cache_recovered_virtual_materials(tmp_path) -> 
     assert np.all(material_matrix[mask] == np.array([4, 4, 4, 4, 4, 4, 4]))
 
 
+def test_generate_route_rejects_stale_recipe_override_artifact_cache(tmp_path) -> None:
+    _test_store.clear_all()
+    image_path = tmp_path / "input.png"
+    lut_path = tmp_path / "source.msgpack"
+    out_path = tmp_path / "out.3mf"
+    Image.fromarray(np.zeros((4, 4, 3), dtype=np.uint8)).save(image_path)
+    lut_path.write_bytes(b"lut")
+    out_path.write_bytes(b"3mf")
+
+    session_id = _test_store.create()
+    mask = np.zeros((4, 4), dtype=bool)
+    mask[1:3, 1:3] = True
+    cache_ref = externalize_preview_cache(
+        session_id,
+        _test_store,
+        {
+            "target_w": 4,
+            "target_h": 4,
+            "target_width_mm": 40.0,
+            "matched_rgb": np.zeros((4, 4, 3), dtype=np.uint8),
+            "mask_solid": np.ones((4, 4), dtype=bool),
+            "material_matrix": np.zeros((4, 4, 5), dtype=np.uint8),
+            "lut_metadata": SimpleNamespace(
+                layer_order="Top2Bottom",
+                base_channel_idx=0,
+                palette=[object(), object(), object(), object()],
+            ),
+        },
+        root_dir=tmp_path,
+    )
+    stale_material_matrix_path = cache_ref["fields"]["material_matrix"]["path"]
+    os.remove(stale_material_matrix_path)
+
+    _test_store.put(session_id, "image_path", str(image_path))
+    _test_store.put(session_id, "lut_path", str(lut_path))
+    _test_store.put(session_id, "replacement_regions", [])
+    _test_store.put(session_id, "free_color_set", set())
+    _test_store.put(session_id, "selected_region_masks", {"region-1": mask})
+    _test_store.put(session_id, "preview_cache", cache_ref)
+    _mock_pool.submit = AsyncMock(
+        return_value={
+            "threemf_path": str(out_path),
+            "glb_path": None,
+            "status_msg": "OK",
+        }
+    )
+
+    response = client.post(
+        "/api/convert/generate",
+        json={
+            "session_id": session_id,
+            "params": {
+                "lut_name": "test_lut",
+                "color_layers": 5,
+                "recipe_overrides": [
+                    {
+                        "region_id": "region-1",
+                        "recipe": [1, 1, 1, 1, 1],
+                        "layer_order": "Top2Bottom",
+                    }
+                ],
+            },
+        },
+    )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert "material_matrix artifact" in detail
+    assert "Re-run preview" in detail
+    assert stale_material_matrix_path not in detail
+    _mock_pool.submit.assert_not_called()
+
+
 def test_generate_route_preserves_session_recipe_overrides_when_request_is_empty(tmp_path) -> None:
     """A stale empty request must not erase an already-applied recipe.
 

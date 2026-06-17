@@ -274,11 +274,21 @@ def _cache_field_array(
         return cache.get(field_name)
     if cache_ref is None:
         return None
-    hydrated = hydrate_preview_cache(
-        cache_ref,
-        fields={field_name},
-        mmap_mode=mmap_mode,
-    )
+    try:
+        hydrated = hydrate_preview_cache(
+            cache_ref,
+            fields={field_name},
+            mmap_mode=mmap_mode,
+        )
+    except (OSError, ValueError, TypeError, KeyError, EOFError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Preview cache {field_name} artifact is unavailable or "
+                "unreadable. Re-run preview before generating with "
+                "recipe overrides."
+            ),
+        ) from exc
     return hydrated.get(field_name)
 
 
