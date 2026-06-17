@@ -1470,6 +1470,7 @@ class LUTManager:
         entries = data.get("entries", [])
         rgb_list: list[list[int]] = []
         stacks_list: list[list[int]] = []
+        stack_recipe_widths: list[int] = []
 
         for entry in entries:
             if not isinstance(entry, dict):
@@ -1547,6 +1548,7 @@ class LUTManager:
             # parsers (core/lut_details/parser.py) only see usable rows.
             recipe_raw = entry.get("recipe", [])
             if not isinstance(recipe_raw, (list, tuple)):
+                source_recipe_width = 0
                 if skip_malformed_recipes:
                     _log.debug(
                         "Skipping row with non-list recipe payload (strict)",
@@ -1567,6 +1569,7 @@ class LUTManager:
                 )
                 recipe_indices = [-1, -1, -1, -1, -1]
             else:
+                source_recipe_width = len(recipe_raw)
                 if skip_malformed_recipes:
                     has_invalid_member = False
                     for member in recipe_raw:
@@ -1597,6 +1600,7 @@ class LUTManager:
             )
             rgb_list.append(row_rgb)
             stacks_list.append(recipe_indices)
+            stack_recipe_widths.append(source_recipe_width)
 
         if rgb_list:
             rgb = np.array(rgb_list, dtype=np.uint8)
@@ -1614,6 +1618,8 @@ class LUTManager:
             stacks = None
         if _looks_like_missing_keyed_stacks(stacks, rgb.reshape(-1, 3).shape[0]):
             stacks = None
+        if stacks is not None and len(stack_recipe_widths) == len(stacks_list):
+            metadata.extensions["stack_recipe_widths"] = stack_recipe_widths
 
         return rgb, stacks, metadata
 

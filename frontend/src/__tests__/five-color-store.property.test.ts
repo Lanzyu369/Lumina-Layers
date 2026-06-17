@@ -79,8 +79,9 @@ describe("Feature: five-color-query, Property 4b: 6 层组合允许第 6 次选�
     fc.assert(
       fc.property(arbSelectedIndices(0, 6), arbColorIndex, (indices, newIndex) => {
         resetStore();
+        const loadedCombination = [...indices, ...Array(6 - indices.length).fill(0)].slice(0, 6);
         useFiveColorStore.setState({
-          combinations: [[0, 1, 2, 3, 4, 0]],
+          combinations: [loadedCombination],
           selectedIndices: [...indices],
         });
 

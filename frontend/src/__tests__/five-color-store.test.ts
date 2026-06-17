@@ -307,6 +307,38 @@ describe("fiveColorStore LUT switching", () => {
     expect(state.queryResult?.result_hex).toBe("#040506");
   });
 
+  it("allows six-layer manual selection when mixed combinations start with a five-layer row", async () => {
+    useFiveColorStore.setState({
+      lutName: "mixed-extended-lut",
+      combinations: [
+        [0, 1, 2, 3, 4],
+        [4, 1, 2, 3, 0, 4],
+      ],
+      selectedIndices: [],
+      queryResult: null,
+    });
+    for (const index of [4, 1, 2, 3, 0, 4]) {
+      useFiveColorStore.getState().addSelection(index);
+    }
+    mockQueryFiveColor.mockResolvedValueOnce({
+      found: true,
+      selected_indices: [4, 1, 2, 3, 0, 4],
+      result_rgb: [4, 5, 6],
+      result_hex: "#040506",
+      row_index: 1,
+      message: "found",
+      source: "extended",
+    });
+
+    await useFiveColorStore.getState().submitQuery();
+
+    expect(mockQueryFiveColor).toHaveBeenCalledWith({
+      lut_name: "mixed-extended-lut",
+      selected_indices: [4, 1, 2, 3, 0, 4],
+    });
+    expect(useFiveColorStore.getState().selectedIndices).toEqual([4, 1, 2, 3, 0, 4]);
+  });
+
   it("ignores stale target-match responses after switching LUTs", async () => {
     let resolveMatch: (value: Awaited<ReturnType<typeof matchFiveColorByHex>>) => void;
     const matchPromise = new Promise<Awaited<ReturnType<typeof matchFiveColorByHex>>>((resolve) => {

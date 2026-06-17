@@ -155,9 +155,13 @@ def _load_engine(lut_name: str) -> tuple[ColorQueryEngine, str]:
                     color_count = inferred_color_count
             # Extract per-entry sources from JSON
             sources = _extract_sources_from_keyed_json(path)
+            stack_recipe_widths = metadata.extensions.get("stack_recipe_widths")
+            if not isinstance(stack_recipe_widths, list):
+                stack_recipe_widths = None
             engine = ColorQueryEngine(
                 stack_lut=stack_data, lut_rgb=rgb_data, color_count=color_count,
                 sources=sources,
+                stack_recipe_widths=stack_recipe_widths,
             )
             # Override base_colors from palette hex_color
             if metadata.palette:

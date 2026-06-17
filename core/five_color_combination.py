@@ -342,6 +342,7 @@ class ColorQueryEngine:
         lut_rgb: np.ndarray,
         color_count: Optional[int] = None,
         sources: Optional[List[str]] = None,
+        stack_recipe_widths: Optional[List[int]] = None,
     ):
         """初始化查询引擎
 
@@ -350,6 +351,7 @@ class ColorQueryEngine:
             lut_rgb: (N, 3) RGB 颜色数据
             color_count: 颜色数量（可选，如果没有则自动检测）
             sources: 每条记录的来源标识列表（可选）
+            stack_recipe_widths: Per-row source recipe widths before any padding.
         """
         self.lut_rgb = lut_rgb
         stack_arr = np.asarray(stack_lut) if stack_lut is not None else None
@@ -361,6 +363,14 @@ class ColorQueryEngine:
             else stack_arr
         )
         self.sources = sources or []
+        if (
+            stack_recipe_widths is not None
+            and raw_stack_lut is not None
+            and len(stack_recipe_widths) == len(raw_stack_lut)
+        ):
+            self._stack_recipe_widths = [int(value) for value in stack_recipe_widths]
+        else:
+            self._stack_recipe_widths = None
         stack_is_reliable = raw_stack_lut is not None
 
         # 验证 stack_lut 和 lut_rgb 长度一致（如果有 stack_lut）
@@ -380,7 +390,7 @@ class ColorQueryEngine:
             if detected_count > 0:
                 self.color_count = detected_count
             else:
-                inferred_count = self._infer_supported_stack_color_count(raw_stack_lut)
+                inferred_count = self._infer_supported_stack_color_count(raw_stack_lut, self._stack_recipe_widths)
                 if inferred_count is not None:
                     self.color_count = inferred_count
                 else:
@@ -408,7 +418,10 @@ class ColorQueryEngine:
                 self.base_colors.append((128, 128, 128))
 
     @staticmethod
-    def _infer_supported_stack_color_count(stack_lut: np.ndarray) -> int | None:
+    def _infer_supported_stack_color_count(
+        stack_lut: np.ndarray,
+        stack_recipe_widths: list[int] | None = None,
+    ) -> int | None:
         stack_arr = np.asarray(stack_lut)
         if (
             stack_arr.ndim != 2
@@ -417,11 +430,16 @@ class ColorQueryEngine:
         ):
             return None
         max_index = -1
-        for row in stack_arr:
+        for row_index, row in enumerate(stack_arr):
             row_values: list[int] = []
             row_is_valid = True
             row_candidates = row.tolist()
-            if len(row_candidates) == 6:
+            source_width = (
+                stack_recipe_widths[row_index]
+                if stack_recipe_widths is not None and row_index < len(stack_recipe_widths)
+                else None
+            )
+            if source_width == 5 and len(row_candidates) == 6:
                 trailing_value = _parse_stack_recipe_integer(row_candidates[-1])
                 if trailing_value == -1:
                     row_candidates = row_candidates[:5]
@@ -447,8 +465,11 @@ class ColorQueryEngine:
             return np.empty((0, recipe_width), dtype=int)
         normalized_rows: list[list[int]] = []
         invalid_row = [-1] * recipe_width
-        for row in stack_arr:
-            recipe = self._normalize_layer_recipe(row.tolist())
+        for row_index, row in enumerate(stack_arr):
+            recipe = self._normalize_layer_recipe(
+                row.tolist(),
+                source_width=self._source_recipe_width(row_index),
+            )
             if recipe is None:
                 normalized_rows.append(invalid_row)
             elif len(recipe) < recipe_width:
@@ -467,8 +488,11 @@ class ColorQueryEngine:
         if stack_arr.ndim != 2 or stack_arr.shape[1] not in _SUPPORTED_STACK_RECIPE_WIDTHS:
             return None
         combinations: list[list[int]] = []
-        for row in stack_arr:
-            recipe = self._normalize_layer_recipe(row.tolist())
+        for row_index, row in enumerate(stack_arr):
+            recipe = self._normalize_layer_recipe(
+                row.tolist(),
+                source_width=self._source_recipe_width(row_index),
+            )
             if recipe is not None:
                 combinations.append(recipe)
         return combinations
@@ -586,7 +610,10 @@ class ColorQueryEngine:
             )
 
         for row_idx, row in enumerate(stack_arr):
-            recipe = self._normalize_layer_recipe(row.tolist())
+            recipe = self._normalize_layer_recipe(
+                row.tolist(),
+                source_width=self._source_recipe_width(row_idx),
+            )
             if recipe == selected_indices:
                 result_rgb = tuple(self.lut_rgb[row_idx])
                 source = self.sources[row_idx] if row_idx < len(self.sources) else ""
@@ -650,7 +677,10 @@ class ColorQueryEngine:
             if stack_arr.shape[1] in _SUPPORTED_STACK_RECIPE_WIDTHS:
                 if row_index < 0 or row_index >= stack_arr.shape[0]:
                     return None
-                return self._normalize_layer_recipe(stack_arr[row_index].tolist())
+                return self._normalize_layer_recipe(
+                    stack_arr[row_index].tolist(),
+                    source_width=self._source_recipe_width(row_index),
+                )
             if stack_arr.shape[1] != 0:
                 return None
 
@@ -670,7 +700,19 @@ class ColorQueryEngine:
             remaining -= value * base
         return recipe
 
-    def _normalize_layer_recipe(self, values: List[int]) -> List[int] | None:
+    def _source_recipe_width(self, row_index: int) -> int | None:
+        if self._stack_recipe_widths is None:
+            return None
+        if row_index < 0 or row_index >= len(self._stack_recipe_widths):
+            return None
+        return self._stack_recipe_widths[row_index]
+
+    def _normalize_layer_recipe(
+        self,
+        values: List[int],
+        *,
+        source_width: int | None = None,
+    ) -> List[int] | None:
         if len(values) not in _SUPPORTED_STACK_RECIPE_WIDTHS or self.color_count <= 0:
             return None
         recipe: list[int] = []
@@ -679,7 +721,7 @@ class ColorQueryEngine:
             if integer_value is None:
                 return None
             recipe.append(integer_value)
-        if len(recipe) == 6 and recipe[-1] == -1:
+        if source_width == 5 and len(recipe) == 6 and recipe[-1] == -1:
             legacy_recipe = recipe[:5]
             if all(0 <= index < self.color_count for index in legacy_recipe):
                 return legacy_recipe
@@ -692,11 +734,14 @@ class ColorQueryEngine:
             return (5,)
         stack_arr = np.asarray(self.stack_lut)
         if stack_arr.ndim == 2 and stack_arr.shape[1] in _SUPPORTED_STACK_RECIPE_WIDTHS:
-            lengths = {
-                len(recipe)
-                for row in stack_arr
-                if (recipe := self._normalize_layer_recipe(row.tolist())) is not None
-            }
+            lengths = set()
+            for row_index, row in enumerate(stack_arr):
+                recipe = self._normalize_layer_recipe(
+                    row.tolist(),
+                    source_width=self._source_recipe_width(row_index),
+                )
+                if recipe is not None:
+                    lengths.add(len(recipe))
             if lengths:
                 return tuple(sorted(lengths))
             return (int(stack_arr.shape[1]),)

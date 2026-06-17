@@ -60,12 +60,23 @@ export function resolveFiveColorRecipeLength(
   combinations: number[][] | null,
   selection: number[] = [],
 ): number {
-  const combo = combinations?.find(
+  const validCombinations = combinations?.filter(
     (candidate) =>
       candidate.length >= DEFAULT_RECIPE_LENGTH &&
       candidate.length <= MAX_RECIPE_LENGTH,
   );
-  if (combo) return combo.length;
+  if (validCombinations?.length) {
+    const matchingCombinations = selection.length > 0
+      ? validCombinations.filter(
+        (candidate) =>
+          candidate.length >= selection.length &&
+          selection.every((value, index) => candidate[index] === value),
+      )
+      : validCombinations;
+    if (matchingCombinations.length > 0) {
+      return Math.max(...matchingCombinations.map((candidate) => candidate.length));
+    }
+  }
   if (selection.length === MAX_RECIPE_LENGTH) return MAX_RECIPE_LENGTH;
   return DEFAULT_RECIPE_LENGTH;
 }

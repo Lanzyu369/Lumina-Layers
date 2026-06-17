@@ -1437,6 +1437,56 @@ def test_mixed_five_and_six_layer_keyed_json_recipes_remain_queryable(tmp_path):
     ]
 
 
+def test_six_layer_keyed_json_trailing_air_is_unavailable_not_legacy_padding(tmp_path):
+    """An explicit sixth Air layer must not be reinterpreted as a legacy 5-layer row."""
+    metadata = LUTMetadata(
+        palette=[
+            PaletteEntry(color="White", material="PLA Basic", hex_color="#FFFFFF"),
+            PaletteEntry(color="Cyan", material="PLA Basic", hex_color="#00FFFF"),
+            PaletteEntry(color="Magenta", material="PLA Basic", hex_color="#FF00FF"),
+            PaletteEntry(color="Yellow", material="PLA Basic", hex_color="#FFFF00"),
+            PaletteEntry(color="Black", material="PLA Basic", hex_color="#000000"),
+        ],
+        color_mode="5-Color Extended",
+        max_color_layers=6,
+    )
+    payload = metadata.to_dict()
+    payload["entries"] = [
+        {
+            "rgb": [1, 2, 3],
+            "hex": "#010203",
+            "recipe": ["White", "Cyan", "Magenta", "Yellow", "Black", "Air"],
+        }
+    ]
+    lut_path = tmp_path / "six-layer-trailing-air-keyed-recipe.json"
+    lut_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    with patch(
+        "api.routers.five_color.LUTManager.get_lut_path",
+        return_value=str(lut_path),
+    ):
+        base_resp = client.get("/api/five-color/base-colors", params={"lut_name": "test_lut"})
+        legacy_query_resp = client.post(
+            "/api/five-color/query",
+            json={"lut_name": "test_lut", "selected_indices": [0, 1, 2, 3, 4]},
+        )
+        match_resp = client.post(
+            "/api/five-color/match-color",
+            json={"lut_name": "test_lut", "target_hex": "#010203"},
+        )
+
+    assert base_resp.status_code == 200
+    assert base_resp.json()["combinations"] == []
+    assert legacy_query_resp.status_code == 422
+    assert legacy_query_resp.json()["detail"]["reason"] == "recipe_length_mismatch"
+    assert legacy_query_resp.json()["detail"]["expected_length"] == 6
+    assert match_resp.status_code == 200
+    match_body = match_resp.json()
+    assert match_body["found"] is False
+    assert match_body["row_index"] == 0
+    assert match_body["reason"] == "recipe_unavailable"
+
+
 def test_keyed_json_non_numeric_recipe_member_keeps_rgb_context(tmp_path):
     """Invalid keyed JSON recipe members must not drop the matching RGB row."""
     metadata = LUTMetadata(
