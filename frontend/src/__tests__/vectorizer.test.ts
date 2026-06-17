@@ -14,6 +14,7 @@ import { translations } from "../i18n/translations";
 
 const {
   mockedApiClient,
+  downloadResourceBlobMock,
   loadVectorizedSvgIntoConverterSpy,
   setWidgetActiveTabSpy,
 } = vi.hoisted(() => ({
@@ -22,6 +23,7 @@ const {
     post: vi.fn(),
     get: vi.fn(),
   },
+  downloadResourceBlobMock: vi.fn(),
   loadVectorizedSvgIntoConverterSpy: vi.fn(),
   setWidgetActiveTabSpy: vi.fn(),
 }));
@@ -29,6 +31,7 @@ const {
 // Mock apiClient for buildFileUrl tests
 vi.mock("../api/client", () => ({
   default: mockedApiClient,
+  downloadResourceBlob: downloadResourceBlobMock,
 }));
 
 // Mock vectorizeImage to avoid real API calls
@@ -76,6 +79,7 @@ describe("vectorizerStore", () => {
     resetStore();
     mockedApiClient.defaults.baseURL = "/api";
     vi.clearAllMocks();
+    downloadResourceBlobMock.mockReset();
   });
 
   // --- Initial state ---
@@ -217,7 +221,7 @@ describe("VectorizerPanel send-to-converter", () => {
 
   it("fetches svg with normalized url and forwards it to converter tab", async () => {
     const svgBlob = new Blob(["<svg/>"], { type: "image/svg+xml" });
-    mockedApiClient.get.mockResolvedValueOnce({ data: svgBlob });
+    downloadResourceBlobMock.mockResolvedValueOnce(svgBlob);
 
     useVectorizerStore.setState({
       imagePreviewUrl: "blob:original-preview",
@@ -238,10 +242,9 @@ describe("VectorizerPanel send-to-converter", () => {
     fireEvent.click(getPanelButtonByKey("vec.send_to_converter"));
 
     await waitFor(() => {
-      expect(mockedApiClient.get).toHaveBeenCalledWith("/api/files/vectorized.svg", {
-        responseType: "blob",
-        baseURL: "",
-      });
+      expect(downloadResourceBlobMock).toHaveBeenCalledWith(
+        "/api/files/vectorized.svg",
+      );
     });
 
     await waitFor(() => {
@@ -256,7 +259,40 @@ describe("VectorizerPanel send-to-converter", () => {
     expect(setWidgetActiveTabSpy).toHaveBeenCalledWith("converter");
   });
 
-  it("downloads svg using a resolved anchor href", () => {
+  it("shows a readable error when sending an expired svg to the converter fails", async () => {
+    downloadResourceBlobMock.mockRejectedValueOnce(
+      new Error("The requested resource was not found or has expired."),
+    );
+
+    useVectorizerStore.setState({
+      imagePreviewUrl: "blob:original-preview",
+      result: {
+        status: "ok",
+        message: "done",
+        svg_url: "/api/files/expired.svg",
+        width: 100,
+        height: 100,
+        num_shapes: 12,
+        num_colors: 4,
+        palette: ["#000000", "#ffffff"],
+      },
+    });
+
+    render(createElement(VectorizerPanel));
+
+    fireEvent.click(getPanelButtonByKey("vec.send_to_converter"));
+
+    expect(
+      await screen.findByText(/The requested resource was not found or has expired\./),
+    ).toBeInTheDocument();
+    expect(loadVectorizedSvgIntoConverterSpy).not.toHaveBeenCalled();
+    expect(setWidgetActiveTabSpy).not.toHaveBeenCalled();
+  });
+
+  it("downloads svg after validating the resource fetch succeeds", async () => {
+    const svgBlob = new Blob(["<svg/>"], { type: "image/svg+xml" });
+    downloadResourceBlobMock.mockResolvedValueOnce(svgBlob);
+
     useVectorizerStore.setState({
       imagePreviewUrl: "blob:original-preview",
       result: {
@@ -274,11 +310,28 @@ describe("VectorizerPanel send-to-converter", () => {
     render(createElement(VectorizerPanel));
 
     const originalCreateElement = document.createElement.bind(document);
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
     const anchorMock = {
       href: "",
       download: "",
       click: vi.fn(),
+      remove: vi.fn(),
+      style: {},
     } as unknown as HTMLAnchorElement;
+    const appendChildSpy = vi
+      .spyOn(document.body, "appendChild")
+      .mockImplementation((node: Node) => node);
+    const createObjectURLSpy = vi.fn().mockReturnValue("blob:download-svg");
+    const revokeObjectURLSpy = vi.fn();
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: createObjectURLSpy,
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: revokeObjectURLSpy,
+    });
 
     const createElementSpy = vi
       .spyOn(document, "createElement")
@@ -291,13 +344,57 @@ describe("VectorizerPanel send-to-converter", () => {
 
     try {
       fireEvent.click(getPanelButtonByKey("vec.download_svg"));
+      await waitFor(() => {
+        expect(downloadResourceBlobMock).toHaveBeenCalledWith(
+          "/api/files/vectorized.svg",
+        );
+      });
     } finally {
       createElementSpy.mockRestore();
+      appendChildSpy.mockRestore();
+      Object.defineProperty(URL, "createObjectURL", {
+        configurable: true,
+        value: originalCreateObjectURL,
+      });
+      Object.defineProperty(URL, "revokeObjectURL", {
+        configurable: true,
+        value: originalRevokeObjectURL,
+      });
     }
 
-    expect(anchorMock.href).toBe("/api/files/vectorized.svg");
+    expect(createObjectURLSpy).toHaveBeenCalledWith(svgBlob);
+    expect(anchorMock.href).toBe("blob:download-svg");
     expect(anchorMock.download).toBe("vectorized.svg");
     expect(anchorMock.click).toHaveBeenCalledTimes(1);
+    expect(revokeObjectURLSpy).toHaveBeenCalledWith("blob:download-svg");
+  });
+
+  it("shows a readable error instead of downloading an expired svg response", async () => {
+    downloadResourceBlobMock.mockRejectedValueOnce(
+      new Error("The requested resource was not found or has expired."),
+    );
+
+    useVectorizerStore.setState({
+      imagePreviewUrl: "blob:original-preview",
+      result: {
+        status: "ok",
+        message: "done",
+        svg_url: "/api/files/expired.svg",
+        width: 100,
+        height: 100,
+        num_shapes: 12,
+        num_colors: 4,
+        palette: ["#000000", "#ffffff"],
+      },
+    });
+
+    render(createElement(VectorizerPanel));
+
+    fireEvent.click(getPanelButtonByKey("vec.download_svg"));
+
+    expect(
+      await screen.findByText(/The requested resource was not found or has expired\./),
+    ).toBeInTheDocument();
   });
 
   it("does not reset vectorizer resources during StrictMode initial mount", async () => {

@@ -5488,6 +5488,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "发送到图像转换",
     en: "Send to Image Converter",
   },
+  "vec.resource_action_failed": {
+    zh: "SVG 文件暂时无法读取，请重新生成后再试。",
+    en: "The SVG file could not be read. Regenerate it and try again.",
+  },
   "vec.error": {
     zh: "矢量化失败",
     en: "Vectorization Failed",
