@@ -120,6 +120,9 @@ class _FakeSwatchEngine:
     def expected_selection_length(self):
         return self._expected_selection_length
 
+    def accepted_selection_lengths(self):
+        return (self._expected_selection_length,)
+
     def query(self, selected_indices):
         return self._query_results.get(
             tuple(selected_indices),
@@ -1341,6 +1344,97 @@ def test_keyed_json_overlong_recipe_does_not_disable_valid_rows(tmp_path):
     assert query_resp.json()["found"] is True
     assert base_resp.status_code == 200
     assert base_resp.json()["combinations"] == [[0, 1, 2, 3, 4]]
+
+
+def test_mixed_five_and_six_layer_keyed_json_recipes_remain_queryable(tmp_path):
+    """Mixed 5C Extended keyed JSON rows must keep both legacy and six-layer recipes."""
+    metadata = LUTMetadata(
+        palette=[
+            PaletteEntry(color="White", material="PLA Basic", hex_color="#FFFFFF"),
+            PaletteEntry(color="Cyan", material="PLA Basic", hex_color="#00FFFF"),
+            PaletteEntry(color="Magenta", material="PLA Basic", hex_color="#FF00FF"),
+            PaletteEntry(color="Yellow", material="PLA Basic", hex_color="#FFFF00"),
+            PaletteEntry(color="Black", material="PLA Basic", hex_color="#000000"),
+        ],
+        color_mode="5-Color Extended",
+        max_color_layers=6,
+    )
+    payload = metadata.to_dict()
+    payload["entries"] = [
+        {
+            "rgb": [1, 2, 3],
+            "hex": "#010203",
+            "recipe": ["White", "Cyan", "Magenta", "Yellow", "Black"],
+        },
+        {
+            "rgb": [4, 5, 6],
+            "hex": "#040506",
+            "recipe": ["Black", "Cyan", "Magenta", "Yellow", "White", "Black"],
+        },
+    ]
+    lut_path = tmp_path / "mixed-five-six-keyed-recipe.json"
+    lut_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    def _fake_generate_recipe_swatch(*, recipes, **kwargs):
+        captured["recipes"] = recipes
+        return ("E:/tmp/generated_swatch.3mf", None, "ok")
+
+    with (
+        patch("api.routers.five_color.LUTManager.get_lut_path", return_value=str(lut_path)),
+        patch(
+            "core.recipe_swatch.generate_recipe_swatch",
+            side_effect=_fake_generate_recipe_swatch,
+        ),
+    ):
+        base_resp = client.get("/api/five-color/base-colors", params={"lut_name": "test_lut"})
+        legacy_query_resp = client.post(
+            "/api/five-color/query",
+            json={"lut_name": "test_lut", "selected_indices": [0, 1, 2, 3, 4]},
+        )
+        extended_query_resp = client.post(
+            "/api/five-color/query",
+            json={"lut_name": "test_lut", "selected_indices": [4, 1, 2, 3, 0, 4]},
+        )
+        legacy_match_resp = client.post(
+            "/api/five-color/match-color",
+            json={"lut_name": "test_lut", "target_hex": "#010203"},
+        )
+        extended_match_resp = client.post(
+            "/api/five-color/match-color",
+            json={"lut_name": "test_lut", "target_hex": "#040506"},
+        )
+        swatch_resp = client.post(
+            "/api/five-color/generate-swatch",
+            json={
+                "lut_name": "test_lut",
+                "recipes": [
+                    {"selected_indices": [0, 1, 2, 3, 4], "result_hex": "#010203"},
+                    {"selected_indices": [4, 1, 2, 3, 0, 4], "result_hex": "#040506"},
+                ],
+            },
+        )
+
+    assert base_resp.status_code == 200
+    assert base_resp.json()["combinations"] == [
+        [0, 1, 2, 3, 4],
+        [4, 1, 2, 3, 0, 4],
+    ]
+    assert legacy_query_resp.status_code == 200
+    assert legacy_query_resp.json()["found"] is True
+    assert legacy_query_resp.json()["result_hex"] == "#010203"
+    assert extended_query_resp.status_code == 200
+    assert extended_query_resp.json()["found"] is True
+    assert extended_query_resp.json()["result_hex"] == "#040506"
+    assert legacy_match_resp.status_code == 200
+    assert legacy_match_resp.json()["selected_indices"] == [0, 1, 2, 3, 4]
+    assert extended_match_resp.status_code == 200
+    assert extended_match_resp.json()["selected_indices"] == [4, 1, 2, 3, 0, 4]
+    assert swatch_resp.status_code == 200
+    assert [item.selected_indices for item in captured["recipes"]] == [
+        [0, 1, 2, 3, 4],
+        [4, 1, 2, 3, 0, 4],
+    ]
 
 
 def test_keyed_json_non_numeric_recipe_member_keeps_rgb_context(tmp_path):

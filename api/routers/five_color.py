@@ -219,22 +219,35 @@ def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
 
 def _validate_recipe_width(
     selected_indices: list[int],
-    expected_length: int,
+    expected_length: int | tuple[int, ...],
     *,
     loc: str,
 ) -> None:
     actual_length = len(selected_indices)
-    if actual_length == expected_length:
+    expected_lengths = (
+        (expected_length,)
+        if isinstance(expected_length, int)
+        else tuple(sorted(set(int(value) for value in expected_length)))
+    )
+    if actual_length in expected_lengths:
         return
+    expected_detail: int | list[int]
+    expected_message: str
+    if len(expected_lengths) == 1:
+        expected_detail = expected_lengths[0]
+        expected_message = str(expected_lengths[0])
+    else:
+        expected_detail = list(expected_lengths)
+        expected_message = " or ".join(str(value) for value in expected_lengths)
     raise HTTPException(
         status_code=422,
         detail={
             "reason": "recipe_length_mismatch",
             "loc": loc,
-            "expected_length": expected_length,
+            "expected_length": expected_detail,
             "actual_length": actual_length,
             "message": (
-                f"Expected {expected_length} color indices for this LUT, "
+                f"Expected {expected_message} color indices for this LUT, "
                 f"got {actual_length}."
             ),
         },
@@ -310,7 +323,7 @@ def query_five_color(request: FiveColorQueryRequest) -> FiveColorQueryResponse:
     engine, _ = _load_engine(request.lut_name)
     _validate_recipe_width(
         request.selected_indices,
-        engine.expected_selection_length(),
+        engine.accepted_selection_lengths(),
         loc="body.selected_indices",
     )
 
@@ -394,7 +407,7 @@ def generate_swatch(
     base_color_hexes = [rgb_to_hex(rgb) for rgb in engine.get_base_colors()]
 
     items: list[RecipeSwatchItem] = []
-    expected_length = engine.expected_selection_length()
+    expected_length = engine.accepted_selection_lengths()
     for recipe_index, recipe_request in enumerate(request.recipes):
         _validate_recipe_width(
             recipe_request.selected_indices,
