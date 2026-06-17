@@ -1932,6 +1932,7 @@ const DEFAULT_PUZZLE_LAYOUT_SEED = 0;
 function buildPreviewSessionResetState(): Partial<ConverterState> {
   return {
     sessionId: null,
+    isLoading: false,
     previewImageUrl: null,
     originalPreviewUrl: null,
     previewBaseImageUrl: null,
@@ -6178,6 +6179,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           previewBaseImageUrl: null,
           sessionId: null,
           previewGlbUrl: null,
+          isLoading: false,
           previewPerformanceTiming: null,
           generatePerformanceTiming: null,
           batchPreviewItems: [],
@@ -6251,6 +6253,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             previewImageUrl: null,
             previewBaseImageUrl: null,
             sessionId: null,
+            isLoading: false,
             previewGlbUrl: null,
             modelUrl: null,
             previewPerformanceTiming: null,
@@ -6282,6 +6285,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             previewImageUrl: null,
             previewBaseImageUrl: null,
             sessionId: null,
+            isLoading: false,
             previewGlbUrl: null,
             modelUrl: null,
             previewPerformanceTiming: null,
@@ -6327,6 +6331,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           previewImageUrl: null,
           previewBaseImageUrl: null,
           sessionId: null,
+          isLoading: false,
           previewGlbUrl: null,
           modelUrl: null,
           previewPerformanceTiming: null,
@@ -6368,6 +6373,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         previewImageUrl: null,
         previewBaseImageUrl: null,
         sessionId: null,
+        isLoading: false,
         previewGlbUrl: null,
         modelUrl: null,
         previewPerformanceTiming: null,
@@ -6769,7 +6775,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       const keepIds = collectConverterKeepFileIds(state);
       apiCleanupSessionFiles(state.sessionId, keepIds);
       void apiCloseSession(state.sessionId, keepIds);
-      set({ sessionId: null });
+      set({ sessionId: null, isLoading: false });
     },
   })),
 );
