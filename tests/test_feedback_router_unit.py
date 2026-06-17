@@ -160,6 +160,50 @@ def test_submit_bug_report_accepts_full_payload_and_logs_canary(
     assert canaries[0].recent_client_log_count == 1
 
 
+def test_submit_bug_report_rejects_unregistered_final_artifact_disk_path(
+    client: TestClient,
+    feedback_root: Path,
+) -> None:
+    """A crafted disk_path cannot attach an unregistered output artifact.
+
+    构造请求中的 disk_path 不能把未注册 output 产物附进反馈工单。
+    """
+    from api.feedback_assembler import REPO_ROOT
+
+    output_dir = REPO_ROOT / "output" / "feedback_security_probe"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    sentinel = output_dir / "foreign_model.3mf"
+    sentinel.write_bytes(b"PK\x03\x04FOREIGN_MODEL_SENTINEL")
+
+    try:
+        payload = _payload()
+        payload["context"]["active_final_artifact_ref"] = {
+            "session_id": "not-the-current-session",
+            "download_url": None,
+            "artifact_type": "3mf",
+            "disk_path": str(sentinel),
+            "source": "converter",
+        }
+
+        response = client.post("/api/feedback/bug-report", json=payload)
+
+        assert response.status_code == 200
+        data = response.json()
+        ticket_json = _read_ticket_json(feedback_root, data["ticket_id"])
+        final_artifact = ticket_json["attachments"]["final_artifact"]
+        assert final_artifact["status"] == "expired_ttl"
+
+        ticket_dir = Path(data["dump_path"])
+        assert not (ticket_dir / "final.3mf").exists()
+        assert not (ticket_dir / "final.zip").exists()
+    finally:
+        sentinel.unlink(missing_ok=True)
+        try:
+            output_dir.rmdir()
+        except OSError:
+            pass
+
+
 def test_submit_bug_report_accepts_description_only(client: TestClient) -> None:
     response = client.post("/api/feedback/bug-report", json=_payload(description="Only text"))
 
