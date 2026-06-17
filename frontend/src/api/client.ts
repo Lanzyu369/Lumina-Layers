@@ -187,6 +187,22 @@ function readableApiErrorMessage(
   return error instanceof Error ? error.message : String(error ?? "API request failed");
 }
 
+function replaceGenericResponseDetail(
+  response: { data?: unknown } | null | undefined,
+  statusCode: number | null,
+  readableMessage: string,
+): void {
+  const data = response?.data;
+  if (!isRecord(data)) {
+    return;
+  }
+  const detail = data.detail;
+  if (typeof detail !== "string" || !isGenericHttpDetail(detail, statusCode)) {
+    return;
+  }
+  response.data = { ...data, detail: readableMessage };
+}
+
 function getResponseHeaderValue(
   headers: unknown,
   name: string,
@@ -315,11 +331,13 @@ apiClient.interceptors.response.use(
     const url = config?.url ?? null;
     const statusCode: number | null = response?.status ?? null;
     const requestId = getResponseHeaderValue(response?.headers, "x-request-id");
+    const responseDetailForLog = summarizeApiErrorData(response?.data);
     const readableMessage = readableApiErrorMessage(
       response?.data,
       statusCode,
       error,
     );
+    replaceGenericResponseDetail(response, statusCode, readableMessage);
     if (error && typeof error === "object") {
       try {
         (error as { message?: string }).message = readableMessage;
@@ -337,7 +355,7 @@ apiClient.interceptors.response.use(
         url,
         status_code: statusCode,
         request_id: requestId,
-        response_detail: summarizeApiErrorData(response?.data),
+        response_detail: responseDetailForLog,
         ...summarizeErrorForLog(error),
         error_message: readableMessage,
       },

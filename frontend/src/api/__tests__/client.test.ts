@@ -139,9 +139,9 @@ describe("apiClient", () => {
 
     const expectedMessage =
       "The server hit an internal error. Check the log for the request ID.";
-    await expect(apiClient.post("/convert/generate", {})).rejects.toMatchObject({
-      message: expectedMessage,
-    });
+    const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
+    expect(rejected).toMatchObject({ message: expectedMessage });
+    expect(rejected.response?.data?.detail).toBe(expectedMessage);
     expect(postClientLog).toHaveBeenCalledWith(
       "api: request failed",
       expect.objectContaining({
@@ -169,10 +169,11 @@ describe("apiClient", () => {
     });
     apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
 
-    await expect(apiClient.post("/convert/generate", {})).rejects.toMatchObject({
-      message:
-        "This action requires an available quota or payment before it can continue.",
-    });
+    const expectedMessage =
+      "This action requires an available quota or payment before it can continue.";
+    const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
+    expect(rejected).toMatchObject({ message: expectedMessage });
+    expect(rejected.response?.data?.detail).toBe(expectedMessage);
   });
 
   it("keeps backend details where numbers are part of the real message", async () => {
@@ -183,9 +184,11 @@ describe("apiClient", () => {
     });
     apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
 
-    await expect(apiClient.post("/convert/generate", {})).rejects.toMatchObject({
+    const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
+    expect(rejected).toMatchObject({
       message: "value must be <= 500",
     });
+    expect(rejected.response?.data?.detail).toBe("value must be <= 500");
   });
 
   it("keeps backend details that explain an upstream status failure", async () => {
@@ -199,9 +202,13 @@ describe("apiClient", () => {
     });
     apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
 
-    await expect(apiClient.post("/convert/generate", {})).rejects.toMatchObject({
+    const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
+    expect(rejected).toMatchObject({
       message: "upstream dependency returned status 500 while slicing",
     });
+    expect(rejected.response?.data?.detail).toBe(
+      "upstream dependency returned status 500 while slicing",
+    );
   });
 
   it("still replaces generic request-failed status details", async () => {
