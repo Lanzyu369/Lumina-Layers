@@ -4683,8 +4683,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
     uploadHeightmap: async () => {
       const state = _get();
+      const clearHeightmapUploadState = {
+        heightmapThumbnailUrl: null,
+        color_height_map: {},
+      };
       if (!state.heightmapFile || !state.sessionId) {
-        set({ error: "请先上传高度图文件并完成预览" });
+        set({
+          ...clearHeightmapUploadState,
+          error: "请先上传高度图文件并完成预览",
+        });
         return;
       }
       set({ isLoading: true, error: null });
@@ -4702,6 +4709,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         });
       } catch (err) {
         set({
+          ...clearHeightmapUploadState,
           isLoading: false,
           error: err instanceof Error ? err.message : "Heightmap upload failed",
         });
@@ -5464,10 +5472,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           : sourceSelection.source_kind === "native_bundle"
             ? (sourceSelection.layer_height_mm ?? null)
             : state.layer_height_mm;
+        const shouldResetHeightmapMapping =
+          state.enable_relief && state.autoHeightMode === "use-heightmap";
         const shouldReuploadHeightmap =
-          state.enable_relief &&
-          state.autoHeightMode === "use-heightmap" &&
-          state.heightmapFile !== null;
+          shouldResetHeightmapMapping && state.heightmapFile !== null;
 
         _previewClientLog("preview: response received", {
           session_id: response.session_id,
@@ -5492,9 +5500,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             match_mode: response.lut_match_mode ?? "legacy",
           },
           palette: normalizedPalette,
-          ...(autoReliefHeightMap
-            ? { color_height_map: autoReliefHeightMap }
-            : {}),
+          ...(shouldResetHeightmapMapping
+            ? { color_height_map: {}, heightmapThumbnailUrl: null }
+            : autoReliefHeightMap
+              ? { color_height_map: autoReliefHeightMap }
+              : {}),
           colorContours: response.contours ?? {},
           previewGlbUrl: glbUrl,
           previewPerformanceTiming: response.performance_timing ?? null,

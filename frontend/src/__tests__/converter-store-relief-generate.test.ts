@@ -413,6 +413,48 @@ describe("converter store relief generate flow", () => {
     });
   });
 
+  it("clears stale heightmap mapping after reupload failure and blocks later generate", async () => {
+    const useConverterStore = await loadStore();
+    const file = new File(["heightmap"], "heightmap.png", {
+      type: "image/png",
+    });
+    mocks.uploadHeightmap.mockRejectedValueOnce(
+      new Error("heightmap upload failed"),
+    );
+    useConverterStore.setState({
+      ...baseReadyState(),
+      sessionId: "old-session",
+      palette: PREVIEW_PALETTE,
+      enable_relief: true,
+      autoHeightMode: "use-heightmap",
+      heightmapFile: file,
+      heightmapThumbnailUrl: "/api/files/old-heightmap.png",
+      color_height_map: { "111111": 0.5 },
+      heightmap_max_height: 3,
+    });
+
+    await useConverterStore.getState().submitPreview();
+
+    let state = useConverterStore.getState();
+    expect(mocks.uploadHeightmap).toHaveBeenCalledWith(
+      file,
+      "session-relief",
+      3,
+    );
+    expect(state.sessionId).toBe("session-relief");
+    expect(state.color_height_map).toEqual({});
+    expect(state.heightmapThumbnailUrl).toBeNull();
+    expect(state.error).toBe("heightmap upload failed");
+
+    const result = await useConverterStore.getState().submitFullPipeline();
+
+    state = useConverterStore.getState();
+    expect(result).toBeNull();
+    expect(mocks.convertPreview).toHaveBeenCalledOnce();
+    expect(mocks.convertGenerate).not.toHaveBeenCalled();
+    expect(state.error).toBe("请先上传高度图并获取高度映射后再生成");
+  });
+
   it("does not overwrite an existing manual color height map after preview refreshes the palette", async () => {
     const useConverterStore = await loadStore();
     const manualMap = { "111111": 1.25 };
