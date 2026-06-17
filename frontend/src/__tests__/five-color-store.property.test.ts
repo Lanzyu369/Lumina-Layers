@@ -42,10 +42,10 @@ const arbSelectedIndices = (min: number, max: number) =>
 
 const arbLutName = fc.stringMatching(/^[A-Za-z0-9_-]{1,20}$/);
 
-// ========== Property 4: 选择追加与上限为 5 ==========
+// ========== Property 4: 选择追加与默认上限为 5 ==========
 
 // **Validates: Requirements 3.1, 3.2**
-describe("Feature: five-color-query, Property 4: 选择追加与上限为 5", () => {
+describe("Feature: five-color-query, Property 4: 选择追加与默认上限为 5", () => {
   it("addSelection appends when length < 5, ignores when length == 5", () => {
     fc.assert(
       fc.property(arbSelectedIndices(0, 5), arbColorIndex, (indices, newIndex) => {
@@ -70,6 +70,30 @@ describe("Feature: five-color-query, Property 4: 选择追加与上限为 5", ()
         }
       }),
       { numRuns: 100 }
+    );
+  });
+});
+
+describe("Feature: five-color-query, Property 4b: 6 层组合允许第 6 次选择", () => {
+  it("addSelection follows the loaded combination width when it is 6", () => {
+    fc.assert(
+      fc.property(arbSelectedIndices(0, 6), arbColorIndex, (indices, newIndex) => {
+        resetStore();
+        useFiveColorStore.setState({
+          combinations: [[0, 1, 2, 3, 4, 0]],
+          selectedIndices: [...indices],
+        });
+
+        const originalLength = indices.length;
+        useFiveColorStore.getState().addSelection(newIndex);
+        const result = useFiveColorStore.getState().selectedIndices;
+
+        if (originalLength < 6) {
+          return result.length === originalLength + 1 && result[result.length - 1] === newIndex;
+        }
+        return result.length === 6 && JSON.stringify(result) === JSON.stringify(indices);
+      }),
+      { numRuns: 100 },
     );
   });
 });

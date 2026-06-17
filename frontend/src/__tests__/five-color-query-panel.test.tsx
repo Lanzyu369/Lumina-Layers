@@ -90,6 +90,7 @@ function resetFiveColorState() {
       { index: 2, rgb: [0, 0, 255], name: "Blue", hex: "#0000FF" },
       { index: 3, rgb: [255, 255, 0], name: "Yellow", hex: "#FFFF00" },
       { index: 4, rgb: [255, 255, 255], name: "White", hex: "#FFFFFF" },
+      { index: 5, rgb: [0, 0, 0], name: "Black", hex: "#000000" },
     ],
     combinations: null,
     selectedIndices: [],
@@ -263,6 +264,43 @@ describe("FiveColorQueryPanel target color match", () => {
     expect(screen.getByRole("button", { name: "反序" })).toBeEnabled();
   });
 
+  it("renders a six-layer target-match recipe", () => {
+    useFiveColorStore.setState({
+      selectedIndices: [4, 1, 2, 3, 0, 4],
+      manualSelectedIndices: [],
+      selectionSource: "target-match",
+      queryResult: {
+        found: true,
+        selected_indices: [4, 1, 2, 3, 0, 4],
+        result_rgb: [4, 5, 6],
+        result_hex: "#040506",
+        row_index: 1,
+        message: "found",
+        source: "test",
+        target_rgb: [4, 5, 6],
+        target_hex: "#040506",
+        matched_rgb: [4, 5, 6],
+        matched_hex: "#040506",
+        delta_e: 0,
+        coordinate: cardCoordinate({
+          card_index: 0,
+          card_label: "1",
+          grid_size: 2,
+          row: 0,
+          col: 0,
+          display_row: 1,
+          display_col: 1,
+        }),
+        neighborhood: [],
+      },
+    });
+
+    render(<FiveColorQueryPanel />);
+
+    expect(screen.getAllByTestId("five-color-match-recipe-layer")).toHaveLength(6);
+    expect(screen.getAllByText("#040506").length).toBeGreaterThan(0);
+  });
+
   it("renders localized swatch structure modes for collected recipes", () => {
     useFiveColorStore.setState({
       collectedRecipes: [
@@ -285,7 +323,7 @@ describe("FiveColorQueryPanel target color match", () => {
     expect(screen.queryByText("five_color_swatch_double_sided")).not.toBeInTheDocument();
   });
 
-  it("shows the localized explanation when a target color has no five-layer recipe", () => {
+  it("shows the localized explanation when a target color has no recipe", () => {
     useFiveColorStore.setState({
       selectedIndices: [4, 3, 2, 1, 0],
       queryResult: {
@@ -294,7 +332,7 @@ describe("FiveColorQueryPanel target color match", () => {
         result_rgb: null,
         result_hex: null,
         row_index: 33,
-        message: "Matched row 33, but no five-layer recipe is available for this LUT row.",
+        message: "Matched row 33, but no layer recipe is available for this LUT row.",
         reason: "recipe_unavailable",
         source: "test",
         target_rgb: [220, 10, 30],
@@ -317,8 +355,8 @@ describe("FiveColorQueryPanel target color match", () => {
 
     render(<FiveColorQueryPanel />);
 
-    expect(screen.getByText("无法生成五层配方")).toBeInTheDocument();
-    expect(screen.getByText("已找到最接近的色卡颜色，但该行无法反推出五层配方。")).toBeInTheDocument();
+    expect(screen.getByText("无法生成配方")).toBeInTheDocument();
+    expect(screen.getByText("已找到最接近的色卡颜色，但该行无法反推出配方。")).toBeInTheDocument();
     expect(screen.queryByText("未找到匹配")).not.toBeInTheDocument();
     expect(screen.queryByText("建议操作：")).not.toBeInTheDocument();
     expect(screen.getAllByText("#DC0A1E").length).toBeGreaterThan(0);
@@ -342,7 +380,7 @@ describe("FiveColorQueryPanel target color match", () => {
     render(<FiveColorQueryPanel />);
 
     expect(screen.getByText("未找到匹配")).toBeInTheDocument();
-    expect(screen.getByText("当前五层颜色顺序没有对应的色卡记录。")).toBeInTheDocument();
+    expect(screen.getByText("当前颜色顺序没有对应的色卡记录。")).toBeInTheDocument();
     expect(screen.queryByText("missing")).not.toBeInTheDocument();
   });
 

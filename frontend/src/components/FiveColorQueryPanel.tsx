@@ -2,7 +2,7 @@ import { motion, AnimatePresence } from "framer-motion"
 import { useEffect, useMemo, useCallback, useState } from "react"
 import type { FormEvent } from "react"
 import type { BaseColorEntry, FiveColorMatchResponse, FiveColorQueryResponse } from "../api/types"
-import { useFiveColorStore } from "../stores/fiveColorStore"
+import { resolveFiveColorRecipeLength, useFiveColorStore } from "../stores/fiveColorStore"
 import { useConverterStore } from "../stores/converter"
 import Dropdown from "./ui/Dropdown"
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode"
@@ -45,8 +45,12 @@ export default function FiveColorQueryPanel() {
     }
   }
 
+  const selectionLimit = useMemo(
+    () => resolveFiveColorRecipeLength(combinations, selectedIndices),
+    [combinations, selectedIndices],
+  )
   const hasSelection = selectedIndices.length > 0
-  const isFull = selectedIndices.length === 5
+  const isFull = selectedIndices.length === selectionLimit
   const canReverse = isFull
   const matchResult = isFiveColorMatchResponse(queryResult) ? queryResult : null
   const isRecipeUnavailable = queryResult?.reason === "recipe_unavailable"
@@ -91,12 +95,12 @@ export default function FiveColorQueryPanel() {
           break
         }
       }
-      if (match && len < 5) {
+      if (match && len < selectionLimit) {
         valid.add(combo[len])
       }
     }
     return Array.from(valid)
-  }, [combinations, selectedIndices, isFull])
+  }, [combinations, selectedIndices, isFull, selectionLimit])
 
   const canvasSlices = useMemo(
     () => selectedIndices.map((idx) => {
@@ -518,12 +522,13 @@ export default function FiveColorQueryPanel() {
                 slices={canvasSlices}
                 resultHex={queryResult?.found ? queryResult.result_hex : null}
                 isLoading={isLoading}
+                layerCount={selectionLimit}
               />
             </div>
           </div>
           <p className="relative mt-8 mb-4 text-sm font-medium text-slate-500 dark:text-slate-400 bg-slate-100/80 dark:bg-slate-800/80 px-4 py-2 rounded-full shadow-sm backdrop-blur-sm border border-slate-200/50 dark:border-slate-700/50">
             {baseColors.length > 0
-              ? t("five_color_selection_progress").replace("{count}", String(selectedIndices.length)).replace("{total}", "5")
+              ? t("five_color_selection_progress").replace("{count}", String(selectedIndices.length)).replace("{total}", String(selectionLimit))
               : t("five_color_select_lut_first")}
           </p>
         </div>
@@ -592,12 +597,16 @@ function MatchColorDetails({
             <span className="text-xs font-medium text-slate-700 dark:text-slate-200">
               {t("five_color_match_recipe")}
             </span>
-            <div className="grid grid-cols-5 gap-1.5">
+            <div
+              className="grid gap-1.5"
+              style={{ gridTemplateColumns: `repeat(${Math.max(1, Math.min(recipeIndices.length, 6))}, minmax(0, 1fr))` }}
+            >
               {recipeIndices.map((idx, order) => {
                 const baseColor = baseColors.find((color) => color.index === idx)
                 return (
                   <div
                     key={`${idx}-${order}`}
+                    data-testid="five-color-match-recipe-layer"
                     className="min-h-14 rounded-xl border border-slate-200/80 bg-slate-100/70 p-1.5 text-center shadow-sm dark:border-slate-700/80 dark:bg-slate-950/40"
                   >
                     <div

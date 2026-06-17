@@ -1591,7 +1591,10 @@ class LUTManager:
                     cls._resolve_recipe_member(value, name_to_idx, file_path)
                     for value in recipe_raw
                 ]
-            recipe_indices = cls._normalize_resolved_five_layer_recipe(recipe_indices)
+            recipe_indices = cls._normalize_resolved_layer_recipe(
+                recipe_indices,
+                max_color_layers=int(metadata.max_color_layers or PrinterConfig.COLOR_LAYERS),
+            )
             rgb_list.append(row_rgb)
             stacks_list.append(recipe_indices)
 
@@ -1694,8 +1697,13 @@ class LUTManager:
         return -1
 
     @staticmethod
-    def _normalize_resolved_five_layer_recipe(recipe_indices: list[int]) -> list[int]:
-        if len(recipe_indices) == 5:
+    def _normalize_resolved_layer_recipe(
+        recipe_indices: list[int],
+        *,
+        max_color_layers: int = PrinterConfig.COLOR_LAYERS,
+    ) -> list[int]:
+        supported_widths = (5, 6) if int(max_color_layers) >= 6 else (5,)
+        if len(recipe_indices) in supported_widths:
             return recipe_indices
         return [-1, -1, -1, -1, -1]
 
@@ -1731,7 +1739,7 @@ class LUTManager:
     ) -> int | None:
         max_index = -1
         for recipe in stacks_list:
-            if len(recipe) != 5 or any(index < 0 for index in recipe):
+            if len(recipe) not in (5, 6) or any(index < 0 for index in recipe):
                 continue
             if any(index >= 8 for index in recipe):
                 continue
@@ -2252,7 +2260,7 @@ class LUTManager:
                     cls._resolve_recipe_member(value, name_to_idx, file_path)
                     for value in recipe_raw
                 ]
-            recipe_indices = cls._normalize_resolved_five_layer_recipe(recipe_indices)
+            recipe_indices = cls._normalize_resolved_layer_recipe(recipe_indices)
             stacks_list.append(recipe_indices)
 
         rgb = np.array(rgb_list, dtype=np.uint8) if rgb_list else np.zeros((0, 3), dtype=np.uint8)
@@ -2262,7 +2270,7 @@ class LUTManager:
 
         metadata = LUTMetadata(
             palette=palette,
-            max_color_layers=PrinterConfig.COLOR_LAYERS,
+            max_color_layers=max(PrinterConfig.COLOR_LAYERS, max((len(row) for row in stacks_list), default=0)),
             layer_height_mm=PrinterConfig.LAYER_HEIGHT,
             line_width_mm=PrinterConfig.NOZZLE_WIDTH,
             base_layers=10,

@@ -295,6 +295,40 @@ class TestLUTManager:
         finally:
             os.unlink(tmp_path)
 
+    def test_keyed_json_with_six_layer_recipe_preserves_stack_width(self):
+        """5-Color Extended keyed JSON must preserve six-layer recipes."""
+        data = {
+            "name": "FiveColorExtended",
+            "color_mode": "5-Color Extended",
+            "max_color_layers": 6,
+            "palette": {
+                "White": {"material": "PLA Basic", "hex_color": "#FFFFFF"},
+                "Cyan": {"material": "PLA Basic", "hex_color": "#00FFFF"},
+                "Magenta": {"material": "PLA Basic", "hex_color": "#FF00FF"},
+                "Yellow": {"material": "PLA Basic", "hex_color": "#FFFF00"},
+                "Black": {"material": "PLA Basic", "hex_color": "#000000"},
+            },
+            "entries": [
+                {
+                    "rgb": [17, 34, 51],
+                    "recipe": ["Black", "Cyan", "Magenta", "Yellow", "White", "Black"],
+                }
+            ],
+        }
+
+        with tempfile.NamedTemporaryFile(suffix=".json", mode="w", delete=False, encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+            tmp_path = f.name
+
+        try:
+            _loaded_rgb, loaded_stacks, metadata = LUTManager.load_lut_with_metadata(tmp_path)
+            assert loaded_stacks is not None
+            assert loaded_stacks.shape == (1, 6)
+            assert loaded_stacks[0].tolist() == [4, 1, 2, 3, 0, 4]
+            assert metadata.max_color_layers == 6
+        finally:
+            os.unlink(tmp_path)
+
     def test_uploaded_standard_keyed_json_with_empty_recipes_rebuilds_stacks(self):
         from core.pipeline.processing_ops.lut_loader import load_lut
 
