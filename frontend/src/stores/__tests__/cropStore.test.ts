@@ -82,6 +82,32 @@ describe('submitCrop', () => {
     expect(state.cropModalOpen).toBe(true); // stays open on failure
   });
 
+  it('资源下载失败时不把错误响应当作裁剪图片', async () => {
+    mockCropImage.mockResolvedValue({
+      status: 'ok',
+      message: 'Cropped',
+      cropped_url: '/api/files/expired-crop',
+      width: 200,
+      height: 100,
+    });
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 404,
+      headers: { get: () => 'application/json' },
+      json: () => Promise.resolve({ detail: 'Not Found' }),
+    });
+
+    await useConverterStore.getState().submitCrop(10, 20, 200, 100);
+
+    const state = useConverterStore.getState();
+    expect(mockCreateObjectURL).not.toHaveBeenCalled();
+    expect(state.imagePreviewUrl).toBe('blob:old-preview');
+    expect(state.cropModalOpen).toBe(true);
+    expect(state.isCropping).toBe(false);
+    expect(state.error).toMatch(/requested resource|请求的资源/);
+    expect(state.error).not.toContain('404');
+  });
+
   it('请求期间 isCropping 为 true', async () => {
     let resolveApi: (value: unknown) => void;
     const pending = new Promise((resolve) => { resolveApi = resolve; });

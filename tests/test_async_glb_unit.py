@@ -313,6 +313,93 @@ class TestGlbStatusLifecycle:
         assert final["glb_url"] is None
         assert "simulated mesh failure" in (final["error"] or "")
 
+    def test_registration_failure_cleans_unregistered_glb(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A registry failure must not leave the generated GLB unowned."""
+        sid = _seed_session(tmp_path)
+        job_token = "job-token"
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {
+                **_test_store.get(sid)["preview_cache"],
+                "glb_job_token": job_token,
+                "glb_url": None,
+                "glb_error": None,
+            },
+        )
+        glb_path = tmp_path / "unregistered.glb"
+
+        def builder(_cache: dict, *, output_path: str) -> str:
+            glb_path.write_bytes(b"unregistered-glb")
+            return str(glb_path)
+
+        class FailingRegistry:
+            def register_path(self, *_args: object, **_kwargs: object) -> str:
+                raise RuntimeError("forced registry failure")
+
+        monkeypatch.setattr(async_glb_module, "generate_segmented_glb", builder)
+        async_glb_module._run_glb_build_job(
+            sid,
+            job_token,
+            _test_store,
+            FailingRegistry(),
+        )
+
+        status = async_glb_module.get_glb_status(
+            _test_store.get(sid)["preview_cache"]
+        )
+        assert status["status"] == "error"
+        assert status["glb_url"] is None
+        assert "forced registry failure" in (status["error"] or "")
+        assert not glb_path.exists()
+
+    def test_superseded_job_cleans_abandoned_glb(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A stale async job must delete its generated GLB before returning."""
+        sid = _seed_session(tmp_path)
+        old_token = "old-token"
+        new_token = "new-token"
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {
+                **_test_store.get(sid)["preview_cache"],
+                "glb_job_token": old_token,
+                "glb_url": None,
+                "glb_error": None,
+            },
+        )
+        glb_path = tmp_path / "superseded.glb"
+
+        def builder(_cache: dict, *, output_path: str) -> str:
+            glb_path.write_bytes(b"superseded-glb")
+            _test_store.put(
+                sid,
+                "preview_cache",
+                {"glb_job_token": new_token, "glb_url": None, "glb_error": None},
+            )
+            return str(glb_path)
+
+        monkeypatch.setattr(async_glb_module, "generate_segmented_glb", builder)
+        async_glb_module._run_glb_build_job(
+            sid,
+            old_token,
+            _test_store,
+            _test_registry,
+        )
+
+        status = async_glb_module.get_glb_status(
+            _test_store.get(sid)["preview_cache"]
+        )
+        assert status["status"] == "pending"
+        assert status["job_token"] == new_token
+        assert status["glb_url"] is None
+        assert status["error"] is None
+        assert not glb_path.exists()
+
     def test_artifact_cache_schedule_and_worker_store_glb_metadata(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

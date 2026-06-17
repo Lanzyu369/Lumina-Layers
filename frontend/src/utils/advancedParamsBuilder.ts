@@ -132,6 +132,7 @@ function buildGeneration(
     model_margin: state.model_margin,
     quantize_colors: state.quantize_colors,
     quantize_colors_unlocked: state.quantize_colors_unlocked,
+    high_precision_3d_preview: state.high_precision_3d_preview,
     enable_cleanup: state.enable_cleanup,
     svg_pixels_per_mm:
       typeof options.svgPixelsPerMm === "number"

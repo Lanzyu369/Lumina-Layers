@@ -7,7 +7,7 @@ import { useConverterStore } from "../stores/converter";
 import { useWidgetStore } from "../stores/widgetStore";
 import { usePanZoom } from "../hooks/usePanZoom";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
-import apiClient from "../api/client";
+import apiClient, { downloadResourceBlob } from "../api/client";
 import ImageUpload from "./ui/ImageUpload";
 import Slider from "./ui/Slider";
 import Checkbox from "./ui/Checkbox";
@@ -38,6 +38,16 @@ function scheduleVectorizerReset(): void {
     pendingVectorizerResetTimer = null;
     useVectorizerStore.getState().reset();
   }, VECTORIZER_RESET_DELAY_MS);
+}
+
+function toVisibleErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message.trim();
+  }
+  if (typeof error === "string" && error.trim()) {
+    return error.trim();
+  }
+  return fallback;
 }
 
 function isHttpUrl(value: string): boolean {
@@ -135,33 +145,55 @@ export default function VectorizerPanel() {
   }, [isProcessing, cancel, submit]);
 
   const svgUrl = result?.svg_url ?? null;
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [resultActionError, setResultActionError] = useState<string | null>(null);
 
-  const handleDownload = useCallback(() => {
-    if (!svgUrl) return;
-    const a = document.createElement("a");
-    a.href = buildFileUrl(svgUrl);
-    a.download = "vectorized.svg";
-    a.click();
+  useEffect(() => {
+    setResultActionError(null);
   }, [svgUrl]);
+
+  const handleDownload = useCallback(async () => {
+    if (!svgUrl) return;
+    setIsDownloading(true);
+    setResultActionError(null);
+    let objectUrl: string | null = null;
+    try {
+      const blob = await downloadResourceBlob(buildFileUrl(svgUrl));
+      objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objectUrl;
+      a.download = "vectorized.svg";
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } catch (err) {
+      setResultActionError(toVisibleErrorMessage(err, t("vec.resource_action_failed")));
+    } finally {
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+      setIsDownloading(false);
+    }
+  }, [svgUrl, t]);
 
   const [isSending, setIsSending] = useState(false);
   const handleSendToConverter = useCallback(async () => {
     if (!svgUrl) return;
     setIsSending(true);
+    setResultActionError(null);
     try {
-      const res = await apiClient.get(buildFileUrl(svgUrl), {
-        responseType: "blob",
-        baseURL: "",
-      });
-      const blob = res.data as Blob;
+      const blob = await downloadResourceBlob(buildFileUrl(svgUrl));
       const file = new File([blob], "vectorized.svg", { type: "image/svg+xml" });
       const converterStore = useConverterStore.getState();
       converterStore.loadVectorizedSvgIntoConverter(file);
       useWidgetStore.getState().setActiveTab("converter");
+    } catch (err) {
+      setResultActionError(toVisibleErrorMessage(err, t("vec.resource_action_failed")));
     } finally {
       setIsSending(false);
     }
-  }, [svgUrl]);
+  }, [svgUrl, t]);
 
   const isDetailEnabled = params.detail_level >= 0;
 
@@ -584,9 +616,18 @@ export default function VectorizerPanel() {
               <Button
                 label={t("vec.download_svg")}
                 onClick={handleDownload}
+                loading={isDownloading}
                 variant="secondary"
               />
             </div>
+            {resultActionError && (
+              <div
+                role="alert"
+                className="rounded-[18px] border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400"
+              >
+                {resultActionError}
+              </div>
+            )}
           </motion.div>
         )}
             </div>

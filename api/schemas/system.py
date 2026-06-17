@@ -2,7 +2,18 @@
 
 from dataclasses import dataclass
 
-from pydantic import BaseModel, StrictBool
+from pydantic import BaseModel, Field, StrictBool
+
+
+class DeviceProfileInfo(BaseModel):
+    """Slicer-scoped machine registry device profile metadata."""
+
+    device_profile_id: str
+    slicer_id: str
+    nozzle_size: str
+    source_profile_name: str
+    revision: str
+    supported: bool = True
 
 
 class PrinterInfo(BaseModel):
@@ -14,8 +25,10 @@ class PrinterInfo(BaseModel):
     bed_width: int
     bed_depth: int
     bed_height: int
-    supported_nozzle_sizes: list[str] = ["0.2", "0.4"]
-    supported_slicers: list[str] = []
+    supported_nozzle_sizes: list[str] = Field(default_factory=lambda: ["0.2", "0.4"])
+    supported_slicers: list[str] = Field(default_factory=list)
+    thumbnail: str = ""
+    device_profiles: list[DeviceProfileInfo] = Field(default_factory=list)
 
 
 class PrinterListResponse(BaseModel):
@@ -64,6 +77,7 @@ class UserSettings(BaseModel):
     enable_crop_modal: StrictBool = True
     printer_model: str = "bambu-h2d"
     slicer_software: str = "BambuStudio"
+    device_profile_id: str = "BambuStudio:bbl:bambu-lab-h2d:0.4"
     custom_slicer_path: str = ""
     custom_slicer_id: str = ""
     nozzle_size: str = "0.4"

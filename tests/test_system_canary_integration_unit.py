@@ -86,6 +86,50 @@ class TestSystemImagePreviewCanary:
         assert registered is not None
         assert record.file_size_bytes == Path(str(registered["path"])).stat().st_size
 
+    def test_invalid_image_preview_cleans_temp_file_and_hides_path(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setattr("config.TEMP_DIR", str(tmp_path))
+        client, registry = _client_with_registry()
+
+        response = client.post(
+            "/api/system/image-preview",
+            files={"file": ("bad.png", b"not a real image", "image/png")},
+        )
+
+        assert response.status_code == 422, response.text
+        assert response.json()["detail"] == "无法读取图片尺寸：无效或损坏的图片文件"
+        assert str(tmp_path) not in response.text
+        assert list(tmp_path.iterdir()) == []
+        assert registry.get_session_entries("preview.png") == {}
+
+    def test_heic_conversion_failure_cleans_temp_files_at_api_boundary(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        payload = _png_bytes()
+
+        def fail_save(self, path, *args, **kwargs):  # noqa: ANN001
+            raise RuntimeError("simulated conversion save failure")
+
+        monkeypatch.setattr("config.TEMP_DIR", str(tmp_path))
+        monkeypatch.setattr("api.file_bridge.HAS_HEIF", True)
+        monkeypatch.setattr(Image.Image, "save", fail_save)
+        client, registry = _client_with_registry()
+
+        response = client.post(
+            "/api/system/image-preview",
+            files={"file": ("photo.heic", payload, "image/heic")},
+        )
+
+        assert response.status_code == 422, response.text
+        assert "HEIC/HEIF 文件解码失败" in response.json()["detail"]
+        assert list(tmp_path.iterdir()) == []
+        assert registry.get_session_entries("preview.png") == {}
+
 
 class TestSystemSaveSettingsCanary:
     """Settings persistence canary isolates the real user settings file."""

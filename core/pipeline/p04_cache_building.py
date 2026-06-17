@@ -16,7 +16,7 @@ from config import BedManager
 from core.pipeline.pipeline_utils import _ensure_quantized_image_in_cache
 
 _log = get_logger(__name__)
-_DEFAULT_GLB_MAX_MESHES = 64
+_DEFAULT_GLB_MAX_MESHES = 128
 
 
 def run(ctx: dict) -> dict:
@@ -33,6 +33,7 @@ def run(ctx: dict) -> dict:
         - color_conf (dict): 颜色系统配置
         - color_mode (str): 颜色模式字符串
         - quantize_colors (int): 量化颜色数
+        - high_precision_3d_preview (bool): 是否将 GLB 颜色上限提升到量化颜色数
         - backing_color_id (int): 底板材料 ID
         - is_dark (bool): 是否深色主题
         - lut_metadata (object | None): LUT 元数据
@@ -60,6 +61,7 @@ def run(ctx: dict) -> dict:
     color_mode = ctx['color_mode']
     modeling_mode = ctx.get('modeling_mode')
     quantize_colors = ctx['quantize_colors']
+    high_precision_3d_preview = bool(ctx.get('high_precision_3d_preview', False))
     svg_pixels_per_mm = ctx.get('svg_pixels_per_mm')
     backing_color_id = ctx.get('backing_color_id', 0)
     is_dark = ctx.get('is_dark', True)
@@ -98,7 +100,7 @@ def run(ctx: dict) -> dict:
         'slot_names': ctx.get('slot_names'),
     }
     modeling_mode_value = getattr(modeling_mode, "value", modeling_mode)
-    if modeling_mode_value == "pixel":
+    if modeling_mode_value == "pixel" or high_precision_3d_preview:
         try:
             glb_mesh_budget = int(quantize_colors)
         except (TypeError, ValueError):

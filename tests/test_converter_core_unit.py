@@ -61,3 +61,34 @@ def test_generate_final_model_forwards_fridge_magnet_kwargs_intact() -> None:
     assert result == ("out.3mf", "out.glb", None, "OK", None)
     assert convert_image_to_3d_mock.call_args.kwargs["enable_fridge_magnet"] is True
     assert convert_image_to_3d_mock.call_args.kwargs["fridge_magnets"] == expected_fridge_magnets
+
+
+def test_generate_final_model_forwards_device_profile_id() -> None:
+    """generate_final_model should forward registry device profile selection."""
+
+    with patch(
+        "core.converter.convert_image_to_3d",
+        return_value=("out.3mf", "out.glb", None, "OK", None),
+    ) as convert_image_to_3d_mock:
+        result = generate_final_model(
+            image_path="image.png",
+            lut_path="lut.npy",
+            target_width_mm=80.0,
+            spacer_thick=1.5,
+            structure_mode="Single-sided",
+            color_mode="4-Color (RYBW)",
+            add_loop=False,
+            loop_width=4.0,
+            loop_length=8.0,
+            loop_hole=2.5,
+            loop_pos=None,
+            modeling_mode=ModelingMode.HIGH_FIDELITY,
+            quantize_colors=64,
+            device_profile_id="BambuStudio:bbl:bambu-lab-h2d:0.4",
+        )
+
+    assert result == ("out.3mf", "out.glb", None, "OK", None)
+    assert (
+        convert_image_to_3d_mock.call_args.kwargs["device_profile_id"]
+        == "BambuStudio:bbl:bambu-lab-h2d:0.4"
+    )

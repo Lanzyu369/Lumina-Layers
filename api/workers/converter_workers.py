@@ -477,6 +477,7 @@ def worker_generate_preview(
     material_layer_height_mm: float | None = None,
     material_grid_resolution: int | None = None,
     auto_dynamic_range: bool = False,
+    high_precision_3d_preview: bool = False,
     svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
 ) -> dict:
     """Execute preview generation in a worker process.
@@ -549,6 +550,7 @@ def worker_generate_preview(
             "material_grid_resolution": material_grid_resolution,
             "model_enable": model_enable,
             "model_only": model_only,
+            "high_precision_3d_preview": high_precision_3d_preview,
         },
     )
     try:
@@ -574,6 +576,7 @@ def worker_generate_preview(
             chroma_gate=chroma_gate,
             use_lut_constrained=use_lut_constrained,
             auto_dynamic_range=auto_dynamic_range,
+            high_precision_3d_preview=high_precision_3d_preview,
             material_source=material_source,
             selected_materials=selected_materials,
             material_layer_count=material_layer_count,
@@ -1025,6 +1028,8 @@ def worker_batch_convert_item(
     material_backing_material_index: int | None = None,
     use_lut_constrained: bool = False,
     auto_dynamic_range: bool = False,
+    high_precision_3d_preview: bool = False,
+    device_profile_id: str | None = None,
 ) -> dict:
     """Execute a single batch conversion item in a worker process.
     在工作进程中执行单个批量转换项。
@@ -1068,6 +1073,9 @@ def worker_batch_convert_item(
         printer_id / slicer / nozzle_size: Device preset fields forwarded
             to the canonical single-item 3MF writer. (透传到单件 3MF
             writer 的设备预设字段)
+        device_profile_id: Generated machine registry device profile ID
+            forwarded to the canonical single-item 3MF writer.
+            (透传到单件 3MF writer 的机器注册表设备配置 ID)
         enable_base_layer_height_modifier: Whether to keep the Bambu-family
             coarse base-layer setting from user settings. (是否沿用设置页
             的底板粗层高开关)
@@ -1128,6 +1136,7 @@ def worker_batch_convert_item(
         printer_id=printer_id,
         slicer=slicer,
         nozzle_size=nozzle_size,
+        device_profile_id=device_profile_id,
         enable_base_layer_height_modifier=enable_base_layer_height_modifier,
         material_source=material_source,
         selected_materials=selected_materials,
@@ -1137,6 +1146,7 @@ def worker_batch_convert_item(
         material_backing_material_index=material_backing_material_index,
         use_lut_constrained=use_lut_constrained,
         auto_dynamic_range=auto_dynamic_range,
+        high_precision_3d_preview=high_precision_3d_preview,
     )
 
     # Conversion failure surfaces as no 3MF; keep the legacy contract
@@ -1599,6 +1609,7 @@ def worker_generate_large_format_svg_native(
                 slicer=params.get("slicer", "BambuStudio"),
                 nozzle_size=params.get("nozzle_size", "0.4"),
                 cover_source=tile_cover,
+                device_profile_id=params.get("device_profile_id") or None,
             )
             successful_paths.append(
                 (

@@ -772,6 +772,42 @@ describe("Feature: extractor-calibration-tab, Property 7: API 请求载荷与 St
     expect(state.imagePreviewUrl).toBe("/api/files/original-preview.jpg");
   });
 
+  it("does not treat failed rotated preview downloads as image files", async () => {
+    const originalFetch = globalThis.fetch;
+    const originalFile = new File(["raw"], "calibration.png", {
+      type: "image/png",
+    });
+    mockedRotateExtractorImage.mockResolvedValueOnce({
+      preview_url: "/api/files/expired-rotated.png",
+      width: 100,
+      height: 100,
+    });
+    globalThis.fetch = vi.fn().mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      headers: { get: () => "application/json" },
+      json: () => Promise.resolve({ detail: "Not Found" }),
+    }) as unknown as typeof fetch;
+
+    try {
+      useExtractorStore.setState({
+        imageFile: originalFile,
+        imagePreviewUrl: "/api/files/original-preview.jpg",
+      });
+
+      await useExtractorStore.getState().rotateImage();
+
+      const state = useExtractorStore.getState();
+      expect(state.imageFile).toBe(originalFile);
+      expect(state.imagePreviewUrl).toBe("/api/files/original-preview.jpg");
+      expect(state.isLoading).toBe(false);
+      expect(state.error).toMatch(/requested resource|请求的资源/);
+      expect(state.error).not.toContain("404");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("keeps original image dimensions when disabling ColorChecker to an existing preview", () => {
     const file = new File(["image"], "calibration.png", { type: "image/png" });
     useExtractorStore.setState({

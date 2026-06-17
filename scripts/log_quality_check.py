@@ -182,6 +182,18 @@ _ALLOWED_LOG_EVENTS = {"client_log", "log_file_configured"}
 _INFO_BUDGET_EXCLUDED_EVENTS = {"worker_pool_shutdown"}
 _ANSI_PATTERN = re.compile(r"(?:\x1b|\\u001b)\[")
 _BRACKET_TAG_PATTERN = re.compile(r"^\s*\[[A-Z][A-Z0-9_]*\]")
+_WARNING_ERROR_ACTIONABLE_FIELDS = frozenset(
+    {
+        "dependency",
+        "error_code",
+        "error_message",
+        "error_type",
+        "exception",
+        "fallback_action",
+        "path",
+        "status_code",
+    }
+)
 
 
 class QualityCheckError(RuntimeError):
@@ -266,6 +278,7 @@ class QualityReport:
     info_lines: int
     warning_lines: int
     error_lines: int
+    warning_error_missing_actionable_fields: int
     catch_all_event_count: int
     ansi_field_count: int
     bracket_tag_message_count: int
@@ -774,6 +787,12 @@ def build_quality_report(
             threshold=0,
         ),
         CheckResult.evaluate(
+            name="no_warning_error_missing_actionable_fields",
+            actual=metrics["warning_error_missing_actionable_fields"],
+            operator="==",
+            threshold=0,
+        ),
+        CheckResult.evaluate(
             name="log_file_configured_once",
             actual=metrics["log_file_configured_count"],
             operator="==",
@@ -801,6 +820,9 @@ def build_quality_report(
         info_lines=metrics["info_lines"],
         warning_lines=metrics["warning_lines"],
         error_lines=metrics["error_lines"],
+        warning_error_missing_actionable_fields=metrics[
+            "warning_error_missing_actionable_fields"
+        ],
         catch_all_event_count=metrics["catch_all_event_count"],
         ansi_field_count=metrics["ansi_field_count"],
         bracket_tag_message_count=metrics["bracket_tag_message_count"],
@@ -4382,6 +4404,7 @@ def _scan_log_file_for_governance_metrics(log_path: Path) -> dict[str, int]:
     ansi = 0
     bracket = 0
     log_file_configured = 0
+    warning_error_missing_actionable_fields = 0
 
     if not log_path.exists():
         raise QualityCheckError(f"Log file missing: {log_path}")
@@ -4410,8 +4433,12 @@ def _scan_log_file_for_governance_metrics(log_path: Path) -> dict[str, int]:
                 info_lines += 1
             elif level == "WARNING":
                 warning_lines += 1
+                if not _has_actionable_warning_error_field(payload):
+                    warning_error_missing_actionable_fields += 1
             elif level == "ERROR":
                 error_lines += 1
+                if not _has_actionable_warning_error_field(payload):
+                    warning_error_missing_actionable_fields += 1
 
             if event == "log_file_configured":
                 log_file_configured += 1
@@ -4426,11 +4453,35 @@ def _scan_log_file_for_governance_metrics(log_path: Path) -> dict[str, int]:
         "info_lines": info_lines,
         "warning_lines": warning_lines,
         "error_lines": error_lines,
+        "warning_error_missing_actionable_fields": (
+            warning_error_missing_actionable_fields
+        ),
         "catch_all_event_count": catch_all,
         "ansi_field_count": ansi,
         "bracket_tag_message_count": bracket,
         "log_file_configured_count": log_file_configured,
     }
+
+
+def _has_actionable_warning_error_field(payload: Mapping[str, Any]) -> bool:
+    for field in _WARNING_ERROR_ACTIONABLE_FIELDS:
+        if _is_nonempty_actionable_value(payload.get(field)):
+            return True
+    return False
+
+
+def _is_nonempty_actionable_value(value: object) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, (list, tuple, set, dict)):
+        return bool(value)
+    return True
 
 
 def _count_info_lines_by_request_id(log_path: Path) -> dict[str, int]:
@@ -4545,6 +4596,10 @@ def _format_stdout_summary(report: QualityReport, output_path: Path) -> str:
         f"  INFO    : {report.info_lines}",
         f"  WARNING : {report.warning_lines}",
         f"  ERROR   : {report.error_lines}",
+        (
+            "  WARNING/ERROR missing actionable fields: "
+            f"{report.warning_error_missing_actionable_fields}"
+        ),
         "",
         "TOP EVENTS",
     ]

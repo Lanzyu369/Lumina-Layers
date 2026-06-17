@@ -113,9 +113,10 @@ export interface SettingsState {
   paletteMode: "swatch" | "card";
   printerModel: string;
   slicerSoftware: string;
+  deviceProfileId: string;
   customSlicerPath: string;
   customSlicerId: string;
-  nozzleSize: "0.2" | "0.4";
+  nozzleSize: "0.2" | "0.25" | "0.4";
   enableBaseLayerHeightModifier: boolean;
   /**
    * When ``false`` (default) the exhaustive-cache dialog hides its
@@ -164,9 +165,10 @@ export interface SettingsActions {
   setPaletteMode: (mode: "swatch" | "card") => void;
   setPrinterModel: (id: string) => void;
   setSlicerSoftware: (id: string) => void;
+  setDeviceProfileId: (id: string) => void;
   setCustomSlicerPath: (path: string) => void;
   setCustomSlicerId: (id: string) => void;
-  setNozzleSize: (size: "0.2" | "0.4") => void;
+  setNozzleSize: (size: "0.2" | "0.25" | "0.4") => void;
   setEnableBaseLayerHeightModifier: (enabled: boolean) => void;
   setEnableSolverCacheGridSelection: (enabled: boolean) => void;
   setSolverCacheGridResolution: (value: SolverCacheGridResolution) => void;
@@ -194,6 +196,7 @@ export const DEFAULT_SETTINGS: SettingsState = {
   paletteMode: "swatch",
   printerModel: "bambu-h2d",
   slicerSoftware: "BambuStudio",
+  deviceProfileId: "BambuStudio:bbl:bambu-lab-h2d:0.4",
   customSlicerPath: "",
   customSlicerId: "",
   nozzleSize: "0.4",
@@ -224,13 +227,31 @@ function stripRetiredClientOnlySettings(
   return migrated as PersistedSettingsSnapshot;
 }
 
+function patchLegacyPersistedDeviceProfile(
+  snapshot: PersistedSettingsSnapshot,
+): PersistedSettingsSnapshot {
+  if (Object.prototype.hasOwnProperty.call(snapshot, "deviceProfileId")) {
+    return snapshot;
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(snapshot, "printerModel") ||
+    Object.prototype.hasOwnProperty.call(snapshot, "slicerSoftware") ||
+    Object.prototype.hasOwnProperty.call(snapshot, "nozzleSize")
+  ) {
+    return { ...snapshot, deviceProfileId: "" };
+  }
+  return snapshot;
+}
+
 function migratePersistedSettings(
   persistedState: unknown,
 ): PersistedSettingsSnapshot {
   if (!persistedState || typeof persistedState !== "object") {
     return {};
   }
-  return stripRetiredClientOnlySettings(persistedState as Record<string, unknown>);
+  return patchLegacyPersistedDeviceProfile(
+    stripRetiredClientOnlySettings(persistedState as Record<string, unknown>),
+  );
 }
 
 function readPersistedSettingsSnapshot(): PersistedSettingsSnapshot | null {
@@ -300,6 +321,15 @@ export function deriveBackendDeviceSettingsPatch(
   }
 
   if (
+    typeof settings.device_profile_id === "string" &&
+    settings.device_profile_id.trim() &&
+    current.deviceProfileId === DEFAULT_SETTINGS.deviceProfileId &&
+    !hasOwnSetting(persistedSnapshot, "deviceProfileId")
+  ) {
+    patch.deviceProfileId = settings.device_profile_id.trim();
+  }
+
+  if (
     typeof settings.custom_slicer_path === "string" &&
     settings.custom_slicer_path.trim() &&
     current.customSlicerPath === DEFAULT_SETTINGS.customSlicerPath &&
@@ -318,7 +348,9 @@ export function deriveBackendDeviceSettingsPatch(
   }
 
   if (
-    (settings.nozzle_size === "0.2" || settings.nozzle_size === "0.4") &&
+    (settings.nozzle_size === "0.2" ||
+      settings.nozzle_size === "0.25" ||
+      settings.nozzle_size === "0.4") &&
     current.nozzleSize === DEFAULT_SETTINGS.nozzleSize &&
     !hasOwnSetting(persistedSnapshot, "nozzleSize")
   ) {
@@ -372,7 +404,11 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
       setPaletteMode: (mode: "swatch" | "card") => set({ paletteMode: mode }),
 
       setPrinterModel: (id: string) => {
-        set({ printerModel: id });
+        set((state) => ({
+          printerModel: id,
+          deviceProfileId:
+            state.printerModel === id ? state.deviceProfileId : "",
+        }));
         invalidateGeneratedArtifacts();
 
         // 延迟导入避免循环依赖
@@ -386,7 +422,16 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
       },
 
       setSlicerSoftware: (id: string) => {
-        set({ slicerSoftware: id });
+        set((state) => ({
+          slicerSoftware: id,
+          deviceProfileId:
+            state.slicerSoftware === id ? state.deviceProfileId : "",
+        }));
+        invalidateGeneratedArtifacts();
+      },
+
+      setDeviceProfileId: (id: string) => {
+        set({ deviceProfileId: id });
         invalidateGeneratedArtifacts();
       },
 
@@ -394,8 +439,12 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
 
       setCustomSlicerId: (id: string) => set({ customSlicerId: id }),
 
-      setNozzleSize: (size: "0.2" | "0.4") => {
-        set({ nozzleSize: size });
+      setNozzleSize: (size: "0.2" | "0.25" | "0.4") => {
+        set((state) => ({
+          nozzleSize: size,
+          deviceProfileId:
+            state.nozzleSize === size ? state.deviceProfileId : "",
+        }));
         invalidateGeneratedArtifacts();
       },
 
@@ -459,6 +508,9 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
             patch.enableBaseLayerHeightModifier,
           );
         }
+        if (typeof patch.deviceProfileId === "string") {
+          actions.setDeviceProfileId(patch.deviceProfileId);
+        }
       },
 
       syncToBackend: async () => {
@@ -473,6 +525,7 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
             enable_crop_modal: state.cropEnabled,
             printer_model: state.printerModel,
             slicer_software: state.slicerSoftware,
+            device_profile_id: state.deviceProfileId,
             custom_slicer_path: state.customSlicerPath,
             custom_slicer_id: state.customSlicerId,
             nozzle_size: state.nozzleSize,
@@ -490,10 +543,12 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
       migrate: migratePersistedSettings,
       merge: (persistedState, currentState) => ({
         ...currentState,
-        ...stripRetiredClientOnlySettings(
-          persistedState && typeof persistedState === "object"
-            ? (persistedState as Record<string, unknown>)
-            : {},
+        ...patchLegacyPersistedDeviceProfile(
+          stripRetiredClientOnlySettings(
+            persistedState && typeof persistedState === "object"
+              ? (persistedState as Record<string, unknown>)
+              : {},
+          ),
         ),
       }),
     },

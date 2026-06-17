@@ -385,11 +385,9 @@ def collect_sync_attachments(
         ref = context.get("active_final_artifact_ref") or {}
         session_id = ref.get("session_id") if isinstance(ref, dict) else None
         artifact_type = ref.get("artifact_type") if isinstance(ref, dict) else None
-        disk_path = ref.get("disk_path") if isinstance(ref, dict) else None
         download_url = ref.get("download_url") if isinstance(ref, dict) else None
         final = _collect_final_artifact(
             ticket_dir, file_registry, session_id, artifact_type,
-            disk_path=disk_path,
             download_url=download_url,
         )
         log.info(
@@ -555,22 +553,21 @@ def _collect_final_artifact(
     session_id: str | None,
     artifact_type: str | None,
     *,
-    disk_path: str | None = None,
     download_url: str | None = None,
 ) -> dict[str, Any]:
     """Build the ``final_artifact`` attachment dict.
 
-    First attempts to locate the artifact via FileRegistry (by session_id).
-    If that fails (e.g. a TTL artifact is registered outside the live
-    session), falls back to the exact ``download_url`` file id and then to
-    ``disk_path`` from the frontend ref — but only if the disk path is a
-    regular file with an allowed extension (.3mf / .zip) and resolves inside
-    ``REPO_ROOT/output``.
+    First attempts the exact ``download_url`` file id because it represents
+    the artifact the user is currently offered for download. If that fails
+    (e.g. the URL is invalid, expired, private, or not a final artifact), it
+    falls back to FileRegistry by ``session_id``. The client context may still
+    contain a historical ``disk_path`` value, but a client-supplied server path
+    is not an authorization source for copying files.
 
-    先通过 FileRegistry（按 session_id）查找产物。如果找不到（例如 TTL
-    产物没有挂在当前业务 session 下），再按 ``download_url`` 精确解析文件
-    id，最后回退到前端 ref 中的 ``disk_path``。磁盘路径回退仍要求扩展名
-    允许且 resolve 后位于 ``REPO_ROOT/output`` 内。
+    优先按 ``download_url`` 精确解析文件 id，因为它代表用户当前看到的下载产物。
+    如果失败（例如 URL 无效、已过期、私有或不是最终产物），再通过
+    FileRegistry（按 session_id）查找。客户端上下文里可能仍带旧版 ``disk_path``，
+    但客户端提交的服务器磁盘路径不能作为复制附件的授权依据。
     """
     base = {
         "status": "not_applicable",
@@ -582,33 +579,10 @@ def _collect_final_artifact(
         "generated_at": None,
         "history_count": 0,
     }
-    if not session_id and not disk_path and not download_url:
+    if not session_id and not download_url:
         return base
 
-    # --- Primary path: FileRegistry lookup by session_id ---
-    if session_id:
-        entries = _file_registry_entries_for(file_registry, session_id)
-        if entries:
-            fid, entry, history_count = _pick_final_artifact_entry(entries)
-            if fid:
-                src_path = Path(entry["path"])
-                suffix = src_path.suffix.lower() or ".3mf"
-                dst = ticket_dir / f"final{suffix}"
-                shutil.copy2(src_path, dst)
-                size = dst.stat().st_size
-                sha = file_sha256(dst)
-                return {
-                    "status": "attached",
-                    "filename": dst.name,
-                    "sha256": sha,
-                    "size_bytes": size,
-                    "artifact_type": suffix.lstrip(".") or artifact_type,
-                    "source_session_id": session_id,
-                    "generated_at": _format_created_at(entry.get("created_at")),
-                    "history_count": history_count,
-                }
-
-    # --- Fallback: exact /api/files/<id> from frontend ref ---
+    # --- Primary path: exact /api/files/<id> from frontend ref ---
     if download_url:
         attached = _collect_final_artifact_from_download_url(
             ticket_dir, file_registry, download_url, artifact_type, session_id,
@@ -616,62 +590,39 @@ def _collect_final_artifact(
         if attached is not None:
             return attached
 
-    # --- Fallback: disk_path from frontend ref ---
-    if disk_path:
-        attached = _try_disk_path_fallback(ticket_dir, disk_path, artifact_type, session_id)
-        if attached is not None:
-            return attached
+    # --- Fallback: FileRegistry lookup by session_id ---
+    if session_id:
+        entries = _file_registry_entries_for(file_registry, session_id)
+        if entries:
+            fid, entry, history_count = _pick_final_artifact_entry(entries)
+            if fid:
+                src_path = Path(entry["path"])
+                if src_path.is_file():
+                    suffix = src_path.suffix.lower() or ".3mf"
+                    dst = ticket_dir / f"final{suffix}"
+                    try:
+                        shutil.copy2(src_path, dst)
+                        size = dst.stat().st_size
+                        sha = file_sha256(dst)
+                    except OSError:
+                        try:
+                            dst.unlink()
+                        except OSError:
+                            pass
+                    else:
+                        return {
+                            "status": "attached",
+                            "filename": dst.name,
+                            "sha256": sha,
+                            "size_bytes": size,
+                            "artifact_type": suffix.lstrip(".") or artifact_type,
+                            "source_session_id": session_id,
+                            "generated_at": _format_created_at(entry.get("created_at")),
+                            "history_count": history_count,
+                        }
 
     # Neither registry nor fallback yielded a file.
     return {**base, "status": "expired_ttl"}
-
-
-def _try_disk_path_fallback(
-    ticket_dir: Path,
-    disk_path: str,
-    artifact_type: str | None,
-    session_id: str | None,
-) -> dict[str, Any] | None:
-    """Attempt to copy a final artifact from ``disk_path`` with safety checks.
-
-    安全校验后尝试从 ``disk_path`` 复制最终产物。
-
-    Safety rules:
-    1. Must be a non-empty string.
-    2. Must resolve to a regular file (not symlink target outside, not dir).
-    3. Extension must be in ``_FINAL_ARTIFACT_EXTENSIONS`` (.3mf / .zip).
-    4. Resolved path must be inside ``REPO_ROOT/output``.
-
-    Returns the attachment dict on success, or None if any check fails.
-    """
-    if not disk_path or not disk_path.strip():
-        return None
-    src = Path(disk_path)
-    if not src.is_file():
-        return None
-    suffix = src.suffix.lower()
-    if suffix not in _FINAL_ARTIFACT_EXTENSIONS:
-        return None
-    # Security: only allow paths inside REPO_ROOT/output.
-    allowed_root = (REPO_ROOT / "output").resolve()
-    try:
-        src.resolve().relative_to(allowed_root)
-    except ValueError:
-        return None
-    dst = ticket_dir / f"final{suffix}"
-    shutil.copy2(src, dst)
-    size = dst.stat().st_size
-    sha = file_sha256(dst)
-    return {
-        "status": "attached",
-        "filename": dst.name,
-        "sha256": sha,
-        "size_bytes": size,
-        "artifact_type": suffix.lstrip(".") or artifact_type,
-        "source_session_id": session_id,
-        "generated_at": None,
-        "history_count": 0,
-    }
 
 
 def _collect_lut(ticket_dir: Path, context: dict[str, Any]) -> dict[str, Any]:

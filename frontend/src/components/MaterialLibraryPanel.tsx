@@ -121,7 +121,7 @@ export default function MaterialLibraryPanel() {
   const [historyMaterial, setHistoryMaterial] = useState<SavedMaterialLibraryItem | null>(null);
   const [selectedDirectoryNames, setSelectedDirectoryNames] = useState<string[]>([]);
   const [editingMaterial, setEditingMaterial] = useState<SavedMaterialLibraryItem | null>(null);
-  const [collapsedBrandGroupKeys, setCollapsedBrandGroupKeys] = useState<string[]>([]);
+  const [expandedBrandGroupKeys, setExpandedBrandGroupKeys] = useState<string[]>([]);
 
   const refreshMaterials = useCallback(async () => {
     setIsLoading(true);
@@ -201,6 +201,8 @@ export default function MaterialLibraryPanel() {
     }
     return result;
   }, [materials]);
+
+  const expandedBrandGroupKeySet = useMemo(() => new Set(expandedBrandGroupKeys), [expandedBrandGroupKeys]);
 
   const handleStartVerification = useCallback((item: SavedMaterialLibraryItem) => {
     startMaterialVerification({
@@ -310,7 +312,7 @@ export default function MaterialLibraryPanel() {
   }, [allSelected, materials]);
 
   const toggleBrandGroupCollapsed = useCallback((groupKey: string) => {
-    setCollapsedBrandGroupKeys((previous) =>
+    setExpandedBrandGroupKeys((previous) =>
       previous.includes(groupKey)
         ? previous.filter((item) => item !== groupKey)
         : [...previous, groupKey],
@@ -658,7 +660,7 @@ export default function MaterialLibraryPanel() {
           {groupedMaterials.map(({ brand, items }) => {
             const groupKey = getMaterialBrandGroupKey(brand);
             const groupLabel = brand ?? t("mat_gradient_library_brand_unassigned");
-            const isCollapsed = collapsedBrandGroupKeys.includes(groupKey);
+            const isCollapsed = !expandedBrandGroupKeySet.has(groupKey);
             return (
               <section
                 key={groupKey}

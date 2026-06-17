@@ -33,7 +33,7 @@ class FiveColorQueryRequest(BaseModel):
 
     lut_name: str = Field(..., description="LUT 显示名称")
     selected_indices: list[int] = Field(
-        ..., min_length=5, max_length=5, description="5 个颜色索引"
+        ..., min_length=5, max_length=6, description="5 或 6 个颜色索引"
     )
 
 
@@ -137,7 +137,7 @@ class RecipeSwatchItemRequest(BaseModel):
     """单个配方色块请求。"""
 
     selected_indices: list[int] = Field(
-        ..., min_length=5, max_length=5, description="5 个颜色索引序列"
+        ..., min_length=5, max_length=6, description="5 或 6 个颜色索引序列"
     )
     result_hex: str = Field(..., description="混合结果 Hex 颜色")
     base_color_names: list[str] = Field(default_factory=list, description="各基础色名称（可省略，服务端将从 LUT 推导）")
@@ -158,6 +158,7 @@ class RecipeSwatchRequest(BaseModel):
     printer_id: str = Field("bambu-h2d", description="打印机配置 ID")
     slicer: str = Field("BambuStudio", description="切片软件 ID")
     nozzle_size: str = Field("0.4", description="喷嘴尺寸")
+    device_profile_id: str | None = Field(None, description="机器注册表设备配置 ID")
 
 
 class RecipeSwatchResponse(BaseModel):

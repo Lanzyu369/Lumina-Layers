@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 vi.mock("../../api/system", () => ({
   clearCache: vi.fn(),
+  getMachineRegistryAssetUrl: (path: string) => `/api/system/machine-registry/assets/${path}`,
   getPrinters: vi.fn(),
   getSlicers: vi.fn(),
   saveSettings: vi.fn(),

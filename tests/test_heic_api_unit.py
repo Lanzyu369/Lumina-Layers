@@ -13,11 +13,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
+from PIL import Image
 
+import api.file_bridge as file_bridge
 from api.file_bridge import (
     HAS_HEIF,
     _guess_media_type,
     ensure_png_tempfile,
+    upload_to_tempfile,
 )
 
 
@@ -29,6 +32,76 @@ def _make_upload_file(filename: str, content: bytes = b"fake") -> MagicMock:
     mock.filename = filename
     mock.read = AsyncMock(return_value=content)
     return mock
+
+
+def _make_png_bytes() -> bytes:
+    """Create a tiny valid PNG payload for extension-based conversion tests."""
+
+    buf = io.BytesIO()
+    Image.new("RGB", (2, 2), (255, 0, 0)).save(buf, "PNG")
+    return buf.getvalue()
+
+
+class TestUploadToTempfileWriteSafety:
+    """Shared upload persistence should write complete files or clean up."""
+
+    def test_short_os_write_is_retried_until_payload_is_complete(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
+    ) -> None:
+        payload = b"abcdefghijklmnopqrstuvwxyz"
+        original_write = file_bridge.os.write
+        written_lengths: list[int] = []
+
+        def short_write(fd: int, data) -> int:  # noqa: ANN001
+            chunk = bytes(data[:5])
+            written_lengths.append(len(chunk))
+            return original_write(fd, chunk)
+
+        monkeypatch.setattr("config.TEMP_DIR", str(tmp_path))
+        monkeypatch.setattr(file_bridge.os, "write", short_write)
+
+        path = asyncio.run(upload_to_tempfile(_make_upload_file("sample.bin", payload)))
+        try:
+            with open(path, "rb") as saved:
+                assert saved.read() == payload
+            assert len(written_lengths) > 1
+        finally:
+            if os.path.exists(path):
+                os.unlink(path)
+
+    def test_write_failure_removes_created_temp_file(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
+    ) -> None:
+        def raise_write_error(fd: int, data: bytes) -> int:
+            raise OSError("simulated short write failure")
+
+        monkeypatch.setattr("config.TEMP_DIR", str(tmp_path))
+        monkeypatch.setattr(file_bridge.os, "write", raise_write_error)
+
+        with pytest.raises(OSError, match="simulated short write failure"):
+            asyncio.run(upload_to_tempfile(_make_upload_file("sample.bin", b"payload")))
+
+        assert list(tmp_path.iterdir()) == []
+
+    def test_zero_byte_write_removes_created_temp_file(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
+    ) -> None:
+        def write_zero_bytes(fd: int, data: bytes) -> int:
+            return 0
+
+        monkeypatch.setattr("config.TEMP_DIR", str(tmp_path))
+        monkeypatch.setattr(file_bridge.os, "write", write_zero_bytes)
+
+        with pytest.raises(OSError, match="Failed to write uploaded file chunk"):
+            asyncio.run(upload_to_tempfile(_make_upload_file("sample.bin", b"payload")))
+
+        assert list(tmp_path.iterdir()) == []
 
 
 # ── Test 1: ensure_png_tempfile raises 422 when HAS_HEIF=False ────────
@@ -59,6 +132,77 @@ class TestEnsurePngRaises422WhenHeifNotInstalled:
             with pytest.raises(HTTPException) as exc_info:
                 asyncio.run(ensure_png_tempfile(mock_file))
             assert exc_info.value.status_code == 422
+
+    def test_cleanup_failure_preserves_unsupported_heic_422(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
+    ) -> None:
+        mock_file = _make_upload_file("photo.heic", content=_make_png_bytes())
+
+        def raise_cleanup_error(path: str) -> None:
+            raise OSError(f"simulated cleanup failure for {path}")
+
+        monkeypatch.setattr("config.TEMP_DIR", str(tmp_path))
+        monkeypatch.setattr(file_bridge.os, "unlink", raise_cleanup_error)
+
+        with patch("api.file_bridge.HAS_HEIF", False):
+            with pytest.raises(HTTPException) as exc_info:
+                asyncio.run(ensure_png_tempfile(mock_file))
+
+        assert exc_info.value.status_code == 422
+        assert "pillow-heif" in exc_info.value.detail
+
+
+class TestEnsurePngConversionFailureCleanup:
+    """HEIC conversion failures should not leave unregistered PNG files."""
+
+    def test_save_failure_removes_created_png_temp_file(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
+    ) -> None:
+        mock_file = _make_upload_file("photo.heic", content=_make_png_bytes())
+
+        def fail_save(self, path, *args, **kwargs):  # noqa: ANN001
+            raise RuntimeError("simulated conversion save failure")
+
+        monkeypatch.setattr("config.TEMP_DIR", str(tmp_path))
+
+        with (
+            patch("api.file_bridge.HAS_HEIF", True),
+            patch.object(Image.Image, "save", fail_save),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                asyncio.run(ensure_png_tempfile(mock_file))
+
+        assert exc_info.value.status_code == 422
+        assert "simulated conversion save failure" in exc_info.value.detail
+        assert list(tmp_path.iterdir()) == []
+
+    def test_raw_cleanup_failure_does_not_leak_png_or_escape_as_oserror(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
+    ) -> None:
+        mock_file = _make_upload_file("photo.heic", content=_make_png_bytes())
+        original_unlink = file_bridge.os.unlink
+
+        def fail_raw_unlink(path: str) -> None:
+            if str(path).endswith(".heic"):
+                raise OSError("simulated raw cleanup failure")
+            original_unlink(path)
+
+        monkeypatch.setattr("config.TEMP_DIR", str(tmp_path))
+        monkeypatch.setattr(file_bridge.os, "unlink", fail_raw_unlink)
+
+        with patch("api.file_bridge.HAS_HEIF", True):
+            with pytest.raises(HTTPException) as exc_info:
+                asyncio.run(ensure_png_tempfile(mock_file))
+
+        assert exc_info.value.status_code == 422
+        assert "simulated raw cleanup failure" in exc_info.value.detail
+        assert not any(path.suffix == ".png" for path in tmp_path.iterdir())
 
 
 # ── Test 2: HAS_HEIF flag consistency with pillow_heif install ─────────

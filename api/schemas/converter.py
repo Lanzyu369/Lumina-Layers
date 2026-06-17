@@ -324,6 +324,7 @@ class ConvertPreviewRequest(LutSourceSelection):
     )
     use_lut_constrained: bool = Field(False, description="启用高精度LUT约束颜色匹配（实验性）")
     auto_dynamic_range: bool = Field(False, description="启用自动动态范围压缩（实验性）")
+    high_precision_3d_preview: bool = Field(False, description="启用3D高精度颜色预览")
 
     @field_validator("color_mode", mode="before")
     @classmethod
@@ -467,6 +468,7 @@ class ConvertGenerateRequest(LutSourceSelection):
     )
     use_lut_constrained: bool = Field(False, description="启用高精度LUT约束颜色匹配（实验性）")
     auto_dynamic_range: bool = Field(False, description="启用自动动态范围压缩（实验性）")
+    high_precision_3d_preview: bool = Field(False, description="启用3D高精度颜色预览")
     recipe_overrides: list[RecipeOverrideItem] | None = Field(None, description="区域级自定义配方覆盖")
     separate_backing: bool = Field(False, description="底板作为独立对象")
     add_loop: bool = Field(False, description="启用挂件环")
@@ -508,6 +510,10 @@ class ConvertGenerateRequest(LutSourceSelection):
     printer_id: str = Field("bambu-h2d", description="Printer profile ID")
     slicer: str = Field("BambuStudio", description="Slicer software name")
     nozzle_size: str = Field("0.4", description="Printer nozzle size")
+    device_profile_id: Optional[str] = Field(
+        None,
+        description="Generated machine registry device profile ID",
+    )
     enable_base_layer_height_modifier: bool = Field(
         True,
         description="Bambu 切片器：底板层高修改器开关（底板用 nozzle×0.5 粗层高打印）",

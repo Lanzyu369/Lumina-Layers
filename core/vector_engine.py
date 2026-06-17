@@ -1256,6 +1256,8 @@ class VectorProcessor:
         self.fridge_magnets: list = []
         self.enable_coating = False
         self.coating_height_mm = 0.08
+        self.enable_outline = False
+        self.outline_width_mm = 0.0
         self.expand_stroke_to_fill = False
 
     @classmethod
@@ -1482,6 +1484,50 @@ class VectorProcessor:
                 polys.append(Polygon(p.exterior, kept))
             return MultiPolygon(polys)
         return geom
+
+    @staticmethod
+    def _expand_coating_silhouette_for_outline(
+        coating_sil,
+        *,
+        enable_outline: bool,
+        outline_width_mm: object,
+        scale_factor: float,
+    ):
+        """Expand coating coverage to include an enabled vector outline.
+
+        扩展透明镀层覆盖范围，使其覆盖已启用的矢量外轮廓。
+        """
+        if not enable_outline:
+            return coating_sil
+        if coating_sil is None or getattr(coating_sil, "is_empty", True):
+            return coating_sil
+        try:
+            requested_outline_width = float(outline_width_mm)
+        except (TypeError, ValueError):
+            return coating_sil
+        if (
+            not np.isfinite(requested_outline_width)
+            or requested_outline_width <= 0
+            or not np.isfinite(scale_factor)
+            or scale_factor <= 0
+        ):
+            return coating_sil
+
+        outline_width_units = requested_outline_width / scale_factor
+        try:
+            expanded = coating_sil.buffer(
+                outline_width_units,
+                join_style="mitre",
+                mitre_limit=2.0,
+            )
+        except VECTOR_HANDLED_ERRORS:
+            try:
+                expanded = coating_sil.buffer(outline_width_units)
+            except VECTOR_HANDLED_ERRORS:
+                return coating_sil
+        if expanded is None or getattr(expanded, "is_empty", True):
+            return coating_sil
+        return expanded
 
     @staticmethod
     def _filter_slits(geom, min_slit_width_mm=0.1):
@@ -2410,6 +2456,8 @@ class VectorProcessor:
         fridge_magnets = list(getattr(self, "fridge_magnets", []) or [])
         enable_coating = bool(getattr(self, "enable_coating", False))
         coating_height_mm = getattr(self, "coating_height_mm", 0.08)
+        enable_outline = bool(getattr(self, "enable_outline", False))
+        outline_width_mm = getattr(self, "outline_width_mm", 0.0)
         structure_mode_value = str(getattr(structure_mode, "value", structure_mode))
 
         # === Stage 5: Run-length extrude per channel ===
@@ -2547,6 +2595,12 @@ class VectorProcessor:
                     coating_sil = coating_sil.buffer(0.15, join_style="mitre", mitre_limit=2.0)
                 except VECTOR_HANDLED_ERRORS:
                     pass
+            coating_sil = self._expand_coating_silhouette_for_outline(
+                coating_sil,
+                enable_outline=enable_outline,
+                outline_width_mm=outline_width_mm,
+                scale_factor=scale_factor,
+            )
             try:
                 requested_coating_height = float(coating_height_mm)
             except (TypeError, ValueError):

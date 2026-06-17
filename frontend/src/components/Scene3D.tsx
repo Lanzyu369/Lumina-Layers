@@ -21,8 +21,14 @@ import {
   getThreePerfDebugConfig,
 } from "../utils/threeDebug";
 import { postClientLog } from "../utils/clientLog";
-import { ActivityIcon, MaximizeIcon, MinimizeIcon, CameraIcon } from "./ui/icons";
-import type { BatchPreviewItem } from "../api/types";
+import {
+  ActivityIcon,
+  BarChartIcon,
+  CameraIcon,
+  MaximizeIcon,
+  MinimizeIcon,
+} from "./ui/icons";
+import type { BatchPreviewItem, PerformanceTiming } from "../api/types";
 
 declare global {
   interface Window {
@@ -42,6 +48,58 @@ interface SceneDiagnosticsSnapshot {
   renderer: ReturnType<typeof getRendererInfoSnapshot>;
   heap: ReturnType<typeof getHeapMemorySnapshot>;
   fps: number | null;
+}
+
+function formatTimingMs(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "—";
+  }
+  if (value >= 1000) {
+    return `${(value / 1000).toFixed(2)} s`;
+  }
+  return `${value.toFixed(value >= 100 ? 0 : 1)} ms`;
+}
+
+function TimingRow({
+  label,
+  value,
+}: {
+  label: string;
+  value: number | null | undefined;
+}) {
+  return (
+    <>
+      <span>{label}</span>
+      <span className="text-right">{formatTimingMs(value)}</span>
+    </>
+  );
+}
+
+function TimingSection({
+  title,
+  timing,
+  rows,
+}: {
+  title: string;
+  timing: PerformanceTiming | null;
+  rows: Array<{ key: keyof PerformanceTiming; label: string }>;
+}) {
+  if (!timing) {
+    return null;
+  }
+
+  return (
+    <div className="space-y-1.5">
+      <div className="text-xs font-semibold text-slate-900 dark:text-slate-50">
+        {title}
+      </div>
+      <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+        {rows.map((row) => (
+          <TimingRow key={row.key} label={row.label} value={timing[row.key]} />
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function FrameSampler({
@@ -439,6 +497,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [diagnostics, setDiagnostics] = useState<SceneDiagnosticsSnapshot | null>(null);
   const [diagnosticsVisible, setDiagnosticsVisible] = useState(false);
+  const [performanceVisible, setPerformanceVisible] = useState(false);
 
   // Witty Loading Messages (Req 1.4 & Enhancements)
   const isLoading = useConverterStore((s) => s.isLoading);
@@ -449,6 +508,8 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const effectiveModelUrl = modelUrl ?? storeModelUrl;
   const batchPreviewItems = useConverterStore((s) => s.batchPreviewItems);
   const previewGlbUrl = useConverterStore((s) => s.previewGlbUrl);
+  const previewPerformanceTiming = useConverterStore((s) => s.previewPerformanceTiming);
+  const generatePerformanceTiming = useConverterStore((s) => s.generatePerformanceTiming);
   const colorRemapMap = useConverterStore((s) => s.colorRemapMap);
   const colorHeightMap = useConverterStore((s) => s.color_height_map);
   const baseHeight = useConverterStore((s) => s.spacer_thick);
@@ -493,6 +554,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const updateFridgeMagnetCenter = useConverterStore((s) => s.updateFridgeMagnetCenter);
   const modelBounds = useConverterStore((s) => s.modelBounds);
   const diagnosticsSamplingEnabled = diagnosticsVisible || getThreePerfDebugConfig().enabled;
+  const hasPerformanceTiming = Boolean(previewPerformanceTiming || generatePerformanceTiming);
 
   const diagnosticsSourceLabel = batchPreviewItems.length > 0
     ? t("viewer_diagnostics_source_generate")
@@ -543,6 +605,9 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const toggleDiagnostics = useCallback(() => {
     const next = !diagnosticsVisible;
     setDiagnosticsVisible(next);
+    if (next) {
+      setPerformanceVisible(false);
+    }
     postClientLog("viewer: diagnostics toggled", {
       scope: "viewer",
       phase: "diagnostics-toggle",
@@ -558,6 +623,23 @@ function Scene3D({ modelUrl }: Scene3DProps) {
       },
     });
   }, [batchPreviewItems.length, diagnosticsVisible, effectiveModelUrl, previewGlbUrl]);
+
+  const togglePerformance = useCallback(() => {
+    const next = !performanceVisible;
+    setPerformanceVisible(next);
+    if (next) {
+      setDiagnosticsVisible(false);
+    }
+    postClientLog("viewer: performance toggled", {
+      scope: "viewer",
+      phase: "performance-toggle",
+      details: {
+        open: next,
+        has_preview_timing: Boolean(previewPerformanceTiming),
+        has_generate_timing: Boolean(generatePerformanceTiming),
+      },
+    });
+  }, [generatePerformanceTiming, performanceVisible, previewPerformanceTiming]);
 
   const toggleFullscreen = useCallback(() => {
     if (!containerRef.current) return;
@@ -618,6 +700,21 @@ function Scene3D({ modelUrl }: Scene3DProps) {
         }}
       >
         <button
+          onClick={togglePerformance}
+          aria-pressed={performanceVisible}
+          aria-label={t("viewer_performance_toggle")}
+          title={t("viewer_performance_toggle")}
+          data-testid="scene3d-performance-toggle"
+          className={
+            "inline-flex h-9 w-9 items-center justify-center rounded-full border backdrop-blur-sm shadow-[var(--shadow-control)] transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] " +
+            (performanceVisible
+              ? "border-blue-500/60 bg-blue-500/15 text-blue-600 dark:text-blue-300"
+              : "border-slate-200/80 bg-slate-100/85 text-slate-600 hover:bg-slate-200/90 dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-300 dark:hover:bg-slate-800/80")
+          }
+        >
+          <BarChartIcon className="h-4 w-4" />
+        </button>
+        <button
           onClick={toggleDiagnostics}
           aria-pressed={diagnosticsVisible}
           aria-label={t("viewer_diagnostics_toggle")}
@@ -651,6 +748,57 @@ function Scene3D({ modelUrl }: Scene3DProps) {
           <CameraIcon className="h-4 w-4" />
         </button>
       </div>
+
+      {performanceVisible && (
+        <div
+          role="dialog"
+          aria-label={t("viewer_performance_title")}
+          className="absolute z-10 w-[300px] rounded-xl border px-3 py-2 text-[11px] shadow-xl"
+          style={{
+            bottom: "56px",
+            right: "calc(var(--lumina-right-dock-width, 0px) + 12px)",
+            borderColor: "var(--surface-outline)",
+            background: "color-mix(in srgb, var(--surface-panel-strong) 90%, transparent)",
+            color: "var(--surface-text-muted)",
+          }}
+          data-testid="scene3d-performance-panel"
+        >
+          <div className="mb-2">
+            <span className="text-xs font-semibold text-slate-900 dark:text-slate-50">
+              {t("viewer_performance_title")}
+            </span>
+          </div>
+          {hasPerformanceTiming ? (
+            <div className="space-y-3">
+              <TimingSection
+                title={t("viewer_performance_preview_title")}
+                timing={previewPerformanceTiming}
+                rows={[
+                  { key: "total_ms", label: t("viewer_performance_total") },
+                  { key: "upload_ms", label: t("viewer_performance_upload") },
+                  { key: "worker_ms", label: t("viewer_performance_worker") },
+                  { key: "pickle_load_ms", label: t("viewer_performance_pickle_load") },
+                  { key: "segmented_glb_ms", label: t("viewer_performance_segmented_glb") },
+                  { key: "palette_ms", label: t("viewer_performance_palette") },
+                ]}
+              />
+              <TimingSection
+                title={t("viewer_performance_generate_title")}
+                timing={generatePerformanceTiming}
+                rows={[
+                  { key: "total_ms", label: t("viewer_performance_total") },
+                  { key: "worker_ms", label: t("viewer_performance_worker") },
+                  { key: "overhead_ms", label: t("viewer_performance_overhead") },
+                ]}
+              />
+            </div>
+          ) : (
+            <p className="text-[11px]" data-testid="scene3d-performance-empty">
+              {t("viewer_performance_empty")}
+            </p>
+          )}
+        </div>
+      )}
 
       {diagnosticsVisible && (
         <div
@@ -728,7 +876,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
       <Canvas
         frameloop="demand"
         camera={{ position: [0, -57, 474], fov: 45 }}
-        gl={{ preserveDrawingBuffer: true }}
+        gl={{ preserveDrawingBuffer: true, toneMapping: THREE.NeutralToneMapping }}
         onPointerMissed={() => {
           if (enableFridgeMagnet) {
             selectFridgeMagnet(null);

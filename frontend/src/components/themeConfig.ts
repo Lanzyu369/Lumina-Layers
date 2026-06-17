@@ -35,8 +35,8 @@ export interface ThemeColors {
 export const THEME_CONFIG: Record<"light" | "dark", ThemeColors> = {
   light: {
     canvasClearColor: "#e8e8ec",
-    environmentIntensity: 0.8,  // TODO: revert to 1.2
-    keyLightIntensity: 0.5,      // TODO: revert to 0.8
+    environmentIntensity: 1.0,
+    keyLightIntensity: 0.8,
     keyLightColor: "#ffffff",
     bedBase: "#d8d8dc",
     bedInner: "#e8e8ec",
@@ -46,8 +46,8 @@ export const THEME_CONFIG: Record<"light" | "dark", ThemeColors> = {
   },
   dark: {
     canvasClearColor: "#1e1e26",
-    environmentIntensity: 0.8,
-    keyLightIntensity: 0.5,
+    environmentIntensity: 1.0,
+    keyLightIntensity: 0.8,
     keyLightColor: "#ffffff",
     bedBase: "#26262c",
     bedInner: "#3a3a42",

@@ -6,6 +6,7 @@ performing five-color combination lookups.
 提供从 LUT 获取基础颜色和执行五色组合查询的端点。
 """
 
+import os
 import threading
 import uuid
 from dataclasses import asdict
@@ -42,6 +43,16 @@ log = get_logger(__name__)
 # ---- LUT Engine 内存缓存 ----
 _engine_cache: dict[str, ColorQueryEngine] = {}
 _engine_cache_lock = threading.Lock()
+
+
+def _remove_generated_path(path: str | None) -> None:
+    """Best-effort delete for route-owned generated swatch exports."""
+    if not path:
+        return
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
 
 
 def _load_npz_color_count(path: str, rgb_data) -> int | None:
@@ -144,9 +155,13 @@ def _load_engine(lut_name: str) -> tuple[ColorQueryEngine, str]:
                     color_count = inferred_color_count
             # Extract per-entry sources from JSON
             sources = _extract_sources_from_keyed_json(path)
+            stack_recipe_widths = metadata.extensions.get("stack_recipe_widths")
+            if not isinstance(stack_recipe_widths, list):
+                stack_recipe_widths = None
             engine = ColorQueryEngine(
                 stack_lut=stack_data, lut_rgb=rgb_data, color_count=color_count,
                 sources=sources,
+                stack_recipe_widths=stack_recipe_widths,
             )
             # Override base_colors from palette hex_color
             if metadata.palette:
@@ -204,6 +219,43 @@ def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
     """Convert a normalized #RRGGBB string to an RGB tuple."""
     value = hex_color.lstrip("#")
     return (int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16))
+
+
+def _validate_recipe_width(
+    selected_indices: list[int],
+    expected_length: int | tuple[int, ...],
+    *,
+    loc: str,
+) -> None:
+    actual_length = len(selected_indices)
+    expected_lengths = (
+        (expected_length,)
+        if isinstance(expected_length, int)
+        else tuple(sorted(set(int(value) for value in expected_length)))
+    )
+    if actual_length in expected_lengths:
+        return
+    expected_detail: int | list[int]
+    expected_message: str
+    if len(expected_lengths) == 1:
+        expected_detail = expected_lengths[0]
+        expected_message = str(expected_lengths[0])
+    else:
+        expected_detail = list(expected_lengths)
+        expected_message = " or ".join(str(value) for value in expected_lengths)
+    raise HTTPException(
+        status_code=422,
+        detail={
+            "reason": "recipe_length_mismatch",
+            "loc": loc,
+            "expected_length": expected_detail,
+            "actual_length": actual_length,
+            "message": (
+                f"Expected {expected_message} color indices for this LUT, "
+                f"got {actual_length}."
+            ),
+        },
+    )
 
 
 @router.get("/base-colors")
@@ -273,6 +325,11 @@ def query_five_color(request: FiveColorQueryRequest) -> FiveColorQueryResponse:
     查询五色组合结果。
     """
     engine, _ = _load_engine(request.lut_name)
+    _validate_recipe_width(
+        request.selected_indices,
+        engine.accepted_selection_lengths(),
+        loc="body.selected_indices",
+    )
 
     # Validate index range
     for idx in request.selected_indices:
@@ -354,7 +411,13 @@ def generate_swatch(
     base_color_hexes = [rgb_to_hex(rgb) for rgb in engine.get_base_colors()]
 
     items: list[RecipeSwatchItem] = []
-    for recipe_request in request.recipes:
+    expected_length = engine.accepted_selection_lengths()
+    for recipe_index, recipe_request in enumerate(request.recipes):
+        _validate_recipe_width(
+            recipe_request.selected_indices,
+            expected_length,
+            loc=f"body.recipes.{recipe_index}.selected_indices",
+        )
         for idx in recipe_request.selected_indices:
             if idx < 0 or idx >= engine.color_count:
                 raise HTTPException(
@@ -385,6 +448,7 @@ def generate_swatch(
         printer_id=request.printer_id,
         slicer=request.slicer,
         nozzle_size=request.nozzle_size,
+        device_profile_id=request.device_profile_id,
     )
 
     if not output_path:
@@ -397,23 +461,29 @@ def generate_swatch(
         if request_id
         else f"recipe-swatch:{unique_suffix}"
     )
-    download_id = registry.register_path(
-        sid,
-        output_path,
-        ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
-    )
-
     preview_url: str | None = None
     preview_id: str | None = None
-    if legend_img is not None:
-        preview_bytes = pil_to_png_bytes(legend_img)
-        preview_id = registry.register_bytes(
+    download_registered = False
+    try:
+        download_id = registry.register_path(
             sid,
-            preview_bytes,
-            "swatch_legend.png",
+            output_path,
             ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
         )
-        preview_url = f"/api/files/{preview_id}"
+        download_registered = True
+
+        if legend_img is not None:
+            preview_bytes = pil_to_png_bytes(legend_img)
+            preview_id = registry.register_bytes(
+                sid,
+                preview_bytes,
+                "swatch_legend.png",
+                ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
+            )
+            preview_url = f"/api/files/{preview_id}"
+    finally:
+        if not download_registered:
+            _remove_generated_path(output_path)
     preview_id_for_log = preview_id if legend_img is not None else None
 
     log.info(

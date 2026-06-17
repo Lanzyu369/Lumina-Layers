@@ -5,6 +5,7 @@ import zipfile
 import xml.etree.ElementTree as ET
 from types import SimpleNamespace
 
+import pytest
 import trimesh
 
 from utils import bambu_3mf_writer as writer_module
@@ -40,6 +41,33 @@ def _metadata_values(parent: ET.Element) -> dict[str, str]:
     return {child.attrib["key"]: child.attrib["value"] for child in parent.findall("metadata")}
 
 
+def test_difference_index_preserves_bambu_project_slot_shape() -> None:
+    original = ["bottom_shell_layers;wall_loops", "", "", "", "", ""]
+
+    normalized = writer_module._normalize_difference_index(
+        original,
+        extra_keys=["layer_height", "wall_loops"],
+    )
+
+    assert normalized == [
+        "bottom_shell_layers;layer_height;wall_loops",
+        "",
+        "",
+        "",
+        "",
+        "",
+    ]
+    assert original == ["bottom_shell_layers;wall_loops", "", "", "", "", ""]
+
+
+def test_builtin_h2d_template_keeps_native_multicolor_slot_shape() -> None:
+    template = load_printer_template("bambu-h2d", slicer="BambuStudio", nozzle_size="0.4")
+
+    assert len(template["filament_settings_id"]) == 8
+    assert len(template["filament_colour"]) == 8
+    assert template["printer_settings_id"] == "Bambu Lab H2D 0.4 nozzle"
+
+
 def _make_anycubic_writer(tmp_path) -> BambuStudio3MFWriter:
     writer = BambuStudio3MFWriter(
         str(tmp_path / "anycubic-test.3mf"),
@@ -57,6 +85,1089 @@ def _make_anycubic_writer(tmp_path) -> BambuStudio3MFWriter:
     green.apply_translation([2, 2, 0.5])
     writer.add_mesh(green, "Green", (0, 255, 0))
     return writer
+
+
+@pytest.mark.parametrize(
+    "printer_id,slicer,device_profile_id,machine_profile_id,display_name,brand,vendor_key,source_version,"
+    "application_metadata,template_payload",
+    [
+        (
+            "anycubic-kobra-x",
+            "AnycubicSlicerNext",
+            "AnycubicSlicerNext:anycubic:anycubic-kobra-x:0.4",
+            "AnycubicSlicerNext:anycubic:anycubic-kobra-x",
+            "Anycubic Kobra X",
+            "Anycubic",
+            "Anycubic",
+            "1.3.2604.18",
+            "BambuStudio-1.3.2604.18",
+            {
+                "printer_model": "Anycubic Kobra X",
+                "printer_settings_id": "Anycubic Kobra X 0.4 nozzle",
+                "printer_variant": "0.4",
+                "nozzle_diameter": ["0.4"],
+                "printable_area": ["0x0", "260x0", "260x260", "0x260"],
+            },
+        ),
+        (
+            "elegoo-cc2",
+            "ElegooSlicer",
+            "ElegooSlicer:elegoo:elegoo-centauri-carbon-2:0.4",
+            "ElegooSlicer:elegoo:elegoo-centauri-carbon-2",
+            "Elegoo Centauri Carbon 2",
+            "Elegoo",
+            "Elegoo",
+            "01.05.00.07",
+            "ElegooSlicer-01.05.00.07",
+            {
+                "printer_model": "Elegoo Centauri Carbon 2",
+                "printer_settings_id": "Elegoo Centauri Carbon 2 0.4 nozzle",
+                "printer_variant": "0.4",
+                "nozzle_diameter": ["0.4"],
+                "printable_area": ["0x0", "256x0", "256x256", "0x256"],
+            },
+        ),
+        (
+            "bambu-h2d",
+            "BambuStudio",
+            "BambuStudio:bbl:bambu-lab-h2d:0.4",
+            "BambuStudio:bbl:bambu-lab-h2d",
+            "Bambu Lab H2D",
+            "Bambu Lab",
+            "BBL",
+            "02.07.00.07",
+            "BambuStudio-02.07.00.07",
+            {
+                "printer_model": "Bambu Lab H2D",
+                "printer_settings_id": "Bambu Lab H2D 0.4 nozzle",
+                "printer_variant": "0.4",
+                "nozzle_diameter": ["0.4", "0.4"],
+                "printable_area": ["0x0", "350x0", "350x320", "0x320"],
+            },
+        ),
+    ],
+)
+def test_registry_exports_preserve_native_filament_slot_shape(
+    tmp_path,
+    monkeypatch,
+    printer_id,
+    slicer,
+    device_profile_id,
+    machine_profile_id,
+    display_name,
+    brand,
+    vendor_key,
+    source_version,
+    application_metadata,
+    template_payload,
+) -> None:
+    registry_root = tmp_path / "machine_registry"
+    _write_registry_fixture(
+        registry_root,
+        template_payload=template_payload,
+        device_profile_id=device_profile_id,
+        machine_profile_id=machine_profile_id,
+        slicer_id=slicer,
+        nozzle_size="0.4",
+        source_version=source_version,
+        application_metadata=application_metadata,
+        display_name=display_name,
+        brand=brand,
+        vendor_key=vendor_key,
+    )
+    monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
+    writer_module._PRINTER_TEMPLATE_CACHE.clear()
+
+    writer = BambuStudio3MFWriter(
+        str(tmp_path / "registry-slots.3mf"),
+        settings={},
+        color_mode="4-Color",
+        printer_id=printer_id,
+        slicer=slicer,
+        nozzle_size="0.4",
+        device_profile_id=device_profile_id,
+    )
+    writer._set_project_palette(
+        ["White", "Red", "Yellow", "Blue"],
+        {
+            0: (255, 255, 255, 255),
+            1: (193, 46, 31, 255),
+            2: (244, 238, 42, 255),
+            3: (10, 41, 137, 255),
+        },
+    )
+
+    settings = json.loads(writer._build_project_settings_bytes().decode("utf-8"))
+
+    assert len(settings["filament_settings_id"]) == 8
+    assert len(settings["filament_colour"]) == 8
+    assert settings["filament_colour"][:4] == ["#FFFFFF", "#C12E1F", "#F4EE2A", "#0A2989"]
+
+
+def _write_registry_fixture(
+    registry_root,
+    *,
+    template_payload: dict[str, object],
+    revision: str = "sha256:abc",
+    device_profile_id: str = "BambuStudio:bbl:bambu-lab-h2d:0.4",
+    machine_profile_id: str = "BambuStudio:bbl:bambu-lab-h2d",
+    slicer_id: str = "BambuStudio",
+    nozzle_size: str = "0.4",
+    source_version: str = "02.07.01.57",
+    application_metadata: str = "BambuStudio-02.07.01.57",
+    client_version: str | None = None,
+    sidecar_policy: str = "bambu_studio",
+    display_name: str = "Bambu Lab H2D",
+    brand: str = "Bambu Lab",
+    vendor_key: str = "BBL",
+    bed_width: int = 350,
+    bed_depth: int = 320,
+    bed_height: int = 325,
+) -> None:
+    template_path = (
+        registry_root
+        / "slicers"
+        / slicer_id
+        / "02.07.01.57"
+        / "metadata_templates"
+        / "h2d_0_4.json"
+    )
+    template_path.parent.mkdir(parents=True, exist_ok=True)
+    template_path.write_text(json.dumps(template_payload), encoding="utf-8")
+    slicer_payload = {
+        "slicer_id": slicer_id,
+        "display_name": "Bambu Studio",
+        "source_kind": "local_install",
+        "source_version": source_version,
+        "profile_format": "bambu_orca",
+        "application_metadata": application_metadata,
+        "sidecar_policy": sidecar_policy,
+        "machines": [
+            {
+                "machine_profile_id": machine_profile_id,
+                "display_name": display_name,
+                "brand": brand,
+                "vendor_key": vendor_key,
+                "bed_width": bed_width,
+                "bed_depth": bed_depth,
+                "bed_height": bed_height,
+                "thumbnail": "",
+                "nozzles": [
+                    {
+                        "device_profile_id": device_profile_id,
+                        "nozzle_size": nozzle_size,
+                        "source_profile_name": "Bambu Lab H2D 0.4 nozzle",
+                        "template": template_path.relative_to(registry_root).as_posix(),
+                        "revision": revision,
+                        "supported": True,
+                    }
+                ],
+            }
+        ],
+    }
+    if client_version is not None:
+        slicer_payload["client_version"] = client_version
+    (registry_root / "registry.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "generated_at": "2026-06-09T00:00:00+08:00",
+                "slicers": [slicer_payload],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _export_two_mesh_registry_3mf(
+    tmp_path,
+    *,
+    registry_root,
+    monkeypatch,
+    printer_id: str,
+    slicer: str,
+    device_profile_id: str,
+    template_payload: dict[str, object],
+    machine_profile_id: str,
+    source_version: str,
+    application_metadata: str,
+    display_name: str,
+    brand: str,
+    vendor_key: str,
+    sidecar_policy: str,
+    client_version: str | None = None,
+) -> zipfile.ZipFile:
+    _write_registry_fixture(
+        registry_root,
+        template_payload=template_payload,
+        device_profile_id=device_profile_id,
+        machine_profile_id=machine_profile_id,
+        slicer_id=slicer,
+        source_version=source_version,
+        application_metadata=application_metadata,
+        client_version=client_version,
+        sidecar_policy=sidecar_policy,
+        display_name=display_name,
+        brand=brand,
+        vendor_key=vendor_key,
+    )
+    monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
+    writer_module._PRINTER_TEMPLATE_CACHE.clear()
+
+    out_path = tmp_path / f"{printer_id}-{slicer}.3mf"
+    writer = BambuStudio3MFWriter(
+        str(out_path),
+        settings={},
+        color_mode="4-Color",
+        printer_id=printer_id,
+        slicer=slicer,
+        nozzle_size="0.4",
+        device_profile_id=device_profile_id,
+    )
+    first = trimesh.creation.box(extents=[2, 2, 1])
+    first.metadata["bambu_material_name"] = "Slot 1 (White)"
+    writer.add_mesh(first, "Slot 1 (White)", (255, 255, 255))
+    second = trimesh.creation.box(extents=[2, 2, 1])
+    second.apply_translation([4, 0, 0])
+    second.metadata["bambu_material_name"] = "Slot 2 (Black)"
+    writer.add_mesh(second, "Slot 2 (Black)", (0, 0, 0))
+    writer.export()
+    return zipfile.ZipFile(out_path, "r")
+
+
+def _count_object_model_geometry(archive: zipfile.ZipFile) -> tuple[int, int]:
+    ns = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
+    vertex_count = 0
+    triangle_count = 0
+    object_model_names = [
+        name
+        for name in archive.namelist()
+        if name.startswith("3D/Objects/") and name.endswith(".model")
+    ]
+    for name in object_model_names:
+        root = ET.fromstring(archive.read(name))
+        vertex_count += len(root.findall(".//m:vertex", ns))
+        triangle_count += len(root.findall(".//m:triangle", ns))
+    return vertex_count, triangle_count
+
+
+@pytest.mark.parametrize(
+    "printer_id,slicer,device_profile_id,machine_profile_id,source_version,application_metadata,"
+    "client_version,sidecar_policy,display_name,brand,vendor_key,expected_slice_header",
+    [
+        (
+            "anycubic-kobra-x",
+            "AnycubicSlicerNext",
+            "AnycubicSlicerNext:anycubic:anycubic-kobra-x:0.4",
+            "AnycubicSlicerNext:anycubic:anycubic-kobra-x",
+            "1.3.2605.22",
+            "AnycubicSlicerNext-1.4.1.2",
+            "1.4.1.2 20260604104233",
+            "anycubic_next",
+            "Anycubic Kobra X",
+            "Anycubic",
+            "Anycubic",
+            {"X-ACNext-Client-Version": "1.4.1.2 20260604104233"},
+        ),
+        (
+            "elegoo-cc2",
+            "ElegooSlicer",
+            "ElegooSlicer:elegoo:elegoo-centauri-carbon-2:0.4",
+            "ElegooSlicer:elegoo:elegoo-centauri-carbon-2",
+            "01.05.01.06",
+            "ElegooSlicer-01.05.01.06",
+            None,
+            "orca_like",
+            "Elegoo Centauri Carbon 2",
+            "Elegoo",
+            "Elegoo",
+            {
+                "X-BBL-Client-Version": "01.05.01.06",
+                "X-BBL-Client-Name": "ElegooSlicer",
+            },
+        ),
+    ],
+)
+def test_registry_ac_and_elegoo_exports_keep_native_identity_and_geometry(
+    tmp_path,
+    monkeypatch,
+    printer_id,
+    slicer,
+    device_profile_id,
+    machine_profile_id,
+    source_version,
+    application_metadata,
+    client_version,
+    sidecar_policy,
+    display_name,
+    brand,
+    vendor_key,
+    expected_slice_header,
+) -> None:
+    registry_root = tmp_path / "machine_registry"
+    template_payload = {
+        "printer_model": display_name,
+        "printer_settings_id": f"{display_name} 0.4 nozzle",
+        "printer_variant": "0.4",
+        "nozzle_diameter": ["0.4"],
+        "printable_area": ["0x0", "256x0", "256x256", "0x256"],
+    }
+
+    with _export_two_mesh_registry_3mf(
+        tmp_path,
+        registry_root=registry_root,
+        monkeypatch=monkeypatch,
+        printer_id=printer_id,
+        slicer=slicer,
+        device_profile_id=device_profile_id,
+        template_payload=template_payload,
+        machine_profile_id=machine_profile_id,
+        source_version=source_version,
+        application_metadata=application_metadata,
+        client_version=client_version,
+        sidecar_policy=sidecar_policy,
+        display_name=display_name,
+        brand=brand,
+        vendor_key=vendor_key,
+    ) as archive:
+        entries = set(archive.namelist())
+        project_settings = json.loads(
+            archive.read("Metadata/project_settings.config").decode("utf-8")
+        )
+        slice_info = ET.fromstring(archive.read("Metadata/slice_info.config"))
+        slice_header = {
+            item.attrib["key"]: item.attrib["value"]
+            for item in slice_info.findall("./header/header_item")
+        }
+        model_xml = archive.read("3D/3dmodel.model").decode("utf-8")
+        package_text = "\n".join(
+            archive.read(name).decode("utf-8", errors="ignore")
+            for name in archive.namelist()
+            if name.endswith((".model", ".config", ".json", ".xml"))
+        )
+
+        assert project_settings["printer_model"] == display_name
+        assert project_settings["printer_settings_id"] == f"{display_name} 0.4 nozzle"
+        assert f'name="Application">{application_metadata}</metadata>' in model_xml
+        for key, expected_value in expected_slice_header.items():
+            assert slice_header[key] == expected_value
+        assert "A1 mini" not in package_text
+        assert "Bambu Lab A1" not in package_text
+        vertices, triangles = _count_object_model_geometry(archive)
+        assert vertices > 0
+        assert triangles > 0
+
+        if slicer == "AnycubicSlicerNext":
+            assert "Metadata/custom_gcode_per_layer.xml" in entries
+            assert "Metadata/filament_sequence.json" not in entries
+            assert "Metadata/cut_information.xml" not in entries
+        else:
+            assert "Metadata/custom_gcode_per_layer.xml" not in entries
+            assert "Metadata/filament_sequence.json" not in entries
+            assert "Metadata/cut_information.xml" not in entries
+
+
+def test_load_printer_template_merges_registry_device_profile_into_legacy_project_template(
+    tmp_path, monkeypatch,
+) -> None:
+    registry_root = tmp_path / "machine_registry"
+    template_path = (
+        registry_root
+        / "slicers"
+        / "BambuStudio"
+        / "02.07.01.57"
+        / "metadata_templates"
+        / "h2d_0_4.json"
+    )
+    template_path.parent.mkdir(parents=True)
+    template_path.write_text(
+        json.dumps(
+            {
+                "type": "machine",
+                "from": "system",
+                "instantiation": "true",
+                "printer_model": "Bambu Lab H2D",
+                "printer_settings_id": "Bambu Lab H2D 0.4 nozzle",
+                "printer_variant": "0.4",
+                "nozzle_diameter": ["0.4", "0.4"],
+                "layer_height": "0.20",
+                "different_settings_to_system": ["printer_settings_id;layer_height"],
+                "inherits": "fdm_bbl_3dp_002_common",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (registry_root / "registry.json").write_text(
+        """
+        {
+          "schema_version": 1,
+          "generated_at": "2026-06-09T00:00:00+08:00",
+          "slicers": [{
+            "slicer_id": "BambuStudio",
+            "display_name": "Bambu Studio",
+            "source_kind": "local_install",
+            "source_version": "02.07.01.57",
+            "profile_format": "bambu_orca",
+            "application_metadata": "BambuStudio-02.07.01.57",
+            "sidecar_policy": "bambu_studio",
+            "machines": [{
+              "machine_profile_id": "BambuStudio:bbl:bambu-lab-h2d",
+              "display_name": "Bambu Lab H2D",
+              "brand": "Bambu Lab",
+              "vendor_key": "BBL",
+              "bed_width": 350,
+              "bed_depth": 320,
+              "bed_height": 325,
+              "thumbnail": "",
+              "nozzles": [{
+                "device_profile_id": "BambuStudio:bbl:bambu-lab-h2d:0.4",
+                "nozzle_size": "0.4",
+                "source_profile_name": "Bambu Lab H2D 0.4 nozzle",
+                "template": "slicers/BambuStudio/02.07.01.57/metadata_templates/h2d_0_4.json",
+                "revision": "sha256:abc",
+                "supported": true
+              }]
+            }]
+          }]
+        }
+        """,
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
+
+    template = load_printer_template(
+        "bambu-h2d",
+        slicer="BambuStudio",
+        nozzle_size="0.4",
+        device_profile_id="BambuStudio:bbl:bambu-lab-h2d:0.4",
+    )
+
+    assert template["printer_model"] == "Bambu Lab H2D"
+    assert template["layer_height"] == "0.08"
+    assert template["from"] == "project"
+    assert template["name"] == "project_settings"
+    assert template["version"] == "02.07.01.57"
+    assert template["curr_bed_type"] == "Textured PEI Plate"
+    assert template["filament_settings_id"] == ["Bambu PLA Basic @BBL H2D"] * 8
+    assert len(template["flush_volumes_matrix"]) == 128
+    assert len(template["flush_volumes_vector"]) == 16
+    assert "type" not in template
+    assert "instantiation" not in template
+    assert "inherits" not in template
+
+
+def test_load_printer_template_uses_default_machine_registry_without_env(tmp_path, monkeypatch) -> None:
+    registry_root = tmp_path / "machine_registry"
+    _write_registry_fixture(
+        registry_root,
+        template_payload={"printer_model": "Default Registry H2D", "layer_height": "0.08"},
+    )
+    monkeypatch.delenv("LUMINA_MACHINE_REGISTRY_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    writer_module._PRINTER_TEMPLATE_CACHE.clear()
+
+    template = load_printer_template(
+        "bambu-h2d",
+        slicer="BambuStudio",
+        nozzle_size="0.4",
+        device_profile_id="BambuStudio:bbl:bambu-lab-h2d:0.4",
+    )
+
+    assert template["printer_model"] == "Bambu Lab H2D"
+    assert template["layer_height"] == "0.08"
+    assert template["from"] == "project"
+
+
+def test_load_printer_template_rejects_mismatched_registry_profile(tmp_path, monkeypatch) -> None:
+    registry_root = tmp_path / "machine_registry"
+    _write_registry_fixture(
+        registry_root,
+        template_payload={"printer_model": "Bambu Lab H2D"},
+    )
+    monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
+    writer_module._PRINTER_TEMPLATE_CACHE.clear()
+
+    with pytest.raises(ValueError, match="does not match requested slicer/nozzle"):
+        load_printer_template(
+            "bambu-h2d",
+            slicer="OrcaSlicer",
+            nozzle_size="0.2",
+            device_profile_id="BambuStudio:bbl:bambu-lab-h2d:0.4",
+        )
+
+
+def test_load_printer_template_rejects_registry_profile_for_other_printer(tmp_path, monkeypatch) -> None:
+    registry_root = tmp_path / "machine_registry"
+    _write_registry_fixture(
+        registry_root,
+        template_payload={"printer_model": "Bambu Lab H2D"},
+    )
+    monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
+    writer_module._PRINTER_TEMPLATE_CACHE.clear()
+
+    with pytest.raises(ValueError, match="does not match requested printer"):
+        load_printer_template(
+            "bambu-p1s",
+            slicer="BambuStudio",
+            nozzle_size="0.4",
+            device_profile_id="BambuStudio:bbl:bambu-lab-h2d:0.4",
+        )
+
+
+def test_load_printer_template_normalizes_slicer_alias_for_registry_profile(tmp_path, monkeypatch) -> None:
+    registry_root = tmp_path / "machine_registry"
+    _write_registry_fixture(
+        registry_root,
+        template_payload={"printer_model": "Bambu Lab H2D", "alias_marker": "matched"},
+    )
+    monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
+    writer_module._PRINTER_TEMPLATE_CACHE.clear()
+
+    template = load_printer_template(
+        "bambu-h2d",
+        slicer="bambu_studio",
+        nozzle_size="0.4mm",
+        device_profile_id="BambuStudio:bbl:bambu-lab-h2d:0.4",
+    )
+
+    assert template["printer_model"] == "Bambu Lab H2D"
+    assert template["from"] == "project"
+
+
+def test_load_printer_template_cache_changes_when_registry_revision_changes(tmp_path, monkeypatch) -> None:
+    registry_root = tmp_path / "machine_registry"
+    monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
+    writer_module._PRINTER_TEMPLATE_CACHE.clear()
+
+    _write_registry_fixture(
+        registry_root,
+        template_payload={
+            "printer_model": "Bambu Lab H2D",
+            "printer_settings_id": "Registry Old H2D 0.4 nozzle",
+        },
+        revision="sha256:old",
+    )
+    first = load_printer_template(
+        "bambu-h2d",
+        slicer="BambuStudio",
+        nozzle_size="0.4",
+        device_profile_id="BambuStudio:bbl:bambu-lab-h2d:0.4",
+    )
+
+    _write_registry_fixture(
+        registry_root,
+        template_payload={
+            "printer_model": "Bambu Lab H2D",
+            "printer_settings_id": "Registry New H2D 0.4 nozzle",
+        },
+        revision="sha256:new",
+    )
+    second = load_printer_template(
+        "bambu-h2d",
+        slicer="BambuStudio",
+        nozzle_size="0.4",
+        device_profile_id="BambuStudio:bbl:bambu-lab-h2d:0.4",
+    )
+
+    assert first["printer_model"] == "Bambu Lab H2D"
+    assert second["printer_model"] == "Bambu Lab H2D"
+    assert first["printer_settings_id"] == "Registry Old H2D 0.4 nozzle"
+    assert second["printer_settings_id"] == "Registry New H2D 0.4 nozzle"
+    assert first["from"] == "project"
+    assert second["from"] == "project"
+
+
+def test_load_printer_template_preserves_registry_native_quarter_nozzle_project_profiles(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    registry_root = tmp_path / "machine_registry"
+    _write_registry_fixture(
+        registry_root,
+        template_payload={
+            "printer_model": "Anycubic Kobra X",
+            "printer_settings_id": "Anycubic Kobra X 0.25 nozzle",
+            "printer_variant": "0.25",
+            "nozzle_diameter": ["0.25"],
+            "print_settings_id": "0.08mm Standard @Anycubic Kobra X 0.25 nozzle",
+            "default_print_profile": "0.10mm Standard @Anycubic Kobra X 0.25 nozzle",
+            "default_filament_profile": [
+                "Anycubic PLA @Anycubic Kobra X 0.25 nozzle",
+            ],
+            "filament_settings_id": [
+                "Anycubic PLA @Anycubic Kobra X 0.25 nozzle",
+            ],
+        },
+        device_profile_id="AnycubicSlicerNext:anycubic:anycubic-kobra-x:0.25",
+        machine_profile_id="AnycubicSlicerNext:anycubic:anycubic-kobra-x",
+        slicer_id="AnycubicSlicerNext",
+        nozzle_size="0.25",
+        display_name="Anycubic Kobra X",
+        brand="Anycubic",
+        vendor_key="Anycubic",
+    )
+    monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
+    writer_module._PRINTER_TEMPLATE_CACHE.clear()
+
+    template = load_printer_template(
+        "anycubic-kobra-x",
+        slicer="AnycubicSlicerNext",
+        nozzle_size="0.25",
+        device_profile_id="AnycubicSlicerNext:anycubic:anycubic-kobra-x:0.25",
+    )
+
+    assert template["printer_settings_id"] == "Anycubic Kobra X 0.25 nozzle"
+    assert template["print_settings_id"] == "0.08mm Standard @Anycubic Kobra X 0.25 nozzle"
+    assert template["default_print_profile"] == "0.10mm Standard @Anycubic Kobra X 0.25 nozzle"
+    assert template["default_filament_profile"] == [
+        "Anycubic PLA @Anycubic Kobra X 0.25 nozzle",
+    ]
+    assert template["filament_settings_id"] == [
+        "Anycubic PLA @Anycubic Kobra X 0.25 nozzle",
+    ] * 8
+    assert "0.2 nozzle" not in json.dumps(template)
+
+
+def test_writer_uses_registry_application_metadata_for_slice_info(tmp_path, monkeypatch) -> None:
+    registry_root = tmp_path / "machine_registry"
+    _write_registry_fixture(
+        registry_root,
+        template_payload={"printer_model": "Bambu Lab H2D"},
+        source_version="99.88.77.66",
+        application_metadata="BambuStudio-99.88.77.66",
+    )
+    monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
+
+    writer = BambuStudio3MFWriter(
+        str(tmp_path / "registry-application.3mf"),
+        settings={},
+        color_mode="4-Color",
+        printer_id="bambu-h2d",
+        slicer="BambuStudio",
+        nozzle_size="0.4",
+        device_profile_id="BambuStudio:bbl:bambu-lab-h2d:0.4",
+    )
+
+    assert writer._get_app_version_str() == "BambuStudio-99.88.77.66"
+    config = ET.fromstring(writer._build_slice_info_bytes())
+    header = config.find("header")
+    assert header is not None
+    values = {
+        item.attrib["key"]: item.attrib["value"]
+        for item in header.findall("header_item")
+    }
+    assert values["X-BBL-Client-Version"] == "99.88.77.66"
+
+
+def test_writer_base_template_uses_registry_device_profile(tmp_path, monkeypatch) -> None:
+    registry_root = tmp_path / "machine_registry"
+    template_path = (
+        registry_root
+        / "slicers"
+        / "BambuStudio"
+        / "02.07.01.57"
+        / "metadata_templates"
+        / "h2d_0_4.json"
+    )
+    template_path.parent.mkdir(parents=True)
+    template_path.write_text(
+        '{"printer_model": "Bambu Lab H2D", "printer_settings_id": "Bambu Lab H2D 0.4 nozzle"}',
+        encoding="utf-8",
+    )
+    (registry_root / "registry.json").write_text(
+        """
+        {
+          "schema_version": 1,
+          "generated_at": "2026-06-09T00:00:00+08:00",
+          "slicers": [{
+            "slicer_id": "BambuStudio",
+            "display_name": "Bambu Studio",
+            "source_kind": "local_install",
+            "source_version": "02.07.01.57",
+            "profile_format": "bambu_orca",
+            "application_metadata": "BambuStudio-02.07.01.57",
+            "sidecar_policy": "bambu_studio",
+            "machines": [{
+              "machine_profile_id": "BambuStudio:bbl:bambu-lab-h2d",
+              "display_name": "Bambu Lab H2D",
+              "brand": "Bambu Lab",
+              "vendor_key": "BBL",
+              "bed_width": 350,
+              "bed_depth": 320,
+              "bed_height": 325,
+              "thumbnail": "",
+              "nozzles": [{
+                "device_profile_id": "BambuStudio:bbl:bambu-lab-h2d:0.4",
+                "nozzle_size": "0.4",
+                "source_profile_name": "Bambu Lab H2D 0.4 nozzle",
+                "template": "slicers/BambuStudio/02.07.01.57/metadata_templates/h2d_0_4.json",
+                "revision": "sha256:abc",
+                "supported": true
+              }]
+            }]
+          }]
+        }
+        """,
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
+
+    writer = BambuStudio3MFWriter(
+        "registry-device-profile.3mf",
+        settings={},
+        color_mode="4-Color",
+        printer_id="bambu-h2d",
+        slicer="BambuStudio",
+        nozzle_size="0.4",
+        device_profile_id="BambuStudio:bbl:bambu-lab-h2d:0.4",
+    )
+
+    settings = writer._get_base_config_template()
+    assert settings["printer_model"] == "Bambu Lab H2D"
+    assert settings["printer_settings_id"] == "Bambu Lab H2D 0.4 nozzle"
+
+
+def test_anycubic_registry_keeps_full_client_version_stamp(tmp_path, monkeypatch) -> None:
+    registry_root = tmp_path / "machine_registry"
+    _write_registry_fixture(
+        registry_root,
+        template_payload={"printer_model": "Anycubic Kobra S1"},
+        device_profile_id="AnycubicSlicerNext:anycubic:anycubic-kobra-s1:0.4",
+        machine_profile_id="AnycubicSlicerNext:anycubic:anycubic-kobra-s1",
+        slicer_id="AnycubicSlicerNext",
+        source_version="1.3.9.4",
+        application_metadata="BambuStudio-1.3.9.4",
+        sidecar_policy="anycubic_acnext",
+        display_name="Anycubic Kobra S1",
+        brand="Anycubic",
+        vendor_key="Anycubic",
+        bed_width=250,
+        bed_depth=250,
+        bed_height=250,
+    )
+    monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
+    writer_module._PRINTER_TEMPLATE_CACHE.clear()
+
+    writer = BambuStudio3MFWriter(
+        str(tmp_path / "anycubic-registry.3mf"),
+        settings={},
+        color_mode="4-Color",
+        printer_id="anycubic-kobra-s1",
+        slicer="AnycubicSlicerNext",
+        nozzle_size="0.4",
+        device_profile_id="AnycubicSlicerNext:anycubic:anycubic-kobra-s1:0.4",
+    )
+
+    config = ET.fromstring(writer._build_slice_info_bytes())
+    header = config.find("header")
+    assert header is not None
+    values = {
+        item.attrib["key"]: item.attrib["value"]
+        for item in header.findall("header_item")
+    }
+    assert values["X-ACNext-Client-Version"] == "1.3.9.4 20260319225535"
+
+
+def test_anycubic_registry_separates_profile_and_client_versions(tmp_path, monkeypatch) -> None:
+    registry_root = tmp_path / "machine_registry"
+    _write_registry_fixture(
+        registry_root,
+        template_payload={"printer_model": "Anycubic Kobra X"},
+        device_profile_id="AnycubicSlicerNext:anycubic:anycubic-kobra-x:0.4",
+        machine_profile_id="AnycubicSlicerNext:anycubic:anycubic-kobra-x",
+        slicer_id="AnycubicSlicerNext",
+        source_version="1.3.2605.22",
+        application_metadata="AnycubicSlicerNext-1.4.1.2",
+        client_version="1.4.1.2 20260604104233",
+        sidecar_policy="anycubic_next",
+        display_name="Anycubic Kobra X",
+        brand="Anycubic",
+        vendor_key="Anycubic",
+        bed_width=260,
+        bed_depth=260,
+        bed_height=260,
+    )
+    monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
+    writer_module._PRINTER_TEMPLATE_CACHE.clear()
+
+    writer = BambuStudio3MFWriter(
+        str(tmp_path / "anycubic-client-version.3mf"),
+        settings={},
+        color_mode="4-Color",
+        printer_id="anycubic-kobra-x",
+        slicer="AnycubicSlicerNext",
+        nozzle_size="0.4",
+        device_profile_id="AnycubicSlicerNext:anycubic:anycubic-kobra-x:0.4",
+    )
+
+    assert writer._get_app_version_str() == "AnycubicSlicerNext-1.4.1.2"
+    assert writer._get_registry_source_version() == "1.3.2605.22"
+    config = ET.fromstring(writer._build_slice_info_bytes())
+    header = config.find("header")
+    assert header is not None
+    values = {
+        item.attrib["key"]: item.attrib["value"]
+        for item in header.findall("header_item")
+    }
+    assert values["X-ACNext-Client-Version"] == "1.4.1.2 20260604104233"
+
+
+def test_load_printer_template_accepts_registry_only_printer_id(tmp_path, monkeypatch) -> None:
+    registry_root = tmp_path / "machine_registry"
+    _write_registry_fixture(
+        registry_root,
+        template_payload={"printer_model": "Snapmaker Artisan", "layer_height": "0.08"},
+        device_profile_id="OrcaSlicer:snapmaker:snapmaker-artisan:0.4",
+        machine_profile_id="OrcaSlicer:snapmaker:snapmaker-artisan",
+        slicer_id="OrcaSlicer",
+        source_version="02.04.00.00",
+        application_metadata="OrcaSlicer-02.04.00.00",
+        sidecar_policy="orca_like",
+        display_name="Snapmaker Artisan",
+        brand="Snapmaker",
+        vendor_key="Snapmaker",
+        bed_width=400,
+        bed_depth=400,
+        bed_height=400,
+    )
+    monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
+    writer_module._PRINTER_TEMPLATE_CACHE.clear()
+
+    template = load_printer_template(
+        printer_id="snapmaker-artisan",
+        slicer="OrcaSlicer",
+        nozzle_size="0.4",
+        device_profile_id="OrcaSlicer:snapmaker:snapmaker-artisan:0.4",
+    )
+
+    assert template["printer_model"] == "Snapmaker Artisan"
+
+
+def test_bambu_registry_x2d_uses_bundled_project_template(tmp_path, monkeypatch) -> None:
+    registry_root = tmp_path / "machine_registry"
+    _write_registry_fixture(
+        registry_root,
+        template_payload={
+            "type": "machine",
+            "from": "system",
+            "instantiation": "true",
+            "inherits": "fdm_bbl_3dp_002_common",
+            "printer_model": "Bambu Lab X2D",
+            "printer_settings_id": "Bambu Lab X2D 0.4 nozzle",
+            "printer_variant": "0.4",
+            "nozzle_diameter": ["0.4", "0.4"],
+            "printable_area": ["0x0", "256x0", "256x256", "0x256 "],
+            "printable_height": "261",
+            "default_filament_profile": ["Bambu PLA Basic @BBL X2D 0.4 nozzle"],
+            "default_print_profile": "0.20mm Standard @BBL X2D",
+            "machine_start_gcode": "; X2D start",
+            "machine_end_gcode": "; X2D end",
+            "change_filament_gcode": "; X2D change filament",
+            "layer_change_gcode": "; X2D layer change",
+            "time_lapse_gcode": "; X2D timelapse",
+            "nozzle_flush_dataset": ["1", "2", "1", "2"],
+            "printer_structure": "corexy",
+            "machine_max_speed_x": ["1000", "1000"],
+            "layer_height": "0.20",
+            "different_settings_to_system": ["printer_settings_id;layer_height"],
+        },
+        device_profile_id="BambuStudio:bbl:bambu-lab-x2d:0.4",
+        machine_profile_id="BambuStudio:bbl:bambu-lab-x2d",
+        nozzle_size="0.4",
+        source_version="02.07.00.07",
+        application_metadata="BambuStudio-02.07.00.07",
+        display_name="Bambu Lab X2D",
+        brand="Bambu Lab",
+        bed_width=256,
+        bed_depth=256,
+        bed_height=261,
+    )
+    monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
+    writer_module._PRINTER_TEMPLATE_CACHE.clear()
+
+    template = load_printer_template(
+        printer_id="bambu-lab-x2d",
+        slicer="BambuStudio",
+        nozzle_size="0.4",
+        device_profile_id="BambuStudio:bbl:bambu-lab-x2d:0.4",
+    )
+
+    assert template["from"] == "project"
+    assert template["name"] == "project_settings"
+    assert template["version"] == "02.07.01.57"
+    assert template["printer_model"] == "Bambu Lab X2D"
+    assert template["printer_settings_id"] == "Bambu Lab X2D 0.4 nozzle"
+    assert template["nozzle_diameter"] == ["0.4", "0.4"]
+    assert template["printable_area"] == ["0x0", "256x0", "256x256", "0x256"]
+    assert template["default_filament_profile"] == ["Bambu PLA Basic @BBL X2D 0.4 nozzle"]
+    assert template["default_print_profile"] == "0.20mm Standard @BBL X2D"
+    assert "X2D start gcode" in template["machine_start_gcode"]
+    assert "X2D end gcode" in template["machine_end_gcode"]
+    assert template["printer_structure"] == "corexy"
+    assert template["layer_height"] == "0.08"
+    assert template["prime_tower_width"] == "200"
+    assert template["prime_tower_brim_width"] == "-1"
+    assert len(template["different_settings_to_system"]) == 11
+    assert "prime_tower_width" in template["different_settings_to_system"][0]
+    assert len(template["filament_settings_id"]) == 9
+    assert template["filament_settings_id"][0] == "Bambu PETG Basic @BBL X2D 0.4 nozzle"
+    assert set(template["filament_settings_id"][1:]) == {
+        "Bambu PLA Basic @BBL X2D 0.4 nozzle"
+    }
+    assert len(template["flush_volumes_matrix"]) == 162
+    assert len(template["flush_volumes_vector"]) == 18
+    assert "type" not in template
+    assert "instantiation" not in template
+    assert "inherits" not in template
+
+
+def test_bambu_a2_registry_uses_bundled_project_template(tmp_path, monkeypatch) -> None:
+    registry_root = tmp_path / "machine_registry"
+    _write_registry_fixture(
+        registry_root,
+        template_payload={
+            "type": "machine",
+            "from": "system",
+            "instantiation": "true",
+            "inherits": "fdm_bbl_3dp_001_common",
+            "printer_model": "Bambu Lab A2L",
+            "printer_settings_id": "Bambu Lab A2L 0.4 nozzle",
+            "printer_variant": "0.4",
+            "nozzle_diameter": ["0.4"],
+            "printable_area": ["0x0", "330x0", "330x320", "0x320"],
+            "printable_height": "325",
+            "default_filament_profile": ["Bambu PLA Basic @BBL A2L 0.4 nozzle"],
+            "default_print_profile": "0.20mm Standard @BBL A2L",
+            "default_wipe_tower_pos": "0.0x1.0",
+            "machine_start_gcode": "; A2L start",
+            "machine_end_gcode": "; A2L end",
+            "change_filament_gcode": "; A2L change filament",
+            "layer_change_gcode": "; A2L layer change",
+            "time_lapse_gcode": "; A2L timelapse",
+            "nozzle_flush_dataset": ["0"],
+            "printer_structure": "i3",
+            "machine_max_speed_x": ["500", "500"],
+            "layer_height": "0.20",
+            "different_settings_to_system": ["printer_settings_id;layer_height"],
+        },
+        device_profile_id="BambuStudio:bbl:bambu-lab-a2l:0.4",
+        machine_profile_id="BambuStudio:bbl:bambu-lab-a2l",
+        nozzle_size="0.4",
+        source_version="02.07.00.07",
+        application_metadata="BambuStudio-02.07.00.07",
+        display_name="Bambu Lab A2L",
+        brand="Bambu Lab",
+        bed_width=330,
+        bed_depth=320,
+        bed_height=325,
+    )
+    monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
+    writer_module._PRINTER_TEMPLATE_CACHE.clear()
+
+    template = load_printer_template(
+        printer_id="bambu-lab-a2l",
+        slicer="BambuStudio",
+        nozzle_size="0.4",
+        device_profile_id="BambuStudio:bbl:bambu-lab-a2l:0.4",
+    )
+
+    assert template["from"] == "project"
+    assert template["name"] == "project_settings"
+    assert template["version"] == "02.07.01.57"
+    assert template["printer_model"] == "Bambu Lab A2L"
+    assert template["printer_settings_id"] == "Bambu Lab A2L 0.4 nozzle"
+    assert template["default_filament_profile"] == ["Bambu PLA Basic @BBL A2L 0.4 nozzle"]
+    assert template["default_print_profile"] == "0.20mm Standard @BBL A2L"
+    assert "A2L start gcode" in template["machine_start_gcode"]
+    assert "A2L end gcode" in template["machine_end_gcode"]
+    assert template["printer_structure"] == "i3"
+    assert "default_wipe_tower_pos" not in template
+    assert template["prime_tower_width"] == "200"
+    assert template["prime_tower_brim_width"] == "-1"
+    assert template["curr_bed_type"] == "Textured PEI Plate"
+    assert len(template["filament_settings_id"]) == 9
+    assert template["filament_settings_id"][0] == "Bambu PETG Basic @BBL A2L 0.4 nozzle"
+    assert set(template["filament_settings_id"][1:]) == {
+        "Bambu PLA Basic @BBL A2L 0.4 nozzle"
+    }
+    assert len(template["different_settings_to_system"]) == 11
+    assert "prime_tower_width" in template["different_settings_to_system"][0]
+    assert len(template["flush_volumes_matrix"]) == 81
+    assert len(template["flush_volumes_vector"]) == 18
+    assert template["layer_height"] == "0.08"
+    assert "type" not in template
+    assert "instantiation" not in template
+    assert "inherits" not in template
+
+
+def test_bambu_registry_project_settings_preserve_native_filament_slots(tmp_path, monkeypatch) -> None:
+    registry_root = tmp_path / "machine_registry"
+    _write_registry_fixture(
+        registry_root,
+        template_payload={
+            "type": "machine",
+            "from": "system",
+            "instantiation": "true",
+            "inherits": "fdm_bbl_3dp_002_common",
+            "printer_model": "Bambu Lab X2D",
+            "printer_settings_id": "Bambu Lab X2D 0.4 nozzle",
+            "printer_variant": "0.4",
+            "nozzle_diameter": ["0.4", "0.4"],
+            "printable_area": ["0x0", "256x0", "256x256", "0x256"],
+            "printable_height": "261",
+            "default_filament_profile": ["Bambu PLA Basic @BBL X2D 0.4 nozzle"],
+            "default_print_profile": "0.20mm Standard @BBL X2D",
+            "machine_start_gcode": "; X2D start",
+            "machine_end_gcode": "; X2D end",
+            "layer_height": "0.20",
+            "different_settings_to_system": ["printer_settings_id;layer_height"],
+        },
+        device_profile_id="BambuStudio:bbl:bambu-lab-x2d:0.4",
+        machine_profile_id="BambuStudio:bbl:bambu-lab-x2d",
+        nozzle_size="0.4",
+        source_version="02.07.00.07",
+        application_metadata="BambuStudio-02.07.00.07",
+        display_name="Bambu Lab X2D",
+        brand="Bambu Lab",
+        bed_width=256,
+        bed_depth=256,
+        bed_height=261,
+    )
+    monkeypatch.setenv("LUMINA_MACHINE_REGISTRY_DIR", str(registry_root))
+    writer_module._PRINTER_TEMPLATE_CACHE.clear()
+
+    writer = BambuStudio3MFWriter(
+        "x2d-slots.3mf",
+        settings={},
+        color_mode="4-Color",
+        printer_id="bambu-lab-x2d",
+        slicer="BambuStudio",
+        nozzle_size="0.4",
+        device_profile_id="BambuStudio:bbl:bambu-lab-x2d:0.4",
+    )
+    writer._set_project_palette(
+        ["White", "Red", "Yellow", "Blue"],
+        {
+            0: (255, 255, 255, 255),
+            1: (193, 46, 31, 255),
+            2: (244, 238, 42, 255),
+            3: (10, 41, 137, 255),
+        },
+    )
+
+    settings = json.loads(writer._build_project_settings_bytes().decode("utf-8"))
+
+    assert len(settings["filament_settings_id"]) == 9
+    assert len(settings["filament_colour"]) == 9
+    assert settings["filament_colour"][:4] == ["#FFFFFF", "#C12E1F", "#F4EE2A", "#0A2989"]
+    assert len(settings["filament_multi_colour"]) == 9
+    assert settings["filament_multi_colour"][:4] == ["#FFFFFF", "#C12E1F", "#F4EE2A", "#0A2989"]
+    assert len(settings["flush_volumes_matrix"]) == 162
+    assert len(settings["flush_volumes_vector"]) == 18
+    assert len(settings["different_settings_to_system"]) == 11
+    assert settings["version"] == "02.07.01.57"
+    assert settings["prime_tower_width"] == "200"
+    assert settings["filament_is_mixed"] == ["0"]
 
 
 class TestAnycubicWriterMetadata:
@@ -91,6 +1202,50 @@ class TestAnycubicWriterMetadata:
         settings = json.loads(writer._build_project_settings_bytes().decode("utf-8"))
         assert settings["line_width"] == "0.22"
         assert settings["initial_layer_line_width"] == "0.22"
+
+    def test_project_settings_preserves_difference_index_slot_shape(self, monkeypatch) -> None:
+        writer = BambuStudio3MFWriter(
+            "difference-index.3mf",
+            settings={
+                "line_width": "0.22",
+                "wall_loops": "3",
+            },
+            color_mode="4-Color",
+            printer_id="bambu-p1s",
+            slicer="BambuStudio",
+            nozzle_size="0.2",
+        )
+        writer.add_mesh(trimesh.creation.box(extents=[1, 1, 1]), "White", (255, 255, 255))
+        original_loader = writer._get_base_config_template
+
+        def stale_template() -> dict[str, object]:
+            template = original_loader()
+            template["different_settings_to_system"] = [
+                "line_width",
+                "wall_loops;top_shell_layers",
+                "bottom_shell_layers",
+                "",
+            ]
+            return template
+
+        monkeypatch.setattr(writer, "_get_base_config_template", stale_template)
+
+        settings = json.loads(writer._build_project_settings_bytes().decode("utf-8"))
+
+        different_settings = settings["different_settings_to_system"]
+        assert isinstance(different_settings, list)
+        assert len(different_settings) == 4
+        difference_index = different_settings[0].split(";")
+        assert difference_index == sorted(set(difference_index))
+        assert {
+            "line_width",
+            "wall_loops",
+        } <= set(difference_index)
+        assert different_settings[1:] == [
+            "wall_loops;top_shell_layers",
+            "bottom_shell_layers",
+            "",
+        ]
 
     def test_shared_material_palette_deduplicates_project_filaments(self) -> None:
         writer = BambuStudio3MFWriter(
@@ -408,6 +1563,53 @@ class TestAnycubicWriterMetadata:
             "#FFE600",
         ]
         assert len(captured_settings["filament_ids"]) == 8
+
+    def test_export_scene_forwards_registry_device_profile_id(self, monkeypatch) -> None:
+        captured: dict[str, object] = {}
+
+        class _FakeWriter:
+            def __init__(
+                self,
+                output_path: str,
+                settings=None,
+                color_mode: str = "4-Color",
+                printer_id: str = "bambu-h2d",
+                slicer: str = "BambuStudio",
+                nozzle_size: str | None = None,
+                watermark: str = "LuminaStudio",
+                *,
+                device_profile_id: str | None = None,
+                **kwargs,
+            ) -> None:
+                self.output_path = output_path
+                captured["device_profile_id"] = device_profile_id
+
+            def add_mesh(self, mesh, name: str, color_rgb: tuple[int, int, int]) -> None:
+                return None
+
+            def export(self) -> str:
+                return self.output_path
+
+        monkeypatch.setattr(writer_module, "BambuStudio3MFWriter", _FakeWriter)
+
+        scene = trimesh.Scene()
+        scene.add_geometry(trimesh.creation.box(extents=[1, 1, 1]), geom_name="Slot 1 (White)")
+
+        out_path = writer_module.export_scene_with_bambu_metadata(
+            scene=scene,
+            output_path="registry-export.3mf",
+            slot_names=["Slot 1 (White)"],
+            preview_colors={0: (255, 255, 255, 255)},
+            settings={},
+            color_mode="4-Color",
+            printer_id="bambu-h2d",
+            slicer="BambuStudio",
+            nozzle_size="0.4",
+            device_profile_id="BambuStudio:bbl:bambu-lab-h2d:0.4",
+        )
+
+        assert out_path == "registry-export.3mf"
+        assert captured["device_profile_id"] == "BambuStudio:bbl:bambu-lab-h2d:0.4"
 
     def test_anycubic_slice_info_and_custom_parts_use_acnext_layout(
         self,

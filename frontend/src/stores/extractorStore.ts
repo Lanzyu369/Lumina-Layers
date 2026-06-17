@@ -19,6 +19,7 @@ import {
   type ColorcheckerDisplaySummary,
 } from "../api/extractor";
 import type { ExtractorPaletteEntry } from "../api/types";
+import { downloadResourceBlob } from "../api/client";
 import { clampValue } from "./converter";
 import { uploadImagePreview } from "../api/system";
 import { tRuntime } from "../i18n/runtime";
@@ -463,8 +464,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
         );
 
         // Fetch rotated image as blob to create a new File for subsequent extract calls
-        const res = await fetch(preview_url);
-        const blob = await res.blob();
+        const blob = await downloadResourceBlob(preview_url);
         const baseName = imageFile.name.replace(/\.[^.]+$/, "");
         const rotatedFile = new File([blob], `${baseName}.png`, {
           type: "image/png",

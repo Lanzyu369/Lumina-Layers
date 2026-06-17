@@ -1383,11 +1383,11 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
         ctx["preview_colors"] = dict(analysis.preview_colors)
         ctx["slot_names"] = list(analysis.slot_names)
 
-        # Inject outline geometry into the preview cache as metadata only.
-        # User-visible 2D / GLB preview rendering consumes this in the
-        # follow-up scope tracked by the SVG vector outline acceptance notes.
-        # preview 分支只暴露 outline 元数据；用户可见的 2D / GLB 像素渲染
-        # 归 SVG vector outline 验收归档里的 OQ-6 follow-up 处理。
+        # Inject outline geometry into the preview cache. The SVG/vector shape
+        # union stays the declared geometry source; S11 copies this mesh into
+        # the preview GLB instead of deriving outline from backing/fridge masks.
+        # preview 分支负责生成来自矢量 shape union 的 outline mesh；S11 复用
+        # 这个 mesh 导出 GLB，避免从 backing / 冰箱贴 mask 重新推断轮廓。
         if bool(ctx.get("enable_outline", False)):
             try:
                 outline_width_mm = float(ctx.get("outline_width", 2.0) or 2.0)
@@ -1548,6 +1548,11 @@ def _run_vector_branch(ctx: dict) -> dict:
         vec_processor.fridge_magnets = list(fridge_magnets)
         vec_processor.enable_coating = bool(ctx.get("enable_coating", False))
         vec_processor.coating_height_mm = float(ctx.get("coating_height_mm", 0.08))
+        vec_processor.enable_outline = bool(ctx.get("enable_outline", False))
+        try:
+            vec_processor.outline_width_mm = float(ctx.get("outline_width", 2.0) or 2.0)
+        except (TypeError, ValueError):
+            vec_processor.outline_width_mm = 2.0
         vec_processor.auto_dynamic_range = bool(ctx.get("auto_dynamic_range", False))
         if hasattr(vec_processor, "backing_color_id"):
             vec_processor.backing_color_id = backing_channel_idx
@@ -2104,6 +2109,7 @@ def _run_vector_branch(ctx: dict) -> dict:
             color_height_mm=float(ctx.get("bambu_color_height_mm", 0.0)),
             face_orientation=str(ctx.get("bambu_face_orientation", "down")),
             cover_source=vector_cover_source,
+            device_profile_id=ctx.get("device_profile_id") or None,
         )
         vector_timing["export_3mf_s"] = time.perf_counter() - export_t0
         log.info(

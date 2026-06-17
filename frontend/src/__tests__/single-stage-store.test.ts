@@ -501,6 +501,74 @@ describe("useSingleStageStore ColorChecker flow", () => {
     expect(state.isExtracting).toBe(true);
   });
 
+  it("does not treat failed white rotation preview downloads as image files", async () => {
+    const originalFetch = globalThis.fetch;
+    const whiteFile = buildPngFile("white.png");
+    mockedRotateExtractorImage.mockResolvedValueOnce({
+      preview_url: "/api/files/expired-white-rotation.png",
+      width: 100,
+      height: 100,
+    });
+    globalThis.fetch = vi.fn().mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      headers: { get: () => "application/json" },
+      json: () => Promise.resolve({ detail: "Not Found" }),
+    }) as unknown as typeof fetch;
+
+    try {
+      useSingleStageStore.setState({
+        whiteImageFile: whiteFile,
+        whiteImagePreviewUrl: "/api/files/original-white.png",
+      });
+
+      await useSingleStageStore.getState().rotateWhiteImage("cw");
+
+      const state = useSingleStageStore.getState();
+      expect(state.whiteImageFile).toBe(whiteFile);
+      expect(state.whiteImagePreviewUrl).toBe("/api/files/original-white.png");
+      expect(state.isRotatingWhite).toBe(false);
+      expect(state.extractError).toMatch(/requested resource|请求的资源/);
+      expect(state.extractError).not.toContain("404");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("does not treat failed black rotation preview downloads as image files", async () => {
+    const originalFetch = globalThis.fetch;
+    const blackFile = buildPngFile("black.png");
+    mockedRotateExtractorImage.mockResolvedValueOnce({
+      preview_url: "/api/files/expired-black-rotation.png",
+      width: 100,
+      height: 100,
+    });
+    globalThis.fetch = vi.fn().mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      headers: { get: () => "application/json" },
+      json: () => Promise.resolve({ detail: "Not Found" }),
+    }) as unknown as typeof fetch;
+
+    try {
+      useSingleStageStore.setState({
+        blackImageFile: blackFile,
+        blackImagePreviewUrl: "/api/files/original-black.png",
+      });
+
+      await useSingleStageStore.getState().rotateBlackImage("ccw");
+
+      const state = useSingleStageStore.getState();
+      expect(state.blackImageFile).toBe(blackFile);
+      expect(state.blackImagePreviewUrl).toBe("/api/files/original-black.png");
+      expect(state.isRotatingBlack).toBe(false);
+      expect(state.extractError).toMatch(/requested resource|请求的资源/);
+      expect(state.extractError).not.toContain("404");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("ignores stale Stage A extraction responses after ColorChecker state changes", async () => {
     let resolveExtract:
       | ((value: Awaited<ReturnType<typeof extractGradientCardStageA>>) => void)

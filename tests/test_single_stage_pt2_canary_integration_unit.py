@@ -504,6 +504,11 @@ class TestMaterialSolverCacheSuggestColorsCanary:
             lambda *args, **kwargs: None,
         )
         monkeypatch.setattr(
+            "api.routers.single_stage.load_material_candidate_runtime",
+            lambda *args, **kwargs: None,
+            raising=False,
+        )
+        monkeypatch.setattr(
             "api.routers.single_stage.suggest_colors_for_target",
             lambda *args, **kwargs: [_StubSuggestion()],
         )

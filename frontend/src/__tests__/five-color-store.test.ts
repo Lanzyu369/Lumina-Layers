@@ -156,6 +156,7 @@ describe("fiveColorStore LUT switching", () => {
       printerModel: "bambu-h2d",
       slicerSoftware: "BambuStudio",
       nozzleSize: "0.2",
+      deviceProfileId: "BambuStudio:bbl:bambu-lab-h2d:0.2",
     });
     useFiveColorStore.setState({
       lutName: "test-lut",
@@ -177,6 +178,7 @@ describe("fiveColorStore LUT switching", () => {
         printer_id: "bambu-h2d",
         slicer: "BambuStudio",
         nozzle_size: "0.2",
+        device_profile_id: "BambuStudio:bbl:bambu-lab-h2d:0.2",
       }),
     );
   });
@@ -272,6 +274,98 @@ describe("fiveColorStore LUT switching", () => {
     expect(state.queryResult?.result_hex).toBe("#F00A00");
     expect(state.isLoading).toBe(false);
     expect(state.error).toBeNull();
+  });
+
+  it("submits a six-layer recipe when the loaded combinations are six-wide", async () => {
+    useFiveColorStore.setState({
+      lutName: "extended-lut",
+      combinations: [[4, 1, 2, 3, 0, 4]],
+      selectedIndices: [],
+      queryResult: null,
+    });
+    for (const index of [4, 1, 2, 3, 0, 4]) {
+      useFiveColorStore.getState().addSelection(index);
+    }
+    mockQueryFiveColor.mockResolvedValueOnce({
+      found: true,
+      selected_indices: [4, 1, 2, 3, 0, 4],
+      result_rgb: [4, 5, 6],
+      result_hex: "#040506",
+      row_index: 1,
+      message: "found",
+      source: "extended",
+    });
+
+    await useFiveColorStore.getState().submitQuery();
+
+    expect(mockQueryFiveColor).toHaveBeenCalledWith({
+      lut_name: "extended-lut",
+      selected_indices: [4, 1, 2, 3, 0, 4],
+    });
+    const state = useFiveColorStore.getState();
+    expect(state.selectedIndices).toEqual([4, 1, 2, 3, 0, 4]);
+    expect(state.queryResult?.result_hex).toBe("#040506");
+  });
+
+  it("allows six-layer manual selection when mixed combinations start with a five-layer row", async () => {
+    useFiveColorStore.setState({
+      lutName: "mixed-extended-lut",
+      combinations: [
+        [0, 1, 2, 3, 4],
+        [4, 1, 2, 3, 0, 4],
+      ],
+      selectedIndices: [],
+      queryResult: null,
+    });
+    for (const index of [4, 1, 2, 3, 0, 4]) {
+      useFiveColorStore.getState().addSelection(index);
+    }
+    mockQueryFiveColor.mockResolvedValueOnce({
+      found: true,
+      selected_indices: [4, 1, 2, 3, 0, 4],
+      result_rgb: [4, 5, 6],
+      result_hex: "#040506",
+      row_index: 1,
+      message: "found",
+      source: "extended",
+    });
+
+    await useFiveColorStore.getState().submitQuery();
+
+    expect(mockQueryFiveColor).toHaveBeenCalledWith({
+      lut_name: "mixed-extended-lut",
+      selected_indices: [4, 1, 2, 3, 0, 4],
+    });
+    expect(useFiveColorStore.getState().selectedIndices).toEqual([4, 1, 2, 3, 0, 4]);
+  });
+
+  it("allows submitting a five-layer recipe that is also a six-layer prefix", async () => {
+    useFiveColorStore.setState({
+      lutName: "mixed-prefix-lut",
+      combinations: [
+        [0, 1, 2, 3, 4],
+        [0, 1, 2, 3, 4, 5],
+      ],
+      selectedIndices: [0, 1, 2, 3, 4],
+      queryResult: null,
+    });
+    mockQueryFiveColor.mockResolvedValueOnce({
+      found: true,
+      selected_indices: [0, 1, 2, 3, 4],
+      result_rgb: [1, 2, 3],
+      result_hex: "#010203",
+      row_index: 0,
+      message: "found",
+      source: "legacy",
+    });
+
+    await useFiveColorStore.getState().submitQuery();
+
+    expect(mockQueryFiveColor).toHaveBeenCalledWith({
+      lut_name: "mixed-prefix-lut",
+      selected_indices: [0, 1, 2, 3, 4],
+    });
+    expect(useFiveColorStore.getState().queryResult?.result_hex).toBe("#010203");
   });
 
   it("ignores stale target-match responses after switching LUTs", async () => {

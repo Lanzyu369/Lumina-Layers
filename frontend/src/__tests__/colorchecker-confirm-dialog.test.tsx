@@ -14,8 +14,11 @@ import {
   colorcheckerWarpPreview,
   type ColorcheckerDisplaySummary,
 } from "../api/extractor";
-import { ColorcheckerConfirmDialogInner } from "../components/ColorcheckerConfirmDialog";
+import ColorcheckerConfirmDialogExtractor, {
+  ColorcheckerConfirmDialogInner,
+} from "../components/ColorcheckerConfirmDialog";
 import { I18nProvider } from "../i18n/context";
+import { useExtractorStore } from "../stores/extractorStore";
 import { useSettingsStore } from "../stores/settingsStore";
 
 vi.mock("read-excel-file/browser", () => ({
@@ -377,6 +380,36 @@ describe("ColorcheckerConfirmDialog", () => {
     ).toBeInTheDocument();
   });
 
+  it("falls back to the default reference when localStorage cannot read the saved selection", async () => {
+    const originalLocalStorage = window.localStorage;
+    const blockedStorage = {
+      ...originalLocalStorage,
+      getItem: vi.fn(() => {
+        throw new DOMException("storage is blocked", "SecurityError");
+      }),
+      setItem: vi.fn(),
+      removeItem: vi.fn(),
+      clear: vi.fn(),
+      key: vi.fn(),
+      length: 0,
+    } as Storage;
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      value: blockedStorage,
+    });
+
+    try {
+      renderDialog();
+      await expectDafanDetectCalled("source-chart.png");
+      expect(screen.getByText("大凡光学")).toBeInTheDocument();
+    } finally {
+      Object.defineProperty(window, "localStorage", {
+        configurable: true,
+        value: originalLocalStorage,
+      });
+    }
+  });
+
   it("uses stage-specific timeout copy during auto detection", async () => {
     vi.mocked(colorcheckerDetectChart).mockRejectedValueOnce(makeTimeoutError());
 
@@ -521,6 +554,79 @@ describe("ColorcheckerConfirmDialog", () => {
       ),
     );
     expect(window.localStorage.getItem("lumina.colorchecker.references.v1")).toBe("[]");
+  });
+
+  it("keeps an uploaded custom reference usable when localStorage cannot persist it", async () => {
+    const originalLocalStorage = window.localStorage;
+    const blockedStorage = {
+      getItem: vi.fn((key: string) => originalLocalStorage.getItem(key)),
+      setItem: vi.fn(() => {
+        throw new DOMException("storage quota exceeded", "QuotaExceededError");
+      }),
+      removeItem: vi.fn((key: string) => originalLocalStorage.removeItem(key)),
+      clear: vi.fn(() => originalLocalStorage.clear()),
+      key: vi.fn((index: number) => originalLocalStorage.key(index)),
+      get length() {
+        return originalLocalStorage.length;
+      },
+    } as Storage;
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      value: blockedStorage,
+    });
+    try {
+      const { container } = renderDialog();
+
+      await expectDafanDetectCalled("source-chart.png");
+      const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+      fireEvent.change(input, {
+        target: {
+          files: [
+            new File([new Uint8Array([7, 8, 9])], "custom-reference.xlsx", {
+              type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            }),
+          ],
+        },
+      });
+
+      await waitFor(() => expect(colorcheckerNormalizeReference).toHaveBeenCalled());
+      await screen.findByText("custom-reference (SN-TEST)");
+      expect(screen.queryByText(/storage quota exceeded/)).not.toBeInTheDocument();
+      expect(screen.queryByText("校色基准上传失败")).not.toBeInTheDocument();
+      expect(
+        screen.getByText(/刷新页面后需要重新上传|refresh/),
+      ).toBeInTheDocument();
+      await waitFor(() =>
+        expect(colorcheckerDetectChart).toHaveBeenLastCalledWith(
+          "source-chart.png",
+          "4x6",
+          null,
+          expect.objectContaining({
+            kind: "custom",
+            referenceSource: expect.objectContaining({
+              referenceHash: "custom-hash",
+            }),
+          }),
+        ),
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "执行校色" }));
+      await waitFor(() => expect(colorcheckerCalibrate).toHaveBeenCalled());
+      const calibrateCall = vi.mocked(colorcheckerCalibrate).mock.calls.at(-1)!;
+      expect(calibrateCall[7]).toEqual(
+        expect.objectContaining({
+          kind: "custom",
+          referenceSource: expect.objectContaining({
+            referenceHash: "custom-hash",
+          }),
+        }),
+      );
+    } finally {
+      Object.defineProperty(window, "localStorage", {
+        configurable: true,
+        value: originalLocalStorage,
+      });
+    }
   });
 
   it("uses localized upload warning copy without hard-coded suffixes", async () => {
@@ -1048,6 +1154,38 @@ describe("ColorcheckerConfirmDialog", () => {
         cache: "no-store",
       }),
     );
+  });
+
+  it("keeps the extractor modal closed after closeDialog clears the phase", () => {
+    useExtractorStore.setState({
+      imageFile,
+      colorchecker_enabled: true,
+      colorchecker_phase: null,
+    });
+
+    render(
+      <I18nProvider>
+        <ColorcheckerConfirmDialogExtractor />
+      </I18nProvider>,
+    );
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("opens the extractor modal only for active calibration phases", () => {
+    useExtractorStore.setState({
+      imageFile,
+      colorchecker_enabled: true,
+      colorchecker_phase: "calibrating",
+    });
+
+    render(
+      <I18nProvider>
+        <ColorcheckerConfirmDialogExtractor />
+      </I18nProvider>,
+    );
+
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 
   it("closes the store dialog when the inline tool unmounts", async () => {

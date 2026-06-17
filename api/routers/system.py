@@ -9,10 +9,13 @@ endpoint (endpoint registered in a later task).
 
 import json
 import os
+import re
 import uuid
+from contextlib import suppress
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from PIL import Image
 
 import config
@@ -28,6 +31,7 @@ from api.schemas.system import (
     CacheCleanupDetails,
     ClearCacheResponse,
     ClearCacheResult,
+    DeviceProfileInfo,
     PrinterInfo,
     PrinterListResponse,
     SaveSettingsResponse,
@@ -46,6 +50,116 @@ log = get_logger(__name__)
 CLEANABLE_EXTENSIONS: set[str] = {".3mf", ".glb", ".png", ".jpg", ".txt"}
 PROTECTED_FILES: set[str] = {"lumina_stats.txt", "lumina_lut.json"}
 EPHEMERAL_PREVIEW_TTL_SECONDS = 600
+MACHINE_REGISTRY_ASSET_MEDIA_TYPES: dict[str, str] = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".svg": "image/svg+xml",
+}
+
+
+def _try_load_machine_registry():
+    """Load optional generated machine registry, returning None on absence/failure.
+    加载可选的生成机器注册表；不存在或读取失败时返回 None。
+    """
+    registry_root = Path(os.environ.get("LUMINA_MACHINE_REGISTRY_DIR", "machine_registry"))
+    registry_path = registry_root / "registry.json"
+    if not registry_path.exists():
+        return None
+    try:
+        from core.machine_registry import load_machine_registry
+
+        return load_machine_registry(registry_path)
+    except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        log.warning(
+            "Machine registry could not be loaded; using legacy printer profiles",
+            extra={
+                "event": "system_machine_registry_load_failed",
+                "path": str(registry_path),
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+        return None
+
+
+def _slug_machine_id(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-")
+
+
+def _unique_preserve_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        unique.append(value)
+    return unique
+
+
+def _registry_printer_id(
+    *,
+    display_name: str,
+    brand: str,
+    existing_ids: set[str],
+) -> str:
+    base = _slug_machine_id(display_name) or _slug_machine_id(f"{brand}-{display_name}")
+    candidate = base or "registry-printer"
+    if candidate not in existing_ids:
+        return candidate
+    branded = _slug_machine_id(f"{brand}-{display_name}")
+    if branded and branded not in existing_ids:
+        return branded
+    suffix = 2
+    while f"{candidate}-{suffix}" in existing_ids:
+        suffix += 1
+    return f"{candidate}-{suffix}"
+
+
+def _registry_machines_by_key() -> dict[tuple[str, str], dict[str, object]]:
+    registry = _try_load_machine_registry()
+    if registry is None:
+        return {}
+
+    machines_by_key: dict[tuple[str, str], dict[str, object]] = {}
+    for device in sorted(
+        registry.devices_by_id.values(),
+        key=lambda item: (item.display_name, item.brand, item.slicer_id, item.nozzle_size),
+    ):
+        key = (device.display_name.casefold(), device.brand.casefold())
+        machine = machines_by_key.setdefault(
+            key,
+            {
+                "display_name": device.display_name,
+                "brand": device.brand,
+                "bed_width": device.bed_width,
+                "bed_depth": device.bed_depth,
+                "bed_height": device.bed_height,
+                "thumbnail": device.thumbnail,
+                "profiles": [],
+            },
+        )
+        if device.thumbnail and not machine["thumbnail"]:
+            machine["thumbnail"] = device.thumbnail
+        profiles = machine["profiles"]
+        assert isinstance(profiles, list)
+        profiles.append(
+            DeviceProfileInfo(
+                device_profile_id=device.device_profile_id,
+                slicer_id=device.slicer_id,
+                nozzle_size=device.nozzle_size,
+                source_profile_name=device.source_profile_name,
+                revision=device.revision,
+                supported=device.supported,
+            )
+        )
+    return machines_by_key
+
+
+def _machine_registry_root() -> Path:
+    return Path(os.environ.get("LUMINA_MACHINE_REGISTRY_DIR", "machine_registry")).resolve()
 
 
 def _purge_subdir(subdir: str) -> tuple[int, int]:
@@ -159,8 +273,14 @@ async def image_preview(
     try:
         with Image.open(png_path) as img:
             width, height = img.size
-    except (OSError, ValueError) as e:
-        raise HTTPException(status_code=422, detail=f"无法读取图片尺寸: {e}")
+    except (OSError, ValueError) as exc:
+        with suppress(OSError):
+            if os.path.exists(png_path):
+                os.unlink(png_path)
+        raise HTTPException(
+            status_code=422,
+            detail="无法读取图片尺寸：无效或损坏的图片文件",
+        ) from exc
     file_id = file_registry.register_path(
         str(uuid.uuid4()),
         png_path,
@@ -291,7 +411,10 @@ def get_printers() -> PrinterListResponse:
         PrinterListResponse: List of printer metadata. (打印机元数据列表)
     """
     profiles = config.list_printer_profiles()
+    registry_machines = _registry_machines_by_key()
     printers = []
+    existing_ids = {profile.id for profile in profiles}
+    attached_registry_keys: set[tuple[str, str]] = set()
     for p in profiles:
         # Build supported slicer list: default template → BambuStudio, plus slicer_templates keys
         slicers = []
@@ -299,13 +422,23 @@ def get_printers() -> PrinterListResponse:
         if p.template_file.startswith("bambu_"):
             slicers.append("BambuStudio")
         slicers.extend(p.slicer_templates.keys())
-        # Deduplicate while preserving order
-        seen: set[str] = set()
-        unique_slicers = []
-        for s in slicers:
-            if s not in seen:
-                seen.add(s)
-                unique_slicers.append(s)
+        key = (p.display_name.casefold(), p.brand.casefold())
+        registry_machine = registry_machines.get(key, {})
+        registry_device_profiles = registry_machine.get("profiles", [])
+        assert isinstance(registry_device_profiles, list)
+        registry_slicers = [
+            profile.slicer_id
+            for profile in registry_device_profiles
+            if isinstance(profile, DeviceProfileInfo)
+        ]
+        registry_nozzles = [
+            profile.nozzle_size
+            for profile in registry_device_profiles
+            if isinstance(profile, DeviceProfileInfo)
+        ]
+        unique_slicers = _unique_preserve_order([*slicers, *registry_slicers])
+        unique_nozzles = _unique_preserve_order([*p.supported_nozzle_sizes, *registry_nozzles])
+        attached_registry_keys.add(key)
         printers.append(
             PrinterInfo(
                 id=p.id,
@@ -314,11 +447,71 @@ def get_printers() -> PrinterListResponse:
                 bed_width=p.bed_width,
                 bed_depth=p.bed_depth,
                 bed_height=p.bed_height,
-                supported_nozzle_sizes=list(p.supported_nozzle_sizes),
+                supported_nozzle_sizes=unique_nozzles,
                 supported_slicers=unique_slicers,
+                thumbnail=str(registry_machine.get("thumbnail") or p.thumbnail),
+                device_profiles=registry_device_profiles,
+            )
+        )
+    for key, registry_machine in registry_machines.items():
+        if key in attached_registry_keys:
+            continue
+        profiles_for_machine = registry_machine.get("profiles", [])
+        assert isinstance(profiles_for_machine, list)
+        device_profiles = [
+            profile
+            for profile in profiles_for_machine
+            if isinstance(profile, DeviceProfileInfo)
+        ]
+        display_name = str(registry_machine["display_name"])
+        brand = str(registry_machine["brand"])
+        printer_id = _registry_printer_id(
+            display_name=display_name,
+            brand=brand,
+            existing_ids=existing_ids,
+        )
+        existing_ids.add(printer_id)
+        printers.append(
+            PrinterInfo(
+                id=printer_id,
+                display_name=display_name,
+                brand=brand,
+                bed_width=int(registry_machine["bed_width"]),
+                bed_depth=int(registry_machine["bed_depth"]),
+                bed_height=int(registry_machine["bed_height"]),
+                supported_nozzle_sizes=_unique_preserve_order(
+                    [profile.nozzle_size for profile in device_profiles]
+                ),
+                supported_slicers=_unique_preserve_order(
+                    [profile.slicer_id for profile in device_profiles]
+                ),
+                thumbnail=str(registry_machine.get("thumbnail") or ""),
+                device_profiles=device_profiles,
             )
         )
     return PrinterListResponse(status="success", printers=printers)
+
+
+@router.get("/machine-registry/assets/{asset_path:path}")
+def get_machine_registry_asset(asset_path: str) -> FileResponse:
+    """Serve a generated machine-registry image asset.
+    返回生成机器注册表中的图片资产。
+    """
+    registry_root = _machine_registry_root()
+    requested = (registry_root / asset_path).resolve()
+    try:
+        inside_registry = os.path.commonpath([str(registry_root), str(requested)]) == str(registry_root)
+    except ValueError:
+        inside_registry = False
+    if not inside_registry:
+        raise HTTPException(status_code=400, detail="Invalid machine registry asset path")
+
+    media_type = MACHINE_REGISTRY_ASSET_MEDIA_TYPES.get(requested.suffix.lower())
+    if media_type is None:
+        raise HTTPException(status_code=404, detail="Machine registry asset not found")
+    if not requested.exists() or not requested.is_file():
+        raise HTTPException(status_code=404, detail="Machine registry asset not found")
+    return FileResponse(path=requested, media_type=media_type)
 
 
 # ---------------------------------------------------------------------------
@@ -347,11 +540,21 @@ SETTINGS_FILE: Path = Path("user_settings.json")
 
 @router.get("/settings")
 def get_settings() -> UserSettingsResponse:
-    """读取 user_settings.json 并返回 UserSettings。文件不存在时返回默认值。"""
+    """Read persisted user settings with safe fallback.
+
+    读取 user_settings.json 并返回 UserSettings；文件缺失、损坏或顶层结构
+    非对象时返回默认值。
+
+    Returns:
+        UserSettingsResponse: Current settings or defaults.
+            当前设置；无法安全读取时返回默认设置。
+    """
     if not SETTINGS_FILE.exists():
         return UserSettingsResponse(status="success", settings=UserSettings())
     try:
         data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return UserSettingsResponse(status="success", settings=UserSettings())
         return UserSettingsResponse(status="success", settings=UserSettings(**data))
     except (json.JSONDecodeError, ValueError):
         return UserSettingsResponse(status="success", settings=UserSettings())

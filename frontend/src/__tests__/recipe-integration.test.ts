@@ -385,6 +385,55 @@ describe("recipe integration", () => {
       expect(recipe.integrity.asset_checksums.primary).toHaveLength(64);
     });
 
+    it("rejects JSON sidecars whose recipe hash no longer matches the recipe section", async () => {
+      const { recipe } = await buildTestRecipe({ lut_name: "TestLUT" });
+      recipe.recipe.converter!.base.target_width_mm += 1;
+      const file = new File([JSON.stringify(recipe)], "tampered.lumina.json", {
+        type: "application/json",
+      });
+
+      await expect(parseRecipeFile(file)).rejects.toThrow("Integrity check failed");
+    });
+
+    it("rejects JSON sidecars whose primary asset payload no longer matches its checksum", async () => {
+      const { recipe } = await buildTestRecipe({ lut_name: "TestLUT" });
+      recipe.asset.primary.payload_b64 = "dGFtcGVyZWQ=";
+      const file = new File([JSON.stringify(recipe)], "tampered.lumina.json", {
+        type: "application/json",
+      });
+
+      await expect(parseRecipeFile(file)).rejects.toThrow("Asset data is corrupted");
+    });
+
+    it("rejects JSON sidecars whose heightmap asset payload no longer matches its checksum", async () => {
+      const heightmapFile = new File([new Uint8Array([10, 20, 30])], "height.png", {
+        type: "image/png",
+      });
+      const { recipe } = await buildTestRecipe({
+        lut_name: "TestLUT",
+        heightmapFile,
+      });
+      recipe.asset.heightmap!.payload_b64 = "dGFtcGVyZWQ=";
+      const file = new File([JSON.stringify(recipe)], "tampered.lumina.json", {
+        type: "application/json",
+      });
+
+      await expect(parseRecipeFile(file)).rejects.toThrow("Asset data is corrupted");
+    });
+
+    it("rejects PNG share cards whose embedded recipe integrity is stale", async () => {
+      const { recipe } = await buildTestRecipe({ lut_name: "TestLUT" });
+      recipe.recipe.converter!.base.target_width_mm += 1;
+      const embedded = await embedRecipeInPng(
+        createMinimalPng(),
+        recipe,
+        recipe.integrity.recipe_sha256,
+      );
+      const file = new File([embedded], "tampered-share.png", { type: "image/png" });
+
+      await expect(parseRecipeFile(file)).rejects.toThrow("Integrity check failed");
+    });
+
     it("recipe with heightmap includes heightmap checksum", async () => {
       const hmFile = new File([new Uint8Array([10, 20, 30])], "height.png", { type: "image/png" });
       const state = { ...DEFAULT_STATE, lut_name: "TestLUT", heightmapFile: hmFile } as ConverterState;

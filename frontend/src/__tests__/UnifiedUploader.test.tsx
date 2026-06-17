@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import UnifiedUploader from "../components/ui/UnifiedUploader";
 
 // Mock i18n — return key as-is
@@ -11,6 +11,7 @@ const defaultProps = {
   batchFiles: [] as File[],
   isBatchMode: false,
   onFilesSelect: vi.fn(),
+  onFileReplace: vi.fn(),
   onBatchFileRemove: vi.fn(),
   accept: "image/jpeg,image/png,image/svg+xml,image/webp,image/heic,image/heif",
 };
@@ -36,6 +37,64 @@ describe("UnifiedUploader", () => {
     const img = screen.getByRole("img");
     expect(img).toBeInTheDocument();
     expect(img).toHaveAttribute("src", "data:image/png;base64,fakedata");
+  });
+
+  it("renders separate replace and add controls in SingleMode", () => {
+    render(
+      <UnifiedUploader
+        {...defaultProps}
+        singlePreview="data:image/png;base64,fakedata"
+      />,
+    );
+
+    expect(screen.getByText("upload_replace_current")).toBeInTheDocument();
+    expect(screen.getByText("upload_add_more")).toBeInTheDocument();
+  });
+
+  it("routes the SingleMode replace input through onFileReplace", async () => {
+    const onFilesSelect = vi.fn();
+    const onFileReplace = vi.fn();
+    const file = new File(["new"], "new.jpg", { type: "image/jpeg" });
+
+    render(
+      <UnifiedUploader
+        {...defaultProps}
+        onFilesSelect={onFilesSelect}
+        onFileReplace={onFileReplace}
+        singlePreview="data:image/png;base64,fakedata"
+      />,
+    );
+
+    const replaceInput = document.querySelector(
+      'input[type="file"]:not([multiple])',
+    ) as HTMLInputElement;
+    fireEvent.change(replaceInput, { target: { files: [file] } });
+
+    await waitFor(() => expect(onFileReplace).toHaveBeenCalledWith(file));
+    expect(onFilesSelect).not.toHaveBeenCalled();
+  });
+
+  it("routes the SingleMode add-more input through onFilesSelect", async () => {
+    const onFilesSelect = vi.fn();
+    const onFileReplace = vi.fn();
+    const file = new File(["new"], "new.jpg", { type: "image/jpeg" });
+
+    render(
+      <UnifiedUploader
+        {...defaultProps}
+        onFilesSelect={onFilesSelect}
+        onFileReplace={onFileReplace}
+        singlePreview="data:image/png;base64,fakedata"
+      />,
+    );
+
+    const addMoreInput = document.querySelector(
+      'input[type="file"][multiple]',
+    ) as HTMLInputElement;
+    fireEvent.change(addMoreInput, { target: { files: [file] } });
+
+    await waitFor(() => expect(onFilesSelect).toHaveBeenCalledWith([file]));
+    expect(onFileReplace).not.toHaveBeenCalled();
   });
 
   it("uses a full-width preview frame so viewBox-only SVG previews keep a nonzero layout size", () => {

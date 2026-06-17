@@ -85,6 +85,86 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "近期接口错误",
     en: "Recent API errors",
   },
+  api_error_http_400: {
+    zh: "请求数据无效，请检查填写的值。",
+    en: "Request data is invalid. Please check the entered values.",
+  },
+  api_error_http_401: {
+    zh: "继续操作前需要先完成登录或认证。",
+    en: "Authentication is required before this action can continue.",
+  },
+  api_error_http_402: {
+    zh: "此操作需要可用额度或付款状态后才能继续。",
+    en: "This action requires an available quota or payment before it can continue.",
+  },
+  api_error_http_403: {
+    zh: "你没有权限执行此操作。",
+    en: "You do not have permission to perform this action.",
+  },
+  api_error_http_404: {
+    zh: "请求的资源不存在或已过期。",
+    en: "The requested resource was not found or has expired.",
+  },
+  api_error_http_405: {
+    zh: "所选接口不支持此操作。",
+    en: "This action is not supported by the selected API endpoint.",
+  },
+  api_error_http_408: {
+    zh: "服务器未能在超时前完成请求。",
+    en: "The request timed out before the server could finish.",
+  },
+  api_error_http_409: {
+    zh: "请求与当前服务器状态冲突。",
+    en: "The request conflicts with the current server state.",
+  },
+  api_error_http_413: {
+    zh: "上传文件或请求内容过大。",
+    en: "The uploaded file or request is too large.",
+  },
+  api_error_http_415: {
+    zh: "服务器不支持此文件类型。",
+    en: "This file type is not supported by the server.",
+  },
+  api_error_http_422: {
+    zh: "请求缺少必填数据或包含无效值。",
+    en: "The request is missing required data or contains invalid values.",
+  },
+  api_error_http_429: {
+    zh: "请求过于频繁，请稍后再试。",
+    en: "Too many requests were sent. Please wait and try again.",
+  },
+  api_error_http_500: {
+    zh: "服务器发生内部错误。请使用请求 ID 查看日志。",
+    en: "The server hit an internal error. Check the log for the request ID.",
+  },
+  api_error_http_502: {
+    zh: "处理请求时上游依赖失败。",
+    en: "An upstream dependency failed while handling this request.",
+  },
+  api_error_http_503: {
+    zh: "服务器暂时不可用，请稍后再试。",
+    en: "Server temporarily unavailable. Please try again later.",
+  },
+  api_error_http_504: {
+    zh: "服务器等待依赖服务时超时。",
+    en: "The server timed out waiting for a dependency.",
+  },
+  api_error_http_default: {
+    zh: "接口请求失败。请使用请求 ID 查看日志。",
+    en: "API request failed. Check the log for the request ID.",
+  },
+  api_error_http_client_default: {
+    zh: "请求未被服务器接受。请检查当前输入、权限或资源是否仍然可用。",
+    en: "The server did not accept the request. Check the current input, permissions, or resource availability.",
+  },
+  api_error_http_server_default: {
+    zh: "服务器处理请求时失败。请使用请求 ID 查看日志。",
+    en: "The server failed while handling the request. Check the log for the request ID.",
+  },
+  api_error_no_response: {
+    zh: "接口请求在服务器返回响应前失败。",
+    en: "API request failed before the server returned a response.",
+  },
   bug_report_modal_privacy_note: {
     zh: "本反馈仅发送到 Lumina Studio 开发者邮箱，用于定位和回复问题。",
     en: "This report is sent only to the Lumina Studio developer mailbox for triage and follow-up.",
@@ -686,7 +766,7 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Screenshot",
   },
   viewer_diagnostics_toggle: {
-    zh: "性能",
+    zh: "3D 诊断",
     en: "Diagnostics",
   },
   viewer_diagnostics_title: {
@@ -748,6 +828,54 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   viewer_diagnostics_canvas: {
     zh: "画布",
     en: "Canvas",
+  },
+  viewer_performance_toggle: {
+    zh: "性能统计",
+    en: "Performance",
+  },
+  viewer_performance_title: {
+    zh: "性能统计",
+    en: "Performance Stats",
+  },
+  viewer_performance_empty: {
+    zh: "暂无性能数据",
+    en: "No performance data yet",
+  },
+  viewer_performance_preview_title: {
+    zh: "预览生成",
+    en: "Preview Generation",
+  },
+  viewer_performance_generate_title: {
+    zh: "模型生成",
+    en: "Model Generation",
+  },
+  viewer_performance_total: {
+    zh: "总耗时",
+    en: "Total",
+  },
+  viewer_performance_upload: {
+    zh: "上传处理",
+    en: "Upload",
+  },
+  viewer_performance_worker: {
+    zh: "核心计算",
+    en: "Worker",
+  },
+  viewer_performance_pickle_load: {
+    zh: "缓存读取",
+    en: "Cache Load",
+  },
+  viewer_performance_segmented_glb: {
+    zh: "预览 GLB",
+    en: "Preview GLB",
+  },
+  viewer_performance_palette: {
+    zh: "调色板",
+    en: "Palette",
+  },
+  viewer_performance_overhead: {
+    zh: "接口开销",
+    en: "API Overhead",
   },
   viewer_hover_magnifier: {
     zh: "放大镜",
@@ -1724,6 +1852,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   "settings.nozzle_size": {
     zh: "喷嘴尺寸",
     en: "Nozzle Size",
+  },
+  "settings.device_profile": {
+    zh: "设备配置",
+    en: "Device Profile",
   },
   "settings.base_layer_height_modifier": {
     zh: "底板层高修改器",
@@ -2902,6 +3034,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "校色基准已上传并选中，{count} 条提示",
     en: "Reference uploaded and selected with {count} warnings",
   },
+  ext_cc_reference_upload_ready_session_only: {
+    zh: "校色基准已用于当前会话，但浏览器阻止保存，刷新页面后需要重新上传。",
+    en: "Reference is selected for this session, but the browser blocked saving it. Upload it again after refreshing.",
+  },
   ext_cc_reference_upload_failed: {
     zh: "校色基准上传失败",
     en: "Reference upload failed",
@@ -3309,6 +3445,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   basic_material_picker_select_all: {
     zh: "\u5168\u9009",
     en: "Select all",
+  },
+  basic_material_picker_deselect_all: {
+    zh: "\u6e05\u7a7a\u9009\u62e9",
+    en: "Deselect all",
   },
   basic_material_picker_close: {
     zh: "\u5173\u95ed",
@@ -3837,6 +3977,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   adv_auto_dynamic_range_hint: {
     zh: "根据所选 LUT 或耗材档案的可达亮度范围，对原图 L* 进行压缩映射；高光与阴影使用软滚降以保留局部对比度，色度通道保持不变。",
     en: "Compresses the source image's L* into the luminance range achievable by the selected LUT or material profile, using soft roll-offs in highlights and shadows to preserve local contrast while leaving chroma channels untouched.",
+  },
+  adv_high_precision_3d_preview: {
+    zh: "3D高精度颜色预览",
+    en: "High-precision 3D colour preview",
+  },
+  adv_high_precision_3d_preview_hint: {
+    zh: "开启后，3D 预览的颜色网格上限会提升到当前量化颜色数；可减少低频颜色被合并成灰色，但 GLB 生成和浏览器渲染会更慢。",
+    en: "When enabled, the 3D preview colour mesh limit is raised to the current quantized colour count. This reduces low-frequency colours being merged into greys, but GLB generation and browser rendering may be slower.",
   },
 
   // ==================== Relief Settings ====================
@@ -4388,6 +4536,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "缓存命中（毫秒级返回）",
     en: "Cache hit (millisecond response)",
   },
+  material_picker_source_runtime: {
+    zh: "运行时命中（适合大耗材组合）",
+    en: "Runtime hit (large-palette solve)",
+  },
   material_picker_source_mitm: {
     zh: "MITM 实时求解（构建持久化缓存可显著加速）",
     en: "MITM live solve (build a persisted cache to accelerate)",
@@ -4694,6 +4846,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "点击更换或追加",
     en: "Change or add",
   },
+  upload_replace_current: {
+    zh: "更换当前图片",
+    en: "Replace current image",
+  },
   upload_unified_aria: {
     zh: "拖拽图片或点击上传文件",
     en: "Drag images or click to upload files",
@@ -4790,6 +4946,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "生成并下载",
     en: "Generate & Download",
   },
+  slicer_download_failed: {
+    zh: "下载文件暂时无法读取，请重新生成后再试。",
+    en: "The download file could not be read. Regenerate it and try again.",
+  },
   slicer_detecting: {
     zh: "正在检测切片软件...",
     en: "Detecting slicers...",
@@ -4851,8 +5011,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Five-Color Recipe Query",
   },
   five_color_desc: {
-    zh: "从基础色中选出 5 种颜色并查询叠层后的结果色，适合快速验证色片配方。",
-    en: "Pick five base colors and query the blended result to validate layered color recipes quickly.",
+    zh: "从基础色中选出配方颜色并查询叠层后的结果色，适合快速验证色片配方。",
+    en: "Pick base colors and query the blended result to validate layered color recipes quickly.",
   },
   five_color_palette: {
     zh: "基础色板",
@@ -4863,8 +5023,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Match by color value",
   },
   five_color_match_desc: {
-    zh: "输入目标 Hex 色值，从当前色卡中按标准最近邻匹配五层配方。",
-    en: "Enter a target Hex value and match the nearest five-layer recipe from the current LUT card.",
+    zh: "输入目标 Hex 色值，从当前色卡中按标准最近邻匹配配方。",
+    en: "Enter a target Hex value and match the nearest recipe from the current LUT card.",
   },
   five_color_match_input_label: {
     zh: "目标色值",
@@ -4923,11 +5083,11 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Empty cell",
   },
   five_color_match_recipe_unavailable: {
-    zh: "已找到最接近的色卡颜色，但该行无法反推出五层配方。",
-    en: "The nearest LUT color was found, but this row cannot be converted into a five-layer recipe.",
+    zh: "已找到最接近的色卡颜色，但该行无法反推出配方。",
+    en: "The nearest LUT color was found, but this row cannot be converted into a recipe.",
   },
   five_color_match_recipe_unavailable_title: {
-    zh: "无法生成五层配方",
+    zh: "无法生成配方",
     en: "Recipe unavailable",
   },
   five_color_error_select_lut_first: {
@@ -5091,8 +5251,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "No match found",
   },
   five_color_not_found_message: {
-    zh: "当前五层颜色顺序没有对应的色卡记录。",
-    en: "The current five-layer color order does not match a LUT record.",
+    zh: "当前颜色顺序没有对应的色卡记录。",
+    en: "The current color order does not match a LUT record.",
   },
   five_color_selection_progress: {
     zh: "已选择 {count}/{total} 种颜色，请继续完成配方。",
@@ -5339,6 +5499,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   "vec.send_to_converter": {
     zh: "发送到图像转换",
     en: "Send to Image Converter",
+  },
+  "vec.resource_action_failed": {
+    zh: "SVG 文件暂时无法读取，请重新生成后再试。",
+    en: "The SVG file could not be read. Regenerate it and try again.",
   },
   "vec.error": {
     zh: "矢量化失败",

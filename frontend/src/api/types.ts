@@ -84,6 +84,7 @@ export type ConvertPreviewRequest = ConvertSourceSelection & {
   model_threshold?: number | null;
   model_margin?: number | null;
   quantize_colors: number;
+  high_precision_3d_preview?: boolean;
   enable_cleanup: boolean;
   enable_outline?: boolean;
   outline_width?: number;
@@ -132,6 +133,7 @@ export type ConvertGenerateRequest = ConvertPreviewRequest & {
   printer_id?: string;
   slicer?: string;
   nozzle_size?: string;
+  device_profile_id?: string;
   enable_base_layer_height_modifier?: boolean;
   use_cached_matched_rgb?: boolean;
 };
@@ -295,6 +297,17 @@ export interface AutoDetectColorsResponse {
 
 // ========== Response Models ==========
 
+/** 接口性能耗时统计，单位毫秒。 Endpoint timing stats in milliseconds. */
+export interface PerformanceTiming {
+  total_ms?: number | null;
+  upload_ms?: number | null;
+  worker_ms?: number | null;
+  pickle_load_ms?: number | null;
+  segmented_glb_ms?: number | null;
+  palette_ms?: number | null;
+  overhead_ms?: number | null;
+}
+
 /** 预览接口响应，包含 session_id 和预览图 URL */
 export interface PreviewResponse {
   session_id: string;
@@ -312,6 +325,7 @@ export interface PreviewResponse {
   };
   contours?: Record<string, number[][][]> | null; // hex -> list of contour polygons (world coords mm)
   warnings: string[];
+  performance_timing?: PerformanceTiming | null;
 }
 
 /** 大画幅生成请求，嵌套 ConvertGenerateRequest + 切片参数 */
@@ -347,6 +361,7 @@ export interface GenerateResponse {
   download_url: string;
   preview_3d_url?: string;
   threemf_disk_path?: string;
+  performance_timing?: PerformanceTiming | null;
 }
 
 export interface LutListResponse {
@@ -462,6 +477,7 @@ export interface CalibrationGenerateRequest {
   printer_id?: string;
   slicer?: string;
   nozzle_size?: string;
+  device_profile_id?: string;
 }
 
 // ========== Calibration Response Models ==========
@@ -493,6 +509,7 @@ export interface SingleStageKitGenerateRequest {
   printer_id?: string;
   slicer?: string;
   nozzle_size?: string;
+  device_profile_id?: string;
 }
 
 export interface SingleStageKitResponse {
@@ -1177,8 +1194,11 @@ export interface MaterialColorSuggestionItem {
 export interface MaterialColorSuggestionsResponse {
   status: string;
   message: string;
-  /** ``"cache"`` when served from the persisted cache, ``"mitm"`` otherwise. */
-  source: "cache" | "mitm";
+  /**
+   * ``"cache"`` for exact cache, ``"runtime"`` for hybrid runtime,
+   * ``"mitm"`` otherwise.
+   */
+  source: "cache" | "runtime" | "mitm";
   palette_hash: string;
   layer_count: number;
   layer_height_mm: number;
@@ -1577,6 +1597,7 @@ export interface BatchConvertParams {
   color_layers?: number;
   layer_height_mm?: number;
   quantize_colors: number;
+  high_precision_3d_preview?: boolean;
   enable_cleanup: boolean;
   svg_pixels_per_mm?: number;
   hue_weight: number;
@@ -1594,6 +1615,7 @@ export interface BatchConvertParams {
   printer_id?: string;
   slicer?: string;
   nozzle_size?: string;
+  device_profile_id?: string;
   enable_base_layer_height_modifier?: boolean;
 }
 
@@ -1703,6 +1725,7 @@ export interface RecipeSwatchRequest {
   printer_id?: string;
   slicer?: string;
   nozzle_size?: string;
+  device_profile_id?: string;
 }
 
 export interface RecipeSwatchResponse {
@@ -1731,6 +1754,7 @@ export interface MaterialRecipeSwatchRequest {
   printer_id?: string;
   slicer?: string;
   nozzle_size?: string;
+  device_profile_id?: string;
 }
 
 export interface MaterialRecipeSwatchResponse {
@@ -1794,6 +1818,15 @@ export interface RegionReplaceResponse {
 
 // ========== Printer Models ==========
 
+export interface DeviceProfileInfo {
+  device_profile_id: string;
+  slicer_id: string;
+  nozzle_size: string;
+  source_profile_name: string;
+  revision: string;
+  supported: boolean;
+}
+
 export interface PrinterInfo {
   id: string;
   display_name: string;
@@ -1803,6 +1836,8 @@ export interface PrinterInfo {
   bed_height: number;
   supported_nozzle_sizes: string[];
   supported_slicers: string[];
+  thumbnail?: string;
+  device_profiles?: DeviceProfileInfo[];
 }
 
 export interface PrinterListResponse {
@@ -1821,6 +1856,7 @@ export interface UserSettings {
   enable_crop_modal: boolean;
   printer_model: string;
   slicer_software: string;
+  device_profile_id: string;
   custom_slicer_path: string;
   custom_slicer_id: string;
   nozzle_size: string;

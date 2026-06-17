@@ -124,6 +124,26 @@ describe("MaterialColorPicker", () => {
     expect(screen.getByText(/cache hit|缓存命中/i)).toBeInTheDocument();
   });
 
+  it("labels suggestions served from the hybrid runtime", async () => {
+    const target = "#123405";
+    fetchMaterialColorSuggestionsMock.mockResolvedValueOnce(
+      _stubResponse(target, { source: "runtime" }),
+    );
+
+    render(<MaterialColorPicker />);
+    const hexInput = screen.getByPlaceholderText(/#RRGGBB/i) as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(hexInput, { target: { value: target } });
+      fireEvent.click(
+        screen.getByRole("button", { name: /suggest colors|生成建议/i }),
+      );
+    });
+
+    expect(
+      screen.getByText(/runtime hit|运行时命中/i),
+    ).toBeInTheDocument();
+  });
+
   it("submits on Enter key in the hex input", async () => {
     const target = "#123402";
     fetchMaterialColorSuggestionsMock.mockResolvedValueOnce(_stubResponse(target));

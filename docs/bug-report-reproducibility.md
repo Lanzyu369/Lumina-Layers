@@ -15,6 +15,7 @@ Use this guide before changing `/api/feedback/bug-report`, feedback ticket assem
 - `summary.txt`: Chinese summary optimized for AI assistants
 - Optional bulky files: `original.<ext>`, `final.<ext>`, `lut.<ext>`, `materials.zip`, `screenshot.<ext>`
 - Bulky files are attached independently when available via `FileRegistry` + copy; missing attachments are explicitly marked in the manifest, never silently dropped
+- Final artifacts must be copied only from server-side `FileRegistry` ownership or an exact `/api/files/<file_id>` reference; client-provided `disk_path` values are diagnostic context only and must not authorize copying files into a ticket
 
 ## Assembly Model
 

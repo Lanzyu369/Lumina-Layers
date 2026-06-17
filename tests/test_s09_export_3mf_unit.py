@@ -32,6 +32,7 @@ def test_s09_passes_full_slot_names_to_exporter(monkeypatch, tmp_path) -> None:
         color_height_mm: float = 0.0,
         face_orientation: str = "down",
         cover_source: object | None = None,
+        device_profile_id: str | None = None,
     ) -> str:
         captured["scene"] = scene
         captured["output_path"] = output_path
@@ -48,6 +49,7 @@ def test_s09_passes_full_slot_names_to_exporter(monkeypatch, tmp_path) -> None:
         captured["color_height_mm"] = color_height_mm
         captured["face_orientation"] = face_orientation
         captured["cover_source"] = cover_source
+        captured["device_profile_id"] = device_profile_id
         return output_path
 
     monkeypatch.setattr(s09_export_3mf, "MODELS_DIR", str(tmp_path))
@@ -168,6 +170,41 @@ def test_s09_passes_face_up_for_five_color(tmp_path) -> None:
     assert mock_export.call_args.kwargs["face_orientation"] == "up"
 
 
+def test_s09_does_not_x_mirror_face_up_single_sided_exports(tmp_path) -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_export_scene_with_bambu_metadata(**kwargs) -> str:
+        captured.update(kwargs)
+        return kwargs["output_path"]
+
+    scene = trimesh.Scene()
+    scene.add_geometry(trimesh.creation.box(extents=[20, 10, 1]), geom_name="Slot 1")
+
+    with patch.object(s09_export_3mf, "MODELS_DIR", str(tmp_path)), patch.object(
+        s09_export_3mf,
+        "generate_model_filename",
+        lambda *_args: "face-up-local.3mf",
+    ), patch.object(
+        s09_export_3mf,
+        "export_scene_with_bambu_metadata",
+        _fake_export_scene_with_bambu_metadata,
+    ):
+        s09_export_3mf.run(
+            _make_minimal_s09_ctx(
+                tmp_path,
+                scene=scene,
+                bambu_face_orientation="up",
+                center_on_bed=False,
+            )
+        )
+
+    exported_scene = captured["scene"]
+    bounds = exported_scene.bounds
+    center_x = (bounds[0][0] + bounds[1][0]) / 2
+    assert center_x == 0
+    assert captured["face_orientation"] == "up"
+
+
 def test_s09_passes_face_double_for_doublesided(tmp_path) -> None:
     with patch.object(s09_export_3mf, "MODELS_DIR", str(tmp_path)), patch.object(
         s09_export_3mf,
@@ -179,6 +216,24 @@ def test_s09_passes_face_double_for_doublesided(tmp_path) -> None:
         s09_export_3mf.run(_make_minimal_s09_ctx(tmp_path, bambu_face_orientation="double"))
 
     assert mock_export.call_args.kwargs["face_orientation"] == "double"
+
+
+def test_s09_passes_device_profile_id_to_exporter(tmp_path) -> None:
+    with patch.object(s09_export_3mf, "MODELS_DIR", str(tmp_path)), patch.object(
+        s09_export_3mf,
+        "generate_model_filename",
+        lambda *_args: "registry-device.3mf",
+    ), patch.object(s09_export_3mf, "export_scene_with_bambu_metadata", autospec=True) as mock_export:
+        mock_export.return_value = str(tmp_path / "registry-device.3mf")
+
+        s09_export_3mf.run(
+            _make_minimal_s09_ctx(
+                tmp_path,
+                device_profile_id="BambuStudio:bbl:bambu-lab-h2d:0.4",
+            )
+        )
+
+    assert mock_export.call_args.kwargs["device_profile_id"] == "BambuStudio:bbl:bambu-lab-h2d:0.4"
 
 
 def test_s09_centers_export_scene_on_printer_bed(tmp_path) -> None:

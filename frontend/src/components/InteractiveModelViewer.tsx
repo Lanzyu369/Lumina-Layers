@@ -175,10 +175,11 @@ function InteractiveModelViewer({
     });
     toRemove.forEach((obj) => obj.removeFromParent());
 
-    // Convert all mesh materials to pure diffuse (no specular reflections).
+    // Convert all mesh materials to unlit (no lighting, no specular).
     // Trimesh-exported GLB uses MeshStandardMaterial which reflects the HDR
     // environment map, causing unwanted glare on the color surfaces.
-    // We replace them with MeshLambertMaterial for a completely matte finish.
+    // We replace them with MeshBasicMaterial so chip colours equal the source
+    // hex exactly and stay decoupled from scene lighting.
     // Skip backing_plate — it gets its own independent material below.
     clone.traverse((child) => {
       if (
@@ -300,7 +301,7 @@ function InteractiveModelViewer({
       const backingMat = new THREE.MeshLambertMaterial({
         color: 0xf5f5f5,
         side: THREE.DoubleSide,
-        toneMapped: false,
+        toneMapped: true,
       });
       bp.material = backingMat;
       disposeMaterial(previousBackingMaterial);
@@ -453,7 +454,7 @@ function InteractiveModelViewer({
     const mat = new THREE.MeshLambertMaterial({
       color: 0xf5f5f5,
       side: THREE.DoubleSide,
-      toneMapped: false,
+      toneMapped: true,
     });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.name = "__backing_plate_fallback";
@@ -511,14 +512,20 @@ function InteractiveModelViewer({
 
     for (const mesh of colorMeshes) {
       const origHex = extractHexFromMeshName(mesh.name);
-      const mat = mesh.material as THREE.MeshLambertMaterial;
+      const mat = mesh.material as THREE.MeshBasicMaterial;
 
-      // Color replacement — always apply
+      // Color replacement — drive the colour solely from mat.color.
+      // Each color_<hex> mesh is single-colour, and the GLB also bakes that
+      // same hex into per-vertex colors. With vertexColors enabled, three.js
+      // multiplies mat.color × vertex colour, applying the hex twice (white
+      // stays white, but mid/dark tones get squared → far darker, higher
+      // contrast than the 2D preview). Disable vertexColors so the chip
+      // shows the exact hex once, matching 2D and supporting colour remap.
+      mat.vertexColors = false;
       const remappedHex = colorRemapMap[origHex] || origHex;
       mat.color.set(`#${remappedHex}`);
 
       // Keep all meshes fully opaque and unchanged
-      mat.emissive.set(0x000000);
       mat.opacity = 1.0;
       mat.transparent = false;
       mat.side = THREE.DoubleSide;

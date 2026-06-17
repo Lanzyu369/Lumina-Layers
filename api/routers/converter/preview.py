@@ -72,6 +72,7 @@ from .common import (
     _require_preview_cache,
     _require_session,
     _resolve_material_backing_index,
+    _validate_material_source,
     recompute_gradient_groups_into_session,
 )
 
@@ -327,6 +328,35 @@ def _cleanup_pre_session_temp_paths(*paths: str | None) -> None:
             )
 
 
+def _rollback_preview_session_after_failure(
+    *,
+    session_id: str,
+    store: SessionStore,
+    registry: FileRegistry,
+    extra_temp_paths: tuple[str | None, ...] = (),
+) -> None:
+    """Best-effort rollback for preview sessions that never reach the client."""
+
+    for cleanup_target, cleanup in (
+        ("file_registry", lambda: registry.cleanup_session(session_id)),
+        ("session_store", lambda: store.close(session_id)),
+    ):
+        try:
+            cleanup()
+        except ROUTER_HANDLED_ERRORS as exc:
+            log.warning(
+                "Failed to roll back preview session after response assembly error",
+                extra={
+                    "event": "converter_preview_session_rollback_failed",
+                    "session_id": session_id,
+                    "cleanup_target": cleanup_target,
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                },
+            )
+    _cleanup_pre_session_temp_paths(*extra_temp_paths)
+
+
 def _normalize_db_names(db_names: list[str] | str | None) -> list[str]:
     """Normalize native DB names from form inputs.
 
@@ -438,11 +468,27 @@ def get_bed_preview(
     if glb_path is None:
         raise HTTPException(status_code=500, detail="Failed to generate bed preview")
 
-    glb_id = registry.register_path(
-        str(uuid.uuid4()),
-        glb_path,
-        ttl_seconds=EPHEMERAL_PREVIEW_TTL_SECONDS,
-    )
+    try:
+        glb_id = registry.register_path(
+            str(uuid.uuid4()),
+            glb_path,
+            ttl_seconds=EPHEMERAL_PREVIEW_TTL_SECONDS,
+        )
+    except Exception:
+        try:
+            if os.path.isfile(glb_path):
+                os.remove(glb_path)
+        except OSError as cleanup_exc:
+            log.warning(
+                "Failed to clean unregistered bed preview GLB",
+                extra={
+                    "event": "converter_bed_preview_cleanup_failed",
+                    "path": glb_path,
+                    "error_type": type(cleanup_exc).__name__,
+                    "error_message": str(cleanup_exc),
+                },
+            )
+        raise
     return {"preview_3d_url": f"/api/files/{glb_id}"}
 
 
@@ -511,37 +557,48 @@ async def crop_image(
     Returns:
         CropResponse: 包含裁剪后图片 URL 和尺寸
     """
-    # 1. Save uploaded file to temp path
-    temp_path = await ensure_png_tempfile(image)
-
-    # 2. Validate that the file is a readable image
+    temp_path: str | None = None
+    cropped_path: str | None = None
+    registered_result = False
     try:
-        ImagePreprocessor.get_image_dimensions(temp_path)
-    except ValueError:
-        raise HTTPException(status_code=422, detail="Invalid image file")
+        # 1. Save uploaded file to temp path
+        temp_path = await ensure_png_tempfile(image)
 
-    # 3. Crop image (CropRegion.clamp is called internally)
-    try:
-        cropped_path = ImagePreprocessor.crop_image(temp_path, x, y, width, height)
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        # 2. Validate that the file is a readable image
+        try:
+            ImagePreprocessor.get_image_dimensions(temp_path)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="Invalid image file")
 
-    # 4. Get cropped image dimensions
-    w, h = ImagePreprocessor.get_image_dimensions(cropped_path)
+        # 3. Crop image (CropRegion.clamp is called internally)
+        try:
+            cropped_path = ImagePreprocessor.crop_image(temp_path, x, y, width, height)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
 
-    # 5. Register cropped file and return response
-    file_id = registry.register_path(
-        str(uuid.uuid4()),
-        cropped_path,
-        ttl_seconds=EPHEMERAL_PREVIEW_TTL_SECONDS,
-    )
-    return CropResponse(
-        status="ok",
-        message="Image cropped successfully",
-        cropped_url=f"/api/files/{file_id}",
-        width=w,
-        height=h,
-    )
+        # 4. Get cropped image dimensions
+        w, h = ImagePreprocessor.get_image_dimensions(cropped_path)
+
+        # 5. Register cropped file and return response
+        file_id = registry.register_path(
+            str(uuid.uuid4()),
+            cropped_path,
+            ttl_seconds=EPHEMERAL_PREVIEW_TTL_SECONDS,
+        )
+        registered_result = True
+        return CropResponse(
+            status="ok",
+            message="Image cropped successfully",
+            cropped_url=f"/api/files/{file_id}",
+            width=w,
+            height=h,
+        )
+    finally:
+        if registered_result:
+            if temp_path != cropped_path:
+                _cleanup_pre_session_temp_paths(temp_path)
+        else:
+            _cleanup_pre_session_temp_paths(temp_path, cropped_path)
 
 
 @router.post("/preview")
@@ -578,6 +635,7 @@ async def convert_preview(
     chroma_gate: float = Form(15.0, description="暗色彩度门槛"),
     use_lut_constrained: bool = Form(False, description="高精度LUT约束匹配"),
     auto_dynamic_range: bool = Form(False, description="自动动态范围压缩（实验性）"),
+    high_precision_3d_preview: bool = Form(False, description="3D高精度颜色预览"),
     is_dark: bool = Form(True, description="深色主题"),
     material_source: str = Form("lut", description="颜色来源: lut | material_archive"),
     selected_materials: list[str] | str | None = Form(None, description="已选耗材目录名列表"),
@@ -615,6 +673,7 @@ async def convert_preview(
     worker_preview_png_path: str | None = None
     worker_cache_data_path: str | None = None
     svg_large_format_policy = None
+    material_source = _validate_material_source(material_source)
     try:
         svg_pixels_per_mm = normalize_svg_pixels_per_mm(svg_pixels_per_mm)
     except ValueError as exc:
@@ -774,6 +833,7 @@ async def convert_preview(
             material_layer_height_mm,
             material_grid_resolution,
             auto_dynamic_range,
+            high_precision_3d_preview,
             svg_pixels_per_mm,
         )
         _t_worker = time.perf_counter() - _t
@@ -915,11 +975,25 @@ async def convert_preview(
             cache_with_originals["original_matched_rgb"] = cache_data["matched_rgb"]
         if "material_matrix" in cache_data:
             cache_with_originals["original_material_matrix"] = cache_data["material_matrix"]
-        cache_session_value = externalize_preview_cache(
-            session_id,
-            store,
-            cache_with_originals,
-        )
+        try:
+            cache_session_value = externalize_preview_cache(
+                session_id,
+                store,
+                cache_with_originals,
+            )
+        except ROUTER_HANDLED_ERRORS:
+            _rollback_preview_session_after_failure(
+                session_id=session_id,
+                store=store,
+                registry=registry,
+                extra_temp_paths=(
+                    temp_path,
+                    temp_native_bundle_path,
+                    worker_preview_png_path,
+                    worker_cache_data_path,
+                ),
+            )
+            raise
     store.put(session_id, "preview_cache", cache_session_value)
     # Synchronously compute gradient-banding groups so the Color Workstation
     # can surface them (group-level multi-select + optional auto-replace)
@@ -971,18 +1045,32 @@ async def convert_preview(
     store.register_temp_file(session_id, worker_preview_png_path)
     store.register_temp_file(session_id, worker_cache_data_path)
 
-    # Register preview image (bed-rendered, for general display)
-    preview_bytes = _image_to_png_bytes(preview_img)
-    preview_id = registry.register_bytes(session_id, preview_bytes, "preview.png")
+    try:
+        # Register preview image (bed-rendered, for general display)
+        preview_bytes = _image_to_png_bytes(preview_img)
+        preview_id = registry.register_bytes(session_id, preview_bytes, "preview.png")
 
-    # Register raw RGBA preview (no bed, pixel-aligned with previewPixelWidth/Height)
-    # Used by ColorPreview2D so SVG contour overlays and click coords align.
-    preview_raw_url: str | None = None
-    if cache_data and "preview_rgba" in cache_data:
-        raw_rgba = cache_data["preview_rgba"]
-        raw_bytes = ndarray_to_png_bytes(raw_rgba)
-        raw_id = registry.register_bytes(session_id, raw_bytes, "preview_raw.png")
-        preview_raw_url = f"/api/files/{raw_id}"
+        # Register raw RGBA preview (no bed, pixel-aligned with previewPixelWidth/Height)
+        # Used by ColorPreview2D so SVG contour overlays and click coords align.
+        preview_raw_url: str | None = None
+        if cache_data and "preview_rgba" in cache_data:
+            raw_rgba = cache_data["preview_rgba"]
+            raw_bytes = ndarray_to_png_bytes(raw_rgba)
+            raw_id = registry.register_bytes(session_id, raw_bytes, "preview_raw.png")
+            preview_raw_url = f"/api/files/{raw_id}"
+    except ROUTER_HANDLED_ERRORS:
+        _rollback_preview_session_after_failure(
+            session_id=session_id,
+            store=store,
+            registry=registry,
+            extra_temp_paths=(
+                temp_path,
+                temp_native_bundle_path,
+                worker_preview_png_path,
+                worker_cache_data_path,
+            ),
+        )
+        raise
 
     # Schedule segmented GLB (one Mesh per color) without blocking preview.
     _t = time.perf_counter()
@@ -1079,32 +1167,55 @@ async def convert_preview(
         contours_data = cache_data["color_contours"]
 
     _t_api_total = time.perf_counter() - _api_t0
+    performance_timing = {
+        "total_ms": round(_t_api_total * 1000, 3),
+        "upload_ms": round(_t_upload * 1000, 3),
+        "worker_ms": round(_t_worker * 1000, 3),
+        "pickle_load_ms": round(_t_pickle_load * 1000, 3),
+        "segmented_glb_ms": round(_t_glb * 1000, 3),
+        "palette_ms": round(_t_palette * 1000, 3),
+    }
     log.info(
         "Preview endpoint timing",
         extra={
             "event": "converter_preview_timing",
-            "duration_ms": round(_t_api_total * 1000, 3),
-            "upload_ms": round(_t_upload * 1000, 3),
-            "worker_ms": round(_t_worker * 1000, 3),
-            "pickle_load_ms": round(_t_pickle_load * 1000, 3),
-            "segmented_glb_ms": round(_t_glb * 1000, 3),
-            "palette_ms": round(_t_palette * 1000, 3),
+            "duration_ms": performance_timing["total_ms"],
+            "upload_ms": performance_timing["upload_ms"],
+            "worker_ms": performance_timing["worker_ms"],
+            "pickle_load_ms": performance_timing["pickle_load_ms"],
+            "segmented_glb_ms": performance_timing["segmented_glb_ms"],
+            "palette_ms": performance_timing["palette_ms"],
         },
     )
 
-    return PreviewResponse(
-        session_id=session_id,
-        status="ok",
-        message=status_msg or "Preview generated",
-        preview_url=f"/api/files/{preview_id}",
-        preview_glb_url=preview_glb_url,
-        lut_match_mode=(cache_data.get("lut_match_info", {}) or {}).get("match_mode"),
-        lut_match_info=cache_data.get("lut_match_info"),
-        palette=palette,
-        dimensions=dimensions,
-        contours=contours_data,
-        warnings=list((svg_large_format_policy or {}).get("warnings", [])),
-    )
+    try:
+        return PreviewResponse(
+            session_id=session_id,
+            status="ok",
+            message=status_msg or "Preview generated",
+            preview_url=f"/api/files/{preview_id}",
+            preview_glb_url=preview_glb_url,
+            lut_match_mode=(cache_data.get("lut_match_info", {}) or {}).get("match_mode"),
+            lut_match_info=cache_data.get("lut_match_info"),
+            palette=palette,
+            dimensions=dimensions,
+            contours=contours_data,
+            warnings=list((svg_large_format_policy or {}).get("warnings", [])),
+            performance_timing=performance_timing,
+        )
+    except (*ROUTER_HANDLED_ERRORS, ValidationError):
+        _rollback_preview_session_after_failure(
+            session_id=session_id,
+            store=store,
+            registry=registry,
+            extra_temp_paths=(
+                temp_path,
+                temp_native_bundle_path,
+                worker_preview_png_path,
+                worker_cache_data_path,
+            ),
+        )
+        raise
 
 
 

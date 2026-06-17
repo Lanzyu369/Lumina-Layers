@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, Suspense, Component } from "react";
 import type { ReactNode } from "react";
 import apiClient from "./api/client";
 import type { HealthResponse } from "./api/types";
+import { trackLuminaEvent } from "./analytics/umami";
 import { useAutoPreview } from "./hooks/useAutoPreview";
 import { useAnnouncement } from "./hooks/useAnnouncement";
 import { usePuzzleLayoutPreview } from "./hooks/usePuzzleLayoutPreview";
@@ -45,6 +46,8 @@ import { useShallow } from "zustand/react/shallow";
 import { useElectronLanguageSync } from "./integrations/electron";
 
 import LutDetailsPanel from "./components/LutDetailsPanel";
+
+const HEALTH_RECHECK_MS = 5_000;
 
 /* ---------- Error Boundary ---------- */
 
@@ -234,6 +237,7 @@ function AppContent() {
   const [announcementReady, setAnnouncementReady] = useState(false);
   const [bugReportOpen, setBugReportOpen] = useState(false);
   const activeTab = useWidgetStore((s) => s.activeTab);
+  const activeConverterSubTab = useWidgetStore((s) => s.activeConverterSubTab);
   const setActiveTab = useWidgetStore((s) => s.setActiveTab);
   const extractorColorcheckerFullIds = useExtractorStore(
     useShallow((s) => [
@@ -293,10 +297,44 @@ function AppContent() {
   );
 
   useEffect(() => {
-    apiClient
-      .get<HealthResponse>("/health")
-      .then((res) => setConnected(res.data.status === "ok"))
-      .catch(() => setConnected(false));
+    trackLuminaEvent("lumina_tab_view", {
+      active_tab: activeTab,
+      converter_sub_tab:
+        activeTab === "converter" ? activeConverterSubTab : null,
+      workspace_mode: workspace.mode,
+    });
+  }, [activeTab, activeConverterSubTab, workspace.mode]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let checking = false;
+
+    const checkHealth = () => {
+      if (checking) return;
+      checking = true;
+      apiClient
+        .get<HealthResponse>("/health")
+        .then((res) => {
+          if (!cancelled) {
+            setConnected(res.data.status === "ok");
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setConnected(false);
+          }
+        })
+        .finally(() => {
+          checking = false;
+        });
+    };
+
+    checkHealth();
+    const intervalId = window.setInterval(checkHealth, HEALTH_RECHECK_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
   }, []);
 
   useEffect(() => {

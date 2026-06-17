@@ -4,6 +4,7 @@ import {
   useConverterStore,
   ACCEPT_IMAGE_FORMATS,
   inferDefaultMaterialBackingDirName,
+  isValidImageType,
   resolveConverterSourceSelection,
 } from "../../stores/converter";
 import {
@@ -56,6 +57,7 @@ const DOT_CLS = "inline-block size-2 rounded-full shrink-0 ring-1 ring-black/10 
 const THICKNESS_LAYER_STEP_MM = 0.08;
 const THICKNESS_SLIDER_MIN_MM = 0.24;
 const THICKNESS_SLIDER_MAX_MM = 3.44;
+const STARTUP_LUT_RETRY_DELAY_MS = 5_000;
 
 const LEGACY_BUCKET_I18N_KEY: Record<ColorModeBucket, string> = {
   BW: "basic_lut_color_mode_bw",
@@ -256,6 +258,11 @@ export default function BasicSettings() {
   );
 
   const [uploaderExpanded, setUploaderExpanded] = useState(true);
+  const startupRetryMountedRef = useRef(false);
+  const legacyCatalogRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const legacyCatalogLoadPendingRef = useRef(false);
+  const lutListRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lutListLoadPendingRef = useRef(false);
 
   // --- Share card import state ---
   const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
@@ -281,7 +288,7 @@ export default function BasicSettings() {
 
   const handleImportConfirm = useCallback(() => {
     if (!importPreview) return;
-    applyImport(importPreview.restoreResult);
+    applyImport(importPreview.restoreResult, importPreview.printerOptions ?? []);
     revokeImportCoverUrl(importPreview.coverUrl);
     setImportDialogOpen(false);
     setImportPreview(null);
@@ -303,6 +310,7 @@ export default function BasicSettings() {
 
   // Action 函数单独提取（函数引用稳定，不需要 shallow）
   const handleFilesSelect = useConverterStore((s) => s.handleFilesSelect);
+  const setImageFile = useConverterStore((s) => s.setImageFile);
   const setLutName = useConverterStore((s) => s.setLutName);
   const setTargetWidthMm = useConverterStore((s) => s.setTargetWidthMm);
   const setTargetHeightMm = useConverterStore((s) => s.setTargetHeightMm);
@@ -319,40 +327,133 @@ export default function BasicSettings() {
   const setTileWidthMm = useConverterStore((s) => s.setTileWidthMm);
   const setTileHeightMm = useConverterStore((s) => s.setTileHeightMm);
 
+  const handleFileReplace = useCallback(
+    (file: File) => {
+      if (!isValidImageType(file.type, file.name)) return;
+      setImageFile(file);
+    },
+    [setImageFile],
+  );
+
   const sourceVersionOptions = [
     { label: t("basic_source_version_legacy"), value: "legacy" },
     { label: t("basic_source_version_native"), value: "native" },
     { label: t("basic_source_version_material"), value: "material" },
   ];
 
+  const clearLegacyCatalogRetry = useCallback(() => {
+    if (legacyCatalogRetryTimerRef.current === null) return;
+    clearTimeout(legacyCatalogRetryTimerRef.current);
+    legacyCatalogRetryTimerRef.current = null;
+  }, []);
+
+  const clearLutListRetry = useCallback(() => {
+    if (lutListRetryTimerRef.current === null) return;
+    clearTimeout(lutListRetryTimerRef.current);
+    lutListRetryTimerRef.current = null;
+  }, []);
+
   useEffect(() => {
-    if (
-      source_version === "legacy" &&
-      legacyCatalogGroups.length === 0 &&
-      !legacyCatalogLoading
-    ) {
-      void fetchLegacyCatalog();
+    startupRetryMountedRef.current = true;
+    return () => {
+      startupRetryMountedRef.current = false;
+      clearLegacyCatalogRetry();
+      clearLutListRetry();
+    };
+  }, [clearLegacyCatalogRetry, clearLutListRetry]);
+
+  const startLegacyCatalogLoad = useCallback(() => {
+    if (legacyCatalogLoadPendingRef.current) return;
+    legacyCatalogLoadPendingRef.current = true;
+
+    void fetchLegacyCatalog()
+      .catch(() => undefined)
+      .then(() => {
+        legacyCatalogLoadPendingRef.current = false;
+        if (!startupRetryMountedRef.current) return;
+
+        const state = useConverterStore.getState();
+        if (
+          state.source_version === "legacy" &&
+          state.legacyCatalogGroups.length === 0 &&
+          !state.legacyCatalogLoading &&
+          legacyCatalogRetryTimerRef.current === null
+        ) {
+          legacyCatalogRetryTimerRef.current = setTimeout(() => {
+            legacyCatalogRetryTimerRef.current = null;
+            startLegacyCatalogLoad();
+          }, STARTUP_LUT_RETRY_DELAY_MS);
+        }
+      });
+  }, [fetchLegacyCatalog]);
+
+  const startLutListLoad = useCallback(() => {
+    if (lutListLoadPendingRef.current) return;
+    lutListLoadPendingRef.current = true;
+
+    void fetchLutList()
+      .catch(() => undefined)
+      .then(() => {
+        lutListLoadPendingRef.current = false;
+        if (!startupRetryMountedRef.current) return;
+
+        const state = useConverterStore.getState();
+        if (
+          state.source_version === "legacy" &&
+          state.lutListFull.length === 0 &&
+          !state.lutListLoading &&
+          lutListRetryTimerRef.current === null
+        ) {
+          lutListRetryTimerRef.current = setTimeout(() => {
+            lutListRetryTimerRef.current = null;
+            startLutListLoad();
+          }, STARTUP_LUT_RETRY_DELAY_MS);
+        }
+      });
+  }, [fetchLutList]);
+
+  useEffect(() => {
+    if (source_version !== "legacy" || legacyCatalogGroups.length > 0) {
+      clearLegacyCatalogRetry();
+      return;
     }
+    if (
+      legacyCatalogLoading ||
+      legacyCatalogRetryTimerRef.current !== null ||
+      legacyCatalogLoadPendingRef.current
+    ) {
+      return;
+    }
+
+    startLegacyCatalogLoad();
   }, [
     source_version,
     legacyCatalogGroups.length,
     legacyCatalogLoading,
-    fetchLegacyCatalog,
+    clearLegacyCatalogRetry,
+    startLegacyCatalogLoad,
   ]);
 
   useEffect(() => {
-    if (
-      source_version === "legacy" &&
-      lutListFull.length === 0 &&
-      !lutListLoading
-    ) {
-      void fetchLutList();
+    if (source_version !== "legacy" || lutListFull.length > 0) {
+      clearLutListRetry();
+      return;
     }
+    if (
+      lutListLoading ||
+      lutListRetryTimerRef.current !== null ||
+      lutListLoadPendingRef.current
+    ) {
+      return;
+    }
+
+    startLutListLoad();
   }, [
     source_version,
     lutListFull.length,
     lutListLoading,
-    fetchLutList,
+    clearLutListRetry,
+    startLutListLoad,
   ]);
 
   const lutIndex = useMemo(
@@ -614,6 +715,7 @@ export default function BasicSettings() {
           batchFiles={batchFiles}
           isBatchMode={batchMode}
           onFilesSelect={handleFilesSelect}
+          onFileReplace={handleFileReplace}
           onBatchFileRemove={removeBatchFile}
           accept={ACCEPT_IMAGE_FORMATS}
           onShareCardDetected={(file) => void handleShareCardDetected(file)}

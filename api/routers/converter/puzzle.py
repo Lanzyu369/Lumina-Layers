@@ -14,6 +14,7 @@ import io
 import json
 import os
 import tempfile
+import uuid
 from typing import Any
 
 import numpy as np
@@ -47,6 +48,7 @@ from core.puzzle import (
     PuzzlePiece,
     build_puzzle_layout,
     export_piece_boundary_geometry,
+    inset_boundary_geometry_payload,
     rasterize_piece_mask,
     render_assembly_overview,
     render_puzzle_overlay,
@@ -55,15 +57,19 @@ from core.puzzle import (
 from core.puzzle_3mf import PuzzlePiece3MFSource, assemble_puzzle_3mf
 
 from .common import (
+    BATCH_DOWNLOAD_TTL_SECONDS,
     ROUTER_HANDLED_ERRORS,
     _handle_core_error,
     _require_session,
     _resolve_material_backing_index,
+    _validate_material_archive_relief_minimum_height,
 )
 
 router = APIRouter()
 log = get_logger(__name__)
 _PUZZLE_WORKER_PIXELS_PER_MM = 10.0
+_PUZZLE_TOTAL_CUT_CLEARANCE_MM = 0.1
+_PUZZLE_BOUNDARY_INSET_MM = _PUZZLE_TOTAL_CUT_CLEARANCE_MM / 2.0
 
 
 class _PuzzleLayoutPreviewBody(BaseModel):
@@ -476,6 +482,10 @@ def _prepare_piece_worker_assets(
         source_size_px=source_size,
         target_size_px=target_size,
     )
+    boundary_payload = inset_boundary_geometry_payload(
+        boundary_payload,
+        inset_px=_PUZZLE_BOUNDARY_INSET_MM * _PUZZLE_WORKER_PIXELS_PER_MM,
+    )
     return (
         bbox_px,
         _resize_piece_array_nearest(piece_rgba, target_size),
@@ -546,6 +556,17 @@ def _save_json_payload(session_id: str, store: SessionStore, payload: dict[str, 
         json.dump(payload, handle, ensure_ascii=False, indent=2)
     store.register_temp_file(session_id, path)
     return path
+
+
+def _remove_temp_path(path: str | None) -> None:
+    """Best-effort removal for route-local temp files not owned by a session."""
+
+    if not path:
+        return
+    try:
+        os.remove(path)
+    except (FileNotFoundError, OSError):
+        return
 
 
 def _resolve_free_color_set(session_data: dict[str, Any], request: ConvertGenerateRequest) -> set[str] | None:
@@ -695,6 +716,7 @@ async def generate_puzzle(
     """
 
     session_data = _require_session(store, body.session_id)
+    preview_cache_ref = session_data.get("preview_cache")
     cache = _require_puzzle_cache(
         session_data,
         fields={"matched_rgb", "mask_solid", "preview_rgba"},
@@ -746,6 +768,16 @@ async def generate_puzzle(
         else CoreModelingMode(generate_params.modeling_mode.value)
     )
     height_mode = generate_params.height_mode or "color"
+    _validate_material_archive_relief_minimum_height(
+        enable_relief=generate_params.enable_relief,
+        material_source=str(session_material_source or "lut"),
+        height_mode=height_mode,
+        color_height_map=generate_params.color_height_map,
+        heightmap_max_height=generate_params.heightmap_max_height,
+        session_data=session_data,
+        cache=cache,
+        cache_ref=preview_cache_ref if isinstance(preview_cache_ref, dict) else None,
+    )
     heightmap_grayscale = session_data.get("heightmap_grayscale")
 
     warnings = list(layout.warnings)
@@ -818,6 +850,7 @@ async def generate_puzzle(
             "printer_id": generate_params.printer_id,
             "slicer": generate_params.slicer,
             "nozzle_size": generate_params.nozzle_size,
+            "device_profile_id": generate_params.device_profile_id,
             "relief_global_max_height": relief_global_max_height,
         }
         if session_material_source == "material_archive":
@@ -920,7 +953,7 @@ async def generate_puzzle(
 
     fd, combined_3mf_path = tempfile.mkstemp(prefix="puzzle_", suffix=".3mf", dir=TEMP_DIR)
     os.close(fd)
-    store.register_temp_file(sid, combined_3mf_path)
+    combined_registered = False
 
     preview_colors = cache.get("preview_colors")
     slot_names = cache.get("slot_names")
@@ -946,8 +979,16 @@ async def generate_puzzle(
             printer_id=generate_params.printer_id,
             slicer=generate_params.slicer,
             nozzle_size=generate_params.nozzle_size,
+            device_profile_id=generate_params.device_profile_id,
             overview_png_bytes=overview_png_bytes,
         )
+        download_id = registry.register_path(
+            str(uuid.uuid4()),
+            combined_3mf_path,
+            filename=f"{base_name}_puzzle.3mf",
+            ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
+        )
+        combined_registered = True
     except ROUTER_HANDLED_ERRORS as exc:
         log.error(
             "Puzzle 3MF assembly failed",
@@ -959,8 +1000,10 @@ async def generate_puzzle(
             },
         )
         raise HTTPException(status_code=500, detail=f"Puzzle 3MF assembly failed: {exc}")
+    finally:
+        if not combined_registered:
+            _remove_temp_path(combined_3mf_path)
 
-    download_id = registry.register_path(sid, combined_3mf_path, filename=f"{base_name}_puzzle.3mf")
     log.info(
         "Puzzle 3MF generated",
         extra={

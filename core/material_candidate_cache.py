@@ -35,7 +35,9 @@ from core.material_candidate_sampling import (
     _unique_rows_preserve_order,
 )
 from core.material_color_solver import (
+    ColorSuggestion,
     MaterialParams,
+    _greedy_lab_spacing_dedup,
     _compute_material_affines,
     linear_to_srgb_uint8,
     rgb_to_lab,
@@ -1067,6 +1069,78 @@ class MaterialCandidateRuntime:
                 uniform_recipes=None,
             )
         return matched_rgb, recipes_user, best_delta
+
+    def lookup_top_k(
+        self,
+        target_srgb: np.ndarray,
+        user_materials: list[MaterialParams],
+        *,
+        top_k: int,
+        min_spacing: float,
+    ) -> list[ColorSuggestion]:
+        """Return distinct candidate-runtime colors closest to one target.
+        返回 hybrid runtime 中最接近单一目标色的去重候选。
+
+        Recipes are converted from canonical runtime order back into the
+        caller's material order, matching :meth:`lookup` and the legacy
+        solver-cache ``lookup_top_k`` contract.
+        """
+        target_srgb = np.asarray(target_srgb, dtype=np.uint8)
+        if target_srgb.shape != (3,):
+            raise ValueError(
+                f"target_srgb must be shaped (3,), got {target_srgb.shape}"
+            )
+        if top_k <= 0:
+            raise ValueError(f"top_k must be positive, got {top_k}")
+        if min_spacing < 0.0:
+            raise ValueError(
+                f"min_spacing must be non-negative, got {min_spacing}"
+            )
+        if fingerprint_palette(user_materials) != self.palette_hash:
+            raise ValueError("MaterialCandidateRuntime palette_hash mismatch")
+        if self.valid_cell_count <= 0:
+            return []
+
+        target_lab = rgb_to_lab(target_srgb.reshape(1, 3))[0].astype(np.float64)
+        query_k = min(max(int(top_k) * 8, 64), self.valid_cell_count)
+        _distances, nearest_idx = self._ensure_tree().query(target_lab, k=query_k)
+        nearest_idx = np.atleast_1d(nearest_idx).astype(np.int64)
+
+        candidate_lab = self.achieved_lab[nearest_idx].astype(np.float64)
+        candidate_srgb = self.achieved_srgb[nearest_idx]
+        candidate_delta = np.linalg.norm(candidate_lab - target_lab, axis=1)
+        order = np.argsort(candidate_delta, kind="stable")
+
+        sorted_lab = candidate_lab[order]
+        sorted_srgb = candidate_srgb[order]
+        sorted_delta = candidate_delta[order]
+        sorted_recipes = self.candidate_recipes[nearest_idx[order]]
+
+        kept_idx = _greedy_lab_spacing_dedup(
+            sorted_lab,
+            min_spacing=min_spacing,
+            limit=int(top_k),
+        )
+        if kept_idx.size == 0:
+            return []
+
+        canonical_to_user = np.asarray(
+            canonical_palette_order(user_materials),
+            dtype=np.int32,
+        )
+        suggestions: list[ColorSuggestion] = []
+        for i in kept_idx:
+            recipe = canonical_to_user[
+                sorted_recipes[i].astype(np.int64, copy=False)
+            ].astype(np.int32, copy=True)
+            suggestions.append(
+                ColorSuggestion(
+                    matched_rgb=sorted_srgb[i].copy(),
+                    recipe=recipe,
+                    delta_e=float(sorted_delta[i]),
+                )
+            )
+        return suggestions
 
 
 @dataclass(frozen=True)

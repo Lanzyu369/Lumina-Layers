@@ -162,6 +162,7 @@ celerybeat.pid
 .env
 .env.local
 .envrc
+dev/machine_registry.sources.local.json
 .venv
 env/
 venv/

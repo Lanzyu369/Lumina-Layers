@@ -80,6 +80,8 @@ from .common import (
     ROUTER_HANDLED_ERRORS,
     _require_session,
     _resolve_material_backing_index,
+    _validate_material_source,
+    _validate_material_archive_relief_minimum_height,
 )
 
 router = APIRouter()
@@ -217,6 +219,45 @@ def _cache_field_path_or_tempfile(
     np.save(temp_path, array)
     store.register_temp_file(sid, temp_path)
     return temp_path
+
+
+def _require_loadable_material_archive_cache_path(
+    path: str | None,
+    field_name: str,
+) -> str:
+    if path is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Preview cache missing {field_name}. Re-run preview before "
+                "generating material-archive models."
+            ),
+        )
+
+    try:
+        loaded = np.load(path, mmap_mode="r", allow_pickle=False)
+        try:
+            if not isinstance(loaded, np.ndarray):
+                raise ValueError(f"{field_name} artifact is not a numpy array")
+            _ = loaded.shape
+        finally:
+            close = getattr(loaded, "close", None)
+            if callable(close):
+                close()
+            mmap_obj = getattr(loaded, "_mmap", None)
+            if mmap_obj is not None:
+                mmap_obj.close()
+    except (OSError, ValueError, TypeError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Preview cache {field_name} artifact is unavailable or "
+                "unreadable. Re-run preview before generating "
+                "material-archive models."
+            ),
+        ) from exc
+
+    return path
 
 
 def _cache_field_array(
@@ -858,6 +899,18 @@ async def convert_generate(
     # 解析 height_mode 用于浮雕分支选择
     height_mode = request.height_mode or "color"
     _require_heightmap_for_relief(session_data, request)
+    _validate_material_archive_relief_minimum_height(
+        enable_relief=request.enable_relief,
+        material_source=str(session_material_source or "lut"),
+        height_mode=height_mode,
+        color_height_map=request.color_height_map,
+        heightmap_max_height=request.heightmap_max_height,
+        session_data=session_data,
+        cache=cache,
+        cache_ref=cache_ref,
+        requested_color_layers=request.color_layers,
+        recipe_overrides=recipe_overrides,
+    )
 
     # If heightmap mode, save session heightmap to temp file for worker process
     # 高度图模式时，将 session 中的高度图保存为临时文件供工作进程使用
@@ -878,11 +931,9 @@ async def convert_generate(
     material_matrix_path: str | None = None
     should_forward_cached_analysis = (
         request.use_cached_matched_rgb
-        or (
-            session_material_source == "material_archive"
-            and core_modeling_mode == CoreModelingMode.VECTOR
-        )
+        or session_material_source == "material_archive"
     )
+    require_cached_material_analysis = session_material_source == "material_archive"
     log.debug(
         "Cached matched RGB input state resolved: use_cached_matched_rgb=%s, has_replacement_regions=%s",
         request.use_cached_matched_rgb,
@@ -901,6 +952,11 @@ async def convert_generate(
             sid=body.session_id,
             store=store,
         )
+        if require_cached_material_analysis:
+            matched_rgb_path = _require_loadable_material_archive_cache_path(
+                matched_rgb_path,
+                "matched_rgb",
+            )
         if matched_rgb_path is not None:
             cached_matched_rgb = cache.get("matched_rgb")
             field_ref = (
@@ -940,6 +996,11 @@ async def convert_generate(
                 sid=body.session_id,
                 store=store,
             )
+            if require_cached_material_analysis:
+                mask_solid_path = _require_loadable_material_archive_cache_path(
+                    mask_solid_path,
+                    "mask_solid",
+                )
 
             material_matrix_path = _cache_field_path_or_tempfile(
                 cache=cache,
@@ -948,6 +1009,11 @@ async def convert_generate(
                 sid=body.session_id,
                 store=store,
             )
+            if require_cached_material_analysis:
+                material_matrix_path = _require_loadable_material_archive_cache_path(
+                    material_matrix_path,
+                    "material_matrix",
+                )
 
     override_material_matrix_path, recipe_override_masks_path = _prepare_recipe_override_worker_inputs(
         cache=cache,
@@ -1034,12 +1100,14 @@ async def convert_generate(
         "chroma_gate": request.chroma_gate,
         "use_lut_constrained": request.use_lut_constrained,
         "auto_dynamic_range": request.auto_dynamic_range,
+        "high_precision_3d_preview": request.high_precision_3d_preview,
         "matched_rgb_path": matched_rgb_path,
         "mask_solid_path": mask_solid_path,
         "material_matrix_path": material_matrix_path,
         "printer_id": request.printer_id,
         "slicer": request.slicer,
         "nozzle_size": request.nozzle_size,
+        "device_profile_id": request.device_profile_id,
         "enable_base_layer_height_modifier": request.enable_base_layer_height_modifier,
         "material_source": session_material_source,
     }
@@ -1086,25 +1154,40 @@ async def convert_generate(
 
     # Register output files via FileRegistry
     sid = body.session_id
-    download_id = registry.register_path(
-        str(uuid.uuid4()),
-        threemf_path,
-        ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
-    )
-
     preview_3d_url: str | None = None
-    if glb_path and os.path.exists(glb_path):
-        glb_id = registry.register_path(sid, glb_path)
-        preview_3d_url = f"/api/files/{glb_id}"
+    threemf_registered = False
+    glb_registered = False
+    try:
+        download_id = registry.register_path(
+            str(uuid.uuid4()),
+            threemf_path,
+            ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
+        )
+        threemf_registered = True
+
+        if glb_path and os.path.exists(glb_path):
+            glb_id = registry.register_path(sid, glb_path)
+            glb_registered = True
+            preview_3d_url = f"/api/files/{glb_id}"
+    finally:
+        if not threemf_registered:
+            _remove_temp_path(threemf_path)
+        if glb_path and not glb_registered:
+            _remove_temp_path(glb_path)
 
     api_total = time.perf_counter() - api_t0
+    performance_timing = {
+        "total_ms": round(api_total * 1000, 3),
+        "worker_ms": round(worker_elapsed * 1000, 3),
+        "overhead_ms": round((api_total - worker_elapsed) * 1000, 3),
+    }
     log.info(
         "Generate endpoint timing",
         extra={
             "event": "converter_generate_timing",
-            "duration_ms": round(api_total * 1000, 3),
-            "worker_ms": round(worker_elapsed * 1000, 3),
-            "overhead_ms": round((api_total - worker_elapsed) * 1000, 3),
+            "duration_ms": performance_timing["total_ms"],
+            "worker_ms": performance_timing["worker_ms"],
+            "overhead_ms": performance_timing["overhead_ms"],
         },
     )
 
@@ -1120,6 +1203,7 @@ async def convert_generate(
         download_url=f"/api/files/{download_id}",
         preview_3d_url=preview_3d_url,
         threemf_disk_path=threemf_path,
+        performance_timing=performance_timing,
     )
 
 
@@ -1289,10 +1373,12 @@ def _resolve_large_format_shared_params(
         "chroma_gate": request.chroma_gate,
         "use_lut_constrained": request.use_lut_constrained,
         "auto_dynamic_range": request.auto_dynamic_range,
+        "high_precision_3d_preview": request.high_precision_3d_preview,
         "material_matrix_path": material_matrix_path,
         "printer_id": request.printer_id,
         "slicer": request.slicer,
         "nozzle_size": request.nozzle_size,
+        "device_profile_id": request.device_profile_id,
         "enable_base_layer_height_modifier": request.enable_base_layer_height_modifier,
         "relief_global_max_height": relief_global_max_height,
     }
@@ -1366,11 +1452,17 @@ async def _generate_large_format_svg_native(
     except ROUTER_HANDLED_ERRORS as e:
         raise HTTPException(status_code=500, detail=f"Large-format SVG generation failed: {str(e)}")
     zip_path = result["zip_path"]
-    download_id = registry.register_path(
-        str(uuid.uuid4()),
-        zip_path,
-        ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
-    )
+    zip_registered = False
+    try:
+        download_id = registry.register_path(
+            str(uuid.uuid4()),
+            zip_path,
+            ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
+        )
+        zip_registered = True
+    finally:
+        if not zip_registered:
+            _remove_temp_path(zip_path)
     return {
         "status": "ok",
         "message": f"Generated {result['tile_count']}/{result['grid_cols'] * result['grid_rows']} tiles ({result['grid_cols']}×{result['grid_rows']})",
@@ -1628,11 +1720,23 @@ async def convert_generate_large_format(
     elif not lut_path or not os.path.exists(lut_path):
         raise HTTPException(status_code=409, detail="LUT file missing. Call POST /api/convert/preview first.")
     _require_heightmap_for_relief(session_data, request)
+    recipe_overrides = _resolve_recipe_overrides(session_data, request)
+    _validate_material_archive_relief_minimum_height(
+        enable_relief=request.enable_relief,
+        material_source=str(session_material_source or "lut"),
+        height_mode=request.height_mode or "color",
+        color_height_map=request.color_height_map,
+        heightmap_max_height=request.heightmap_max_height,
+        session_data=session_data,
+        cache=cache,
+        cache_ref=cache_ref,
+        requested_color_layers=request.color_layers,
+        recipe_overrides=recipe_overrides,
+    )
 
     sid = body.session_id
     total_w_mm, total_h_mm = _resolve_large_format_dimensions(cache, request, lf.target_height_mm)
     source_basename = _resolve_large_format_source_basename(session_data, image_path)
-    recipe_overrides = _resolve_recipe_overrides(session_data, request)
     material_matrix_path, recipe_override_masks_path = _prepare_recipe_override_worker_inputs(
         cache=cache,
         cache_ref=cache_ref,
@@ -1918,6 +2022,7 @@ async def convert_batch(
     model_margin: float | None = Form(None, description="模型回退边距"),
     use_lut_constrained: bool = Form(False, description="高精度 LUT 约束匹配"),
     auto_dynamic_range: bool = Form(False, description="自动动态范围压缩"),
+    high_precision_3d_preview: bool = Form(False, description="3D 高精度颜色预览"),
     enable_relief: bool = Form(False, description="启用 2.5D 浮雕模式"),
     height_mode: str = Form("color", description="浮雕高度模式"),
     color_height_map: str | None = Form(None, description="颜色高度映射 JSON"),
@@ -1925,6 +2030,7 @@ async def convert_batch(
     printer_id: str = Form("bambu-h2d", description="打印机配置 ID"),
     slicer: str = Form("BambuStudio", description="切片器"),
     nozzle_size: str = Form("0.4", description="喷嘴直径"),
+    device_profile_id: str | None = Form(None, description="机器注册表设备配置 ID"),
     enable_base_layer_height_modifier: bool = Form(
         True,
         description="启用底板粗层高优化",
@@ -1946,6 +2052,7 @@ async def convert_batch(
     # reverse-LUT bundle, or material archives.
     # 解析颜色来源；批量模式应与单图预览/生成一致支持传统 LUT、反推 LUT
     # 和耗材档案。
+    material_source = _validate_material_source(material_source)
     image_count = len(images)
     selected_material_names: list[str] = []
     temp_native_bundle_path: str | None = None
@@ -2042,6 +2149,15 @@ async def convert_batch(
             status_code=422,
             detail="Batch relief requires color_height_map",
         )
+    _validate_material_archive_relief_minimum_height(
+        enable_relief=enable_relief,
+        material_source=material_source,
+        height_mode=resolved_height_mode,
+        color_height_map=parsed_color_height_map,
+        heightmap_max_height=heightmap_max_height,
+        material_layer_count=material_layer_count,
+        requested_color_layers=color_layers,
+    )
 
     # --- batch_run_id: unique per-request identifier for structured logging
     # and artifact naming. Independent of request.state.request_id (R9 §1).
@@ -2097,6 +2213,8 @@ async def convert_batch(
                 material_backing_material_index,
                 use_lut_constrained,
                 auto_dynamic_range,
+                high_precision_3d_preview,
+                device_profile_id,
             )
 
             # 3. Result processing (main thread)

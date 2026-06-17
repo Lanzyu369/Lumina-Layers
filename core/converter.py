@@ -256,6 +256,7 @@ def convert_image_to_3d(
     printer_id: str = "bambu-h2d",
     slicer: str = "BambuStudio",
     nozzle_size: str = "0.4",
+    device_profile_id: Optional[str] = None,
     enable_base_layer_height_modifier: bool = True,
     center_on_bed: bool = True,
     relief_global_max_height: Optional[float] = None,
@@ -270,6 +271,7 @@ def convert_image_to_3d(
     material_backing_material_index: Optional[int] = None,
     use_lut_constrained: bool = False,
     auto_dynamic_range: bool = False,
+    high_precision_3d_preview: bool = False,
     svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
     *,
     cover_source_path: Optional[str] = None,
@@ -292,6 +294,9 @@ def convert_image_to_3d(
             ``"material_archive"``. Native and legacy LUT flows ignore it.
             (耗材档案模式下作为底板颜色的已选耗材索引；传统 LUT 与反推 LUT
             流程会忽略该值)
+        device_profile_id: Optional generated machine registry device profile
+            selection forwarded to 3MF export.
+            (可选的机器注册表设备配置 ID，透传给 3MF 导出)
 
     Returns:
         Tuple of (3mf_path, glb_path, preview_image, status_message, recipe_path)
@@ -345,6 +350,7 @@ def generate_preview_cached(
     material_grid_resolution: Optional[int] = None,
     use_lut_constrained: bool = False,
     auto_dynamic_range: bool = False,
+    high_precision_3d_preview: bool = False,
     svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
 ):
     """Generate preview and cache data. Thin wrapper, delegates to coordinator.
@@ -449,6 +455,7 @@ def generate_final_model(
     printer_id: str = "bambu-h2d",
     slicer: str = "BambuStudio",
     nozzle_size: str = "0.4",
+    device_profile_id: Optional[str] = None,
     enable_base_layer_height_modifier: bool = True,
     center_on_bed: bool = True,
     relief_global_max_height: Optional[float] = None,
@@ -462,6 +469,7 @@ def generate_final_model(
     material_grid_resolution: Optional[int] = None,
     use_lut_constrained: bool = False,
     auto_dynamic_range: bool = False,
+    high_precision_3d_preview: bool = False,
     material_backing_material_index: Optional[int] = None,
     svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
     *,
@@ -483,6 +491,9 @@ def generate_final_model(
             Forwarded to ``convert_image_to_3d`` which mirrors it onto the
             staged pipeline ctx; defaults to ``image_path``.
             (可选的封面缩略图源路径，最终透传到 staged pipeline ctx)
+        device_profile_id: Optional generated machine registry device profile
+            selection forwarded to ``convert_image_to_3d`` and 3MF export.
+            (可选的机器注册表设备配置 ID，透传到主转换与 3MF 导出)
     """
     # Convert backing color name to ID or use special marker for separate backing
     try:
@@ -592,6 +603,7 @@ def generate_final_model(
         printer_id=printer_id,
         slicer=slicer,
         nozzle_size=nozzle_size,
+        device_profile_id=device_profile_id,
         enable_base_layer_height_modifier=enable_base_layer_height_modifier,
         center_on_bed=center_on_bed,
         relief_global_max_height=relief_global_max_height,
@@ -606,6 +618,7 @@ def generate_final_model(
         material_backing_material_index=material_backing_material_index,
         use_lut_constrained=use_lut_constrained,
         auto_dynamic_range=auto_dynamic_range,
+        high_precision_3d_preview=high_precision_3d_preview,
         cover_source_path=cover_source_path,
     )
 

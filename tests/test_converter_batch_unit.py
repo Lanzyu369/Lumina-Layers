@@ -120,6 +120,46 @@ class TestBatchLutNotFound:
         assert "LUT" in response.json()["detail"]
 
 
+class TestBatchMaterialSourceValidation:
+    """Verify batch rejects unsupported material source values early."""
+
+    def test_batch_rejects_invalid_material_source_before_io(self) -> None:
+        """Invalid material_source should not resolve LUTs, upload, or submit work."""
+        _mock_pool.submit = AsyncMock(
+            return_value=_make_worker_result("invalid-source.png", 30.0, 20.0),
+        )
+
+        with (
+            patch(
+                "api.routers.converter.generate.LUTManager.resolve_source_selection",
+                return_value=("/tmp/fake.npy", "Fake LUT"),
+            ) as resolve_source,
+            patch(
+                "api.routers.converter.generate.ensure_png_tempfile",
+                new_callable=AsyncMock,
+                return_value="/tmp/uploaded.png",
+            ) as ensure_png,
+            patch(
+                "utils.merged_bambu_3mf_writer.MergedBambu3MFWriter.write",
+                _noop_3mf_write,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/batch",
+                files=[("images", _make_test_image_buf("invalid-source.png"))],
+                data={
+                    "lut_name": "test_lut",
+                    "material_source": "bad-source",
+                },
+            )
+
+        assert response.status_code == 422
+        assert "material_source" in response.json()["detail"]
+        resolve_source.assert_not_called()
+        ensure_png.assert_not_called()
+        _mock_pool.submit.assert_not_called()
+
+
 class TestBatchColorCardRejected:
     def test_batch_rejects_color_card_mode(self) -> None:
         _mock_pool.submit = AsyncMock()
@@ -402,6 +442,7 @@ class TestBatchWorkerPoolSubmit:
                     "slicer": "OrcaSlicer",
                     "nozzle_size": "0.2",
                     "enable_base_layer_height_modifier": "false",
+                    "high_precision_3d_preview": "true",
                 },
             )
 
@@ -445,6 +486,7 @@ class TestBatchWorkerPoolSubmit:
         assert call_args[0][21] == "OrcaSlicer"
         assert call_args[0][22] == "0.2"
         assert call_args[0][23] is False
+        assert call_args[0][36] is True
 
     def test_batch_submits_material_archive_source_to_worker(self) -> None:
         """Batch endpoint forwards material-archive source params to worker."""

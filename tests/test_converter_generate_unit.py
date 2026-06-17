@@ -33,6 +33,7 @@ from api.dependencies import get_file_registry, get_session_store, get_worker_po
 from api.file_registry import FileRegistry
 from api.preview_cache_artifacts import externalize_preview_cache
 from api.routers.converter.generate import _generate_large_format_raster
+from api.routers.converter.generate import _generate_large_format_svg_native
 from api.routers.converter.generate import _recover_virtual_materials_from_preview_cache
 from api.routers.converter.generate import _resolve_recipe_overrides
 from api.routers.converter.generate import _resolve_large_format_source_basename
@@ -70,6 +71,29 @@ setup_module(None)
 
 
 client: TestClient = TestClient(app)
+
+
+class _FailingRegistry(FileRegistry):
+    """Registry stub that simulates registration backend failure."""
+
+    def register_path(self, *args: object, **kwargs: object) -> str:
+        raise RuntimeError("registry unavailable")
+
+
+class _SecondRegistrationFailingRegistry(FileRegistry):
+    """Registry stub that fails after the first path is owned."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.register_calls = 0
+        self.first_file_id: str | None = None
+
+    def register_path(self, *args: object, **kwargs: object) -> str:
+        self.register_calls += 1
+        if self.register_calls > 1:
+            raise RuntimeError("registry unavailable after first file")
+        self.first_file_id = super().register_path(*args, **kwargs)
+        return self.first_file_id
 
 
 def _create_session_with_preview_and_files(store: SessionStore) -> str:
@@ -326,6 +350,7 @@ class TestGenerateParameterCompleteness:
                 "printer_id": "orca-p1s",
                 "slicer": "OrcaSlicer",
                 "nozzle_size": "0.2",
+                "device_profile_id": "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
             },
         }
 
@@ -377,6 +402,7 @@ class TestGenerateParameterCompleteness:
         assert submitted_params["enable_cleanup"] is False
         assert submitted_params["separate_backing"] is True
         assert submitted_params["nozzle_size"] == "0.2"
+        assert submitted_params["device_profile_id"] == "OrcaSlicer:bbl:bambu-lab-p1s:0.2"
 
         # Verify modeling_mode is converted to core enum
         assert submitted_params["modeling_mode"] == CoreModelingMode("high-fidelity")
@@ -638,6 +664,65 @@ class TestGenerateParameterCompleteness:
         assert submitted_params["mask_solid_path"] == cache_ref["fields"]["mask_solid"]["path"]
         assert submitted_params["material_matrix_path"] == cache_ref["fields"]["material_matrix"]["path"]
 
+    def test_generate_artifact_cache_rejects_relief_height_below_manifest_depth(
+        self,
+        tmp_path,
+    ) -> None:
+        _test_store.clear_all()
+        image_path = tmp_path / "input.png"
+        out_path = tmp_path / "out.3mf"
+        Image.fromarray(np.zeros((4, 4, 3), dtype=np.uint8)).save(image_path)
+        out_path.write_bytes(b"3mf")
+
+        sid = _test_store.create()
+        cache_ref = externalize_preview_cache(
+            sid,
+            _test_store,
+            {
+                "target_w": 4,
+                "target_h": 4,
+                "target_width_mm": 40.0,
+                "matched_rgb": np.zeros((4, 4, 3), dtype=np.uint8),
+                "mask_solid": np.ones((4, 4), dtype=bool),
+                "material_matrix": np.zeros((4, 4, 10), dtype=np.uint8),
+            },
+            root_dir=tmp_path,
+        )
+        _test_store.put(sid, "preview_cache", cache_ref)
+        _test_store.put(sid, "image_path", str(image_path))
+        _test_store.put(sid, "lut_path", "__material_archive__")
+        _test_store.put(sid, "material_source", "material_archive")
+        _test_store.put(sid, "selected_materials", ["mat-a", "mat-b"])
+        _test_store.put(sid, "material_layer_count", 5)
+        _test_store.put(sid, "material_layer_height_mm", 0.08)
+        _test_store.put(sid, "replacement_regions", [])
+        _test_store.put(sid, "free_color_set", set())
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": str(out_path),
+                "glb_path": None,
+                "status_msg": "OK",
+            },
+        )
+
+        response = client.post(
+            "/api/convert/generate",
+            json={
+                "session_id": sid,
+                "params": {
+                    "lut_name": "__material_archive__",
+                    "enable_relief": True,
+                    "height_mode": "color",
+                    "color_height_map": {"#111111": 0.6},
+                    "heightmap_max_height": 0.6,
+                },
+            },
+        )
+
+        assert response.status_code == 422, response.text
+        assert "0.80 mm" in response.json()["detail"]
+        _mock_pool.submit.assert_not_called()
+
     def test_generate_heightmap_mode_rejects_missing_session_heightmap(self) -> None:
         sid: str = _create_session_with_preview_and_files(_test_store)
         payload = {
@@ -852,6 +937,237 @@ class TestGenerateWorkerException:
 
         assert response.status_code == 500
         assert "Worker crashed" in response.json()["detail"]
+
+
+class TestGenerateRegistryFailureCleanup:
+    """Final worker outputs should not leak when registry ownership fails."""
+
+    def test_generate_registry_failure_cleans_unregistered_worker_outputs(self) -> None:
+        paths: list[str] = []
+
+        def _make_file(suffix: str, payload: bytes) -> str:
+            fd, path = tempfile.mkstemp(suffix=suffix)
+            paths.append(path)
+            os.write(fd, payload)
+            os.close(fd)
+            return path
+
+        image_path = _make_file(".png", b"img")
+        lut_path = _make_file(".npy", b"lut")
+        threemf_path = _make_file(".3mf", b"3mf")
+        glb_path = _make_file(".glb", b"glb")
+
+        sid = _test_store.create()
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {"target_w": 10, "target_h": 10, "target_width_mm": 10.0},
+        )
+        _test_store.put(sid, "image_path", image_path)
+        _test_store.put(sid, "lut_path", lut_path)
+        _test_store.put(sid, "replacement_regions", [])
+        _test_store.put(sid, "free_color_set", set())
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": threemf_path,
+                "glb_path": glb_path,
+                "status_msg": "OK",
+            }
+        )
+
+        original_registry_override = app.dependency_overrides[get_file_registry]
+        app.dependency_overrides[get_file_registry] = lambda: _FailingRegistry()
+        failing_client = TestClient(app, raise_server_exceptions=False)
+        try:
+            response = failing_client.post(
+                "/api/convert/generate",
+                json={"session_id": sid, "params": {"lut_name": "test_lut"}},
+            )
+
+            assert response.status_code == 500
+            assert not os.path.exists(threemf_path)
+            assert not os.path.exists(glb_path)
+            assert os.path.exists(image_path)
+            assert os.path.exists(lut_path)
+        finally:
+            app.dependency_overrides[get_file_registry] = original_registry_override
+            for path in paths:
+                if os.path.exists(path):
+                    os.unlink(path)
+            _test_store.close(sid)
+
+    def test_color_card_registry_failure_cleans_unregistered_worker_outputs(
+        self,
+        tmp_path,
+    ) -> None:
+        lut_path = tmp_path / "source.npy"
+        threemf_path = tmp_path / "card.3mf"
+        glb_path = tmp_path / "card.glb"
+        lut_path.write_bytes(b"lut")
+        threemf_path.write_bytes(b"3mf")
+        glb_path.write_bytes(b"glb")
+
+        sid = _test_store.create()
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {
+                "target_w": 4,
+                "target_h": 4,
+                "target_width_mm": 40.0,
+                "color_palette": [{"hex": "#ff0000"}, {"hex": "#00ff00"}],
+            },
+        )
+        _test_store.put(sid, "lut_path", str(lut_path))
+        _test_store.put(sid, "material_source", "lut")
+
+        def _fake_generate_color_card_svg(hex_colors, **_kwargs):
+            svg_path = tmp_path / "card.svg"
+            svg_path.write_text("<svg></svg>", encoding="utf-8")
+            return str(svg_path)
+
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": str(threemf_path),
+                "glb_path": str(glb_path),
+                "status_msg": "OK",
+            }
+        )
+        original_registry_override = app.dependency_overrides[get_file_registry]
+        app.dependency_overrides[get_file_registry] = lambda: _FailingRegistry()
+        failing_client = TestClient(app, raise_server_exceptions=False)
+        try:
+            with patch(
+                "core.color_card.generate_color_card_svg",
+                _fake_generate_color_card_svg,
+            ):
+                response = failing_client.post(
+                    "/api/convert/color-card",
+                    json={"session_id": sid},
+                )
+
+            assert response.status_code == 500
+            assert not threemf_path.exists()
+            assert not glb_path.exists()
+            assert lut_path.exists()
+        finally:
+            app.dependency_overrides[get_file_registry] = original_registry_override
+            for path in (threemf_path, glb_path, tmp_path / "card.svg"):
+                if path.exists():
+                    path.unlink()
+            _test_store.close(sid)
+
+    def test_generate_glb_registry_failure_keeps_registered_3mf_and_cleans_glb(self) -> None:
+        paths: list[str] = []
+
+        def _make_file(suffix: str, payload: bytes) -> str:
+            fd, path = tempfile.mkstemp(suffix=suffix)
+            paths.append(path)
+            os.write(fd, payload)
+            os.close(fd)
+            return path
+
+        image_path = _make_file(".png", b"img")
+        lut_path = _make_file(".npy", b"lut")
+        threemf_path = _make_file(".3mf", b"3mf")
+        glb_path = _make_file(".glb", b"glb")
+        registry = _SecondRegistrationFailingRegistry()
+
+        sid = _test_store.create()
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {"target_w": 10, "target_h": 10, "target_width_mm": 10.0},
+        )
+        _test_store.put(sid, "image_path", image_path)
+        _test_store.put(sid, "lut_path", lut_path)
+        _test_store.put(sid, "replacement_regions", [])
+        _test_store.put(sid, "free_color_set", set())
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": threemf_path,
+                "glb_path": glb_path,
+                "status_msg": "OK",
+            }
+        )
+
+        original_registry_override = app.dependency_overrides[get_file_registry]
+        app.dependency_overrides[get_file_registry] = lambda: registry
+        failing_client = TestClient(app, raise_server_exceptions=False)
+        try:
+            response = failing_client.post(
+                "/api/convert/generate",
+                json={"session_id": sid, "params": {"lut_name": "test_lut"}},
+            )
+
+            assert response.status_code == 500
+            assert os.path.exists(threemf_path)
+            assert not os.path.exists(glb_path)
+            assert registry.first_file_id is not None
+            entry = registry.get_entry(registry.first_file_id)
+            assert entry is not None
+            assert entry["path"] == threemf_path
+        finally:
+            app.dependency_overrides[get_file_registry] = original_registry_override
+            registry.cleanup_expired()
+            for path in paths:
+                if os.path.exists(path):
+                    os.unlink(path)
+            _test_store.close(sid)
+
+    @pytest.mark.asyncio
+    async def test_large_format_svg_registry_failure_cleans_unregistered_zip(
+        self,
+        tmp_path,
+    ) -> None:
+        image_path = tmp_path / "source.svg"
+        lut_path = tmp_path / "source.npy"
+        zip_path = tmp_path / "tiles.zip"
+        image_path.write_text("<svg/>", encoding="utf-8")
+        lut_path.write_bytes(b"lut")
+        zip_path.write_bytes(b"zip")
+
+        mock_pool = SimpleNamespace(
+            submit=AsyncMock(
+                return_value={
+                    "zip_path": str(zip_path),
+                    "tile_count": 1,
+                    "grid_cols": 1,
+                    "grid_rows": 1,
+                    "warnings": [],
+                }
+            )
+        )
+        request = LargeFormatConvertGenerateRequest(
+            total_width_mm=20.0,
+            total_height_mm=20.0,
+            tile_width_mm=20.0,
+            tile_height_mm=20.0,
+            lut_name="test_lut",
+        )
+
+        with pytest.raises(RuntimeError, match="registry unavailable"):
+            await _generate_large_format_svg_native(
+                image_path=str(image_path),
+                lut_path=str(lut_path),
+                source_basename="source",
+                recipe_overrides=None,
+                recipe_override_masks_path=None,
+                material_matrix_path=None,
+                total_width_mm=20.0,
+                total_height_mm=20.0,
+                tile_width_mm=20.0,
+                tile_height_mm=20.0,
+                request=request,
+                session_data={},
+                sid="session-1",
+                store=_test_store,
+                registry=_FailingRegistry(),
+                pool=mock_pool,
+                warnings=[],
+            )
+
+        assert not zip_path.exists()
 
 
 class TestLargeFormatFridgeMagnetValidation:
@@ -1213,6 +1529,131 @@ class TestLargeFormatDimensionsAndRouting:
         assert response.status_code == 200, response.text
         raster_helper.assert_called_once()
         assert raster_helper.call_args.kwargs["material_matrix_path"] is None
+
+    def test_large_format_artifact_cache_rejects_relief_height_below_manifest_depth(
+        self,
+        tmp_path,
+    ) -> None:
+        _test_store.clear_all()
+        image_path = tmp_path / "input.png"
+        Image.fromarray(np.zeros((8, 12, 3), dtype=np.uint8)).save(image_path)
+
+        sid = _test_store.create()
+        cache_ref = externalize_preview_cache(
+            sid,
+            _test_store,
+            {
+                "target_w": 12,
+                "target_h": 8,
+                "target_width_mm": 60.0,
+                "matched_rgb": np.zeros((8, 12, 3), dtype=np.uint8),
+                "mask_solid": np.ones((8, 12), dtype=bool),
+                "material_matrix": np.zeros((8, 12, 10), dtype=np.uint8),
+            },
+            root_dir=tmp_path,
+        )
+        _test_store.put(sid, "preview_cache", cache_ref)
+        _test_store.put(sid, "image_path", str(image_path))
+        _test_store.put(sid, "lut_path", "__material_archive__")
+        _test_store.put(sid, "material_source", "material_archive")
+        _test_store.put(sid, "selected_materials", ["mat-a", "mat-b"])
+        _test_store.put(sid, "material_layer_count", 5)
+        _test_store.put(sid, "material_layer_height_mm", 0.08)
+        _test_store.put(sid, "replacement_regions", [])
+        _test_store.put(sid, "free_color_set", set())
+
+        with patch("api.routers.converter.generate._generate_large_format_raster") as raster_helper:
+            response = client.post(
+                "/api/convert/generate-large-format",
+                json={
+                    "session_id": sid,
+                    "params": {
+                        "target_height_mm": 80.0,
+                        "tile_width_mm": 40.0,
+                        "tile_height_mm": 40.0,
+                        "params": {
+                            "lut_name": "__material_archive__",
+                            "modeling_mode": "high-fidelity",
+                            "target_width_mm": 120.0,
+                            "enable_relief": True,
+                            "height_mode": "color",
+                            "color_height_map": {"#111111": 0.6},
+                            "heightmap_max_height": 0.6,
+                        },
+                    },
+                },
+            )
+
+        assert response.status_code == 422, response.text
+        assert "0.80 mm" in response.json()["detail"]
+        raster_helper.assert_not_called()
+
+    def test_large_format_rejects_relief_height_below_override_depth(
+        self,
+        tmp_path,
+    ) -> None:
+        _test_store.clear_all()
+        image_path = tmp_path / "input.png"
+        Image.fromarray(np.zeros((8, 12, 3), dtype=np.uint8)).save(image_path)
+
+        sid = _test_store.create()
+        cache_ref = externalize_preview_cache(
+            sid,
+            _test_store,
+            {
+                "target_w": 12,
+                "target_h": 8,
+                "target_width_mm": 60.0,
+                "matched_rgb": np.zeros((8, 12, 3), dtype=np.uint8),
+                "mask_solid": np.ones((8, 12), dtype=bool),
+                "material_matrix": np.zeros((8, 12, 5), dtype=np.uint8),
+            },
+            root_dir=tmp_path,
+        )
+        _test_store.put(sid, "preview_cache", cache_ref)
+        _test_store.put(sid, "image_path", str(image_path))
+        _test_store.put(sid, "lut_path", "__material_archive__")
+        _test_store.put(sid, "material_source", "material_archive")
+        _test_store.put(sid, "selected_materials", ["mat-a", "mat-b"])
+        _test_store.put(sid, "material_layer_count", 5)
+        _test_store.put(sid, "material_layer_height_mm", 0.08)
+        _test_store.put(sid, "replacement_regions", [])
+        _test_store.put(sid, "free_color_set", set())
+        _test_store.put(sid, "selected_region_masks", {"region-1": np.ones((8, 12), dtype=bool)})
+
+        with patch("api.routers.converter.generate._generate_large_format_raster") as raster_helper:
+            response = client.post(
+                "/api/convert/generate-large-format",
+                json={
+                    "session_id": sid,
+                    "params": {
+                        "target_height_mm": 80.0,
+                        "tile_width_mm": 40.0,
+                        "tile_height_mm": 40.0,
+                        "params": {
+                            "lut_name": "__material_archive__",
+                            "modeling_mode": "high-fidelity",
+                            "target_width_mm": 120.0,
+                            "color_layers": 10,
+                            "enable_relief": True,
+                            "height_mode": "color",
+                            "color_height_map": {"#111111": 0.6},
+                            "heightmap_max_height": 0.6,
+                            "recipe_overrides": [
+                                {
+                                    "region_id": "region-1",
+                                    "recipe": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                                    "layer_order": "Top2Bottom",
+                                },
+                            ],
+                        },
+                    },
+                },
+            )
+
+        assert response.status_code == 422, response.text
+        assert "0.80 mm" in response.json()["detail"]
+        raster_helper.assert_not_called()
 
     def test_large_format_heightmap_mode_rejects_missing_session_heightmap(self) -> None:
         sid, image_path, lut_path = _create_raster_large_format_session(_test_store)
@@ -2171,6 +2612,157 @@ def test_generate_route_infers_material_archive_white_backing_when_unspecified(t
     assert submitted_params["material_backing_material_index"] == 2
 
 
+def test_generate_route_rejects_material_archive_relief_color_height_below_optical_depth(tmp_path) -> None:
+    _test_store.clear_all()
+    image_path = tmp_path / "input.png"
+    Image.fromarray(np.zeros((4, 4, 3), dtype=np.uint8)).save(image_path)
+
+    session_id = _test_store.create()
+    _test_store.put(session_id, "image_path", str(image_path))
+    _test_store.put(session_id, "lut_path", "__material_archive__")
+    _test_store.put(session_id, "material_source", "material_archive")
+    _test_store.put(session_id, "selected_materials", ["mat-a", "mat-b"])
+    _test_store.put(session_id, "material_layer_count", 10)
+    _test_store.put(session_id, "material_layer_height_mm", 0.08)
+    _test_store.put(session_id, "replacement_regions", [])
+    _test_store.put(session_id, "free_color_set", set())
+    _test_store.put(
+        session_id,
+        "preview_cache",
+        {
+            "target_w": 4,
+            "target_h": 4,
+            "target_width_mm": 40.0,
+            "matched_rgb": np.zeros((4, 4, 3), dtype=np.uint8),
+            "mask_solid": np.ones((4, 4), dtype=bool),
+            "material_matrix": np.zeros((4, 4, 10), dtype=np.uint8),
+        },
+    )
+    _mock_pool.submit = AsyncMock()
+
+    response = client.post(
+        "/api/convert/generate",
+        json={
+            "session_id": session_id,
+            "params": {
+                "lut_name": "__material_archive__",
+                "enable_relief": True,
+                "height_mode": "color",
+                "color_height_map": {"#111111": 0.6},
+                "heightmap_max_height": 0.6,
+            },
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    assert "0.80 mm" in response.json()["detail"]
+    _mock_pool.submit.assert_not_called()
+
+
+def test_generate_route_rejects_material_archive_relief_height_below_override_depth(tmp_path) -> None:
+    _test_store.clear_all()
+    image_path = tmp_path / "input.png"
+    Image.fromarray(np.zeros((4, 4, 3), dtype=np.uint8)).save(image_path)
+
+    session_id = _test_store.create()
+    _test_store.put(session_id, "image_path", str(image_path))
+    _test_store.put(session_id, "lut_path", "__material_archive__")
+    _test_store.put(session_id, "material_source", "material_archive")
+    _test_store.put(session_id, "selected_materials", ["mat-a", "mat-b"])
+    _test_store.put(session_id, "material_layer_count", 5)
+    _test_store.put(session_id, "material_layer_height_mm", 0.08)
+    _test_store.put(session_id, "replacement_regions", [])
+    _test_store.put(session_id, "free_color_set", set())
+    _test_store.put(session_id, "selected_region_masks", {"region-1": np.ones((4, 4), dtype=bool)})
+    _test_store.put(
+        session_id,
+        "preview_cache",
+        {
+            "target_w": 4,
+            "target_h": 4,
+            "target_width_mm": 40.0,
+            "matched_rgb": np.zeros((4, 4, 3), dtype=np.uint8),
+            "mask_solid": np.ones((4, 4), dtype=bool),
+            "material_matrix": np.zeros((4, 4, 5), dtype=np.uint8),
+        },
+    )
+    _mock_pool.submit = AsyncMock()
+
+    response = client.post(
+        "/api/convert/generate",
+        json={
+            "session_id": session_id,
+            "params": {
+                "lut_name": "__material_archive__",
+                "color_layers": 10,
+                "enable_relief": True,
+                "height_mode": "color",
+                "color_height_map": {"#111111": 0.6},
+                "heightmap_max_height": 0.6,
+                "recipe_overrides": [
+                    {
+                        "region_id": "region-1",
+                        "recipe": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                        "layer_order": "Top2Bottom",
+                    },
+                ],
+            },
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    assert "0.80 mm" in response.json()["detail"]
+    _mock_pool.submit.assert_not_called()
+
+
+def test_generate_route_rejects_material_archive_heightmap_below_optical_depth(tmp_path) -> None:
+    _test_store.clear_all()
+    image_path = tmp_path / "input.png"
+    Image.fromarray(np.zeros((4, 4, 3), dtype=np.uint8)).save(image_path)
+
+    session_id = _test_store.create()
+    _test_store.put(session_id, "image_path", str(image_path))
+    _test_store.put(session_id, "lut_path", "__material_archive__")
+    _test_store.put(session_id, "material_source", "material_archive")
+    _test_store.put(session_id, "selected_materials", ["mat-a", "mat-b"])
+    _test_store.put(session_id, "material_layer_count", 10)
+    _test_store.put(session_id, "material_layer_height_mm", 0.08)
+    _test_store.put(session_id, "replacement_regions", [])
+    _test_store.put(session_id, "free_color_set", set())
+    _test_store.put(session_id, "heightmap_grayscale", np.zeros((4, 4), dtype=np.uint8))
+    _test_store.put(
+        session_id,
+        "preview_cache",
+        {
+            "target_w": 4,
+            "target_h": 4,
+            "target_width_mm": 40.0,
+            "matched_rgb": np.zeros((4, 4, 3), dtype=np.uint8),
+            "mask_solid": np.ones((4, 4), dtype=bool),
+            "material_matrix": np.zeros((4, 4, 10), dtype=np.uint8),
+        },
+    )
+    _mock_pool.submit = AsyncMock()
+
+    response = client.post(
+        "/api/convert/generate",
+        json={
+            "session_id": session_id,
+            "params": {
+                "lut_name": "__material_archive__",
+                "enable_relief": True,
+                "height_mode": "heightmap",
+                "heightmap_max_height": 0.6,
+            },
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    assert "heightmap_max_height" in response.json()["detail"]
+    assert "0.80 mm" in response.json()["detail"]
+    _mock_pool.submit.assert_not_called()
+
+
 def test_generate_route_forwards_material_archive_backing_index(tmp_path) -> None:
     _test_store.clear_all()
     image_path = tmp_path / "input.png"
@@ -2226,6 +2818,248 @@ def test_generate_route_forwards_material_archive_backing_index(tmp_path) -> Non
     assert submitted_params["material_source"] == "material_archive"
     assert submitted_params["selected_materials"] == ["mat-a", "mat-b", "mat-c"]
     assert submitted_params["material_backing_material_index"] == 2
+
+
+def _create_material_archive_artifact_generate_session(tmp_path):
+    _test_store.clear_all()
+    image_path = tmp_path / "input.png"
+    out_path = tmp_path / "out.3mf"
+    Image.fromarray(np.zeros((4, 4, 3), dtype=np.uint8)).save(image_path)
+    out_path.write_bytes(b"3mf")
+
+    matched_rgb = np.zeros((4, 4, 3), dtype=np.uint8)
+    matched_rgb[:, :, 1] = 66
+    mask_solid = np.ones((4, 4), dtype=bool)
+    material_matrix = np.zeros((4, 4, 5), dtype=np.uint8)
+    material_matrix[:, :, :] = np.array([0, 1, 2, 1, 0], dtype=np.uint8)
+
+    session_id = _test_store.create()
+    cache_ref = externalize_preview_cache(
+        session_id,
+        _test_store,
+        {
+            "target_w": 4,
+            "target_h": 4,
+            "target_width_mm": 40.0,
+            "matched_rgb": matched_rgb,
+            "mask_solid": mask_solid,
+            "material_matrix": material_matrix,
+        },
+        root_dir=tmp_path,
+    )
+    _test_store.put(session_id, "image_path", str(image_path))
+    _test_store.put(session_id, "lut_path", "__material_archive__")
+    _test_store.put(session_id, "material_source", "material_archive")
+    _test_store.put(
+        session_id,
+        "selected_materials",
+        ["mat-red", "mat-blue", "mat-white"],
+    )
+    _test_store.put(session_id, "material_layer_count", 5)
+    _test_store.put(session_id, "material_layer_height_mm", 0.08)
+    _test_store.put(session_id, "replacement_regions", [])
+    _test_store.put(session_id, "free_color_set", set())
+    _test_store.put(session_id, "preview_cache", cache_ref)
+
+    return session_id, cache_ref, out_path
+
+
+def test_generate_route_reuses_material_archive_preview_cache_for_hifi(tmp_path) -> None:
+    """Material-archive high-fidelity generation must reuse preview analysis.
+
+    The material solver can choose a different stack on a second pass. Final
+    3MF generation therefore needs the same matched RGB and material matrix
+    that powered the accepted preview, not a fresh solve.
+    """
+    _test_store.clear_all()
+    image_path = tmp_path / "input.png"
+    out_path = tmp_path / "out.3mf"
+    Image.fromarray(np.zeros((4, 4, 3), dtype=np.uint8)).save(image_path)
+    out_path.write_bytes(b"3mf")
+
+    matched_rgb = np.zeros((4, 4, 3), dtype=np.uint8)
+    matched_rgb[:, :, 0] = 33
+    mask_solid = np.ones((4, 4), dtype=bool)
+    material_matrix = np.zeros((4, 4, 5), dtype=np.uint8)
+    material_matrix[:, :, :] = np.array([0, 1, 2, 1, 0], dtype=np.uint8)
+
+    session_id = _test_store.create()
+    _test_store.put(session_id, "image_path", str(image_path))
+    _test_store.put(session_id, "lut_path", "__material_archive__")
+    _test_store.put(session_id, "material_source", "material_archive")
+    _test_store.put(
+        session_id,
+        "selected_materials",
+        ["mat-red", "mat-blue", "mat-white"],
+    )
+    _test_store.put(session_id, "material_layer_count", 5)
+    _test_store.put(session_id, "material_layer_height_mm", 0.08)
+    _test_store.put(session_id, "replacement_regions", [])
+    _test_store.put(session_id, "free_color_set", set())
+    _test_store.put(
+        session_id,
+        "preview_cache",
+        {
+            "target_w": 4,
+            "target_h": 4,
+            "target_width_mm": 40.0,
+            "matched_rgb": matched_rgb,
+            "mask_solid": mask_solid,
+            "material_matrix": material_matrix,
+        },
+    )
+
+    _mock_pool.submit = AsyncMock(
+        return_value={
+            "threemf_path": str(out_path),
+            "glb_path": None,
+            "status_msg": "OK",
+        }
+    )
+
+    response = client.post(
+        "/api/convert/generate",
+        json={
+            "session_id": session_id,
+            "params": {
+                "lut_name": "__material_archive__",
+                "modeling_mode": "high-fidelity",
+            },
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    submitted_params = _mock_pool.submit.call_args.args[3]
+    assert submitted_params["matched_rgb_path"] is not None
+    assert submitted_params["mask_solid_path"] is not None
+    assert submitted_params["material_matrix_path"] is not None
+    np.testing.assert_array_equal(
+        np.load(submitted_params["matched_rgb_path"]),
+        matched_rgb,
+    )
+    np.testing.assert_array_equal(
+        np.load(submitted_params["mask_solid_path"]),
+        mask_solid,
+    )
+    np.testing.assert_array_equal(
+        np.load(submitted_params["material_matrix_path"]),
+        material_matrix,
+    )
+
+
+def test_generate_route_reuses_material_archive_artifact_cache_for_hifi(tmp_path) -> None:
+    session_id, cache_ref, out_path = _create_material_archive_artifact_generate_session(tmp_path)
+
+    _mock_pool.submit = AsyncMock(
+        return_value={
+            "threemf_path": str(out_path),
+            "glb_path": None,
+            "status_msg": "OK",
+        }
+    )
+
+    response = client.post(
+        "/api/convert/generate",
+        json={
+            "session_id": session_id,
+            "params": {
+                "lut_name": "__material_archive__",
+                "modeling_mode": "high-fidelity",
+            },
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    submitted_params = _mock_pool.submit.call_args.args[3]
+    assert submitted_params["matched_rgb_path"] == cache_ref["fields"]["matched_rgb"]["path"]
+    assert submitted_params["mask_solid_path"] == cache_ref["fields"]["mask_solid"]["path"]
+    assert submitted_params["material_matrix_path"] == cache_ref["fields"]["material_matrix"]["path"]
+
+
+def test_generate_route_rejects_material_archive_missing_artifact_field(tmp_path) -> None:
+    session_id, cache_ref, out_path = _create_material_archive_artifact_generate_session(tmp_path)
+    cache_ref["fields"].pop("mask_solid")
+    _test_store.put(session_id, "preview_cache", cache_ref)
+    _mock_pool.submit = AsyncMock(
+        return_value={
+            "threemf_path": str(out_path),
+            "glb_path": None,
+            "status_msg": "OK",
+        }
+    )
+
+    response = client.post(
+        "/api/convert/generate",
+        json={
+            "session_id": session_id,
+            "params": {
+                "lut_name": "__material_archive__",
+                "modeling_mode": "high-fidelity",
+            },
+        },
+    )
+
+    assert response.status_code == 409
+    assert "mask_solid" in response.json()["detail"]
+    assert "Re-run preview" in response.json()["detail"]
+    _mock_pool.submit.assert_not_called()
+
+
+def test_generate_route_rejects_material_archive_missing_artifact_file(tmp_path) -> None:
+    session_id, cache_ref, out_path = _create_material_archive_artifact_generate_session(tmp_path)
+    os.remove(cache_ref["fields"]["matched_rgb"]["path"])
+    _mock_pool.submit = AsyncMock(
+        return_value={
+            "threemf_path": str(out_path),
+            "glb_path": None,
+            "status_msg": "OK",
+        }
+    )
+
+    response = client.post(
+        "/api/convert/generate",
+        json={
+            "session_id": session_id,
+            "params": {
+                "lut_name": "__material_archive__",
+                "modeling_mode": "high-fidelity",
+            },
+        },
+    )
+
+    assert response.status_code == 409
+    assert "matched_rgb artifact" in response.json()["detail"]
+    assert "Re-run preview" in response.json()["detail"]
+    _mock_pool.submit.assert_not_called()
+
+
+def test_generate_route_rejects_material_archive_corrupt_artifact_file(tmp_path) -> None:
+    session_id, cache_ref, out_path = _create_material_archive_artifact_generate_session(tmp_path)
+    with open(cache_ref["fields"]["material_matrix"]["path"], "w", encoding="utf-8") as f:
+        f.write("not a numpy array")
+    _mock_pool.submit = AsyncMock(
+        return_value={
+            "threemf_path": str(out_path),
+            "glb_path": None,
+            "status_msg": "OK",
+        }
+    )
+
+    response = client.post(
+        "/api/convert/generate",
+        json={
+            "session_id": session_id,
+            "params": {
+                "lut_name": "__material_archive__",
+                "modeling_mode": "high-fidelity",
+            },
+        },
+    )
+
+    assert response.status_code == 409
+    assert "material_matrix artifact" in response.json()["detail"]
+    assert "Re-run preview" in response.json()["detail"]
+    _mock_pool.submit.assert_not_called()
 
 
 def test_generate_route_forwards_cache_recovered_virtual_materials(tmp_path) -> None:

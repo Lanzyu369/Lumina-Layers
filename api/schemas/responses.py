@@ -622,8 +622,9 @@ class MaterialColorSuggestionsResponse(BaseModel):
     "为目标色推荐可达近似色" 接口的响应。
 
     ``source`` is ``"cache"`` when a persisted ``MaterialSolverCache`` served
-    the query, ``"mitm"`` when the MITM fallback ran in-process. The frontend
-    uses this to decide whether to nudge the user to build a cache.
+    the query, ``"runtime"`` when the persisted hybrid candidate runtime served
+    it, or ``"mitm"`` when the MITM fallback ran in-process. The frontend uses
+    this to decide whether to nudge the user to build reusable solver data.
     """
 
     status: str
@@ -824,6 +825,21 @@ class RegionRecipeResponse(BaseModel):
     recipes: list[RegionRecipeEntry] = Field(default_factory=list)
 
 
+class PerformanceTimingResponse(BaseModel):
+    """Endpoint performance timings in milliseconds.
+
+    接口性能耗时统计，单位为毫秒。
+    """
+
+    total_ms: Optional[float] = None
+    upload_ms: Optional[float] = None
+    worker_ms: Optional[float] = None
+    pickle_load_ms: Optional[float] = None
+    segmented_glb_ms: Optional[float] = None
+    palette_ms: Optional[float] = None
+    overhead_ms: Optional[float] = None
+
+
 class PreviewResponse(BaseModel):
     """预览生成响应。"""
 
@@ -838,6 +854,7 @@ class PreviewResponse(BaseModel):
     dimensions: dict
     contours: Optional[dict[str, list[list[list[float]]]]] = None
     warnings: list[str] = Field(default_factory=list)
+    performance_timing: Optional[PerformanceTimingResponse] = None
 
 
 class ColorReplaceResponse(BaseModel):
@@ -870,6 +887,7 @@ class GenerateResponse(BaseModel):
     download_url: str
     preview_3d_url: Optional[str] = None
     threemf_disk_path: Optional[str] = None
+    performance_timing: Optional[PerformanceTimingResponse] = None
 
 
 class RecipePredictionResponse(BaseModel):

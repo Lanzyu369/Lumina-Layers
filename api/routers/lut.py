@@ -5,14 +5,16 @@ Provides endpoints for LUT preset listing, information queries, and merge operat
 提供 LUT 预设列表、信息查询和合并操作端点。
 """
 
+import json
 import os
 import shutil
 import threading
 import tempfile
 import time
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
+import msgpack
 import numpy as np
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
@@ -60,10 +62,11 @@ from api.schemas.lut import (
 from api.schemas.responses import LUTListResponse, LutInfo, LutColorsResponse, LutColorEntry
 from api.structured_logging import get_logger
 from config import LUTMetadata, get_capabilities, get_schema_version, get_source_kind, get_supported_modes
-from core.lut_details.service import get_lut_details_service
 from core.lut_card_layout import resolve_lut_layout
+from core.lut_details.service import get_lut_details_service
 from core.lut_merger import LUTMerger
 from core.material_lut_synthesis import infer_material_archive_base_channel_idx
+from core.native_reference import build_model_package_runtime_payload
 from core.predictive_lut import opencv_lab_to_rgb_uint8, predict_recipe_color, resolve_predictive_runtime
 from utils.lut_manager import LUTManager
 
@@ -78,6 +81,7 @@ _lut_list_cache_checked_at: float | None = None
 _lut_list_cache_file_map: tuple[tuple[str, str], ...] | None = None
 _lut_list_cache_signature: tuple[tuple[str, str, int, int], ...] | None = None
 _lut_list_cache_response: LUTListResponse | None = None
+_ALLOWED_LUT_EXTENSIONS = {".npy", ".json", ".npz", ".msgpack"}
 
 
 def _build_lut_list_file_map(lut_dict: dict[str, str]) -> tuple[tuple[str, str], ...]:
@@ -116,6 +120,50 @@ def _clear_lut_list_cache() -> None:
         _lut_list_cache_file_map = None
         _lut_list_cache_signature = None
         _lut_list_cache_response = None
+
+
+def _validate_uploaded_lut_filename(filename: str) -> tuple[str, str]:
+    """Return safe upload stem and extension for a Custom LUT filename.
+    返回可用于 Custom LUT 目录的安全上传文件名主干与扩展名。
+    """
+    raw_filename = filename.strip()
+    if not raw_filename:
+        raise ValueError("Invalid LUT filename")
+    if (
+        "/" in raw_filename
+        or "\\" in raw_filename
+        or raw_filename in {".", ".."}
+        or Path(raw_filename).is_absolute()
+        or PureWindowsPath(raw_filename).drive
+    ):
+        raise ValueError("Invalid LUT filename: path components are not allowed")
+
+    path = Path(raw_filename)
+    stem = path.stem
+    ext = path.suffix.lower()
+    if not stem or stem in {".", ".."}:
+        raise ValueError("Invalid LUT filename")
+    if ext not in _ALLOWED_LUT_EXTENSIONS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"不支持的文件类型: {ext}，仅支持 .npy/.json/.npz/.msgpack",
+        )
+    return stem, ext
+
+
+def _custom_lut_destination(custom_dir: str, stem: str, ext: str) -> Path:
+    custom_root = Path(custom_dir).resolve()
+    counter = 0
+    while True:
+        suffix = "" if counter == 0 else f"_{counter}"
+        dest_path = (custom_root / f"{stem}{suffix}{ext}").resolve(strict=False)
+        try:
+            dest_path.relative_to(custom_root)
+        except ValueError as exc:
+            raise RuntimeError("Resolved LUT destination escaped Custom directory") from exc
+        if not dest_path.exists():
+            return dest_path
+        counter += 1
 
 
 def _resolve_lut_details_service():
@@ -251,7 +299,190 @@ def get_lut_details_catalog() -> LutDetailsCatalogResponse:
     )
 
 
-_ALLOWED_LUT_EXTENSIONS = {".npy", ".json", ".npz", ".msgpack"}
+class _UploadedLutValidationError(ValueError):
+    """Raised when an uploaded file is not a usable LUT preset."""
+
+
+def _uploaded_lut_error(message: str) -> _UploadedLutValidationError:
+    return _UploadedLutValidationError(f"Invalid LUT file: {message}")
+
+
+def _numeric_triplet(value: Any) -> bool:
+    if not isinstance(value, (list, tuple)) or len(value) != 3:
+        return False
+    try:
+        values = np.asarray([float(component) for component in value], dtype=np.float64)
+    except (TypeError, ValueError):
+        return False
+    return bool(np.isfinite(values).all())
+
+
+def _rgb_triplet(value: Any) -> bool:
+    if not _numeric_triplet(value):
+        return False
+    values = [float(component) for component in value]
+    return all(0.0 <= component <= 255.0 for component in values)
+
+
+def _json_entry_has_real_color(entry: Any) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    return _rgb_triplet(entry.get("rgb")) or _numeric_triplet(entry.get("lab"))
+
+
+def _require_rgb_rows(value: Any, label: str) -> np.ndarray:
+    try:
+        rgb = np.asarray(value, dtype=np.float64)
+    except (TypeError, ValueError) as exc:
+        raise _uploaded_lut_error(f"{label} RGB values must be numeric") from exc
+
+    if rgb.size == 0:
+        raise _uploaded_lut_error(f"{label} contains no RGB rows")
+
+    if rgb.ndim == 2 and rgb.shape[1] == 3:
+        rows = rgb
+    elif rgb.ndim in {1, 3}:
+        if rgb.size % 3 != 0:
+            raise _uploaded_lut_error(
+                f"{label} RGB data is not divisible into RGB triplets"
+            )
+        rows = rgb.reshape(-1, 3)
+    else:
+        raise _uploaded_lut_error(f"{label} RGB data must be shaped as N x 3")
+
+    if rows.shape[0] == 0:
+        raise _uploaded_lut_error(f"{label} contains no RGB rows")
+    if not np.isfinite(rows).all():
+        raise _uploaded_lut_error(f"{label} RGB data contains non-finite values")
+    if np.any((rows < 0.0) | (rows > 255.0)):
+        raise _uploaded_lut_error(f"{label} RGB values must be between 0 and 255")
+    return rows
+
+
+def _validate_uploaded_npy_lut(path: str) -> None:
+    try:
+        rgb = np.load(path, allow_pickle=False)
+    except (OSError, ValueError, TypeError, EOFError) as exc:
+        raise _uploaded_lut_error(f"unable to parse NPY data: {exc}") from exc
+    _require_rgb_rows(rgb, "NPY LUT")
+
+
+def _validate_uploaded_json_lut(path: str) -> None:
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, ValueError, TypeError) as exc:
+        raise _uploaded_lut_error(f"unable to parse JSON data: {exc}") from exc
+
+    display_name = Path(path).stem
+    if isinstance(payload, list):
+        if not any(_json_entry_has_real_color(entry) for entry in payload):
+            raise _uploaded_lut_error("JSON LUT contains no valid rgb or lab entries")
+        try:
+            rgb, _stacks, _metadata = LUTManager._load_keyed_json_flat_list(
+                payload,
+                display_name,
+                path,
+            )
+        except (OSError, ValueError, TypeError, KeyError, RuntimeError, ImportError) as exc:
+            raise _uploaded_lut_error(f"invalid JSON LUT payload: {exc}") from exc
+        _require_rgb_rows(rgb, "JSON LUT")
+        return
+
+    if isinstance(payload, dict):
+        try:
+            rgb, _stacks, metadata = LUTManager._load_keyed_payload(
+                payload,
+                display_name,
+                path,
+                skip_malformed_recipes=True,
+            )
+        except (OSError, ValueError, TypeError, KeyError, RuntimeError, ImportError) as exc:
+            raise _uploaded_lut_error(f"invalid JSON LUT payload: {exc}") from exc
+        _require_rgb_rows(rgb, "JSON LUT")
+        return
+
+    raise _uploaded_lut_error("JSON LUT root must be an object or list")
+
+
+def _validate_uploaded_npz_lut(path: str) -> None:
+    try:
+        with np.load(path, allow_pickle=False) as payload:
+            if "rgb" not in payload.files:
+                raise _uploaded_lut_error("NPZ LUT is missing rgb data")
+            rgb_rows = _require_rgb_rows(payload["rgb"], "NPZ LUT")
+            if "stacks" in payload.files:
+                stacks = np.asarray(payload["stacks"])
+                if stacks.ndim < 2:
+                    raise _uploaded_lut_error("NPZ stacks must be a 2D array")
+                if int(stacks.shape[0]) != int(rgb_rows.shape[0]):
+                    raise _uploaded_lut_error("NPZ stacks row count does not match rgb")
+    except _UploadedLutValidationError:
+        raise
+    except (OSError, ValueError, TypeError, EOFError) as exc:
+        raise _uploaded_lut_error(f"unable to parse NPZ data: {exc}") from exc
+
+
+def _validate_uploaded_msgpack_lut(path: str) -> None:
+    try:
+        payload = msgpack.unpackb(Path(path).read_bytes(), raw=False)
+    except (OSError, ValueError, TypeError, msgpack.UnpackException) as exc:
+        raise _uploaded_lut_error(f"unable to parse msgpack data: {exc}") from exc
+
+    display_name = Path(path).stem
+    if LUTManager._is_model_package_payload(payload):
+        try:
+            build_model_package_runtime_payload(path, payload=payload)
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            raise _uploaded_lut_error(
+                f"model package contains no usable runtime modes: {exc}"
+            ) from exc
+        return
+
+    if isinstance(payload, list):
+        if not any(_json_entry_has_real_color(entry) for entry in payload):
+            raise _uploaded_lut_error("msgpack LUT contains no valid rgb or lab entries")
+        try:
+            rgb, _stacks, _metadata = LUTManager._load_keyed_json_flat_list(
+                payload,
+                display_name,
+                path,
+            )
+        except (OSError, ValueError, TypeError, KeyError, RuntimeError, ImportError) as exc:
+            raise _uploaded_lut_error(f"invalid msgpack LUT payload: {exc}") from exc
+        _require_rgb_rows(rgb, "msgpack LUT")
+        return
+
+    if isinstance(payload, dict):
+        try:
+            rgb, _stacks, metadata = LUTManager._load_keyed_payload(
+                payload,
+                display_name,
+                path,
+                skip_malformed_recipes=True,
+            )
+        except (OSError, ValueError, TypeError, KeyError, RuntimeError, ImportError) as exc:
+            raise _uploaded_lut_error(f"invalid msgpack LUT payload: {exc}") from exc
+        _require_rgb_rows(rgb, "msgpack LUT")
+        return
+
+    raise _uploaded_lut_error("msgpack LUT root must be an object or list")
+
+
+def _validate_uploaded_lut_file(path: str, ext: str) -> None:
+    if ext == ".npy":
+        _validate_uploaded_npy_lut(path)
+        return
+    if ext == ".json":
+        _validate_uploaded_json_lut(path)
+        return
+    if ext == ".npz":
+        _validate_uploaded_npz_lut(path)
+        return
+    if ext == ".msgpack":
+        _validate_uploaded_msgpack_lut(path)
+        return
+    raise _uploaded_lut_error(f"unsupported extension: {ext}")
 
 
 @router.post("/upload")
@@ -260,12 +491,13 @@ async def upload_lut(file: UploadFile = File(..., description="LUT 文件 (.npy/
     上传 LUT 文件到 Custom 预设目录。
     """
     filename = file.filename or "unknown"
-    ext = Path(filename).suffix.lower()
-    if ext not in _ALLOWED_LUT_EXTENSIONS:
+    try:
+        stem, ext = _validate_uploaded_lut_filename(filename)
+    except ValueError as exc:
         raise HTTPException(
             status_code=422,
-            detail=f"不支持的文件类型: {ext}，仅支持 .npy/.json/.npz/.msgpack",
-        )
+            detail=str(exc),
+        ) from exc
 
     # Save to temp file first (chunked read with size limit)
     from config import TEMP_DIR
@@ -289,9 +521,8 @@ async def upload_lut(file: UploadFile = File(..., description="LUT 文件 (.npy/
         tmp_path = tmp.name
 
     try:
-        import numpy as np
+        _validate_uploaded_lut_file(tmp_path, ext)
 
-        stem = Path(filename).stem
         custom_dir = os.path.join(LUTManager.LUT_PRESET_DIR, "Custom")
         os.makedirs(custom_dir, exist_ok=True)
 
@@ -305,18 +536,10 @@ async def upload_lut(file: UploadFile = File(..., description="LUT 文件 (.npy/
                 rgb = rgb.reshape(-1, 3)
             metadata = LUTManager.infer_default_metadata(stem, tmp_path, len(rgb))
             stacks = np.zeros((len(rgb), 0), dtype=np.int32)
-            dest_path = os.path.join(custom_dir, f"{stem}{dest_ext}")
-            counter = 1
-            while os.path.exists(dest_path):
-                dest_path = os.path.join(custom_dir, f"{stem}_{counter}{dest_ext}")
-                counter += 1
-            LUTManager.save_keyed_json(dest_path, rgb, stacks, metadata)
+            dest_path = _custom_lut_destination(custom_dir, stem, dest_ext)
+            LUTManager.save_keyed_json(str(dest_path), rgb, stacks, metadata)
         else:
-            dest_path = os.path.join(custom_dir, filename)
-            counter = 1
-            while os.path.exists(dest_path):
-                dest_path = os.path.join(custom_dir, f"{stem}_{counter}{ext}")
-                counter += 1
+            dest_path = _custom_lut_destination(custom_dir, stem, ext)
             shutil.copy2(tmp_path, dest_path)
 
         _invalidate_lut_details_service_cache()
@@ -335,6 +558,8 @@ async def upload_lut(file: UploadFile = File(..., description="LUT 文件 (.npy/
             },
         )
         return {"status": "ok", "message": f"LUT 已保存: {display_name}", "name": display_name}
+    except _UploadedLutValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"上传失败: {exc}") from exc
     finally:

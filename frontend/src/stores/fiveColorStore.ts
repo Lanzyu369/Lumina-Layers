@@ -38,6 +38,8 @@ type PersistedFiveColorState = Pick<
 >;
 
 const HEX_COLOR_PATTERN = /^#[0-9A-Fa-f]{6}$/;
+const DEFAULT_RECIPE_LENGTH = 5;
+const MAX_RECIPE_LENGTH = 6;
 let baseColorsRequestSequence = 0;
 let queryRequestSequence = 0;
 let matchColorRequestSequence = 0;
@@ -52,6 +54,51 @@ function invalidateQueryRequests() {
 
 function sameSelection(left: number[], right: number[]) {
   return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function isSupportedRecipeLength(length: number): boolean {
+  return length >= DEFAULT_RECIPE_LENGTH && length <= MAX_RECIPE_LENGTH;
+}
+
+export function resolveFiveColorRecipeLength(
+  combinations: number[][] | null,
+  selection: number[] = [],
+): number {
+  const validCombinations = combinations?.filter(
+    (candidate) => isSupportedRecipeLength(candidate.length),
+  );
+  if (validCombinations?.length) {
+    const matchingCombinations = selection.length > 0
+      ? validCombinations.filter(
+        (candidate) =>
+          candidate.length >= selection.length &&
+          selection.every((value, index) => candidate[index] === value),
+      )
+      : validCombinations;
+    if (matchingCombinations.length > 0) {
+      return Math.max(...matchingCombinations.map((candidate) => candidate.length));
+    }
+  }
+  if (selection.length === MAX_RECIPE_LENGTH) return MAX_RECIPE_LENGTH;
+  return DEFAULT_RECIPE_LENGTH;
+}
+
+export function hasCompleteFiveColorSelection(
+  combinations: number[][] | null,
+  selection: number[],
+): boolean {
+  if (!isSupportedRecipeLength(selection.length)) return false;
+  const validCombinations = combinations?.filter(
+    (candidate) => isSupportedRecipeLength(candidate.length),
+  );
+  if (validCombinations?.length) {
+    return validCombinations.some(
+      (candidate) =>
+        candidate.length === selection.length &&
+        selection.every((value, index) => candidate[index] === value),
+    );
+  }
+  return selection.length === resolveFiveColorRecipeLength(combinations, selection);
 }
 
 // ========== State Interface ==========
@@ -167,9 +214,10 @@ export const useFiveColorStore = create<FiveColorState & FiveColorActions>()(
       },
 
       addSelection: (index: number) => {
-        const { selectedIndices, selectionSource } = get();
+        const { selectedIndices, selectionSource, combinations } = get();
         const baseSelection = selectionSource === "target-match" ? [] : selectedIndices;
-        if (baseSelection.length < 5) {
+        const recipeLength = resolveFiveColorRecipeLength(combinations, baseSelection);
+        if (baseSelection.length < recipeLength) {
           invalidateQueryRequests();
           invalidateMatchColorRequests();
           const nextSelection = [...baseSelection, index];
@@ -210,8 +258,8 @@ export const useFiveColorStore = create<FiveColorState & FiveColorActions>()(
       },
 
       reverseSelection: () => {
-        const { selectedIndices } = get();
-        if (selectedIndices.length === 5) {
+        const { selectedIndices, combinations } = get();
+        if (hasCompleteFiveColorSelection(combinations, selectedIndices)) {
           invalidateQueryRequests();
           invalidateMatchColorRequests();
           const nextSelection = [...selectedIndices].reverse();
@@ -226,8 +274,8 @@ export const useFiveColorStore = create<FiveColorState & FiveColorActions>()(
       },
 
       submitQuery: async () => {
-        const { selectedIndices, lutName, manualSelectedIndices, selectionSource } = get();
-        if (selectedIndices.length !== 5) return;
+        const { selectedIndices, lutName, manualSelectedIndices, selectionSource, combinations } = get();
+        if (!hasCompleteFiveColorSelection(combinations, selectedIndices)) return;
         const requestId = ++queryRequestSequence;
         invalidateMatchColorRequests();
         set({
@@ -448,6 +496,7 @@ export const useFiveColorStore = create<FiveColorState & FiveColorActions>()(
             printer_id: useSettingsStore.getState().printerModel,
             slicer: useSettingsStore.getState().slicerSoftware,
             nozzle_size: useSettingsStore.getState().nozzleSize,
+            device_profile_id: useSettingsStore.getState().deviceProfileId,
           });
           set({
             swatchDownloadUrl: response.download_url,
