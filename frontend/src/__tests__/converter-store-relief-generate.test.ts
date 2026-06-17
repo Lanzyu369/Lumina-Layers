@@ -369,6 +369,50 @@ describe("converter store relief generate flow", () => {
     );
   });
 
+  it("reuploads the selected heightmap to the refreshed preview session before generating", async () => {
+    const useConverterStore = await loadStore();
+    const file = new File(["heightmap"], "heightmap.png", {
+      type: "image/png",
+    });
+    mocks.uploadHeightmap.mockResolvedValueOnce({
+      status: "ok",
+      message: "Heightmap uploaded to refreshed session",
+      thumbnail_url: "/api/files/new-heightmap.png",
+      color_height_map: { "111111": 0.92 },
+    });
+    useConverterStore.setState({
+      ...baseReadyState(),
+      sessionId: null,
+      palette: [],
+      spacer_thick: 1.2,
+      enable_relief: true,
+      autoHeightMode: "use-heightmap",
+      heightmapFile: file,
+      color_height_map: {},
+      heightmap_max_height: 3,
+    });
+
+    const result = await useConverterStore.getState().submitFullPipeline();
+
+    expect(result).toBe("/api/files/model.glb");
+    expect(mocks.convertPreview).toHaveBeenCalledOnce();
+    expect(mocks.uploadHeightmap).toHaveBeenCalledWith(
+      file,
+      "session-relief",
+      3,
+    );
+    expect(mocks.convertGenerate).toHaveBeenCalledOnce();
+    expect(mocks.uploadHeightmap.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.convertGenerate.mock.invocationCallOrder[0],
+    );
+    const [, generateParams] = mocks.convertGenerate.mock.calls[0];
+    expect(generateParams.height_mode).toBe("heightmap");
+    expect(generateParams.heightmap_max_height).toBeCloseTo(4.2, 10);
+    expect(useConverterStore.getState().color_height_map).toEqual({
+      "111111": 0.92,
+    });
+  });
+
   it("does not overwrite an existing manual color height map after preview refreshes the palette", async () => {
     const useConverterStore = await loadStore();
     const manualMap = { "111111": 1.25 };

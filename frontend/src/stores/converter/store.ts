@@ -5464,6 +5464,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           : sourceSelection.source_kind === "native_bundle"
             ? (sourceSelection.layer_height_mm ?? null)
             : state.layer_height_mm;
+        const shouldReuploadHeightmap =
+          state.enable_relief &&
+          state.autoHeightMode === "use-heightmap" &&
+          state.heightmapFile !== null;
 
         _previewClientLog("preview: response received", {
           session_id: response.session_id,
@@ -5529,6 +5533,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           gradientGroupsSessionId: null,
           gradientSelection: null,
         });
+        if (
+          shouldReuploadHeightmap &&
+          _get().sessionId === response.session_id
+        ) {
+          await _get().uploadHeightmap();
+          if (_get().sessionId !== response.session_id) {
+            return;
+          }
+        }
         if (!glbUrl) {
           _get()._pollAsyncGlb();
         }
@@ -6612,7 +6625,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         await _get().submitPreview();
         // 检查预览是否成功
         const afterPreview = _get();
-        if (!afterPreview.sessionId) {
+        if (!afterPreview.sessionId || afterPreview.error) {
           return null; // 预览失败，错误已由 submitPreview 设置
         }
       }
