@@ -493,8 +493,9 @@ def _build_relief_voxel_matrix(
 
     Physical Model:
     - Each color region has its own target height (Target_Z)
-    - Bottom layers (base): Z=0 to Z=(Target_Z - 0.4mm) - filled with backing_color_id
-    - Top layers (optical): Z=(Target_Z - 0.4mm) to Z=Target_Z - filled with material layers
+    - Optical thickness is material_matrix.shape[2] * layer height
+    - Bottom layers (base): Z=0 to Z=(Target_Z - optical thickness) - filled with backing_color_id
+    - Top layers (optical): Z=(Target_Z - optical thickness) to Z=Target_Z - filled with material layers
 
     Args:
         matched_rgb (np.ndarray): (H, W, 3) RGB color array after K-Means matching
