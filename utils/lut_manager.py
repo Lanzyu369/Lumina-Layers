@@ -1470,6 +1470,7 @@ class LUTManager:
         entries = data.get("entries", [])
         rgb_list: list[list[int]] = []
         stacks_list: list[list[int]] = []
+        stack_recipe_widths: list[int] = []
 
         for entry in entries:
             if not isinstance(entry, dict):
@@ -1547,6 +1548,7 @@ class LUTManager:
             # parsers (core/lut_details/parser.py) only see usable rows.
             recipe_raw = entry.get("recipe", [])
             if not isinstance(recipe_raw, (list, tuple)):
+                source_recipe_width = 0
                 if skip_malformed_recipes:
                     _log.debug(
                         "Skipping row with non-list recipe payload (strict)",
@@ -1567,6 +1569,7 @@ class LUTManager:
                 )
                 recipe_indices = [-1, -1, -1, -1, -1]
             else:
+                source_recipe_width = len(recipe_raw)
                 if skip_malformed_recipes:
                     has_invalid_member = False
                     for member in recipe_raw:
@@ -1591,9 +1594,13 @@ class LUTManager:
                     cls._resolve_recipe_member(value, name_to_idx, file_path)
                     for value in recipe_raw
                 ]
-            recipe_indices = cls._normalize_resolved_five_layer_recipe(recipe_indices)
+            recipe_indices = cls._normalize_resolved_layer_recipe(
+                recipe_indices,
+                max_color_layers=int(metadata.max_color_layers or PrinterConfig.COLOR_LAYERS),
+            )
             rgb_list.append(row_rgb)
             stacks_list.append(recipe_indices)
+            stack_recipe_widths.append(source_recipe_width)
 
         if rgb_list:
             rgb = np.array(rgb_list, dtype=np.uint8)
@@ -1611,6 +1618,8 @@ class LUTManager:
             stacks = None
         if _looks_like_missing_keyed_stacks(stacks, rgb.reshape(-1, 3).shape[0]):
             stacks = None
+        if stacks is not None and len(stack_recipe_widths) == len(stacks_list):
+            metadata.extensions["stack_recipe_widths"] = stack_recipe_widths
 
         return rgb, stacks, metadata
 
@@ -1694,8 +1703,13 @@ class LUTManager:
         return -1
 
     @staticmethod
-    def _normalize_resolved_five_layer_recipe(recipe_indices: list[int]) -> list[int]:
-        if len(recipe_indices) == 5:
+    def _normalize_resolved_layer_recipe(
+        recipe_indices: list[int],
+        *,
+        max_color_layers: int = PrinterConfig.COLOR_LAYERS,
+    ) -> list[int]:
+        supported_widths = (5, 6) if int(max_color_layers) >= 6 else (5,)
+        if len(recipe_indices) in supported_widths:
             return recipe_indices
         return [-1, -1, -1, -1, -1]
 
@@ -1731,7 +1745,7 @@ class LUTManager:
     ) -> int | None:
         max_index = -1
         for recipe in stacks_list:
-            if len(recipe) != 5 or any(index < 0 for index in recipe):
+            if len(recipe) not in (5, 6) or any(index < 0 for index in recipe):
                 continue
             if any(index >= 8 for index in recipe):
                 continue
@@ -2180,12 +2194,15 @@ class LUTManager:
         """Load a flat-list JSON LUT: [{recipe, rgb, hex, source}, ...].
         加载顶层为数组的旧格式 JSON LUT 文件。
         """
+        # Legacy flat-list JSON has no metadata/max_color_layers field, so it
+        # remains a five-layer-only format. Use keyed JSON for six-layer recipes.
+        legacy_recipe_width = PrinterConfig.COLOR_LAYERS
         numeric_recipe_rows: list[list[int]] = []
         for entry in data:
             if not isinstance(entry, dict):
                 continue
             recipe_raw = entry.get("recipe", [])
-            if not isinstance(recipe_raw, (list, tuple)) or len(recipe_raw) != 5:
+            if not isinstance(recipe_raw, (list, tuple)) or len(recipe_raw) != legacy_recipe_width:
                 continue
             parsed_row = [cls._parse_integer_recipe_value(value) for value in recipe_raw]
             if any(value is None for value in parsed_row):
@@ -2246,13 +2263,16 @@ class LUTManager:
                         "recipe_value": recipe_raw,
                     },
                 )
-                recipe_indices = [-1, -1, -1, -1, -1]
+                recipe_indices = [-1] * legacy_recipe_width
             else:
                 recipe_indices = [
                     cls._resolve_recipe_member(value, name_to_idx, file_path)
                     for value in recipe_raw
                 ]
-            recipe_indices = cls._normalize_resolved_five_layer_recipe(recipe_indices)
+            recipe_indices = cls._normalize_resolved_layer_recipe(
+                recipe_indices,
+                max_color_layers=legacy_recipe_width,
+            )
             stacks_list.append(recipe_indices)
 
         rgb = np.array(rgb_list, dtype=np.uint8) if rgb_list else np.zeros((0, 3), dtype=np.uint8)
@@ -2262,7 +2282,7 @@ class LUTManager:
 
         metadata = LUTMetadata(
             palette=palette,
-            max_color_layers=PrinterConfig.COLOR_LAYERS,
+            max_color_layers=max(PrinterConfig.COLOR_LAYERS, max((len(row) for row in stacks_list), default=0)),
             layer_height_mm=PrinterConfig.LAYER_HEIGHT,
             line_width_mm=PrinterConfig.NOZZLE_WIDTH,
             base_layers=10,

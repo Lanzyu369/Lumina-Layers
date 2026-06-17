@@ -5007,8 +5007,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Five-Color Recipe Query",
   },
   five_color_desc: {
-    zh: "从基础色中选出 5 种颜色并查询叠层后的结果色，适合快速验证色片配方。",
-    en: "Pick five base colors and query the blended result to validate layered color recipes quickly.",
+    zh: "从基础色中选出配方颜色并查询叠层后的结果色，适合快速验证色片配方。",
+    en: "Pick base colors and query the blended result to validate layered color recipes quickly.",
   },
   five_color_palette: {
     zh: "基础色板",
@@ -5019,8 +5019,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Match by color value",
   },
   five_color_match_desc: {
-    zh: "输入目标 Hex 色值，从当前色卡中按标准最近邻匹配五层配方。",
-    en: "Enter a target Hex value and match the nearest five-layer recipe from the current LUT card.",
+    zh: "输入目标 Hex 色值，从当前色卡中按标准最近邻匹配配方。",
+    en: "Enter a target Hex value and match the nearest recipe from the current LUT card.",
   },
   five_color_match_input_label: {
     zh: "目标色值",
@@ -5079,11 +5079,11 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Empty cell",
   },
   five_color_match_recipe_unavailable: {
-    zh: "已找到最接近的色卡颜色，但该行无法反推出五层配方。",
-    en: "The nearest LUT color was found, but this row cannot be converted into a five-layer recipe.",
+    zh: "已找到最接近的色卡颜色，但该行无法反推出配方。",
+    en: "The nearest LUT color was found, but this row cannot be converted into a recipe.",
   },
   five_color_match_recipe_unavailable_title: {
-    zh: "无法生成五层配方",
+    zh: "无法生成配方",
     en: "Recipe unavailable",
   },
   five_color_error_select_lut_first: {
@@ -5247,8 +5247,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "No match found",
   },
   five_color_not_found_message: {
-    zh: "当前五层颜色顺序没有对应的色卡记录。",
-    en: "The current five-layer color order does not match a LUT record.",
+    zh: "当前颜色顺序没有对应的色卡记录。",
+    en: "The current color order does not match a LUT record.",
   },
   five_color_selection_progress: {
     zh: "已选择 {count}/{total} 种颜色，请继续完成配方。",

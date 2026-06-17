@@ -1,6 +1,6 @@
 /**
  * FiveColorCanvas - 五色配方 3D 薄片叠加动画。
- * 用 Canvas 2D 绘制 5 层半透明薄片，选满后播放叠加动画，融合成结果颜色。
+ * 用 Canvas 2D 绘制 5/6 层半透明薄片，选满后播放叠加动画，融合成结果颜色。
  */
 
 import { useRef, useEffect, useCallback, useState } from "react";
@@ -11,12 +11,14 @@ interface SliceColor {
 }
 
 interface FiveColorCanvasProps {
-  /** 已选颜色（0~5 个） */
+  /** 已选颜色（0~6 个） */
   slices: SliceColor[];
   /** 查询结果颜色 hex */
   resultHex: string | null;
   /** 是否正在查询 */
   isLoading: boolean;
+  /** 当前配方层数 */
+  layerCount?: number;
 }
 
 // ===== 常量 =====
@@ -27,6 +29,15 @@ const SLICE_GAP = 6;
 const CORNER_R = 6;
 const LABEL_FONT = "12px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
 const LABEL_FONT_BOLD = "bold 13px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+const DEFAULT_LAYER_COUNT = 5;
+const MAX_LAYER_COUNT = 6;
+
+function resolveCanvasLayerCount(sliceCount: number, requestedLayerCount = DEFAULT_LAYER_COUNT) {
+  return Math.max(
+    DEFAULT_LAYER_COUNT,
+    Math.min(MAX_LAYER_COUNT, Math.max(sliceCount, requestedLayerCount)),
+  );
+}
 
 /** 绘制一个带圆角的平行四边形薄片 */
 function drawSlice(
@@ -225,7 +236,12 @@ function drawResultCircle(
   ctx.restore();
 }
 
-export default function FiveColorCanvas({ slices, resultHex, isLoading }: FiveColorCanvasProps) {
+export default function FiveColorCanvas({
+  slices,
+  resultHex,
+  isLoading,
+  layerCount: requestedLayerCount = DEFAULT_LAYER_COUNT,
+}: FiveColorCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
   const phaseRef = useRef<"idle" | "stacking" | "merging" | "done">("idle");
@@ -281,16 +297,17 @@ export default function FiveColorCanvas({ slices, resultHex, isLoading }: FiveCo
     const emptySliceColor = isDark ? "#374151" : "#d1d5db";
     const loadingTextColor = isDark ? "rgba(255,255,255,0.6)" : "rgba(0,0,0,0.5)";
 
+    const layerCount = resolveCanvasLayerCount(slices.length, requestedLayerCount);
     const centerX = w / 2 - SLICE_W / 2 - SLICE_SKEW / 2;
-    const totalStackH = 5 * SLICE_H + 4 * SLICE_GAP;
+    const totalStackH = layerCount * SLICE_H + (layerCount - 1) * SLICE_GAP;
     const startY = h / 2 - totalStackH / 2;
 
     const phase = phaseRef.current;
     const progress = progressRef.current;
 
     if (slices.length === 0 && !resultHex) {
-      // 空状态：绘制 5 个灰色占位薄片
-      for (let i = 0; i < 5; i++) {
+      // 空状态：绘制默认灰色占位薄片
+      for (let i = 0; i < layerCount; i++) {
         const y = startY + i * (SLICE_H + SLICE_GAP);
         drawSlice(ctx, centerX, y, SLICE_W, SLICE_H, SLICE_SKEW, CORNER_R, emptySliceColor, 0.4, false);
         // 序号
@@ -313,7 +330,7 @@ export default function FiveColorCanvas({ slices, resultHex, isLoading }: FiveCo
 
     if (phase === "merging" || phase === "done") {
       // 合并动画：薄片向中心收缩
-      const mergeY = startY + 2 * (SLICE_H + SLICE_GAP); // 中间位置
+      const mergeY = startY + ((layerCount - 1) / 2) * (SLICE_H + SLICE_GAP); // 中间位置
       for (let i = 0; i < slices.length; i++) {
         const originalY = startY + i * (SLICE_H + SLICE_GAP);
         const currentY = originalY + (mergeY - originalY) * Math.min(progress * 2, 1);
@@ -358,7 +375,7 @@ export default function FiveColorCanvas({ slices, resultHex, isLoading }: FiveCo
       }
     } else {
       // 正常堆叠状态
-      for (let i = 0; i < 5; i++) {
+      for (let i = 0; i < layerCount; i++) {
         const y = startY + i * (SLICE_H + SLICE_GAP);
         if (i < slices.length) {
           // 入场动画
@@ -391,7 +408,7 @@ export default function FiveColorCanvas({ slices, resultHex, isLoading }: FiveCo
       drawFaceLabel(ctx, "底面 Bottom", w / 2, startY + totalStackH + 35, isDark, false);
       
       // 绘制添加位置指示（下一个要添加的位置）
-      if (slices.length < 5) {
+      if (slices.length < layerCount) {
         const nextY = startY + slices.length * (SLICE_H + SLICE_GAP);
         const pulseProgress = (timestamp % 2000) / 2000; // 2秒一个周期
         drawAddIndicator(ctx, centerX - 30, nextY + SLICE_H / 2, isDark, pulseProgress);
@@ -484,7 +501,7 @@ export default function FiveColorCanvas({ slices, resultHex, isLoading }: FiveCo
 
   // 新增颜色时触发入场动画
   useEffect(() => {
-    if (slices.length > prevSliceCountRef.current && slices.length <= 5) {
+    if (slices.length > prevSliceCountRef.current && slices.length <= MAX_LAYER_COUNT) {
       phaseRef.current = "stacking";
       progressRef.current = 0;
       setAnimationEpoch((value) => value + 1);
@@ -494,13 +511,14 @@ export default function FiveColorCanvas({ slices, resultHex, isLoading }: FiveCo
 
   // 有结果时触发合并动画
   useEffect(() => {
-    if (resultHex && slices.length === 5) {
+    const isCompleteRecipe = slices.length >= DEFAULT_LAYER_COUNT && slices.length <= MAX_LAYER_COUNT;
+    if (resultHex && isCompleteRecipe) {
       phaseRef.current = "merging";
       progressRef.current = 0;
       setAnimationEpoch((value) => value + 1);
     }
     // 结果被清除（如反序操作），重置回正常堆叠
-    if (!resultHex && slices.length === 5 && (phaseRef.current === "merging" || phaseRef.current === "done")) {
+    if (!resultHex && isCompleteRecipe && (phaseRef.current === "merging" || phaseRef.current === "done")) {
       phaseRef.current = "idle";
       progressRef.current = 0;
       draw();
