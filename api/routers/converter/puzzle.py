@@ -48,6 +48,7 @@ from core.puzzle import (
     PuzzlePiece,
     build_puzzle_layout,
     export_piece_boundary_geometry,
+    inset_boundary_geometry_payload,
     rasterize_piece_mask,
     render_assembly_overview,
     render_puzzle_overlay,
@@ -66,6 +67,8 @@ from .common import (
 router = APIRouter()
 log = get_logger(__name__)
 _PUZZLE_WORKER_PIXELS_PER_MM = 10.0
+_PUZZLE_TOTAL_CUT_CLEARANCE_MM = 0.1
+_PUZZLE_BOUNDARY_INSET_MM = _PUZZLE_TOTAL_CUT_CLEARANCE_MM / 2.0
 
 
 class _PuzzleLayoutPreviewBody(BaseModel):
@@ -477,6 +480,10 @@ def _prepare_piece_worker_assets(
         _piece_boundary_geometry_payload(piece, bbox_px),
         source_size_px=source_size,
         target_size_px=target_size,
+    )
+    boundary_payload = inset_boundary_geometry_payload(
+        boundary_payload,
+        inset_px=_PUZZLE_BOUNDARY_INSET_MM * _PUZZLE_WORKER_PIXELS_PER_MM,
     )
     return (
         bbox_px,

@@ -952,6 +952,92 @@ def export_piece_boundary_geometry(piece: PuzzlePiece) -> dict[str, object]:
     }
 
 
+def inset_boundary_geometry_payload(
+    payload: dict[str, object],
+    inset_px: float,
+) -> dict[str, object]:
+    """Inset a crop-local puzzle boundary payload by a cutter clearance.
+    按切刀间隙向内收缩局部拼图边界载荷。
+
+    Args:
+        payload: Boundary payload produced by ``export_piece_boundary_geometry``.
+            (由 ``export_piece_boundary_geometry`` 生成的边界载荷)
+        inset_px: Inset distance in the payload's local pixel grid.
+            (在载荷局部像素网格中的向内收缩距离)
+
+    Returns:
+        dict[str, object]: JSON-serializable inset boundary payload. If the
+            inset would destroy a fragile polygon, the original payload is
+            returned unchanged so generation remains deterministic.
+            (可 JSON 序列化的收缩后边界；若收缩会破坏脆弱多边形，则返回原载荷，
+            保证生成流程稳定)
+    """
+
+    cloned_payload = _clone_boundary_payload(payload)
+    if inset_px <= 0.0:
+        return cloned_payload
+
+    polygon_points = cloned_payload["polygon_px"]
+    if len(polygon_points) < 3:
+        return cloned_payload
+
+    polygon = Polygon(
+        polygon_points,
+        holes=cloned_payload["holes_px"],
+    )
+    normalized_polygon = _normalize_polygonal_geometry(polygon)
+    if not isinstance(normalized_polygon, Polygon):
+        return cloned_payload
+
+    inset_geometry = _normalize_polygonal_geometry(
+        normalized_polygon.buffer(-float(inset_px), join_style=2)
+    )
+    if not isinstance(inset_geometry, Polygon):
+        return cloned_payload
+
+    return {
+        "bbox_px": cloned_payload["bbox_px"],
+        "polygon_px": _geometry_ring_to_json(inset_geometry.exterior.coords),
+        "holes_px": [
+            _geometry_ring_to_json(interior.coords)
+            for interior in inset_geometry.interiors
+            if len(interior.coords) >= 4
+        ],
+    }
+
+
+def _clone_boundary_payload(payload: dict[str, object]) -> dict[str, object]:
+    """Return a normalized JSON-compatible boundary payload copy."""
+
+    return {
+        "bbox_px": [int(value) for value in payload.get("bbox_px") or []],
+        "polygon_px": _coerce_payload_ring(payload.get("polygon_px") or []),
+        "holes_px": [
+            _coerce_payload_ring(hole)
+            for hole in payload.get("holes_px") or []
+        ],
+    }
+
+
+def _coerce_payload_ring(points: object) -> list[list[float]]:
+    """Coerce an arbitrary payload point ring to ``[[x, y], ...]`` floats."""
+
+    ring: list[list[float]] = []
+    if not isinstance(points, (list, tuple)):
+        return ring
+    for point in points:
+        if not isinstance(point, (list, tuple)) or len(point) < 2:
+            continue
+        ring.append([float(point[0]), float(point[1])])
+    return ring
+
+
+def _geometry_ring_to_json(coords: object) -> list[list[float]]:
+    """Convert a Shapely coordinate sequence to a JSON point ring."""
+
+    return [[float(x), float(y)] for x, y in list(coords)[:-1]]
+
+
 def _translate_points_to_local(points: tuple[_Point, ...] | list[_Point], origin_x: int, origin_y: int) -> list[list[float]]:
     """Translate a point ring to crop-local coordinates.
     将点环平移到裁切框局部坐标系。

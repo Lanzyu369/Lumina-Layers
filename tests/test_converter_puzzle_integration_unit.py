@@ -16,6 +16,7 @@ from api.file_registry import FileRegistry
 from api.routers.converter import puzzle as puzzle_router
 from api.session_store import SessionStore
 from api.worker_pool import WorkerPoolManager
+from core.puzzle import PuzzlePiece
 
 
 @pytest.fixture()
@@ -135,6 +136,36 @@ def _generate_puzzle_body(session_id: str) -> dict[str, object]:
             },
         },
     }
+
+
+def test_prepare_piece_worker_assets_adds_actual_cut_clearance() -> None:
+    """Puzzle worker boundaries should remove 0.1mm total kerf from generated geometry."""
+
+    source_rgba = np.full((40, 40, 4), 255, dtype=np.uint8)
+    matched_rgb = np.full((40, 40, 3), 127, dtype=np.uint8)
+    piece = PuzzlePiece(
+        row=1,
+        col=1,
+        label="A1",
+        polygon_px=((0.0, 0.0), (40.0, 0.0), (40.0, 40.0), (0.0, 40.0)),
+        bbox_px=(0, 0, 40, 40),
+        bbox_mm=(0.0, 0.0, 4.0, 4.0),
+        centroid_mm=(2.0, 2.0),
+    )
+
+    _bbox_px, _piece_rgba, _piece_matched, boundary_payload = (
+        puzzle_router._prepare_piece_worker_assets(source_rgba, matched_rgb, piece)
+    )
+
+    polygon = boundary_payload["polygon_px"]
+    x_values = [point[0] for point in polygon]
+    y_values = [point[1] for point in polygon]
+
+    assert min(x_values) == pytest.approx(0.5)
+    assert min(y_values) == pytest.approx(0.5)
+    assert max(x_values) == pytest.approx(39.5)
+    assert max(y_values) == pytest.approx(39.5)
+    assert boundary_payload["bbox_px"] == [0, 0, 40, 40]
 
 
 class TestPuzzleLayoutPreviewCanary:
