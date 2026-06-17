@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
@@ -13,6 +14,7 @@ import pytest
 
 from api.dependencies import get_file_registry, get_session_store, get_worker_pool
 from api.file_registry import FileRegistry
+from api.preview_cache_artifacts import externalize_preview_cache
 from api.routers.converter import puzzle as puzzle_router
 from api.session_store import SessionStore
 from api.worker_pool import WorkerPoolManager
@@ -83,6 +85,26 @@ def _seed_puzzle_generate_session(store: SessionStore, tmp_path) -> str:
     store.register_temp_file(session_id, str(image_path))
     store.register_temp_file(session_id, str(lut_path))
     return session_id
+
+
+def _delete_externalized_preview_cache_field(
+    store: SessionStore,
+    session_id: str,
+    tmp_path,
+    field_name: str,
+) -> Path:
+    session_data = store.get(session_id)
+    cache = session_data["preview_cache"]
+    cache_ref = externalize_preview_cache(
+        session_id,
+        store,
+        cache,
+        root_dir=tmp_path,
+    )
+    store.put(session_id, "preview_cache", cache_ref)
+    field_path = Path(cache_ref["fields"][field_name]["path"])
+    field_path.unlink()
+    return field_path
 
 
 def _layout_preview_body(session_id: str) -> dict[str, object]:
@@ -171,6 +193,31 @@ def test_prepare_piece_worker_assets_adds_actual_cut_clearance() -> None:
 class TestPuzzleLayoutPreviewCanary:
     """Successful puzzle-layout-preview requests emit the renamed done canary."""
 
+    def test_stale_artifact_cache_returns_repreview_error(
+        self,
+        puzzle_harness,
+        tmp_path,
+    ) -> None:
+        store: SessionStore = puzzle_harness["store"]
+        client: TestClient = puzzle_harness["client"]
+        session_id = _seed_puzzle_preview_session(store)
+        stale_path = _delete_externalized_preview_cache_field(
+            store,
+            session_id,
+            tmp_path,
+            "matched_rgb",
+        )
+
+        response = client.post(
+            "/api/convert/puzzle-layout-preview",
+            json=_layout_preview_body(session_id),
+        )
+
+        assert response.status_code == 409
+        detail = response.json()["detail"]
+        assert "Re-run preview" in detail
+        assert str(stale_path) not in detail
+
     def test_puzzle_layout_preview_emits_renamed_contract_canary(
         self,
         puzzle_harness,
@@ -222,6 +269,33 @@ class TestPuzzleLayoutPreviewCanary:
 
 class TestGeneratePuzzleCanary:
     """Successful generate-puzzle requests emit the full structured contract."""
+
+    def test_stale_artifact_cache_returns_repreview_error_before_worker(
+        self,
+        puzzle_harness,
+        tmp_path,
+    ) -> None:
+        store: SessionStore = puzzle_harness["store"]
+        pool: MagicMock = puzzle_harness["pool"]
+        client: TestClient = puzzle_harness["client"]
+        session_id = _seed_puzzle_generate_session(store, tmp_path)
+        stale_path = _delete_externalized_preview_cache_field(
+            store,
+            session_id,
+            tmp_path,
+            "preview_rgba",
+        )
+
+        response = client.post(
+            "/api/convert/generate-puzzle",
+            json=_generate_puzzle_body(session_id),
+        )
+
+        assert response.status_code == 409
+        detail = response.json()["detail"]
+        assert "Re-run preview" in detail
+        assert str(stale_path) not in detail
+        pool.submit.assert_not_called()
 
     def test_generate_puzzle_emits_extended_contract_canary(
         self,
