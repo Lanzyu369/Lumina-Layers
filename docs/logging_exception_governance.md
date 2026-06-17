@@ -48,6 +48,15 @@
 - Session-bound endpoints should bind `session_id` for log correlation.
 
 ## Examples
-- API request completion: `event=request_completed`
-- API failures: `event=<domain>_error`, include `error_type` and `error_message`
+- API HTTP errors: `event=api_http_error`, include `request_id`, `path`,
+  `method`, `status_code`, `error_type`, and `error_message`
+- API validation errors: `event=api_validation_failed`, include the same
+  request fields plus a bounded validation summary
+- Unhandled API exceptions: `event=api_unhandled_exception`, emitted only by
+  the top-level request middleware guard before returning a deterministic 500
 - Worker tasks: `event=worker_<name>_started|failed|done`
+
+Do not introduce request-scoped catch-all event names such as
+`request_completed`, `request_failed`, or `request_*`. The log quality gate
+counts those as bucket events; governed paths must keep
+`request_completed_count == 0` and catch-all event count at zero.

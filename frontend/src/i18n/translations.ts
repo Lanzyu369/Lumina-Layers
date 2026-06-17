@@ -85,6 +85,78 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "近期接口错误",
     en: "Recent API errors",
   },
+  api_error_http_400: {
+    zh: "请求数据无效，请检查填写的值。(HTTP 400)",
+    en: "Request data is invalid. Please check the entered values. (HTTP 400)",
+  },
+  api_error_http_401: {
+    zh: "继续操作前需要先完成登录或认证。(HTTP 401)",
+    en: "Authentication is required before this action can continue. (HTTP 401)",
+  },
+  api_error_http_402: {
+    zh: "此操作需要可用额度或付款状态后才能继续。(HTTP 402)",
+    en: "This action requires an available quota or payment before it can continue. (HTTP 402)",
+  },
+  api_error_http_403: {
+    zh: "你没有权限执行此操作。(HTTP 403)",
+    en: "You do not have permission to perform this action. (HTTP 403)",
+  },
+  api_error_http_404: {
+    zh: "请求的资源不存在或已过期。(HTTP 404)",
+    en: "The requested resource was not found or has expired. (HTTP 404)",
+  },
+  api_error_http_405: {
+    zh: "所选接口不支持此操作。(HTTP 405)",
+    en: "This action is not supported by the selected API endpoint. (HTTP 405)",
+  },
+  api_error_http_408: {
+    zh: "服务器未能在超时前完成请求。(HTTP 408)",
+    en: "The request timed out before the server could finish. (HTTP 408)",
+  },
+  api_error_http_409: {
+    zh: "请求与当前服务器状态冲突。(HTTP 409)",
+    en: "The request conflicts with the current server state. (HTTP 409)",
+  },
+  api_error_http_413: {
+    zh: "上传文件或请求内容过大。(HTTP 413)",
+    en: "The uploaded file or request is too large. (HTTP 413)",
+  },
+  api_error_http_415: {
+    zh: "服务器不支持此文件类型。(HTTP 415)",
+    en: "This file type is not supported by the server. (HTTP 415)",
+  },
+  api_error_http_422: {
+    zh: "请求缺少必填数据或包含无效值。(HTTP 422)",
+    en: "The request is missing required data or contains invalid values. (HTTP 422)",
+  },
+  api_error_http_429: {
+    zh: "请求过于频繁，请稍后再试。(HTTP 429)",
+    en: "Too many requests were sent. Please wait and try again. (HTTP 429)",
+  },
+  api_error_http_500: {
+    zh: "服务器发生内部错误。请使用请求 ID 查看日志。(HTTP 500)",
+    en: "The server hit an internal error. Check the log for the request ID. (HTTP 500)",
+  },
+  api_error_http_502: {
+    zh: "处理请求时上游依赖失败。(HTTP 502)",
+    en: "An upstream dependency failed while handling this request. (HTTP 502)",
+  },
+  api_error_http_503: {
+    zh: "服务器暂时不可用，请稍后再试。(HTTP 503)",
+    en: "Server temporarily unavailable. Please try again later. (HTTP 503)",
+  },
+  api_error_http_504: {
+    zh: "服务器等待依赖服务时超时。(HTTP 504)",
+    en: "The server timed out waiting for a dependency. (HTTP 504)",
+  },
+  api_error_http_default: {
+    zh: "接口请求失败。请使用请求 ID 查看日志。(HTTP {status})",
+    en: "API request failed. Check the log for the request ID. (HTTP {status})",
+  },
+  api_error_no_response: {
+    zh: "接口请求在服务器返回响应前失败。",
+    en: "API request failed before the server returned a response.",
+  },
   bug_report_modal_privacy_note: {
     zh: "本反馈仅发送到 Lumina Studio 开发者邮箱，用于定位和回复问题。",
     en: "This report is sent only to the Lumina Studio developer mailbox for triage and follow-up.",

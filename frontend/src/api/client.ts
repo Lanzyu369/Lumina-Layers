@@ -1,6 +1,7 @@
 import axios from "axios";
 import { postClientLog, summarizeErrorForLog } from "../utils/clientLog";
 import { useActionHistoryStore } from "../stores/actionHistoryStore";
+import { tRuntime } from "../i18n/runtime";
 
 /**
  * Axios 实例，统一管理 API 请求基础配置。
@@ -33,6 +34,142 @@ function summarizeApiErrorData(data: unknown): unknown {
   return { keys: Object.keys(record).slice(0, 12) };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function formatValidationLocation(value: unknown): string | null {
+  if (!Array.isArray(value) || value.length === 0) {
+    return null;
+  }
+  return value.map((part) => String(part)).join(".");
+}
+
+function formatValidationDetails(details: unknown[]): string | null {
+  const messages = details
+    .map((item) => {
+      if (!isRecord(item)) {
+        return typeof item === "string" ? item : null;
+      }
+      const message = typeof item.msg === "string" ? item.msg : null;
+      if (!message) {
+        return null;
+      }
+      const location = formatValidationLocation(item.loc);
+      return location ? `${location}: ${message}` : message;
+    })
+    .filter((message): message is string => Boolean(message));
+  return messages.length > 0 ? messages.join("; ") : null;
+}
+
+function extractReadableDetail(data: unknown): string | null {
+  if (typeof data === "string" && data.trim()) {
+    return data.trim();
+  }
+  if (!isRecord(data)) {
+    return null;
+  }
+
+  const detail = data.detail;
+  if (typeof detail === "string" && detail.trim()) {
+    return detail.trim();
+  }
+  if (Array.isArray(detail)) {
+    const validationMessage = formatValidationDetails(detail);
+    if (validationMessage) {
+      return validationMessage;
+    }
+  }
+
+  const message = data.message;
+  if (typeof message === "string" && message.trim()) {
+    return message.trim();
+  }
+  return null;
+}
+
+function fallbackHttpStatusMessage(statusCode: number | null): string {
+  switch (statusCode) {
+    case 400:
+      return tRuntime("api_error_http_400");
+    case 401:
+      return tRuntime("api_error_http_401");
+    case 402:
+      return tRuntime("api_error_http_402");
+    case 403:
+      return tRuntime("api_error_http_403");
+    case 404:
+      return tRuntime("api_error_http_404");
+    case 405:
+      return tRuntime("api_error_http_405");
+    case 408:
+      return tRuntime("api_error_http_408");
+    case 409:
+      return tRuntime("api_error_http_409");
+    case 413:
+      return tRuntime("api_error_http_413");
+    case 415:
+      return tRuntime("api_error_http_415");
+    case 422:
+      return tRuntime("api_error_http_422");
+    case 429:
+      return tRuntime("api_error_http_429");
+    case 500:
+      return tRuntime("api_error_http_500");
+    case 502:
+      return tRuntime("api_error_http_502");
+    case 503:
+      return tRuntime("api_error_http_503");
+    case 504:
+      return tRuntime("api_error_http_504");
+    default:
+      return typeof statusCode === "number"
+        ? tRuntime("api_error_http_default", { status: statusCode })
+        : tRuntime("api_error_no_response");
+  }
+}
+
+function readableApiErrorMessage(
+  data: unknown,
+  statusCode: number | null,
+  error: unknown,
+): string {
+  const detail = extractReadableDetail(data);
+  if (detail) {
+    return detail;
+  }
+  const fallback = fallbackHttpStatusMessage(statusCode);
+  if (fallback) {
+    return fallback;
+  }
+  return error instanceof Error ? error.message : String(error ?? "API request failed");
+}
+
+function getResponseHeaderValue(
+  headers: unknown,
+  name: string,
+): string | null {
+  if (!headers) {
+    return null;
+  }
+  const lowerName = name.toLowerCase();
+  if (
+    typeof (headers as { get?: unknown }).get === "function"
+  ) {
+    const value = (headers as { get: (headerName: string) => unknown }).get(name);
+    return typeof value === "string" && value.trim() ? value.trim() : null;
+  }
+  if (isRecord(headers)) {
+    for (const [key, value] of Object.entries(headers)) {
+      if (key.toLowerCase() !== lowerName) {
+        continue;
+      }
+      return typeof value === "string" && value.trim() ? value.trim() : null;
+    }
+  }
+  return null;
+}
+
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
@@ -42,6 +179,19 @@ apiClient.interceptors.response.use(
       typeof config?.method === "string" ? config.method.toUpperCase() : null;
     const url = config?.url ?? null;
     const statusCode: number | null = response?.status ?? null;
+    const requestId = getResponseHeaderValue(response?.headers, "x-request-id");
+    const readableMessage = readableApiErrorMessage(
+      response?.data,
+      statusCode,
+      error,
+    );
+    if (error && typeof error === "object") {
+      try {
+        (error as { message?: string }).message = readableMessage;
+      } catch {
+        // Preserve the original error object if a runtime marks message read-only.
+      }
+    }
     postClientLog("api: request failed", {
       scope: "api",
       phase: "request-failed",
@@ -51,8 +201,10 @@ apiClient.interceptors.response.use(
         method,
         url,
         status_code: statusCode,
+        request_id: requestId,
         response_detail: summarizeApiErrorData(response?.data),
         ...summarizeErrorForLog(error),
+        error_message: readableMessage,
       },
     });
     // Mirror the failure into the action history bundle so a bug report
@@ -65,10 +217,8 @@ apiClient.interceptors.response.use(
           error: {
             status_code: statusCode,
             path: typeof url === "string" ? url : String(url ?? ""),
-            error_message:
-              typeof error?.message === "string"
-                ? error.message
-                : String(error ?? "unknown error"),
+            ...(requestId ? { request_id: requestId } : {}),
+            error_message: readableMessage,
           },
         });
       } catch {
