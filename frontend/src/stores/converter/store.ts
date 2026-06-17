@@ -1933,6 +1933,7 @@ const DEFAULT_PUZZLE_LAYOUT_SEED = 0;
 function buildPreviewSessionResetState(): Partial<ConverterState> {
   return {
     sessionId: null,
+    isLoading: false,
     previewImageUrl: null,
     originalPreviewUrl: null,
     previewBaseImageUrl: null,
@@ -4684,17 +4685,28 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
     uploadHeightmap: async () => {
       const state = _get();
+      const clearHeightmapUploadState = {
+        heightmapThumbnailUrl: null,
+        color_height_map: {},
+      };
       if (!state.heightmapFile || !state.sessionId) {
-        set({ error: "请先上传高度图文件并完成预览" });
+        set({
+          ...clearHeightmapUploadState,
+          error: "请先上传高度图文件并完成预览",
+        });
         return;
       }
+      const requestedSessionId = state.sessionId;
       set({ isLoading: true, error: null });
       try {
         const response = await apiUploadHeightmap(
           state.heightmapFile,
-          state.sessionId,
+          requestedSessionId,
           state.heightmap_max_height,
         );
+        if (_get().sessionId !== requestedSessionId) {
+          return;
+        }
         const thumbnailUrl = `${response.thumbnail_url}`;
         set({
           isLoading: false,
@@ -4702,7 +4714,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           color_height_map: response.color_height_map,
         });
       } catch (err) {
+        if (_get().sessionId !== requestedSessionId) {
+          return;
+        }
         set({
+          ...clearHeightmapUploadState,
           isLoading: false,
           error: err instanceof Error ? err.message : "Heightmap upload failed",
         });
@@ -5465,6 +5481,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           : sourceSelection.source_kind === "native_bundle"
             ? (sourceSelection.layer_height_mm ?? null)
             : state.layer_height_mm;
+        const shouldResetHeightmapMapping =
+          state.enable_relief && state.autoHeightMode === "use-heightmap";
+        const shouldReuploadHeightmap =
+          shouldResetHeightmapMapping && state.heightmapFile !== null;
 
         _previewClientLog("preview: response received", {
           session_id: response.session_id,
@@ -5489,9 +5509,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             match_mode: response.lut_match_mode ?? "legacy",
           },
           palette: normalizedPalette,
-          ...(autoReliefHeightMap
-            ? { color_height_map: autoReliefHeightMap }
-            : {}),
+          ...(shouldResetHeightmapMapping
+            ? { color_height_map: {}, heightmapThumbnailUrl: null }
+            : autoReliefHeightMap
+              ? { color_height_map: autoReliefHeightMap }
+              : {}),
           colorContours: response.contours ?? {},
           previewGlbUrl: glbUrl,
           previewPerformanceTiming: response.performance_timing ?? null,
@@ -5530,6 +5552,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           gradientGroupsSessionId: null,
           gradientSelection: null,
         });
+        if (
+          shouldReuploadHeightmap &&
+          _get().sessionId === response.session_id
+        ) {
+          await _get().uploadHeightmap();
+          if (_get().sessionId !== response.session_id) {
+            return;
+          }
+        }
         if (!glbUrl) {
           _get()._pollAsyncGlb();
         }
@@ -6149,6 +6180,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           previewBaseImageUrl: null,
           sessionId: null,
           previewGlbUrl: null,
+          isLoading: false,
           previewPerformanceTiming: null,
           generatePerformanceTiming: null,
           batchPreviewItems: [],
@@ -6222,6 +6254,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             previewImageUrl: null,
             previewBaseImageUrl: null,
             sessionId: null,
+            isLoading: false,
             previewGlbUrl: null,
             modelUrl: null,
             previewPerformanceTiming: null,
@@ -6253,6 +6286,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             previewImageUrl: null,
             previewBaseImageUrl: null,
             sessionId: null,
+            isLoading: false,
             previewGlbUrl: null,
             modelUrl: null,
             previewPerformanceTiming: null,
@@ -6298,6 +6332,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           previewImageUrl: null,
           previewBaseImageUrl: null,
           sessionId: null,
+          isLoading: false,
           previewGlbUrl: null,
           modelUrl: null,
           previewPerformanceTiming: null,
@@ -6339,6 +6374,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         previewImageUrl: null,
         previewBaseImageUrl: null,
         sessionId: null,
+        isLoading: false,
         previewGlbUrl: null,
         modelUrl: null,
         previewPerformanceTiming: null,
@@ -6613,7 +6649,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         await _get().submitPreview();
         // 检查预览是否成功
         const afterPreview = _get();
-        if (!afterPreview.sessionId) {
+        if (!afterPreview.sessionId || afterPreview.error) {
           return null; // 预览失败，错误已由 submitPreview 设置
         }
       }
@@ -6740,7 +6776,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       const keepIds = collectConverterKeepFileIds(state);
       apiCleanupSessionFiles(state.sessionId, keepIds);
       void apiCloseSession(state.sessionId, keepIds);
-      set({ sessionId: null });
+      set({ sessionId: null, isLoading: false });
     },
   })),
 );
