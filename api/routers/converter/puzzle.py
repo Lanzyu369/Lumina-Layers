@@ -114,13 +114,22 @@ def _require_puzzle_cache(
         return cache
 
     loaded = get_preview_cache_metadata(cache)
-    loaded.update(
-        hydrate_preview_cache(
-            cache,
-            fields=fields,
-            mmap_mode="r",
+    try:
+        loaded.update(
+            hydrate_preview_cache(
+                cache,
+                fields=fields,
+                mmap_mode="r",
+            )
         )
-    )
+    except (OSError, ValueError, TypeError, KeyError, EOFError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Puzzle preview cache is unavailable. "
+                "Re-run preview before using puzzle mode."
+            ),
+        ) from exc
     return loaded
 
 
