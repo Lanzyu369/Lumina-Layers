@@ -2,7 +2,11 @@ import { motion, AnimatePresence } from "framer-motion"
 import { useEffect, useMemo, useCallback, useState } from "react"
 import type { FormEvent } from "react"
 import type { BaseColorEntry, FiveColorMatchResponse, FiveColorQueryResponse } from "../api/types"
-import { resolveFiveColorRecipeLength, useFiveColorStore } from "../stores/fiveColorStore"
+import {
+  hasCompleteFiveColorSelection,
+  resolveFiveColorRecipeLength,
+  useFiveColorStore,
+} from "../stores/fiveColorStore"
 import { useConverterStore } from "../stores/converter"
 import Dropdown from "./ui/Dropdown"
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode"
@@ -49,9 +53,13 @@ export default function FiveColorQueryPanel() {
     () => resolveFiveColorRecipeLength(combinations, selectedIndices),
     [combinations, selectedIndices],
   )
+  const canSubmitSelection = useMemo(
+    () => hasCompleteFiveColorSelection(combinations, selectedIndices),
+    [combinations, selectedIndices],
+  )
   const hasSelection = selectedIndices.length > 0
-  const isFull = selectedIndices.length === selectionLimit
-  const canReverse = isFull
+  const hasReachedSelectionLimit = selectedIndices.length === selectionLimit
+  const canReverse = canSubmitSelection
   const matchResult = isFiveColorMatchResponse(queryResult) ? queryResult : null
   const isRecipeUnavailable = queryResult?.reason === "recipe_unavailable"
 
@@ -80,7 +88,7 @@ export default function FiveColorQueryPanel() {
   }, [matchColorByHex, targetHex])
 
   const validNextIndices = useMemo(() => {
-    if (isFull) return null
+    if (hasReachedSelectionLimit) return null
     if (!combinations) return null
     if (combinations.length === 0) return []
 
@@ -100,7 +108,7 @@ export default function FiveColorQueryPanel() {
       }
     }
     return Array.from(valid)
-  }, [combinations, selectedIndices, isFull, selectionLimit])
+  }, [combinations, selectedIndices, hasReachedSelectionLimit, selectionLimit])
 
   const canvasSlices = useMemo(
     () => selectedIndices.map((idx) => {
@@ -149,7 +157,7 @@ export default function FiveColorQueryPanel() {
                       const isSelected = selectedIndices.includes(color.index)
                       const selOrder = selectedIndices.indexOf(color.index)
                       const isValidNext = validNextIndices === null || validNextIndices.includes(color.index)
-                      const disabled = isFull || !isValidNext
+                      const disabled = hasReachedSelectionLimit || !isValidNext
 
                       return (
                         <button
@@ -227,7 +235,7 @@ export default function FiveColorQueryPanel() {
             <div className={`grid gap-2 ${workspace.isCompact ? "grid-cols-1" : "grid-cols-2"}`}>
               <Button
                 onClick={() => void submitQuery()}
-                disabled={!isFull || isLoading}
+                disabled={!canSubmitSelection || isLoading}
                 label={isLoading ? t("five_color_query_loading") : t("five_color_query")}
                 className={workspace.isCompact ? "" : "col-span-2"}
               />

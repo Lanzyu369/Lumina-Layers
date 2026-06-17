@@ -339,6 +339,35 @@ describe("fiveColorStore LUT switching", () => {
     expect(useFiveColorStore.getState().selectedIndices).toEqual([4, 1, 2, 3, 0, 4]);
   });
 
+  it("allows submitting a five-layer recipe that is also a six-layer prefix", async () => {
+    useFiveColorStore.setState({
+      lutName: "mixed-prefix-lut",
+      combinations: [
+        [0, 1, 2, 3, 4],
+        [0, 1, 2, 3, 4, 5],
+      ],
+      selectedIndices: [0, 1, 2, 3, 4],
+      queryResult: null,
+    });
+    mockQueryFiveColor.mockResolvedValueOnce({
+      found: true,
+      selected_indices: [0, 1, 2, 3, 4],
+      result_rgb: [1, 2, 3],
+      result_hex: "#010203",
+      row_index: 0,
+      message: "found",
+      source: "legacy",
+    });
+
+    await useFiveColorStore.getState().submitQuery();
+
+    expect(mockQueryFiveColor).toHaveBeenCalledWith({
+      lut_name: "mixed-prefix-lut",
+      selected_indices: [0, 1, 2, 3, 4],
+    });
+    expect(useFiveColorStore.getState().queryResult?.result_hex).toBe("#010203");
+  });
+
   it("ignores stale target-match responses after switching LUTs", async () => {
     let resolveMatch: (value: Awaited<ReturnType<typeof matchFiveColorByHex>>) => void;
     const matchPromise = new Promise<Awaited<ReturnType<typeof matchFiveColorByHex>>>((resolve) => {

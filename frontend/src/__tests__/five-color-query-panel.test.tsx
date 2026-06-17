@@ -193,6 +193,21 @@ describe("FiveColorQueryPanel target color match", () => {
     expect(screen.getByRole("button", { name: "选择颜色 White (#FFFFFF)" })).toBeDisabled();
   });
 
+  it("allows a five-layer prefix recipe to submit and still exposes the sixth layer", () => {
+    useFiveColorStore.setState({
+      combinations: [
+        [0, 1, 2, 3, 4],
+        [0, 1, 2, 3, 4, 5],
+      ],
+      selectedIndices: [0, 1, 2, 3, 4],
+    });
+
+    render(<FiveColorQueryPanel />);
+
+    expect(screen.getByRole("button", { name: "查询" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "选择颜色 Black (#000000)" })).toBeEnabled();
+  });
+
   it("does not present the zero-based LUT row as a user-facing card row", () => {
     useFiveColorStore.setState({
       selectedIndices: [0, 1, 2, 3, 4],

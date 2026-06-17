@@ -56,14 +56,16 @@ function sameSelection(left: number[], right: number[]) {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
+function isSupportedRecipeLength(length: number): boolean {
+  return length >= DEFAULT_RECIPE_LENGTH && length <= MAX_RECIPE_LENGTH;
+}
+
 export function resolveFiveColorRecipeLength(
   combinations: number[][] | null,
   selection: number[] = [],
 ): number {
   const validCombinations = combinations?.filter(
-    (candidate) =>
-      candidate.length >= DEFAULT_RECIPE_LENGTH &&
-      candidate.length <= MAX_RECIPE_LENGTH,
+    (candidate) => isSupportedRecipeLength(candidate.length),
   );
   if (validCombinations?.length) {
     const matchingCombinations = selection.length > 0
@@ -79,6 +81,24 @@ export function resolveFiveColorRecipeLength(
   }
   if (selection.length === MAX_RECIPE_LENGTH) return MAX_RECIPE_LENGTH;
   return DEFAULT_RECIPE_LENGTH;
+}
+
+export function hasCompleteFiveColorSelection(
+  combinations: number[][] | null,
+  selection: number[],
+): boolean {
+  if (!isSupportedRecipeLength(selection.length)) return false;
+  const validCombinations = combinations?.filter(
+    (candidate) => isSupportedRecipeLength(candidate.length),
+  );
+  if (validCombinations?.length) {
+    return validCombinations.some(
+      (candidate) =>
+        candidate.length === selection.length &&
+        selection.every((value, index) => candidate[index] === value),
+    );
+  }
+  return selection.length === resolveFiveColorRecipeLength(combinations, selection);
 }
 
 // ========== State Interface ==========
@@ -239,7 +259,7 @@ export const useFiveColorStore = create<FiveColorState & FiveColorActions>()(
 
       reverseSelection: () => {
         const { selectedIndices, combinations } = get();
-        if (selectedIndices.length === resolveFiveColorRecipeLength(combinations, selectedIndices)) {
+        if (hasCompleteFiveColorSelection(combinations, selectedIndices)) {
           invalidateQueryRequests();
           invalidateMatchColorRequests();
           const nextSelection = [...selectedIndices].reverse();
@@ -255,7 +275,7 @@ export const useFiveColorStore = create<FiveColorState & FiveColorActions>()(
 
       submitQuery: async () => {
         const { selectedIndices, lutName, manualSelectedIndices, selectionSource, combinations } = get();
-        if (selectedIndices.length !== resolveFiveColorRecipeLength(combinations, selectedIndices)) return;
+        if (!hasCompleteFiveColorSelection(combinations, selectedIndices)) return;
         const requestId = ++queryRequestSequence;
         invalidateMatchColorRequests();
         set({
