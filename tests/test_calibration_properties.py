@@ -7,7 +7,9 @@ Lumina Studio - 校准板色块尺寸与间距配置 属性测试 (Property-Base
 
 import os
 import sys
+from pathlib import Path
 
+import numpy as np
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
@@ -293,7 +295,7 @@ def test_resolve_backing_layers_falls_back_to_printer_config_when_none() -> None
 
 def test_5color_page1_generation_uses_equalized_physical_board_layout(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
     """5-Color Page 1 uses a 40x40 physical frame like Page 2.
 
@@ -302,7 +304,7 @@ def test_5color_page1_generation_uses_equalized_physical_board_layout(
     """
     from core import calibration
 
-    captured: dict[str, object] = {}
+    captured: dict[str, np.ndarray] = {}
     block_size_mm = 4.2
     gap_mm = 0.42
     px_blk = max(1, int(block_size_mm / PrinterConfig.NOZZLE_WIDTH))
@@ -311,7 +313,11 @@ def test_5color_page1_generation_uses_equalized_physical_board_layout(
     expected_physical_dim = 40
     expected_padding = 4
 
-    def _capture_previews(full_matrix, *_args, **_kwargs):
+    def _capture_previews(
+        full_matrix: np.ndarray,
+        *_args: object,
+        **_kwargs: object,
+    ) -> list[object]:
         captured["matrix"] = full_matrix.copy()
         return []
 
