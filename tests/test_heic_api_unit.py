@@ -20,6 +20,7 @@ from api.file_bridge import (
     HAS_HEIF,
     _guess_media_type,
     ensure_png_tempfile,
+    upload_to_ndarray,
     upload_to_tempfile,
 )
 
@@ -203,6 +204,28 @@ class TestEnsurePngConversionFailureCleanup:
         assert exc_info.value.status_code == 422
         assert "simulated raw cleanup failure" in exc_info.value.detail
         assert not any(path.suffix == ".png" for path in tmp_path.iterdir())
+
+
+class TestUploadToNdarrayDependencyErrors:
+    """Direct image upload decoding should preserve optional dependency guidance."""
+
+    def test_heic_missing_dependency_preserves_pillow_heif_guidance(self) -> None:
+        mock_file = _make_upload_file("photo.heic", content=b"not a heic image")
+
+        with patch("api.file_bridge.HAS_HEIF", False):
+            with pytest.raises(ValueError) as exc_info:
+                asyncio.run(upload_to_ndarray(mock_file))
+
+        assert "pillow-heif" in str(exc_info.value)
+
+    def test_raw_missing_dependency_preserves_rawpy_guidance(self) -> None:
+        mock_file = _make_upload_file("photo.dng", content=b"not a raw image")
+
+        with patch("api.file_bridge.HAS_RAW", False):
+            with pytest.raises(ValueError) as exc_info:
+                asyncio.run(upload_to_ndarray(mock_file))
+
+        assert "rawpy" in str(exc_info.value)
 
 
 # ── Test 2: HAS_HEIF flag consistency with pillow_heif install ─────────

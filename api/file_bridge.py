@@ -56,6 +56,9 @@ RAW_EXTENSIONS: set[str] = {
 }
 _GZIP_CHUNK_SIZE = 1024 * 1024
 _GLB_GZIP_MIN_BYTES = 1024
+_UPLOAD_IMAGE_UNREADABLE_DETAIL = (
+    "无法解码图像文件: 请重新上传有效的 PNG、JPEG、HEIC 或 RAW 图片后再试。"
+)
 
 
 def _write_all(fd: int, data: bytes) -> None:
@@ -124,7 +127,7 @@ async def upload_to_ndarray(file: UploadFile) -> np.ndarray:
     except (UnidentifiedImageError, OSError, ValueError) as e:
         if ext in HEIC_EXTENSIONS and not HAS_HEIF:
             raise ValueError("HEIC/HEIF 格式需要 pillow-heif 库。请执行: pip install pillow-heif")
-        raise ValueError(f"无法解码图像文件: {e}")
+        raise ValueError(_UPLOAD_IMAGE_UNREADABLE_DETAIL) from e
 
 
 async def upload_to_tempfile(file: UploadFile, suffix: Optional[str] = None) -> str:

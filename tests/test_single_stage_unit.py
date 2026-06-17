@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import zipfile
 from pathlib import Path
@@ -41,6 +42,17 @@ from core.single_stage import (
 )
 from core.single_stage.kit import SingleStageSpec, _build_stage_matrix, _build_stage_scene
 from core.single_stage.processing import _safe_extract_zip
+
+
+_UPLOAD_IMAGE_UNREADABLE_DETAIL = (
+    "无法解码图像文件: 请重新上传有效的 PNG、JPEG、HEIC 或 RAW 图片后再试。"
+)
+
+
+def _png_bytes(width: int = 8, height: int = 8) -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", (width, height), (20, 40, 60)).save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 def _client_with_state() -> tuple[TestClient, SessionStore, FileRegistry]:
@@ -2223,6 +2235,29 @@ def test_gradient_card_stage_a_routes_compute_and_save_material(
     assert removed == 4
     assert registry.resolve(save_body["material_file_url"].split("/")[-1]) is None
     assert registry.resolve(save_body["stage_a_params_url"].split("/")[-1]) is None
+
+
+def test_gradient_card_stage_a_rejects_unreadable_image_without_pil_detail() -> None:
+    client, _store, _registry = _client_with_state()
+
+    response = client.post(
+        "/api/extractor/extract-gradient-card-stage-a",
+        data={
+            "white_corner_points": json.dumps([[0, 0], [10, 0], [10, 10], [0, 10]]),
+            "black_corner_points": json.dumps([[0, 0], [10, 0], [10, 10], [0, 10]]),
+        },
+        files={
+            "white_image": ("white.png", b"not an image", "image/png"),
+            "black_image": ("black.png", _png_bytes(), "image/png"),
+            "dataset_zip": ("kit.zip", b"not a real zip", "application/zip"),
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail == _UPLOAD_IMAGE_UNREADABLE_DETAIL
+    assert "cannot identify image file" not in detail
+    assert "BytesIO object" not in detail
 
 
 def test_list_saved_stage_a_material_archives_reads_saved_material_directory(tmp_path: Path) -> None:
