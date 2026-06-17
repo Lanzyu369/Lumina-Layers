@@ -36,6 +36,23 @@ def test_resolve_standard_single_page_layouts() -> None:
         assert row_index_for_cell(layout, cell.card_index, cell.data_row, cell.data_col) == row_index
 
 
+def test_resolve_1024_extended_page_1_layout_uses_wide_padding() -> None:
+    layout = resolve_lut_layout("5-Color Extended", 1024)
+
+    assert len(layout.pages) == 1
+    page = layout.pages[0]
+    assert page.item_count == 1024
+    assert page.data_rows == 32
+    assert page.data_cols == 32
+    assert page.padding == 4
+    assert page.physical_rows == 40
+    assert page.physical_cols == 40
+
+    tail = cell_for_row_index(layout, 1023)
+    assert (tail.data_row, tail.data_col) == (31, 31)
+    assert (tail.physical_row, tail.physical_col) == (35, 35)
+
+
 def test_resolve_2468_extended_layout_preserves_two_page_order() -> None:
     layout = resolve_lut_layout("5-Color Extended", 2468)
 
