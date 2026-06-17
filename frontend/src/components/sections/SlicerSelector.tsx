@@ -4,6 +4,7 @@ import { useSlicerStore } from "../../stores/slicerStore";
 import { useConverterStore } from "../../stores/converter";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useI18n } from "../../i18n/context";
+import { assertResourceDownloadAvailable } from "../../api/client";
 import {
   getDetectedSlicerIdForSoftware,
   getSlicerSoftwareDisplayName,
@@ -126,6 +127,16 @@ function resolveActiveSlicer(
   return selectedSlicer;
 }
 
+function toVisibleErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message.trim();
+  }
+  if (typeof error === "string" && error.trim()) {
+    return error.trim();
+  }
+  return fallback;
+}
+
 interface SlicerSelectorProps {
   threemfDiskPath: string | null;
   downloadUrl: string | null;
@@ -161,6 +172,8 @@ export default function SlicerSelector({
 
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isAutoGenerating, setIsAutoGenerating] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
   const triggerRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const syncedSlicerSoftwareRef = useRef<string | null>(null);
@@ -281,28 +294,41 @@ export default function SlicerSelector({
     slicerSoftware,
   ]);
 
+  useEffect(() => {
+    setDownloadError(null);
+  }, [downloadUrl]);
+
   /**
    * Helper to trigger a browser download from a URL.
    * 辅助函数：通过 URL 触发浏览器下载。
    */
-  const triggerDownload = (url: string) => {
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "";
-    link.click();
-    handleArtifactAction();
+  const triggerDownload = async (url: string) => {
+    setIsDownloading(true);
+    setDownloadError(null);
+    try {
+      await assertResourceDownloadAvailable(url);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "";
+      link.click();
+      handleArtifactAction();
+    } catch (err) {
+      setDownloadError(toVisibleErrorMessage(err, t("slicer_download_failed")));
+    } finally {
+      setIsDownloading(false);
+    }
   };
 
   const handleDownloadOrGenerate = async () => {
     if (downloadUrl) {
-      triggerDownload(downloadUrl);
+      await triggerDownload(downloadUrl);
     } else {
       setIsAutoGenerating(true);
       try {
         await onAutoGenerate();
         const latestDownloadUrl = resolveLatestDownloadUrl();
         if (latestDownloadUrl) {
-          triggerDownload(latestDownloadUrl);
+          await triggerDownload(latestDownloadUrl);
         }
       } catch {
         // Error state is set by submitGenerate in ConverterStore
@@ -344,14 +370,14 @@ export default function SlicerSelector({
     setIsDropdownOpen(false);
   };
 
-  const handleDownloadFromMenu = () => {
+  const handleDownloadFromMenu = async () => {
     if (downloadUrl) {
-      triggerDownload(downloadUrl);
+      await triggerDownload(downloadUrl);
     }
     setIsDropdownOpen(false);
   };
 
-  const isDisabled = !canSubmit || isDetecting || isLaunching || isAutoGenerating;
+  const isDisabled = !canSubmit || isDetecting || isLaunching || isAutoGenerating || isDownloading;
 
   const mainButtonLabel = getButtonLabel(
     largeFormat ? hasSlicers : canOpenInSlicer,
@@ -374,7 +400,7 @@ export default function SlicerSelector({
               disabled={isDisabled}
               className={`flex flex-1 items-center justify-center gap-2 rounded-l-md px-4 py-2 text-sm font-medium transition-colors ${brandStyle.bg} ${brandStyle.hover} ${brandStyle.text} disabled:opacity-40 disabled:cursor-not-allowed`}
             >
-              {(isLaunching || isAutoGenerating) && (
+              {(isLaunching || isAutoGenerating || isDownloading) && (
                 <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
@@ -435,8 +461,8 @@ export default function SlicerSelector({
               <div className="my-1 border-t border-slate-200 dark:border-slate-600" />
               <button
                 type="button"
-                onClick={handleDownloadFromMenu}
-                disabled={!downloadUrl}
+                onClick={() => void handleDownloadFromMenu()}
+                disabled={!downloadUrl || isDownloading}
                 className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-slate-700 dark:text-slate-200 transition-colors hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <svg className="h-4 w-4 text-slate-500 dark:text-slate-400" viewBox="0 0 20 20" fill="currentColor">
@@ -462,7 +488,7 @@ export default function SlicerSelector({
                 disabled={isDisabled}
                 className={`flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors ${brandStyle.bg} ${brandStyle.hover} ${brandStyle.text} disabled:opacity-40 disabled:cursor-not-allowed`}
               >
-                {isAutoGenerating && (
+                {(isAutoGenerating || isDownloading) && (
                   <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
@@ -483,6 +509,9 @@ export default function SlicerSelector({
       )}
       {error && (
         <p className="text-xs text-red-400">{error}</p>
+      )}
+      {downloadError && (
+        <p role="alert" className="text-xs text-red-400">{downloadError}</p>
       )}
     </div>
   );

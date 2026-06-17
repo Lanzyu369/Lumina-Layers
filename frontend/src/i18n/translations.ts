@@ -85,6 +85,86 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "近期接口错误",
     en: "Recent API errors",
   },
+  api_error_http_400: {
+    zh: "请求数据无效，请检查填写的值。",
+    en: "Request data is invalid. Please check the entered values.",
+  },
+  api_error_http_401: {
+    zh: "继续操作前需要先完成登录或认证。",
+    en: "Authentication is required before this action can continue.",
+  },
+  api_error_http_402: {
+    zh: "此操作需要可用额度或付款状态后才能继续。",
+    en: "This action requires an available quota or payment before it can continue.",
+  },
+  api_error_http_403: {
+    zh: "你没有权限执行此操作。",
+    en: "You do not have permission to perform this action.",
+  },
+  api_error_http_404: {
+    zh: "请求的资源不存在或已过期。",
+    en: "The requested resource was not found or has expired.",
+  },
+  api_error_http_405: {
+    zh: "所选接口不支持此操作。",
+    en: "This action is not supported by the selected API endpoint.",
+  },
+  api_error_http_408: {
+    zh: "服务器未能在超时前完成请求。",
+    en: "The request timed out before the server could finish.",
+  },
+  api_error_http_409: {
+    zh: "请求与当前服务器状态冲突。",
+    en: "The request conflicts with the current server state.",
+  },
+  api_error_http_413: {
+    zh: "上传文件或请求内容过大。",
+    en: "The uploaded file or request is too large.",
+  },
+  api_error_http_415: {
+    zh: "服务器不支持此文件类型。",
+    en: "This file type is not supported by the server.",
+  },
+  api_error_http_422: {
+    zh: "请求缺少必填数据或包含无效值。",
+    en: "The request is missing required data or contains invalid values.",
+  },
+  api_error_http_429: {
+    zh: "请求过于频繁，请稍后再试。",
+    en: "Too many requests were sent. Please wait and try again.",
+  },
+  api_error_http_500: {
+    zh: "服务器发生内部错误。请使用请求 ID 查看日志。",
+    en: "The server hit an internal error. Check the log for the request ID.",
+  },
+  api_error_http_502: {
+    zh: "处理请求时上游依赖失败。",
+    en: "An upstream dependency failed while handling this request.",
+  },
+  api_error_http_503: {
+    zh: "服务器暂时不可用，请稍后再试。",
+    en: "Server temporarily unavailable. Please try again later.",
+  },
+  api_error_http_504: {
+    zh: "服务器等待依赖服务时超时。",
+    en: "The server timed out waiting for a dependency.",
+  },
+  api_error_http_default: {
+    zh: "接口请求失败。请使用请求 ID 查看日志。",
+    en: "API request failed. Check the log for the request ID.",
+  },
+  api_error_http_client_default: {
+    zh: "请求未被服务器接受。请检查当前输入、权限或资源是否仍然可用。",
+    en: "The server did not accept the request. Check the current input, permissions, or resource availability.",
+  },
+  api_error_http_server_default: {
+    zh: "服务器处理请求时失败。请使用请求 ID 查看日志。",
+    en: "The server failed while handling the request. Check the log for the request ID.",
+  },
+  api_error_no_response: {
+    zh: "接口请求在服务器返回响应前失败。",
+    en: "API request failed before the server returned a response.",
+  },
   bug_report_modal_privacy_note: {
     zh: "本反馈仅发送到 Lumina Studio 开发者邮箱，用于定位和回复问题。",
     en: "This report is sent only to the Lumina Studio developer mailbox for triage and follow-up.",
@@ -4858,6 +4938,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "生成并下载",
     en: "Generate & Download",
   },
+  slicer_download_failed: {
+    zh: "下载文件暂时无法读取，请重新生成后再试。",
+    en: "The download file could not be read. Regenerate it and try again.",
+  },
   slicer_detecting: {
     zh: "正在检测切片软件...",
     en: "Detecting slicers...",
@@ -5407,6 +5491,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   "vec.send_to_converter": {
     zh: "发送到图像转换",
     en: "Send to Image Converter",
+  },
+  "vec.resource_action_failed": {
+    zh: "SVG 文件暂时无法读取，请重新生成后再试。",
+    en: "The SVG file could not be read. Regenerate it and try again.",
   },
   "vec.error": {
     zh: "矢量化失败",

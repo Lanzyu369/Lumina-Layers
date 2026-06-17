@@ -54,6 +54,7 @@ def _sample_payload(**overrides):
                     "error": {
                         "status_code": 500,
                         "path": "/api/converter/generate",
+                        "request_id": "req-ticket-500",
                         "error_message": "internal server error",
                     },
                     "snapshot": {},
@@ -111,6 +112,7 @@ def test_basic_payload_renders_all_sections(tmp_path: Path) -> None:
     assert "upload_image" in md
     assert "## Recent API Errors (last 5)" in md
     assert "/api/converter/generate" in md
+    assert "req-ticket-500" in md
     assert "## Attachments" in md
     assert "original.png" in md
     assert "final.3mf" in md

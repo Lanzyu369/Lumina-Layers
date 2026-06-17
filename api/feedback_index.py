@@ -130,8 +130,8 @@ def _format_api_errors_table(action_history: Any) -> str:
         "",
         "## Recent API Errors (last 5)",
         "",
-        "| time | status | path | message |",
-        "|---|---|---|---|",
+        "| time | status | request_id | path | message |",
+        "|---|---|---|---|---|",
     ]
     for entry in errors:
         if not isinstance(entry, dict):
@@ -139,10 +139,12 @@ def _format_api_errors_table(action_history: Any) -> str:
         ts = _format_timestamp_ms(entry.get("timestamp"))
         err = entry.get("error") or {}
         status = err.get("status_code") if isinstance(err, dict) else None
+        request_id = err.get("request_id") if isinstance(err, dict) else None
         path = err.get("path") if isinstance(err, dict) else None
         msg = err.get("error_message") if isinstance(err, dict) else None
         lines.append(
             f"| {ts} | {_safe_str(status)} | "
+            f"{_safe_str(request_id)} | "
             f"{_safe_str(path)} | {_safe_str(msg)} |"
         )
     return "\n".join(lines) + "\n"
