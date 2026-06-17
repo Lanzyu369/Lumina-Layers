@@ -58,6 +58,10 @@ _COLORCHECKER_PREVIEW_ROLES = (
     "overlay",
     "artifact",
 )
+_COLORCHECKER_PREVIEW_UNREADABLE_DETAIL = (
+    "ColorChecker preview is unavailable or unreadable. "
+    "Re-run ColorChecker calibration and try again."
+)
 
 
 @dataclass(frozen=True)
@@ -465,7 +469,7 @@ def snapshot_public_preview_file(
     except (UnidentifiedImageError, OSError, ValueError) as exc:
         raise HTTPException(
             status_code=422,
-            detail=f"Unable to read ColorChecker preview: {exc}",
+            detail=_COLORCHECKER_PREVIEW_UNREADABLE_DETAIL,
         ) from exc
     return PreviewFileSnapshot(
         data=data,
