@@ -514,6 +514,33 @@ class TestLutColorsLayout:
         assert len(data["cards"]) == 1
         assert len(data["cards"][0]["colors"]) == 1024
 
+    def test_colors_uses_extended_page_1_padding_for_standalone_1024_lut(self) -> None:
+        rgb = np.zeros((1024, 3), dtype=np.uint8)
+
+        with (
+            patch("api.routers.lut.LUTManager.get_lut_path", return_value="/fake/five-page-1.json"),
+            patch(
+                "api.routers.lut.LUTManager.load_lut_with_metadata",
+                return_value=(rgb, None, LUTMetadata(color_mode="5-Color Extended")),
+            ),
+            patch(
+                "core.converter.extract_lut_available_colors",
+                return_value=_raw_lut_colors(1024),
+            ),
+        ):
+            response = client.get("/api/lut/FivePage1/colors")
+
+        assert response.status_code == 200
+        data = response.json()
+        page = data["layout"]["pages"][0]
+        assert page["data_rows"] == 32
+        assert page["data_cols"] == 32
+        assert page["padding"] == 4
+        assert page["physical_rows"] == 40
+        assert page["physical_cols"] == 40
+        assert data["cards"][0]["page"]["padding"] == 4
+        assert len(data["cards"][0]["colors"]) == 1024
+
     def test_colors_splits_flattened_8color_grid_into_two_cards(self) -> None:
         rgb = np.zeros((74, 37, 3), dtype=np.uint8)
 
