@@ -498,7 +498,7 @@ def _build_relief_voxel_matrix(
 
     Args:
         matched_rgb (np.ndarray): (H, W, 3) RGB color array after K-Means matching
-        material_matrix (np.ndarray): (H, W, 5) material matrix for optical layers
+        material_matrix (np.ndarray): (H, W, N) material matrix for optical layers
         mask_solid (np.ndarray): (H, W) boolean mask of solid pixels
         color_height_map (dict): dict mapping hex colors to heights in mm
         default_height (float): default height in mm for colors not in map
@@ -516,9 +516,12 @@ def _build_relief_voxel_matrix(
 
     target_h, target_w = material_matrix.shape[:2]
 
-    # Constants
-    OPTICAL_LAYERS = 5
-    OPTICAL_THICKNESS_MM = OPTICAL_LAYERS * PrinterConfig.LAYER_HEIGHT  # 0.4mm
+    # Material archives can use more than the legacy 5 optical layers. Relief
+    # must preserve the full recipe depth instead of truncating to 5.
+    OPTICAL_LAYERS = int(material_matrix.shape[2])
+    if OPTICAL_LAYERS <= 0:
+        raise ValueError("material_matrix must contain at least one optical layer")
+    OPTICAL_THICKNESS_MM = OPTICAL_LAYERS * PrinterConfig.LAYER_HEIGHT
 
     _log.debug(f"Building 2.5D relief voxel matrix...")
     _log.debug(f"Optical layer thickness: {OPTICAL_THICKNESS_MM}mm ({OPTICAL_LAYERS} layers)")
