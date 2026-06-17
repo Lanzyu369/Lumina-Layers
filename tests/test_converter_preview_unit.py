@@ -17,6 +17,8 @@ import json
 import os
 import pickle
 import tempfile
+from contextlib import nullcontext
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
@@ -131,6 +133,237 @@ def _make_test_image_buf() -> io.BytesIO:
     img.save(buf, format="PNG")
     buf.seek(0)
     return buf
+
+
+class _RecordingSessionStore(SessionStore):
+    """SessionStore test double that records created sessions and temp paths."""
+
+    def __init__(self) -> None:
+        super().__init__(ttl=1800)
+        self.created_session_ids: list[str] = []
+        self.registered_temp_paths: list[str] = []
+
+    def create(self, session_id: str | None = None) -> str:
+        created = super().create(session_id=session_id)
+        self.created_session_ids.append(created)
+        return created
+
+    def register_temp_file(self, session_id: str, path: str) -> None:
+        self.registered_temp_paths.append(path)
+        super().register_temp_file(session_id, path)
+
+
+class _FailingRegisterBytesRegistry(FileRegistry):
+    """FileRegistry test double that fails selected byte registrations."""
+
+    def __init__(self, fail_filename: str) -> None:
+        super().__init__()
+        self.fail_filename = fail_filename
+        self.registered_file_ids: list[str] = []
+        self.registered_paths: list[str] = []
+
+    def register_bytes(  # type: ignore[override]
+        self,
+        session_id: str,
+        data: bytes,
+        filename: str,
+        **kwargs,
+    ) -> str:
+        if filename == self.fail_filename:
+            raise OSError(f"simulated {filename} registration failure")
+        file_id = super().register_bytes(session_id, data, filename, **kwargs)
+        entry = self.get_entry(file_id)
+        if entry is not None:
+            self.registered_file_ids.append(file_id)
+            self.registered_paths.append(str(entry["path"]))
+        return file_id
+
+
+def _create_worker_result_files_in_dir(
+    directory: Path,
+    *,
+    cache: dict | None = None,
+) -> dict:
+    """Create worker result files under a test-owned temp directory."""
+
+    preview_path = directory / "worker-preview.png"
+    Image.fromarray(_mock_preview_img).save(preview_path)
+
+    cache_path = directory / "worker-cache.pkl"
+    with cache_path.open("wb") as f:
+        pickle.dump(_mock_cache if cache is None else cache, f)
+
+    return {
+        "status_msg": "Preview OK",
+        "preview_png_path": str(preview_path),
+        "cache_data_path": str(cache_path),
+    }
+
+
+def _preview_cache_with_raw_rgba() -> dict:
+    """Return mock preview cache that triggers preview_raw.png registration."""
+
+    cache = dict(_mock_cache)
+    cache["preview_rgba"] = np.zeros((80, 120, 4), dtype=np.uint8)
+    cache["preview_rgba"][:, :, 3] = 255
+    return cache
+
+
+def _run_preview_with_local_dependencies(
+    monkeypatch,
+    tmp_path: Path,
+    *,
+    registry: FileRegistry,
+    cache: dict | None = None,
+    externalize_side_effect=None,
+) -> tuple[object, _RecordingSessionStore]:
+    """Run /api/convert/preview with isolated dependencies and temp dir."""
+
+    monkeypatch.setattr("config.TEMP_DIR", str(tmp_path))
+    monkeypatch.setattr("api.file_registry.TEMP_DIR", str(tmp_path))
+    monkeypatch.setattr("api.preview_cache_artifacts.TEMP_DIR", str(tmp_path))
+    monkeypatch.setattr("api.routers.converter.preview.TEMP_DIR", str(tmp_path))
+
+    store = _RecordingSessionStore()
+    pool = MagicMock(spec=WorkerPoolManager)
+    pool.submit = AsyncMock(
+        return_value=_create_worker_result_files_in_dir(tmp_path, cache=cache)
+    )
+    uploaded_path = tmp_path / "uploaded.png"
+    Image.new("RGB", (10, 10), (0, 0, 0)).save(uploaded_path)
+
+    previous_overrides = {
+        get_session_store: app.dependency_overrides.get(get_session_store),
+        get_file_registry: app.dependency_overrides.get(get_file_registry),
+        get_worker_pool: app.dependency_overrides.get(get_worker_pool),
+    }
+    app.dependency_overrides[get_session_store] = lambda: store
+    app.dependency_overrides[get_file_registry] = lambda: registry
+    app.dependency_overrides[get_worker_pool] = lambda: pool
+
+    externalize_patch = (
+        patch(
+            "api.routers.converter.preview.externalize_preview_cache",
+            side_effect=externalize_side_effect,
+        )
+        if externalize_side_effect is not None
+        else nullcontext()
+    )
+
+    try:
+        local_client = TestClient(app, raise_server_exceptions=False)
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.resolve_source_selection",
+                return_value=("/tmp/fake.npy", "Fake LUT"),
+            ),
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value=str(uploaded_path)),
+            ),
+            patch(
+                "api.routers.converter.preview.generate_segmented_glb",
+                return_value=None,
+            ),
+            externalize_patch,
+        ):
+            response = local_client.post(
+                "/api/convert/preview",
+                files={"image": ("test.png", _make_test_image_buf(), "image/png")},
+                data={"lut_name": "test_lut", "color_mode": "4-Color"},
+            )
+    finally:
+        for dependency, previous in previous_overrides.items():
+            if previous is None:
+                app.dependency_overrides.pop(dependency, None)
+            else:
+                app.dependency_overrides[dependency] = previous
+
+    return response, store
+
+
+class TestPreviewRegistrationFailureRollback:
+    """Preview failures after session creation should not leave hidden sessions."""
+
+    def test_preview_cache_externalize_failure_cleans_pre_registration_files(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+    ) -> None:
+        registry = FileRegistry()
+
+        def fail_externalize(session_id: str, store: SessionStore, _cache: dict) -> dict:
+            partial_path = tmp_path / "preview-cache-partial.npy"
+            np.save(partial_path, np.zeros((1, 1), dtype=np.uint8))
+            store.register_temp_file(session_id, str(partial_path))
+            raise OSError("simulated preview cache externalize failure")
+
+        response, store = _run_preview_with_local_dependencies(
+            monkeypatch,
+            tmp_path,
+            registry=registry,
+            externalize_side_effect=fail_externalize,
+        )
+
+        assert response.status_code == 500
+        assert store.created_session_ids
+        assert store.registered_temp_paths
+        for session_id in store.created_session_ids:
+            assert store.get(session_id) is None
+            assert registry.get_session_entries(session_id) == {}
+        for path in store.registered_temp_paths:
+            assert not os.path.exists(path)
+        assert list(tmp_path.iterdir()) == []
+
+    def test_preview_bytes_registration_failure_closes_unreturned_session(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+    ) -> None:
+        registry = _FailingRegisterBytesRegistry(fail_filename="preview.png")
+
+        response, store = _run_preview_with_local_dependencies(
+            monkeypatch,
+            tmp_path,
+            registry=registry,
+        )
+
+        assert response.status_code == 500
+        assert store.created_session_ids
+        assert store.registered_temp_paths
+        for session_id in store.created_session_ids:
+            assert store.get(session_id) is None
+            assert registry.get_session_entries(session_id) == {}
+        for path in store.registered_temp_paths:
+            assert not os.path.exists(path)
+        assert list(tmp_path.iterdir()) == []
+
+    def test_preview_raw_registration_failure_cleans_prior_preview_file(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+    ) -> None:
+        registry = _FailingRegisterBytesRegistry(fail_filename="preview_raw.png")
+
+        response, store = _run_preview_with_local_dependencies(
+            monkeypatch,
+            tmp_path,
+            registry=registry,
+            cache=_preview_cache_with_raw_rgba(),
+        )
+
+        assert response.status_code == 500
+        assert store.created_session_ids
+        assert store.registered_temp_paths
+        assert registry.registered_file_ids
+        for session_id in store.created_session_ids:
+            assert store.get(session_id) is None
+            assert registry.get_session_entries(session_id) == {}
+        for file_id in registry.registered_file_ids:
+            assert registry.get_entry(file_id) is None
+        for path in [*store.registered_temp_paths, *registry.registered_paths]:
+            assert not os.path.exists(path)
+        assert list(tmp_path.iterdir()) == []
 
 
 class TestBedPreviewRegistrationCleanup:
