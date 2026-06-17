@@ -269,11 +269,36 @@ function buildResourceDownloadError(
   return error;
 }
 
+function buildResourceNetworkError(
+  url: string,
+  cause: unknown,
+): Error {
+  const readableMessage = readableApiErrorMessage(null, null, cause);
+  const error = new Error(readableMessage, { cause }) as Error & {
+    response?: {
+      status: number | null;
+      data: unknown;
+      headers: Headers;
+    };
+  };
+  error.response = {
+    status: null,
+    data: { detail: readableMessage, url },
+    headers: new Headers(),
+  };
+  return error;
+}
+
 export async function downloadResourceBlob(
   url: string,
   init?: RequestInit,
 ): Promise<Blob> {
-  const response = await fetch(url, init);
+  let response: Response;
+  try {
+    response = await fetch(url, init);
+  } catch (error) {
+    throw buildResourceNetworkError(url, error);
+  }
   const failed =
     response.ok === false ||
     (typeof response.ok !== "boolean" &&
@@ -283,7 +308,11 @@ export async function downloadResourceBlob(
     const data = await readResourceErrorData(response);
     throw buildResourceDownloadError(url, response, data);
   }
-  return response.blob();
+  try {
+    return await response.blob();
+  } catch (error) {
+    throw buildResourceNetworkError(url, error);
+  }
 }
 
 export async function assertResourceDownloadAvailable(
@@ -294,10 +323,15 @@ export async function assertResourceDownloadAvailable(
   if (!headers.has("Range")) {
     headers.set("Range", "bytes=0-0");
   }
-  const response = await fetch(url, {
-    ...init,
-    headers,
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...init,
+      headers,
+    });
+  } catch (error) {
+    throw buildResourceNetworkError(url, error);
+  }
   const failed =
     response.ok === false ||
     (typeof response.ok !== "boolean" &&

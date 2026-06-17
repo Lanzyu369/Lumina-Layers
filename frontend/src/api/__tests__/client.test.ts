@@ -277,6 +277,80 @@ describe("apiClient", () => {
     }
   });
 
+  it("turns resource download network failures into readable errors", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("Failed to fetch")) as unknown as typeof fetch;
+
+    try {
+      let caught: unknown;
+      try {
+        await downloadResourceBlob("/api/files/model");
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).message).toBe(
+        "API request failed before the server returned a response.",
+      );
+      expect((caught as Error).message).not.toContain("Failed to fetch");
+      expect((caught as Error).cause).toBeInstanceOf(TypeError);
+      expect(
+        (caught as Error & { response?: { status: number | null } }).response
+          ?.status,
+      ).toBeNull();
+      expect(
+        (
+          (caught as Error & { response?: { data: { detail?: unknown } } })
+            .response?.data.detail
+        ),
+      ).toBe("API request failed before the server returned a response.");
+      expect(
+        (
+          (caught as Error & { response?: { data: { url?: unknown } } })
+            .response?.data.url
+        ),
+      ).toBe("/api/files/model");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("turns interrupted resource body reads into readable errors", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      headers: { get: () => "application/octet-stream" },
+      blob: () =>
+        Promise.reject(
+          new TypeError("NetworkError when attempting to fetch resource."),
+        ),
+    }) as unknown as typeof fetch;
+
+    try {
+      let caught: unknown;
+      try {
+        await downloadResourceBlob("/api/files/model");
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).message).toBe(
+        "API request failed before the server returned a response.",
+      );
+      expect((caught as Error).message).not.toContain("NetworkError");
+      expect((caught as Error).cause).toBeInstanceOf(TypeError);
+      expect(
+        (caught as Error & { response?: { status: number | null } }).response
+          ?.status,
+      ).toBeNull();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("preserves detailed backend messages for failed resource downloads", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = vi.fn().mockResolvedValueOnce({
@@ -318,6 +392,34 @@ describe("apiClient", () => {
       const init = vi.mocked(globalThis.fetch).mock.calls[0]?.[1] as RequestInit;
       expect((init.headers as Headers).get("Range")).toBe("bytes=0-0");
       expect(cancel).toHaveBeenCalledOnce();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("turns resource validation network failures into readable errors", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("Failed to fetch")) as unknown as typeof fetch;
+
+    try {
+      let caught: unknown;
+      try {
+        await assertResourceDownloadAvailable("/api/files/model");
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).message).toBe(
+        "API request failed before the server returned a response.",
+      );
+      expect((caught as Error).message).not.toContain("Failed to fetch");
+      expect((caught as Error).cause).toBeInstanceOf(TypeError);
+      expect(
+        (caught as Error & { response?: { status: number | null } }).response
+          ?.status,
+      ).toBeNull();
     } finally {
       globalThis.fetch = originalFetch;
     }
