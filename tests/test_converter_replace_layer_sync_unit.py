@@ -15,6 +15,7 @@ from api.preview_cache_artifacts import (
     is_preview_cache_artifact_ref,
     save_preview_cache_fields,
 )
+from api.routers.converter import replace as replace_router
 from api.routers.converter.preview import get_layer_images
 from api.session_store import SessionStore
 from api.structured_logging import bind_session_id, set_request_id
@@ -138,6 +139,15 @@ def _create_artifact_lut_session(tmp_path: Path) -> str:
     return sid
 
 
+def _delete_externalized_preview_cache_field(sid: str, field_name: str) -> Path:
+    cache_ref = _test_store.get(sid)["preview_cache"]
+    field_path = Path(cache_ref["fields"][field_name]["path"])
+    assert field_path.exists()
+    field_path.unlink()
+    assert not field_path.exists()
+    return field_path
+
+
 class TestReplaceColorLayerSync:
     def test_replace_color_updates_material_matrix_and_layer_images(self, tmp_path: Path) -> None:
         sid = _create_lut_session(tmp_path)
@@ -219,6 +229,46 @@ class TestReplaceColorLayerSync:
         assert is_preview_cache_artifact_ref(cache_ref)
         assert cache_ref["fields"]["matched_rgb"]["revision"] == 2
         assert cache_ref["fields"]["material_matrix"]["revision"] == 2
+
+    def test_replace_color_stale_artifact_cache_returns_repreview_error(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        sid = _create_artifact_lut_session(tmp_path)
+        stale_path = _delete_externalized_preview_cache_field(sid, "matched_rgb")
+
+        response = client.post(
+            "/api/convert/replace-color",
+            json={
+                "session_id": sid,
+                "selected_color": "#ff0000",
+                "replacement_color": "#0000ff",
+            },
+        )
+
+        assert response.status_code == 409
+        detail = response.json()["detail"]
+        assert "Re-run preview" in detail
+        assert str(stale_path) not in detail
+        assert _test_store.get(sid)["replacement_regions"] == []
+        assert is_preview_cache_artifact_ref(_test_store.get(sid)["preview_cache"])
+
+    def test_preview_cache_transaction_preserves_body_oserror(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        sid = _create_lut_session(tmp_path)
+        session_data = _test_store.get(sid)
+
+        with pytest.raises(OSError, match="body failure"):
+            with replace_router._preview_cache_transaction(
+                sid,
+                _test_store,
+                session_data,
+                fields={"matched_rgb"},
+            ) as cache:
+                assert cache["matched_rgb"].shape == (3, 3, 3)
+                raise OSError("body failure")
 
     def test_reset_replacements_restores_original_material_matrix(self, tmp_path: Path) -> None:
         sid = _create_lut_session(tmp_path)
