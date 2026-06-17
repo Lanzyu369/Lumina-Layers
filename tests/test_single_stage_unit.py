@@ -126,6 +126,22 @@ class _SecondPathFailingRegistry(FileRegistry):
         return self.first_file_id
 
 
+class _RegisterBytesFailingRegistry(FileRegistry):
+    """Registry stub that fails after path registrations succeed."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.path_file_ids: list[str] = []
+
+    def register_path(self, *args: object, **kwargs: object) -> str:
+        file_id = super().register_path(*args, **kwargs)
+        self.path_file_ids.append(file_id)
+        return file_id
+
+    def register_bytes(self, *args: object, **kwargs: object) -> str:
+        raise RuntimeError("registry byte storage unavailable")
+
+
 def _linear_to_srgb_uint8(arr: np.ndarray) -> np.ndarray:
     clipped = np.clip(arr.astype(np.float64), 0.0, 1.0)
     srgb = np.where(
@@ -344,9 +360,98 @@ def test_generate_single_stage_kit_cleans_manifest_when_second_registration_fail
 
     assert response.status_code == 500
     assert registry.first_file_id is not None
-    assert registry.get_entry(registry.first_file_id) is not None
-    assert kit_path.exists()
+    assert registry.get_entry(registry.first_file_id) is None
+    assert registry.resolve(registry.first_file_id) is None
+    assert not kit_path.exists()
     assert not manifest_path.exists()
+
+
+def test_generate_single_stage_kit_rolls_back_paths_when_preview_registration_fails(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    app = create_app()
+    registry = _RegisterBytesFailingRegistry()
+    app.dependency_overrides[get_file_registry] = lambda: registry
+    client = TestClient(app, raise_server_exceptions=False)
+    kit_path = tmp_path / "kit.zip"
+    manifest_path = tmp_path / "manifest.json"
+    kit_path.write_bytes(b"zip")
+    manifest_path.write_text("{}", encoding="utf-8")
+
+    def _fake_generate_single_stage_kit(*args, **kwargs):
+        return SingleStageKitResult(
+            zip_path=str(kit_path),
+            manifest_path=str(manifest_path),
+            preview_image=Image.new("RGB", (32, 32), (255, 255, 255)),
+            jobs=[],
+            message="ok",
+        )
+
+    monkeypatch.setattr(
+        "api.routers.calibration.generate_single_stage_kit",
+        _fake_generate_single_stage_kit,
+    )
+
+    response = client.post(
+        "/api/calibration/generate-single-stage-kit",
+        json={
+            "palette": [
+                {
+                    "color": "White",
+                    "material": "PLA Basic",
+                    "hex_color": "#FFFFFF",
+                    "color_name": "White",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 500
+    assert len(registry.path_file_ids) == 2
+    for file_id in registry.path_file_ids:
+        assert registry.get_entry(file_id) is None
+        assert registry.resolve(file_id) is None
+    assert not kit_path.exists()
+    assert not manifest_path.exists()
+
+
+def test_calibration_generate_rolls_back_download_when_preview_registration_fails(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    app = create_app()
+    registry = _RegisterBytesFailingRegistry()
+    app.dependency_overrides[get_file_registry] = lambda: registry
+    client = TestClient(app, raise_server_exceptions=False)
+    board_path = tmp_path / "board.3mf"
+    board_path.write_bytes(b"3mf")
+
+    monkeypatch.setattr(
+        "api.routers.calibration.generate_calibration_board",
+        lambda **kwargs: (
+            str(board_path),
+            Image.new("RGB", (8, 8), (255, 255, 255)),
+            "ok",
+        ),
+    )
+
+    response = client.post(
+        "/api/calibration/generate",
+        json={
+            "color_mode": "4-Color (RYBW)",
+            "block_size": 5,
+            "gap": 0.84,
+            "backing": "White",
+        },
+    )
+
+    assert response.status_code == 500
+    assert len(registry.path_file_ids) == 1
+    download_id = registry.path_file_ids[0]
+    assert registry.get_entry(download_id) is None
+    assert registry.resolve(download_id) is None
+    assert not board_path.exists()
 
 
 def test_calibration_generate_registers_stateless_outputs_with_ttl(
