@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
+import api.file_bridge as file_bridge
 from api.app import create_app
 from api.dependencies import get_file_registry, get_session_store
 from api.file_registry import FileRegistry
@@ -48,6 +50,80 @@ def _client_with_state() -> tuple[TestClient, SessionStore, FileRegistry]:
     app.dependency_overrides[get_session_store] = lambda: store
     app.dependency_overrides[get_file_registry] = lambda: registry
     return TestClient(app), store, registry
+
+
+class _RegisterPathFailingRegistry(FileRegistry):
+    """Registry stub that fails before taking ownership of any path."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.paths: list[str] = []
+
+    def register_path(self, *args: object, **kwargs: object) -> str:
+        path = kwargs.get("path")
+        if path is None and len(args) >= 2:
+            path = args[1]
+        if path is not None:
+            self.paths.append(str(path))
+        raise RuntimeError("registry backend unavailable")
+
+
+class _RegisterPathAndCleanupFailingRegistry(_RegisterPathFailingRegistry):
+    """Registry stub that also fails when cleanup is attempted."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.cleanup_session_ids: list[str] = []
+
+    def cleanup_session(self, session_id: str) -> int:
+        self.cleanup_session_ids.append(session_id)
+        raise RuntimeError("registry cleanup unavailable")
+
+
+class _MaterialExportRegisterPathFailingRegistry(FileRegistry):
+    """Registry stub that records the export archive path before failing."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.archive_path: str | None = None
+
+    def register_path(self, *args: object, **kwargs: object) -> str:
+        path = kwargs.get("path")
+        if path is None and len(args) >= 2:
+            path = args[1]
+        self.archive_path = str(path) if path is not None else None
+        raise RuntimeError("registry backend unavailable")
+
+
+class _SwatchRegisterPathFailingRegistry(FileRegistry):
+    """Registry stub that records the swatch path before failing."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.generated_path: str | None = None
+
+    def register_path(self, *args: object, **kwargs: object) -> str:
+        path = kwargs.get("path")
+        if path is None and len(args) >= 2:
+            path = args[1]
+        self.generated_path = str(path) if path is not None else None
+        raise RuntimeError("registry backend unavailable")
+
+
+class _SecondPathFailingRegistry(FileRegistry):
+    """Registry stub that fails after the first path is registered."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.register_calls = 0
+        self.first_file_id: str | None = None
+
+    def register_path(self, *args: object, **kwargs: object) -> str:
+        self.register_calls += 1
+        if self.register_calls > 1:
+            raise RuntimeError("registry backend unavailable after first file")
+        self.first_file_id = super().register_path(*args, **kwargs)
+        return self.first_file_id
 
 
 def _linear_to_srgb_uint8(arr: np.ndarray) -> np.ndarray:
@@ -176,6 +252,101 @@ def test_generate_single_stage_kit_route(monkeypatch, tmp_path: Path) -> None:
     assert captured["printer_id"] == "bambu-p1s"
     assert captured["slicer"] == "OrcaSlicer"
     assert captured["nozzle_size"] == "0.2"
+
+
+def test_generate_single_stage_kit_cleans_zip_when_first_registration_fails(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    app = create_app()
+    registry = _RegisterPathFailingRegistry()
+    app.dependency_overrides[get_file_registry] = lambda: registry
+    client = TestClient(app, raise_server_exceptions=False)
+    kit_path = tmp_path / "kit.zip"
+    manifest_path = tmp_path / "manifest.json"
+    kit_path.write_bytes(b"zip")
+    manifest_path.write_text("{}", encoding="utf-8")
+
+    def _fake_generate_single_stage_kit(*args, **kwargs):
+        return SingleStageKitResult(
+            zip_path=str(kit_path),
+            manifest_path=str(manifest_path),
+            preview_image=Image.new("RGB", (32, 32), (255, 255, 255)),
+            jobs=[],
+            message="ok",
+        )
+
+    monkeypatch.setattr(
+        "api.routers.calibration.generate_single_stage_kit",
+        _fake_generate_single_stage_kit,
+    )
+
+    response = client.post(
+        "/api/calibration/generate-single-stage-kit",
+        json={
+            "palette": [
+                {
+                    "color": "White",
+                    "material": "PLA Basic",
+                    "hex_color": "#FFFFFF",
+                    "color_name": "White",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 500
+    assert registry.paths == [str(kit_path)]
+    assert not kit_path.exists()
+    assert not manifest_path.exists()
+
+
+def test_generate_single_stage_kit_cleans_manifest_when_second_registration_fails(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    app = create_app()
+    registry = _SecondPathFailingRegistry()
+    app.dependency_overrides[get_file_registry] = lambda: registry
+    client = TestClient(app, raise_server_exceptions=False)
+    kit_path = tmp_path / "kit.zip"
+    manifest_path = tmp_path / "manifest.json"
+    kit_path.write_bytes(b"zip")
+    manifest_path.write_text("{}", encoding="utf-8")
+
+    def _fake_generate_single_stage_kit(*args, **kwargs):
+        return SingleStageKitResult(
+            zip_path=str(kit_path),
+            manifest_path=str(manifest_path),
+            preview_image=Image.new("RGB", (32, 32), (255, 255, 255)),
+            jobs=[],
+            message="ok",
+        )
+
+    monkeypatch.setattr(
+        "api.routers.calibration.generate_single_stage_kit",
+        _fake_generate_single_stage_kit,
+    )
+
+    response = client.post(
+        "/api/calibration/generate-single-stage-kit",
+        json={
+            "palette": [
+                {
+                    "color": "White",
+                    "material": "PLA Basic",
+                    "hex_color": "#FFFFFF",
+                    "color_name": "White",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 500
+    assert registry.first_file_id is not None
+    assert registry.get_entry(registry.first_file_id) is not None
+    assert kit_path.exists()
+    assert not manifest_path.exists()
 
 
 def test_calibration_generate_registers_stateless_outputs_with_ttl(
@@ -570,6 +741,109 @@ def test_extract_single_stage_route_creates_session(monkeypatch, tmp_path: Path)
     assert session["single_stage_stage_json_path"] == str(stage_json_path)
 
 
+def test_extract_single_stage_route_preserves_upload_after_short_write(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    client, store, _ = _client_with_state()
+    payload = b"single-stage zip bytes that require several writes"
+    stage_json_path = tmp_path / "1_single_stage.json"
+    extract_root = tmp_path / "dataset"
+    stage_json_path.write_text("{}", encoding="utf-8")
+    extract_root.mkdir()
+    original_write = file_bridge.os.write
+    written_lengths: list[int] = []
+
+    def short_write(fd: int, data) -> int:  # noqa: ANN001
+        chunk = bytes(data[:7])
+        written_lengths.append(len(chunk))
+        return original_write(fd, chunk)
+
+    def _fake_extract_single_stage_dataset(zip_path: str) -> SingleStageExtractResult:
+        assert Path(zip_path).read_bytes() == payload
+        return SingleStageExtractResult(
+            stage_json_path=str(stage_json_path),
+            dataset_summary={
+                "substrate_count": 1,
+                "color_count": 1,
+                "dataset_count": 1,
+                "image_count": 2,
+                "substrates": ["white"],
+                "coverage": [{"substrate_id": "white", "colors": ["White"]}],
+                "datasets": [],
+            },
+            warnings=[],
+            extracted_root=str(extract_root),
+        )
+
+    monkeypatch.setattr("config.TEMP_DIR", str(tmp_path))
+    monkeypatch.setattr(file_bridge.os, "write", short_write)
+    monkeypatch.setattr(
+        "api.routers.single_stage.extract_single_stage_dataset",
+        _fake_extract_single_stage_dataset,
+    )
+
+    response = client.post(
+        "/api/extractor/extract-single-stage",
+        files={"dataset_zip": ("dataset.zip", payload, "application/zip")},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["stage_json_url"].startswith("/api/files/")
+    assert len(written_lengths) > 1
+    assert store.get(response.json()["session_id"]) is not None
+
+
+def test_extract_single_stage_route_cleans_session_when_registration_fails(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    app = create_app()
+    store = SessionStore(ttl=1800)
+    registry = _RegisterPathAndCleanupFailingRegistry()
+    app.dependency_overrides[get_session_store] = lambda: store
+    app.dependency_overrides[get_file_registry] = lambda: registry
+    client = TestClient(app, raise_server_exceptions=False)
+    zip_path = tmp_path / "dataset.zip"
+    stage_json_path = tmp_path / "1_single_stage.json"
+    extract_root = tmp_path / "dataset"
+    zip_path.write_bytes(b"zip")
+    stage_json_path.write_text("{}", encoding="utf-8")
+    extract_root.mkdir()
+
+    async def _fake_upload_to_tempfile(*args, **kwargs):
+        return str(zip_path)
+
+    def _fake_extract_single_stage_dataset(*args, **kwargs):
+        return SingleStageExtractResult(
+            stage_json_path=str(stage_json_path),
+            dataset_summary={"dataset_count": 1},
+            warnings=[],
+            extracted_root=str(extract_root),
+        )
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.upload_to_tempfile",
+        _fake_upload_to_tempfile,
+    )
+    monkeypatch.setattr(
+        "api.routers.single_stage.extract_single_stage_dataset",
+        _fake_extract_single_stage_dataset,
+    )
+
+    response = client.post(
+        "/api/extractor/extract-single-stage",
+        files={"dataset_zip": ("dataset.zip", b"zip", "application/zip")},
+    )
+
+    assert response.status_code == 500
+    assert registry.paths == [str(stage_json_path)]
+    assert len(registry.cleanup_session_ids) == 1
+    assert store._store == {}
+    assert not zip_path.exists()
+    assert not stage_json_path.exists()
+
+
 def test_fit_stage_a_route_uses_session(monkeypatch, tmp_path: Path) -> None:
     client, store, _ = _client_with_state()
     stage_json_path = tmp_path / "1_single_stage.json"
@@ -675,6 +949,140 @@ def test_fit_stage_a_route_accepts_uploaded_stage_json(
         and session.get("single_stage_stage_json_path") == str(uploaded_stage_json)
         for session in stored_sessions
     )
+
+
+def test_fit_stage_a_upload_route_cleans_session_when_registration_fails(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    app = create_app()
+    store = SessionStore(ttl=1800)
+    registry = _RegisterPathAndCleanupFailingRegistry()
+    app.dependency_overrides[get_session_store] = lambda: store
+    app.dependency_overrides[get_file_registry] = lambda: registry
+    client = TestClient(app, raise_server_exceptions=False)
+    uploaded_stage_json = tmp_path / "uploaded_stage.json"
+    params_path = tmp_path / "stage_A_parameters.json"
+    uploaded_stage_json.write_text("{}", encoding="utf-8")
+    params_path.write_text("{}", encoding="utf-8")
+
+    async def _fake_upload_to_tempfile(*args, **kwargs):
+        return str(uploaded_stage_json)
+
+    def _fake_fit_stage_a_from_stage_json(path: str, output_path: str | None = None):
+        assert path == str(uploaded_stage_json)
+        return StageAFitResult(
+            params_path=str(params_path),
+            fit_summary={"ok": True},
+        )
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.upload_to_tempfile",
+        _fake_upload_to_tempfile,
+    )
+    monkeypatch.setattr(
+        "api.routers.single_stage.fit_stage_a_from_stage_json",
+        _fake_fit_stage_a_from_stage_json,
+    )
+
+    response = client.post(
+        "/api/extractor/fit-stage-a",
+        files={"stage_json": ("uploaded_stage.json", b"{}", "application/json")},
+    )
+
+    assert response.status_code == 500
+    assert registry.paths == [str(params_path)]
+    assert len(registry.cleanup_session_ids) == 1
+    assert store._store == {}
+    assert not uploaded_stage_json.exists()
+    assert not params_path.exists()
+
+
+def test_fit_stage_a_upload_route_cleans_session_when_fit_file_missing(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    client_app = create_app()
+    store = SessionStore(ttl=1800)
+    registry = FileRegistry()
+    client_app.dependency_overrides[get_session_store] = lambda: store
+    client_app.dependency_overrides[get_file_registry] = lambda: registry
+    client = TestClient(client_app, raise_server_exceptions=False)
+    uploaded_stage_json = tmp_path / "uploaded_stage.json"
+    uploaded_stage_json.write_text("{}", encoding="utf-8")
+
+    async def _fake_upload_to_tempfile(*args, **kwargs):
+        return str(uploaded_stage_json)
+
+    def _fake_fit_stage_a_from_stage_json(path: str, output_path: str | None = None):
+        assert path == str(uploaded_stage_json)
+        raise FileNotFoundError("reference assets missing")
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.upload_to_tempfile",
+        _fake_upload_to_tempfile,
+    )
+    monkeypatch.setattr(
+        "api.routers.single_stage.fit_stage_a_from_stage_json",
+        _fake_fit_stage_a_from_stage_json,
+    )
+
+    response = client.post(
+        "/api/extractor/fit-stage-a",
+        files={"stage_json": ("uploaded_stage.json", b"{}", "application/json")},
+    )
+
+    assert response.status_code == 500
+    assert "reference assets missing" in response.json()["detail"]
+    assert store._store == {}
+    assert not uploaded_stage_json.exists()
+
+
+def test_fit_stage_a_session_route_does_not_pollute_session_when_registration_fails(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    store = SessionStore(ttl=1800)
+    registry = _SecondPathFailingRegistry()
+    app = create_app()
+    app.dependency_overrides[get_session_store] = lambda: store
+    app.dependency_overrides[get_file_registry] = lambda: registry
+    client = TestClient(app, raise_server_exceptions=False)
+    session_id = store.create()
+    stage_json_path = tmp_path / "1_single_stage.json"
+    params_path = tmp_path / "stage_A_parameters.json"
+    stage_json_path.write_text("{}", encoding="utf-8")
+    params_path.write_text("{}", encoding="utf-8")
+    store.register_temp_file(session_id, str(stage_json_path))
+    store.put(session_id, "single_stage_stage_json_path", str(stage_json_path))
+    first_file_id = registry.register_path(session_id, str(stage_json_path))
+
+    def _fake_fit_stage_a_from_stage_json(path: str, output_path: str | None = None):
+        assert path == str(stage_json_path)
+        return StageAFitResult(
+            params_path=str(params_path),
+            fit_summary={"ok": True},
+        )
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.fit_stage_a_from_stage_json",
+        _fake_fit_stage_a_from_stage_json,
+    )
+
+    response = client.post(
+        "/api/extractor/fit-stage-a",
+        data={"session_id": session_id},
+    )
+
+    assert response.status_code == 500
+    session = store.get(session_id)
+    assert session is not None
+    assert session["single_stage_stage_json_path"] == str(stage_json_path)
+    assert "stage_a_params_path" not in session
+    assert "stage_a_fit_summary" not in session
+    assert stage_json_path.exists()
+    assert not params_path.exists()
+    assert registry.resolve(first_file_id) is not None
 
 
 def test_gradient_card_stage_a_core_extracts_and_saves_material_archive(
@@ -2121,6 +2529,85 @@ def test_gradient_card_material_export_route_returns_download_url(
     resolved = registry.resolve(body["download_url"].split("/")[-1])
     assert resolved is not None
     assert resolved[0] == str(exported_zip)
+
+
+def test_gradient_card_material_export_cleans_archive_when_registry_fails(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    app = create_app()
+    registry = _MaterialExportRegisterPathFailingRegistry()
+    app.dependency_overrides[get_file_registry] = lambda: registry
+    client = TestClient(app, raise_server_exceptions=False)
+    exported_zip = tmp_path / "exported-materials.zip"
+    exported_zip.write_bytes(b"zip")
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.export_saved_stage_a_material_archives",
+        lambda directory_names: MaterialArchiveExportResult(
+            archive_path=str(exported_zip),
+            download_filename="materials.zip",
+            exported_directory_names=list(directory_names),
+        ),
+    )
+
+    response = client.post(
+        "/api/extractor/gradient-card-materials/export",
+        json={"directory_names": ["pla-basic"]},
+    )
+
+    assert response.status_code == 500
+    assert registry.archive_path == str(exported_zip)
+    assert not exported_zip.exists()
+
+
+def test_generate_material_swatch_cleans_output_when_registry_fails(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    app = create_app()
+    registry = _SwatchRegisterPathFailingRegistry()
+    app.dependency_overrides[get_file_registry] = lambda: registry
+    client = TestClient(app, raise_server_exceptions=False)
+    swatch_path = tmp_path / "material-swatch.3mf"
+    swatch_path.write_bytes(b"3mf")
+
+    monkeypatch.setattr(
+        "api.routers.single_stage._load_palette_or_raise",
+        lambda directory_names: [
+            SimpleNamespace(
+                directory_name="pla-basic",
+                name="PLA Basic",
+                estimated_rgb=np.array([255, 255, 255], dtype=np.uint8),
+            )
+        ],
+    )
+
+    def _fake_generate_material_recipe_swatch(*, recipes, **kwargs):
+        return str(swatch_path), None, "ok"
+
+    monkeypatch.setattr(
+        "core.material_recipe_swatch.generate_material_recipe_swatch",
+        _fake_generate_material_recipe_swatch,
+    )
+
+    response = client.post(
+        "/api/extractor/generate-material-swatch",
+        json={
+            "recipes": [
+                {
+                    "directory_names": ["pla-basic"],
+                    "result_hex": "#FFFFFF",
+                    "layer_height_mm": 0.08,
+                    "substrate": "white",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 500
+    assert registry.generated_path == str(swatch_path)
+    assert not swatch_path.exists()
 
 
 def test_gradient_card_material_import_route_imports_multiple_archives(

@@ -1,5 +1,5 @@
 ﻿import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 
 // Mock the API client module — default to rejecting so unexpected calls don't crash
@@ -116,6 +116,35 @@ describe("App component", () => {
     await waitFor(() => {
       expect(screen.getByTestId("health-badge-fail")).toBeInTheDocument();
     });
+  });
+
+  it("rechecks health after a failed request and recovers the badge", async () => {
+    vi.useFakeTimers();
+    vi.mocked(apiClient.get)
+      .mockRejectedValueOnce(new Error("Network Error"))
+      .mockResolvedValue({
+        data: { status: "ok", version: "2.0", uptime_seconds: 120 },
+      });
+
+    try {
+      render(<App />);
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(screen.getByTestId("health-badge-fail")).toBeInTheDocument();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+        await Promise.resolve();
+      });
+
+      expect(apiClient.get).toHaveBeenCalledTimes(2);
+      expect(screen.getByTestId("health-badge-ok")).toBeInTheDocument();
+      expect(screen.queryByTestId("health-badge-fail")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('renders header with "Lumina Studio 2"', async () => {

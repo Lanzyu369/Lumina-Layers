@@ -80,6 +80,7 @@ from .common import (
     ROUTER_HANDLED_ERRORS,
     _require_session,
     _resolve_material_backing_index,
+    _validate_material_source,
 )
 
 router = APIRouter()
@@ -1088,16 +1089,26 @@ async def convert_generate(
 
     # Register output files via FileRegistry
     sid = body.session_id
-    download_id = registry.register_path(
-        str(uuid.uuid4()),
-        threemf_path,
-        ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
-    )
-
     preview_3d_url: str | None = None
-    if glb_path and os.path.exists(glb_path):
-        glb_id = registry.register_path(sid, glb_path)
-        preview_3d_url = f"/api/files/{glb_id}"
+    threemf_registered = False
+    glb_registered = False
+    try:
+        download_id = registry.register_path(
+            str(uuid.uuid4()),
+            threemf_path,
+            ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
+        )
+        threemf_registered = True
+
+        if glb_path and os.path.exists(glb_path):
+            glb_id = registry.register_path(sid, glb_path)
+            glb_registered = True
+            preview_3d_url = f"/api/files/{glb_id}"
+    finally:
+        if not threemf_registered:
+            _remove_temp_path(threemf_path)
+        if glb_path and not glb_registered:
+            _remove_temp_path(glb_path)
 
     api_total = time.perf_counter() - api_t0
     performance_timing = {
@@ -1376,11 +1387,17 @@ async def _generate_large_format_svg_native(
     except ROUTER_HANDLED_ERRORS as e:
         raise HTTPException(status_code=500, detail=f"Large-format SVG generation failed: {str(e)}")
     zip_path = result["zip_path"]
-    download_id = registry.register_path(
-        str(uuid.uuid4()),
-        zip_path,
-        ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
-    )
+    zip_registered = False
+    try:
+        download_id = registry.register_path(
+            str(uuid.uuid4()),
+            zip_path,
+            ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
+        )
+        zip_registered = True
+    finally:
+        if not zip_registered:
+            _remove_temp_path(zip_path)
     return {
         "status": "ok",
         "message": f"Generated {result['tile_count']}/{result['grid_cols'] * result['grid_rows']} tiles ({result['grid_cols']}×{result['grid_rows']})",
@@ -1958,6 +1975,7 @@ async def convert_batch(
     # reverse-LUT bundle, or material archives.
     # 解析颜色来源；批量模式应与单图预览/生成一致支持传统 LUT、反推 LUT
     # 和耗材档案。
+    material_source = _validate_material_source(material_source)
     image_count = len(images)
     selected_material_names: list[str] = []
     temp_native_bundle_path: str | None = None

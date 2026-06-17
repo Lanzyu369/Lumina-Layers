@@ -72,6 +72,7 @@ from .common import (
     _require_preview_cache,
     _require_session,
     _resolve_material_backing_index,
+    _validate_material_source,
     recompute_gradient_groups_into_session,
 )
 
@@ -438,11 +439,27 @@ def get_bed_preview(
     if glb_path is None:
         raise HTTPException(status_code=500, detail="Failed to generate bed preview")
 
-    glb_id = registry.register_path(
-        str(uuid.uuid4()),
-        glb_path,
-        ttl_seconds=EPHEMERAL_PREVIEW_TTL_SECONDS,
-    )
+    try:
+        glb_id = registry.register_path(
+            str(uuid.uuid4()),
+            glb_path,
+            ttl_seconds=EPHEMERAL_PREVIEW_TTL_SECONDS,
+        )
+    except Exception:
+        try:
+            if os.path.isfile(glb_path):
+                os.remove(glb_path)
+        except OSError as cleanup_exc:
+            log.warning(
+                "Failed to clean unregistered bed preview GLB",
+                extra={
+                    "event": "converter_bed_preview_cleanup_failed",
+                    "path": glb_path,
+                    "error_type": type(cleanup_exc).__name__,
+                    "error_message": str(cleanup_exc),
+                },
+            )
+        raise
     return {"preview_3d_url": f"/api/files/{glb_id}"}
 
 
@@ -511,37 +528,48 @@ async def crop_image(
     Returns:
         CropResponse: 包含裁剪后图片 URL 和尺寸
     """
-    # 1. Save uploaded file to temp path
-    temp_path = await ensure_png_tempfile(image)
-
-    # 2. Validate that the file is a readable image
+    temp_path: str | None = None
+    cropped_path: str | None = None
+    registered_result = False
     try:
-        ImagePreprocessor.get_image_dimensions(temp_path)
-    except ValueError:
-        raise HTTPException(status_code=422, detail="Invalid image file")
+        # 1. Save uploaded file to temp path
+        temp_path = await ensure_png_tempfile(image)
 
-    # 3. Crop image (CropRegion.clamp is called internally)
-    try:
-        cropped_path = ImagePreprocessor.crop_image(temp_path, x, y, width, height)
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        # 2. Validate that the file is a readable image
+        try:
+            ImagePreprocessor.get_image_dimensions(temp_path)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="Invalid image file")
 
-    # 4. Get cropped image dimensions
-    w, h = ImagePreprocessor.get_image_dimensions(cropped_path)
+        # 3. Crop image (CropRegion.clamp is called internally)
+        try:
+            cropped_path = ImagePreprocessor.crop_image(temp_path, x, y, width, height)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
 
-    # 5. Register cropped file and return response
-    file_id = registry.register_path(
-        str(uuid.uuid4()),
-        cropped_path,
-        ttl_seconds=EPHEMERAL_PREVIEW_TTL_SECONDS,
-    )
-    return CropResponse(
-        status="ok",
-        message="Image cropped successfully",
-        cropped_url=f"/api/files/{file_id}",
-        width=w,
-        height=h,
-    )
+        # 4. Get cropped image dimensions
+        w, h = ImagePreprocessor.get_image_dimensions(cropped_path)
+
+        # 5. Register cropped file and return response
+        file_id = registry.register_path(
+            str(uuid.uuid4()),
+            cropped_path,
+            ttl_seconds=EPHEMERAL_PREVIEW_TTL_SECONDS,
+        )
+        registered_result = True
+        return CropResponse(
+            status="ok",
+            message="Image cropped successfully",
+            cropped_url=f"/api/files/{file_id}",
+            width=w,
+            height=h,
+        )
+    finally:
+        if registered_result:
+            if temp_path != cropped_path:
+                _cleanup_pre_session_temp_paths(temp_path)
+        else:
+            _cleanup_pre_session_temp_paths(temp_path, cropped_path)
 
 
 @router.post("/preview")
@@ -616,6 +644,7 @@ async def convert_preview(
     worker_preview_png_path: str | None = None
     worker_cache_data_path: str | None = None
     svg_large_format_policy = None
+    material_source = _validate_material_source(material_source)
     try:
         svg_pixels_per_mm = normalize_svg_pixels_per_mm(svg_pixels_per_mm)
     except ValueError as exc:

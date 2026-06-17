@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from api.app import create_app
 from api.dependencies import get_file_registry
 from api.file_registry import FileRegistry
+from api.routers.slicer import _create_launch_copy
 from core.slicer import DetectedSlicer
 
 
@@ -40,15 +41,55 @@ def _records_for_event(
     ]
 
 
+class _RegisterPathFailingRegistry(FileRegistry):
+    """Registry stub that records the launch copy path before failing."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.launch_copy_path: str | None = None
+
+    def register_path(self, *args: object, **kwargs: object) -> str:
+        path = kwargs.get("path")
+        self.launch_copy_path = str(path) if path is not None else None
+        raise RuntimeError("registry backend unavailable")
+
+
 class TestSlicerLaunchCanary:
     """Slicer launch canary keeps subprocess execution mocked."""
+
+    def test_create_launch_copy_cleans_copy_when_registry_fails(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        source_path = tmp_path / "model.3mf"
+        source_path.write_bytes(b"placeholder-3mf")
+        registry = _RegisterPathFailingRegistry()
+
+        try:
+            with pytest.raises(RuntimeError, match="registry backend unavailable"):
+                _create_launch_copy(str(source_path), registry)
+
+            assert registry.launch_copy_path is not None
+            assert not Path(registry.launch_copy_path).exists()
+            assert source_path.exists()
+        finally:
+            if registry.launch_copy_path:
+                Path(registry.launch_copy_path).unlink(missing_ok=True)
 
     def test_launch_slicer_emits_sessionless_contract_canary(
         self,
         tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        source_path = tmp_path / "model.3mf"
+        import api.routers.slicer as slicer_router
+
+        output_root = tmp_path / "output"
+        temp_root = output_root / "temp"
+        temp_root.mkdir(parents=True)
+        monkeypatch.setattr(slicer_router, "OUTPUT_DIR", str(output_root))
+        monkeypatch.setattr(slicer_router, "TEMP_DIR", str(temp_root))
+        source_path = output_root / "model.3mf"
         source_path.write_bytes(b"placeholder-3mf")
         fake_slicer = DetectedSlicer(
             id="bambu-studio",

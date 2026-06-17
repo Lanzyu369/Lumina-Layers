@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,6 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
+import config
 from api.app import create_app
 from api.dependencies import get_file_registry, get_worker_pool
 from api.file_registry import FileRegistry
@@ -461,7 +463,34 @@ class TestVectorizeImageCanary:
         assert record.palette_size == 3
         assert "session_id" not in record.__dict__
 
-    def test_timeout_returns_504(self) -> None:
+    @pytest.mark.parametrize("params_value", [[], None, "bad", True, 123])
+    def test_non_object_params_return_422_before_worker(
+        self,
+        params_value: object,
+    ) -> None:
+        mock_pool = SimpleNamespace(submit=AsyncMock())
+        app = create_app()
+        app.dependency_overrides[get_worker_pool] = lambda: mock_pool
+        client = TestClient(app, raise_server_exceptions=False)
+        try:
+            response = client.post(
+                "/api/vectorize",
+                files={"image": ("input.png", _png_bytes(), "image/png")},
+                data={"params": json.dumps(params_value)},
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 422
+        assert "params" in response.text
+        mock_pool.submit.assert_not_called()
+
+    def test_timeout_returns_504_and_cleans_upload_temp_file(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setattr(config, "TEMP_DIR", str(tmp_path))
         mock_pool = SimpleNamespace(
             submit=AsyncMock(side_effect=asyncio.TimeoutError())
         )
@@ -481,3 +510,71 @@ class TestVectorizeImageCanary:
 
         assert response.status_code == 504
         assert response.json()["detail"] == "Vectorization timed out"
+        assert sorted(tmp_path.iterdir()) == []
+
+    def test_worker_error_cleans_upload_temp_file(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setattr(config, "TEMP_DIR", str(tmp_path))
+        mock_pool = SimpleNamespace(
+            submit=AsyncMock(side_effect=RuntimeError("vector failed"))
+        )
+        app = create_app()
+        registry = FileRegistry()
+        app.dependency_overrides[get_file_registry] = lambda: registry
+        app.dependency_overrides[get_worker_pool] = lambda: mock_pool
+        client = TestClient(app)
+        try:
+            response = client.post(
+                "/api/vectorize",
+                files={"image": ("input.png", _png_bytes(), "image/png")},
+                data={"params": "{}"},
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 500
+        assert response.json()["detail"] == "Vectorization failed: vector failed"
+        assert sorted(tmp_path.iterdir()) == []
+
+    def test_registry_failure_cleans_upload_and_unregistered_svg(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        class FailingRegistry(FileRegistry):
+            def register_path(self, *args: object, **kwargs: object) -> str:
+                raise RuntimeError("registry unavailable")
+
+        monkeypatch.setattr(config, "TEMP_DIR", str(tmp_path))
+        svg_path = tmp_path / "output.svg"
+        svg_path.write_text("<svg/>", encoding="utf-8")
+        mock_pool = SimpleNamespace(
+            submit=AsyncMock(
+                return_value={
+                    "svg_path": str(svg_path),
+                    "num_shapes": 1,
+                    "num_colors": 1,
+                    "width": 4,
+                    "height": 4,
+                    "palette": [],
+                }
+            )
+        )
+        app = create_app()
+        app.dependency_overrides[get_file_registry] = lambda: FailingRegistry()
+        app.dependency_overrides[get_worker_pool] = lambda: mock_pool
+        client = TestClient(app)
+        try:
+            with pytest.raises(RuntimeError, match="registry unavailable"):
+                client.post(
+                    "/api/vectorize",
+                    files={"image": ("input.png", _png_bytes(), "image/png")},
+                    data={"params": "{}"},
+                )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert sorted(tmp_path.iterdir()) == []

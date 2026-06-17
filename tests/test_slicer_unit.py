@@ -62,6 +62,21 @@ def _make_macos_app(root: Path, app_name: str, info: dict) -> Path:
     return app_path
 
 
+def _configure_slicer_output(
+    monkeypatch: pytest.MonkeyPatch,
+    root: Path,
+) -> Path:
+    """Point slicer launch validation and copies at an isolated output tree."""
+    import api.routers.slicer as slicer_router
+
+    output_root = root / "output"
+    temp_root = output_root / "temp"
+    temp_root.mkdir(parents=True)
+    monkeypatch.setattr(slicer_router, "OUTPUT_DIR", str(output_root), raising=False)
+    monkeypatch.setattr(slicer_router, "TEMP_DIR", str(temp_root))
+    return output_root
+
+
 # =========================================================================
 # 1. scan_registry — non-Windows returns empty list (Requirement 1.3)
 # =========================================================================
@@ -463,11 +478,12 @@ class TestRouterEndpoints:
         assert resp.status_code == 400
         assert resp.json()["status"] == "error"
 
-    def test_launch_success(self, tmp_path):
+    def test_launch_success(self, tmp_path, monkeypatch):
         """POST /api/slicer/launch with valid data returns success. Requirement 3.2"""
-        f = tmp_path / "model.3mf"
+        output_root = _configure_slicer_output(monkeypatch, tmp_path)
+        f = output_root / "model.3mf"
         f.write_text("data")
-        launch_copy = tmp_path / "launch_copy.3mf"
+        launch_copy = output_root / "temp" / "launch_copy.3mf"
         launch_copy.write_text("data")
 
         client = _make_client()
@@ -494,10 +510,11 @@ class TestRouterEndpoints:
         mock_copy.assert_called_once()
         mock_launch.assert_called_once_with("bambu_studio", str(launch_copy), mock_slicers)
 
-    def test_launch_uses_valid_custom_path(self, tmp_path):
-        f = tmp_path / "model.3mf"
+    def test_launch_uses_valid_custom_path(self, tmp_path, monkeypatch):
+        output_root = _configure_slicer_output(monkeypatch, tmp_path)
+        f = output_root / "model.3mf"
         f.write_text("data")
-        launch_copy = tmp_path / "launch_copy.3mf"
+        launch_copy = output_root / "temp" / "launch_copy.3mf"
         launch_copy.write_text("data")
         client = _make_client()
         auto_slicers = []
@@ -530,6 +547,156 @@ class TestRouterEndpoints:
         assert resp.status_code == 200
         mock_launch.assert_called_once_with("bambu_studio", str(launch_copy), [custom_slicer])
 
+    def test_launch_rejects_existing_3mf_outside_output(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        output_root = _configure_slicer_output(monkeypatch, tmp_path)
+        outside_dir = tmp_path / "outside"
+        outside_dir.mkdir()
+        f = outside_dir / "model.3mf"
+        f.write_text("data")
+        launch_copy = output_root / "temp" / "launch_copy.3mf"
+        mock_slicers = [
+            DetectedSlicer(id="bambu_studio", display_name="Bambu Studio", exe_path="C:\\bs.exe"),
+        ]
+
+        client = _make_client()
+        with patch("api.routers.slicer.detect_installed_slicers", return_value=mock_slicers), patch(
+            "api.routers.slicer._create_launch_copy",
+            return_value=str(launch_copy),
+        ) as mock_copy, patch(
+            "api.routers.slicer.launch_slicer",
+            return_value=(True, "Opened in Bambu Studio"),
+        ) as mock_launch:
+            resp = client.post(
+                "/api/slicer/launch",
+                json={
+                    "slicer_id": "bambu_studio",
+                    "file_path": str(f),
+                },
+            )
+
+        assert resp.status_code == 400
+        assert resp.json()["status"] == "error"
+        mock_copy.assert_not_called()
+        mock_launch.assert_not_called()
+
+    def test_launch_rejects_non_3mf_inside_output(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        output_root = _configure_slicer_output(monkeypatch, tmp_path)
+        f = output_root / "probe.txt"
+        f.write_text("NOT_A_3MF_SENTINEL")
+        launch_copy = output_root / "temp" / "probe_launch.txt"
+        mock_slicers = [
+            DetectedSlicer(id="bambu_studio", display_name="Bambu Studio", exe_path="C:\\bs.exe"),
+        ]
+
+        client = _make_client()
+        with patch("api.routers.slicer.detect_installed_slicers", return_value=mock_slicers), patch(
+            "api.routers.slicer._create_launch_copy",
+            return_value=str(launch_copy),
+        ) as mock_copy, patch(
+            "api.routers.slicer.launch_slicer",
+            return_value=(True, "Opened in Bambu Studio"),
+        ) as mock_launch:
+            resp = client.post(
+                "/api/slicer/launch",
+                json={
+                    "slicer_id": "bambu_studio",
+                    "file_path": str(f),
+                },
+            )
+
+        assert resp.status_code == 400
+        assert resp.json()["status"] == "error"
+        mock_copy.assert_not_called()
+        mock_launch.assert_not_called()
+
+    def test_launch_rejects_output_symlink_to_external_file(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        output_root = _configure_slicer_output(monkeypatch, tmp_path)
+        outside_dir = tmp_path / "outside"
+        outside_dir.mkdir()
+        outside_file = outside_dir / "secret.3mf"
+        outside_file.write_text("external-data")
+        symlink_path = output_root / "fake.3mf"
+        try:
+            symlink_path.symlink_to(outside_file)
+        except (NotImplementedError, OSError) as exc:
+            pytest.skip(f"symlink creation unavailable: {exc}")
+        launch_copy = output_root / "temp" / "fake_launch.3mf"
+        mock_slicers = [
+            DetectedSlicer(id="bambu_studio", display_name="Bambu Studio", exe_path="C:\\bs.exe"),
+        ]
+
+        client = _make_client()
+        with patch("api.routers.slicer.detect_installed_slicers", return_value=mock_slicers), patch(
+            "api.routers.slicer._create_launch_copy",
+            return_value=str(launch_copy),
+        ) as mock_copy, patch(
+            "api.routers.slicer.launch_slicer",
+            return_value=(True, "Opened in Bambu Studio"),
+        ) as mock_launch:
+            resp = client.post(
+                "/api/slicer/launch",
+                json={
+                    "slicer_id": "bambu_studio",
+                    "file_path": str(symlink_path),
+                },
+            )
+
+        assert resp.status_code == 400
+        assert resp.json()["status"] == "error"
+        mock_copy.assert_not_called()
+        mock_launch.assert_not_called()
+
+    def test_launch_rejects_output_symlink_to_non_3mf_target(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        output_root = _configure_slicer_output(monkeypatch, tmp_path)
+        target_file = output_root / "secret.txt"
+        target_file.write_text("not-a-3mf")
+        symlink_path = output_root / "fake.3mf"
+        try:
+            symlink_path.symlink_to(target_file)
+        except (NotImplementedError, OSError) as exc:
+            pytest.skip(f"symlink creation unavailable: {exc}")
+        launch_copy = output_root / "temp" / "fake_launch.3mf"
+        mock_slicers = [
+            DetectedSlicer(id="bambu_studio", display_name="Bambu Studio", exe_path="C:\\bs.exe"),
+        ]
+
+        client = _make_client()
+        with patch("api.routers.slicer.detect_installed_slicers", return_value=mock_slicers), patch(
+            "api.routers.slicer._create_launch_copy",
+            return_value=str(launch_copy),
+        ) as mock_copy, patch(
+            "api.routers.slicer.launch_slicer",
+            return_value=(True, "Opened in Bambu Studio"),
+        ) as mock_launch:
+            resp = client.post(
+                "/api/slicer/launch",
+                json={
+                    "slicer_id": "bambu_studio",
+                    "file_path": str(symlink_path),
+                },
+            )
+
+        assert resp.status_code == 400
+        assert resp.json()["status"] == "error"
+        mock_copy.assert_not_called()
+        mock_launch.assert_not_called()
+
     def test_launch_file_not_found(self):
         """POST with non-existent file returns 400. Requirement 2.3"""
         client = _make_client()
@@ -555,9 +722,10 @@ class TestRouterEndpoints:
         resp = client.post("/api/slicer/launch", json={})
         assert resp.status_code == 422
 
-    def test_launch_slicer_not_found_returns_404(self, tmp_path):
+    def test_launch_slicer_not_found_returns_404(self, tmp_path, monkeypatch):
         """POST with unknown slicer_id returns 404. Requirement 2.2"""
-        f = tmp_path / "model.3mf"
+        output_root = _configure_slicer_output(monkeypatch, tmp_path)
+        f = output_root / "model.3mf"
         f.write_text("data")
 
         client = _make_client()

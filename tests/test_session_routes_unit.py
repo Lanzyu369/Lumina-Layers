@@ -178,6 +178,79 @@ def test_repeated_session_close_does_not_delete_preserved_file_ids(
             os.unlink(keep_path)
 
 
+def test_serve_file_allows_download_when_close_detaches_kept_file_mid_request(
+    client_with_stores: tuple[TestClient, SessionStore, FileRegistry],
+) -> None:
+    """A close/detach race must not turn a kept download into a transient 404."""
+    client, store, registry = client_with_stores
+    session_id = store.create()
+    keep_path = _create_temp_file(b"download")
+    store.register_temp_file(session_id, keep_path)
+    keep_file_id = registry.register_path(session_id, keep_path, "download.3mf")
+    original_resolve = registry.resolve
+    triggered = False
+
+    def racing_resolve(file_id: str) -> tuple[str, str] | None:
+        nonlocal triggered
+        if file_id == keep_file_id and not triggered:
+            triggered = True
+            registry.detach_files({keep_file_id}, ttl_seconds=3600)
+            store.close_except(session_id, keep_paths={keep_path})
+        return original_resolve(file_id)
+
+    try:
+        with patch.object(registry, "resolve", side_effect=racing_resolve):
+            response = client.get(f"/api/files/{keep_file_id}")
+
+        assert response.status_code == 200
+        assert response.content == b"download"
+        kept_entry = registry.get_entry(keep_file_id)
+        assert kept_entry is not None
+        assert kept_entry["lifecycle"] == "ephemeral"
+        assert kept_entry["session_id"] is None
+        assert store.exists(session_id) is False
+    finally:
+        if os.path.exists(keep_path):
+            os.unlink(keep_path)
+
+
+def test_serve_file_recovers_when_close_detaches_kept_file_during_session_touch(
+    client_with_stores: tuple[TestClient, SessionStore, FileRegistry],
+) -> None:
+    """The kept-file recovery also covers close races during session touch."""
+    client, store, registry = client_with_stores
+    session_id = store.create()
+    keep_path = _create_temp_file(b"download")
+    store.register_temp_file(session_id, keep_path)
+    keep_file_id = registry.register_path(session_id, keep_path, "download.3mf")
+    original_touch = store.touch
+    triggered = False
+
+    def racing_touch(touched_session_id: str) -> float | None:
+        nonlocal triggered
+        if touched_session_id == session_id and not triggered:
+            triggered = True
+            registry.detach_files({keep_file_id}, ttl_seconds=3600)
+            store.close_except(session_id, keep_paths={keep_path})
+            return None
+        return original_touch(touched_session_id)
+
+    try:
+        with patch.object(store, "touch", side_effect=racing_touch):
+            response = client.get(f"/api/files/{keep_file_id}")
+
+        assert response.status_code == 200
+        assert response.content == b"download"
+        kept_entry = registry.get_entry(keep_file_id)
+        assert kept_entry is not None
+        assert kept_entry["lifecycle"] == "ephemeral"
+        assert kept_entry["session_id"] is None
+        assert store.exists(session_id) is False
+    finally:
+        if os.path.exists(keep_path):
+            os.unlink(keep_path)
+
+
 def test_serve_file_touches_session_bound_session_lease(
     client_with_stores: tuple[TestClient, SessionStore, FileRegistry],
 ) -> None:

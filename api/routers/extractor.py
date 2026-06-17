@@ -301,6 +301,22 @@ def _parse_colorchecker_reference_form(
     }
 
 
+def _parse_colorchecker_patch_points(raw_patch_points: str | None) -> list[object] | None:
+    if raw_patch_points is None:
+        return None
+    try:
+        parsed = json.loads(raw_patch_points)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid patch_points JSON: {exc}") from exc
+    if parsed is None:
+        return None
+    if not isinstance(parsed, list):
+        raise HTTPException(status_code=422, detail="patch_points must be a JSON array.")
+    if len(parsed) == 0:
+        return None
+    return parsed
+
+
 def _decode_colorchecker_source(
     registry: FileRegistry,
     source_file_id: str,
@@ -920,14 +936,7 @@ async def extractor_colorchecker_calibrate(
             detail=f"corner_points must contain exactly 4 points, got {len(corners) if isinstance(corners, list) else 'non-list'}",
         )
 
-    pp = None
-    if patch_points is not None:
-        try:
-            pp_raw = json.loads(patch_points)
-        except (json.JSONDecodeError, TypeError) as e:
-            raise HTTPException(status_code=422, detail=f"Invalid patch_points JSON: {e}")
-        if isinstance(pp_raw, list) and len(pp_raw) > 0:
-            pp = [[float(p["x"]), float(p["y"])] if isinstance(p, dict) else p for p in pp_raw]
+    pp = _parse_colorchecker_patch_points(patch_points)
     reference_kwargs = _parse_colorchecker_reference_form(
         reference_id,
         reference_patches,

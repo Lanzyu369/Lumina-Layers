@@ -60,11 +60,14 @@ export function beaconCloseSession(
     typeof navigator !== "undefined" &&
     typeof navigator.sendBeacon === "function"
   ) {
-    navigator.sendBeacon(
+    const queued = navigator.sendBeacon(
       beaconUrl,
       new Blob([body], { type: "application/json" }),
     );
-    return;
+    if (queued) {
+      markSessionCloseRequested(sessionId);
+      return;
+    }
   }
 
   void closeSession(sessionId, keepFileIds);

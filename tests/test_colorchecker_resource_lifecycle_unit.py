@@ -9,6 +9,7 @@ import os
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 from fastapi import UploadFile
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -43,13 +44,16 @@ def _custom_reference_patches() -> list[dict[str, object]]:
     ]
 
 
-def _client_with_state() -> tuple[TestClient, SessionStore, FileRegistry]:
+def _client_with_state(
+    *,
+    raise_server_exceptions: bool = True,
+) -> tuple[TestClient, SessionStore, FileRegistry]:
     app = create_app()
     store = SessionStore(ttl=1800)
     registry = FileRegistry()
     app.dependency_overrides[get_session_store] = lambda: store
     app.dependency_overrides[get_file_registry] = lambda: registry
-    return TestClient(app), store, registry
+    return TestClient(app, raise_server_exceptions=raise_server_exceptions), store, registry
 
 
 def _register_colorchecker_source(
@@ -544,6 +548,109 @@ def test_colorchecker_calibrate_returns_private_full_id_and_releases(
     assert client.get(body["calibrated_preview_url"]).status_code == 404
     assert client.get(body["overlay_url"]).status_code == 404
     assert client.get(confirm_body["source_preview_url"]).status_code == 200
+
+
+@pytest.mark.parametrize(
+    "patch_points",
+    [
+        [{"x": "bad", "y": 0}],
+        [{"x": 1}],
+        [{"x": float(i), "y": 0.0} for i in range(23)] + [{"x": "bad", "y": 0.0}],
+    ],
+)
+def test_colorchecker_calibrate_rejects_invalid_patch_points_without_500(
+    monkeypatch,
+    tmp_path,
+    patch_points,
+) -> None:
+    """Malformed manual patch points are client errors, not server failures."""
+    import core.colorchecker_adapter as adapter
+
+    client, _store, registry = _client_with_state(raise_server_exceptions=False)
+    source_id = _register_colorchecker_source(registry, tmp_path, width=8, height=6)
+
+    def fake_decode(*_args, **_kwargs):
+        return SimpleNamespace(
+            image_bgr=np.zeros((6, 8, 3), dtype=np.uint8),
+            source_type="standard",
+        )
+
+    monkeypatch.setattr(adapter, "decode_colorchecker_file", fake_decode)
+
+    response = client.post(
+        "/api/extractor/colorchecker-calibrate",
+        data={
+            "colorchecker_source_file_id": source_id,
+            "corner_points": "[[0,0],[4,0],[4,3],[0,3]]",
+            "corner_points_width": "4",
+            "corner_points_height": "3",
+            "patch_points": json.dumps(patch_points),
+        },
+    )
+
+    assert response.status_code == 422
+    assert "patch_points" in response.text
+
+
+def test_colorchecker_calibrate_rejects_non_array_patch_points_before_source_lookup() -> None:
+    client, _store, _registry = _client_with_state(raise_server_exceptions=False)
+
+    response = client.post(
+        "/api/extractor/colorchecker-calibrate",
+        data={
+            "colorchecker_source_file_id": "missing-source",
+            "corner_points": "[[0,0],[4,0],[4,3],[0,3]]",
+            "patch_points": json.dumps({"x": 1.0, "y": 2.0}),
+        },
+    )
+
+    assert response.status_code == 422
+    assert "patch_points" in response.text
+
+
+def test_colorchecker_calibrate_accepts_manual_patch_point_pairs(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """Route validation must preserve the core contract accepting [x, y] pairs."""
+    import core.colorchecker_adapter as adapter
+
+    client, _store, registry = _client_with_state()
+    source_id = _register_colorchecker_source(registry, tmp_path, width=8, height=6)
+    patch_points = [[float(i), 1.0] for i in range(24)]
+    captured: dict[str, object] = {}
+
+    def fake_decode(*_args, **_kwargs):
+        return SimpleNamespace(
+            image_bgr=np.zeros((6, 8, 3), dtype=np.uint8),
+            source_type="standard",
+        )
+
+    def fake_apply(*_args, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            calibrated_image=np.zeros((8, 12, 3), dtype=np.uint8),
+            overlay_image=np.zeros((4, 6, 3), dtype=np.uint8),
+            patch_points=[{"x": 1.0, "y": 2.0}] * 24,
+            display_summary={"deltaE00": {"mean": 1.0}},
+        )
+
+    monkeypatch.setattr(adapter, "decode_colorchecker_file", fake_decode)
+    monkeypatch.setattr(adapter, "apply_colorchecker_calibration", fake_apply)
+
+    response = client.post(
+        "/api/extractor/colorchecker-calibrate",
+        data={
+            "colorchecker_source_file_id": source_id,
+            "corner_points": "[[0,0],[4,0],[4,3],[0,3]]",
+            "corner_points_width": "4",
+            "corner_points_height": "3",
+            "patch_points": json.dumps(patch_points),
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["patch_points"] == patch_points
 
 
 def test_colorchecker_calibrate_passes_raw_source_path_to_core(

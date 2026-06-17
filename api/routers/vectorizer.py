@@ -9,6 +9,7 @@ the neroued_vectorizer library.
 from __future__ import annotations
 
 import asyncio
+import os
 import uuid
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -30,6 +31,29 @@ from api.structured_logging import get_logger
 router = APIRouter(prefix="/api/vectorize", tags=["Vectorizer"])
 VECTORIZER_OUTPUT_TTL_SECONDS = 1200
 log = get_logger(__name__)
+
+
+def _cleanup_vectorize_temp_paths(*paths: str | None) -> None:
+    """Best-effort cleanup for vectorize files without registry ownership."""
+
+    seen: set[str] = set()
+    for path in paths:
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        try:
+            if os.path.exists(path):
+                os.unlink(path)
+        except OSError as exc:
+            log.warning(
+                "Failed to clean vectorize temp file",
+                extra={
+                    "event": "vectorize_temp_cleanup_failed",
+                    "temp_path": path,
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                },
+            )
 
 
 def _palette_for_response(palette: object) -> list[str]:
@@ -89,6 +113,8 @@ async def vectorize_image(
         params_dict = json.loads(params)
     except json.JSONDecodeError as e:
         raise HTTPException(status_code=422, detail=f"Invalid params JSON: {e}")
+    if not isinstance(params_dict, dict):
+        raise HTTPException(status_code=422, detail="params must be a JSON object")
 
     try:
         validated = VectorizeParams(**params_dict)
@@ -96,52 +122,63 @@ async def vectorize_image(
         raise HTTPException(status_code=422, detail=e.errors())
     params_clean = validated.model_dump()
 
-    image_path = await ensure_png_tempfile(image)
-
+    image_path: str | None = None
+    svg_path: str | None = None
+    svg_registered = False
     try:
-        result = await pool.submit(worker_vectorize, image_path, params_clean)
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="Vectorization timed out")
-    except (ValueError, TypeError, KeyError, OSError, RuntimeError) as e:
-        log.exception(
-            "Vectorization failed",
+        image_path = await ensure_png_tempfile(image)
+
+        try:
+            result = await pool.submit(worker_vectorize, image_path, params_clean)
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=504, detail="Vectorization timed out")
+        except (ValueError, TypeError, KeyError, OSError, RuntimeError) as e:
+            log.exception(
+                "Vectorization failed",
+                extra={
+                    "event": "vectorize_failed",
+                    "error_type": type(e).__name__,
+                    "error_message": str(e),
+                },
+            )
+            raise to_http_exception(e, "Vectorization")
+
+        svg_path = result["svg_path"]
+        svg_file_id = registry.register_path(
+            str(uuid.uuid4()),
+            svg_path,
+            "output.svg",
+            ttl_seconds=VECTORIZER_OUTPUT_TTL_SECONDS,
+        )
+        svg_registered = True
+        palette = result["palette"]
+        palette_size = len(palette) if isinstance(palette, list) else 0
+
+        log.info(
+            "Image vectorized",
             extra={
-                "event": "vectorize_failed",
-                "error_type": type(e).__name__,
-                "error_message": str(e),
+                "event": "vectorize_image_done",
+                "svg_file_id": svg_file_id,
+                "num_shapes": result["num_shapes"],
+                "num_colors": result["num_colors"],
+                "width": result["width"],
+                "height": result["height"],
+                "palette_size": palette_size,
             },
         )
-        raise to_http_exception(e, "Vectorization")
 
-    svg_file_id = registry.register_path(
-        str(uuid.uuid4()),
-        result["svg_path"],
-        "output.svg",
-        ttl_seconds=VECTORIZER_OUTPUT_TTL_SECONDS,
-    )
-    palette = result["palette"]
-    palette_size = len(palette) if isinstance(palette, list) else 0
-
-    log.info(
-        "Image vectorized",
-        extra={
-            "event": "vectorize_image_done",
-            "svg_file_id": svg_file_id,
-            "num_shapes": result["num_shapes"],
-            "num_colors": result["num_colors"],
-            "width": result["width"],
-            "height": result["height"],
-            "palette_size": palette_size,
-        },
-    )
-
-    return VectorizeResponse(
-        status="ok",
-        message=f"Vectorized: {result['num_shapes']} shapes, {result['num_colors']} colors",
-        svg_url=f"/api/files/{svg_file_id}",
-        width=result["width"],
-        height=result["height"],
-        num_shapes=result["num_shapes"],
-        num_colors=result["num_colors"],
-        palette=_palette_for_response(palette),
-    )
+        return VectorizeResponse(
+            status="ok",
+            message=f"Vectorized: {result['num_shapes']} shapes, {result['num_colors']} colors",
+            svg_url=f"/api/files/{svg_file_id}",
+            width=result["width"],
+            height=result["height"],
+            num_shapes=result["num_shapes"],
+            num_colors=result["num_colors"],
+            palette=_palette_for_response(palette),
+        )
+    finally:
+        _cleanup_vectorize_temp_paths(
+            image_path,
+            None if svg_registered else svg_path,
+        )

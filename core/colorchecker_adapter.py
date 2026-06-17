@@ -233,7 +233,7 @@ def detect_colorchecker_chart(
             image_bgr,
             brand["patches"],
             patch_layout=_validate_patch_layout(patch_layout),
-            assist_point=_to_point_dict(assist_point) if assist_point else None,
+            assist_point=_to_point_dict(assist_point, name="assist_point") if assist_point else None,
         )
     except (ValueError, TypeError, RuntimeError, KeyError) as exc:
         raise ColorCheckerCalibrationError(
@@ -575,10 +575,37 @@ def _validate_blur_radius(blur_radius: float) -> float:
     return value
 
 
-def _to_point_dict(point: PointInput) -> PointDict:
-    if isinstance(point, dict):
-        return {"x": float(point["x"]), "y": float(point["y"])}
-    return {"x": float(point[0]), "y": float(point[1])}
+def _point_coordinate(value: object, *, name: str) -> float:
+    try:
+        coordinate = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ColorCheckerCalibrationError(
+            f"{name} items must contain finite numeric x and y values."
+        ) from exc
+    if not np.isfinite(coordinate):
+        raise ColorCheckerCalibrationError(
+            f"{name} items must contain finite numeric x and y values."
+        )
+    return coordinate
+
+
+def _to_point_dict(point: PointInput, *, name: str) -> PointDict:
+    try:
+        if isinstance(point, dict):
+            x_value = point["x"]
+            y_value = point["y"]
+        else:
+            x_value = point[0]
+            y_value = point[1]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise ColorCheckerCalibrationError(
+            f"{name} items must contain x and y coordinates."
+        ) from exc
+
+    return {
+        "x": _point_coordinate(x_value, name=name),
+        "y": _point_coordinate(y_value, name=name),
+    }
 
 
 def _normalize_points(
@@ -591,7 +618,7 @@ def _normalize_points(
         raise ColorCheckerCalibrationError(
             f"{name} must contain exactly {expected_count} points, got {len(points)}."
         )
-    return [_to_point_dict(point) for point in points]
+    return [_to_point_dict(point, name=name) for point in points]
 
 
 def _normalize_response_points(raw: object) -> list[PointDict]:

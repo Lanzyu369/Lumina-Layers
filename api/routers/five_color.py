@@ -6,6 +6,7 @@ performing five-color combination lookups.
 提供从 LUT 获取基础颜色和执行五色组合查询的端点。
 """
 
+import os
 import threading
 import uuid
 from dataclasses import asdict
@@ -42,6 +43,16 @@ log = get_logger(__name__)
 # ---- LUT Engine 内存缓存 ----
 _engine_cache: dict[str, ColorQueryEngine] = {}
 _engine_cache_lock = threading.Lock()
+
+
+def _remove_generated_path(path: str | None) -> None:
+    """Best-effort delete for route-owned generated swatch exports."""
+    if not path:
+        return
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
 
 
 def _load_npz_color_count(path: str, rgb_data) -> int | None:
@@ -398,23 +409,29 @@ def generate_swatch(
         if request_id
         else f"recipe-swatch:{unique_suffix}"
     )
-    download_id = registry.register_path(
-        sid,
-        output_path,
-        ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
-    )
-
     preview_url: str | None = None
     preview_id: str | None = None
-    if legend_img is not None:
-        preview_bytes = pil_to_png_bytes(legend_img)
-        preview_id = registry.register_bytes(
+    download_registered = False
+    try:
+        download_id = registry.register_path(
             sid,
-            preview_bytes,
-            "swatch_legend.png",
+            output_path,
             ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
         )
-        preview_url = f"/api/files/{preview_id}"
+        download_registered = True
+
+        if legend_img is not None:
+            preview_bytes = pil_to_png_bytes(legend_img)
+            preview_id = registry.register_bytes(
+                sid,
+                preview_bytes,
+                "swatch_legend.png",
+                ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
+            )
+            preview_url = f"/api/files/{preview_id}"
+    finally:
+        if not download_registered:
+            _remove_generated_path(output_path)
     preview_id_for_log = preview_id if legend_img is not None else None
 
     log.info(

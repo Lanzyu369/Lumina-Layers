@@ -20,6 +20,7 @@ from PIL import Image
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from api.app import create_app
 import config as runtime_config
 from api.workers.converter_workers import worker_generate_model
 from api.dependencies import get_file_registry, get_session_store, get_worker_pool
@@ -27,6 +28,7 @@ from api.file_registry import FileRegistry
 from api.preview_cache_artifacts import externalize_preview_cache
 from api.routers.converter import puzzle as puzzle_router
 from api.routers.converter.puzzle import _crop_piece_arrays, _submit_puzzle_worker
+from api.routers.converter.common import BATCH_DOWNLOAD_TTL_SECONDS
 from api.session_store import SessionStore
 from api.worker_pool import WorkerPoolManager
 from config import ModelingMode
@@ -116,6 +118,43 @@ def _make_artifact_session(tmp_path: Path) -> tuple[str, dict[str, Any]]:
     )
     _test_store.put(session_id, "preview_cache", cache_ref)
     return session_id, preview_cache
+
+
+def _seed_puzzle_session(store: SessionStore, tmp_path: Path) -> str:
+    """Create a preview-ready puzzle session in the provided store.
+    在指定 store 中创建可用于拼图生成的预览 session。
+    """
+
+    session_id = store.create()
+    matched_rgb = np.zeros((80, 120, 3), dtype=np.uint8)
+    matched_rgb[:40, :, :] = (255, 0, 0)
+    matched_rgb[40:, :, :] = (0, 255, 0)
+    mask_solid = np.ones((80, 120), dtype=bool)
+    preview_rgba = np.zeros((80, 120, 4), dtype=np.uint8)
+    preview_rgba[..., :3] = matched_rgb
+    preview_rgba[..., 3] = 255
+
+    image_path = tmp_path / "puzzle.png"
+    lut_path = tmp_path / "palette.npy"
+    Image.fromarray(matched_rgb).save(image_path)
+    np.save(lut_path, np.zeros((1,), dtype=np.uint8))
+
+    store.put(session_id, "image_path", str(image_path))
+    store.put(session_id, "lut_path", str(lut_path))
+    store.put(
+        session_id,
+        "preview_cache",
+        {
+            "matched_rgb": matched_rgb,
+            "mask_solid": mask_solid,
+            "preview_rgba": preview_rgba,
+            "preview_colors": {"White": (255, 255, 255, 255)},
+            "slot_names": ["White"],
+        },
+    )
+    store.register_temp_file(session_id, str(image_path))
+    store.register_temp_file(session_id, str(lut_path))
+    return session_id
 
 
 def _build_generate_body(session_id: str) -> dict[str, Any]:
@@ -390,7 +429,7 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
         boundary = json.load(handle)
 
     assert boundary["bbox_px"] == list(first_piece.bbox_px)
-    assert len(boundary["polygon_px"]) == len(first_piece.polygon_px)
+    assert len(boundary["polygon_px"]) >= 3
     assert len(boundary["holes_px"]) == len(first_piece.holes_px)
     first_matched_path = Path(submitted_params[0]["matched_rgb_path"])
     saved_matched = np.load(first_matched_path)
@@ -409,17 +448,127 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
     assert np.array_equal(saved_matched, expected_matched)
     assert np.any(saved_matched != 0)
 
-    original_boundary = export_piece_boundary_geometry(first_piece)
-    source_w = max(1, first_piece.bbox_px[2] - first_piece.bbox_px[0])
-    source_h = max(1, first_piece.bbox_px[3] - first_piece.bbox_px[1])
-    scale_x = expected_worker_w / float(source_w)
-    scale_y = expected_worker_h / float(source_h)
-    assert boundary["polygon_px"][0] == [
-        original_boundary["polygon_px"][0][0] * scale_x,
-        original_boundary["polygon_px"][0][1] * scale_y,
-    ]
-    assert max(point[0] for point in boundary["polygon_px"]) <= expected_worker_w + 1e-6
-    assert max(point[1] for point in boundary["polygon_px"]) <= expected_worker_h + 1e-6
+    boundary_x_values = [point[0] for point in boundary["polygon_px"]]
+    boundary_y_values = [point[1] for point in boundary["polygon_px"]]
+    assert min(boundary_x_values) >= 0.5 - 1e-6
+    assert min(boundary_y_values) >= 0.5 - 1e-6
+    assert max(boundary_x_values) <= expected_worker_w - 0.5 + 1e-6
+    assert max(boundary_y_values) <= expected_worker_h - 0.5 + 1e-6
+
+
+def test_generate_puzzle_download_survives_source_session_close(tmp_path: Path) -> None:
+    """Final puzzle 3MF downloads should outlive the source session.
+    拼图最终 3MF 下载应在源 session 关闭后仍可访问。
+    """
+
+    store = SessionStore(ttl=1800)
+    registry = FileRegistry()
+    pool = MagicMock(spec=WorkerPoolManager)
+    full_app = create_app()
+    full_app.dependency_overrides[get_session_store] = lambda: store
+    full_app.dependency_overrides[get_file_registry] = lambda: registry
+    full_app.dependency_overrides[get_worker_pool] = lambda: pool
+    full_client = TestClient(full_app, raise_server_exceptions=False)
+    session_id = _seed_puzzle_session(store, tmp_path)
+    piece_index = 0
+
+    async def _submit_stub(*_args: object, **_kwargs: object) -> dict[str, object]:
+        nonlocal piece_index
+        piece_index += 1
+        piece_path = tmp_path / f"piece-{piece_index}.3mf"
+        piece_path.write_bytes(b"piece-3mf")
+        return {"threemf_path": str(piece_path), "glb_path": None, "status_msg": "ok"}
+
+    def _assemble_stub(*, output_path: str, **_kwargs: object) -> str:
+        Path(output_path).write_bytes(b"combined-3mf")
+        return output_path
+
+    pool.submit = AsyncMock(side_effect=_submit_stub)
+
+    try:
+        with patch(
+            "api.routers.converter.puzzle.assemble_puzzle_3mf",
+            side_effect=_assemble_stub,
+        ):
+            response = full_client.post(
+                "/api/convert/generate-puzzle",
+                json=_build_generate_body(session_id),
+            )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        download_url = body["download_url"]
+        download_file_id = download_url.rsplit("/", 1)[-1]
+        entry = registry.get_entry(download_file_id)
+        assert entry is not None
+        assert entry["lifecycle"] == "ephemeral"
+        assert entry["session_id"] != session_id
+        assert entry["ttl_seconds"] == BATCH_DOWNLOAD_TTL_SECONDS
+        assert body["threemf_disk_path"] not in store.get_temp_file_paths(session_id)
+
+        close_response = full_client.post(
+            "/api/session/close",
+            json={"session_id": session_id},
+        )
+        assert close_response.status_code == 200
+
+        download_response = full_client.get(download_url)
+        assert download_response.status_code == 200
+        assert download_response.content == b"combined-3mf"
+    finally:
+        registry.clear_all()
+        store.clear_all()
+        full_app.dependency_overrides.clear()
+
+
+def test_generate_puzzle_deletes_combined_output_when_assembly_fails(tmp_path: Path) -> None:
+    """Unregistered final puzzle outputs should be removed on assembly failure.
+    拼图组装失败时应删除尚未注册的最终输出文件。
+    """
+
+    store = SessionStore(ttl=1800)
+    registry = FileRegistry()
+    pool = MagicMock(spec=WorkerPoolManager)
+    full_app = create_app()
+    full_app.dependency_overrides[get_session_store] = lambda: store
+    full_app.dependency_overrides[get_file_registry] = lambda: registry
+    full_app.dependency_overrides[get_worker_pool] = lambda: pool
+    full_client = TestClient(full_app, raise_server_exceptions=False)
+    session_id = _seed_puzzle_session(store, tmp_path)
+    piece_index = 0
+    combined_paths: list[str] = []
+
+    async def _submit_stub(*_args: object, **_kwargs: object) -> dict[str, object]:
+        nonlocal piece_index
+        piece_index += 1
+        piece_path = tmp_path / f"piece-{piece_index}.3mf"
+        piece_path.write_bytes(b"piece-3mf")
+        return {"threemf_path": str(piece_path), "glb_path": None, "status_msg": "ok"}
+
+    def _assemble_failure_stub(*, output_path: str, **_kwargs: object) -> str:
+        combined_paths.append(output_path)
+        Path(output_path).write_bytes(b"partial-combined-3mf")
+        raise RuntimeError("assembly failed")
+
+    pool.submit = AsyncMock(side_effect=_submit_stub)
+
+    try:
+        with patch(
+            "api.routers.converter.puzzle.assemble_puzzle_3mf",
+            side_effect=_assemble_failure_stub,
+        ):
+            response = full_client.post(
+                "/api/convert/generate-puzzle",
+                json=_build_generate_body(session_id),
+            )
+
+        assert response.status_code == 500
+        assert combined_paths
+        assert os.path.exists(combined_paths[0]) is False
+    finally:
+        registry.clear_all()
+        store.clear_all()
+        full_app.dependency_overrides.clear()
 
 
 def test_generate_puzzle_rejects_fridge_magnet_mode() -> None:

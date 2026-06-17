@@ -258,6 +258,36 @@ def _rollback_imported_materials(directory_names: list[str]) -> None:
             pass
 
 
+def _remove_path_safely(path: str | None) -> None:
+    if not path:
+        return
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+def _close_session_safely(store: SessionStore, session_id: str | None) -> None:
+    if not session_id:
+        return
+    try:
+        store.close(session_id)
+    except (ValueError, TypeError, OSError, RuntimeError):
+        pass
+
+
+def _cleanup_registry_session_safely(
+    registry: FileRegistry,
+    session_id: str | None,
+) -> None:
+    if not session_id:
+        return
+    try:
+        registry.cleanup_session(session_id)
+    except Exception:
+        pass
+
+
 @router.post("/extract-single-stage")
 async def extractor_extract_single_stage(
     dataset_zip: UploadFile = File(..., description="Single-stage dataset ZIP"),
@@ -295,7 +325,12 @@ async def extractor_extract_single_stage(
             except OSError:
                 pass
 
-    stage_json_id = registry.register_path(session_id, result.stage_json_path)
+    try:
+        stage_json_id = registry.register_path(session_id, result.stage_json_path)
+    except Exception:
+        _cleanup_registry_session_safely(registry, session_id)
+        _close_session_safely(store, session_id)
+        raise
     log.info(
         "Single-stage dataset extracted",
         extra={
@@ -331,6 +366,7 @@ async def extractor_fit_stage_a(
     stage_json_path: str | None = None
     sid_for_registry: str | None = None
     source_mode: str
+    created_session_for_upload = False
 
     if session_id:
         bind_session_id(session_id)
@@ -348,6 +384,7 @@ async def extractor_fit_stage_a(
     elif stage_json is not None:
         stage_json_path = await upload_to_tempfile(stage_json, suffix=".json")
         sid_for_registry = store.create()
+        created_session_for_upload = True
         store.register_temp_file(sid_for_registry, stage_json_path)
         store.put(sid_for_registry, "single_stage_stage_json_path", stage_json_path)
         source_mode = "upload"
@@ -360,15 +397,27 @@ async def extractor_fit_stage_a(
     try:
         result = fit_stage_a_from_stage_json(stage_json_path)
     except FileNotFoundError as e:
+        if created_session_for_upload:
+            _close_session_safely(store, sid_for_registry)
         raise HTTPException(status_code=500, detail=str(e))
     except (ValueError, TypeError, OSError, RuntimeError) as e:
+        if created_session_for_upload:
+            _close_session_safely(store, sid_for_registry)
         raise HTTPException(status_code=422, detail=str(e))
+
+    try:
+        params_id = registry.register_path(sid_for_registry, result.params_path)
+    except Exception:
+        _remove_path_safely(result.params_path)
+        if created_session_for_upload:
+            _cleanup_registry_session_safely(registry, sid_for_registry)
+            _close_session_safely(store, sid_for_registry)
+        raise
 
     store.register_temp_file(sid_for_registry, result.params_path)
     store.put(sid_for_registry, "stage_a_params_path", result.params_path)
     store.put(sid_for_registry, "stage_a_fit_summary", result.fit_summary)
 
-    params_id = registry.register_path(sid_for_registry, result.params_path)
     log.info(
         "Stage A parameters fitted",
         extra={
@@ -791,12 +840,21 @@ async def extractor_export_gradient_card_materials(
         raise HTTPException(status_code=422, detail=str(exc))
 
     persistent_registry_session = f"material-export:{uuid.uuid4().hex}"
-    download_id = registry.register_path(
-        persistent_registry_session,
-        result.archive_path,
-        filename=result.download_filename,
-        ttl_seconds=MATERIAL_LIBRARY_FILE_TTL_SECONDS,
-    )
+    archive_registered = False
+    try:
+        download_id = registry.register_path(
+            persistent_registry_session,
+            result.archive_path,
+            filename=result.download_filename,
+            ttl_seconds=MATERIAL_LIBRARY_FILE_TTL_SECONDS,
+        )
+        archive_registered = True
+    finally:
+        if not archive_registered:
+            try:
+                os.unlink(result.archive_path)
+            except OSError:
+                pass
     log.info(
         "Gradient card materials exported",
         extra={
@@ -1018,6 +1076,16 @@ def _load_palette_or_raise(directory_names: list[str]):
         raise HTTPException(status_code=422, detail=str(exc))
 
 
+def _remove_generated_path(path: str | None) -> None:
+    """Best-effort delete for route-owned generated exports."""
+    if not path:
+        return
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
 def _resolve_substrate_linear(materials, substrate: str) -> np.ndarray:
     """Resolve the substrate color in linear RGB for the forward model.
     解析正向模型所需的基底线性 RGB。
@@ -1159,22 +1227,28 @@ async def generate_material_swatch(
         if request_id
         else f"material-recipe-swatch:{unique_suffix}"
     )
-    download_id = registry.register_path(
-        sid,
-        output_path,
-        ttl_seconds=MATERIAL_SWATCH_EXPORT_TTL_SECONDS,
-    )
-
     preview_url: str | None = None
-    if legend_img is not None:
-        preview_bytes = pil_to_png_bytes(legend_img)
-        preview_id = registry.register_bytes(
+    download_registered = False
+    try:
+        download_id = registry.register_path(
             sid,
-            preview_bytes,
-            "material_swatch_legend.png",
+            output_path,
             ttl_seconds=MATERIAL_SWATCH_EXPORT_TTL_SECONDS,
         )
-        preview_url = f"/api/files/{preview_id}"
+        download_registered = True
+
+        if legend_img is not None:
+            preview_bytes = pil_to_png_bytes(legend_img)
+            preview_id = registry.register_bytes(
+                sid,
+                preview_bytes,
+                "material_swatch_legend.png",
+                ttl_seconds=MATERIAL_SWATCH_EXPORT_TTL_SECONDS,
+            )
+            preview_url = f"/api/files/{preview_id}"
+    finally:
+        if not download_registered:
+            _remove_generated_path(output_path)
 
     log.info(
         "Material recipe swatch generated",
@@ -2185,13 +2259,15 @@ async def material_solver_cache_suggest_colors(
     Fast path: when a persisted :class:`core.material_cache.MaterialSolverCache`
     matches the ``(palette, N, t, substrate)`` parameters the response is
     served from the KDTree-over-Lab-buckets lookup (microseconds per query).
-    Fallback: no cache available → runs
+    Runtime path: when the exact cache is absent but a persisted hybrid
+    candidate runtime exists, query that bounded runtime instead of falling
+    back to exhaustive MITM. Fallback: no reusable solver data available → runs
     :func:`core.material_color_solver.suggest_colors_for_target` in a worker
     thread, bounded by ``max_combinations`` to keep interactive UX responsive.
 
-    The frontend reports ``source`` in the response so it can surface a
-    "build cache for instant suggestions" hint when the MITM fallback runs.
-    前端会根据 ``source`` 判断是否提示用户构建缓存以获得毫秒级响应。
+    The frontend reports ``source`` in the response so it can explain whether
+    the suggestion came from exact cache, hybrid runtime, or live MITM fallback.
+    前端会根据 ``source`` 判断结果来自精确缓存、hybrid runtime 还是实时 MITM。
     """
     dir_names = _parse_material_directory_names(material_directory_names)
     _validate_cache_parameters(layer_count, layer_height_mm, substrate)
@@ -2223,35 +2299,59 @@ async def material_solver_cache_suggest_colors(
             f"(via solver cache, {cache.valid_cell_count} cells)."
         )
     else:
-        def _run_suggest() -> list[ColorSuggestion]:
-            return suggest_colors_for_target(
-                target_rgb_arr,
-                materials,
-                layer_count=layer_count,
-                layer_height_mm=layer_height_mm,
-                substrate=substrate,
-                top_k=top_k,
-                min_spacing=min_spacing,
-                max_combinations=max_combinations,
-            )
-
-        try:
-            suggestions = await anyio.to_thread.run_sync(_run_suggest)
-        except OverflowError as exc:
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    f"{exc}. Please build the material solver cache first to "
-                    "enable interactive suggestions for this palette."
-                ),
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc))
-        source = "mitm"
-        message = (
-            f"Returned {len(suggestions)} achievable colors "
-            f"(via MITM fallback)."
+        runtime = load_material_candidate_runtime(
+            materials,
+            layer_count,
+            layer_height_mm,
+            substrate,
+            candidate_budget=DEFAULT_PERSISTED_CANDIDATE_BUDGET,
         )
+        if runtime is not None:
+            try:
+                suggestions = runtime.lookup_top_k(
+                    target_rgb_arr,
+                    materials,
+                    top_k=top_k,
+                    min_spacing=min_spacing,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc))
+            source = "runtime"
+            message = (
+                f"Returned {len(suggestions)} achievable colors "
+                f"(via hybrid runtime, {runtime.valid_cell_count} candidates)."
+            )
+        else:
+            def _run_suggest() -> list[ColorSuggestion]:
+                return suggest_colors_for_target(
+                    target_rgb_arr,
+                    materials,
+                    layer_count=layer_count,
+                    layer_height_mm=layer_height_mm,
+                    substrate=substrate,
+                    top_k=top_k,
+                    min_spacing=min_spacing,
+                    max_combinations=max_combinations,
+                )
+
+            try:
+                suggestions = await anyio.to_thread.run_sync(_run_suggest)
+            except OverflowError as exc:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"{exc}. Please build the material solver cache or "
+                        "hybrid runtime first to enable interactive suggestions "
+                        "for this palette."
+                    ),
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc))
+            source = "mitm"
+            message = (
+                f"Returned {len(suggestions)} achievable colors "
+                f"(via MITM fallback)."
+            )
 
     log.info(
         "Material solver cache color suggestions returned",

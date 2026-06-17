@@ -11,6 +11,7 @@ import json
 import os
 import re
 import uuid
+from contextlib import suppress
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -272,8 +273,14 @@ async def image_preview(
     try:
         with Image.open(png_path) as img:
             width, height = img.size
-    except (OSError, ValueError) as e:
-        raise HTTPException(status_code=422, detail=f"无法读取图片尺寸: {e}")
+    except (OSError, ValueError) as exc:
+        with suppress(OSError):
+            if os.path.exists(png_path):
+                os.unlink(png_path)
+        raise HTTPException(
+            status_code=422,
+            detail="无法读取图片尺寸：无效或损坏的图片文件",
+        ) from exc
     file_id = file_registry.register_path(
         str(uuid.uuid4()),
         png_path,
@@ -533,11 +540,21 @@ SETTINGS_FILE: Path = Path("user_settings.json")
 
 @router.get("/settings")
 def get_settings() -> UserSettingsResponse:
-    """读取 user_settings.json 并返回 UserSettings。文件不存在时返回默认值。"""
+    """Read persisted user settings with safe fallback.
+
+    读取 user_settings.json 并返回 UserSettings；文件缺失、损坏或顶层结构
+    非对象时返回默认值。
+
+    Returns:
+        UserSettingsResponse: Current settings or defaults.
+            当前设置；无法安全读取时返回默认设置。
+    """
     if not SETTINGS_FILE.exists():
         return UserSettingsResponse(status="success", settings=UserSettings())
     try:
         data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return UserSettingsResponse(status="success", settings=UserSettings())
         return UserSettingsResponse(status="success", settings=UserSettings(**data))
     except (json.JSONDecodeError, ValueError):
         return UserSettingsResponse(status="success", settings=UserSettings())
