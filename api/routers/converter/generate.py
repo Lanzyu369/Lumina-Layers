@@ -879,11 +879,9 @@ async def convert_generate(
     material_matrix_path: str | None = None
     should_forward_cached_analysis = (
         request.use_cached_matched_rgb
-        or (
-            session_material_source == "material_archive"
-            and core_modeling_mode == CoreModelingMode.VECTOR
-        )
+        or session_material_source == "material_archive"
     )
+    require_cached_material_analysis = session_material_source == "material_archive"
     log.debug(
         "Cached matched RGB input state resolved: use_cached_matched_rgb=%s, has_replacement_regions=%s",
         request.use_cached_matched_rgb,
@@ -902,6 +900,14 @@ async def convert_generate(
             sid=body.session_id,
             store=store,
         )
+        if matched_rgb_path is None and require_cached_material_analysis:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Preview cache missing matched_rgb. Re-run preview before "
+                    "generating material-archive models."
+                ),
+            )
         if matched_rgb_path is not None:
             cached_matched_rgb = cache.get("matched_rgb")
             field_ref = (
@@ -941,6 +947,14 @@ async def convert_generate(
                 sid=body.session_id,
                 store=store,
             )
+            if mask_solid_path is None and require_cached_material_analysis:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Preview cache missing mask_solid. Re-run preview "
+                        "before generating material-archive models."
+                    ),
+                )
 
             material_matrix_path = _cache_field_path_or_tempfile(
                 cache=cache,
@@ -949,6 +963,14 @@ async def convert_generate(
                 sid=body.session_id,
                 store=store,
             )
+            if material_matrix_path is None and require_cached_material_analysis:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Preview cache missing material_matrix. Re-run preview "
+                        "before generating material-archive models."
+                    ),
+                )
 
     override_material_matrix_path, recipe_override_masks_path = _prepare_recipe_override_worker_inputs(
         cache=cache,

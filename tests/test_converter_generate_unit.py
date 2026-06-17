@@ -2485,6 +2485,89 @@ def test_generate_route_forwards_material_archive_backing_index(tmp_path) -> Non
     assert submitted_params["material_backing_material_index"] == 2
 
 
+def test_generate_route_reuses_material_archive_preview_cache_for_hifi(tmp_path) -> None:
+    """Material-archive high-fidelity generation must reuse preview analysis.
+
+    The material solver can choose a different stack on a second pass. Final
+    3MF generation therefore needs the same matched RGB and material matrix
+    that powered the accepted preview, not a fresh solve.
+    """
+    _test_store.clear_all()
+    image_path = tmp_path / "input.png"
+    out_path = tmp_path / "out.3mf"
+    Image.fromarray(np.zeros((4, 4, 3), dtype=np.uint8)).save(image_path)
+    out_path.write_bytes(b"3mf")
+
+    matched_rgb = np.zeros((4, 4, 3), dtype=np.uint8)
+    matched_rgb[:, :, 0] = 33
+    mask_solid = np.ones((4, 4), dtype=bool)
+    material_matrix = np.zeros((4, 4, 5), dtype=np.uint8)
+    material_matrix[:, :, :] = np.array([0, 1, 2, 1, 0], dtype=np.uint8)
+
+    session_id = _test_store.create()
+    _test_store.put(session_id, "image_path", str(image_path))
+    _test_store.put(session_id, "lut_path", "__material_archive__")
+    _test_store.put(session_id, "material_source", "material_archive")
+    _test_store.put(
+        session_id,
+        "selected_materials",
+        ["mat-red", "mat-blue", "mat-white"],
+    )
+    _test_store.put(session_id, "material_layer_count", 5)
+    _test_store.put(session_id, "material_layer_height_mm", 0.08)
+    _test_store.put(session_id, "replacement_regions", [])
+    _test_store.put(session_id, "free_color_set", set())
+    _test_store.put(
+        session_id,
+        "preview_cache",
+        {
+            "target_w": 4,
+            "target_h": 4,
+            "target_width_mm": 40.0,
+            "matched_rgb": matched_rgb,
+            "mask_solid": mask_solid,
+            "material_matrix": material_matrix,
+        },
+    )
+
+    _mock_pool.submit = AsyncMock(
+        return_value={
+            "threemf_path": str(out_path),
+            "glb_path": None,
+            "status_msg": "OK",
+        }
+    )
+
+    response = client.post(
+        "/api/convert/generate",
+        json={
+            "session_id": session_id,
+            "params": {
+                "lut_name": "__material_archive__",
+                "modeling_mode": "high-fidelity",
+            },
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    submitted_params = _mock_pool.submit.call_args.args[3]
+    assert submitted_params["matched_rgb_path"] is not None
+    assert submitted_params["mask_solid_path"] is not None
+    assert submitted_params["material_matrix_path"] is not None
+    np.testing.assert_array_equal(
+        np.load(submitted_params["matched_rgb_path"]),
+        matched_rgb,
+    )
+    np.testing.assert_array_equal(
+        np.load(submitted_params["mask_solid_path"]),
+        mask_solid,
+    )
+    np.testing.assert_array_equal(
+        np.load(submitted_params["material_matrix_path"]),
+        material_matrix,
+    )
+
+
 def test_generate_route_forwards_cache_recovered_virtual_materials(tmp_path) -> None:
     """The actual /generate route must pass recovered virtuals to the worker."""
     _test_store.clear_all()
