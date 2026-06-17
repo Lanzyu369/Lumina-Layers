@@ -10,7 +10,10 @@ vi.mock("../../utils/clientLog", () => ({
 import { postClientLog } from "../../utils/clientLog";
 import { useActionHistoryStore } from "../../stores/actionHistoryStore";
 import { useSettingsStore } from "../../stores/settingsStore";
-import apiClient, { downloadResourceBlob } from "../client";
+import apiClient, {
+  assertResourceDownloadAvailable,
+  downloadResourceBlob,
+} from "../client";
 
 describe("apiClient", () => {
   beforeEach(() => {
@@ -184,6 +187,52 @@ describe("apiClient", () => {
       await expect(downloadResourceBlob("/api/files/broken")).rejects.toThrow(
         "worker crashed",
       );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("validates resource downloads with a bounded range request", async () => {
+    const originalFetch = globalThis.fetch;
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    globalThis.fetch = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      status: 206,
+      headers: { get: () => "application/octet-stream" },
+      body: { cancel },
+    }) as unknown as typeof fetch;
+
+    try {
+      await expect(
+        assertResourceDownloadAvailable("/api/files/model"),
+      ).resolves.toBeUndefined();
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        "/api/files/model",
+        expect.objectContaining({
+          headers: expect.any(Headers),
+        }),
+      );
+      const init = vi.mocked(globalThis.fetch).mock.calls[0]?.[1] as RequestInit;
+      expect((init.headers as Headers).get("Range")).toBe("bytes=0-0");
+      expect(cancel).toHaveBeenCalledOnce();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("turns failed resource validation into readable errors", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      headers: { get: () => "application/json" },
+      json: () => Promise.resolve({ detail: "File not found or expired" }),
+    }) as unknown as typeof fetch;
+
+    try {
+      await expect(
+        assertResourceDownloadAvailable("/api/files/missing-model"),
+      ).rejects.toThrow("File not found or expired");
     } finally {
       globalThis.fetch = originalFetch;
     }

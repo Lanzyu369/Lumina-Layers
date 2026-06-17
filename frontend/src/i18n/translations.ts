@@ -4938,6 +4938,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "生成并下载",
     en: "Generate & Download",
   },
+  slicer_download_failed: {
+    zh: "下载文件暂时无法读取，请重新生成后再试。",
+    en: "The download file could not be read. Regenerate it and try again.",
+  },
   slicer_detecting: {
     zh: "正在检测切片软件...",
     en: "Detecting slicers...",

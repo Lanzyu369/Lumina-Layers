@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { launchSlicer } from "../api/slicer";
@@ -6,6 +6,14 @@ import SlicerSelector from "../components/sections/SlicerSelector";
 import { I18nProvider } from "../i18n/context";
 import { DEFAULT_SETTINGS, useSettingsStore } from "../stores/settingsStore";
 import { useSlicerStore } from "../stores/slicerStore";
+
+const { assertResourceDownloadAvailableMock } = vi.hoisted(() => ({
+  assertResourceDownloadAvailableMock: vi.fn(),
+}));
+
+vi.mock("../api/client", () => ({
+  assertResourceDownloadAvailable: assertResourceDownloadAvailableMock,
+}));
 
 vi.mock("../api/slicer", () => ({
   detectSlicers: vi.fn().mockResolvedValue({
@@ -60,6 +68,7 @@ describe("SlicerSelector settings linkage", () => {
       error: null,
       detectSlicers: vi.fn().mockResolvedValue(undefined),
     });
+    assertResourceDownloadAvailableMock.mockReset();
   });
 
   it("prefers the slicer selected in settings over stale selectedSlicerId", async () => {
@@ -121,5 +130,111 @@ describe("SlicerSelector settings linkage", () => {
       slicer_id: "orca_slicer",
       file_path: "/tmp/calibration.3mf",
     });
+  });
+
+  it("does not clean up the converter session when a direct 3MF download is expired", async () => {
+    assertResourceDownloadAvailableMock.mockRejectedValueOnce(
+      new Error("The requested resource was not found or has expired."),
+    );
+    useSlicerStore.setState({
+      slicers: [],
+      selectedSlicerId: null,
+    });
+    const onArtifactAction = vi.fn();
+    const anchorClick = vi.fn();
+    const originalCreateElement = document.createElement.bind(document);
+    const createElementSpy = vi
+      .spyOn(document, "createElement")
+      .mockImplementation((tagName: string, options?: ElementCreationOptions) => {
+        if (tagName.toLowerCase() === "a") {
+          return {
+            href: "",
+            download: "",
+            click: anchorClick,
+          } as unknown as HTMLAnchorElement;
+        }
+        return originalCreateElement(tagName, options);
+      });
+
+    try {
+      render(
+        <I18nProvider>
+          <SlicerSelector
+            threemfDiskPath="/tmp/model.3mf"
+            downloadUrl="/api/files/expired-model"
+            canSubmit
+            onAutoGenerate={async () => "/tmp/model.3mf"}
+            onArtifactAction={onArtifactAction}
+          />
+        </I18nProvider>,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "下载 3MF" }));
+
+      expect(
+        await screen.findByText(
+          /The requested resource was not found or has expired\./,
+        ),
+      ).toBeInTheDocument();
+      expect(assertResourceDownloadAvailableMock).toHaveBeenCalledWith(
+        "/api/files/expired-model",
+      );
+      expect(anchorClick).not.toHaveBeenCalled();
+      expect(onArtifactAction).not.toHaveBeenCalled();
+    } finally {
+      createElementSpy.mockRestore();
+    }
+  });
+
+  it("cleans up only after a direct 3MF download URL validates successfully", async () => {
+    assertResourceDownloadAvailableMock.mockResolvedValueOnce(undefined);
+    useSlicerStore.setState({
+      slicers: [],
+      selectedSlicerId: null,
+    });
+    const onArtifactAction = vi.fn();
+    const anchorClick = vi.fn();
+    const anchor = {
+      href: "",
+      download: "",
+      click: anchorClick,
+    } as unknown as HTMLAnchorElement;
+    const originalCreateElement = document.createElement.bind(document);
+    const createElementSpy = vi
+      .spyOn(document, "createElement")
+      .mockImplementation((tagName: string, options?: ElementCreationOptions) => {
+        if (tagName.toLowerCase() === "a") {
+          return anchor;
+        }
+        return originalCreateElement(tagName, options);
+      });
+
+    try {
+      render(
+        <I18nProvider>
+          <SlicerSelector
+            threemfDiskPath="/tmp/model.3mf"
+            downloadUrl="/api/files/model"
+            canSubmit
+            onAutoGenerate={async () => "/tmp/model.3mf"}
+            onArtifactAction={onArtifactAction}
+          />
+        </I18nProvider>,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "下载 3MF" }));
+
+      await waitFor(() => {
+        expect(assertResourceDownloadAvailableMock).toHaveBeenCalledWith(
+          "/api/files/model",
+        );
+      });
+      expect(anchor.href).toBe("/api/files/model");
+      expect(anchor.download).toBe("");
+      expect(anchorClick).toHaveBeenCalledOnce();
+      expect(onArtifactAction).toHaveBeenCalledOnce();
+    } finally {
+      createElementSpy.mockRestore();
+    }
   });
 });

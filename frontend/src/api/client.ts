@@ -274,6 +274,34 @@ export async function downloadResourceBlob(
   return response.blob();
 }
 
+export async function assertResourceDownloadAvailable(
+  url: string,
+  init?: RequestInit,
+): Promise<void> {
+  const headers = new Headers(init?.headers);
+  if (!headers.has("Range")) {
+    headers.set("Range", "bytes=0-0");
+  }
+  const response = await fetch(url, {
+    ...init,
+    headers,
+  });
+  const failed =
+    response.ok === false ||
+    (typeof response.ok !== "boolean" &&
+      typeof response.status === "number" &&
+      response.status >= 400);
+  if (failed) {
+    const data = await readResourceErrorData(response);
+    throw buildResourceDownloadError(url, response, data);
+  }
+  try {
+    await response.body?.cancel();
+  } catch {
+    // The validation request only needs headers/status. Ignore body cleanup failures.
+  }
+}
+
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
