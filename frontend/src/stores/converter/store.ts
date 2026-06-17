@@ -4694,13 +4694,17 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         });
         return;
       }
+      const requestedSessionId = state.sessionId;
       set({ isLoading: true, error: null });
       try {
         const response = await apiUploadHeightmap(
           state.heightmapFile,
-          state.sessionId,
+          requestedSessionId,
           state.heightmap_max_height,
         );
+        if (_get().sessionId !== requestedSessionId) {
+          return;
+        }
         const thumbnailUrl = `${response.thumbnail_url}`;
         set({
           isLoading: false,
@@ -4708,6 +4712,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           color_height_map: response.color_height_map,
         });
       } catch (err) {
+        if (_get().sessionId !== requestedSessionId) {
+          return;
+        }
         set({
           ...clearHeightmapUploadState,
           isLoading: false,

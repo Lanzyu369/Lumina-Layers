@@ -369,6 +369,54 @@ describe("converter store relief generate flow", () => {
     );
   });
 
+  it("ignores a stale heightmap upload response after the session changes", async () => {
+    const useConverterStore = await loadStore();
+    const file = new File(["heightmap"], "heightmap.png", {
+      type: "image/png",
+    });
+    let resolveUpload!: (value: {
+      status: string;
+      message: string;
+      thumbnail_url: string;
+      color_height_map: Record<string, number>;
+    }) => void;
+    mocks.uploadHeightmap.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveUpload = resolve;
+      }),
+    );
+    useConverterStore.setState({
+      ...baseReadyState(),
+      sessionId: "old-session",
+      heightmapFile: file,
+      heightmapThumbnailUrl: null,
+      color_height_map: {},
+    });
+
+    const uploadPromise = useConverterStore.getState().uploadHeightmap();
+    expect(mocks.uploadHeightmap).toHaveBeenCalledWith(file, "old-session", 3);
+
+    useConverterStore.setState({
+      sessionId: "new-session",
+      heightmapThumbnailUrl: "/api/files/current-heightmap.png",
+      color_height_map: { current: 1.1 },
+      isLoading: false,
+    });
+    resolveUpload({
+      status: "ok",
+      message: "stale upload finished",
+      thumbnail_url: "/api/files/stale-heightmap.png",
+      color_height_map: { stale: 0.2 },
+    });
+
+    await uploadPromise;
+
+    const state = useConverterStore.getState();
+    expect(state.sessionId).toBe("new-session");
+    expect(state.heightmapThumbnailUrl).toBe("/api/files/current-heightmap.png");
+    expect(state.color_height_map).toEqual({ current: 1.1 });
+  });
+
   it("reuploads the selected heightmap to the refreshed preview session before generating", async () => {
     const useConverterStore = await loadStore();
     const file = new File(["heightmap"], "heightmap.png", {
