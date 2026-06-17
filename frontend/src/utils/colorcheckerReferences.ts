@@ -24,6 +24,11 @@ export interface StoredColorcheckerReference {
   createdAt: string;
 }
 
+export interface StoredColorcheckerReferenceResult {
+  references: StoredColorcheckerReference[];
+  persisted: boolean;
+}
+
 interface HeaderMapping {
   index: number;
   label: number | null;
@@ -138,40 +143,60 @@ export function loadStoredColorcheckerReferences(): StoredColorcheckerReference[
 
 export function saveStoredColorcheckerReferences(
   references: StoredColorcheckerReference[],
-) {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(
-    CUSTOM_REFERENCES_STORAGE_KEY,
-    JSON.stringify(references.filter(isStoredReference)),
-  );
+): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    window.localStorage.setItem(
+      CUSTOM_REFERENCES_STORAGE_KEY,
+      JSON.stringify(references.filter(isStoredReference)),
+    );
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function upsertStoredColorcheckerReference(
   reference: StoredColorcheckerReference,
-) {
+): StoredColorcheckerReferenceResult {
   const current = loadStoredColorcheckerReferences();
   const next = [
     reference,
     ...current.filter((item) => item.key !== reference.key),
   ];
-  saveStoredColorcheckerReferences(next);
-  return next;
+  return {
+    references: next,
+    persisted: saveStoredColorcheckerReferences(next),
+  };
 }
 
-export function removeStoredColorcheckerReference(key: string) {
+export function removeStoredColorcheckerReference(
+  key: string,
+): StoredColorcheckerReferenceResult {
   const next = loadStoredColorcheckerReferences().filter((item) => item.key !== key);
-  saveStoredColorcheckerReferences(next);
-  return next;
+  return {
+    references: next,
+    persisted: saveStoredColorcheckerReferences(next),
+  };
 }
 
 export function loadSelectedColorcheckerReferenceKey(): string | null {
   if (typeof window === "undefined") return null;
-  return window.localStorage.getItem(SELECTED_REFERENCE_STORAGE_KEY);
+  try {
+    return window.localStorage.getItem(SELECTED_REFERENCE_STORAGE_KEY);
+  } catch {
+    return null;
+  }
 }
 
-export function saveSelectedColorcheckerReferenceKey(key: string) {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(SELECTED_REFERENCE_STORAGE_KEY, key);
+export function saveSelectedColorcheckerReferenceKey(key: string): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    window.localStorage.setItem(SELECTED_REFERENCE_STORAGE_KEY, key);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function findHeaderMapping(rows: SheetRow[]): HeaderMapping | null {

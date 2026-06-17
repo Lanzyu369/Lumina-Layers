@@ -3030,6 +3030,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "校色基准已上传并选中，{count} 条提示",
     en: "Reference uploaded and selected with {count} warnings",
   },
+  ext_cc_reference_upload_ready_session_only: {
+    zh: "校色基准已用于当前会话，但浏览器阻止保存，刷新页面后需要重新上传。",
+    en: "Reference is selected for this session, but the browser blocked saving it. Upload it again after refreshing.",
+  },
   ext_cc_reference_upload_failed: {
     zh: "校色基准上传失败",
     en: "Reference upload failed",
