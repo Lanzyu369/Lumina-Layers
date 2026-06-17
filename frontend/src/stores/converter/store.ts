@@ -56,6 +56,7 @@ import {
   uploadLut as apiUploadLut,
   getGlbStatus as apiGetGlbStatus,
 } from "../../api/converter";
+import { downloadResourceBlob } from "../../api/client";
 import { closeSession as apiCloseSession } from "../../api/session";
 import type { LutColorEntry, LutInfo } from "../../api/types";
 import {
@@ -6023,7 +6024,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         const croppedFullUrl = `${response.cropped_url}`;
 
         // Fetch cropped image as Blob to create a new File
-        const blob = await fetch(croppedFullUrl).then((r) => r.blob());
+        const blob = await downloadResourceBlob(croppedFullUrl);
         const croppedFile = new File([blob], state.imageFile.name, {
           type: "image/png",
         });

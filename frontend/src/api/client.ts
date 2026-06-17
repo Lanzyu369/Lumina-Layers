@@ -209,6 +209,71 @@ function getResponseHeaderValue(
   return null;
 }
 
+async function readResourceErrorData(response: Response): Promise<unknown> {
+  const contentType = getResponseHeaderValue(response.headers, "content-type");
+  if (contentType?.toLowerCase().includes("json")) {
+    try {
+      return await response.json();
+    } catch {
+      return null;
+    }
+  }
+
+  try {
+    const text = await response.text();
+    return text.trim() ? text.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildResourceDownloadError(
+  url: string,
+  response: Response,
+  data: unknown,
+): Error {
+  const statusCode =
+    typeof response.status === "number" ? response.status : null;
+  const readableMessage = readableApiErrorMessage(
+    data,
+    statusCode,
+    new Error(`Resource download failed: ${url}`),
+  );
+  const responseData = isRecord(data)
+    ? { ...data, detail: readableMessage }
+    : { detail: readableMessage };
+  const error = new Error(readableMessage) as Error & {
+    response?: {
+      status: number | null;
+      data: unknown;
+      headers: Headers;
+    };
+  };
+  error.response = {
+    status: statusCode,
+    data: responseData,
+    headers: response.headers,
+  };
+  return error;
+}
+
+export async function downloadResourceBlob(
+  url: string,
+  init?: RequestInit,
+): Promise<Blob> {
+  const response = await fetch(url, init);
+  const failed =
+    response.ok === false ||
+    (typeof response.ok !== "boolean" &&
+      typeof response.status === "number" &&
+      response.status >= 400);
+  if (failed) {
+    const data = await readResourceErrorData(response);
+    throw buildResourceDownloadError(url, response, data);
+  }
+  return response.blob();
+}
+
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {

@@ -10,7 +10,7 @@ vi.mock("../../utils/clientLog", () => ({
 import { postClientLog } from "../../utils/clientLog";
 import { useActionHistoryStore } from "../../stores/actionHistoryStore";
 import { useSettingsStore } from "../../stores/settingsStore";
-import apiClient from "../client";
+import apiClient, { downloadResourceBlob } from "../client";
 
 describe("apiClient", () => {
   beforeEach(() => {
@@ -151,5 +151,41 @@ describe("apiClient", () => {
       message:
         "The server did not accept the request. Check the current input, permissions, or resource availability.",
     });
+  });
+
+  it("turns failed resource downloads into readable errors", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      headers: { get: () => "application/json" },
+      json: () => Promise.resolve({ detail: "Not Found" }),
+    }) as unknown as typeof fetch;
+
+    try {
+      await expect(downloadResourceBlob("/api/files/missing")).rejects.toThrow(
+        "The requested resource was not found or has expired.",
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("preserves detailed backend messages for failed resource downloads", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      headers: { get: () => "application/json" },
+      json: () => Promise.resolve({ detail: "worker crashed" }),
+    }) as unknown as typeof fetch;
+
+    try {
+      await expect(downloadResourceBlob("/api/files/broken")).rejects.toThrow(
+        "worker crashed",
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
