@@ -82,6 +82,10 @@ LARGE_FORMAT_SVG_PREVIEW_CACHE_MAX_BYTES_ENV = (
     "LUMINA_LARGE_FORMAT_SVG_PREVIEW_CACHE_MAX_BYTES"
 )
 DEFAULT_LARGE_FORMAT_SVG_PREVIEW_CACHE_MAX_BYTES = 1024 * 1024 * 1024
+LAYER_IMAGES_PREVIEW_CACHE_UNAVAILABLE_DETAIL = (
+    "Layer image preview cache is unavailable. "
+    "Re-run preview before viewing layer images."
+)
 
 
 def _get_large_format_svg_preview_cache_max_bytes() -> int:
@@ -1427,11 +1431,17 @@ def get_layer_images(
             return {"session_id": session_id, "layers": layers_out}
 
     if cache_ref is not None:
-        hydrated = hydrate_preview_cache(
-            cache_ref,
-            fields={"material_matrix", "mask_solid"},
-            mmap_mode="r",
-        )
+        try:
+            hydrated = hydrate_preview_cache(
+                cache_ref,
+                fields={"material_matrix", "mask_solid"},
+                mmap_mode="r",
+            )
+        except (OSError, ValueError, TypeError, KeyError, EOFError) as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=LAYER_IMAGES_PREVIEW_CACHE_UNAVAILABLE_DETAIL,
+            ) from exc
         material_matrix = hydrated.get("material_matrix")
         mask_solid = hydrated.get("mask_solid")
     else:
