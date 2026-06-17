@@ -132,6 +132,42 @@ def _handle_core_error(e: Exception, context: str) -> None:
     raise to_http_exception(e, context)
 
 
+def _resolve_session_lut_path_or_error(
+    store: SessionStore,
+    session_id: str,
+) -> tuple[dict[str, Any], str]:
+    """Resolve a session-bound LUT path or raise a deterministic API error."""
+    bind_session_id(session_id)
+    session_data = store.get(session_id)
+    if session_data is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Manual correction session not found or expired. "
+                "Re-run extraction before editing the LUT."
+            ),
+        )
+    raw_lut_path = session_data.get("lut_path")
+    if not isinstance(raw_lut_path, str) or not raw_lut_path.strip():
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Manual correction LUT is missing from the session. "
+                "Re-run extraction before editing the LUT."
+            ),
+        )
+    lut_path = raw_lut_path.strip()
+    if not os.path.exists(lut_path):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Manual correction LUT file is missing. "
+                "Re-run extraction before editing the LUT."
+            ),
+        )
+    return session_data, lut_path
+
+
 def _resize_bgr_for_colorchecker_preview(image_bgr: np.ndarray) -> np.ndarray:
     """Return a display copy constrained by bounded preview config.
     按小预览配置返回受限尺寸的显示图。
@@ -1433,29 +1469,11 @@ def extractor_manual_fix(
     # Resolve lut_path: prefer session lookup, fallback to direct path
     lut_path = request.lut_path.strip()
     session_data = None
-    using_session_lut = False
     if request.session_id:
-        bind_session_id(request.session_id)
-        session_data = store.get(request.session_id)
-        if session_data is None:
-            raise HTTPException(
-                status_code=404,
-                detail=(
-                    "Manual correction session not found or expired. "
-                    "Re-run extraction before editing the LUT."
-                ),
-            )
-        raw_lut_path = session_data.get("lut_path")
-        if not isinstance(raw_lut_path, str) or not raw_lut_path.strip():
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "Manual correction LUT is missing from the session. "
-                    "Re-run extraction before editing the LUT."
-                ),
-            )
-        lut_path = raw_lut_path.strip()
-        using_session_lut = True
+        session_data, lut_path = _resolve_session_lut_path_or_error(
+            store,
+            request.session_id,
+        )
     elif not lut_path:
         raise HTTPException(
             status_code=422,
@@ -1463,14 +1481,6 @@ def extractor_manual_fix(
         )
 
     if not os.path.exists(lut_path):
-        if using_session_lut:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "Manual correction LUT file is missing. "
-                    "Re-run extraction before editing the LUT."
-                ),
-            )
         raise HTTPException(
             status_code=404,
             detail="Manual correction LUT file not found.",
@@ -1540,12 +1550,11 @@ def extractor_resolve_cell(
     store: SessionStore = Depends(get_session_store),
 ) -> LutPreviewResolvedCell:
     """Resolve a LUT preview click using the backend LUT card layout."""
-    bind_session_id(request.session_id)
-    session_data = store.get(request.session_id)
-    if not session_data or "lut_path" not in session_data:
-        raise HTTPException(status_code=404, detail="Session LUT not found")
+    session_data, lut_path = _resolve_session_lut_path_or_error(
+        store,
+        request.session_id,
+    )
 
-    lut_path = session_data["lut_path"]
     try:
         rgb, _stacks, _metadata = LUTManager.load_lut_with_metadata(lut_path)
     except EXTRACTOR_HANDLED_ERRORS as e:

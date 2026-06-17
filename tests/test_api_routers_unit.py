@@ -357,12 +357,112 @@ class TestExtractorEndpoints:
         assert body["status"] == "ok"
         assert body["lut_preview_url"].startswith("/api/files/")
 
-    def test_resolve_cell_invalid_card_index_returns_422(self) -> None:
+    @pytest.mark.parametrize(
+        "lut_path_value",
+        [None, "", "   ", 123],
+    )
+    def test_resolve_cell_session_without_lut_returns_409(
+        self,
+        lut_path_value: Any,
+    ) -> None:
+        """Resolve-cell requires an active session LUT path before layout parsing."""
+        test_app = create_app()
+        store = SessionStore(ttl=60)
+        session_id = store.create("resolve-missing-lut-session")
+        if lut_path_value is not None:
+            store.put(session_id, "lut_path", lut_path_value)
+        test_app.dependency_overrides[get_session_store] = lambda: store
+        local_client = TestClient(test_app, raise_server_exceptions=False)
+
+        try:
+            with patch("api.routers.extractor.LUTManager.load_lut_with_metadata") as load_mock:
+                resp = local_client.post(
+                    "/api/extractor/resolve-cell",
+                    json={
+                        "session_id": session_id,
+                        "x": 0.5,
+                        "y": 0.5,
+                        "card_index": 0,
+                    },
+                )
+        finally:
+            test_app.dependency_overrides.pop(get_session_store, None)
+
+        assert resp.status_code == 409
+        load_mock.assert_not_called()
+
+    def test_resolve_cell_session_missing_lut_file_returns_409_without_lut_load(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """A cleaned-up LUT file is stale session state, not an invalid click."""
+        test_app = create_app()
+        store = SessionStore(ttl=60)
+        session_id = store.create("resolve-missing-lut-file-session")
+        missing_lut = tmp_path / "deleted-lut.json"
+        store.put(session_id, "lut_path", str(missing_lut))
+        test_app.dependency_overrides[get_session_store] = lambda: store
+        local_client = TestClient(test_app, raise_server_exceptions=False)
+
+        try:
+            with patch("api.routers.extractor.LUTManager.load_lut_with_metadata") as load_mock:
+                resp = local_client.post(
+                    "/api/extractor/resolve-cell",
+                    json={
+                        "session_id": session_id,
+                        "x": 0.5,
+                        "y": 0.5,
+                        "card_index": 0,
+                    },
+                )
+        finally:
+            test_app.dependency_overrides.pop(get_session_store, None)
+
+        assert resp.status_code == 409
+        assert str(missing_lut) not in resp.text
+        assert "Clicked cell is outside" not in resp.text
+        load_mock.assert_not_called()
+
+    def test_resolve_cell_outside_lut_area_still_returns_404(self, tmp_path: Path) -> None:
+        """A real valid-LUT blank-area click keeps the existing outside-area error."""
+        test_app = create_app()
+        store = SessionStore(ttl=60)
+        session_id = store.create("resolve-outside-lut-session")
+        lut_path = tmp_path / "valid-lut.json"
+        lut_path.write_text("{}", encoding="utf-8")
+        store.put(session_id, "lut_path", str(lut_path))
+        store.put(session_id, "color_mode", "BW")
+        test_app.dependency_overrides[get_session_store] = lambda: store
+        local_client = TestClient(test_app, raise_server_exceptions=False)
+
+        try:
+            with patch(
+                "api.routers.extractor.LUTManager.load_lut_with_metadata",
+                return_value=(np.zeros((32, 3), dtype=np.uint8), None, None),
+            ):
+                resp = local_client.post(
+                    "/api/extractor/resolve-cell",
+                    json={
+                        "session_id": session_id,
+                        "x": 0.99,
+                        "y": 0.99,
+                        "card_index": 0,
+                    },
+                )
+        finally:
+            test_app.dependency_overrides.pop(get_session_store, None)
+
+        assert resp.status_code == 404
+        assert "Clicked cell is outside the valid LUT area" in resp.text
+
+    def test_resolve_cell_invalid_card_index_returns_422(self, tmp_path: Path) -> None:
         """POST /api/extractor/resolve-cell maps invalid card_index to 422."""
         test_app = create_app()
         store = SessionStore(ttl=60)
         session_id = store.create()
-        store.put(session_id, "lut_path", "/fake/lut.json")
+        lut_path = tmp_path / "valid-lut.json"
+        lut_path.write_text("{}", encoding="utf-8")
+        store.put(session_id, "lut_path", str(lut_path))
         store.put(session_id, "color_mode", "8-Color Max")
         test_app.dependency_overrides[get_session_store] = lambda: store
         local_client = TestClient(test_app, raise_server_exceptions=False)
