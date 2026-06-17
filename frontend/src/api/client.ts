@@ -95,6 +95,14 @@ function isGenericHttpDetail(detail: string, statusCode: number | null): boolean
   }
   if (
     typeof statusCode === "number" &&
+    new RegExp(
+      `^(?:(?:http\\s*)?(?:error|status(?:\\s+code)?)\\s*)?${statusCode}$`,
+    ).test(normalized)
+  ) {
+    return true;
+  }
+  if (
+    typeof statusCode === "number" &&
     new RegExp(`\\b(http|status code|status)\\s*${statusCode}\\b`).test(normalized)
   ) {
     return true;
