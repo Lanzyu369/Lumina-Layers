@@ -188,6 +188,38 @@ describe("apiClient", () => {
     });
   });
 
+  it("keeps backend details that explain an upstream status failure", async () => {
+    const error = new Error("Request failed with status code 500");
+    Object.assign(error, {
+      config: { method: "post", url: "/convert/generate" },
+      response: {
+        status: 500,
+        data: { detail: "upstream dependency returned status 500 while slicing" },
+      },
+    });
+    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+    await expect(apiClient.post("/convert/generate", {})).rejects.toMatchObject({
+      message: "upstream dependency returned status 500 while slicing",
+    });
+  });
+
+  it("still replaces generic request-failed status details", async () => {
+    const error = new Error("Request failed with status code 500");
+    Object.assign(error, {
+      config: { method: "post", url: "/convert/generate" },
+      response: {
+        status: 500,
+        data: { detail: "Request failed with status code 500" },
+      },
+    });
+    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+    await expect(apiClient.post("/convert/generate", {})).rejects.toMatchObject({
+      message: "The server hit an internal error. Check the log for the request ID.",
+    });
+  });
+
   it("replaces generic framework details with a real user-facing reason", async () => {
     const error = new Error("Request failed with status code 404");
     Object.assign(error, {
