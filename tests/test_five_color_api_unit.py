@@ -181,6 +181,21 @@ class _SwatchRegisterPathFailingRegistry(FileRegistry):
         raise RuntimeError("registry backend unavailable")
 
 
+class _SwatchRegisterBytesFailingRegistry(FileRegistry):
+    """Registry stub that fails after the swatch path is registered."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.path_file_id: str | None = None
+
+    def register_path(self, *args: object, **kwargs: object) -> str:
+        self.path_file_id = super().register_path(*args, **kwargs)
+        return self.path_file_id
+
+    def register_bytes(self, *args: object, **kwargs: object) -> str:
+        raise RuntimeError("registry byte storage unavailable")
+
+
 # ---------------------------------------------------------------------------
 # GET /api/five-color/base-colors
 # ---------------------------------------------------------------------------
@@ -2554,4 +2569,52 @@ def test_generate_swatch_cleans_output_when_registry_fails(
 
     assert response.status_code == 500
     assert registry.generated_path == str(swatch_path)
+    assert not swatch_path.exists()
+
+
+def test_generate_swatch_rolls_back_download_when_preview_registration_fails(
+    tmp_path: Path,
+) -> None:
+    """Swatch download should be rolled back if preview registration fails."""
+    engine = _FakeSwatchEngine()
+    registry = _SwatchRegisterBytesFailingRegistry()
+    swatch_path = tmp_path / "swatch.3mf"
+    swatch_path.write_bytes(b"3mf")
+    app = create_app()
+    app.dependency_overrides[get_file_registry] = lambda: registry
+    failing_client = TestClient(app, raise_server_exceptions=False)
+
+    def _fake_generate_recipe_swatch(*, recipes, **kwargs):
+        return (
+            str(swatch_path),
+            Image.new("RGB", (1, 1), (255, 255, 255)),
+            "ok",
+        )
+
+    with (
+        patch("api.routers.five_color._load_engine", return_value=(engine, "test_lut")),
+        patch(
+            "core.recipe_swatch.generate_recipe_swatch",
+            side_effect=_fake_generate_recipe_swatch,
+        ),
+    ):
+        response = failing_client.post(
+            "/api/five-color/generate-swatch",
+            json={
+                "lut_name": "test_lut",
+                "recipes": [
+                    {
+                        "selected_indices": [0, 1, 2, 3, 4],
+                        "result_hex": "#123456",
+                        "base_color_names": ["ignored"] * 6,
+                        "base_color_hexes": ["#000000"] * 6,
+                    }
+                ],
+            },
+        )
+
+    assert response.status_code == 500
+    assert registry.path_file_id is not None
+    assert registry.get_entry(registry.path_file_id) is None
+    assert registry.resolve(registry.path_file_id) is None
     assert not swatch_path.exists()

@@ -110,6 +110,21 @@ class _SwatchRegisterPathFailingRegistry(FileRegistry):
         raise RuntimeError("registry backend unavailable")
 
 
+class _SwatchRegisterBytesFailingRegistry(FileRegistry):
+    """Registry stub that fails after the swatch path is registered."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.path_file_id: str | None = None
+
+    def register_path(self, *args: object, **kwargs: object) -> str:
+        self.path_file_id = super().register_path(*args, **kwargs)
+        return self.path_file_id
+
+    def register_bytes(self, *args: object, **kwargs: object) -> str:
+        raise RuntimeError("registry byte storage unavailable")
+
+
 class _SecondPathFailingRegistry(FileRegistry):
     """Registry stub that fails after the first path is registered."""
 
@@ -2607,6 +2622,61 @@ def test_generate_material_swatch_cleans_output_when_registry_fails(
 
     assert response.status_code == 500
     assert registry.generated_path == str(swatch_path)
+    assert not swatch_path.exists()
+
+
+def test_generate_material_swatch_rolls_back_download_when_preview_registration_fails(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    app = create_app()
+    registry = _SwatchRegisterBytesFailingRegistry()
+    app.dependency_overrides[get_file_registry] = lambda: registry
+    client = TestClient(app, raise_server_exceptions=False)
+    swatch_path = tmp_path / "material-swatch.3mf"
+    swatch_path.write_bytes(b"3mf")
+
+    monkeypatch.setattr(
+        "api.routers.single_stage._load_palette_or_raise",
+        lambda directory_names: [
+            SimpleNamespace(
+                directory_name="pla-basic",
+                name="PLA Basic",
+                estimated_rgb=np.array([255, 255, 255], dtype=np.uint8),
+            )
+        ],
+    )
+
+    def _fake_generate_material_recipe_swatch(*, recipes, **kwargs):
+        return (
+            str(swatch_path),
+            Image.new("RGB", (1, 1), (255, 255, 255)),
+            "ok",
+        )
+
+    monkeypatch.setattr(
+        "core.material_recipe_swatch.generate_material_recipe_swatch",
+        _fake_generate_material_recipe_swatch,
+    )
+
+    response = client.post(
+        "/api/extractor/generate-material-swatch",
+        json={
+            "recipes": [
+                {
+                    "directory_names": ["pla-basic"],
+                    "result_hex": "#FFFFFF",
+                    "layer_height_mm": 0.08,
+                    "substrate": "white",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 500
+    assert registry.path_file_id is not None
+    assert registry.get_entry(registry.path_file_id) is None
+    assert registry.resolve(registry.path_file_id) is None
     assert not swatch_path.exists()
 
 
