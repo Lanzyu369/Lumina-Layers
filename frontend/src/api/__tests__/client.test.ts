@@ -108,7 +108,7 @@ describe("apiClient", () => {
     apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
 
     await expect(apiClient.get("/system/settings")).rejects.toMatchObject({
-      message: "Server temporarily unavailable. Please try again later. (HTTP 503)",
+      message: "Server temporarily unavailable. Please try again later.",
     });
   });
 
@@ -122,7 +122,34 @@ describe("apiClient", () => {
 
     await expect(apiClient.post("/convert/generate", {})).rejects.toMatchObject({
       message:
-        "This action requires an available quota or payment before it can continue. (HTTP 402)",
+        "This action requires an available quota or payment before it can continue.",
+    });
+  });
+
+  it("replaces generic framework details with a real user-facing reason", async () => {
+    const error = new Error("Request failed with status code 404");
+    Object.assign(error, {
+      config: { method: "get", url: "/missing-preview.png" },
+      response: { status: 404, data: { detail: "Not Found" } },
+    });
+    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+    await expect(apiClient.get("/missing-preview.png")).rejects.toMatchObject({
+      message: "The requested resource was not found or has expired.",
+    });
+  });
+
+  it("uses a language fallback for unknown client errors without exposing status numbers", async () => {
+    const error = new Error("Request failed with status code 418");
+    Object.assign(error, {
+      config: { method: "post", url: "/convert/generate" },
+      response: { status: 418, data: {} },
+    });
+    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+    await expect(apiClient.post("/convert/generate", {})).rejects.toMatchObject({
+      message:
+        "The server did not accept the request. Check the current input, permissions, or resource availability.",
     });
   });
 });

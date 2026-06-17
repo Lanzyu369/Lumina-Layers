@@ -88,6 +88,38 @@ function extractReadableDetail(data: unknown): string | null {
   return null;
 }
 
+function isGenericHttpDetail(detail: string, statusCode: number | null): boolean {
+  const normalized = detail.trim().toLowerCase();
+  if (!normalized) {
+    return true;
+  }
+  if (
+    typeof statusCode === "number" &&
+    new RegExp(`\\b(http|status code|status)\\s*${statusCode}\\b`).test(normalized)
+  ) {
+    return true;
+  }
+  return [
+    "bad request",
+    "unauthorized",
+    "payment required",
+    "forbidden",
+    "not found",
+    "method not allowed",
+    "request timeout",
+    "conflict",
+    "payload too large",
+    "unsupported media type",
+    "unprocessable entity",
+    "too many requests",
+    "internal server error",
+    "internal error",
+    "bad gateway",
+    "service unavailable",
+    "gateway timeout",
+  ].includes(normalized);
+}
+
 function fallbackHttpStatusMessage(statusCode: number | null): string {
   switch (statusCode) {
     case 400:
@@ -123,9 +155,16 @@ function fallbackHttpStatusMessage(statusCode: number | null): string {
     case 504:
       return tRuntime("api_error_http_504");
     default:
-      return typeof statusCode === "number"
-        ? tRuntime("api_error_http_default", { status: statusCode })
-        : tRuntime("api_error_no_response");
+      if (typeof statusCode !== "number") {
+        return tRuntime("api_error_no_response");
+      }
+      if (statusCode >= 400 && statusCode < 500) {
+        return tRuntime("api_error_http_client_default");
+      }
+      if (statusCode >= 500 && statusCode < 600) {
+        return tRuntime("api_error_http_server_default");
+      }
+      return tRuntime("api_error_http_default");
   }
 }
 
@@ -135,7 +174,7 @@ function readableApiErrorMessage(
   error: unknown,
 ): string {
   const detail = extractReadableDetail(data);
-  if (detail) {
+  if (detail && !isGenericHttpDetail(detail, statusCode)) {
     return detail;
   }
   const fallback = fallbackHttpStatusMessage(statusCode);
