@@ -3202,6 +3202,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "点击右侧 LUT 预览图中的色块可手动修正颜色",
     en: "Click a cell in the LUT preview to manually fix its color",
   },
+  ext_manual_fix_resolve_failed: {
+    zh: "无法识别你点击的 LUT 色块，请重新提取后再试。",
+    en: "Could not resolve the selected LUT cell. Re-run extraction and try again.",
+  },
   ext_material_type_label: {
     zh: "耗材类型",
     en: "Material Type",

@@ -221,6 +221,7 @@ export interface ExtractorActions {
   submitMerge: () => Promise<void>;
   setError: (error: string | null) => void;
   clearError: () => void;
+  setManualFixError: (error: string | null) => void;
   updatePaletteEntry: (
     index: number,
     entry: Partial<ExtractorPaletteEntry>,
@@ -1332,6 +1333,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
 
     setError: (error: string | null) => set({ error }),
     clearError: () => set({ error: null }),
+    setManualFixError: (error: string | null) => set({ manualFixError: error }),
 
     updatePaletteEntry: (
       index: number,
