@@ -26,6 +26,11 @@ from api.preview_resources import PREVIEW_PUBLIC_PURPOSE
 from api.session_store import SessionStore
 from config import COLORCHECKER_TEMP_TTL_SECONDS, IMAGE_PREVIEW_MAX_EDGE
 
+_PREVIEW_ARTIFACT_UNREADABLE_DETAIL = (
+    "Preview artifact is unavailable or unreadable. "
+    "Re-run the previous step and try again."
+)
+
 
 def _png_bytes(width: int = 8, height: int = 6) -> bytes:
     buffer = io.BytesIO()
@@ -73,6 +78,23 @@ def _register_colorchecker_source(
         is_public=False,
         purpose=COLORCHECKER_SOURCE_PURPOSE,
     )
+
+
+def _register_bad_colorchecker_full_artifact(
+    registry: FileRegistry,
+    tmp_path,
+) -> tuple[str, str]:
+    bad_path = tmp_path / "bad-colorchecker.png"
+    bad_path.write_bytes(b"not a png")
+    file_id = registry.register_path(
+        "colorchecker:test",
+        str(bad_path),
+        bad_path.name,
+        ttl_seconds=COLORCHECKER_TEMP_TTL_SECONDS,
+        is_public=False,
+        purpose=COLORCHECKER_FULL_PURPOSE,
+    )
+    return file_id, str(bad_path)
 
 
 def test_save_upload_to_tempfile_handles_short_os_write(monkeypatch, tmp_path) -> None:
@@ -140,6 +162,24 @@ def test_preview_resource_returns_private_source_id_and_bounded_preview() -> Non
     assert release_response.json()["released"] is True
     assert registry.resolve(source_id) is None
     assert client.get(body["preview_url"]).status_code == 404
+
+
+def test_preview_artifact_rejects_unreadable_private_artifact_without_path(
+    tmp_path,
+) -> None:
+    client, _store, registry = _client_with_state()
+    file_id, bad_path = _register_bad_colorchecker_full_artifact(registry, tmp_path)
+
+    response = client.post(
+        "/api/system/preview-artifacts",
+        data={"resource_id": file_id, "context": "colorchecker"},
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail == _PREVIEW_ARTIFACT_UNREADABLE_DETAIL
+    assert bad_path not in detail
+    assert "cannot identify image file" not in detail
 
 
 def test_colorchecker_source_keeps_standard_type_hint_for_extensionless_upload(monkeypatch) -> None:
