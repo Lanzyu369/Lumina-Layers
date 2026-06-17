@@ -2428,6 +2428,101 @@ def test_generate_route_infers_material_archive_white_backing_when_unspecified(t
     assert submitted_params["material_backing_material_index"] == 2
 
 
+def test_generate_route_rejects_material_archive_relief_color_height_below_optical_depth(tmp_path) -> None:
+    _test_store.clear_all()
+    image_path = tmp_path / "input.png"
+    Image.fromarray(np.zeros((4, 4, 3), dtype=np.uint8)).save(image_path)
+
+    session_id = _test_store.create()
+    _test_store.put(session_id, "image_path", str(image_path))
+    _test_store.put(session_id, "lut_path", "__material_archive__")
+    _test_store.put(session_id, "material_source", "material_archive")
+    _test_store.put(session_id, "selected_materials", ["mat-a", "mat-b"])
+    _test_store.put(session_id, "material_layer_count", 10)
+    _test_store.put(session_id, "material_layer_height_mm", 0.08)
+    _test_store.put(session_id, "replacement_regions", [])
+    _test_store.put(session_id, "free_color_set", set())
+    _test_store.put(
+        session_id,
+        "preview_cache",
+        {
+            "target_w": 4,
+            "target_h": 4,
+            "target_width_mm": 40.0,
+            "matched_rgb": np.zeros((4, 4, 3), dtype=np.uint8),
+            "mask_solid": np.ones((4, 4), dtype=bool),
+            "material_matrix": np.zeros((4, 4, 10), dtype=np.uint8),
+        },
+    )
+    _mock_pool.submit = AsyncMock()
+
+    response = client.post(
+        "/api/convert/generate",
+        json={
+            "session_id": session_id,
+            "params": {
+                "lut_name": "__material_archive__",
+                "enable_relief": True,
+                "height_mode": "color",
+                "color_height_map": {"#111111": 0.6},
+                "heightmap_max_height": 0.6,
+            },
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    assert "0.80 mm" in response.json()["detail"]
+    _mock_pool.submit.assert_not_called()
+
+
+def test_generate_route_rejects_material_archive_heightmap_below_optical_depth(tmp_path) -> None:
+    _test_store.clear_all()
+    image_path = tmp_path / "input.png"
+    Image.fromarray(np.zeros((4, 4, 3), dtype=np.uint8)).save(image_path)
+
+    session_id = _test_store.create()
+    _test_store.put(session_id, "image_path", str(image_path))
+    _test_store.put(session_id, "lut_path", "__material_archive__")
+    _test_store.put(session_id, "material_source", "material_archive")
+    _test_store.put(session_id, "selected_materials", ["mat-a", "mat-b"])
+    _test_store.put(session_id, "material_layer_count", 10)
+    _test_store.put(session_id, "material_layer_height_mm", 0.08)
+    _test_store.put(session_id, "replacement_regions", [])
+    _test_store.put(session_id, "free_color_set", set())
+    _test_store.put(session_id, "heightmap_grayscale", np.zeros((4, 4), dtype=np.uint8))
+    _test_store.put(
+        session_id,
+        "preview_cache",
+        {
+            "target_w": 4,
+            "target_h": 4,
+            "target_width_mm": 40.0,
+            "matched_rgb": np.zeros((4, 4, 3), dtype=np.uint8),
+            "mask_solid": np.ones((4, 4), dtype=bool),
+            "material_matrix": np.zeros((4, 4, 10), dtype=np.uint8),
+        },
+    )
+    _mock_pool.submit = AsyncMock()
+
+    response = client.post(
+        "/api/convert/generate",
+        json={
+            "session_id": session_id,
+            "params": {
+                "lut_name": "__material_archive__",
+                "enable_relief": True,
+                "height_mode": "heightmap",
+                "heightmap_max_height": 0.6,
+            },
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    assert "heightmap_max_height" in response.json()["detail"]
+    assert "0.80 mm" in response.json()["detail"]
+    _mock_pool.submit.assert_not_called()
+
+
 def test_generate_route_forwards_material_archive_backing_index(tmp_path) -> None:
     _test_store.clear_all()
     image_path = tmp_path / "input.png"

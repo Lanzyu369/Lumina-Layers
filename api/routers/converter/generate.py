@@ -81,6 +81,7 @@ from .common import (
     _require_session,
     _resolve_material_backing_index,
     _validate_material_source,
+    _validate_material_archive_relief_minimum_height,
 )
 
 router = APIRouter()
@@ -859,6 +860,15 @@ async def convert_generate(
     # 解析 height_mode 用于浮雕分支选择
     height_mode = request.height_mode or "color"
     _require_heightmap_for_relief(session_data, request)
+    _validate_material_archive_relief_minimum_height(
+        enable_relief=request.enable_relief,
+        material_source=str(session_material_source or "lut"),
+        height_mode=height_mode,
+        color_height_map=request.color_height_map,
+        heightmap_max_height=request.heightmap_max_height,
+        session_data=session_data,
+        cache=cache,
+    )
 
     # If heightmap mode, save session heightmap to temp file for worker process
     # 高度图模式时，将 session 中的高度图保存为临时文件供工作进程使用
@@ -1655,6 +1665,15 @@ async def convert_generate_large_format(
     elif not lut_path or not os.path.exists(lut_path):
         raise HTTPException(status_code=409, detail="LUT file missing. Call POST /api/convert/preview first.")
     _require_heightmap_for_relief(session_data, request)
+    _validate_material_archive_relief_minimum_height(
+        enable_relief=request.enable_relief,
+        material_source=str(session_material_source or "lut"),
+        height_mode=request.height_mode or "color",
+        color_height_map=request.color_height_map,
+        heightmap_max_height=request.heightmap_max_height,
+        session_data=session_data,
+        cache=cache,
+    )
 
     sid = body.session_id
     total_w_mm, total_h_mm = _resolve_large_format_dimensions(cache, request, lf.target_height_mm)
@@ -2072,6 +2091,14 @@ async def convert_batch(
             status_code=422,
             detail="Batch relief requires color_height_map",
         )
+    _validate_material_archive_relief_minimum_height(
+        enable_relief=enable_relief,
+        material_source=material_source,
+        height_mode=resolved_height_mode,
+        color_height_map=parsed_color_height_map,
+        heightmap_max_height=heightmap_max_height,
+        material_layer_count=material_layer_count,
+    )
 
     # --- batch_run_id: unique per-request identifier for structured logging
     # and artifact naming. Independent of request.state.request_id (R9 §1).

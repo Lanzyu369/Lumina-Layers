@@ -239,6 +239,54 @@ export function clampValue(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
+const RELIEF_MIN_EXTRA_HEIGHT_MM = 0.08;
+const RELIEF_MAX_EXTRA_HEIGHT_MM = 15.0;
+const MATERIAL_ARCHIVE_RELIEF_LAYER_HEIGHT_MM = 0.08;
+
+type MaterialArchiveReliefMinimumState = {
+  source_version: SourceVersion;
+  materialLayerCount: number;
+  spacer_thick: number;
+};
+
+export function getMaterialArchiveReliefMinimumTotalHeight(
+  state: MaterialArchiveReliefMinimumState,
+): number {
+  if (state.source_version !== "material") {
+    return RELIEF_MIN_EXTRA_HEIGHT_MM;
+  }
+  return (
+    Math.max(1, Math.round(state.materialLayerCount)) *
+    MATERIAL_ARCHIVE_RELIEF_LAYER_HEIGHT_MM
+  );
+}
+
+export function getMaterialArchiveReliefMinimumExtraHeight(
+  state: MaterialArchiveReliefMinimumState,
+): number {
+  const minimumTotalHeight = getMaterialArchiveReliefMinimumTotalHeight(state);
+  return clampValue(
+    minimumTotalHeight - state.spacer_thick,
+    RELIEF_MIN_EXTRA_HEIGHT_MM,
+    RELIEF_MAX_EXTRA_HEIGHT_MM,
+  );
+}
+
+function clampAbsoluteReliefHeightMap(
+  map: Record<string, number> | undefined,
+  minimumTotalHeight: number,
+): Record<string, number> | undefined {
+  if (!map) {
+    return undefined;
+  }
+  return Object.fromEntries(
+    Object.entries(map).map(([hex, height]) => [
+      hex,
+      Math.max(height, minimumTotalHeight),
+    ]),
+  );
+}
+
 export function buildLayerImagesSourceKey(
   state: Pick<
     ConverterState,
@@ -2803,10 +2851,23 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       });
     },
     setMaterialLayerCount: (count: number) =>
-      set(() => ({
-        materialLayerCount: count,
-        ...buildPreviewSessionResetState(),
-      })),
+      set((state) => {
+        const materialLayerCount = clampValue(Math.round(count), 1, 20);
+        return {
+          materialLayerCount,
+          heightmap_max_height: state.enable_relief
+            ? clampValue(
+                state.heightmap_max_height,
+                getMaterialArchiveReliefMinimumExtraHeight({
+                  ...state,
+                  materialLayerCount,
+                }),
+                RELIEF_MAX_EXTRA_HEIGHT_MM,
+              )
+            : state.heightmap_max_height,
+          ...buildPreviewSessionResetState(),
+        };
+      }),
     setMaterialLayerHeightMm: (height: number) =>
       set(() => ({
         materialLayerHeightMm: height,
@@ -2952,13 +3013,26 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       }),
 
     setSpacerThick: (thick: number) =>
-      set((state) => ({
-        ...buildFridgeMagnetState(state, {
+      set((state) => {
+        const fridgeState = buildFridgeMagnetState(state, {
           base_spacer_thick: clampValue(thick, 0.2, 3.5),
-        }),
-        threemfDiskPath: null,
-        downloadUrl: null,
-      })),
+        });
+        return {
+          ...fridgeState,
+          heightmap_max_height: state.enable_relief
+            ? clampValue(
+                state.heightmap_max_height,
+                getMaterialArchiveReliefMinimumExtraHeight({
+                  ...state,
+                  spacer_thick: fridgeState.spacer_thick,
+                }),
+                RELIEF_MAX_EXTRA_HEIGHT_MM,
+              )
+            : state.heightmap_max_height,
+          threemfDiskPath: null,
+          downloadUrl: null,
+        };
+      }),
 
     setStructureMode: (mode: StructureMode) =>
       set((state) => ({
@@ -3261,6 +3335,14 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     // --- 浮雕（互斥） ---
     setEnableRelief: (enabled: boolean) => {
       set((state) => {
+        const minimumReliefExtraHeight = getMaterialArchiveReliefMinimumExtraHeight(state);
+        const reliefMaxHeight = enabled
+          ? clampValue(
+              state.heightmap_max_height,
+              minimumReliefExtraHeight,
+              RELIEF_MAX_EXTRA_HEIGHT_MM,
+            )
+          : state.heightmap_max_height;
         const updates: Partial<ConverterState> = {
           enable_relief: enabled,
           enable_cloisonne: enabled ? false : state.enable_cloisonne,
@@ -3268,6 +3350,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           structure_mode: enabled
             ? StructureModeEnum.SINGLE_SIDED
             : state.structure_mode,
+          heightmap_max_height: reliefMaxHeight,
           threemfDiskPath: null,
           downloadUrl: null,
         };
@@ -3288,7 +3371,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           updates.color_height_map = computeAutoHeightMap(
             state.palette,
             mode,
-            state.heightmap_max_height,
+            reliefMaxHeight,
           );
         }
         return updates;
@@ -3298,14 +3381,19 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       set({ color_height_map: map }),
     setHeightmapMaxHeight: (height: number) => {
       const state = _get();
-      const newMax = clampValue(height, 0.08, 15.0);
+      const minimumReliefExtraHeight = getMaterialArchiveReliefMinimumExtraHeight(state);
+      const newMax = clampValue(
+        height,
+        minimumReliefExtraHeight,
+        RELIEF_MAX_EXTRA_HEIGHT_MM,
+      );
       const oldMax = state.heightmap_max_height;
       // Proportionally rescale all existing color heights
       if (oldMax > 0 && Object.keys(state.color_height_map).length > 0) {
         const ratio = newMax / oldMax;
         const scaled: Record<string, number> = {};
         for (const [hex, h] of Object.entries(state.color_height_map)) {
-          scaled[hex] = clampValue(h * ratio, 0.08, newMax);
+          scaled[hex] = clampValue(h * ratio, minimumReliefExtraHeight, newMax);
         }
         set({ heightmap_max_height: newMax, color_height_map: scaled });
       } else {
@@ -5716,17 +5804,28 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           });
           return null;
         }
+        const reliefMinimumTotalHeight =
+          getMaterialArchiveReliefMinimumTotalHeight(state);
         const reliefHeightmapMaxHeight = state.enable_relief
-          ? state.spacer_thick + state.heightmap_max_height
+          ? Math.max(
+              state.spacer_thick + state.heightmap_max_height,
+              reliefMinimumTotalHeight,
+            )
           : state.heightmap_max_height;
         const reliefColorHeightMap =
           state.enable_relief && state.autoHeightMode !== "use-heightmap"
-            ? toAbsoluteReliefHeightMap(
-                state.color_height_map,
-                state.spacer_thick,
+            ? clampAbsoluteReliefHeightMap(
+                toAbsoluteReliefHeightMap(
+                  state.color_height_map,
+                  state.spacer_thick,
+                ),
+                reliefMinimumTotalHeight,
               )
             : state.enable_relief
-              ? state.color_height_map
+              ? clampAbsoluteReliefHeightMap(
+                  state.color_height_map,
+                  reliefMinimumTotalHeight,
+                )
               : undefined;
         const baseParams = {
           ...sourceParams,
@@ -6405,14 +6504,22 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         error: null,
       });
       try {
+        const reliefMinimumTotalHeight =
+          getMaterialArchiveReliefMinimumTotalHeight(state);
         const reliefHeightmapMaxHeight = state.enable_relief
-          ? state.spacer_thick + state.heightmap_max_height
+          ? Math.max(
+              state.spacer_thick + state.heightmap_max_height,
+              reliefMinimumTotalHeight,
+            )
           : state.heightmap_max_height;
         const reliefColorHeightMap =
           state.enable_relief && state.autoHeightMode !== "use-heightmap"
-            ? toAbsoluteReliefHeightMap(
-                state.color_height_map,
-                state.spacer_thick,
+            ? clampAbsoluteReliefHeightMap(
+                toAbsoluteReliefHeightMap(
+                  state.color_height_map,
+                  state.spacer_thick,
+                ),
+                reliefMinimumTotalHeight,
               )
             : undefined;
         const settings = useSettingsStore.getState();

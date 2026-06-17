@@ -218,6 +218,34 @@ describe("converter store relief generate flow", () => {
     });
   });
 
+  it("constrains 10-layer material archive relief totals to the optical stack height", async () => {
+    const useConverterStore = await loadStore();
+    useConverterStore.setState({
+      ...baseReadyState(),
+      sessionId: "session-relief",
+      source_version: "material",
+      selectedMaterialDirNames: ["mat-black", "mat-white"],
+      materialLayerCount: 10,
+      materialLayerHeightMm: 0.08,
+      spacer_thick: 0.2,
+      enable_relief: true,
+      autoHeightMode: "darker-higher",
+      color_height_map: { "111111": 0.08 },
+      heightmap_max_height: 0.08,
+    });
+
+    await useConverterStore.getState().submitGenerate();
+
+    expect(mocks.convertGenerate).toHaveBeenCalledOnce();
+    const [, generateParams] = mocks.convertGenerate.mock.calls[0];
+    expect(generateParams.material_source).toBe("material_archive");
+    expect(generateParams.color_height_map).toEqual({ "111111": 0.8 });
+    expect(generateParams.heightmap_max_height).toBeCloseTo(0.8, 10);
+    expect(useConverterStore.getState().color_height_map).toEqual({
+      "111111": 0.08,
+    });
+  });
+
   it("stores preview and generate performance timing from successful responses", async () => {
     const useConverterStore = await loadStore();
     useConverterStore.setState({

@@ -19,6 +19,7 @@ from api.preview_cache_artifacts import (
 )
 from api.session_store import SessionStore
 from api.structured_logging import bind_session_id, get_logger
+from config import PrinterConfig
 from core.material_lut_synthesis import infer_material_archive_base_channel_idx
 from core.gradient_group_analyzer import (
     GradientGroupAnalysisParams,
@@ -30,6 +31,7 @@ EPHEMERAL_PREVIEW_TTL_SECONDS = 600
 BATCH_DOWNLOAD_TTL_SECONDS = 3600
 log = get_logger(__name__)
 _VALID_MATERIAL_SOURCES = {"lut", "material_archive"}
+_RELIEF_HEIGHT_EPSILON_MM = 1e-9
 
 # Shared error tuples for except clauses across converter router modules.
 # replace.py extends ROUTER_HANDLED_ERRORS with IndexError for array-index
@@ -65,6 +67,103 @@ def _validate_material_source(material_source: str) -> str:
             ),
         )
     return material_source
+
+
+def _cache_material_matrix_depth(cache: dict | None) -> int | None:
+    if not cache:
+        return None
+    material_matrix = cache.get("material_matrix")
+    shape = getattr(material_matrix, "shape", None)
+    if shape is None and isinstance(material_matrix, dict):
+        shape = material_matrix.get("shape")
+    if shape is None or len(shape) < 3:
+        return None
+    try:
+        depth = int(shape[2])
+    except (TypeError, ValueError):
+        return None
+    return depth if depth > 0 else None
+
+
+def _resolve_material_archive_optical_layer_count(
+    *,
+    session_data: dict | None = None,
+    cache: dict | None = None,
+    material_layer_count: object | None = None,
+) -> int | None:
+    cache_depth = _cache_material_matrix_depth(cache)
+    if cache_depth is not None:
+        return cache_depth
+
+    raw_count = material_layer_count
+    if raw_count is None and session_data is not None:
+        raw_count = session_data.get("material_layer_count")
+    try:
+        count = int(raw_count)
+    except (TypeError, ValueError):
+        return None
+    return count if count > 0 else None
+
+
+def _format_mm(value: float) -> str:
+    return f"{value:.2f} mm"
+
+
+def _validate_material_archive_relief_minimum_height(
+    *,
+    enable_relief: bool,
+    material_source: str,
+    height_mode: str | None,
+    color_height_map: dict[str, float] | None,
+    heightmap_max_height: float | None,
+    session_data: dict | None = None,
+    cache: dict | None = None,
+    material_layer_count: object | None = None,
+) -> None:
+    """Reject material-archive relief heights below the optical stack depth."""
+
+    if not enable_relief or material_source != "material_archive":
+        return
+
+    optical_layers = _resolve_material_archive_optical_layer_count(
+        session_data=session_data,
+        cache=cache,
+        material_layer_count=material_layer_count,
+    )
+    if optical_layers is None:
+        return
+
+    min_height_mm = optical_layers * float(PrinterConfig.LAYER_HEIGHT)
+    mode = height_mode or "color"
+    if mode == "heightmap":
+        requested = float(heightmap_max_height or 0.0)
+        if requested + _RELIEF_HEIGHT_EPSILON_MM < min_height_mm:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Material-archive relief heightmap_max_height must be at least "
+                    f"{_format_mm(min_height_mm)} for {optical_layers} optical layers; "
+                    f"received {_format_mm(requested)}."
+                ),
+            )
+        return
+
+    if mode != "color" or not color_height_map:
+        return
+
+    try:
+        min_color_height = min(float(value) for value in color_height_map.values())
+    except (TypeError, ValueError):
+        return
+    if min_color_height + _RELIEF_HEIGHT_EPSILON_MM < min_height_mm:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Material-archive relief color heights must be at least "
+                f"{_format_mm(min_height_mm)} for {optical_layers} optical layers; "
+                f"received minimum {_format_mm(min_color_height)}."
+            ),
+        )
 
 
 def _handle_core_error(e: Exception, context: str) -> NoReturn:
