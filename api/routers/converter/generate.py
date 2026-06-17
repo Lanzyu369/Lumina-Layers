@@ -220,6 +220,45 @@ def _cache_field_path_or_tempfile(
     return temp_path
 
 
+def _require_loadable_material_archive_cache_path(
+    path: str | None,
+    field_name: str,
+) -> str:
+    if path is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Preview cache missing {field_name}. Re-run preview before "
+                "generating material-archive models."
+            ),
+        )
+
+    try:
+        loaded = np.load(path, mmap_mode="r", allow_pickle=False)
+        try:
+            if not isinstance(loaded, np.ndarray):
+                raise ValueError(f"{field_name} artifact is not a numpy array")
+            _ = loaded.shape
+        finally:
+            close = getattr(loaded, "close", None)
+            if callable(close):
+                close()
+            mmap_obj = getattr(loaded, "_mmap", None)
+            if mmap_obj is not None:
+                mmap_obj.close()
+    except (OSError, ValueError, TypeError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Preview cache {field_name} artifact is unavailable or "
+                "unreadable. Re-run preview before generating "
+                "material-archive models."
+            ),
+        ) from exc
+
+    return path
+
+
 def _cache_field_array(
     *,
     cache: dict,
@@ -879,11 +918,9 @@ async def convert_generate(
     material_matrix_path: str | None = None
     should_forward_cached_analysis = (
         request.use_cached_matched_rgb
-        or (
-            session_material_source == "material_archive"
-            and core_modeling_mode == CoreModelingMode.VECTOR
-        )
+        or session_material_source == "material_archive"
     )
+    require_cached_material_analysis = session_material_source == "material_archive"
     log.debug(
         "Cached matched RGB input state resolved: use_cached_matched_rgb=%s, has_replacement_regions=%s",
         request.use_cached_matched_rgb,
@@ -902,6 +939,11 @@ async def convert_generate(
             sid=body.session_id,
             store=store,
         )
+        if require_cached_material_analysis:
+            matched_rgb_path = _require_loadable_material_archive_cache_path(
+                matched_rgb_path,
+                "matched_rgb",
+            )
         if matched_rgb_path is not None:
             cached_matched_rgb = cache.get("matched_rgb")
             field_ref = (
@@ -941,6 +983,11 @@ async def convert_generate(
                 sid=body.session_id,
                 store=store,
             )
+            if require_cached_material_analysis:
+                mask_solid_path = _require_loadable_material_archive_cache_path(
+                    mask_solid_path,
+                    "mask_solid",
+                )
 
             material_matrix_path = _cache_field_path_or_tempfile(
                 cache=cache,
@@ -949,6 +996,11 @@ async def convert_generate(
                 sid=body.session_id,
                 store=store,
             )
+            if require_cached_material_analysis:
+                material_matrix_path = _require_loadable_material_archive_cache_path(
+                    material_matrix_path,
+                    "material_matrix",
+                )
 
     override_material_matrix_path, recipe_override_masks_path = _prepare_recipe_override_worker_inputs(
         cache=cache,
