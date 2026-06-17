@@ -28,6 +28,7 @@ import shutil
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from pathlib import PurePath, PureWindowsPath
 from typing import Any, Iterable
 from urllib.parse import urlparse
 
@@ -41,6 +42,7 @@ from api.feedback_materials_bundle import pack_materials
 from api.feedback_time import now_beijing
 from api.structured_logging import get_logger
 from config import TEMP_DIR
+from utils.lut_manager import LUTManager
 
 __all__ = [
     "SyncCollectionResult",
@@ -258,28 +260,65 @@ def _find_lut_file(lut_name: str) -> Path | None:
 
     先精确匹配，再大小写不敏感；按 .npy/.json/.npz/.msgpack 的优先顺序取。
     """
-    if not lut_name:
+    if not _is_lut_name_path_safe(lut_name):
         return None
-    lut_preset_dir = REPO_ROOT / "lut-preset"
+    lut_preset_dir = _safe_lut_preset_root()
     if not lut_preset_dir.is_dir():
         return None
+
+    display_match = LUTManager.get_lut_path(lut_name)
+    if display_match:
+        found = _lut_file_within_preset(Path(display_match), lut_preset_dir)
+        if found is not None:
+            return found
+
     for ext in _LUT_EXTENSIONS:
         exact = lut_preset_dir / f"{lut_name}{ext}"
-        if exact.exists():
-            return exact
+        found = _lut_file_within_preset(exact, lut_preset_dir)
+        if found is not None:
+            return found
     # Case-insensitive fallback: search children.
     try:
         lowered = lut_name.lower()
         for path in lut_preset_dir.rglob("*"):
-            if not path.is_file():
-                continue
             if path.stem.lower() != lowered:
                 continue
-            if path.suffix.lower() in _LUT_EXTENSIONS:
-                return path
+            found = _lut_file_within_preset(path, lut_preset_dir)
+            if found is not None:
+                return found
     except OSError:
         return None
     return None
+
+
+def _is_lut_name_path_safe(lut_name: object) -> bool:
+    """Return whether a client LUT name is safe to use for lookup."""
+
+    if not isinstance(lut_name, str) or not lut_name.strip():
+        return False
+    if "/" in lut_name or "\\" in lut_name:
+        return False
+    if PurePath(lut_name).is_absolute() or PureWindowsPath(lut_name).is_absolute():
+        return False
+    path_parts = (*PurePath(lut_name).parts, *PureWindowsPath(lut_name).parts)
+    return ".." not in path_parts
+
+
+def _safe_lut_preset_root() -> Path:
+    return (REPO_ROOT / "lut-preset").resolve()
+
+
+def _lut_file_within_preset(path: Path, preset_root: Path) -> Path | None:
+    try:
+        resolved = path.resolve()
+        if not resolved.is_file():
+            return None
+        if resolved.suffix.lower() not in _LUT_EXTENSIONS:
+            return None
+        resolved.relative_to(preset_root)
+    except (OSError, ValueError):
+        return None
+    return resolved
 
 
 def _format_created_at(value: Any) -> str | None:
