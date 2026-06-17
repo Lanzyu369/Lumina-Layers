@@ -1086,6 +1086,23 @@ def _remove_generated_path(path: str | None) -> None:
         pass
 
 
+def _rollback_swatch_registration(
+    registry: FileRegistry,
+    *,
+    file_ids: list[str | None],
+    generated_path: str | None,
+) -> None:
+    """Best-effort cleanup for failed swatch registration."""
+    for file_id in file_ids:
+        if not file_id:
+            continue
+        try:
+            registry.cleanup_file(file_id)
+        except Exception:
+            pass
+    _remove_generated_path(generated_path)
+
+
 def _resolve_substrate_linear(materials, substrate: str) -> np.ndarray:
     """Resolve the substrate color in linear RGB for the forward model.
     解析正向模型所需的基底线性 RGB。
@@ -1228,14 +1245,14 @@ async def generate_material_swatch(
         else f"material-recipe-swatch:{unique_suffix}"
     )
     preview_url: str | None = None
-    download_registered = False
+    registered_file_ids: list[str | None] = []
     try:
         download_id = registry.register_path(
             sid,
             output_path,
             ttl_seconds=MATERIAL_SWATCH_EXPORT_TTL_SECONDS,
         )
-        download_registered = True
+        registered_file_ids.append(download_id)
 
         if legend_img is not None:
             preview_bytes = pil_to_png_bytes(legend_img)
@@ -1245,10 +1262,15 @@ async def generate_material_swatch(
                 "material_swatch_legend.png",
                 ttl_seconds=MATERIAL_SWATCH_EXPORT_TTL_SECONDS,
             )
+            registered_file_ids.append(preview_id)
             preview_url = f"/api/files/{preview_id}"
-    finally:
-        if not download_registered:
-            _remove_generated_path(output_path)
+    except Exception:
+        _rollback_swatch_registration(
+            registry,
+            file_ids=registered_file_ids,
+            generated_path=output_path,
+        )
+        raise
 
     log.info(
         "Material recipe swatch generated",
