@@ -11,6 +11,7 @@ Steps:
     4. Build Electron installer (electron-builder -> NSIS Setup.exe)
 """
 
+import argparse
 import os
 import shutil
 import subprocess
@@ -23,6 +24,7 @@ ELECTRON_DIR = ROOT / "electron"
 RESOURCES_DIR = ELECTRON_DIR / "resources"
 BACKEND_RES_DIR = RESOURCES_DIR / "backend"
 APP_DIST_RES_DIR = RESOURCES_DIR / "app" / "dist"
+MATERIALS_RES_DIR = RESOURCES_DIR / "materials"
 PYINSTALLER_DIST = ROOT / "dist"
 
 
@@ -34,13 +36,27 @@ def run(cmd, cwd=None, env_extra=None):
     subprocess.check_call(cmd, shell=True, cwd=cwd, env=env)
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Build Lumina Studio desktop installer.",
+    )
+    parser.add_argument(
+        "--materials-seed-path",
+        default=os.environ.get("MATERIALS_SEED_PATH", ""),
+        help="Optional lumina-materials-seed.zip artifact to bundle.",
+    )
+    return parser.parse_args()
+
+
 def main():
+    args = parse_args()
     print("=" * 60)
     print("  Lumina Studio — Desktop Build")
     print("=" * 60)
 
     BACKEND_RES_DIR.mkdir(parents=True, exist_ok=True)
     APP_DIST_RES_DIR.mkdir(parents=True, exist_ok=True)
+    MATERIALS_RES_DIR.mkdir(parents=True, exist_ok=True)
 
     # ── Step 1: Build frontend ──
     print("\n[1/4] Building frontend...")
@@ -72,6 +88,18 @@ def main():
         shutil.rmtree(APP_DIST_RES_DIR)
     shutil.copytree(frontend_dist, APP_DIST_RES_DIR)
     print(f"  Copied: {frontend_dist} -> {APP_DIST_RES_DIR}")
+
+    seed_path = Path(args.materials_seed_path).expanduser() if args.materials_seed_path else None
+    target_seed_path = MATERIALS_RES_DIR / "lumina-materials-seed.zip"
+    if seed_path:
+        if not seed_path.is_file():
+            print(f"ERROR: Materials seed not found at {seed_path}")
+            sys.exit(1)
+        shutil.copy2(seed_path, target_seed_path)
+        print(f"  Copied: {seed_path} -> {target_seed_path}")
+    elif target_seed_path.exists():
+        target_seed_path.unlink()
+        print(f"  Removed stale seed: {target_seed_path}")
 
     # ── Step 4: Build Electron installer ──
     print("\n[4/4] Building Electron installer (electron-builder)...")

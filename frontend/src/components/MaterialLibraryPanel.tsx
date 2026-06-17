@@ -731,6 +731,14 @@ export default function MaterialLibraryPanel() {
                           />
                           <div className="min-w-0 flex-1">
                             <h3 className="flex min-w-0 flex-wrap items-center gap-2 text-base font-semibold text-slate-900 dark:text-slate-50">
+                              {item.sync_official ? (
+                                <span
+                                  data-testid="material-library-official-badge"
+                                  className="rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-amber-800 dark:border-amber-400/60 dark:bg-amber-500/15 dark:text-amber-200"
+                                >
+                                  {t("mat_sync_official_badge")}
+                                </span>
+                              ) : null}
                               <span
                                 data-testid="material-library-brand-tag"
                                 className="max-w-full truncate rounded-full border border-slate-200/80 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:border-slate-700/80 dark:text-slate-300"

@@ -50,6 +50,9 @@ test.png
 *.zip
 *.7z
 
+# Material Registry package collections live in the sibling Lumina-materials repo.
+material-registry-packages/
+
 # Old version folders
 Lumina-Layers-*/
 
