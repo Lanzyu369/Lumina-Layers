@@ -2188,12 +2188,15 @@ class LUTManager:
         """Load a flat-list JSON LUT: [{recipe, rgb, hex, source}, ...].
         加载顶层为数组的旧格式 JSON LUT 文件。
         """
+        # Legacy flat-list JSON has no metadata/max_color_layers field, so it
+        # remains a five-layer-only format. Use keyed JSON for six-layer recipes.
+        legacy_recipe_width = PrinterConfig.COLOR_LAYERS
         numeric_recipe_rows: list[list[int]] = []
         for entry in data:
             if not isinstance(entry, dict):
                 continue
             recipe_raw = entry.get("recipe", [])
-            if not isinstance(recipe_raw, (list, tuple)) or len(recipe_raw) != 5:
+            if not isinstance(recipe_raw, (list, tuple)) or len(recipe_raw) != legacy_recipe_width:
                 continue
             parsed_row = [cls._parse_integer_recipe_value(value) for value in recipe_raw]
             if any(value is None for value in parsed_row):
@@ -2254,13 +2257,16 @@ class LUTManager:
                         "recipe_value": recipe_raw,
                     },
                 )
-                recipe_indices = [-1, -1, -1, -1, -1]
+                recipe_indices = [-1] * legacy_recipe_width
             else:
                 recipe_indices = [
                     cls._resolve_recipe_member(value, name_to_idx, file_path)
                     for value in recipe_raw
                 ]
-            recipe_indices = cls._normalize_resolved_layer_recipe(recipe_indices)
+            recipe_indices = cls._normalize_resolved_layer_recipe(
+                recipe_indices,
+                max_color_layers=legacy_recipe_width,
+            )
             stacks_list.append(recipe_indices)
 
         rgb = np.array(rgb_list, dtype=np.uint8) if rgb_list else np.zeros((0, 3), dtype=np.uint8)

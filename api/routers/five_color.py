@@ -217,6 +217,30 @@ def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
     return (int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16))
 
 
+def _validate_recipe_width(
+    selected_indices: list[int],
+    expected_length: int,
+    *,
+    loc: str,
+) -> None:
+    actual_length = len(selected_indices)
+    if actual_length == expected_length:
+        return
+    raise HTTPException(
+        status_code=422,
+        detail={
+            "reason": "recipe_length_mismatch",
+            "loc": loc,
+            "expected_length": expected_length,
+            "actual_length": actual_length,
+            "message": (
+                f"Expected {expected_length} color indices for this LUT, "
+                f"got {actual_length}."
+            ),
+        },
+    )
+
+
 @router.get("/base-colors")
 def get_base_colors(lut_name: str = Query(..., description="LUT 显示名称")) -> BaseColorsResponse:
     """Return the base colors of a LUT.
@@ -284,6 +308,11 @@ def query_five_color(request: FiveColorQueryRequest) -> FiveColorQueryResponse:
     查询五色组合结果。
     """
     engine, _ = _load_engine(request.lut_name)
+    _validate_recipe_width(
+        request.selected_indices,
+        engine.expected_selection_length(),
+        loc="body.selected_indices",
+    )
 
     # Validate index range
     for idx in request.selected_indices:
@@ -365,7 +394,13 @@ def generate_swatch(
     base_color_hexes = [rgb_to_hex(rgb) for rgb in engine.get_base_colors()]
 
     items: list[RecipeSwatchItem] = []
-    for recipe_request in request.recipes:
+    expected_length = engine.expected_selection_length()
+    for recipe_index, recipe_request in enumerate(request.recipes):
+        _validate_recipe_width(
+            recipe_request.selected_indices,
+            expected_length,
+            loc=f"body.recipes.{recipe_index}.selected_indices",
+        )
         for idx in recipe_request.selected_indices:
             if idx < 0 or idx >= engine.color_count:
                 raise HTTPException(

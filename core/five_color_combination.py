@@ -192,8 +192,8 @@ class StackLUTLoader:
             if data.ndim != 2:
                 return False, f"错误：数组维度应为 2，实际为 {data.ndim}", None
 
-            if data.shape[1] != 5:
-                return False, f"错误：数组列数应为 5，实际为 {data.shape[1]}", None
+            if data.shape[1] not in _SUPPORTED_STACK_RECIPE_WIDTHS:
+                return False, f"错误：数组列数应为 5 或 6，实际为 {data.shape[1]}", None
 
             # 验证值范围
             if data.min() < 0 or data.max() > 7:
@@ -680,6 +680,12 @@ class ColorQueryEngine:
         if stack_arr.ndim == 2 and stack_arr.shape[1] in _SUPPORTED_STACK_RECIPE_WIDTHS:
             return int(stack_arr.shape[1])
         return 5
+
+    def expected_selection_length(self) -> int:
+        """Return the recipe width accepted by this LUT query engine.
+        返回当前 LUT 查询引擎接受的配方层数。
+        """
+        return self._expected_selection_length()
 
     def _supports_dynamic_five_layer_row_decoding(self) -> bool:
         row_count = int(np.asarray(self.lut_rgb).reshape(-1, 3).shape[0])

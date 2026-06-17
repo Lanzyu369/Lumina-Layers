@@ -10,6 +10,7 @@ import os
 import json
 import tempfile
 
+import msgpack
 import pytest
 import numpy as np
 
@@ -326,6 +327,62 @@ class TestLUTManager:
             assert loaded_stacks.shape == (1, 6)
             assert loaded_stacks[0].tolist() == [4, 1, 2, 3, 0, 4]
             assert metadata.max_color_layers == 6
+        finally:
+            os.unlink(tmp_path)
+
+    def test_keyed_msgpack_with_six_layer_recipe_preserves_stack_width(self):
+        """Keyed msgpack uses the same six-layer recipe contract as keyed JSON."""
+        data = {
+            "name": "FiveColorExtended",
+            "color_mode": "5-Color Extended",
+            "max_color_layers": 6,
+            "palette": {
+                "White": {"material": "PLA Basic", "hex_color": "#FFFFFF"},
+                "Cyan": {"material": "PLA Basic", "hex_color": "#00FFFF"},
+                "Magenta": {"material": "PLA Basic", "hex_color": "#FF00FF"},
+                "Yellow": {"material": "PLA Basic", "hex_color": "#FFFF00"},
+                "Black": {"material": "PLA Basic", "hex_color": "#000000"},
+            },
+            "entries": [
+                {
+                    "rgb": [17, 34, 51],
+                    "recipe": ["Black", "Cyan", "Magenta", "Yellow", "White", "Black"],
+                }
+            ],
+        }
+
+        with tempfile.NamedTemporaryFile(suffix=".msgpack", delete=False) as f:
+            f.write(msgpack.packb(data, use_bin_type=True))
+            tmp_path = f.name
+
+        try:
+            _loaded_rgb, loaded_stacks, metadata = LUTManager.load_lut_with_metadata(tmp_path)
+            assert loaded_stacks is not None
+            assert loaded_stacks.shape == (1, 6)
+            assert loaded_stacks[0].tolist() == [4, 1, 2, 3, 0, 4]
+            assert metadata.max_color_layers == 6
+        finally:
+            os.unlink(tmp_path)
+
+    def test_legacy_flat_list_json_six_layer_recipe_is_unavailable(self):
+        """Legacy flat-list JSON is a five-layer-only format without metadata."""
+        data = [
+            {
+                "rgb": [17, 34, 51],
+                "recipe": [4, 1, 2, 3, 0, 4],
+            }
+        ]
+
+        with tempfile.NamedTemporaryFile(suffix=".json", mode="w", delete=False, encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+            tmp_path = f.name
+
+        try:
+            _loaded_rgb, loaded_stacks, metadata = LUTManager.load_lut_with_metadata(tmp_path)
+            assert loaded_stacks is not None
+            assert loaded_stacks.shape == (1, 5)
+            assert loaded_stacks[0].tolist() == [-1, -1, -1, -1, -1]
+            assert metadata.max_color_layers == 5
         finally:
             os.unlink(tmp_path)
 

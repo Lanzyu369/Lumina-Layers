@@ -80,7 +80,8 @@ def test_base_colors_schema_documents_combinations_contract():
 class _FakeSwatchEngine:
     """Test double exposing canonical LUT metadata for swatch generation."""
 
-    def __init__(self) -> None:
+    def __init__(self, expected_selection_length: int = 5) -> None:
+        self._expected_selection_length = expected_selection_length
         self.color_count = 6
         self._base_colors = [
             (255, 0, 0),
@@ -115,6 +116,9 @@ class _FakeSwatchEngine:
 
     def get_color_names(self):
         return self._color_names
+
+    def expected_selection_length(self):
+        return self._expected_selection_length
 
     def query(self, selected_indices):
         return self._query_results.get(
@@ -586,6 +590,20 @@ def test_npz_object_sources_do_not_enable_pickle_loading(tmp_path):
     assert StackLUTLoader.load_sources_from_json(str(lut_path)) == []
 
 
+def test_load_stack_lut_accepts_six_column_recipes(tmp_path):
+    """Standalone stack .npy files may carry 5C Extended six-layer recipes."""
+    stack_path = tmp_path / "five_color_extended_stack.npy"
+    np.save(stack_path, np.array([[4, 1, 2, 3, 0, 4]], dtype=np.int32))
+
+    ok, message, stack = StackLUTLoader.load_stack_lut(str(stack_path))
+
+    assert ok is True
+    assert "成功加载 1 个组合" in message
+    assert stack is not None
+    assert stack.shape == (1, 6)
+    assert stack[0].tolist() == [4, 1, 2, 3, 0, 4]
+
+
 def test_npz_object_stack_values_do_not_fail_loading(tmp_path):
     """Object-dtype stack members must be treated as unavailable recipes, not load failures."""
     rgb_data = np.array([[12, 34, 56]], dtype=np.uint8)
@@ -856,6 +874,25 @@ def test_query_uses_normalized_numeric_string_stack_rows():
     assert body["found"] is True
     assert body["selected_indices"] == [0, 1, 2, 3, 4]
     assert body["result_hex"] == "#0C2238"
+
+
+def test_query_rejects_six_indices_for_five_layer_lut_with_422():
+    """Five-layer LUTs must keep legacy request-validation semantics."""
+    rgb_data = np.array([[12, 34, 56]], dtype=np.uint8)
+    stack_lut = np.array([[0, 1, 2, 3, 4]], dtype=np.int64)
+    engine = ColorQueryEngine(stack_lut=stack_lut, lut_rgb=rgb_data, color_count=5)
+
+    with patch("api.routers.five_color._load_engine", return_value=(engine, "legacy_five_layer")):
+        resp = client.post(
+            "/api/five-color/query",
+            json={"lut_name": "legacy_five_layer", "selected_indices": [0, 1, 2, 3, 4, 0]},
+        )
+
+    assert resp.status_code == 422
+    body = resp.json()
+    assert body["detail"]["reason"] == "recipe_length_mismatch"
+    assert body["detail"]["expected_length"] == 5
+    assert body["detail"]["actual_length"] == 6
 
 
 def test_native_recipe_json_precise_fraction_recipe_is_unavailable_not_500(tmp_path):
@@ -2309,7 +2346,7 @@ def test_generate_swatch_uses_canonical_lut_metadata_instead_of_client_payload()
 
 def test_generate_swatch_preserves_six_layer_extended_recipe():
     """Swatch generation passes 5C Extended six-layer recipes through intact."""
-    engine = _FakeSwatchEngine()
+    engine = _FakeSwatchEngine(expected_selection_length=6)
     captured: dict[str, object] = {}
 
     def _fake_generate_recipe_swatch(*, recipes, **kwargs):
@@ -2343,6 +2380,35 @@ def test_generate_swatch_preserves_six_layer_extended_recipe():
     swatch_item = captured["recipes"][0]
     assert swatch_item.selected_indices == [4, 1, 2, 3, 0, 4]
     assert swatch_item.result_hex == "#040506"
+
+
+def test_generate_swatch_rejects_six_indices_for_five_layer_lut_with_422():
+    """Five-layer swatch requests must reject six indices before query/generation."""
+    engine = _FakeSwatchEngine()
+
+    with (
+        patch("api.routers.five_color._load_engine", return_value=(engine, "legacy_five_layer")),
+        patch("core.recipe_swatch.generate_recipe_swatch") as generate_mock,
+    ):
+        resp = client.post(
+            "/api/five-color/generate-swatch",
+            json={
+                "lut_name": "legacy_five_layer",
+                "recipes": [
+                    {
+                        "selected_indices": [0, 1, 2, 3, 4, 0],
+                        "result_hex": "#123456",
+                    }
+                ],
+            },
+        )
+
+    assert resp.status_code == 422
+    body = resp.json()
+    assert body["detail"]["reason"] == "recipe_length_mismatch"
+    assert body["detail"]["expected_length"] == 5
+    assert body["detail"]["actual_length"] == 6
+    generate_mock.assert_not_called()
 
 
 def test_recipe_swatch_uses_six_layer_height_for_extended_recipe():
