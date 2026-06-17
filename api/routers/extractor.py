@@ -1431,13 +1431,50 @@ def extractor_manual_fix(
     手动覆盖单个 LUT 格点的颜色值。
     """
     # Resolve lut_path: prefer session lookup, fallback to direct path
-    lut_path = request.lut_path
+    lut_path = request.lut_path.strip()
     session_data = None
+    using_session_lut = False
     if request.session_id:
         bind_session_id(request.session_id)
         session_data = store.get(request.session_id)
-        if session_data and "lut_path" in session_data:
-            lut_path = session_data["lut_path"]
+        if session_data is None:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    "Manual correction session not found or expired. "
+                    "Re-run extraction before editing the LUT."
+                ),
+            )
+        raw_lut_path = session_data.get("lut_path")
+        if not isinstance(raw_lut_path, str) or not raw_lut_path.strip():
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Manual correction LUT is missing from the session. "
+                    "Re-run extraction before editing the LUT."
+                ),
+            )
+        lut_path = raw_lut_path.strip()
+        using_session_lut = True
+    elif not lut_path:
+        raise HTTPException(
+            status_code=422,
+            detail="manual fix requires session_id or lut_path",
+        )
+
+    if not os.path.exists(lut_path):
+        if using_session_lut:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Manual correction LUT file is missing. "
+                    "Re-run extraction before editing the LUT."
+                ),
+            )
+        raise HTTPException(
+            status_code=404,
+            detail="Manual correction LUT file not found.",
+        )
 
     manual_fix_start = time.perf_counter()
     try:
