@@ -30,6 +30,10 @@ _COLORCHECKER_PREVIEW_UNREADABLE_DETAIL = (
     "ColorChecker preview is unavailable or unreadable. "
     "Re-run ColorChecker calibration and try again."
 )
+_PREVIEW_ARTIFACT_UNREADABLE_DETAIL = (
+    "Preview artifact is unavailable or unreadable. "
+    "Re-run the previous step and try again."
+)
 _COLORCHECKER_UNREADABLE_DETAIL = (
     "ColorChecker calibrated image is unavailable or unreadable. "
     "Recalibrate and try again."
@@ -166,6 +170,24 @@ def test_preview_resource_returns_private_source_id_and_bounded_preview() -> Non
     assert release_response.json()["released"] is True
     assert registry.resolve(source_id) is None
     assert client.get(body["preview_url"]).status_code == 404
+
+
+def test_preview_artifact_rejects_unreadable_private_artifact_without_path(
+    tmp_path,
+) -> None:
+    client, _store, registry = _client_with_state()
+    file_id, bad_path = _register_bad_colorchecker_full_artifact(registry, tmp_path)
+
+    response = client.post(
+        "/api/system/preview-artifacts",
+        data={"resource_id": file_id, "context": "colorchecker"},
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail == _PREVIEW_ARTIFACT_UNREADABLE_DETAIL
+    assert bad_path not in detail
+    assert "cannot identify image file" not in detail
 
 
 def test_colorchecker_source_keeps_standard_type_hint_for_extensionless_upload(monkeypatch) -> None:
