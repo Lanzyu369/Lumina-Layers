@@ -1378,7 +1378,7 @@ def region_detect(
             preview_img[region_mask].astype(np.float32) * (1 - alpha) + highlight_color.astype(np.float32) * alpha
         ).astype(np.uint8)
 
-        preview_bytes: bytes = _image_to_png_bytes(preview_img)
+        preview_bytes: bytes = _render_masked_preview_bytes(preview_img, mask_solid)
         preview_id: str = registry.register_bytes(request.session_id, preview_bytes, "region_highlight.png")
 
         # Extract 2D contours from region_mask for frontend RGB outline rendering

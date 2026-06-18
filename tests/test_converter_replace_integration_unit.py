@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import logging
 from pathlib import Path
 from unittest.mock import patch
@@ -59,6 +60,31 @@ def _seed_preview_session(store: SessionStore) -> str:
         },
     )
     store.put(session_id, "original_matched_rgb", matched_rgb.copy())
+    store.put(session_id, "material_source", "lut")
+    return session_id
+
+
+def _seed_transparent_region_session(store: SessionStore) -> str:
+    """Create a preview cache whose transparent background keeps stale RGB."""
+    session_id = store.create()
+    matched_rgb = np.full((4, 4, 3), [48, 144, 184], dtype=np.uint8)
+    matched_rgb[1:3, 1:3, :] = [255, 0, 0]
+    mask_solid = np.zeros((4, 4), dtype=bool)
+    mask_solid[1:3, 1:3] = True
+    quantized_image = matched_rgb.copy()
+    store.put(
+        session_id,
+        "preview_cache",
+        {
+            "matched_rgb": matched_rgb.copy(),
+            "quantized_image": quantized_image,
+            "mask_solid": mask_solid,
+            "target_w": 4,
+            "target_h": 4,
+            "target_width_mm": 40.0,
+            "color_palette": [],
+        },
+    )
     store.put(session_id, "material_source", "lut")
     return session_id
 
@@ -514,6 +540,28 @@ class TestRegionDetectCanary:
         assert record.click_y == 0
         assert record.detected_pixel_count == 8
         assert record.detected_dominant_color == "#ffffff"
+
+    def test_region_detect_preserves_transparent_background_alpha(
+        self,
+        _isolate_dependency_overrides,
+    ) -> None:
+        store: SessionStore = _isolate_dependency_overrides["store"]
+        session_id = _seed_transparent_region_session(store)
+
+        response = client.post(
+            "/api/convert/region-detect",
+            json={"session_id": session_id, "x": 1, "y": 1},
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        preview = client.get(body["preview_url"])
+        assert preview.status_code == 200, preview.text
+        img = Image.open(io.BytesIO(preview.content)).convert("RGBA")
+        rgba = np.asarray(img, dtype=np.uint8)
+        mask_solid = store.get(session_id)["preview_cache"]["mask_solid"]
+        assert int((rgba[~mask_solid, 3] == 0).sum()) == int((~mask_solid).sum())
+        assert int((rgba[mask_solid, 3] == 255).sum()) == int(mask_solid.sum())
 
 
 class TestRegionRequantizeCanary:
