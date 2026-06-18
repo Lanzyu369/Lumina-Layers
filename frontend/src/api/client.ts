@@ -81,11 +81,23 @@ function extractReadableDetail(data: unknown): string | null {
     }
   }
 
+  let detailErrorCode: string | null = null;
+  if (isRecord(detail)) {
+    const detailMessage = detail.message;
+    if (typeof detailMessage === "string" && detailMessage.trim()) {
+      return detailMessage.trim();
+    }
+    const errorCode = detail.error;
+    if (typeof errorCode === "string" && errorCode.trim()) {
+      detailErrorCode = errorCode.trim();
+    }
+  }
+
   const message = data.message;
   if (typeof message === "string" && message.trim()) {
     return message.trim();
   }
-  return null;
+  return detailErrorCode;
 }
 
 function isGenericHttpDetail(detail: string, statusCode: number | null): boolean {
@@ -95,7 +107,10 @@ function isGenericHttpDetail(detail: string, statusCode: number | null): boolean
   }
   if (
     typeof statusCode === "number" &&
-    new RegExp(`\\b(http|status code|status)\\s*${statusCode}\\b`).test(normalized)
+    new RegExp(
+      `^(?:request\\s+failed\\s+with\\s+status\\s+code\\s+|` +
+        `(?:http\\s*)?(?:error|status(?:\\s+code)?)\\s*)?${statusCode}$`,
+    ).test(normalized)
   ) {
     return true;
   }
@@ -184,6 +199,22 @@ function readableApiErrorMessage(
   return error instanceof Error ? error.message : String(error ?? "API request failed");
 }
 
+function replaceGenericResponseDetail(
+  response: { data?: unknown } | null | undefined,
+  statusCode: number | null,
+  readableMessage: string,
+): void {
+  const data = response?.data;
+  if (!isRecord(data)) {
+    return;
+  }
+  const detail = data.detail;
+  if (typeof detail !== "string" || !isGenericHttpDetail(detail, statusCode)) {
+    return;
+  }
+  response.data = { ...data, detail: readableMessage };
+}
+
 function getResponseHeaderValue(
   headers: unknown,
   name: string,
@@ -257,11 +288,36 @@ function buildResourceDownloadError(
   return error;
 }
 
+function buildResourceNetworkError(
+  url: string,
+  cause: unknown,
+): Error {
+  const readableMessage = readableApiErrorMessage(null, null, cause);
+  const error = new Error(readableMessage, { cause }) as Error & {
+    response?: {
+      status: number | null;
+      data: unknown;
+      headers: Headers;
+    };
+  };
+  error.response = {
+    status: null,
+    data: { detail: readableMessage, url },
+    headers: new Headers(),
+  };
+  return error;
+}
+
 export async function downloadResourceBlob(
   url: string,
   init?: RequestInit,
 ): Promise<Blob> {
-  const response = await fetch(url, init);
+  let response: Response;
+  try {
+    response = await fetch(url, init);
+  } catch (error) {
+    throw buildResourceNetworkError(url, error);
+  }
   const failed =
     response.ok === false ||
     (typeof response.ok !== "boolean" &&
@@ -271,7 +327,11 @@ export async function downloadResourceBlob(
     const data = await readResourceErrorData(response);
     throw buildResourceDownloadError(url, response, data);
   }
-  return response.blob();
+  try {
+    return await response.blob();
+  } catch (error) {
+    throw buildResourceNetworkError(url, error);
+  }
 }
 
 export async function assertResourceDownloadAvailable(
@@ -282,10 +342,15 @@ export async function assertResourceDownloadAvailable(
   if (!headers.has("Range")) {
     headers.set("Range", "bytes=0-0");
   }
-  const response = await fetch(url, {
-    ...init,
-    headers,
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...init,
+      headers,
+    });
+  } catch (error) {
+    throw buildResourceNetworkError(url, error);
+  }
   const failed =
     response.ok === false ||
     (typeof response.ok !== "boolean" &&
@@ -312,11 +377,13 @@ apiClient.interceptors.response.use(
     const url = config?.url ?? null;
     const statusCode: number | null = response?.status ?? null;
     const requestId = getResponseHeaderValue(response?.headers, "x-request-id");
+    const responseDetailForLog = summarizeApiErrorData(response?.data);
     const readableMessage = readableApiErrorMessage(
       response?.data,
       statusCode,
       error,
     );
+    replaceGenericResponseDetail(response, statusCode, readableMessage);
     if (error && typeof error === "object") {
       try {
         (error as { message?: string }).message = readableMessage;
@@ -334,7 +401,7 @@ apiClient.interceptors.response.use(
         url,
         status_code: statusCode,
         request_id: requestId,
-        response_detail: summarizeApiErrorData(response?.data),
+        response_detail: responseDetailForLog,
         ...summarizeErrorForLog(error),
         error_message: readableMessage,
       },

@@ -50,6 +50,13 @@ from core.naming import generate_segmented_glb_filename
 from .common import NON_FATAL_GLB_ERRORS
 
 log = get_logger(__name__)
+_GLB_CACHE_UNAVAILABLE_MESSAGE = (
+    "3D preview cache is unavailable. Re-run preview before updating the 3D preview."
+)
+
+
+class _GlbPreviewCacheUnavailableError(RuntimeError):
+    """Public-safe GLB failure raised when preview-cache artifacts are stale."""
 
 
 def _cache_state(cache: dict) -> dict:
@@ -68,6 +75,23 @@ def _with_cache_metadata(cache: dict, metadata: dict[str, object]) -> dict:
         return merge_preview_cache_metadata(cache, metadata)
     cache.update(metadata)
     return cache
+
+
+def _hydrate_cache_for_glb_worker(cache: dict) -> dict:
+    if not is_preview_cache_artifact_ref(cache):
+        return cache
+    try:
+        return hydrate_preview_cache_for_worker(cache)
+    except (OSError, ValueError, TypeError, KeyError, EOFError) as exc:
+        raise _GlbPreviewCacheUnavailableError(
+            _GLB_CACHE_UNAVAILABLE_MESSAGE
+        ) from exc
+
+
+def _glb_status_error_text(exc: Exception) -> str:
+    if isinstance(exc, _GlbPreviewCacheUnavailableError):
+        return str(exc)
+    return f"{type(exc).__name__}: {exc}"
 
 
 def _cleanup_unregistered_glb(
@@ -238,11 +262,7 @@ def _run_glb_build_job(
             OUTPUT_DIR,
             generate_segmented_glb_filename(session_id),
         )
-        build_cache = (
-            hydrate_preview_cache_for_worker(latest_cache)
-            if is_preview_cache_artifact_ref(latest_cache)
-            else latest_cache
-        )
+        build_cache = _hydrate_cache_for_glb_worker(latest_cache)
         glb_path = generate_segmented_glb(build_cache, output_path=target_path)
 
         # Re-check the token post-build: another replace might have landed
@@ -350,7 +370,7 @@ def _run_glb_build_job(
             latest_cache,
             {
                 "glb_url": None,
-                "glb_error": f"{type(exc).__name__}: {exc}",
+                "glb_error": _glb_status_error_text(exc),
                 "glb_completed_at": time.time(),
             },
         )

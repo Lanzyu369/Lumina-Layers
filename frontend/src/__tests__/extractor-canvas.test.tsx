@@ -483,6 +483,95 @@ describe("ExtractorCanvas 单元测试", () => {
     });
   });
 
+  it("surfaces LUT preview resolve API errors through manualFixError", async () => {
+    const ExtractorCanvas = (await import("../components/ExtractorCanvas")).default;
+    const message = "Manual correction LUT file is missing. Re-run extraction before editing the LUT.";
+    mockResolveLutPreviewCell.mockRejectedValueOnce(new Error(message));
+
+    useExtractorStore.setState({
+      imagePreviewUrl: "blob:test-image",
+      session_id: "session-1",
+      warp_view_url: null,
+      lut_preview_url: "/api/files/lut-456",
+    });
+
+    render(<ExtractorCanvas />);
+    const preview = screen.getByTestId("lut-preview-image") as HTMLImageElement;
+    Object.defineProperty(preview, "naturalWidth", {
+      configurable: true,
+      value: 1000,
+    });
+    Object.defineProperty(preview, "naturalHeight", {
+      configurable: true,
+      value: 1000,
+    });
+    preview.getBoundingClientRect = vi.fn(() => ({
+      x: 10,
+      y: 20,
+      left: 10,
+      top: 20,
+      right: 210,
+      bottom: 120,
+      width: 200,
+      height: 100,
+      toJSON: () => ({}),
+    } as DOMRect));
+
+    fireEvent.click(preview, { clientX: 85, clientY: 45 });
+
+    await waitFor(() => {
+      expect(useExtractorStore.getState().manualFixError).toBe(message);
+    });
+    expect(screen.queryByTestId("manual-fix-popup")).not.toBeInTheDocument();
+  });
+
+  it("keeps LUT blank-area resolve misses silent", async () => {
+    const ExtractorCanvas = (await import("../components/ExtractorCanvas")).default;
+    mockResolveLutPreviewCell.mockRejectedValueOnce(
+      new Error("Clicked cell is outside the valid LUT area"),
+    );
+
+    useExtractorStore.setState({
+      imagePreviewUrl: "blob:test-image",
+      session_id: "session-1",
+      warp_view_url: null,
+      lut_preview_url: "/api/files/lut-456",
+      manualFixError: "stale manual fix error",
+    });
+
+    render(<ExtractorCanvas />);
+    const preview = screen.getByTestId("lut-preview-image") as HTMLImageElement;
+    Object.defineProperty(preview, "naturalWidth", {
+      configurable: true,
+      value: 1000,
+    });
+    Object.defineProperty(preview, "naturalHeight", {
+      configurable: true,
+      value: 1000,
+    });
+    preview.getBoundingClientRect = vi.fn(() => ({
+      x: 10,
+      y: 20,
+      left: 10,
+      top: 20,
+      right: 210,
+      bottom: 120,
+      width: 200,
+      height: 100,
+      toJSON: () => ({}),
+    } as DOMRect));
+
+    fireEvent.click(preview, { clientX: 85, clientY: 45 });
+
+    await waitFor(() => {
+      expect(mockResolveLutPreviewCell).toHaveBeenCalledWith("session-1", 0.25, 0.25);
+    });
+    await waitFor(() => {
+      expect(useExtractorStore.getState().manualFixError).toBeNull();
+    });
+    expect(screen.queryByTestId("manual-fix-popup")).not.toBeInTheDocument();
+  });
+
   it("renders only warp_view when lut_preview is null", async () => {
     const ExtractorCanvas = (await import("../components/ExtractorCanvas")).default;
 

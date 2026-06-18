@@ -71,6 +71,10 @@ from api.dependencies import (
     worker_pool,
 )
 from api.file_bridge import file_to_response
+from api.material_sync_scheduler import (
+    cancel_material_sync_auto_refresh_tasks,
+    start_material_sync_auto_refresh_tasks,
+)
 from api.routers import (
     calibration_router,
     converter_router,
@@ -79,6 +83,8 @@ from api.routers import (
     five_color_router,
     health_router,
     lut_router,
+    material_registry_router,
+    material_sync_router,
     session_router,
     slicer_router,
     single_stage_router,
@@ -180,6 +186,15 @@ def _coerce_client_log_duration(value: Any) -> float | None:
 
 def _env_enabled(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _material_registry_service_enabled() -> bool:
+    """Return whether this process should expose Registry write-service routes.
+    判断当前进程是否暴露耗材 Registry 写服务路由。
+    """
+    return _env_enabled("LUMINA_ENABLE_MATERIAL_REGISTRY_SERVICE") or _env_enabled(
+        "LUMINA_MATERIAL_REGISTRY_SERVICE_MODE"
+    )
 
 
 def _configure_frontend_dist(app: FastAPI) -> None:
@@ -290,6 +305,29 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             },
         )
 
+    try:
+        from api.material_seed import install_material_seed_if_needed
+
+        seed_result = install_material_seed_if_needed()
+        if seed_result is not None:
+            log.info(
+                "Material seed installed",
+                extra={
+                    "event": "material_seed_install_done",
+                    "installed_count": seed_result["installed_count"],
+                    "seed_source": seed_result["seed_source"],
+                },
+            )
+    except Exception as exc:  # noqa: BLE001 — seed bootstrap must not block startup.
+        log.warning(
+            "Material seed install failed",
+            extra={
+                "event": "material_seed_install_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+
     async def _cleanup_loop() -> None:
         """Periodically clean up expired sessions and their registered files.
         定期清理过期会话及其注册文件。
@@ -320,11 +358,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 )
 
     cleanup_task = asyncio.create_task(_cleanup_loop())
+    material_sync_refresh_tasks = start_material_sync_auto_refresh_tasks()
 
     yield
 
     # --- Shutdown ---
     cleanup_task.cancel()
+    await cancel_material_sync_auto_refresh_tasks(material_sync_refresh_tasks)
     worker_pool.shutdown(wait=True)
     log.info("Worker pool shutdown complete", extra={"event": "worker_pool_shutdown"})
 
@@ -477,6 +517,9 @@ def create_app() -> FastAPI:
     app.include_router(five_color_router)
     app.include_router(health_router)
     app.include_router(lut_router)
+    if _material_registry_service_enabled():
+        app.include_router(material_registry_router)
+    app.include_router(material_sync_router)
     app.include_router(session_router)
     app.include_router(slicer_router)
     app.include_router(single_stage_router)

@@ -182,6 +182,95 @@ class TestHeightClamping:
                     f"应至少有 {OPTICAL_LAYERS} 层"
                 )
 
+    def test_relief_preserves_material_archive_layers_above_five(self):
+        """Material-archive relief must preserve every optical layer.
+
+        耗材档案浮雕不能把 6 层以上的叠色截断为传统 5 层。
+        """
+        from core.converter import _build_relief_voxel_matrix
+
+        matched_rgb = np.array([[[255, 0, 0]]], dtype=np.uint8)
+        material_matrix = np.arange(10, dtype=np.int32).reshape(1, 1, 10)
+        mask_solid = np.array([[True]])
+
+        full_matrix, _metadata = _build_relief_voxel_matrix(
+            matched_rgb=matched_rgb,
+            material_matrix=material_matrix,
+            mask_solid=mask_solid,
+            color_height_map={"ff0000": 1.2},
+            default_height=0.4,
+            structure_mode="Single-sided",
+            backing_color_id=99,
+            pixel_scale=0.5,
+        )
+
+        filled_column = full_matrix[:, 0, 0]
+        optical_layers = [
+            int(value)
+            for value in filled_column
+            if value not in (-1, 99)
+        ]
+
+        assert optical_layers == list(reversed(range(10)))
+
+    def test_relief_preserves_material_archive_layers_in_heightmap_mode(self):
+        """Heightmap relief uses the same dynamic optical layer depth."""
+        from core.converter import _build_relief_voxel_matrix
+
+        matched_rgb = np.array([[[255, 0, 0]]], dtype=np.uint8)
+        material_matrix = np.arange(10, dtype=np.int32).reshape(1, 1, 10)
+        mask_solid = np.array([[True]])
+        height_matrix = np.array([[1.2]], dtype=np.float32)
+
+        full_matrix, _metadata = _build_relief_voxel_matrix(
+            matched_rgb=matched_rgb,
+            material_matrix=material_matrix,
+            mask_solid=mask_solid,
+            color_height_map={},
+            default_height=0.4,
+            structure_mode="Single-sided",
+            backing_color_id=99,
+            pixel_scale=0.5,
+            height_matrix=height_matrix,
+        )
+
+        filled_column = full_matrix[:, 0, 0]
+        optical_layers = [
+            int(value)
+            for value in filled_column
+            if value not in (-1, 99)
+        ]
+
+        assert optical_layers == list(reversed(range(10)))
+
+    def test_relief_keeps_legacy_five_layer_order(self):
+        """Legacy five-layer relief still writes top-to-bottom as 4..0."""
+        from core.converter import _build_relief_voxel_matrix
+
+        matched_rgb = np.array([[[255, 0, 0]]], dtype=np.uint8)
+        material_matrix = np.arange(5, dtype=np.int32).reshape(1, 1, 5)
+        mask_solid = np.array([[True]])
+
+        full_matrix, _metadata = _build_relief_voxel_matrix(
+            matched_rgb=matched_rgb,
+            material_matrix=material_matrix,
+            mask_solid=mask_solid,
+            color_height_map={"ff0000": 0.6},
+            default_height=0.4,
+            structure_mode="Single-sided",
+            backing_color_id=99,
+            pixel_scale=0.5,
+        )
+
+        filled_column = full_matrix[:, 0, 0]
+        optical_layers = [
+            int(value)
+            for value in filled_column
+            if value not in (-1, 99)
+        ]
+
+        assert optical_layers == [4, 3, 2, 1, 0]
+
 
 # ========== 9.5 错误处理 (需求 8.1, 8.2, 8.3) ==========
 

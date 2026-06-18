@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
@@ -90,6 +91,19 @@ def _seed_artifact_preview_session(store: SessionStore, tmp_path) -> str:
     store.put(session_id, "replacement_history", [])
     store.put(session_id, "material_source", "lut")
     return session_id
+
+
+def _delete_externalized_preview_cache_field(
+    store: SessionStore,
+    session_id: str,
+    field_name: str,
+) -> Path:
+    cache_ref = store.get(session_id)["preview_cache"]
+    field_path = Path(cache_ref["fields"][field_name]["path"])
+    assert field_path.exists()
+    field_path.unlink()
+    assert not field_path.exists()
+    return field_path
 
 
 def _capture_replace_logger(caplog: pytest.LogCaptureFixture) -> logging.Logger:
@@ -358,6 +372,29 @@ class TestResetReplacementsCanary:
 
 class TestSourceColorPickCanary:
     """Successful source-color-pick requests emit the structured done canary."""
+
+    def test_stale_artifact_cache_returns_repreview_error(
+        self,
+        _isolate_dependency_overrides,
+        tmp_path,
+    ) -> None:
+        store: SessionStore = _isolate_dependency_overrides["store"]
+        session_id = _seed_artifact_preview_session(store, tmp_path)
+        stale_path = _delete_externalized_preview_cache_field(
+            store,
+            session_id,
+            "matched_rgb",
+        )
+
+        response = client.post(
+            "/api/convert/source-color-pick",
+            json={"session_id": session_id, "x": 0, "y": 0},
+        )
+
+        assert response.status_code == 409
+        detail = response.json()["detail"]
+        assert "Re-run preview" in detail
+        assert str(stale_path) not in detail
 
     def test_source_color_pick_emits_converter_source_color_pick_done_canary(
         self,

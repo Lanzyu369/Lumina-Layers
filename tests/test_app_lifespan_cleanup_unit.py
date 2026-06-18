@@ -145,3 +145,25 @@ def test_cleanup_expired_retries_failed_session_bound_entry_after_tombstone_expi
         app.dependency_overrides.clear()
         if os.path.exists(registry_path):
             os.unlink(registry_path)
+
+
+def test_lifespan_starts_material_sync_auto_refresh_tasks() -> None:
+    """App lifespan should delegate material sync background refresh startup."""
+    calls = 0
+
+    def _fake_start_tasks() -> list:
+        nonlocal calls
+        calls += 1
+        return []
+
+    app = create_app()
+
+    with patch(
+        "api.app.start_material_sync_auto_refresh_tasks",
+        side_effect=_fake_start_tasks,
+    ):
+        with TestClient(app) as client:
+            response = client.get("/api/health")
+
+    assert response.status_code == 200
+    assert calls == 1

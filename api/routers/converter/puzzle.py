@@ -62,6 +62,7 @@ from .common import (
     _handle_core_error,
     _require_session,
     _resolve_material_backing_index,
+    _validate_material_archive_relief_minimum_height,
 )
 
 router = APIRouter()
@@ -113,13 +114,22 @@ def _require_puzzle_cache(
         return cache
 
     loaded = get_preview_cache_metadata(cache)
-    loaded.update(
-        hydrate_preview_cache(
-            cache,
-            fields=fields,
-            mmap_mode="r",
+    try:
+        loaded.update(
+            hydrate_preview_cache(
+                cache,
+                fields=fields,
+                mmap_mode="r",
+            )
         )
-    )
+    except (OSError, ValueError, TypeError, KeyError, EOFError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Puzzle preview cache is unavailable. "
+                "Re-run preview before using puzzle mode."
+            ),
+        ) from exc
     return loaded
 
 
@@ -715,6 +725,7 @@ async def generate_puzzle(
     """
 
     session_data = _require_session(store, body.session_id)
+    preview_cache_ref = session_data.get("preview_cache")
     cache = _require_puzzle_cache(
         session_data,
         fields={"matched_rgb", "mask_solid", "preview_rgba"},
@@ -766,6 +777,16 @@ async def generate_puzzle(
         else CoreModelingMode(generate_params.modeling_mode.value)
     )
     height_mode = generate_params.height_mode or "color"
+    _validate_material_archive_relief_minimum_height(
+        enable_relief=generate_params.enable_relief,
+        material_source=str(session_material_source or "lut"),
+        height_mode=height_mode,
+        color_height_map=generate_params.color_height_map,
+        heightmap_max_height=generate_params.heightmap_max_height,
+        session_data=session_data,
+        cache=cache,
+        cache_ref=preview_cache_ref if isinstance(preview_cache_ref, dict) else None,
+    )
     heightmap_grayscale = session_data.get("heightmap_grayscale")
 
     warnings = list(layout.warnings)

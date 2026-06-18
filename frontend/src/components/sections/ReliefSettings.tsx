@@ -1,6 +1,9 @@
 import { useCallback } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { useConverterStore } from "../../stores/converter";
+import {
+  getMaterialArchiveReliefMinimumExtraHeight,
+  useConverterStore,
+} from "../../stores/converter";
 import type { AutoHeightMode } from "../../api/types";
 import { ModelingMode } from "../../api/types";
 import Checkbox from "../ui/Checkbox";
@@ -26,6 +29,9 @@ export default function ReliefSettings() {
     heightmapFile,
     heightmapThumbnailUrl,
     modeling_mode,
+    source_version,
+    materialLayerCount,
+    spacer_thick,
   } = useConverterStore(useShallow((s) => ({
     enable_relief: s.enable_relief,
     heightmap_max_height: s.heightmap_max_height,
@@ -33,9 +39,17 @@ export default function ReliefSettings() {
     heightmapFile: s.heightmapFile,
     heightmapThumbnailUrl: s.heightmapThumbnailUrl,
     modeling_mode: s.modeling_mode,
+    source_version: s.source_version,
+    materialLayerCount: s.materialLayerCount,
+    spacer_thick: s.spacer_thick,
   })));
 
   const isVector = modeling_mode === ModelingMode.VECTOR;
+  const minimumReliefHeight = getMaterialArchiveReliefMinimumExtraHeight({
+    source_version,
+    materialLayerCount,
+    spacer_thick,
+  });
 
   // Actions extracted individually (stable references)
   const setEnableRelief = useConverterStore((s) => s.setEnableRelief);
@@ -88,7 +102,7 @@ export default function ReliefSettings() {
               label={t("relief_max_height")}
               tooltip={t("relief_max_height_hint")}
               value={heightmap_max_height}
-              min={0.08}
+              min={minimumReliefHeight}
               max={15.0}
               step={0.04}
               unit="mm"
