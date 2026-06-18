@@ -346,10 +346,12 @@ function buildResourceDownloadError(
 ): Error {
   const statusCode =
     typeof response.status === "number" ? response.status : null;
+  const requestId = getResponseHeaderValue(response.headers, "x-request-id");
   const readableMessage = readableApiErrorMessage(
     data,
     statusCode,
     new Error(`Resource download failed: ${url}`),
+    requestId,
   );
   const responseData = buildReadableResponseData(
     data,

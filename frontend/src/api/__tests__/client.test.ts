@@ -15,6 +15,11 @@ import apiClient, {
   downloadResourceBlob,
 } from "../client";
 
+const jsonHeaders = {
+  get: (name: string) =>
+    name.toLowerCase() === "content-type" ? "application/json" : null,
+};
+
 describe("apiClient", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -382,7 +387,7 @@ describe("apiClient", () => {
     globalThis.fetch = vi.fn().mockResolvedValueOnce({
       ok: false,
       status: 404,
-      headers: { get: () => "application/json" },
+      headers: jsonHeaders,
       json: () => Promise.resolve({ detail: "Not Found" }),
     }) as unknown as typeof fetch;
 
@@ -400,7 +405,7 @@ describe("apiClient", () => {
     globalThis.fetch = vi.fn().mockResolvedValueOnce({
       ok: false,
       status: 422,
-      headers: { get: () => "application/json" },
+      headers: jsonHeaders,
       json: () =>
         Promise.resolve({
           detail: {
@@ -499,7 +504,7 @@ describe("apiClient", () => {
     globalThis.fetch = vi.fn().mockResolvedValueOnce({
       ok: false,
       status: 500,
-      headers: { get: () => "application/json" },
+      headers: jsonHeaders,
       json: () => Promise.resolve({ detail: "worker crashed" }),
     }) as unknown as typeof fetch;
 
@@ -521,12 +526,37 @@ describe("apiClient", () => {
     }
   });
 
+  it("includes request ids in failed resource download server errors", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      headers: {
+        get: (name: string) => {
+          const normalized = name.toLowerCase();
+          if (normalized === "content-type") return "application/json";
+          if (normalized === "x-request-id") return "req-file-500";
+          return null;
+        },
+      },
+      json: () => Promise.resolve({ detail: "worker crashed" }),
+    }) as unknown as typeof fetch;
+
+    try {
+      await expect(downloadResourceBlob("/api/files/broken")).rejects.toThrow(
+        "The server hit an internal error. Request ID: req-file-500.",
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("redacts top-level server error messages for failed resource downloads", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = vi.fn().mockResolvedValueOnce({
       ok: false,
       status: 500,
-      headers: { get: () => "application/json" },
+      headers: jsonHeaders,
       json: () => Promise.resolve({ message: "worker crashed" }),
     }) as unknown as typeof fetch;
 
@@ -609,7 +639,7 @@ describe("apiClient", () => {
     globalThis.fetch = vi.fn().mockResolvedValueOnce({
       ok: false,
       status: 404,
-      headers: { get: () => "application/json" },
+      headers: jsonHeaders,
       json: () => Promise.resolve({ detail: "File not found or expired" }),
     }) as unknown as typeof fetch;
 
