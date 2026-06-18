@@ -55,9 +55,27 @@ RAW_EXTENSIONS: set[str] = {
     ".srw",
     ".raw",
 }
+_PASSTHROUGH_IMAGE_EXTENSIONS: set[str] = {
+    ".bmp",
+    ".gif",
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".svg",
+    ".tif",
+    ".tiff",
+    ".webp",
+}
+_SUPPORTED_UPLOAD_IMAGE_EXTENSIONS = (
+    _PASSTHROUGH_IMAGE_EXTENSIONS | HEIC_EXTENSIONS | RAW_EXTENSIONS
+)
 _GZIP_CHUNK_SIZE = 1024 * 1024
 _GLB_GZIP_MIN_BYTES = 1024
 _UPLOAD_CHUNK_SIZE = 1024 * 1024
+_UNSUPPORTED_IMAGE_UPLOAD_DETAIL = (
+    "不支持的图像文件类型: "
+    "请上传 PNG、JPEG、SVG、WebP、HEIC/HEIF、RAW、BMP、GIF 或 TIFF 图片。"
+)
 _UPLOAD_IMAGE_UNREADABLE_DETAIL = (
     "无法解码图像文件: 请重新上传有效的 PNG、JPEG、HEIC 或 RAW 图片后再试。"
 )
@@ -201,8 +219,8 @@ async def upload_to_tempfile(
 
 
 async def ensure_png_tempfile(file: UploadFile) -> str:
-    """Save uploaded file to temp; convert HEIC/HEIF to PNG.
-    保存上传文件为临时文件；若为 HEIC/HEIF 则转换为 PNG。
+    """Validate and save uploaded image to temp; convert HEIC/HEIF/RAW to PNG.
+    校验并保存上传图片为临时文件；若为 HEIC/HEIF/RAW 则转换为 PNG。
 
     Args:
         file (UploadFile): FastAPI upload. (FastAPI 上传文件)
@@ -211,9 +229,13 @@ async def ensure_png_tempfile(file: UploadFile) -> str:
         str: Temp file path (PNG if converted). (临时文件路径)
 
     Raises:
-        HTTPException: pillow-heif missing or decode failure. (解码失败)
+        HTTPException: unsupported image type, missing dependency, or decode failure.
+        (不支持的图像类型、依赖缺失或解码失败)
     """
     ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in _SUPPORTED_UPLOAD_IMAGE_EXTENSIONS:
+        raise HTTPException(status_code=422, detail=_UNSUPPORTED_IMAGE_UPLOAD_DETAIL)
+
     raw_path = await upload_to_tempfile(file)
 
     if ext not in HEIC_EXTENSIONS and ext not in RAW_EXTENSIONS:

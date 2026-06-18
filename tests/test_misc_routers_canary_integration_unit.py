@@ -210,6 +210,9 @@ class _FiveColorQueryEngine:
     def get_color_names(self):
         return ["White", "Red", "Yellow", "Blue", "Black"]
 
+    def accepted_selection_lengths(self) -> int:
+        return 5
+
 
 class _FiveColorBaseColorsEngine(_FiveColorQueryEngine):
     def __init__(self, stack_lut):
@@ -485,6 +488,32 @@ class TestVectorizeImageCanary:
         assert "params" in response.text
         mock_pool.submit.assert_not_called()
 
+    def test_unsupported_upload_type_returns_422_before_worker(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setattr(config, "TEMP_DIR", str(tmp_path))
+        mock_pool = SimpleNamespace(
+            submit=AsyncMock(side_effect=RuntimeError("worker should not run"))
+        )
+        app = create_app()
+        app.dependency_overrides[get_worker_pool] = lambda: mock_pool
+        client = TestClient(app, raise_server_exceptions=False)
+        try:
+            response = client.post(
+                "/api/vectorize",
+                files={"image": ("notes.txt", b"not image data", "text/plain")},
+                data={"params": "{}"},
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 422
+        assert response.json()["detail"].startswith("不支持的图像文件类型")
+        mock_pool.submit.assert_not_called()
+        assert sorted(tmp_path.iterdir()) == []
+
     def test_timeout_returns_504_and_cleans_upload_temp_file(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -566,15 +595,16 @@ class TestVectorizeImageCanary:
         app = create_app()
         app.dependency_overrides[get_file_registry] = lambda: FailingRegistry()
         app.dependency_overrides[get_worker_pool] = lambda: mock_pool
-        client = TestClient(app)
+        client = TestClient(app, raise_server_exceptions=False)
         try:
-            with pytest.raises(RuntimeError, match="registry unavailable"):
-                client.post(
-                    "/api/vectorize",
-                    files={"image": ("input.png", _png_bytes(), "image/png")},
-                    data={"params": "{}"},
-                )
+            response = client.post(
+                "/api/vectorize",
+                files={"image": ("input.png", _png_bytes(), "image/png")},
+                data={"params": "{}"},
+            )
         finally:
             app.dependency_overrides.clear()
 
+        assert response.status_code == 500
+        assert response.json()["detail"] == "Internal server error"
         assert sorted(tmp_path.iterdir()) == []
