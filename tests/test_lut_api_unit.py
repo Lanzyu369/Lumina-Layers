@@ -1112,6 +1112,43 @@ class TestMergeCompatibilityFailure:
         assert "Incompatible" in response.json()["detail"]
 
 
+class TestMergeFailureLanguage:
+    """Verify merge internals do not leak loader details to API clients."""
+
+    @patch(
+        "api.routers.lut.LUTMerger.load_lut_with_stacks",
+        side_effect=ValueError(
+            "cannot load /Users/min/private/primary.json: corrupt stack data"
+        ),
+    )
+    @patch("api.routers.lut.LUTMerger.detect_color_mode", return_value=("8-Color", 2738))
+    @patch(
+        "api.routers.lut.LUTManager.get_lut_path",
+        return_value="/Users/min/private/primary.json",
+    )
+    def test_merge_loader_failure_uses_public_error_language(
+        self,
+        mock_path,
+        mock_detect,
+        mock_load,
+    ) -> None:
+        payload = {
+            "primary_name": "PrimaryLUT",
+            "secondary_names": ["SecondaryLUT"],
+            "dedup_threshold": 3.0,
+        }
+        response = client.post("/api/lut/merge", json=payload)
+
+        assert response.status_code == 500
+        detail = response.json()["detail"]
+        assert detail == (
+            "Unable to merge the selected LUTs. Check that each LUT uses a "
+            "supported format and compatible color mode."
+        )
+        assert "/Users/min/private/primary.json" not in detail
+        assert "corrupt stack data" not in detail
+
+
 # =========================================================================
 # 6. POST /api/lut/compare — success scenario
 # =========================================================================
@@ -1281,6 +1318,46 @@ class TestCompareNotFound:
         response = client.post("/api/lut/compare", json=payload)
         assert response.status_code == 404
         assert "LUT not found" in response.json()["detail"]
+
+
+class TestCompareFailureLanguage:
+    """Verify compare internals do not leak loader details to API clients."""
+
+    @patch(
+        "api.routers.lut.LUTMerger.load_lut_with_stacks",
+        side_effect=ValueError(
+            "cannot parse /Users/min/private/a.json: invalid JSON"
+        ),
+    )
+    @patch(
+        "api.routers.lut.LUTMerger.detect_color_mode",
+        side_effect=[("4-Color", 1024), ("4-Color", 1024)],
+    )
+    @patch(
+        "api.routers.lut.LUTManager.get_lut_path",
+        side_effect=["/Users/min/private/a.json", "/Users/min/private/b.json"],
+    )
+    def test_compare_loader_failure_uses_public_error_language(
+        self,
+        mock_path,
+        mock_detect,
+        mock_load,
+    ) -> None:
+        payload = {
+            "lut_a_name": "LUT_A",
+            "lut_b_name": "LUT_B",
+            "top_n": 5,
+        }
+        response = client.post("/api/lut/compare", json=payload)
+
+        assert response.status_code == 500
+        detail = response.json()["detail"]
+        assert detail == (
+            "Unable to compare the selected LUTs. Check that both LUTs use "
+            "supported formats with comparable recipes."
+        )
+        assert "/Users/min/private/a.json" not in detail
+        assert "invalid JSON" not in detail
 
 
 # =========================================================================

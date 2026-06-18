@@ -82,6 +82,14 @@ _lut_list_cache_file_map: tuple[tuple[str, str], ...] | None = None
 _lut_list_cache_signature: tuple[tuple[str, str, int, int], ...] | None = None
 _lut_list_cache_response: LUTListResponse | None = None
 _ALLOWED_LUT_EXTENSIONS = {".npy", ".json", ".npz", ".msgpack"}
+_LUT_MERGE_FAILED_DETAIL = (
+    "Unable to merge the selected LUTs. Check that each LUT uses a "
+    "supported format and compatible color mode."
+)
+_LUT_COMPARE_FAILED_DETAIL = (
+    "Unable to compare the selected LUTs. Check that both LUTs use "
+    "supported formats with comparable recipes."
+)
 
 
 def _build_lut_list_file_map(lut_dict: dict[str, str]) -> tuple[tuple[str, str], ...]:
@@ -728,7 +736,7 @@ def merge_luts_endpoint(request: MergeRequest) -> MergeResponse:
     except Exception as exc:
         raise HTTPException(
             status_code=500,
-            detail=f"Merge failed: {exc}",
+            detail=_LUT_MERGE_FAILED_DETAIL,
         ) from exc
 
 
@@ -838,7 +846,7 @@ def compare_luts_endpoint(request: CompareRequest) -> CompareResponse:
     except Exception as exc:
         raise HTTPException(
             status_code=500,
-            detail=f"Compare failed: {exc}",
+            detail=_LUT_COMPARE_FAILED_DETAIL,
         ) from exc
 
 
