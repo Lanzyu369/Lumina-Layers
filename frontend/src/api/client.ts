@@ -417,6 +417,7 @@ function buildResourceNetworkError(
   cause: unknown,
 ): Error {
   const readableMessage = readableApiErrorMessage(null, null, cause);
+  const responseData = { detail: readableMessage, url };
   const error = new Error(readableMessage, { cause }) as Error & {
     response?: {
       status: number | null;
@@ -426,9 +427,18 @@ function buildResourceNetworkError(
   };
   error.response = {
     status: null,
-    data: { detail: readableMessage, url },
+    data: responseData,
     headers: new Headers(),
   };
+  recordApiFailure({
+    method: "GET",
+    url,
+    statusCode: null,
+    requestId: null,
+    responseDetailForLog: responseData,
+    error,
+    readableMessage,
+  });
   return error;
 }
 

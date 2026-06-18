@@ -500,6 +500,23 @@ describe("apiClient", () => {
             .response?.data.url
         ),
       ).toBe("/api/files/model");
+      expect(postClientLog).toHaveBeenCalledWith(
+        "api: request failed",
+        expect.objectContaining({
+          scope: "api",
+          phase: "request-failed",
+          method: "error",
+          details: expect.objectContaining({
+            method: "GET",
+            url: "/api/files/model",
+            status_code: null,
+            request_id: null,
+            error_message:
+              "API request failed before the server returned a response.",
+          }),
+        }),
+      );
+      expect(useActionHistoryStore.getState().history).toHaveLength(0);
     } finally {
       globalThis.fetch = originalFetch;
     }
