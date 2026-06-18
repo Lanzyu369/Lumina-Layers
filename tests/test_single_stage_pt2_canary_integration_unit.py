@@ -19,7 +19,11 @@ from api.app import create_app
 from api.dependencies import get_file_registry, get_session_store
 from api.file_registry import FileRegistry
 from api.session_store import SessionStore
-from api.routers.single_stage import _validate_candidate_budget
+from api.routers.single_stage import (
+    MATERIAL_SOLVER_CACHE_BUILD_FAILED_DETAIL,
+    MATERIAL_SOLVER_RUNTIME_BUILD_FAILED_DETAIL,
+    _validate_candidate_budget,
+)
 
 
 def _client_with_state() -> tuple[TestClient, SessionStore, FileRegistry]:
@@ -546,6 +550,41 @@ class TestMaterialSolverCacheSuggestColorsCanary:
 
 
 class TestMaterialSolverCacheBuildCanary:
+    def test_material_solver_cache_build_hides_save_error_detail(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        client, _, _ = _client_with_state()
+        private_path = "/Users/min/private/material-cache/solver-cache.npz"
+        monkeypatch.setattr(
+            "api.routers.single_stage.load_multiple_materials",
+            lambda directory_names: [
+                SimpleNamespace(directory_name=name) for name in directory_names
+            ],
+        )
+        monkeypatch.setattr(
+            "api.routers.single_stage.build_material_solver_cache",
+            lambda *args, **kwargs: SimpleNamespace(metadata=_solver_cache_metadata()),
+        )
+
+        def _fail_save_cache(_cache):
+            raise OSError(f"cannot write {private_path}: permission denied")
+
+        monkeypatch.setattr(
+            "api.routers.single_stage.save_material_solver_cache",
+            _fail_save_cache,
+        )
+
+        response = client.post(
+            "/api/extractor/material-solver-cache/build",
+            data=_solver_cache_form_data(),
+        )
+
+        assert response.status_code == 500
+        assert response.json()["detail"] == MATERIAL_SOLVER_CACHE_BUILD_FAILED_DETAIL
+        assert private_path not in response.text
+        assert "permission denied" not in response.text
+
     def test_material_solver_cache_build_rejects_unsafe_budget_before_build(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -874,6 +913,55 @@ class TestMaterialSolverRuntimeCanary:
         assert record.candidate_budget == 32
         assert record.candidate_count == 32
         assert record.cache_file_size_bytes == 64
+
+    def test_material_solver_runtime_build_hides_save_error_detail(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        client, _, _ = _client_with_state()
+        private_path = "/Users/min/private/material-runtime/candidate-runtime.npz"
+        monkeypatch.setattr(
+            "api.routers.single_stage.load_multiple_materials",
+            lambda directory_names: [
+                SimpleNamespace(directory_name=name) for name in directory_names
+            ],
+        )
+        monkeypatch.setattr(
+            "api.routers.single_stage.fingerprint_palette",
+            lambda materials: "stub_hash",
+        )
+        monkeypatch.setattr(
+            "api.routers.single_stage.load_material_candidate_runtime_metadata",
+            lambda *args, **kwargs: None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            "api.routers.single_stage.build_material_candidate_runtime",
+            lambda *args, **kwargs: SimpleNamespace(
+                metadata=_solver_runtime_metadata(),
+                valid_cell_count=32,
+            ),
+            raising=False,
+        )
+
+        def _fail_save_runtime(_runtime):
+            raise OSError(f"cannot write {private_path}: permission denied")
+
+        monkeypatch.setattr(
+            "api.routers.single_stage.save_material_candidate_runtime",
+            _fail_save_runtime,
+            raising=False,
+        )
+
+        response = client.post(
+            "/api/extractor/material-solver-runtime/build",
+            data=_solver_runtime_form_data(),
+        )
+
+        assert response.status_code == 500
+        assert response.json()["detail"] == MATERIAL_SOLVER_RUNTIME_BUILD_FAILED_DETAIL
+        assert private_path not in response.text
+        assert "permission denied" not in response.text
 
     def test_material_solver_runtime_build_single_flights_same_key(
         self,
