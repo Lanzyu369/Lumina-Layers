@@ -123,6 +123,14 @@ FIT_STAGE_A_EXPIRED_STAGE_JSON_DETAIL = (
     "Extracted single-stage dataset has expired. "
     "Re-run extraction before fitting Stage A."
 )
+MATERIAL_SOLVER_CACHE_BUILD_FAILED_DETAIL = (
+    "Material solver cache could not be built. "
+    "Check material inputs and cache storage, then try again."
+)
+MATERIAL_SOLVER_RUNTIME_BUILD_FAILED_DETAIL = (
+    "Material solver runtime could not be built. "
+    "Check material inputs and cache storage, then try again."
+)
 MaterialCacheEvictor = Callable[[str], int]
 _RUNTIME_BUILD_LOCKS_GUARD = threading.Lock()
 _RUNTIME_BUILD_LOCKS: dict[tuple[str, int, str, str, int], threading.Lock] = {}
@@ -1610,12 +1618,44 @@ async def material_solver_cache_build(
     except (MaterialSolverCacheBudgetError, ValueError, TypeError, OSError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        log.error(
+            "Material solver cache build failed",
+            extra={
+                "event": "material_solver_cache_build_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+                "material_count": len(dir_names),
+                "layer_count": layer_count,
+                "layer_height_mm": layer_height_mm,
+                "substrate": substrate,
+                "grid_resolution": grid_resolution,
+            },
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=MATERIAL_SOLVER_CACHE_BUILD_FAILED_DETAIL,
+        ) from exc
 
     try:
         npz_path = await anyio.to_thread.run_sync(save_material_solver_cache, cache)
     except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to save cache: {exc}")
+        log.error(
+            "Material solver cache save failed",
+            extra={
+                "event": "material_solver_cache_build_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+                "material_count": len(dir_names),
+                "layer_count": layer_count,
+                "layer_height_mm": layer_height_mm,
+                "substrate": substrate,
+                "grid_resolution": grid_resolution,
+            },
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=MATERIAL_SOLVER_CACHE_BUILD_FAILED_DETAIL,
+        ) from exc
 
     try:
         file_size = npz_path.stat().st_size
@@ -1838,7 +1878,23 @@ async def material_solver_runtime_build(
     except (ValueError, TypeError, OSError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        log.error(
+            "Material solver runtime build failed",
+            extra={
+                "event": "material_solver_runtime_build_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+                "material_count": len(dir_names),
+                "layer_count": layer_count,
+                "layer_height_mm": layer_height_mm,
+                "substrate": substrate,
+                "candidate_budget": candidate_budget,
+            },
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=MATERIAL_SOLVER_RUNTIME_BUILD_FAILED_DETAIL,
+        ) from exc
 
     entry = _runtime_entry_from_metadata_record(metadata_record)
     log.info(
