@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import zipfile
 from pathlib import Path
@@ -13,6 +14,17 @@ from fastapi.testclient import TestClient
 from api.app import create_app
 import core.material_registry as material_registry_module
 import core.single_stage.materials as single_stage_materials_module
+
+MATERIAL_REGISTRY_STORAGE_UNAVAILABLE_DETAIL = (
+    "Material Registry storage is not available. Check the Registry service configuration."
+)
+MATERIAL_REGISTRY_PACKAGE_INVALID_DETAIL = (
+    "The material package is invalid. Export it again from Lumina and upload the new ZIP."
+)
+MATERIAL_REGISTRY_UPLOAD_ZIP_REQUIRED_DETAIL = "Uploaded file must be a ZIP archive."
+MATERIAL_REGISTRY_UPLOAD_TOO_LARGE_DETAIL = (
+    "The material package ZIP is too large for this Registry service."
+)
 
 
 def _client() -> TestClient:
@@ -156,7 +168,38 @@ def test_material_registry_catalog_requires_package_directory(monkeypatch) -> No
     response = _client().get("/api/material-registry/v1/materials/catalog")
 
     assert response.status_code == 422
-    assert "Material registry packages directory is not configured" in response.json()["detail"]
+    assert response.json()["detail"] == MATERIAL_REGISTRY_STORAGE_UNAVAILABLE_DETAIL
+
+
+def test_material_registry_catalog_hides_storage_path_and_logs(
+    monkeypatch,
+    tmp_path: Path,
+    caplog,
+) -> None:
+    missing_packages_dir = tmp_path / "private" / "registry-packages"
+    monkeypatch.setenv(
+        "LUMINA_MATERIAL_REGISTRY_PACKAGES_DIR",
+        str(missing_packages_dir),
+    )
+    target_logger = logging.getLogger("lumina.api.routers.material_registry")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.WARNING, logger=target_logger.name)
+    try:
+        response = _client().get("/api/material-registry/v1/materials/catalog")
+    finally:
+        target_logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == MATERIAL_REGISTRY_STORAGE_UNAVAILABLE_DETAIL
+    assert str(missing_packages_dir) not in response.text
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "material_registry_catalog_failed"
+    ]
+    assert records
+    assert records[-1].error_type == "ValueError"
+    assert str(missing_packages_dir) in records[-1].error_message
 
 
 def test_material_registry_catalog_lists_official_package_and_serves_zip(
@@ -610,6 +653,31 @@ def test_material_registry_upload_stores_package_as_pending(
     assert catalog.status_code == 403
 
 
+def test_material_registry_upload_rejects_non_zip_without_echoing_filename(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    packages_dir = tmp_path / "registry-packages"
+    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_PACKAGES_DIR", str(packages_dir))
+    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_OFFICIAL_PASSWORD", "approve-secret")
+
+    response = _client().post(
+        "/api/material-registry/v1/packages/upload",
+        headers={"X-Lumina-Material-Registry-Official-Password": "approve-secret"},
+        files={
+            "archive": (
+                "/Users/min/private/material.txt",
+                b"not a zip",
+                "text/plain",
+            )
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == MATERIAL_REGISTRY_UPLOAD_ZIP_REQUIRED_DETAIL
+    assert "/Users/min/private" not in response.text
+
+
 def test_material_registry_upload_rejects_oversized_upload(
     monkeypatch,
     tmp_path: Path,
@@ -639,7 +707,7 @@ def test_material_registry_upload_rejects_oversized_upload(
     )
 
     assert response.status_code == 413
-    assert "Uploaded file exceeds maximum size" in response.json()["detail"]
+    assert response.json()["detail"] == MATERIAL_REGISTRY_UPLOAD_TOO_LARGE_DETAIL
     assert not packages_dir.exists() or not any(packages_dir.rglob("*.zip"))
 
 
@@ -676,8 +744,58 @@ def test_material_registry_upload_rejects_tampered_package(
     )
 
     assert response.status_code == 422
-    assert "mismatch" in response.json()["detail"]
+    assert response.json()["detail"] == MATERIAL_REGISTRY_PACKAGE_INVALID_DETAIL
+    assert "mismatch" not in response.text
     assert not packages_dir.exists() or not any(packages_dir.rglob("*.zip"))
+
+
+def test_material_registry_upload_logs_raw_package_validation_error(
+    monkeypatch,
+    tmp_path: Path,
+    caplog,
+) -> None:
+    packages_dir = tmp_path / "registry-packages"
+    source_package = tmp_path / "upload.zip"
+    _write_v2_registry_package(
+        source_package,
+        material_id="mat_tampered_upload_log",
+        revision_id="rev_tampered_upload_log",
+        channel="manual",
+    )
+    _replace_zip_member(
+        source_package,
+        "materials/BrandA/pla-basic/material.json",
+        b'{"brand":"BrandA","material_name":"Tampered"}',
+    )
+    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_PACKAGES_DIR", str(packages_dir))
+    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_OFFICIAL_PASSWORD", "approve-secret")
+    target_logger = logging.getLogger("lumina.api.routers.material_registry")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.WARNING, logger=target_logger.name)
+    try:
+        response = _client().post(
+            "/api/material-registry/v1/packages/upload",
+            headers={"X-Lumina-Material-Registry-Official-Password": "approve-secret"},
+            files={
+                "archive": (
+                    "upload.zip",
+                    source_package.read_bytes(),
+                    "application/zip",
+                )
+            },
+        )
+    finally:
+        target_logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 422
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "material_registry_package_upload_failed"
+    ]
+    assert records
+    assert records[-1].error_type == "ValueError"
+    assert "mismatch" in records[-1].error_message
 
 
 def test_material_registry_approve_requires_official_password(
@@ -748,7 +866,8 @@ def test_material_registry_approve_revalidates_pending_package(
     )
 
     assert response.status_code == 422
-    assert "mismatch" in response.json()["detail"]
+    assert response.json()["detail"] == MATERIAL_REGISTRY_PACKAGE_INVALID_DETAIL
+    assert "mismatch" not in response.text
     assert not (packages_dir / "official").exists()
     assert pending_path.is_file()
 
@@ -823,4 +942,6 @@ def test_material_registry_upload_local_material_rejects_duplicate_content(
 
     assert first.status_code == 200
     assert duplicate.status_code == 409
-    assert "already exists" in duplicate.json()["detail"]
+    assert duplicate.json()["detail"] == (
+        "This material package revision already exists in the Registry."
+    )
