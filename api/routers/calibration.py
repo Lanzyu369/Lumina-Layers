@@ -30,6 +30,14 @@ from core.single_stage import generate_single_stage_kit
 
 router = APIRouter(prefix="/api/calibration", tags=["Calibration"])
 STATELESS_EXPORT_TTL_SECONDS = 8 * 60 * 60
+CALIBRATION_GENERATION_FAILED_DETAIL = (
+    "Calibration board could not be generated. "
+    "Check calibration settings and try again."
+)
+SINGLE_STAGE_KIT_GENERATION_FAILED_DETAIL = (
+    "Single-stage calibration kit could not be generated. "
+    "Check material and device settings and try again."
+)
 log = get_logger(__name__)
 
 
@@ -63,8 +71,15 @@ def _rollback_stateless_export_registration(
         _remove_generated_path(path)
 
 
-def _handle_core_error(e: Exception, context: str) -> None:
-    """将 core 模块异常转换为 HTTP 500 错误。"""
+def _handle_core_error(
+    e: Exception,
+    *,
+    context: str,
+    public_detail: str,
+) -> None:
+    """Map core exceptions to sanitized HTTP 500 errors.
+    将 core 模块异常转换为脱敏的 HTTP 500 错误。
+    """
     log.error(
         "Calibration core operation failed",
         extra={
@@ -74,7 +89,7 @@ def _handle_core_error(e: Exception, context: str) -> None:
             "error_message": str(e),
         },
     )
-    raise HTTPException(status_code=500, detail=f"{context} failed: {str(e)}")
+    raise HTTPException(status_code=500, detail=public_detail)
 
 
 def _new_stateless_export_sid(prefix: str) -> str:
@@ -173,7 +188,11 @@ def calibration_generate(
     except HTTPException:
         raise
     except (OSError, RuntimeError, TypeError, ValueError) as e:
-        _handle_core_error(e, "Calibration generation")
+        _handle_core_error(
+            e,
+            context="Calibration generation",
+            public_detail=CALIBRATION_GENERATION_FAILED_DETAIL,
+        )
 
     # Register files via FileRegistry
     sid = _new_stateless_export_sid("calibration")
@@ -287,7 +306,11 @@ def calibration_generate_single_stage_kit(
             device_profile_id=request.device_profile_id,
         )
     except (OSError, RuntimeError, TypeError, ValueError) as e:
-        _handle_core_error(e, "Single-stage kit generation")
+        _handle_core_error(
+            e,
+            context="Single-stage kit generation",
+            public_detail=SINGLE_STAGE_KIT_GENERATION_FAILED_DETAIL,
+        )
 
     sid = _new_stateless_export_sid("single-stage-kit")
     registered_file_ids: list[str | None] = []

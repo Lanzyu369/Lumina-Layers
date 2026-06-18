@@ -20,6 +20,7 @@ import core.single_stage.materials as materials_module
 from api.app import create_app
 from api.dependencies import get_file_registry, get_session_store
 from api.file_registry import FileRegistry
+from api.routers.calibration import SINGLE_STAGE_KIT_GENERATION_FAILED_DETAIL
 from api.session_store import SessionStore
 from config import PaletteEntry
 from core.single_stage import (
@@ -299,6 +300,40 @@ def test_generate_single_stage_kit_route(monkeypatch, tmp_path: Path) -> None:
     assert captured["printer_id"] == "bambu-p1s"
     assert captured["slicer"] == "OrcaSlicer"
     assert captured["nozzle_size"] == "0.2"
+
+
+def test_generate_single_stage_kit_hides_core_error_detail(
+    monkeypatch,
+) -> None:
+    client, _, _ = _client_with_state()
+    private_path = "/Users/min/private/single-stage-kit.zip"
+
+    def _fail_generate_single_stage_kit(*args, **kwargs):
+        raise RuntimeError(f"permission denied while writing {private_path}")
+
+    monkeypatch.setattr(
+        "api.routers.calibration.generate_single_stage_kit",
+        _fail_generate_single_stage_kit,
+    )
+
+    response = client.post(
+        "/api/calibration/generate-single-stage-kit",
+        json={
+            "palette": [
+                {
+                    "color": "White",
+                    "material": "PLA Basic",
+                    "hex_color": "#FFFFFF",
+                    "color_name": "White",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == SINGLE_STAGE_KIT_GENERATION_FAILED_DETAIL
+    assert "permission denied" not in response.text
+    assert private_path not in response.text
 
 
 def test_generate_single_stage_kit_cleans_zip_when_first_registration_fails(
