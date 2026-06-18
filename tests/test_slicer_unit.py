@@ -24,6 +24,11 @@ from api.schemas.slicer import (
     SlicerLaunchRequest,
     SlicerLaunchResponse,
 )
+from api.routers.slicer import (
+    SLICER_LAUNCH_COPY_FAILED_MESSAGE,
+    SLICER_LAUNCH_FAILED_MESSAGE,
+    SLICER_LAUNCH_SOURCE_MISSING_MESSAGE,
+)
 from core.slicer import (
     DetectedSlicer,
     _match_slicer_id,
@@ -710,6 +715,26 @@ class TestRouterEndpoints:
         assert resp.status_code == 400
         assert resp.json()["status"] == "error"
 
+    def test_launch_missing_output_file_uses_safe_message(self, tmp_path, monkeypatch):
+        """Missing Lumina output files should not echo local paths."""
+        output_root = _configure_slicer_output(monkeypatch, tmp_path)
+        missing_path = output_root / "missing.3mf"
+        client = _make_client()
+
+        resp = client.post(
+            "/api/slicer/launch",
+            json={
+                "slicer_id": "bambu_studio",
+                "file_path": str(missing_path),
+            },
+        )
+
+        assert resp.status_code == 400
+        body = resp.json()
+        assert body["status"] == "error"
+        assert body["message"] == SLICER_LAUNCH_SOURCE_MISSING_MESSAGE
+        assert str(missing_path) not in resp.text
+
     def test_launch_invalid_body_returns_422(self):
         """POST with invalid body returns 422. Requirement 3.6"""
         client = _make_client()
@@ -746,3 +771,104 @@ class TestRouterEndpoints:
         assert resp.status_code == 404
         assert resp.json()["status"] == "error"
         mock_copy.assert_not_called()
+
+    def test_launch_copy_failure_uses_safe_message(self, tmp_path, monkeypatch):
+        output_root = _configure_slicer_output(monkeypatch, tmp_path)
+        f = output_root / "model.3mf"
+        f.write_text("data")
+        private_path = "/Users/min/private/model.3mf"
+        mock_slicers = [
+            DetectedSlicer(id="bambu_studio", display_name="Bambu Studio", exe_path="C:\\bs.exe"),
+        ]
+
+        client = _make_client()
+        with patch("api.routers.slicer.detect_installed_slicers", return_value=mock_slicers), patch(
+            "api.routers.slicer._create_launch_copy",
+            side_effect=RuntimeError(f"cannot copy {private_path}: permission denied"),
+        ), patch(
+            "api.routers.slicer.launch_slicer",
+            return_value=(True, "Opened in Bambu Studio"),
+        ) as mock_launch:
+            resp = client.post(
+                "/api/slicer/launch",
+                json={
+                    "slicer_id": "bambu_studio",
+                    "file_path": str(f),
+                },
+            )
+
+        assert resp.status_code == 500
+        body = resp.json()
+        assert body["status"] == "error"
+        assert body["message"] == SLICER_LAUNCH_COPY_FAILED_MESSAGE
+        assert private_path not in resp.text
+        assert "permission denied" not in resp.text
+        mock_launch.assert_not_called()
+
+    def test_launch_exception_uses_safe_message(self, tmp_path, monkeypatch):
+        output_root = _configure_slicer_output(monkeypatch, tmp_path)
+        f = output_root / "model.3mf"
+        f.write_text("data")
+        launch_copy = output_root / "temp" / "launch_copy.3mf"
+        launch_copy.write_text("data")
+        private_path = "/Applications/Private/Slicer.app"
+        mock_slicers = [
+            DetectedSlicer(id="bambu_studio", display_name="Bambu Studio", exe_path="C:\\bs.exe"),
+        ]
+
+        client = _make_client()
+        with patch("api.routers.slicer.detect_installed_slicers", return_value=mock_slicers), patch(
+            "api.routers.slicer._create_launch_copy",
+            return_value=str(launch_copy),
+        ), patch(
+            "api.routers.slicer.launch_slicer",
+            side_effect=OSError(f"cannot execute {private_path}: launch denied"),
+        ):
+            resp = client.post(
+                "/api/slicer/launch",
+                json={
+                    "slicer_id": "bambu_studio",
+                    "file_path": str(f),
+                },
+            )
+
+        assert resp.status_code == 500
+        body = resp.json()
+        assert body["status"] == "error"
+        assert body["message"] == SLICER_LAUNCH_FAILED_MESSAGE
+        assert private_path not in resp.text
+        assert "launch denied" not in resp.text
+
+    def test_launch_failure_message_is_not_exposed(self, tmp_path, monkeypatch):
+        output_root = _configure_slicer_output(monkeypatch, tmp_path)
+        f = output_root / "model.3mf"
+        f.write_text("data")
+        launch_copy = output_root / "temp" / "launch_copy.3mf"
+        launch_copy.write_text("data")
+        private_path = "/Applications/Private/Slicer.app"
+        mock_slicers = [
+            DetectedSlicer(id="bambu_studio", display_name="Bambu Studio", exe_path="C:\\bs.exe"),
+        ]
+
+        client = _make_client()
+        with patch("api.routers.slicer.detect_installed_slicers", return_value=mock_slicers), patch(
+            "api.routers.slicer._create_launch_copy",
+            return_value=str(launch_copy),
+        ), patch(
+            "api.routers.slicer.launch_slicer",
+            return_value=(False, f"open failed {private_path}: code 500"),
+        ):
+            resp = client.post(
+                "/api/slicer/launch",
+                json={
+                    "slicer_id": "bambu_studio",
+                    "file_path": str(f),
+                },
+            )
+
+        assert resp.status_code == 500
+        body = resp.json()
+        assert body["status"] == "error"
+        assert body["message"] == SLICER_LAUNCH_FAILED_MESSAGE
+        assert private_path not in resp.text
+        assert "code 500" not in resp.text
