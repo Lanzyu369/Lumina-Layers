@@ -565,6 +565,106 @@ class TestGenerateParameterCompleteness:
         submitted_params = _mock_pool.submit.call_args.args[3]
         assert submitted_params["color_layers"] == 5
 
+    def test_color_card_worker_exception_uses_public_error_language(
+        self,
+        tmp_path,
+    ) -> None:
+        lut_path = tmp_path / "source.npy"
+        lut_path.write_bytes(b"lut")
+        private_path = "/Users/min/private/color-card.svg"
+
+        sid = _test_store.create()
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {
+                "target_w": 4,
+                "target_h": 4,
+                "target_width_mm": 40.0,
+                "color_palette": [{"hex": "#ff0000"}, {"hex": "#00ff00"}],
+            },
+        )
+        _test_store.put(sid, "lut_path", str(lut_path))
+        _test_store.put(sid, "material_source", "lut")
+
+        def _fake_generate_color_card_svg(hex_colors, **_kwargs):
+            svg_path = tmp_path / "card.svg"
+            svg_path.write_text("<svg></svg>", encoding="utf-8")
+            return str(svg_path)
+
+        _mock_pool.submit = AsyncMock(
+            side_effect=RuntimeError(f"cannot open {private_path}: invalid vector")
+        )
+
+        try:
+            with patch("core.color_card.generate_color_card_svg", _fake_generate_color_card_svg):
+                response = client.post(
+                    "/api/convert/color-card",
+                    json={"session_id": sid},
+                )
+
+            assert response.status_code == 500
+            assert response.json()["detail"] == (
+                "Color card 3MF generation failed. Re-run preview and try "
+                "generating the color card again."
+            )
+            assert private_path not in response.text
+            assert "invalid vector" not in response.text
+        finally:
+            _test_store.close(sid)
+
+    def test_color_card_missing_worker_output_uses_public_error_language(
+        self,
+        tmp_path,
+    ) -> None:
+        lut_path = tmp_path / "source.npy"
+        lut_path.write_bytes(b"lut")
+        private_path = "/Users/min/private/card.3mf"
+
+        sid = _test_store.create()
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {
+                "target_w": 4,
+                "target_h": 4,
+                "target_width_mm": 40.0,
+                "color_palette": [{"hex": "#ff0000"}, {"hex": "#00ff00"}],
+            },
+        )
+        _test_store.put(sid, "lut_path", str(lut_path))
+        _test_store.put(sid, "material_source", "lut")
+
+        def _fake_generate_color_card_svg(hex_colors, **_kwargs):
+            svg_path = tmp_path / "card.svg"
+            svg_path.write_text("<svg></svg>", encoding="utf-8")
+            return str(svg_path)
+
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": private_path,
+                "glb_path": None,
+                "status_msg": f"cannot write {private_path}: permission denied",
+            }
+        )
+
+        try:
+            with patch("core.color_card.generate_color_card_svg", _fake_generate_color_card_svg):
+                response = client.post(
+                    "/api/convert/color-card",
+                    json={"session_id": sid},
+                )
+
+            assert response.status_code == 500
+            assert response.json()["detail"] == (
+                "Color card 3MF generation failed. Re-run preview and try "
+                "generating the color card again."
+            )
+            assert private_path not in response.text
+            assert "permission denied" not in response.text
+        finally:
+            _test_store.close(sid)
+
     def test_material_archive_vector_forwards_cached_material_matrix_without_region_replace(self) -> None:
         sid: str = _create_session_with_preview_and_files(_test_store)
         preview_cache = _test_store.get(sid)["preview_cache"]
