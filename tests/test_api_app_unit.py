@@ -44,6 +44,20 @@ MAIN_APP_MATERIAL_LUT_PREFIXES: List[str] = [
 MAIN_APP_SINGLE_STAGE_PATHS: List[str] = [
     "/api/extractor/gradient-card-materials",
     "/api/extractor/material-solver-cache/status",
+    "/api/material-sync/catalog",
+    "/api/material-sync/install",
+    "/api/material-sync/install-from-registry",
+    "/api/material-sync/refresh",
+    "/api/material-sync/rollback",
+    "/api/material-sync/status",
+]
+
+MATERIAL_REGISTRY_SERVICE_PATHS: List[str] = [
+    "/api/material-registry/v1/materials/catalog",
+    "/api/material-registry/v1/packages/{package_path}",
+    "/api/material-registry/v1/packages/upload",
+    "/api/material-registry/v1/packages/upload-local",
+    "/api/material-registry/v1/packages/{package_path}/approve",
 ]
 
 
@@ -175,6 +189,35 @@ class TestOpenAPIJSON:
                 f"Missing main-app single-stage endpoint {expected_path!r}. "
                 f"Found: {sorted(paths.keys())}"
             )
+
+    def test_material_registry_service_routes_are_disabled_by_default(
+        self,
+        client: TestClient,
+    ) -> None:
+        """Distribution builds do not expose Registry upload/approval routes.
+        分发版默认不暴露 Registry 上传/审批路由。
+        """
+        resp = client.get("/openapi.json")
+        paths = resp.json().get("paths", {})
+
+        for service_path in MATERIAL_REGISTRY_SERVICE_PATHS:
+            assert service_path not in paths
+
+    def test_material_registry_service_routes_can_be_enabled(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Dedicated Registry service mode can still host the write router.
+        独立 Registry 服务模式仍可注册写服务路由。
+        """
+        monkeypatch.setenv("LUMINA_ENABLE_MATERIAL_REGISTRY_SERVICE", "1")
+        service_client = TestClient(create_app())
+
+        resp = service_client.get("/openapi.json")
+        paths = resp.json().get("paths", {})
+
+        for service_path in MATERIAL_REGISTRY_SERVICE_PATHS:
+            assert service_path in paths
 
     def test_openapi_json_has_correct_title(self, client: TestClient) -> None:
         """OpenAPI JSON should have title 'Lumina Studio API'.

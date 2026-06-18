@@ -219,23 +219,23 @@ def test_out_of_range_index_rejection(data) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Property 9: FiveColorQueryRequest 拒绝非 5 长度索引
+# Property 9: FiveColorQueryRequest 接受 5/6 层并拒绝其他长度
 # **Validates: Requirements 2.2, 7.3**
 # ---------------------------------------------------------------------------
 
 @given(
     length=st.one_of(
         st.integers(min_value=0, max_value=4),
-        st.integers(min_value=6, max_value=20),
+        st.integers(min_value=7, max_value=20),
     ),
     values=st.data(),
 )
 @settings(max_examples=100)
-def test_five_color_query_request_rejects_non_5_length(length: int, values) -> None:
-    """Property 9: For any integer list with length != 5, constructing
+def test_five_color_query_request_rejects_non_5_or_6_length(length: int, values) -> None:
+    """Property 9: For any integer list with length outside 5/6, constructing
     FiveColorQueryRequest SHALL raise a ValidationError.
 
-    Feature: five-color-query, Property 9: FiveColorQueryRequest 拒绝非 5 长度索引
+    Feature: five-color-query, Property 9: FiveColorQueryRequest 拒绝非 5/6 长度索引
     **Validates: Requirements 2.2, 7.3**
     """
     indices = values.draw(
@@ -244,3 +244,16 @@ def test_five_color_query_request_rejects_non_5_length(length: int, values) -> N
 
     with pytest.raises(ValidationError):
         FiveColorQueryRequest(lut_name="test_lut", selected_indices=indices)
+
+
+@given(length=st.sampled_from([5, 6]), values=st.data())
+@settings(max_examples=40)
+def test_five_color_query_request_accepts_5_or_6_length(length: int, values) -> None:
+    """Five-color requests accept normal 5-layer and 5C Extended 6-layer recipes."""
+    indices = values.draw(
+        st.lists(st.integers(min_value=0, max_value=7), min_size=length, max_size=length)
+    )
+
+    request = FiveColorQueryRequest(lut_name="test_lut", selected_indices=indices)
+
+    assert request.selected_indices == indices

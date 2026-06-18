@@ -24,6 +24,7 @@ from api.feedback_assembler import (
     run_startup_cleanup,
 )
 from api.feedback_time import BEIJING_TZ, now_beijing
+from utils.lut_manager import LUTManager
 
 
 class _MockFileRegistry:
@@ -317,6 +318,124 @@ def test_collect_sync_attachments_lut_is_noop_for_material_mode(
     }
     result = collect_sync_attachments(ticket_dir, payload, registry, now_beijing())
     assert result.lut["status"] == "not_applicable"
+
+
+def _use_feedback_lut_repo(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> Path:
+    repo_root = tmp_path / "repo"
+    preset_root = repo_root / "lut-preset"
+    (preset_root / "Custom").mkdir(parents=True)
+    (preset_root / "BIQU").mkdir(parents=True)
+    monkeypatch.setattr("api.feedback_assembler.REPO_ROOT", repo_root)
+    monkeypatch.setattr(LUTManager, "LUT_PRESET_DIR", str(preset_root))
+    LUTManager.invalidate_preset_cache()
+    return repo_root
+
+
+def test_collect_lut_rejects_path_traversal_lut_name(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = _use_feedback_lut_repo(monkeypatch, tmp_path)
+    (repo_root / "bambu_config_template.json").write_bytes(b"ROOT_CONFIG")
+    ticket_dir = tmp_path / "LUM-20260618-001"
+    ticket_dir.mkdir()
+    payload = {
+        "ticket_id": "LUM-20260618-001",
+        "context": {
+            "active_original_image_ref": None,
+            "active_final_artifact_ref": None,
+            "source_version": "legacy",
+            "lut_name": "Custom/../../bambu_config_template",
+        },
+    }
+
+    try:
+        result = collect_sync_attachments(
+            ticket_dir,
+            payload,
+            _MockFileRegistry({}),
+            now_beijing(),
+        )
+    finally:
+        LUTManager.invalidate_preset_cache()
+
+    assert result.lut["status"] == "not_applicable"
+    assert not (ticket_dir / "lut.json").exists()
+
+
+def test_collect_lut_accepts_custom_display_name(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = _use_feedback_lut_repo(monkeypatch, tmp_path)
+    safe_lut = repo_root / "lut-preset" / "Custom" / "safe.json"
+    safe_lut.write_bytes(b"SAFE_CUSTOM_LUT")
+    ticket_dir = tmp_path / "LUM-20260618-002"
+    ticket_dir.mkdir()
+    payload = {
+        "ticket_id": "LUM-20260618-002",
+        "context": {
+            "active_original_image_ref": None,
+            "active_final_artifact_ref": None,
+            "source_version": "legacy",
+            "lut_name": "Custom - safe",
+        },
+    }
+
+    try:
+        result = collect_sync_attachments(
+            ticket_dir,
+            payload,
+            _MockFileRegistry({}),
+            now_beijing(),
+        )
+    finally:
+        LUTManager.invalidate_preset_cache()
+
+    assert result.lut["status"] == "attached"
+    assert result.lut["kind"] == "custom"
+    assert result.lut["filename"] == "lut.json"
+    assert (ticket_dir / "lut.json").read_bytes() == b"SAFE_CUSTOM_LUT"
+
+
+def test_collect_lut_accepts_nested_preset_display_name(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = _use_feedback_lut_repo(monkeypatch, tmp_path)
+    preset_lut = repo_root / "lut-preset" / "BIQU" / "必趣&PLAGO&6色RYBWGK.json"
+    preset_lut.write_bytes(b"BIQU_PRESET_LUT")
+    ticket_dir = tmp_path / "LUM-20260618-003"
+    ticket_dir.mkdir()
+    payload = {
+        "ticket_id": "LUM-20260618-003",
+        "context": {
+            "active_original_image_ref": None,
+            "active_final_artifact_ref": None,
+            "source_version": "legacy",
+            "lut_name": "BIQU - 必趣&PLAGO&6色RYBWGK",
+        },
+    }
+
+    try:
+        result = collect_sync_attachments(
+            ticket_dir,
+            payload,
+            _MockFileRegistry({}),
+            now_beijing(),
+        )
+    finally:
+        LUTManager.invalidate_preset_cache()
+
+    assert result.lut["status"] == "preset_reference_only"
+    assert result.lut["kind"] == "preset"
+    assert result.lut["preset_relative_path"] == (
+        "lut-preset/BIQU/必趣&PLAGO&6色RYBWGK.json"
+    )
+    assert not (ticket_dir / "lut.json").exists()
 
 
 def _write_ticket(

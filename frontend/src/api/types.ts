@@ -849,7 +849,7 @@ export interface SavedMaterialLibraryItem {
   updated_at?: string | null;
   archive_path: string;
   stage_a_params_path?: string | null;
-  material_file_url: string;
+  material_file_url: string | null;
   stage_a_params_url?: string | null;
   estimated_rgb: number[];
   layer_height_mm?: number | null;
@@ -862,6 +862,10 @@ export interface SavedMaterialLibraryItem {
   usage_by_color_mode?: Record<string, number>;
   usage_last_used_at?: string | null;
   usage_last_used_color_mode?: string | null;
+  sync_material_id?: string | null;
+  sync_revision_id?: string | null;
+  sync_channel?: string | null;
+  sync_official?: boolean;
 }
 
 export interface GradientCardMaterialLibraryResponse {
@@ -908,6 +912,113 @@ export interface GradientCardMaterialBulkImportResponse {
   message: string;
   imported_count: number;
   imported_materials: SavedMaterialSummary[];
+}
+
+export interface MaterialSyncInstalledEntry {
+  material_id: string;
+  revision_id: string;
+  content_hash: string;
+  channel: string;
+  source: string;
+  local_directory: string;
+  display_brand: string;
+  display_name: string;
+  installed_at?: string | null;
+  updated_at?: string | null;
+  local_exists: boolean;
+  material_file_exists: boolean;
+  available_revisions: string[];
+}
+
+export interface MaterialSyncStatusResponse {
+  status: string;
+  message: string;
+  schema_version: string;
+  index_state: "missing" | "ready" | "invalid";
+  last_sync_at?: string | null;
+  registries: Record<string, unknown>;
+  installed_count: number;
+  installed: MaterialSyncInstalledEntry[];
+  local_overrides_count: number;
+}
+
+export interface MaterialSyncRefreshFailure {
+  material_id: string;
+  revision_id: string;
+  package_url: string;
+  error: string;
+}
+
+export interface MaterialSyncRefreshResponse {
+  status: "ok" | "partial" | string;
+  message: string;
+  registry_url: string;
+  channels: string[];
+  checked_count: number;
+  installed_count: number;
+  skipped_count: number;
+  failed_count: number;
+  installed_materials: SavedMaterialSummary[];
+  failures: MaterialSyncRefreshFailure[];
+}
+
+export interface MaterialSyncRollbackResponse {
+  status: string;
+  message: string;
+  material_id: string;
+  revision_id: string;
+  content_hash: string;
+  channel: string;
+  local_directory: string;
+}
+
+export interface MaterialRegistryCatalogEntry {
+  material_id: string;
+  revision_id: string;
+  content_hash: string;
+  channel: string;
+  visibility: string;
+  local_directory: string;
+  display: Record<string, unknown>;
+  compatibility: Record<string, unknown>;
+  package_url: string;
+  package_sha256: string;
+  package_bytes: number;
+}
+
+export interface MaterialRegistryCatalogResponse {
+  schema_version: string;
+  channels: string[];
+  count: number;
+  total_count: number | null;
+  offset: number;
+  limit: number | null;
+  materials: MaterialRegistryCatalogEntry[];
+}
+
+export interface MaterialRegistryInstallRequest {
+  material_id: string;
+  revision_id: string;
+  package_url: string;
+  package_sha256: string;
+}
+
+export interface MaterialSyncInstallResponse {
+  status: string;
+  message: string;
+  installed_count: number;
+  installed_materials: SavedMaterialSummary[];
+}
+
+export interface MaterialRegistryPackageMutationResponse {
+  status: string;
+  message: string;
+  channel: string;
+  package_path: string;
+  package_url: string;
+  package_sha256: string;
+  package_bytes: number;
+  materials: MaterialRegistryCatalogEntry[];
 }
 
 // ========== Material solver cache (64³ Lab-grid recipe lookup) ==========

@@ -26,6 +26,19 @@ from api.preview_resources import PREVIEW_PUBLIC_PURPOSE
 from api.session_store import SessionStore
 from config import COLORCHECKER_TEMP_TTL_SECONDS, IMAGE_PREVIEW_MAX_EDGE
 
+_COLORCHECKER_PREVIEW_UNREADABLE_DETAIL = (
+    "ColorChecker preview is unavailable or unreadable. "
+    "Re-run ColorChecker calibration and try again."
+)
+_PREVIEW_ARTIFACT_UNREADABLE_DETAIL = (
+    "Preview artifact is unavailable or unreadable. "
+    "Re-run the previous step and try again."
+)
+_COLORCHECKER_UNREADABLE_DETAIL = (
+    "ColorChecker calibrated image is unavailable or unreadable. "
+    "Recalibrate and try again."
+)
+
 
 def _png_bytes(width: int = 8, height: int = 6) -> bytes:
     buffer = io.BytesIO()
@@ -73,6 +86,23 @@ def _register_colorchecker_source(
         is_public=False,
         purpose=COLORCHECKER_SOURCE_PURPOSE,
     )
+
+
+def _register_bad_colorchecker_full_artifact(
+    registry: FileRegistry,
+    tmp_path,
+) -> tuple[str, str]:
+    bad_path = tmp_path / "bad-colorchecker.png"
+    bad_path.write_bytes(b"not a png")
+    file_id = registry.register_path(
+        "colorchecker:test",
+        str(bad_path),
+        bad_path.name,
+        ttl_seconds=COLORCHECKER_TEMP_TTL_SECONDS,
+        is_public=False,
+        purpose=COLORCHECKER_FULL_PURPOSE,
+    )
+    return file_id, str(bad_path)
 
 
 def test_save_upload_to_tempfile_handles_short_os_write(monkeypatch, tmp_path) -> None:
@@ -140,6 +170,24 @@ def test_preview_resource_returns_private_source_id_and_bounded_preview() -> Non
     assert release_response.json()["released"] is True
     assert registry.resolve(source_id) is None
     assert client.get(body["preview_url"]).status_code == 404
+
+
+def test_preview_artifact_rejects_unreadable_private_artifact_without_path(
+    tmp_path,
+) -> None:
+    client, _store, registry = _client_with_state()
+    file_id, bad_path = _register_bad_colorchecker_full_artifact(registry, tmp_path)
+
+    response = client.post(
+        "/api/system/preview-artifacts",
+        data={"resource_id": file_id, "context": "colorchecker"},
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail == _PREVIEW_ARTIFACT_UNREADABLE_DETAIL
+    assert bad_path not in detail
+    assert "cannot identify image file" not in detail
 
 
 def test_colorchecker_source_keeps_standard_type_hint_for_extensionless_upload(monkeypatch) -> None:
@@ -550,6 +598,75 @@ def test_colorchecker_calibrate_returns_private_full_id_and_releases(
     assert client.get(confirm_body["source_preview_url"]).status_code == 200
 
 
+def test_colorchecker_confirm_rejects_unreadable_source_preview_without_path(
+    tmp_path,
+) -> None:
+    client, _store, registry = _client_with_state()
+    full_path = tmp_path / "full.png"
+    source_path = tmp_path / "source.png"
+    bad_preview_path = tmp_path / "bad-source-preview.jpg"
+    Image.new("RGB", (8, 6), (10, 20, 30)).save(full_path, format="PNG")
+    Image.new("RGB", (8, 6), (10, 20, 30)).save(source_path, format="PNG")
+    bad_preview_path.write_bytes(b"not a preview")
+    full_id = registry.register_path(
+        "colorchecker:full",
+        str(full_path),
+        full_path.name,
+        ttl_seconds=COLORCHECKER_TEMP_TTL_SECONDS,
+        is_public=False,
+        purpose=COLORCHECKER_FULL_PENDING_PURPOSE,
+    )
+    source_id = registry.register_path(
+        "colorchecker:source",
+        str(source_path),
+        source_path.name,
+        ttl_seconds=COLORCHECKER_TEMP_TTL_SECONDS,
+        is_public=False,
+        purpose=COLORCHECKER_SOURCE_PURPOSE,
+    )
+    source_preview_id = registry.register_path(
+        f"bounded-preview-owner:{source_id}:role:source",
+        str(bad_preview_path),
+        bad_preview_path.name,
+        ttl_seconds=COLORCHECKER_TEMP_TTL_SECONDS,
+        is_public=True,
+        purpose=PREVIEW_PUBLIC_PURPOSE,
+    )
+
+    response = client.post(
+        "/api/extractor/colorchecker-confirm",
+        data={
+            "file_id": full_id,
+            "source_file_id": source_id,
+            "source_preview_file_id": source_preview_id,
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail == _COLORCHECKER_PREVIEW_UNREADABLE_DETAIL
+    assert str(bad_preview_path) not in detail
+    assert "cannot identify image file" not in detail
+
+
+def test_colorchecker_confirm_rejects_unreadable_full_artifact_without_path(
+    tmp_path,
+) -> None:
+    client, _store, registry = _client_with_state()
+    file_id, bad_path = _register_bad_colorchecker_full_artifact(registry, tmp_path)
+
+    response = client.post(
+        "/api/extractor/colorchecker-confirm",
+        data={"file_id": file_id},
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail == _COLORCHECKER_UNREADABLE_DETAIL
+    assert bad_path not in detail
+    assert "cannot identify image file" not in detail
+
+
 @pytest.mark.parametrize(
     "patch_points",
     [
@@ -947,6 +1064,40 @@ def test_extractor_uses_private_colorchecker_image_and_scales_points(
     assert captured["img"].shape == (20, 40, 3)
     assert captured["points"] == [[0, 0], [40, 0], [40, 20], [0, 20]]
     assert captured["auto_wb"] is False
+
+
+def test_extract_rejects_unreadable_colorchecker_full_artifact_without_path(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import api.routers.extractor as extractor_router
+
+    client, _store, registry = _client_with_state()
+    file_id, bad_path = _register_bad_colorchecker_full_artifact(registry, tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_run_extraction(**kwargs):
+        captured.update(kwargs)
+        raise AssertionError("extract should stop before running LUT extraction")
+
+    monkeypatch.setattr(extractor_router, "run_extraction", fake_run_extraction)
+
+    response = client.post(
+        "/api/extractor/extract",
+        data={
+            "corner_points": "[[0,0],[10,0],[10,10],[0,10]]",
+            "colorchecker_calibrated_file_id": file_id,
+            "corner_points_width": "10",
+            "corner_points_height": "10",
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail == _COLORCHECKER_UNREADABLE_DETAIL
+    assert bad_path not in detail
+    assert "cannot identify image file" not in detail
+    assert captured == {}
 
 
 def test_stage_a_uses_private_colorchecker_images_only_when_restored(

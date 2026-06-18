@@ -84,6 +84,7 @@ describe("Widget Workspace Layout", () => {
 
     fireEvent.click(screen.getByTestId("tab-material-management"));
     expect(screen.getByTestId("subtab-material-library")).toBeInTheDocument();
+    expect(screen.getByTestId("subtab-material-cloud-sync")).toBeInTheDocument();
     expect(screen.getByTestId("subtab-material-recipe")).toBeInTheDocument();
 
     expect(screen.queryByTestId("tab-calibration")).not.toBeInTheDocument();

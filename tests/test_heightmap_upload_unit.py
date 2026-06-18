@@ -11,6 +11,7 @@ Validates:
 from __future__ import annotations
 
 import io
+from pathlib import Path
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
@@ -119,6 +120,27 @@ def _setup_session_with_preview(
     return session_id
 
 
+def _delete_externalized_preview_cache_field(
+    store: SessionStore,
+    session_id: str,
+    tmp_path: Path,
+    field_name: str,
+) -> Path:
+    session_data = store.get(session_id)
+    cache_ref = externalize_preview_cache(
+        session_id,
+        store,
+        session_data["preview_cache"],
+        root_dir=tmp_path,
+    )
+    store.put(session_id, "preview_cache", cache_ref)
+    field_path = Path(cache_ref["fields"][field_name]["path"])
+    assert field_path.exists()
+    field_path.unlink()
+    assert not field_path.exists()
+    return field_path
+
+
 # =========================================================================
 # 1. Valid grayscale PNG upload returns 200 - Requirement 8.1, 8.2
 # =========================================================================
@@ -198,6 +220,34 @@ class TestValidHeightmapUpload:
 
         assert response.status_code == 200, response.text
         assert set(response.json()["color_height_map"]) == {"ff0000", "00ff00"}
+
+    def test_stale_artifact_preview_cache_returns_repreview_error(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        session_id = _setup_session_with_preview(_test_store)
+        stale_path = _delete_externalized_preview_cache_field(
+            _test_store,
+            session_id,
+            tmp_path,
+            "matched_rgb",
+        )
+        buf = _make_grayscale_png(100, 100)
+
+        response = client.post(
+            "/api/convert/upload-heightmap",
+            files={"heightmap": ("heightmap.png", buf, "image/png")},
+            data={"session_id": session_id, "max_relief_height": "2.0"},
+        )
+
+        assert response.status_code == 409
+        detail = response.json()["detail"]
+        assert "Re-run preview" in detail
+        assert str(stale_path) not in detail
+        session_data = _test_store.get(session_id)
+        assert "heightmap_grayscale" not in session_data
+        assert "heightmap_original_size" not in session_data
+        assert "heightmap_color_height_map" not in session_data
 
 
 # =========================================================================

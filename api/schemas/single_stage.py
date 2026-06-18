@@ -225,3 +225,68 @@ class MaterialLibraryBulkExportRequest(BaseModel):
         if len(cleaned) != len(value) or not cleaned:
             raise ValueError("directory_names must contain non-empty strings")
         return cleaned
+
+
+class MaterialSyncRollbackRequest(BaseModel):
+    """Request model for rolling a synced material back to an earlier revision."""
+
+    material_id: str = Field(..., description="Stable material identity.")
+    revision_id: str = Field(..., description="Revision to make current again.")
+
+    @field_validator("material_id", "revision_id")
+    @classmethod
+    def validate_non_empty(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("value cannot be blank")
+        return cleaned
+
+
+class MaterialRegistryInstallRequest(BaseModel):
+    """Request model for installing one selected Registry package."""
+
+    package_url: str = Field(..., description="Registry package URL from catalog.")
+    package_sha256: str = Field(..., description="Expected ZIP SHA-256.")
+    material_id: str = Field(..., description="Stable material identity.")
+    revision_id: str = Field(..., description="Selected material revision.")
+
+    @field_validator("package_url", "package_sha256", "material_id", "revision_id")
+    @classmethod
+    def validate_non_empty(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("value cannot be blank")
+        return cleaned
+
+
+class MaterialRegistryApproveRequest(BaseModel):
+    """Request model for approving one Registry package into official channel."""
+
+    official_password: str = Field(..., description="Server-side official approval password.")
+
+    @field_validator("official_password")
+    @classmethod
+    def validate_official_password(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("official_password cannot be blank")
+        return cleaned
+
+
+class MaterialRegistryLocalUploadRequest(BaseModel):
+    """Request model for uploading one local saved material into the Registry.
+    将一个本地已保存耗材上传到 Registry 待审核队列的请求模型。
+    """
+
+    directory_name: str = Field(
+        ...,
+        description="Saved material directory name to export and upload.",
+    )
+
+    @field_validator("directory_name")
+    @classmethod
+    def validate_directory_name(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("directory_name cannot be blank")
+        return cleaned
