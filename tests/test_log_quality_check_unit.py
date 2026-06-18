@@ -931,6 +931,21 @@ def test_replace_family_member_dispatches_correct_color_mode(monkeypatch) -> Non
         ]
 
 
+def test_default_workflow_lut_names_exist_in_catalog() -> None:
+    from utils.lut_manager import LUTManager
+
+    lut_names = [
+        log_quality_check.DEFAULT_LUT_NAME,
+        log_quality_check.BW_LUT_NAME,
+        log_quality_check.EIGHT_COLOR_LUT_NAME,
+        log_quality_check.FIVE_COLOR_EXT_LUT_NAME,
+    ]
+
+    missing = [name for name in lut_names if LUTManager.get_lut_path(name) is None]
+
+    assert missing == []
+
+
 def test_full_replace_workflow_requires_canary_events() -> None:
     checks = _workflow_required_event_checks(
         mode="full",
