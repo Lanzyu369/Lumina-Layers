@@ -26,6 +26,10 @@ from api.preview_resources import PREVIEW_PUBLIC_PURPOSE
 from api.session_store import SessionStore
 from config import COLORCHECKER_TEMP_TTL_SECONDS, IMAGE_PREVIEW_MAX_EDGE
 
+_COLORCHECKER_PREVIEW_UNREADABLE_DETAIL = (
+    "ColorChecker preview is unavailable or unreadable. "
+    "Re-run ColorChecker calibration and try again."
+)
 _PREVIEW_ARTIFACT_UNREADABLE_DETAIL = (
     "Preview artifact is unavailable or unreadable. "
     "Re-run the previous step and try again."
@@ -592,6 +596,57 @@ def test_colorchecker_calibrate_returns_private_full_id_and_releases(
     assert client.get(body["calibrated_preview_url"]).status_code == 404
     assert client.get(body["overlay_url"]).status_code == 404
     assert client.get(confirm_body["source_preview_url"]).status_code == 200
+
+
+def test_colorchecker_confirm_rejects_unreadable_source_preview_without_path(
+    tmp_path,
+) -> None:
+    client, _store, registry = _client_with_state()
+    full_path = tmp_path / "full.png"
+    source_path = tmp_path / "source.png"
+    bad_preview_path = tmp_path / "bad-source-preview.jpg"
+    Image.new("RGB", (8, 6), (10, 20, 30)).save(full_path, format="PNG")
+    Image.new("RGB", (8, 6), (10, 20, 30)).save(source_path, format="PNG")
+    bad_preview_path.write_bytes(b"not a preview")
+    full_id = registry.register_path(
+        "colorchecker:full",
+        str(full_path),
+        full_path.name,
+        ttl_seconds=COLORCHECKER_TEMP_TTL_SECONDS,
+        is_public=False,
+        purpose=COLORCHECKER_FULL_PENDING_PURPOSE,
+    )
+    source_id = registry.register_path(
+        "colorchecker:source",
+        str(source_path),
+        source_path.name,
+        ttl_seconds=COLORCHECKER_TEMP_TTL_SECONDS,
+        is_public=False,
+        purpose=COLORCHECKER_SOURCE_PURPOSE,
+    )
+    source_preview_id = registry.register_path(
+        f"bounded-preview-owner:{source_id}:role:source",
+        str(bad_preview_path),
+        bad_preview_path.name,
+        ttl_seconds=COLORCHECKER_TEMP_TTL_SECONDS,
+        is_public=True,
+        purpose=PREVIEW_PUBLIC_PURPOSE,
+    )
+
+    response = client.post(
+        "/api/extractor/colorchecker-confirm",
+        data={
+            "file_id": full_id,
+            "source_file_id": source_id,
+            "source_preview_file_id": source_preview_id,
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail == _COLORCHECKER_PREVIEW_UNREADABLE_DETAIL
+    assert str(bad_preview_path) not in detail
+    assert "cannot identify image file" not in detail
 
 
 def test_colorchecker_confirm_rejects_unreadable_full_artifact_without_path(
