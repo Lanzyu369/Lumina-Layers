@@ -58,6 +58,10 @@ _COLORCHECKER_PREVIEW_ROLES = (
     "overlay",
     "artifact",
 )
+_PREVIEW_ARTIFACT_UNREADABLE_DETAIL = (
+    "Preview artifact is unavailable or unreadable. "
+    "Re-run the previous step and try again."
+)
 
 
 @dataclass(frozen=True)
@@ -383,7 +387,7 @@ def register_preview_for_artifact(
             with Image.open(path) as image:
                 rgb = np.asarray(image.convert("RGB"), dtype=np.uint8)
         except (UnidentifiedImageError, OSError, ValueError) as exc:
-            raise HTTPException(status_code=422, detail=f"Unable to read preview artifact: {exc}") from exc
+            raise HTTPException(status_code=422, detail=_PREVIEW_ARTIFACT_UNREADABLE_DETAIL) from exc
         bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
         return register_preview_jpeg(
             registry,
