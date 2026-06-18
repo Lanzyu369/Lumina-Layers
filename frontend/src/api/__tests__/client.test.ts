@@ -193,9 +193,10 @@ describe("apiClient", () => {
     });
     apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
 
-    await expect(apiClient.post("/convert/generate", {})).rejects.toMatchObject({
-      message: "The request conflicts with the current server state.",
-    });
+    const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
+    const expectedMessage = "The request conflicts with the current server state.";
+    expect(rejected).toMatchObject({ message: expectedMessage });
+    expect(rejected.response?.data?.detail).toBe(expectedMessage);
   });
 
   it("replaces string error codes with readable HTTP fallbacks", async () => {

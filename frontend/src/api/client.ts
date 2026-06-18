@@ -311,6 +311,27 @@ function buildReadableResponseData(
   }
   const detail = data.detail;
   const message = data.message;
+  if (isRecord(detail)) {
+    const detailMessage = detail.message;
+    const detailError = detail.error;
+    const hasReadableDetailMessage =
+      typeof detailMessage === "string" &&
+      detailMessage.trim().length > 0 &&
+      !isGenericHttpDetail(detailMessage, statusCode);
+    const hasCodeOnlyDetail =
+      typeof detailError === "string" &&
+      detailError.trim().length > 0 &&
+      !hasReadableDetailMessage;
+    if (hasCodeOnlyDetail) {
+      if (
+        typeof message === "string" &&
+        isGenericHttpDetail(message, statusCode)
+      ) {
+        return { ...data, detail: readableMessage, message: readableMessage };
+      }
+      return { ...data, detail: readableMessage };
+    }
+  }
   if (typeof detail !== "string" || !isGenericHttpDetail(detail, statusCode)) {
     if (
       typeof message === "string" &&
