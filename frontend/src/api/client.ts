@@ -390,6 +390,59 @@ function getResponseHeaderValue(
   return null;
 }
 
+function recordApiFailure({
+  method,
+  url,
+  statusCode,
+  requestId,
+  responseDetailForLog,
+  error,
+  readableMessage,
+}: {
+  method: string | null;
+  url: string | null;
+  statusCode: number | null;
+  requestId: string | null;
+  responseDetailForLog: unknown;
+  error: unknown;
+  readableMessage: string;
+}): void {
+  postClientLog("api: request failed", {
+    scope: "api",
+    phase: "request-failed",
+    method: "error",
+    dedupeMs: 500,
+    details: {
+      method,
+      url,
+      status_code: statusCode,
+      request_id: requestId,
+      response_detail: responseDetailForLog,
+      ...summarizeErrorForLog(error),
+      error_message: readableMessage,
+    },
+  });
+  // Mirror the failure into the action history bundle so a bug report
+  // submitted minutes later still sees the recent 4xx/5xx context.
+  // 同步写入操作历史，便于后续提交 Bug 报告时仍能带上最近的 API 错误。
+  if (typeof statusCode === "number" && statusCode >= 400) {
+    try {
+      useActionHistoryStore.getState().pushAction({
+        action_type: "api_error",
+        error: {
+          status_code: statusCode,
+          path: typeof url === "string" ? url : String(url ?? ""),
+          ...(requestId ? { request_id: requestId } : {}),
+          error_message: readableMessage,
+        },
+      });
+    } catch {
+      // Action history must never propagate failure into the HTTP layer.
+      // 即便历史记录失败，也不得影响 HTTP 调用链。
+    }
+  }
+}
+
 async function readResourceErrorData(response: Response): Promise<unknown> {
   const contentType = getResponseHeaderValue(response.headers, "content-type");
   if (contentType?.toLowerCase().includes("json")) {
@@ -439,6 +492,15 @@ function buildResourceDownloadError(
     data: responseData,
     headers: response.headers,
   };
+  recordApiFailure({
+    method: "GET",
+    url,
+    statusCode,
+    requestId,
+    responseDetailForLog: summarizeApiErrorData(data, statusCode),
+    error,
+    readableMessage,
+  });
   return error;
 }
 
@@ -447,6 +509,7 @@ function buildResourceNetworkError(
   cause: unknown,
 ): Error {
   const readableMessage = readableApiErrorMessage(null, null, cause);
+  const responseData = { detail: readableMessage, url };
   const error = new Error(readableMessage, { cause }) as Error & {
     response?: {
       status: number | null;
@@ -456,9 +519,18 @@ function buildResourceNetworkError(
   };
   error.response = {
     status: null,
-    data: { detail: readableMessage, url },
+    data: responseData,
     headers: new Headers(),
   };
+  recordApiFailure({
+    method: "GET",
+    url,
+    statusCode: null,
+    requestId: null,
+    responseDetailForLog: responseData,
+    error,
+    readableMessage,
+  });
   return error;
 }
 
@@ -549,40 +621,15 @@ apiClient.interceptors.response.use(
         // Preserve the original error object if a runtime marks message read-only.
       }
     }
-    postClientLog("api: request failed", {
-      scope: "api",
-      phase: "request-failed",
-      method: "error",
-      dedupeMs: 500,
-      details: {
-        method,
-        url,
-        status_code: statusCode,
-        request_id: requestId,
-        response_detail: responseDetailForLog,
-        ...summarizeErrorForLog(error),
-        error_message: readableMessage,
-      },
+    recordApiFailure({
+      method,
+      url,
+      statusCode,
+      requestId,
+      responseDetailForLog,
+      error,
+      readableMessage,
     });
-    // Mirror the failure into the action history bundle so a bug report
-    // submitted minutes later still sees the recent 4xx/5xx context.
-    // 同步写入操作历史，便于后续提交 Bug 报告时仍能带上最近的 API 错误。
-    if (typeof statusCode === "number" && statusCode >= 400) {
-      try {
-        useActionHistoryStore.getState().pushAction({
-          action_type: "api_error",
-          error: {
-            status_code: statusCode,
-            path: typeof url === "string" ? url : String(url ?? ""),
-            ...(requestId ? { request_id: requestId } : {}),
-            error_message: readableMessage,
-          },
-        });
-      } catch {
-        // Action history must never propagate failure into the HTTP layer.
-        // 即便历史记录失败，也不得影响 HTTP 调用链。
-      }
-    }
     return Promise.reject(error);
   },
 );

@@ -493,6 +493,51 @@ describe("apiClient", () => {
     }
   });
 
+  it("records failed resource downloads in client logs and action history", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      headers: new Headers({
+        "content-type": "application/json",
+        "x-request-id": "req-resource-404",
+      }),
+      json: () => Promise.resolve({ detail: "File not found or expired" }),
+    }) as unknown as typeof fetch;
+
+    try {
+      await expect(downloadResourceBlob("/api/files/missing")).rejects.toThrow(
+        "File not found or expired",
+      );
+
+      expect(postClientLog).toHaveBeenCalledWith(
+        "api: request failed",
+        expect.objectContaining({
+          scope: "api",
+          phase: "request-failed",
+          method: "error",
+          details: expect.objectContaining({
+            method: "GET",
+            url: "/api/files/missing",
+            status_code: 404,
+            request_id: "req-resource-404",
+            error_message: "File not found or expired",
+          }),
+        }),
+      );
+      expect(useActionHistoryStore.getState().history.at(-1)?.error).toEqual(
+        expect.objectContaining({
+          status_code: 404,
+          path: "/api/files/missing",
+          request_id: "req-resource-404",
+          error_message: "File not found or expired",
+        }),
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("uses structured detail object messages for failed resource downloads", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = vi.fn().mockResolvedValueOnce({
@@ -553,6 +598,23 @@ describe("apiClient", () => {
             .response?.data.url
         ),
       ).toBe("/api/files/model");
+      expect(postClientLog).toHaveBeenCalledWith(
+        "api: request failed",
+        expect.objectContaining({
+          scope: "api",
+          phase: "request-failed",
+          method: "error",
+          details: expect.objectContaining({
+            method: "GET",
+            url: "/api/files/model",
+            status_code: null,
+            request_id: null,
+            error_message:
+              "API request failed before the server returned a response.",
+          }),
+        }),
+      );
+      expect(useActionHistoryStore.getState().history).toHaveLength(0);
     } finally {
       globalThis.fetch = originalFetch;
     }
