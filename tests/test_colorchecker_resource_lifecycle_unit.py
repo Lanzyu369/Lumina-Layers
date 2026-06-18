@@ -30,6 +30,14 @@ _COLORCHECKER_PREVIEW_UNREADABLE_DETAIL = (
     "ColorChecker preview is unavailable or unreadable. "
     "Re-run ColorChecker calibration and try again."
 )
+_COLORCHECKER_PREVIEW_GENERATION_FAILED_DETAIL = (
+    "ColorChecker preview could not be generated from this image. "
+    "Choose a supported image file and try again."
+)
+_COLORCHECKER_PREVIEW_SERVICE_UNAVAILABLE_DETAIL = (
+    "ColorChecker preview service is unavailable. "
+    "Check the server ColorChecker dependencies and try again."
+)
 _PREVIEW_ARTIFACT_UNREADABLE_DETAIL = (
     "Preview artifact is unavailable or unreadable. "
     "Re-run the previous step and try again."
@@ -188,6 +196,56 @@ def test_preview_artifact_rejects_unreadable_private_artifact_without_path(
     assert detail == _PREVIEW_ARTIFACT_UNREADABLE_DETAIL
     assert bad_path not in detail
     assert "cannot identify image file" not in detail
+
+
+def test_preview_resource_upload_rejects_decode_error_without_path(monkeypatch) -> None:
+    import core.colorchecker_adapter as adapter
+
+    client, _store, _registry = _client_with_state(raise_server_exceptions=False)
+    private_path = "/Users/min/private/chart.tiff"
+
+    def fail_decode(*_args, **_kwargs):
+        raise adapter.ColorCheckerCalibrationError(
+            f"cannot decode {private_path}: decoder exploded"
+        )
+
+    monkeypatch.setattr(adapter, "decode_colorchecker_file", fail_decode)
+
+    response = client.post(
+        "/api/system/preview-resources",
+        data={"context": "colorchecker"},
+        files={"file": ("chart.tiff", b"not an image", "image/tiff")},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == _COLORCHECKER_PREVIEW_GENERATION_FAILED_DETAIL
+    assert private_path not in response.text
+    assert "decoder exploded" not in response.text
+
+
+def test_preview_resource_upload_hides_unavailable_error_detail(monkeypatch) -> None:
+    import core.colorchecker_adapter as adapter
+
+    client, _store, _registry = _client_with_state(raise_server_exceptions=False)
+    private_path = "/Users/min/private/core/colorchecker.py"
+
+    def fail_decode(*_args, **_kwargs):
+        raise adapter.ColorCheckerUnavailableError(
+            f"cannot import {private_path}"
+        )
+
+    monkeypatch.setattr(adapter, "decode_colorchecker_file", fail_decode)
+
+    response = client.post(
+        "/api/system/preview-resources",
+        data={"context": "colorchecker"},
+        files={"file": ("chart.png", _png_bytes(), "image/png")},
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == _COLORCHECKER_PREVIEW_SERVICE_UNAVAILABLE_DETAIL
+    assert private_path not in response.text
+    assert "cannot import" not in response.text
 
 
 def test_colorchecker_source_keeps_standard_type_hint_for_extensionless_upload(monkeypatch) -> None:
@@ -371,6 +429,34 @@ def test_preview_artifact_returns_bounded_preview_for_private_source(
     assert preview_entry["is_public"] is True
     assert preview_entry["purpose"] == PREVIEW_PUBLIC_PURPOSE
     assert client.get(body["preview_url"]).status_code == 200
+
+
+def test_preview_artifact_source_decode_error_uses_safe_detail(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import core.colorchecker_adapter as adapter
+
+    client, _store, registry = _client_with_state(raise_server_exceptions=False)
+    source_id = _register_colorchecker_source(registry, tmp_path, width=18, height=10)
+    private_path = "/Users/min/private/source.png"
+
+    def fail_decode(*_args, **_kwargs):
+        raise adapter.ColorCheckerCalibrationError(
+            f"cannot decode {private_path}: raw plugin failed"
+        )
+
+    monkeypatch.setattr(adapter, "decode_colorchecker_file", fail_decode)
+
+    response = client.post(
+        "/api/system/preview-artifacts",
+        data={"context": "colorchecker", "resource_id": source_id},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == _COLORCHECKER_PREVIEW_GENERATION_FAILED_DETAIL
+    assert private_path not in response.text
+    assert "raw plugin failed" not in response.text
 
 
 def test_colorchecker_source_preserves_raw_extension_when_mime_is_standard(monkeypatch) -> None:
