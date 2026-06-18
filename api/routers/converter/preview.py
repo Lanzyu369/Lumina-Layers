@@ -82,6 +82,10 @@ LARGE_FORMAT_SVG_PREVIEW_CACHE_MAX_BYTES_ENV = (
     "LUMINA_LARGE_FORMAT_SVG_PREVIEW_CACHE_MAX_BYTES"
 )
 DEFAULT_LARGE_FORMAT_SVG_PREVIEW_CACHE_MAX_BYTES = 1024 * 1024 * 1024
+LAYER_IMAGES_PREVIEW_CACHE_UNAVAILABLE_DETAIL = (
+    "Layer image preview cache is unavailable. "
+    "Re-run preview before viewing layer images."
+)
 
 
 def _get_large_format_svg_preview_cache_max_bytes() -> int:
@@ -326,6 +330,35 @@ def _cleanup_pre_session_temp_paths(*paths: str | None) -> None:
                     "error_message": str(exc),
                 },
             )
+
+
+def _rollback_preview_session_after_failure(
+    *,
+    session_id: str,
+    store: SessionStore,
+    registry: FileRegistry,
+    extra_temp_paths: tuple[str | None, ...] = (),
+) -> None:
+    """Best-effort rollback for preview sessions that never reach the client."""
+
+    for cleanup_target, cleanup in (
+        ("file_registry", lambda: registry.cleanup_session(session_id)),
+        ("session_store", lambda: store.close(session_id)),
+    ):
+        try:
+            cleanup()
+        except ROUTER_HANDLED_ERRORS as exc:
+            log.warning(
+                "Failed to roll back preview session after response assembly error",
+                extra={
+                    "event": "converter_preview_session_rollback_failed",
+                    "session_id": session_id,
+                    "cleanup_target": cleanup_target,
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                },
+            )
+    _cleanup_pre_session_temp_paths(*extra_temp_paths)
 
 
 def _normalize_db_names(db_names: list[str] | str | None) -> list[str]:
@@ -946,11 +979,25 @@ async def convert_preview(
             cache_with_originals["original_matched_rgb"] = cache_data["matched_rgb"]
         if "material_matrix" in cache_data:
             cache_with_originals["original_material_matrix"] = cache_data["material_matrix"]
-        cache_session_value = externalize_preview_cache(
-            session_id,
-            store,
-            cache_with_originals,
-        )
+        try:
+            cache_session_value = externalize_preview_cache(
+                session_id,
+                store,
+                cache_with_originals,
+            )
+        except ROUTER_HANDLED_ERRORS:
+            _rollback_preview_session_after_failure(
+                session_id=session_id,
+                store=store,
+                registry=registry,
+                extra_temp_paths=(
+                    temp_path,
+                    temp_native_bundle_path,
+                    worker_preview_png_path,
+                    worker_cache_data_path,
+                ),
+            )
+            raise
     store.put(session_id, "preview_cache", cache_session_value)
     # Synchronously compute gradient-banding groups so the Color Workstation
     # can surface them (group-level multi-select + optional auto-replace)
@@ -1002,18 +1049,32 @@ async def convert_preview(
     store.register_temp_file(session_id, worker_preview_png_path)
     store.register_temp_file(session_id, worker_cache_data_path)
 
-    # Register preview image (bed-rendered, for general display)
-    preview_bytes = _image_to_png_bytes(preview_img)
-    preview_id = registry.register_bytes(session_id, preview_bytes, "preview.png")
+    try:
+        # Register preview image (bed-rendered, for general display)
+        preview_bytes = _image_to_png_bytes(preview_img)
+        preview_id = registry.register_bytes(session_id, preview_bytes, "preview.png")
 
-    # Register raw RGBA preview (no bed, pixel-aligned with previewPixelWidth/Height)
-    # Used by ColorPreview2D so SVG contour overlays and click coords align.
-    preview_raw_url: str | None = None
-    if cache_data and "preview_rgba" in cache_data:
-        raw_rgba = cache_data["preview_rgba"]
-        raw_bytes = ndarray_to_png_bytes(raw_rgba)
-        raw_id = registry.register_bytes(session_id, raw_bytes, "preview_raw.png")
-        preview_raw_url = f"/api/files/{raw_id}"
+        # Register raw RGBA preview (no bed, pixel-aligned with previewPixelWidth/Height)
+        # Used by ColorPreview2D so SVG contour overlays and click coords align.
+        preview_raw_url: str | None = None
+        if cache_data and "preview_rgba" in cache_data:
+            raw_rgba = cache_data["preview_rgba"]
+            raw_bytes = ndarray_to_png_bytes(raw_rgba)
+            raw_id = registry.register_bytes(session_id, raw_bytes, "preview_raw.png")
+            preview_raw_url = f"/api/files/{raw_id}"
+    except ROUTER_HANDLED_ERRORS:
+        _rollback_preview_session_after_failure(
+            session_id=session_id,
+            store=store,
+            registry=registry,
+            extra_temp_paths=(
+                temp_path,
+                temp_native_bundle_path,
+                worker_preview_png_path,
+                worker_cache_data_path,
+            ),
+        )
+        raise
 
     # Schedule segmented GLB (one Mesh per color) without blocking preview.
     _t = time.perf_counter()
@@ -1131,20 +1192,34 @@ async def convert_preview(
         },
     )
 
-    return PreviewResponse(
-        session_id=session_id,
-        status="ok",
-        message=status_msg or "Preview generated",
-        preview_url=f"/api/files/{preview_id}",
-        preview_glb_url=preview_glb_url,
-        lut_match_mode=(cache_data.get("lut_match_info", {}) or {}).get("match_mode"),
-        lut_match_info=cache_data.get("lut_match_info"),
-        palette=palette,
-        dimensions=dimensions,
-        contours=contours_data,
-        warnings=list((svg_large_format_policy or {}).get("warnings", [])),
-        performance_timing=performance_timing,
-    )
+    try:
+        return PreviewResponse(
+            session_id=session_id,
+            status="ok",
+            message=status_msg or "Preview generated",
+            preview_url=f"/api/files/{preview_id}",
+            preview_glb_url=preview_glb_url,
+            lut_match_mode=(cache_data.get("lut_match_info", {}) or {}).get("match_mode"),
+            lut_match_info=cache_data.get("lut_match_info"),
+            palette=palette,
+            dimensions=dimensions,
+            contours=contours_data,
+            warnings=list((svg_large_format_policy or {}).get("warnings", [])),
+            performance_timing=performance_timing,
+        )
+    except (*ROUTER_HANDLED_ERRORS, ValidationError):
+        _rollback_preview_session_after_failure(
+            session_id=session_id,
+            store=store,
+            registry=registry,
+            extra_temp_paths=(
+                temp_path,
+                temp_native_bundle_path,
+                worker_preview_png_path,
+                worker_cache_data_path,
+            ),
+        )
+        raise
 
 
 
@@ -1213,11 +1288,20 @@ def _require_preview_cache_for_heightmap(session_data: dict) -> dict:
     cache, cache_ref = _require_preview_cache_for_layer_images(session_data)
     if cache_ref is None:
         return cache
-    hydrated = hydrate_preview_cache(
-        cache_ref,
-        fields={"matched_rgb", "mask_solid"},
-        mmap_mode="r",
-    )
+    try:
+        hydrated = hydrate_preview_cache(
+            cache_ref,
+            fields={"matched_rgb", "mask_solid"},
+            mmap_mode="r",
+        )
+    except (OSError, ValueError, TypeError, KeyError, EOFError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Preview cache is unavailable. "
+                "Re-run preview before uploading a heightmap."
+            ),
+        ) from exc
     cache.update(hydrated)
     return cache
 
@@ -1356,11 +1440,17 @@ def get_layer_images(
             return {"session_id": session_id, "layers": layers_out}
 
     if cache_ref is not None:
-        hydrated = hydrate_preview_cache(
-            cache_ref,
-            fields={"material_matrix", "mask_solid"},
-            mmap_mode="r",
-        )
+        try:
+            hydrated = hydrate_preview_cache(
+                cache_ref,
+                fields={"material_matrix", "mask_solid"},
+                mmap_mode="r",
+            )
+        except (OSError, ValueError, TypeError, KeyError, EOFError) as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=LAYER_IMAGES_PREVIEW_CACHE_UNAVAILABLE_DETAIL,
+            ) from exc
         material_matrix = hydrated.get("material_matrix")
         mask_solid = hydrated.get("mask_solid")
     else:

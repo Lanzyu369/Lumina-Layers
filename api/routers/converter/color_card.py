@@ -11,6 +11,7 @@ printer before committing to a full model print.
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 import os
 import time
 import uuid
@@ -262,7 +263,8 @@ async def generate_color_card(
         )
 
     preview_3d_url: str | None = None
-    threemf_registered = False
+    download_id: str | None = None
+    registration_complete = False
     glb_registered = False
     try:
         download_id = registry.register_path(
@@ -270,15 +272,18 @@ async def generate_color_card(
             threemf_path,
             ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
         )
-        threemf_registered = True
 
         if glb_path and os.path.exists(glb_path):
             glb_id = registry.register_path(body.session_id, glb_path)
             glb_registered = True
             preview_3d_url = f"/api/files/{glb_id}"
+        registration_complete = True
     finally:
-        if not threemf_registered:
+        if download_id is None:
             _remove_temp_path(threemf_path)
+        elif not registration_complete:
+            with suppress(Exception):
+                registry.cleanup_file(download_id)
         if glb_path and not glb_registered:
             _remove_temp_path(glb_path)
 

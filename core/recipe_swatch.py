@@ -46,7 +46,7 @@ class RecipeSwatchItem:
     单个配方，渲染为一个色块。
 
     Attributes:
-        selected_indices: 5-element color index sequence. (5 个颜色索引序列)
+        selected_indices: 5- or 6-element color index sequence. (5 或 6 个颜色索引序列)
         result_hex: Blended result hex color. (混合结果 hex 颜色)
         base_color_names: Name of each base color by index. (各基础色名称)
         base_color_hexes: Hex of each base color by index. (各基础色 hex)
@@ -99,7 +99,7 @@ def _generate_legend_image(
     生成一张色卡图，标注网格位置与配方的对应关系。
 
     Layout: each cell shows the result color swatch, grid coordinate (row, col),
-    result hex, and the 5-layer recipe abbreviated as color initials.
+    result hex, and the recipe abbreviated as color initials.
     """
     cell_w, cell_h = 200, 100
     pad = 12
@@ -248,14 +248,14 @@ def _add_color_layers(
     cols: int,
     block_size_mm: float, gap_mm: float,
     layer_h: float, z_start: float,
+    num_layers: int,
     reverse: bool = False,
 ) -> None:
-    """Stack 5 color layers per recipe in grid cells.
-    为每个配方在网格单元格中堆叠 5 层颜色。
+    """Stack color layers per recipe in grid cells.
+    为每个配方在网格单元格中堆叠颜色层。
 
     When *reverse* is True the layer order is inverted (for double-sided top).
     """
-    num_layers = PrinterConfig.COLOR_LAYERS
     for recipe_idx, recipe in enumerate(recipes):
         c = recipe_idx % cols
         r = recipe_idx // cols
@@ -326,7 +326,7 @@ def generate_recipe_swatch(
     from utils.bambu_3mf_writer import export_scene_with_bambu_metadata
 
     layer_h = PrinterConfig.LAYER_HEIGHT
-    color_layers = PrinterConfig.COLOR_LAYERS
+    color_layers = max(PrinterConfig.COLOR_LAYERS, max(len(recipe.selected_indices) for recipe in recipes))
     backing_mm = PrinterConfig.BACKING_MM
     backing_layers = int(backing_mm / layer_h)
     color_h = color_layers * layer_h
@@ -397,12 +397,12 @@ def generate_recipe_swatch(
         _add_color_layers(
             material_meshes, recipes, cols,
             block_size_mm, gap_mm, layer_h,
-            z_start=0, reverse=False,
+            z_start=0, num_layers=color_layers, reverse=False,
         )
         _add_color_layers(
             material_meshes, recipes, cols,
             block_size_mm, gap_mm, layer_h,
-            z_start=color_h + backing_h, reverse=True,
+            z_start=color_h + backing_h, num_layers=color_layers, reverse=True,
         )
     else:
         # Single-sided: bottom colors | white backing on top
@@ -424,7 +424,7 @@ def generate_recipe_swatch(
         _add_color_layers(
             material_meshes, recipes, cols,
             block_size_mm, gap_mm, layer_h,
-            z_start=0, reverse=False,
+            z_start=0, num_layers=color_layers, reverse=False,
         )
 
     # --- Assemble scene ---

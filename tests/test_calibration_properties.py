@@ -7,7 +7,9 @@ Lumina Studio - 校准板色块尺寸与间距配置 属性测试 (Property-Base
 
 import os
 import sys
+from pathlib import Path
 
+import numpy as np
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
@@ -289,3 +291,55 @@ def test_resolve_backing_layers_falls_back_to_printer_config_when_none() -> None
     assert _resolve_backing_layers(None) == max(
         1, int(PrinterConfig.BACKING_MM / PrinterConfig.LAYER_HEIGHT)
     )
+
+
+def test_5color_page1_generation_uses_equalized_physical_board_layout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """5-Color Page 1 uses a 40x40 physical frame like Page 2.
+
+    The data area remains 32x32, but it is centered with four physical
+    padding cells so Page 1 and Page 2 honor the same custom size envelope.
+    """
+    from core import calibration
+
+    captured: dict[str, np.ndarray] = {}
+    block_size_mm = 4.2
+    gap_mm = 0.42
+    px_blk = max(1, int(block_size_mm / PrinterConfig.NOZZLE_WIDTH))
+    px_gap = max(1, int(gap_mm / PrinterConfig.NOZZLE_WIDTH))
+    stride = px_blk + px_gap
+    expected_physical_dim = 40
+    expected_padding = 4
+
+    def _capture_previews(
+        full_matrix: np.ndarray,
+        *_args: object,
+        **_kwargs: object,
+    ) -> list[object]:
+        captured["matrix"] = full_matrix.copy()
+        return []
+
+    monkeypatch.setattr(calibration, "MODELS_DIR", str(tmp_path))
+    monkeypatch.setattr(calibration, "_generate_voxel_mesh", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(calibration, "_generate_layer_previews", _capture_previews)
+    monkeypatch.setattr(calibration, "export_scene_with_bambu_metadata", lambda **_kwargs: None)
+    monkeypatch.setattr(calibration.Stats, "increment", lambda *_args, **_kwargs: None)
+
+    calibration.generate_5color_extended_board(
+        block_size_mm=block_size_mm,
+        gap_mm=gap_mm,
+        page_index=0,
+        backing_thickness_mm=PrinterConfig.LAYER_HEIGHT,
+    )
+
+    matrix = captured["matrix"]
+    assert matrix.shape[1:] == (
+        expected_physical_dim * stride,
+        expected_physical_dim * stride,
+    )
+
+    y = expected_padding * stride
+    x = (expected_padding + 1) * stride
+    assert [int(matrix[z, y, x]) for z in range(5)] == [0, 0, 0, 0, 1]

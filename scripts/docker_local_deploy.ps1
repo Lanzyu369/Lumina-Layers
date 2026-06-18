@@ -2,6 +2,9 @@
 param(
     [string]$RepoRoot = "",
     [string]$RuntimeRoot = "E:\Lumina-Layers\lumina-runtime",
+    [string]$MaterialsSeedPath = "",
+    [string]$MaterialsSeedUrl = "",
+    [string]$MaterialsSeedSha256 = "",
     [string]$ImageName = "lumina-layers:local-latest",
     [string]$ContainerName = "lumina-layers-local",
     [string]$PublicHost = "localhost",
@@ -99,7 +102,18 @@ $outputDir = Ensure-Directory (Join-Path $RuntimeRoot "output")
 $logsDir = Ensure-Directory (Join-Path $RuntimeRoot "logs")
 $feedbackDir = Ensure-Directory (Join-Path $RuntimeRoot "feedback")
 $lutPresetDir = Ensure-SeededDirectory (Join-Path $RepoRoot "lut-preset") (Join-Path $RuntimeRoot "lut-preset")
-$materialsDir = Ensure-SeededDirectory (Join-Path $RepoRoot "materials") (Join-Path $RuntimeRoot "materials")
+$materialsDir = Ensure-Directory (Join-Path $RuntimeRoot "materials")
+$materialsSeedFile = ""
+if ($MaterialsSeedPath.Trim() -and $MaterialsSeedUrl.Trim()) {
+    throw "Use either -MaterialsSeedPath or -MaterialsSeedUrl, not both."
+}
+if ($MaterialsSeedPath.Trim()) {
+    $resolvedSeedPath = (Resolve-Path $MaterialsSeedPath).Path
+    $materialsSeedDir = Ensure-Directory (Join-Path $RuntimeRoot "materials-seed")
+    $materialsSeedFile = Join-Path $materialsSeedDir "lumina-materials-seed.zip"
+    Copy-Item -LiteralPath $resolvedSeedPath -Destination $materialsSeedFile -Force
+    $materialsSeedFile = (Resolve-Path $materialsSeedFile).Path
+}
 $settingsFile = Join-Path $RuntimeRoot "user_settings.json"
 if (-not (Test-Path -LiteralPath $settingsFile)) {
     Set-Content -LiteralPath $settingsFile -Value "{}" -Encoding UTF8
@@ -127,7 +141,15 @@ if ($SolverCacheBuildMemoryLimitMb -lt 512) {
 if (-not $SkipBuild) {
     Push-Location $RepoRoot
     try {
-        Invoke-Checked "docker" @("build", "-t", $ImageName, ".")
+        $buildArgs = @("build", "-t", $ImageName)
+        if ($MaterialsSeedUrl.Trim()) {
+            $buildArgs += @("--build-arg", "MATERIALS_SEED_URL=$MaterialsSeedUrl")
+        }
+        if ($MaterialsSeedSha256.Trim()) {
+            $buildArgs += @("--build-arg", "MATERIALS_SEED_SHA256=$MaterialsSeedSha256")
+        }
+        $buildArgs += "."
+        Invoke-Checked "docker" $buildArgs
     }
     finally {
         Pop-Location
@@ -155,6 +177,7 @@ $runArgs = @(
     "-v", "${lutPresetDir}:/app/lut-preset",
     "-v", "${materialsDir}:/app/materials",
     "-v", "${settingsFile}:/app/user_settings.json",
+    "-e", "LUMINA_MATERIALS_DIR=/app/materials",
     "-e", "LUMINA_SERVE_FRONTEND_DIST=1",
     "-e", "LUMINA_FRONTEND_DIST_DIR=/app/frontend/dist",
     "-e", "VITE_ALLOW_ALL_HOSTS=true",
@@ -174,6 +197,19 @@ $runArgs = @(
     "-e", "VECLIB_MAXIMUM_THREADS=1",
     "-e", "NUMEXPR_NUM_THREADS=1"
 )
+
+if ($materialsSeedFile) {
+    $runArgs += @(
+        "-v", "${materialsSeedFile}:/app/resources/materials/lumina-materials-seed.zip:ro",
+        "-e", "LUMINA_MATERIALS_SEED_PATH=/app/resources/materials/lumina-materials-seed.zip"
+    )
+}
+if ($MaterialsSeedUrl.Trim()) {
+    $runArgs += @("-e", "LUMINA_MATERIALS_SEED_URL=$MaterialsSeedUrl")
+}
+if ($MaterialsSeedSha256.Trim()) {
+    $runArgs += @("-e", "LUMINA_MATERIALS_SEED_SHA256=$MaterialsSeedSha256")
+}
 
 $feedbackEnvKeys = @(
     "LUMINA_FEEDBACK_SMTP_HOST",
@@ -204,6 +240,15 @@ Write-Host "Main backend  : ${PublicScheme}://${PublicHost}:$PublicBackendPort/a
 Write-Host "Runtime root  : $RuntimeRoot"
 Write-Host "Container     : $ContainerName"
 Write-Host "Materials    : $materialsDir"
+if ($materialsSeedFile) {
+    Write-Host "Seed         : $materialsSeedFile"
+}
+elseif ($MaterialsSeedUrl.Trim()) {
+    Write-Host "Seed         : $MaterialsSeedUrl"
+}
+else {
+    Write-Host "Seed         : <not configured>"
+}
 Write-Host "Workers       : max=$MaxWorkers recycle=$WorkerMaxTasksPerChild arena=$MallocArenaMax"
 Write-Host "Cache budget  : ${SolverCacheBuildMemoryLimitMb}MB"
 Write-Host "GLB kernel   : $GlbKernel"

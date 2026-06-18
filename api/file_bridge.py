@@ -56,6 +56,11 @@ RAW_EXTENSIONS: set[str] = {
 }
 _GZIP_CHUNK_SIZE = 1024 * 1024
 _GLB_GZIP_MIN_BYTES = 1024
+_UPLOAD_CHUNK_SIZE = 1024 * 1024
+
+
+class UploadTooLargeError(ValueError):
+    """Raised when an upload exceeds a caller-specified byte limit."""
 
 
 def _write_all(fd: int, data: bytes) -> None:
@@ -127,7 +132,11 @@ async def upload_to_ndarray(file: UploadFile) -> np.ndarray:
         raise ValueError(f"无法解码图像文件: {e}")
 
 
-async def upload_to_tempfile(file: UploadFile, suffix: Optional[str] = None) -> str:
+async def upload_to_tempfile(
+    file: UploadFile,
+    suffix: Optional[str] = None,
+    max_bytes: int | None = None,
+) -> str:
     """将 UploadFile 保存为临时文件，返回路径。
 
     Args:
@@ -139,14 +148,29 @@ async def upload_to_tempfile(file: UploadFile, suffix: Optional[str] = None) -> 
     """
     if suffix is None:
         suffix = os.path.splitext(file.filename or "")[1] or ".tmp"
-    contents = await file.read()
     from config import TEMP_DIR
 
     fd, path = tempfile.mkstemp(suffix=suffix, dir=TEMP_DIR)
     try:
-        _write_all(fd, contents)
+        if max_bytes is None:
+            contents = await file.read()
+            _write_all(fd, contents)
+            os.close(fd)
+            return path
+
+        total_bytes = 0
+        while True:
+            chunk = await file.read(_UPLOAD_CHUNK_SIZE)
+            if not chunk:
+                break
+            total_bytes += len(chunk)
+            if total_bytes > max_bytes:
+                raise UploadTooLargeError(
+                    f"Uploaded file exceeds maximum size: {max_bytes} bytes"
+                )
+            _write_all(fd, chunk)
         os.close(fd)
-    except OSError:
+    except (OSError, RuntimeError, ValueError):
         with suppress(OSError):
             os.close(fd)
         with suppress(OSError):
@@ -175,19 +199,22 @@ async def ensure_png_tempfile(file: UploadFile) -> str:
         return raw_path
 
     if ext in HEIC_EXTENSIONS and not HAS_HEIF:
-        os.unlink(raw_path)
+        with suppress(OSError):
+            os.unlink(raw_path)
         raise HTTPException(
             status_code=422,
             detail="HEIC/HEIF 格式需要 pillow-heif 库。请执行: pip install pillow-heif",
         )
 
     if ext in RAW_EXTENSIONS and not HAS_RAW:
-        os.unlink(raw_path)
+        with suppress(OSError):
+            os.unlink(raw_path)
         raise HTTPException(
             status_code=422,
             detail="RAW 格式需要 rawpy 库。请执行: pip install rawpy",
         )
 
+    png_path: str | None = None
     try:
         if ext in RAW_EXTENSIONS:
             with open(raw_path, "rb") as f:
@@ -204,11 +231,22 @@ async def ensure_png_tempfile(file: UploadFile) -> str:
         os.close(fd)
         img.save(png_path, "PNG")
         os.unlink(raw_path)
-        return png_path
+        converted_path = png_path
+        png_path = None
+        return converted_path
     except HTTPException:
+        with suppress(OSError):
+            os.unlink(raw_path)
+        if png_path is not None:
+            with suppress(OSError):
+                os.unlink(png_path)
         raise
     except (UnidentifiedImageError, OSError, ValueError, RuntimeError) as e:
-        os.unlink(raw_path)
+        with suppress(OSError):
+            os.unlink(raw_path)
+        if png_path is not None:
+            with suppress(OSError):
+                os.unlink(png_path)
         fmt = "RAW" if ext in RAW_EXTENSIONS else "HEIC/HEIF"
         raise HTTPException(
             status_code=422,

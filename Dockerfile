@@ -7,6 +7,7 @@ ENV PYTHONUNBUFFERED=1 \
     VITE_DEV_HOST=0.0.0.0 \
     VITE_ALLOW_ALL_HOSTS=true \
     LUMINA_BACKEND=memory \
+    LUMINA_MATERIALS_DIR=/app/materials \
     LUMINA_LOG_DIR=/app/logs \
     LUMINA_FEEDBACK_DUMP_DIR=/app/feedback \
     OMP_NUM_THREADS=1 \
@@ -42,9 +43,20 @@ RUN cd frontend && pnpm install --frozen-lockfile
 
 COPY . /app/
 RUN cd frontend && pnpm build
+
+ARG MATERIALS_SEED_URL=""
+ARG MATERIALS_SEED_SHA256=""
+RUN mkdir -p /app/resources/materials \
+    && if [ -n "$MATERIALS_SEED_URL" ]; then \
+        curl -fL "$MATERIALS_SEED_URL" -o /app/resources/materials/lumina-materials-seed.zip; \
+        if [ -n "$MATERIALS_SEED_SHA256" ]; then \
+            echo "$MATERIALS_SEED_SHA256  /app/resources/materials/lumina-materials-seed.zip" | sha256sum -c -; \
+        fi; \
+    fi
+
 ENV LUMINA_SERVE_FRONTEND_DIST=1 \
     LUMINA_FRONTEND_DIST_DIR=/app/frontend/dist
-RUN mkdir -p /app/output /app/logs /app/feedback
+RUN mkdir -p /app/output /app/logs /app/feedback /app/materials
 
 EXPOSE 8000
 

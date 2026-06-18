@@ -7,7 +7,9 @@ import {
   rotateExtractorImage,
 } from "../api/extractor";
 import { uploadImagePreview } from "../api/system";
+import apiClient from "../api/client";
 import { useSingleStageStore } from "../stores/singleStageStore";
+import { useSettingsStore } from "../stores/settingsStore";
 
 vi.mock("../api/extractor", () => ({
   colorcheckerConfirm: vi.fn(),
@@ -29,6 +31,26 @@ const mockedExtractGradientCardStageA = vi.mocked(extractGradientCardStageA);
 const mockedColorcheckerConfirm = vi.mocked(colorcheckerConfirm);
 const mockedColorcheckerRelease = vi.mocked(colorcheckerRelease);
 const mockedRotateExtractorImage = vi.mocked(rotateExtractorImage);
+
+async function buildNormalizedApiError(detail: string, status = 500): Promise<unknown> {
+  const previousLanguage = useSettingsStore.getState().language;
+  useSettingsStore.setState({ language: "en" });
+  const error = new Error(`Request failed with status code ${status}`);
+  Object.assign(error, {
+    config: { method: "post", url: "/gradient-card/extract" },
+    response: { status, data: { detail } },
+  });
+  apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+  try {
+    await apiClient.post("/gradient-card/extract", {});
+  } catch (err) {
+    return err;
+  } finally {
+    apiClient.defaults.adapter = undefined;
+    useSettingsStore.setState({ language: previousLanguage });
+  }
+  throw new Error("Expected apiClient to reject");
+}
 
 type MockImageHandle = {
   onload: (() => void) | null;
@@ -499,6 +521,107 @@ describe("useSingleStageStore ColorChecker flow", () => {
     expect(state.whiteColorcheckerFileId).toBe("white-full-id");
     expect(state.blackColorcheckerFileId).toBe("black-full-id");
     expect(state.isExtracting).toBe(true);
+  });
+
+  it("does not treat failed white rotation preview downloads as image files", async () => {
+    const originalFetch = globalThis.fetch;
+    const whiteFile = buildPngFile("white.png");
+    mockedRotateExtractorImage.mockResolvedValueOnce({
+      preview_url: "/api/files/expired-white-rotation.png",
+      width: 100,
+      height: 100,
+    });
+    globalThis.fetch = vi.fn().mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      headers: { get: () => "application/json" },
+      json: () => Promise.resolve({ detail: "Not Found" }),
+    }) as unknown as typeof fetch;
+
+    try {
+      useSingleStageStore.setState({
+        whiteImageFile: whiteFile,
+        whiteImagePreviewUrl: "/api/files/original-white.png",
+      });
+
+      await useSingleStageStore.getState().rotateWhiteImage("cw");
+
+      const state = useSingleStageStore.getState();
+      expect(state.whiteImageFile).toBe(whiteFile);
+      expect(state.whiteImagePreviewUrl).toBe("/api/files/original-white.png");
+      expect(state.isRotatingWhite).toBe(false);
+      expect(state.extractError).toMatch(/requested resource|请求的资源/);
+      expect(state.extractError).not.toContain("404");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("does not treat failed black rotation preview downloads as image files", async () => {
+    const originalFetch = globalThis.fetch;
+    const blackFile = buildPngFile("black.png");
+    mockedRotateExtractorImage.mockResolvedValueOnce({
+      preview_url: "/api/files/expired-black-rotation.png",
+      width: 100,
+      height: 100,
+    });
+    globalThis.fetch = vi.fn().mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      headers: { get: () => "application/json" },
+      json: () => Promise.resolve({ detail: "Not Found" }),
+    }) as unknown as typeof fetch;
+
+    try {
+      useSingleStageStore.setState({
+        blackImageFile: blackFile,
+        blackImagePreviewUrl: "/api/files/original-black.png",
+      });
+
+      await useSingleStageStore.getState().rotateBlackImage("ccw");
+
+      const state = useSingleStageStore.getState();
+      expect(state.blackImageFile).toBe(blackFile);
+      expect(state.blackImagePreviewUrl).toBe("/api/files/original-black.png");
+      expect(state.isRotatingBlack).toBe(false);
+      expect(state.extractError).toMatch(/requested resource|请求的资源/);
+      expect(state.extractError).not.toContain("404");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("uses readable API fallbacks for numeric gradient card extraction failures", async () => {
+    const normalizedError = await buildNormalizedApiError("500", 500);
+    mockedExtractGradientCardStageA.mockRejectedValueOnce(normalizedError);
+
+    useSingleStageStore.setState({
+      datasetFile: new File(["zip"], "kit.zip", { type: "application/zip" }),
+      whiteImageFile: buildPngFile("white.png"),
+      blackImageFile: buildPngFile("black.png"),
+      whiteCornerPoints: [
+        [0, 0],
+        [100, 0],
+        [100, 100],
+        [0, 100],
+      ],
+      blackCornerPoints: [
+        [0, 0],
+        [100, 0],
+        [100, 100],
+        [0, 100],
+      ],
+      whiteImageNaturalWidth: 100,
+      whiteImageNaturalHeight: 100,
+      blackImageNaturalWidth: 100,
+      blackImageNaturalHeight: 100,
+    });
+
+    await useSingleStageStore.getState().submitExtract();
+
+    expect(useSingleStageStore.getState().extractError).toBe(
+      "The server hit an internal error. Check the log for the request ID.",
+    );
   });
 
   it("ignores stale Stage A extraction responses after ColorChecker state changes", async () => {

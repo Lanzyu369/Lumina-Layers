@@ -357,6 +357,7 @@ export type ActionType =
 export interface ActionErrorInfo {
   status_code: number;
   path: string;
+  request_id?: string;
   error_message: string;
 }
 

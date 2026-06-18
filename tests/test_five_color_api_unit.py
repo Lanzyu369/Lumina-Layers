@@ -80,7 +80,8 @@ def test_base_colors_schema_documents_combinations_contract():
 class _FakeSwatchEngine:
     """Test double exposing canonical LUT metadata for swatch generation."""
 
-    def __init__(self) -> None:
+    def __init__(self, expected_selection_length: int = 5) -> None:
+        self._expected_selection_length = expected_selection_length
         self.color_count = 6
         self._base_colors = [
             (255, 0, 0),
@@ -99,6 +100,14 @@ class _FakeSwatchEngine:
                 row_index=0,
                 message="ok",
                 source="",
+            ),
+            (4, 1, 2, 3, 0, 4): SimpleNamespace(
+                found=True,
+                selected_indices=[4, 1, 2, 3, 0, 4],
+                result_rgb=(4, 5, 6),
+                row_index=1,
+                message="ok",
+                source="",
             )
         }
 
@@ -107,6 +116,12 @@ class _FakeSwatchEngine:
 
     def get_color_names(self):
         return self._color_names
+
+    def expected_selection_length(self):
+        return self._expected_selection_length
+
+    def accepted_selection_lengths(self):
+        return (self._expected_selection_length,)
 
     def query(self, selected_indices):
         return self._query_results.get(
@@ -179,6 +194,21 @@ class _SwatchRegisterPathFailingRegistry(FileRegistry):
             path = args[1]
         self.generated_path = str(path) if path is not None else None
         raise RuntimeError("registry backend unavailable")
+
+
+class _SwatchRegisterBytesFailingRegistry(FileRegistry):
+    """Registry stub that fails after the swatch path is registered."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.path_file_id: str | None = None
+
+    def register_path(self, *args: object, **kwargs: object) -> str:
+        self.path_file_id = super().register_path(*args, **kwargs)
+        return self.path_file_id
+
+    def register_bytes(self, *args: object, **kwargs: object) -> str:
+        raise RuntimeError("registry byte storage unavailable")
 
 
 # ---------------------------------------------------------------------------
@@ -578,6 +608,20 @@ def test_npz_object_sources_do_not_enable_pickle_loading(tmp_path):
     assert StackLUTLoader.load_sources_from_json(str(lut_path)) == []
 
 
+def test_load_stack_lut_accepts_six_column_recipes(tmp_path):
+    """Standalone stack .npy files may carry 5C Extended six-layer recipes."""
+    stack_path = tmp_path / "five_color_extended_stack.npy"
+    np.save(stack_path, np.array([[4, 1, 2, 3, 0, 4]], dtype=np.int32))
+
+    ok, message, stack = StackLUTLoader.load_stack_lut(str(stack_path))
+
+    assert ok is True
+    assert "成功加载 1 个组合" in message
+    assert stack is not None
+    assert stack.shape == (1, 6)
+    assert stack[0].tolist() == [4, 1, 2, 3, 0, 4]
+
+
 def test_npz_object_stack_values_do_not_fail_loading(tmp_path):
     """Object-dtype stack members must be treated as unavailable recipes, not load failures."""
     rgb_data = np.array([[12, 34, 56]], dtype=np.uint8)
@@ -848,6 +892,25 @@ def test_query_uses_normalized_numeric_string_stack_rows():
     assert body["found"] is True
     assert body["selected_indices"] == [0, 1, 2, 3, 4]
     assert body["result_hex"] == "#0C2238"
+
+
+def test_query_rejects_six_indices_for_five_layer_lut_with_422():
+    """Five-layer LUTs must keep legacy request-validation semantics."""
+    rgb_data = np.array([[12, 34, 56]], dtype=np.uint8)
+    stack_lut = np.array([[0, 1, 2, 3, 4]], dtype=np.int64)
+    engine = ColorQueryEngine(stack_lut=stack_lut, lut_rgb=rgb_data, color_count=5)
+
+    with patch("api.routers.five_color._load_engine", return_value=(engine, "legacy_five_layer")):
+        resp = client.post(
+            "/api/five-color/query",
+            json={"lut_name": "legacy_five_layer", "selected_indices": [0, 1, 2, 3, 4, 0]},
+        )
+
+    assert resp.status_code == 422
+    body = resp.json()
+    assert body["detail"]["reason"] == "recipe_length_mismatch"
+    assert body["detail"]["expected_length"] == 5
+    assert body["detail"]["actual_length"] == 6
 
 
 def test_native_recipe_json_precise_fraction_recipe_is_unavailable_not_500(tmp_path):
@@ -1296,6 +1359,147 @@ def test_keyed_json_overlong_recipe_does_not_disable_valid_rows(tmp_path):
     assert query_resp.json()["found"] is True
     assert base_resp.status_code == 200
     assert base_resp.json()["combinations"] == [[0, 1, 2, 3, 4]]
+
+
+def test_mixed_five_and_six_layer_keyed_json_recipes_remain_queryable(tmp_path):
+    """Mixed 5C Extended keyed JSON rows must keep both legacy and six-layer recipes."""
+    metadata = LUTMetadata(
+        palette=[
+            PaletteEntry(color="White", material="PLA Basic", hex_color="#FFFFFF"),
+            PaletteEntry(color="Cyan", material="PLA Basic", hex_color="#00FFFF"),
+            PaletteEntry(color="Magenta", material="PLA Basic", hex_color="#FF00FF"),
+            PaletteEntry(color="Yellow", material="PLA Basic", hex_color="#FFFF00"),
+            PaletteEntry(color="Black", material="PLA Basic", hex_color="#000000"),
+        ],
+        color_mode="5-Color Extended",
+        max_color_layers=6,
+    )
+    payload = metadata.to_dict()
+    payload["entries"] = [
+        {
+            "rgb": [1, 2, 3],
+            "hex": "#010203",
+            "recipe": ["White", "Cyan", "Magenta", "Yellow", "Black"],
+        },
+        {
+            "rgb": [4, 5, 6],
+            "hex": "#040506",
+            "recipe": ["Black", "Cyan", "Magenta", "Yellow", "White", "Black"],
+        },
+    ]
+    lut_path = tmp_path / "mixed-five-six-keyed-recipe.json"
+    lut_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    def _fake_generate_recipe_swatch(*, recipes, **kwargs):
+        captured["recipes"] = recipes
+        return ("E:/tmp/generated_swatch.3mf", None, "ok")
+
+    with (
+        patch("api.routers.five_color.LUTManager.get_lut_path", return_value=str(lut_path)),
+        patch(
+            "core.recipe_swatch.generate_recipe_swatch",
+            side_effect=_fake_generate_recipe_swatch,
+        ),
+    ):
+        base_resp = client.get("/api/five-color/base-colors", params={"lut_name": "test_lut"})
+        legacy_query_resp = client.post(
+            "/api/five-color/query",
+            json={"lut_name": "test_lut", "selected_indices": [0, 1, 2, 3, 4]},
+        )
+        extended_query_resp = client.post(
+            "/api/five-color/query",
+            json={"lut_name": "test_lut", "selected_indices": [4, 1, 2, 3, 0, 4]},
+        )
+        legacy_match_resp = client.post(
+            "/api/five-color/match-color",
+            json={"lut_name": "test_lut", "target_hex": "#010203"},
+        )
+        extended_match_resp = client.post(
+            "/api/five-color/match-color",
+            json={"lut_name": "test_lut", "target_hex": "#040506"},
+        )
+        swatch_resp = client.post(
+            "/api/five-color/generate-swatch",
+            json={
+                "lut_name": "test_lut",
+                "recipes": [
+                    {"selected_indices": [0, 1, 2, 3, 4], "result_hex": "#010203"},
+                    {"selected_indices": [4, 1, 2, 3, 0, 4], "result_hex": "#040506"},
+                ],
+            },
+        )
+
+    assert base_resp.status_code == 200
+    assert base_resp.json()["combinations"] == [
+        [0, 1, 2, 3, 4],
+        [4, 1, 2, 3, 0, 4],
+    ]
+    assert legacy_query_resp.status_code == 200
+    assert legacy_query_resp.json()["found"] is True
+    assert legacy_query_resp.json()["result_hex"] == "#010203"
+    assert extended_query_resp.status_code == 200
+    assert extended_query_resp.json()["found"] is True
+    assert extended_query_resp.json()["result_hex"] == "#040506"
+    assert legacy_match_resp.status_code == 200
+    assert legacy_match_resp.json()["selected_indices"] == [0, 1, 2, 3, 4]
+    assert extended_match_resp.status_code == 200
+    assert extended_match_resp.json()["selected_indices"] == [4, 1, 2, 3, 0, 4]
+    assert swatch_resp.status_code == 200
+    assert [item.selected_indices for item in captured["recipes"]] == [
+        [0, 1, 2, 3, 4],
+        [4, 1, 2, 3, 0, 4],
+    ]
+
+
+def test_six_layer_keyed_json_trailing_air_is_unavailable_not_legacy_padding(tmp_path):
+    """An explicit sixth Air layer must not be reinterpreted as a legacy 5-layer row."""
+    metadata = LUTMetadata(
+        palette=[
+            PaletteEntry(color="White", material="PLA Basic", hex_color="#FFFFFF"),
+            PaletteEntry(color="Cyan", material="PLA Basic", hex_color="#00FFFF"),
+            PaletteEntry(color="Magenta", material="PLA Basic", hex_color="#FF00FF"),
+            PaletteEntry(color="Yellow", material="PLA Basic", hex_color="#FFFF00"),
+            PaletteEntry(color="Black", material="PLA Basic", hex_color="#000000"),
+        ],
+        color_mode="5-Color Extended",
+        max_color_layers=6,
+    )
+    payload = metadata.to_dict()
+    payload["entries"] = [
+        {
+            "rgb": [1, 2, 3],
+            "hex": "#010203",
+            "recipe": ["White", "Cyan", "Magenta", "Yellow", "Black", "Air"],
+        }
+    ]
+    lut_path = tmp_path / "six-layer-trailing-air-keyed-recipe.json"
+    lut_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    with patch(
+        "api.routers.five_color.LUTManager.get_lut_path",
+        return_value=str(lut_path),
+    ):
+        base_resp = client.get("/api/five-color/base-colors", params={"lut_name": "test_lut"})
+        legacy_query_resp = client.post(
+            "/api/five-color/query",
+            json={"lut_name": "test_lut", "selected_indices": [0, 1, 2, 3, 4]},
+        )
+        match_resp = client.post(
+            "/api/five-color/match-color",
+            json={"lut_name": "test_lut", "target_hex": "#010203"},
+        )
+
+    assert base_resp.status_code == 200
+    assert base_resp.json()["combinations"] == []
+    assert legacy_query_resp.status_code == 422
+    assert legacy_query_resp.json()["detail"]["reason"] == "recipe_length_mismatch"
+    assert legacy_query_resp.json()["detail"]["expected_length"] == 6
+    assert match_resp.status_code == 200
+    match_body = match_resp.json()
+    assert match_body["found"] is False
+    assert match_body["row_index"] == 0
+    assert match_body["reason"] == "recipe_unavailable"
 
 
 def test_keyed_json_non_numeric_recipe_member_keeps_rgb_context(tmp_path):
@@ -1986,6 +2190,25 @@ def test_match_color_returns_nearest_recipe_coordinate_and_neighborhood():
     assert tail_empty["row_index"] is None
 
 
+def test_match_color_preserves_six_layer_extended_stack_recipe():
+    """5C Extended stack rows keep their sixth layer instead of being dropped."""
+    stack_lut = np.array([[4, 1, 2, 3, 0, 4]], dtype=np.int64)
+    rgb_data = np.array([[10, 20, 30]], dtype=np.uint8)
+    engine = ColorQueryEngine(stack_lut=stack_lut, lut_rgb=rgb_data, color_count=5)
+
+    with patch("api.routers.five_color._load_engine", return_value=(engine, "extended_lut")):
+        resp = client.post(
+            "/api/five-color/match-color",
+            json={"lut_name": "extended_lut", "target_hex": "#0A141E"},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["found"] is True
+    assert body["matched_hex"] == "#0A141E"
+    assert body["selected_indices"] == [4, 1, 2, 3, 0, 4]
+
+
 def test_match_color_reports_second_2738_card_coordinates():
     """A 2738-row LUT is displayed as two 37x37 cards matching legacy layout."""
     stack_lut = np.tile(np.array([[0, 1, 2, 3, 4]], dtype=np.int64), (2738, 1))
@@ -2030,8 +2253,8 @@ def test_match_color_rejects_invalid_hex():
     load_engine.assert_not_called()
 
 
-def test_match_color_reports_missing_five_layer_recipe():
-    """If the matched row cannot map to a five-layer recipe, the response explains it."""
+def test_match_color_reports_missing_layer_recipe():
+    """If the matched row cannot map to a layer recipe, the response explains it."""
     rgb_data = np.zeros((40, 3), dtype=np.uint8)
     rgb_data[33] = np.array([220, 10, 30], dtype=np.uint8)
     engine = ColorQueryEngine(stack_lut=None, lut_rgb=rgb_data, color_count=2)
@@ -2049,7 +2272,7 @@ def test_match_color_reports_missing_five_layer_recipe():
     assert body["matched_hex"] == "#DC0A1E"
     assert body["selected_indices"] == []
     assert body["reason"] == "recipe_unavailable"
-    assert "five-layer recipe" in body["message"]
+    assert "recipe" in body["message"]
 
 
 def test_match_color_reports_invalid_stack_recipe_as_unavailable():
@@ -2278,6 +2501,98 @@ def test_generate_swatch_uses_canonical_lut_metadata_instead_of_client_payload()
     assert captured["kwargs"]["slicer"] == "OrcaSlicer"
     assert captured["kwargs"]["nozzle_size"] == "0.2"
     assert captured["kwargs"]["device_profile_id"] == "OrcaSlicer:bbl:bambu-lab-p1s:0.2"
+
+
+def test_generate_swatch_preserves_six_layer_extended_recipe():
+    """Swatch generation passes 5C Extended six-layer recipes through intact."""
+    engine = _FakeSwatchEngine(expected_selection_length=6)
+    captured: dict[str, object] = {}
+
+    def _fake_generate_recipe_swatch(*, recipes, **kwargs):
+        captured["recipes"] = recipes
+        captured["kwargs"] = kwargs
+        return ("E:/tmp/generated_swatch.3mf", None, "ok")
+
+    with (
+        patch("api.routers.five_color._load_engine", return_value=(engine, "extended_lut")),
+        patch(
+            "core.recipe_swatch.generate_recipe_swatch",
+            side_effect=_fake_generate_recipe_swatch,
+        ),
+    ):
+        resp = client.post(
+            "/api/five-color/generate-swatch",
+            json={
+                "lut_name": "extended_lut",
+                "recipes": [
+                    {
+                        "selected_indices": [4, 1, 2, 3, 0, 4],
+                        "result_hex": "#123456",
+                        "base_color_names": ["tampered"] * 6,
+                        "base_color_hexes": ["#000000"] * 6,
+                    }
+                ],
+            },
+        )
+
+    assert resp.status_code == 200
+    swatch_item = captured["recipes"][0]
+    assert swatch_item.selected_indices == [4, 1, 2, 3, 0, 4]
+    assert swatch_item.result_hex == "#040506"
+
+
+def test_generate_swatch_rejects_six_indices_for_five_layer_lut_with_422():
+    """Five-layer swatch requests must reject six indices before query/generation."""
+    engine = _FakeSwatchEngine()
+
+    with (
+        patch("api.routers.five_color._load_engine", return_value=(engine, "legacy_five_layer")),
+        patch("core.recipe_swatch.generate_recipe_swatch") as generate_mock,
+    ):
+        resp = client.post(
+            "/api/five-color/generate-swatch",
+            json={
+                "lut_name": "legacy_five_layer",
+                "recipes": [
+                    {
+                        "selected_indices": [0, 1, 2, 3, 4, 0],
+                        "result_hex": "#123456",
+                    }
+                ],
+            },
+        )
+
+    assert resp.status_code == 422
+    body = resp.json()
+    assert body["detail"]["reason"] == "recipe_length_mismatch"
+    assert body["detail"]["expected_length"] == 5
+    assert body["detail"]["actual_length"] == 6
+    generate_mock.assert_not_called()
+
+
+def test_recipe_swatch_uses_six_layer_height_for_extended_recipe():
+    """A six-layer recipe must lift the backing above the sixth optical layer."""
+    from core.recipe_swatch import RecipeSwatchItem, generate_recipe_swatch
+
+    captured: dict[str, object] = {}
+    recipe = RecipeSwatchItem(
+        selected_indices=[4, 1, 2, 3, 0, 4],
+        result_hex="#040506",
+        base_color_names=["White", "Cyan", "Magenta", "Yellow", "Black"],
+        base_color_hexes=["#FFFFFF", "#00FFFF", "#FF00FF", "#FFFF00", "#000000"],
+    )
+
+    def _capture_export(**kwargs):
+        captured.update(kwargs)
+
+    with patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata", side_effect=_capture_export):
+        output_path, legend_img, status_msg = generate_recipe_swatch([recipe], structure_mode="Single-sided")
+
+    assert output_path is not None
+    assert legend_img is not None
+    assert status_msg == "Generated 1 recipe swatch(es)"
+    assert "Black" in captured["slot_names"]
+    assert captured["scene"].bounds[1][2] == pytest.approx(1.68)
 
 
 def test_generate_swatch_rejects_selected_indices_out_of_range():
@@ -2554,4 +2869,52 @@ def test_generate_swatch_cleans_output_when_registry_fails(
 
     assert response.status_code == 500
     assert registry.generated_path == str(swatch_path)
+    assert not swatch_path.exists()
+
+
+def test_generate_swatch_rolls_back_download_when_preview_registration_fails(
+    tmp_path: Path,
+) -> None:
+    """Swatch download should be rolled back if preview registration fails."""
+    engine = _FakeSwatchEngine()
+    registry = _SwatchRegisterBytesFailingRegistry()
+    swatch_path = tmp_path / "swatch.3mf"
+    swatch_path.write_bytes(b"3mf")
+    app = create_app()
+    app.dependency_overrides[get_file_registry] = lambda: registry
+    failing_client = TestClient(app, raise_server_exceptions=False)
+
+    def _fake_generate_recipe_swatch(*, recipes, **kwargs):
+        return (
+            str(swatch_path),
+            Image.new("RGB", (1, 1), (255, 255, 255)),
+            "ok",
+        )
+
+    with (
+        patch("api.routers.five_color._load_engine", return_value=(engine, "test_lut")),
+        patch(
+            "core.recipe_swatch.generate_recipe_swatch",
+            side_effect=_fake_generate_recipe_swatch,
+        ),
+    ):
+        response = failing_client.post(
+            "/api/five-color/generate-swatch",
+            json={
+                "lut_name": "test_lut",
+                "recipes": [
+                    {
+                        "selected_indices": [0, 1, 2, 3, 4],
+                        "result_hex": "#123456",
+                        "base_color_names": ["ignored"] * 6,
+                        "base_color_hexes": ["#000000"] * 6,
+                    }
+                ],
+            },
+        )
+
+    assert response.status_code == 500
+    assert registry.path_file_id is not None
+    assert registry.get_entry(registry.path_file_id) is None
+    assert registry.resolve(registry.path_file_id) is None
     assert not swatch_path.exists()

@@ -10,6 +10,7 @@ across randomly generated valid request bodies.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Dict, List, Tuple
 from unittest.mock import patch
 
@@ -178,15 +179,106 @@ class TestExtractorEndpoints:
         assert resp.status_code == 422
         assert "corner_points" in resp.text
 
-    def test_post_manual_fix(self, client: TestClient) -> None:
-        """POST /api/extractor/manual-fix with nonexistent LUT returns 500."""
+    def test_post_manual_fix_missing_lut_path_returns_404(self, client: TestClient) -> None:
+        """POST /api/extractor/manual-fix with nonexistent LUT is a client-visible 404."""
         payload = {
             "lut_path": "/tmp/test.npy",
             "cell_coord": [2, 3],
             "override_color": "#aabbcc",
         }
         resp = client.post("/api/extractor/manual-fix", json=payload)
-        assert resp.status_code == 500
+        assert resp.status_code == 404
+        assert "/tmp/test.npy" not in resp.text
+
+    def test_post_manual_fix_unknown_session_returns_404_without_core_call(self) -> None:
+        """Unknown manual-fix sessions must not fall back to the default LUT."""
+        test_app = create_app()
+        store = SessionStore(ttl=60)
+        test_app.dependency_overrides[get_session_store] = lambda: store
+        local_client = TestClient(test_app, raise_server_exceptions=False)
+
+        try:
+            with patch("api.routers.extractor.manual_fix_cell") as manual_fix_mock:
+                resp = local_client.post(
+                    "/api/extractor/manual-fix",
+                    json={
+                        "session_id": "missing-session",
+                        "row_index": 0,
+                        "override_color": "#aabbcc",
+                    },
+                )
+        finally:
+            test_app.dependency_overrides.pop(get_session_store, None)
+
+        assert resp.status_code == 404
+        manual_fix_mock.assert_not_called()
+
+    def test_post_manual_fix_session_without_lut_returns_409_without_core_call(self) -> None:
+        """Existing sessions without a LUT path require re-extraction."""
+        test_app = create_app()
+        store = SessionStore(ttl=60)
+        session_id = store.create("manual-empty-session")
+        test_app.dependency_overrides[get_session_store] = lambda: store
+        local_client = TestClient(test_app, raise_server_exceptions=False)
+
+        try:
+            with patch("api.routers.extractor.manual_fix_cell") as manual_fix_mock:
+                resp = local_client.post(
+                    "/api/extractor/manual-fix",
+                    json={
+                        "session_id": session_id,
+                        "row_index": 0,
+                        "override_color": "#aabbcc",
+                    },
+                )
+        finally:
+            test_app.dependency_overrides.pop(get_session_store, None)
+
+        assert resp.status_code == 409
+        manual_fix_mock.assert_not_called()
+
+    def test_post_manual_fix_session_missing_lut_file_returns_409_without_core_call(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """A session whose LUT file was cleaned up must not call core manual fix."""
+        test_app = create_app()
+        store = SessionStore(ttl=60)
+        session_id = store.create("manual-missing-lut-session")
+        missing_lut = tmp_path / "deleted-lut.json"
+        store.put(session_id, "lut_path", str(missing_lut))
+        test_app.dependency_overrides[get_session_store] = lambda: store
+        local_client = TestClient(test_app, raise_server_exceptions=False)
+
+        try:
+            with patch("api.routers.extractor.manual_fix_cell") as manual_fix_mock:
+                resp = local_client.post(
+                    "/api/extractor/manual-fix",
+                    json={
+                        "session_id": session_id,
+                        "row_index": 0,
+                        "override_color": "#aabbcc",
+                    },
+                )
+        finally:
+            test_app.dependency_overrides.pop(get_session_store, None)
+
+        assert resp.status_code == 409
+        assert str(missing_lut) not in resp.text
+        manual_fix_mock.assert_not_called()
+
+    def test_post_manual_fix_requires_session_or_lut_path(self, client: TestClient) -> None:
+        """Manual fix must identify the edited LUT via session_id or lut_path."""
+        resp = client.post(
+            "/api/extractor/manual-fix",
+            json={
+                "row_index": 0,
+                "override_color": "#aabbcc",
+            },
+        )
+
+        assert resp.status_code == 422
+        assert "session_id or lut_path" in resp.text
 
     def test_post_manual_fix_requires_cell_locator(self, client: TestClient) -> None:
         """POST /api/extractor/manual-fix requires row_index or cell_coord."""
@@ -200,11 +292,17 @@ class TestExtractorEndpoints:
         assert resp.status_code == 422
         assert "row_index or cell_coord" in resp.text
 
-    def test_post_manual_fix_accepts_row_index_only(self, client: TestClient) -> None:
+    def test_post_manual_fix_accepts_row_index_only(
+        self,
+        client: TestClient,
+        tmp_path: Path,
+    ) -> None:
         """POST /api/extractor/manual-fix must not require cell_coord for logging."""
         preview = np.zeros((2, 2, 3), dtype=np.uint8)
+        lut_path = tmp_path / "test.json"
+        lut_path.write_text("{}", encoding="utf-8")
         payload = {
-            "lut_path": "/tmp/test.json",
+            "lut_path": str(lut_path),
             "row_index": 5,
             "override_color": "#aabbcc",
         }
@@ -223,12 +321,148 @@ class TestExtractorEndpoints:
         assert body["status"] == "ok"
         assert body["lut_preview_url"].startswith("/api/files/")
 
-    def test_resolve_cell_invalid_card_index_returns_422(self) -> None:
+    def test_post_manual_fix_accepts_session_lut_path(self, tmp_path: Path) -> None:
+        """The frontend session-based manual-fix contract still succeeds."""
+        test_app = create_app()
+        store = SessionStore(ttl=60)
+        session_id = store.create("manual-valid-session")
+        lut_path = tmp_path / "session-lut.json"
+        lut_path.write_text("{}", encoding="utf-8")
+        store.put(session_id, "lut_path", str(lut_path))
+        test_app.dependency_overrides[get_session_store] = lambda: store
+        local_client = TestClient(test_app, raise_server_exceptions=False)
+        preview = np.zeros((2, 2, 3), dtype=np.uint8)
+
+        try:
+            with patch(
+                "api.routers.extractor.LUTManager.load_lut_with_metadata",
+                return_value=(np.zeros((32, 3), dtype=np.uint8), None, None),
+            ), patch(
+                "api.routers.extractor.manual_fix_cell",
+                return_value=(preview, "[OK] Cell updated"),
+            ):
+                resp = local_client.post(
+                    "/api/extractor/manual-fix",
+                    json={
+                        "session_id": session_id,
+                        "row_index": 5,
+                        "override_color": "#aabbcc",
+                    },
+                )
+        finally:
+            test_app.dependency_overrides.pop(get_session_store, None)
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "ok"
+        assert body["lut_preview_url"].startswith("/api/files/")
+
+    @pytest.mark.parametrize(
+        "lut_path_value",
+        [None, "", "   ", 123],
+    )
+    def test_resolve_cell_session_without_lut_returns_409(
+        self,
+        lut_path_value: Any,
+    ) -> None:
+        """Resolve-cell requires an active session LUT path before layout parsing."""
+        test_app = create_app()
+        store = SessionStore(ttl=60)
+        session_id = store.create("resolve-missing-lut-session")
+        if lut_path_value is not None:
+            store.put(session_id, "lut_path", lut_path_value)
+        test_app.dependency_overrides[get_session_store] = lambda: store
+        local_client = TestClient(test_app, raise_server_exceptions=False)
+
+        try:
+            with patch("api.routers.extractor.LUTManager.load_lut_with_metadata") as load_mock:
+                resp = local_client.post(
+                    "/api/extractor/resolve-cell",
+                    json={
+                        "session_id": session_id,
+                        "x": 0.5,
+                        "y": 0.5,
+                        "card_index": 0,
+                    },
+                )
+        finally:
+            test_app.dependency_overrides.pop(get_session_store, None)
+
+        assert resp.status_code == 409
+        load_mock.assert_not_called()
+
+    def test_resolve_cell_session_missing_lut_file_returns_409_without_lut_load(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """A cleaned-up LUT file is stale session state, not an invalid click."""
+        test_app = create_app()
+        store = SessionStore(ttl=60)
+        session_id = store.create("resolve-missing-lut-file-session")
+        missing_lut = tmp_path / "deleted-lut.json"
+        store.put(session_id, "lut_path", str(missing_lut))
+        test_app.dependency_overrides[get_session_store] = lambda: store
+        local_client = TestClient(test_app, raise_server_exceptions=False)
+
+        try:
+            with patch("api.routers.extractor.LUTManager.load_lut_with_metadata") as load_mock:
+                resp = local_client.post(
+                    "/api/extractor/resolve-cell",
+                    json={
+                        "session_id": session_id,
+                        "x": 0.5,
+                        "y": 0.5,
+                        "card_index": 0,
+                    },
+                )
+        finally:
+            test_app.dependency_overrides.pop(get_session_store, None)
+
+        assert resp.status_code == 409
+        assert str(missing_lut) not in resp.text
+        assert "Clicked cell is outside" not in resp.text
+        load_mock.assert_not_called()
+
+    def test_resolve_cell_outside_lut_area_still_returns_404(self, tmp_path: Path) -> None:
+        """A real valid-LUT blank-area click keeps the existing outside-area error."""
+        test_app = create_app()
+        store = SessionStore(ttl=60)
+        session_id = store.create("resolve-outside-lut-session")
+        lut_path = tmp_path / "valid-lut.json"
+        lut_path.write_text("{}", encoding="utf-8")
+        store.put(session_id, "lut_path", str(lut_path))
+        store.put(session_id, "color_mode", "BW")
+        test_app.dependency_overrides[get_session_store] = lambda: store
+        local_client = TestClient(test_app, raise_server_exceptions=False)
+
+        try:
+            with patch(
+                "api.routers.extractor.LUTManager.load_lut_with_metadata",
+                return_value=(np.zeros((32, 3), dtype=np.uint8), None, None),
+            ):
+                resp = local_client.post(
+                    "/api/extractor/resolve-cell",
+                    json={
+                        "session_id": session_id,
+                        "x": 0.99,
+                        "y": 0.99,
+                        "card_index": 0,
+                    },
+                )
+        finally:
+            test_app.dependency_overrides.pop(get_session_store, None)
+
+        assert resp.status_code == 404
+        assert "Clicked cell is outside the valid LUT area" in resp.text
+
+    def test_resolve_cell_invalid_card_index_returns_422(self, tmp_path: Path) -> None:
         """POST /api/extractor/resolve-cell maps invalid card_index to 422."""
         test_app = create_app()
         store = SessionStore(ttl=60)
         session_id = store.create()
-        store.put(session_id, "lut_path", "/fake/lut.json")
+        lut_path = tmp_path / "valid-lut.json"
+        lut_path.write_text("{}", encoding="utf-8")
+        store.put(session_id, "lut_path", str(lut_path))
         store.put(session_id, "color_mode", "8-Color Max")
         test_app.dependency_overrides[get_session_store] = lambda: store
         local_client = TestClient(test_app, raise_server_exceptions=False)

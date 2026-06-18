@@ -43,6 +43,26 @@ def _remove_generated_path(path: str | None) -> None:
         pass
 
 
+def _rollback_stateless_export_registration(
+    registry: FileRegistry,
+    *,
+    file_ids: list[str | None],
+    generated_paths: list[str | None],
+) -> None:
+    """Best-effort cleanup for failed multi-file stateless exports.
+    多文件无状态导出失败时，尽力回滚已注册和未注册的生成文件。
+    """
+    for file_id in file_ids:
+        if not file_id:
+            continue
+        try:
+            registry.cleanup_file(file_id)
+        except (OSError, RuntimeError, ValueError):
+            pass
+    for path in generated_paths:
+        _remove_generated_path(path)
+
+
 def _handle_core_error(e: Exception, context: str) -> None:
     """将 core 模块异常转换为 HTTP 500 错误。"""
     log.error(
@@ -160,14 +180,14 @@ def calibration_generate(
     preview_url = None
     preview_id = None
     layer_urls = []
-    download_registered = False
+    registered_file_ids: list[str | None] = []
     try:
         download_id = registry.register_path(
             sid,
             path,
             ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
         )
-        download_registered = True
+        registered_file_ids.append(download_id)
 
         if isinstance(preview_imgs, list) and len(preview_imgs) > 0:
             main_preview = preview_imgs[0]
@@ -177,6 +197,7 @@ def calibration_generate(
                 "preview.png",
                 ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
             )
+            registered_file_ids.append(preview_id)
             preview_url = f"/api/files/{preview_id}"
 
             for idx, layer_img in enumerate(preview_imgs[1:]):
@@ -186,6 +207,7 @@ def calibration_generate(
                     f"layer_{idx+1}.png",
                     ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
                 )
+                registered_file_ids.append(layer_id)
                 layer_urls.append(f"/api/files/{layer_id}")
         elif preview_imgs is not None:
             # Fallback for single image
@@ -195,10 +217,15 @@ def calibration_generate(
                 "preview.png",
                 ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
             )
+            registered_file_ids.append(preview_id)
             preview_url = f"/api/files/{preview_id}"
-    finally:
-        if not download_registered:
-            _remove_generated_path(path)
+    except (OSError, RuntimeError, TypeError, ValueError):
+        _rollback_stateless_export_registration(
+            registry,
+            file_ids=registered_file_ids,
+            generated_paths=[path],
+        )
+        raise
 
     backing_color_for_log = (
         "White"
@@ -263,32 +290,34 @@ def calibration_generate_single_stage_kit(
         _handle_core_error(e, "Single-stage kit generation")
 
     sid = _new_stateless_export_sid("single-stage-kit")
-    kit_registered = False
-    manifest_registered = False
+    registered_file_ids: list[str | None] = []
     try:
         kit_id = registry.register_path(
             sid,
             result.zip_path,
             ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
         )
-        kit_registered = True
+        registered_file_ids.append(kit_id)
         manifest_id = registry.register_path(
             sid,
             result.manifest_path,
             ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
         )
-        manifest_registered = True
+        registered_file_ids.append(manifest_id)
         preview_id = registry.register_bytes(
             sid,
             pil_to_png_bytes(result.preview_image),
             "single_stage_preview.png",
             ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
         )
-    finally:
-        if not kit_registered:
-            _remove_generated_path(result.zip_path)
-        if not manifest_registered:
-            _remove_generated_path(result.manifest_path)
+        registered_file_ids.append(preview_id)
+    except (OSError, RuntimeError, TypeError, ValueError):
+        _rollback_stateless_export_registration(
+            registry,
+            file_ids=registered_file_ids,
+            generated_paths=[result.zip_path, result.manifest_path],
+        )
+        raise
     log.info(
         "Single-stage calibration kit generated",
         extra={

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import os
 import sys
 import uuid
@@ -94,6 +95,17 @@ router = APIRouter()
 log = get_logger(__name__)
 _DEFAULT_GENERATE_SEGMENTED_GLB = generate_segmented_glb
 _SELECT_ALL_COLOR_REGION_PREFIX = "__select_all_color__:"
+_PREVIEW_CACHE_TRANSACTION_ENTER_ERRORS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    EOFError,
+)
+_PREVIEW_CACHE_TRANSACTION_UNAVAILABLE_DETAIL = (
+    "Preview cache is unavailable. "
+    "Re-run preview before changing replacement colors."
+)
 
 
 def _require_preview_cache_fields(
@@ -119,13 +131,22 @@ def _require_preview_cache_fields(
     if not is_preview_cache_artifact_ref(cache):
         return cache
     loaded = get_preview_cache_metadata(cache)
-    loaded.update(
-        hydrate_preview_cache(
-            cache,
-            fields=fields,
-            mmap_mode="r",
+    try:
+        loaded.update(
+            hydrate_preview_cache(
+                cache,
+                fields=fields,
+                mmap_mode="r",
+            )
         )
-    )
+    except (OSError, ValueError, TypeError, KeyError, EOFError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Preview cache is unavailable. "
+                "Re-run preview before using replacement tools."
+            ),
+        ) from exc
     return loaded
 
 
@@ -137,6 +158,7 @@ def _dirty_array_fields(cache: dict, *field_names: str) -> set[str]:
     }
 
 
+@contextmanager
 def _preview_cache_transaction(
     session_id: str,
     store: SessionStore,
@@ -155,7 +177,22 @@ def _preview_cache_transaction(
             status_code=409,
             detail="Invalid preview cache. Call POST /api/convert/preview again.",
         )
-    return preview_cache_transaction(session_id, store, session_data, fields=fields)
+    inner = preview_cache_transaction(session_id, store, session_data, fields=fields)
+    try:
+        cache_view = inner.__enter__()
+    except _PREVIEW_CACHE_TRANSACTION_ENTER_ERRORS as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=_PREVIEW_CACHE_TRANSACTION_UNAVAILABLE_DETAIL,
+        ) from exc
+
+    try:
+        yield cache_view
+    except BaseException:
+        if not inner.__exit__(*sys.exc_info()):
+            raise
+    else:
+        inner.__exit__(None, None, None)
 
 
 def _recalc_matched_rgb_for_padded_pixels(

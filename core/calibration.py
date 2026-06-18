@@ -1681,7 +1681,7 @@ def _generate_5color_base_page(
         2468,
         page="Page 1",
     )
-    layout = resolve_lut_layout("5-Color Extended", 1024)
+    layout = localize_page_layout(page_layout, item_count=1024)
     total_dim = page_layout.physical_rows
     block_w = float(block_size_mm)
     gap = float(gap_mm)

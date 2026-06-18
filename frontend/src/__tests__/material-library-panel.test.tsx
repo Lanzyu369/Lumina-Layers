@@ -76,6 +76,10 @@ describe("MaterialLibraryPanel", () => {
               black_detected_orientation: "rotate_90_cw",
             },
           ],
+          sync_material_id: "mat_official",
+          sync_revision_id: "rev_official",
+          sync_channel: "official",
+          sync_official: true,
         },
       ],
     });
@@ -96,6 +100,7 @@ describe("MaterialLibraryPanel", () => {
     expect(screen.queryByText(/下载 material\.json|download material\.json/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/下载 stage_A_parameters\.json|download stage_a_parameters\.json/i)).not.toBeInTheDocument();
     expect(screen.getAllByTestId("material-library-item")).toHaveLength(1);
+    expect(screen.getByTestId("material-library-official-badge")).toBeInTheDocument();
     expect(screen.getByText("3")).toBeInTheDocument();
   });
 
@@ -643,6 +648,41 @@ describe("MaterialLibraryPanel", () => {
     expect(screen.getByTestId("material-library-success")).toBeInTheDocument();
   });
 
+  it("does not expose cloud upload controls in the distribution UI", async () => {
+    vi.mocked(listGradientCardMaterials).mockResolvedValue({
+      status: "ok",
+      message: "Loaded 1 saved materials",
+      materials: [
+        {
+          material_name: "PLA Basic",
+          directory_name: "BrandA/pla-basic",
+          brand: "BrandA",
+          created_at: "2026-04-16T10:00:00Z",
+          updated_at: "2026-04-16T11:00:00Z",
+          archive_path: "materials/BrandA/pla-basic/material.json",
+          stage_a_params_path: "materials/BrandA/pla-basic/stage_A_parameters.json",
+          material_file_url: "/api/files/material-json",
+          stage_a_params_url: "/api/files/stage-a-json",
+          estimated_rgb: [100, 120, 140],
+          layer_height_mm: 0.04,
+          mean_delta_e: 1.23,
+          verification_count: 3,
+        },
+      ],
+    });
+
+    render(<MaterialLibraryPanel />);
+
+    await screen.findByTestId("material-library-brand-group-toggle");
+    expandAllMaterialLibraryGroups();
+
+    await waitFor(() => {
+      expect(screen.getByText("PLA Basic")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByRole("button", { name: /上传到云端|upload to cloud/i })).not.toBeInTheDocument();
+  });
+
   it("imports multiple ZIP archives and selects newly imported materials", async () => {
     vi.mocked(listGradientCardMaterials)
       .mockResolvedValueOnce({
@@ -715,4 +755,5 @@ describe("MaterialLibraryPanel", () => {
     expect(screen.getByTestId("material-library-success")).toBeInTheDocument();
     expect((screen.getByTestId("material-library-select-pla-basic") as HTMLInputElement).checked).toBe(true);
   });
+
 });

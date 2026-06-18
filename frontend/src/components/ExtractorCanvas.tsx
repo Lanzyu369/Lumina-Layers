@@ -229,6 +229,14 @@ function getResolvedCellOverlayStyle(
   };
 }
 
+const LUT_PREVIEW_OUTSIDE_AREA_ERROR = "Clicked cell is outside the valid LUT area";
+
+function getResolveCellErrorMessage(error: unknown, fallback: string): string | null {
+  const message = error instanceof Error ? error.message.trim() : "";
+  if (!message) return fallback;
+  return message === LUT_PREVIEW_OUTSIDE_AREA_ERROR ? null : message;
+}
+
 // ========== Component ==========
 
 export default function ExtractorCanvas() {
@@ -250,6 +258,7 @@ export default function ExtractorCanvas() {
   const activeCornerIndex = useExtractorStore((s) => s.active_corner_index);
 
   const submitManualFix = useExtractorStore((s) => s.submitManualFix);
+  const setManualFixError = useExtractorStore((s) => s.setManualFixError);
   const manualFixLoading = useExtractorStore((s) => s.manualFixLoading);
   const rotateImage = useExtractorStore((s) => s.rotateImage);
 
@@ -351,16 +360,26 @@ export default function ExtractorCanvas() {
       if (relX < 0 || relY < 0 || relX >= rendered.width || relY >= rendered.height) return;
       const x = relX / rendered.width;
       const y = relY / rendered.height;
+      setManualFixError(null);
       void resolveLutPreviewCell(session_id, x, y)
         .then((cell) => {
           setSelectedCell(cell);
           setRenderedRect(rendered);
           setInitialFixColor(cell.hex || UI_COLOR_TOKENS.extractorFixColorDefault);
         })
-        .catch(() => setSelectedCell(null));
+        .catch((err) => {
+          setSelectedCell(null);
+          const message = getResolveCellErrorMessage(
+            err,
+            t("ext_manual_fix_resolve_failed"),
+          );
+          if (message) {
+            setManualFixError(message);
+          }
+        });
       // 留白区域点击被忽略
     },
-    [session_id]
+    [session_id, setManualFixError, t]
   );
 
   const handleFixSubmit = useCallback(

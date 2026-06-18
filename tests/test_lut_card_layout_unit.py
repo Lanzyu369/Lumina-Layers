@@ -36,12 +36,40 @@ def test_resolve_standard_single_page_layouts() -> None:
         assert row_index_for_cell(layout, cell.card_index, cell.data_row, cell.data_col) == row_index
 
 
+def test_resolve_1024_extended_page_1_layout_uses_wide_padding() -> None:
+    layout = resolve_lut_layout("5-Color Extended", 1024)
+
+    assert len(layout.pages) == 1
+    page = layout.pages[0]
+    assert page.item_count == 1024
+    assert page.data_rows == 32
+    assert page.data_cols == 32
+    assert page.padding == 4
+    assert page.physical_rows == 40
+    assert page.physical_cols == 40
+
+    tail = cell_for_row_index(layout, 1023)
+    assert (tail.data_row, tail.data_col) == (31, 31)
+    assert (tail.physical_row, tail.physical_col) == (35, 35)
+
+
 def test_resolve_2468_extended_layout_preserves_two_page_order() -> None:
     layout = resolve_lut_layout("5-Color Extended", 2468)
 
-    assert [(p.start_index, p.item_count, p.data_rows, p.data_cols) for p in layout.pages] == [
-        (0, 1024, 32, 32),
-        (1024, 1444, 38, 38),
+    assert [
+        (
+            p.start_index,
+            p.item_count,
+            p.data_rows,
+            p.data_cols,
+            p.padding,
+            p.physical_rows,
+            p.physical_cols,
+        )
+        for p in layout.pages
+    ] == [
+        (0, 1024, 32, 32, 4, 40, 40),
+        (1024, 1444, 38, 38, 1, 40, 40),
     ]
 
     page_1_tail = cell_for_row_index(layout, 1023)
@@ -49,6 +77,7 @@ def test_resolve_2468_extended_layout_preserves_two_page_order() -> None:
 
     assert page_1_tail.page_index == 0
     assert (page_1_tail.data_row, page_1_tail.data_col) == (31, 31)
+    assert (page_1_tail.physical_row, page_1_tail.physical_col) == (35, 35)
     assert page_2_head.page_index == 1
     assert (page_2_head.data_row, page_2_head.data_col) == (0, 0)
     assert (page_2_head.physical_row, page_2_head.physical_col) == (1, 1)

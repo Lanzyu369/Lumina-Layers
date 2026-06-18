@@ -10,6 +10,7 @@ import {
   type ColorcheckerDisplaySummary,
   type ExtractorRotationDirection,
 } from "../api/extractor";
+import { downloadResourceBlob } from "../api/client";
 import { uploadImagePreview } from "../api/system";
 import type {
   GradientCardMaterialSummary,
@@ -688,8 +689,7 @@ export const useSingleStageStore = create<
           "White gradient card rotation did not return a preview URL",
         );
       }
-      const res = await fetch(previewUrl);
-      const blob = await res.blob();
+      const blob = await downloadResourceBlob(previewUrl);
       const baseName = whiteImageFile.name.replace(/\.[^.]+$/, "");
       const rotatedFile = new File([blob], `${baseName}.png`, {
         type: "image/png",
@@ -769,8 +769,7 @@ export const useSingleStageStore = create<
           "Black gradient card rotation did not return a preview URL",
         );
       }
-      const res = await fetch(previewUrl);
-      const blob = await res.blob();
+      const blob = await downloadResourceBlob(previewUrl);
       const baseName = blackImageFile.name.replace(/\.[^.]+$/, "");
       const rotatedFile = new File([blob], `${baseName}.png`, {
         type: "image/png",

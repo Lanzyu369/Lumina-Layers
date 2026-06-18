@@ -11,6 +11,7 @@ background tasks lifecycle.
 """
 
 import asyncio
+import json
 import os
 import time
 import uuid
@@ -24,6 +25,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.staticfiles import StaticFiles
 
@@ -69,6 +71,10 @@ from api.dependencies import (
     worker_pool,
 )
 from api.file_bridge import file_to_response
+from api.material_sync_scheduler import (
+    cancel_material_sync_auto_refresh_tasks,
+    start_material_sync_auto_refresh_tasks,
+)
 from api.routers import (
     calibration_router,
     converter_router,
@@ -77,6 +83,8 @@ from api.routers import (
     five_color_router,
     health_router,
     lut_router,
+    material_registry_router,
+    material_sync_router,
     session_router,
     slicer_router,
     single_stage_router,
@@ -87,7 +95,6 @@ from api.routers import (
 log = get_logger(__name__)
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-_REQUEST_COMPLETED_SLOW_MS = 1000.0
 _VALIDATION_LOG_MESSAGE_LIMIT = 1200
 _CLIENT_LOG_FIELD_LIMIT = 256
 _CLIENT_LOG_DETAILS_DEPTH = 4
@@ -109,6 +116,33 @@ def _truncate_log_message(message: str, limit: int) -> str:
     if len(message) <= limit:
         return message
     return f"{message[:limit]}...<truncated>"
+
+
+def _format_error_detail(detail: Any) -> str:
+    """Return a concise human-readable detail string for logs and UI.
+    为日志和前端错误提示生成简洁可读的错误详情。
+    """
+
+    encoded_detail = jsonable_encoder(detail)
+    if isinstance(encoded_detail, str):
+        return encoded_detail
+    if isinstance(encoded_detail, list):
+        validation_parts = []
+        for item in encoded_detail:
+            if not isinstance(item, dict):
+                continue
+            message = item.get("msg")
+            location = item.get("loc")
+            if not message:
+                continue
+            if isinstance(location, list) and location:
+                location_text = ".".join(str(part) for part in location)
+                validation_parts.append(f"{location_text}: {message}")
+            else:
+                validation_parts.append(str(message))
+        if validation_parts:
+            return "; ".join(validation_parts)
+    return json.dumps(encoded_detail, ensure_ascii=False, separators=(",", ":"))
 
 
 def _sanitize_client_log_value(value: Any, *, depth: int = 0) -> Any:
@@ -152,6 +186,15 @@ def _coerce_client_log_duration(value: Any) -> float | None:
 
 def _env_enabled(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _material_registry_service_enabled() -> bool:
+    """Return whether this process should expose Registry write-service routes.
+    判断当前进程是否暴露耗材 Registry 写服务路由。
+    """
+    return _env_enabled("LUMINA_ENABLE_MATERIAL_REGISTRY_SERVICE") or _env_enabled(
+        "LUMINA_MATERIAL_REGISTRY_SERVICE_MODE"
+    )
 
 
 def _configure_frontend_dist(app: FastAPI) -> None:
@@ -262,6 +305,29 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             },
         )
 
+    try:
+        from api.material_seed import install_material_seed_if_needed
+
+        seed_result = install_material_seed_if_needed()
+        if seed_result is not None:
+            log.info(
+                "Material seed installed",
+                extra={
+                    "event": "material_seed_install_done",
+                    "installed_count": seed_result["installed_count"],
+                    "seed_source": seed_result["seed_source"],
+                },
+            )
+    except Exception as exc:  # noqa: BLE001 — seed bootstrap must not block startup.
+        log.warning(
+            "Material seed install failed",
+            extra={
+                "event": "material_seed_install_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+
     async def _cleanup_loop() -> None:
         """Periodically clean up expired sessions and their registered files.
         定期清理过期会话及其注册文件。
@@ -292,11 +358,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 )
 
     cleanup_task = asyncio.create_task(_cleanup_loop())
+    material_sync_refresh_tasks = start_material_sync_auto_refresh_tasks()
 
     yield
 
     # --- Shutdown ---
     cleanup_task.cancel()
+    await cancel_material_sync_auto_refresh_tasks(material_sync_refresh_tasks)
     worker_pool.shutdown(wait=True)
     log.info("Worker pool shutdown complete", extra={"event": "worker_pool_shutdown"})
 
@@ -332,42 +400,70 @@ def create_app() -> FastAPI:
         except Exception as exc:
             duration_ms = round((time.perf_counter() - started) * 1000, 3)
             log.exception(
-                "Request failed",
+                "Unhandled API exception",
                 extra={
-                    "event": "request_failed",
+                    "event": "api_unhandled_exception",
                     "request_id": request_id,
                     "path": request.url.path,
                     "method": request.method,
                     "status_code": 500,
                     "duration_ms": duration_ms,
                     "error_type": type(exc).__name__,
-                    "error_message": str(exc),
+                    "error_message": _truncate_log_message(
+                        str(exc),
+                        _VALIDATION_LOG_MESSAGE_LIMIT,
+                    ),
                 },
             )
             reset_request_id(request_token)
             reset_session_id(session_token)
-            raise
+            return JSONResponse(
+                status_code=500,
+                content={"detail": "Internal server error"},
+                headers={"X-Request-ID": request_id},
+            )
 
         if isinstance(response, Response):
             response.headers["X-Request-ID"] = request_id
-        duration_ms = round((time.perf_counter() - started) * 1000, 3)
-        request_completed_extra = {
-                "event": "request_completed",
-                "request_id": request_id,
-                "path": request.url.path,
-                "method": request.method,
-                "status_code": response.status_code,
-                "duration_ms": duration_ms,
-        }
-        if response.status_code >= 500:
-            log.warning("Request completed", extra=request_completed_extra)
-        elif response.status_code >= 400:
-            log.info("Request completed", extra=request_completed_extra)
-        else:
-            log.debug("Request completed", extra=request_completed_extra)
         reset_request_id(request_token)
         reset_session_id(session_token)
         return response
+
+    @app.exception_handler(StarletteHTTPException)
+    async def _log_http_exception(
+        request: Request, exc: StarletteHTTPException
+    ) -> JSONResponse:
+        """Log handled HTTP errors with actionable fields and stable responses.
+        使用可定位字段记录 HTTP 错误，同时保持稳定响应体。
+        """
+
+        request_id = getattr(
+            request.state,
+            "request_id",
+            request.headers.get("X-Request-ID"),
+        )
+        error_message = _truncate_log_message(
+            _format_error_detail(exc.detail),
+            _VALIDATION_LOG_MESSAGE_LIMIT,
+        )
+        log_method = log.error if exc.status_code >= 500 else log.warning
+        log_method(
+            "API HTTP error",
+            extra=_compact_log_extra({
+                "event": "api_http_error",
+                "request_id": request_id,
+                "path": request.url.path,
+                "method": request.method,
+                "status_code": exc.status_code,
+                "error_type": type(exc).__name__,
+                "error_message": error_message,
+            }),
+        )
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": jsonable_encoder(exc.detail)},
+            headers=exc.headers,
+        )
 
     @app.exception_handler(RequestValidationError)
     async def _log_request_validation_error(
@@ -388,18 +484,22 @@ def create_app() -> FastAPI:
         # jsonable_encoder 统一序列化，否则 handler 本身会抛 TypeError
         # 导致前端拿不到 422，错误文案映射随之失效。)
         encoded_errors = jsonable_encoder(exc.errors())
-        request_id = getattr(request.state, "request_id", request.headers.get("X-Request-ID"))
+        request_id = getattr(
+            request.state,
+            "request_id",
+            request.headers.get("X-Request-ID"),
+        )
         log.warning(
-            "Request validation failed",
+            "API validation failed",
             extra=_compact_log_extra({
-                "event": "request_validation_failed",
+                "event": "api_validation_failed",
                 "request_id": request_id,
                 "path": request.url.path,
                 "method": request.method,
                 "status_code": 422,
                 "error_type": "RequestValidationError",
                 "error_message": _truncate_log_message(
-                    str(encoded_errors),
+                    _format_error_detail(encoded_errors),
                     _VALIDATION_LOG_MESSAGE_LIMIT,
                 ),
                 "validation_error_count": len(encoded_errors),
@@ -417,6 +517,9 @@ def create_app() -> FastAPI:
     app.include_router(five_color_router)
     app.include_router(health_router)
     app.include_router(lut_router)
+    if _material_registry_service_enabled():
+        app.include_router(material_registry_router)
+    app.include_router(material_sync_router)
     app.include_router(session_router)
     app.include_router(slicer_router)
     app.include_router(single_stage_router)

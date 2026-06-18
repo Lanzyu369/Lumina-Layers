@@ -33,8 +33,10 @@ The deployment script bind-mounts these paths into the container:
 | `E:\Lumina-Layers\lumina-runtime\user_settings.json` | `/app/user_settings.json` | backend settings |
 
 On first run, `lut-preset/` is seeded from the repository if the runtime copy is
-empty. `materials/` follows the same rule and then stays on the runtime volume
-so Docker container replacement does not discard local material data.
+empty. `materials/` is only a writable runtime volume. To preload official
+materials, pass a reviewed seed artifact; the application imports it only when
+the runtime material library is empty, then keeps all later user changes on the
+runtime volume.
 
 ## Build And Start
 
@@ -42,6 +44,21 @@ From the repository root:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\docker_local_deploy.ps1
+```
+
+Optional official seed artifact:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\docker_local_deploy.ps1 `
+  -MaterialsSeedPath "E:\Work\PythonProject\Lumina-materials\seed\lumina-materials-seed.zip"
+```
+
+Or build/download from a seed URL:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\docker_local_deploy.ps1 `
+  -MaterialsSeedUrl "https://materials.example/releases/lumina-materials-seed.zip" `
+  -MaterialsSeedSha256 "<sha256>"
 ```
 
 For LAN or tunnel testing, pass the host name that testers will use:
@@ -62,7 +79,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\docker_local_deploy.
 ```
 
 Material and LUT data are served from the main app's local routes and the
-bind-mounted runtime directories.
+bind-mounted runtime directories. Registry upload and approval routes are not
+enabled in this distribution deployment.
 
 ## GLB Preview Kernel
 

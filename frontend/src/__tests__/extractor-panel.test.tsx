@@ -210,6 +210,17 @@ describe("Feature: extractor-calibration-tab, Property 6: 提取按钮禁用状�
 // ========== Unit Tests ==========
 
 describe("ExtractorPanel 单元测试", () => {
+  it("renders manual fix error messages", async () => {
+    const ExtractorPanel = (await import("../components/ExtractorPanel")).default;
+    const message = "Manual correction LUT file is missing. Re-run extraction before editing the LUT.";
+
+    useExtractorStore.setState({ manualFixError: message });
+
+    render(<ExtractorPanel />);
+
+    expect(screen.getByTestId("manual-fix-error")).toHaveTextContent(message);
+  });
+
   it("renders all color mode options in the dropdown", async () => {
     const ExtractorPanel = (await import("../components/ExtractorPanel")).default;
 

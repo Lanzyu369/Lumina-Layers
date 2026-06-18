@@ -562,6 +562,7 @@ export function ColorcheckerConfirmDialogInner({
   const [patchOrientation, setPatchOrientation] = useState<PatchOrientation>("normal");
   const [overlayPreviewUrl, setOverlayPreviewUrl] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [storageNoticeMessage, setStorageNoticeMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [autoDetecting, setAutoDetecting] = useState(false);
   const [warping, setWarping] = useState(false);
@@ -932,6 +933,7 @@ export function ColorcheckerConfirmDialogInner({
     if (nextKey === selectedReferenceKey) return;
     setSelectedReferenceKey(nextKey);
     saveSelectedColorcheckerReferenceKey(nextKey);
+    setStorageNoticeMessage(null);
     invalidateReferenceState();
   }, [invalidateReferenceState, selectedReferenceKey]);
 
@@ -939,6 +941,7 @@ export function ColorcheckerConfirmDialogInner({
     setReferenceUploading(true);
     setErrorMessage(null);
     setStatusMessage(null);
+    setStorageNoticeMessage(null);
     try {
       const parsed = await readColorcheckerReferenceWorkbook(file);
       const normalized = await colorcheckerNormalizeReference({
@@ -949,17 +952,22 @@ export function ColorcheckerConfirmDialogInner({
         normalized,
         file.name.replace(/\.[^.]+$/, ""),
       );
-      setCustomReferences(upsertStoredColorcheckerReference(stored));
+      const storedResult = upsertStoredColorcheckerReference(stored);
+      setCustomReferences(storedResult.references);
       setSelectedReferenceKey(stored.key);
-      saveSelectedColorcheckerReferenceKey(stored.key);
+      const selectedPersisted = saveSelectedColorcheckerReferenceKey(stored.key);
       invalidateReferenceState();
-      setStatusMessage(
-        normalized.warnings.length
-          ? tRuntime("ext_cc_reference_upload_ready_with_warnings", {
-              count: normalized.warnings.length,
-            })
-          : t("ext_cc_reference_upload_ready"),
-      );
+      if (!storedResult.persisted || !selectedPersisted) {
+        setStorageNoticeMessage(t("ext_cc_reference_upload_ready_session_only"));
+      } else {
+        setStatusMessage(
+          normalized.warnings.length
+            ? tRuntime("ext_cc_reference_upload_ready_with_warnings", {
+                count: normalized.warnings.length,
+              })
+            : t("ext_cc_reference_upload_ready"),
+        );
+      }
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : t("ext_cc_reference_upload_failed"));
     } finally {
@@ -977,10 +985,12 @@ export function ColorcheckerConfirmDialogInner({
 
   const handleDeleteSelectedReference = useCallback(() => {
     if (!selectedCustomReference) return;
-    setCustomReferences(removeStoredColorcheckerReference(selectedCustomReference.key));
+    const storedResult = removeStoredColorcheckerReference(selectedCustomReference.key);
+    setCustomReferences(storedResult.references);
     const fallback = `server:${defaultReferenceId || DEFAULT_REFERENCE_ID}`;
     setSelectedReferenceKey(fallback);
     saveSelectedColorcheckerReferenceKey(fallback);
+    setStorageNoticeMessage(null);
     invalidateReferenceState();
   }, [defaultReferenceId, invalidateReferenceState, selectedCustomReference]);
 
@@ -1376,6 +1386,7 @@ export function ColorcheckerConfirmDialogInner({
 
             <div className="flex min-w-0 flex-col gap-3">
               {errorMessage && <StatusBanner tone="error">{errorMessage}</StatusBanner>}
+              {storageNoticeMessage && <StatusBanner tone="info">{storageNoticeMessage}</StatusBanner>}
               {statusMessage && <StatusBanner tone="info">{statusMessage}</StatusBanner>}
               <div className="rounded-[24px] border border-slate-200/80 p-4 dark:border-slate-700/80" style={{ background: "var(--surface-panel)" }}>
                 <div className="flex items-start justify-between gap-3">

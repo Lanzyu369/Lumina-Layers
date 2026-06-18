@@ -56,6 +56,7 @@ import {
   uploadLut as apiUploadLut,
   getGlbStatus as apiGetGlbStatus,
 } from "../../api/converter";
+import { downloadResourceBlob } from "../../api/client";
 import { closeSession as apiCloseSession } from "../../api/session";
 import type { LutColorEntry, LutInfo } from "../../api/types";
 import {
@@ -237,6 +238,54 @@ export interface PendingReplacement {
 
 export function clampValue(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
+}
+
+const RELIEF_MIN_EXTRA_HEIGHT_MM = 0.08;
+const RELIEF_MAX_EXTRA_HEIGHT_MM = 15.0;
+const MATERIAL_ARCHIVE_RELIEF_LAYER_HEIGHT_MM = 0.08;
+
+type MaterialArchiveReliefMinimumState = {
+  source_version: SourceVersion;
+  materialLayerCount: number;
+  spacer_thick: number;
+};
+
+export function getMaterialArchiveReliefMinimumTotalHeight(
+  state: MaterialArchiveReliefMinimumState,
+): number {
+  if (state.source_version !== "material") {
+    return RELIEF_MIN_EXTRA_HEIGHT_MM;
+  }
+  return (
+    Math.max(1, Math.round(state.materialLayerCount)) *
+    MATERIAL_ARCHIVE_RELIEF_LAYER_HEIGHT_MM
+  );
+}
+
+export function getMaterialArchiveReliefMinimumExtraHeight(
+  state: MaterialArchiveReliefMinimumState,
+): number {
+  const minimumTotalHeight = getMaterialArchiveReliefMinimumTotalHeight(state);
+  return clampValue(
+    minimumTotalHeight - state.spacer_thick,
+    RELIEF_MIN_EXTRA_HEIGHT_MM,
+    RELIEF_MAX_EXTRA_HEIGHT_MM,
+  );
+}
+
+function clampAbsoluteReliefHeightMap(
+  map: Record<string, number> | undefined,
+  minimumTotalHeight: number,
+): Record<string, number> | undefined {
+  if (!map) {
+    return undefined;
+  }
+  return Object.fromEntries(
+    Object.entries(map).map(([hex, height]) => [
+      hex,
+      Math.max(height, minimumTotalHeight),
+    ]),
+  );
 }
 
 export function buildLayerImagesSourceKey(
@@ -1932,6 +1981,7 @@ const DEFAULT_PUZZLE_LAYOUT_SEED = 0;
 function buildPreviewSessionResetState(): Partial<ConverterState> {
   return {
     sessionId: null,
+    isLoading: false,
     previewImageUrl: null,
     originalPreviewUrl: null,
     previewBaseImageUrl: null,
@@ -2803,10 +2853,23 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       });
     },
     setMaterialLayerCount: (count: number) =>
-      set(() => ({
-        materialLayerCount: count,
-        ...buildPreviewSessionResetState(),
-      })),
+      set((state) => {
+        const materialLayerCount = clampValue(Math.round(count), 1, 20);
+        return {
+          materialLayerCount,
+          heightmap_max_height: state.enable_relief
+            ? clampValue(
+                state.heightmap_max_height,
+                getMaterialArchiveReliefMinimumExtraHeight({
+                  ...state,
+                  materialLayerCount,
+                }),
+                RELIEF_MAX_EXTRA_HEIGHT_MM,
+              )
+            : state.heightmap_max_height,
+          ...buildPreviewSessionResetState(),
+        };
+      }),
     setMaterialLayerHeightMm: (height: number) =>
       set(() => ({
         materialLayerHeightMm: height,
@@ -2952,13 +3015,26 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       }),
 
     setSpacerThick: (thick: number) =>
-      set((state) => ({
-        ...buildFridgeMagnetState(state, {
+      set((state) => {
+        const fridgeState = buildFridgeMagnetState(state, {
           base_spacer_thick: clampValue(thick, 0.2, 3.5),
-        }),
-        threemfDiskPath: null,
-        downloadUrl: null,
-      })),
+        });
+        return {
+          ...fridgeState,
+          heightmap_max_height: state.enable_relief
+            ? clampValue(
+                state.heightmap_max_height,
+                getMaterialArchiveReliefMinimumExtraHeight({
+                  ...state,
+                  spacer_thick: fridgeState.spacer_thick,
+                }),
+                RELIEF_MAX_EXTRA_HEIGHT_MM,
+              )
+            : state.heightmap_max_height,
+          threemfDiskPath: null,
+          downloadUrl: null,
+        };
+      }),
 
     setStructureMode: (mode: StructureMode) =>
       set((state) => ({
@@ -3261,6 +3337,14 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     // --- 浮雕（互斥） ---
     setEnableRelief: (enabled: boolean) => {
       set((state) => {
+        const minimumReliefExtraHeight = getMaterialArchiveReliefMinimumExtraHeight(state);
+        const reliefMaxHeight = enabled
+          ? clampValue(
+              state.heightmap_max_height,
+              minimumReliefExtraHeight,
+              RELIEF_MAX_EXTRA_HEIGHT_MM,
+            )
+          : state.heightmap_max_height;
         const updates: Partial<ConverterState> = {
           enable_relief: enabled,
           enable_cloisonne: enabled ? false : state.enable_cloisonne,
@@ -3268,6 +3352,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           structure_mode: enabled
             ? StructureModeEnum.SINGLE_SIDED
             : state.structure_mode,
+          heightmap_max_height: reliefMaxHeight,
           threemfDiskPath: null,
           downloadUrl: null,
         };
@@ -3288,7 +3373,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           updates.color_height_map = computeAutoHeightMap(
             state.palette,
             mode,
-            state.heightmap_max_height,
+            reliefMaxHeight,
           );
         }
         return updates;
@@ -3298,14 +3383,19 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       set({ color_height_map: map }),
     setHeightmapMaxHeight: (height: number) => {
       const state = _get();
-      const newMax = clampValue(height, 0.08, 15.0);
+      const minimumReliefExtraHeight = getMaterialArchiveReliefMinimumExtraHeight(state);
+      const newMax = clampValue(
+        height,
+        minimumReliefExtraHeight,
+        RELIEF_MAX_EXTRA_HEIGHT_MM,
+      );
       const oldMax = state.heightmap_max_height;
       // Proportionally rescale all existing color heights
       if (oldMax > 0 && Object.keys(state.color_height_map).length > 0) {
         const ratio = newMax / oldMax;
         const scaled: Record<string, number> = {};
         for (const [hex, h] of Object.entries(state.color_height_map)) {
-          scaled[hex] = clampValue(h * ratio, 0.08, newMax);
+          scaled[hex] = clampValue(h * ratio, minimumReliefExtraHeight, newMax);
         }
         set({ heightmap_max_height: newMax, color_height_map: scaled });
       } else {
@@ -4683,17 +4773,28 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
     uploadHeightmap: async () => {
       const state = _get();
+      const clearHeightmapUploadState = {
+        heightmapThumbnailUrl: null,
+        color_height_map: {},
+      };
       if (!state.heightmapFile || !state.sessionId) {
-        set({ error: "请先上传高度图文件并完成预览" });
+        set({
+          ...clearHeightmapUploadState,
+          error: "请先上传高度图文件并完成预览",
+        });
         return;
       }
+      const requestedSessionId = state.sessionId;
       set({ isLoading: true, error: null });
       try {
         const response = await apiUploadHeightmap(
           state.heightmapFile,
-          state.sessionId,
+          requestedSessionId,
           state.heightmap_max_height,
         );
+        if (_get().sessionId !== requestedSessionId) {
+          return;
+        }
         const thumbnailUrl = `${response.thumbnail_url}`;
         set({
           isLoading: false,
@@ -4701,7 +4802,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           color_height_map: response.color_height_map,
         });
       } catch (err) {
+        if (_get().sessionId !== requestedSessionId) {
+          return;
+        }
         set({
+          ...clearHeightmapUploadState,
           isLoading: false,
           error: err instanceof Error ? err.message : "Heightmap upload failed",
         });
@@ -5464,6 +5569,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           : sourceSelection.source_kind === "native_bundle"
             ? (sourceSelection.layer_height_mm ?? null)
             : state.layer_height_mm;
+        const shouldResetHeightmapMapping =
+          state.enable_relief && state.autoHeightMode === "use-heightmap";
+        const shouldReuploadHeightmap =
+          shouldResetHeightmapMapping && state.heightmapFile !== null;
 
         _previewClientLog("preview: response received", {
           session_id: response.session_id,
@@ -5488,9 +5597,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             match_mode: response.lut_match_mode ?? "legacy",
           },
           palette: normalizedPalette,
-          ...(autoReliefHeightMap
-            ? { color_height_map: autoReliefHeightMap }
-            : {}),
+          ...(shouldResetHeightmapMapping
+            ? { color_height_map: {}, heightmapThumbnailUrl: null }
+            : autoReliefHeightMap
+              ? { color_height_map: autoReliefHeightMap }
+              : {}),
           colorContours: response.contours ?? {},
           previewGlbUrl: glbUrl,
           previewPerformanceTiming: response.performance_timing ?? null,
@@ -5529,6 +5640,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           gradientGroupsSessionId: null,
           gradientSelection: null,
         });
+        if (
+          shouldReuploadHeightmap &&
+          _get().sessionId === response.session_id
+        ) {
+          await _get().uploadHeightmap();
+          if (_get().sessionId !== response.session_id) {
+            return;
+          }
+        }
         if (!glbUrl) {
           _get()._pollAsyncGlb();
         }
@@ -5716,17 +5836,28 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           });
           return null;
         }
+        const reliefMinimumTotalHeight =
+          getMaterialArchiveReliefMinimumTotalHeight(state);
         const reliefHeightmapMaxHeight = state.enable_relief
-          ? state.spacer_thick + state.heightmap_max_height
+          ? Math.max(
+              state.spacer_thick + state.heightmap_max_height,
+              reliefMinimumTotalHeight,
+            )
           : state.heightmap_max_height;
         const reliefColorHeightMap =
           state.enable_relief && state.autoHeightMode !== "use-heightmap"
-            ? toAbsoluteReliefHeightMap(
-                state.color_height_map,
-                state.spacer_thick,
+            ? clampAbsoluteReliefHeightMap(
+                toAbsoluteReliefHeightMap(
+                  state.color_height_map,
+                  state.spacer_thick,
+                ),
+                reliefMinimumTotalHeight,
               )
             : state.enable_relief
-              ? state.color_height_map
+              ? clampAbsoluteReliefHeightMap(
+                  state.color_height_map,
+                  reliefMinimumTotalHeight,
+                )
               : undefined;
         const baseParams = {
           ...sourceParams,
@@ -6023,7 +6154,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         const croppedFullUrl = `${response.cropped_url}`;
 
         // Fetch cropped image as Blob to create a new File
-        const blob = await fetch(croppedFullUrl).then((r) => r.blob());
+        const blob = await downloadResourceBlob(croppedFullUrl);
         const croppedFile = new File([blob], state.imageFile.name, {
           type: "image/png",
         });
@@ -6148,6 +6279,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           previewBaseImageUrl: null,
           sessionId: null,
           previewGlbUrl: null,
+          isLoading: false,
           previewPerformanceTiming: null,
           generatePerformanceTiming: null,
           batchPreviewItems: [],
@@ -6221,6 +6353,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             previewImageUrl: null,
             previewBaseImageUrl: null,
             sessionId: null,
+            isLoading: false,
             previewGlbUrl: null,
             modelUrl: null,
             previewPerformanceTiming: null,
@@ -6252,6 +6385,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             previewImageUrl: null,
             previewBaseImageUrl: null,
             sessionId: null,
+            isLoading: false,
             previewGlbUrl: null,
             modelUrl: null,
             previewPerformanceTiming: null,
@@ -6297,6 +6431,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           previewImageUrl: null,
           previewBaseImageUrl: null,
           sessionId: null,
+          isLoading: false,
           previewGlbUrl: null,
           modelUrl: null,
           previewPerformanceTiming: null,
@@ -6338,6 +6473,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         previewImageUrl: null,
         previewBaseImageUrl: null,
         sessionId: null,
+        isLoading: false,
         previewGlbUrl: null,
         modelUrl: null,
         previewPerformanceTiming: null,
@@ -6405,14 +6541,22 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         error: null,
       });
       try {
+        const reliefMinimumTotalHeight =
+          getMaterialArchiveReliefMinimumTotalHeight(state);
         const reliefHeightmapMaxHeight = state.enable_relief
-          ? state.spacer_thick + state.heightmap_max_height
+          ? Math.max(
+              state.spacer_thick + state.heightmap_max_height,
+              reliefMinimumTotalHeight,
+            )
           : state.heightmap_max_height;
         const reliefColorHeightMap =
           state.enable_relief && state.autoHeightMode !== "use-heightmap"
-            ? toAbsoluteReliefHeightMap(
-                state.color_height_map,
-                state.spacer_thick,
+            ? clampAbsoluteReliefHeightMap(
+                toAbsoluteReliefHeightMap(
+                  state.color_height_map,
+                  state.spacer_thick,
+                ),
+                reliefMinimumTotalHeight,
               )
             : undefined;
         const settings = useSettingsStore.getState();
@@ -6612,7 +6756,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         await _get().submitPreview();
         // 检查预览是否成功
         const afterPreview = _get();
-        if (!afterPreview.sessionId) {
+        if (!afterPreview.sessionId || afterPreview.error) {
           return null; // 预览失败，错误已由 submitPreview 设置
         }
       }
@@ -6739,7 +6883,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       const keepIds = collectConverterKeepFileIds(state);
       apiCleanupSessionFiles(state.sessionId, keepIds);
       void apiCloseSession(state.sessionId, keepIds);
-      set({ sessionId: null });
+      set({ sessionId: null, isLoading: false });
     },
   })),
 );

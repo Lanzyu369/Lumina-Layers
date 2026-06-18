@@ -16,6 +16,9 @@ TARGETS = [
     ROOT / "api" / "routers" / "feedback.py",
     ROOT / "api" / "routers" / "five_color.py",
     ROOT / "api" / "routers" / "lut.py",
+    ROOT / "api" / "routers" / "material_registry.py",
+    ROOT / "api" / "routers" / "material_sync.py",
+    ROOT / "api" / "material_sync_scheduler.py",
     ROOT / "api" / "routers" / "slicer.py",
     ROOT / "api" / "routers" / "system.py",
     ROOT / "api" / "routers" / "vectorizer.py",
@@ -179,6 +182,26 @@ EXTRACTOR_STRUCTURED_EVENTS = {
     "material_solver_runtime_delete_done",
     "material_solver_runtime_details_done",
 }
+MATERIAL_SYNC_STRUCTURED_EVENTS = {
+    "material_seed_install_done",
+    "material_seed_install_failed",
+    "material_sync_status_done",
+    "material_sync_catalog_done",
+    "material_sync_install_done",
+    "material_sync_install_from_registry_done",
+    "material_sync_refresh_done",
+    "material_sync_rollback_done",
+    "material_sync_auto_refresh_scheduled",
+    "material_sync_auto_refresh_done",
+    "material_sync_auto_refresh_failed",
+    "material_sync_auto_refresh_skipped",
+}
+MATERIAL_REGISTRY_STRUCTURED_EVENTS = {
+    "material_registry_catalog_done",
+    "material_registry_package_download_done",
+    "material_registry_package_upload_done",
+    "material_registry_package_approve_done",
+}
 CONVERTER_STRUCTURED_EVENTS = {
     "converter_region_replace_timing",
     "converter_replace_color_done",
@@ -274,6 +297,8 @@ SLICER_STRUCTURED_EVENTS = {
 REQUIRED_STRUCTURED_EVENTS = (
     VECTOR_STRUCTURED_EVENTS
     | EXTRACTOR_STRUCTURED_EVENTS
+    | MATERIAL_SYNC_STRUCTURED_EVENTS
+    | MATERIAL_REGISTRY_STRUCTURED_EVENTS
     | CONVERTER_STRUCTURED_EVENTS
     | CALIBRATION_STRUCTURED_EVENTS
     | FIVE_COLOR_STRUCTURED_EVENTS

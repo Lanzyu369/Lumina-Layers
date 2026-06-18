@@ -256,6 +256,7 @@ describe("Property 6: i18n 键完整性 (i18n key completeness)", () => {
     "vec.colors",
     "vec.download_svg",
     "vec.send_to_converter",
+    "vec.resource_action_failed",
     "vec.error",
     "vec.no_image",
   ] as const;

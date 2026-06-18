@@ -24,6 +24,7 @@ from api.feedback_assembler import (
     run_startup_cleanup,
 )
 from api.feedback_time import BEIJING_TZ, now_beijing
+from utils.lut_manager import LUTManager
 
 
 class _MockFileRegistry:
@@ -319,6 +320,124 @@ def test_collect_sync_attachments_lut_is_noop_for_material_mode(
     assert result.lut["status"] == "not_applicable"
 
 
+def _use_feedback_lut_repo(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> Path:
+    repo_root = tmp_path / "repo"
+    preset_root = repo_root / "lut-preset"
+    (preset_root / "Custom").mkdir(parents=True)
+    (preset_root / "BIQU").mkdir(parents=True)
+    monkeypatch.setattr("api.feedback_assembler.REPO_ROOT", repo_root)
+    monkeypatch.setattr(LUTManager, "LUT_PRESET_DIR", str(preset_root))
+    LUTManager.invalidate_preset_cache()
+    return repo_root
+
+
+def test_collect_lut_rejects_path_traversal_lut_name(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = _use_feedback_lut_repo(monkeypatch, tmp_path)
+    (repo_root / "bambu_config_template.json").write_bytes(b"ROOT_CONFIG")
+    ticket_dir = tmp_path / "LUM-20260618-001"
+    ticket_dir.mkdir()
+    payload = {
+        "ticket_id": "LUM-20260618-001",
+        "context": {
+            "active_original_image_ref": None,
+            "active_final_artifact_ref": None,
+            "source_version": "legacy",
+            "lut_name": "Custom/../../bambu_config_template",
+        },
+    }
+
+    try:
+        result = collect_sync_attachments(
+            ticket_dir,
+            payload,
+            _MockFileRegistry({}),
+            now_beijing(),
+        )
+    finally:
+        LUTManager.invalidate_preset_cache()
+
+    assert result.lut["status"] == "not_applicable"
+    assert not (ticket_dir / "lut.json").exists()
+
+
+def test_collect_lut_accepts_custom_display_name(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = _use_feedback_lut_repo(monkeypatch, tmp_path)
+    safe_lut = repo_root / "lut-preset" / "Custom" / "safe.json"
+    safe_lut.write_bytes(b"SAFE_CUSTOM_LUT")
+    ticket_dir = tmp_path / "LUM-20260618-002"
+    ticket_dir.mkdir()
+    payload = {
+        "ticket_id": "LUM-20260618-002",
+        "context": {
+            "active_original_image_ref": None,
+            "active_final_artifact_ref": None,
+            "source_version": "legacy",
+            "lut_name": "Custom - safe",
+        },
+    }
+
+    try:
+        result = collect_sync_attachments(
+            ticket_dir,
+            payload,
+            _MockFileRegistry({}),
+            now_beijing(),
+        )
+    finally:
+        LUTManager.invalidate_preset_cache()
+
+    assert result.lut["status"] == "attached"
+    assert result.lut["kind"] == "custom"
+    assert result.lut["filename"] == "lut.json"
+    assert (ticket_dir / "lut.json").read_bytes() == b"SAFE_CUSTOM_LUT"
+
+
+def test_collect_lut_accepts_nested_preset_display_name(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = _use_feedback_lut_repo(monkeypatch, tmp_path)
+    preset_lut = repo_root / "lut-preset" / "BIQU" / "必趣&PLAGO&6色RYBWGK.json"
+    preset_lut.write_bytes(b"BIQU_PRESET_LUT")
+    ticket_dir = tmp_path / "LUM-20260618-003"
+    ticket_dir.mkdir()
+    payload = {
+        "ticket_id": "LUM-20260618-003",
+        "context": {
+            "active_original_image_ref": None,
+            "active_final_artifact_ref": None,
+            "source_version": "legacy",
+            "lut_name": "BIQU - 必趣&PLAGO&6色RYBWGK",
+        },
+    }
+
+    try:
+        result = collect_sync_attachments(
+            ticket_dir,
+            payload,
+            _MockFileRegistry({}),
+            now_beijing(),
+        )
+    finally:
+        LUTManager.invalidate_preset_cache()
+
+    assert result.lut["status"] == "preset_reference_only"
+    assert result.lut["kind"] == "preset"
+    assert result.lut["preset_relative_path"] == (
+        "lut-preset/BIQU/必趣&PLAGO&6色RYBWGK.json"
+    )
+    assert not (ticket_dir / "lut.json").exists()
+
+
 def _write_ticket(
     feedback_root: Path,
     ticket_id: str,
@@ -441,13 +560,13 @@ def test_run_startup_cleanup_missing_root_returns_zero(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_collect_final_artifact_falls_back_to_disk_path_when_registry_empty(
+def test_collect_final_artifact_rejects_unregistered_disk_path_when_registry_empty(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """FileRegistry has no matching entry, but disk_path points to a real .3mf.
+    """Client-provided disk_path must not authorize final-artifact attachment.
 
-    FileRegistry 找不到产物，但 disk_path 指向存在的 .3mf 时，应成功复制。
+    客户端传来的 disk_path 不能作为最终产物附件的授权来源。
     """
     from api.feedback_assembler import REPO_ROOT
 
@@ -478,11 +597,10 @@ def test_collect_final_artifact_falls_back_to_disk_path_when_registry_empty(
 
         result = collect_sync_attachments(ticket_dir, payload, registry, now_beijing())
 
-        assert result.final_artifact["status"] == "attached"
-        assert result.final_artifact["filename"] == "final.3mf"
+        assert result.final_artifact["status"] == "expired_ttl"
+        assert result.final_artifact["filename"] is None
         assert result.final_artifact["artifact_type"] == "3mf"
-        assert (ticket_dir / "final.3mf").exists()
-        assert (ticket_dir / "final.3mf").stat().st_size == fake_3mf.stat().st_size
+        assert not (ticket_dir / "final.3mf").exists()
     finally:
         fake_3mf.unlink(missing_ok=True)
         # Clean up the test file but leave the directory structure.
@@ -947,13 +1065,13 @@ def test_collect_final_artifact_registry_hit_takes_priority_over_disk_path(
         disk_3mf.unlink(missing_ok=True)
 
 
-def test_collect_final_artifact_stale_registry_falls_back_to_disk_path(
+def test_collect_final_artifact_stale_registry_rejects_disk_path_fallback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A stale FileRegistry hit should not block a safe disk_path fallback.
+    """A stale FileRegistry hit must not authorize client disk_path fallback.
 
-    FileRegistry 命中但磁盘文件已清理时，不应阻断安全的 disk_path 回退。
+    FileRegistry 命中但磁盘文件已清理时，客户端 disk_path 仍不能授权复制。
     """
     monkeypatch.setattr("api.feedback_assembler.REPO_ROOT", tmp_path)
 
@@ -991,9 +1109,9 @@ def test_collect_final_artifact_stale_registry_falls_back_to_disk_path(
 
     result = collect_sync_attachments(ticket_dir, payload, registry, now_beijing())
 
-    assert result.final_artifact["status"] == "attached"
-    assert result.final_artifact["filename"] == "final.3mf"
-    assert (ticket_dir / "final.3mf").read_bytes() == b"FALLBACK_3MF"
+    assert result.final_artifact["status"] == "expired_ttl"
+    assert result.final_artifact["filename"] is None
+    assert not (ticket_dir / "final.3mf").exists()
 
 
 def test_collect_final_artifact_stale_registry_falls_back_to_download_url(

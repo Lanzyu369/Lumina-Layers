@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 import json
 import math
 import os
@@ -81,6 +82,7 @@ from .common import (
     _require_session,
     _resolve_material_backing_index,
     _validate_material_source,
+    _validate_material_archive_relief_minimum_height,
 )
 
 router = APIRouter()
@@ -220,6 +222,45 @@ def _cache_field_path_or_tempfile(
     return temp_path
 
 
+def _require_loadable_material_archive_cache_path(
+    path: str | None,
+    field_name: str,
+) -> str:
+    if path is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Preview cache missing {field_name}. Re-run preview before "
+                "generating material-archive models."
+            ),
+        )
+
+    try:
+        loaded = np.load(path, mmap_mode="r", allow_pickle=False)
+        try:
+            if not isinstance(loaded, np.ndarray):
+                raise ValueError(f"{field_name} artifact is not a numpy array")
+            _ = loaded.shape
+        finally:
+            close = getattr(loaded, "close", None)
+            if callable(close):
+                close()
+            mmap_obj = getattr(loaded, "_mmap", None)
+            if mmap_obj is not None:
+                mmap_obj.close()
+    except (OSError, ValueError, TypeError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Preview cache {field_name} artifact is unavailable or "
+                "unreadable. Re-run preview before generating "
+                "material-archive models."
+            ),
+        ) from exc
+
+    return path
+
+
 def _cache_field_array(
     *,
     cache: dict,
@@ -235,11 +276,21 @@ def _cache_field_array(
         return cache.get(field_name)
     if cache_ref is None:
         return None
-    hydrated = hydrate_preview_cache(
-        cache_ref,
-        fields={field_name},
-        mmap_mode=mmap_mode,
-    )
+    try:
+        hydrated = hydrate_preview_cache(
+            cache_ref,
+            fields={field_name},
+            mmap_mode=mmap_mode,
+        )
+    except (OSError, ValueError, TypeError, KeyError, EOFError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Preview cache {field_name} artifact is unavailable or "
+                "unreadable. Re-run preview before generating with "
+                "recipe overrides."
+            ),
+        ) from exc
     return hydrated.get(field_name)
 
 
@@ -859,6 +910,18 @@ async def convert_generate(
     # 解析 height_mode 用于浮雕分支选择
     height_mode = request.height_mode or "color"
     _require_heightmap_for_relief(session_data, request)
+    _validate_material_archive_relief_minimum_height(
+        enable_relief=request.enable_relief,
+        material_source=str(session_material_source or "lut"),
+        height_mode=height_mode,
+        color_height_map=request.color_height_map,
+        heightmap_max_height=request.heightmap_max_height,
+        session_data=session_data,
+        cache=cache,
+        cache_ref=cache_ref,
+        requested_color_layers=request.color_layers,
+        recipe_overrides=recipe_overrides,
+    )
 
     # If heightmap mode, save session heightmap to temp file for worker process
     # 高度图模式时，将 session 中的高度图保存为临时文件供工作进程使用
@@ -879,11 +942,9 @@ async def convert_generate(
     material_matrix_path: str | None = None
     should_forward_cached_analysis = (
         request.use_cached_matched_rgb
-        or (
-            session_material_source == "material_archive"
-            and core_modeling_mode == CoreModelingMode.VECTOR
-        )
+        or session_material_source == "material_archive"
     )
+    require_cached_material_analysis = session_material_source == "material_archive"
     log.debug(
         "Cached matched RGB input state resolved: use_cached_matched_rgb=%s, has_replacement_regions=%s",
         request.use_cached_matched_rgb,
@@ -902,6 +963,11 @@ async def convert_generate(
             sid=body.session_id,
             store=store,
         )
+        if require_cached_material_analysis:
+            matched_rgb_path = _require_loadable_material_archive_cache_path(
+                matched_rgb_path,
+                "matched_rgb",
+            )
         if matched_rgb_path is not None:
             cached_matched_rgb = cache.get("matched_rgb")
             field_ref = (
@@ -941,6 +1007,11 @@ async def convert_generate(
                 sid=body.session_id,
                 store=store,
             )
+            if require_cached_material_analysis:
+                mask_solid_path = _require_loadable_material_archive_cache_path(
+                    mask_solid_path,
+                    "mask_solid",
+                )
 
             material_matrix_path = _cache_field_path_or_tempfile(
                 cache=cache,
@@ -949,6 +1020,11 @@ async def convert_generate(
                 sid=body.session_id,
                 store=store,
             )
+            if require_cached_material_analysis:
+                material_matrix_path = _require_loadable_material_archive_cache_path(
+                    material_matrix_path,
+                    "material_matrix",
+                )
 
     override_material_matrix_path, recipe_override_masks_path = _prepare_recipe_override_worker_inputs(
         cache=cache,
@@ -1090,7 +1166,8 @@ async def convert_generate(
     # Register output files via FileRegistry
     sid = body.session_id
     preview_3d_url: str | None = None
-    threemf_registered = False
+    download_id: str | None = None
+    registration_complete = False
     glb_registered = False
     try:
         download_id = registry.register_path(
@@ -1098,15 +1175,18 @@ async def convert_generate(
             threemf_path,
             ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
         )
-        threemf_registered = True
 
         if glb_path and os.path.exists(glb_path):
             glb_id = registry.register_path(sid, glb_path)
             glb_registered = True
             preview_3d_url = f"/api/files/{glb_id}"
+        registration_complete = True
     finally:
-        if not threemf_registered:
+        if download_id is None:
             _remove_temp_path(threemf_path)
+        elif not registration_complete:
+            with suppress(Exception):
+                registry.cleanup_file(download_id)
         if glb_path and not glb_registered:
             _remove_temp_path(glb_path)
 
@@ -1655,11 +1735,23 @@ async def convert_generate_large_format(
     elif not lut_path or not os.path.exists(lut_path):
         raise HTTPException(status_code=409, detail="LUT file missing. Call POST /api/convert/preview first.")
     _require_heightmap_for_relief(session_data, request)
+    recipe_overrides = _resolve_recipe_overrides(session_data, request)
+    _validate_material_archive_relief_minimum_height(
+        enable_relief=request.enable_relief,
+        material_source=str(session_material_source or "lut"),
+        height_mode=request.height_mode or "color",
+        color_height_map=request.color_height_map,
+        heightmap_max_height=request.heightmap_max_height,
+        session_data=session_data,
+        cache=cache,
+        cache_ref=cache_ref,
+        requested_color_layers=request.color_layers,
+        recipe_overrides=recipe_overrides,
+    )
 
     sid = body.session_id
     total_w_mm, total_h_mm = _resolve_large_format_dimensions(cache, request, lf.target_height_mm)
     source_basename = _resolve_large_format_source_basename(session_data, image_path)
-    recipe_overrides = _resolve_recipe_overrides(session_data, request)
     material_matrix_path, recipe_override_masks_path = _prepare_recipe_override_worker_inputs(
         cache=cache,
         cache_ref=cache_ref,
@@ -2072,6 +2164,15 @@ async def convert_batch(
             status_code=422,
             detail="Batch relief requires color_height_map",
         )
+    _validate_material_archive_relief_minimum_height(
+        enable_relief=enable_relief,
+        material_source=material_source,
+        height_mode=resolved_height_mode,
+        color_height_map=parsed_color_height_map,
+        heightmap_max_height=heightmap_max_height,
+        material_layer_count=material_layer_count,
+        requested_color_layers=color_layers,
+    )
 
     # --- batch_run_id: unique per-request identifier for structured logging
     # and artifact naming. Independent of request.state.request_id (R9 §1).

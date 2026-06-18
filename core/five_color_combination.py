@@ -26,6 +26,7 @@ from core.lut_card_layout import (
 _INT32_MIN = -(2**31)
 _INT32_MAX = 2**31 - 1
 _INTEGER_STRING_PATTERN = re.compile(r"[+-]?\d+")
+_SUPPORTED_STACK_RECIPE_WIDTHS = (5, 6)
 
 
 def _parse_stack_recipe_integer(value: object) -> int | None:
@@ -54,7 +55,7 @@ class ColorQueryResult:
     """颜色查询结果"""
 
     found: bool
-    selected_indices: List[int]  # 用户选择的 5 个索引
+    selected_indices: List[int]  # 用户选择的 5 或 6 个索引
     result_rgb: Optional[Tuple[int, int, int]]  # 结果 RGB 颜色
     row_index: int  # 在 stack LUT 中的行索引
     message: str  # 状态消息
@@ -182,7 +183,7 @@ class StackLUTLoader:
             tuple: (success, message, stack_data)
                 - success: 是否成功
                 - message: 状态消息
-                - stack_data: (N, 5) 数组，每行是一个 5 色组合索引；None 或 (N, 0) 表示无配方列
+                - stack_data: (N, 5/6) 数组，每行是一个组合索引；None 或 (N, 0) 表示无配方列
         """
         try:
             data = np.load(file_path)
@@ -191,8 +192,8 @@ class StackLUTLoader:
             if data.ndim != 2:
                 return False, f"错误：数组维度应为 2，实际为 {data.ndim}", None
 
-            if data.shape[1] != 5:
-                return False, f"错误：数组列数应为 5，实际为 {data.shape[1]}", None
+            if data.shape[1] not in _SUPPORTED_STACK_RECIPE_WIDTHS:
+                return False, f"错误：数组列数应为 5 或 6，实际为 {data.shape[1]}", None
 
             # 验证值范围
             if data.min() < 0 or data.max() > 7:
@@ -214,7 +215,7 @@ class StackLUTLoader:
             tuple: (success, message, stack_data, rgb_data)
                 - success: 是否成功
                 - message: 状态消息
-                - stack_data: (N, 5) 数组，每行是一个 5 色组合索引
+                - stack_data: (N, 5/6) 数组，每行是一个组合索引
                 - rgb_data: (N, 3) 数组，每行是一个 RGB 颜色
         """
         try:
@@ -239,15 +240,18 @@ class StackLUTLoader:
                 return False, f"错误：RGB 数据形状应为 (N, 3)，实际为 {rgb_data.shape}", None, None
 
             # 验证 stack 数据格式；缺失或空列表示该 LUT 没有可直接查询的配方列。
-            if stack_data is not None and (stack_data.ndim != 2 or stack_data.shape[1] not in (0, 5)):
-                return False, f"错误：Stack 数据形状应为 (N, 5) 或 (N, 0)，实际为 {stack_data.shape}", None, None
+            if stack_data is not None and (
+                stack_data.ndim != 2
+                or stack_data.shape[1] not in (0, *_SUPPORTED_STACK_RECIPE_WIDTHS)
+            ):
+                return False, f"错误：Stack 数据形状应为 (N, 5)、(N, 6) 或 (N, 0)，实际为 {stack_data.shape}", None, None
 
             # 验证数据长度一致
             stack_is_unavailable = (
                 stack_data is not None
                 and stack_data.ndim == 2
                 and stack_data.shape[0] == 0
-                and stack_data.shape[1] in (0, 5)
+                and stack_data.shape[1] in (0, *_SUPPORTED_STACK_RECIPE_WIDTHS)
             )
             if stack_data is not None and not stack_is_unavailable and len(rgb_data) != len(stack_data):
                 return False, f"错误：RGB 和 Stack 数据长度不一致: {len(rgb_data)} vs {len(stack_data)}", None, None
@@ -338,14 +342,16 @@ class ColorQueryEngine:
         lut_rgb: np.ndarray,
         color_count: Optional[int] = None,
         sources: Optional[List[str]] = None,
+        stack_recipe_widths: Optional[List[int]] = None,
     ):
         """初始化查询引擎
 
         Args:
-            stack_lut: (N, 5) 堆叠查找表；(N, 0) 或 None 时使用动态查询
+            stack_lut: (N, 5/6) 堆叠查找表；(N, 0) 或 None 时使用动态查询
             lut_rgb: (N, 3) RGB 颜色数据
             color_count: 颜色数量（可选，如果没有则自动检测）
             sources: 每条记录的来源标识列表（可选）
+            stack_recipe_widths: Per-row source recipe widths before any padding.
         """
         self.lut_rgb = lut_rgb
         stack_arr = np.asarray(stack_lut) if stack_lut is not None else None
@@ -357,6 +363,14 @@ class ColorQueryEngine:
             else stack_arr
         )
         self.sources = sources or []
+        if (
+            stack_recipe_widths is not None
+            and raw_stack_lut is not None
+            and len(stack_recipe_widths) == len(raw_stack_lut)
+        ):
+            self._stack_recipe_widths = [int(value) for value in stack_recipe_widths]
+        else:
+            self._stack_recipe_widths = None
         stack_is_reliable = raw_stack_lut is not None
 
         # 验证 stack_lut 和 lut_rgb 长度一致（如果有 stack_lut）
@@ -376,7 +390,7 @@ class ColorQueryEngine:
             if detected_count > 0:
                 self.color_count = detected_count
             else:
-                inferred_count = self._infer_supported_stack_color_count(raw_stack_lut)
+                inferred_count = self._infer_supported_stack_color_count(raw_stack_lut, self._stack_recipe_widths)
                 if inferred_count is not None:
                     self.color_count = inferred_count
                 else:
@@ -404,15 +418,32 @@ class ColorQueryEngine:
                 self.base_colors.append((128, 128, 128))
 
     @staticmethod
-    def _infer_supported_stack_color_count(stack_lut: np.ndarray) -> int | None:
+    def _infer_supported_stack_color_count(
+        stack_lut: np.ndarray,
+        stack_recipe_widths: list[int] | None = None,
+    ) -> int | None:
         stack_arr = np.asarray(stack_lut)
-        if stack_arr.ndim != 2 or stack_arr.shape[1] != 5 or stack_arr.size == 0:
+        if (
+            stack_arr.ndim != 2
+            or stack_arr.shape[1] not in _SUPPORTED_STACK_RECIPE_WIDTHS
+            or stack_arr.size == 0
+        ):
             return None
         max_index = -1
-        for row in stack_arr:
+        for row_index, row in enumerate(stack_arr):
             row_values: list[int] = []
             row_is_valid = True
-            for value in row.tolist():
+            row_candidates = row.tolist()
+            source_width = (
+                stack_recipe_widths[row_index]
+                if stack_recipe_widths is not None and row_index < len(stack_recipe_widths)
+                else None
+            )
+            if source_width == 5 and len(row_candidates) == 6:
+                trailing_value = _parse_stack_recipe_integer(row_candidates[-1])
+                if trailing_value == -1:
+                    row_candidates = row_candidates[:5]
+            for value in row_candidates:
                 integer_value = _parse_stack_recipe_integer(value)
                 if integer_value is None or integer_value < 0 or integer_value >= 8:
                     row_is_valid = False
@@ -427,29 +458,41 @@ class ColorQueryEngine:
 
     def _normalize_stack_lut_for_matching(self, stack_lut: np.ndarray) -> np.ndarray:
         stack_arr = np.asarray(stack_lut)
-        if stack_arr.ndim != 2 or stack_arr.shape[1] != 5:
+        if stack_arr.ndim != 2 or stack_arr.shape[1] not in _SUPPORTED_STACK_RECIPE_WIDTHS:
             return np.empty((0, 5), dtype=int)
+        recipe_width = int(stack_arr.shape[1])
         if stack_arr.shape[0] == 0:
-            return np.empty((0, 5), dtype=int)
+            return np.empty((0, recipe_width), dtype=int)
         normalized_rows: list[list[int]] = []
-        invalid_row = [-1, -1, -1, -1, -1]
-        for row in stack_arr:
-            recipe = self._normalize_five_layer_recipe(row.tolist())
-            normalized_rows.append(recipe if recipe is not None else invalid_row)
+        invalid_row = [-1] * recipe_width
+        for row_index, row in enumerate(stack_arr):
+            recipe = self._normalize_layer_recipe(
+                row.tolist(),
+                source_width=self._source_recipe_width(row_index),
+            )
+            if recipe is None:
+                normalized_rows.append(invalid_row)
+            elif len(recipe) < recipe_width:
+                normalized_rows.append(recipe + ([-1] * (recipe_width - len(recipe))))
+            else:
+                normalized_rows.append(recipe)
         return np.asarray(normalized_rows, dtype=int)
 
     def get_combinations(self) -> Optional[List[List[int]]]:
-        """Return valid five-layer stack combinations for UI filtering.
-        返回可用于前端筛选的合法五层 stack 组合。
+        """Return valid stack combinations for UI filtering.
+        返回可用于前端筛选的合法 stack 组合。
         """
         if self.stack_lut is None:
             return None if self._supports_dynamic_five_layer_row_decoding() else []
         stack_arr = np.asarray(self.stack_lut)
-        if stack_arr.ndim != 2 or stack_arr.shape[1] != 5:
+        if stack_arr.ndim != 2 or stack_arr.shape[1] not in _SUPPORTED_STACK_RECIPE_WIDTHS:
             return None
         combinations: list[list[int]] = []
-        for row in stack_arr:
-            recipe = self._normalize_five_layer_recipe(row.tolist())
+        for row_index, row in enumerate(stack_arr):
+            recipe = self._normalize_layer_recipe(
+                row.tolist(),
+                source_width=self._source_recipe_width(row_index),
+            )
             if recipe is not None:
                 combinations.append(recipe)
         return combinations
@@ -499,7 +542,7 @@ class ColorQueryEngine:
                 result_rgb=None,
                 row_index=row_index,
                 message=(
-                    f"Matched row {row_index}, but no five-layer recipe is "
+                    f"Matched row {row_index}, but no five-layer or six-layer recipe is "
                     "available for this LUT row."
                 ),
                 source=self.sources[row_index] if row_index < len(self.sources) else "",
@@ -529,19 +572,20 @@ class ColorQueryEngine:
         """查询 5 色组合
 
         Args:
-            selected_indices: 用户选择的 5 个索引，例如 [0, 1, 0, 3, 2]
+            selected_indices: 用户选择的 5 或 6 个索引，例如 [0, 1, 0, 3, 2]
 
         Returns:
             ColorQueryResult: 查询结果
         """
-        # 验证输入
-        if len(selected_indices) != 5:
+        expected_lengths = self._accepted_selection_lengths()
+        if len(selected_indices) not in expected_lengths:
+            expected_message = " 或 ".join(str(value) for value in expected_lengths)
             return ColorQueryResult(
                 found=False,
                 selected_indices=selected_indices,
                 result_rgb=None,
                 row_index=-1,
-                message=f"错误：需要选择 5 次颜色，当前选择了 {len(selected_indices)} 次",
+                message=f"错误：需要选择 {expected_message} 次颜色，当前选择了 {len(selected_indices)} 次",
             )
 
         # 如果有 stack_lut，使用快速查询
@@ -553,29 +597,42 @@ class ColorQueryEngine:
 
     def _query_with_stack(self, selected_indices: List[int]) -> ColorQueryResult:
         """使用 stack 文件进行快速查询"""
-        target = np.array(selected_indices)
-        matches = np.where((self.stack_lut == target).all(axis=1))[0]
-
-        if len(matches) > 0:
-            row_idx = matches[0]
-            result_rgb = tuple(self.lut_rgb[row_idx])
-            source = self.sources[row_idx] if row_idx < len(self.sources) else ""
-            return ColorQueryResult(
-                found=True,
-                selected_indices=selected_indices,
-                result_rgb=result_rgb,
-                row_index=row_idx,
-                message=f"找到匹配！行索引: {row_idx}",
-                source=source,
-            )
-        else:
+        if self.stack_lut is None:
+            return self._query_without_stack(selected_indices)
+        stack_arr = np.asarray(self.stack_lut)
+        if stack_arr.ndim != 2 or stack_arr.shape[1] not in _SUPPORTED_STACK_RECIPE_WIDTHS:
             return ColorQueryResult(
                 found=False,
                 selected_indices=selected_indices,
                 result_rgb=None,
                 row_index=-1,
-                message="未找到匹配的组合",
+                message="当前 LUT 没有可直接查询的配方列",
             )
+
+        for row_idx, row in enumerate(stack_arr):
+            recipe = self._normalize_layer_recipe(
+                row.tolist(),
+                source_width=self._source_recipe_width(row_idx),
+            )
+            if recipe == selected_indices:
+                result_rgb = tuple(self.lut_rgb[row_idx])
+                source = self.sources[row_idx] if row_idx < len(self.sources) else ""
+                return ColorQueryResult(
+                    found=True,
+                    selected_indices=selected_indices,
+                    result_rgb=result_rgb,
+                    row_index=row_idx,
+                    message=f"找到匹配！行索引: {row_idx}",
+                    source=source,
+                )
+
+        return ColorQueryResult(
+            found=False,
+            selected_indices=selected_indices,
+            result_rgb=None,
+            row_index=-1,
+            message="未找到匹配的组合",
+        )
 
     def _query_without_stack(self, selected_indices: List[int]) -> ColorQueryResult:
         """动态查询（无 stack 文件）"""
@@ -617,10 +674,13 @@ class ColorQueryEngine:
             stack_arr = np.asarray(self.stack_lut)
             if stack_arr.ndim != 2:
                 return None
-            if stack_arr.shape[1] == 5:
+            if stack_arr.shape[1] in _SUPPORTED_STACK_RECIPE_WIDTHS:
                 if row_index < 0 or row_index >= stack_arr.shape[0]:
                     return None
-                return self._normalize_five_layer_recipe(stack_arr[row_index].tolist())
+                return self._normalize_layer_recipe(
+                    stack_arr[row_index].tolist(),
+                    source_width=self._source_recipe_width(row_index),
+                )
             if stack_arr.shape[1] != 0:
                 return None
 
@@ -640,8 +700,20 @@ class ColorQueryEngine:
             remaining -= value * base
         return recipe
 
-    def _normalize_five_layer_recipe(self, values: List[int]) -> List[int] | None:
-        if len(values) != 5 or self.color_count <= 0:
+    def _source_recipe_width(self, row_index: int) -> int | None:
+        if self._stack_recipe_widths is None:
+            return None
+        if row_index < 0 or row_index >= len(self._stack_recipe_widths):
+            return None
+        return self._stack_recipe_widths[row_index]
+
+    def _normalize_layer_recipe(
+        self,
+        values: List[int],
+        *,
+        source_width: int | None = None,
+    ) -> List[int] | None:
+        if len(values) not in _SUPPORTED_STACK_RECIPE_WIDTHS or self.color_count <= 0:
             return None
         recipe: list[int] = []
         for value in values:
@@ -649,9 +721,44 @@ class ColorQueryEngine:
             if integer_value is None:
                 return None
             recipe.append(integer_value)
+        if source_width == 5 and len(recipe) == 6 and recipe[-1] == -1:
+            legacy_recipe = recipe[:5]
+            if all(0 <= index < self.color_count for index in legacy_recipe):
+                return legacy_recipe
         if any(index < 0 or index >= self.color_count for index in recipe):
             return None
         return recipe
+
+    def _accepted_selection_lengths(self) -> tuple[int, ...]:
+        if self.stack_lut is None:
+            return (5,)
+        stack_arr = np.asarray(self.stack_lut)
+        if stack_arr.ndim == 2 and stack_arr.shape[1] in _SUPPORTED_STACK_RECIPE_WIDTHS:
+            lengths = set()
+            for row_index, row in enumerate(stack_arr):
+                recipe = self._normalize_layer_recipe(
+                    row.tolist(),
+                    source_width=self._source_recipe_width(row_index),
+                )
+                if recipe is not None:
+                    lengths.add(len(recipe))
+            if lengths:
+                return tuple(sorted(lengths))
+            return (int(stack_arr.shape[1]),)
+        return (5,)
+
+    def _expected_selection_length(self) -> int:
+        return self._accepted_selection_lengths()[-1]
+
+    def expected_selection_length(self) -> int:
+        """Return the recipe width accepted by this LUT query engine.
+        返回当前 LUT 查询引擎接受的配方层数。
+        """
+        return self._expected_selection_length()
+
+    def accepted_selection_lengths(self) -> tuple[int, ...]:
+        """Return all recipe widths accepted by this LUT query engine."""
+        return self._accepted_selection_lengths()
 
     def _supports_dynamic_five_layer_row_decoding(self) -> bool:
         row_count = int(np.asarray(self.lut_rgb).reshape(-1, 3).shape[0])

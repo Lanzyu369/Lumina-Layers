@@ -85,6 +85,86 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "近期接口错误",
     en: "Recent API errors",
   },
+  api_error_http_400: {
+    zh: "请求数据无效，请检查填写的值。",
+    en: "Request data is invalid. Please check the entered values.",
+  },
+  api_error_http_401: {
+    zh: "继续操作前需要先完成登录或认证。",
+    en: "Authentication is required before this action can continue.",
+  },
+  api_error_http_402: {
+    zh: "此操作需要可用额度或付款状态后才能继续。",
+    en: "This action requires an available quota or payment before it can continue.",
+  },
+  api_error_http_403: {
+    zh: "你没有权限执行此操作。",
+    en: "You do not have permission to perform this action.",
+  },
+  api_error_http_404: {
+    zh: "请求的资源不存在或已过期。",
+    en: "The requested resource was not found or has expired.",
+  },
+  api_error_http_405: {
+    zh: "所选接口不支持此操作。",
+    en: "This action is not supported by the selected API endpoint.",
+  },
+  api_error_http_408: {
+    zh: "服务器未能在超时前完成请求。",
+    en: "The request timed out before the server could finish.",
+  },
+  api_error_http_409: {
+    zh: "请求与当前服务器状态冲突。",
+    en: "The request conflicts with the current server state.",
+  },
+  api_error_http_413: {
+    zh: "上传文件或请求内容过大。",
+    en: "The uploaded file or request is too large.",
+  },
+  api_error_http_415: {
+    zh: "服务器不支持此文件类型。",
+    en: "This file type is not supported by the server.",
+  },
+  api_error_http_422: {
+    zh: "请求缺少必填数据或包含无效值。",
+    en: "The request is missing required data or contains invalid values.",
+  },
+  api_error_http_429: {
+    zh: "请求过于频繁，请稍后再试。",
+    en: "Too many requests were sent. Please wait and try again.",
+  },
+  api_error_http_500: {
+    zh: "服务器发生内部错误。请使用请求 ID 查看日志。",
+    en: "The server hit an internal error. Check the log for the request ID.",
+  },
+  api_error_http_502: {
+    zh: "处理请求时上游依赖失败。",
+    en: "An upstream dependency failed while handling this request.",
+  },
+  api_error_http_503: {
+    zh: "服务器暂时不可用，请稍后再试。",
+    en: "Server temporarily unavailable. Please try again later.",
+  },
+  api_error_http_504: {
+    zh: "服务器等待依赖服务时超时。",
+    en: "The server timed out waiting for a dependency.",
+  },
+  api_error_http_default: {
+    zh: "接口请求失败。请使用请求 ID 查看日志。",
+    en: "API request failed. Check the log for the request ID.",
+  },
+  api_error_http_client_default: {
+    zh: "请求未被服务器接受。请检查当前输入、权限或资源是否仍然可用。",
+    en: "The server did not accept the request. Check the current input, permissions, or resource availability.",
+  },
+  api_error_http_server_default: {
+    zh: "服务器处理请求时失败。请使用请求 ID 查看日志。",
+    en: "The server failed while handling the request. Check the log for the request ID.",
+  },
+  api_error_no_response: {
+    zh: "接口请求在服务器返回响应前失败。",
+    en: "API request failed before the server returned a response.",
+  },
   bug_report_modal_privacy_note: {
     zh: "本反馈仅发送到 Lumina Studio 开发者邮箱，用于定位和回复问题。",
     en: "This report is sent only to the Lumina Studio developer mailbox for triage and follow-up.",
@@ -1547,6 +1627,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "耗材库",
     en: "Material Library",
   },
+  "tab.materialCloudSync": {
+    zh: "云端耗材库",
+    en: "Cloud Material Library",
+  },
   "tab.materialRecipe": {
     zh: "配方查询",
     en: "Recipe Query",
@@ -2950,6 +3034,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "校色基准已上传并选中，{count} 条提示",
     en: "Reference uploaded and selected with {count} warnings",
   },
+  ext_cc_reference_upload_ready_session_only: {
+    zh: "校色基准已用于当前会话，但浏览器阻止保存，刷新页面后需要重新上传。",
+    en: "Reference is selected for this session, but the browser blocked saving it. Upload it again after refreshing.",
+  },
   ext_cc_reference_upload_failed: {
     zh: "校色基准上传失败",
     en: "Reference upload failed",
@@ -3113,6 +3201,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   ext_manual_fix_hint: {
     zh: "点击右侧 LUT 预览图中的色块可手动修正颜色",
     en: "Click a cell in the LUT preview to manually fix its color",
+  },
+  ext_manual_fix_resolve_failed: {
+    zh: "无法识别你点击的 LUT 色块，请重新提取后再试。",
+    en: "Could not resolve the selected LUT cell. Re-run extraction and try again.",
   },
   ext_material_type_label: {
     zh: "耗材类型",
@@ -4858,6 +4950,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "生成并下载",
     en: "Generate & Download",
   },
+  slicer_download_failed: {
+    zh: "下载文件暂时无法读取，请重新生成后再试。",
+    en: "The download file could not be read. Regenerate it and try again.",
+  },
   slicer_detecting: {
     zh: "正在检测切片软件...",
     en: "Detecting slicers...",
@@ -4919,8 +5015,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Five-Color Recipe Query",
   },
   five_color_desc: {
-    zh: "从基础色中选出 5 种颜色并查询叠层后的结果色，适合快速验证色片配方。",
-    en: "Pick five base colors and query the blended result to validate layered color recipes quickly.",
+    zh: "从基础色中选出配方颜色并查询叠层后的结果色，适合快速验证色片配方。",
+    en: "Pick base colors and query the blended result to validate layered color recipes quickly.",
   },
   five_color_palette: {
     zh: "基础色板",
@@ -4931,8 +5027,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Match by color value",
   },
   five_color_match_desc: {
-    zh: "输入目标 Hex 色值，从当前色卡中按标准最近邻匹配五层配方。",
-    en: "Enter a target Hex value and match the nearest five-layer recipe from the current LUT card.",
+    zh: "输入目标 Hex 色值，从当前色卡中按标准最近邻匹配配方。",
+    en: "Enter a target Hex value and match the nearest recipe from the current LUT card.",
   },
   five_color_match_input_label: {
     zh: "目标色值",
@@ -4991,11 +5087,11 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Empty cell",
   },
   five_color_match_recipe_unavailable: {
-    zh: "已找到最接近的色卡颜色，但该行无法反推出五层配方。",
-    en: "The nearest LUT color was found, but this row cannot be converted into a five-layer recipe.",
+    zh: "已找到最接近的色卡颜色，但该行无法反推出配方。",
+    en: "The nearest LUT color was found, but this row cannot be converted into a recipe.",
   },
   five_color_match_recipe_unavailable_title: {
-    zh: "无法生成五层配方",
+    zh: "无法生成配方",
     en: "Recipe unavailable",
   },
   five_color_error_select_lut_first: {
@@ -5159,8 +5255,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "No match found",
   },
   five_color_not_found_message: {
-    zh: "当前五层颜色顺序没有对应的色卡记录。",
-    en: "The current five-layer color order does not match a LUT record.",
+    zh: "当前颜色顺序没有对应的色卡记录。",
+    en: "The current color order does not match a LUT record.",
   },
   five_color_selection_progress: {
     zh: "已选择 {count}/{total} 种颜色，请继续完成配方。",
@@ -5407,6 +5503,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   "vec.send_to_converter": {
     zh: "发送到图像转换",
     en: "Send to Image Converter",
+  },
+  "vec.resource_action_failed": {
+    zh: "SVG 文件暂时无法读取，请重新生成后再试。",
+    en: "The SVG file could not be read. Regenerate it and try again.",
   },
   "vec.error": {
     zh: "矢量化失败",
@@ -6695,6 +6795,282 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "可一次选择多个 ZIP；导出文件也可再次批量导入。",
     en: "You can choose multiple ZIP files at once, and exported bundles can be imported again in bulk.",
   },
+  mat_sync_title: {
+    zh: "云端耗材库",
+    en: "Cloud Material Library",
+  },
+  mat_sync_catalog_count_label: {
+    zh: "云端条目",
+    en: "Cloud Items",
+  },
+  mat_sync_catalog_loaded_inline: {
+    zh: "已加载 {loaded} / {total} 个云端耗材",
+    en: "Loaded {loaded} / {total} cloud materials",
+  },
+  mat_sync_index_state_label: {
+    zh: "索引状态",
+    en: "Index",
+  },
+  mat_sync_installed_count_label: {
+    zh: "已安装",
+    en: "Installed",
+  },
+  mat_sync_update_count_label: {
+    zh: "可更新",
+    en: "Updates",
+  },
+  mat_sync_last_sync_label: {
+    zh: "上次同步",
+    en: "Last Sync",
+  },
+  mat_sync_last_sync_inline: {
+    zh: "本地索引更新时间：{time}",
+    en: "Local index updated: {time}",
+  },
+  mat_sync_state_missing: {
+    zh: "未建立",
+    en: "Missing",
+  },
+  mat_sync_state_ready: {
+    zh: "正常",
+    en: "Ready",
+  },
+  mat_sync_state_invalid: {
+    zh: "异常",
+    en: "Invalid",
+  },
+  mat_sync_state_unknown: {
+    zh: "未知",
+    en: "Unknown",
+  },
+  mat_sync_refresh_btn: {
+    zh: "刷新云端目录",
+    en: "Refresh Catalog",
+  },
+  mat_sync_load_more_btn: {
+    zh: "加载更多",
+    en: "Load More",
+  },
+  mat_sync_load_all_btn: {
+    zh: "加载全部",
+    en: "Load All",
+  },
+  mat_sync_status_failed: {
+    zh: "读取云端耗材库失败",
+    en: "Failed to load cloud material library",
+  },
+  mat_sync_catalog_not_configured: {
+    zh: "尚未配置云端耗材库。本地耗材库仍可离线使用；配置 LUMINA_MATERIAL_REGISTRY_URL 后会显示云端耗材。",
+    en: "Cloud material registry is not configured. The local material library remains available offline; configure LUMINA_MATERIAL_REGISTRY_URL to show cloud materials.",
+  },
+  mat_sync_catalog_refresh_success: {
+    zh: "云端耗材目录已刷新。",
+    en: "Cloud material catalog refreshed.",
+  },
+  mat_sync_refresh_success: {
+    zh: "云端耗材同步完成。",
+    en: "Cloud material sync completed.",
+  },
+  mat_sync_refresh_failed: {
+    zh: "云端耗材同步失败",
+    en: "Cloud material sync failed",
+  },
+  mat_sync_official_badge: {
+    zh: "官方",
+    en: "Official",
+  },
+  mat_sync_search_placeholder: {
+    zh: "搜索品牌、名称、目录或 ID",
+    en: "Search brand, name, directory, or ID",
+  },
+  mat_sync_filter_group_label: {
+    zh: "云端耗材筛选",
+    en: "Cloud material filters",
+  },
+  mat_sync_filter_all: {
+    zh: "全部",
+    en: "All",
+  },
+  mat_sync_filter_official: {
+    zh: "官方",
+    en: "Official",
+  },
+  mat_sync_filter_not_installed: {
+    zh: "未安装",
+    en: "Not Installed",
+  },
+  mat_sync_filter_updates: {
+    zh: "可更新",
+    en: "Updates",
+  },
+  mat_sync_filter_installed: {
+    zh: "已安装",
+    en: "Installed",
+  },
+  mat_sync_install_btn: {
+    zh: "下载到本地",
+    en: "Download",
+  },
+  mat_sync_update_btn: {
+    zh: "更新到 {revisionId}",
+    en: "Update to {revisionId}",
+  },
+  mat_sync_installed_btn: {
+    zh: "已安装",
+    en: "Installed",
+  },
+  mat_sync_local_available_btn: {
+    zh: "本地已有版本",
+    en: "Local revision available",
+  },
+  mat_sync_official_password_required_btn: {
+    zh: "需要官方密码",
+    en: "Official password required",
+  },
+  mat_sync_install_success: {
+    zh: "耗材已下载并安装到本地。",
+    en: "Material downloaded and installed locally.",
+  },
+  mat_sync_install_failed: {
+    zh: "耗材下载失败",
+    en: "Material download failed",
+  },
+  mat_sync_catalog_state_label: {
+    zh: "状态",
+    en: "Status",
+  },
+  mat_sync_catalog_state_not_installed: {
+    zh: "未安装",
+    en: "Not installed",
+  },
+  mat_sync_catalog_state_installed: {
+    zh: "已安装",
+    en: "Installed",
+  },
+  mat_sync_catalog_state_update_available: {
+    zh: "有新版本",
+    en: "Update available",
+  },
+  mat_sync_catalog_state_local_available: {
+    zh: "本地已有版本",
+    en: "Local revision available",
+  },
+  mat_sync_catalog_state_local_missing: {
+    zh: "本地文件缺失",
+    en: "Local files missing",
+  },
+  mat_sync_local_section_title: {
+    zh: "本地已安装 / 版本回滚",
+    en: "Local Installed / Rollback",
+  },
+  mat_sync_catalog_empty: {
+    zh: "没有匹配的云端耗材。",
+    en: "No matching cloud materials.",
+  },
+  mat_sync_admin_section_title: {
+    zh: "贡献者 / 管理员入口",
+    en: "Contributor / Admin",
+  },
+  mat_sync_upload_title: {
+    zh: "测试服务器上传与审批",
+    en: "Test Server Upload & Approval",
+  },
+  mat_sync_upload_empty: {
+    zh: "上传耗材包后，可用官方密码批准为 official 耗材。",
+    en: "After uploading a material package, approve it as official with the official password.",
+  },
+  mat_sync_upload_btn: {
+    zh: "上传耗材包",
+    en: "Upload Package",
+  },
+  mat_sync_upload_success: {
+    zh: "耗材包已上传到待审核队列。",
+    en: "Material package uploaded to the review queue.",
+  },
+  mat_sync_upload_failed: {
+    zh: "耗材包上传失败",
+    en: "Material package upload failed",
+  },
+  mat_sync_approve_official_btn: {
+    zh: "批准为官方耗材",
+    en: "Approve as Official",
+  },
+  mat_sync_approve_success: {
+    zh: "耗材包已批准为官方耗材。",
+    en: "Material package approved as official.",
+  },
+  mat_sync_approve_failed: {
+    zh: "官方耗材审批失败",
+    en: "Official approval failed",
+  },
+  mat_sync_approve_existing_title: {
+    zh: "审批已有云端耗材",
+    en: "Approve Existing Cloud Materials",
+  },
+  mat_sync_approve_existing_empty: {
+    zh: "在上方云端耗材卡片勾选非 official 耗材后，可在这里批准为官方耗材。",
+    en: "Select non-official cloud material cards above, then approve them as official here.",
+  },
+  mat_sync_approve_selected_summary: {
+    zh: "已选择 {count} 个云端耗材，审批后会进入 official 频道。",
+    en: "{count} cloud materials selected. Approval will publish them to the official channel.",
+  },
+  mat_sync_approve_selected_btn: {
+    zh: "批准选中云端耗材为官方",
+    en: "Approve Selected Cloud Materials",
+  },
+  mat_sync_approve_selected_success: {
+    zh: "已将 {count} 个云端耗材批准为官方耗材。",
+    en: "Approved {count} cloud materials as official.",
+  },
+  mat_sync_approve_package_path_invalid: {
+    zh: "无法解析所选云端耗材的包路径。",
+    en: "Could not resolve the selected cloud material package path.",
+  },
+  mat_sync_official_password_placeholder: {
+    zh: "官方审批密码",
+    en: "Official approval password",
+  },
+  mat_sync_package_path_label: {
+    zh: "包路径",
+    en: "Package Path",
+  },
+  mat_sync_package_size_label: {
+    zh: "体积",
+    en: "Size",
+  },
+  mat_sync_material_id_label: {
+    zh: "耗材 ID",
+    en: "Material ID",
+  },
+  mat_sync_revision_label: {
+    zh: "版本",
+    en: "Revision",
+  },
+  mat_sync_content_fingerprint_label: {
+    zh: "内容指纹",
+    en: "Fingerprint",
+  },
+  mat_sync_select_catalog_item_label: {
+    zh: "选择云端耗材「{materialName}」",
+    en: 'Select cloud material "{materialName}"',
+  },
+  mat_sync_rollback_btn: {
+    zh: "回滚到 {revisionId}",
+    en: "Rollback to {revisionId}",
+  },
+  mat_sync_rollback_success: {
+    zh: "耗材版本已回滚。",
+    en: "Material revision rolled back.",
+  },
+  mat_sync_rollback_failed: {
+    zh: "耗材版本回滚失败",
+    en: "Material rollback failed",
+  },
+  mat_sync_no_rollback: {
+    zh: "暂无可回滚版本",
+    en: "No rollback revision",
+  },
   mat_gradient_library_selection_summary: {
     zh: "已选择 {selected} / {total} 个耗材",
     en: "Selected {selected} / {total} materials",
@@ -6810,6 +7186,22 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   mat_gradient_library_reverify_btn: {
     zh: "再次验证",
     en: "Re-Verify",
+  },
+  mat_gradient_library_cloud_upload_btn: {
+    zh: "上传到云端",
+    en: "Upload to Cloud",
+  },
+  mat_gradient_library_cloud_upload_password_prompt: {
+    zh: "请输入官方审批密码，用于上传这个耗材到云端待审核队列。",
+    en: "Enter the official approval password to upload this material to the cloud review queue.",
+  },
+  mat_gradient_library_cloud_upload_success: {
+    zh: "耗材已提交到云端待审核队列。",
+    en: "Material uploaded to the cloud review queue.",
+  },
+  mat_gradient_library_cloud_upload_failed: {
+    zh: "上传到云端失败",
+    en: "Failed to upload material to cloud",
   },
   mat_gradient_library_delete_btn: {
     zh: "删除耗材",

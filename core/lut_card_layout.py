@@ -214,6 +214,7 @@ def resolve_lut_layout(color_mode: str | None, total_count: int) -> LutCardLayou
             ),
         )
     elif count == 1024:
+        padding = 4 if "5-Color Extended" in mode else 1
         pages = (
             _make_page(
                 page_index=0,
@@ -223,6 +224,7 @@ def resolve_lut_layout(color_mode: str | None, total_count: int) -> LutCardLayou
                 item_count=1024,
                 data_rows=32,
                 data_cols=32,
+                padding=padding,
             ),
         )
     elif count == 1296:
@@ -247,6 +249,7 @@ def resolve_lut_layout(color_mode: str | None, total_count: int) -> LutCardLayou
                 item_count=1024,
                 data_rows=32,
                 data_cols=32,
+                padding=4,
             ),
             _make_page(
                 page_index=1,

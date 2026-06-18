@@ -28,6 +28,7 @@ import shutil
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from pathlib import PurePath, PureWindowsPath
 from typing import Any, Iterable
 from urllib.parse import urlparse
 
@@ -41,6 +42,7 @@ from api.feedback_materials_bundle import pack_materials
 from api.feedback_time import now_beijing
 from api.structured_logging import get_logger
 from config import TEMP_DIR
+from utils.lut_manager import LUTManager
 
 __all__ = [
     "SyncCollectionResult",
@@ -258,28 +260,65 @@ def _find_lut_file(lut_name: str) -> Path | None:
 
     先精确匹配，再大小写不敏感；按 .npy/.json/.npz/.msgpack 的优先顺序取。
     """
-    if not lut_name:
+    if not _is_lut_name_path_safe(lut_name):
         return None
-    lut_preset_dir = REPO_ROOT / "lut-preset"
+    lut_preset_dir = _safe_lut_preset_root()
     if not lut_preset_dir.is_dir():
         return None
+
+    display_match = LUTManager.get_lut_path(lut_name)
+    if display_match:
+        found = _lut_file_within_preset(Path(display_match), lut_preset_dir)
+        if found is not None:
+            return found
+
     for ext in _LUT_EXTENSIONS:
         exact = lut_preset_dir / f"{lut_name}{ext}"
-        if exact.exists():
-            return exact
+        found = _lut_file_within_preset(exact, lut_preset_dir)
+        if found is not None:
+            return found
     # Case-insensitive fallback: search children.
     try:
         lowered = lut_name.lower()
         for path in lut_preset_dir.rglob("*"):
-            if not path.is_file():
-                continue
             if path.stem.lower() != lowered:
                 continue
-            if path.suffix.lower() in _LUT_EXTENSIONS:
-                return path
+            found = _lut_file_within_preset(path, lut_preset_dir)
+            if found is not None:
+                return found
     except OSError:
         return None
     return None
+
+
+def _is_lut_name_path_safe(lut_name: object) -> bool:
+    """Return whether a client LUT name is safe to use for lookup."""
+
+    if not isinstance(lut_name, str) or not lut_name.strip():
+        return False
+    if "/" in lut_name or "\\" in lut_name:
+        return False
+    if PurePath(lut_name).is_absolute() or PureWindowsPath(lut_name).is_absolute():
+        return False
+    path_parts = (*PurePath(lut_name).parts, *PureWindowsPath(lut_name).parts)
+    return ".." not in path_parts
+
+
+def _safe_lut_preset_root() -> Path:
+    return (REPO_ROOT / "lut-preset").resolve()
+
+
+def _lut_file_within_preset(path: Path, preset_root: Path) -> Path | None:
+    try:
+        resolved = path.resolve()
+        if not resolved.is_file():
+            return None
+        if resolved.suffix.lower() not in _LUT_EXTENSIONS:
+            return None
+        resolved.relative_to(preset_root)
+    except (OSError, ValueError):
+        return None
+    return resolved
 
 
 def _format_created_at(value: Any) -> str | None:
@@ -385,11 +424,9 @@ def collect_sync_attachments(
         ref = context.get("active_final_artifact_ref") or {}
         session_id = ref.get("session_id") if isinstance(ref, dict) else None
         artifact_type = ref.get("artifact_type") if isinstance(ref, dict) else None
-        disk_path = ref.get("disk_path") if isinstance(ref, dict) else None
         download_url = ref.get("download_url") if isinstance(ref, dict) else None
         final = _collect_final_artifact(
             ticket_dir, file_registry, session_id, artifact_type,
-            disk_path=disk_path,
             download_url=download_url,
         )
         log.info(
@@ -555,7 +592,6 @@ def _collect_final_artifact(
     session_id: str | None,
     artifact_type: str | None,
     *,
-    disk_path: str | None = None,
     download_url: str | None = None,
 ) -> dict[str, Any]:
     """Build the ``final_artifact`` attachment dict.
@@ -563,14 +599,14 @@ def _collect_final_artifact(
     First attempts the exact ``download_url`` file id because it represents
     the artifact the user is currently offered for download. If that fails
     (e.g. the URL is invalid, expired, private, or not a final artifact), it
-    falls back to FileRegistry by ``session_id`` and then to ``disk_path`` from
-    the frontend ref — but only if the disk path is a regular file with an
-    allowed extension (.3mf / .zip) and resolves inside ``REPO_ROOT/output``.
+    falls back to FileRegistry by ``session_id``. The client context may still
+    contain a historical ``disk_path`` value, but a client-supplied server path
+    is not an authorization source for copying files.
 
     优先按 ``download_url`` 精确解析文件 id，因为它代表用户当前看到的下载产物。
     如果失败（例如 URL 无效、已过期、私有或不是最终产物），再通过
-    FileRegistry（按 session_id）查找，最后回退到前端 ref 中的 ``disk_path``。
-    磁盘路径回退仍要求扩展名允许且 resolve 后位于 ``REPO_ROOT/output`` 内。
+    FileRegistry（按 session_id）查找。客户端上下文里可能仍带旧版 ``disk_path``，
+    但客户端提交的服务器磁盘路径不能作为复制附件的授权依据。
     """
     base = {
         "status": "not_applicable",
@@ -582,7 +618,7 @@ def _collect_final_artifact(
         "generated_at": None,
         "history_count": 0,
     }
-    if not session_id and not disk_path and not download_url:
+    if not session_id and not download_url:
         return base
 
     # --- Primary path: exact /api/files/<id> from frontend ref ---
@@ -624,62 +660,8 @@ def _collect_final_artifact(
                             "history_count": history_count,
                         }
 
-    # --- Fallback: disk_path from frontend ref ---
-    if disk_path:
-        attached = _try_disk_path_fallback(ticket_dir, disk_path, artifact_type, session_id)
-        if attached is not None:
-            return attached
-
     # Neither registry nor fallback yielded a file.
     return {**base, "status": "expired_ttl"}
-
-
-def _try_disk_path_fallback(
-    ticket_dir: Path,
-    disk_path: str,
-    artifact_type: str | None,
-    session_id: str | None,
-) -> dict[str, Any] | None:
-    """Attempt to copy a final artifact from ``disk_path`` with safety checks.
-
-    安全校验后尝试从 ``disk_path`` 复制最终产物。
-
-    Safety rules:
-    1. Must be a non-empty string.
-    2. Must resolve to a regular file (not symlink target outside, not dir).
-    3. Extension must be in ``_FINAL_ARTIFACT_EXTENSIONS`` (.3mf / .zip).
-    4. Resolved path must be inside ``REPO_ROOT/output``.
-
-    Returns the attachment dict on success, or None if any check fails.
-    """
-    if not disk_path or not disk_path.strip():
-        return None
-    src = Path(disk_path)
-    if not src.is_file():
-        return None
-    suffix = src.suffix.lower()
-    if suffix not in _FINAL_ARTIFACT_EXTENSIONS:
-        return None
-    # Security: only allow paths inside REPO_ROOT/output.
-    allowed_root = (REPO_ROOT / "output").resolve()
-    try:
-        src.resolve().relative_to(allowed_root)
-    except ValueError:
-        return None
-    dst = ticket_dir / f"final{suffix}"
-    shutil.copy2(src, dst)
-    size = dst.stat().st_size
-    sha = file_sha256(dst)
-    return {
-        "status": "attached",
-        "filename": dst.name,
-        "sha256": sha,
-        "size_bytes": size,
-        "artifact_type": suffix.lstrip(".") or artifact_type,
-        "source_session_id": session_id,
-        "generated_at": None,
-        "history_count": 0,
-    }
 
 
 def _collect_lut(ticket_dir: Path, context: dict[str, Any]) -> dict[str, Any]:
