@@ -16,7 +16,6 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import ValidationError
 
 from api.dependencies import get_file_registry, get_worker_pool
-from api.errors import to_http_exception
 from api.file_bridge import ensure_png_tempfile
 from api.file_registry import FileRegistry
 from api.schemas.vectorizer import (
@@ -30,6 +29,17 @@ from api.structured_logging import get_logger
 
 router = APIRouter(prefix="/api/vectorize", tags=["Vectorizer"])
 VECTORIZER_OUTPUT_TTL_SECONDS = 1200
+VECTORIZER_FAILURE_DETAIL = "Vectorization failed. Check server logs for details."
+VECTORIZER_OUTPUT_FAILURE_DETAIL = (
+    "Vectorization output could not be prepared. Check server logs for details."
+)
+_VECTORIZER_BOUNDARY_ERRORS: tuple[type[Exception], ...] = (
+    ValueError,
+    TypeError,
+    KeyError,
+    OSError,
+    RuntimeError,
+)
 log = get_logger(__name__)
 
 
@@ -72,6 +82,18 @@ def _palette_for_response(palette: object) -> list[str]:
         except (TypeError, ValueError):
             normalized.append(str(entry))
     return normalized
+
+
+def _log_vectorize_failure(stage: str, exc: Exception) -> None:
+    log.exception(
+        "Vectorization failed",
+        extra={
+            "event": "vectorize_image_failed",
+            "stage": stage,
+            "error_type": type(exc).__name__,
+            "error_message": str(exc),
+        },
+    )
 
 
 @router.get("/defaults")
@@ -132,26 +154,44 @@ async def vectorize_image(
             result = await pool.submit(worker_vectorize, image_path, params_clean)
         except asyncio.TimeoutError:
             raise HTTPException(status_code=504, detail="Vectorization timed out")
-        except (ValueError, TypeError, KeyError, OSError, RuntimeError) as e:
-            log.exception(
-                "Vectorization failed",
-                extra={
-                    "event": "vectorize_failed",
-                    "error_type": type(e).__name__,
-                    "error_message": str(e),
-                },
-            )
-            raise to_http_exception(e, "Vectorization")
+        except _VECTORIZER_BOUNDARY_ERRORS as e:
+            _log_vectorize_failure("worker", e)
+            raise HTTPException(
+                status_code=500,
+                detail=VECTORIZER_FAILURE_DETAIL,
+            ) from e
 
-        svg_path = result["svg_path"]
-        svg_file_id = registry.register_path(
-            str(uuid.uuid4()),
-            svg_path,
-            "output.svg",
-            ttl_seconds=VECTORIZER_OUTPUT_TTL_SECONDS,
-        )
+        try:
+            svg_path_value = result["svg_path"]
+            if not isinstance(svg_path_value, str) or not svg_path_value:
+                raise ValueError("worker result missing svg_path")
+            svg_path = svg_path_value
+            num_shapes = int(result["num_shapes"])
+            num_colors = int(result["num_colors"])
+            width = int(result["width"])
+            height = int(result["height"])
+            palette = result["palette"]
+        except _VECTORIZER_BOUNDARY_ERRORS as exc:
+            _log_vectorize_failure("worker_result", exc)
+            raise HTTPException(
+                status_code=500,
+                detail=VECTORIZER_FAILURE_DETAIL,
+            ) from exc
+
+        try:
+            svg_file_id = registry.register_path(
+                str(uuid.uuid4()),
+                svg_path,
+                "output.svg",
+                ttl_seconds=VECTORIZER_OUTPUT_TTL_SECONDS,
+            )
+        except _VECTORIZER_BOUNDARY_ERRORS as exc:
+            _log_vectorize_failure("register_output", exc)
+            raise HTTPException(
+                status_code=500,
+                detail=VECTORIZER_OUTPUT_FAILURE_DETAIL,
+            ) from exc
         svg_registered = True
-        palette = result["palette"]
         palette_size = len(palette) if isinstance(palette, list) else 0
 
         log.info(
@@ -159,22 +199,22 @@ async def vectorize_image(
             extra={
                 "event": "vectorize_image_done",
                 "svg_file_id": svg_file_id,
-                "num_shapes": result["num_shapes"],
-                "num_colors": result["num_colors"],
-                "width": result["width"],
-                "height": result["height"],
+                "num_shapes": num_shapes,
+                "num_colors": num_colors,
+                "width": width,
+                "height": height,
                 "palette_size": palette_size,
             },
         )
 
         return VectorizeResponse(
             status="ok",
-            message=f"Vectorized: {result['num_shapes']} shapes, {result['num_colors']} colors",
+            message=f"Vectorized: {num_shapes} shapes, {num_colors} colors",
             svg_url=f"/api/files/{svg_file_id}",
-            width=result["width"],
-            height=result["height"],
-            num_shapes=result["num_shapes"],
-            num_colors=result["num_colors"],
+            width=width,
+            height=height,
+            num_shapes=num_shapes,
+            num_colors=num_colors,
             palette=_palette_for_response(palette),
         )
     finally:
