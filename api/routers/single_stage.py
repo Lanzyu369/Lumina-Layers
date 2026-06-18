@@ -123,6 +123,10 @@ FIT_STAGE_A_EXPIRED_STAGE_JSON_DETAIL = (
     "Extracted single-stage dataset has expired. "
     "Re-run extraction before fitting Stage A."
 )
+MATERIAL_SOLVER_CACHE_LIST_FAILED_DETAIL = (
+    "Material solver caches could not be listed. "
+    "Check cache storage and try again."
+)
 MaterialCacheEvictor = Callable[[str], int]
 _RUNTIME_BUILD_LOCKS_GUARD = threading.Lock()
 _RUNTIME_BUILD_LOCKS: dict[tuple[str, int, str, str, int], threading.Lock] = {}
@@ -1450,7 +1454,18 @@ async def material_solver_cache_list() -> MaterialSolverCacheListResponse:
     try:
         raw_entries = list_cached_entries()
     except (OSError, ValueError) as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        log.error(
+            "Material solver cache list failed",
+            extra={
+                "event": "material_solver_cache_list_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=MATERIAL_SOLVER_CACHE_LIST_FAILED_DETAIL,
+        ) from exc
     entries = [
         _cache_entry_from_metadata(
             entry,
