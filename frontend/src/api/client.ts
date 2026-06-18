@@ -174,7 +174,21 @@ function isGenericHttpDetail(detail: string, statusCode: number | null): boolean
   ].includes(normalized);
 }
 
-function fallbackHttpStatusMessage(statusCode: number | null): string {
+function withRequestId(
+  message: string,
+  statusCode: number | null,
+  requestId: string | null = null,
+): string {
+  if (!requestId || !isServerErrorStatus(statusCode)) {
+    return message;
+  }
+  return tRuntime("api_error_with_request_id", { message, requestId });
+}
+
+function fallbackHttpStatusMessage(
+  statusCode: number | null,
+  requestId: string | null = null,
+): string {
   switch (statusCode) {
     case 400:
       return tRuntime("api_error_http_400");
@@ -201,13 +215,16 @@ function fallbackHttpStatusMessage(statusCode: number | null): string {
     case 429:
       return tRuntime("api_error_http_429");
     case 500:
+      if (requestId) {
+        return tRuntime("api_error_http_500_with_request_id", { requestId });
+      }
       return tRuntime("api_error_http_500");
     case 502:
-      return tRuntime("api_error_http_502");
+      return withRequestId(tRuntime("api_error_http_502"), statusCode, requestId);
     case 503:
-      return tRuntime("api_error_http_503");
+      return withRequestId(tRuntime("api_error_http_503"), statusCode, requestId);
     case 504:
-      return tRuntime("api_error_http_504");
+      return withRequestId(tRuntime("api_error_http_504"), statusCode, requestId);
     default:
       if (typeof statusCode !== "number") {
         return tRuntime("api_error_no_response");
@@ -216,7 +233,11 @@ function fallbackHttpStatusMessage(statusCode: number | null): string {
         return tRuntime("api_error_http_client_default");
       }
       if (statusCode >= 500 && statusCode < 600) {
-        return tRuntime("api_error_http_server_default");
+        return withRequestId(
+          tRuntime("api_error_http_server_default"),
+          statusCode,
+          requestId,
+        );
       }
       return tRuntime("api_error_http_default");
   }
@@ -226,15 +247,16 @@ function readableApiErrorMessage(
   data: unknown,
   statusCode: number | null,
   error: unknown,
+  requestId: string | null = null,
 ): string {
   if (isServerErrorStatus(statusCode)) {
-    return fallbackHttpStatusMessage(statusCode);
+    return fallbackHttpStatusMessage(statusCode, requestId);
   }
   const detail = extractReadableDetail(data);
   if (detail && !isGenericHttpDetail(detail, statusCode)) {
     return detail;
   }
-  const fallback = fallbackHttpStatusMessage(statusCode);
+  const fallback = fallbackHttpStatusMessage(statusCode, requestId);
   if (fallback) {
     return fallback;
   }
@@ -442,6 +464,7 @@ apiClient.interceptors.response.use(
       response?.data,
       statusCode,
       error,
+      requestId,
     );
     const responseDetailForLog = summarizeApiErrorData(
       response?.data,

@@ -39,7 +39,7 @@ describe("apiClient", () => {
     apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
 
     const expectedMessage =
-      "The server hit an internal error. Check the log for the request ID.";
+      "The server hit an internal error. Request ID: req-500-debug.";
     const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
     expect(rejected).toMatchObject({ message: expectedMessage });
     expect(rejected.response?.data?.detail).toBe(expectedMessage);
