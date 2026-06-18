@@ -7,6 +7,8 @@ import {
   convertGenerateLargeFormat,
   convertGeneratePuzzle,
   convertPuzzleLayoutPreview,
+  beaconCleanupSessionFiles,
+  cleanupSessionFiles,
   fetchLutList,
   getFileUrl,
 } from "../api/converter";
@@ -666,5 +668,42 @@ describe("getFileUrl", () => {
     expect(getFileUrl("file-2024-01-01_model")).toBe(
       "/api/files/file-2024-01-01_model"
     );
+  });
+});
+
+describe("beaconCleanupSessionFiles", () => {
+  it("falls back to cleanupSessionFiles when sendBeacon is unavailable", () => {
+    const originalSendBeacon = navigator.sendBeacon;
+    Object.defineProperty(navigator, "sendBeacon", {
+      configurable: true,
+      value: undefined,
+    });
+    mockPost.mockResolvedValueOnce({ data: { status: "ok" } });
+
+    try {
+      expect(() =>
+        beaconCleanupSessionFiles("sess-cleanup", ["keep-model"]),
+      ).not.toThrow();
+      expect(mockPost).toHaveBeenCalledWith("/convert/cleanup-session-files", {
+        session_id: "sess-cleanup",
+        keep_file_ids: ["keep-model"],
+      });
+    } finally {
+      Object.defineProperty(navigator, "sendBeacon", {
+        configurable: true,
+        value: originalSendBeacon,
+      });
+    }
+  });
+
+  it("uses the same cleanup payload for the direct API helper", async () => {
+    mockPost.mockResolvedValueOnce({ data: { status: "ok" } });
+
+    await cleanupSessionFiles("sess-cleanup", ["keep-model"]);
+
+    expect(mockPost).toHaveBeenCalledWith("/convert/cleanup-session-files", {
+      session_id: "sess-cleanup",
+      keep_file_ids: ["keep-model"],
+    });
   });
 });
