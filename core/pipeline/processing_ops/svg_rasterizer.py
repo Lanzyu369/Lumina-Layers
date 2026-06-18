@@ -26,6 +26,8 @@ except ImportError:
 
 _SVG_RASTER_CACHE = {}
 _SVG_RASTER_CACHE_MAX = 4
+# resvg needs non-zero DPI to resolve physical SVG units such as mm/in.
+_RESVG_DPI = 96
 
 
 def rasterize_svg(
@@ -88,7 +90,11 @@ def rasterize_svg(
     render_width_px = max(target_width_px, MIN_QUALITY_PX)
 
     _t0 = time.perf_counter()
-    png_bytes = resvg_py.svg_to_bytes(svg_path=svg_path, width=render_width_px)
+    png_bytes = resvg_py.svg_to_bytes(
+        svg_path=svg_path,
+        width=render_width_px,
+        dpi=_RESVG_DPI,
+    )
     _t_render = time.perf_counter() - _t0
 
     from PIL import Image
