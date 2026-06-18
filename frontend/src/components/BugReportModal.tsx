@@ -115,7 +115,12 @@ function CompactContextSummary({
           <ul className="ml-4 list-disc font-mono">
             {recentApiErrors.map((entry, idx) => {
               const details = entry.details as
-                | { status_code?: unknown; path?: unknown; url?: unknown }
+                | {
+                    status_code?: unknown;
+                    path?: unknown;
+                    url?: unknown;
+                    error_message?: unknown;
+                  }
                 | null
                 | undefined;
               const status =
@@ -128,9 +133,19 @@ function CompactContextSummary({
                   : typeof details?.url === "string"
                     ? details.url
                     : "";
+              const message =
+                typeof details?.error_message === "string" &&
+                details.error_message.trim()
+                  ? details.error_message.trim()
+                  : "";
               return (
                 <li key={`${entry.timestamp}-${idx}`}>
-                  {status} · {path || entry.label}
+                  <span>{status} · {path || entry.label}</span>
+                  {message && (
+                    <span className="block text-slate-500 dark:text-slate-400">
+                      {message}
+                    </span>
+                  )}
                 </li>
               );
             })}

@@ -92,6 +92,9 @@ describe("BugReportModal", () => {
 
     expect(screen.getByText("近期接口错误")).toBeInTheDocument();
     expect(screen.getByText("500 · /convert/generate")).toBeInTheDocument();
+    expect(
+      screen.getByText("The server hit an internal error."),
+    ).toBeInTheDocument();
   });
 
   it("submits the built payload and shows a success toast", async () => {
