@@ -23,6 +23,10 @@ from api.colorchecker_artifacts import (
 from api.dependencies import get_file_registry, get_session_store
 from api.file_registry import FileRegistry
 from api.preview_resources import PREVIEW_PUBLIC_PURPOSE
+from api.routers.extractor import (
+    COLORCHECKER_PROCESSING_FAILED_DETAIL,
+    COLORCHECKER_SERVICE_UNAVAILABLE_DETAIL,
+)
 from api.session_store import SessionStore
 from config import COLORCHECKER_TEMP_TTL_SECONDS, IMAGE_PREVIEW_MAX_EDGE
 
@@ -964,6 +968,43 @@ def test_colorchecker_warp_preview_uses_colorchecker_ttl(monkeypatch, tmp_path) 
     assert captured["patch_orientation"] == "rotate_180"
 
 
+def test_colorchecker_warp_preview_hides_core_error_detail(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import core.colorchecker_adapter as adapter
+
+    client, _store, registry = _client_with_state(raise_server_exceptions=False)
+    source_id = _register_colorchecker_source(registry, tmp_path, width=16, height=8)
+    private_path = "/Users/min/private/chart.png"
+
+    def fake_decode(*_args, **_kwargs):
+        return SimpleNamespace(image_bgr=np.zeros((8, 16, 3), dtype=np.uint8))
+
+    def fail_warp(*_args, **_kwargs):
+        raise adapter.ColorCheckerCalibrationError(
+            f"cannot warp {private_path}: singular matrix"
+        )
+
+    monkeypatch.setattr(adapter, "decode_colorchecker_file", fake_decode)
+    monkeypatch.setattr(adapter, "warp_colorchecker_preview", fail_warp)
+
+    response = client.post(
+        "/api/extractor/colorchecker-warp-preview",
+        data={
+            "colorchecker_source_file_id": source_id,
+            "corner_points": "[[0,0],[8,0],[8,4],[0,4]]",
+            "corner_points_width": "8",
+            "corner_points_height": "4",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == COLORCHECKER_PROCESSING_FAILED_DETAIL
+    assert private_path not in response.text
+    assert "singular matrix" not in response.text
+
+
 def test_colorchecker_detect_uses_private_source_and_preview_coordinates(
     monkeypatch,
     tmp_path,
@@ -1039,6 +1080,38 @@ def test_colorchecker_detect_uses_private_source_and_preview_coordinates(
     assert captured["reference_id"] is None
     assert captured["reference_patches"][0]["sRGB"] == [1, 2, 3]
     assert captured["reference_source"]["sourceName"] == "Detect upload"
+
+
+def test_colorchecker_detect_hides_unavailable_error_detail(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import core.colorchecker_adapter as adapter
+
+    client, _store, registry = _client_with_state(raise_server_exceptions=False)
+    source_id = _register_colorchecker_source(registry, tmp_path, width=16, height=8)
+    private_path = "/Users/min/private/core/colorchecker.py"
+
+    def fake_decode(*_args, **_kwargs):
+        return SimpleNamespace(image_bgr=np.zeros((8, 16, 3), dtype=np.uint8))
+
+    def fail_detect(*_args, **_kwargs):
+        raise adapter.ColorCheckerUnavailableError(
+            f"cannot import {private_path}"
+        )
+
+    monkeypatch.setattr(adapter, "decode_colorchecker_file", fake_decode)
+    monkeypatch.setattr(adapter, "detect_colorchecker_chart", fail_detect)
+
+    response = client.post(
+        "/api/extractor/colorchecker-detect-chart",
+        data={"colorchecker_source_file_id": source_id},
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == COLORCHECKER_SERVICE_UNAVAILABLE_DETAIL
+    assert private_path not in response.text
+    assert "cannot import" not in response.text
 
 
 def test_colorchecker_detect_rejects_ambiguous_reference_selection(
