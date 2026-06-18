@@ -39,10 +39,15 @@ def test_upstream_domain_error_maps_to_502() -> None:
     assert exc.detail == "upstream"
 
 
-def test_unknown_exception_maps_to_500_with_context() -> None:
-    exc = to_http_exception(RuntimeError("boom"), "vectorize")
+def test_unknown_exception_maps_to_500_without_leaking_exception_detail() -> None:
+    exc = to_http_exception(
+        RuntimeError("boom at /Users/min/private/input.png"),
+        "vectorize",
+    )
     assert exc.status_code == 500
-    assert exc.detail == "vectorize failed: boom"
+    assert exc.detail == "vectorize failed. Check the server log for details."
+    assert "boom" not in exc.detail
+    assert "/Users/min" not in exc.detail
 
 
 def test_core_validation_error_maps_to_422() -> None:

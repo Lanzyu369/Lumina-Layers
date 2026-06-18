@@ -512,14 +512,18 @@ class TestVectorizeImageCanary:
         assert response.json()["detail"] == "Vectorization timed out"
         assert sorted(tmp_path.iterdir()) == []
 
-    def test_worker_error_cleans_upload_temp_file(
+    def test_worker_error_returns_sanitized_500_and_cleans_upload_temp_file(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
     ) -> None:
         monkeypatch.setattr(config, "TEMP_DIR", str(tmp_path))
         mock_pool = SimpleNamespace(
-            submit=AsyncMock(side_effect=RuntimeError("vector failed"))
+            submit=AsyncMock(
+                side_effect=RuntimeError(
+                    f"vector failed while reading {tmp_path / 'input.png'}"
+                )
+            )
         )
         app = create_app()
         registry = FileRegistry()
@@ -536,7 +540,10 @@ class TestVectorizeImageCanary:
             app.dependency_overrides.clear()
 
         assert response.status_code == 500
-        assert response.json()["detail"] == "Vectorization failed: vector failed"
+        detail = response.json()["detail"]
+        assert detail == "Vectorization failed. Check the server log for details."
+        assert "vector failed" not in detail
+        assert str(tmp_path) not in detail
         assert sorted(tmp_path.iterdir()) == []
 
     def test_registry_failure_cleans_upload_and_unregistered_svg(
@@ -568,13 +575,15 @@ class TestVectorizeImageCanary:
         app.dependency_overrides[get_worker_pool] = lambda: mock_pool
         client = TestClient(app)
         try:
-            with pytest.raises(RuntimeError, match="registry unavailable"):
-                client.post(
-                    "/api/vectorize",
-                    files={"image": ("input.png", _png_bytes(), "image/png")},
-                    data={"params": "{}"},
-                )
+            response = client.post(
+                "/api/vectorize",
+                files={"image": ("input.png", _png_bytes(), "image/png")},
+                data={"params": "{}"},
+            )
         finally:
             app.dependency_overrides.clear()
 
+        assert response.status_code == 500
+        assert response.json()["detail"] == "Internal server error"
+        assert "registry unavailable" not in response.text
         assert sorted(tmp_path.iterdir()) == []
