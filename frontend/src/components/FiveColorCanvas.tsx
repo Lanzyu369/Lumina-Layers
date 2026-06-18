@@ -425,7 +425,7 @@ export default function FiveColorCanvas({
       ctx.fillText(`查询中${dots}`, w / 2, h - 30);
       ctx.restore();
     }
-  }, [isLoading, resizeCanvas, resultHex, slices]);
+  }, [isLoading, requestedLayerCount, resizeCanvas, resultHex, slices]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
