@@ -140,6 +140,12 @@ function isGenericHttpDetail(detail: string, statusCode: number | null): boolean
     return true;
   }
   if (
+    /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/.test(normalized) ||
+    /^[a-z][a-z0-9]*(?:-[a-z0-9]+)+$/.test(normalized)
+  ) {
+    return true;
+  }
+  if (
     typeof statusCode === "number" &&
     new RegExp(
       `^(?:request\\s+failed\\s+with\\s+status\\s+code\\s+|` +
@@ -270,8 +276,21 @@ function buildReadableResponseData(
     return { detail: readableMessage };
   }
   const detail = data.detail;
+  const message = data.message;
   if (typeof detail !== "string" || !isGenericHttpDetail(detail, statusCode)) {
+    if (
+      typeof message === "string" &&
+      isGenericHttpDetail(message, statusCode)
+    ) {
+      return { ...data, message: readableMessage };
+    }
     return data;
+  }
+  if (
+    typeof message === "string" &&
+    isGenericHttpDetail(message, statusCode)
+  ) {
+    return { ...data, detail: readableMessage, message: readableMessage };
   }
   return { ...data, detail: readableMessage };
 }

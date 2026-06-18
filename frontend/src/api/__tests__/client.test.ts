@@ -198,6 +198,67 @@ describe("apiClient", () => {
     });
   });
 
+  it("replaces string error codes with readable HTTP fallbacks", async () => {
+    const error = new Error("Request failed with status code 409");
+    Object.assign(error, {
+      config: { method: "post", url: "/convert/generate" },
+      response: {
+        status: 409,
+        data: { detail: "preview_cache_missing" },
+      },
+    });
+    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+    const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
+    expect(rejected).toMatchObject({
+      message: "The request conflicts with the current server state.",
+    });
+    expect(rejected.response?.data?.detail).toBe(
+      "The request conflicts with the current server state.",
+    );
+  });
+
+  it("replaces top-level string error codes with readable HTTP fallbacks", async () => {
+    const error = new Error("Request failed with status code 409");
+    Object.assign(error, {
+      config: { method: "post", url: "/convert/generate" },
+      response: {
+        status: 409,
+        data: { message: "preview_cache_missing" },
+      },
+    });
+    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+    const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
+    expect(rejected).toMatchObject({
+      message: "The request conflicts with the current server state.",
+    });
+    expect(rejected.response?.data?.message).toBe(
+      "The request conflicts with the current server state.",
+    );
+  });
+
+  it("replaces duplicated detail and message error codes together", async () => {
+    const error = new Error("Request failed with status code 409");
+    Object.assign(error, {
+      config: { method: "post", url: "/convert/generate" },
+      response: {
+        status: 409,
+        data: {
+          detail: "preview_cache_missing",
+          message: "preview-cache-missing",
+        },
+      },
+    });
+    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+    const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
+    const expectedMessage = "The request conflicts with the current server state.";
+    expect(rejected).toMatchObject({ message: expectedMessage });
+    expect(rejected.response?.data?.detail).toBe(expectedMessage);
+    expect(rejected.response?.data?.message).toBe(expectedMessage);
+  });
+
   it("uses a readable HTTP fallback when the response has no detail", async () => {
     const error = new Error("Request failed with status code 503");
     Object.assign(error, {
