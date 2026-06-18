@@ -14,6 +14,37 @@ import { relayBugReport, submitBugReport } from "../../api/feedback";
 import { collectBugReportContext } from "../../utils/bugReportContext";
 import { BugReportModal } from "../BugReportModal";
 
+function createBugReportContext(
+  overrides: Partial<ReturnType<typeof collectBugReportContext>> = {},
+): ReturnType<typeof collectBugReportContext> {
+  return {
+    url: "http://localhost:5174/",
+    user_agent: "vitest-agent",
+    screen_width: 1280,
+    screen_height: 720,
+    device_pixel_ratio: 1,
+    app_version: "2.0.0",
+    language: "zh",
+    theme: "light",
+    active_tab: "converter",
+    active_session_ids: {
+      converter: "session-12345678",
+      single_stage: null,
+    },
+    color_mode: "4-Color (RYBW)",
+    lut_name: "Test LUT",
+    source_version: "legacy",
+    selected_native_brand_key: null,
+    selected_native_db_names: [],
+    selected_material_dir_names: [],
+    material_layer_count: null,
+    material_layer_height_mm: null,
+    material_backing_material_dir_name: null,
+    recent_client_logs: [],
+    ...overrides,
+  };
+}
+
 describe("BugReportModal", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -25,31 +56,7 @@ describe("BugReportModal", () => {
       configurable: true,
       value: undefined,
     });
-    vi.mocked(collectBugReportContext).mockReturnValue({
-      url: "http://localhost:5174/",
-      user_agent: "vitest-agent",
-      screen_width: 1280,
-      screen_height: 720,
-      device_pixel_ratio: 1,
-      app_version: "2.0.0",
-      language: "zh",
-      theme: "light",
-      active_tab: "converter",
-      active_session_ids: {
-        converter: "session-12345678",
-        single_stage: null,
-      },
-      color_mode: "4-Color (RYBW)",
-      lut_name: "Test LUT",
-      source_version: "legacy",
-      selected_native_brand_key: null,
-      selected_native_db_names: [],
-      selected_material_dir_names: [],
-      material_layer_count: null,
-      material_layer_height_mm: null,
-      material_backing_material_dir_name: null,
-      recent_client_logs: [],
-    });
+    vi.mocked(collectBugReportContext).mockReturnValue(createBugReportContext());
   });
 
   it("disables submit until description has content", () => {
@@ -60,6 +67,34 @@ describe("BugReportModal", () => {
       target: { value: "Preview failed" },
     });
     expect(screen.getByRole("button", { name: "发送" })).not.toBeDisabled();
+  });
+
+  it("summarizes recent API client errors from the captured context", () => {
+    vi.mocked(collectBugReportContext).mockReturnValueOnce(createBugReportContext({
+      recent_client_logs: [
+        {
+          timestamp: "2026-06-18T15:00:00.000Z",
+          method: "error",
+          label: "api: request failed",
+          elapsed_ms: null,
+          scope: "api",
+          phase: "request-failed",
+          details: {
+            status_code: 500,
+            url: "/convert/generate",
+            error_message: "The server hit an internal error.",
+          },
+        },
+      ],
+    }));
+
+    render(<BugReportModal open onClose={() => {}} />);
+
+    expect(screen.getByText("近期接口错误")).toBeInTheDocument();
+    expect(screen.getByText("500 · /convert/generate")).toBeInTheDocument();
+    expect(
+      screen.getByText("The server hit an internal error."),
+    ).toBeInTheDocument();
   });
 
   it("submits the built payload and shows a success toast", async () => {
