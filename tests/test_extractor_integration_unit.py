@@ -30,7 +30,6 @@ client: TestClient = TestClient(app)
 # Shared mock return value: (vis_img, preview_img, lut_path, status_msg)
 _mock_vis: np.ndarray = np.zeros((10, 10, 3), dtype=np.uint8)
 _mock_preview: np.ndarray = np.zeros((10, 10, 3), dtype=np.uint8)
-_mock_return = (_mock_vis, _mock_preview, "/tmp/test.npy", "OK")
 
 
 @pytest.fixture(autouse=True)
@@ -54,6 +53,38 @@ def _make_test_image_buf() -> io.BytesIO:
     img.save(buf, format="PNG")
     buf.seek(0)
     return buf
+
+
+def _write_keyed_lut(
+    path: Path,
+    rgb_rows: list[list[int]],
+    *,
+    color_mode: str = "4-Color (RYBW)",
+) -> bytes:
+    """Write a small keyed JSON LUT and return its exact bytes."""
+    rgb = np.array(rgb_rows, dtype=np.uint8)
+    stacks = np.zeros((len(rgb), 0), dtype=np.int32)
+    metadata = LUTManager.infer_default_metadata(
+        path.stem,
+        str(path),
+        len(rgb),
+        color_mode=color_mode,
+    )
+    LUTManager.save_keyed_json(str(path), rgb, stacks, metadata)
+    return path.read_bytes()
+
+
+def _assert_download_survives_session_close(download_url: str, session_id: str) -> bytes:
+    before_close = client.get(download_url)
+    assert before_close.status_code == 200
+
+    close_response = client.post("/api/session/close", json={"session_id": session_id})
+    assert close_response.status_code == 200
+
+    after_close = client.get(download_url)
+    assert after_close.status_code == 200
+    assert after_close.content == before_close.content
+    return after_close.content
 
 
 # =========================================================================
@@ -89,12 +120,21 @@ class TestCornerPointsValidation:
 class TestSessionStatePersistence:
     """Verify extraction stores session state with lut_path and color_mode."""
 
-    def test_extract_stores_session_state(self, _isolate_dependency_overrides) -> None:
+    def test_extract_stores_session_state(
+        self,
+        _isolate_dependency_overrides,
+        tmp_path: Path,
+    ) -> None:
         """Mock run_extraction, verify session contains lut_path and color_mode."""
         buf = _make_test_image_buf()
+        lut_path = tmp_path / "test-lut.json"
+        _write_keyed_lut(
+            lut_path,
+            [[255, 255, 255], [255, 0, 0], [0, 0, 0]],
+        )
         with patch(
             "api.routers.extractor.run_extraction",
-            return_value=_mock_return,
+            return_value=(_mock_vis, _mock_preview, str(lut_path), "OK"),
         ):
             response = client.post(
                 "/api/extractor/extract",
@@ -114,8 +154,216 @@ class TestSessionStatePersistence:
         # Verify session data in store
         session_data = _isolate_dependency_overrides["store"].get(session_id)
         assert session_data is not None
-        assert session_data["lut_path"] == "/tmp/test.npy"
+        assert Path(session_data["lut_path"]).read_bytes() == lut_path.read_bytes()
         assert session_data["color_mode"] == "4-Color (RYBW)"
+
+    def test_extract_lut_download_survives_source_session_close(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """The extractor final LUT download remains available after close."""
+        lut_path = tmp_path / "extract-lut.json"
+        expected_bytes = _write_keyed_lut(
+            lut_path,
+            [[255, 255, 255], [255, 0, 0], [0, 0, 0]],
+        )
+        buf = _make_test_image_buf()
+        vis_img = np.zeros((4, 4, 3), dtype=np.uint8)
+        preview_img = np.zeros((4, 4, 3), dtype=np.uint8)
+
+        with patch(
+            "api.routers.extractor.run_extraction",
+            return_value=(vis_img, preview_img, str(lut_path), "OK"),
+        ):
+            response = client.post(
+                "/api/extractor/extract",
+                files={"image": ("test.png", buf, "image/png")},
+                data={
+                    "corner_points": json.dumps(
+                        [[0, 0], [100, 0], [100, 100], [0, 100]]
+                    ),
+                    "color_mode": "4-Color",
+                    "distortion": "0.0",
+                    "vignette_correction": "false",
+                },
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        downloaded = _assert_download_survives_session_close(
+            body["lut_download_url"],
+            body["session_id"],
+        )
+        assert downloaded == expected_bytes
+
+    def test_merge_5color_lut_download_survives_source_session_close(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """The 5-color merged LUT download is independent of its session."""
+        assets_dir = tmp_path / "assets"
+        assets_dir.mkdir()
+        merged_lut_path = tmp_path / "lumina_lut.json"
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("config.LUT_FILE_PATH", str(merged_lut_path))
+        _write_keyed_lut(
+            assets_dir / "temp_5c_ext_page_1.json",
+            [[255, 255, 255], [255, 0, 0]],
+            color_mode="5-Color Extended",
+        )
+        _write_keyed_lut(
+            assets_dir / "temp_5c_ext_page_2.json",
+            [[255, 255, 0], [0, 0, 0]],
+            color_mode="5-Color Extended",
+        )
+
+        response = client.post("/api/extractor/merge-5color-extended", json={})
+
+        assert response.status_code == 200
+        body = response.json()
+        _assert_download_survives_session_close(
+            body["lut_download_url"],
+            body["session_id"],
+        )
+
+    def test_merge_8color_lut_download_survives_source_session_close(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """The 8-color merged LUT download is independent of its session."""
+        merged_lut_path = tmp_path / "lumina_lut.json"
+        monkeypatch.setattr("api.routers.extractor._get_assets_dir", lambda: str(tmp_path))
+        monkeypatch.setattr("config.LUT_FILE_PATH", str(merged_lut_path))
+        _write_keyed_lut(
+            tmp_path / "temp_8c_page_1.json",
+            [[255, 255, 255], [255, 0, 0]],
+            color_mode="8-Color Max",
+        )
+        _write_keyed_lut(
+            tmp_path / "temp_8c_page_2.json",
+            [[255, 255, 0], [0, 128, 255]],
+            color_mode="8-Color Max",
+        )
+
+        response = client.post(
+            "/api/extractor/merge-8color",
+            json={"eight_color_full_export": False},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        _assert_download_survives_session_close(
+            body["lut_download_url"],
+            body["session_id"],
+        )
+
+    def test_merge_5color_lut_download_keeps_original_content_after_later_merge(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """A returned merge download URL is not overwritten by later merges."""
+        assets_dir = tmp_path / "assets"
+        assets_dir.mkdir()
+        merged_lut_path = tmp_path / "lumina_lut.json"
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("config.LUT_FILE_PATH", str(merged_lut_path))
+
+        _write_keyed_lut(
+            assets_dir / "temp_5c_ext_page_1.json",
+            [[255, 255, 255], [255, 0, 0]],
+            color_mode="5-Color Extended",
+        )
+        _write_keyed_lut(
+            assets_dir / "temp_5c_ext_page_2.json",
+            [[255, 255, 0], [0, 0, 0]],
+            color_mode="5-Color Extended",
+        )
+        first_response = client.post("/api/extractor/merge-5color-extended", json={})
+        assert first_response.status_code == 200
+        first_url = first_response.json()["lut_download_url"]
+        first_bytes = client.get(first_url).content
+
+        _write_keyed_lut(
+            assets_dir / "temp_5c_ext_page_1.json",
+            [[1, 2, 3], [4, 5, 6]],
+            color_mode="5-Color Extended",
+        )
+        _write_keyed_lut(
+            assets_dir / "temp_5c_ext_page_2.json",
+            [[7, 8, 9], [10, 11, 12]],
+            color_mode="5-Color Extended",
+        )
+        second_response = client.post("/api/extractor/merge-5color-extended", json={})
+        assert second_response.status_code == 200
+
+        assert client.get(first_url).content == first_bytes
+
+    def test_merge_5color_preserves_manual_fix_after_download_snapshot(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """Manual fixes on an extracted page must be included in the merged LUT."""
+        merged_lut_path = tmp_path / "lumina_lut.json"
+        page_1_lut_path = tmp_path / "page-1-source.json"
+        page_2_lut_path = tmp_path / "page-2-source.json"
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("config.LUT_FILE_PATH", str(merged_lut_path))
+        _write_keyed_lut(
+            page_1_lut_path,
+            [[10, 10, 10], [20, 20, 20]],
+            color_mode="5-Color Extended",
+        )
+        _write_keyed_lut(
+            page_2_lut_path,
+            [[30, 30, 30], [40, 40, 40]],
+            color_mode="5-Color Extended",
+        )
+
+        def _extract_page(lut_path: Path) -> str:
+            buf = _make_test_image_buf()
+            with patch(
+                "api.routers.extractor.run_extraction",
+                return_value=(_mock_vis, _mock_preview, str(lut_path), "OK"),
+            ):
+                response = client.post(
+                    "/api/extractor/extract",
+                    files={"image": ("test.png", buf, "image/png")},
+                    data={
+                        "corner_points": json.dumps(
+                            [[0, 0], [100, 0], [100, 100], [0, 100]]
+                        ),
+                        "color_mode": "5-Color Extended",
+                        "page": "Page 1" if lut_path == page_1_lut_path else "Page 2",
+                        "distortion": "0.0",
+                        "vignette_correction": "false",
+                    },
+                )
+            assert response.status_code == 200
+            return str(response.json()["session_id"])
+
+        page_1_session_id = _extract_page(page_1_lut_path)
+        _extract_page(page_2_lut_path)
+
+        manual_response = client.post(
+            "/api/extractor/manual-fix",
+            json={
+                "session_id": page_1_session_id,
+                "row_index": 0,
+                "override_color": "#010203",
+            },
+        )
+        assert manual_response.status_code == 200
+
+        merge_response = client.post("/api/extractor/merge-5color-extended", json={})
+        assert merge_response.status_code == 200
+        merged_rgb, _merged_stacks, _metadata = LUTManager.load_lut_with_metadata(
+            str(merged_lut_path)
+        )
+        assert merged_rgb.reshape(-1, 3)[0].tolist() == [1, 2, 3]
 
     def test_extract_endpoint_emits_canary_on_success(
         self,
@@ -523,12 +771,17 @@ class TestSessionStatePersistence:
 class TestFieldNameMapping:
     """Verify API field names map to core function parameter names."""
 
-    def test_extract_field_name_mapping(self) -> None:
+    def test_extract_field_name_mapping(self, tmp_path: Path) -> None:
         """Verify distortion->barrel, vignette_correction->bright, and 8-color full flag forwarding."""
         buf = _make_test_image_buf()
+        lut_path = tmp_path / "field-mapping-lut.json"
+        _write_keyed_lut(
+            lut_path,
+            [[255, 255, 255], [255, 0, 0], [0, 0, 0]],
+        )
         with patch(
             "api.routers.extractor.run_extraction",
-            return_value=_mock_return,
+            return_value=(_mock_vis, _mock_preview, str(lut_path), "OK"),
         ) as mock_fn:
             response = client.post(
                 "/api/extractor/extract",

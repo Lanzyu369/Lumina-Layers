@@ -170,7 +170,7 @@ async def upload_to_tempfile(
                 )
             _write_all(fd, chunk)
         os.close(fd)
-    except Exception:
+    except (OSError, RuntimeError, ValueError):
         with suppress(OSError):
             os.close(fd)
         with suppress(OSError):
