@@ -23,6 +23,10 @@ _COLORCHECKER_PRIVATE_PURPOSES = {
     *_COLORCHECKER_FULL_PURPOSES,
     COLORCHECKER_SOURCE_PURPOSE,
 }
+_COLORCHECKER_FULL_UNREADABLE_DETAIL = (
+    "ColorChecker calibrated image is unavailable or unreadable. "
+    "Recalibrate and try again."
+)
 
 
 def resolve_colorchecker_full_path(registry: FileRegistry, file_id: str) -> str:
@@ -54,7 +58,7 @@ def load_colorchecker_full_rgb(registry: FileRegistry, file_id: str) -> np.ndarr
         with Image.open(path) as image:
             return np.array(image.convert("RGB"), dtype=np.uint8)
     except (UnidentifiedImageError, OSError, ValueError) as exc:
-        raise HTTPException(status_code=422, detail=f"Unable to read ColorChecker calibrated image: {exc}") from exc
+        raise HTTPException(status_code=422, detail=_COLORCHECKER_FULL_UNREADABLE_DETAIL) from exc
 
 
 def resolve_colorchecker_source_file(registry: FileRegistry, file_id: str) -> tuple[str, str]:

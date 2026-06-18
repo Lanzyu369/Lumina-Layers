@@ -34,6 +34,10 @@
       {
         "from": "resources/app/dist",
         "to": "app/dist"
+      },
+      {
+        "from": "resources/materials",
+        "to": "materials"
       }
     ],
     "win": {

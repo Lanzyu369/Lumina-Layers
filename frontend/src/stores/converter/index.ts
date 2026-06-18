@@ -7,6 +7,8 @@ export {
   DEFAULT_STATE,
   buildLayerImagesSourceKey,
   collectConverterKeepFileIds,
+  getMaterialArchiveReliefMinimumExtraHeight,
+  getMaterialArchiveReliefMinimumTotalHeight,
   inferDefaultMaterialBackingDirName,
   resolveConverterSourceSelection,
 } from "./store";

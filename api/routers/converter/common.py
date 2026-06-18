@@ -19,6 +19,7 @@ from api.preview_cache_artifacts import (
 )
 from api.session_store import SessionStore
 from api.structured_logging import bind_session_id, get_logger
+from config import PrinterConfig
 from core.material_lut_synthesis import infer_material_archive_base_channel_idx
 from core.gradient_group_analyzer import (
     GradientGroupAnalysisParams,
@@ -30,6 +31,7 @@ EPHEMERAL_PREVIEW_TTL_SECONDS = 600
 BATCH_DOWNLOAD_TTL_SECONDS = 3600
 log = get_logger(__name__)
 _VALID_MATERIAL_SOURCES = {"lut", "material_archive"}
+_RELIEF_HEIGHT_EPSILON_MM = 1e-9
 
 # Shared error tuples for except clauses across converter router modules.
 # replace.py extends ROUTER_HANDLED_ERRORS with IndexError for array-index
@@ -65,6 +67,174 @@ def _validate_material_source(material_source: str) -> str:
             ),
         )
     return material_source
+
+
+def _material_matrix_depth_from_shape(shape: object | None) -> int | None:
+    if shape is None:
+        return None
+    try:
+        shape_values = list(shape)
+    except TypeError:
+        return None
+    if len(shape_values) < 3:
+        return None
+    try:
+        depth = int(shape_values[2])
+    except (TypeError, ValueError):
+        return None
+    return depth if depth > 0 else None
+
+
+def _material_matrix_depth_from_value(material_matrix: object | None) -> int | None:
+    shape = getattr(material_matrix, "shape", None)
+    if shape is None and isinstance(material_matrix, dict):
+        shape = material_matrix.get("shape")
+    return _material_matrix_depth_from_shape(shape)
+
+
+def _cache_material_matrix_depth(cache: dict | None) -> int | None:
+    if not cache:
+        return None
+    depth = _material_matrix_depth_from_value(cache.get("material_matrix"))
+    if depth is not None:
+        return depth
+
+    fields = cache.get("fields")
+    if isinstance(fields, dict):
+        material_matrix_ref = fields.get("material_matrix")
+        if isinstance(material_matrix_ref, dict):
+            return _material_matrix_depth_from_shape(material_matrix_ref.get("shape"))
+    return None
+
+
+def _positive_int(value: object | None) -> int | None:
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        return None
+    return count if count > 0 else None
+
+
+def _recipe_override_layer_count(recipe_overrides: list[dict[str, object]] | None) -> int | None:
+    if not recipe_overrides:
+        return None
+
+    counts: list[int] = []
+    for item in recipe_overrides:
+        if not isinstance(item, dict):
+            continue
+        recipe = item.get("recipe")
+        try:
+            count = len(recipe)  # type: ignore[arg-type]
+        except TypeError:
+            continue
+        if count > 0:
+            counts.append(count)
+    return max(counts) if counts else None
+
+
+def _resolve_material_archive_optical_layer_count(
+    *,
+    session_data: dict | None = None,
+    cache: dict | None = None,
+    cache_ref: dict | None = None,
+    material_layer_count: object | None = None,
+    requested_color_layers: object | None = None,
+    recipe_overrides: list[dict[str, object]] | None = None,
+) -> int | None:
+    candidates: list[int] = []
+
+    cache_ref_depth = _cache_material_matrix_depth(cache_ref)
+    if cache_ref_depth is not None:
+        candidates.append(cache_ref_depth)
+
+    cache_depth = _cache_material_matrix_depth(cache)
+    if cache_depth is not None:
+        candidates.append(cache_depth)
+
+    raw_count = material_layer_count
+    if raw_count is None and session_data is not None:
+        raw_count = session_data.get("material_layer_count")
+    session_count = _positive_int(raw_count)
+    if session_count is not None:
+        candidates.append(session_count)
+
+    request_count = _positive_int(requested_color_layers)
+    if request_count is not None:
+        candidates.append(request_count)
+
+    override_count = _recipe_override_layer_count(recipe_overrides)
+    if override_count is not None:
+        candidates.append(override_count)
+
+    return max(candidates) if candidates else None
+
+
+def _format_mm(value: float) -> str:
+    return f"{value:.2f} mm"
+
+
+def _validate_material_archive_relief_minimum_height(
+    *,
+    enable_relief: bool,
+    material_source: str,
+    height_mode: str | None,
+    color_height_map: dict[str, float] | None,
+    heightmap_max_height: float | None,
+    session_data: dict | None = None,
+    cache: dict | None = None,
+    cache_ref: dict | None = None,
+    material_layer_count: object | None = None,
+    requested_color_layers: object | None = None,
+    recipe_overrides: list[dict[str, object]] | None = None,
+) -> None:
+    """Reject material-archive relief heights below the optical stack depth."""
+
+    if not enable_relief or material_source != "material_archive":
+        return
+
+    optical_layers = _resolve_material_archive_optical_layer_count(
+        session_data=session_data,
+        cache=cache,
+        cache_ref=cache_ref,
+        material_layer_count=material_layer_count,
+        requested_color_layers=requested_color_layers,
+        recipe_overrides=recipe_overrides,
+    )
+    if optical_layers is None:
+        return
+
+    min_height_mm = optical_layers * float(PrinterConfig.LAYER_HEIGHT)
+    mode = height_mode or "color"
+    if mode == "heightmap":
+        requested = float(heightmap_max_height or 0.0)
+        if requested + _RELIEF_HEIGHT_EPSILON_MM < min_height_mm:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Material-archive relief heightmap_max_height must be at least "
+                    f"{_format_mm(min_height_mm)} for {optical_layers} optical layers; "
+                    f"received {_format_mm(requested)}."
+                ),
+            )
+        return
+
+    if mode != "color" or not color_height_map:
+        return
+
+    try:
+        min_color_height = min(float(value) for value in color_height_map.values())
+    except (TypeError, ValueError):
+        return
+    if min_color_height + _RELIEF_HEIGHT_EPSILON_MM < min_height_mm:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Material-archive relief color heights must be at least "
+                f"{_format_mm(min_height_mm)} for {optical_layers} optical layers; "
+                f"received minimum {_format_mm(min_color_height)}."
+            ),
+        )
 
 
 def _handle_core_error(e: Exception, context: str) -> NoReturn:

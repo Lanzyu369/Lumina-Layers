@@ -51,10 +51,28 @@ def test_local_docker_deploy_enables_vector_glb_v2_without_overriding_bitmap_v2(
 
 def test_local_docker_deploy_persists_materials_on_runtime_volume() -> None:
     deploy_script = _read_repo_text("scripts/docker_local_deploy.ps1")
+    dockerfile = _read_repo_text("Dockerfile")
 
-    assert '$materialsDir = Ensure-SeededDirectory (Join-Path $RepoRoot "materials") (Join-Path $RuntimeRoot "materials")' in deploy_script
+    assert '$materialsDir = Ensure-Directory (Join-Path $RuntimeRoot "materials")' in deploy_script
     assert '"-v", "${materialsDir}:/app/materials"' in deploy_script
+    assert '"-e", "LUMINA_MATERIALS_DIR=/app/materials"' in deploy_script
     assert '"Materials    : $materialsDir"' in deploy_script
+    assert "LUMINA_MATERIALS_DIR=/app/materials" in dockerfile
+
+
+def test_local_docker_deploy_accepts_optional_material_seed() -> None:
+    deploy_script = _read_repo_text("scripts/docker_local_deploy.ps1")
+    dockerfile = _read_repo_text("Dockerfile")
+
+    assert "[string]$MaterialsSeedPath = \"\"" in deploy_script
+    assert "[string]$MaterialsSeedUrl = \"\"" in deploy_script
+    assert "[string]$MaterialsSeedSha256 = \"\"" in deploy_script
+    assert "MATERIALS_SEED_URL=$MaterialsSeedUrl" in deploy_script
+    assert "MATERIALS_SEED_SHA256=$MaterialsSeedSha256" in deploy_script
+    assert "LUMINA_MATERIALS_SEED_PATH=/app/resources/materials/lumina-materials-seed.zip" in deploy_script
+    assert "ARG MATERIALS_SEED_URL=\"\"" in dockerfile
+    assert "ARG MATERIALS_SEED_SHA256=\"\"" in dockerfile
+    assert "lumina-materials-seed.zip" in dockerfile
 
 
 def test_local_docker_serves_built_frontend_dist_on_public_port() -> None:

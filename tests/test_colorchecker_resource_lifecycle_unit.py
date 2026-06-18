@@ -30,6 +30,10 @@ _PREVIEW_ARTIFACT_UNREADABLE_DETAIL = (
     "Preview artifact is unavailable or unreadable. "
     "Re-run the previous step and try again."
 )
+_COLORCHECKER_UNREADABLE_DETAIL = (
+    "ColorChecker calibrated image is unavailable or unreadable. "
+    "Recalibrate and try again."
+)
 
 
 def _png_bytes(width: int = 8, height: int = 6) -> bytes:
@@ -590,6 +594,24 @@ def test_colorchecker_calibrate_returns_private_full_id_and_releases(
     assert client.get(confirm_body["source_preview_url"]).status_code == 200
 
 
+def test_colorchecker_confirm_rejects_unreadable_full_artifact_without_path(
+    tmp_path,
+) -> None:
+    client, _store, registry = _client_with_state()
+    file_id, bad_path = _register_bad_colorchecker_full_artifact(registry, tmp_path)
+
+    response = client.post(
+        "/api/extractor/colorchecker-confirm",
+        data={"file_id": file_id},
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail == _COLORCHECKER_UNREADABLE_DETAIL
+    assert bad_path not in detail
+    assert "cannot identify image file" not in detail
+
+
 @pytest.mark.parametrize(
     "patch_points",
     [
@@ -987,6 +1009,40 @@ def test_extractor_uses_private_colorchecker_image_and_scales_points(
     assert captured["img"].shape == (20, 40, 3)
     assert captured["points"] == [[0, 0], [40, 0], [40, 20], [0, 20]]
     assert captured["auto_wb"] is False
+
+
+def test_extract_rejects_unreadable_colorchecker_full_artifact_without_path(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import api.routers.extractor as extractor_router
+
+    client, _store, registry = _client_with_state()
+    file_id, bad_path = _register_bad_colorchecker_full_artifact(registry, tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_run_extraction(**kwargs):
+        captured.update(kwargs)
+        raise AssertionError("extract should stop before running LUT extraction")
+
+    monkeypatch.setattr(extractor_router, "run_extraction", fake_run_extraction)
+
+    response = client.post(
+        "/api/extractor/extract",
+        data={
+            "corner_points": "[[0,0],[10,0],[10,10],[0,10]]",
+            "colorchecker_calibrated_file_id": file_id,
+            "corner_points_width": "10",
+            "corner_points_height": "10",
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail == _COLORCHECKER_UNREADABLE_DETAIL
+    assert bad_path not in detail
+    assert "cannot identify image file" not in detail
+    assert captured == {}
 
 
 def test_stage_a_uses_private_colorchecker_images_only_when_restored(

@@ -606,10 +606,15 @@ export async function previewMaterialRecipe(
   return response.data;
 }
 
-export async function listGradientCardMaterials(): Promise<GradientCardMaterialLibraryResponse> {
+export async function listGradientCardMaterials(options?: {
+  includeFileUrls?: boolean;
+}): Promise<GradientCardMaterialLibraryResponse> {
   const response = await apiClient.get<GradientCardMaterialLibraryResponse>(
     "/extractor/gradient-card-materials",
-    { timeout: 3_600_000 },
+    {
+      params: options?.includeFileUrls ? { include_file_urls: true } : undefined,
+      timeout: 3_600_000,
+    },
   );
   return response.data;
 }

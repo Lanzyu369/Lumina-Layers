@@ -454,6 +454,44 @@ class TestGlbStatusLifecycle:
             "#ff0000": [[[0.0, 0.0], [1.0, 1.0]]]
         }
 
+    def test_artifact_cache_hydration_failure_returns_safe_status_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sid = _seed_session(tmp_path)
+        ref = _convert_seeded_session_to_artifact(sid, tmp_path)
+        job_token = "job-token"
+        ref["metadata"]["glb_job_token"] = job_token
+        ref["metadata"]["glb_url"] = None
+        ref["metadata"]["glb_error"] = None
+        stale_path = ref["fields"]["matched_rgb"]["path"]
+        os.remove(stale_path)
+        _test_store.put(sid, "preview_cache", ref)
+
+        calls: list[dict] = []
+
+        def builder(cache: dict, *, output_path: str) -> str:
+            calls.append(cache)
+            return output_path
+
+        monkeypatch.setattr(async_glb_module, "generate_segmented_glb", builder)
+        async_glb_module._run_glb_build_job(
+            sid,
+            job_token,
+            _test_store,
+            _test_registry,
+        )
+
+        response = client.get(f"/api/convert/glb-status/{sid}")
+        assert response.status_code == 200
+        status = response.json()
+        assert status["status"] == "error"
+        assert status["glb_url"] is None
+        assert "3D preview cache is unavailable" in status["error"]
+        assert "Re-run preview" in status["error"]
+        assert "FileNotFoundError" not in status["error"]
+        assert stale_path not in status["error"]
+        assert calls == []
+
 
 class TestJobTokenGuard:
     def test_newer_job_discards_older_result(

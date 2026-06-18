@@ -611,6 +611,38 @@ def test_generate_puzzle_rejects_fridge_magnet_flag_even_with_empty_list() -> No
     assert "fridge magnet" in response.json()["detail"].lower()
 
 
+def test_generate_puzzle_artifact_cache_rejects_relief_height_below_manifest_depth(tmp_path: Path) -> None:
+    _test_store.clear_all()
+    session_id, preview_cache = _make_session()
+    preview_cache["material_matrix"] = np.zeros((80, 120, 10), dtype=np.uint8)
+    cache_ref = externalize_preview_cache(
+        session_id,
+        _test_store,
+        preview_cache,
+        root_dir=tmp_path,
+    )
+    _test_store.put(session_id, "preview_cache", cache_ref)
+    _test_store.put(session_id, "lut_path", "__material_archive__")
+    _test_store.put(session_id, "material_source", "material_archive")
+    _test_store.put(session_id, "selected_materials", ["mat-a", "mat-b"])
+    _test_store.put(session_id, "material_layer_count", 5)
+    _test_store.put(session_id, "material_layer_height_mm", 0.08)
+    _mock_pool.submit = AsyncMock()
+
+    body = _build_generate_body(session_id)
+    body["params"]["params"]["lut_name"] = "__material_archive__"
+    body["params"]["params"]["enable_relief"] = True
+    body["params"]["params"]["height_mode"] = "color"
+    body["params"]["params"]["color_height_map"] = {"#111111": 0.6}
+    body["params"]["params"]["heightmap_max_height"] = 0.6
+
+    response = client.post("/api/convert/generate-puzzle", json=body)
+
+    assert response.status_code == 422, response.text
+    assert "0.80 mm" in response.json()["detail"]
+    _mock_pool.submit.assert_not_called()
+
+
 def test_generate_puzzle_resizes_heightmap_crop_to_worker_grid() -> None:
     """Heightmap relief inputs should stay aligned with the worker raster grid."""
 

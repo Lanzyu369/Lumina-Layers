@@ -7,7 +7,9 @@ import {
   rotateExtractorImage,
 } from "../api/extractor";
 import { uploadImagePreview } from "../api/system";
+import apiClient from "../api/client";
 import { useSingleStageStore } from "../stores/singleStageStore";
+import { useSettingsStore } from "../stores/settingsStore";
 
 vi.mock("../api/extractor", () => ({
   colorcheckerConfirm: vi.fn(),
@@ -29,6 +31,26 @@ const mockedExtractGradientCardStageA = vi.mocked(extractGradientCardStageA);
 const mockedColorcheckerConfirm = vi.mocked(colorcheckerConfirm);
 const mockedColorcheckerRelease = vi.mocked(colorcheckerRelease);
 const mockedRotateExtractorImage = vi.mocked(rotateExtractorImage);
+
+async function buildNormalizedApiError(detail: string, status = 500): Promise<unknown> {
+  const previousLanguage = useSettingsStore.getState().language;
+  useSettingsStore.setState({ language: "en" });
+  const error = new Error(`Request failed with status code ${status}`);
+  Object.assign(error, {
+    config: { method: "post", url: "/gradient-card/extract" },
+    response: { status, data: { detail } },
+  });
+  apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+  try {
+    await apiClient.post("/gradient-card/extract", {});
+  } catch (err) {
+    return err;
+  } finally {
+    apiClient.defaults.adapter = undefined;
+    useSettingsStore.setState({ language: previousLanguage });
+  }
+  throw new Error("Expected apiClient to reject");
+}
 
 type MockImageHandle = {
   onload: (() => void) | null;
@@ -567,6 +589,39 @@ describe("useSingleStageStore ColorChecker flow", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  it("uses readable API fallbacks for numeric gradient card extraction failures", async () => {
+    const normalizedError = await buildNormalizedApiError("500", 500);
+    mockedExtractGradientCardStageA.mockRejectedValueOnce(normalizedError);
+
+    useSingleStageStore.setState({
+      datasetFile: new File(["zip"], "kit.zip", { type: "application/zip" }),
+      whiteImageFile: buildPngFile("white.png"),
+      blackImageFile: buildPngFile("black.png"),
+      whiteCornerPoints: [
+        [0, 0],
+        [100, 0],
+        [100, 100],
+        [0, 100],
+      ],
+      blackCornerPoints: [
+        [0, 0],
+        [100, 0],
+        [100, 100],
+        [0, 100],
+      ],
+      whiteImageNaturalWidth: 100,
+      whiteImageNaturalHeight: 100,
+      blackImageNaturalWidth: 100,
+      blackImageNaturalHeight: 100,
+    });
+
+    await useSingleStageStore.getState().submitExtract();
+
+    expect(useSingleStageStore.getState().extractError).toBe(
+      "The server hit an internal error. Check the log for the request ID.",
+    );
   });
 
   it("ignores stale Stage A extraction responses after ColorChecker state changes", async () => {

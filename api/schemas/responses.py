@@ -316,7 +316,7 @@ class SavedMaterialLibraryItemResponse(BaseModel):
     updated_at: str | None = None
     archive_path: str
     stage_a_params_path: str | None = None
-    material_file_url: str
+    material_file_url: str | None = None
     stage_a_params_url: str | None = None
     estimated_rgb: list[int] = Field(default_factory=list)
     layer_height_mm: float | None = None
@@ -329,6 +329,10 @@ class SavedMaterialLibraryItemResponse(BaseModel):
     usage_by_color_mode: dict[str, int] = Field(default_factory=dict)
     usage_last_used_at: str | None = None
     usage_last_used_color_mode: str | None = None
+    sync_material_id: str | None = None
+    sync_revision_id: str | None = None
+    sync_channel: str | None = None
+    sync_official: bool = False
 
 
 class GradientCardMaterialLibraryResponse(BaseModel):
@@ -357,6 +361,142 @@ class GradientCardMaterialBulkImportResponse(BaseModel):
     message: str
     imported_count: int
     imported_materials: list[SavedMaterialSummaryResponse] = Field(default_factory=list)
+
+
+class MaterialSyncInstalledEntryResponse(BaseModel):
+    """One material package recorded in the local sync index.
+    本地同步索引记录的单个耗材包。
+    """
+
+    material_id: str
+    revision_id: str
+    content_hash: str
+    channel: str
+    source: str
+    local_directory: str
+    display_brand: str
+    display_name: str
+    installed_at: str | None = None
+    updated_at: str | None = None
+    local_exists: bool = False
+    material_file_exists: bool = False
+    available_revisions: list[str] = Field(default_factory=list)
+
+
+class MaterialSyncStatusResponse(BaseModel):
+    """Local material sync-index status response.
+    本地耗材同步索引状态响应。
+    """
+
+    status: str
+    message: str
+    schema_version: str
+    index_state: Literal["missing", "ready", "invalid"]
+    last_sync_at: str | None = None
+    registries: dict[str, Any] = Field(default_factory=dict)
+    installed_count: int = 0
+    installed: list[MaterialSyncInstalledEntryResponse] = Field(default_factory=list)
+    local_overrides_count: int = 0
+
+
+class MaterialSyncInstallResponse(BaseModel):
+    """Local material package install response.
+    本地耗材包安装响应。
+    """
+
+    status: str
+    message: str
+    installed_count: int
+    installed_materials: list[SavedMaterialSummaryResponse] = Field(default_factory=list)
+
+
+class MaterialSyncRefreshFailureResponse(BaseModel):
+    """One package-level failure during read-only material Registry refresh.
+    耗材 Registry 只读刷新中的单个包级失败。
+    """
+
+    material_id: str = ""
+    revision_id: str = ""
+    package_url: str = ""
+    error: str
+
+
+class MaterialSyncRefreshResponse(BaseModel):
+    """Read-only material Registry refresh response.
+    耗材 Registry 只读刷新响应。
+    """
+
+    status: str
+    message: str
+    registry_url: str
+    channels: list[str] = Field(default_factory=list)
+    checked_count: int
+    installed_count: int
+    skipped_count: int
+    failed_count: int
+    installed_materials: list[SavedMaterialSummaryResponse] = Field(default_factory=list)
+    failures: list[MaterialSyncRefreshFailureResponse] = Field(default_factory=list)
+
+
+class MaterialSyncRollbackResponse(BaseModel):
+    """Local synced material rollback response.
+    本地已同步耗材回滚响应。
+    """
+
+    status: str
+    message: str
+    material_id: str
+    revision_id: str
+    content_hash: str
+    channel: str
+    local_directory: str
+
+
+class MaterialRegistryCatalogEntryResponse(BaseModel):
+    """One published material package revision in the read-only Registry catalog.
+    只读 Registry catalog 中的单个已发布耗材包 revision。
+    """
+
+    material_id: str
+    revision_id: str
+    content_hash: str
+    channel: str
+    visibility: str
+    local_directory: str
+    display: dict[str, Any] = Field(default_factory=dict)
+    compatibility: dict[str, Any] = Field(default_factory=dict)
+    package_url: str
+    package_sha256: str
+    package_bytes: int
+
+
+class MaterialRegistryCatalogResponse(BaseModel):
+    """Read-only material Registry catalog response.
+    只读耗材 Registry catalog 响应。
+    """
+
+    schema_version: str
+    channels: list[str] = Field(default_factory=list)
+    count: int
+    total_count: int | None = None
+    offset: int = 0
+    limit: int | None = None
+    materials: list[MaterialRegistryCatalogEntryResponse] = Field(default_factory=list)
+
+
+class MaterialRegistryPackageMutationResponse(BaseModel):
+    """Registry package upload/approval response.
+    Registry 耗材包上传/审批响应。
+    """
+
+    status: str
+    message: str
+    channel: str
+    package_path: str
+    package_url: str
+    package_sha256: str
+    package_bytes: int
+    materials: list[MaterialRegistryCatalogEntryResponse] = Field(default_factory=list)
 
 
 class MaterialSolverCacheEntryResponse(BaseModel):

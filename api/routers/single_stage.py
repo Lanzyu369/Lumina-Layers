@@ -11,7 +11,7 @@ from typing import Any, Callable
 
 import anyio
 import numpy as np
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 
 from api.colorchecker_artifacts import load_colorchecker_full_rgb, scale_corner_points
 from api.dependencies import get_file_registry, get_session_store
@@ -119,6 +119,10 @@ log = get_logger(__name__)
 GRADIENT_CARD_PREVIEW_TTL_SECONDS = 600
 MATERIAL_LIBRARY_FILE_TTL_SECONDS = 600
 MATERIAL_SWATCH_EXPORT_TTL_SECONDS = 8 * 60 * 60
+FIT_STAGE_A_EXPIRED_STAGE_JSON_DETAIL = (
+    "Extracted single-stage dataset has expired. "
+    "Re-run extraction before fitting Stage A."
+)
 MaterialCacheEvictor = Callable[[str], int]
 _RUNTIME_BUILD_LOCKS_GUARD = threading.Lock()
 _RUNTIME_BUILD_LOCKS: dict[tuple[str, int, str, str, int], threading.Lock] = {}
@@ -130,6 +134,14 @@ def _noop_material_cache_evictor(_directory_name: str) -> int:
     主应用默认的耗材缓存失效回调。
     """
     return 0
+
+
+def _is_missing_stage_json_path(path: str | None) -> bool:
+    return not isinstance(path, str) or not path.strip() or not os.path.exists(path)
+
+
+def _expired_stage_json_exception() -> HTTPException:
+    return HTTPException(status_code=409, detail=FIT_STAGE_A_EXPIRED_STAGE_JSON_DETAIL)
 
 
 def get_material_cache_evictor() -> MaterialCacheEvictor:
@@ -379,6 +391,8 @@ async def extractor_fit_stage_a(
                 status_code=400,
                 detail="Session does not contain an extracted single-stage dataset",
             )
+        if _is_missing_stage_json_path(stage_json_path):
+            raise _expired_stage_json_exception()
         sid_for_registry = session_id
         source_mode = "session"
     elif stage_json is not None:
@@ -397,9 +411,11 @@ async def extractor_fit_stage_a(
     try:
         result = fit_stage_a_from_stage_json(stage_json_path)
     except FileNotFoundError as e:
+        if source_mode == "session" and _is_missing_stage_json_path(stage_json_path):
+            raise _expired_stage_json_exception() from e
         if created_session_for_upload:
             _close_session_safely(store, sid_for_registry)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
     except (ValueError, TypeError, OSError, RuntimeError) as e:
         if created_session_for_upload:
             _close_session_safely(store, sid_for_registry)
@@ -943,6 +959,10 @@ async def extractor_import_gradient_card_materials(
 
 @router.get("/gradient-card-materials")
 async def extractor_list_gradient_card_materials(
+    include_file_urls: bool = Query(
+        False,
+        description="Register temporary /api/files URLs for each material archive.",
+    ),
     registry: FileRegistry = Depends(get_file_registry),
 ) -> GradientCardMaterialLibraryResponse:
     """List saved gradient-card material archives.
@@ -953,7 +973,11 @@ async def extractor_list_gradient_card_materials(
     except (ValueError, TypeError, OSError, RuntimeError) as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
-    persistent_registry_session = f"material-library:{uuid.uuid4().hex}"
+    persistent_registry_session = (
+        f"material-library:{uuid.uuid4().hex}"
+        if include_file_urls
+        else None
+    )
     response_items: list[dict[str, object]] = []
     for item in materials:
         material_file_url = (
@@ -962,6 +986,8 @@ async def extractor_list_gradient_card_materials(
                 str(item['archive_path']),
                 ttl_seconds=MATERIAL_LIBRARY_FILE_TTL_SECONDS,
             )}"
+            if persistent_registry_session is not None
+            else None
         )
         stage_a_path = item.get("stage_a_params_path")
         stage_a_params_url = (
@@ -970,7 +996,9 @@ async def extractor_list_gradient_card_materials(
                 str(stage_a_path),
                 ttl_seconds=MATERIAL_LIBRARY_FILE_TTL_SECONDS,
             )}"
-            if isinstance(stage_a_path, str) and stage_a_path
+            if persistent_registry_session is not None
+            and isinstance(stage_a_path, str)
+            and stage_a_path
             else None
         )
         response_items.append(
@@ -1084,6 +1112,23 @@ def _remove_generated_path(path: str | None) -> None:
         os.unlink(path)
     except OSError:
         pass
+
+
+def _rollback_swatch_registration(
+    registry: FileRegistry,
+    *,
+    file_ids: list[str | None],
+    generated_path: str | None,
+) -> None:
+    """Best-effort cleanup for failed swatch registration."""
+    for file_id in file_ids:
+        if not file_id:
+            continue
+        try:
+            registry.cleanup_file(file_id)
+        except Exception:
+            pass
+    _remove_generated_path(generated_path)
 
 
 def _resolve_substrate_linear(materials, substrate: str) -> np.ndarray:
@@ -1228,14 +1273,14 @@ async def generate_material_swatch(
         else f"material-recipe-swatch:{unique_suffix}"
     )
     preview_url: str | None = None
-    download_registered = False
+    registered_file_ids: list[str | None] = []
     try:
         download_id = registry.register_path(
             sid,
             output_path,
             ttl_seconds=MATERIAL_SWATCH_EXPORT_TTL_SECONDS,
         )
-        download_registered = True
+        registered_file_ids.append(download_id)
 
         if legend_img is not None:
             preview_bytes = pil_to_png_bytes(legend_img)
@@ -1245,10 +1290,15 @@ async def generate_material_swatch(
                 "material_swatch_legend.png",
                 ttl_seconds=MATERIAL_SWATCH_EXPORT_TTL_SECONDS,
             )
+            registered_file_ids.append(preview_id)
             preview_url = f"/api/files/{preview_id}"
-    finally:
-        if not download_registered:
-            _remove_generated_path(output_path)
+    except Exception:
+        _rollback_swatch_registration(
+            registry,
+            file_ids=registered_file_ids,
+            generated_path=output_path,
+        )
+        raise
 
     log.info(
         "Material recipe swatch generated",
