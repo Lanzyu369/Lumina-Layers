@@ -66,7 +66,11 @@ function CompactContextSummary({
   const recentActions = (context.action_history ?? []).slice(-3).reverse();
   const recentLogs = context.recent_client_logs ?? [];
   const recentApiErrors = recentLogs
-    .filter((log) => log.method === "error" && log.scope === "http")
+    .filter(
+      (log) =>
+        log.method === "error" &&
+        (log.scope === "api" || log.scope === "http"),
+    )
     .slice(-2)
     .reverse();
 
@@ -111,14 +115,19 @@ function CompactContextSummary({
           <ul className="ml-4 list-disc font-mono">
             {recentApiErrors.map((entry, idx) => {
               const details = entry.details as
-                | { status_code?: unknown; path?: unknown }
+                | { status_code?: unknown; path?: unknown; url?: unknown }
                 | null
                 | undefined;
               const status =
                 typeof details?.status_code === "number"
                   ? details.status_code
                   : "?";
-              const path = typeof details?.path === "string" ? details.path : "";
+              const path =
+                typeof details?.path === "string"
+                  ? details.path
+                  : typeof details?.url === "string"
+                    ? details.url
+                    : "";
               return (
                 <li key={`${entry.timestamp}-${idx}`}>
                   {status} · {path || entry.label}
