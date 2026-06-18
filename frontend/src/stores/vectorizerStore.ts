@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { VectorizeParams, VectorizeResponse } from "../api/types";
+import { apiErrorToVisibleMessage } from "../api/client";
 import { vectorizeImage } from "../api/vectorizer";
 
 export interface VectorizerState {
@@ -93,7 +94,7 @@ export const useVectorizerStore = create<VectorizerState & VectorizerActions>(
           set({ isProcessing: false, abortController: null });
           return;
         }
-        const message = err instanceof Error ? err.message : String(err);
+        const message = apiErrorToVisibleMessage(err);
         set({ error: message, isProcessing: false, abortController: null });
       }
     },

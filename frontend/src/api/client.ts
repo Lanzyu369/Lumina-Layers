@@ -298,6 +298,54 @@ function readableApiErrorMessage(
   return error instanceof Error ? error.message : String(error ?? "API request failed");
 }
 
+function errorMessageFromUnknown(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message.trim();
+  }
+  if (typeof error === "string") {
+    return error.trim();
+  }
+  return String(error ?? "").trim();
+}
+
+function extractStatusCodeFromGenericErrorMessage(message: string): number | null {
+  const match = message
+    .trim()
+    .toLowerCase()
+    .match(
+      /(?:request\s+failed\s+with\s+status\s+code|http(?:\s+error)?|(?:error|status(?:\s+code)?))\s*(\d{3})\b/,
+    );
+  if (!match) {
+    return null;
+  }
+  const statusCode = Number(match[1]);
+  return Number.isInteger(statusCode) ? statusCode : null;
+}
+
+export function apiErrorToVisibleMessage(
+  error: unknown,
+  fallback: string = tRuntime("api_error_http_default"),
+): string {
+  const response = isRecord(error) && isRecord(error.response) ? error.response : null;
+  const statusCode =
+    typeof response?.status === "number"
+      ? response.status
+      : extractStatusCodeFromGenericErrorMessage(errorMessageFromUnknown(error));
+  const requestId = getResponseHeaderValue(response?.headers, "x-request-id");
+  if (response) {
+    return readableApiErrorMessage(response.data, statusCode, error, requestId);
+  }
+
+  const rawMessage = errorMessageFromUnknown(error);
+  if (
+    typeof statusCode === "number" &&
+    isGenericHttpDetail(rawMessage, statusCode)
+  ) {
+    return fallbackHttpStatusMessage(statusCode, requestId);
+  }
+  return rawMessage || fallback;
+}
+
 function buildReadableResponseData(
   data: unknown,
   statusCode: number | null,

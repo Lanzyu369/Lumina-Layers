@@ -9,11 +9,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { StrictMode, createElement } from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useVectorizerStore } from "../stores/vectorizerStore";
+import { useSettingsStore } from "../stores/settingsStore";
 import VectorizerPanel, { buildFileUrl } from "../components/VectorizerPanel";
 import { translations } from "../i18n/translations";
+import { vectorizeImage } from "../api/vectorizer";
 
 const {
   mockedApiClient,
+  apiErrorToVisibleMessageMock,
   downloadResourceBlobMock,
   loadVectorizedSvgIntoConverterSpy,
   setWidgetActiveTabSpy,
@@ -23,6 +26,16 @@ const {
     post: vi.fn(),
     get: vi.fn(),
   },
+  apiErrorToVisibleMessageMock: vi.fn((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message === "Request failed with status code 500") {
+      return "The server hit an internal error. Check the log for the request ID.";
+    }
+    if (message === "Request failed with status code 422") {
+      return "The request is missing required data or contains invalid values.";
+    }
+    return message;
+  }),
   downloadResourceBlobMock: vi.fn(),
   loadVectorizedSvgIntoConverterSpy: vi.fn(),
   setWidgetActiveTabSpy: vi.fn(),
@@ -31,6 +44,7 @@ const {
 // Mock apiClient for buildFileUrl tests
 vi.mock("../api/client", () => ({
   default: mockedApiClient,
+  apiErrorToVisibleMessage: apiErrorToVisibleMessageMock,
   downloadResourceBlob: downloadResourceBlobMock,
 }));
 
@@ -80,6 +94,7 @@ describe("vectorizerStore", () => {
     mockedApiClient.defaults.baseURL = "/api";
     vi.clearAllMocks();
     downloadResourceBlobMock.mockReset();
+    useSettingsStore.setState({ language: "en" });
   });
 
   // --- Initial state ---
@@ -186,6 +201,27 @@ describe("vectorizerStore", () => {
   it("submit does nothing when imageFile is null", async () => {
     await useVectorizerStore.getState().submit();
     expect(useVectorizerStore.getState().isProcessing).toBe(false);
+  });
+
+  it("normalizes generic HTTP status errors from submit", async () => {
+    useVectorizerStore.setState({
+      imageFile: new File(["img"], "vectorizer.png", { type: "image/png" }),
+    });
+    vi.mocked(vectorizeImage).mockRejectedValueOnce(
+      new Error("Request failed with status code 500"),
+    );
+
+    await useVectorizerStore.getState().submit();
+
+    expect(apiErrorToVisibleMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Request failed with status code 500",
+      }),
+    );
+    expect(useVectorizerStore.getState().error).toBe(
+      "The server hit an internal error. Check the log for the request ID.",
+    );
+    expect(useVectorizerStore.getState().error).not.toContain("status code 500");
   });
 });
 

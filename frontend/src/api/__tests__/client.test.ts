@@ -11,6 +11,7 @@ import { postClientLog } from "../../utils/clientLog";
 import { useActionHistoryStore } from "../../stores/actionHistoryStore";
 import { useSettingsStore } from "../../stores/settingsStore";
 import apiClient, {
+  apiErrorToVisibleMessage,
   assertResourceDownloadAvailable,
   downloadResourceBlob,
 } from "../client";
@@ -473,6 +474,20 @@ describe("apiClient", () => {
       message:
         "The server did not accept the request. Check the current input, permissions, or resource availability.",
     });
+  });
+
+  it("normalizes bare generic HTTP errors for store-level callers", () => {
+    expect(
+      apiErrorToVisibleMessage(
+        new Error("Request failed with status code 500"),
+      ),
+    ).toBe("The server hit an internal error. Check the log for the request ID.");
+    expect(
+      apiErrorToVisibleMessage(new Error("Request failed with status code 422")),
+    ).toBe("The request is missing required data or contains invalid values.");
+    expect(
+      apiErrorToVisibleMessage(new Error("Vectorizer dependency missing")),
+    ).toBe("Vectorizer dependency missing");
   });
 
   it("turns failed resource downloads into readable errors", async () => {
