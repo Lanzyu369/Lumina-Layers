@@ -171,6 +171,22 @@ def test_no_api_errors_skips_that_section(tmp_path: Path) -> None:
     assert "## Recent API Errors" not in md
 
 
+def test_attachment_failure_detail_is_visible_in_index(tmp_path: Path) -> None:
+    payload = _sample_payload()
+    payload["attachments"]["screenshot"] = {
+        "status": "failed",
+        "filename": "screenshot.png",
+        "size_bytes": None,
+        "error_type": "OSError",
+        "error_message": "Screenshot could not be saved.",
+    }
+
+    md = generate_index_markdown("LUM-20260511-001", tmp_path, payload)
+
+    assert "screenshot.png" in md
+    assert "error=OSError: Screenshot could not be saved." in md
+
+
 # ---------------------------------------------------------------------------
 # Advanced Generation Parameters rendering (task 7.3)
 # ---------------------------------------------------------------------------
