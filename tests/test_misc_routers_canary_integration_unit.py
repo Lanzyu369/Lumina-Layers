@@ -188,6 +188,9 @@ class TestCalibrationGenerateSingleStageKitCanary:
 class _FiveColorQueryEngine:
     color_count = 5
 
+    def accepted_selection_lengths(self):
+        return (5,)
+
     def query(self, selected_indices):
         return SimpleNamespace(
             found=True,
