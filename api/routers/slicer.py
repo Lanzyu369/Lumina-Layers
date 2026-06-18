@@ -35,6 +35,9 @@ router = APIRouter(prefix="/api/slicer", tags=["Slicer"])
 log = get_logger(__name__)
 _SLICER_LAUNCH_COPY_TTL_SECONDS = 60 * 60
 _ALLOWED_SLICER_LAUNCH_SUFFIXES = {".3mf"}
+SLICER_LAUNCH_COPY_FAILED_MESSAGE = "准备切片器打开文件失败，请重新生成 3MF 后再试。"
+SLICER_LAUNCH_FAILED_MESSAGE = "启动切片器失败，请确认切片软件可用后再试。"
+SLICER_LAUNCH_SOURCE_MISSING_MESSAGE = "找不到要打开的 3MF 文件，请重新生成 3MF 后再试。"
 
 
 def _remove_launch_copy(path: str) -> None:
@@ -87,7 +90,7 @@ def _resolve_launch_source_path(file_path: str) -> tuple[str | None, str | None]
     except ValueError:
         return None, "只能打开 Lumina 输出目录中的 3MF 文件"
     if not os.path.isfile(real_source_path):
-        return None, f"文件不存在: {file_path}"
+        return None, SLICER_LAUNCH_SOURCE_MISSING_MESSAGE
     return real_source_path, None
 
 
@@ -167,24 +170,24 @@ def launch_slicer_endpoint(
         )
     try:
         launch_file_path = _create_launch_copy(source_file_path, registry)
-    except Exception as exc:
+    except Exception:
         return JSONResponse(
             status_code=500,
             content=SlicerLaunchResponse(
                 status="error",
-                message=f"准备切片器打开副本失败: {exc}",
+                message=SLICER_LAUNCH_COPY_FAILED_MESSAGE,
             ).model_dump(),
         )
 
     # 3) Attempt launch
     try:
         success, message = launch_slicer(request.slicer_id, launch_file_path, slicers)
-    except (OSError, RuntimeError, ValueError) as exc:
+    except (OSError, RuntimeError, ValueError):
         return JSONResponse(
             status_code=500,
             content=SlicerLaunchResponse(
                 status="error",
-                message=f"启动失败: {exc}",
+                message=SLICER_LAUNCH_FAILED_MESSAGE,
             ).model_dump(),
         )
 
@@ -202,7 +205,7 @@ def launch_slicer_endpoint(
             status_code=500,
             content=SlicerLaunchResponse(
                 status="error",
-                message=f"启动失败: {message}",
+                message=SLICER_LAUNCH_FAILED_MESSAGE,
             ).model_dump(),
         )
 

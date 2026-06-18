@@ -44,7 +44,9 @@ class UpstreamDomainError(DomainError):  # Reserved for future use
 
 
 def to_http_exception(exc: Exception, context: str) -> HTTPException:
-    """Map domain/unknown exceptions to stable HTTPException."""
+    """Map domain/unknown exceptions to stable HTTPException.
+    将领域异常和未知异常映射为稳定的 HTTPException。
+    """
     if isinstance(exc, HTTPException):
         return exc
     if isinstance(exc, DomainError):
@@ -55,4 +57,7 @@ def to_http_exception(exc: Exception, context: str) -> HTTPException:
         return HTTPException(status_code=502, detail=exc.detail)
     if isinstance(exc, (CoreProcessingError, CoreError)):
         return HTTPException(status_code=500, detail=exc.detail)
-    return HTTPException(status_code=500, detail=f"{context} failed: {str(exc)}")
+    return HTTPException(
+        status_code=500,
+        detail=f"{context} failed. Check the server log for details.",
+    )

@@ -41,6 +41,10 @@ from .common import (
 
 router = APIRouter()
 log = get_logger(__name__)
+_COLOR_CARD_GENERATION_FAILED_DETAIL = (
+    "Color card 3MF generation failed. Re-run preview and try "
+    "generating the color card again."
+)
 
 
 def _remove_temp_path(path: str | None) -> None:
@@ -244,10 +248,10 @@ async def generate_color_card(
             status_code=504,
             detail="Color card 3MF generation timed out.",
         )
-    except ROUTER_HANDLED_ERRORS as e:
+    except ROUTER_HANDLED_ERRORS:
         raise HTTPException(
             status_code=500,
-            detail=f"Color card generation failed: {e}",
+            detail=_COLOR_CARD_GENERATION_FAILED_DETAIL,
         )
     worker_elapsed = time.perf_counter() - worker_t0
 
@@ -259,7 +263,7 @@ async def generate_color_card(
     if not threemf_path or not os.path.exists(threemf_path):
         raise HTTPException(
             status_code=500,
-            detail=status_msg or "Color card 3MF generation failed.",
+            detail=_COLOR_CARD_GENERATION_FAILED_DETAIL,
         )
 
     preview_3d_url: str | None = None

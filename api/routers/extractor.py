@@ -97,6 +97,14 @@ EXTRACTOR_HANDLED_ERRORS = (
     RuntimeError,
     json.JSONDecodeError,
 )
+COLORCHECKER_PROCESSING_FAILED_DETAIL = (
+    "ColorChecker processing failed. Recheck the source image or chart corners "
+    "and try again."
+)
+COLORCHECKER_SERVICE_UNAVAILABLE_DETAIL = (
+    "ColorChecker processing service is unavailable. "
+    "Check the server ColorChecker dependencies and try again."
+)
 
 
 @dataclass(frozen=True)
@@ -808,10 +816,16 @@ async def extractor_colorchecker_warp_preview(
             patch_layout=patch_layout,
             patch_orientation=patch_orientation,
         )
-    except ColorCheckerUnavailableError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    except ColorCheckerCalibrationError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+    except ColorCheckerUnavailableError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=COLORCHECKER_SERVICE_UNAVAILABLE_DETAIL,
+        ) from exc
+    except ColorCheckerCalibrationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=COLORCHECKER_PROCESSING_FAILED_DETAIL,
+        ) from exc
 
     del decoded
     file_id = register_preview_bytes(
@@ -895,10 +909,16 @@ async def extractor_colorchecker_detect_chart(
             assist_point=scaled_assist,
             **reference_kwargs,
         )
-    except ColorCheckerUnavailableError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    except ColorCheckerCalibrationError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+    except ColorCheckerUnavailableError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=COLORCHECKER_SERVICE_UNAVAILABLE_DETAIL,
+        ) from exc
+    except ColorCheckerCalibrationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=COLORCHECKER_PROCESSING_FAILED_DETAIL,
+        ) from exc
 
     del decoded
     log.info(

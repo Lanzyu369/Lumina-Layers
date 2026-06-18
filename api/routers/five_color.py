@@ -39,6 +39,13 @@ from utils.lut_manager import LUTManager
 router = APIRouter(prefix="/api/five-color", tags=["Five-Color"])
 STATELESS_EXPORT_TTL_SECONDS = 8 * 60 * 60
 log = get_logger(__name__)
+_LUT_LOAD_FAILED_DETAIL = (
+    "Unable to load the selected LUT. Check that the file exists and uses a "
+    "supported LUT format."
+)
+_JSON_LUT_MISSING_RGB_DETAIL = (
+    "The selected JSON LUT does not include readable RGB color data."
+)
 
 # ---- LUT Engine 内存缓存 ----
 _engine_cache: dict[str, ColorQueryEngine] = {}
@@ -149,9 +156,9 @@ def _load_engine(lut_name: str) -> tuple[ColorQueryEngine, str]:
 
     try:
         if path.endswith(".npz"):
-            success, msg, stack_data, rgb_data = StackLUTLoader.load_npz_file(path)
+            success, _msg, stack_data, rgb_data = StackLUTLoader.load_npz_file(path)
             if not success:
-                raise HTTPException(status_code=500, detail=f"Failed to load LUT: {msg}")
+                raise HTTPException(status_code=500, detail=_LUT_LOAD_FAILED_DETAIL)
             sources = StackLUTLoader.load_sources_from_json(path)
             engine = ColorQueryEngine(
                 stack_lut=stack_data,
@@ -163,7 +170,7 @@ def _load_engine(lut_name: str) -> tuple[ColorQueryEngine, str]:
             # Keyed JSON format — use LUTManager unified loader
             rgb_data, stack_data, metadata = LUTManager.load_lut_with_metadata(path)
             if rgb_data is None or len(rgb_data) == 0:
-                raise HTTPException(status_code=500, detail="Failed to load JSON LUT: no RGB data")
+                raise HTTPException(status_code=500, detail=_JSON_LUT_MISSING_RGB_DETAIL)
             # Use palette names for color_count
             color_count = len(metadata.palette) if metadata.palette else None
             if color_count is None:
@@ -196,9 +203,9 @@ def _load_engine(lut_name: str) -> tuple[ColorQueryEngine, str]:
                 engine.base_colors = base_from_palette
         else:
             # .npy file
-            success, msg, rgb_data = StackLUTLoader.load_lut_rgb(path)
+            success, _msg, rgb_data = StackLUTLoader.load_lut_rgb(path)
             if not success:
-                raise HTTPException(status_code=500, detail=f"Failed to load LUT: {msg}")
+                raise HTTPException(status_code=500, detail=_LUT_LOAD_FAILED_DETAIL)
 
             color_count, combination_count = ColorCountDetector.detect_color_count(rgb_data)
             if color_count == 0:
@@ -228,7 +235,7 @@ def _load_engine(lut_name: str) -> tuple[ColorQueryEngine, str]:
         raise
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
         raise HTTPException(
-            status_code=500, detail=f"Failed to load LUT: {exc}"
+            status_code=500, detail=_LUT_LOAD_FAILED_DETAIL
         ) from exc
 
 

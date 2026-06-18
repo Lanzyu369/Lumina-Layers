@@ -70,6 +70,10 @@ log = get_logger(__name__)
 _PUZZLE_WORKER_PIXELS_PER_MM = 10.0
 _PUZZLE_TOTAL_CUT_CLEARANCE_MM = 0.1
 _PUZZLE_BOUNDARY_INSET_MM = _PUZZLE_TOTAL_CUT_CLEARANCE_MM / 2.0
+_PUZZLE_ASSEMBLY_FAILED_DETAIL = (
+    "Puzzle 3MF assembly failed. The generated pieces could not be "
+    "combined into a downloadable file. Try generating the puzzle again."
+)
 
 
 class _PuzzleLayoutPreviewBody(BaseModel):
@@ -1005,10 +1009,10 @@ async def generate_puzzle(
                 "event": "converter_puzzle_assembly_failed",
                 "session_id": sid,
                 "error_type": type(exc).__name__,
-                "error_message": str(exc),
+                "error_message": _PUZZLE_ASSEMBLY_FAILED_DETAIL,
             },
         )
-        raise HTTPException(status_code=500, detail=f"Puzzle 3MF assembly failed: {exc}")
+        raise HTTPException(status_code=500, detail=_PUZZLE_ASSEMBLY_FAILED_DETAIL)
     finally:
         if not combined_registered:
             _remove_temp_path(combined_3mf_path)

@@ -12,6 +12,7 @@ This pins the user-reported bug: "重新量化后 3D 预览的 GLB 没更新"，
 
 from __future__ import annotations
 
+import logging
 import os
 import tempfile
 from unittest.mock import patch
@@ -26,6 +27,19 @@ from api.dependencies import get_file_registry, get_session_store
 from api.file_registry import FileRegistry
 from api.session_store import SessionStore
 from core.gradient_group_analyzer import REGION_ID_ENCODING_MULTIPLIER
+
+REGION_REQUANTIZE_MATERIALS_UNAVAILABLE_DETAIL = (
+    "Region re-quantisation cannot load the selected material archives. "
+    "Re-select the materials and run preview again."
+)
+REGION_REQUANTIZE_SOURCE_IMAGE_UNAVAILABLE_DETAIL = (
+    "Region re-quantisation cannot read the original source image. "
+    "Re-upload the image and run preview again."
+)
+REGION_REQUANTIZE_REQUEST_INVALID_DETAIL = (
+    "Region re-quantisation could not process the selected region. "
+    "Refresh preview and try again."
+)
 
 
 # ---------------------------------------------------------------------------
@@ -131,9 +145,107 @@ class _FakeSolverCache:
         return rotated, recipes, delta_e
 
 
+def _region_requantize_payload(session_id: str) -> dict[str, object]:
+    return {
+        "session_id": session_id,
+        "targets": [
+            {"gradient_group_index": 1, "gradient_region_index": 1},
+        ],
+        "local_quantize_colors": 12,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
+
+def test_requantize_material_load_error_uses_safe_detail_and_logs(
+    patched_dependencies,
+    caplog,
+):
+    client, session_id, _store = patched_dependencies
+    target_logger = logging.getLogger("lumina.api.routers.converter.replace")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.WARNING, logger=target_logger.name)
+    try:
+        with patch(
+            "api.routers.converter.replace.load_multiple_materials",
+            side_effect=FileNotFoundError(
+                "/Users/min/private/materials/BrandA/material.json"
+            ),
+        ):
+            resp = client.post(
+                "/api/convert/region-requantize",
+                json=_region_requantize_payload(session_id),
+            )
+    finally:
+        target_logger.removeHandler(caplog.handler)
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == REGION_REQUANTIZE_MATERIALS_UNAVAILABLE_DETAIL
+    assert "/Users/min/private" not in resp.text
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "converter_region_requantize_failed"
+    ]
+    assert records
+    assert records[-1].error_type == "FileNotFoundError"
+    assert "/Users/min/private" in records[-1].error_message
+
+
+def test_requantize_source_image_error_uses_safe_detail(
+    patched_dependencies,
+    tmp_path,
+):
+    client, session_id, store = patched_dependencies
+    corrupt_source = tmp_path / "private-source.png"
+    corrupt_source.write_text("not an image", encoding="utf-8")
+    store.put(session_id, "image_path", str(corrupt_source))
+
+    with patch(
+        "api.routers.converter.replace.load_multiple_materials",
+        return_value=[],
+    ), patch(
+        "api.routers.converter.replace.load_material_solver_cache_with_fallback",
+        return_value=(_FakeSolverCache(), 64),
+    ):
+        resp = client.post(
+            "/api/convert/region-requantize",
+            json=_region_requantize_payload(session_id),
+        )
+
+    assert resp.status_code == 500
+    assert resp.json()["detail"] == REGION_REQUANTIZE_SOURCE_IMAGE_UNAVAILABLE_DETAIL
+    assert str(corrupt_source) not in resp.text
+
+
+def test_requantize_core_error_uses_safe_detail(
+    patched_dependencies,
+):
+    client, session_id, _store = patched_dependencies
+
+    with patch(
+        "api.routers.converter.replace.load_multiple_materials",
+        return_value=[],
+    ), patch(
+        "api.routers.converter.replace.load_material_solver_cache_with_fallback",
+        return_value=(_FakeSolverCache(), 64),
+    ), patch(
+        "api.routers.converter.replace.requantize_gradient_regions",
+        side_effect=ValueError(
+            "local quantize failed for /Users/min/private/source.png"
+        ),
+    ):
+        resp = client.post(
+            "/api/convert/region-requantize",
+            json=_region_requantize_payload(session_id),
+        )
+
+    assert resp.status_code == 409
+    assert resp.json()["detail"] == REGION_REQUANTIZE_REQUEST_INVALID_DETAIL
+    assert "/Users/min/private" not in resp.text
 
 
 def test_requantize_writes_glb_max_meshes_above_default(patched_dependencies):

@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, NoReturn
 
 import os
 
@@ -42,6 +42,92 @@ from core.single_stage import (
 router = APIRouter(prefix="/api/material-registry/v1", tags=["Material Registry"])
 log = get_logger(__name__)
 
+MATERIAL_REGISTRY_ACCESS_DENIED_DETAIL = (
+    "Material Registry access is not authorized for this channel."
+)
+MATERIAL_REGISTRY_WRITE_ACCESS_DENIED_DETAIL = (
+    "Material Registry write access is not authorized or is not configured."
+)
+MATERIAL_REGISTRY_STORAGE_UNAVAILABLE_DETAIL = (
+    "Material Registry storage is not available. Check the Registry service configuration."
+)
+MATERIAL_REGISTRY_CATALOG_INVALID_DETAIL = (
+    "Material Registry catalog request is invalid. Check the channel and pagination values."
+)
+MATERIAL_REGISTRY_PACKAGE_INVALID_DETAIL = (
+    "The material package is invalid. Export it again from Lumina and upload the new ZIP."
+)
+MATERIAL_REGISTRY_UPLOAD_ZIP_REQUIRED_DETAIL = "Uploaded file must be a ZIP archive."
+MATERIAL_REGISTRY_UPLOAD_TOO_LARGE_DETAIL = (
+    "The material package ZIP is too large for this Registry service."
+)
+MATERIAL_REGISTRY_PACKAGE_PATH_INVALID_DETAIL = (
+    "The requested material package path is invalid."
+)
+MATERIAL_REGISTRY_PACKAGE_NOT_FOUND_DETAIL = (
+    "The requested material package was not found."
+)
+MATERIAL_REGISTRY_DUPLICATE_DETAIL = (
+    "This material package revision already exists in the Registry."
+)
+MATERIAL_REGISTRY_LOCAL_PACKAGE_INVALID_DETAIL = (
+    "The local material package could not be prepared. Check that the saved material exists and is valid."
+)
+
+
+def _material_registry_storage_unavailable(exc: Exception) -> bool:
+    message = str(exc).casefold()
+    return "material registry packages directory" in message
+
+
+def _material_registry_package_path_invalid(exc: Exception) -> bool:
+    message = str(exc).casefold()
+    return (
+        "unsafe material registry package path" in message
+        or "material registry package path must reference a zip file" in message
+    )
+
+
+def _catalog_error_detail(exc: Exception) -> str:
+    if _material_registry_storage_unavailable(exc):
+        return MATERIAL_REGISTRY_STORAGE_UNAVAILABLE_DETAIL
+    return MATERIAL_REGISTRY_CATALOG_INVALID_DETAIL
+
+
+def _package_error_detail(exc: Exception) -> str:
+    if _material_registry_storage_unavailable(exc):
+        return MATERIAL_REGISTRY_STORAGE_UNAVAILABLE_DETAIL
+    if _material_registry_package_path_invalid(exc):
+        return MATERIAL_REGISTRY_PACKAGE_PATH_INVALID_DETAIL
+    return MATERIAL_REGISTRY_PACKAGE_INVALID_DETAIL
+
+
+def _local_package_error_detail(exc: Exception) -> str:
+    if _material_registry_storage_unavailable(exc):
+        return MATERIAL_REGISTRY_STORAGE_UNAVAILABLE_DETAIL
+    return MATERIAL_REGISTRY_LOCAL_PACKAGE_INVALID_DETAIL
+
+
+def _raise_material_registry_error(
+    *,
+    event: str,
+    exc: Exception,
+    status_code: int,
+    detail: str,
+    **fields: object,
+) -> NoReturn:
+    log.warning(
+        "Material Registry request failed",
+        extra={
+            "event": event,
+            "status_code": status_code,
+            "error_type": type(exc).__name__,
+            "error_message": str(exc),
+            **fields,
+        },
+    )
+    raise HTTPException(status_code=status_code, detail=detail) from exc
+
 
 @router.get("/materials/catalog", response_model=MaterialRegistryCatalogResponse)
 async def material_registry_catalog(
@@ -67,9 +153,23 @@ async def material_registry_catalog(
             query=q,
         )
     except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+        _raise_material_registry_error(
+            event="material_registry_catalog_failed",
+            exc=exc,
+            status_code=403,
+            detail=MATERIAL_REGISTRY_ACCESS_DENIED_DETAIL,
+            channels=channel,
+            query=q,
+        )
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _raise_material_registry_error(
+            event="material_registry_catalog_failed",
+            exc=exc,
+            status_code=422,
+            detail=_catalog_error_detail(exc),
+            channels=channel,
+            query=q,
+        )
 
     log.info(
         "Material registry catalog loaded",
@@ -99,9 +199,12 @@ async def material_registry_package_upload(
     """
     filename = archive.filename or ""
     if not filename.lower().endswith(".zip"):
-        raise HTTPException(
+        _raise_material_registry_error(
+            event="material_registry_package_upload_failed",
+            exc=ValueError("Uploaded file must be a ZIP archive"),
             status_code=422,
-            detail=f"Uploaded file must be a ZIP archive: {filename or '<unnamed>'}",
+            detail=MATERIAL_REGISTRY_UPLOAD_ZIP_REQUIRED_DETAIL,
+            upload_filename=filename,
         )
     archive_path: str | None = None
     try:
@@ -114,11 +217,37 @@ async def material_registry_package_upload(
         result = upload_material_registry_package(archive_path=archive_path)
         invalidate_material_registry_remote_catalog_cache()
     except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+        _raise_material_registry_error(
+            event="material_registry_package_upload_failed",
+            exc=exc,
+            status_code=403,
+            detail=MATERIAL_REGISTRY_WRITE_ACCESS_DENIED_DETAIL,
+            upload_filename=filename,
+        )
     except UploadTooLargeError as exc:
-        raise HTTPException(status_code=413, detail=str(exc)) from exc
+        _raise_material_registry_error(
+            event="material_registry_package_upload_failed",
+            exc=exc,
+            status_code=413,
+            detail=MATERIAL_REGISTRY_UPLOAD_TOO_LARGE_DETAIL,
+            upload_filename=filename,
+        )
+    except MaterialRegistryDuplicateError as exc:
+        _raise_material_registry_error(
+            event="material_registry_package_upload_failed",
+            exc=exc,
+            status_code=409,
+            detail=MATERIAL_REGISTRY_DUPLICATE_DETAIL,
+            upload_filename=filename,
+        )
     except (ValueError, OSError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _raise_material_registry_error(
+            event="material_registry_package_upload_failed",
+            exc=exc,
+            status_code=422,
+            detail=_package_error_detail(exc),
+            upload_filename=filename,
+        )
     finally:
         if archive_path is not None:
             try:
@@ -163,13 +292,37 @@ async def material_registry_local_package_upload(
         result = upload_material_registry_package(archive_path=archive_path)
         invalidate_material_registry_remote_catalog_cache()
     except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+        _raise_material_registry_error(
+            event="material_registry_local_package_upload_failed",
+            exc=exc,
+            status_code=403,
+            detail=MATERIAL_REGISTRY_WRITE_ACCESS_DENIED_DETAIL,
+            directory_name=payload.directory_name,
+        )
     except MaterialRegistryDuplicateError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        _raise_material_registry_error(
+            event="material_registry_local_package_upload_failed",
+            exc=exc,
+            status_code=409,
+            detail=MATERIAL_REGISTRY_DUPLICATE_DETAIL,
+            directory_name=payload.directory_name,
+        )
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        _raise_material_registry_error(
+            event="material_registry_local_package_upload_failed",
+            exc=exc,
+            status_code=404,
+            detail=MATERIAL_REGISTRY_LOCAL_PACKAGE_INVALID_DETAIL,
+            directory_name=payload.directory_name,
+        )
     except (ValueError, TypeError, OSError, RuntimeError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _raise_material_registry_error(
+            event="material_registry_local_package_upload_failed",
+            exc=exc,
+            status_code=422,
+            detail=_local_package_error_detail(exc),
+            directory_name=payload.directory_name,
+        )
     finally:
         if archive_path is not None:
             try:
@@ -213,11 +366,29 @@ async def material_registry_package_approve(
         invalidate_material_registry_remote_catalog_cache()
         invalidate_material_library_cache()
     except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+        _raise_material_registry_error(
+            event="material_registry_package_approve_failed",
+            exc=exc,
+            status_code=403,
+            detail=MATERIAL_REGISTRY_WRITE_ACCESS_DENIED_DETAIL,
+            package_path=package_path,
+        )
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        _raise_material_registry_error(
+            event="material_registry_package_approve_failed",
+            exc=exc,
+            status_code=404,
+            detail=MATERIAL_REGISTRY_PACKAGE_NOT_FOUND_DETAIL,
+            package_path=package_path,
+        )
     except (ValueError, OSError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _raise_material_registry_error(
+            event="material_registry_package_approve_failed",
+            exc=exc,
+            status_code=422,
+            detail=_package_error_detail(exc),
+            package_path=package_path,
+        )
 
     log.info(
         "Material registry package approved",
@@ -251,11 +422,29 @@ async def material_registry_package_download(
             authorization=authorization,
         )
     except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+        _raise_material_registry_error(
+            event="material_registry_package_download_failed",
+            exc=exc,
+            status_code=403,
+            detail=MATERIAL_REGISTRY_ACCESS_DENIED_DETAIL,
+            package_path=package_path,
+        )
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        _raise_material_registry_error(
+            event="material_registry_package_download_failed",
+            exc=exc,
+            status_code=404,
+            detail=MATERIAL_REGISTRY_PACKAGE_NOT_FOUND_DETAIL,
+            package_path=package_path,
+        )
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _raise_material_registry_error(
+            event="material_registry_package_download_failed",
+            exc=exc,
+            status_code=422,
+            detail=_package_error_detail(exc),
+            package_path=package_path,
+        )
 
     log.info(
         "Material registry package downloaded",

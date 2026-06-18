@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import logging
 import zipfile
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
@@ -20,6 +21,7 @@ import core.single_stage.materials as materials_module
 from api.app import create_app
 from api.dependencies import get_file_registry, get_session_store
 from api.file_registry import FileRegistry
+from api.routers.calibration import SINGLE_STAGE_KIT_GENERATION_FAILED_DETAIL
 from api.routers.single_stage import MATERIAL_SOLVER_CACHE_LIST_FAILED_DETAIL
 from api.session_store import SessionStore
 from config import PaletteEntry
@@ -322,6 +324,40 @@ def test_generate_single_stage_kit_route(monkeypatch, tmp_path: Path) -> None:
     assert captured["printer_id"] == "bambu-p1s"
     assert captured["slicer"] == "OrcaSlicer"
     assert captured["nozzle_size"] == "0.2"
+
+
+def test_generate_single_stage_kit_hides_core_error_detail(
+    monkeypatch,
+) -> None:
+    client, _, _ = _client_with_state()
+    private_path = "/Users/min/private/single-stage-kit.zip"
+
+    def _fail_generate_single_stage_kit(*args, **kwargs):
+        raise RuntimeError(f"permission denied while writing {private_path}")
+
+    monkeypatch.setattr(
+        "api.routers.calibration.generate_single_stage_kit",
+        _fail_generate_single_stage_kit,
+    )
+
+    response = client.post(
+        "/api/calibration/generate-single-stage-kit",
+        json={
+            "palette": [
+                {
+                    "color": "White",
+                    "material": "PLA Basic",
+                    "hex_color": "#FFFFFF",
+                    "color_name": "White",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == SINGLE_STAGE_KIT_GENERATION_FAILED_DETAIL
+    assert "permission denied" not in response.text
+    assert private_path not in response.text
 
 
 def test_generate_single_stage_kit_cleans_zip_when_first_registration_fails(
@@ -956,6 +992,7 @@ def test_extract_single_stage_route_preserves_upload_after_short_write(
 def test_extract_single_stage_route_cleans_session_when_registration_fails(
     monkeypatch,
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     app = create_app()
     store = SessionStore(ttl=1800)
@@ -989,18 +1026,83 @@ def test_extract_single_stage_route_cleans_session_when_registration_fails(
         "api.routers.single_stage.extract_single_stage_dataset",
         _fake_extract_single_stage_dataset,
     )
+    target_logger = logging.getLogger("lumina.api.routers.single_stage")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.ERROR, logger=target_logger.name)
 
-    response = client.post(
-        "/api/extractor/extract-single-stage",
-        files={"dataset_zip": ("dataset.zip", b"zip", "application/zip")},
-    )
+    try:
+        response = client.post(
+            "/api/extractor/extract-single-stage",
+            files={"dataset_zip": ("dataset.zip", b"zip", "application/zip")},
+        )
+    finally:
+        target_logger.removeHandler(caplog.handler)
 
     assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Single-stage dataset file registration failed. Check the server log for details."
+    )
+    assert "registry backend unavailable" not in response.text
     assert registry.paths == [str(stage_json_path)]
     assert len(registry.cleanup_session_ids) == 1
     assert store._store == {}
     assert not zip_path.exists()
     assert not stage_json_path.exists()
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None)
+        == "extractor_extract_single_stage_registration_failed"
+    ]
+    assert len(records) == 1
+    record = records[0]
+    assert record.error_type == "RuntimeError"
+    assert record.error_message == "registry backend unavailable"
+
+
+def test_extract_single_stage_route_sanitizes_internal_file_error(
+    monkeypatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client, store, _ = _client_with_state()
+    leaked_path = tmp_path / "missing" / "dataset_manifest.json"
+
+    def _fake_extract_single_stage_dataset(*args, **kwargs):
+        raise FileNotFoundError(f"manifest missing at {leaked_path}")
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.extract_single_stage_dataset",
+        _fake_extract_single_stage_dataset,
+    )
+    target_logger = logging.getLogger("lumina.api.routers.single_stage")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.ERROR, logger=target_logger.name)
+
+    try:
+        response = client.post(
+            "/api/extractor/extract-single-stage",
+            files={"dataset_zip": ("dataset.zip", b"zip", "application/zip")},
+        )
+    finally:
+        target_logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Single-stage dataset extraction failed. Check the server log for details."
+    )
+    assert str(leaked_path) not in response.text
+    assert "manifest missing" not in response.text
+    assert store._store == {}
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "extractor_extract_single_stage_failed"
+    ]
+    assert len(records) == 1
+    record = records[0]
+    assert record.error_type == "FileNotFoundError"
+    assert str(leaked_path) in record.error_message
 
 
 def test_fit_stage_a_route_uses_session(monkeypatch, tmp_path: Path) -> None:
@@ -1191,6 +1293,7 @@ def test_fit_stage_a_route_accepts_uploaded_stage_json(
 def test_fit_stage_a_upload_route_cleans_session_when_registration_fails(
     monkeypatch,
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     app = create_app()
     store = SessionStore(ttl=1800)
@@ -1221,23 +1324,43 @@ def test_fit_stage_a_upload_route_cleans_session_when_registration_fails(
         "api.routers.single_stage.fit_stage_a_from_stage_json",
         _fake_fit_stage_a_from_stage_json,
     )
+    target_logger = logging.getLogger("lumina.api.routers.single_stage")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.ERROR, logger=target_logger.name)
 
-    response = client.post(
-        "/api/extractor/fit-stage-a",
-        files={"stage_json": ("uploaded_stage.json", b"{}", "application/json")},
-    )
+    try:
+        response = client.post(
+            "/api/extractor/fit-stage-a",
+            files={"stage_json": ("uploaded_stage.json", b"{}", "application/json")},
+        )
+    finally:
+        target_logger.removeHandler(caplog.handler)
 
     assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Stage A parameter file registration failed. Check the server log for details."
+    )
+    assert "registry backend unavailable" not in response.text
     assert registry.paths == [str(params_path)]
     assert len(registry.cleanup_session_ids) == 1
     assert store._store == {}
     assert not uploaded_stage_json.exists()
     assert not params_path.exists()
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "extractor_fit_stage_a_registration_failed"
+    ]
+    assert len(records) == 1
+    record = records[0]
+    assert record.error_type == "RuntimeError"
+    assert record.error_message == "registry backend unavailable"
 
 
 def test_fit_stage_a_upload_route_cleans_session_when_fit_file_missing(
     monkeypatch,
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     client_app = create_app()
     store = SessionStore(ttl=1800)
@@ -1263,16 +1386,34 @@ def test_fit_stage_a_upload_route_cleans_session_when_fit_file_missing(
         "api.routers.single_stage.fit_stage_a_from_stage_json",
         _fake_fit_stage_a_from_stage_json,
     )
+    target_logger = logging.getLogger("lumina.api.routers.single_stage")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.ERROR, logger=target_logger.name)
 
-    response = client.post(
-        "/api/extractor/fit-stage-a",
-        files={"stage_json": ("uploaded_stage.json", b"{}", "application/json")},
-    )
+    try:
+        response = client.post(
+            "/api/extractor/fit-stage-a",
+            files={"stage_json": ("uploaded_stage.json", b"{}", "application/json")},
+        )
+    finally:
+        target_logger.removeHandler(caplog.handler)
 
     assert response.status_code == 500
-    assert "reference assets missing" in response.json()["detail"]
+    assert response.json()["detail"] == (
+        "Stage A fitting failed. Check the server log for details."
+    )
+    assert "reference assets missing" not in response.text
     assert store._store == {}
     assert not uploaded_stage_json.exists()
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "extractor_fit_stage_a_failed"
+    ]
+    assert len(records) == 1
+    record = records[0]
+    assert record.error_type == "FileNotFoundError"
+    assert record.error_message == "reference assets missing"
 
 
 def test_fit_stage_a_session_route_does_not_pollute_session_when_registration_fails(

@@ -106,6 +106,22 @@ _PREVIEW_CACHE_TRANSACTION_UNAVAILABLE_DETAIL = (
     "Preview cache is unavailable. "
     "Re-run preview before changing replacement colors."
 )
+REGION_REQUANTIZE_MATERIALS_UNAVAILABLE_DETAIL = (
+    "Region re-quantisation cannot load the selected material archives. "
+    "Re-select the materials and run preview again."
+)
+REGION_REQUANTIZE_SOURCE_IMAGE_UNAVAILABLE_DETAIL = (
+    "Region re-quantisation cannot read the original source image. "
+    "Re-upload the image and run preview again."
+)
+REGION_REQUANTIZE_REQUEST_INVALID_DETAIL = (
+    "Region re-quantisation could not process the selected region. "
+    "Refresh preview and try again."
+)
+REGION_REQUANTIZE_CACHE_CONFLICT_DETAIL = (
+    "Preview cache changed while region re-quantisation was running. "
+    "Refresh preview and try again."
+)
 
 
 def _require_preview_cache_fields(
@@ -156,6 +172,29 @@ def _dirty_array_fields(cache: dict, *field_names: str) -> set[str]:
         for field_name in field_names
         if isinstance(cache.get(field_name), np.ndarray)
     }
+
+
+def _raise_region_requantize_error(
+    exc: Exception,
+    *,
+    status_code: int,
+    detail: str,
+    session_id: str,
+    stage: str,
+) -> None:
+    log_method = log.error if status_code >= 500 else log.warning
+    log_method(
+        "Region re-quantisation failed",
+        extra={
+            "event": "converter_region_requantize_failed",
+            "session_id": session_id,
+            "stage": stage,
+            "status_code": status_code,
+            "error_type": type(exc).__name__,
+            "error_message": str(exc),
+        },
+    )
+    raise HTTPException(status_code=status_code, detail=detail) from exc
 
 
 @contextmanager
@@ -1782,10 +1821,13 @@ def region_requantize(
         try:
             materials = load_multiple_materials(list(selected_materials))
         except (FileNotFoundError, OSError, TypeError, ValueError) as exc:
-            raise HTTPException(
+            _raise_region_requantize_error(
+                exc,
                 status_code=409,
-                detail=f"Failed to load materials: {exc}",
-            ) from exc
+                detail=REGION_REQUANTIZE_MATERIALS_UNAVAILABLE_DETAIL,
+                session_id=request.session_id,
+                stage="load_materials",
+            )
 
         layer_count = int(
             session_data.get("material_layer_count")
@@ -1842,10 +1884,13 @@ def region_requantize(
                 )
             original_source_rgb = np.asarray(original_pil, dtype=np.uint8)
         except (OSError, ValueError) as exc:
-            raise HTTPException(
+            _raise_region_requantize_error(
+                exc,
                 status_code=500,
-                detail=f"Failed to load / resize source image: {exc}",
-            ) from exc
+                detail=REGION_REQUANTIZE_SOURCE_IMAGE_UNAVAILABLE_DETAIL,
+                session_id=request.session_id,
+                stage="load_source_image",
+            )
 
         # Convert Pydantic targets to plain tuples for the core function.
         target_pairs = [
@@ -1926,10 +1971,13 @@ def region_requantize(
                 local_quantize_colors=request.local_quantize_colors,
             )
         except (ValueError, TypeError) as exc:
-            raise HTTPException(
+            _raise_region_requantize_error(
+                exc,
                 status_code=409,
-                detail=f"Invalid re-quantisation request: {exc}",
-            ) from exc
+                detail=REGION_REQUANTIZE_REQUEST_INVALID_DETAIL,
+                session_id=request.session_id,
+                stage="requantize_core",
+            )
         _core_ms = (_time.perf_counter() - _t_core) * 1000
 
         # Sync material matrix for the changed pixels, then commit to cache.
@@ -2050,7 +2098,13 @@ def region_requantize(
     except HTTPException:
         raise
     except PreviewCacheRevisionConflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        _raise_region_requantize_error(
+            exc,
+            status_code=409,
+            detail=REGION_REQUANTIZE_CACHE_CONFLICT_DETAIL,
+            session_id=request.session_id,
+            stage="preview_cache_commit",
+        )
     except REPLACE_HANDLED_ERRORS as exc:
         _handle_core_error(exc, "Region re-quantisation")
     finally:

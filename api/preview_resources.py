@@ -62,6 +62,14 @@ _COLORCHECKER_PREVIEW_UNREADABLE_DETAIL = (
     "ColorChecker preview is unavailable or unreadable. "
     "Re-run ColorChecker calibration and try again."
 )
+_COLORCHECKER_PREVIEW_GENERATION_FAILED_DETAIL = (
+    "ColorChecker preview could not be generated from this image. "
+    "Choose a supported image file and try again."
+)
+_COLORCHECKER_PREVIEW_SERVICE_UNAVAILABLE_DETAIL = (
+    "ColorChecker preview service is unavailable. "
+    "Check the server ColorChecker dependencies and try again."
+)
 _PREVIEW_ARTIFACT_UNREADABLE_DETAIL = (
     "Preview artifact is unavailable or unreadable. "
     "Re-run the previous step and try again."
@@ -319,9 +327,15 @@ async def register_preview_resource_upload(
             source_type=str(decoded.source_type),
         )
     except ColorCheckerUnavailableError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=500,
+            detail=_COLORCHECKER_PREVIEW_SERVICE_UNAVAILABLE_DETAIL,
+        ) from exc
     except ColorCheckerCalibrationError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=422,
+            detail=_COLORCHECKER_PREVIEW_GENERATION_FAILED_DETAIL,
+        ) from exc
     except (cv2.error, OSError, RuntimeError, TypeError, ValueError):
         if resource_id:
             registry.cleanup_file(resource_id)
@@ -369,9 +383,15 @@ def register_preview_for_artifact(
                 mime_type="application/octet-stream",
             )
         except ColorCheckerUnavailableError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            raise HTTPException(
+                status_code=500,
+                detail=_COLORCHECKER_PREVIEW_SERVICE_UNAVAILABLE_DETAIL,
+            ) from exc
         except ColorCheckerCalibrationError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+            raise HTTPException(
+                status_code=422,
+                detail=_COLORCHECKER_PREVIEW_GENERATION_FAILED_DETAIL,
+            ) from exc
         return register_preview_jpeg(
             registry,
             decoded.image_bgr,

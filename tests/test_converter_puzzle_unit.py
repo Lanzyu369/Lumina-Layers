@@ -537,6 +537,7 @@ def test_generate_puzzle_deletes_combined_output_when_assembly_fails(tmp_path: P
     session_id = _seed_puzzle_session(store, tmp_path)
     piece_index = 0
     combined_paths: list[str] = []
+    private_path = "/Users/min/private/puzzle-piece.3mf"
 
     async def _submit_stub(*_args: object, **_kwargs: object) -> dict[str, object]:
         nonlocal piece_index
@@ -548,14 +549,17 @@ def test_generate_puzzle_deletes_combined_output_when_assembly_fails(tmp_path: P
     def _assemble_failure_stub(*, output_path: str, **_kwargs: object) -> str:
         combined_paths.append(output_path)
         Path(output_path).write_bytes(b"partial-combined-3mf")
-        raise RuntimeError("assembly failed")
+        raise RuntimeError(f"cannot rewrite {private_path}: invalid archive")
 
     pool.submit = AsyncMock(side_effect=_submit_stub)
 
     try:
-        with patch(
-            "api.routers.converter.puzzle.assemble_puzzle_3mf",
-            side_effect=_assemble_failure_stub,
+        with (
+            patch(
+                "api.routers.converter.puzzle.assemble_puzzle_3mf",
+                side_effect=_assemble_failure_stub,
+            ),
+            patch.object(puzzle_router.log, "error") as log_error,
         ):
             response = full_client.post(
                 "/api/convert/generate-puzzle",
@@ -563,6 +567,16 @@ def test_generate_puzzle_deletes_combined_output_when_assembly_fails(tmp_path: P
             )
 
         assert response.status_code == 500
+        assert response.json()["detail"] == (
+            "Puzzle 3MF assembly failed. The generated pieces could not be "
+            "combined into a downloadable file. Try generating the puzzle again."
+        )
+        assert private_path not in response.text
+        log_error.assert_called_once()
+        log_extra = log_error.call_args.kwargs["extra"]
+        assert log_extra["error_type"] == "RuntimeError"
+        assert log_extra["error_message"] == response.json()["detail"]
+        assert private_path not in log_extra["error_message"]
         assert combined_paths
         assert os.path.exists(combined_paths[0]) is False
     finally:
