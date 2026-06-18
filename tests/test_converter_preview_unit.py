@@ -1218,7 +1218,53 @@ class TestGeneralExceptionReturns500:
     def test_preview_exception_returns_500(self) -> None:
         """Simulate pool.submit raising RuntimeError, expect 500."""
         buf = _make_test_image_buf()
-        _mock_pool.submit = AsyncMock(side_effect=RuntimeError("Worker crashed"))
+        private_path = "/Users/min/private/preview-source.png"
+        _mock_pool.submit = AsyncMock(
+            side_effect=RuntimeError(f"Worker crashed reading {private_path}")
+        )
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+            patch("api.routers.converter.preview.log.exception") as log_exception,
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": ("test.png", buf, "image/png")},
+                data={
+                    "lut_name": "test_lut",
+                    "color_mode": "4-Color",
+                },
+            )
+        assert response.status_code == 500
+        assert response.json()["detail"] == (
+            "Preview generation failed. Re-run preview and try again."
+        )
+        assert private_path not in response.text
+        assert "Worker crashed" not in response.text
+        log_exception.assert_called_once()
+        log_extra = log_exception.call_args.kwargs["extra"]
+        assert log_extra["error_type"] == "RuntimeError"
+        assert log_extra["error_message"] == response.json()["detail"]
+        assert private_path not in log_extra["error_message"]
+
+    def test_preview_missing_worker_output_uses_public_error_language(self) -> None:
+        """Worker status_msg should not leak local paths when no PNG is returned."""
+        buf = _make_test_image_buf()
+        private_path = "/Users/min/private/preview.png"
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "status_msg": f"cannot write {private_path}: permission denied",
+                "preview_png_path": None,
+                "cache_data_path": None,
+            }
+        )
 
         with (
             patch(
@@ -1238,8 +1284,13 @@ class TestGeneralExceptionReturns500:
                     "color_mode": "4-Color",
                 },
             )
+
         assert response.status_code == 500
-        assert "Worker crashed" in response.json()["detail"]
+        assert response.json()["detail"] == (
+            "Preview generation failed. Re-run preview and try again."
+        )
+        assert private_path not in response.text
+        assert "permission denied" not in response.text
 
 
 class TestNativeBundleValidation:
