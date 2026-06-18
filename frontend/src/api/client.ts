@@ -16,8 +16,41 @@ const apiClient = axios.create({
   timeout: 3_600_000,
 });
 
-function summarizeApiErrorData(data: unknown): unknown {
+function isServerErrorStatus(statusCode: number | null): boolean {
+  return typeof statusCode === "number" && statusCode >= 500;
+}
+
+function summarizeRedactedServerValue(
+  field: "detail" | "message" | "body",
+  value: unknown,
+): Record<string, unknown> {
+  const summary: Record<string, unknown> = {
+    [`${field}_redacted`]: true,
+    [`${field}_type`]: Array.isArray(value)
+      ? "array"
+      : value === null
+        ? "null"
+        : typeof value,
+  };
+  if (typeof value === "string") {
+    summary[`${field}_length`] = value.length;
+  } else if (Array.isArray(value)) {
+    summary[`${field}_item_count`] = value.length;
+  } else if (isRecord(value)) {
+    summary[`${field}_keys`] = Object.keys(value).slice(0, 12);
+  }
+  return summary;
+}
+
+function summarizeApiErrorData(
+  data: unknown,
+  statusCode: number | null = null,
+): unknown {
+  const redactServerDetails = isServerErrorStatus(statusCode);
   if (data == null || typeof data !== "object") {
+    if (redactServerDetails && data != null) {
+      return summarizeRedactedServerValue("body", data);
+    }
     return data ?? null;
   }
   if (Array.isArray(data)) {
@@ -26,9 +59,15 @@ function summarizeApiErrorData(data: unknown): unknown {
 
   const record = data as Record<string, unknown>;
   if ("detail" in record) {
+    if (redactServerDetails) {
+      return summarizeRedactedServerValue("detail", record.detail);
+    }
     return { detail: record.detail };
   }
   if ("message" in record) {
+    if (redactServerDetails) {
+      return summarizeRedactedServerValue("message", record.message);
+    }
     return { message: record.message };
   }
   return { keys: Object.keys(record).slice(0, 12) };
@@ -188,6 +227,9 @@ function readableApiErrorMessage(
   statusCode: number | null,
   error: unknown,
 ): string {
+  if (isServerErrorStatus(statusCode)) {
+    return fallbackHttpStatusMessage(statusCode);
+  }
   const detail = extractReadableDetail(data);
   if (detail && !isGenericHttpDetail(detail, statusCode)) {
     return detail;
@@ -199,20 +241,37 @@ function readableApiErrorMessage(
   return error instanceof Error ? error.message : String(error ?? "API request failed");
 }
 
-function replaceGenericResponseDetail(
+function buildReadableResponseData(
+  data: unknown,
+  statusCode: number | null,
+  readableMessage: string,
+): unknown {
+  if (isServerErrorStatus(statusCode)) {
+    return { detail: readableMessage };
+  }
+  if (!isRecord(data)) {
+    return { detail: readableMessage };
+  }
+  const detail = data.detail;
+  if (typeof detail !== "string" || !isGenericHttpDetail(detail, statusCode)) {
+    return data;
+  }
+  return { ...data, detail: readableMessage };
+}
+
+function replaceUnsafeResponseData(
   response: { data?: unknown } | null | undefined,
   statusCode: number | null,
   readableMessage: string,
 ): void {
-  const data = response?.data;
-  if (!isRecord(data)) {
+  if (!response) {
     return;
   }
-  const detail = data.detail;
-  if (typeof detail !== "string" || !isGenericHttpDetail(detail, statusCode)) {
-    return;
-  }
-  response.data = { ...data, detail: readableMessage };
+  response.data = buildReadableResponseData(
+    response.data,
+    statusCode,
+    readableMessage,
+  );
 }
 
 function getResponseHeaderValue(
@@ -270,9 +329,11 @@ function buildResourceDownloadError(
     statusCode,
     new Error(`Resource download failed: ${url}`),
   );
-  const responseData = isRecord(data)
-    ? { ...data, detail: readableMessage }
-    : { detail: readableMessage };
+  const responseData = buildReadableResponseData(
+    data,
+    statusCode,
+    readableMessage,
+  );
   const error = new Error(readableMessage) as Error & {
     response?: {
       status: number | null;
@@ -377,13 +438,16 @@ apiClient.interceptors.response.use(
     const url = config?.url ?? null;
     const statusCode: number | null = response?.status ?? null;
     const requestId = getResponseHeaderValue(response?.headers, "x-request-id");
-    const responseDetailForLog = summarizeApiErrorData(response?.data);
     const readableMessage = readableApiErrorMessage(
       response?.data,
       statusCode,
       error,
     );
-    replaceGenericResponseDetail(response, statusCode, readableMessage);
+    const responseDetailForLog = summarizeApiErrorData(
+      response?.data,
+      statusCode,
+    );
+    replaceUnsafeResponseData(response, statusCode, readableMessage);
     if (error && typeof error === "object") {
       try {
         (error as { message?: string }).message = readableMessage;
