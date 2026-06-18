@@ -8,7 +8,7 @@ Validates:
 - No preview_cache returns 409
 - Missing image_path returns 409
 - asyncio.TimeoutError → HTTP 504
-- General Exception → HTTP 500
+- General Exception → safe HTTP 500
 """
 
 from __future__ import annotations
@@ -34,6 +34,7 @@ from api.file_registry import FileRegistry
 from api.preview_cache_artifacts import externalize_preview_cache
 from api.routers.converter.generate import _generate_large_format_raster
 from api.routers.converter.generate import _generate_large_format_svg_native
+from api.routers.converter.generate import MODEL_GENERATION_FAILED_DETAIL
 from api.routers.converter.generate import _recover_virtual_materials_from_preview_cache
 from api.routers.converter.generate import _resolve_recipe_overrides
 from api.routers.converter.generate import _resolve_large_format_source_basename
@@ -920,7 +921,7 @@ class TestGenerateTimeout:
 
 
 class TestGenerateWorkerException:
-    """Verify general Exception from pool.submit returns HTTP 500."""
+    """Verify general Exception from pool.submit returns a safe HTTP 500."""
 
     def test_generate_worker_exception_returns_500(self) -> None:
         sid: str = _create_session_with_preview_and_files(_test_store)
@@ -936,7 +937,8 @@ class TestGenerateWorkerException:
             response = client.post("/api/convert/generate", json=payload)
 
         assert response.status_code == 500
-        assert "Worker crashed" in response.json()["detail"]
+        assert response.json()["detail"] == MODEL_GENERATION_FAILED_DETAIL
+        assert "Worker crashed" not in response.text
 
 
 class TestGenerateRegistryFailureCleanup:
