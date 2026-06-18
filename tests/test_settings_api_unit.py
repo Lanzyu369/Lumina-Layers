@@ -16,9 +16,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.app import app
+from api.routers.system import SETTINGS_SAVE_FAILED_DETAIL
 
 client: TestClient = TestClient(app)
-
 
 # =========================================================================
 # 1. GET /api/system/settings — Requirements 5.1, 5.2
@@ -133,7 +133,7 @@ class TestPostSettings:
         assert written["device_profile_id"] == "OrcaSlicer:bbl:bambu-lab-p1s:0.2"
 
     def test_post_settings_io_error(self) -> None:
-        """I/O 错误返回 500。"""
+        """I/O 错误返回 500，但不暴露本机路径或底层异常。"""
         payload = {
             "last_lut": "",
             "last_modeling_mode": "high-fidelity",
@@ -144,13 +144,18 @@ class TestPostSettings:
             "nozzle_size": "0.4",
         }
         mock_file = MagicMock()
-        mock_file.write_text.side_effect = OSError("disk full")
+        private_path = "/Users/min/private/user_settings.json"
+        mock_file.write_text.side_effect = OSError(
+            f"cannot write {private_path}: disk full"
+        )
 
         with patch("api.routers.system.SETTINGS_FILE", mock_file):
             response = client.post("/api/system/settings", json=payload)
 
         assert response.status_code == 500
-        assert "Failed to save settings" in response.json()["detail"]
+        assert response.json()["detail"] == SETTINGS_SAVE_FAILED_DETAIL
+        assert private_path not in response.text
+        assert "disk full" not in response.text
 
 
 # =========================================================================
