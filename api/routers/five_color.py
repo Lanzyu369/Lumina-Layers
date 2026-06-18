@@ -67,7 +67,7 @@ def _rollback_swatch_registration(
             continue
         try:
             registry.cleanup_file(file_id)
-        except Exception:
+        except (OSError, RuntimeError, ValueError):
             pass
     _remove_generated_path(generated_path)
 
@@ -499,7 +499,7 @@ def generate_swatch(
             )
             registered_file_ids.append(preview_id)
             preview_url = f"/api/files/{preview_id}"
-    except Exception:
+    except (OSError, RuntimeError, TypeError, ValueError):
         _rollback_swatch_registration(
             registry,
             file_ids=registered_file_ids,

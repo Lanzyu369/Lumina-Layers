@@ -26,7 +26,7 @@ describe("apiClient", () => {
     apiClient.defaults.adapter = undefined;
   });
 
-  it("records failed API responses in the client log buffer", async () => {
+  it("redacts server error details from user-facing API failures and logs", async () => {
     const error = new Error("Request failed");
     Object.assign(error, {
       config: { method: "post", url: "/convert/generate" },
@@ -38,9 +38,12 @@ describe("apiClient", () => {
     });
     apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
 
-    await expect(apiClient.post("/convert/generate", {})).rejects.toMatchObject({
-      message: "worker crashed",
-    });
+    const expectedMessage =
+      "The server hit an internal error. Check the log for the request ID.";
+    const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
+    expect(rejected).toMatchObject({ message: expectedMessage });
+    expect(rejected.response?.data?.detail).toBe(expectedMessage);
+    expect(JSON.stringify(rejected.response?.data)).not.toContain("worker crashed");
 
     expect(postClientLog).toHaveBeenCalledWith(
       "api: request failed",
@@ -53,19 +56,29 @@ describe("apiClient", () => {
           url: "/convert/generate",
           status_code: 500,
           request_id: "req-500-debug",
-          response_detail: { detail: "worker crashed" },
-          error_message: "worker crashed",
+          response_detail: {
+            detail_redacted: true,
+            detail_type: "string",
+            detail_length: "worker crashed".length,
+          },
+          error_message: expectedMessage,
         }),
       }),
+    );
+    expect(JSON.stringify(vi.mocked(postClientLog).mock.calls)).not.toContain(
+      "worker crashed",
     );
     expect(useActionHistoryStore.getState().history.at(-1)?.error).toEqual(
       expect.objectContaining({
         status_code: 500,
         path: "/convert/generate",
         request_id: "req-500-debug",
-        error_message: "worker crashed",
+        error_message: expectedMessage,
       }),
     );
+    expect(
+      JSON.stringify(useActionHistoryStore.getState().history.at(-1)),
+    ).not.toContain("worker crashed");
   });
 
   it("turns FastAPI validation details into a readable rejected message", async () => {
@@ -225,7 +238,11 @@ describe("apiClient", () => {
       expect.objectContaining({
         details: expect.objectContaining({
           status_code: 500,
-          response_detail: { detail: "500" },
+          response_detail: {
+            detail_redacted: true,
+            detail_type: "string",
+            detail_length: "500".length,
+          },
           error_message: expectedMessage,
         }),
       }),
@@ -269,7 +286,7 @@ describe("apiClient", () => {
     expect(rejected.response?.data?.detail).toBe("value must be <= 500");
   });
 
-  it("keeps backend details that explain an upstream status failure", async () => {
+  it("redacts server error details even when they mention an upstream status", async () => {
     const error = new Error("Request failed with status code 500");
     Object.assign(error, {
       config: { method: "post", url: "/convert/generate" },
@@ -281,12 +298,40 @@ describe("apiClient", () => {
     apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
 
     const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
+    const expectedMessage =
+      "The server hit an internal error. Check the log for the request ID.";
     expect(rejected).toMatchObject({
-      message: "upstream dependency returned status 500 while slicing",
+      message: expectedMessage,
     });
-    expect(rejected.response?.data?.detail).toBe(
+    expect(rejected.response?.data?.detail).toBe(expectedMessage);
+    expect(JSON.stringify(rejected.response?.data)).not.toContain(
       "upstream dependency returned status 500 while slicing",
     );
+  });
+
+  it("redacts top-level and structured server error messages", async () => {
+    const expectedMessage =
+      "The server hit an internal error. Check the log for the request ID.";
+    for (const data of [
+      { message: "worker crashed" },
+      { detail: { message: "worker crashed", error: "worker_crashed" } },
+      { detail: ["worker crashed"] },
+    ]) {
+      const error = new Error("Request failed with status code 500");
+      Object.assign(error, {
+        config: { method: "post", url: "/convert/generate" },
+        response: { status: 500, data },
+      });
+      apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+      const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
+      expect(rejected).toMatchObject({ message: expectedMessage });
+      expect(JSON.stringify(rejected.response?.data)).not.toContain("worker crashed");
+      expect(JSON.stringify(vi.mocked(postClientLog).mock.calls)).not.toContain(
+        "worker crashed",
+      );
+      vi.mocked(postClientLog).mockClear();
+    }
   });
 
   it("still replaces generic request-failed status details", async () => {
@@ -449,7 +494,7 @@ describe("apiClient", () => {
     }
   });
 
-  it("preserves detailed backend messages for failed resource downloads", async () => {
+  it("redacts server error details for failed resource downloads", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = vi.fn().mockResolvedValueOnce({
       ok: false,
@@ -459,9 +504,45 @@ describe("apiClient", () => {
     }) as unknown as typeof fetch;
 
     try {
-      await expect(downloadResourceBlob("/api/files/broken")).rejects.toThrow(
-        "worker crashed",
+      let caught: unknown;
+      try {
+        await downloadResourceBlob("/api/files/broken");
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).message).toBe(
+        "The server hit an internal error. Check the log for the request ID.",
       );
+      expect(JSON.stringify((caught as { response?: { data?: unknown } }).response?.data))
+        .not.toContain("worker crashed");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("redacts top-level server error messages for failed resource downloads", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      headers: { get: () => "application/json" },
+      json: () => Promise.resolve({ message: "worker crashed" }),
+    }) as unknown as typeof fetch;
+
+    try {
+      let caught: unknown;
+      try {
+        await downloadResourceBlob("/api/files/broken");
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).message).toBe(
+        "The server hit an internal error. Check the log for the request ID.",
+      );
+      expect(JSON.stringify((caught as { response?: { data?: unknown } }).response?.data))
+        .not.toContain("worker crashed");
     } finally {
       globalThis.fetch = originalFetch;
     }
