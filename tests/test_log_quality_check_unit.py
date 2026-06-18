@@ -1572,6 +1572,70 @@ def test_extract_single_stage_workflow_requires_canary_event() -> None:
     )
 
 
+def test_single_stage_full_mode_assets_create_reference_stub(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(log_quality_check, "REPO_ROOT", tmp_path)
+
+    created_paths = log_quality_check._ensure_single_stage_colorchecker_assets()
+
+    reference_root = tmp_path / "reference" / "ChromaPrint3D"
+    try:
+        assert (
+            reference_root
+            / "modeling"
+            / "pipeline"
+            / "step1_extract_stages.py"
+        ).is_file()
+        assert (
+            reference_root
+            / "modeling"
+            / "pipeline"
+            / "step2_fit_stage_a.py"
+        ).is_file()
+        assert (
+            reference_root
+            / "modeling"
+            / "data"
+            / "ColorChecker"
+            / "ColorCheckerjson.json"
+        ).is_file()
+        pycache_dir = reference_root / "modeling" / "pipeline" / "__pycache__"
+        pycache_dir.mkdir(parents=True)
+        (pycache_dir / "step1_extract_stages.cpython-312.pyc").write_bytes(b"cache")
+    finally:
+        log_quality_check._remove_single_stage_colorchecker_assets(created_paths)
+
+    assert not reference_root.exists()
+
+
+def test_single_stage_full_mode_assets_recreate_incomplete_reference_residue(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(log_quality_check, "REPO_ROOT", tmp_path)
+    reference_root = tmp_path / "reference" / "ChromaPrint3D"
+    residue = reference_root / "modeling" / "pipeline" / "__pycache__"
+    residue.mkdir(parents=True)
+    (residue / "step1_extract_stages.cpython-312.pyc").write_bytes(b"cache")
+
+    created_paths = log_quality_check._ensure_single_stage_colorchecker_assets()
+
+    try:
+        assert (
+            reference_root
+            / "modeling"
+            / "pipeline"
+            / "step1_extract_stages.py"
+        ).is_file()
+        assert (reference_root / ".lumina_log_quality_stub").is_file()
+    finally:
+        log_quality_check._remove_single_stage_colorchecker_assets(created_paths)
+
+    assert not reference_root.exists()
+
+
 def test_fit_stage_a_workflow_requires_canary_event() -> None:
     checks = _workflow_required_event_checks(
         mode="fast",

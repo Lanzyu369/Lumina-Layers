@@ -1905,14 +1905,13 @@ def _synthesize_gradient_card_kit_zip_bytes() -> bytes:
     return buffer.getvalue()
 
 
-def _ensure_single_stage_colorchecker_assets() -> list[Path]:
-    asset_dir = REPO_ROOT / "assets" / "ColorChecker"
+def _write_single_stage_colorchecker_assets(
+    asset_dir: Path,
+    created_paths: list[Path],
+) -> None:
     ref_json_path = asset_dir / "ColorCheckerjson.json"
     desc_path = asset_dir / "desc.txt"
-    if ref_json_path.exists() and desc_path.exists():
-        return []
-
-    asset_dir.mkdir(parents=True, exist_ok=True)
+    _mkdir_for_cleanup(asset_dir, created_paths)
     ref_payload = {
         "version": "5.0.1",
         "flags": {},
@@ -1956,21 +1955,192 @@ def _ensure_single_stage_colorchecker_assets() -> list[Path]:
             "3. Patch3:\nsRGB: [128, 130, 132]",
         ]
     )
-    ref_json_path.write_text(
-        json.dumps(ref_payload, ensure_ascii=False, indent=2),
+    if not ref_json_path.exists():
+        ref_json_path.write_text(
+            json.dumps(ref_payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        created_paths.append(ref_json_path)
+    if not desc_path.exists():
+        desc_path.write_text(desc_text + "\n", encoding="utf-8")
+        created_paths.append(desc_path)
+
+
+def _mkdir_for_cleanup(path: Path, created_paths: list[Path]) -> None:
+    if path.exists():
+        return
+    path.mkdir(parents=True, exist_ok=True)
+    created_paths.append(path)
+
+
+def _safe_to_replace_reference_stub(reference_root: Path) -> bool:
+    if not reference_root.exists():
+        return True
+    allowed_files = {
+        ".lumina_log_quality_stub",
+        "modeling/__init__.py",
+        "modeling/pipeline/__init__.py",
+        "modeling/pipeline/step1_extract_stages.py",
+        "modeling/pipeline/step2_fit_stage_a.py",
+        "modeling/data/ColorChecker/ColorCheckerjson.json",
+        "modeling/data/ColorChecker/desc.txt",
+    }
+    for path in reference_root.rglob("*"):
+        if not path.is_file():
+            continue
+        if "__pycache__" in path.parts or path.suffix == ".pyc":
+            continue
+        try:
+            relative = path.relative_to(reference_root).as_posix()
+        except ValueError:
+            return False
+        if relative not in allowed_files:
+            return False
+    return True
+
+
+def _ensure_single_stage_reference_stub(created_paths: list[Path]) -> None:
+    reference_root = REPO_ROOT / "reference" / "ChromaPrint3D"
+    required_files = (
+        reference_root / "modeling" / "pipeline" / "step1_extract_stages.py",
+        reference_root / "modeling" / "pipeline" / "step2_fit_stage_a.py",
+    )
+    if reference_root.exists() and not _safe_to_replace_reference_stub(reference_root):
+        return
+    if reference_root.exists():
+        shutil.rmtree(reference_root)
+        try:
+            reference_root.parent.rmdir()
+        except OSError:
+            pass
+    if all(path.exists() for path in required_files):
+        return
+
+    modeling_dir = reference_root / "modeling"
+    pipeline_dir = modeling_dir / "pipeline"
+    colorchecker_dir = modeling_dir / "data" / "ColorChecker"
+    reference_parent = reference_root.parent
+    _mkdir_for_cleanup(reference_parent, created_paths)
+    _mkdir_for_cleanup(reference_root, created_paths)
+    _mkdir_for_cleanup(modeling_dir, created_paths)
+    _mkdir_for_cleanup(pipeline_dir, created_paths)
+    _mkdir_for_cleanup(colorchecker_dir.parent, created_paths)
+    _mkdir_for_cleanup(colorchecker_dir, created_paths)
+
+    for package_init in (
+        modeling_dir / "__init__.py",
+        pipeline_dir / "__init__.py",
+    ):
+        package_init.write_text("", encoding="utf-8")
+        created_paths.append(package_init)
+
+    (pipeline_dir / "step1_extract_stages.py").write_text(
+        """
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input-root", required=True)
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--ref-json", required=True)
+    parser.add_argument("--ref-desc")
+    args = parser.parse_args()
+    input_root = Path(args.input_root)
+    datasets = []
+    for substrate_dir in sorted(path for path in input_root.iterdir() if path.is_dir()):
+        for color_dir in sorted(path for path in substrate_dir.iterdir() if path.is_dir()):
+            image_count = sum(
+                1
+                for item in color_dir.iterdir()
+                if item.is_file() and item.suffix.lower() in {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
+            )
+            datasets.append(
+                {
+                    "substrate_id": substrate_dir.name,
+                    "color_name": color_dir.name,
+                    "image_count": image_count,
+                    "calibration": {"source": "log_quality_stub"},
+                }
+            )
+    Path(args.output).write_text(
+        json.dumps({"datasets": datasets, "meta": {"warnings": []}}, ensure_ascii=False),
         encoding="utf-8",
     )
-    desc_path.write_text(desc_text + "\n", encoding="utf-8")
-    return [ref_json_path, desc_path, asset_dir]
+
+
+if __name__ == "__main__":
+    main()
+""".lstrip(),
+        encoding="utf-8",
+    )
+    created_paths.append(pipeline_dir / "step1_extract_stages.py")
+
+    (pipeline_dir / "step2_fit_stage_a.py").write_text(
+        """
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input", required=True)
+    parser.add_argument("--output", required=True)
+    args = parser.parse_args()
+    payload = {
+        "fitted_substrates": {"white": {}},
+        "parameters": {"channels": [{"color_name": "White"}]},
+        "validation": {"overall": {"mean_delta_e": 0.001}},
+        "meta": {"warnings": []},
+    }
+    Path(args.output).write_text(
+        json.dumps(payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+if __name__ == "__main__":
+    main()
+""".lstrip(),
+        encoding="utf-8",
+    )
+    created_paths.append(pipeline_dir / "step2_fit_stage_a.py")
+
+    _write_single_stage_colorchecker_assets(colorchecker_dir, created_paths)
+    (reference_root / ".lumina_log_quality_stub").write_text(
+        "Created by scripts/log_quality_check.py for self-contained full-mode checks.\n",
+        encoding="utf-8",
+    )
+    created_paths.append(reference_root / ".lumina_log_quality_stub")
+
+
+def _ensure_single_stage_colorchecker_assets() -> list[Path]:
+    created_paths: list[Path] = []
+    _ensure_single_stage_reference_stub(created_paths)
+    _write_single_stage_colorchecker_assets(
+        REPO_ROOT / "assets" / "ColorChecker",
+        created_paths,
+    )
+    return created_paths
 
 
 def _remove_single_stage_colorchecker_assets(paths: Sequence[Path]) -> None:
-    for path in paths:
+    for path in reversed(paths):
         try:
             if path.is_file():
                 path.unlink()
             elif path.is_dir():
-                path.rmdir()
+                if path.name == "ChromaPrint3D" and _safe_to_replace_reference_stub(path):
+                    shutil.rmtree(path)
+                else:
+                    path.rmdir()
         except OSError:
             pass
 
