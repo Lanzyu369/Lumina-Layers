@@ -120,15 +120,10 @@ function extractReadableDetail(data: unknown): string | null {
     }
   }
 
-  let detailErrorCode: string | null = null;
   if (isRecord(detail)) {
     const detailMessage = detail.message;
     if (typeof detailMessage === "string" && detailMessage.trim()) {
       return detailMessage.trim();
-    }
-    const errorCode = detail.error;
-    if (typeof errorCode === "string" && errorCode.trim()) {
-      detailErrorCode = errorCode.trim();
     }
   }
 
@@ -136,7 +131,7 @@ function extractReadableDetail(data: unknown): string | null {
   if (typeof message === "string" && message.trim()) {
     return message.trim();
   }
-  return detailErrorCode;
+  return null;
 }
 
 function isGenericHttpDetail(detail: string, statusCode: number | null): boolean {

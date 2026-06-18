@@ -180,7 +180,7 @@ describe("apiClient", () => {
     });
   });
 
-  it("uses structured detail error codes when no readable message exists", async () => {
+  it("uses readable HTTP fallbacks instead of structured detail error codes", async () => {
     const error = new Error("Request failed with status code 409");
     Object.assign(error, {
       config: { method: "post", url: "/convert/generate" },
@@ -194,7 +194,7 @@ describe("apiClient", () => {
     apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
 
     await expect(apiClient.post("/convert/generate", {})).rejects.toMatchObject({
-      message: "preview_cache_missing",
+      message: "The request conflicts with the current server state.",
     });
   });
 
