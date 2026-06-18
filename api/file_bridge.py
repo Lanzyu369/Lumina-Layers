@@ -34,6 +34,7 @@ try:
 
     HAS_RAW: bool = True
 except ImportError:
+    rawpy = None
     HAS_RAW: bool = False
     log.warning(
         "rawpy not installed. Camera RAW support disabled.",
@@ -57,6 +58,23 @@ RAW_EXTENSIONS: set[str] = {
 _GZIP_CHUNK_SIZE = 1024 * 1024
 _GLB_GZIP_MIN_BYTES = 1024
 _UPLOAD_CHUNK_SIZE = 1024 * 1024
+_UPLOAD_IMAGE_UNREADABLE_DETAIL = (
+    "无法解码图像文件: 请重新上传有效的 PNG、JPEG、HEIC 或 RAW 图片后再试。"
+)
+_HEIC_UNREADABLE_DETAIL = (
+    "HEIC/HEIF 文件解码失败: 请重新上传有效的 HEIC/HEIF 图片，"
+    "或先转换为 PNG/JPEG 后再试。"
+)
+_RAW_UNREADABLE_DETAIL = (
+    "RAW 文件解码失败: 请重新上传有效的 RAW 图片，或先转换为 PNG/JPEG 后再试。"
+)
+RAW_DECODE_ERRORS: tuple[type[BaseException], ...] = (
+    OSError,
+    ValueError,
+    RuntimeError,
+)
+if rawpy is not None and hasattr(rawpy, "LibRawError"):
+    RAW_DECODE_ERRORS = RAW_DECODE_ERRORS + (rawpy.LibRawError,)
 
 
 class UploadTooLargeError(ValueError):
@@ -91,8 +109,11 @@ def _decode_raw_to_pil(data: bytes) -> Image.Image:
         raise ValueError("RAW 格式需要 rawpy 库。请执行: pip install rawpy")
     import rawpy  # noqa: PLC0415
 
-    with rawpy.imread(io.BytesIO(data)) as raw:
-        rgb = raw.postprocess(use_camera_wb=True, output_bps=8)
+    try:
+        with rawpy.imread(io.BytesIO(data)) as raw:
+            rgb = raw.postprocess(use_camera_wb=True, output_bps=8)
+    except RAW_DECODE_ERRORS as exc:
+        raise ValueError(_RAW_UNREADABLE_DETAIL) from exc
     return Image.fromarray(rgb)
 
 
@@ -129,7 +150,7 @@ async def upload_to_ndarray(file: UploadFile) -> np.ndarray:
     except (UnidentifiedImageError, OSError, ValueError) as e:
         if ext in HEIC_EXTENSIONS and not HAS_HEIF:
             raise ValueError("HEIC/HEIF 格式需要 pillow-heif 库。请执行: pip install pillow-heif")
-        raise ValueError(f"无法解码图像文件: {e}")
+        raise ValueError(_UPLOAD_IMAGE_UNREADABLE_DETAIL) from e
 
 
 async def upload_to_tempfile(
@@ -247,11 +268,11 @@ async def ensure_png_tempfile(file: UploadFile) -> str:
         if png_path is not None:
             with suppress(OSError):
                 os.unlink(png_path)
-        fmt = "RAW" if ext in RAW_EXTENSIONS else "HEIC/HEIF"
+        detail = _RAW_UNREADABLE_DETAIL if ext in RAW_EXTENSIONS else _HEIC_UNREADABLE_DETAIL
         raise HTTPException(
             status_code=422,
-            detail=f"{fmt} 文件解码失败: {e}",
-        )
+            detail=detail,
+        ) from e
 
 
 def pil_to_png_bytes(img: Image.Image) -> bytes:

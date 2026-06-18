@@ -31,6 +31,13 @@ def _capture_system_logger(caplog: pytest.LogCaptureFixture) -> logging.Logger:
     return target_logger
 
 
+def _capture_app_logger(caplog: pytest.LogCaptureFixture) -> logging.Logger:
+    target_logger = logging.getLogger("lumina.api.app")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.WARNING, logger=target_logger.name)
+    return target_logger
+
+
 def _records_for_event(
     caplog: pytest.LogCaptureFixture,
     event_name: str,
@@ -46,6 +53,21 @@ def _png_bytes(width: int = 4, height: int = 4) -> bytes:
     buffer = io.BytesIO()
     Image.new("RGB", (width, height), (255, 0, 0)).save(buffer, format="PNG")
     return buffer.getvalue()
+
+
+_HEIC_UNREADABLE_DETAIL = (
+    "HEIC/HEIF 文件解码失败: 请重新上传有效的 HEIC/HEIF 图片，"
+    "或先转换为 PNG/JPEG 后再试。"
+)
+_RAW_UNREADABLE_DETAIL = (
+    "RAW 文件解码失败: 请重新上传有效的 RAW 图片，或先转换为 PNG/JPEG 后再试。"
+)
+_UNREADABLE_IMAGE_FORBIDDEN_FRAGMENTS = (
+    "cannot identify image file",
+    "Input/output error",
+    "LibRaw",
+    "output/temp",
+)
 
 
 class TestSystemImagePreviewCanary:
@@ -127,6 +149,64 @@ class TestSystemImagePreviewCanary:
 
         assert response.status_code == 422, response.text
         assert "HEIC/HEIF 文件解码失败" in response.json()["detail"]
+        assert list(tmp_path.iterdir()) == []
+        assert registry.get_session_entries("preview.png") == {}
+
+    def test_bad_heic_preview_returns_sanitized_422_and_cleans_temp(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setattr("config.TEMP_DIR", str(tmp_path))
+        monkeypatch.setattr("api.file_bridge.HAS_HEIF", True)
+        client, registry = _client_with_registry()
+        app_logger = _capture_app_logger(caplog)
+        try:
+            response = client.post(
+                "/api/system/image-preview",
+                files={"file": ("bad.heic", b"not a heic image", "image/heic")},
+            )
+        finally:
+            app_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 422, response.text
+        assert response.json()["detail"] == _HEIC_UNREADABLE_DETAIL
+        assert str(tmp_path) not in response.text
+        assert all(fragment not in response.text for fragment in _UNREADABLE_IMAGE_FORBIDDEN_FRAGMENTS)
+        records = _records_for_event(caplog, "api_http_error")
+        assert len(records) == 1
+        assert records[0].error_message == _HEIC_UNREADABLE_DETAIL
+        assert _records_for_event(caplog, "api_unhandled_exception") == []
+        assert list(tmp_path.iterdir()) == []
+        assert registry.get_session_entries("preview.png") == {}
+
+    def test_bad_raw_preview_returns_sanitized_422_and_cleans_temp(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setattr("config.TEMP_DIR", str(tmp_path))
+        monkeypatch.setattr("api.file_bridge.HAS_RAW", True)
+        client, registry = _client_with_registry()
+        app_logger = _capture_app_logger(caplog)
+        try:
+            response = client.post(
+                "/api/system/image-preview",
+                files={"file": ("bad.dng", b"not a raw image", "application/octet-stream")},
+            )
+        finally:
+            app_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 422, response.text
+        assert response.json()["detail"] == _RAW_UNREADABLE_DETAIL
+        assert str(tmp_path) not in response.text
+        assert all(fragment not in response.text for fragment in _UNREADABLE_IMAGE_FORBIDDEN_FRAGMENTS)
+        records = _records_for_event(caplog, "api_http_error")
+        assert len(records) == 1
+        assert records[0].error_message == _RAW_UNREADABLE_DETAIL
+        assert _records_for_event(caplog, "api_unhandled_exception") == []
         assert list(tmp_path.iterdir()) == []
         assert registry.get_session_entries("preview.png") == {}
 

@@ -20,7 +20,16 @@ from api.file_bridge import (
     HAS_HEIF,
     _guess_media_type,
     ensure_png_tempfile,
+    upload_to_ndarray,
     upload_to_tempfile,
+)
+
+_HEIC_UNREADABLE_DETAIL = (
+    "HEIC/HEIF 文件解码失败: 请重新上传有效的 HEIC/HEIF 图片，"
+    "或先转换为 PNG/JPEG 后再试。"
+)
+_RAW_UNREADABLE_DETAIL = (
+    "RAW 文件解码失败: 请重新上传有效的 RAW 图片，或先转换为 PNG/JPEG 后再试。"
 )
 
 
@@ -177,7 +186,8 @@ class TestEnsurePngConversionFailureCleanup:
                 asyncio.run(ensure_png_tempfile(mock_file))
 
         assert exc_info.value.status_code == 422
-        assert "simulated conversion save failure" in exc_info.value.detail
+        assert exc_info.value.detail == _HEIC_UNREADABLE_DETAIL
+        assert "simulated conversion save failure" not in exc_info.value.detail
         assert list(tmp_path.iterdir()) == []
 
     def test_raw_cleanup_failure_does_not_leak_png_or_escape_as_oserror(
@@ -201,8 +211,68 @@ class TestEnsurePngConversionFailureCleanup:
                 asyncio.run(ensure_png_tempfile(mock_file))
 
         assert exc_info.value.status_code == 422
-        assert "simulated raw cleanup failure" in exc_info.value.detail
+        assert exc_info.value.detail == _HEIC_UNREADABLE_DETAIL
+        assert "simulated raw cleanup failure" not in exc_info.value.detail
         assert not any(path.suffix == ".png" for path in tmp_path.iterdir())
+
+    def test_bad_heic_decode_returns_sanitized_detail_and_cleans_temp(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
+    ) -> None:
+        monkeypatch.setattr("config.TEMP_DIR", str(tmp_path))
+        mock_file = _make_upload_file("photo.heic", content=b"not a heic image")
+
+        with patch("api.file_bridge.HAS_HEIF", True):
+            with pytest.raises(HTTPException) as exc_info:
+                asyncio.run(ensure_png_tempfile(mock_file))
+
+        assert exc_info.value.status_code == 422
+        assert exc_info.value.detail == _HEIC_UNREADABLE_DETAIL
+        assert "cannot identify image file" not in exc_info.value.detail
+        assert str(tmp_path) not in exc_info.value.detail
+        assert list(tmp_path.iterdir()) == []
+
+    def test_bad_raw_decode_returns_sanitized_detail_and_cleans_temp(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
+    ) -> None:
+        monkeypatch.setattr("config.TEMP_DIR", str(tmp_path))
+        mock_file = _make_upload_file("photo.dng", content=b"not a raw image")
+
+        with patch("api.file_bridge.HAS_RAW", True):
+            with pytest.raises(HTTPException) as exc_info:
+                asyncio.run(ensure_png_tempfile(mock_file))
+
+        assert exc_info.value.status_code == 422
+        assert exc_info.value.detail == _RAW_UNREADABLE_DETAIL
+        assert "Input/output error" not in exc_info.value.detail
+        assert "LibRaw" not in exc_info.value.detail
+        assert str(tmp_path) not in exc_info.value.detail
+        assert list(tmp_path.iterdir()) == []
+
+
+class TestUploadToNdarrayDependencyErrors:
+    """Direct image upload decoding should preserve optional dependency guidance."""
+
+    def test_heic_missing_dependency_preserves_pillow_heif_guidance(self) -> None:
+        mock_file = _make_upload_file("photo.heic", content=b"not a heic image")
+
+        with patch("api.file_bridge.HAS_HEIF", False):
+            with pytest.raises(ValueError) as exc_info:
+                asyncio.run(upload_to_ndarray(mock_file))
+
+        assert "pillow-heif" in str(exc_info.value)
+
+    def test_raw_missing_dependency_preserves_rawpy_guidance(self) -> None:
+        mock_file = _make_upload_file("photo.dng", content=b"not a raw image")
+
+        with patch("api.file_bridge.HAS_RAW", False):
+            with pytest.raises(ValueError) as exc_info:
+                asyncio.run(upload_to_ndarray(mock_file))
+
+        assert "rawpy" in str(exc_info.value)
 
 
 # ── Test 2: HAS_HEIF flag consistency with pillow_heif install ─────────
