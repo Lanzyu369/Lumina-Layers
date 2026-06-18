@@ -78,6 +78,9 @@ from .common import (
 
 router = APIRouter()
 log = get_logger(__name__)
+_PREVIEW_GENERATION_FAILED_DETAIL = (
+    "Preview generation failed. Re-run preview and try again."
+)
 LARGE_FORMAT_SVG_PREVIEW_CACHE_MAX_BYTES_ENV = (
     "LUMINA_LARGE_FORMAT_SVG_PREVIEW_CACHE_MAX_BYTES"
 )
@@ -850,10 +853,10 @@ async def convert_preview(
             extra={
                 "event": "converter_preview_worker_error",
                 "error_type": type(e).__name__,
-                "error_message": str(e),
+                "error_message": _PREVIEW_GENERATION_FAILED_DETAIL,
             },
         )
-        raise HTTPException(status_code=500, detail=f"Preview generation failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=_PREVIEW_GENERATION_FAILED_DETAIL)
     finally:
         if not worker_completed:
             _cleanup_pre_session_temp_paths(temp_path, temp_native_bundle_path)
@@ -864,7 +867,7 @@ async def convert_preview(
         worker_preview_png_path = result["preview_png_path"]
         worker_cache_data_path = result["cache_data_path"]
         if worker_preview_png_path is None:
-            raise HTTPException(status_code=500, detail=result["status_msg"] or "Preview generation failed")
+            raise HTTPException(status_code=500, detail=_PREVIEW_GENERATION_FAILED_DETAIL)
 
         # Load cache_data from disk (worker serialized to .pkl)
         _t = time.perf_counter()
