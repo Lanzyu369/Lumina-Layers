@@ -104,6 +104,9 @@ BATCH_PREVIEW_LIMIT_FALLBACK_MESSAGE: str = (
     "3D preview automatically shows the first models that fit on the current "
     "print bed."
 )
+MODEL_GENERATION_FAILED_DETAIL: str = (
+    "3MF generation failed. Re-run preview and try generating the model again."
+)
 
 
 class _GenerateBody(BaseModel):
@@ -1151,8 +1154,11 @@ async def convert_generate(
         )
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="3MF generation timed out")
-    except ROUTER_HANDLED_ERRORS as e:
-        raise HTTPException(status_code=500, detail=f"3MF generation failed: {str(e)}")
+    except ROUTER_HANDLED_ERRORS as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=MODEL_GENERATION_FAILED_DETAIL,
+        ) from exc
     worker_elapsed = time.perf_counter() - worker_t0
 
     # 4. Result processing (I/O + FileRegistry, main thread)
@@ -1161,7 +1167,10 @@ async def convert_generate(
     status_msg: str = result.get("status_msg", "")
 
     if not threemf_path or not os.path.exists(threemf_path):
-        raise HTTPException(status_code=500, detail=status_msg or "3MF generation failed")
+        raise HTTPException(
+            status_code=500,
+            detail=MODEL_GENERATION_FAILED_DETAIL,
+        )
 
     # Register output files via FileRegistry
     sid = body.session_id

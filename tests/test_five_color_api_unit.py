@@ -2053,6 +2053,58 @@ def test_get_base_colors_not_found():
     assert "LUT not found" in resp.json()["detail"]
 
 
+def test_get_base_colors_lut_load_failure_uses_public_error_language():
+    """Loader failure messages must not leak local paths to API clients."""
+    private_path = "/Users/min/private/broken.npy"
+
+    with (
+        patch(
+            "api.routers.five_color.LUTManager.get_lut_path",
+            return_value=private_path,
+        ),
+        patch(
+            "api.routers.five_color.StackLUTLoader.load_lut_rgb",
+            return_value=(False, f"cannot open {private_path}: bad header", None),
+        ),
+    ):
+        resp = client.get("/api/five-color/base-colors", params={"lut_name": "broken"})
+
+    assert resp.status_code == 500
+    detail = resp.json()["detail"]
+    assert detail == (
+        "Unable to load the selected LUT. Check that the file exists and uses a "
+        "supported LUT format."
+    )
+    assert private_path not in detail
+    assert "bad header" not in detail
+
+
+def test_get_base_colors_lut_loader_exception_uses_public_error_language():
+    """Unexpected LUT reader exceptions must use the same client-safe detail."""
+    private_path = "/Users/min/private/broken.json"
+
+    with (
+        patch(
+            "api.routers.five_color.LUTManager.get_lut_path",
+            return_value=private_path,
+        ),
+        patch(
+            "api.routers.five_color.LUTManager.load_lut_with_metadata",
+            side_effect=ValueError(f"cannot parse {private_path}: line 1"),
+        ),
+    ):
+        resp = client.get("/api/five-color/base-colors", params={"lut_name": "broken"})
+
+    assert resp.status_code == 500
+    detail = resp.json()["detail"]
+    assert detail == (
+        "Unable to load the selected LUT. Check that the file exists and uses a "
+        "supported LUT format."
+    )
+    assert private_path not in detail
+    assert "line 1" not in detail
+
+
 # ---------------------------------------------------------------------------
 # POST /api/five-color/query
 # ---------------------------------------------------------------------------

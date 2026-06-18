@@ -33,6 +33,12 @@ from core.single_stage import (
 
 router = APIRouter(prefix="/api/material-sync", tags=["Material Sync"])
 log = get_logger(__name__)
+MATERIAL_SYNC_CATALOG_UNAVAILABLE_DETAIL = (
+    "Material registry catalog is unavailable. Check registry settings and try again."
+)
+MATERIAL_SYNC_REFRESH_UNAVAILABLE_DETAIL = (
+    "Material registry refresh failed. Check registry settings and try again."
+)
 
 
 def _canonical_package_sha256(value: object) -> str:
@@ -116,11 +122,20 @@ async def material_sync_catalog(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=502,
+            detail=MATERIAL_SYNC_CATALOG_UNAVAILABLE_DETAIL,
+        ) from exc
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=502,
+            detail=MATERIAL_SYNC_CATALOG_UNAVAILABLE_DETAIL,
+        ) from exc
     except OSError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=500,
+            detail=MATERIAL_SYNC_CATALOG_UNAVAILABLE_DETAIL,
+        ) from exc
 
     response = MaterialRegistryCatalogResponse(**catalog)
     log.info(
@@ -253,9 +268,15 @@ async def material_sync_refresh(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=502,
+            detail=MATERIAL_SYNC_REFRESH_UNAVAILABLE_DETAIL,
+        ) from exc
     except OSError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=500,
+            detail=MATERIAL_SYNC_REFRESH_UNAVAILABLE_DETAIL,
+        ) from exc
 
     log.info(
         "Material registry refresh completed",

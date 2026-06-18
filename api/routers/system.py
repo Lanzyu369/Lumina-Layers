@@ -536,6 +536,9 @@ def get_slicers() -> SlicerListResponse:
 # ---------------------------------------------------------------------------
 
 SETTINGS_FILE: Path = Path("user_settings.json")
+SETTINGS_SAVE_FAILED_DETAIL = (
+    "Settings could not be saved. Check disk permissions or free space and try again."
+)
 
 
 @router.get("/settings")
@@ -577,8 +580,17 @@ def save_settings(settings: UserSettings) -> SaveSettingsResponse:
             },
         )
         return SaveSettingsResponse(status="success", message="Settings saved")
-    except OSError as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save settings: {e}")
+    except OSError as exc:
+        log.error(
+            "User settings save failed",
+            extra={
+                "event": "system_save_settings_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+                "settings_path": str(SETTINGS_FILE),
+            },
+        )
+        raise HTTPException(status_code=500, detail=SETTINGS_SAVE_FAILED_DETAIL) from exc
 
 
 @router.get("/stats")

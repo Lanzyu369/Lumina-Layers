@@ -123,6 +123,14 @@ FIT_STAGE_A_EXPIRED_STAGE_JSON_DETAIL = (
     "Extracted single-stage dataset has expired. "
     "Re-run extraction before fitting Stage A."
 )
+MATERIAL_SOLVER_CACHE_BUILD_FAILED_DETAIL = (
+    "Material solver cache could not be built. "
+    "Check material inputs and cache storage, then try again."
+)
+MATERIAL_SOLVER_RUNTIME_BUILD_FAILED_DETAIL = (
+    "Material solver runtime could not be built. "
+    "Check material inputs and cache storage, then try again."
+)
 MaterialCacheEvictor = Callable[[str], int]
 _RUNTIME_BUILD_LOCKS_GUARD = threading.Lock()
 _RUNTIME_BUILD_LOCKS: dict[tuple[str, int, str, str, int], threading.Lock] = {}
@@ -300,6 +308,50 @@ def _cleanup_registry_session_safely(
         pass
 
 
+def _raise_internal_route_error(
+    exc: Exception,
+    *,
+    context: str,
+    event: str,
+    session_id: str | None = None,
+) -> None:
+    extra: dict[str, object] = {
+        "event": event,
+        "context": context,
+        "error_type": type(exc).__name__,
+        "error_message": str(exc),
+    }
+    if session_id:
+        extra["session_id"] = session_id
+    log.exception("Single-stage workflow failed", extra=extra)
+    raise HTTPException(
+        status_code=500,
+        detail=f"{context} failed. Check the server log for details.",
+    ) from exc
+
+
+def _raise_file_registration_error(
+    exc: Exception,
+    *,
+    context: str,
+    event: str,
+    session_id: str | None = None,
+) -> None:
+    extra: dict[str, object] = {
+        "event": event,
+        "context": context,
+        "error_type": type(exc).__name__,
+        "error_message": str(exc),
+    }
+    if session_id:
+        extra["session_id"] = session_id
+    log.exception("Single-stage file registration failed", extra=extra)
+    raise HTTPException(
+        status_code=500,
+        detail=f"{context} failed. Check the server log for details.",
+    ) from exc
+
+
 @router.post("/extract-single-stage")
 async def extractor_extract_single_stage(
     dataset_zip: UploadFile = File(..., description="Single-stage dataset ZIP"),
@@ -325,7 +377,12 @@ async def extractor_extract_single_stage(
         store.put(session_id, "single_stage_dataset_summary", result.dataset_summary)
         store.put(session_id, "single_stage_warnings", result.warnings)
     except FileNotFoundError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        _raise_internal_route_error(
+            e,
+            context="Single-stage dataset extraction",
+            event="extractor_extract_single_stage_failed",
+            session_id=session_id,
+        )
     except zipfile.BadZipFile:
         raise HTTPException(status_code=422, detail="Malformed ZIP archive")
     except (ValueError, TypeError, OSError, RuntimeError) as e:
@@ -339,10 +396,15 @@ async def extractor_extract_single_stage(
 
     try:
         stage_json_id = registry.register_path(session_id, result.stage_json_path)
-    except Exception:
+    except Exception as exc:
         _cleanup_registry_session_safely(registry, session_id)
         _close_session_safely(store, session_id)
-        raise
+        _raise_file_registration_error(
+            exc,
+            context="Single-stage dataset file registration",
+            event="extractor_extract_single_stage_registration_failed",
+            session_id=session_id,
+        )
     log.info(
         "Single-stage dataset extracted",
         extra={
@@ -415,7 +477,12 @@ async def extractor_fit_stage_a(
             raise _expired_stage_json_exception() from e
         if created_session_for_upload:
             _close_session_safely(store, sid_for_registry)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        _raise_internal_route_error(
+            e,
+            context="Stage A fitting",
+            event="extractor_fit_stage_a_failed",
+            session_id=sid_for_registry,
+        )
     except (ValueError, TypeError, OSError, RuntimeError) as e:
         if created_session_for_upload:
             _close_session_safely(store, sid_for_registry)
@@ -423,12 +490,17 @@ async def extractor_fit_stage_a(
 
     try:
         params_id = registry.register_path(sid_for_registry, result.params_path)
-    except Exception:
+    except Exception as exc:
         _remove_path_safely(result.params_path)
         if created_session_for_upload:
             _cleanup_registry_session_safely(registry, sid_for_registry)
             _close_session_safely(store, sid_for_registry)
-        raise
+        _raise_file_registration_error(
+            exc,
+            context="Stage A parameter file registration",
+            event="extractor_fit_stage_a_registration_failed",
+            session_id=sid_for_registry,
+        )
 
     store.register_temp_file(sid_for_registry, result.params_path)
     store.put(sid_for_registry, "stage_a_params_path", result.params_path)
@@ -1610,12 +1682,44 @@ async def material_solver_cache_build(
     except (MaterialSolverCacheBudgetError, ValueError, TypeError, OSError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        log.error(
+            "Material solver cache build failed",
+            extra={
+                "event": "material_solver_cache_build_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+                "material_count": len(dir_names),
+                "layer_count": layer_count,
+                "layer_height_mm": layer_height_mm,
+                "substrate": substrate,
+                "grid_resolution": grid_resolution,
+            },
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=MATERIAL_SOLVER_CACHE_BUILD_FAILED_DETAIL,
+        ) from exc
 
     try:
         npz_path = await anyio.to_thread.run_sync(save_material_solver_cache, cache)
     except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to save cache: {exc}")
+        log.error(
+            "Material solver cache save failed",
+            extra={
+                "event": "material_solver_cache_build_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+                "material_count": len(dir_names),
+                "layer_count": layer_count,
+                "layer_height_mm": layer_height_mm,
+                "substrate": substrate,
+                "grid_resolution": grid_resolution,
+            },
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=MATERIAL_SOLVER_CACHE_BUILD_FAILED_DETAIL,
+        ) from exc
 
     try:
         file_size = npz_path.stat().st_size
@@ -1838,7 +1942,23 @@ async def material_solver_runtime_build(
     except (ValueError, TypeError, OSError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        log.error(
+            "Material solver runtime build failed",
+            extra={
+                "event": "material_solver_runtime_build_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+                "material_count": len(dir_names),
+                "layer_count": layer_count,
+                "layer_height_mm": layer_height_mm,
+                "substrate": substrate,
+                "candidate_budget": candidate_budget,
+            },
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=MATERIAL_SOLVER_RUNTIME_BUILD_FAILED_DETAIL,
+        ) from exc
 
     entry = _runtime_entry_from_metadata_record(metadata_record)
     log.info(

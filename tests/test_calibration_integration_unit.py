@@ -16,6 +16,7 @@ from PIL import Image
 from api.app import create_app
 from api.dependencies import get_file_registry
 from api.file_registry import FileRegistry
+from api.routers.calibration import CALIBRATION_GENERATION_FAILED_DETAIL
 from config import DEFAULT_PRINTER_ID, DEFAULT_SLICER_ID
 
 client: TestClient = TestClient(create_app())
@@ -312,9 +313,11 @@ class TestErrorHandling:
     """Verify core exceptions are translated to HTTP 500 responses."""
 
     def test_core_exception_returns_500(self) -> None:
+        private_path = "/Users/min/private/calibration.3mf"
+
         with patch(
             "api.routers.calibration.generate_calibration_board",
-            side_effect=RuntimeError("disk full"),
+            side_effect=RuntimeError(f"disk full while writing {private_path}"),
         ):
             response = client.post(
                 "/api/calibration/generate",
@@ -326,4 +329,6 @@ class TestErrorHandling:
                 },
             )
             assert response.status_code == 500
-            assert "disk full" in response.json()["detail"]
+            assert response.json()["detail"] == CALIBRATION_GENERATION_FAILED_DETAIL
+            assert "disk full" not in response.text
+            assert private_path not in response.text

@@ -188,6 +188,9 @@ class TestCalibrationGenerateSingleStageKitCanary:
 class _FiveColorQueryEngine:
     color_count = 5
 
+    def accepted_selection_lengths(self):
+        return (5,)
+
     def query(self, selected_indices):
         return SimpleNamespace(
             found=True,
@@ -541,7 +544,7 @@ class TestVectorizeImageCanary:
         assert response.json()["detail"] == "Vectorization timed out"
         assert sorted(tmp_path.iterdir()) == []
 
-    def test_worker_error_cleans_upload_temp_file(
+    def test_worker_error_returns_sanitized_500_and_cleans_upload_temp_file(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,

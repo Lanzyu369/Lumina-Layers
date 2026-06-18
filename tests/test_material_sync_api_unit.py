@@ -12,6 +12,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.app import create_app
+from api.routers.material_sync import (
+    MATERIAL_SYNC_CATALOG_UNAVAILABLE_DETAIL,
+    MATERIAL_SYNC_REFRESH_UNAVAILABLE_DETAIL,
+)
 from core.single_stage import (
     install_material_registry_package,
     list_material_registry_catalog,
@@ -343,8 +347,12 @@ def test_material_sync_refresh_requires_registry_url(
 
 
 def test_material_sync_refresh_registry_unavailable_returns_502(monkeypatch) -> None:
+    private_url = "https://registry.internal/private/catalog.json"
+
     def _fake_refresh_material_sync_from_registry() -> dict[str, object]:
-        raise RuntimeError("Material registry catalog request failed")
+        raise RuntimeError(
+            f"Material registry catalog request failed for {private_url}: status 500"
+        )
 
     monkeypatch.setattr(
         "api.routers.material_sync.refresh_material_sync_from_registry",
@@ -354,7 +362,32 @@ def test_material_sync_refresh_registry_unavailable_returns_502(monkeypatch) -> 
     response = _client().post("/api/material-sync/refresh")
 
     assert response.status_code == 502
-    assert "Material registry catalog request failed" in response.json()["detail"]
+    assert response.json()["detail"] == MATERIAL_SYNC_REFRESH_UNAVAILABLE_DETAIL
+    assert private_url not in response.text
+    assert "status 500" not in response.text
+
+
+def test_material_sync_catalog_registry_unavailable_returns_safe_detail(
+    monkeypatch,
+) -> None:
+    private_url = "https://registry.internal/private/catalog.json"
+
+    def _fake_list_material_registry_catalog(**_: object) -> dict[str, object]:
+        raise RuntimeError(
+            f"Material registry catalog request failed for {private_url}: status 502"
+        )
+
+    monkeypatch.setattr(
+        "api.routers.material_sync.list_material_registry_catalog",
+        _fake_list_material_registry_catalog,
+    )
+
+    response = _client().get("/api/material-sync/catalog")
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == MATERIAL_SYNC_CATALOG_UNAVAILABLE_DETAIL
+    assert private_url not in response.text
+    assert "status 502" not in response.text
 
 
 def test_material_sync_refresh_endpoint_returns_core_summary(monkeypatch) -> None:
