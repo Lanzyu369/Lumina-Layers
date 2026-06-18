@@ -20,6 +20,25 @@ function isServerErrorStatus(statusCode: number | null): boolean {
   return typeof statusCode === "number" && statusCode >= 500;
 }
 
+const HTTP_REASON_PHRASES: Record<number, string> = {
+  400: "bad request",
+  401: "unauthorized",
+  402: "payment required",
+  403: "forbidden",
+  404: "not found",
+  405: "method not allowed",
+  408: "request timeout",
+  409: "conflict",
+  413: "payload too large",
+  415: "unsupported media type",
+  422: "unprocessable entity",
+  429: "too many requests",
+  500: "internal server error",
+  502: "bad gateway",
+  503: "service unavailable",
+  504: "gateway timeout",
+};
+
 function summarizeRedactedServerValue(
   field: "detail" | "message" | "body",
   value: unknown,
@@ -153,6 +172,21 @@ function isGenericHttpDetail(detail: string, statusCode: number | null): boolean
     ).test(normalized)
   ) {
     return true;
+  }
+  if (typeof statusCode === "number") {
+    const reasonPhrase = HTTP_REASON_PHRASES[statusCode];
+    if (reasonPhrase) {
+      const escapedReason = reasonPhrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      if (
+        new RegExp(
+          `^(?:request\\s+failed\\s+with\\s+status\\s+code\\s+|` +
+            `(?:http\\s*)?(?:error\\s+)?|status(?:\\s+code)?\\s*)?` +
+            `${statusCode}\\s*(?::|-)?\\s*${escapedReason}\\.?$`,
+        ).test(normalized)
+      ) {
+        return true;
+      }
+    }
   }
   return [
     "bad request",

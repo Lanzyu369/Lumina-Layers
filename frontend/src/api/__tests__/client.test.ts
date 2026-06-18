@@ -337,6 +337,37 @@ describe("apiClient", () => {
     expect(rejected.response?.data?.detail).toBe(expectedMessage);
   });
 
+  it.each([
+    {
+      status: 402,
+      detail: "HTTP 402 Payment Required",
+      expected:
+        "This action requires an available quota or payment before it can continue.",
+    },
+    {
+      status: 422,
+      detail: "Request failed with status code 422: Unprocessable Entity",
+      expected: "The request is missing required data or contains invalid values.",
+    },
+  ])(
+    "replaces status detail '$detail' with readable HTTP fallbacks",
+    async ({ status, detail, expected }) => {
+      const error = new Error(`Request failed with status code ${status}`);
+      Object.assign(error, {
+        config: { method: "post", url: "/convert/generate" },
+        response: {
+          status,
+          data: { detail },
+        },
+      });
+      apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+      const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
+      expect(rejected).toMatchObject({ message: expected });
+      expect(rejected.response?.data?.detail).toBe(expected);
+    },
+  );
+
   it("keeps backend details where numbers are part of the real message", async () => {
     const error = new Error("Request failed with status code 422");
     Object.assign(error, {
