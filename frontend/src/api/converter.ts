@@ -712,7 +712,24 @@ export function beaconCleanupSessionFiles(
     session_id: sessionId,
     keep_file_ids: keepFileIds,
   });
-  navigator.sendBeacon(url, new Blob([body], { type: "application/json" }));
+  if (
+    typeof navigator !== "undefined" &&
+    typeof navigator.sendBeacon === "function"
+  ) {
+    try {
+      const queued = navigator.sendBeacon(
+        url,
+        new Blob([body], { type: "application/json" }),
+      );
+      if (queued) {
+        return;
+      }
+    } catch {
+      // Fall back to the regular cleanup request below.
+    }
+  }
+
+  void cleanupSessionFiles(sessionId, keepFileIds);
 }
 
 /** 自动检测推荐量化颜色数 */

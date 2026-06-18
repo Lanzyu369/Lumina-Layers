@@ -182,7 +182,7 @@ class LuminaImageProcessor:
         }
 
     def _log_init_summary(self):
-        log.info(
+        log.debug(
             "Initialized LUT processor",
             extra={
                 "event": "image_processor_init",

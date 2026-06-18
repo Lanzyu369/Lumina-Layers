@@ -66,6 +66,14 @@ def _read_png(client: TestClient, preview_url: str) -> np.ndarray:
     return np.asarray(img, dtype=np.uint8)
 
 
+def _read_png_rgba(client: TestClient, preview_url: str) -> np.ndarray:
+    """Fetch the PNG at ``preview_url`` and return it as an RGBA ndarray."""
+    response = client.get(preview_url)
+    assert response.status_code == 200, response.text
+    img = Image.open(io.BytesIO(response.content)).convert("RGBA")
+    return np.asarray(img, dtype=np.uint8)
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -134,6 +142,31 @@ def test_color_highlight_with_bbox_clips_to_rectangle(
     right_pure_red = int(np.all(img[:, 50:] == (255, 0, 0), axis=-1).sum())
     assert left_pure_red == 0
     assert right_pure_red == 100 * 50
+
+
+def test_color_highlight_preserves_transparent_background_alpha() -> None:
+    """Highlight preview must not make masked background RGB visible.
+
+    透明背景图的预览缓存中，``matched_rgb`` 仍可能保留原始背景 RGB。
+    高亮输出必须继续使用 ``mask_solid`` 写 alpha，否则渐变分组里直接
+    选区会把这些背景 RGB 渲成整片蓝色，用户看不清选区。
+    """
+    matched_rgb = np.full((4, 4, 3), (48, 144, 184), dtype=np.uint8)
+    matched_rgb[1:3, 1:3] = (255, 0, 0)
+    mask_solid = np.zeros((4, 4), dtype=bool)
+    mask_solid[1:3, 1:3] = True
+    client, session_id = _make_client_with_cache(matched_rgb, mask_solid)
+
+    response = client.post(
+        "/api/convert/color-highlight",
+        json={"session_id": session_id, "color_hexes": ["#ff0000"]},
+    )
+
+    assert response.status_code == 200, response.text
+    img = _read_png_rgba(client, response.json()["preview_url"])
+    assert int((img[~mask_solid, 3] == 0).sum()) == int((~mask_solid).sum())
+    assert int((img[mask_solid, 3] == 255).sum()) == int(mask_solid.sum())
+    assert int(np.all(img[~mask_solid, :3] == (48, 144, 184), axis=-1).sum()) == 0
 
 
 def test_color_highlight_rejects_out_of_bounds_bbox(

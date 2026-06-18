@@ -57,6 +57,19 @@ _GLTF_UINT32_COMPONENT_TYPE = 5125
 PREVIEW_CANVAS_BOUNDS_NODE_NAME = "preview_canvas_bounds"
 
 
+def _resolve_glb_pixel_scale(target_width_mm: object, pixel_width: float) -> float:
+    """Return mm-per-pixel for GLB previews with a nozzle-width fallback."""
+
+    if pixel_width > 0:
+        try:
+            width_mm = float(target_width_mm)
+        except (TypeError, ValueError):
+            width_mm = 0.0
+        if np.isfinite(width_mm) and width_mm > 0:
+            return width_mm / float(pixel_width)
+    return float(PrinterConfig.NOZZLE_WIDTH)
+
+
 def _resolve_kernel_choice() -> str:
     """Return the requested kernel id: 'shapely_v1', 'rasterio_manifold3d', or 'auto'.
 
@@ -1089,7 +1102,8 @@ def generate_segmented_glb(
               preview GLB as the ``Outline`` node so the user-visible 3D
               preview matches the requested outline setting.
             - target_w, target_h: pixel dimensions
-            - target_width_mm: physical width in mm
+            - target_width_mm: physical width in mm; missing/null legacy
+              values fall back to ``PrinterConfig.NOZZLE_WIDTH`` per pixel.
             - glb_max_meshes (optional): per-session override that bumps
               the merge cap above the function default. Set by edit
               endpoints (e.g. ``/region-requantize``) that intentionally
@@ -1285,7 +1299,7 @@ def generate_segmented_glb(
         scene = trimesh.Scene()
         contours_data: dict[str, list[list[list[float]]]] = {}
 
-        pixel_scale = target_width_mm / width if width > 0 else 0.42
+        pixel_scale = _resolve_glb_pixel_scale(target_width_mm, width)
         scale_transform = np.eye(4)
         scale_transform[0, 0] = pixel_scale
         scale_transform[1, 1] = pixel_scale
@@ -1492,7 +1506,7 @@ def generate_realtime_glb(cache: dict, output_path: str) -> Optional[str]:
 
         # Scale from pixel/voxel coords to mm
         mesh_width = preview_mesh.bounds[1][0] - preview_mesh.bounds[0][0]
-        pixel_scale = target_width_mm / mesh_width if mesh_width > 0 else 0.42
+        pixel_scale = _resolve_glb_pixel_scale(target_width_mm, mesh_width)
         transform = np.eye(4)
         transform[0, 0] = pixel_scale
         transform[1, 1] = pixel_scale

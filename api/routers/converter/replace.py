@@ -271,6 +271,28 @@ def _render_styled_preview_bytes(replaced_rgb: np.ndarray, cache: dict) -> bytes
     return _image_to_png_bytes(preview_rgba)
 
 
+def _render_masked_preview_bytes(rgb: np.ndarray, mask_solid: np.ndarray) -> bytes:
+    """Render RGB pixels with alpha derived from ``mask_solid``.
+
+    Args:
+        rgb: Preview RGB image, shape ``(H, W, 3)``.
+        mask_solid: Solid-pixel mask, shape ``(H, W)``.
+
+    Returns:
+        PNG bytes with transparent background outside ``mask_solid``.
+    """
+    rgb_arr = np.asarray(rgb, dtype=np.uint8)
+    mask_arr = np.asarray(mask_solid, dtype=bool)
+    h, w = rgb_arr.shape[:2]
+    if mask_arr.shape != (h, w):
+        raise ValueError("mask_solid shape must match RGB preview dimensions.")
+
+    preview_rgba = np.zeros((h, w, 4), dtype=np.uint8)
+    preview_rgba[mask_arr, :3] = rgb_arr[mask_arr]
+    preview_rgba[mask_arr, 3] = 255
+    return _image_to_png_bytes(preview_rgba)
+
+
 def _schedule_or_run_overridden_glb_build(
     session_id: str,
     store: SessionStore,
@@ -1232,7 +1254,7 @@ def color_highlight(
             + highlight_color.astype(np.float32) * alpha
         ).astype(np.uint8)
 
-        preview_bytes: bytes = _image_to_png_bytes(preview_img)
+        preview_bytes: bytes = _render_masked_preview_bytes(preview_img, mask_solid)
         preview_id: str = registry.register_bytes(
             request.session_id, preview_bytes, "color_highlight.png",
         )
@@ -1356,7 +1378,7 @@ def region_detect(
             preview_img[region_mask].astype(np.float32) * (1 - alpha) + highlight_color.astype(np.float32) * alpha
         ).astype(np.uint8)
 
-        preview_bytes: bytes = _image_to_png_bytes(preview_img)
+        preview_bytes: bytes = _render_masked_preview_bytes(preview_img, mask_solid)
         preview_id: str = registry.register_bytes(request.session_id, preview_bytes, "region_highlight.png")
 
         # Extract 2D contours from region_mask for frontend RGB outline rendering

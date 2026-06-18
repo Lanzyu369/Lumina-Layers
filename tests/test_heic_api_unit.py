@@ -275,6 +275,28 @@ class TestUploadToNdarrayDependencyErrors:
         assert "rawpy" in str(exc_info.value)
 
 
+class TestEnsurePngRejectsUnsupportedUploads:
+    """Unsupported image upload extensions should fail before worker decode."""
+
+    def test_unsupported_extension_is_rejected_before_temp_write(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
+    ) -> None:
+        monkeypatch.setattr("config.TEMP_DIR", str(tmp_path))
+        mock_file = _make_upload_file("not-an-image.txt", content=b"not image data")
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(ensure_png_tempfile(mock_file))
+
+        assert exc_info.value.status_code == 422
+        assert "不支持的图像文件类型" in exc_info.value.detail
+        assert "cannot identify image file" not in exc_info.value.detail
+        assert str(tmp_path) not in exc_info.value.detail
+        assert mock_file.read.await_count == 0
+        assert list(tmp_path.iterdir()) == []
+
+
 # ── Test 2: HAS_HEIF flag consistency with pillow_heif install ─────────
 # Validates: Requirement 1.2
 class TestHasHeifFlagConsistency:

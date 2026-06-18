@@ -137,6 +137,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "服务器发生内部错误。请使用请求 ID 查看日志。",
     en: "The server hit an internal error. Check the log for the request ID.",
   },
+  api_error_http_500_with_request_id: {
+    zh: "服务器发生内部错误。请求 ID：{requestId}。",
+    en: "The server hit an internal error. Request ID: {requestId}.",
+  },
   api_error_http_502: {
     zh: "处理请求时上游依赖失败。",
     en: "An upstream dependency failed while handling this request.",
@@ -164,6 +168,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   api_error_no_response: {
     zh: "接口请求在服务器返回响应前失败。",
     en: "API request failed before the server returned a response.",
+  },
+  api_error_with_request_id: {
+    zh: "{message}请求 ID：{requestId}。",
+    en: "{message} Request ID: {requestId}.",
   },
   bug_report_modal_privacy_note: {
     zh: "本反馈仅发送到 Lumina Studio 开发者邮箱，用于定位和回复问题。",

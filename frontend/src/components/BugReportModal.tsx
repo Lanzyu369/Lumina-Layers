@@ -66,7 +66,11 @@ function CompactContextSummary({
   const recentActions = (context.action_history ?? []).slice(-3).reverse();
   const recentLogs = context.recent_client_logs ?? [];
   const recentApiErrors = recentLogs
-    .filter((log) => log.method === "error" && log.scope === "http")
+    .filter(
+      (log) =>
+        log.method === "error" &&
+        (log.scope === "api" || log.scope === "http"),
+    )
     .slice(-2)
     .reverse();
 
@@ -111,17 +115,37 @@ function CompactContextSummary({
           <ul className="ml-4 list-disc font-mono">
             {recentApiErrors.map((entry, idx) => {
               const details = entry.details as
-                | { status_code?: unknown; path?: unknown }
+                | {
+                    status_code?: unknown;
+                    path?: unknown;
+                    url?: unknown;
+                    error_message?: unknown;
+                  }
                 | null
                 | undefined;
               const status =
                 typeof details?.status_code === "number"
                   ? details.status_code
                   : "?";
-              const path = typeof details?.path === "string" ? details.path : "";
+              const path =
+                typeof details?.path === "string"
+                  ? details.path
+                  : typeof details?.url === "string"
+                    ? details.url
+                    : "";
+              const message =
+                typeof details?.error_message === "string" &&
+                details.error_message.trim()
+                  ? details.error_message.trim()
+                  : "";
               return (
                 <li key={`${entry.timestamp}-${idx}`}>
-                  {status} · {path || entry.label}
+                  <span>{status} · {path || entry.label}</span>
+                  {message && (
+                    <span className="block text-slate-500 dark:text-slate-400">
+                      {message}
+                    </span>
+                  )}
                 </li>
               );
             })}

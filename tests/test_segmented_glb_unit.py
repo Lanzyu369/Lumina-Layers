@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from config import PrinterConfig
 from core.converter import generate_segmented_glb
+from core.pipeline.s11_glb_preview import generate_realtime_glb
 
 # Total Z layers hard-coded inside generate_segmented_glb().
 # generate_segmented_glb 内部硬编码的总层数。
@@ -256,6 +257,46 @@ class TestSingleColorImage:
         assert canvas_mesh.bounds[0][1] == pytest.approx(0.0)
         assert canvas_mesh.bounds[1][0] == pytest.approx(60.0)
         assert canvas_mesh.bounds[1][1] == pytest.approx(60.0)
+
+    def test_missing_target_width_uses_nozzle_width_fallback(
+        self,
+        out_path: str,
+    ) -> None:
+        """Async replace GLB should survive legacy caches without a target width."""
+        h, w = 8, 8
+        green = np.array([0, 255, 0], dtype=np.uint8)
+        matched_rgb = np.full((h, w, 3), green, dtype=np.uint8)
+        mask_solid = np.ones((h, w), dtype=bool)
+        cache = _make_cache(matched_rgb, mask_solid)
+        cache.pop("target_width_mm")
+
+        glb_path = generate_segmented_glb(cache, output_path=out_path)
+
+        assert glb_path is not None
+        scene = trimesh.load(glb_path)
+        canvas_mesh = _get_node_mesh(scene, "preview_canvas_bounds")
+        assert canvas_mesh.bounds[1][0] == pytest.approx(
+            w * PrinterConfig.NOZZLE_WIDTH
+        )
+
+    def test_none_target_width_uses_nozzle_width_fallback_for_realtime_glb(
+        self,
+        tmp_path,
+    ) -> None:
+        """Lightweight GLB should not fail when cache metadata has null width."""
+        h, w = 8, 8
+        blue = np.array([0, 0, 255], dtype=np.uint8)
+        matched_rgb = np.full((h, w, 3), blue, dtype=np.uint8)
+        mask_solid = np.ones((h, w), dtype=bool)
+        cache = _make_cache(matched_rgb, mask_solid)
+        cache["target_width_mm"] = None
+
+        glb_path = generate_realtime_glb(
+            cache,
+            output_path=str(tmp_path / "realtime.glb"),
+        )
+
+        assert glb_path is not None
 
 
 # ============================================================================

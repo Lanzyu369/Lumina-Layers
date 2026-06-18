@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import numpy as np
 import pytest
@@ -101,6 +101,45 @@ class TestConverterEndpoints:
             data={"lut_name": "test_lut", "color_mode": "4-Color"},
         )
         assert resp.status_code == 422
+
+    def test_post_preview_rejects_unsupported_upload_before_temp_write(
+        self,
+        client: TestClient,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """POST /api/convert/preview rejects non-image uploads deterministically."""
+        import io
+
+        monkeypatch.setattr("config.TEMP_DIR", str(tmp_path))
+        upload_spy = AsyncMock()
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.resolve_source_selection",
+                return_value=(str(tmp_path / "fake.npy"), "Fake LUT"),
+            ),
+            patch("api.file_bridge.upload_to_tempfile", upload_spy),
+        ):
+            resp = client.post(
+                "/api/convert/preview",
+                files={
+                    "image": (
+                        "notes.txt",
+                        io.BytesIO(b"not image data"),
+                        "text/plain",
+                    )
+                },
+                data={"lut_name": "test_lut", "color_mode": "4-Color"},
+            )
+
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert "不支持的图像文件类型" in detail
+        assert "cannot identify image file" not in detail
+        assert str(tmp_path) not in detail
+        assert upload_spy.await_count == 0
+        assert list(tmp_path.iterdir()) == []
 
     def test_post_generate_missing_session_returns_422(self, client: TestClient) -> None:
         """POST /api/convert/generate without valid body returns 422."""

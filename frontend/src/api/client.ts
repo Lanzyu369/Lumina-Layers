@@ -20,6 +20,25 @@ function isServerErrorStatus(statusCode: number | null): boolean {
   return typeof statusCode === "number" && statusCode >= 500;
 }
 
+const HTTP_REASON_PHRASES: Record<number, string> = {
+  400: "bad request",
+  401: "unauthorized",
+  402: "payment required",
+  403: "forbidden",
+  404: "not found",
+  405: "method not allowed",
+  408: "request timeout",
+  409: "conflict",
+  413: "payload too large",
+  415: "unsupported media type",
+  422: "unprocessable entity",
+  429: "too many requests",
+  500: "internal server error",
+  502: "bad gateway",
+  503: "service unavailable",
+  504: "gateway timeout",
+};
+
 function summarizeRedactedServerValue(
   field: "detail" | "message" | "body",
   value: unknown,
@@ -120,15 +139,10 @@ function extractReadableDetail(data: unknown): string | null {
     }
   }
 
-  let detailErrorCode: string | null = null;
   if (isRecord(detail)) {
     const detailMessage = detail.message;
     if (typeof detailMessage === "string" && detailMessage.trim()) {
       return detailMessage.trim();
-    }
-    const errorCode = detail.error;
-    if (typeof errorCode === "string" && errorCode.trim()) {
-      detailErrorCode = errorCode.trim();
     }
   }
 
@@ -136,12 +150,18 @@ function extractReadableDetail(data: unknown): string | null {
   if (typeof message === "string" && message.trim()) {
     return message.trim();
   }
-  return detailErrorCode;
+  return null;
 }
 
 function isGenericHttpDetail(detail: string, statusCode: number | null): boolean {
   const normalized = detail.trim().toLowerCase();
   if (!normalized) {
+    return true;
+  }
+  if (
+    /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/.test(normalized) ||
+    /^[a-z][a-z0-9]*(?:-[a-z0-9]+)+$/.test(normalized)
+  ) {
     return true;
   }
   if (
@@ -152,6 +172,21 @@ function isGenericHttpDetail(detail: string, statusCode: number | null): boolean
     ).test(normalized)
   ) {
     return true;
+  }
+  if (typeof statusCode === "number") {
+    const reasonPhrase = HTTP_REASON_PHRASES[statusCode];
+    if (reasonPhrase) {
+      const escapedReason = reasonPhrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      if (
+        new RegExp(
+          `^(?:request\\s+failed\\s+with\\s+status\\s+code\\s+|` +
+            `(?:http\\s*)?(?:error\\s+)?|status(?:\\s+code)?\\s*)?` +
+            `${statusCode}\\s*(?::|-)?\\s*${escapedReason}\\.?$`,
+        ).test(normalized)
+      ) {
+        return true;
+      }
+    }
   }
   return [
     "bad request",
@@ -174,7 +209,21 @@ function isGenericHttpDetail(detail: string, statusCode: number | null): boolean
   ].includes(normalized);
 }
 
-function fallbackHttpStatusMessage(statusCode: number | null): string {
+function withRequestId(
+  message: string,
+  statusCode: number | null,
+  requestId: string | null = null,
+): string {
+  if (!requestId || !isServerErrorStatus(statusCode)) {
+    return message;
+  }
+  return tRuntime("api_error_with_request_id", { message, requestId });
+}
+
+function fallbackHttpStatusMessage(
+  statusCode: number | null,
+  requestId: string | null = null,
+): string {
   switch (statusCode) {
     case 400:
       return tRuntime("api_error_http_400");
@@ -201,13 +250,16 @@ function fallbackHttpStatusMessage(statusCode: number | null): string {
     case 429:
       return tRuntime("api_error_http_429");
     case 500:
+      if (requestId) {
+        return tRuntime("api_error_http_500_with_request_id", { requestId });
+      }
       return tRuntime("api_error_http_500");
     case 502:
-      return tRuntime("api_error_http_502");
+      return withRequestId(tRuntime("api_error_http_502"), statusCode, requestId);
     case 503:
-      return tRuntime("api_error_http_503");
+      return withRequestId(tRuntime("api_error_http_503"), statusCode, requestId);
     case 504:
-      return tRuntime("api_error_http_504");
+      return withRequestId(tRuntime("api_error_http_504"), statusCode, requestId);
     default:
       if (typeof statusCode !== "number") {
         return tRuntime("api_error_no_response");
@@ -216,7 +268,11 @@ function fallbackHttpStatusMessage(statusCode: number | null): string {
         return tRuntime("api_error_http_client_default");
       }
       if (statusCode >= 500 && statusCode < 600) {
-        return tRuntime("api_error_http_server_default");
+        return withRequestId(
+          tRuntime("api_error_http_server_default"),
+          statusCode,
+          requestId,
+        );
       }
       return tRuntime("api_error_http_default");
   }
@@ -226,15 +282,16 @@ function readableApiErrorMessage(
   data: unknown,
   statusCode: number | null,
   error: unknown,
+  requestId: string | null = null,
 ): string {
   if (isServerErrorStatus(statusCode)) {
-    return fallbackHttpStatusMessage(statusCode);
+    return fallbackHttpStatusMessage(statusCode, requestId);
   }
   const detail = extractReadableDetail(data);
   if (detail && !isGenericHttpDetail(detail, statusCode)) {
     return detail;
   }
-  const fallback = fallbackHttpStatusMessage(statusCode);
+  const fallback = fallbackHttpStatusMessage(statusCode, requestId);
   if (fallback) {
     return fallback;
   }
@@ -253,8 +310,42 @@ function buildReadableResponseData(
     return { detail: readableMessage };
   }
   const detail = data.detail;
+  const message = data.message;
+  if (isRecord(detail)) {
+    const detailMessage = detail.message;
+    const detailError = detail.error;
+    const hasReadableDetailMessage =
+      typeof detailMessage === "string" &&
+      detailMessage.trim().length > 0 &&
+      !isGenericHttpDetail(detailMessage, statusCode);
+    const hasCodeOnlyDetail =
+      typeof detailError === "string" &&
+      detailError.trim().length > 0 &&
+      !hasReadableDetailMessage;
+    if (hasCodeOnlyDetail) {
+      if (
+        typeof message === "string" &&
+        isGenericHttpDetail(message, statusCode)
+      ) {
+        return { ...data, detail: readableMessage, message: readableMessage };
+      }
+      return { ...data, detail: readableMessage };
+    }
+  }
   if (typeof detail !== "string" || !isGenericHttpDetail(detail, statusCode)) {
+    if (
+      typeof message === "string" &&
+      isGenericHttpDetail(message, statusCode)
+    ) {
+      return { ...data, message: readableMessage };
+    }
     return data;
+  }
+  if (
+    typeof message === "string" &&
+    isGenericHttpDetail(message, statusCode)
+  ) {
+    return { ...data, detail: readableMessage, message: readableMessage };
   }
   return { ...data, detail: readableMessage };
 }
@@ -299,6 +390,59 @@ function getResponseHeaderValue(
   return null;
 }
 
+function recordApiFailure({
+  method,
+  url,
+  statusCode,
+  requestId,
+  responseDetailForLog,
+  error,
+  readableMessage,
+}: {
+  method: string | null;
+  url: string | null;
+  statusCode: number | null;
+  requestId: string | null;
+  responseDetailForLog: unknown;
+  error: unknown;
+  readableMessage: string;
+}): void {
+  postClientLog("api: request failed", {
+    scope: "api",
+    phase: "request-failed",
+    method: "error",
+    dedupeMs: 500,
+    details: {
+      method,
+      url,
+      status_code: statusCode,
+      request_id: requestId,
+      response_detail: responseDetailForLog,
+      ...summarizeErrorForLog(error),
+      error_message: readableMessage,
+    },
+  });
+  // Mirror the failure into the action history bundle so a bug report
+  // submitted minutes later still sees the recent 4xx/5xx context.
+  // 同步写入操作历史，便于后续提交 Bug 报告时仍能带上最近的 API 错误。
+  if (typeof statusCode === "number" && statusCode >= 400) {
+    try {
+      useActionHistoryStore.getState().pushAction({
+        action_type: "api_error",
+        error: {
+          status_code: statusCode,
+          path: typeof url === "string" ? url : String(url ?? ""),
+          ...(requestId ? { request_id: requestId } : {}),
+          error_message: readableMessage,
+        },
+      });
+    } catch {
+      // Action history must never propagate failure into the HTTP layer.
+      // 即便历史记录失败，也不得影响 HTTP 调用链。
+    }
+  }
+}
+
 async function readResourceErrorData(response: Response): Promise<unknown> {
   const contentType = getResponseHeaderValue(response.headers, "content-type");
   if (contentType?.toLowerCase().includes("json")) {
@@ -324,10 +468,12 @@ function buildResourceDownloadError(
 ): Error {
   const statusCode =
     typeof response.status === "number" ? response.status : null;
+  const requestId = getResponseHeaderValue(response.headers, "x-request-id");
   const readableMessage = readableApiErrorMessage(
     data,
     statusCode,
     new Error(`Resource download failed: ${url}`),
+    requestId,
   );
   const responseData = buildReadableResponseData(
     data,
@@ -346,6 +492,15 @@ function buildResourceDownloadError(
     data: responseData,
     headers: response.headers,
   };
+  recordApiFailure({
+    method: "GET",
+    url,
+    statusCode,
+    requestId,
+    responseDetailForLog: summarizeApiErrorData(data, statusCode),
+    error,
+    readableMessage,
+  });
   return error;
 }
 
@@ -354,6 +509,7 @@ function buildResourceNetworkError(
   cause: unknown,
 ): Error {
   const readableMessage = readableApiErrorMessage(null, null, cause);
+  const responseData = { detail: readableMessage, url };
   const error = new Error(readableMessage, { cause }) as Error & {
     response?: {
       status: number | null;
@@ -363,9 +519,18 @@ function buildResourceNetworkError(
   };
   error.response = {
     status: null,
-    data: { detail: readableMessage, url },
+    data: responseData,
     headers: new Headers(),
   };
+  recordApiFailure({
+    method: "GET",
+    url,
+    statusCode: null,
+    requestId: null,
+    responseDetailForLog: responseData,
+    error,
+    readableMessage,
+  });
   return error;
 }
 
@@ -442,6 +607,7 @@ apiClient.interceptors.response.use(
       response?.data,
       statusCode,
       error,
+      requestId,
     );
     const responseDetailForLog = summarizeApiErrorData(
       response?.data,
@@ -455,40 +621,15 @@ apiClient.interceptors.response.use(
         // Preserve the original error object if a runtime marks message read-only.
       }
     }
-    postClientLog("api: request failed", {
-      scope: "api",
-      phase: "request-failed",
-      method: "error",
-      dedupeMs: 500,
-      details: {
-        method,
-        url,
-        status_code: statusCode,
-        request_id: requestId,
-        response_detail: responseDetailForLog,
-        ...summarizeErrorForLog(error),
-        error_message: readableMessage,
-      },
+    recordApiFailure({
+      method,
+      url,
+      statusCode,
+      requestId,
+      responseDetailForLog,
+      error,
+      readableMessage,
     });
-    // Mirror the failure into the action history bundle so a bug report
-    // submitted minutes later still sees the recent 4xx/5xx context.
-    // 同步写入操作历史，便于后续提交 Bug 报告时仍能带上最近的 API 错误。
-    if (typeof statusCode === "number" && statusCode >= 400) {
-      try {
-        useActionHistoryStore.getState().pushAction({
-          action_type: "api_error",
-          error: {
-            status_code: statusCode,
-            path: typeof url === "string" ? url : String(url ?? ""),
-            ...(requestId ? { request_id: requestId } : {}),
-            error_message: readableMessage,
-          },
-        });
-      } catch {
-        // Action history must never propagate failure into the HTTP layer.
-        // 即便历史记录失败，也不得影响 HTTP 调用链。
-      }
-    }
     return Promise.reject(error);
   },
 );

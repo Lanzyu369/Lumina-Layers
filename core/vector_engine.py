@@ -2222,7 +2222,7 @@ class VectorProcessor:
             _g = _item.get("geometry")
             if _g is not None and not _g.is_empty:
                 _total_geom_area += float(_g.area)
-        _log.info(
+        _log.debug(
             "analyze_svg geometry fingerprint: shapes=%d unique_colors=%d total_area=%.2f "
             "gradient_bands=%s layer_count=%s cache_hit=%s",
             len(clipped_shapes),
@@ -2393,7 +2393,7 @@ class VectorProcessor:
             "legacy_stroke_only_shapes": legacy_stroke_only_shapes,
             "fill_eq_stroke_double_buffer": fill_eq_stroke_double_buffer,
         }
-        _log.info(stroke_policy_message, extra=stroke_policy_extra)
+        _log.debug(stroke_policy_message, extra=stroke_policy_extra)
 
         return VectorAnalysis(
             shape_data=shape_data,

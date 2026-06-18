@@ -15,6 +15,11 @@ import apiClient, {
   downloadResourceBlob,
 } from "../client";
 
+const jsonHeaders = {
+  get: (name: string) =>
+    name.toLowerCase() === "content-type" ? "application/json" : null,
+};
+
 describe("apiClient", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -39,7 +44,7 @@ describe("apiClient", () => {
     apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
 
     const expectedMessage =
-      "The server hit an internal error. Check the log for the request ID.";
+      "The server hit an internal error. Request ID: req-500-debug.";
     const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
     expect(rejected).toMatchObject({ message: expectedMessage });
     expect(rejected.response?.data?.detail).toBe(expectedMessage);
@@ -175,7 +180,7 @@ describe("apiClient", () => {
     });
   });
 
-  it("uses structured detail error codes when no readable message exists", async () => {
+  it("uses readable HTTP fallbacks instead of structured detail error codes", async () => {
     const error = new Error("Request failed with status code 409");
     Object.assign(error, {
       config: { method: "post", url: "/convert/generate" },
@@ -188,9 +193,71 @@ describe("apiClient", () => {
     });
     apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
 
-    await expect(apiClient.post("/convert/generate", {})).rejects.toMatchObject({
-      message: "preview_cache_missing",
+    const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
+    const expectedMessage = "The request conflicts with the current server state.";
+    expect(rejected).toMatchObject({ message: expectedMessage });
+    expect(rejected.response?.data?.detail).toBe(expectedMessage);
+  });
+
+  it("replaces string error codes with readable HTTP fallbacks", async () => {
+    const error = new Error("Request failed with status code 409");
+    Object.assign(error, {
+      config: { method: "post", url: "/convert/generate" },
+      response: {
+        status: 409,
+        data: { detail: "preview_cache_missing" },
+      },
     });
+    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+    const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
+    expect(rejected).toMatchObject({
+      message: "The request conflicts with the current server state.",
+    });
+    expect(rejected.response?.data?.detail).toBe(
+      "The request conflicts with the current server state.",
+    );
+  });
+
+  it("replaces top-level string error codes with readable HTTP fallbacks", async () => {
+    const error = new Error("Request failed with status code 409");
+    Object.assign(error, {
+      config: { method: "post", url: "/convert/generate" },
+      response: {
+        status: 409,
+        data: { message: "preview_cache_missing" },
+      },
+    });
+    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+    const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
+    expect(rejected).toMatchObject({
+      message: "The request conflicts with the current server state.",
+    });
+    expect(rejected.response?.data?.message).toBe(
+      "The request conflicts with the current server state.",
+    );
+  });
+
+  it("replaces duplicated detail and message error codes together", async () => {
+    const error = new Error("Request failed with status code 409");
+    Object.assign(error, {
+      config: { method: "post", url: "/convert/generate" },
+      response: {
+        status: 409,
+        data: {
+          detail: "preview_cache_missing",
+          message: "preview-cache-missing",
+        },
+      },
+    });
+    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+    const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
+    const expectedMessage = "The request conflicts with the current server state.";
+    expect(rejected).toMatchObject({ message: expectedMessage });
+    expect(rejected.response?.data?.detail).toBe(expectedMessage);
+    expect(rejected.response?.data?.message).toBe(expectedMessage);
   });
 
   it("uses a readable HTTP fallback when the response has no detail", async () => {
@@ -270,6 +337,37 @@ describe("apiClient", () => {
     expect(rejected).toMatchObject({ message: expectedMessage });
     expect(rejected.response?.data?.detail).toBe(expectedMessage);
   });
+
+  it.each([
+    {
+      status: 402,
+      detail: "HTTP 402 Payment Required",
+      expected:
+        "This action requires an available quota or payment before it can continue.",
+    },
+    {
+      status: 422,
+      detail: "Request failed with status code 422: Unprocessable Entity",
+      expected: "The request is missing required data or contains invalid values.",
+    },
+  ])(
+    "replaces status detail '$detail' with readable HTTP fallbacks",
+    async ({ status, detail, expected }) => {
+      const error = new Error(`Request failed with status code ${status}`);
+      Object.assign(error, {
+        config: { method: "post", url: "/convert/generate" },
+        response: {
+          status,
+          data: { detail },
+        },
+      });
+      apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+      const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
+      expect(rejected).toMatchObject({ message: expected });
+      expect(rejected.response?.data?.detail).toBe(expected);
+    },
+  );
 
   it("keeps backend details where numbers are part of the real message", async () => {
     const error = new Error("Request failed with status code 422");
@@ -382,7 +480,7 @@ describe("apiClient", () => {
     globalThis.fetch = vi.fn().mockResolvedValueOnce({
       ok: false,
       status: 404,
-      headers: { get: () => "application/json" },
+      headers: jsonHeaders,
       json: () => Promise.resolve({ detail: "Not Found" }),
     }) as unknown as typeof fetch;
 
@@ -395,12 +493,57 @@ describe("apiClient", () => {
     }
   });
 
+  it("records failed resource downloads in client logs and action history", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      headers: new Headers({
+        "content-type": "application/json",
+        "x-request-id": "req-resource-404",
+      }),
+      json: () => Promise.resolve({ detail: "File not found or expired" }),
+    }) as unknown as typeof fetch;
+
+    try {
+      await expect(downloadResourceBlob("/api/files/missing")).rejects.toThrow(
+        "File not found or expired",
+      );
+
+      expect(postClientLog).toHaveBeenCalledWith(
+        "api: request failed",
+        expect.objectContaining({
+          scope: "api",
+          phase: "request-failed",
+          method: "error",
+          details: expect.objectContaining({
+            method: "GET",
+            url: "/api/files/missing",
+            status_code: 404,
+            request_id: "req-resource-404",
+            error_message: "File not found or expired",
+          }),
+        }),
+      );
+      expect(useActionHistoryStore.getState().history.at(-1)?.error).toEqual(
+        expect.objectContaining({
+          status_code: 404,
+          path: "/api/files/missing",
+          request_id: "req-resource-404",
+          error_message: "File not found or expired",
+        }),
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("uses structured detail object messages for failed resource downloads", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = vi.fn().mockResolvedValueOnce({
       ok: false,
       status: 422,
-      headers: { get: () => "application/json" },
+      headers: jsonHeaders,
       json: () =>
         Promise.resolve({
           detail: {
@@ -455,6 +598,23 @@ describe("apiClient", () => {
             .response?.data.url
         ),
       ).toBe("/api/files/model");
+      expect(postClientLog).toHaveBeenCalledWith(
+        "api: request failed",
+        expect.objectContaining({
+          scope: "api",
+          phase: "request-failed",
+          method: "error",
+          details: expect.objectContaining({
+            method: "GET",
+            url: "/api/files/model",
+            status_code: null,
+            request_id: null,
+            error_message:
+              "API request failed before the server returned a response.",
+          }),
+        }),
+      );
+      expect(useActionHistoryStore.getState().history).toHaveLength(0);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -499,7 +659,7 @@ describe("apiClient", () => {
     globalThis.fetch = vi.fn().mockResolvedValueOnce({
       ok: false,
       status: 500,
-      headers: { get: () => "application/json" },
+      headers: jsonHeaders,
       json: () => Promise.resolve({ detail: "worker crashed" }),
     }) as unknown as typeof fetch;
 
@@ -521,12 +681,37 @@ describe("apiClient", () => {
     }
   });
 
+  it("includes request ids in failed resource download server errors", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      headers: {
+        get: (name: string) => {
+          const normalized = name.toLowerCase();
+          if (normalized === "content-type") return "application/json";
+          if (normalized === "x-request-id") return "req-file-500";
+          return null;
+        },
+      },
+      json: () => Promise.resolve({ detail: "worker crashed" }),
+    }) as unknown as typeof fetch;
+
+    try {
+      await expect(downloadResourceBlob("/api/files/broken")).rejects.toThrow(
+        "The server hit an internal error. Request ID: req-file-500.",
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("redacts top-level server error messages for failed resource downloads", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = vi.fn().mockResolvedValueOnce({
       ok: false,
       status: 500,
-      headers: { get: () => "application/json" },
+      headers: jsonHeaders,
       json: () => Promise.resolve({ message: "worker crashed" }),
     }) as unknown as typeof fetch;
 
@@ -609,7 +794,7 @@ describe("apiClient", () => {
     globalThis.fetch = vi.fn().mockResolvedValueOnce({
       ok: false,
       status: 404,
-      headers: { get: () => "application/json" },
+      headers: jsonHeaders,
       json: () => Promise.resolve({ detail: "File not found or expired" }),
     }) as unknown as typeof fetch;
 
