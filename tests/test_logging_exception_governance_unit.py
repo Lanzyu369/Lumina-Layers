@@ -59,7 +59,7 @@ GOVERNANCE_SCAN_ROOTS = [
     ROOT / "core",
     ROOT / "utils",
 ]
-EXCEPT_EXCEPTION_BASELINE = 65
+EXCEPT_EXCEPTION_BASELINE = 66
 LOG_METHODS = {"debug", "info", "warning", "error", "exception", "critical", "log"}
 VECTOR_STRUCTURED_EVENTS = {
     "vector_branch_init",
@@ -151,6 +151,7 @@ VECTOR_STRUCTURED_EVENTS = {
 }
 EXTRACTOR_STRUCTURED_EVENTS = {
     "extractor_extract_done",
+    "extractor_lut_download_registration_failed",
     "extractor_merge_8color_done",
     "extractor_merge_5color_extended_done",
     "extractor_manual_fix_done",
@@ -378,7 +379,14 @@ def test_no_business_print_in_hot_paths() -> None:
 def test_except_exception_count_does_not_increase() -> None:
     """Catch-all exceptions may exist but should not grow.
 
-    Baseline last bumped from 60 -> 65 by the v2 GLB mesh kernel work in
+    Baseline last bumped from 65 -> 66 by the extractor final LUT download
+    registration cleanup guard in ``api/routers/extractor.py``. That guard
+    runs after a route-owned ``extractor_lut_*`` copy has been written but
+    before it is registered with ``FileRegistry``; it removes the orphan copy,
+    emits ``extractor_lut_download_registration_failed`` with actionable ERROR
+    fields, and raises a bounded HTTP 500.
+
+    Earlier baseline bump from 60 -> 65 came from the v2 GLB mesh kernel work in
     ``core/pipeline/s11_glb_preview.py`` (delta = +5). Note: the previous
     in-tree baseline value of 61 was a `<=` ceiling, not an exact count;
     actual pre-change total was 60. The five new ``except Exception`` sites

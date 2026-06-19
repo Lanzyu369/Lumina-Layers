@@ -87,6 +87,24 @@ def _assert_download_survives_session_close(download_url: str, session_id: str) 
     return after_close.content
 
 
+class _FailingLutDownloadRegistry(FileRegistry):
+    """Registry stub that fails after the route creates a LUT download copy."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.registered_paths: list[str] = []
+
+    def register_path(self, *args: object, **kwargs: object) -> str:
+        path = kwargs.get("path")
+        if path is None and len(args) >= 2:
+            path = args[1]
+        if path is not None:
+            self.registered_paths.append(str(path))
+        raise RuntimeError(
+            "registry backend unavailable for /Users/min/private/file-registry.db"
+        )
+
+
 # =========================================================================
 # 1. Corner points validation - Requirement 4.5
 # =========================================================================
@@ -195,6 +213,89 @@ class TestSessionStatePersistence:
             body["session_id"],
         )
         assert downloaded == expected_bytes
+
+    def test_extract_lut_download_registration_failure_is_bounded(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        tmp_path: Path,
+        _isolate_dependency_overrides,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Failed final LUT registration should not leak a temp copy."""
+        lut_path = tmp_path / "extract-lut.json"
+        _write_keyed_lut(
+            lut_path,
+            [[255, 255, 255], [255, 0, 0], [0, 0, 0]],
+        )
+        buf = _make_test_image_buf()
+        vis_img = np.zeros((4, 4, 3), dtype=np.uint8)
+        preview_img = np.zeros((4, 4, 3), dtype=np.uint8)
+        registry = _FailingLutDownloadRegistry()
+        app.dependency_overrides[get_file_registry] = lambda: registry
+        monkeypatch.setattr("api.routers.extractor.TEMP_DIR", str(tmp_path))
+
+        extractor_logger = logging.getLogger("lumina.api.routers.extractor")
+        app_logger = logging.getLogger("lumina.api.app")
+        extractor_logger.addHandler(caplog.handler)
+        app_logger.addHandler(caplog.handler)
+        caplog.set_level(logging.ERROR, logger=extractor_logger.name)
+        caplog.set_level(logging.ERROR, logger=app_logger.name)
+        try:
+            with patch(
+                "api.routers.extractor.run_extraction",
+                return_value=(vis_img, preview_img, str(lut_path), "OK"),
+            ):
+                response = client.post(
+                    "/api/extractor/extract",
+                    files={"image": ("test.png", buf, "image/png")},
+                    data={
+                        "corner_points": json.dumps(
+                            [[0, 0], [100, 0], [100, 100], [0, 100]]
+                        ),
+                        "color_mode": "4-Color",
+                        "distortion": "0.0",
+                        "vignette_correction": "false",
+                    },
+                )
+        finally:
+            extractor_logger.removeHandler(caplog.handler)
+            app_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 500
+        assert response.json()["detail"] == (
+            "Extractor LUT download could not be prepared. Try the extraction again."
+        )
+        assert "/Users/min/private" not in response.text
+        assert registry.registered_paths
+        assert list(tmp_path.glob("extractor_lut_*")) == []
+
+        extractor_records = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "extractor_lut_download_registration_failed"
+        ]
+        assert len(extractor_records) == 1
+        extractor_record = extractor_records[0]
+        assert extractor_record.levelno == logging.ERROR
+        assert extractor_record.status_code == 500
+        assert extractor_record.error_type == "RuntimeError"
+        assert extractor_record.lut_filename == "extract-lut.json"
+        assert extractor_record.ttl_seconds == 8 * 60 * 60
+        assert "/Users/min/private/file-registry.db" in extractor_record.error_message
+
+        http_records = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "api_http_error"
+        ]
+        assert len(http_records) == 1
+        assert http_records[0].error_message == response.json()["detail"]
+        assert "/Users/min/private" not in http_records[0].error_message
+        assert [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "api_unhandled_exception"
+        ] == []
 
     def test_merge_5color_lut_download_survives_source_session_close(
         self,
