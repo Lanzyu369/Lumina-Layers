@@ -1159,7 +1159,7 @@ class TestGenerateRegistryFailureCleanup:
                     path.unlink()
             _test_store.close(sid)
 
-    def test_generate_glb_registry_failure_rolls_back_registered_3mf(self) -> None:
+    def test_generate_glb_registry_failure_preserves_downloaded_3mf(self) -> None:
         paths: list[str] = []
 
         def _make_file(suffix: str, payload: bytes) -> str:
@@ -1202,15 +1202,31 @@ class TestGenerateRegistryFailureCleanup:
                 json={"session_id": sid, "params": {"lut_name": "test_lut"}},
             )
 
-            assert response.status_code == 500
-            assert not os.path.exists(threemf_path)
+            assert response.status_code == 200
+            payload = response.json()
+            assert payload["download_url"].startswith("/api/files/")
+            assert payload["preview_3d_url"] is None
+            download_file_id = payload["download_url"].rsplit("/", 1)[-1]
+            assert os.path.exists(threemf_path)
             assert not os.path.exists(glb_path)
             assert os.path.exists(image_path)
             assert os.path.exists(lut_path)
             assert registry.register_calls == 2
-            assert registry.first_file_id is not None
+            assert registry.first_file_id == download_file_id
             entry = registry.get_entry(registry.first_file_id)
-            assert entry is None
+            assert entry is not None
+            assert entry["path"] == threemf_path
+            assert entry["lifecycle"] == "ephemeral"
+            assert entry["session_id"] != sid
+
+            close_response = failing_client.post(
+                "/api/session/close",
+                json={"session_id": sid},
+            )
+            assert close_response.status_code == 200
+            download_response = failing_client.get(payload["download_url"])
+            assert download_response.status_code == 200
+            assert download_response.content == b"3mf"
         finally:
             app.dependency_overrides[get_file_registry] = original_registry_override
             registry.cleanup_expired()
@@ -1219,7 +1235,7 @@ class TestGenerateRegistryFailureCleanup:
                     os.unlink(path)
             _test_store.close(sid)
 
-    def test_color_card_glb_registry_failure_rolls_back_registered_3mf(
+    def test_color_card_glb_registry_failure_preserves_downloaded_3mf(
         self,
         tmp_path,
     ) -> None:
@@ -1270,15 +1286,31 @@ class TestGenerateRegistryFailureCleanup:
                     json={"session_id": sid},
                 )
 
-            assert response.status_code == 500
-            assert not threemf_path.exists()
+            assert response.status_code == 200
+            payload = response.json()
+            assert payload["download_url"].startswith("/api/files/")
+            assert payload["preview_3d_url"] is None
+            download_file_id = payload["download_url"].rsplit("/", 1)[-1]
+            assert threemf_path.exists()
             assert not glb_path.exists()
             assert lut_path.exists()
             assert svg_path.exists()
             assert registry.register_calls == 2
-            assert registry.first_file_id is not None
+            assert registry.first_file_id == download_file_id
             entry = registry.get_entry(registry.first_file_id)
-            assert entry is None
+            assert entry is not None
+            assert entry["path"] == str(threemf_path)
+            assert entry["lifecycle"] == "ephemeral"
+            assert entry["session_id"] != sid
+
+            close_response = failing_client.post(
+                "/api/session/close",
+                json={"session_id": sid},
+            )
+            assert close_response.status_code == 200
+            download_response = failing_client.get(payload["download_url"])
+            assert download_response.status_code == 200
+            assert download_response.content == b"3mf"
         finally:
             app.dependency_overrides[get_file_registry] = original_registry_override
             registry.cleanup_expired()

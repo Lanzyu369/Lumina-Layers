@@ -278,9 +278,22 @@ async def generate_color_card(
         )
 
         if glb_path and os.path.exists(glb_path):
-            glb_id = registry.register_path(body.session_id, glb_path)
-            glb_registered = True
-            preview_3d_url = f"/api/files/{glb_id}"
+            try:
+                glb_id = registry.register_path(body.session_id, glb_path)
+            except Exception as exc:
+                log.warning(
+                    "Color card GLB preview registration failed",
+                    extra={
+                        "event": "color_card_glb_registration_failed",
+                        "session_id": body.session_id,
+                        "error_type": type(exc).__name__,
+                        "error_message": str(exc),
+                        "path": glb_path,
+                    },
+                )
+            else:
+                glb_registered = True
+                preview_3d_url = f"/api/files/{glb_id}"
         registration_complete = True
     finally:
         if download_id is None:
