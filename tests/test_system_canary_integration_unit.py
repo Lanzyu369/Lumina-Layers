@@ -20,6 +20,9 @@ from api.schemas.system import UserSettings
 _IMAGE_PREVIEW_PREPARATION_FAILED_DETAIL = (
     "Image preview could not be prepared. Please try again."
 )
+_COLORCHECKER_PREVIEW_PREPARATION_FAILED_DETAIL = (
+    "ColorChecker preview could not be prepared. Please try again."
+)
 
 
 def _client_with_registry() -> tuple[TestClient, FileRegistry]:
@@ -241,6 +244,35 @@ class TestSystemImagePreviewCanary:
         assert len(records) == 1
         assert records[0].error_type == "OSError"
         assert records[0].error_message == "stat failed at /Users/min/private/preview.png"
+        assert _records_for_event(caplog, "api_unhandled_exception") == []
+
+    def test_preview_resource_registration_failure_returns_readable_error(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setattr("api.preview_resources.TEMP_DIR", str(tmp_path))
+        app = create_app()
+        registry = _RegisterPathFailingRegistry()
+        app.dependency_overrides[get_file_registry] = lambda: registry
+        client = TestClient(app, raise_server_exceptions=False)
+        app_logger = _capture_app_logger(caplog)
+        try:
+            response = client.post(
+                "/api/system/preview-resources",
+                data={"context": "colorchecker"},
+                files={"file": ("chart.png", _png_bytes(6, 5), "image/png")},
+            )
+        finally:
+            app_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 500
+        assert response.json()["detail"] == _COLORCHECKER_PREVIEW_PREPARATION_FAILED_DETAIL
+        assert "preview registry unavailable" not in response.text
+        assert "/Users/min/private" not in response.text
+        assert len(registry.paths) == 1
+        assert list(tmp_path.iterdir()) == []
         assert _records_for_event(caplog, "api_unhandled_exception") == []
 
     def test_heic_conversion_failure_cleans_temp_files_at_api_boundary(

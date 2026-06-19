@@ -10,6 +10,7 @@ Validates:
 """
 
 import json
+import logging
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -19,6 +20,17 @@ from api.app import app
 from api.routers.system import SETTINGS_SAVE_FAILED_DETAIL
 
 client: TestClient = TestClient(app)
+
+
+def _records_for_event(
+    caplog: pytest.LogCaptureFixture,
+    event_name: str,
+) -> list[logging.LogRecord]:
+    return [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == event_name
+    ]
 
 # =========================================================================
 # 1. GET /api/system/settings — Requirements 5.1, 5.2
@@ -97,6 +109,65 @@ class TestGetSettings:
         assert settings["last_lut"] == ""
         assert settings["last_modeling_mode"] == "high-fidelity"
         assert settings["last_color_mode"] == "4-Color (RYBW)"
+        assert settings["device_profile_id"] == "BambuStudio:bbl:bambu-lab-h2d:0.4"
+
+    def test_get_settings_read_error_returns_defaults_without_unhandled_exception(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """I/O read failures fall back to defaults without app-level 500."""
+        mock_file = MagicMock()
+        private_path = "/Users/min/private/user_settings.json"
+        mock_file.exists.return_value = True
+        mock_file.read_text.side_effect = OSError(
+            f"permission denied: {private_path}"
+        )
+        client_no_raise = TestClient(app, raise_server_exceptions=False)
+        system_logger = logging.getLogger("lumina.api.routers.system")
+        app_logger = logging.getLogger("lumina.api.app")
+        system_logger.addHandler(caplog.handler)
+        app_logger.addHandler(caplog.handler)
+        caplog.set_level(logging.WARNING, logger=system_logger.name)
+        caplog.set_level(logging.WARNING, logger=app_logger.name)
+
+        try:
+            with patch("api.routers.system.SETTINGS_FILE", mock_file):
+                response = client_no_raise.get("/api/system/settings")
+        finally:
+            system_logger.removeHandler(caplog.handler)
+            app_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 200
+        assert private_path not in response.text
+        data = response.json()
+        assert data["status"] == "success"
+        settings = data["settings"]
+        assert settings["last_lut"] == ""
+        assert settings["last_modeling_mode"] == "high-fidelity"
+        assert settings["device_profile_id"] == "BambuStudio:bbl:bambu-lab-h2d:0.4"
+        records = _records_for_event(caplog, "system_settings_load_failed")
+        assert len(records) == 1
+        assert records[0].levelno == logging.WARNING
+        assert records[0].error_type == "OSError"
+        assert records[0].settings_path == str(mock_file)
+        assert private_path in records[0].error_message
+        assert _records_for_event(caplog, "api_unhandled_exception") == []
+
+    def test_get_settings_exists_error_returns_defaults(self) -> None:
+        """Even checking for settings file presence is a recoverable read failure."""
+        mock_file = MagicMock()
+        private_path = "/Users/min/private/user_settings.json"
+        mock_file.exists.side_effect = OSError(f"stat failed: {private_path}")
+        client_no_raise = TestClient(app, raise_server_exceptions=False)
+
+        with patch("api.routers.system.SETTINGS_FILE", mock_file):
+            response = client_no_raise.get("/api/system/settings")
+
+        assert response.status_code == 200
+        assert private_path not in response.text
+        settings = response.json()["settings"]
+        assert settings["last_lut"] == ""
+        assert settings["last_modeling_mode"] == "high-fidelity"
         assert settings["device_profile_id"] == "BambuStudio:bbl:bambu-lab-h2d:0.4"
 
 

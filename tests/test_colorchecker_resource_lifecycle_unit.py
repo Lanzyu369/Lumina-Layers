@@ -43,6 +43,9 @@ _COLORCHECKER_PREVIEW_SERVICE_UNAVAILABLE_DETAIL = (
     "ColorChecker preview service is unavailable. "
     "Check the server ColorChecker dependencies and try again."
 )
+_COLORCHECKER_PREVIEW_PREPARATION_FAILED_DETAIL = (
+    "ColorChecker preview could not be prepared. Please try again."
+)
 _PREVIEW_ARTIFACT_UNREADABLE_DETAIL = (
     "Preview artifact is unavailable or unreadable. "
     "Re-run the previous step and try again."
@@ -80,6 +83,35 @@ def _client_with_state(
     app.dependency_overrides[get_session_store] = lambda: store
     app.dependency_overrides[get_file_registry] = lambda: registry
     return TestClient(app, raise_server_exceptions=raise_server_exceptions), store, registry
+
+
+def _records_for_event(
+    caplog: pytest.LogCaptureFixture,
+    event_name: str,
+) -> list[logging.LogRecord]:
+    return [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == event_name
+    ]
+
+
+class _RegisterPathFailingRegistry(FileRegistry):
+    """Registry stub that fails while retaining the attempted source path."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.paths: list[str] = []
+
+    def register_path(self, *args: object, **kwargs: object) -> str:
+        path = kwargs.get("path")
+        if path is None and len(args) >= 2:
+            path = args[1]
+        if path is not None:
+            self.paths.append(str(path))
+        raise RuntimeError(
+            "colorchecker source registry unavailable at /Users/min/private/source.png"
+        )
 
 
 def _register_colorchecker_source(
@@ -251,6 +283,40 @@ def test_preview_resource_upload_hides_unavailable_error_detail(monkeypatch) -> 
     assert response.json()["detail"] == _COLORCHECKER_PREVIEW_SERVICE_UNAVAILABLE_DETAIL
     assert private_path not in response.text
     assert "cannot import" not in response.text
+
+
+def test_extractor_colorchecker_source_bounds_registry_failure(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import api.preview_resources as preview_resources
+
+    monkeypatch.setattr(preview_resources, "TEMP_DIR", str(tmp_path))
+    app = create_app()
+    registry = _RegisterPathFailingRegistry()
+    app.dependency_overrides[get_session_store] = lambda: SessionStore(ttl=1800)
+    app.dependency_overrides[get_file_registry] = lambda: registry
+    client = TestClient(app, raise_server_exceptions=False)
+    app_logger = logging.getLogger("lumina.api.app")
+    app_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.WARNING, logger=app_logger.name)
+
+    try:
+        response = client.post(
+            "/api/extractor/colorchecker-source",
+            files={"image": ("chart.png", _png_bytes(12, 8), "image/png")},
+        )
+    finally:
+        app_logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == _COLORCHECKER_PREVIEW_PREPARATION_FAILED_DETAIL
+    assert "colorchecker source registry unavailable" not in response.text
+    assert "/Users/min/private" not in response.text
+    assert len(registry.paths) == 1
+    assert list(tmp_path.iterdir()) == []
+    assert _records_for_event(caplog, "api_unhandled_exception") == []
 
 
 def test_colorchecker_source_keeps_standard_type_hint_for_extensionless_upload(monkeypatch) -> None:
