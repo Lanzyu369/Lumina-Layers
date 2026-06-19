@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import logging
 import os
 from types import SimpleNamespace
 
@@ -921,6 +922,114 @@ def test_colorchecker_calibrate_passes_raw_source_path_to_core(
     assert captured["file_name"] == "shot.dng"
     assert captured["mime_type"] == "application/octet-stream"
     assert captured["corners"] == [[0, 0], [8, 0], [8, 6], [0, 6]]
+
+
+def test_colorchecker_calibrate_hides_unavailable_error_detail(
+    monkeypatch,
+    tmp_path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import core.colorchecker_adapter as adapter
+
+    client, _store, registry = _client_with_state(raise_server_exceptions=False)
+    source_id = _register_colorchecker_source(registry, tmp_path, width=16, height=8)
+    private_path = "/Users/min/private/core/colorchecker.py"
+
+    def fake_decode(*_args, **_kwargs):
+        return SimpleNamespace(image_bgr=np.zeros((8, 16, 3), dtype=np.uint8))
+
+    def fail_apply(*_args, **_kwargs):
+        raise adapter.ColorCheckerUnavailableError(
+            f"cannot import {private_path}"
+        )
+
+    monkeypatch.setattr(adapter, "decode_colorchecker_file", fake_decode)
+    monkeypatch.setattr(adapter, "apply_colorchecker_calibration", fail_apply)
+
+    target_logger = logging.getLogger("lumina.api.routers.extractor")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.WARNING, logger=target_logger.name)
+    try:
+        response = client.post(
+            "/api/extractor/colorchecker-calibrate",
+            data={
+                "colorchecker_source_file_id": source_id,
+                "corner_points": "[[0,0],[8,0],[8,4],[0,4]]",
+                "corner_points_width": "8",
+                "corner_points_height": "4",
+            },
+        )
+    finally:
+        target_logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == COLORCHECKER_SERVICE_UNAVAILABLE_DETAIL
+    assert private_path not in response.text
+    assert "cannot import" not in response.text
+
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "extractor_colorchecker_calibrate_failed"
+    ]
+    assert len(records) == 1
+    assert records[0].status_code == 500
+    assert records[0].error_type == "ColorCheckerUnavailableError"
+    assert private_path in records[0].error_message
+
+
+def test_colorchecker_calibrate_hides_calibration_error_detail(
+    monkeypatch,
+    tmp_path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import core.colorchecker_adapter as adapter
+
+    client, _store, registry = _client_with_state(raise_server_exceptions=False)
+    source_id = _register_colorchecker_source(registry, tmp_path, width=16, height=8)
+    private_path = "/Users/min/private/chart.png"
+
+    def fake_decode(*_args, **_kwargs):
+        return SimpleNamespace(image_bgr=np.zeros((8, 16, 3), dtype=np.uint8))
+
+    def fail_apply(*_args, **_kwargs):
+        raise adapter.ColorCheckerCalibrationError(
+            f"cannot solve chart at {private_path}: singular matrix"
+        )
+
+    monkeypatch.setattr(adapter, "decode_colorchecker_file", fake_decode)
+    monkeypatch.setattr(adapter, "apply_colorchecker_calibration", fail_apply)
+
+    target_logger = logging.getLogger("lumina.api.routers.extractor")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.WARNING, logger=target_logger.name)
+    try:
+        response = client.post(
+            "/api/extractor/colorchecker-calibrate",
+            data={
+                "colorchecker_source_file_id": source_id,
+                "corner_points": "[[0,0],[8,0],[8,4],[0,4]]",
+                "corner_points_width": "8",
+                "corner_points_height": "4",
+            },
+        )
+    finally:
+        target_logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == COLORCHECKER_PROCESSING_FAILED_DETAIL
+    assert private_path not in response.text
+    assert "singular matrix" not in response.text
+
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "extractor_colorchecker_calibrate_failed"
+    ]
+    assert len(records) == 1
+    assert records[0].status_code == 422
+    assert records[0].error_type == "ColorCheckerCalibrationError"
+    assert private_path in records[0].error_message
 
 
 def test_colorchecker_warp_preview_uses_colorchecker_ttl(monkeypatch, tmp_path) -> None:

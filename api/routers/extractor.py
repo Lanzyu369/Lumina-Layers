@@ -358,6 +358,36 @@ def _parse_colorchecker_patch_points(raw_patch_points: str | None) -> list[objec
         raise HTTPException(status_code=422, detail="patch_points must be a JSON array.")
     if len(parsed) == 0:
         return None
+    if len(parsed) != 24:
+        raise HTTPException(
+            status_code=422,
+            detail=f"patch_points must contain exactly 24 points, got {len(parsed)}.",
+        )
+    for point in parsed:
+        if isinstance(point, dict):
+            x_value = point.get("x")
+            y_value = point.get("y")
+        elif isinstance(point, list) and len(point) >= 2:
+            x_value = point[0]
+            y_value = point[1]
+        else:
+            raise HTTPException(
+                status_code=422,
+                detail="patch_points items must contain x and y coordinates.",
+            )
+        try:
+            x_coordinate = float(x_value)
+            y_coordinate = float(y_value)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=422,
+                detail="patch_points items must contain finite numeric x and y values.",
+            ) from exc
+        if not np.isfinite(x_coordinate) or not np.isfinite(y_coordinate):
+            raise HTTPException(
+                status_code=422,
+                detail="patch_points items must contain finite numeric x and y values.",
+            )
     return parsed
 
 
@@ -1061,20 +1091,44 @@ async def extractor_colorchecker_calibrate(
         )
         patch_points_out = result.patch_points
         display_summary = result.display_summary
-    except ColorCheckerUnavailableError as e:
+    except ColorCheckerUnavailableError as exc:
         if full_png_path is not None:
             try:
                 os.remove(full_png_path)
             except OSError:
                 pass
-        raise HTTPException(status_code=500, detail=str(e))
-    except ColorCheckerCalibrationError as e:
+        log.warning(
+            "ColorChecker calibration failed because the service is unavailable",
+            extra={
+                "event": "extractor_colorchecker_calibrate_failed",
+                "status_code": 500,
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=COLORCHECKER_SERVICE_UNAVAILABLE_DETAIL,
+        ) from exc
+    except ColorCheckerCalibrationError as exc:
         if full_png_path is not None:
             try:
                 os.remove(full_png_path)
             except OSError:
                 pass
-        raise HTTPException(status_code=422, detail=str(e))
+        log.warning(
+            "ColorChecker calibration failed",
+            extra={
+                "event": "extractor_colorchecker_calibrate_failed",
+                "status_code": 422,
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+        raise HTTPException(
+            status_code=422,
+            detail=COLORCHECKER_PROCESSING_FAILED_DETAIL,
+        ) from exc
     except (cv2.error, OSError, RuntimeError, TypeError, ValueError):
         if full_file_id:
             registry.cleanup_file(full_file_id)
