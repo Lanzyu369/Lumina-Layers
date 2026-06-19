@@ -36,6 +36,7 @@ from shapely.validation import make_valid
 
 from api.structured_logging import get_logger
 from config import BedManager, PrinterConfig, normalize_nozzle_size
+from core.geometry_utils import create_keychain_loop
 from core.pipeline import p06_bed_rendering, s09_export_3mf, vector_glb_preview
 from core.pipeline.pipeline_utils import extract_color_palette
 from core.pipeline.s03_color_replacement import _normalize_color_replacements_input
@@ -390,6 +391,180 @@ def _resolve_vector_line_width_mm(nozzle_size: object) -> str:
         nozzle_mm = 0.4
     line_width = 0.22 if nozzle_mm <= 0.25 else 0.42
     return f"{line_width:.2f}"
+
+
+def _coerce_finite_float(value: object, default: float) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not np.isfinite(result):
+        return default
+    return result
+
+
+def _coerce_positive_float(value: object, default: float) -> float:
+    result = _coerce_finite_float(value, default)
+    return result if result > 0 else default
+
+
+def _finite_scene_bounds(scene: trimesh.Scene) -> np.ndarray | None:
+    try:
+        bounds = np.asarray(scene.bounds, dtype=np.float64)
+    except (AttributeError, TypeError, ValueError):
+        return None
+    if bounds.shape != (2, 3) or not np.all(np.isfinite(bounds)):
+        return None
+    if np.any(bounds[1] <= bounds[0]):
+        return None
+    return bounds
+
+
+def _vector_loop_attach_point(ctx: dict, scene_bounds: np.ndarray) -> tuple[float, float]:
+    min_x, min_y = float(scene_bounds[0, 0]), float(scene_bounds[0, 1])
+    max_x, max_y = float(scene_bounds[1, 0]), float(scene_bounds[1, 1])
+    center_x = (min_x + max_x) / 2.0
+    center_y = (min_y + max_y) / 2.0
+
+    loop_pos = ctx.get("loop_pos")
+    if isinstance(loop_pos, (list, tuple)) and len(loop_pos) >= 2:
+        attach_x = _coerce_finite_float(loop_pos[0], center_x)
+        attach_y = _coerce_finite_float(loop_pos[1], max_y)
+    else:
+        preset = str(ctx.get("loop_position_preset") or "top-center")
+        if preset == "top-left":
+            attach_x, attach_y = min_x, max_y
+        elif preset == "top-right":
+            attach_x, attach_y = max_x, max_y
+        elif preset == "left-center":
+            attach_x, attach_y = min_x, center_y
+        elif preset == "right-center":
+            attach_x, attach_y = max_x, center_y
+        elif preset == "bottom-center":
+            attach_x, attach_y = center_x, min_y
+        else:
+            attach_x, attach_y = center_x, max_y
+
+    attach_x += _coerce_finite_float(ctx.get("loop_offset_x"), 0.0)
+    attach_y += _coerce_finite_float(ctx.get("loop_offset_y"), 0.0)
+    return attach_x, attach_y
+
+
+def _geometry_xy_distance(bounds: np.ndarray, x: float, y: float) -> tuple[float, float]:
+    min_x, min_y = float(bounds[0, 0]), float(bounds[0, 1])
+    max_x, max_y = float(bounds[1, 0]), float(bounds[1, 1])
+    if min_x <= x <= max_x:
+        dx = 0.0
+    else:
+        dx = min(abs(x - min_x), abs(x - max_x))
+    if min_y <= y <= max_y:
+        dy = 0.0
+    else:
+        dy = min(abs(y - min_y), abs(y - max_y))
+    return dx, dy
+
+
+def _resolve_vector_loop_style(
+    ctx: dict,
+    scene: trimesh.Scene,
+    attach_x: float,
+    attach_y: float,
+    preview_colors: dict,
+    slot_names: list,
+) -> tuple[int, list[int], str | None]:
+    fallback_idx = 0
+    try:
+        candidate = int(ctx.get("backing_color_id", 0) or 0)
+    except (TypeError, ValueError):
+        candidate = 0
+    if 0 <= candidate < len(slot_names):
+        fallback_idx = candidate
+
+    candidates: list[tuple[float, float, int, str]] = []
+    for geom_order, (geom_name, geom) in enumerate(scene.geometry.items()):
+        name = str(geom_name)
+        if name not in slot_names:
+            continue
+        try:
+            bounds = np.asarray(geom.bounds, dtype=np.float64)
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if bounds.shape != (2, 3) or not np.all(np.isfinite(bounds)):
+            continue
+        dx, dy = _geometry_xy_distance(bounds, attach_x, attach_y)
+        candidates.append((dx, dy, geom_order, name))
+
+    material_name: str | None = None
+    color_idx = fallback_idx
+    if candidates:
+        _, _, _, material_name = min(candidates)
+        color_idx = slot_names.index(material_name)
+    elif 0 <= fallback_idx < len(slot_names):
+        material_name = str(slot_names[fallback_idx])
+
+    color = preview_colors.get(material_name) if material_name else None
+    if color is None:
+        color = preview_colors.get(color_idx)
+    if color is None:
+        color = preview_colors.get(str(color_idx))
+    rgba = _coerce_preview_rgba(color)
+    return color_idx, rgba, material_name
+
+
+def _inject_vector_keychain_loop(
+    ctx: dict,
+    scene: trimesh.Scene,
+    preview_colors: dict,
+    slot_names: list,
+) -> bool:
+    """Add vector keychain-loop geometry to the export scene when requested."""
+    if not bool(ctx.get("add_loop", False)):
+        return False
+
+    bounds = _finite_scene_bounds(scene)
+    if bounds is None:
+        return False
+
+    attach_x, attach_y = _vector_loop_attach_point(ctx, bounds)
+    _color_idx, rgba, material_name = _resolve_vector_loop_style(
+        ctx,
+        scene,
+        attach_x,
+        attach_y,
+        preview_colors,
+        list(slot_names),
+    )
+
+    thickness_mm = max(
+        PrinterConfig.LAYER_HEIGHT,
+        float(bounds[1, 2] - bounds[0, 2]),
+    )
+    loop_mesh = create_keychain_loop(
+        width_mm=_coerce_positive_float(ctx.get("loop_width"), 4.0),
+        length_mm=_coerce_positive_float(ctx.get("loop_length"), 8.0),
+        hole_dia_mm=_coerce_positive_float(ctx.get("loop_hole"), 2.5),
+        thickness_mm=thickness_mm,
+        attach_x_mm=attach_x,
+        attach_y_mm=attach_y,
+        angle_deg=_coerce_finite_float(ctx.get("loop_angle"), 0.0),
+    )
+    if loop_mesh is None or len(loop_mesh.vertices) == 0 or len(loop_mesh.faces) == 0:
+        return False
+
+    z_offset = float(bounds[0, 2])
+    if z_offset != 0.0:
+        loop_mesh.vertices[:, 2] += z_offset
+    loop_mesh.visual.face_colors = rgba
+    loop_mesh.metadata["name"] = "Keychain_Loop"
+    if material_name:
+        loop_mesh.metadata["bambu_material_name"] = material_name
+
+    if "Keychain_Loop" in scene.geometry:
+        del scene.geometry["Keychain_Loop"]
+    scene.add_geometry(loop_mesh, node_name="Keychain_Loop", geom_name="Keychain_Loop")
+    preview_colors["Keychain_Loop"] = rgba
+    ctx["loop_added"] = True
+    return True
 
 
 # ===================================================================
@@ -1887,6 +2062,13 @@ def _run_vector_branch(ctx: dict) -> dict:
                     "separate_backing": True,
                 },
             )
+
+        _inject_vector_keychain_loop(
+            ctx,
+            scene,
+            vec_preview_colors,
+            list(vec_slot_list),
+        )
 
         # 1.6 Inject vector Outline mesh.
         # 在 export 之前注入 Outline 节点，几何来源 analysis.matched_shapes union；
