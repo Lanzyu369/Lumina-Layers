@@ -7,7 +7,7 @@ import { useConverterStore } from "../stores/converter";
 import { useWidgetStore } from "../stores/widgetStore";
 import { usePanZoom } from "../hooks/usePanZoom";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
-import apiClient, { downloadResourceBlob } from "../api/client";
+import { buildApiResourceUrl, downloadResourceBlob } from "../api/client";
 import ImageUpload from "./ui/ImageUpload";
 import Slider from "./ui/Slider";
 import Checkbox from "./ui/Checkbox";
@@ -50,51 +50,13 @@ function toVisibleErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
-function isHttpUrl(value: string): boolean {
-  return /^https?:\/\//i.test(value);
-}
-
-function joinUrl(base: string, path: string): string {
-  return `${base.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
-}
-
 /**
  * Build full URL from a relative API file path.
  * In dev mode (frontend :5173, backend :8000), apiClient.defaults.baseURL
  * points to the backend origin, so we prepend it to ensure correct resolution.
  */
 export function buildFileUrl(relativePath: string): string {
-  const base = apiClient.defaults.baseURL ?? "";
-  if (!relativePath) return base;
-  if (isHttpUrl(relativePath)) return relativePath;
-
-  const normalizedPath = relativePath.startsWith("/")
-    ? relativePath
-    : `/${relativePath}`;
-  if (!base) return normalizedPath;
-
-  const normalizedBase = base.replace(/\/+$/, "");
-  const baseIsAbsolute = isHttpUrl(normalizedBase);
-
-  // Backend now returns svg_url as /api/files/<id>; keep it stable.
-  if (normalizedPath.startsWith("/api/")) {
-    if (!baseIsAbsolute && normalizedBase === "/api") {
-      return normalizedPath;
-    }
-    if (baseIsAbsolute) {
-      try {
-        const parsedBase = new URL(normalizedBase);
-        const pathPrefixMatch = parsedBase.pathname.match(/^(.*)\/api$/);
-        const pathPrefixRaw = pathPrefixMatch?.[1] ?? "";
-        const pathPrefix = pathPrefixRaw === "/" ? "" : pathPrefixRaw.replace(/\/+$/, "");
-        return `${parsedBase.origin}${pathPrefix}${normalizedPath}`;
-      } catch {
-        return normalizedPath;
-      }
-    }
-  }
-
-  return joinUrl(normalizedBase, normalizedPath);
+  return buildApiResourceUrl(relativePath);
 }
 
 export default function VectorizerPanel() {

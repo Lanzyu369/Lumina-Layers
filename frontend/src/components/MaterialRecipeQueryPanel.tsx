@@ -6,7 +6,11 @@ import {
   previewMaterialRecipe,
   generateMaterialRecipeSwatch,
 } from "../api/extractor";
-import { apiErrorToVisibleMessage } from "../api/client";
+import {
+  apiErrorToVisibleMessage,
+  buildApiResourceUrl,
+  downloadResourceBlob,
+} from "../api/client";
 import type {
   MaterialRecipeLayer,
   MaterialRecipePreviewResponse,
@@ -124,6 +128,7 @@ export default function MaterialRecipeQueryPanel() {
   const [swatchCols, setSwatchCols] = useState(0);
   const [swatchStructureMode, setSwatchStructureMode] = useState("Single-sided");
   const [isGeneratingSwatch, setIsGeneratingSwatch] = useState(false);
+  const [isDownloadingSwatch, setIsDownloadingSwatch] = useState(false);
   const [swatchDownloadUrl, setSwatchDownloadUrl] = useState<string | null>(null);
   const [swatchPreviewUrl, setSwatchPreviewUrl] = useState<string | null>(null);
   const [collapsedBrandGroupKeys, setCollapsedBrandGroupKeys] = useState<string[]>([]);
@@ -163,6 +168,7 @@ export default function MaterialRecipeQueryPanel() {
     setCollectedRecipes([]);
     setSwatchDownloadUrl(null);
     setSwatchPreviewUrl(null);
+    setError(null);
   }, []);
 
   const handleGenerateSwatch = useCallback(async () => {
@@ -202,12 +208,30 @@ export default function MaterialRecipeQueryPanel() {
     }
   }, [collectedRecipes, swatchBlockSize, swatchGap, swatchCols, swatchStructureMode, t]);
 
-  const handleDownloadSwatch = useCallback(() => {
-    if (swatchDownloadUrl) {
-      const baseUrl = import.meta.env.VITE_API_BASE_URL || "";
-      window.open(`${baseUrl}${swatchDownloadUrl}`, "_blank");
+  const handleDownloadSwatch = useCallback(async () => {
+    if (!swatchDownloadUrl || isDownloadingSwatch) return;
+    setIsDownloadingSwatch(true);
+    setError(null);
+    let objectUrl: string | null = null;
+    try {
+      const blob = await downloadResourceBlob(buildApiResourceUrl(swatchDownloadUrl));
+      objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = objectUrl;
+      anchor.download = "material-recipe-swatch.3mf";
+      anchor.style.display = "none";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+    } catch (err) {
+      setError(resolveMaterialRecipeError(err, t("material_recipe_download_swatch_failed")));
+    } finally {
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+      setIsDownloadingSwatch(false);
     }
-  }, [swatchDownloadUrl]);
+  }, [isDownloadingSwatch, swatchDownloadUrl, t]);
 
   const loadPalette = useCallback(async () => {
     setPaletteLoading(true);
@@ -550,7 +574,9 @@ export default function MaterialRecipeQueryPanel() {
                       />
                       {swatchDownloadUrl ? (
                         <Button
-                          onClick={handleDownloadSwatch}
+                          onClick={() => void handleDownloadSwatch()}
+                          disabled={isDownloadingSwatch}
+                          loading={isDownloadingSwatch}
                           label={t("material_recipe_download_swatch")}
                           variant="secondary"
                         />

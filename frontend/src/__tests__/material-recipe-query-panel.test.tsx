@@ -2,6 +2,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import MaterialRecipeQueryPanel from "../components/MaterialRecipeQueryPanel";
+import { downloadResourceBlob } from "../api/client";
 import {
   generateMaterialRecipeSwatch,
   listGradientCardMaterials,
@@ -17,6 +18,14 @@ vi.mock("../api/extractor", () => ({
   listGradientCardMaterials: vi.fn(),
   previewMaterialRecipe: vi.fn(),
 }));
+
+vi.mock("../api/client", async () => {
+  const actual = await vi.importActual<typeof import("../api/client")>("../api/client");
+  return {
+    ...actual,
+    downloadResourceBlob: vi.fn(),
+  };
+});
 
 const buildLibraryResponse = (count: number) => ({
   status: "ok",
@@ -55,6 +64,7 @@ describe("MaterialRecipeQueryPanel", () => {
       preview_url: "/api/files/material-swatch-preview",
       recipe_count: 1,
     });
+    vi.mocked(downloadResourceBlob).mockResolvedValue(new Blob(["3mf"], { type: "model/3mf" }));
   });
 
   it("renders the empty palette hint when the library has no materials", async () => {
@@ -364,6 +374,132 @@ describe("MaterialRecipeQueryPanel", () => {
     const callArgs = vi.mocked(generateMaterialRecipeSwatch).mock.calls[0][0];
     expect(callArgs.recipes[0].directory_names).toEqual(["mat-1", "mat-0"]);
     expect(callArgs.device_profile_id).toBe("BambuStudio:bbl:bambu-lab-h2d:0.2");
+  });
+
+  it("keeps swatch download failures in the panel with visible language", async () => {
+    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+    vi.mocked(downloadResourceBlob).mockRejectedValueOnce(
+      new Error("Request failed with status code 404"),
+    );
+    vi.mocked(listGradientCardMaterials).mockResolvedValue(buildLibraryResponse(2));
+    vi.mocked(previewMaterialRecipe).mockResolvedValue({
+      status: "ok",
+      layer_count: 2,
+      layer_height_mm: 0.08,
+      substrate: "white",
+      predicted_rgb: [180, 60, 90],
+      predicted_hex: "#B43C5A",
+      layers: [],
+    });
+
+    render(<MaterialRecipeQueryPanel />);
+    await waitFor(() => {
+      expect(screen.getAllByTestId("material-recipe-palette-item").length).toBe(2);
+    });
+
+    const tiles = screen.getAllByTestId("material-recipe-palette-item");
+    fireEvent.click(tiles[0]);
+    fireEvent.click(tiles[1]);
+    fireEvent.click(screen.getByRole("button", { name: /计算混色|Compute color/ }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /添加到队列|Add to queue/ })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /添加到队列|Add to queue/ }));
+    fireEvent.click(screen.getByRole("button", { name: /生成验证色块|Generate swatch/ }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /下载 3MF|Download 3MF/ })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /下载 3MF|Download 3MF/ }));
+
+    await waitFor(() => {
+      expect(downloadResourceBlob).toHaveBeenCalledWith("/api/files/material-swatch");
+    });
+    expect(openSpy).not.toHaveBeenCalled();
+    expect(screen.getByText(/请求的资源不存在或已过期|not found or has expired/i)).toBeInTheDocument();
+    expect(screen.queryByText("Request failed with status code 404")).not.toBeInTheDocument();
+
+    openSpy.mockRestore();
+  });
+
+  it("downloads the material recipe swatch through a blob URL", async () => {
+    const clickSpy = vi.fn();
+    const removeSpy = vi.fn();
+    const anchor = document.createElement("a");
+    anchor.click = clickSpy;
+    anchor.remove = removeSpy;
+    const createElementSpy = vi
+      .spyOn(document, "createElement")
+      .mockImplementation((tagName: string, options?: ElementCreationOptions) => {
+        if (tagName.toLowerCase() === "a") {
+          return anchor;
+        }
+        return Document.prototype.createElement.call(document, tagName, options);
+      });
+    const appendSpy = vi.spyOn(document.body, "appendChild");
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: vi.fn(() => "blob:material-swatch"),
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: vi.fn(),
+    });
+    vi.mocked(listGradientCardMaterials).mockResolvedValue(buildLibraryResponse(2));
+    vi.mocked(previewMaterialRecipe).mockResolvedValue({
+      status: "ok",
+      layer_count: 2,
+      layer_height_mm: 0.08,
+      substrate: "white",
+      predicted_rgb: [180, 60, 90],
+      predicted_hex: "#B43C5A",
+      layers: [],
+    });
+
+    render(<MaterialRecipeQueryPanel />);
+    await waitFor(() => {
+      expect(screen.getAllByTestId("material-recipe-palette-item").length).toBe(2);
+    });
+
+    const tiles = screen.getAllByTestId("material-recipe-palette-item");
+    fireEvent.click(tiles[0]);
+    fireEvent.click(tiles[1]);
+    fireEvent.click(screen.getByRole("button", { name: /计算混色|Compute color/ }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /添加到队列|Add to queue/ })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /添加到队列|Add to queue/ }));
+    fireEvent.click(screen.getByRole("button", { name: /生成验证色块|Generate swatch/ }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /下载 3MF|Download 3MF/ })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /下载 3MF|Download 3MF/ }));
+
+    await waitFor(() => {
+      expect(clickSpy).toHaveBeenCalledOnce();
+    });
+    expect(downloadResourceBlob).toHaveBeenCalledWith("/api/files/material-swatch");
+    expect(anchor.href).toBe("blob:material-swatch");
+    expect(anchor.download).toBe("material-recipe-swatch.3mf");
+    expect(appendSpy).toHaveBeenCalledWith(anchor);
+    expect(removeSpy).toHaveBeenCalledOnce();
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:material-swatch");
+
+    createElementSpy.mockRestore();
+    appendSpy.mockRestore();
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: originalCreateObjectURL,
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: originalRevokeObjectURL,
+    });
   });
 
   it("disables reverse button when fewer than two layers are present", async () => {

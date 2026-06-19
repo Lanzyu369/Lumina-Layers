@@ -16,6 +16,47 @@ const apiClient = axios.create({
   timeout: 3_600_000,
 });
 
+function isHttpUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value);
+}
+
+function joinUrl(base: string, path: string): string {
+  return `${base.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
+}
+
+export function buildApiResourceUrl(relativePath: string): string {
+  const base = apiClient.defaults.baseURL ?? "";
+  if (!relativePath) return base;
+  if (isHttpUrl(relativePath)) return relativePath;
+
+  const normalizedPath = relativePath.startsWith("/")
+    ? relativePath
+    : `/${relativePath}`;
+  if (!base) return normalizedPath;
+
+  const normalizedBase = base.replace(/\/+$/, "");
+  const baseIsAbsolute = isHttpUrl(normalizedBase);
+
+  if (normalizedPath.startsWith("/api/")) {
+    if (!baseIsAbsolute && normalizedBase === "/api") {
+      return normalizedPath;
+    }
+    if (baseIsAbsolute) {
+      try {
+        const parsedBase = new URL(normalizedBase);
+        const pathPrefixMatch = parsedBase.pathname.match(/^(.*)\/api$/);
+        const pathPrefixRaw = pathPrefixMatch?.[1] ?? "";
+        const pathPrefix = pathPrefixRaw === "/" ? "" : pathPrefixRaw.replace(/\/+$/, "");
+        return `${parsedBase.origin}${pathPrefix}${normalizedPath}`;
+      } catch {
+        return normalizedPath;
+      }
+    }
+  }
+
+  return joinUrl(normalizedBase, normalizedPath);
+}
+
 function isServerErrorStatus(statusCode: number | null): boolean {
   return typeof statusCode === "number" && statusCode >= 500;
 }

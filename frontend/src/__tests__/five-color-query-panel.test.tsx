@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import FiveColorQueryPanel from "../components/FiveColorQueryPanel";
+import { downloadResourceBlob } from "../api/client";
 import { useFiveColorStore } from "../stores/fiveColorStore";
 import { useConverterStore } from "../stores/converter";
 import { translations } from "../i18n/translations";
@@ -16,6 +17,14 @@ vi.mock("../api/fiveColor", () => ({
   matchFiveColorByHex: vi.fn(),
   generateRecipeSwatch: vi.fn(),
 }));
+
+vi.mock("../api/client", async () => {
+  const actual = await vi.importActual<typeof import("../api/client")>("../api/client");
+  return {
+    ...actual,
+    downloadResourceBlob: vi.fn(),
+  };
+});
 
 import { matchFiveColorByHex } from "../api/fiveColor";
 
@@ -119,6 +128,7 @@ describe("FiveColorQueryPanel target color match", () => {
       lutList: ["test-lut"],
       fetchLutList: vi.fn(),
     });
+    vi.mocked(downloadResourceBlob).mockResolvedValue(new Blob(["3mf"], { type: "model/3mf" }));
   });
 
   it("accepts a hex value, matches a recipe, and renders coordinate plus neighborhood", async () => {
@@ -425,5 +435,105 @@ describe("FiveColorQueryPanel target color match", () => {
 
     expect(screen.getByText("五色操作失败")).toBeInTheDocument();
     expect(screen.queryByText("Request failed with status code 500")).not.toBeInTheDocument();
+  });
+
+  it("keeps swatch download failures in the panel with visible language", async () => {
+    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+    vi.mocked(downloadResourceBlob).mockRejectedValueOnce(
+      new Error("Request failed with status code 404"),
+    );
+    useFiveColorStore.setState({
+      collectedRecipes: [
+        {
+          id: "recipe-1",
+          selectedIndices: [0, 1, 2, 3, 4],
+          resultHex: "#F00A00",
+          baseColorNames: ["Red", "Green", "Blue", "Yellow", "White"],
+          baseColorHexes: ["#FF0000", "#00FF00", "#0000FF", "#FFFF00", "#FFFFFF"],
+          label: "Recipe 1",
+        },
+      ],
+      swatchDownloadUrl: "/api/files/five-color-swatch",
+      swatchPreviewUrl: "/api/files/five-color-swatch-preview",
+    });
+
+    render(<FiveColorQueryPanel />);
+
+    fireEvent.click(screen.getByRole("button", { name: /下载色卡|Download swatch/ }));
+
+    await waitFor(() => {
+      expect(downloadResourceBlob).toHaveBeenCalledWith("/api/files/five-color-swatch");
+    });
+    expect(openSpy).not.toHaveBeenCalled();
+    expect(screen.getByText(/请求的资源不存在或已过期|not found or has expired/i)).toBeInTheDocument();
+    expect(screen.queryByText("Request failed with status code 404")).not.toBeInTheDocument();
+
+    openSpy.mockRestore();
+  });
+
+  it("downloads the five-color swatch through a blob URL", async () => {
+    const clickSpy = vi.fn();
+    const removeSpy = vi.fn();
+    const anchor = document.createElement("a");
+    anchor.click = clickSpy;
+    anchor.remove = removeSpy;
+    const createElementSpy = vi
+      .spyOn(document, "createElement")
+      .mockImplementation((tagName: string, options?: ElementCreationOptions) => {
+        if (tagName.toLowerCase() === "a") {
+          return anchor;
+        }
+        return Document.prototype.createElement.call(document, tagName, options);
+      });
+    const appendSpy = vi.spyOn(document.body, "appendChild");
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: vi.fn(() => "blob:five-color-swatch"),
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: vi.fn(),
+    });
+    useFiveColorStore.setState({
+      collectedRecipes: [
+        {
+          id: "recipe-1",
+          selectedIndices: [0, 1, 2, 3, 4],
+          resultHex: "#F00A00",
+          baseColorNames: ["Red", "Green", "Blue", "Yellow", "White"],
+          baseColorHexes: ["#FF0000", "#00FF00", "#0000FF", "#FFFF00", "#FFFFFF"],
+          label: "Recipe 1",
+        },
+      ],
+      swatchDownloadUrl: "/api/files/five-color-swatch",
+      swatchPreviewUrl: "/api/files/five-color-swatch-preview",
+    });
+
+    render(<FiveColorQueryPanel />);
+
+    fireEvent.click(screen.getByRole("button", { name: /下载色卡|Download swatch/ }));
+
+    await waitFor(() => {
+      expect(clickSpy).toHaveBeenCalledOnce();
+    });
+    expect(downloadResourceBlob).toHaveBeenCalledWith("/api/files/five-color-swatch");
+    expect(anchor.href).toBe("blob:five-color-swatch");
+    expect(anchor.download).toBe("five-color-swatch.3mf");
+    expect(appendSpy).toHaveBeenCalledWith(anchor);
+    expect(removeSpy).toHaveBeenCalledOnce();
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:five-color-swatch");
+
+    createElementSpy.mockRestore();
+    appendSpy.mockRestore();
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: originalCreateObjectURL,
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: originalRevokeObjectURL,
+    });
   });
 });

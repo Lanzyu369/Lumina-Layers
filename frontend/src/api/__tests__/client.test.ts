@@ -13,6 +13,7 @@ import { useSettingsStore } from "../../stores/settingsStore";
 import apiClient, {
   apiErrorToVisibleMessage,
   assertResourceDownloadAvailable,
+  buildApiResourceUrl,
   downloadResourceBlob,
 } from "../client";
 
@@ -26,6 +27,7 @@ describe("apiClient", () => {
     vi.clearAllMocks();
     useActionHistoryStore.getState()._resetForTests();
     useSettingsStore.setState({ language: "en" });
+    apiClient.defaults.baseURL = "/api";
   });
 
   afterEach(() => {
@@ -502,6 +504,20 @@ describe("apiClient", () => {
       );
       expect(message).not.toMatch(/Network Error|Failed to fetch|timeout of/i);
     }
+  });
+
+  it("builds resource URLs without double-prefixing API file paths", () => {
+    expect(buildApiResourceUrl("/api/files/model.3mf")).toBe("/api/files/model.3mf");
+    expect(buildApiResourceUrl("/files/model.3mf")).toBe("/api/files/model.3mf");
+
+    apiClient.defaults.baseURL = "https://host.example/lumina/api";
+
+    expect(buildApiResourceUrl("/api/files/model.3mf")).toBe(
+      "https://host.example/lumina/api/files/model.3mf",
+    );
+    expect(buildApiResourceUrl("files/model.3mf")).toBe(
+      "https://host.example/lumina/api/files/model.3mf",
+    );
   });
 
   it("turns failed resource downloads into readable errors", async () => {
