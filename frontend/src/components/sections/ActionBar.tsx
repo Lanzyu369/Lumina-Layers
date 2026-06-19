@@ -29,9 +29,24 @@ import WikiTooltip from "../ui/WikiTooltip"
 import { resolvePreviewHoverPixel } from "./actionBarHoverUtils"
 import { useI18n } from "../../i18n/context"
 import { useWorkspaceMode } from "../../hooks/useWorkspaceMode"
+import { apiErrorToVisibleMessage } from "../../api/client"
 import { exportShareCard, exportSidecar } from "../../recipe/importFlow"
 
 const EMPTY_LAYER_IMAGES: { layer_index: number; name: string; url: string }[] = []
+const EXPORT_NO_IMAGE_MESSAGE = "No image file loaded"
+const EXPORT_NO_PREVIEW_MESSAGE = "No preview available — please generate a preview first"
+
+function resolveRecipeExportError(error: unknown, t: (key: string) => string): string {
+  if (error instanceof Error) {
+    if (error.message === EXPORT_NO_IMAGE_MESSAGE) {
+      return t("recipe_export_error_no_image")
+    }
+    if (error.message === EXPORT_NO_PREVIEW_MESSAGE) {
+      return t("recipe_export_error_no_preview")
+    }
+  }
+  return apiErrorToVisibleMessage(error, t("recipe_export_error_unknown"))
+}
 
 export default function ActionBar() {
   const SURFACE_CACHE_LIMIT = 256
@@ -720,7 +735,7 @@ export default function ActionBar() {
                     exportShareCard()
                       .then(() => setExportError(null))
                       .catch((err: unknown) => {
-                        setExportError(err instanceof Error ? err.message : "Export failed")
+                        setExportError(resolveRecipeExportError(err, t))
                       })
                       .finally(() => setIsExporting(false))
                   }}
@@ -737,7 +752,7 @@ export default function ActionBar() {
                     exportSidecar()
                       .then(() => setExportError(null))
                       .catch((err: unknown) => {
-                        setExportError(err instanceof Error ? err.message : "Export failed")
+                        setExportError(resolveRecipeExportError(err, t))
                       })
                       .finally(() => setIsExporting(false))
                   }}

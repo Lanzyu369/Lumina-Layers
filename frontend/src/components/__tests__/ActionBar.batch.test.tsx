@@ -1,8 +1,9 @@
 import type { ReactNode } from "react";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useConverterStore } from "../../stores/converter";
 import { buildLayerImagesSourceKey } from "../../stores/converter/store";
+import * as recipeImportFlow from "../../recipe/importFlow";
 import ActionBar from "../sections/ActionBar";
 
 let capturedCanvasPreviewSurfaceProps: Record<string, unknown> | null = null;
@@ -31,6 +32,11 @@ vi.mock("../ui/CanvasPreviewSurface", () => ({
       </div>
     );
   },
+}));
+
+vi.mock("../../recipe/importFlow", () => ({
+  exportShareCard: vi.fn(),
+  exportSidecar: vi.fn(),
 }));
 
 function makeFile(name: string, type = "image/png"): File {
@@ -66,6 +72,8 @@ describe("ActionBar — auto batch mode", () => {
       threemfDiskPath: null,
       downloadUrl: null,
     });
+    vi.mocked(recipeImportFlow.exportShareCard).mockResolvedValue(undefined);
+    vi.mocked(recipeImportFlow.exportSidecar).mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -499,6 +507,32 @@ describe("ActionBar — auto batch mode", () => {
     render(<ActionBar />);
 
     expect(capturedCanvasPreviewSurfaceProps?.src).toBe("/api/files/preview-raw.png");
+  });
+
+  it("shows readable share-card export failures instead of raw HTTP status text", async () => {
+    vi.mocked(recipeImportFlow.exportShareCard).mockRejectedValueOnce(
+      new Error("Request failed with status code 500"),
+    );
+
+    useConverterStore.setState({
+      batchMode: false,
+      imageFile: makeFile("preview.png"),
+      lut_name: "test_lut",
+      sessionId: "session-1",
+      previewImageUrl: "/api/files/preview.png",
+      previewBaseImageUrl: "/api/files/preview.png",
+      layerImages: [],
+      layerImagesLoading: false,
+    });
+
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "导出分享卡" }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/导出失败：服务器发生内部错误。请使用请求 ID 查看日志。/)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/Request failed with status code 500/)).not.toBeInTheDocument();
   });
 
   it("refetches layer images when the 2D preview changes within the same session", async () => {
