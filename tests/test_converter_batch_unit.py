@@ -1305,8 +1305,11 @@ class TestBatchMergeFlow:
             intermediate_paths.append(wr["preview_glb_path"])
             intermediate_paths.append(wr["metadata_sidecar_path"])
 
+        private_path = "/Users/min/private/batch-output/merged.3mf"
+        raw_error_message = f"cannot write {private_path}: Permission denied"
+
         def _failing_3mf_write(self, items, output_path, *, plate_width_mm, plate_depth_mm):
-            raise MergedWriteError("Simulated 3MF write failure")
+            raise MergedWriteError(raw_error_message)
 
         # Capture _safe_log calls to verify structured log emission
         log_calls: list[tuple] = []
@@ -1344,6 +1347,13 @@ class TestBatchMergeFlow:
 
         # HTTP 500
         assert response.status_code == 500
+        assert response.json()["detail"] == (
+            "Batch 3MF merge failed. Try again or check the server log for details."
+        )
+        assert private_path not in response.text
+        assert "Permission denied" not in response.text
+        assert "Batch merge failed at stage=" not in response.text
+        assert "merge_3mf" not in response.text
 
         # Verify structured log: batch_merge_3mf_failed with stage=="merge_3mf"
         error_logs = [
@@ -1359,6 +1369,8 @@ class TestBatchMergeFlow:
         assert level == "error"
         assert fields["stage"] == "merge_3mf"
         assert fields["error_type"] == "MergedWriteError"
+        assert private_path in fields["error_message"]
+        assert "Permission denied" in fields["error_message"]
 
         # No residual intermediate temp files (P12)
         for p in intermediate_paths:

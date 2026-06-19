@@ -104,6 +104,9 @@ BATCH_PREVIEW_LIMIT_FALLBACK_MESSAGE: str = (
     "3D preview automatically shows the first models that fit on the current "
     "print bed."
 )
+BATCH_MERGE_FAILED_DETAIL: str = (
+    "Batch 3MF merge failed. Try again or check the server log for details."
+)
 MODEL_GENERATION_FAILED_DETAIL: str = (
     "3MF generation failed. Re-run preview and try generating the model again."
 )
@@ -2493,7 +2496,7 @@ async def convert_batch(
         _remove_temp_path(temp_native_bundle_path)
         raise HTTPException(
             status_code=500,
-            detail=f"Batch merge failed at stage={stage}: {exc}",
+            detail=BATCH_MERGE_FAILED_DETAIL,
         )
 
     # Success path: cleanup intermediate files
