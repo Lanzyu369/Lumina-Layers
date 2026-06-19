@@ -233,6 +233,7 @@ CONVERTER_STRUCTURED_EVENTS = {
     # 边车写入失败的 WARNING 事件。
     "material_usage_record_failed",
     # Batch merge 3MF structured events (批量合并 3MF 流程日志)
+    "converter_batch_item_failed",
     "batch_merge_3mf_init",
     "batch_merge_3mf_done",
     "batch_merge_plate_overflow_warning",
