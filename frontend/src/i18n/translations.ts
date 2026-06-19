@@ -3858,6 +3858,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "仅支持 JPG/PNG/SVG/WebP/HEIC 格式",
     en: "Only JPG/PNG/SVG/WebP/HEIC formats are supported",
   },
+  converter_raw_preview_failed: {
+    zh: "RAW 图片预览失败：{error}。请检查后端 RAW 支持或换用 PNG/JPG 后重试。",
+    en: "RAW image preview failed: {error}. Check backend RAW support or retry with a PNG/JPG file.",
+  },
 
   // ==================== Large Format Mode ====================
   slicer_download_zip: {
