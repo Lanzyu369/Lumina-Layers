@@ -1853,6 +1853,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "打印机型号",
     en: "Printer Model",
   },
+  "settings.printer_options_load_failed": {
+    zh: "打印机列表加载失败：{error}",
+    en: "Failed to load printer options: {error}",
+  },
+  "settings.slicer_options_load_failed": {
+    zh: "切片器列表加载失败：{error}",
+    en: "Failed to load slicer options: {error}",
+  },
   "settings.bed_size": {
     zh: "打印床尺寸",
     en: "Bed Size",

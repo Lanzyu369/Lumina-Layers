@@ -4,9 +4,10 @@
  */
 
 import { motion } from "framer-motion";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useI18n } from "../i18n/context";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
+import { apiErrorToVisibleMessage } from "../api/client";
 import { clearCache, getMachineRegistryAssetUrl, getPrinters, getSlicers } from "../api/system";
 import {
   SVG_PIXELS_PER_MM_DEFAULT,
@@ -45,6 +46,13 @@ import {
 
 const SETTINGS_OPTIONS_RETRY_ATTEMPTS = 6;
 const SETTINGS_OPTIONS_RETRY_DELAY_MS = 1000;
+const SETTINGS_OPTIONS_NOT_CANCELLED = () => false;
+
+type CancellationCheck = () => boolean;
+
+function formatSettingsOptionsLoadError(template: string, error: unknown): string {
+  return template.replace("{error}", apiErrorToVisibleMessage(error));
+}
 
 function getMachinePlaceholderLabel(printer: PrinterInfo): string {
   const compactBrand = printer.brand.replace(/\s+/g, "");
@@ -62,10 +70,12 @@ export default function SettingsPanel() {
   // Printer list state (task 5.2)
   const [printers, setPrinters] = useState<PrinterInfo[]>([]);
   const [printersLoading, setPrintersLoading] = useState(true);
+  const [printerOptionsError, setPrinterOptionsError] = useState<string | null>(null);
 
   // Slicer list state
   const [slicers, setSlicers] = useState<SlicerOption[]>([]);
   const [slicersLoading, setSlicersLoading] = useState(true);
+  const [slicerOptionsError, setSlicerOptionsError] = useState<string | null>(null);
 
   // Store state (task 5.3)
   const printerModel = useSettingsStore((s) => s.printerModel);
@@ -124,42 +134,69 @@ export default function SettingsPanel() {
     setCustomSlicerPathInput(customSlicerPath);
   }, [customSlicerPath]);
 
-  // Load printers and slicers on mount
+  const loadPrinterOptions = useCallback(async (
+    isCancelled: CancellationCheck = SETTINGS_OPTIONS_NOT_CANCELLED,
+  ) => {
+    setPrintersLoading(true);
+    setPrinterOptionsError(null);
+    try {
+      const list = await retryAsync(getPrinters, {
+        attempts: SETTINGS_OPTIONS_RETRY_ATTEMPTS,
+        delayMs: SETTINGS_OPTIONS_RETRY_DELAY_MS,
+      });
+      if (!isCancelled()) {
+        setPrinters(list);
+      }
+    } catch (error) {
+      console.warn("[SettingsPanel] Failed to load printer options", error);
+      if (!isCancelled()) {
+        setPrinterOptionsError(
+          formatSettingsOptionsLoadError(t("settings.printer_options_load_failed"), error),
+        );
+      }
+    } finally {
+      if (!isCancelled()) {
+        setPrintersLoading(false);
+      }
+    }
+  }, [t]);
+
+  const loadSlicerOptions = useCallback(async (
+    isCancelled: CancellationCheck = SETTINGS_OPTIONS_NOT_CANCELLED,
+  ) => {
+    setSlicersLoading(true);
+    setSlicerOptionsError(null);
+    try {
+      const list = await retryAsync(getSlicers, {
+        attempts: SETTINGS_OPTIONS_RETRY_ATTEMPTS,
+        delayMs: SETTINGS_OPTIONS_RETRY_DELAY_MS,
+      });
+      if (!isCancelled()) {
+        setSlicers(list);
+      }
+    } catch (error) {
+      console.warn("[SettingsPanel] Failed to load slicer options", error);
+      if (!isCancelled()) {
+        setSlicerOptionsError(
+          formatSettingsOptionsLoadError(t("settings.slicer_options_load_failed"), error),
+        );
+      }
+    } finally {
+      if (!isCancelled()) {
+        setSlicersLoading(false);
+      }
+    }
+  }, [t]);
+
+  // Load printers and slicers on mount.
   useEffect(() => {
     let cancelled = false;
-    setPrintersLoading(true);
-    setSlicersLoading(true);
 
-    void retryAsync(getPrinters, {
-      attempts: SETTINGS_OPTIONS_RETRY_ATTEMPTS,
-      delayMs: SETTINGS_OPTIONS_RETRY_DELAY_MS,
-    })
-      .then((list) => {
-        if (!cancelled) setPrinters(list);
-      })
-      .catch((error) => {
-        console.warn("[SettingsPanel] Failed to load printer options", error);
-      })
-      .finally(() => {
-        if (!cancelled) setPrintersLoading(false);
-      });
-
-    void retryAsync(getSlicers, {
-      attempts: SETTINGS_OPTIONS_RETRY_ATTEMPTS,
-      delayMs: SETTINGS_OPTIONS_RETRY_DELAY_MS,
-    })
-      .then((list) => {
-        if (!cancelled) setSlicers(list);
-      })
-      .catch((error) => {
-        console.warn("[SettingsPanel] Failed to load slicer options", error);
-      })
-      .finally(() => {
-        if (!cancelled) setSlicersLoading(false);
-      });
+    void loadPrinterOptions(() => cancelled);
+    void loadSlicerOptions(() => cancelled);
 
     return () => { cancelled = true; };
-  }, []);
+  }, [loadPrinterOptions, loadSlicerOptions]);
 
   const resolvedSlicerSoftware = resolveSlicerOptionId(slicerSoftware, slicers);
   const resolvedPrinterModel = resolvePrinterOptionId(
@@ -375,6 +412,40 @@ export default function SettingsPanel() {
             {t("settings.printer_model")}
           </h4>
         </div>
+        {slicerOptionsError && (
+          <StatusBanner
+            role="alert"
+            tone="error"
+            action={(
+              <Button
+                label={t("widget_retry")}
+                variant="secondary"
+                size="sm"
+                loading={slicersLoading}
+                onClick={() => { void loadSlicerOptions(); }}
+              />
+            )}
+          >
+            {slicerOptionsError}
+          </StatusBanner>
+        )}
+        {printerOptionsError && (
+          <StatusBanner
+            role="alert"
+            tone="error"
+            action={(
+              <Button
+                label={t("widget_retry")}
+                variant="secondary"
+                size="sm"
+                loading={printersLoading}
+                onClick={() => { void loadPrinterOptions(); }}
+              />
+            )}
+          >
+            {printerOptionsError}
+          </StatusBanner>
+        )}
         <div className="grid gap-4">
           <div>
             <Dropdown
