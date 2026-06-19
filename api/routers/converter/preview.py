@@ -81,6 +81,9 @@ log = get_logger(__name__)
 _PREVIEW_GENERATION_FAILED_DETAIL = (
     "Preview generation failed. Re-run preview and try again."
 )
+AUTO_DETECT_COLORS_FAILED_DETAIL = (
+    "颜色分析失败，请重新上传图片，或手动设置颜色数后继续。"
+)
 LARGE_FORMAT_SVG_PREVIEW_CACHE_MAX_BYTES_ENV = (
     "LUMINA_LARGE_FORMAT_SVG_PREVIEW_CACHE_MAX_BYTES"
 )
@@ -335,6 +338,24 @@ def _cleanup_pre_session_temp_paths(*paths: str | None) -> None:
             )
 
 
+def _cleanup_auto_detect_tempfile(temp_path: str) -> None:
+    """Best-effort cleanup for sessionless auto-detect uploads."""
+
+    try:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+    except OSError as exc:
+        log.warning(
+            "Failed to clean auto-detect temp file",
+            extra={
+                "event": "converter_auto_detect_temp_cleanup_failed",
+                "path": temp_path,
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+
+
 def _rollback_preview_session_after_failure(
     *,
     session_id: str,
@@ -516,11 +537,23 @@ async def auto_detect_colors(
     temp_path = await ensure_png_tempfile(image)
     try:
         result = ImagePreprocessor.analyze_recommended_colors(temp_path, target_width_mm)
-    except (ValueError, TypeError, OSError, RuntimeError) as e:
-        raise HTTPException(status_code=422, detail=f"颜色分析失败: {e}")
+    except (ValueError, TypeError, OSError, RuntimeError) as exc:
+        log.warning(
+            "Auto-detect color count failed",
+            extra={
+                "event": "converter_auto_detect_colors_failed",
+                "image_filename": image.filename or "",
+                "target_width_mm": target_width_mm,
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+        raise HTTPException(
+            status_code=422,
+            detail=AUTO_DETECT_COLORS_FAILED_DETAIL,
+        ) from exc
     finally:
-        if os.path.exists(temp_path):
-            os.unlink(temp_path)
+        _cleanup_auto_detect_tempfile(temp_path)
     log.info(
         "Auto-detected color count",
         extra={

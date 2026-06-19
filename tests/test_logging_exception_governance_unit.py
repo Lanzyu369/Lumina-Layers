@@ -228,6 +228,8 @@ CONVERTER_STRUCTURED_EVENTS = {
     "converter_puzzle_layout_preview_done",
     "converter_puzzle_generate_done",
     "converter_auto_detect_colors_done",
+    "converter_auto_detect_colors_failed",
+    "converter_auto_detect_temp_cleanup_failed",
     "converter_cleanup_session_files_done",
     # Auxiliary material-archive usage tracking. The success path has no
     # dedicated event (per-archive bookkeeping piggybacks on the existing
