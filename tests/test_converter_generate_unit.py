@@ -2044,7 +2044,13 @@ class TestLargeFormatDimensionsAndRouting:
 
     def test_large_format_svg_native_worker_error_returns_500(self) -> None:
         sid, _svg_path, _lut_path = _create_svg_session(_test_store, native_tiling_supported=True)
-        _mock_pool.submit = AsyncMock(side_effect=ValueError("tile analysis failed"))
+        private_path = "/Users/min/private/source.svg"
+        raw_error_message = f"cannot read {private_path}: Permission denied"
+        log_calls: list[tuple[str, str, dict[str, object]]] = []
+        _mock_pool.submit = AsyncMock(side_effect=ValueError(raw_error_message))
+
+        def _capturing_safe_log(level: str, event: str, **fields: object) -> None:
+            log_calls.append((level, event, fields))
 
         payload = {
             "session_id": sid,
@@ -2060,11 +2066,32 @@ class TestLargeFormatDimensionsAndRouting:
             },
         }
 
-        response = client.post("/api/convert/generate-large-format", json=payload)
+        with patch(
+            "api.routers.converter.generate._safe_log",
+            side_effect=_capturing_safe_log,
+        ):
+            response = client.post("/api/convert/generate-large-format", json=payload)
 
         assert response.status_code == 500
-        assert "large-format svg generation failed" in response.json()["detail"].lower()
-        assert "tile analysis failed" in response.json()["detail"].lower()
+        assert response.json()["detail"] == (
+            "Large-format generation failed. Try again or check the server log for details."
+        )
+        assert private_path not in response.text
+        assert "Permission denied" not in response.text
+        assert "Large-format SVG generation failed" not in response.text
+        failure_logs = [
+            (level, fields)
+            for level, event, fields in log_calls
+            if event == "converter_large_format_failed"
+        ]
+        assert len(failure_logs) == 1
+        level, fields = failure_logs[0]
+        assert level == "error"
+        assert fields["session_id"] == sid
+        assert fields["failure_kind"] == "svg_native_worker"
+        assert fields["error_type"] == "ValueError"
+        assert private_path in str(fields["error_message"])
+        assert "Permission denied" in str(fields["error_message"])
 
     def test_large_format_raster_helper_writes_sanitized_zip_entry_names(self) -> None:
         fd_img, image_path = tempfile.mkstemp(suffix=".png")
@@ -2316,6 +2343,10 @@ class TestLargeFormatDimensionsAndRouting:
         os.close(fd_img)
         fd_lut, lut_path = tempfile.mkstemp(suffix=".npy")
         os.close(fd_lut)
+        log_calls: list[tuple[str, str, dict[str, object]]] = []
+
+        def _capturing_safe_log(level: str, event: str, **fields: object) -> None:
+            log_calls.append((level, event, fields))
 
         Image.fromarray(np.zeros((10, 10, 3), dtype=np.uint8)).save(image_path)
         with open(lut_path, "wb") as lut_file:
@@ -2332,7 +2363,13 @@ class TestLargeFormatDimensionsAndRouting:
         )
 
         try:
-            with pytest.raises(HTTPException) as exc_info:
+            with (
+                patch(
+                    "api.routers.converter.generate._safe_log",
+                    side_effect=_capturing_safe_log,
+                ),
+                pytest.raises(HTTPException) as exc_info,
+            ):
                 asyncio.run(
                     _generate_large_format_raster(
                         image_path=image_path,
@@ -2355,11 +2392,292 @@ class TestLargeFormatDimensionsAndRouting:
                 )
 
             assert exc_info.value.status_code == 500
-            assert "All tiles failed" in str(exc_info.value.detail)
-            assert "generation timed out" in str(exc_info.value.detail)
+            assert exc_info.value.detail == (
+                "Large-format generation failed. Try again or check the server log for details."
+            )
+            assert "All tiles failed" not in str(exc_info.value.detail)
+            assert "generation timed out" not in str(exc_info.value.detail)
+            failure_logs = [
+                (level, fields)
+                for level, event, fields in log_calls
+                if event == "converter_large_format_failed"
+            ]
+            assert len(failure_logs) == 1
+            level, fields = failure_logs[0]
+            assert level == "error"
+            assert fields["session_id"] == sid
+            assert fields["failure_kind"] == "tile_failed"
+            assert fields["error_type"] == "LargeFormatTileFailure"
+            assert "generation timed out" in str(fields["error_message"])
         finally:
             store.clear_all()
             for path in (image_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    def test_large_format_raster_all_tile_failure_sanitizes_status_message(self) -> None:
+        fd_img, image_path = tempfile.mkstemp(suffix=".png")
+        os.close(fd_img)
+        fd_lut, lut_path = tempfile.mkstemp(suffix=".npy")
+        os.close(fd_lut)
+        private_path = "/Users/min/private/tile-R1C1.3mf"
+        log_calls: list[tuple[str, str, dict[str, object]]] = []
+
+        def _capturing_safe_log(level: str, event: str, **fields: object) -> None:
+            log_calls.append((level, event, fields))
+
+        Image.fromarray(np.zeros((10, 10, 3), dtype=np.uint8)).save(image_path)
+        with open(lut_path, "wb") as lut_file:
+            lut_file.write(b"lut")
+
+        store = SessionStore(ttl=1800)
+        registry = FileRegistry()
+        sid = store.create()
+        mock_pool = MagicMock(spec=WorkerPoolManager)
+        mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": None,
+                "status_msg": f"cannot write {private_path}: Permission denied",
+            }
+        )
+        request = LargeFormatConvertGenerateRequest(
+            lut_name="test_lut",
+            modeling_mode=ModelingMode.HIGH_FIDELITY,
+        )
+
+        try:
+            with (
+                patch(
+                    "api.routers.converter.generate._safe_log",
+                    side_effect=_capturing_safe_log,
+                ),
+                pytest.raises(HTTPException) as exc_info,
+            ):
+                asyncio.run(
+                    _generate_large_format_raster(
+                        image_path=image_path,
+                        lut_path=lut_path,
+                        source_basename="poster",
+                        recipe_overrides=None,
+                        recipe_override_masks_path=None,
+                        material_matrix_path=None,
+                        total_width_mm=40.0,
+                        total_height_mm=40.0,
+                        tile_width_mm=40.0,
+                        tile_height_mm=40.0,
+                        request=request,
+                        session_data={},
+                        sid=sid,
+                        store=store,
+                        registry=registry,
+                        pool=mock_pool,
+                    )
+                )
+
+            assert exc_info.value.status_code == 500
+            assert exc_info.value.detail == (
+                "Large-format generation failed. Try again or check the server log for details."
+            )
+            detail = str(exc_info.value.detail)
+            assert private_path not in detail
+            assert "Permission denied" not in detail
+            assert "All tiles failed" not in detail
+            failure_logs = [
+                (level, fields)
+                for level, event, fields in log_calls
+                if event == "converter_large_format_failed"
+            ]
+            assert len(failure_logs) == 1
+            level, fields = failure_logs[0]
+            assert level == "error"
+            assert fields["session_id"] == sid
+            assert fields["failure_kind"] == "tile_failed"
+            assert fields["error_type"] == "LargeFormatTileFailure"
+            assert private_path in str(fields["error_message"])
+            assert "Permission denied" in str(fields["error_message"])
+        finally:
+            store.clear_all()
+            for path in (image_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    def test_large_format_recipe_override_matrix_load_failure_is_sanitized(self) -> None:
+        fd_img, image_path = tempfile.mkstemp(suffix=".png")
+        os.close(fd_img)
+        fd_lut, lut_path = tempfile.mkstemp(suffix=".npy")
+        os.close(fd_lut)
+        private_path = "/Users/min/private/material-matrix.npy"
+        log_calls: list[tuple[str, str, dict[str, object]]] = []
+
+        def _capturing_safe_log(level: str, event: str, **fields: object) -> None:
+            log_calls.append((level, event, fields))
+
+        Image.fromarray(np.zeros((10, 10, 3), dtype=np.uint8)).save(image_path)
+        with open(lut_path, "wb") as lut_file:
+            lut_file.write(b"lut")
+
+        store = SessionStore(ttl=1800)
+        registry = FileRegistry()
+        request = LargeFormatConvertGenerateRequest(
+            lut_name="test_lut",
+            modeling_mode=ModelingMode.HIGH_FIDELITY,
+        )
+
+        try:
+            with (
+                patch(
+                    "api.routers.converter.generate.np.load",
+                    side_effect=OSError(
+                        f"cannot load {private_path}: Permission denied"
+                    ),
+                ),
+                patch(
+                    "api.routers.converter.generate._safe_log",
+                    side_effect=_capturing_safe_log,
+                ),
+                pytest.raises(HTTPException) as exc_info,
+            ):
+                asyncio.run(
+                    _generate_large_format_raster(
+                        image_path=image_path,
+                        lut_path=lut_path,
+                        source_basename="poster",
+                        recipe_overrides=[
+                            {"region_id": "r1", "recipe": [1, 1, 1, 1, 1]},
+                        ],
+                        recipe_override_masks_path=None,
+                        material_matrix_path=private_path,
+                        total_width_mm=40.0,
+                        total_height_mm=40.0,
+                        tile_width_mm=40.0,
+                        tile_height_mm=40.0,
+                        request=request,
+                        session_data={},
+                        sid="large-format-session",
+                        store=store,
+                        registry=registry,
+                        pool=MagicMock(spec=WorkerPoolManager),
+                    )
+                )
+
+            assert exc_info.value.status_code == 500
+            assert exc_info.value.detail == (
+                "Large-format recipe override data could not be loaded. Re-run preview and try again."
+            )
+            detail = str(exc_info.value.detail)
+            assert private_path not in detail
+            assert "Permission denied" not in detail
+            failure_logs = [
+                (level, fields)
+                for level, event, fields in log_calls
+                if event == "converter_large_format_failed"
+            ]
+            assert len(failure_logs) == 1
+            level, fields = failure_logs[0]
+            assert level == "error"
+            assert fields["session_id"] == "large-format-session"
+            assert fields["failure_kind"] == "recipe_override_matrix"
+            assert fields["error_type"] == "OSError"
+            assert fields["artifact_role"] == "material_matrix"
+            assert fields["path"] == private_path
+            assert private_path in str(fields["error_message"])
+            assert "Permission denied" in str(fields["error_message"])
+        finally:
+            store.clear_all()
+            for path in (image_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    def test_large_format_recipe_override_masks_load_failure_is_sanitized(self) -> None:
+        fd_img, image_path = tempfile.mkstemp(suffix=".png")
+        os.close(fd_img)
+        fd_lut, lut_path = tempfile.mkstemp(suffix=".npy")
+        os.close(fd_lut)
+        fd_masks, masks_path = tempfile.mkstemp(suffix=".pkl")
+        os.close(fd_masks)
+        private_path = "/Users/min/private/recipe-masks.pkl"
+        log_calls: list[tuple[str, str, dict[str, object]]] = []
+
+        def _capturing_safe_log(level: str, event: str, **fields: object) -> None:
+            log_calls.append((level, event, fields))
+
+        Image.fromarray(np.zeros((10, 10, 3), dtype=np.uint8)).save(image_path)
+        with open(lut_path, "wb") as lut_file:
+            lut_file.write(b"lut")
+
+        store = SessionStore(ttl=1800)
+        registry = FileRegistry()
+        request = LargeFormatConvertGenerateRequest(
+            lut_name="test_lut",
+            modeling_mode=ModelingMode.HIGH_FIDELITY,
+        )
+
+        try:
+            with (
+                patch(
+                    "api.routers.converter.generate.np.load",
+                    return_value=np.zeros((10, 10, 5), dtype=np.int16),
+                ),
+                patch(
+                    "api.routers.converter.generate.pickle.load",
+                    side_effect=pickle.UnpicklingError(
+                        f"cannot load {private_path}: Permission denied"
+                    ),
+                ),
+                patch(
+                    "api.routers.converter.generate._safe_log",
+                    side_effect=_capturing_safe_log,
+                ),
+                pytest.raises(HTTPException) as exc_info,
+            ):
+                asyncio.run(
+                    _generate_large_format_raster(
+                        image_path=image_path,
+                        lut_path=lut_path,
+                        source_basename="poster",
+                        recipe_overrides=[
+                            {"region_id": "r1", "recipe": [1, 1, 1, 1, 1]},
+                        ],
+                        recipe_override_masks_path=masks_path,
+                        material_matrix_path="/tmp/material-matrix.npy",
+                        total_width_mm=40.0,
+                        total_height_mm=40.0,
+                        tile_width_mm=40.0,
+                        tile_height_mm=40.0,
+                        request=request,
+                        session_data={},
+                        sid="large-format-session",
+                        store=store,
+                        registry=registry,
+                        pool=MagicMock(spec=WorkerPoolManager),
+                    )
+                )
+
+            assert exc_info.value.status_code == 500
+            assert exc_info.value.detail == (
+                "Large-format recipe override data could not be loaded. Re-run preview and try again."
+            )
+            detail = str(exc_info.value.detail)
+            assert private_path not in detail
+            assert "Permission denied" not in detail
+            failure_logs = [
+                (level, fields)
+                for level, event, fields in log_calls
+                if event == "converter_large_format_failed"
+            ]
+            assert len(failure_logs) == 1
+            level, fields = failure_logs[0]
+            assert level == "error"
+            assert fields["session_id"] == "large-format-session"
+            assert fields["failure_kind"] == "recipe_override_masks"
+            assert fields["error_type"] == "UnpicklingError"
+            assert fields["artifact_role"] == "recipe_override_masks"
+            assert fields["path"] == masks_path
+            assert private_path in str(fields["error_message"])
+            assert "Permission denied" in str(fields["error_message"])
+        finally:
+            store.clear_all()
+            for path in (image_path, lut_path, masks_path):
                 if os.path.exists(path):
                     os.unlink(path)
 
