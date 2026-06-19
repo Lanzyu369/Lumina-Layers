@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { LutInfo, LutInfoResponse, MergeResponse } from "../api/types";
+import { apiErrorToVisibleMessage } from "../api/client";
 import { fetchLutInfo, mergeLuts } from "../api/lut";
 import { fetchLutList as apiFetchLutList } from "../api/converter";
 import { useConverterStore } from "./converter";
@@ -110,7 +111,7 @@ export const useLutManagerStore = create<LutManagerState & LutManagerActions>(
       } catch (err) {
         set({
           lutListLoading: false,
-          error: err instanceof Error ? err.message : "LUT 列表加载失败",
+          error: apiErrorToVisibleMessage(err),
         });
       }
     },
@@ -142,7 +143,7 @@ export const useLutManagerStore = create<LutManagerState & LutManagerActions>(
       } catch (err) {
         set({
           primaryLoading: false,
-          error: err instanceof Error ? err.message : "获取 LUT 信息失败",
+          error: apiErrorToVisibleMessage(err),
         });
       }
     },
@@ -196,7 +197,7 @@ export const useLutManagerStore = create<LutManagerState & LutManagerActions>(
       } catch (err) {
         set({
           merging: false,
-          error: err instanceof Error ? err.message : "合并失败",
+          error: apiErrorToVisibleMessage(err),
         });
       }
     },
