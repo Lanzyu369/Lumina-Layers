@@ -22,7 +22,10 @@ from api.app import create_app
 from api.dependencies import get_file_registry, get_session_store
 from api.file_registry import FileRegistry
 from api.routers.calibration import SINGLE_STAGE_KIT_GENERATION_FAILED_DETAIL
-from api.routers.single_stage import MATERIAL_SOLVER_CACHE_LIST_FAILED_DETAIL
+from api.routers.single_stage import (
+    MATERIAL_SOLVER_CACHE_LIST_FAILED_DETAIL,
+    get_material_cache_evictor,
+)
 from api.session_store import SessionStore
 from config import PaletteEntry
 from core.single_stage import (
@@ -69,6 +72,52 @@ def _client_with_state() -> tuple[TestClient, SessionStore, FileRegistry]:
     app.dependency_overrides[get_session_store] = lambda: store
     app.dependency_overrides[get_file_registry] = lambda: registry
     return TestClient(app), store, registry
+
+
+def _client_with_registry(
+    registry: FileRegistry,
+    *,
+    evictor=None,
+) -> tuple[TestClient, SessionStore]:
+    app = create_app()
+    store = SessionStore(ttl=1800)
+    app.dependency_overrides[get_session_store] = lambda: store
+    app.dependency_overrides[get_file_registry] = lambda: registry
+    if evictor is not None:
+        app.dependency_overrides[get_material_cache_evictor] = lambda: evictor
+    return TestClient(app, raise_server_exceptions=False), store
+
+
+def _seed_gradient_card_material_session(store: SessionStore) -> str:
+    session_id = store.create()
+    store.put(
+        session_id,
+        "gradient_card_stage_a_params",
+        {
+            "parameters": {
+                "channels": [
+                    {
+                        "color_name": "PLA Basic",
+                        "E": [0.1, 0.2, 0.3],
+                        "k": [1.0, 1.1, 1.2],
+                    }
+                ]
+            },
+            "meta": {},
+        },
+    )
+    store.put(
+        session_id,
+        "gradient_card_fit_summary",
+        {"overall_validation": {"mean_delta_e": 0.5}, "warnings": []},
+    )
+    store.put(
+        session_id,
+        "gradient_card_material_summary",
+        {"estimated_rgb": [120, 130, 140]},
+    )
+    store.put(session_id, "gradient_card_source_summary", {"image_source": "manual"})
+    return session_id
 
 
 def test_material_solver_cache_list_hides_storage_error_detail(
@@ -1889,6 +1938,101 @@ def test_extractor_update_gradient_card_material_route_persists_edits(
     assert stage_a_payload["parameters"]["channels"][0]["color_name"] == "PLA Matte"
 
 
+def test_extractor_update_gradient_card_material_rolls_back_when_registration_fails(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    registry = _SecondPathFailingRegistry()
+    evicted: list[str] = []
+    client, _ = _client_with_registry(registry, evictor=evicted.append)
+    materials_root = tmp_path / "materials"
+    archive_path, stage_a_path = _write_updatable_material_archive(
+        materials_root,
+        "pla-basic",
+        material_name="PLA Basic",
+        brand="Generic",
+    )
+    monkeypatch.setattr(
+        "core.single_stage.materials.MATERIALS_DIR",
+        str(materials_root),
+    )
+
+    response = client.patch(
+        "/api/extractor/gradient-card-materials/pla-basic",
+        json={"material_name": "PLA Matte", "brand": "Bambu Lab"},
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Gradient card material file registration failed. Check the server log for details."
+    )
+    assert "registry backend unavailable" not in response.text
+    assert registry.first_file_id is not None
+    assert registry.resolve(registry.first_file_id) is None
+    archive_payload = json.loads(archive_path.read_text(encoding="utf-8"))
+    assert archive_payload["material_name"] == "PLA Basic"
+    assert archive_payload["brand"] == "Generic"
+    stage_a_payload = json.loads(stage_a_path.read_text(encoding="utf-8"))
+    assert stage_a_payload["parameters"]["channels"][0]["color_name"] == "PLA Basic"
+    assert evicted == ["pla-basic"]
+
+
+def test_extractor_update_gradient_card_material_restores_existing_archive_on_core_failure(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    evicted: list[str] = []
+    client, _ = _client_with_registry(FileRegistry(), evictor=evicted.append)
+    materials_root = tmp_path / "materials"
+    archive_path, stage_a_path = _write_updatable_material_archive(
+        materials_root,
+        "pla-basic",
+        material_name="PLA Basic",
+        brand="Generic",
+    )
+    monkeypatch.setattr(
+        "core.single_stage.materials.MATERIALS_DIR",
+        str(materials_root),
+    )
+
+    def _fail_after_partial_write(**kwargs):
+        archive_path.write_text(
+            json.dumps(
+                {
+                    "material_name": "PLA Matte",
+                    "brand": "Bambu Lab",
+                    "stage_a_params_file": "stage_A_parameters.json",
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        raise OSError("disk full while writing /Users/min/private/stage_A_parameters.json")
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.update_saved_stage_a_material_archive_metadata",
+        _fail_after_partial_write,
+    )
+
+    response = client.patch(
+        "/api/extractor/gradient-card-materials/pla-basic",
+        json={"material_name": "PLA Matte", "brand": "Bambu Lab"},
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Gradient card material update failed. Check the server log for details."
+    )
+    assert "disk full" not in response.text
+    assert "/Users/min/private" not in response.text
+    archive_payload = json.loads(archive_path.read_text(encoding="utf-8"))
+    assert archive_payload["material_name"] == "PLA Basic"
+    assert archive_payload["brand"] == "Generic"
+    stage_a_payload = json.loads(stage_a_path.read_text(encoding="utf-8"))
+    assert stage_a_payload["parameters"]["channels"][0]["color_name"] == "PLA Basic"
+    assert evicted == ["pla-basic"]
+
+
 def test_extractor_update_gradient_card_material_route_rejects_blank_name(
     monkeypatch,
     tmp_path: Path,
@@ -2522,6 +2666,10 @@ def test_gradient_card_stage_a_routes_compute_and_save_material(
     archive_path.write_text(json.dumps({"material_name": "Test Material"}), encoding="utf-8")
     saved_stage_a_path = archive_path.parent / "stage_A_parameters.json"
     saved_stage_a_path.write_text(json.dumps(params_payload), encoding="utf-8")
+    monkeypatch.setattr(
+        "core.single_stage.materials.MATERIALS_DIR",
+        str(tmp_path / "materials"),
+    )
 
     def _fake_save_stage_a_material_archive(**kwargs):
         assert kwargs["material_name"] == "Test Material"
@@ -2601,6 +2749,336 @@ def test_gradient_card_stage_a_routes_compute_and_save_material(
     assert removed == 4
     assert registry.resolve(save_body["material_file_url"].split("/")[-1]) is None
     assert registry.resolve(save_body["stage_a_params_url"].split("/")[-1]) is None
+
+
+def test_extractor_save_gradient_card_material_removes_new_archive_when_registration_fails(
+    monkeypatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    registry = _RegisterPathFailingRegistry()
+    evicted: list[str] = []
+    client, store = _client_with_registry(registry, evictor=evicted.append)
+    session_id = _seed_gradient_card_material_session(store)
+    materials_root = tmp_path / "materials"
+    material_dir = materials_root / "Bambu Lab" / "PLA Basic"
+    archive_path = material_dir / "material.json"
+    stage_a_path = material_dir / "stage_A_parameters.json"
+    monkeypatch.setattr(
+        "core.single_stage.materials.MATERIALS_DIR",
+        str(materials_root),
+    )
+
+    def _fake_save_stage_a_material_archive(**kwargs):
+        assert kwargs["brand"] == "Bambu Lab"
+        material_dir.mkdir(parents=True, exist_ok=True)
+        archive_path.write_text(
+            json.dumps(
+                {
+                    "material_name": kwargs["material_name"],
+                    "brand": kwargs["brand"],
+                    "stage_a_params_file": "stage_A_parameters.json",
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        stage_a_path.write_text(
+            json.dumps(
+                {
+                    "parameters": {
+                        "channels": [
+                            {
+                                "color_name": kwargs["material_name"],
+                                "E": [0.1, 0.2, 0.3],
+                                "k": [1.0, 1.1, 1.2],
+                            }
+                        ]
+                    },
+                    "meta": {},
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        return MaterialArchiveSaveResult(
+            archive_path=str(archive_path),
+            stage_a_params_path=str(stage_a_path),
+            material_summary={
+                "material_name": kwargs["material_name"],
+                "directory_name": "Bambu Lab/PLA Basic",
+                "archive_path": str(archive_path),
+                "stage_a_params_path": str(stage_a_path),
+                "verification_count": 1,
+            },
+        )
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.save_stage_a_material_archive",
+        _fake_save_stage_a_material_archive,
+    )
+    target_logger = logging.getLogger("lumina.api.routers.single_stage")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.ERROR, logger=target_logger.name)
+
+    try:
+        response = client.post(
+            "/api/extractor/save-gradient-card-material",
+            data={
+                "session_id": session_id,
+                "material_name": "PLA Basic",
+                "brand": "Bambu Lab",
+            },
+        )
+    finally:
+        target_logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Gradient card material file registration failed. Check the server log for details."
+    )
+    assert "registry backend unavailable" not in response.text
+    assert registry.paths == [str(archive_path)]
+    assert not material_dir.exists()
+    assert not (materials_root / "Bambu Lab").exists()
+    assert evicted == ["Bambu Lab/PLA Basic"]
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None)
+        == "extractor_save_gradient_card_material_registration_failed"
+    ]
+    assert len(records) == 1
+    assert records[0].error_type == "RuntimeError"
+    assert records[0].error_message == "registry backend unavailable"
+
+
+def test_extractor_save_gradient_card_material_restores_existing_archive_on_registration_failure(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    registry = _SecondPathFailingRegistry()
+    evicted: list[str] = []
+    client, store = _client_with_registry(registry, evictor=evicted.append)
+    session_id = _seed_gradient_card_material_session(store)
+    materials_root = tmp_path / "materials"
+    archive_path, stage_a_path = _write_updatable_material_archive(
+        materials_root,
+        "pla-basic",
+        material_name="PLA Basic",
+        brand="Generic",
+    )
+    monkeypatch.setattr(
+        "core.single_stage.materials.MATERIALS_DIR",
+        str(materials_root),
+    )
+
+    def _fake_save_stage_a_material_archive(**kwargs):
+        assert kwargs["existing_directory_name"] == "pla-basic"
+        archive_path.write_text(
+            json.dumps(
+                {
+                    "material_name": "PLA Matte",
+                    "brand": "Bambu Lab",
+                    "stage_a_params_file": "stage_A_parameters.json",
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        stage_a_path.write_text(
+            json.dumps(
+                {
+                    "parameters": {
+                        "channels": [
+                            {
+                                "color_name": "PLA Matte",
+                                "E": [0.4, 0.5, 0.6],
+                                "k": [1.4, 1.5, 1.6],
+                            }
+                        ]
+                    },
+                    "meta": {},
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        return MaterialArchiveSaveResult(
+            archive_path=str(archive_path),
+            stage_a_params_path=str(stage_a_path),
+            material_summary={
+                "material_name": "PLA Matte",
+                "directory_name": "pla-basic",
+                "archive_path": str(archive_path),
+                "stage_a_params_path": str(stage_a_path),
+                "verification_count": 2,
+            },
+        )
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.save_stage_a_material_archive",
+        _fake_save_stage_a_material_archive,
+    )
+
+    response = client.post(
+        "/api/extractor/save-gradient-card-material",
+        data={
+            "session_id": session_id,
+            "material_name": "PLA Matte",
+            "target_directory_name": "pla-basic",
+        },
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Gradient card material file registration failed. Check the server log for details."
+    )
+    assert "registry backend unavailable" not in response.text
+    assert registry.first_file_id is not None
+    assert registry.resolve(registry.first_file_id) is None
+    archive_payload = json.loads(archive_path.read_text(encoding="utf-8"))
+    assert archive_payload["material_name"] == "PLA Basic"
+    assert archive_payload["brand"] == "Generic"
+    stage_a_payload = json.loads(stage_a_path.read_text(encoding="utf-8"))
+    assert stage_a_payload["parameters"]["channels"][0]["color_name"] == "PLA Basic"
+    assert evicted == ["pla-basic"]
+
+
+def test_extractor_save_gradient_card_material_restores_existing_archive_on_core_failure(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    evicted: list[str] = []
+    client, store = _client_with_registry(FileRegistry(), evictor=evicted.append)
+    session_id = _seed_gradient_card_material_session(store)
+    materials_root = tmp_path / "materials"
+    archive_path, stage_a_path = _write_updatable_material_archive(
+        materials_root,
+        "pla-basic",
+        material_name="PLA Basic",
+        brand="Generic",
+    )
+    monkeypatch.setattr(
+        "core.single_stage.materials.MATERIALS_DIR",
+        str(materials_root),
+    )
+
+    def _fail_after_partial_write(**kwargs):
+        assert kwargs["existing_directory_name"] == "pla-basic"
+        stage_a_path.write_text(
+            json.dumps(
+                {
+                    "parameters": {
+                        "channels": [
+                            {
+                                "color_name": "PLA Matte",
+                                "E": [0.4, 0.5, 0.6],
+                                "k": [1.4, 1.5, 1.6],
+                            }
+                        ]
+                    },
+                    "meta": {},
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        raise OSError("disk full while writing /Users/min/private/material.json")
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.save_stage_a_material_archive",
+        _fail_after_partial_write,
+    )
+
+    response = client.post(
+        "/api/extractor/save-gradient-card-material",
+        data={
+            "session_id": session_id,
+            "material_name": "PLA Matte",
+            "target_directory_name": "pla-basic",
+        },
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Gradient card material save failed. Check the server log for details."
+    )
+    assert "disk full" not in response.text
+    assert "/Users/min/private" not in response.text
+    archive_payload = json.loads(archive_path.read_text(encoding="utf-8"))
+    assert archive_payload["material_name"] == "PLA Basic"
+    assert archive_payload["brand"] == "Generic"
+    stage_a_payload = json.loads(stage_a_path.read_text(encoding="utf-8"))
+    assert stage_a_payload["parameters"]["channels"][0]["color_name"] == "PLA Basic"
+    assert evicted == ["pla-basic"]
+
+
+def test_extractor_save_gradient_card_material_removes_new_archive_on_core_failure(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    evicted: list[str] = []
+    client, store = _client_with_registry(FileRegistry(), evictor=evicted.append)
+    session_id = _seed_gradient_card_material_session(store)
+    materials_root = tmp_path / "materials"
+    material_dir = materials_root / "Bambu Lab" / "PLA Basic"
+    archive_path = material_dir / "material.json"
+    stage_a_path = material_dir / "stage_A_parameters.json"
+    monkeypatch.setattr(
+        "core.single_stage.materials.MATERIALS_DIR",
+        str(materials_root),
+    )
+
+    def _fail_after_partial_new_write(**kwargs):
+        assert kwargs["existing_directory_name"] is None
+        assert kwargs["brand"] == "Bambu Lab"
+        material_dir.mkdir(parents=True, exist_ok=True)
+        stage_a_path.write_text(
+            json.dumps(
+                {
+                    "parameters": {
+                        "channels": [
+                            {
+                                "color_name": kwargs["material_name"],
+                                "E": [0.4, 0.5, 0.6],
+                                "k": [1.4, 1.5, 1.6],
+                            }
+                        ]
+                    },
+                    "meta": {},
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        raise OSError("disk full while writing /Users/min/private/material.json")
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.save_stage_a_material_archive",
+        _fail_after_partial_new_write,
+    )
+
+    response = client.post(
+        "/api/extractor/save-gradient-card-material",
+        data={
+            "session_id": session_id,
+            "material_name": "PLA Basic",
+            "brand": "Bambu Lab",
+        },
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Gradient card material save failed. Check the server log for details."
+    )
+    assert "disk full" not in response.text
+    assert "/Users/min/private" not in response.text
+    assert not archive_path.exists()
+    assert not stage_a_path.exists()
+    assert not material_dir.exists()
+    assert not (materials_root / "Bambu Lab").exists()
+    assert evicted == ["Bambu Lab/PLA Basic"]
 
 
 def test_gradient_card_stage_a_rejects_unreadable_image_without_pil_detail() -> None:
