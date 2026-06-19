@@ -473,11 +473,22 @@ export function postClientLog(
     payload.details = entry.details;
   }
 
-  fetch("/api/client-log", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  }).catch(() => {});
+  try {
+    const maybePromise = fetch("/api/client-log", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (
+      maybePromise &&
+      typeof (maybePromise as Promise<unknown>).catch === "function"
+    ) {
+      void (maybePromise as Promise<unknown>).catch(() => {});
+    }
+  } catch {
+    // Client-log relay is diagnostic only and must never replace the
+    // user-facing error that triggered it.
+  }
 }
 
 export function installGlobalClientLogCapture(): () => void {

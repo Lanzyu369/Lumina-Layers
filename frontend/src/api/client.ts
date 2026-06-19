@@ -278,6 +278,13 @@ function fallbackHttpStatusMessage(
   }
 }
 
+export function apiStatusCodeToVisibleMessage(
+  statusCode: number | null,
+  requestId: string | null = null,
+): string {
+  return fallbackHttpStatusMessage(statusCode, requestId);
+}
+
 function readableApiErrorMessage(
   data: unknown,
   statusCode: number | null,
@@ -322,6 +329,21 @@ function extractStatusCodeFromGenericErrorMessage(message: string): number | nul
   return Number.isInteger(statusCode) ? statusCode : null;
 }
 
+function isGenericNoResponseErrorMessage(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized === "network error" ||
+    normalized === "failed to fetch" ||
+    normalized.includes("networkerror when attempting to fetch resource") ||
+    /^timeout of \d+ms exceeded$/.test(normalized) ||
+    normalized === "econnaborted" ||
+    normalized.includes("econnaborted")
+  );
+}
+
 export function apiErrorToVisibleMessage(
   error: unknown,
   fallback: string = tRuntime("api_error_http_default"),
@@ -342,6 +364,9 @@ export function apiErrorToVisibleMessage(
     isGenericHttpDetail(rawMessage, statusCode)
   ) {
     return fallbackHttpStatusMessage(statusCode, requestId);
+  }
+  if (isGenericNoResponseErrorMessage(rawMessage)) {
+    return fallbackHttpStatusMessage(null);
   }
   return rawMessage || fallback;
 }

@@ -490,6 +490,20 @@ describe("apiClient", () => {
     ).toBe("Vectorizer dependency missing");
   });
 
+  it("normalizes bare network and timeout errors for visible UI callers", () => {
+    for (const error of [
+      new Error("Network Error"),
+      new TypeError("Failed to fetch"),
+      new Error("timeout of 30000ms exceeded"),
+    ]) {
+      const message = apiErrorToVisibleMessage(error);
+      expect(message).toBe(
+        "API request failed before the server returned a response.",
+      );
+      expect(message).not.toMatch(/Network Error|Failed to fetch|timeout of/i);
+    }
+  });
+
   it("turns failed resource downloads into readable errors", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = vi.fn().mockResolvedValueOnce({

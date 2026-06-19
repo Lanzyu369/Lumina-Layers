@@ -7,6 +7,7 @@ import {
   installMaterialRegistryCatalogEntry,
   rollbackMaterialSyncRevision,
 } from "../api/materialSync";
+import { apiErrorToVisibleMessage } from "../api/client";
 import type { MaterialRegistryCatalogQuery } from "../api/materialSync";
 import type {
   MaterialRegistryCatalogEntry,
@@ -179,7 +180,7 @@ const isMaterialRegistryNotConfiguredError = (err: unknown): boolean =>
   readApiErrorDetail(err) === MATERIAL_REGISTRY_NOT_CONFIGURED_DETAIL;
 
 const resolveErrorMessage = (err: unknown, fallback: string): string =>
-  readApiErrorDetail(err) ?? (err instanceof Error ? err.message : fallback);
+  apiErrorToVisibleMessage(err, readApiErrorDetail(err) ?? fallback);
 
 const emptyMaterialRegistryCatalog = (): MaterialRegistryCatalogResponse => ({
   schema_version: "1.0",
@@ -440,7 +441,7 @@ export default function MaterialCloudSyncPanel() {
       await loadCatalogAndStatus();
       setSuccess(response.message || t("mat_sync_install_success"));
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("mat_sync_install_failed"));
+      setError(resolveErrorMessage(err, t("mat_sync_install_failed")));
     } finally {
       setPendingInstall(null);
     }
@@ -459,7 +460,7 @@ export default function MaterialCloudSyncPanel() {
       await loadCatalogAndStatus();
       setSuccess(response.message || t("mat_sync_rollback_success"));
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("mat_sync_rollback_failed"));
+      setError(resolveErrorMessage(err, t("mat_sync_rollback_failed")));
     } finally {
       setPendingRollback(null);
     }
