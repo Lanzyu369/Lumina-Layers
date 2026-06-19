@@ -6,6 +6,7 @@ import type {
 import { useActionHistoryStore } from "../stores/actionHistoryStore";
 import { useConverterStore } from "../stores/converter";
 import { useSettingsStore } from "../stores/settingsStore";
+import { useSingleStageStore } from "../stores/singleStageStore";
 import { useWidgetStore } from "../stores/widgetStore";
 import { buildAdvancedParams } from "./advancedParamsBuilder";
 import { getRecentClientLogs } from "./clientLog";
@@ -74,6 +75,7 @@ function deriveOriginalImageRef(
 
 export function collectBugReportContext(): BugReportContextPayload {
   const converter = useConverterStore.getState();
+  const singleStage = useSingleStageStore.getState();
   const settings = useSettingsStore.getState();
   const widget = useWidgetStore.getState();
 
@@ -123,7 +125,7 @@ export function collectBugReportContext(): BugReportContextPayload {
     active_tab: widget.activeTab,
     active_session_ids: {
       converter: converter.sessionId ?? null,
-      single_stage: null,
+      single_stage: singleStage.sessionId ?? null,
     },
     color_mode: colorMode,
     lut_name: lutName,
