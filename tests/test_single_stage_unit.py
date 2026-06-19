@@ -2869,6 +2869,173 @@ def test_gradient_card_material_library_route_can_include_file_urls(
     assert registry.resolve(item["stage_a_params_url"].split("/")[-1]) is None
 
 
+def test_gradient_card_material_library_route_hides_scan_error_detail(
+    monkeypatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client, _, _ = _client_with_state()
+    private_path = "/Users/min/private/materials/gradient-card"
+
+    def _fail_list_saved_materials():
+        raise OSError(f"Permission denied: '{private_path}'")
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.list_saved_stage_a_material_archives",
+        _fail_list_saved_materials,
+    )
+    target_logger = logging.getLogger("lumina.api.routers.single_stage")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.ERROR, logger=target_logger.name)
+
+    try:
+        response = client.get("/api/extractor/gradient-card-materials")
+    finally:
+        target_logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Gradient-card material library could not be loaded. "
+        "Check saved material storage and try again."
+    )
+    assert private_path not in response.text
+    assert "Permission denied" not in response.text
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None)
+        == "extractor_gradient_card_material_library_failed"
+    ]
+    assert len(records) == 1
+    assert records[0].error_type == "OSError"
+    assert private_path in records[0].error_message
+
+
+def test_gradient_card_material_library_route_hides_registration_error_detail(
+    monkeypatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client, _, registry = _client_with_state()
+    private_path = "/Users/min/private/materials/gradient-card"
+    archive_path = tmp_path / "material.json"
+    stage_a_path = tmp_path / "stage_A_parameters.json"
+    archive_path.write_text("{}", encoding="utf-8")
+    stage_a_path.write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.list_saved_stage_a_material_archives",
+        lambda: [
+            {
+                "material_name": "PLA Basic",
+                "directory_name": "pla-basic",
+                "created_at": "2026-04-16T10:00:00Z",
+                "updated_at": "2026-04-16T11:00:00Z",
+                "archive_path": str(archive_path),
+                "stage_a_params_path": str(stage_a_path),
+                "estimated_rgb": [100, 120, 140],
+                "layer_height_mm": 0.04,
+                "mean_delta_e": 1.23,
+                "verification_count": 3,
+                "verification_history": [],
+            }
+        ],
+    )
+
+    def _fail_register_path(*args, **kwargs):
+        raise RuntimeError(f"registry failed at {private_path}/material.json")
+
+    monkeypatch.setattr(registry, "register_path", _fail_register_path)
+    target_logger = logging.getLogger("lumina.api.routers.single_stage")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.ERROR, logger=target_logger.name)
+
+    try:
+        response = client.get(
+            "/api/extractor/gradient-card-materials?include_file_urls=true"
+        )
+    finally:
+        target_logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Gradient-card material library could not be loaded. "
+        "Check saved material storage and try again."
+    )
+    assert private_path not in response.text
+    assert "registry failed" not in response.text
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None)
+        == "extractor_gradient_card_material_library_registration_failed"
+    ]
+    assert len(records) == 1
+    assert records[0].error_type == "RuntimeError"
+    assert private_path in records[0].error_message
+
+
+def test_gradient_card_material_library_route_handles_registry_backend_error(
+    monkeypatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client, _, registry = _client_with_state()
+    private_path = "/Users/min/private/materials/gradient-card"
+    archive_path = tmp_path / "material.json"
+    archive_path.write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.list_saved_stage_a_material_archives",
+        lambda: [
+            {
+                "material_name": "PLA Basic",
+                "directory_name": "pla-basic",
+                "created_at": "2026-04-16T10:00:00Z",
+                "updated_at": "2026-04-16T11:00:00Z",
+                "archive_path": str(archive_path),
+                "stage_a_params_path": "",
+                "estimated_rgb": [100, 120, 140],
+                "layer_height_mm": 0.04,
+                "mean_delta_e": 1.23,
+                "verification_count": 3,
+                "verification_history": [],
+            }
+        ],
+    )
+
+    def _fail_register_path(*args, **kwargs):
+        raise Exception(f"database registry failed at {private_path}/material.json")
+
+    monkeypatch.setattr(registry, "register_path", _fail_register_path)
+    target_logger = logging.getLogger("lumina.api.routers.single_stage")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.ERROR, logger=target_logger.name)
+
+    try:
+        response = client.get(
+            "/api/extractor/gradient-card-materials?include_file_urls=true"
+        )
+    finally:
+        target_logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Gradient-card material library could not be loaded. "
+        "Check saved material storage and try again."
+    )
+    assert private_path not in response.text
+    assert "database registry failed" not in response.text
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None)
+        == "extractor_gradient_card_material_library_registration_failed"
+    ]
+    assert len(records) == 1
+    assert records[0].error_type == "Exception"
+    assert private_path in records[0].error_message
+
+
 def test_gradient_card_material_delete_route_removes_saved_material(
     monkeypatch,
 ) -> None:

@@ -127,6 +127,10 @@ MATERIAL_SOLVER_CACHE_LIST_FAILED_DETAIL = (
     "Material solver caches could not be listed. "
     "Check cache storage and try again."
 )
+GRADIENT_CARD_MATERIAL_LIBRARY_LIST_FAILED_DETAIL = (
+    "Gradient-card material library could not be loaded. "
+    "Check saved material storage and try again."
+)
 MATERIAL_SOLVER_CACHE_BUILD_FAILED_DETAIL = (
     "Material solver cache could not be built. "
     "Check material inputs and cache storage, then try again."
@@ -1047,7 +1051,19 @@ async def extractor_list_gradient_card_materials(
     try:
         materials = list_saved_stage_a_material_archives()
     except (ValueError, TypeError, OSError, RuntimeError) as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        log.error(
+            "Gradient card material library failed",
+            extra={
+                "event": "extractor_gradient_card_material_library_failed",
+                "include_file_urls": bool(include_file_urls),
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=GRADIENT_CARD_MATERIAL_LIBRARY_LIST_FAILED_DETAIL,
+        ) from exc
 
     persistent_registry_session = (
         f"material-library:{uuid.uuid4().hex}"
@@ -1055,35 +1071,51 @@ async def extractor_list_gradient_card_materials(
         else None
     )
     response_items: list[dict[str, object]] = []
-    for item in materials:
-        material_file_url = (
-            f"/api/files/{registry.register_path(
-                persistent_registry_session,
-                str(item['archive_path']),
-                ttl_seconds=MATERIAL_LIBRARY_FILE_TTL_SECONDS,
-            )}"
-            if persistent_registry_session is not None
-            else None
+    try:
+        for item in materials:
+            material_file_url = (
+                f"/api/files/{registry.register_path(
+                    persistent_registry_session,
+                    str(item['archive_path']),
+                    ttl_seconds=MATERIAL_LIBRARY_FILE_TTL_SECONDS,
+                )}"
+                if persistent_registry_session is not None
+                else None
+            )
+            stage_a_path = item.get("stage_a_params_path")
+            stage_a_params_url = (
+                f"/api/files/{registry.register_path(
+                    persistent_registry_session,
+                    str(stage_a_path),
+                    ttl_seconds=MATERIAL_LIBRARY_FILE_TTL_SECONDS,
+                )}"
+                if persistent_registry_session is not None
+                and isinstance(stage_a_path, str)
+                and stage_a_path
+                else None
+            )
+            response_items.append(
+                {
+                    **item,
+                    "material_file_url": material_file_url,
+                    "stage_a_params_url": stage_a_params_url,
+                }
+            )
+    except Exception as exc:
+        log.error(
+            "Gradient card material library file registration failed",
+            extra={
+                "event": "extractor_gradient_card_material_library_registration_failed",
+                "include_file_urls": bool(include_file_urls),
+                "material_count": len(materials),
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
         )
-        stage_a_path = item.get("stage_a_params_path")
-        stage_a_params_url = (
-            f"/api/files/{registry.register_path(
-                persistent_registry_session,
-                str(stage_a_path),
-                ttl_seconds=MATERIAL_LIBRARY_FILE_TTL_SECONDS,
-            )}"
-            if persistent_registry_session is not None
-            and isinstance(stage_a_path, str)
-            and stage_a_path
-            else None
-        )
-        response_items.append(
-            {
-                **item,
-                "material_file_url": material_file_url,
-                "stage_a_params_url": stage_a_params_url,
-            }
-        )
+        raise HTTPException(
+            status_code=500,
+            detail=GRADIENT_CARD_MATERIAL_LIBRARY_LIST_FAILED_DETAIL,
+        ) from exc
 
     return GradientCardMaterialLibraryResponse(
         status="ok",
