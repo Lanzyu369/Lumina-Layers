@@ -4150,6 +4150,78 @@ def test_generate_material_swatch_cleans_output_when_registry_fails(
     assert not swatch_path.exists()
 
 
+def test_generate_material_swatch_hides_export_failure_detail(
+    monkeypatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client, _, _ = _client_with_state()
+    private_path = "/Users/min/private/MaterialSwatch.3mf"
+    status_msg = (
+        f"3MF export failed: cannot write {private_path}: permission denied"
+    )
+    safe_detail = (
+        "Material swatch export failed. Check the selected material recipes "
+        "and export settings, then try again."
+    )
+
+    monkeypatch.setattr(
+        "api.routers.single_stage._load_palette_or_raise",
+        lambda directory_names: [
+            SimpleNamespace(
+                directory_name="pla-basic",
+                name="PLA Basic",
+                estimated_rgb=np.array([255, 255, 255], dtype=np.uint8),
+            )
+        ],
+    )
+
+    def _fake_generate_material_recipe_swatch(*, recipes, **kwargs):
+        return None, None, status_msg
+
+    monkeypatch.setattr(
+        "core.material_recipe_swatch.generate_material_recipe_swatch",
+        _fake_generate_material_recipe_swatch,
+    )
+
+    target_logger = logging.getLogger("lumina.api.routers.single_stage")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.WARNING, logger=target_logger.name)
+    try:
+        response = client.post(
+            "/api/extractor/generate-material-swatch",
+            json={
+                "recipes": [
+                    {
+                        "directory_names": ["pla-basic"],
+                        "result_hex": "#FFFFFF",
+                        "layer_height_mm": 0.08,
+                        "substrate": "white",
+                    }
+                ],
+            },
+        )
+    finally:
+        target_logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == safe_detail
+    assert private_path not in response.text
+    assert "3MF export failed" not in response.text
+
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "extractor_material_swatch_failed"
+    ]
+    assert len(records) == 1
+    record = records[0]
+    assert record.levelno == logging.WARNING
+    assert record.status_code == 500
+    assert record.error_type == "MaterialSwatchGenerationFailed"
+    assert record.error_message == status_msg
+    assert record.recipe_count == 1
+
+
 def test_generate_material_swatch_rolls_back_download_when_preview_registration_fails(
     monkeypatch,
     tmp_path: Path,
