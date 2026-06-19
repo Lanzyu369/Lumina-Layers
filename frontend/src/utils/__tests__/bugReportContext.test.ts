@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ColorMode } from "../../api/types";
 import { useConverterStore } from "../../stores/converter";
 import { useSettingsStore } from "../../stores/settingsStore";
+import { useSingleStageStore } from "../../stores/singleStageStore";
 import { useWidgetStore } from "../../stores/widgetStore";
 import type { AdvancedParamsFull } from "../../types/actionHistory";
 import { _clearClientLogBufferForTests, postClientLog } from "../clientLog";
@@ -36,6 +37,12 @@ describe("collectBugReportContext", () => {
       theme: "dark",
       lastColorMode: "8-Color Max",
       lastLutName: "My LUT",
+    });
+    useSingleStageStore.setState({
+      sessionId: null,
+      stageAParamsUrl: null,
+      materialFileUrl: null,
+      savedStageAParamsUrl: null,
     });
     useWidgetStore.setState({ activeTab: "settings" });
     Object.defineProperty(window, "innerWidth", {
@@ -343,6 +350,48 @@ describe("collectBugReportContext", () => {
 
     expect(context.active_original_image_ref).toBeNull();
     expect(context.advanced_params).toBeNull();
+    expect(context.active_final_artifact_ref).toBeNull();
+  });
+
+  it("captures active gradient-card extract session for bug-report log lookup", () => {
+    useWidgetStore.setState({ activeTab: "gradient-card-extract" });
+    useConverterStore.setState({
+      sessionId: "stale-converter-session",
+      downloadUrl: "/api/files/stale-3mf",
+      threemfDiskPath: "/tmp/stale-model.3mf",
+    });
+    useSingleStageStore.setState({
+      sessionId: "single-stage-session",
+      stageAParamsUrl: "/api/files/stage-a-params",
+      materialFileUrl: "/api/files/material-json",
+      savedStageAParamsUrl: "/api/files/saved-stage-a-params",
+    });
+
+    const context = collectBugReportContext();
+
+    expect(context.active_session_ids).toEqual({
+      converter: "stale-converter-session",
+      single_stage: "single-stage-session",
+    });
+    // Gradient-card extraction has two source images and the backend does
+    // not register those uploads as a singular original-image attachment
+    // today. Keep the session id for log lookup without promising a file
+    // attachment the backend cannot currently resolve.
+    expect(context.active_original_image_ref).toBeNull();
+    expect(context.active_final_artifact_ref).toBeNull();
+    expect(context.advanced_params).toBeNull();
+  });
+
+  it("keeps inactive single-stage sessions available for log lookup without attaching stale originals", () => {
+    useWidgetStore.setState({ activeTab: "settings" });
+    useSingleStageStore.setState({
+      sessionId: "inactive-single-stage-session",
+    });
+
+    const context = collectBugReportContext();
+
+    expect(context.active_session_ids.single_stage).toBe("inactive-single-stage-session");
+    expect(context.active_original_image_ref).toBeNull();
     expect(context.active_final_artifact_ref).toBeNull();
   });
 
