@@ -46,6 +46,10 @@ _LUT_LOAD_FAILED_DETAIL = (
 _JSON_LUT_MISSING_RGB_DETAIL = (
     "The selected JSON LUT does not include readable RGB color data."
 )
+SWATCH_EXPORT_FAILED_DETAIL = (
+    "Five-color swatch export failed. Check the selected recipes and export "
+    "settings, then try again."
+)
 
 # ---- LUT Engine 内存缓存 ----
 _engine_cache: dict[str, ColorQueryEngine] = {}
@@ -476,7 +480,18 @@ def generate_swatch(
     )
 
     if not output_path:
-        raise HTTPException(status_code=500, detail=status_msg or "Swatch generation failed")
+        log.warning(
+            "Five-color swatch export failed",
+            extra={
+                "event": "five_color_generate_swatch_failed",
+                "lut_name": request.lut_name,
+                "recipe_count": len(items),
+                "status_code": 500,
+                "error_type": "SwatchGenerationFailed",
+                "error_message": status_msg or "Swatch generation failed",
+            },
+        )
+        raise HTTPException(status_code=500, detail=SWATCH_EXPORT_FAILED_DETAIL)
 
     request_id = get_request_id()
     unique_suffix = uuid.uuid4().hex
