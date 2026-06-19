@@ -7227,6 +7227,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "耗材已删除。",
     en: "Material deleted.",
   },
+  mat_gradient_library_delete_failed: {
+    zh: "删除耗材失败",
+    en: "Failed to delete material",
+  },
   mat_gradient_library_export_requires_selection: {
     zh: "请先至少选择一个耗材再导出。",
     en: "Select at least one material before exporting.",
