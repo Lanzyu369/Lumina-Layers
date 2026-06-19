@@ -7,11 +7,13 @@ Validates:
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
+import pytest
 from fastapi.testclient import TestClient
 
 from api.app import app
@@ -28,6 +30,279 @@ from core.native_reference import (
 )
 
 client: TestClient = TestClient(app)
+_PRIVATE_ERROR_PATH = "/Users/min/private/lut-secret.json"
+_UNSAFE_ERROR_FRAGMENTS = (
+    _PRIVATE_ERROR_PATH,
+    "/Users/",
+    "Permission denied",
+    "sqlite status",
+    "BAD_METADATA",
+    "lut-secret.json",
+)
+
+
+def _records_for_event(
+    caplog: pytest.LogCaptureFixture,
+    event_name: str,
+) -> list[logging.LogRecord]:
+    return [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == event_name
+    ]
+
+
+def _assert_safe_error_detail(response, expected_detail: str) -> None:
+    assert response.json()["detail"] == expected_detail
+    for fragment in _UNSAFE_ERROR_FRAGMENTS:
+        assert fragment not in response.text
+
+
+def _attach_lut_logger(
+    caplog: pytest.LogCaptureFixture,
+    *,
+    level: int = logging.ERROR,
+) -> logging.Logger:
+    target_logger = logging.getLogger("lumina.api.routers.lut")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(level, logger=target_logger.name)
+    return target_logger
+
+
+class TestLutErrorBoundary:
+    """Verify LUT route failures return user-safe details and keep diagnostics in logs."""
+
+    class _FailingDetailsService:
+        def get_catalog(self):
+            raise OSError(f"sqlite status=BUSY path={_PRIVATE_ERROR_PATH}")
+
+        def get_lut_details(self, _lut_name: str):
+            raise RuntimeError(
+                f"metadata parse failed at {_PRIVATE_ERROR_PATH} status=BAD_METADATA"
+            )
+
+    def test_details_catalog_failure_uses_safe_detail_and_logs(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        service = self._FailingDetailsService()
+        monkeypatch.setattr(lut_router, "_lut_details_service", service)
+        monkeypatch.setattr(lut_router, "get_lut_details_service", lambda: service)
+        target_logger = _attach_lut_logger(caplog)
+
+        try:
+            response = client.get("/api/lut/details/catalog")
+        finally:
+            target_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 500
+        _assert_safe_error_detail(
+            response,
+            "Unable to load the LUT catalog. Check that LUT presets are available and try again.",
+        )
+        records = _records_for_event(caplog, "lut_details_catalog_failed")
+        assert len(records) == 1
+        assert records[0].error_type == "OSError"
+        assert _PRIVATE_ERROR_PATH in records[0].error_message
+
+    def test_lut_details_failure_uses_safe_detail_and_logs(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        service = self._FailingDetailsService()
+        monkeypatch.setattr(lut_router, "_lut_details_service", service)
+        monkeypatch.setattr(lut_router, "get_lut_details_service", lambda: service)
+        target_logger = _attach_lut_logger(caplog)
+
+        try:
+            response = client.get("/api/lut/Faulty/details")
+        finally:
+            target_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 500
+        _assert_safe_error_detail(
+            response,
+            "Unable to load LUT details. Check that the selected LUT is valid and try again.",
+        )
+        records = _records_for_event(caplog, "lut_details_failed")
+        assert len(records) == 1
+        assert records[0].error_type == "RuntimeError"
+        assert _PRIVATE_ERROR_PATH in records[0].error_message
+
+    def test_upload_parse_failure_uses_safe_detail_and_logs(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        def _fail_load_keyed_payload(*args, **kwargs):
+            raise OSError(f"cannot read {_PRIVATE_ERROR_PATH}: Permission denied")
+
+        monkeypatch.setattr(
+            lut_router.LUTManager,
+            "_load_keyed_payload",
+            staticmethod(_fail_load_keyed_payload),
+        )
+        target_logger = _attach_lut_logger(caplog, level=logging.WARNING)
+
+        try:
+            response = client.post(
+                "/api/lut/upload",
+                files={
+                    "file": (
+                        "secret.json",
+                        (
+                            b'{"entries":[{"rgb":[255,255,255],"recipe":["White"]}],'
+                            b'"palette":{"White":{"material":"PLA"}}}'
+                        ),
+                        "application/json",
+                    )
+                },
+            )
+        finally:
+            target_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 422
+        _assert_safe_error_detail(
+            response,
+            "Invalid LUT file. Use a supported LUT format with readable color entries.",
+        )
+        records = _records_for_event(caplog, "lut_upload_validation_failed")
+        assert len(records) == 1
+        assert records[0].error_type == "_UploadedLutValidationError"
+        assert _PRIVATE_ERROR_PATH in records[0].error_message
+
+    def test_upload_save_failure_uses_safe_detail_and_logs(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        def _fail_copy(_src, _dst):
+            raise PermissionError(f"Permission denied: '{_PRIVATE_ERROR_PATH}'")
+
+        monkeypatch.setattr(lut_router.shutil, "copy2", _fail_copy)
+        target_logger = _attach_lut_logger(caplog)
+
+        try:
+            response = client.post(
+                "/api/lut/upload",
+                files={
+                    "file": (
+                        "save-failure.json",
+                        (
+                            b'{"entries":[{"rgb":[255,255,255],"recipe":["White"]}],'
+                            b'"palette":{"White":{"material":"PLA"}}}'
+                        ),
+                        "application/json",
+                    )
+                },
+            )
+        finally:
+            target_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 500
+        _assert_safe_error_detail(
+            response,
+            "Unable to save the LUT upload. Check server storage permissions and try again.",
+        )
+        records = _records_for_event(caplog, "lut_upload_failed")
+        assert len(records) == 1
+        assert records[0].error_type == "PermissionError"
+        assert _PRIVATE_ERROR_PATH in records[0].error_message
+
+    def test_recipe_color_prediction_failure_uses_safe_detail_and_logs(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        def _fail_load_lut(_path: str):
+            raise OSError(f"cannot read {_PRIVATE_ERROR_PATH}: Permission denied")
+
+        monkeypatch.setattr(
+            lut_router.LUTManager,
+            "get_lut_path",
+            staticmethod(lambda _name: "/fake/source.json"),
+        )
+        monkeypatch.setattr(
+            lut_router.LUTManager,
+            "load_lut_with_metadata",
+            staticmethod(_fail_load_lut),
+        )
+        target_logger = _attach_lut_logger(caplog, level=logging.WARNING)
+
+        try:
+            response = client.post(
+                "/api/lut/Faulty/predict-recipe-color",
+                json={
+                    "recipe": [0, 0, 0, 0, 0],
+                    "color_layers": 5,
+                    "layer_height_mm": 0.08,
+                    "layer_order": "Top2Bottom",
+                },
+            )
+        finally:
+            target_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 422
+        _assert_safe_error_detail(
+            response,
+            (
+                "Unable to predict the recipe color. Check that the LUT supports "
+                "recipe prediction and the recipe parameters are valid."
+            ),
+        )
+        records = _records_for_event(caplog, "lut_recipe_color_prediction_failed")
+        assert len(records) == 1
+        assert records[0].error_type == "OSError"
+        assert _PRIVATE_ERROR_PATH in records[0].error_message
+
+    def test_recipe_search_failure_uses_safe_detail_and_logs(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        def _fail_load_lut(_path: str):
+            raise OSError(f"cannot read {_PRIVATE_ERROR_PATH}: Permission denied")
+
+        monkeypatch.setattr(
+            lut_router.LUTManager,
+            "get_lut_path",
+            staticmethod(lambda _name: "/fake/source.json"),
+        )
+        monkeypatch.setattr(
+            lut_router.LUTManager,
+            "load_lut_with_metadata",
+            staticmethod(_fail_load_lut),
+        )
+        target_logger = _attach_lut_logger(caplog, level=logging.WARNING)
+
+        try:
+            response = client.post(
+                "/api/lut/Faulty/search-recipes",
+                json={
+                    "pattern": "WWWWW",
+                    "color_layers": 5,
+                    "layer_height_mm": 0.08,
+                    "layer_order": "Top2Bottom",
+                    "limit": 1,
+                },
+            )
+        finally:
+            target_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 422
+        _assert_safe_error_detail(
+            response,
+            (
+                "Unable to search LUT recipes. Check that the LUT supports recipe "
+                "search and the search parameters are valid."
+            ),
+        )
+        records = _records_for_event(caplog, "lut_recipe_search_failed")
+        assert len(records) == 1
+        assert records[0].error_type == "OSError"
+        assert _PRIVATE_ERROR_PATH in records[0].error_message
 
 
 def test_public_color_mode_canonicalizes_legacy_variants() -> None:
@@ -627,7 +902,12 @@ class TestPredictRecipeColor:
             },
         )
         assert response.status_code == 422
-        assert "exact prediction unavailable" in response.json()["detail"]
+        detail = response.json()["detail"]
+        assert detail == (
+            "Unable to predict the recipe color. Check that the LUT supports "
+            "recipe prediction and the recipe parameters are valid."
+        )
+        assert "exact prediction unavailable" not in detail
 
 
 class TestSourceKindFallback:
