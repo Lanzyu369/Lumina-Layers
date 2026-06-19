@@ -91,6 +91,100 @@ _STARTUP_INTERRUPTED_AFTER_MINUTES = 10
 # ---------------------------------------------------------------------------
 
 
+def _is_non_empty_string(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _failed_original_image(
+    session_id: str | None,
+    error_type: str,
+    error_message: str,
+) -> dict[str, Any]:
+    return {
+        "status": "failed",
+        "filename": None,
+        "sha256": None,
+        "size_bytes": None,
+        "mime_type": None,
+        "source_session_id": session_id,
+        "error_type": error_type,
+        "error_message": error_message,
+    }
+
+
+def _failed_final_artifact(
+    session_id: str | None,
+    artifact_type: str | None,
+    error_type: str,
+    error_message: str,
+    *,
+    history_count: int = 0,
+) -> dict[str, Any]:
+    return {
+        "status": "failed",
+        "filename": None,
+        "sha256": None,
+        "size_bytes": None,
+        "artifact_type": artifact_type,
+        "source_session_id": session_id,
+        "generated_at": None,
+        "history_count": history_count,
+        "error_type": error_type,
+        "error_message": error_message,
+    }
+
+
+def _failed_lut(
+    lut_name: str | None,
+    kind: str | None,
+    error_type: str,
+    error_message: str,
+    *,
+    preset_relative_path: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "status": "failed",
+        "kind": kind,
+        "name": lut_name,
+        "preset_relative_path": preset_relative_path,
+        "filename": None,
+        "sha256": None,
+        "size_bytes": None,
+        "metadata": {},
+        "error_type": error_type,
+        "error_message": error_message,
+    }
+
+
+def _original_image_expected(context: dict[str, Any]) -> bool:
+    ref = context.get("active_original_image_ref")
+    return isinstance(ref, dict) and _is_non_empty_string(ref.get("session_id"))
+
+
+def _final_artifact_expected(context: dict[str, Any]) -> bool:
+    ref = context.get("active_final_artifact_ref")
+    return (
+        isinstance(ref, dict)
+        and (
+            _is_non_empty_string(ref.get("session_id"))
+            or _is_non_empty_string(ref.get("download_url"))
+            or _is_non_empty_string(ref.get("disk_path"))
+        )
+    )
+
+
+def _lut_expected(context: dict[str, Any]) -> bool:
+    source_version = context.get("source_version")
+    return (
+        source_version in {None, "legacy"}
+        and _is_non_empty_string(context.get("lut_name"))
+    )
+
+
+def _lut_critical_for_finalize(context: dict[str, Any]) -> bool:
+    return context.get("active_tab") == "converter" and _lut_expected(context)
+
+
 def _file_registry_entries_for(file_registry, session_id: str | None) -> dict[str, dict]:
     """Return FileRegistry entries for ``session_id`` (empty dict on None)."""
     if not session_id:
@@ -207,8 +301,13 @@ def _collect_final_artifact_from_download_url(
         return None
     try:
         entry = get_entry(file_id)
-    except Exception:
-        return None
+    except Exception as exc:
+        return _failed_final_artifact(
+            session_id,
+            artifact_type,
+            type(exc).__name__,
+            "Final artifact could not be saved.",
+        )
     if not isinstance(entry, dict) or entry.get("is_public") is False:
         return None
     if (
@@ -221,8 +320,13 @@ def _collect_final_artifact_from_download_url(
         return None
     try:
         resolved = resolve(file_id)
-    except Exception:
-        return None
+    except Exception as exc:
+        return _failed_final_artifact(
+            session_id,
+            artifact_type,
+            type(exc).__name__,
+            "Final artifact could not be saved.",
+        )
     if resolved is None:
         return None
     try:
@@ -240,8 +344,18 @@ def _collect_final_artifact_from_download_url(
         shutil.copy2(src_path, dst)
         size = dst.stat().st_size
         sha = file_sha256(dst)
-    except OSError:
-        return None
+    except OSError as exc:
+        try:
+            dst.unlink()
+        except OSError:
+            pass
+        return _failed_final_artifact(
+            session_id,
+            artifact_type,
+            type(exc).__name__,
+            "Final artifact could not be saved.",
+            history_count=1,
+        )
     created_at = entry.get("created_at") if isinstance(entry, dict) else None
     return {
         "status": "attached",
@@ -355,7 +469,8 @@ def collect_sync_attachments(
     """
     del now  # Reserved for future time-based TTL policies.
     ticket_id = payload.get("ticket_id")
-    context = payload.get("context") or {}
+    raw_context = payload.get("context")
+    context = raw_context if isinstance(raw_context, dict) else {}
 
     # Defaults used when a sub-step bails early.
     default_original = {
@@ -408,6 +523,14 @@ def collect_sync_attachments(
             },
         )
     except Exception as exc:
+        if _original_image_expected(context):
+            ref = context.get("active_original_image_ref") or {}
+            session_id = ref.get("session_id") if isinstance(ref, dict) else None
+            original = _failed_original_image(
+                session_id,
+                type(exc).__name__,
+                "Original image could not be saved.",
+            )
         log.warning(
             "Original-image collection crashed.",
             extra={
@@ -429,6 +552,8 @@ def collect_sync_attachments(
             ticket_dir, file_registry, session_id, artifact_type,
             download_url=download_url,
         )
+        if _final_artifact_expected(context) and final.get("status") == "not_applicable":
+            final = {**final, "status": "expired_ttl"}
         log.info(
             "Attachment collected.",
             extra={
@@ -439,6 +564,16 @@ def collect_sync_attachments(
             },
         )
     except Exception as exc:
+        if _final_artifact_expected(context):
+            ref = context.get("active_final_artifact_ref") or {}
+            session_id = ref.get("session_id") if isinstance(ref, dict) else None
+            artifact_type = ref.get("artifact_type") if isinstance(ref, dict) else None
+            final = _failed_final_artifact(
+                session_id,
+                artifact_type,
+                type(exc).__name__,
+                "Final artifact could not be saved.",
+            )
         log.warning(
             "Final-artifact collection crashed.",
             extra={
@@ -463,6 +598,14 @@ def collect_sync_attachments(
             },
         )
     except Exception as exc:
+        if _lut_expected(context):
+            lut_name = context.get("lut_name")
+            lut = _failed_lut(
+                str(lut_name) if lut_name is not None else None,
+                None,
+                type(exc).__name__,
+                "LUT could not be saved.",
+            )
         log.warning(
             "LUT collection crashed.",
             extra={
@@ -535,13 +678,25 @@ def _copy_original_image_path(
     suffix = src_path.suffix.lower() or ".png"
     if suffix not in _IMAGE_EXTENSIONS:
         return None
+    if not src_path.is_file():
+        return None
     dst = ticket_dir / f"original{suffix}"
     try:
         shutil.copy2(src_path, dst)
         size = dst.stat().st_size
         sha = file_sha256(dst)
-    except OSError:
-        return None
+    except OSError as exc:
+        if isinstance(exc, FileNotFoundError) and not src_path.is_file():
+            return None
+        try:
+            dst.unlink()
+        except OSError:
+            pass
+        return _failed_original_image(
+            session_id,
+            type(exc).__name__,
+            "Original image could not be saved.",
+        )
     return {
         "status": "attached",
         "filename": dst.name,
@@ -643,11 +798,18 @@ def _collect_final_artifact(
                         shutil.copy2(src_path, dst)
                         size = dst.stat().st_size
                         sha = file_sha256(dst)
-                    except OSError:
+                    except OSError as exc:
                         try:
                             dst.unlink()
                         except OSError:
                             pass
+                        return _failed_final_artifact(
+                            session_id,
+                            artifact_type,
+                            type(exc).__name__,
+                            "Final artifact could not be saved.",
+                            history_count=history_count,
+                        )
                     else:
                         return {
                             "status": "attached",
@@ -678,13 +840,26 @@ def _collect_lut(ticket_dir: Path, context: dict[str, Any]) -> dict[str, Any]:
     }
     if context.get("source_version") == "material":
         return base
+    if context.get("source_version") == "native":
+        return base
     lut_name = context.get("lut_name")
     if not lut_name:
         return base
+    if not _is_lut_name_path_safe(lut_name):
+        return _failed_lut(
+            str(lut_name),
+            None,
+            "InvalidLutName",
+            "LUT could not be saved.",
+        )
 
     found = _find_lut_file(lut_name)
     if found is None:
-        return base
+        return {
+            **base,
+            "status": "unavailable",
+            "name": lut_name,
+        }
 
     # Classify custom vs preset. Custom LUTs typically live under
     # lut-preset/Custom/ or have names starting with "Custom".
@@ -701,12 +876,32 @@ def _collect_lut(ticket_dir: Path, context: dict[str, Any]) -> dict[str, Any]:
             )
         except ValueError:
             is_custom = False
-    size = found.stat().st_size
-    sha = file_sha256(found)
+    try:
+        size = found.stat().st_size
+        sha = file_sha256(found)
+    except OSError as exc:
+        return _failed_lut(
+            lut_name,
+            "custom" if is_custom else "preset",
+            type(exc).__name__,
+            "LUT could not be saved.",
+        )
     if is_custom:
         suffix = found.suffix.lower()
         dst = ticket_dir / f"lut{suffix}"
-        shutil.copy2(found, dst)
+        try:
+            shutil.copy2(found, dst)
+        except OSError as exc:
+            try:
+                dst.unlink()
+            except OSError:
+                pass
+            return _failed_lut(
+                lut_name,
+                "custom",
+                type(exc).__name__,
+                "LUT could not be saved.",
+            )
         return {
             "status": "attached",
             "kind": "custom",
@@ -736,6 +931,262 @@ def _collect_lut(ticket_dir: Path, context: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Async finalization
 # ---------------------------------------------------------------------------
+
+
+def _attachment_file_path(
+    ticket_dir: Path,
+    attachment: dict[str, Any],
+    *,
+    failure_message: str,
+) -> Path | None:
+    filename = attachment.get("filename")
+    if _is_non_empty_string(filename):
+        filename_str = str(filename)
+        is_plain_name = (
+            filename_str == Path(filename_str).name
+            and filename_str == PureWindowsPath(filename_str).name
+        )
+        candidate = ticket_dir / filename_str
+        if is_plain_name and candidate.is_file():
+            return candidate
+    attachment.update(
+        {
+            "status": "failed",
+            "sha256": None,
+            "size_bytes": None,
+            "error_type": "AttachmentFileMissing",
+            "error_message": failure_message,
+        }
+    )
+    return None
+
+
+def _is_sha256_hex(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(char in "0123456789abcdefABCDEF" for char in value)
+    )
+
+
+def _is_positive_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _safe_preset_relative_path(value: Any) -> bool:
+    if not _is_non_empty_string(value):
+        return False
+    path_text = str(value)
+    if "\\" in path_text:
+        return False
+    try:
+        posix_path = PurePath(path_text)
+        windows_path = PureWindowsPath(path_text)
+    except TypeError:
+        return False
+    if posix_path.is_absolute() or windows_path.is_absolute():
+        return False
+    if not posix_path.parts or posix_path.parts[0] != "lut-preset":
+        return False
+    if ".." in (*posix_path.parts, *windows_path.parts):
+        return False
+    return posix_path.suffix.lower() in _LUT_EXTENSIONS
+
+
+def _mark_invalid_attachment_manifest(
+    attachment: dict[str, Any],
+) -> bool:
+    attachment.update(
+        {
+            "status": "failed",
+            "filename": None,
+            "sha256": None,
+            "size_bytes": None,
+            "error_type": "InvalidAttachmentManifest",
+            "error_message": "Attachment manifest is invalid.",
+        }
+    )
+    return False
+
+
+def _attachment_metadata_is_valid(
+    attachment: dict[str, Any],
+    *,
+    required_text_fields: tuple[str, ...],
+    path: Path | None = None,
+) -> bool:
+    if not _is_sha256_hex(attachment.get("sha256")):
+        return _mark_invalid_attachment_manifest(attachment)
+    if not _is_positive_int(attachment.get("size_bytes")):
+        return _mark_invalid_attachment_manifest(attachment)
+    if any(
+        not _is_non_empty_string(attachment.get(field))
+        for field in required_text_fields
+    ):
+        return _mark_invalid_attachment_manifest(attachment)
+    if path is not None:
+        try:
+            if attachment.get("size_bytes") != path.stat().st_size:
+                return _mark_invalid_attachment_manifest(attachment)
+            if str(attachment.get("sha256")).lower() != file_sha256(path).lower():
+                return _mark_invalid_attachment_manifest(attachment)
+        except OSError:
+            return _mark_invalid_attachment_manifest(attachment)
+    return True
+
+
+def _preset_lut_manifest_is_valid(attachment: dict[str, Any]) -> bool:
+    if attachment.get("kind") != "preset":
+        return _mark_invalid_attachment_manifest(attachment)
+    if not _is_non_empty_string(attachment.get("name")):
+        return _mark_invalid_attachment_manifest(attachment)
+    if not _safe_preset_relative_path(attachment.get("preset_relative_path")):
+        return _mark_invalid_attachment_manifest(attachment)
+    preset_path = (REPO_ROOT / str(attachment["preset_relative_path"])).resolve()
+    try:
+        preset_path.relative_to((REPO_ROOT / "lut-preset").resolve())
+    except ValueError:
+        return _mark_invalid_attachment_manifest(attachment)
+    if not preset_path.is_file():
+        return _mark_invalid_attachment_manifest(attachment)
+    return _attachment_metadata_is_valid(
+        attachment,
+        required_text_fields=(),
+        path=preset_path,
+    )
+
+
+def _final_artifact_type_matches_filename(attachment: dict[str, Any]) -> bool:
+    artifact_type = attachment.get("artifact_type")
+    filename = attachment.get("filename")
+    if not _is_non_empty_string(artifact_type) or not _is_non_empty_string(filename):
+        return _mark_invalid_attachment_manifest(attachment)
+    suffix = Path(str(filename)).suffix.lower().lstrip(".")
+    if suffix not in {"3mf", "zip"} or artifact_type != suffix:
+        return _mark_invalid_attachment_manifest(attachment)
+    return True
+
+
+def _original_image_manifest_matches_file(
+    attachment: dict[str, Any],
+    path: Path,
+) -> bool:
+    if path.suffix.lower() not in _IMAGE_EXTENSIONS:
+        return _mark_invalid_attachment_manifest(attachment)
+    if attachment.get("mime_type") != guess_mime(path):
+        return _mark_invalid_attachment_manifest(attachment)
+    return True
+
+
+def _attached_lut_manifest_matches_file(
+    attachment: dict[str, Any],
+    path: Path,
+) -> bool:
+    if attachment.get("kind") != "custom":
+        return _mark_invalid_attachment_manifest(attachment)
+    if path.suffix.lower() not in _LUT_EXTENSIONS:
+        return _mark_invalid_attachment_manifest(attachment)
+    return True
+
+
+def _attachment_section(
+    attachments: dict[str, Any],
+    key: str,
+) -> dict[str, Any]:
+    value = attachments.get(key)
+    if isinstance(value, dict):
+        return value
+    replacement: dict[str, Any] = {
+        "status": "failed",
+        "filename": None,
+        "error_type": "InvalidAttachmentManifest",
+        "error_message": "Attachment manifest is invalid.",
+    }
+    attachments[key] = replacement
+    return replacement
+
+
+def _critical_sync_attachments_complete(
+    payload: dict[str, Any],
+    ticket_dir: Path,
+) -> bool:
+    raw_context = payload.get("context")
+    context = raw_context if isinstance(raw_context, dict) else {}
+    raw_attachments = payload.get("attachments")
+    if isinstance(raw_attachments, dict):
+        attachments = raw_attachments
+    else:
+        attachments = {}
+        payload["attachments"] = attachments
+    complete = True
+
+    if _original_image_expected(context):
+        original = _attachment_section(attachments, "original_image")
+        if original.get("status") != "attached":
+            complete = False
+        else:
+            original_path = _attachment_file_path(
+                ticket_dir,
+                original,
+                failure_message="Original image is missing from the ticket directory.",
+            )
+            if original_path is None:
+                complete = False
+            elif not _original_image_manifest_matches_file(original, original_path):
+                complete = False
+            elif not _attachment_metadata_is_valid(
+                original,
+                required_text_fields=("mime_type",),
+                path=original_path,
+            ):
+                complete = False
+
+    if _final_artifact_expected(context):
+        final = _attachment_section(attachments, "final_artifact")
+        if final.get("status") != "attached":
+            complete = False
+        else:
+            final_path = _attachment_file_path(
+                ticket_dir,
+                final,
+                failure_message="Final artifact is missing from the ticket directory.",
+            )
+            if final_path is None:
+                complete = False
+            elif not _final_artifact_type_matches_filename(final):
+                complete = False
+            elif not _attachment_metadata_is_valid(
+                final,
+                required_text_fields=("artifact_type",),
+                path=final_path,
+            ):
+                complete = False
+
+    if _lut_critical_for_finalize(context):
+        lut = _attachment_section(attachments, "lut")
+        if lut.get("status") == "preset_reference_only":
+            if not _preset_lut_manifest_is_valid(lut):
+                complete = False
+        elif lut.get("status") != "attached":
+            complete = False
+        else:
+            lut_path = _attachment_file_path(
+                ticket_dir,
+                lut,
+                failure_message="LUT is missing from the ticket directory.",
+            )
+            if lut_path is None:
+                complete = False
+            elif not _attached_lut_manifest_matches_file(lut, lut_path):
+                complete = False
+            elif not _attachment_metadata_is_valid(
+                lut,
+                required_text_fields=("kind", "name"),
+                path=lut_path,
+            ):
+                complete = False
+
+    return complete
 
 
 async def finalize_ticket_async(
@@ -768,8 +1219,16 @@ async def finalize_ticket_async(
             },
         )
         partial = False
-        context = payload.get("context") or {}
-        attachments = payload.setdefault("attachments", {})
+        raw_context = payload.get("context")
+        context = raw_context if isinstance(raw_context, dict) else {}
+        if context is not raw_context:
+            payload["context"] = context
+        raw_attachments = payload.get("attachments")
+        if isinstance(raw_attachments, dict):
+            attachments = raw_attachments
+        else:
+            attachments = {}
+            payload["attachments"] = attachments
 
         # --- Materials zip ---
         if (
@@ -824,6 +1283,9 @@ async def finalize_ticket_async(
                         "error_message": str(exc),
                     },
                 )
+
+        if not _critical_sync_attachments_complete(payload, ticket_dir):
+            partial = True
 
         # --- Index + summary ---
         try:

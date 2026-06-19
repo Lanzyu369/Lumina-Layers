@@ -180,7 +180,10 @@ def test_lut_details_catalog_endpoint_returns_500_when_all_catalog_entries_fail_
     try:
         response = client.get("/api/lut/details/catalog")
         assert response.status_code == 500
-        assert "LUT details catalog unavailable" in response.json()["detail"]
+        assert response.json()["detail"] == (
+            "Unable to load the LUT catalog. Check that LUT presets are available and try again."
+        )
+        assert "All discovered LUT detail files failed to parse" not in response.text
     finally:
         lut_router_module._lut_details_service = original_service
         lut_router_module.get_lut_details_service = original_factory
@@ -205,7 +208,10 @@ def test_lut_details_detail_endpoint_returns_500_when_named_file_exists_but_cann
     try:
         response = client.get("/api/lut/Bambulab - PLA - broken_detail/details")
         assert response.status_code == 500
-        assert "LUT details unavailable" in response.json()["detail"]
+        assert response.json()["detail"] == (
+            "Unable to load LUT details. Check that the selected LUT is valid and try again."
+        )
+        assert "failed to parse" not in response.text
     finally:
         lut_router_module._lut_details_service = original_service
 

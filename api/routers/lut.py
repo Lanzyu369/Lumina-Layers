@@ -90,6 +90,33 @@ _LUT_COMPARE_FAILED_DETAIL = (
     "Unable to compare the selected LUTs. Check that both LUTs use "
     "supported formats with comparable recipes."
 )
+_LUT_DETAILS_CATALOG_FAILED_DETAIL = (
+    "Unable to load the LUT catalog. Check that LUT presets are available and try again."
+)
+_LUT_DETAILS_FAILED_DETAIL = (
+    "Unable to load LUT details. Check that the selected LUT is valid and try again."
+)
+_LUT_UPLOAD_INVALID_DETAIL = (
+    "Invalid LUT file. Use a supported LUT format with readable color entries."
+)
+_LUT_UPLOAD_FAILED_DETAIL = (
+    "Unable to save the LUT upload. Check server storage permissions and try again."
+)
+_LUT_RECIPE_COLOR_PREDICTION_FAILED_DETAIL = (
+    "Unable to predict the recipe color. Check that the LUT supports "
+    "recipe prediction and the recipe parameters are valid."
+)
+_LUT_RECIPE_SEARCH_FAILED_DETAIL = (
+    "Unable to search LUT recipes. Check that the LUT supports recipe "
+    "search and the search parameters are valid."
+)
+
+
+def _lut_error_fields(exc: Exception) -> dict[str, str]:
+    return {
+        "error_type": type(exc).__name__,
+        "error_message": str(exc),
+    }
 
 
 def _build_lut_list_file_map(lut_dict: dict[str, str]) -> tuple[tuple[str, str], ...]:
@@ -281,7 +308,17 @@ def get_lut_details_catalog() -> LutDetailsCatalogResponse:
     try:
         catalog = _resolve_lut_details_service().get_catalog()
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"LUT details catalog unavailable: {exc}") from exc
+        log.error(
+            "LUT details catalog failed",
+            extra={
+                "event": "lut_details_catalog_failed",
+                **_lut_error_fields(exc),
+            },
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=_LUT_DETAILS_CATALOG_FAILED_DETAIL,
+        ) from exc
     return LutDetailsCatalogResponse(
         groups=[
             LutDetailsCatalogGroup(
@@ -567,9 +604,29 @@ async def upload_lut(file: UploadFile = File(..., description="LUT 文件 (.npy/
         )
         return {"status": "ok", "message": f"LUT 已保存: {display_name}", "name": display_name}
     except _UploadedLutValidationError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        log.warning(
+            "LUT upload validation failed",
+            extra={
+                "event": "lut_upload_validation_failed",
+                "original_filename": filename,
+                "file_extension": ext,
+                "file_size_bytes": int(total_read),
+                **_lut_error_fields(exc),
+            },
+        )
+        raise HTTPException(status_code=422, detail=_LUT_UPLOAD_INVALID_DETAIL) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"上传失败: {exc}") from exc
+        log.error(
+            "LUT upload failed",
+            extra={
+                "event": "lut_upload_failed",
+                "original_filename": filename,
+                "file_extension": ext,
+                "file_size_bytes": int(total_read),
+                **_lut_error_fields(exc),
+            },
+        )
+        raise HTTPException(status_code=500, detail=_LUT_UPLOAD_FAILED_DETAIL) from exc
     finally:
         os.unlink(tmp_path)
 
@@ -1073,7 +1130,18 @@ def get_lut_details(lut_name: str) -> LutDetailsResponse:
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"LUT not found: {lut_name}") from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"LUT details unavailable: {exc}") from exc
+        log.error(
+            "LUT details failed",
+            extra={
+                "event": "lut_details_failed",
+                "lut_name": lut_name,
+                **_lut_error_fields(exc),
+            },
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=_LUT_DETAILS_FAILED_DETAIL,
+        ) from exc
 
     log.info(
         "LUT details returned",
@@ -1186,9 +1254,17 @@ def predict_recipe_color_endpoint(
     except HTTPException:
         raise
     except Exception as exc:
+        log.warning(
+            "LUT recipe color prediction failed",
+            extra={
+                "event": "lut_recipe_color_prediction_failed",
+                "lut_name": lut_name,
+                **_lut_error_fields(exc),
+            },
+        )
         raise HTTPException(
             status_code=422,
-            detail=f"Recipe color prediction failed: {exc}",
+            detail=_LUT_RECIPE_COLOR_PREDICTION_FAILED_DETAIL,
         ) from exc
 
     return RecipeColorPredictResponse(
@@ -1237,7 +1313,18 @@ def search_recipes_endpoint(
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=422, detail=f"Recipe search failed: {exc}") from exc
+        log.warning(
+            "LUT recipe search failed",
+            extra={
+                "event": "lut_recipe_search_failed",
+                "lut_name": lut_name,
+                **_lut_error_fields(exc),
+            },
+        )
+        raise HTTPException(
+            status_code=422,
+            detail=_LUT_RECIPE_SEARCH_FAILED_DETAIL,
+        ) from exc
 
     return RecipeSearchResponse(
         status="ok",

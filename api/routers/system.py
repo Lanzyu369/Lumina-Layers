@@ -50,6 +50,9 @@ log = get_logger(__name__)
 CLEANABLE_EXTENSIONS: set[str] = {".3mf", ".glb", ".png", ".jpg", ".txt"}
 PROTECTED_FILES: set[str] = {"lumina_stats.txt", "lumina_lut.json"}
 EPHEMERAL_PREVIEW_TTL_SECONDS = 600
+IMAGE_PREVIEW_PREPARATION_FAILED_DETAIL = (
+    "Image preview could not be prepared. Please try again."
+)
 MACHINE_REGISTRY_ASSET_MEDIA_TYPES: dict[str, str] = {
     ".png": "image/png",
     ".jpg": "image/jpeg",
@@ -181,6 +184,35 @@ def _purge_subdir(subdir: str) -> tuple[int, int]:
     return count, freed
 
 
+def _remove_preview_path(path: str | None) -> None:
+    """Best-effort cleanup for preview files not owned by FileRegistry."""
+    if not path:
+        return
+    with suppress(OSError):
+        if os.path.exists(path):
+            os.unlink(path)
+
+
+def _raise_image_preview_preparation_error(
+    exc: Exception,
+    *,
+    original_filename: str,
+) -> None:
+    log.error(
+        "Image preview registration failed",
+        extra={
+            "event": "system_image_preview_registration_failed",
+            "error_type": type(exc).__name__,
+            "error_message": str(exc),
+            "original_filename": original_filename,
+        },
+    )
+    raise HTTPException(
+        status_code=500,
+        detail=IMAGE_PREVIEW_PREPARATION_FAILED_DETAIL,
+    ) from exc
+
+
 def cleanup_output_dir(output_dir: str) -> tuple[int, int]:
     """Scan *output_dir* and its ``temp/`` / ``models/`` subdirectories,
     deleting transient files.
@@ -281,24 +313,36 @@ async def image_preview(
             status_code=422,
             detail="无法读取图片尺寸：无效或损坏的图片文件",
         ) from exc
-    file_id = file_registry.register_path(
-        str(uuid.uuid4()),
-        png_path,
-        "preview.png",
-        ttl_seconds=EPHEMERAL_PREVIEW_TTL_SECONDS,
-    )
-    file_size_bytes = os.path.getsize(png_path)
-    log.info(
-        "Image preview generated",
-        extra={
-            "event": "system_image_preview_done",
-            "original_filename": original_filename,
-            "file_id": file_id,
-            "image_width": int(width),
-            "image_height": int(height),
-            "file_size_bytes": int(file_size_bytes),
-        },
-    )
+    file_id: str | None = None
+    try:
+        file_id = file_registry.register_path(
+            str(uuid.uuid4()),
+            png_path,
+            "preview.png",
+            ttl_seconds=EPHEMERAL_PREVIEW_TTL_SECONDS,
+        )
+        file_size_bytes = os.path.getsize(png_path)
+        log.info(
+            "Image preview generated",
+            extra={
+                "event": "system_image_preview_done",
+                "original_filename": original_filename,
+                "file_id": file_id,
+                "image_width": int(width),
+                "image_height": int(height),
+                "file_size_bytes": int(file_size_bytes),
+            },
+        )
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        if file_id is not None:
+            with suppress(OSError, RuntimeError, ValueError):
+                file_registry.cleanup_file(file_id)
+        else:
+            _remove_preview_path(png_path)
+        _raise_image_preview_preparation_error(
+            exc,
+            original_filename=original_filename,
+        )
     return {"preview_url": f"/api/files/{file_id}", "width": width, "height": height}
 
 

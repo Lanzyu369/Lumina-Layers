@@ -33,6 +33,7 @@ def _build_fake_processor(scene):
                                     2: [255, 255, 0, 255], 3: [0, 0, 255, 255]}
     fake_analysis.slot_names = ["White", "Red", "Yellow", "Blue"]
     fake_analysis.stage_timings = {}
+    fake_analysis.num_layers = 4
     vp.analyze_svg.return_value = fake_analysis
     vp.build_mesh.return_value = scene
     vp.render_preview = MagicMock(return_value=np.zeros((100, 100, 4), dtype=np.uint8))
@@ -311,6 +312,72 @@ class TestVectorBranchExport:
         _, export_kwargs = mock_bambu_export.call_args
         assert export_kwargs["slot_names"] == ["White", "Cyan", "Board"]
         assert export_kwargs["preview_colors"]["Board"] == [0, 255, 255, 255]
+
+    @patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata")
+    @patch("core.vector_engine.VectorProcessor")
+    def test_vector_add_loop_exports_keychain_geometry(self, MockVP, mock_bambu_export, tmp_path):
+        """Vector exports should include the requested keychain loop object."""
+        from config import ModelingMode
+
+        svg_file = tmp_path / "loop-vector.svg"
+        svg_file.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="84">'
+            '<rect x="10" y="10" width="60" height="64" fill="#ff0000"/>'
+            "</svg>"
+        )
+
+        fake_scene = trimesh.Scene()
+        red = trimesh.creation.box(extents=[80, 84, 1])
+        red.metadata["name"] = "Red"
+        red.visual.face_colors = [255, 0, 0, 255]
+        fake_scene.add_geometry(red, geom_name="Red")
+
+        fake_processor = _build_fake_processor(fake_scene)
+        fake_processor.analyze_svg.return_value.preview_colors = {
+            0: [255, 255, 255, 255],
+            1: [255, 0, 0, 255],
+            2: [255, 255, 0, 255],
+            3: [0, 0, 255, 255],
+        }
+        fake_processor.analyze_svg.return_value.slot_names = ["White", "Red", "Yellow", "Blue"]
+        fake_processor.analyze_svg.return_value.num_layers = 4
+        MockVP.return_value = fake_processor
+
+        from core.converter import convert_image_to_3d
+
+        dummy_lut = str(tmp_path / "dummy-loop-vector.npy")
+        np.save(dummy_lut, np.zeros(10))
+
+        convert_image_to_3d(
+            image_path=str(svg_file),
+            lut_path=dummy_lut,
+            target_width_mm=80.0,
+            spacer_thick=1.2,
+            structure_mode="Single-sided",
+            color_mode="4-Color",
+            add_loop=True,
+            loop_width=4.5,
+            loop_length=5.0,
+            loop_hole=2.5,
+            loop_pos=None,
+            modeling_mode=ModelingMode.VECTOR,
+            loop_offset_x=3.392669411755735,
+            loop_offset_y=-0.16220436514278447,
+            loop_position_preset="top-center",
+            center_on_bed=False,
+        )
+
+        _, export_kwargs = mock_bambu_export.call_args
+        exported_scene = export_kwargs["scene"]
+        keychain = exported_scene.geometry["Keychain_Loop"]
+
+        assert "Keychain_Loop" in export_kwargs["slot_names"]
+        assert "Keychain_Loop" not in export_kwargs["project_slot_names"]
+        assert export_kwargs["preview_colors"]["Keychain_Loop"] == [255, 0, 0, 255]
+        assert keychain.metadata["name"] == "Keychain_Loop"
+        assert keychain.metadata["bambu_material_name"] == "Red"
+        assert len(keychain.vertices) > 0
+        assert len(keychain.faces) > 0
 
     @patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata")
     @patch("core.vector_engine.VectorProcessor")

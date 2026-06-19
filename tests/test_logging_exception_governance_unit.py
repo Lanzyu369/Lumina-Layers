@@ -59,7 +59,7 @@ GOVERNANCE_SCAN_ROOTS = [
     ROOT / "core",
     ROOT / "utils",
 ]
-EXCEPT_EXCEPTION_BASELINE = 65
+EXCEPT_EXCEPTION_BASELINE = 66
 LOG_METHODS = {"debug", "info", "warning", "error", "exception", "critical", "log"}
 VECTOR_STRUCTURED_EVENTS = {
     "vector_branch_init",
@@ -151,6 +151,7 @@ VECTOR_STRUCTURED_EVENTS = {
 }
 EXTRACTOR_STRUCTURED_EVENTS = {
     "extractor_extract_done",
+    "extractor_lut_download_registration_failed",
     "extractor_merge_8color_done",
     "extractor_merge_5color_extended_done",
     "extractor_manual_fix_done",
@@ -160,6 +161,7 @@ EXTRACTOR_STRUCTURED_EVENTS = {
     "extractor_colorchecker_source_done",
     "extractor_colorchecker_detect_chart_done",
     "extractor_colorchecker_calibrate_done",
+    "extractor_colorchecker_calibrate_failed",
     "extractor_colorchecker_release_done",
     "extractor_colorchecker_confirm_done",
     "extractor_colorchecker_touch_done",
@@ -167,6 +169,8 @@ EXTRACTOR_STRUCTURED_EVENTS = {
     "extractor_extract_single_stage_done",
     "extractor_fit_stage_a_done",
     "extractor_extract_gradient_card_stage_a_done",
+    "extractor_gradient_card_material_library_failed",
+    "extractor_gradient_card_material_library_registration_failed",
     "extractor_save_gradient_card_material_done",
     "extractor_delete_gradient_card_material_done",
     "extractor_update_gradient_card_material_done",
@@ -188,9 +192,13 @@ MATERIAL_SYNC_STRUCTURED_EVENTS = {
     "material_sync_status_done",
     "material_sync_catalog_done",
     "material_sync_install_done",
+    "material_sync_install_failed",
     "material_sync_install_from_registry_done",
+    "material_sync_install_from_registry_failed",
     "material_sync_refresh_done",
     "material_sync_rollback_done",
+    "material_sync_rollback_failed",
+    "material_sync_status_failed",
     "material_sync_auto_refresh_scheduled",
     "material_sync_auto_refresh_done",
     "material_sync_auto_refresh_failed",
@@ -230,6 +238,7 @@ CONVERTER_STRUCTURED_EVENTS = {
     # 边车写入失败的 WARNING 事件。
     "material_usage_record_failed",
     # Batch merge 3MF structured events (批量合并 3MF 流程日志)
+    "converter_batch_item_failed",
     "batch_merge_3mf_init",
     "batch_merge_3mf_done",
     "batch_merge_plate_overflow_warning",
@@ -243,6 +252,7 @@ CALIBRATION_STRUCTURED_EVENTS = {
 FIVE_COLOR_STRUCTURED_EVENTS = {
     "five_color_query_done",
     "five_color_generate_swatch_done",
+    "five_color_generate_swatch_failed",
     "five_color_base_colors_done",
 }
 VECTORIZER_STRUCTURED_EVENTS = {
@@ -251,10 +261,16 @@ VECTORIZER_STRUCTURED_EVENTS = {
 }
 LUT_STRUCTURED_EVENTS = {
     "lut_compare_done",
+    "lut_details_catalog_failed",
     "lut_details_done",
+    "lut_details_failed",
     "lut_merge_done",
+    "lut_recipe_color_prediction_failed",
+    "lut_recipe_search_failed",
     "lut_session_info_done",
     "lut_upload_done",
+    "lut_upload_failed",
+    "lut_upload_validation_failed",
 }
 SYSTEM_STRUCTURED_EVENTS = {
     "system_image_preview_done",
@@ -364,7 +380,14 @@ def test_no_business_print_in_hot_paths() -> None:
 def test_except_exception_count_does_not_increase() -> None:
     """Catch-all exceptions may exist but should not grow.
 
-    Baseline last bumped from 60 -> 65 by the v2 GLB mesh kernel work in
+    Baseline last bumped from 65 -> 66 by the extractor final LUT download
+    registration cleanup guard in ``api/routers/extractor.py``. That guard
+    runs after a route-owned ``extractor_lut_*`` copy has been written but
+    before it is registered with ``FileRegistry``; it removes the orphan copy,
+    emits ``extractor_lut_download_registration_failed`` with actionable ERROR
+    fields, and raises a bounded HTTP 500.
+
+    Earlier baseline bump from 60 -> 65 came from the v2 GLB mesh kernel work in
     ``core/pipeline/s11_glb_preview.py`` (delta = +5). Note: the previous
     in-tree baseline value of 61 was a `<=` ceiling, not an exact count;
     actual pre-change total was 60. The five new ``except Exception`` sites
@@ -443,6 +466,12 @@ def _is_safe_log_call(node: ast.Call) -> bool:
     return isinstance(func, ast.Name) and func.id == "_safe_log"
 
 
+def _is_material_sync_error_helper_call(node: ast.Call) -> bool:
+    """Detect _raise_material_sync_error(event=...) helper calls."""
+    func = node.func
+    return isinstance(func, ast.Name) and func.id == "_raise_material_sync_error"
+
+
 def test_no_starlog_catchall_event_names() -> None:
     """Structured event names should describe real events, not generic log buckets."""
     violations: list[str] = []
@@ -483,6 +512,23 @@ def test_no_starlog_catchall_event_names() -> None:
                         violations.append(
                             _relative_location(file_path, second_arg)
                         )
+            # Pattern 3: _raise_material_sync_error(event="event_name", ...)
+            # centralizes handled HTTP error logging while preserving literal
+            # structured event names for governance.
+            if _is_material_sync_error_helper_call(node):
+                for keyword in node.keywords:
+                    if keyword.arg != "event":
+                        continue
+                    event_arg = keyword.value
+                    if isinstance(event_arg, ast.Constant) and isinstance(
+                        event_arg.value, str
+                    ):
+                        event_name = event_arg.value
+                        literal_events.add(event_name)
+                        if event_name.endswith("_log"):
+                            violations.append(
+                                _relative_location(file_path, event_arg)
+                            )
 
     assert not violations, "Catch-all *_log events found: " + ", ".join(violations)
     missing = sorted(REQUIRED_STRUCTURED_EVENTS - literal_events)

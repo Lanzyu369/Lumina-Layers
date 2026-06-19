@@ -4922,6 +4922,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "失败文件列表",
     en: "Failed files list",
   },
+  "batch.itemError.conversionFailed": {
+    zh: "这个文件无法转换。请重新上传该文件，或查看服务端日志了解详情。",
+    en: "This file could not be converted. Re-upload it or check the server log for details.",
+  },
   // Merged batch 3MF download + plate-overflow warning (batch-mode-merged-3mf).
   // 批量合并 3MF 下载与超出热床范围的警告文案。
   "batch.download.mergedThreemf": {

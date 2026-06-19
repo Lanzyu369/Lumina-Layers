@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -46,6 +47,137 @@ _log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Material loading
 # ---------------------------------------------------------------------------
+
+
+def _material_solver_value_error(material_label: str, reason: str) -> ValueError:
+    label = str(material_label or "selected material").strip() or "selected material"
+    return ValueError(
+        f"Material '{label}' cannot be used by the material solver: {reason}. "
+        "Re-fit Stage A or import a complete Lumina material export."
+    )
+
+
+def _solver_vector(
+    raw_value: Any,
+    *,
+    material_label: str,
+    field_path: str,
+    bounded_unit: bool = False,
+    positive: bool = False,
+) -> np.ndarray:
+    if not isinstance(raw_value, (list, tuple)):
+        raise _material_solver_value_error(
+            material_label,
+            f"{field_path} must contain exactly 3 finite numbers",
+        )
+    try:
+        vector = np.asarray(raw_value, dtype=np.float64)
+    except (TypeError, ValueError) as exc:
+        raise _material_solver_value_error(
+            material_label,
+            f"{field_path} must contain exactly 3 finite numbers",
+        ) from exc
+    if vector.shape != (3,) or not np.all(np.isfinite(vector)):
+        raise _material_solver_value_error(
+            material_label,
+            f"{field_path} must contain exactly 3 finite numbers",
+        )
+    if bounded_unit and not np.all((0.0 <= vector) & (vector <= 1.0)):
+        raise _material_solver_value_error(
+            material_label,
+            f"{field_path} must contain numbers in [0, 1]",
+        )
+    if positive and not np.all(vector > 0.0):
+        raise _material_solver_value_error(
+            material_label,
+            f"{field_path} must contain positive numbers",
+        )
+    return vector
+
+
+def validate_stage_a_solver_parameters(
+    stage_a: Any,
+    *,
+    material_label: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Validate and extract the Stage A vectors required by the material solver.
+    校验并提取材料求解器所需的 Stage A 向量。
+
+    Args:
+        stage_a: Parsed Stage A JSON payload. (已解析的 Stage A JSON 数据)
+        material_label: Logical material label for user-facing errors.
+            (用于错误提示的逻辑耗材标识)
+
+    Returns:
+        ``E``, ``k``, and white-substrate ``C0`` vectors. (E、k 和白底 C0 向量)
+    """
+    if not isinstance(stage_a, dict):
+        raise _material_solver_value_error(
+            material_label,
+            "Stage A parameters must be a JSON object",
+        )
+    parameters = stage_a.get("parameters")
+    if not isinstance(parameters, dict):
+        raise _material_solver_value_error(
+            material_label,
+            "parameters must be a JSON object",
+        )
+    channels = parameters.get("channels")
+    if not isinstance(channels, list) or not channels:
+        raise _material_solver_value_error(
+            material_label,
+            "parameters.channels[0] must be an object with E and k vectors",
+        )
+    channel0 = channels[0]
+    if not isinstance(channel0, dict):
+        raise _material_solver_value_error(
+            material_label,
+            "parameters.channels[0] must be an object with E and k vectors",
+        )
+
+    E = _solver_vector(
+        channel0.get("E"),
+        material_label=material_label,
+        field_path="parameters.channels[0].E",
+        bounded_unit=True,
+    )
+    k = _solver_vector(
+        channel0.get("k"),
+        material_label=material_label,
+        field_path="parameters.channels[0].k",
+        positive=True,
+    )
+
+    c0_raw: Any = None
+    substrates = parameters.get("substrates")
+    if isinstance(substrates, list):
+        for substrate in substrates:
+            if (
+                isinstance(substrate, dict)
+                and substrate.get("substrate_id") == "white"
+            ):
+                c0_raw = substrate.get("C0")
+                break
+    if c0_raw is None:
+        fitted_substrates = stage_a.get("fitted_substrates")
+        if isinstance(fitted_substrates, dict):
+            white_fitted = fitted_substrates.get("white")
+            if isinstance(white_fitted, dict):
+                c0_raw = white_fitted.get("C0")
+    if c0_raw is None:
+        raise _material_solver_value_error(
+            material_label,
+            "Stage A parameters must include white substrate C0 as "
+            "parameters.substrates[substrate_id='white'].C0 or "
+            "fitted_substrates.white.C0",
+        )
+    C0_white = _solver_vector(
+        c0_raw,
+        material_label=material_label,
+        field_path="white substrate C0",
+        bounded_unit=True,
+    )
+    return E, k, C0_white
 
 
 def load_material_params(
@@ -86,34 +218,10 @@ def load_material_params(
         raise FileNotFoundError(f"Stage A parameters not found: {stage_a_filename}")
 
     stage_a = json.loads(stage_a_path.read_text(encoding="utf-8"))
-    parameters = stage_a.get("parameters") or {}
-    channels = parameters.get("channels") or []
-    if not channels:
-        raise ValueError(f"No channels in Stage A parameters for {directory_name}")
-
-    channel0 = channels[0]
-    E = np.asarray(channel0["E"], dtype=np.float64)
-    k = np.asarray(channel0["k"], dtype=np.float64)
-    if E.shape != (3,) or k.shape != (3,):
-        raise ValueError(f"E/k must be length-3 vectors, got E={E.shape}, k={k.shape}")
-
-    # Extract C0_white from substrates
-    substrates = parameters.get("substrates") or []
-    C0_white: np.ndarray | None = None
-    for sub in substrates:
-        if sub.get("substrate_id") == "white":
-            C0_white = np.asarray(sub["C0"], dtype=np.float64)
-            break
-    # Fallback to fitted_substrates
-    if C0_white is None:
-        fitted = stage_a.get("fitted_substrates") or {}
-        white_fitted = fitted.get("white") or {}
-        if "C0" in white_fitted:
-            C0_white = np.asarray(white_fitted["C0"], dtype=np.float64)
-    if C0_white is None:
-        raise ValueError(f"No white substrate C0 found for {directory_name}")
-    if C0_white.shape != (3,):
-        raise ValueError(f"C0_white must be length-3, got {C0_white.shape}")
+    E, k, C0_white = validate_stage_a_solver_parameters(
+        stage_a,
+        material_label=directory_name,
+    )
 
     # Estimated sRGB for preview
     material_summary = archive.get("material_summary") or {}
