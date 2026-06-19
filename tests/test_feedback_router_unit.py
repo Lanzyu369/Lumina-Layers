@@ -580,6 +580,53 @@ def test_submit_bug_report_accepts_valid_png_screenshot(
     assert ticket_json["attachments"]["screenshot"]["filename"] == "screenshot.png"
 
 
+def test_submit_bug_report_marks_screenshot_failed_when_write_fails(
+    client: TestClient,
+    feedback_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failed screenshot write is explicit in ``ticket.json``.
+
+    截图写入失败时，``ticket.json`` 必须显式标记失败，不能伪装成不适用。
+    """
+    import base64
+
+    original_write_bytes = Path.write_bytes
+
+    def _fail_screenshot_write(self: Path, data: bytes) -> int:
+        if self.name.startswith("screenshot"):
+            raise OSError("disk full while writing screenshot")
+        return original_write_bytes(self, data)
+
+    monkeypatch.setattr(Path, "write_bytes", _fail_screenshot_write)
+    _capture_feedback_logger(caplog, logging.WARNING)
+
+    valid_png_b64 = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 32).decode()
+    payload = _payload(screenshot_data_url=f"data:image/png;base64,{valid_png_b64}")
+
+    response = client.post("/api/feedback/bug-report", json=payload)
+
+    assert response.status_code == 200
+    data = response.json()
+    ticket_json = _read_ticket_json(feedback_root, data["ticket_id"])
+    screenshot = ticket_json["attachments"]["screenshot"]
+    assert screenshot == {
+        "status": "failed",
+        "filename": "screenshot.png",
+        "size_bytes": None,
+        "error_type": "OSError",
+        "error_message": "Screenshot could not be saved.",
+    }
+    warnings = [
+        record for record in caplog.records
+        if getattr(record, "event", None) == "feedback_attachment_lookup_failed"
+    ]
+    assert warnings
+    assert warnings[0].attachment_kind == "screenshot"
+    assert warnings[0].error_type == "OSError"
+
+
 def test_submit_bug_report_rejects_non_image_mime_screenshot(
     client: TestClient,
     caplog: pytest.LogCaptureFixture,

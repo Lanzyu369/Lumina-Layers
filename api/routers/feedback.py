@@ -949,6 +949,13 @@ async def submit_bug_report(
                 "size_bytes": screenshot_path.stat().st_size,
             }
         except OSError as exc:
+            payload["attachments"]["screenshot"] = {
+                "status": "failed",
+                "filename": screenshot_path.name,
+                "size_bytes": None,
+                "error_type": type(exc).__name__,
+                "error_message": "Screenshot could not be saved.",
+            }
             log.warning(
                 "Screenshot write failed.",
                 extra={
@@ -957,6 +964,7 @@ async def submit_bug_report(
                     "error_message": str(exc),
                     "path": str(screenshot_path),
                     "attachment_kind": "screenshot",
+                    "ticket_id": ticket_id,
                 },
             )
 

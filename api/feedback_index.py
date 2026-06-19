@@ -184,6 +184,10 @@ def _format_attachments_table(attachments: Any) -> str:
                 detail_parts.append(
                     f"dirs={len(entry['included_dirs'])}"
                 )
+        if entry.get("error_type") or entry.get("error_message"):
+            error_type = entry.get("error_type") or "AttachmentError"
+            error_message = entry.get("error_message") or "Attachment failed"
+            detail_parts.append(f"error={error_type}: {error_message}")
         detail = ", ".join(detail_parts) if detail_parts else _MISSING
         lines.append(
             f"| {kind} | {status} | {filename} | {_safe_str(size)} | {detail} |"
