@@ -524,7 +524,7 @@ function resolveStageErrorMessage(
   if (isRequestTimeoutError(error)) {
     return timeoutMessage;
   }
-  return error instanceof Error ? error.message : fallbackMessage;
+  return fallbackMessage;
 }
 
 export function ColorcheckerConfirmDialogInner({
@@ -840,7 +840,7 @@ export function ColorcheckerConfirmDialogInner({
             resolveStageErrorMessage(
               error,
               t("ext_cc_source_prepare_timeout"),
-              t("ext_cc_missing_image"),
+              t("ext_cc_source_prepare_failed"),
             ),
           );
         }
