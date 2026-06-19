@@ -587,7 +587,7 @@ def test_generate_single_stage_kit_cleans_manifest_when_second_registration_fail
     assert not manifest_path.exists()
 
 
-def test_generate_single_stage_kit_rolls_back_paths_when_preview_registration_fails(
+def test_generate_single_stage_kit_preserves_paths_when_preview_registration_fails(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -628,16 +628,30 @@ def test_generate_single_stage_kit_rolls_back_paths_when_preview_registration_fa
         },
     )
 
-    assert response.status_code == 500
+    assert response.status_code == 200
+    body = response.json()
+    assert body["kit_download_url"].startswith("/api/files/")
+    assert body["manifest_url"].startswith("/api/files/")
+    assert body["preview_url"] is None
     assert len(registry.path_file_ids) == 2
-    for file_id in registry.path_file_ids:
-        assert registry.get_entry(file_id) is None
-        assert registry.resolve(file_id) is None
-    assert not kit_path.exists()
-    assert not manifest_path.exists()
+    kit_id, manifest_id = registry.path_file_ids
+    assert body["kit_download_url"].endswith(kit_id)
+    assert body["manifest_url"].endswith(manifest_id)
+    assert registry.get_entry(kit_id) is not None
+    assert registry.get_entry(manifest_id) is not None
+    resolved_kit = registry.resolve(kit_id)
+    resolved_manifest = registry.resolve(manifest_id)
+    assert resolved_kit is not None
+    assert resolved_manifest is not None
+    assert resolved_kit[0] == str(kit_path)
+    assert resolved_manifest[0] == str(manifest_path)
+    assert client.get(body["kit_download_url"]).status_code == 200
+    assert client.get(body["manifest_url"]).status_code == 200
+    assert kit_path.exists()
+    assert manifest_path.exists()
 
 
-def test_calibration_generate_rolls_back_download_when_preview_registration_fails(
+def test_calibration_generate_preserves_download_when_preview_registration_fails(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -667,12 +681,20 @@ def test_calibration_generate_rolls_back_download_when_preview_registration_fail
         },
     )
 
-    assert response.status_code == 500
+    assert response.status_code == 200
+    body = response.json()
+    assert body["download_url"].startswith("/api/files/")
+    assert body["preview_url"] is None
+    assert body["layer_urls"] is None
     assert len(registry.path_file_ids) == 1
     download_id = registry.path_file_ids[0]
-    assert registry.get_entry(download_id) is None
-    assert registry.resolve(download_id) is None
-    assert not board_path.exists()
+    assert body["download_url"].endswith(download_id)
+    assert registry.get_entry(download_id) is not None
+    resolved_download = registry.resolve(download_id)
+    assert resolved_download is not None
+    assert resolved_download[0] == str(board_path)
+    assert client.get(body["download_url"]).status_code == 200
+    assert board_path.exists()
 
 
 def test_calibration_generate_registers_stateless_outputs_with_ttl(
