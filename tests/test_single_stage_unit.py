@@ -22,6 +22,7 @@ from api.app import create_app
 from api.dependencies import get_file_registry, get_session_store
 from api.file_registry import FileRegistry
 from api.routers.calibration import SINGLE_STAGE_KIT_GENERATION_FAILED_DETAIL
+from api.routers.single_stage import MATERIAL_SOLVER_CACHE_LIST_FAILED_DETAIL
 from api.session_store import SessionStore
 from config import PaletteEntry
 from core.single_stage import (
@@ -68,6 +69,28 @@ def _client_with_state() -> tuple[TestClient, SessionStore, FileRegistry]:
     app.dependency_overrides[get_session_store] = lambda: store
     app.dependency_overrides[get_file_registry] = lambda: registry
     return TestClient(app), store, registry
+
+
+def test_material_solver_cache_list_hides_storage_error_detail(
+    monkeypatch,
+) -> None:
+    client, _, _ = _client_with_state()
+    private_path = "/Users/min/private/material-cache/index.json"
+
+    def _fail_list_cached_entries():
+        raise OSError(f"cannot read {private_path}: permission denied")
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.list_cached_entries",
+        _fail_list_cached_entries,
+    )
+
+    response = client.get("/api/extractor/material-solver-caches")
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == MATERIAL_SOLVER_CACHE_LIST_FAILED_DETAIL
+    assert private_path not in response.text
+    assert "permission denied" not in response.text
 
 
 class _RegisterPathFailingRegistry(FileRegistry):
