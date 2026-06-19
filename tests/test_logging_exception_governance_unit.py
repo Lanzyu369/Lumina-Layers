@@ -250,10 +250,16 @@ VECTORIZER_STRUCTURED_EVENTS = {
 }
 LUT_STRUCTURED_EVENTS = {
     "lut_compare_done",
+    "lut_details_catalog_failed",
     "lut_details_done",
+    "lut_details_failed",
     "lut_merge_done",
+    "lut_recipe_color_prediction_failed",
+    "lut_recipe_search_failed",
     "lut_session_info_done",
     "lut_upload_done",
+    "lut_upload_failed",
+    "lut_upload_validation_failed",
 }
 SYSTEM_STRUCTURED_EVENTS = {
     "system_image_preview_done",
