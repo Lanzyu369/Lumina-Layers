@@ -246,6 +246,7 @@ FIVE_COLOR_STRUCTURED_EVENTS = {
 }
 VECTORIZER_STRUCTURED_EVENTS = {
     "vectorize_image_done",
+    "vectorize_image_failed",
 }
 LUT_STRUCTURED_EVENTS = {
     "lut_compare_done",

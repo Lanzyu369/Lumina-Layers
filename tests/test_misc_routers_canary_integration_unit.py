@@ -548,20 +548,19 @@ class TestVectorizeImageCanary:
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         monkeypatch.setattr(config, "TEMP_DIR", str(tmp_path))
+        private_detail = f"vector failed while reading {tmp_path / 'private.png'}"
         mock_pool = SimpleNamespace(
-            submit=AsyncMock(
-                side_effect=RuntimeError(
-                    f"vector failed while reading {tmp_path / 'input.png'}"
-                )
-            )
+            submit=AsyncMock(side_effect=RuntimeError(private_detail))
         )
         app = create_app()
         registry = FileRegistry()
         app.dependency_overrides[get_file_registry] = lambda: registry
         app.dependency_overrides[get_worker_pool] = lambda: mock_pool
         client = TestClient(app)
+        target_logger = _capture_router_logger(caplog, "vectorizer")
         try:
             response = client.post(
                 "/api/vectorize",
@@ -569,23 +568,31 @@ class TestVectorizeImageCanary:
                 data={"params": "{}"},
             )
         finally:
+            target_logger.removeHandler(caplog.handler)
             app.dependency_overrides.clear()
 
         assert response.status_code == 500
-        detail = response.json()["detail"]
-        assert detail == "Vectorization failed. Check the server log for details."
-        assert "vector failed" not in detail
-        assert str(tmp_path) not in detail
+        assert response.json()["detail"] == (
+            "Vectorization failed. Check server logs for details."
+        )
+        assert str(tmp_path) not in response.text
+        records = _records_for_event(caplog, "vectorize_image_failed")
+        assert len(records) == 1
+        record = records[0]
+        assert record.stage == "worker"
+        assert record.error_type == "RuntimeError"
+        assert record.error_message == private_detail
         assert sorted(tmp_path.iterdir()) == []
 
     def test_registry_failure_cleans_upload_and_unregistered_svg(
         self,
         monkeypatch: pytest.MonkeyPatch,
         tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         class FailingRegistry(FileRegistry):
             def register_path(self, *args: object, **kwargs: object) -> str:
-                raise RuntimeError("registry unavailable")
+                raise RuntimeError(f"registry unavailable at {tmp_path / 'registry.db'}")
 
         monkeypatch.setattr(config, "TEMP_DIR", str(tmp_path))
         svg_path = tmp_path / "output.svg"
@@ -606,6 +613,7 @@ class TestVectorizeImageCanary:
         app.dependency_overrides[get_file_registry] = lambda: FailingRegistry()
         app.dependency_overrides[get_worker_pool] = lambda: mock_pool
         client = TestClient(app, raise_server_exceptions=False)
+        target_logger = _capture_router_logger(caplog, "vectorizer")
         try:
             response = client.post(
                 "/api/vectorize",
@@ -613,9 +621,18 @@ class TestVectorizeImageCanary:
                 data={"params": "{}"},
             )
         finally:
+            target_logger.removeHandler(caplog.handler)
             app.dependency_overrides.clear()
 
         assert response.status_code == 500
-        assert response.json()["detail"] == "Internal server error"
-        assert "registry unavailable" not in response.text
+        assert response.json()["detail"] == (
+            "Vectorization output could not be prepared. Check server logs for details."
+        )
+        assert str(tmp_path) not in response.text
+        records = _records_for_event(caplog, "vectorize_image_failed")
+        assert len(records) == 1
+        record = records[0]
+        assert record.stage == "register_output"
+        assert record.error_type == "RuntimeError"
+        assert str(tmp_path / "registry.db") in record.error_message
         assert sorted(tmp_path.iterdir()) == []
