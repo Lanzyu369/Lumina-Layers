@@ -188,9 +188,13 @@ MATERIAL_SYNC_STRUCTURED_EVENTS = {
     "material_sync_status_done",
     "material_sync_catalog_done",
     "material_sync_install_done",
+    "material_sync_install_failed",
     "material_sync_install_from_registry_done",
+    "material_sync_install_from_registry_failed",
     "material_sync_refresh_done",
     "material_sync_rollback_done",
+    "material_sync_rollback_failed",
+    "material_sync_status_failed",
     "material_sync_auto_refresh_scheduled",
     "material_sync_auto_refresh_done",
     "material_sync_auto_refresh_failed",
@@ -442,6 +446,12 @@ def _is_safe_log_call(node: ast.Call) -> bool:
     return isinstance(func, ast.Name) and func.id == "_safe_log"
 
 
+def _is_material_sync_error_helper_call(node: ast.Call) -> bool:
+    """Detect _raise_material_sync_error(event=...) helper calls."""
+    func = node.func
+    return isinstance(func, ast.Name) and func.id == "_raise_material_sync_error"
+
+
 def test_no_starlog_catchall_event_names() -> None:
     """Structured event names should describe real events, not generic log buckets."""
     violations: list[str] = []
@@ -482,6 +492,23 @@ def test_no_starlog_catchall_event_names() -> None:
                         violations.append(
                             _relative_location(file_path, second_arg)
                         )
+            # Pattern 3: _raise_material_sync_error(event="event_name", ...)
+            # centralizes handled HTTP error logging while preserving literal
+            # structured event names for governance.
+            if _is_material_sync_error_helper_call(node):
+                for keyword in node.keywords:
+                    if keyword.arg != "event":
+                        continue
+                    event_arg = keyword.value
+                    if isinstance(event_arg, ast.Constant) and isinstance(
+                        event_arg.value, str
+                    ):
+                        event_name = event_arg.value
+                        literal_events.add(event_name)
+                        if event_name.endswith("_log"):
+                            violations.append(
+                                _relative_location(file_path, event_arg)
+                            )
 
     assert not violations, "Catch-all *_log events found: " + ", ".join(violations)
     missing = sorted(REQUIRED_STRUCTURED_EVENTS - literal_events)
