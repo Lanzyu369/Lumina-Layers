@@ -6,6 +6,7 @@ import {
   previewMaterialRecipe,
   generateMaterialRecipeSwatch,
 } from "../api/extractor";
+import { apiErrorToVisibleMessage } from "../api/client";
 import type {
   MaterialRecipeLayer,
   MaterialRecipePreviewResponse,
@@ -41,6 +42,9 @@ const toHex = (rgb: [number, number, number]) =>
 
 const toRgbCss = (rgb: [number, number, number]) =>
   `rgb(${clampChannel(rgb[0])}, ${clampChannel(rgb[1])}, ${clampChannel(rgb[2])})`;
+
+const resolveMaterialRecipeError = (err: unknown, fallback: string): string =>
+  apiErrorToVisibleMessage(err, fallback);
 
 interface PaletteEntry {
   directoryName: string;
@@ -188,7 +192,10 @@ export default function MaterialRecipeQueryPanel() {
       setSwatchDownloadUrl(response.download_url);
       setSwatchPreviewUrl(response.preview_url ?? null);
     } catch (err) {
-      const message = err instanceof Error ? err.message : t("material_recipe_generate_swatch_failed");
+      const message = resolveMaterialRecipeError(
+        err,
+        t("material_recipe_generate_swatch_failed"),
+      );
       setError(message);
     } finally {
       setIsGeneratingSwatch(false);
@@ -209,7 +216,10 @@ export default function MaterialRecipeQueryPanel() {
       const response = await listGradientCardMaterials();
       setPalette(buildPaletteEntries(response.materials ?? []));
     } catch (err) {
-      const message = err instanceof Error ? err.message : t("material_recipe_palette_load_failed");
+      const message = resolveMaterialRecipeError(
+        err,
+        t("material_recipe_palette_load_failed"),
+      );
       setPaletteError(message);
       setPalette([]);
     } finally {
@@ -303,7 +313,10 @@ export default function MaterialRecipeQueryPanel() {
       });
       setResult(response);
     } catch (err) {
-      const message = err instanceof Error ? err.message : t("material_recipe_query_failed");
+      const message = resolveMaterialRecipeError(
+        err,
+        t("material_recipe_query_failed"),
+      );
       setError(message);
       setResult(null);
     } finally {

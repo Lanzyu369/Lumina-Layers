@@ -185,9 +185,9 @@ describe("MaterialRecipeQueryPanel", () => {
     expect(callArgs.directory_names).toHaveLength(7);
   });
 
-  it("renders an error banner when the preview API rejects", async () => {
+  it("renders a readable error banner when the preview API rejects with a generic server error", async () => {
     vi.mocked(listGradientCardMaterials).mockResolvedValue(buildLibraryResponse(1));
-    vi.mocked(previewMaterialRecipe).mockRejectedValue(new Error("backend boom"));
+    vi.mocked(previewMaterialRecipe).mockRejectedValue(new Error("Request failed with status code 500"));
 
     render(<MaterialRecipeQueryPanel />);
     await waitFor(() => {
@@ -197,8 +197,105 @@ describe("MaterialRecipeQueryPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: /计算混色|Compute color/ }));
 
     await waitFor(() => {
-      expect(screen.getByText("backend boom")).toBeInTheDocument();
+      expect(
+        screen.getByText(/The server hit an internal error|服务器发生内部错误/),
+      ).toBeInTheDocument();
     });
+    expect(
+      screen.queryByText("Request failed with status code 500"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders a readable palette error when material loading rejects with a generic client error", async () => {
+    vi.mocked(listGradientCardMaterials).mockRejectedValue(
+      new Error("Request failed with status code 422"),
+    );
+
+    render(<MaterialRecipeQueryPanel />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/missing required data|缺少必填数据|invalid values|无效值/),
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByText("Request failed with status code 422"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("preserves actionable validation details from the preview API", async () => {
+    vi.mocked(listGradientCardMaterials).mockResolvedValue(buildLibraryResponse(1));
+    const validationError = new Error(
+      "Request failed with status code 422",
+    ) as Error & {
+      response: {
+        status: number;
+        data: { detail: string };
+        headers: Record<string, string>;
+      };
+    };
+    validationError.response = {
+      status: 422,
+      data: { detail: "Layer height must be 0.04, 0.08, or 0.1 mm" },
+      headers: {},
+    };
+    vi.mocked(previewMaterialRecipe).mockRejectedValue(validationError);
+
+    render(<MaterialRecipeQueryPanel />);
+    await waitFor(() => {
+      expect(screen.getAllByTestId("material-recipe-palette-item").length).toBe(1);
+    });
+    fireEvent.click(screen.getAllByTestId("material-recipe-palette-item")[0]);
+    fireEvent.click(screen.getByRole("button", { name: /计算混色|Compute color/ }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Layer height must be 0.04, 0.08, or 0.1 mm"),
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByText("Request failed with status code 422"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders a readable swatch error when generation rejects with a generic server error", async () => {
+    vi.mocked(listGradientCardMaterials).mockResolvedValue(buildLibraryResponse(1));
+    vi.mocked(previewMaterialRecipe).mockResolvedValue({
+      status: "ok",
+      layer_count: 1,
+      layer_height_mm: 0.08,
+      substrate: "white",
+      predicted_rgb: [180, 60, 90],
+      predicted_hex: "#B43C5A",
+      layers: [],
+    });
+    vi.mocked(generateMaterialRecipeSwatch).mockRejectedValue(
+      new Error("Request failed with status code 500"),
+    );
+
+    render(<MaterialRecipeQueryPanel />);
+    await waitFor(() => {
+      expect(screen.getAllByTestId("material-recipe-palette-item").length).toBe(1);
+    });
+    fireEvent.click(screen.getAllByTestId("material-recipe-palette-item")[0]);
+    fireEvent.click(screen.getByRole("button", { name: /计算混色|Compute color/ }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /添加到队列|Add to queue/ }),
+      ).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /添加到队列|Add to queue/ }));
+    fireEvent.click(screen.getByRole("button", { name: /生成验证色块|Generate swatch/ }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/The server hit an internal error|服务器发生内部错误/),
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByText("Request failed with status code 500"),
+    ).not.toBeInTheDocument();
   });
 
   it("reverses the visible recipe layer order when the reverse button is pressed", async () => {
