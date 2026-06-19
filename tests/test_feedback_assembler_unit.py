@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -21,6 +22,7 @@ import pytest
 from api.feedback_assembler import (
     SyncCollectionResult,
     collect_sync_attachments,
+    finalize_ticket_async,
     run_startup_cleanup,
 )
 from api.feedback_time import BEIJING_TZ, now_beijing
@@ -80,6 +82,14 @@ def _make_entry(
         "created_at": created_at,
         **extra,
     }
+
+
+def _disable_feedback_email(monkeypatch: pytest.MonkeyPatch) -> None:
+    import api.feedback_email as feedback_email
+
+    monkeypatch.delenv("LUMINA_FEEDBACK_SMTP_HOST", raising=False)
+    monkeypatch.delenv("LUMINA_FEEDBACK_TO", raising=False)
+    feedback_email.is_email_configured.cache_clear()
 
 
 def test_collect_sync_attachments_copies_original_and_final(
@@ -154,6 +164,490 @@ def test_collect_sync_attachments_copies_original_and_final(
     ]
     assert any(getattr(r, "attachment_kind", None) == "original_image" for r in attachment_logs)
     assert any(getattr(r, "attachment_kind", None) == "final_artifact" for r in attachment_logs)
+
+
+def test_collect_sync_attachments_marks_copy_failures_explicitly(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    src_dir = tmp_path / "source"
+    src_dir.mkdir()
+    image_path = src_dir / "hello.png"
+    image_path.write_bytes(b"PNGDATA")
+    artifact_path = src_dir / "model.3mf"
+    artifact_path.write_bytes(b"3MFDATA")
+
+    registry = _MockFileRegistry(
+        {
+            "sess-report": {
+                "img": _make_entry(str(image_path), "hello.png", created_at=1.0),
+                "final": _make_entry(str(artifact_path), "model.3mf", created_at=2.0),
+            },
+        }
+    )
+    ticket_dir = tmp_path / "LUM-20260619-001"
+    ticket_dir.mkdir()
+    payload = {
+        "ticket_id": "LUM-20260619-001",
+        "context": {
+            "active_original_image_ref": {"session_id": "sess-report"},
+            "active_final_artifact_ref": {
+                "session_id": "sess-report",
+                "artifact_type": "3mf",
+            },
+            "source_version": "legacy",
+            "lut_name": None,
+        },
+    }
+
+    def _fail_ticket_attachment_copy(
+        src: str | os.PathLike[str],
+        dst: str | os.PathLike[str],
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
+        del src, args, kwargs
+        if Path(dst).name in {"original.png", "final.3mf"}:
+            raise OSError("disk full")
+
+    monkeypatch.setattr("api.feedback_assembler.shutil.copy2", _fail_ticket_attachment_copy)
+
+    result = collect_sync_attachments(ticket_dir, payload, registry, now_beijing())
+
+    assert result.original_image["status"] == "failed"
+    assert result.original_image["filename"] is None
+    assert result.original_image["error_type"] == "OSError"
+    assert result.original_image["error_message"] == "Original image could not be saved."
+    assert result.final_artifact["status"] == "failed"
+    assert result.final_artifact["filename"] is None
+    assert result.final_artifact["error_type"] == "OSError"
+    assert result.final_artifact["error_message"] == "Final artifact could not be saved."
+    assert not (ticket_dir / "original.png").exists()
+    assert not (ticket_dir / "final.3mf").exists()
+
+
+def test_collect_sync_attachments_marks_hash_failures_explicitly(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    src_dir = tmp_path / "source"
+    src_dir.mkdir()
+    image_path = src_dir / "hello.png"
+    image_path.write_bytes(b"PNGDATA")
+    artifact_path = src_dir / "model.3mf"
+    artifact_path.write_bytes(b"3MFDATA")
+    registry = _MockFileRegistry(
+        {
+            "sess-report": {
+                "img": _make_entry(str(image_path), "hello.png", created_at=1.0),
+                "final": _make_entry(str(artifact_path), "model.3mf", created_at=2.0),
+            },
+        }
+    )
+    ticket_dir = tmp_path / "LUM-20260619-008"
+    ticket_dir.mkdir()
+    payload = {
+        "ticket_id": "LUM-20260619-008",
+        "context": {
+            "active_original_image_ref": {"session_id": "sess-report"},
+            "active_final_artifact_ref": {
+                "session_id": "sess-report",
+                "artifact_type": "3mf",
+            },
+            "source_version": "legacy",
+            "lut_name": None,
+        },
+    }
+
+    def _fail_hash(path: str | Path) -> str:
+        if Path(path).name in {"original.png", "final.3mf"}:
+            raise OSError("hash read failed")
+        return "0" * 64
+
+    monkeypatch.setattr("api.feedback_assembler.file_sha256", _fail_hash)
+
+    result = collect_sync_attachments(ticket_dir, payload, registry, now_beijing())
+
+    assert result.original_image["status"] == "failed"
+    assert result.original_image["error_type"] == "OSError"
+    assert result.final_artifact["status"] == "failed"
+    assert result.final_artifact["error_type"] == "OSError"
+    assert not (ticket_dir / "original.png").exists()
+    assert not (ticket_dir / "final.3mf").exists()
+
+
+def test_collect_sync_attachments_tolerates_malformed_context(
+    tmp_path: Path,
+) -> None:
+    ticket_dir = tmp_path / "LUM-20260619-010"
+    ticket_dir.mkdir()
+    payload = {
+        "ticket_id": "LUM-20260619-010",
+        "context": "bad-context",
+    }
+
+    result = collect_sync_attachments(
+        ticket_dir,
+        payload,
+        _MockFileRegistry({}),
+        now_beijing(),
+    )
+
+    assert result.original_image["status"] == "not_applicable"
+    assert result.final_artifact["status"] == "not_applicable"
+    assert result.lut["status"] == "not_applicable"
+
+
+def test_finalize_ticket_async_marks_missing_declared_attachments_partial(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _disable_feedback_email(monkeypatch)
+    ticket_dir = tmp_path / "LUM-20260619-002"
+    ticket_dir.mkdir()
+    ticket_json = ticket_dir / "ticket.json"
+    payload = {
+        "schema_version": 3,
+        "ticket_id": "LUM-20260619-002",
+        "received_at_cst": now_beijing().isoformat(),
+        "assembly_status": "in_progress",
+        "context": {
+            "source_version": "legacy",
+            "lut_name": None,
+            "active_original_image_ref": {"session_id": "sess-report"},
+            "active_final_artifact_ref": {
+                "session_id": "sess-report",
+                "artifact_type": "3mf",
+                "download_url": "/api/files/missing-final",
+            },
+        },
+        "attachments": {
+            "original_image": {
+                "status": "unavailable_after_cleanup",
+                "filename": None,
+                "source_session_id": "sess-report",
+            },
+            "final_artifact": {
+                "status": "expired_ttl",
+                "filename": None,
+                "source_session_id": "sess-report",
+                "artifact_type": "3mf",
+            },
+            "lut": {"status": "not_applicable"},
+        },
+    }
+    ticket_json.write_text(json.dumps(payload), encoding="utf-8")
+
+    asyncio.run(finalize_ticket_async(ticket_dir, _MockFileRegistry({})))
+
+    finalized = json.loads(ticket_json.read_text(encoding="utf-8"))
+    assert finalized["assembly_status"] == "partial_failed"
+    assert (ticket_dir / "index.md").exists()
+    assert (ticket_dir / "summary.txt").exists()
+
+
+def test_finalize_ticket_async_marks_disk_path_only_final_ref_partial(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _disable_feedback_email(monkeypatch)
+    ticket_dir = tmp_path / "LUM-20260619-016"
+    ticket_dir.mkdir()
+    ticket_json = ticket_dir / "ticket.json"
+    payload = {
+        "schema_version": 3,
+        "ticket_id": "LUM-20260619-016",
+        "received_at_cst": now_beijing().isoformat(),
+        "assembly_status": "in_progress",
+        "context": {
+            "source_version": "legacy",
+            "lut_name": None,
+            "active_original_image_ref": None,
+            "active_final_artifact_ref": {
+                "session_id": None,
+                "download_url": None,
+                "artifact_type": "3mf",
+                "disk_path": "/nonexistent/path/model.3mf",
+            },
+        },
+        "attachments": {
+            "original_image": {"status": "not_applicable", "filename": None},
+            "final_artifact": {
+                "status": "expired_ttl",
+                "filename": None,
+                "artifact_type": "3mf",
+            },
+            "lut": {"status": "not_applicable", "filename": None},
+        },
+    }
+    ticket_json.write_text(json.dumps(payload), encoding="utf-8")
+
+    asyncio.run(finalize_ticket_async(ticket_dir, _MockFileRegistry({})))
+
+    finalized = json.loads(ticket_json.read_text(encoding="utf-8"))
+    assert finalized["assembly_status"] == "partial_failed"
+
+
+def test_finalize_ticket_async_leaves_unreferenced_attachments_done(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _disable_feedback_email(monkeypatch)
+    ticket_dir = tmp_path / "LUM-20260619-003"
+    ticket_dir.mkdir()
+    ticket_json = ticket_dir / "ticket.json"
+    payload = {
+        "schema_version": 3,
+        "ticket_id": "LUM-20260619-003",
+        "received_at_cst": now_beijing().isoformat(),
+        "assembly_status": "in_progress",
+        "context": {
+            "source_version": "legacy",
+            "lut_name": None,
+            "active_original_image_ref": None,
+            "active_final_artifact_ref": None,
+        },
+        "attachments": {
+            "original_image": {"status": "not_applicable", "filename": None},
+            "final_artifact": {"status": "not_applicable", "filename": None},
+            "lut": {"status": "not_applicable", "filename": None},
+        },
+    }
+    ticket_json.write_text(json.dumps(payload), encoding="utf-8")
+
+    asyncio.run(finalize_ticket_async(ticket_dir, _MockFileRegistry({})))
+
+    finalized = json.loads(ticket_json.read_text(encoding="utf-8"))
+    assert finalized["assembly_status"] == "done"
+
+
+def test_finalize_ticket_async_accepts_preset_lut_reference(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _disable_feedback_email(monkeypatch)
+    repo_root = _use_feedback_lut_repo(monkeypatch, tmp_path)
+    preset_lut = repo_root / "lut-preset" / "BIQU" / "preset.json"
+    preset_lut.write_bytes(b"PRESET_LUT_BYTES")
+    ticket_dir = tmp_path / "LUM-20260619-006"
+    ticket_dir.mkdir()
+    ticket_json = ticket_dir / "ticket.json"
+    payload = {
+        "schema_version": 3,
+        "ticket_id": "LUM-20260619-006",
+        "received_at_cst": now_beijing().isoformat(),
+        "assembly_status": "in_progress",
+        "context": {
+            "active_tab": "converter",
+            "source_version": "legacy",
+            "lut_name": "BIQU - preset",
+            "active_original_image_ref": None,
+            "active_final_artifact_ref": None,
+        },
+        "attachments": {
+            "original_image": {"status": "not_applicable", "filename": None},
+            "final_artifact": {"status": "not_applicable", "filename": None},
+            "lut": {
+                "status": "preset_reference_only",
+                "kind": "preset",
+                "name": "BIQU - preset",
+                "preset_relative_path": "lut-preset/BIQU/preset.json",
+                "filename": None,
+                "sha256": "daea61c337077769f11b77306bc80a91baf0aef78aaae60fec3e9f4739231c93",
+                "size_bytes": len(b"PRESET_LUT_BYTES"),
+                "metadata": {},
+            },
+        },
+    }
+    ticket_json.write_text(json.dumps(payload), encoding="utf-8")
+
+    try:
+        asyncio.run(finalize_ticket_async(ticket_dir, _MockFileRegistry({})))
+    finally:
+        LUTManager.invalidate_preset_cache()
+
+    finalized = json.loads(ticket_json.read_text(encoding="utf-8"))
+    assert finalized["assembly_status"] == "done"
+
+
+def test_finalize_ticket_async_does_not_require_lut_for_native_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _disable_feedback_email(monkeypatch)
+    ticket_dir = tmp_path / "LUM-20260619-014"
+    ticket_dir.mkdir()
+    ticket_json = ticket_dir / "ticket.json"
+    payload = {
+        "schema_version": 3,
+        "ticket_id": "LUM-20260619-014",
+        "received_at_cst": now_beijing().isoformat(),
+        "assembly_status": "in_progress",
+        "context": {
+            "active_tab": "converter",
+            "source_version": "native",
+            "lut_name": "native-summary",
+            "selected_native_db_names": ["BIQU"],
+            "active_original_image_ref": None,
+            "active_final_artifact_ref": None,
+        },
+        "attachments": {
+            "original_image": {"status": "not_applicable", "filename": None},
+            "final_artifact": {"status": "not_applicable", "filename": None},
+            "lut": {"status": "not_applicable", "filename": None},
+        },
+    }
+    ticket_json.write_text(json.dumps(payload), encoding="utf-8")
+
+    asyncio.run(finalize_ticket_async(ticket_dir, _MockFileRegistry({})))
+
+    finalized = json.loads(ticket_json.read_text(encoding="utf-8"))
+    assert finalized["assembly_status"] == "done"
+
+
+def test_finalize_ticket_async_marks_invalid_attachment_section_partial(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _disable_feedback_email(monkeypatch)
+    ticket_dir = tmp_path / "LUM-20260619-007"
+    ticket_dir.mkdir()
+    ticket_json = ticket_dir / "ticket.json"
+    payload = {
+        "schema_version": 3,
+        "ticket_id": "LUM-20260619-007",
+        "received_at_cst": now_beijing().isoformat(),
+        "assembly_status": "in_progress",
+        "context": {
+            "source_version": "legacy",
+            "lut_name": None,
+            "active_original_image_ref": {"session_id": "sess-bad"},
+            "active_final_artifact_ref": None,
+        },
+        "attachments": {
+            "original_image": "bad-manifest",
+            "final_artifact": {"status": "not_applicable", "filename": None},
+            "lut": {"status": "not_applicable", "filename": None},
+        },
+    }
+    ticket_json.write_text(json.dumps(payload), encoding="utf-8")
+
+    asyncio.run(finalize_ticket_async(ticket_dir, _MockFileRegistry({})))
+
+    finalized = json.loads(ticket_json.read_text(encoding="utf-8"))
+    assert finalized["assembly_status"] == "partial_failed"
+    assert finalized["attachments"]["original_image"]["status"] == "failed"
+    assert finalized["attachments"]["original_image"]["error_type"] == (
+        "InvalidAttachmentManifest"
+    )
+
+
+def test_finalize_ticket_async_marks_invalid_attached_manifests_partial(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _disable_feedback_email(monkeypatch)
+    repo_root = _use_feedback_lut_repo(monkeypatch, tmp_path)
+    preset_lut = repo_root / "lut-preset" / "BIQU" / "preset.json"
+    preset_lut.write_bytes(b"PRESET_LUT_BYTES")
+    ticket_dir = tmp_path / "LUM-20260619-017"
+    ticket_dir.mkdir()
+    (ticket_dir / "original.png").write_bytes(b"PNGDATA")
+    (ticket_dir / "final.3mf").write_bytes(b"3MFDATA")
+    ticket_json = ticket_dir / "ticket.json"
+    payload = {
+        "schema_version": 3,
+        "ticket_id": "LUM-20260619-017",
+        "received_at_cst": now_beijing().isoformat(),
+        "assembly_status": "in_progress",
+        "context": {
+            "active_tab": "converter",
+            "source_version": "legacy",
+            "lut_name": "BIQU - preset",
+            "active_original_image_ref": {"session_id": "sess-bad"},
+            "active_final_artifact_ref": {
+                "session_id": "sess-bad",
+                "artifact_type": "3mf",
+            },
+        },
+        "attachments": {
+            "original_image": {
+                "status": "attached",
+                "filename": "original.png",
+                "sha256": "0" * 64,
+                "size_bytes": 1,
+                "mime_type": "image/png",
+            },
+            "final_artifact": {
+                "status": "attached",
+                "filename": "final.3mf",
+                "sha256": "0" * 64,
+                "size_bytes": 1,
+                "artifact_type": "3mf",
+            },
+            "lut": {
+                "status": "preset_reference_only",
+                "kind": "preset",
+                "name": "BIQU - preset",
+                "preset_relative_path": "lut-preset/BIQU/preset.json",
+                "sha256": "0" * 64,
+                "size_bytes": 1,
+                "metadata": {},
+            },
+        },
+    }
+    ticket_json.write_text(json.dumps(payload), encoding="utf-8")
+
+    try:
+        asyncio.run(finalize_ticket_async(ticket_dir, _MockFileRegistry({})))
+    finally:
+        LUTManager.invalidate_preset_cache()
+
+    finalized = json.loads(ticket_json.read_text(encoding="utf-8"))
+    assert finalized["assembly_status"] == "partial_failed"
+    assert finalized["attachments"]["original_image"]["status"] == "failed"
+    assert finalized["attachments"]["original_image"]["error_type"] == (
+        "InvalidAttachmentManifest"
+    )
+    assert finalized["attachments"]["final_artifact"]["status"] == "failed"
+    assert finalized["attachments"]["final_artifact"]["error_type"] == (
+        "InvalidAttachmentManifest"
+    )
+    assert finalized["attachments"]["lut"]["status"] == "failed"
+    assert finalized["attachments"]["lut"]["error_type"] == (
+        "InvalidAttachmentManifest"
+    )
+
+
+def test_finalize_ticket_async_tolerates_malformed_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _disable_feedback_email(monkeypatch)
+    ticket_dir = tmp_path / "LUM-20260619-011"
+    ticket_dir.mkdir()
+    ticket_json = ticket_dir / "ticket.json"
+    payload = {
+        "schema_version": 3,
+        "ticket_id": "LUM-20260619-011",
+        "received_at_cst": now_beijing().isoformat(),
+        "assembly_status": "in_progress",
+        "context": "bad-context",
+        "attachments": {
+            "original_image": {"status": "not_applicable", "filename": None},
+            "final_artifact": {"status": "not_applicable", "filename": None},
+            "lut": {"status": "not_applicable", "filename": None},
+        },
+    }
+    ticket_json.write_text(json.dumps(payload), encoding="utf-8")
+
+    asyncio.run(finalize_ticket_async(ticket_dir, _MockFileRegistry({})))
+
+    finalized = json.loads(ticket_json.read_text(encoding="utf-8"))
+    assert finalized["context"] == {}
+    assert finalized["assembly_status"] == "done"
+    assert (ticket_dir / "index.md").exists()
+    assert (ticket_dir / "summary.txt").exists()
 
 
 def test_collect_sync_attachments_marks_unavailable_when_session_missing(
@@ -301,6 +795,52 @@ def test_collect_original_image_registry_hit_takes_priority_over_session_path(
     assert (ticket_dir / "original.png").read_bytes() == b"REGISTRY"
 
 
+def test_collect_original_image_stale_registry_falls_back_to_session_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    temp_root = tmp_path / "temp"
+    temp_root.mkdir()
+    session_image = temp_root / "session.png"
+    session_image.write_bytes(b"SESSION")
+    monkeypatch.setattr("api.feedback_assembler.TEMP_DIR", str(temp_root))
+
+    registry = _MockFileRegistry(
+        {
+            "sess-orig": {
+                "stale": _make_entry(
+                    str(tmp_path / "missing.png"),
+                    "missing.png",
+                    created_at=1.0,
+                ),
+            },
+        }
+    )
+    session_store = _MockSessionStore({"sess-orig": {"image_path": str(session_image)}})
+    ticket_dir = tmp_path / "LUM-20260619-012"
+    ticket_dir.mkdir()
+    payload = {
+        "ticket_id": "LUM-20260619-012",
+        "context": {
+            "active_original_image_ref": {"session_id": "sess-orig"},
+            "active_final_artifact_ref": None,
+            "source_version": "legacy",
+            "lut_name": None,
+        },
+    }
+
+    result = collect_sync_attachments(
+        ticket_dir,
+        payload,
+        registry,
+        now_beijing(),
+        session_store=session_store,
+    )
+
+    assert result.original_image["status"] == "attached"
+    assert (ticket_dir / "original.png").read_bytes() == b"SESSION"
+
+
 def test_collect_sync_attachments_lut_is_noop_for_material_mode(
     tmp_path: Path,
 ) -> None:
@@ -317,6 +857,29 @@ def test_collect_sync_attachments_lut_is_noop_for_material_mode(
         },
     }
     result = collect_sync_attachments(ticket_dir, payload, registry, now_beijing())
+    assert result.lut["status"] == "not_applicable"
+
+
+def test_collect_sync_attachments_lut_is_noop_for_native_mode(
+    tmp_path: Path,
+) -> None:
+    registry = _MockFileRegistry({})
+    ticket_dir = tmp_path / "LUM-20260619-013"
+    ticket_dir.mkdir()
+    payload = {
+        "ticket_id": "LUM-20260619-013",
+        "context": {
+            "active_original_image_ref": None,
+            "active_final_artifact_ref": None,
+            "active_tab": "converter",
+            "source_version": "native",
+            "lut_name": "native-summary",
+            "selected_native_db_names": ["BIQU"],
+        },
+    }
+
+    result = collect_sync_attachments(ticket_dir, payload, registry, now_beijing())
+
     assert result.lut["status"] == "not_applicable"
 
 
@@ -362,7 +925,9 @@ def test_collect_lut_rejects_path_traversal_lut_name(
     finally:
         LUTManager.invalidate_preset_cache()
 
-    assert result.lut["status"] == "not_applicable"
+    assert result.lut["status"] == "failed"
+    assert result.lut["error_type"] == "InvalidLutName"
+    assert result.lut["error_message"] == "LUT could not be saved."
     assert not (ticket_dir / "lut.json").exists()
 
 
@@ -399,6 +964,101 @@ def test_collect_lut_accepts_custom_display_name(
     assert result.lut["kind"] == "custom"
     assert result.lut["filename"] == "lut.json"
     assert (ticket_dir / "lut.json").read_bytes() == b"SAFE_CUSTOM_LUT"
+
+
+def test_collect_lut_marks_custom_copy_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = _use_feedback_lut_repo(monkeypatch, tmp_path)
+    safe_lut = repo_root / "lut-preset" / "Custom" / "safe.json"
+    safe_lut.write_bytes(b"SAFE_CUSTOM_LUT")
+    ticket_dir = tmp_path / "LUM-20260619-004"
+    ticket_dir.mkdir()
+    payload = {
+        "ticket_id": "LUM-20260619-004",
+        "context": {
+            "active_original_image_ref": None,
+            "active_final_artifact_ref": None,
+            "active_tab": "converter",
+            "source_version": "legacy",
+            "lut_name": "Custom - safe",
+        },
+    }
+
+    def _fail_lut_copy(
+        src: str | os.PathLike[str],
+        dst: str | os.PathLike[str],
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
+        del src, args, kwargs
+        if Path(dst).name == "lut.json":
+            raise OSError("disk full")
+
+    monkeypatch.setattr("api.feedback_assembler.shutil.copy2", _fail_lut_copy)
+
+    try:
+        result = collect_sync_attachments(
+            ticket_dir,
+            payload,
+            _MockFileRegistry({}),
+            now_beijing(),
+        )
+    finally:
+        LUTManager.invalidate_preset_cache()
+
+    assert result.lut["status"] == "failed"
+    assert result.lut["kind"] == "custom"
+    assert result.lut["name"] == "Custom - safe"
+    assert result.lut["filename"] is None
+    assert result.lut["error_type"] == "OSError"
+    assert result.lut["error_message"] == "LUT could not be saved."
+    assert not (ticket_dir / "lut.json").exists()
+
+
+def test_collect_lut_marks_custom_hash_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = _use_feedback_lut_repo(monkeypatch, tmp_path)
+    safe_lut = repo_root / "lut-preset" / "Custom" / "safe.json"
+    safe_lut.write_bytes(b"SAFE_CUSTOM_LUT")
+    ticket_dir = tmp_path / "LUM-20260619-009"
+    ticket_dir.mkdir()
+    payload = {
+        "ticket_id": "LUM-20260619-009",
+        "context": {
+            "active_original_image_ref": None,
+            "active_final_artifact_ref": None,
+            "active_tab": "converter",
+            "source_version": "legacy",
+            "lut_name": "Custom - safe",
+        },
+    }
+
+    def _fail_hash(path: str | Path) -> str:
+        if Path(path).name == "safe.json":
+            raise OSError("hash read failed")
+        return "0" * 64
+
+    monkeypatch.setattr("api.feedback_assembler.file_sha256", _fail_hash)
+
+    try:
+        result = collect_sync_attachments(
+            ticket_dir,
+            payload,
+            _MockFileRegistry({}),
+            now_beijing(),
+        )
+    finally:
+        LUTManager.invalidate_preset_cache()
+
+    assert result.lut["status"] == "failed"
+    assert result.lut["kind"] == "custom"
+    assert result.lut["error_type"] == "OSError"
+    assert result.lut["error_message"] == "LUT could not be saved."
+    assert not (ticket_dir / "lut.json").exists()
 
 
 def test_collect_lut_accepts_nested_preset_display_name(
@@ -636,6 +1296,34 @@ def test_collect_final_artifact_disk_path_nonexistent_stays_expired(
     assert not (ticket_dir / "final.3mf").exists()
 
 
+def test_collect_final_artifact_disk_path_only_marks_declared_artifact_expired(
+    tmp_path: Path,
+) -> None:
+    registry = _MockFileRegistry({})
+    ticket_dir = tmp_path / "LUM-20260619-015"
+    ticket_dir.mkdir()
+    payload = {
+        "ticket_id": "LUM-20260619-015",
+        "context": {
+            "active_original_image_ref": None,
+            "active_final_artifact_ref": {
+                "session_id": None,
+                "download_url": None,
+                "artifact_type": "3mf",
+                "disk_path": "/nonexistent/path/model.3mf",
+            },
+            "source_version": "legacy",
+            "lut_name": None,
+        },
+    }
+
+    result = collect_sync_attachments(ticket_dir, payload, registry, now_beijing())
+
+    assert result.final_artifact["status"] == "expired_ttl"
+    assert result.final_artifact["artifact_type"] == "3mf"
+    assert not (ticket_dir / "final.3mf").exists()
+
+
 def test_collect_final_artifact_uses_download_url_for_ttl_zip(
     tmp_path: Path,
 ) -> None:
@@ -680,6 +1368,62 @@ def test_collect_final_artifact_uses_download_url_for_ttl_zip(
     assert result.final_artifact["artifact_type"] == "zip"
     assert result.final_artifact["history_count"] == 1
     assert (ticket_dir / "final.zip").read_bytes() == b"PK\x03\x04LARGE_FORMAT"
+
+
+def test_collect_final_artifact_download_url_copy_failure_is_failed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    zip_path = tmp_path / "large_format_tiles.zip"
+    zip_path.write_bytes(b"PK\x03\x04LARGE_FORMAT")
+    registry = _MockFileRegistry(
+        {
+            "foreign-ttl-owner": {
+                "zip-file-id": _make_entry(
+                    str(zip_path),
+                    "large_format_tiles.zip",
+                    created_at=9.0,
+                ),
+            },
+        }
+    )
+    ticket_dir = tmp_path / "LUM-20260619-005"
+    ticket_dir.mkdir()
+    payload = {
+        "ticket_id": "LUM-20260619-005",
+        "context": {
+            "active_original_image_ref": None,
+            "active_final_artifact_ref": {
+                "session_id": "sess-current",
+                "download_url": "/api/files/zip-file-id?download=1",
+                "artifact_type": "zip",
+                "disk_path": None,
+            },
+            "source_version": "legacy",
+            "lut_name": None,
+        },
+    }
+
+    def _fail_final_copy(
+        src: str | os.PathLike[str],
+        dst: str | os.PathLike[str],
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
+        del src, args, kwargs
+        if Path(dst).name == "final.zip":
+            raise OSError("disk full")
+
+    monkeypatch.setattr("api.feedback_assembler.shutil.copy2", _fail_final_copy)
+
+    result = collect_sync_attachments(ticket_dir, payload, registry, now_beijing())
+
+    assert result.final_artifact["status"] == "failed"
+    assert result.final_artifact["filename"] is None
+    assert result.final_artifact["artifact_type"] == "zip"
+    assert result.final_artifact["error_type"] == "OSError"
+    assert result.final_artifact["error_message"] == "Final artifact could not be saved."
+    assert not (ticket_dir / "final.zip").exists()
 
 
 def test_collect_final_artifact_prefers_download_url_over_stale_session_entry(
