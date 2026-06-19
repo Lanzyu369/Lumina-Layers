@@ -181,11 +181,13 @@ export default function MaterialSolverCacheStatusCard({
       } else {
         setState({ phase: "missing", entry: null, errorMessage: null });
       }
-    } catch (error) {
+    } catch {
       if (requestIdRef.current !== thisRequest) return;
-      const message =
-        error instanceof Error ? error.message : String(error ?? "");
-      setState({ phase: "error", entry: null, errorMessage: message });
+      setState({
+        phase: "error",
+        entry: null,
+        errorMessage: tRuntime("basic_material_cache_status_error_detail"),
+      });
     }
   }, [materialDirectoryNames.length, cacheKey, effectiveGridResolution]);
 
@@ -219,11 +221,13 @@ export default function MaterialSolverCacheStatusCard({
       } else {
         setRuntimeState({ phase: "missing", entry: null, errorMessage: null });
       }
-    } catch (error) {
+    } catch {
       if (runtimeRequestIdRef.current !== thisRequest) return;
-      const message =
-        error instanceof Error ? error.message : String(error ?? "");
-      setRuntimeState({ phase: "error", entry: null, errorMessage: message });
+      setRuntimeState({
+        phase: "error",
+        entry: null,
+        errorMessage: tRuntime("basic_material_runtime_status_error_detail"),
+      });
     }
   }, [materialDirectoryNames.length, cacheKey, runtimeCandidateBudget]);
 
@@ -268,10 +272,8 @@ export default function MaterialSolverCacheStatusCard({
         maxPoints: 8000,
       });
       setChartsData(response);
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : String(error ?? "");
-      setChartsError(message);
+    } catch {
+      setChartsError(tRuntime("basic_material_cache_charts_failed"));
     } finally {
       setChartsLoading(false);
     }
@@ -294,10 +296,8 @@ export default function MaterialSolverCacheStatusCard({
         maxPoints: 8000,
       });
       setRuntimeChartsData(response);
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : String(error ?? "");
-      setRuntimeChartsError(message);
+    } catch {
+      setRuntimeChartsError(tRuntime("basic_material_runtime_charts_failed"));
     } finally {
       setRuntimeChartsLoading(false);
     }
@@ -323,12 +323,8 @@ export default function MaterialSolverCacheStatusCard({
         entry: response.entry,
         errorMessage: null,
       });
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : String(error ?? "");
-      setActionError(
-        tRuntime("basic_material_cache_build_error", { message }),
-      );
+    } catch {
+      setActionError(tRuntime("basic_material_cache_build_failed"));
     } finally {
       setIsBuilding(false);
     }
@@ -350,12 +346,8 @@ export default function MaterialSolverCacheStatusCard({
         gridResolution: effectiveGridResolution,
       });
       setState({ phase: "missing", entry: null, errorMessage: null });
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : String(error ?? "");
-      setActionError(
-        tRuntime("basic_material_cache_delete_error", { message }),
-      );
+    } catch {
+      setActionError(tRuntime("basic_material_cache_delete_failed"));
     } finally {
       setIsDeleting(false);
     }
@@ -383,12 +375,8 @@ export default function MaterialSolverCacheStatusCard({
         entry: response.entry,
         errorMessage: null,
       });
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : String(error ?? "");
-      setRuntimeActionError(
-        tRuntime("basic_material_runtime_build_error", { message }),
-      );
+    } catch {
+      setRuntimeActionError(tRuntime("basic_material_runtime_build_failed"));
     } finally {
       setIsRuntimeBuilding(false);
     }
@@ -405,12 +393,8 @@ export default function MaterialSolverCacheStatusCard({
         candidateBudget: runtimeCandidateBudget,
       });
       setRuntimeState({ phase: "missing", entry: null, errorMessage: null });
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : String(error ?? "");
-      setRuntimeActionError(
-        tRuntime("basic_material_runtime_delete_error", { message }),
-      );
+    } catch {
+      setRuntimeActionError(tRuntime("basic_material_runtime_delete_failed"));
     } finally {
       setIsRuntimeDeleting(false);
     }
@@ -716,11 +700,7 @@ export default function MaterialSolverCacheStatusCard({
             className="mt-2 flex flex-col gap-3"
           >
             {runtimeChartsError ? (
-              <p className="text-xs text-rose-500">
-                {tRuntime("basic_material_runtime_charts_error", {
-                  message: runtimeChartsError,
-                })}
-              </p>
+              <p className="text-xs text-rose-500">{runtimeChartsError}</p>
             ) : runtimeChartsLoading ? (
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
                 {t("basic_material_runtime_charts_loading")}
@@ -748,11 +728,7 @@ export default function MaterialSolverCacheStatusCard({
           className="mt-3 flex flex-col gap-3"
         >
           {chartsError ? (
-            <p className="text-xs text-rose-500">
-              {tRuntime("basic_material_cache_charts_error", {
-                message: chartsError,
-              })}
-            </p>
+            <p className="text-xs text-rose-500">{chartsError}</p>
           ) : chartsLoading ? (
             <p className="text-[11px] text-slate-500 dark:text-slate-400">
               {t("basic_material_cache_charts_loading")}
