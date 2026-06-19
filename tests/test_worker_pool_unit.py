@@ -9,6 +9,9 @@ max_workers defaults, and RuntimeError when pool not started.
 import asyncio
 import logging
 import os
+import subprocess
+import sys
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -275,6 +278,49 @@ class TestWorkerPoolConfigEnvValidation:
         assert len(warnings) == 1
         assert getattr(warnings[0], "raw_value", None) == raw_value
         assert getattr(warnings[0], "fallback", None) == WorkerPoolConfig.TASK_TIMEOUT
+
+    def test_invalid_worker_env_does_not_crash_dependencies_cold_import(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        env = os.environ.copy()
+        env.update(
+            {
+                "LUMINA_ENV_LOCAL_PATH": str(tmp_path / "missing-env"),
+                "LUMINA_LOG_DIR": str(tmp_path / "logs"),
+                "LUMINA_MAX_WORKERS": "abc",
+                "LUMINA_TASK_TIMEOUT": "notfloat",
+                "PYTHONPATH": os.pathsep.join(
+                    filter(None, [os.getcwd(), env.get("PYTHONPATH", "")])
+                ),
+            }
+        )
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import api.dependencies as deps; "
+                    "print("
+                    "f'max={deps.worker_pool.max_workers};"
+                    "timeout={deps.worker_pool.default_task_timeout!r}'"
+                    ")"
+                ),
+            ],
+            cwd=os.getcwd(),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
+        combined_output = f"{result.stdout}\n{result.stderr}"
+        assert result.returncode == 0, combined_output
+        assert f"max={WorkerPoolConfig.MAX_WORKERS};timeout=None" in result.stdout
+        assert "worker_pool_max_workers_invalid" in combined_output
+        assert "worker_pool_task_timeout_invalid" in combined_output
 
 
 # ---------------------------------------------------------------------------
