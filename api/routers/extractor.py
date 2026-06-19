@@ -105,6 +105,9 @@ COLORCHECKER_SERVICE_UNAVAILABLE_DETAIL = (
     "ColorChecker processing service is unavailable. "
     "Check the server ColorChecker dependencies and try again."
 )
+EXTRACTOR_LUT_DOWNLOAD_REGISTRATION_FAILED_DETAIL = (
+    "Extractor LUT download could not be prepared. Try the extraction again."
+)
 
 
 @dataclass(frozen=True)
@@ -164,12 +167,35 @@ def _register_final_lut_download(
             pass
         raise
 
-    download_id = registry.register_path(
-        f"extractor-lut:{uuid.uuid4().hex}",
-        download_path,
-        filename=os.path.basename(lut_path) or "lumina_lut.json",
-        ttl_seconds=EXTRACTOR_LUT_DOWNLOAD_TTL_SECONDS,
-    )
+    filename = os.path.basename(lut_path) or "lumina_lut.json"
+    try:
+        download_id = registry.register_path(
+            f"extractor-lut:{uuid.uuid4().hex}",
+            download_path,
+            filename=filename,
+            ttl_seconds=EXTRACTOR_LUT_DOWNLOAD_TTL_SECONDS,
+        )
+    except Exception as exc:
+        try:
+            os.remove(download_path)
+        except OSError:
+            pass
+        log.error(
+            "Extractor LUT download registration failed",
+            extra={
+                "event": "extractor_lut_download_registration_failed",
+                "status_code": 500,
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+                "lut_filename": filename,
+                "suffix": suffix,
+                "ttl_seconds": EXTRACTOR_LUT_DOWNLOAD_TTL_SECONDS,
+            },
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=EXTRACTOR_LUT_DOWNLOAD_REGISTRATION_FAILED_DETAIL,
+        ) from exc
     return download_id, download_path
 
 
