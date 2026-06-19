@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import logging
 import zipfile
 from pathlib import Path
 
@@ -14,7 +15,10 @@ from fastapi.testclient import TestClient
 from api.app import create_app
 from api.routers.material_sync import (
     MATERIAL_SYNC_CATALOG_UNAVAILABLE_DETAIL,
+    MATERIAL_SYNC_INSTALL_UNAVAILABLE_DETAIL,
     MATERIAL_SYNC_REFRESH_UNAVAILABLE_DETAIL,
+    MATERIAL_SYNC_ROLLBACK_UNAVAILABLE_DETAIL,
+    MATERIAL_SYNC_STATUS_UNAVAILABLE_DETAIL,
 )
 from core.single_stage import (
     install_material_registry_package,
@@ -28,6 +32,10 @@ _OFFICIAL_PASSWORD = "approve-secret"
 _AUTH_HEADERS = {
     "X-Lumina-Material-Registry-Official-Password": _OFFICIAL_PASSWORD,
 }
+_MATERIAL_SYNC_LOGGER_NAMES = (
+    "lumina.api.routers.material_sync",
+    "lumina.api.app",
+)
 
 
 def _client() -> TestClient:
@@ -39,6 +47,97 @@ def _enable_material_registry_password(monkeypatch) -> None:
         "LUMINA_MATERIAL_REGISTRY_OFFICIAL_PASSWORD",
         _OFFICIAL_PASSWORD,
     )
+
+
+def _capture_material_sync_logs(
+    caplog: pytest.LogCaptureFixture,
+) -> list[logging.Logger]:
+    loggers: list[logging.Logger] = []
+    for logger_name in _MATERIAL_SYNC_LOGGER_NAMES:
+        logger = logging.getLogger(logger_name)
+        logger.addHandler(caplog.handler)
+        caplog.set_level(logging.WARNING, logger=logger.name)
+        loggers.append(logger)
+    return loggers
+
+
+def _release_caplog_handler(
+    loggers: list[logging.Logger],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    for logger in loggers:
+        logger.removeHandler(caplog.handler)
+
+
+def _records_for_event(
+    caplog: pytest.LogCaptureFixture,
+    event: str,
+) -> list[logging.LogRecord]:
+    return [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == event
+    ]
+
+
+def _assert_http_error_log_safe(
+    caplog: pytest.LogCaptureFixture,
+    *,
+    path: str,
+    status_code: int,
+    detail: str,
+    forbidden_fragments: tuple[str, ...],
+) -> None:
+    records = [
+        record
+        for record in _records_for_event(caplog, "api_http_error")
+        if getattr(record, "path", None) == path
+        and getattr(record, "status_code", None) == status_code
+    ]
+    assert records
+    error_message = str(getattr(records[-1], "error_message", ""))
+    assert error_message == detail
+    for fragment in forbidden_fragments:
+        assert fragment not in error_message
+
+
+def _assert_route_failure_log_preserves_diagnostics(
+    caplog: pytest.LogCaptureFixture,
+    *,
+    event: str,
+    error_type: str,
+    raw_fragment: str,
+    status_code: int,
+) -> None:
+    records = _records_for_event(caplog, event)
+    assert records
+    record = records[-1]
+    assert getattr(record, "error_type", None) == error_type
+    assert getattr(record, "status_code", None) == status_code
+    assert raw_fragment in str(getattr(record, "error_message", ""))
+
+
+def _registry_install_catalog() -> dict[str, object]:
+    return {
+        "schema_version": "1.0",
+        "channels": ["official"],
+        "count": 1,
+        "materials": [
+            {
+                "material_id": "mat_cloud_test",
+                "revision_id": "rev_cloud_test",
+                "content_hash": "sha256:cloud",
+                "channel": "official",
+                "visibility": "official",
+                "local_directory": "BrandA/pla-basic",
+                "display": {"brand": "BrandA", "material_name": "PLA Basic"},
+                "compatibility": {},
+                "package_url": "/v1/packages/material_package.zip",
+                "package_sha256": "a" * 64,
+                "package_bytes": 1234,
+            }
+        ],
+    }
 
 
 def _write_v2_material_package(
@@ -63,6 +162,12 @@ def _write_v2_material_package(
             "parameters": {
                 "channels": [
                     {"color_name": "PLA Basic Imported", "E": [0.1, 0.2, 0.3], "k": [1.0, 1.1, 1.2]}
+                ],
+                "substrates": [
+                    {
+                        "substrate_id": "white",
+                        "C0": [1.0, 1.0, 1.0],
+                    }
                 ],
             },
         },
@@ -152,6 +257,12 @@ def _write_v2_multi_material_package(zip_path: Path) -> dict[str, str]:
                                 "k": [1.0, 1.1, 1.2],
                             }
                         ],
+                        "substrates": [
+                            {
+                                "substrate_id": "white",
+                                "C0": [1.0, 1.0, 1.0],
+                            }
+                        ],
                     },
                 },
                 ensure_ascii=False,
@@ -238,6 +349,46 @@ def test_material_sync_status_returns_empty_state_when_index_is_missing(
     assert body["installed"] == []
 
 
+def test_material_sync_status_unavailable_returns_safe_detail(
+    monkeypatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    private_path = "/Users/min/private/materials/_sync/index.json"
+
+    def _fake_get_material_sync_status() -> dict[str, object]:
+        raise OSError(f"[Errno 13] Permission denied: '{private_path}'")
+
+    monkeypatch.setattr(
+        "api.routers.material_sync.get_material_sync_status",
+        _fake_get_material_sync_status,
+    )
+
+    loggers = _capture_material_sync_logs(caplog)
+    try:
+        response = _client().get("/api/material-sync/status")
+    finally:
+        _release_caplog_handler(loggers, caplog)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == MATERIAL_SYNC_STATUS_UNAVAILABLE_DETAIL
+    assert private_path not in response.text
+    assert "Permission denied" not in response.text
+    _assert_http_error_log_safe(
+        caplog,
+        path="/api/material-sync/status",
+        status_code=500,
+        detail=MATERIAL_SYNC_STATUS_UNAVAILABLE_DETAIL,
+        forbidden_fragments=(private_path, "Permission denied"),
+    )
+    _assert_route_failure_log_preserves_diagnostics(
+        caplog,
+        event="material_sync_status_failed",
+        error_type="OSError",
+        raw_fragment=private_path,
+        status_code=500,
+    )
+
+
 def test_material_sync_install_imports_v2_package_and_updates_status(
     monkeypatch,
     tmp_path: Path,
@@ -306,6 +457,116 @@ def test_material_sync_install_rejects_oversized_upload(
 
     assert response.status_code == 413
     assert "exceeds maximum size" in response.json()["detail"]
+
+
+def test_material_sync_install_import_os_error_returns_safe_detail(
+    monkeypatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    package_path = tmp_path / "material_package.zip"
+    _write_v2_material_package(package_path)
+    private_path = "/Users/min/private/materials/BrandA/pla-basic/material.json"
+
+    def _fake_import_saved_stage_a_material_archives(
+        *,
+        archive_path: str,
+    ) -> object:
+        raise OSError(f"[Errno 13] Permission denied: '{private_path}'")
+
+    monkeypatch.setattr(
+        "api.routers.material_sync.import_saved_stage_a_material_archives",
+        _fake_import_saved_stage_a_material_archives,
+    )
+
+    loggers = _capture_material_sync_logs(caplog)
+    try:
+        response = _client().post(
+            "/api/material-sync/install",
+            files={
+                "archive": (
+                    "material_package.zip",
+                    package_path.read_bytes(),
+                    "application/zip",
+                )
+            },
+        )
+    finally:
+        _release_caplog_handler(loggers, caplog)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == MATERIAL_SYNC_INSTALL_UNAVAILABLE_DETAIL
+    assert private_path not in response.text
+    assert "Permission denied" not in response.text
+    _assert_http_error_log_safe(
+        caplog,
+        path="/api/material-sync/install",
+        status_code=422,
+        detail=MATERIAL_SYNC_INSTALL_UNAVAILABLE_DETAIL,
+        forbidden_fragments=(private_path, "Permission denied"),
+    )
+    _assert_route_failure_log_preserves_diagnostics(
+        caplog,
+        event="material_sync_install_failed",
+        error_type="OSError",
+        raw_fragment=private_path,
+        status_code=422,
+    )
+
+
+def test_material_sync_install_import_missing_file_returns_safe_404(
+    monkeypatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    package_path = tmp_path / "material_package.zip"
+    _write_v2_material_package(package_path)
+    private_path = "/Users/min/private/materials/BrandA/pla-basic/material.json"
+
+    def _fake_import_saved_stage_a_material_archives(
+        *,
+        archive_path: str,
+    ) -> object:
+        raise FileNotFoundError(f"Saved material archive not found: {private_path}")
+
+    monkeypatch.setattr(
+        "api.routers.material_sync.import_saved_stage_a_material_archives",
+        _fake_import_saved_stage_a_material_archives,
+    )
+
+    loggers = _capture_material_sync_logs(caplog)
+    try:
+        response = _client().post(
+            "/api/material-sync/install",
+            files={
+                "archive": (
+                    "material_package.zip",
+                    package_path.read_bytes(),
+                    "application/zip",
+                )
+            },
+        )
+    finally:
+        _release_caplog_handler(loggers, caplog)
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == MATERIAL_SYNC_INSTALL_UNAVAILABLE_DETAIL
+    assert private_path not in response.text
+    assert "Saved material archive" not in response.text
+    _assert_http_error_log_safe(
+        caplog,
+        path="/api/material-sync/install",
+        status_code=404,
+        detail=MATERIAL_SYNC_INSTALL_UNAVAILABLE_DETAIL,
+        forbidden_fragments=(private_path, "Saved material archive"),
+    )
+    _assert_route_failure_log_preserves_diagnostics(
+        caplog,
+        event="material_sync_install_failed",
+        error_type="FileNotFoundError",
+        raw_fragment=private_path,
+        status_code=404,
+    )
 
 
 def test_material_sync_install_is_local_import_without_official_password(
@@ -1015,7 +1276,105 @@ def test_material_sync_install_from_registry_maps_invalid_package_to_502(
     )
 
     assert response.status_code == 502
-    assert "Saved material archive" in response.json()["detail"]
+    assert response.json()["detail"] == MATERIAL_SYNC_INSTALL_UNAVAILABLE_DETAIL
+    assert "Saved material archive" not in response.text
+
+
+@pytest.mark.parametrize(
+    ("exc", "status_code", "forbidden_fragments"),
+    [
+        (
+            RuntimeError(
+                "Material registry package request failed for "
+                "https://registry.internal/private/material_package.zip: status 500"
+            ),
+            502,
+            ("https://registry.internal/private/material_package.zip", "status 500"),
+        ),
+        (
+            FileNotFoundError(
+                "Saved material archive not found in "
+                "/Users/min/private/materials/BrandA/pla-basic/material.json"
+            ),
+            502,
+            (
+                "/Users/min/private/materials/BrandA/pla-basic/material.json",
+                "Saved material archive",
+            ),
+        ),
+        (
+            OSError(
+                "[Errno 13] Permission denied: "
+                "'/Users/min/private/materials/BrandA/pla-basic/material.json'"
+            ),
+            500,
+            (
+                "/Users/min/private/materials/BrandA/pla-basic/material.json",
+                "Permission denied",
+            ),
+        ),
+    ],
+)
+def test_material_sync_install_from_registry_failures_return_safe_detail(
+    monkeypatch,
+    caplog: pytest.LogCaptureFixture,
+    exc: Exception,
+    status_code: int,
+    forbidden_fragments: tuple[str, ...],
+) -> None:
+    _enable_material_registry_password(monkeypatch)
+
+    def _fake_install_material_registry_package(**_: object) -> dict[str, object]:
+        raise exc
+
+    monkeypatch.setattr(
+        "api.routers.material_sync.list_material_registry_catalog",
+        _registry_install_catalog,
+    )
+    monkeypatch.setattr(
+        "api.routers.material_sync.install_material_registry_package",
+        _fake_install_material_registry_package,
+    )
+
+    loggers = _capture_material_sync_logs(caplog)
+    try:
+        response = _client().post(
+            "/api/material-sync/install-from-registry",
+            json={
+                "package_url": "/v1/packages/material_package.zip",
+                "package_sha256": "a" * 64,
+                "material_id": "mat_cloud_test",
+                "revision_id": "rev_cloud_test",
+            },
+            headers=_AUTH_HEADERS,
+        )
+    finally:
+        _release_caplog_handler(loggers, caplog)
+
+    assert response.status_code == status_code
+    assert response.json()["detail"] == MATERIAL_SYNC_INSTALL_UNAVAILABLE_DETAIL
+    for fragment in forbidden_fragments:
+        assert fragment not in response.text
+    _assert_http_error_log_safe(
+        caplog,
+        path="/api/material-sync/install-from-registry",
+        status_code=status_code,
+        detail=MATERIAL_SYNC_INSTALL_UNAVAILABLE_DETAIL,
+        forbidden_fragments=forbidden_fragments,
+    )
+    _assert_route_failure_log_preserves_diagnostics(
+        caplog,
+        event="material_sync_install_from_registry_failed",
+        error_type=type(exc).__name__,
+        raw_fragment=forbidden_fragments[0],
+        status_code=status_code,
+    )
+    route_record = _records_for_event(
+        caplog,
+        "material_sync_install_from_registry_failed",
+    )[-1]
+    assert getattr(route_record, "material_id", None) == "mat_cloud_test"
+    assert getattr(route_record, "revision_id", None) == "rev_cloud_test"
 
 
 def test_material_sync_install_from_registry_rejects_missing_catalog_entry_without_password(
@@ -1950,6 +2309,56 @@ def test_material_sync_rollback_is_local_without_official_password(
 
     assert response.status_code == 200
     assert response.json()["revision_id"] == "rev_old"
+
+
+def test_material_sync_rollback_os_error_returns_safe_detail(
+    monkeypatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    private_path = "/Users/min/private/materials/_sync/index.json"
+
+    def _fake_rollback_material_sync_revision(
+        *,
+        material_id: str,
+        revision_id: str,
+    ) -> dict[str, object]:
+        raise OSError(f"[Errno 13] Permission denied: '{private_path}'")
+
+    monkeypatch.setattr(
+        "api.routers.material_sync.rollback_material_sync_revision",
+        _fake_rollback_material_sync_revision,
+    )
+
+    loggers = _capture_material_sync_logs(caplog)
+    try:
+        response = _client().post(
+            "/api/material-sync/rollback",
+            json={"material_id": "mat_test", "revision_id": "rev_old"},
+        )
+    finally:
+        _release_caplog_handler(loggers, caplog)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == MATERIAL_SYNC_ROLLBACK_UNAVAILABLE_DETAIL
+    assert private_path not in response.text
+    assert "Permission denied" not in response.text
+    _assert_http_error_log_safe(
+        caplog,
+        path="/api/material-sync/rollback",
+        status_code=500,
+        detail=MATERIAL_SYNC_ROLLBACK_UNAVAILABLE_DETAIL,
+        forbidden_fragments=(private_path, "Permission denied"),
+    )
+    _assert_route_failure_log_preserves_diagnostics(
+        caplog,
+        event="material_sync_rollback_failed",
+        error_type="OSError",
+        raw_fragment=private_path,
+        status_code=500,
+    )
+    route_record = _records_for_event(caplog, "material_sync_rollback_failed")[-1]
+    assert getattr(route_record, "material_id", None) == "mat_test"
+    assert getattr(route_record, "revision_id", None) == "rev_old"
 
 
 def test_rollback_material_sync_revision_rejects_missing_local_files(

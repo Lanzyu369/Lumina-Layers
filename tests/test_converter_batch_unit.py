@@ -189,13 +189,19 @@ class TestBatchPartialFailure:
 
     def test_batch_partial_failure_continues(self) -> None:
         call_count = 0
+        private_path = "/Users/min/private/batch-input/fail.png"
+        raw_error_message = f"cannot read {private_path}: Permission denied"
+        log_calls: list[tuple[str, str, dict[str, object]]] = []
 
         async def _mock_submit(fn, *args, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                raise RuntimeError("Simulated failure")
+                raise RuntimeError(raw_error_message)
             return _make_worker_result("ok.png", 30.0, 20.0)
+
+        def _capturing_safe_log(level: str, event: str, **fields: object) -> None:
+            log_calls.append((level, event, fields))
 
         _mock_pool.submit = AsyncMock(side_effect=_mock_submit)
 
@@ -211,6 +217,10 @@ class TestBatchPartialFailure:
             patch(
                 "utils.merged_bambu_3mf_writer.MergedBambu3MFWriter.write",
                 _noop_3mf_write,
+            ),
+            patch(
+                "api.routers.converter.generate._safe_log",
+                side_effect=_capturing_safe_log,
             ),
         ):
             response = client.post(
@@ -230,7 +240,24 @@ class TestBatchPartialFailure:
         # First image failed
         assert body["results"][0]["filename"] == "fail.png"
         assert body["results"][0]["status"] == "failed"
-        assert body["results"][0]["error"] is not None
+        assert body["results"][0]["error"] == (
+            "This file could not be converted. Re-upload it or check the server log for details."
+        )
+        assert private_path not in response.text
+        assert "Permission denied" not in response.text
+        failure_logs = [
+            (level, fields)
+            for level, event, fields in log_calls
+            if event == "converter_batch_item_failed"
+        ]
+        assert len(failure_logs) == 1
+        level, fields = failure_logs[0]
+        assert level == "warning"
+        assert fields["filename"] == "fail.png"
+        assert fields["failure_kind"] == "worker_exception"
+        assert fields["error_type"] == "RuntimeError"
+        assert private_path in str(fields["error_message"])
+        assert "Permission denied" in str(fields["error_message"])
 
         # Second image succeeded
         assert body["results"][1]["filename"] == "ok.png"
@@ -321,8 +348,9 @@ class TestBatchAllFailed:
     """Verify all images failing returns status 'failed' with null artifacts."""
 
     def test_batch_all_fail(self) -> None:
+        private_path = "/Users/min/private/batch-input/bad.png"
         _mock_pool.submit = AsyncMock(
-            side_effect=RuntimeError("boom"),
+            side_effect=RuntimeError(f"cannot read {private_path}: Permission denied"),
         )
 
         with (
@@ -346,10 +374,72 @@ class TestBatchAllFailed:
         assert body["status"] == "failed"
         assert "0/1" in body["message"]
         assert body["results"][0]["status"] == "failed"
+        assert body["results"][0]["error"] == (
+            "This file could not be converted. Re-upload it or check the server log for details."
+        )
+        assert private_path not in response.text
+        assert "Permission denied" not in response.text
         assert body["download_url"] is None
         assert body["threemf_disk_path"] is None
         assert body["preview_3d_url"] is None
         assert body["preview_items"] == []
+
+    def test_batch_worker_missing_output_sanitizes_status_message(self) -> None:
+        private_path = "/Users/min/private/batch-output/missing.3mf"
+        log_calls: list[tuple[str, str, dict[str, object]]] = []
+
+        def _capturing_safe_log(level: str, event: str, **fields: object) -> None:
+            log_calls.append((level, event, fields))
+
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": None,
+                "status_msg": f"failed at {private_path}: Permission denied",
+            },
+        )
+
+        with (
+            patch(
+                "api.routers.converter.generate.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.generate.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+            patch(
+                "api.routers.converter.generate._safe_log",
+                side_effect=_capturing_safe_log,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/batch",
+                files=[("images", _make_test_image_buf("missing.png"))],
+                data={"lut_name": "test_lut"},
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "failed"
+        assert body["results"][0]["status"] == "failed"
+        assert body["results"][0]["error"] == (
+            "This file could not be converted. Re-upload it or check the server log for details."
+        )
+        assert private_path not in response.text
+        assert "Permission denied" not in response.text
+        failure_logs = [
+            (level, fields)
+            for level, event, fields in log_calls
+            if event == "converter_batch_item_failed"
+        ]
+        assert len(failure_logs) == 1
+        level, fields = failure_logs[0]
+        assert level == "warning"
+        assert fields["filename"] == "missing.png"
+        assert fields["failure_kind"] == "missing_output"
+        assert fields["error_type"] == "MissingBatchOutput"
+        assert private_path in str(fields["error_message"])
+        assert "Permission denied" in str(fields["error_message"])
 
 
 # =========================================================================
@@ -1305,8 +1395,11 @@ class TestBatchMergeFlow:
             intermediate_paths.append(wr["preview_glb_path"])
             intermediate_paths.append(wr["metadata_sidecar_path"])
 
+        private_path = "/Users/min/private/batch-output/merged.3mf"
+        raw_error_message = f"cannot write {private_path}: Permission denied"
+
         def _failing_3mf_write(self, items, output_path, *, plate_width_mm, plate_depth_mm):
-            raise MergedWriteError("Simulated 3MF write failure")
+            raise MergedWriteError(raw_error_message)
 
         # Capture _safe_log calls to verify structured log emission
         log_calls: list[tuple] = []
@@ -1344,6 +1437,13 @@ class TestBatchMergeFlow:
 
         # HTTP 500
         assert response.status_code == 500
+        assert response.json()["detail"] == (
+            "Batch 3MF merge failed. Try again or check the server log for details."
+        )
+        assert private_path not in response.text
+        assert "Permission denied" not in response.text
+        assert "Batch merge failed at stage=" not in response.text
+        assert "merge_3mf" not in response.text
 
         # Verify structured log: batch_merge_3mf_failed with stage=="merge_3mf"
         error_logs = [
@@ -1359,6 +1459,8 @@ class TestBatchMergeFlow:
         assert level == "error"
         assert fields["stage"] == "merge_3mf"
         assert fields["error_type"] == "MergedWriteError"
+        assert private_path in fields["error_message"]
+        assert "Permission denied" in fields["error_message"]
 
         # No residual intermediate temp files (P12)
         for p in intermediate_paths:

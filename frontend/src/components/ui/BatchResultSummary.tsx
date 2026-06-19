@@ -6,6 +6,30 @@ interface BatchResultSummaryProps {
   result: BatchResponse;
 }
 
+const API_BATCH_ITEM_FAILED_DETAIL =
+  "This file could not be converted. Re-upload it or check the server log for details.";
+
+function shouldHideRawBatchItemError(error: string): boolean {
+  const trimmed = error.trim();
+  return (
+    trimmed === API_BATCH_ITEM_FAILED_DETAIL ||
+    /(?:^|\s)\/(?:Users|home|var|tmp|private|Volumes|opt|mnt|etc)\/[^\s]+/i.test(trimmed) ||
+    /\b[A-Za-z]:\\[^\s]+/.test(trimmed) ||
+    /\\\\[A-Za-z0-9_.-]+\\[^\s]+/.test(trimmed) ||
+    /\bPermission denied\b/i.test(trimmed) ||
+    /\bTraceback\b/i.test(trimmed) ||
+    /\bRequest failed with status code\s+[45]\d{2}\b/i.test(trimmed) ||
+    /^(?:HTTP\s*)?(?:error\s*)?[45]\d{2}\b/i.test(trimmed)
+  );
+}
+
+function visibleBatchItemError(error: string | undefined, fallback: string): string | null {
+  if (!error?.trim()) {
+    return null;
+  }
+  return shouldHideRawBatchItemError(error) ? fallback : error;
+}
+
 export default function BatchResultSummary({ result }: BatchResultSummaryProps) {
   const { t } = useI18n();
   const downloadUrl =
@@ -87,17 +111,23 @@ export default function BatchResultSummary({ result }: BatchResultSummaryProps) 
         <div className="flex flex-col gap-1">
           <p className="text-xs font-medium text-red-400">{t("batch_failed_files")}</p>
           <ul className="flex flex-col gap-1" aria-label={t("batch_failed_list_label")}>
-            {failedItems.map((item, index) => (
-              <li
-                key={`${item.filename}-${index}`}
-                className="rounded bg-red-900/20 px-2 py-1 text-xs text-slate-300"
-              >
-                <span className="font-medium">{item.filename}</span>
-                {item.error && (
-                  <span className="text-red-300"> — {item.error}</span>
-                )}
-              </li>
-            ))}
+            {failedItems.map((item, index) => {
+              const visibleError = visibleBatchItemError(
+                item.error,
+                t("batch.itemError.conversionFailed"),
+              );
+              return (
+                <li
+                  key={`${item.filename}-${index}`}
+                  className="rounded bg-red-900/20 px-2 py-1 text-xs text-slate-300"
+                >
+                  <span className="font-medium">{item.filename}</span>
+                  {visibleError && (
+                    <span className="text-red-300"> — {visibleError}</span>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         </div>
       )}

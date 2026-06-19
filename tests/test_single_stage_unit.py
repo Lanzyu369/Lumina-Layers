@@ -22,7 +22,10 @@ from api.app import create_app
 from api.dependencies import get_file_registry, get_session_store
 from api.file_registry import FileRegistry
 from api.routers.calibration import SINGLE_STAGE_KIT_GENERATION_FAILED_DETAIL
-from api.routers.single_stage import MATERIAL_SOLVER_CACHE_LIST_FAILED_DETAIL
+from api.routers.single_stage import (
+    MATERIAL_SOLVER_CACHE_LIST_FAILED_DETAIL,
+    get_material_cache_evictor,
+)
 from api.session_store import SessionStore
 from config import PaletteEntry
 from core.single_stage import (
@@ -62,6 +65,38 @@ def _png_bytes(width: int = 8, height: int = 8) -> bytes:
     return buffer.getvalue()
 
 
+def _minimal_solver_stage_a_payload(
+    material_name: str = "PLA Basic",
+) -> dict[str, object]:
+    return {
+        "parameters": {
+            "channels": [
+                {
+                    "color_name": material_name,
+                    "E": [0.1, 0.2, 0.3],
+                    "k": [1.0, 1.1, 1.2],
+                }
+            ],
+            "substrates": [
+                {
+                    "substrate_id": "white",
+                    "C0": [1.0, 1.0, 1.0],
+                }
+            ],
+        }
+    }
+
+
+def _minimal_solver_stage_a_bytes(
+    material_name: str = "PLA Basic",
+) -> bytes:
+    return json.dumps(
+        _minimal_solver_stage_a_payload(material_name),
+        ensure_ascii=False,
+        indent=2,
+    ).encode("utf-8")
+
+
 def _client_with_state() -> tuple[TestClient, SessionStore, FileRegistry]:
     app = create_app()
     store = SessionStore(ttl=1800)
@@ -69,6 +104,52 @@ def _client_with_state() -> tuple[TestClient, SessionStore, FileRegistry]:
     app.dependency_overrides[get_session_store] = lambda: store
     app.dependency_overrides[get_file_registry] = lambda: registry
     return TestClient(app), store, registry
+
+
+def _client_with_registry(
+    registry: FileRegistry,
+    *,
+    evictor=None,
+) -> tuple[TestClient, SessionStore]:
+    app = create_app()
+    store = SessionStore(ttl=1800)
+    app.dependency_overrides[get_session_store] = lambda: store
+    app.dependency_overrides[get_file_registry] = lambda: registry
+    if evictor is not None:
+        app.dependency_overrides[get_material_cache_evictor] = lambda: evictor
+    return TestClient(app, raise_server_exceptions=False), store
+
+
+def _seed_gradient_card_material_session(store: SessionStore) -> str:
+    session_id = store.create()
+    store.put(
+        session_id,
+        "gradient_card_stage_a_params",
+        {
+            "parameters": {
+                "channels": [
+                    {
+                        "color_name": "PLA Basic",
+                        "E": [0.1, 0.2, 0.3],
+                        "k": [1.0, 1.1, 1.2],
+                    }
+                ]
+            },
+            "meta": {},
+        },
+    )
+    store.put(
+        session_id,
+        "gradient_card_fit_summary",
+        {"overall_validation": {"mean_delta_e": 0.5}, "warnings": []},
+    )
+    store.put(
+        session_id,
+        "gradient_card_material_summary",
+        {"estimated_rgb": [120, 130, 140]},
+    )
+    store.put(session_id, "gradient_card_source_summary", {"image_source": "manual"})
+    return session_id
 
 
 def test_material_solver_cache_list_hides_storage_error_detail(
@@ -91,6 +172,56 @@ def test_material_solver_cache_list_hides_storage_error_detail(
     assert response.json()["detail"] == MATERIAL_SOLVER_CACHE_LIST_FAILED_DETAIL
     assert private_path not in response.text
     assert "permission denied" not in response.text
+
+
+def test_material_solver_cache_status_rejects_malformed_local_material(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    material_dir = materials_root / "BrandA" / "pla-bad"
+    material_dir.mkdir(parents=True)
+    (material_dir / "material.json").write_text(
+        json.dumps(
+            {
+                "brand": "BrandA",
+                "material_name": "Bad Stage A",
+                "stage_a_params_file": "stage_A_parameters.json",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (material_dir / "stage_A_parameters.json").write_text(
+        json.dumps(
+            {
+                "parameters": {
+                    "channels": [{"color_name": "Bad Stage A"}],
+                    "substrates": [{"substrate_id": "white", "C0": [1.0, 1.0, 1.0]}],
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("core.material_lut_synthesis.MATERIALS_DIR", str(materials_root))
+    client, _, _ = _client_with_state()
+
+    response = client.post(
+        "/api/extractor/material-solver-cache/status",
+        data={
+            "material_directory_names": json.dumps(["BrandA/pla-bad"]),
+            "layer_count": "5",
+            "layer_height_mm": "0.1",
+            "substrate": "white",
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "cannot be used by the material solver" in detail
+    assert "parameters.channels[0].E" in detail
+    assert str(tmp_path) not in detail
 
 
 class _RegisterPathFailingRegistry(FileRegistry):
@@ -1889,6 +2020,101 @@ def test_extractor_update_gradient_card_material_route_persists_edits(
     assert stage_a_payload["parameters"]["channels"][0]["color_name"] == "PLA Matte"
 
 
+def test_extractor_update_gradient_card_material_rolls_back_when_registration_fails(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    registry = _SecondPathFailingRegistry()
+    evicted: list[str] = []
+    client, _ = _client_with_registry(registry, evictor=evicted.append)
+    materials_root = tmp_path / "materials"
+    archive_path, stage_a_path = _write_updatable_material_archive(
+        materials_root,
+        "pla-basic",
+        material_name="PLA Basic",
+        brand="Generic",
+    )
+    monkeypatch.setattr(
+        "core.single_stage.materials.MATERIALS_DIR",
+        str(materials_root),
+    )
+
+    response = client.patch(
+        "/api/extractor/gradient-card-materials/pla-basic",
+        json={"material_name": "PLA Matte", "brand": "Bambu Lab"},
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Gradient card material file registration failed. Check the server log for details."
+    )
+    assert "registry backend unavailable" not in response.text
+    assert registry.first_file_id is not None
+    assert registry.resolve(registry.first_file_id) is None
+    archive_payload = json.loads(archive_path.read_text(encoding="utf-8"))
+    assert archive_payload["material_name"] == "PLA Basic"
+    assert archive_payload["brand"] == "Generic"
+    stage_a_payload = json.loads(stage_a_path.read_text(encoding="utf-8"))
+    assert stage_a_payload["parameters"]["channels"][0]["color_name"] == "PLA Basic"
+    assert evicted == ["pla-basic"]
+
+
+def test_extractor_update_gradient_card_material_restores_existing_archive_on_core_failure(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    evicted: list[str] = []
+    client, _ = _client_with_registry(FileRegistry(), evictor=evicted.append)
+    materials_root = tmp_path / "materials"
+    archive_path, stage_a_path = _write_updatable_material_archive(
+        materials_root,
+        "pla-basic",
+        material_name="PLA Basic",
+        brand="Generic",
+    )
+    monkeypatch.setattr(
+        "core.single_stage.materials.MATERIALS_DIR",
+        str(materials_root),
+    )
+
+    def _fail_after_partial_write(**kwargs):
+        archive_path.write_text(
+            json.dumps(
+                {
+                    "material_name": "PLA Matte",
+                    "brand": "Bambu Lab",
+                    "stage_a_params_file": "stage_A_parameters.json",
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        raise OSError("disk full while writing /Users/min/private/stage_A_parameters.json")
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.update_saved_stage_a_material_archive_metadata",
+        _fail_after_partial_write,
+    )
+
+    response = client.patch(
+        "/api/extractor/gradient-card-materials/pla-basic",
+        json={"material_name": "PLA Matte", "brand": "Bambu Lab"},
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Gradient card material update failed. Check the server log for details."
+    )
+    assert "disk full" not in response.text
+    assert "/Users/min/private" not in response.text
+    archive_payload = json.loads(archive_path.read_text(encoding="utf-8"))
+    assert archive_payload["material_name"] == "PLA Basic"
+    assert archive_payload["brand"] == "Generic"
+    stage_a_payload = json.loads(stage_a_path.read_text(encoding="utf-8"))
+    assert stage_a_payload["parameters"]["channels"][0]["color_name"] == "PLA Basic"
+    assert evicted == ["pla-basic"]
+
+
 def test_extractor_update_gradient_card_material_route_rejects_blank_name(
     monkeypatch,
     tmp_path: Path,
@@ -2522,6 +2748,10 @@ def test_gradient_card_stage_a_routes_compute_and_save_material(
     archive_path.write_text(json.dumps({"material_name": "Test Material"}), encoding="utf-8")
     saved_stage_a_path = archive_path.parent / "stage_A_parameters.json"
     saved_stage_a_path.write_text(json.dumps(params_payload), encoding="utf-8")
+    monkeypatch.setattr(
+        "core.single_stage.materials.MATERIALS_DIR",
+        str(tmp_path / "materials"),
+    )
 
     def _fake_save_stage_a_material_archive(**kwargs):
         assert kwargs["material_name"] == "Test Material"
@@ -2601,6 +2831,336 @@ def test_gradient_card_stage_a_routes_compute_and_save_material(
     assert removed == 4
     assert registry.resolve(save_body["material_file_url"].split("/")[-1]) is None
     assert registry.resolve(save_body["stage_a_params_url"].split("/")[-1]) is None
+
+
+def test_extractor_save_gradient_card_material_removes_new_archive_when_registration_fails(
+    monkeypatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    registry = _RegisterPathFailingRegistry()
+    evicted: list[str] = []
+    client, store = _client_with_registry(registry, evictor=evicted.append)
+    session_id = _seed_gradient_card_material_session(store)
+    materials_root = tmp_path / "materials"
+    material_dir = materials_root / "Bambu Lab" / "PLA Basic"
+    archive_path = material_dir / "material.json"
+    stage_a_path = material_dir / "stage_A_parameters.json"
+    monkeypatch.setattr(
+        "core.single_stage.materials.MATERIALS_DIR",
+        str(materials_root),
+    )
+
+    def _fake_save_stage_a_material_archive(**kwargs):
+        assert kwargs["brand"] == "Bambu Lab"
+        material_dir.mkdir(parents=True, exist_ok=True)
+        archive_path.write_text(
+            json.dumps(
+                {
+                    "material_name": kwargs["material_name"],
+                    "brand": kwargs["brand"],
+                    "stage_a_params_file": "stage_A_parameters.json",
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        stage_a_path.write_text(
+            json.dumps(
+                {
+                    "parameters": {
+                        "channels": [
+                            {
+                                "color_name": kwargs["material_name"],
+                                "E": [0.1, 0.2, 0.3],
+                                "k": [1.0, 1.1, 1.2],
+                            }
+                        ]
+                    },
+                    "meta": {},
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        return MaterialArchiveSaveResult(
+            archive_path=str(archive_path),
+            stage_a_params_path=str(stage_a_path),
+            material_summary={
+                "material_name": kwargs["material_name"],
+                "directory_name": "Bambu Lab/PLA Basic",
+                "archive_path": str(archive_path),
+                "stage_a_params_path": str(stage_a_path),
+                "verification_count": 1,
+            },
+        )
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.save_stage_a_material_archive",
+        _fake_save_stage_a_material_archive,
+    )
+    target_logger = logging.getLogger("lumina.api.routers.single_stage")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.ERROR, logger=target_logger.name)
+
+    try:
+        response = client.post(
+            "/api/extractor/save-gradient-card-material",
+            data={
+                "session_id": session_id,
+                "material_name": "PLA Basic",
+                "brand": "Bambu Lab",
+            },
+        )
+    finally:
+        target_logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Gradient card material file registration failed. Check the server log for details."
+    )
+    assert "registry backend unavailable" not in response.text
+    assert registry.paths == [str(archive_path)]
+    assert not material_dir.exists()
+    assert not (materials_root / "Bambu Lab").exists()
+    assert evicted == ["Bambu Lab/PLA Basic"]
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None)
+        == "extractor_save_gradient_card_material_registration_failed"
+    ]
+    assert len(records) == 1
+    assert records[0].error_type == "RuntimeError"
+    assert records[0].error_message == "registry backend unavailable"
+
+
+def test_extractor_save_gradient_card_material_restores_existing_archive_on_registration_failure(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    registry = _SecondPathFailingRegistry()
+    evicted: list[str] = []
+    client, store = _client_with_registry(registry, evictor=evicted.append)
+    session_id = _seed_gradient_card_material_session(store)
+    materials_root = tmp_path / "materials"
+    archive_path, stage_a_path = _write_updatable_material_archive(
+        materials_root,
+        "pla-basic",
+        material_name="PLA Basic",
+        brand="Generic",
+    )
+    monkeypatch.setattr(
+        "core.single_stage.materials.MATERIALS_DIR",
+        str(materials_root),
+    )
+
+    def _fake_save_stage_a_material_archive(**kwargs):
+        assert kwargs["existing_directory_name"] == "pla-basic"
+        archive_path.write_text(
+            json.dumps(
+                {
+                    "material_name": "PLA Matte",
+                    "brand": "Bambu Lab",
+                    "stage_a_params_file": "stage_A_parameters.json",
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        stage_a_path.write_text(
+            json.dumps(
+                {
+                    "parameters": {
+                        "channels": [
+                            {
+                                "color_name": "PLA Matte",
+                                "E": [0.4, 0.5, 0.6],
+                                "k": [1.4, 1.5, 1.6],
+                            }
+                        ]
+                    },
+                    "meta": {},
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        return MaterialArchiveSaveResult(
+            archive_path=str(archive_path),
+            stage_a_params_path=str(stage_a_path),
+            material_summary={
+                "material_name": "PLA Matte",
+                "directory_name": "pla-basic",
+                "archive_path": str(archive_path),
+                "stage_a_params_path": str(stage_a_path),
+                "verification_count": 2,
+            },
+        )
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.save_stage_a_material_archive",
+        _fake_save_stage_a_material_archive,
+    )
+
+    response = client.post(
+        "/api/extractor/save-gradient-card-material",
+        data={
+            "session_id": session_id,
+            "material_name": "PLA Matte",
+            "target_directory_name": "pla-basic",
+        },
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Gradient card material file registration failed. Check the server log for details."
+    )
+    assert "registry backend unavailable" not in response.text
+    assert registry.first_file_id is not None
+    assert registry.resolve(registry.first_file_id) is None
+    archive_payload = json.loads(archive_path.read_text(encoding="utf-8"))
+    assert archive_payload["material_name"] == "PLA Basic"
+    assert archive_payload["brand"] == "Generic"
+    stage_a_payload = json.loads(stage_a_path.read_text(encoding="utf-8"))
+    assert stage_a_payload["parameters"]["channels"][0]["color_name"] == "PLA Basic"
+    assert evicted == ["pla-basic"]
+
+
+def test_extractor_save_gradient_card_material_restores_existing_archive_on_core_failure(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    evicted: list[str] = []
+    client, store = _client_with_registry(FileRegistry(), evictor=evicted.append)
+    session_id = _seed_gradient_card_material_session(store)
+    materials_root = tmp_path / "materials"
+    archive_path, stage_a_path = _write_updatable_material_archive(
+        materials_root,
+        "pla-basic",
+        material_name="PLA Basic",
+        brand="Generic",
+    )
+    monkeypatch.setattr(
+        "core.single_stage.materials.MATERIALS_DIR",
+        str(materials_root),
+    )
+
+    def _fail_after_partial_write(**kwargs):
+        assert kwargs["existing_directory_name"] == "pla-basic"
+        stage_a_path.write_text(
+            json.dumps(
+                {
+                    "parameters": {
+                        "channels": [
+                            {
+                                "color_name": "PLA Matte",
+                                "E": [0.4, 0.5, 0.6],
+                                "k": [1.4, 1.5, 1.6],
+                            }
+                        ]
+                    },
+                    "meta": {},
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        raise OSError("disk full while writing /Users/min/private/material.json")
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.save_stage_a_material_archive",
+        _fail_after_partial_write,
+    )
+
+    response = client.post(
+        "/api/extractor/save-gradient-card-material",
+        data={
+            "session_id": session_id,
+            "material_name": "PLA Matte",
+            "target_directory_name": "pla-basic",
+        },
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Gradient card material save failed. Check the server log for details."
+    )
+    assert "disk full" not in response.text
+    assert "/Users/min/private" not in response.text
+    archive_payload = json.loads(archive_path.read_text(encoding="utf-8"))
+    assert archive_payload["material_name"] == "PLA Basic"
+    assert archive_payload["brand"] == "Generic"
+    stage_a_payload = json.loads(stage_a_path.read_text(encoding="utf-8"))
+    assert stage_a_payload["parameters"]["channels"][0]["color_name"] == "PLA Basic"
+    assert evicted == ["pla-basic"]
+
+
+def test_extractor_save_gradient_card_material_removes_new_archive_on_core_failure(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    evicted: list[str] = []
+    client, store = _client_with_registry(FileRegistry(), evictor=evicted.append)
+    session_id = _seed_gradient_card_material_session(store)
+    materials_root = tmp_path / "materials"
+    material_dir = materials_root / "Bambu Lab" / "PLA Basic"
+    archive_path = material_dir / "material.json"
+    stage_a_path = material_dir / "stage_A_parameters.json"
+    monkeypatch.setattr(
+        "core.single_stage.materials.MATERIALS_DIR",
+        str(materials_root),
+    )
+
+    def _fail_after_partial_new_write(**kwargs):
+        assert kwargs["existing_directory_name"] is None
+        assert kwargs["brand"] == "Bambu Lab"
+        material_dir.mkdir(parents=True, exist_ok=True)
+        stage_a_path.write_text(
+            json.dumps(
+                {
+                    "parameters": {
+                        "channels": [
+                            {
+                                "color_name": kwargs["material_name"],
+                                "E": [0.4, 0.5, 0.6],
+                                "k": [1.4, 1.5, 1.6],
+                            }
+                        ]
+                    },
+                    "meta": {},
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        raise OSError("disk full while writing /Users/min/private/material.json")
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.save_stage_a_material_archive",
+        _fail_after_partial_new_write,
+    )
+
+    response = client.post(
+        "/api/extractor/save-gradient-card-material",
+        data={
+            "session_id": session_id,
+            "material_name": "PLA Basic",
+            "brand": "Bambu Lab",
+        },
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Gradient card material save failed. Check the server log for details."
+    )
+    assert "disk full" not in response.text
+    assert "/Users/min/private" not in response.text
+    assert not archive_path.exists()
+    assert not stage_a_path.exists()
+    assert not material_dir.exists()
+    assert not (materials_root / "Bambu Lab").exists()
+    assert evicted == ["Bambu Lab/PLA Basic"]
 
 
 def test_gradient_card_stage_a_rejects_unreadable_image_without_pil_detail() -> None:
@@ -2869,6 +3429,173 @@ def test_gradient_card_material_library_route_can_include_file_urls(
     assert registry.resolve(item["stage_a_params_url"].split("/")[-1]) is None
 
 
+def test_gradient_card_material_library_route_hides_scan_error_detail(
+    monkeypatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client, _, _ = _client_with_state()
+    private_path = "/Users/min/private/materials/gradient-card"
+
+    def _fail_list_saved_materials():
+        raise OSError(f"Permission denied: '{private_path}'")
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.list_saved_stage_a_material_archives",
+        _fail_list_saved_materials,
+    )
+    target_logger = logging.getLogger("lumina.api.routers.single_stage")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.ERROR, logger=target_logger.name)
+
+    try:
+        response = client.get("/api/extractor/gradient-card-materials")
+    finally:
+        target_logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Gradient-card material library could not be loaded. "
+        "Check saved material storage and try again."
+    )
+    assert private_path not in response.text
+    assert "Permission denied" not in response.text
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None)
+        == "extractor_gradient_card_material_library_failed"
+    ]
+    assert len(records) == 1
+    assert records[0].error_type == "OSError"
+    assert private_path in records[0].error_message
+
+
+def test_gradient_card_material_library_route_hides_registration_error_detail(
+    monkeypatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client, _, registry = _client_with_state()
+    private_path = "/Users/min/private/materials/gradient-card"
+    archive_path = tmp_path / "material.json"
+    stage_a_path = tmp_path / "stage_A_parameters.json"
+    archive_path.write_text("{}", encoding="utf-8")
+    stage_a_path.write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.list_saved_stage_a_material_archives",
+        lambda: [
+            {
+                "material_name": "PLA Basic",
+                "directory_name": "pla-basic",
+                "created_at": "2026-04-16T10:00:00Z",
+                "updated_at": "2026-04-16T11:00:00Z",
+                "archive_path": str(archive_path),
+                "stage_a_params_path": str(stage_a_path),
+                "estimated_rgb": [100, 120, 140],
+                "layer_height_mm": 0.04,
+                "mean_delta_e": 1.23,
+                "verification_count": 3,
+                "verification_history": [],
+            }
+        ],
+    )
+
+    def _fail_register_path(*args, **kwargs):
+        raise RuntimeError(f"registry failed at {private_path}/material.json")
+
+    monkeypatch.setattr(registry, "register_path", _fail_register_path)
+    target_logger = logging.getLogger("lumina.api.routers.single_stage")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.ERROR, logger=target_logger.name)
+
+    try:
+        response = client.get(
+            "/api/extractor/gradient-card-materials?include_file_urls=true"
+        )
+    finally:
+        target_logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Gradient-card material library could not be loaded. "
+        "Check saved material storage and try again."
+    )
+    assert private_path not in response.text
+    assert "registry failed" not in response.text
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None)
+        == "extractor_gradient_card_material_library_registration_failed"
+    ]
+    assert len(records) == 1
+    assert records[0].error_type == "RuntimeError"
+    assert private_path in records[0].error_message
+
+
+def test_gradient_card_material_library_route_handles_registry_backend_error(
+    monkeypatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client, _, registry = _client_with_state()
+    private_path = "/Users/min/private/materials/gradient-card"
+    archive_path = tmp_path / "material.json"
+    archive_path.write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.list_saved_stage_a_material_archives",
+        lambda: [
+            {
+                "material_name": "PLA Basic",
+                "directory_name": "pla-basic",
+                "created_at": "2026-04-16T10:00:00Z",
+                "updated_at": "2026-04-16T11:00:00Z",
+                "archive_path": str(archive_path),
+                "stage_a_params_path": "",
+                "estimated_rgb": [100, 120, 140],
+                "layer_height_mm": 0.04,
+                "mean_delta_e": 1.23,
+                "verification_count": 3,
+                "verification_history": [],
+            }
+        ],
+    )
+
+    def _fail_register_path(*args, **kwargs):
+        raise Exception(f"database registry failed at {private_path}/material.json")
+
+    monkeypatch.setattr(registry, "register_path", _fail_register_path)
+    target_logger = logging.getLogger("lumina.api.routers.single_stage")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.ERROR, logger=target_logger.name)
+
+    try:
+        response = client.get(
+            "/api/extractor/gradient-card-materials?include_file_urls=true"
+        )
+    finally:
+        target_logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Gradient-card material library could not be loaded. "
+        "Check saved material storage and try again."
+    )
+    assert private_path not in response.text
+    assert "database registry failed" not in response.text
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None)
+        == "extractor_gradient_card_material_library_registration_failed"
+    ]
+    assert len(records) == 1
+    assert records[0].error_type == "Exception"
+    assert private_path in records[0].error_message
+
+
 def test_gradient_card_material_delete_route_removes_saved_material(
     monkeypatch,
 ) -> None:
@@ -3129,7 +3856,11 @@ def test_import_saved_stage_a_material_archives_copies_materials_and_renames_col
         )
         archive.writestr(
             "materials/BrandA/pla-basic/stage_A_parameters.json",
-            json.dumps({"parameters": {}}, ensure_ascii=False, indent=2),
+            json.dumps(
+                _minimal_solver_stage_a_payload("PLA Basic Imported"),
+                ensure_ascii=False,
+                indent=2,
+            ),
         )
 
     materials_root = tmp_path / "materials"
@@ -3153,6 +3884,55 @@ def test_import_saved_stage_a_material_archives_copies_materials_and_renames_col
     assert (imported_dir / "stage_A_parameters.json").exists() is True
 
 
+def test_import_saved_stage_a_material_archives_rejects_stage_a_without_solver_parameters(
+    tmp_path: Path,
+) -> None:
+    exported_zip = tmp_path / "materials_import_bad_stage_a.zip"
+    with zipfile.ZipFile(exported_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "lumina_material_export.json",
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "kind": "lumina_material_export",
+                    "directory_names": ["BrandA/pla-basic"],
+                    "material_count": 1,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+        )
+        archive.writestr(
+            "materials/BrandA/pla-basic/material.json",
+            json.dumps(
+                {
+                    "material_name": "PLA Basic Imported",
+                    "stage_a_params_file": "stage_A_parameters.json",
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+        )
+        archive.writestr(
+            "materials/BrandA/pla-basic/stage_A_parameters.json",
+            json.dumps({"parameters": {}}, ensure_ascii=False, indent=2),
+        )
+    materials_root = tmp_path / "materials"
+
+    with pytest.raises(ValueError) as exc_info:
+        import_saved_stage_a_material_archives(
+            archive_path=str(exported_zip),
+            materials_dir=str(materials_root),
+        )
+
+    message = str(exc_info.value)
+    assert "cannot be used by the material solver" in message
+    assert "parameters.channels[0]" in message
+    assert str(tmp_path) not in message
+    assert (materials_root / "BrandA" / "pla-basic").exists() is False
+    assert (materials_root / "_sync" / "index.json").exists() is False
+
+
 def test_import_saved_stage_a_material_archives_accepts_v2_bundle_and_writes_sync_index(
     tmp_path: Path,
 ) -> None:
@@ -3166,11 +3946,7 @@ def test_import_saved_stage_a_material_archives_accepts_v2_bundle_and_writes_syn
         ensure_ascii=False,
         indent=2,
     ).encode("utf-8")
-    stage_a_payload = json.dumps(
-        {"parameters": {}},
-        ensure_ascii=False,
-        indent=2,
-    ).encode("utf-8")
+    stage_a_payload = _minimal_solver_stage_a_bytes("PLA Basic Imported")
     material_hash = hashlib.sha256(material_payload).hexdigest()
     stage_a_hash = hashlib.sha256(stage_a_payload).hexdigest()
     content_hash = hashlib.sha256(
@@ -3244,6 +4020,94 @@ def test_import_saved_stage_a_material_archives_accepts_v2_bundle_and_writes_syn
     assert installed["content_hash"] == f"sha256:{content_hash}"
     assert installed["channel"] == "team"
     assert installed["local_directory"] == "BrandA/pla-basic"
+
+
+def test_import_saved_stage_a_material_archives_rejects_v2_bundle_without_solver_parameters(
+    tmp_path: Path,
+) -> None:
+    exported_zip = tmp_path / "materials_import_v2_bad_stage_a.zip"
+    material_payload = json.dumps(
+        {
+            "brand": "BrandA",
+            "material_name": "PLA Basic Imported",
+            "stage_a_params_file": "stage_A_parameters.json",
+        },
+        ensure_ascii=False,
+        indent=2,
+    ).encode("utf-8")
+    stage_a_payload = json.dumps(
+        {"parameters": {}},
+        ensure_ascii=False,
+        indent=2,
+    ).encode("utf-8")
+    material_hash = hashlib.sha256(material_payload).hexdigest()
+    stage_a_hash = hashlib.sha256(stage_a_payload).hexdigest()
+    content_hash = hashlib.sha256(
+        f"material.json:{material_hash}\nstage_A_parameters.json:{stage_a_hash}".encode(
+            "utf-8"
+        )
+    ).hexdigest()
+    with zipfile.ZipFile(exported_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("materials/BrandA/pla-basic/material.json", material_payload)
+        archive.writestr(
+            "materials/BrandA/pla-basic/stage_A_parameters.json",
+            stage_a_payload,
+        )
+        archive.writestr(
+            "lumina_material_bundle.json",
+            json.dumps(
+                {
+                    "kind": "lumina_material_bundle",
+                    "schema_version": "2.0",
+                    "packages": [
+                        {
+                            "material_id": "mat_bad_stage_a",
+                            "revision_id": "rev_bad_stage_a",
+                            "content_hash": f"sha256:{content_hash}",
+                            "channel": "team",
+                            "visibility": "team",
+                            "local_directory": "BrandA/pla-basic",
+                            "display": {"material_name": "PLA Basic Imported"},
+                            "files": [
+                                {
+                                    "path": "materials/BrandA/pla-basic/material.json",
+                                    "role": "material_archive",
+                                    "sha256": material_hash,
+                                    "bytes": len(material_payload),
+                                    "required": True,
+                                },
+                                {
+                                    "path": (
+                                        "materials/BrandA/pla-basic/"
+                                        "stage_A_parameters.json"
+                                    ),
+                                    "role": "stage_a_parameters",
+                                    "sha256": stage_a_hash,
+                                    "bytes": len(stage_a_payload),
+                                    "required": True,
+                                },
+                            ],
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+        )
+    materials_root = tmp_path / "materials"
+
+    with pytest.raises(ValueError) as exc_info:
+        import_saved_stage_a_material_archives(
+            archive_path=str(exported_zip),
+            materials_dir=str(materials_root),
+        )
+
+    message = str(exc_info.value)
+    assert "cannot be used by the material solver" in message
+    assert "hash mismatch" not in message
+    assert str(tmp_path) not in message
+    assert (materials_root / "BrandA" / "pla-basic").exists() is False
+    assert (materials_root / "_sync" / "index.json").exists() is False
 
 
 def test_material_sync_status_reports_matching_local_material_without_sync_index(
@@ -3464,11 +4328,7 @@ def test_import_saved_stage_a_material_archives_v2_ignores_undeclared_local_only
         ensure_ascii=False,
         indent=2,
     ).encode("utf-8")
-    stage_a_payload = json.dumps(
-        {"parameters": {}},
-        ensure_ascii=False,
-        indent=2,
-    ).encode("utf-8")
+    stage_a_payload = _minimal_solver_stage_a_bytes("PLA Basic Imported")
     material_hash = hashlib.sha256(material_payload).hexdigest()
     stage_a_hash = hashlib.sha256(stage_a_payload).hexdigest()
     content_hash = hashlib.sha256(
@@ -4008,7 +4868,11 @@ def test_import_saved_stage_a_material_archives_skips_same_v2_revision(
         encoding="utf-8",
     )
     (material_dir / "stage_A_parameters.json").write_text(
-        json.dumps({"parameters": {}}, ensure_ascii=False, indent=2),
+        json.dumps(
+            _minimal_solver_stage_a_payload("PLA Basic"),
+            ensure_ascii=False,
+            indent=2,
+        ),
         encoding="utf-8",
     )
     exported_zip = tmp_path / "materials_export_v2.zip"
@@ -4340,6 +5204,63 @@ def test_gradient_card_material_import_route_imports_multiple_archives(
     ]
     assert seen_import_paths == uploaded_paths
     assert removed_paths == uploaded_paths
+
+
+def test_gradient_card_material_import_route_rejects_invalid_stage_a_solver_parameters(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    monkeypatch.setattr("core.single_stage.materials.MATERIALS_DIR", str(materials_root))
+    client, _, _ = _client_with_state()
+    uploaded_zip = io.BytesIO()
+    with zipfile.ZipFile(uploaded_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "lumina_material_export.json",
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "kind": "lumina_material_export",
+                    "directory_names": ["BrandA/pla-basic"],
+                    "material_count": 1,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+        )
+        archive.writestr(
+            "materials/BrandA/pla-basic/material.json",
+            json.dumps(
+                {
+                    "material_name": "PLA Basic Imported",
+                    "stage_a_params_file": "stage_A_parameters.json",
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+        )
+        archive.writestr(
+            "materials/BrandA/pla-basic/stage_A_parameters.json",
+            json.dumps({"parameters": {}}, ensure_ascii=False, indent=2),
+        )
+    uploaded_zip.seek(0)
+
+    response = client.post(
+        "/api/extractor/gradient-card-materials/import",
+        files=[
+            (
+                "archives",
+                ("bad-stage-a.zip", uploaded_zip.getvalue(), "application/zip"),
+            )
+        ],
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "cannot be used by the material solver" in detail
+    assert "parameters.channels[0]" in detail
+    assert str(tmp_path) not in detail
+    assert (materials_root / "BrandA" / "pla-basic").exists() is False
 
 
 def test_extract_single_stage_dataset_rejects_invalid_layout(tmp_path: Path) -> None:

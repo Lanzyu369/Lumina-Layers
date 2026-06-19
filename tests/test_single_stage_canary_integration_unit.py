@@ -520,10 +520,17 @@ class TestUpdateGradientCardMaterialCanary:
         expected_count: int,
     ) -> None:
         client, _, _ = _client_with_state()
-        archive_path = tmp_path / "material_archive.json"
-        params_path = tmp_path / "stage_a_params.json"
+        materials_root = tmp_path / "materials"
+        material_dir = materials_root / "stub_material_v1"
+        material_dir.mkdir(parents=True, exist_ok=True)
+        archive_path = material_dir / "material.json"
+        params_path = material_dir / "stage_A_parameters.json"
         archive_path.write_text(json.dumps({"ok": True}), encoding="utf-8")
         params_path.write_text(json.dumps({"ok": True}), encoding="utf-8")
+        monkeypatch.setattr(
+            "core.single_stage.materials.MATERIALS_DIR",
+            str(materials_root),
+        )
 
         def _stub_update_saved_stage_a_material_archive_metadata(
             **kwargs,

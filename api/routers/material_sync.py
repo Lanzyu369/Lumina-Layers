@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import os
+from typing import NoReturn
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 
@@ -36,9 +37,39 @@ log = get_logger(__name__)
 MATERIAL_SYNC_CATALOG_UNAVAILABLE_DETAIL = (
     "Material registry catalog is unavailable. Check registry settings and try again."
 )
+MATERIAL_SYNC_INSTALL_UNAVAILABLE_DETAIL = (
+    "Material package install failed. Check the material package and try again."
+)
 MATERIAL_SYNC_REFRESH_UNAVAILABLE_DETAIL = (
     "Material registry refresh failed. Check registry settings and try again."
 )
+MATERIAL_SYNC_ROLLBACK_UNAVAILABLE_DETAIL = (
+    "Material sync rollback failed. Check the installed revision and try again."
+)
+MATERIAL_SYNC_STATUS_UNAVAILABLE_DETAIL = (
+    "Material sync status is unavailable. Check the material library and try again."
+)
+
+
+def _raise_material_sync_error(
+    *,
+    event: str,
+    exc: Exception,
+    status_code: int,
+    detail: str,
+    **fields: object,
+) -> NoReturn:
+    log.warning(
+        "Material sync request failed",
+        extra={
+            "event": event,
+            "status_code": status_code,
+            "error_type": type(exc).__name__,
+            "error_message": str(exc),
+            **fields,
+        },
+    )
+    raise HTTPException(status_code=status_code, detail=detail) from exc
 
 
 def _canonical_package_sha256(value: object) -> str:
@@ -91,7 +122,12 @@ async def material_sync_status() -> MaterialSyncStatusResponse:
     try:
         status_payload = get_material_sync_status()
     except OSError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        _raise_material_sync_error(
+            event="material_sync_status_failed",
+            exc=exc,
+            status_code=500,
+            detail=MATERIAL_SYNC_STATUS_UNAVAILABLE_DETAIL,
+        )
     response = MaterialSyncStatusResponse(
         status="ok",
         message="Material sync status loaded",
@@ -183,10 +219,29 @@ async def material_sync_install(
         )
         result = import_saved_stage_a_material_archives(archive_path=archive_path)
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        _raise_material_sync_error(
+            event="material_sync_install_failed",
+            exc=exc,
+            status_code=404,
+            detail=MATERIAL_SYNC_INSTALL_UNAVAILABLE_DETAIL,
+        )
     except UploadTooLargeError as exc:
         raise HTTPException(status_code=413, detail=str(exc)) from exc
-    except (ValueError, TypeError, OSError, RuntimeError) as exc:
+    except OSError as exc:
+        _raise_material_sync_error(
+            event="material_sync_install_failed",
+            exc=exc,
+            status_code=422,
+            detail=MATERIAL_SYNC_INSTALL_UNAVAILABLE_DETAIL,
+        )
+    except RuntimeError as exc:
+        _raise_material_sync_error(
+            event="material_sync_install_failed",
+            exc=exc,
+            status_code=422,
+            detail=MATERIAL_SYNC_INSTALL_UNAVAILABLE_DETAIL,
+        )
+    except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     finally:
         if archive_path is not None:
@@ -229,11 +284,32 @@ async def material_sync_install_from_registry(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        _raise_material_sync_error(
+            event="material_sync_install_from_registry_failed",
+            exc=exc,
+            status_code=502,
+            detail=MATERIAL_SYNC_INSTALL_UNAVAILABLE_DETAIL,
+            material_id=payload.material_id,
+            revision_id=payload.revision_id,
+        )
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        _raise_material_sync_error(
+            event="material_sync_install_from_registry_failed",
+            exc=exc,
+            status_code=502,
+            detail=MATERIAL_SYNC_INSTALL_UNAVAILABLE_DETAIL,
+            material_id=payload.material_id,
+            revision_id=payload.revision_id,
+        )
     except OSError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        _raise_material_sync_error(
+            event="material_sync_install_from_registry_failed",
+            exc=exc,
+            status_code=500,
+            detail=MATERIAL_SYNC_INSTALL_UNAVAILABLE_DETAIL,
+            material_id=payload.material_id,
+            revision_id=payload.revision_id,
+        )
 
     installed_materials = result["installed_materials"]
     log.info(
@@ -317,7 +393,14 @@ async def material_sync_rollback(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except OSError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        _raise_material_sync_error(
+            event="material_sync_rollback_failed",
+            exc=exc,
+            status_code=500,
+            detail=MATERIAL_SYNC_ROLLBACK_UNAVAILABLE_DETAIL,
+            material_id=payload.material_id,
+            revision_id=payload.revision_id,
+        )
 
     log.info(
         "Material sync rollback completed",

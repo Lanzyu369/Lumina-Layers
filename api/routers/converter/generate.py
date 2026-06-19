@@ -104,6 +104,12 @@ BATCH_PREVIEW_LIMIT_FALLBACK_MESSAGE: str = (
     "3D preview automatically shows the first models that fit on the current "
     "print bed."
 )
+BATCH_MERGE_FAILED_DETAIL: str = (
+    "Batch 3MF merge failed. Try again or check the server log for details."
+)
+BATCH_ITEM_FAILED_DETAIL: str = (
+    "This file could not be converted. Re-upload it or check the server log for details."
+)
 MODEL_GENERATION_FAILED_DETAIL: str = (
     "3MF generation failed. Re-run preview and try generating the model again."
 )
@@ -1932,6 +1938,26 @@ def _safe_log(level: str, event: str, **fields: object) -> None:
         pass
 
 
+def _log_batch_item_failure(
+    *,
+    batch_run_id: str,
+    filename: str,
+    failure_kind: str,
+    error_type: str,
+    error_message: str,
+) -> None:
+    """Log raw per-item batch diagnostics without exposing them in responses."""
+    _safe_log(
+        "warning",
+        "converter_batch_item_failed",
+        session_id=batch_run_id,
+        filename=filename,
+        failure_kind=failure_kind,
+        error_type=error_type,
+        error_message=error_message,
+    )
+
+
 def _resolve_batch_plate_dimensions(printer_id: str) -> tuple[float, float]:
     """Return the batch layout plate dimensions for the selected printer.
 
@@ -2243,7 +2269,7 @@ async def convert_batch(
 
             # 3. Result processing (main thread)
             threemf_path: str | None = result.get("threemf_path")
-            status_msg: str = result.get("status_msg", "")
+            status_msg: str = str(result.get("status_msg") or "")
 
             if threemf_path and os.path.exists(threemf_path):
                 successful_entries.append(result)
@@ -2259,11 +2285,19 @@ async def convert_batch(
                         color_mode=color_mode,
                     )
             else:
+                raw_status_msg = status_msg.strip() or "Worker result did not include a generated 3MF path"
+                _log_batch_item_failure(
+                    batch_run_id=batch_run_id,
+                    filename=filename,
+                    failure_kind="missing_output",
+                    error_type="MissingBatchOutput",
+                    error_message=raw_status_msg,
+                )
                 results.append(
                     BatchItemResult(
                         filename=filename,
                         status="failed",
-                        error=status_msg or "3MF generation returned no output",
+                        error=BATCH_ITEM_FAILED_DETAIL,
                     )
                 )
         except asyncio.TimeoutError:
@@ -2275,11 +2309,18 @@ async def convert_batch(
                 )
             )
         except ROUTER_HANDLED_ERRORS as e:
+            _log_batch_item_failure(
+                batch_run_id=batch_run_id,
+                filename=filename,
+                failure_kind="worker_exception",
+                error_type=type(e).__name__,
+                error_message=str(e),
+            )
             results.append(
                 BatchItemResult(
                     filename=filename,
                     status="failed",
-                    error=str(e),
+                    error=BATCH_ITEM_FAILED_DETAIL,
                 )
             )
         finally:
@@ -2493,7 +2534,7 @@ async def convert_batch(
         _remove_temp_path(temp_native_bundle_path)
         raise HTTPException(
             status_code=500,
-            detail=f"Batch merge failed at stage={stage}: {exc}",
+            detail=BATCH_MERGE_FAILED_DETAIL,
         )
 
     # Success path: cleanup intermediate files

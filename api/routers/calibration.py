@@ -34,9 +34,15 @@ CALIBRATION_GENERATION_FAILED_DETAIL = (
     "Calibration board could not be generated. "
     "Check calibration settings and try again."
 )
+CALIBRATION_OUTPUT_PREPARATION_FAILED_DETAIL = (
+    "Calibration board output could not be prepared. Please try again."
+)
 SINGLE_STAGE_KIT_GENERATION_FAILED_DETAIL = (
     "Single-stage calibration kit could not be generated. "
     "Check material and device settings and try again."
+)
+SINGLE_STAGE_KIT_OUTPUT_PREPARATION_FAILED_DETAIL = (
+    "Single-stage calibration kit output could not be prepared. Please try again."
 )
 log = get_logger(__name__)
 
@@ -84,6 +90,27 @@ def _handle_core_error(
         "Calibration core operation failed",
         extra={
             "event": "calibration_core_operation_failed",
+            "context": context,
+            "error_type": type(e).__name__,
+            "error_message": str(e),
+        },
+    )
+    raise HTTPException(status_code=500, detail=public_detail)
+
+
+def _handle_output_preparation_error(
+    e: Exception,
+    *,
+    context: str,
+    public_detail: str,
+) -> None:
+    """Map FileRegistry/export handoff failures to readable HTTP errors.
+    将 FileRegistry / 导出交接失败转换为可读的 HTTP 错误。
+    """
+    log.error(
+        "Calibration output preparation failed",
+        extra={
+            "event": "calibration_output_preparation_failed",
             "context": context,
             "error_type": type(e).__name__,
             "error_message": str(e),
@@ -238,13 +265,17 @@ def calibration_generate(
             )
             registered_file_ids.append(preview_id)
             preview_url = f"/api/files/{preview_id}"
-    except (OSError, RuntimeError, TypeError, ValueError):
+    except (OSError, RuntimeError, TypeError, ValueError) as e:
         _rollback_stateless_export_registration(
             registry,
             file_ids=registered_file_ids,
             generated_paths=[path],
         )
-        raise
+        _handle_output_preparation_error(
+            e,
+            context="Calibration output registration",
+            public_detail=CALIBRATION_OUTPUT_PREPARATION_FAILED_DETAIL,
+        )
 
     backing_color_for_log = (
         "White"
@@ -334,13 +365,17 @@ def calibration_generate_single_stage_kit(
             ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
         )
         registered_file_ids.append(preview_id)
-    except (OSError, RuntimeError, TypeError, ValueError):
+    except (OSError, RuntimeError, TypeError, ValueError) as e:
         _rollback_stateless_export_registration(
             registry,
             file_ids=registered_file_ids,
             generated_paths=[result.zip_path, result.manifest_path],
         )
-        raise
+        _handle_output_preparation_error(
+            e,
+            context="Single-stage kit output registration",
+            public_detail=SINGLE_STAGE_KIT_OUTPUT_PREPARATION_FAILED_DETAIL,
+        )
     log.info(
         "Single-stage calibration kit generated",
         extra={
