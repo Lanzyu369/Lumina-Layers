@@ -22,7 +22,23 @@ def _write_seed_archive(zip_path: Path) -> str:
         ensure_ascii=False,
     ).encode("utf-8")
     stage_a_payload = json.dumps(
-        {"parameters": {"channels": [{"color_name": "Seed PLA"}]}},
+        {
+            "parameters": {
+                "channels": [
+                    {
+                        "color_name": "Seed PLA",
+                        "E": [0.1, 0.2, 0.3],
+                        "k": [1.0, 1.1, 1.2],
+                    }
+                ],
+                "substrates": [
+                    {
+                        "substrate_id": "white",
+                        "C0": [1.0, 1.0, 1.0],
+                    }
+                ],
+            }
+        },
         ensure_ascii=False,
     ).encode("utf-8")
     material_hash = hashlib.sha256(material_payload).hexdigest()

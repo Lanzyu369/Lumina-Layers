@@ -62,6 +62,38 @@ def _png_bytes(width: int = 8, height: int = 8) -> bytes:
     return buffer.getvalue()
 
 
+def _minimal_solver_stage_a_payload(
+    material_name: str = "PLA Basic",
+) -> dict[str, object]:
+    return {
+        "parameters": {
+            "channels": [
+                {
+                    "color_name": material_name,
+                    "E": [0.1, 0.2, 0.3],
+                    "k": [1.0, 1.1, 1.2],
+                }
+            ],
+            "substrates": [
+                {
+                    "substrate_id": "white",
+                    "C0": [1.0, 1.0, 1.0],
+                }
+            ],
+        }
+    }
+
+
+def _minimal_solver_stage_a_bytes(
+    material_name: str = "PLA Basic",
+) -> bytes:
+    return json.dumps(
+        _minimal_solver_stage_a_payload(material_name),
+        ensure_ascii=False,
+        indent=2,
+    ).encode("utf-8")
+
+
 def _client_with_state() -> tuple[TestClient, SessionStore, FileRegistry]:
     app = create_app()
     store = SessionStore(ttl=1800)
@@ -91,6 +123,56 @@ def test_material_solver_cache_list_hides_storage_error_detail(
     assert response.json()["detail"] == MATERIAL_SOLVER_CACHE_LIST_FAILED_DETAIL
     assert private_path not in response.text
     assert "permission denied" not in response.text
+
+
+def test_material_solver_cache_status_rejects_malformed_local_material(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    material_dir = materials_root / "BrandA" / "pla-bad"
+    material_dir.mkdir(parents=True)
+    (material_dir / "material.json").write_text(
+        json.dumps(
+            {
+                "brand": "BrandA",
+                "material_name": "Bad Stage A",
+                "stage_a_params_file": "stage_A_parameters.json",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (material_dir / "stage_A_parameters.json").write_text(
+        json.dumps(
+            {
+                "parameters": {
+                    "channels": [{"color_name": "Bad Stage A"}],
+                    "substrates": [{"substrate_id": "white", "C0": [1.0, 1.0, 1.0]}],
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("core.material_lut_synthesis.MATERIALS_DIR", str(materials_root))
+    client, _, _ = _client_with_state()
+
+    response = client.post(
+        "/api/extractor/material-solver-cache/status",
+        data={
+            "material_directory_names": json.dumps(["BrandA/pla-bad"]),
+            "layer_count": "5",
+            "layer_height_mm": "0.1",
+            "substrate": "white",
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "cannot be used by the material solver" in detail
+    assert "parameters.channels[0].E" in detail
+    assert str(tmp_path) not in detail
 
 
 class _RegisterPathFailingRegistry(FileRegistry):
@@ -3129,7 +3211,11 @@ def test_import_saved_stage_a_material_archives_copies_materials_and_renames_col
         )
         archive.writestr(
             "materials/BrandA/pla-basic/stage_A_parameters.json",
-            json.dumps({"parameters": {}}, ensure_ascii=False, indent=2),
+            json.dumps(
+                _minimal_solver_stage_a_payload("PLA Basic Imported"),
+                ensure_ascii=False,
+                indent=2,
+            ),
         )
 
     materials_root = tmp_path / "materials"
@@ -3153,6 +3239,55 @@ def test_import_saved_stage_a_material_archives_copies_materials_and_renames_col
     assert (imported_dir / "stage_A_parameters.json").exists() is True
 
 
+def test_import_saved_stage_a_material_archives_rejects_stage_a_without_solver_parameters(
+    tmp_path: Path,
+) -> None:
+    exported_zip = tmp_path / "materials_import_bad_stage_a.zip"
+    with zipfile.ZipFile(exported_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "lumina_material_export.json",
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "kind": "lumina_material_export",
+                    "directory_names": ["BrandA/pla-basic"],
+                    "material_count": 1,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+        )
+        archive.writestr(
+            "materials/BrandA/pla-basic/material.json",
+            json.dumps(
+                {
+                    "material_name": "PLA Basic Imported",
+                    "stage_a_params_file": "stage_A_parameters.json",
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+        )
+        archive.writestr(
+            "materials/BrandA/pla-basic/stage_A_parameters.json",
+            json.dumps({"parameters": {}}, ensure_ascii=False, indent=2),
+        )
+    materials_root = tmp_path / "materials"
+
+    with pytest.raises(ValueError) as exc_info:
+        import_saved_stage_a_material_archives(
+            archive_path=str(exported_zip),
+            materials_dir=str(materials_root),
+        )
+
+    message = str(exc_info.value)
+    assert "cannot be used by the material solver" in message
+    assert "parameters.channels[0]" in message
+    assert str(tmp_path) not in message
+    assert (materials_root / "BrandA" / "pla-basic").exists() is False
+    assert (materials_root / "_sync" / "index.json").exists() is False
+
+
 def test_import_saved_stage_a_material_archives_accepts_v2_bundle_and_writes_sync_index(
     tmp_path: Path,
 ) -> None:
@@ -3166,11 +3301,7 @@ def test_import_saved_stage_a_material_archives_accepts_v2_bundle_and_writes_syn
         ensure_ascii=False,
         indent=2,
     ).encode("utf-8")
-    stage_a_payload = json.dumps(
-        {"parameters": {}},
-        ensure_ascii=False,
-        indent=2,
-    ).encode("utf-8")
+    stage_a_payload = _minimal_solver_stage_a_bytes("PLA Basic Imported")
     material_hash = hashlib.sha256(material_payload).hexdigest()
     stage_a_hash = hashlib.sha256(stage_a_payload).hexdigest()
     content_hash = hashlib.sha256(
@@ -3244,6 +3375,94 @@ def test_import_saved_stage_a_material_archives_accepts_v2_bundle_and_writes_syn
     assert installed["content_hash"] == f"sha256:{content_hash}"
     assert installed["channel"] == "team"
     assert installed["local_directory"] == "BrandA/pla-basic"
+
+
+def test_import_saved_stage_a_material_archives_rejects_v2_bundle_without_solver_parameters(
+    tmp_path: Path,
+) -> None:
+    exported_zip = tmp_path / "materials_import_v2_bad_stage_a.zip"
+    material_payload = json.dumps(
+        {
+            "brand": "BrandA",
+            "material_name": "PLA Basic Imported",
+            "stage_a_params_file": "stage_A_parameters.json",
+        },
+        ensure_ascii=False,
+        indent=2,
+    ).encode("utf-8")
+    stage_a_payload = json.dumps(
+        {"parameters": {}},
+        ensure_ascii=False,
+        indent=2,
+    ).encode("utf-8")
+    material_hash = hashlib.sha256(material_payload).hexdigest()
+    stage_a_hash = hashlib.sha256(stage_a_payload).hexdigest()
+    content_hash = hashlib.sha256(
+        f"material.json:{material_hash}\nstage_A_parameters.json:{stage_a_hash}".encode(
+            "utf-8"
+        )
+    ).hexdigest()
+    with zipfile.ZipFile(exported_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("materials/BrandA/pla-basic/material.json", material_payload)
+        archive.writestr(
+            "materials/BrandA/pla-basic/stage_A_parameters.json",
+            stage_a_payload,
+        )
+        archive.writestr(
+            "lumina_material_bundle.json",
+            json.dumps(
+                {
+                    "kind": "lumina_material_bundle",
+                    "schema_version": "2.0",
+                    "packages": [
+                        {
+                            "material_id": "mat_bad_stage_a",
+                            "revision_id": "rev_bad_stage_a",
+                            "content_hash": f"sha256:{content_hash}",
+                            "channel": "team",
+                            "visibility": "team",
+                            "local_directory": "BrandA/pla-basic",
+                            "display": {"material_name": "PLA Basic Imported"},
+                            "files": [
+                                {
+                                    "path": "materials/BrandA/pla-basic/material.json",
+                                    "role": "material_archive",
+                                    "sha256": material_hash,
+                                    "bytes": len(material_payload),
+                                    "required": True,
+                                },
+                                {
+                                    "path": (
+                                        "materials/BrandA/pla-basic/"
+                                        "stage_A_parameters.json"
+                                    ),
+                                    "role": "stage_a_parameters",
+                                    "sha256": stage_a_hash,
+                                    "bytes": len(stage_a_payload),
+                                    "required": True,
+                                },
+                            ],
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+        )
+    materials_root = tmp_path / "materials"
+
+    with pytest.raises(ValueError) as exc_info:
+        import_saved_stage_a_material_archives(
+            archive_path=str(exported_zip),
+            materials_dir=str(materials_root),
+        )
+
+    message = str(exc_info.value)
+    assert "cannot be used by the material solver" in message
+    assert "hash mismatch" not in message
+    assert str(tmp_path) not in message
+    assert (materials_root / "BrandA" / "pla-basic").exists() is False
+    assert (materials_root / "_sync" / "index.json").exists() is False
 
 
 def test_material_sync_status_reports_matching_local_material_without_sync_index(
@@ -3464,11 +3683,7 @@ def test_import_saved_stage_a_material_archives_v2_ignores_undeclared_local_only
         ensure_ascii=False,
         indent=2,
     ).encode("utf-8")
-    stage_a_payload = json.dumps(
-        {"parameters": {}},
-        ensure_ascii=False,
-        indent=2,
-    ).encode("utf-8")
+    stage_a_payload = _minimal_solver_stage_a_bytes("PLA Basic Imported")
     material_hash = hashlib.sha256(material_payload).hexdigest()
     stage_a_hash = hashlib.sha256(stage_a_payload).hexdigest()
     content_hash = hashlib.sha256(
@@ -4008,7 +4223,11 @@ def test_import_saved_stage_a_material_archives_skips_same_v2_revision(
         encoding="utf-8",
     )
     (material_dir / "stage_A_parameters.json").write_text(
-        json.dumps({"parameters": {}}, ensure_ascii=False, indent=2),
+        json.dumps(
+            _minimal_solver_stage_a_payload("PLA Basic"),
+            ensure_ascii=False,
+            indent=2,
+        ),
         encoding="utf-8",
     )
     exported_zip = tmp_path / "materials_export_v2.zip"
@@ -4268,6 +4487,63 @@ def test_gradient_card_material_import_route_imports_multiple_archives(
     ]
     assert seen_import_paths == uploaded_paths
     assert removed_paths == uploaded_paths
+
+
+def test_gradient_card_material_import_route_rejects_invalid_stage_a_solver_parameters(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    monkeypatch.setattr("core.single_stage.materials.MATERIALS_DIR", str(materials_root))
+    client, _, _ = _client_with_state()
+    uploaded_zip = io.BytesIO()
+    with zipfile.ZipFile(uploaded_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "lumina_material_export.json",
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "kind": "lumina_material_export",
+                    "directory_names": ["BrandA/pla-basic"],
+                    "material_count": 1,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+        )
+        archive.writestr(
+            "materials/BrandA/pla-basic/material.json",
+            json.dumps(
+                {
+                    "material_name": "PLA Basic Imported",
+                    "stage_a_params_file": "stage_A_parameters.json",
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+        )
+        archive.writestr(
+            "materials/BrandA/pla-basic/stage_A_parameters.json",
+            json.dumps({"parameters": {}}, ensure_ascii=False, indent=2),
+        )
+    uploaded_zip.seek(0)
+
+    response = client.post(
+        "/api/extractor/gradient-card-materials/import",
+        files=[
+            (
+                "archives",
+                ("bad-stage-a.zip", uploaded_zip.getvalue(), "application/zip"),
+            )
+        ],
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "cannot be used by the material solver" in detail
+    assert "parameters.channels[0]" in detail
+    assert str(tmp_path) not in detail
+    assert (materials_root / "BrandA" / "pla-basic").exists() is False
 
 
 def test_extract_single_stage_dataset_rejects_invalid_layout(tmp_path: Path) -> None:

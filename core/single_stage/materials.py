@@ -5129,6 +5129,8 @@ def import_saved_stage_a_material_archives(
     Returns:
         MaterialArchiveImportResult: Imported material summaries. (导入后的耗材摘要)
     """
+    from core.material_lut_synthesis import validate_stage_a_solver_parameters
+
     selected_material_id = str(selected_material_id or "").strip()
     selected_revision_id = str(selected_revision_id or "").strip()
     if bool(selected_material_id) != bool(selected_revision_id):
@@ -5253,9 +5255,13 @@ def import_saved_stage_a_material_archives(
                     raise FileNotFoundError(
                         f"Saved Stage A parameters not found in ZIP: {relative_directory_name}"
                     )
-                _load_json_object(
+                stage_a_payload = _load_json_object(
                     stage_a_params_path,
                     "Saved Stage A parameters are not valid UTF-8 JSON",
+                )
+                validate_stage_a_solver_parameters(
+                    stage_a_payload,
+                    material_label=relative_directory_name,
                 )
                 destination_dir = _import_target_material_dir(
                     target_root,

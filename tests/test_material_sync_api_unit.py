@@ -64,6 +64,12 @@ def _write_v2_material_package(
                 "channels": [
                     {"color_name": "PLA Basic Imported", "E": [0.1, 0.2, 0.3], "k": [1.0, 1.1, 1.2]}
                 ],
+                "substrates": [
+                    {
+                        "substrate_id": "white",
+                        "C0": [1.0, 1.0, 1.0],
+                    }
+                ],
             },
         },
         ensure_ascii=False,
@@ -150,6 +156,12 @@ def _write_v2_multi_material_package(zip_path: Path) -> dict[str, str]:
                                 "color_name": f"PLA {suffix.title()}",
                                 "E": [0.1, 0.2, 0.3],
                                 "k": [1.0, 1.1, 1.2],
+                            }
+                        ],
+                        "substrates": [
+                            {
+                                "substrate_id": "white",
+                                "C0": [1.0, 1.0, 1.0],
                             }
                         ],
                     },
