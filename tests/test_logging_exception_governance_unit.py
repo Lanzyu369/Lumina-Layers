@@ -160,6 +160,7 @@ EXTRACTOR_STRUCTURED_EVENTS = {
     "extractor_colorchecker_source_done",
     "extractor_colorchecker_detect_chart_done",
     "extractor_colorchecker_calibrate_done",
+    "extractor_colorchecker_calibrate_failed",
     "extractor_colorchecker_release_done",
     "extractor_colorchecker_confirm_done",
     "extractor_colorchecker_touch_done",
