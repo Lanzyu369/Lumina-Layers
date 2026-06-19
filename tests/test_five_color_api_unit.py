@@ -12,6 +12,7 @@ Tests cover:
 """
 
 import json
+import logging
 from pathlib import Path
 from unittest.mock import patch
 
@@ -2922,6 +2923,71 @@ def test_generate_swatch_cleans_output_when_registry_fails(
     assert response.status_code == 500
     assert registry.generated_path == str(swatch_path)
     assert not swatch_path.exists()
+
+
+def test_generate_swatch_hides_export_failure_detail(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Swatch export failures should not return raw exporter paths."""
+    engine = _FakeSwatchEngine()
+    private_path = "/Users/min/private/RecipeSwatch.3mf"
+    status_msg = (
+        f"3MF export failed: cannot write {private_path}: permission denied"
+    )
+    safe_detail = (
+        "Five-color swatch export failed. Check the selected recipes and "
+        "export settings, then try again."
+    )
+
+    def _fake_generate_recipe_swatch(*, recipes, **kwargs):
+        return None, None, status_msg
+
+    target_logger = logging.getLogger("lumina.api.routers.five_color")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.WARNING, logger=target_logger.name)
+    try:
+        with (
+            patch("api.routers.five_color._load_engine", return_value=(engine, "test_lut")),
+            patch(
+                "core.recipe_swatch.generate_recipe_swatch",
+                side_effect=_fake_generate_recipe_swatch,
+            ),
+        ):
+            response = client.post(
+                "/api/five-color/generate-swatch",
+                json={
+                    "lut_name": "test_lut",
+                    "recipes": [
+                        {
+                            "selected_indices": [0, 1, 2, 3, 4],
+                            "result_hex": "#123456",
+                            "base_color_names": ["ignored"] * 6,
+                            "base_color_hexes": ["#000000"] * 6,
+                        }
+                    ],
+                },
+            )
+    finally:
+        target_logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == safe_detail
+    assert private_path not in response.text
+    assert "3MF export failed" not in response.text
+
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "five_color_generate_swatch_failed"
+    ]
+    assert len(records) == 1
+    record = records[0]
+    assert record.levelname == "WARNING"
+    assert record.status_code == 500
+    assert record.error_type == "SwatchGenerationFailed"
+    assert record.error_message == status_msg
+    assert record.lut_name == "test_lut"
+    assert record.recipe_count == 1
 
 
 def test_generate_swatch_rolls_back_download_when_preview_registration_fails(
