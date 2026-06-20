@@ -396,4 +396,33 @@ describe("confirmReplacement routes multi-region to the batch path", () => {
     expect(state.regionReplacementCount).toBe(2);
     expect(state.previewImageUrl).toBe("/api/files/recolored.png");
   });
+
+  it("normalizes HTTP status errors when multi-region replacement fails", async () => {
+    seedStore({
+      selectedGradientRegions: [
+        { groupIndex: 1, regionIndex: 1 },
+        { groupIndex: 1, regionIndex: 2 },
+      ],
+      gradientSelection: {
+        kind: "multi-region",
+        groupIndex: 1,
+        regionIndices: [1, 2],
+      },
+      pendingReplacement: {
+        mode: "select-all",
+        sourceHex: "d2aeb4",
+        targetHex: "ff0000",
+      },
+    });
+    mockRegionReplaceBatch.mockRejectedValueOnce(
+      new Error("Request failed with status code 500"),
+    );
+
+    await useConverterStore.getState().confirmReplacement();
+
+    const error = useConverterStore.getState().error;
+    expect(error).toBeTruthy();
+    expect(error).not.toMatch(/Request failed with status code 500/i);
+    expect(error).not.toMatch(/status code\s+500/i);
+  });
 });

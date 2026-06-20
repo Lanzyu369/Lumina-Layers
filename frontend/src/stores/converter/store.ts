@@ -56,7 +56,10 @@ import {
   uploadLut as apiUploadLut,
   getGlbStatus as apiGetGlbStatus,
 } from "../../api/converter";
-import { downloadResourceBlob } from "../../api/client";
+import {
+  apiErrorToVisibleMessage,
+  downloadResourceBlob,
+} from "../../api/client";
 import { closeSession as apiCloseSession } from "../../api/session";
 import type { LutColorEntry, LutInfo } from "../../api/types";
 import {
@@ -198,11 +201,12 @@ function isRawFileConverter(file: File): boolean {
   return RAW_EXTENSIONS_CONVERTER.has(ext);
 }
 
+function visibleConverterError(error: unknown, fallback: string): string {
+  return apiErrorToVisibleMessage(error, fallback);
+}
+
 function rawPreviewFailureMessage(error: unknown): string {
-  const detail =
-    error instanceof Error && error.message.trim()
-      ? error.message.trim()
-      : tRuntime("api_error_http_default");
+  const detail = visibleConverterError(error, tRuntime("api_error_http_default"));
   return tRuntime("converter_raw_preview_failed", { error: detail });
 }
 
@@ -3615,7 +3619,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         }
         set({
           ...DEFAULT_PUZZLE_PREVIEW_STATE,
-          error: err instanceof Error ? err.message : "Puzzle preview failed",
+          error: visibleConverterError(err, "Puzzle preview failed"),
         });
         return false;
       }
@@ -3791,7 +3795,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           colorRemapMap: snapshot,
           remapHistory: state.remapHistory,
           replacePreviewLoading: false,
-          error: err instanceof Error ? err.message : "批量颜色替换失败",
+          error: visibleConverterError(err, "批量颜色替换失败"),
         });
       }
     },
@@ -3821,7 +3825,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         });
       } catch (err) {
         set({
-          error: err instanceof Error ? err.message : "Region detect failed",
+          error: visibleConverterError(err, "Region detect failed"),
         });
       }
     },
@@ -3868,7 +3872,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         }
       } catch (err) {
         set({
-          error: err instanceof Error ? err.message : "Region detect failed",
+          error: visibleConverterError(err, "Region detect failed"),
         });
       }
     },
@@ -4055,7 +4059,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       } catch (err) {
         set({
           replacePreviewLoading: false,
-          error: err instanceof Error ? err.message : "区域颜色替换失败",
+          error: visibleConverterError(err, "区域颜色替换失败"),
         });
       }
     },
@@ -4114,7 +4118,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       } catch (err) {
         set({
           replacePreviewLoading: false,
-          error: err instanceof Error ? err.message : "区域颜色替换失败",
+          error: visibleConverterError(err, "区域颜色替换失败"),
         });
       }
     },
@@ -4283,7 +4287,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       } catch (err) {
         set({
           replacePreviewLoading: false,
-          error: err instanceof Error ? err.message : "合并去海带纹失败",
+          error: visibleConverterError(err, "合并去海带纹失败"),
         });
       }
     },
@@ -4378,7 +4382,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       } catch (err) {
         set({
           replacePreviewLoading: false,
-          error: err instanceof Error ? err.message : "区域二次量化失败",
+          error: visibleConverterError(err, "区域二次量化失败"),
         });
       }
     },
@@ -4429,7 +4433,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       } catch (err) {
         set({
           replacePreviewLoading: false,
-          error: err instanceof Error ? err.message : "合并换色失败",
+          error: visibleConverterError(err, "合并换色失败"),
         });
       }
     },
@@ -4521,7 +4525,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       } catch (err) {
         set({
           replacePreviewLoading: false,
-          error: err instanceof Error ? err.message : "自定义配方应用失败",
+          error: visibleConverterError(err, "自定义配方应用失败"),
         });
       }
     },
@@ -4655,10 +4659,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           } catch (err) {
             set({
               replacePreviewLoading: false,
-              error:
-                err instanceof Error
-                  ? err.message
-                  : "Multi-region color replacement failed",
+              error: visibleConverterError(
+                err,
+                "Multi-region color replacement failed",
+              ),
             });
           }
           break;
@@ -4824,7 +4828,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         set({
           ...clearHeightmapUploadState,
           isLoading: false,
-          error: err instanceof Error ? err.message : "Heightmap upload failed",
+          error: visibleConverterError(err, "Heightmap upload failed"),
         });
       }
     },
@@ -4882,7 +4886,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       } catch (err) {
         set({
           bedSizesLoading: false,
-          error: err instanceof Error ? err.message : "热床尺寸列表加载失败",
+          error: visibleConverterError(err, "热床尺寸列表加载失败"),
         });
       }
     },
@@ -4900,7 +4904,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         _get().setLutName(res.name);
       } catch (err) {
         set({
-          error: err instanceof Error ? err.message : "LUT 上传失败",
+          error: visibleConverterError(err, "LUT 上传失败"),
         });
       } finally {
         set({ lutListLoading: false });
@@ -4939,7 +4943,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       } catch (err) {
         set({
           lutListLoading: false,
-          error: err instanceof Error ? err.message : "LUT 列表加载失败",
+          error: visibleConverterError(err, "LUT 列表加载失败"),
         });
       }
     },
@@ -5005,7 +5009,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       } catch (err) {
         set({
           nativeBrandGroupsLoading: false,
-          error: err instanceof Error ? err.message : "品牌目录加载失败",
+          error: visibleConverterError(err, "品牌目录加载失败"),
         });
       }
     },
@@ -5039,9 +5043,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         });
       } catch (err) {
         set({ legacyCatalogLoading: false });
-        _get().setError(
-          err instanceof Error ? err.message : "LUT 详情目录加载失败",
-        );
+        _get().setError(visibleConverterError(err, "LUT 详情目录加载失败"));
       }
     },
 
@@ -5066,7 +5068,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       } catch (err) {
         set({
           lutColorsLoading: false,
-          error: err instanceof Error ? err.message : "LUT 颜色加载失败",
+          error: visibleConverterError(err, "LUT 颜色加载失败"),
         });
       }
     },
@@ -5174,10 +5176,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         }
         set({
           materialSuggestionsLoading: false,
-          materialSuggestionsError:
-            err instanceof Error
-              ? err.message
-              : "Material color suggestion request failed",
+          materialSuggestionsError: visibleConverterError(
+            err,
+            "Material color suggestion request failed",
+          ),
         });
       }
     },
@@ -5247,10 +5249,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         }
         set({
           gradientGroupsLoading: false,
-          gradientGroupsError:
-            err instanceof Error
-              ? err.message
-              : "Failed to load gradient groups",
+          gradientGroupsError: visibleConverterError(
+            err,
+            "Failed to load gradient groups",
+          ),
         });
       }
     },
@@ -5395,7 +5397,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       } catch (err) {
         set({
           replacePreviewLoading: false,
-          error: err instanceof Error ? err.message : "去海带纹替换失败",
+          error: visibleConverterError(err, "去海带纹替换失败"),
         });
       }
     },
@@ -5722,7 +5724,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         }
         set({
           isLoading: false,
-          error: err instanceof Error ? err.message : "预览失败",
+          error: visibleConverterError(err, "预览失败"),
         });
         trackLuminaEvent("lumina_converter_preview_failed", {
           source_version: state.source_version,
@@ -6122,7 +6124,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         }
         set({
           isGenerating: false,
-          error: err instanceof Error ? err.message : "生成失败",
+          error: visibleConverterError(err, "生成失败"),
         });
         trackLuminaEvent("lumina_converter_generate_failed", {
           source_version: state.source_version,
@@ -6194,7 +6196,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       } catch (err) {
         set({
           isCropping: false,
-          error: err instanceof Error ? err.message : "Crop failed",
+          error: visibleConverterError(err, "Crop failed"),
         });
       }
     },
@@ -6225,8 +6227,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       } catch (err) {
         set({
           autoDetectColorsLoading: false,
-          error:
-            err instanceof Error ? err.message : "Auto color detection failed",
+          error: visibleConverterError(err, "Auto color detection failed"),
         });
       }
     },
@@ -6678,7 +6679,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       } catch (err) {
         set({
           batchLoading: false,
-          error: err instanceof Error ? err.message : "批量处理失败",
+          error: visibleConverterError(err, "批量处理失败"),
         });
         trackLuminaEvent("lumina_batch_convert_failed", {
           source_version: state.source_version,
@@ -6722,12 +6723,12 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             colorRemapMap: previousMap,
             remapHistory: currentHistory.slice(0, -1),
             replacePreviewLoading: false,
-            error: err instanceof Error ? err.message : "颜色替换失败",
+            error: visibleConverterError(err, "颜色替换失败"),
           });
         } else {
           set({
             replacePreviewLoading: false,
-            error: err instanceof Error ? err.message : "颜色替换失败",
+            error: visibleConverterError(err, "颜色替换失败"),
           });
         }
       }
@@ -6772,7 +6773,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       } catch (err) {
         set({
           replacePreviewLoading: false,
-          error: err instanceof Error ? err.message : "颜色替换预览失败",
+          error: visibleConverterError(err, "颜色替换预览失败"),
         });
       }
     },
