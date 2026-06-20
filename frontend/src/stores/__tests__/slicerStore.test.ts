@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { useSlicerStore } from "../slicerStore";
+import { mergeCustomSlicer, useSlicerStore } from "../slicerStore";
 import type { SlicerInfo } from "../../api/types";
 import { DEFAULT_SETTINGS, useSettingsStore } from "../settingsStore";
 
@@ -25,9 +25,9 @@ const mockLaunch = vi.mocked(apiLaunchSlicer);
 const mockValidateCustomPath = vi.mocked(apiValidateCustomSlicerPath);
 
 const MOCK_SLICERS: SlicerInfo[] = [
-  { id: "bambu_studio", display_name: "Bambu Studio", exe_path: "mock-bambu.exe" },
-  { id: "orca_slicer", display_name: "OrcaSlicer", exe_path: "mock-orca.exe" },
-  { id: "anycubic_slicer_next", display_name: "Anycubic Slicer Next", exe_path: "mock-anycubic.exe" },
+  { id: "bambu_studio", display_name: "Bambu Studio", exe_path: null },
+  { id: "orca_slicer", display_name: "OrcaSlicer", exe_path: null },
+  { id: "anycubic_slicer_next", display_name: "Anycubic Slicer Next", exe_path: null },
 ];
 
 function resetStore(): void {
@@ -119,7 +119,7 @@ describe("detectSlicers", () => {
       slicer: {
         id: "bambu_studio",
         display_name: "Bambu Studio",
-        exe_path: "/Applications/Bambu Studio.app",
+        exe_path: null,
         source: "custom_macos_app",
       },
     });
@@ -131,6 +131,35 @@ describe("detectSlicers", () => {
       source: "custom_macos_app",
     });
     expect(useSlicerStore.getState().selectedSlicerId).toBe("bambu_studio");
+  });
+
+  it("合并手动路径时保留其他未暴露路径的自动切片软件", () => {
+    const result = mergeCustomSlicer(
+      [
+        {
+          id: "orca_slicer",
+          display_name: "OrcaSlicer",
+          exe_path: null,
+        },
+        {
+          id: "anycubic_slicer_next",
+          display_name: "Anycubic Slicer Next",
+          exe_path: null,
+        },
+      ],
+      {
+        id: "bambu_studio",
+        display_name: "Bambu Studio",
+        exe_path: null,
+        source: "custom_macos_app",
+      },
+    );
+
+    expect(result.map((slicer) => slicer.id)).toEqual([
+      "bambu_studio",
+      "orca_slicer",
+      "anycubic_slicer_next",
+    ]);
   });
 });
 
@@ -148,14 +177,14 @@ describe("validateAndSaveCustomSlicerPath", () => {
       slicer: {
         id: "orca_slicer",
         display_name: "OrcaSlicer",
-        exe_path: "/Applications/OrcaSlicer.app",
+        exe_path: null,
         source: "custom_macos_app",
       },
     });
 
     await useSlicerStore
       .getState()
-      .validateAndSaveCustomSlicerPath("/Applications/OrcaSlicer.app");
+      .validateAndSaveCustomSlicerPath("  /Applications/OrcaSlicer.app  ");
 
     expect(useSettingsStore.getState().customSlicerPath).toBe(
       "/Applications/OrcaSlicer.app",

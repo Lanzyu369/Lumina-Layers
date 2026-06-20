@@ -95,10 +95,12 @@ def _resolve_launch_source_path(file_path: str) -> tuple[str | None, str | None]
 
 
 def _to_slicer_info(slicer: DetectedSlicer) -> SlicerInfo:
+    """Build public slicer metadata without exposing local executable paths.
+    构建公开切片器元数据，不暴露本机可执行文件路径。
+    """
     return SlicerInfo(
         id=slicer.id,
         display_name=slicer.display_name,
-        exe_path=slicer.exe_path,
         source=slicer.source,
     )
 

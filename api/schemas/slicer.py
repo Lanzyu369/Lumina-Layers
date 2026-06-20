@@ -24,13 +24,14 @@ class SlicerInfo(BaseModel):
             切片软件标识符。
         display_name: Human-readable display name, e.g. "Bambu Studio".
             显示名称。
-        exe_path: Absolute path to the slicer executable.
-            可执行文件路径。
+        exe_path: Redacted compatibility field; public responses do not expose
+            the local executable path.
+            脱敏兼容字段；公开响应不暴露本机可执行文件路径。
     """
 
     id: str = Field(..., min_length=1, description="切片软件标识符")
     display_name: str = Field(..., description="显示名称")
-    exe_path: str = Field(..., description="可执行文件路径")
+    exe_path: str | None = Field(default=None, description="已脱敏的可执行文件路径")
     source: str = Field(default="auto", description="检测来源")
 
 
