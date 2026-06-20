@@ -569,6 +569,90 @@ def test_material_sync_install_import_missing_file_returns_safe_404(
     )
 
 
+@pytest.mark.parametrize(
+    ("exc", "error_type", "forbidden_fragments"),
+    [
+        (
+            ValueError(
+                "Material bundle file hash mismatch: "
+                "/Users/min/private/materials/BrandA/pla-basic/material.json"
+            ),
+            "ValueError",
+            (
+                "/Users/min/private/materials/BrandA/pla-basic/material.json",
+                "hash mismatch",
+            ),
+        ),
+        (
+            TypeError(
+                "Material bundle manifest parser failed for "
+                "/Users/min/private/materials/BrandA/pla-basic/material.json"
+            ),
+            "TypeError",
+            (
+                "/Users/min/private/materials/BrandA/pla-basic/material.json",
+                "parser failed",
+            ),
+        ),
+    ],
+)
+def test_material_sync_install_import_validation_errors_return_safe_detail(
+    monkeypatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    exc: Exception,
+    error_type: str,
+    forbidden_fragments: tuple[str, ...],
+) -> None:
+    package_path = tmp_path / "material_package.zip"
+    _write_v2_material_package(package_path)
+
+    def _fake_import_saved_stage_a_material_archives(
+        *,
+        archive_path: str,
+    ) -> object:
+        raise exc
+
+    monkeypatch.setattr(
+        "api.routers.material_sync.import_saved_stage_a_material_archives",
+        _fake_import_saved_stage_a_material_archives,
+    )
+
+    loggers = _capture_material_sync_logs(caplog)
+    try:
+        response = _client().post(
+            "/api/material-sync/install",
+            files={
+                "archive": (
+                    "material_package.zip",
+                    package_path.read_bytes(),
+                    "application/zip",
+                )
+            },
+        )
+    finally:
+        _release_caplog_handler(loggers, caplog)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == MATERIAL_SYNC_INSTALL_UNAVAILABLE_DETAIL
+    for fragment in forbidden_fragments:
+        assert fragment not in response.text
+    _assert_http_error_log_safe(
+        caplog,
+        path="/api/material-sync/install",
+        status_code=422,
+        detail=MATERIAL_SYNC_INSTALL_UNAVAILABLE_DETAIL,
+        forbidden_fragments=forbidden_fragments,
+    )
+    _assert_route_failure_log_preserves_diagnostics(
+        caplog,
+        event="material_sync_install_failed",
+        error_type=error_type,
+        raw_fragment=forbidden_fragments[0],
+        status_code=422,
+    )
+
+
 def test_material_sync_install_is_local_import_without_official_password(
     monkeypatch,
     tmp_path: Path,
@@ -1311,6 +1395,28 @@ def test_material_sync_install_from_registry_maps_invalid_package_to_502(
             (
                 "/Users/min/private/materials/BrandA/pla-basic/material.json",
                 "Permission denied",
+            ),
+        ),
+        (
+            ValueError(
+                "Material bundle file hash mismatch: "
+                "/Users/min/private/materials/BrandA/pla-basic/material.json"
+            ),
+            502,
+            (
+                "/Users/min/private/materials/BrandA/pla-basic/material.json",
+                "hash mismatch",
+            ),
+        ),
+        (
+            TypeError(
+                "Material bundle manifest parser failed for "
+                "/Users/min/private/materials/BrandA/pla-basic/material.json"
+            ),
+            502,
+            (
+                "/Users/min/private/materials/BrandA/pla-basic/material.json",
+                "parser failed",
             ),
         ),
     ],
