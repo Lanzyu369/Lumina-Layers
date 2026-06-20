@@ -5889,6 +5889,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "导入失败：{error}",
     en: "Import failed: {error}",
   },
+  recipe_import_error_unreadable: {
+    zh: "无法读取这个分享卡文件，请确认文件未损坏且来自 Lumina。",
+    en: "This share card could not be read. Make sure the file is not corrupted and was created by Lumina.",
+  },
   recipe_import_not_share_card: {
     zh: "该 PNG 不包含 Lumina 配方数据",
     en: "This PNG does not contain Lumina recipe data",

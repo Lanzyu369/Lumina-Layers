@@ -59,9 +59,11 @@ export const RECIPE_IMPORT_WARNING_PUZZLE_CONFLICT_LOOP =
 export const RECIPE_IMPORT_WARNING_BACK_LABELS_UNAVAILABLE =
   "recipe_import_warning_back_labels_unavailable";
 
-const RECIPE_INTEGRITY_ERROR =
+export const RECIPE_IMPORT_NOT_SHARE_CARD_ERROR =
+  "PNG file does not contain Lumina recipe metadata";
+export const RECIPE_INTEGRITY_ERROR =
   "Integrity check failed — recipe data may be corrupted";
-const RECIPE_ASSET_CORRUPT_ERROR =
+export const RECIPE_ASSET_CORRUPT_ERROR =
   "Asset data is corrupted — unable to restore original file";
 
 /**
@@ -109,7 +111,7 @@ export async function parseRecipeFile(file: File): Promise<ParsedRecipe> {
   if (fileType === "png") {
     const recipe = await extractRecipeFromPng(file);
     if (!recipe) {
-      throw new Error("PNG file does not contain Lumina recipe metadata");
+      throw new Error(RECIPE_IMPORT_NOT_SHARE_CARD_ERROR);
     }
     const migrated = migrateRecipe(recipe);
     await validateRecipeIntegrity(migrated);
