@@ -20,6 +20,20 @@ const mockGenerateRecipeSwatch = vi.mocked(generateRecipeSwatch);
 const mockMatchFiveColorByHex = vi.mocked(matchFiveColorByHex);
 const mockQueryFiveColor = vi.mocked(queryFiveColor);
 
+function apiFailure(
+  data: unknown,
+  message = "Request failed with status code 422",
+  status = 422,
+) {
+  return {
+    message,
+    response: {
+      status,
+      data,
+    },
+  };
+}
+
 const staleRecipe: CollectedRecipe = {
   id: "old-lut_0-1-2-3-4_1",
   selectedIndices: [0, 1, 2, 3, 4],
@@ -193,6 +207,18 @@ describe("fiveColorStore LUT switching", () => {
     expect(state.isLoading).toBe(false);
   });
 
+  it("preserves backend detail when base color loading fails", async () => {
+    mockFetchBaseColors.mockRejectedValueOnce(
+      apiFailure({ detail: "Selected LUT does not expose a five-color base palette" }),
+    );
+
+    await useFiveColorStore.getState().loadBaseColors("broken-lut");
+
+    const state = useFiveColorStore.getState();
+    expect(state.error).toBe("Selected LUT does not expose a five-color base palette");
+    expect(state.isLoading).toBe(false);
+  });
+
   it("clears stale base colors when loading a different LUT fails", async () => {
     mockFetchBaseColors.mockResolvedValueOnce({
       lut_name: "old-lut",
@@ -228,6 +254,45 @@ describe("fiveColorStore LUT switching", () => {
 
     const state = useFiveColorStore.getState();
     expect(state.error).toBe("five_color_error_generate_swatch_failed");
+    expect(state.isGeneratingSwatch).toBe(false);
+  });
+
+  it("keeps the localized fallback for raw status-code swatch failures", async () => {
+    useFiveColorStore.setState({
+      lutName: "test-lut",
+      collectedRecipes: [staleRecipe],
+    });
+    mockGenerateRecipeSwatch.mockRejectedValueOnce(new Error("Request failed with status code 500"));
+
+    await useFiveColorStore.getState().generateSwatch();
+
+    const state = useFiveColorStore.getState();
+    expect(state.error).toBe("five_color_error_generate_swatch_failed");
+    expect(state.isGeneratingSwatch).toBe(false);
+  });
+
+  it("preserves validation details when swatch generation fails", async () => {
+    useFiveColorStore.setState({
+      lutName: "test-lut",
+      collectedRecipes: [staleRecipe],
+    });
+    mockGenerateRecipeSwatch.mockRejectedValueOnce(
+      apiFailure({
+        detail: [
+          {
+            loc: ["body", "recipes", 0, "selected_indices"],
+            msg: "Recipe must contain exactly five material indices",
+          },
+        ],
+      }),
+    );
+
+    await useFiveColorStore.getState().generateSwatch();
+
+    const state = useFiveColorStore.getState();
+    expect(state.error).toBe(
+      "body.recipes.0.selected_indices: Recipe must contain exactly five material indices",
+    );
     expect(state.isGeneratingSwatch).toBe(false);
   });
 
@@ -579,6 +644,27 @@ describe("fiveColorStore LUT switching", () => {
     expect(state.isLoading).toBe(false);
   });
 
+  it("preserves backend detail when target hex lookup fails", async () => {
+    useFiveColorStore.setState({
+      lutName: "test-lut",
+      selectedIndices: [4, 3, 2, 1, 0],
+      manualSelectedIndices: [4, 3, 2, 1, 0],
+      selectionSource: "manual",
+      queryResult: null,
+    });
+    mockMatchFiveColorByHex.mockRejectedValueOnce(
+      apiFailure({ detail: "Target color is outside the loaded five-color LUT gamut" }),
+    );
+
+    await useFiveColorStore.getState().matchColorByHex("#F20A00");
+
+    const state = useFiveColorStore.getState();
+    expect(state.queryResult).toBeNull();
+    expect(state.selectedIndices).toEqual([4, 3, 2, 1, 0]);
+    expect(state.error).toBe("Target color is outside the loaded five-color LUT gamut");
+    expect(state.isLoading).toBe(false);
+  });
+
   it("restores the manual selection when a target hex lookup has no recipe after a match", async () => {
     useFiveColorStore.setState({
       lutName: "test-lut",
@@ -693,6 +779,29 @@ describe("fiveColorStore LUT switching", () => {
     expect(state.selectedIndices).toEqual([4, 3, 2, 1, 0]);
     expect(state.manualSelectedIndices).toEqual([4, 3, 2, 1, 0]);
     expect(state.selectionSource).toBe("manual");
+  });
+
+  it("preserves backend detail when a standard query fails", async () => {
+    useFiveColorStore.setState({
+      lutName: "test-lut",
+      selectedIndices: [0, 1, 2, 3, 4],
+      manualSelectedIndices: [0, 1, 2, 3, 4],
+      selectionSource: "manual",
+      queryResult: null,
+    });
+    mockQueryFiveColor.mockRejectedValueOnce(
+      apiFailure({ detail: "Selected LUT does not contain five-color recipes" }),
+    );
+
+    await useFiveColorStore.getState().submitQuery();
+
+    const state = useFiveColorStore.getState();
+    expect(state.queryResult).toBeNull();
+    expect(state.error).toBe("Selected LUT does not contain five-color recipes");
+    expect(state.selectedIndices).toEqual([0, 1, 2, 3, 4]);
+    expect(state.manualSelectedIndices).toEqual([0, 1, 2, 3, 4]);
+    expect(state.selectionSource).toBe("manual");
+    expect(state.isLoading).toBe(false);
   });
 
   it("normalizes target-match state when a standard query succeeds after target matching", async () => {
