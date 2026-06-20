@@ -168,6 +168,8 @@ EXTRACTOR_STRUCTURED_EVENTS = {
     "extractor_confirm_palette_done",
     "extractor_extract_single_stage_done",
     "extractor_fit_stage_a_done",
+    "extractor_extract_gradient_card_stage_a_failed",
+    "extractor_extract_gradient_card_stage_a_registration_failed",
     "extractor_extract_gradient_card_stage_a_done",
     "extractor_gradient_card_material_library_failed",
     "extractor_gradient_card_material_library_registration_failed",
@@ -465,10 +467,14 @@ def _is_safe_log_call(node: ast.Call) -> bool:
     return isinstance(func, ast.Name) and func.id == "_safe_log"
 
 
-def _is_material_sync_error_helper_call(node: ast.Call) -> bool:
-    """Detect _raise_material_sync_error(event=...) helper calls."""
+def _is_structured_error_helper_call(node: ast.Call) -> bool:
+    """Detect central error helpers that accept literal event=... values."""
     func = node.func
-    return isinstance(func, ast.Name) and func.id == "_raise_material_sync_error"
+    return isinstance(func, ast.Name) and func.id in {
+        "_raise_file_registration_error",
+        "_raise_internal_route_error",
+        "_raise_material_sync_error",
+    }
 
 
 def test_no_starlog_catchall_event_names() -> None:
@@ -511,10 +517,10 @@ def test_no_starlog_catchall_event_names() -> None:
                         violations.append(
                             _relative_location(file_path, second_arg)
                         )
-            # Pattern 3: _raise_material_sync_error(event="event_name", ...)
-            # centralizes handled HTTP error logging while preserving literal
+            # Pattern 3: _raise_*_error(event="event_name", ...)
+            # centralize handled HTTP error logging while preserving literal
             # structured event names for governance.
-            if _is_material_sync_error_helper_call(node):
+            if _is_structured_error_helper_call(node):
                 for keyword in node.keywords:
                     if keyword.arg != "event":
                         continue
