@@ -226,6 +226,8 @@ CONVERTER_STRUCTURED_EVENTS = {
     "converter_region_recipe_done",
     "converter_merge_colors_done",
     "converter_generate_large_format_done",
+    "converter_generate_glb_registration_failed",
+    "color_card_glb_registration_failed",
     "converter_large_format_failed",
     "converter_puzzle_layout_preview_done",
     "converter_puzzle_generate_done",
