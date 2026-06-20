@@ -11,6 +11,7 @@ import type {
   GradientRegionItem,
   GradientSelectionSource,
 } from "../../api/types";
+import { apiErrorToVisibleMessage } from "../../api/client";
 import {
   colorHighlight,
   type ColorHighlightScope,
@@ -165,17 +166,19 @@ export default function GradientGroupsPanel() {
         );
         const url = normalizeResourceUrl(res.preview_url);
         if (!url) {
-          throw new Error("empty preview_url");
+          setHighlightError(t("api_error_http_default"));
+          return;
         }
         setHighlightDialog({ title: params.title, imageUrl: url });
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        setHighlightError(message);
+        setHighlightError(
+          apiErrorToVisibleMessage(err, t("api_error_http_default")),
+        );
       } finally {
         setHighlightLoading(false);
       }
     },
-    [sessionId],
+    [sessionId, t],
   );
 
   const closeHighlightDialog = useCallback(() => {

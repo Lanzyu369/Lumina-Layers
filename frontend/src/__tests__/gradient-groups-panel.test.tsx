@@ -227,6 +227,57 @@ describe("GradientGroupsPanel", () => {
     );
   });
 
+  it("shows a friendly error when the highlight response has no preview URL", async () => {
+    colorHighlightMock.mockResolvedValueOnce({ preview_url: "" });
+    render(<GradientGroupsPanel />);
+
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: /view highlight|查看高亮图/i }),
+      );
+    });
+
+    expect(screen.getByText(/failed to generate highlight|生成高亮图失败/i))
+      .toBeInTheDocument();
+    expect(screen.queryByText(/empty preview_url/i)).not.toBeInTheDocument();
+  });
+
+  it("normalizes HTTP status errors in the highlight dialog", async () => {
+    colorHighlightMock.mockRejectedValueOnce(
+      new Error("Request failed with status code 500"),
+    );
+    render(<GradientGroupsPanel />);
+
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: /view highlight|查看高亮图/i }),
+      );
+    });
+
+    const error = screen.getByText(/failed to generate highlight|生成高亮图失败/i);
+    expect(error).toBeInTheDocument();
+    expect(error.textContent).not.toMatch(/Request failed with status code 500/i);
+    expect(error.textContent).not.toMatch(/status code\s+500/i);
+  });
+
+  it("renders the highlight image when the response contains a preview URL", async () => {
+    colorHighlightMock.mockResolvedValueOnce({
+      preview_url: "/api/files/highlight-dialog.png",
+    });
+    render(<GradientGroupsPanel />);
+
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: /view highlight|查看高亮图/i }),
+      );
+    });
+
+    const image = screen.getByRole("img", {
+      name: /highlight preview|高亮预览/i,
+    });
+    expect(image).toHaveAttribute("src", "/api/files/highlight-dialog.png");
+  });
+
   it("expands regions and select-region writes the region's breakdown with a region-scoped source", () => {
     render(<GradientGroupsPanel />);
     // Expand regions for the only group on screen.
