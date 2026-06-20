@@ -32,7 +32,7 @@ def _client_with_state() -> tuple[TestClient, SessionStore, FileRegistry]:
     registry = FileRegistry()
     app.dependency_overrides[get_session_store] = lambda: store
     app.dependency_overrides[get_file_registry] = lambda: registry
-    return TestClient(app), store, registry
+    return TestClient(app, base_url="http://localhost:8000"), store, registry
 
 
 def _capture_single_stage_logger(
