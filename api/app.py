@@ -15,7 +15,7 @@ import json
 import os
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from math import isfinite
 from pathlib import Path
@@ -143,6 +143,40 @@ def _format_error_detail(detail: Any) -> str:
         if validation_parts:
             return "; ".join(validation_parts)
     return json.dumps(encoded_detail, ensure_ascii=False, separators=(",", ":"))
+
+
+def _sanitize_validation_errors(errors: Sequence[Any]) -> list[dict[str, Any]]:
+    """Return validation errors safe for HTTP responses.
+    生成可安全返回给前端的校验错误列表。
+    """
+    sanitized: list[dict[str, Any]] = []
+    for error in errors:
+        if not isinstance(error, dict):
+            sanitized.append({
+                "type": type(error).__name__,
+                "loc": [],
+                "msg": "Invalid request",
+            })
+            continue
+
+        raw_loc = error.get("loc", [])
+        if isinstance(raw_loc, list):
+            loc = list(raw_loc)
+        elif isinstance(raw_loc, tuple):
+            loc = list(raw_loc)
+        elif raw_loc is None:
+            loc = []
+        else:
+            loc = [str(raw_loc)]
+
+        item: dict[str, Any] = {
+            "loc": loc,
+            "msg": str(error.get("msg") or "Invalid request"),
+        }
+        if error.get("type") is not None:
+            item["type"] = str(error["type"])
+        sanitized.append(item)
+    return sanitized
 
 
 def _sanitize_client_log_value(value: Any, *, depth: int = 0) -> Any:
@@ -473,17 +507,12 @@ def create_app() -> FastAPI:
 
         记录 FastAPI 422 验证错误详情，方便定位前端载荷不匹配的 bug。
         """
-        # Pydantic v2 stores the originating exception in ``ctx.error`` which is
-        # not JSON-serialisable by the default encoder, so both the structured
-        # log payload and the response body must go through ``jsonable_encoder``
-        # to coerce those values to strings. Without this the handler itself
-        # raises ``TypeError`` and the client sees a 500 instead of the real
-        # 422, which in turn breaks frontend error-detail mapping (e.g. the
-        # gradient-card store's ``detail === "material_name is required"``
-        # path). (Pydantic v2 将原始异常放在 ctx.error 中，必须通过
-        # jsonable_encoder 统一序列化，否则 handler 本身会抛 TypeError
-        # 导致前端拿不到 422，错误文案映射随之失效。)
-        encoded_errors = jsonable_encoder(exc.errors())
+        # Pydantic/FastAPI validation entries can include the raw submitted
+        # ``input`` and ``ctx`` values. Keep only the actionable shape needed by
+        # frontend error rendering and logs.
+        # Pydantic/FastAPI 校验项可能包含原始 ``input`` 和 ``ctx``，响应体只保留
+        # 前端错误展示和日志诊断需要的字段。
+        encoded_errors = jsonable_encoder(_sanitize_validation_errors(exc.errors()))
         request_id = getattr(
             request.state,
             "request_id",
