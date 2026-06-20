@@ -115,6 +115,16 @@ function buildDetail(
 const DETAIL_A = buildDetail("Bambu Lab - PLA - Test", "fp-1", "/fake/test.json");
 const DETAIL_B = buildDetail("Aliz - PETG - Test", "fp-2", "/fake/aliz.json");
 
+function makeAxiosLikeError(
+  message: string,
+  status: number,
+  data: unknown,
+): Error & { response: { status: number; data: unknown; headers: Record<string, string> } } {
+  return Object.assign(new Error(message), {
+    response: { status, data, headers: {} },
+  });
+}
+
 function setUnloadedCatalogState() {
   useLutDetailsStore.setState({
     catalog: CATALOG,
@@ -316,6 +326,41 @@ describe("LutDetailsPanel", () => {
     expect(screen.getByTestId("lut-details-loaded-view")).toBeInTheDocument();
     expect(screen.getByText("Bambu Lab - PLA - Test")).toBeInTheDocument();
     expect(screen.getByText("当前显示的是已加载 LUT，点击加载后更新。")).toBeInTheDocument();
+  });
+
+  it("shows readable backend detail instead of raw HTTP status errors", async () => {
+    setLoadedState({
+      selectedLutName: "Aliz - PETG - Test",
+      loadedLutName: "Bambu Lab - PLA - Test",
+      detail: DETAIL_A,
+      hasLoadedDetail: true,
+      isSelectionDirty: true,
+    });
+    mockFetchLutDetailsCatalog.mockResolvedValueOnce({ groups: CATALOG });
+    mockFetchLutDetails.mockRejectedValueOnce(makeAxiosLikeError(
+      "Request failed with status code 404",
+      404,
+      { detail: "LUT not found: stale" },
+    ));
+
+    render(<LutDetailsPanel />);
+
+    await waitFor(() => {
+      expect(mockFetchLutDetailsCatalog).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "加载 LUT" })).not.toBeDisabled();
+    });
+    await useLutDetailsStore.getState().loadSelectedLut();
+
+    await waitFor(() => {
+      expect(screen.getByText("LUT not found: stale")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText(/Request failed with status code/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/status code\s+404/i)).not.toBeInTheDocument();
+    expect(screen.getByTestId("lut-details-loaded-view")).toBeInTheDocument();
+    expect(screen.getByText("Bambu Lab - PLA - Test")).toBeInTheDocument();
   });
 
   it("retries the selected LUT detail load from the error banner", async () => {
