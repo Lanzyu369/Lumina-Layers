@@ -360,6 +360,93 @@ class TestExtractorEndpoints:
         assert body["status"] == "ok"
         assert body["lut_preview_url"].startswith("/api/files/")
 
+    def test_post_manual_fix_out_of_range_target_returns_422(
+        self,
+        client: TestClient,
+        tmp_path: Path,
+    ) -> None:
+        """Manual-fix target misses are client validation errors, not 500s."""
+        lut_path = tmp_path / "test.json"
+        lut_path.write_text("{}", encoding="utf-8")
+        payload = {
+            "lut_path": str(lut_path),
+            "row_index": 999999,
+            "override_color": "#aabbcc",
+        }
+
+        with patch(
+            "api.routers.extractor.LUTManager.load_lut_with_metadata",
+            return_value=(np.zeros((32, 3), dtype=np.uint8), None, None),
+        ), patch(
+            "api.routers.extractor.manual_fix_cell",
+            return_value=(None, "[WARNING] 索引超出范围"),
+        ):
+            resp = client.post("/api/extractor/manual-fix", json=payload)
+
+        assert resp.status_code == 422
+        assert resp.json()["detail"] == (
+            "Manual correction target is outside the current LUT. "
+            "Refresh the preview and try again."
+        )
+        assert "[WARNING]" not in resp.text
+
+    def test_post_manual_fix_invalid_color_returns_422(
+        self,
+        client: TestClient,
+        tmp_path: Path,
+    ) -> None:
+        """Manual-fix color parse failures are client validation errors."""
+        lut_path = tmp_path / "test.json"
+        lut_path.write_text("{}", encoding="utf-8")
+        payload = {
+            "lut_path": str(lut_path),
+            "row_index": 0,
+            "override_color": "not-a-color",
+        }
+
+        with patch(
+            "api.routers.extractor.LUTManager.load_lut_with_metadata",
+            return_value=(np.zeros((32, 3), dtype=np.uint8), None, None),
+        ), patch(
+            "api.routers.extractor.manual_fix_cell",
+            return_value=(None, "[ERROR] 格式错误: not-a-color"),
+        ):
+            resp = client.post("/api/extractor/manual-fix", json=payload)
+
+        assert resp.status_code == 422
+        assert resp.json()["detail"] == (
+            "Manual correction color is invalid. Use a valid hex or RGB color."
+        )
+        assert "[ERROR]" not in resp.text
+        assert "not-a-color" not in resp.text
+
+    def test_post_manual_fix_unknown_core_failure_stays_500(
+        self,
+        client: TestClient,
+        tmp_path: Path,
+    ) -> None:
+        """Unknown core manual-fix misses remain server errors."""
+        lut_path = tmp_path / "test.json"
+        lut_path.write_text("{}", encoding="utf-8")
+        payload = {
+            "lut_path": str(lut_path),
+            "row_index": 0,
+            "override_color": "#aabbcc",
+        }
+
+        with patch(
+            "api.routers.extractor.LUTManager.load_lut_with_metadata",
+            return_value=(np.zeros((32, 3), dtype=np.uint8), None, None),
+        ), patch(
+            "api.routers.extractor.manual_fix_cell",
+            return_value=(None, "unexpected manual fix failure"),
+        ):
+            resp = client.post("/api/extractor/manual-fix", json=payload)
+
+        assert resp.status_code == 500
+        assert resp.json()["detail"] == "Manual fix failed"
+        assert "unexpected manual fix failure" not in resp.text
+
     def test_post_manual_fix_accepts_session_lut_path(self, tmp_path: Path) -> None:
         """The frontend session-based manual-fix contract still succeeds."""
         test_app = create_app()

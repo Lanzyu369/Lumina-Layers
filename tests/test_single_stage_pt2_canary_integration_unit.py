@@ -32,7 +32,7 @@ def _client_with_state() -> tuple[TestClient, SessionStore, FileRegistry]:
     registry = FileRegistry()
     app.dependency_overrides[get_session_store] = lambda: store
     app.dependency_overrides[get_file_registry] = lambda: registry
-    return TestClient(app), store, registry
+    return TestClient(app, base_url="http://localhost:8000"), store, registry
 
 
 def _capture_single_stage_logger(
@@ -269,6 +269,220 @@ class _StubSuggestion:
     recipe = np.array([1, 0, 1], dtype=np.int32)
 
 
+UNTRUSTED_ORIGIN_HEADERS = {"Origin": "https://attacker.example"}
+LOCAL_FRONTEND_ORIGIN_HEADERS = {"Origin": "http://localhost:5174"}
+
+
+def _patch_material_solver_management_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> list[str]:
+    calls: list[str] = []
+    cache_path = tmp_path / "solver_cache.npz"
+    runtime_path = tmp_path / "candidate-runtime.npz"
+    cache_path.write_bytes(b"cache bytes")
+    runtime_path.write_bytes(b"runtime bytes")
+
+    cache = SimpleNamespace(
+        metadata=_solver_cache_metadata(),
+        valid_cell_count=200,
+        total_cell_count=256,
+    )
+    runtime = SimpleNamespace(
+        metadata=_solver_runtime_metadata(),
+        valid_cell_count=32,
+    )
+    runtime_metadata = SimpleNamespace(
+        metadata=_solver_runtime_metadata(),
+        cache_file_path=runtime_path,
+        cache_file_size_bytes=runtime_path.stat().st_size,
+    )
+
+    def _load_multiple_materials(directory_names):
+        calls.append("load_multiple_materials")
+        return [
+            SimpleNamespace(directory_name=name)
+            for name in directory_names
+        ]
+
+    def _build_solver_cache(*args, **kwargs):
+        calls.append("build_material_solver_cache")
+        return cache
+
+    def _delete_cached_entry(*args, **kwargs):
+        calls.append("delete_cached_entry")
+        return True
+
+    def _delete_candidate_runtime(*args, **kwargs):
+        calls.append("delete_material_candidate_runtime")
+        return True
+
+    def _suggest_colors(*args, **kwargs):
+        calls.append("suggest_colors_for_target")
+        return [_StubSuggestion()]
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.load_multiple_materials",
+        _load_multiple_materials,
+    )
+    monkeypatch.setattr(
+        "api.routers.single_stage.fingerprint_palette",
+        lambda materials: "stub_hash",
+    )
+    monkeypatch.setattr(
+        "api.routers.single_stage.cache_file_path",
+        lambda *args, **kwargs: cache_path,
+    )
+    monkeypatch.setattr(
+        "api.routers.single_stage.load_material_solver_cache",
+        lambda *args, **kwargs: cache,
+    )
+    monkeypatch.setattr(
+        "api.routers.single_stage.load_material_solver_cache_with_fallback",
+        lambda *args, **kwargs: (cache, 64),
+    )
+    monkeypatch.setattr(
+        "api.routers.single_stage.build_material_solver_cache",
+        _build_solver_cache,
+    )
+    monkeypatch.setattr(
+        "api.routers.single_stage.save_material_solver_cache",
+        lambda cache: cache_path,
+    )
+    monkeypatch.setattr(
+        "api.routers.single_stage.delete_cached_entry",
+        _delete_cached_entry,
+    )
+    monkeypatch.setattr(
+        "api.routers.single_stage.load_material_candidate_runtime_metadata",
+        lambda *args, **kwargs: runtime_metadata,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "api.routers.single_stage.load_material_candidate_runtime",
+        lambda *args, **kwargs: runtime,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "api.routers.single_stage.build_material_candidate_runtime",
+        lambda *args, **kwargs: runtime,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "api.routers.single_stage.save_material_candidate_runtime",
+        lambda runtime: runtime_path,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "api.routers.single_stage.delete_material_candidate_runtime",
+        _delete_candidate_runtime,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "api.routers.single_stage.build_material_cache_details",
+        lambda *args, **kwargs: _runtime_details_stub(),
+    )
+    monkeypatch.setattr(
+        "api.routers.single_stage.build_material_runtime_details",
+        lambda *args, **kwargs: _runtime_details_stub(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "api.routers.single_stage.suggest_colors_for_target",
+        _suggest_colors,
+    )
+    return calls
+
+
+@pytest.mark.parametrize(
+    ("path", "data_factory"),
+    [
+        ("/api/extractor/material-solver-cache/status", _solver_cache_form_data),
+        ("/api/extractor/material-solver-cache/build", _solver_cache_form_data),
+        ("/api/extractor/material-solver-cache/delete", _solver_cache_form_data),
+        ("/api/extractor/material-solver-cache/details", _solver_cache_form_data),
+        (
+            "/api/extractor/material-solver-cache/suggest-colors",
+            _solver_cache_suggest_form_data,
+        ),
+        ("/api/extractor/material-solver-runtime/status", _solver_runtime_form_data),
+        ("/api/extractor/material-solver-runtime/build", _solver_runtime_form_data),
+        ("/api/extractor/material-solver-runtime/delete", _solver_runtime_form_data),
+        ("/api/extractor/material-solver-runtime/details", _solver_runtime_form_data),
+    ],
+)
+def test_material_solver_management_posts_reject_untrusted_origin_before_loading_materials(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    path: str,
+    data_factory,
+) -> None:
+    client, _, _ = _client_with_state()
+    calls = _patch_material_solver_management_dependencies(monkeypatch, tmp_path)
+
+    response = client.post(
+        path,
+        data=data_factory(),
+        headers=UNTRUSTED_ORIGIN_HEADERS,
+    )
+
+    assert response.status_code == 403
+    assert "local Lumina Studio app" in response.json()["detail"]
+    assert calls == []
+
+
+def test_material_solver_cache_list_rejects_untrusted_origin_before_reading_index(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _, _ = _client_with_state()
+    called = False
+    private_path = "/Users/min/private/materials/_solver_cache/cache.npz"
+
+    def _list_cached_entries():
+        nonlocal called
+        called = True
+        return [
+            {
+                **_solver_cache_metadata(),
+                "cache_file_size_bytes": 128,
+                "cache_file_path": private_path,
+            }
+        ]
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.list_cached_entries",
+        _list_cached_entries,
+    )
+
+    response = client.get(
+        "/api/extractor/material-solver-caches",
+        headers=UNTRUSTED_ORIGIN_HEADERS,
+    )
+
+    assert response.status_code == 403
+    assert "local Lumina Studio app" in response.json()["detail"]
+    assert called is False
+    assert private_path not in response.text
+
+
+def test_material_solver_management_allows_local_frontend_origin(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    client, _, _ = _client_with_state()
+    calls = _patch_material_solver_management_dependencies(monkeypatch, tmp_path)
+
+    response = client.post(
+        "/api/extractor/material-solver-cache/status",
+        data=_solver_cache_form_data(),
+        headers=LOCAL_FRONTEND_ORIGIN_HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+    assert "load_multiple_materials" in calls
+
+
 class TestExportGradientCardMaterialsCanary:
     def test_export_gradient_card_materials_logs_sessionless_canary(
         self,
@@ -371,6 +585,11 @@ class TestImportGradientCardMaterialsCanary:
             "stub_material_v1",
             "stub_material_v2",
         ]
+        for item in body["imported_materials"]:
+            assert "archive_path" not in item
+            assert "stage_a_params_path" not in item
+        assert str(tmp_path / "material_1.json") not in response.text
+        assert str(tmp_path / "params_1.json") not in response.text
         assert len(calls) == 2
 
         records = _records_for_event(
@@ -718,6 +937,8 @@ class TestMaterialSolverCacheBuildCanary:
         assert body["entry"]["total_cell_count"] == 256
         assert body["entry"]["mean_delta_e"] == 1.5
         assert body["entry"]["cache_file_size_bytes"] == 64
+        assert "cache_file_path" not in body["entry"]
+        assert str(cache_path) not in response.text
 
         records = _records_for_event(caplog, "material_solver_cache_build_done")
         assert len(records) == 1
@@ -832,7 +1053,8 @@ class TestMaterialSolverRuntimeCanary:
         assert body["cached"] is True
         assert body["entry"]["candidate_count"] == 32
         assert body["entry"]["cache_file_size_bytes"] == 64
-        assert body["entry"]["cache_file_path"] == str(cache_path)
+        assert "cache_file_path" not in body["entry"]
+        assert str(cache_path) not in response.text
 
     def test_material_solver_runtime_build_logs_sessionless_canary(
         self,
@@ -1233,6 +1455,8 @@ class TestMaterialSolverCacheDeleteCanary:
         assert body["status"] == "ok"
         assert body["cached"] is True
         assert body["entry"]["valid_cell_count"] == 200
+        assert "cache_file_path" not in body["entry"]
+        assert "solver_cache.npz" not in response.text
 
         records = _records_for_event(caplog, "material_solver_cache_status_done")
         assert len(records) == 1

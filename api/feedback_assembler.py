@@ -449,6 +449,12 @@ def _format_created_at(value: Any) -> str | None:
         return None
 
 
+def _public_ticket_path(ticket_dir: Path) -> str:
+    """Return the logical ticket location for user-facing channels."""
+
+    return f"feedback/{ticket_dir.parent.name}/{ticket_dir.name}"
+
+
 def collect_sync_attachments(
     ticket_dir: Path,
     payload: dict[str, Any],
@@ -1327,7 +1333,7 @@ async def finalize_ticket_async(
                 sent = await send_bug_report_email_async(
                     ticket_id=ticket_id,
                     request_payload=payload,
-                    dump_path=str(ticket_dir),
+                    dump_path=_public_ticket_path(ticket_dir),
                     attachments_dir=ticket_dir,
                 )
                 payload.setdefault("email", {})["status"] = "sent" if sent else "failed"

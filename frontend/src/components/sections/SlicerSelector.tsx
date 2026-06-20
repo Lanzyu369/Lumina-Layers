@@ -4,7 +4,10 @@ import { useSlicerStore } from "../../stores/slicerStore";
 import { useConverterStore } from "../../stores/converter";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useI18n } from "../../i18n/context";
-import { assertResourceDownloadAvailable } from "../../api/client";
+import {
+  apiErrorToVisibleMessage,
+  assertResourceDownloadAvailable,
+} from "../../api/client";
 import {
   getDetectedSlicerIdForSoftware,
   getSlicerSoftwareDisplayName,
@@ -129,13 +132,7 @@ function resolveActiveSlicer(
 }
 
 function toVisibleErrorMessage(error: unknown, fallback: string): string {
-  if (error instanceof Error && error.message.trim()) {
-    return error.message.trim();
-  }
-  if (typeof error === "string" && error.trim()) {
-    return error.trim();
-  }
-  return fallback;
+  return apiErrorToVisibleMessage(error, fallback);
 }
 
 interface SlicerSelectorProps {

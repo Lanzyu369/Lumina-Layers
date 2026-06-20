@@ -99,6 +99,10 @@ export interface ConverterRecipeColorOps {
     region_id: string;
     recipe: number[];
     layer_order: string;
+    virtual_materials?: Array<{
+      name: string;
+      hex: string;
+    }>;
   }>;
   /** V2+: session-scoped custom recipe history; imported with fromModel forced to false. */
   custom_recipe_history?: Array<{
@@ -113,6 +117,10 @@ export interface ConverterRecipeColorOps {
     display_hexes?: string[];
     /** 每层用户意图原色名（可选，v2 之后新增）。 */
     display_labels?: string[];
+    virtual_materials?: Array<{
+      name: string;
+      hex: string;
+    }>;
     created_at_ms: number;
   }>;
 }

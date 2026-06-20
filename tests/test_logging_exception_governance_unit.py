@@ -172,6 +172,7 @@ EXTRACTOR_STRUCTURED_EVENTS = {
     "extractor_extract_gradient_card_stage_a_registration_failed",
     "extractor_extract_gradient_card_stage_a_done",
     "extractor_material_swatch_failed",
+    "extractor_gradient_card_material_library_forbidden",
     "extractor_gradient_card_material_library_failed",
     "extractor_gradient_card_material_library_registration_failed",
     "extractor_save_gradient_card_material_done",
@@ -319,6 +320,8 @@ FEEDBACK_STRUCTURED_EVENTS = {
 }
 SLICER_STRUCTURED_EVENTS = {
     "slicer_launch_done",
+    "slicer_launch_copy_failed",
+    "slicer_launch_failed",
 }
 REQUIRED_STRUCTURED_EVENTS = (
     VECTOR_STRUCTURED_EVENTS

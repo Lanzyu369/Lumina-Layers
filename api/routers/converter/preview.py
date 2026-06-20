@@ -1715,7 +1715,7 @@ def get_segmented_glb_status(
         - ``idle``    — 该会话从未调度过 GLB 构建（通常只在预览之前出现）。
         - ``pending`` — GLB 正在后台生成；``job_token`` 标识当前任务。
         - ``ready``   — 新 GLB 已写入 FileRegistry，URL 在 ``glb_url`` 中。
-        - ``error``   — 后台构建抛错；错误类型/消息在 ``error`` 中。
+        - ``error``   — 后台构建失败；安全公开文案在 ``error`` 中。
 
     The payload is ``{ status, glb_url, job_token, error, color_contours }``.
     ``glb_url`` is the same ``/api/files/<id>`` form the synchronous code

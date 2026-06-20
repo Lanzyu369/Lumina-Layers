@@ -11,6 +11,7 @@ import os
 import re
 import time
 from collections import deque
+from copy import deepcopy
 from datetime import datetime, timezone
 from math import isfinite
 from pathlib import Path
@@ -727,14 +728,44 @@ def _decode_screenshot_data_url(data_url: str) -> tuple[str, bytes]:
 
 
 def _relative_ticket_path(ticket_dir: Path) -> str:
-    """Return a repo-relative POSIX path for response bodies.
+    """Return a non-sensitive logical POSIX path for response bodies.
 
-    返回用于响应体的仓库相对 POSIX 路径。
+    返回用于响应体的非敏感逻辑 POSIX 路径。
     """
     try:
         return ticket_dir.resolve().relative_to(_REPO_ROOT).as_posix()
     except ValueError:
-        return ticket_dir.resolve().as_posix()
+        return f"feedback/{ticket_dir.parent.name}/{ticket_dir.name}"
+
+
+def _sanitize_bug_report_context_for_export(context: dict[str, Any]) -> dict[str, Any]:
+    """Remove local-only fields before persisting or forwarding context.
+
+    在持久化或转发反馈上下文前移除只应在本机使用的字段。
+    """
+
+    sanitized = deepcopy(context)
+    final_ref = sanitized.get("active_final_artifact_ref")
+    if isinstance(final_ref, dict):
+        sanitized_ref = dict(final_ref)
+        sanitized_ref.pop("disk_path", None)
+        sanitized["active_final_artifact_ref"] = sanitized_ref
+    return sanitized
+
+
+def _sanitize_bug_report_request_payload_for_export(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Return an export-safe bug-report request payload copy.
+
+    返回可安全持久化或转发的 Bug 报告请求 payload 副本。
+    """
+
+    sanitized = deepcopy(payload)
+    context = sanitized.get("context")
+    if isinstance(context, dict):
+        sanitized["context"] = _sanitize_bug_report_context_for_export(context)
+    return sanitized
 
 
 @router.post("/bug-report", response_model=BugReportResponse)
@@ -815,7 +846,9 @@ async def submit_bug_report(
 
     ticket_dir = ticket_dir_for(feedback_root, ticket_id, now)
 
-    context_dump = request.model_dump(mode="json").get("context") or {}
+    request_dump = request.model_dump(mode="json")
+    attachment_context_dump = deepcopy(request_dump.get("context") or {})
+    context_dump = _sanitize_bug_report_context_for_export(attachment_context_dump)
 
     # Dedicated sanitization for ``advanced_params``. Pydantic's validator only
     # shape-checks the field (dict-or-null); the real depth/size enforcement
@@ -972,9 +1005,10 @@ async def submit_bug_report(
     file_registry = get_file_registry()
     session_store = get_session_store()
     try:
+        attachment_payload = {**payload, "context": attachment_context_dump}
         sync_result = collect_sync_attachments(
             ticket_dir=ticket_dir,
-            payload=payload,
+            payload=attachment_payload,
             file_registry=file_registry,
             now=now,
             session_store=session_store,
@@ -1094,7 +1128,9 @@ async def relay_bug_report(
                 relay_url,
                 json={
                     "ticket_id": request.ticket_id,
-                    "request_payload": request.request_payload.model_dump(mode="json"),
+                    "request_payload": _sanitize_bug_report_request_payload_for_export(
+                        request.request_payload.model_dump(mode="json")
+                    ),
                 },
                 headers=headers,
             )

@@ -720,27 +720,6 @@ export function BugReportModal({
                       : t("bug_report_success_email_unconfigured")}
               </p>
 
-              {submittedTicket.dump_path && (
-                <div
-                  className="rounded-[18px] border px-4 py-3"
-                  style={{
-                    borderColor: "var(--surface-outline)",
-                    background:
-                      "color-mix(in srgb, var(--surface-panel-strong) 68%, transparent)",
-                  }}
-                >
-                  <div className="text-xs font-medium text-slate-500 dark:text-slate-400">
-                    {t("bug_report_success_dump_path_label")}:
-                  </div>
-                  <code
-                    data-testid="bug-report-dump-path"
-                    className="mt-1 block break-all font-mono text-xs"
-                    style={{ color: "var(--surface-text)" }}
-                  >
-                    {submittedTicket.dump_path}
-                  </code>
-                </div>
-              )}
               {(submittedTicket.email_status === "failed" ||
                 submittedTicket.email_status === "unconfigured") &&
                 submittedTicket.relay_available &&

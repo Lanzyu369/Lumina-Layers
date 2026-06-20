@@ -7,6 +7,7 @@ import {
   matchFiveColorByHex,
   generateRecipeSwatch,
 } from "../api/fiveColor";
+import { apiErrorToVisibleMessage } from "../api/client";
 import { useSettingsStore } from "./settingsStore";
 
 // ========== Collected Recipe ==========
@@ -43,6 +44,17 @@ const MAX_RECIPE_LENGTH = 6;
 let baseColorsRequestSequence = 0;
 let queryRequestSequence = 0;
 let matchColorRequestSequence = 0;
+
+function fiveColorErrorMessage(error: unknown, fallbackKey: string): string {
+  if (!error || typeof error !== "object") {
+    return fallbackKey;
+  }
+  const response = (error as { response?: unknown }).response;
+  if (!response || typeof response !== "object") {
+    return fallbackKey;
+  }
+  return apiErrorToVisibleMessage(error, fallbackKey);
+}
 
 function invalidateMatchColorRequests() {
   matchColorRequestSequence += 1;
@@ -202,12 +214,12 @@ export const useFiveColorStore = create<FiveColorState & FiveColorActions>()(
             combinations: response.combinations ?? null,
             isLoading: false,
           });
-        } catch {
+        } catch (error) {
           if (requestId !== baseColorsRequestSequence || get().lutName !== lutName) {
             return;
           }
           set({
-            error: "five_color_error_load_base_colors_failed",
+            error: fiveColorErrorMessage(error, "five_color_error_load_base_colors_failed"),
             isLoading: false,
           });
         }
@@ -315,7 +327,7 @@ export const useFiveColorStore = create<FiveColorState & FiveColorActions>()(
                   : selectionSource,
             isLoading: false,
           });
-        } catch {
+        } catch (error) {
           const current = get();
           if (
             requestId !== queryRequestSequence ||
@@ -331,7 +343,7 @@ export const useFiveColorStore = create<FiveColorState & FiveColorActions>()(
               selectionSource === "manual" ? selectedIndices : manualSelectedIndices,
             selectionSource: selectionSource === "target-match" ? "manual" : selectionSource,
             queryResult: null,
-            error: "five_color_error_query_failed",
+            error: fiveColorErrorMessage(error, "five_color_error_query_failed"),
             isLoading: false,
           });
         }
@@ -376,7 +388,7 @@ export const useFiveColorStore = create<FiveColorState & FiveColorActions>()(
             queryResult: response,
             isLoading: false,
           });
-        } catch {
+        } catch (error) {
           if (requestId !== matchColorRequestSequence || get().lutName !== lutName) {
             return;
           }
@@ -385,7 +397,7 @@ export const useFiveColorStore = create<FiveColorState & FiveColorActions>()(
             manualSelectedIndices: fallbackSelection,
             selectionSource: "manual",
             queryResult: null,
-            error: "five_color_error_match_failed",
+            error: fiveColorErrorMessage(error, "five_color_error_match_failed"),
             isLoading: false,
           });
         }
@@ -503,9 +515,9 @@ export const useFiveColorStore = create<FiveColorState & FiveColorActions>()(
             swatchPreviewUrl: response.preview_url,
             isGeneratingSwatch: false,
           });
-        } catch {
+        } catch (error) {
           set({
-            error: "five_color_error_generate_swatch_failed",
+            error: fiveColorErrorMessage(error, "five_color_error_generate_swatch_failed"),
             isGeneratingSwatch: false,
           });
         }

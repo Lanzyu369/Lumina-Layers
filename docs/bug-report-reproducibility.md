@@ -42,7 +42,7 @@ Validate with a real local bug report and confirm `ticket.json`, `index.md`, and
 - `materials.zip` excludes `_solver_cache/` because developers can rebuild it locally
 - Materials bundling has a 30 second wall-clock timeout controlled by `LUMINA_FEEDBACK_MATERIALS_BUNDLE_TIMEOUT_S`
 - Email attachments over `LUMINA_FEEDBACK_MAX_EMAIL_ATTACHMENT_MB` (default 40) stay on disk
-- When email attachments stay on disk, the email body lists them with absolute paths so the on-call engineer can `scp` them manually
+- When email attachments stay on disk, the email body lists file names and the logical ticket location only; use the ticket id on the server to locate bulky files without exposing local paths in forwarded mail
 
 ## Cleanup
 

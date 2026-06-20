@@ -35,8 +35,6 @@ const buildLibraryResponse = (count: number) => ({
     directory_name: `mat-${idx}`,
     created_at: "2026-04-16T10:00:00Z",
     updated_at: "2026-04-16T11:00:00Z",
-    archive_path: `materials/mat-${idx}/material.json`,
-    stage_a_params_path: `materials/mat-${idx}/stage_A_parameters.json`,
     material_file_url: `/api/files/material-${idx}`,
     stage_a_params_url: `/api/files/stage-a-${idx}`,
     estimated_rgb: [100 + idx * 10, 120, 140] as [number, number, number],

@@ -31,6 +31,25 @@ function ensureHash(hex: string): string {
   return hex.startsWith("#") ? hex : `#${hex}`;
 }
 
+function cloneVirtualMaterials(
+  materials: Array<{ name: string; hex: string }> | undefined,
+): Array<{ name: string; hex: string }> | undefined {
+  if (!materials || materials.length === 0) {
+    return undefined;
+  }
+  return materials.map((material) => ({
+    name: material.name,
+    hex: material.hex,
+  }));
+}
+
+function virtualMaterialsField(
+  materials: Array<{ name: string; hex: string }> | undefined,
+): { virtual_materials?: Array<{ name: string; hex: string }> } {
+  const cloned = cloneVirtualMaterials(materials);
+  return cloned ? { virtual_materials: cloned } : {};
+}
+
 // ========== App version ==========
 
 declare const __LUMINA_VERSION__: string | undefined;
@@ -162,6 +181,7 @@ export function exportConverterRecipe(
         region_id: item.region_id,
         recipe: [...item.recipe],
         layer_order: item.layer_order,
+        ...virtualMaterialsField(item.virtual_materials),
       })),
       custom_recipe_history: state.customRecipeHistory.map((item) => ({
         id: item.id,
@@ -178,6 +198,7 @@ export function exportConverterRecipe(
         ...(item.displayLabels
           ? { display_labels: [...item.displayLabels] }
           : {}),
+        ...virtualMaterialsField(item.virtualMaterials),
       })),
     },
     large_format: {

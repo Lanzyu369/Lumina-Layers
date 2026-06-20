@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { SlicerInfo } from "../api/types";
+import { apiErrorToVisibleMessage } from "../api/client";
 import {
   detectSlicers as apiDetectSlicers,
   launchSlicer as apiLaunchSlicer,
@@ -53,6 +54,24 @@ const DEFAULT_STATE: SlicerState = {
   customPathError: null,
   error: null,
 };
+
+function hasApiResponse(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "response" in error
+  );
+}
+
+function slicerErrorToVisibleMessage(
+  error: unknown,
+  fallback: string,
+): string {
+  if (error instanceof Error || hasApiResponse(error)) {
+    return apiErrorToVisibleMessage(error, fallback);
+  }
+  return fallback;
+}
 
 export function resolveSelectedSlicerId(
   slicers: SlicerInfo[],
@@ -124,7 +143,7 @@ export const useSlicerStore = create<SlicerState & SlicerActions>(
       } catch (err) {
         set({
           isDetecting: false,
-          error: err instanceof Error ? err.message : "切片软件检测失败",
+          error: slicerErrorToVisibleMessage(err, "切片软件检测失败"),
         });
       }
     },
@@ -181,8 +200,10 @@ export const useSlicerStore = create<SlicerState & SlicerActions>(
         set({
           isValidatingCustomPath: false,
           customPathMessage: null,
-          customPathError:
-            err instanceof Error ? err.message : "切片软件路径校验失败",
+          customPathError: slicerErrorToVisibleMessage(
+            err,
+            "切片软件路径校验失败",
+          ),
         });
       }
     },
@@ -244,7 +265,7 @@ export const useSlicerStore = create<SlicerState & SlicerActions>(
       } catch (err) {
         set({
           isLaunching: false,
-          error: err instanceof Error ? err.message : "启动切片软件失败",
+          error: slicerErrorToVisibleMessage(err, "启动切片软件失败"),
         });
       }
     },

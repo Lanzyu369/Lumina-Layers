@@ -12,8 +12,8 @@ export interface FinalArtifactRef {
   download_url: string | null;
   /** Artifact classification, best-effort. */
   artifact_type: "3mf" | "zip" | "share_card" | null;
-  /** Server path on disk if the frontend knows it (e.g. batch output dir). */
-  disk_path: string | null;
+  /** Legacy clients may still send this; new payloads should omit it. */
+  disk_path?: string | null;
   /** Which workstream originated the artifact. */
   source: "converter" | "single_stage" | "puzzle" | "vector" | "batch" | null;
 }

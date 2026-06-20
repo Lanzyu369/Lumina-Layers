@@ -17,6 +17,21 @@ from api.schemas.lut import (
     PaletteEntrySchema,
 )
 
+_MATERIAL_PATH_RESPONSE_KEYS = frozenset(
+    {"archive_path", "stage_a_params_path", "cache_file_path"}
+)
+
+
+def public_material_response_item(item: dict[str, object]) -> dict[str, object]:
+    """Return a material response item without server-local paths.
+    返回不包含服务端本地路径的耗材响应项。
+    """
+    return {
+        key: value
+        for key, value in item.items()
+        if key not in _MATERIAL_PATH_RESPONSE_KEYS
+    }
+
 
 class _NoPublic3mfDiskPathMixin(BaseModel):
     """Redact server-local generated 3MF paths from public responses.
@@ -201,13 +216,16 @@ class AggregationSelectionResponse(BaseModel):
 
 
 class SavedMaterialSummaryResponse(BaseModel):
-    """Summary of a saved material archive."""
+    """Public summary of a saved material archive.
+    已保存耗材档案的公开摘要。
+
+    Server-side archive paths stay internal. Public callers receive stable
+    directory identifiers and temporary file URLs from enclosing responses.
+    """
 
     material_name: str
     directory_name: str
     brand: str | None = None
-    archive_path: str
-    stage_a_params_path: str
     verification_count: int = 1
     created_at: str | None = None
     updated_at: str | None = None
@@ -318,15 +336,15 @@ class SavedMaterialVerificationHistoryItemResponse(BaseModel):
 
 
 class SavedMaterialLibraryItemResponse(BaseModel):
-    """Summary row for a saved Stage A material archive."""
+    """Public library row for a saved Stage A material archive.
+    已保存 Stage A 耗材档案的公开列表行。
+    """
 
     material_name: str
     directory_name: str
     brand: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
-    archive_path: str
-    stage_a_params_path: str | None = None
     material_file_url: str | None = None
     stage_a_params_url: str | None = None
     estimated_rgb: list[int] = Field(default_factory=list)
@@ -533,7 +551,6 @@ class MaterialSolverCacheEntryResponse(BaseModel):
     build_time_seconds: float
     built_at: str | None = None
     cache_file_size_bytes: int = 0
-    cache_file_path: str | None = None
 
 
 class MaterialSolverCacheStatusResponse(BaseModel):
@@ -685,7 +702,6 @@ class MaterialSolverRuntimeEntryResponse(BaseModel):
     inverse_refinement_enabled: bool
     built_at: str | None = None
     cache_file_size_bytes: int = 0
-    cache_file_path: str | None = None
 
 
 class MaterialSolverRuntimeStatusResponse(BaseModel):
@@ -1016,7 +1032,7 @@ class LutInfo(BaseModel):
 
     name: str
     color_mode: str
-    path: str
+    path: str = Field(..., description="公开引用（非本机文件系统路径）")
     fingerprint: str = ""
 
 

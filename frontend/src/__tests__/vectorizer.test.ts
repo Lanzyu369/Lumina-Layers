@@ -347,6 +347,38 @@ describe("VectorizerPanel send-to-converter", () => {
     expect(setWidgetActiveTabSpy).not.toHaveBeenCalled();
   });
 
+  it("normalizes raw HTTP status text when sending svg to the converter fails", async () => {
+    downloadResourceBlobMock.mockRejectedValueOnce(
+      new Error("Request failed with status code 500"),
+    );
+
+    useVectorizerStore.setState({
+      imagePreviewUrl: "blob:original-preview",
+      result: {
+        status: "ok",
+        message: "done",
+        svg_url: "/api/files/expired.svg",
+        width: 100,
+        height: 100,
+        num_shapes: 12,
+        num_colors: 4,
+        palette: ["#000000", "#ffffff"],
+      },
+    });
+
+    render(createElement(VectorizerPanel));
+
+    fireEvent.click(getPanelButtonByKey("vec.send_to_converter"));
+
+    expect(
+      await screen.findByText(
+        "The server hit an internal error. Check the log for the request ID.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Request failed with status code 500/i)).not.toBeInTheDocument();
+    expect(loadVectorizedSvgIntoConverterSpy).not.toHaveBeenCalled();
+  });
+
   it("downloads svg after validating the resource fetch succeeds", async () => {
     const svgBlob = new Blob(["<svg/>"], { type: "image/svg+xml" });
     downloadResourceBlobMock.mockResolvedValueOnce(svgBlob);
@@ -453,6 +485,37 @@ describe("VectorizerPanel send-to-converter", () => {
     expect(
       await screen.findByText(/The requested resource was not found or has expired\./),
     ).toBeInTheDocument();
+  });
+
+  it("normalizes raw HTTP status text when svg download fails", async () => {
+    downloadResourceBlobMock.mockRejectedValueOnce(
+      new Error("Request failed with status code 500"),
+    );
+
+    useVectorizerStore.setState({
+      imagePreviewUrl: "blob:original-preview",
+      result: {
+        status: "ok",
+        message: "done",
+        svg_url: "/api/files/expired.svg",
+        width: 100,
+        height: 100,
+        num_shapes: 12,
+        num_colors: 4,
+        palette: ["#000000", "#ffffff"],
+      },
+    });
+
+    render(createElement(VectorizerPanel));
+
+    fireEvent.click(getPanelButtonByKey("vec.download_svg"));
+
+    expect(
+      await screen.findByText(
+        "The server hit an internal error. Check the log for the request ID.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Request failed with status code 500/i)).not.toBeInTheDocument();
   });
 
   it("does not reset vectorizer resources during StrictMode initial mount", async () => {

@@ -31,6 +31,8 @@ describe("collectBugReportContext", () => {
       downloadUrl: null,
       threemfDiskPath: null,
       largeFormatEnabled: false,
+      free_color_set: new Set(),
+      recipe_overrides: [],
     });
     useSettingsStore.setState({
       language: "en",
@@ -285,6 +287,15 @@ describe("collectBugReportContext", () => {
       largeFormatEnabled: true,
       tileWidthMm: 200,
       tileHeightMm: 180,
+      free_color_set: new Set(["ff0000"]),
+      recipe_overrides: [
+        {
+          region_id: "region-a",
+          recipe: [0, 1, 2, 4],
+          layer_order: "Top2Bottom",
+          virtual_materials: [{ name: "Matte Black", hex: "#101010" }],
+        },
+      ],
     });
 
     const context = collectBugReportContext();
@@ -310,6 +321,16 @@ describe("collectBugReportContext", () => {
     expect(advanced.large_format.largeFormatEnabled).toBe(true);
     expect(advanced.large_format.tileWidthMm).toBe(200);
     expect(advanced.large_format.tileHeightMm).toBe(180);
+
+    expect(advanced.color_replacement.free_color_set).toEqual(["#ff0000"]);
+    expect(advanced.color_replacement.recipe_overrides).toEqual([
+      {
+        region_id: "region-a",
+        recipe: [0, 1, 2, 4],
+        layer_order: "Top2Bottom",
+        virtual_materials: [{ name: "Matte Black", hex: "#101010" }],
+      },
+    ]);
 
     // Disabled-toggle groups are still present with their toggles false
     // and detail fields nulled out (builder contract).
@@ -467,12 +488,11 @@ describe("collectBugReportContext", () => {
       session_id: "converter-large-format",
       download_url: "/api/files/large-format-download-id",
       artifact_type: "zip",
-      disk_path: null,
       source: "converter",
     });
   });
 
-  it("captures converter 3mf final artifacts on the converter tab", () => {
+  it("captures converter 3mf final artifacts without disk paths", () => {
     useWidgetStore.setState({ activeTab: "converter" });
     useConverterStore.setState({
       sessionId: "converter-3mf",
@@ -487,8 +507,8 @@ describe("collectBugReportContext", () => {
       session_id: "converter-3mf",
       download_url: "/api/files/model-3mf-download-id",
       artifact_type: "3mf",
-      disk_path: "/tmp/model.3mf",
       source: "converter",
     });
+    expect(context.active_final_artifact_ref).not.toHaveProperty("disk_path");
   });
 });

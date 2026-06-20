@@ -145,6 +145,96 @@ def _resolve_launch_request_source_path(
     return None, SLICER_LAUNCH_SOURCE_MISSING_MESSAGE
 
 
+def _slicer_launch_failure_extra(
+    *,
+    request: SlicerLaunchRequest,
+    status_code: int,
+    original_file_path: str,
+    safe_message: str,
+    error: BaseException | None = None,
+    error_type: str | None = None,
+    error_message: str | None = None,
+    launch_copy_path: str | None = None,
+) -> dict[str, object]:
+    """Build actionable launch-failure fields while responses stay safe."""
+    resolved_error_type = error_type or (
+        type(error).__name__ if error is not None else "SlicerLaunchFailed"
+    )
+    resolved_error_message = (
+        str(error)
+        if error is not None
+        else error_message
+        if error_message is not None
+        else safe_message
+    )
+    extra: dict[str, object] = {
+        "status_code": status_code,
+        "slicer_id": request.slicer_id,
+        "original_file_path": original_file_path,
+        "safe_message": safe_message,
+        "error_type": resolved_error_type,
+        "error_message": resolved_error_message,
+    }
+    if launch_copy_path is not None:
+        extra["launch_copy_path"] = launch_copy_path
+        extra["launch_copy_filename"] = os.path.basename(launch_copy_path)
+    return extra
+
+
+def _log_slicer_launch_copy_failed(
+    *,
+    request: SlicerLaunchRequest,
+    status_code: int,
+    original_file_path: str,
+    safe_message: str,
+    error: BaseException,
+) -> None:
+    """Log launch-copy preparation failures."""
+    log.error(
+        "Slicer launch failed",
+        extra={
+            "event": "slicer_launch_copy_failed",
+            **_slicer_launch_failure_extra(
+                request=request,
+                status_code=status_code,
+                original_file_path=original_file_path,
+                safe_message=safe_message,
+                error=error,
+            ),
+        },
+    )
+
+
+def _log_slicer_launch_failed(
+    *,
+    request: SlicerLaunchRequest,
+    status_code: int,
+    original_file_path: str,
+    safe_message: str,
+    launch_copy_path: str,
+    error: BaseException | None = None,
+    error_type: str | None = None,
+    error_message: str | None = None,
+) -> None:
+    """Log slicer process launch failures."""
+    log.error(
+        "Slicer launch failed",
+        extra={
+            "event": "slicer_launch_failed",
+            **_slicer_launch_failure_extra(
+                request=request,
+                status_code=status_code,
+                original_file_path=original_file_path,
+                safe_message=safe_message,
+                error=error,
+                error_type=error_type,
+                error_message=error_message,
+                launch_copy_path=launch_copy_path,
+            ),
+        },
+    )
+
+
 def _to_slicer_info(slicer: DetectedSlicer) -> SlicerInfo:
     return SlicerInfo(
         id=slicer.id,
@@ -224,7 +314,14 @@ def launch_slicer_endpoint(
         )
     try:
         launch_file_path = _create_launch_copy(source_file_path, registry)
-    except Exception:
+    except Exception as exc:
+        _log_slicer_launch_copy_failed(
+            request=request,
+            status_code=500,
+            original_file_path=source_file_path,
+            safe_message=SLICER_LAUNCH_COPY_FAILED_MESSAGE,
+            error=exc,
+        )
         return JSONResponse(
             status_code=500,
             content=SlicerLaunchResponse(
@@ -236,7 +333,15 @@ def launch_slicer_endpoint(
     # 3) Attempt launch
     try:
         success, message = launch_slicer(request.slicer_id, launch_file_path, slicers)
-    except (OSError, RuntimeError, ValueError):
+    except (OSError, RuntimeError, ValueError) as exc:
+        _log_slicer_launch_failed(
+            request=request,
+            status_code=500,
+            original_file_path=source_file_path,
+            safe_message=SLICER_LAUNCH_FAILED_MESSAGE,
+            error=exc,
+            launch_copy_path=launch_file_path,
+        )
         return JSONResponse(
             status_code=500,
             content=SlicerLaunchResponse(
@@ -255,6 +360,15 @@ def launch_slicer_endpoint(
                     message=f"未找到切片软件: {request.slicer_id}",
                 ).model_dump(),
             )
+        _log_slicer_launch_failed(
+            request=request,
+            status_code=500,
+            original_file_path=source_file_path,
+            safe_message=SLICER_LAUNCH_FAILED_MESSAGE,
+            error_type="SlicerLaunchFailed",
+            error_message=message,
+            launch_copy_path=launch_file_path,
+        )
         return JSONResponse(
             status_code=500,
             content=SlicerLaunchResponse(

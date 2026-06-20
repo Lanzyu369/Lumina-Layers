@@ -2172,8 +2172,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Fingerprint",
   },
   lut_details_summary_path: {
-    zh: "路径",
-    en: "Path",
+    zh: "公开引用",
+    en: "Public reference",
   },
   lut_details_metadata_title: {
     zh: "类型化元数据",
@@ -2619,6 +2619,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   cal_generate_btn_panel: {
     zh: "生成校准板",
     en: "Generate Calibration",
+  },
+  calibration_generation_failed: {
+    zh: "校准板生成失败，请稍后重试。",
+    en: "Calibration generation failed. Please try again.",
   },
   cal_download_3mf: {
     zh: "下载校准文件",
@@ -5800,6 +5804,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   recipe_export_error_no_preview: {
     zh: "请先生成预览后再导出。",
     en: "Generate a preview before exporting.",
+  },
+  recipe_export_error_preview_load: {
+    zh: "预览图已失效，请重新生成预览后再导出。",
+    en: "The preview image is no longer available. Generate a new preview before exporting.",
   },
   recipe_export_error_unknown: {
     zh: "导出没有完成，请稍后重试。",
