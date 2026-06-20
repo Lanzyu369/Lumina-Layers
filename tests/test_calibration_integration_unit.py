@@ -6,6 +6,7 @@ Validates:
 - Core exception returns HTTP 500 (Requirement 3.6)
 """
 
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -27,13 +28,6 @@ _mock_preview: Image.Image = Image.fromarray(
     np.zeros((10, 10, 3), dtype=np.uint8)
 )
 _mock_return = ("/tmp/fake.3mf", _mock_preview, "OK")
-_CALIBRATION_OUTPUT_PREPARATION_FAILED_DETAIL = (
-    "Calibration board output could not be prepared. Please try again."
-)
-_SINGLE_STAGE_KIT_OUTPUT_PREPARATION_FAILED_DETAIL = (
-    "Single-stage calibration kit output could not be prepared. Please try again."
-)
-
 
 class _RegisterPathFailingRegistry(FileRegistry):
     """Registry stub that records the generated path before failing."""
@@ -66,6 +60,37 @@ class _RegisterBytesFailingRegistry(FileRegistry):
         raise RuntimeError(
             "registry byte storage unavailable at /Users/min/private/preview.png"
         )
+
+
+class _SecondRegisterBytesFailingRegistry(FileRegistry):
+    """Registry stub that fails after one preview image is registered."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.path_file_ids: list[str] = []
+        self.byte_file_ids: list[str] = []
+        self._byte_calls = 0
+        self._registering_bytes = False
+
+    def register_path(self, *args: object, **kwargs: object) -> str:
+        file_id = super().register_path(*args, **kwargs)
+        if self._registering_bytes:
+            self.byte_file_ids.append(file_id)
+        else:
+            self.path_file_ids.append(file_id)
+        return file_id
+
+    def register_bytes(self, *args: object, **kwargs: object) -> str:
+        self._byte_calls += 1
+        if self._byte_calls == 2:
+            raise RuntimeError(
+                "registry layer storage unavailable at /Users/min/private/layer.png"
+            )
+        self._registering_bytes = True
+        try:
+            return super().register_bytes(*args, **kwargs)
+        finally:
+            self._registering_bytes = False
 
 
 def _assert_default_device_kwargs(kwargs: dict) -> None:
@@ -111,9 +136,10 @@ class TestColorModeRouting:
         assert registry.generated_path == str(output_path)
         assert not output_path.exists()
 
-    def test_generate_returns_readable_detail_when_preview_registration_fails(
+    def test_generate_preserves_download_when_preview_registration_fails(
         self,
         tmp_path: Path,
+        caplog,
     ) -> None:
         output_path = tmp_path / "calibration.3mf"
         output_path.write_bytes(b"placeholder-3mf")
@@ -121,10 +147,72 @@ class TestColorModeRouting:
         app = create_app()
         app.dependency_overrides[get_file_registry] = lambda: registry
         failing_client = TestClient(app, raise_server_exceptions=False)
+        target_logger = logging.getLogger("lumina.api.routers.calibration")
+        target_logger.addHandler(caplog.handler)
+        caplog.set_level(logging.WARNING, logger=target_logger.name)
+
+        try:
+            with patch(
+                "api.routers.calibration.generate_calibration_board",
+                return_value=(str(output_path), _mock_preview, "OK"),
+            ):
+                response = failing_client.post(
+                    "/api/calibration/generate",
+                    json={
+                        "color_mode": "4-Color (RYBW)",
+                        "block_size": 5,
+                        "gap": 0.84,
+                        "backing_thickness": 1.6,
+                    },
+                )
+        finally:
+            target_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["download_url"].startswith("/api/files/")
+        assert body["preview_url"] is None
+        assert body["layer_urls"] is None
+        assert len(registry.path_file_ids) == 1
+        download_id = registry.path_file_ids[0]
+        assert body["download_url"].endswith(download_id)
+        assert registry.get_entry(download_id) is not None
+        resolved_download = registry.resolve(download_id)
+        assert resolved_download is not None
+        assert resolved_download[0] == str(output_path)
+        download_response = failing_client.get(body["download_url"])
+        assert download_response.status_code == 200
+        assert download_response.content == b"placeholder-3mf"
+        assert output_path.exists()
+        records = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "calibration_preview_registration_failed"
+        ]
+        assert len(records) == 1
+        assert records[0].context == "Calibration preview registration"
+        assert records[0].export_ids == [download_id]
+        assert records[0].error_type == "RuntimeError"
+        assert "registry byte storage unavailable" in records[0].error_message
+
+    def test_generate_cleans_preview_when_layer_registration_fails(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        output_path = tmp_path / "calibration.3mf"
+        output_path.write_bytes(b"placeholder-3mf")
+        registry = _SecondRegisterBytesFailingRegistry()
+        app = create_app()
+        app.dependency_overrides[get_file_registry] = lambda: registry
+        failing_client = TestClient(app, raise_server_exceptions=False)
+        preview_imgs = [
+            Image.new("RGB", (8, 8), (255, 255, 255)),
+            Image.new("RGB", (8, 8), (0, 0, 0)),
+        ]
 
         with patch(
             "api.routers.calibration.generate_calibration_board",
-            return_value=(str(output_path), _mock_preview, "OK"),
+            return_value=(str(output_path), preview_imgs, "OK"),
         ):
             response = failing_client.post(
                 "/api/calibration/generate",
@@ -136,13 +224,20 @@ class TestColorModeRouting:
                 },
             )
 
-        assert response.status_code == 500
-        assert response.json()["detail"] == _CALIBRATION_OUTPUT_PREPARATION_FAILED_DETAIL
-        assert "registry byte storage unavailable" not in response.text
-        assert "/Users/min/private" not in response.text
+        assert response.status_code == 200
+        body = response.json()
+        assert body["download_url"].startswith("/api/files/")
+        assert body["preview_url"] is None
+        assert body["layer_urls"] is None
         assert len(registry.path_file_ids) == 1
-        assert registry.get_entry(registry.path_file_ids[0]) is None
-        assert not output_path.exists()
+        assert len(registry.byte_file_ids) == 1
+        download_id = registry.path_file_ids[0]
+        preview_id = registry.byte_file_ids[0]
+        assert registry.get_entry(download_id) is not None
+        assert registry.get_entry(preview_id) is None
+        assert registry.resolve(preview_id) is None
+        assert failing_client.get(body["download_url"]).status_code == 200
+        assert output_path.exists()
 
     def test_bw_mode_routes_to_generate_bw(self) -> None:
         with patch(
@@ -391,9 +486,10 @@ class TestErrorHandling:
             assert "disk full" not in response.text
             assert private_path not in response.text
 
-    def test_single_stage_kit_registration_failure_returns_readable_detail(
+    def test_single_stage_kit_preserves_downloads_when_preview_registration_fails(
         self,
         tmp_path: Path,
+        caplog,
     ) -> None:
         zip_path = tmp_path / "single-stage.zip"
         manifest_path = tmp_path / "manifest.json"
@@ -403,41 +499,72 @@ class TestErrorHandling:
         app = create_app()
         app.dependency_overrides[get_file_registry] = lambda: registry
         failing_client = TestClient(app, raise_server_exceptions=False)
+        target_logger = logging.getLogger("lumina.api.routers.calibration")
+        target_logger.addHandler(caplog.handler)
+        caplog.set_level(logging.WARNING, logger=target_logger.name)
 
-        with patch(
-            "api.routers.calibration.generate_single_stage_kit",
-            return_value=SimpleNamespace(
-                zip_path=str(zip_path),
-                manifest_path=str(manifest_path),
-                preview_image=Image.new("RGB", (8, 8), (255, 255, 255)),
-                jobs=[],
-                message="OK",
-            ),
-        ):
-            response = failing_client.post(
-                "/api/calibration/generate-single-stage-kit",
-                json={
-                    "palette": [
-                        {
-                            "color": "White",
-                            "material": "PLA Basic",
-                            "hex_color": "#FFFFFF",
-                            "color_name": "White",
-                        }
-                    ],
-                    "substrate_id": "white",
-                    "substrate_display_name": "White",
-                    "material_default": "PLA Basic",
-                    "layer_height_mm": 0.04,
-                },
-            )
+        try:
+            with patch(
+                "api.routers.calibration.generate_single_stage_kit",
+                return_value=SimpleNamespace(
+                    zip_path=str(zip_path),
+                    manifest_path=str(manifest_path),
+                    preview_image=Image.new("RGB", (8, 8), (255, 255, 255)),
+                    jobs=[],
+                    message="OK",
+                ),
+            ):
+                response = failing_client.post(
+                    "/api/calibration/generate-single-stage-kit",
+                    json={
+                        "palette": [
+                            {
+                                "color": "White",
+                                "material": "PLA Basic",
+                                "hex_color": "#FFFFFF",
+                                "color_name": "White",
+                            }
+                        ],
+                        "substrate_id": "white",
+                        "substrate_display_name": "White",
+                        "material_default": "PLA Basic",
+                        "layer_height_mm": 0.04,
+                    },
+                )
+        finally:
+            target_logger.removeHandler(caplog.handler)
 
-        assert response.status_code == 500
-        assert response.json()["detail"] == _SINGLE_STAGE_KIT_OUTPUT_PREPARATION_FAILED_DETAIL
-        assert "registry byte storage unavailable" not in response.text
-        assert "/Users/min/private" not in response.text
+        assert response.status_code == 200
+        body = response.json()
+        assert body["kit_download_url"].startswith("/api/files/")
+        assert body["manifest_url"].startswith("/api/files/")
+        assert body["preview_url"] is None
         assert len(registry.path_file_ids) == 2
-        for file_id in registry.path_file_ids:
-            assert registry.get_entry(file_id) is None
-        assert not zip_path.exists()
-        assert not manifest_path.exists()
+        kit_id, manifest_id = registry.path_file_ids
+        assert body["kit_download_url"].endswith(kit_id)
+        assert body["manifest_url"].endswith(manifest_id)
+        assert registry.get_entry(kit_id) is not None
+        assert registry.get_entry(manifest_id) is not None
+        resolved_kit = registry.resolve(kit_id)
+        resolved_manifest = registry.resolve(manifest_id)
+        assert resolved_kit is not None
+        assert resolved_manifest is not None
+        assert resolved_kit[0] == str(zip_path)
+        assert resolved_manifest[0] == str(manifest_path)
+        kit_response = failing_client.get(body["kit_download_url"])
+        manifest_response = failing_client.get(body["manifest_url"])
+        assert kit_response.status_code == 200
+        assert manifest_response.status_code == 200
+        assert kit_response.content == b"zip"
+        assert manifest_response.content == b"{}"
+        assert zip_path.exists()
+        assert manifest_path.exists()
+        records = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "calibration_preview_registration_failed"
+        ]
+        assert len(records) == 1
+        assert records[0].context == "Single-stage kit preview registration"
+        assert records[0].export_ids == [kit_id, manifest_id]
+        assert records[0].error_type == "RuntimeError"

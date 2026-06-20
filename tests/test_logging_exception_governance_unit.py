@@ -249,6 +249,7 @@ CONVERTER_STRUCTURED_EVENTS = {
 CALIBRATION_STRUCTURED_EVENTS = {
     "calibration_generate_done",
     "calibration_generate_single_stage_kit_done",
+    "calibration_preview_registration_failed",
 }
 FIVE_COLOR_STRUCTURED_EVENTS = {
     "five_color_query_done",
