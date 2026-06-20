@@ -754,6 +754,46 @@ describe("GradientCardExtractPanel", () => {
     );
   });
 
+  it("shows a friendly save error when material verification image sources differ", async () => {
+    const saveMock = vi.mocked(saveGradientCardMaterial);
+    const rawDetail =
+      "Cannot merge gradient-card captures from different image sources: existing runs use [restored] but the new capture is tagged 'raw'. Use save_mode='override' to replace the existing runs.";
+    const axiosLikeError = new Error("Request failed with status code 422") as Error & {
+      response?: {
+        status: number;
+        data: {
+          detail: string;
+        };
+      };
+    };
+    axiosLikeError.response = {
+      status: 422,
+      data: {
+        detail: rawDetail,
+      },
+    };
+    saveMock.mockRejectedValueOnce(axiosLikeError);
+
+    useSingleStageStore.setState({
+      sessionId: "sess-source-mismatch",
+      materialName: "PLA Basic",
+      verificationTargetDirectoryName: "bambu-lab/pla-basic",
+    });
+
+    render(<GradientCardExtractPanel />);
+
+    await act(async () => {
+      await useSingleStageStore.getState().submitSave();
+    });
+
+    const saveError = screen.getByTestId("save-error");
+    expect(saveError).toHaveTextContent(
+      /图像来源与该耗材已有的验证记录不一致|image source of this capture does not match/i,
+    );
+    expect(saveError).not.toHaveTextContent("Cannot merge gradient-card captures");
+    expect(saveError).not.toHaveTextContent("save_mode='override'");
+  });
+
   it("propagates the manual white anchor-corner selection to the extractor API call", async () => {
     const extractMock = vi.mocked(extractGradientCardStageA);
     extractMock.mockResolvedValue({
