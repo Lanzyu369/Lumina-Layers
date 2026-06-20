@@ -53,6 +53,9 @@ log = get_logger(__name__)
 _GLB_CACHE_UNAVAILABLE_MESSAGE = (
     "3D preview cache is unavailable. Re-run preview before updating the 3D preview."
 )
+_GLB_BUILD_FAILED_MESSAGE = (
+    "3D preview could not be updated. Re-run preview and try again."
+)
 
 
 class _GlbPreviewCacheUnavailableError(RuntimeError):
@@ -91,7 +94,7 @@ def _hydrate_cache_for_glb_worker(cache: dict) -> dict:
 def _glb_status_error_text(exc: Exception) -> str:
     if isinstance(exc, _GlbPreviewCacheUnavailableError):
         return str(exc)
-    return f"{type(exc).__name__}: {exc}"
+    return _GLB_BUILD_FAILED_MESSAGE
 
 
 def _cleanup_unregistered_glb(
@@ -141,7 +144,7 @@ class GlbStatus(TypedDict, total=False):
     status: str  # "pending" | "ready" | "error" | "idle"
     glb_url: Optional[str]
     job_token: Optional[str]
-    error: Optional[str]
+    error: Optional[str]  # Public-safe error detail for client polling.
 
 
 def schedule_glb_build(
@@ -321,13 +324,15 @@ def _run_glb_build_job(
                 cache_updates["color_contours"] = build_cache["color_contours"]
         else:
             cache_updates["glb_url"] = None
-            cache_updates["glb_error"] = "generate_segmented_glb returned no path"
+            cache_updates["glb_error"] = _GLB_BUILD_FAILED_MESSAGE
             log.warning(
                 "GLB build produced no output path",
                 extra={
                     "event": "converter_glb_no_output",
                     "session_id": session_id,
                     "job_token": job_token,
+                    "error_type": "missing_output",
+                    "error_message": "generate_segmented_glb returned no path",
                 },
             )
 
