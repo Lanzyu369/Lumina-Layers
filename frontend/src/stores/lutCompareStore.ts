@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { CompareResponse, LutInfo, LutInfoResponse } from "../api/types";
+import { apiErrorToVisibleMessage } from "../api/client";
 import { compareLuts, fetchLutInfo } from "../api/lut";
 import { fetchLutList as apiFetchLutList } from "../api/converter";
 
@@ -51,7 +52,7 @@ export const useLutCompareStore = create<LutCompareState & LutCompareActions>(
       } catch (err) {
         set({
           lutListLoading: false,
-          error: err instanceof Error ? err.message : "Failed to load LUT list",
+          error: apiErrorToVisibleMessage(err),
         });
       }
     },
@@ -84,7 +85,7 @@ export const useLutCompareStore = create<LutCompareState & LutCompareActions>(
         }
         set({
           lutAInfoLoading: false,
-          error: err instanceof Error ? err.message : "Failed to load LUT info",
+          error: apiErrorToVisibleMessage(err),
         });
       }
     },
@@ -117,7 +118,7 @@ export const useLutCompareStore = create<LutCompareState & LutCompareActions>(
         }
         set({
           lutBInfoLoading: false,
-          error: err instanceof Error ? err.message : "Failed to load LUT info",
+          error: apiErrorToVisibleMessage(err),
         });
       }
     },
@@ -147,7 +148,7 @@ export const useLutCompareStore = create<LutCompareState & LutCompareActions>(
       } catch (err) {
         set({
           comparing: false,
-          error: err instanceof Error ? err.message : "LUT comparison failed",
+          error: apiErrorToVisibleMessage(err),
         });
       }
     },
