@@ -170,6 +170,60 @@ def _estimate_preview_layers(
     return 5
 
 
+def _preview_material_matrix_dtype_for_range(
+    min_value: int,
+    max_value: int,
+) -> np.dtype:
+    """Return the smallest signed preview-cache dtype for material indices."""
+
+    for dtype in (np.int16, np.int32, np.int64):
+        info = np.iinfo(dtype)
+        if min_value >= info.min and max_value <= info.max:
+            return np.dtype(dtype)
+    return np.dtype(np.int64)
+
+
+def _estimate_material_matrix_itemsize(
+    *,
+    material_source: str,
+    selected_material_count: int | None,
+) -> int | None:
+    """Estimate persisted material-matrix item size for preview-cache guardrails."""
+
+    if material_source != "material_archive":
+        return None
+    max_material_index = max(0, int(selected_material_count or 0) - 1)
+    return _preview_material_matrix_dtype_for_range(-1, max_material_index).itemsize
+
+
+def _compact_material_matrix_array(array: np.ndarray) -> np.ndarray:
+    """Compact a preview material matrix while preserving signed ``-1`` air."""
+
+    if not np.issubdtype(array.dtype, np.integer):
+        return array
+    if array.size:
+        min_value = int(array.min())
+        max_value = int(array.max())
+    else:
+        min_value = -1
+        max_value = 0
+    target_dtype = _preview_material_matrix_dtype_for_range(min_value, max_value)
+    if array.dtype == target_dtype:
+        return array
+    return array.astype(target_dtype, copy=False)
+
+
+def _compact_preview_cache_material_matrices(cache: dict) -> dict:
+    """Return cache with material matrices stored in compact signed dtypes."""
+
+    compacted = dict(cache)
+    for field_name in ("material_matrix", "original_material_matrix"):
+        value = compacted.get(field_name)
+        if isinstance(value, np.ndarray):
+            compacted[field_name] = _compact_material_matrix_array(value)
+    return compacted
+
+
 def _parse_svg_length(raw: str | None) -> float | None:
     if raw is None:
         return None
@@ -268,6 +322,7 @@ def _enforce_preview_cache_size_limit(
     color_layers: int | None,
     material_layer_count: int | None,
     material_source: str,
+    selected_material_count: int | None = None,
     max_bytes: int | None = None,
 ) -> None:
     """Reject previews whose estimated cache arrays exceed the guardrail.
@@ -294,6 +349,10 @@ def _enforce_preview_cache_size_limit(
         height,
         layers,
         include_original=True,
+        matrix_itemsize=_estimate_material_matrix_itemsize(
+            material_source=material_source,
+            selected_material_count=selected_material_count,
+        ),
     )
     resolved_max_bytes = max_bytes if max_bytes is not None else get_preview_cache_max_bytes()
     if estimate_bytes <= resolved_max_bytes:
@@ -719,6 +778,19 @@ async def convert_preview(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    _selected_mats: list[str] | None = None
+    _material_backing_index = 0
+    if material_source == "material_archive":
+        _selected_mats = (
+            _parse_selected_materials(selected_materials)
+            if selected_materials is not None
+            else []
+        )
+        _material_backing_index = _resolve_material_backing_index(
+            _selected_mats,
+            material_backing_material_index,
+        )
+
     # Material-archive mode: skip LUT resolution entirely
     if material_source == "material_archive":
         request = LutSourceSelection.model_validate(
@@ -791,6 +863,7 @@ async def convert_preview(
             color_layers=color_layers,
             material_layer_count=material_layer_count,
             material_source=material_source,
+            selected_material_count=len(_selected_mats or []),
             max_bytes=(
                 _get_large_format_svg_preview_cache_max_bytes()
                 if use_large_format_svg_guard
@@ -824,18 +897,7 @@ async def convert_preview(
             },
         )
         _t = time.perf_counter()
-        _selected_mats: list[str] | None = None
-        _material_backing_index = 0
         if material_source == "material_archive":
-            _selected_mats = (
-                _parse_selected_materials(selected_materials)
-                if selected_materials is not None
-                else []
-            )
-            _material_backing_index = _resolve_material_backing_index(
-                _selected_mats,
-                material_backing_material_index,
-            )
             log.debug(
                 "Material mode parsed: count=%d names=%s",
                 len(_selected_mats or []),
@@ -908,8 +970,10 @@ async def convert_preview(
             cache_data = pickle.load(f)
         _t_pickle_load = time.perf_counter() - _t
 
-        # Load preview image from disk (worker saved as .png)
-        preview_img = Image.open(worker_preview_png_path)
+        # Load preview image from disk (worker saved as .png). Copy it so the
+        # file handle is closed before rollback cleanup can run on Windows.
+        with Image.open(worker_preview_png_path) as worker_preview_img:
+            preview_img = worker_preview_img.copy()
         result_loaded = True
     finally:
         if not result_loaded:
@@ -1015,6 +1079,9 @@ async def convert_preview(
             cache_with_originals["original_matched_rgb"] = cache_data["matched_rgb"]
         if "material_matrix" in cache_data:
             cache_with_originals["original_material_matrix"] = cache_data["material_matrix"]
+        cache_with_originals = _compact_preview_cache_material_matrices(
+            cache_with_originals,
+        )
         try:
             cache_session_value = externalize_preview_cache(
                 session_id,
