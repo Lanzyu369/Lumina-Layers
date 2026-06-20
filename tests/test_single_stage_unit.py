@@ -1242,6 +1242,29 @@ def test_extract_single_stage_route_preserves_upload_after_short_write(
     assert store.get(response.json()["session_id"]) is not None
 
 
+def test_extract_single_stage_route_redacts_missing_labelme_json_path() -> None:
+    client, _store, _registry = _client_with_state()
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w") as archive:
+        archive.writestr("dataset/white/Red/sample.png", _png_bytes())
+    payload.seek(0)
+
+    response = client.post(
+        "/api/extractor/extract-single-stage",
+        files={
+            "dataset_zip": ("dataset.zip", payload.getvalue(), "application/zip")
+        },
+    )
+
+    assert response.status_code == 422
+    detail = str(response.json()["detail"])
+    normalized_detail = detail.replace("\\", "/")
+    assert detail == "Missing LabelMe JSON files in dataset directory: white/Red"
+    assert "output/temp" not in normalized_detail
+    assert "single_stage_dataset_" not in normalized_detail
+    assert "/private/" not in normalized_detail
+
+
 def test_extract_single_stage_route_cleans_session_when_registration_fails(
     monkeypatch,
     tmp_path: Path,

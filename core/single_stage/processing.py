@@ -113,7 +113,13 @@ def _validate_dataset_root(root: Path) -> dict[str, object]:
             if p.is_file() and p.suffix.lower() in _IMAGE_EXTENSIONS
         )
         if not label_files:
-            raise ValueError(f"Missing LabelMe JSON files in {color_dir}")
+            try:
+                dataset_dir = color_dir.relative_to(root).as_posix()
+            except ValueError:
+                dataset_dir = color_dir.name
+            raise ValueError(
+                f"Missing LabelMe JSON files in dataset directory: {dataset_dir}"
+            )
 
         coverage.setdefault(substrate_dir.name, []).append(color_dir.name)
         image_count += len(image_files)
