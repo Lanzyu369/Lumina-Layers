@@ -19,7 +19,7 @@ import {
   type ColorcheckerDisplaySummary,
 } from "../api/extractor";
 import type { ExtractorPaletteEntry } from "../api/types";
-import { downloadResourceBlob } from "../api/client";
+import { apiErrorToVisibleMessage, downloadResourceBlob } from "../api/client";
 import { clampValue } from "./converter";
 import { uploadImagePreview } from "../api/system";
 import { tRuntime } from "../i18n/runtime";
@@ -55,6 +55,10 @@ const COMPACT_EXTRACTOR_PAGES = new Set<ExtractorPage>([
 function releaseColorcheckerArtifact(fileId: string | null): void {
   if (!fileId) return;
   void colorcheckerRelease(fileId).catch(() => {});
+}
+
+function visibleExtractorError(error: unknown, fallback: string): string {
+  return apiErrorToVisibleMessage(error, fallback);
 }
 
 function normalizeCompactExtractorPage(page: ExtractorPage): ExtractorPage {
@@ -501,7 +505,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
         });
       } catch (err) {
         set({
-          error: err instanceof Error ? err.message : "图片旋转失败",
+          error: visibleExtractorError(err, "图片旋转失败"),
           isLoading: false,
           colorchecker_enabled: false,
           colorchecker_phase: null,
@@ -791,7 +795,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
                 return;
               }
               set({
-                error: err instanceof Error ? err.message : "图片预览失败",
+                error: visibleExtractorError(err, "图片预览失败"),
               });
             });
         }
@@ -1079,10 +1083,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
         } catch (err) {
           set({
             auto_wb: false,
-            error:
-              err instanceof Error
-                ? err.message
-                : "White balance preview failed",
+            error: visibleExtractorError(err, "White balance preview failed"),
             isLoading: false,
           });
         }
@@ -1253,7 +1254,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
           return;
         }
         set({
-          error: err instanceof Error ? err.message : "颜色提取失败，请重试",
+          error: visibleExtractorError(err, "颜色提取失败，请重试"),
           isLoading: false,
         });
       }
@@ -1279,8 +1280,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
         });
       } catch (err) {
         set({
-          manualFixError:
-            err instanceof Error ? err.message : "手动修正失败，请重试",
+          manualFixError: visibleExtractorError(err, "手动修正失败，请重试"),
           manualFixLoading: false,
         });
       }
@@ -1325,7 +1325,7 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
         });
       } catch (err) {
         set({
-          mergeError: err instanceof Error ? err.message : "合并失败，请重试",
+          mergeError: visibleExtractorError(err, "合并失败，请重试"),
           mergeLoading: false,
         });
       }
@@ -1364,8 +1364,10 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
         set({ paletteConfirmed: true, paletteConfirmLoading: false });
       } catch (err) {
         set({
-          paletteConfirmError:
-            err instanceof Error ? err.message : "Palette confirmation failed",
+          paletteConfirmError: visibleExtractorError(
+            err,
+            "Palette confirmation failed",
+          ),
           paletteConfirmLoading: false,
         });
       }

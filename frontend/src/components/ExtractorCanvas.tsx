@@ -3,6 +3,7 @@ import { useRef, useEffect, useCallback, useState } from "react";
 import { useExtractorStore } from "../stores/extractorStore";
 import { ExtractorColorMode, ExtractorPage, type LutPreviewResolvedCell } from "../api/types";
 import { resolveLutPreviewCell } from "../api/extractor";
+import { apiErrorToVisibleMessage } from "../api/client";
 import { useI18n } from "../i18n/context";
 import { getObjectFitRect, type RenderedImageRect } from "../utils/lutCoordUtils";
 import { hexToRgb } from "../utils/colorUtils";
@@ -233,8 +234,8 @@ const LUT_PREVIEW_OUTSIDE_AREA_ERROR = "Clicked cell is outside the valid LUT ar
 
 function getResolveCellErrorMessage(error: unknown, fallback: string): string | null {
   const message = error instanceof Error ? error.message.trim() : "";
-  if (!message) return fallback;
-  return message === LUT_PREVIEW_OUTSIDE_AREA_ERROR ? null : message;
+  if (message === LUT_PREVIEW_OUTSIDE_AREA_ERROR) return null;
+  return apiErrorToVisibleMessage(error, fallback);
 }
 
 // ========== Component ==========
