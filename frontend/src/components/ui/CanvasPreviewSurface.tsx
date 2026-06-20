@@ -21,6 +21,7 @@ import {
   type CanvasPreviewHoverSample,
   type CanvasPreviewRenderingQuality,
 } from "./canvasPreviewUtils"
+import { useI18n } from "../../i18n/context"
 
 export interface CanvasPreviewSurfaceReadyPayload {
   image: HTMLImageElement
@@ -83,6 +84,7 @@ export default function CanvasPreviewSurface({
   onSurfaceReady,
   canStartDrag,
 }: CanvasPreviewSurfaceProps) {
+  const { t } = useI18n()
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const imageRef = useRef<HTMLImageElement | null>(null)
@@ -100,6 +102,7 @@ export default function CanvasPreviewSurface({
   const [scale, setScale] = useState(1)
   const [translate, setTranslate] = useState({ x: 0, y: 0 })
   const [isDragging, setIsDragging] = useState(false)
+  const [failedSrc, setFailedSrc] = useState<string | null>(null)
 
   const naturalSizeRef = useRef(naturalSize)
   const scaleRef = useRef(scale)
@@ -245,6 +248,7 @@ export default function CanvasPreviewSurface({
       }
 
       imageRef.current = image
+      setFailedSrc(null)
       setScale(1)
       setTranslate({ x: 0, y: 0 })
       updateContainerSize()
@@ -261,6 +265,7 @@ export default function CanvasPreviewSurface({
       }
 
       imageRef.current = null
+      setFailedSrc(src)
       setNaturalSize({ width: 0, height: 0 })
       lastPointerClientRef.current = null
       emitHoverSample(null)
@@ -280,6 +285,7 @@ export default function CanvasPreviewSurface({
     () => resolveCanvasPreviewImageRect(containerSize, naturalSize),
     [containerSize, naturalSize],
   )
+  const loadFailed = failedSrc === src
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -510,6 +516,17 @@ export default function CanvasPreviewSurface({
           aria-label={alt}
           className={`block h-full w-full select-none ${imageClassName ?? ""}`.trim()}
         />
+        {loadFailed ? (
+          <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center p-4">
+            <div
+              role="alert"
+              className="status-banner max-w-sm text-center text-sm font-medium"
+              data-tone="error"
+            >
+              {t("canvas_preview_load_failed")}
+            </div>
+          </div>
+        ) : null}
         {overlay && imageRect ? (
           <div
             className="pointer-events-none absolute inset-0"

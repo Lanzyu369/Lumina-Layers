@@ -463,6 +463,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "2D 预览图",
     en: "2D preview image",
   },
+  canvas_preview_load_failed: {
+    zh: "预览资源加载失败。请重新生成预览或刷新后再试。",
+    en: "Preview resource failed to load. Regenerate the preview or refresh and try again.",
+  },
   conv_palette_step1: {
     zh: "### 1. 原图颜色（点击预览图）",
     en: "### 1. Original Color (Click Preview)",
