@@ -18,7 +18,7 @@ const CATALOG = [
     items: [
       {
         name: "Bambu Lab - PLA - Test",
-        path: "/fake/test.json",
+        path: "lut-ref/fp-1.json",
         fingerprint: "fp-1",
         color_mode: "4-Color (RYBW)",
         source_kind: "legacy_lookup",
@@ -35,7 +35,7 @@ const CATALOG = [
     items: [
       {
         name: "Aliz - PETG - Test",
-        path: "/fake/aliz.json",
+        path: "lut-ref/fp-2.json",
         fingerprint: "fp-2",
         color_mode: "4-Color (CMYW)",
         source_kind: "legacy_lookup",
@@ -112,8 +112,8 @@ function buildDetail(
   };
 }
 
-const DETAIL_A = buildDetail("Bambu Lab - PLA - Test", "fp-1", "/fake/test.json");
-const DETAIL_B = buildDetail("Aliz - PETG - Test", "fp-2", "/fake/aliz.json");
+const DETAIL_A = buildDetail("Bambu Lab - PLA - Test", "fp-1", "lut-ref/fp-1.json");
+const DETAIL_B = buildDetail("Aliz - PETG - Test", "fp-2", "lut-ref/fp-2.json");
 
 function makeAxiosLikeError(
   message: string,
@@ -241,6 +241,8 @@ describe("LutDetailsPanel", () => {
     expect(screen.getByTestId("lut-details-primary-column")).toContainElement(screen.getByText("摘要"));
     expect(screen.getByTestId("lut-details-secondary-column")).toContainElement(screen.getByTestId("lut-details-lab-chart"));
     expect(screen.getByText("摘要")).toBeInTheDocument();
+    expect(screen.getByText("公开引用")).toBeInTheDocument();
+    expect(screen.getByText("lut-ref/fp-1.json")).toBeInTheDocument();
     expect(screen.getByTestId("lut-details-lab-chart")).toBeInTheDocument();
     expect(screen.getByTestId("lut-details-rgb-chart")).toBeInTheDocument();
     expect(screen.getByTestId("lut-details-hue-lightness-chart")).toBeInTheDocument();

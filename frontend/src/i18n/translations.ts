@@ -2172,8 +2172,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Fingerprint",
   },
   lut_details_summary_path: {
-    zh: "路径",
-    en: "Path",
+    zh: "公开引用",
+    en: "Public reference",
   },
   lut_details_metadata_title: {
     zh: "类型化元数据",
