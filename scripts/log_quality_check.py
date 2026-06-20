@@ -627,7 +627,7 @@ def run_fast_mode(temp_log_path: Path, workflow: list[str]) -> dict[str, Any]:
             with ExitStack() as stack:
                 for patch_context in patch_contexts:
                     stack.enter_context(patch_context)
-                with TestClient(app) as client:
+                with TestClient(app, base_url="http://localhost:8000") as client:
                     _execute_workflow(client, workflow)
             _flush_lumina_handlers()
         finally:

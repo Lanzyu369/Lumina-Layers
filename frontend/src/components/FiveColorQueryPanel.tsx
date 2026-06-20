@@ -25,6 +25,8 @@ import {
   resolveSectionCardClass,
 } from "./ui/panelPrimitives"
 
+const RAW_STATUS_CODE_ERROR = /^Request failed with status code \d{3}$/i
+
 export default function FiveColorQueryPanel() {
   const { t } = useI18n()
   const workspace = useWorkspaceMode()
@@ -730,10 +732,14 @@ function resolveFiveColorError(
   error: string,
   t: (key: string) => string,
 ): string {
-  if (error.startsWith("five_color_")) {
-    return t(error)
+  const normalized = error.trim()
+  if (normalized.startsWith("five_color_")) {
+    return t(normalized)
   }
-  return t("five_color_error_generic")
+  if (!normalized || RAW_STATUS_CODE_ERROR.test(normalized)) {
+    return t("five_color_error_generic")
+  }
+  return normalized
 }
 
 function ColorMatchChip({

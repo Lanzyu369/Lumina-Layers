@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 import os
 import sys
+from typing import NoReturn
 import uuid
 
 import cv2
@@ -106,6 +107,10 @@ _PREVIEW_CACHE_TRANSACTION_UNAVAILABLE_DETAIL = (
     "Preview cache is unavailable. "
     "Re-run preview before changing replacement colors."
 )
+CONVERTER_REPLACE_CACHE_CONFLICT_DETAIL = (
+    "Preview cache changed while replacement tools were running. "
+    "Re-run preview and try again."
+)
 REGION_REQUANTIZE_MATERIALS_UNAVAILABLE_DETAIL = (
     "Region re-quantisation cannot load the selected material archives. "
     "Re-select the materials and run preview again."
@@ -195,6 +200,29 @@ def _raise_region_requantize_error(
         },
     )
     raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+def _raise_replace_cache_conflict(
+    exc: PreviewCacheRevisionConflict,
+    *,
+    session_id: str,
+    operation: str,
+) -> NoReturn:
+    log.warning(
+        "Preview cache conflict during replacement tool",
+        extra={
+            "event": "converter_replace_cache_conflict",
+            "session_id": session_id,
+            "operation": operation,
+            "status_code": 409,
+            "error_type": type(exc).__name__,
+            "error_message": str(exc),
+        },
+    )
+    raise HTTPException(
+        status_code=409,
+        detail=CONVERTER_REPLACE_CACHE_CONFLICT_DETAIL,
+    ) from exc
 
 
 @contextmanager
@@ -837,7 +865,11 @@ def replace_color(
     except HTTPException:
         raise
     except PreviewCacheRevisionConflict as e:
-        raise HTTPException(status_code=409, detail=str(e)) from e
+        _raise_replace_cache_conflict(
+            e,
+            session_id=request.session_id,
+            operation="replace_color",
+        )
     except REPLACE_HANDLED_ERRORS as e:
         _handle_core_error(e, "Color replacement")
 
@@ -957,7 +989,11 @@ def reset_replacements(
     except HTTPException:
         raise
     except PreviewCacheRevisionConflict as e:
-        raise HTTPException(status_code=409, detail=str(e)) from e
+        _raise_replace_cache_conflict(
+            e,
+            session_id=request.session_id,
+            operation="reset_replacements",
+        )
     except REPLACE_HANDLED_ERRORS as e:
         _handle_core_error(e, "Reset replacements")
 
@@ -1704,7 +1740,11 @@ def region_replace(
     except HTTPException:
         raise
     except PreviewCacheRevisionConflict as e:
-        raise HTTPException(status_code=409, detail=str(e)) from e
+        _raise_replace_cache_conflict(
+            e,
+            session_id=request.session_id,
+            operation="region_replace",
+        )
     except REPLACE_HANDLED_ERRORS as e:
         _handle_core_error(e, "Region replacement")
     finally:
@@ -2359,7 +2399,11 @@ def replace_colors_batch(
     except HTTPException:
         raise
     except PreviewCacheRevisionConflict as e:
-        raise HTTPException(status_code=409, detail=str(e)) from e
+        _raise_replace_cache_conflict(
+            e,
+            session_id=request.session_id,
+            operation="replace_colors_batch",
+        )
     except REPLACE_HANDLED_ERRORS as e:
         _handle_core_error(e, "Batch color replacement")
     finally:
@@ -2493,7 +2537,11 @@ def region_replace_batch(
     except HTTPException:
         raise
     except PreviewCacheRevisionConflict as e:
-        raise HTTPException(status_code=409, detail=str(e)) from e
+        _raise_replace_cache_conflict(
+            e,
+            session_id=request.session_id,
+            operation="region_replace_batch",
+        )
     except REPLACE_HANDLED_ERRORS as e:
         _handle_core_error(e, "Batch region replacement")
     finally:
@@ -3439,7 +3487,11 @@ def apply_recipe_override(
     except HTTPException:
         raise
     except PreviewCacheRevisionConflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        _raise_replace_cache_conflict(
+            exc,
+            session_id=request.session_id,
+            operation="apply_recipe_override",
+        )
     except (ValueError, TypeError, OSError, RuntimeError) as exc:
         import traceback
         log.error(

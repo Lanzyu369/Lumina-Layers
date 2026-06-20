@@ -109,6 +109,18 @@ function makeHeavyState(): ConverterState {
     replacement_regions: Array.from({ length: 50 }, (_, i) =>
       makeReplacementRegion(i),
     ),
+    free_color_set: new Set(
+      Array.from(
+        { length: 80 },
+        (_, i) => i.toString(16).padStart(6, "0"),
+      ),
+    ),
+    recipe_overrides: Array.from({ length: 40 }, (_, i) => ({
+      region_id: `region-${i}`,
+      recipe: [0, 1, 2, 4],
+      layer_order: "Top2Bottom",
+      virtual_materials: [{ name: `Virtual ${i}`, hex: "#101010" }],
+    })),
   });
 }
 
@@ -129,6 +141,8 @@ function applyTiersInOrder(
       next.relief.color_height_map = null;
     } else if (tier === 3) {
       next.color_replacement.replacement_regions = null;
+      next.color_replacement.free_color_set = null;
+      next.color_replacement.recipe_overrides = null;
     } else if (tier === 4) {
       next.puzzle.puzzleStyle = null;
       next.puzzle.puzzleSizingMode = null;
@@ -198,6 +212,15 @@ describe("buildAdvancedParams — groups populated when toggles enabled", () => 
       puzzleEnabled: true,
       largeFormatEnabled: true,
       replacement_regions: [makeReplacementRegion(0), makeReplacementRegion(1)],
+      free_color_set: new Set(["ff0000", "#00ff00"]),
+      recipe_overrides: [
+        {
+          region_id: "region-a",
+          recipe: [0, 1, 2, 4],
+          layer_order: "Top2Bottom",
+          virtual_materials: [{ name: "Matte Black", hex: "#101010" }],
+        },
+      ],
     });
 
     const result = buildAdvancedParams(state, "converter", {
@@ -260,6 +283,18 @@ describe("buildAdvancedParams — groups populated when toggles enabled", () => 
 
     // Color replacement regions preserved.
     expect(result.color_replacement.replacement_regions).toHaveLength(2);
+    expect(result.color_replacement.free_color_set).toEqual([
+      "#ff0000",
+      "#00ff00",
+    ]);
+    expect(result.color_replacement.recipe_overrides).toEqual([
+      {
+        region_id: "region-a",
+        recipe: [0, 1, 2, 4],
+        layer_order: "Top2Bottom",
+        virtual_materials: [{ name: "Matte Black", hex: "#101010" }],
+      },
+    ]);
     expect(result.color_replacement).not.toHaveProperty(
       "replacement_regions_truncated",
     );
@@ -377,6 +412,49 @@ describe("buildAdvancedParams — length cap truncation", () => {
     expect(result.color_replacement.replacement_regions_truncated).toBe(true);
   });
 
+  it("caps free_color_set at 64 items and sets free_color_set_truncated", () => {
+    const state = makeState({
+      free_color_set: new Set(
+        Array.from(
+          { length: 80 },
+          (_, i) => i.toString(16).padStart(6, "0"),
+        ),
+      ),
+    });
+    const result = buildAdvancedParams(state, "converter", {
+      maxBytes: 1_000_000,
+    }) as AdvancedParamsFull;
+
+    expect(result.color_replacement.free_color_set).not.toBeNull();
+    expect(result.color_replacement.free_color_set).toHaveLength(64);
+    expect(result.color_replacement.free_color_set![0]).toBe("#000000");
+    expect(result.color_replacement.free_color_set_truncated).toBe(true);
+  });
+
+  it("caps recipe_overrides at 32 items and sets recipe_overrides_truncated", () => {
+    const state = makeState({
+      recipe_overrides: Array.from({ length: 40 }, (_, i) => ({
+        region_id: `region-${i}`,
+        recipe: [0, 1, 2, 4],
+        layer_order: "Top2Bottom",
+        virtual_materials: [{ name: `Virtual ${i}`, hex: "#101010" }],
+      })),
+    });
+    const result = buildAdvancedParams(state, "converter", {
+      maxBytes: 1_000_000,
+    }) as AdvancedParamsFull;
+
+    expect(result.color_replacement.recipe_overrides).not.toBeNull();
+    expect(result.color_replacement.recipe_overrides).toHaveLength(32);
+    expect(result.color_replacement.recipe_overrides![0]).toEqual({
+      region_id: "region-0",
+      recipe: [0, 1, 2, 4],
+      layer_order: "Top2Bottom",
+      virtual_materials: [{ name: "Virtual 0", hex: "#101010" }],
+    });
+    expect(result.color_replacement.recipe_overrides_truncated).toBe(true);
+  });
+
   it("does not set truncation flags when collections are at or under the caps", () => {
     const state = makeState({
       enable_relief: true,
@@ -386,6 +464,17 @@ describe("buildAdvancedParams — length cap truncation", () => {
       replacement_regions: Array.from({ length: 32 }, (_, i) =>
         makeReplacementRegion(i),
       ),
+      free_color_set: new Set(
+        Array.from(
+          { length: 64 },
+          (_, i) => i.toString(16).padStart(6, "0"),
+        ),
+      ),
+      recipe_overrides: Array.from({ length: 32 }, (_, i) => ({
+        region_id: `region-${i}`,
+        recipe: [0, 1, 2],
+        layer_order: "Top2Bottom",
+      })),
     });
     const result = buildAdvancedParams(state, "converter", {
       maxBytes: 1_000_000,
@@ -395,6 +484,12 @@ describe("buildAdvancedParams — length cap truncation", () => {
     expect(result.fridge_magnet).not.toHaveProperty("fridge_magnets_truncated");
     expect(result.color_replacement).not.toHaveProperty(
       "replacement_regions_truncated",
+    );
+    expect(result.color_replacement).not.toHaveProperty(
+      "free_color_set_truncated",
+    );
+    expect(result.color_replacement).not.toHaveProperty(
+      "recipe_overrides_truncated",
     );
   });
 });

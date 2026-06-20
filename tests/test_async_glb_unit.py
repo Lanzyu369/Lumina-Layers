@@ -14,8 +14,8 @@ Covers / 覆盖范围:
        keeps reporting the newer token.
        job_token 守护：新任务覆盖未完成任务后，旧线程的结果被丢弃。
     4. Failure path: if ``generate_segmented_glb`` raises, ``status``
-       becomes ``error`` and the error text is surfaced.
-       失败路径：后台抛错时状态切换为 ``error`` 并回传错误消息。
+       becomes ``error`` and a safe public error text is surfaced.
+       失败路径：后台抛错时状态切换为 ``error`` 并回传安全公开文案。
 
     The tests monkeypatch ``generate_segmented_glb`` so they can exercise
     the async scheduler deterministically without spending 30+ seconds on
@@ -28,6 +28,7 @@ Covers / 覆盖范围:
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from pathlib import Path
@@ -49,6 +50,7 @@ from api.session_store import SessionStore
 
 _test_store: SessionStore = SessionStore(ttl=1800)
 _test_registry: FileRegistry = FileRegistry()
+_GLB_STATUS_SAFE_ERROR = "3D preview could not be updated. Re-run preview and try again."
 
 
 def setup_module(module) -> None:
@@ -289,29 +291,51 @@ class TestGlbStatusLifecycle:
             "#ff0000": [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]]
         }
 
-    def test_error_propagated_to_status(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    def test_worker_exception_status_uses_safe_public_error(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         sid = _seed_session(tmp_path)
+        private_path = "/Users/min/private/async-preview.glb"
 
         def broken(_cache: dict) -> str | None:
-            raise RuntimeError("simulated mesh failure")
+            raise OSError(f"cannot write {private_path}: permission denied")
 
         _install_glb_stub(monkeypatch, broken)
+        target_logger = logging.getLogger("lumina.api.routers.converter.async_glb")
+        target_logger.addHandler(caplog.handler)
+        caplog.set_level(logging.WARNING, logger=target_logger.name)
 
-        resp = client.post(
-            "/api/convert/replace-color",
-            json={
-                "session_id": sid,
-                "selected_color": "#ff0000",
-                "replacement_color": "#0000ff",
-            },
-        )
-        assert resp.status_code == 200
+        try:
+            resp = client.post(
+                "/api/convert/replace-color",
+                json={
+                    "session_id": sid,
+                    "selected_color": "#ff0000",
+                    "replacement_color": "#0000ff",
+                },
+            )
+            assert resp.status_code == 200
 
-        final = _wait_for_status(sid, lambda b: b["status"] == "error")
-        assert final["glb_url"] is None
-        assert "simulated mesh failure" in (final["error"] or "")
+            final = _wait_for_status(sid, lambda b: b["status"] == "error")
+            assert final["glb_url"] is None
+            assert final["error"] == _GLB_STATUS_SAFE_ERROR
+            assert private_path not in final["error"]
+            assert "OSError" not in final["error"]
+            assert "permission denied" not in final["error"]
+
+            failure_records = [
+                record
+                for record in caplog.records
+                if getattr(record, "event", "") == "converter_glb_build_failed"
+            ]
+            assert failure_records
+            assert getattr(failure_records[-1], "error_type", "") == "OSError"
+            assert private_path in getattr(failure_records[-1], "error_message", "")
+        finally:
+            target_logger.removeHandler(caplog.handler)
 
     def test_registration_failure_cleans_unregistered_glb(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -352,8 +376,45 @@ class TestGlbStatusLifecycle:
         )
         assert status["status"] == "error"
         assert status["glb_url"] is None
-        assert "forced registry failure" in (status["error"] or "")
+        assert status["error"] == _GLB_STATUS_SAFE_ERROR
+        assert "forced registry failure" not in status["error"]
         assert not glb_path.exists()
+
+    def test_missing_glb_output_uses_safe_status_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A worker that returns no GLB path must not expose helper names."""
+        sid = _seed_session(tmp_path)
+        job_token = "job-token"
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {
+                **_test_store.get(sid)["preview_cache"],
+                "glb_job_token": job_token,
+                "glb_url": None,
+                "glb_error": None,
+            },
+        )
+
+        def builder(_cache: dict, *, output_path: str) -> None:
+            return None
+
+        monkeypatch.setattr(async_glb_module, "generate_segmented_glb", builder)
+        async_glb_module._run_glb_build_job(
+            sid,
+            job_token,
+            _test_store,
+            _test_registry,
+        )
+
+        status = async_glb_module.get_glb_status(
+            _test_store.get(sid)["preview_cache"]
+        )
+        assert status["status"] == "error"
+        assert status["glb_url"] is None
+        assert status["error"] == _GLB_STATUS_SAFE_ERROR
+        assert "generate_segmented_glb" not in status["error"]
 
     def test_superseded_job_cleans_abandoned_glb(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

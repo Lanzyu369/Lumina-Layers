@@ -151,6 +151,95 @@ def test_lut_details_endpoint_canonicalizes_raw_metadata_color_mode(tmp_path: Pa
         lut_router_module.get_lut_details_service = original_factory
 
 
+def test_lut_details_raw_metadata_hides_local_path_strings(tmp_path: Path) -> None:
+    alias_path = tmp_path / "assets" / "lut_details_aliases.json"
+    preset_dir = tmp_path / "lut-preset"
+    alias_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_alias_config(alias_path)
+
+    lut_path = preset_dir / "Bambulab" / "PLA" / "path_meta.json"
+    payload = {
+        "palette": {
+            "White": {
+                "material": "PLA Basic",
+                "hex_color": "#FFFFFF",
+                "color_name": "White",
+            },
+        },
+        "entries": [
+            {
+                "rgb": [255, 255, 255],
+                "lab": [100.0, 0.0, 0.0],
+                "recipe": ["White"],
+            },
+        ],
+        "batch_code": "B-12",
+        "notes": "plain user note",
+        "relative_id": "Bambulab/PLA",
+        "documentation_url": "https://example.test/docs/lut",
+        "color_mode": "4-Color (RYBW)",
+        "source_image_path": "/Users/min/private/secret-source.png",
+        "nested": {
+            "stage_model_path": r"C:\Users\min\private\stage.json",
+            "share_path": r"\\nas\private\share.json",
+            "file_url": "file:///Users/min/private/model.json",
+        },
+        "paths": ["/Users/min/private/a.png", "file:/Users/min/private/list.json", "plain note"],
+        "home_path": "~/private/source.json",
+    }
+    lut_path.parent.mkdir(parents=True, exist_ok=True)
+    lut_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    service = get_lut_details_service(preset_dir=preset_dir, alias_config_path=alias_path)
+
+    from api.routers import lut as lut_router_module
+
+    original_service = lut_router_module._lut_details_service
+    original_factory = lut_router_module.get_lut_details_service
+
+    def _service_factory():
+        return get_lut_details_service(
+            preset_dir=preset_dir,
+            alias_config_path=alias_path,
+        )
+
+    _service_factory.cache_clear = get_lut_details_service.cache_clear  # type: ignore[attr-defined]
+    lut_router_module.get_lut_details_service = _service_factory
+    lut_router_module._lut_details_service = service
+    try:
+        detail_response = client.get("/api/lut/Bambulab - PLA - path_meta/details")
+        assert detail_response.status_code == 200
+        for leaked in (
+            "/Users/min/private",
+            r"C:\Users\min\private",
+            r"\\nas\private",
+            "file:/Users/min/private",
+            "file:///Users/min/private",
+            "~/private",
+            "secret-source.png",
+            "stage.json",
+        ):
+            assert leaked not in detail_response.text
+
+        detail = detail_response.json()
+        raw_metadata = detail["raw_metadata"]
+        assert raw_metadata["source_image_path"] == "<local path>"
+        assert raw_metadata["nested"]["stage_model_path"] == "<local path>"
+        assert raw_metadata["nested"]["share_path"] == "<local path>"
+        assert raw_metadata["nested"]["file_url"] == "<local path>"
+        assert raw_metadata["paths"] == ["<local path>", "<local path>", "plain note"]
+        assert raw_metadata["home_path"] == "<local path>"
+        assert raw_metadata["batch_code"] == "B-12"
+        assert raw_metadata["notes"] == "plain user note"
+        assert raw_metadata["relative_id"] == "Bambulab/PLA"
+        assert raw_metadata["documentation_url"] == "https://example.test/docs/lut"
+        assert raw_metadata["palette"]["White"]["color_name"] == "White"
+        assert raw_metadata["color_mode"] == "4-Color (RYBW)"
+    finally:
+        lut_router_module._lut_details_service = original_service
+        lut_router_module.get_lut_details_service = original_factory
+
+
 def test_lut_details_catalog_endpoint_returns_500_when_all_catalog_entries_fail_to_parse(tmp_path: Path) -> None:
     alias_path = tmp_path / "assets" / "lut_details_aliases.json"
     preset_dir = tmp_path / "lut-preset"

@@ -437,6 +437,17 @@ describe("FiveColorQueryPanel target color match", () => {
     expect(screen.queryByText("Request failed with status code 500")).not.toBeInTheDocument();
   });
 
+  it("renders backend error detail strings in the shared error banner", () => {
+    useFiveColorStore.setState({
+      error: "Selected LUT does not contain five-color recipes",
+    });
+
+    render(<FiveColorQueryPanel />);
+
+    expect(screen.getByText("Selected LUT does not contain five-color recipes")).toBeInTheDocument();
+    expect(screen.queryByText("五色操作失败")).not.toBeInTheDocument();
+  });
+
   it("keeps swatch download failures in the panel with visible language", async () => {
     const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
     vi.mocked(downloadResourceBlob).mockRejectedValueOnce(

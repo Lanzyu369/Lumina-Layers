@@ -108,6 +108,14 @@ COLORCHECKER_SERVICE_UNAVAILABLE_DETAIL = (
 EXTRACTOR_LUT_DOWNLOAD_REGISTRATION_FAILED_DETAIL = (
     "Extractor LUT download could not be prepared. Try the extraction again."
 )
+MANUAL_FIX_TARGET_OUT_OF_RANGE_DETAIL = (
+    "Manual correction target is outside the current LUT. "
+    "Refresh the preview and try again."
+)
+MANUAL_FIX_INVALID_COLOR_DETAIL = (
+    "Manual correction color is invalid. Use a valid hex or RGB color."
+)
+MANUAL_FIX_FAILED_DETAIL = "Manual fix failed"
 
 
 @dataclass(frozen=True)
@@ -143,6 +151,17 @@ def _handle_core_error(e: Exception, context: str) -> None:
         },
     )
     raise to_http_exception(e, context)
+
+
+def _manual_fix_validation_detail(status_msg: str | None) -> str | None:
+    """Map legacy manual-fix sentinel messages to safe client errors."""
+    if not isinstance(status_msg, str):
+        return None
+    if "索引超出范围" in status_msg:
+        return MANUAL_FIX_TARGET_OUT_OF_RANGE_DETAIL
+    if "格式错误" in status_msg:
+        return MANUAL_FIX_INVALID_COLOR_DETAIL
+    return None
 
 
 def _register_final_lut_download(
@@ -1645,7 +1664,10 @@ def extractor_manual_fix(
     manual_fix_ms = (time.perf_counter() - manual_fix_start) * 1000.0
 
     if preview_result is None:
-        raise HTTPException(status_code=500, detail=status_msg or "Manual fix failed")
+        validation_detail = _manual_fix_validation_detail(status_msg)
+        if validation_detail:
+            raise HTTPException(status_code=422, detail=validation_detail)
+        raise HTTPException(status_code=500, detail=MANUAL_FIX_FAILED_DETAIL)
 
     # Register updated preview
     preview_bytes = _image_to_png_bytes(preview_result)

@@ -16,8 +16,6 @@ function makeMaterial(
   },
 ): SavedMaterialLibraryItem {
   return {
-    archive_path: `materials/${overrides.directory_name}/material.json`,
-    stage_a_params_path: `materials/${overrides.directory_name}/stage_A_parameters.json`,
     material_file_url: `/api/files/${overrides.directory_name}-material`,
     stage_a_params_url: `/api/files/${overrides.directory_name}-stage-a`,
     created_at: "2026-04-17T00:00:00Z",

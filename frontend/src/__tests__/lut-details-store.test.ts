@@ -96,6 +96,22 @@ function buildDetail(
 const DETAIL_A = buildDetail("Bambu Lab - PLA - RYBW", "fp-a", "/fake/a.json");
 const DETAIL_B = buildDetail("Aliz - PETG - CMYW", "fp-b", "/fake/b.json");
 
+function makeAxiosLikeError(
+  message: string,
+  status: number,
+  data: unknown,
+): Error & { response: { status: number; data: unknown; headers: Record<string, string> } } {
+  return Object.assign(new Error(message), {
+    response: { status, data, headers: {} },
+  });
+}
+
+function expectNoRawHttpError(error: string | null): void {
+  expect(error).toBeTruthy();
+  expect(error).not.toMatch(/Request failed/i);
+  expect(error).not.toMatch(/status code\s+\d{3}/i);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   useLutDetailsStore.setState({
@@ -241,6 +257,42 @@ describe("useLutDetailsStore", () => {
     expect(state.error).toBe("detail failed");
     expect(state.errorKind).toBe("detail");
     expect(state.isSelectionDirty).toBe(true);
+  });
+
+  it("uses readable backend detail when a LUT detail request fails", async () => {
+    mockFetchLutDetailsCatalog.mockResolvedValue({ groups: CATALOG });
+    mockFetchLutDetails
+      .mockResolvedValueOnce(DETAIL_A)
+      .mockRejectedValueOnce(makeAxiosLikeError(
+        "Request failed with status code 404",
+        404,
+        { detail: "LUT not found: stale" },
+      ));
+
+    await useLutDetailsStore.getState().fetchCatalog();
+    await useLutDetailsStore.getState().loadSelectedLut();
+    useLutDetailsStore.getState().selectLut("Aliz - PETG - CMYW");
+    await useLutDetailsStore.getState().loadSelectedLut();
+
+    const state = useLutDetailsStore.getState();
+    expect(state.error).toBe("LUT not found: stale");
+    expectNoRawHttpError(state.error);
+    expect(state.errorKind).toBe("detail");
+    expect(state.loadedLutName).toBe("Bambu Lab - PLA - RYBW");
+  });
+
+  it("normalizes generic network failures for LUT detail requests", async () => {
+    mockFetchLutDetailsCatalog.mockResolvedValue({ groups: CATALOG });
+    mockFetchLutDetails.mockRejectedValueOnce(new Error("Network Error"));
+
+    await useLutDetailsStore.getState().fetchCatalog();
+    await useLutDetailsStore.getState().loadSelectedLut();
+
+    const state = useLutDetailsStore.getState();
+    expectNoRawHttpError(state.error);
+    expect(state.error).not.toBe("Network Error");
+    expect(state.error).not.toBe("lut_details_error_load_detail");
+    expect(state.errorKind).toBe("detail");
   });
 
   it("refreshes the loaded detail when the catalog refresh changes the same-name fingerprint", async () => {

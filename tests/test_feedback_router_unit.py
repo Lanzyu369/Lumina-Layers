@@ -227,7 +227,10 @@ def test_submit_bug_report_rejects_unregistered_final_artifact_disk_path(
         final_artifact = ticket_json["attachments"]["final_artifact"]
         assert final_artifact["status"] == "expired_ttl"
 
-        ticket_dir = Path(data["dump_path"])
+        month_dir = next(
+            p for p in feedback_root.iterdir() if p.is_dir() and p.name.startswith("20")
+        )
+        ticket_dir = month_dir / data["ticket_id"]
         assert not (ticket_dir / "final.3mf").exists()
         assert not (ticket_dir / "final.zip").exists()
     finally:
@@ -250,9 +253,14 @@ def test_submit_bug_report_accepts_description_only(client: TestClient) -> None:
 
 def test_submit_bug_report_returns_pending_email_status_when_configured(
     client: TestClient,
+    feedback_root: Path,
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    async def _send(**_kwargs: Any) -> bool:
+    email_calls: list[dict[str, Any]] = []
+
+    async def _send(**kwargs: Any) -> bool:
+        email_calls.append(kwargs)
         return True
 
     monkeypatch.setenv("LUMINA_FEEDBACK_SMTP_HOST", "localhost")
@@ -263,7 +271,17 @@ def test_submit_bug_report_returns_pending_email_status_when_configured(
 
     feedback_email.is_email_configured.cache_clear()
 
-    response = client.post("/api/feedback/bug-report", json=_payload(description="Email ok"))
+    private_path = tmp_path / "private-output" / "model.3mf"
+    payload = _payload(description="Email ok")
+    payload["context"]["active_final_artifact_ref"] = {
+        "session_id": "session-abcdef",
+        "download_url": None,
+        "artifact_type": "3mf",
+        "disk_path": private_path.as_posix(),
+        "source": "converter",
+    }
+
+    response = client.post("/api/feedback/bug-report", json=payload)
 
     assert response.status_code == 200
     data = response.json()
@@ -272,6 +290,15 @@ def test_submit_bug_report_returns_pending_email_status_when_configured(
     assert data["emailed"] is False
     assert data["email_status"] == "pending"
     assert data["relay_available"] is True
+    email_payload = email_calls[0]["request_payload"]
+    active_ref = email_payload["context"]["active_final_artifact_ref"]
+    assert "disk_path" not in active_ref
+    assert private_path.as_posix() not in json.dumps(email_payload, ensure_ascii=False)
+    email_dump_path = email_calls[0]["dump_path"]
+    assert email_dump_path.startswith("feedback/")
+    assert data["ticket_id"] in email_dump_path
+    assert not Path(email_dump_path).is_absolute()
+    assert feedback_root.as_posix() not in email_dump_path
 
 
 def test_submit_bug_report_assembly_marks_done_after_background_task(
@@ -680,6 +707,70 @@ def test_relay_bug_report_forwards_to_configured_relay(
     ]
     assert len(infos) == 1
     assert infos[0].relay_status_code == 202
+
+
+def test_relay_bug_report_redacts_final_artifact_disk_path(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Relay payloads must not forward local or server disk paths.
+
+    官方转发 payload 不应包含本机或服务器磁盘路径。
+    """
+    import httpx
+
+    calls: list[dict[str, Any]] = []
+
+    class _Response:
+        status_code = 202
+
+        def raise_for_status(self) -> None:
+            return None
+
+    class _Client:
+        def __init__(self, *, timeout: float) -> None:
+            self.timeout = timeout
+
+        async def __aenter__(self) -> "_Client":
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def post(
+            self,
+            url: str,
+            *,
+            json: dict[str, Any],
+            headers: dict[str, str],
+        ) -> _Response:
+            calls.append({"url": url, "json": json, "headers": headers})
+            return _Response()
+
+    private_path = tmp_path / "private-output" / "model.3mf"
+    payload = _payload()
+    payload["context"]["active_final_artifact_ref"] = {
+        "session_id": "session-abcdef",
+        "download_url": None,
+        "artifact_type": "3mf",
+        "disk_path": private_path.as_posix(),
+        "source": "converter",
+    }
+
+    monkeypatch.setenv("LUMINA_FEEDBACK_RELAY_URL", "https://relay.example.test/feedback")
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+
+    response = client.post(
+        "/api/feedback/bug-report/relay",
+        json={"ticket_id": "abc12345", "request_payload": payload},
+    )
+
+    assert response.status_code == 200
+    relayed_payload = calls[0]["json"]["request_payload"]
+    active_ref = relayed_payload["context"]["active_final_artifact_ref"]
+    assert "disk_path" not in active_ref
+    assert private_path.as_posix() not in json.dumps(relayed_payload, ensure_ascii=False)
 
 
 def test_relay_bug_report_returns_502_when_relay_fails(
