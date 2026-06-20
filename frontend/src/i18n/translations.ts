@@ -5757,6 +5757,18 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "导出失败：{error}",
     en: "Export failed: {error}",
   },
+  recipe_export_error_no_image: {
+    zh: "请先载入图片。",
+    en: "Load an image first.",
+  },
+  recipe_export_error_no_preview: {
+    zh: "请先生成预览后再导出。",
+    en: "Generate a preview before exporting.",
+  },
+  recipe_export_error_unknown: {
+    zh: "导出没有完成，请稍后重试。",
+    en: "The export did not finish. Please try again.",
+  },
   recipe_import_title: {
     zh: "导入分享卡",
     en: "Import Share Card",
