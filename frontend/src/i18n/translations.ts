@@ -2842,6 +2842,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "校色器原图上传或预览生成超时。图片较大或网络较慢时可能发生，请重试或使用更快网络。",
     en: "Timed out while uploading the source image or preparing its preview. This can happen with large images or slow networks. Please retry or use a faster connection.",
   },
+  ext_cc_source_prepare_failed: {
+    zh: "原图上传或预览生成失败，请重试。",
+    en: "Failed to upload the source image or prepare its preview. Please retry.",
+  },
   ext_cc_auto_detect_timeout: {
     zh: "ColorChecker 自动识别超时。请重试，或手动点选四个色卡角点。",
     en: "ColorChecker auto detection timed out. Please retry or mark the four chart corners manually.",
