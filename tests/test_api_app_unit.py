@@ -332,6 +332,72 @@ class TestRequestIdHeader:
         assert resp.headers.get("x-request-id") == req_id
 
 
+class TestValidationErrorSanitization:
+    """Verify global 422 validation responses do not echo submitted values."""
+
+    def test_validation_error_response_redacts_original_input(
+        self,
+        client: TestClient,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        target_logger = logging.getLogger("lumina.api.app")
+        target_logger.addHandler(caplog.handler)
+        caplog.set_level(logging.WARNING, logger=target_logger.name)
+        private_path = "/Users/min/private-path"
+        secret_token = "secret-token-should-not-return"
+
+        try:
+            response = client.post(
+                "/api/system/settings",
+                json={
+                    "last_lut": "",
+                    "last_modeling_mode": "high-fidelity",
+                    "last_color_mode": "4-Color",
+                    "last_slicer": "",
+                    "palette_mode": "swatch",
+                    "enable_crop_modal": {
+                        "path": private_path,
+                        "token": secret_token,
+                    },
+                    "nozzle_size": "0.4",
+                },
+            )
+        finally:
+            target_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 422
+        body = response.json()
+        assert isinstance(body["detail"], list)
+        assert body["detail"]
+        first_error = body["detail"][0]
+        assert first_error["type"] == "bool_type"
+        assert first_error["loc"] == ["body", "enable_crop_modal"]
+        assert first_error["msg"] == "Input should be a valid boolean"
+        for error in body["detail"]:
+            assert set(error) <= {"type", "loc", "msg"}
+
+        response_text = response.text
+        assert "input" not in response_text
+        assert "ctx" not in response_text
+        assert "url" not in response_text
+        assert private_path not in response_text
+        assert secret_token not in response_text
+
+        records = [
+            record for record in caplog.records
+            if getattr(record, "event", None) == "api_validation_failed"
+        ]
+        assert len(records) == 1
+        assert records[0].error_type == "RequestValidationError"
+        assert records[0].validation_error_count == 1
+        assert (
+            records[0].error_message
+            == "body.enable_crop_modal: Input should be a valid boolean"
+        )
+        assert private_path not in records[0].error_message
+        assert secret_token not in records[0].error_message
+
+
 class TestClientLogEndpoint:
     """Verify frontend diagnostic logs are bounded before server logging."""
 

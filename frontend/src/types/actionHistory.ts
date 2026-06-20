@@ -61,6 +61,26 @@ export interface ColorReplacementScalarItem {
 }
 
 /**
+ * Scalar-only virtual material attached to a custom recipe override.
+ * 自定义配方覆盖中携带的虚拟耗材定义。
+ */
+export interface AdvancedParamsVirtualMaterial {
+  name: string;
+  hex: string;
+}
+
+/**
+ * Region-level custom recipe override captured for reproducibility.
+ * 反馈复现用的区域级自定义配方覆盖。
+ */
+export interface AdvancedParamsRecipeOverride {
+  region_id: string;
+  recipe: number[];
+  layer_order: string;
+  virtual_materials?: AdvancedParamsVirtualMaterial[];
+}
+
+/**
  * Target geometry inputs used by every converter generation.
  * 所有转换生成流程都会用到的目标几何参数。
  *
@@ -249,6 +269,10 @@ export interface AdvancedParamsLargeFormat {
 export interface AdvancedParamsColorReplacement {
   replacement_regions: ColorReplacementScalarItem[] | null;
   replacement_regions_truncated?: boolean;
+  free_color_set: string[] | null;
+  free_color_set_truncated?: boolean;
+  recipe_overrides: AdvancedParamsRecipeOverride[] | null;
+  recipe_overrides_truncated?: boolean;
 }
 
 /**

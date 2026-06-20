@@ -16,7 +16,8 @@ FastAPI 会话/状态），现在作为主应用内部共享逻辑保留，避�
 
 from __future__ import annotations
 
-from pathlib import Path
+import hashlib
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 import numpy as np
@@ -24,6 +25,11 @@ import numpy as np
 from api.schemas.lut import LutInfoResponseV2, PaletteEntrySchema
 from config import LUTMetadata, get_capabilities, get_schema_version
 from core.lut_merger import LUTMerger
+from core.native_reference import (
+    get_reference_db_root,
+    get_reference_forward_model_root,
+    get_reference_model_pack_root,
+)
 from utils.lut_manager import LUTManager
 
 # Canonical hex for the well-known primary / secondary channel names used by
@@ -100,6 +106,123 @@ def canonicalize_source_catalog_color_modes(catalog: dict) -> dict:
                 {
                     **option,
                     "color_mode": canonicalize_public_color_mode(option.get("color_mode")),
+                }
+                for option in group.get("db_options", [])
+            ],
+        }
+        for group in catalog.get("native_brand_groups", [])
+    ]
+    return {
+        **catalog,
+        "legacy_groups": legacy_groups,
+        "native_brand_groups": native_brand_groups,
+    }
+
+
+def _public_lut_reference_roots() -> tuple[tuple[str, Path], ...]:
+    return (
+        ("lut-preset", Path(LUTManager.LUT_PRESET_DIR)),
+        ("reference-db", get_reference_db_root()),
+        ("reference-pack", get_reference_model_pack_root()),
+        ("reference-model", get_reference_forward_model_root()),
+    )
+
+
+def _lut_reference_suffix(path_text: str) -> str:
+    suffix = PureWindowsPath(path_text).suffix or Path(path_text).suffix
+    return suffix.lower()
+
+
+def _hashed_lut_reference(path_text: str) -> str:
+    normalized = path_text.replace("\\", "/")
+    digest = hashlib.sha256(normalized.encode("utf-8", "surrogatepass")).hexdigest()[:12]
+    return f"lut-ref/{digest}{_lut_reference_suffix(path_text)}"
+
+
+def _is_absolute_path_like(path_text: str) -> bool:
+    windows_path = PureWindowsPath(path_text)
+    return (
+        Path(path_text).is_absolute()
+        or windows_path.is_absolute()
+        or bool(windows_path.drive)
+    )
+
+
+def _safe_relative_lut_reference(path_text: str) -> str | None:
+    normalized = path_text.replace("\\", "/").strip()
+    while normalized.startswith("./"):
+        normalized = normalized[2:]
+    parts = tuple(part for part in normalized.split("/") if part and part != ".")
+    if not parts or any(part == ".." or part.startswith("~") for part in parts):
+        return None
+    return "/".join(parts)
+
+
+def public_lut_path_reference(path: str | Path | None) -> str:
+    """Return a stable non-sensitive reference for public LUT API payloads.
+    返回公开 LUT API 载荷使用的稳定非敏感引用。
+
+    Args:
+        path: Internal filesystem path or legacy relative path.
+            (内部文件路径或旧版相对路径)
+
+    Returns:
+        A public reference that never exposes user directories or unknown
+        absolute filenames. Known application roots are represented as
+        relative catalog references; unknown absolute paths are hash-only
+        references. (不暴露用户目录或未知绝对文件名的公开引用)
+    """
+    path_text = str(path or "").strip()
+    if not path_text:
+        return ""
+
+    try:
+        resolved_path = Path(path_text).resolve(strict=False)
+        for public_root, root_path in _public_lut_reference_roots():
+            resolved_root = Path(root_path).resolve(strict=False)
+            try:
+                relative = resolved_path.relative_to(resolved_root)
+            except ValueError:
+                continue
+            relative_text = relative.as_posix().strip("/")
+            if relative_text:
+                return f"{public_root}/{relative_text}"
+    except (OSError, RuntimeError, ValueError):
+        pass
+
+    if _is_absolute_path_like(path_text):
+        return _hashed_lut_reference(path_text)
+
+    safe_relative = _safe_relative_lut_reference(path_text)
+    if safe_relative is not None:
+        return safe_relative
+    return _hashed_lut_reference(path_text)
+
+
+def public_lut_source_catalog_paths(catalog: dict) -> dict:
+    """Replace source-catalog filesystem paths with public LUT references.
+    将源目录中的文件系统路径替换为公开 LUT 引用。
+    """
+    legacy_groups = [
+        {
+            **group,
+            "items": [
+                {
+                    **item,
+                    "path": public_lut_path_reference(item.get("path")),
+                }
+                for item in group.get("items", [])
+            ],
+        }
+        for group in catalog.get("legacy_groups", [])
+    ]
+    native_brand_groups = [
+        {
+            **group,
+            "db_options": [
+                {
+                    **option,
+                    "path": public_lut_path_reference(option.get("path")),
                 }
                 for option in group.get("db_options", [])
             ],

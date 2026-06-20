@@ -25,7 +25,7 @@ describe("lut details api", () => {
             items: [
               {
                 name: "Bambu Lab - PLA - RYBW",
-                path: "/fake/a.json",
+                path: "lut-ref/fp-a.json",
                 fingerprint: "fp-a",
                 color_mode: "4-Color (RYBW)",
                 source_kind: "legacy_lookup",
@@ -55,7 +55,7 @@ describe("lut details api", () => {
     mockGet.mockResolvedValueOnce({
       data: {
         name: "Bambu Lab - PLA - RYBW",
-        path: "/fake/a.json",
+        path: "lut-ref/fp-a.json",
         fingerprint: "fp-a",
         manufacturer: "Bambu Lab",
         manufacturer_source: "metadata",

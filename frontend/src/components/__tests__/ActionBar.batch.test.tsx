@@ -535,6 +535,66 @@ describe("ActionBar — auto batch mode", () => {
     expect(screen.queryByText(/Request failed with status code 500/)).not.toBeInTheDocument();
   });
 
+  it("shows a readable share-card export failure when the preview cover image is unavailable", async () => {
+    vi.mocked(recipeImportFlow.exportShareCard).mockRejectedValueOnce(
+      new Error("Failed to load preview image for cover"),
+    );
+
+    useConverterStore.setState({
+      batchMode: false,
+      imageFile: makeFile("preview.png"),
+      lut_name: "test_lut",
+      sessionId: "session-1",
+      previewImageUrl: "/api/files/preview.png",
+      previewBaseImageUrl: "/api/files/preview.png",
+      layerImages: [],
+      layerImagesLoading: false,
+    });
+
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "导出分享卡" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/导出失败：预览图已失效，请重新生成预览后再导出。/),
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByText(/Failed to load preview image for cover/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows a readable sidecar export failure when the preview cover image is unavailable", async () => {
+    vi.mocked(recipeImportFlow.exportSidecar).mockRejectedValueOnce(
+      new Error("Failed to load preview image for cover"),
+    );
+
+    useConverterStore.setState({
+      batchMode: false,
+      imageFile: makeFile("preview.png"),
+      lut_name: "test_lut",
+      sessionId: "session-1",
+      previewImageUrl: "/api/files/preview.png",
+      previewBaseImageUrl: "/api/files/preview.png",
+      layerImages: [],
+      layerImagesLoading: false,
+    });
+
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "导出 JSON" }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/导出失败：预览图已失效，请重新生成预览后再导出。/),
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByText(/Failed to load preview image for cover/),
+    ).not.toBeInTheDocument();
+  });
+
   it("refetches layer images when the 2D preview changes within the same session", async () => {
     const fetchLayerImages = vi.fn();
 

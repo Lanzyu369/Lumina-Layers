@@ -744,8 +744,6 @@ export interface SavedMaterialSummary {
   material_name: string;
   directory_name: string;
   brand?: string | null;
-  archive_path: string;
-  stage_a_params_path: string;
   verification_count?: number;
   created_at?: string | null;
   updated_at?: string | null;
@@ -847,8 +845,6 @@ export interface SavedMaterialLibraryItem {
   brand?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
-  archive_path: string;
-  stage_a_params_path?: string | null;
   material_file_url: string | null;
   stage_a_params_url?: string | null;
   estimated_rgb: number[];
@@ -1039,7 +1035,6 @@ export interface MaterialSolverCacheEntry {
   build_time_seconds: number;
   built_at?: string | null;
   cache_file_size_bytes: number;
-  cache_file_path?: string | null;
 }
 
 /** Status response for a specific ``(palette, N, t, substrate)`` combination. */
@@ -1099,7 +1094,6 @@ export interface MaterialSolverRuntimeEntry {
   inverse_refinement_enabled: boolean;
   built_at?: string | null;
   cache_file_size_bytes: number;
-  cache_file_path?: string | null;
 }
 
 /** Status response for a bounded hybrid runtime combination. */

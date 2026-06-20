@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 import cv2
@@ -230,20 +230,60 @@ class LutParser:
             for key, value in raw_payload.items():
                 if key in {"entries", "runtime_package", "stage_model", "measured_db", "modes"}:
                     continue
-                sanitized[str(key)] = self._json_safe_value(value)
+                key_text = str(key)
+                sanitized[key_text] = self._json_safe_value(value, key=key_text)
             return sanitized
         metadata_dict = metadata.to_dict()
         for heavy_key in ("runtime_package", "stage_model", "measured_db"):
             metadata_dict.pop(heavy_key, None)
-        return metadata_dict
+        return {
+            str(key): self._json_safe_value(value, key=str(key))
+            for key, value in metadata_dict.items()
+        }
 
-    def _json_safe_value(self, value: Any) -> Any:
+    def _json_safe_value(self, value: Any, *, key: str | None = None) -> Any:
         if isinstance(value, bytes):
             return f"<{len(value)} bytes>"
         if isinstance(value, dict):
-            return {str(key): self._json_safe_value(item) for key, item in value.items()}
+            return {
+                str(item_key): self._json_safe_value(item, key=str(item_key))
+                for item_key, item in value.items()
+            }
         if isinstance(value, list):
-            return [self._json_safe_value(item) for item in value]
+            return [self._json_safe_value(item, key=key) for item in value]
         if isinstance(value, tuple):
-            return [self._json_safe_value(item) for item in value]
+            return [self._json_safe_value(item, key=key) for item in value]
+        if isinstance(value, str) and self._is_sensitive_local_path(value, key=key):
+            return "<local path>"
         return value
+
+    def _is_sensitive_local_path(self, value: str, *, key: str | None = None) -> bool:
+        text = value.strip()
+        if not text:
+            return False
+        if self._looks_like_local_path(text):
+            return True
+        return self._is_path_like_metadata_key(key) and text.lower().startswith("file:")
+
+    def _is_path_like_metadata_key(self, key: str | None) -> bool:
+        if not key:
+            return False
+        normalized = key.replace("-", "_").lower()
+        return any(
+            token in normalized
+            for token in ("path", "file", "dir", "folder", "url", "uri")
+        )
+
+    def _looks_like_local_path(self, value: str) -> bool:
+        normalized = value.replace("\\", "/")
+        lower = normalized.lower()
+        if lower.startswith("file://"):
+            return True
+        if normalized.startswith("~/") or normalized == "~":
+            return True
+        if value.startswith("\\\\") or value.startswith("//"):
+            return True
+        windows_path = PureWindowsPath(value)
+        if windows_path.drive:
+            return True
+        return normalized.startswith("/")

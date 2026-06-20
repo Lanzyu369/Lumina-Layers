@@ -24,6 +24,8 @@ const mockDetect = vi.mocked(apiDetectSlicers);
 const mockLaunch = vi.mocked(apiLaunchSlicer);
 const mockValidateCustomPath = vi.mocked(apiValidateCustomSlicerPath);
 
+const RAW_HTTP_STATUS_PATTERN = /Request failed with status code|status code\s+\d{3}/i;
+
 const MOCK_SLICERS: SlicerInfo[] = [
   { id: "bambu_studio", display_name: "Bambu Studio", exe_path: null },
   { id: "orca_slicer", display_name: "OrcaSlicer", exe_path: null },
@@ -80,6 +82,19 @@ describe("detectSlicers", () => {
     await useSlicerStore.getState().detectSlicers();
 
     expect(useSlicerStore.getState().error).toBe("切片软件检测失败");
+  });
+
+  it("失败时不展示原始 HTTP 状态码错误", async () => {
+    mockDetect.mockRejectedValue(
+      new Error("Request failed with status code 500"),
+    );
+
+    await useSlicerStore.getState().detectSlicers();
+
+    const error = useSlicerStore.getState().error;
+    expect(error).toBeTruthy();
+    expect(error).not.toMatch(RAW_HTTP_STATUS_PATTERN);
+    expect(error).toBe("服务器发生内部错误。请使用请求 ID 查看日志。");
   });
 
   it("检测到空列表时 selectedSlicerId 为 null", async () => {
@@ -205,6 +220,22 @@ describe("validateAndSaveCustomSlicerPath", () => {
     expect(useSlicerStore.getState().customPathError).toBe("未识别");
     expect(useSettingsStore.getState().customSlicerPath).toBe("");
   });
+
+  it("校验失败时不展示原始 HTTP 状态码错误", async () => {
+    mockValidateCustomPath.mockRejectedValue(
+      new Error("Request failed with status code 422"),
+    );
+
+    await useSlicerStore
+      .getState()
+      .validateAndSaveCustomSlicerPath("/Applications/Notes.app");
+
+    const error = useSlicerStore.getState().customPathError;
+    expect(error).toBeTruthy();
+    expect(error).not.toMatch(RAW_HTTP_STATUS_PATTERN);
+    expect(error).toBe("请求缺少必填数据或包含无效值。");
+    expect(useSettingsStore.getState().customSlicerPath).toBe("");
+  });
 });
 
 describe("setSelectedSlicerId", () => {
@@ -303,6 +334,22 @@ describe("launchSlicer", () => {
 
     const state = useSlicerStore.getState();
     expect(state.error).toBe("启动失败");
+    expect(state.isLaunching).toBe(false);
+    expect(state.launchMessage).toBeNull();
+  });
+
+  it("启动失败时不展示原始 HTTP 状态码错误", async () => {
+    useSlicerStore.setState({ selectedSlicerId: "bambu_studio" });
+    mockLaunch.mockRejectedValue(
+      new Error("Request failed with status code 500"),
+    );
+
+    await useSlicerStore.getState().launchSlicer("/output/model.3mf");
+
+    const state = useSlicerStore.getState();
+    expect(state.error).toBeTruthy();
+    expect(state.error).not.toMatch(RAW_HTTP_STATUS_PATTERN);
+    expect(state.error).toBe("服务器发生内部错误。请使用请求 ID 查看日志。");
     expect(state.isLaunching).toBe(false);
     expect(state.launchMessage).toBeNull();
   });

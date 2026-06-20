@@ -184,6 +184,29 @@ describe("MaterialCloudSyncPanel", () => {
     expect(banner).not.toHaveTextContent("Request failed with status code 500");
   });
 
+  it("uses install fallback when the selected cloud package is stale", async () => {
+    const staleCatalogDetail =
+      "Selected material registry package is not in current material registry catalog";
+    vi.mocked(installMaterialRegistryCatalogEntry).mockRejectedValueOnce(
+      Object.assign(new Error("Request failed with status code 422"), {
+        response: {
+          status: 422,
+          data: { detail: staleCatalogDetail },
+        },
+      }),
+    );
+
+    render(<MaterialCloudSyncPanel />);
+
+    expect(await screen.findByText("Silk PETG")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /下载到本地|download/i }));
+
+    const banner = await screen.findByTestId("material-cloud-sync-error");
+    expect(banner).toHaveTextContent(/耗材下载失败|Material download failed/i);
+    expect(banner).not.toHaveTextContent(staleCatalogDetail);
+    expect(banner).not.toHaveTextContent("Request failed with status code 422");
+  });
+
   it("reloads the cloud catalog without exposing an official password", async () => {
     render(<MaterialCloudSyncPanel />);
 

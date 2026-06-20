@@ -201,7 +201,7 @@ describe("BugReportModal", () => {
     expect(submitBugReport).not.toHaveBeenCalled();
   });
 
-  it("renders a persistent success view with ticket id, dump path, and a manual close button when not emailed", async () => {
+  it("renders a persistent success view with ticket id and a manual close button when not emailed", async () => {
     vi.mocked(submitBugReport).mockResolvedValueOnce({
       ticket_id: "abc12345",
       emailed: false,
@@ -218,9 +218,8 @@ describe("BugReportModal", () => {
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
 
     expect(await screen.findByTestId("bug-report-ticket-id")).toHaveTextContent("abc12345");
-    expect(screen.getByTestId("bug-report-dump-path")).toHaveTextContent(
-      "feedback/20260429T162531Z_abc.json",
-    );
+    expect(screen.queryByTestId("bug-report-dump-path")).not.toBeInTheDocument();
+    expect(screen.queryByText("feedback/20260429T162531Z_abc.json")).not.toBeInTheDocument();
     expect(
       screen.getByText(
         "本机未配置邮件，报告已保存到本地。请选择官方转发或手动发送。",
@@ -231,7 +230,7 @@ describe("BugReportModal", () => {
     expect(screen.queryByLabelText("问题描述")).not.toBeInTheDocument();
   });
 
-  it("keeps the local dump path visible when the report was emailed", async () => {
+  it("does not show the local dump path when the report was emailed", async () => {
     vi.mocked(submitBugReport).mockResolvedValueOnce({
       ticket_id: "deadbeef",
       emailed: true,
@@ -248,9 +247,10 @@ describe("BugReportModal", () => {
 
     expect(await screen.findByTestId("bug-report-ticket-id")).toHaveTextContent("deadbeef");
     expect(screen.getByText("报告已通过本机邮件发送给开发者。")).toBeInTheDocument();
-    expect(screen.getByTestId("bug-report-dump-path")).toHaveTextContent(
-      "feedback/20260429T162531Z_deadbeef.json",
-    );
+    expect(screen.queryByTestId("bug-report-dump-path")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("feedback/20260429T162531Z_deadbeef.json"),
+    ).not.toBeInTheDocument();
   });
 
   it("shows pending email status without relay prompt or manual fallback", async () => {

@@ -156,3 +156,53 @@ def test_full_submit_populates_ticket_directory(
     assert "final.3mf" in index_md
     # Reproduction suggestion references the last API error.
     assert "/api/converter/generate" in index_md
+
+
+def test_submit_returns_logical_dump_path_for_external_feedback_root(
+    populated_client: tuple[TestClient, Path],
+) -> None:
+    """Response paths stay logical even when tickets are stored outside repo.
+
+    即使反馈目录位于仓库外，响应路径也只返回逻辑定位，不暴露服务器绝对路径。
+    """
+    client, feedback_root = populated_client
+
+    response = client.post("/api/feedback/bug-report", json=_payload())
+
+    assert response.status_code == 200
+    data = response.json()
+    dump_path = data["dump_path"]
+    assert dump_path.startswith("feedback/")
+    assert data["ticket_id"] in dump_path
+    assert not Path(dump_path).is_absolute()
+    assert feedback_root.as_posix() not in dump_path
+
+
+def test_submit_redacts_final_artifact_disk_path_from_persisted_payload(
+    populated_client: tuple[TestClient, Path],
+    tmp_path: Path,
+) -> None:
+    """Client-supplied disk paths are not persisted in feedback payloads.
+
+    客户端上报的本地磁盘路径不应写入可转发的反馈 payload。
+    """
+    client, feedback_root = populated_client
+    private_path = tmp_path / "private-output" / "model.3mf"
+    private_path.parent.mkdir()
+    private_path.write_bytes(b"LEGACY_DISK_PATH_SENTINEL")
+    payload = _payload()
+    payload["context"]["active_final_artifact_ref"]["disk_path"] = private_path.as_posix()
+
+    response = client.post("/api/feedback/bug-report", json=payload)
+
+    assert response.status_code == 200
+    ticket_id = response.json()["ticket_id"]
+    month_dirs = [p for p in feedback_root.iterdir() if p.is_dir()]
+    assert len(month_dirs) == 1
+    ticket_json = month_dirs[0] / ticket_id / "ticket.json"
+    ticket_dir = ticket_json.parent
+    persisted = json.loads(ticket_json.read_text(encoding="utf-8"))
+    active_ref = persisted["context"]["active_final_artifact_ref"]
+    assert "disk_path" not in active_ref
+    assert private_path.as_posix() not in json.dumps(persisted, ensure_ascii=False)
+    assert (ticket_dir / "final.3mf").read_bytes() == b"3MFDATA_SENTINEL"
