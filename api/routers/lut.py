@@ -31,6 +31,8 @@ from api.services.lut_presentation import (
     dedupe_warnings as _dedupe_warnings,
     preview_color_to_hex as _preview_color_to_hex,
     pure_channel_hex as _pure_channel_hex,
+    public_lut_path_reference as _public_lut_path_reference,
+    public_lut_source_catalog_paths as _public_lut_source_catalog_paths,
     recipe_matches_pattern as _recipe_matches_pattern,
 )
 from api.schemas.lut import (
@@ -270,7 +272,7 @@ def list_luts() -> LUTListResponse:
                 color_mode=_canonicalize_public_color_mode(
                     LUTManager.infer_color_mode(display_name, file_path)
                 ),
-                path=file_path,
+                path=_public_lut_path_reference(file_path),
                 fingerprint=fingerprint,
             )
         )
@@ -295,7 +297,9 @@ def get_source_catalog() -> LutSourceCatalogResponse:
     返回传统源与原生源的分组目录。
     """
 
-    catalog = _canonicalize_source_catalog_color_modes(LUTManager.get_source_catalog())
+    catalog = _public_lut_source_catalog_paths(
+        _canonicalize_source_catalog_color_modes(LUTManager.get_source_catalog())
+    )
     return LutSourceCatalogResponse.model_validate(catalog)
 
 
@@ -326,7 +330,7 @@ def get_lut_details_catalog() -> LutDetailsCatalogResponse:
                 items=[
                     LutDetailsCatalogItem(
                         name=item.name,
-                        path=item.path,
+                        path=_public_lut_path_reference(item.path),
                         fingerprint=item.fingerprint,
                         color_mode=_canonicalize_public_color_mode(item.color_mode),
                         source_kind=item.source_kind,
@@ -1159,7 +1163,7 @@ def get_lut_details(lut_name: str) -> LutDetailsResponse:
     )
     return LutDetailsResponse(
         name=detail.name,
-        path=detail.path,
+        path=_public_lut_path_reference(detail.path),
         fingerprint=detail.fingerprint,
         manufacturer=detail.manufacturer,
         manufacturer_source=detail.manufacturer_source,

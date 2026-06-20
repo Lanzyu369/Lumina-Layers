@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import logging
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
@@ -20,10 +21,12 @@ from api.app import app
 from api.dependencies import get_session_store
 from api.routers import lut as lut_router
 from api.routers.lut import _canonicalize_public_color_mode
+from api.services.lut_presentation import public_lut_path_reference
 from api.schemas.converter import ColorMode, ConvertGenerateRequest, ConvertPreviewRequest
 from api.session_store import SessionStore
 from config import LUTMetadata, PaletteEntry
 from core.native_reference import (
+    get_reference_db_root,
     NativeReferenceContext,
     SOURCE_KIND_COLORD_DB,
     SOURCE_KIND_PACKAGE,
@@ -39,6 +42,18 @@ _UNSAFE_ERROR_FRAGMENTS = (
     "BAD_METADATA",
     "lut-secret.json",
 )
+_PRIVATE_WINDOWS_LUT_PATH = r"C:\Users\min\private\native-secret.json"
+
+
+def _assert_public_lut_path(path: str) -> None:
+    assert path
+    assert not path.startswith("/")
+    assert not PureWindowsPath(path).is_absolute()
+    assert "/Users/" not in path
+    assert "C:/Users/" not in path.replace("\\", "/")
+    assert "private" not in path
+    assert "lut-secret" not in path
+    assert "native-secret" not in path
 
 
 def _records_for_event(
@@ -310,6 +325,210 @@ def test_public_color_mode_canonicalizes_legacy_variants() -> None:
     assert _canonicalize_public_color_mode("4-Color CMYW") == "4-Color (CMYW)"
     assert _canonicalize_public_color_mode("6-Color (RYBW)") == "6-Color (RYBWGK 1296)"
     assert _canonicalize_public_color_mode("6-Color RYBWGK") == "6-Color (RYBWGK 1296)"
+
+
+def test_public_lut_path_reference_keeps_known_roots_relative(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    preset_root = tmp_path / "lut-preset"
+    preset_path = preset_root / "Brand" / "Visible.json"
+    monkeypatch.setattr(lut_router.LUTManager, "LUT_PRESET_DIR", str(preset_root))
+
+    reference_path = get_reference_db_root() / "PLA" / "BambuLab" / "CMYW_008_5L.json"
+
+    assert public_lut_path_reference(preset_path) == "lut-preset/Brand/Visible.json"
+    assert public_lut_path_reference(reference_path).startswith("reference-db/")
+    assert not public_lut_path_reference(reference_path).startswith("/")
+
+
+def _axis_range() -> SimpleNamespace:
+    return SimpleNamespace(min=0.0, max=1.0)
+
+
+def _fake_lut_detail(path: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        name="Secret LUT",
+        path=path,
+        fingerprint="fp-secret",
+        manufacturer="Private",
+        manufacturer_source="metadata",
+        material_type="PLA",
+        material_source="metadata",
+        color_mode="4-Color (RYBW)",
+        color_count=1,
+        source_kind="legacy_lookup",
+        schema_version="1.0",
+        capabilities=[],
+        supported_modes=[],
+        raw_metadata={},
+        palette=[
+            {
+                "color": "White",
+                "material": "PLA",
+                "hex_color": "#FFFFFF",
+                "color_name": "White",
+            }
+        ],
+        coverage_stats=SimpleNamespace(
+            entry_count=1,
+            plotted_point_count=1,
+            l_range=_axis_range(),
+            a_range=_axis_range(),
+            b_range=_axis_range(),
+            r_range=_axis_range(),
+            g_range=_axis_range(),
+            b_rgb_range=_axis_range(),
+        ),
+        lab_points=[],
+        lab_points_3d=[],
+        lab_hull=[],
+        rgb_points=[],
+        max_color_layers=4,
+        layer_height_mm=0.2,
+        line_width_mm=0.4,
+        base_layers=1,
+        base_channel_idx=0,
+        layer_order="base-first",
+    )
+
+
+class _SuccessfulDetailsService:
+    def get_catalog(self) -> SimpleNamespace:
+        return SimpleNamespace(
+            groups=[
+                SimpleNamespace(
+                    manufacturer="Private",
+                    items=[
+                        SimpleNamespace(
+                            name="Secret LUT",
+                            path=_PRIVATE_ERROR_PATH,
+                            fingerprint="fp-secret",
+                            color_mode="4-Color (RYBW)",
+                            source_kind="legacy_lookup",
+                            manufacturer="Private",
+                            material_type="PLA",
+                            manufacturer_source="metadata",
+                            material_source="metadata",
+                            search_tokens=["secret", "private"],
+                        )
+                    ],
+                )
+            ]
+        )
+
+    def get_lut_details(self, _lut_name: str) -> SimpleNamespace:
+        return _fake_lut_detail(_PRIVATE_ERROR_PATH)
+
+
+def test_public_lut_listing_and_catalog_responses_hide_local_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lut_router._clear_lut_list_cache()
+    service = _SuccessfulDetailsService()
+    monkeypatch.setattr(lut_router, "_lut_details_service", service)
+    monkeypatch.setattr(lut_router, "get_lut_details_service", lambda: service)
+    monkeypatch.setattr(
+        lut_router.LUTManager,
+        "get_all_lut_files",
+        staticmethod(lambda: {"Secret LUT": _PRIVATE_ERROR_PATH}),
+    )
+    monkeypatch.setattr(
+        lut_router.LUTManager,
+        "compute_fingerprint",
+        staticmethod(lambda _path: "fp-secret"),
+    )
+    monkeypatch.setattr(
+        lut_router.LUTManager,
+        "infer_color_mode",
+        staticmethod(lambda _name, _path: "4-Color (RYBW)"),
+    )
+    monkeypatch.setattr(
+        lut_router.LUTManager,
+        "get_source_catalog",
+        staticmethod(
+            lambda: {
+                "legacy_groups": [
+                    {
+                        "group_name": "Preset",
+                        "items": [
+                            {
+                                "name": "Secret LUT",
+                                "color_mode": "4-Color (RYBW)",
+                                "path": _PRIVATE_ERROR_PATH,
+                                "fingerprint": "fp-secret",
+                            }
+                        ],
+                    }
+                ],
+                "native_brand_groups": [
+                    {
+                        "brand_key": "secret_native",
+                        "material_type": "PLA",
+                        "vendor": "Private",
+                        "display_name": "Private PLA",
+                        "db_options": [
+                            {
+                                "name": "native-secret.json",
+                                "path": _PRIVATE_WINDOWS_LUT_PATH,
+                                "color_mode": "4-Color (RYBW)",
+                                "fingerprint": "fp-native",
+                            }
+                        ],
+                        "default_db_names": ["native-secret.json"],
+                        "package_name": None,
+                        "model_name": None,
+                        "supported_modes": [],
+                    }
+                ],
+            }
+        ),
+    )
+
+    list_response = client.get("/api/lut/list")
+    catalog_response = client.get("/api/lut/catalog")
+    details_catalog_response = client.get("/api/lut/details/catalog")
+    detail_response = client.get("/api/lut/Secret%20LUT/details")
+
+    assert list_response.status_code == 200
+    assert catalog_response.status_code == 200
+    assert details_catalog_response.status_code == 200
+    assert detail_response.status_code == 200
+    assert _PRIVATE_ERROR_PATH not in list_response.text
+    assert _PRIVATE_ERROR_PATH not in catalog_response.text
+    assert _PRIVATE_ERROR_PATH not in details_catalog_response.text
+    assert _PRIVATE_ERROR_PATH not in detail_response.text
+    assert _PRIVATE_WINDOWS_LUT_PATH not in catalog_response.text
+
+    listed_path = list_response.json()["luts"][0]["path"]
+    legacy_path = catalog_response.json()["legacy_groups"][0]["items"][0]["path"]
+    native_path = catalog_response.json()["native_brand_groups"][0]["db_options"][0]["path"]
+    details_catalog_path = details_catalog_response.json()["groups"][0]["items"][0]["path"]
+    detail_path = detail_response.json()["path"]
+    assert {listed_path, legacy_path, details_catalog_path, detail_path} == {listed_path}
+    _assert_public_lut_path(listed_path)
+    _assert_public_lut_path(native_path)
+
+
+def test_public_lut_details_responses_hide_local_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _SuccessfulDetailsService()
+    monkeypatch.setattr(lut_router, "_lut_details_service", service)
+    monkeypatch.setattr(lut_router, "get_lut_details_service", lambda: service)
+
+    catalog_response = client.get("/api/lut/details/catalog")
+    detail_response = client.get("/api/lut/Secret%20LUT/details")
+
+    assert catalog_response.status_code == 200
+    assert detail_response.status_code == 200
+    assert _PRIVATE_ERROR_PATH not in catalog_response.text
+    assert _PRIVATE_ERROR_PATH not in detail_response.text
+
+    catalog_path = catalog_response.json()["groups"][0]["items"][0]["path"]
+    detail_path = detail_response.json()["path"]
+    assert catalog_path == detail_path
+    _assert_public_lut_path(catalog_path)
 
 
 def test_lut_list_reuses_file_metadata_until_signature_changes(tmp_path: Path) -> None:

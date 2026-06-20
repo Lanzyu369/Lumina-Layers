@@ -51,7 +51,7 @@ function makeLegacyCatalogGroups(): LutDetailsCatalogGroup[] {
       items: [
         {
           name: "A 4C",
-          path: "/a4.npy",
+          path: "lut-ref/fp-a4.npy",
           fingerprint: "fp-a4",
           color_mode: ColorModeEnum.FOUR_COLOR_RYBW,
           source_kind: "legacy_lookup",
@@ -63,7 +63,7 @@ function makeLegacyCatalogGroups(): LutDetailsCatalogGroup[] {
         },
         {
           name: "A 8C",
-          path: "/a8.npy",
+          path: "lut-ref/fp-a8.npy",
           fingerprint: "fp-a8",
           color_mode: ColorModeEnum.EIGHT_COLOR,
           source_kind: "legacy_lookup",
@@ -80,7 +80,7 @@ function makeLegacyCatalogGroups(): LutDetailsCatalogGroup[] {
       items: [
         {
           name: "B BW",
-          path: "/bbw.npy",
+          path: "lut-ref/fp-bbw.npy",
           fingerprint: "fp-bbw",
           color_mode: ColorModeEnum.BW,
           source_kind: "legacy_lookup",
@@ -97,7 +97,7 @@ function makeLegacyCatalogGroups(): LutDetailsCatalogGroup[] {
       items: [
         {
           name: "Loose Merged",
-          path: "/loose.npy",
+          path: "lut-ref/fp-loose.npy",
           fingerprint: "fp-loose",
           color_mode: ColorModeEnum.MERGED,
           source_kind: "legacy_lookup",
@@ -119,7 +119,7 @@ beforeEach(() => {
       {
         name: "Brand A - A4",
         color_mode: ColorModeEnum.FOUR_COLOR_RYBW,
-        path: "/a4.npy",
+        path: "lut-ref/fp-a4.npy",
         fingerprint: "fp-a4",
       },
     ],
@@ -156,25 +156,25 @@ beforeEach(() => {
       {
         name: "Brand A - A4",
         color_mode: ColorModeEnum.FOUR_COLOR_RYBW,
-        path: "/a4.npy",
+        path: "lut-ref/fp-a4.npy",
         fingerprint: "fp-a4",
       },
       {
         name: "Brand A - A8",
         color_mode: ColorModeEnum.EIGHT_COLOR,
-        path: "/a8.npy",
+        path: "lut-ref/fp-a8.npy",
         fingerprint: "fp-a8",
       },
       {
         name: "Brand B - BW",
         color_mode: ColorModeEnum.BW,
-        path: "/bbw.npy",
+        path: "lut-ref/fp-bbw.npy",
         fingerprint: "fp-bbw",
       },
       {
         name: "Loose Merged",
         color_mode: ColorModeEnum.MERGED,
-        path: "/loose.npy",
+        path: "lut-ref/fp-loose.npy",
         fingerprint: "fp-loose",
       },
     ],
