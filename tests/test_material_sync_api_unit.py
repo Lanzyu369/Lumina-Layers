@@ -39,7 +39,7 @@ _MATERIAL_SYNC_LOGGER_NAMES = (
 
 
 def _client() -> TestClient:
-    return TestClient(create_app())
+    return TestClient(create_app(), base_url="http://localhost:8000")
 
 
 def _enable_material_registry_password(monkeypatch) -> None:

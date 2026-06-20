@@ -57,6 +57,13 @@ from core.single_stage.processing import _safe_extract_zip
 _UPLOAD_IMAGE_UNREADABLE_DETAIL = (
     "无法解码图像文件: 请重新上传有效的 PNG、JPEG、HEIC 或 RAW 图片后再试。"
 )
+_MATERIAL_LIBRARY_FORBIDDEN_DETAIL = (
+    "Material library management is only available from the Lumina Studio local app."
+)
+_UNTRUSTED_ORIGIN_HEADERS = {
+    "Origin": "https://attacker.example",
+    "Host": "localhost:8000",
+}
 
 
 def _png_bytes(width: int = 8, height: int = 8) -> bytes:
@@ -103,7 +110,7 @@ def _client_with_state() -> tuple[TestClient, SessionStore, FileRegistry]:
     registry = FileRegistry()
     app.dependency_overrides[get_session_store] = lambda: store
     app.dependency_overrides[get_file_registry] = lambda: registry
-    return TestClient(app), store, registry
+    return TestClient(app, base_url="http://localhost:8000"), store, registry
 
 
 def _client_with_registry(
@@ -117,7 +124,14 @@ def _client_with_registry(
     app.dependency_overrides[get_file_registry] = lambda: registry
     if evictor is not None:
         app.dependency_overrides[get_material_cache_evictor] = lambda: evictor
-    return TestClient(app, raise_server_exceptions=False), store
+    return (
+        TestClient(
+            app,
+            raise_server_exceptions=False,
+            base_url="http://localhost:8000",
+        ),
+        store,
+    )
 
 
 def _seed_gradient_card_material_session(store: SessionStore) -> str:
@@ -150,6 +164,26 @@ def _seed_gradient_card_material_session(store: SessionStore) -> str:
     )
     store.put(session_id, "gradient_card_source_summary", {"image_source": "manual"})
     return session_id
+
+
+def _capture_single_stage_warning_logger(
+    caplog: pytest.LogCaptureFixture,
+) -> logging.Logger:
+    target_logger = logging.getLogger("lumina.api.routers.single_stage")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.WARNING, logger=target_logger.name)
+    return target_logger
+
+
+def _records_for_event(
+    caplog: pytest.LogCaptureFixture,
+    event_name: str,
+) -> list[logging.LogRecord]:
+    return [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == event_name
+    ]
 
 
 def test_material_solver_cache_list_hides_storage_error_detail(
@@ -3543,6 +3577,343 @@ def test_list_saved_stage_a_material_archives_reuses_cached_scan(
     assert third[0]["material_name"] == "PLA Basic"
 
 
+def test_gradient_card_material_delete_rejects_untrusted_origin_without_removing_saved_material(
+    monkeypatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client, _, _ = _client_with_state()
+    materials_root = tmp_path / "materials"
+    _write_updatable_material_archive(materials_root, "pla-basic")
+    monkeypatch.setattr(
+        "core.single_stage.materials.MATERIALS_DIR",
+        str(materials_root),
+    )
+    logger = _capture_single_stage_warning_logger(caplog)
+
+    try:
+        response = client.delete(
+            "/api/extractor/gradient-card-materials/pla-basic",
+            headers=_UNTRUSTED_ORIGIN_HEADERS,
+        )
+    finally:
+        logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": _MATERIAL_LIBRARY_FORBIDDEN_DETAIL}
+    assert (materials_root / "pla-basic").exists()
+    records = _records_for_event(
+        caplog,
+        "extractor_gradient_card_material_library_forbidden",
+    )
+    assert len(records) == 1
+    record = records[0]
+    assert record.levelno == logging.WARNING
+    assert record.origin == "https://attacker.example"
+    assert record.host == "localhost:8000"
+    assert record.error_type == "ForbiddenMaterialLibraryOrigin"
+    assert record.error_message == _MATERIAL_LIBRARY_FORBIDDEN_DETAIL
+
+
+def test_gradient_card_material_library_rejects_untrusted_origin_before_file_registration(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    client, _, registry = _client_with_state()
+    archive_path = tmp_path / "material.json"
+    stage_a_path = tmp_path / "stage_A_parameters.json"
+    archive_path.write_text("{}", encoding="utf-8")
+    stage_a_path.write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.list_saved_stage_a_material_archives",
+        lambda: [
+            {
+                "material_name": "PLA Basic",
+                "directory_name": "pla-basic",
+                "created_at": "2026-04-16T10:00:00Z",
+                "updated_at": "2026-04-16T11:00:00Z",
+                "archive_path": str(archive_path),
+                "stage_a_params_path": str(stage_a_path),
+                "estimated_rgb": [100, 120, 140],
+                "layer_height_mm": 0.04,
+                "mean_delta_e": 1.23,
+                "verification_count": 3,
+                "verification_history": [],
+            }
+        ],
+    )
+
+    response = client.get(
+        "/api/extractor/gradient-card-materials?include_file_urls=true",
+        headers=_UNTRUSTED_ORIGIN_HEADERS,
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": _MATERIAL_LIBRARY_FORBIDDEN_DETAIL}
+    assert registry.cleanup_expired() == 0
+
+
+def test_gradient_card_material_library_rejects_direct_non_loopback_host(
+    monkeypatch,
+) -> None:
+    client, _, _ = _client_with_state()
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "api.routers.single_stage.list_saved_stage_a_material_archives",
+        lambda: calls.append("list") or [],
+    )
+
+    response = client.get(
+        "/api/extractor/gradient-card-materials",
+        headers={"Host": "studio.lan:8000"},
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": _MATERIAL_LIBRARY_FORBIDDEN_DETAIL}
+    assert calls == []
+
+
+def test_gradient_card_material_delete_allows_local_frontend_origin(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    client, _, _ = _client_with_state()
+    materials_root = tmp_path / "materials"
+    _write_updatable_material_archive(materials_root, "pla-basic")
+    monkeypatch.setattr(
+        "core.single_stage.materials.MATERIALS_DIR",
+        str(materials_root),
+    )
+
+    response = client.delete(
+        "/api/extractor/gradient-card-materials/pla-basic",
+        headers={"Origin": "http://localhost:5174", "Host": "localhost:8000"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["directory_name"] == "pla-basic"
+    assert not (materials_root / "pla-basic").exists()
+
+
+def test_gradient_card_material_delete_allows_local_origin_even_when_fetch_site_cross_site(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    client, _, _ = _client_with_state()
+    materials_root = tmp_path / "materials"
+    _write_updatable_material_archive(materials_root, "pla-basic")
+    monkeypatch.setattr(
+        "core.single_stage.materials.MATERIALS_DIR",
+        str(materials_root),
+    )
+
+    response = client.delete(
+        "/api/extractor/gradient-card-materials/pla-basic",
+        headers={
+            "Origin": "http://localhost:5174",
+            "Host": "127.0.0.1:8000",
+            "Sec-Fetch-Site": "cross-site",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["directory_name"] == "pla-basic"
+    assert not (materials_root / "pla-basic").exists()
+
+
+def test_gradient_card_material_library_rejects_originless_cross_site_fetch(
+    monkeypatch,
+) -> None:
+    client, _, _ = _client_with_state()
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "api.routers.single_stage.list_saved_stage_a_material_archives",
+        lambda: calls.append("list") or [],
+    )
+
+    response = client.get(
+        "/api/extractor/gradient-card-materials",
+        headers={"Host": "localhost:8000", "Sec-Fetch-Site": "cross-site"},
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": _MATERIAL_LIBRARY_FORBIDDEN_DETAIL}
+    assert calls == []
+
+
+def test_gradient_card_material_delete_allows_direct_local_request(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    client, _, _ = _client_with_state()
+    materials_root = tmp_path / "materials"
+    _write_updatable_material_archive(materials_root, "pla-basic")
+    monkeypatch.setattr(
+        "core.single_stage.materials.MATERIALS_DIR",
+        str(materials_root),
+    )
+
+    response = client.delete("/api/extractor/gradient-card-materials/pla-basic")
+
+    assert response.status_code == 200
+    assert response.json()["directory_name"] == "pla-basic"
+    assert not (materials_root / "pla-basic").exists()
+
+
+def test_gradient_card_material_management_routes_reject_untrusted_origin_before_side_effects(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    client, store, _ = _client_with_state()
+    session_id = _seed_gradient_card_material_session(store)
+    archive_path = tmp_path / "material.json"
+    stage_a_path = tmp_path / "stage_A_parameters.json"
+    export_path = tmp_path / "materials.zip"
+    archive_path.write_text("{}", encoding="utf-8")
+    stage_a_path.write_text("{}", encoding="utf-8")
+    export_path.write_bytes(b"zip")
+    calls: list[str] = []
+
+    def _record_list():
+        calls.append("list")
+        return []
+
+    def _record_save(**kwargs):
+        calls.append("save")
+        return MaterialArchiveSaveResult(
+            archive_path=str(archive_path),
+            stage_a_params_path=str(stage_a_path),
+            material_summary={
+                "material_name": kwargs["material_name"],
+                "directory_name": "pla-basic",
+                "archive_path": str(archive_path),
+                "stage_a_params_path": str(stage_a_path),
+                "verification_count": 1,
+            },
+        )
+
+    def _record_update(**kwargs):
+        calls.append("update")
+        return MaterialArchiveUpdateResult(
+            archive_path=str(archive_path),
+            stage_a_params_path=str(stage_a_path),
+            material_summary={
+                "material_name": kwargs["material_name"],
+                "directory_name": kwargs["directory_name"],
+                "archive_path": str(archive_path),
+                "stage_a_params_path": str(stage_a_path),
+                "verification_count": 1,
+            },
+        )
+
+    def _record_delete(**kwargs):
+        calls.append("delete")
+        return MaterialArchiveDeleteResult(
+            directory_name=kwargs["directory_name"],
+            material_name="PLA Basic",
+            deleted_path=str(tmp_path / kwargs["directory_name"]),
+        )
+
+    def _record_export(**kwargs):
+        calls.append("export")
+        return MaterialArchiveExportResult(
+            archive_path=str(export_path),
+            download_filename="materials.zip",
+            exported_directory_names=list(kwargs["directory_names"]),
+        )
+
+    async def _record_upload(*args, **kwargs):
+        calls.append("upload")
+        return str(tmp_path / "uploaded.zip")
+
+    def _record_import(**kwargs):
+        calls.append("import")
+        return MaterialArchiveImportResult(imported_materials=[])
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.list_saved_stage_a_material_archives",
+        _record_list,
+    )
+    monkeypatch.setattr(
+        "api.routers.single_stage.save_stage_a_material_archive",
+        _record_save,
+    )
+    monkeypatch.setattr(
+        "api.routers.single_stage.update_saved_stage_a_material_archive_metadata",
+        _record_update,
+    )
+    monkeypatch.setattr(
+        "api.routers.single_stage.delete_saved_stage_a_material_archive",
+        _record_delete,
+    )
+    monkeypatch.setattr(
+        "api.routers.single_stage.export_saved_stage_a_material_archives",
+        _record_export,
+    )
+    monkeypatch.setattr("api.routers.single_stage.upload_to_tempfile", _record_upload)
+    monkeypatch.setattr(
+        "api.routers.single_stage.import_saved_stage_a_material_archives",
+        _record_import,
+    )
+
+    requests = [
+        (
+            "save",
+            lambda: client.post(
+                "/api/extractor/save-gradient-card-material",
+                data={"session_id": session_id, "material_name": "PLA Basic"},
+                headers=_UNTRUSTED_ORIGIN_HEADERS,
+            ),
+        ),
+        (
+            "list",
+            lambda: client.get(
+                "/api/extractor/gradient-card-materials",
+                headers=_UNTRUSTED_ORIGIN_HEADERS,
+            ),
+        ),
+        (
+            "update",
+            lambda: client.patch(
+                "/api/extractor/gradient-card-materials/pla-basic",
+                json={"material_name": "PLA Matte"},
+                headers=_UNTRUSTED_ORIGIN_HEADERS,
+            ),
+        ),
+        (
+            "delete",
+            lambda: client.delete(
+                "/api/extractor/gradient-card-materials/pla-basic",
+                headers=_UNTRUSTED_ORIGIN_HEADERS,
+            ),
+        ),
+        (
+            "export",
+            lambda: client.post(
+                "/api/extractor/gradient-card-materials/export",
+                json={"directory_names": ["pla-basic"]},
+                headers=_UNTRUSTED_ORIGIN_HEADERS,
+            ),
+        ),
+        (
+            "import",
+            lambda: client.post(
+                "/api/extractor/gradient-card-materials/import",
+                files={"archives": ("materials.zip", b"zip", "application/zip")},
+                headers=_UNTRUSTED_ORIGIN_HEADERS,
+            ),
+        ),
+    ]
+
+    for label, send_request in requests:
+        calls.clear()
+        response = send_request()
+        assert response.status_code == 403, label
+        assert response.json() == {"detail": _MATERIAL_LIBRARY_FORBIDDEN_DETAIL}
+        assert calls == [], label
+
+
 def test_gradient_card_material_library_route_lists_saved_materials(
     monkeypatch,
     tmp_path: Path,
@@ -5170,7 +5541,11 @@ def test_gradient_card_material_export_cleans_archive_when_registry_fails(
     app = create_app()
     registry = _MaterialExportRegisterPathFailingRegistry()
     app.dependency_overrides[get_file_registry] = lambda: registry
-    client = TestClient(app, raise_server_exceptions=False)
+    client = TestClient(
+        app,
+        raise_server_exceptions=False,
+        base_url="http://localhost:8000",
+    )
     exported_zip = tmp_path / "exported-materials.zip"
     exported_zip.write_bytes(b"zip")
 

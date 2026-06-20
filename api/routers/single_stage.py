@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from ipaddress import ip_address
 from pathlib import Path
 import shutil
 import threading
@@ -11,10 +12,11 @@ import tempfile
 import uuid
 import zipfile
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 import anyio
 import numpy as np
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 
 from api.colorchecker_artifacts import load_colorchecker_full_rgb, scale_corner_points
 from api.dependencies import get_file_registry, get_session_store
@@ -135,6 +137,14 @@ GRADIENT_CARD_MATERIAL_LIBRARY_LIST_FAILED_DETAIL = (
     "Gradient-card material library could not be loaded. "
     "Check saved material storage and try again."
 )
+GRADIENT_CARD_MATERIAL_LIBRARY_FORBIDDEN_DETAIL = (
+    "Material library management is only available from the Lumina Studio local app."
+)
+_MATERIAL_LIBRARY_DEFAULT_LOCAL_PORTS = frozenset({8000, 4174, 5174, 5173})
+_MATERIAL_LIBRARY_ALLOWED_LOCAL_PORTS_ENV = (
+    "LUMINA_MATERIAL_LIBRARY_ALLOWED_LOCAL_PORTS"
+)
+_MATERIAL_LIBRARY_ALLOWED_ORIGINS_ENV = "LUMINA_MATERIAL_LIBRARY_ALLOWED_ORIGINS"
 MATERIAL_SOLVER_CACHE_BUILD_FAILED_DETAIL = (
     "Material solver cache could not be built. "
     "Check material inputs and cache storage, then try again."
@@ -183,6 +193,176 @@ def get_material_cache_evictor() -> MaterialCacheEvictor:
             （接收耗材目录名的回调函数）
     """
     return _noop_material_cache_evictor
+
+
+def _normalize_host(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip().strip("[]").rstrip(".").lower()
+    return normalized or None
+
+
+def _is_loopback_host(value: str | None) -> bool:
+    host = _normalize_host(value)
+    if host is None:
+        return False
+    if host == "localhost":
+        return True
+    try:
+        return ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _parse_port(raw_value: str) -> int | None:
+    try:
+        port = int(raw_value)
+    except ValueError:
+        return None
+    if 1 <= port <= 65535:
+        return port
+    return None
+
+
+def _material_library_allowed_local_ports() -> set[int]:
+    ports = set(_MATERIAL_LIBRARY_DEFAULT_LOCAL_PORTS)
+    raw_ports = os.environ.get(_MATERIAL_LIBRARY_ALLOWED_LOCAL_PORTS_ENV, "")
+    for raw_port in raw_ports.split(","):
+        port = _parse_port(raw_port.strip())
+        if port is not None:
+            ports.add(port)
+    return ports
+
+
+def _parse_host_header(value: str | None) -> tuple[str, int | None] | None:
+    if value is None or not value.strip():
+        return None
+    try:
+        parsed = urlparse(f"//{value.strip()}")
+        hostname = _normalize_host(parsed.hostname)
+        port = parsed.port
+    except ValueError:
+        return None
+    if hostname is None:
+        return None
+    return hostname, port
+
+
+def _origin_host_for_key(host: str) -> str:
+    if ":" in host and not host.startswith("["):
+        return f"[{host}]"
+    return host
+
+
+def _origin_default_port(scheme: str) -> int:
+    return 443 if scheme == "https" else 80
+
+
+def _origin_key(
+    *,
+    scheme: str,
+    host: str,
+    port: int,
+) -> str:
+    normalized_host = _origin_host_for_key(_normalize_host(host) or host)
+    default_port = _origin_default_port(scheme)
+    if port == default_port:
+        return f"{scheme}://{normalized_host}"
+    return f"{scheme}://{normalized_host}:{port}"
+
+
+def _parse_origin(value: str | None) -> tuple[str, int, str] | None:
+    if value is None or not value.strip():
+        return None
+    try:
+        parsed = urlparse(value.strip())
+        scheme = parsed.scheme.lower()
+        hostname = _normalize_host(parsed.hostname)
+        port = parsed.port
+    except ValueError:
+        return None
+    if scheme not in {"http", "https"} or hostname is None:
+        return None
+    if parsed.params or parsed.query or parsed.fragment:
+        return None
+    if parsed.path not in {"", "/"}:
+        return None
+    resolved_port = port if port is not None else _origin_default_port(scheme)
+    return hostname, resolved_port, _origin_key(
+        scheme=scheme,
+        host=hostname,
+        port=resolved_port,
+    )
+
+
+def _material_library_allowed_origin_keys() -> set[str]:
+    allowed: set[str] = set()
+    raw_origins = os.environ.get(_MATERIAL_LIBRARY_ALLOWED_ORIGINS_ENV, "")
+    for raw_origin in raw_origins.split(","):
+        parsed = _parse_origin(raw_origin)
+        if parsed is None:
+            continue
+        _, _, origin_key = parsed
+        allowed.add(origin_key)
+    return allowed
+
+
+def _is_trusted_material_library_request(request: Request) -> tuple[bool, str]:
+    raw_host = request.headers.get("host")
+    parsed_host = _parse_host_header(raw_host)
+    if parsed_host is None:
+        return False, "invalid_host"
+    host, _host_port = parsed_host
+    if not _is_loopback_host(host):
+        return False, "untrusted_host"
+
+    raw_origin = request.headers.get("origin")
+    if raw_origin is None:
+        sec_fetch_site = request.headers.get("sec-fetch-site", "").strip().lower()
+        if sec_fetch_site == "cross-site":
+            return False, "cross_site_fetch"
+        return True, "no_origin"
+
+    parsed_origin = _parse_origin(raw_origin)
+    if parsed_origin is None:
+        return False, "invalid_origin"
+
+    origin_host, origin_port, origin_key_value = parsed_origin
+    if origin_key_value in _material_library_allowed_origin_keys():
+        return True, "explicit_origin_allowlist"
+
+    if not _is_loopback_host(origin_host):
+        return False, "untrusted_origin_host"
+    if origin_port not in _material_library_allowed_local_ports():
+        return False, "untrusted_origin_port"
+
+    return True, "local_origin"
+
+
+def _enforce_material_library_request(request: Request) -> None:
+    trusted, reason = _is_trusted_material_library_request(request)
+    if trusted:
+        return
+
+    origin = request.headers.get("origin", "")
+    host = request.headers.get("host", "")
+    sec_fetch_site = request.headers.get("sec-fetch-site", "")
+    log.warning(
+        "Material library management blocked for untrusted request origin",
+        extra={
+            "event": "extractor_gradient_card_material_library_forbidden",
+            "origin": origin,
+            "host": host,
+            "sec_fetch_site": sec_fetch_site,
+            "reason": reason,
+            "error_type": "ForbiddenMaterialLibraryOrigin",
+            "error_message": GRADIENT_CARD_MATERIAL_LIBRARY_FORBIDDEN_DETAIL,
+        },
+    )
+    raise HTTPException(
+        status_code=403,
+        detail=GRADIENT_CARD_MATERIAL_LIBRARY_FORBIDDEN_DETAIL,
+    )
 
 
 def _saved_material_directory_name(material_summary: Any, fallback: str) -> str:
@@ -1013,6 +1193,7 @@ async def extractor_extract_gradient_card_stage_a(
 
 @router.post("/save-gradient-card-material")
 async def extractor_save_gradient_card_material(
+    request: Request,
     session_id: str = Form(...),
     material_name: str = Form(...),
     target_directory_name: str | None = Form(None),
@@ -1023,6 +1204,7 @@ async def extractor_save_gradient_card_material(
     evict_material_cache: MaterialCacheEvictor = Depends(get_material_cache_evictor),
 ) -> GradientCardMaterialSaveResponse:
     """Persist a computed gradient-card Stage A material archive."""
+    _enforce_material_library_request(request)
     bind_session_id(session_id)
     session_data = store.get(session_id)
     if session_data is None:
@@ -1168,12 +1350,14 @@ async def extractor_save_gradient_card_material(
 
 @router.delete("/gradient-card-materials/{directory_name:path}")
 async def extractor_delete_gradient_card_material(
+    request: Request,
     directory_name: str,
     evict_material_cache: MaterialCacheEvictor = Depends(get_material_cache_evictor),
 ) -> GradientCardMaterialDeleteResponse:
     """Delete a saved gradient-card material archive.
     删除已保存的梯度卡耗材档案。
     """
+    _enforce_material_library_request(request)
     try:
         result = delete_saved_stage_a_material_archive(directory_name=directory_name)
     except FileNotFoundError as exc:
@@ -1200,6 +1384,7 @@ async def extractor_delete_gradient_card_material(
 
 @router.patch("/gradient-card-materials/{directory_name:path}")
 async def extractor_update_gradient_card_material(
+    request: Request,
     directory_name: str,
     payload: GradientCardMaterialUpdateRequest,
     registry: FileRegistry = Depends(get_file_registry),
@@ -1208,6 +1393,7 @@ async def extractor_update_gradient_card_material(
     """Update saved gradient-card material metadata.
     更新已保存的梯度卡耗材元数据。
     """
+    _enforce_material_library_request(request)
     update_kwargs: dict[str, Any] = {
         "directory_name": directory_name,
         "material_name": payload.material_name,
@@ -1311,12 +1497,14 @@ async def extractor_update_gradient_card_material(
 
 @router.post("/gradient-card-materials/export")
 async def extractor_export_gradient_card_materials(
+    request: Request,
     payload: MaterialLibraryBulkExportRequest,
     registry: FileRegistry = Depends(get_file_registry),
 ) -> GradientCardMaterialBulkExportResponse:
     """Export multiple saved gradient-card materials as one ZIP archive.
     将多个已保存的梯度卡耗材导出为一个 ZIP 归档。
     """
+    _enforce_material_library_request(request)
     try:
         result = export_saved_stage_a_material_archives(
             directory_names=payload.directory_names,
@@ -1363,12 +1551,14 @@ async def extractor_export_gradient_card_materials(
 
 @router.post("/gradient-card-materials/import")
 async def extractor_import_gradient_card_materials(
+    request: Request,
     archives: list[UploadFile] = File(...),
     evict_material_cache: MaterialCacheEvictor = Depends(get_material_cache_evictor),
 ) -> GradientCardMaterialBulkImportResponse:
     """Import one or more saved-material ZIP archives into the material library.
     导入一个或多个已保存耗材 ZIP 归档到耗材库。
     """
+    _enforce_material_library_request(request)
     if not archives:
         raise HTTPException(status_code=422, detail="At least one archive must be uploaded")
 
@@ -1430,6 +1620,7 @@ async def extractor_import_gradient_card_materials(
 
 @router.get("/gradient-card-materials")
 async def extractor_list_gradient_card_materials(
+    request: Request,
     include_file_urls: bool = Query(
         False,
         description="Register temporary /api/files URLs for each material archive.",
@@ -1439,6 +1630,7 @@ async def extractor_list_gradient_card_materials(
     """List saved gradient-card material archives.
     列出已保存的梯度卡耗材档案。
     """
+    _enforce_material_library_request(request)
     try:
         materials = list_saved_stage_a_material_archives()
     except (ValueError, TypeError, OSError, RuntimeError) as exc:
