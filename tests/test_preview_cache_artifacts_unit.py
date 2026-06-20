@@ -234,6 +234,25 @@ def test_estimate_preview_cache_bytes_includes_original_snapshots() -> None:
     ) == 1750
 
 
+def test_estimate_preview_cache_bytes_accepts_compact_matrix_itemsize() -> None:
+    legacy_int32 = estimate_preview_cache_bytes(
+        width=10,
+        height=5,
+        layers=3,
+        include_original=True,
+    )
+    compact_int16 = estimate_preview_cache_bytes(
+        width=10,
+        height=5,
+        layers=3,
+        include_original=True,
+        matrix_itemsize=2,
+    )
+
+    assert legacy_int32 == 1750
+    assert compact_int16 == 1150
+
+
 def test_persist_preview_cache_keeps_artifact_session_externalized(
     tmp_path: Path,
 ) -> None:

@@ -101,7 +101,7 @@ _mock_cache: dict = {
 _mock_preview_img: np.ndarray = np.zeros((80, 120, 3), dtype=np.uint8)
 
 
-def _create_worker_result_files() -> dict:
+def _create_worker_result_files(cache_data: dict | None = None) -> dict:
     """Create temp files simulating worker_generate_preview output.
     创建模拟 worker_generate_preview 输出的临时文件。
 
@@ -117,7 +117,7 @@ def _create_worker_result_files() -> dict:
     fd, cache_path = tempfile.mkstemp(suffix=".pkl")
     os.close(fd)
     with open(cache_path, "wb") as f:
-        pickle.dump(_mock_cache, f)
+        pickle.dump(cache_data if cache_data is not None else _mock_cache, f)
 
     return {
         "status_msg": "Preview OK",
@@ -604,6 +604,64 @@ class TestSessionContainsPreviewCache:
         assert not any(
             isinstance(value, np.ndarray)
             for value in cache_ref["metadata"].values()
+        )
+
+    def test_preview_compacts_material_matrix_before_externalizing(self) -> None:
+        """Material matrices should not keep int32 when a signed int16 fits."""
+        buf = _make_test_image_buf()
+        material_matrix = np.full((80, 120, 9), 17, dtype=np.int32)
+        material_matrix[0, 0, :] = -1
+        worker_result = _create_worker_result_files(
+            {
+                **_mock_cache,
+                "material_matrix": material_matrix,
+            }
+        )
+
+        _mock_pool.submit = AsyncMock(return_value=worker_result)
+
+        with (
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+            patch(
+                "api.routers.converter.preview.generate_segmented_glb",
+                return_value=None,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": ("test.png", buf, "image/png")},
+                data={
+                    "material_source": "material_archive",
+                    "selected_materials": json.dumps(
+                        [f"material-{i}" for i in range(18)]
+                    ),
+                    "material_layer_count": "9",
+                },
+            )
+
+        assert response.status_code == 200
+        session_data = _test_store.get(response.json()["session_id"])
+        assert session_data is not None
+        cache_ref = session_data["preview_cache"]
+        assert cache_ref["fields"]["material_matrix"]["dtype"] == "int16"
+        assert cache_ref["fields"]["original_material_matrix"]["dtype"] == "int16"
+
+        loaded_cache = hydrate_preview_cache(
+            cache_ref,
+            fields={"material_matrix", "original_material_matrix"},
+        )
+        assert loaded_cache["material_matrix"].dtype == np.int16
+        assert loaded_cache["original_material_matrix"].dtype == np.int16
+        np.testing.assert_array_equal(
+            loaded_cache["material_matrix"],
+            material_matrix.astype(np.int16),
+        )
+        np.testing.assert_array_equal(
+            loaded_cache["original_material_matrix"],
+            material_matrix.astype(np.int16),
         )
 
     def test_preview_binds_session_id_before_worker_submit_and_reuses_it(self) -> None:
@@ -1622,6 +1680,29 @@ class TestLargeFormatSvgPreviewCacheSizing:
                 assert exc.detail["error"] == "preview_cache_size_limit_exceeded"
             else:
                 raise AssertionError("uncapped tall SVG preview should exceed the cache guardrail")
+
+    def test_material_archive_svg_uses_compacted_matrix_estimate(self, tmp_path) -> None:
+        """Material archive cache estimates should match compact persisted matrices."""
+        svg_path = tmp_path / "square.svg"
+        svg_path.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" '
+            'width="100" height="100" viewBox="0 0 100 100">'
+            '<path d="M0 0H100V100H0Z" fill="#ffffff"/>'
+            '</svg>',
+            encoding="utf-8",
+        )
+
+        _enforce_preview_cache_size_limit(
+            image_path=str(svg_path),
+            target_width_mm=263,
+            modeling_mode="vector",
+            svg_pixels_per_mm=10,
+            color_layers=None,
+            material_layer_count=9,
+            material_source="material_archive",
+            selected_material_count=18,
+            max_bytes=512 * 1024 * 1024,
+        )
 
     def test_large_format_svg_preview_uses_higher_guardrail(self, tmp_path) -> None:
         """Tall large-format SVG previews can run full-res without removing all guardrails."""

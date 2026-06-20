@@ -346,6 +346,7 @@ def estimate_preview_cache_bytes(
     layers: int,
     *,
     include_original: bool,
+    matrix_itemsize: int | None = None,
 ) -> int:
     """Estimate large preview-cache array bytes from dimensions.
 
@@ -357,6 +358,9 @@ def estimate_preview_cache_bytes(
         layers (int): Estimated optical layer count. 估算叠色层数。
         include_original (bool): Include original snapshot arrays.
             是否包含原始快照数组。
+        matrix_itemsize (int | None): Bytes per material-matrix cell.
+            ``None`` preserves the legacy int32 estimate.
+            material_matrix 每个单元的字节数；``None`` 保持旧 int32 估算。
 
     Returns:
         int: Estimated bytes for matched RGB, RGBA, mask, material matrix,
@@ -369,7 +373,12 @@ def estimate_preview_cache_bytes(
     matched = pixel_count * 3
     rgba = pixel_count * 4
     mask = pixel_count
-    matrix = pixel_count * safe_layers * np.dtype(np.int32).itemsize
+    matrix_cell_bytes = (
+        int(matrix_itemsize)
+        if matrix_itemsize is not None and int(matrix_itemsize) > 0
+        else np.dtype(np.int32).itemsize
+    )
+    matrix = pixel_count * safe_layers * matrix_cell_bytes
     original = matched + matrix if include_original else 0
     return matched + rgba + mask + matrix + original
 
