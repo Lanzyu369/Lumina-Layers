@@ -21,6 +21,7 @@ import type {
 import type {
   ColorReplacementItem,
   FridgeMagnetItem,
+  RecipeOverrideItem,
 } from "../api/types";
 import { SVG_PIXELS_PER_MM_DEFAULT } from "../stores/settingsStore";
 
@@ -33,6 +34,8 @@ import { SVG_PIXELS_PER_MM_DEFAULT } from "../stores/settingsStore";
 const MAX_COLOR_HEIGHT_MAP_ENTRIES = 64;
 const MAX_FRIDGE_MAGNETS = 20;
 const MAX_REPLACEMENT_REGIONS = 32;
+const MAX_FREE_COLOR_SET_ENTRIES = 64;
+const MAX_RECIPE_OVERRIDES = 32;
 
 /**
  * Options controlling the serialized byte budget for the built object.
@@ -311,11 +314,24 @@ function buildColorReplacement(
   const { regions, truncated } = serializeReplacementRegions(
     state.replacement_regions,
   );
+  const { colors, truncated: freeColorsTruncated } = serializeFreeColorSet(
+    state.free_color_set,
+  );
+  const { overrides, truncated: overridesTruncated } =
+    serializeRecipeOverrides(state.recipe_overrides);
   const result: AdvancedParamsColorReplacement = {
     replacement_regions: regions,
+    free_color_set: colors,
+    recipe_overrides: overrides,
   };
   if (truncated) {
     result.replacement_regions_truncated = true;
+  }
+  if (freeColorsTruncated) {
+    result.free_color_set_truncated = true;
+  }
+  if (overridesTruncated) {
+    result.recipe_overrides_truncated = true;
   }
   return result;
 }
@@ -332,6 +348,10 @@ function serializeFileMetadata(file: File | null): FileMetadata | null {
     size: file.size,
     type: file.type,
   };
+}
+
+function ensureHash(hex: string): string {
+  return hex.startsWith("#") ? hex : `#${hex}`;
 }
 
 function trimColorHeightMap(map: Record<string, number>): {
@@ -399,6 +419,48 @@ function serializeReplacementRegions(regions: ColorReplacementItem[]): {
   return { regions: out, truncated };
 }
 
+function serializeFreeColorSet(colors: Set<string>): {
+  colors: string[] | null;
+  truncated: boolean;
+} {
+  if (colors.size === 0) {
+    return { colors: null, truncated: false };
+  }
+  const source = Array.from(colors);
+  const truncated = source.length > MAX_FREE_COLOR_SET_ENTRIES;
+  const out = source
+    .slice(0, MAX_FREE_COLOR_SET_ENTRIES)
+    .map(ensureHash);
+  return { colors: out, truncated };
+}
+
+function serializeRecipeOverrides(overrides: RecipeOverrideItem[]): {
+  overrides: AdvancedParamsColorReplacement["recipe_overrides"];
+  truncated: boolean;
+} {
+  if (overrides.length === 0) {
+    return { overrides: null, truncated: false };
+  }
+  const truncated = overrides.length > MAX_RECIPE_OVERRIDES;
+  const source = truncated
+    ? overrides.slice(0, MAX_RECIPE_OVERRIDES)
+    : overrides;
+  const out = source.map((item) => ({
+    region_id: item.region_id,
+    recipe: [...item.recipe],
+    layer_order: item.layer_order,
+    ...(item.virtual_materials && item.virtual_materials.length > 0
+      ? {
+          virtual_materials: item.virtual_materials.map((material) => ({
+            name: material.name,
+            hex: material.hex,
+          })),
+        }
+      : {}),
+  }));
+  return { overrides: out, truncated };
+}
+
 // ---------------------------------------------------------------------------
 // Byte measurement and tiered trimming
 // 字节测量与分层裁剪
@@ -432,6 +494,8 @@ function applyTier(full: AdvancedParamsFull, tier: number): void {
       full.color_replacement = {
         ...full.color_replacement,
         replacement_regions: null,
+        free_color_set: null,
+        recipe_overrides: null,
       };
       return;
     case 4:

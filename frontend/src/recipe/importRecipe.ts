@@ -26,6 +26,18 @@ function stripHash(hex: string): string {
   return hex.startsWith("#") ? hex.slice(1) : hex;
 }
 
+function cloneVirtualMaterials(
+  materials: Array<{ name: string; hex: string }> | undefined,
+): Array<{ name: string; hex: string }> | undefined {
+  if (!materials || materials.length === 0) {
+    return undefined;
+  }
+  return materials.map((material) => ({
+    name: material.name,
+    hex: material.hex,
+  }));
+}
+
 // ========== Source detection ==========
 
 export type RecipeFileSource = "png" | "json";
@@ -284,11 +296,17 @@ export function restoreConverterRecipe(
 
   // V2+ optional: recipe_overrides (back-compat: missing → empty array)
   const recipeOverrides = (conv.color_ops.recipe_overrides ?? []).map(
-    (item) => ({
-      region_id: item.region_id,
-      recipe: [...item.recipe],
-      layer_order: item.layer_order,
-    }),
+    (item) => {
+      const virtualMaterials = cloneVirtualMaterials(item.virtual_materials);
+      return {
+        region_id: item.region_id,
+        recipe: [...item.recipe],
+        layer_order: item.layer_order,
+        ...(virtualMaterials
+          ? { virtual_materials: virtualMaterials }
+          : {}),
+      };
+    },
   );
 
   // V2+ optional: custom_recipe_history — fromModel is forced to false on import
@@ -296,30 +314,34 @@ export function restoreConverterRecipe(
   // 历史条目导入后 fromModel 强制为 false：离开原会话模型上下文后不再保留"来自模型"标记。
   const customRecipeHistory: RecipeHistoryItem[] = (
     conv.color_ops.custom_recipe_history ?? []
-  ).map((item) => ({
-    id: item.id,
-    recipe: [...item.recipe],
-    layerOrder: item.layer_order,
-    predictedRgb: [
-      item.predicted_rgb[0],
-      item.predicted_rgb[1],
-      item.predicted_rgb[2],
-    ],
-    predictedLab: [
-      item.predicted_lab[0],
-      item.predicted_lab[1],
-      item.predicted_lab[2],
-    ],
-    hex: item.hex,
-    fromModel: false,
-    createdAtMs: item.created_at_ms,
-    ...(item.display_hexes
-      ? { displayHexes: [...item.display_hexes] }
-      : {}),
-    ...(item.display_labels
-      ? { displayLabels: [...item.display_labels] }
-      : {}),
-  }));
+  ).map((item) => {
+    const virtualMaterials = cloneVirtualMaterials(item.virtual_materials);
+    return {
+      id: item.id,
+      recipe: [...item.recipe],
+      layerOrder: item.layer_order,
+      predictedRgb: [
+        item.predicted_rgb[0],
+        item.predicted_rgb[1],
+        item.predicted_rgb[2],
+      ],
+      predictedLab: [
+        item.predicted_lab[0],
+        item.predicted_lab[1],
+        item.predicted_lab[2],
+      ],
+      hex: item.hex,
+      fromModel: false,
+      createdAtMs: item.created_at_ms,
+      ...(item.display_hexes
+        ? { displayHexes: [...item.display_hexes] }
+        : {}),
+      ...(item.display_labels
+        ? { displayLabels: [...item.display_labels] }
+        : {}),
+      ...(virtualMaterials ? { virtualMaterials } : {}),
+    };
+  });
 
   const colorHeightMap: Record<string, number> = {};
   for (const [hex, height] of Object.entries(conv.relief.color_height_map)) {
