@@ -127,7 +127,18 @@ def run(ctx: dict) -> dict:
 
     # Check if scene has any geometry before exporting
     if len(scene.geometry) == 0:
-        _log.error("No meshes generated, cannot export 3MF")
+        _log.error(
+            "No meshes generated, cannot export 3MF",
+            extra={
+                "event": "s09_export_3mf_empty_scene",
+                "error_type": "EmptySceneError",
+                "error_message": "No valid meshes generated",
+                "geometry_count": 0,
+                "color_mode": str(color_mode),
+                "modeling_mode": str(modeling_mode),
+                "out_path": str(out_path),
+            },
+        )
         ctx["error"] = "[ERROR] Mesh generation failed: No valid meshes generated"
         return ctx
 
