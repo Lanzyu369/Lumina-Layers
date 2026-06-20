@@ -1,10 +1,12 @@
 import { create } from "zustand";
+import { apiErrorToVisibleMessage } from "../api/client";
 import type { CalibrationColorMode } from "../api/types";
 import { CalibrationColorMode as CalibrationColorModeEnum } from "../api/types";
 import {
   calibrationGenerate,
   generateSingleStageKit,
 } from "../api/calibration";
+import { tRuntime } from "../i18n/runtime";
 import { clampValue } from "./converter";
 import { useSettingsStore } from "./settingsStore";
 
@@ -35,6 +37,25 @@ function buildSingleStagePalette(materialDefault: string) {
       color_name: "Sample",
     },
   ];
+}
+
+function hasApiResponse(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "response" in error
+  );
+}
+
+function calibrationErrorToVisibleMessage(error: unknown): string {
+  const fallback = tRuntime("calibration_generation_failed");
+  if (!(error instanceof Error) && !hasApiResponse(error)) {
+    return fallback;
+  }
+  return apiErrorToVisibleMessage(
+    error,
+    fallback,
+  );
 }
 
 export interface CalibrationState {
@@ -191,8 +212,7 @@ export const useCalibrationStore = create<
       });
     } catch (err) {
       set({
-        error:
-          err instanceof Error ? err.message : "Calibration generation failed",
+        error: calibrationErrorToVisibleMessage(err),
         isLoading: false,
       });
     }
@@ -230,8 +250,7 @@ export const useCalibrationStore = create<
       });
     } catch (err) {
       set({
-        error:
-          err instanceof Error ? err.message : "Calibration generation failed",
+        error: calibrationErrorToVisibleMessage(err),
         isLoading: false,
       });
     }

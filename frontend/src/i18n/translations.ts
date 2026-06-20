@@ -2620,6 +2620,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "生成校准板",
     en: "Generate Calibration",
   },
+  calibration_generation_failed: {
+    zh: "校准板生成失败，请稍后重试。",
+    en: "Calibration generation failed. Please try again.",
+  },
   cal_download_3mf: {
     zh: "下载校准文件",
     en: "Download Calibration File",
