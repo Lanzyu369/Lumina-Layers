@@ -167,6 +167,23 @@ describe("MaterialCloudSyncPanel", () => {
     expect(fetchMaterialSyncStatus).toHaveBeenCalledTimes(3);
   });
 
+  it("shows readable install failures without raw status-code wording", async () => {
+    vi.mocked(installMaterialRegistryCatalogEntry).mockRejectedValueOnce(
+      new Error("Request failed with status code 500"),
+    );
+
+    render(<MaterialCloudSyncPanel />);
+
+    expect(await screen.findByText("Silk PETG")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /下载到本地|download/i }));
+
+    const banner = await screen.findByTestId("material-cloud-sync-error");
+    expect(banner).toHaveTextContent(
+      /服务器发生内部错误|server hit an internal error/i,
+    );
+    expect(banner).not.toHaveTextContent("Request failed with status code 500");
+  });
+
   it("reloads the cloud catalog without exposing an official password", async () => {
     render(<MaterialCloudSyncPanel />);
 

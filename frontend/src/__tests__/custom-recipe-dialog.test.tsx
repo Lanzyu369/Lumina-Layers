@@ -249,6 +249,25 @@ describe("CustomRecipeDialog", () => {
     ).toBeInTheDocument();
   });
 
+  it("normalizes generic apply API failures in the visible error banner", async () => {
+    applyRecipeOverrideMock.mockRejectedValueOnce(
+      Object.assign(new Error("Request failed with status code 500"), {
+        response: {
+          status: 500,
+          data: {},
+          headers: {},
+        },
+      }),
+    );
+    renderDialog();
+
+    fireEvent.click(screen.getByRole("button", { name: "recipe_custom_apply" }));
+
+    const banner = await screen.findByTestId("recipe-error-banner");
+    expect(banner).toHaveTextContent("服务器发生内部错误");
+    expect(banner).not.toHaveTextContent("Request failed with status code 500");
+  });
+
   it("restores the prior recipe when the undo button is clicked", () => {
     renderDialog({ colorLayers: 2 });
 

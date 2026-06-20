@@ -8,6 +8,11 @@ import {
   useFiveColorStore,
 } from "../stores/fiveColorStore"
 import { useConverterStore } from "../stores/converter"
+import {
+  apiErrorToVisibleMessage,
+  buildApiResourceUrl,
+  downloadResourceBlob,
+} from "../api/client"
 import Dropdown from "./ui/Dropdown"
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode"
 import { useI18n } from "../i18n/context"
@@ -37,6 +42,8 @@ export default function FiveColorQueryPanel() {
 
   const lutList = useConverterStore((s) => s.lutList)
   const fetchLutList = useConverterStore((s) => s.fetchLutList)
+  const [isDownloadingSwatch, setIsDownloadingSwatch] = useState(false)
+  const [swatchDownloadError, setSwatchDownloadError] = useState<string | null>(null)
 
   useEffect(() => {
     if (lutList.length === 0) void fetchLutList()
@@ -44,6 +51,7 @@ export default function FiveColorQueryPanel() {
 
   const handleLutChange = (name: string) => {
     if (name) {
+      setSwatchDownloadError(null)
       clearError()
       void loadBaseColors(name)
     }
@@ -73,12 +81,47 @@ export default function FiveColorQueryPanel() {
     )
   }, [collectedRecipes, selectedIndices, queryResult])
 
-  const handleDownloadSwatch = useCallback(() => {
-    if (swatchDownloadUrl) {
-      const baseUrl = import.meta.env.VITE_API_BASE_URL || ""
-      window.open(`${baseUrl}${swatchDownloadUrl}`, "_blank")
+  const handleGenerateSwatch = useCallback(() => {
+    setSwatchDownloadError(null)
+    void generateSwatch()
+  }, [generateSwatch])
+
+  const handleClearCollection = useCallback(() => {
+    setSwatchDownloadError(null)
+    clearCollection()
+  }, [clearCollection])
+
+  const handleClearVisibleError = useCallback(() => {
+    setSwatchDownloadError(null)
+    clearError()
+  }, [clearError])
+
+  const handleDownloadSwatch = useCallback(async () => {
+    if (!swatchDownloadUrl || isDownloadingSwatch) return
+    setIsDownloadingSwatch(true)
+    setSwatchDownloadError(null)
+    let objectUrl: string | null = null
+    try {
+      const blob = await downloadResourceBlob(buildApiResourceUrl(swatchDownloadUrl))
+      objectUrl = URL.createObjectURL(blob)
+      const anchor = document.createElement("a")
+      anchor.href = objectUrl
+      anchor.download = "five-color-swatch.3mf"
+      anchor.style.display = "none"
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+    } catch (err) {
+      setSwatchDownloadError(
+        apiErrorToVisibleMessage(err, t("five_color_error_download_swatch_failed")),
+      )
+    } finally {
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl)
+      }
+      setIsDownloadingSwatch(false)
     }
-  }, [swatchDownloadUrl])
+  }, [isDownloadingSwatch, swatchDownloadUrl, t])
 
   const handleTargetMatch = useCallback((event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -395,21 +438,23 @@ export default function FiveColorQueryPanel() {
 
                   <div className="grid grid-cols-2 gap-2">
                       <Button
-                        onClick={() => void generateSwatch()}
+                        onClick={handleGenerateSwatch}
                         disabled={isGeneratingSwatch}
                         loading={isGeneratingSwatch}
                         label={isGeneratingSwatch ? t("five_color_generating_swatch") : t("five_color_generate_swatch")}
                       />
                       {swatchDownloadUrl && (
                         <Button
-                          onClick={handleDownloadSwatch}
+                          onClick={() => void handleDownloadSwatch()}
+                          disabled={isDownloadingSwatch}
+                          loading={isDownloadingSwatch}
                           label={t("five_color_download_swatch")}
                           variant="secondary"
                         />
                       )}
                       {!swatchDownloadUrl && (
                         <Button
-                          onClick={clearCollection}
+                          onClick={handleClearCollection}
                           label={t("five_color_collection_clear")}
                           variant="secondary"
                         />
@@ -429,7 +474,7 @@ export default function FiveColorQueryPanel() {
 
                 {swatchDownloadUrl && (
                   <Button
-                    onClick={clearCollection}
+                    onClick={handleClearCollection}
                     label={t("five_color_collection_clear")}
                     variant="secondary"
                   />
@@ -441,14 +486,14 @@ export default function FiveColorQueryPanel() {
       </aside>
 
       <div className={`relative min-h-0 flex-1 overflow-hidden border-slate-200/70 dark:border-slate-800/80 flex flex-col bg-slate-50 dark:bg-slate-950 ${workspace.isWide ? "border-t 2xl:border-l 2xl:border-t-0" : "border-t"}`}>
-        {(error || queryResult) && (
+        {(swatchDownloadError || error || queryResult) && (
           <div className="flex-none border-b border-slate-200/70 bg-slate-100/70 p-4 sm:p-5 lg:p-7 dark:border-slate-800/80 dark:bg-slate-900/50">
-            {error && (
+            {(swatchDownloadError || error) && (
               <StatusBanner
                 tone="error"
                 action={
                   <button
-                    onClick={clearError}
+                    onClick={handleClearVisibleError}
                     aria-label={t("five_color_close_error")}
                     className="rounded-full border border-current/20 px-2 py-1 text-xs text-red-600 transition-colors hover:bg-red-500/10 dark:text-red-300"
                   >
@@ -456,7 +501,7 @@ export default function FiveColorQueryPanel() {
                   </button>
                 }
               >
-                {resolveFiveColorError(error, t)}
+                {swatchDownloadError ?? (error ? resolveFiveColorError(error, t) : null)}
               </StatusBanner>
             )}
 

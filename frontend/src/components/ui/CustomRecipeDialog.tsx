@@ -13,6 +13,7 @@ import {
   fetchRegionRecipe,
   predictCustomRecipe,
 } from "../../api/converter";
+import { apiErrorToVisibleMessage } from "../../api/client";
 import type {
   PredictFailureKind,
   RecipeHistoryItem,
@@ -400,56 +401,6 @@ function buildDisplayPalette(
     });
   });
   return entries;
-}
-
-/**
- * 从 axios 错误里抽取后端真实错误信息；优先 FastAPI 的 detail 字段，次选 message，
- * 保底 axios 自己的 message（通常是通用的 "Request failed with status code XXX"）。
- * Extract the backend-supplied error message from an axios error, preferring
- * FastAPI's `detail` over the generic axios `message` so users and logs see
- * the real validation reason instead of "Request failed with status code 422".
- */
-function extractApiErrorMessage(err: unknown, fallback: string): string {
-  if (err && typeof err === "object") {
-    const maybeAxios = err as {
-      response?: { data?: unknown };
-      message?: string;
-    };
-    const data = maybeAxios.response?.data;
-    if (data && typeof data === "object") {
-      const detail = (data as { detail?: unknown }).detail;
-      if (typeof detail === "string" && detail.trim()) {
-        return detail;
-      }
-      if (Array.isArray(detail) && detail.length > 0) {
-        // Pydantic v2 returns an array of `{loc, msg, type, ...}`; compact them
-        // into a single readable string so users see "field X: message".
-        return detail
-          .map((entry) => {
-            if (entry && typeof entry === "object") {
-              const loc = (entry as { loc?: unknown[] }).loc;
-              const msg = (entry as { msg?: string }).msg;
-              const path = Array.isArray(loc)
-                ? loc.filter((seg) => seg !== "body").join(".")
-                : "";
-              return path ? `${path}: ${msg ?? ""}` : msg ?? "";
-            }
-            return String(entry);
-          })
-          .filter(Boolean)
-          .join("; ");
-      }
-      const message = (data as { message?: unknown }).message;
-      if (typeof message === "string" && message.trim()) {
-        return message;
-      }
-    }
-    if (typeof maybeAxios.message === "string" && maybeAxios.message.trim()) {
-      return maybeAxios.message;
-    }
-  }
-  if (err instanceof Error && err.message) return err.message;
-  return fallback;
 }
 
 function useStableByKey<T>(value: T, key: string): T {
@@ -919,7 +870,7 @@ export default function CustomRecipeDialog({
       setPrediction(response);
       setLastPredictFromModel(true);
     } catch (err) {
-      const message = extractApiErrorMessage(
+      const message = apiErrorToVisibleMessage(
         err,
         t("recipe_custom_predict_failed"),
       );
@@ -1018,7 +969,7 @@ export default function CustomRecipeDialog({
       }
     } catch (err) {
       setErrorKind("unknown");
-      setError(extractApiErrorMessage(err, t("recipe_custom_apply_failed")));
+      setError(apiErrorToVisibleMessage(err, t("recipe_custom_apply_failed")));
     } finally {
       setIsApplying(false);
     }

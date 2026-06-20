@@ -5130,6 +5130,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "色卡生成失败",
     en: "Swatch generation failed",
   },
+  five_color_error_download_swatch_failed: {
+    zh: "色卡下载失败",
+    en: "Swatch download failed",
+  },
   five_color_error_generic: {
     zh: "五色操作失败",
     en: "Five-color operation failed",
@@ -7598,6 +7602,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   material_recipe_generate_swatch_failed: {
     zh: "色块生成失败",
     en: "Swatch generation failed",
+  },
+  material_recipe_download_swatch_failed: {
+    zh: "色块下载失败",
+    en: "Swatch download failed",
   },
   material_recipe_swatch_legend_alt: {
     zh: "色块图例",
