@@ -2,7 +2,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import MaterialRecipeQueryPanel from "../components/MaterialRecipeQueryPanel";
-import { downloadResourceBlob } from "../api/client";
+import apiClient, { downloadResourceBlob } from "../api/client";
 import {
   generateMaterialRecipeSwatch,
   listGradientCardMaterials,
@@ -374,6 +374,51 @@ describe("MaterialRecipeQueryPanel", () => {
     const callArgs = vi.mocked(generateMaterialRecipeSwatch).mock.calls[0][0];
     expect(callArgs.recipes[0].directory_names).toEqual(["mat-1", "mat-0"]);
     expect(callArgs.device_profile_id).toBe("BambuStudio:bbl:bambu-lab-h2d:0.2");
+  });
+
+  it("renders the swatch preview without double-prefixing API file URLs", async () => {
+    const originalBaseUrl = apiClient.defaults.baseURL;
+    vi.stubEnv("VITE_API_BASE_URL", "/api");
+    apiClient.defaults.baseURL = "/api";
+
+    vi.mocked(listGradientCardMaterials).mockResolvedValue(buildLibraryResponse(2));
+    vi.mocked(previewMaterialRecipe).mockResolvedValue({
+      status: "ok",
+      layer_count: 2,
+      layer_height_mm: 0.08,
+      substrate: "white",
+      predicted_rgb: [180, 60, 90],
+      predicted_hex: "#B43C5A",
+      layers: [],
+    });
+
+    try {
+      render(<MaterialRecipeQueryPanel />);
+      await waitFor(() => {
+        expect(screen.getAllByTestId("material-recipe-palette-item").length).toBe(2);
+      });
+
+      const tiles = screen.getAllByTestId("material-recipe-palette-item");
+      fireEvent.click(tiles[0]);
+      fireEvent.click(tiles[1]);
+      fireEvent.click(screen.getByRole("button", { name: /计算混色|Compute color/ }));
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /添加到队列|Add to queue/ })).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByRole("button", { name: /添加到队列|Add to queue/ }));
+      fireEvent.click(screen.getByRole("button", { name: /生成验证色块|Generate swatch/ }));
+
+      const preview = await screen.findByAltText(/色块图例|Swatch legend/);
+      expect(preview).toHaveAttribute(
+        "src",
+        "/api/files/material-swatch-preview",
+      );
+      expect(preview.getAttribute("src")).not.toContain("/api/api/files");
+    } finally {
+      apiClient.defaults.baseURL = originalBaseUrl;
+      vi.unstubAllEnvs();
+    }
   });
 
   it("keeps swatch download failures in the panel with visible language", async () => {
