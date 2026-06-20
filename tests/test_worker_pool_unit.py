@@ -9,6 +9,9 @@ max_workers defaults, and RuntimeError when pool not started.
 import asyncio
 import logging
 import os
+import subprocess
+import sys
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -148,6 +151,176 @@ class TestMaxWorkers:
 
         assert pool.max_workers == 3
         assert pool.default_task_timeout == 14.0
+
+
+class TestWorkerPoolConfigEnvValidation:
+    """Validate env override parsing for worker pool config."""
+
+    def test_invalid_max_workers_falls_back_and_logs_warning(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("LUMINA_MAX_WORKERS", "abc")
+        target_logger = logging.getLogger("lumina.config")
+        target_logger.addHandler(caplog.handler)
+        caplog.set_level(logging.WARNING, logger=target_logger.name)
+
+        cfg = WorkerPoolConfig.from_env()
+
+        assert cfg.MAX_WORKERS == WorkerPoolConfig.MAX_WORKERS
+        warnings = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "worker_pool_max_workers_invalid"
+        ]
+        assert len(warnings) == 1
+        assert getattr(warnings[0], "env_var", None) == "LUMINA_MAX_WORKERS"
+        assert getattr(warnings[0], "raw_value", None) == "abc"
+        assert getattr(warnings[0], "fallback", None) == WorkerPoolConfig.MAX_WORKERS
+        assert getattr(warnings[0], "error_type", None) == "ValueError"
+        assert getattr(warnings[0], "error_message", None)
+
+    def test_blank_worker_config_env_is_ignored_without_warning(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("LUMINA_MAX_WORKERS", "   ")
+        monkeypatch.setenv("LUMINA_TASK_TIMEOUT", "   ")
+        target_logger = logging.getLogger("lumina.config")
+        target_logger.addHandler(caplog.handler)
+        caplog.set_level(logging.WARNING, logger=target_logger.name)
+
+        cfg = WorkerPoolConfig.from_env()
+
+        assert cfg.MAX_WORKERS == WorkerPoolConfig.MAX_WORKERS
+        assert cfg.TASK_TIMEOUT == WorkerPoolConfig.TASK_TIMEOUT
+        assert not [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None)
+            in {
+                "worker_pool_max_workers_invalid",
+                "worker_pool_task_timeout_invalid",
+            }
+        ]
+
+    @pytest.mark.parametrize("raw_value", ["0", "-2"])
+    def test_non_positive_max_workers_falls_back_and_logs_warning(
+        self,
+        raw_value: str,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("LUMINA_MAX_WORKERS", raw_value)
+        target_logger = logging.getLogger("lumina.config")
+        target_logger.addHandler(caplog.handler)
+        caplog.set_level(logging.WARNING, logger=target_logger.name)
+
+        cfg = WorkerPoolConfig.from_env()
+
+        assert cfg.MAX_WORKERS == WorkerPoolConfig.MAX_WORKERS
+        warnings = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "worker_pool_max_workers_invalid"
+        ]
+        assert len(warnings) == 1
+        assert getattr(warnings[0], "raw_value", None) == raw_value
+        assert getattr(warnings[0], "fallback", None) == WorkerPoolConfig.MAX_WORKERS
+
+    def test_invalid_task_timeout_falls_back_and_logs_warning(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("LUMINA_TASK_TIMEOUT", "notfloat")
+        target_logger = logging.getLogger("lumina.config")
+        target_logger.addHandler(caplog.handler)
+        caplog.set_level(logging.WARNING, logger=target_logger.name)
+
+        cfg = WorkerPoolConfig.from_env()
+
+        assert cfg.TASK_TIMEOUT == WorkerPoolConfig.TASK_TIMEOUT
+        warnings = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "worker_pool_task_timeout_invalid"
+        ]
+        assert len(warnings) == 1
+        assert getattr(warnings[0], "env_var", None) == "LUMINA_TASK_TIMEOUT"
+        assert getattr(warnings[0], "raw_value", None) == "notfloat"
+        assert getattr(warnings[0], "fallback", None) == WorkerPoolConfig.TASK_TIMEOUT
+        assert getattr(warnings[0], "error_type", None) == "ValueError"
+        assert getattr(warnings[0], "error_message", None)
+
+    @pytest.mark.parametrize("raw_value", ["nan", "inf", "-inf"])
+    def test_non_finite_task_timeout_falls_back_and_logs_warning(
+        self,
+        raw_value: str,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("LUMINA_TASK_TIMEOUT", raw_value)
+        target_logger = logging.getLogger("lumina.config")
+        target_logger.addHandler(caplog.handler)
+        caplog.set_level(logging.WARNING, logger=target_logger.name)
+
+        cfg = WorkerPoolConfig.from_env()
+
+        assert cfg.TASK_TIMEOUT == WorkerPoolConfig.TASK_TIMEOUT
+        warnings = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "worker_pool_task_timeout_invalid"
+        ]
+        assert len(warnings) == 1
+        assert getattr(warnings[0], "raw_value", None) == raw_value
+        assert getattr(warnings[0], "fallback", None) == WorkerPoolConfig.TASK_TIMEOUT
+
+    def test_invalid_worker_env_does_not_crash_dependencies_cold_import(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        env = os.environ.copy()
+        env.update(
+            {
+                "LUMINA_ENV_LOCAL_PATH": str(tmp_path / "missing-env"),
+                "LUMINA_LOG_DIR": str(tmp_path / "logs"),
+                "LUMINA_MAX_WORKERS": "abc",
+                "LUMINA_TASK_TIMEOUT": "notfloat",
+                "PYTHONPATH": os.pathsep.join(
+                    filter(None, [os.getcwd(), env.get("PYTHONPATH", "")])
+                ),
+            }
+        )
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import api.dependencies as deps; "
+                    "print("
+                    "f'max={deps.worker_pool.max_workers};"
+                    "timeout={deps.worker_pool.default_task_timeout!r}'"
+                    ")"
+                ),
+            ],
+            cwd=os.getcwd(),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
+        combined_output = f"{result.stdout}\n{result.stderr}"
+        assert result.returncode == 0, combined_output
+        assert f"max={WorkerPoolConfig.MAX_WORKERS};timeout=None" in result.stdout
+        assert "worker_pool_max_workers_invalid" in combined_output
+        assert "worker_pool_task_timeout_invalid" in combined_output
 
 
 # ---------------------------------------------------------------------------
