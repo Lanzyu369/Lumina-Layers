@@ -140,6 +140,13 @@ function buildRuntimeDetailsResponse() {
   };
 }
 
+function expectRawMaterialCacheErrorsHidden() {
+  expect(screen.queryByText(/network down/i)).not.toBeInTheDocument();
+  expect(screen.queryByText(/Request failed with status code/i)).not.toBeInTheDocument();
+  expect(screen.queryByText(/status code 422/i)).not.toBeInTheDocument();
+  expect(screen.queryByText(/status code 500/i)).not.toBeInTheDocument();
+}
+
 describe("MaterialSolverCacheStatusCard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -678,9 +685,9 @@ describe("MaterialSolverCacheStatusCard", () => {
     confirmSpy.mockRestore();
   });
 
-  it("renders an error pill when the status request fails", async () => {
+  it("renders safe copy when the cache status request fails", async () => {
     vi.mocked(fetchMaterialSolverCacheStatus).mockRejectedValue(
-      new Error("network down"),
+      new Error("Request failed with status code 422"),
     );
 
     render(
@@ -696,7 +703,318 @@ describe("MaterialSolverCacheStatusCard", () => {
     await waitFor(() => {
       expect(pill).toHaveAttribute("data-tone", "error");
     });
-    expect(screen.getByText(/network down/i)).toBeInTheDocument();
+    expect(
+      screen.getByText("缓存状态查询失败，请稍后重试。"),
+    ).toBeInTheDocument();
+    expectRawMaterialCacheErrorsHidden();
+  });
+
+  it("renders safe copy when cache build fails", async () => {
+    vi.mocked(fetchMaterialSolverCacheStatus).mockResolvedValue({
+      status: "ok",
+      message: "No cache found",
+      cached: false,
+      palette_hash: "0123456789abcdef",
+      layer_count: 5,
+      layer_height_mm: 0.08,
+      substrate: "white",
+      entry: null,
+    });
+    vi.mocked(buildMaterialSolverCache).mockRejectedValue(
+      new Error("Request failed with status code 500"),
+    );
+
+    render(
+      <MaterialSolverCacheStatusCard
+        materialDirectoryNames={["red", "white"]}
+        layerCount={5}
+        layerHeightMm={0.08}
+      />,
+    );
+    const buildButton = await screen.findByRole("button", {
+      name: "立即构建缓存",
+    });
+    await act(async () => {
+      fireEvent.click(buildButton);
+    });
+
+    await waitFor(() => {
+      expect(buildMaterialSolverCache).toHaveBeenCalledTimes(1);
+    });
+    expect(
+      screen.getByText("缓存构建失败，请稍后重试。"),
+    ).toBeInTheDocument();
+    expectRawMaterialCacheErrorsHidden();
+  });
+
+  it("renders safe copy when cache delete fails", async () => {
+    vi.mocked(fetchMaterialSolverCacheStatus).mockResolvedValue({
+      status: "ok",
+      message: "Cache found",
+      cached: true,
+      palette_hash: "0123456789abcdef",
+      layer_count: 5,
+      layer_height_mm: 0.08,
+      substrate: "white",
+      entry: buildCacheEntry(),
+    });
+    vi.mocked(deleteMaterialSolverCache).mockRejectedValue(
+      new Error("Request failed with status code 500"),
+    );
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(
+      <MaterialSolverCacheStatusCard
+        materialDirectoryNames={["red", "white"]}
+        layerCount={5}
+        layerHeightMm={0.08}
+      />,
+    );
+    const deleteButton = await screen.findByRole("button", {
+      name: "删除缓存",
+    });
+    await act(async () => {
+      fireEvent.click(deleteButton);
+    });
+
+    await waitFor(() => {
+      expect(deleteMaterialSolverCache).toHaveBeenCalledTimes(1);
+    });
+    expect(
+      screen.getByText("缓存删除失败，请稍后重试。"),
+    ).toBeInTheDocument();
+    expectRawMaterialCacheErrorsHidden();
+    confirmSpy.mockRestore();
+  });
+
+  it("renders safe copy when cache charts fail to load", async () => {
+    vi.mocked(fetchMaterialSolverCacheStatus).mockResolvedValue({
+      status: "ok",
+      message: "Cache found",
+      cached: true,
+      palette_hash: "0123456789abcdef",
+      layer_count: 5,
+      layer_height_mm: 0.08,
+      substrate: "white",
+      entry: buildCacheEntry(),
+    });
+    vi.mocked(fetchMaterialSolverCacheDetails).mockRejectedValue(
+      new Error("network down"),
+    );
+
+    render(
+      <MaterialSolverCacheStatusCard
+        materialDirectoryNames={["red", "white"]}
+        layerCount={5}
+        layerHeightMm={0.08}
+      />,
+    );
+    const chartsButton = await screen.findByRole("button", {
+      name: "查看色彩分布图",
+    });
+    await act(async () => {
+      fireEvent.click(chartsButton);
+    });
+
+    await waitFor(() => {
+      expect(fetchMaterialSolverCacheDetails).toHaveBeenCalledTimes(1);
+    });
+    expect(
+      screen.getByText("色彩分布图加载失败，请稍后重试。"),
+    ).toBeInTheDocument();
+    expectRawMaterialCacheErrorsHidden();
+  });
+
+  it("renders safe copy when the runtime status request fails", async () => {
+    vi.mocked(fetchMaterialSolverCacheStatus).mockResolvedValue({
+      status: "ok",
+      message: "No cache found",
+      cached: false,
+      palette_hash: "0123456789abcdef",
+      layer_count: 5,
+      layer_height_mm: 0.08,
+      substrate: "white",
+      entry: null,
+    });
+    vi.mocked(fetchMaterialSolverRuntimeStatus).mockRejectedValue(
+      new Error("Request failed with status code 422"),
+    );
+
+    render(
+      <MaterialSolverCacheStatusCard
+        materialDirectoryNames={["red", "white"]}
+        layerCount={5}
+        layerHeightMm={0.08}
+      />,
+    );
+    const pill = await screen.findByTestId(
+      "material-solver-runtime-status-pill",
+    );
+    await waitFor(() => {
+      expect(pill).toHaveAttribute("data-tone", "error");
+    });
+    expect(
+      screen.getByText("智能缓存状态查询失败，请稍后重试。"),
+    ).toBeInTheDocument();
+    expectRawMaterialCacheErrorsHidden();
+  });
+
+  it("renders safe copy when runtime build fails", async () => {
+    vi.mocked(fetchMaterialSolverCacheStatus).mockResolvedValue({
+      status: "ok",
+      message: "No cache found",
+      cached: false,
+      palette_hash: "0123456789abcdef",
+      layer_count: 5,
+      layer_height_mm: 0.08,
+      substrate: "white",
+      entry: null,
+    });
+    vi.mocked(fetchMaterialSolverRuntimeStatus).mockResolvedValue({
+      status: "ok",
+      message: "No runtime found",
+      cached: false,
+      palette_hash: "0123456789abcdef",
+      layer_count: 5,
+      layer_height_mm: 0.08,
+      substrate: "white",
+      candidate_budget: 33_554_432,
+      entry: null,
+    });
+    vi.mocked(buildMaterialSolverRuntime).mockRejectedValue(
+      new Error("Request failed with status code 500"),
+    );
+
+    render(
+      <MaterialSolverCacheStatusCard
+        materialDirectoryNames={["red", "white"]}
+        layerCount={5}
+        layerHeightMm={0.08}
+      />,
+    );
+    const runtimeSection = await screen.findByTestId(
+      "material-solver-runtime-section",
+    );
+    const runtimeBuildButton = within(runtimeSection).getByRole("button", {
+      name: "构建智能缓存",
+    });
+    await act(async () => {
+      fireEvent.click(runtimeBuildButton);
+    });
+
+    await waitFor(() => {
+      expect(buildMaterialSolverRuntime).toHaveBeenCalledTimes(1);
+    });
+    expect(
+      screen.getByText("智能缓存构建失败，请稍后重试。"),
+    ).toBeInTheDocument();
+    expectRawMaterialCacheErrorsHidden();
+  });
+
+  it("renders safe copy when runtime delete fails", async () => {
+    vi.mocked(fetchMaterialSolverCacheStatus).mockResolvedValue({
+      status: "ok",
+      message: "No cache found",
+      cached: false,
+      palette_hash: "0123456789abcdef",
+      layer_count: 8,
+      layer_height_mm: 0.04,
+      substrate: "white",
+      entry: null,
+    });
+    vi.mocked(fetchMaterialSolverRuntimeStatus).mockResolvedValue({
+      status: "ok",
+      message: "Runtime found",
+      cached: true,
+      palette_hash: "0123456789abcdef",
+      layer_count: 8,
+      layer_height_mm: 0.04,
+      substrate: "white",
+      candidate_budget: 33_554_432,
+      entry: buildRuntimeEntry(),
+    });
+    vi.mocked(deleteMaterialSolverRuntime).mockRejectedValue(
+      new Error("Request failed with status code 500"),
+    );
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(
+      <MaterialSolverCacheStatusCard
+        materialDirectoryNames={["red", "white"]}
+        layerCount={8}
+        layerHeightMm={0.04}
+      />,
+    );
+    const runtimeSection = await screen.findByTestId(
+      "material-solver-runtime-section",
+    );
+    const runtimeDeleteButton = within(runtimeSection).getByRole("button", {
+      name: "删除智能缓存",
+    });
+    await act(async () => {
+      fireEvent.click(runtimeDeleteButton);
+    });
+
+    await waitFor(() => {
+      expect(deleteMaterialSolverRuntime).toHaveBeenCalledTimes(1);
+    });
+    expect(
+      screen.getByText("智能缓存删除失败，请稍后重试。"),
+    ).toBeInTheDocument();
+    expectRawMaterialCacheErrorsHidden();
+    confirmSpy.mockRestore();
+  });
+
+  it("renders safe copy when runtime charts fail to load", async () => {
+    vi.mocked(fetchMaterialSolverCacheStatus).mockResolvedValue({
+      status: "ok",
+      message: "No cache found",
+      cached: false,
+      palette_hash: "0123456789abcdef",
+      layer_count: 8,
+      layer_height_mm: 0.04,
+      substrate: "white",
+      entry: null,
+    });
+    vi.mocked(fetchMaterialSolverRuntimeStatus).mockResolvedValue({
+      status: "ok",
+      message: "Runtime found",
+      cached: true,
+      palette_hash: "0123456789abcdef",
+      layer_count: 8,
+      layer_height_mm: 0.04,
+      substrate: "white",
+      candidate_budget: 33_554_432,
+      entry: buildRuntimeEntry(),
+    });
+    vi.mocked(fetchMaterialSolverRuntimeDetails).mockRejectedValue(
+      new Error("network down"),
+    );
+
+    render(
+      <MaterialSolverCacheStatusCard
+        materialDirectoryNames={["red", "white"]}
+        layerCount={8}
+        layerHeightMm={0.04}
+      />,
+    );
+    const runtimeSection = await screen.findByTestId(
+      "material-solver-runtime-section",
+    );
+    const chartsButton = within(runtimeSection).getByRole("button", {
+      name: "查看配方覆盖图",
+    });
+    await act(async () => {
+      fireEvent.click(chartsButton);
+    });
+
+    await waitFor(() => {
+      expect(fetchMaterialSolverRuntimeDetails).toHaveBeenCalledTimes(1);
+    });
+    expect(
+      screen.getByText("配方覆盖图加载失败，请稍后重试。"),
+    ).toBeInTheDocument();
+    expectRawMaterialCacheErrorsHidden();
   });
 
   it("forwards the chosen gridResolution to every API call when the opt-in toggle is on", async () => {

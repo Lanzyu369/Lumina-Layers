@@ -3530,6 +3530,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "缓存状态查询失败",
     en: "Failed to query cache status",
   },
+  basic_material_cache_status_error_detail: {
+    zh: "缓存状态查询失败，请稍后重试。",
+    en: "Failed to query the cache status. Please try again later.",
+  },
   basic_material_cache_fallback_hint: {
     zh: "未构建缓存时，每张图将使用 B&B 最优求解器（耗时较长，保证最优）。",
     en: "When no cache is available, every conversion runs the B&B optimal solver (slower, always optimal).",
@@ -3574,6 +3578,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "色彩分布图加载失败：{message}",
     en: "Failed to load color charts: {message}",
   },
+  basic_material_cache_charts_failed: {
+    zh: "色彩分布图加载失败，请稍后重试。",
+    en: "Failed to load the color charts. Please try again later.",
+  },
   basic_material_cache_confirm_delete: {
     zh: "确认删除当前组合的缓存？",
     en: "Delete the cache for this combination?",
@@ -3614,9 +3622,17 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "构建失败：{message}",
     en: "Build failed: {message}",
   },
+  basic_material_cache_build_failed: {
+    zh: "缓存构建失败，请稍后重试。",
+    en: "Cache build failed. Please try again later.",
+  },
   basic_material_cache_delete_error: {
     zh: "删除失败：{message}",
     en: "Delete failed: {message}",
+  },
+  basic_material_cache_delete_failed: {
+    zh: "缓存删除失败，请稍后重试。",
+    en: "Cache delete failed. Please try again later.",
   },
   basic_material_runtime_section_title: {
     zh: "智能配方缓存",
@@ -3645,6 +3661,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   basic_material_runtime_status_error: {
     zh: "智能缓存状态查询失败",
     en: "Failed to query smart cache status",
+  },
+  basic_material_runtime_status_error_detail: {
+    zh: "智能缓存状态查询失败，请稍后重试。",
+    en: "Failed to query the smart cache status. Please try again later.",
   },
   basic_material_runtime_budget_label: {
     zh: "缓存规模",
@@ -3702,6 +3722,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "配方覆盖图加载失败：{message}",
     en: "Failed to load recipe coverage: {message}",
   },
+  basic_material_runtime_charts_failed: {
+    zh: "配方覆盖图加载失败，请稍后重试。",
+    en: "Failed to load recipe coverage. Please try again later.",
+  },
   basic_material_runtime_building_label: {
     zh: "正在构建智能缓存…",
     en: "Building smart cache…",
@@ -3734,9 +3758,17 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "智能缓存构建失败：{message}",
     en: "Smart cache build failed: {message}",
   },
+  basic_material_runtime_build_failed: {
+    zh: "智能缓存构建失败，请稍后重试。",
+    en: "Smart cache build failed. Please try again later.",
+  },
   basic_material_runtime_delete_error: {
     zh: "智能缓存删除失败：{message}",
     en: "Smart cache delete failed: {message}",
+  },
+  basic_material_runtime_delete_failed: {
+    zh: "智能缓存删除失败，请稍后重试。",
+    en: "Smart cache delete failed. Please try again later.",
   },
   basic_source_kind_label: {
     zh: "颜色源类型",
