@@ -329,6 +329,29 @@ class _RegisterBytesFailingRegistry(FileRegistry):
         raise RuntimeError("registry byte storage unavailable")
 
 
+class _GradientCardStageARegisterBytesFailingRegistry(FileRegistry):
+    """Registry stub that fails after the Stage A params file is registered."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.path_file_ids: list[str] = []
+        self.cleanup_session_ids: list[str] = []
+
+    def register_path(self, *args: object, **kwargs: object) -> str:
+        file_id = super().register_path(*args, **kwargs)
+        self.path_file_ids.append(file_id)
+        return file_id
+
+    def register_bytes(self, *args: object, **kwargs: object) -> str:
+        raise RuntimeError(
+            "registry wrote /Users/min/private/stage-a/preview.png"
+        )
+
+    def cleanup_session(self, session_id: str) -> int:
+        self.cleanup_session_ids.append(session_id)
+        return super().cleanup_session(session_id)
+
+
 def _linear_to_srgb_uint8(arr: np.ndarray) -> np.ndarray:
     clipped = np.clip(arr.astype(np.float64), 0.0, 1.0)
     srgb = np.where(
@@ -2853,6 +2876,189 @@ def test_gradient_card_stage_a_routes_compute_and_save_material(
     assert removed == 4
     assert registry.resolve(save_body["material_file_url"].split("/")[-1]) is None
     assert registry.resolve(save_body["stage_a_params_url"].split("/")[-1]) is None
+
+
+@pytest.mark.parametrize(
+    ("exception_type", "raw_message"),
+    [
+        (
+            FileNotFoundError,
+            "missing /Users/min/private/stage-a/dataset/index.json",
+        ),
+        (
+            OSError,
+            "cannot read /Users/min/private/stage-a/dataset.zip",
+        ),
+        (
+            RuntimeError,
+            "worker failed while reading /Users/min/private/stage-a/cache.npy",
+        ),
+        (
+            TypeError,
+            "unexpected payload from /Users/min/private/stage-a/payload.json",
+        ),
+    ],
+)
+def test_gradient_card_stage_a_route_sanitizes_internal_extract_errors(
+    monkeypatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    exception_type: type[Exception],
+    raw_message: str,
+) -> None:
+    client, store, _registry = _client_with_state()
+    zip_path = tmp_path / "kit.zip"
+    zip_path.write_bytes(b"zip")
+
+    async def _fake_upload_to_ndarray(_file):
+        return np.zeros((8, 8, 3), dtype=np.uint8)
+
+    async def _fake_upload_to_tempfile(*args, **kwargs):
+        return str(zip_path)
+
+    def _fake_extract_stage_a_material_from_gradient_cards(*args, **kwargs):
+        raise exception_type(raw_message)
+
+    monkeypatch.setattr("api.routers.single_stage.upload_to_ndarray", _fake_upload_to_ndarray)
+    monkeypatch.setattr("api.routers.single_stage.upload_to_tempfile", _fake_upload_to_tempfile)
+    monkeypatch.setattr(
+        "api.routers.single_stage.extract_stage_a_material_from_gradient_cards",
+        _fake_extract_stage_a_material_from_gradient_cards,
+    )
+    target_logger = logging.getLogger("lumina.api.routers.single_stage")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.ERROR, logger=target_logger.name)
+
+    try:
+        response = client.post(
+            "/api/extractor/extract-gradient-card-stage-a",
+            data={
+                "white_corner_points": json.dumps([[0, 0], [7, 0], [7, 7], [0, 7]]),
+                "black_corner_points": json.dumps([[0, 0], [7, 0], [7, 7], [0, 7]]),
+            },
+            files={
+                "white_image": ("white.png", b"white", "image/png"),
+                "black_image": ("black.png", b"black", "image/png"),
+                "dataset_zip": ("kit.zip", b"zip", "application/zip"),
+            },
+        )
+    finally:
+        target_logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Gradient card Stage A extraction failed. Check the server log for details."
+    )
+    assert "/Users/min/private" not in response.text
+    assert raw_message not in response.text
+    assert store._store == {}
+    assert not zip_path.exists()
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None)
+        == "extractor_extract_gradient_card_stage_a_failed"
+    ]
+    assert len(records) == 1
+    record = records[0]
+    assert record.error_type == exception_type.__name__
+    assert record.error_message == raw_message
+
+
+def test_gradient_card_stage_a_route_rolls_back_when_preview_registration_fails(
+    monkeypatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    registry = _GradientCardStageARegisterBytesFailingRegistry()
+    client, store = _client_with_registry(registry)
+    zip_path = tmp_path / "kit.zip"
+    zip_path.write_bytes(b"zip")
+    params_path = tmp_path / "stage_A_parameters.json"
+    params_payload = {
+        "parameters": {
+            "channels": [
+                {
+                    "color_name": "PLA Basic",
+                    "E": [0.1, 0.2, 0.3],
+                    "k": [1.0, 1.1, 1.2],
+                }
+            ]
+        },
+        "meta": {"warnings": []},
+    }
+    params_path.write_text(json.dumps(params_payload), encoding="utf-8")
+    extract_result = GradientCardStageAResult(
+        params_path=str(params_path),
+        params_payload=params_payload,
+        fit_summary={"warnings": []},
+        material_summary={"sample_count": 1},
+        source_summary={"image_source": "manual"},
+        warnings=[],
+        white_warp_rgb=np.zeros((8, 8, 3), dtype=np.uint8),
+        black_warp_rgb=np.zeros((8, 8, 3), dtype=np.uint8),
+    )
+
+    async def _fake_upload_to_ndarray(_file):
+        return np.zeros((8, 8, 3), dtype=np.uint8)
+
+    async def _fake_upload_to_tempfile(*args, **kwargs):
+        return str(zip_path)
+
+    def _fake_extract_stage_a_material_from_gradient_cards(*args, **kwargs):
+        return extract_result
+
+    monkeypatch.setattr("api.routers.single_stage.upload_to_ndarray", _fake_upload_to_ndarray)
+    monkeypatch.setattr("api.routers.single_stage.upload_to_tempfile", _fake_upload_to_tempfile)
+    monkeypatch.setattr(
+        "api.routers.single_stage.extract_stage_a_material_from_gradient_cards",
+        _fake_extract_stage_a_material_from_gradient_cards,
+    )
+    target_logger = logging.getLogger("lumina.api.routers.single_stage")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.ERROR, logger=target_logger.name)
+
+    try:
+        response = client.post(
+            "/api/extractor/extract-gradient-card-stage-a",
+            data={
+                "white_corner_points": json.dumps([[0, 0], [7, 0], [7, 7], [0, 7]]),
+                "black_corner_points": json.dumps([[0, 0], [7, 0], [7, 7], [0, 7]]),
+            },
+            files={
+                "white_image": ("white.png", b"white", "image/png"),
+                "black_image": ("black.png", b"black", "image/png"),
+                "dataset_zip": ("kit.zip", b"zip", "application/zip"),
+            },
+        )
+    finally:
+        target_logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Gradient card Stage A file registration failed. Check the server log for details."
+    )
+    assert "/Users/min/private" not in response.text
+    assert "registry wrote" not in response.text
+    assert len(registry.path_file_ids) == 1
+    assert len(registry.cleanup_session_ids) == 1
+    assert registry.resolve(registry.path_file_ids[0]) is None
+    assert registry.get_session_entries(registry.cleanup_session_ids[0]) == {}
+    assert store._store == {}
+    assert not zip_path.exists()
+    assert not params_path.exists()
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None)
+        == "extractor_extract_gradient_card_stage_a_registration_failed"
+    ]
+    assert len(records) == 1
+    record = records[0]
+    assert record.error_type == "RuntimeError"
+    assert record.error_message == (
+        "registry wrote /Users/min/private/stage-a/preview.png"
+    )
 
 
 def test_extractor_save_gradient_card_material_removes_new_archive_when_registration_fails(

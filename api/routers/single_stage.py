@@ -934,6 +934,30 @@ async def extractor_extract_gradient_card_stage_a(
         store.put(session_id, "gradient_card_fit_summary", result.fit_summary)
         store.put(session_id, "gradient_card_material_summary", result.material_summary)
         store.put(session_id, "gradient_card_source_summary", result.source_summary)
+    except FileNotFoundError as exc:
+        _raise_internal_route_error(
+            exc,
+            context="Gradient card Stage A extraction",
+            event="extractor_extract_gradient_card_stage_a_failed",
+            session_id=session_id,
+        )
+    except (TypeError, OSError, RuntimeError) as exc:
+        _raise_internal_route_error(
+            exc,
+            context="Gradient card Stage A extraction",
+            event="extractor_extract_gradient_card_stage_a_failed",
+            session_id=session_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    finally:
+        if zip_path is not None and session_id is None:
+            try:
+                os.remove(zip_path)
+            except OSError:
+                pass
+
+    try:
         stage_a_id = registry.register_path(session_id, result.params_path)
         white_warp_id = registry.register_bytes(
             session_id,
@@ -947,16 +971,15 @@ async def extractor_extract_gradient_card_stage_a(
             "black_gradient_warp.png",
             ttl_seconds=GRADIENT_CARD_PREVIEW_TTL_SECONDS,
         )
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
-    except (ValueError, TypeError, OSError, RuntimeError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
-    finally:
-        if zip_path is not None and session_id is None:
-            try:
-                os.remove(zip_path)
-            except OSError:
-                pass
+    except Exception as exc:
+        _cleanup_registry_session_safely(registry, session_id)
+        _close_session_safely(store, session_id)
+        _raise_file_registration_error(
+            exc,
+            context="Gradient card Stage A file registration",
+            event="extractor_extract_gradient_card_stage_a_registration_failed",
+            session_id=session_id,
+        )
 
     log.info(
         "Gradient card Stage A material extracted",
