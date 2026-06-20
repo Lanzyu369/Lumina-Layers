@@ -592,7 +592,7 @@ export default function MaterialRecipeQueryPanel() {
                   {swatchPreviewUrl && (
                     <div className="rounded-xl border border-slate-200/80 overflow-hidden shadow-sm dark:border-slate-700/80">
                       <img
-                        src={`${import.meta.env.VITE_API_BASE_URL || ""}${swatchPreviewUrl}`}
+                        src={buildApiResourceUrl(swatchPreviewUrl)}
                         alt={t("material_recipe_swatch_legend_alt")}
                         className="w-full h-auto"
                       />
