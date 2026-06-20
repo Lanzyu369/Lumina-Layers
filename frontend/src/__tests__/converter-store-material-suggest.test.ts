@@ -117,6 +117,21 @@ describe("converter store — fetchMaterialSuggestions", () => {
     expect(s.materialSuggestionsError).toBe("boom");
   });
 
+  it("normalizes HTTP status errors before showing material suggestion failures", async () => {
+    const useConverterStore = await loadStore();
+    resetStore(useConverterStore);
+    fetchMaterialColorSuggestionsMock.mockRejectedValueOnce(
+      new Error("Request failed with status code 500"),
+    );
+
+    await useConverterStore.getState().fetchMaterialSuggestions("#808080");
+
+    const error = useConverterStore.getState().materialSuggestionsError;
+    expect(error).toBeTruthy();
+    expect(error).not.toMatch(/Request failed with status code 500/i);
+    expect(error).not.toMatch(/status code\s+500/i);
+  });
+
   it("short-circuits when called outside material-archive mode", async () => {
     const useConverterStore = await loadStore();
     resetStore(useConverterStore);

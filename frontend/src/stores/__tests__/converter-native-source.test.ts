@@ -888,6 +888,19 @@ describe("native bundle converter flow", () => {
     expect(useConverterStore.getState().lutListFull).toHaveLength(2);
   });
 
+  it("normalizes catalog load HTTP status errors before showing them", async () => {
+    vi.mocked(lutApi.fetchLutCatalog).mockRejectedValueOnce(
+      new Error("Request failed with status code 500"),
+    );
+
+    await useConverterStore.getState().fetchLutCatalog();
+
+    const error = useConverterStore.getState().error;
+    expect(error).toBeTruthy();
+    expect(error).not.toMatch(/Request failed with status code 500/i);
+    expect(error).not.toMatch(/status code\s+500/i);
+  });
+
   it("fetches the legacy details catalog into converter state", async () => {
     vi.mocked(lutApi.fetchLutDetailsCatalog).mockResolvedValueOnce(
       makeLegacyDetailsCatalog(),
@@ -898,6 +911,19 @@ describe("native bundle converter flow", () => {
     expect(lutApi.fetchLutDetailsCatalog).toHaveBeenCalledOnce();
     expect(useConverterStore.getState().legacyCatalogGroups).toHaveLength(2);
     expect(useConverterStore.getState().legacyCatalogLoading).toBe(false);
+  });
+
+  it("normalizes legacy details catalog HTTP status errors before showing them", async () => {
+    vi.mocked(lutApi.fetchLutDetailsCatalog).mockRejectedValueOnce(
+      new Error("Request failed with status code 402"),
+    );
+
+    await useConverterStore.getState().fetchLegacyCatalog();
+
+    const error = useConverterStore.getState().error;
+    expect(error).toBeTruthy();
+    expect(error).not.toMatch(/Request failed with status code 402/i);
+    expect(error).not.toMatch(/status code\s+402/i);
   });
 
   it("hydrates selectedLegacyManufacturer from a remembered lut_name", async () => {

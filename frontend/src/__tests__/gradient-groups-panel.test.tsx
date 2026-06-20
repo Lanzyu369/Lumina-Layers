@@ -14,6 +14,7 @@ const replaceColorMock = vi.hoisted(() => vi.fn());
 const regionReplaceMock = vi.hoisted(() => vi.fn());
 const regionReplaceBatchMock = vi.hoisted(() => vi.fn());
 const regionRequantizeMock = vi.hoisted(() => vi.fn());
+const fetchGradientGroupsMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../api/converter", async () => {
   const actual = await vi.importActual<typeof import("../api/converter")>(
@@ -26,6 +27,7 @@ vi.mock("../api/converter", async () => {
     regionReplace: regionReplaceMock,
     regionReplaceBatch: regionReplaceBatchMock,
     regionRequantize: regionRequantizeMock,
+    fetchGradientGroups: fetchGradientGroupsMock,
   };
 });
 
@@ -102,6 +104,10 @@ describe("GradientGroupsPanel", () => {
     colorHighlightMock.mockResolvedValue({
       preview_url: "/api/files/highlighted.png",
     });
+    fetchGradientGroupsMock.mockResolvedValue({
+      status: "ok",
+      groups: [_makeGroup()],
+    });
   });
 
   afterEach(() => {
@@ -140,6 +146,41 @@ describe("GradientGroupsPanel", () => {
     render(<GradientGroupsPanel />);
     const alert = screen.getByRole("alert");
     expect(alert.textContent).toContain("boom");
+  });
+
+  it("normalizes HTTP status errors before storing gradient group failures", async () => {
+    regionReplaceBatchMock.mockRejectedValueOnce(
+      new Error("Request failed with status code 500"),
+    );
+    render(<GradientGroupsPanel />);
+    fireEvent.click(
+      screen.getByRole("button", { name: /expand regions|展开区域/i }),
+    );
+    fireEvent.click(screen.getByTestId("merge-check-1-1"));
+    fireEvent.click(screen.getByTestId("merge-check-1-2"));
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("merge-flatten-1"));
+    });
+
+    const error = useConverterStore.getState().error;
+    expect(error).toBeTruthy();
+    expect(error).not.toMatch(/Request failed with status code 500/i);
+    expect(error).not.toMatch(/status code\s+500/i);
+  });
+
+  it("normalizes HTTP status errors before showing gradient group load failures", async () => {
+    _resetStores({ gradientGroups: null });
+    fetchGradientGroupsMock.mockRejectedValueOnce(
+      new Error("Request failed with status code 500"),
+    );
+
+    await useConverterStore.getState().fetchGradientGroups("sess-test");
+
+    const error = useConverterStore.getState().gradientGroupsError;
+    expect(error).toBeTruthy();
+    expect(error).not.toMatch(/Request failed with status code 500/i);
+    expect(error).not.toMatch(/status code\s+500/i);
   });
 
   it("renders a group row with material count and select button", () => {
