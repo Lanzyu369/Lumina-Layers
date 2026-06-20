@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import FiveColorQueryPanel from "../components/FiveColorQueryPanel";
-import { downloadResourceBlob } from "../api/client";
+import apiClient, { downloadResourceBlob } from "../api/client";
 import { useFiveColorStore } from "../stores/fiveColorStore";
 import { useConverterStore } from "../stores/converter";
 import { translations } from "../i18n/translations";
@@ -469,6 +469,42 @@ describe("FiveColorQueryPanel target color match", () => {
     expect(screen.queryByText("Request failed with status code 404")).not.toBeInTheDocument();
 
     openSpy.mockRestore();
+  });
+
+  it("renders the swatch preview without double-prefixing API file URLs", () => {
+    const originalBaseUrl = apiClient.defaults.baseURL;
+    vi.stubEnv("VITE_API_BASE_URL", "/api");
+    apiClient.defaults.baseURL = "/api";
+    useFiveColorStore.setState({
+      collectedRecipes: [
+        {
+          id: "recipe-1",
+          selectedIndices: [0, 1, 2, 3, 4],
+          resultHex: "#F00A00",
+          baseColorNames: ["Red", "Green", "Blue", "Yellow", "White"],
+          baseColorHexes: ["#FF0000", "#00FF00", "#0000FF", "#FFFF00", "#FFFFFF"],
+          label: "Recipe 1",
+        },
+      ],
+      swatchDownloadUrl: "/api/files/five-color-swatch",
+      swatchPreviewUrl: "/api/files/five-color-swatch-preview",
+    });
+
+    try {
+      render(<FiveColorQueryPanel />);
+
+      const preview = screen.getByAltText(
+        translations.five_color_swatch_legend_alt.zh,
+      );
+      expect(preview).toHaveAttribute(
+        "src",
+        "/api/files/five-color-swatch-preview",
+      );
+      expect(preview.getAttribute("src")).not.toContain("/api/api/files");
+    } finally {
+      apiClient.defaults.baseURL = originalBaseUrl;
+      vi.unstubAllEnvs();
+    }
   });
 
   it("downloads the five-color swatch through a blob URL", async () => {
