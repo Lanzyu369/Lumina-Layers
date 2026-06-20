@@ -12,9 +12,11 @@ import os
 import re
 import uuid
 from contextlib import suppress
+from ipaddress import ip_address
 from pathlib import Path
+from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from PIL import Image
 
@@ -53,6 +55,12 @@ EPHEMERAL_PREVIEW_TTL_SECONDS = 600
 IMAGE_PREVIEW_PREPARATION_FAILED_DETAIL = (
     "Image preview could not be prepared. Please try again."
 )
+CLEAR_CACHE_FORBIDDEN_DETAIL = (
+    "Cache cleanup is only available from the Lumina Studio local app."
+)
+_CLEAR_CACHE_DEFAULT_LOCAL_PORTS = frozenset({8000, 4174, 5174, 5173})
+_CLEAR_CACHE_ALLOWED_ORIGINS_ENV = "LUMINA_CLEAR_CACHE_ALLOWED_ORIGINS"
+_CLEAR_CACHE_ALLOWED_LOCAL_PORTS_ENV = "LUMINA_CLEAR_CACHE_ALLOWED_LOCAL_PORTS"
 MACHINE_REGISTRY_ASSET_MEDIA_TYPES: dict[str, str] = {
     ".png": "image/png",
     ".jpg": "image/jpeg",
@@ -60,6 +68,168 @@ MACHINE_REGISTRY_ASSET_MEDIA_TYPES: dict[str, str] = {
     ".webp": "image/webp",
     ".svg": "image/svg+xml",
 }
+
+
+def _normalize_host(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip().strip("[]").rstrip(".").lower()
+    return normalized or None
+
+
+def _is_loopback_host(value: str | None) -> bool:
+    host = _normalize_host(value)
+    if host is None:
+        return False
+    if host == "localhost":
+        return True
+    try:
+        return ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _parse_port(raw_value: str) -> int | None:
+    try:
+        port = int(raw_value)
+    except ValueError:
+        return None
+    if 1 <= port <= 65535:
+        return port
+    return None
+
+
+def _clear_cache_allowed_local_ports() -> set[int]:
+    ports = set(_CLEAR_CACHE_DEFAULT_LOCAL_PORTS)
+    raw_ports = os.environ.get(_CLEAR_CACHE_ALLOWED_LOCAL_PORTS_ENV, "")
+    for raw_port in raw_ports.split(","):
+        port = _parse_port(raw_port.strip())
+        if port is not None:
+            ports.add(port)
+    return ports
+
+
+def _parse_host_header(value: str | None) -> tuple[str, int | None] | None:
+    if value is None or not value.strip():
+        return None
+    try:
+        parsed = urlparse(f"//{value.strip()}")
+        hostname = _normalize_host(parsed.hostname)
+        port = parsed.port
+    except ValueError:
+        return None
+    if hostname is None:
+        return None
+    return hostname, port
+
+
+def _origin_host_for_key(host: str) -> str:
+    if ":" in host and not host.startswith("["):
+        return f"[{host}]"
+    return host
+
+
+def _origin_default_port(scheme: str) -> int:
+    return 443 if scheme == "https" else 80
+
+
+def _origin_key(
+    *,
+    scheme: str,
+    host: str,
+    port: int,
+) -> str:
+    normalized_host = _origin_host_for_key(_normalize_host(host) or host)
+    default_port = _origin_default_port(scheme)
+    if port == default_port:
+        return f"{scheme}://{normalized_host}"
+    return f"{scheme}://{normalized_host}:{port}"
+
+
+def _parse_origin(value: str | None) -> tuple[str, int, str] | None:
+    if value is None or not value.strip():
+        return None
+    try:
+        parsed = urlparse(value.strip())
+        scheme = parsed.scheme.lower()
+        hostname = _normalize_host(parsed.hostname)
+        port = parsed.port
+    except ValueError:
+        return None
+    if scheme not in {"http", "https"} or hostname is None:
+        return None
+    if parsed.params or parsed.query or parsed.fragment:
+        return None
+    if parsed.path not in {"", "/"}:
+        return None
+    resolved_port = port if port is not None else _origin_default_port(scheme)
+    return hostname, resolved_port, _origin_key(
+        scheme=scheme,
+        host=hostname,
+        port=resolved_port,
+    )
+
+
+def _clear_cache_allowed_origin_keys() -> set[str]:
+    allowed: set[str] = set()
+    raw_origins = os.environ.get(_CLEAR_CACHE_ALLOWED_ORIGINS_ENV, "")
+    for raw_origin in raw_origins.split(","):
+        parsed = _parse_origin(raw_origin)
+        if parsed is None:
+            continue
+        _, _, origin_key = parsed
+        allowed.add(origin_key)
+    return allowed
+
+
+def _is_trusted_clear_cache_request(request: Request) -> tuple[bool, str]:
+    raw_origin = request.headers.get("origin")
+    raw_host = request.headers.get("host")
+    parsed_host = _parse_host_header(raw_host)
+    if parsed_host is None:
+        return False, "invalid_host"
+    host, _host_port = parsed_host
+    if not _is_loopback_host(host):
+        return False, "untrusted_host"
+
+    if raw_origin is None:
+        return True, "no_origin"
+
+    parsed_origin = _parse_origin(raw_origin)
+    if parsed_origin is None:
+        return False, "invalid_origin"
+
+    origin_host, origin_port, origin_key_value = parsed_origin
+    if origin_key_value in _clear_cache_allowed_origin_keys():
+        return True, "explicit_origin_allowlist"
+
+    if not _is_loopback_host(origin_host):
+        return False, "untrusted_origin_host"
+    if origin_port not in _clear_cache_allowed_local_ports():
+        return False, "untrusted_origin_port"
+
+    return True, "local_origin"
+
+
+def _enforce_clear_cache_origin(request: Request) -> None:
+    trusted, reason = _is_trusted_clear_cache_request(request)
+    if trusted:
+        return
+
+    origin = request.headers.get("origin", "")
+    host = request.headers.get("host", "")
+    log.warning(
+        "Cache cleanup blocked for untrusted request origin",
+        extra={
+            "event": "system_clear_cache_forbidden",
+            "origin": origin,
+            "host": host,
+            "reason": reason,
+            "error_type": "ForbiddenCacheCleanupOrigin",
+            "error_message": CLEAR_CACHE_FORBIDDEN_DETAIL,
+        },
+    )
+    raise HTTPException(status_code=403, detail=CLEAR_CACHE_FORBIDDEN_DETAIL)
 
 
 def _try_load_machine_registry():
@@ -419,6 +589,7 @@ async def preview_artifacts(
 
 @router.post("/clear-cache")
 def clear_cache(
+    request: Request,
     file_registry: FileRegistry = Depends(get_file_registry),
     session_store: SessionStore = Depends(get_session_store),
 ) -> ClearCacheResponse:
@@ -426,6 +597,7 @@ def clear_cache(
 
     清除所有子系统中的缓存和临时文件，返回清理统计信息。
     """
+    _enforce_clear_cache_origin(request)
     result: ClearCacheResult = perform_cache_cleanup(file_registry, session_store, config.OUTPUT_DIR)
     total_deleted: int = result.registry_cleaned + result.sessions_cleaned + result.output_files_cleaned
     return ClearCacheResponse(
