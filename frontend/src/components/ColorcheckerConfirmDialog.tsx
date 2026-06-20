@@ -15,6 +15,7 @@ import {
   type ColorcheckerReferenceSelection,
   type ColorcheckerReferenceSummary,
 } from "../api/extractor";
+import { apiErrorToVisibleMessage } from "../api/client";
 import { useI18n } from "../i18n/context";
 import { tRuntime } from "../i18n/runtime";
 import { useColorcheckerArtifactLease } from "../hooks/useColorcheckerArtifactLease";
@@ -527,6 +528,10 @@ function resolveStageErrorMessage(
   return fallbackMessage;
 }
 
+function resolveReferenceErrorMessage(error: unknown, fallbackMessage: string): string {
+  return apiErrorToVisibleMessage(error, fallbackMessage);
+}
+
 export function ColorcheckerConfirmDialogInner({
   phase,
   colorcheckerTarget = null,
@@ -729,7 +734,12 @@ export function ColorcheckerConfirmDialogInner({
       })
       .catch((error) => {
         if (!cancelled) {
-          setErrorMessage(error instanceof Error ? error.message : t("ext_cc_reference_load_failed"));
+          setErrorMessage(
+            resolveReferenceErrorMessage(
+              error,
+              t("ext_cc_reference_load_failed"),
+            ),
+          );
         }
       })
       .finally(() => {
@@ -969,7 +979,9 @@ export function ColorcheckerConfirmDialogInner({
         );
       }
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : t("ext_cc_reference_upload_failed"));
+      setErrorMessage(
+        resolveReferenceErrorMessage(error, t("ext_cc_reference_upload_failed")),
+      );
     } finally {
       setReferenceUploading(false);
     }

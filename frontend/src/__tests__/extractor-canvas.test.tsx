@@ -34,6 +34,8 @@ vi.mock("../api/extractor", () => ({
 
 const mockManualFixCell = vi.mocked(manualFixCell);
 const mockResolveLutPreviewCell = vi.mocked(resolveLutPreviewCell);
+const rawHttpStatusErrorPattern =
+  /Request failed with status code|status code\s+\d{3}\b|\b[45]\d{2}\b/i;
 
 // ========== Mock browser APIs ==========
 
@@ -521,6 +523,51 @@ describe("ExtractorCanvas 单元测试", () => {
 
     await waitFor(() => {
       expect(useExtractorStore.getState().manualFixError).toBe(message);
+    });
+    expect(screen.queryByTestId("manual-fix-popup")).not.toBeInTheDocument();
+  });
+
+  it("normalizes LUT preview resolve HTTP status errors", async () => {
+    const ExtractorCanvas = (await import("../components/ExtractorCanvas")).default;
+    mockResolveLutPreviewCell.mockRejectedValueOnce(
+      new Error("Request failed with status code 500"),
+    );
+
+    useExtractorStore.setState({
+      imagePreviewUrl: "blob:test-image",
+      session_id: "session-1",
+      warp_view_url: null,
+      lut_preview_url: "/api/files/lut-456",
+    });
+
+    render(<ExtractorCanvas />);
+    const preview = screen.getByTestId("lut-preview-image") as HTMLImageElement;
+    Object.defineProperty(preview, "naturalWidth", {
+      configurable: true,
+      value: 1000,
+    });
+    Object.defineProperty(preview, "naturalHeight", {
+      configurable: true,
+      value: 1000,
+    });
+    preview.getBoundingClientRect = vi.fn(() => ({
+      x: 10,
+      y: 20,
+      left: 10,
+      top: 20,
+      right: 210,
+      bottom: 120,
+      width: 200,
+      height: 100,
+      toJSON: () => ({}),
+    } as DOMRect));
+
+    fireEvent.click(preview, { clientX: 85, clientY: 45 });
+
+    await waitFor(() => {
+      const message = useExtractorStore.getState().manualFixError;
+      expect(message).toEqual(expect.any(String));
+      expect(message).not.toMatch(rawHttpStatusErrorPattern);
     });
     expect(screen.queryByTestId("manual-fix-popup")).not.toBeInTheDocument();
   });
