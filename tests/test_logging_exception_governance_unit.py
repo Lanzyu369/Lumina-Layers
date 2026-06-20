@@ -319,6 +319,8 @@ FEEDBACK_STRUCTURED_EVENTS = {
 }
 SLICER_STRUCTURED_EVENTS = {
     "slicer_launch_done",
+    "slicer_launch_copy_failed",
+    "slicer_launch_failed",
 }
 REQUIRED_STRUCTURED_EVENTS = (
     VECTOR_STRUCTURED_EVENTS
