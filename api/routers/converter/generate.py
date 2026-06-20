@@ -104,6 +104,12 @@ BATCH_PREVIEW_LIMIT_FALLBACK_MESSAGE: str = (
     "3D preview automatically shows the first models that fit on the current "
     "print bed."
 )
+LARGE_FORMAT_GENERATION_FAILED_DETAIL: str = (
+    "Large-format generation failed. Try again or check the server log for details."
+)
+LARGE_FORMAT_RECIPE_OVERRIDE_LOAD_FAILED_DETAIL: str = (
+    "Large-format recipe override data could not be loaded. Re-run preview and try again."
+)
 BATCH_MERGE_FAILED_DETAIL: str = (
     "Batch 3MF merge failed. Try again or check the server log for details."
 )
@@ -1480,7 +1486,13 @@ async def _generate_large_format_svg_native(
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="Large-format SVG generation timed out")
     except ROUTER_HANDLED_ERRORS as e:
-        raise HTTPException(status_code=500, detail=f"Large-format SVG generation failed: {str(e)}")
+        _log_large_format_failure(
+            session_id=sid,
+            failure_kind="svg_native_worker",
+            error_type=type(e).__name__,
+            error_message=str(e),
+        )
+        raise HTTPException(status_code=500, detail=LARGE_FORMAT_GENERATION_FAILED_DETAIL)
     zip_path = result["zip_path"]
     zip_registered = False
     try:
@@ -1542,7 +1554,18 @@ async def _generate_large_format_raster(
         try:
             full_material_matrix = np.load(material_matrix_path)
         except (OSError, ValueError, TypeError) as exc:
-            raise HTTPException(status_code=500, detail=f"Failed to load large-format recipe override matrix: {exc}")
+            _log_large_format_failure(
+                session_id=sid,
+                failure_kind="recipe_override_matrix",
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+                artifact_role="material_matrix",
+                path=material_matrix_path,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=LARGE_FORMAT_RECIPE_OVERRIDE_LOAD_FAILED_DETAIL,
+            )
         if full_material_matrix.ndim != 3:
             raise HTTPException(status_code=500, detail="Large-format recipe override matrix must be 3-dimensional")
         override_target_h, override_target_w = full_material_matrix.shape[:2]
@@ -1551,7 +1574,18 @@ async def _generate_large_format_raster(
                 with open(recipe_override_masks_path, "rb") as f:
                     loaded_masks = pickle.load(f)
             except (OSError, ValueError, TypeError, pickle.PickleError) as exc:
-                raise HTTPException(status_code=500, detail=f"Failed to load large-format recipe override masks: {exc}")
+                _log_large_format_failure(
+                    session_id=sid,
+                    failure_kind="recipe_override_masks",
+                    error_type=type(exc).__name__,
+                    error_message=str(exc),
+                    artifact_role="recipe_override_masks",
+                    path=recipe_override_masks_path,
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail=LARGE_FORMAT_RECIPE_OVERRIDE_LOAD_FAILED_DETAIL,
+                )
             if isinstance(loaded_masks, dict):
                 full_recipe_override_masks = {
                     str(region_id): np.asarray(mask, dtype=bool)
@@ -1662,10 +1696,14 @@ async def _generate_large_format_raster(
                 errors.append(f"{label}: {e}")
 
         if not successful_paths:
-            detail = "All tiles failed"
-            if errors:
-                detail += ": " + "; ".join(errors[:5])
-            raise HTTPException(status_code=500, detail=detail)
+            for raw_error in errors[:5]:
+                _log_large_format_failure(
+                    session_id=sid,
+                    failure_kind="tile_failed",
+                    error_type="LargeFormatTileFailure",
+                    error_message=raw_error,
+                )
+            raise HTTPException(status_code=500, detail=LARGE_FORMAT_GENERATION_FAILED_DETAIL)
 
         fd, zip_path = tempfile.mkstemp(suffix=".zip", dir=TEMP_DIR)
         os.close(fd)
@@ -1936,6 +1974,31 @@ def _safe_log(level: str, event: str, **fields: object) -> None:
         log_fn(event, extra={"event": event, **fields})
     except Exception:
         pass
+
+
+def _log_large_format_failure(
+    *,
+    session_id: str,
+    failure_kind: str,
+    error_type: str,
+    error_message: str,
+    tile_label: str | None = None,
+    artifact_role: str | None = None,
+    path: str | None = None,
+) -> None:
+    fields: dict[str, object] = {
+        "session_id": session_id,
+        "failure_kind": failure_kind,
+        "error_type": error_type,
+        "error_message": error_message,
+    }
+    if tile_label:
+        fields["tile_label"] = tile_label
+    if artifact_role:
+        fields["artifact_role"] = artifact_role
+    if path:
+        fields["path"] = path
+    _safe_log("error", "converter_large_format_failed", **fields)
 
 
 def _log_batch_item_failure(
