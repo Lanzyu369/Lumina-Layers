@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ast
+from contextlib import contextmanager
 import io
 import logging
 from pathlib import Path
@@ -16,13 +18,20 @@ from api.app import app
 from api.dependencies import get_file_registry, get_session_store
 from api.file_registry import FileRegistry
 from api.preview_cache_artifacts import (
+    PreviewCacheRevisionConflict,
     externalize_preview_cache,
     hydrate_preview_cache,
     is_preview_cache_artifact_ref,
 )
+from api.routers.converter import replace as replace_router
 from api.session_store import SessionStore
 
 client: TestClient = TestClient(app)
+
+_REPLACE_CACHE_CONFLICT_DETAIL = (
+    "Preview cache changed while replacement tools were running. "
+    "Re-run preview and try again."
+)
 
 
 @pytest.fixture(autouse=True)
@@ -139,6 +148,32 @@ def _capture_replace_logger(caplog: pytest.LogCaptureFixture) -> logging.Logger:
     return target_logger
 
 
+def test_replace_cache_conflict_handlers_do_not_return_internal_exception_text() -> None:
+    """Preview-cache conflicts should never expose internal field revisions."""
+
+    source = Path(replace_router.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    leaking_handlers: list[int] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ExceptHandler):
+            continue
+        if not isinstance(node.type, ast.Name):
+            continue
+        if node.type.id != "PreviewCacheRevisionConflict":
+            continue
+        for call in ast.walk(node):
+            if not isinstance(call, ast.Call):
+                continue
+            if not isinstance(call.func, ast.Name) or call.func.id != "str":
+                continue
+            if not call.args or not isinstance(call.args[0], ast.Name):
+                continue
+            if call.args[0].id == node.name:
+                leaking_handlers.append(call.lineno)
+
+    assert leaking_handlers == []
+
+
 def _seed_region_requantize_session(store: SessionStore, tmp_path) -> str:
     session_id = store.create()
     height, width = 16, 16
@@ -218,6 +253,58 @@ def _seed_recipe_session(store: SessionStore) -> str:
 
 class TestReplaceColorCanary:
     """Successful replace-color requests emit the structured done canary."""
+
+    def test_replace_color_cache_conflict_uses_safe_detail_and_logs_internal_reason(
+        self,
+        _isolate_dependency_overrides,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        store: SessionStore = _isolate_dependency_overrides["store"]
+        session_id = _seed_preview_session(store)
+        raw_detail = "Preview cache field 'matched_rgb' revision changed from 1 to 2"
+
+        @contextmanager
+        def _conflicting_transaction(*_args, **_kwargs):
+            raise PreviewCacheRevisionConflict(raw_detail)
+            yield
+
+        target_logger = _capture_replace_logger(caplog)
+
+        try:
+            with patch.object(
+                replace_router,
+                "_preview_cache_transaction",
+                _conflicting_transaction,
+            ):
+                response = client.post(
+                    "/api/convert/replace-color",
+                    json={
+                        "session_id": session_id,
+                        "selected_color": "#ffffff",
+                        "replacement_color": "#0000ff",
+                    },
+                )
+        finally:
+            target_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 409
+        assert response.json()["detail"] == _REPLACE_CACHE_CONFLICT_DETAIL
+        assert "matched_rgb" not in response.text
+        assert "revision changed" not in response.text
+        assert "from 1 to 2" not in response.text
+
+        records = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "converter_replace_cache_conflict"
+        ]
+        assert len(records) == 1
+        assert records[0].levelno == logging.WARNING
+        assert records[0].session_id == session_id
+        assert records[0].operation == "replace_color"
+        assert records[0].status_code == 409
+        assert records[0].error_type == "PreviewCacheRevisionConflict"
+        assert records[0].error_message == raw_detail
 
     def test_replace_color_emits_converter_replace_color_done_canary(
         self,
