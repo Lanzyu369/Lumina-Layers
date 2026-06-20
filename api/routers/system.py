@@ -596,13 +596,24 @@ def get_settings() -> UserSettingsResponse:
         UserSettingsResponse: Current settings or defaults.
             当前设置；无法安全读取时返回默认设置。
     """
-    if not SETTINGS_FILE.exists():
-        return UserSettingsResponse(status="success", settings=UserSettings())
     try:
+        if not SETTINGS_FILE.exists():
+            return UserSettingsResponse(status="success", settings=UserSettings())
         data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
             return UserSettingsResponse(status="success", settings=UserSettings())
         return UserSettingsResponse(status="success", settings=UserSettings(**data))
+    except OSError as exc:
+        log.warning(
+            "User settings could not be loaded; using defaults",
+            extra={
+                "event": "system_settings_load_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+                "settings_path": str(SETTINGS_FILE),
+            },
+        )
+        return UserSettingsResponse(status="success", settings=UserSettings())
     except (json.JSONDecodeError, ValueError):
         return UserSettingsResponse(status="success", settings=UserSettings())
 

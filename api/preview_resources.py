@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 import tempfile
 import uuid
+from contextlib import suppress
 from dataclasses import dataclass
 
 import cv2
@@ -21,6 +22,7 @@ from api.colorchecker_artifacts import (
     resolve_colorchecker_source_file,
 )
 from api.file_registry import FileRegistry
+from api.structured_logging import get_logger
 from config import (
     COLORCHECKER_TEMP_TTL_SECONDS,
     IMAGE_PREVIEW_JPEG_QUALITY,
@@ -31,6 +33,7 @@ from config import (
 PREVIEW_CONTEXT_COLORCHECKER = "colorchecker"
 PREVIEW_PUBLIC_PURPOSE = "bounded_preview"
 _PREVIEW_OWNER_SESSION_PREFIX = "bounded-preview-owner:"
+log = get_logger(__name__)
 
 _SUPPORTED_CONTEXTS = {PREVIEW_CONTEXT_COLORCHECKER}
 _COLORCHECKER_STANDARD_MIME_SUFFIXES = {
@@ -69,6 +72,9 @@ _COLORCHECKER_PREVIEW_GENERATION_FAILED_DETAIL = (
 _COLORCHECKER_PREVIEW_SERVICE_UNAVAILABLE_DETAIL = (
     "ColorChecker preview service is unavailable. "
     "Check the server ColorChecker dependencies and try again."
+)
+_COLORCHECKER_PREVIEW_PREPARATION_FAILED_DETAIL = (
+    "ColorChecker preview could not be prepared. Please try again."
 )
 _PREVIEW_ARTIFACT_UNREADABLE_DETAIL = (
     "Preview artifact is unavailable or unreadable. "
@@ -336,12 +342,26 @@ async def register_preview_resource_upload(
             status_code=422,
             detail=_COLORCHECKER_PREVIEW_GENERATION_FAILED_DETAIL,
         ) from exc
-    except (cv2.error, OSError, RuntimeError, TypeError, ValueError):
+    except (cv2.error, OSError, RuntimeError, TypeError, ValueError) as exc:
         if resource_id:
-            registry.cleanup_file(resource_id)
+            with suppress(OSError, RuntimeError, ValueError):
+                registry.cleanup_file(resource_id)
         if preview_id:
-            registry.cleanup_file(preview_id)
-        raise
+            with suppress(OSError, RuntimeError, ValueError):
+                registry.cleanup_file(preview_id)
+        log.error(
+            "ColorChecker preview resource preparation failed",
+            extra={
+                "event": "preview_resource_registration_failed",
+                "context": context,
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=_COLORCHECKER_PREVIEW_PREPARATION_FAILED_DETAIL,
+        ) from exc
     finally:
         if source_path is not None:
             try:
