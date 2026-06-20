@@ -20,6 +20,7 @@ import cv2
 import numpy as np
 from scipy.optimize import least_squares
 
+from api.structured_logging import get_logger
 from config import MATERIALS_DIR, TEMP_DIR
 from .kit import SINGLE_STAGE_SPEC, SingleStageSpec
 
@@ -29,6 +30,47 @@ DEFAULT_MATERIAL_PACKAGE_MAX_ZIP_ENTRY_BYTES = 50 * 1024 * 1024
 DEFAULT_MATERIAL_PACKAGE_MAX_UNCOMPRESSED_BYTES = 150 * 1024 * 1024
 DEFAULT_MATERIAL_PACKAGE_MAX_COMPRESSION_RATIO = 100
 _MATERIAL_PACKAGE_DOWNLOAD_CHUNK_BYTES = 1024 * 1024
+_MATERIAL_REGISTRY_REFRESH_PACKAGE_FAILURE_DETAIL = (
+    "Material registry package could not be installed. "
+    "Check the package and try refreshing again."
+)
+_MATERIAL_REGISTRY_REFRESH_PUBLIC_ERROR_PREFIXES = {
+    "Material registry package exceeds maximum size": (
+        "Material registry package exceeds maximum size."
+    ),
+    "Material registry package_url must be http:// or https://": (
+        "Material registry package_url must be http:// or https://."
+    ),
+    "Material registry package_url must use the same origin": (
+        "Material registry package_url must use the same origin."
+    ),
+    "Material registry package redirects are not allowed": (
+        "Material registry package redirects are not allowed."
+    ),
+    "Material registry package_sha256 is invalid": (
+        "Material registry package_sha256 is invalid."
+    ),
+    "Material registry package_sha256 mismatch": (
+        "Material registry package_sha256 mismatch."
+    ),
+    "Material registry catalog entry is missing material identity": (
+        "Material registry catalog entry is missing material identity."
+    ),
+    "Material package ZIP has too many entries": (
+        "Material registry package ZIP has too many entries."
+    ),
+    "Material package ZIP entry exceeds maximum size": (
+        "Material registry package ZIP entry exceeds maximum size."
+    ),
+    "Material package ZIP uncompressed size exceeds maximum": (
+        "Material registry package ZIP contents exceed the supported size."
+    ),
+    "Material package ZIP compression ratio is too high": (
+        "Material registry package ZIP compression ratio is too high."
+    ),
+}
+
+_log = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -2652,6 +2694,14 @@ def _reject_material_registry_package_redirect(response: Any) -> None:
 def _reject_material_registry_catalog_redirect(response: Any) -> None:
     if bool(getattr(response, "is_redirect", False)):
         raise RuntimeError("Material registry catalog redirects are not allowed")
+
+
+def _public_material_registry_refresh_failure_error(exc: BaseException) -> str:
+    message = str(exc).strip()
+    for prefix, public_error in _MATERIAL_REGISTRY_REFRESH_PUBLIC_ERROR_PREFIXES.items():
+        if message.startswith(prefix):
+            return public_error
+    return _MATERIAL_REGISTRY_REFRESH_PACKAGE_FAILURE_DETAIL
 
 
 def _new_temp_material_registry_package_path() -> tuple[int, Path]:
@@ -5422,12 +5472,24 @@ def refresh_material_sync_from_registry(
                             pass
                     installed_materials.extend(import_result.imported_materials)
                 except (httpx.HTTPError, OSError, RuntimeError, TypeError, ValueError) as exc:
+                    public_error = _public_material_registry_refresh_failure_error(exc)
+                    _log.warning(
+                        "Material registry package refresh failed",
+                        extra={
+                            "event": "material_sync_package_refresh_failed",
+                            "material_id": material_id,
+                            "revision_id": revision_id,
+                            "package_url": package_url,
+                            "error_type": type(exc).__name__,
+                            "error_message": str(exc),
+                        },
+                    )
                     failures.append(
                         {
                             "material_id": material_id,
                             "revision_id": revision_id,
                             "package_url": package_url,
-                            "error": str(exc),
+                            "error": public_error,
                         }
                     )
 
