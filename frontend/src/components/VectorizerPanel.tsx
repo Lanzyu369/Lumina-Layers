@@ -7,7 +7,11 @@ import { useConverterStore } from "../stores/converter";
 import { useWidgetStore } from "../stores/widgetStore";
 import { usePanZoom } from "../hooks/usePanZoom";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
-import { buildApiResourceUrl, downloadResourceBlob } from "../api/client";
+import {
+  apiErrorToVisibleMessage,
+  buildApiResourceUrl,
+  downloadResourceBlob,
+} from "../api/client";
 import ImageUpload from "./ui/ImageUpload";
 import Slider from "./ui/Slider";
 import Checkbox from "./ui/Checkbox";
@@ -41,13 +45,7 @@ function scheduleVectorizerReset(): void {
 }
 
 function toVisibleErrorMessage(error: unknown, fallback: string): string {
-  if (error instanceof Error && error.message.trim()) {
-    return error.message.trim();
-  }
-  if (typeof error === "string" && error.trim()) {
-    return error.trim();
-  }
-  return fallback;
+  return apiErrorToVisibleMessage(error, fallback);
 }
 
 /**

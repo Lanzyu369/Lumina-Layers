@@ -1,4 +1,5 @@
 import { create } from "zustand"
+import { apiErrorToVisibleMessage } from "../api/client"
 import { clearCache as clearCacheApi } from "../api/system"
 import { tRuntime } from "../i18n/runtime"
 
@@ -46,8 +47,10 @@ export const useAboutStore = create<AboutState & AboutActions>((set) => ({
         loading: false,
         notification: {
           type: "error",
-          message:
-            err instanceof Error ? err.message : tRuntime("about_cache_clear_failed"),
+          message: apiErrorToVisibleMessage(
+            err,
+            tRuntime("about_cache_clear_failed"),
+          ),
         },
       })
     }
@@ -59,4 +62,3 @@ export const useAboutStore = create<AboutState & AboutActions>((set) => ({
 
   dismissNotification: () => set({ notification: null }),
 }))
-
