@@ -467,12 +467,11 @@ describe("collectBugReportContext", () => {
       session_id: "converter-large-format",
       download_url: "/api/files/large-format-download-id",
       artifact_type: "zip",
-      disk_path: null,
       source: "converter",
     });
   });
 
-  it("captures converter 3mf final artifacts on the converter tab", () => {
+  it("captures converter 3mf final artifacts without disk paths", () => {
     useWidgetStore.setState({ activeTab: "converter" });
     useConverterStore.setState({
       sessionId: "converter-3mf",
@@ -487,8 +486,8 @@ describe("collectBugReportContext", () => {
       session_id: "converter-3mf",
       download_url: "/api/files/model-3mf-download-id",
       artifact_type: "3mf",
-      disk_path: "/tmp/model.3mf",
       source: "converter",
     });
+    expect(context.active_final_artifact_ref).not.toHaveProperty("disk_path");
   });
 });
