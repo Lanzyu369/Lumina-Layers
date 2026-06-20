@@ -774,6 +774,78 @@ def test_material_sync_refresh_endpoint_returns_core_summary(monkeypatch) -> Non
     assert body["installed_materials"][0]["directory_name"] == "BrandA/pla-basic"
 
 
+def test_material_sync_refresh_endpoint_hides_package_failure_paths(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    temp_root = tmp_path / "temp"
+    package_path = tmp_path / "material_package.zip"
+    content_hash = _write_v2_material_package(package_path)
+    package_bytes = package_path.read_bytes()
+    package_sha256 = hashlib.sha256(package_bytes).hexdigest()
+    monkeypatch.setattr(materials_module, "TEMP_DIR", str(temp_root))
+    monkeypatch.setenv("LUMINA_MATERIAL_PACKAGE_MAX_UNCOMPRESSED_BYTES", "1")
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/materials/catalog":
+            return httpx.Response(
+                200,
+                json={
+                    "schema_version": "1.0",
+                    "materials": [
+                        {
+                            "material_id": "mat_sync_test",
+                            "revision_id": "rev_sync_test",
+                            "content_hash": content_hash,
+                            "channel": "official",
+                            "visibility": "official",
+                            "package_url": "/v1/packages/material_package.zip",
+                            "package_sha256": package_sha256,
+                        }
+                    ],
+                },
+            )
+        if request.url.path == "/v1/packages/material_package.zip":
+            return httpx.Response(200, content=package_bytes)
+        return httpx.Response(404)
+
+    def _real_refresh_with_mock_transport() -> dict[str, object]:
+        return refresh_material_sync_from_registry(
+            registry_url="https://registry.test/v1",
+            materials_dir=str(materials_root),
+            transport=httpx.MockTransport(_handler),
+        )
+
+    monkeypatch.setattr(
+        "api.routers.material_sync.refresh_material_sync_from_registry",
+        _real_refresh_with_mock_transport,
+    )
+
+    logger = logging.getLogger("lumina.core.single_stage.materials")
+    logger.addHandler(caplog.handler)
+    caplog.set_level(logging.WARNING, logger=logger.name)
+    try:
+        response = _client().post("/api/material-sync/refresh")
+    finally:
+        logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "partial"
+    assert body["failed_count"] == 1
+    assert str(temp_root) not in response.text
+    assert "material_registry_package_" not in response.text
+    failure_logs = _records_for_event(
+        caplog,
+        "material_sync_package_refresh_failed",
+    )
+    assert failure_logs
+    assert failure_logs[0].error_type == "ValueError"
+    assert str(temp_root) in failure_logs[0].error_message
+
+
 def test_material_sync_catalog_endpoint_returns_remote_catalog_without_installing(
     monkeypatch,
 ) -> None:
