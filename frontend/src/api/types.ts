@@ -1512,7 +1512,8 @@ export interface SlicerDetectResponse {
 
 export interface SlicerLaunchRequest {
   slicer_id: string;
-  file_path: string;
+  file_path?: string;
+  download_url?: string;
   slicer_path?: string;
 }
 
@@ -1558,7 +1559,7 @@ export interface BatchResponse {
   message: string;
   /** 合并 3MF 的下载 URL；零成功项时为 null */
   download_url: string | null;
-  /** 合并 3MF 的后端本地路径；用于复用原有“在切片软件打开”链路 */
+  /** Legacy field kept for compatibility; public responses should be null. */
   threemf_disk_path?: string | null;
   /** 兼容旧客户端的首个批量预览 GLB URL；零成功项时为 null */
   preview_3d_url: string | null;

@@ -321,5 +321,5 @@ async def generate_color_card(
         message=status_msg or "Color card generated",
         download_url=f"/api/files/{download_id}",
         preview_3d_url=preview_3d_url,
-        threemf_disk_path=threemf_path,
+        threemf_disk_path=None,
     )

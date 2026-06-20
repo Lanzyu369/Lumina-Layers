@@ -56,7 +56,8 @@ export function getSlicerBrandStyle(slicerId: string): SlicerBrandStyle {
  * 根据切片软件可用性和 3MF 状态决定主按钮文案。
  *
  * @param hasSlicers - Whether any slicer is detected. (是否检测到切片软件)
- * @param threemfDiskPath - The 3MF file disk path, or null. (3MF 文件磁盘路径，或 null)
+ * @param threemfDiskPath - Legacy 3MF disk path or public artifact URL, or null.
+ *   (旧版 3MF 磁盘路径或公开产物 URL，或 null)
  * @param slicerName - The display name of the selected slicer. (选中切片软件的显示名称)
  * @returns The button label string. (按钮文案字符串)
  */
@@ -272,6 +273,7 @@ export default function SlicerSelector({
     getLatestThreemfDiskPath ?? (() => useConverterStore.getState().threemfDiskPath);
   const handleArtifactAction =
     onArtifactAction ?? (() => useConverterStore.getState().cleanupAfterDownload());
+  const launchArtifactSource = downloadUrl ?? threemfDiskPath;
 
   useEffect(() => {
     if (!preferredInstalledSlicer) {
@@ -345,16 +347,17 @@ export default function SlicerSelector({
     }
 
     // Has slicers (normal mode)
-    if (threemfDiskPath) {
-      void launchSlicer(threemfDiskPath, activeSlicerId);
+    if (launchArtifactSource) {
+      void launchSlicer(launchArtifactSource, activeSlicerId);
       handleArtifactAction();
     } else {
       setIsAutoGenerating(true);
       try {
         await onAutoGenerate();
-        const latestPath = resolveLatestThreemfDiskPath();
-        if (latestPath) {
-          void launchSlicer(latestPath, activeSlicerId);
+        const latestArtifactSource =
+          resolveLatestDownloadUrl() ?? resolveLatestThreemfDiskPath();
+        if (latestArtifactSource) {
+          void launchSlicer(latestArtifactSource, activeSlicerId);
           handleArtifactAction();
         }
       } catch {
@@ -381,7 +384,7 @@ export default function SlicerSelector({
 
   const mainButtonLabel = getButtonLabel(
     largeFormat ? hasSlicers : canOpenInSlicer,
-    threemfDiskPath,
+    launchArtifactSource,
     activeSlicer?.display_name ?? preferredSlicerName,
     t,
     largeFormat,
@@ -494,7 +497,7 @@ export default function SlicerSelector({
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                   </svg>
                 )}
-                {getButtonLabel(false, threemfDiskPath, null, t, largeFormat)}
+                {getButtonLabel(false, launchArtifactSource, null, t, largeFormat)}
               </button>
             </>
           )}

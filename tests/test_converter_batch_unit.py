@@ -265,7 +265,7 @@ class TestBatchPartialFailure:
 
         # download_url present
         assert body["download_url"].startswith("/api/files/")
-        assert body["threemf_disk_path"].endswith(".3mf")
+        assert body["threemf_disk_path"] is None
         assert body["preview_3d_url"].startswith("/api/files/")
         assert len(body["preview_items"]) == 1
         assert body["preview_items"][0]["filename"] == "ok.png"
@@ -327,7 +327,7 @@ class TestBatchAllSuccess:
         assert len(body["results"]) == 2
         assert all(r["status"] == "success" for r in body["results"])
         assert body["download_url"].startswith("/api/files/")
-        assert body["threemf_disk_path"].endswith(".3mf")
+        assert body["threemf_disk_path"] is None
         assert body["preview_3d_url"].startswith("/api/files/")
         assert [item["filename"] for item in body["preview_items"]] == [
             "img1.png",
@@ -1049,7 +1049,7 @@ class TestBatchMergeFlow:
         assert body["status"] == "ok"
         assert body["download_url"] is not None
         assert body["download_url"].startswith("/api/files/")
-        assert body["threemf_disk_path"].endswith(".3mf")
+        assert body["threemf_disk_path"] is None
         assert body["preview_3d_url"] is not None
         assert body["preview_3d_url"].startswith("/api/files/")
         assert body["preview_items"] == [
@@ -1154,7 +1154,7 @@ class TestBatchMergeFlow:
         assert body["status"] == "ok"
         assert body["download_url"] is not None
         assert body["download_url"].startswith("/api/files/")
-        assert body["threemf_disk_path"].endswith(".3mf")
+        assert body["threemf_disk_path"] is None
         assert body["preview_3d_url"] is not None
         assert body["preview_3d_url"].startswith("/api/files/")
         assert len(body["preview_items"]) == 1
@@ -1315,7 +1315,7 @@ class TestBatchMergeFlow:
 
         # download_url and preview_3d_url are present
         assert body["download_url"] is not None
-        assert body["threemf_disk_path"].endswith(".3mf")
+        assert body["threemf_disk_path"] is None
         assert body["preview_3d_url"] is not None
         assert len(body["preview_items"]) == 3
         assert [item["filename"] for item in body["preview_items"]] == [

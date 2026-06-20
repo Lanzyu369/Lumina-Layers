@@ -857,10 +857,12 @@ export default function ActionBar() {
         onAutoGenerate={async () => {
           if (batchMode) {
             await submitBatch()
-            return useConverterStore.getState().threemfDiskPath ?? null
+            const state = useConverterStore.getState()
+            return state.downloadUrl ?? state.threemfDiskPath ?? null
           }
           await submitFullPipeline()
-          return useConverterStore.getState().threemfDiskPath ?? null
+          const state = useConverterStore.getState()
+          return state.downloadUrl ?? state.threemfDiskPath ?? null
         }}
       />
     </div>

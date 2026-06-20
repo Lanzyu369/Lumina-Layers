@@ -339,7 +339,7 @@ def calibration_generate(
         download_url=f"/api/files/{download_id}",
         preview_url=preview_url,
         layer_urls=layer_urls if layer_urls else None,
-        threemf_disk_path=path if str(path).lower().endswith(".3mf") else None,
+        threemf_disk_path=None,
     )
 
 

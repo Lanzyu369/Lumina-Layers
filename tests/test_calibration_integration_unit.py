@@ -448,7 +448,8 @@ class TestParameterMapping:
             )
 
         assert response.status_code == 200
-        assert response.json()["threemf_disk_path"] == "/tmp/fake.3mf"
+        assert response.json()["threemf_disk_path"] is None
+        assert "/tmp/fake.3mf" not in response.text
         mock_fn.assert_called_once()
         kwargs = mock_fn.call_args.kwargs
         assert kwargs["printer_id"] == "bambu-p1s"

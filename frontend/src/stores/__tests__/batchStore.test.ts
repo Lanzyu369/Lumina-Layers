@@ -315,7 +315,7 @@ describe("submitBatch API 调用和状态管理", () => {
     expect(state.batchResult).toEqual(mockBatchResponse);
     expect(state.batchLoading).toBe(false);
     expect(state.error).toBeNull();
-    expect(state.threemfDiskPath).toBe("/tmp/batch_result.3mf");
+    expect(state.threemfDiskPath).toBeNull();
     expect(state.downloadUrl).toBe("/api/files/batch_result.3mf");
   });
 
@@ -360,7 +360,7 @@ describe("submitBatch API 调用和状态管理", () => {
     await useConverterStore.getState().submitBatch();
 
     const state = useConverterStore.getState();
-    expect(state.error).toBe("Network error");
+    expect(state.error).toBe("接口请求在服务器返回响应前失败。");
     expect(state.batchLoading).toBe(false);
     expect(state.batchResult).toBeNull();
   });
@@ -413,7 +413,7 @@ describe("submitBatch API 调用和状态管理", () => {
     await useConverterStore.getState().submitBatch();
 
     const state = useConverterStore.getState();
-    expect(state.error).toBe("批量处理失败");
+    expect(state.error).toBe("string error");
     expect(state.batchLoading).toBe(false);
   });
 });

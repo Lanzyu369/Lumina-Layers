@@ -132,6 +132,33 @@ describe("SlicerSelector settings linkage", () => {
     });
   });
 
+  it("opens a generated /api/files artifact without requiring a disk path", async () => {
+    const onAutoGenerate = vi.fn(async () => null);
+
+    render(
+      <I18nProvider>
+        <SlicerSelector
+          threemfDiskPath={null}
+          downloadUrl="/api/files/calibration"
+          canSubmit
+          onAutoGenerate={onAutoGenerate}
+        />
+      </I18nProvider>,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "在 OrcaSlicer 中打开" }),
+    );
+
+    await waitFor(() => {
+      expect(vi.mocked(launchSlicer)).toHaveBeenCalledWith({
+        slicer_id: "orca_slicer",
+        download_url: "/api/files/calibration",
+      });
+    });
+    expect(onAutoGenerate).not.toHaveBeenCalled();
+  });
+
   it("does not clean up the converter session when a direct 3MF download is expired", async () => {
     assertResourceDownloadAvailableMock.mockRejectedValueOnce(
       new Error("The requested resource was not found or has expired."),

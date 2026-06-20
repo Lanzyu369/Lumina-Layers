@@ -248,7 +248,7 @@ describe("ActionBar — auto batch mode", () => {
 
   it("reuses the slicer-open action for batch merged 3MF generation", async () => {
     const submitBatch = vi.fn(async () => {
-      useConverterStore.setState({ threemfDiskPath: "/tmp/batch-merged.3mf" });
+      useConverterStore.setState({ downloadUrl: "/api/files/batch-merged" });
     });
     const submitFullPipeline = vi.fn();
     useConverterStore.setState({
@@ -270,7 +270,7 @@ describe("ActionBar — auto batch mode", () => {
       | undefined;
     expect(onAutoGenerate).toBeTypeOf("function");
 
-    await expect(onAutoGenerate!()).resolves.toBe("/tmp/batch-merged.3mf");
+    await expect(onAutoGenerate!()).resolves.toBe("/api/files/batch-merged");
     expect(submitBatch).toHaveBeenCalledOnce();
     expect(submitFullPipeline).not.toHaveBeenCalled();
   });

@@ -330,7 +330,7 @@ def test_registry_match_produces_correct_display_name(
 
 # =========================================================================
 # Feature: slicer-launch-integration
-# Property 1: GenerateResponse 包含 3MF 磁盘路径
+# Property 1: GenerateResponse hides server-local 3MF disk paths
 # **Validates: Requirements 1.1, 7.1, 7.2**
 # =========================================================================
 
@@ -343,12 +343,10 @@ _nonempty_path_strategy = st.text(min_size=1).filter(lambda s: s.strip() != "")
 
 @given(path=_nonempty_path_strategy)
 @settings(max_examples=200)
-def test_generate_response_contains_threemf_disk_path(path: str) -> None:
-    """Property 1: For any successful 3MF generation where generate_final_model
-    returns a valid threemf_path, GenerateResponse.threemf_disk_path SHALL equal
-    that path and be a non-empty string.
+def test_generate_response_redacts_threemf_disk_path(path: str) -> None:
+    """Property 1: Public GenerateResponse must not expose server-local paths.
 
-    Feature: slicer-launch-integration, Property 1: GenerateResponse 包含 3MF 磁盘路径
+    Feature: slicer-launch-integration, Property 1: GenerateResponse hides disk paths
     **Validates: Requirements 1.1, 7.1, 7.2**
     """
     resp = GenerateResponse(
@@ -359,14 +357,7 @@ def test_generate_response_contains_threemf_disk_path(path: str) -> None:
         threemf_disk_path=path,
     )
 
-    # threemf_disk_path must equal the input path
-    assert resp.threemf_disk_path == path, (
-        f"Expected threemf_disk_path={path!r}, got {resp.threemf_disk_path!r}"
-    )
-    # threemf_disk_path must be a non-empty string
-    assert isinstance(resp.threemf_disk_path, str) and len(resp.threemf_disk_path) > 0, (
-        f"threemf_disk_path should be a non-empty string, got {resp.threemf_disk_path!r}"
-    )
+    assert resp.threemf_disk_path is None
 
 
 def test_generate_response_threemf_disk_path_none_when_omitted() -> None:

@@ -180,7 +180,7 @@ export const useCalibrationStore = create<
       });
       set({
         downloadUrl: response.download_url,
-        threemfDiskPath: response.threemf_disk_path ?? null,
+        threemfDiskPath: null,
         previewImageUrl: response.preview_url ?? null,
         layerImageUrls: response.layer_urls ?? null,
         modelUrl: null,
