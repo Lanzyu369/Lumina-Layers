@@ -20,6 +20,7 @@ from api.schemas.responses import (
     MaterialSyncRefreshResponse,
     MaterialSyncRollbackResponse,
     MaterialSyncStatusResponse,
+    public_material_response_item,
 )
 from api.structured_logging import get_logger
 from core.single_stage import (
@@ -266,7 +267,9 @@ async def material_sync_install(
         status="ok",
         message=f"Installed {len(result.imported_materials)} material packages",
         installed_count=len(result.imported_materials),
-        installed_materials=result.imported_materials,
+        installed_materials=[
+            public_material_response_item(item) for item in result.imported_materials
+        ],
     )
 
 
@@ -368,7 +371,11 @@ async def material_sync_install_from_registry(
         status="ok",
         message=f"Installed {len(installed_materials)} material packages",
         installed_count=len(installed_materials),
-        installed_materials=installed_materials,
+        installed_materials=[
+            public_material_response_item(item)
+            for item in installed_materials
+            if isinstance(item, dict)
+        ],
     )
 
 
@@ -415,7 +422,18 @@ async def material_sync_refresh(
             f"Installed {result['installed_count']} material packages; "
             f"skipped {result['skipped_count']}; failed {result['failed_count']}"
         ),
-        **result,
+        registry_url=str(result["registry_url"]),
+        channels=list(result["channels"]),
+        checked_count=int(result["checked_count"]),
+        installed_count=int(result["installed_count"]),
+        skipped_count=int(result["skipped_count"]),
+        failed_count=int(result["failed_count"]),
+        installed_materials=[
+            public_material_response_item(item)
+            for item in list(result.get("installed_materials") or [])
+            if isinstance(item, dict)
+        ],
+        failures=list(result.get("failures") or []),
     )
 
 

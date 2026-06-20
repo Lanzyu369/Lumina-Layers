@@ -174,6 +174,49 @@ def test_material_solver_cache_list_hides_storage_error_detail(
     assert "permission denied" not in response.text
 
 
+def test_material_solver_cache_list_hides_cache_file_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    client, _, _ = _client_with_state()
+    private_cache_path = tmp_path / "material-cache" / "solver-cache.npz"
+    private_cache_path.parent.mkdir()
+    private_cache_path.write_bytes(b"cache bytes")
+    monkeypatch.setattr(
+        "api.routers.single_stage.list_cached_entries",
+        lambda: [
+            {
+                "palette_hash": "stub_hash",
+                "canonical_materials": [
+                    {"directory_name": "BrandA/pla-basic"},
+                    {"directory_name": "BrandB/pla-red"},
+                ],
+                "layer_count": 8,
+                "layer_height_mm": 0.04,
+                "substrate": "white",
+                "grid_resolution": 64,
+                "total_combinations": 256,
+                "valid_cell_count": 200,
+                "total_cell_count": 4096,
+                "mean_delta_e": 1.5,
+                "max_delta_e": 4.0,
+                "build_time_seconds": 1.0,
+                "cache_file_size_bytes": private_cache_path.stat().st_size,
+                "cache_file_path": str(private_cache_path),
+            }
+        ],
+    )
+
+    response = client.get("/api/extractor/material-solver-caches")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["entries"][0]["palette_hash"] == "stub_hash"
+    assert body["entries"][0]["cache_file_size_bytes"] == private_cache_path.stat().st_size
+    assert "cache_file_path" not in body["entries"][0]
+    assert str(private_cache_path) not in response.text
+
+
 def test_material_solver_cache_status_rejects_malformed_local_material(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -3603,6 +3646,10 @@ def test_gradient_card_material_library_route_lists_saved_materials(
     assert item["verification_history"][0]["rmse_linear"] == 0.015
     assert item["material_file_url"] is None
     assert item["stage_a_params_url"] is None
+    assert "archive_path" not in item
+    assert "stage_a_params_path" not in item
+    assert str(archive_path) not in response.text
+    assert str(stage_a_path) not in response.text
     assert registry.cleanup_expired() == 0
 
 
@@ -3643,6 +3690,10 @@ def test_gradient_card_material_library_route_can_include_file_urls(
     item = response.json()["materials"][0]
     assert item["material_file_url"].startswith("/api/files/")
     assert item["stage_a_params_url"].startswith("/api/files/")
+    assert "archive_path" not in item
+    assert "stage_a_params_path" not in item
+    assert str(archive_path) not in response.text
+    assert str(stage_a_path) not in response.text
     material_resolved = registry.resolve(item["material_file_url"].split("/")[-1])
     stage_a_resolved = registry.resolve(item["stage_a_params_url"].split("/")[-1])
     assert material_resolved is not None

@@ -52,6 +52,7 @@ from api.schemas.responses import (
     MaterialSolverRuntimeStatusResponse,
     SingleStageExtractResponse,
     StageAFitResponse,
+    public_material_response_item,
 )
 from api.schemas.lut import (
     LutAxisRange,
@@ -1162,7 +1163,7 @@ async def extractor_save_gradient_card_material(
         ),
         material_file_url=f"/api/files/{material_id}",
         stage_a_params_url=f"/api/files/{stage_a_id}",
-        material_summary=result.material_summary,
+        material_summary=public_material_response_item(result.material_summary),
     )
 
 
@@ -1302,7 +1303,7 @@ async def extractor_update_gradient_card_material(
         status="ok",
         message="Gradient card material updated successfully",
         material={
-            **result.material_summary,
+            **public_material_response_item(result.material_summary),
             "material_file_url": material_file_url,
             "stage_a_params_url": stage_a_params_url,
         },
@@ -1424,7 +1425,9 @@ async def extractor_import_gradient_card_materials(
         status="ok",
         message=f"Imported {len(imported_materials)} saved materials",
         imported_count=len(imported_materials),
-        imported_materials=imported_materials,
+        imported_materials=[
+            public_material_response_item(item) for item in imported_materials
+        ],
     )
 
 
@@ -1487,7 +1490,7 @@ async def extractor_list_gradient_card_materials(
             )
             response_items.append(
                 {
-                    **item,
+                    **public_material_response_item(item),
                     "material_file_url": material_file_url,
                     "stage_a_params_url": stage_a_params_url,
                 }
@@ -1837,7 +1840,6 @@ def _cache_entry_from_metadata(
     metadata: dict,
     *,
     cache_file_size_bytes: int,
-    cache_file_path: str | None,
 ) -> MaterialSolverCacheEntryResponse:
     canonical_materials = metadata.get("canonical_materials") or []
     material_dir_names = [
@@ -1860,7 +1862,6 @@ def _cache_entry_from_metadata(
         build_time_seconds=float(metadata.get("build_time_seconds", 0.0)),
         built_at=metadata.get("built_at"),
         cache_file_size_bytes=int(cache_file_size_bytes),
-        cache_file_path=cache_file_path,
     )
 
 
@@ -1879,7 +1880,6 @@ def _runtime_entry_from_metadata(
     metadata: dict,
     *,
     cache_file_size_bytes: int,
-    cache_file_path: str | None,
 ) -> MaterialSolverRuntimeEntryResponse:
     canonical_materials = metadata.get("canonical_materials") or []
     material_dir_names = [
@@ -1914,7 +1914,6 @@ def _runtime_entry_from_metadata(
         inverse_refinement_enabled=bool(inverse.get("enabled", False)),
         built_at=metadata.get("built_at"),
         cache_file_size_bytes=int(cache_file_size_bytes),
-        cache_file_path=cache_file_path,
     )
 
 
@@ -1922,7 +1921,6 @@ def _runtime_entry_from_metadata_record(record: Any) -> MaterialSolverRuntimeEnt
     return _runtime_entry_from_metadata(
         record.metadata,
         cache_file_size_bytes=int(record.cache_file_size_bytes),
-        cache_file_path=str(record.cache_file_path),
     )
 
 
@@ -1978,7 +1976,6 @@ async def material_solver_cache_list() -> MaterialSolverCacheListResponse:
         _cache_entry_from_metadata(
             entry,
             cache_file_size_bytes=int(entry.get("cache_file_size_bytes", 0)),
-            cache_file_path=entry.get("cache_file_path"),
         )
         for entry in raw_entries
     ]
@@ -2059,7 +2056,6 @@ async def material_solver_cache_status(
     entry = _cache_entry_from_metadata(
         cache.metadata,
         cache_file_size_bytes=file_size,
-        cache_file_path=str(npz_path),
     )
     return MaterialSolverCacheStatusResponse(
         status="ok",
@@ -2179,7 +2175,6 @@ async def material_solver_cache_build(
     entry = _cache_entry_from_metadata(
         cache.metadata,
         cache_file_size_bytes=file_size,
-        cache_file_path=str(npz_path),
     )
     log.info(
         "Material solver cache built",

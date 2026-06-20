@@ -414,6 +414,13 @@ def test_material_sync_install_imports_v2_package_and_updates_status(
     assert install_body["status"] == "ok"
     assert install_body["installed_count"] == 1
     assert install_body["installed_materials"][0]["directory_name"] == "BrandA/pla-basic"
+    assert "archive_path" not in install_body["installed_materials"][0]
+    assert "stage_a_params_path" not in install_body["installed_materials"][0]
+    assert "materials/BrandA/pla-basic/material.json" not in install_response.text
+    assert (
+        "materials/BrandA/pla-basic/stage_A_parameters.json"
+        not in install_response.text
+    )
 
     status_response = _client().get("/api/material-sync/status")
     assert status_response.status_code == 200
@@ -772,6 +779,10 @@ def test_material_sync_refresh_endpoint_returns_core_summary(monkeypatch) -> Non
     assert body["channels"] == ["official"]
     assert body["installed_count"] == 1
     assert body["installed_materials"][0]["directory_name"] == "BrandA/pla-basic"
+    assert "archive_path" not in body["installed_materials"][0]
+    assert "stage_a_params_path" not in body["installed_materials"][0]
+    assert "materials/BrandA/pla-basic/material.json" not in response.text
+    assert "materials/BrandA/pla-basic/stage_A_parameters.json" not in response.text
 
 
 def test_material_sync_catalog_endpoint_returns_remote_catalog_without_installing(
@@ -1243,6 +1254,10 @@ def test_material_sync_install_from_registry_endpoint_installs_selected_package(
     assert body["status"] == "ok"
     assert body["installed_count"] == 1
     assert body["installed_materials"][0]["directory_name"] == "BrandA/pla-basic"
+    assert "archive_path" not in body["installed_materials"][0]
+    assert "stage_a_params_path" not in body["installed_materials"][0]
+    assert "materials/BrandA/pla-basic/material.json" not in response.text
+    assert "materials/BrandA/pla-basic/stage_A_parameters.json" not in response.text
 
 
 def test_material_sync_install_from_registry_rejects_package_not_in_catalog(

@@ -424,6 +424,10 @@ class TestSaveGradientCardMaterialCanary:
         assert body["status"] == "ok"
         assert body["material_file_url"].startswith("/api/files/")
         assert body["material_summary"]["verification_count"] == 2
+        assert "archive_path" not in body["material_summary"]
+        assert "stage_a_params_path" not in body["material_summary"]
+        assert str(archive_path) not in response.text
+        assert str(params_path) not in response.text
 
         records = _records_for_event(
             caplog,
@@ -574,6 +578,10 @@ class TestUpdateGradientCardMaterialCanary:
         body = response.json()
         assert body["status"] == "ok"
         assert body["material"]["material_name"] == payload["material_name"]
+        assert "archive_path" not in body["material"]
+        assert "stage_a_params_path" not in body["material"]
+        assert str(archive_path) not in response.text
+        assert str(params_path) not in response.text
 
         records = _records_for_event(
             caplog,

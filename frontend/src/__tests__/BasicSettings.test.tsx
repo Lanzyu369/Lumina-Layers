@@ -236,7 +236,6 @@ function makeMaterial(
   return {
     material_name: materialName,
     directory_name: directoryName,
-    archive_path: `${directoryName}/material.json`,
     material_file_url: `/materials/${directoryName}/material.json`,
     estimated_rgb: [255, 255, 255],
   };
