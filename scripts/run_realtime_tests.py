@@ -20,8 +20,9 @@ ROOT = Path(__file__).resolve().parents[1]
 LOG_DIR = ROOT / ".cache" / "test-dashboard"
 
 SMOKE_CMD = [sys.executable, "-m", "pytest", "tests", "-m", "smoke", "-q"]
-LINT_CMD = ["npm", "run", "lint"]
-VITEST_WATCH_CMD = ["npm", "run", "test:watch:core"]
+LINT_CMD = ["pnpm", "lint"]
+VITEST_WATCH_CMD = ["pnpm", "test:watch:core"]
+WINDOWS_COMMAND_SHIMS = {"pnpm"}
 
 
 @dataclass
@@ -38,7 +39,7 @@ class CheckStatus:
 
 
 def _run_command(cmd: list[str], cwd: Path, log_path: Path) -> tuple[int, str]:
-    if os.name == "nt" and cmd and cmd[0] in {"npm", "npx"}:
+    if os.name == "nt" and cmd and cmd[0] in WINDOWS_COMMAND_SHIMS:
         full_cmd = ["cmd", "/c", *cmd]
     else:
         full_cmd = cmd
@@ -113,7 +114,7 @@ def _periodic_runner(
 def _vitest_watch_runner(status: CheckStatus, stop_event: threading.Event) -> None:
     log_path = status.log_path or LOG_DIR / "vitest-watch.log"
     status.running = True
-    if os.name == "nt" and VITEST_WATCH_CMD[0] in {"npm", "npx"}:
+    if os.name == "nt" and VITEST_WATCH_CMD[0] in WINDOWS_COMMAND_SHIMS:
         cmd = ["cmd", "/c", *VITEST_WATCH_CMD]
     else:
         cmd = VITEST_WATCH_CMD
