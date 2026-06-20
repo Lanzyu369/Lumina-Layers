@@ -11,9 +11,15 @@ const { assertResourceDownloadAvailableMock } = vi.hoisted(() => ({
   assertResourceDownloadAvailableMock: vi.fn(),
 }));
 
-vi.mock("../api/client", () => ({
-  assertResourceDownloadAvailable: assertResourceDownloadAvailableMock,
-}));
+vi.mock("../api/client", async () => {
+  const actual = await vi.importActual<typeof import("../api/client")>(
+    "../api/client",
+  );
+  return {
+    ...actual,
+    assertResourceDownloadAvailable: assertResourceDownloadAvailableMock,
+  };
+});
 
 vi.mock("../api/slicer", () => ({
   detectSlicers: vi.fn().mockResolvedValue({
@@ -231,6 +237,61 @@ describe("SlicerSelector settings linkage", () => {
         ),
       ).toBeInTheDocument();
       expect(screen.queryByText(/Failed to fetch/)).not.toBeInTheDocument();
+      expect(assertResourceDownloadAvailableMock).toHaveBeenCalledWith(
+        "/api/files/model",
+      );
+      expect(anchorClick).not.toHaveBeenCalled();
+      expect(onArtifactAction).not.toHaveBeenCalled();
+    } finally {
+      createElementSpy.mockRestore();
+    }
+  });
+
+  it("normalizes raw HTTP status text from direct 3MF download validation", async () => {
+    assertResourceDownloadAvailableMock.mockRejectedValueOnce(
+      new Error("Request failed with status code 500"),
+    );
+    useSlicerStore.setState({
+      slicers: [],
+      selectedSlicerId: null,
+    });
+    const onArtifactAction = vi.fn();
+    const anchorClick = vi.fn();
+    const originalCreateElement = document.createElement.bind(document);
+    const createElementSpy = vi
+      .spyOn(document, "createElement")
+      .mockImplementation((tagName: string, options?: ElementCreationOptions) => {
+        if (tagName.toLowerCase() === "a") {
+          return {
+            href: "",
+            download: "",
+            click: anchorClick,
+          } as unknown as HTMLAnchorElement;
+        }
+        return originalCreateElement(tagName, options);
+      });
+
+    try {
+      render(
+        <I18nProvider>
+          <SlicerSelector
+            threemfDiskPath="/tmp/model.3mf"
+            downloadUrl="/api/files/model"
+            canSubmit
+            onAutoGenerate={async () => "/tmp/model.3mf"}
+            onArtifactAction={onArtifactAction}
+          />
+        </I18nProvider>,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "下载 3MF" }));
+
+      expect(
+        await screen.findByText("服务器发生内部错误。请使用请求 ID 查看日志。"),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByText(/Request failed with status code 500/i),
+      ).not.toBeInTheDocument();
       expect(assertResourceDownloadAvailableMock).toHaveBeenCalledWith(
         "/api/files/model",
       );
