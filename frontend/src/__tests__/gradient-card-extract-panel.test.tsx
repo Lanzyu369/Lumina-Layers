@@ -268,8 +268,6 @@ describe("GradientCardExtractPanel", () => {
       savedMaterialSummary: {
         material_name: "Test Material",
         directory_name: "test-material",
-        archive_path: "materials/test-material/material.json",
-        stage_a_params_path: "materials/test-material/stage_A_parameters.json",
         verification_count: 2,
       },
     });
@@ -444,8 +442,6 @@ describe("GradientCardExtractPanel", () => {
       material_summary: {
         material_name: "PLA Basic",
         directory_name: "pla-basic",
-        archive_path: "materials/pla-basic/material.json",
-        stage_a_params_path: "materials/pla-basic/stage_A_parameters.json",
         verification_count: 4,
       },
     });
@@ -575,8 +571,6 @@ describe("GradientCardExtractPanel", () => {
           material_name: "PLA Basic",
           directory_name: "bambu-lab/pla-basic",
           brand: "Bambu Lab",
-          archive_path: "materials/bambu-lab/pla-basic/material.json",
-          stage_a_params_path: "materials/bambu-lab/pla-basic/stage_A_parameters.json",
           material_file_url: "/api/files/material-1.json",
           stage_a_params_url: "/api/files/stage-a-1.json",
           estimated_rgb: [100, 120, 140],
@@ -585,8 +579,6 @@ describe("GradientCardExtractPanel", () => {
           material_name: "PLA Matte",
           directory_name: "polymaker/pla-matte",
           brand: "Polymaker",
-          archive_path: "materials/polymaker/pla-matte/material.json",
-          stage_a_params_path: "materials/polymaker/pla-matte/stage_A_parameters.json",
           material_file_url: "/api/files/material-2.json",
           stage_a_params_url: "/api/files/stage-a-2.json",
           estimated_rgb: [120, 120, 120],
@@ -615,8 +607,6 @@ describe("GradientCardExtractPanel", () => {
           material_name: "PLA Basic",
           directory_name: "bambu-lab/pla-basic",
           brand: "Bambu Lab",
-          archive_path: "materials/bambu-lab/pla-basic/material.json",
-          stage_a_params_path: "materials/bambu-lab/pla-basic/stage_A_parameters.json",
           material_file_url: "/api/files/material-1.json",
           stage_a_params_url: "/api/files/stage-a-1.json",
           estimated_rgb: [100, 120, 140],
@@ -1089,8 +1079,6 @@ describe("GradientCardExtractPanel", () => {
       savedMaterialSummary: {
         material_name: "Test",
         directory_name: "test",
-        archive_path: "/m/test/material.json",
-        stage_a_params_path: "/m/test/stage_A_parameters.json",
         verification_count: 1,
       },
     });
@@ -1107,8 +1095,6 @@ describe("GradientCardExtractPanel", () => {
       savedMaterialSummary: {
         material_name: "Test",
         directory_name: "test",
-        archive_path: "/m/test/material.json",
-        stage_a_params_path: "/m/test/stage_A_parameters.json",
         verification_count: 1,
         aggregation_method: "refit_combined_samples",
         aggregation_selection: {
@@ -1164,8 +1150,6 @@ describe("GradientCardExtractPanel", () => {
       savedMaterialSummary: {
         material_name: "Test",
         directory_name: "test",
-        archive_path: "/m/test/material.json",
-        stage_a_params_path: "/m/test/stage_A_parameters.json",
         verification_count: 2,
         aggregation_method: "refit_combined_samples",
         aggregation_selection: {

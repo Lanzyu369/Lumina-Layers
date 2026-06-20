@@ -371,6 +371,11 @@ class TestImportGradientCardMaterialsCanary:
             "stub_material_v1",
             "stub_material_v2",
         ]
+        for item in body["imported_materials"]:
+            assert "archive_path" not in item
+            assert "stage_a_params_path" not in item
+        assert str(tmp_path / "material_1.json") not in response.text
+        assert str(tmp_path / "params_1.json") not in response.text
         assert len(calls) == 2
 
         records = _records_for_event(
@@ -718,6 +723,8 @@ class TestMaterialSolverCacheBuildCanary:
         assert body["entry"]["total_cell_count"] == 256
         assert body["entry"]["mean_delta_e"] == 1.5
         assert body["entry"]["cache_file_size_bytes"] == 64
+        assert "cache_file_path" not in body["entry"]
+        assert str(cache_path) not in response.text
 
         records = _records_for_event(caplog, "material_solver_cache_build_done")
         assert len(records) == 1
@@ -832,7 +839,8 @@ class TestMaterialSolverRuntimeCanary:
         assert body["cached"] is True
         assert body["entry"]["candidate_count"] == 32
         assert body["entry"]["cache_file_size_bytes"] == 64
-        assert body["entry"]["cache_file_path"] == str(cache_path)
+        assert "cache_file_path" not in body["entry"]
+        assert str(cache_path) not in response.text
 
     def test_material_solver_runtime_build_logs_sessionless_canary(
         self,
@@ -1233,6 +1241,8 @@ class TestMaterialSolverCacheDeleteCanary:
         assert body["status"] == "ok"
         assert body["cached"] is True
         assert body["entry"]["valid_cell_count"] == 200
+        assert "cache_file_path" not in body["entry"]
+        assert "solver_cache.npz" not in response.text
 
         records = _records_for_event(caplog, "material_solver_cache_status_done")
         assert len(records) == 1

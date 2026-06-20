@@ -62,7 +62,6 @@ function buildCacheEntry(
     build_time_seconds: 12.5,
     built_at: "2026-04-17T04:00:00Z",
     cache_file_size_bytes: 3_145_728,
-    cache_file_path: "/tmp/cache.npz",
     ...overrides,
   };
 }
@@ -87,7 +86,6 @@ function buildRuntimeEntry(
     inverse_refinement_enabled: true,
     built_at: "2026-06-07T04:00:00Z",
     cache_file_size_bytes: 268_435_456,
-    cache_file_path: "/tmp/hybrid.npz",
     ...overrides,
   };
 }
