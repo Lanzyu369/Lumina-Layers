@@ -11,7 +11,7 @@ import os
 import re
 from email.message import EmailMessage
 from functools import lru_cache
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 try:
@@ -37,6 +37,34 @@ from api.structured_logging import get_logger
 log = get_logger(__name__)
 
 _RECIPIENT_SPLIT_RE = re.compile(r"[;,]")
+
+
+def _public_dump_path_label(dump_path: str) -> str:
+    """Return a non-sensitive dump path label for email bodies."""
+
+    raw_value = str(dump_path)
+    posix_path = Path(raw_value)
+    windows_path = PureWindowsPath(raw_value)
+    is_posix_absolute = posix_path.is_absolute()
+    is_windows_absolute = windows_path.is_absolute()
+    if not (is_posix_absolute or is_windows_absolute):
+        return raw_value
+
+    if is_windows_absolute and not is_posix_absolute:
+        parts = [
+            part
+            for part in windows_path.parts
+            if part not in {windows_path.anchor, ""}
+        ]
+    else:
+        parts = [
+            part
+            for part in posix_path.parts
+            if part not in {posix_path.anchor, ""}
+        ]
+    if len(parts) >= 2 and parts[-1].startswith("LUM-"):
+        return f"feedback/{parts[-2]}/{parts[-1]}"
+    return parts[-1] if parts else "(redacted)"
 
 
 @lru_cache(maxsize=1)
@@ -83,8 +111,8 @@ async def send_bug_report_email_async(
             展示给用户的短工单号。
         request_payload: Full report payload.
             完整报告 payload。
-        dump_path: Stored JSON dump path string.
-            已落盘 JSON 路径字符串。
+        dump_path: Logical ticket location string.
+            逻辑工单位置字符串。
         attachments_dir: Optional directory containing ticket attachments to
             attach (original image / final artifact / LUT / materials zip /
             screenshot / index.md / summary.txt). Files that exceed
@@ -160,8 +188,8 @@ def _build_email_message(
             短工单号。
         request_payload: Full report payload.
             完整报告 payload。
-        dump_path: Stored JSON dump path string.
-            已落盘 JSON 路径字符串。
+        dump_path: Logical ticket location string.
+            逻辑工单位置字符串。
         smtp_from: Sender address.
             发件地址。
         smtp_to: Recipient addresses.
@@ -181,6 +209,7 @@ def _build_email_message(
     short_desc = description[:50].replace("\n", " ")
     user_email = request_payload.get("user_email") or "(not provided)"
     context = request_payload.get("context", {})
+    public_dump_path = _public_dump_path_label(dump_path)
     recent_logs = context.get("recent_client_logs") or []
     recent_log_labels = [
         str(item.get("label"))
@@ -208,7 +237,7 @@ def _build_email_message(
         "Description:",
         description,
         "",
-        f"Full payload (json) attached. Dump on disk: {dump_path}",
+        f"Full payload (json) attached. Ticket location: {public_dump_path}",
         "Search the structured log file for these session ids to reproduce.",
     ]
 
@@ -232,7 +261,7 @@ def _build_email_message(
         body_lines.append("")
         body_lines.append("Oversized attachments (fetch from server):")
         for path, size in oversized:
-            body_lines.append(f"  - {path} ({size} bytes)")
+            body_lines.append(f"  - {path.name} ({size} bytes)")
 
     message = EmailMessage()
     message["Subject"] = f"[Lumina Bug] {ticket_id} - {short_desc}"

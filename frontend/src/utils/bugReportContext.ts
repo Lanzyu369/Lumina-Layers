@@ -15,12 +15,12 @@ declare const __LUMINA_VERSION__: string | undefined;
 
 /**
  * Best-effort shape of the converter generation artifact. The converter
- * store tracks ``downloadUrl`` (typically ``/api/files/<file_id>``) and
- * ``threemfDiskPath`` after a successful ``convertGenerate``. When either
- * is populated we treat it as evidence of a recent artifact.
+ * store tracks ``downloadUrl`` (typically ``/api/files/<file_id>``) after a
+ * successful ``convertGenerate``. Bug reports intentionally do not include
+ * local/server disk paths; the backend resolves files through FileRegistry.
  *
- * 最近一次生成的产物引用：converter store 在生成成功后写入 downloadUrl /
- * threemfDiskPath；任一存在即视为最近产物。
+ * 最近一次生成的产物引用：converter store 在生成成功后写入 downloadUrl。
+ * Bug 报告不携带本机/服务器磁盘路径；后端通过 FileRegistry 解析文件。
  */
 function deriveFinalArtifact(isConverterActive: boolean): FinalArtifactRef | null {
   if (!isConverterActive) {
@@ -28,24 +28,18 @@ function deriveFinalArtifact(isConverterActive: boolean): FinalArtifactRef | nul
   }
   const converter = useConverterStore.getState();
   const downloadUrl = converter.downloadUrl ?? null;
-  const diskPath = converter.threemfDiskPath ?? null;
-  if (!downloadUrl && !diskPath) {
+  if (!downloadUrl) {
     return null;
   }
-  const artifactType: FinalArtifactRef["artifact_type"] = diskPath
-    ? diskPath.toLowerCase().endsWith(".zip")
+  const artifactType: FinalArtifactRef["artifact_type"] = converter.largeFormatEnabled
+    ? "zip"
+    : downloadUrl.toLowerCase().includes(".zip")
       ? "zip"
-      : "3mf"
-    : converter.largeFormatEnabled
-      ? "zip"
-      : downloadUrl && downloadUrl.toLowerCase().includes(".zip")
-        ? "zip"
-        : "3mf";
+      : "3mf";
   return {
     session_id: converter.sessionId ?? null,
     download_url: downloadUrl,
     artifact_type: artifactType,
-    disk_path: diskPath,
     source: "converter",
   };
 }

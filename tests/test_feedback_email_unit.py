@@ -271,4 +271,23 @@ def test_build_email_message_skips_oversized_files(
     assert "summary.txt" in attachment_names
     body = msg.get_body(preferencelist=("plain",)).get_content()
     assert "Oversized attachments" in body
-    assert str(big) in body
+    assert "materials.zip" in body
+    assert str(big) not in body
+    assert tmp_path.as_posix() not in body
+
+
+def test_build_email_message_redacts_windows_absolute_dump_path() -> None:
+    """Windows absolute ticket paths are reduced to logical ticket labels."""
+    from api.feedback_email import _build_email_message
+
+    msg = _build_email_message(
+        ticket_id="LUM-20260511-003",
+        request_payload=_payload(),
+        dump_path=r"C:\Users\min\feedback\2026-06\LUM-20260511-003",
+        smtp_from="from@example.com",
+        smtp_to=["to@example.com"],
+    )
+
+    body = msg.get_body(preferencelist=("plain",)).get_content()
+    assert r"C:\Users\min" not in body
+    assert "feedback/2026-06/LUM-20260511-003" in body
