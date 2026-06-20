@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field, field_validator
 
 from api.dependencies import get_file_registry, get_session_store
@@ -26,6 +26,7 @@ from api.feedback_email import is_email_configured, send_bug_report_email_async
 from api.feedback_store import dump_bug_report, to_dump_path_string
 from api.feedback_ticket import generate_ticket_id, ticket_dir_for
 from api.feedback_time import format_received_cst, now_beijing
+from api.local_origin_guard import require_local_app_origin
 from api.structured_logging import get_logger
 
 router = APIRouter(prefix="/api/feedback", tags=["feedback"])
@@ -737,7 +738,11 @@ def _relative_ticket_path(ticket_dir: Path) -> str:
         return ticket_dir.resolve().as_posix()
 
 
-@router.post("/bug-report", response_model=BugReportResponse)
+@router.post(
+    "/bug-report",
+    response_model=BugReportResponse,
+    dependencies=[Depends(require_local_app_origin)],
+)
 async def submit_bug_report(
     request: BugReportRequest,
     http_request: Request,
@@ -1052,7 +1057,11 @@ async def submit_bug_report(
     )
 
 
-@router.post("/bug-report/relay", response_model=BugReportRelayResponse)
+@router.post(
+    "/bug-report/relay",
+    response_model=BugReportRelayResponse,
+    dependencies=[Depends(require_local_app_origin)],
+)
 async def relay_bug_report(
     request: BugReportRelayRequest,
     http_request: Request,

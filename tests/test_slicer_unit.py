@@ -39,6 +39,9 @@ from core.slicer import (
     validate_custom_slicer_path,
 )
 
+UNTRUSTED_ORIGIN_HEADERS = {"Origin": "https://attacker.example"}
+LOCAL_FRONTEND_ORIGIN_HEADERS = {"Origin": "http://localhost:5174"}
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -451,6 +454,40 @@ class TestRouterEndpoints:
         assert resp.status_code == 200
         assert resp.json()["slicers"] == []
 
+    def test_detect_rejects_untrusted_origin_before_scanning(self):
+        client = _make_client()
+        with patch(
+            "api.routers.slicer.detect_installed_slicers",
+            side_effect=AssertionError("detect should not run"),
+        ):
+            resp = client.get(
+                "/api/slicer/detect",
+                headers=UNTRUSTED_ORIGIN_HEADERS,
+            )
+
+        assert resp.status_code == 403
+        assert "local Lumina Studio app" in resp.json()["detail"]
+
+    def test_detect_allows_local_frontend_origin(self):
+        client = _make_client()
+        slicer = DetectedSlicer(
+            id="bambu_studio",
+            display_name="Bambu Studio",
+            exe_path="/Applications/Bambu Studio.app",
+            source="auto_macos_app",
+        )
+        with patch(
+            "api.routers.slicer.detect_installed_slicers",
+            return_value=[slicer],
+        ):
+            resp = client.get(
+                "/api/slicer/detect",
+                headers=LOCAL_FRONTEND_ORIGIN_HEADERS,
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["slicers"][0]["exe_path"] == "/Applications/Bambu Studio.app"
+
     def test_custom_path_validate_success(self):
         client = _make_client()
         slicer = DetectedSlicer(
@@ -470,6 +507,21 @@ class TestRouterEndpoints:
         data = resp.json()
         assert data["status"] == "success"
         assert data["slicer"]["source"] == "custom_macos_app"
+
+    def test_custom_path_validate_rejects_untrusted_origin_before_path_probe(self):
+        client = _make_client()
+        with patch(
+            "api.routers.slicer.validate_custom_slicer_path",
+            side_effect=AssertionError("path validation should not run"),
+        ):
+            resp = client.post(
+                "/api/slicer/custom-path/validate",
+                json={"path": "/Applications/Bambu Studio.app"},
+                headers=UNTRUSTED_ORIGIN_HEADERS,
+            )
+
+        assert resp.status_code == 403
+        assert "local Lumina Studio app" in resp.json()["detail"]
 
     def test_custom_path_validate_failure(self):
         client = _make_client()
@@ -514,6 +566,38 @@ class TestRouterEndpoints:
         assert resp.json()["status"] == "success"
         mock_copy.assert_called_once()
         mock_launch.assert_called_once_with("bambu_studio", str(launch_copy), mock_slicers)
+
+    def test_launch_rejects_untrusted_origin_before_copy_or_process_launch(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        output_root = _configure_slicer_output(monkeypatch, tmp_path)
+        f = output_root / "model.3mf"
+        f.write_text("data")
+
+        client = _make_client()
+        with patch(
+            "api.routers.slicer.detect_installed_slicers",
+            side_effect=AssertionError("detect should not run"),
+        ), patch(
+            "api.routers.slicer._create_launch_copy",
+            side_effect=AssertionError("copy should not run"),
+        ), patch(
+            "api.routers.slicer.launch_slicer",
+            side_effect=AssertionError("launch should not run"),
+        ):
+            resp = client.post(
+                "/api/slicer/launch",
+                json={
+                    "slicer_id": "bambu_studio",
+                    "file_path": str(f),
+                },
+                headers=UNTRUSTED_ORIGIN_HEADERS,
+            )
+
+        assert resp.status_code == 403
+        assert "local Lumina Studio app" in resp.json()["detail"]
 
     def test_launch_uses_valid_custom_path(self, tmp_path, monkeypatch):
         output_root = _configure_slicer_output(monkeypatch, tmp_path)

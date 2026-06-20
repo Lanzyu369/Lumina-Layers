@@ -22,6 +22,7 @@ import config
 from api.dependencies import get_file_registry, get_session_store
 from api.file_bridge import ensure_png_tempfile
 from api.file_registry import FileRegistry
+from api.local_origin_guard import require_local_app_origin
 from api.preview_resources import (
     register_preview_for_artifact,
     register_preview_resource_upload,
@@ -585,7 +586,10 @@ SETTINGS_SAVE_FAILED_DETAIL = (
 )
 
 
-@router.get("/settings")
+@router.get(
+    "/settings",
+    dependencies=[Depends(require_local_app_origin)],
+)
 def get_settings() -> UserSettingsResponse:
     """Read persisted user settings with safe fallback.
 
@@ -618,7 +622,10 @@ def get_settings() -> UserSettingsResponse:
         return UserSettingsResponse(status="success", settings=UserSettings())
 
 
-@router.post("/settings")
+@router.post(
+    "/settings",
+    dependencies=[Depends(require_local_app_origin)],
+)
 def save_settings(settings: UserSettings) -> SaveSettingsResponse:
     """将 UserSettings 写入 user_settings.json。"""
     try:

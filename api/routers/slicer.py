@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 
 from api.dependencies import get_file_registry
 from api.file_registry import FileRegistry
+from api.local_origin_guard import require_local_app_origin
 from api.schemas.slicer import (
     SlicerCustomPathRequest,
     SlicerCustomPathResponse,
@@ -31,7 +32,11 @@ from core.slicer import (
     validate_custom_slicer_path,
 )
 
-router = APIRouter(prefix="/api/slicer", tags=["Slicer"])
+router = APIRouter(
+    prefix="/api/slicer",
+    tags=["Slicer"],
+    dependencies=[Depends(require_local_app_origin)],
+)
 log = get_logger(__name__)
 _SLICER_LAUNCH_COPY_TTL_SECONDS = 60 * 60
 _ALLOWED_SLICER_LAUNCH_SUFFIXES = {".3mf"}
