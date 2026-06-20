@@ -23,7 +23,7 @@ import xml.etree.ElementTree as ET
 import numpy as np
 import trimesh
 
-from utils.bambu_3mf_writer import BambuStudio3MFWriter
+from utils.bambu_3mf_writer import BambuStudio3MFWriter, _FILAMENT_RESIZABLE_ARRAY_KEYS
 
 log = logging.getLogger(__name__)
 
@@ -567,6 +567,15 @@ def _build_combined_project_settings_bytes(
 
     num_colors = len(material_names)
     _resize_project_settings_arrays(settings, num_colors)
+    material_settings = _build_project_material_settings(
+        material_names=material_names,
+        preview_colors=preview_colors,
+        printer_id=printer_id,
+        slicer=slicer,
+        nozzle_size=nozzle_size,
+        device_profile_id=device_profile_id,
+    )
+    _replace_material_project_settings(settings, material_settings)
 
     settings["filament_colour"] = [
         _rgb_to_hex(
@@ -583,6 +592,55 @@ def _build_combined_project_settings_bytes(
     settings.setdefault("single_extruder_multi_material", "1")
     settings.setdefault("enable_prime_tower", "1")
     return json.dumps(settings, indent=4, ensure_ascii=False).encode("utf-8")
+
+
+def _build_project_material_settings(
+    *,
+    material_names: list[str],
+    preview_colors: dict[object, object] | None,
+    printer_id: str,
+    slicer: str,
+    nozzle_size: str,
+    device_profile_id: str | None,
+) -> dict[str, object]:
+    """Build slicer material arrays from the selected global puzzle palette.
+
+    按拼图组合后的全局耗材调色板，重新生成切片器耗材数组。
+    """
+
+    writer = BambuStudio3MFWriter(
+        output_path="combined-puzzle.3mf",
+        settings={},
+        color_mode="8-Color",
+        printer_id=printer_id,
+        slicer=slicer,
+        nozzle_size=nozzle_size,
+        device_profile_id=device_profile_id,
+        enable_base_layer_height_modifier=False,
+    )
+    writer._set_project_palette(material_names, preview_colors or {})
+    return json.loads(writer._build_project_settings_bytes().decode("utf-8"))
+
+
+def _replace_material_project_settings(
+    settings: dict[str, object],
+    material_settings: dict[str, object],
+) -> None:
+    """Replace only filament-indexed project settings with freshly built values.
+
+    只替换按耗材槽位索引的项目设置，保留源 3MF 的其它打印设置。
+    """
+
+    for key, value in material_settings.items():
+        if key == "filament_colour":
+            continue
+        if key == "default_filament_profile":
+            settings[key] = copy.deepcopy(value)
+            continue
+        if isinstance(value, list) and (
+            key.startswith("filament_") or key in _FILAMENT_RESIZABLE_ARRAY_KEYS
+        ):
+            settings[key] = copy.deepcopy(value)
 
 
 def _build_combined_slice_info_bytes(
