@@ -164,6 +164,84 @@ def test_assemble_puzzle_3mf_restores_global_slot_palette_for_sparse_piece() -> 
     }
 
 
+def test_assemble_puzzle_3mf_rebuilds_filament_metadata_from_global_material_names() -> None:
+    """Combined puzzle 3MF must not inherit stale PETG metadata for PLA material archives."""
+
+    slot_names = [
+        "PLA Pro 白色",
+        "PLA Pro 青色",
+        "PLA Pro 品红色",
+        "PLA Pro 黄色",
+        "PLA Pro 黑色",
+        "PLA Pro 红色",
+        "PLA Pro 蓝色",
+        "PLA Pro 嫩绿色",
+    ]
+    filament_colours = [
+        "#F2F4F7",
+        "#387AC1",
+        "#C44C7C",
+        "#F1ED3A",
+        "#212427",
+        "#9C2E33",
+        "#2D428A",
+        "#7BC26D",
+    ]
+    stale_petg_settings = {
+        "filament_colour": filament_colours,
+        "filament_type": ["PETG"] * len(slot_names),
+        "filament_settings_id": [
+            "Bambu PETG Basic @BBL X1C 0.2 nozzle"
+        ]
+        * len(slot_names),
+        "nozzle_temperature": ["255"] * len(slot_names),
+        "nozzle_temperature_initial_layer": ["245"] * len(slot_names),
+        "textured_plate_temp": ["70"] * len(slot_names),
+        "default_filament_profile": ["Bambu PETG Basic @BBL X1C 0.2 nozzle"],
+    }
+
+    piece_path = _reserve_temp_path(".3mf")
+    output_path = _reserve_temp_path(".3mf")
+    try:
+        _write_sparse_piece_package(
+            piece_path,
+            materials=[
+                (slot_names[0], "1"),
+                (slot_names[2], "3"),
+            ],
+            filament_colours=filament_colours,
+            project_settings=stale_petg_settings,
+        )
+
+        assemble_puzzle_3mf(
+            piece_sources=[
+                PuzzlePiece3MFSource(label="A1", threemf_path=str(piece_path), offset_x_mm=0.0, offset_y_mm=0.0),
+            ],
+            output_path=str(output_path),
+            preview_colors={
+                index: [int(hex_color[1:3], 16), int(hex_color[3:5], 16), int(hex_color[5:7], 16), 255]
+                for index, hex_color in enumerate(filament_colours)
+            },
+            slot_names=slot_names,
+            printer_id="bambu-p1s",
+            slicer="BambuStudio",
+            nozzle_size="0.2",
+        )
+
+        with zipfile.ZipFile(output_path, "r") as archive:
+            project_settings = json.loads(archive.read("Metadata/project_settings.config").decode("utf-8"))
+    finally:
+        _cleanup_temp_paths(piece_path, output_path)
+
+    assert project_settings["filament_colour"] == filament_colours
+    assert project_settings["filament_type"] == ["PLA"] * len(slot_names)
+    assert project_settings["filament_settings_id"] == [
+        "Bambu PLA Basic @BBL X1C 0.2 nozzle"
+    ] * len(slot_names)
+    assert project_settings["nozzle_temperature"] == ["220"] * len(slot_names)
+    assert project_settings["textured_plate_temp"] == ["55"] * len(slot_names)
+
+
 def test_assemble_puzzle_3mf_refreshes_metadata_files_and_preview_assets() -> None:
     """Combined puzzle 3MF should rebuild shared metadata and preview PNG assets."""
 
@@ -311,7 +389,13 @@ def _write_piece_package(path, *, width: float, height: float) -> None:
         archive.writestr("[Content_Types].xml", b"<Types/>")
 
 
-def _write_sparse_piece_package(path, *, materials: list[tuple[str, str]], filament_colours: list[str]) -> None:
+def _write_sparse_piece_package(
+    path,
+    *,
+    materials: list[tuple[str, str]],
+    filament_colours: list[str],
+    project_settings: dict[str, object] | None = None,
+) -> None:
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("3D/3dmodel.model", _piece_root_model_bytes())
         archive.writestr("3D/Objects/object_1.model", _sparse_piece_object_model_bytes(materials))
@@ -319,7 +403,8 @@ def _write_sparse_piece_package(path, *, materials: list[tuple[str, str]], filam
         archive.writestr(
             "Metadata/project_settings.config",
             json.dumps(
-                {
+                project_settings
+                or {
                     "filament_colour": filament_colours,
                     "filament_type": ["PLA"] * len(filament_colours),
                 },
