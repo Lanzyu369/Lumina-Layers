@@ -161,22 +161,46 @@ describe("recipe integration", () => {
       const { recipe } = await buildTestRecipe({
         lut_name: "TestLUT",
         recipe_overrides: [
-          { region_id: "r1", recipe: [0, 1, 2], layer_order: "Top2Bottom" },
+          {
+            region_id: "r1",
+            recipe: [0, 1, 2, 4],
+            layer_order: "Top2Bottom",
+            virtual_materials: [{ name: "Matte Black", hex: "#101010" }],
+          },
           { region_id: "r2", recipe: [1, 1, 0, 2], layer_order: "Top2Bottom" },
         ],
         customRecipeHistory: [
           {
-            id: "0-1-2@Top2Bottom",
-            recipe: [0, 1, 2],
+            id: "0-1-2-4@Top2Bottom",
+            recipe: [0, 1, 2, 4],
             layerOrder: "Top2Bottom",
             predictedRgb: [10, 20, 30],
             predictedLab: [40, 5, -3],
             hex: "#0A141E",
             fromModel: true,
+            virtualMaterials: [{ name: "Matte Black", hex: "#101010" }],
             createdAtMs: 1_700_000_000_000,
           },
         ],
       });
+
+      expect(
+        recipe.recipe.converter?.color_ops.recipe_overrides?.[0],
+      ).toEqual({
+        region_id: "r1",
+        recipe: [0, 1, 2, 4],
+        layer_order: "Top2Bottom",
+        virtual_materials: [{ name: "Matte Black", hex: "#101010" }],
+      });
+      expect(
+        recipe.recipe.converter?.color_ops.custom_recipe_history?.[0],
+      ).toEqual(
+        expect.objectContaining({
+          id: "0-1-2-4@Top2Bottom",
+          recipe: [0, 1, 2, 4],
+          virtual_materials: [{ name: "Matte Black", hex: "#101010" }],
+        }),
+      );
 
       const { state: restored, warnings } = restoreConverterRecipe(
         recipe,
@@ -187,22 +211,41 @@ describe("recipe integration", () => {
       expect(restored.recipe_overrides).toHaveLength(2);
       expect(restored.recipe_overrides![0]).toEqual({
         region_id: "r1",
-        recipe: [0, 1, 2],
+        recipe: [0, 1, 2, 4],
         layer_order: "Top2Bottom",
+        virtual_materials: [{ name: "Matte Black", hex: "#101010" }],
       });
       expect(restored.recipe_overrides![1].recipe).toEqual([1, 1, 0, 2]);
 
       expect(restored.customRecipeHistory).toHaveLength(1);
       const history = restored.customRecipeHistory![0];
-      expect(history.id).toBe("0-1-2@Top2Bottom");
-      expect(history.recipe).toEqual([0, 1, 2]);
+      expect(history.id).toBe("0-1-2-4@Top2Bottom");
+      expect(history.recipe).toEqual([0, 1, 2, 4]);
       expect(history.layerOrder).toBe("Top2Bottom");
       expect(history.predictedRgb).toEqual([10, 20, 30]);
       expect(history.predictedLab).toEqual([40, 5, -3]);
       expect(history.hex).toBe("#0A141E");
       expect(history.fromModel).toBe(false);
+      expect(history.virtualMaterials).toEqual([
+        { name: "Matte Black", hex: "#101010" },
+      ]);
       expect(history.createdAtMs).toBe(1_700_000_000_000);
       expect(warnings).toHaveLength(0);
+
+      const embedded = await embedRecipeInPng(
+        createMinimalPng(),
+        recipe,
+        recipe.integrity.recipe_sha256,
+      );
+      const extracted = await extractRecipeFromPng(embedded);
+      expect(
+        extracted?.recipe.converter?.color_ops.recipe_overrides?.[0],
+      ).toEqual({
+        region_id: "r1",
+        recipe: [0, 1, 2, 4],
+        layer_order: "Top2Bottom",
+        virtual_materials: [{ name: "Matte Black", hex: "#101010" }],
+      });
     });
 
     it("exports schema_version 2 and imports legacy v1 without warnings", async () => {
