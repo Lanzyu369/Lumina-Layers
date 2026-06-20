@@ -86,6 +86,7 @@ import {
 import { trackLuminaEvent } from "../../analytics/umami";
 import { registerGeneratedArtifactInvalidator } from "../generatedArtifactInvalidation";
 import { uploadImagePreview } from "../../api/system";
+import { tRuntime } from "../../i18n/runtime";
 import { fetchMaterialColorSuggestions } from "../../api/materialCache";
 import { fetchGradientGroups as apiFetchGradientGroups } from "../../api/converter";
 import type {
@@ -195,6 +196,14 @@ export const RAW_EXTENSIONS_CONVERTER = new Set([
 function isRawFileConverter(file: File): boolean {
   const ext = file.name.toLowerCase().slice(file.name.lastIndexOf("."));
   return RAW_EXTENSIONS_CONVERTER.has(ext);
+}
+
+function rawPreviewFailureMessage(error: unknown): string {
+  const detail =
+    error instanceof Error && error.message.trim()
+      ? error.message.trim()
+      : tRuntime("api_error_http_default");
+  return tRuntime("converter_raw_preview_failed", { error: detail });
 }
 
 function isSvgFile(file: File): boolean {
@@ -2575,13 +2584,20 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         });
         uploadImagePreview(file)
           .then(({ preview_url, width, height }) => {
+            if (_get().imageFile !== file) {
+              return;
+            }
             set({
               imagePreviewUrl: preview_url,
               aspectRatio: width / height,
+              error: null,
             });
           })
-          .catch(() => {
-            /* non-fatal */
+          .catch((err) => {
+            if (_get().imageFile !== file) {
+              return;
+            }
+            set({ error: rawPreviewFailureMessage(err) });
           });
         return;
       }
@@ -6240,13 +6256,20 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           });
           uploadImagePreview(lastFile)
             .then(({ preview_url, width, height }) => {
+              if (_get().imageFile !== lastFile) {
+                return;
+              }
               set({
                 imagePreviewUrl: preview_url,
                 aspectRatio: width / height,
+                error: null,
               });
             })
-            .catch(() => {
-              /* non-fatal */
+            .catch((err) => {
+              if (_get().imageFile !== lastFile) {
+                return;
+              }
+              set({ error: rawPreviewFailureMessage(err) });
             });
         } else {
           const previewUrl = URL.createObjectURL(lastFile);
@@ -6407,13 +6430,20 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           });
           uploadImagePreview(singleFile)
             .then(({ preview_url, width, height }) => {
+              if (_get().imageFile !== singleFile) {
+                return;
+              }
               set({
                 imagePreviewUrl: preview_url,
                 aspectRatio: width / height,
+                error: null,
               });
             })
-            .catch(() => {
-              /* non-fatal */
+            .catch((err) => {
+              if (_get().imageFile !== singleFile) {
+                return;
+              }
+              set({ error: rawPreviewFailureMessage(err) });
             });
           return;
         }
