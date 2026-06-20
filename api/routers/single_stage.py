@@ -20,6 +20,7 @@ from api.colorchecker_artifacts import load_colorchecker_full_rgb, scale_corner_
 from api.dependencies import get_file_registry, get_session_store
 from api.file_bridge import ndarray_to_png_bytes, upload_to_ndarray, upload_to_tempfile
 from api.file_registry import FileRegistry
+from api.local_origin_guard import require_local_app_origin
 from api.schemas.single_stage import (
     GradientCardMaterialUpdateRequest,
     MaterialLibraryBulkExportRequest,
@@ -1954,7 +1955,10 @@ def _get_runtime_build_lock(
         return lock
 
 
-@router.get("/material-solver-caches")
+@router.get(
+    "/material-solver-caches",
+    dependencies=[Depends(require_local_app_origin)],
+)
 async def material_solver_cache_list() -> MaterialSolverCacheListResponse:
     """List every persisted solver-cache entry with its metadata.
     列出所有已持久化的求解器缓存条目及其元数据。
@@ -1989,7 +1993,10 @@ async def material_solver_cache_list() -> MaterialSolverCacheListResponse:
     )
 
 
-@router.post("/material-solver-cache/status")
+@router.post(
+    "/material-solver-cache/status",
+    dependencies=[Depends(require_local_app_origin)],
+)
 async def material_solver_cache_status(
     material_directory_names: str = Form(...),
     layer_count: int = Form(...),
@@ -2073,7 +2080,10 @@ async def material_solver_cache_status(
     )
 
 
-@router.post("/material-solver-cache/build")
+@router.post(
+    "/material-solver-cache/build",
+    dependencies=[Depends(require_local_app_origin)],
+)
 async def material_solver_cache_build(
     material_directory_names: str = Form(...),
     layer_count: int = Form(...),
@@ -2208,7 +2218,10 @@ async def material_solver_cache_build(
     )
 
 
-@router.post("/material-solver-cache/delete")
+@router.post(
+    "/material-solver-cache/delete",
+    dependencies=[Depends(require_local_app_origin)],
+)
 async def material_solver_cache_delete(
     material_directory_names: str = Form(...),
     layer_count: int = Form(...),
@@ -2254,7 +2267,10 @@ async def material_solver_cache_delete(
     )
 
 
-@router.post("/material-solver-runtime/status")
+@router.post(
+    "/material-solver-runtime/status",
+    dependencies=[Depends(require_local_app_origin)],
+)
 async def material_solver_runtime_status(
     material_directory_names: str = Form(...),
     layer_count: int = Form(...),
@@ -2318,7 +2334,10 @@ async def material_solver_runtime_status(
     )
 
 
-@router.post("/material-solver-runtime/build")
+@router.post(
+    "/material-solver-runtime/build",
+    dependencies=[Depends(require_local_app_origin)],
+)
 async def material_solver_runtime_build(
     material_directory_names: str = Form(...),
     layer_count: int = Form(...),
@@ -2444,7 +2463,10 @@ async def material_solver_runtime_build(
     )
 
 
-@router.post("/material-solver-runtime/delete")
+@router.post(
+    "/material-solver-runtime/delete",
+    dependencies=[Depends(require_local_app_origin)],
+)
 async def material_solver_runtime_delete(
     material_directory_names: str = Form(...),
     layer_count: int = Form(...),
@@ -2496,7 +2518,10 @@ async def material_solver_runtime_delete(
     )
 
 
-@router.post("/material-solver-runtime/details")
+@router.post(
+    "/material-solver-runtime/details",
+    dependencies=[Depends(require_local_app_origin)],
+)
 async def material_solver_runtime_details(
     material_directory_names: str = Form(...),
     layer_count: int = Form(...),
@@ -2697,7 +2722,10 @@ def _suggestions_to_response_items(
     return items
 
 
-@router.post("/material-solver-cache/details")
+@router.post(
+    "/material-solver-cache/details",
+    dependencies=[Depends(require_local_app_origin)],
+)
 async def material_solver_cache_details(
     material_directory_names: str = Form(...),
     layer_count: int = Form(...),
@@ -2862,7 +2890,10 @@ async def material_solver_cache_details(
     )
 
 
-@router.post("/material-solver-cache/suggest-colors")
+@router.post(
+    "/material-solver-cache/suggest-colors",
+    dependencies=[Depends(require_local_app_origin)],
+)
 async def material_solver_cache_suggest_colors(
     material_directory_names: str = Form(...),
     layer_count: int = Form(...),
