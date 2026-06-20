@@ -35,6 +35,7 @@ import { exportShareCard, exportSidecar } from "../../recipe/importFlow"
 const EMPTY_LAYER_IMAGES: { layer_index: number; name: string; url: string }[] = []
 const EXPORT_NO_IMAGE_MESSAGE = "No image file loaded"
 const EXPORT_NO_PREVIEW_MESSAGE = "No preview available — please generate a preview first"
+const EXPORT_PREVIEW_LOAD_MESSAGE = "Failed to load preview image for cover"
 
 function resolveRecipeExportError(error: unknown, t: (key: string) => string): string {
   if (error instanceof Error) {
@@ -43,6 +44,9 @@ function resolveRecipeExportError(error: unknown, t: (key: string) => string): s
     }
     if (error.message === EXPORT_NO_PREVIEW_MESSAGE) {
       return t("recipe_export_error_no_preview")
+    }
+    if (error.message === EXPORT_PREVIEW_LOAD_MESSAGE) {
+      return t("recipe_export_error_preview_load")
     }
   }
   return apiErrorToVisibleMessage(error, t("recipe_export_error_unknown"))

@@ -5801,6 +5801,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "请先生成预览后再导出。",
     en: "Generate a preview before exporting.",
   },
+  recipe_export_error_preview_load: {
+    zh: "预览图已失效，请重新生成预览后再导出。",
+    en: "The preview image is no longer available. Generate a new preview before exporting.",
+  },
   recipe_export_error_unknown: {
     zh: "导出没有完成，请稍后重试。",
     en: "The export did not finish. Please try again.",
