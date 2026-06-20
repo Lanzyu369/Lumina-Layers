@@ -143,6 +143,10 @@ MATERIAL_SOLVER_RUNTIME_BUILD_FAILED_DETAIL = (
     "Material solver runtime could not be built. "
     "Check material inputs and cache storage, then try again."
 )
+MATERIAL_SWATCH_EXPORT_FAILED_DETAIL = (
+    "Material swatch export failed. Check the selected material recipes and "
+    "export settings, then try again."
+)
 MaterialCacheEvictor = Callable[[str], int]
 _RUNTIME_BUILD_LOCKS_GUARD = threading.Lock()
 _RUNTIME_BUILD_LOCKS: dict[tuple[str, int, str, str, int], threading.Lock] = {}
@@ -1735,7 +1739,20 @@ async def generate_material_swatch(
     )
 
     if not output_path:
-        raise HTTPException(status_code=500, detail=status_msg or "Material swatch generation failed")
+        log.warning(
+            "Material recipe swatch export failed",
+            extra={
+                "event": "extractor_material_swatch_failed",
+                "recipe_count": len(items),
+                "status_code": 500,
+                "error_type": "MaterialSwatchGenerationFailed",
+                "error_message": status_msg or "Material swatch generation failed",
+            },
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=MATERIAL_SWATCH_EXPORT_FAILED_DETAIL,
+        )
 
     request_id = get_request_id()
     unique_suffix = uuid.uuid4().hex

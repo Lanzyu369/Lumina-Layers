@@ -169,6 +169,7 @@ EXTRACTOR_STRUCTURED_EVENTS = {
     "extractor_extract_single_stage_done",
     "extractor_fit_stage_a_done",
     "extractor_extract_gradient_card_stage_a_done",
+    "extractor_material_swatch_failed",
     "extractor_gradient_card_material_library_failed",
     "extractor_gradient_card_material_library_registration_failed",
     "extractor_save_gradient_card_material_done",
