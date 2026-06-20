@@ -51,6 +51,8 @@ const catalogFilters: CatalogFilter[] = [
 ];
 const MATERIAL_CATALOG_PAGE_SIZE = 50;
 const MATERIAL_REGISTRY_NOT_CONFIGURED_DETAIL = "Material registry URL is not configured";
+const MATERIAL_REGISTRY_STALE_INSTALL_DETAIL =
+  "Selected material registry package is not in current material registry catalog";
 
 const formatBytes = (bytes: number): string => {
   if (!Number.isFinite(bytes) || bytes <= 0) {
@@ -181,6 +183,25 @@ const isMaterialRegistryNotConfiguredError = (err: unknown): boolean =>
 
 const resolveErrorMessage = (err: unknown, fallback: string): string =>
   apiErrorToVisibleMessage(err, readApiErrorDetail(err) ?? fallback);
+
+const readApiErrorStatus = (err: unknown): number | null => {
+  if (!err || typeof err !== "object" || !("response" in err)) {
+    return null;
+  }
+  const response = (err as { response?: { status?: unknown } }).response;
+  return typeof response?.status === "number" ? response.status : null;
+};
+
+const resolveInstallErrorMessage = (err: unknown, fallback: string): string => {
+  const detail = readApiErrorDetail(err);
+  if (
+    readApiErrorStatus(err) === 422
+    && detail === MATERIAL_REGISTRY_STALE_INSTALL_DETAIL
+  ) {
+    return fallback;
+  }
+  return apiErrorToVisibleMessage(err, fallback);
+};
 
 const emptyMaterialRegistryCatalog = (): MaterialRegistryCatalogResponse => ({
   schema_version: "1.0",
@@ -441,7 +462,7 @@ export default function MaterialCloudSyncPanel() {
       await loadCatalogAndStatus();
       setSuccess(response.message || t("mat_sync_install_success"));
     } catch (err) {
-      setError(resolveErrorMessage(err, t("mat_sync_install_failed")));
+      setError(resolveInstallErrorMessage(err, t("mat_sync_install_failed")));
     } finally {
       setPendingInstall(null);
     }
