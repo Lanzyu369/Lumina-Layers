@@ -12,6 +12,7 @@ import {
   ModelingMode,
   StructureMode,
 } from "../../api/types";
+import { apiErrorToVisibleMessage } from "../../api/client";
 import type { SavedMaterialLibraryItem } from "../../api/types";
 import { listGradientCardMaterials } from "../../api/extractor";
 import { reconcileDirectoryNames } from "../../utils/materialDirectoryMigration";
@@ -278,13 +279,14 @@ export default function BasicSettings() {
       setImportSource(file.name.toLowerCase().endsWith(".lumina.json") ? "json" : "png");
       setImportDialogOpen(true);
     } catch (err) {
+      const visibleError = apiErrorToVisibleMessage(err);
       useConverterStore.getState().setError(
-        err instanceof Error ? err.message : "Import failed",
+        t("recipe_import_error").replace("{error}", visibleError),
       );
     } finally {
       setImportLoading(false);
     }
-  }, []);
+  }, [t]);
 
   const handleImportConfirm = useCallback(() => {
     if (!importPreview) return;
