@@ -116,6 +116,34 @@ describe("clientLog", () => {
     );
   });
 
+  it("does not propagate synchronous client-log relay failures", () => {
+    vi.mocked(fetch).mockImplementationOnce(() => {
+      throw new Error("client-log relay unavailable");
+    });
+
+    expect(() => {
+      postClientLog("api: request failed", {
+        method: "error",
+        scope: "api",
+        phase: "request-failed",
+        details: {
+          status_code: 500,
+          error_message: "The server hit an internal error.",
+        },
+      });
+    }).not.toThrow();
+
+    const logs = getRecentClientLogs();
+    expect(logs.at(-1)).toEqual(
+      expect.objectContaining({
+        method: "error",
+        label: "api: request failed",
+        scope: "api",
+        phase: "request-failed",
+      }),
+    );
+  });
+
   it("exports only the newest bounded logs for bug reports", () => {
     for (let index = 0; index < 600; index += 1) {
       postClientLog(`event-${index}`, { elapsedMs: index });

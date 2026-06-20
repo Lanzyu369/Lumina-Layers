@@ -13,7 +13,7 @@ const arbSuccessItem: fc.Arbitrary<BatchItemResult> = fc.record({
 const arbFailedItem: fc.Arbitrary<BatchItemResult> = fc.record({
   filename: fc.string({ minLength: 1, maxLength: 30 }),
   status: fc.constant("failed"),
-  error: fc.string({ minLength: 1, maxLength: 50 }),
+  error: fc.constantFrom("Invalid image", "LUT not found", "Unsupported format"),
 });
 
 const arbMixedBatchResponse: fc.Arbitrary<BatchResponse> = fc

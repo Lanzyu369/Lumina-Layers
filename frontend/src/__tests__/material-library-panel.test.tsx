@@ -596,6 +596,18 @@ describe("MaterialLibraryPanel", () => {
     });
   });
 
+  it("shows readable material library load failures instead of raw HTTP status text", async () => {
+    vi.mocked(listGradientCardMaterials).mockRejectedValueOnce(
+      new Error("Request failed with status code 500"),
+    );
+
+    render(<MaterialLibraryPanel />);
+
+    const error = await screen.findByTestId("material-library-error");
+    expect(error).toHaveTextContent("服务器发生内部错误。请使用请求 ID 查看日志。");
+    expect(error).not.toHaveTextContent("Request failed with status code 500");
+  });
+
   it("exports selected materials as one ZIP archive", async () => {
     vi.mocked(listGradientCardMaterials).mockResolvedValue({
       status: "ok",
@@ -646,6 +658,49 @@ describe("MaterialLibraryPanel", () => {
       expect(exportGradientCardMaterials).toHaveBeenCalledWith(["pla-basic"]);
     });
     expect(screen.getByTestId("material-library-success")).toBeInTheDocument();
+  });
+
+  it("shows readable material export failures instead of raw HTTP status text", async () => {
+    vi.mocked(listGradientCardMaterials).mockResolvedValue({
+      status: "ok",
+      message: "Loaded 1 saved materials",
+      materials: [
+        {
+          material_name: "PLA Basic",
+          directory_name: "pla-basic",
+          created_at: "2026-04-16T10:00:00Z",
+          updated_at: "2026-04-16T11:00:00Z",
+          archive_path: "materials/pla-basic/material.json",
+          stage_a_params_path: "materials/pla-basic/stage_A_parameters.json",
+          material_file_url: "/api/files/material-json",
+          stage_a_params_url: "/api/files/stage-a-json",
+          estimated_rgb: [100, 120, 140],
+          layer_height_mm: 0.04,
+          mean_delta_e: 1.23,
+          verification_count: 3,
+        },
+      ],
+    });
+    vi.mocked(exportGradientCardMaterials).mockRejectedValueOnce(
+      new Error("Request failed with status code 500"),
+    );
+
+    render(<MaterialLibraryPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("material-library-brand-group")).toBeInTheDocument();
+    });
+    expandAllMaterialLibraryGroups();
+    await waitFor(() => {
+      expect(screen.getByText("PLA Basic")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId("material-library-select-pla-basic"));
+    fireEvent.click(screen.getByRole("button", { name: /导出所选耗材|export selected/i }));
+
+    const error = await screen.findByTestId("material-library-error");
+    expect(error).toHaveTextContent("服务器发生内部错误。请使用请求 ID 查看日志。");
+    expect(error).not.toHaveTextContent("Request failed with status code 500");
   });
 
   it("does not expose cloud upload controls in the distribution UI", async () => {

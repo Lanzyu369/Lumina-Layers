@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
+import { translations } from "../../../i18n/translations"
 import CanvasPreviewSurface, { type CanvasPreviewSurfaceReadyPayload } from "../CanvasPreviewSurface"
 
 const OriginalImage = globalThis.Image
@@ -776,10 +777,27 @@ describe("CanvasPreviewSurface", () => {
       latestImage?.dispatchError()
     })
 
+    expect(screen.getByRole("alert")).toHaveTextContent(translations.canvas_preview_load_failed.zh)
     expect(canvas.width).toBe(0)
     expect(canvas.height).toBe(0)
     expect(readyPayloads).toHaveLength(3)
     expect(readyPayloads[2]).toBeNull()
+
+    rerender(
+      <CanvasPreviewSurface
+        src="/preview-c.png"
+        alt="Preview"
+        onSurfaceReady={(payload) => readyPayloads.push(payload)}
+      />,
+    )
+
+    expect(screen.queryByRole("alert")).toBeNull()
+
+    act(() => {
+      latestImage?.dispatchLoad()
+    })
+
+    expect(screen.queryByRole("alert")).toBeNull()
   })
 
   it("uses pointer capture to preserve drag continuity", () => {

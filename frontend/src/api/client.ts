@@ -16,6 +16,47 @@ const apiClient = axios.create({
   timeout: 3_600_000,
 });
 
+function isHttpUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value);
+}
+
+function joinUrl(base: string, path: string): string {
+  return `${base.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
+}
+
+export function buildApiResourceUrl(relativePath: string): string {
+  const base = apiClient.defaults.baseURL ?? "";
+  if (!relativePath) return base;
+  if (isHttpUrl(relativePath)) return relativePath;
+
+  const normalizedPath = relativePath.startsWith("/")
+    ? relativePath
+    : `/${relativePath}`;
+  if (!base) return normalizedPath;
+
+  const normalizedBase = base.replace(/\/+$/, "");
+  const baseIsAbsolute = isHttpUrl(normalizedBase);
+
+  if (normalizedPath.startsWith("/api/")) {
+    if (!baseIsAbsolute && normalizedBase === "/api") {
+      return normalizedPath;
+    }
+    if (baseIsAbsolute) {
+      try {
+        const parsedBase = new URL(normalizedBase);
+        const pathPrefixMatch = parsedBase.pathname.match(/^(.*)\/api$/);
+        const pathPrefixRaw = pathPrefixMatch?.[1] ?? "";
+        const pathPrefix = pathPrefixRaw === "/" ? "" : pathPrefixRaw.replace(/\/+$/, "");
+        return `${parsedBase.origin}${pathPrefix}${normalizedPath}`;
+      } catch {
+        return normalizedPath;
+      }
+    }
+  }
+
+  return joinUrl(normalizedBase, normalizedPath);
+}
+
 function isServerErrorStatus(statusCode: number | null): boolean {
   return typeof statusCode === "number" && statusCode >= 500;
 }
@@ -278,6 +319,13 @@ function fallbackHttpStatusMessage(
   }
 }
 
+export function apiStatusCodeToVisibleMessage(
+  statusCode: number | null,
+  requestId: string | null = null,
+): string {
+  return fallbackHttpStatusMessage(statusCode, requestId);
+}
+
 function readableApiErrorMessage(
   data: unknown,
   statusCode: number | null,
@@ -322,6 +370,21 @@ function extractStatusCodeFromGenericErrorMessage(message: string): number | nul
   return Number.isInteger(statusCode) ? statusCode : null;
 }
 
+function isGenericNoResponseErrorMessage(message: string): boolean {
+  const normalized = message.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized === "network error" ||
+    normalized === "failed to fetch" ||
+    normalized.includes("networkerror when attempting to fetch resource") ||
+    /^timeout of \d+ms exceeded$/.test(normalized) ||
+    normalized === "econnaborted" ||
+    normalized.includes("econnaborted")
+  );
+}
+
 export function apiErrorToVisibleMessage(
   error: unknown,
   fallback: string = tRuntime("api_error_http_default"),
@@ -342,6 +405,9 @@ export function apiErrorToVisibleMessage(
     isGenericHttpDetail(rawMessage, statusCode)
   ) {
     return fallbackHttpStatusMessage(statusCode, requestId);
+  }
+  if (isGenericNoResponseErrorMessage(rawMessage)) {
+    return fallbackHttpStatusMessage(null);
   }
   return rawMessage || fallback;
 }

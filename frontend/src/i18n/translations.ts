@@ -463,6 +463,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "2D 预览图",
     en: "2D preview image",
   },
+  canvas_preview_load_failed: {
+    zh: "预览资源加载失败。请重新生成预览或刷新后再试。",
+    en: "Preview resource failed to load. Regenerate the preview or refresh and try again.",
+  },
   conv_palette_step1: {
     zh: "### 1. 原图颜色（点击预览图）",
     en: "### 1. Original Color (Click Preview)",
@@ -1853,6 +1857,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "打印机型号",
     en: "Printer Model",
   },
+  "settings.printer_options_load_failed": {
+    zh: "打印机列表加载失败：{error}",
+    en: "Failed to load printer options: {error}",
+  },
+  "settings.slicer_options_load_failed": {
+    zh: "切片器列表加载失败：{error}",
+    en: "Failed to load slicer options: {error}",
+  },
   "settings.bed_size": {
     zh: "打印床尺寸",
     en: "Bed Size",
@@ -2830,6 +2842,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "校色器原图上传或预览生成超时。图片较大或网络较慢时可能发生，请重试或使用更快网络。",
     en: "Timed out while uploading the source image or preparing its preview. This can happen with large images or slow networks. Please retry or use a faster connection.",
   },
+  ext_cc_source_prepare_failed: {
+    zh: "原图上传或预览生成失败，请重试。",
+    en: "Failed to upload the source image or prepare its preview. Please retry.",
+  },
   ext_cc_auto_detect_timeout: {
     zh: "ColorChecker 自动识别超时。请重试，或手动点选四个色卡角点。",
     en: "ColorChecker auto detection timed out. Please retry or mark the four chart corners manually.",
@@ -3514,6 +3530,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "缓存状态查询失败",
     en: "Failed to query cache status",
   },
+  basic_material_cache_status_error_detail: {
+    zh: "缓存状态查询失败，请稍后重试。",
+    en: "Failed to query the cache status. Please try again later.",
+  },
   basic_material_cache_fallback_hint: {
     zh: "未构建缓存时，每张图将使用 B&B 最优求解器（耗时较长，保证最优）。",
     en: "When no cache is available, every conversion runs the B&B optimal solver (slower, always optimal).",
@@ -3558,6 +3578,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "色彩分布图加载失败：{message}",
     en: "Failed to load color charts: {message}",
   },
+  basic_material_cache_charts_failed: {
+    zh: "色彩分布图加载失败，请稍后重试。",
+    en: "Failed to load the color charts. Please try again later.",
+  },
   basic_material_cache_confirm_delete: {
     zh: "确认删除当前组合的缓存？",
     en: "Delete the cache for this combination?",
@@ -3598,9 +3622,17 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "构建失败：{message}",
     en: "Build failed: {message}",
   },
+  basic_material_cache_build_failed: {
+    zh: "缓存构建失败，请稍后重试。",
+    en: "Cache build failed. Please try again later.",
+  },
   basic_material_cache_delete_error: {
     zh: "删除失败：{message}",
     en: "Delete failed: {message}",
+  },
+  basic_material_cache_delete_failed: {
+    zh: "缓存删除失败，请稍后重试。",
+    en: "Cache delete failed. Please try again later.",
   },
   basic_material_runtime_section_title: {
     zh: "智能配方缓存",
@@ -3629,6 +3661,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   basic_material_runtime_status_error: {
     zh: "智能缓存状态查询失败",
     en: "Failed to query smart cache status",
+  },
+  basic_material_runtime_status_error_detail: {
+    zh: "智能缓存状态查询失败，请稍后重试。",
+    en: "Failed to query the smart cache status. Please try again later.",
   },
   basic_material_runtime_budget_label: {
     zh: "缓存规模",
@@ -3686,6 +3722,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "配方覆盖图加载失败：{message}",
     en: "Failed to load recipe coverage: {message}",
   },
+  basic_material_runtime_charts_failed: {
+    zh: "配方覆盖图加载失败，请稍后重试。",
+    en: "Failed to load recipe coverage. Please try again later.",
+  },
   basic_material_runtime_building_label: {
     zh: "正在构建智能缓存…",
     en: "Building smart cache…",
@@ -3718,9 +3758,17 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "智能缓存构建失败：{message}",
     en: "Smart cache build failed: {message}",
   },
+  basic_material_runtime_build_failed: {
+    zh: "智能缓存构建失败，请稍后重试。",
+    en: "Smart cache build failed. Please try again later.",
+  },
   basic_material_runtime_delete_error: {
     zh: "智能缓存删除失败：{message}",
     en: "Smart cache delete failed: {message}",
+  },
+  basic_material_runtime_delete_failed: {
+    zh: "智能缓存删除失败，请稍后重试。",
+    en: "Smart cache delete failed. Please try again later.",
   },
   basic_source_kind_label: {
     zh: "颜色源类型",
@@ -3857,6 +3905,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   basic_image_format_error: {
     zh: "仅支持 JPG/PNG/SVG/WebP/HEIC 格式",
     en: "Only JPG/PNG/SVG/WebP/HEIC formats are supported",
+  },
+  converter_raw_preview_failed: {
+    zh: "RAW 图片预览失败：{error}。请检查后端 RAW 支持或换用 PNG/JPG 后重试。",
+    en: "RAW image preview failed: {error}. Check backend RAW support or retry with a PNG/JPG file.",
   },
 
   // ==================== Large Format Mode ====================
@@ -4922,6 +4974,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "失败文件列表",
     en: "Failed files list",
   },
+  "batch.itemError.conversionFailed": {
+    zh: "这个文件无法转换。请重新上传该文件，或查看服务端日志了解详情。",
+    en: "This file could not be converted. Re-upload it or check the server log for details.",
+  },
   // Merged batch 3MF download + plate-overflow warning (batch-mode-merged-3mf).
   // 批量合并 3MF 下载与超出热床范围的警告文案。
   "batch.download.mergedThreemf": {
@@ -5125,6 +5181,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   five_color_error_generate_swatch_failed: {
     zh: "色卡生成失败",
     en: "Swatch generation failed",
+  },
+  five_color_error_download_swatch_failed: {
+    zh: "色卡下载失败",
+    en: "Swatch download failed",
   },
   five_color_error_generic: {
     zh: "五色操作失败",
@@ -5732,6 +5792,18 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   recipe_export_error: {
     zh: "导出失败：{error}",
     en: "Export failed: {error}",
+  },
+  recipe_export_error_no_image: {
+    zh: "请先载入图片。",
+    en: "Load an image first.",
+  },
+  recipe_export_error_no_preview: {
+    zh: "请先生成预览后再导出。",
+    en: "Generate a preview before exporting.",
+  },
+  recipe_export_error_unknown: {
+    zh: "导出没有完成，请稍后重试。",
+    en: "The export did not finish. Please try again.",
   },
   recipe_import_title: {
     zh: "导入分享卡",
@@ -7223,6 +7295,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "耗材已删除。",
     en: "Material deleted.",
   },
+  mat_gradient_library_delete_failed: {
+    zh: "删除耗材失败",
+    en: "Failed to delete material",
+  },
   mat_gradient_library_export_requires_selection: {
     zh: "请先至少选择一个耗材再导出。",
     en: "Select at least one material before exporting.",
@@ -7594,6 +7670,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   material_recipe_generate_swatch_failed: {
     zh: "色块生成失败",
     en: "Swatch generation failed",
+  },
+  material_recipe_download_swatch_failed: {
+    zh: "色块下载失败",
+    en: "Swatch download failed",
   },
   material_recipe_swatch_legend_alt: {
     zh: "色块图例",

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ChangeEvent, FormEvent, JSX } from "react";
 import { createPortal } from "react-dom";
+import { apiStatusCodeToVisibleMessage } from "../api/client";
 import { relayBugReport, submitBugReport } from "../api/feedback";
 import type { BugReportRequestPayload, BugReportResponse } from "../api/feedback";
 import { trackLuminaEvent } from "../analytics/umami";
@@ -35,6 +36,10 @@ function scheduleIdle(callback: () => void): void {
     }
   }
   setTimeout(callback, 0);
+}
+
+function isGenericStatusCodeMessage(message: string): boolean {
+  return /^Request failed with status code \d{3}(?::.*)?$/i.test(message.trim());
 }
 
 /**
@@ -138,14 +143,19 @@ function CompactContextSummary({
                 details.error_message.trim()
                   ? details.error_message.trim()
                   : "";
+              const fallbackMessage = apiStatusCodeToVisibleMessage(
+                typeof status === "number" ? status : null,
+              );
+              const primaryMessage =
+                message && !isGenericStatusCodeMessage(message)
+                  ? message
+                  : fallbackMessage;
+              const primaryText = path
+                ? `${primaryMessage} · ${path}`
+                : primaryMessage || entry.label;
               return (
                 <li key={`${entry.timestamp}-${idx}`}>
-                  <span>{status} · {path || entry.label}</span>
-                  {message && (
-                    <span className="block text-slate-500 dark:text-slate-400">
-                      {message}
-                    </span>
-                  )}
+                  <span>{primaryText}</span>
                 </li>
               );
             })}

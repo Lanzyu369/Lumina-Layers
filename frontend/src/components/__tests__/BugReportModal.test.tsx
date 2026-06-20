@@ -91,10 +91,39 @@ describe("BugReportModal", () => {
     render(<BugReportModal open onClose={() => {}} />);
 
     expect(screen.getByText("近期接口错误")).toBeInTheDocument();
-    expect(screen.getByText("500 · /convert/generate")).toBeInTheDocument();
     expect(
-      screen.getByText("The server hit an internal error."),
+      screen.getByText("The server hit an internal error. · /convert/generate"),
     ).toBeInTheDocument();
+  });
+
+  it("replaces generic status-code API errors in the context summary", () => {
+    vi.mocked(collectBugReportContext).mockReturnValueOnce(createBugReportContext({
+      recent_client_logs: [
+        {
+          timestamp: "2026-06-18T15:00:00.000Z",
+          method: "error",
+          label: "api: request failed",
+          elapsed_ms: null,
+          scope: "api",
+          phase: "request-failed",
+          details: {
+            status_code: 402,
+            url: "/api/quota/check",
+            error_message: "Request failed with status code 402",
+          },
+        },
+      ],
+    }));
+
+    render(<BugReportModal open onClose={() => {}} />);
+
+    expect(
+      screen.getByText("此操作需要可用额度或付款状态后才能继续。 · /api/quota/check"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("402 · /api/quota/check")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Request failed with status code 402"),
+    ).not.toBeInTheDocument();
   });
 
   it("submits the built payload and shows a success toast", async () => {

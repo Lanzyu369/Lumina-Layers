@@ -1,7 +1,12 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useConverterStore } from '../../stores/converter';
 import { DEFAULT_STATE } from '../../stores/converter';
 import { StructureMode } from '../../api/types';
+import { uploadImagePreview } from '../../api/system';
+
+vi.mock('../../api/system', () => ({
+  uploadImagePreview: vi.fn(),
+}));
 
 /**
  * Converter_Store 单元测试
@@ -30,6 +35,10 @@ function resetConverterState(overrides?: Record<string, unknown>): void {
     ...DEFAULT_STATE,
     ...overrides,
   });
+}
+
+async function flushPromises(): Promise<void> {
+  await Promise.resolve();
 }
 
 function expectMagnetsToNotOverlap(
@@ -232,6 +241,113 @@ describe('handleFilesSelect clears stale puzzle state', () => {
       URL.createObjectURL = originalCreateObjectURL;
       URL.revokeObjectURL = originalRevokeObjectURL;
     }
+  });
+});
+
+describe('RAW image preview upload failures', () => {
+  beforeEach(() => {
+    resetConverterState({
+      enableCrop: true,
+      error: null,
+      imageFile: null,
+      imagePreviewUrl: null,
+      aspectRatio: null,
+    });
+    vi.mocked(uploadImagePreview).mockReset();
+  });
+
+  it('sets an actionable error when setImageFile cannot prepare a RAW preview', async () => {
+    vi.mocked(uploadImagePreview).mockRejectedValueOnce(
+      new Error('rawpy is not installed'),
+    );
+    const rawFile = new File(['raw'], 'camera.dng', { type: '' });
+
+    useConverterStore.getState().setImageFile(rawFile);
+    await flushPromises();
+
+    const state = useConverterStore.getState();
+    expect(state.imageFile).toBe(rawFile);
+    expect(state.imagePreviewUrl).toBeNull();
+    expect(state.aspectRatio).toBeNull();
+    expect(state.error).toContain('RAW');
+    expect(state.error).toContain('rawpy is not installed');
+  });
+
+  it('sets an actionable error when handleFilesSelect cannot prepare a RAW preview', async () => {
+    vi.mocked(uploadImagePreview).mockRejectedValueOnce(
+      new Error('Preview service unavailable'),
+    );
+    const rawFile = new File(['raw'], 'camera.cr3', { type: '' });
+
+    useConverterStore.getState().handleFilesSelect([rawFile]);
+    await flushPromises();
+
+    const state = useConverterStore.getState();
+    expect(state.imageFile).toBe(rawFile);
+    expect(state.batchMode).toBe(false);
+    expect(state.imagePreviewUrl).toBeNull();
+    expect(state.aspectRatio).toBeNull();
+    expect(state.error).toContain('RAW');
+    expect(state.error).toContain('Preview service unavailable');
+  });
+
+  it('does not let a stale RAW preview failure overwrite a newer file selection', async () => {
+    let rejectRawPreview!: (reason?: unknown) => void;
+    vi.mocked(uploadImagePreview).mockImplementationOnce(
+      () =>
+        new Promise((_, reject) => {
+          rejectRawPreview = reject;
+        }),
+    );
+    const rawFile = new File(['raw'], 'stale.nef', { type: '' });
+    const pngFile = new File(['png'], 'fresh.png', { type: 'image/png' });
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    URL.createObjectURL = vi.fn(() => 'blob:fresh-preview');
+    URL.revokeObjectURL = vi.fn();
+
+    try {
+      useConverterStore.getState().setImageFile(rawFile);
+      useConverterStore.getState().setImageFile(pngFile);
+      rejectRawPreview(new Error('rawpy is not installed'));
+      await flushPromises();
+
+      const state = useConverterStore.getState();
+      expect(state.imageFile).toBe(pngFile);
+      expect(state.imagePreviewUrl).toBe('blob:fresh-preview');
+      expect(state.error).toBeNull();
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+    }
+  });
+
+  it('sets an actionable error when batch removal downgrades to a RAW file without a preview', async () => {
+    vi.mocked(uploadImagePreview).mockRejectedValueOnce(
+      new Error('rawpy is not installed'),
+    );
+    const pngFile = new File(['png'], 'remove.png', { type: 'image/png' });
+    const rawFile = new File(['raw'], 'remaining.raf', { type: '' });
+    useConverterStore.setState({
+      batchFiles: [pngFile, rawFile],
+      batchMode: true,
+      imageFile: null,
+      imagePreviewUrl: null,
+      aspectRatio: null,
+      error: null,
+    });
+
+    useConverterStore.getState().removeBatchFile(0);
+    await flushPromises();
+
+    const state = useConverterStore.getState();
+    expect(state.batchFiles).toEqual([]);
+    expect(state.batchMode).toBe(false);
+    expect(state.imageFile).toBe(rawFile);
+    expect(state.imagePreviewUrl).toBeNull();
+    expect(state.aspectRatio).toBeNull();
+    expect(state.error).toContain('RAW');
+    expect(state.error).toContain('rawpy is not installed');
   });
 });
 

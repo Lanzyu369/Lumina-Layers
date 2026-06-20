@@ -34,9 +34,15 @@ CALIBRATION_GENERATION_FAILED_DETAIL = (
     "Calibration board could not be generated. "
     "Check calibration settings and try again."
 )
+CALIBRATION_OUTPUT_PREPARATION_FAILED_DETAIL = (
+    "Calibration board output could not be prepared. Please try again."
+)
 SINGLE_STAGE_KIT_GENERATION_FAILED_DETAIL = (
     "Single-stage calibration kit could not be generated. "
     "Check material and device settings and try again."
+)
+SINGLE_STAGE_KIT_OUTPUT_PREPARATION_FAILED_DETAIL = (
+    "Single-stage calibration kit output could not be prepared. Please try again."
 )
 log = get_logger(__name__)
 
@@ -90,6 +96,46 @@ def _handle_core_error(
         },
     )
     raise HTTPException(status_code=500, detail=public_detail)
+
+
+def _handle_output_preparation_error(
+    e: Exception,
+    *,
+    context: str,
+    public_detail: str,
+) -> None:
+    """Map FileRegistry/export handoff failures to readable HTTP errors.
+    将 FileRegistry / 导出交接失败转换为可读的 HTTP 错误。
+    """
+    log.error(
+        "Calibration output preparation failed",
+        extra={
+            "event": "calibration_output_preparation_failed",
+            "context": context,
+            "error_type": type(e).__name__,
+            "error_message": str(e),
+        },
+    )
+    raise HTTPException(status_code=500, detail=public_detail)
+
+
+def _log_optional_preview_registration_failure(
+    e: Exception,
+    *,
+    context: str,
+    export_ids: list[str | None],
+) -> None:
+    """Record a degraded optional preview without failing the export."""
+    log.warning(
+        "Calibration optional preview registration failed",
+        extra={
+            "event": "calibration_preview_registration_failed",
+            "context": context,
+            "export_ids": [file_id for file_id in export_ids if file_id],
+            "error_type": type(e).__name__,
+            "error_message": str(e),
+        },
+    )
 
 
 def _new_stateless_export_sid(prefix: str) -> str:
@@ -199,15 +245,27 @@ def calibration_generate(
     preview_url = None
     preview_id = None
     layer_urls = []
-    registered_file_ids: list[str | None] = []
+    download_id = None
     try:
         download_id = registry.register_path(
             sid,
             path,
             ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
         )
-        registered_file_ids.append(download_id)
+    except (OSError, RuntimeError, TypeError, ValueError) as e:
+        _rollback_stateless_export_registration(
+            registry,
+            file_ids=[download_id],
+            generated_paths=[path],
+        )
+        _handle_output_preparation_error(
+            e,
+            context="Calibration output registration",
+            public_detail=CALIBRATION_OUTPUT_PREPARATION_FAILED_DETAIL,
+        )
 
+    preview_file_ids: list[str | None] = []
+    try:
         if isinstance(preview_imgs, list) and len(preview_imgs) > 0:
             main_preview = preview_imgs[0]
             preview_id = registry.register_bytes(
@@ -216,7 +274,7 @@ def calibration_generate(
                 "preview.png",
                 ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
             )
-            registered_file_ids.append(preview_id)
+            preview_file_ids.append(preview_id)
             preview_url = f"/api/files/{preview_id}"
 
             for idx, layer_img in enumerate(preview_imgs[1:]):
@@ -226,7 +284,7 @@ def calibration_generate(
                     f"layer_{idx+1}.png",
                     ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
                 )
-                registered_file_ids.append(layer_id)
+                preview_file_ids.append(layer_id)
                 layer_urls.append(f"/api/files/{layer_id}")
         elif preview_imgs is not None:
             # Fallback for single image
@@ -236,15 +294,22 @@ def calibration_generate(
                 "preview.png",
                 ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
             )
-            registered_file_ids.append(preview_id)
+            preview_file_ids.append(preview_id)
             preview_url = f"/api/files/{preview_id}"
-    except (OSError, RuntimeError, TypeError, ValueError):
+    except (OSError, RuntimeError, TypeError, ValueError) as e:
         _rollback_stateless_export_registration(
             registry,
-            file_ids=registered_file_ids,
-            generated_paths=[path],
+            file_ids=preview_file_ids,
+            generated_paths=[],
         )
-        raise
+        preview_url = None
+        preview_id = None
+        layer_urls = []
+        _log_optional_preview_registration_failure(
+            e,
+            context="Calibration preview registration",
+            export_ids=[download_id],
+        )
 
     backing_color_for_log = (
         "White"
@@ -313,34 +378,51 @@ def calibration_generate_single_stage_kit(
         )
 
     sid = _new_stateless_export_sid("single-stage-kit")
-    registered_file_ids: list[str | None] = []
+    kit_id = None
+    manifest_id = None
     try:
         kit_id = registry.register_path(
             sid,
             result.zip_path,
             ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
         )
-        registered_file_ids.append(kit_id)
         manifest_id = registry.register_path(
             sid,
             result.manifest_path,
             ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
         )
-        registered_file_ids.append(manifest_id)
+    except (OSError, RuntimeError, TypeError, ValueError) as e:
+        _rollback_stateless_export_registration(
+            registry,
+            file_ids=[kit_id, manifest_id],
+            generated_paths=[result.zip_path, result.manifest_path],
+        )
+        _handle_output_preparation_error(
+            e,
+            context="Single-stage kit output registration",
+            public_detail=SINGLE_STAGE_KIT_OUTPUT_PREPARATION_FAILED_DETAIL,
+        )
+
+    preview_id = None
+    try:
         preview_id = registry.register_bytes(
             sid,
             pil_to_png_bytes(result.preview_image),
             "single_stage_preview.png",
             ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
         )
-        registered_file_ids.append(preview_id)
-    except (OSError, RuntimeError, TypeError, ValueError):
+    except (OSError, RuntimeError, TypeError, ValueError) as e:
         _rollback_stateless_export_registration(
             registry,
-            file_ids=registered_file_ids,
-            generated_paths=[result.zip_path, result.manifest_path],
+            file_ids=[preview_id],
+            generated_paths=[],
         )
-        raise
+        preview_id = None
+        _log_optional_preview_registration_failure(
+            e,
+            context="Single-stage kit preview registration",
+            export_ids=[kit_id, manifest_id],
+        )
     log.info(
         "Single-stage calibration kit generated",
         extra={
@@ -358,7 +440,7 @@ def calibration_generate_single_stage_kit(
         status="ok",
         message=result.message,
         kit_download_url=f"/api/files/{kit_id}",
-        preview_url=f"/api/files/{preview_id}",
+        preview_url=f"/api/files/{preview_id}" if preview_id else None,
         manifest_url=f"/api/files/{manifest_id}",
         jobs=result.jobs,
     )

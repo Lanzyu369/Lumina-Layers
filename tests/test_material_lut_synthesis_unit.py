@@ -268,6 +268,41 @@ class TestLoadMaterialParams:
         with pytest.raises(FileNotFoundError):
             load_material_params("nonexistent", materials_dir=str(tmp_path))
 
+    def test_invalid_stage_a_missing_solver_vectors_raises_value_error(self, tmp_path):
+        mat_dir = tmp_path / "broken-pla"
+        mat_dir.mkdir()
+        (mat_dir / "stage_A_parameters.json").write_text(
+            json.dumps(
+                {
+                    "parameters": {
+                        "channels": [{"color_name": "Broken PLA"}],
+                        "substrates": [
+                            {"substrate_id": "white", "C0": [1.0, 1.0, 1.0]}
+                        ],
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        (mat_dir / "material.json").write_text(
+            json.dumps(
+                {
+                    "material_name": "Broken PLA",
+                    "stage_a_params_file": "stage_A_parameters.json",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError) as exc_info:
+            load_material_params("broken-pla", materials_dir=str(tmp_path))
+
+        message = str(exc_info.value)
+        assert "broken-pla" in message
+        assert "parameters.channels[0].E" in message
+        assert "cannot be used by the material solver" in message
+        assert str(tmp_path) not in message
+
     def test_load_multiple(self, tmp_path):
         for name, E_val in [("mat-a", 0.3), ("mat-b", 0.7)]:
             d = tmp_path / name

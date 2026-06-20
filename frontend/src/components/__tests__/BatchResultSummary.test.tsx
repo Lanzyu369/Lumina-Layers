@@ -41,6 +41,21 @@ const mixedResult: BatchResponse = {
   warnings: [],
 };
 
+const rawFailureResult: BatchResponse = {
+  status: "failed",
+  message: "all failed",
+  download_url: null,
+  preview_3d_url: null,
+  results: [
+    {
+      filename: "private.png",
+      status: "failed",
+      error: "cannot read /Users/min/private/batch-input/private.png: Permission denied",
+    },
+  ],
+  warnings: [],
+};
+
 describe("BatchResultSummary", () => {
   describe("all success", () => {
     it("shows correct success count and total", () => {
@@ -81,6 +96,15 @@ describe("BatchResultSummary", () => {
       expect(screen.getByText(/LUT not found/)).toBeInTheDocument();
       expect(screen.getByText("bad2.jpg")).toBeInTheDocument();
       expect(screen.getByText(/Invalid dimensions/)).toBeInTheDocument();
+    });
+
+    it("hides raw local paths from failed file details", () => {
+      const { container } = render(<BatchResultSummary result={rawFailureResult} />);
+      const text = container.textContent ?? "";
+      expect(text).toContain("private.png");
+      expect(text).toContain("这个文件无法转换。请重新上传该文件，或查看服务端日志了解详情。");
+      expect(text).not.toContain("/Users/min/private");
+      expect(text).not.toContain("Permission denied");
     });
   });
 

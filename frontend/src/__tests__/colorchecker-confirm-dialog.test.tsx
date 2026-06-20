@@ -380,6 +380,23 @@ describe("ColorcheckerConfirmDialog", () => {
     ).toBeInTheDocument();
   });
 
+  it("uses source prepare fallback copy instead of backend ColorChecker detail", async () => {
+    vi.mocked(colorcheckerPrepareSource).mockRejectedValueOnce(
+      new Error(
+        "ColorChecker processing service is unavailable. Check the server ColorChecker dependencies and try again.",
+      ),
+    );
+
+    renderDialog();
+
+    expect(
+      await screen.findByText("原图上传或预览生成失败，请重试。"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/ColorChecker processing service is unavailable/i),
+    ).not.toBeInTheDocument();
+  });
+
   it("falls back to the default reference when localStorage cannot read the saved selection", async () => {
     const originalLocalStorage = window.localStorage;
     const blockedStorage = {
@@ -420,6 +437,23 @@ describe("ColorcheckerConfirmDialog", () => {
     ).toBeInTheDocument();
   });
 
+  it("uses stage fallback copy instead of backend ColorChecker detail during auto detection", async () => {
+    vi.mocked(colorcheckerDetectChart).mockRejectedValueOnce(
+      new Error(
+        "ColorChecker processing failed. Recheck the source image or chart corners and try again.",
+      ),
+    );
+
+    renderDialog();
+
+    expect(
+      await screen.findByText("自动定位失败，请手动点选四角"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/ColorChecker processing failed/i),
+    ).not.toBeInTheDocument();
+  });
+
   it("uses stage-specific timeout copy during warp preview generation", async () => {
     vi.mocked(colorcheckerWarpPreview).mockRejectedValueOnce(makeTimeoutError());
     renderDialog();
@@ -434,6 +468,21 @@ describe("ColorcheckerConfirmDialog", () => {
     ).toBeInTheDocument();
   });
 
+  it("uses stage fallback copy instead of generic HTTP status copy during warp preview generation", async () => {
+    vi.mocked(colorcheckerWarpPreview).mockRejectedValueOnce(
+      new Error("Request failed with status code 500"),
+    );
+    renderDialog();
+
+    await expectDafanDetectCalled("source-chart.png");
+    const warpButton = await screen.findByRole("button", { name: "生成预览" });
+    await waitFor(() => expect(warpButton).not.toBeDisabled());
+    fireEvent.click(warpButton);
+
+    expect(await screen.findByText("透视预览生成失败")).toBeInTheDocument();
+    expect(screen.queryByText(/Request failed with status code/i)).not.toBeInTheDocument();
+  });
+
   it("uses stage-specific timeout copy during calibration", async () => {
     vi.mocked(colorcheckerCalibrate).mockRejectedValueOnce(makeTimeoutError());
     renderDialog();
@@ -446,6 +495,21 @@ describe("ColorcheckerConfirmDialog", () => {
     expect(
       await screen.findByText("ColorChecker 校色计算超时。请重试；大 RAW/DNG 图片可能需要更长处理时间。"),
     ).toBeInTheDocument();
+  });
+
+  it("uses stage fallback copy instead of generic HTTP status copy during calibration", async () => {
+    vi.mocked(colorcheckerCalibrate).mockRejectedValueOnce(
+      new Error("Request failed with status code 500"),
+    );
+    renderDialog();
+
+    await expectDafanDetectCalled("source-chart.png");
+    const calibrateButton = await screen.findByRole("button", { name: "执行校色" });
+    await waitFor(() => expect(calibrateButton).not.toBeDisabled());
+    fireEvent.click(calibrateButton);
+
+    expect(await screen.findByText("校色失败")).toBeInTheDocument();
+    expect(screen.queryByText(/Request failed with status code/i)).not.toBeInTheDocument();
   });
 
   it("submits advanced algorithm options and dragged corner coordinates", async () => {

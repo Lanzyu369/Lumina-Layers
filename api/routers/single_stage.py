@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
+import shutil
 import threading
+import tempfile
 import uuid
 import zipfile
 from typing import Any, Callable
@@ -59,6 +62,7 @@ from api.schemas.lut import (
 )
 from api.session_store import SessionStore
 from api.structured_logging import bind_session_id, get_logger
+import core.single_stage.materials as single_stage_materials
 from core.material_cache import (
     ALLOWED_GRID_RESOLUTIONS,
     ALLOWED_LAYER_HEIGHTS_MM as _CACHE_ALLOWED_LAYER_HEIGHTS,  # noqa: N811
@@ -127,6 +131,10 @@ MATERIAL_SOLVER_CACHE_LIST_FAILED_DETAIL = (
     "Material solver caches could not be listed. "
     "Check cache storage and try again."
 )
+GRADIENT_CARD_MATERIAL_LIBRARY_LIST_FAILED_DETAIL = (
+    "Gradient-card material library could not be loaded. "
+    "Check saved material storage and try again."
+)
 MATERIAL_SOLVER_CACHE_BUILD_FAILED_DETAIL = (
     "Material solver cache could not be built. "
     "Check material inputs and cache storage, then try again."
@@ -134,6 +142,10 @@ MATERIAL_SOLVER_CACHE_BUILD_FAILED_DETAIL = (
 MATERIAL_SOLVER_RUNTIME_BUILD_FAILED_DETAIL = (
     "Material solver runtime could not be built. "
     "Check material inputs and cache storage, then try again."
+)
+MATERIAL_SWATCH_EXPORT_FAILED_DETAIL = (
+    "Material swatch export failed. Check the selected material recipes and "
+    "export settings, then try again."
 )
 MaterialCacheEvictor = Callable[[str], int]
 _RUNTIME_BUILD_LOCKS_GUARD = threading.Lock()
@@ -280,6 +292,267 @@ def _rollback_imported_materials(directory_names: list[str]) -> None:
             delete_saved_stage_a_material_archive(directory_name=directory_name)
         except (FileNotFoundError, ValueError, TypeError, OSError, RuntimeError):
             pass
+
+
+MaterialDirectoryBackup = tuple[Path, Path, Path]
+NewMaterialCandidateSnapshot = tuple[Path, str, set[Path]]
+
+
+def _candidate_material_dir_name_matches(name: str, stem: str) -> bool:
+    return name == stem or name.startswith(f"{stem}_")
+
+
+def _create_new_material_candidate_snapshot(
+    *,
+    material_name: str,
+    brand: str | None,
+) -> NewMaterialCandidateSnapshot:
+    materials_root = Path(single_stage_materials.MATERIALS_DIR)
+    stem = single_stage_materials._sanitize_material_dirname(material_name)
+    parent_dir = materials_root
+    if brand is not None:
+        parent_dir = materials_root / single_stage_materials._sanitize_material_dirname(brand)
+    existing_candidates: set[Path] = set()
+    try:
+        children = list(parent_dir.iterdir()) if parent_dir.exists() else []
+    except OSError:
+        children = []
+    for child in children:
+        if child.is_dir() and _candidate_material_dir_name_matches(child.name, stem):
+            try:
+                existing_candidates.add(child.resolve())
+            except OSError:
+                existing_candidates.add(child.absolute())
+    return parent_dir, stem, existing_candidates
+
+
+def _create_material_directory_backup(directory_name: str) -> MaterialDirectoryBackup:
+    materials_root = Path(single_stage_materials.MATERIALS_DIR)
+    material_dir = single_stage_materials.resolve_saved_material_dir(
+        materials_root,
+        directory_name,
+    )
+    backup_root = Path(tempfile.mkdtemp(prefix="lumina_material_backup_"))
+    backup_dir = backup_root / "material"
+    try:
+        shutil.copytree(material_dir, backup_dir)
+    except (OSError, shutil.Error):
+        shutil.rmtree(backup_root, ignore_errors=True)
+        raise
+    return material_dir, backup_dir, backup_root
+
+
+def _create_material_directory_backup_or_raise(
+    directory_name: str,
+    *,
+    event: str,
+    session_id: str | None = None,
+) -> MaterialDirectoryBackup:
+    try:
+        return _create_material_directory_backup(directory_name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (OSError, RuntimeError, shutil.Error) as exc:
+        _raise_internal_route_error(
+            exc,
+            context="Gradient card material backup",
+            event=event,
+            session_id=session_id,
+        )
+
+
+def _discard_material_directory_backup(
+    backup: MaterialDirectoryBackup | None,
+) -> None:
+    if backup is None:
+        return
+    _, _, backup_root = backup
+    shutil.rmtree(backup_root, ignore_errors=True)
+
+
+def _restore_material_directory_backup(
+    backup: MaterialDirectoryBackup | None,
+) -> None:
+    if backup is None:
+        return
+    material_dir, backup_dir, _ = backup
+    restore_dir = material_dir.parent / f".{material_dir.name}.restore-{uuid.uuid4().hex}"
+    try:
+        shutil.copytree(backup_dir, restore_dir)
+        shutil.rmtree(material_dir, ignore_errors=True)
+        material_dir.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(restore_dir, material_dir)
+    finally:
+        shutil.rmtree(restore_dir, ignore_errors=True)
+
+
+def _path_is_inside_materials_root(path: Path) -> bool:
+    try:
+        resolved_path = path.resolve()
+        materials_root = Path(single_stage_materials.MATERIALS_DIR).resolve()
+        resolved_path.relative_to(materials_root)
+    except (OSError, ValueError):
+        return False
+    return resolved_path != materials_root
+
+
+def _prune_empty_material_parents(start_dir: Path) -> None:
+    try:
+        materials_root = Path(single_stage_materials.MATERIALS_DIR).resolve()
+        current = start_dir.resolve()
+    except OSError:
+        return
+    while current != materials_root:
+        try:
+            current.relative_to(materials_root)
+        except ValueError:
+            return
+        try:
+            current.rmdir()
+        except OSError:
+            return
+        current = current.parent
+
+
+def _remove_saved_material_directory_safely(
+    *,
+    directory_name: str | None,
+    archive_path: str,
+) -> None:
+    if directory_name:
+        try:
+            delete_saved_stage_a_material_archive(directory_name=directory_name)
+            return
+        except (FileNotFoundError, ValueError, TypeError, OSError, RuntimeError):
+            pass
+    material_dir = Path(archive_path).parent
+    if not _path_is_inside_materials_root(material_dir):
+        return
+    parent_dir = material_dir.parent
+    shutil.rmtree(material_dir, ignore_errors=True)
+    _prune_empty_material_parents(parent_dir)
+
+
+def _rollback_saved_material_write(
+    *,
+    directory_name: str,
+    archive_path: str,
+    backup: MaterialDirectoryBackup | None,
+    evict_material_cache: MaterialCacheEvictor,
+) -> None:
+    try:
+        if backup is not None:
+            _restore_material_directory_backup(backup)
+        else:
+            _remove_saved_material_directory_safely(
+                directory_name=directory_name,
+                archive_path=archive_path,
+            )
+        single_stage_materials.invalidate_material_library_cache()
+        evict_material_cache(directory_name)
+    except (FileNotFoundError, ValueError, TypeError, OSError, RuntimeError) as exc:
+        log.exception(
+            "Gradient card material rollback failed",
+            extra={
+                "event": "extractor_gradient_card_material_rollback_failed",
+                "directory_name": directory_name,
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+
+
+def _rollback_existing_material_write(
+    *,
+    directory_name: str | None,
+    backup: MaterialDirectoryBackup | None,
+    evict_material_cache: MaterialCacheEvictor,
+) -> None:
+    if backup is None:
+        return
+    if directory_name is None:
+        material_dir, _, _ = backup
+        directory_name = _saved_material_directory_name({}, material_dir.name)
+    _rollback_saved_material_write(
+        directory_name=directory_name,
+        archive_path=str(backup[0] / "material.json"),
+        backup=backup,
+        evict_material_cache=evict_material_cache,
+    )
+
+
+def _rollback_new_material_write(
+    *,
+    snapshot: NewMaterialCandidateSnapshot | None,
+    evict_material_cache: MaterialCacheEvictor,
+) -> None:
+    if snapshot is None:
+        return
+    parent_dir, stem, existing_candidates = snapshot
+    try:
+        children = list(parent_dir.iterdir()) if parent_dir.exists() else []
+    except OSError:
+        return
+    materials_root = Path(single_stage_materials.MATERIALS_DIR)
+    for child in children:
+        if not child.is_dir() or not _candidate_material_dir_name_matches(child.name, stem):
+            continue
+        try:
+            resolved_child = child.resolve()
+        except OSError:
+            resolved_child = child.absolute()
+        if resolved_child in existing_candidates:
+            continue
+        if not _path_is_inside_materials_root(child):
+            continue
+        try:
+            directory_name = resolved_child.relative_to(materials_root.resolve()).as_posix()
+        except (OSError, ValueError):
+            directory_name = child.name
+        shutil.rmtree(child, ignore_errors=True)
+        evict_material_cache(directory_name)
+    _prune_empty_material_parents(parent_dir)
+
+
+def _register_gradient_card_material_files(
+    *,
+    registry: FileRegistry,
+    registry_session: str,
+    archive_path: str,
+    stage_a_params_path: str,
+    rollback: Callable[[], None],
+    event: str,
+    session_id: str | None = None,
+) -> tuple[str, str]:
+    registered_file_ids: list[str] = []
+    try:
+        material_id = registry.register_path(
+            registry_session,
+            archive_path,
+            ttl_seconds=MATERIAL_LIBRARY_FILE_TTL_SECONDS,
+        )
+        registered_file_ids.append(material_id)
+        stage_a_id = registry.register_path(
+            registry_session,
+            stage_a_params_path,
+            ttl_seconds=MATERIAL_LIBRARY_FILE_TTL_SECONDS,
+        )
+    except Exception as exc:
+        for file_id in reversed(registered_file_ids):
+            try:
+                registry.cleanup_file(file_id)
+            except Exception:
+                pass
+        rollback()
+        _raise_file_registration_error(
+            exc,
+            context="Gradient card material file registration",
+            event=event,
+            session_id=session_id,
+        )
+    return material_id, stage_a_id
 
 
 def _remove_path_safely(path: str | None) -> None:
@@ -745,43 +1018,105 @@ async def extractor_save_gradient_card_material(
             detail="Session does not contain a computed gradient-card Stage A result",
         )
 
+    material_backup: MaterialDirectoryBackup | None = None
+    new_material_snapshot: NewMaterialCandidateSnapshot | None = None
+    validated_save_mode = save_mode.strip().lower() if isinstance(save_mode, str) else "merge"
+    if validated_save_mode not in ("merge", "override"):
+        validated_save_mode = "merge"
+    existing_directory_name = (
+        target_directory_name.strip()
+        if isinstance(target_directory_name, str) and target_directory_name.strip()
+        else None
+    )
+    cleaned_brand = brand.strip() if isinstance(brand, str) and brand.strip() else None
+    if existing_directory_name is not None:
+        material_backup = _create_material_directory_backup_or_raise(
+            existing_directory_name,
+            event="extractor_save_gradient_card_material_backup_failed",
+            session_id=session_id,
+        )
+    else:
+        new_material_snapshot = _create_new_material_candidate_snapshot(
+            material_name=cleaned_material_name,
+            brand=cleaned_brand,
+        )
     try:
-        validated_save_mode = save_mode.strip().lower() if isinstance(save_mode, str) else "merge"
-        if validated_save_mode not in ("merge", "override"):
-            validated_save_mode = "merge"
         result = save_stage_a_material_archive(
             material_name=cleaned_material_name,
             params_payload=params_payload,
             fit_summary=fit_summary,
             source_summary=source_summary,
             material_summary=material_summary,
-            existing_directory_name=target_directory_name.strip() if isinstance(target_directory_name, str) and target_directory_name.strip() else None,
+            existing_directory_name=existing_directory_name,
             save_mode=validated_save_mode,
-            brand=brand.strip() if isinstance(brand, str) and brand.strip() else None,
+            brand=cleaned_brand,
         )
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except (ValueError, TypeError, OSError, RuntimeError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
-
-    persistent_registry_session = f"material:{uuid.uuid4().hex}"
-    material_id = registry.register_path(
-        persistent_registry_session,
-        result.archive_path,
-        ttl_seconds=MATERIAL_LIBRARY_FILE_TTL_SECONDS,
-    )
-    stage_a_id = registry.register_path(
-        persistent_registry_session,
-        result.stage_a_params_path,
-        ttl_seconds=MATERIAL_LIBRARY_FILE_TTL_SECONDS,
-    )
-    verification_count = int(result.material_summary.get("verification_count") or 1)
-    directory_name = getattr(result, "directory_name", None)
-    if not isinstance(directory_name, str) or not directory_name:
-        directory_name = str(
-            result.material_summary.get("directory_name")
-            or os.path.splitext(os.path.basename(result.archive_path))[0]
+        _rollback_existing_material_write(
+            directory_name=existing_directory_name,
+            backup=material_backup,
+            evict_material_cache=evict_material_cache,
         )
+        _rollback_new_material_write(
+            snapshot=new_material_snapshot,
+            evict_material_cache=evict_material_cache,
+        )
+        _discard_material_directory_backup(material_backup)
+        raise HTTPException(status_code=404, detail=str(exc))
+    except (ValueError, TypeError) as exc:
+        _rollback_existing_material_write(
+            directory_name=existing_directory_name,
+            backup=material_backup,
+            evict_material_cache=evict_material_cache,
+        )
+        _rollback_new_material_write(
+            snapshot=new_material_snapshot,
+            evict_material_cache=evict_material_cache,
+        )
+        _discard_material_directory_backup(material_backup)
+        raise HTTPException(status_code=422, detail=str(exc))
+    except (OSError, RuntimeError) as exc:
+        _rollback_existing_material_write(
+            directory_name=existing_directory_name,
+            backup=material_backup,
+            evict_material_cache=evict_material_cache,
+        )
+        _rollback_new_material_write(
+            snapshot=new_material_snapshot,
+            evict_material_cache=evict_material_cache,
+        )
+        _discard_material_directory_backup(material_backup)
+        _raise_internal_route_error(
+            exc,
+            context="Gradient card material save",
+            event="extractor_save_gradient_card_material_failed",
+            session_id=session_id,
+        )
+
+    try:
+        persistent_registry_session = f"material:{uuid.uuid4().hex}"
+        verification_count = int(result.material_summary.get("verification_count") or 1)
+        directory_name = _saved_material_directory_name(
+            result.material_summary,
+            str(os.path.splitext(os.path.basename(result.archive_path))[0]),
+        )
+        material_id, stage_a_id = _register_gradient_card_material_files(
+            registry=registry,
+            registry_session=persistent_registry_session,
+            archive_path=result.archive_path,
+            stage_a_params_path=result.stage_a_params_path,
+            rollback=lambda: _rollback_saved_material_write(
+                directory_name=directory_name,
+                archive_path=result.archive_path,
+                backup=material_backup,
+                evict_material_cache=evict_material_cache,
+            ),
+            event="extractor_save_gradient_card_material_registration_failed",
+            session_id=session_id,
+        )
+    finally:
+        _discard_material_directory_backup(material_backup)
+
     evict_material_cache(directory_name)
     log.info(
         "Gradient card material saved",
@@ -857,24 +1192,65 @@ async def extractor_update_gradient_card_material(
     }
     if payload.estimated_rgb is not None:
         update_kwargs["estimated_rgb"] = payload.estimated_rgb
+    material_backup: MaterialDirectoryBackup | None = None
+    material_backup = _create_material_directory_backup_or_raise(
+        directory_name,
+        event="extractor_update_gradient_card_material_backup_failed",
+    )
     try:
         result = update_saved_stage_a_material_archive_metadata(**update_kwargs)
     except FileNotFoundError as exc:
+        _rollback_existing_material_write(
+            directory_name=directory_name,
+            backup=material_backup,
+            evict_material_cache=evict_material_cache,
+        )
+        _discard_material_directory_backup(material_backup)
         raise HTTPException(status_code=404, detail=str(exc))
-    except (ValueError, TypeError, OSError, RuntimeError) as exc:
+    except (ValueError, TypeError) as exc:
+        _rollback_existing_material_write(
+            directory_name=directory_name,
+            backup=material_backup,
+            evict_material_cache=evict_material_cache,
+        )
+        _discard_material_directory_backup(material_backup)
         raise HTTPException(status_code=422, detail=str(exc))
+    except (OSError, RuntimeError) as exc:
+        _rollback_existing_material_write(
+            directory_name=directory_name,
+            backup=material_backup,
+            evict_material_cache=evict_material_cache,
+        )
+        _discard_material_directory_backup(material_backup)
+        _raise_internal_route_error(
+            exc,
+            context="Gradient card material update",
+            event="extractor_update_gradient_card_material_failed",
+        )
 
-    persistent_registry_session = f"material-library:{uuid.uuid4().hex}"
-    material_file_url = f"/api/files/{registry.register_path(
-        persistent_registry_session,
-        result.archive_path,
-        ttl_seconds=MATERIAL_LIBRARY_FILE_TTL_SECONDS,
-    )}"
-    stage_a_params_url = f"/api/files/{registry.register_path(
-        persistent_registry_session,
-        result.stage_a_params_path,
-        ttl_seconds=MATERIAL_LIBRARY_FILE_TTL_SECONDS,
-    )}"
+    try:
+        persistent_registry_session = f"material-library:{uuid.uuid4().hex}"
+        normalized_directory_name = _saved_material_directory_name(
+            result.material_summary,
+            directory_name,
+        )
+        material_id, stage_a_id = _register_gradient_card_material_files(
+            registry=registry,
+            registry_session=persistent_registry_session,
+            archive_path=result.archive_path,
+            stage_a_params_path=result.stage_a_params_path,
+            rollback=lambda: _rollback_saved_material_write(
+                directory_name=normalized_directory_name,
+                archive_path=result.archive_path,
+                backup=material_backup,
+                evict_material_cache=evict_material_cache,
+            ),
+            event="extractor_update_gradient_card_material_registration_failed",
+        )
+    finally:
+        _discard_material_directory_backup(material_backup)
+    material_file_url = f"/api/files/{material_id}"
+    stage_a_params_url = f"/api/files/{stage_a_id}"
     material_name = (
         payload.material_name
         if payload.material_name is not None
@@ -888,10 +1264,6 @@ async def extractor_update_gradient_card_material(
         1
         for value in (payload.material_name, payload.brand, payload.estimated_rgb)
         if value is not None
-    )
-    normalized_directory_name = _saved_material_directory_name(
-        result.material_summary,
-        directory_name,
     )
     evict_material_cache(normalized_directory_name)
     log.info(
@@ -1047,7 +1419,19 @@ async def extractor_list_gradient_card_materials(
     try:
         materials = list_saved_stage_a_material_archives()
     except (ValueError, TypeError, OSError, RuntimeError) as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        log.error(
+            "Gradient card material library failed",
+            extra={
+                "event": "extractor_gradient_card_material_library_failed",
+                "include_file_urls": bool(include_file_urls),
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=GRADIENT_CARD_MATERIAL_LIBRARY_LIST_FAILED_DETAIL,
+        ) from exc
 
     persistent_registry_session = (
         f"material-library:{uuid.uuid4().hex}"
@@ -1055,35 +1439,51 @@ async def extractor_list_gradient_card_materials(
         else None
     )
     response_items: list[dict[str, object]] = []
-    for item in materials:
-        material_file_url = (
-            f"/api/files/{registry.register_path(
-                persistent_registry_session,
-                str(item['archive_path']),
-                ttl_seconds=MATERIAL_LIBRARY_FILE_TTL_SECONDS,
-            )}"
-            if persistent_registry_session is not None
-            else None
+    try:
+        for item in materials:
+            material_file_url = (
+                f"/api/files/{registry.register_path(
+                    persistent_registry_session,
+                    str(item['archive_path']),
+                    ttl_seconds=MATERIAL_LIBRARY_FILE_TTL_SECONDS,
+                )}"
+                if persistent_registry_session is not None
+                else None
+            )
+            stage_a_path = item.get("stage_a_params_path")
+            stage_a_params_url = (
+                f"/api/files/{registry.register_path(
+                    persistent_registry_session,
+                    str(stage_a_path),
+                    ttl_seconds=MATERIAL_LIBRARY_FILE_TTL_SECONDS,
+                )}"
+                if persistent_registry_session is not None
+                and isinstance(stage_a_path, str)
+                and stage_a_path
+                else None
+            )
+            response_items.append(
+                {
+                    **item,
+                    "material_file_url": material_file_url,
+                    "stage_a_params_url": stage_a_params_url,
+                }
+            )
+    except Exception as exc:
+        log.error(
+            "Gradient card material library file registration failed",
+            extra={
+                "event": "extractor_gradient_card_material_library_registration_failed",
+                "include_file_urls": bool(include_file_urls),
+                "material_count": len(materials),
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
         )
-        stage_a_path = item.get("stage_a_params_path")
-        stage_a_params_url = (
-            f"/api/files/{registry.register_path(
-                persistent_registry_session,
-                str(stage_a_path),
-                ttl_seconds=MATERIAL_LIBRARY_FILE_TTL_SECONDS,
-            )}"
-            if persistent_registry_session is not None
-            and isinstance(stage_a_path, str)
-            and stage_a_path
-            else None
-        )
-        response_items.append(
-            {
-                **item,
-                "material_file_url": material_file_url,
-                "stage_a_params_url": stage_a_params_url,
-            }
-        )
+        raise HTTPException(
+            status_code=500,
+            detail=GRADIENT_CARD_MATERIAL_LIBRARY_LIST_FAILED_DETAIL,
+        ) from exc
 
     return GradientCardMaterialLibraryResponse(
         status="ok",
@@ -1339,7 +1739,20 @@ async def generate_material_swatch(
     )
 
     if not output_path:
-        raise HTTPException(status_code=500, detail=status_msg or "Material swatch generation failed")
+        log.warning(
+            "Material recipe swatch export failed",
+            extra={
+                "event": "extractor_material_swatch_failed",
+                "recipe_count": len(items),
+                "status_code": 500,
+                "error_type": "MaterialSwatchGenerationFailed",
+                "error_message": status_msg or "Material swatch generation failed",
+            },
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=MATERIAL_SWATCH_EXPORT_FAILED_DETAIL,
+        )
 
     request_id = get_request_id()
     unique_suffix = uuid.uuid4().hex

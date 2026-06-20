@@ -17,6 +17,12 @@ vi.mock("../api/converter", () => ({
 
 import { useLutCompareStore } from "../stores/lutCompareStore";
 
+function expectVisibleErrorLanguage(error: string | null): void {
+  expect(error).toBeTruthy();
+  expect(error).not.toMatch(/Request failed/i);
+  expect(error).not.toMatch(/status code\s+\d{3}/i);
+}
+
 describe("useLutCompareStore", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -52,5 +58,49 @@ describe("useLutCompareStore", () => {
     expect(state.error).toBeNull();
     expect(state.lutList).toHaveLength(1);
     expect(state.lutList[0].name).toBe("LUT A");
+  });
+
+  it("normalizes list load status errors", async () => {
+    mockFetchLutList.mockRejectedValueOnce(
+      new Error("Request failed with status code 500"),
+    );
+
+    await useLutCompareStore.getState().fetchLutList();
+
+    expectVisibleErrorLanguage(useLutCompareStore.getState().error);
+  });
+
+  it("normalizes LUT info status errors", async () => {
+    mockFetchLutInfo.mockRejectedValueOnce(
+      new Error("Request failed with status code 402"),
+    );
+
+    await useLutCompareStore.getState().selectLutA("LUT A");
+
+    expectVisibleErrorLanguage(useLutCompareStore.getState().error);
+  });
+
+  it("normalizes second LUT info status errors", async () => {
+    mockFetchLutInfo.mockRejectedValueOnce(
+      new Error("Request failed with status code 500"),
+    );
+
+    await useLutCompareStore.getState().selectLutB("LUT B");
+
+    expectVisibleErrorLanguage(useLutCompareStore.getState().error);
+  });
+
+  it("normalizes compare status errors", async () => {
+    mockCompareLuts.mockRejectedValueOnce(
+      new Error("Request failed with status code 500"),
+    );
+    useLutCompareStore.setState({
+      lutAName: "LUT A",
+      lutBName: "LUT B",
+    });
+
+    await useLutCompareStore.getState().executeCompare();
+
+    expectVisibleErrorLanguage(useLutCompareStore.getState().error);
   });
 });

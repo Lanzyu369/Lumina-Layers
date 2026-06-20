@@ -23,6 +23,28 @@ const { mockedApiClient } = vi.hoisted(() => ({
 // Mock apiClient before importing buildFileUrl
 vi.mock("../api/client", () => ({
   default: mockedApiClient,
+  buildApiResourceUrl: (relativePath: string) => {
+    const base = mockedApiClient.defaults.baseURL ?? "";
+    if (!relativePath) return base;
+    if (/^https?:\/\//i.test(relativePath)) return relativePath;
+    const normalizedPath = relativePath.startsWith("/") ? relativePath : `/${relativePath}`;
+    if (!base) return normalizedPath;
+    const normalizedBase = base.replace(/\/+$/, "");
+    const baseIsAbsolute = /^https?:\/\//i.test(normalizedBase);
+    if (normalizedPath.startsWith("/api/")) {
+      if (!baseIsAbsolute && normalizedBase === "/api") {
+        return normalizedPath;
+      }
+      if (baseIsAbsolute) {
+        const parsedBase = new URL(normalizedBase);
+        const pathPrefixMatch = parsedBase.pathname.match(/^(.*)\/api$/);
+        const pathPrefixRaw = pathPrefixMatch?.[1] ?? "";
+        const pathPrefix = pathPrefixRaw === "/" ? "" : pathPrefixRaw.replace(/\/+$/, "");
+        return `${parsedBase.origin}${pathPrefix}${normalizedPath}`;
+      }
+    }
+    return `${normalizedBase.replace(/\/+$/, "")}/${normalizedPath.replace(/^\/+/, "")}`;
+  },
 }));
 
 vi.mock("../api/vectorizer", () => ({

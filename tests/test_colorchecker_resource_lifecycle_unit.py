@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import logging
 import os
 from types import SimpleNamespace
 
@@ -41,6 +42,9 @@ _COLORCHECKER_PREVIEW_GENERATION_FAILED_DETAIL = (
 _COLORCHECKER_PREVIEW_SERVICE_UNAVAILABLE_DETAIL = (
     "ColorChecker preview service is unavailable. "
     "Check the server ColorChecker dependencies and try again."
+)
+_COLORCHECKER_PREVIEW_PREPARATION_FAILED_DETAIL = (
+    "ColorChecker preview could not be prepared. Please try again."
 )
 _PREVIEW_ARTIFACT_UNREADABLE_DETAIL = (
     "Preview artifact is unavailable or unreadable. "
@@ -79,6 +83,35 @@ def _client_with_state(
     app.dependency_overrides[get_session_store] = lambda: store
     app.dependency_overrides[get_file_registry] = lambda: registry
     return TestClient(app, raise_server_exceptions=raise_server_exceptions), store, registry
+
+
+def _records_for_event(
+    caplog: pytest.LogCaptureFixture,
+    event_name: str,
+) -> list[logging.LogRecord]:
+    return [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == event_name
+    ]
+
+
+class _RegisterPathFailingRegistry(FileRegistry):
+    """Registry stub that fails while retaining the attempted source path."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.paths: list[str] = []
+
+    def register_path(self, *args: object, **kwargs: object) -> str:
+        path = kwargs.get("path")
+        if path is None and len(args) >= 2:
+            path = args[1]
+        if path is not None:
+            self.paths.append(str(path))
+        raise RuntimeError(
+            "colorchecker source registry unavailable at /Users/min/private/source.png"
+        )
 
 
 def _register_colorchecker_source(
@@ -250,6 +283,40 @@ def test_preview_resource_upload_hides_unavailable_error_detail(monkeypatch) -> 
     assert response.json()["detail"] == _COLORCHECKER_PREVIEW_SERVICE_UNAVAILABLE_DETAIL
     assert private_path not in response.text
     assert "cannot import" not in response.text
+
+
+def test_extractor_colorchecker_source_bounds_registry_failure(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import api.preview_resources as preview_resources
+
+    monkeypatch.setattr(preview_resources, "TEMP_DIR", str(tmp_path))
+    app = create_app()
+    registry = _RegisterPathFailingRegistry()
+    app.dependency_overrides[get_session_store] = lambda: SessionStore(ttl=1800)
+    app.dependency_overrides[get_file_registry] = lambda: registry
+    client = TestClient(app, raise_server_exceptions=False)
+    app_logger = logging.getLogger("lumina.api.app")
+    app_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.WARNING, logger=app_logger.name)
+
+    try:
+        response = client.post(
+            "/api/extractor/colorchecker-source",
+            files={"image": ("chart.png", _png_bytes(12, 8), "image/png")},
+        )
+    finally:
+        app_logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == _COLORCHECKER_PREVIEW_PREPARATION_FAILED_DETAIL
+    assert "colorchecker source registry unavailable" not in response.text
+    assert "/Users/min/private" not in response.text
+    assert len(registry.paths) == 1
+    assert list(tmp_path.iterdir()) == []
+    assert _records_for_event(caplog, "api_unhandled_exception") == []
 
 
 def test_colorchecker_source_keeps_standard_type_hint_for_extensionless_upload(monkeypatch) -> None:
@@ -921,6 +988,114 @@ def test_colorchecker_calibrate_passes_raw_source_path_to_core(
     assert captured["file_name"] == "shot.dng"
     assert captured["mime_type"] == "application/octet-stream"
     assert captured["corners"] == [[0, 0], [8, 0], [8, 6], [0, 6]]
+
+
+def test_colorchecker_calibrate_hides_unavailable_error_detail(
+    monkeypatch,
+    tmp_path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import core.colorchecker_adapter as adapter
+
+    client, _store, registry = _client_with_state(raise_server_exceptions=False)
+    source_id = _register_colorchecker_source(registry, tmp_path, width=16, height=8)
+    private_path = "/Users/min/private/core/colorchecker.py"
+
+    def fake_decode(*_args, **_kwargs):
+        return SimpleNamespace(image_bgr=np.zeros((8, 16, 3), dtype=np.uint8))
+
+    def fail_apply(*_args, **_kwargs):
+        raise adapter.ColorCheckerUnavailableError(
+            f"cannot import {private_path}"
+        )
+
+    monkeypatch.setattr(adapter, "decode_colorchecker_file", fake_decode)
+    monkeypatch.setattr(adapter, "apply_colorchecker_calibration", fail_apply)
+
+    target_logger = logging.getLogger("lumina.api.routers.extractor")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.WARNING, logger=target_logger.name)
+    try:
+        response = client.post(
+            "/api/extractor/colorchecker-calibrate",
+            data={
+                "colorchecker_source_file_id": source_id,
+                "corner_points": "[[0,0],[8,0],[8,4],[0,4]]",
+                "corner_points_width": "8",
+                "corner_points_height": "4",
+            },
+        )
+    finally:
+        target_logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == COLORCHECKER_SERVICE_UNAVAILABLE_DETAIL
+    assert private_path not in response.text
+    assert "cannot import" not in response.text
+
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "extractor_colorchecker_calibrate_failed"
+    ]
+    assert len(records) == 1
+    assert records[0].status_code == 500
+    assert records[0].error_type == "ColorCheckerUnavailableError"
+    assert private_path in records[0].error_message
+
+
+def test_colorchecker_calibrate_hides_calibration_error_detail(
+    monkeypatch,
+    tmp_path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import core.colorchecker_adapter as adapter
+
+    client, _store, registry = _client_with_state(raise_server_exceptions=False)
+    source_id = _register_colorchecker_source(registry, tmp_path, width=16, height=8)
+    private_path = "/Users/min/private/chart.png"
+
+    def fake_decode(*_args, **_kwargs):
+        return SimpleNamespace(image_bgr=np.zeros((8, 16, 3), dtype=np.uint8))
+
+    def fail_apply(*_args, **_kwargs):
+        raise adapter.ColorCheckerCalibrationError(
+            f"cannot solve chart at {private_path}: singular matrix"
+        )
+
+    monkeypatch.setattr(adapter, "decode_colorchecker_file", fake_decode)
+    monkeypatch.setattr(adapter, "apply_colorchecker_calibration", fail_apply)
+
+    target_logger = logging.getLogger("lumina.api.routers.extractor")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.WARNING, logger=target_logger.name)
+    try:
+        response = client.post(
+            "/api/extractor/colorchecker-calibrate",
+            data={
+                "colorchecker_source_file_id": source_id,
+                "corner_points": "[[0,0],[8,0],[8,4],[0,4]]",
+                "corner_points_width": "8",
+                "corner_points_height": "4",
+            },
+        )
+    finally:
+        target_logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == COLORCHECKER_PROCESSING_FAILED_DETAIL
+    assert private_path not in response.text
+    assert "singular matrix" not in response.text
+
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "extractor_colorchecker_calibrate_failed"
+    ]
+    assert len(records) == 1
+    assert records[0].status_code == 422
+    assert records[0].error_type == "ColorCheckerCalibrationError"
+    assert private_path in records[0].error_message
 
 
 def test_colorchecker_warp_preview_uses_colorchecker_ttl(monkeypatch, tmp_path) -> None:

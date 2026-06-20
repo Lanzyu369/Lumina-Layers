@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent } from "react";
 import { motion } from "framer-motion";
 
+import { apiErrorToVisibleMessage } from "../api/client";
 import { tRuntime } from "../i18n/runtime";
 import {
   deleteGradientCardMaterial,
@@ -104,6 +105,12 @@ type MaterialLibraryBrandGroup = {
   items: SavedMaterialLibraryItem[];
 };
 
+const formatMaterialLibraryError = (
+  error: unknown,
+  fallbackKey: string,
+  t: (key: string) => string,
+): string => apiErrorToVisibleMessage(error, t(fallbackKey));
+
 export default function MaterialLibraryPanel() {
   const { t, lang } = useI18n();
   const workspace = useWorkspaceMode();
@@ -142,7 +149,7 @@ export default function MaterialLibraryPanel() {
       );
       return nextMaterials;
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("mat_gradient_library_load_failed"));
+      setError(formatMaterialLibraryError(err, "mat_gradient_library_load_failed", t));
       setMaterials([]);
       setSelectedDirectoryNames([]);
       return [];
@@ -259,7 +266,7 @@ export default function MaterialLibraryPanel() {
         setSuccess(response.message || t("mat_gradient_library_edit_success"));
         setEditingMaterial(null);
       } catch (err) {
-        setError(err instanceof Error ? err.message : t("mat_gradient_library_edit_failed"));
+        setError(formatMaterialLibraryError(err, "mat_gradient_library_edit_failed", t));
       } finally {
         setPendingUpdateDirectoryName(null);
       }
@@ -291,7 +298,7 @@ export default function MaterialLibraryPanel() {
       );
       setSuccess(t("mat_gradient_library_delete_success"));
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("mat_gradient_library_load_failed"));
+      setError(formatMaterialLibraryError(err, "mat_gradient_library_delete_failed", t));
     } finally {
       setPendingDeleteDirectoryName(null);
     }
@@ -333,7 +340,7 @@ export default function MaterialLibraryPanel() {
       triggerDownload(downloadUrl, response.filename);
       setSuccess(response.message || t("mat_gradient_library_export_success"));
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("mat_gradient_library_export_failed"));
+      setError(formatMaterialLibraryError(err, "mat_gradient_library_export_failed", t));
     } finally {
       setIsExporting(false);
     }
@@ -365,7 +372,7 @@ export default function MaterialLibraryPanel() {
       setSelectedDirectoryNames(importedDirectoryNames);
       setSuccess(response.message || t("mat_gradient_library_import_success"));
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("mat_gradient_library_import_failed"));
+      setError(formatMaterialLibraryError(err, "mat_gradient_library_import_failed", t));
     } finally {
       setIsImporting(false);
     }

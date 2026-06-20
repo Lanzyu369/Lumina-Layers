@@ -265,6 +265,112 @@ def test_submit_bug_report_assembly_marks_done_after_background_task(
     assert (ticket_dir / "summary.txt").exists()
 
 
+def test_submit_bug_report_marks_partial_when_declared_attachments_missing(
+    client: TestClient,
+    feedback_root: Path,
+) -> None:
+    payload = _payload(description="Missing repro attachments")
+    payload["context"]["active_session_ids"] = {
+        "converter": "missing-repro-session",
+        "single_stage": None,
+    }
+    payload["context"]["active_original_image_ref"] = {
+        "session_id": "missing-repro-session",
+        "filename": "source.png",
+        "source": "converter",
+    }
+    payload["context"]["active_final_artifact_ref"] = {
+        "session_id": "missing-repro-session",
+        "download_url": "/api/files/missing-final-id",
+        "artifact_type": "3mf",
+        "disk_path": None,
+        "source": "converter",
+    }
+
+    response = client.post("/api/feedback/bug-report", json=payload)
+
+    assert response.status_code == 200
+    data = response.json()
+    ticket_json = _read_ticket_json(feedback_root, data["ticket_id"])
+    assert ticket_json["attachments"]["original_image"]["status"] == (
+        "unavailable_after_cleanup"
+    )
+    assert ticket_json["attachments"]["final_artifact"]["status"] == "expired_ttl"
+    assert ticket_json["assembly_status"] == "partial_failed"
+
+
+def test_submit_bug_report_marks_failed_when_attachment_copy_fails(
+    client: TestClient,
+    feedback_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import shutil
+
+    from api.dependencies import get_file_registry
+
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    source_image = source_dir / "source.png"
+    source_image.write_bytes(b"PNGDATA")
+    source_model = source_dir / "model.3mf"
+    source_model.write_bytes(b"3MFDATA")
+    session_id = "copy-fails-session"
+    registry = get_file_registry()
+    registry.register_path(
+        session_id=session_id,
+        path=str(source_image),
+        filename="source.png",
+    )
+    registry.register_path(
+        session_id=session_id,
+        path=str(source_model),
+        filename="model.3mf",
+    )
+
+    original_copy2 = shutil.copy2
+
+    def _fail_ticket_copy(src: object, dst: object, *args: object, **kwargs: object) -> object:
+        if Path(dst).name in {"original.png", "final.3mf"}:
+            raise OSError("disk full")
+        return original_copy2(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr("api.feedback_assembler.shutil.copy2", _fail_ticket_copy)
+
+    payload = _payload(description="Copy fails during attachment collection")
+    payload["context"]["active_session_ids"] = {
+        "converter": session_id,
+        "single_stage": None,
+    }
+    payload["context"]["active_original_image_ref"] = {
+        "session_id": session_id,
+        "filename": "source.png",
+        "source": "converter",
+    }
+    payload["context"]["active_final_artifact_ref"] = {
+        "session_id": session_id,
+        "download_url": None,
+        "artifact_type": "3mf",
+        "disk_path": None,
+        "source": "converter",
+    }
+
+    response = client.post("/api/feedback/bug-report", json=payload)
+
+    assert response.status_code == 200
+    data = response.json()
+    ticket_json = _read_ticket_json(feedback_root, data["ticket_id"])
+    original = ticket_json["attachments"]["original_image"]
+    final = ticket_json["attachments"]["final_artifact"]
+    assert original["status"] == "failed"
+    assert original["error_type"] == "OSError"
+    assert original["error_message"] == "Original image could not be saved."
+    assert final["status"] == "failed"
+    assert final["error_type"] == "OSError"
+    assert final["error_message"] == "Final artifact could not be saved."
+    assert ticket_json["assembly_status"] == "partial_failed"
+
+
 def test_submit_bug_report_preserves_material_source_context(
     client: TestClient,
     feedback_root: Path,

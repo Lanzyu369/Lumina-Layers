@@ -9,12 +9,17 @@ vi.mock("../../api/system", () => ({
   saveSettings: vi.fn(),
 }));
 
+vi.mock("../../utils/retryAsync", () => ({
+  retryAsync: vi.fn((operation: () => Promise<unknown>) => operation()),
+}));
+
 import { I18nProvider } from "../../i18n/context";
 import SettingsPanel from "../SettingsPanel";
 import { DEFAULT_SETTINGS, useSettingsStore } from "../../stores/settingsStore";
 import { useSlicerStore } from "../../stores/slicerStore";
 import type { PrinterInfo, SlicerOption } from "../../api/types";
 import * as systemApi from "../../api/system";
+import { translations } from "../../i18n/translations";
 
 const SLICERS: SlicerOption[] = [
   { id: "BambuStudio", display_name: "Bambu Studio" },
@@ -213,5 +218,57 @@ describe("SettingsPanel machine adapter registry UI", () => {
     });
     expect(h2dNozzle02).toHaveAttribute("aria-pressed", "true");
     expect(screen.queryByRole("combobox", { name: "喷嘴尺寸" })).not.toBeInTheDocument();
+  });
+
+  it("shows a visible error when printer options fail to load", async () => {
+    vi.mocked(systemApi.getPrinters).mockRejectedValueOnce(
+      new Error("Printer registry unavailable"),
+    );
+
+    renderPanel();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      translations["settings.printer_options_load_failed"].zh.replace("{error}", ""),
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Printer registry unavailable",
+    );
+    expect(await screen.findByText("Bambu Studio")).toBeInTheDocument();
+  });
+
+  it("retries printer options from the visible error banner", async () => {
+    vi.mocked(systemApi.getPrinters)
+      .mockRejectedValueOnce(new Error("Printer registry unavailable"))
+      .mockResolvedValueOnce(PRINTERS);
+
+    renderPanel();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Printer registry unavailable",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: translations.widget_retry.zh }));
+
+    expect(await screen.findByTestId("machine-adapter-card-bambu-h2d")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+    expect(systemApi.getPrinters).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows a visible error when slicer options fail to load", async () => {
+    vi.mocked(systemApi.getSlicers).mockRejectedValueOnce(
+      new Error("Slicer registry unavailable"),
+    );
+
+    renderPanel();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      translations["settings.slicer_options_load_failed"].zh.replace("{error}", ""),
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Slicer registry unavailable",
+    );
+    expect(await screen.findByTestId("machine-adapter-card-bambu-h2d")).toBeInTheDocument();
   });
 });

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import logging
+import math
 import os
-import sys
 import platform
+import sys
 from decimal import Decimal, InvalidOperation
 from enum import Enum
 
@@ -180,6 +182,85 @@ class WorkerPoolConfig:
     MAX_WORKERS: int = min(os.cpu_count() or 2, 4)
     TASK_TIMEOUT: float = 0  # No timeout
 
+    @staticmethod
+    def _log_invalid_env(
+        *,
+        event: str,
+        env_var: str,
+        raw_value: str,
+        fallback: int | float,
+        message: str,
+    ) -> None:
+        logging.getLogger("lumina.config").warning(
+            message,
+            extra={
+                "event": event,
+                "env_var": env_var,
+                "raw_value": raw_value,
+                "fallback": fallback,
+                "error_type": "ValueError",
+                "error_message": message,
+            },
+        )
+
+    @classmethod
+    def _read_positive_int_env(
+        cls,
+        env_var: str,
+        fallback: int,
+        *,
+        event: str,
+    ) -> int:
+        raw_value = os.environ.get(env_var)
+        if raw_value is None:
+            return fallback
+        value_text = raw_value.strip()
+        if not value_text:
+            return fallback
+        try:
+            value = int(value_text)
+            if value <= 0:
+                raise ValueError(f"{env_var} must be a positive integer")
+        except ValueError:
+            cls._log_invalid_env(
+                event=event,
+                env_var=env_var,
+                raw_value=raw_value,
+                fallback=fallback,
+                message=f"{env_var} must be a positive integer; got {raw_value!r}",
+            )
+            return fallback
+        return value
+
+    @classmethod
+    def _read_finite_float_env(
+        cls,
+        env_var: str,
+        fallback: float,
+        *,
+        event: str,
+    ) -> float:
+        raw_value = os.environ.get(env_var)
+        if raw_value is None:
+            return fallback
+        value_text = raw_value.strip()
+        if not value_text:
+            return fallback
+        try:
+            value = float(value_text)
+            if not math.isfinite(value):
+                raise ValueError(f"{env_var} must be finite")
+        except ValueError:
+            cls._log_invalid_env(
+                event=event,
+                env_var=env_var,
+                raw_value=raw_value,
+                fallback=fallback,
+                message=f"{env_var} must be a finite number; got {raw_value!r}",
+            )
+            return fallback
+        return value
+
     @classmethod
     def from_env(cls) -> "WorkerPoolConfig":
         """Create config with environment variable overrides.
@@ -194,10 +275,16 @@ class WorkerPoolConfig:
                               (应用环境变量覆盖后的配置实例)
         """
         cfg = cls()
-        if v := os.environ.get("LUMINA_MAX_WORKERS"):
-            cfg.MAX_WORKERS = int(v)
-        if v := os.environ.get("LUMINA_TASK_TIMEOUT"):
-            cfg.TASK_TIMEOUT = float(v)
+        cfg.MAX_WORKERS = cls._read_positive_int_env(
+            "LUMINA_MAX_WORKERS",
+            cls.MAX_WORKERS,
+            event="worker_pool_max_workers_invalid",
+        )
+        cfg.TASK_TIMEOUT = cls._read_finite_float_env(
+            "LUMINA_TASK_TIMEOUT",
+            cls.TASK_TIMEOUT,
+            event="worker_pool_task_timeout_invalid",
+        )
         return cfg
 
 
