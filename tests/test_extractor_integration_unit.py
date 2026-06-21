@@ -214,6 +214,87 @@ class TestSessionStatePersistence:
         )
         assert downloaded == expected_bytes
 
+    def test_extract_missing_lut_path_redacts_status_message(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Core status messages are server diagnostics, not public API detail."""
+        raw_status = (
+            "failed to save /Users/min/private/extract-lut.npy: "
+            "Request failed with status code 500"
+        )
+        buf = _make_test_image_buf()
+
+        extractor_logger = logging.getLogger("lumina.api.routers.extractor")
+        app_logger = logging.getLogger("lumina.api.app")
+        extractor_logger.addHandler(caplog.handler)
+        app_logger.addHandler(caplog.handler)
+        caplog.set_level(logging.ERROR, logger=extractor_logger.name)
+        caplog.set_level(logging.ERROR, logger=app_logger.name)
+        try:
+            with patch(
+                "api.routers.extractor.run_extraction",
+                return_value=(None, None, None, raw_status),
+            ):
+                response = client.post(
+                    "/api/extractor/extract",
+                    files={"image": ("test.png", buf, "image/png")},
+                    data={
+                        "corner_points": json.dumps(
+                            [[0, 0], [100, 0], [100, 100], [0, 100]]
+                        ),
+                        "color_mode": "4-Color",
+                        "page": "Page 1",
+                        "eight_color_full_export": "false",
+                        "distortion": "0.0",
+                        "vignette_correction": "false",
+                    },
+                )
+        finally:
+            extractor_logger.removeHandler(caplog.handler)
+            app_logger.removeHandler(caplog.handler)
+
+        public_detail = (
+            "Color extraction failed. Recheck the source image or calibration "
+            "corners and try again."
+        )
+        assert response.status_code == 500
+        assert response.json()["detail"] == public_detail
+        assert raw_status not in response.text
+        assert "/Users/min/private" not in response.text
+        assert "Request failed with status code 500" not in response.text
+
+        failed_records = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "extractor_extract_failed"
+        ]
+        assert len(failed_records) == 1
+        failed_record = failed_records[0]
+        assert failed_record.levelno == logging.ERROR
+        assert failed_record.status_code == 500
+        assert failed_record.error_type == "ExtractorMissingLutPath"
+        assert failed_record.error_message == raw_status
+        assert failed_record.color_mode == "4-Color (RYBW)"
+        assert failed_record.page == "Page 1"
+        assert failed_record.eight_color_full_export is False
+        assert isinstance(failed_record.extract_ms, float)
+        assert failed_record.extract_ms >= 0.0
+        assert [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "extractor_extract_done"
+        ] == []
+
+        http_records = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "api_http_error"
+        ]
+        assert len(http_records) == 1
+        assert http_records[0].error_message == public_detail
+        assert "/Users/min/private" not in http_records[0].error_message
+
     def test_extract_lut_download_registration_failure_is_bounded(
         self,
         caplog: pytest.LogCaptureFixture,

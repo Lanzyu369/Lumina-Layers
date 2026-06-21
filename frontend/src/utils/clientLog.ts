@@ -30,6 +30,23 @@ const CLIENT_LOG_MAX_DEPTH = 4;
 const CLIENT_LOG_MAX_ARRAY_ITEMS = 20;
 const CLIENT_LOG_MAX_OBJECT_KEYS = 24;
 const CLIENT_LOG_MAX_STRING_LENGTH = 1200;
+const CLIENT_LOG_REDACTED_LOCAL_PATH = "<redacted:local-path>";
+const CLIENT_LOG_SENSITIVE_PATH_KEYS = new Set([
+  "absolutepath",
+  "diskpath",
+  "filepath",
+  "inputpath",
+  "localpath",
+  "modelpath",
+  "outputpath",
+  "previewpath",
+  "sourcepath",
+  "targetpath",
+  "threemfdiskpath",
+]);
+const CLIENT_LOG_WINDOWS_LOCAL_PATH_PATTERN = /\b[A-Za-z]:[\\/][^\s"'<>),:;]*/g;
+const CLIENT_LOG_POSIX_LOCAL_PATH_PATTERN =
+  /(^|[^A-Za-z0-9._~%-])(\/(?:Users|private|tmp|var|Volumes|home|opt|mnt|workspace|workspaces|app|data|output)(?:\/[^\s"'<>),:;]*)?)(?=$|[\s"'<>),:;])/g;
 
 /**
  * Session-storage key backing the optional persistence layer for the
@@ -101,16 +118,46 @@ function roundNumber(value: number, digits: number = 2): number {
   return Math.round(value * factor) / factor;
 }
 
+function normalizeClientLogKey(key: string): string {
+  return key.replace(/[\s_-]/g, "").toLowerCase();
+}
+
+function isSensitiveClientPathKey(key: string | null | undefined): boolean {
+  return key != null && CLIENT_LOG_SENSITIVE_PATH_KEYS.has(normalizeClientLogKey(key));
+}
+
+function redactClientLogLocalPathFragments(value: string): string {
+  return value
+    .replace(CLIENT_LOG_WINDOWS_LOCAL_PATH_PATTERN, CLIENT_LOG_REDACTED_LOCAL_PATH)
+    .replace(CLIENT_LOG_POSIX_LOCAL_PATH_PATTERN, (_match, prefix: string) => (
+      `${prefix}${CLIENT_LOG_REDACTED_LOCAL_PATH}`
+    ));
+}
+
+function redactSensitiveClientPathValue(value: unknown): unknown {
+  if (value == null || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "string" && value.length === 0) {
+    return value;
+  }
+  return CLIENT_LOG_REDACTED_LOCAL_PATH;
+}
+
 function sanitizeClientLogValue(
   value: unknown,
   depth: number = 0,
   seen: WeakSet<object> = new WeakSet(),
+  key?: string,
 ): unknown {
   if (value == null || typeof value === "boolean") {
     return value;
   }
+  if (isSensitiveClientPathKey(key)) {
+    return redactSensitiveClientPathValue(value);
+  }
   if (typeof value === "string") {
-    return truncateString(value);
+    return truncateString(redactClientLogLocalPathFragments(value));
   }
   if (typeof value === "number") {
     return Number.isFinite(value) ? value : String(value);
@@ -168,6 +215,7 @@ function sanitizeClientLogValue(
       rawValue,
       depth + 1,
       seen,
+      rawKey,
     );
   }
   if (entries.length > CLIENT_LOG_MAX_OBJECT_KEYS) {
@@ -286,6 +334,31 @@ function _flushToSessionStorage(): void {
   }
 }
 
+function sanitizeClientLogEntry(entry: Partial<ClientLogEntry>): ClientLogEntry {
+  const method = entry.method === "warn" || entry.method === "error"
+    ? entry.method
+    : "log";
+  const elapsedMs = typeof entry.elapsed_ms === "number" && Number.isFinite(entry.elapsed_ms)
+    ? roundNumber(entry.elapsed_ms, 2)
+    : null;
+  const sanitized: ClientLogEntry = {
+    timestamp: entry.timestamp ?? new Date().toISOString(),
+    method,
+    label: truncateString(entry.label ?? "", 256),
+    elapsed_ms: elapsedMs,
+  };
+  if (typeof entry.scope === "string") {
+    sanitized.scope = truncateString(entry.scope, 80);
+  }
+  if (typeof entry.phase === "string") {
+    sanitized.phase = truncateString(entry.phase, 120);
+  }
+  if (entry.details != null) {
+    sanitized.details = sanitizeClientLogValue(entry.details);
+  }
+  return sanitized;
+}
+
 /**
  * Load any persisted client-log history from sessionStorage into the
  * in-memory ring. Idempotent: after the first call it becomes a no-op.
@@ -325,10 +398,11 @@ export function loadPersistedLogs(): void {
     if (typeof entry.timestamp !== "string" || typeof entry.label !== "string") {
       continue;
     }
-    const scope = typeof entry.scope === "string" ? entry.scope : "";
-    const phase = typeof entry.phase === "string" ? entry.phase : "";
-    const key = `${entry.timestamp}|${entry.label}|${scope}|${phase}`;
-    merged.set(key, candidate as ClientLogEntry);
+    const sanitizedEntry = sanitizeClientLogEntry(entry);
+    const scope = sanitizedEntry.scope ?? "";
+    const phase = sanitizedEntry.phase ?? "";
+    const key = `${sanitizedEntry.timestamp}|${sanitizedEntry.label}|${scope}|${phase}`;
+    merged.set(key, sanitizedEntry);
   }
   const sorted = [...merged.values()].sort((a, b) =>
     a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0,

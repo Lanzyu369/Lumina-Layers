@@ -45,6 +45,111 @@ function createBugReportContext(
   };
 }
 
+function createSensitiveBugReportContext(): ReturnType<typeof collectBugReportContext> {
+  return createBugReportContext({
+    active_final_artifact_ref: {
+      session_id: "session-12345678",
+      download_url: "/api/files/output-model",
+      artifact_type: "3mf",
+      disk_path: "/Users/min/private/final-output.3mf",
+      source: "converter",
+    },
+    action_history: [
+      {
+        timestamp: 1_781_999_000_000,
+        action_type: "api_error",
+        snapshot: {
+          color_mode: "4-Color (RYBW)",
+          lut_name: "Test LUT",
+          source_version: "legacy",
+          selected_native_db_names: [],
+          selected_material_dir_names: [],
+          material_layer_count: null,
+          material_layer_height_mm: null,
+          material_backing_material_dir_name: null,
+          active_tab: "converter",
+          advanced_params: null,
+        },
+        error: {
+          status_code: 500,
+          path: "/api/converter/preview",
+          error_message:
+            "Request failed with status code 500 while reading /Users/min/private/source.png",
+        },
+      },
+    ],
+    recent_client_logs: [
+      {
+        timestamp: "2026-06-21T10:00:00.000Z",
+        method: "error",
+        label: "Request failed with status code 500",
+        elapsed_ms: null,
+        scope: "\\\\LUMINA-NAS\\private\\trace.log",
+        details: {
+          "Request failed with status code 500": "transport",
+          api_path_transport_error:
+            "Request failed with status code 500 at /api/files/output-model",
+          error_message:
+            "AxiosError: Request failed with status code 500 at /Users/min/private/source.png",
+          home_path: "/home/min/private/source.png",
+          private_tmp_path: "/private/tmp/lumina/private/source.png",
+          tmp_path: "/tmp/lumina/private/source.png",
+          var_path: "/var/folders/private/source.png",
+          volume_path: "/Volumes/Work/private/source.png",
+          mnt_path: "/mnt/lumina/private/source.png",
+          opt_path: "/opt/lumina/private/source.png",
+          error_stack:
+            "Error: boom\n    at convert (/Users/min/CascadeProjects/Lumina-studio/frontend/src/api/client.ts:12:3)",
+          path: "/Users/min/private/output.3mf",
+          cache_url: "file:///Users/min/private/cache/model.glb",
+          local_cache_url: "file://localhost/Users/min/private/cache/model.glb",
+          unc_path: "\\\\LUMINA-NAS\\share\\secret.3mf",
+          windows_file_url: "file:///C:/tmp/lumina/model.glb",
+          windows_path: "C:\\Users\\min\\private\\output.3mf",
+          windows_tmp_path: "C:\\tmp\\lumina\\output.3mf",
+          windows_program_data_path: "C:/ProgramData/Lumina/output.3mf",
+          windows_temp_path: "C:\\Windows\\Temp\\lumina\\output.3mf",
+          status_code: 500,
+        },
+      },
+    ],
+  });
+}
+
+function expectManualFallbackTextRedacted(
+  text: string,
+  description?: string,
+): void {
+  if (description != null) {
+    expect(text).toContain(`"description": "${description}"`);
+  }
+  expectNoSensitiveManualFallbackText(text);
+  const statusScanText = description ? text.split(description).join("") : text;
+  expect(statusScanText).not.toContain("Request failed with status code 500");
+  expect(statusScanText).not.toMatch(/\b500\b/);
+  expect(text).toContain("/api/files/output-model");
+}
+
+function expectNoSensitiveManualFallbackText(text: string): void {
+  expect(text).not.toContain("/Users/min");
+  expect(text).not.toContain("/home/min");
+  expect(text).not.toContain("/private/tmp");
+  expect(text).not.toContain("/tmp/lumina");
+  expect(text).not.toContain("/var/folders");
+  expect(text).not.toContain("/Volumes/Work");
+  expect(text).not.toContain("/mnt/lumina");
+  expect(text).not.toContain("/opt/lumina");
+  expect(text).not.toContain("C:\\Users");
+  expect(text).not.toContain("C:\\tmp");
+  expect(text).not.toContain("C:/ProgramData");
+  expect(text).not.toContain("C:\\Windows\\Temp");
+  expect(text).not.toContain("file:///Users");
+  expect(text).not.toContain("file://localhost/Users");
+  expect(text).not.toContain("file:///C:");
+  expect(text).not.toContain("\\\\LUMINA-NAS");
+  expect(text).not.toContain("error_stack");
+}
+
 describe("BugReportModal", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -333,6 +438,53 @@ describe("BugReportModal", () => {
     expect(screen.getByTestId("bug-report-copy-submitted-report")).toBeInTheDocument();
   });
 
+  it("redacts client log internals from the submitted manual fallback", async () => {
+    const sensitiveContext = createSensitiveBugReportContext();
+    vi.mocked(collectBugReportContext).mockReturnValue(sensitiveContext);
+    vi.mocked(submitBugReport).mockResolvedValueOnce({
+      ticket_id: "emailfail",
+      emailed: false,
+      email_status: "failed",
+      relay_available: false,
+      dump_path: "feedback/emailfail.json",
+    });
+    const writeText = vi.fn().mockResolvedValueOnce(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+
+    render(<BugReportModal open onClose={() => {}} />);
+    fireEvent.change(screen.getByLabelText("问题描述"), {
+      target: { value: "Crash after generate." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+    const fallbackText = await screen.findByTestId(
+      "bug-report-submitted-fallback-text",
+    );
+    expectManualFallbackTextRedacted(
+      fallbackText.textContent ?? "",
+      "Crash after generate.",
+    );
+    expectManualFallbackTextRedacted(
+      decodeURIComponent(
+        screen.getByText("用默认邮箱发送").getAttribute("href") ?? "",
+      ),
+      "Crash after generate.",
+    );
+    expect(submitBugReport).toHaveBeenCalledWith(
+      expect.objectContaining({ context: sensitiveContext }),
+    );
+
+    fireEvent.click(screen.getByTestId("bug-report-copy-submitted-report"));
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    expectManualFallbackTextRedacted(
+      String(writeText.mock.calls[0]?.[0]),
+      "Crash after generate.",
+    );
+  });
+
   it("keeps manual fallback actions visible when official relay fails", async () => {
     vi.mocked(submitBugReport).mockResolvedValueOnce({
       ticket_id: "relayfail",
@@ -523,6 +675,41 @@ describe("BugReportModal", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 
+  it("redacts client log internals from the failed-submit manual fallback", async () => {
+    const sensitiveContext = createSensitiveBugReportContext();
+    const userDescription = "I got Request failed with status code 500 after generate";
+    vi.mocked(collectBugReportContext).mockReturnValue(sensitiveContext);
+    vi.mocked(submitBugReport).mockRejectedValueOnce(new Error("boom"));
+    const writeText = vi.fn().mockResolvedValueOnce(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+
+    render(<BugReportModal open onClose={() => {}} />);
+
+    fireEvent.change(screen.getByLabelText("问题描述"), {
+      target: { value: userDescription },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+    const fallbackText = await screen.findByTestId("bug-report-fallback-text");
+    expectManualFallbackTextRedacted(fallbackText.textContent ?? "", userDescription);
+    expectManualFallbackTextRedacted(
+      decodeURIComponent(
+        screen.getByText("用默认邮箱发送").getAttribute("href") ?? "",
+      ),
+      userDescription,
+    );
+    expect(submitBugReport).toHaveBeenCalledWith(
+      expect.objectContaining({ context: sensitiveContext }),
+    );
+
+    fireEvent.click(screen.getByTestId("bug-report-copy-failed-report"));
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    expectManualFallbackTextRedacted(String(writeText.mock.calls[0]?.[0]), userDescription);
+  });
+
   it("copies the failed report payload for manual fallback", async () => {
     vi.mocked(submitBugReport).mockRejectedValueOnce(new Error("boom"));
     const writeText = vi.fn().mockResolvedValueOnce(undefined);
@@ -596,6 +783,23 @@ describe("BugReportModal", () => {
     await screen.findByText(/"active_tab":\s*"converter"/, undefined, {
       timeout: 1500,
     });
+  });
+
+  it("redacts client log internals from the expanded context disclosure", async () => {
+    vi.mocked(collectBugReportContext).mockReturnValue(
+      createSensitiveBugReportContext(),
+    );
+
+    render(<BugReportModal open onClose={() => {}} />);
+
+    fireEvent.click(screen.getByText("已自动收集的信息（点击展开）"));
+
+    await screen.findByText(/"active_tab":\s*"converter"/, undefined, {
+      timeout: 1500,
+    });
+    expectManualFallbackTextRedacted(
+      screen.getByTestId("bug-report-context-json").textContent ?? "",
+    );
   });
 
   it("resets local form state when cancelled", () => {

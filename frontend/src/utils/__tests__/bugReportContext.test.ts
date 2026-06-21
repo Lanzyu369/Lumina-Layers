@@ -265,6 +265,28 @@ describe("collectBugReportContext", () => {
     ]);
   });
 
+  it("redacts local file paths from recent client logs in bug reports", () => {
+    postClientLog("generate: response received", {
+      scope: "generate",
+      phase: "response-received",
+      details: {
+        threemf_disk_path: "/Users/min/CascadeProjects/Lumina-studio/output/model.3mf",
+        file_path: "E:/tmp/upload.png",
+        message: "failed while reading /private/tmp/lumina/model.3mf",
+        download_url: "/api/files/tmp-model",
+      },
+    });
+
+    const context = collectBugReportContext();
+    const serializedLogs = JSON.stringify(context.recent_client_logs);
+
+    expect(serializedLogs).not.toContain("/Users/min");
+    expect(serializedLogs).not.toContain("E:/tmp");
+    expect(serializedLogs).not.toContain("/private/tmp");
+    expect(serializedLogs).toContain("<redacted:local-path>");
+    expect(serializedLogs).toContain("/api/files/tmp-model");
+  });
+
   it("populates advanced_params as an AdvancedParamsFull on the converter tab when advanced fields are non-default", () => {
     // The collector must ship a grouped advanced_params object so the
     // backend ticket can surface which feature toggles were active when

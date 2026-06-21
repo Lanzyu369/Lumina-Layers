@@ -492,6 +492,55 @@ describe("apiClient", () => {
     ).toBe("Vectorizer dependency missing");
   });
 
+  it("normalizes status-code errors with API path context for store-level callers", () => {
+    expect(
+      apiErrorToVisibleMessage(
+        new Error("Request failed with status code 500 at /api/files/output-model"),
+      ),
+    ).toBe("The server hit an internal error. Check the log for the request ID.");
+    expect(
+      apiErrorToVisibleMessage(new Error("HTTP 402: /api/convert/generate")),
+    ).toBe(
+      "This action requires an available quota or payment before it can continue.",
+    );
+    expect(
+      apiErrorToVisibleMessage(
+        new Error("AxiosError: Request failed with status code 500"),
+        "操作失败",
+      ),
+    ).toBe("The server hit an internal error. Check the log for the request ID.");
+    expect(
+      apiErrorToVisibleMessage(
+        new Error("HTTP 422: Selected material is missing"),
+      ),
+    ).toBe("Selected material is missing");
+    expect(
+      apiErrorToVisibleMessage(
+        new Error("HTTP 422: Request body is missing material selection"),
+      ),
+    ).toBe("Request body is missing material selection");
+    expect(
+      apiErrorToVisibleMessage(
+        new Error("HTTP 422 Request body is missing material selection"),
+      ),
+    ).toBe("Request body is missing material selection");
+    expect(
+      apiErrorToVisibleMessage(new Error("status 404 Preview cache missing")),
+    ).toBe("Preview cache missing");
+    expect(apiErrorToVisibleMessage(new Error("HTTP 422 format invalid"))).toBe(
+      "format invalid",
+    );
+    expect(apiErrorToVisibleMessage(new Error("HTTP 422 attempt invalid"))).toBe(
+      "attempt invalid",
+    );
+    expect(apiErrorToVisibleMessage(new Error("HTTP 500: worker crashed"))).toBe(
+      "The server hit an internal error. Check the log for the request ID.",
+    );
+    expect(apiErrorToVisibleMessage(new Error("value must be <= 500"))).toBe(
+      "value must be <= 500",
+    );
+  });
+
   it("normalizes bare network and timeout errors for visible UI callers", () => {
     for (const error of [
       new Error("Network Error"),
@@ -504,6 +553,35 @@ describe("apiClient", () => {
       );
       expect(message).not.toMatch(/Network Error|Failed to fetch|timeout of/i);
     }
+  });
+
+  it("uses the provided fallback for bare non-Error rejection values", () => {
+    expect(apiErrorToVisibleMessage("string error", "批量处理失败")).toBe(
+      "批量处理失败",
+    );
+    expect(
+      apiErrorToVisibleMessage(
+        "AxiosError: Request failed with status code 500",
+        "向量化失败",
+      ),
+    ).toBe("向量化失败");
+    expect(apiErrorToVisibleMessage({ message: "opaque object" }, "操作失败")).toBe(
+      "操作失败",
+    );
+  });
+
+  it("preserves readable response details on non-Error response-shaped values", () => {
+    expect(
+      apiErrorToVisibleMessage(
+        {
+          response: {
+            status: 422,
+            data: { detail: "请先选择要处理的图片。" },
+          },
+        },
+        "操作失败",
+      ),
+    ).toBe("请先选择要处理的图片。");
   });
 
   it("builds resource URLs without double-prefixing API file paths", () => {
