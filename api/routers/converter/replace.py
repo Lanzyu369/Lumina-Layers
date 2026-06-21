@@ -82,7 +82,14 @@ from api.preview_cache_artifacts import (
 from api.structured_logging import get_logger
 
 from .common import (
+    GRADIENT_REGION_METADATA_STALE_DETAIL,
+    GRADIENT_REGION_METADATA_UNAVAILABLE_DETAIL,
+    MATCHED_COLORS_UNAVAILABLE_DETAIL,
+    MATERIAL_SOLVER_CACHE_UNAVAILABLE_DETAIL,
     NON_FATAL_GLB_ERRORS,
+    PREVIEW_CACHE_INVALID_DETAIL,
+    PREVIEW_CACHE_UNAVAILABLE_DETAIL,
+    REGION_SELECTION_REQUIRED_DETAIL,
     ROUTER_HANDLED_ERRORS,
     _handle_core_error,
     _image_to_png_bytes,
@@ -142,12 +149,12 @@ def _require_preview_cache_fields(
     if cache is None:
         raise HTTPException(
             status_code=409,
-            detail="No preview cache. Call POST /api/convert/preview first.",
+            detail=PREVIEW_CACHE_UNAVAILABLE_DETAIL,
         )
     if not isinstance(cache, dict):
         raise HTTPException(
             status_code=409,
-            detail="Invalid preview cache. Call POST /api/convert/preview again.",
+            detail=PREVIEW_CACHE_INVALID_DETAIL,
         )
     if not is_preview_cache_artifact_ref(cache):
         return cache
@@ -237,12 +244,12 @@ def _preview_cache_transaction(
     if cache is None:
         raise HTTPException(
             status_code=409,
-            detail="No preview cache. Call POST /api/convert/preview first.",
+            detail=PREVIEW_CACHE_UNAVAILABLE_DETAIL,
         )
     if not isinstance(cache, dict):
         raise HTTPException(
             status_code=409,
-            detail="Invalid preview cache. Call POST /api/convert/preview again.",
+            detail=PREVIEW_CACHE_INVALID_DETAIL,
         )
     inner = preview_cache_transaction(session_id, store, session_data, fields=fields)
     try:
@@ -1228,20 +1235,13 @@ def color_highlight(
             if region_id_map is None:
                 raise HTTPException(
                     status_code=409,
-                    detail=(
-                        "Preview cache has no gradient_region_id_map; "
-                        "re-run /preview to refresh gradient-region metadata."
-                    ),
+                    detail=GRADIENT_REGION_METADATA_UNAVAILABLE_DETAIL,
                 )
             region_id_arr = np.asarray(region_id_map)
             if region_id_arr.shape != (img_h, img_w):
                 raise HTTPException(
                     status_code=409,
-                    detail=(
-                        f"Cached gradient_region_id_map shape "
-                        f"{region_id_arr.shape} does not match preview "
-                        f"{img_h}x{img_w}; re-run /preview."
-                    ),
+                    detail=GRADIENT_REGION_METADATA_STALE_DETAIL,
                 )
             encoded_id = (
                 int(group_idx) * REGION_ID_ENCODING_MULTIPLIER + int(region_idx)
@@ -1568,20 +1568,13 @@ def region_replace(
             if region_id_map is None:
                 raise HTTPException(
                     status_code=409,
-                    detail=(
-                        "Preview cache has no gradient_region_id_map; "
-                        "re-run /preview to refresh gradient-region metadata."
-                    ),
+                    detail=GRADIENT_REGION_METADATA_UNAVAILABLE_DETAIL,
                 )
             region_id_arr = np.asarray(region_id_map)
             if region_id_arr.shape != (img_h, img_w):
                 raise HTTPException(
                     status_code=409,
-                    detail=(
-                        f"Cached gradient_region_id_map shape "
-                        f"{region_id_arr.shape} does not match preview "
-                        f"{img_h}x{img_w}; re-run /preview."
-                    ),
+                    detail=GRADIENT_REGION_METADATA_STALE_DETAIL,
                 )
             if gradient_region_idx is not None:
                 # Single region within the group
@@ -1623,10 +1616,7 @@ def region_replace(
             if region_mask is None:
                 raise HTTPException(
                     status_code=409,
-                    detail=(
-                        "No region selected. Call POST /api/convert/region-detect first, "
-                        "or supply gradient_group_index + gradient_region_index."
-                    ),
+                    detail=REGION_SELECTION_REQUIRED_DETAIL,
                 )
 
         # Parse replacement hex to RGB tuple
@@ -1816,7 +1806,7 @@ def region_requantize(
         if matched_rgb is None:
             raise HTTPException(
                 status_code=409,
-                detail="Preview cache missing matched_rgb; re-run /preview first.",
+                detail=MATCHED_COLORS_UNAVAILABLE_DETAIL,
             )
 
         material_source = str(session_data.get("material_source") or "lut")
@@ -1834,21 +1824,14 @@ def region_requantize(
         if region_id_map is None:
             raise HTTPException(
                 status_code=409,
-                detail=(
-                    "Preview cache has no gradient_region_id_map; "
-                    "re-run /preview to refresh gradient-region metadata."
-                ),
+                detail=GRADIENT_REGION_METADATA_UNAVAILABLE_DETAIL,
             )
         region_id_arr = np.asarray(region_id_map)
         img_h, img_w = matched_rgb.shape[:2]
         if region_id_arr.shape != (img_h, img_w):
             raise HTTPException(
                 status_code=409,
-                detail=(
-                    f"Cached gradient_region_id_map shape "
-                    f"{region_id_arr.shape} does not match preview "
-                    f"{img_h}x{img_w}; re-run /preview."
-                ),
+                detail=GRADIENT_REGION_METADATA_STALE_DETAIL,
             )
 
         # Materials list → MaterialParams → solver cache.
@@ -1899,10 +1882,7 @@ def region_requantize(
         if solver_cache is None:
             raise HTTPException(
                 status_code=409,
-                detail=(
-                    "No material solver cache on disk for the current palette; "
-                    "run a normal /preview first so the cache is built."
-                ),
+                detail=MATERIAL_SOLVER_CACHE_UNAVAILABLE_DETAIL,
             )
 
         # Load the ORIGINAL source image and resize to preview resolution so
@@ -2210,20 +2190,13 @@ def _build_mask_for_region_batch_item(
         if region_id_map is None:
             raise HTTPException(
                 status_code=409,
-                detail=(
-                    "Preview cache has no gradient_region_id_map; "
-                    "re-run /preview to refresh gradient-region metadata."
-                ),
+                detail=GRADIENT_REGION_METADATA_UNAVAILABLE_DETAIL,
             )
         region_id_arr = np.asarray(region_id_map)
         if region_id_arr.shape != (img_h, img_w):
             raise HTTPException(
                 status_code=409,
-                detail=(
-                    f"Cached gradient_region_id_map shape "
-                    f"{region_id_arr.shape} does not match preview "
-                    f"{img_h}x{img_w}; re-run /preview."
-                ),
+                detail=GRADIENT_REGION_METADATA_STALE_DETAIL,
             )
         if gradient_region_idx is not None:
             encoded_id = (

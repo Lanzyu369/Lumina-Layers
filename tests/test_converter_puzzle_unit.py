@@ -44,9 +44,20 @@ _test_store: SessionStore = SessionStore(ttl=1800)
 _test_registry: FileRegistry = FileRegistry()
 _mock_pool = MagicMock(spec=WorkerPoolManager)
 _TEST_TEMP_DIR = tempfile.gettempdir()
+_ORIGINAL_RUNTIME_TEMP_DIR = runtime_config.TEMP_DIR
+_ORIGINAL_PUZZLE_TEMP_DIR = puzzle_router.TEMP_DIR
 
-runtime_config.TEMP_DIR = _TEST_TEMP_DIR
-puzzle_router.TEMP_DIR = _TEST_TEMP_DIR
+
+def setup_module(module) -> None:
+    runtime_config.TEMP_DIR = _TEST_TEMP_DIR
+    puzzle_router.TEMP_DIR = _TEST_TEMP_DIR
+
+
+def teardown_module(module) -> None:
+    runtime_config.TEMP_DIR = _ORIGINAL_RUNTIME_TEMP_DIR
+    puzzle_router.TEMP_DIR = _ORIGINAL_PUZZLE_TEMP_DIR
+    _test_registry.clear_all()
+    _test_store.clear_all()
 
 
 def _make_puzzle_client() -> TestClient:

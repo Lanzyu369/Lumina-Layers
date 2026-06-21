@@ -175,6 +175,11 @@ class TestRegionReplaceNoNameError:
             },
         )
         assert response.status_code == 409
+        detail = response.json()["detail"]
+        assert "POST" not in detail
+        assert "/api/convert" not in detail
+        assert "region-detect" not in detail
+        assert "region" in detail.lower()
 
 
 # =========================================================================
