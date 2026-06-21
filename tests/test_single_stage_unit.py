@@ -175,6 +175,19 @@ def _capture_single_stage_warning_logger(
     return target_logger
 
 
+def _capture_single_stage_warning_loggers(
+    caplog: pytest.LogCaptureFixture,
+) -> list[logging.Logger]:
+    loggers = [
+        logging.getLogger("lumina.api.routers.single_stage"),
+        logging.getLogger("lumina.api.app"),
+    ]
+    for logger in loggers:
+        logger.addHandler(caplog.handler)
+        caplog.set_level(logging.WARNING, logger=logger.name)
+    return loggers
+
+
 def _records_for_event(
     caplog: pytest.LogCaptureFixture,
     event_name: str,
@@ -6074,6 +6087,136 @@ def test_gradient_card_material_import_route_rejects_invalid_stage_a_solver_para
     assert "parameters.channels[0]" in detail
     assert str(tmp_path) not in detail
     assert (materials_root / "BrandA" / "pla-basic").exists() is False
+
+
+def test_gradient_card_material_import_route_redacts_unsafe_zip_entry(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client, _, _ = _client_with_state()
+    private_path = "/Users/min/private/materials/BrandA/pla-basic/material.json"
+    uploaded_zip = io.BytesIO()
+    with zipfile.ZipFile(uploaded_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "lumina_material_export.json",
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "kind": "lumina_material_export",
+                    "directory_names": ["BrandA/pla-basic"],
+                    "material_count": 1,
+                },
+                ensure_ascii=False,
+            ),
+        )
+        archive.writestr(private_path, "{}")
+    uploaded_zip.seek(0)
+
+    target_loggers = _capture_single_stage_warning_loggers(caplog)
+    try:
+        response = client.post(
+            "/api/extractor/gradient-card-materials/import",
+            files=[
+                (
+                    "archives",
+                    ("unsafe-materials.zip", uploaded_zip.getvalue(), "application/zip"),
+                )
+            ],
+        )
+    finally:
+        for target_logger in target_loggers:
+            target_logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Material import ZIP contains an unsafe file path."
+    assert private_path not in response.text
+    assert "Unsafe zip entry" not in response.text
+
+    api_http_records = _records_for_event(caplog, "api_http_error")
+    assert api_http_records
+    assert private_path not in str(getattr(api_http_records[-1], "error_message", ""))
+    route_records = _records_for_event(
+        caplog,
+        "extractor_import_gradient_card_materials_failed",
+    )
+    assert route_records
+    route_record = route_records[-1]
+    assert getattr(route_record, "status_code", None) == 422
+    assert getattr(route_record, "error_type", None) == "ValueError"
+    assert private_path in str(getattr(route_record, "error_message", ""))
+
+
+def test_gradient_card_material_import_route_redacts_unsafe_bundle_manifest_path(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client, _, _ = _client_with_state()
+    private_path = "/Users/min/private/materials/BrandA/pla-basic/material.json"
+    uploaded_zip = io.BytesIO()
+    with zipfile.ZipFile(uploaded_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "lumina_material_bundle.json",
+            json.dumps(
+                {
+                    "kind": "lumina_material_bundle",
+                    "schema_version": "2.0",
+                    "packages": [
+                        {
+                            "material_id": "mat_private",
+                            "revision_id": "rev_private",
+                            "local_directory": "BrandA/pla-basic",
+                            "content_hash": "sha256:fake",
+                            "files": [
+                                {
+                                    "role": "material_archive",
+                                    "path": private_path,
+                                },
+                                {
+                                    "role": "stage_a_parameters",
+                                    "path": (
+                                        "materials/BrandA/pla-basic/"
+                                        "stage_A_parameters.json"
+                                    ),
+                                },
+                            ],
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+        )
+    uploaded_zip.seek(0)
+
+    target_loggers = _capture_single_stage_warning_loggers(caplog)
+    try:
+        response = client.post(
+            "/api/extractor/gradient-card-materials/import",
+            files=[
+                (
+                    "archives",
+                    ("unsafe-bundle.zip", uploaded_zip.getvalue(), "application/zip"),
+                )
+            ],
+        )
+    finally:
+        for target_logger in target_loggers:
+            target_logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Material import ZIP contains an unsafe file path."
+    assert private_path not in response.text
+    assert "Unsafe material bundle file path" not in response.text
+
+    api_http_records = _records_for_event(caplog, "api_http_error")
+    assert api_http_records
+    assert private_path not in str(getattr(api_http_records[-1], "error_message", ""))
+    route_records = _records_for_event(
+        caplog,
+        "extractor_import_gradient_card_materials_failed",
+    )
+    assert route_records
+    route_record = route_records[-1]
+    assert getattr(route_record, "status_code", None) == 422
+    assert getattr(route_record, "error_type", None) == "ValueError"
+    assert private_path in str(getattr(route_record, "error_message", ""))
 
 
 def test_extract_single_stage_dataset_rejects_invalid_layout(tmp_path: Path) -> None:

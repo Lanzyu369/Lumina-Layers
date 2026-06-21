@@ -157,6 +157,9 @@ GRADIENT_CARD_MATERIAL_LIBRARY_LIST_FAILED_DETAIL = (
 GRADIENT_CARD_MATERIAL_LIBRARY_FORBIDDEN_DETAIL = (
     "Material library management is only available from the Lumina Studio local app."
 )
+GRADIENT_CARD_MATERIAL_IMPORT_UNSAFE_PATH_DETAIL = (
+    "Material import ZIP contains an unsafe file path."
+)
 _MATERIAL_LIBRARY_DEFAULT_LOCAL_PORTS = frozenset({8000, 4174, 5174, 5173})
 _MATERIAL_LIBRARY_ALLOWED_LOCAL_PORTS_ENV = (
     "LUMINA_MATERIAL_LIBRARY_ALLOWED_LOCAL_PORTS"
@@ -222,6 +225,17 @@ def _single_stage_dataset_input_error_detail(exc: ValueError) -> str | None:
         if _is_safe_relative_detail_fragment(missing_dir):
             return f"{SINGLE_STAGE_DATASET_MISSING_LABELME_PREFIX}{missing_dir.strip()}"
         return SINGLE_STAGE_DATASET_MISSING_LABELME_DETAIL
+    return None
+
+
+def _gradient_card_material_import_error_detail(exc: ValueError) -> str | None:
+    message = str(exc).strip()
+    if message.startswith("Unsafe zip entry:"):
+        return GRADIENT_CARD_MATERIAL_IMPORT_UNSAFE_PATH_DETAIL
+    if message.startswith("Unsafe material bundle file path:"):
+        return GRADIENT_CARD_MATERIAL_IMPORT_UNSAFE_PATH_DETAIL
+    if message.startswith("Material bundle file is outside material directory:"):
+        return GRADIENT_CARD_MATERIAL_IMPORT_UNSAFE_PATH_DETAIL
     return None
 
 
@@ -1692,7 +1706,24 @@ async def extractor_import_gradient_card_materials(
     except FileNotFoundError as exc:
         _rollback_imported_materials(imported_directory_names)
         raise HTTPException(status_code=404, detail=str(exc))
-    except (ValueError, TypeError, OSError, RuntimeError) as exc:
+    except ValueError as exc:
+        _rollback_imported_materials(imported_directory_names)
+        safe_detail = _gradient_card_material_import_error_detail(exc)
+        if safe_detail is not None:
+            log.warning(
+                "Gradient card materials import failed",
+                extra={
+                    "event": "extractor_import_gradient_card_materials_failed",
+                    "status_code": 422,
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                    "archives_received": len(archives),
+                    "imported_directory_names_count": len(imported_directory_names),
+                },
+            )
+            raise HTTPException(status_code=422, detail=safe_detail) from exc
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (TypeError, OSError, RuntimeError) as exc:
         _rollback_imported_materials(imported_directory_names)
         raise HTTPException(status_code=422, detail=str(exc))
     finally:

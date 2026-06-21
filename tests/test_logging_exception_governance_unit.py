@@ -181,6 +181,7 @@ EXTRACTOR_STRUCTURED_EVENTS = {
     "extractor_update_gradient_card_material_done",
     "extractor_export_gradient_card_materials_done",
     "extractor_export_gradient_card_materials_registration_failed",
+    "extractor_import_gradient_card_materials_failed",
     "extractor_import_gradient_card_materials_done",
     "material_solver_cache_status_done",
     "material_solver_cache_build_done",
