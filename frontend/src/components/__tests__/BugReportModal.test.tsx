@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 vi.mock("../../api/feedback", () => ({
   relayBugReport: vi.fn(),
@@ -196,9 +196,9 @@ describe("BugReportModal", () => {
     render(<BugReportModal open onClose={() => {}} />);
 
     expect(screen.getByText("近期接口错误")).toBeInTheDocument();
-    expect(
-      screen.getByText("The server hit an internal error. · /convert/generate"),
-    ).toBeInTheDocument();
+    const summary = within(screen.getByTestId("bug-report-context-summary"));
+    expect(summary.getByText("The server hit an internal error.")).toBeInTheDocument();
+    expect(summary.queryByText(/\/convert\/generate/)).not.toBeInTheDocument();
   });
 
   it("replaces generic status-code API errors in the context summary", () => {
@@ -213,7 +213,7 @@ describe("BugReportModal", () => {
           phase: "request-failed",
           details: {
             status_code: 402,
-            url: "/api/quota/check",
+            path: "/api/quota/check",
             error_message: "Request failed with status code 402",
           },
         },
@@ -222,12 +222,14 @@ describe("BugReportModal", () => {
 
     render(<BugReportModal open onClose={() => {}} />);
 
+    const summary = within(screen.getByTestId("bug-report-context-summary"));
     expect(
-      screen.getByText("此操作需要可用额度或付款状态后才能继续。 · /api/quota/check"),
+      summary.getByText("此操作需要可用额度或付款状态后才能继续。"),
     ).toBeInTheDocument();
-    expect(screen.queryByText("402 · /api/quota/check")).not.toBeInTheDocument();
+    expect(summary.queryByText("402 · /api/quota/check")).not.toBeInTheDocument();
+    expect(summary.queryByText(/\/api\/quota\/check/)).not.toBeInTheDocument();
     expect(
-      screen.queryByText("Request failed with status code 402"),
+      summary.queryByText("Request failed with status code 402"),
     ).not.toBeInTheDocument();
   });
 
@@ -773,6 +775,25 @@ describe("BugReportModal", () => {
   });
 
   it("expands the collected context disclosure", async () => {
+    vi.mocked(collectBugReportContext).mockReturnValueOnce(createBugReportContext({
+      recent_client_logs: [
+        {
+          timestamp: "2026-06-18T15:00:00.000Z",
+          method: "error",
+          label: "api: request failed",
+          elapsed_ms: null,
+          scope: "api",
+          phase: "request-failed",
+          details: {
+            status_code: 500,
+            path: "/api/files/output-model",
+            url: "/convert/generate",
+            error_message: "The server hit an internal error.",
+          },
+        },
+      ],
+    }));
+
     render(<BugReportModal open onClose={() => {}} />);
 
     fireEvent.click(screen.getByText("已自动收集的信息（点击展开）"));
@@ -783,6 +804,9 @@ describe("BugReportModal", () => {
     await screen.findByText(/"active_tab":\s*"converter"/, undefined, {
       timeout: 1500,
     });
+    const fullContext = screen.getByTestId("bug-report-context-json").textContent ?? "";
+    expect(fullContext).toContain('"path": "/api/files/output-model"');
+    expect(fullContext).toContain('"url": "/convert/generate"');
   });
 
   it("redacts client log internals from the expanded context disclosure", async () => {

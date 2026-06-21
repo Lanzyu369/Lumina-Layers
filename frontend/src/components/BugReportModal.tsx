@@ -132,12 +132,6 @@ function CompactContextSummary({
                 typeof details?.status_code === "number"
                   ? details.status_code
                   : "?";
-              const path =
-                typeof details?.path === "string"
-                  ? details.path
-                  : typeof details?.url === "string"
-                    ? details.url
-                    : "";
               const message =
                 typeof details?.error_message === "string" &&
                 details.error_message.trim()
@@ -150,9 +144,7 @@ function CompactContextSummary({
                 message && !isGenericStatusCodeMessage(message)
                   ? message
                   : fallbackMessage;
-              const primaryText = path
-                ? `${primaryMessage} · ${path}`
-                : primaryMessage || entry.label;
+              const primaryText = primaryMessage || entry.label;
               return (
                 <li key={`${entry.timestamp}-${idx}`}>
                   <span>{primaryText}</span>
