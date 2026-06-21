@@ -1233,6 +1233,7 @@ async def convert_preview(
     elif isinstance(vector_parse_clip_cache_blob, (bytes, bytearray)):
         vector_cache_bytes = len(vector_parse_clip_cache_blob)
         if vector_cache_bytes <= vector_cache_max_bytes:
+            vector_cache_path = None
             try:
                 fd, vector_cache_path = tempfile.mkstemp(
                     prefix="vector_parse_clip_cache_",
@@ -1258,6 +1259,7 @@ async def convert_preview(
                         "max_bytes": int(vector_cache_max_bytes),
                     },
                 )
+                _cleanup_pre_session_temp_paths(vector_cache_path)
         else:
             log.debug(
                 "Vector parse/clip cache artifact persist skipped",

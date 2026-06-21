@@ -431,6 +431,7 @@ def test_native_split_retry_requires_large_non_expanding_reference_groups() -> N
 
 
 def test_native_hybrid_retries_empty_group_as_reference_polygons(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LUMINA_VECTOR_NATIVE_MESH_VALIDATE_SURFACE", raising=False)
     monkeypatch.setattr(vector_native_mesh, "NATIVE_SPLIT_RETRY_MIN_ORIGINAL_PATHS", 1)
     monkeypatch.setattr(vector_native_mesh, "NATIVE_SPLIT_RETRY_MIN_POLYGONS", 2)
     native_box = _box_mesh()
@@ -630,7 +631,9 @@ def test_compiled_native_mesh_module_returns_numpy_arrays() -> None:
     assert faces.flags.c_contiguous
 
 
-def test_native_hybrid_coalesces_native_meshes_per_slot() -> None:
+def test_native_hybrid_coalesces_native_meshes_per_slot(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LUMINA_VECTOR_NATIVE_MESH_VALIDATE_SURFACE", raising=False)
+
     def fake_merge_run_groups_to_meshes(
         groups,
         *,

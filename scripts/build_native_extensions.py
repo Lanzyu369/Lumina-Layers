@@ -27,8 +27,14 @@ class NativeExtension:
     extra_compile_args: list[str]
 
 
-def _relative(path: Path) -> str:
-    return str(path.relative_to(ROOT))
+def _build_path(path: Path) -> str:
+    """Return a repo-relative path when possible, otherwise an absolute path."""
+
+    resolved = path.resolve()
+    try:
+        return str(resolved.relative_to(ROOT))
+    except ValueError:
+        return str(resolved)
 
 
 def _compiler_args() -> list[str]:
@@ -49,8 +55,8 @@ def get_clipper2_extension() -> NativeExtension:
     include_dirs = [CLIPPER_ROOT / "include", Path(np.get_include()).resolve()]
     return NativeExtension(
         name="clipper2_batch",
-        sources=[_relative(path) for path in sources],
-        include_dirs=[_relative(path) for path in include_dirs],
+        sources=[_build_path(path) for path in sources],
+        include_dirs=[_build_path(path) for path in include_dirs],
         language="c++",
         extra_compile_args=_compiler_args(),
     )

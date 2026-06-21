@@ -33,6 +33,7 @@ const MATERIALS_SEED_RESOURCE = path.join(
   "materials",
   "lumina-materials-seed.zip",
 );
+const NATIVE_VECTOR_MESH_MARKER = "native-vector-mesh.enabled";
 
 // Platform-aware icon paths.
 //   - Windows: 仍用仓库根目录的 icon.ico（任务栏 / 安装包用）
@@ -348,8 +349,16 @@ function findNode() {
 function backendRuntimeEnv() {
   const env = {
     LUMINA_MATERIALS_DIR: path.join(app.getPath("userData"), "materials"),
-    LUMINA_VECTOR_NATIVE_MESH: "1",
   };
+  const nativeMarkerPath = path.join(
+    process.resourcesPath,
+    "backend",
+    NATIVE_VECTOR_MESH_MARKER,
+  );
+  if (!isDev && fs.existsSync(nativeMarkerPath)) {
+    env.LUMINA_VECTOR_NATIVE_MESH = "1";
+    env.LUMINA_VECTOR_NATIVE_MESH_VALIDATE_SURFACE = "1";
+  }
   if (fs.existsSync(MATERIALS_SEED_RESOURCE)) {
     env.LUMINA_MATERIALS_SEED_PATH = MATERIALS_SEED_RESOURCE;
   }

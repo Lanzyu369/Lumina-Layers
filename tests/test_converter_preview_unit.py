@@ -897,6 +897,81 @@ class TestSessionContainsPreviewCache:
         with open(vector_cache_path, "rb") as handle:
             assert handle.read() == b"parse-clip-cache"
 
+    def test_preview_cleans_vector_parse_clip_cache_blob_on_register_failure(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+    ) -> None:
+        """Vector cache fallback files should be removed if session adoption fails."""
+        monkeypatch.setattr("api.routers.converter.preview.TEMP_DIR", str(tmp_path))
+        buf = _make_test_image_buf()
+        cache_with_blob = dict(_mock_cache)
+        cache_with_blob["vector_parse_clip_cache_blob"] = b"parse-clip-cache"
+
+        fd, png_path = tempfile.mkstemp(suffix=".png")
+        os.close(fd)
+        Image.fromarray(_mock_preview_img).save(png_path)
+        fd, cache_path = tempfile.mkstemp(suffix=".pkl")
+        os.close(fd)
+        with open(cache_path, "wb") as handle:
+            pickle.dump(cache_with_blob, handle)
+
+        original_register_temp_file = _test_store.register_temp_file
+        attempted_vector_cache_paths: list[str] = []
+
+        def fail_vector_cache_register(session_id: str, path: str) -> None:
+            if Path(path).name.startswith("vector_parse_clip_cache_"):
+                attempted_vector_cache_paths.append(path)
+                raise OSError("simulated vector cache registration failure")
+            original_register_temp_file(session_id, path)
+
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "status_msg": "Preview OK",
+                "preview_png_path": png_path,
+                "cache_data_path": cache_path,
+            }
+        )
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+            patch(
+                "api.routers.converter.preview.generate_segmented_glb",
+                return_value=None,
+            ),
+            patch.object(
+                _test_store,
+                "register_temp_file",
+                side_effect=fail_vector_cache_register,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": ("test.png", buf, "image/png")},
+                data={
+                    "lut_name": "test_lut",
+                    "color_mode": "4-Color",
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        assert attempted_vector_cache_paths
+        for path in attempted_vector_cache_paths:
+            assert not os.path.exists(path)
+        assert not list(tmp_path.glob("vector_parse_clip_cache_*.pkl"))
+        session_data = _test_store.get(response.json()["session_id"])
+        assert session_data is not None
+        metadata = session_data["preview_cache"]["metadata"]
+        assert "vector_parse_clip_cache_blob" not in metadata
+        assert "vector_parse_clip_cache_path" not in metadata
+
     def test_preview_skips_oversized_vector_parse_clip_cache_blob(
         self,
         monkeypatch,

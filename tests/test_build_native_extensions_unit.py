@@ -63,6 +63,7 @@ def test_docker_runtime_enables_native_vector_mesh() -> None:
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 
     assert "LUMINA_VECTOR_NATIVE_MESH=1" in dockerfile
+    assert "LUMINA_VECTOR_NATIVE_MESH_VALIDATE_SURFACE=1" in dockerfile
 
 
 def test_desktop_build_invokes_native_extension_before_pyinstaller() -> None:
@@ -75,15 +76,29 @@ def test_desktop_build_invokes_native_extension_before_pyinstaller() -> None:
     assert native_index < pyinstaller_index
 
 
+def test_desktop_build_treats_native_extension_as_optional() -> None:
+    from scripts.build_native_extensions import ROOT
+
+    build_script = (ROOT / "scripts" / "build_desktop.py").read_text(encoding="utf-8")
+
+    assert "NATIVE_VECTOR_MESH_MARKER" in build_script
+    assert "build_native_extensions_optional" in build_script
+    assert "subprocess.CalledProcessError" in build_script
+
+
 def test_electron_production_backend_enables_native_vector_mesh() -> None:
     from scripts.build_native_extensions import ROOT
 
     electron_main = (ROOT / "electron" / "main.cjs").read_text(encoding="utf-8")
 
-    assert "LUMINA_VECTOR_NATIVE_MESH: \"1\"" in electron_main
+    assert "NATIVE_VECTOR_MESH_MARKER" in electron_main
+    assert "env.LUMINA_VECTOR_NATIVE_MESH = \"1\"" in electron_main
+    assert "env.LUMINA_VECTOR_NATIVE_MESH_VALIDATE_SURFACE = \"1\"" in electron_main
     production_start = electron_main.index("const backendExe = path.join")
-    native_env = electron_main.index("LUMINA_VECTOR_NATIVE_MESH: \"1\"")
-    assert production_start < native_env
+    native_spawn = electron_main.index(
+        "spawnChild(\"Backend\", backendExe, [], ROOT_DIR, backendRuntimeEnv())",
+    )
+    assert production_start < native_spawn
 
 
 def test_pyinstaller_spec_includes_native_extension_binary() -> None:
