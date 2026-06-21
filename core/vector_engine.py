@@ -984,10 +984,10 @@ def _direct_path_visibility_requires_full_svg_parse(elem):
         if elem.get(attr) is not None:
             return True
 
-    display = str(elem.get("display", "") or "").strip().lower()
+    display = _normalize_svg_css_token(elem.get("display", ""))
     if display == "none":
         return True
-    visibility = str(elem.get("visibility", "") or "").strip().lower()
+    visibility = _normalize_svg_css_token(elem.get("visibility", ""))
     if visibility in {"hidden", "collapse"}:
         return True
 
@@ -997,7 +997,7 @@ def _direct_path_visibility_requires_full_svg_parse(elem):
         if not sep:
             continue
         prop = name.strip().lower()
-        css_value = value.strip().lower()
+        css_value = _normalize_svg_css_token(value)
         if prop in opacity_attrs:
             return True
         if prop == "display" and css_value == "none":
@@ -1044,6 +1044,56 @@ def _svg_element_opacity(element):
         if opacity is not None:
             return opacity
     return 1.0
+
+
+def _normalize_svg_css_token(raw_value):
+    value = str(raw_value or "").strip().lower()
+    if value.endswith("!important"):
+        value = value[: -len("!important")].strip()
+    return value
+
+
+def _svg_element_hidden_by_visibility(element):
+    """Return True when SVG display/visibility semantics hide an element."""
+
+    values = getattr(element, "values", None)
+    raw_display_values = []
+    raw_visibility_values = []
+    raw_style_values = []
+    if isinstance(values, dict):
+        raw_display_values.append(values.get("display"))
+        raw_visibility_values.append(values.get("visibility"))
+        raw_style_values.append(values.get("style"))
+        attrs = values.get("attributes")
+        if isinstance(attrs, dict):
+            raw_display_values.append(attrs.get("display"))
+            raw_visibility_values.append(attrs.get("visibility"))
+            raw_style_values.append(attrs.get("style"))
+    raw_display_values.append(getattr(element, "display", None))
+    raw_visibility_values.append(getattr(element, "visibility", None))
+    raw_style_values.append(getattr(element, "style", None))
+
+    if any(_normalize_svg_css_token(value) == "none" for value in raw_display_values):
+        return True
+    if any(
+        _normalize_svg_css_token(value) in {"hidden", "collapse"}
+        for value in raw_visibility_values
+    ):
+        return True
+
+    for raw_style in raw_style_values:
+        style = str(raw_style or "")
+        for declaration in style.split(";"):
+            name, sep, value = declaration.partition(":")
+            if not sep:
+                continue
+            prop = name.strip().lower()
+            css_value = _normalize_svg_css_token(value)
+            if prop == "display" and css_value == "none":
+                return True
+            if prop == "visibility" and css_value in {"hidden", "collapse"}:
+                return True
+    return False
 
 
 def _direct_path_fill_rgb(fill_value):
@@ -5292,7 +5342,10 @@ class VectorProcessor:
                 skipped_types[type_name] = skipped_types.get(type_name, 0) + 1
                 continue
 
-            if _svg_element_opacity(element) < 0.01:
+            if (
+                _svg_element_hidden_by_visibility(element)
+                or _svg_element_opacity(element) < 0.01
+            ):
                 continue
 
             has_fill = (

@@ -735,9 +735,15 @@ class TestNormalizeContours:
             ("fill_opacity", 'fill-opacity="0"'),
             ("opacity", 'opacity="0"'),
             ("style_opacity", 'style="opacity:0"'),
+            ("visibility_hidden", 'visibility="hidden"'),
+            ("style_visibility_hidden", 'style="visibility:hidden"'),
+            ("style_visibility_hidden_important", 'style="visibility:hidden!important"'),
+            ("display_none", 'display="none"'),
+            ("style_display_none", 'style="display:none"'),
+            ("style_display_none_important", 'style="display:none!important"'),
         ],
     )
-    def test_direct_parser_falls_back_for_path_opacity(
+    def test_direct_parser_falls_back_for_path_visibility(
         self,
         tmp_path,
         monkeypatch,
@@ -770,6 +776,41 @@ class TestNormalizeContours:
         shapes, _scale, _bbox = vp._parse_svg(str(svg_path), target_width_mm=20.0)
 
         assert parse_calls
+        assert [shape["color"] for shape in shapes] == [(255, 0, 0)]
+
+    @pytest.mark.parametrize(
+        ("case_name", "group_markup"),
+        [
+            ("group_visibility_hidden", 'visibility="hidden"'),
+            ("group_style_visibility_hidden", 'style="visibility:hidden"'),
+        ],
+    )
+    def test_svg_parser_skips_group_hidden_paths(
+        self,
+        tmp_path,
+        case_name,
+        group_markup,
+    ):
+        svg_path = tmp_path / f"hidden_{case_name}.svg"
+        svg_path.write_text(
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">'
+            f'  <g {group_markup}>'
+            '    <path d="M 0 0 L 20 0 L 20 20 L 0 20 Z" fill="#000000" '
+            'fill-rule="nonzero"/>'
+            "  </g>"
+            '  <path d="M 1 1 L 10 1 L 10 10 L 1 10 Z" fill="#ff0000" '
+            'fill-rule="nonzero"/>'
+            "</svg>",
+            encoding="utf-8",
+        )
+
+        vp = VectorProcessor.__new__(VectorProcessor)
+        vp.sampling_precision = 0.02
+        vp._parse_expand_stroke_to_fill = False
+
+        shapes, _scale, _bbox = vp._parse_svg(str(svg_path), target_width_mm=20.0)
+
         assert [shape["color"] for shape in shapes] == [(255, 0, 0)]
 
     def test_root_display_none_returns_no_valid_shapes(self, tmp_path):
