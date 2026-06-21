@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useConverterStore } from '../../stores/converter';
 import { DEFAULT_STATE } from '../../stores/converter';
-import { StructureMode } from '../../api/types';
+import { ModelingMode, StructureMode } from '../../api/types';
 import { uploadImagePreview } from '../../api/system';
 
 vi.mock('../../api/system', () => ({
@@ -240,6 +240,51 @@ describe('handleFilesSelect clears stale puzzle state', () => {
       expect(state.puzzleEnabled).toBe(false);
       expect(state.puzzleOverlayUrl).toBeNull();
       expect(state.puzzleWarnings).toEqual([]);
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+    }
+  });
+});
+
+
+describe('SVG vector mode guard', () => {
+  beforeEach(() => {
+    resetConverterState({
+      imageFile: null,
+      imagePreviewUrl: null,
+      modeling_mode: ModelingMode.HIGH_FIDELITY,
+    });
+  });
+
+  it('prevents selecting vector mode before an SVG is loaded', () => {
+    useConverterStore.getState().setModelingMode(ModelingMode.VECTOR);
+
+    expect(useConverterStore.getState().modeling_mode).toBe(ModelingMode.HIGH_FIDELITY);
+  });
+
+  it('allows selecting vector mode when current image is SVG', () => {
+    const svgFile = new File(['<svg/>'], 'input.svg', { type: 'image/svg+xml' });
+    useConverterStore.setState({ imageFile: svgFile });
+
+    useConverterStore.getState().setModelingMode(ModelingMode.VECTOR);
+
+    expect(useConverterStore.getState().modeling_mode).toBe(ModelingMode.VECTOR);
+  });
+
+  it('downgrades vector mode when replacing SVG with a raster image', () => {
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    URL.createObjectURL = vi.fn(() => 'blob:raster-preview');
+    URL.revokeObjectURL = vi.fn();
+
+    try {
+      const pngFile = new File(['png'], 'input.png', { type: 'image/png' });
+      useConverterStore.setState({ modeling_mode: ModelingMode.VECTOR });
+
+      useConverterStore.getState().setImageFile(pngFile);
+
+      expect(useConverterStore.getState().modeling_mode).toBe(ModelingMode.HIGH_FIDELITY);
     } finally {
       URL.createObjectURL = originalCreateObjectURL;
       URL.revokeObjectURL = originalRevokeObjectURL;

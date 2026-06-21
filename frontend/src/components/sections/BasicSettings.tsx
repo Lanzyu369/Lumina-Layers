@@ -39,6 +39,7 @@ import {
   type RecipeFileSource,
 } from "../../recipe/importRecipe";
 import { StatusBanner, workstationInputClass } from "../ui/panelPrimitives";
+import { isSvgImageFile, type ImageRotationDegrees } from "../../utils/imageRotation";
 import {
   buildLutCatalogIndex,
   getBucketDisplayColorMode,
@@ -100,6 +101,12 @@ function resolveRecipeImportError(
   }
   return t("recipe_import_error_unreadable");
 }
+const IMAGE_ROTATION_OPTIONS: { label: string; value: string }[] = [
+  { label: "90°", value: "90" },
+  { label: "180°", value: "180" },
+  { label: "270°", value: "270" },
+];
+
 const LEGACY_BUCKET_I18N_KEY: Partial<Record<ColorModeBucket, string>> = {
   [ColorMode.BW]: "basic_lut_color_mode_bw",
   [ColorMode.FOUR_COLOR_CMYW]: "basic_lut_color_mode_4color_cmyw",
@@ -195,6 +202,7 @@ export default function BasicSettings() {
     isCropping,
     batchMode,
     batchFiles,
+    isLoading,
     largeFormatEnabled,
     enable_fridge_magnet,
     puzzleEnabled,
@@ -255,6 +263,7 @@ export default function BasicSettings() {
     isCropping: s.isCropping,
     batchMode: s.batchMode,
     batchFiles: s.batchFiles,
+    isLoading: s.isLoading,
     largeFormatEnabled: s.largeFormatEnabled,
     enable_fridge_magnet: s.enable_fridge_magnet,
     puzzleEnabled: s.puzzleEnabled,
@@ -391,6 +400,10 @@ export default function BasicSettings() {
   const setLargeFormatEnabled = useConverterStore((s) => s.setLargeFormatEnabled);
   const setTileWidthMm = useConverterStore((s) => s.setTileWidthMm);
   const setTileHeightMm = useConverterStore((s) => s.setTileHeightMm);
+  const rotateImageForExport = useConverterStore((s) => s.rotateImageForExport);
+  const [selectedImageRotation, setSelectedImageRotation] = useState<ImageRotationDegrees>(90);
+  const isVectorModelingAvailable = isSvgImageFile(imageFile);
+  const disabledModelingModes = isVectorModelingAvailable ? [] : [ModelingMode.VECTOR];
 
   const handleFileReplace = useCallback(
     (file: File) => {
@@ -800,6 +813,10 @@ export default function BasicSettings() {
     void submitCrop(data.x, data.y, data.width, data.height);
   };
 
+  const handleApplyImageRotation = useCallback(() => {
+    void rotateImageForExport(selectedImageRotation);
+  }, [rotateImageForExport, selectedImageRotation]);
+
   const handleNativeDbToggle = (dbName: string) => {
     if (!selectedNativeBrand) return;
     const nextNames = selectedNativeDbSet.has(dbName)
@@ -884,6 +901,29 @@ export default function BasicSettings() {
             checked={enableCrop}
             onChange={setEnableCrop}
           />
+
+          <div className="rounded-[22px] border border-slate-200/70 bg-slate-100/50 p-3 dark:border-slate-700/50 dark:bg-slate-900/45">
+            <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+              <Dropdown
+                label={t("basic_image_rotation_label")}
+                value={String(selectedImageRotation)}
+                options={IMAGE_ROTATION_OPTIONS}
+                onChange={(value) => setSelectedImageRotation(Number(value) as ImageRotationDegrees)}
+                disabled={isLoading}
+              />
+              <button
+                type="button"
+                onClick={handleApplyImageRotation}
+                disabled={!imageFile || !imagePreviewUrl || isLoading}
+                className="min-h-11 rounded-[22px] border border-slate-200/80 bg-white/82 px-4 py-2 text-sm font-medium text-slate-700 shadow-[var(--shadow-control)] transition-all hover:border-slate-300 hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-45 dark:border-slate-700/80 dark:bg-slate-900/72 dark:text-slate-200 dark:hover:border-slate-600"
+              >
+                {t("basic_image_rotation_apply")}
+              </button>
+            </div>
+            <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
+              {t("basic_image_rotation_hint")}
+            </p>
+          </div>
 
           <CropModal
             open={cropModalOpen}
@@ -1277,6 +1317,7 @@ export default function BasicSettings() {
         value={modeling_mode}
         options={modelingModeOptions}
         onChange={(v) => setModelingMode(v as ModelingMode)}
+        disabledValues={disabledModelingModes}
       />
 
       <QuantizeColorsControl />
