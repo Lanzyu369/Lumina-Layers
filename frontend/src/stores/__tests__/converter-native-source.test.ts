@@ -298,7 +298,7 @@ describe("native bundle converter flow", () => {
     mocks.convertGenerateLargeFormat.mockResolvedValue({
       status: "ok",
       message: "Generated 4 tiles",
-      download_url: "/api/files/lf-zip",
+      download_url: "http://localhost:8000/api/files/lf-zip",
       tile_count: 4,
       grid_cols: 2,
       grid_rows: 2,
@@ -1165,8 +1165,8 @@ describe("native bundle converter flow", () => {
     mocks.convertGenerate.mockResolvedValueOnce({
       status: "ok",
       message: "Model generated",
-      download_url: "/api/files/native-model",
-      preview_3d_url: "/api/files/native-model.glb",
+      download_url: "http://localhost:8000/api/files/native-model",
+      preview_3d_url: "http://localhost:8000/api/files/native-model.glb",
     });
 
     useConverterStore.setState({
@@ -1224,13 +1224,14 @@ describe("native bundle converter flow", () => {
     });
     expect(params).not.toHaveProperty("lut_name");
     expect(result).toBe("/api/files/native-model.glb");
+    expect(useConverterStore.getState().downloadUrl).toBe("/api/files/native-model");
   });
 
   it("submitGenerate uses the puzzle endpoint when puzzle mode is enabled", async () => {
     mocks.convertGeneratePuzzle.mockResolvedValueOnce({
       status: "ok",
       message: "Generated puzzle",
-      download_url: "/api/files/puzzle-model",
+      download_url: "http://localhost:8000/api/files/puzzle-model",
       threemf_disk_path: "E:/tmp/puzzle.3mf",
       piece_count: 6,
       grid_cols: 3,

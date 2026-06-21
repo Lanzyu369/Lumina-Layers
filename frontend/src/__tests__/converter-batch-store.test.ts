@@ -68,7 +68,7 @@ describe("submitBatch modelUrl 与 batchResult 状态管理", () => {
     const response: BatchResponse = {
       status: "ok",
       message: "Batch completed",
-      download_url: "/api/files/merged.3mf",
+      download_url: "http://localhost:8000/api/files/merged.3mf",
       threemf_disk_path: "/tmp/merged.3mf",
       preview_3d_url: "/api/files/abc.glb",
       results: [
@@ -85,7 +85,10 @@ describe("submitBatch modelUrl 与 batchResult 状态管理", () => {
     expect(state.modelUrl).toBeNull();
     expect(state.previewGlbUrl).toBeNull();
     expect(state.batchPreviewItems).toEqual([]);
-    expect(state.batchResult).toEqual(response);
+    expect(state.batchResult).toEqual({
+      ...response,
+      download_url: "/api/files/merged.3mf",
+    });
     expect(state.threemfDiskPath).toBe("/tmp/merged.3mf");
     expect(state.downloadUrl).toBe("/api/files/merged.3mf");
     expect(state.batchLoading).toBe(false);
