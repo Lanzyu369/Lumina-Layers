@@ -51,6 +51,9 @@ MATERIAL_SYNC_STATUS_UNAVAILABLE_DETAIL = (
     "Material sync status is unavailable. Check the material library and try again."
 )
 MATERIAL_REGISTRY_URL_NOT_CONFIGURED_DETAIL = "Material registry URL is not configured"
+MATERIAL_REGISTRY_PACKAGE_NOT_IN_CATALOG_DETAIL = (
+    "Selected material registry package is not in current material registry catalog"
+)
 
 
 def _raise_material_sync_error(
@@ -82,10 +85,20 @@ def _canonical_package_sha256(value: object) -> str:
 
 
 def _catalog_value_error_detail(exc: ValueError) -> str:
+    return _material_sync_value_error_detail(
+        exc,
+        fallback=MATERIAL_SYNC_CATALOG_UNAVAILABLE_DETAIL,
+    )
+
+
+def _material_sync_value_error_detail(exc: ValueError, *, fallback: str) -> str:
     raw_detail = str(exc).strip()
-    if raw_detail == MATERIAL_REGISTRY_URL_NOT_CONFIGURED_DETAIL:
-        return MATERIAL_REGISTRY_URL_NOT_CONFIGURED_DETAIL
-    return MATERIAL_SYNC_CATALOG_UNAVAILABLE_DETAIL
+    if raw_detail in {
+        MATERIAL_REGISTRY_URL_NOT_CONFIGURED_DETAIL,
+        MATERIAL_REGISTRY_PACKAGE_NOT_IN_CATALOG_DETAIL,
+    }:
+        return raw_detail
+    return fallback
 
 
 def _select_catalog_install_entry(
@@ -303,7 +316,17 @@ async def material_sync_install_from_registry(
         catalog = list_material_registry_catalog()
         catalog_entry = _select_catalog_install_entry(catalog, payload)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _raise_material_sync_error(
+            event="material_sync_install_from_registry_failed",
+            exc=exc,
+            status_code=422,
+            detail=_material_sync_value_error_detail(
+                exc,
+                fallback=MATERIAL_SYNC_INSTALL_UNAVAILABLE_DETAIL,
+            ),
+            material_id=payload.material_id,
+            revision_id=payload.revision_id,
+        )
     except RuntimeError as exc:
         _raise_material_sync_error(
             event="material_sync_install_from_registry_failed",
@@ -411,17 +434,29 @@ async def material_sync_refresh(
     try:
         result = refresh_material_sync_from_registry()
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _raise_material_sync_error(
+            event="material_sync_refresh_failed",
+            exc=exc,
+            status_code=422,
+            detail=_material_sync_value_error_detail(
+                exc,
+                fallback=MATERIAL_SYNC_REFRESH_UNAVAILABLE_DETAIL,
+            ),
+        )
     except RuntimeError as exc:
-        raise HTTPException(
+        _raise_material_sync_error(
+            event="material_sync_refresh_failed",
+            exc=exc,
             status_code=502,
             detail=MATERIAL_SYNC_REFRESH_UNAVAILABLE_DETAIL,
-        ) from exc
+        )
     except OSError as exc:
-        raise HTTPException(
+        _raise_material_sync_error(
+            event="material_sync_refresh_failed",
+            exc=exc,
             status_code=500,
             detail=MATERIAL_SYNC_REFRESH_UNAVAILABLE_DETAIL,
-        ) from exc
+        )
 
     log.info(
         "Material registry refresh completed",
