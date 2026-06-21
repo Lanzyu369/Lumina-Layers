@@ -108,6 +108,10 @@ COLORCHECKER_SERVICE_UNAVAILABLE_DETAIL = (
 EXTRACTOR_LUT_DOWNLOAD_REGISTRATION_FAILED_DETAIL = (
     "Extractor LUT download could not be prepared. Try the extraction again."
 )
+EXTRACTOR_EXTRACT_FAILED_DETAIL = (
+    "Color extraction failed. Recheck the source image or calibration corners "
+    "and try again."
+)
 MANUAL_FIX_TARGET_OUT_OF_RANGE_DETAIL = (
     "Manual correction target is outside the current LUT. "
     "Refresh the preview and try again."
@@ -1496,7 +1500,28 @@ async def extractor_extract(
         _handle_core_error(e, "Color extraction")
 
     if lut_path is None:
-        raise HTTPException(status_code=500, detail=status_msg or "Extraction failed")
+        error_message = (
+            status_msg.strip()
+            if isinstance(status_msg, str) and status_msg.strip()
+            else "run_extraction returned no LUT path"
+        )
+        log.error(
+            "Extractor extraction returned no LUT path",
+            extra={
+                "event": "extractor_extract_failed",
+                "status_code": 500,
+                "error_type": "ExtractorMissingLutPath",
+                "error_message": error_message,
+                "color_mode": requested_color_mode,
+                "page": page,
+                "eight_color_full_export": bool(eight_color_full_export),
+                "extract_ms": round(extract_ms, 1),
+            },
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=EXTRACTOR_EXTRACT_FAILED_DETAIL,
+        )
 
     # Create session and store state
     session_id = store.create()

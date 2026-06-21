@@ -151,6 +151,7 @@ VECTOR_STRUCTURED_EVENTS = {
 }
 EXTRACTOR_STRUCTURED_EVENTS = {
     "extractor_extract_done",
+    "extractor_extract_failed",
     "extractor_lut_download_registration_failed",
     "extractor_merge_8color_done",
     "extractor_merge_5color_extended_done",
