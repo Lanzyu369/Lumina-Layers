@@ -19,6 +19,80 @@ from api.structured_logging import get_logger
 
 log = get_logger(__name__)
 
+_PACKED_STACK_BITS = 8
+_MAX_PACKED_STACK_LAYERS = 5
+
+
+def _can_pack_color_stack_keys(
+    solid_rgb: np.ndarray,
+    solid_materials: np.ndarray,
+) -> bool:
+    if solid_rgb.ndim != 2 or solid_rgb.shape[1] != 3:
+        return False
+    if solid_materials.ndim != 2 or solid_materials.shape[1] > _MAX_PACKED_STACK_LAYERS:
+        return False
+    if not np.issubdtype(solid_rgb.dtype, np.integer):
+        return False
+    if not np.issubdtype(solid_materials.dtype, np.integer):
+        return False
+    if solid_rgb.size and (np.min(solid_rgb) < 0 or np.max(solid_rgb) > 255):
+        return False
+    if solid_materials.size and (
+        np.min(solid_materials) < 0 or np.max(solid_materials) > 255
+    ):
+        return False
+    return True
+
+
+def _count_unique_color_stack_combinations(
+    matched_rgb: np.ndarray,
+    material_matrix: np.ndarray,
+    mask_solid: np.ndarray,
+) -> list[tuple[tuple[int, int, int], tuple[int, ...], int]]:
+    """Count unique ``(matched_rgb, material_stack)`` pairs in first-seen order."""
+
+    solid_rgb = np.asarray(matched_rgb)[mask_solid]
+    solid_materials = np.asarray(material_matrix)[mask_solid]
+    if len(solid_rgb) == 0:
+        return []
+
+    if _can_pack_color_stack_keys(solid_rgb, solid_materials):
+        keys = solid_rgb[:, 0].astype(np.uint64)
+        keys |= solid_rgb[:, 1].astype(np.uint64) << 8
+        keys |= solid_rgb[:, 2].astype(np.uint64) << 16
+        for layer_index in range(solid_materials.shape[1]):
+            keys |= solid_materials[:, layer_index].astype(np.uint64) << (
+                24 + _PACKED_STACK_BITS * layer_index
+            )
+        _, first_indices, counts = np.unique(
+            keys,
+            return_index=True,
+            return_counts=True,
+        )
+    else:
+        combined = np.concatenate(
+            (
+                solid_rgb.astype(np.int64, copy=False),
+                solid_materials.astype(np.int64, copy=False),
+            ),
+            axis=1,
+        )
+        _, first_indices, counts = np.unique(
+            combined,
+            axis=0,
+            return_index=True,
+            return_counts=True,
+        )
+
+    ordered_unique_indices = np.argsort(first_indices)
+    combinations: list[tuple[tuple[int, int, int], tuple[int, ...], int]] = []
+    for unique_index in ordered_unique_indices:
+        first_index = int(first_indices[unique_index])
+        rgb_tuple = tuple(int(value) for value in solid_rgb[first_index])
+        stack_tuple = tuple(int(value) for value in solid_materials[first_index])
+        combinations.append((rgb_tuple, stack_tuple, int(counts[unique_index])))
+    return combinations
+
 
 class ColorRecipeLogger:
     """
@@ -313,34 +387,28 @@ class ColorRecipeLogger:
             metadata=metadata,
         )
         
-        # Extract unique colors and their pixel counts
-        solid_rgb = matched_rgb[mask_solid]
-        solid_materials = material_matrix[mask_solid]
-        
-        # Find unique color-stack combinations
-        unique_colors = {}
-        for i in range(len(solid_rgb)):
-            rgb_tuple = tuple(solid_rgb[i])
-            stack_tuple = tuple(solid_materials[i])
-            
-            key = (rgb_tuple, stack_tuple)
-            if key not in unique_colors:
-                unique_colors[key] = 0
-            unique_colors[key] += 1
-        
+        color_stack_counts = _count_unique_color_stack_combinations(
+            matched_rgb,
+            material_matrix,
+            mask_solid,
+        )
+        lut_index_by_rgb = {
+            tuple(int(channel) for channel in lut_color): idx
+            for idx, lut_color in enumerate(processor.lut_rgb)
+        }
+        lut_rgb_int = processor.lut_rgb.astype(int)
+
         # Add mappings
-        for (rgb_tuple, stack_tuple), count in unique_colors.items():
+        for rgb_tuple, _stack_tuple, count in color_stack_counts:
             # Find LUT index by matching RGB
-            lut_index = -1
-            for idx, lut_color in enumerate(processor.lut_rgb):
-                if tuple(lut_color) == rgb_tuple:
-                    lut_index = idx
-                    break
-            
-            if lut_index == -1:
+            lut_index = lut_index_by_rgb.get(rgb_tuple)
+            if lut_index is None:
                 # Fallback: find closest match
-                distances = np.sum(np.abs(processor.lut_rgb.astype(int) - np.array(rgb_tuple).astype(int)), axis=1)
-                lut_index = np.argmin(distances)
+                distances = np.sum(
+                    np.abs(lut_rgb_int - np.array(rgb_tuple, dtype=int)),
+                    axis=1,
+                )
+                lut_index = int(np.argmin(distances))
             
             logger.add_mapping(
                 original_rgb=rgb_tuple,  # In this case, we don't have the original, so use matched

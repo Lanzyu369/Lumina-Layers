@@ -44,6 +44,25 @@ from core.pipeline.processing_ops.dynamic_range_compressor import (
 )
 
 
+def _unique_rgb_rows_fast(rgb: np.ndarray) -> np.ndarray:
+    """Return unique RGB rows using a packed 24-bit representation."""
+
+    rgb_u8 = np.ascontiguousarray(np.asarray(rgb)[:, :3], dtype=np.uint8)
+    if rgb_u8.size == 0:
+        return np.empty((0, 3), dtype=np.uint8)
+    packed = (
+        (rgb_u8[:, 0].astype(np.uint32) << 16)
+        | (rgb_u8[:, 1].astype(np.uint32) << 8)
+        | rgb_u8[:, 2].astype(np.uint32)
+    )
+    unique_packed = np.unique(packed)
+    unique_rgb = np.empty((len(unique_packed), 3), dtype=np.uint8)
+    unique_rgb[:, 0] = (unique_packed >> 16) & 0xFF
+    unique_rgb[:, 1] = (unique_packed >> 8) & 0xFF
+    unique_rgb[:, 2] = unique_packed & 0xFF
+    return unique_rgb
+
+
 class LuminaImageProcessor:
     """
     Image processor class — 图像处理核心类。
@@ -590,7 +609,7 @@ class LuminaImageProcessor:
             lut_fingerprint=getattr(self, 'lut_fingerprint', None),
         )
         t0 = time.perf_counter()
-        unique_colors = np.unique(quantized_image.reshape(-1, 3), axis=0)
+        unique_colors = _unique_rgb_rows_fast(quantized_image.reshape(-1, 3))
         self._last_unique_colors = int(len(unique_colors))
         log.debug(
             "Unique colors extracted",

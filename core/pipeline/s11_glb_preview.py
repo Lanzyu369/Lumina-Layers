@@ -33,17 +33,18 @@ _log = get_logger(__name__)
 # ---------------------------------------------------------------------------
 #
 # ``LUMINA_GLB_KERNEL`` selects the per-color extrusion backend used by the
-# S11 segmented-GLB preview. Default is the long-standing Shapely v1 path
-# (RLE -> shapely_box -> unary_union -> trimesh.creation.extrude_polygon),
-# which is the proven production code. ``v2`` opts into the prototype
-# rasterio + manifold3d backend evaluated in
-# ``progress/glb-preview-mesh-library-spike.md``.
-# 该开关用于在生产保留旧 Shapely 实现的同时，按需启用新 rasterio +
-# manifold3d 实现进行回归对比。默认仍走 v1（生产路径），异常时自动回退到
-# v1，确保任何环境（含缺少 wheel 的 Windows arm64）都能继续工作。
+# S11 segmented-GLB preview. Default is the faster rasterio + manifold3d
+# backend, which is the measured preview-performance baseline. Missing native
+# deps or runtime v2 failures fall back to the long-standing Shapely v1 path
+# (RLE -> shapely_box -> unary_union -> trimesh.creation.extrude_polygon).
+# Operators can still force ``v1`` to pin the proven path.
+# 该开关用于选择 GLB 分色预览的 mesh kernel。默认走已经作为性能基准的
+# rasterio + manifold3d v2；缺依赖或运行失败时回退旧 Shapely v1。需要锁定
+# 旧路径时可显式设置 ``v1``。
 #
 # Allowed values (case-insensitive, leading/trailing whitespace stripped):
-#     - ``v1`` / ``shapely`` / ``""`` / unset  -> ``shapely_v1`` (default)
+#     - ``""`` / unset                         -> attempt v2, fallback to v1 (default)
+#     - ``v1`` / ``shapely``                   -> ``shapely_v1``
 #     - ``v2`` / ``rasterio_manifold3d``       -> attempt v2, fallback to v1
 #     - ``auto``                               -> attempt v2 if importable,
 #                                                 silently fallback otherwise
@@ -81,12 +82,12 @@ def _resolve_kernel_choice() -> str:
     返回调用方请求的 kernel 名称；真正的可用性检查由 dispatcher 完成。
     """
     raw = (os.environ.get(_KERNEL_ENV_VAR) or "").strip().lower()
-    if raw in {"", "v1", "shapely", "shapely_v1"}:
-        return "shapely_v1"
-    if raw in {"v2", "rasterio_manifold3d", "rasterio+manifold3d"}:
-        return "rasterio_manifold3d"
     if raw == "auto":
         return "auto"
+    if raw in {"v1", "shapely", "shapely_v1"}:
+        return "shapely_v1"
+    if raw in {"", "v2", "rasterio_manifold3d", "rasterio+manifold3d"}:
+        return "rasterio_manifold3d"
     _log.warning(
         "Unknown LUMINA_GLB_KERNEL value, falling back to shapely_v1",
         extra={
@@ -898,7 +899,9 @@ def _build_color_extruded_mesh(
 
     Public API: callers in ``generate_segmented_glb`` and
     ``_build_backing_plate_mesh`` keep using this name. Behaviour:
-        - ``LUMINA_GLB_KERNEL`` unset / ``v1`` / ``shapely``  -> v1 (default)
+        - ``LUMINA_GLB_KERNEL`` unset / ``v2``                -> v2, fallback to v1
+                                                                 with warning (default)
+        - ``LUMINA_GLB_KERNEL=v1`` / ``shapely``              -> v1
         - ``LUMINA_GLB_KERNEL=v2``                            -> v2, fallback to v1
         - ``LUMINA_GLB_KERNEL=auto``                          -> v2 if importable,
                                                                  else v1, no warning
@@ -1544,11 +1547,24 @@ def run(ctx: dict) -> dict:
         - outline_added (bool): 描边是否已添加
         - target_h (int): 图像高度（像素）
         - transform (np.ndarray): 4x4 变换矩阵
+        - preview_glb_path (str | None): 可复用的已生成预览 GLB 路径
 
     PipelineContext 输出键 / Output keys:
         - glb_path (str | None): GLB 预览文件路径
     """
     _t0 = time.perf_counter()
+
+    reusable_glb_path = ctx.get("preview_glb_path")
+    if isinstance(reusable_glb_path, str) and os.path.exists(reusable_glb_path):
+        _prog = ctx.get("progress")
+        if _prog is not None:
+            _prog(0.90, "复用 3D 预览中... | Reusing 3D preview...")
+        ctx["glb_path"] = reusable_glb_path
+        _elapsed = time.perf_counter() - _t0
+        _hifi_timings = ctx.setdefault("_hifi_timings", {})
+        _hifi_timings["glb_preview_s"] = _elapsed
+        _log.debug(f"glb_preview reused: {_elapsed:.3f}s")
+        return ctx
 
     matched_rgb = ctx["matched_rgb"]
     mask_solid = ctx["mask_solid"]

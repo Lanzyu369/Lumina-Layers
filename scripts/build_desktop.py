@@ -6,9 +6,10 @@ Usage:
 
 Steps:
     1. Build frontend (VITE_API_BASE_URL=http://127.0.0.1:8000/api)
-    2. Build backend (PyInstaller -> lumina-backend.exe)
-    3. Copy artifacts to electron/resources/
-    4. Build Electron installer (electron-builder -> NSIS Setup.exe)
+    2. Build backend native extensions
+    3. Build backend (PyInstaller -> lumina-backend.exe)
+    4. Copy artifacts to electron/resources/
+    5. Build Electron installer (electron-builder -> NSIS Setup.exe)
 """
 
 import argparse
@@ -67,11 +68,14 @@ def main():
     )
 
     # ── Step 2: Build backend ──
-    print("\n[2/4] Building backend (PyInstaller)...")
+    print("\n[2/5] Building backend native extensions...")
+    run(f"{sys.executable} scripts/build_native_extensions.py", cwd=str(ROOT))
+
+    print("\n[3/5] Building backend (PyInstaller)...")
     run("pyinstaller lumina_studio.spec", cwd=str(ROOT))
 
     # ── Step 3: Copy artifacts ──
-    print("\n[3/4] Copying artifacts to electron/resources/...")
+    print("\n[4/5] Copying artifacts to electron/resources/...")
 
     backend_exe = PYINSTALLER_DIST / "lumina-backend.exe"
     if not backend_exe.exists():
@@ -102,7 +106,7 @@ def main():
         print(f"  Removed stale seed: {target_seed_path}")
 
     # ── Step 4: Build Electron installer ──
-    print("\n[4/4] Building Electron installer (electron-builder)...")
+    print("\n[5/5] Building Electron installer (electron-builder)...")
     if not (ELECTRON_DIR / "node_modules").exists():
         print("  Installing Electron dependencies...")
         run("pnpm install", cwd=str(ELECTRON_DIR))

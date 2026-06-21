@@ -85,10 +85,13 @@ def _analysis_for_v2_test() -> SimpleNamespace:
     )
 
 
-def test_vector_glb_kernel_defaults_to_v1(monkeypatch) -> None:
+def test_vector_glb_kernel_defaults_to_v2(monkeypatch) -> None:
     monkeypatch.delenv("LUMINA_VECTOR_GLB_KERNEL", raising=False)
 
-    assert vector_glb_preview.resolve_vector_glb_kernel_choice() == "trimesh_v1"
+    assert (
+        vector_glb_preview.resolve_vector_glb_kernel_choice()
+        == "rasterio_manifold3d"
+    )
 
 
 def test_vector_glb_kernel_accepts_v2_aliases(monkeypatch) -> None:
@@ -277,23 +280,30 @@ def test_build_parts_from_analysis_creates_color_backing_and_outline_parts() -> 
     )
 
 
-def test_export_dispatch_defaults_to_v1(monkeypatch, tmp_path: Path) -> None:
+def test_export_dispatch_defaults_to_v2_scene_reuse(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
     scene = trimesh.Scene()
     scene.add_geometry(_box_mesh(), geom_name="Red")
     calls: list[str] = []
 
-    def fake_v1(parts, *, output_path):
+    def fake_scene_reuse(parts, *, output_path):
         assert parts[0].export_name == "color_ff0000"
-        calls.append("v1")
+        calls.append("scene_reuse")
         Path(output_path).write_bytes(b"glb")
         return output_path
 
-    def fail_v2(*_args, **_kwargs):
-        raise AssertionError("v2 should not run by default")
+    def fail_v1(*_args, **_kwargs):
+        raise AssertionError("v1 should not run by default")
 
     monkeypatch.delenv("LUMINA_VECTOR_GLB_KERNEL", raising=False)
-    monkeypatch.setattr(vector_glb_preview, "export_vector_glb_preview_v1", fake_v1)
-    monkeypatch.setattr(vector_glb_preview, "export_vector_glb_preview_v2", fail_v2)
+    monkeypatch.setattr(
+        vector_glb_preview,
+        "export_vector_glb_preview_v2_scene_reuse",
+        fake_scene_reuse,
+    )
+    monkeypatch.setattr(vector_glb_preview, "export_vector_glb_preview_v1", fail_v1)
 
     result = vector_glb_preview.export_vector_glb_preview(
         scene=scene,
@@ -307,7 +317,7 @@ def test_export_dispatch_defaults_to_v1(monkeypatch, tmp_path: Path) -> None:
     )
 
     assert result.endswith("preview.glb")
-    assert calls == ["v1"]
+    assert calls == ["scene_reuse"]
 
 
 def test_export_dispatch_v2_uses_scene_reuse_exporter(monkeypatch, tmp_path: Path) -> None:

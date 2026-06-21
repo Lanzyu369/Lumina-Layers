@@ -10,6 +10,7 @@ ENV PYTHONUNBUFFERED=1 \
     LUMINA_MATERIALS_DIR=/app/materials \
     LUMINA_LOG_DIR=/app/logs \
     LUMINA_FEEDBACK_DUMP_DIR=/app/feedback \
+    LUMINA_VECTOR_NATIVE_MESH=1 \
     OMP_NUM_THREADS=1 \
     OPENBLAS_NUM_THREADS=1 \
     MKL_NUM_THREADS=1 \
@@ -42,6 +43,7 @@ COPY frontend/package.json frontend/pnpm-lock.yaml /app/frontend/
 RUN cd frontend && pnpm install --frozen-lockfile
 
 COPY . /app/
+RUN python scripts/build_native_extensions.py
 RUN cd frontend && pnpm build
 
 ARG MATERIALS_SEED_URL=""

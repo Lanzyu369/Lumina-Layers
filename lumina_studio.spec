@@ -7,17 +7,23 @@ Usage:
 """
 
 import os
+import sysconfig
+from pathlib import Path
 
 block_cipher = None
+ROOT = Path.cwd()
+NATIVE_EXT_SUFFIX = sysconfig.get_config_var("EXT_SUFFIX") or (".pyd" if os.name == "nt" else ".so")
+NATIVE_EXT_PATH = ROOT / f"clipper2_batch{NATIVE_EXT_SUFFIX}"
+native_binaries = [(str(NATIVE_EXT_PATH), ".")] if NATIVE_EXT_PATH.exists() else []
 
 a = Analysis(
     ['api_server.py'],
     pathex=[],
-    binaries=[],
+    binaries=native_binaries,
     datas=[
         ('assets', 'assets'),  # Bundle entire assets/ folder (8-color stacks etc.)
     ],
-    hiddenimports=[],
+    hiddenimports=['clipper2_batch'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

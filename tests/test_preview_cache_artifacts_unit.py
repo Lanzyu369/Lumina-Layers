@@ -2,6 +2,7 @@ from pathlib import Path
 
 import numpy as np
 
+from api import preview_cache_artifacts
 from api.preview_cache_artifacts import (
     ARTIFACT_SCHEMA,
     PreviewCacheRevisionConflict,
@@ -78,6 +79,123 @@ def test_externalize_preview_cache_writes_arrays_and_manifest(
         assert field_ref["nbytes"] == cache[field_name].nbytes
         assert field_ref["sha256"]
         np.testing.assert_array_equal(np.load(field_path), cache[field_name])
+
+
+def test_externalize_preview_cache_reuses_artifact_for_same_array_object(
+    tmp_path: Path,
+) -> None:
+    store = SessionStore()
+    session_id = store.create("sid-artifact-alias")
+    cache = _make_cache()
+    cache["original_matched_rgb"] = cache["matched_rgb"]
+    cache["original_material_matrix"] = cache["material_matrix"]
+
+    ref = externalize_preview_cache(
+        session_id,
+        store,
+        cache,
+        root_dir=tmp_path,
+    )
+
+    assert ref["fields"]["original_matched_rgb"]["path"] == (
+        ref["fields"]["matched_rgb"]["path"]
+    )
+    assert ref["fields"]["original_material_matrix"]["path"] == (
+        ref["fields"]["material_matrix"]["path"]
+    )
+    assert len(store.get_temp_file_paths(session_id)) == 3
+
+    store.put(session_id, "preview_cache", ref)
+    session_data = store.get(session_id)
+    new_rgb = np.full((2, 2, 3), 21, dtype=np.uint8)
+    original_rgb_path = ref["fields"]["original_matched_rgb"]["path"]
+
+    with preview_cache_transaction(
+        session_id,
+        store,
+        session_data,
+        fields={"matched_rgb"},
+    ) as transaction:
+        transaction["matched_rgb"] = new_rgb
+        transaction.commit({"matched_rgb"})
+
+    stored = store.get(session_id)["preview_cache"]
+    assert stored["fields"]["matched_rgb"]["path"] != original_rgb_path
+    assert stored["fields"]["original_matched_rgb"]["path"] == original_rgb_path
+    np.testing.assert_array_equal(
+        np.load(stored["fields"]["matched_rgb"]["path"]),
+        new_rgb,
+    )
+    np.testing.assert_array_equal(
+        np.load(stored["fields"]["original_matched_rgb"]["path"]),
+        cache["matched_rgb"],
+    )
+
+
+def test_externalize_preview_cache_cleans_partial_artifacts_on_write_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    original_write = preview_cache_artifacts._write_new_array_field
+    write_count = 0
+
+    def fail_after_first_array(
+        field_name: str,
+        array: np.ndarray,
+        artifact_dir: Path,
+        *,
+        revision: int = 1,
+    ) -> tuple[str, dict]:
+        nonlocal write_count
+        write_count += 1
+        if write_count == 2:
+            raise OSError("simulated artifact write failure")
+        return original_write(
+            field_name,
+            array,
+            artifact_dir,
+            revision=revision,
+        )
+
+    monkeypatch.setattr(
+        preview_cache_artifacts,
+        "_write_new_array_field",
+        fail_after_first_array,
+    )
+
+    try:
+        preview_cache_artifacts.externalize_preview_cache_to_artifacts(
+            _make_cache(),
+            root_dir=tmp_path,
+        )
+    except OSError as exc:
+        assert "simulated artifact write failure" in str(exc)
+    else:
+        raise AssertionError("Expected artifact write failure")
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_externalize_preview_cache_cleans_artifact_when_ref_build_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    def fail_hash(array: np.ndarray) -> str:
+        raise RuntimeError("simulated artifact hash failure")
+
+    monkeypatch.setattr(preview_cache_artifacts, "_array_sha256", fail_hash)
+
+    try:
+        preview_cache_artifacts.externalize_preview_cache_to_artifacts(
+            _make_cache(),
+            root_dir=tmp_path,
+        )
+    except RuntimeError as exc:
+        assert "simulated artifact hash failure" in str(exc)
+    else:
+        raise AssertionError("Expected artifact hash failure")
+
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_save_preview_cache_fields_updates_only_dirty_field(

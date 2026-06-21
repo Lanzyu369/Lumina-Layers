@@ -442,6 +442,40 @@ class TestGenerateParameterCompleteness:
         assert submitted_params["free_color_set"] is None
         assert submitted_params["enable_base_layer_height_modifier"] is True
 
+    def test_vector_generate_forwards_parse_clip_cache_path(self) -> None:
+        sid: str = _create_session_with_preview_and_files(_test_store)
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {
+                "target_w": 120,
+                "target_h": 80,
+                "target_width_mm": 60.0,
+                "vector_parse_clip_cache_path": "/tmp/vector-parse-cache.pkl",
+            },
+        )
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": "/tmp/out.3mf",
+                "glb_path": None,
+                "status_msg": "OK",
+            },
+        )
+        payload = {
+            "session_id": sid,
+            "params": {
+                "lut_name": "test_lut",
+                "modeling_mode": "vector",
+            },
+        }
+
+        with patch("os.path.exists", return_value=True):
+            response = client.post("/api/convert/generate", json=payload)
+
+        assert response.status_code == 200, response.text
+        submitted_params = _mock_pool.submit.call_args.args[3]
+        assert submitted_params["vector_parse_clip_cache_path"] == "/tmp/vector-parse-cache.pkl"
+
     def test_color_card_generate_uses_source_palette(self) -> None:
         sid: str = _create_session_with_preview_and_files(_test_store)
         _test_store.put(
@@ -460,6 +494,7 @@ class TestGenerateParameterCompleteness:
                     {"hex": "#ff0000", "count": 100, "percentage": 50.0},
                     {"hex": "#00ff00", "count": 100, "percentage": 50.0},
                 ],
+                "vector_parse_clip_cache_path": "/tmp/old-vector-parse-cache.pkl",
             },
         )
         captured: dict[str, object] = {}
@@ -500,6 +535,7 @@ class TestGenerateParameterCompleteness:
         submitted_params = _mock_pool.submit.call_args.args[3]
         assert submitted_image_path == captured["svg_path"]
         assert submitted_params["modeling_mode"] == CoreModelingMode.VECTOR
+        assert submitted_params["vector_parse_clip_cache_path"] is None
 
     def test_color_card_endpoint_reads_artifact_metadata_without_hydrating(
         self,
@@ -825,6 +861,349 @@ class TestGenerateParameterCompleteness:
         assert response.status_code == 422, response.text
         assert "0.80 mm" in response.json()["detail"]
         _mock_pool.submit.assert_not_called()
+
+    def test_generate_reuses_artifact_preview_analysis_when_params_match(
+        self,
+        tmp_path,
+    ) -> None:
+        """Default raster generate should reuse matching preview analysis artifacts."""
+        _test_store.clear_all()
+        image_path = tmp_path / "input.png"
+        lut_path = tmp_path / "source.npy"
+        out_path = tmp_path / "out.3mf"
+        Image.fromarray(np.zeros((4, 4, 3), dtype=np.uint8)).save(image_path)
+        lut_path.write_bytes(b"lut")
+        out_path.write_bytes(b"3mf")
+
+        sid = _test_store.create()
+        cache_ref = externalize_preview_cache(
+            sid,
+            _test_store,
+            {
+                "target_w": 4,
+                "target_h": 4,
+                "target_width_mm": 40.0,
+                "color_mode": "4-Color (RYBW)",
+                "modeling_mode": "high-fidelity",
+                "color_layers": 5,
+                "layer_height_mm": 0.08,
+                "quantize_colors": 48,
+                "enable_cleanup": True,
+                "hue_weight": 0.0,
+                "chroma_gate": 15.0,
+                "use_lut_constrained": False,
+                "auto_dynamic_range": False,
+                "model_enable": False,
+                "model_only": False,
+                "model_threshold": None,
+                "model_margin": None,
+                "svg_pixels_per_mm": 10.0,
+                "material_source": "lut",
+                "matched_rgb": np.zeros((4, 4, 3), dtype=np.uint8),
+                "mask_solid": np.ones((4, 4), dtype=bool),
+                "material_matrix": np.zeros((4, 4, 5), dtype=np.uint8),
+            },
+            root_dir=tmp_path,
+        )
+        _test_store.put(sid, "preview_cache", cache_ref)
+        _test_store.put(sid, "image_path", str(image_path))
+        _test_store.put(sid, "lut_path", str(lut_path))
+        _test_store.put(sid, "color_mode", "4-Color (RYBW)")
+        _test_store.put(sid, "modeling_mode", "high-fidelity")
+        _test_store.put(sid, "color_layers", 5)
+        _test_store.put(sid, "layer_height_mm", 0.08)
+        _test_store.put(sid, "replacement_regions", [])
+        _test_store.put(sid, "free_color_set", set())
+        _test_store.put(sid, "material_source", "lut")
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": str(out_path),
+                "glb_path": None,
+                "status_msg": "OK",
+            },
+        )
+
+        response = client.post(
+            "/api/convert/generate",
+            json={
+                "session_id": sid,
+                "params": {
+                    "lut_name": "test_lut",
+                    "target_width_mm": 40.0,
+                    "color_mode": "4-Color (RYBW)",
+                    "modeling_mode": "high-fidelity",
+                    "color_layers": 5,
+                    "layer_height_mm": 0.08,
+                    "quantize_colors": 48,
+                    "enable_cleanup": True,
+                    "svg_pixels_per_mm": 10.0,
+                },
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        submitted_params = _mock_pool.submit.call_args.args[3]
+        assert submitted_params["reuse_preview_analysis"] is True
+        assert submitted_params["matched_rgb_path"] == cache_ref["fields"]["matched_rgb"]["path"]
+        assert submitted_params["mask_solid_path"] == cache_ref["fields"]["mask_solid"]["path"]
+        assert submitted_params["material_matrix_path"] == cache_ref["fields"]["material_matrix"]["path"]
+
+    def test_generate_forwards_ready_preview_glb_when_analysis_params_match(
+        self,
+        tmp_path,
+    ) -> None:
+        """Default raster generate should reuse the already-built preview GLB."""
+        _test_store.clear_all()
+        _test_registry.clear_all()
+        image_path = tmp_path / "input.png"
+        lut_path = tmp_path / "source.npy"
+        out_path = tmp_path / "out.3mf"
+        preview_glb_path = tmp_path / "preview.glb"
+        Image.fromarray(np.zeros((4, 4, 3), dtype=np.uint8)).save(image_path)
+        lut_path.write_bytes(b"lut")
+        out_path.write_bytes(b"3mf")
+        preview_glb_path.write_bytes(b"glb")
+
+        sid = _test_store.create()
+        preview_glb_id = _test_registry.register_path(sid, str(preview_glb_path))
+        cache_ref = externalize_preview_cache(
+            sid,
+            _test_store,
+            {
+                "target_w": 4,
+                "target_h": 4,
+                "target_width_mm": 40.0,
+                "color_mode": "4-Color (RYBW)",
+                "modeling_mode": "high-fidelity",
+                "color_layers": 5,
+                "layer_height_mm": 0.08,
+                "quantize_colors": 48,
+                "enable_cleanup": True,
+                "hue_weight": 0.0,
+                "chroma_gate": 15.0,
+                "use_lut_constrained": False,
+                "auto_dynamic_range": False,
+                "model_enable": False,
+                "model_only": False,
+                "model_threshold": None,
+                "model_margin": None,
+                "svg_pixels_per_mm": 10.0,
+                "material_source": "lut",
+                "high_precision_3d_preview": False,
+                "glb_url": f"/api/files/{preview_glb_id}",
+                "matched_rgb": np.zeros((4, 4, 3), dtype=np.uint8),
+                "mask_solid": np.ones((4, 4), dtype=bool),
+                "material_matrix": np.zeros((4, 4, 5), dtype=np.uint8),
+            },
+            root_dir=tmp_path,
+        )
+        _test_store.put(sid, "preview_cache", cache_ref)
+        _test_store.put(sid, "image_path", str(image_path))
+        _test_store.put(sid, "lut_path", str(lut_path))
+        _test_store.put(sid, "color_mode", "4-Color (RYBW)")
+        _test_store.put(sid, "modeling_mode", "high-fidelity")
+        _test_store.put(sid, "color_layers", 5)
+        _test_store.put(sid, "layer_height_mm", 0.08)
+        _test_store.put(sid, "replacement_regions", [])
+        _test_store.put(sid, "free_color_set", set())
+        _test_store.put(sid, "material_source", "lut")
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": str(out_path),
+                "glb_path": None,
+                "status_msg": "OK",
+            },
+        )
+
+        response = client.post(
+            "/api/convert/generate",
+            json={
+                "session_id": sid,
+                "params": {
+                    "lut_name": "test_lut",
+                    "target_width_mm": 40.0,
+                    "color_mode": "4-Color (RYBW)",
+                    "modeling_mode": "high-fidelity",
+                    "color_layers": 5,
+                    "layer_height_mm": 0.08,
+                    "quantize_colors": 48,
+                    "enable_cleanup": True,
+                    "svg_pixels_per_mm": 10.0,
+                    "high_precision_3d_preview": False,
+                },
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        submitted_params = _mock_pool.submit.call_args.args[3]
+        assert submitted_params["reuse_preview_analysis"] is True
+        assert submitted_params["preview_glb_path"] == str(preview_glb_path)
+
+    def test_generate_reuses_preview_analysis_when_optional_layer_defaults_match(
+        self,
+        tmp_path,
+    ) -> None:
+        """Omitted layer settings should match preview-derived LUT defaults."""
+        _test_store.clear_all()
+        image_path = tmp_path / "input.png"
+        lut_path = tmp_path / "source.npy"
+        out_path = tmp_path / "out.3mf"
+        Image.fromarray(np.zeros((4, 4, 3), dtype=np.uint8)).save(image_path)
+        lut_path.write_bytes(b"lut")
+        out_path.write_bytes(b"3mf")
+
+        sid = _test_store.create()
+        cache_ref = externalize_preview_cache(
+            sid,
+            _test_store,
+            {
+                "target_w": 4,
+                "target_h": 4,
+                "target_width_mm": 40.0,
+                "color_mode": "4-Color (RYBW)",
+                "modeling_mode": "high-fidelity",
+                "color_layers": 5,
+                "layer_height_mm": 0.08,
+                "quantize_colors": 48,
+                "enable_cleanup": True,
+                "hue_weight": 0.0,
+                "chroma_gate": 15.0,
+                "use_lut_constrained": False,
+                "auto_dynamic_range": False,
+                "model_enable": False,
+                "model_only": False,
+                "model_threshold": None,
+                "model_margin": None,
+                "svg_pixels_per_mm": 10.0,
+                "material_source": "lut",
+                "matched_rgb": np.zeros((4, 4, 3), dtype=np.uint8),
+                "mask_solid": np.ones((4, 4), dtype=bool),
+                "material_matrix": np.zeros((4, 4, 5), dtype=np.uint8),
+            },
+            root_dir=tmp_path,
+        )
+        _test_store.put(sid, "preview_cache", cache_ref)
+        _test_store.put(sid, "image_path", str(image_path))
+        _test_store.put(sid, "lut_path", str(lut_path))
+        _test_store.put(sid, "color_mode", "4-Color (RYBW)")
+        _test_store.put(sid, "modeling_mode", "high-fidelity")
+        _test_store.put(sid, "color_layers", None)
+        _test_store.put(sid, "layer_height_mm", None)
+        _test_store.put(sid, "replacement_regions", [])
+        _test_store.put(sid, "free_color_set", set())
+        _test_store.put(sid, "material_source", "lut")
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": str(out_path),
+                "glb_path": None,
+                "status_msg": "OK",
+            },
+        )
+
+        response = client.post(
+            "/api/convert/generate",
+            json={
+                "session_id": sid,
+                "params": {
+                    "lut_name": "test_lut",
+                    "target_width_mm": 40.0,
+                    "color_mode": "4-Color (RYBW)",
+                    "modeling_mode": "high-fidelity",
+                    "quantize_colors": 48,
+                    "enable_cleanup": True,
+                    "svg_pixels_per_mm": 10.0,
+                },
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        submitted_params = _mock_pool.submit.call_args.args[3]
+        assert submitted_params["reuse_preview_analysis"] is True
+        assert submitted_params["matched_rgb_path"] == cache_ref["fields"]["matched_rgb"]["path"]
+        assert submitted_params["mask_solid_path"] == cache_ref["fields"]["mask_solid"]["path"]
+        assert submitted_params["material_matrix_path"] == cache_ref["fields"]["material_matrix"]["path"]
+
+    def test_generate_does_not_reuse_preview_analysis_when_params_mismatch(
+        self,
+        tmp_path,
+    ) -> None:
+        """A mismatched preview-analysis parameter must fall back to full S02."""
+        _test_store.clear_all()
+        image_path = tmp_path / "input.png"
+        lut_path = tmp_path / "source.npy"
+        out_path = tmp_path / "out.3mf"
+        Image.fromarray(np.zeros((4, 4, 3), dtype=np.uint8)).save(image_path)
+        lut_path.write_bytes(b"lut")
+        out_path.write_bytes(b"3mf")
+
+        sid = _test_store.create()
+        cache_ref = externalize_preview_cache(
+            sid,
+            _test_store,
+            {
+                "target_w": 4,
+                "target_h": 4,
+                "target_width_mm": 40.0,
+                "color_mode": "4-Color (RYBW)",
+                "modeling_mode": "high-fidelity",
+                "color_layers": 5,
+                "layer_height_mm": 0.08,
+                "quantize_colors": 48,
+                "enable_cleanup": False,
+                "hue_weight": 0.0,
+                "chroma_gate": 15.0,
+                "use_lut_constrained": False,
+                "auto_dynamic_range": False,
+                "model_enable": False,
+                "model_only": False,
+                "model_threshold": None,
+                "model_margin": None,
+                "svg_pixels_per_mm": 10.0,
+                "material_source": "lut",
+                "matched_rgb": np.zeros((4, 4, 3), dtype=np.uint8),
+                "mask_solid": np.ones((4, 4), dtype=bool),
+                "material_matrix": np.zeros((4, 4, 5), dtype=np.uint8),
+            },
+            root_dir=tmp_path,
+        )
+        _test_store.put(sid, "preview_cache", cache_ref)
+        _test_store.put(sid, "image_path", str(image_path))
+        _test_store.put(sid, "lut_path", str(lut_path))
+        _test_store.put(sid, "replacement_regions", [])
+        _test_store.put(sid, "free_color_set", set())
+        _test_store.put(sid, "material_source", "lut")
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": str(out_path),
+                "glb_path": None,
+                "status_msg": "OK",
+            },
+        )
+
+        response = client.post(
+            "/api/convert/generate",
+            json={
+                "session_id": sid,
+                "params": {
+                    "lut_name": "test_lut",
+                    "target_width_mm": 40.0,
+                    "color_mode": "4-Color (RYBW)",
+                    "modeling_mode": "high-fidelity",
+                    "color_layers": 5,
+                    "layer_height_mm": 0.08,
+                    "quantize_colors": 48,
+                    "enable_cleanup": True,
+                    "svg_pixels_per_mm": 10.0,
+                },
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        submitted_params = _mock_pool.submit.call_args.args[3]
+        assert submitted_params["reuse_preview_analysis"] is False
+        assert submitted_params["matched_rgb_path"] is None
+        assert submitted_params["mask_solid_path"] is None
+        assert submitted_params["material_matrix_path"] is None
 
     def test_generate_heightmap_mode_rejects_missing_session_heightmap(self) -> None:
         sid: str = _create_session_with_preview_and_files(_test_store)

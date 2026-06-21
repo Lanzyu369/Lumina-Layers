@@ -8,6 +8,8 @@ processing_ops 子模块的单元测试。
 _需求: 10.2, 10.6_
 """
 
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
@@ -202,6 +204,31 @@ class TestKmeansQuantizer:
         unique = np.unique(result.reshape(-1, 3), axis=0)
         assert len(unique) <= rgb.shape[0] * rgb.shape[1]
 
+    def test_unique_colors_within_budget_skip_opencv_kmeans(self, monkeypatch):
+        """Images already within the palette budget should pass through exactly."""
+        from core.pipeline.processing_ops import kmeans_quantizer
+
+        colors = np.array(
+            [
+                [255, 0, 0],
+                [0, 255, 0],
+                [0, 0, 255],
+                [255, 255, 0],
+            ],
+            dtype=np.uint8,
+        )
+        idx = np.indices((32, 32)).sum(axis=0) % len(colors)
+        rgb = colors[idx]
+
+        def _fail_kmeans(*_args, **_kwargs):
+            raise AssertionError("cv2.kmeans should be skipped")
+
+        monkeypatch.setattr(kmeans_quantizer.cv2, "kmeans", _fail_kmeans)
+
+        result = kmeans_quantizer.quantize_colors(rgb, n_colors=8)
+
+        np.testing.assert_array_equal(result, rgb)
+
     def test_all_black_image(self):
         """全黑图像量化后仍为全黑。"""
         from core.pipeline.processing_ops.kmeans_quantizer import quantize_colors
@@ -221,6 +248,56 @@ class TestKmeansQuantizer:
         unique = np.unique(result.reshape(-1, 3), axis=0)
         assert len(unique) == 1
         np.testing.assert_array_equal(unique[0], [255, 255, 255])
+
+
+class TestHighFidelityImageProcessing:
+    """LuminaImageProcessor high-fidelity hot-path tests."""
+
+    def test_unique_color_extraction_avoids_axis_row_unique(self, monkeypatch):
+        """High-fidelity unique extraction should use packed RGB, not axis=0 rows."""
+        from core import image_processing
+        from core.image_processing import LuminaImageProcessor
+
+        original_unique = image_processing.np.unique
+
+        def unique_spy(*args, **kwargs):
+            if kwargs.get("axis") == 0:
+                raise AssertionError("row-wise np.unique is too slow for high-fidelity colors")
+            return original_unique(*args, **kwargs)
+
+        monkeypatch.setattr(image_processing.np, "unique", unique_spy)
+        monkeypatch.setattr(image_processing, "apply_bilateral_filter", lambda rgb, _sigma: rgb)
+        monkeypatch.setattr(image_processing, "apply_median_filter", lambda rgb, _kernel: rgb)
+        monkeypatch.setattr(image_processing, "kmeans_quantize", lambda rgb, *_args, **_kwargs: rgb.copy())
+
+        colors = np.array(
+            [
+                [255, 0, 0],
+                [0, 0, 255],
+                [255, 255, 0],
+            ],
+            dtype=np.uint8,
+        )
+        idx = np.indices((12, 12)).sum(axis=0) % len(colors)
+        rgb = colors[idx]
+        processor = SimpleNamespace(use_lut_constrained=False, lut_fingerprint=None, _last_unique_colors=0)
+
+        quantized, unique_colors, processed = LuminaImageProcessor._prepare_high_fidelity_images(
+            processor,
+            rgb,
+            8,
+            0,
+            10,
+        )
+
+        np.testing.assert_array_equal(quantized, rgb)
+        np.testing.assert_array_equal(processed, rgb)
+        assert processor._last_unique_colors == 3
+        assert {tuple(color) for color in unique_colors.tolist()} == {
+            (255, 0, 0),
+            (0, 0, 255),
+            (255, 255, 0),
+        }
 
 
 # ===========================================================================

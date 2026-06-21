@@ -10,6 +10,7 @@ Extracted from LuminaImageProcessor._load_lut.
 
 from api.structured_logging import get_logger
 from dataclasses import replace
+from functools import lru_cache
 import hashlib
 import os
 import numpy as np
@@ -172,6 +173,116 @@ def _maybe_use_native_bundle_exact_lookup(
 
 
 def load_lut(
+    lut_path: str,
+    color_mode: str,
+    *,
+    color_layers: int | None = None,
+    layer_height_mm: float | None = None,
+    model_enable: bool = False,
+    model_only: bool = False,
+    model_threshold: float | None = None,
+    model_margin: float | None = None,
+) -> dict:
+    """Load LUT runtime data, reusing parsed data while the file is unchanged."""
+
+    cache_key = _lut_runtime_cache_key(
+        lut_path,
+        color_mode,
+        color_layers=color_layers,
+        layer_height_mm=layer_height_mm,
+        model_enable=model_enable,
+        model_only=model_only,
+        model_threshold=model_threshold,
+        model_margin=model_margin,
+    )
+    if cache_key is None:
+        return _load_lut_uncached(
+            lut_path,
+            color_mode,
+            color_layers=color_layers,
+            layer_height_mm=layer_height_mm,
+            model_enable=model_enable,
+            model_only=model_only,
+            model_threshold=model_threshold,
+            model_margin=model_margin,
+        )
+    return dict(_load_lut_cached(*cache_key))
+
+
+def clear_lut_runtime_cache() -> None:
+    """Clear the in-process LUT runtime cache."""
+
+    _load_lut_cached.cache_clear()
+
+
+def _lut_runtime_cache_key(
+    lut_path: str,
+    color_mode: str,
+    *,
+    color_layers: int | None,
+    layer_height_mm: float | None,
+    model_enable: bool,
+    model_only: bool,
+    model_threshold: float | None,
+    model_margin: float | None,
+) -> tuple | None:
+    try:
+        path_abs = os.path.abspath(lut_path)
+        stat = os.stat(path_abs)
+    except (TypeError, OSError, ValueError):
+        return None
+
+    companion_signature: tuple[bool, int | None, int | None] = (False, None, None)
+    if not path_abs.lower().endswith(".npz") and "." in os.path.basename(path_abs):
+        companion_path = path_abs.rsplit(".", 1)[0] + ".npz"
+        try:
+            companion_stat = os.stat(companion_path)
+            companion_signature = (True, int(companion_stat.st_mtime_ns), int(companion_stat.st_size))
+        except OSError:
+            companion_signature = (False, None, None)
+
+    return (
+        path_abs,
+        int(stat.st_mtime_ns),
+        int(stat.st_size),
+        companion_signature,
+        str(color_mode),
+        int(color_layers) if color_layers is not None else None,
+        float(layer_height_mm) if layer_height_mm is not None else None,
+        bool(model_enable),
+        bool(model_only),
+        float(model_threshold) if model_threshold is not None else None,
+        float(model_margin) if model_margin is not None else None,
+    )
+
+
+@lru_cache(maxsize=64)
+def _load_lut_cached(
+    lut_path: str,
+    _mtime_ns: int,
+    _size: int,
+    _companion_signature: tuple[bool, int | None, int | None],
+    color_mode: str,
+    color_layers: int | None,
+    layer_height_mm: float | None,
+    model_enable: bool,
+    model_only: bool,
+    model_threshold: float | None,
+    model_margin: float | None,
+) -> dict:
+    return _load_lut_uncached(
+        lut_path,
+        color_mode,
+        color_layers=color_layers,
+        layer_height_mm=layer_height_mm,
+        model_enable=model_enable,
+        model_only=model_only,
+        model_threshold=model_threshold,
+        model_margin=model_margin,
+    )
+
+
+def _load_lut_uncached(
     lut_path: str,
     color_mode: str,
     *,

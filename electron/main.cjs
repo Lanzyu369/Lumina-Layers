@@ -348,6 +348,7 @@ function findNode() {
 function backendRuntimeEnv() {
   const env = {
     LUMINA_MATERIALS_DIR: path.join(app.getPath("userData"), "materials"),
+    LUMINA_VECTOR_NATIVE_MESH: "1",
   };
   if (fs.existsSync(MATERIALS_SEED_RESOURCE)) {
     env.LUMINA_MATERIALS_SEED_PATH = MATERIALS_SEED_RESOURCE;

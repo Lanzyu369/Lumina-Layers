@@ -13,7 +13,7 @@ import time
 import numpy as np
 
 from api.structured_logging import get_logger
-from config import SVG_PIXELS_PER_MM_DEFAULT
+from config import SVG_PIXELS_PER_MM_DEFAULT, ModelingMode
 from core.image_processing import LuminaImageProcessor
 
 _log = get_logger(__name__)
@@ -23,6 +23,53 @@ try:
     from utils.lut_manager import LUTManager
 except ImportError:
     LUTManager = None
+
+
+def _normalize_modeling_mode(value):
+    if isinstance(value, ModelingMode):
+        return value
+    try:
+        return ModelingMode(value)
+    except (TypeError, ValueError):
+        return value
+
+
+def _load_reused_preview_analysis(ctx: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    """Load preview analysis arrays when generate can safely skip processing."""
+
+    if not ctx.get("reuse_preview_analysis"):
+        return None
+    matched_rgb_path = ctx.get("matched_rgb_path")
+    mask_solid_path = ctx.get("mask_solid_path")
+    material_matrix_path = ctx.get("material_matrix_path")
+    if not (matched_rgb_path and mask_solid_path and material_matrix_path):
+        return None
+    try:
+        matched_rgb = np.load(matched_rgb_path, allow_pickle=False)
+        mask_solid = np.load(mask_solid_path, allow_pickle=False)
+        material_matrix = np.load(material_matrix_path, allow_pickle=False)
+    except (OSError, ValueError, TypeError) as exc:
+        _log.warning(
+            "Preview analysis reuse failed; falling back to image processing",
+            extra={
+                "event": "s02_preview_analysis_reuse_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+        return None
+
+    if matched_rgb.ndim != 3 or matched_rgb.shape[-1] != 3:
+        return None
+    if mask_solid.ndim != 2 or material_matrix.ndim != 3:
+        return None
+    if matched_rgb.shape[:2] != mask_solid.shape or material_matrix.shape[:2] != mask_solid.shape:
+        return None
+    if matched_rgb.dtype != np.uint8:
+        matched_rgb = matched_rgb.astype(np.uint8, copy=False)
+    if mask_solid.dtype != bool:
+        mask_solid = mask_solid.astype(bool, copy=False)
+    return matched_rgb, mask_solid, material_matrix
 
 
 def run(ctx: dict) -> dict:
@@ -102,6 +149,63 @@ def run(ctx: dict) -> dict:
             )
 
     ctx['lut_metadata'] = lut_metadata
+
+    _reuse_t0 = time.perf_counter()
+    reused_analysis = _load_reused_preview_analysis(ctx)
+    if reused_analysis is not None:
+        matched_rgb, mask_solid, material_matrix = reused_analysis
+        target_h, target_w = mask_solid.shape
+        pixel_scale = float(target_width_mm) / float(target_w) if target_w > 0 else 0.0
+        modeling_mode = _normalize_modeling_mode(modeling_mode)
+        try:
+            processor = LuminaImageProcessor(
+                actual_lut_path,
+                color_mode,
+                hue_weight=hue_weight,
+                chroma_gate=chroma_gate,
+                color_layers=color_layers,
+                layer_height_mm=layer_height_mm,
+                model_enable=model_enable,
+                model_only=model_only,
+                model_threshold=model_threshold,
+                model_margin=model_margin,
+                use_lut_constrained=use_lut_constrained,
+                auto_dynamic_range=auto_dynamic_range,
+                svg_pixels_per_mm=svg_pixels_per_mm,
+            )
+            processor.enable_cleanup = enable_cleanup
+        except Exception as e:
+            ctx['error'] = f"[ERROR] Image processing failed: {e}"
+            return ctx
+
+        ctx['matched_rgb'] = matched_rgb
+        ctx['material_matrix'] = material_matrix
+        ctx['mask_solid'] = mask_solid
+        ctx['target_w'] = int(target_w)
+        ctx['target_h'] = int(target_h)
+        ctx['pixel_scale'] = pixel_scale
+        ctx['mode_info'] = {'mode': modeling_mode}
+        ctx['debug_data'] = None
+        ctx['processor'] = processor
+        ctx['lut_match_info'] = getattr(processor, 'last_match_info', None)
+        _elapsed = time.perf_counter() - _reuse_t0
+        ctx.setdefault('_hifi_timings', {})['image_proc_s'] = _elapsed
+        _log.debug(
+            "preview analysis reused: %.3fs, %sx%spx, scale=%smm/px",
+            _elapsed,
+            target_w,
+            target_h,
+            pixel_scale,
+            extra={
+                "event": "s02_preview_analysis_reused",
+                "duration_ms": round(_elapsed * 1000, 3),
+                "width": int(target_w),
+                "height": int(target_h),
+                "pixel_scale": pixel_scale,
+                "mode": str(getattr(modeling_mode, "value", modeling_mode)),
+            },
+        )
+        return ctx
 
     # Create processor and process image
     _hifi_t0 = time.perf_counter()
