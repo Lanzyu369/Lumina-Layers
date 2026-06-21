@@ -271,11 +271,28 @@ async def generate_color_card(
     registration_complete = False
     glb_registered = False
     try:
-        download_id = registry.register_path(
-            str(uuid.uuid4()),
-            threemf_path,
-            ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
-        )
+        try:
+            download_id = registry.register_path(
+                str(uuid.uuid4()),
+                threemf_path,
+                ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
+            )
+        except ROUTER_HANDLED_ERRORS as exc:
+            log.exception(
+                "Color card 3MF download registration failed",
+                extra={
+                    "event": "color_card_download_registration_failed",
+                    "session_id": body.session_id,
+                    "artifact_role": "threemf_download",
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                    "path": threemf_path,
+                },
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=_COLOR_CARD_GENERATION_FAILED_DETAIL,
+            ) from exc
 
         if glb_path and os.path.exists(glb_path):
             try:

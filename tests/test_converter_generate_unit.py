@@ -32,8 +32,10 @@ from api.app import app
 from api.dependencies import get_file_registry, get_session_store, get_worker_pool
 from api.file_registry import FileRegistry
 from api.preview_cache_artifacts import externalize_preview_cache
+from api.routers.converter.color_card import _COLOR_CARD_GENERATION_FAILED_DETAIL
 from api.routers.converter.generate import _generate_large_format_raster
 from api.routers.converter.generate import _generate_large_format_svg_native
+from api.routers.converter.generate import LARGE_FORMAT_GENERATION_FAILED_DETAIL
 from api.routers.converter.generate import MODEL_GENERATION_FAILED_DETAIL
 from api.routers.converter.generate import _recover_virtual_materials_from_preview_cache
 from api.routers.converter.generate import _resolve_recipe_overrides
@@ -1087,6 +1089,8 @@ class TestGenerateRegistryFailureCleanup:
             )
 
             assert response.status_code == 500
+            assert response.json()["detail"] == MODEL_GENERATION_FAILED_DETAIL
+            assert "registry unavailable" not in response.text
             assert not os.path.exists(threemf_path)
             assert not os.path.exists(glb_path)
             assert os.path.exists(image_path)
@@ -1149,6 +1153,8 @@ class TestGenerateRegistryFailureCleanup:
                 )
 
             assert response.status_code == 500
+            assert response.json()["detail"] == _COLOR_CARD_GENERATION_FAILED_DETAIL
+            assert "registry unavailable" not in response.text
             assert not threemf_path.exists()
             assert not glb_path.exists()
             assert lut_path.exists()
@@ -1350,7 +1356,7 @@ class TestGenerateRegistryFailureCleanup:
             lut_name="test_lut",
         )
 
-        with pytest.raises(RuntimeError, match="registry unavailable"):
+        with pytest.raises(HTTPException) as exc_info:
             await _generate_large_format_svg_native(
                 image_path=str(image_path),
                 lut_path=str(lut_path),
@@ -1371,7 +1377,63 @@ class TestGenerateRegistryFailureCleanup:
                 warnings=[],
             )
 
+        assert exc_info.value.status_code == 500
+        assert exc_info.value.detail == LARGE_FORMAT_GENERATION_FAILED_DETAIL
+        assert "registry unavailable" not in str(exc_info.value.detail)
         assert not zip_path.exists()
+
+    @pytest.mark.asyncio
+    async def test_large_format_raster_registry_failure_cleans_unregistered_zip(
+        self,
+        tmp_path,
+    ) -> None:
+        image_path = tmp_path / "source.png"
+        lut_path = tmp_path / "source.npy"
+        Image.fromarray(np.zeros((20, 20, 3), dtype=np.uint8)).save(image_path)
+        lut_path.write_bytes(b"lut")
+
+        request = LargeFormatConvertGenerateRequest(
+            total_width_mm=20.0,
+            total_height_mm=20.0,
+            tile_width_mm=20.0,
+            tile_height_mm=20.0,
+            lut_name="test_lut",
+            modeling_mode=ModelingMode.HIGH_FIDELITY,
+        )
+
+        async def _write_tile(*_args, **_kwargs):
+            tile_path = tmp_path / "tile.3mf"
+            tile_path.write_bytes(b"3mf")
+            return {"threemf_path": str(tile_path), "status_msg": "OK"}
+
+        mock_pool = MagicMock(spec=WorkerPoolManager)
+        mock_pool.submit = AsyncMock(side_effect=_write_tile)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await _generate_large_format_raster(
+                image_path=str(image_path),
+                lut_path=str(lut_path),
+                source_basename="source",
+                recipe_overrides=None,
+                recipe_override_masks_path=None,
+                material_matrix_path=None,
+                total_width_mm=20.0,
+                total_height_mm=20.0,
+                tile_width_mm=20.0,
+                tile_height_mm=20.0,
+                request=request,
+                session_data={},
+                sid="session-1",
+                store=_test_store,
+                registry=_FailingRegistry(),
+                pool=mock_pool,
+                warnings=[],
+            )
+
+        assert exc_info.value.status_code == 500
+        assert exc_info.value.detail == LARGE_FORMAT_GENERATION_FAILED_DETAIL
+        assert "registry unavailable" not in str(exc_info.value.detail)
+        assert not (tmp_path / "tile.3mf").exists()
 
 
 class TestLargeFormatFridgeMagnetValidation:

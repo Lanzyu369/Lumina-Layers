@@ -5642,6 +5642,11 @@ def test_gradient_card_material_export_cleans_archive_when_registry_fails(
     )
 
     assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Gradient card material export file registration failed. "
+        "Check the server log for details."
+    )
+    assert "registry backend unavailable" not in response.text
     assert registry.archive_path == str(exported_zip)
     assert not exported_zip.exists()
 
@@ -5691,6 +5696,11 @@ def test_generate_material_swatch_cleans_output_when_registry_fails(
     )
 
     assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Material swatch file registration failed. "
+        "Check the server log for details."
+    )
+    assert "registry backend unavailable" not in response.text
     assert registry.generated_path == str(swatch_path)
     assert not swatch_path.exists()
 
@@ -5816,6 +5826,11 @@ def test_generate_material_swatch_rolls_back_download_when_preview_registration_
     )
 
     assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Material swatch file registration failed. "
+        "Check the server log for details."
+    )
+    assert "registry byte storage unavailable" not in response.text
     assert registry.path_file_id is not None
     assert registry.get_entry(registry.path_file_id) is None
     assert registry.resolve(registry.path_file_id) is None
