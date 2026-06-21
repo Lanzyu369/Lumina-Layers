@@ -5,9 +5,11 @@ import {
   colorcheckerRelease,
   extractGradientCardStageA,
   rotateExtractorImage,
+  saveGradientCardMaterial,
 } from "../api/extractor";
 import { uploadImagePreview } from "../api/system";
 import apiClient from "../api/client";
+import { tRuntime } from "../i18n/runtime";
 import { useSingleStageStore } from "../stores/singleStageStore";
 import { useSettingsStore } from "../stores/settingsStore";
 
@@ -31,6 +33,7 @@ const mockedExtractGradientCardStageA = vi.mocked(extractGradientCardStageA);
 const mockedColorcheckerConfirm = vi.mocked(colorcheckerConfirm);
 const mockedColorcheckerRelease = vi.mocked(colorcheckerRelease);
 const mockedRotateExtractorImage = vi.mocked(rotateExtractorImage);
+const mockedSaveGradientCardMaterial = vi.mocked(saveGradientCardMaterial);
 
 async function buildNormalizedApiError(detail: string, status = 500): Promise<unknown> {
   const previousLanguage = useSettingsStore.getState().language;
@@ -80,6 +83,16 @@ const triggerImageLoad = (image: MockImageHandle | null) => {
 
 const triggerImageError = (image: MockImageHandle | null) => {
   image?.onerror?.();
+};
+
+const expectNoFragments = (
+  value: string | null,
+  fragments: readonly string[],
+) => {
+  expect(value).toBeTruthy();
+  for (const fragment of fragments) {
+    expect(value).not.toContain(fragment);
+  }
 };
 
 describe("useSingleStageStore ColorChecker flow", () => {
@@ -622,6 +635,136 @@ describe("useSingleStageStore ColorChecker flow", () => {
     expect(useSingleStageStore.getState().extractError).toBe(
       "The server hit an internal error. Check the log for the request ID.",
     );
+  });
+
+  it("uses the extraction fallback for unknown gradient card details", async () => {
+    const previousLanguage = useSettingsStore.getState().language;
+    useSettingsStore.setState({ language: "en" });
+    const technicalDetail =
+      "image_source='restored' requires both white_colorchecker_file_id and black_colorchecker_file_id";
+    const normalizedError = await buildNormalizedApiError(technicalDetail, 422);
+    mockedExtractGradientCardStageA.mockRejectedValueOnce(normalizedError);
+
+    useSingleStageStore.setState({
+      datasetFile: new File(["zip"], "kit.zip", { type: "application/zip" }),
+      whiteImageFile: buildPngFile("white.png"),
+      blackImageFile: buildPngFile("black.png"),
+      whiteCornerPoints: [
+        [0, 0],
+        [100, 0],
+        [100, 100],
+        [0, 100],
+      ],
+      blackCornerPoints: [
+        [0, 0],
+        [100, 0],
+        [100, 100],
+        [0, 100],
+      ],
+      whiteImageNaturalWidth: 100,
+      whiteImageNaturalHeight: 100,
+      blackImageNaturalWidth: 100,
+      blackImageNaturalHeight: 100,
+    });
+
+    try {
+      await useSingleStageStore.getState().submitExtract();
+
+      const error = useSingleStageStore.getState().extractError;
+      expect(error).toBe(tRuntime("mat_gradient_extract_failed_error"));
+      expectNoFragments(error, [
+        "image_source",
+        "restored",
+        "white_colorchecker_file_id",
+        "black_colorchecker_file_id",
+      ]);
+    } finally {
+      useSettingsStore.setState({ language: previousLanguage });
+    }
+  });
+
+  it("uses rotation fallbacks for unknown gradient card details", async () => {
+    const previousLanguage = useSettingsStore.getState().language;
+    useSettingsStore.setState({ language: "en" });
+    const technicalDetail =
+      "Unsupported image_source value 'debug' while rotating gradient card";
+    const whiteError = await buildNormalizedApiError(technicalDetail, 422);
+    const blackError = await buildNormalizedApiError(technicalDetail, 422);
+
+    try {
+      mockedRotateExtractorImage.mockRejectedValueOnce(whiteError);
+      useSingleStageStore.setState({
+        whiteImageFile: buildPngFile("white.png"),
+      });
+      await useSingleStageStore.getState().rotateWhiteImage("cw");
+      let error = useSingleStageStore.getState().extractError;
+      expect(error).toBe(tRuntime("mat_gradient_rotate_white_failed"));
+      expectNoFragments(error, ["image_source", "debug"]);
+
+      mockedRotateExtractorImage.mockRejectedValueOnce(blackError);
+      useSingleStageStore.setState({
+        blackImageFile: buildPngFile("black.png"),
+        extractError: null,
+      });
+      await useSingleStageStore.getState().rotateBlackImage("ccw");
+      error = useSingleStageStore.getState().extractError;
+      expect(error).toBe(tRuntime("mat_gradient_rotate_black_failed"));
+      expectNoFragments(error, ["image_source", "debug"]);
+    } finally {
+      useSettingsStore.setState({ language: previousLanguage });
+    }
+  });
+
+  it("uses the save fallback for unknown gradient card details", async () => {
+    const previousLanguage = useSettingsStore.getState().language;
+    useSettingsStore.setState({ language: "en" });
+    const technicalDetail =
+      "Invalid save_mode: 'debug', expected 'merge' or 'override'";
+    const normalizedError = await buildNormalizedApiError(technicalDetail, 422);
+    mockedSaveGradientCardMaterial.mockRejectedValueOnce(normalizedError);
+
+    useSingleStageStore.setState({
+      sessionId: "stage-a-session",
+      materialName: "PLA Basic",
+    });
+
+    try {
+      await useSingleStageStore.getState().submitSave("merge");
+
+      const error = useSingleStageStore.getState().saveError;
+      expect(error).toBe(tRuntime("mat_gradient_save_failed_error"));
+      expectNoFragments(error, ["save_mode", "debug", "merge", "override"]);
+    } finally {
+      useSettingsStore.setState({ language: previousLanguage });
+    }
+  });
+
+  it("uses the save fallback for quoted local path details", async () => {
+    const previousLanguage = useSettingsStore.getState().language;
+    useSettingsStore.setState({ language: "en" });
+    const technicalDetail =
+      'Failed to open "/Users/min/private/gradient-card-source.png"';
+    const normalizedError = await buildNormalizedApiError(technicalDetail, 422);
+    mockedSaveGradientCardMaterial.mockRejectedValueOnce(normalizedError);
+
+    useSingleStageStore.setState({
+      sessionId: "stage-a-session",
+      materialName: "PLA Basic",
+    });
+
+    try {
+      await useSingleStageStore.getState().submitSave("merge");
+
+      const error = useSingleStageStore.getState().saveError;
+      expect(error).toBe(tRuntime("mat_gradient_save_failed_error"));
+      expectNoFragments(error, [
+        "/Users/min",
+        "private",
+        "gradient-card-source.png",
+      ]);
+    } finally {
+      useSettingsStore.setState({ language: previousLanguage });
+    }
   });
 
   it("ignores stale Stage A extraction responses after ColorChecker state changes", async () => {
