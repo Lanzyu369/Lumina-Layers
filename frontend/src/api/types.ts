@@ -1496,7 +1496,7 @@ export interface LutColorsResponse {
 export interface SlicerInfo {
   id: string;
   display_name: string;
-  exe_path: string;
+  exe_path?: string | null;
   source?: string;
 }
 

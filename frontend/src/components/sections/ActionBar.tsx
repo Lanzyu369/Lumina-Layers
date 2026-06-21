@@ -36,6 +36,20 @@ const EMPTY_LAYER_IMAGES: { layer_index: number; name: string; url: string }[] =
 const EXPORT_NO_IMAGE_MESSAGE = "No image file loaded"
 const EXPORT_NO_PREVIEW_MESSAGE = "No preview available — please generate a preview first"
 const EXPORT_PREVIEW_LOAD_MESSAGE = "Failed to load preview image for cover"
+const GENERIC_HTTP_STATUS_ERROR_RE =
+  /(?:Request failed with status code|HTTP(?:\s+error)?|status(?:\s+code)?)\s*\d{3}\b/i
+
+function hasApiErrorResponse(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "response" in error)
+}
+
+function shouldUseApiErrorLanguage(error: unknown): boolean {
+  if (hasApiErrorResponse(error)) {
+    return true
+  }
+  const message = error instanceof Error ? error.message.trim() : ""
+  return GENERIC_HTTP_STATUS_ERROR_RE.test(message)
+}
 
 function resolveRecipeExportError(error: unknown, t: (key: string) => string): string {
   if (error instanceof Error) {
@@ -49,7 +63,10 @@ function resolveRecipeExportError(error: unknown, t: (key: string) => string): s
       return t("recipe_export_error_preview_load")
     }
   }
-  return apiErrorToVisibleMessage(error, t("recipe_export_error_unknown"))
+  if (shouldUseApiErrorLanguage(error)) {
+    return apiErrorToVisibleMessage(error, t("recipe_export_error_unknown"))
+  }
+  return t("recipe_export_error_unknown")
 }
 
 export default function ActionBar() {

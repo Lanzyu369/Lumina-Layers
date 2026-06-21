@@ -32,7 +32,12 @@ import { useI18n } from "../../i18n/context";
 import { useWorkspaceMode } from "../../hooks/useWorkspaceMode";
 import { prepareImport, applyImport, revokeImportCoverUrl } from "../../recipe/importFlow";
 import type { ImportPreview } from "../../recipe/importFlow";
-import type { RecipeFileSource } from "../../recipe/importRecipe";
+import {
+  RECIPE_ASSET_CORRUPT_ERROR,
+  RECIPE_IMPORT_NOT_SHARE_CARD_ERROR,
+  RECIPE_INTEGRITY_ERROR,
+  type RecipeFileSource,
+} from "../../recipe/importRecipe";
 import { StatusBanner, workstationInputClass } from "../ui/panelPrimitives";
 import {
   buildLutCatalogIndex,
@@ -58,6 +63,40 @@ const DOT_CLS = "inline-block size-2 rounded-full shrink-0 ring-1 ring-black/10 
 const THICKNESS_LAYER_STEP_MM = 0.08;
 const THICKNESS_SLIDER_MIN_MM = 0.24;
 const THICKNESS_SLIDER_MAX_MM = 3.44;
+const GENERIC_HTTP_STATUS_ERROR_RE =
+  /(?:Request failed with status code|HTTP(?:\s+error)?|status(?:\s+code)?)\s*\d{3}\b/i;
+
+function hasApiErrorResponse(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "response" in error);
+}
+
+function shouldUseApiErrorLanguage(error: unknown): boolean {
+  if (hasApiErrorResponse(error)) {
+    return true;
+  }
+  const message = error instanceof Error ? error.message.trim() : "";
+  return GENERIC_HTTP_STATUS_ERROR_RE.test(message);
+}
+
+function resolveRecipeImportError(
+  error: unknown,
+  t: (key: string) => string,
+): string {
+  if (shouldUseApiErrorLanguage(error)) {
+    return apiErrorToVisibleMessage(error, t("recipe_import_error_unreadable"));
+  }
+  const message = error instanceof Error ? error.message.trim() : "";
+  if (message === RECIPE_IMPORT_NOT_SHARE_CARD_ERROR) {
+    return t("recipe_import_not_share_card");
+  }
+  if (message === RECIPE_INTEGRITY_ERROR) {
+    return t("recipe_import_integrity_fail");
+  }
+  if (message === RECIPE_ASSET_CORRUPT_ERROR) {
+    return t("recipe_import_asset_corrupt");
+  }
+  return t("recipe_import_error_unreadable");
+}
 const STARTUP_LUT_RETRY_DELAY_MS = 5_000;
 
 const LEGACY_BUCKET_I18N_KEY: Record<ColorModeBucket, string> = {
@@ -279,7 +318,7 @@ export default function BasicSettings() {
       setImportSource(file.name.toLowerCase().endsWith(".lumina.json") ? "json" : "png");
       setImportDialogOpen(true);
     } catch (err) {
-      const visibleError = apiErrorToVisibleMessage(err);
+      const visibleError = resolveRecipeImportError(err, t);
       useConverterStore.getState().setError(
         t("recipe_import_error").replace("{error}", visibleError),
       );

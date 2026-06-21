@@ -1191,11 +1191,26 @@ async def convert_generate(
     registration_complete = False
     glb_registered = False
     try:
-        download_id = registry.register_path(
-            str(uuid.uuid4()),
-            threemf_path,
-            ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
-        )
+        try:
+            download_id = registry.register_path(
+                str(uuid.uuid4()),
+                threemf_path,
+                ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
+            )
+        except ROUTER_HANDLED_ERRORS as exc:
+            _safe_log(
+                "error",
+                "converter_generate_download_registration_failed",
+                session_id=sid,
+                artifact_role="threemf_download",
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+                path=threemf_path,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=MODEL_GENERATION_FAILED_DETAIL,
+            ) from exc
 
         if glb_path and os.path.exists(glb_path):
             try:
@@ -1509,11 +1524,25 @@ async def _generate_large_format_svg_native(
     zip_path = result["zip_path"]
     zip_registered = False
     try:
-        download_id = registry.register_path(
-            str(uuid.uuid4()),
-            zip_path,
-            ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
-        )
+        try:
+            download_id = registry.register_path(
+                str(uuid.uuid4()),
+                zip_path,
+                ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
+            )
+        except ROUTER_HANDLED_ERRORS as exc:
+            _log_large_format_failure(
+                session_id=sid,
+                failure_kind="zip_registration",
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+                artifact_role="download_zip",
+                path=zip_path,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=LARGE_FORMAT_GENERATION_FAILED_DETAIL,
+            ) from exc
         zip_registered = True
     finally:
         if not zip_registered:
@@ -1723,11 +1752,25 @@ async def _generate_large_format_raster(
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
             for label, tp in successful_paths:
                 zf.write(tp, f"{label}.3mf")
-        download_id = registry.register_path(
-            str(uuid.uuid4()),
-            zip_path,
-            ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
-        )
+        try:
+            download_id = registry.register_path(
+                str(uuid.uuid4()),
+                zip_path,
+                ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
+            )
+        except ROUTER_HANDLED_ERRORS as exc:
+            _log_large_format_failure(
+                session_id=sid,
+                failure_kind="zip_registration",
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+                artifact_role="download_zip",
+                path=zip_path,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=LARGE_FORMAT_GENERATION_FAILED_DETAIL,
+            ) from exc
         zip_ready = True
 
         msg = f"Generated {len(successful_paths)}/{cols * rows} tiles ({cols}×{rows})"

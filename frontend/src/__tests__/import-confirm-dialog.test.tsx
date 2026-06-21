@@ -97,7 +97,10 @@ function createPreview(): ImportPreview {
       warnings: [
         "recipe_import_warning_fridge_conflict_puzzle",
         "recipe_import_warning_fridge_conflict_large_format",
+        "recipe_import_warning_fridge_conflict_loop",
+        "recipe_import_warning_puzzle_conflict_large_format",
         "recipe_import_warning_puzzle_conflict_loop",
+        "recipe_import_warning_back_labels_unavailable",
       ],
       recipe: {
         format: "lumina-recipe",
@@ -130,7 +133,7 @@ function createPreview(): ImportPreview {
 }
 
 describe("ImportConfirmDialog", () => {
-  it("renders translated fridge conflict warnings instead of raw warning keys", () => {
+  it("renders translated import conflict warnings instead of raw warning keys", () => {
     render(
       <I18nProvider>
         <ImportConfirmDialog
@@ -150,10 +153,28 @@ describe("ImportConfirmDialog", () => {
       screen.getByText("导入的配方同时启用了冰箱贴模式和大画幅切片。为保持状态有效，大画幅模式已被禁用。"),
     ).toBeInTheDocument();
     expect(
+      screen.getByText("导入的配方同时启用了冰箱贴模式和挂件环。为保持状态有效，挂件环已被禁用。"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("导入的配方同时启用了拼图模式和大画幅切片。为保持状态有效，大画幅模式已被禁用。"),
+    ).toBeInTheDocument();
+    expect(
       screen.getByText("导入的配方同时启用了拼图模式和挂件环。为保持状态有效，挂件环已被禁用。"),
     ).toBeInTheDocument();
     expect(
+      screen.getByText("导入的配方启用了拼图背面标签。当前版本暂不支持背面标签，已自动关闭。"),
+    ).toBeInTheDocument();
+    expect(
       screen.queryByText("recipe_import_warning_fridge_conflict_puzzle"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("recipe_import_warning_fridge_conflict_loop"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("recipe_import_warning_puzzle_conflict_large_format"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("recipe_import_warning_back_labels_unavailable"),
     ).not.toBeInTheDocument();
   });
 });

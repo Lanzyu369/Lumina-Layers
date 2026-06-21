@@ -11,6 +11,8 @@ from datetime import datetime
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
+FRONTEND_LINT_CMD = ["pnpm", "lint"]
+WINDOWS_COMMAND_SHIMS = {"pnpm"}
 
 
 @dataclass
@@ -22,7 +24,7 @@ class CommandResult:
 
 def run(cmd: list[str], cwd: Path | None = None) -> CommandResult:
     print(f"\n>>> {' '.join(cmd)}")
-    if os.name == "nt" and cmd and cmd[0] in {"npm", "npx"}:
+    if os.name == "nt" and cmd and cmd[0] in WINDOWS_COMMAND_SHIMS:
         proc = subprocess.run(
             ["cmd", "/c", *cmd],
             cwd=cwd or ROOT,
@@ -70,7 +72,7 @@ def main() -> int:
             ROOT / "frontend",
             "Frontend full regression failed",
         ),
-        (["npm", "run", "lint"], ROOT / "frontend", "Frontend lint failed"),
+        (FRONTEND_LINT_CMD, ROOT / "frontend", "Frontend lint failed"),
     ]
     try:
         for cmd, cwd, msg in steps:

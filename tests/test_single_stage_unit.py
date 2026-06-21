@@ -407,7 +407,7 @@ class _RegisterBytesFailingRegistry(FileRegistry):
 
 
 class _GradientCardStageARegisterBytesFailingRegistry(FileRegistry):
-    """Registry stub that fails after the Stage A params file is registered."""
+    """Registry stub that fails before the Stage A params download is registered."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -1553,7 +1553,9 @@ def test_fit_stage_a_route_accepts_uploaded_stage_json(
 
     resolved = registry.resolve(body["stage_a_params_url"].split("/")[-1])
     assert resolved is not None
-    assert resolved[0] == str(params_path)
+    assert resolved[0] != str(params_path)
+    assert resolved[1] == "stage_A_parameters.json"
+    assert json.loads(Path(resolved[0]).read_text(encoding="utf-8")) == {"ok": True}
 
     stored_sessions = [
         store.get(session_id)
@@ -1617,7 +1619,10 @@ def test_fit_stage_a_upload_route_cleans_session_when_registration_fails(
         "Stage A parameter file registration failed. Check the server log for details."
     )
     assert "registry backend unavailable" not in response.text
-    assert registry.paths == [str(params_path)]
+    assert len(registry.paths) == 1
+    assert registry.paths[0] != str(params_path)
+    assert Path(registry.paths[0]).name.startswith("stage_a_params_")
+    assert not Path(registry.paths[0]).exists()
     assert len(registry.cleanup_session_ids) == 1
     assert store._store == {}
     assert not uploaded_stage_json.exists()
@@ -2973,7 +2978,7 @@ def test_gradient_card_stage_a_routes_compute_and_save_material(
 
     clock["now"] += 86_400
     removed = registry.cleanup_expired()
-    assert removed == 4
+    assert removed == 5
     assert registry.resolve(save_body["material_file_url"].split("/")[-1]) is None
     assert registry.resolve(save_body["stage_a_params_url"].split("/")[-1]) is None
 
@@ -3140,9 +3145,8 @@ def test_gradient_card_stage_a_route_rolls_back_when_preview_registration_fails(
     )
     assert "/Users/min/private" not in response.text
     assert "registry wrote" not in response.text
-    assert len(registry.path_file_ids) == 1
+    assert registry.path_file_ids == []
     assert len(registry.cleanup_session_ids) == 1
-    assert registry.resolve(registry.path_file_ids[0]) is None
     assert registry.get_session_entries(registry.cleanup_session_ids[0]) == {}
     assert store._store == {}
     assert not zip_path.exists()
@@ -5638,6 +5642,11 @@ def test_gradient_card_material_export_cleans_archive_when_registry_fails(
     )
 
     assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Gradient card material export file registration failed. "
+        "Check the server log for details."
+    )
+    assert "registry backend unavailable" not in response.text
     assert registry.archive_path == str(exported_zip)
     assert not exported_zip.exists()
 
@@ -5687,6 +5696,11 @@ def test_generate_material_swatch_cleans_output_when_registry_fails(
     )
 
     assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Material swatch file registration failed. "
+        "Check the server log for details."
+    )
+    assert "registry backend unavailable" not in response.text
     assert registry.generated_path == str(swatch_path)
     assert not swatch_path.exists()
 
@@ -5812,6 +5826,11 @@ def test_generate_material_swatch_rolls_back_download_when_preview_registration_
     )
 
     assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Material swatch file registration failed. "
+        "Check the server log for details."
+    )
+    assert "registry byte storage unavailable" not in response.text
     assert registry.path_file_id is not None
     assert registry.get_entry(registry.path_file_id) is None
     assert registry.resolve(registry.path_file_id) is None

@@ -15,6 +15,7 @@ from PIL import Image
 from api.app import create_app
 from api.dependencies import get_file_registry, get_session_store
 from api.file_registry import FileRegistry
+from api.routers.single_stage import STAGE_A_PARAMS_DOWNLOAD_TTL_SECONDS
 from api.session_store import SessionStore
 from core.single_stage import (
     GradientCardStageAResult,
@@ -270,6 +271,66 @@ class TestFitStageACanary:
         assert record.source_mode == "upload"
         assert record.fit_summary_count == 6
 
+    def test_fit_stage_a_params_download_survives_source_session_close(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        client, store, registry = _client_with_state()
+        stage_json_path = tmp_path / "single_stage.json"
+        params_path = tmp_path / "stage_A_parameters.json"
+        params_payload = {"ok": True, "source": "fit-stage-a"}
+        stage_json_path.write_text("{}", encoding="utf-8")
+        params_path.write_text(json.dumps(params_payload), encoding="utf-8")
+        session_id = store.create()
+        store.put(session_id, "single_stage_stage_json_path", str(stage_json_path))
+
+        def _stub_fit_stage_a_from_stage_json(path: str):
+            assert path == str(stage_json_path)
+            return StageAFitResult(
+                params_path=str(params_path),
+                fit_summary={
+                    "substrate_count": 1,
+                    "channel_count": 6,
+                    "substrates": ["white"],
+                    "colors": ["White"],
+                    "overall_validation": {"mean_delta_e": 0.001},
+                    "warnings": [],
+                },
+            )
+
+        monkeypatch.setattr(
+            "api.routers.single_stage.fit_stage_a_from_stage_json",
+            _stub_fit_stage_a_from_stage_json,
+        )
+
+        response = client.post(
+            "/api/extractor/fit-stage-a",
+            data={"session_id": session_id},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        params_file_id = body["stage_a_params_url"].rsplit("/", 1)[-1]
+        entry = registry.get_entry(params_file_id)
+        assert entry is not None
+        assert entry["session_id"] != session_id
+        assert entry["lifecycle"] == "ephemeral"
+        assert entry["ttl_seconds"] == STAGE_A_PARAMS_DOWNLOAD_TTL_SECONDS
+        assert entry["purpose"] == "stage_a_params_download"
+        assert Path(entry["path"]) != params_path
+        assert client.get(body["stage_a_params_url"]).json() == params_payload
+
+        close_response = client.post(
+            "/api/session/close",
+            json={"session_id": session_id},
+        )
+
+        assert close_response.status_code == 200
+        assert not params_path.exists()
+        assert Path(entry["path"]).exists()
+        assert client.get(body["stage_a_params_url"]).json() == params_payload
+
 
 class TestExtractGradientCardStageACanary:
     def test_extract_gradient_card_stage_a_logs_success_canary(
@@ -358,6 +419,82 @@ class TestExtractGradientCardStageACanary:
         assert record.manual_white_orientation == "rotate_90_cw"
         assert record.manual_black_orientation is None
         assert record.stage_a_id == body["stage_a_params_url"].rsplit("/", 1)[-1]
+
+    def test_extract_gradient_card_stage_a_params_download_survives_session_close(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        client, _, registry = _client_with_state()
+        params_path = tmp_path / "stage_A_parameters.json"
+        params_payload = {"version": "stage_a/v1", "source": "gradient-card"}
+        params_path.write_text(json.dumps(params_payload), encoding="utf-8")
+
+        def _stub_extract_gradient_card(
+            white_rgb: np.ndarray,
+            black_rgb: np.ndarray,
+            white_points: list[list[float]],
+            black_points: list[list[float]],
+            dataset_zip_path: str,
+            *,
+            manual_white_orientation: str | None,
+            manual_black_orientation: str | None,
+            image_source: str | None = None,
+        ) -> GradientCardStageAResult:
+            return GradientCardStageAResult(
+                params_path=str(params_path),
+                params_payload=params_payload,
+                fit_summary=_stage_a_fit_summary(),
+                material_summary=_gradient_material_summary(),
+                source_summary={
+                    "white_image_size": [16, 16],
+                    "black_image_size": [16, 16],
+                },
+                warnings=[],
+                white_warp_rgb=np.zeros((8, 8, 3), dtype=np.uint8),
+                black_warp_rgb=np.zeros((8, 8, 3), dtype=np.uint8),
+            )
+
+        monkeypatch.setattr(
+            "api.routers.single_stage.extract_stage_a_material_from_gradient_cards",
+            _stub_extract_gradient_card,
+        )
+
+        response = client.post(
+            "/api/extractor/extract-gradient-card-stage-a",
+            files={
+                "white_image": ("white.png", _png_bytes(), "image/png"),
+                "black_image": ("black.png", _png_bytes(), "image/png"),
+                "dataset_zip": ("kit.zip", b"zip", "application/zip"),
+            },
+            data={
+                "white_corner_points": "[[0,0],[15,0],[15,15],[0,15]]",
+                "black_corner_points": "[[0,0],[15,0],[15,15],[0,15]]",
+            },
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        session_id = body["session_id"]
+        params_file_id = body["stage_a_params_url"].rsplit("/", 1)[-1]
+        entry = registry.get_entry(params_file_id)
+        assert entry is not None
+        assert entry["session_id"] != session_id
+        assert entry["lifecycle"] == "ephemeral"
+        assert entry["ttl_seconds"] == STAGE_A_PARAMS_DOWNLOAD_TTL_SECONDS
+        assert entry["purpose"] == "stage_a_params_download"
+        assert Path(entry["path"]) != params_path
+        assert client.get(body["stage_a_params_url"]).json() == params_payload
+
+        close_response = client.post(
+            "/api/session/close",
+            json={"session_id": session_id},
+        )
+
+        assert close_response.status_code == 200
+        assert not params_path.exists()
+        assert Path(entry["path"]).exists()
+        assert client.get(body["stage_a_params_url"]).json() == params_payload
 
 
 class TestSaveGradientCardMaterialCanary:

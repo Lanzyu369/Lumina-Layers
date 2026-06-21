@@ -8,6 +8,7 @@ interface BatchResultSummaryProps {
 
 const API_BATCH_ITEM_FAILED_DETAIL =
   "This file could not be converted. Re-upload it or check the server log for details.";
+const API_BATCH_ITEM_TIMEOUT_DETAIL = "Batch item conversion timed out";
 
 function shouldHideRawBatchItemError(error: string): boolean {
   const trimmed = error.trim();
@@ -23,11 +24,19 @@ function shouldHideRawBatchItemError(error: string): boolean {
   );
 }
 
-function visibleBatchItemError(error: string | undefined, fallback: string): string | null {
+function visibleBatchItemError(
+  error: string | undefined,
+  fallback: string,
+  timeoutFallback: string,
+): string | null {
   if (!error?.trim()) {
     return null;
   }
-  return shouldHideRawBatchItemError(error) ? fallback : error;
+  const trimmed = error.trim();
+  if (trimmed === API_BATCH_ITEM_TIMEOUT_DETAIL) {
+    return timeoutFallback;
+  }
+  return shouldHideRawBatchItemError(trimmed) ? fallback : trimmed;
 }
 
 export default function BatchResultSummary({ result }: BatchResultSummaryProps) {
@@ -115,6 +124,7 @@ export default function BatchResultSummary({ result }: BatchResultSummaryProps) 
               const visibleError = visibleBatchItemError(
                 item.error,
                 t("batch.itemError.conversionFailed"),
+                t("batch.itemError.timeout"),
               );
               return (
                 <li

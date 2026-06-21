@@ -20,6 +20,8 @@ from api.app import app
 from api.routers.system import SETTINGS_SAVE_FAILED_DETAIL
 
 client: TestClient = TestClient(app)
+UNTRUSTED_ORIGIN_HEADERS = {"Origin": "https://attacker.example"}
+LOCAL_FRONTEND_ORIGIN_HEADERS = {"Origin": "http://localhost:5174"}
 
 
 def _records_for_event(
@@ -59,6 +61,20 @@ class TestGetSettings:
         assert settings["device_profile_id"] == "BambuStudio:bbl:bambu-lab-h2d:0.4"
         assert settings["nozzle_size"] == "0.4"
 
+    def test_get_settings_rejects_untrusted_origin_before_reading_file(self) -> None:
+        """外部网页不能读取本地持久设置。"""
+        mock_file = MagicMock()
+        mock_file.exists.side_effect = AssertionError("settings file should not be read")
+
+        with patch("api.routers.system.SETTINGS_FILE", mock_file):
+            response = client.get(
+                "/api/system/settings",
+                headers=UNTRUSTED_ORIGIN_HEADERS,
+            )
+
+        assert response.status_code == 403
+        assert "local Lumina Studio app" in response.json()["detail"]
+
     def test_get_settings_file_exists(self) -> None:
         """文件存在时返回正确数据。"""
         custom_settings = {
@@ -90,6 +106,29 @@ class TestGetSettings:
         assert settings["enable_crop_modal"] is False
         assert settings["device_profile_id"] == "OrcaSlicer:bbl:bambu-lab-p1s:0.2"
         assert settings["nozzle_size"] == "0.2"
+
+    def test_get_settings_allows_local_frontend_origin(self) -> None:
+        """本地前端仍可读取设置。"""
+        custom_settings = {
+            "last_lut": "LocalLUT",
+            "last_modeling_mode": "vector",
+            "last_color_mode": "4-Color (RYBW)",
+            "palette_mode": "swatch",
+            "enable_crop_modal": True,
+            "custom_slicer_path": "/Applications/Bambu Studio.app",
+        }
+        mock_file = MagicMock()
+        mock_file.exists.return_value = True
+        mock_file.read_text.return_value = json.dumps(custom_settings)
+
+        with patch("api.routers.system.SETTINGS_FILE", mock_file):
+            response = client.get(
+                "/api/system/settings",
+                headers=LOCAL_FRONTEND_ORIGIN_HEADERS,
+            )
+
+        assert response.status_code == 200
+        assert response.json()["settings"]["last_lut"] == "LocalLUT"
 
     @pytest.mark.parametrize("raw_json", ["[]", "null", '"oops"', "123", "true", "1.5"])
     def test_get_settings_non_object_json_returns_defaults(self, raw_json: str) -> None:
@@ -202,6 +241,37 @@ class TestPostSettings:
         mock_file.write_text.assert_called_once()
         written = json.loads(mock_file.write_text.call_args.args[0])
         assert written["device_profile_id"] == "OrcaSlicer:bbl:bambu-lab-p1s:0.2"
+
+    def test_post_settings_rejects_untrusted_origin_before_writing_file(self) -> None:
+        """外部网页不能改写本地持久设置。"""
+        payload = {
+            "last_lut": "attacker-lut",
+            "last_modeling_mode": "vector",
+            "last_color_mode": "8-Color Max",
+            "last_slicer": "attacker",
+            "palette_mode": "swatch",
+            "enable_crop_modal": False,
+            "printer_model": "attacker-printer",
+            "slicer_software": "AttackerSlicer",
+            "device_profile_id": "Attacker:profile:0.8",
+            "custom_slicer_path": "/tmp/attacker.app",
+            "custom_slicer_id": "attacker-custom",
+            "nozzle_size": "0.8",
+            "enable_base_layer_height_modifier": False,
+        }
+        mock_file = MagicMock()
+        mock_file.write_text.side_effect = AssertionError("settings file should not be written")
+
+        with patch("api.routers.system.SETTINGS_FILE", mock_file):
+            response = client.post(
+                "/api/system/settings",
+                json=payload,
+                headers=UNTRUSTED_ORIGIN_HEADERS,
+            )
+
+        assert response.status_code == 403
+        assert "local Lumina Studio app" in response.json()["detail"]
+        mock_file.write_text.assert_not_called()
 
     def test_post_settings_io_error(self) -> None:
         """I/O 错误返回 500，但不暴露本机路径或底层异常。"""

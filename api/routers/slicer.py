@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 
 from api.dependencies import get_file_registry
 from api.file_registry import FileRegistry
+from api.local_origin_guard import require_local_app_origin
 from api.schemas.slicer import (
     SlicerCustomPathRequest,
     SlicerCustomPathResponse,
@@ -32,7 +33,11 @@ from core.slicer import (
     validate_custom_slicer_path,
 )
 
-router = APIRouter(prefix="/api/slicer", tags=["Slicer"])
+router = APIRouter(
+    prefix="/api/slicer",
+    tags=["Slicer"],
+    dependencies=[Depends(require_local_app_origin)],
+)
 log = get_logger(__name__)
 _SLICER_LAUNCH_COPY_TTL_SECONDS = 60 * 60
 _ALLOWED_SLICER_LAUNCH_SUFFIXES = {".3mf"}
@@ -236,10 +241,12 @@ def _log_slicer_launch_failed(
 
 
 def _to_slicer_info(slicer: DetectedSlicer) -> SlicerInfo:
+    """Build public slicer metadata without exposing local executable paths.
+    构建公开切片器元数据，不暴露本机可执行文件路径。
+    """
     return SlicerInfo(
         id=slicer.id,
         display_name=slicer.display_name,
-        exe_path=slicer.exe_path,
         source=slicer.source,
     )
 

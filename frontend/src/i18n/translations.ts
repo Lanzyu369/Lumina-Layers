@@ -4982,6 +4982,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "这个文件无法转换。请重新上传该文件，或查看服务端日志了解详情。",
     en: "This file could not be converted. Re-upload it or check the server log for details.",
   },
+  "batch.itemError.timeout": {
+    zh: "这个文件转换超时。请减少模型复杂度后重试，或单独转换该文件。",
+    en: "This file took too long to convert. Reduce the model complexity and try again, or convert this file on its own.",
+  },
   // Merged batch 3MF download + plate-overflow warning (batch-mode-merged-3mf).
   // 批量合并 3MF 下载与超出热床范围的警告文案。
   "batch.download.mergedThreemf": {
@@ -5889,6 +5893,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "导入失败：{error}",
     en: "Import failed: {error}",
   },
+  recipe_import_error_unreadable: {
+    zh: "无法读取这个分享卡文件，请确认文件未损坏且来自 Lumina。",
+    en: "This share card could not be read. Make sure the file is not corrupted and was created by Lumina.",
+  },
   recipe_import_not_share_card: {
     zh: "该 PNG 不包含 Lumina 配方数据",
     en: "This PNG does not contain Lumina recipe data",
@@ -6061,9 +6069,21 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "导入的配方同时启用了冰箱贴模式和大画幅切片。为保持状态有效，大画幅模式已被禁用。",
     en: "The imported recipe enabled both fridge magnet mode and large-format tiling. Large-format mode has been disabled to keep the state valid.",
   },
+  recipe_import_warning_fridge_conflict_loop: {
+    zh: "导入的配方同时启用了冰箱贴模式和挂件环。为保持状态有效，挂件环已被禁用。",
+    en: "The imported recipe enabled both fridge magnet mode and a keychain loop. The loop has been disabled to keep the state valid.",
+  },
+  recipe_import_warning_puzzle_conflict_large_format: {
+    zh: "导入的配方同时启用了拼图模式和大画幅切片。为保持状态有效，大画幅模式已被禁用。",
+    en: "The imported recipe enabled both puzzle mode and large-format tiling. Large-format mode has been disabled to keep the state valid.",
+  },
   recipe_import_warning_puzzle_conflict_loop: {
     zh: "导入的配方同时启用了拼图模式和挂件环。为保持状态有效，挂件环已被禁用。",
     en: "The imported recipe enabled both puzzle mode and a keychain loop. The loop has been disabled to keep the state valid.",
+  },
+  recipe_import_warning_back_labels_unavailable: {
+    zh: "导入的配方启用了拼图背面标签。当前版本暂不支持背面标签，已自动关闭。",
+    en: "The imported recipe enabled puzzle back labels. Back labels are not available in this version and have been disabled.",
   },
   recipe_import_schema_newer: {
     zh: "配方版本较新，部分参数可能无法恢复",

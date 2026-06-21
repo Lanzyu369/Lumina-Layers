@@ -41,6 +41,9 @@ from core.slicer import (
     validate_custom_slicer_path,
 )
 
+UNTRUSTED_ORIGIN_HEADERS = {"Origin": "https://attacker.example"}
+LOCAL_FRONTEND_ORIGIN_HEADERS = {"Origin": "http://localhost:5174"}
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -377,9 +380,10 @@ class TestPydanticModels:
     """Pydantic schema validation for slicer models."""
 
     def test_slicer_info_valid(self):
-        info = SlicerInfo(id="bambu_studio", display_name="Bambu Studio", exe_path="C:\\bs.exe")
+        info = SlicerInfo(id="bambu_studio", display_name="Bambu Studio")
         assert info.id == "bambu_studio"
         assert info.display_name == "Bambu Studio"
+        assert info.exe_path is None
 
     def test_slicer_info_empty_id_rejected(self):
         """id with min_length=1 rejects empty string. Requirement 6.5"""
@@ -398,7 +402,6 @@ class TestPydanticModels:
             slicer=SlicerInfo(
                 id="bambu_studio",
                 display_name="Bambu Studio",
-                exe_path="/Applications/Bambu Studio.app",
                 source="custom_macos_app",
             ),
         )
@@ -432,8 +435,9 @@ class TestRouterEndpoints:
     def test_detect_endpoint_returns_200(self):
         """GET /api/slicer/detect returns 200 with slicer list. Requirement 3.1"""
         client = _make_client()
+        private_path = "/Users/min/Applications/Private Bambu Studio.app"
         mock_slicers = [
-            DetectedSlicer(id="bambu_studio", display_name="Bambu Studio", exe_path="C:\\bs.exe"),
+            DetectedSlicer(id="bambu_studio", display_name="Bambu Studio", exe_path=private_path),
         ]
         with patch("api.routers.slicer.detect_installed_slicers", return_value=mock_slicers):
             resp = client.get("/api/slicer/detect")
@@ -443,6 +447,38 @@ class TestRouterEndpoints:
         assert "slicers" in data
         assert len(data["slicers"]) == 1
         assert data["slicers"][0]["id"] == "bambu_studio"
+        assert data["slicers"][0]["display_name"] == "Bambu Studio"
+        assert data["slicers"][0]["exe_path"] is None
+        assert private_path not in resp.text
+
+    def test_detect_endpoint_preserves_items_without_exposing_executable_paths(self):
+        client = _make_client()
+        private_bambu_path = "/Users/min/Applications/Private Bambu Studio.app"
+        private_orca_path = "/Users/min/Applications/Private OrcaSlicer.app"
+        mock_slicers = [
+            DetectedSlicer(
+                id="bambu_studio",
+                display_name="Bambu Studio",
+                exe_path=private_bambu_path,
+                source="macos_app",
+            ),
+            DetectedSlicer(
+                id="orca_slicer",
+                display_name="OrcaSlicer",
+                exe_path=private_orca_path,
+                source="macos_app",
+            ),
+        ]
+
+        with patch("api.routers.slicer.detect_installed_slicers", return_value=mock_slicers):
+            resp = client.get("/api/slicer/detect")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert [item["id"] for item in data["slicers"]] == ["bambu_studio", "orca_slicer"]
+        assert all(item["exe_path"] is None for item in data["slicers"])
+        assert private_bambu_path not in resp.text
+        assert private_orca_path not in resp.text
 
     def test_detect_endpoint_empty(self):
         """GET /api/slicer/detect with no slicers returns empty list."""
@@ -453,25 +489,83 @@ class TestRouterEndpoints:
         assert resp.status_code == 200
         assert resp.json()["slicers"] == []
 
-    def test_custom_path_validate_success(self):
+    def test_detect_rejects_untrusted_origin_before_scanning(self):
         client = _make_client()
+        with patch(
+            "api.routers.slicer.detect_installed_slicers",
+            side_effect=AssertionError("detect should not run"),
+        ):
+            resp = client.get(
+                "/api/slicer/detect",
+                headers=UNTRUSTED_ORIGIN_HEADERS,
+            )
+
+        assert resp.status_code == 403
+        assert "local Lumina Studio app" in resp.json()["detail"]
+
+    def test_detect_allows_local_frontend_origin(self):
+        client = _make_client()
+        private_path = "/Applications/Bambu Studio.app"
         slicer = DetectedSlicer(
             id="bambu_studio",
             display_name="Bambu Studio",
-            exe_path="/Applications/Bambu Studio.app",
+            exe_path=private_path,
+            source="auto_macos_app",
+        )
+        with patch(
+            "api.routers.slicer.detect_installed_slicers",
+            return_value=[slicer],
+        ):
+            resp = client.get(
+                "/api/slicer/detect",
+                headers=LOCAL_FRONTEND_ORIGIN_HEADERS,
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["slicers"][0]["id"] == "bambu_studio"
+        assert data["slicers"][0]["source"] == "auto_macos_app"
+        assert data["slicers"][0]["exe_path"] is None
+        assert private_path not in resp.text
+
+    def test_custom_path_validate_success(self):
+        client = _make_client()
+        private_path = "/Users/min/Applications/Private Bambu Studio.app"
+        slicer = DetectedSlicer(
+            id="bambu_studio",
+            display_name="Bambu Studio",
+            exe_path=private_path,
             source="custom_macos_app",
         )
 
         with patch("api.routers.slicer.validate_custom_slicer_path", return_value=slicer):
             resp = client.post(
                 "/api/slicer/custom-path/validate",
-                json={"path": "/Applications/Bambu Studio.app"},
+                json={"path": private_path},
             )
 
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "success"
+        assert data["slicer"]["id"] == "bambu_studio"
         assert data["slicer"]["source"] == "custom_macos_app"
+        assert data["slicer"]["exe_path"] is None
+        assert private_path not in resp.text
+
+    def test_custom_path_validate_rejects_untrusted_origin_before_path_probe(self):
+        client = _make_client()
+        with patch(
+            "api.routers.slicer.validate_custom_slicer_path",
+            side_effect=AssertionError("path validation should not run"),
+        ):
+            resp = client.post(
+                "/api/slicer/custom-path/validate",
+                json={"path": "/Applications/Bambu Studio.app"},
+                headers=UNTRUSTED_ORIGIN_HEADERS,
+            )
+
+        assert resp.status_code == 403
+        assert "local Lumina Studio app" in resp.json()["detail"]
 
     def test_custom_path_validate_failure(self):
         client = _make_client()
@@ -616,6 +710,38 @@ class TestRouterEndpoints:
 
         assert resp.status_code == 400
         assert resp.json()["message"] == SLICER_LAUNCH_SOURCE_MISSING_MESSAGE
+
+    def test_launch_rejects_untrusted_origin_before_copy_or_process_launch(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        output_root = _configure_slicer_output(monkeypatch, tmp_path)
+        f = output_root / "model.3mf"
+        f.write_text("data")
+
+        client = _make_client()
+        with patch(
+            "api.routers.slicer.detect_installed_slicers",
+            side_effect=AssertionError("detect should not run"),
+        ), patch(
+            "api.routers.slicer._create_launch_copy",
+            side_effect=AssertionError("copy should not run"),
+        ), patch(
+            "api.routers.slicer.launch_slicer",
+            side_effect=AssertionError("launch should not run"),
+        ):
+            resp = client.post(
+                "/api/slicer/launch",
+                json={
+                    "slicer_id": "bambu_studio",
+                    "file_path": str(f),
+                },
+                headers=UNTRUSTED_ORIGIN_HEADERS,
+            )
+
+        assert resp.status_code == 403
+        assert "local Lumina Studio app" in resp.json()["detail"]
 
     def test_launch_uses_valid_custom_path(self, tmp_path, monkeypatch):
         output_root = _configure_slicer_output(monkeypatch, tmp_path)

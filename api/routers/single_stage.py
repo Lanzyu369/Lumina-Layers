@@ -18,6 +18,7 @@ import anyio
 import numpy as np
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 
+from config import TEMP_DIR
 from api.colorchecker_artifacts import load_colorchecker_full_rgb, scale_corner_points
 from api.dependencies import get_file_registry, get_session_store
 from api.file_bridge import ndarray_to_png_bytes, upload_to_ndarray, upload_to_tempfile
@@ -125,6 +126,7 @@ from core.single_stage import (
 router = APIRouter(prefix="/api/extractor", tags=["Extractor"])
 log = get_logger(__name__)
 GRADIENT_CARD_PREVIEW_TTL_SECONDS = 600
+STAGE_A_PARAMS_DOWNLOAD_TTL_SECONDS = 8 * 60 * 60
 MATERIAL_LIBRARY_FILE_TTL_SECONDS = 600
 MATERIAL_SWATCH_EXPORT_TTL_SECONDS = 8 * 60 * 60
 FIT_STAGE_A_EXPIRED_STAGE_JSON_DETAIL = (
@@ -746,6 +748,31 @@ def _remove_path_safely(path: str | None) -> None:
         pass
 
 
+def _register_stage_a_params_download(
+    registry: FileRegistry,
+    source_path: str,
+) -> str:
+    suffix = Path(source_path).suffix or ".json"
+    fd, download_path = tempfile.mkstemp(
+        prefix="stage_a_params_",
+        suffix=suffix,
+        dir=TEMP_DIR,
+    )
+    os.close(fd)
+    try:
+        shutil.copy2(source_path, download_path)
+        return registry.register_path(
+            f"stage-a-params:{uuid.uuid4().hex}",
+            download_path,
+            filename=os.path.basename(source_path) or "stage_A_parameters.json",
+            ttl_seconds=STAGE_A_PARAMS_DOWNLOAD_TTL_SECONDS,
+            purpose="stage_a_params_download",
+        )
+    except Exception:
+        _remove_path_safely(download_path)
+        raise
+
+
 def _close_session_safely(store: SessionStore, session_id: str | None) -> None:
     if not session_id:
         return
@@ -948,7 +975,7 @@ async def extractor_fit_stage_a(
         raise HTTPException(status_code=422, detail=str(e))
 
     try:
-        params_id = registry.register_path(sid_for_registry, result.params_path)
+        params_id = _register_stage_a_params_download(registry, result.params_path)
     except Exception as exc:
         _remove_path_safely(result.params_path)
         if created_session_for_upload:
@@ -1140,7 +1167,6 @@ async def extractor_extract_gradient_card_stage_a(
                 pass
 
     try:
-        stage_a_id = registry.register_path(session_id, result.params_path)
         white_warp_id = registry.register_bytes(
             session_id,
             ndarray_to_png_bytes(result.white_warp_rgb),
@@ -1153,6 +1179,7 @@ async def extractor_extract_gradient_card_stage_a(
             "black_gradient_warp.png",
             ttl_seconds=GRADIENT_CARD_PREVIEW_TTL_SECONDS,
         )
+        stage_a_id = _register_stage_a_params_download(registry, result.params_path)
     except Exception as exc:
         _cleanup_registry_session_safely(registry, session_id)
         _close_session_safely(store, session_id)
@@ -1519,12 +1546,20 @@ async def extractor_export_gradient_card_materials(
     persistent_registry_session = f"material-export:{uuid.uuid4().hex}"
     archive_registered = False
     try:
-        download_id = registry.register_path(
-            persistent_registry_session,
-            result.archive_path,
-            filename=result.download_filename,
-            ttl_seconds=MATERIAL_LIBRARY_FILE_TTL_SECONDS,
-        )
+        try:
+            download_id = registry.register_path(
+                persistent_registry_session,
+                result.archive_path,
+                filename=result.download_filename,
+                ttl_seconds=MATERIAL_LIBRARY_FILE_TTL_SECONDS,
+            )
+        except (OSError, RuntimeError, ValueError, TypeError) as exc:
+            _raise_file_registration_error(
+                exc,
+                context="Gradient card material export file registration",
+                event="extractor_export_gradient_card_materials_registration_failed",
+                session_id=persistent_registry_session,
+            )
         archive_registered = True
     finally:
         if not archive_registered:
@@ -2000,13 +2035,18 @@ async def generate_material_swatch(
             )
             registered_file_ids.append(preview_id)
             preview_url = f"/api/files/{preview_id}"
-    except Exception:
+    except (OSError, RuntimeError, ValueError, TypeError) as exc:
         _rollback_swatch_registration(
             registry,
             file_ids=registered_file_ids,
             generated_path=output_path,
         )
-        raise
+        _raise_file_registration_error(
+            exc,
+            context="Material swatch file registration",
+            event="extractor_material_swatch_registration_failed",
+            session_id=sid,
+        )
 
     log.info(
         "Material recipe swatch generated",

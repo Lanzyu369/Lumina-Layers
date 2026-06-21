@@ -18,6 +18,9 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+UNTRUSTED_ORIGIN_HEADERS = {"Origin": "https://attacker.example"}
+LOCAL_FRONTEND_ORIGIN_HEADERS = {"Origin": "http://localhost:5174"}
+
 
 def _capture_feedback_logger(
     caplog: pytest.LogCaptureFixture,
@@ -158,6 +161,37 @@ def test_submit_bug_report_accepts_full_payload_and_logs_canary(
     assert canaries[0].email_status == "unconfigured"
     assert canaries[0].source_version == "legacy"
     assert canaries[0].recent_client_log_count == 1
+
+
+def test_submit_bug_report_rejects_untrusted_origin_before_ticket_write(
+    client: TestClient,
+    feedback_root: Path,
+) -> None:
+    response = client.post(
+        "/api/feedback/bug-report",
+        json=_payload(description="cross-origin probe"),
+        headers=UNTRUSTED_ORIGIN_HEADERS,
+    )
+
+    assert response.status_code == 403
+    assert "local Lumina Studio app" in response.json()["detail"]
+    assert list(feedback_root.rglob("ticket.json")) == []
+
+
+def test_submit_bug_report_allows_local_frontend_origin(
+    client: TestClient,
+    feedback_root: Path,
+) -> None:
+    response = client.post(
+        "/api/feedback/bug-report",
+        json=_payload(description="local frontend report"),
+        headers=LOCAL_FRONTEND_ORIGIN_HEADERS,
+    )
+
+    assert response.status_code == 200
+    ticket_id = response.json()["ticket_id"]
+    ticket_json = _read_ticket_json(feedback_root, ticket_id)
+    assert ticket_json["description"] == "local frontend report"
 
 
 def test_submit_bug_report_rejects_unregistered_final_artifact_disk_path(
@@ -568,6 +602,35 @@ def test_relay_bug_report_returns_503_when_unconfigured(
     ]
     assert len(warnings) == 1
     assert warnings[0].error_type == "RelayUnconfigured"
+
+
+def test_relay_bug_report_rejects_untrusted_origin_before_relay_http(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+
+    class _Client:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def __aenter__(self) -> "_Client":
+            raise AssertionError("relay client should not be opened")
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    monkeypatch.setenv("LUMINA_FEEDBACK_RELAY_URL", "https://relay.example.test/feedback")
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+
+    response = client.post(
+        "/api/feedback/bug-report/relay",
+        json={"ticket_id": "abc12345", "request_payload": _payload()},
+        headers=UNTRUSTED_ORIGIN_HEADERS,
+    )
+
+    assert response.status_code == 403
+    assert "local Lumina Studio app" in response.json()["detail"]
 
 
 def test_relay_bug_report_forwards_to_configured_relay(

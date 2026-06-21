@@ -535,6 +535,32 @@ describe("ActionBar — auto batch mode", () => {
     expect(screen.queryByText(/Request failed with status code 500/)).not.toBeInTheDocument();
   });
 
+  it("shows a readable share-card export failure when PNG encoding fails", async () => {
+    vi.mocked(recipeImportFlow.exportShareCard).mockRejectedValueOnce(
+      new Error("Failed to create cover PNG blob"),
+    );
+
+    useConverterStore.setState({
+      batchMode: false,
+      imageFile: makeFile("preview.png"),
+      lut_name: "test_lut",
+      sessionId: "session-1",
+      previewImageUrl: "/api/files/preview.png",
+      previewBaseImageUrl: "/api/files/preview.png",
+      layerImages: [],
+      layerImagesLoading: false,
+    });
+
+    render(<ActionBar />);
+
+    fireEvent.click(screen.getByRole("button", { name: "导出分享卡" }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/导出失败：导出没有完成，请稍后重试。/)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/Failed to create cover PNG blob/)).not.toBeInTheDocument();
+  });
+
   it("shows a readable share-card export failure when the preview cover image is unavailable", async () => {
     vi.mocked(recipeImportFlow.exportShareCard).mockRejectedValueOnce(
       new Error("Failed to load preview image for cover"),

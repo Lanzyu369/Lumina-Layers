@@ -74,6 +74,10 @@ _PUZZLE_ASSEMBLY_FAILED_DETAIL = (
     "Puzzle 3MF assembly failed. The generated pieces could not be "
     "combined into a downloadable file. Try generating the puzzle again."
 )
+_PUZZLE_PIECE_GENERATION_FAILED_DETAIL = (
+    "Puzzle generation failed for one or more pieces. Re-run preview and "
+    "try generating the puzzle again."
+)
 
 
 class _PuzzleLayoutPreviewBody(BaseModel):
@@ -945,7 +949,7 @@ async def generate_puzzle(
         )
         raise HTTPException(
             status_code=500,
-            detail="Puzzle generation failed for one or more pieces: " + "; ".join(errors[:5]),
+            detail=_PUZZLE_PIECE_GENERATION_FAILED_DETAIL,
         )
 
     if not successful_entries:
