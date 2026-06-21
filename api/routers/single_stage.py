@@ -1519,12 +1519,20 @@ async def extractor_export_gradient_card_materials(
     persistent_registry_session = f"material-export:{uuid.uuid4().hex}"
     archive_registered = False
     try:
-        download_id = registry.register_path(
-            persistent_registry_session,
-            result.archive_path,
-            filename=result.download_filename,
-            ttl_seconds=MATERIAL_LIBRARY_FILE_TTL_SECONDS,
-        )
+        try:
+            download_id = registry.register_path(
+                persistent_registry_session,
+                result.archive_path,
+                filename=result.download_filename,
+                ttl_seconds=MATERIAL_LIBRARY_FILE_TTL_SECONDS,
+            )
+        except (OSError, RuntimeError, ValueError, TypeError) as exc:
+            _raise_file_registration_error(
+                exc,
+                context="Gradient card material export file registration",
+                event="extractor_export_gradient_card_materials_registration_failed",
+                session_id=persistent_registry_session,
+            )
         archive_registered = True
     finally:
         if not archive_registered:
@@ -2000,13 +2008,18 @@ async def generate_material_swatch(
             )
             registered_file_ids.append(preview_id)
             preview_url = f"/api/files/{preview_id}"
-    except Exception:
+    except (OSError, RuntimeError, ValueError, TypeError) as exc:
         _rollback_swatch_registration(
             registry,
             file_ids=registered_file_ids,
             generated_path=output_path,
         )
-        raise
+        _raise_file_registration_error(
+            exc,
+            context="Material swatch file registration",
+            event="extractor_material_swatch_registration_failed",
+            session_id=sid,
+        )
 
     log.info(
         "Material recipe swatch generated",
