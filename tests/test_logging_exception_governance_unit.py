@@ -266,6 +266,7 @@ FIVE_COLOR_STRUCTURED_EVENTS = {
     "five_color_query_done",
     "five_color_generate_swatch_done",
     "five_color_generate_swatch_failed",
+    "five_color_generate_swatch_registration_failed",
     "five_color_base_colors_done",
 }
 VECTORIZER_STRUCTURED_EVENTS = {
