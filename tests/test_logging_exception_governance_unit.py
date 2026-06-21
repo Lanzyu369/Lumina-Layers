@@ -151,6 +151,7 @@ VECTOR_STRUCTURED_EVENTS = {
 }
 EXTRACTOR_STRUCTURED_EVENTS = {
     "extractor_extract_done",
+    "extractor_extract_failed",
     "extractor_lut_download_registration_failed",
     "extractor_merge_8color_done",
     "extractor_merge_5color_extended_done",
@@ -181,6 +182,7 @@ EXTRACTOR_STRUCTURED_EVENTS = {
     "extractor_update_gradient_card_material_done",
     "extractor_export_gradient_card_materials_done",
     "extractor_export_gradient_card_materials_registration_failed",
+    "extractor_import_gradient_card_materials_failed",
     "extractor_import_gradient_card_materials_done",
     "material_solver_cache_status_done",
     "material_solver_cache_build_done",
@@ -266,6 +268,7 @@ FIVE_COLOR_STRUCTURED_EVENTS = {
     "five_color_query_done",
     "five_color_generate_swatch_done",
     "five_color_generate_swatch_failed",
+    "five_color_generate_swatch_registration_failed",
     "five_color_base_colors_done",
 }
 VECTORIZER_STRUCTURED_EVENTS = {

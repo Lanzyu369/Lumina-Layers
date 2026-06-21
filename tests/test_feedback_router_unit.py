@@ -90,6 +90,23 @@ def _read_ticket_json(feedback_root: Path, ticket_id: str) -> dict[str, Any]:
     raise AssertionError(f"ticket.json for {ticket_id} not found under {feedback_root}")
 
 
+def _iter_json_strings(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        strings: list[str] = []
+        for key, item in value.items():
+            strings.append(str(key))
+            strings.extend(_iter_json_strings(item))
+        return strings
+    if isinstance(value, list):
+        strings: list[str] = []
+        for item in value:
+            strings.extend(_iter_json_strings(item))
+        return strings
+    return []
+
+
 @pytest.fixture()
 def feedback_root(tmp_path: Path) -> Path:
     root = tmp_path / "feedback_root"
@@ -273,6 +290,23 @@ def test_submit_bug_report_returns_pending_email_status_when_configured(
 
     private_path = tmp_path / "private-output" / "model.3mf"
     payload = _payload(description="Email ok")
+    payload["context"]["recent_client_logs"] = [
+        {
+            "timestamp": "2026-05-10T01:02:03.000Z",
+            "method": "error",
+            "label": "api: request failed",
+            "elapsed_ms": 12.346,
+            "scope": "api",
+            "phase": "request-failed",
+            "details": {
+                "status_code": 500,
+                "api_path": "/api/files/output-model",
+                "api_path_transport_error": (
+                    "Request failed with status code 500 at /api/files/output-model"
+                ),
+            },
+        }
+    ]
     payload["context"]["active_final_artifact_ref"] = {
         "session_id": "session-abcdef",
         "download_url": None,
@@ -294,6 +328,44 @@ def test_submit_bug_report_returns_pending_email_status_when_configured(
     active_ref = email_payload["context"]["active_final_artifact_ref"]
     assert "disk_path" not in active_ref
     assert private_path.as_posix() not in json.dumps(email_payload, ensure_ascii=False)
+    email_log_details = email_payload["context"]["recent_client_logs"][0]["details"]
+    assert email_log_details["api_path_transport_error"] == (
+        "The server reported an error while processing this request. "
+        "Context: /api/files/output-model"
+    )
+    assert email_log_details["status_code"] == 500
+    assert email_log_details["api_path"] == "/api/files/output-model"
+    assert "Request failed with status code 500" not in json.dumps(
+        email_payload,
+        ensure_ascii=False,
+    )
+    from api.feedback_email import _build_email_message
+
+    email_message = _build_email_message(
+        ticket_id=data["ticket_id"],
+        request_payload=email_payload,
+        dump_path=email_calls[0]["dump_path"],
+        smtp_from="from@example.com",
+        smtp_to=["dev@example.com"],
+    )
+    json_attachments = [
+        attachment
+        for attachment in email_message.iter_attachments()
+        if attachment.get_filename() == f"{data['ticket_id']}.json"
+    ]
+    assert len(json_attachments) == 1
+    attached_payload = json.loads(
+        json_attachments[0].get_payload(decode=True).decode("utf-8")
+    )
+    attached_details = attached_payload["context"]["recent_client_logs"][0]["details"]
+    assert attached_details["api_path_transport_error"] == (
+        "The server reported an error while processing this request. "
+        "Context: /api/files/output-model"
+    )
+    assert "Request failed with status code 500" not in json.dumps(
+        attached_payload,
+        ensure_ascii=False,
+    )
     email_dump_path = email_calls[0]["dump_path"]
     assert email_dump_path.startswith("feedback/")
     assert data["ticket_id"] in email_dump_path
@@ -491,6 +563,106 @@ def test_submit_bug_report_sanitizes_recent_client_logs(
     assert logs[0]["elapsed_ms"] == 5.123
     assert logs[0]["details"]["long"].endswith("...<truncated>")
     assert logs[0]["details"]["__truncated_keys"] == 7
+
+
+def test_submit_bug_report_redacts_context_diagnostic_strings(
+    client: TestClient,
+    feedback_root: Path,
+) -> None:
+    payload = _payload()
+    payload["context"]["recent_client_logs"] = [
+        {
+            "timestamp": "file:///Users/min/private/log.txt",
+            "method": "error",
+            "label": "Request failed with status code 500",
+            "elapsed_ms": 12.3456,
+            "scope": r"\\LUMINA-NAS\private\trace.log",
+            "phase": "HTTP 500",
+            "details": {
+                "posix_path": "failed at /Users/min/private/model.3mf",
+                "private_tmp": "open /private/tmp/lumina/model.png",
+                "windows_path": r"C:\Users\min\secret\model.3mf",
+                "windows_forward_path": "C:/Users/min/secret/model.3mf",
+                "unc_path": r"\\LUMINA-NAS\share\secret.3mf",
+                "file_url": "file:///Users/min/private/model.3mf",
+                "windows_file_url": "file:///C:/Users/min/private/model.3mf",
+                "generic_http_error": "Request failed with status code 500",
+                "api_path_transport_error": (
+                    "Request failed with status code 500 at /api/files/output-model"
+                ),
+                "business_detail": "Color palette has no hex entries.",
+                "api_path": "/api/files/output-model",
+            },
+        }
+    ]
+    payload["context"]["action_history"] = [
+        {
+            "timestamp": 1760000000000,
+            "action_type": "api_error",
+            "snapshot": {
+                "active_tab": "converter",
+                "advanced_params": {
+                    "relief": {
+                        "source": "file:///Users/min/private/source.png",
+                        "color_height_map": {"#ffffff": 0.24},
+                    },
+                },
+            },
+            "error": {
+                "status_code": 500,
+                "path": "/api/files/output-model",
+                "error_message": "HTTP 404: /api/files/output-model",
+                "local_path_error_message": (
+                    r"Request failed with status code 500 at C:\Users\min\secret.3mf"
+                ),
+                "stack": "Traceback at /home/min/lumina/app.py",
+            },
+        }
+    ]
+    payload["context"]["advanced_params"] = {
+        "relief": {
+            "source": "file:///Users/min/private/source.png",
+            "color_height_map": {"#ffffff": 0.24},
+        }
+    }
+
+    response = client.post("/api/feedback/bug-report", json=payload)
+
+    assert response.status_code == 200
+    data = response.json()
+    ticket_json = _read_ticket_json(feedback_root, data["ticket_id"])
+    context_text = json.dumps(ticket_json["context"], ensure_ascii=False)
+    context_strings = "\n".join(_iter_json_strings(ticket_json["context"]))
+    log_details = ticket_json["context"]["recent_client_logs"][0]["details"]
+    action_error = ticket_json["context"]["action_history"][0]["error"]
+    assert "/Users/min/private" not in context_strings
+    assert "/private/tmp/lumina" not in context_strings
+    assert "/home/min/lumina" not in context_strings
+    assert r"C:\Users\min" not in context_strings
+    assert "C:/Users/min" not in context_strings
+    assert r"\\LUMINA-NAS" not in context_strings
+    assert "file:///Users/min" not in context_strings
+    assert "file:///C:/Users/min" not in context_strings
+    assert "Request failed with status code 500" not in context_strings
+    assert "HTTP 404" not in context_strings
+    assert "HTTP 500" not in context_strings
+    assert "[redacted_local_path]" in context_text
+    assert "The server reported an error while processing this request." in context_text
+    assert ticket_json["context"]["action_history"][0]["error"]["status_code"] == 500
+    assert "/api/files/output-model" in context_text
+    assert log_details["api_path_transport_error"] == (
+        "The server reported an error while processing this request. "
+        "Context: /api/files/output-model"
+    )
+    assert action_error["error_message"] == (
+        "The server reported an error while processing this request. "
+        "Context: /api/files/output-model"
+    )
+    assert action_error["local_path_error_message"] == (
+        "The server reported an error while processing this request."
+    )
+    assert "Color palette has no hex entries." in context_text
+    assert ticket_json["context"]["recent_client_logs"][0]["elapsed_ms"] == 12.346
 
 
 @pytest.mark.parametrize(

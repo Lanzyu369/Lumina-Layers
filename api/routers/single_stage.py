@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 from ipaddress import ip_address
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import shutil
 import threading
 import tempfile
@@ -133,6 +133,19 @@ FIT_STAGE_A_EXPIRED_STAGE_JSON_DETAIL = (
     "Extracted single-stage dataset has expired. "
     "Re-run extraction before fitting Stage A."
 )
+SINGLE_STAGE_DATASET_MALFORMED_ZIP_DETAIL = "Malformed ZIP archive"
+SINGLE_STAGE_DATASET_INVALID_LAYOUT_DETAIL = (
+    "Dataset zip must contain {substrate_id}/{color_name}/ directories."
+)
+SINGLE_STAGE_DATASET_UNSAFE_ZIP_DETAIL = (
+    "Dataset ZIP contains an unsafe file path."
+)
+SINGLE_STAGE_DATASET_MISSING_LABELME_PREFIX = (
+    "Missing LabelMe JSON files in dataset directory: "
+)
+SINGLE_STAGE_DATASET_MISSING_LABELME_DETAIL = (
+    "Dataset ZIP is missing LabelMe JSON files."
+)
 MATERIAL_SOLVER_CACHE_LIST_FAILED_DETAIL = (
     "Material solver caches could not be listed. "
     "Check cache storage and try again."
@@ -143,6 +156,12 @@ GRADIENT_CARD_MATERIAL_LIBRARY_LIST_FAILED_DETAIL = (
 )
 GRADIENT_CARD_MATERIAL_LIBRARY_FORBIDDEN_DETAIL = (
     "Material library management is only available from the Lumina Studio local app."
+)
+GRADIENT_CARD_MATERIAL_IMPORT_UNSAFE_PATH_DETAIL = (
+    "Material import ZIP contains an unsafe file path."
+)
+GRADIENT_CARD_MATERIAL_IMPORT_FAILED_DETAIL = (
+    "Material import failed. Check the server log for details."
 )
 _MATERIAL_LIBRARY_DEFAULT_LOCAL_PORTS = frozenset({8000, 4174, 5174, 5173})
 _MATERIAL_LIBRARY_ALLOWED_LOCAL_PORTS_ENV = (
@@ -180,6 +199,47 @@ def _is_missing_stage_json_path(path: str | None) -> bool:
 
 def _expired_stage_json_exception() -> HTTPException:
     return HTTPException(status_code=409, detail=FIT_STAGE_A_EXPIRED_STAGE_JSON_DETAIL)
+
+
+def _is_safe_relative_detail_fragment(value: str) -> bool:
+    cleaned = value.strip()
+    if not cleaned:
+        return False
+    if cleaned.startswith(("/", "\\", "file://")):
+        return False
+    if "\\" in cleaned or "://" in cleaned:
+        return False
+    if PureWindowsPath(cleaned).drive:
+        return False
+    parts = PurePosixPath(cleaned).parts
+    return all(part not in {"", ".", ".."} for part in parts)
+
+
+def _single_stage_dataset_input_error_detail(exc: ValueError) -> str | None:
+    message = str(exc).strip()
+    if message == SINGLE_STAGE_DATASET_MALFORMED_ZIP_DETAIL:
+        return SINGLE_STAGE_DATASET_MALFORMED_ZIP_DETAIL
+    if message == SINGLE_STAGE_DATASET_INVALID_LAYOUT_DETAIL:
+        return SINGLE_STAGE_DATASET_INVALID_LAYOUT_DETAIL
+    if message.startswith("Unsafe zip entry:"):
+        return SINGLE_STAGE_DATASET_UNSAFE_ZIP_DETAIL
+    if message.startswith(SINGLE_STAGE_DATASET_MISSING_LABELME_PREFIX):
+        missing_dir = message[len(SINGLE_STAGE_DATASET_MISSING_LABELME_PREFIX):]
+        if _is_safe_relative_detail_fragment(missing_dir):
+            return f"{SINGLE_STAGE_DATASET_MISSING_LABELME_PREFIX}{missing_dir.strip()}"
+        return SINGLE_STAGE_DATASET_MISSING_LABELME_DETAIL
+    return None
+
+
+def _gradient_card_material_import_error_detail(exc: ValueError) -> str | None:
+    message = str(exc).strip()
+    if message.startswith("Unsafe zip entry:"):
+        return GRADIENT_CARD_MATERIAL_IMPORT_UNSAFE_PATH_DETAIL
+    if message.startswith("Unsafe material bundle file path:"):
+        return GRADIENT_CARD_MATERIAL_IMPORT_UNSAFE_PATH_DETAIL
+    if message.startswith("Material bundle file is outside material directory:"):
+        return GRADIENT_CARD_MATERIAL_IMPORT_UNSAFE_PATH_DETAIL
+    return None
 
 
 def get_material_cache_evictor() -> MaterialCacheEvictor:
@@ -870,9 +930,27 @@ async def extractor_extract_single_stage(
             session_id=session_id,
         )
     except zipfile.BadZipFile:
-        raise HTTPException(status_code=422, detail="Malformed ZIP archive")
-    except (ValueError, TypeError, OSError, RuntimeError) as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        raise HTTPException(
+            status_code=422,
+            detail=SINGLE_STAGE_DATASET_MALFORMED_ZIP_DETAIL,
+        )
+    except ValueError as e:
+        detail = _single_stage_dataset_input_error_detail(e)
+        if detail is not None:
+            raise HTTPException(status_code=422, detail=detail) from e
+        _raise_internal_route_error(
+            e,
+            context="Single-stage dataset extraction",
+            event="extractor_extract_single_stage_failed",
+            session_id=session_id,
+        )
+    except (TypeError, OSError, RuntimeError) as e:
+        _raise_internal_route_error(
+            e,
+            context="Single-stage dataset extraction",
+            event="extractor_extract_single_stage_failed",
+            session_id=session_id,
+        )
     finally:
         if zip_path is not None and session_id is None:
             try:
@@ -972,7 +1050,12 @@ async def extractor_fit_stage_a(
     except (ValueError, TypeError, OSError, RuntimeError) as e:
         if created_session_for_upload:
             _close_session_safely(store, sid_for_registry)
-        raise HTTPException(status_code=422, detail=str(e))
+        _raise_internal_route_error(
+            e,
+            context="Stage A fitting",
+            event="extractor_fit_stage_a_failed",
+            session_id=sid_for_registry,
+        )
 
     try:
         params_id = _register_stage_a_params_download(registry, result.params_path)
@@ -1626,9 +1709,40 @@ async def extractor_import_gradient_card_materials(
     except FileNotFoundError as exc:
         _rollback_imported_materials(imported_directory_names)
         raise HTTPException(status_code=404, detail=str(exc))
-    except (ValueError, TypeError, OSError, RuntimeError) as exc:
+    except ValueError as exc:
         _rollback_imported_materials(imported_directory_names)
-        raise HTTPException(status_code=422, detail=str(exc))
+        safe_detail = _gradient_card_material_import_error_detail(exc)
+        if safe_detail is not None:
+            log.warning(
+                "Gradient card materials import failed",
+                extra={
+                    "event": "extractor_import_gradient_card_materials_failed",
+                    "status_code": 422,
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                    "archives_received": len(archives),
+                    "imported_directory_names_count": len(imported_directory_names),
+                },
+            )
+            raise HTTPException(status_code=422, detail=safe_detail) from exc
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (TypeError, OSError, RuntimeError) as exc:
+        _rollback_imported_materials(imported_directory_names)
+        log.warning(
+            "Gradient card materials import failed",
+            extra={
+                "event": "extractor_import_gradient_card_materials_failed",
+                "status_code": 500,
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+                "archives_received": len(archives),
+                "imported_directory_names_count": len(imported_directory_names),
+            },
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=GRADIENT_CARD_MATERIAL_IMPORT_FAILED_DETAIL,
+        ) from exc
     finally:
         for archive_path in uploaded_archive_paths:
             try:
