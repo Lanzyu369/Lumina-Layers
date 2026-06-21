@@ -20,6 +20,14 @@ from fastapi.testclient import TestClient
 
 UNTRUSTED_ORIGIN_HEADERS = {"Origin": "https://attacker.example"}
 LOCAL_FRONTEND_ORIGIN_HEADERS = {"Origin": "http://localhost:5174"}
+DESCRIPTION_RAW_DIAGNOSTICS = (
+    r"导出失败：AxiosError: Request failed with status code 500 "
+    r"at /Users/min/private/model.3mf; retry /api/files/output-model; "
+    r"file:///Users/min/private/source.png; C:\Users\min\secret\source.png"
+)
+GENERIC_HTTP_STATUS_DETAIL = (
+    "The server reported an error while processing this request."
+)
 
 
 def _capture_feedback_logger(
@@ -105,6 +113,17 @@ def _iter_json_strings(value: Any) -> list[str]:
             strings.extend(_iter_json_strings(item))
         return strings
     return []
+
+
+def _assert_description_diagnostics_redacted(text: str) -> None:
+    assert "Request failed with status code 500" not in text
+    assert "AxiosError" not in text
+    assert "/Users/min/private" not in text
+    assert "file:///Users/min" not in text
+    assert r"C:\Users\min" not in text
+    assert "[redacted_local_path]" in text
+    assert GENERIC_HTTP_STATUS_DETAIL in text
+    assert "/api/files/output-model" in text
 
 
 @pytest.fixture()
@@ -268,6 +287,49 @@ def test_submit_bug_report_accepts_description_only(client: TestClient) -> None:
     assert data["assembly_status"] in ("in_progress", "done", "partial_failed")
 
 
+def test_feedback_description_sanitizer_preserves_safe_text_and_api_context() -> None:
+    from api.routers.feedback import _sanitize_bug_report_description
+
+    ordinary = "中文描述：切换到 8 色时 3D 预览异常"
+    assert _sanitize_bug_report_description(ordinary) == ordinary
+
+    sanitized = _sanitize_bug_report_description(DESCRIPTION_RAW_DIAGNOSTICS)
+    _assert_description_diagnostics_redacted(sanitized)
+
+    api_query = (
+        "AxiosError: Request failed with status code 500 "
+        "at /api/files/output-model?token=secret#debug"
+    )
+    query_sanitized = _sanitize_bug_report_description(api_query)
+    assert query_sanitized == (
+        f"{GENERIC_HTTP_STATUS_DETAIL} Context: /api/files/output-model"
+    )
+    assert "token=secret" not in query_sanitized
+
+
+def test_submit_bug_report_sanitizes_description_for_export(
+    client: TestClient,
+    feedback_root: Path,
+) -> None:
+    response = client.post(
+        "/api/feedback/bug-report",
+        json=_payload(description=DESCRIPTION_RAW_DIAGNOSTICS),
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    ticket_json = _read_ticket_json(feedback_root, data["ticket_id"])
+    ticket_dir = next(feedback_root.glob(f"*/{data['ticket_id']}"))
+    exported_text = "\n".join(
+        [
+            json.dumps(ticket_json, ensure_ascii=False),
+            (ticket_dir / "index.md").read_text(encoding="utf-8"),
+            (ticket_dir / "summary.txt").read_text(encoding="utf-8"),
+        ]
+    )
+    _assert_description_diagnostics_redacted(exported_text)
+
+
 def test_submit_bug_report_returns_pending_email_status_when_configured(
     client: TestClient,
     feedback_root: Path,
@@ -289,7 +351,7 @@ def test_submit_bug_report_returns_pending_email_status_when_configured(
     feedback_email.is_email_configured.cache_clear()
 
     private_path = tmp_path / "private-output" / "model.3mf"
-    payload = _payload(description="Email ok")
+    payload = _payload(description=DESCRIPTION_RAW_DIAGNOSTICS)
     payload["context"]["recent_client_logs"] = [
         {
             "timestamp": "2026-05-10T01:02:03.000Z",
@@ -325,6 +387,9 @@ def test_submit_bug_report_returns_pending_email_status_when_configured(
     assert data["email_status"] == "pending"
     assert data["relay_available"] is True
     email_payload = email_calls[0]["request_payload"]
+    _assert_description_diagnostics_redacted(
+        json.dumps(email_payload, ensure_ascii=False)
+    )
     active_ref = email_payload["context"]["active_final_artifact_ref"]
     assert "disk_path" not in active_ref
     assert private_path.as_posix() not in json.dumps(email_payload, ensure_ascii=False)
@@ -356,6 +421,9 @@ def test_submit_bug_report_returns_pending_email_status_when_configured(
     assert len(json_attachments) == 1
     attached_payload = json.loads(
         json_attachments[0].get_payload(decode=True).decode("utf-8")
+    )
+    _assert_description_diagnostics_redacted(
+        json.dumps(attached_payload, ensure_ascii=False)
     )
     attached_details = attached_payload["context"]["recent_client_logs"][0]["details"]
     assert attached_details["api_path_transport_error"] == (
@@ -879,6 +947,58 @@ def test_relay_bug_report_forwards_to_configured_relay(
     ]
     assert len(infos) == 1
     assert infos[0].relay_status_code == 202
+
+
+def test_relay_bug_report_sanitizes_description_before_forwarding(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+
+    calls: list[dict[str, Any]] = []
+
+    class _Response:
+        status_code = 202
+
+        def raise_for_status(self) -> None:
+            return None
+
+    class _Client:
+        def __init__(self, *, timeout: float) -> None:
+            self.timeout = timeout
+
+        async def __aenter__(self) -> "_Client":
+            return self
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+        async def post(
+            self,
+            url: str,
+            *,
+            json: dict[str, Any],
+            headers: dict[str, str],
+        ) -> _Response:
+            calls.append({"url": url, "json": json, "headers": headers})
+            return _Response()
+
+    monkeypatch.setenv("LUMINA_FEEDBACK_RELAY_URL", "https://relay.example.test/feedback")
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+
+    response = client.post(
+        "/api/feedback/bug-report/relay",
+        json={
+            "ticket_id": "abc12345",
+            "request_payload": _payload(description=DESCRIPTION_RAW_DIAGNOSTICS),
+        },
+    )
+
+    assert response.status_code == 200
+    forwarded_payload = calls[0]["json"]["request_payload"]
+    _assert_description_diagnostics_redacted(
+        json.dumps(forwarded_payload, ensure_ascii=False)
+    )
 
 
 def test_relay_bug_report_redacts_final_artifact_disk_path(
