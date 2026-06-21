@@ -93,10 +93,15 @@ export function mergeCustomSlicer(
   if (!customSlicer) {
     return slicers;
   }
+  const customPath = customSlicer.exe_path?.trim() ?? "";
   const rest = slicers.filter(
-    (slicer) =>
-      slicer.id !== customSlicer.id &&
-      slicer.exe_path !== customSlicer.exe_path,
+    (slicer) => {
+      if (slicer.id === customSlicer.id) {
+        return false;
+      }
+      const slicerPath = slicer.exe_path?.trim() ?? "";
+      return !(customPath && slicerPath && slicerPath === customPath);
+    },
   );
   return [{ ...customSlicer, source: customSlicer.source ?? "custom" }, ...rest];
 }
@@ -177,7 +182,7 @@ export const useSlicerStore = create<SlicerState & SlicerActions>(
           throw new Error(response.message || "未识别到切片软件");
         }
         const settingsState = useSettingsStore.getState();
-        settingsState.setCustomSlicerPath(response.slicer.exe_path);
+        settingsState.setCustomSlicerPath(trimmed);
         settingsState.setCustomSlicerId(response.slicer.id);
         settingsState.setLastSlicerId(response.slicer.id);
         const softwareId = getSoftwareIdForDetectedSlicerId(response.slicer.id);
