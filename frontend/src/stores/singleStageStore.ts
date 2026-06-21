@@ -259,6 +259,8 @@ const GRADIENT_CARD_SAVE_TARGET_MISSING_DETAIL_PATTERNS = [
 const GRADIENT_CARD_SAVE_TARGET_INVALID_DETAILS = [
   "Existing material archive is not valid UTF-8 JSON",
 ];
+const GRADIENT_CARD_IMAGE_SOURCE_MISMATCH_DETAIL_PREFIX =
+  "Cannot merge gradient-card captures from different image sources:";
 
 const GRADIENT_CARD_IMAGE_DECODE_DETAIL_PREFIX = "无法解码图像文件:";
 const GRADIENT_CARD_HEIC_DETAIL_FRAGMENT = "HEIC/HEIF";
@@ -355,6 +357,9 @@ function resolveGradientCardSaveError(err: unknown): string {
     }
     if (GRADIENT_CARD_SAVE_TARGET_INVALID_DETAILS.includes(detail)) {
       return tRuntime("mat_gradient_save_target_invalid_error");
+    }
+    if (detail.startsWith(GRADIENT_CARD_IMAGE_SOURCE_MISMATCH_DETAIL_PREFIX)) {
+      return tRuntime("mat_gradient_image_source_mismatch_error");
     }
     return detail;
   }
