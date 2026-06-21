@@ -336,7 +336,11 @@ function readableApiErrorMessage(
     return fallbackHttpStatusMessage(statusCode, requestId);
   }
   const detail = extractReadableDetail(data);
-  if (detail && !isGenericHttpDetail(detail, statusCode)) {
+  if (
+    detail &&
+    !isGenericHttpDetail(detail, statusCode) &&
+    !unsafeVisibleErrorSuffix(detail)
+  ) {
     return detail;
   }
   const fallback = fallbackHttpStatusMessage(statusCode, requestId);
@@ -522,7 +526,8 @@ function buildReadableResponseData(
     const hasReadableDetailMessage =
       typeof detailMessage === "string" &&
       detailMessage.trim().length > 0 &&
-      !isGenericHttpDetail(detailMessage, statusCode);
+      !isGenericHttpDetail(detailMessage, statusCode) &&
+      !unsafeVisibleErrorSuffix(detailMessage);
     const hasCodeOnlyDetail =
       typeof detailError === "string" &&
       detailError.trim().length > 0 &&
@@ -537,7 +542,13 @@ function buildReadableResponseData(
       return { ...data, detail: readableMessage };
     }
   }
-  if (typeof detail !== "string" || !isGenericHttpDetail(detail, statusCode)) {
+  if (
+    typeof detail !== "string" ||
+    (
+      !isGenericHttpDetail(detail, statusCode) &&
+      !unsafeVisibleErrorSuffix(detail)
+    )
+  ) {
     if (
       typeof message === "string" &&
       isGenericHttpDetail(message, statusCode)
