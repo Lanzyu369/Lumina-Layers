@@ -489,6 +489,31 @@ describe("apiClient", () => {
     expect(JSON.stringify(rejected)).not.toContain("/api/convert/preview");
   });
 
+  it("redacts technical route guidance when the backend omits the /api prefix", async () => {
+    const error = new Error("Request failed with status code 409");
+    Object.assign(error, {
+      config: { method: "post", url: "/convert/generate" },
+      response: {
+        status: 409,
+        data: {
+          detail: "No preview cache. Call POST /convert/preview first.",
+        },
+      },
+    });
+    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+    const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
+
+    expect(rejected).toMatchObject({
+      message: "The request conflicts with the current server state.",
+    });
+    expect(rejected.response?.data?.detail).toBe(
+      "The request conflicts with the current server state.",
+    );
+    expect(JSON.stringify(rejected)).not.toContain("Call POST");
+    expect(JSON.stringify(rejected)).not.toContain("/convert/preview");
+  });
+
   it("uses a language fallback for unknown client errors without exposing status numbers", async () => {
     const error = new Error("Request failed with status code 418");
     Object.assign(error, {

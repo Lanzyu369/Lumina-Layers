@@ -8,6 +8,7 @@ import { trackLuminaEvent } from "../analytics/umami";
 import { useI18n } from "../i18n/context";
 import { collectBugReportContext } from "../utils/bugReportContext";
 import { loadPersistedLogs } from "../utils/clientLog";
+import { isUnsafeVisibleErrorText } from "../utils/visibleErrorText";
 import { useActionHistoryStore } from "../stores/actionHistoryStore";
 import Button from "./ui/Button";
 import { StatusBanner, workstationInputClass } from "./ui/panelPrimitives";
@@ -39,7 +40,7 @@ function scheduleIdle(callback: () => void): void {
 }
 
 function isGenericStatusCodeMessage(message: string): boolean {
-  return /^Request failed with status code \d{3}(?::.*)?$/i.test(message.trim());
+  return isUnsafeVisibleErrorText(message);
 }
 
 /**

@@ -1,5 +1,6 @@
 import axios from "axios";
 import { postClientLog, summarizeErrorForLog } from "../utils/clientLog";
+import { isUnsafeVisibleErrorText } from "../utils/visibleErrorText";
 import { useActionHistoryStore } from "../stores/actionHistoryStore";
 import { tRuntime } from "../i18n/runtime";
 
@@ -339,7 +340,7 @@ function readableApiErrorMessage(
   if (
     detail &&
     !isGenericHttpDetail(detail, statusCode) &&
-    !unsafeVisibleErrorSuffix(detail)
+    !isUnsafeVisibleErrorText(detail)
   ) {
     return detail;
   }
@@ -372,25 +373,6 @@ function extractStatusCodeFromGenericErrorMessage(message: string): number | nul
   }
   const statusCode = Number(match[1]);
   return Number.isInteger(statusCode) ? statusCode : null;
-}
-
-function technicalHttpContextSuffix(suffix: string): boolean {
-  const normalized = suffix.trim().toLowerCase();
-  if (!normalized) {
-    return true;
-  }
-  return (
-    /^\/api(?:\/|\b)\S*$/.test(normalized) ||
-    /^https?:\/\/\S+$/.test(normalized)
-  );
-}
-
-function unsafeVisibleErrorSuffix(suffix: string): boolean {
-  return (
-    /(?:^|\s)(?:\/(?:users|private|tmp|var|home|volumes)\b|~\/|[a-z]:[\\/]|\\\\)/i.test(suffix) ||
-    /(?:^|\s)(?:\/api(?:\/|\b)|https?:\/\/)/i.test(suffix) ||
-    /\b(?:traceback|stack trace|exception)\b/i.test(suffix)
-  );
 }
 
 function cleanHttpStatusSuffix(suffix: string): string {
@@ -437,8 +419,7 @@ function statusPrefixedErrorVisibleMessage(
     !suffix ||
     isServerErrorStatus(statusCode) ||
     isGenericHttpDetail(suffix, statusCode) ||
-    technicalHttpContextSuffix(suffix) ||
-    unsafeVisibleErrorSuffix(suffix)
+    isUnsafeVisibleErrorText(suffix)
   ) {
     return fallbackHttpStatusMessage(statusCode, requestId);
   }
@@ -527,7 +508,7 @@ function buildReadableResponseData(
       typeof detailMessage === "string" &&
       detailMessage.trim().length > 0 &&
       !isGenericHttpDetail(detailMessage, statusCode) &&
-      !unsafeVisibleErrorSuffix(detailMessage);
+      !isUnsafeVisibleErrorText(detailMessage);
     const hasCodeOnlyDetail =
       typeof detailError === "string" &&
       detailError.trim().length > 0 &&
@@ -546,7 +527,7 @@ function buildReadableResponseData(
     typeof detail !== "string" ||
     (
       !isGenericHttpDetail(detail, statusCode) &&
-      !unsafeVisibleErrorSuffix(detail)
+      !isUnsafeVisibleErrorText(detail)
     )
   ) {
     if (

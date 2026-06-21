@@ -233,6 +233,35 @@ describe("BugReportModal", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("replaces transport-prefixed API errors in the context summary", () => {
+    vi.mocked(collectBugReportContext).mockReturnValueOnce(createBugReportContext({
+      recent_client_logs: [
+        {
+          timestamp: "2026-06-18T15:00:00.000Z",
+          method: "error",
+          label: "api: request failed",
+          elapsed_ms: null,
+          scope: "api",
+          phase: "request-failed",
+          details: {
+            status_code: 500,
+            url: "/convert/generate",
+            error_message: "AxiosError: Request failed with status code 500 at /convert/generate",
+          },
+        },
+      ],
+    }));
+
+    render(<BugReportModal open onClose={() => {}} />);
+
+    const summary = within(screen.getByTestId("bug-report-context-summary"));
+    expect(
+      summary.getByText("服务器发生内部错误。请使用请求 ID 查看日志。"),
+    ).toBeInTheDocument();
+    expect(summary.queryByText(/AxiosError/)).not.toBeInTheDocument();
+    expect(summary.queryByText(/\/convert\/generate/)).not.toBeInTheDocument();
+  });
+
   it("submits the built payload and shows a success toast", async () => {
     vi.mocked(submitBugReport).mockResolvedValueOnce({
       ticket_id: "abc12345",
