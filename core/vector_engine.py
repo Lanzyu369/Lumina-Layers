@@ -946,6 +946,8 @@ def _is_strict_top_level_path_svg(root):
         return False
     if root.get("data-lumina-origin") is not None or root.get("transform") is not None:
         return False
+    if _direct_path_visibility_requires_full_svg_parse(root):
+        return False
 
     reference_tags = {
         "defs",
@@ -968,8 +970,80 @@ def _is_strict_top_level_path_svg(root):
             return False
         if elem.get("transform") is not None:
             return False
+        if _direct_path_visibility_requires_full_svg_parse(elem):
+            return False
 
     return all(_tag_local_name(child) == "path" for child in list(root))
+
+
+def _direct_path_visibility_requires_full_svg_parse(elem):
+    """Return True when visibility or opacity semantics exceed the direct parser."""
+
+    opacity_attrs = ("opacity", "fill-opacity", "stroke-opacity")
+    for attr in opacity_attrs:
+        if elem.get(attr) is not None:
+            return True
+
+    display = str(elem.get("display", "") or "").strip().lower()
+    if display == "none":
+        return True
+    visibility = str(elem.get("visibility", "") or "").strip().lower()
+    if visibility in {"hidden", "collapse"}:
+        return True
+
+    style = str(elem.get("style", "") or "")
+    for declaration in style.split(";"):
+        name, sep, value = declaration.partition(":")
+        if not sep:
+            continue
+        prop = name.strip().lower()
+        css_value = value.strip().lower()
+        if prop in opacity_attrs:
+            return True
+        if prop == "display" and css_value == "none":
+            return True
+        if prop == "visibility" and css_value in {"hidden", "collapse"}:
+            return True
+    return False
+
+
+def _parse_svg_opacity_scalar(raw_value):
+    """Parse an SVG opacity scalar, returning None when it is absent or invalid."""
+
+    if raw_value is None:
+        return None
+    value = str(raw_value).strip()
+    if not value:
+        return None
+    try:
+        if value.endswith("%"):
+            parsed = float(value[:-1].strip()) / 100.0
+        else:
+            parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed):
+        return None
+    return min(max(parsed, 0.0), 1.0)
+
+
+def _svg_element_opacity(element):
+    """Return inherited SVG element opacity as a normalized 0..1 scalar."""
+
+    values = getattr(element, "values", None)
+    raw_values = []
+    if isinstance(values, dict):
+        raw_values.append(values.get("opacity"))
+        attrs = values.get("attributes")
+        if isinstance(attrs, dict):
+            raw_values.append(attrs.get("opacity"))
+    raw_values.append(getattr(element, "opacity", None))
+
+    for raw_value in raw_values:
+        opacity = _parse_svg_opacity_scalar(raw_value)
+        if opacity is not None:
+            return opacity
+    return 1.0
 
 
 def _direct_path_fill_rgb(fill_value):
@@ -4869,6 +4943,8 @@ class VectorProcessor:
                     raise ValueError(f"Failed to parse SVG: {fallback_error}") from fallback_error
             else:
                 raise ValueError(f"Failed to parse SVG: {e}") from e
+        if svg is None:
+            raise ValueError("No valid shapes found in SVG")
 
         image_vectorizer_origin = False
         root = parsed_root
@@ -5214,6 +5290,9 @@ class VectorProcessor:
             if not isinstance(element, (Path, Shape)):
                 type_name = type(element).__name__
                 skipped_types[type_name] = skipped_types.get(type_name, 0) + 1
+                continue
+
+            if _svg_element_opacity(element) < 0.01:
                 continue
 
             has_fill = (

@@ -157,13 +157,13 @@ long double FilledArea(const Paths64& paths) {
   for (const Path64& path : paths) {
     signed_sum += SignedArea(path);
   }
-  return std::fabsl(signed_sum);
+  return std::fabs(signed_sum);
 }
 
 long double TriangleAreaSum(const Paths64& triangles) {
   long double total = 0.0L;
   for (const Path64& triangle : triangles) {
-    total += std::fabsl(SignedArea(triangle));
+    total += std::fabs(SignedArea(triangle));
   }
   return total;
 }
@@ -171,7 +171,7 @@ long double TriangleAreaSum(const Paths64& triangles) {
 bool TriangulatedAreaMatches(const Paths64& paths, const Paths64& triangles) {
   const long double expected_area = FilledArea(paths);
   const long double triangle_area = TriangleAreaSum(triangles);
-  const long double delta = std::fabsl(triangle_area - expected_area);
+  const long double delta = std::fabs(triangle_area - expected_area);
   const long double tolerance =
       std::max(kTriangulationAreaAbsTol, expected_area * kTriangulationAreaRelTol);
   return delta <= tolerance;
