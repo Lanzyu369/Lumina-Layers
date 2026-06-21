@@ -50,6 +50,7 @@ MATERIAL_SYNC_ROLLBACK_UNAVAILABLE_DETAIL = (
 MATERIAL_SYNC_STATUS_UNAVAILABLE_DETAIL = (
     "Material sync status is unavailable. Check the material library and try again."
 )
+MATERIAL_REGISTRY_URL_NOT_CONFIGURED_DETAIL = "Material registry URL is not configured"
 
 
 def _raise_material_sync_error(
@@ -78,6 +79,13 @@ def _canonical_package_sha256(value: object) -> str:
     if raw_value.startswith("sha256:"):
         raw_value = raw_value.split(":", 1)[1]
     return raw_value
+
+
+def _catalog_value_error_detail(exc: ValueError) -> str:
+    raw_detail = str(exc).strip()
+    if raw_detail == MATERIAL_REGISTRY_URL_NOT_CONFIGURED_DETAIL:
+        return MATERIAL_REGISTRY_URL_NOT_CONFIGURED_DETAIL
+    return MATERIAL_SYNC_CATALOG_UNAVAILABLE_DETAIL
 
 
 def _select_catalog_install_entry(
@@ -157,22 +165,33 @@ async def material_sync_catalog(
     try:
         catalog = list_material_registry_catalog(query=q, limit=limit, offset=offset)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _raise_material_sync_error(
+            event="material_sync_catalog_failed",
+            exc=exc,
+            status_code=422,
+            detail=_catalog_value_error_detail(exc),
+        )
     except RuntimeError as exc:
-        raise HTTPException(
+        _raise_material_sync_error(
+            event="material_sync_catalog_failed",
+            exc=exc,
             status_code=502,
             detail=MATERIAL_SYNC_CATALOG_UNAVAILABLE_DETAIL,
-        ) from exc
+        )
     except FileNotFoundError as exc:
-        raise HTTPException(
+        _raise_material_sync_error(
+            event="material_sync_catalog_failed",
+            exc=exc,
             status_code=502,
             detail=MATERIAL_SYNC_CATALOG_UNAVAILABLE_DETAIL,
-        ) from exc
+        )
     except OSError as exc:
-        raise HTTPException(
+        _raise_material_sync_error(
+            event="material_sync_catalog_failed",
+            exc=exc,
             status_code=500,
             detail=MATERIAL_SYNC_CATALOG_UNAVAILABLE_DETAIL,
-        ) from exc
+        )
 
     response = MaterialRegistryCatalogResponse(**catalog)
     log.info(

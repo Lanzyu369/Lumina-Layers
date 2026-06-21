@@ -698,6 +698,17 @@ def test_material_sync_refresh_requires_registry_url(
     assert "Material registry URL is not configured" in response.json()["detail"]
 
 
+def test_material_sync_catalog_requires_registry_url_keeps_offline_detail(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("LUMINA_MATERIAL_REGISTRY_URL", raising=False)
+
+    response = _client().get("/api/material-sync/catalog")
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Material registry URL is not configured"
+
+
 def test_material_sync_refresh_registry_unavailable_returns_502(monkeypatch) -> None:
     private_url = "https://registry.internal/private/catalog.json"
 
@@ -740,6 +751,40 @@ def test_material_sync_catalog_registry_unavailable_returns_safe_detail(
     assert response.json()["detail"] == MATERIAL_SYNC_CATALOG_UNAVAILABLE_DETAIL
     assert private_url not in response.text
     assert "status 502" not in response.text
+
+
+def test_material_sync_catalog_invalid_channel_returns_safe_detail(
+    monkeypatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    private_channel = "/Users/min/private/team"
+    loggers = _capture_material_sync_logs(caplog)
+    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_URL", "https://registry.test/v1")
+    monkeypatch.setenv("LUMINA_MATERIAL_REGISTRY_CHANNELS", private_channel)
+
+    try:
+        response = _client().get("/api/material-sync/catalog")
+    finally:
+        _release_caplog_handler(loggers, caplog)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == MATERIAL_SYNC_CATALOG_UNAVAILABLE_DETAIL
+    assert private_channel not in response.text
+    assert "Material registry channel is invalid" not in response.text
+    _assert_http_error_log_safe(
+        caplog,
+        path="/api/material-sync/catalog",
+        status_code=422,
+        detail=MATERIAL_SYNC_CATALOG_UNAVAILABLE_DETAIL,
+        forbidden_fragments=(private_channel, "Material registry channel is invalid"),
+    )
+    _assert_route_failure_log_preserves_diagnostics(
+        caplog,
+        event="material_sync_catalog_failed",
+        error_type="ValueError",
+        raw_fragment=private_channel,
+        status_code=422,
+    )
 
 
 def test_material_sync_refresh_endpoint_returns_core_summary(monkeypatch) -> None:
