@@ -184,6 +184,106 @@ interface FailedReportState {
 
 type RelayState = "idle" | "sending" | "sent" | "failed" | "skipped";
 
+const LOCAL_PATH_PLACEHOLDER = "<local-path>";
+const STACK_TRACE_PLACEHOLDER = "<stack-trace omitted>";
+const GENERIC_HTTP_FAILURE_MESSAGE = "Request failed. Please try again.";
+
+const SENSITIVE_STACK_KEYS = new Set([
+  "error_stack",
+  "stack",
+  "trace",
+  "traceback",
+  "stacktrace",
+  "stack_trace",
+]);
+
+const ERROR_MESSAGE_KEYS = new Set([
+  "error",
+  "error_message",
+  "message",
+  "reason",
+  "detail",
+  "details",
+]);
+
+const LOCAL_FILE_URL_PATTERN = /\bfile:\/\/\/(?:[A-Za-z]:\/|(?:Users|home|private|tmp|var|Volumes)\/)[^\s"',)]+/gi;
+const POSIX_LOCAL_PATH_PATTERN = /(^|[\s("'=:])((?:\/Users|\/home|\/private|\/tmp|\/var|\/Volumes)\/[^\s"',)]+)/g;
+const WINDOWS_LOCAL_PATH_PATTERN = /\b[A-Za-z]:[\\/][^\s"'<>|?*]+/g;
+const GENERIC_HTTP_STATUS_PATTERN = /\brequest failed with status code\s+\d{3}\b/i;
+const STACK_FRAME_PATTERN = /^\s*at\s+.+$/gm;
+const HTTP_STATUS_KEY_PATTERN = /^(?:status|status_code|http_status|response_status)$/i;
+
+function redactManualFallbackString(value: string, key: string | null = null): string {
+  let redacted = value.replace(LOCAL_FILE_URL_PATTERN, LOCAL_PATH_PLACEHOLDER);
+  redacted = redacted.replace(WINDOWS_LOCAL_PATH_PATTERN, LOCAL_PATH_PLACEHOLDER);
+  redacted = redacted.replace(
+    POSIX_LOCAL_PATH_PATTERN,
+    (_match, prefix: string) => `${prefix}${LOCAL_PATH_PLACEHOLDER}`,
+  );
+  redacted = redacted.replace(STACK_FRAME_PATTERN, `    at ${STACK_TRACE_PLACEHOLDER}`);
+  if (key && ERROR_MESSAGE_KEYS.has(key.toLowerCase()) && GENERIC_HTTP_STATUS_PATTERN.test(redacted)) {
+    return GENERIC_HTTP_FAILURE_MESSAGE;
+  }
+  return redacted;
+}
+
+function shouldOmitManualFallbackValue(key: string | null, value: unknown): boolean {
+  if (key && SENSITIVE_STACK_KEYS.has(key.toLowerCase())) {
+    return true;
+  }
+  if (!key || !HTTP_STATUS_KEY_PATTERN.test(key)) {
+    return false;
+  }
+  if (typeof value === "number") {
+    return value >= 400 && value <= 599;
+  }
+  return typeof value === "string" && /^[45]\d\d$/.test(value);
+}
+
+function sanitizeManualFallbackValue(
+  value: unknown,
+  key: string | null = null,
+): unknown {
+  if (shouldOmitManualFallbackValue(key, value)) {
+    return undefined;
+  }
+  if (typeof value === "string") {
+    return redactManualFallbackString(value, key);
+  }
+  if (value == null || typeof value === "boolean" || typeof value === "number") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => sanitizeManualFallbackValue(item))
+      .filter((item) => item !== undefined);
+  }
+  if (typeof value !== "object") {
+    return String(value);
+  }
+
+  const sanitized: Record<string, unknown> = {};
+  for (const [entryKey, entryValue] of Object.entries(value)) {
+    const sanitizedValue = sanitizeManualFallbackValue(entryValue, entryKey);
+    if (sanitizedValue !== undefined) {
+      sanitized[entryKey] = sanitizedValue;
+    }
+  }
+  return sanitized;
+}
+
+function stringifyManualFallbackReport(
+  payload: BugReportRequestPayload,
+): string {
+  return JSON.stringify(sanitizeManualFallbackValue(payload), null, 2);
+}
+
+function stringifyUserVisibleBugReportContext(
+  context: ReturnType<typeof collectBugReportContext>,
+): string {
+  return JSON.stringify(sanitizeManualFallbackValue(context), null, 2);
+}
+
 function interpolateTicket(template: string, ticket: string): string {
   return template.replace("{{ticket}}", ticket);
 }
@@ -358,7 +458,7 @@ export function BugReportModal({
     scheduleIdle(() => {
       if (cancelled) return;
       try {
-        const serialized = JSON.stringify(context, null, 2);
+        const serialized = stringifyUserVisibleBugReportContext(context);
         if (!cancelled) {
           setFullContextJson(serialized);
         }
@@ -481,7 +581,7 @@ export function BugReportModal({
         message: t("bug_report_toast_error"),
       });
       setFailedReport({
-        text: JSON.stringify(reportPayload, null, 2),
+        text: stringifyManualFallbackReport(reportPayload),
         copied: false,
       });
       setSubmitting(false);
@@ -513,7 +613,7 @@ export function BugReportModal({
   };
 
   const submittedReportText = submittedPayload
-    ? JSON.stringify(submittedPayload, null, 2)
+    ? stringifyManualFallbackReport(submittedPayload)
     : "";
 
   const handleRelayReport = async () => {
