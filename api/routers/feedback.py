@@ -61,6 +61,46 @@ _ADV_PARAMS_COLOR_HEIGHT_MAP_MAX_KEYS = 64
 _ADV_PARAMS_MAX_TOTAL_BYTES = 16_384
 
 _RATE_LIMIT_HITS: dict[str, deque[float]] = {}
+_LOCAL_PATH_PLACEHOLDER = "[redacted_local_path]"
+_GENERIC_HTTP_STATUS_DETAIL = (
+    "The server reported an error while processing this request."
+)
+_LOCAL_FILE_URL_RE = re.compile(
+    r"file://(?:localhost/|/)(?:[A-Z]:/|(?:Users|home|private|tmp|var|Volumes|mnt|opt|etc)/)"
+    r"[^\s\"'<>)]*",
+    re.IGNORECASE,
+)
+_POSIX_LOCAL_PATH_RE = re.compile(
+    r"(?<![\w:])/(?:Users|home|private|tmp|var|Volumes|mnt|opt|etc)"
+    r"(?:/[^\s\"'<>)]*)?",
+    re.IGNORECASE,
+)
+_WINDOWS_LOCAL_PATH_RE = re.compile(
+    r"\b[A-Z]:[\\/](?:Users|Documents and Settings|Temp|tmp|Windows|ProgramData|"
+    r"Program Files(?: \(x86\))?)(?:[\\/][^\s\"'<>|]*)*",
+    re.IGNORECASE,
+)
+_UNC_LOCAL_PATH_RE = re.compile(
+    r"\\\\[A-Za-z0-9_.-]+\\[^\s\"'<>|]+(?:\\[^\s\"'<>|]+)*"
+)
+_GENERIC_HTTP_STATUS_RE = re.compile(
+    r"^\s*(?:Request failed with status code|HTTP(?:\s+error)?|"
+    r"status(?:\s+code)?|error)\s+[45]\d{2}\s*$",
+    re.IGNORECASE,
+)
+_GENERIC_HTTP_STATUS_WITH_REDACTED_PATH_RE = re.compile(
+    r"^\s*(?:Request failed with status code|HTTP(?:\s+error)?|"
+    r"status(?:\s+code)?|error)\s+[45]\d{2}"
+    rf"(?:\s*(?::|at|-)\s*{re.escape(_LOCAL_PATH_PLACEHOLDER)})\s*$",
+    re.IGNORECASE,
+)
+_GENERIC_HTTP_STATUS_WITH_CONTEXT_RE = re.compile(
+    r"^\s*(?:Request failed with status code|HTTP(?:\s+error)?|"
+    r"status(?:\s+code)?|error)\s+[45]\d{2}"
+    r"\s*(?::|at|-)\s*(?P<context>.+?)\s*$",
+    re.IGNORECASE,
+)
+_SAFE_API_CONTEXT_RE = re.compile(r"^/api/[A-Za-z0-9._~!$&'()*+,;=:@%/-]+$")
 
 
 def _truncate_feedback_text(value: str, limit: int = _MAX_CLIENT_LOG_STRING_LENGTH) -> str:
@@ -69,11 +109,53 @@ def _truncate_feedback_text(value: str, limit: int = _MAX_CLIENT_LOG_STRING_LENG
     return f"{value[:limit]}...<truncated>"
 
 
+def _safe_status_context(value: str) -> str | None:
+    token = value.strip().strip("\"'<>").split(maxsplit=1)[0]
+    token = token.rstrip(".,;)")
+    token = token.split("?", 1)[0].split("#", 1)[0]
+    if not token.startswith("/api/"):
+        return None
+    if "\\" in token or "://" in token:
+        return None
+    if not _SAFE_API_CONTEXT_RE.fullmatch(token):
+        return None
+    if any(part in {".", ".."} for part in token.split("/")):
+        return None
+    return token
+
+
+def _sanitize_feedback_text(
+    value: str,
+    limit: int = _MAX_CLIENT_LOG_STRING_LENGTH,
+) -> str:
+    """Redact local diagnostic strings before feedback export.
+
+    在反馈导出前脱敏本机诊断字符串。
+    """
+
+    redacted = _LOCAL_FILE_URL_RE.sub(_LOCAL_PATH_PLACEHOLDER, value)
+    redacted = _UNC_LOCAL_PATH_RE.sub(_LOCAL_PATH_PLACEHOLDER, redacted)
+    redacted = _WINDOWS_LOCAL_PATH_RE.sub(_LOCAL_PATH_PLACEHOLDER, redacted)
+    redacted = _POSIX_LOCAL_PATH_RE.sub(_LOCAL_PATH_PLACEHOLDER, redacted)
+    if _GENERIC_HTTP_STATUS_RE.fullmatch(redacted) or (
+        _GENERIC_HTTP_STATUS_WITH_REDACTED_PATH_RE.fullmatch(redacted)
+    ):
+        redacted = _GENERIC_HTTP_STATUS_DETAIL
+    else:
+        context_match = _GENERIC_HTTP_STATUS_WITH_CONTEXT_RE.fullmatch(redacted)
+        if context_match is not None:
+            safe_context = _safe_status_context(context_match.group("context"))
+            redacted = _GENERIC_HTTP_STATUS_DETAIL
+            if safe_context is not None:
+                redacted = f"{redacted} Context: {safe_context}"
+    return _truncate_feedback_text(redacted, limit)
+
+
 def _sanitize_feedback_jsonish(value: Any, *, depth: int = 0) -> Any:
     if value is None or isinstance(value, bool):
         return value
     if isinstance(value, str):
-        return _truncate_feedback_text(value)
+        return _sanitize_feedback_text(value)
     if isinstance(value, int):
         return value
     if isinstance(value, float):
@@ -93,13 +175,13 @@ def _sanitize_feedback_jsonish(value: Any, *, depth: int = 0) -> Any:
         sanitized: dict[str, Any] = {}
         items = list(value.items())
         for raw_key, raw_value in items[:_MAX_CLIENT_LOG_OBJECT_KEYS]:
-            key = _truncate_feedback_text(str(raw_key), 120)
+            key = _sanitize_feedback_text(str(raw_key), 120)
             sanitized[key] = _sanitize_feedback_jsonish(raw_value, depth=depth + 1)
         remaining = len(items) - _MAX_CLIENT_LOG_OBJECT_KEYS
         if remaining > 0:
             sanitized["__truncated_keys"] = remaining
         return sanitized
-    return _truncate_feedback_text(str(value))
+    return _sanitize_feedback_text(str(value))
 
 
 def _sanitize_advanced_params(
@@ -150,7 +232,7 @@ def _sanitize_advanced_params(
     if value is None or isinstance(value, bool):
         return value
     if isinstance(value, str):
-        return _truncate_feedback_text(value)
+        return _sanitize_feedback_text(value)
     if isinstance(value, int):
         return value
     if isinstance(value, float):
@@ -180,7 +262,7 @@ def _sanitize_advanced_params(
         sanitized: dict[str, Any] = {}
         items = list(value.items())
         for raw_key, raw_value in items[:max_keys]:
-            key = _truncate_feedback_text(str(raw_key), 120)
+            key = _sanitize_feedback_text(str(raw_key), 120)
             child_path = f"{path}.{raw_key}" if path else str(raw_key)
             sanitized[key] = _sanitize_advanced_params(
                 raw_value, depth=depth + 1, path=child_path
@@ -189,7 +271,7 @@ def _sanitize_advanced_params(
         if remaining > 0:
             sanitized["__truncated_keys"] = remaining
         return sanitized
-    return _truncate_feedback_text(str(value))
+    return _sanitize_feedback_text(str(value))
 
 
 def _sanitize_client_log_entry(entry: Any) -> dict[str, Any]:
@@ -200,7 +282,7 @@ def _sanitize_client_log_entry(entry: Any) -> dict[str, Any]:
     for key in ("timestamp", "method", "label", "scope", "phase"):
         value = entry.get(key)
         if value is not None:
-            sanitized[key] = _truncate_feedback_text(str(value), 256)
+            sanitized[key] = _sanitize_feedback_text(str(value), 256)
     elapsed_ms = entry.get("elapsed_ms")
     if isinstance(elapsed_ms, (int, float)) and isfinite(float(elapsed_ms)):
         sanitized["elapsed_ms"] = round(float(elapsed_ms), 3)
