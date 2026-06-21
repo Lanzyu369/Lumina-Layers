@@ -82,10 +82,13 @@ function createSensitiveBugReportContext(): ReturnType<typeof collectBugReportCo
       {
         timestamp: "2026-06-21T10:00:00.000Z",
         method: "error",
-        label: "submit failed",
+        label: "Request failed with status code 500",
         elapsed_ms: null,
-        scope: "http",
+        scope: "\\\\LUMINA-NAS\\private\\trace.log",
         details: {
+          "Request failed with status code 500": "transport",
+          api_path_transport_error:
+            "Request failed with status code 500 at /api/files/output-model",
           error_message:
             "AxiosError: Request failed with status code 500 at /Users/min/private/source.png",
           home_path: "/home/min/private/source.png",
@@ -93,10 +96,14 @@ function createSensitiveBugReportContext(): ReturnType<typeof collectBugReportCo
           tmp_path: "/tmp/lumina/private/source.png",
           var_path: "/var/folders/private/source.png",
           volume_path: "/Volumes/Work/private/source.png",
+          mnt_path: "/mnt/lumina/private/source.png",
+          opt_path: "/opt/lumina/private/source.png",
           error_stack:
             "Error: boom\n    at convert (/Users/min/CascadeProjects/Lumina-studio/frontend/src/api/client.ts:12:3)",
           path: "/Users/min/private/output.3mf",
           cache_url: "file:///Users/min/private/cache/model.glb",
+          local_cache_url: "file://localhost/Users/min/private/cache/model.glb",
+          unc_path: "\\\\LUMINA-NAS\\share\\secret.3mf",
           windows_file_url: "file:///C:/tmp/lumina/model.glb",
           windows_path: "C:\\Users\\min\\private\\output.3mf",
           windows_tmp_path: "C:\\tmp\\lumina\\output.3mf",
@@ -130,12 +137,16 @@ function expectNoSensitiveManualFallbackText(text: string): void {
   expect(text).not.toContain("/tmp/lumina");
   expect(text).not.toContain("/var/folders");
   expect(text).not.toContain("/Volumes/Work");
+  expect(text).not.toContain("/mnt/lumina");
+  expect(text).not.toContain("/opt/lumina");
   expect(text).not.toContain("C:\\Users");
   expect(text).not.toContain("C:\\tmp");
   expect(text).not.toContain("C:/ProgramData");
   expect(text).not.toContain("C:\\Windows\\Temp");
   expect(text).not.toContain("file:///Users");
+  expect(text).not.toContain("file://localhost/Users");
   expect(text).not.toContain("file:///C:");
+  expect(text).not.toContain("\\\\LUMINA-NAS");
   expect(text).not.toContain("error_stack");
 }
 

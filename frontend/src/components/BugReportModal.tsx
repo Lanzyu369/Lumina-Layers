@@ -197,31 +197,29 @@ const SENSITIVE_STACK_KEYS = new Set([
   "stack_trace",
 ]);
 
-const ERROR_MESSAGE_KEYS = new Set([
-  "error",
-  "error_message",
-  "message",
-  "reason",
-  "detail",
-  "details",
-]);
+const USER_AUTHORED_TEXT_KEYS = new Set(["description"]);
 
-const LOCAL_FILE_URL_PATTERN = /\bfile:\/\/\/(?:[A-Za-z]:\/|(?:Users|home|private|tmp|var|Volumes)\/)[^\s"',)]+/gi;
-const POSIX_LOCAL_PATH_PATTERN = /(^|[\s("'=:])((?:\/Users|\/home|\/private|\/tmp|\/var|\/Volumes)\/[^\s"',)]+)/g;
+const LOCAL_FILE_URL_PATTERN = /\bfile:\/\/(?:localhost\/|\/)(?:[A-Za-z]:\/|(?:Users|home|private|tmp|var|Volumes|mnt|opt|etc)\/)[^\s"',)]+/gi;
+const POSIX_LOCAL_PATH_PATTERN = /(^|[\s("'=:])((?:\/Users|\/home|\/private|\/tmp|\/var|\/Volumes|\/mnt|\/opt|\/etc)\/[^\s"',)]+)/g;
 const WINDOWS_LOCAL_PATH_PATTERN = /\b[A-Za-z]:[\\/][^\s"'<>|?*]+/g;
-const GENERIC_HTTP_STATUS_PATTERN = /\brequest failed with status code\s+\d{3}\b/i;
+const UNC_LOCAL_PATH_PATTERN = /\\\\[A-Za-z0-9_.-]+\\[^\s"'<>|]+(?:\\[^\s"'<>|]+)*/g;
+const GENERIC_HTTP_STATUS_PATTERN = /\b(?:request failed with status code|http(?:\s+error)?|status(?:\s+code)?|error)\s+[45]\d{2}\b/i;
 const STACK_FRAME_PATTERN = /^\s*at\s+.+$/gm;
 const HTTP_STATUS_KEY_PATTERN = /^(?:status|status_code|http_status|response_status)$/i;
 
 function redactManualFallbackString(value: string, key: string | null = null): string {
   let redacted = value.replace(LOCAL_FILE_URL_PATTERN, LOCAL_PATH_PLACEHOLDER);
+  redacted = redacted.replace(UNC_LOCAL_PATH_PATTERN, LOCAL_PATH_PLACEHOLDER);
   redacted = redacted.replace(WINDOWS_LOCAL_PATH_PATTERN, LOCAL_PATH_PLACEHOLDER);
   redacted = redacted.replace(
     POSIX_LOCAL_PATH_PATTERN,
     (_match, prefix: string) => `${prefix}${LOCAL_PATH_PLACEHOLDER}`,
   );
   redacted = redacted.replace(STACK_FRAME_PATTERN, `    at ${STACK_TRACE_PLACEHOLDER}`);
-  if (key && ERROR_MESSAGE_KEYS.has(key.toLowerCase()) && GENERIC_HTTP_STATUS_PATTERN.test(redacted)) {
+  if (key && USER_AUTHORED_TEXT_KEYS.has(key.toLowerCase())) {
+    return redacted;
+  }
+  if (GENERIC_HTTP_STATUS_PATTERN.test(redacted)) {
     return GENERIC_HTTP_FAILURE_MESSAGE;
   }
   return redacted;
@@ -264,9 +262,10 @@ function sanitizeManualFallbackValue(
 
   const sanitized: Record<string, unknown> = {};
   for (const [entryKey, entryValue] of Object.entries(value)) {
+    const sanitizedKey = redactManualFallbackString(entryKey, entryKey);
     const sanitizedValue = sanitizeManualFallbackValue(entryValue, entryKey);
     if (sanitizedValue !== undefined) {
-      sanitized[entryKey] = sanitizedValue;
+      sanitized[sanitizedKey] = sanitizedValue;
     }
   }
   return sanitized;
