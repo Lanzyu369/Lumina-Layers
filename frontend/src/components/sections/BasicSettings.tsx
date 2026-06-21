@@ -915,7 +915,7 @@ export default function BasicSettings() {
                 type="button"
                 onClick={handleApplyImageRotation}
                 disabled={!imageFile || !imagePreviewUrl || isLoading}
-                className="min-h-11 rounded-[22px] border border-slate-200/80 bg-white/82 px-4 py-2 text-sm font-medium text-slate-700 shadow-[var(--shadow-control)] transition-all hover:border-slate-300 hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-45 dark:border-slate-700/80 dark:bg-slate-900/72 dark:text-slate-200 dark:hover:border-slate-600"
+                className="min-h-11 rounded-[22px] border border-[color:var(--surface-outline)] bg-[color:var(--surface-section-muted)] px-4 py-2 text-sm font-medium text-slate-700 shadow-[var(--shadow-control)] transition-all hover:bg-[color:var(--surface-panel-strong)] disabled:cursor-not-allowed disabled:opacity-45 dark:text-slate-200"
               >
                 {t("basic_image_rotation_apply")}
               </button>
