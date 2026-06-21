@@ -160,6 +160,9 @@ GRADIENT_CARD_MATERIAL_LIBRARY_FORBIDDEN_DETAIL = (
 GRADIENT_CARD_MATERIAL_IMPORT_UNSAFE_PATH_DETAIL = (
     "Material import ZIP contains an unsafe file path."
 )
+GRADIENT_CARD_MATERIAL_IMPORT_FAILED_DETAIL = (
+    "Material import failed. Check the server log for details."
+)
 _MATERIAL_LIBRARY_DEFAULT_LOCAL_PORTS = frozenset({8000, 4174, 5174, 5173})
 _MATERIAL_LIBRARY_ALLOWED_LOCAL_PORTS_ENV = (
     "LUMINA_MATERIAL_LIBRARY_ALLOWED_LOCAL_PORTS"
@@ -1725,7 +1728,21 @@ async def extractor_import_gradient_card_materials(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except (TypeError, OSError, RuntimeError) as exc:
         _rollback_imported_materials(imported_directory_names)
-        raise HTTPException(status_code=422, detail=str(exc))
+        log.warning(
+            "Gradient card materials import failed",
+            extra={
+                "event": "extractor_import_gradient_card_materials_failed",
+                "status_code": 500,
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+                "archives_received": len(archives),
+                "imported_directory_names_count": len(imported_directory_names),
+            },
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=GRADIENT_CARD_MATERIAL_IMPORT_FAILED_DETAIL,
+        ) from exc
     finally:
         for archive_path in uploaded_archive_paths:
             try:

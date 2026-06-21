@@ -6219,6 +6219,61 @@ def test_gradient_card_material_import_route_redacts_unsafe_bundle_manifest_path
     assert private_path in str(getattr(route_record, "error_message", ""))
 
 
+def test_gradient_card_material_import_route_redacts_internal_import_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client, _, _ = _client_with_state()
+    private_path = "/Users/min/private/materials/BrandA/pla-basic/material.json"
+
+    def _raise_internal_import_error(*, archive_path: str):
+        raise OSError(
+            f"failed to copy {private_path}: Request failed with status code 500"
+        )
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.import_saved_stage_a_material_archives",
+        _raise_internal_import_error,
+    )
+    uploaded_zip = io.BytesIO()
+    with zipfile.ZipFile(uploaded_zip, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("lumina_material_export.json", "{}")
+    uploaded_zip.seek(0)
+
+    target_loggers = _capture_single_stage_warning_loggers(caplog)
+    try:
+        response = client.post(
+            "/api/extractor/gradient-card-materials/import",
+            files=[
+                (
+                    "archives",
+                    ("internal-import-error.zip", uploaded_zip.getvalue(), "application/zip"),
+                )
+            ],
+        )
+    finally:
+        for target_logger in target_loggers:
+            target_logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Material import failed. Check the server log for details."
+    assert private_path not in response.text
+    assert "Request failed with status code 500" not in response.text
+
+    api_http_records = _records_for_event(caplog, "api_http_error")
+    assert api_http_records
+    assert private_path not in str(getattr(api_http_records[-1], "error_message", ""))
+    route_records = _records_for_event(
+        caplog,
+        "extractor_import_gradient_card_materials_failed",
+    )
+    assert route_records
+    route_record = route_records[-1]
+    assert getattr(route_record, "status_code", None) == 500
+    assert getattr(route_record, "error_type", None) == "OSError"
+    assert private_path in str(getattr(route_record, "error_message", ""))
+
+
 def test_extract_single_stage_dataset_rejects_invalid_layout(tmp_path: Path) -> None:
     zip_path = tmp_path / "invalid_dataset.zip"
     with zipfile.ZipFile(zip_path, "w") as archive:
