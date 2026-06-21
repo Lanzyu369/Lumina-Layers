@@ -2511,6 +2511,10 @@ async def convert_batch(
                 model_count=len(successes),
                 plate_width_mm=plate_width_mm,
                 plate_depth_mm=plate_depth_mm,
+                error_message=BATCH_PLATE_OVERFLOW_FALLBACK_MESSAGE,
+                fallback_action=(
+                    "merged_3mf_returned_with_plate_overflow_warning"
+                ),
             )
 
         # Step 3: Merged 3MF

@@ -1121,6 +1121,16 @@ class TestBatchMergeFlow:
             exceeds_plate=True,
         )
 
+        from api.routers.converter.generate import (
+            BATCH_PLATE_OVERFLOW_FALLBACK_MESSAGE,
+        )
+        from scripts.log_quality_check import _has_actionable_warning_error_field
+
+        log_calls: list[tuple[str, str, dict[str, object]]] = []
+
+        def _capturing_safe_log(level: str, event: str, **fields: object) -> None:
+            log_calls.append((level, event, fields))
+
         with (
             patch(
                 "api.routers.converter.generate.LUTManager.get_lut_path",
@@ -1137,6 +1147,10 @@ class TestBatchMergeFlow:
             patch(
                 "utils.merged_bambu_3mf_writer.MergedBambu3MFWriter.write",
                 _noop_3mf_write,
+            ),
+            patch(
+                "api.routers.converter.generate._safe_log",
+                side_effect=_capturing_safe_log,
             ),
         ):
             response = client.post(
@@ -1168,6 +1182,27 @@ class TestBatchMergeFlow:
         assert len(overflow_warnings) == 1
         assert overflow_warnings[0]["code"] == "plate-overflow"
         assert isinstance(overflow_warnings[0]["message"], str)
+        overflow_log = next(
+            (
+                (level, event, fields)
+                for level, event, fields in log_calls
+                if event == "batch_merge_plate_overflow_warning"
+            ),
+            None,
+        )
+        assert overflow_log is not None
+        log_level, log_event, log_fields = overflow_log
+        assert log_level == "warning"
+        assert log_event == "batch_merge_plate_overflow_warning"
+        assert (
+            log_fields["error_message"]
+            == BATCH_PLATE_OVERFLOW_FALLBACK_MESSAGE
+        )
+        assert (
+            log_fields["fallback_action"]
+            == "merged_3mf_returned_with_plate_overflow_warning"
+        )
+        assert _has_actionable_warning_error_field(log_fields)
 
     # ------------------------------------------------------------------
     # 2b. large-success-preview-limited: full 3MF keeps all, preview fits current bed
