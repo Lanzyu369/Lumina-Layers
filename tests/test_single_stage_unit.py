@@ -1381,6 +1381,56 @@ def test_extract_single_stage_route_sanitizes_internal_file_error(
     assert str(leaked_path) in record.error_message
 
 
+@pytest.mark.parametrize("exception_type", [RuntimeError, ValueError, TypeError, OSError])
+def test_extract_single_stage_route_redacts_internal_processing_errors(
+    monkeypatch,
+    caplog: pytest.LogCaptureFixture,
+    exception_type: type[Exception],
+) -> None:
+    client, store, _ = _client_with_state()
+    raw_message = (
+        "Traceback in /Users/min/private/reference/step1.py: "
+        "Request failed with status code 500"
+    )
+
+    def _fake_extract_single_stage_dataset(*args, **kwargs):
+        raise exception_type(raw_message)
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.extract_single_stage_dataset",
+        _fake_extract_single_stage_dataset,
+    )
+    target_logger = logging.getLogger("lumina.api.routers.single_stage")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.ERROR, logger=target_logger.name)
+
+    try:
+        response = client.post(
+            "/api/extractor/extract-single-stage",
+            files={"dataset_zip": ("dataset.zip", b"zip", "application/zip")},
+        )
+    finally:
+        target_logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Single-stage dataset extraction failed. Check the server log for details."
+    )
+    assert raw_message not in response.text
+    assert "/Users/min/private" not in response.text
+    assert "Request failed with status code 500" not in response.text
+    assert store._store == {}
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "extractor_extract_single_stage_failed"
+    ]
+    assert len(records) == 1
+    record = records[0]
+    assert record.error_type == exception_type.__name__
+    assert record.error_message == raw_message
+
+
 def test_fit_stage_a_route_uses_session(monkeypatch, tmp_path: Path) -> None:
     client, store, _ = _client_with_state()
     stage_json_path = tmp_path / "1_single_stage.json"
@@ -1695,6 +1745,73 @@ def test_fit_stage_a_upload_route_cleans_session_when_fit_file_missing(
     record = records[0]
     assert record.error_type == "FileNotFoundError"
     assert record.error_message == "reference assets missing"
+
+
+@pytest.mark.parametrize("exception_type", [RuntimeError, ValueError, TypeError, OSError])
+def test_fit_stage_a_upload_route_redacts_internal_processing_errors(
+    monkeypatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    exception_type: type[Exception],
+) -> None:
+    client_app = create_app()
+    store = SessionStore(ttl=1800)
+    registry = FileRegistry()
+    client_app.dependency_overrides[get_session_store] = lambda: store
+    client_app.dependency_overrides[get_file_registry] = lambda: registry
+    client = TestClient(client_app, raise_server_exceptions=False)
+    uploaded_stage_json = tmp_path / "uploaded_stage.json"
+    uploaded_stage_json.write_text("{}", encoding="utf-8")
+    raw_message = (
+        "Stage A traceback at /Users/min/private/reference/fit.py: "
+        "Request failed with status code 500"
+    )
+
+    async def _fake_upload_to_tempfile(*args, **kwargs):
+        return str(uploaded_stage_json)
+
+    def _fake_fit_stage_a_from_stage_json(path: str, output_path: str | None = None):
+        assert path == str(uploaded_stage_json)
+        raise exception_type(raw_message)
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.upload_to_tempfile",
+        _fake_upload_to_tempfile,
+    )
+    monkeypatch.setattr(
+        "api.routers.single_stage.fit_stage_a_from_stage_json",
+        _fake_fit_stage_a_from_stage_json,
+    )
+    target_logger = logging.getLogger("lumina.api.routers.single_stage")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.ERROR, logger=target_logger.name)
+
+    try:
+        response = client.post(
+            "/api/extractor/fit-stage-a",
+            files={"stage_json": ("uploaded_stage.json", b"{}", "application/json")},
+        )
+    finally:
+        target_logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Stage A fitting failed. Check the server log for details."
+    )
+    assert raw_message not in response.text
+    assert "/Users/min/private" not in response.text
+    assert "Request failed with status code 500" not in response.text
+    assert store._store == {}
+    assert not uploaded_stage_json.exists()
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "extractor_fit_stage_a_failed"
+    ]
+    assert len(records) == 1
+    record = records[0]
+    assert record.error_type == exception_type.__name__
+    assert record.error_message == raw_message
 
 
 def test_fit_stage_a_session_route_does_not_pollute_session_when_registration_fails(
@@ -6017,6 +6134,30 @@ def test_extract_single_stage_route_rejects_bad_zip_and_cleans_temp_file(
     assert response.status_code == 422
     assert response.json()["detail"] == "Malformed ZIP archive"
     assert not uploaded_zip.exists()
+    assert store._store == {}
+
+
+def test_extract_single_stage_route_redacts_unsafe_zip_entry() -> None:
+    client, store, _ = _client_with_state()
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w") as archive:
+        archive.writestr(
+            "/Users/min/private/dataset/white/Red/payload.png",
+            b"payload",
+        )
+    payload.seek(0)
+
+    response = client.post(
+        "/api/extractor/extract-single-stage",
+        files={"dataset_zip": ("dataset.zip", payload.getvalue(), "application/zip")},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Dataset ZIP contains an unsafe file path."
+    assert "/Users/min/private" not in response.text
+    assert "Unsafe zip entry" not in response.text
+    assert "Traceback" not in response.text
+    assert "Request failed with status code 500" not in response.text
     assert store._store == {}
 
 
