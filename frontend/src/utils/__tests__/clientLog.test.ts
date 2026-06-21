@@ -144,6 +144,46 @@ describe("clientLog", () => {
     );
   });
 
+  it("redacts local file paths from buffered and relayed diagnostics", () => {
+    postClientLog("generate: response received", {
+      method: "log",
+      scope: "generate",
+      phase: "response-received",
+      details: {
+        threemf_disk_path: "/Users/min/CascadeProjects/Lumina-studio/output/model.3mf",
+        nested: {
+          threemfDiskPath: "E:/tmp/model.3mf",
+          disk_path: "/private/tmp/lumina/model.3mf",
+          file_path: "/tmp/lumina/upload.png",
+        },
+        message: "failed while opening /Users/min/CascadeProjects/Lumina-studio/output/model.3mf",
+        download_url: "/api/files/output-model",
+      },
+    });
+
+    const logs = getRecentClientLogs();
+    const serializedLog = JSON.stringify(logs[0]);
+    const relayBody = String(vi.mocked(fetch).mock.calls[0]?.[1]?.body ?? "");
+    const consoleDetails = JSON.stringify(vi.mocked(console.log).mock.calls[0]?.[1] ?? "");
+
+    expect(serializedLog).not.toContain("/Users/min");
+    expect(serializedLog).not.toContain("E:/tmp");
+    expect(serializedLog).not.toContain("/private/tmp");
+    expect(serializedLog).not.toContain("/tmp/lumina");
+    expect(relayBody).not.toContain("/Users/min");
+    expect(relayBody).not.toContain("E:/tmp");
+    expect(relayBody).not.toContain("/private/tmp");
+    expect(relayBody).not.toContain("/tmp/lumina");
+    expect(consoleDetails).not.toContain("/Users/min");
+    expect(consoleDetails).not.toContain("E:/tmp");
+    expect(consoleDetails).not.toContain("/private/tmp");
+    expect(consoleDetails).not.toContain("/tmp/lumina");
+    expect(serializedLog).toContain("<redacted:local-path>");
+    expect(serializedLog).toContain("/api/files/output-model");
+    expect(relayBody).toContain("/api/files/output-model");
+    expect(consoleDetails).toContain("/api/files/output-model");
+  });
+
   it("exports only the newest bounded logs for bug reports", () => {
     for (let index = 0; index < 600; index += 1) {
       postClientLog(`event-${index}`, { elapsedMs: index });
@@ -267,6 +307,35 @@ describe("clientLog", () => {
     // strictly earlier than the clock used by postClientLog during the test).
     // 持久化条目的 ISO 时间早于 live push，合并后排在前面。
     expect(labels.indexOf("old-event-a")).toBeLessThan(labels.indexOf("live-event"));
+  });
+
+  it("redacts local file paths when importing persisted client logs", () => {
+    _storage._map.set(
+      CLIENT_LOG_SESSION_STORAGE_KEY,
+      JSON.stringify([
+        {
+          timestamp: "2026-05-12T10:00:00.000Z",
+          method: "log",
+          label: "generate: response received",
+          elapsed_ms: 3,
+          details: {
+            threemf_disk_path: "/Users/min/output/model.3mf",
+            nested: {
+              file_path: "C:\\tmp\\upload.png",
+            },
+            message: "failed while reading /private/tmp/lumina/model.3mf",
+          },
+        },
+      ]),
+    );
+
+    const logs = getRecentClientLogs();
+    const serializedLog = JSON.stringify(logs[0]);
+
+    expect(serializedLog).not.toContain("/Users/min");
+    expect(serializedLog).not.toContain("C:\\tmp");
+    expect(serializedLog).not.toContain("/private/tmp");
+    expect(serializedLog).toContain("<redacted:local-path>");
   });
 
   it("dedupes identical persisted+live entries by (timestamp, label, scope, phase)", () => {
