@@ -510,6 +510,12 @@ describe("apiClient", () => {
     expect(apiErrorToVisibleMessage("string error", "批量处理失败")).toBe(
       "批量处理失败",
     );
+    expect(
+      apiErrorToVisibleMessage(
+        "AxiosError: Request failed with status code 500",
+        "向量化失败",
+      ),
+    ).toBe("向量化失败");
     expect(apiErrorToVisibleMessage({ message: "opaque object" }, "操作失败")).toBe(
       "操作失败",
     );
