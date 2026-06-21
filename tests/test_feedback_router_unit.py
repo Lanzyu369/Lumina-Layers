@@ -582,8 +582,10 @@ def test_submit_bug_report_redacts_context_diagnostic_strings(
                 "posix_path": "failed at /Users/min/private/model.3mf",
                 "private_tmp": "open /private/tmp/lumina/model.png",
                 "windows_path": r"C:\Users\min\secret\model.3mf",
+                "windows_forward_path": "C:/Users/min/secret/model.3mf",
                 "unc_path": r"\\LUMINA-NAS\share\secret.3mf",
                 "file_url": "file:///Users/min/private/model.3mf",
+                "windows_file_url": "file:///C:/Users/min/private/model.3mf",
                 "generic_http_error": "Request failed with status code 500",
                 "api_path_transport_error": (
                     "Request failed with status code 500 at /api/files/output-model"
@@ -637,8 +639,10 @@ def test_submit_bug_report_redacts_context_diagnostic_strings(
     assert "/private/tmp/lumina" not in context_strings
     assert "/home/min/lumina" not in context_strings
     assert r"C:\Users\min" not in context_strings
+    assert "C:/Users/min" not in context_strings
     assert r"\\LUMINA-NAS" not in context_strings
     assert "file:///Users/min" not in context_strings
+    assert "file:///C:/Users/min" not in context_strings
     assert "Request failed with status code 500" not in context_strings
     assert "HTTP 404" not in context_strings
     assert "HTTP 500" not in context_strings

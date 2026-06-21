@@ -66,8 +66,8 @@ _GENERIC_HTTP_STATUS_DETAIL = (
     "The server reported an error while processing this request."
 )
 _LOCAL_FILE_URL_RE = re.compile(
-    r"file://(?:localhost)?/(?:Users|home|private|tmp|var|Volumes|mnt|opt|etc)"
-    r"(?:/[^\s\"'<>)]*)?",
+    r"file://(?:localhost/|/)(?:[A-Z]:/|(?:Users|home|private|tmp|var|Volumes|mnt|opt|etc)/)"
+    r"[^\s\"'<>)]*",
     re.IGNORECASE,
 )
 _POSIX_LOCAL_PATH_RE = re.compile(
@@ -76,8 +76,8 @@ _POSIX_LOCAL_PATH_RE = re.compile(
     re.IGNORECASE,
 )
 _WINDOWS_LOCAL_PATH_RE = re.compile(
-    r"\b[A-Z]:\\(?:Users|Documents and Settings|Temp|tmp|Windows|ProgramData|"
-    r"Program Files(?: \(x86\))?)(?:\\[^\s\"'<>|]*)*",
+    r"\b[A-Z]:[\\/](?:Users|Documents and Settings|Temp|tmp|Windows|ProgramData|"
+    r"Program Files(?: \(x86\))?)(?:[\\/][^\s\"'<>|]*)*",
     re.IGNORECASE,
 )
 _UNC_LOCAL_PATH_RE = re.compile(
