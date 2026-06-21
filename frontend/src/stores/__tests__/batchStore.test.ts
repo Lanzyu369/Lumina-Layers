@@ -413,7 +413,7 @@ describe("submitBatch API 调用和状态管理", () => {
     await useConverterStore.getState().submitBatch();
 
     const state = useConverterStore.getState();
-    expect(state.error).toBe("string error");
+    expect(state.error).toBe("批量处理失败");
     expect(state.batchLoading).toBe(false);
   });
 });
