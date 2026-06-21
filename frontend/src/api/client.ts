@@ -400,6 +400,18 @@ export function apiErrorToVisibleMessage(
   }
 
   const rawMessage = errorMessageFromUnknown(error);
+  if (!(error instanceof Error)) {
+    if (
+      typeof statusCode === "number" &&
+      isGenericHttpDetail(rawMessage, statusCode)
+    ) {
+      return fallbackHttpStatusMessage(statusCode, requestId);
+    }
+    if (isGenericNoResponseErrorMessage(rawMessage)) {
+      return fallbackHttpStatusMessage(null);
+    }
+    return fallback;
+  }
   if (
     typeof statusCode === "number" &&
     isGenericHttpDetail(rawMessage, statusCode)

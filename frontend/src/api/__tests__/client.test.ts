@@ -506,6 +506,29 @@ describe("apiClient", () => {
     }
   });
 
+  it("uses the provided fallback for bare non-Error rejection values", () => {
+    expect(apiErrorToVisibleMessage("string error", "批量处理失败")).toBe(
+      "批量处理失败",
+    );
+    expect(apiErrorToVisibleMessage({ message: "opaque object" }, "操作失败")).toBe(
+      "操作失败",
+    );
+  });
+
+  it("preserves readable response details on non-Error response-shaped values", () => {
+    expect(
+      apiErrorToVisibleMessage(
+        {
+          response: {
+            status: 422,
+            data: { detail: "请先选择要处理的图片。" },
+          },
+        },
+        "操作失败",
+      ),
+    ).toBe("请先选择要处理的图片。");
+  });
+
   it("builds resource URLs without double-prefixing API file paths", () => {
     expect(buildApiResourceUrl("/api/files/model.3mf")).toBe("/api/files/model.3mf");
     expect(buildApiResourceUrl("/files/model.3mf")).toBe("/api/files/model.3mf");
