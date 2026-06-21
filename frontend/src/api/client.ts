@@ -370,6 +370,77 @@ function extractStatusCodeFromGenericErrorMessage(message: string): number | nul
   return Number.isInteger(statusCode) ? statusCode : null;
 }
 
+function technicalHttpContextSuffix(suffix: string): boolean {
+  const normalized = suffix.trim().toLowerCase();
+  if (!normalized) {
+    return true;
+  }
+  return (
+    /^\/api(?:\/|\b)\S*$/.test(normalized) ||
+    /^https?:\/\/\S+$/.test(normalized)
+  );
+}
+
+function unsafeVisibleErrorSuffix(suffix: string): boolean {
+  return (
+    /(?:^|\s)(?:\/(?:users|private|tmp|var|home|volumes)\b|~\/|[a-z]:[\\/]|\\\\)/i.test(suffix) ||
+    /(?:^|\s)(?:\/api(?:\/|\b)|https?:\/\/)/i.test(suffix) ||
+    /\b(?:traceback|stack trace|exception)\b/i.test(suffix)
+  );
+}
+
+function cleanHttpStatusSuffix(suffix: string): string {
+  const trimmed = suffix.trim();
+  if (!trimmed) {
+    return "";
+  }
+  const symbolSeparated = trimmed.match(/^(?::|-)\s*(.*)$/);
+  if (symbolSeparated) {
+    return symbolSeparated[1]?.trim() ?? "";
+  }
+  const wordSeparated = trimmed.match(/^(?:at|for)\s+(.+)$/i);
+  if (wordSeparated) {
+    return wordSeparated[1]?.trim() ?? "";
+  }
+  return trimmed;
+}
+
+function statusPrefixedErrorVisibleMessage(
+  message: string,
+  statusCode: number | null,
+  requestId: string | null = null,
+): string | null {
+  if (typeof statusCode !== "number") {
+    return null;
+  }
+  const escapedStatus = String(statusCode).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = message.trim().match(
+    new RegExp(
+      `^(?:axioserror:\\s*)?` +
+        `(?:request\\s+failed\\s+with\\s+status\\s+code|` +
+        `http(?:\\s+error)?|status(?:\\s+code)?)` +
+        `\\s*${escapedStatus}\\b` +
+        `(.*)$`,
+      "i",
+    ),
+  );
+  if (!match) {
+    return null;
+  }
+
+  const suffix = cleanHttpStatusSuffix(match[1] ?? "");
+  if (
+    !suffix ||
+    isServerErrorStatus(statusCode) ||
+    isGenericHttpDetail(suffix, statusCode) ||
+    technicalHttpContextSuffix(suffix) ||
+    unsafeVisibleErrorSuffix(suffix)
+  ) {
+    return fallbackHttpStatusMessage(statusCode, requestId);
+  }
+  return suffix;
+}
+
 function isGenericNoResponseErrorMessage(message: string): boolean {
   const normalized = message.trim().toLowerCase();
   if (!normalized) {
@@ -400,6 +471,26 @@ export function apiErrorToVisibleMessage(
   }
 
   const rawMessage = errorMessageFromUnknown(error);
+  if (!(error instanceof Error)) {
+    if (
+      typeof statusCode === "number" &&
+      isGenericHttpDetail(rawMessage, statusCode)
+    ) {
+      return fallbackHttpStatusMessage(statusCode, requestId);
+    }
+    if (isGenericNoResponseErrorMessage(rawMessage)) {
+      return fallbackHttpStatusMessage(null);
+    }
+    return fallback;
+  }
+  const statusPrefixedMessage = statusPrefixedErrorVisibleMessage(
+    rawMessage,
+    statusCode,
+    requestId,
+  );
+  if (statusPrefixedMessage) {
+    return statusPrefixedMessage;
+  }
   if (
     typeof statusCode === "number" &&
     isGenericHttpDetail(rawMessage, statusCode)
