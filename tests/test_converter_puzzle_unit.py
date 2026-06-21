@@ -330,6 +330,41 @@ def test_puzzle_layout_preview_reuses_cached_layout_and_overlay() -> None:
     assert first_response.json()["overlay_url"] == second_response.json()["overlay_url"]
 
 
+def test_generate_puzzle_worker_missing_output_uses_public_error_detail(tmp_path: Path) -> None:
+    """Worker diagnostics should stay in logs, not the user-visible 500 detail."""
+
+    session_id, _preview_cache = _make_session()
+    private_path = str(tmp_path / "missing-private-piece.3mf")
+    assert not os.path.exists(private_path)
+    raw_status = f"cannot write {private_path}: permission denied"
+    _mock_pool.submit = AsyncMock(
+        return_value={
+            "threemf_path": private_path,
+            "glb_path": None,
+            "status_msg": raw_status,
+        }
+    )
+
+    try:
+        with patch.object(puzzle_router.log, "error") as log_error:
+            response = client.post(
+                "/api/convert/generate-puzzle",
+                json=_build_generate_body(session_id),
+            )
+    finally:
+        _test_store.close(session_id)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == puzzle_router._PUZZLE_PIECE_GENERATION_FAILED_DETAIL
+    assert private_path not in response.text
+    assert "permission denied" not in response.text
+    assert "cannot write" not in response.text
+    assert log_error.call_args is not None
+    logged_error = log_error.call_args.kwargs["extra"]["error_message"]
+    assert private_path in logged_error
+    assert raw_status in logged_error
+
+
 def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> None:
     """Puzzle generation should align per-piece helper assets to the worker raster grid."""
 
