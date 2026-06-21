@@ -94,12 +94,34 @@ _GENERIC_HTTP_STATUS_WITH_REDACTED_PATH_RE = re.compile(
     rf"(?:\s*(?::|at|-)\s*{re.escape(_LOCAL_PATH_PLACEHOLDER)})\s*$",
     re.IGNORECASE,
 )
+_GENERIC_HTTP_STATUS_WITH_CONTEXT_RE = re.compile(
+    r"^\s*(?:Request failed with status code|HTTP(?:\s+error)?|"
+    r"status(?:\s+code)?|error)\s+[45]\d{2}"
+    r"\s*(?::|at|-)\s*(?P<context>.+?)\s*$",
+    re.IGNORECASE,
+)
+_SAFE_API_CONTEXT_RE = re.compile(r"^/api/[A-Za-z0-9._~!$&'()*+,;=:@%/-]+$")
 
 
 def _truncate_feedback_text(value: str, limit: int = _MAX_CLIENT_LOG_STRING_LENGTH) -> str:
     if len(value) <= limit:
         return value
     return f"{value[:limit]}...<truncated>"
+
+
+def _safe_status_context(value: str) -> str | None:
+    token = value.strip().strip("\"'<>").split(maxsplit=1)[0]
+    token = token.rstrip(".,;)")
+    token = token.split("?", 1)[0].split("#", 1)[0]
+    if not token.startswith("/api/"):
+        return None
+    if "\\" in token or "://" in token:
+        return None
+    if not _SAFE_API_CONTEXT_RE.fullmatch(token):
+        return None
+    if any(part in {".", ".."} for part in token.split("/")):
+        return None
+    return token
 
 
 def _sanitize_feedback_text(
@@ -119,6 +141,13 @@ def _sanitize_feedback_text(
         _GENERIC_HTTP_STATUS_WITH_REDACTED_PATH_RE.fullmatch(redacted)
     ):
         redacted = _GENERIC_HTTP_STATUS_DETAIL
+    else:
+        context_match = _GENERIC_HTTP_STATUS_WITH_CONTEXT_RE.fullmatch(redacted)
+        if context_match is not None:
+            safe_context = _safe_status_context(context_match.group("context"))
+            redacted = _GENERIC_HTTP_STATUS_DETAIL
+            if safe_context is not None:
+                redacted = f"{redacted} Context: {safe_context}"
     return _truncate_feedback_text(redacted, limit)
 
 
