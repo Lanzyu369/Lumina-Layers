@@ -2885,6 +2885,7 @@ def test_generate_swatch_registers_ttl_entries_and_cleanup_expired(tmp_path, mon
 
 def test_generate_swatch_cleans_output_when_registry_fails(
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Swatch output should not leak when FileRegistry registration fails."""
     engine = _FakeSwatchEngine()
@@ -2898,29 +2899,61 @@ def test_generate_swatch_cleans_output_when_registry_fails(
     def _fake_generate_recipe_swatch(*, recipes, **kwargs):
         return str(swatch_path), None, "ok"
 
-    with (
-        patch("api.routers.five_color._load_engine", return_value=(engine, "test_lut")),
-        patch(
-            "core.recipe_swatch.generate_recipe_swatch",
-            side_effect=_fake_generate_recipe_swatch,
-        ),
-    ):
-        response = failing_client.post(
-            "/api/five-color/generate-swatch",
-            json={
-                "lut_name": "test_lut",
-                "recipes": [
-                    {
-                        "selected_indices": [0, 1, 2, 3, 4],
-                        "result_hex": "#123456",
-                        "base_color_names": ["ignored"] * 6,
-                        "base_color_hexes": ["#000000"] * 6,
-                    }
-                ],
-            },
-        )
+    target_logger = logging.getLogger("lumina.api.routers.five_color")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.ERROR, logger=target_logger.name)
+    try:
+        with (
+            patch("api.routers.five_color._load_engine", return_value=(engine, "test_lut")),
+            patch(
+                "core.recipe_swatch.generate_recipe_swatch",
+                side_effect=_fake_generate_recipe_swatch,
+            ),
+        ):
+            response = failing_client.post(
+                "/api/five-color/generate-swatch",
+                json={
+                    "lut_name": "test_lut",
+                    "recipes": [
+                        {
+                            "selected_indices": [0, 1, 2, 3, 4],
+                            "result_hex": "#123456",
+                            "base_color_names": ["ignored"] * 6,
+                            "base_color_hexes": ["#000000"] * 6,
+                        }
+                    ],
+                },
+            )
+    finally:
+        target_logger.removeHandler(caplog.handler)
+
+    safe_detail = (
+        "Five-color swatch download could not be prepared. "
+        "Try generating the swatch again."
+    )
 
     assert response.status_code == 500
+    assert response.json()["detail"] == safe_detail
+    assert "registry backend unavailable" not in response.text
+    assert "Internal server error" not in response.text
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None)
+        == "five_color_generate_swatch_registration_failed"
+    ]
+    assert len(records) == 1
+    record = records[0]
+    assert record.levelname == "ERROR"
+    assert record.error_type == "RuntimeError"
+    assert record.error_message == "registry backend unavailable"
+    assert record.registration_stage == "download"
+    assert record.lut_name == "test_lut"
+    assert record.recipe_count == 1
+    assert all(
+        getattr(record, "event", None) != "api_unhandled_exception"
+        for record in caplog.records
+    )
     assert registry.generated_path == str(swatch_path)
     assert not swatch_path.exists()
 
@@ -2992,6 +3025,7 @@ def test_generate_swatch_hides_export_failure_detail(
 
 def test_generate_swatch_rolls_back_download_when_preview_registration_fails(
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Swatch download should be rolled back if preview registration fails."""
     engine = _FakeSwatchEngine()
@@ -3009,29 +3043,61 @@ def test_generate_swatch_rolls_back_download_when_preview_registration_fails(
             "ok",
         )
 
-    with (
-        patch("api.routers.five_color._load_engine", return_value=(engine, "test_lut")),
-        patch(
-            "core.recipe_swatch.generate_recipe_swatch",
-            side_effect=_fake_generate_recipe_swatch,
-        ),
-    ):
-        response = failing_client.post(
-            "/api/five-color/generate-swatch",
-            json={
-                "lut_name": "test_lut",
-                "recipes": [
-                    {
-                        "selected_indices": [0, 1, 2, 3, 4],
-                        "result_hex": "#123456",
-                        "base_color_names": ["ignored"] * 6,
-                        "base_color_hexes": ["#000000"] * 6,
-                    }
-                ],
-            },
-        )
+    target_logger = logging.getLogger("lumina.api.routers.five_color")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.ERROR, logger=target_logger.name)
+    try:
+        with (
+            patch("api.routers.five_color._load_engine", return_value=(engine, "test_lut")),
+            patch(
+                "core.recipe_swatch.generate_recipe_swatch",
+                side_effect=_fake_generate_recipe_swatch,
+            ),
+        ):
+            response = failing_client.post(
+                "/api/five-color/generate-swatch",
+                json={
+                    "lut_name": "test_lut",
+                    "recipes": [
+                        {
+                            "selected_indices": [0, 1, 2, 3, 4],
+                            "result_hex": "#123456",
+                            "base_color_names": ["ignored"] * 6,
+                            "base_color_hexes": ["#000000"] * 6,
+                        }
+                    ],
+                },
+            )
+    finally:
+        target_logger.removeHandler(caplog.handler)
+
+    safe_detail = (
+        "Five-color swatch download could not be prepared. "
+        "Try generating the swatch again."
+    )
 
     assert response.status_code == 500
+    assert response.json()["detail"] == safe_detail
+    assert "registry byte storage unavailable" not in response.text
+    assert "Internal server error" not in response.text
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None)
+        == "five_color_generate_swatch_registration_failed"
+    ]
+    assert len(records) == 1
+    record = records[0]
+    assert record.levelname == "ERROR"
+    assert record.error_type == "RuntimeError"
+    assert record.error_message == "registry byte storage unavailable"
+    assert record.registration_stage == "preview"
+    assert record.lut_name == "test_lut"
+    assert record.recipe_count == 1
+    assert all(
+        getattr(record, "event", None) != "api_unhandled_exception"
+        for record in caplog.records
+    )
     assert registry.path_file_id is not None
     assert registry.get_entry(registry.path_file_id) is None
     assert registry.resolve(registry.path_file_id) is None
