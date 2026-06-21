@@ -107,7 +107,7 @@ describe("BasicSettings recipe import visible errors", () => {
     });
   });
 
-  it("preserves readable recipe import validation errors", async () => {
+  it("hides local recipe import parser errors behind readable user language", async () => {
     mockPrepareImport.mockRejectedValueOnce(
       new Error("Invalid .lumina.json: failed to parse JSON"),
     );
@@ -125,9 +125,10 @@ describe("BasicSettings recipe import visible errors", () => {
       expect(mockPrepareImport).toHaveBeenCalledWith(file);
     });
     await waitFor(() => {
-      expect(useConverterStore.getState().error).toBe(
-        "导入失败：Invalid .lumina.json: failed to parse JSON",
-      );
+      const error = useConverterStore.getState().error;
+      expect(error).toBe("导入失败：无法读取这个分享卡文件，请确认文件未损坏且来自 Lumina。");
+      expect(error).not.toContain("Invalid .lumina.json");
+      expect(error).not.toContain("failed to parse JSON");
     });
   });
 });
