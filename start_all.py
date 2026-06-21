@@ -23,6 +23,7 @@ FRONTEND_DIR = ROOT / "frontend"
 BACKEND_PORT = 8000
 FRONTEND_PORT = 4174
 FRONTEND_PORT_RANGE = [FRONTEND_PORT + i for i in range(6)]
+WINDOWS_COMMAND_SHIMS = {"pnpm"}
 
 _R = "\033[0m"
 _B = "\033[1m"
@@ -183,12 +184,19 @@ def _find_node() -> str:
 PYTHON = _find_python()
 
 
+def _package_manager_cmd(*args: str, os_name: str | None = None) -> list[str]:
+    cmd = ["pnpm", *args]
+    if (os_name or os.name) == "nt" and cmd[0] in WINDOWS_COMMAND_SHIMS:
+        return ["cmd", "/c", *cmd]
+    return cmd
+
+
 def _frontend_cmd() -> list[str]:
     vite_args = ["--host", "0.0.0.0", "--port", str(FRONTEND_PORT)]
     vite_js = FRONTEND_DIR / "node_modules" / "vite" / "bin" / "vite.js"
     if vite_js.exists():
         return [_find_node(), str(vite_js), *vite_args]
-    return ["npm", "run", "dev", "--", *vite_args]
+    return _package_manager_cmd("dev", "--", *vite_args)
 
 
 def _port_in_use(port: int) -> bool:
