@@ -578,7 +578,7 @@ describe("MaterialLibraryPanel", () => {
     render(<MaterialLibraryPanel />);
 
     const error = await screen.findByTestId("material-library-error");
-    expect(error).toHaveTextContent("服务器发生内部错误。请使用请求 ID 查看日志。");
+    expect(error).toHaveTextContent("服务器发生内部错误。请稍后重试；如果问题持续，请提交反馈。");
     expect(error).not.toHaveTextContent("Request failed with status code 500");
   });
 
@@ -669,7 +669,7 @@ describe("MaterialLibraryPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: /导出所选耗材|export selected/i }));
 
     const error = await screen.findByTestId("material-library-error");
-    expect(error).toHaveTextContent("服务器发生内部错误。请使用请求 ID 查看日志。");
+    expect(error).toHaveTextContent("服务器发生内部错误。请稍后重试；如果问题持续，请提交反馈。");
     expect(error).not.toHaveTextContent("Request failed with status code 500");
   });
 

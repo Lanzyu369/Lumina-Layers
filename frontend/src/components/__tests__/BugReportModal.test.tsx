@@ -256,7 +256,7 @@ describe("BugReportModal", () => {
 
     const summary = within(screen.getByTestId("bug-report-context-summary"));
     expect(
-      summary.getByText("服务器发生内部错误。请使用请求 ID 查看日志。"),
+      summary.getByText("服务器发生内部错误。请稍后重试；如果问题持续，请提交反馈。"),
     ).toBeInTheDocument();
     expect(summary.queryByText(/AxiosError/)).not.toBeInTheDocument();
     expect(summary.queryByText(/\/convert\/generate/)).not.toBeInTheDocument();

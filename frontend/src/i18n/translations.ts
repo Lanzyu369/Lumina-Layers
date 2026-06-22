@@ -134,8 +134,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Too many requests were sent. Please wait and try again.",
   },
   api_error_http_500: {
-    zh: "服务器发生内部错误。请使用请求 ID 查看日志。",
-    en: "The server hit an internal error. Check the log for the request ID.",
+    zh: "服务器发生内部错误。请稍后重试；如果问题持续，请提交反馈。",
+    en: "The server hit an internal error. Try again later, or submit feedback if it keeps happening.",
   },
   api_error_http_500_with_request_id: {
     zh: "服务器发生内部错误。请求 ID：{requestId}。",
@@ -154,20 +154,20 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "The server timed out waiting for a dependency.",
   },
   api_error_http_default: {
-    zh: "接口请求失败。请使用请求 ID 查看日志。",
-    en: "API request failed. Check the log for the request ID.",
+    zh: "接口请求失败。请重试；如果问题持续，请提交反馈。",
+    en: "The API request failed. Try again, or submit feedback if it keeps happening.",
   },
   api_error_http_client_default: {
     zh: "请求未被服务器接受。请检查当前输入、权限或资源是否仍然可用。",
     en: "The server did not accept the request. Check the current input, permissions, or resource availability.",
   },
   api_error_http_server_default: {
-    zh: "服务器处理请求时失败。请使用请求 ID 查看日志。",
-    en: "The server failed while handling the request. Check the log for the request ID.",
+    zh: "服务器处理请求时失败。请稍后重试；如果问题持续，请提交反馈。",
+    en: "The server failed while handling the request. Try again later, or submit feedback if it keeps happening.",
   },
   api_error_no_response: {
-    zh: "接口请求在服务器返回响应前失败。",
-    en: "API request failed before the server returned a response.",
+    zh: "请求没有收到服务器响应。请确认 Lumina 后端已启动、网络连接正常，然后重试。",
+    en: "The request did not receive a server response. Make sure the Lumina backend is running, check the network connection, and try again.",
   },
   api_error_with_request_id: {
     zh: "{message}请求 ID：{requestId}。",
