@@ -86,6 +86,12 @@ _HEIC_UNREADABLE_DETAIL = (
 _RAW_UNREADABLE_DETAIL = (
     "RAW 文件解码失败: 请重新上传有效的 RAW 图片，或先转换为 PNG/JPEG 后再试。"
 )
+_HEIC_UNSUPPORTED_DETAIL = (
+    "当前环境暂不支持 HEIC/HEIF 图片，请先转换为 PNG/JPEG 后再上传。"
+)
+_RAW_UNSUPPORTED_DETAIL = (
+    "当前环境暂不支持 RAW 图片，请先转换为 PNG/JPEG 后再上传。"
+)
 RAW_DECODE_ERRORS: tuple[type[BaseException], ...] = (
     OSError,
     ValueError,
@@ -124,7 +130,7 @@ def _decode_raw_to_pil(data: bytes) -> Image.Image:
         ValueError: rawpy 未安装或解码失败
     """
     if not HAS_RAW:
-        raise ValueError("RAW 格式需要 rawpy 库。请执行: pip install rawpy")
+        raise ValueError(_RAW_UNSUPPORTED_DETAIL)
     import rawpy  # noqa: PLC0415
 
     try:
@@ -167,7 +173,7 @@ async def upload_to_ndarray(file: UploadFile) -> np.ndarray:
         return np.array(img, dtype=np.uint8)
     except (UnidentifiedImageError, OSError, ValueError) as e:
         if ext in HEIC_EXTENSIONS and not HAS_HEIF:
-            raise ValueError("HEIC/HEIF 格式需要 pillow-heif 库。请执行: pip install pillow-heif")
+            raise ValueError(_HEIC_UNSUPPORTED_DETAIL)
         raise ValueError(_UPLOAD_IMAGE_UNREADABLE_DETAIL) from e
 
 
@@ -246,7 +252,7 @@ async def ensure_png_tempfile(file: UploadFile) -> str:
             os.unlink(raw_path)
         raise HTTPException(
             status_code=422,
-            detail="HEIC/HEIF 格式需要 pillow-heif 库。请执行: pip install pillow-heif",
+            detail=_HEIC_UNSUPPORTED_DETAIL,
         )
 
     if ext in RAW_EXTENSIONS and not HAS_RAW:
@@ -254,7 +260,7 @@ async def ensure_png_tempfile(file: UploadFile) -> str:
             os.unlink(raw_path)
         raise HTTPException(
             status_code=422,
-            detail="RAW 格式需要 rawpy 库。请执行: pip install rawpy",
+            detail=_RAW_UNSUPPORTED_DETAIL,
         )
 
     png_path: str | None = None

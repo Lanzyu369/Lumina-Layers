@@ -26,6 +26,8 @@ vi.mock("../api/system", () => ({
 
 const buildPngFile = (name: string) =>
   new File([new Uint8Array([1, 2, 3])], name, { type: "image/png" });
+const heicUnsupportedDetail =
+  "当前环境暂不支持 HEIC/HEIF 图片，请先转换为 PNG/JPEG 后再上传。";
 
 const mockedExtractGradientCardStageA = vi.mocked(extractGradientCardStageA);
 const mockedColorcheckerConfirm = vi.mocked(colorcheckerConfirm);
@@ -50,6 +52,12 @@ async function buildNormalizedApiError(detail: string, status = 500): Promise<un
     useSettingsStore.setState({ language: previousLanguage });
   }
   throw new Error("Expected apiClient to reject");
+}
+
+function buildApiDetailError(detail: string): unknown {
+  return Object.assign(new Error("Request failed with status code 422"), {
+    response: { status: 422, data: { detail } },
+  });
 }
 
 type MockImageHandle = {
@@ -622,6 +630,46 @@ describe("useSingleStageStore ColorChecker flow", () => {
     expect(useSingleStageStore.getState().extractError).toBe(
       "The server hit an internal error. Check the log for the request ID.",
     );
+  });
+
+  it("maps safe HEIC unsupported details to the gradient-card upload guidance", async () => {
+    const previousLanguage = useSettingsStore.getState().language;
+    useSettingsStore.setState({ language: "en" });
+    mockedExtractGradientCardStageA.mockRejectedValueOnce(
+      buildApiDetailError(heicUnsupportedDetail),
+    );
+
+    try {
+      useSingleStageStore.setState({
+        datasetFile: new File(["zip"], "kit.zip", { type: "application/zip" }),
+        whiteImageFile: buildPngFile("white.heic"),
+        blackImageFile: buildPngFile("black.png"),
+        whiteCornerPoints: [
+          [0, 0],
+          [100, 0],
+          [100, 100],
+          [0, 100],
+        ],
+        blackCornerPoints: [
+          [0, 0],
+          [100, 0],
+          [100, 100],
+          [0, 100],
+        ],
+        whiteImageNaturalWidth: 100,
+        whiteImageNaturalHeight: 100,
+        blackImageNaturalWidth: 100,
+        blackImageNaturalHeight: 100,
+      });
+
+      await useSingleStageStore.getState().submitExtract();
+
+      expect(useSingleStageStore.getState().extractError).toBe(
+        "HEIC/HEIF images are not supported in the current environment. Please convert them to PNG or JPG before uploading.",
+      );
+    } finally {
+      useSettingsStore.setState({ language: previousLanguage });
+    }
   });
 
   it("ignores stale Stage A extraction responses after ColorChecker state changes", async () => {
