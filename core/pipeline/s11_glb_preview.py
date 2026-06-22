@@ -1186,6 +1186,12 @@ def generate_segmented_glb(
     if isinstance(cache_override, (int, np.integer)) and int(cache_override) > max_meshes:
         max_meshes = int(cache_override)
 
+    height = None
+    width = None
+    scene = None
+    requested_kernel = None
+    logged_max_meshes = int(max_meshes) if isinstance(max_meshes, (int, np.integer)) else None
+
     try:
         _glb_t0 = time.perf_counter()
 
@@ -1452,7 +1458,20 @@ def generate_segmented_glb(
         return glb_path
 
     except (OSError, ValueError, TypeError, RuntimeError) as e:
-        _log.exception(f"Failed: {e}")
+        _log.exception(
+            "Segmented GLB export failed",
+            extra={
+                "event": "segmented_glb_export_failed",
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+                "output_path": str(output_path),
+                "width": int(width) if width is not None else None,
+                "height": int(height) if height is not None else None,
+                "geometry_count": int(len(scene.geometry)) if scene is not None else 0,
+                "max_meshes": logged_max_meshes,
+                "kernel": requested_kernel,
+            },
+        )
         return None
 
 

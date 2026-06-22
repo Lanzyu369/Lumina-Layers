@@ -276,6 +276,44 @@ def test_s09_empty_scene_error_log_has_actionable_fields(tmp_path, caplog) -> No
     assert record.out_path == str(tmp_path / "empty-scene.3mf")
 
 
+def test_s09_writer_error_log_has_actionable_fields(tmp_path, caplog) -> None:
+    ctx = _make_minimal_s09_ctx(tmp_path)
+
+    logger = logging.getLogger("lumina.core.pipeline.s09_export_3mf")
+    logger.addHandler(caplog.handler)
+    caplog.set_level(logging.ERROR, logger="lumina.core.pipeline.s09_export_3mf")
+
+    with patch.object(s09_export_3mf, "MODELS_DIR", str(tmp_path)), patch.object(
+        s09_export_3mf,
+        "generate_model_filename",
+        lambda *_args: "writer-failed.3mf",
+    ), patch.object(s09_export_3mf, "export_scene_with_bambu_metadata", autospec=True) as mock_export:
+        mock_export.side_effect = RuntimeError("writer unavailable")
+        try:
+            result = s09_export_3mf.run(ctx)
+        finally:
+            logger.removeHandler(caplog.handler)
+
+    assert result["error"] == "[ERROR] 3MF export failed: writer unavailable"
+    assert "out_path" not in result
+
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "s09_export_3mf_failed"
+    ]
+    assert len(records) == 1
+    record = records[0]
+    assert record.levelno == logging.ERROR
+    assert record.error_type == "RuntimeError"
+    assert record.error_message == "writer unavailable"
+    assert record.color_mode == "4-Color"
+    assert record.modeling_mode == str(ModelingMode.HIGH_FIDELITY)
+    assert record.printer_id == "bambu-h2d"
+    assert record.slicer == "BambuStudio"
+    assert record.out_path == str(tmp_path / "writer-failed.3mf")
+
+
 def test_s09_centers_export_scene_on_printer_bed(tmp_path) -> None:
     captured: dict[str, object] = {}
 
