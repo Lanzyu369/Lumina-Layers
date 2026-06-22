@@ -44,6 +44,7 @@ _MAX_CLIENT_LOG_DEPTH = 4
 _MAX_CLIENT_LOG_ARRAY_ITEMS = 20
 _MAX_CLIENT_LOG_OBJECT_KEYS = 24
 _MAX_CLIENT_LOG_STRING_LENGTH = 1200
+_MAX_DESCRIPTION_STRING_LENGTH = 10_000
 
 # Relaxed limits for the grouped ``advanced_params`` capture. They are wider
 # than the generic client-log sanitizer above because the frontend builder
@@ -101,6 +102,16 @@ _GENERIC_HTTP_STATUS_WITH_CONTEXT_RE = re.compile(
     re.IGNORECASE,
 )
 _SAFE_API_CONTEXT_RE = re.compile(r"^/api/[A-Za-z0-9._~!$&'()*+,;=:@%/-]+$")
+_GENERIC_HTTP_STATUS_FRAGMENT_RE = re.compile(
+    r"(?:\b[A-Za-z]+Error:\s*)?"
+    r"(?:Request failed with status code|HTTP(?:\s+error)?|"
+    r"status(?:\s+code)?|error)\s+[45]\d{2}"
+    r"(?:\s*(?::|at|-)\s*(?P<context>"
+    rf"{re.escape(_LOCAL_PATH_PLACEHOLDER)}|"
+    r"/api/[^\s\"'<>)]*"
+    r"))?",
+    re.IGNORECASE,
+)
 
 
 def _truncate_feedback_text(value: str, limit: int = _MAX_CLIENT_LOG_STRING_LENGTH) -> str:
@@ -149,6 +160,28 @@ def _sanitize_feedback_text(
             if safe_context is not None:
                 redacted = f"{redacted} Context: {safe_context}"
     return _truncate_feedback_text(redacted, limit)
+
+
+def _sanitize_bug_report_description(value: str) -> str:
+    """Redact diagnostics from the free-form bug-report description.
+
+    从自由文本 Bug 描述中移除本机路径和传输层空错误文案。
+    """
+
+    redacted = _sanitize_feedback_text(value, limit=_MAX_DESCRIPTION_STRING_LENGTH)
+
+    def _replace_http_status(match: re.Match[str]) -> str:
+        context = match.group("context")
+        safe_context = _safe_status_context(context) if context else None
+        if safe_context is not None:
+            return f"{_GENERIC_HTTP_STATUS_DETAIL} Context: {safe_context}"
+        return _GENERIC_HTTP_STATUS_DETAIL
+
+    normalized = _GENERIC_HTTP_STATUS_FRAGMENT_RE.sub(
+        _replace_http_status,
+        redacted,
+    )
+    return _truncate_feedback_text(normalized, _MAX_DESCRIPTION_STRING_LENGTH)
 
 
 def _sanitize_feedback_jsonish(value: Any, *, depth: int = 0) -> Any:
@@ -845,6 +878,9 @@ def _sanitize_bug_report_request_payload_for_export(
     """
 
     sanitized = deepcopy(payload)
+    description = sanitized.get("description")
+    if isinstance(description, str):
+        sanitized["description"] = _sanitize_bug_report_description(description)
     context = sanitized.get("context")
     if isinstance(context, dict):
         sanitized["context"] = _sanitize_bug_report_context_for_export(context)
@@ -979,7 +1015,7 @@ async def submit_bug_report(
         "ticket_id": ticket_id,
         "received_at_cst": format_received_cst(now),
         "received_at_utc": received_at_utc,
-        "description": request.description,
+        "description": _sanitize_bug_report_description(request.description),
         "user_email": request.user_email,
         "context": context_dump,
         "screenshot_attached": request.screenshot_data_url is not None,
