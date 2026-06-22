@@ -361,7 +361,7 @@ function resolveGradientCardSaveError(err: unknown): string {
     if (detail.startsWith(GRADIENT_CARD_IMAGE_SOURCE_MISMATCH_DETAIL_PREFIX)) {
       return tRuntime("mat_gradient_image_source_mismatch_error");
     }
-    return detail;
+    return tRuntime("mat_gradient_save_failed_error");
   }
   return tRuntime("mat_gradient_save_failed_error");
 }

@@ -3722,6 +3722,71 @@ def test_extractor_save_gradient_card_material_removes_new_archive_on_core_failu
     assert evicted == ["Bambu Lab/PLA Basic"]
 
 
+@pytest.mark.parametrize(
+    ("exception_type", "status_code"),
+    [
+        (FileNotFoundError, 404),
+        (ValueError, 422),
+        (TypeError, 422),
+    ],
+)
+def test_extractor_save_gradient_card_material_redacts_unknown_client_error_detail(
+    monkeypatch,
+    caplog: pytest.LogCaptureFixture,
+    exception_type: type[Exception],
+    status_code: int,
+) -> None:
+    client, store = _client_with_registry(FileRegistry())
+    session_id = _seed_gradient_card_material_session(store)
+    raw_message = (
+        "Saved material archive is invalid at "
+        "/Users/min/private/materials/BrandA/private/material.json"
+    )
+
+    def _fake_save_stage_a_material_archive(**kwargs):
+        raise exception_type(raw_message)
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.save_stage_a_material_archive",
+        _fake_save_stage_a_material_archive,
+    )
+
+    target_loggers = _capture_single_stage_warning_loggers(caplog)
+    try:
+        response = client.post(
+            "/api/extractor/save-gradient-card-material",
+            data={
+                "session_id": session_id,
+                "material_name": "PLA Basic",
+                "brand": "BrandA",
+            },
+        )
+    finally:
+        for target_logger in target_loggers:
+            target_logger.removeHandler(caplog.handler)
+
+    safe_detail = "Gradient card material save failed. Check the server log for details."
+    assert response.status_code == status_code
+    assert response.json()["detail"] == safe_detail
+    assert raw_message not in response.text
+    assert "/Users/min/private" not in response.text
+
+    api_http_records = _records_for_event(caplog, "api_http_error")
+    assert api_http_records
+    assert str(getattr(api_http_records[-1], "error_message", "")) == safe_detail
+    assert raw_message not in str(getattr(api_http_records[-1], "error_message", ""))
+
+    route_records = _records_for_event(
+        caplog,
+        "extractor_save_gradient_card_material_failed",
+    )
+    assert route_records
+    route_record = route_records[-1]
+    assert getattr(route_record, "status_code", None) == status_code
+    assert getattr(route_record, "error_type", None) == exception_type.__name__
+    assert raw_message in str(getattr(route_record, "error_message", ""))
+
+
 def test_gradient_card_stage_a_rejects_unreadable_image_without_pil_detail() -> None:
     client, _store, _registry = _client_with_state()
 
