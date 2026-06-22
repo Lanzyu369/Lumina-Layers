@@ -1100,3 +1100,50 @@ class TestRouterEndpoints:
         assert body["message"] == SLICER_LAUNCH_FAILED_MESSAGE
         assert private_path not in resp.text
         assert "code 500" not in resp.text
+
+    def test_launch_download_url_failure_message_is_not_exposed(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        output_root = _configure_slicer_output(monkeypatch, tmp_path)
+        f = output_root / "model.3mf"
+        f.write_text("data")
+        registry = FileRegistry()
+        file_id = registry.register_path("generated-model", str(f), filename="model.3mf")
+        launch_copy = output_root / "temp" / "launch_copy.3mf"
+        launch_copy.write_text("data")
+        mock_slicers = [
+            DetectedSlicer(id="bambu_studio", display_name="Bambu Studio", exe_path="C:\\bs.exe"),
+        ]
+
+        client = _make_client()
+        client.app.dependency_overrides[get_file_registry] = lambda: registry
+        try:
+            with patch(
+                "api.routers.slicer.detect_installed_slicers",
+                return_value=mock_slicers,
+            ), patch(
+                "api.routers.slicer._create_launch_copy",
+                return_value=str(launch_copy),
+            ), patch(
+                "api.routers.slicer.launch_slicer",
+                return_value=(False, f"open failed {f}: code 500"),
+            ):
+                resp = client.post(
+                    "/api/slicer/launch",
+                    json={
+                        "slicer_id": "bambu_studio",
+                        "download_url": f"/api/files/{file_id}",
+                    },
+                )
+        finally:
+            client.app.dependency_overrides.pop(get_file_registry, None)
+
+        assert resp.status_code == 500
+        body = resp.json()
+        assert body["status"] == "error"
+        assert body["message"] == SLICER_LAUNCH_FAILED_MESSAGE
+        assert str(f) not in resp.text
+        assert str(launch_copy) not in resp.text
+        assert "code 500" not in resp.text
