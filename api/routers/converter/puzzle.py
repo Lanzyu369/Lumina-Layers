@@ -1038,7 +1038,7 @@ async def generate_puzzle(
         status="ok",
         message=f"Generated {len(successful_entries)} puzzle pieces into a single 3MF",
         download_url=f"/api/files/{download_id}",
-        threemf_disk_path=combined_3mf_path,
+        threemf_disk_path=None,
         piece_count=len(successful_entries),
         grid_cols=layout.cols,
         grid_rows=layout.rows,

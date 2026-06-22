@@ -86,7 +86,7 @@ describe("submitBatch modelUrl 与 batchResult 状态管理", () => {
     expect(state.previewGlbUrl).toBeNull();
     expect(state.batchPreviewItems).toEqual([]);
     expect(state.batchResult).toEqual(response);
-    expect(state.threemfDiskPath).toBe("/tmp/merged.3mf");
+    expect(state.threemfDiskPath).toBeNull();
     expect(state.downloadUrl).toBe("/api/files/merged.3mf");
     expect(state.batchLoading).toBe(false);
   });
@@ -137,7 +137,7 @@ describe("submitBatch modelUrl 与 batchResult 状态管理", () => {
     expect(state.modelUrl).toBeNull();
     expect(state.previewGlbUrl).toBeNull();
     expect(state.batchResult).toEqual(response);
-    expect(state.threemfDiskPath).toBe("/tmp/merged.3mf");
+    expect(state.threemfDiskPath).toBeNull();
     expect(state.downloadUrl).toBe("/api/files/merged.3mf");
   });
 
@@ -202,7 +202,7 @@ describe("submitBatch modelUrl 与 batchResult 状态管理", () => {
     expect(state.previewGlbUrl).toBeNull();
     expect(state.batchPreviewItems).toEqual([]);
     expect(state.batchResult).toEqual(response);
-    expect(state.threemfDiskPath).toBe("/tmp/merged.3mf");
+    expect(state.threemfDiskPath).toBeNull();
     expect(state.downloadUrl).toBe("/api/files/merged.3mf");
   });
 

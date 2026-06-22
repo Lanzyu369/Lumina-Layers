@@ -315,7 +315,7 @@ describe("submitBatch API 调用和状态管理", () => {
     expect(state.batchResult).toEqual(mockBatchResponse);
     expect(state.batchLoading).toBe(false);
     expect(state.error).toBeNull();
-    expect(state.threemfDiskPath).toBe("/tmp/batch_result.3mf");
+    expect(state.threemfDiskPath).toBeNull();
     expect(state.downloadUrl).toBe("/api/files/batch_result.3mf");
   });
 

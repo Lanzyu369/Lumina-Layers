@@ -373,6 +373,8 @@ class TestGenerateParameterCompleteness:
         assert body["status"] == "ok"
         assert body["download_url"].startswith("/api/files/")
         assert body["preview_3d_url"].startswith("/api/files/")
+        assert body["threemf_disk_path"] is None
+        assert "/tmp/out.3mf" not in response.text
 
         # Verify pool.submit was called exactly once
         _mock_pool.submit.assert_called_once()

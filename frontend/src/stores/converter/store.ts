@@ -5978,7 +5978,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             isGenerating: false,
             modelUrl: null,
             batchPreviewItems: [],
-            threemfDiskPath: puzzleResponse.threemf_disk_path ?? null,
+            threemfDiskPath: null,
             downloadUrl: puzzleResponse.download_url
               ? `${puzzleResponse.download_url}`
               : null,
@@ -5990,7 +5990,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           _logGenerateTimer("puzzle 3mf received");
           _clientLog("generate: puzzle 3mf received", {
             download_url: puzzleResponse.download_url ?? null,
-            threemf_disk_path: puzzleResponse.threemf_disk_path ?? null,
+            has_legacy_threemf_disk_path: Boolean(
+              puzzleResponse.threemf_disk_path,
+            ),
             warning_count: (puzzleResponse.warnings ?? []).length,
             grid_rows: puzzleResponse.grid_rows ?? null,
             grid_cols: puzzleResponse.grid_cols ?? null,
@@ -6074,7 +6076,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         _clientLog("generate: response received", {
           preview_3d_url: response.preview_3d_url ?? null,
           download_url: response.download_url ?? null,
-          threemf_disk_path: response.threemf_disk_path ?? null,
+          has_legacy_threemf_disk_path: Boolean(response.threemf_disk_path),
         });
         const modelUrl = response.preview_3d_url
           ? `${response.preview_3d_url}`
@@ -6093,7 +6095,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             ? null
             : modelUrl,
           batchPreviewItems: [],
-          threemfDiskPath: response.threemf_disk_path ?? null,
+          threemfDiskPath: null,
           downloadUrl: response.download_url
             ? `${response.download_url}`
             : null,
@@ -6104,7 +6106,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         _clientLog("generate: UI unlocked", {
           model_url: modelUrl,
           download_url: response.download_url ?? null,
-          threemf_disk_path: response.threemf_disk_path ?? null,
+          has_legacy_threemf_disk_path: Boolean(response.threemf_disk_path),
         });
         trackLuminaEvent("lumina_converter_generate_done", {
           source_version: state.source_version,
@@ -6664,7 +6666,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           previewGlbUrl: null,
           previewPerformanceTiming: null,
           generatePerformanceTiming: null,
-          threemfDiskPath: result.threemf_disk_path ?? null,
+          threemfDiskPath: null,
           downloadUrl: result.download_url ? `${result.download_url}` : null,
         });
         trackLuminaEvent("lumina_batch_convert_done", {

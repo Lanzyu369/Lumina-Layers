@@ -160,7 +160,8 @@ export default function CalibrationPanel() {
               largeFormat={exportsZipPackage}
               onAutoGenerate={async () => {
                 await submitLegacyGenerate();
-                return useCalibrationStore.getState().threemfDiskPath ?? null;
+                const state = useCalibrationStore.getState();
+                return state.downloadUrl ?? state.threemfDiskPath ?? null;
               }}
               getLatestDownloadUrl={() =>
                 useCalibrationStore.getState().downloadUrl

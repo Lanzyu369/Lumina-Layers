@@ -1266,7 +1266,7 @@ async def convert_generate(
         message=status_msg or "Model generated",
         download_url=f"/api/files/{download_id}",
         preview_3d_url=preview_3d_url,
-        threemf_disk_path=threemf_path,
+        threemf_disk_path=None,
         performance_timing=performance_timing,
     )
 
@@ -2677,7 +2677,7 @@ async def convert_batch(
         status="ok",
         message=f"Batch complete: {success_count}/{len(results)} succeeded",
         download_url=download_url,
-        threemf_disk_path=str(merged_3mf_path),
+        threemf_disk_path=None,
         preview_3d_url=preview_3d_url,
         preview_items=preview_items,
         warnings=warnings,

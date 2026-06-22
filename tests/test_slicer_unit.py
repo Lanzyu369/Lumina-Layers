@@ -24,6 +24,8 @@ from api.schemas.slicer import (
     SlicerLaunchRequest,
     SlicerLaunchResponse,
 )
+from api.dependencies import get_file_registry
+from api.file_registry import FileRegistry
 from api.routers.slicer import (
     SLICER_LAUNCH_COPY_FAILED_MESSAGE,
     SLICER_LAUNCH_FAILED_MESSAGE,
@@ -503,10 +505,11 @@ class TestRouterEndpoints:
 
     def test_detect_allows_local_frontend_origin(self):
         client = _make_client()
+        private_path = "/Applications/Bambu Studio.app"
         slicer = DetectedSlicer(
             id="bambu_studio",
             display_name="Bambu Studio",
-            exe_path="/Applications/Bambu Studio.app",
+            exe_path=private_path,
             source="auto_macos_app",
         )
         with patch(
@@ -519,7 +522,11 @@ class TestRouterEndpoints:
             )
 
         assert resp.status_code == 200
-        assert resp.json()["slicers"][0]["exe_path"] == "/Applications/Bambu Studio.app"
+        data = resp.json()
+        assert data["slicers"][0]["id"] == "bambu_studio"
+        assert data["slicers"][0]["source"] == "auto_macos_app"
+        assert data["slicers"][0]["exe_path"] is None
+        assert private_path not in resp.text
 
     def test_custom_path_validate_success(self):
         client = _make_client()
@@ -603,6 +610,106 @@ class TestRouterEndpoints:
         assert resp.json()["status"] == "success"
         mock_copy.assert_called_once()
         mock_launch.assert_called_once_with("bambu_studio", str(launch_copy), mock_slicers)
+
+    def test_launch_resolves_download_url_without_public_disk_path(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        output_root = _configure_slicer_output(monkeypatch, tmp_path)
+        f = output_root / "model.3mf"
+        f.write_text("data")
+        registry = FileRegistry()
+        file_id = registry.register_path("generated-model", str(f), filename="model.3mf")
+        launch_copy = output_root / "temp" / "launch_copy.3mf"
+        launch_copy.write_text("data")
+        client = _make_client()
+        client.app.dependency_overrides[get_file_registry] = lambda: registry
+        mock_slicers = [
+            DetectedSlicer(id="bambu_studio", display_name="Bambu Studio", exe_path="C:\\bs.exe"),
+        ]
+        try:
+            with patch(
+                "api.routers.slicer.detect_installed_slicers",
+                return_value=mock_slicers,
+            ), patch(
+                "api.routers.slicer._create_launch_copy",
+                return_value=str(launch_copy),
+            ) as mock_copy, patch(
+                "api.routers.slicer.launch_slicer",
+                return_value=(True, "Opened in Bambu Studio"),
+            ) as mock_launch:
+                resp = client.post(
+                    "/api/slicer/launch",
+                    json={
+                        "slicer_id": "bambu_studio",
+                        "download_url": f"/api/files/{file_id}",
+                    },
+                )
+        finally:
+            client.app.dependency_overrides.pop(get_file_registry, None)
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "success"
+        mock_copy.assert_called_once_with(str(f), registry)
+        mock_launch.assert_called_once_with("bambu_studio", str(launch_copy), mock_slicers)
+
+    def test_launch_rejects_absolute_download_url(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        output_root = _configure_slicer_output(monkeypatch, tmp_path)
+        f = output_root / "model.3mf"
+        f.write_text("data")
+        registry = FileRegistry()
+        file_id = registry.register_path("generated-model", str(f), filename="model.3mf")
+        client = _make_client()
+        client.app.dependency_overrides[get_file_registry] = lambda: registry
+        try:
+            resp = client.post(
+                "/api/slicer/launch",
+                json={
+                    "slicer_id": "bambu_studio",
+                    "download_url": f"https://example.test/api/files/{file_id}",
+                },
+            )
+        finally:
+            client.app.dependency_overrides.pop(get_file_registry, None)
+
+        assert resp.status_code == 400
+        assert resp.json()["message"] == SLICER_LAUNCH_SOURCE_MISSING_MESSAGE
+
+    def test_launch_rejects_private_download_url_entry(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        output_root = _configure_slicer_output(monkeypatch, tmp_path)
+        f = output_root / "model.3mf"
+        f.write_text("data")
+        registry = FileRegistry()
+        file_id = registry.register_path(
+            "private-model",
+            str(f),
+            filename="model.3mf",
+            is_public=False,
+        )
+        client = _make_client()
+        client.app.dependency_overrides[get_file_registry] = lambda: registry
+        try:
+            resp = client.post(
+                "/api/slicer/launch",
+                json={
+                    "slicer_id": "bambu_studio",
+                    "download_url": f"/api/files/{file_id}",
+                },
+            )
+        finally:
+            client.app.dependency_overrides.pop(get_file_registry, None)
+
+        assert resp.status_code == 400
+        assert resp.json()["message"] == SLICER_LAUNCH_SOURCE_MISSING_MESSAGE
 
     def test_launch_rejects_untrusted_origin_before_copy_or_process_launch(
         self,
