@@ -82,6 +82,7 @@ import {
   resolveFridgeMagnetSpacerThick,
 } from "../../constants/fridgeMagnets";
 import { useSettingsStore } from "../settingsStore";
+import { lutErrorToVisibleMessage } from "../lutErrorMessages";
 import {
   postClientLog,
   summarizeErrorForLog,
@@ -5069,7 +5070,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       } catch (err) {
         set({
           lutColorsLoading: false,
-          error: visibleConverterError(err, "LUT 颜色加载失败"),
+          error: lutErrorToVisibleMessage(err, "LUT 颜色加载失败"),
         });
       }
     },
