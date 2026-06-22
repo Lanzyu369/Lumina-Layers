@@ -58,7 +58,11 @@ from core.puzzle_3mf import PuzzlePiece3MFSource, assemble_puzzle_3mf
 
 from .common import (
     BATCH_DOWNLOAD_TTL_SECONDS,
+    LUT_DATA_UNAVAILABLE_DETAIL,
+    PREVIEW_CACHE_INVALID_DETAIL,
+    PREVIEW_CACHE_UNAVAILABLE_DETAIL,
     ROUTER_HANDLED_ERRORS,
+    SOURCE_IMAGE_UNAVAILABLE_DETAIL,
     _handle_core_error,
     _require_session,
     _resolve_material_backing_index,
@@ -111,12 +115,12 @@ def _require_puzzle_cache(
     if cache is None:
         raise HTTPException(
             status_code=409,
-            detail="No preview cache. Call POST /api/convert/preview first.",
+            detail=PREVIEW_CACHE_UNAVAILABLE_DETAIL,
         )
     if not isinstance(cache, dict):
         raise HTTPException(
             status_code=409,
-            detail="Invalid preview cache. Call POST /api/convert/preview again.",
+            detail=PREVIEW_CACHE_INVALID_DETAIL,
         )
     if not is_preview_cache_artifact_ref(cache):
         return cache
@@ -755,11 +759,11 @@ async def generate_puzzle(
     lut_path: str | None = session_data.get("lut_path")
     session_material_source = session_data.get("material_source", "lut")
     if not image_path or not os.path.exists(image_path):
-        raise HTTPException(status_code=409, detail="Image file missing. Call POST /api/convert/preview first.")
+        raise HTTPException(status_code=409, detail=SOURCE_IMAGE_UNAVAILABLE_DETAIL)
     if session_material_source == "material_archive":
         lut_path = "__material_archive__"
     elif not lut_path or not os.path.exists(lut_path):
-        raise HTTPException(status_code=409, detail="LUT file missing. Call POST /api/convert/preview first.")
+        raise HTTPException(status_code=409, detail=LUT_DATA_UNAVAILABLE_DETAIL)
 
     try:
         layout, _layout_cache_key = _resolve_layout(

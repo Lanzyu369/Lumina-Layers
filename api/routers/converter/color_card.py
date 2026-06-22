@@ -34,6 +34,10 @@ from config import TEMP_DIR, ModelingMode as CoreModelingMode
 
 from .common import (
     BATCH_DOWNLOAD_TTL_SECONDS,
+    LUT_DATA_UNAVAILABLE_DETAIL,
+    PREVIEW_CACHE_INVALID_DETAIL,
+    PREVIEW_CACHE_UNAVAILABLE_DETAIL,
+    PREVIEW_COLOR_PALETTE_UNAVAILABLE_DETAIL,
     ROUTER_HANDLED_ERRORS,
     _resolve_material_backing_index,
     _require_session,
@@ -66,12 +70,12 @@ def _require_color_card_cache_metadata(session_data: dict) -> dict:
     if cache is None:
         raise HTTPException(
             status_code=409,
-            detail="No preview cache. Call POST /api/convert/preview first.",
+            detail=PREVIEW_CACHE_UNAVAILABLE_DETAIL,
         )
     if not isinstance(cache, dict):
         raise HTTPException(
             status_code=409,
-            detail="Invalid preview cache. Call POST /api/convert/preview again.",
+            detail=PREVIEW_CACHE_INVALID_DETAIL,
         )
     if is_preview_cache_artifact_ref(cache):
         return get_preview_cache_metadata(cache)
@@ -123,7 +127,7 @@ async def generate_color_card(
         if not lut_path or not os.path.exists(lut_path):
             raise HTTPException(
                 status_code=409,
-                detail="LUT file missing. Call POST /api/convert/preview first.",
+                detail=LUT_DATA_UNAVAILABLE_DETAIL,
             )
     else:
         lut_path = "__material_archive__"
@@ -133,8 +137,7 @@ async def generate_color_card(
     if not color_palette:
         raise HTTPException(
             status_code=409,
-            detail="No color_palette in preview cache. "
-            "Call POST /api/convert/preview first.",
+            detail=PREVIEW_COLOR_PALETTE_UNAVAILABLE_DETAIL,
         )
 
     hex_colors = [entry["hex"] for entry in color_palette if "hex" in entry]

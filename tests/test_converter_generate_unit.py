@@ -267,7 +267,9 @@ class TestGenerateMissingImagePath:
         }
         response = client.post("/api/convert/generate", json=payload)
         assert response.status_code == 409
-        assert "Image file missing" in response.json()["detail"]
+        assert response.json()["detail"] == (
+            "Source image is unavailable. Re-upload the image, run preview, and try again."
+        )
 
     def test_generate_nonexistent_image_file_returns_409(self) -> None:
         sid: str = _test_store.create()

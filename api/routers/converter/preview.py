@@ -66,6 +66,7 @@ from .async_glb import get_glb_status, schedule_glb_build
 from .common import (
     EPHEMERAL_PREVIEW_TTL_SECONDS,
     NON_FATAL_GLB_ERRORS,
+    PREVIEW_CACHE_UNAVAILABLE_DETAIL,
     ROUTER_HANDLED_ERRORS,
     _handle_core_error,
     _image_to_png_bytes,
@@ -1378,7 +1379,7 @@ def _require_preview_cache_for_layer_images(
     if cache is None:
         raise HTTPException(
             status_code=409,
-            detail="No preview cache. Call POST /api/convert/preview first.",
+            detail=PREVIEW_CACHE_UNAVAILABLE_DETAIL,
         )
     if not isinstance(cache, dict):
         raise HTTPException(status_code=400, detail="Invalid preview cache")

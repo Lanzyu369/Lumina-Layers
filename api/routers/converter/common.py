@@ -29,6 +29,38 @@ from core.gradient_group_analyzer import (
 
 EPHEMERAL_PREVIEW_TTL_SECONDS = 600
 BATCH_DOWNLOAD_TTL_SECONDS = 3600
+PREVIEW_CACHE_UNAVAILABLE_DETAIL = (
+    "Preview data is unavailable. Re-run preview and try again."
+)
+PREVIEW_CACHE_INVALID_DETAIL = (
+    "Preview data is unavailable. Re-run preview before trying again."
+)
+SOURCE_IMAGE_UNAVAILABLE_DETAIL = (
+    "Source image is unavailable. Re-upload the image, run preview, and try again."
+)
+LUT_DATA_UNAVAILABLE_DETAIL = (
+    "Color lookup data is unavailable. Re-select the LUT or materials, run preview, "
+    "and try again."
+)
+PREVIEW_COLOR_PALETTE_UNAVAILABLE_DETAIL = (
+    "Preview color palette is unavailable. Re-run preview and try again."
+)
+REGION_SELECTION_REQUIRED_DETAIL = (
+    "No replacement region is selected. Select a region or choose a gradient group, "
+    "then try again."
+)
+GRADIENT_REGION_METADATA_UNAVAILABLE_DETAIL = (
+    "Gradient region data is unavailable. Re-run preview and try again."
+)
+GRADIENT_REGION_METADATA_STALE_DETAIL = (
+    "Gradient region data no longer matches the preview. Re-run preview and try again."
+)
+MATCHED_COLORS_UNAVAILABLE_DETAIL = (
+    "Preview matched colors are unavailable. Re-run preview and try again."
+)
+MATERIAL_SOLVER_CACHE_UNAVAILABLE_DETAIL = (
+    "Material solver data is unavailable. Re-run preview and try again."
+)
 log = get_logger(__name__)
 _VALID_MATERIAL_SOURCES = {"lut", "material_archive"}
 _RELIEF_HEIGHT_EPSILON_MM = 1e-9
@@ -261,7 +293,7 @@ def _require_session(store: SessionStore, session_id: str) -> dict:
 def _require_preview_cache(session_data: dict) -> dict:
     cache = session_data.get("preview_cache")
     if cache is None:
-        raise HTTPException(status_code=409, detail="No preview cache. Call POST /api/convert/preview first.")
+        raise HTTPException(status_code=409, detail=PREVIEW_CACHE_UNAVAILABLE_DETAIL)
     if is_preview_cache_artifact_ref(cache):
         return hydrate_preview_cache(cache)
     return cache
