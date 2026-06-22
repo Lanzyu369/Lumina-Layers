@@ -114,6 +114,7 @@ function makeLegacyCatalogGroups(): LutDetailsCatalogGroup[] {
 
 // Reset store to a clean state before each test
 beforeEach(() => {
+  vi.clearAllMocks();
   vi.mocked(converterApi.fetchLutList).mockResolvedValue({
     luts: [
       {
@@ -288,6 +289,12 @@ describe("BasicSettings", () => {
 
       expect(converterApi.fetchLutList).toHaveBeenCalledTimes(1);
       expect(lutApi.fetchLutDetailsCatalog).toHaveBeenCalledTimes(1);
+      expect(converterApi.fetchLutList).toHaveBeenNthCalledWith(1, {
+        suppressClientLog: true,
+      });
+      expect(lutApi.fetchLutDetailsCatalog).toHaveBeenNthCalledWith(1, {
+        suppressClientLog: true,
+      });
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(4_000);
@@ -297,6 +304,56 @@ describe("BasicSettings", () => {
 
       expect(converterApi.fetchLutList).toHaveBeenCalledTimes(2);
       expect(lutApi.fetchLutDetailsCatalog).toHaveBeenCalledTimes(2);
+      expect(converterApi.fetchLutList).toHaveBeenNthCalledWith(2, {
+        suppressClientLog: true,
+      });
+      expect(lutApi.fetchLutDetailsCatalog).toHaveBeenNthCalledWith(2, {
+        suppressClientLog: true,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops startup LUT retries after repeated backend failures", async () => {
+    vi.useFakeTimers();
+    vi.mocked(converterApi.fetchLutList).mockRejectedValue(
+      new Error("backend offline"),
+    );
+    vi.mocked(lutApi.fetchLutDetailsCatalog).mockRejectedValue(
+      new Error("backend offline"),
+    );
+    useConverterStore.setState({
+      source_version: "legacy",
+      lutList: [],
+      lutListFull: [],
+      lutListLoading: false,
+      legacyCatalogGroups: [],
+      legacyCatalogLoading: false,
+    });
+
+    try {
+      render(<BasicSettings />);
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20_000);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(converterApi.fetchLutList).toHaveBeenCalledTimes(2);
+      expect(lutApi.fetchLutDetailsCatalog).toHaveBeenCalledTimes(2);
+      expect(converterApi.fetchLutList).toHaveBeenNthCalledWith(2, {
+        suppressClientLog: true,
+      });
+      expect(lutApi.fetchLutDetailsCatalog).toHaveBeenNthCalledWith(2, {
+        suppressClientLog: true,
+      });
     } finally {
       vi.useRealTimers();
     }

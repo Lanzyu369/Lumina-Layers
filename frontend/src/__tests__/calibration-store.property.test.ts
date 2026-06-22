@@ -414,7 +414,8 @@ describe("Feature: calibration-tab-integration, Property 6: API 请求载荷与 
           callArgs.slicer === "OrcaSlicer" &&
           callArgs.nozzle_size === "0.2" &&
           callArgs.device_profile_id === "OrcaSlicer:bbl:bambu-lab-p1s:0.2" &&
-          useCalibrationStore.getState().threemfDiskPath === "/tmp/test.3mf"
+          useCalibrationStore.getState().threemfDiskPath === null &&
+          useCalibrationStore.getState().downloadUrl === "/test.3mf"
         );
       }),
       { numRuns: 100 },

@@ -7,7 +7,7 @@ All API endpoint response schemas are defined here.
 
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from api.schemas.lut import (
     LutCoverageStatsResponse,
@@ -33,7 +33,18 @@ def public_material_response_item(item: dict[str, object]) -> dict[str, object]:
     }
 
 
-class CalibrationResponse(BaseModel):
+class _NoPublic3mfDiskPathMixin(BaseModel):
+    """Redact server-local generated 3MF paths from public responses.
+    从公开响应中移除服务器本地生成 3MF 路径。
+    """
+
+    @field_validator("threemf_disk_path", mode="before", check_fields=False)
+    @classmethod
+    def _redact_threemf_disk_path(cls, _value: object) -> None:
+        return None
+
+
+class CalibrationResponse(_NoPublic3mfDiskPathMixin):
     """校准板生成响应。"""
 
     status: str
@@ -895,7 +906,7 @@ class MergePreviewResponse(BaseModel):
     colors_after: int
 
 
-class GenerateResponse(BaseModel):
+class GenerateResponse(_NoPublic3mfDiskPathMixin):
     """3MF 生成响应。"""
 
     status: str
@@ -933,7 +944,7 @@ class PuzzleLayoutPreviewResponse(BaseModel):
     piece_areas_mm2: list[float] = Field(default_factory=list)
 
 
-class PuzzleGenerateResponse(BaseModel):
+class PuzzleGenerateResponse(_NoPublic3mfDiskPathMixin):
     """拼图生成响应。"""
 
     status: str
@@ -1003,7 +1014,7 @@ class BatchPreviewItem(BaseModel):
     depth_mm: float
 
 
-class BatchResponse(BaseModel):
+class BatchResponse(_NoPublic3mfDiskPathMixin):
     """批量转换响应。"""
 
     status: str

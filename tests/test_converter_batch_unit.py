@@ -265,7 +265,7 @@ class TestBatchPartialFailure:
 
         # download_url present
         assert body["download_url"].startswith("/api/files/")
-        assert body["threemf_disk_path"].endswith(".3mf")
+        assert body["threemf_disk_path"] is None
         assert body["preview_3d_url"].startswith("/api/files/")
         assert len(body["preview_items"]) == 1
         assert body["preview_items"][0]["filename"] == "ok.png"
@@ -327,7 +327,7 @@ class TestBatchAllSuccess:
         assert len(body["results"]) == 2
         assert all(r["status"] == "success" for r in body["results"])
         assert body["download_url"].startswith("/api/files/")
-        assert body["threemf_disk_path"].endswith(".3mf")
+        assert body["threemf_disk_path"] is None
         assert body["preview_3d_url"].startswith("/api/files/")
         assert [item["filename"] for item in body["preview_items"]] == [
             "img1.png",
@@ -1049,7 +1049,7 @@ class TestBatchMergeFlow:
         assert body["status"] == "ok"
         assert body["download_url"] is not None
         assert body["download_url"].startswith("/api/files/")
-        assert body["threemf_disk_path"].endswith(".3mf")
+        assert body["threemf_disk_path"] is None
         assert body["preview_3d_url"] is not None
         assert body["preview_3d_url"].startswith("/api/files/")
         assert body["preview_items"] == [
@@ -1121,6 +1121,16 @@ class TestBatchMergeFlow:
             exceeds_plate=True,
         )
 
+        from api.routers.converter.generate import (
+            BATCH_PLATE_OVERFLOW_FALLBACK_MESSAGE,
+        )
+        from scripts.log_quality_check import _has_actionable_warning_error_field
+
+        log_calls: list[tuple[str, str, dict[str, object]]] = []
+
+        def _capturing_safe_log(level: str, event: str, **fields: object) -> None:
+            log_calls.append((level, event, fields))
+
         with (
             patch(
                 "api.routers.converter.generate.LUTManager.get_lut_path",
@@ -1138,6 +1148,10 @@ class TestBatchMergeFlow:
                 "utils.merged_bambu_3mf_writer.MergedBambu3MFWriter.write",
                 _noop_3mf_write,
             ),
+            patch(
+                "api.routers.converter.generate._safe_log",
+                side_effect=_capturing_safe_log,
+            ),
         ):
             response = client.post(
                 "/api/convert/batch",
@@ -1154,7 +1168,7 @@ class TestBatchMergeFlow:
         assert body["status"] == "ok"
         assert body["download_url"] is not None
         assert body["download_url"].startswith("/api/files/")
-        assert body["threemf_disk_path"].endswith(".3mf")
+        assert body["threemf_disk_path"] is None
         assert body["preview_3d_url"] is not None
         assert body["preview_3d_url"].startswith("/api/files/")
         assert len(body["preview_items"]) == 1
@@ -1168,6 +1182,27 @@ class TestBatchMergeFlow:
         assert len(overflow_warnings) == 1
         assert overflow_warnings[0]["code"] == "plate-overflow"
         assert isinstance(overflow_warnings[0]["message"], str)
+        overflow_log = next(
+            (
+                (level, event, fields)
+                for level, event, fields in log_calls
+                if event == "batch_merge_plate_overflow_warning"
+            ),
+            None,
+        )
+        assert overflow_log is not None
+        log_level, log_event, log_fields = overflow_log
+        assert log_level == "warning"
+        assert log_event == "batch_merge_plate_overflow_warning"
+        assert (
+            log_fields["error_message"]
+            == BATCH_PLATE_OVERFLOW_FALLBACK_MESSAGE
+        )
+        assert (
+            log_fields["fallback_action"]
+            == "merged_3mf_returned_with_plate_overflow_warning"
+        )
+        assert _has_actionable_warning_error_field(log_fields)
 
     # ------------------------------------------------------------------
     # 2b. large-success-preview-limited: full 3MF keeps all, preview fits current bed
@@ -1315,7 +1350,7 @@ class TestBatchMergeFlow:
 
         # download_url and preview_3d_url are present
         assert body["download_url"] is not None
-        assert body["threemf_disk_path"].endswith(".3mf")
+        assert body["threemf_disk_path"] is None
         assert body["preview_3d_url"] is not None
         assert len(body["preview_items"]) == 3
         assert [item["filename"] for item in body["preview_items"]] == [

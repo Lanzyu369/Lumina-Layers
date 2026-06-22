@@ -12,6 +12,10 @@ import {
   getSoftwareIdForDetectedSlicerId,
 } from "../utils/settingsOptionIds";
 
+function isApiFilesUrl(value: string): boolean {
+  return value.trim().startsWith("/api/files/");
+}
+
 // ========== State Interface ==========
 
 export interface SlicerState {
@@ -33,7 +37,7 @@ export interface SlicerActions {
   setSelectedSlicerId: (id: string | null) => void;
   validateAndSaveCustomSlicerPath: (path: string) => Promise<void>;
   clearCustomSlicerPath: () => void;
-  launchSlicer: (filePath: string, slicerId?: string | null) => Promise<void>;
+  launchSlicer: (artifactSource: string, slicerId?: string | null) => Promise<void>;
   clearMessage: () => void;
 }
 
@@ -232,7 +236,7 @@ export const useSlicerStore = create<SlicerState & SlicerActions>(
       void _get().detectSlicers();
     },
 
-    launchSlicer: async (filePath: string, slicerId?: string | null) => {
+    launchSlicer: async (artifactSource: string, slicerId?: string | null) => {
       const state = _get();
       const targetSlicerId = slicerId ?? state.selectedSlicerId;
       if (!targetSlicerId) {
@@ -251,9 +255,12 @@ export const useSlicerStore = create<SlicerState & SlicerActions>(
           String(selectedSlicer?.source ?? "").includes("custom")
             ? settingsState.customSlicerPath
             : undefined;
+        const source = artifactSource.trim();
         const response = await apiLaunchSlicer({
           slicer_id: targetSlicerId,
-          file_path: filePath,
+          ...(isApiFilesUrl(source)
+            ? { download_url: source }
+            : { file_path: source }),
           ...(slicerPath ? { slicer_path: slicerPath } : {}),
         });
         set({

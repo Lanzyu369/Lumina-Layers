@@ -397,7 +397,7 @@ describe("native bundle converter flow", () => {
     const state = useConverterStore.getState();
     expect(state.sessionId).toBe("session-fresh");
     expect(state.downloadUrl).toBe("/api/files/fresh.3mf");
-    expect(state.threemfDiskPath).toBe("/tmp/fresh.3mf");
+    expect(state.threemfDiskPath).toBeNull();
     expect(state.modelUrl).toBe("/api/files/fresh.glb");
     expect(state.isGenerating).toBe(false);
     expect(state.error).toBeNull();
@@ -476,7 +476,7 @@ describe("native bundle converter flow", () => {
 
     const state = useConverterStore.getState();
     expect(state.downloadUrl).toBe("/api/files/second.3mf");
-    expect(state.threemfDiskPath).toBe("/tmp/second.3mf");
+    expect(state.threemfDiskPath).toBeNull();
     expect(state.modelUrl).toBe("/api/files/second.glb");
     expect(state.error).toBeNull();
   });
@@ -553,7 +553,7 @@ describe("native bundle converter flow", () => {
     const state = useConverterStore.getState();
     expect(state.sessionId).toBe("puzzle-fresh");
     expect(state.downloadUrl).toBe("/api/files/fresh-puzzle.3mf");
-    expect(state.threemfDiskPath).toBe("/tmp/fresh-puzzle.3mf");
+    expect(state.threemfDiskPath).toBeNull();
     expect(state.puzzleResolvedPieceCount).toBe(4);
     expect(state.puzzleWarnings).toEqual([]);
   });

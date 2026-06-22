@@ -144,6 +144,120 @@ describe("clientLog", () => {
     );
   });
 
+  it("prints a readable console summary without an opaque Object suffix", () => {
+    postClientLog("api: request failed", {
+      method: "error",
+      scope: "api",
+      phase: "request-failed",
+      details: {
+        method: "GET",
+        url: "/api/system/settings",
+        status_code: null,
+        request_id: null,
+        error_message:
+          "The request did not receive a server response. Make sure the Lumina backend is running.",
+      },
+    });
+
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "[LUMINA] api: request failed - GET /api/system/settings - The request did not receive a server response. Make sure the Lumina backend is running.",
+      ),
+    );
+    expect(console.error).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(console.error).mock.calls[0]).toHaveLength(1);
+    expect(getRecentClientLogs().at(-1)?.details).toEqual(
+      expect.objectContaining({
+        method: "GET",
+        url: "/api/system/settings",
+        status_code: null,
+      }),
+    );
+  });
+
+  it("backs off client-log relay after non-OK relay responses", async () => {
+    vi.useFakeTimers();
+    vi.mocked(fetch).mockResolvedValueOnce({ ok: false } as Response);
+
+    postClientLog("api: request failed", {
+      method: "error",
+      scope: "api",
+      phase: "request-failed",
+      details: {
+        method: "GET",
+        url: "/api/health",
+        status_code: null,
+        error_message: "The request did not receive a server response.",
+      },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    postClientLog("api: request failed again", {
+      method: "error",
+      scope: "api",
+      phase: "request-failed-again",
+      details: {
+        method: "GET",
+        url: "/api/lut/list",
+        status_code: null,
+        error_message: "The request did not receive a server response.",
+      },
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(getRecentClientLogs()).toHaveLength(2);
+
+    vi.advanceTimersByTime(10_001);
+    postClientLog("api: request recovered", {
+      method: "warn",
+      scope: "api",
+      phase: "request-recovered",
+      details: {
+        method: "GET",
+        url: "/api/health",
+        status_code: null,
+        error_message: "Retrying client-log relay.",
+      },
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("backs off client-log relay after rejected relay requests", async () => {
+    vi.useFakeTimers();
+    vi.mocked(fetch).mockRejectedValueOnce(new Error("backend offline"));
+
+    postClientLog("api: request failed", {
+      method: "error",
+      scope: "api",
+      phase: "request-failed",
+      details: {
+        method: "GET",
+        url: "/api/health",
+        status_code: null,
+        error_message: "The request did not receive a server response.",
+      },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    postClientLog("api: request failed again", {
+      method: "error",
+      scope: "api",
+      phase: "request-failed-again",
+      details: {
+        method: "GET",
+        url: "/api/lut/list",
+        status_code: null,
+        error_message: "The request did not receive a server response.",
+      },
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(getRecentClientLogs()).toHaveLength(2);
+  });
+
   it("redacts local file paths from buffered and relayed diagnostics", () => {
     postClientLog("generate: response received", {
       method: "log",
@@ -164,7 +278,7 @@ describe("clientLog", () => {
     const logs = getRecentClientLogs();
     const serializedLog = JSON.stringify(logs[0]);
     const relayBody = String(vi.mocked(fetch).mock.calls[0]?.[1]?.body ?? "");
-    const consoleDetails = JSON.stringify(vi.mocked(console.log).mock.calls[0]?.[1] ?? "");
+    const consoleLine = String(vi.mocked(console.log).mock.calls[0]?.[0] ?? "");
 
     expect(serializedLog).not.toContain("/Users/min");
     expect(serializedLog).not.toContain("E:/tmp");
@@ -174,14 +288,14 @@ describe("clientLog", () => {
     expect(relayBody).not.toContain("E:/tmp");
     expect(relayBody).not.toContain("/private/tmp");
     expect(relayBody).not.toContain("/tmp/lumina");
-    expect(consoleDetails).not.toContain("/Users/min");
-    expect(consoleDetails).not.toContain("E:/tmp");
-    expect(consoleDetails).not.toContain("/private/tmp");
-    expect(consoleDetails).not.toContain("/tmp/lumina");
+    expect(consoleLine).not.toContain("/Users/min");
+    expect(consoleLine).not.toContain("E:/tmp");
+    expect(consoleLine).not.toContain("/private/tmp");
+    expect(consoleLine).not.toContain("/tmp/lumina");
     expect(serializedLog).toContain("<redacted:local-path>");
+    expect(consoleLine).toContain("<redacted:local-path>");
     expect(serializedLog).toContain("/api/files/output-model");
     expect(relayBody).toContain("/api/files/output-model");
-    expect(consoleDetails).toContain("/api/files/output-model");
   });
 
   it("exports only the newest bounded logs for bug reports", () => {

@@ -78,7 +78,12 @@ from utils.lut_manager import LUTManager
 
 from .common import (
     BATCH_DOWNLOAD_TTL_SECONDS,
+    LUT_DATA_UNAVAILABLE_DETAIL,
+    PREVIEW_CACHE_INVALID_DETAIL,
+    PREVIEW_CACHE_UNAVAILABLE_DETAIL,
+    PREVIEW_COLOR_PALETTE_UNAVAILABLE_DETAIL,
     ROUTER_HANDLED_ERRORS,
+    SOURCE_IMAGE_UNAVAILABLE_DETAIL,
     _require_session,
     _resolve_material_backing_index,
     _validate_material_source,
@@ -197,12 +202,12 @@ def _require_preview_cache_for_generate(
     if cache is None:
         raise HTTPException(
             status_code=409,
-            detail="No preview cache. Call POST /api/convert/preview first.",
+            detail=PREVIEW_CACHE_UNAVAILABLE_DETAIL,
         )
     if not isinstance(cache, dict):
         raise HTTPException(
             status_code=409,
-            detail="Invalid preview cache. Call POST /api/convert/preview again.",
+            detail=PREVIEW_CACHE_INVALID_DETAIL,
         )
     if is_preview_cache_artifact_ref(cache):
         return get_preview_cache_metadata(cache), cache
@@ -873,10 +878,10 @@ async def convert_generate(
     lut_path: str | None = session_data.get("lut_path")
     session_material_source = session_data.get("material_source", "lut")
     if not image_path or not os.path.exists(image_path):
-        raise HTTPException(status_code=409, detail="Image file missing. Call POST /api/convert/preview first.")
+        raise HTTPException(status_code=409, detail=SOURCE_IMAGE_UNAVAILABLE_DETAIL)
     if session_material_source != "material_archive":
         if not lut_path or not os.path.exists(lut_path):
-            raise HTTPException(status_code=409, detail="LUT file missing. Call POST /api/convert/preview first.")
+            raise HTTPException(status_code=409, detail=LUT_DATA_UNAVAILABLE_DETAIL)
     else:
         lut_path = "__material_archive__"
 
@@ -910,7 +915,7 @@ async def convert_generate(
         if not color_palette:
             raise HTTPException(
                 status_code=409,
-                detail="No color_palette in preview cache.",
+                detail=PREVIEW_COLOR_PALETTE_UNAVAILABLE_DETAIL,
             )
         hex_colors = [e["hex"] for e in color_palette if "hex" in e]
         if not hex_colors:
@@ -1266,7 +1271,7 @@ async def convert_generate(
         message=status_msg or "Model generated",
         download_url=f"/api/files/{download_id}",
         preview_3d_url=preview_3d_url,
-        threemf_disk_path=threemf_path,
+        threemf_disk_path=None,
         performance_timing=performance_timing,
     )
 
@@ -1838,11 +1843,11 @@ async def convert_generate_large_format(
     lut_path: str | None = session_data.get("lut_path")
     session_material_source = session_data.get("material_source", "lut")
     if not image_path or not os.path.exists(image_path):
-        raise HTTPException(status_code=409, detail="Image file missing. Call POST /api/convert/preview first.")
+        raise HTTPException(status_code=409, detail=SOURCE_IMAGE_UNAVAILABLE_DETAIL)
     if session_material_source == "material_archive":
         lut_path = "__material_archive__"
     elif not lut_path or not os.path.exists(lut_path):
-        raise HTTPException(status_code=409, detail="LUT file missing. Call POST /api/convert/preview first.")
+        raise HTTPException(status_code=409, detail=LUT_DATA_UNAVAILABLE_DETAIL)
     _require_heightmap_for_relief(session_data, request)
     recipe_overrides = _resolve_recipe_overrides(session_data, request)
     _validate_material_archive_relief_minimum_height(
@@ -2511,6 +2516,10 @@ async def convert_batch(
                 model_count=len(successes),
                 plate_width_mm=plate_width_mm,
                 plate_depth_mm=plate_depth_mm,
+                error_message=BATCH_PLATE_OVERFLOW_FALLBACK_MESSAGE,
+                fallback_action=(
+                    "merged_3mf_returned_with_plate_overflow_warning"
+                ),
             )
 
         # Step 3: Merged 3MF
@@ -2677,7 +2686,7 @@ async def convert_batch(
         status="ok",
         message=f"Batch complete: {success_count}/{len(results)} succeeded",
         download_url=download_url,
-        threemf_disk_path=str(merged_3mf_path),
+        threemf_disk_path=None,
         preview_3d_url=preview_3d_url,
         preview_items=preview_items,
         warnings=warnings,

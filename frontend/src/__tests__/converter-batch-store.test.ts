@@ -88,8 +88,9 @@ describe("submitBatch modelUrl 与 batchResult 状态管理", () => {
     expect(state.batchResult).toEqual({
       ...response,
       download_url: "/api/files/merged.3mf",
+      threemf_disk_path: null,
     });
-    expect(state.threemfDiskPath).toBe("/tmp/merged.3mf");
+    expect(state.threemfDiskPath).toBeNull();
     expect(state.downloadUrl).toBe("/api/files/merged.3mf");
     expect(state.batchLoading).toBe(false);
   });
@@ -139,8 +140,11 @@ describe("submitBatch modelUrl 与 batchResult 状态管理", () => {
     expect(state.batchPreviewItems).toEqual(response.preview_items);
     expect(state.modelUrl).toBeNull();
     expect(state.previewGlbUrl).toBeNull();
-    expect(state.batchResult).toEqual(response);
-    expect(state.threemfDiskPath).toBe("/tmp/merged.3mf");
+    expect(state.batchResult).toEqual({
+      ...response,
+      threemf_disk_path: null,
+    });
+    expect(state.threemfDiskPath).toBeNull();
     expect(state.downloadUrl).toBe("/api/files/merged.3mf");
   });
 
@@ -176,7 +180,10 @@ describe("submitBatch modelUrl 与 batchResult 状态管理", () => {
     expect(state.batchPreviewItems.map((item) => item.filename)).toEqual(
       previewItems.slice(0, 96).map((item) => item.filename),
     );
-    expect(state.batchResult).toEqual(response);
+    expect(state.batchResult).toEqual({
+      ...response,
+      threemf_disk_path: null,
+    });
   });
 
   // 用例 B: preview_3d_url 为 null 时，清空旧模型预览，避免显示上一批结果
@@ -204,8 +211,11 @@ describe("submitBatch modelUrl 与 batchResult 状态管理", () => {
     expect(state.modelUrl).toBeNull();
     expect(state.previewGlbUrl).toBeNull();
     expect(state.batchPreviewItems).toEqual([]);
-    expect(state.batchResult).toEqual(response);
-    expect(state.threemfDiskPath).toBe("/tmp/merged.3mf");
+    expect(state.batchResult).toEqual({
+      ...response,
+      threemf_disk_path: null,
+    });
+    expect(state.threemfDiskPath).toBeNull();
     expect(state.downloadUrl).toBe("/api/files/merged.3mf");
   });
 

@@ -44,9 +44,20 @@ _test_store: SessionStore = SessionStore(ttl=1800)
 _test_registry: FileRegistry = FileRegistry()
 _mock_pool = MagicMock(spec=WorkerPoolManager)
 _TEST_TEMP_DIR = tempfile.gettempdir()
+_ORIGINAL_RUNTIME_TEMP_DIR = runtime_config.TEMP_DIR
+_ORIGINAL_PUZZLE_TEMP_DIR = puzzle_router.TEMP_DIR
 
-runtime_config.TEMP_DIR = _TEST_TEMP_DIR
-puzzle_router.TEMP_DIR = _TEST_TEMP_DIR
+
+def setup_module(module) -> None:
+    runtime_config.TEMP_DIR = _TEST_TEMP_DIR
+    puzzle_router.TEMP_DIR = _TEST_TEMP_DIR
+
+
+def teardown_module(module) -> None:
+    runtime_config.TEMP_DIR = _ORIGINAL_RUNTIME_TEMP_DIR
+    puzzle_router.TEMP_DIR = _ORIGINAL_PUZZLE_TEMP_DIR
+    _test_registry.clear_all()
+    _test_store.clear_all()
 
 
 def _make_puzzle_client() -> TestClient:
@@ -425,7 +436,7 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
     body = response.json()
     assert body["piece_count"] == 6
     assert body["download_url"].startswith("/api/files/")
-    assert body["threemf_disk_path"].endswith(".3mf")
+    assert body["threemf_disk_path"] is None
     assert len(submitted_params) == 6
     assert all(os.path.exists(params["piece_boundary_geometry_path"]) for params in submitted_params)
     assert all(params["disable_material_dilation"] is True for params in submitted_params)
@@ -539,7 +550,7 @@ def test_generate_puzzle_download_survives_source_session_close(tmp_path: Path) 
         assert entry["lifecycle"] == "ephemeral"
         assert entry["session_id"] != session_id
         assert entry["ttl_seconds"] == BATCH_DOWNLOAD_TTL_SECONDS
-        assert body["threemf_disk_path"] not in store.get_temp_file_paths(session_id)
+        assert body["threemf_disk_path"] is None
 
         close_response = full_client.post(
             "/api/session/close",

@@ -60,6 +60,7 @@ import {
   apiErrorToVisibleMessage,
   downloadResourceBlob,
 } from "../../api/client";
+import type { ApiRequestOptions } from "../../api/client";
 import { closeSession as apiCloseSession } from "../../api/session";
 import type { LutColorEntry, LutInfo } from "../../api/types";
 import {
@@ -1745,9 +1746,9 @@ export interface ConverterActions {
 
   // API 操作
   uploadLut: (file: File) => Promise<void>;
-  fetchLutList: () => Promise<void>;
+  fetchLutList: (options?: ApiRequestOptions) => Promise<void>;
   fetchLutCatalog: () => Promise<void>;
-  fetchLegacyCatalog: () => Promise<void>;
+  fetchLegacyCatalog: (options?: ApiRequestOptions) => Promise<void>;
   setLegacyManufacturer: (name: string) => void;
   fetchLutColors: (lutName: string) => Promise<void>;
 
@@ -4916,10 +4917,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       }
     },
 
-    fetchLutList: async () => {
+    fetchLutList: async (options = {}) => {
       set({ lutListLoading: true });
       try {
-        const response = await apiFetchLutList();
+        const response = await apiFetchLutList(options);
         const luts = response.luts.map(normalizeLutColorMode);
         const updates: Partial<ConverterState> = {
           lutList: luts.map((l) => l.name),
@@ -5019,10 +5020,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       }
     },
 
-    fetchLegacyCatalog: async () => {
+    fetchLegacyCatalog: async (options = {}) => {
       set({ legacyCatalogLoading: true, error: null });
       try {
-        const response = await apiFetchLutDetailsCatalog();
+        const response = await apiFetchLutDetailsCatalog(options);
         const groups = normalizeLutGroups(response.groups ?? []);
         const currentState = _get();
         const index = buildLutCatalogIndex(groups);
@@ -5984,8 +5985,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             isGenerating: false,
             modelUrl: null,
             batchPreviewItems: [],
-            threemfDiskPath: puzzleResponse.threemf_disk_path ?? null,
             downloadUrl,
+            threemfDiskPath: null,
             puzzleWarnings: puzzleResponse.warnings ?? [],
             puzzleResolvedRows: puzzleResponse.grid_rows ?? null,
             puzzleResolvedCols: puzzleResponse.grid_cols ?? null,
@@ -5994,7 +5995,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           _logGenerateTimer("puzzle 3mf received");
           _clientLog("generate: puzzle 3mf received", {
             download_url: downloadUrl,
-            threemf_disk_path: puzzleResponse.threemf_disk_path ?? null,
+            has_legacy_threemf_disk_path: Boolean(
+              puzzleResponse.threemf_disk_path,
+            ),
             warning_count: (puzzleResponse.warnings ?? []).length,
             grid_rows: puzzleResponse.grid_rows ?? null,
             grid_cols: puzzleResponse.grid_cols ?? null,
@@ -6077,7 +6080,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         _clientLog("generate: response received", {
           preview_3d_url: response.preview_3d_url ?? null,
           download_url: response.download_url ?? null,
-          threemf_disk_path: response.threemf_disk_path ?? null,
+          has_legacy_threemf_disk_path: Boolean(response.threemf_disk_path),
         });
         const modelUrl = normalizeStoreResourceUrl(response.preview_3d_url);
         const downloadUrl = normalizeStoreResourceUrl(response.download_url);
@@ -6095,8 +6098,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             ? null
             : modelUrl,
           batchPreviewItems: [],
-          threemfDiskPath: response.threemf_disk_path ?? null,
           downloadUrl,
+          threemfDiskPath: null,
           generatePerformanceTiming: response.performance_timing ?? null,
           largeFormatWarnings: [],
         });
@@ -6104,7 +6107,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         _clientLog("generate: UI unlocked", {
           model_url: modelUrl,
           download_url: downloadUrl,
-          threemf_disk_path: response.threemf_disk_path ?? null,
+          has_legacy_threemf_disk_path: Boolean(response.threemf_disk_path),
         });
         trackLuminaEvent("lumina_converter_generate_done", {
           source_version: state.source_version,
@@ -6656,7 +6659,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           }));
         const downloadUrl = normalizeStoreResourceUrl(result.download_url);
         set({
-          batchResult: { ...result, download_url: downloadUrl },
+          batchResult: {
+            ...result,
+            download_url: downloadUrl,
+            threemf_disk_path: null,
+          },
           batchLoading: false,
           batchPreviewItems: previewItems,
           // 批量预览只接受 preview_items。旧的 preview_3d_url 曾经指向
@@ -6665,8 +6672,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           previewGlbUrl: null,
           previewPerformanceTiming: null,
           generatePerformanceTiming: null,
-          threemfDiskPath: result.threemf_disk_path ?? null,
           downloadUrl,
+          threemfDiskPath: null,
         });
         trackLuminaEvent("lumina_batch_convert_done", {
           source_version: state.source_version,

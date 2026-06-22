@@ -6,14 +6,50 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
+import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from PIL import Image
 
 from api.app import app
 from api.dependencies import get_file_registry, get_session_store, get_worker_pool
 from api.file_registry import FileRegistry
+from api.routers.converter.color_card import _require_color_card_cache_metadata
+from api.routers.converter.common import _require_preview_cache
+from api.routers.converter.generate import _require_preview_cache_for_generate
+from api.routers.converter.preview import _require_preview_cache_for_layer_images
+from api.routers.converter.puzzle import _require_puzzle_cache
+from api.routers.converter.replace import _require_preview_cache_fields
 from api.session_store import SessionStore
 from api.worker_pool import WorkerPoolManager
+
+
+def _assert_public_converter_detail(detail: str) -> None:
+    assert "Call POST" not in detail
+    assert "POST" not in detail
+    assert "/api/convert" not in detail
+    assert "/preview" not in detail
+    assert "preview" in detail.lower()
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: _require_preview_cache({}),
+        lambda: _require_preview_cache_for_generate({}),
+        lambda: _require_preview_cache_for_generate({"preview_cache": "stale"}),
+        lambda: _require_color_card_cache_metadata({}),
+        lambda: _require_puzzle_cache({}, fields={"matched_rgb"}),
+        lambda: _require_preview_cache_fields({}, fields={"matched_rgb"}),
+        lambda: _require_preview_cache_for_layer_images({}),
+    ],
+)
+def test_converter_preview_cache_errors_use_user_language(call) -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        call()
+
+    assert exc_info.value.status_code in {400, 409}
+    _assert_public_converter_detail(str(exc_info.value.detail))
 
 
 def _seed_generate_session(store: SessionStore, tmp_path: Path) -> str:

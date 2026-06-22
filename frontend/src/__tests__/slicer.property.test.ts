@@ -10,13 +10,14 @@ import * as fc from "fast-check";
 // ========== Pure mapping logic extracted from ConverterStore.submitGenerate ==========
 
 /**
- * Maps a GenerateResponse's threemf_disk_path to the store's threemfDiskPath.
- * Mirrors: `threemfDiskPath: response.threemf_disk_path ?? null`
+ * Redacts a GenerateResponse's legacy threemf_disk_path before store writes.
+ * Mirrors: `threemfDiskPath: null`
  */
 function mapThreemfDiskPath(
   threemf_disk_path: string | null | undefined
 ): string | null {
-  return threemf_disk_path ?? null;
+  void threemf_disk_path;
+  return null;
 }
 
 /**
@@ -31,21 +32,19 @@ function mapDownloadUrl(download_url: string | null | undefined): string | null 
 
 describe("Slicer Launch Integration — Property-Based Tests", () => {
   /**
-   * Feature: slicer-launch-integration, Property 2: ConverterStore 正确存储 3MF 路径
+   * Feature: slicer-launch-integration, Property 2: ConverterStore 不保存后端磁盘路径
    * **Validates: Requirements 1.2**
    *
-   * For any GenerateResponse, if threemf_disk_path is a non-empty string,
-   * then threemfDiskPath should equal that value;
-   * if threemf_disk_path is null or undefined, then threemfDiskPath should be null.
+   * For any GenerateResponse, threemf_disk_path should not be copied into state.
    */
-  describe("Property 2: ConverterStore 正确存储 3MF 路径", () => {
-    it("non-empty threemf_disk_path maps to the same string value", () => {
+  describe("Property 2: ConverterStore 不保存后端磁盘路径", () => {
+    it("non-empty threemf_disk_path maps to null", () => {
       fc.assert(
         fc.property(
           fc.string({ minLength: 1 }),
           (path) => {
             const result = mapThreemfDiskPath(path);
-            return result === path;
+            return result === null;
           }
         ),
         { numRuns: 100 }
@@ -62,17 +61,12 @@ describe("Slicer Launch Integration — Property-Based Tests", () => {
       return result === null;
     });
 
-    it("for any optional string, mapping is consistent with ?? null semantics", () => {
+    it("for any optional string, mapping always redacts to null", () => {
       fc.assert(
         fc.property(
           fc.option(fc.string({ minLength: 1 }), { nil: undefined }),
           (maybePath) => {
             const result = mapThreemfDiskPath(maybePath);
-            if (maybePath !== undefined && maybePath !== null) {
-              // Non-empty string → stored as-is
-              return result === maybePath;
-            }
-            // null or undefined → stored as null
             return result === null;
           }
         ),

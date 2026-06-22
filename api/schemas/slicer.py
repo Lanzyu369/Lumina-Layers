@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import List
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, model_validator
 
 
 class SlicerInfo(BaseModel):
@@ -54,13 +54,30 @@ class SlicerLaunchRequest(BaseModel):
     Attributes:
         slicer_id: Identifier of the slicer to launch.
             要启动的切片软件 ID。
-        file_path: Path to the 3MF file to open.
-            要打开的 3MF 文件路径。
+        file_path: Legacy server-local path to the 3MF file to open.
+            旧版服务器本地 3MF 文件路径。
+        download_url: Public ``/api/files/<id>`` URL for the 3MF artifact.
+            公开的 3MF 产物 ``/api/files/<id>`` 地址。
     """
 
     slicer_id: str = Field(..., description="要启动的切片软件 ID")
-    file_path: str = Field(..., min_length=1, description="要打开的 3MF 文件路径")
+    file_path: str | None = Field(
+        default=None,
+        min_length=1,
+        description="旧版要打开的 3MF 文件路径",
+    )
+    download_url: str | None = Field(
+        default=None,
+        min_length=1,
+        description="要打开的 3MF 下载 URL",
+    )
     slicer_path: str | None = Field(default=None, description="可选手动切片软件路径")
+
+    @model_validator(mode="after")
+    def require_launch_source(self) -> "SlicerLaunchRequest":
+        if not self.file_path and not self.download_url:
+            raise ValueError("Either file_path or download_url is required")
+        return self
 
 
 class SlicerCustomPathRequest(BaseModel):

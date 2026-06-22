@@ -51,6 +51,17 @@ describe("lut details api", () => {
     });
   });
 
+  it("can suppress client logs for background catalog probes", async () => {
+    mockGet.mockResolvedValueOnce({ data: { groups: [] } });
+
+    const result = await fetchLutDetailsCatalog({ suppressClientLog: true });
+
+    expect(mockGet).toHaveBeenCalledWith("/lut/details/catalog", {
+      suppressClientLog: true,
+    });
+    expect(result.groups).toEqual([]);
+  });
+
   it("fetchLutDetails loads one detail payload", async () => {
     mockGet.mockResolvedValueOnce({
       data: {

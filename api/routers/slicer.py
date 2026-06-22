@@ -8,6 +8,7 @@ import os
 import shutil
 import tempfile
 import uuid
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
@@ -43,6 +44,7 @@ _ALLOWED_SLICER_LAUNCH_SUFFIXES = {".3mf"}
 SLICER_LAUNCH_COPY_FAILED_MESSAGE = "准备切片器打开文件失败，请重新生成 3MF 后再试。"
 SLICER_LAUNCH_FAILED_MESSAGE = "启动切片器失败，请确认切片软件可用后再试。"
 SLICER_LAUNCH_SOURCE_MISSING_MESSAGE = "找不到要打开的 3MF 文件，请重新生成 3MF 后再试。"
+_API_FILES_PREFIX = "/api/files/"
 
 
 def _remove_launch_copy(path: str) -> None:
@@ -97,6 +99,55 @@ def _resolve_launch_source_path(file_path: str) -> tuple[str | None, str | None]
     if not os.path.isfile(real_source_path):
         return None, SLICER_LAUNCH_SOURCE_MISSING_MESSAGE
     return real_source_path, None
+
+
+def _extract_file_id_from_download_url(download_url: str | None) -> str | None:
+    if not isinstance(download_url, str) or not download_url.strip():
+        return None
+    parsed = urlparse(download_url.strip())
+    if parsed.scheme or parsed.netloc:
+        return None
+    path = parsed.path
+    if not path.startswith(_API_FILES_PREFIX):
+        return None
+    file_id = path[len(_API_FILES_PREFIX):].strip()
+    if (
+        not file_id
+        or file_id in {".", ".."}
+        or "/" in file_id
+        or "\\" in file_id
+        or any(char.isspace() for char in file_id)
+    ):
+        return None
+    return file_id
+
+
+def _resolve_launch_download_url_path(
+    download_url: str,
+    registry: FileRegistry,
+) -> tuple[str | None, str | None]:
+    file_id = _extract_file_id_from_download_url(download_url)
+    if file_id is None:
+        return None, SLICER_LAUNCH_SOURCE_MISSING_MESSAGE
+    entry = registry.get_entry(file_id)
+    if entry is None or entry.get("is_public") is False:
+        return None, SLICER_LAUNCH_SOURCE_MISSING_MESSAGE
+    resolved = registry.resolve(file_id)
+    if resolved is None:
+        return None, SLICER_LAUNCH_SOURCE_MISSING_MESSAGE
+    source_path, _filename = resolved
+    return _resolve_launch_source_path(source_path)
+
+
+def _resolve_launch_request_source_path(
+    request: SlicerLaunchRequest,
+    registry: FileRegistry,
+) -> tuple[str | None, str | None]:
+    if request.download_url:
+        return _resolve_launch_download_url_path(request.download_url, registry)
+    if request.file_path:
+        return _resolve_launch_source_path(request.file_path)
+    return None, SLICER_LAUNCH_SOURCE_MISSING_MESSAGE
 
 
 def _slicer_launch_failure_extra(
@@ -236,7 +287,10 @@ def launch_slicer_endpoint(
 ) -> SlicerLaunchResponse:
     """启动切片软件打开指定文件。"""
     # 1) Validate launch source before touching slicer detection or copy state.
-    source_file_path, validation_error = _resolve_launch_source_path(request.file_path)
+    source_file_path, validation_error = _resolve_launch_request_source_path(
+        request,
+        registry,
+    )
     if validation_error is not None:
         return JSONResponse(
             status_code=400,

@@ -89,6 +89,24 @@ describe("apiClient", () => {
     ).not.toContain("worker crashed");
   });
 
+  it("keeps suppressed background probes out of client logs and action history", async () => {
+    const error = new Error("Request failed with status code 503");
+    Object.assign(error, {
+      config: { method: "get", url: "/health", suppressClientLog: true },
+      response: { status: 503, data: {} },
+    });
+    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+    await expect(
+      apiClient.get("/health", { suppressClientLog: true }),
+    ).rejects.toMatchObject({
+      message: "Server temporarily unavailable. Please try again later.",
+    });
+
+    expect(postClientLog).not.toHaveBeenCalled();
+    expect(useActionHistoryStore.getState().history).toHaveLength(0);
+  });
+
   it("turns FastAPI validation details into a readable rejected message", async () => {
     const error = new Error("Request failed with status code 422");
     Object.assign(error, {

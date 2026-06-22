@@ -46,3 +46,4 @@ def test_generate_response_includes_performance_timing() -> None:
     assert data["performance_timing"]["total_ms"] == 20.5
     assert data["performance_timing"]["worker_ms"] == 18.0
     assert data["download_url"] == "/api/files/model.3mf"
+    assert data["threemf_disk_path"] is None

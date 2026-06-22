@@ -106,6 +106,9 @@ describe("App component", () => {
     await waitFor(() => {
       expect(screen.getByTestId("health-badge-ok")).toBeInTheDocument();
     });
+    expect(apiClient.get).toHaveBeenCalledWith("/health", {
+      suppressClientLog: true,
+    });
   });
 
   it("renders red badge when API request fails", async () => {
@@ -115,6 +118,9 @@ describe("App component", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("health-badge-fail")).toBeInTheDocument();
+    });
+    expect(apiClient.get).toHaveBeenCalledWith("/health", {
+      suppressClientLog: true,
     });
   });
 
@@ -140,6 +146,12 @@ describe("App component", () => {
       });
 
       expect(apiClient.get).toHaveBeenCalledTimes(2);
+      expect(apiClient.get).toHaveBeenNthCalledWith(1, "/health", {
+        suppressClientLog: true,
+      });
+      expect(apiClient.get).toHaveBeenNthCalledWith(2, "/health", {
+        suppressClientLog: true,
+      });
       expect(screen.getByTestId("health-badge-ok")).toBeInTheDocument();
       expect(screen.queryByTestId("health-badge-fail")).not.toBeInTheDocument();
     } finally {
