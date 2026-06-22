@@ -134,6 +134,9 @@ REGION_REQUANTIZE_CACHE_CONFLICT_DETAIL = (
     "Preview cache changed while region re-quantisation was running. "
     "Refresh preview and try again."
 )
+RECIPE_OVERRIDE_APPLY_FAILED_DETAIL = (
+    "Recipe override could not be applied. Check the server log for details."
+)
 
 
 def _require_preview_cache_fields(
@@ -3466,20 +3469,20 @@ def apply_recipe_override(
             operation="apply_recipe_override",
         )
     except (ValueError, TypeError, OSError, RuntimeError) as exc:
-        import traceback
         log.error(
-            "apply-recipe-override failed with %s: %s\n%s",
-            type(exc).__name__,
-            exc,
-            traceback.format_exc(),
+            "Recipe override apply failed",
             extra={
                 "event": "converter_apply_recipe_override_error",
                 "session_id": request.session_id,
+                "status_code": 422,
                 "error_type": type(exc).__name__,
                 "error_message": str(exc),
             },
         )
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=422,
+            detail=RECIPE_OVERRIDE_APPLY_FAILED_DETAIL,
+        ) from exc
     finally:
         cache_context.__exit__(*sys.exc_info())
 
