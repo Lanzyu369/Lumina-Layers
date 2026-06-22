@@ -2694,6 +2694,107 @@ def test_material_sync_rollback_os_error_returns_safe_detail(
     assert getattr(route_record, "revision_id", None) == "rev_old"
 
 
+def test_material_sync_rollback_missing_revision_returns_safe_detail(
+    monkeypatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    raw_detail = "Material sync rollback target is missing material.json: BrandA/missing"
+
+    def _fake_rollback_material_sync_revision(
+        *,
+        material_id: str,
+        revision_id: str,
+    ) -> dict[str, object]:
+        raise FileNotFoundError(raw_detail)
+
+    monkeypatch.setattr(
+        "api.routers.material_sync.rollback_material_sync_revision",
+        _fake_rollback_material_sync_revision,
+    )
+
+    loggers = _capture_material_sync_logs(caplog)
+    try:
+        response = _client().post(
+            "/api/material-sync/rollback",
+            json={"material_id": "mat_test", "revision_id": "rev_missing"},
+        )
+    finally:
+        _release_caplog_handler(loggers, caplog)
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == MATERIAL_SYNC_ROLLBACK_UNAVAILABLE_DETAIL
+    assert "BrandA/missing" not in response.text
+    assert "material.json" not in response.text
+    _assert_http_error_log_safe(
+        caplog,
+        path="/api/material-sync/rollback",
+        status_code=404,
+        detail=MATERIAL_SYNC_ROLLBACK_UNAVAILABLE_DETAIL,
+        forbidden_fragments=("BrandA/missing", "material.json"),
+    )
+    _assert_route_failure_log_preserves_diagnostics(
+        caplog,
+        event="material_sync_rollback_failed",
+        error_type="FileNotFoundError",
+        raw_fragment=raw_detail,
+        status_code=404,
+    )
+    route_record = _records_for_event(caplog, "material_sync_rollback_failed")[-1]
+    assert getattr(route_record, "material_id", None) == "mat_test"
+    assert getattr(route_record, "revision_id", None) == "rev_missing"
+
+
+def test_material_sync_rollback_value_error_returns_safe_detail(
+    monkeypatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    private_path = "/Users/min/private/materials/_sync/index.json"
+    raw_detail = f"Material sync index is invalid: {private_path}"
+
+    def _fake_rollback_material_sync_revision(
+        *,
+        material_id: str,
+        revision_id: str,
+    ) -> dict[str, object]:
+        raise ValueError(raw_detail)
+
+    monkeypatch.setattr(
+        "api.routers.material_sync.rollback_material_sync_revision",
+        _fake_rollback_material_sync_revision,
+    )
+
+    loggers = _capture_material_sync_logs(caplog)
+    try:
+        response = _client().post(
+            "/api/material-sync/rollback",
+            json={"material_id": "mat_test", "revision_id": "rev_old"},
+        )
+    finally:
+        _release_caplog_handler(loggers, caplog)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == MATERIAL_SYNC_ROLLBACK_UNAVAILABLE_DETAIL
+    assert private_path not in response.text
+    assert "Material sync index is invalid" not in response.text
+    _assert_http_error_log_safe(
+        caplog,
+        path="/api/material-sync/rollback",
+        status_code=422,
+        detail=MATERIAL_SYNC_ROLLBACK_UNAVAILABLE_DETAIL,
+        forbidden_fragments=(private_path, "Material sync index is invalid"),
+    )
+    _assert_route_failure_log_preserves_diagnostics(
+        caplog,
+        event="material_sync_rollback_failed",
+        error_type="ValueError",
+        raw_fragment=raw_detail,
+        status_code=422,
+    )
+    route_record = _records_for_event(caplog, "material_sync_rollback_failed")[-1]
+    assert getattr(route_record, "material_id", None) == "mat_test"
+    assert getattr(route_record, "revision_id", None) == "rev_old"
+
+
 def test_rollback_material_sync_revision_rejects_missing_local_files(
     tmp_path: Path,
 ) -> None:
