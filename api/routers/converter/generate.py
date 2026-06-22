@@ -109,6 +109,10 @@ BATCH_PREVIEW_LIMIT_FALLBACK_MESSAGE: str = (
     "3D preview automatically shows the first models that fit on the current "
     "print bed."
 )
+BATCH_PREVIEW_UNAVAILABLE_MESSAGE: str = (
+    "批量 3MF 下载已生成；网页 3D 预览暂不可用 / The batch 3MF download "
+    "is ready; the browser 3D preview is temporarily unavailable."
+)
 LARGE_FORMAT_GENERATION_FAILED_DETAIL: str = (
     "Large-format generation failed. Try again or check the server log for details."
 )
@@ -2577,71 +2581,6 @@ async def convert_batch(
         )
         download_url = f"/api/files/{download_id}"
 
-        preview_items: list[BatchPreviewItem] = []
-        preview_3d_url: str | None = None
-        stage = "layout"
-        preview_successes, preview_layout_result = _select_batch_preview_subset(
-            successes,
-            plate_width_mm=plate_width_mm,
-            plate_depth_mm=plate_depth_mm,
-        )
-        stage = "file_registry"
-        if len(preview_successes) < len(successes):
-            warnings.append(
-                WarningEntry(
-                    code="preview-limited",
-                    message=BATCH_PREVIEW_LIMIT_FALLBACK_MESSAGE,
-                )
-            )
-
-        for idx, wr in enumerate(preview_successes):
-            source_glb = wr.get("preview_glb_path")
-            if not source_glb:
-                continue
-            source_glb_path = Path(source_glb)
-            if not source_glb_path.exists():
-                continue
-
-            fd, preview_copy_str = tempfile.mkstemp(
-                suffix=".glb", dir=TEMP_DIR, prefix=artifact_prefix
-            )
-            os.close(fd)
-            preview_copy_path = Path(preview_copy_str)
-            shutil.copy2(source_glb_path, preview_copy_path)
-            merged_outputs.append(preview_copy_path)
-
-            preview_id = registry.register_path(
-                session_id=f"batch-preview:{batch_run_id}",
-                path=str(preview_copy_path),
-                filename=f"batch_preview_{idx + 1}.glb",
-                ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
-            )
-            preview_url = f"/api/files/{preview_id}"
-            if preview_3d_url is None:
-                preview_3d_url = preview_url
-
-            placement = preview_layout_result.placements[idx]
-            xy = wr["xy_bbox_mm"]
-            preview_filename = f"item_{idx}"
-            try:
-                with open(wr["metadata_sidecar_path"], "r", encoding="utf-8") as f:
-                    preview_sidecar = json.load(f)
-                preview_filename = str(
-                    preview_sidecar.get("source_filename") or preview_filename
-                )
-            except (OSError, json.JSONDecodeError, TypeError, ValueError):
-                pass
-            preview_items.append(
-                BatchPreviewItem(
-                    url=preview_url,
-                    filename=preview_filename,
-                    tx_mm=placement.tx_mm,
-                    ty_mm=placement.ty_mm,
-                    width_mm=float(xy[0]),
-                    depth_mm=float(xy[1]),
-                )
-            )
-
     except Exception as exc:
         # Failure path: log, cleanup, raise HTTP 500
         _safe_log(
@@ -2664,6 +2603,110 @@ async def convert_batch(
             status_code=500,
             detail=BATCH_MERGE_FAILED_DETAIL,
         )
+
+    preview_items: list[BatchPreviewItem] = []
+    preview_3d_url: str | None = None
+    preview_unavailable_reported = False
+
+    def _record_preview_unavailable(exc: Exception, *, preview_stage: str) -> None:
+        nonlocal preview_unavailable_reported
+        _safe_log(
+            "warning",
+            "batch_merge_preview_unavailable",
+            session_id=batch_run_id,
+            error_type=type(exc).__name__,
+            error_message=str(exc),
+            stage=preview_stage,
+        )
+        if not preview_unavailable_reported:
+            warnings.append(
+                WarningEntry(
+                    code="preview-unavailable",
+                    message=BATCH_PREVIEW_UNAVAILABLE_MESSAGE,
+                )
+            )
+            preview_unavailable_reported = True
+
+    preview_stage = "preview_layout"
+    try:
+        preview_successes, preview_layout_result = _select_batch_preview_subset(
+            successes,
+            plate_width_mm=plate_width_mm,
+            plate_depth_mm=plate_depth_mm,
+        )
+        if len(preview_successes) < len(successes):
+            warnings.append(
+                WarningEntry(
+                    code="preview-limited",
+                    message=BATCH_PREVIEW_LIMIT_FALLBACK_MESSAGE,
+                )
+            )
+
+        for idx, wr in enumerate(preview_successes):
+            preview_id: str | None = None
+            preview_copy_path: Path | None = None
+            try:
+                preview_stage = "preview_source"
+                source_glb = wr.get("preview_glb_path")
+                if not source_glb:
+                    continue
+                source_glb_path = Path(source_glb)
+                if not source_glb_path.exists():
+                    continue
+
+                preview_stage = "preview_copy"
+                fd, preview_copy_str = tempfile.mkstemp(
+                    suffix=".glb", dir=TEMP_DIR, prefix=artifact_prefix
+                )
+                os.close(fd)
+                preview_copy_path = Path(preview_copy_str)
+                shutil.copy2(source_glb_path, preview_copy_path)
+
+                preview_stage = "preview_file_registry"
+                preview_id = registry.register_path(
+                    session_id=f"batch-preview:{batch_run_id}",
+                    path=str(preview_copy_path),
+                    filename=f"batch_preview_{idx + 1}.glb",
+                    ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
+                )
+                preview_url = f"/api/files/{preview_id}"
+
+                placement = preview_layout_result.placements[idx]
+                xy = wr["xy_bbox_mm"]
+                preview_filename = f"item_{idx}"
+                try:
+                    with open(wr["metadata_sidecar_path"], "r", encoding="utf-8") as f:
+                        preview_sidecar = json.load(f)
+                    preview_filename = str(
+                        preview_sidecar.get("source_filename") or preview_filename
+                    )
+                except (OSError, json.JSONDecodeError, TypeError, ValueError):
+                    pass
+
+                preview_items.append(
+                    BatchPreviewItem(
+                        url=preview_url,
+                        filename=preview_filename,
+                        tx_mm=placement.tx_mm,
+                        ty_mm=placement.ty_mm,
+                        width_mm=float(xy[0]),
+                        depth_mm=float(xy[1]),
+                    )
+                )
+                if preview_3d_url is None:
+                    preview_3d_url = preview_url
+            except (*ROUTER_HANDLED_ERRORS, IndexError, ValidationError) as exc:
+                if preview_id is not None:
+                    with suppress(Exception):
+                        registry.cleanup_file(preview_id)
+                elif preview_copy_path is not None:
+                    with suppress(OSError):
+                        preview_copy_path.unlink(missing_ok=True)
+                _record_preview_unavailable(exc, preview_stage=preview_stage)
+    except (*ROUTER_HANDLED_ERRORS, IndexError, ValidationError) as exc:
+        preview_items = []
+        preview_3d_url = None
+        _record_preview_unavailable(exc, preview_stage=preview_stage)
 
     # Success path: cleanup intermediate files
     _cleanup_intermediates(intermediates, batch_run_id)
