@@ -312,7 +312,10 @@ describe("submitBatch API 调用和状态管理", () => {
     await useConverterStore.getState().submitBatch();
 
     const state = useConverterStore.getState();
-    expect(state.batchResult).toEqual(mockBatchResponse);
+    expect(state.batchResult).toEqual({
+      ...mockBatchResponse,
+      threemf_disk_path: null,
+    });
     expect(state.batchLoading).toBe(false);
     expect(state.error).toBeNull();
     expect(state.threemfDiskPath).toBeNull();
