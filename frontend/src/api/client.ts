@@ -3,6 +3,14 @@ import { postClientLog, summarizeErrorForLog } from "../utils/clientLog";
 import { useActionHistoryStore } from "../stores/actionHistoryStore";
 import { tRuntime } from "../i18n/runtime";
 
+export interface ApiRequestOptions {
+  suppressClientLog?: boolean;
+}
+
+declare module "axios" {
+  interface AxiosRequestConfig<D = any> extends ApiRequestOptions {}
+}
+
 /**
  * Axios 实例，统一管理 API 请求基础配置。
  *
@@ -803,6 +811,7 @@ apiClient.interceptors.response.use(
   (error) => {
     const response = error?.response;
     const config = error?.config;
+    const suppressClientLog = config?.suppressClientLog === true;
     const method =
       typeof config?.method === "string" ? config.method.toUpperCase() : null;
     const url = config?.url ?? null;
@@ -826,15 +835,17 @@ apiClient.interceptors.response.use(
         // Preserve the original error object if a runtime marks message read-only.
       }
     }
-    recordApiFailure({
-      method,
-      url,
-      statusCode,
-      requestId,
-      responseDetailForLog,
-      error,
-      readableMessage,
-    });
+    if (!suppressClientLog) {
+      recordApiFailure({
+        method,
+        url,
+        statusCode,
+        requestId,
+        responseDetailForLog,
+        error,
+        readableMessage,
+      });
+    }
     return Promise.reject(error);
   },
 );

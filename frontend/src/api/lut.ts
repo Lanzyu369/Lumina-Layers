@@ -1,4 +1,4 @@
-import apiClient from "./client";
+import apiClient, { type ApiRequestOptions } from "./client";
 import type {
   CompareRequest,
   CompareResponse,
@@ -64,8 +64,15 @@ export async function fetchLutCatalog(): Promise<LutCatalogResponse> {
 }
 
 /** 获取 LUT 详情目录，包含 manufacturer 分组与可搜索 tokens。 */
-export async function fetchLutDetailsCatalog(): Promise<LutDetailsCatalogResponse> {
-  const response = await apiClient.get<LutDetailsCatalogResponse>("/lut/details/catalog");
+export async function fetchLutDetailsCatalog(
+  options: ApiRequestOptions = {},
+): Promise<LutDetailsCatalogResponse> {
+  const response =
+    options.suppressClientLog === true
+      ? await apiClient.get<LutDetailsCatalogResponse>("/lut/details/catalog", {
+          suppressClientLog: true,
+        })
+      : await apiClient.get<LutDetailsCatalogResponse>("/lut/details/catalog");
   return response.data;
 }
 
