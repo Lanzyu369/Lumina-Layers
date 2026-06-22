@@ -12,6 +12,7 @@ _Requirements: 9.3, 9.4, 9.5_
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import List
@@ -434,3 +435,37 @@ class TestClientLogEndpoint:
         assert records[0].duration_ms == 12.346
         assert records[0].client_details["long"].endswith("...<truncated>")
         assert records[0].client_details["__truncated_keys"] == 7
+
+    def test_client_log_endpoint_redacts_local_paths_in_detail_keys(
+        self,
+        client: TestClient,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        target_logger = logging.getLogger("lumina.api.app")
+        target_logger.addHandler(caplog.handler)
+        caplog.set_level(logging.DEBUG, logger=target_logger.name)
+
+        response = client.post(
+            "/api/client-log",
+            json={
+                "label": "generate: keyed path diagnostic",
+                "details": {
+                    "/Users/min/private/source.png": "failed",
+                    "value_path": "failed while opening /private/tmp/lumina/source.png",
+                    "nested": {
+                        "C:\\Users\\min\\private\\source.png": "failed",
+                    },
+                },
+            },
+        )
+
+        assert response.status_code == 200
+        records = [
+            record for record in caplog.records
+            if getattr(record, "event", None) == "client_log"
+        ]
+        assert len(records) == 1
+        serialized_details = json.dumps(records[0].client_details)
+        assert "Users" not in serialized_details
+        assert "/private/tmp" not in serialized_details
+        assert "<redacted:local-path>" in serialized_details
