@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import os
 import pickle
@@ -20,6 +21,7 @@ from pydantic import ValidationError
 from api.dependencies import get_file_registry, get_session_store, get_worker_pool
 from api.file_bridge import ensure_png_tempfile, ndarray_to_png_bytes
 from api.file_registry import FileRegistry
+from api.preview_response_payload import build_preview_response_palette
 from api.preview_cache_artifacts import (
     estimate_preview_cache_bytes,
     externalize_preview_cache,
@@ -93,6 +95,14 @@ LAYER_IMAGES_PREVIEW_CACHE_UNAVAILABLE_DETAIL = (
     "Layer image preview cache is unavailable. "
     "Re-run preview before viewing layer images."
 )
+VECTOR_PARSE_CLIP_CACHE_MAX_BYTES_ENV = "LUMINA_VECTOR_PARSE_CLIP_CACHE_MAX_BYTES"
+DEFAULT_VECTOR_PARSE_CLIP_CACHE_MAX_BYTES = 64 * 1024 * 1024
+PREVIEW_RESPONSE_CACHE_FIELDS = {
+    "matched_rgb",
+    "mask_solid",
+    "preview_rgba",
+    "quantized_image",
+}
 
 
 def _get_large_format_svg_preview_cache_max_bytes() -> int:
@@ -106,6 +116,51 @@ def _get_large_format_svg_preview_cache_max_bytes() -> int:
     except ValueError:
         return DEFAULT_LARGE_FORMAT_SVG_PREVIEW_CACHE_MAX_BYTES
     return max(1, parsed)
+
+
+def _get_vector_parse_clip_cache_max_bytes() -> int:
+    """Return the session temp-file guardrail for SVG parse/clip artifacts."""
+
+    raw = os.getenv(VECTOR_PARSE_CLIP_CACHE_MAX_BYTES_ENV)
+    if raw is None or raw.strip() == "":
+        return DEFAULT_VECTOR_PARSE_CLIP_CACHE_MAX_BYTES
+    try:
+        parsed = int(raw)
+    except ValueError:
+        return DEFAULT_VECTOR_PARSE_CLIP_CACHE_MAX_BYTES
+    return max(1, parsed)
+
+
+def _preview_cache_artifact_paths(ref: dict | None) -> list[str]:
+    if not is_preview_cache_artifact_ref(ref):
+        return []
+    paths: list[str] = []
+    seen: set[str] = set()
+    for field_ref in ref.get("fields", {}).values():
+        path = field_ref.get("path") if isinstance(field_ref, dict) else None
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        paths.append(path)
+    return paths
+
+
+def _with_original_preview_cache_refs(ref: dict) -> dict:
+    updated = {
+        "schema": ref["schema"],
+        "manifest_revision": int(ref.get("manifest_revision", 0)),
+        "fields": {
+            field_name: dict(field_ref)
+            for field_name, field_ref in ref.get("fields", {}).items()
+        },
+        "metadata": copy.deepcopy(ref.get("metadata", {})),
+    }
+    fields = updated["fields"]
+    if "matched_rgb" in fields:
+        fields["original_matched_rgb"] = dict(fields["matched_rgb"])
+    if "material_matrix" in fields:
+        fields["original_material_matrix"] = dict(fields["material_matrix"])
+    return updated
 _DEFAULT_GENERATE_SEGMENTED_GLB = generate_segmented_glb
 
 
@@ -771,7 +826,14 @@ async def convert_preview(
     temp_path: str | None = None
     temp_native_bundle_path: str | None = None
     worker_preview_png_path: str | None = None
+    worker_raw_preview_png_path: str | None = None
     worker_cache_data_path: str | None = None
+    worker_cache_artifact_ref: dict | None = None
+    worker_vector_parse_clip_cache_path: str | None = None
+    worker_response_palette: list[dict] | None = None
+    worker_gradient_groups: list[dict] | None = None
+    worker_gradient_region_id_map_path: str | None = None
+    worker_gradient_region_id_map: np.ndarray | None = None
     svg_large_format_policy = None
     material_source = _validate_material_source(material_source)
     try:
@@ -961,14 +1023,69 @@ async def convert_preview(
     result_loaded = False
     try:
         worker_preview_png_path = result["preview_png_path"]
-        worker_cache_data_path = result["cache_data_path"]
+        candidate_raw_preview_path = result.get("raw_preview_png_path")
+        if isinstance(candidate_raw_preview_path, str):
+            worker_raw_preview_png_path = candidate_raw_preview_path
+        worker_cache_data_path = result.get("cache_data_path")
+        candidate_cache_artifact_ref = result.get("cache_artifact_ref")
+        if is_preview_cache_artifact_ref(candidate_cache_artifact_ref):
+            worker_cache_artifact_ref = candidate_cache_artifact_ref
+        candidate_vector_cache_path = result.get("vector_parse_clip_cache_path")
+        if isinstance(candidate_vector_cache_path, str):
+            worker_vector_parse_clip_cache_path = candidate_vector_cache_path
+        candidate_response_palette = result.get("response_palette")
+        if isinstance(candidate_response_palette, list):
+            worker_response_palette = candidate_response_palette
+        candidate_gradient_groups = result.get("gradient_groups")
+        candidate_region_map_path = result.get("gradient_region_id_map_path")
+        if (
+            isinstance(candidate_gradient_groups, list)
+            and isinstance(candidate_region_map_path, str)
+            and os.path.exists(candidate_region_map_path)
+        ):
+            try:
+                worker_gradient_region_id_map = np.ascontiguousarray(
+                    np.load(candidate_region_map_path, allow_pickle=False),
+                    dtype=np.uint32,
+                )
+                worker_gradient_groups = candidate_gradient_groups
+                worker_gradient_region_id_map_path = candidate_region_map_path
+            except (OSError, ValueError, TypeError) as exc:
+                log.warning(
+                    "Worker gradient-group artifact load failed",
+                    extra={
+                        "event": "worker_gradient_groups_adopt_failed",
+                        "error_type": type(exc).__name__,
+                        "error_message": str(exc),
+                        "path": candidate_region_map_path,
+                    },
+                )
         if worker_preview_png_path is None:
             raise HTTPException(status_code=500, detail=_PREVIEW_GENERATION_FAILED_DETAIL)
 
-        # Load cache_data from disk (worker serialized to .pkl)
         _t = time.perf_counter()
-        with open(worker_cache_data_path, "rb") as f:
-            cache_data = pickle.load(f)
+        if worker_cache_artifact_ref is not None:
+            response_cache_fields = set(PREVIEW_RESPONSE_CACHE_FIELDS)
+            if worker_raw_preview_png_path and os.path.exists(worker_raw_preview_png_path):
+                response_cache_fields.discard("preview_rgba")
+            if (
+                worker_response_palette is not None
+                and worker_gradient_region_id_map is not None
+            ):
+                response_cache_fields.difference_update(
+                    {"matched_rgb", "mask_solid", "quantized_image"}
+                )
+            cache_data = hydrate_preview_cache(
+                worker_cache_artifact_ref,
+                fields=response_cache_fields,
+                mmap_mode="r",
+            )
+        else:
+            if worker_cache_data_path is None:
+                raise HTTPException(status_code=500, detail="Preview worker returned no cache data")
+            # Load cache_data from disk (worker serialized to .pkl)
+            with open(worker_cache_data_path, "rb") as f:
+                cache_data = pickle.load(f)
         _t_pickle_load = time.perf_counter() - _t
 
         # Load preview image from disk (worker saved as .png). Copy it so the
@@ -982,7 +1099,11 @@ async def convert_preview(
                 temp_path,
                 temp_native_bundle_path,
                 worker_preview_png_path,
+                worker_raw_preview_png_path,
                 worker_cache_data_path,
+                worker_vector_parse_clip_cache_path,
+                worker_gradient_region_id_map_path,
+                *_preview_cache_artifact_paths(worker_cache_artifact_ref),
             )
 
     status_msg: str = result["status_msg"]
@@ -1052,12 +1173,104 @@ async def convert_preview(
                 },
             )
 
+    vector_parse_clip_cache_blob = None
+    if isinstance(cache_data, dict):
+        vector_parse_clip_cache_blob = cache_data.pop(
+            "vector_parse_clip_cache_blob",
+            None,
+        )
+
     # Reuse the session_id minted before worker submit so worker logs and the
     # returned session use the same id; SessionStore.create() will fall back to
     # a fresh UUID if the pre-minted id ever collides.
     # 复用 worker submit 前生成的 session_id，确保 worker 日志与返回会话同 id；
     # 若 id 与现有会话冲突，SessionStore.create() 会自动改用新 UUID。
     session_id = store.create(session_id=preview_session_id)
+    cache_session_value: dict | None = None
+    if worker_cache_artifact_ref is not None:
+        cache_session_value = _with_original_preview_cache_refs(
+            worker_cache_artifact_ref,
+        )
+        for artifact_path in _preview_cache_artifact_paths(cache_session_value):
+            store.register_temp_file(session_id, artifact_path)
+
+    vector_cache_max_bytes = _get_vector_parse_clip_cache_max_bytes()
+    if worker_vector_parse_clip_cache_path and os.path.exists(
+        worker_vector_parse_clip_cache_path,
+    ):
+        try:
+            vector_cache_bytes = os.path.getsize(worker_vector_parse_clip_cache_path)
+            if vector_cache_bytes <= vector_cache_max_bytes:
+                store.register_temp_file(session_id, worker_vector_parse_clip_cache_path)
+                if cache_session_value is not None:
+                    cache_session_value["metadata"]["vector_parse_clip_cache_path"] = (
+                        worker_vector_parse_clip_cache_path
+                    )
+                cache_data["vector_parse_clip_cache_path"] = worker_vector_parse_clip_cache_path
+            else:
+                _cleanup_pre_session_temp_paths(worker_vector_parse_clip_cache_path)
+                log.debug(
+                    "Vector parse/clip cache artifact persist skipped",
+                    extra={
+                        "event": "vector_parse_clip_cache_persist_skipped",
+                        "reason": "cache_artifact_too_large",
+                        "cache_bytes": int(vector_cache_bytes),
+                        "max_bytes": int(vector_cache_max_bytes),
+                    },
+                )
+                worker_vector_parse_clip_cache_path = None
+        except ROUTER_HANDLED_ERRORS as exc:
+            log.debug(
+                "Vector parse/clip cache artifact persist skipped",
+                extra={
+                    "event": "vector_parse_clip_cache_persist_skipped",
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                    "max_bytes": int(vector_cache_max_bytes),
+                },
+            )
+            _cleanup_pre_session_temp_paths(worker_vector_parse_clip_cache_path)
+            worker_vector_parse_clip_cache_path = None
+    elif isinstance(vector_parse_clip_cache_blob, (bytes, bytearray)):
+        vector_cache_bytes = len(vector_parse_clip_cache_blob)
+        if vector_cache_bytes <= vector_cache_max_bytes:
+            vector_cache_path = None
+            try:
+                fd, vector_cache_path = tempfile.mkstemp(
+                    prefix="vector_parse_clip_cache_",
+                    suffix=".pkl",
+                    dir=TEMP_DIR,
+                )
+                with os.fdopen(fd, "wb") as handle:
+                    handle.write(vector_parse_clip_cache_blob)
+                store.register_temp_file(session_id, vector_cache_path)
+                if cache_session_value is not None:
+                    cache_session_value["metadata"]["vector_parse_clip_cache_path"] = (
+                        vector_cache_path
+                    )
+                cache_data["vector_parse_clip_cache_path"] = vector_cache_path
+            except ROUTER_HANDLED_ERRORS as exc:
+                log.debug(
+                    "Vector parse/clip cache artifact persist skipped",
+                    extra={
+                        "event": "vector_parse_clip_cache_persist_skipped",
+                        "error_type": type(exc).__name__,
+                        "error_message": str(exc),
+                        "cache_bytes": int(vector_cache_bytes),
+                        "max_bytes": int(vector_cache_max_bytes),
+                    },
+                )
+                _cleanup_pre_session_temp_paths(vector_cache_path)
+        else:
+            log.debug(
+                "Vector parse/clip cache artifact persist skipped",
+                extra={
+                    "event": "vector_parse_clip_cache_persist_skipped",
+                    "reason": "cache_artifact_too_large",
+                    "cache_bytes": int(vector_cache_bytes),
+                    "max_bytes": int(vector_cache_max_bytes),
+                },
+            )
     memory_profile = build_preview_cache_memory_profile(
         cache_data,
         session_id=session_id,
@@ -1073,8 +1286,7 @@ async def convert_preview(
         log.info("Preview cache memory profile", extra=memory_profile)
     else:
         log.debug("Preview cache memory profile", extra=memory_profile)
-    cache_session_value: dict | None = None
-    if cache_data is not None:
+    if cache_session_value is None and cache_data is not None:
         cache_with_originals = dict(cache_data)
         if "matched_rgb" in cache_data:
             cache_with_originals["original_matched_rgb"] = cache_data["matched_rgb"]
@@ -1103,12 +1315,28 @@ async def convert_preview(
             )
             raise
     store.put(session_id, "preview_cache", cache_session_value)
-    # Synchronously compute gradient-banding groups so the Color Workstation
-    # can surface them (group-level multi-select + optional auto-replace)
-    # without a second round-trip. Best-effort: failures are logged and do
-    # not block the preview response.
-    # 同步计算渐变海带纹分组，便于颜色工作站的分组多选与自动换色。
-    recompute_gradient_groups_into_session(cache_data, session_id, store)
+    if worker_gradient_groups is not None and worker_gradient_region_id_map is not None:
+        store.put(session_id, "gradient_groups", worker_gradient_groups)
+        store.put(
+            session_id,
+            "gradient_region_id_map",
+            worker_gradient_region_id_map,
+        )
+        log.debug(
+            "Gradient groups adopted from worker",
+            extra={
+                "event": "gradient_groups_adopted_from_worker",
+                "group_count": len(worker_gradient_groups),
+                "region_id_map_shape": list(worker_gradient_region_id_map.shape),
+            },
+        )
+    else:
+        # Synchronously compute gradient-banding groups so the Color Workstation
+        # can surface them (group-level multi-select + optional auto-replace)
+        # without a second round-trip. Best-effort: failures are logged and do
+        # not block the preview response.
+        # 同步计算渐变海带纹分组，便于颜色工作站的分组多选与自动换色。
+        recompute_gradient_groups_into_session(cache_data, session_id, store)
     store.put(session_id, "image_path", temp_path)
     source_basename = _resolve_upload_source_basename(image.filename, temp_path)
     store.put(session_id, "source_basename", source_basename)
@@ -1151,7 +1379,12 @@ async def convert_preview(
         store.register_temp_file(session_id, temp_native_bundle_path)
     # Register worker temp files for cleanup
     store.register_temp_file(session_id, worker_preview_png_path)
-    store.register_temp_file(session_id, worker_cache_data_path)
+    if worker_raw_preview_png_path is not None:
+        store.register_temp_file(session_id, worker_raw_preview_png_path)
+    if worker_cache_data_path is not None:
+        store.register_temp_file(session_id, worker_cache_data_path)
+    if worker_gradient_region_id_map_path is not None:
+        store.register_temp_file(session_id, worker_gradient_region_id_map_path)
 
     try:
         # Register preview image (bed-rendered, for general display)
@@ -1161,7 +1394,14 @@ async def convert_preview(
         # Register raw RGBA preview (no bed, pixel-aligned with previewPixelWidth/Height)
         # Used by ColorPreview2D so SVG contour overlays and click coords align.
         preview_raw_url: str | None = None
-        if cache_data and "preview_rgba" in cache_data:
+        if worker_raw_preview_png_path and os.path.exists(worker_raw_preview_png_path):
+            raw_id = registry.register_path(
+                session_id,
+                worker_raw_preview_png_path,
+                filename="preview_raw.png",
+            )
+            preview_raw_url = f"/api/files/{raw_id}"
+        elif cache_data and "preview_rgba" in cache_data:
             raw_rgba = cache_data["preview_rgba"]
             raw_bytes = ndarray_to_png_bytes(raw_rgba)
             raw_id = registry.register_bytes(session_id, raw_bytes, "preview_raw.png")
@@ -1176,6 +1416,8 @@ async def convert_preview(
                 temp_native_bundle_path,
                 worker_preview_png_path,
                 worker_cache_data_path,
+                worker_raw_preview_png_path,
+                worker_gradient_region_id_map_path,
             ),
         )
         raise
@@ -1202,61 +1444,12 @@ async def convert_preview(
         )
     _t_glb = time.perf_counter() - _t
 
-    # Build palette with quantized_hex, matched_hex, pixel_count, percentage
     _t = time.perf_counter()
-    raw_palette: list[dict] = cache_data.get("color_palette", []) if cache_data else []
-    quantized_image = cache_data.get("quantized_image") if cache_data else None
-    matched_rgb_arr = cache_data.get("matched_rgb") if cache_data else None
-    mask_solid_arr = cache_data.get("mask_solid") if cache_data else None
-
-    palette: list[dict] = []
-    if raw_palette and matched_rgb_arr is not None and mask_solid_arr is not None:
-        matched_to_quantized: dict[str, str] = {}
-        if quantized_image is not None:
-            solid_mask = mask_solid_arr
-            q_pixels = quantized_image[solid_mask]  # (N, 3)
-            m_pixels = matched_rgb_arr[solid_mask]  # (N, 3)
-
-            # Vectorized: encode RGB triplets as uint32 scalars, find dominant
-            # quantized color per matched color in a single np.unique pass.
-            m_enc = (
-                (m_pixels[:, 0].astype(np.uint32) << 16)
-                | (m_pixels[:, 1].astype(np.uint32) << 8)
-                | m_pixels[:, 2].astype(np.uint32)
-            )
-            q_enc = (
-                (q_pixels[:, 0].astype(np.uint32) << 16)
-                | (q_pixels[:, 1].astype(np.uint32) << 8)
-                | q_pixels[:, 2].astype(np.uint32)
-            )
-
-            pair_key = m_enc.astype(np.uint64) * (1 << 24) + q_enc.astype(np.uint64)
-            unique_keys, counts = np.unique(pair_key, return_counts=True)
-
-            u_m = (unique_keys >> 24).astype(np.uint32)
-            u_q = (unique_keys & 0xFFFFFF).astype(np.uint32)
-
-            order = np.lexsort((-counts, u_m))
-            sorted_m = u_m[order]
-            sorted_q = u_q[order]
-            _, first_idx = np.unique(sorted_m, return_index=True)
-
-            for mk, qk in zip(sorted_m[first_idx], sorted_q[first_idx]):
-                m_hex = f"#{(mk >> 16) & 0xFF:02x}{(mk >> 8) & 0xFF:02x}{mk & 0xFF:02x}"
-                q_hex = f"#{(qk >> 16) & 0xFF:02x}{(qk >> 8) & 0xFF:02x}{qk & 0xFF:02x}"
-                matched_to_quantized[m_hex] = q_hex
-
-        for entry in raw_palette:
-            m_hex = entry["hex"]  # '#rrggbb'
-            q_hex = matched_to_quantized.get(m_hex, m_hex)
-            palette.append(
-                {
-                    "quantized_hex": q_hex,
-                    "matched_hex": m_hex,
-                    "pixel_count": entry["count"],
-                    "percentage": entry["percentage"],
-                }
-            )
+    palette = (
+        worker_response_palette
+        if worker_response_palette is not None
+        else build_preview_response_palette(cache_data)
+    )
 
     dimensions: dict = {}
     if cache_data:

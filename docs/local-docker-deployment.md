@@ -94,9 +94,11 @@ enabled in this distribution deployment.
 该路径通过 `LUMINA_GLB_KERNEL=v2` 启用 `rasterio + manifold3d` 挤出实现；
 如果依赖不可用或运行时失败，后端仍会回退到旧的 Shapely v1 路径。
 这些原生依赖保存在 `requirements-glb-v2.txt`，由 Docker 镜像安装；普通
-`pip install -r requirements.txt` 仍只安装默认 V1 路径需要的基础依赖。
+`pip install -r requirements.txt` 仍只安装基础依赖；若普通本地安装也要匹配
+当前 v2 性能基准，需额外安装 `requirements-glb-v2.txt`。缺少这些依赖时，
+位图 GLB 路径会带 WARNING 回退 V1。
 `LUMINA_VECTOR_GLB_KERNEL=v2` 启用 SVG/vector 最终生成链路的 preview GLB
-descriptor exporter；遇到冰箱贴凹槽、涂层或不支持的复杂几何时整次回退 V1。
+scene-reuse exporter；遇到不支持的复杂几何时整次回退 V1。
 
 真实前端 SVG 预览模型走 `preview_cache -> generate_segmented_glb`，也就是
 `-GlbKernel` / `LUMINA_GLB_KERNEL` 这条链路。可用下面的本地 profile 入口

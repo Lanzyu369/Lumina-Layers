@@ -1,6 +1,7 @@
 """Unit tests for slicer-specific 3MF metadata generation."""
 
 import json
+from pathlib import Path
 import zipfile
 import xml.etree.ElementTree as ET
 from types import SimpleNamespace
@@ -39,6 +40,73 @@ class _FakeBuilder:
 
 def _metadata_values(parent: ET.Element) -> dict[str, str]:
     return {child.attrib["key"]: child.attrib["value"] for child in parent.findall("metadata")}
+
+
+def _raw_zip_member_bytes(path: Path, member_name: str) -> bytes:
+    with zipfile.ZipFile(path, "r") as archive:
+        info = archive.getinfo(member_name)
+        with path.open("rb") as handle:
+            handle.seek(info.header_offset)
+            return handle.read(info._end_offset - info.header_offset)
+
+
+def test_cover_relationship_postprocess_raw_copies_unchanged_deflated_entries(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Rewriting cover rels should not decompress/recompress large entries."""
+    intermediate = tmp_path / "intermediate.3mf"
+    output = tmp_path / "output.3mf"
+    rels_xml = (
+        b'<?xml version="1.0" encoding="UTF-8"?>'
+        b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        b'<Relationship Id="rel-1" Type="model" Target="/3D/3dmodel.model" />'
+        b'</Relationships>'
+    )
+    original_zip_file = zipfile.ZipFile
+
+    with original_zip_file(intermediate, "w") as archive:
+        archive.writestr(
+            "3D/Objects/object_1.model",
+            b"<mesh>" + (b"0123456789abcdef" * 4096) + b"</mesh>",
+            compress_type=zipfile.ZIP_DEFLATED,
+        )
+        archive.writestr("_rels/.rels", rels_xml, compress_type=zipfile.ZIP_STORED)
+
+    writes: list[str] = []
+
+    class TrackingZipFile(original_zip_file):
+        def writestr(self, zinfo_or_arcname, data, *args, **kwargs):
+            if isinstance(zinfo_or_arcname, zipfile.ZipInfo):
+                writes.append(zinfo_or_arcname.filename)
+            else:
+                writes.append(str(zinfo_or_arcname))
+            return super().writestr(zinfo_or_arcname, data, *args, **kwargs)
+
+    monkeypatch.setattr(writer_module.zipfile, "ZipFile", TrackingZipFile)
+    writer = BambuStudio3MFWriter(
+        str(output),
+        settings={},
+        color_mode="4-Color",
+    )
+
+    writer._inject_cover_relationships_postprocess(str(intermediate), str(output))
+
+    assert writes == ["_rels/.rels"]
+    assert _raw_zip_member_bytes(output, "3D/Objects/object_1.model") == (
+        _raw_zip_member_bytes(intermediate, "3D/Objects/object_1.model")
+    )
+    with original_zip_file(output, "r") as archive:
+        root = ET.fromstring(archive.read("_rels/.rels"))
+    rels = root.findall(
+        "{http://schemas.openxmlformats.org/package/2006/relationships}Relationship"
+    )
+    cover_targets = [
+        rel.get("Target")
+        for rel in rels
+        if (rel.get("Target") or "").startswith("/Auxiliaries/.thumbnails/")
+    ]
+    assert len(cover_targets) == 3
 
 
 def test_difference_index_preserves_bambu_project_slot_shape() -> None:

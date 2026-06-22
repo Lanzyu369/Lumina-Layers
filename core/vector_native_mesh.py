@@ -1,0 +1,1117 @@
+"""Optional native acceleration for SVG vector run-length extrusion.
+
+The native path is deliberately opt-in. It accepts a Clipper2-style
+``clipper2_batch`` module when present, but preserves the current
+Shapely/trimesh extrusion as the fallback for dependency absence, native
+errors, empty native meshes, or invalid mesh buffers.
+"""
+
+from __future__ import annotations
+
+import importlib
+import os
+import time
+from collections import defaultdict
+from dataclasses import dataclass
+from typing import Any, Iterable
+
+import numpy as np
+import trimesh
+from shapely import set_precision
+from shapely.geometry import GeometryCollection, MultiPolygon, Polygon
+from shapely.geometry.polygon import orient
+from shapely.ops import unary_union
+
+from core.vector_engine import VectorProcessor, _union_run_group_geometries
+
+
+NATIVE_CLOSE_DELTA_MM = 0.03
+NATIVE_COORD_SCALE = 1_000_000
+NATIVE_SURFACE_AREA_REL_TOL = 0.001
+NATIVE_SURFACE_AREA_ABS_TOL_MM2 = 0.01
+NATIVE_REQUIRED_GUARD_CAPABILITY = "triangulation_area_guard"
+NATIVE_SPLIT_RETRY_MIN_ORIGINAL_PATHS = 300
+NATIVE_SPLIT_RETRY_MAX_ORIGINAL_PATHS_PER_GEOM = 1.15
+NATIVE_SPLIT_RETRY_MIN_POLYGONS = 240
+NATIVE_SPLIT_RETRY_MAX_PATH_RATIO = 1.2
+NATIVE_MERGED_FALLBACK_MIN_PATHS = 64
+NATIVE_MERGED_FALLBACK_MAX_HOLE_RATIO = 0.5
+
+
+@dataclass(frozen=True)
+class NativeVectorMeshResult:
+    """Result from optional native vector mesh extrusion.
+    可选 native 矢量挤出返回结果。
+
+    Args:
+        meshes_by_slot: Mapping compatible with ``VectorProcessor.build_mesh``:
+            slot name -> ``{"meshes": list[Trimesh], "mat_id": int}``.
+            与 ``VectorProcessor.build_mesh`` 兼容的材质槽到 mesh 列表映射。
+        stats: Diagnostic counters/timings for fallback and profiling.
+            fallback 与性能诊断统计信息。
+    """
+
+    meshes_by_slot: dict[str, dict[str, Any]]
+    stats: dict[str, float | int | str]
+
+
+def is_native_vector_mesh_enabled(processor: Any | None = None) -> bool:
+    """Return whether optional native vector meshing should be attempted.
+    返回是否应尝试可选 native 矢量网格路径。
+
+    The default remains disabled. Callers may opt in with either
+    ``processor.enable_native_vector_mesh = True`` or
+    ``LUMINA_VECTOR_NATIVE_MESH=1``.
+    默认关闭；可通过处理器属性或环境变量显式开启。
+    """
+
+    if processor is not None and bool(getattr(processor, "enable_native_vector_mesh", False)):
+        return True
+    return str(os.environ.get("LUMINA_VECTOR_NATIVE_MESH", "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def run_length_extrude_native_hybrid(
+    *,
+    matched_shapes,
+    num_layers: int,
+    layer_h: float,
+    num_channels: int,
+    slot_names,
+    scale_factor: float,
+    extrude_cache=None,
+    face_up: bool = False,
+    optical_z_base: float = 0.0,
+    native_module=None,
+) -> NativeVectorMeshResult:
+    """Extrude SVG run groups through an optional native mesh module.
+    通过可选 native 模块挤出 SVG run-group，并对失败组回退旧链路。
+
+    Args:
+        matched_shapes: Vector shapes with ``geometry`` and per-layer
+            ``recipe`` entries.
+        num_layers: Number of color layers to inspect.
+        layer_h: Layer height in millimeters.
+        num_channels: Number of material channels.
+        slot_names: Material slot names by channel id.
+        scale_factor: SVG user-unit to millimeter scale.
+        extrude_cache: Existing Python extrusion cache used by fallback groups.
+        face_up: Whether layer order is inverted for face-up workflows.
+        optical_z_base: Z base used by face-up workflows.
+        native_module: Optional injected module for tests. When omitted,
+            ``clipper2_batch`` is imported lazily.
+
+    Returns:
+        ``NativeVectorMeshResult`` containing meshes and diagnostic stats.
+    """
+
+    stats = _empty_stats()
+    module = native_module if native_module is not None else _load_native_module(stats)
+    if module is None or not hasattr(module, "merge_run_groups_to_meshes"):
+        raise RuntimeError("clipper2_batch.merge_run_groups_to_meshes is unavailable")
+
+    run_groups = _build_run_groups(
+        matched_shapes=matched_shapes,
+        num_layers=num_layers,
+        num_channels=num_channels,
+        slot_names=slot_names,
+    )
+    stats["run_group_count"] = len(run_groups)
+
+    jobs_by_height_z: dict[tuple[float, float], list[tuple[tuple[int, int, int], list]]] = defaultdict(list)
+    for key, geoms in run_groups.items():
+        _, run_start, run_end = key
+        if face_up:
+            inv_start = (num_layers - 1) - run_end
+            inv_end = (num_layers - 1) - run_start
+            z_bot = float(optical_z_base) + inv_start * float(layer_h)
+            height = (inv_end - inv_start + 1) * float(layer_h)
+        else:
+            z_bot = run_start * float(layer_h)
+            height = (run_end - run_start + 1) * float(layer_h)
+        jobs_by_height_z[(round(float(height), 8), round(float(z_bot), 8))].append((key, geoms))
+
+    meshes_by_slot: dict[str, dict[str, Any]] = {}
+    if not _native_module_has_triangulation_area_guard(module):
+        stats["native_capability_error"] = f"{NATIVE_REQUIRED_GUARD_CAPABILITY}_missing"
+        stats["native_triangulation_area_guard"] = "missing"
+        for (height, z_bot), jobs in jobs_by_height_z.items():
+            for key, geoms in jobs:
+                _fallback_key(
+                    key,
+                    geoms,
+                    height=float(height),
+                    z_bot=float(z_bot),
+                    scale_factor=float(scale_factor),
+                    slot_names=slot_names,
+                    meshes_by_slot=meshes_by_slot,
+                    extrude_cache=extrude_cache,
+                    stats=stats,
+                    reason="capability_missing",
+                )
+        return NativeVectorMeshResult(meshes_by_slot=meshes_by_slot, stats=stats)
+
+    stats["native_triangulation_area_guard"] = "present"
+    path_cache: dict[int, tuple[Any, list[list[tuple[float, float]]]]] = {}
+    for (height, z_bot), jobs in jobs_by_height_z.items():
+        _run_native_job_batch(
+            module=module,
+            jobs=jobs,
+            height=float(height),
+            z_bot=float(z_bot),
+            scale_factor=float(scale_factor),
+            slot_names=slot_names,
+            meshes_by_slot=meshes_by_slot,
+            extrude_cache=extrude_cache,
+            stats=stats,
+            path_cache=path_cache,
+        )
+
+    _flush_native_buffers(meshes_by_slot, stats)
+    return NativeVectorMeshResult(meshes_by_slot=meshes_by_slot, stats=stats)
+
+
+def _empty_stats() -> dict[str, float | int | str]:
+    return {
+        "run_group_count": 0,
+        "native_group_count": 0,
+        "native_input_paths": 0,
+        "native_path_cache_hits": 0,
+        "native_path_cache_misses": 0,
+        "pack_seconds": 0.0,
+        "native_seconds": 0.0,
+        "mesh_convert_seconds": 0.0,
+        "fallback_seconds": 0.0,
+        "native_empty_meshes": 0,
+        "native_invalid_meshes": 0,
+        "native_extra_meshes": 0,
+        "native_surface_checked": 0,
+        "native_surface_rejects": 0,
+        "surface_validation_seconds": 0.0,
+        "native_meshes": 0,
+        "native_coalesced_meshes": 0,
+        "native_coalesced_slots": 0,
+        "native_output_meshes": 0,
+        "native_split_retries": 0,
+        "native_split_group_count": 0,
+        "native_split_meshes": 0,
+        "native_split_fallback_groups": 0,
+        "native_merged_fallback_groups": 0,
+        "native_merged_fallback_polygons": 0,
+        "native_merged_fallback_input_paths": 0,
+        "native_merged_fallback_input_holes": 0,
+        "native_merged_fallback_skipped_groups": 0,
+        "fallback_groups": 0,
+        "native_capability_error": "",
+        "native_triangulation_area_guard": "",
+    }
+
+
+def _load_native_module(stats: dict[str, float | int | str]):
+    try:
+        return importlib.import_module("clipper2_batch")
+    except Exception as exc:
+        stats["native_import_error"] = type(exc).__name__
+        return None
+
+
+def _native_module_has_triangulation_area_guard(module) -> bool:
+    capabilities_fn = getattr(module, "native_mesh_capabilities", None)
+    if not callable(capabilities_fn):
+        return False
+    try:
+        capabilities = capabilities_fn()
+    except Exception:
+        return False
+    if not isinstance(capabilities, dict):
+        return False
+    return bool(capabilities.get(NATIVE_REQUIRED_GUARD_CAPABILITY))
+
+
+def _build_run_groups(*, matched_shapes, num_layers: int, num_channels: int, slot_names) -> dict[tuple[int, int, int], list]:
+    run_groups: dict[tuple[int, int, int], list] = {}
+    for item in matched_shapes:
+        geom = item["geometry"]
+        recipe = item["recipe"]
+        if geom is None or geom.is_empty:
+            continue
+        layers_to_use = min(int(num_layers), len(recipe))
+        runs_by_channel = VectorProcessor._build_channel_runs(recipe, layers_to_use, int(num_channels))
+        for ch, runs in runs_by_channel.items():
+            if ch >= len(slot_names):
+                continue
+            for run_start, run_end in runs:
+                run_groups.setdefault((int(ch), int(run_start), int(run_end)), []).append(geom)
+    return run_groups
+
+
+def _run_native_job_batch(
+    *,
+    module,
+    jobs: list[tuple[tuple[int, int, int], list]],
+    height: float,
+    z_bot: float,
+    scale_factor: float,
+    slot_names,
+    meshes_by_slot: dict[str, dict[str, Any]],
+    extrude_cache,
+    stats: dict[str, float | int | str],
+    path_cache: dict[int, tuple[Any, list[list[tuple[float, float]]]]] | None,
+) -> None:
+    t0 = time.perf_counter()
+    native_groups = []
+    keys = []
+    geoms_by_key = {}
+    path_counts_by_key = {}
+    for key, geoms in jobs:
+        paths = []
+        for geom in geoms:
+            paths.extend(_geometry_to_paths_cached(geom, path_cache, stats))
+        if not paths:
+            _fallback_key(
+                key,
+                geoms,
+                height=height,
+                z_bot=z_bot,
+                scale_factor=scale_factor,
+                slot_names=slot_names,
+                meshes_by_slot=meshes_by_slot,
+                extrude_cache=extrude_cache,
+                stats=stats,
+                reason="no_paths",
+            )
+            continue
+        keys.append(key)
+        geoms_by_key[key] = geoms
+        path_counts_by_key[key] = len(paths)
+        native_groups.append(paths)
+        stats["native_input_paths"] = int(stats["native_input_paths"]) + len(paths)
+    stats["native_group_count"] = int(stats["native_group_count"]) + len(native_groups)
+    stats["pack_seconds"] = float(stats["pack_seconds"]) + (time.perf_counter() - t0)
+    if not native_groups:
+        return
+
+    try:
+        t0 = time.perf_counter()
+        native_meshes = module.merge_run_groups_to_meshes(
+            native_groups,
+            close_delta_mm=NATIVE_CLOSE_DELTA_MM,
+            scale=NATIVE_COORD_SCALE,
+            height=height,
+            z_offset=z_bot,
+            xy_scale=scale_factor,
+        )
+        stats["native_seconds"] = float(stats["native_seconds"]) + (time.perf_counter() - t0)
+    except Exception as exc:
+        stats["native_call_error"] = type(exc).__name__
+        for key in keys:
+            _fallback_key(
+                key,
+                geoms_by_key[key],
+                height=height,
+                z_bot=z_bot,
+                scale_factor=scale_factor,
+                slot_names=slot_names,
+                meshes_by_slot=meshes_by_slot,
+                extrude_cache=extrude_cache,
+                stats=stats,
+                reason="native_call_error",
+            )
+        return
+
+    t0 = time.perf_counter()
+    native_mesh_list = list(native_meshes or [])
+    if len(native_mesh_list) > len(keys):
+        stats["native_extra_meshes"] = int(stats["native_extra_meshes"]) + (
+            len(native_mesh_list) - len(keys)
+        )
+    for index, key in enumerate(keys):
+        ch = key[0]
+        slot_name = slot_names[ch]
+        _ensure_slot(meshes_by_slot, slot_name, ch)
+        if index >= len(native_mesh_list):
+            stats["native_invalid_meshes"] = int(stats["native_invalid_meshes"]) + 1
+            _fallback_key(
+                key,
+                geoms_by_key[key],
+                height=height,
+                z_bot=z_bot,
+                scale_factor=scale_factor,
+                slot_names=slot_names,
+                meshes_by_slot=meshes_by_slot,
+                extrude_cache=extrude_cache,
+                stats=stats,
+                reason="missing_native_mesh",
+            )
+            continue
+        native_mesh = native_mesh_list[index]
+        mesh_arrays = _native_mesh_arrays(native_mesh)
+        if mesh_arrays is None:
+            reason = _native_mesh_rejection_reason(native_mesh)
+            stats[reason] = int(stats[reason]) + 1
+            if _retry_native_group_as_reference_polygons(
+                module=module,
+                key=key,
+                geoms=geoms_by_key[key],
+                original_path_count=path_counts_by_key[key],
+                height=height,
+                z_bot=z_bot,
+                scale_factor=scale_factor,
+                slot_names=slot_names,
+                meshes_by_slot=meshes_by_slot,
+                extrude_cache=extrude_cache,
+                stats=stats,
+                path_cache=path_cache,
+            ):
+                continue
+            _fallback_key(
+                key,
+                geoms_by_key[key],
+                height=height,
+                z_bot=z_bot,
+                scale_factor=scale_factor,
+                slot_names=slot_names,
+                meshes_by_slot=meshes_by_slot,
+                extrude_cache=extrude_cache,
+                stats=stats,
+                reason=_fallback_reason_for_native_rejection(reason),
+                native_module=module,
+                path_cache=path_cache,
+                input_path_count=path_counts_by_key.get(key),
+            )
+            continue
+        mesh = None
+        if _surface_validation_enabled():
+            mesh = _mesh_from_arrays(mesh_arrays)
+            if mesh is None:
+                stats["native_invalid_meshes"] = int(stats["native_invalid_meshes"]) + 1
+                _fallback_key(
+                    key,
+                    geoms_by_key[key],
+                    height=height,
+                    z_bot=z_bot,
+                    scale_factor=scale_factor,
+                    slot_names=slot_names,
+                    meshes_by_slot=meshes_by_slot,
+                    extrude_cache=extrude_cache,
+                    stats=stats,
+                    reason="invalid_native_mesh",
+                )
+                continue
+            t_validate = time.perf_counter()
+            surface_ok = _native_surface_area_matches(
+                mesh,
+                geoms_by_key[key],
+                height=height,
+                scale_factor=scale_factor,
+            )
+            stats["surface_validation_seconds"] = float(stats["surface_validation_seconds"]) + (
+                time.perf_counter() - t_validate
+            )
+            stats["native_surface_checked"] = int(stats["native_surface_checked"]) + 1
+            if not surface_ok:
+                stats["native_surface_rejects"] = int(stats["native_surface_rejects"]) + 1
+                _fallback_key(
+                    key,
+                    geoms_by_key[key],
+                    height=height,
+                    z_bot=z_bot,
+                    scale_factor=scale_factor,
+                    slot_names=slot_names,
+                    meshes_by_slot=meshes_by_slot,
+                    extrude_cache=extrude_cache,
+                    stats=stats,
+                    reason="surface_reject",
+                )
+                continue
+        stats["native_meshes"] = int(stats["native_meshes"]) + 1
+        if mesh is not None:
+            meshes_by_slot[slot_name]["meshes"].append(mesh)
+            stats["native_output_meshes"] = int(stats["native_output_meshes"]) + 1
+        else:
+            _append_native_buffer(meshes_by_slot, slot_name, ch, mesh_arrays)
+    stats["mesh_convert_seconds"] = float(stats["mesh_convert_seconds"]) + (time.perf_counter() - t0)
+
+
+def _retry_native_group_as_reference_polygons(
+    *,
+    module,
+    key: tuple[int, int, int],
+    geoms,
+    original_path_count: int,
+    height: float,
+    z_bot: float,
+    scale_factor: float,
+    slot_names,
+    meshes_by_slot: dict[str, dict[str, Any]],
+    extrude_cache,
+    stats: dict[str, float | int | str],
+    path_cache: dict[int, tuple[Any, list[list[tuple[float, float]]]]] | None,
+) -> bool:
+    if not _should_consider_native_split(
+        original_geometry_count=len(geoms),
+        original_path_count=original_path_count,
+    ):
+        return False
+
+    retry_polygons = None
+    retry_groups = _native_retry_groups_for_native_retry(
+        module=module,
+        geoms=geoms,
+        path_cache=path_cache,
+        stats=stats,
+    )
+    if retry_groups is None:
+        polygons = _reference_polygons_for_native_retry(geoms)
+        if len(polygons) <= 1:
+            return False
+
+        retry_groups = []
+        retry_polygons = []
+        for poly in polygons:
+            paths = _geometry_to_paths_cached(poly, path_cache, stats)
+            if paths:
+                retry_groups.append(paths)
+                retry_polygons.append(poly)
+    if len(retry_groups) <= 1:
+        return False
+    retry_path_count = sum(len(group) for group in retry_groups)
+    if not _should_retry_native_split(
+        original_path_count=original_path_count,
+        retry_group_count=len(retry_groups),
+        retry_path_count=retry_path_count,
+    ):
+        return False
+
+    stats["native_split_retries"] = int(stats["native_split_retries"]) + 1
+    stats["native_split_group_count"] = int(stats["native_split_group_count"]) + len(retry_groups)
+    stats["native_input_paths"] = int(stats["native_input_paths"]) + retry_path_count
+
+    try:
+        t0 = time.perf_counter()
+        native_meshes = module.merge_run_groups_to_meshes(
+            retry_groups,
+            close_delta_mm=0.0,
+            scale=NATIVE_COORD_SCALE,
+            height=height,
+            z_offset=z_bot,
+            xy_scale=scale_factor,
+        )
+        stats["native_seconds"] = float(stats["native_seconds"]) + (time.perf_counter() - t0)
+    except Exception:
+        return False
+
+    ch = key[0]
+    slot_name = slot_names[ch]
+    _ensure_slot(meshes_by_slot, slot_name, ch)
+    native_mesh_list = list(native_meshes or [])
+    any_output = False
+    for index, retry_group in enumerate(retry_groups):
+        native_mesh = native_mesh_list[index] if index < len(native_mesh_list) else None
+        mesh_arrays = _native_mesh_arrays(native_mesh)
+        if mesh_arrays is not None:
+            mesh = None
+            surface_ok = True
+            if _surface_validation_enabled():
+                poly = _retry_polygon_for_group(retry_polygons, retry_group, index)
+                if poly is None:
+                    return bool(any_output)
+                mesh = _mesh_from_arrays(mesh_arrays)
+                surface_ok = mesh is not None and _native_mesh_surface_is_acceptable(
+                    mesh,
+                    [poly],
+                    height=height,
+                    scale_factor=scale_factor,
+                    stats=stats,
+                )
+            if surface_ok:
+                stats["native_meshes"] = int(stats["native_meshes"]) + 1
+                stats["native_split_meshes"] = int(stats["native_split_meshes"]) + 1
+                if mesh is not None:
+                    meshes_by_slot[slot_name]["meshes"].append(mesh)
+                    stats["native_output_meshes"] = int(stats["native_output_meshes"]) + 1
+                else:
+                    _append_native_buffer(meshes_by_slot, slot_name, ch, mesh_arrays)
+                any_output = True
+                continue
+            _fallback_key(
+                key,
+                [poly],
+                height=height,
+                z_bot=z_bot,
+                scale_factor=scale_factor,
+                slot_names=slot_names,
+                meshes_by_slot=meshes_by_slot,
+                extrude_cache=extrude_cache,
+                stats=stats,
+                reason="split_surface_reject",
+            )
+            stats["native_split_fallback_groups"] = int(stats["native_split_fallback_groups"]) + 1
+            any_output = True
+            continue
+
+        if native_mesh is None:
+            stats["native_invalid_meshes"] = int(stats["native_invalid_meshes"]) + 1
+            reason = "missing_native_mesh"
+        else:
+            counter_name = _native_mesh_rejection_reason(native_mesh)
+            stats[counter_name] = int(stats[counter_name]) + 1
+            reason = _fallback_reason_for_native_rejection(counter_name)
+        poly = _retry_polygon_for_group(retry_polygons, retry_group, index)
+        if poly is None:
+            return bool(any_output)
+        _fallback_key(
+            key,
+            [poly],
+            height=height,
+            z_bot=z_bot,
+            scale_factor=scale_factor,
+            slot_names=slot_names,
+            meshes_by_slot=meshes_by_slot,
+            extrude_cache=extrude_cache,
+            stats=stats,
+            reason=f"split_{reason}",
+        )
+        stats["native_split_fallback_groups"] = int(stats["native_split_fallback_groups"]) + 1
+        any_output = True
+    return any_output
+
+
+def _should_consider_native_split(
+    *,
+    original_geometry_count: int,
+    original_path_count: int,
+) -> bool:
+    if original_geometry_count <= 0:
+        return False
+    if original_path_count < NATIVE_SPLIT_RETRY_MIN_ORIGINAL_PATHS:
+        return False
+    paths_per_geometry = float(original_path_count) / float(original_geometry_count)
+    return paths_per_geometry <= NATIVE_SPLIT_RETRY_MAX_ORIGINAL_PATHS_PER_GEOM
+
+
+def _should_retry_native_split(
+    *,
+    original_path_count: int,
+    retry_group_count: int,
+    retry_path_count: int,
+) -> bool:
+    if original_path_count <= 0:
+        return False
+    if retry_group_count < NATIVE_SPLIT_RETRY_MIN_POLYGONS:
+        return False
+    max_retry_paths = float(original_path_count) * NATIVE_SPLIT_RETRY_MAX_PATH_RATIO
+    return float(retry_path_count) <= max_retry_paths
+
+
+def _native_retry_groups_for_native_retry(
+    *,
+    module,
+    geoms,
+    path_cache: dict[int, tuple[Any, list[list[tuple[float, float]]]]] | None,
+    stats: dict[str, float | int | str],
+) -> list | None:
+    merge_run_groups = getattr(module, "merge_run_groups", None)
+    if not callable(merge_run_groups):
+        return None
+
+    original_paths = []
+    for geom in geoms:
+        original_paths.extend(_geometry_to_paths_cached(geom, path_cache, stats))
+    if not original_paths:
+        return None
+
+    try:
+        merged_groups = merge_run_groups(
+            [original_paths],
+            close_delta_mm=NATIVE_CLOSE_DELTA_MM,
+            scale=NATIVE_COORD_SCALE,
+        )
+        merged_group = merged_groups[0] if merged_groups else []
+    except Exception:
+        return None
+    retry_groups = [poly for poly in (merged_group or []) if poly]
+    return retry_groups or None
+
+
+def _reference_polygons_for_native_retry(geoms) -> list[Polygon]:
+    merged = _merged_reference_geometry(geoms)
+    if merged is None or merged.is_empty:
+        return []
+    if merged.geom_type == "Polygon":
+        return [merged]
+    if merged.geom_type == "MultiPolygon":
+        return [poly for poly in merged.geoms if not poly.is_empty]
+    return []
+
+
+def _retry_polygon_for_group(retry_polygons, retry_group, index: int) -> Polygon | None:
+    if retry_polygons is not None:
+        return retry_polygons[index]
+    return _polygon_from_native_rings(retry_group)
+
+
+def _polygon_from_native_rings(rings) -> Polygon | None:
+    if not rings:
+        return None
+    try:
+        exterior = [(float(point[0]), float(point[1])) for point in rings[0]]
+        holes = [
+            [(float(point[0]), float(point[1])) for point in ring]
+            for ring in rings[1:]
+        ]
+    except (TypeError, IndexError, ValueError):
+        return None
+    if len(exterior) < 3:
+        return None
+    try:
+        polygon = Polygon(exterior, holes)
+    except Exception:
+        return None
+    if polygon.is_empty:
+        return None
+    return polygon
+
+
+def _native_mesh_surface_is_acceptable(
+    mesh: trimesh.Trimesh,
+    geoms,
+    *,
+    height: float,
+    scale_factor: float,
+    stats: dict[str, float | int | str],
+) -> bool:
+    if not _surface_validation_enabled():
+        return True
+    t_validate = time.perf_counter()
+    surface_ok = _native_surface_area_matches(
+        mesh,
+        geoms,
+        height=height,
+        scale_factor=scale_factor,
+    )
+    stats["surface_validation_seconds"] = float(stats["surface_validation_seconds"]) + (
+        time.perf_counter() - t_validate
+    )
+    stats["native_surface_checked"] = int(stats["native_surface_checked"]) + 1
+    if not surface_ok:
+        stats["native_surface_rejects"] = int(stats["native_surface_rejects"]) + 1
+    return surface_ok
+
+
+def _fallback_key(
+    key: tuple[int, int, int],
+    geoms,
+    *,
+    height: float,
+    z_bot: float,
+    scale_factor: float,
+    slot_names,
+    meshes_by_slot: dict[str, dict[str, Any]],
+    extrude_cache,
+    stats: dict[str, float | int | str],
+    reason: str = "unknown",
+    native_module=None,
+    path_cache: dict[int, tuple[Any, list[list[tuple[float, float]]]]] | None = None,
+    input_path_count: int | None = None,
+) -> None:
+    t0 = time.perf_counter()
+    ch = key[0]
+    slot_name = slot_names[ch]
+    _ensure_slot(meshes_by_slot, slot_name, ch)
+    if reason == "empty_native_mesh" and _try_native_merged_fallback(
+        key=key,
+        geoms=geoms,
+        height=height,
+        z_bot=z_bot,
+        scale_factor=scale_factor,
+        slot_names=slot_names,
+        meshes_by_slot=meshes_by_slot,
+        extrude_cache=extrude_cache,
+        stats=stats,
+        native_module=native_module,
+        path_cache=path_cache,
+        input_path_count=input_path_count,
+    ):
+        stats["fallback_seconds"] = float(stats["fallback_seconds"]) + (time.perf_counter() - t0)
+        return
+    meshes_by_slot[slot_name]["meshes"].extend(
+        _fallback_extrude_group(
+            geoms,
+            height=height,
+            z_bot=z_bot,
+            scale_factor=scale_factor,
+            extrude_cache=extrude_cache,
+        )
+    )
+    stats["fallback_groups"] = int(stats["fallback_groups"]) + 1
+    _increment_fallback_reason(stats, reason)
+    stats["fallback_seconds"] = float(stats["fallback_seconds"]) + (time.perf_counter() - t0)
+
+
+def _try_native_merged_fallback(
+    *,
+    key: tuple[int, int, int],
+    geoms,
+    height: float,
+    z_bot: float,
+    scale_factor: float,
+    slot_names,
+    meshes_by_slot: dict[str, dict[str, Any]],
+    extrude_cache,
+    stats: dict[str, float | int | str],
+    native_module,
+    path_cache: dict[int, tuple[Any, list[list[tuple[float, float]]]]] | None,
+    input_path_count: int | None,
+) -> bool:
+    merge_run_groups = getattr(native_module, "merge_run_groups", None)
+    if not callable(merge_run_groups):
+        return False
+
+    topology_path_count, hole_count = _fallback_group_topology(geoms)
+    path_count = int(input_path_count) if input_path_count is not None else topology_path_count
+    hole_ratio = float(hole_count) / max(float(path_count), 1.0)
+    if (
+        path_count < NATIVE_MERGED_FALLBACK_MIN_PATHS
+        or hole_ratio > NATIVE_MERGED_FALLBACK_MAX_HOLE_RATIO
+    ):
+        stats["native_merged_fallback_skipped_groups"] = int(
+            stats.get("native_merged_fallback_skipped_groups", 0) or 0
+        ) + 1
+        return False
+
+    paths = []
+    for geom in geoms:
+        paths.extend(_geometry_to_paths_cached(geom, path_cache, stats))
+    if not paths:
+        return False
+
+    try:
+        merged_groups = merge_run_groups(
+            [paths],
+            close_delta_mm=NATIVE_CLOSE_DELTA_MM,
+            scale=NATIVE_COORD_SCALE,
+        )
+    except Exception as exc:
+        stats["native_merged_fallback_error"] = type(exc).__name__
+        return False
+
+    merged_group = merged_groups[0] if merged_groups else []
+    polygons = [
+        polygon
+        for polygon in (_polygon_from_native_rings(group) for group in (merged_group or []) if group)
+        if polygon is not None and not polygon.is_empty
+    ]
+    if not polygons:
+        return False
+
+    merged_geom = polygons[0] if len(polygons) == 1 else MultiPolygon(polygons)
+    ch = key[0]
+    slot_name = slot_names[ch]
+    _ensure_slot(meshes_by_slot, slot_name, ch)
+    meshes_by_slot[slot_name]["meshes"].extend(
+        VectorProcessor._extrude_geometry(
+            merged_geom,
+            height=height,
+            z_offset=z_bot,
+            scale=scale_factor,
+            extrude_cache=extrude_cache,
+        )
+    )
+    stats["fallback_groups"] = int(stats["fallback_groups"]) + 1
+    _increment_fallback_reason(stats, "native_merged_empty_native_mesh")
+    stats["native_merged_fallback_groups"] = int(
+        stats.get("native_merged_fallback_groups", 0) or 0
+    ) + 1
+    stats["native_merged_fallback_polygons"] = int(
+        stats.get("native_merged_fallback_polygons", 0) or 0
+    ) + len(polygons)
+    stats["native_merged_fallback_input_paths"] = int(
+        stats.get("native_merged_fallback_input_paths", 0) or 0
+    ) + len(paths)
+    stats["native_merged_fallback_input_holes"] = int(
+        stats.get("native_merged_fallback_input_holes", 0) or 0
+    ) + hole_count
+    return True
+
+
+def _ensure_slot(meshes_by_slot: dict[str, dict[str, Any]], slot_name: str, mat_id: int) -> None:
+    if slot_name not in meshes_by_slot:
+        meshes_by_slot[slot_name] = {"meshes": [], "mat_id": mat_id}
+
+
+def _iter_polygons(geom) -> Iterable[Polygon]:
+    if geom is None or geom.is_empty:
+        return
+    if geom.geom_type == "Polygon":
+        yield geom
+    elif geom.geom_type == "MultiPolygon":
+        for poly in geom.geoms:
+            if not poly.is_empty:
+                yield poly
+    elif hasattr(geom, "geoms"):
+        for part in geom.geoms:
+            yield from _iter_polygons(part)
+
+
+def _ring(coords) -> list[tuple[float, float]]:
+    try:
+        points = [(float(point[0]), float(point[1])) for point in coords]
+    except (TypeError, IndexError, ValueError):
+        return []
+    if len(points) < 3:
+        return []
+    if len(points) > 1 and points[0] == points[-1]:
+        points.pop()
+    return points if len(points) >= 3 else []
+
+
+def _geometry_to_paths(geom) -> list[list[tuple[float, float]]]:
+    paths = []
+    for poly in _iter_polygons(geom):
+        try:
+            poly = orient(poly, sign=1.0)
+        except Exception:
+            pass
+        exterior = _ring(poly.exterior.coords)
+        if exterior:
+            paths.append(exterior)
+        for interior in poly.interiors:
+            hole = _ring(interior.coords)
+            if hole:
+                paths.append(hole)
+    return paths
+
+
+def _fallback_group_topology(geoms) -> tuple[int, int]:
+    path_count = 0
+    hole_count = 0
+    for geom in geoms:
+        for poly in _iter_polygons(geom):
+            holes = len(poly.interiors)
+            hole_count += holes
+            path_count += 1 + holes
+    return path_count, hole_count
+
+
+def _geometry_to_paths_cached(
+    geom,
+    path_cache: dict[int, tuple[Any, list[list[tuple[float, float]]]]] | None,
+    stats: dict[str, float | int | str],
+) -> list[list[tuple[float, float]]]:
+    if path_cache is None:
+        return _geometry_to_paths(geom)
+    key = id(geom)
+    cached = path_cache.get(key)
+    if cached is not None and cached[0] is geom:
+        stats["native_path_cache_hits"] = int(stats["native_path_cache_hits"]) + 1
+        return cached[1]
+    paths = _geometry_to_paths(geom)
+    path_cache[key] = (geom, paths)
+    stats["native_path_cache_misses"] = int(stats["native_path_cache_misses"]) + 1
+    return paths
+
+
+def _native_mesh_arrays(native_mesh) -> tuple[np.ndarray, np.ndarray] | None:
+    try:
+        vertices, faces = native_mesh
+    except (TypeError, ValueError):
+        return None
+    try:
+        if len(vertices) == 0 or len(faces) == 0:
+            return None
+    except TypeError:
+        return None
+    verts = np.asarray(vertices, dtype=np.float64)
+    fac = np.asarray(faces, dtype=np.int64)
+    if verts.ndim != 2 or verts.shape[1] != 3 or fac.ndim != 2 or fac.shape[1] != 3:
+        return None
+    if not np.all(np.isfinite(verts)):
+        return None
+    if len(verts) == 0 or len(fac) == 0:
+        return None
+    if np.any(fac < 0) or np.any(fac >= len(verts)):
+        return None
+    return verts, fac
+
+
+def _mesh_from_arrays(mesh_arrays: tuple[np.ndarray, np.ndarray]) -> trimesh.Trimesh | None:
+    verts, fac = mesh_arrays
+    if len(verts) == 0 or len(fac) == 0:
+        return None
+    return trimesh.Trimesh(vertices=verts, faces=fac, process=False)
+
+
+def _mesh_from_native(native_mesh) -> trimesh.Trimesh | None:
+    mesh_arrays = _native_mesh_arrays(native_mesh)
+    if mesh_arrays is None:
+        return None
+    return _mesh_from_arrays(mesh_arrays)
+
+
+def _append_native_buffer(
+    meshes_by_slot: dict[str, dict[str, Any]],
+    slot_name: str,
+    mat_id: int,
+    mesh_arrays: tuple[np.ndarray, np.ndarray],
+) -> None:
+    _ensure_slot(meshes_by_slot, slot_name, mat_id)
+    buffers = meshes_by_slot[slot_name].setdefault("_native_buffers", [])
+    buffers.append(mesh_arrays)
+
+
+def _coalesced_mesh_from_buffers(
+    buffers: list[tuple[np.ndarray, np.ndarray]],
+) -> trimesh.Trimesh | None:
+    if not buffers:
+        return None
+    if len(buffers) == 1:
+        return _mesh_from_arrays(buffers[0])
+
+    vertices = []
+    faces = []
+    vertex_offset = 0
+    for verts, fac in buffers:
+        if len(verts) == 0 or len(fac) == 0:
+            continue
+        vertices.append(verts)
+        faces.append(fac + vertex_offset)
+        vertex_offset += len(verts)
+
+    if not vertices or not faces:
+        return None
+    return _mesh_from_arrays((np.vstack(vertices), np.vstack(faces)))
+
+
+def _flush_native_buffers(
+    meshes_by_slot: dict[str, dict[str, Any]],
+    stats: dict[str, float | int | str],
+) -> None:
+    t0 = time.perf_counter()
+    for slot_data in meshes_by_slot.values():
+        buffers = slot_data.pop("_native_buffers", [])
+        if not buffers:
+            continue
+        mesh = _coalesced_mesh_from_buffers(buffers)
+        if mesh is None:
+            continue
+        slot_data["meshes"].append(mesh)
+        stats["native_coalesced_slots"] = int(stats["native_coalesced_slots"]) + 1
+        stats["native_coalesced_meshes"] = int(stats["native_coalesced_meshes"]) + len(buffers)
+        stats["native_output_meshes"] = int(stats["native_output_meshes"]) + 1
+    stats["mesh_convert_seconds"] = float(stats["mesh_convert_seconds"]) + (
+        time.perf_counter() - t0
+    )
+
+
+def _native_mesh_rejection_reason(native_mesh) -> str:
+    try:
+        vertices, faces = native_mesh
+    except (TypeError, ValueError):
+        return "native_invalid_meshes"
+    try:
+        if len(vertices) == 0 or len(faces) == 0:
+            return "native_empty_meshes"
+    except TypeError:
+        return "native_invalid_meshes"
+    return "native_invalid_meshes"
+
+
+def _fallback_reason_for_native_rejection(counter_name: str) -> str:
+    if counter_name == "native_empty_meshes":
+        return "empty_native_mesh"
+    return "invalid_native_mesh"
+
+
+def _increment_fallback_reason(stats: dict[str, float | int | str], reason: str) -> None:
+    safe_reason = str(reason or "unknown").strip().lower().replace("-", "_").replace(" ", "_")
+    key = f"fallback_reason_{safe_reason or 'unknown'}"
+    stats[key] = int(stats.get(key, 0) or 0) + 1
+
+
+def _surface_validation_enabled() -> bool:
+    return str(os.environ.get("LUMINA_VECTOR_NATIVE_MESH_VALIDATE_SURFACE", "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _surface_area_rel_tolerance() -> float:
+    raw = os.environ.get("LUMINA_VECTOR_NATIVE_MESH_SURFACE_REL_TOL")
+    if raw is None:
+        return NATIVE_SURFACE_AREA_REL_TOL
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return NATIVE_SURFACE_AREA_REL_TOL
+
+
+def _native_surface_area_matches(
+    mesh: trimesh.Trimesh,
+    geoms,
+    *,
+    height: float,
+    scale_factor: float,
+) -> bool:
+    expected_area = _expected_extruded_surface_area(
+        geoms,
+        height=height,
+        scale_factor=scale_factor,
+    )
+    if expected_area <= NATIVE_SURFACE_AREA_ABS_TOL_MM2:
+        return True
+    delta = abs(float(mesh.area) - expected_area)
+    if delta <= NATIVE_SURFACE_AREA_ABS_TOL_MM2:
+        return True
+    return delta / expected_area <= _surface_area_rel_tolerance()
+
+
+def _expected_extruded_surface_area(geoms, *, height: float, scale_factor: float) -> float:
+    merged = _merged_reference_geometry(geoms)
+    if merged is None or merged.is_empty:
+        return 0.0
+    area_mm2 = abs(float(merged.area)) * float(scale_factor) * float(scale_factor)
+    perimeter_mm = float(merged.length) * float(scale_factor)
+    return (2.0 * area_mm2) + (perimeter_mm * float(height))
+
+
+def _merged_reference_geometry(geoms):
+    if not geoms:
+        return None
+    if len(geoms) > 1:
+        snapped = []
+        for geom in geoms:
+            if geom is not None and not geom.is_empty:
+                snapped_geom = set_precision(geom, grid_size=0.001)
+                if snapped_geom is not None and not snapped_geom.is_empty:
+                    snapped.append(snapped_geom)
+        if not snapped:
+            return None
+        try:
+            unioned = _union_run_group_geometries(snapped)
+            merged = VectorProcessor._normalize_contours(unioned, close_delta_mm=NATIVE_CLOSE_DELTA_MM)
+            if merged is None or merged.is_empty:
+                merged = unioned
+            return merged
+        except Exception:
+            return unary_union(snapped)
+    return geoms[0]
+
+
+def _fallback_extrude_group(geoms, *, height: float, z_bot: float, scale_factor: float, extrude_cache):
+    merged = _merged_reference_geometry(geoms)
+    if merged is None or (isinstance(merged, GeometryCollection) and merged.is_empty):
+        return []
+    return VectorProcessor._extrude_geometry(
+        merged,
+        height=height,
+        z_offset=z_bot,
+        scale=scale_factor,
+        extrude_cache=extrude_cache,
+    )

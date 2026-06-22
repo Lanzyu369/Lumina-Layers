@@ -6,9 +6,10 @@ Usage:
 
 Steps:
     1. Build frontend (VITE_API_BASE_URL=http://127.0.0.1:8000/api)
-    2. Build backend (PyInstaller -> lumina-backend.exe)
-    3. Copy artifacts to electron/resources/
-    4. Build Electron installer (electron-builder -> NSIS Setup.exe)
+    2. Build backend native extensions
+    3. Build backend (PyInstaller -> lumina-backend.exe)
+    4. Copy artifacts to electron/resources/
+    5. Build Electron installer (electron-builder -> NSIS Setup.exe)
 """
 
 import argparse
@@ -26,6 +27,7 @@ BACKEND_RES_DIR = RESOURCES_DIR / "backend"
 APP_DIST_RES_DIR = RESOURCES_DIR / "app" / "dist"
 MATERIALS_RES_DIR = RESOURCES_DIR / "materials"
 PYINSTALLER_DIST = ROOT / "dist"
+NATIVE_VECTOR_MESH_MARKER = "native-vector-mesh.enabled"
 
 
 def run(cmd, cwd=None, env_extra=None):
@@ -34,6 +36,37 @@ def run(cmd, cwd=None, env_extra=None):
         env.update(env_extra)
     print(f"  > {cmd}")
     subprocess.check_call(cmd, shell=True, cwd=cwd, env=env)
+
+
+def native_extension_outputs():
+    return [
+        path for path in ROOT.glob("clipper2_batch*")
+        if path.is_file() and path.suffix in {".so", ".pyd", ".dll", ".dylib"}
+    ]
+
+
+def remove_native_extension_outputs():
+    for path in native_extension_outputs():
+        path.unlink()
+
+
+def build_native_extensions_optional() -> bool:
+    """Build optional native acceleration without blocking desktop packaging."""
+
+    remove_native_extension_outputs()
+    try:
+        run(f"{sys.executable} scripts/build_native_extensions.py", cwd=str(ROOT))
+    except subprocess.CalledProcessError as exc:
+        print(
+            "WARNING: Optional native vector mesh build failed; "
+            f"continuing with Python fallback. Exit code: {exc.returncode}",
+        )
+        return False
+
+    if not native_extension_outputs():
+        print("WARNING: Native vector mesh build produced no extension; using Python fallback.")
+        return False
+    return True
 
 
 def parse_args():
@@ -67,11 +100,14 @@ def main():
     )
 
     # ── Step 2: Build backend ──
-    print("\n[2/4] Building backend (PyInstaller)...")
+    print("\n[2/5] Building optional backend native extensions...")
+    native_vector_mesh_enabled = build_native_extensions_optional()
+
+    print("\n[3/5] Building backend (PyInstaller)...")
     run("pyinstaller lumina_studio.spec", cwd=str(ROOT))
 
     # ── Step 3: Copy artifacts ──
-    print("\n[3/4] Copying artifacts to electron/resources/...")
+    print("\n[4/5] Copying artifacts to electron/resources/...")
 
     backend_exe = PYINSTALLER_DIST / "lumina-backend.exe"
     if not backend_exe.exists():
@@ -79,6 +115,13 @@ def main():
         sys.exit(1)
     shutil.copy2(backend_exe, BACKEND_RES_DIR / "lumina-backend.exe")
     print(f"  Copied: {backend_exe} -> {BACKEND_RES_DIR / 'lumina-backend.exe'}")
+    native_marker = BACKEND_RES_DIR / NATIVE_VECTOR_MESH_MARKER
+    if native_vector_mesh_enabled:
+        native_marker.write_text("1\n", encoding="utf-8")
+        print(f"  Enabled native vector mesh marker: {native_marker}")
+    elif native_marker.exists():
+        native_marker.unlink()
+        print(f"  Removed stale native vector mesh marker: {native_marker}")
 
     frontend_dist = FRONTEND_DIR / "dist"
     if not frontend_dist.exists():
@@ -102,7 +145,7 @@ def main():
         print(f"  Removed stale seed: {target_seed_path}")
 
     # ── Step 4: Build Electron installer ──
-    print("\n[4/4] Building Electron installer (electron-builder)...")
+    print("\n[5/5] Building Electron installer (electron-builder)...")
     if not (ELECTRON_DIR / "node_modules").exists():
         print("  Installing Electron dependencies...")
         run("pnpm install", cwd=str(ELECTRON_DIR))

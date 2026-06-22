@@ -214,6 +214,47 @@ def _require_preview_cache_for_generate(
     return cache, None
 
 
+def _resolve_reusable_preview_glb_path(
+    *,
+    cache: dict,
+    request: ConvertGenerateRequest,
+    sid: str,
+    registry: FileRegistry,
+    reuse_preview_analysis: bool,
+) -> str | None:
+    """Return a ready preview GLB path when generate can reuse preview analysis.
+
+    仅在预览分析参数已确认可复用、GLB 文件仍由同一 session 注册且高精度
+    预览开关一致时，才把现有预览 GLB 传给 worker。
+    """
+    if not reuse_preview_analysis:
+        return None
+
+    preview_high_precision = bool(cache.get("high_precision_3d_preview", False))
+    if preview_high_precision is not bool(request.high_precision_3d_preview):
+        return None
+
+    glb_url = cache.get("glb_url")
+    if not isinstance(glb_url, str) or not glb_url.strip():
+        return None
+    url_path = glb_url.split("?", 1)[0].rstrip("/")
+    file_id = url_path.rsplit("/", 1)[-1] if "/api/files/" in url_path else ""
+    if not file_id:
+        return None
+
+    entry = registry.get_entry(file_id)
+    if entry is None or entry.get("session_id") != sid:
+        return None
+
+    resolved = registry.resolve(file_id)
+    if resolved is None:
+        return None
+    preview_glb_path, _filename = resolved
+    if not os.path.exists(preview_glb_path):
+        return None
+    return preview_glb_path
+
+
 def _cache_field_path_or_tempfile(
     *,
     cache: dict,
@@ -279,6 +320,174 @@ def _require_loadable_material_archive_cache_path(
         ) from exc
 
     return path
+
+
+_MISSING = object()
+_PREVIEW_ANALYSIS_ARRAY_FIELDS = {"matched_rgb", "mask_solid", "material_matrix"}
+
+
+def _cache_has_preview_analysis_fields(
+    cache: dict,
+    cache_ref: dict | None,
+) -> bool:
+    """Return whether cache can provide the arrays needed to skip S02."""
+
+    for field_name in _PREVIEW_ANALYSIS_ARRAY_FIELDS:
+        if cache_ref is not None:
+            path = get_preview_cache_field_path(cache_ref, field_name)
+            if not path or not os.path.exists(path):
+                return False
+        elif cache.get(field_name) is None:
+            return False
+    return True
+
+
+def _enum_value(value: object) -> object:
+    return getattr(value, "value", value)
+
+
+def _nullable_float_equal(left: object, right: object) -> bool:
+    if left is None or right is None:
+        return left is None and right is None
+    try:
+        return math.isclose(float(left), float(right), rel_tol=0.0, abs_tol=1e-9)
+    except (TypeError, ValueError):
+        return False
+
+
+def _preview_analysis_param_matches(
+    cache: dict,
+    key: str,
+    expected: object,
+    *,
+    kind: str,
+) -> bool:
+    value = cache.get(key, _MISSING)
+    if value is _MISSING:
+        return False
+    if kind == "float":
+        return _nullable_float_equal(value, expected)
+    if kind == "int":
+        try:
+            return int(value) == int(expected)
+        except (TypeError, ValueError):
+            return False
+    if kind == "bool":
+        return bool(value) is bool(expected)
+    if kind == "enum":
+        return str(_enum_value(value)) == str(_enum_value(expected))
+    return value == expected
+
+
+def _resolve_optional_preview_default_match(
+    cache: dict,
+    key: str,
+    request_value: object,
+    preview_request_value: object,
+    *,
+    kind: str,
+) -> tuple[object, str]:
+    """Use preview-derived defaults only when both requests omitted the option."""
+
+    if request_value is not None:
+        return request_value, kind
+    if preview_request_value is None:
+        cached_value = cache.get(key, _MISSING)
+        if cached_value is not _MISSING:
+            return cached_value, kind
+    return request_value, "raw"
+
+
+def _can_reuse_preview_analysis(
+    *,
+    cache: dict,
+    cache_ref: dict | None,
+    request: ConvertGenerateRequest,
+    core_modeling_mode: CoreModelingMode,
+    session_material_source: str,
+    replacement_regions: list[dict] | None,
+    recipe_overrides: list[dict] | None,
+    free_color_set: set[str] | list[str] | None,
+    preview_color_layers: object = _MISSING,
+    preview_layer_height_mm: object = _MISSING,
+) -> tuple[bool, str]:
+    """Decide whether generate can skip S02 and load preview analysis arrays.
+
+    只在普通 LUT + raster 默认路径启用。任一分析参数不一致，或遇到
+    会重写颜色/高度/几何语义的高级功能，就回退到完整图像处理。
+    """
+
+    if session_material_source != "lut":
+        return False, "material_source_not_lut"
+    if core_modeling_mode not in {
+        CoreModelingMode.HIGH_FIDELITY,
+        CoreModelingMode.PIXEL,
+    }:
+        return False, "modeling_mode_not_raster"
+    if not _cache_has_preview_analysis_fields(cache, cache_ref):
+        return False, "missing_preview_analysis_fields"
+    if replacement_regions:
+        return False, "replacement_regions_present"
+    if recipe_overrides:
+        return False, "recipe_overrides_present"
+    if free_color_set:
+        return False, "free_color_set_present"
+    if request.enable_relief:
+        return False, "relief_enabled"
+    if request.enable_cloisonne:
+        return False, "cloisonne_enabled"
+    if request.enable_fridge_magnet:
+        return False, "fridge_magnet_enabled"
+    if request.enable_outline:
+        return False, "outline_enabled"
+
+    color_layers_expected, color_layers_kind = _resolve_optional_preview_default_match(
+        cache,
+        "color_layers",
+        request.color_layers,
+        preview_color_layers,
+        kind="int",
+    )
+    layer_height_expected, layer_height_kind = _resolve_optional_preview_default_match(
+        cache,
+        "layer_height_mm",
+        request.layer_height_mm,
+        preview_layer_height_mm,
+        kind="float",
+    )
+
+    checks = (
+        ("target_width_mm", request.target_width_mm, "float"),
+        ("color_mode", request.color_mode, "enum"),
+        ("modeling_mode", core_modeling_mode, "enum"),
+        ("color_layers", color_layers_expected, color_layers_kind),
+        ("layer_height_mm", layer_height_expected, layer_height_kind),
+        ("quantize_colors", request.quantize_colors, "int"),
+        ("enable_cleanup", request.enable_cleanup, "bool"),
+        ("hue_weight", request.hue_weight, "float"),
+        ("chroma_gate", request.chroma_gate, "float"),
+        ("use_lut_constrained", request.use_lut_constrained, "bool"),
+        ("auto_dynamic_range", request.auto_dynamic_range, "bool"),
+        ("model_enable", request.model_enable, "bool"),
+        ("model_only", request.model_only, "bool"),
+        ("model_threshold", request.model_threshold, "float"),
+        ("model_margin", request.model_margin, "float"),
+        ("svg_pixels_per_mm", request.svg_pixels_per_mm, "float"),
+        ("material_source", session_material_source, "raw"),
+    )
+    for key, expected, kind in checks:
+        if kind == "raw":
+            if cache.get(key, _MISSING) != expected:
+                return False, f"param_mismatch:{key}"
+            continue
+        if not _preview_analysis_param_matches(
+            cache,
+            key,
+            expected,
+            kind=kind,
+        ):
+            return False, f"param_mismatch:{key}"
+    return True, "params_match"
 
 
 def _cache_field_array(
@@ -908,6 +1117,7 @@ async def convert_generate(
     # Color-card mode: generate SVG from cached palette, swap image_path,
     # and force VECTOR mode so the existing vector branch produces the 3MF.
     # 色卡模式：从缓存调色板生成 SVG，替换 image_path 并强制走矢量分支。
+    generated_color_card_svg = False
     if core_modeling_mode == CoreModelingMode.COLOR_CARD:
         color_palette = cache.get("color_card_source_palette") or cache.get(
             "color_palette",
@@ -925,6 +1135,16 @@ async def convert_generate(
         store.register_temp_file(body.session_id, svg_path)
         image_path = svg_path
         core_modeling_mode = CoreModelingMode.VECTOR
+        generated_color_card_svg = True
+
+    vector_parse_clip_cache_path: str | None = None
+    if core_modeling_mode == CoreModelingMode.VECTOR and not generated_color_card_svg:
+        candidate_vector_cache_path = cache.get("vector_parse_clip_cache_path")
+        if (
+            isinstance(candidate_vector_cache_path, str)
+            and os.path.exists(candidate_vector_cache_path)
+        ):
+            vector_parse_clip_cache_path = candidate_vector_cache_path
 
     # Resolve height_mode for relief branching
     # 解析 height_mode 用于浮雕分支选择
@@ -960,8 +1180,21 @@ async def convert_generate(
     matched_rgb_path: str | None = None
     mask_solid_path: str | None = None
     material_matrix_path: str | None = None
+    reuse_preview_analysis, reuse_preview_analysis_reason = _can_reuse_preview_analysis(
+        cache=cache,
+        cache_ref=cache_ref,
+        request=request,
+        core_modeling_mode=core_modeling_mode,
+        session_material_source=session_material_source,
+        replacement_regions=replacement_regions,
+        recipe_overrides=recipe_overrides,
+        free_color_set=free_color_set,
+        preview_color_layers=session_data.get("color_layers", _MISSING),
+        preview_layer_height_mm=session_data.get("layer_height_mm", _MISSING),
+    )
     should_forward_cached_analysis = (
-        request.use_cached_matched_rgb
+        reuse_preview_analysis
+        or request.use_cached_matched_rgb
         or session_material_source == "material_archive"
     )
     require_cached_material_analysis = session_material_source == "material_archive"
@@ -973,6 +1206,8 @@ async def convert_generate(
             "event": "converter_generate_cached_input_state",
             "use_cached_matched_rgb": request.use_cached_matched_rgb,
             "has_replacement_regions": bool(replacement_regions),
+            "reuse_preview_analysis": reuse_preview_analysis,
+            "reuse_preview_analysis_reason": reuse_preview_analysis_reason,
         },
     )
     if should_forward_cached_analysis:
@@ -1045,6 +1280,20 @@ async def convert_generate(
                     material_matrix_path,
                     "material_matrix",
                 )
+
+    if reuse_preview_analysis and not (
+        matched_rgb_path and mask_solid_path and material_matrix_path
+    ):
+        reuse_preview_analysis = False
+        reuse_preview_analysis_reason = "analysis_paths_unavailable"
+
+    preview_glb_path = _resolve_reusable_preview_glb_path(
+        cache=cache,
+        request=request,
+        sid=body.session_id,
+        registry=registry,
+        reuse_preview_analysis=reuse_preview_analysis,
+    )
 
     override_material_matrix_path, recipe_override_masks_path = _prepare_recipe_override_worker_inputs(
         cache=cache,
@@ -1135,6 +1384,9 @@ async def convert_generate(
         "matched_rgb_path": matched_rgb_path,
         "mask_solid_path": mask_solid_path,
         "material_matrix_path": material_matrix_path,
+        "reuse_preview_analysis": reuse_preview_analysis,
+        "preview_glb_path": preview_glb_path,
+        "vector_parse_clip_cache_path": vector_parse_clip_cache_path,
         "printer_id": request.printer_id,
         "slicer": request.slicer,
         "nozzle_size": request.nozzle_size,

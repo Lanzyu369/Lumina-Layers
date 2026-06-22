@@ -257,24 +257,68 @@ def externalize_preview_cache(
         dict[str, Any]: Artifact manifest with array field references and
         non-array metadata. 包含数组字段引用和非数组元数据的工件 manifest。
     """
+    ref, artifact_paths = externalize_preview_cache_to_artifacts(
+        cache,
+        root_dir=root_dir,
+    )
+    for path in artifact_paths:
+        store.register_temp_file(session_id, path)
+    return ref
+
+
+def externalize_preview_cache_to_artifacts(
+    cache: dict[str, Any],
+    *,
+    root_dir: str | os.PathLike[str] | None = None,
+) -> tuple[dict[str, Any], list[str]]:
+    """Write NumPy cache fields to artifact files without session mutation.
+
+    不修改 SessionStore，仅把 NumPy 缓存字段写入 artifact 文件。
+
+    Args:
+        cache (dict[str, Any]): Preview cache payload. 预览缓存负载。
+        root_dir (str | os.PathLike[str] | None): Optional artifact directory.
+            可选的工件目录。
+
+    Returns:
+        tuple[dict[str, Any], list[str]]: Artifact manifest plus unique
+        paths that the caller must register or clean up.
+        artifact manifest 与唯一文件路径列表；调用方负责注册或清理。
+    """
     fields: dict[str, dict[str, Any]] = {}
     metadata: dict[str, Any] = {}
+    artifact_paths: list[str] = []
     artifact_dir = Path(root_dir) if root_dir is not None else Path(TEMP_DIR)
+    field_refs_by_array_id: dict[int, dict[str, Any]] = {}
 
-    for key, value in cache.items():
-        if isinstance(value, np.ndarray):
-            path, field_ref = _write_new_array_field(key, value, artifact_dir)
-            store.register_temp_file(session_id, path)
-            fields[key] = field_ref
-        else:
-            metadata[key] = deepcopy(value)
+    try:
+        for key, value in cache.items():
+            if isinstance(value, np.ndarray):
+                array_id = id(value)
+                existing_ref = field_refs_by_array_id.get(array_id)
+                if existing_ref is not None:
+                    fields[key] = dict(existing_ref)
+                    continue
+                path, field_ref = _write_new_array_field(key, value, artifact_dir)
+                artifact_paths.append(path)
+                fields[key] = field_ref
+                field_refs_by_array_id[array_id] = dict(field_ref)
+            else:
+                metadata[key] = deepcopy(value)
+    except Exception:
+        for path in set(artifact_paths):
+            _delete_if_exists(path)
+        raise
 
-    return {
-        "schema": ARTIFACT_SCHEMA,
-        "manifest_revision": 1,
-        "fields": fields,
-        "metadata": metadata,
-    }
+    return (
+        {
+            "schema": ARTIFACT_SCHEMA,
+            "manifest_revision": 1,
+            "fields": fields,
+            "metadata": metadata,
+        },
+        artifact_paths,
+    )
 
 
 def hydrate_preview_cache(
@@ -609,11 +653,12 @@ def _write_new_array_field(
         with os.fdopen(fd, "wb") as handle:
             np.save(handle, array, allow_pickle=False)
         os.replace(tmp_path, final_path)
+        field_ref = _build_field_ref(final_path, array, revision=revision)
     except BaseException:
         _delete_if_exists(tmp_path)
         _delete_if_exists(final_path)
         raise
-    return final_path, _build_field_ref(final_path, array, revision=revision)
+    return final_path, field_ref
 
 
 def _build_field_ref(

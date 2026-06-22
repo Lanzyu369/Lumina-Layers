@@ -1543,6 +1543,45 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
             "debug_data": None,
             "quantized_image": raster_cache["quantized_image"],
         }
+        try:
+            from core.vector_engine import (
+                _VECTOR_PARSE_CLIP_CACHE,
+                _serialize_vector_parse_clip_cache,
+                _vector_parse_clip_cache_key,
+            )
+
+            cache_key = _vector_parse_clip_cache_key(
+                image_path,
+                target_width_mm=target_width_mm,
+                sampling_precision=vec_processor.sampling_precision,
+                expand_stroke_to_fill=bool(
+                    getattr(vec_processor, "expand_stroke_to_fill", False)
+                ),
+                gradient_color_bands=getattr(vec_processor, "gradient_color_bands", None),
+            )
+            cache_entry = _VECTOR_PARSE_CLIP_CACHE.get(cache_key)
+            if cache_entry is None:
+                cache_entry = {
+                    "shape_data": analysis.shape_data,
+                    "clipped_shapes": analysis.clipped_shapes,
+                    "silhouette": analysis.silhouette,
+                    "image_vectorizer_bounds": analysis.image_vectorizer_bounds,
+                    "scale_factor": analysis.scale_factor,
+                    "bbox": analysis.bbox,
+                }
+            cache["vector_parse_clip_cache_blob"] = _serialize_vector_parse_clip_cache(
+                cache_key,
+                cache_entry,
+            )
+        except COORDINATOR_HANDLED_ERRORS as exc:
+            log.debug(
+                "Vector parse/clip cache artifact build skipped",
+                extra={
+                    "event": "vector_parse_clip_cache_artifact_skipped",
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                },
+            )
         cache["color_palette"] = extract_color_palette(cache)
 
         ctx["matched_rgb"] = raster_cache["matched_rgb"]
@@ -1731,6 +1770,9 @@ def _run_vector_branch(ctx: dict) -> dict:
         vec_processor.auto_dynamic_range = bool(ctx.get("auto_dynamic_range", False))
         if hasattr(vec_processor, "backing_color_id"):
             vec_processor.backing_color_id = backing_channel_idx
+        parse_clip_cache_path = ctx.get("vector_parse_clip_cache_path")
+        if parse_clip_cache_path:
+            vec_processor._parse_clip_cache_path = str(parse_clip_cache_path)
 
         # 1. Unified analysis: parse \u2192 clip \u2192 match (shared by preview + mesh)
         _report_progress(ctx, 0.05, "SVG \u89e3\u6790\u4e0e\u51e0\u4f55\u5904\u7406\u4e2d... | Parsing & extruding SVG...")
