@@ -485,6 +485,46 @@ describe("BugReportModal", () => {
     );
   });
 
+  it("redacts non-error HTTP status text from the submitted manual fallback", async () => {
+    vi.mocked(collectBugReportContext).mockReturnValueOnce(createBugReportContext({
+      recent_client_logs: [
+        {
+          timestamp: "2026-06-21T10:00:00.000Z",
+          method: "error",
+          label: "Request failed with status code 302",
+          elapsed_ms: null,
+          scope: "api",
+          details: {
+            status_code: 302,
+            url: "/api/files/output-model",
+            error_message: "Request failed with status code 302",
+          },
+        },
+      ],
+    }));
+    vi.mocked(submitBugReport).mockResolvedValueOnce({
+      ticket_id: "redirect",
+      emailed: false,
+      email_status: "failed",
+      relay_available: false,
+      dump_path: "feedback/redirect.json",
+    });
+
+    render(<BugReportModal open onClose={() => {}} />);
+    fireEvent.change(screen.getByLabelText("问题描述"), {
+      target: { value: "Preview redirected after generate." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+    const fallbackText = await screen.findByTestId(
+      "bug-report-submitted-fallback-text",
+    );
+    const text = fallbackText.textContent ?? "";
+    expect(text).not.toContain("Request failed with status code 302");
+    expect(text).not.toMatch(/\b302\b/);
+    expect(text).toContain("Request failed. Please try again.");
+  });
+
   it("keeps manual fallback actions visible when official relay fails", async () => {
     vi.mocked(submitBugReport).mockResolvedValueOnce({
       ticket_id: "relayfail",

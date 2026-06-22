@@ -19,8 +19,8 @@ function shouldHideRawBatchItemError(error: string): boolean {
     /\\\\[A-Za-z0-9_.-]+\\[^\s]+/.test(trimmed) ||
     /\bPermission denied\b/i.test(trimmed) ||
     /\bTraceback\b/i.test(trimmed) ||
-    /\bRequest failed with status code\s+[45]\d{2}\b/i.test(trimmed) ||
-    /^(?:HTTP\s*)?(?:error\s*)?[45]\d{2}\b/i.test(trimmed)
+    /\bRequest failed with status code\s+\d{3}\b/i.test(trimmed) ||
+    /^(?:HTTP\s*)?(?:error\s*)?\d{3}\b/i.test(trimmed)
   );
 }
 
