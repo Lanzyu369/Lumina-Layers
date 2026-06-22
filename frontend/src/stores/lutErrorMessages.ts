@@ -31,13 +31,18 @@ function readDetail(data: unknown): string | null {
   return typeof message === "string" && message.trim() ? message.trim() : null;
 }
 
+const MISSING_LUT_PUBLIC_DETAIL = "Selected LUT was not found or is unavailable.";
+
 function isMissingLutDetail(error: unknown): boolean {
   const response = readResponse(error);
   if (!response || response.status !== 404) {
     return false;
   }
   const detail = readDetail(response.data);
-  return typeof detail === "string" && /^LUT not found:/i.test(detail);
+  return (
+    typeof detail === "string" &&
+    (/^LUT not found:/i.test(detail) || detail === MISSING_LUT_PUBLIC_DETAIL)
+  );
 }
 
 export function lutErrorToVisibleMessage(
