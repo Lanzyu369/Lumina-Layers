@@ -1383,7 +1383,7 @@ class TestNativeBundleValidation:
         assert response.status_code == 422
         assert "native" in str(response.json()["detail"]).lower()
 
-    def test_preview_returns_json_safe_validation_error_for_invalid_native_bundle_contract(self) -> None:
+    def test_preview_returns_public_error_for_invalid_native_bundle_contract(self) -> None:
         buf = _make_test_image_buf()
 
         response = client.post(
@@ -1397,9 +1397,13 @@ class TestNativeBundleValidation:
         )
 
         assert response.status_code == 422
-        detail = response.json()["detail"]
-        assert isinstance(detail, list)
-        assert "vendor" in str(detail).lower()
+        assert response.json()["detail"] == (
+            "Choose a valid LUT or complete native material source, then try again."
+        )
+        assert "native_bundle requires" not in response.text
+        assert '"input"' not in response.text
+        assert '"ctx"' not in response.text
+        assert "pydantic.dev" not in response.text
 
 
 class TestNativeBundleDbNamesParsing:
