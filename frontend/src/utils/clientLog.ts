@@ -26,6 +26,7 @@ export interface ClientLogEntry {
 
 const CLIENT_LOG_BUFFER_LIMIT = 500;
 const CLIENT_LOG_EXPORT_LIMIT = 500;
+const CLIENT_LOG_RELAY_FAILURE_BACKOFF_MS = 10_000;
 const CLIENT_LOG_MAX_DEPTH = 4;
 const CLIENT_LOG_MAX_ARRAY_ITEMS = 20;
 const CLIENT_LOG_MAX_OBJECT_KEYS = 24;
@@ -92,6 +93,8 @@ let _pendingFlushTimer: number | null = null;
 let _sessionStorageDisabled = false;
 /** Have we attempted to load persisted logs during this session yet? */
 let _persistedLogsLoaded = false;
+/** Wall-clock deadline before retrying the optional backend relay. */
+let _clientLogRelayBackoffUntilMs = 0;
 
 function _shouldSkipForDedupe(key: string, dedupeMs?: number): boolean {
   if (!dedupeMs || dedupeMs <= 0) {
@@ -116,6 +119,77 @@ function truncateString(value: string, limit: number = CLIENT_LOG_MAX_STRING_LEN
 function roundNumber(value: number, digits: number = 2): number {
   const factor = 10 ** digits;
   return Math.round(value * factor) / factor;
+}
+
+function clientLogNowMs(): number {
+  return Date.now();
+}
+
+function markClientLogRelayUnavailable(): void {
+  _clientLogRelayBackoffUntilMs =
+    clientLogNowMs() + CLIENT_LOG_RELAY_FAILURE_BACKOFF_MS;
+}
+
+function canAttemptClientLogRelay(): boolean {
+  return clientLogNowMs() >= _clientLogRelayBackoffUntilMs;
+}
+
+function isFailedClientLogRelayResponse(response: unknown): boolean {
+  return Boolean(
+    response &&
+      typeof response === "object" &&
+      "ok" in response &&
+      (response as { ok?: unknown }).ok === false,
+  );
+}
+
+function readableConsoleDetail(value: unknown): string | null {
+  if (typeof value === "string" && value.trim()) {
+    return truncateString(value.trim(), 240);
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  if (typeof value === "boolean") {
+    return String(value);
+  }
+  return null;
+}
+
+function buildClientLogConsoleSummary(details: unknown): string | null {
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return null;
+  }
+  const record = details as Record<string, unknown>;
+  const parts: string[] = [];
+  const method = readableConsoleDetail(record.method);
+  const url = readableConsoleDetail(record.url);
+  if (method && url) {
+    parts.push(`${method.toUpperCase()} ${url}`);
+  } else if (url) {
+    parts.push(url);
+  }
+
+  const statusCode = readableConsoleDetail(record.status_code);
+  if (statusCode) {
+    parts.push(`HTTP ${statusCode}`);
+  }
+
+  const errorMessage =
+    readableConsoleDetail(record.error_message) ??
+    readableConsoleDetail(record.message) ??
+    readableConsoleDetail(record.reason) ??
+    readableConsoleDetail(record.error);
+  if (errorMessage) {
+    parts.push(errorMessage);
+  }
+
+  const requestId = readableConsoleDetail(record.request_id);
+  if (requestId) {
+    parts.push(`request_id=${requestId}`);
+  }
+
+  return parts.length > 0 ? parts.join(" - ") : null;
 }
 
 function normalizeClientLogKey(key: string): string {
@@ -481,6 +555,7 @@ export function _clearClientLogBufferForTests(): void {
   _pendingFlushCount = 0;
   _sessionStorageDisabled = false;
   _persistedLogsLoaded = false;
+  _clientLogRelayBackoffUntilMs = 0;
 }
 
 export function postClientLog(
@@ -518,18 +593,21 @@ export function postClientLog(
   const message = elapsedMs != null
     ? `${label} (+${elapsedMs.toFixed(0)}ms)`
     : label;
+  const consoleSummary = buildClientLogConsoleSummary(sanitizedDetails);
+  const consoleMessage = consoleSummary == null
+    ? message
+    : `${message} - ${consoleSummary}`;
   const logger = options.method === "error"
     ? console.error
     : options.method === "warn"
       ? console.warn
       : console.log;
-  if (sanitizedDetails != null) {
-    logger(`[LUMINA] ${message}`, sanitizedDetails);
-  } else {
-    logger(`[LUMINA] ${message}`);
-  }
+  logger(`[LUMINA] ${consoleMessage}`);
 
   if (typeof fetch !== "function") {
+    return;
+  }
+  if (!canAttemptClientLogRelay()) {
     return;
   }
 
@@ -557,11 +635,22 @@ export function postClientLog(
       maybePromise &&
       typeof (maybePromise as Promise<unknown>).catch === "function"
     ) {
-      void (maybePromise as Promise<unknown>).catch(() => {});
+      void (maybePromise as Promise<unknown>)
+        .then((response) => {
+          if (isFailedClientLogRelayResponse(response)) {
+            markClientLogRelayUnavailable();
+          }
+        })
+        .catch(() => {
+          markClientLogRelayUnavailable();
+        });
+    } else if (isFailedClientLogRelayResponse(maybePromise)) {
+      markClientLogRelayUnavailable();
     }
   } catch {
     // Client-log relay is diagnostic only and must never replace the
     // user-facing error that triggered it.
+    markClientLogRelayUnavailable();
   }
 }
 
