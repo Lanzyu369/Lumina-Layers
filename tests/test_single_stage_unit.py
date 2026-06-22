@@ -5907,9 +5907,10 @@ def test_generate_material_swatch_hides_export_failure_detail(
     assert record.recipe_count == 1
 
 
-def test_generate_material_swatch_rolls_back_download_when_preview_registration_fails(
+def test_generate_material_swatch_preserves_download_when_preview_registration_fails(
     monkeypatch,
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     app = create_app()
     registry = _SwatchRegisterBytesFailingRegistry()
@@ -5941,30 +5942,136 @@ def test_generate_material_swatch_rolls_back_download_when_preview_registration_
         _fake_generate_material_recipe_swatch,
     )
 
-    response = client.post(
-        "/api/extractor/generate-material-swatch",
-        json={
-            "recipes": [
-                {
-                    "directory_names": ["pla-basic"],
-                    "result_hex": "#FFFFFF",
-                    "layer_height_mm": 0.08,
-                    "substrate": "white",
-                }
-            ],
-        },
-    )
+    target_logger = logging.getLogger("lumina.api.routers.single_stage")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.WARNING, logger=target_logger.name)
+    try:
+        response = client.post(
+            "/api/extractor/generate-material-swatch",
+            json={
+                "recipes": [
+                    {
+                        "directory_names": ["pla-basic"],
+                        "result_hex": "#FFFFFF",
+                        "layer_height_mm": 0.08,
+                        "substrate": "white",
+                    }
+                ],
+            },
+        )
+    finally:
+        target_logger.removeHandler(caplog.handler)
 
-    assert response.status_code == 500
-    assert response.json()["detail"] == (
-        "Material swatch file registration failed. "
-        "Check the server log for details."
-    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["download_url"].startswith("/api/files/")
+    assert body["preview_url"] is None
+    download_response = client.get(body["download_url"])
+    assert download_response.status_code == 200
+    assert download_response.content == b"3mf"
     assert "registry byte storage unavailable" not in response.text
     assert registry.path_file_id is not None
-    assert registry.get_entry(registry.path_file_id) is None
-    assert registry.resolve(registry.path_file_id) is None
-    assert not swatch_path.exists()
+    assert registry.get_entry(registry.path_file_id) is not None
+    assert registry.resolve(registry.path_file_id) is not None
+    assert swatch_path.exists()
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None)
+        == "extractor_material_swatch_registration_failed"
+    ]
+    assert len(records) == 1
+    record = records[0]
+    assert record.levelno == logging.WARNING
+    assert record.error_type == "RuntimeError"
+    assert record.error_message == "registry byte storage unavailable"
+    assert record.registration_stage == "preview"
+    assert record.download_id == body["download_url"].rsplit("/", 1)[-1]
+    assert record.recipe_count == 1
+
+
+def test_generate_material_swatch_preserves_download_when_preview_encoding_fails(
+    monkeypatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    app = create_app()
+    registry = FileRegistry()
+    app.dependency_overrides[get_file_registry] = lambda: registry
+    client = TestClient(app, raise_server_exceptions=False)
+    swatch_path = tmp_path / "material-swatch.3mf"
+    swatch_path.write_bytes(b"3mf")
+
+    monkeypatch.setattr(
+        "api.routers.single_stage._load_palette_or_raise",
+        lambda directory_names: [
+            SimpleNamespace(
+                directory_name="pla-basic",
+                name="PLA Basic",
+                estimated_rgb=np.array([255, 255, 255], dtype=np.uint8),
+            )
+        ],
+    )
+
+    def _fake_generate_material_recipe_swatch(*, recipes, **kwargs):
+        return (
+            str(swatch_path),
+            Image.new("RGB", (1, 1), (255, 255, 255)),
+            "ok",
+        )
+
+    monkeypatch.setattr(
+        "core.material_recipe_swatch.generate_material_recipe_swatch",
+        _fake_generate_material_recipe_swatch,
+    )
+
+    def _fail_png_encoding(_image):
+        raise OSError("material preview encoder unavailable")
+    monkeypatch.setattr(file_bridge, "pil_to_png_bytes", _fail_png_encoding)
+
+    target_logger = logging.getLogger("lumina.api.routers.single_stage")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.WARNING, logger=target_logger.name)
+    try:
+        response = client.post(
+            "/api/extractor/generate-material-swatch",
+            json={
+                "recipes": [
+                    {
+                        "directory_names": ["pla-basic"],
+                        "result_hex": "#FFFFFF",
+                        "layer_height_mm": 0.08,
+                        "substrate": "white",
+                    }
+                ],
+            },
+        )
+    finally:
+        target_logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["download_url"].startswith("/api/files/")
+    assert body["preview_url"] is None
+    download_response = client.get(body["download_url"])
+    assert download_response.status_code == 200
+    assert download_response.content == b"3mf"
+    assert "material preview encoder unavailable" not in response.text
+    assert swatch_path.exists()
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None)
+        == "extractor_material_swatch_registration_failed"
+    ]
+    assert len(records) == 1
+    record = records[0]
+    assert record.levelno == logging.WARNING
+    assert record.error_type == "OSError"
+    assert record.error_message == "material preview encoder unavailable"
+    assert record.registration_stage == "preview"
+    assert record.download_id == body["download_url"].rsplit("/", 1)[-1]
+    assert record.recipe_count == 1
 
 
 def test_gradient_card_material_import_route_imports_multiple_archives(

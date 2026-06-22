@@ -1750,6 +1750,9 @@ class _MockFiveColorEngine:
     def get_color_names(self) -> list[str]:
         return ["White", "Red", "Yellow", "Blue", "Black"]
 
+    def accepted_selection_lengths(self) -> tuple[int, ...]:
+        return (5,)
+
 
 def _mock_load_five_color_engine(lut_name: str) -> tuple[_MockFiveColorEngine, str]:
     return _MockFiveColorEngine(), lut_name

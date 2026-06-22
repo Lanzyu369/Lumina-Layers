@@ -2130,29 +2130,16 @@ async def generate_material_swatch(
         else f"material-recipe-swatch:{unique_suffix}"
     )
     preview_url: str | None = None
-    registered_file_ids: list[str | None] = []
     try:
         download_id = registry.register_path(
             sid,
             output_path,
             ttl_seconds=MATERIAL_SWATCH_EXPORT_TTL_SECONDS,
         )
-        registered_file_ids.append(download_id)
-
-        if legend_img is not None:
-            preview_bytes = pil_to_png_bytes(legend_img)
-            preview_id = registry.register_bytes(
-                sid,
-                preview_bytes,
-                "material_swatch_legend.png",
-                ttl_seconds=MATERIAL_SWATCH_EXPORT_TTL_SECONDS,
-            )
-            registered_file_ids.append(preview_id)
-            preview_url = f"/api/files/{preview_id}"
     except (OSError, RuntimeError, ValueError, TypeError) as exc:
         _rollback_swatch_registration(
             registry,
-            file_ids=registered_file_ids,
+            file_ids=[],
             generated_path=output_path,
         )
         _raise_file_registration_error(
@@ -2161,6 +2148,31 @@ async def generate_material_swatch(
             event="extractor_material_swatch_registration_failed",
             session_id=sid,
         )
+
+    if legend_img is not None:
+        try:
+            preview_bytes = pil_to_png_bytes(legend_img)
+            preview_id = registry.register_bytes(
+                sid,
+                preview_bytes,
+                "material_swatch_legend.png",
+                ttl_seconds=MATERIAL_SWATCH_EXPORT_TTL_SECONDS,
+            )
+            preview_url = f"/api/files/{preview_id}"
+        except (OSError, RuntimeError, ValueError, TypeError) as exc:
+            log.warning(
+                "Material swatch preview registration failed",
+                extra={
+                    "event": "extractor_material_swatch_registration_failed",
+                    "context": "Material swatch preview registration",
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                    "registration_stage": "preview",
+                    "download_id": download_id,
+                    "recipe_count": len(items),
+                    "session_id": sid,
+                },
+            )
 
     log.info(
         "Material recipe swatch generated",
