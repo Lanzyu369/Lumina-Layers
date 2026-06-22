@@ -12,6 +12,7 @@ Instead we inspect function metadata and verify picklability.
 """
 
 import inspect
+import logging
 import os
 import pickle
 import types
@@ -421,6 +422,50 @@ def test_worker_generate_preview_accepts_numpy_preview_image(tmp_path) -> None:
     finally:
         os.unlink(result["preview_png_path"])
         os.unlink(result["cache_data_path"])
+
+
+def test_worker_generate_preview_no_image_warning_has_actionable_fields(caplog) -> None:
+    status_msg = "synthetic no preview image"
+    target_logger = logging.getLogger("lumina.api.workers.converter_workers")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.WARNING, logger="lumina.api.workers.converter_workers")
+
+    try:
+        with patch(
+            "core.converter.generate_preview_cached",
+            return_value=(None, None, status_msg),
+        ):
+            with pytest.raises(RuntimeError, match=status_msg):
+                worker_generate_preview(
+                    image_path="image.png",
+                    lut_path="lut.npy",
+                    target_width_mm=60.0,
+                    color_mode="4-Color (RYBW)",
+                    modeling_mode="high-fidelity",
+                    color_layers=10,
+                    layer_height_mm=0.08,
+                    quantize_colors=16,
+                    enable_cleanup=True,
+                    enable_outline=True,
+                    outline_width=2.5,
+                )
+    finally:
+        target_logger.removeHandler(caplog.handler)
+
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "worker_preview_no_image"
+    ]
+    assert len(records) == 1
+
+    record = records[0]
+    assert record.error_type == "PreviewImageMissing"
+    assert record.error_message == status_msg
+
+    from scripts.log_quality_check import _has_actionable_warning_error_field
+
+    assert _has_actionable_warning_error_field(record.__dict__) is True
 
 
 def test_worker_generate_large_format_svg_native_uses_sanitized_tile_prefix_in_zip_entries(tmp_path) -> None:
