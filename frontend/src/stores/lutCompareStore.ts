@@ -1,8 +1,8 @@
 import { create } from "zustand";
 import type { CompareResponse, LutInfo, LutInfoResponse } from "../api/types";
-import { apiErrorToVisibleMessage } from "../api/client";
 import { compareLuts, fetchLutInfo } from "../api/lut";
 import { fetchLutList as apiFetchLutList } from "../api/converter";
+import { lutErrorToVisibleMessage } from "./lutErrorMessages";
 
 export interface LutCompareState {
   lutList: LutInfo[];
@@ -52,7 +52,7 @@ export const useLutCompareStore = create<LutCompareState & LutCompareActions>(
       } catch (err) {
         set({
           lutListLoading: false,
-          error: apiErrorToVisibleMessage(err),
+          error: lutErrorToVisibleMessage(err),
         });
       }
     },
@@ -85,7 +85,7 @@ export const useLutCompareStore = create<LutCompareState & LutCompareActions>(
         }
         set({
           lutAInfoLoading: false,
-          error: apiErrorToVisibleMessage(err),
+          error: lutErrorToVisibleMessage(err),
         });
       }
     },
@@ -118,7 +118,7 @@ export const useLutCompareStore = create<LutCompareState & LutCompareActions>(
         }
         set({
           lutBInfoLoading: false,
-          error: apiErrorToVisibleMessage(err),
+          error: lutErrorToVisibleMessage(err),
         });
       }
     },
@@ -148,7 +148,7 @@ export const useLutCompareStore = create<LutCompareState & LutCompareActions>(
       } catch (err) {
         set({
           comparing: false,
-          error: apiErrorToVisibleMessage(err),
+          error: lutErrorToVisibleMessage(err),
         });
       }
     },
