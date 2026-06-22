@@ -1473,9 +1473,15 @@ async def extractor_delete_gradient_card_material(
     try:
         result = delete_saved_stage_a_material_archive(directory_name=directory_name)
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except (ValueError, TypeError, OSError, RuntimeError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (TypeError, OSError, RuntimeError) as exc:
+        _raise_internal_route_error(
+            exc,
+            context="Gradient card material delete",
+            event="extractor_delete_gradient_card_material_failed",
+        )
 
     evict_material_cache(result.directory_name)
     log.info(
@@ -1622,9 +1628,15 @@ async def extractor_export_gradient_card_materials(
             directory_names=payload.directory_names,
         )
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except (ValueError, TypeError, OSError, RuntimeError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (TypeError, OSError, RuntimeError) as exc:
+        _raise_internal_route_error(
+            exc,
+            context="Gradient card material export",
+            event="extractor_export_gradient_card_materials_failed",
+        )
 
     persistent_registry_session = f"material-export:{uuid.uuid4().hex}"
     archive_registered = False
