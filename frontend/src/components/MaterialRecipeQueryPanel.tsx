@@ -47,8 +47,40 @@ const toHex = (rgb: [number, number, number]) =>
 const toRgbCss = (rgb: [number, number, number]) =>
   `rgb(${clampChannel(rgb[0])}, ${clampChannel(rgb[1])}, ${clampChannel(rgb[2])})`;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasMaterialRecipeValidationPath(error: unknown): boolean {
+  const response = isRecord(error) && isRecord(error.response) ? error.response : null;
+  const data = isRecord(response?.data) ? response.data : null;
+  const detail = data?.detail;
+  if (!Array.isArray(detail)) {
+    return false;
+  }
+  return detail.some((item) => {
+    const loc = isRecord(item) ? item.loc : null;
+    if (!Array.isArray(loc)) {
+      return false;
+    }
+    const parts = loc.map((part) => String(part));
+    return (
+      parts.length === 2 &&
+        parts[0] === "body" &&
+        parts[1] === "directory_names"
+    ) || (
+      parts.length === 4 &&
+        parts[0] === "body" &&
+        parts[1] === "recipes" &&
+        parts[3] === "directory_names"
+    );
+  });
+}
+
 const resolveMaterialRecipeError = (err: unknown, fallback: string): string =>
-  apiErrorToVisibleMessage(err, fallback);
+  hasMaterialRecipeValidationPath(err)
+    ? fallback
+    : apiErrorToVisibleMessage(err, fallback);
 
 interface PaletteEntry {
   directoryName: string;

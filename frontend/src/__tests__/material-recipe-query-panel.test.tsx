@@ -45,6 +45,18 @@ const buildLibraryResponse = (count: number) => ({
   })),
 });
 
+function apiValidationFailure(loc: Array<string | number>, msg: string) {
+  return Object.assign(new Error("Request failed with status code 422"), {
+    response: {
+      status: 422,
+      data: {
+        detail: [{ loc, msg }],
+      },
+      headers: {},
+    },
+  });
+}
+
 describe("MaterialRecipeQueryPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -266,6 +278,56 @@ describe("MaterialRecipeQueryPanel", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("hides backend validation paths from the preview API", async () => {
+    vi.mocked(listGradientCardMaterials).mockResolvedValue(buildLibraryResponse(1));
+    vi.mocked(previewMaterialRecipe).mockRejectedValue(
+      apiValidationFailure(["body", "directory_names"], "Field required"),
+    );
+
+    render(<MaterialRecipeQueryPanel />);
+    await waitFor(() => {
+      expect(screen.getAllByTestId("material-recipe-palette-item").length).toBe(1);
+    });
+    fireEvent.click(screen.getAllByTestId("material-recipe-palette-item")[0]);
+    fireEvent.click(screen.getByRole("button", { name: /计算混色|Compute color/ }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/配方计算失败|Recipe computation failed/),
+      ).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/body\.directory_names/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/directory_names/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Request failed with status code 422"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps non-path material validation details from the preview API", async () => {
+    vi.mocked(listGradientCardMaterials).mockResolvedValue(buildLibraryResponse(1));
+    vi.mocked(previewMaterialRecipe).mockRejectedValue(
+      apiValidationFailure(
+        ["body", "layer_height_mm"],
+        "Layer height must be 0.04, 0.08, or 0.1 mm",
+      ),
+    );
+
+    render(<MaterialRecipeQueryPanel />);
+    await waitFor(() => {
+      expect(screen.getAllByTestId("material-recipe-palette-item").length).toBe(1);
+    });
+    fireEvent.click(screen.getAllByTestId("material-recipe-palette-item")[0]);
+    fireEvent.click(screen.getByRole("button", { name: /计算混色|Compute color/ }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          "body.layer_height_mm: Layer height must be 0.04, 0.08, or 0.1 mm",
+        ),
+      ).toBeInTheDocument();
+    });
+  });
+
   it("renders a readable swatch error when generation rejects with a generic server error", async () => {
     vi.mocked(listGradientCardMaterials).mockResolvedValue(buildLibraryResponse(1));
     vi.mocked(previewMaterialRecipe).mockResolvedValue({
@@ -303,6 +365,51 @@ describe("MaterialRecipeQueryPanel", () => {
     });
     expect(
       screen.queryByText("Request failed with status code 500"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("hides backend validation paths from swatch generation errors", async () => {
+    vi.mocked(listGradientCardMaterials).mockResolvedValue(buildLibraryResponse(1));
+    vi.mocked(previewMaterialRecipe).mockResolvedValue({
+      status: "ok",
+      layer_count: 1,
+      layer_height_mm: 0.08,
+      substrate: "white",
+      predicted_rgb: [180, 60, 90],
+      predicted_hex: "#B43C5A",
+      layers: [],
+    });
+    vi.mocked(generateMaterialRecipeSwatch).mockRejectedValue(
+      apiValidationFailure(
+        ["body", "recipes", 0, "directory_names"],
+        "Recipe must include material directories",
+      ),
+    );
+
+    render(<MaterialRecipeQueryPanel />);
+    await waitFor(() => {
+      expect(screen.getAllByTestId("material-recipe-palette-item").length).toBe(1);
+    });
+    fireEvent.click(screen.getAllByTestId("material-recipe-palette-item")[0]);
+    fireEvent.click(screen.getByRole("button", { name: /计算混色|Compute color/ }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /添加到队列|Add to queue/ }),
+      ).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /添加到队列|Add to queue/ }));
+    fireEvent.click(screen.getByRole("button", { name: /生成验证色块|Generate swatch/ }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/色块生成失败|Swatch generation failed/),
+      ).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/body\.recipes\.0\.directory_names/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/directory_names/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Request failed with status code 422"),
     ).not.toBeInTheDocument();
   });
 
