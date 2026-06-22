@@ -60,6 +60,7 @@ import {
   apiErrorToVisibleMessage,
   downloadResourceBlob,
 } from "../../api/client";
+import type { ApiRequestOptions } from "../../api/client";
 import { closeSession as apiCloseSession } from "../../api/session";
 import type { LutColorEntry, LutInfo } from "../../api/types";
 import {
@@ -1740,9 +1741,9 @@ export interface ConverterActions {
 
   // API 操作
   uploadLut: (file: File) => Promise<void>;
-  fetchLutList: () => Promise<void>;
+  fetchLutList: (options?: ApiRequestOptions) => Promise<void>;
   fetchLutCatalog: () => Promise<void>;
-  fetchLegacyCatalog: () => Promise<void>;
+  fetchLegacyCatalog: (options?: ApiRequestOptions) => Promise<void>;
   setLegacyManufacturer: (name: string) => void;
   fetchLutColors: (lutName: string) => Promise<void>;
 
@@ -4911,10 +4912,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       }
     },
 
-    fetchLutList: async () => {
+    fetchLutList: async (options = {}) => {
       set({ lutListLoading: true });
       try {
-        const response = await apiFetchLutList();
+        const response = await apiFetchLutList(options);
         const luts = response.luts.map(normalizeLutColorMode);
         const updates: Partial<ConverterState> = {
           lutList: luts.map((l) => l.name),
@@ -5014,10 +5015,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       }
     },
 
-    fetchLegacyCatalog: async () => {
+    fetchLegacyCatalog: async (options = {}) => {
       set({ legacyCatalogLoading: true, error: null });
       try {
-        const response = await apiFetchLutDetailsCatalog();
+        const response = await apiFetchLutDetailsCatalog(options);
         const groups = normalizeLutGroups(response.groups ?? []);
         const currentState = _get();
         const index = buildLutCatalogIndex(groups);

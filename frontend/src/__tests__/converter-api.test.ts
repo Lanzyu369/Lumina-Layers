@@ -617,6 +617,19 @@ describe("fetchLutList", () => {
     expect(result.luts[0].color_mode).toBe(ColorMode.FOUR_COLOR_RYBW);
   });
 
+  it("can suppress client logs for background LUT list probes", async () => {
+    const mockData = { luts: [] };
+    mockGet.mockResolvedValueOnce({ data: mockData });
+
+    const result = await fetchLutList({ suppressClientLog: true });
+
+    expect(mockGet).toHaveBeenCalledWith("/lut/list", {
+      timeout: 3_600_000,
+      suppressClientLog: true,
+    });
+    expect(result).toEqual(mockData);
+  });
+
   it("propagates network errors", async () => {
     mockGet.mockRejectedValueOnce(new Error("Network Error"));
     await expect(fetchLutList()).rejects.toThrow("Network Error");

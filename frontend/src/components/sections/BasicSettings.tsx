@@ -65,6 +65,8 @@ const THICKNESS_SLIDER_MIN_MM = 0.24;
 const THICKNESS_SLIDER_MAX_MM = 3.44;
 const GENERIC_HTTP_STATUS_ERROR_RE =
   /(?:Request failed with status code|HTTP(?:\s+error)?|status(?:\s+code)?)\s*\d{3}\b/i;
+const STARTUP_LUT_RETRY_DELAY_MS = 5_000;
+const STARTUP_LUT_ATTEMPT_LIMIT = 2;
 
 function hasApiErrorResponse(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && "response" in error);
@@ -97,8 +99,6 @@ function resolveRecipeImportError(
   }
   return t("recipe_import_error_unreadable");
 }
-const STARTUP_LUT_RETRY_DELAY_MS = 5_000;
-
 const LEGACY_BUCKET_I18N_KEY: Record<ColorModeBucket, string> = {
   BW: "basic_lut_color_mode_bw",
   "4-Color": "basic_lut_color_mode_4color",
@@ -300,8 +300,10 @@ export default function BasicSettings() {
   const [uploaderExpanded, setUploaderExpanded] = useState(true);
   const startupRetryMountedRef = useRef(false);
   const legacyCatalogRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const legacyCatalogStartupAttemptRef = useRef(0);
   const legacyCatalogLoadPendingRef = useRef(false);
   const lutListRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lutListStartupAttemptRef = useRef(0);
   const lutListLoadPendingRef = useRef(false);
 
   // --- Share card import state ---
@@ -406,19 +408,23 @@ export default function BasicSettings() {
   const startLegacyCatalogLoad = useCallback(() => {
     if (legacyCatalogLoadPendingRef.current) return;
     legacyCatalogLoadPendingRef.current = true;
+    legacyCatalogStartupAttemptRef.current += 1;
 
-    void fetchLegacyCatalog()
+    void fetchLegacyCatalog({ suppressClientLog: true })
       .catch(() => undefined)
       .then(() => {
         legacyCatalogLoadPendingRef.current = false;
         if (!startupRetryMountedRef.current) return;
 
         const state = useConverterStore.getState();
+        if (state.source_version !== "legacy" || state.legacyCatalogGroups.length > 0) {
+          legacyCatalogStartupAttemptRef.current = 0;
+          return;
+        }
         if (
-          state.source_version === "legacy" &&
-          state.legacyCatalogGroups.length === 0 &&
           !state.legacyCatalogLoading &&
-          legacyCatalogRetryTimerRef.current === null
+          legacyCatalogRetryTimerRef.current === null &&
+          legacyCatalogStartupAttemptRef.current < STARTUP_LUT_ATTEMPT_LIMIT
         ) {
           legacyCatalogRetryTimerRef.current = setTimeout(() => {
             legacyCatalogRetryTimerRef.current = null;
@@ -431,19 +437,23 @@ export default function BasicSettings() {
   const startLutListLoad = useCallback(() => {
     if (lutListLoadPendingRef.current) return;
     lutListLoadPendingRef.current = true;
+    lutListStartupAttemptRef.current += 1;
 
-    void fetchLutList()
+    void fetchLutList({ suppressClientLog: true })
       .catch(() => undefined)
       .then(() => {
         lutListLoadPendingRef.current = false;
         if (!startupRetryMountedRef.current) return;
 
         const state = useConverterStore.getState();
+        if (state.source_version !== "legacy" || state.lutListFull.length > 0) {
+          lutListStartupAttemptRef.current = 0;
+          return;
+        }
         if (
-          state.source_version === "legacy" &&
-          state.lutListFull.length === 0 &&
           !state.lutListLoading &&
-          lutListRetryTimerRef.current === null
+          lutListRetryTimerRef.current === null &&
+          lutListStartupAttemptRef.current < STARTUP_LUT_ATTEMPT_LIMIT
         ) {
           lutListRetryTimerRef.current = setTimeout(() => {
             lutListRetryTimerRef.current = null;
@@ -456,6 +466,10 @@ export default function BasicSettings() {
   useEffect(() => {
     if (source_version !== "legacy" || legacyCatalogGroups.length > 0) {
       clearLegacyCatalogRetry();
+      legacyCatalogStartupAttemptRef.current = 0;
+      return;
+    }
+    if (legacyCatalogStartupAttemptRef.current >= STARTUP_LUT_ATTEMPT_LIMIT) {
       return;
     }
     if (
@@ -478,6 +492,10 @@ export default function BasicSettings() {
   useEffect(() => {
     if (source_version !== "legacy" || lutListFull.length > 0) {
       clearLutListRetry();
+      lutListStartupAttemptRef.current = 0;
+      return;
+    }
+    if (lutListStartupAttemptRef.current >= STARTUP_LUT_ATTEMPT_LIMIT) {
       return;
     }
     if (

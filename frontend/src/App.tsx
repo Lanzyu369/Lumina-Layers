@@ -313,7 +313,7 @@ function AppContent() {
       if (checking) return;
       checking = true;
       apiClient
-        .get<HealthResponse>("/health")
+        .get<HealthResponse>("/health", { suppressClientLog: true })
         .then((res) => {
           if (!cancelled) {
             setConnected(res.data.status === "ok");

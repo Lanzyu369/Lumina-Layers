@@ -1,4 +1,4 @@
-import apiClient from "./client";
+import apiClient, { type ApiRequestOptions } from "./client";
 import type {
   ConvertPreviewRequest,
   ConvertGenerateRequest,
@@ -134,9 +134,12 @@ export async function convertGeneratePuzzle(
 }
 
 /** 获取可用 LUT 列表 */
-export async function fetchLutList(): Promise<LutListResponse> {
+export async function fetchLutList(
+  options: ApiRequestOptions = {},
+): Promise<LutListResponse> {
   const response = await apiClient.get<LutListResponse>("/lut/list", {
     timeout: 3_600_000,
+    ...(options.suppressClientLog === true ? { suppressClientLog: true } : {}),
   });
   return response.data;
 }
