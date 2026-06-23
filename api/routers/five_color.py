@@ -507,31 +507,16 @@ def generate_swatch(
     )
     preview_url: str | None = None
     preview_id: str | None = None
-    registered_file_ids: list[str | None] = []
-    registration_stage = "download"
     try:
         download_id = registry.register_path(
             sid,
             output_path,
             ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
         )
-        registered_file_ids.append(download_id)
-
-        if legend_img is not None:
-            registration_stage = "preview"
-            preview_bytes = pil_to_png_bytes(legend_img)
-            preview_id = registry.register_bytes(
-                sid,
-                preview_bytes,
-                "swatch_legend.png",
-                ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
-            )
-            registered_file_ids.append(preview_id)
-            preview_url = f"/api/files/{preview_id}"
     except (OSError, RuntimeError, TypeError, ValueError) as exc:
         _rollback_swatch_registration(
             registry,
-            file_ids=registered_file_ids,
+            file_ids=[],
             generated_path=output_path,
         )
         log.error(
@@ -543,13 +528,37 @@ def generate_swatch(
                 "error_message": str(exc),
                 "lut_name": request.lut_name,
                 "recipe_count": len(items),
-                "registration_stage": registration_stage,
+                "registration_stage": "download",
             },
         )
         raise HTTPException(
             status_code=500,
             detail=SWATCH_DOWNLOAD_REGISTRATION_FAILED_DETAIL,
         ) from exc
+
+    if legend_img is not None:
+        try:
+            preview_bytes = pil_to_png_bytes(legend_img)
+            preview_id = registry.register_bytes(
+                sid,
+                preview_bytes,
+                "swatch_legend.png",
+                ttl_seconds=STATELESS_EXPORT_TTL_SECONDS,
+            )
+            preview_url = f"/api/files/{preview_id}"
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            log.warning(
+                "Five-color swatch preview registration failed",
+                extra={
+                    "event": "five_color_generate_swatch_registration_failed",
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                    "lut_name": request.lut_name,
+                    "recipe_count": len(items),
+                    "registration_stage": "preview",
+                    "download_id": download_id,
+                },
+            )
     preview_id_for_log = preview_id if legend_img is not None else None
 
     log.info(
