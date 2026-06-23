@@ -340,7 +340,7 @@ function AppContent() {
   useEffect(() => {
     let cancelled = false;
 
-    getSettings()
+    getSettings({ suppressClientLog: true })
       .then((response) => {
         if (!cancelled && response?.settings) {
           hydrateDeviceSettingsFromBackend(response.settings);

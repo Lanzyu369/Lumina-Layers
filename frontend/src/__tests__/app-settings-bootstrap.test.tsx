@@ -133,13 +133,36 @@ describe("App settings bootstrap", () => {
     render(<App />);
 
     await waitFor(() => {
-      expect(systemApi.getSettings).toHaveBeenCalled();
+      expect(systemApi.getSettings).toHaveBeenCalledWith({
+        suppressClientLog: true,
+      });
       expect(settingsStore.useSettingsStore.getState().printerModel).toBe("bambu-p1s");
       expect(settingsStore.useSettingsStore.getState().slicerSoftware).toBe("BambuStudio");
       expect(settingsStore.useSettingsStore.getState().nozzleSize).toBe("0.2");
       expect(settingsStore.useSettingsStore.getState().deviceProfileId).toBe(
         "BambuStudio:bbl:bambu-lab-p1s:0.2",
       );
+    });
+  });
+
+  it("keeps startup settings hydration failures best-effort and quiet", async () => {
+    const apiClient = (await import("../api/client")).default;
+    vi.mocked(apiClient.get).mockResolvedValueOnce({
+      data: { status: "ok", version: "2.0", uptime_seconds: 100 },
+    });
+
+    const systemApi = await import("../api/system");
+    vi.mocked(systemApi.getSettings).mockRejectedValueOnce(
+      new Error("Request failed with status code 503"),
+    );
+
+    const { default: App } = await import("../App");
+    render(<App />);
+
+    await waitFor(() => {
+      expect(systemApi.getSettings).toHaveBeenCalledWith({
+        suppressClientLog: true,
+      });
     });
   });
 });
