@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import ValidationError
@@ -33,6 +34,9 @@ VECTORIZER_FAILURE_DETAIL = "Vectorization failed. Check server logs for details
 VECTORIZER_OUTPUT_FAILURE_DETAIL = (
     "Vectorization output could not be prepared. Check server logs for details."
 )
+VECTORIZER_PARAMS_JSON_DETAIL = (
+    "Invalid vectorizer parameters JSON. Check the form value and try again."
+)
 _VECTORIZER_BOUNDARY_ERRORS: tuple[type[Exception], ...] = (
     ValueError,
     TypeError,
@@ -41,6 +45,31 @@ _VECTORIZER_BOUNDARY_ERRORS: tuple[type[Exception], ...] = (
     RuntimeError,
 )
 log = get_logger(__name__)
+
+
+def _sanitize_vectorizer_validation_errors(
+    exc: ValidationError,
+) -> list[dict[str, Any]]:
+    sanitized: list[dict[str, Any]] = []
+    for error in exc.errors():
+        detail: dict[str, Any] = {}
+        loc = error.get("loc")
+        if isinstance(loc, (list, tuple)):
+            detail["loc"] = list(loc)
+        message = error.get("msg")
+        if isinstance(message, str):
+            detail["msg"] = message
+        error_type = error.get("type")
+        if isinstance(error_type, str):
+            detail["type"] = error_type
+        if detail:
+            sanitized.append(detail)
+    return sanitized or [
+        {
+            "msg": "Vectorizer parameters are invalid.",
+            "type": "value_error",
+        }
+    ]
 
 
 def _cleanup_vectorize_temp_paths(*paths: str | None) -> None:
@@ -134,14 +163,17 @@ async def vectorize_image(
     try:
         params_dict = json.loads(params)
     except json.JSONDecodeError as e:
-        raise HTTPException(status_code=422, detail=f"Invalid params JSON: {e}")
+        raise HTTPException(status_code=422, detail=VECTORIZER_PARAMS_JSON_DETAIL) from e
     if not isinstance(params_dict, dict):
         raise HTTPException(status_code=422, detail="params must be a JSON object")
 
     try:
         validated = VectorizeParams(**params_dict)
     except ValidationError as e:
-        raise HTTPException(status_code=422, detail=e.errors())
+        raise HTTPException(
+            status_code=422,
+            detail=_sanitize_vectorizer_validation_errors(e),
+        ) from e
     params_clean = validated.model_dump()
 
     image_path: str | None = None
