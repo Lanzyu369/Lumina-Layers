@@ -794,6 +794,46 @@ describe("GradientCardExtractPanel", () => {
     expect(saveError).not.toHaveTextContent("save_mode='override'");
   });
 
+  it("shows a generic save error for unknown backend detail", async () => {
+    const saveMock = vi.mocked(saveGradientCardMaterial);
+    const rawDetail =
+      "Saved material archive is invalid at /Users/min/private/materials/BrandA/private/material.json";
+    const axiosLikeError = new Error("Request failed with status code 422") as Error & {
+      response?: {
+        status: number;
+        data: {
+          detail: string;
+        };
+      };
+    };
+    axiosLikeError.response = {
+      status: 422,
+      data: {
+        detail: rawDetail,
+      },
+    };
+    saveMock.mockRejectedValueOnce(axiosLikeError);
+
+    useSingleStageStore.setState({
+      sessionId: "sess-unknown-save-detail",
+      materialName: "PLA Basic",
+      verificationTargetDirectoryName: "bambu-lab/pla-basic",
+    });
+
+    render(<GradientCardExtractPanel />);
+
+    await act(async () => {
+      await useSingleStageStore.getState().submitSave();
+    });
+
+    const saveError = screen.getByTestId("save-error");
+    expect(saveError).toHaveTextContent(
+      /保存耗材档案失败|Saving the material archive failed/i,
+    );
+    expect(saveError).not.toHaveTextContent(rawDetail);
+    expect(saveError).not.toHaveTextContent("/Users/min/private");
+  });
+
   it("propagates the manual white anchor-corner selection to the extractor API call", async () => {
     const extractMock = vi.mocked(extractGradientCardStageA);
     extractMock.mockResolvedValue({

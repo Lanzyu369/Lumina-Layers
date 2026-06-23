@@ -163,6 +163,9 @@ GRADIENT_CARD_MATERIAL_IMPORT_UNSAFE_PATH_DETAIL = (
 GRADIENT_CARD_MATERIAL_IMPORT_FAILED_DETAIL = (
     "Material import failed. Check the server log for details."
 )
+GRADIENT_CARD_MATERIAL_SAVE_FAILED_DETAIL = (
+    "Gradient card material save failed. Check the server log for details."
+)
 _MATERIAL_LIBRARY_DEFAULT_LOCAL_PORTS = frozenset({8000, 4174, 5174, 5173})
 _MATERIAL_LIBRARY_ALLOWED_LOCAL_PORTS_ENV = (
     "LUMINA_MATERIAL_LIBRARY_ALLOWED_LOCAL_PORTS"
@@ -240,6 +243,48 @@ def _gradient_card_material_import_error_detail(exc: ValueError) -> str | None:
     if message.startswith("Material bundle file is outside material directory:"):
         return GRADIENT_CARD_MATERIAL_IMPORT_UNSAFE_PATH_DETAIL
     return None
+
+
+def _gradient_card_material_save_error_detail(exc: Exception) -> str:
+    message = str(exc).strip()
+    if message == "material_name is required":
+        return message
+    if message == "Existing material archive is not valid UTF-8 JSON":
+        return message
+    if message.startswith(
+        "Cannot merge gradient-card captures from different image sources:"
+    ):
+        return message
+    for prefix in (
+        "Saved material directory not found:",
+        "Saved material archive not found:",
+    ):
+        if message.startswith(prefix):
+            target = message[len(prefix):].strip()
+            if _is_safe_relative_detail_fragment(target):
+                return message
+    return GRADIENT_CARD_MATERIAL_SAVE_FAILED_DETAIL
+
+
+def _raise_gradient_card_material_save_client_error(
+    exc: Exception,
+    *,
+    status_code: int,
+    session_id: str,
+) -> None:
+    detail = _gradient_card_material_save_error_detail(exc)
+    log.warning(
+        "Gradient card material save failed",
+        extra={
+            "event": "extractor_save_gradient_card_material_failed",
+            "context": "Gradient card material save",
+            "status_code": status_code,
+            "error_type": type(exc).__name__,
+            "error_message": str(exc),
+            "session_id": session_id,
+        },
+    )
+    raise HTTPException(status_code=status_code, detail=detail) from exc
 
 
 def get_material_cache_evictor() -> MaterialCacheEvictor:
@@ -1379,7 +1424,11 @@ async def extractor_save_gradient_card_material(
             evict_material_cache=evict_material_cache,
         )
         _discard_material_directory_backup(material_backup)
-        raise HTTPException(status_code=404, detail=str(exc))
+        _raise_gradient_card_material_save_client_error(
+            exc,
+            status_code=404,
+            session_id=session_id,
+        )
     except (ValueError, TypeError) as exc:
         _rollback_existing_material_write(
             directory_name=existing_directory_name,
@@ -1391,7 +1440,11 @@ async def extractor_save_gradient_card_material(
             evict_material_cache=evict_material_cache,
         )
         _discard_material_directory_backup(material_backup)
-        raise HTTPException(status_code=422, detail=str(exc))
+        _raise_gradient_card_material_save_client_error(
+            exc,
+            status_code=422,
+            session_id=session_id,
+        )
     except (OSError, RuntimeError) as exc:
         _rollback_existing_material_write(
             directory_name=existing_directory_name,
@@ -1473,9 +1526,15 @@ async def extractor_delete_gradient_card_material(
     try:
         result = delete_saved_stage_a_material_archive(directory_name=directory_name)
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except (ValueError, TypeError, OSError, RuntimeError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (TypeError, OSError, RuntimeError) as exc:
+        _raise_internal_route_error(
+            exc,
+            context="Gradient card material delete",
+            event="extractor_delete_gradient_card_material_failed",
+        )
 
     evict_material_cache(result.directory_name)
     log.info(
@@ -1622,9 +1681,15 @@ async def extractor_export_gradient_card_materials(
             directory_names=payload.directory_names,
         )
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except (ValueError, TypeError, OSError, RuntimeError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (TypeError, OSError, RuntimeError) as exc:
+        _raise_internal_route_error(
+            exc,
+            context="Gradient card material export",
+            event="extractor_export_gradient_card_materials_failed",
+        )
 
     persistent_registry_session = f"material-export:{uuid.uuid4().hex}"
     archive_registered = False
