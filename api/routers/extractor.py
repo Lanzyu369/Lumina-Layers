@@ -120,6 +120,23 @@ MANUAL_FIX_INVALID_COLOR_DETAIL = (
     "Manual correction color is invalid. Use a valid hex or RGB color."
 )
 MANUAL_FIX_FAILED_DETAIL = "Manual fix failed"
+INVALID_JSON_FORM_DETAIL_TEMPLATE = (
+    "Invalid {field_name} JSON. Check the form value and try again."
+)
+
+
+def _invalid_json_form_detail(field_name: str) -> str:
+    return INVALID_JSON_FORM_DETAIL_TEMPLATE.format(field_name=field_name)
+
+
+def _parse_json_form_value(raw_value: str, *, field_name: str) -> Any:
+    try:
+        return json.loads(raw_value)
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=_invalid_json_form_detail(field_name),
+        ) from exc
 
 
 @dataclass(frozen=True)
@@ -371,19 +388,19 @@ def _parse_colorchecker_reference_form(
             "reference_patches": None,
             "reference_source": None,
         }
-    try:
-        patches = json.loads(reference_patches or "[]")
-    except (json.JSONDecodeError, TypeError) as exc:
-        raise HTTPException(status_code=422, detail=f"Invalid reference_patches JSON: {exc}") from exc
+    patches = _parse_json_form_value(
+        reference_patches or "[]",
+        field_name="reference_patches",
+    )
     if not isinstance(patches, list):
         raise HTTPException(status_code=422, detail="reference_patches must be a JSON list.")
 
     source: dict[str, object] | None = None
     if reference_source and reference_source.strip():
-        try:
-            raw_source = json.loads(reference_source)
-        except (json.JSONDecodeError, TypeError) as exc:
-            raise HTTPException(status_code=422, detail=f"Invalid reference_source JSON: {exc}") from exc
+        raw_source = _parse_json_form_value(
+            reference_source,
+            field_name="reference_source",
+        )
         if not isinstance(raw_source, dict):
             raise HTTPException(status_code=422, detail="reference_source must be a JSON object.")
         source = raw_source
@@ -397,10 +414,10 @@ def _parse_colorchecker_reference_form(
 def _parse_colorchecker_patch_points(raw_patch_points: str | None) -> list[object] | None:
     if raw_patch_points is None:
         return None
-    try:
-        parsed = json.loads(raw_patch_points)
-    except (json.JSONDecodeError, TypeError) as exc:
-        raise HTTPException(status_code=422, detail=f"Invalid patch_points JSON: {exc}") from exc
+    parsed = _parse_json_form_value(
+        raw_patch_points,
+        field_name="patch_points",
+    )
     if parsed is None:
         return None
     if not isinstance(parsed, list):
@@ -869,10 +886,7 @@ async def extractor_colorchecker_warp_preview(
         warp_colorchecker_preview,
     )
 
-    try:
-        points = json.loads(corner_points)
-    except (json.JSONDecodeError, TypeError) as e:
-        raise HTTPException(status_code=422, detail=f"Invalid corner_points JSON: {e}")
+    points = _parse_json_form_value(corner_points, field_name="corner_points")
     if not isinstance(points, list) or len(points) != 4:
         raise HTTPException(
             status_code=422,
@@ -958,10 +972,7 @@ async def extractor_colorchecker_detect_chart(
 
     assist = None
     if assist_point:
-        try:
-            assist = json.loads(assist_point)
-        except (json.JSONDecodeError, TypeError) as e:
-            raise HTTPException(status_code=422, detail=f"Invalid assist_point JSON: {e}")
+        assist = _parse_json_form_value(assist_point, field_name="assist_point")
     reference_kwargs = _parse_colorchecker_reference_form(
         reference_id,
         reference_patches,
@@ -1061,10 +1072,7 @@ async def extractor_colorchecker_calibrate(
         apply_colorchecker_calibration,
     )
 
-    try:
-        corners = json.loads(corner_points)
-    except (json.JSONDecodeError, TypeError) as e:
-        raise HTTPException(status_code=422, detail=f"Invalid corner_points JSON: {e}")
+    corners = _parse_json_form_value(corner_points, field_name="corner_points")
     if not isinstance(corners, list) or len(corners) != 4:
         raise HTTPException(
             status_code=422,
@@ -1433,10 +1441,7 @@ async def extractor_extract(
     从拍摄的标定板图像中提取颜色。
     """
     # Parse corner_points from JSON string
-    try:
-        points_raw = json.loads(corner_points)
-    except (json.JSONDecodeError, TypeError) as e:
-        raise HTTPException(status_code=422, detail=f"Invalid corner_points JSON: {e}")
+    points_raw = _parse_json_form_value(corner_points, field_name="corner_points")
 
     if not isinstance(points_raw, list) or len(points_raw) != 4:
         raise HTTPException(
