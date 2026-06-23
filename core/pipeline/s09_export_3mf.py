@@ -225,7 +225,20 @@ def run(ctx: dict) -> dict:
             _log.debug(f"export_3mf done: {_export_elapsed:.3f}s")
         _log.debug(f"3MF exported with embedded settings: {out_path}")
     except (ValueError, TypeError, RuntimeError, OSError) as e:
-        _log.exception(f"Error exporting 3MF: {e}")
+        _log.exception(
+            "3MF export failed",
+            extra={
+                "event": "s09_export_3mf_failed",
+                "error_type": type(e).__name__,
+                "error_message": str(e),
+                "geometry_count": int(len(scene.geometry)),
+                "color_mode": str(color_mode),
+                "modeling_mode": str(modeling_mode),
+                "printer_id": str(ctx.get("printer_id", "bambu-h2d")),
+                "slicer": str(ctx.get("slicer", "BambuStudio")),
+                "out_path": str(out_path),
+            },
+        )
         ctx["error"] = f"[ERROR] 3MF export failed: {e}"
         return ctx
 

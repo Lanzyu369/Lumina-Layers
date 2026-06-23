@@ -5,6 +5,7 @@ Lumina Studio - 按颜色分组 GLB 预览模型单元测试 (Unit Tests)
 Requirements: 1.1, 1.5
 """
 
+import logging
 import os
 import re
 import sys
@@ -115,6 +116,81 @@ class TestEmptyAndNoneInputs:
         }
         result = generate_segmented_glb(cache, output_path=out_path)
         assert result is None
+
+    def test_export_failure_log_has_actionable_fields(
+        self,
+        out_path: str,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """GLB export exceptions should leave a searchable structured log."""
+
+        def _raise_export_error(self, *args, **kwargs) -> None:
+            raise RuntimeError("glb writer unavailable")
+
+        logger = logging.getLogger("lumina.core.pipeline.s11_glb_preview")
+        logger.addHandler(caplog.handler)
+        caplog.set_level(logging.ERROR, logger="lumina.core.pipeline.s11_glb_preview")
+        monkeypatch.setattr(trimesh.Scene, "export", _raise_export_error)
+
+        try:
+            cache = _make_cache(
+                matched_rgb=np.full((4, 4, 3), [255, 0, 0], dtype=np.uint8),
+                mask_solid=np.ones((4, 4), dtype=bool),
+                target_width_mm=10.0,
+            )
+            result = generate_segmented_glb(cache, output_path=out_path)
+        finally:
+            logger.removeHandler(caplog.handler)
+
+        assert result is None
+
+        records = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "segmented_glb_export_failed"
+        ]
+        assert len(records) == 1
+        record = records[0]
+        assert record.levelno == logging.ERROR
+        assert record.error_type == "RuntimeError"
+        assert record.error_message == "glb writer unavailable"
+        assert record.output_path == out_path
+        assert record.width == 4
+        assert record.height == 4
+        assert record.geometry_count >= 1
+
+    def test_export_failure_log_tolerates_invalid_max_meshes(
+        self,
+        out_path: str,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Logging should not mask the original GLB failure."""
+        logger = logging.getLogger("lumina.core.pipeline.s11_glb_preview")
+        logger.addHandler(caplog.handler)
+        caplog.set_level(logging.ERROR, logger="lumina.core.pipeline.s11_glb_preview")
+
+        try:
+            cache = _make_cache(
+                matched_rgb=np.full((4, 4, 3), [255, 0, 0], dtype=np.uint8),
+                mask_solid=np.ones((4, 4), dtype=bool),
+                target_width_mm=10.0,
+            )
+            result = generate_segmented_glb(cache, output_path=out_path, max_meshes=None)
+        finally:
+            logger.removeHandler(caplog.handler)
+
+        assert result is None
+
+        records = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "segmented_glb_export_failed"
+        ]
+        assert len(records) == 1
+        record = records[0]
+        assert record.error_type == "TypeError"
+        assert record.max_meshes is None
 
 
 # ============================================================================
