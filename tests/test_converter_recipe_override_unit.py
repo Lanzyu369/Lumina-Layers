@@ -286,6 +286,14 @@ def test_apply_recipe_override_redacts_unexpected_file_errors(
     assert private_path not in response.text
     assert "Traceback" not in response.text
 
+    session_data = store.get(session_id)
+    assert session_data is not None
+    assert "recipe_overrides" not in session_data
+    assert "recipe_override_count" not in session_data
+    current_cache = session_data["preview_cache"]
+    assert np.array_equal(current_cache["matched_rgb"], matched_rgb)
+    assert np.array_equal(current_cache["material_matrix"], material_matrix)
+
     records = [
         record
         for record in caplog.records

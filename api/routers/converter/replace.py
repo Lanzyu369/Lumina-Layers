@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from copy import deepcopy
 import os
 import sys
 from typing import NoReturn
@@ -3031,6 +3032,27 @@ def apply_recipe_override(
 ) -> RecipeOverrideApplyResponse:
     """Apply a custom recipe override to the selected regions and update preview cache."""
     session_data = _require_session(store, request.session_id)
+    missing_session_value = object()
+    rollback_snapshot = {
+        key: (
+            deepcopy(session_data[key])
+            if key in session_data
+            else missing_session_value
+        )
+        for key in (
+            "preview_cache",
+            "recipe_overrides",
+            "recipe_override_count",
+        )
+    }
+
+    def restore_session_state() -> None:
+        for key, value in rollback_snapshot.items():
+            if value is missing_session_value:
+                session_data.pop(key, None)
+            else:
+                session_data[key] = deepcopy(value)
+
     cache_context = _preview_cache_transaction(
         request.session_id,
         store,
@@ -3428,8 +3450,6 @@ def apply_recipe_override(
             }
             for region_id, _region_mask in region_mask_items
         )
-        store.put(request.session_id, "recipe_overrides", existing_overrides)
-        store.put(request.session_id, "recipe_override_count", len(existing_overrides))
 
         preview_bytes = _render_styled_preview_bytes(updated_rgb, cache)
         preview_id = registry.register_bytes(
@@ -3454,6 +3474,8 @@ def apply_recipe_override(
                 "color_conf",
             },
         )
+        store.put(request.session_id, "recipe_overrides", existing_overrides)
+        store.put(request.session_id, "recipe_override_count", len(existing_overrides))
 
         # Async GLB rebuild for the newly applied recipe override. Keeps
         # the override response fast; GLB arrives via /glb-status polling.
@@ -3463,12 +3485,14 @@ def apply_recipe_override(
     except HTTPException:
         raise
     except PreviewCacheRevisionConflict as exc:
+        restore_session_state()
         _raise_replace_cache_conflict(
             exc,
             session_id=request.session_id,
             operation="apply_recipe_override",
         )
     except (ValueError, TypeError, OSError, RuntimeError) as exc:
+        restore_session_state()
         log.error(
             "Recipe override apply failed",
             extra={
