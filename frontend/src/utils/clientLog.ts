@@ -285,7 +285,8 @@ function sanitizeClientLogValue(
   const entries = Object.entries(value as Record<string, unknown>);
   const sanitized: Record<string, unknown> = {};
   for (const [rawKey, rawValue] of entries.slice(0, CLIENT_LOG_MAX_OBJECT_KEYS)) {
-    sanitized[truncateString(rawKey, 120)] = sanitizeClientLogValue(
+    const sanitizedKey = truncateString(redactClientLogLocalPathFragments(rawKey), 120);
+    sanitized[sanitizedKey] = sanitizeClientLogValue(
       rawValue,
       depth + 1,
       seen,
