@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
+import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
@@ -200,6 +202,112 @@ def test_apply_recipe_override_endpoint_updates_preview_cache(
 
     file_id = body["preview_url"].split("/")[-1]
     assert registry.resolve(file_id) is not None
+
+
+def test_apply_recipe_override_redacts_unexpected_file_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+) -> None:
+    client, store, registry = _client_with_state()
+    lut_path = tmp_path / "ref.msgpack"
+    lut_path.write_bytes(b"package")
+
+    session_id = store.create()
+    matched_rgb = np.zeros((4, 4, 3), dtype=np.uint8)
+    material_matrix = np.zeros((4, 4, 5), dtype=np.int32)
+    mask = np.zeros((4, 4), dtype=bool)
+    mask[1:3, 1:3] = True
+    preview_cache = {
+        "matched_rgb": matched_rgb.copy(),
+        "material_matrix": material_matrix.copy(),
+        "mask_solid": np.ones((4, 4), dtype=bool),
+        "color_layers": 5,
+        "layer_height_mm": 0.08,
+    }
+    store.put(session_id, "lut_path", str(lut_path))
+    store.put(session_id, "preview_cache", preview_cache)
+    store.put(session_id, "selected_region_mask", mask)
+    store.put(session_id, "selected_region_id", "region-1")
+    store.put(session_id, "selected_region_masks", {"region-1": mask})
+
+    monkeypatch.setattr(
+        "api.routers.converter.replace.LUTManager.load_lut_with_metadata",
+        lambda _path: (
+            np.zeros((0, 3), dtype=np.uint8),
+            None,
+            LUTMetadata(max_color_layers=5, layer_height_mm=0.08, base_channel_idx=0),
+        ),
+    )
+    monkeypatch.setattr(
+        "api.routers.converter.replace.predict_recipe_color",
+        lambda metadata, recipe, layer_height_mm, color_layers, layer_order: {
+            "rgb": [200, 100, 50],
+            "lab": [55.0, 2.0, 3.0],
+            "source": "stage_model",
+            "runtime_mode_key": "0.08x5",
+        },
+    )
+    monkeypatch.setattr(
+        "api.routers.converter.replace.schedule_glb_build",
+        lambda *_args, **_kwargs: None,
+    )
+
+    private_path = "/Users/min/private/secret.png"
+
+    def _raise_private_path(*_args, **_kwargs):
+        raise OSError(f"[Errno 13] Permission denied: '{private_path}'")
+
+    monkeypatch.setattr(registry, "register_bytes", _raise_private_path)
+
+    logger = logging.getLogger("lumina.api.routers.converter.replace")
+    logger.addHandler(caplog.handler)
+    caplog.set_level(logging.ERROR, logger=logger.name)
+    try:
+        response = client.post(
+            "/api/convert/apply-recipe-override",
+            json={
+                "session_id": session_id,
+                "region_ids": ["region-1"],
+                "recipe": [1, 1, 1, 1, 1],
+                "layer_order": "Top2Bottom",
+                "color_layers": 5,
+                "layer_height_mm": 0.08,
+            },
+        )
+    finally:
+        logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == (
+        "Recipe override could not be applied. Check the server log for details."
+    )
+    assert "Permission denied" not in response.text
+    assert private_path not in response.text
+    assert "Traceback" not in response.text
+
+    session_data = store.get(session_id)
+    assert session_data is not None
+    assert "recipe_overrides" not in session_data
+    assert "recipe_override_count" not in session_data
+    current_cache = session_data["preview_cache"]
+    assert np.array_equal(current_cache["matched_rgb"], matched_rgb)
+    assert np.array_equal(current_cache["material_matrix"], material_matrix)
+
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "converter_apply_recipe_override_error"
+    ]
+    assert len(records) == 1
+    record = records[0]
+    assert record.error_type == "OSError"
+    assert record.status_code == 422
+    assert "Permission denied" in record.error_message
+    assert private_path in record.error_message
+    assert "Traceback" not in record.getMessage()
+    assert private_path not in record.getMessage()
+    assert record.exc_info is None
 
 
 def test_region_recipe_resolves_select_all_color_region_id() -> None:
