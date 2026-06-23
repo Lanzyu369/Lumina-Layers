@@ -8,6 +8,9 @@ vi.mock('../../api/system', () => ({
   uploadImagePreview: vi.fn(),
 }));
 
+const rawUnsupportedDetail =
+  '当前环境暂不支持 RAW 图片，请先转换为 PNG/JPEG 后再上传。';
+
 /**
  * Converter_Store 单元测试
  * Validates: Requirements 9.4, 2.4, 4.3, 4.5
@@ -258,7 +261,7 @@ describe('RAW image preview upload failures', () => {
 
   it('sets an actionable error when setImageFile cannot prepare a RAW preview', async () => {
     vi.mocked(uploadImagePreview).mockRejectedValueOnce(
-      new Error('rawpy is not installed'),
+      new Error(rawUnsupportedDetail),
     );
     const rawFile = new File(['raw'], 'camera.dng', { type: '' });
 
@@ -270,7 +273,8 @@ describe('RAW image preview upload failures', () => {
     expect(state.imagePreviewUrl).toBeNull();
     expect(state.aspectRatio).toBeNull();
     expect(state.error).toContain('RAW');
-    expect(state.error).toContain('rawpy is not installed');
+    expect(state.error).toContain('PNG/JPEG');
+    expect(state.error).not.toMatch(/rawpy|pip install|pillow-heif/i);
   });
 
   it('sets an actionable error when handleFilesSelect cannot prepare a RAW preview', async () => {
@@ -309,7 +313,7 @@ describe('RAW image preview upload failures', () => {
     try {
       useConverterStore.getState().setImageFile(rawFile);
       useConverterStore.getState().setImageFile(pngFile);
-      rejectRawPreview(new Error('rawpy is not installed'));
+      rejectRawPreview(new Error(rawUnsupportedDetail));
       await flushPromises();
 
       const state = useConverterStore.getState();
@@ -324,7 +328,7 @@ describe('RAW image preview upload failures', () => {
 
   it('sets an actionable error when batch removal downgrades to a RAW file without a preview', async () => {
     vi.mocked(uploadImagePreview).mockRejectedValueOnce(
-      new Error('rawpy is not installed'),
+      new Error(rawUnsupportedDetail),
     );
     const pngFile = new File(['png'], 'remove.png', { type: 'image/png' });
     const rawFile = new File(['raw'], 'remaining.raf', { type: '' });
@@ -347,7 +351,8 @@ describe('RAW image preview upload failures', () => {
     expect(state.imagePreviewUrl).toBeNull();
     expect(state.aspectRatio).toBeNull();
     expect(state.error).toContain('RAW');
-    expect(state.error).toContain('rawpy is not installed');
+    expect(state.error).toContain('PNG/JPEG');
+    expect(state.error).not.toMatch(/rawpy|pip install|pillow-heif/i);
   });
 });
 

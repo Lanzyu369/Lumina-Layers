@@ -26,6 +26,14 @@ from api.file_registry import FileRegistry
 from api.session_store import SessionStore
 
 client: TestClient = TestClient(app)
+_RAW_UNSUPPORTED_DETAIL = (
+    "当前环境暂不支持 RAW 图片，请先转换为 PNG/JPEG 后再上传。"
+)
+_OPTIONAL_DEPENDENCY_FORBIDDEN_FRAGMENTS = (
+    "pip install",
+    "pillow-heif",
+    "rawpy",
+)
 
 
 @pytest.fixture(autouse=True)
@@ -140,3 +148,28 @@ def test_rotate_rejects_invalid_direction(invalid: str):
     image_bytes, _ = _asymmetric_png_bytes()
     response = _post_rotate(image_bytes, direction=invalid)
     assert response.status_code == 422, response.text
+
+
+def test_rotate_raw_missing_dependency_returns_safe_detail(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """RAW optional dependency failures should not leak install guidance."""
+    monkeypatch.setattr("api.file_bridge.HAS_RAW", False)
+
+    response = client.post(
+        "/api/extractor/rotate?direction=ccw",
+        files={
+            "image": (
+                "camera.dng",
+                b"not a raw image",
+                "application/octet-stream",
+            )
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"] == _RAW_UNSUPPORTED_DETAIL
+    assert all(
+        fragment not in response.text
+        for fragment in _OPTIONAL_DEPENDENCY_FORBIDDEN_FRAGMENTS
+    )
