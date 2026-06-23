@@ -2044,14 +2044,21 @@ def test_get_base_colors_npy():
 
 def test_get_base_colors_not_found():
     """Non-existent LUT returns 404."""
+    private_lut_name = r"C:\Users\min\private\missing-lut.json"
+
     with patch(
         "api.routers.five_color.LUTManager.get_lut_path",
         return_value=None,
     ):
-        resp = client.get("/api/five-color/base-colors", params={"lut_name": "nonexistent"})
+        resp = client.get(
+            "/api/five-color/base-colors",
+            params={"lut_name": private_lut_name},
+        )
 
     assert resp.status_code == 404
-    assert "LUT not found" in resp.json()["detail"]
+    assert resp.json()["detail"] == "Selected LUT was not found or is unavailable."
+    assert private_lut_name not in resp.text
+    assert "LUT not found:" not in resp.text
 
 
 def test_get_base_colors_lut_load_failure_uses_public_error_language():

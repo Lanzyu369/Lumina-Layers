@@ -46,6 +46,7 @@ _LUT_LOAD_FAILED_DETAIL = (
 _JSON_LUT_MISSING_RGB_DETAIL = (
     "The selected JSON LUT does not include readable RGB color data."
 )
+_LUT_NOT_FOUND_DETAIL = "Selected LUT was not found or is unavailable."
 SWATCH_EXPORT_FAILED_DETAIL = (
     "Five-color swatch export failed. Check the selected recipes and export "
     "settings, then try again."
@@ -160,7 +161,7 @@ def _load_engine(lut_name: str) -> tuple[ColorQueryEngine, str]:
 
     path: str | None = LUTManager.get_lut_path(lut_name)
     if path is None:
-        raise HTTPException(status_code=404, detail=f"LUT not found: {lut_name}")
+        raise HTTPException(status_code=404, detail=_LUT_NOT_FOUND_DETAIL)
 
     try:
         if path.endswith(".npz"):
