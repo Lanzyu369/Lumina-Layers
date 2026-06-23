@@ -79,6 +79,7 @@ from utils.lut_manager import LUTManager
 from .common import (
     BATCH_DOWNLOAD_TTL_SECONDS,
     LUT_DATA_UNAVAILABLE_DETAIL,
+    LUT_SOURCE_SELECTION_INVALID_DETAIL,
     PREVIEW_CACHE_INVALID_DETAIL,
     PREVIEW_CACHE_UNAVAILABLE_DETAIL,
     PREVIEW_COLOR_PALETTE_UNAVAILABLE_DETAIL,
@@ -2255,7 +2256,7 @@ async def convert_batch(
         except ValidationError as exc:
             raise HTTPException(
                 status_code=422,
-                detail=json.loads(exc.json()),
+                detail=LUT_SOURCE_SELECTION_INVALID_DETAIL,
             ) from exc
         try:
             lut_path, resolved_lut_name = LUTManager.resolve_source_selection(

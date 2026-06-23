@@ -106,6 +106,25 @@ def _make_fake_3mf(suffix: str = ".3mf") -> str:
 class TestBatchLutNotFound:
     """Verify unresolvable lut_name returns HTTP 404."""
 
+    def test_batch_missing_lut_name_returns_public_source_selection_error(self) -> None:
+        _mock_pool.submit = AsyncMock()
+
+        response = client.post(
+            "/api/convert/batch",
+            files=[("images", _make_test_image_buf("a.png"))],
+            data={"source_kind": "legacy_single"},
+        )
+
+        assert response.status_code == 422
+        assert response.json()["detail"] == (
+            "Choose a valid LUT or complete native material source, then try again."
+        )
+        assert "legacy_single requires lut_name" not in response.text
+        assert '"input"' not in response.text
+        assert '"ctx"' not in response.text
+        assert "pydantic.dev" not in response.text
+        _mock_pool.submit.assert_not_called()
+
     def test_batch_unknown_lut_returns_404(self) -> None:
         with patch(
             "api.routers.converter.generate.LUTManager.get_lut_path",

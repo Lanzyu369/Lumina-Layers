@@ -42,6 +42,9 @@ LUT_DATA_UNAVAILABLE_DETAIL = (
     "Color lookup data is unavailable. Re-select the LUT or materials, run preview, "
     "and try again."
 )
+LUT_SOURCE_SELECTION_INVALID_DETAIL = (
+    "Choose a valid LUT or complete native material source, then try again."
+)
 PREVIEW_COLOR_PALETTE_UNAVAILABLE_DETAIL = (
     "Preview color palette is unavailable. Re-run preview and try again."
 )

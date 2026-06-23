@@ -65,6 +65,7 @@ from utils.lut_manager import LUTManager
 from .async_glb import get_glb_status, schedule_glb_build
 from .common import (
     EPHEMERAL_PREVIEW_TTL_SECONDS,
+    LUT_SOURCE_SELECTION_INVALID_DETAIL,
     NON_FATAL_GLB_ERRORS,
     PREVIEW_CACHE_UNAVAILABLE_DETAIL,
     ROUTER_HANDLED_ERRORS,
@@ -813,7 +814,10 @@ async def convert_preview(
                 }
             )
         except ValidationError as exc:
-            raise HTTPException(status_code=422, detail=json.loads(exc.json())) from exc
+            raise HTTPException(
+                status_code=422,
+                detail=LUT_SOURCE_SELECTION_INVALID_DETAIL,
+            ) from exc
 
         try:
             lut_path, resolved_lut_name = LUTManager.resolve_source_selection(
