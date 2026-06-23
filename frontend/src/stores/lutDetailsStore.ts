@@ -8,7 +8,7 @@ import {
   fetchLutDetails as apiFetchLutDetails,
   fetchLutDetailsCatalog as apiFetchLutDetailsCatalog,
 } from "../api/lut";
-import { apiErrorToVisibleMessage } from "../api/client";
+import { lutErrorToVisibleMessage } from "./lutErrorMessages";
 
 export interface FilteredLutDetailsCatalog {
   manufacturers: string[];
@@ -189,7 +189,7 @@ function toErrorMessage(error: unknown, fallbackKey: string): string {
     error instanceof Error ||
     (error !== null && typeof error === "object" && "response" in error)
   ) {
-    return apiErrorToVisibleMessage(error, fallbackKey);
+    return lutErrorToVisibleMessage(error, fallbackKey);
   }
   return fallbackKey;
 }
