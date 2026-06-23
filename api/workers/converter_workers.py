@@ -633,10 +633,16 @@ def worker_generate_preview(
     }
 
     if preview_img is None:
+        status_error_message = str(status_msg).strip() if status_msg else ""
+        error_message = (
+            status_error_message or "Preview generation returned no image."
+        )
         log.warning(
             "Worker preview returned no image",
             extra={
                 "event": "worker_preview_no_image",
+                "error_type": "PreviewImageMissing",
+                "error_message": error_message,
                 "status_msg": status_msg,
             },
         )
