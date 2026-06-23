@@ -1295,6 +1295,11 @@ def color_highlight(
                     "color_highlight_region_unmapped_group_fallback",
                     extra={
                         "event": "color_highlight_region_unmapped_group_fallback",
+                        "error_type": "GradientRegionMaskMissing",
+                        "error_message": (
+                            "Gradient region mask was empty; using the parent group mask."
+                        ),
+                        "fallback_action": "use_group_mask",
                         "group_index": int(group_idx),
                         "region_index": int(region_idx),
                         "encoded_id": int(encoded_id),
@@ -1978,6 +1983,12 @@ def region_requantize(
                 "region_requantize_unmapped_target_group_fallback",
                 extra={
                     "event": "region_requantize_unmapped_target_group_fallback",
+                    "error_type": "GradientRegionMaskMissing",
+                    "error_message": (
+                        "One or more target region masks were empty; "
+                        "widening them to their parent group mask."
+                    ),
+                    "fallback_action": "widen_to_group_mask",
                     "fallback_targets": fallback_targets,
                     "total_targets": len(target_pairs),
                 },
@@ -3387,6 +3398,12 @@ def apply_recipe_override(
                     effective_mask.shape, updated_rgb.shape[:2],
                     extra={
                         "event": "recipe_override_shape_mismatch",
+                        "error_type": "RecipeOverrideMaskShapeMismatch",
+                        "error_message": (
+                            "A recipe override region mask shape did not match "
+                            "the preview image; skipping that mask."
+                        ),
+                        "fallback_action": "skip_region_mask",
                         "region_id": str(_region_id),
                         "mask_shape": list(effective_mask.shape),
                         "matched_rgb_shape": list(updated_rgb.shape[:2]),

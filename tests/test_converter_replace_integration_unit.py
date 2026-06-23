@@ -148,6 +148,35 @@ def _capture_replace_logger(caplog: pytest.LogCaptureFixture) -> logging.Logger:
     return target_logger
 
 
+def _single_record(caplog: pytest.LogCaptureFixture, event: str) -> logging.LogRecord:
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == event
+    ]
+    assert len(records) == 1
+    return records[0]
+
+
+def _assert_actionable_warning(record: logging.LogRecord) -> None:
+    from scripts.log_quality_check import _has_actionable_warning_error_field
+
+    assert record.levelno == logging.WARNING
+    assert _has_actionable_warning_error_field(record.__dict__) is True
+
+
+def _force_region_group_one_map(store: SessionStore, session_id: str) -> None:
+    session_data = store.get(session_id)
+    assert session_data is not None
+    cache = session_data["preview_cache"]
+    height, width = np.asarray(cache["matched_rgb"]).shape[:2]
+    region_id_map = np.zeros((height, width), dtype=np.uint32)
+    region_id_map[4:12, 4:12] = np.uint32(
+        int(replace_router.REGION_ID_ENCODING_MULTIPLIER) + 1
+    )
+    store.put(session_id, "gradient_region_id_map", region_id_map)
+
+
 def test_replace_cache_conflict_handlers_do_not_return_internal_exception_text() -> None:
     """Preview-cache conflicts should never expose internal field revisions."""
 
@@ -550,6 +579,37 @@ class TestSourceColorPickCanary:
 class TestColorHighlightCanary:
     """Successful color-highlight requests emit the structured done canary."""
 
+    def test_color_highlight_group_fallback_warning_has_actionable_fields(
+        self,
+        _isolate_dependency_overrides,
+        caplog: pytest.LogCaptureFixture,
+        tmp_path,
+    ) -> None:
+        store: SessionStore = _isolate_dependency_overrides["store"]
+        session_id = _seed_region_requantize_session(store, tmp_path)
+        _force_region_group_one_map(store, session_id)
+        target_logger = _capture_replace_logger(caplog)
+
+        try:
+            response = client.post(
+                "/api/convert/color-highlight",
+                json={
+                    "session_id": session_id,
+                    "color_hexes": ["#0a141e"],
+                    "gradient_group_index": 1,
+                    "gradient_region_index": 2,
+                },
+            )
+        finally:
+            target_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 200, response.text
+        record = _single_record(
+            caplog,
+            "color_highlight_region_unmapped_group_fallback",
+        )
+        _assert_actionable_warning(record)
+
     def test_color_highlight_emits_converter_color_highlight_done_canary(
         self,
         _isolate_dependency_overrides,
@@ -653,6 +713,68 @@ class TestRegionDetectCanary:
 
 class TestRegionRequantizeCanary:
     """Successful region-requantize requests expose the structured done fields."""
+
+    def test_region_requantize_group_fallback_warning_has_actionable_fields(
+        self,
+        _isolate_dependency_overrides,
+        caplog: pytest.LogCaptureFixture,
+        tmp_path,
+    ) -> None:
+        store: SessionStore = _isolate_dependency_overrides["store"]
+        session_id = _seed_region_requantize_session(store, tmp_path)
+        _force_region_group_one_map(store, session_id)
+        target_logger = _capture_replace_logger(caplog)
+        fallback_encoded_id = int(replace_router.REGION_ID_ENCODING_MULTIPLIER) + 2
+
+        def _fake_requantize(*, matched_rgb, original_source_rgb, region_id_map, **_kwargs):
+            assert original_source_rgb is not None
+            updated = np.asarray(matched_rgb).copy()
+            mask = np.asarray(region_id_map) == fallback_encoded_id
+            assert int(mask.sum()) == 64
+            updated[mask] = [1, 2, 3]
+            return updated, int(mask.sum())
+
+        try:
+            with patch(
+                "api.routers.converter.replace.load_multiple_materials",
+                return_value=[],
+            ), patch(
+                "api.routers.converter.replace.load_material_solver_cache_with_fallback",
+                return_value=(object(), 64),
+            ), patch(
+                "api.routers.converter.replace.requantize_gradient_regions",
+                side_effect=_fake_requantize,
+            ), patch(
+                "api.routers.converter.replace._sync_material_matrix_after_rgb_change",
+            ), patch(
+                "api.routers.converter.replace.recompute_gradient_groups_into_session",
+                return_value=[],
+            ), patch(
+                "api.routers.converter.replace.schedule_glb_build",
+                return_value="mock-glb-token",
+            ):
+                response = client.post(
+                    "/api/convert/region-requantize",
+                    json={
+                        "session_id": session_id,
+                        "targets": [
+                            {
+                                "gradient_group_index": 1,
+                                "gradient_region_index": 2,
+                            }
+                        ],
+                        "local_quantize_colors": 12,
+                    },
+                )
+        finally:
+            target_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 200, response.text
+        record = _single_record(
+            caplog,
+            "region_requantize_unmapped_target_group_fallback",
+        )
+        _assert_actionable_warning(record)
 
     def test_region_requantize_emits_converter_region_requantize_done_canary(
         self,
@@ -1021,6 +1143,43 @@ class TestPredictRecipeCanary:
 
 class TestApplyRecipeOverrideCanary:
     """Successful apply-recipe-override requests emit the structured done canary."""
+
+    def test_recipe_override_shape_mismatch_warning_has_actionable_fields(
+        self,
+        _isolate_dependency_overrides,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        store: SessionStore = _isolate_dependency_overrides["store"]
+        session_id = _seed_recipe_session(store)
+        store.put(
+            session_id,
+            "selected_region_masks",
+            {"region-1": np.ones((2, 2), dtype=bool)},
+        )
+        target_logger = _capture_replace_logger(caplog)
+
+        try:
+            with patch(
+                "api.routers.converter.replace.schedule_glb_build",
+                return_value="mock-glb-token",
+            ):
+                response = client.post(
+                    "/api/convert/apply-recipe-override",
+                    json={
+                        "session_id": session_id,
+                        "region_ids": ["region-1"],
+                        "recipe": [0, 1, 0],
+                        "layer_height_mm": 0.08,
+                        "color_layers": 3,
+                        "layer_order": "Top2Bottom",
+                    },
+                )
+        finally:
+            target_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 200, response.text
+        record = _single_record(caplog, "recipe_override_shape_mismatch")
+        _assert_actionable_warning(record)
 
     def test_apply_recipe_override_emits_converter_apply_recipe_override_done_canary(
         self,
