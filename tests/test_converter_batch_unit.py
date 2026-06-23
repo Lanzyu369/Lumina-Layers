@@ -37,6 +37,49 @@ _test_store: SessionStore = SessionStore(ttl=1800)
 _test_registry: FileRegistry = FileRegistry()
 
 
+class _PreviewRegistrationFailingRegistry(FileRegistry):
+    """FileRegistry that accepts the merged 3MF and rejects preview GLBs."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.download_id: str | None = None
+        self.download_path: str | None = None
+        self.preview_path: str | None = None
+
+    def register_path(
+        self,
+        session_id: str,
+        path: str,
+        filename: str | None = None,
+        ttl_seconds: int | None = None,
+        is_public: bool = True,
+        purpose: str | None = None,
+    ) -> str:
+        if filename == "batch.3mf":
+            file_id = super().register_path(
+                session_id=session_id,
+                path=path,
+                filename=filename,
+                ttl_seconds=ttl_seconds,
+                is_public=is_public,
+                purpose=purpose,
+            )
+            self.download_id = file_id
+            self.download_path = path
+            return file_id
+        if filename and filename.endswith(".glb"):
+            self.preview_path = path
+            raise RuntimeError("preview registry unavailable")
+        return super().register_path(
+            session_id=session_id,
+            path=path,
+            filename=filename,
+            ttl_seconds=ttl_seconds,
+            is_public=is_public,
+            purpose=purpose,
+        )
+
+
 class _MockWorkerPool:
     """Mock WorkerPoolManager that delegates submit to a configurable side_effect.
     模拟 WorkerPoolManager，将 submit 委托给可配置的 side_effect。
@@ -1105,6 +1148,165 @@ class TestBatchMergeFlow:
         # All results are success
         assert len(body["results"]) == 3
         assert all(r["status"] == "success" for r in body["results"])
+
+    def test_preview_registration_failure_preserves_final_download(self) -> None:
+        """Preview registration failure should not discard the merged 3MF."""
+        _mock_pool.submit = AsyncMock(
+            return_value=_make_worker_result("img.png", 30.0, 20.0),
+        )
+        registry = _PreviewRegistrationFailingRegistry()
+        log_calls: list[tuple[str, str, dict[str, object]]] = []
+
+        def _capturing_safe_log(level: str, event: str, **fields: object) -> None:
+            log_calls.append((level, event, fields))
+
+        original_registry_override = app.dependency_overrides[get_file_registry]
+        app.dependency_overrides[get_file_registry] = lambda: registry
+        try:
+            with (
+                patch(
+                    "api.routers.converter.generate.LUTManager.get_lut_path",
+                    return_value="/tmp/fake.npy",
+                ),
+                patch(
+                    "api.routers.converter.generate.ensure_png_tempfile",
+                    new=AsyncMock(return_value="/tmp/uploaded.png"),
+                ),
+                patch(
+                    "utils.merged_bambu_3mf_writer.MergedBambu3MFWriter.write",
+                    _noop_3mf_write,
+                ),
+                patch(
+                    "api.routers.converter.generate._safe_log",
+                    side_effect=_capturing_safe_log,
+                ),
+            ):
+                response = client.post(
+                    "/api/convert/batch",
+                    files=[("images", _make_test_image_buf("img.png"))],
+                    data={"lut_name": "test_lut"},
+                )
+
+            assert response.status_code == 200
+            body = response.json()
+            assert body["status"] == "ok"
+            assert body["download_url"].startswith("/api/files/")
+            assert body["preview_3d_url"] is None
+            assert body["preview_items"] == []
+            assert [
+                warning["code"]
+                for warning in body["warnings"]
+                if warning["code"] == "preview-unavailable"
+            ] == ["preview-unavailable"]
+
+            download_response = client.get(body["download_url"])
+        finally:
+            app.dependency_overrides[get_file_registry] = original_registry_override
+
+        assert download_response.status_code == 200
+        assert download_response.content == b"fake-merged-3mf"
+        assert registry.download_path is not None
+        assert Path(registry.download_path).exists()
+        assert registry.preview_path is not None
+        assert not Path(registry.preview_path).exists()
+
+        assert not any(
+            event == "batch_merge_3mf_failed" for _level, event, _fields in log_calls
+        )
+        warning_logs = [
+            (level, fields)
+            for level, event, fields in log_calls
+            if event == "batch_merge_preview_unavailable"
+        ]
+        assert len(warning_logs) == 1
+        level, fields = warning_logs[0]
+        assert level == "warning"
+        assert fields["error_type"] == "RuntimeError"
+        assert fields["stage"] == "preview_file_registry"
+
+    def test_later_preview_path_failure_keeps_earlier_preview(self) -> None:
+        """One bad preview path should not hide previews already registered."""
+        worker_results = [
+            _make_worker_result("ok-preview.png", 30.0, 20.0),
+            _make_worker_result("bad-preview.png", 30.0, 20.0),
+        ]
+        bad_preview_path = worker_results[1]["preview_glb_path"]
+        results_iter = iter(worker_results)
+
+        async def _mock_submit(fn, *args, **kwargs):
+            return next(results_iter)
+
+        _mock_pool.submit = AsyncMock(side_effect=_mock_submit)
+        registry = FileRegistry()
+        log_calls: list[tuple[str, str, dict[str, object]]] = []
+        original_path_exists = Path.exists
+
+        def _exists_with_late_preview_failure(path: Path) -> bool:
+            if str(path) == bad_preview_path:
+                raise ValueError("preview source path could not be inspected")
+            return original_path_exists(path)
+
+        def _capturing_safe_log(level: str, event: str, **fields: object) -> None:
+            log_calls.append((level, event, fields))
+
+        original_registry_override = app.dependency_overrides[get_file_registry]
+        app.dependency_overrides[get_file_registry] = lambda: registry
+        try:
+            with (
+                patch(
+                    "api.routers.converter.generate.LUTManager.get_lut_path",
+                    return_value="/tmp/fake.npy",
+                ),
+                patch(
+                    "api.routers.converter.generate.ensure_png_tempfile",
+                    new=AsyncMock(return_value="/tmp/uploaded.png"),
+                ),
+                patch(
+                    "utils.merged_bambu_3mf_writer.MergedBambu3MFWriter.write",
+                    _noop_3mf_write,
+                ),
+                patch(
+                    "api.routers.converter.generate._safe_log",
+                    side_effect=_capturing_safe_log,
+                ),
+                patch.object(Path, "exists", _exists_with_late_preview_failure),
+            ):
+                response = client.post(
+                    "/api/convert/batch",
+                    files=[
+                        ("images", _make_test_image_buf("ok-preview.png")),
+                        ("images", _make_test_image_buf("bad-preview.png")),
+                    ],
+                    data={"lut_name": "test_lut"},
+                )
+        finally:
+            app.dependency_overrides[get_file_registry] = original_registry_override
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["download_url"].startswith("/api/files/")
+        assert body["preview_3d_url"] == body["preview_items"][0]["url"]
+        assert [item["filename"] for item in body["preview_items"]] == [
+            "ok-preview.png"
+        ]
+        assert [
+            warning["code"]
+            for warning in body["warnings"]
+            if warning["code"] == "preview-unavailable"
+        ] == ["preview-unavailable"]
+        assert not any(
+            event == "batch_merge_3mf_failed" for _level, event, _fields in log_calls
+        )
+        warning_logs = [
+            (level, fields)
+            for level, event, fields in log_calls
+            if event == "batch_merge_preview_unavailable"
+        ]
+        assert len(warning_logs) == 1
+        level, fields = warning_logs[0]
+        assert level == "warning"
+        assert fields["error_type"] == "ValueError"
+        assert fields["stage"] == "preview_source"
 
     # ------------------------------------------------------------------
     # 2. all-success-overflows: layout exceeds plate → plate-overflow warning
