@@ -110,6 +110,19 @@ function summarizeRedactedServerValue(
   return summary;
 }
 
+function summarizeUnsafeClientValue(
+  field: "detail" | "message" | "body",
+  value: unknown,
+): Record<string, unknown> {
+  const summary = summarizeRedactedServerValue(field, value);
+  if (isRecord(value)) {
+    delete summary[`${field}_keys`];
+    summary[`${field}_key_count`] = Object.keys(value).length;
+  }
+  summary[`${field}_redaction_reason`] = "unsafe_client_error_text";
+  return summary;
+}
+
 function summarizeApiErrorData(
   data: unknown,
   statusCode: number | null = null,
@@ -119,9 +132,15 @@ function summarizeApiErrorData(
     if (redactServerDetails && data != null) {
       return summarizeRedactedServerValue("body", data);
     }
+    if (unsafeTextInUnknown(data)) {
+      return summarizeUnsafeClientValue("body", data);
+    }
     return data ?? null;
   }
   if (Array.isArray(data)) {
+    if (unsafeTextInUnknown(data)) {
+      return summarizeUnsafeClientValue("detail", data);
+    }
     return { item_count: data.length };
   }
 
@@ -130,13 +149,22 @@ function summarizeApiErrorData(
     if (redactServerDetails) {
       return summarizeRedactedServerValue("detail", record.detail);
     }
+    if (unsafeTextInUnknown(record.detail)) {
+      return summarizeUnsafeClientValue("detail", record.detail);
+    }
     return { detail: record.detail };
   }
   if ("message" in record) {
     if (redactServerDetails) {
       return summarizeRedactedServerValue("message", record.message);
     }
+    if (unsafeTextInUnknown(record.message)) {
+      return summarizeUnsafeClientValue("message", record.message);
+    }
     return { message: record.message };
+  }
+  if (unsafeTextInUnknown(record)) {
+    return summarizeUnsafeClientValue("body", record);
   }
   return { keys: Object.keys(record).slice(0, 12) };
 }
@@ -344,7 +372,11 @@ function readableApiErrorMessage(
     return fallbackHttpStatusMessage(statusCode, requestId);
   }
   const detail = extractReadableDetail(data);
-  if (detail && !isGenericHttpDetail(detail, statusCode)) {
+  if (
+    detail &&
+    !isGenericHttpDetail(detail, statusCode) &&
+    !unsafeVisibleErrorText(detail)
+  ) {
     return detail;
   }
   const fallback = fallbackHttpStatusMessage(statusCode, requestId);
@@ -389,12 +421,40 @@ function technicalHttpContextSuffix(suffix: string): boolean {
   );
 }
 
-function unsafeVisibleErrorSuffix(suffix: string): boolean {
+function unsafeVisibleErrorText(value: string): boolean {
+  const text = value.trim();
+  if (!text) {
+    return false;
+  }
   return (
-    /(?:^|\s)(?:\/(?:users|private|tmp|var|home|volumes)\b|~\/|[a-z]:[\\/]|\\\\)/i.test(suffix) ||
-    /(?:^|\s)(?:\/api(?:\/|\b)|https?:\/\/)/i.test(suffix) ||
-    /\b(?:traceback|stack trace|exception)\b/i.test(suffix)
+    /(?:^|[\s"'(:=\[{,])(?:\/(?:users|private|tmp|var|home|volumes|mnt|opt)\b|~\/|[a-z]:[\\/]|\\\\)/i.test(text) ||
+    /\bfile:\/\/\S+/i.test(text) ||
+    /(?:^|[\s"'(:=\[{,])\/api(?:\/|\b)\S*/i.test(text) ||
+    /\bhttps?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/\S*)?/i.test(text) ||
+    /\bhttps?:\/\/\S+\/api(?:\/|\b)\S*/i.test(text) ||
+    /\b(?:traceback|stack trace|exception|axioserror|request failed with status code)\b/i.test(text) ||
+    /\b(?:ValueError|RuntimeError|TypeError|OSError|FileNotFoundError|PermissionError|HTTPException):/i.test(text)
   );
+}
+
+function unsafeTextInUnknown(value: unknown): boolean {
+  if (typeof value === "string") {
+    return unsafeVisibleErrorText(value);
+  }
+  if (Array.isArray(value)) {
+    return value.some(unsafeTextInUnknown);
+  }
+  if (isRecord(value)) {
+    return Object.entries(value).some(
+      ([key, nestedValue]) =>
+        unsafeVisibleErrorText(key) || unsafeTextInUnknown(nestedValue),
+    );
+  }
+  return false;
+}
+
+function unsafeVisibleErrorSuffix(suffix: string): boolean {
+  return unsafeVisibleErrorText(suffix);
 }
 
 function cleanHttpStatusSuffix(suffix: string): string {
@@ -508,6 +568,9 @@ export function apiErrorToVisibleMessage(
   if (isGenericNoResponseErrorMessage(rawMessage)) {
     return fallbackHttpStatusMessage(null);
   }
+  if (unsafeVisibleErrorText(rawMessage)) {
+    return fallback;
+  }
   return rawMessage || fallback;
 }
 
@@ -521,6 +584,11 @@ function buildReadableResponseData(
   }
   if (!isRecord(data)) {
     return { detail: readableMessage };
+  }
+  if (unsafeTextInUnknown(data)) {
+    return "message" in data && !("detail" in data)
+      ? { message: readableMessage }
+      : { detail: readableMessage };
   }
   const detail = data.detail;
   const message = data.message;
