@@ -16,6 +16,142 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-06-23",
+    title: {
+      zh: "Lumina Layers — 近期更新速览",
+      en: "Lumina Layers — Latest updates",
+    },
+    sections: [
+      {
+        category: { zh: "新功能", en: "New" },
+        items: [
+          {
+            zh: "设置里新增按切片软件、机型和喷嘴选择的机器卡片；导出的 3MF 会尽量保留 Bambu Studio、OrcaSlicer、ElegooSlicer、Anycubic Slicer Next 等软件认识的机器信息。",
+            en: "Settings now include slicer, machine, and nozzle cards, so exported 3MF files can keep machine details recognised by Bambu Studio, OrcaSlicer, ElegooSlicer, Anycubic Slicer Next, and related slicers.",
+          },
+          {
+            zh: "拼图模式补齐了预览和导出流程：现在可以在转换区查看拼图叠线，逐块生成后合并成一个 3MF，配方导入导出也会一起保留拼图设置。",
+            en: "Puzzle mode now has a fuller preview and export flow: you can see the puzzle overlay in the converter, generate pieces into one 3MF, and keep puzzle settings when importing or exporting recipes.",
+          },
+          {
+            zh: "3D 预览区域新增耗时统计，想排查一张图为什么慢时，可以直接看到预览和生成各花了多久。",
+            en: "The 3D preview area now shows timing details, so it is easier to see where preview or 3MF generation time is being spent.",
+          },
+        ],
+      },
+      {
+        category: { zh: "颜色工作站", en: "Color Workstation" },
+        items: [
+          {
+            zh: "大耗材组合做颜色建议时，现在会优先复用已经准备好的候选结果；之前一些 10 层、十几种耗材的组合会直接提示组合太多，现在能继续给出建议。",
+            en: "Colour suggestions for large material sets can now reuse prepared candidates first, so some 10-layer, many-material jobs that used to stop as 'too many combinations' can return suggestions instead.",
+          },
+          {
+            zh: "单图模式下重新选图片时，现在明确分成「更换当前图片」和「添加更多图片」；想换图时不会再误变成批量追加。",
+            en: "Single-image upload now separates 'replace current image' from 'add more images', so replacing an image no longer accidentally turns into a batch append.",
+          },
+          {
+            zh: "透明图做渐变分组或区域高亮时，透明背景会继续保持透明，不会再被整片蓝色高亮铺满。",
+            en: "When highlighting gradient groups or regions in transparent artwork, transparent areas now stay transparent instead of turning into a solid blue background.",
+          },
+        ],
+      },
+      {
+        category: { zh: "提取器（校色卡）", en: "Extractor (Calibration Card)" },
+        items: [
+          {
+            zh: "ColorChecker 校色弹窗关闭后不会再偶发自动弹回；如果「执行校色」暂时不可用，界面也会说明还缺哪一步。",
+            en: "The ColorChecker calibration dialog no longer reopens right after you close it, and the Calibrate button now explains what is still missing when it cannot run yet.",
+          },
+        ],
+      },
+      {
+        category: { zh: "校准 & 材料", en: "Calibration & Materials" },
+        items: [
+          {
+            zh: "耗材选择弹窗和耗材库里的品牌分组默认收起，长列表打开时更清爽；选择弹窗里也新增了「清空选择」。",
+            en: "Brand groups in the material picker and material library now start collapsed for long lists, and the picker includes a new clear-selection action.",
+          },
+          {
+            zh: "新增 8 个 KYNIX PETG 耗材档案，可以直接在材料库里选择中国红、白色、黑色等常用颜色。",
+            en: "Added eight KYNIX PETG material profiles, including common colours such as Chinese Red, white, and black, ready to select from the material library.",
+          },
+          {
+            zh: "5 色扩展校准板的两张页面现在使用一致的物理外框，自定义色块尺寸后不会再一张大一张小。",
+            en: "Both pages of the 5-Color Extended calibration board now use the same physical frame, so custom patch sizes no longer make one page visibly smaller than the other.",
+          },
+          {
+            zh: "5 色扩展配方会保留第 6 层黑色，不会在查询、匹配或生成配方色块时被截掉。",
+            en: "5-Color Extended recipes now keep the sixth black layer during lookup, matching, and recipe swatch generation instead of trimming it away.",
+          },
+        ],
+      },
+      {
+        category: { zh: "预览 & 交互", en: "Preview & Interaction" },
+        items: [
+          {
+            zh: "高级设置里新增 3D 高精度颜色预览；开启后，低占比颜色更不容易在 3D 预览里被合并掉。",
+            en: "Advanced settings now include high-precision 3D colour preview, which helps small colour regions stay visible instead of being merged away in the 3D view.",
+          },
+          {
+            zh: "像素模式的高颜色数预览会保留更多色块和边界，3D 预览看起来会更接近原来的像素图。",
+            en: "Pixel-mode previews with high colour counts now keep more colour blocks and boundaries, making the 3D preview closer to the source pixel artwork.",
+          },
+          {
+            zh: "只有 viewBox、没有写死宽高的 SVG 上传后也会正常显示预览，不会再出现 0 尺寸空白框。",
+            en: "SVG files that rely on viewBox sizing now show a proper upload preview instead of collapsing into an empty 0-size frame.",
+          },
+          {
+            zh: "高度图浮雕在刷新预览后会自动把高度图带到新的生成流程里，不会因为预览刷新而丢失高度图。",
+            en: "Heightmap relief generation now carries the selected heightmap through preview refreshes, so final generation no longer loses it after a new preview is made.",
+          },
+          {
+            zh: "耗材档案浮雕超过 5 层时，现在会按实际层数生成分层预览和 3MF，不会只保留前 5 层。",
+            en: "Material-archive relief above five layers now uses the actual layer count for layer previews and 3MF output instead of keeping only the first five layers.",
+          },
+        ],
+      },
+      {
+        category: { zh: "矢量化", en: "Vectorisation" },
+        items: [
+          {
+            zh: "SVG 矢量模式的外轮廓在预览和导出的 3MF 里都会跟主体对齐，不会再出现边框错位或看起来没有包住边缘的问题。",
+            en: "SVG vector outlines now line up with the artwork in both preview and exported 3MF files, instead of appearing offset or missing around the edge.",
+          },
+          {
+            zh: "SVG 矢量模式开启挂件环后，导出的 3MF 现在会真正带上挂件环，同时不会多占一个打印耗材槽。",
+            en: "SVG vector exports now include the requested keychain loop in the 3MF without adding an extra filament slot.",
+          },
+          {
+            zh: "大尺寸 SVG 搭配很多耗材和多层配方时，预览不会再过早误报太大；能实际处理的作品会继续正常预览。",
+            en: "Large SVG previews with many selected materials and layers are no longer rejected too early as oversized when Lumina can actually process them.",
+          },
+        ],
+      },
+      {
+        category: { zh: "稳定性", en: "Stability" },
+        items: [
+          {
+            zh: "生成 3MF 已经成功时，即使可选的 3D 预览文件保存失败，也会优先保留最终下载链接，不会把可打印文件一起丢掉。",
+            en: "When a 3MF has already been generated, Lumina now keeps the final download even if the optional 3D preview file cannot be saved.",
+          },
+          {
+            zh: "批量、校准、耗材色块和分享卡等下载更稳了；预览附件失败时，软件会尽量保留已经生成好的最终文件。",
+            en: "Downloads for batch jobs, calibration, material swatches, and share cards are more resilient, with finished files preserved when optional preview attachments fail.",
+          },
+          {
+            zh: "很多报错提示改成了更容易看懂的中英文说明，不再把本机路径或内部细节直接显示给用户。",
+            en: "Many error messages now use clearer Chinese and English text, and avoid showing local file paths or internal details to users.",
+          },
+          {
+            zh: "提交 Bug 反馈时，会更完整地收集原图、生成文件、LUT、耗材档案和最近操作记录，方便后续复现问题。",
+            en: "Bug reports now collect the original artwork, generated files, LUT, material profiles, and recent actions more reliably, making issues easier to reproduce later.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-06-02",
     title: {
       zh: "Lumina Layers — 近期更新速览",
