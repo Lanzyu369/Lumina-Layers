@@ -224,7 +224,7 @@ def load_lut(
     enable_predictive_matching = bool(
         model_only
         or (native_predictive_source and (model_enable or not native_exact_lookup_active))
-        or (not is_native_reference_source and source_kind != "legacy_lookup")
+        or (not is_native_reference_source and source_kind not in ("legacy_lookup", "legacy_multi"))
     )
 
     if rgb is None or len(rgb) == 0:

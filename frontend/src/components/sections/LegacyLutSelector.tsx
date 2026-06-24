@@ -15,10 +15,12 @@ interface LegacyLutOptionGroup {
 interface LegacyLutSelectorProps {
   manufacturer: string;
   lutName: string;
+  selectedLutNames?: string[];
   manufacturerOptions: LegacyLutOption[];
   groupedLutOptions: LegacyLutOptionGroup[];
   onManufacturerChange: (value: string) => void;
   onLutChange: (value: string) => void;
+  onLutSelectionChange?: (values: string[]) => void;
   onRefresh: () => void;
   onUploadClick: () => void;
   loading?: boolean;
@@ -34,16 +36,20 @@ interface LegacyLutSelectorProps {
     upload: string;
     loadingHint: string;
     noBrandHint: string;
+    multiSelect?: string;
+    selectedCount?: string;
   };
 }
 
 export default function LegacyLutSelector({
   manufacturer,
   lutName,
+  selectedLutNames,
   manufacturerOptions,
   groupedLutOptions,
   onManufacturerChange,
   onLutChange,
+  onLutSelectionChange,
   onRefresh,
   onUploadClick,
   loading = false,
@@ -58,6 +64,35 @@ export default function LegacyLutSelector({
     : !manufacturer
       ? labels.noBrandHint
       : "";
+  const selectedSet = new Set(
+    selectedLutNames && selectedLutNames.length > 0
+      ? selectedLutNames
+      : lutName
+        ? [lutName]
+        : [],
+  );
+  const orderedLutValues = groupedLutOptions.flatMap((group) =>
+    group.options.map((option) => option.value),
+  );
+  const selectedCount = orderedLutValues.filter((value) =>
+    selectedSet.has(value),
+  ).length;
+
+  const handleToggleLut = (value: string) => {
+    if (!onLutSelectionChange) {
+      onLutChange(value);
+      return;
+    }
+    const next = new Set(selectedSet);
+    if (next.has(value)) {
+      next.delete(value);
+    } else {
+      next.add(value);
+    }
+    onLutSelectionChange(
+      orderedLutValues.filter((candidate) => next.has(candidate)),
+    );
+  };
 
   const refreshButton = (
     <WikiTooltip title={labels.refreshTooltip} description="">
@@ -88,6 +123,40 @@ export default function LegacyLutSelector({
     </button>
   );
 
+  const multiSelectList =
+    manufacturer && groupedLutOptions.length > 0 ? (
+      <div className="grid gap-2 rounded-lg border border-slate-200/60 bg-slate-100/50 p-3 dark:border-slate-700/40 dark:bg-slate-900/40">
+        <div className="flex items-center justify-between gap-2 text-xs font-medium uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">
+          <span>{labels.multiSelect ?? labels.lut}</span>
+          <span className="tracking-normal">{labels.selectedCount ?? "Selected"}: {selectedCount}</span>
+        </div>
+        <div className="grid gap-2">
+          {groupedLutOptions.map((group) => (
+            <div key={group.label} className="grid gap-1.5">
+              <div className="text-xs text-slate-500 dark:text-slate-400">
+                {group.label}
+              </div>
+              {group.options.map((option) => (
+                <label
+                  key={option.value}
+                  className="flex min-h-8 items-center gap-2 rounded-md px-2 text-sm text-slate-700 transition-colors hover:bg-slate-200/60 dark:text-slate-200 dark:hover:bg-slate-800/60"
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedSet.has(option.value)}
+                    disabled={lutDisabled}
+                    onChange={() => handleToggleLut(option.value)}
+                    className="size-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-900"
+                  />
+                  <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                </label>
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+    ) : null;
+
   if (compact) {
     return (
       <div className="grid grid-cols-1 gap-2">
@@ -114,6 +183,7 @@ export default function LegacyLutSelector({
             {helperText}
           </div>
         )}
+        {multiSelectList}
       </div>
     );
   }
@@ -147,6 +217,7 @@ export default function LegacyLutSelector({
           {helperText}
         </div>
       )}
+      {multiSelectList}
     </div>
   );
 }

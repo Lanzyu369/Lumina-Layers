@@ -52,6 +52,8 @@ export const RECIPE_IMPORT_WARNING_LUT_DEGRADED =
   "recipe_import_lut_degraded";
 export const RECIPE_IMPORT_WARNING_LUT_MISSING =
   "recipe_import_lut_missing";
+export const RECIPE_IMPORT_WARNING_SECONDARY_LUT_MISSING =
+  "recipe_import_warning_secondary_lut_missing";
 export const RECIPE_IMPORT_WARNING_PUZZLE_CONFLICT_LARGE_FORMAT =
   "recipe_import_warning_puzzle_conflict_large_format";
 export const RECIPE_IMPORT_WARNING_PUZZLE_CONFLICT_LOOP =
@@ -220,6 +222,45 @@ export function matchLut(
   };
 }
 
+function normalizeStringList(values: string[] | undefined): string[] {
+  const seen = new Set<string>();
+  return (values ?? []).filter((value) => {
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      return false;
+    }
+    seen.add(trimmed);
+    return true;
+  });
+}
+
+function restoreLegacyLutNames(
+  primaryName: string,
+  selectedNames: string[] | undefined,
+  localLuts: LutInfo[],
+): { names: string[]; missingSecondary: boolean } {
+  if (!primaryName) {
+    return { names: [], missingSecondary: false };
+  }
+
+  const availableNames = new Set(localLuts.map((lut) => lut.name));
+  const normalized = normalizeStringList(selectedNames);
+  const secondaryNames = normalized.slice(1);
+  const names = [primaryName];
+  let missingSecondary = false;
+  for (const name of secondaryNames) {
+    if (name === primaryName || names.includes(name)) {
+      continue;
+    }
+    if (availableNames.has(name)) {
+      names.push(name);
+    } else {
+      missingSecondary = true;
+    }
+  }
+  return { names, missingSecondary };
+}
+
 // ========== Restore result ==========
 
 export interface RestoreResult {
@@ -283,6 +324,14 @@ export function restoreConverterRecipe(
     warnings.push(RECIPE_IMPORT_WARNING_LUT_MISSING);
   }
   const source = conv.source;
+  const restoredLegacyLutNames = restoreLegacyLutNames(
+    lutName,
+    source?.selected_legacy_lut_names,
+    localLuts,
+  );
+  if (restoredLegacyLutNames.missingSecondary) {
+    warnings.push(RECIPE_IMPORT_WARNING_SECONDARY_LUT_MISSING);
+  }
 
   // --- Normalize hex values (strip '#' for store) ---
   const replacementRegions: ColorReplacementItem[] =
@@ -421,6 +470,7 @@ export function restoreConverterRecipe(
     // Base
     source_version: (source?.source_version ?? "legacy") as ConverterState["source_version"],
     lut_name: lutName,
+    lut_names: restoredLegacyLutNames.names,
     color_mode: conv.base.color_mode as ConverterState["color_mode"],
     modeling_mode: conv.base.modeling_mode as ConverterState["modeling_mode"],
     target_width_mm: conv.base.target_width_mm,

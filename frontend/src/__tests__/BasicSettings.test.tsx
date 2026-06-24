@@ -527,9 +527,9 @@ describe("BasicSettings", () => {
 
     await waitFor(() => {
       expect(lutDropdown).toHaveAttribute("aria-expanded", "true");
-      expect(screen.getByText("4 色")).toBeInTheDocument();
+      expect(screen.getAllByText("4 色").length).toBeGreaterThan(0);
     });
-    expect(screen.getByText("8 色")).toBeInTheDocument();
+    expect(screen.getAllByText("8 色").length).toBeGreaterThan(0);
     expect(screen.getByRole("option", { name: "A 4C" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "A 8C" })).toBeInTheDocument();
   });

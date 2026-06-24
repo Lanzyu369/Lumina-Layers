@@ -12,7 +12,7 @@ import { resolvePrimaryTab } from './TabNavBar';
 import { useWidgetStore } from '../../stores/widgetStore';
 import { motion } from 'framer-motion';
 
-type LutSubTabId = 'calibration' | 'extractor' | 'lut-manager' | 'lut-details' | 'lut-compare' | 'five-color';
+type LutSubTabId = 'lut-library' | 'calibration' | 'extractor' | 'lut-manager' | 'lut-cloud-sync' | 'lut-details' | 'lut-compare' | 'five-color';
 type MaterialSubTabId =
   | 'gradient-card-generate'
   | 'gradient-card-extract'
@@ -40,6 +40,11 @@ const CONVERTER_SUB_TAB_ICONS: Record<ConverterSubTabId, React.ReactNode> = {
 };
 
 const SECONDARY_TAB_ICONS: Record<LutSubTabId | MaterialSubTabId, React.ReactNode> = {
+  'lut-library': (
+    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M3 7.5A2.5 2.5 0 015.5 5H9l1.5 2H18.5A2.5 2.5 0 0121 9.5v7A2.5 2.5 0 0118.5 19h-13A2.5 2.5 0 013 16.5v-9z" />
+    </svg>
+  ),
   'calibration': (
     <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
@@ -53,6 +58,11 @@ const SECONDARY_TAB_ICONS: Record<LutSubTabId | MaterialSubTabId, React.ReactNod
   'lut-manager': (
     <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
       <path strokeLinecap="round" strokeLinejoin="round" d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" />
+    </svg>
+  ),
+  'lut-cloud-sync': (
+    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v12m0 0l-4-4m4 4l4-4M4 17.5A3.5 3.5 0 017.5 14H8a5 5 0 019.7-1.7A3.5 3.5 0 0117.5 21h-10A3.5 3.5 0 014 17.5z" />
     </svg>
   ),
   'lut-details': (
@@ -105,9 +115,10 @@ const CONVERTER_SUB_TAB_LIST: { id: ConverterSubTabId; titleKey: string }[] = [
 ];
 
 const LUT_SECONDARY_TAB_LIST: { id: LutSubTabId; titleKey: string }[] = [
+  { id: 'lut-library', titleKey: 'tab.lutLibrary' },
+  { id: 'lut-cloud-sync', titleKey: 'tab.lutCloudSync' },
   { id: 'calibration', titleKey: 'tab.calibration' },
   { id: 'extractor', titleKey: 'tab.extractor' },
-  { id: 'lut-manager', titleKey: 'tab.lutManager' },
   { id: 'lut-details', titleKey: 'tab.lutDetails' },
   { id: 'lut-compare', titleKey: 'tab.lutCompare' },
   { id: 'five-color', titleKey: 'tab.fiveColor' },

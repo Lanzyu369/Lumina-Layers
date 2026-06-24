@@ -84,6 +84,7 @@ from api.routers import (
     five_color_router,
     health_router,
     lut_router,
+    lut_registry_router,
     material_registry_router,
     material_sync_router,
     session_router,
@@ -575,6 +576,7 @@ def create_app() -> FastAPI:
     app.include_router(five_color_router)
     app.include_router(health_router)
     app.include_router(lut_router)
+    app.include_router(lut_registry_router)
     if _material_registry_service_enabled():
         app.include_router(material_registry_router)
     app.include_router(material_sync_router)

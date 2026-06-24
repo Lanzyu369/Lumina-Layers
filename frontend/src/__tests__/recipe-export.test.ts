@@ -152,6 +152,21 @@ describe("recipe/exportRecipe", () => {
       });
     });
 
+    it("exports selected legacy LUT names for multi-select restore", () => {
+      const state = makeState({
+        source_version: "legacy",
+        lut_name: "LUT-A",
+        lut_names: ["LUT-A", "LUT-B", "LUT-A", ""],
+      });
+
+      const recipe = exportConverterRecipe(state, makeSettings(), "fp");
+
+      expect(recipe.source!.selected_legacy_lut_names).toEqual([
+        "LUT-A",
+        "LUT-B",
+      ]);
+    });
+
     it("exports large format parameters", () => {
       const state = makeState({
         largeFormatEnabled: true,

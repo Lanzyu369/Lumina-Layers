@@ -76,6 +76,24 @@ describe("LegacyLutSelector", () => {
     expect(labelsInOrder).toEqual(["4-Color", "8-Color"]);
   });
 
+  it("emits multi-selected LUT names in grouped order", () => {
+    const onLutSelectionChange = vi.fn();
+    renderSelector({
+      selectedLutNames: ["a4"],
+      onLutSelectionChange,
+      labels: {
+        ...labels,
+        multiSelect: "Multi-select LUTs",
+        selectedCount: "Selected",
+      },
+    });
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "A 8C" }));
+
+    expect(onLutSelectionChange).toHaveBeenCalledWith(["a4", "a8"]);
+    expect(screen.getByText("Selected: 1")).toBeInTheDocument();
+  });
+
   it("uses a vertical stack in compact mode", () => {
     const { container } = renderSelector({ compact: true });
 

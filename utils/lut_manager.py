@@ -258,6 +258,13 @@ class LUTManager:
         if root_label == "ReferenceModel":
             return f"ReferenceModel - {stem}"
         return stem
+
+    @staticmethod
+    def _is_preset_sync_file(root_label: str, root_dir: str, file_path: str) -> bool:
+        if root_label != "Preset":
+            return False
+        rel_parts = Path(os.path.relpath(file_path, root_dir)).parts
+        return bool(rel_parts and rel_parts[0] == "_sync")
     
     @classmethod
     def get_all_lut_files(cls) -> dict[str, str]:
@@ -304,6 +311,8 @@ class LUTManager:
                 all_files.extend(glob.glob(pattern, recursive=True))
 
             for file_path in all_files:
+                if cls._is_preset_sync_file(root_label, root_dir, file_path):
+                    continue
                 display_name = cls._display_name_for_root(root_label, root_dir, file_path)
                 ext = Path(file_path).suffix.lower()
                 priority = _EXT_PRIORITY.get(ext, -1)
@@ -813,6 +822,8 @@ class LUTManager:
             seen: set[str] = set()
             for pattern in patterns:
                 for file_path in glob.glob(pattern, recursive=True):
+                    if cls._is_preset_sync_file(root_label, root_dir, file_path):
+                        continue
                     resolved_path = str(Path(file_path).resolve())
                     if resolved_path in seen:
                         continue
@@ -869,6 +880,8 @@ class LUTManager:
                 all_files.extend(glob.glob(pattern, recursive=True))
 
             for file_path in all_files:
+                if cls._is_preset_sync_file(root_label, root_dir, file_path):
+                    continue
                 display_name = cls._display_name_for_root(root_label, root_dir, file_path)
                 try:
                     fingerprint_fn = cls.compute_fingerprint
@@ -970,6 +983,210 @@ class LUTManager:
 
         raise ValueError(f"Unsupported native bundle format: {bundle_path}")
 
+    @staticmethod
+    def _normalize_legacy_multi_names(
+        lut_name: str | None,
+        lut_names: list[str] | None,
+    ) -> list[str]:
+        normalized: list[str] = []
+        for name in ([lut_name] if lut_name else []) + list(lut_names or []):
+            clean_name = str(name).strip()
+            if clean_name and clean_name not in normalized:
+                normalized.append(clean_name)
+        if not normalized:
+            raise ValueError("legacy_multi requires lut_names or lut_name")
+        return normalized
+
+    @staticmethod
+    def _palette_signature(metadata: LUTMetadata) -> tuple[tuple[str, str, str | None, str | None], ...]:
+        return tuple(
+            (
+                str(entry.color),
+                str(entry.material),
+                entry.hex_color,
+                entry.color_name,
+            )
+            for entry in metadata.palette
+        )
+
+    @classmethod
+    def _legacy_multi_compatibility_signature(cls, metadata: LUTMetadata) -> dict[str, Any]:
+        return {
+            "color_mode": str(metadata.color_mode or ""),
+            "palette": cls._palette_signature(metadata),
+            "max_color_layers": int(metadata.max_color_layers),
+            "layer_height_mm": round(float(metadata.layer_height_mm), 6),
+            "line_width_mm": round(float(metadata.line_width_mm), 6),
+            "base_layers": int(metadata.base_layers),
+            "base_channel_idx": int(metadata.base_channel_idx),
+            "layer_order": str(metadata.layer_order),
+        }
+
+    @staticmethod
+    def _legacy_standard_stacks_for_count(color_count: int) -> np.ndarray | None:
+        if color_count == 32:
+            rows = []
+            for index in range(color_count):
+                temp = index
+                digits = []
+                for _ in range(5):
+                    digits.append(temp % 2)
+                    temp //= 2
+                rows.append(convert_recipe_between_orders(digits, "Bottom2Top", "Top2Bottom"))
+            return np.asarray(rows, dtype=np.int32)
+
+        if color_count == 1024:
+            rows = []
+            for index in range(color_count):
+                temp = index
+                digits = []
+                for _ in range(5):
+                    digits.append(temp % 4)
+                    temp //= 4
+                rows.append(convert_recipe_between_orders(digits, "Bottom2Top", "Top2Bottom"))
+            return np.asarray(rows, dtype=np.int32)
+
+        if color_count == 1296:
+            from core.calibration import get_top_1296_colors
+
+            rows = [
+                convert_recipe_between_orders(row, "Bottom2Top", "Top2Bottom")
+                for row in get_top_1296_colors()
+            ]
+            return np.asarray(rows[:color_count], dtype=np.int32)
+
+        if color_count == 2468:
+            from core.calibration import select_extended_1444_colors
+
+            base_5layer = [
+                tuple(
+                    convert_recipe_between_orders(
+                        [index // 4**pos % 4 for pos in range(5)],
+                        "Bottom2Top",
+                        "Top2Bottom",
+                    )
+                )
+                for index in range(1024)
+            ]
+            rows: list[tuple[int, ...]] = [(-1,) + row for row in base_5layer]
+            rows.extend(tuple(row) for row in select_extended_1444_colors(base_5layer))
+            return np.asarray(rows[:color_count], dtype=np.int32)
+
+        if color_count == 2738:
+            from config import get_asset_path
+
+            stacks_path = get_asset_path("smart_8color_stacks.npy")
+            rows = [
+                convert_recipe_between_orders(row, "Bottom2Top", "Top2Bottom")
+                for row in np.load(stacks_path).tolist()
+            ]
+            return np.asarray(rows[:color_count], dtype=np.int32)
+
+        return None
+
+    @classmethod
+    def _ensure_legacy_runtime_stacks(
+        cls,
+        rgb: np.ndarray,
+        stacks: np.ndarray | None,
+        lut_name: str,
+    ) -> np.ndarray:
+        measured_colors = rgb.reshape(-1, 3)
+        if (
+            isinstance(stacks, np.ndarray)
+            and stacks.ndim == 2
+            and stacks.shape[0] == measured_colors.shape[0]
+            and stacks.shape[1] > 0
+        ):
+            runtime_stacks = stacks.astype(np.int32, copy=False)
+            if not np.all(runtime_stacks < 0):
+                return runtime_stacks
+
+        reconstructed = cls._legacy_standard_stacks_for_count(int(measured_colors.shape[0]))
+        if reconstructed is not None and reconstructed.shape[0] == measured_colors.shape[0]:
+            return reconstructed
+
+        raise ValueError(f"Legacy LUT missing recipe stacks: {lut_name}")
+
+    @classmethod
+    def _legacy_multi_runtime_path(
+        cls,
+        selected_names: list[str],
+        selected_paths: list[str],
+    ) -> str:
+        rgb_parts: list[np.ndarray] = []
+        stack_parts: list[np.ndarray] = []
+        source_fingerprints: list[dict[str, str]] = []
+        seen_recipes: set[tuple[int, ...]] = set()
+        baseline_signature: dict[str, Any] | None = None
+        baseline_metadata: LUTMetadata | None = None
+
+        for lut_name, lut_path in zip(selected_names, selected_paths):
+            rgb, stacks, metadata = cls.load_lut_with_metadata(lut_path)
+            measured_colors = rgb.reshape(-1, 3)
+            if measured_colors.size == 0:
+                raise ValueError(f"Legacy LUT has no lookup entries: {lut_name}")
+
+            signature = cls._legacy_multi_compatibility_signature(metadata)
+            if baseline_signature is None:
+                baseline_signature = signature
+                baseline_metadata = copy.deepcopy(metadata)
+            elif signature != baseline_signature:
+                raise ValueError(f"Incompatible legacy LUT metadata: {lut_name}")
+
+            runtime_stacks = cls._ensure_legacy_runtime_stacks(measured_colors, stacks, lut_name)
+            kept_rgb: list[np.ndarray] = []
+            kept_stacks: list[np.ndarray] = []
+            for row_rgb, row_stack in zip(measured_colors, runtime_stacks):
+                recipe_key = tuple(int(value) for value in row_stack)
+                if recipe_key in seen_recipes:
+                    continue
+                seen_recipes.add(recipe_key)
+                kept_rgb.append(row_rgb)
+                kept_stacks.append(row_stack)
+            if kept_rgb:
+                rgb_parts.append(np.asarray(kept_rgb, dtype=np.uint8).reshape(-1, 3))
+                stack_parts.append(np.asarray(kept_stacks, dtype=np.int32))
+            source_fingerprints.append(
+                {
+                    "name": lut_name,
+                    "path": str(Path(lut_path).resolve()),
+                    "fingerprint": cls.compute_fingerprint(lut_path),
+                }
+            )
+
+        if baseline_metadata is None or not rgb_parts:
+            raise ValueError("legacy_multi requires at least one usable LUT")
+
+        runtime_rgb = np.concatenate(rgb_parts, axis=0)
+        runtime_stacks = np.concatenate(stack_parts, axis=0)
+        metadata = baseline_metadata
+        metadata.schema_version = metadata.schema_version or "1.0"
+        metadata.capabilities = sorted(
+            (set(metadata.capabilities) | {"legacy_lookup"})
+            - {"predictive_match", "predictive_model"}
+        )
+        for key in (
+            "runtime_package",
+            "stage_model",
+            "native_model_package_path",
+            "native_stage_model_path",
+        ):
+            metadata.extensions.pop(key, None)
+        metadata.extensions["source_kind"] = "legacy_multi"
+        metadata.extensions["selected_lut_names"] = list(selected_names)
+        metadata.extensions["source_fingerprints"] = source_fingerprints
+
+        fd, temp_path = tempfile.mkstemp(suffix=".npz", dir=TEMP_DIR)
+        os.close(fd)
+        try:
+            cls.save_npz_with_metadata(temp_path, runtime_rgb, runtime_stacks, metadata)
+            return temp_path
+        except Exception:
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+            raise
+
     @classmethod
     def get_source_catalog(cls) -> dict[str, list[dict]]:
         """Return legacy and native source catalog groupings.
@@ -1014,6 +1231,7 @@ class LUTManager:
         *,
         source_kind: str,
         lut_name: str | None = None,
+        lut_names: list[str] | None = None,
         material_type: str | None = None,
         vendor: str | None = None,
         db_names: list[str] | None = None,
@@ -1028,6 +1246,17 @@ class LUTManager:
             if lut_path is None:
                 raise ValueError(f"LUT not found: {lut_name}")
             return lut_path, lut_name
+
+        if normalized_kind == "legacy_multi":
+            selected_names = cls._normalize_legacy_multi_names(lut_name, lut_names)
+            selected_paths: list[str] = []
+            for selected_name in selected_names:
+                lut_path = cls.get_lut_path(selected_name)
+                if lut_path is None:
+                    raise ValueError(f"LUT not found: {selected_name}")
+                selected_paths.append(lut_path)
+            runtime_path = cls._legacy_multi_runtime_path(selected_names, selected_paths)
+            return runtime_path, selected_names[0]
 
         if normalized_kind != "native_bundle":
             raise ValueError(f"Unsupported source_kind: {source_kind}")

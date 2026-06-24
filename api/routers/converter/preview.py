@@ -467,7 +467,10 @@ def _normalize_db_names(db_names: list[str] | str | None) -> list[str]:
                 return [item for item in parsed if isinstance(item, str)]
         return [db_names]
 
-    normalized = list(db_names)
+    try:
+        normalized = list(db_names)
+    except TypeError:
+        return []
     if len(normalized) == 1 and isinstance(normalized[0], str):
         value = normalized[0].strip()
         if value.startswith("[") and value.endswith("]"):
@@ -705,8 +708,9 @@ async def crop_image(
 @router.post("/preview")
 async def convert_preview(
     image: UploadFile = File(..., description="输入图像"),
-    source_kind: str = Form("legacy_single", description="源类型: legacy_single | native_bundle"),
+    source_kind: str = Form("legacy_single", description="源类型: legacy_single | legacy_multi | native_bundle"),
     lut_name: str | None = Form(None, description="LUT 名称"),
+    lut_names: list[str] | str | None = Form(None, description="传统 LUT 名称列表"),
     material_type: str | None = Form(None, description="原生材料类型"),
     vendor: str | None = Form(None, description="原生厂商"),
     db_names: list[str] | str | None = Form(None, description="原生 DB 名称列表"),
@@ -796,7 +800,14 @@ async def convert_preview(
     # Material-archive mode: skip LUT resolution entirely
     if material_source == "material_archive":
         request = LutSourceSelection.model_validate(
-            {"source_kind": "legacy_single", "lut_name": "__material_archive__", "material_type": None, "vendor": None, "db_names": []}
+            {
+                "source_kind": "legacy_single",
+                "lut_name": "__material_archive__",
+                "lut_names": [],
+                "material_type": None,
+                "vendor": None,
+                "db_names": [],
+            }
         )
         lut_path = "__material_archive__"
         resolved_lut_name = "__material_archive__"
@@ -804,10 +815,12 @@ async def convert_preview(
     else:
         try:
             normalized_db_names = _normalize_db_names(db_names)
+            normalized_lut_names = _normalize_db_names(lut_names)
             request = LutSourceSelection.model_validate(
                 {
                     "source_kind": source_kind,
                     "lut_name": lut_name,
+                    "lut_names": normalized_lut_names,
                     "material_type": material_type,
                     "vendor": vendor,
                     "db_names": normalized_db_names,
@@ -820,12 +833,17 @@ async def convert_preview(
             ) from exc
 
         try:
+            source_kwargs = {
+                "source_kind": request.source_kind,
+                "lut_name": request.lut_name,
+                "material_type": request.material_type,
+                "vendor": request.vendor,
+                "db_names": request.db_names,
+            }
+            if request.source_kind == "legacy_multi":
+                source_kwargs["lut_names"] = request.lut_names
             lut_path, resolved_lut_name = LUTManager.resolve_source_selection(
-                source_kind=request.source_kind,
-                lut_name=request.lut_name,
-                material_type=request.material_type,
-                vendor=request.vendor,
-                db_names=request.db_names,
+                **source_kwargs
             )
         except ValueError as exc:
             detail = str(exc)
@@ -833,7 +851,7 @@ async def convert_preview(
             raise HTTPException(status_code=status_code, detail=detail) from exc
 
         resolved_lut_path = os.path.abspath(lut_path)
-    if request.source_kind == "native_bundle":
+    if request.source_kind in ("native_bundle", "legacy_multi"):
         try:
             Path(resolved_lut_path).resolve().relative_to(Path(TEMP_DIR).resolve())
         except ValueError:
@@ -1119,6 +1137,7 @@ async def convert_preview(
     store.put(session_id, "lut_path", lut_path)
     store.put(session_id, "lut_name", resolved_lut_name)
     store.put(session_id, "lut_source_kind", request.source_kind)
+    store.put(session_id, "lut_names", list(request.lut_names))
     store.put(session_id, "lut_material_type", request.material_type)
     store.put(session_id, "lut_vendor", request.vendor)
     store.put(session_id, "lut_db_names", list(request.db_names))

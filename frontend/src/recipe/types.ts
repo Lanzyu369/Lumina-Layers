@@ -163,6 +163,7 @@ export interface ConverterRecipeFridgeMagnet {
 
 export interface ConverterRecipeSource {
   source_version: "legacy" | "native" | "material" | string;
+  selected_legacy_lut_names?: string[];
   selected_native_brand_key: string;
   selected_native_db_names: string[];
   color_layers: number | null;

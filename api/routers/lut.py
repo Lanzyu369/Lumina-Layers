@@ -115,6 +115,16 @@ _LUT_RECIPE_SEARCH_FAILED_DETAIL = (
 _LUT_NOT_FOUND_DETAIL = "Selected LUT was not found or is unavailable."
 
 
+def _is_lut_sync_index_path(path: str) -> bool:
+    try:
+        resolved = Path(path).resolve()
+        preset_root = Path(LUTManager.LUT_PRESET_DIR).resolve()
+        relative = resolved.relative_to(preset_root)
+    except (OSError, ValueError):
+        return False
+    return bool(relative.parts and relative.parts[0] == "_sync")
+
+
 def _lut_error_fields(exc: Exception) -> dict[str, str]:
     return {
         "error_type": type(exc).__name__,
@@ -342,9 +352,11 @@ def get_lut_details_catalog() -> LutDetailsCatalogResponse:
                         search_tokens=list(item.search_tokens),
                     )
                     for item in group.items
+                    if not _is_lut_sync_index_path(item.path)
                 ],
             )
             for group in catalog.groups
+            if any(not _is_lut_sync_index_path(item.path) for item in group.items)
         ]
     )
 

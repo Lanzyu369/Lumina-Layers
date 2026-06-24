@@ -106,6 +106,10 @@ export function collectBugReportContext(): BugReportContextPayload {
   const lutName = isConverterActive
     ? (isMaterialSource ? null : converter.lut_name || null)
     : settings.lastLutName || null;
+  const lutNames =
+    isConverterActive && sourceVersion === "legacy"
+      ? [...converter.lut_names]
+      : null;
 
   return {
     url: typeof window !== "undefined" ? window.location.href : "",
@@ -123,6 +127,7 @@ export function collectBugReportContext(): BugReportContextPayload {
     },
     color_mode: colorMode,
     lut_name: lutName,
+    ...(lutNames ? { lut_names: lutNames } : {}),
     source_version: sourceVersion,
     selected_native_brand_key: isNativeSource ? converter.selectedNativeBrandKey || null : null,
     selected_native_db_names: isNativeSource ? converter.selectedNativeDbNames : [],

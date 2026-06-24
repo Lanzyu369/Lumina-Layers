@@ -156,6 +156,7 @@ export default function BasicSettings() {
     imagePreviewUrl,
     source_version,
     lut_name,
+    lut_names,
     lutListFull,
     lutListLoading,
     legacyCatalogGroups,
@@ -207,6 +208,7 @@ export default function BasicSettings() {
     setNativeSupportedMode,
     setNativeDbNames,
     setLegacyManufacturer,
+    setLegacyLutNames,
     fetchLutList,
     fetchLegacyCatalog,
   } = useConverterStore(useShallow((s) => ({
@@ -214,6 +216,7 @@ export default function BasicSettings() {
     imagePreviewUrl: s.imagePreviewUrl,
     source_version: s.source_version,
     lut_name: s.lut_name,
+    lut_names: s.lut_names,
     lutListFull: s.lutListFull,
     lutListLoading: s.lutListLoading,
     legacyCatalogGroups: s.legacyCatalogGroups,
@@ -265,6 +268,7 @@ export default function BasicSettings() {
     setNativeSupportedMode: s.setNativeSupportedMode,
     setNativeDbNames: s.setNativeDbNames,
     setLegacyManufacturer: s.setLegacyManufacturer,
+    setLegacyLutNames: s.setLegacyLutNames,
     fetchLutList: s.fetchLutList,
     fetchLegacyCatalog: s.fetchLegacyCatalog,
   })));
@@ -274,6 +278,7 @@ export default function BasicSettings() {
       resolveConverterSourceSelection({
         source_version,
         lut_name,
+        lut_names,
         nativeBrandGroups,
         selectedNativeBrandKey,
         selectedNativeDbNames,
@@ -286,6 +291,7 @@ export default function BasicSettings() {
     [
       source_version,
       lut_name,
+      lut_names,
       nativeBrandGroups,
       selectedNativeBrandKey,
       selectedNativeDbNames,
@@ -913,10 +919,12 @@ export default function BasicSettings() {
           <LegacyLutSelector
             manufacturer={selectedLegacyManufacturer}
             lutName={lut_name}
+            selectedLutNames={lut_names.length > 0 ? lut_names : (lut_name ? [lut_name] : [])}
             manufacturerOptions={manufacturerOptions}
             groupedLutOptions={groupedLutOptions}
             onManufacturerChange={setLegacyManufacturer}
             onLutChange={setLutName}
+            onLutSelectionChange={setLegacyLutNames}
             onRefresh={() => void handleRefreshLut()}
             onUploadClick={() => lutFileRef.current?.click()}
             loading={legacyCatalogLoading}
@@ -932,6 +940,8 @@ export default function BasicSettings() {
               upload: `+ ${t("basic_lut_upload")}`,
               loadingHint: t("basic_brand_loading"),
               noBrandHint: t("basic_lut_no_brand_hint"),
+              multiSelect: t("basic_lut_multi_select"),
+              selectedCount: t("basic_lut_selected_count"),
             }}
           />
           <input
