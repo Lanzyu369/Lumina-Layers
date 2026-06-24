@@ -38,12 +38,14 @@ function makeItem(
   name: string,
   manufacturer: string,
   colorMode: string,
+  compatibilityKey = colorMode,
 ): LutDetailsCatalogItem {
   return {
     name,
     path: `/lut/${name}.npy`,
     fingerprint: `fp-${name}`,
     color_mode: colorMode,
+    compatibility_key: compatibilityKey,
     source_kind: "legacy_lookup",
     manufacturer,
     material_type: "",
@@ -54,12 +56,24 @@ function makeItem(
 }
 
 function rowsToGroups(
-  rows: Array<{ name: string; manufacturer: string; colorMode: string }>,
+  rows: Array<{
+    name: string;
+    manufacturer: string;
+    colorMode: string;
+    compatibilityKey?: string;
+  }>,
 ): LutDetailsCatalogGroup[] {
   const grouped = new Map<string, LutDetailsCatalogItem[]>();
   for (const row of rows) {
     const items = grouped.get(row.manufacturer) ?? [];
-    items.push(makeItem(row.name, row.manufacturer, row.colorMode));
+    items.push(
+      makeItem(
+        row.name,
+        row.manufacturer,
+        row.colorMode,
+        row.compatibilityKey ?? row.colorMode,
+      ),
+    );
     grouped.set(row.manufacturer, items);
   }
   return Array.from(grouped, ([manufacturer, items]) => ({
@@ -69,14 +83,7 @@ function rowsToGroups(
 }
 
 function expectedBucket(colorMode: string) {
-  const normalized = colorMode.toLowerCase();
-  if (normalized.includes("4-color")) return "4-Color";
-  if (normalized.includes("5-color")) return "5-Color Extended";
-  if (normalized.includes("6-color")) return "6-Color";
-  if (normalized.includes("8-color")) return "8-Color";
-  if (normalized.includes("merged")) return "Merged";
-  if (normalized.includes("bw")) return "BW";
-  return "Merged";
+  return colorMode.trim() || "Unknown";
 }
 
 describe("legacy LUT catalog selection helpers", () => {
@@ -205,13 +212,15 @@ describe("legacy LUT catalog selection helpers", () => {
             const bucketSet = new Set(buckets);
             expect(bucketSet.size).toBe(buckets.length);
             expect(
-              buckets.every((bucket) => COLOR_MODE_BUCKETS.includes(bucket)),
+              buckets.every((bucket) =>
+                (COLOR_MODE_BUCKETS as readonly string[]).includes(bucket),
+              ),
             ).toBe(true);
             expect(buckets).toEqual(
               [...buckets].sort(
                 (left, right) =>
-                  COLOR_MODE_BUCKETS.indexOf(left) -
-                  COLOR_MODE_BUCKETS.indexOf(right),
+                  (COLOR_MODE_BUCKETS as readonly string[]).indexOf(left) -
+                  (COLOR_MODE_BUCKETS as readonly string[]).indexOf(right),
               ),
             );
             expect(
@@ -231,7 +240,53 @@ describe("legacy LUT catalog selection helpers", () => {
     for (const colorMode of colorModes) {
       expect(getColorModeBucket(colorMode)).toBe(expectedBucket(colorMode));
     }
-    expect(getColorModeBucket("future custom catalog mode")).toBe("Merged");
+    expect(getColorModeBucket("future custom catalog mode")).toBe(
+      "future custom catalog mode",
+    );
+  });
+
+  it("keeps CMYW and RYBW in separate compatibility buckets", () => {
+    const groups = rowsToGroups([
+      { name: "A-CMYW", manufacturer: "Brand A", colorMode: ColorMode.FOUR_COLOR_CMYW },
+      { name: "A-RYBW", manufacturer: "Brand A", colorMode: ColorMode.FOUR_COLOR_RYBW },
+    ]);
+    const index = buildLutCatalogIndex(groups);
+
+    expect(listBucketsForManufacturer(index, "Brand A")).toEqual([
+      ColorMode.FOUR_COLOR_CMYW,
+      ColorMode.FOUR_COLOR_RYBW,
+    ]);
+    expect(index.byManufacturerAndBucket["Brand A"]?.[ColorMode.FOUR_COLOR_CMYW])
+      .toHaveLength(1);
+    expect(index.byManufacturerAndBucket["Brand A"]?.[ColorMode.FOUR_COLOR_RYBW])
+      .toHaveLength(1);
+  });
+
+  it("uses compatibility_key instead of color_mode for same-mode multi-select buckets", () => {
+    const groups = rowsToGroups([
+      {
+        name: "A-RYBW",
+        manufacturer: "Brand A",
+        colorMode: ColorMode.FOUR_COLOR_RYBW,
+        compatibilityKey: "sig-a",
+      },
+      {
+        name: "B-RYBW",
+        manufacturer: "Brand A",
+        colorMode: ColorMode.FOUR_COLOR_RYBW,
+        compatibilityKey: "sig-b",
+      },
+    ]);
+    const index = buildLutCatalogIndex(groups);
+
+    expect(listBucketsForManufacturer(index, "Brand A")).toEqual([
+      "sig-a",
+      "sig-b",
+    ]);
+    expect(index.byManufacturerAndBucket["Brand A"]?.["sig-a"]?.map((item) => item.name))
+      .toEqual(["A-RYBW"]);
+    expect(index.byManufacturerAndBucket["Brand A"]?.["sig-b"]?.map((item) => item.name))
+      .toEqual(["B-RYBW"]);
   });
 
   it("lists LUTs only for the selected manufacturer", () => {

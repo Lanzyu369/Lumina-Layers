@@ -71,7 +71,14 @@ export default function LegacyLutSelector({
         ? [lutName]
         : [],
   );
-  const orderedLutValues = groupedLutOptions.flatMap((group) =>
+  const activeLutName = lutName || selectedLutNames?.[0] || "";
+  const activeGroup = activeLutName
+    ? groupedLutOptions.find((group) =>
+        group.options.some((option) => option.value === activeLutName),
+      ) ?? null
+    : null;
+  const multiSelectGroups = activeGroup ? [activeGroup] : [];
+  const orderedLutValues = multiSelectGroups.flatMap((group) =>
     group.options.map((option) => option.value),
   );
   const selectedCount = orderedLutValues.filter((value) =>
@@ -124,14 +131,14 @@ export default function LegacyLutSelector({
   );
 
   const multiSelectList =
-    manufacturer && groupedLutOptions.length > 0 ? (
+    manufacturer && multiSelectGroups.length > 0 ? (
       <div className="grid gap-2 rounded-lg border border-slate-200/60 bg-slate-100/50 p-3 dark:border-slate-700/40 dark:bg-slate-900/40">
         <div className="flex items-center justify-between gap-2 text-xs font-medium uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">
           <span>{labels.multiSelect ?? labels.lut}</span>
           <span className="tracking-normal">{labels.selectedCount ?? "Selected"}: {selectedCount}</span>
         </div>
         <div className="grid gap-2">
-          {groupedLutOptions.map((group) => (
+          {multiSelectGroups.map((group) => (
             <div key={group.label} className="grid gap-1.5">
               <div className="text-xs text-slate-500 dark:text-slate-400">
                 {group.label}

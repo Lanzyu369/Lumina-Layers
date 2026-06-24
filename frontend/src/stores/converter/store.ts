@@ -101,6 +101,7 @@ import type {
 } from "../../api/types";
 import {
   buildLutCatalogIndex,
+  findLutLocation,
   findLutLocationByPath,
 } from "./legacyLutSelection";
 
@@ -1105,7 +1106,8 @@ export function resolveConverterSourceSelection(
     | "selectedMaterialDirNames"
     | "materialLayerCount"
     | "materialLayerHeightMm"
-  >,
+  > &
+    Partial<Pick<ConverterState, "lutListFull" | "legacyCatalogGroups">>,
 ): {
   source_kind: "legacy_single" | "legacy_multi" | "native_bundle";
   isReady: boolean;
@@ -1139,7 +1141,10 @@ export function resolveConverterSourceSelection(
   }
 
   if (state.source_version === "legacy") {
-    const lutNames = normalizeLegacyLutNames(state.lut_names, state.lut_name);
+    const lutNames = filterLegacyLutNamesToPrimaryBucket(
+      state,
+      normalizeLegacyLutNames(state.lut_names, state.lut_name),
+    );
     return {
       source_kind: lutNames.length > 1 ? "legacy_multi" : "legacy_single",
       isReady: lutNames.length > 0,
@@ -1166,9 +1171,13 @@ export function resolveConverterSourceSelection(
 }
 
 function buildLegacySourceParams(
-  state: Pick<ConverterState, "lut_name" | "lut_names">,
+  state: Pick<ConverterState, "lut_name" | "lut_names"> &
+    Partial<Pick<ConverterState, "lutListFull" | "legacyCatalogGroups">>,
 ) {
-  const lutNames = normalizeLegacyLutNames(state.lut_names, state.lut_name);
+  const lutNames = filterLegacyLutNamesToPrimaryBucket(
+    state,
+    normalizeLegacyLutNames(state.lut_names, state.lut_name),
+  );
   const primaryName = lutNames[0] ?? state.lut_name;
   if (lutNames.length > 1) {
     return {
@@ -2122,6 +2131,49 @@ function normalizeLegacyLutNames(
   });
 }
 
+function findLegacyLutLocationForName(
+  state: Partial<Pick<ConverterState, "lutListFull" | "legacyCatalogGroups">>,
+  index: ReturnType<typeof buildLutCatalogIndex>,
+  name: string,
+): { manufacturer: string; bucket: string } | null {
+  const lutInfo = (state.lutListFull ?? []).find((lut) => lut.name === name);
+  const pathLocation = lutInfo
+    ? findLutLocationByPath(index, lutInfo.path)
+    : null;
+  return pathLocation ?? findLutLocation(index, name);
+}
+
+function filterLegacyLutNamesToPrimaryBucket(
+  state: Partial<Pick<ConverterState, "lutListFull" | "legacyCatalogGroups">>,
+  names: string[],
+): string[] {
+  const normalized = normalizeLegacyLutNames(names, "");
+  if (normalized.length <= 1) {
+    return normalized;
+  }
+
+  const catalogIndex = buildLutCatalogIndex(state.legacyCatalogGroups ?? []);
+  const primaryLocation = findLegacyLutLocationForName(
+    state,
+    catalogIndex,
+    normalized[0],
+  );
+  if (!primaryLocation) {
+    return normalized.slice(0, 1);
+  }
+
+  return normalized.filter((name, position) => {
+    if (position === 0) {
+      return true;
+    }
+    const location = findLegacyLutLocationForName(state, catalogIndex, name);
+    return (
+      location?.manufacturer === primaryLocation.manufacturer &&
+      location.bucket === primaryLocation.bucket
+    );
+  });
+}
+
 function areStringArraysEqual(left: string[], right: string[]): boolean {
   return (
     left.length === right.length &&
@@ -2140,6 +2192,8 @@ function buildLegacySelectionAvailabilityUpdates(
     | "model_only"
     | "model_threshold"
     | "model_margin"
+    | "lutListFull"
+    | "legacyCatalogGroups"
   >,
   availableNames: Iterable<string>,
 ): Partial<ConverterState> {
@@ -2163,7 +2217,10 @@ function buildLegacySelectionAvailabilityUpdates(
     };
   }
 
-  const filtered = normalized.filter((name) => available.has(name));
+  const filtered = filterLegacyLutNamesToPrimaryBucket(
+    state,
+    normalized.filter((name) => available.has(name)),
+  );
   if (state.lut_name !== primary || !areStringArraysEqual(state.lut_names, filtered)) {
     return {
       lut_name: primary,
@@ -2171,6 +2228,26 @@ function buildLegacySelectionAvailabilityUpdates(
     };
   }
   return {};
+}
+
+function buildLegacySelectionCompatibilityUpdates(
+  state: Pick<
+    ConverterState,
+    "lut_name" | "lut_names" | "lutListFull" | "legacyCatalogGroups"
+  >,
+): Partial<ConverterState> {
+  const normalized = normalizeLegacyLutNames(state.lut_names, state.lut_name);
+  if (normalized.length === 0) {
+    return {};
+  }
+  const filtered = filterLegacyLutNamesToPrimaryBucket(state, normalized);
+  if (areStringArraysEqual(normalized, filtered)) {
+    return {};
+  }
+  return {
+    lut_name: filtered[0] ?? "",
+    lut_names: filtered,
+  };
 }
 
 const SELECTED_MATERIAL_DIR_NAMES_KEY = "lumina_selectedMaterialDirNames";
@@ -2859,7 +2936,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
     setLegacyLutNames: (names: string[]) => {
       const state = _get();
-      const normalized = normalizeLegacyLutNames(names, "");
+      const normalized = filterLegacyLutNamesToPrimaryBucket(
+        state,
+        normalizeLegacyLutNames(names, ""),
+      );
       const primaryName = normalized[0] ?? "";
       const lutInfo = primaryName
         ? state.lutListFull.find((l) => l.name === primaryName)
@@ -5115,10 +5195,14 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
         // If a remembered LUT exists, apply its color_mode.
         const currentState = _get();
+        const selectionState = {
+          ...currentState,
+          lutListFull: luts,
+        };
         Object.assign(
           updates,
           buildLegacySelectionAvailabilityUpdates(
-            currentState,
+            selectionState,
             luts.map((lut) => lut.name),
           ),
         );
@@ -5163,10 +5247,14 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           nativeBrandGroupsLoading: false,
         };
         const remembered = currentState.lut_name;
+        const selectionState = {
+          ...currentState,
+          lutListFull: legacyLuts,
+        };
         Object.assign(
           updates,
           buildLegacySelectionAvailabilityUpdates(
-            currentState,
+            selectionState,
             legacyLuts.map((lut) => lut.name),
           ),
         );
@@ -5241,11 +5329,16 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           index.byManufacturer[currentState.selectedLegacyManufacturer]
             ? currentState.selectedLegacyManufacturer
             : "");
+        const selectionUpdates = buildLegacySelectionCompatibilityUpdates({
+          ...currentState,
+          legacyCatalogGroups: groups,
+        });
 
         set({
           legacyCatalogGroups: groups,
           legacyCatalogLoading: false,
           selectedLegacyManufacturer: selectedManufacturer,
+          ...selectionUpdates,
         });
       } catch (err) {
         set({ legacyCatalogLoading: false });

@@ -54,6 +54,7 @@ function makeLegacyCatalogGroups(): LutDetailsCatalogGroup[] {
           path: "lut-ref/fp-a4.npy",
           fingerprint: "fp-a4",
           color_mode: ColorModeEnum.FOUR_COLOR_RYBW,
+          compatibility_key: "sig-a4",
           source_kind: "legacy_lookup",
           manufacturer: "Brand A",
           material_type: "",
@@ -62,10 +63,24 @@ function makeLegacyCatalogGroups(): LutDetailsCatalogGroup[] {
           search_tokens: ["brand", "a", "4c"],
         },
         {
+          name: "A 4C Alt",
+          path: "lut-ref/fp-a4-alt.npy",
+          fingerprint: "fp-a4-alt",
+          color_mode: ColorModeEnum.FOUR_COLOR_RYBW,
+          compatibility_key: "sig-a4-alt",
+          source_kind: "legacy_lookup",
+          manufacturer: "Brand A",
+          material_type: "",
+          manufacturer_source: "metadata",
+          material_source: "metadata",
+          search_tokens: ["brand", "a", "4c", "alt"],
+        },
+        {
           name: "A 8C",
           path: "lut-ref/fp-a8.npy",
           fingerprint: "fp-a8",
           color_mode: ColorModeEnum.EIGHT_COLOR,
+          compatibility_key: "sig-a8",
           source_kind: "legacy_lookup",
           manufacturer: "Brand A",
           material_type: "",
@@ -83,6 +98,7 @@ function makeLegacyCatalogGroups(): LutDetailsCatalogGroup[] {
           path: "lut-ref/fp-bbw.npy",
           fingerprint: "fp-bbw",
           color_mode: ColorModeEnum.BW,
+          compatibility_key: "sig-bw",
           source_kind: "legacy_lookup",
           manufacturer: "Brand B",
           material_type: "",
@@ -100,6 +116,7 @@ function makeLegacyCatalogGroups(): LutDetailsCatalogGroup[] {
           path: "lut-ref/fp-loose.npy",
           fingerprint: "fp-loose",
           color_mode: ColorModeEnum.MERGED,
+          compatibility_key: "sig-merged",
           source_kind: "legacy_lookup",
           manufacturer: "Unlabeled",
           material_type: "",
@@ -159,6 +176,12 @@ beforeEach(() => {
         color_mode: ColorModeEnum.FOUR_COLOR_RYBW,
         path: "lut-ref/fp-a4.npy",
         fingerprint: "fp-a4",
+      },
+      {
+        name: "Brand A - A4 Alt",
+        color_mode: ColorModeEnum.FOUR_COLOR_RYBW,
+        path: "lut-ref/fp-a4-alt.npy",
+        fingerprint: "fp-a4-alt",
       },
       {
         name: "Brand A - A8",
@@ -527,11 +550,26 @@ describe("BasicSettings", () => {
 
     await waitFor(() => {
       expect(lutDropdown).toHaveAttribute("aria-expanded", "true");
-      expect(screen.getAllByText("4 色").length).toBeGreaterThan(0);
+      expect(screen.getByText("4 色 RYBW #1")).toBeInTheDocument();
+      expect(screen.getByText("4 色 RYBW #2")).toBeInTheDocument();
     });
-    expect(screen.getAllByText("8 色").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("8 色 Max").length)
+      .toBeGreaterThan(0);
     expect(screen.getByRole("option", { name: "A 4C" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "A 4C Alt" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "A 8C" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("option", { name: "A 4C" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("同组多选 LUT")).toBeInTheDocument();
+      expect(screen.getByRole("checkbox", { name: "A 4C" }))
+        .toBeInTheDocument();
+    });
+    expect(screen.queryByRole("checkbox", { name: "A 4C Alt" }))
+      .not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "A 8C" }))
+      .not.toBeInTheDocument();
   });
 
   it("submits the LUTManager name when a catalog LUT path maps to a shorter legacy LUT name", async () => {

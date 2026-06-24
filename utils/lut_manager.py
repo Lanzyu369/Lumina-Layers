@@ -1022,6 +1022,22 @@ class LUTManager:
             "layer_order": str(metadata.layer_order),
         }
 
+    @classmethod
+    def legacy_multi_compatibility_key(cls, metadata: LUTMetadata) -> str:
+        """Return a stable key for legacy_multi-compatible LUT metadata.
+        返回用于 legacy_multi 兼容分组的稳定键。
+        """
+
+        signature = cls._legacy_multi_compatibility_signature(metadata)
+        payload = json.dumps(
+            signature,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
     @staticmethod
     def _legacy_standard_stacks_for_count(color_count: int) -> np.ndarray | None:
         if color_count == 32:

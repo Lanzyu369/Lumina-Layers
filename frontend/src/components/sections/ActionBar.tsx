@@ -92,6 +92,8 @@ export default function ActionBar() {
   const imageFile = useConverterStore((s) => s.imageFile)
   const lut_name = useConverterStore((s) => s.lut_name)
   const lut_names = useConverterStore((s) => s.lut_names)
+  const lutListFull = useConverterStore((s) => s.lutListFull)
+  const legacyCatalogGroups = useConverterStore((s) => s.legacyCatalogGroups)
   const sourceVersion = useConverterStore((s) => s.source_version)
   const selectedNativeBrandKey = useConverterStore((s) => s.selectedNativeBrandKey)
   const selectedNativeDbNames = useConverterStore((s) => s.selectedNativeDbNames)
@@ -147,6 +149,8 @@ export default function ActionBar() {
         selectedMaterialDirNames,
         materialLayerCount,
         materialLayerHeightMm,
+        lutListFull,
+        legacyCatalogGroups,
       }),
     [
       sourceVersion,
@@ -160,6 +164,8 @@ export default function ActionBar() {
       selectedMaterialDirNames,
       materialLayerCount,
       materialLayerHeightMm,
+      lutListFull,
+      legacyCatalogGroups,
     ],
   )
 

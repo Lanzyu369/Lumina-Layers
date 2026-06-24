@@ -3378,17 +3378,41 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "4 色",
     en: "4-Color",
   },
+  basic_lut_color_mode_4color_cmyw: {
+    zh: "4 色 CMYW",
+    en: "4-Color (CMYW)",
+  },
+  basic_lut_color_mode_4color_rybw: {
+    zh: "4 色 RYBW",
+    en: "4-Color (RYBW)",
+  },
   basic_lut_color_mode_5color_ext: {
     zh: "5 色扩展",
     en: "5-Color Extended",
+  },
+  basic_lut_color_mode_5color_ext_1444: {
+    zh: "5 色扩展 1444",
+    en: "5-Color Extended (1444)",
   },
   basic_lut_color_mode_6color: {
     zh: "6 色",
     en: "6-Color",
   },
+  basic_lut_color_mode_6color_cmywgk: {
+    zh: "6 色 CMYWGK",
+    en: "6-Color (CMYWGK 1296)",
+  },
+  basic_lut_color_mode_6color_rybwgk: {
+    zh: "6 色 RYBWGK",
+    en: "6-Color (RYBWGK 1296)",
+  },
   basic_lut_color_mode_8color: {
     zh: "8 色",
     en: "8-Color",
+  },
+  basic_lut_color_mode_8color_max: {
+    zh: "8 色 Max",
+    en: "8-Color Max",
   },
   basic_lut_color_mode_merged: {
     zh: "合并 LUT",

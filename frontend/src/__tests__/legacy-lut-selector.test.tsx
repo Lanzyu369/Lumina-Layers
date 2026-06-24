@@ -21,7 +21,10 @@ const manufacturerOptions = [
 const groupedLutOptions = [
   {
     label: "4-Color",
-    options: [{ label: "A 4C", value: "a4" }],
+    options: [
+      { label: "A 4C", value: "a4" },
+      { label: "B 4C", value: "b4" },
+    ],
   },
   {
     label: "8-Color",
@@ -88,10 +91,24 @@ describe("LegacyLutSelector", () => {
       },
     });
 
-    fireEvent.click(screen.getByRole("checkbox", { name: "A 8C" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "B 4C" }));
 
-    expect(onLutSelectionChange).toHaveBeenCalledWith(["a4", "a8"]);
+    expect(onLutSelectionChange).toHaveBeenCalledWith(["a4", "b4"]);
     expect(screen.getByText("Selected: 1")).toBeInTheDocument();
+  });
+
+  it("limits multi-select checkboxes to the selected LUT group", () => {
+    renderSelector({
+      selectedLutNames: ["a4"],
+      labels: {
+        ...labels,
+        multiSelect: "Multi-select LUTs",
+        selectedCount: "Selected",
+      },
+    });
+
+    expect(screen.getByRole("checkbox", { name: "A 4C" })).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "A 8C" })).not.toBeInTheDocument();
   });
 
   it("uses a vertical stack in compact mode", () => {

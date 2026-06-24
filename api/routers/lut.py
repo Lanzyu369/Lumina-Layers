@@ -345,6 +345,7 @@ def get_lut_details_catalog() -> LutDetailsCatalogResponse:
                         fingerprint=item.fingerprint,
                         color_mode=_canonicalize_public_color_mode(item.color_mode),
                         source_kind=item.source_kind,
+                        compatibility_key=getattr(item, "compatibility_key", ""),
                         manufacturer=item.manufacturer,
                         material_type=item.material_type,
                         manufacturer_source=item.manufacturer_source,

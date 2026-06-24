@@ -101,6 +101,7 @@ class LutDetailsCatalogItem(BaseModel):
     fingerprint: str = Field("", description="文件指纹")
     color_mode: str = Field(..., description="颜色模式")
     source_kind: str = Field("legacy_lookup", description="来源类型")
+    compatibility_key: str = Field("", description="legacy_multi 兼容分组键")
     manufacturer: str = Field(..., description="解析后的厂商")
     material_type: str = Field("", description="解析后的材质")
     manufacturer_source: str = Field(..., description="厂商解析来源")

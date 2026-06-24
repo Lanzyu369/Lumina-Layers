@@ -28,7 +28,12 @@ def _write_alias_config(path: Path) -> None:
     )
 
 
-def _write_lut_json(path: Path, *, color_mode: str = "4-Color (RYBW)") -> None:
+def _write_lut_json(
+    path: Path,
+    *,
+    color_mode: str = "4-Color (RYBW)",
+    layer_height_mm: float = 0.08,
+) -> None:
     payload = {
         "palette": {
             "White": {"material": "PLA Basic", "hex_color": "#FFFFFF", "color_name": "White"},
@@ -42,7 +47,7 @@ def _write_lut_json(path: Path, *, color_mode: str = "4-Color (RYBW)") -> None:
         "manufacturer": "",
         "type": "",
         "max_color_layers": 5,
-        "layer_height_mm": 0.08,
+        "layer_height_mm": layer_height_mm,
         "line_width_mm": 0.42,
         "base_layers": 10,
         "base_channel_idx": 0,
@@ -62,6 +67,8 @@ def test_lut_details_catalog_and_detail_endpoints(tmp_path: Path) -> None:
 
     lut_path = preset_dir / "Bambulab" / "PLA" / "catalog_source.json"
     _write_lut_json(lut_path)
+    alternate_lut_path = preset_dir / "Bambulab" / "PLA" / "alternate_layer.json"
+    _write_lut_json(alternate_lut_path, layer_height_mm=0.12)
 
     service = get_lut_details_service(preset_dir=preset_dir, alias_config_path=alias_path)
 
@@ -87,6 +94,18 @@ def test_lut_details_catalog_and_detail_endpoints(tmp_path: Path) -> None:
         assert catalog["groups"][0]["items"][0]["manufacturer_source"] == "folder"
         assert "bambulab" in catalog["groups"][0]["items"][0]["search_tokens"]
         assert catalog["groups"][0]["items"][0]["material_type"] == "PLA"
+        compatibility_keys = {
+            item["name"]: item["compatibility_key"]
+            for item in catalog["groups"][0]["items"]
+        }
+        catalog_key = next(
+            key for name, key in compatibility_keys.items() if "catalog_source" in name
+        )
+        alternate_key = next(
+            key for name, key in compatibility_keys.items() if "alternate_layer" in name
+        )
+        assert catalog_key
+        assert catalog_key != alternate_key
 
         lut_name = catalog["groups"][0]["items"][0]["name"]
         detail_response = client.get(f"/api/lut/{lut_name}/details")

@@ -424,6 +424,7 @@ export interface LutDetailsCatalogItem {
   fingerprint: string;
   color_mode: string;
   source_kind: string;
+  compatibility_key?: string;
   manufacturer: string;
   material_type: string;
   manufacturer_source: string;

@@ -184,6 +184,7 @@ function seedLegacyGenerateState(
 
 describe("native bundle converter flow", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     resetStore();
     mocks.convertPreview.mockReset();
     mocks.convertGenerate.mockReset();
@@ -861,6 +862,375 @@ describe("native bundle converter flow", () => {
     await useConverterStore.getState().submitGenerate();
     const generateParams = mocks.convertGenerate.mock.calls[0][1];
     expect(generateParams.color_mode).toBe(ColorMode.EIGHT_COLOR);
+  });
+
+  it("drops legacy multi-select names outside the primary exact catalog bucket", () => {
+    vi.mocked(lutApi.fetchLutInfo).mockResolvedValueOnce({
+      name: "legacy-rybw",
+      color_mode: ColorMode.FOUR_COLOR_RYBW,
+      color_count: 4,
+    } as never);
+
+    useConverterStore.setState({
+      legacyCatalogGroups: [
+        {
+          manufacturer: "Brand A",
+          items: [
+            {
+              name: "A RYBW",
+              path: "/legacy-rybw.npy",
+              fingerprint: "fp-rybw",
+              color_mode: ColorMode.FOUR_COLOR_RYBW,
+              compatibility_key: "sig-rybw",
+              source_kind: "legacy_lookup",
+              manufacturer: "Brand A",
+              material_type: "",
+              manufacturer_source: "metadata",
+              material_source: "metadata",
+              search_tokens: ["rybw"],
+            },
+            {
+              name: "A RYBW Alt",
+              path: "/legacy-rybw-alt.npy",
+              fingerprint: "fp-rybw-alt",
+              color_mode: ColorMode.FOUR_COLOR_RYBW,
+              compatibility_key: "sig-rybw",
+              source_kind: "legacy_lookup",
+              manufacturer: "Brand A",
+              material_type: "",
+              manufacturer_source: "metadata",
+              material_source: "metadata",
+              search_tokens: ["rybw", "alt"],
+            },
+            {
+              name: "A 8C",
+              path: "/legacy-eight.npy",
+              fingerprint: "fp-eight",
+              color_mode: ColorMode.EIGHT_COLOR,
+              compatibility_key: "sig-eight",
+              source_kind: "legacy_lookup",
+              manufacturer: "Brand A",
+              material_type: "",
+              manufacturer_source: "metadata",
+              material_source: "metadata",
+              search_tokens: ["eight"],
+            },
+          ],
+        },
+      ],
+      lutListFull: [
+        {
+          name: "legacy-rybw",
+          color_mode: ColorMode.FOUR_COLOR_RYBW,
+          path: "/legacy-rybw.npy",
+          fingerprint: "fp-rybw",
+        },
+        {
+          name: "legacy-eight",
+          color_mode: ColorMode.EIGHT_COLOR,
+          path: "/legacy-eight.npy",
+          fingerprint: "fp-eight",
+        },
+        {
+          name: "legacy-rybw-alt",
+          color_mode: ColorMode.FOUR_COLOR_RYBW,
+          path: "/legacy-rybw-alt.npy",
+          fingerprint: "fp-rybw-alt",
+        },
+      ],
+    } as never);
+
+    useConverterStore.getState().setLegacyLutNames([
+      "legacy-rybw",
+      "legacy-eight",
+      "legacy-rybw-alt",
+    ]);
+
+    const state = useConverterStore.getState();
+    expect(state.lut_name).toBe("legacy-rybw");
+    expect(state.lut_names).toEqual(["legacy-rybw", "legacy-rybw-alt"]);
+    expect(state.selectedLegacyManufacturer).toBe("Brand A");
+  });
+
+  it("drops same-color-mode legacy names when compatibility keys differ", () => {
+    vi.mocked(lutApi.fetchLutInfo).mockResolvedValueOnce({
+      name: "legacy-a",
+      color_mode: ColorMode.FOUR_COLOR_RYBW,
+      color_count: 4,
+    } as never);
+
+    useConverterStore.setState({
+      legacyCatalogGroups: [
+        {
+          manufacturer: "Brand A",
+          items: [
+            {
+              name: "A RYBW",
+              path: "/legacy-a.npy",
+              fingerprint: "fp-a",
+              color_mode: ColorMode.FOUR_COLOR_RYBW,
+              compatibility_key: "sig-a",
+              source_kind: "legacy_lookup",
+              manufacturer: "Brand A",
+              material_type: "",
+              manufacturer_source: "metadata",
+              material_source: "metadata",
+              search_tokens: ["a"],
+            },
+            {
+              name: "B RYBW",
+              path: "/legacy-b.npy",
+              fingerprint: "fp-b",
+              color_mode: ColorMode.FOUR_COLOR_RYBW,
+              compatibility_key: "sig-b",
+              source_kind: "legacy_lookup",
+              manufacturer: "Brand A",
+              material_type: "",
+              manufacturer_source: "metadata",
+              material_source: "metadata",
+              search_tokens: ["b"],
+            },
+          ],
+        },
+      ],
+      lutListFull: [
+        {
+          name: "legacy-a",
+          color_mode: ColorMode.FOUR_COLOR_RYBW,
+          path: "/legacy-a.npy",
+          fingerprint: "fp-a",
+        },
+        {
+          name: "legacy-b",
+          color_mode: ColorMode.FOUR_COLOR_RYBW,
+          path: "/legacy-b.npy",
+          fingerprint: "fp-b",
+        },
+      ],
+    } as never);
+
+    useConverterStore.getState().setLegacyLutNames(["legacy-a", "legacy-b"]);
+
+    expect(useConverterStore.getState().lut_names).toEqual(["legacy-a"]);
+  });
+
+  it("filters stale legacy multi-select names when LUT list loads after details catalog", async () => {
+    vi.mocked(lutApi.fetchLutInfo).mockResolvedValue({
+      name: "legacy-a",
+      color_mode: ColorMode.FOUR_COLOR_RYBW,
+      color_count: 4,
+    } as never);
+    vi.mocked(lutApi.fetchLutDetailsCatalog).mockResolvedValueOnce({
+      groups: [
+        {
+          manufacturer: "Brand A",
+          items: [
+            {
+              name: "Display A",
+              path: "/legacy-a.npy",
+              fingerprint: "fp-a",
+              color_mode: ColorMode.FOUR_COLOR_RYBW,
+              compatibility_key: "sig-a",
+              source_kind: "legacy_lookup",
+              manufacturer: "Brand A",
+              material_type: "",
+              manufacturer_source: "metadata",
+              material_source: "metadata",
+              search_tokens: ["a"],
+            },
+            {
+              name: "Display B",
+              path: "/legacy-b.npy",
+              fingerprint: "fp-b",
+              color_mode: ColorMode.FOUR_COLOR_RYBW,
+              compatibility_key: "sig-b",
+              source_kind: "legacy_lookup",
+              manufacturer: "Brand A",
+              material_type: "",
+              manufacturer_source: "metadata",
+              material_source: "metadata",
+              search_tokens: ["b"],
+            },
+          ],
+        },
+      ],
+    });
+    vi.mocked(lutApi.fetchLutCatalog).mockResolvedValueOnce({
+      legacy_groups: [
+        {
+          group_name: "Legacy",
+          items: [
+            { name: "legacy-a", color_mode: ColorMode.FOUR_COLOR_RYBW, path: "/legacy-a.npy", fingerprint: "fp-a" },
+            { name: "legacy-b", color_mode: ColorMode.FOUR_COLOR_RYBW, path: "/legacy-b.npy", fingerprint: "fp-b" },
+          ],
+        },
+      ],
+      native_brand_groups: [],
+    });
+
+    useConverterStore.setState({
+      source_version: "legacy",
+      lut_name: "legacy-a",
+      lut_names: ["legacy-a", "legacy-b"],
+      lutListFull: [],
+      legacyCatalogGroups: [],
+    } as never);
+
+    await useConverterStore.getState().fetchLegacyCatalog();
+    expect(useConverterStore.getState().lut_names).toEqual(["legacy-a"]);
+
+    await useConverterStore.getState().fetchLutCatalog();
+
+    expect(useConverterStore.getState().lut_names).toEqual(["legacy-a"]);
+  });
+
+  it("submitPreview omits stale legacy multi-select names outside the compatibility key", async () => {
+    mocks.convertPreview.mockResolvedValueOnce({
+      session_id: "session-legacy",
+      status: "ok",
+      message: "Preview generated",
+      preview_url: "/api/files/legacy-preview",
+      preview_glb_url: null,
+      palette: [],
+      dimensions: { width: 200, height: 160 },
+    });
+
+    useConverterStore.setState({
+      imageFile: new File(["png"], "legacy.png", { type: "image/png" }),
+      source_version: "legacy",
+      lut_name: "legacy-a",
+      lut_names: ["legacy-a", "legacy-b"],
+      target_width_mm: 90,
+      color_mode: ColorMode.FOUR_COLOR_RYBW,
+      modeling_mode: ModelingMode.HIGH_FIDELITY,
+      quantize_colors: 48,
+      enable_cleanup: true,
+      hue_enable: false,
+      legacyCatalogGroups: [
+        {
+          manufacturer: "Brand A",
+          items: [
+            {
+              name: "Display A",
+              path: "/legacy-a.npy",
+              fingerprint: "fp-a",
+              color_mode: ColorMode.FOUR_COLOR_RYBW,
+              compatibility_key: "sig-a",
+              source_kind: "legacy_lookup",
+              manufacturer: "Brand A",
+              material_type: "",
+              manufacturer_source: "metadata",
+              material_source: "metadata",
+              search_tokens: ["a"],
+            },
+            {
+              name: "Display B",
+              path: "/legacy-b.npy",
+              fingerprint: "fp-b",
+              color_mode: ColorMode.FOUR_COLOR_RYBW,
+              compatibility_key: "sig-b",
+              source_kind: "legacy_lookup",
+              manufacturer: "Brand A",
+              material_type: "",
+              manufacturer_source: "metadata",
+              material_source: "metadata",
+              search_tokens: ["b"],
+            },
+          ],
+        },
+      ],
+      lutListFull: [
+        {
+          name: "legacy-a",
+          color_mode: ColorMode.FOUR_COLOR_RYBW,
+          path: "/legacy-a.npy",
+          fingerprint: "fp-a",
+        },
+        {
+          name: "legacy-b",
+          color_mode: ColorMode.FOUR_COLOR_RYBW,
+          path: "/legacy-b.npy",
+          fingerprint: "fp-b",
+        },
+      ],
+    } as never);
+
+    await useConverterStore.getState().submitPreview();
+
+    const [, params] = mocks.convertPreview.mock.calls[0];
+    expect(params).toMatchObject({
+      source_kind: "legacy_single",
+      lut_name: "legacy-a",
+    });
+    expect(params).not.toHaveProperty("lut_names");
+  });
+
+  it("submitPreview falls back to the primary legacy LUT when compatibility cannot be resolved", async () => {
+    mocks.convertPreview.mockResolvedValueOnce({
+      session_id: "session-legacy",
+      status: "ok",
+      message: "Preview generated",
+      preview_url: "/api/files/legacy-preview",
+      preview_glb_url: null,
+      palette: [],
+      dimensions: { width: 200, height: 160 },
+    });
+
+    useConverterStore.setState({
+      imageFile: new File(["png"], "legacy.png", { type: "image/png" }),
+      source_version: "legacy",
+      lut_name: "legacy-a",
+      lut_names: ["legacy-a", "legacy-b"],
+      target_width_mm: 90,
+      color_mode: ColorMode.FOUR_COLOR_RYBW,
+      modeling_mode: ModelingMode.HIGH_FIDELITY,
+      quantize_colors: 48,
+      enable_cleanup: true,
+      hue_enable: false,
+      legacyCatalogGroups: [
+        {
+          manufacturer: "Brand A",
+          items: [
+            {
+              name: "Display A",
+              path: "/legacy-a.npy",
+              fingerprint: "fp-a",
+              color_mode: ColorMode.FOUR_COLOR_RYBW,
+              compatibility_key: "sig-a",
+              source_kind: "legacy_lookup",
+              manufacturer: "Brand A",
+              material_type: "",
+              manufacturer_source: "metadata",
+              material_source: "metadata",
+              search_tokens: ["a"],
+            },
+            {
+              name: "Display B",
+              path: "/legacy-b.npy",
+              fingerprint: "fp-b",
+              color_mode: ColorMode.FOUR_COLOR_RYBW,
+              compatibility_key: "sig-b",
+              source_kind: "legacy_lookup",
+              manufacturer: "Brand A",
+              material_type: "",
+              manufacturer_source: "metadata",
+              material_source: "metadata",
+              search_tokens: ["b"],
+            },
+          ],
+        },
+      ],
+      lutListFull: [],
+    } as never);
+
+    await useConverterStore.getState().submitPreview();
+
+    const [, params] = mocks.convertPreview.mock.calls[0];
+    expect(params).toMatchObject({
+      source_kind: "legacy_single",
+      lut_name: "legacy-a",
+    });
+    expect(params).not.toHaveProperty("lut_names");
   });
 
   it("hydrates the legacy LUT list from the catalog response", async () => {
