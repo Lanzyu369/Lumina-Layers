@@ -1040,10 +1040,10 @@ class LUTManager:
 
     @staticmethod
     def _legacy_standard_stacks_for_count(color_count: int) -> np.ndarray | None:
-        if color_count == 32:
+        if 30 <= color_count <= 36:
             rows = []
             for index in range(color_count):
-                temp = index
+                temp = index % 32
                 digits = []
                 for _ in range(5):
                     digits.append(temp % 2)

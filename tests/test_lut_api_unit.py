@@ -108,6 +108,7 @@ def _attach_lut_logger(
 def test_legacy_multi_runtime_accepts_cross_color_lut_candidates(tmp_path: Path) -> None:
     from utils.lut_manager import LUTManager
 
+    bw_path = tmp_path / "bw_36.npz"
     four_path = tmp_path / "four.npz"
     eight_path = tmp_path / "eight.npz"
     base_kwargs = {
@@ -128,6 +129,14 @@ def test_legacy_multi_runtime_accepts_cross_color_lut_candidates(tmp_path: Path)
         color_mode="4-Color (RYBW)",
         **base_kwargs,
     )
+    bw_meta = LUTMetadata(
+        palette=[
+            PaletteEntry("White", "PLA Basic"),
+            PaletteEntry("Black", "PLA Basic"),
+        ],
+        color_mode="BW (Black & White)",
+        **base_kwargs,
+    )
     eight_meta = LUTMetadata(
         palette=[
             PaletteEntry("White", "PLA Basic"),
@@ -141,6 +150,16 @@ def test_legacy_multi_runtime_accepts_cross_color_lut_candidates(tmp_path: Path)
         ],
         color_mode="8-Color Max",
         **base_kwargs,
+    )
+    bw_rgb = np.asarray(
+        [[255 - idx * 4, 255 - idx * 4, 255 - idx * 4] for idx in range(36)],
+        dtype=np.uint8,
+    )
+    LUTManager.save_npz_with_metadata(
+        str(bw_path),
+        bw_rgb,
+        None,
+        bw_meta,
     )
     LUTManager.save_npz_with_metadata(
         str(four_path),
@@ -156,6 +175,7 @@ def test_legacy_multi_runtime_accepts_cross_color_lut_candidates(tmp_path: Path)
     )
 
     paths = {
+        "bw": str(bw_path),
         "four": str(four_path),
         "eight": str(eight_path),
     }
@@ -164,29 +184,30 @@ def test_legacy_multi_runtime_accepts_cross_color_lut_candidates(tmp_path: Path)
         with patch("utils.lut_manager.LUTManager.get_lut_path", side_effect=lambda name: paths.get(name)):
             runtime_path, display_name = LUTManager.resolve_source_selection(
                 source_kind="legacy_multi",
-                lut_name="four",
-                lut_names=["four", "eight"],
+                lut_name="bw",
+                lut_names=["bw", "four", "eight"],
             )
 
-        assert display_name == "four"
+        assert display_name == "bw"
         runtime_rgb, runtime_stacks, runtime_meta = LUTManager.load_lut_with_metadata(runtime_path)
-        assert runtime_rgb.reshape(-1, 3).tolist() == [[255, 0, 0], [0, 0, 0]]
+        assert runtime_rgb.reshape(-1, 3).shape[0] == 34
         assert [entry.color for entry in runtime_meta.palette] == [
+            "White",
+            "Black",
             "Red",
             "Yellow",
             "Blue",
-            "White",
             "Cyan",
             "Magenta",
-            "Black",
             "Green",
         ]
         assert runtime_meta.color_mode == "Merged"
         assert runtime_meta.extensions["source_kind"] == "legacy_multi"
-        assert runtime_meta.extensions["selected_lut_names"] == ["four", "eight"]
-        assert runtime_stacks.tolist() == [
-            [0, 1, 2, 3, 0],
-            [0, 1, 2, 3, 6],
+        assert runtime_meta.extensions["selected_lut_names"] == ["bw", "four", "eight"]
+        assert len({tuple(row) for row in runtime_stacks.tolist()}) == 34
+        assert runtime_stacks[-2:].tolist() == [
+            [2, 3, 4, 0, 2],
+            [2, 3, 4, 0, 1],
         ]
 
         from core.pipeline.s01_input_validation import run as run_s01
@@ -202,13 +223,13 @@ def test_legacy_multi_runtime_accepts_cross_color_lut_candidates(tmp_path: Path)
             }
         )
         assert generate_ctx["slot_names"] == [
+            "White",
+            "Black",
             "Red",
             "Yellow",
             "Blue",
-            "White",
             "Cyan",
             "Magenta",
-            "Black",
             "Green",
         ]
         assert len(generate_ctx["preview_colors"]) == 8
