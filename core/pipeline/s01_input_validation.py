@@ -194,7 +194,7 @@ def run(ctx: dict) -> dict:
         # For Merged LUTs, extract slot_names and preview_colors from LUT metadata.
         # Use metadata.palette order (same as LUTManager.name_to_idx) so that
         # integer material IDs in ref_stacks match slot_names and preview_colors.
-        if actual_lut_path.endswith((".json", ".msgpack", ".npy")):
+        if actual_lut_path.endswith((".json", ".msgpack", ".npy", ".npz")):
             try:
                 _, _, lut_metadata = LUTManager.load_lut_with_metadata(actual_lut_path)
                 if ctx.get("color_layers") is None:

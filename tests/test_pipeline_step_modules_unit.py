@@ -215,6 +215,50 @@ class TestS01InputValidation:
         with pytest.raises(KeyError):
             run({})
 
+    def test_npz_runtime_lut_uses_metadata_palette_slots(self):
+        """legacy_multi 的 .npz 运行时 LUT 应使用 metadata palette 作为材料槽。"""
+        from core.pipeline.s01_input_validation import run
+
+        palette = [
+            PaletteEntry("White", "PLA", "#FFFFFF"),
+            PaletteEntry("Red", "PLA", "#DC143C"),
+            PaletteEntry("Yellow", "PLA", "#FFE600"),
+            PaletteEntry("Blue", "PLA", "#0064F0"),
+            PaletteEntry("Cyan", "PLA", "#0086D6"),
+            PaletteEntry("Magenta", "PLA", "#EC008C"),
+            PaletteEntry("Black", "PLA", "#000000"),
+            PaletteEntry("Green", "PLA", "#00AE42"),
+        ]
+        metadata = LUTMetadata(
+            palette=palette,
+            color_mode="Merged",
+            max_color_layers=5,
+            layer_height_mm=0.08,
+        )
+        ctx = self._make_valid_ctx()
+        ctx["lut_path"] = "/tmp/legacy_multi_runtime.npz"
+        ctx["color_mode"] = "4-Color (RYBW)"
+
+        with patch(
+            "core.pipeline.s01_input_validation.LUTManager.load_lut_with_metadata",
+            return_value=(np.zeros((1, 3), dtype=np.uint8), np.zeros((1, 5), dtype=np.int32), metadata),
+        ):
+            result = run(ctx)
+
+        assert result["slot_names"] == [
+            "White",
+            "Red",
+            "Yellow",
+            "Blue",
+            "Cyan",
+            "Magenta",
+            "Black",
+            "Green",
+        ]
+        assert len(result["preview_colors"]) == 8
+        assert result["color_layers"] == 5
+        assert result["layer_height_mm"] == 0.08
+
 
 # ===========================================================================
 # S03 — s03_color_replacement 单元测试
@@ -897,6 +941,50 @@ class TestP01PreviewValidation:
 
         with pytest.raises(KeyError):
             run({})
+
+    def test_npz_runtime_lut_uses_metadata_palette_slots(self):
+        """legacy_multi 的 .npz 预览运行时 LUT 应保留 union palette 槽位。"""
+        from core.pipeline.p01_preview_validation import run
+
+        palette = [
+            PaletteEntry("White", "PLA", "#FFFFFF"),
+            PaletteEntry("Red", "PLA", "#DC143C"),
+            PaletteEntry("Yellow", "PLA", "#FFE600"),
+            PaletteEntry("Blue", "PLA", "#0064F0"),
+            PaletteEntry("Cyan", "PLA", "#0086D6"),
+            PaletteEntry("Magenta", "PLA", "#EC008C"),
+            PaletteEntry("Black", "PLA", "#000000"),
+            PaletteEntry("Green", "PLA", "#00AE42"),
+        ]
+        metadata = LUTMetadata(
+            palette=palette,
+            color_mode="Merged",
+            max_color_layers=5,
+            layer_height_mm=0.08,
+        )
+        ctx = self._make_valid_ctx()
+        ctx["lut_path"] = "/tmp/legacy_multi_runtime.npz"
+        ctx["color_mode"] = "4-Color (RYBW)"
+
+        with patch(
+            "core.pipeline.p01_preview_validation.LUTManager.load_lut_with_metadata",
+            return_value=(np.zeros((1, 3), dtype=np.uint8), np.zeros((1, 5), dtype=np.int32), metadata),
+        ):
+            result = run(ctx)
+
+        assert result["slot_names"] == [
+            "White",
+            "Red",
+            "Yellow",
+            "Blue",
+            "Cyan",
+            "Magenta",
+            "Black",
+            "Green",
+        ]
+        assert len(result["preview_colors"]) == 8
+        assert result["color_layers"] == 5
+        assert result["layer_height_mm"] == 0.08
 
 
 # ===========================================================================

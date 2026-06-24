@@ -109,7 +109,7 @@ def run(ctx: dict) -> dict:
     if "layer_height_mm" not in ctx:
         ctx["layer_height_mm"] = None
 
-    if actual_lut_path.endswith((".json", ".msgpack", ".npy")):
+    if actual_lut_path.endswith((".json", ".msgpack", ".npy", ".npz")):
         try:
             _, _, lut_metadata = LUTManager.load_lut_with_metadata(actual_lut_path)
             if ctx.get("color_layers") is None:

@@ -25,7 +25,7 @@ from api.routers.lut import _canonicalize_public_color_mode
 from api.services.lut_presentation import public_lut_path_reference
 from api.schemas.converter import ColorMode, ConvertGenerateRequest, ConvertPreviewRequest
 from api.session_store import SessionStore
-from config import LUTMetadata, PaletteEntry
+from config import LUTMetadata, ModelingMode, PaletteEntry
 from core.native_reference import (
     get_reference_db_root,
     NativeReferenceContext,
@@ -188,6 +188,30 @@ def test_legacy_multi_runtime_accepts_cross_color_lut_candidates(tmp_path: Path)
             [0, 1, 2, 3, 0],
             [0, 1, 2, 3, 6],
         ]
+
+        from core.pipeline.s01_input_validation import run as run_s01
+
+        generate_ctx = run_s01(
+            {
+                "image_path": "/tmp/source.png",
+                "lut_path": runtime_path,
+                "color_mode": "4-Color (RYBW)",
+                "modeling_mode": ModelingMode.HIGH_FIDELITY,
+                "backing_color_id": 0,
+                "separate_backing": False,
+            }
+        )
+        assert generate_ctx["slot_names"] == [
+            "Red",
+            "Yellow",
+            "Blue",
+            "White",
+            "Cyan",
+            "Magenta",
+            "Black",
+            "Green",
+        ]
+        assert len(generate_ctx["preview_colors"]) == 8
     finally:
         if runtime_path:
             Path(runtime_path).unlink(missing_ok=True)
