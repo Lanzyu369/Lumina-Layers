@@ -82,6 +82,14 @@ describe("LegacyLutSelector", () => {
     expect(screen.getByRole("checkbox", { name: "A 8C" })).toBeInTheDocument();
   });
 
+  it("uses the shared reverse-LUT checkbox row styling", () => {
+    renderSelector();
+
+    const checkbox = screen.getByRole("checkbox", { name: "A 4C" });
+    expect(checkbox).toHaveClass("sr-only");
+    expect(checkbox.closest("label")).toHaveClass("rounded-[22px]");
+  });
+
   it("emits multi-selected LUT names in grouped order", () => {
     const onLutSelectionChange = vi.fn();
     renderSelector({
@@ -131,7 +139,7 @@ describe("LegacyLutSelector", () => {
     expect(screen.getByText("Loading LUT catalog")).toBeInTheDocument();
   });
 
-  it("disables the LUT dropdown until a brand is selected", () => {
+  it("shows the database picker hint until a brand is selected", () => {
     renderSelector({ manufacturer: "", lutName: "" });
 
     expect(screen.getByText("Pick a brand first")).toBeInTheDocument();

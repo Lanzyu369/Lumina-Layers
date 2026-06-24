@@ -1,5 +1,6 @@
 import Dropdown from "../ui/Dropdown";
 import WikiTooltip from "../ui/WikiTooltip";
+import Checkbox from "../ui/Checkbox";
 import { cx } from "../ui/panelPrimitives";
 
 interface LegacyLutOption {
@@ -208,26 +209,21 @@ export default function LegacyLutSelector({
 
           <div className="grid gap-2">
             {allLutOptions.map((option) => (
-              <label
+              <Checkbox
                 key={option.value}
-                className="flex min-h-14 items-start gap-3 rounded-2xl border border-slate-200/70 bg-[var(--surface-panel)] px-4 py-3 text-sm text-slate-700 shadow-[var(--shadow-control)] transition-colors hover:bg-[color:var(--surface-section-muted)] dark:border-slate-700/60 dark:text-slate-200"
-              >
-                <input
-                  type="checkbox"
-                  checked={selectedSet.has(option.value)}
-                  disabled={lutDisabled}
-                  onChange={() => handleToggleLut(option.value)}
-                  className="mt-0.5 size-5 shrink-0 rounded-md border-slate-300 focus:ring-[var(--focus-ring)] dark:border-slate-600 dark:bg-slate-900"
-                  style={{ accentColor: "var(--palette-blue)" }}
-                />
-                <span className="min-w-0 flex-1 whitespace-normal break-words leading-6">
-                  {option.label}
-                </span>
-              </label>
+                label={(
+                  <span className="block min-w-0 whitespace-normal break-words leading-6">
+                    {option.label}
+                  </span>
+                )}
+                checked={selectedSet.has(option.value)}
+                disabled={lutDisabled}
+                onChange={() => handleToggleLut(option.value)}
+              />
             ))}
           </div>
 
-          <div className="text-xs text-slate-500 dark:text-slate-400">
+          <div className="sr-only" aria-live="polite">
             {labels.selectedCount ?? "Selected"}: {selectedCount}
           </div>
         </div>
