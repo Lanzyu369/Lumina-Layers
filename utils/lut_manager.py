@@ -1124,6 +1124,53 @@ class LUTManager:
 
         raise ValueError(f"Legacy LUT missing recipe stacks: {lut_name}")
 
+    @staticmethod
+    def _legacy_palette_entry_key(entry: PaletteEntry) -> str:
+        return normalize_channel_key(build_channel_key(entry.color, entry.material))
+
+    @staticmethod
+    def _legacy_print_settings_signature(metadata: LUTMetadata) -> dict[str, Any]:
+        return {
+            "max_color_layers": int(metadata.max_color_layers),
+            "layer_height_mm": round(float(metadata.layer_height_mm), 6),
+            "line_width_mm": round(float(metadata.line_width_mm), 6),
+            "base_layers": int(metadata.base_layers),
+            "layer_order": str(metadata.layer_order),
+        }
+
+    @classmethod
+    def _remap_legacy_stacks_to_palette(
+        cls,
+        stacks: np.ndarray,
+        source_palette: list[PaletteEntry],
+        global_palette_index: dict[str, int],
+        lut_name: str,
+    ) -> np.ndarray:
+        remapped = np.full(stacks.shape, -1, dtype=np.int32)
+        local_to_global: dict[int, int] = {}
+        for local_idx, entry in enumerate(source_palette):
+            key = cls._legacy_palette_entry_key(entry)
+            if key in global_palette_index:
+                local_to_global[local_idx] = global_palette_index[key]
+
+        used_indices = {
+            int(value)
+            for value in np.unique(stacks)
+            if int(value) >= 0
+        }
+        missing_indices = sorted(
+            index for index in used_indices if index not in local_to_global
+        )
+        if missing_indices:
+            raise ValueError(
+                f"Legacy LUT palette cannot map recipe channels for {lut_name}: "
+                + ", ".join(str(index) for index in missing_indices)
+            )
+
+        for local_idx, global_idx in local_to_global.items():
+            remapped[stacks == local_idx] = global_idx
+        return remapped
+
     @classmethod
     def _legacy_multi_runtime_path(
         cls,
@@ -1134,8 +1181,12 @@ class LUTManager:
         stack_parts: list[np.ndarray] = []
         source_fingerprints: list[dict[str, str]] = []
         seen_recipes: set[tuple[int, ...]] = set()
-        baseline_signature: dict[str, Any] | None = None
+        baseline_print_signature: dict[str, Any] | None = None
         baseline_metadata: LUTMetadata | None = None
+        global_palette: list[PaletteEntry] = []
+        global_palette_index: dict[str, int] = {}
+        loaded_sources: list[tuple[str, str, np.ndarray, np.ndarray, LUTMetadata]] = []
+        stack_width: int | None = None
 
         for lut_name, lut_path in zip(selected_names, selected_paths):
             rgb, stacks, metadata = cls.load_lut_with_metadata(lut_path)
@@ -1143,17 +1194,39 @@ class LUTManager:
             if measured_colors.size == 0:
                 raise ValueError(f"Legacy LUT has no lookup entries: {lut_name}")
 
-            signature = cls._legacy_multi_compatibility_signature(metadata)
-            if baseline_signature is None:
-                baseline_signature = signature
+            print_signature = cls._legacy_print_settings_signature(metadata)
+            if baseline_print_signature is None:
+                baseline_print_signature = print_signature
                 baseline_metadata = copy.deepcopy(metadata)
-            elif signature != baseline_signature:
-                raise ValueError(f"Incompatible legacy LUT metadata: {lut_name}")
+            elif print_signature != baseline_print_signature:
+                raise ValueError(f"Incompatible legacy LUT print settings: {lut_name}")
 
             runtime_stacks = cls._ensure_legacy_runtime_stacks(measured_colors, stacks, lut_name)
+            if stack_width is None:
+                stack_width = int(runtime_stacks.shape[1])
+            elif int(runtime_stacks.shape[1]) != stack_width:
+                raise ValueError(f"Incompatible legacy LUT recipe layer count: {lut_name}")
+
+            for entry in metadata.palette:
+                key = cls._legacy_palette_entry_key(entry)
+                if key and key not in global_palette_index:
+                    global_palette_index[key] = len(global_palette)
+                    global_palette.append(copy.deepcopy(entry))
+            loaded_sources.append((lut_name, lut_path, measured_colors, runtime_stacks, metadata))
+
+        if baseline_metadata is None or not loaded_sources or stack_width is None:
+            raise ValueError("legacy_multi requires at least one usable LUT")
+
+        for lut_name, lut_path, measured_colors, runtime_stacks, _metadata in loaded_sources:
+            remapped_stacks = cls._remap_legacy_stacks_to_palette(
+                runtime_stacks,
+                _metadata.palette,
+                global_palette_index,
+                lut_name,
+            )
             kept_rgb: list[np.ndarray] = []
             kept_stacks: list[np.ndarray] = []
-            for row_rgb, row_stack in zip(measured_colors, runtime_stacks):
+            for row_rgb, row_stack in zip(measured_colors, remapped_stacks):
                 recipe_key = tuple(int(value) for value in row_stack)
                 if recipe_key in seen_recipes:
                     continue
@@ -1171,12 +1244,15 @@ class LUTManager:
                 }
             )
 
-        if baseline_metadata is None or not rgb_parts:
+        if not rgb_parts:
             raise ValueError("legacy_multi requires at least one usable LUT")
 
         runtime_rgb = np.concatenate(rgb_parts, axis=0)
         runtime_stacks = np.concatenate(stack_parts, axis=0)
         metadata = baseline_metadata
+        metadata.palette = global_palette
+        metadata.color_mode = "Merged"
+        metadata.max_color_layers = int(stack_width)
         metadata.schema_version = metadata.schema_version or "1.0"
         metadata.capabilities = sorted(
             (set(metadata.capabilities) | {"legacy_lookup"})

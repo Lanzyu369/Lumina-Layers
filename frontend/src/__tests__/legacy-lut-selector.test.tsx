@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import LegacyLutSelector from "../components/sections/LegacyLutSelector";
 
 const labels = {
@@ -11,6 +11,12 @@ const labels = {
   upload: "Upload",
   loadingHint: "Loading LUT catalog",
   noBrandHint: "Pick a brand first",
+  selectedCount: "Selected",
+  brandInfo: "Brand Info",
+  materialType: "Material Type",
+  vendor: "Vendor",
+  database: "Databases",
+  databasePlaceholder: "No databases selected",
 };
 
 const manufacturerOptions = [
@@ -50,11 +56,12 @@ function renderSelector(overrides = {}) {
 }
 
 describe("LegacyLutSelector", () => {
-  it("renders manufacturer and LUT dropdowns", () => {
+  it("renders the manufacturer dropdown and database panel", () => {
     renderSelector();
 
     expect(screen.getByRole("combobox", { name: "Brand" })).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "LUT" })).toBeInTheDocument();
+    expect(screen.getByText(/Brand Info/)).toBeInTheDocument();
+    expect(screen.getByText(/Databases/)).toBeInTheDocument();
   });
 
   it("emits manufacturer changes", () => {
@@ -67,16 +74,12 @@ describe("LegacyLutSelector", () => {
     expect(onManufacturerChange).toHaveBeenCalledWith("Brand B");
   });
 
-  it("renders LUT groups in the provided order", () => {
+  it("renders all database checkboxes", () => {
     renderSelector();
 
-    fireEvent.click(screen.getByRole("combobox", { name: "LUT" }));
-    const listbox = screen.getByRole("listbox");
-    const labelsInOrder = within(listbox)
-      .getAllByText(/Color$/)
-      .map((node) => node.textContent);
-
-    expect(labelsInOrder).toEqual(["4-Color", "8-Color"]);
+    expect(screen.getByRole("checkbox", { name: "A 4C" })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "B 4C" })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "A 8C" })).toBeInTheDocument();
   });
 
   it("emits multi-selected LUT names in grouped order", () => {
@@ -87,7 +90,6 @@ describe("LegacyLutSelector", () => {
       labels: {
         ...labels,
         multiSelect: "Multi-select LUTs",
-        selectedCount: "Selected",
       },
     });
 
@@ -97,18 +99,23 @@ describe("LegacyLutSelector", () => {
     expect(screen.getByText("Selected: 1")).toBeInTheDocument();
   });
 
-  it("limits multi-select checkboxes to the selected LUT group", () => {
+  it("allows selecting LUTs across color groups", () => {
+    const onLutSelectionChange = vi.fn();
     renderSelector({
       selectedLutNames: ["a4"],
+      onLutSelectionChange,
       labels: {
         ...labels,
         multiSelect: "Multi-select LUTs",
-        selectedCount: "Selected",
       },
     });
 
     expect(screen.getByRole("checkbox", { name: "A 4C" })).toBeInTheDocument();
-    expect(screen.queryByRole("checkbox", { name: "A 8C" })).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "A 8C" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "A 8C" }));
+
+    expect(onLutSelectionChange).toHaveBeenCalledWith(["a4", "a8"]);
   });
 
   it("uses a vertical stack in compact mode", () => {
@@ -127,7 +134,6 @@ describe("LegacyLutSelector", () => {
   it("disables the LUT dropdown until a brand is selected", () => {
     renderSelector({ manufacturer: "", lutName: "" });
 
-    expect(screen.getByRole("combobox", { name: "LUT" })).toBeDisabled();
     expect(screen.getByText("Pick a brand first")).toBeInTheDocument();
   });
 });

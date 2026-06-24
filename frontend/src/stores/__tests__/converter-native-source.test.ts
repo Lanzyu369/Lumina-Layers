@@ -864,7 +864,7 @@ describe("native bundle converter flow", () => {
     expect(generateParams.color_mode).toBe(ColorMode.EIGHT_COLOR);
   });
 
-  it("drops legacy multi-select names outside the primary exact catalog bucket", () => {
+  it("keeps legacy multi-select names across color-mode buckets", () => {
     vi.mocked(lutApi.fetchLutInfo).mockResolvedValueOnce({
       name: "legacy-rybw",
       color_mode: ColorMode.FOUR_COLOR_RYBW,
@@ -948,11 +948,15 @@ describe("native bundle converter flow", () => {
 
     const state = useConverterStore.getState();
     expect(state.lut_name).toBe("legacy-rybw");
-    expect(state.lut_names).toEqual(["legacy-rybw", "legacy-rybw-alt"]);
+    expect(state.lut_names).toEqual([
+      "legacy-rybw",
+      "legacy-eight",
+      "legacy-rybw-alt",
+    ]);
     expect(state.selectedLegacyManufacturer).toBe("Brand A");
   });
 
-  it("drops same-color-mode legacy names when compatibility keys differ", () => {
+  it("keeps same-color-mode legacy names when compatibility keys differ", () => {
     vi.mocked(lutApi.fetchLutInfo).mockResolvedValueOnce({
       name: "legacy-a",
       color_mode: ColorMode.FOUR_COLOR_RYBW,
@@ -1011,10 +1015,10 @@ describe("native bundle converter flow", () => {
 
     useConverterStore.getState().setLegacyLutNames(["legacy-a", "legacy-b"]);
 
-    expect(useConverterStore.getState().lut_names).toEqual(["legacy-a"]);
+    expect(useConverterStore.getState().lut_names).toEqual(["legacy-a", "legacy-b"]);
   });
 
-  it("filters stale legacy multi-select names when LUT list loads after details catalog", async () => {
+  it("keeps legacy multi-select names when LUT list loads after details catalog", async () => {
     vi.mocked(lutApi.fetchLutInfo).mockResolvedValue({
       name: "legacy-a",
       color_mode: ColorMode.FOUR_COLOR_RYBW,
@@ -1077,14 +1081,14 @@ describe("native bundle converter flow", () => {
     } as never);
 
     await useConverterStore.getState().fetchLegacyCatalog();
-    expect(useConverterStore.getState().lut_names).toEqual(["legacy-a"]);
+    expect(useConverterStore.getState().lut_names).toEqual(["legacy-a", "legacy-b"]);
 
     await useConverterStore.getState().fetchLutCatalog();
 
-    expect(useConverterStore.getState().lut_names).toEqual(["legacy-a"]);
+    expect(useConverterStore.getState().lut_names).toEqual(["legacy-a", "legacy-b"]);
   });
 
-  it("submitPreview omits stale legacy multi-select names outside the compatibility key", async () => {
+  it("submitPreview sends legacy_multi names across compatibility keys", async () => {
     mocks.convertPreview.mockResolvedValueOnce({
       session_id: "session-legacy",
       status: "ok",
@@ -1159,13 +1163,13 @@ describe("native bundle converter flow", () => {
 
     const [, params] = mocks.convertPreview.mock.calls[0];
     expect(params).toMatchObject({
-      source_kind: "legacy_single",
+      source_kind: "legacy_multi",
       lut_name: "legacy-a",
+      lut_names: ["legacy-a", "legacy-b"],
     });
-    expect(params).not.toHaveProperty("lut_names");
   });
 
-  it("submitPreview falls back to the primary legacy LUT when compatibility cannot be resolved", async () => {
+  it("submitPreview keeps legacy_multi names even before catalog compatibility resolves", async () => {
     mocks.convertPreview.mockResolvedValueOnce({
       session_id: "session-legacy",
       status: "ok",
@@ -1227,10 +1231,10 @@ describe("native bundle converter flow", () => {
 
     const [, params] = mocks.convertPreview.mock.calls[0];
     expect(params).toMatchObject({
-      source_kind: "legacy_single",
+      source_kind: "legacy_multi",
       lut_name: "legacy-a",
+      lut_names: ["legacy-a", "legacy-b"],
     });
-    expect(params).not.toHaveProperty("lut_names");
   });
 
   it("hydrates the legacy LUT list from the catalog response", async () => {

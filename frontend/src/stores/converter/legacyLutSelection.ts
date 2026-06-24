@@ -90,7 +90,7 @@ export function buildLutCatalogIndex(
     colorModeByManufacturerAndBucket[manufacturer] ??= Object.create(null);
 
     for (const item of group.items ?? []) {
-      const bucket = getCompatibilityBucket(item);
+      const bucket = getColorModeBucket(item.color_mode);
       byManufacturerAndBucket[manufacturer][bucket] ??= [];
       colorModeByManufacturerAndBucket[manufacturer][bucket] ??=
         getColorModeBucket(item.color_mode);

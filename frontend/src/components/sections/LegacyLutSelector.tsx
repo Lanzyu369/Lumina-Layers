@@ -12,12 +12,19 @@ interface LegacyLutOptionGroup {
   options: LegacyLutOption[];
 }
 
+interface LegacyBrandInfo {
+  displayName: string;
+  materialTypes: string[];
+  vendor: string;
+}
+
 interface LegacyLutSelectorProps {
   manufacturer: string;
   lutName: string;
   selectedLutNames?: string[];
   manufacturerOptions: LegacyLutOption[];
   groupedLutOptions: LegacyLutOptionGroup[];
+  brandInfo?: LegacyBrandInfo | null;
   onManufacturerChange: (value: string) => void;
   onLutChange: (value: string) => void;
   onLutSelectionChange?: (values: string[]) => void;
@@ -38,7 +45,31 @@ interface LegacyLutSelectorProps {
     noBrandHint: string;
     multiSelect?: string;
     selectedCount?: string;
+    brandInfo?: string;
+    materialType?: string;
+    vendor?: string;
+    database?: string;
+    databasePlaceholder?: string;
   };
+}
+
+function flattenOptions(groups: LegacyLutOptionGroup[]): LegacyLutOption[] {
+  const seen = new Set<string>();
+  const flattened: LegacyLutOption[] = [];
+  for (const group of groups) {
+    for (const option of group.options) {
+      if (seen.has(option.value)) {
+        continue;
+      }
+      seen.add(option.value);
+      flattened.push(option);
+    }
+  }
+  return flattened;
+}
+
+function formatList(values: string[]): string {
+  return values.length > 0 ? values.join(", ") : "";
 }
 
 export default function LegacyLutSelector({
@@ -47,6 +78,7 @@ export default function LegacyLutSelector({
   selectedLutNames,
   manufacturerOptions,
   groupedLutOptions,
+  brandInfo,
   onManufacturerChange,
   onLutChange,
   onLutSelectionChange,
@@ -64,6 +96,7 @@ export default function LegacyLutSelector({
     : !manufacturer
       ? labels.noBrandHint
       : "";
+  const allLutOptions = flattenOptions(groupedLutOptions);
   const selectedSet = new Set(
     selectedLutNames && selectedLutNames.length > 0
       ? selectedLutNames
@@ -71,19 +104,10 @@ export default function LegacyLutSelector({
         ? [lutName]
         : [],
   );
-  const activeLutName = lutName || selectedLutNames?.[0] || "";
-  const activeGroup = activeLutName
-    ? groupedLutOptions.find((group) =>
-        group.options.some((option) => option.value === activeLutName),
-      ) ?? null
-    : null;
-  const multiSelectGroups = activeGroup ? [activeGroup] : [];
-  const orderedLutValues = multiSelectGroups.flatMap((group) =>
-    group.options.map((option) => option.value),
+  const selectedOptions = allLutOptions.filter((option) =>
+    selectedSet.has(option.value),
   );
-  const selectedCount = orderedLutValues.filter((value) =>
-    selectedSet.has(value),
-  ).length;
+  const selectedCount = selectedOptions.length;
 
   const handleToggleLut = (value: string) => {
     if (!onLutSelectionChange) {
@@ -96,9 +120,10 @@ export default function LegacyLutSelector({
     } else {
       next.add(value);
     }
-    onLutSelectionChange(
-      orderedLutValues.filter((candidate) => next.has(candidate)),
-    );
+    const ordered = allLutOptions
+      .map((option) => option.value)
+      .filter((candidate) => next.has(candidate));
+    onLutSelectionChange(ordered);
   };
 
   const refreshButton = (
@@ -130,101 +155,83 @@ export default function LegacyLutSelector({
     </button>
   );
 
-  const multiSelectList =
-    manufacturer && multiSelectGroups.length > 0 ? (
-      <div className="grid gap-2 rounded-lg border border-slate-200/60 bg-slate-100/50 p-3 dark:border-slate-700/40 dark:bg-slate-900/40">
-        <div className="flex items-center justify-between gap-2 text-xs font-medium uppercase tracking-[0.2em] text-slate-500 dark:text-slate-400">
-          <span>{labels.multiSelect ?? labels.lut}</span>
-          <span className="tracking-normal">{labels.selectedCount ?? "Selected"}: {selectedCount}</span>
-        </div>
-        <div className="grid gap-2">
-          {multiSelectGroups.map((group) => (
-            <div key={group.label} className="grid gap-1.5">
-              <div className="text-xs text-slate-500 dark:text-slate-400">
-                {group.label}
-              </div>
-              {group.options.map((option) => (
-                <label
-                  key={option.value}
-                  className="flex min-h-8 items-center gap-2 rounded-md px-2 text-sm text-slate-700 transition-colors hover:bg-slate-200/60 dark:text-slate-200 dark:hover:bg-slate-800/60"
-                >
-                  <input
-                    type="checkbox"
-                    checked={selectedSet.has(option.value)}
-                    disabled={lutDisabled}
-                    onChange={() => handleToggleLut(option.value)}
-                    className="size-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-900"
-                  />
-                  <span className="min-w-0 flex-1 truncate">{option.label}</span>
-                </label>
-              ))}
-            </div>
-          ))}
-        </div>
-      </div>
-    ) : null;
-
-  if (compact) {
-    return (
-      <div className="grid grid-cols-1 gap-2">
-        <Dropdown
-          label={labels.manufacturer}
-          value={manufacturer}
-          options={manufacturerOptions}
-          onChange={onManufacturerChange}
-          placeholder={labels.manufacturerPlaceholder}
-          disabled={loading || manufacturerOptions.length === 0}
-        />
-        <Dropdown
-          label={labels.lut}
-          value={lutName}
-          groupedOptions={groupedLutOptions}
-          onChange={onLutChange}
-          placeholder={labels.lutPlaceholder}
-          disabled={lutDisabled}
-          labelAccessory={refreshButton}
-        />
-        {uploadButton}
-        {helperText && (
-          <div className="px-1 text-xs text-slate-500 dark:text-slate-400">
-            {helperText}
-          </div>
-        )}
-        {multiSelectList}
-      </div>
-    );
-  }
+  const databaseSummary = selectedOptions.map((option) => option.label);
+  const materialTypes = brandInfo?.materialTypes.filter(Boolean) ?? [];
 
   return (
     <div className="grid grid-cols-1 gap-2">
-      <Dropdown
-        label={labels.manufacturer}
-        value={manufacturer}
-        options={manufacturerOptions}
-        onChange={onManufacturerChange}
-        placeholder={labels.manufacturerPlaceholder}
-        disabled={loading || manufacturerOptions.length === 0}
-      />
-      <div className="flex items-end gap-2">
+      <div className={`gap-2 ${compact ? "grid grid-cols-1" : "flex items-end"}`}>
         <div className="min-w-0 flex-1">
           <Dropdown
-            label={labels.lut}
-            value={lutName}
-            groupedOptions={groupedLutOptions}
-            onChange={onLutChange}
-            placeholder={labels.lutPlaceholder}
-            disabled={lutDisabled}
+            label={labels.manufacturer}
+            value={manufacturer}
+            options={manufacturerOptions}
+            onChange={onManufacturerChange}
+            placeholder={labels.manufacturerPlaceholder}
+            disabled={loading || manufacturerOptions.length === 0}
             labelAccessory={refreshButton}
           />
         </div>
-        <div className="shrink-0">{uploadButton}</div>
+        <div className={compact ? "" : "shrink-0"}>{uploadButton}</div>
       </div>
+
       {helperText && (
         <div className="px-1 text-xs text-slate-500 dark:text-slate-400">
           {helperText}
         </div>
       )}
-      {multiSelectList}
+
+      {manufacturer ? (
+        <div className="flex flex-col gap-3 rounded-lg border border-slate-200/60 bg-slate-100/50 p-3 dark:border-slate-700/40 dark:bg-slate-900/40">
+          <div className="text-xs text-slate-500 dark:text-slate-400">
+            {labels.brandInfo ?? "Brand Info"}:
+            <span className="ml-1 text-slate-700 dark:text-slate-200">
+              {brandInfo?.displayName || manufacturer}
+            </span>
+          </div>
+          {materialTypes.length > 0 && (
+            <div className="text-xs text-slate-500 dark:text-slate-400">
+              {labels.materialType ?? "Material Type"}: {formatList(materialTypes)}
+            </div>
+          )}
+          <div className="text-xs text-slate-500 dark:text-slate-400">
+            {labels.vendor ?? "Vendor"}: {brandInfo?.vendor || manufacturer}
+          </div>
+          <div className="text-xs text-slate-500 dark:text-slate-400">
+            {labels.database ?? labels.lut}:
+            <span className="ml-1 whitespace-normal break-words text-slate-700 dark:text-slate-200">
+              {databaseSummary.length > 0
+                ? formatList(databaseSummary)
+                : labels.databasePlaceholder ?? labels.lutPlaceholder}
+            </span>
+          </div>
+
+          <div className="grid gap-2">
+            {allLutOptions.map((option) => (
+              <label
+                key={option.value}
+                className="flex min-h-14 items-start gap-3 rounded-2xl border border-slate-200/70 bg-[var(--surface-panel)] px-4 py-3 text-sm text-slate-700 shadow-[var(--shadow-control)] transition-colors hover:bg-[color:var(--surface-section-muted)] dark:border-slate-700/60 dark:text-slate-200"
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedSet.has(option.value)}
+                  disabled={lutDisabled}
+                  onChange={() => handleToggleLut(option.value)}
+                  className="mt-0.5 size-5 shrink-0 rounded-md border-slate-300 focus:ring-[var(--focus-ring)] dark:border-slate-600 dark:bg-slate-900"
+                  style={{ accentColor: "var(--palette-blue)" }}
+                />
+                <span className="min-w-0 flex-1 whitespace-normal break-words leading-6">
+                  {option.label}
+                </span>
+              </label>
+            ))}
+          </div>
+
+          <div className="text-xs text-slate-500 dark:text-slate-400">
+            {labels.selectedCount ?? "Selected"}: {selectedCount}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

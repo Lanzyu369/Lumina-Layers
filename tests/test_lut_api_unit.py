@@ -105,6 +105,94 @@ def _attach_lut_logger(
     return target_logger
 
 
+def test_legacy_multi_runtime_accepts_cross_color_lut_candidates(tmp_path: Path) -> None:
+    from utils.lut_manager import LUTManager
+
+    four_path = tmp_path / "four.npz"
+    eight_path = tmp_path / "eight.npz"
+    base_kwargs = {
+        "max_color_layers": 5,
+        "layer_height_mm": 0.08,
+        "line_width_mm": 0.42,
+        "base_layers": 10,
+        "base_channel_idx": 3,
+        "layer_order": "Top2Bottom",
+    }
+    four_meta = LUTMetadata(
+        palette=[
+            PaletteEntry("Red", "PLA Basic"),
+            PaletteEntry("Yellow", "PLA Basic"),
+            PaletteEntry("Blue", "PLA Basic"),
+            PaletteEntry("White", "PLA Basic"),
+        ],
+        color_mode="4-Color (RYBW)",
+        **base_kwargs,
+    )
+    eight_meta = LUTMetadata(
+        palette=[
+            PaletteEntry("White", "PLA Basic"),
+            PaletteEntry("Cyan", "PLA Basic"),
+            PaletteEntry("Magenta", "PLA Basic"),
+            PaletteEntry("Yellow", "PLA Basic"),
+            PaletteEntry("Black", "PLA Basic"),
+            PaletteEntry("Red", "PLA Basic"),
+            PaletteEntry("Blue", "PLA Basic"),
+            PaletteEntry("Green", "PLA Basic"),
+        ],
+        color_mode="8-Color Max",
+        **base_kwargs,
+    )
+    LUTManager.save_npz_with_metadata(
+        str(four_path),
+        np.asarray([[255, 0, 0]], dtype=np.uint8),
+        np.asarray([[0, 1, 2, 3, 0]], dtype=np.int32),
+        four_meta,
+    )
+    LUTManager.save_npz_with_metadata(
+        str(eight_path),
+        np.asarray([[0, 0, 0]], dtype=np.uint8),
+        np.asarray([[5, 3, 6, 0, 4]], dtype=np.int32),
+        eight_meta,
+    )
+
+    paths = {
+        "four": str(four_path),
+        "eight": str(eight_path),
+    }
+    runtime_path = None
+    try:
+        with patch("utils.lut_manager.LUTManager.get_lut_path", side_effect=lambda name: paths.get(name)):
+            runtime_path, display_name = LUTManager.resolve_source_selection(
+                source_kind="legacy_multi",
+                lut_name="four",
+                lut_names=["four", "eight"],
+            )
+
+        assert display_name == "four"
+        runtime_rgb, runtime_stacks, runtime_meta = LUTManager.load_lut_with_metadata(runtime_path)
+        assert runtime_rgb.reshape(-1, 3).tolist() == [[255, 0, 0], [0, 0, 0]]
+        assert [entry.color for entry in runtime_meta.palette] == [
+            "Red",
+            "Yellow",
+            "Blue",
+            "White",
+            "Cyan",
+            "Magenta",
+            "Black",
+            "Green",
+        ]
+        assert runtime_meta.color_mode == "Merged"
+        assert runtime_meta.extensions["source_kind"] == "legacy_multi"
+        assert runtime_meta.extensions["selected_lut_names"] == ["four", "eight"]
+        assert runtime_stacks.tolist() == [
+            [0, 1, 2, 3, 0],
+            [0, 1, 2, 3, 6],
+        ]
+    finally:
+        if runtime_path:
+            Path(runtime_path).unlink(missing_ok=True)
+
+
 class TestLutErrorBoundary:
     """Verify LUT route failures return user-safe details and keep diagnostics in logs."""
 

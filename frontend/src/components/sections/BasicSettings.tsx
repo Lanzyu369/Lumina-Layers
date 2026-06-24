@@ -609,6 +609,32 @@ export default function BasicSettings() {
       };
     });
   }, [lutIndex, selectedLegacyManufacturer, t, lutNameByPath]);
+  const selectedLegacyBrandInfo = useMemo(() => {
+    if (!selectedLegacyManufacturer) {
+      return null;
+    }
+    const group = legacyCatalogGroups.find(
+      (candidate) => candidate.manufacturer === selectedLegacyManufacturer,
+    );
+    const materialTypes = Array.from(
+      new Set(
+        (group?.items ?? [])
+          .map((item) => item.material_type.trim())
+          .filter(Boolean),
+      ),
+    ).sort((a, b) => a.localeCompare(b));
+    return {
+      displayName:
+        selectedLegacyManufacturer === "Unlabeled"
+          ? t("basic_lut_unlabeled_brand")
+          : selectedLegacyManufacturer,
+      materialTypes,
+      vendor:
+        selectedLegacyManufacturer === "Unlabeled"
+          ? t("basic_lut_unlabeled_brand")
+          : selectedLegacyManufacturer,
+    };
+  }, [legacyCatalogGroups, selectedLegacyManufacturer, t]);
 
   // --- Material library for material-archive mode ---
   const [materialLibrary, setMaterialLibrary] = useState<SavedMaterialLibraryItem[]>([]);
@@ -966,6 +992,7 @@ export default function BasicSettings() {
             selectedLutNames={lut_names.length > 0 ? lut_names : (lut_name ? [lut_name] : [])}
             manufacturerOptions={manufacturerOptions}
             groupedLutOptions={groupedLutOptions}
+            brandInfo={selectedLegacyBrandInfo}
             onManufacturerChange={setLegacyManufacturer}
             onLutChange={setLutName}
             onLutSelectionChange={setLegacyLutNames}
@@ -986,6 +1013,11 @@ export default function BasicSettings() {
               noBrandHint: t("basic_lut_no_brand_hint"),
               multiSelect: t("basic_lut_multi_select"),
               selectedCount: t("basic_lut_selected_count"),
+              brandInfo: t("basic_native_brand_summary_label"),
+              materialType: t("basic_native_material_label"),
+              vendor: t("basic_native_vendor_label"),
+              database: t("basic_native_db_label"),
+              databasePlaceholder: t("basic_native_db_placeholder"),
             }}
           />
           <input
