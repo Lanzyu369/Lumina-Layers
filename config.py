@@ -616,6 +616,7 @@ class VectorConfig:
     MATERIAL_VECTOR_SMALL_SHAPE_SNAP_MAX_AREA_RATIO: float = 0.01
     MATERIAL_VECTOR_SMALL_SHAPE_SNAP_MIN_ANCHOR_AREA_RATIO: float = 0.03
     MATERIAL_VECTOR_SMALL_SHAPE_SNAP_DELTA_E: float = 20.0
+    VECTOR_NEAR_FILL_QUERY_DELTA_E: float = 2.0
 
     # Boolean operation tolerance
     BUFFER_TOLERANCE: float = 0.0  # Shapely buffer precision
