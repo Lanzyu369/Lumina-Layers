@@ -12,6 +12,7 @@ from pathlib import Path
 _OPACITY_PROPERTIES = frozenset({"opacity", "fill-opacity", "stroke-opacity"})
 _COLOR_PROPERTIES = frozenset({"fill", "stroke"})
 _STYLE_DECL_RE = re.compile(r"([A-Za-z-]+)\s*:\s*([^;{}]+)")
+_STYLE_RULE_RE = re.compile(r"([^{}]+)\{([^{}]*)\}")
 _FUNCTION_ALPHA_RE = re.compile(r"(?i)\b(?:rgba|hsla)\s*\(([^)]*)\)")
 
 
@@ -87,6 +88,59 @@ def _style_uses_partial_opacity(style: object) -> bool:
     return False
 
 
+def _class_tokens(element: ET.Element) -> set[str]:
+    return {token for token in element.attrib.get("class", "").split() if token}
+
+
+def _simple_selector_matches(element: ET.Element, selector: str) -> bool:
+    selector = selector.strip()
+    if not selector or selector == "*":
+        return bool(selector)
+    if any(token in selector for token in " >+~:["):
+        return False
+
+    tag_name = ""
+    element_id = ""
+    class_names: list[str] = []
+    cursor = 0
+    while cursor < len(selector):
+        marker = selector[cursor]
+        if marker in ".#":
+            cursor += 1
+            start = cursor
+            while cursor < len(selector) and selector[cursor] not in ".#":
+                cursor += 1
+            token = selector[start:cursor]
+            if not token:
+                return False
+            if marker == ".":
+                class_names.append(token)
+            else:
+                if element_id:
+                    return False
+                element_id = token
+            continue
+
+        if tag_name:
+            return False
+        start = cursor
+        while cursor < len(selector) and selector[cursor] not in ".#":
+            cursor += 1
+        tag_name = selector[start:cursor]
+
+    if tag_name and _local_name(str(element.tag)).lower() != tag_name.lower():
+        return False
+    if element_id and element.attrib.get("id") != element_id:
+        return False
+
+    element_classes = _class_tokens(element)
+    return all(class_name in element_classes for class_name in class_names)
+
+
+def _selector_matches_any_element(root: ET.Element, selector: str) -> bool:
+    return any(_simple_selector_matches(element, selector) for element in root.iter())
+
+
 def _element_uses_partial_opacity(element: ET.Element) -> bool:
     for raw_name, value in element.attrib.items():
         name = _local_name(raw_name).lower()
@@ -103,8 +157,12 @@ def _stylesheet_uses_partial_opacity(root: ET.Element) -> bool:
     for element in root.iter():
         if _local_name(str(element.tag)).lower() != "style":
             continue
-        if _style_uses_partial_opacity(element.text or ""):
-            return True
+        for selectors_text, declarations in _STYLE_RULE_RE.findall(element.text or ""):
+            if not _style_uses_partial_opacity(declarations):
+                continue
+            selectors = [selector.strip() for selector in selectors_text.split(",")]
+            if any(_selector_matches_any_element(root, selector) for selector in selectors):
+                return True
     return False
 
 
