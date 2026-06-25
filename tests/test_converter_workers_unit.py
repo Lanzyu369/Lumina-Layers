@@ -154,7 +154,7 @@ class TestParameterAnnotations:
     def test_preview_has_expected_param_count(self) -> None:
         """worker_generate_preview should expose the full preview parameter set."""
         sig = inspect.signature(worker_generate_preview)
-        assert len(sig.parameters) == 27
+        assert len(sig.parameters) == 28
 
     def test_model_has_expected_param_count(self) -> None:
         """worker_generate_model should have 3 parameters."""
@@ -180,7 +180,7 @@ class TestParameterAnnotations:
             "material_source", "selected_materials",
             "material_layer_count", "material_layer_height_mm",
             "material_grid_resolution", "auto_dynamic_range",
-            "high_precision_3d_preview",
+            "high_precision_3d_preview", "replacement_regions",
         }
         assert set(sig.parameters.keys()) == expected
 
@@ -404,12 +404,26 @@ def test_worker_generate_preview_accepts_numpy_preview_image(tmp_path) -> None:
             enable_cleanup=True,
             enable_outline=True,
             outline_width=2.5,
+            replacement_regions=[
+                {
+                    "quantized_hex": "#111111",
+                    "matched_hex": "#111111",
+                    "replacement_hex": "#222222",
+                },
+            ],
         )
 
     assert result["status_msg"] == "OK"
     call_kwargs = generate_preview_cached_mock.call_args.kwargs
     assert call_kwargs["enable_outline"] is True
     assert call_kwargs["outline_width"] == 2.5
+    assert call_kwargs["replacement_regions"] == [
+        {
+            "quantized_hex": "#111111",
+            "matched_hex": "#111111",
+            "replacement_hex": "#222222",
+        },
+    ]
     assert result["preview_png_path"] is not None
     assert result["cache_data_path"] is not None
     assert os.path.exists(result["preview_png_path"])

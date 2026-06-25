@@ -33,7 +33,11 @@ from api.preview_cache_memory import (
     get_process_rss_bytes,
     should_log_preview_cache_memory_profile_at_info,
 )
-from api.schemas.converter import BedSizeItem, BedSizeListResponse
+from api.schemas.converter import (
+    BedSizeItem,
+    BedSizeListResponse,
+    ColorReplacementItem,
+)
 from api.schemas.lut import LutSourceSelection
 from api.schemas.responses import (
     AutoDetectColorsResponse,
@@ -516,6 +520,43 @@ def _parse_selected_materials(value: list[str] | str | None) -> list[str]:
     return [s.strip() for s in normalized if s.strip()]
 
 
+def _parse_preview_replacement_regions(
+    value: str | None,
+) -> list[dict[str, str]] | None:
+    """Parse preview replay replacement regions from form JSON.
+    解析预览重放用的颜色替换 JSON。
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return None
+    try:
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="replacement_regions must be a JSON array",
+        ) from exc
+    if not isinstance(parsed, list):
+        raise HTTPException(
+            status_code=422,
+            detail="replacement_regions must be a JSON array",
+        )
+    try:
+        return [
+            ColorReplacementItem.model_validate(item).model_dump()
+            for item in parsed
+        ]
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="replacement_regions contains invalid items",
+        ) from exc
+
+
 @router.get("/bed-sizes", response_model=BedSizeListResponse)
 def get_bed_sizes() -> BedSizeListResponse:
     """Return all available printer bed sizes including printer models and custom sizes.
@@ -756,6 +797,7 @@ async def convert_preview(
         description="耗材档案模式底板耗材索引（基于 selected_materials 的 0-based 索引）",
     ),
     large_format_enabled: bool = Form(False, description="是否处于大画幅模式"),
+    replacement_regions: str | None = Form(None, description="颜色替换列表 JSON"),
     store: SessionStore = Depends(get_session_store),
     registry: FileRegistry = Depends(get_file_registry),
     pool: WorkerPoolManager = Depends(get_worker_pool),
@@ -779,6 +821,9 @@ async def convert_preview(
         svg_pixels_per_mm = normalize_svg_pixels_per_mm(svg_pixels_per_mm)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    parsed_replacement_regions = _parse_preview_replacement_regions(
+        replacement_regions,
+    )
 
     _selected_mats: list[str] | None = None
     _material_backing_index = 0
@@ -899,6 +944,7 @@ async def convert_preview(
                 "enable_outline": enable_outline,
                 "outline_width": outline_width,
                 "svg_pixels_per_mm": svg_pixels_per_mm,
+                "replacement_count": len(parsed_replacement_regions or []),
             },
         )
         _t = time.perf_counter()
@@ -942,6 +988,7 @@ async def convert_preview(
             auto_dynamic_range,
             high_precision_3d_preview,
             svg_pixels_per_mm,
+            parsed_replacement_regions,
         )
         _t_worker = time.perf_counter() - _t
         worker_completed = True
@@ -1145,7 +1192,7 @@ async def convert_preview(
             "material_backing_material_index",
             _material_backing_index,
         )
-    store.put(session_id, "replacement_regions", [])
+    store.put(session_id, "replacement_regions", parsed_replacement_regions or [])
     store.put(session_id, "replacement_history", [])
     store.put(session_id, "free_color_set", set())
     if svg_large_format_policy is not None:
