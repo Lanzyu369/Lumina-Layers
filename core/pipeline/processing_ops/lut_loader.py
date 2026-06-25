@@ -238,6 +238,29 @@ def _infer_legacy_4color_channel_remap(
     return remap
 
 
+def _legacy_4color_blue_like_raw_channels(
+    channel_remap: np.ndarray,
+    color_mode: str,
+) -> frozenset[int]:
+    """Return raw channels that map to the mode's blue/cyan-like slot."""
+    color_conf = ColorSystem.get(color_mode)
+    slots = list(color_conf.get("slots") or [])
+    blue_like_slot_ids = {
+        slot_idx
+        for slot_idx, slot_name in enumerate(slots)
+        if str(slot_name).strip().lower() in {"blue", "cyan", "deep blue"}
+    }
+    if not blue_like_slot_ids:
+        return frozenset({3})
+
+    raw_channels = {
+        raw_idx
+        for raw_idx, slot_idx in enumerate(channel_remap.tolist())
+        if int(slot_idx) in blue_like_slot_ids
+    }
+    return frozenset(raw_channels or {3})
+
+
 def load_lut(
     lut_path: str,
     color_mode: str,
@@ -557,6 +580,10 @@ def load_lut(
             measured_colors,
             color_mode,
         )
+        blue_like_raw_channels = _legacy_4color_blue_like_raw_channels(
+            channel_remap,
+            color_mode,
+        )
 
         for i in range(1024):
             if i >= total_colors:
@@ -574,9 +601,11 @@ def load_lut(
 
             # Filter outliers against the legacy raw recipe. Some CMYW-family
             # NPY files need raw channel IDs remapped to canonical slots below,
-            # and canonical slot 3 is Yellow there, not the legacy blue corner.
+            # and their raw blue/cyan-like corner is not always channel 3.
             dist = np.linalg.norm(real_rgb - base_blue)
-            if dist < 60 and 3 not in raw_stack:
+            if dist < 60 and not any(
+                channel in blue_like_raw_channels for channel in raw_stack
+            ):
                 dropped += 1
                 continue
             stack = tuple(int(channel_remap[int(channel)]) for channel in raw_stack)

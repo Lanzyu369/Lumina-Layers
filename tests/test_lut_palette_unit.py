@@ -274,6 +274,35 @@ class TestLUTManager:
         finally:
             os.unlink(tmp_path)
 
+    def test_legacy_bmyw_npy_remap_keeps_raw_channel_zero_blue(self):
+        """BMYW legacy NPY can store the blue/cyan-like corner in raw channel 0."""
+        from core.pipeline.processing_ops.lut_loader import load_lut
+
+        rgb = np.zeros((1024, 3), dtype=np.uint8)
+        rgb[0] = [30, 100, 200]        # raw channel 0 -> Blue/Cyan-like
+        rgb[341] = [236, 0, 140]       # raw channel 1 -> Magenta
+        rgb[682] = [244, 238, 42]      # raw channel 2 -> Yellow
+        rgb[1023] = [240, 240, 240]    # raw channel 3 -> White
+
+        with tempfile.NamedTemporaryFile(suffix="_BMYW.npy", delete=False) as f:
+            tmp_path = f.name
+            np.save(tmp_path, rgb)
+
+        try:
+            loaded = load_lut(tmp_path, "4-Color (CMYW)")
+            blue_rows = np.where(
+                np.all(loaded["lut_rgb"] == [30, 100, 200], axis=1)
+            )[0]
+
+            assert blue_rows.size == 1
+            np.testing.assert_array_equal(
+                loaded["ref_stacks"][blue_rows[0]],
+                [1, 1, 1, 1, 1],
+            )
+            assert loaded["lut_rgb"].shape[0] == 1024
+        finally:
+            os.unlink(tmp_path)
+
     def test_legacy_rybw_npy_keeps_blue_outlier_filter(self):
         """Near-blue rows still drop when the raw legacy stack has no Blue."""
         from core.pipeline.processing_ops.lut_loader import load_lut
