@@ -6083,19 +6083,25 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         const modelUrl = response.preview_3d_url
           ? `${response.preview_3d_url}`
           : null;
+        const shouldShowGeneratedHeightmapModel =
+          state.enable_relief && state.autoHeightMode === "use-heightmap";
         set({
           isGenerating: false,
           // Keep previewGlbUrl as the 3D viewer source: it renders the
           // pixel-level colour-mixed preview. The generate GLB contains the
           // exact per-material geometry used for 3MF export which looks like
           // solid single-colour blocks and confuses users. Only fall back to
-          // modelUrl when no preview GLB exists (e.g. raster flow).
+          // modelUrl when no preview GLB exists (e.g. raster flow), except
+          // heightmap relief where the generated GLB is the only preview that
+          // preserves per-pixel heightmap geometry.
           // 保留 previewGlbUrl 作为 3D 预览源：它渲染像素级混色预览。
           // generate GLB 是 3MF 导出用的精确分材料几何，看起来是纯色块。
-          // 只在没有 preview GLB 时（如光栅流程）才用 modelUrl。
-          modelUrl: useConverterStore.getState().previewGlbUrl
-            ? null
-            : modelUrl,
+          // 高度图浮雕例外：生成 GLB 才保留逐像素高度图几何。
+          modelUrl: shouldShowGeneratedHeightmapModel
+            ? modelUrl
+            : useConverterStore.getState().previewGlbUrl
+              ? null
+              : modelUrl,
           batchPreviewItems: [],
           threemfDiskPath: null,
           downloadUrl: response.download_url
