@@ -25,6 +25,9 @@ from utils.lut_manager import LUTManager
 
 _log = get_logger(__name__)
 
+_LEGACY_4COLOR_REMAP_MAX_CHANNEL_DISTANCE = 80.0
+_LEGACY_4COLOR_REMAP_MIN_SCORE_MARGIN = 120.0
+
 
 def _rgb_to_lab(rgb_array: np.ndarray) -> np.ndarray:
     """将 RGB 数组转换为 CIELAB 空间。
@@ -214,17 +217,34 @@ def _infer_legacy_4color_channel_remap(
     pure_rgb = measured_colors[pure_rows].astype(np.float64, copy=False)
     canonical = np.asarray(canonical_rgb, dtype=np.float64)
     distances = np.linalg.norm(pure_rgb[:, None, :] - canonical[None, :, :], axis=2)
-    best_perm = min(
-        permutations(range(4)),
-        key=lambda perm: float(
-            sum(
-                distances[raw_idx, slot_idx]
-                for raw_idx, slot_idx in enumerate(perm)
+    scored_perms = sorted(
+        (
+            (
+                float(
+                    sum(
+                        distances[raw_idx, slot_idx]
+                        for raw_idx, slot_idx in enumerate(perm)
+                    )
+                ),
+                perm,
             )
+            for perm in permutations(range(4))
         ),
+        key=lambda item: item[0],
     )
+    best_score, best_perm = scored_perms[0]
+    second_score = scored_perms[1][0] if len(scored_perms) > 1 else float("inf")
     remap = np.asarray(best_perm, dtype=np.int32)
     if np.array_equal(remap, identity):
+        return identity
+    matched_distances = np.asarray(
+        [distances[raw_idx, slot_idx] for raw_idx, slot_idx in enumerate(best_perm)],
+        dtype=np.float64,
+    )
+    if (
+        float(np.max(matched_distances)) > _LEGACY_4COLOR_REMAP_MAX_CHANNEL_DISTANCE
+        or (second_score - best_score) < _LEGACY_4COLOR_REMAP_MIN_SCORE_MARGIN
+    ):
         return identity
 
     _log.debug(
