@@ -10,6 +10,7 @@ Extracted from LuminaImageProcessor._load_lut.
 
 from api.structured_logging import get_logger
 from dataclasses import replace
+from itertools import permutations
 import hashlib
 import os
 import numpy as np
@@ -169,6 +170,72 @@ def _maybe_use_native_bundle_exact_lookup(
 
     bundle_rgb, bundle_stacks = bundle_lookup
     return bundle_rgb, bundle_stacks, True
+
+
+def _legacy_pure_stack_row_index(
+    channel_idx: int,
+    base_count: int,
+    layer_count: int,
+) -> int:
+    row_index = 0
+    place_value = 1
+    for _ in range(layer_count):
+        row_index += int(channel_idx) * place_value
+        place_value *= int(base_count)
+    return row_index
+
+
+def _infer_legacy_4color_channel_remap(
+    measured_colors: np.ndarray,
+    color_mode: str,
+) -> np.ndarray:
+    """Infer raw legacy NPY channel ids from pure-channel measured rows."""
+    identity = np.arange(4, dtype=np.int32)
+    color_conf = ColorSystem.get(color_mode)
+    slots = list(color_conf.get("slots") or [])
+    preview = color_conf.get("preview") or {}
+    if len(slots) != 4:
+        return identity
+
+    canonical_rgb: list[list[int]] = []
+    for slot_idx in range(4):
+        rgba = preview.get(slot_idx)
+        if not rgba or len(rgba) < 3:
+            return identity
+        canonical_rgb.append([int(rgba[0]), int(rgba[1]), int(rgba[2])])
+
+    pure_rows = [
+        _legacy_pure_stack_row_index(channel_idx, 4, PrinterConfig.COLOR_LAYERS)
+        for channel_idx in range(4)
+    ]
+    if measured_colors.shape[0] <= max(pure_rows):
+        return identity
+
+    pure_rgb = measured_colors[pure_rows].astype(np.float64, copy=False)
+    canonical = np.asarray(canonical_rgb, dtype=np.float64)
+    distances = np.linalg.norm(pure_rgb[:, None, :] - canonical[None, :, :], axis=2)
+    best_perm = min(
+        permutations(range(4)),
+        key=lambda perm: float(
+            sum(
+                distances[raw_idx, slot_idx]
+                for raw_idx, slot_idx in enumerate(perm)
+            )
+        ),
+    )
+    remap = np.asarray(best_perm, dtype=np.int32)
+    if np.array_equal(remap, identity):
+        return identity
+
+    _log.debug(
+        "Legacy 4-color NPY channel order remapped",
+        extra={
+            "event": "legacy_4color_npy_channel_remapped",
+            "color_mode": str(color_mode),
+            "channel_remap": remap.tolist(),
+        },
+    )
+    return remap
 
 
 def load_lut(
@@ -486,6 +553,10 @@ def load_lut(
         # Keep original outlier filtering logic (Blue Check)
         base_blue = np.array([30, 100, 200])
         dropped = 0
+        channel_remap = _infer_legacy_4color_channel_remap(
+            measured_colors,
+            color_mode,
+        )
 
         for i in range(1024):
             if i >= total_colors:
@@ -498,6 +569,7 @@ def load_lut(
                 digits.append(temp % 4)
                 temp //= 4
             stack = convert_recipe_between_orders(digits, "Bottom2Top", "Top2Bottom")
+            stack = tuple(int(channel_remap[int(channel)]) for channel in stack)
 
             real_rgb = measured_colors[i]
 

@@ -214,6 +214,38 @@ class TestLUTManager:
         ]
         assert result["preview_colors"][1][:3] != ColorSystem.SIX_COLOR_RYBW["preview"][1][:3]
 
+    def test_legacy_cmyw_npy_reindexes_swapped_pure_channels(self):
+        """Legacy 1024-row NPY stacks should map raw channels to CMYW slots."""
+        from core.pipeline.processing_ops.lut_loader import load_lut
+
+        rgb = np.zeros((1024, 3), dtype=np.uint8)
+        rgb[0] = [240, 240, 240]       # raw channel 0 -> White
+        rgb[341] = [0, 134, 214]       # raw channel 1 -> Cyan
+        rgb[682] = [244, 238, 42]      # raw channel 2 -> Yellow
+        rgb[1023] = [236, 0, 140]      # raw channel 3 -> Magenta
+
+        with tempfile.NamedTemporaryFile(suffix="_CMYW.npy", delete=False) as f:
+            tmp_path = f.name
+            np.save(tmp_path, rgb)
+
+        try:
+            loaded = load_lut(tmp_path, "4-Color (CMYW)")
+            stacks = loaded["ref_stacks"]
+
+            yellow_rows = np.where(
+                np.all(loaded["lut_rgb"] == [244, 238, 42], axis=1)
+            )[0]
+            magenta_rows = np.where(
+                np.all(loaded["lut_rgb"] == [236, 0, 140], axis=1)
+            )[0]
+
+            assert yellow_rows.size == 1
+            assert magenta_rows.size == 1
+            np.testing.assert_array_equal(stacks[yellow_rows[0]], [3, 3, 3, 3, 3])
+            np.testing.assert_array_equal(stacks[magenta_rows[0]], [2, 2, 2, 2, 2])
+        finally:
+            os.unlink(tmp_path)
+
     def test_smart_6color_stacks_asset_contract(self):
         from core import calibration
 
