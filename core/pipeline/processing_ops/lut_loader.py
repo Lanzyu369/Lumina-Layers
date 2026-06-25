@@ -568,16 +568,18 @@ def load_lut(
             for _ in range(5):
                 digits.append(temp % 4)
                 temp //= 4
-            stack = convert_recipe_between_orders(digits, "Bottom2Top", "Top2Bottom")
-            stack = tuple(int(channel_remap[int(channel)]) for channel in stack)
+            raw_stack = convert_recipe_between_orders(digits, "Bottom2Top", "Top2Bottom")
 
             real_rgb = measured_colors[i]
 
-            # Filter outliers: close to blue but doesn't contain blue
+            # Filter outliers against the legacy raw recipe. Some CMYW-family
+            # NPY files need raw channel IDs remapped to canonical slots below,
+            # and canonical slot 3 is Yellow there, not the legacy blue corner.
             dist = np.linalg.norm(real_rgb - base_blue)
-            if dist < 60 and 3 not in stack:  # 3 is Blue in RYBW/CMYW
+            if dist < 60 and 3 not in raw_stack:
                 dropped += 1
                 continue
+            stack = tuple(int(channel_remap[int(channel)]) for channel in raw_stack)
 
             valid_rgb.append(real_rgb)
             valid_stacks.append(stack)

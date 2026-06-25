@@ -246,6 +246,56 @@ class TestLUTManager:
         finally:
             os.unlink(tmp_path)
 
+    def test_legacy_cmyw_npy_remap_does_not_drop_raw_blue_corner(self):
+        """Outlier filtering must run before legacy raw channel remap."""
+        from core.pipeline.processing_ops.lut_loader import load_lut
+
+        rgb = np.zeros((1024, 3), dtype=np.uint8)
+        rgb[0] = [240, 240, 240]       # raw channel 0 -> White
+        rgb[341] = [236, 0, 140]       # raw channel 1 -> Magenta
+        rgb[682] = [244, 238, 42]      # raw channel 2 -> Yellow
+        rgb[1023] = [0, 134, 214]      # raw channel 3 -> Cyan/Blue corner
+
+        with tempfile.NamedTemporaryFile(suffix="_CMYW.npy", delete=False) as f:
+            tmp_path = f.name
+            np.save(tmp_path, rgb)
+
+        try:
+            loaded = load_lut(tmp_path, "4-Color (CMYW)")
+            cyan_rows = np.where(
+                np.all(loaded["lut_rgb"] == [0, 134, 214], axis=1)
+            )[0]
+
+            assert cyan_rows.size == 1
+            np.testing.assert_array_equal(
+                loaded["ref_stacks"][cyan_rows[0]],
+                [1, 1, 1, 1, 1],
+            )
+        finally:
+            os.unlink(tmp_path)
+
+    def test_legacy_rybw_npy_keeps_blue_outlier_filter(self):
+        """Near-blue rows still drop when the raw legacy stack has no Blue."""
+        from core.pipeline.processing_ops.lut_loader import load_lut
+
+        rgb = np.zeros((1024, 3), dtype=np.uint8)
+        rgb[0] = [240, 240, 240]
+        rgb[1] = [30, 100, 200]        # near blue, raw stack has no channel 3
+        rgb[341] = [220, 20, 60]
+        rgb[682] = [255, 230, 0]
+        rgb[1023] = [0, 100, 240]
+
+        with tempfile.NamedTemporaryFile(suffix="_RYBW.npy", delete=False) as f:
+            tmp_path = f.name
+            np.save(tmp_path, rgb)
+
+        try:
+            loaded = load_lut(tmp_path, "4-Color (RYBW)")
+
+            assert not np.any(np.all(loaded["lut_rgb"] == [30, 100, 200], axis=1))
+        finally:
+            os.unlink(tmp_path)
+
     def test_smart_6color_stacks_asset_contract(self):
         from core import calibration
 
