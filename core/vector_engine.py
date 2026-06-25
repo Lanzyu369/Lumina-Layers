@@ -3334,19 +3334,23 @@ class VectorProcessor:
         )
 
         representatives = []
+        representative_members = []
         representative_by_color = {}
         for rgb in ordered_colors:
             rgb_lab = lab_by_color[rgb]
             chosen = None
-            for representative in representatives:
-                distance = float(
-                    np.linalg.norm(rgb_lab - lab_by_color[representative])
-                )
-                if distance <= threshold:
+            for group_idx, representative in enumerate(representatives):
+                if all(
+                    float(np.linalg.norm(rgb_lab - lab_by_color[member]))
+                    <= threshold
+                    for member in representative_members[group_idx]
+                ):
                     chosen = representative
+                    representative_members[group_idx].append(rgb)
                     break
             if chosen is None:
                 representatives.append(rgb)
+                representative_members.append([rgb])
                 chosen = rgb
             representative_by_color[rgb] = chosen
 

@@ -21,7 +21,13 @@ from unittest import mock
 import numpy as np
 import pytest
 from svgelements import Arc, Path as SvgPath
-from shapely.geometry import Polygon, MultiPolygon, GeometryCollection, LineString
+from shapely.geometry import (
+    Polygon,
+    MultiPolygon,
+    GeometryCollection,
+    LineString,
+    box,
+)
 from shapely.ops import unary_union as shapely_unary_union
 
 import core.vector_engine as vector_engine
@@ -714,6 +720,27 @@ class TestVectorNearFillConsistency:
             (100, 100, 100),
             (104, 100, 100),
         }
+
+    def test_center_representative_does_not_chain_merge_distant_endpoints(self):
+        processor = self._processor()
+        shapes = [
+            {"color": (100, 100, 100), "geometry": box(0, 0, 1, 1)},
+            {"color": (102, 100, 100), "geometry": box(0, 0, 10, 10)},
+            {"color": (104, 100, 100), "geometry": box(0, 0, 1, 1)},
+        ]
+
+        updated = processor._with_near_fill_match_queries(shapes)
+
+        assert [
+            tuple(item.get("match_color", item["color"]))
+            for item in updated
+        ] == [
+            (102, 100, 100),
+            (102, 100, 100),
+            (104, 100, 100),
+        ]
+        assert "match_color" not in shapes[0]
+        assert "match_color" not in shapes[2]
 
 
 class TestVectorNegativeSpacePreview:
