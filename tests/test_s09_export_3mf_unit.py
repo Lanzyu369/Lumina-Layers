@@ -35,6 +35,7 @@ def test_s09_passes_full_slot_names_to_exporter(monkeypatch, tmp_path) -> None:
         face_orientation: str = "down",
         cover_source: object | None = None,
         device_profile_id: str | None = None,
+        preserve_template_filament_slots: bool | None = None,
     ) -> str:
         captured["scene"] = scene
         captured["output_path"] = output_path
@@ -52,6 +53,7 @@ def test_s09_passes_full_slot_names_to_exporter(monkeypatch, tmp_path) -> None:
         captured["face_orientation"] = face_orientation
         captured["cover_source"] = cover_source
         captured["device_profile_id"] = device_profile_id
+        captured["preserve_template_filament_slots"] = preserve_template_filament_slots
         return output_path
 
     monkeypatch.setattr(s09_export_3mf, "MODELS_DIR", str(tmp_path))
@@ -236,6 +238,33 @@ def test_s09_passes_device_profile_id_to_exporter(tmp_path) -> None:
         )
 
     assert mock_export.call_args.kwargs["device_profile_id"] == "BambuStudio:bbl:bambu-lab-h2d:0.4"
+
+
+def test_s09_trims_template_filament_slots_for_material_archive(tmp_path) -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_export_scene_with_bambu_metadata(**kwargs) -> str:
+        captured.update(kwargs)
+        return kwargs["output_path"]
+
+    with patch.object(s09_export_3mf, "MODELS_DIR", str(tmp_path)), patch.object(
+        s09_export_3mf,
+        "generate_model_filename",
+        lambda *_args: "material-archive.3mf",
+    ), patch.object(
+        s09_export_3mf,
+        "export_scene_with_bambu_metadata",
+        _fake_export_scene_with_bambu_metadata,
+    ):
+        s09_export_3mf.run(
+            _make_minimal_s09_ctx(
+                tmp_path,
+                material_source="material_archive",
+                device_profile_id="BambuStudio:bbl:bambu-lab-x2d:0.4",
+            )
+        )
+
+    assert captured["preserve_template_filament_slots"] is False
 
 
 def test_s09_empty_scene_error_log_has_actionable_fields(tmp_path, caplog) -> None:

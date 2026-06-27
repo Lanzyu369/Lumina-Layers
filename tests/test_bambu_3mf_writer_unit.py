@@ -1168,7 +1168,9 @@ def test_bambu_a2_registry_uses_bundled_project_template(tmp_path, monkeypatch) 
     assert "inherits" not in template
 
 
-def test_bambu_registry_project_settings_preserve_native_filament_slots(tmp_path, monkeypatch) -> None:
+def test_bambu_registry_project_settings_can_trim_native_template_filament_slots(
+    tmp_path, monkeypatch
+) -> None:
     registry_root = tmp_path / "machine_registry"
     _write_registry_fixture(
         registry_root,
@@ -1212,30 +1214,43 @@ def test_bambu_registry_project_settings_preserve_native_filament_slots(tmp_path
         slicer="BambuStudio",
         nozzle_size="0.4",
         device_profile_id="BambuStudio:bbl:bambu-lab-x2d:0.4",
+        preserve_template_filament_slots=False,
     )
     writer._set_project_palette(
-        ["White", "Red", "Yellow", "Blue"],
+        [
+            "赛纳PETG白色 by MingDee",
+            "PETG 肤色 by荒沙",
+            "PETG 深红 by荒沙",
+            "PETG 深灰 by荒沙",
+        ],
         {
-            0: (255, 255, 255, 255),
-            1: (193, 46, 31, 255),
-            2: (244, 238, 42, 255),
-            3: (10, 41, 137, 255),
+            0: (255, 255, 249, 255),
+            1: (253, 203, 166, 255),
+            2: (205, 60, 70, 255),
+            3: (169, 168, 166, 255),
         },
     )
 
     settings = json.loads(writer._build_project_settings_bytes().decode("utf-8"))
 
-    assert len(settings["filament_settings_id"]) == 9
-    assert len(settings["filament_colour"]) == 9
-    assert settings["filament_colour"][:4] == ["#FFFFFF", "#C12E1F", "#F4EE2A", "#0A2989"]
-    assert len(settings["filament_multi_colour"]) == 9
-    assert settings["filament_multi_colour"][:4] == ["#FFFFFF", "#C12E1F", "#F4EE2A", "#0A2989"]
-    assert len(settings["flush_volumes_matrix"]) == 162
-    assert len(settings["flush_volumes_vector"]) == 18
+    assert settings["filament_settings_id"] == [
+        "Bambu PETG Basic @BBL X2D 0.4 nozzle",
+        "Bambu PETG Basic @BBL X2D 0.4 nozzle",
+        "Bambu PETG Basic @BBL X2D 0.4 nozzle",
+        "Bambu PETG Basic @BBL X2D 0.4 nozzle",
+    ]
+    assert settings["filament_colour"] == ["#FFFFF9", "#FDCBA6", "#CD3C46", "#A9A8A6"]
+    assert settings["filament_multi_colour"] == ["#FFFFF9", "#FDCBA6", "#CD3C46", "#A9A8A6"]
+    assert settings["filament_type"] == ["PETG", "PETG", "PETG", "PETG"]
+    assert len(settings["filament_is_mixed"]) == 4
+    assert len(settings["activate_air_filtration"]) == 4
+    assert len(settings["additional_fan_full_speed_layer"]) == 4
+    assert len(settings["pressure_advance"]) == 4
+    assert len(settings["flush_volumes_matrix"]) == 32
+    assert len(settings["flush_volumes_vector"]) == 8
     assert len(settings["different_settings_to_system"]) == 11
     assert settings["version"] == "02.07.01.57"
     assert settings["prime_tower_width"] == "200"
-    assert settings["filament_is_mixed"] == ["0"]
 
 
 class TestAnycubicWriterMetadata:

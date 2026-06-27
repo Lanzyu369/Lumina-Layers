@@ -2334,6 +2334,11 @@ def _run_vector_branch(ctx: dict) -> dict:
             face_orientation=str(ctx.get("bambu_face_orientation", "down")),
             cover_source=vector_cover_source,
             device_profile_id=ctx.get("device_profile_id") or None,
+            preserve_template_filament_slots=(
+                False
+                if str(ctx.get("material_source") or "lut") == "material_archive"
+                else None
+            ),
         )
         vector_timing["export_3mf_s"] = time.perf_counter() - export_t0
         log.info(

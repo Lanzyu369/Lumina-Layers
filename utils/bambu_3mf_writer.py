@@ -526,21 +526,77 @@ _FILAMENT_RESIZABLE_ARRAY_KEYS = frozenset(
         "bed_temperature_initial_layer",
         "activate_air_filtration",
         "additional_cooling_fan_speed",
+        "additional_fan_full_speed_layer",
         "chamber_temperatures",
+        "circle_compensation_speed",
+        "close_additional_fan_first_x_layers",
         "close_fan_the_first_x_layers",
         "complete_print_exhaust_fan_speed",
         "cool_plate_temp",
         "cool_plate_temp_initial_layer",
+        "cooling_perimeter_transition_distance",
+        "cooling_slowdown_logic",
+        "counter_coef_1",
+        "counter_coef_2",
+        "counter_coef_3",
+        "counter_limit_max",
+        "counter_limit_min",
+        "default_filament_colour",
+        "diameter_limit",
         "during_print_exhaust_fan_speed",
+        "enable_overhang_bridge_fan",
+        "enable_pressure_advance",
         "eng_plate_temp",
         "eng_plate_temp_initial_layer",
         "fan_cooling_layer_time",
         "fan_max_speed",
         "fan_min_speed",
+        "first_x_layer_fan_speed",
+        "first_x_layer_part_fan_speed",
+        "full_fan_speed_layer",
+        "hole_coef_1",
+        "hole_coef_2",
+        "hole_coef_3",
+        "hole_limit_max",
+        "hole_limit_min",
         "hot_plate_temp",
         "hot_plate_temp_initial_layer",
+        "impact_strength_z",
+        "ironing_fan_speed",
+        "no_slow_down_for_cooling_on_outwalls",
+        "overhang_fan_speed",
+        "overhang_fan_threshold",
+        "overhang_threshold_participating_cooling",
+        "pre_start_fan_time",
+        "pressure_advance",
+        "reduce_fan_stop_start_freq",
+        "required_nozzle_HRC",
+        "slow_down_for_layer_cooling",
+        "slow_down_layer_time",
+        "supertack_plate_temp",
+        "supertack_plate_temp_initial_layer",
+        "temperature_vitrification",
         "textured_plate_temp",
         "textured_plate_temp_initial_layer",
+    ]
+)
+
+_FILAMENT_LINEAR_GROUP_ARRAY_KEYS = frozenset(
+    [
+        "flush_volumes_vector",
+    ]
+)
+_FILAMENT_SQUARE_GROUP_ARRAY_KEYS = frozenset(
+    [
+        "flush_volumes_matrix",
+    ]
+)
+_CRITICAL_FILAMENT_ARRAY_KEYS = frozenset(
+    [
+        "filament_colour",
+        "filament_multi_colour",
+        "filament_settings_id",
+        "filament_type",
     ]
 )
 
@@ -639,12 +695,145 @@ def _should_preserve_template_filament_slots(
     registry_profile: Any,
     template_settings: dict,
     material_count: int,
+    explicit: Optional[bool] = None,
 ) -> bool:
     """Return whether registry exports should keep the slicer's native slot shape."""
 
+    if explicit is not None:
+        return bool(explicit)
     if registry_profile is None:
         return False
     return _template_filament_count(template_settings) > material_count
+
+
+def _is_filament_linear_array_key(key: str) -> bool:
+    return key.startswith("filament_") or key in _FILAMENT_RESIZABLE_ARRAY_KEYS
+
+
+def _copy_template_group(
+    values: list,
+    *,
+    template_count: int,
+    source_index: int,
+    group_size: int,
+) -> list:
+    if not values or template_count <= 0 or group_size <= 0:
+        return []
+    clamped_index = max(0, min(int(source_index), template_count - 1))
+    start = clamped_index * group_size
+    group = list(values[start : start + group_size])
+    if len(group) == group_size:
+        return [copy.deepcopy(item) for item in group]
+    fallback = list(values[:group_size])
+    return [copy.deepcopy(item) for item in fallback]
+
+
+def _resize_filament_linear_array(
+    key: str,
+    values: list,
+    *,
+    template_settings: dict,
+    material_count: int,
+) -> list:
+    if material_count <= 0:
+        return []
+    current = list(values)
+    if len(current) == material_count:
+        return current
+
+    template_count = _template_filament_count(template_settings)
+    preserves_group_shape = (
+        key in _FILAMENT_LINEAR_GROUP_ARRAY_KEYS
+        or (
+            key.startswith("filament_")
+            and template_count > 0
+            and len(current) > template_count
+            and len(current) % template_count == 0
+        )
+    )
+    if preserves_group_shape and template_count > 0 and len(current) % template_count == 0:
+        group_size = max(1, len(current) // template_count)
+        result: list = []
+        for material_index in range(material_count):
+            result.extend(
+                _copy_template_group(
+                    current,
+                    template_count=template_count,
+                    source_index=material_index,
+                    group_size=group_size,
+                )
+            )
+        return result
+
+    template_value = _template_default_list_value(current, template_settings)
+    return [copy.deepcopy(template_value) for _ in range(material_count)]
+
+
+def _resize_filament_square_array(
+    values: list,
+    *,
+    template_settings: dict,
+    material_count: int,
+) -> list:
+    if material_count <= 0:
+        return []
+    current = list(values)
+    template_count = _template_filament_count(template_settings)
+    if template_count <= 0:
+        return current
+
+    template_pair_count = template_count * template_count
+    if template_pair_count <= 0 or len(current) % template_pair_count != 0:
+        return current[: material_count * material_count]
+
+    group_size = max(1, len(current) // template_pair_count)
+    result: list = []
+    for row in range(material_count):
+        source_row = min(row, template_count - 1)
+        for col in range(material_count):
+            source_col = min(col, template_count - 1)
+            source_index = source_row * template_count + source_col
+            result.extend(
+                _copy_template_group(
+                    current,
+                    template_count=template_pair_count,
+                    source_index=source_index,
+                    group_size=group_size,
+                )
+            )
+    return result
+
+
+def _validate_trimmed_project_filament_arrays(settings: dict, material_count: int) -> None:
+    if material_count <= 0:
+        raise ValueError("project filament palette is empty")
+
+    for key in _CRITICAL_FILAMENT_ARRAY_KEYS:
+        value = settings.get(key)
+        if not isinstance(value, list):
+            raise ValueError(f"project filament array '{key}' is missing")
+        if len(value) != material_count:
+            raise ValueError(
+                f"project filament array '{key}' has {len(value)} entries; "
+                f"expected {material_count}"
+            )
+
+    for key, value in settings.items():
+        if not isinstance(value, list) or not value:
+            continue
+        if key in _FILAMENT_SQUARE_GROUP_ARRAY_KEYS:
+            expected_base = material_count * material_count
+            if len(value) < expected_base or len(value) % expected_base != 0:
+                raise ValueError(
+                    f"project filament matrix '{key}' has {len(value)} entries; "
+                    f"expected a multiple of {expected_base}"
+                )
+        elif key in _FILAMENT_LINEAR_GROUP_ARRAY_KEYS or _is_filament_linear_array_key(key):
+            if len(value) < material_count or len(value) % material_count != 0:
+                raise ValueError(
+                    f"project filament array '{key}' has {len(value)} entries; "
+                    f"expected a multiple of {material_count}"
+                )
 
 
 def _apply_filament_array_overrides(
@@ -655,6 +844,8 @@ def _apply_filament_array_overrides(
 ) -> None:
     if not preserve_template_slots:
         settings.update(arrays)
+        if "filament_colour" in arrays:
+            settings["filament_multi_colour"] = list(arrays["filament_colour"])
         return
 
     for key, values in arrays.items():
@@ -1113,6 +1304,7 @@ class BambuStudio3MFWriter:
         face_orientation: str = "down",
         cover_source: "str | bytes | Image.Image | None" = None,
         device_profile_id: Optional[str] = None,
+        preserve_template_filament_slots: Optional[bool] = None,
     ):
         """Initialize 3MF writer with printer-specific template support.
         初始化 3MF 写入器，支持机型和切片器专属配置模板。
@@ -1143,6 +1335,11 @@ class BambuStudio3MFWriter:
             device_profile_id (Optional[str]): Slicer-scoped generated registry
                 device profile ID used to select native machine metadata.
                 （切片软件维度的注册表设备配置 ID，用于选择原生机型元数据）
+            preserve_template_filament_slots (Optional[bool]): Override whether
+                registry templates keep their native filament slot count. ``None``
+                keeps the legacy automatic behaviour; ``False`` trims project
+                filament arrays to the selected palette.（是否保留注册表模板的原生
+                耗材槽数量；``None`` 保持旧自动逻辑，``False`` 按已选调色板裁剪。）
         """
         from config import format_native_nozzle_size, normalize_nozzle_size, normalize_slicer_software_id
 
@@ -1181,6 +1378,7 @@ class BambuStudio3MFWriter:
         self._project_preview_colors: dict | None = None
         self.cover_source: "str | bytes | Image.Image | None" = cover_source
         self.cover_bundle: Optional[CoverPngBundle] = None
+        self.preserve_template_filament_slots = preserve_template_filament_slots
 
     def add_mesh(self, mesh: _get_trimesh().Trimesh, name: str, color_rgb: tuple):
         """Add a mesh object to the scene.
@@ -1984,6 +2182,7 @@ class BambuStudio3MFWriter:
             self._registry_device_profile,
             template_settings,
             num_colors,
+            self.preserve_template_filament_slots,
         )
         if "different_settings_to_system" in settings:
             settings["different_settings_to_system"] = _normalize_difference_index(
@@ -1992,12 +2191,21 @@ class BambuStudio3MFWriter:
 
         for key, value in settings.items():
             if isinstance(value, list) and len(value) > 0:
-                if key.startswith("filament_") or key in _FILAMENT_RESIZABLE_ARRAY_KEYS:
-                    if preserve_template_filament_slots:
-                        continue
-                    if len(value) != num_colors:
-                        template_value = _template_default_list_value(value, template_settings)
-                        settings[key] = [template_value] * num_colors
+                if preserve_template_filament_slots:
+                    continue
+                if key in _FILAMENT_SQUARE_GROUP_ARRAY_KEYS:
+                    settings[key] = _resize_filament_square_array(
+                        value,
+                        template_settings=template_settings,
+                        material_count=num_colors,
+                    )
+                elif key in _FILAMENT_LINEAR_GROUP_ARRAY_KEYS or _is_filament_linear_array_key(key):
+                    settings[key] = _resize_filament_linear_array(
+                        key,
+                        value,
+                        template_settings=template_settings,
+                        material_count=num_colors,
+                    )
 
         _apply_filament_array_overrides(
             settings,
@@ -2006,7 +2214,11 @@ class BambuStudio3MFWriter:
         )
         _apply_material_filament_metadata(settings, template_settings, material_palette)
         if not preserve_template_filament_slots:
+            filament_colour = settings.get("filament_colour")
+            if isinstance(filament_colour, list):
+                settings["filament_multi_colour"] = list(filament_colour)
             _disable_cut_retraction_filament_overrides(settings, num_colors)
+            _validate_trimmed_project_filament_arrays(settings, num_colors)
 
         settings.setdefault("single_extruder_multi_material", "1")
         settings.setdefault("enable_prime_tower", "1")
@@ -2282,6 +2494,7 @@ def export_scene_with_bambu_metadata(
     face_orientation: str = "down",
     cover_source: "str | bytes | Image.Image | None" = None,
     device_profile_id: Optional[str] = None,
+    preserve_template_filament_slots: Optional[bool] = None,
 ):
     """Export a Trimesh scene to BambuStudio/OrcaSlicer-compatible 3MF with metadata.
     将 Trimesh 场景导出为 BambuStudio/OrcaSlicer 兼容的 3MF 文件（含元数据）。
@@ -2317,6 +2530,11 @@ def export_scene_with_bambu_metadata(
         device_profile_id (Optional[str]): Slicer-scoped generated registry
             device profile ID used to select native machine metadata.
             （切片软件维度的注册表设备配置 ID，用于选择原生机型元数据）
+        preserve_template_filament_slots (Optional[bool]): Override whether a
+            registry-backed project keeps the template's native filament slot
+            count. ``False`` trims project filament arrays to the selected
+            palette.（是否覆盖注册表模板原生耗材槽保留策略；``False`` 会按已选
+            调色板裁剪项目耗材数组。）
 
     Returns:
         str: Path to the exported 3MF file. (导出的 3MF 文件路径)
@@ -2359,6 +2577,7 @@ def export_scene_with_bambu_metadata(
         "watermark": watermark,
         "cover_source": cover_source,
         "device_profile_id": device_profile_id,
+        "preserve_template_filament_slots": preserve_template_filament_slots,
     }
     writer = BambuStudio3MFWriter(**writer_kwargs)
     writer.enable_base_layer_height_modifier = bool(enable_base_layer_height_modifier)
