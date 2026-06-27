@@ -139,14 +139,14 @@ def test_legacy_multi_runtime_accepts_cross_color_lut_candidates(tmp_path: Path)
     )
     eight_meta = LUTMetadata(
         palette=[
-            PaletteEntry("White", "PLA Basic"),
-            PaletteEntry("Cyan", "PLA Basic"),
-            PaletteEntry("Magenta", "PLA Basic"),
-            PaletteEntry("Yellow", "PLA Basic"),
-            PaletteEntry("Black", "PLA Basic"),
-            PaletteEntry("Red", "PLA Basic"),
-            PaletteEntry("Blue", "PLA Basic"),
-            PaletteEntry("Green", "PLA Basic"),
+            PaletteEntry("Slot 1 (White)", "PLA Basic"),
+            PaletteEntry("Slot 2 (Cyan)", "PLA Basic"),
+            PaletteEntry("Slot 3 (Magenta)", "PLA Basic"),
+            PaletteEntry("Slot 4 (Yellow)", "PLA Basic"),
+            PaletteEntry("Slot 5 (Black)", "PLA Basic"),
+            PaletteEntry("Slot 6 (Red)", "PLA Basic"),
+            PaletteEntry("Slot 7 (Deep Blue)", "PLA Basic"),
+            PaletteEntry("Slot 8 (Green)", "PLA Basic"),
         ],
         color_mode="8-Color Max",
         **base_kwargs,
@@ -192,22 +192,22 @@ def test_legacy_multi_runtime_accepts_cross_color_lut_candidates(tmp_path: Path)
         runtime_rgb, runtime_stacks, runtime_meta = LUTManager.load_lut_with_metadata(runtime_path)
         assert runtime_rgb.reshape(-1, 3).shape[0] == 34
         assert [entry.color for entry in runtime_meta.palette] == [
-            "White",
-            "Black",
-            "Red",
-            "Yellow",
-            "Blue",
-            "Cyan",
-            "Magenta",
-            "Green",
+            "Slot 1 (White)",
+            "Slot 2 (Cyan)",
+            "Slot 3 (Magenta)",
+            "Slot 4 (Yellow)",
+            "Slot 5 (Black)",
+            "Slot 6 (Red)",
+            "Slot 7 (Deep Blue)",
+            "Slot 8 (Green)",
         ]
         assert runtime_meta.color_mode == "Merged"
         assert runtime_meta.extensions["source_kind"] == "legacy_multi"
         assert runtime_meta.extensions["selected_lut_names"] == ["bw", "four", "eight"]
         assert len({tuple(row) for row in runtime_stacks.tolist()}) == 34
         assert runtime_stacks[-2:].tolist() == [
-            [2, 3, 4, 0, 2],
-            [2, 3, 4, 0, 1],
+            [5, 3, 6, 0, 5],
+            [5, 3, 6, 0, 4],
         ]
 
         from core.pipeline.s01_input_validation import run as run_s01
@@ -223,14 +223,14 @@ def test_legacy_multi_runtime_accepts_cross_color_lut_candidates(tmp_path: Path)
             }
         )
         assert generate_ctx["slot_names"] == [
-            "White",
-            "Black",
-            "Red",
-            "Yellow",
-            "Blue",
-            "Cyan",
-            "Magenta",
-            "Green",
+            "Slot 1 (White)",
+            "Slot 2 (Cyan)",
+            "Slot 3 (Magenta)",
+            "Slot 4 (Yellow)",
+            "Slot 5 (Black)",
+            "Slot 6 (Red)",
+            "Slot 7 (Deep Blue)",
+            "Slot 8 (Green)",
         ]
         assert len(generate_ctx["preview_colors"]) == 8
     finally:

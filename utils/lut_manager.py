@@ -214,6 +214,27 @@ class LUTManager:
     _source_catalog_cache_lock = threading.Lock()
     NATIVE_SOURCE_INDEX_TTL_SECONDS = 30.0
     SOURCE_CATALOG_SIGNATURE_TTL_SECONDS = 5.0
+    _LEGACY_MULTI_STANDARD_SLOT_ORDER: tuple[str, ...] = (
+        "White",
+        "Cyan",
+        "Magenta",
+        "Yellow",
+        "Black",
+        "Red",
+        "Deep Blue",
+        "Green",
+    )
+    _LEGACY_MULTI_COLOR_ALIASES: dict[str, str] = {
+        "white": "White",
+        "cyan": "Cyan",
+        "magenta": "Magenta",
+        "yellow": "Yellow",
+        "black": "Black",
+        "red": "Red",
+        "blue": "Deep Blue",
+        "deepblue": "Deep Blue",
+        "green": "Green",
+    }
 
     @classmethod
     def _scan_roots(cls) -> list[tuple[str, str]]:
@@ -1124,9 +1145,55 @@ class LUTManager:
 
         raise ValueError(f"Legacy LUT missing recipe stacks: {lut_name}")
 
-    @staticmethod
-    def _legacy_palette_entry_key(entry: PaletteEntry) -> str:
-        return normalize_channel_key(build_channel_key(entry.color, entry.material))
+    @classmethod
+    def _canonicalize_legacy_multi_color_name(cls, color: object) -> str:
+        text = str(color or "").strip()
+        parenthetical = re.findall(r"\(([^()]*)\)", text)
+        if parenthetical:
+            text = parenthetical[-1].strip()
+        else:
+            text = re.sub(r"^\s*slot\s*\d+\s*[:：\-_\s]*", "", text, flags=re.IGNORECASE).strip()
+
+        normalized = re.sub(r"[^a-z]+", "", text.lower())
+        return cls._LEGACY_MULTI_COLOR_ALIASES.get(normalized, text)
+
+    @classmethod
+    def _legacy_multi_slot_label(cls, color: str) -> str:
+        slot_index = cls._LEGACY_MULTI_STANDARD_SLOT_ORDER.index(color) + 1
+        return f"Slot {slot_index} ({color})"
+
+    @classmethod
+    def _legacy_palette_entry_key(cls, entry: PaletteEntry) -> str:
+        color = cls._canonicalize_legacy_multi_color_name(entry.color)
+        return normalize_channel_key(build_channel_key(color, entry.material))
+
+    @classmethod
+    def _canonicalize_legacy_multi_palette_entry(cls, entry: PaletteEntry) -> PaletteEntry:
+        cloned = copy.deepcopy(entry)
+        color = cls._canonicalize_legacy_multi_color_name(cloned.color)
+        if color in cls._LEGACY_MULTI_STANDARD_SLOT_ORDER:
+            cloned.color = cls._legacy_multi_slot_label(color)
+            cloned.color_name = color
+        return cloned
+
+    @classmethod
+    def _ordered_legacy_multi_palette(
+        cls,
+        entries_by_key: dict[str, PaletteEntry],
+    ) -> list[PaletteEntry]:
+        standard_order = {
+            color: index
+            for index, color in enumerate(cls._LEGACY_MULTI_STANDARD_SLOT_ORDER)
+        }
+
+        def sort_key(item: tuple[str, PaletteEntry]) -> tuple[int, int, str]:
+            key, entry = item
+            color = cls._canonicalize_legacy_multi_color_name(entry.color)
+            if color in standard_order:
+                return (0, standard_order[color], normalize_channel_key(str(entry.material)))
+            return (1, len(standard_order), key)
+
+        return [entry for _key, entry in sorted(entries_by_key.items(), key=sort_key)]
 
     @staticmethod
     def _legacy_print_settings_signature(metadata: LUTMetadata) -> dict[str, Any]:
@@ -1183,8 +1250,7 @@ class LUTManager:
         seen_recipes: set[tuple[int, ...]] = set()
         baseline_print_signature: dict[str, Any] | None = None
         baseline_metadata: LUTMetadata | None = None
-        global_palette: list[PaletteEntry] = []
-        global_palette_index: dict[str, int] = {}
+        global_palette_entries: dict[str, PaletteEntry] = {}
         loaded_sources: list[tuple[str, str, np.ndarray, np.ndarray, LUTMetadata]] = []
         stack_width: int | None = None
 
@@ -1209,13 +1275,18 @@ class LUTManager:
 
             for entry in metadata.palette:
                 key = cls._legacy_palette_entry_key(entry)
-                if key and key not in global_palette_index:
-                    global_palette_index[key] = len(global_palette)
-                    global_palette.append(copy.deepcopy(entry))
+                if key and key not in global_palette_entries:
+                    global_palette_entries[key] = cls._canonicalize_legacy_multi_palette_entry(entry)
             loaded_sources.append((lut_name, lut_path, measured_colors, runtime_stacks, metadata))
 
         if baseline_metadata is None or not loaded_sources or stack_width is None:
             raise ValueError("legacy_multi requires at least one usable LUT")
+
+        global_palette = cls._ordered_legacy_multi_palette(global_palette_entries)
+        global_palette_index = {
+            cls._legacy_palette_entry_key(entry): index
+            for index, entry in enumerate(global_palette)
+        }
 
         for lut_name, lut_path, measured_colors, runtime_stacks, _metadata in loaded_sources:
             remapped_stacks = cls._remap_legacy_stacks_to_palette(
