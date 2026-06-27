@@ -491,6 +491,59 @@ class TestVectorizeImageCanary:
         assert "params" in response.text
         mock_pool.submit.assert_not_called()
 
+    def test_malformed_params_json_returns_safe_422_before_worker(self) -> None:
+        mock_pool = SimpleNamespace(submit=AsyncMock())
+        app = create_app()
+        app.dependency_overrides[get_worker_pool] = lambda: mock_pool
+        client = TestClient(app, raise_server_exceptions=False)
+        try:
+            response = client.post(
+                "/api/vectorize",
+                files={"image": ("input.png", _png_bytes(), "image/png")},
+                data={"params": "[bad"},
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 422
+        assert response.json()["detail"] == (
+            "Invalid vectorizer parameters JSON. Check the form value and try again."
+        )
+        for fragment in ("Expecting", "line", "column", "char"):
+            assert fragment not in response.text
+        mock_pool.submit.assert_not_called()
+
+    def test_invalid_params_schema_returns_trimmed_422_before_worker(self) -> None:
+        mock_pool = SimpleNamespace(submit=AsyncMock())
+        app = create_app()
+        app.dependency_overrides[get_worker_pool] = lambda: mock_pool
+        client = TestClient(app, raise_server_exceptions=False)
+        try:
+            response = client.post(
+                "/api/vectorize",
+                files={"image": ("input.png", _png_bytes(), "image/png")},
+                data={"params": json.dumps({"smoothness": "bad", "num_colors": 999})},
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 422
+        detail = response.json()["detail"]
+        assert isinstance(detail, list)
+        assert {
+            "loc": ["smoothness"],
+            "msg": "Input should be a valid number, unable to parse string as a number",
+            "type": "float_parsing",
+        } in detail
+        assert {
+            "loc": ["num_colors"],
+            "msg": "Input should be less than or equal to 256",
+            "type": "less_than_equal",
+        } in detail
+        for fragment in ("input", "url", "ctx", "pydantic.dev"):
+            assert fragment not in response.text
+        mock_pool.submit.assert_not_called()
+
     def test_unsupported_upload_type_returns_422_before_worker(
         self,
         monkeypatch: pytest.MonkeyPatch,

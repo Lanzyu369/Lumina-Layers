@@ -1,5 +1,5 @@
 import type { AxiosProgressEvent } from "axios";
-import apiClient from "./client";
+import apiClient, { type ApiRequestOptions } from "./client";
 import type {
   ClearCacheResponse,
   UserSettings,
@@ -37,9 +37,15 @@ export async function clearCache(): Promise<ClearCacheResponse> {
 }
 
 /** 获取用户设置 */
-export async function getSettings(): Promise<UserSettingsResponse> {
+export async function getSettings(
+  options: ApiRequestOptions = {},
+): Promise<UserSettingsResponse> {
   const response =
-    await apiClient.get<UserSettingsResponse>("/system/settings");
+    options.suppressClientLog === true
+      ? await apiClient.get<UserSettingsResponse>("/system/settings", {
+          suppressClientLog: true,
+        })
+      : await apiClient.get<UserSettingsResponse>("/system/settings");
   return response.data;
 }
 

@@ -823,8 +823,10 @@ def render_markdown(
     else:
         L.append("- **Insufficient successful pairs** to make a recommendation.")
     L.append(
-        "- **Default kernel** SHALL remain `shapely_v1`. v2 stays opt-in via "
-        "`LUMINA_GLB_KERNEL=v2` / `auto`. Phase-2 default switch is a separate PR."
+        "- **Default kernel** is `v2`: use the rasterio + manifold3d path as "
+        "the performance baseline, with fallback to `shapely_v1` if v2 is "
+        "unavailable or fails. Set `LUMINA_GLB_KERNEL=shapely_v1` to pin the "
+        "legacy path."
     )
     L.append(
         "- **SVG / vector pipeline is out of scope** for this benchmark; the matrix "

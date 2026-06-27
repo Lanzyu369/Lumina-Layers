@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 import numpy as np
@@ -55,6 +55,60 @@ def _material_solver_value_error(material_label: str, reason: str) -> ValueError
         f"Material '{label}' cannot be used by the material solver: {reason}. "
         "Re-fit Stage A or import a complete Lumina material export."
     )
+
+
+_STAGE_A_PARAMS_FILE_REASON = (
+    "stage_a_params_file must reference an existing file inside the material directory"
+)
+
+
+def _stage_a_params_file_error(material_label: str) -> ValueError:
+    return _material_solver_value_error(material_label, _STAGE_A_PARAMS_FILE_REASON)
+
+
+def _resolve_stage_a_params_path(
+    material_dir: Path,
+    archive: dict[str, Any],
+    *,
+    material_label: str,
+) -> Path:
+    raw_value = archive.get("stage_a_params_file")
+    if raw_value is None:
+        raw_filename = "stage_A_parameters.json"
+    elif isinstance(raw_value, str):
+        raw_filename = raw_value.strip()
+    else:
+        raise _stage_a_params_file_error(material_label)
+
+    normalized = raw_filename.replace("\\", "/")
+    windows_path = PureWindowsPath(raw_filename)
+    if (
+        not normalized
+        or normalized.startswith("/")
+        or windows_path.drive
+        or windows_path.is_absolute()
+        or Path(raw_filename).is_absolute()
+    ):
+        raise _stage_a_params_file_error(material_label)
+
+    path_parts = tuple(part for part in normalized.split("/") if part)
+    if not path_parts or any(part in {".", ".."} for part in path_parts):
+        raise _stage_a_params_file_error(material_label)
+
+    try:
+        material_root = material_dir.resolve(strict=True)
+        resolved_path = material_dir.joinpath(*path_parts).resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise _stage_a_params_file_error(material_label) from exc
+
+    try:
+        resolved_path.relative_to(material_root)
+    except ValueError as exc:
+        raise _stage_a_params_file_error(material_label) from exc
+
+    if not resolved_path.is_file():
+        raise _stage_a_params_file_error(material_label)
+    return resolved_path
 
 
 def _solver_vector(
@@ -212,12 +266,15 @@ def load_material_params(
     material_name = str(archive.get("material_name") or directory_name)
 
     # Load stage_A_parameters.json for E and k
-    stage_a_filename = str(archive.get("stage_a_params_file") or "stage_A_parameters.json")
-    stage_a_path = material_dir / stage_a_filename
-    if not stage_a_path.exists():
-        raise FileNotFoundError(f"Stage A parameters not found: {stage_a_filename}")
-
-    stage_a = json.loads(stage_a_path.read_text(encoding="utf-8"))
+    stage_a_path = _resolve_stage_a_params_path(
+        material_dir,
+        archive,
+        material_label=directory_name,
+    )
+    try:
+        stage_a = json.loads(stage_a_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise _stage_a_params_file_error(directory_name) from exc
     E, k, C0_white = validate_stage_a_solver_parameters(
         stage_a,
         material_label=directory_name,

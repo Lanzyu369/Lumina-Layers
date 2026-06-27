@@ -13,6 +13,7 @@ background tasks lifecycle.
 import asyncio
 import json
 import os
+import re
 import time
 import uuid
 from collections.abc import AsyncIterator, Sequence
@@ -100,6 +101,14 @@ _CLIENT_LOG_FIELD_LIMIT = 256
 _CLIENT_LOG_DETAILS_DEPTH = 4
 _CLIENT_LOG_DETAILS_ITEMS = 24
 _CLIENT_LOG_DETAILS_STRING_LIMIT = 1200
+_CLIENT_LOG_REDACTED_LOCAL_PATH = "<redacted:local-path>"
+_CLIENT_LOG_WINDOWS_LOCAL_PATH_RE = re.compile(r"\b[A-Za-z]:[\\/][^\s\"'<>),:;]*")
+_CLIENT_LOG_POSIX_LOCAL_PATH_RE = re.compile(
+    r"(^|[^A-Za-z0-9._~%-])"
+    r"(/(?:Users|private|tmp|var|Volumes|home|opt|mnt|workspace|workspaces|app|data|output)"
+    r"(?:/[^\s\"'<>),:;]*)?)"
+    r"(?=$|[\s\"'<>),:;])"
+)
 
 
 def _compact_log_extra(extra: dict) -> dict:
@@ -116,6 +125,20 @@ def _truncate_log_message(message: str, limit: int) -> str:
     if len(message) <= limit:
         return message
     return f"{message[:limit]}...<truncated>"
+
+
+def _redact_client_log_local_paths(value: str) -> str:
+    """Redact local filesystem fragments in frontend diagnostic payloads.
+    脱敏前端诊断 payload 中的本地文件系统片段。
+    """
+    redacted = _CLIENT_LOG_WINDOWS_LOCAL_PATH_RE.sub(
+        _CLIENT_LOG_REDACTED_LOCAL_PATH,
+        value,
+    )
+    return _CLIENT_LOG_POSIX_LOCAL_PATH_RE.sub(
+        lambda match: f"{match.group(1)}{_CLIENT_LOG_REDACTED_LOCAL_PATH}",
+        redacted,
+    )
 
 
 def _format_error_detail(detail: Any) -> str:
@@ -183,7 +206,10 @@ def _sanitize_client_log_value(value: Any, *, depth: int = 0) -> Any:
     if value is None or isinstance(value, bool):
         return value
     if isinstance(value, str):
-        return _truncate_log_message(value, _CLIENT_LOG_DETAILS_STRING_LIMIT)
+        return _truncate_log_message(
+            _redact_client_log_local_paths(value),
+            _CLIENT_LOG_DETAILS_STRING_LIMIT,
+        )
     if isinstance(value, int):
         return value
     if isinstance(value, float):
@@ -203,7 +229,10 @@ def _sanitize_client_log_value(value: Any, *, depth: int = 0) -> Any:
         sanitized = {}
         items = list(value.items())
         for raw_key, raw_value in items[:_CLIENT_LOG_DETAILS_ITEMS]:
-            key = _truncate_log_message(str(raw_key), 120)
+            key = _truncate_log_message(
+                _redact_client_log_local_paths(str(raw_key)),
+                120,
+            )
             sanitized[key] = _sanitize_client_log_value(raw_value, depth=depth + 1)
         remaining = len(items) - _CLIENT_LOG_DETAILS_ITEMS
         if remaining > 0:

@@ -1,9 +1,9 @@
 import { create } from "zustand";
 import type { LutInfo, LutInfoResponse, MergeResponse } from "../api/types";
-import { apiErrorToVisibleMessage } from "../api/client";
 import { fetchLutInfo, mergeLuts } from "../api/lut";
 import { fetchLutList as apiFetchLutList } from "../api/converter";
 import { useConverterStore } from "./converter";
+import { lutErrorToVisibleMessage } from "./lutErrorMessages";
 
 // ========== Compatibility Filtering ==========
 
@@ -111,7 +111,7 @@ export const useLutManagerStore = create<LutManagerState & LutManagerActions>(
       } catch (err) {
         set({
           lutListLoading: false,
-          error: apiErrorToVisibleMessage(err),
+          error: lutErrorToVisibleMessage(err),
         });
       }
     },
@@ -143,7 +143,7 @@ export const useLutManagerStore = create<LutManagerState & LutManagerActions>(
       } catch (err) {
         set({
           primaryLoading: false,
-          error: apiErrorToVisibleMessage(err),
+          error: lutErrorToVisibleMessage(err),
         });
       }
     },
@@ -197,7 +197,7 @@ export const useLutManagerStore = create<LutManagerState & LutManagerActions>(
       } catch (err) {
         set({
           merging: false,
-          error: apiErrorToVisibleMessage(err),
+          error: lutErrorToVisibleMessage(err),
         });
       }
     },

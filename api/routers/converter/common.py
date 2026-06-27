@@ -13,6 +13,7 @@ from PIL import Image
 
 from api.errors import to_http_exception
 from api.file_bridge import ndarray_to_png_bytes, pil_to_png_bytes
+from api.gradient_group_payload import compute_gradient_group_payload
 from api.preview_cache_artifacts import (
     hydrate_preview_cache,
     is_preview_cache_artifact_ref,
@@ -21,11 +22,6 @@ from api.session_store import SessionStore
 from api.structured_logging import bind_session_id, get_logger
 from config import PrinterConfig
 from core.material_lut_synthesis import infer_material_archive_base_channel_idx
-from core.gradient_group_analyzer import (
-    GradientGroupAnalysisParams,
-    analyze_gradient_groups_with_region_id_map,
-    gradient_groups_to_json,
-)
 
 EPHEMERAL_PREVIEW_TTL_SECONDS = 600
 BATCH_DOWNLOAD_TTL_SECONDS = 3600
@@ -41,6 +37,9 @@ SOURCE_IMAGE_UNAVAILABLE_DETAIL = (
 LUT_DATA_UNAVAILABLE_DETAIL = (
     "Color lookup data is unavailable. Re-select the LUT or materials, run preview, "
     "and try again."
+)
+LUT_SOURCE_SELECTION_INVALID_DETAIL = (
+    "Choose a valid LUT or complete native material source, then try again."
 )
 PREVIEW_COLOR_PALETTE_UNAVAILABLE_DETAIL = (
     "Preview color palette is unavailable. Re-run preview and try again."
@@ -387,12 +386,7 @@ def recompute_gradient_groups_into_session(
         return None
     _t = time.perf_counter()
     try:
-        analysis = analyze_gradient_groups_with_region_id_map(
-            matched_rgb=np.asarray(matched_rgb, dtype=np.uint8),
-            quantized_rgb=np.asarray(quantized_image, dtype=np.uint8),
-            mask_solid=np.asarray(mask_solid, dtype=bool),
-            params=GradientGroupAnalysisParams(),
-        )
+        computed = compute_gradient_group_payload(cache_data)
     except (ValueError, RuntimeError) as exc:
         log.warning(
             "Gradient-group analysis failed",
@@ -403,7 +397,9 @@ def recompute_gradient_groups_into_session(
             },
         )
         return None
-    payload = gradient_groups_to_json(analysis.groups)
+    if computed is None:
+        return None
+    payload, region_id_map = computed
     store.put(session_id, "gradient_groups", payload)
     # Cache the per-pixel region_id_map so the color-highlight / replace /
     # requantize endpoints can clip by the exact pixel mask of a selected
@@ -413,7 +409,7 @@ def recompute_gradient_groups_into_session(
     store.put(
         session_id,
         "gradient_region_id_map",
-        np.ascontiguousarray(analysis.region_id_map, dtype=np.uint32),
+        region_id_map,
     )
     log.debug(
         "Gradient groups computed",

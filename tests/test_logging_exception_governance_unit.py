@@ -257,6 +257,7 @@ CONVERTER_STRUCTURED_EVENTS = {
     "batch_merge_3mf_init",
     "batch_merge_3mf_done",
     "batch_merge_plate_overflow_warning",
+    "batch_merge_preview_unavailable",
     "batch_merge_3mf_failed",
     "batch_merge_intermediate_cleanup_failed",
 }

@@ -203,7 +203,7 @@ const LOCAL_FILE_URL_PATTERN = /\bfile:\/\/(?:localhost\/|\/)(?:[A-Za-z]:\/|(?:U
 const POSIX_LOCAL_PATH_PATTERN = /(^|[\s("'=:])((?:\/Users|\/home|\/private|\/tmp|\/var|\/Volumes|\/mnt|\/opt|\/etc)\/[^\s"',)]+)/g;
 const WINDOWS_LOCAL_PATH_PATTERN = /\b[A-Za-z]:[\\/][^\s"'<>|?*]+/g;
 const UNC_LOCAL_PATH_PATTERN = /\\\\[A-Za-z0-9_.-]+\\[^\s"'<>|]+(?:\\[^\s"'<>|]+)*/g;
-const GENERIC_HTTP_STATUS_PATTERN = /\b(?:request failed with status code|http(?:\s+error)?|status(?:\s+code)?|error)\s+[45]\d{2}\b/i;
+const GENERIC_HTTP_STATUS_PATTERN = /\b(?:request failed with status code|http(?:\s+error)?|status(?:\s+code)?|error)\s+\d{3}\b/i;
 const STACK_FRAME_PATTERN = /^\s*at\s+.+$/gm;
 const HTTP_STATUS_KEY_PATTERN = /^(?:status|status_code|http_status|response_status)$/i;
 
@@ -233,9 +233,9 @@ function shouldOmitManualFallbackValue(key: string | null, value: unknown): bool
     return false;
   }
   if (typeof value === "number") {
-    return value >= 400 && value <= 599;
+    return value >= 100 && value <= 599;
   }
-  return typeof value === "string" && /^[45]\d\d$/.test(value);
+  return typeof value === "string" && /^\d\d\d$/.test(value);
 }
 
 function sanitizeManualFallbackValue(
@@ -725,7 +725,6 @@ export function BugReportModal({
       data-testid="bug-report-backdrop"
       className="fixed inset-0 z-[10000] flex items-center justify-center px-4 py-6 backdrop-blur-sm"
       style={{ background: "var(--surface-scrim)" }}
-      onClick={handleCancel}
     >
       <div
         role="dialog"

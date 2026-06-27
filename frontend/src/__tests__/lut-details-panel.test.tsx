@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { LutDetailsResponse } from "../api/types";
 import LutDetailsPanel from "../components/LutDetailsPanel";
+import { tRuntime } from "../i18n/runtime";
 import { useLutDetailsStore } from "../stores/lutDetailsStore";
 
 const mockFetchLutDetailsCatalog = vi.fn();
@@ -330,7 +331,7 @@ describe("LutDetailsPanel", () => {
     expect(screen.getByText("当前显示的是已加载 LUT，点击加载后更新。")).toBeInTheDocument();
   });
 
-  it("shows readable backend detail instead of raw HTTP status errors", async () => {
+  it("shows user-facing stale LUT detail instead of raw backend detail", async () => {
     setLoadedState({
       selectedLutName: "Aliz - PETG - Test",
       loadedLutName: "Bambu Lab - PLA - Test",
@@ -356,9 +357,10 @@ describe("LutDetailsPanel", () => {
     await useLutDetailsStore.getState().loadSelectedLut();
 
     await waitFor(() => {
-      expect(screen.getByText("LUT not found: stale")).toBeInTheDocument();
+      expect(screen.getByText(tRuntime("lut_error_missing_refresh"))).toBeInTheDocument();
     });
 
+    expect(screen.queryByText(/LUT not found/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Request failed with status code/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/status code\s+404/i)).not.toBeInTheDocument();
     expect(screen.getByTestId("lut-details-loaded-view")).toBeInTheDocument();

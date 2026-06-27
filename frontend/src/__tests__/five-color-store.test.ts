@@ -5,6 +5,7 @@ import {
 } from "../stores/fiveColorStore";
 import { useSettingsStore, DEFAULT_SETTINGS } from "../stores/settingsStore";
 import type { FiveColorCardCoordinate } from "../api/types";
+import { tRuntime } from "../i18n/runtime";
 
 vi.mock("../api/fiveColor", () => ({
   fetchBaseColors: vi.fn(),
@@ -219,6 +220,23 @@ describe("fiveColorStore LUT switching", () => {
     expect(state.isLoading).toBe(false);
   });
 
+  it("hides missing LUT backend details when base color loading fails", async () => {
+    mockFetchBaseColors.mockRejectedValueOnce(
+      apiFailure(
+        { detail: "LUT not found: stale-five-color" },
+        "Request failed with status code 404",
+        404,
+      ),
+    );
+
+    await useFiveColorStore.getState().loadBaseColors("stale-five-color");
+
+    const state = useFiveColorStore.getState();
+    expect(state.error).toBe(tRuntime("lut_error_missing_refresh"));
+    expect(state.error).not.toMatch(/LUT not found/i);
+    expect(state.isLoading).toBe(false);
+  });
+
   it("clears stale base colors when loading a different LUT fails", async () => {
     mockFetchBaseColors.mockResolvedValueOnce({
       lut_name: "old-lut",
@@ -268,6 +286,27 @@ describe("fiveColorStore LUT switching", () => {
 
     const state = useFiveColorStore.getState();
     expect(state.error).toBe("five_color_error_generate_swatch_failed");
+    expect(state.isGeneratingSwatch).toBe(false);
+  });
+
+  it("hides missing LUT backend details when swatch generation fails", async () => {
+    useFiveColorStore.setState({
+      lutName: "stale-five-color",
+      collectedRecipes: [staleRecipe],
+    });
+    mockGenerateRecipeSwatch.mockRejectedValueOnce(
+      apiFailure(
+        { detail: "LUT not found: stale-five-color" },
+        "Request failed with status code 404",
+        404,
+      ),
+    );
+
+    await useFiveColorStore.getState().generateSwatch();
+
+    const state = useFiveColorStore.getState();
+    expect(state.error).toBe(tRuntime("lut_error_missing_refresh"));
+    expect(state.error).not.toMatch(/LUT not found/i);
     expect(state.isGeneratingSwatch).toBe(false);
   });
 
@@ -665,6 +704,32 @@ describe("fiveColorStore LUT switching", () => {
     expect(state.isLoading).toBe(false);
   });
 
+  it("hides missing LUT backend details when target hex lookup fails", async () => {
+    useFiveColorStore.setState({
+      lutName: "stale-five-color",
+      selectedIndices: [4, 3, 2, 1, 0],
+      manualSelectedIndices: [4, 3, 2, 1, 0],
+      selectionSource: "manual",
+      queryResult: null,
+    });
+    mockMatchFiveColorByHex.mockRejectedValueOnce(
+      apiFailure(
+        { detail: "LUT not found: stale-five-color" },
+        "Request failed with status code 404",
+        404,
+      ),
+    );
+
+    await useFiveColorStore.getState().matchColorByHex("#F20A00");
+
+    const state = useFiveColorStore.getState();
+    expect(state.queryResult).toBeNull();
+    expect(state.error).toBe(tRuntime("lut_error_missing_refresh"));
+    expect(state.error).not.toMatch(/LUT not found/i);
+    expect(state.selectedIndices).toEqual([4, 3, 2, 1, 0]);
+    expect(state.isLoading).toBe(false);
+  });
+
   it("restores the manual selection when a target hex lookup has no recipe after a match", async () => {
     useFiveColorStore.setState({
       lutName: "test-lut",
@@ -798,6 +863,34 @@ describe("fiveColorStore LUT switching", () => {
     const state = useFiveColorStore.getState();
     expect(state.queryResult).toBeNull();
     expect(state.error).toBe("Selected LUT does not contain five-color recipes");
+    expect(state.selectedIndices).toEqual([0, 1, 2, 3, 4]);
+    expect(state.manualSelectedIndices).toEqual([0, 1, 2, 3, 4]);
+    expect(state.selectionSource).toBe("manual");
+    expect(state.isLoading).toBe(false);
+  });
+
+  it("hides missing LUT backend details when a standard query fails", async () => {
+    useFiveColorStore.setState({
+      lutName: "stale-five-color",
+      selectedIndices: [0, 1, 2, 3, 4],
+      manualSelectedIndices: [0, 1, 2, 3, 4],
+      selectionSource: "manual",
+      queryResult: null,
+    });
+    mockQueryFiveColor.mockRejectedValueOnce(
+      apiFailure(
+        { detail: "LUT not found: stale-five-color" },
+        "Request failed with status code 404",
+        404,
+      ),
+    );
+
+    await useFiveColorStore.getState().submitQuery();
+
+    const state = useFiveColorStore.getState();
+    expect(state.queryResult).toBeNull();
+    expect(state.error).toBe(tRuntime("lut_error_missing_refresh"));
+    expect(state.error).not.toMatch(/LUT not found/i);
     expect(state.selectedIndices).toEqual([0, 1, 2, 3, 4]);
     expect(state.manualSelectedIndices).toEqual([0, 1, 2, 3, 4]);
     expect(state.selectionSource).toBe("manual");

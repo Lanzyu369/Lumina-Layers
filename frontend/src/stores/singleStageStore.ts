@@ -265,6 +265,12 @@ const GRADIENT_CARD_IMAGE_SOURCE_MISMATCH_DETAIL_PREFIX =
 const GRADIENT_CARD_IMAGE_DECODE_DETAIL_PREFIX = "无法解码图像文件:";
 const GRADIENT_CARD_HEIC_DETAIL_FRAGMENT = "HEIC/HEIF";
 const GRADIENT_CARD_HEIC_DECODE_DETAIL_PREFIX = "HEIC/HEIF 文件解码失败:";
+const GRADIENT_CARD_HEIC_LEGACY_UNSUPPORTED_DETAIL_PREFIX =
+  "HEIC/HEIF 格式需要";
+const GRADIENT_CARD_HEIC_UNSUPPORTED_DETAIL_PREFIX =
+  "当前环境暂不支持 HEIC/HEIF";
+const GRADIENT_CARD_HEIC_UNSUPPORTED_DETAIL_EN_FRAGMENT =
+  "HEIC/HEIF images are not supported";
 
 function extractErrorDetail(err: unknown): string | null {
   const detail = (err as ErrorWithResponseDetail | null)?.response?.data
@@ -288,7 +294,9 @@ function resolveKnownGradientCardDetail(detail: string): string | null {
   }
   if (
     detail.includes(GRADIENT_CARD_HEIC_DETAIL_FRAGMENT) &&
-    detail.includes("pillow-heif")
+    (detail.startsWith(GRADIENT_CARD_HEIC_LEGACY_UNSUPPORTED_DETAIL_PREFIX) ||
+      detail.startsWith(GRADIENT_CARD_HEIC_UNSUPPORTED_DETAIL_PREFIX) ||
+      detail.includes(GRADIENT_CARD_HEIC_UNSUPPORTED_DETAIL_EN_FRAGMENT))
   ) {
     return tRuntime("mat_gradient_heic_unsupported_error");
   }
@@ -361,7 +369,7 @@ function resolveGradientCardSaveError(err: unknown): string {
     if (detail.startsWith(GRADIENT_CARD_IMAGE_SOURCE_MISMATCH_DETAIL_PREFIX)) {
       return tRuntime("mat_gradient_image_source_mismatch_error");
     }
-    return detail;
+    return tRuntime("mat_gradient_save_failed_error");
   }
   return tRuntime("mat_gradient_save_failed_error");
 }

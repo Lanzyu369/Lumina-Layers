@@ -2143,6 +2143,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "LUT 详情加载失败",
     en: "Failed to load LUT details",
   },
+  lut_error_missing_refresh: {
+    zh: "该 LUT 已不存在，请刷新列表后重试。",
+    en: "The selected LUT no longer exists. Refresh the list and try again.",
+  },
   lut_details_summary_name: {
     zh: "名称",
     en: "Name",
@@ -3911,8 +3915,12 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Only JPG/PNG/SVG/WebP/HEIC formats are supported",
   },
   converter_raw_preview_failed: {
-    zh: "RAW 图片预览失败：{error}。请检查后端 RAW 支持或换用 PNG/JPG 后重试。",
-    en: "RAW image preview failed: {error}. Check backend RAW support or retry with a PNG/JPG file.",
+    zh: "RAW 图片预览失败：{error}。请先转换为 PNG/JPG 后再试。",
+    en: "RAW image preview failed: {error}. Please convert it to PNG or JPG and try again.",
+  },
+  extractor_raw_preview_failed: {
+    zh: "RAW 图片预览失败：{error}。请先转换为 PNG/JPG 后再试。",
+    en: "RAW image preview failed: {error}. Please convert it to PNG or JPG and try again.",
   },
 
   // ==================== Large Format Mode ====================

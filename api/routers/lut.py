@@ -112,6 +112,7 @@ _LUT_RECIPE_SEARCH_FAILED_DETAIL = (
     "Unable to search LUT recipes. Check that the LUT supports recipe "
     "search and the search parameters are valid."
 )
+_LUT_NOT_FOUND_DETAIL = "Selected LUT was not found or is unavailable."
 
 
 def _lut_error_fields(exc: Exception) -> dict[str, str]:
@@ -658,7 +659,7 @@ def merge_luts_endpoint(request: MergeRequest) -> MergeResponse:
     if primary_path is None:
         raise HTTPException(
             status_code=404,
-            detail=f"LUT not found: {request.primary_name}",
+            detail=_LUT_NOT_FOUND_DETAIL,
         )
 
     try:
@@ -808,11 +809,11 @@ def compare_luts_endpoint(request: CompareRequest) -> CompareResponse:
     """
     path_a: str | None = LUTManager.get_lut_path(request.lut_a_name)
     if path_a is None:
-        raise HTTPException(status_code=404, detail=f"LUT not found: {request.lut_a_name}")
+        raise HTTPException(status_code=404, detail=_LUT_NOT_FOUND_DETAIL)
 
     path_b: str | None = LUTManager.get_lut_path(request.lut_b_name)
     if path_b is None:
-        raise HTTPException(status_code=404, detail=f"LUT not found: {request.lut_b_name}")
+        raise HTTPException(status_code=404, detail=_LUT_NOT_FOUND_DETAIL)
 
     try:
         mode_a, _count_a = LUTMerger.detect_color_mode(path_a)
@@ -918,7 +919,7 @@ def get_lut_colors(lut_name: str) -> LutColorsResponse:
     """
     path: str | None = LUTManager.get_lut_path(lut_name)
     if path is None:
-        raise HTTPException(status_code=404, detail=f"LUT not found: {lut_name}")
+        raise HTTPException(status_code=404, detail=_LUT_NOT_FOUND_DETAIL)
 
     from core.converter import extract_lut_available_colors
 
@@ -1060,7 +1061,7 @@ def get_lut_info(lut_name: str) -> LutInfoResponseV2:
     """
     path: str | None = LUTManager.get_lut_path(lut_name)
     if path is None:
-        raise HTTPException(status_code=404, detail=f"LUT not found: {lut_name}")
+        raise HTTPException(status_code=404, detail=_LUT_NOT_FOUND_DETAIL)
     return _build_lut_info_from_path(path, lut_name)
 
 
@@ -1132,7 +1133,7 @@ def get_lut_details(lut_name: str) -> LutDetailsResponse:
     try:
         detail = _resolve_lut_details_service().get_lut_details(lut_name)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=f"LUT not found: {lut_name}") from exc
+        raise HTTPException(status_code=404, detail=_LUT_NOT_FOUND_DETAIL) from exc
     except Exception as exc:
         log.error(
             "LUT details failed",
@@ -1244,7 +1245,7 @@ def predict_recipe_color_endpoint(
     """Predict a custom recipe color for the selected source."""
     path: str | None = LUTManager.get_lut_path(lut_name)
     if path is None:
-        raise HTTPException(status_code=404, detail=f"LUT not found: {lut_name}")
+        raise HTTPException(status_code=404, detail=_LUT_NOT_FOUND_DETAIL)
 
     try:
         _rgb, _stacks, metadata = LUTManager.load_lut_with_metadata(path)
@@ -1288,7 +1289,7 @@ def search_recipes_endpoint(
     """Search predictive candidate recipes by a simple layer pattern."""
     path: str | None = LUTManager.get_lut_path(lut_name)
     if path is None:
-        raise HTTPException(status_code=404, detail=f"LUT not found: {lut_name}")
+        raise HTTPException(status_code=404, detail=_LUT_NOT_FOUND_DETAIL)
 
     try:
         _rgb, _stacks, metadata = LUTManager.load_lut_with_metadata(path)

@@ -5,6 +5,7 @@ Lumina Studio - 按颜色分组 GLB 预览模型单元测试 (Unit Tests)
 Requirements: 1.1, 1.5
 """
 
+import logging
 import os
 import re
 import sys
@@ -57,6 +58,26 @@ def _get_node_mesh(scene: trimesh.Scene, node_name: str) -> trimesh.Trimesh:
     """Return the mesh attached to a named GLB node."""
     _, geom_name = scene.graph[node_name]
     return scene.geometry[geom_name]
+
+
+def _unique_mesh_rgb(mesh: trimesh.Trimesh) -> np.ndarray:
+    """Return unique RGB values from either per-face colors or material color."""
+    face_colors = getattr(mesh.visual, "face_colors", None)
+    if face_colors is not None:
+        face_colors = np.asarray(face_colors)
+        if face_colors.ndim == 2 and face_colors.shape[1] >= 3 and len(face_colors) > 0:
+            return np.unique(face_colors[:, :3], axis=0)
+
+    material = getattr(mesh.visual, "material", None)
+    material_color = getattr(material, "baseColorFactor", None)
+    if material_color is None:
+        material_color = getattr(material, "main_color", None)
+    if material_color is not None:
+        rgb = np.asarray(material_color, dtype=np.uint8).reshape(-1)[:3]
+        if rgb.shape == (3,):
+            return rgb.reshape(1, 3)
+
+    return np.empty((0, 3), dtype=np.uint8)
 
 
 @pytest.fixture
@@ -116,6 +137,81 @@ class TestEmptyAndNoneInputs:
         result = generate_segmented_glb(cache, output_path=out_path)
         assert result is None
 
+    def test_export_failure_log_has_actionable_fields(
+        self,
+        out_path: str,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """GLB export exceptions should leave a searchable structured log."""
+
+        def _raise_export_error(self, *args, **kwargs) -> None:
+            raise RuntimeError("glb writer unavailable")
+
+        logger = logging.getLogger("lumina.core.pipeline.s11_glb_preview")
+        logger.addHandler(caplog.handler)
+        caplog.set_level(logging.ERROR, logger="lumina.core.pipeline.s11_glb_preview")
+        monkeypatch.setattr(trimesh.Scene, "export", _raise_export_error)
+
+        try:
+            cache = _make_cache(
+                matched_rgb=np.full((4, 4, 3), [255, 0, 0], dtype=np.uint8),
+                mask_solid=np.ones((4, 4), dtype=bool),
+                target_width_mm=10.0,
+            )
+            result = generate_segmented_glb(cache, output_path=out_path)
+        finally:
+            logger.removeHandler(caplog.handler)
+
+        assert result is None
+
+        records = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "segmented_glb_export_failed"
+        ]
+        assert len(records) == 1
+        record = records[0]
+        assert record.levelno == logging.ERROR
+        assert record.error_type == "RuntimeError"
+        assert record.error_message == "glb writer unavailable"
+        assert record.output_path == out_path
+        assert record.width == 4
+        assert record.height == 4
+        assert record.geometry_count >= 1
+
+    def test_export_failure_log_tolerates_invalid_max_meshes(
+        self,
+        out_path: str,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Logging should not mask the original GLB failure."""
+        logger = logging.getLogger("lumina.core.pipeline.s11_glb_preview")
+        logger.addHandler(caplog.handler)
+        caplog.set_level(logging.ERROR, logger="lumina.core.pipeline.s11_glb_preview")
+
+        try:
+            cache = _make_cache(
+                matched_rgb=np.full((4, 4, 3), [255, 0, 0], dtype=np.uint8),
+                mask_solid=np.ones((4, 4), dtype=bool),
+                target_width_mm=10.0,
+            )
+            result = generate_segmented_glb(cache, output_path=out_path, max_meshes=None)
+        finally:
+            logger.removeHandler(caplog.handler)
+
+        assert result is None
+
+        records = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "segmented_glb_export_failed"
+        ]
+        assert len(records) == 1
+        record = records[0]
+        assert record.error_type == "TypeError"
+        assert record.max_meshes is None
+
 
 # ============================================================================
 # Test 2: Single color image generates exactly 1 Mesh
@@ -145,9 +241,9 @@ class TestSingleColorImage:
 
         # Verify face color matches
         mesh = color_nodes["color_ff0000"]
-        face_rgb = np.unique(mesh.visual.face_colors[:, :3], axis=0)
-        assert len(face_rgb) == 1
-        assert tuple(face_rgb[0]) == (255, 0, 0)
+        mesh_rgb = _unique_mesh_rgb(mesh)
+        assert len(mesh_rgb) == 1
+        assert tuple(mesh_rgb[0]) == (255, 0, 0)
 
         # Verify Pivot Point constraint: min_z = 0
         assert np.isclose(mesh.vertices[:, 2].min(), 0.0, atol=1e-6)

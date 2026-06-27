@@ -20,6 +20,9 @@ import os
 import re
 import json
 import io
+import pickle
+import warnings
+import math
 import numpy as np
 import time
 import xml.etree.ElementTree as ET
@@ -29,11 +32,23 @@ from dataclasses import dataclass, field
 from svgelements import SVG, Path, Shape, Move, Line, Close, CubicBezier, QuadraticBezier, Arc, Color
 from shapely.geometry import Polygon, MultiPolygon, LineString, Point, box
 from shapely import affinity
+try:
+    from shapely import buffer as shapely_buffer
+except ImportError:  # Shapely < 2.0; scalar geometry.buffer remains available.
+    shapely_buffer = None
 from shapely.ops import polygonize, unary_union
 from shapely.strtree import STRtree
 from shapely.validation import make_valid
 from shapely import set_precision
 from shapely.errors import ShapelyError
+try:
+    from shapely.prepared import prep
+except ImportError:  # Keep evenodd merging available if prepared geometries are absent.
+    prep = None
+try:
+    from shapely import symmetric_difference_all
+except ImportError:  # Shapely < 2.0; keep sequential evenodd merge available.
+    symmetric_difference_all = None
 try:
     from shapely import disjoint_subset_union_all
 except ImportError:  # Shapely < 2.1; keep the old union path available.
@@ -61,6 +76,8 @@ _MAX_BEZIER_DEPTH = 16
 _MASK_SUPERSAMPLE = 4
 _ARC_SAMPLE_POSITIONS_10 = np.linspace(0.1, 1.0, 10)
 _ARC_SAMPLE_POSITIONS_10.setflags(write=False)
+_ARC_SAMPLE_POSITIONS_10_TUPLE = tuple(float(value) for value in _ARC_SAMPLE_POSITIONS_10)
+_VECTOR_LARGE_DISTANCE_WARN_LIMIT = 8
 
 
 def _union_run_group_geometries(geometries):
@@ -74,6 +91,162 @@ def _union_run_group_geometries(geometries):
     return unary_union(geometries)
 
 
+def _union_occluder_geometries(geometries):
+    """Union occluder geometries using Shapely's disjoint-subset fast path."""
+
+    if disjoint_subset_union_all is not None:
+        try:
+            return disjoint_subset_union_all(geometries)
+        except VECTOR_HANDLED_ERRORS:
+            pass
+    return unary_union(geometries)
+
+
+def _geometries_have_pairwise_intersections(items):
+    """Return True if any geometry pair intersects; fail closed on errors."""
+
+    try:
+        tree = STRtree(items)
+        geom_id_to_indices = {}
+        for idx, geom in enumerate(items):
+            geom_id_to_indices.setdefault(id(geom), []).append(idx)
+        for i, geom in enumerate(items):
+            try:
+                candidate_refs = tree.query(geom, predicate="intersects")
+                predicate_filtered = True
+            except TypeError:
+                candidate_refs = tree.query(geom)
+                predicate_filtered = False
+
+            for ref in candidate_refs:
+                if isinstance(ref, (int, np.integer)):
+                    candidate_idx = int(ref)
+                    candidate_indices = [candidate_idx]
+                    candidate = (
+                        items[candidate_idx]
+                        if 0 <= candidate_idx < len(items)
+                        else None
+                    )
+                else:
+                    candidate_indices = geom_id_to_indices.get(id(ref), [])
+                    candidate = ref
+                if not candidate_indices:
+                    return True
+                for idx in candidate_indices:
+                    if idx <= i:
+                        continue
+                    if predicate_filtered:
+                        return True
+                    if candidate is None:
+                        return True
+                    try:
+                        if geom.intersects(candidate):
+                            return True
+                    except VECTOR_HANDLED_ERRORS:
+                        return True
+        return False
+    except VECTOR_HANDLED_ERRORS:
+        return True
+
+
+def _polygonal_union_for_disjoint_items(items):
+    """Build polygonal output for already-verified disjoint geometries."""
+
+    polygons = []
+    for geom in items:
+        geom_type = getattr(geom, "geom_type", "")
+        if geom_type == "Polygon":
+            polygons.append(geom)
+        elif geom_type == "MultiPolygon":
+            polygons.extend(part for part in geom.geoms if not part.is_empty)
+        else:
+            return unary_union(items)
+    if not polygons:
+        return None
+    if len(polygons) == 1:
+        return polygons[0]
+    return MultiPolygon(polygons)
+
+
+def _combine_evenodd_contained_disjoint_holes(items):
+    """Fast path for one outer evenodd contour containing disjoint holes."""
+
+    if len(items) <= 2:
+        return None
+
+    try:
+        container_index, container = max(
+            enumerate(items),
+            key=lambda indexed: float(getattr(indexed[1], "area", 0.0) or 0.0),
+        )
+        children = [geom for idx, geom in enumerate(items) if idx != container_index]
+        if not children:
+            return None
+        prepared_container = prep(container) if prep is not None else container
+        if not all(prepared_container.contains(child) for child in children):
+            return None
+        if _geometries_have_pairwise_intersections(children):
+            return None
+
+        result = container
+        for child in children:
+            result = result.difference(child)
+            if result is None or result.is_empty:
+                return None
+        return result
+    except ET.ParseError:
+        return None
+    except VECTOR_HANDLED_ERRORS:
+        return None
+
+
+def _combine_evenodd_polygons(polygons):
+    """Combine subpath polygons with SVG evenodd semantics."""
+
+    items = [poly for poly in polygons if poly is not None and not poly.is_empty]
+    if not items:
+        return None
+    if len(items) == 1:
+        return items[0]
+
+    if not _geometries_have_pairwise_intersections(items):
+        return _polygonal_union_for_disjoint_items(items)
+
+    if len(items) == 2:
+        first, second = items
+        try:
+            if first.contains(second):
+                result = first.difference(second)
+                if result is not None and not result.is_empty:
+                    return result
+            if second.contains(first):
+                result = second.difference(first)
+                if result is not None and not result.is_empty:
+                    return result
+        except VECTOR_HANDLED_ERRORS:
+            pass
+
+    contained_disjoint = _combine_evenodd_contained_disjoint_holes(items)
+    if contained_disjoint is not None and not contained_disjoint.is_empty:
+        return contained_disjoint
+
+    if symmetric_difference_all is not None:
+        try:
+            result = symmetric_difference_all(items)
+            if result is not None:
+                return result
+        except VECTOR_HANDLED_ERRORS:
+            pass
+
+    combined = items[0]
+    for sp in items[1:]:
+        try:
+            combined = combined.symmetric_difference(sp)
+        except VECTOR_HANDLED_ERRORS:
+            pass
+    return combined
+
+
 def _color_object_to_hex(color_obj):
     """Return a lowercase hex string for svgelements Color objects."""
     if color_obj is None:
@@ -83,7 +256,7 @@ def _color_object_to_hex(color_obj):
         if value is None or str(value).lower() == "none":
             return None
         return f"#{int(color_obj.red) & 255:02x}{int(color_obj.green) & 255:02x}{int(color_obj.blue) & 255:02x}"
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         value = getattr(color_obj, "value", None)
         return None if value is None else str(value)
 
@@ -92,7 +265,7 @@ def _rgb_to_hex(rgb):
     """Return a stable lowercase hex string for RGB tuples."""
     try:
         return f"#{int(rgb[0]) & 255:02x}{int(rgb[1]) & 255:02x}{int(rgb[2]) & 255:02x}"
-    except Exception:
+    except (IndexError, TypeError, ValueError):
         return None
 
 
@@ -290,8 +463,134 @@ def _tag_local_name(elem):
     return str(getattr(elem, "tag", "")).split("}")[-1]
 
 
+_SVG_FAST_FILTER_REFERENCE_TAG_RE = re.compile(
+    rb"<\s*(?:[A-Za-z_][\w.-]*:)?"
+    rb"(?:defs|clipPath|mask|pattern|linearGradient|radialGradient|symbol|style|use)\b",
+    re.IGNORECASE,
+)
+_SVG_DIRECT_UNSUPPORTED_OPEN_TAG_RE = re.compile(
+    rb"<\s*(?:(?:[A-Za-z_][\w.-]*):)?"
+    rb"(?!svg\b|path\b)[A-Za-z_][\w.-]*\b",
+    re.IGNORECASE,
+)
+_SVG_FAST_FILTER_SELF_CLOSING_PATH_RE = re.compile(
+    rb"<(?:[A-Za-z_][\w.-]*:)?path\b[^<>]*/\s*>",
+    re.IGNORECASE | re.DOTALL,
+)
+_SVG_FAST_FILTER_PATH_TAG_PREFIX_RE = re.compile(
+    rb"<(?:[A-Za-z_][\w.-]*:)?path\b",
+    re.IGNORECASE,
+)
+_SVG_FAST_FILTER_GAP_FILLER_CLASS_RE = re.compile(
+    rb"\bclass\s*=\s*(['\"])[^'\"]*\bqq3d-gap-filler\b[^'\"]*\1",
+    re.IGNORECASE | re.DOTALL,
+)
+_SVG_FAST_FILTER_FILL_NONE_RE = re.compile(
+    rb"\bfill\s*=\s*(['\"])\s*none\s*\1",
+    re.IGNORECASE | re.DOTALL,
+)
+_SVG_FAST_FILTER_ID_ATTR_RE = re.compile(
+    rb"\bid\s*=",
+    re.IGNORECASE,
+)
+_SVG_FAST_FILTER_COMMON_GAP_FILLER_PREFIX = b'<path class="qq3d-gap-filler" d="'
+_SVG_FAST_FILTER_COMMON_GAP_FILLER_FILL_STROKE = b'" fill="none" stroke="'
+_SVG_FAST_FILTER_COMMON_GAP_FILLER_SUFFIX = (
+    b'" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" '
+    b'vector-effect="non-scaling-stroke"/>'
+)
+_SVG_FAST_FILTER_COMMON_GAP_FILLER_QUOTE_COUNT = 16
+
+
+def _is_common_generated_gap_filler_path_tag(tag, stripped_tag=None):
+    """Return True for Lumina's exact generated gap-filler path layout."""
+
+    if stripped_tag is None:
+        stripped_tag = tag.rstrip()
+    if not tag.startswith(_SVG_FAST_FILTER_COMMON_GAP_FILLER_PREFIX):
+        return False
+    if not stripped_tag.endswith(_SVG_FAST_FILTER_COMMON_GAP_FILLER_SUFFIX):
+        return False
+    if _SVG_FAST_FILTER_COMMON_GAP_FILLER_FILL_STROKE not in stripped_tag[-256:]:
+        return False
+    # The fast path intentionally accepts only the exact generated attribute
+    # layout. Extra attributes such as id="..." add quotes and fall back to
+    # the legacy regex validator, which preserves the old "do not remove ids"
+    # behavior.
+    return stripped_tag.count(b'"') == _SVG_FAST_FILTER_COMMON_GAP_FILLER_QUOTE_COUNT
+
+
+def _fast_filtered_gap_filler_svg_payload(payload):
+    """Return bytes with generated gap-filler paths removed when safe."""
+
+    if b"qq3d-gap-filler" not in payload or b"fill" not in payload:
+        return None
+    if b"data-lumina-origin" in payload or b"url(#" in payload:
+        return None
+    if _SVG_FAST_FILTER_REFERENCE_TAG_RE.search(payload):
+        return None
+
+    marker = b"qq3d-gap-filler"
+    removed_count = 0
+    chunks = []
+    last_end = 0
+    search_from = 0
+
+    while True:
+        marker_at = payload.find(marker, search_from)
+        if marker_at < 0:
+            break
+        tag_start = payload.rfind(b"<", 0, marker_at)
+        tag_end = payload.find(b">", marker_at)
+        if tag_start < 0 or tag_end < 0:
+            search_from = marker_at + len(marker)
+            continue
+
+        tag = payload[tag_start : tag_end + 1]
+        stripped_tag = tag.rstrip()
+        if (
+            _is_common_generated_gap_filler_path_tag(tag, stripped_tag)
+            or (
+                _SVG_FAST_FILTER_PATH_TAG_PREFIX_RE.match(tag)
+                and stripped_tag.endswith(b"/>")
+                and _SVG_FAST_FILTER_GAP_FILLER_CLASS_RE.search(tag)
+                and _SVG_FAST_FILTER_FILL_NONE_RE.search(tag)
+                and not _SVG_FAST_FILTER_ID_ATTR_RE.search(tag)
+            )
+        ):
+            removed_count += 1
+            chunks.append(payload[last_end:tag_start])
+            last_end = tag_end + 1
+        search_from = tag_end + 1
+
+    if removed_count <= 0:
+        return None
+    chunks.append(payload[last_end:])
+    return b"".join(chunks)
+
+
+def _fast_filtered_gap_filler_svg_source(svg_path):
+    """Byte-filter generated gap-filler paths when no XML references exist."""
+
+    try:
+        with open(svg_path, "rb") as handle:
+            payload = handle.read()
+    except VECTOR_HANDLED_ERRORS:
+        return None
+
+    filtered = _fast_filtered_gap_filler_svg_payload(payload)
+    if filtered is None:
+        return None
+    return io.BytesIO(filtered)
+
+
 def _filtered_svg_source_for_vector_parse(svg_path, parse_expand_stroke_to_fill):
     """Return a filtered SVG source that omits stroke-only paths when safe."""
+
+    if not parse_expand_stroke_to_fill:
+        fast_source = _fast_filtered_gap_filler_svg_source(svg_path)
+        if fast_source is not None:
+            return None, fast_source
 
     try:
         tree = ET.parse(svg_path)
@@ -343,7 +642,48 @@ def _sample_arc_segment_points(segment, sample_count=10):
 
     try:
         count = int(sample_count)
-        positions = _ARC_SAMPLE_POSITIONS_10 if count == 10 else np.linspace(0.1, 1.0, count)
+        if count == 10:
+            if segment.start == segment.end and segment.sweep == 0:
+                point = (float(segment.start.x), float(segment.start.y))
+                return [point] * len(_ARC_SAMPLE_POSITIONS_10_TUPLE)
+
+            start_t = segment.get_start_t()
+            sweep = segment.sweep
+            center_x = segment.center.x
+            center_y = segment.center.y
+            prx_x = segment.prx.x
+            prx_y = segment.prx.y
+            pry_x = segment.pry.x
+            pry_y = segment.pry.y
+            radius_x = math.sqrt(
+                (center_x - prx_x) * (center_x - prx_x)
+                + (center_y - prx_y) * (center_y - prx_y)
+            )
+            radius_y = math.sqrt(
+                (center_x - pry_x) * (center_x - pry_x)
+                + (center_y - pry_y) * (center_y - pry_y)
+            )
+            rotation = math.atan2(prx_y - center_y, prx_x - center_x)
+            cos_rotation = math.cos(rotation)
+            sin_rotation = math.sin(rotation)
+            end_point = (float(segment.end.x), float(segment.end.y))
+            sampled_points = []
+            for position in _ARC_SAMPLE_POSITIONS_10_TUPLE:
+                if position == 1.0:
+                    sampled_points.append(end_point)
+                    continue
+                t_value = start_t + (sweep * position)
+                cos_t = math.cos(t_value)
+                sin_t = math.sin(t_value)
+                sampled_points.append(
+                    (
+                        float(center_x + radius_x * cos_t * cos_rotation - radius_y * sin_t * sin_rotation),
+                        float(center_y + radius_x * cos_t * sin_rotation + radius_y * sin_t * cos_rotation),
+                    )
+                )
+            return sampled_points
+
+        positions = np.linspace(0.1, 1.0, count)
         points = segment.npoint(positions)
         arr = np.asarray(points, dtype=float)
         if arr.ndim == 2 and arr.shape[1] >= 2:
@@ -435,6 +775,49 @@ def _direct_convex_extrusion_base(poly, scale):
     return vertices, np.asarray(faces, dtype=np.int64)
 
 
+def _concatenate_meshes_fast(meshes):
+    """Concatenate Trimesh vertices/faces for build_mesh's per-slot merge."""
+
+    items = [mesh for mesh in meshes if mesh is not None]
+    if not items:
+        return trimesh.Trimesh(process=False)
+
+    def _vertices_faces(item):
+        if isinstance(item, tuple) and len(item) == 2:
+            vertices, faces = item
+        else:
+            vertices, faces = item.vertices, item.faces
+        return (
+            np.asarray(vertices, dtype=np.float64),
+            np.asarray(faces, dtype=np.int64),
+        )
+
+    if len(items) == 1:
+        if isinstance(items[0], tuple):
+            vertices, faces = _vertices_faces(items[0])
+            if vertices.size == 0 or faces.size == 0:
+                return trimesh.Trimesh(process=False)
+            return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+        return items[0].copy()
+
+    vertices_parts = []
+    faces_parts = []
+    vertex_offset = 0
+    for item in items:
+        vertices, faces = _vertices_faces(item)
+        if vertices.size == 0 or faces.size == 0:
+            continue
+        vertices_parts.append(vertices)
+        faces_parts.append(faces + vertex_offset)
+        vertex_offset += len(vertices)
+
+    if not vertices_parts:
+        return trimesh.Trimesh(process=False)
+    vertices = np.vstack(vertices_parts)
+    faces = np.vstack(faces_parts)
+    return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+
+
 def _normalize_contours_cached(cache, geom, close_delta_mm=0.03):
     """Normalize contours with a per-call-site identity cache."""
 
@@ -454,10 +837,723 @@ def _normalize_contours_cached(cache, geom, close_delta_mm=0.03):
     return result
 
 
+def _finish_normalized_contour(geom, inflated, deflated):
+    """Apply scalar _normalize_contours post-buffer fallback semantics."""
+
+    if inflated is None or inflated.is_empty:
+        return geom
+    if deflated is None or deflated.is_empty:
+        return geom
+    if deflated.is_valid and deflated.geom_type in ("Polygon", "MultiPolygon"):
+        return deflated
+
+    result = make_valid(deflated)
+    if result is not None and result.geom_type == "GeometryCollection":
+        polys = [g for g in result.geoms if g.geom_type in ("Polygon", "MultiPolygon")]
+        if polys:
+            result = MultiPolygon(polys) if len(polys) > 1 else polys[0]
+        else:
+            return deflated
+    return result
+
+
+def _normalize_contours_many(geometries, close_delta_mm=0.03):
+    """Normalize a batch of contours with scalar-compatible semantics."""
+
+    items = list(geometries)
+    if not items:
+        return []
+    if shapely_buffer is None:
+        cache = {}
+        return [
+            _normalize_contours_cached(cache, geom, close_delta_mm=close_delta_mm)
+            for geom in items
+        ]
+
+    results = [None] * len(items)
+    active_indices = []
+    active_geoms = []
+    for idx, geom in enumerate(items):
+        if geom is None or geom.is_empty:
+            results[idx] = geom
+            continue
+        active_indices.append(idx)
+        active_geoms.append(geom)
+
+    if not active_geoms:
+        return results
+
+    try:
+        geom_array = np.asarray(active_geoms, dtype=object)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            inflated = shapely_buffer(
+                geom_array,
+                close_delta_mm,
+                quad_segs=1,
+                join_style="mitre",
+                mitre_limit=2.0,
+            )
+            deflated = shapely_buffer(
+                inflated,
+                -close_delta_mm,
+                quad_segs=1,
+                join_style="mitre",
+                mitre_limit=2.0,
+            )
+    except VECTOR_HANDLED_ERRORS:
+        cache = {}
+        return [
+            _normalize_contours_cached(cache, geom, close_delta_mm=close_delta_mm)
+            for geom in items
+        ]
+
+    for idx, geom, inflated_geom, deflated_geom in zip(
+        active_indices,
+        active_geoms,
+        inflated,
+        deflated,
+    ):
+        try:
+            results[idx] = _finish_normalized_contour(geom, inflated_geom, deflated_geom)
+        except VECTOR_HANDLED_ERRORS:
+            results[idx] = VectorProcessor._normalize_contours(
+                geom,
+                close_delta_mm=close_delta_mm,
+            )
+    return results
+
+
+def _direct_top_level_path_viewbox(root):
+    """Return a numeric viewBox tuple for strict generated SVGs."""
+
+    raw = str(root.get("viewBox", "") or "").replace(",", " ").split()
+    if len(raw) != 4:
+        return None
+    try:
+        x, y, width, height = (float(value) for value in raw)
+    except (TypeError, ValueError):
+        return None
+    if width <= 0.0 or height <= 0.0:
+        return None
+    return x, y, width, height
+
+
+def _is_strict_top_level_path_svg(root):
+    """Return True when a generated SVG is safe for the direct path parser."""
+
+    if root is None:
+        return False
+    if root.get("data-lumina-origin") is not None or root.get("transform") is not None:
+        return False
+    if _direct_path_visibility_requires_full_svg_parse(root):
+        return False
+
+    reference_tags = {
+        "defs",
+        "clipPath",
+        "mask",
+        "pattern",
+        "linearGradient",
+        "radialGradient",
+        "symbol",
+        "style",
+        "use",
+    }
+    for elem in root.iter():
+        if elem is root:
+            continue
+        tag = _tag_local_name(elem)
+        if tag in reference_tags:
+            return False
+        if tag != "path":
+            return False
+        if elem.get("transform") is not None:
+            return False
+        if _direct_path_visibility_requires_full_svg_parse(elem):
+            return False
+
+    return all(_tag_local_name(child) == "path" for child in list(root))
+
+
+def _direct_path_visibility_requires_full_svg_parse(elem):
+    """Return True when visibility or opacity semantics exceed the direct parser."""
+
+    opacity_attrs = ("opacity", "fill-opacity", "stroke-opacity")
+    for attr in opacity_attrs:
+        if elem.get(attr) is not None:
+            return True
+
+    display = _normalize_svg_css_token(elem.get("display", ""))
+    if display == "none":
+        return True
+    visibility = _normalize_svg_css_token(elem.get("visibility", ""))
+    if visibility in {"hidden", "collapse"}:
+        return True
+
+    style = str(elem.get("style", "") or "")
+    for declaration in style.split(";"):
+        name, sep, value = declaration.partition(":")
+        if not sep:
+            continue
+        prop = name.strip().lower()
+        css_value = _normalize_svg_css_token(value)
+        if prop in opacity_attrs:
+            return True
+        if prop == "display" and css_value == "none":
+            return True
+        if prop == "visibility" and css_value in {"hidden", "collapse"}:
+            return True
+    return False
+
+
+def _parse_svg_opacity_scalar(raw_value):
+    """Parse an SVG opacity scalar, returning None when it is absent or invalid."""
+
+    if raw_value is None:
+        return None
+    value = str(raw_value).strip()
+    if not value:
+        return None
+    try:
+        if value.endswith("%"):
+            parsed = float(value[:-1].strip()) / 100.0
+        else:
+            parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed):
+        return None
+    return min(max(parsed, 0.0), 1.0)
+
+
+def _svg_element_opacity(element):
+    """Return inherited SVG element opacity as a normalized 0..1 scalar."""
+
+    values = getattr(element, "values", None)
+    raw_values = []
+    if isinstance(values, dict):
+        raw_values.append(values.get("opacity"))
+        attrs = values.get("attributes")
+        if isinstance(attrs, dict):
+            raw_values.append(attrs.get("opacity"))
+    raw_values.append(getattr(element, "opacity", None))
+
+    for raw_value in raw_values:
+        opacity = _parse_svg_opacity_scalar(raw_value)
+        if opacity is not None:
+            return opacity
+    return 1.0
+
+
+def _normalize_svg_css_token(raw_value):
+    value = str(raw_value or "").strip().lower()
+    if value.endswith("!important"):
+        value = value[: -len("!important")].strip()
+    return value
+
+
+def _svg_element_hidden_by_visibility(element):
+    """Return True when SVG display/visibility semantics hide an element."""
+
+    values = getattr(element, "values", None)
+    raw_display_values = []
+    raw_visibility_values = []
+    raw_style_values = []
+    if isinstance(values, dict):
+        raw_display_values.append(values.get("display"))
+        raw_visibility_values.append(values.get("visibility"))
+        raw_style_values.append(values.get("style"))
+        attrs = values.get("attributes")
+        if isinstance(attrs, dict):
+            raw_display_values.append(attrs.get("display"))
+            raw_visibility_values.append(attrs.get("visibility"))
+            raw_style_values.append(attrs.get("style"))
+    raw_display_values.append(getattr(element, "display", None))
+    raw_visibility_values.append(getattr(element, "visibility", None))
+    raw_style_values.append(getattr(element, "style", None))
+
+    if any(_normalize_svg_css_token(value) == "none" for value in raw_display_values):
+        return True
+    if any(
+        _normalize_svg_css_token(value) in {"hidden", "collapse"}
+        for value in raw_visibility_values
+    ):
+        return True
+
+    for raw_style in raw_style_values:
+        style = str(raw_style or "")
+        for declaration in style.split(";"):
+            name, sep, value = declaration.partition(":")
+            if not sep:
+                continue
+            prop = name.strip().lower()
+            css_value = _normalize_svg_css_token(value)
+            if prop == "display" and css_value == "none":
+                return True
+            if prop == "visibility" and css_value in {"hidden", "collapse"}:
+                return True
+    return False
+
+
+def _direct_path_fill_rgb(fill_value):
+    """Parse a direct path fill color into an RGB tuple."""
+
+    value = str(fill_value or "").strip()
+    if not value or value.lower() == "none":
+        return None
+    try:
+        color = Color(value)
+        alpha = getattr(color, "alpha", None)
+        if alpha is not None and float(alpha) < 0.01:
+            return None
+        return (int(color.red), int(color.green), int(color.blue))
+    except VECTOR_HANDLED_ERRORS:
+        return None
+
+
+def _direct_flatten_segments(segments, tolerance):
+    """Flatten path segments for the strict top-level direct SVG parser."""
+
+    coords = []
+    for seg in segments:
+        if isinstance(seg, Move):
+            continue
+        if isinstance(seg, (Line, Close)):
+            coords.append((seg.start.x, seg.start.y))
+        elif isinstance(seg, CubicBezier):
+            start_pt = (seg.start.x, seg.start.y)
+            if not coords or coords[-1] != start_pt:
+                coords.append(start_pt)
+            _flatten_cubic(
+                seg.start.x,
+                seg.start.y,
+                seg.control1.x,
+                seg.control1.y,
+                seg.control2.x,
+                seg.control2.y,
+                seg.end.x,
+                seg.end.y,
+                tolerance,
+                coords,
+                0,
+            )
+        elif isinstance(seg, QuadraticBezier):
+            start_pt = (seg.start.x, seg.start.y)
+            if not coords or coords[-1] != start_pt:
+                coords.append(start_pt)
+            _flatten_quadratic(
+                seg.start.x,
+                seg.start.y,
+                seg.control.x,
+                seg.control.y,
+                seg.end.x,
+                seg.end.y,
+                tolerance,
+                coords,
+                0,
+            )
+        elif isinstance(seg, Arc):
+            start_pt = (seg.start.x, seg.start.y)
+            if not coords or coords[-1] != start_pt:
+                coords.append(start_pt)
+            coords.extend(_sample_arc_segment_points(seg, sample_count=10))
+        else:
+            coords.append((seg.start.x, seg.start.y))
+            try:
+                for tv in np.linspace(0.1, 1.0, 10):
+                    pt = seg.point(tv)
+                    coords.append((pt.x, pt.y))
+            except VECTOR_HANDLED_ERRORS:
+                coords.append((seg.end.x, seg.end.y))
+    return coords
+
+
+def _direct_flatten_segments_fallback(path_obj, tolerance):
+    """Fallback point sampling for paths that cannot expose segments."""
+
+    try:
+        path_len = path_obj.length()
+    except VECTOR_HANDLED_ERRORS:
+        return []
+    if path_len == 0:
+        return []
+    count = max(10, min(int(path_len / max(tolerance, 0.01)), 8000))
+    points = [path_obj.point(t) for t in np.linspace(0, 1, count)]
+    return [(point.x, point.y) for point in points]
+
+
+def _direct_sample_segments_coords(path_obj, segments, tolerance):
+    """Sample path coordinates with scalar-compatible endpoint handling."""
+
+    if segments and len(segments) > 1:
+        coords = _direct_flatten_segments(segments, tolerance)
+    else:
+        coords = _direct_flatten_segments_fallback(path_obj, tolerance)
+
+    if segments:
+        try:
+            last_end = segments[-1].end
+            last_pt = (last_end.x, last_end.y)
+            if coords and coords[-1] != last_pt:
+                coords.append(last_pt)
+        except VECTOR_HANDLED_ERRORS:
+            pass
+    return coords
+
+
+def _direct_signed_ring_area(coords):
+    """Return signed ring area for direct parser subpath fill handling."""
+
+    if len(coords) < 3:
+        return 0.0
+    area = 0.0
+    for (x1, y1), (x2, y2) in zip(coords, coords[1:] + coords[:1]):
+        area += (float(x1) * float(y2)) - (float(x2) * float(y1))
+    return area * 0.5
+
+
+def _direct_polygon_from_coords(coords):
+    """Build a polygonal geometry from direct parser coordinates."""
+
+    if len(coords) < 3:
+        return None
+    poly = Polygon(coords)
+    if not poly.is_valid:
+        poly = make_valid(poly)
+    poly = VectorProcessor._extract_polygonal_geometry(poly)
+    if poly is not None and not poly.is_empty:
+        return poly
+    return None
+
+
+def _direct_single_subpath_item(path_obj, tolerance):
+    """Sample one strict top-level path when it contains a single subpath."""
+
+    try:
+        segments = list(path_obj.segments())
+    except VECTOR_HANDLED_ERRORS:
+        return None
+    if not segments:
+        return None
+
+    move_count = 0
+    for seg in segments:
+        if isinstance(seg, Move):
+            move_count += 1
+            if move_count > 1:
+                return None
+
+    coords = _direct_sample_segments_coords(path_obj, segments, tolerance)
+    poly = _direct_polygon_from_coords(coords)
+    if poly is None:
+        return None
+    return {"poly": poly, "signed_area": _direct_signed_ring_area(coords)}
+
+
+def _direct_subpath_items_for_path(path_obj, tolerance):
+    """Return sampled subpath items for a direct parser path."""
+
+    single = _direct_single_subpath_item(path_obj, tolerance)
+    if single is not None:
+        return [single]
+
+    try:
+        subpaths = list(path_obj.as_subpaths())
+    except VECTOR_HANDLED_ERRORS:
+        subpaths = []
+
+    items = []
+    for subpath in subpaths:
+        try:
+            sub_path = subpath if isinstance(subpath, Path) else Path(subpath)
+            segments = list(sub_path.segments())
+            coords = _direct_sample_segments_coords(sub_path, segments, tolerance)
+            poly = _direct_polygon_from_coords(coords)
+        except VECTOR_HANDLED_ERRORS:
+            continue
+        if poly is None:
+            continue
+        items.append({"poly": poly, "signed_area": _direct_signed_ring_area(coords)})
+    return items
+
+
+def _try_parse_strict_top_level_path_svg(processor, svg_path, target_width_mm):
+    """Parse simple generated SVGs without constructing a full SVG document."""
+
+    try:
+        with open(svg_path, "rb") as handle:
+            payload = handle.read()
+        if _SVG_DIRECT_UNSUPPORTED_OPEN_TAG_RE.search(payload):
+            return None
+        filtered_payload = _fast_filtered_gap_filler_svg_payload(payload)
+        if filtered_payload is not None:
+            payload = filtered_payload
+        root = ET.fromstring(payload)
+    except VECTOR_HANDLED_ERRORS:
+        return None
+    if not _is_strict_top_level_path_svg(root):
+        return None
+    svg_viewport_bounds = _direct_top_level_path_viewbox(root)
+    if svg_viewport_bounds is None:
+        return None
+
+    tolerance = processor.sampling_precision / max(target_width_mm / 100.0, 0.01)
+    raw_shapes = []
+    needs_normalize_key = "_needs_contour_normalize"
+    skipped_polygon_count = 0
+
+    for elem in list(root):
+        rgb = _direct_path_fill_rgb(elem.get("fill"))
+        if rgb is None:
+            continue
+
+        stroke_value = str(elem.get("stroke", "") or "").strip().lower()
+        if stroke_value and stroke_value != "none":
+            return None
+
+        path_data = elem.get("d")
+        if not path_data:
+            continue
+        try:
+            path_obj = Path(path_data)
+        except VECTOR_HANDLED_ERRORS:
+            return None
+
+        raw_fill_rule = elem.get("fill-rule")
+        if raw_fill_rule is None:
+            return None
+        fill_rule = str(raw_fill_rule or "nonzero").strip().lower()
+        if fill_rule not in ("nonzero", "evenodd"):
+            fill_rule = "nonzero"
+
+        subpath_items = _direct_subpath_items_for_path(path_obj, tolerance)
+        subpath_polys = [item["poly"] for item in subpath_items]
+        if len(subpath_items) == 1:
+            result_poly = subpath_items[0]["poly"]
+        elif len(subpath_polys) > 1 and fill_rule == "evenodd":
+            result_poly = _combine_evenodd_polygons(subpath_polys)
+            if result_poly is not None and not result_poly.is_empty and not result_poly.is_valid:
+                result_poly = make_valid(result_poly)
+        elif len(subpath_polys) > 1:
+            return None
+        else:
+            result_poly = None
+
+        if result_poly is None or result_poly.is_empty:
+            skipped_polygon_count += 1
+            continue
+
+        raw_shapes.append(
+            {
+                "poly": result_poly,
+                "color": rgb,
+                "source_kind": "fill",
+                "same_color_stroke": False,
+                "same_color_stroke_double_buffer": False,
+                "stroke_width_svg": 0.0,
+                needs_normalize_key: True,
+            }
+        )
+
+    if not raw_shapes:
+        return None
+
+    pending_positions = []
+    pending_geometries = []
+    for idx, item in enumerate(raw_shapes):
+        if item.get(needs_normalize_key) is True:
+            pending_positions.append(idx)
+            pending_geometries.append(item["poly"])
+
+    if pending_geometries:
+        normalized_geometries = _normalize_contours_many(pending_geometries)
+        dropped_positions = set()
+        for idx, normalized in zip(pending_positions, normalized_geometries):
+            if normalized is None or normalized.is_empty:
+                dropped_positions.add(idx)
+                skipped_polygon_count += 1
+                continue
+            raw_shapes[idx]["poly"] = normalized
+            raw_shapes[idx]["geometry_normalized"] = True
+
+        normalized_shapes = []
+        for idx, item in enumerate(raw_shapes):
+            if idx in dropped_positions:
+                continue
+            if needs_normalize_key in item:
+                item = dict(item)
+                item.pop(needs_normalize_key, None)
+            normalized_shapes.append(item)
+        raw_shapes = normalized_shapes
+
+    if not raw_shapes:
+        return None
+
+    min_xs, min_ys, max_xs, max_ys = [], [], [], []
+    for item in raw_shapes:
+        bx0, by0, bx1, by1 = item["poly"].bounds
+        min_xs.append(bx0)
+        min_ys.append(by0)
+        max_xs.append(bx1)
+        max_ys.append(by1)
+
+    gx0, gy0 = min(min_xs), min(min_ys)
+    gx1, gy1 = max(max_xs), max(max_ys)
+    vb_x, vb_y, vb_w, vb_h = svg_viewport_bounds
+    gx0 = min(gx0, vb_x)
+    gy0 = min(gy0, vb_y)
+    gx1 = max(gx1, vb_x + vb_w)
+    gy1 = max(gy1, vb_y + vb_h)
+
+    real_w = gx1 - gx0
+    real_h = gy1 - gy0
+    if real_w == 0:
+        raise ValueError("Invalid geometry width (0)")
+
+    scale_factor = target_width_mm / real_w
+    min_area_svg = max(0.0, (processor.sampling_precision**2) / max(scale_factor**2, 1e-12) * 0.25)
+    simplify_tol_svg = max(0.0, (processor.sampling_precision / max(scale_factor, 1e-9)) * 0.5)
+
+    final_shapes = []
+    for item in raw_shapes:
+        shifted = affinity.translate(item["poly"], xoff=-gx0, yoff=-gy0)
+        geometry_normalized = bool(item.get("geometry_normalized"))
+        if simplify_tol_svg > 0.0:
+            before_simplify = shifted
+            try:
+                shifted = shifted.simplify(simplify_tol_svg, preserve_topology=True)
+                if geometry_normalized and not shifted.equals_exact(before_simplify, tolerance=0.0):
+                    geometry_normalized = False
+            except VECTOR_HANDLED_ERRORS:
+                geometry_normalized = False
+
+        if not shifted.is_valid:
+            shifted = make_valid(shifted)
+            geometry_normalized = False
+
+        if shifted.is_empty or shifted.area <= min_area_svg:
+            continue
+
+        final_item = {"poly": shifted, "color": item["color"]}
+        for key in (
+            "source_kind",
+            "same_color_stroke",
+            "same_color_stroke_double_buffer",
+            "stroke_width_svg",
+        ):
+            if key in item:
+                final_item[key] = item[key]
+        if geometry_normalized:
+            final_item["geometry_normalized"] = True
+        final_shapes.append(final_item)
+
+    if not final_shapes:
+        return None
+
+    processor.parse_warnings = (
+        [f"{skipped_polygon_count} elements produced invalid geometry and were skipped"]
+        if skipped_polygon_count > 0
+        else []
+    )
+    processor._last_image_vectorizer_bounds = None
+    return final_shapes, scale_factor, (gx0, gy0, real_w, real_h)
+
+
 # Lazy import to avoid circular dependency at module load time
 _LuminaImageProcessor = None
 _VECTOR_PARSE_CLIP_CACHE = {}
-_VECTOR_PARSE_CLIP_CACHE_MAX = 3
+_VECTOR_PARSE_CLIP_CACHE_MAX = 8
+_VECTOR_PARSE_CLIP_ARTIFACT_SCHEMA = "lumina_vector_parse_clip_cache_v1"
+
+
+def _vector_parse_clip_cache_key(
+    svg_path,
+    *,
+    target_width_mm,
+    sampling_precision,
+    expand_stroke_to_fill,
+    gradient_color_bands,
+):
+    """Build the parse/clip cache key shared by memory and artifact caches."""
+
+    svg_abs = os.path.abspath(svg_path)
+    svg_mtime = os.path.getmtime(svg_abs)
+    try:
+        gradient_key = None if gradient_color_bands is None else int(gradient_color_bands)
+    except (TypeError, ValueError):
+        gradient_key = str(gradient_color_bands)
+    return (
+        svg_abs,
+        round(float(target_width_mm), 4),
+        round(float(sampling_precision), 4),
+        bool(expand_stroke_to_fill),
+        gradient_key,
+        svg_mtime,
+    )
+
+
+def _serialize_vector_parse_clip_cache(cache_key, cache_entry):
+    """Serialize a verified parse/clip cache entry for session-bound reuse."""
+
+    return pickle.dumps(
+        {
+            "schema": _VECTOR_PARSE_CLIP_ARTIFACT_SCHEMA,
+            "cache_key": tuple(cache_key),
+            "entry": _copy_vector_parse_clip_cache_entry(cache_entry),
+        },
+        protocol=pickle.HIGHEST_PROTOCOL,
+    )
+
+
+def _copy_vector_parse_clip_cache_entry(cache_entry):
+    """Return a mutation-isolated shallow copy of a parse/clip cache entry."""
+
+    return {
+        "shape_data": [
+            dict(item)
+            for item in (cache_entry.get("shape_data") or [])
+        ],
+        "clipped_shapes": [
+            dict(item)
+            for item in (cache_entry.get("clipped_shapes") or [])
+        ],
+        "silhouette": cache_entry.get("silhouette"),
+        "image_vectorizer_bounds": cache_entry.get("image_vectorizer_bounds"),
+        "scale_factor": cache_entry.get("scale_factor"),
+        "bbox": cache_entry.get("bbox"),
+    }
+
+
+def _load_vector_parse_clip_cache_artifact(path, expected_cache_key):
+    """Load a parse/clip artifact only when its key exactly matches."""
+
+    if not path:
+        return None
+    try:
+        with open(path, "rb") as handle:
+            payload = pickle.load(handle)
+    except VECTOR_HANDLED_ERRORS:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("schema") != _VECTOR_PARSE_CLIP_ARTIFACT_SCHEMA:
+        return None
+    if tuple(payload.get("cache_key") or ()) != tuple(expected_cache_key):
+        return None
+    entry = payload.get("entry")
+    if not isinstance(entry, dict):
+        return None
+    required = {
+        "shape_data",
+        "clipped_shapes",
+        "silhouette",
+        "scale_factor",
+        "bbox",
+    }
+    if not required.issubset(entry):
+        return None
+    return _copy_vector_parse_clip_cache_entry(entry)
 
 
 def _get_image_processor_class():
@@ -1802,7 +2898,7 @@ class VectorProcessor:
             return MultiPolygon(polygon_parts)
 
     @staticmethod
-    def _parse_gradient_defs(svg_path):
+    def _parse_gradient_defs(svg_path, *, root=None):
         """Pre-parse SVG XML to extract gradient definitions.
 
         Returns ``{gradient_id: {type, stops, units, transform, ...}}``
@@ -1818,11 +2914,12 @@ class VectorProcessor:
         _SVG_NS = {"svg": "http://www.w3.org/2000/svg"}
         _XLINK_HREF = "{http://www.w3.org/1999/xlink}href"
         gradients = {}
-        try:
-            tree = ET.parse(svg_path)
-            root = tree.getroot()
-        except Exception:
-            return gradients
+        if root is None:
+            try:
+                tree = ET.parse(svg_path)
+                root = tree.getroot()
+            except Exception:
+                return gradients
 
         def _parse_stops(parent):
             stops = []
@@ -2113,22 +3210,35 @@ class VectorProcessor:
         cache_key = None
         cached_entry = None
         try:
-            svg_abs = os.path.abspath(svg_path)
-            svg_mtime = os.path.getmtime(svg_abs)
-            cache_key = (
-                svg_abs,
-                round(float(target_width_mm), 4),
-                round(float(self.sampling_precision), 4),
-                expand_stroke_to_fill,
-                svg_mtime,
+            cache_key = _vector_parse_clip_cache_key(
+                svg_path,
+                target_width_mm=target_width_mm,
+                sampling_precision=self.sampling_precision,
+                expand_stroke_to_fill=expand_stroke_to_fill,
+                gradient_color_bands=getattr(self, "gradient_color_bands", None),
             )
             cached_entry = _VECTOR_PARSE_CLIP_CACHE.get(cache_key)
+            if cached_entry is not None:
+                _VECTOR_PARSE_CLIP_CACHE.pop(cache_key, None)
+                _VECTOR_PARSE_CLIP_CACHE[cache_key] = cached_entry
         except VECTOR_HANDLED_ERRORS:
             cache_key = None
 
+        if cached_entry is None and cache_key is not None:
+            artifact_path = getattr(self, "_parse_clip_cache_path", None)
+            cached_entry = _load_vector_parse_clip_cache_artifact(
+                artifact_path,
+                cache_key,
+            )
+            if cached_entry is not None:
+                _VECTOR_PARSE_CLIP_CACHE[cache_key] = cached_entry
+                while len(_VECTOR_PARSE_CLIP_CACHE) > _VECTOR_PARSE_CLIP_CACHE_MAX:
+                    _VECTOR_PARSE_CLIP_CACHE.pop(next(iter(_VECTOR_PARSE_CLIP_CACHE)))
+
         if cached_entry is not None:
-            shape_data = cached_entry["shape_data"]
-            clipped_shapes = cached_entry["clipped_shapes"]
+            working_entry = _copy_vector_parse_clip_cache_entry(cached_entry)
+            shape_data = working_entry["shape_data"]
+            clipped_shapes = working_entry["clipped_shapes"]
             silhouette = cached_entry["silhouette"]
             image_vectorizer_bounds = cached_entry.get("image_vectorizer_bounds")
             scale_factor = cached_entry["scale_factor"]
@@ -2197,7 +3307,7 @@ class VectorProcessor:
             _log.debug("After occlusion clip: %s non-overlapping shapes", len(clipped_shapes))
 
             if cache_key is not None:
-                _VECTOR_PARSE_CLIP_CACHE[cache_key] = {
+                cache_entry = {
                     "shape_data": shape_data,
                     "clipped_shapes": clipped_shapes,
                     "silhouette": silhouette,
@@ -2205,6 +3315,7 @@ class VectorProcessor:
                     "scale_factor": scale_factor,
                     "bbox": bbox,
                 }
+                _VECTOR_PARSE_CLIP_CACHE[cache_key] = _copy_vector_parse_clip_cache_entry(cache_entry)
                 while len(_VECTOR_PARSE_CLIP_CACHE) > _VECTOR_PARSE_CLIP_CACHE_MAX:
                     _VECTOR_PARSE_CLIP_CACHE.pop(next(iter(_VECTOR_PARSE_CLIP_CACHE)))
 
@@ -2475,14 +3586,51 @@ class VectorProcessor:
         backing_height = backing_layer_count * layer_h
 
         t0 = time.perf_counter()
+        self.last_native_vector_mesh_stats = {}
+
+        def _run_length_extrude_with_optional_native(**kwargs):
+            native_enabled = bool(getattr(self, "enable_native_vector_mesh", False)) or str(
+                os.environ.get("LUMINA_VECTOR_NATIVE_MESH", "")
+            ).strip().lower() in {"1", "true", "yes", "on"}
+            if not native_enabled:
+                return self._run_length_extrude(**kwargs)
+            try:
+                from core.vector_native_mesh import run_length_extrude_native_hybrid
+            except Exception as exc:
+                _log.warning(
+                    "Native vector mesh availability check failed",
+                    extra={
+                        "event": "vector_native_mesh_availability_failed",
+                        "error_type": type(exc).__name__,
+                        "error_message": str(exc),
+                    },
+                )
+                return self._run_length_extrude(**kwargs)
+
+            try:
+                native_result = run_length_extrude_native_hybrid(**kwargs)
+                self.last_native_vector_mesh_stats = dict(native_result.stats)
+                if native_result.meshes_by_slot or not kwargs.get("matched_shapes"):
+                    return native_result.meshes_by_slot
+            except Exception as exc:
+                _log.warning(
+                    "Native vector mesh path failed; falling back to Python extrusion",
+                    extra={
+                        "event": "vector_native_mesh_fallback",
+                        "error_type": type(exc).__name__,
+                        "error_message": str(exc),
+                    },
+                )
+            return self._run_length_extrude(**kwargs)
+
         if is_5color:
-            meshes_by_slot = self._run_length_extrude(
-                matched_shapes,
-                num_layers,
-                layer_h,
-                num_channels,
-                slot_names,
-                scale_factor,
+            meshes_by_slot = _run_length_extrude_with_optional_native(
+                matched_shapes=matched_shapes,
+                num_layers=num_layers,
+                layer_h=layer_h,
+                num_channels=num_channels,
+                slot_names=slot_names,
+                scale_factor=scale_factor,
                 extrude_cache=extrude_cache,
                 face_up=True,
                 optical_z_base=backing_height,
@@ -2493,13 +3641,13 @@ class VectorProcessor:
                 backing_height,
             )
         else:
-            meshes_by_slot = self._run_length_extrude(
-                matched_shapes,
-                num_layers,
-                layer_h,
-                num_channels,
-                slot_names,
-                scale_factor,
+            meshes_by_slot = _run_length_extrude_with_optional_native(
+                matched_shapes=matched_shapes,
+                num_layers=num_layers,
+                layer_h=layer_h,
+                num_channels=num_channels,
+                slot_names=slot_names,
+                scale_factor=scale_factor,
                 extrude_cache=extrude_cache,
             )
         stage_timings["extrude_bottom_s"] = time.perf_counter() - t0
@@ -2658,7 +3806,7 @@ class VectorProcessor:
                 continue
 
             _log.debug("Merging %s parts for %s...", len(mesh_list), name)
-            combined = trimesh.util.concatenate(mesh_list) if len(mesh_list) > 1 else mesh_list[0]
+            combined = _concatenate_meshes_fast(mesh_list)
             # Weld coincident border vertices produced by independent per-shape
             # ``_extrude_geometry`` calls so Three.js / exporters do not render
             # visible seams along shape boundaries. 对相邻 shape 独立 extrude
@@ -2906,8 +4054,22 @@ class VectorProcessor:
                 return None
             return pts
 
+        def _local_mask_any(mask_ref):
+            if mask_ref is None:
+                return False
+            return bool(np.any(mask_ref[2]))
+
+        def _apply_local_mask_or(target, mask_ref):
+            y_slice, x_slice, local = mask_ref
+            target[y_slice, x_slice] |= local
+
+        def _assign_local_mask(target, mask_ref, value):
+            y_slice, x_slice, local = mask_ref
+            view = target[y_slice, x_slice]
+            view[local] = value
+
         def _polygon_mask_plain(poly, height, width, scale):
-            """Original int-truncated single-resolution fill.
+            """Original int-truncated single-resolution fill as a local mask.
             原始的整数截断、单分辨率填充。
 
             Retained for the ``preview_rgba`` path, which already rasterises
@@ -2920,19 +4082,31 @@ class VectorProcessor:
             INTER_AREA 降采样，边缘已抗锯齿、缝会被视觉平均掉，无需再次
             超采样（``preview_rgba`` 仅用于显示，不作为归属掩膜）。
             """
-            region = np.zeros((height, width), dtype=np.uint8)
             ext_pts = _coords_to_pts(np.array(poly.exterior.coords), scale)
             if ext_pts is None:
                 return None
-            cv2.fillPoly(region, [ext_pts], 255)
+            x0 = max(0, int(ext_pts[:, 0].min()))
+            y0 = max(0, int(ext_pts[:, 1].min()))
+            x1 = min(width, int(ext_pts[:, 0].max()) + 1)
+            y1 = min(height, int(ext_pts[:, 1].max()) + 1)
+            if x1 <= x0 or y1 <= y0:
+                return None
+
+            region = np.zeros((y1 - y0, x1 - x0), dtype=np.uint8)
+            local_ext = ext_pts - np.array([x0, y0], dtype=np.int32)
+            cv2.fillPoly(region, [local_ext], 255)
             for interior in poly.interiors:
                 hole_pts = _coords_to_pts(np.array(interior.coords), scale)
                 if hole_pts is not None:
-                    cv2.fillPoly(region, [hole_pts], 0)
-            return region.astype(bool)
+                    local_hole = hole_pts - np.array([x0, y0], dtype=np.int32)
+                    cv2.fillPoly(region, [local_hole], 0)
+            local = region.astype(bool)
+            if not np.any(local):
+                return None
+            return slice(y0, y1), slice(x0, x1), local
 
         def _polygon_mask(poly, height, width, scale):
-            """Rasterise one polygon's footprint into a boolean membership mask.
+            """Rasterise one polygon footprint into a local membership mask.
             将单个多边形栅格化为布尔归属掩膜。
 
             Sub-pixel-accurate: the polygon (exterior minus interior holes)
@@ -3013,10 +4187,7 @@ class VectorProcessor:
             local = sub[off::ss, off::ss][:bh, :bw].astype(bool)
             if not np.any(local):
                 return None
-
-            region = np.zeros((height, width), dtype=bool)
-            region[y0:y1, x0:x1] = local
-            return region
+            return slice(y0, y1), slice(x0, x1), local
 
         backing_geom = getattr(analysis, "image_vectorizer_bounds", None)
         if backing_geom is None or getattr(backing_geom, "is_empty", True):
@@ -3055,8 +4226,8 @@ class VectorProcessor:
                 pass
             for poly in _iter_polygons(backing_geom):
                 region_mask = _polygon_mask(poly, h_px, w_px, coord_scale)
-                if region_mask is not None and np.any(region_mask):
-                    backing_mask |= region_mask
+                if _local_mask_any(region_mask):
+                    _apply_local_mask_or(backing_mask, region_mask)
 
         for shape in analysis.matched_shapes:
             geom = shape.get("geometry")
@@ -3081,13 +4252,13 @@ class VectorProcessor:
                 if poly.is_empty:
                     continue
                 region_mask = _polygon_mask(poly, h_px, w_px, coord_scale)
-                if region_mask is None or not np.any(region_mask):
+                if not _local_mask_any(region_mask):
                     continue
 
-                matched_rgb[region_mask] = matched_color
-                quantized_image[region_mask] = source_color
-                mask_solid[region_mask] = True
-                material_matrix[region_mask] = recipe_full
+                _assign_local_mask(matched_rgb, region_mask, matched_color)
+                _assign_local_mask(quantized_image, region_mask, source_color)
+                _assign_local_mask(mask_solid, region_mask, True)
+                _assign_local_mask(material_matrix, region_mask, recipe_full)
 
                 if preview_rgba_ss is not None:
                     # preview_rgba is display-only and already supersampled +
@@ -3096,9 +4267,9 @@ class VectorProcessor:
                     # preview_rgba 仅用于显示且已超采样 + INTER_AREA 降采样，
                     # 这里用普通填充，避免再嵌套一层超采样。
                     ss_mask = _polygon_mask_plain(poly, ss_h, ss_w, ss_coord_scale)
-                    if ss_mask is not None and np.any(ss_mask):
-                        preview_rgba_ss[ss_mask, :3] = matched_color
-                        preview_rgba_ss[ss_mask, 3] = 255
+                    if _local_mask_any(ss_mask):
+                        _assign_local_mask(preview_rgba_ss[:, :, :3], ss_mask, matched_color)
+                        _assign_local_mask(preview_rgba_ss[:, :, 3], ss_mask, 255)
 
         if preview_rgba_ss is not None:
             preview_rgba = cv2.resize(
@@ -3220,7 +4391,7 @@ class VectorProcessor:
                 clipped = geom
                 geometry_normalized = bool(item.get("geometry_normalized"))
             else:
-                occ = occluders[0] if len(occluders) == 1 else unary_union(occluders)
+                occ = occluders[0] if len(occluders) == 1 else _union_occluder_geometries(occluders)
                 try:
                     clipped = geom.difference(occ)
                 except VECTOR_HANDLED_ERRORS:
@@ -3258,17 +4429,34 @@ class VectorProcessor:
 
     @staticmethod
     def _postprocess_clipped_shapes(clipped_shapes):
-        post_clip = []
-        for item in clipped_shapes:
+        post_clip = [None] * len(clipped_shapes)
+        pending_positions = []
+        pending_items = []
+        pending_geometries = []
+
+        for idx, item in enumerate(clipped_shapes):
             g = item["geometry"]
             if item.get("geometry_normalized") is not True:
-                g = VectorProcessor._normalize_contours(g)
+                pending_positions.append(idx)
+                pending_items.append(item)
+                pending_geometries.append(g)
+                continue
             if g is not None and not g.is_empty:
                 updated = dict(item)
                 updated["geometry"] = g
                 updated["geometry_normalized"] = True
-                post_clip.append(updated)
-        return post_clip
+                post_clip[idx] = updated
+
+        if pending_geometries:
+            normalized_geometries = _normalize_contours_many(pending_geometries)
+            for idx, item, g in zip(pending_positions, pending_items, normalized_geometries):
+                if g is not None and not g.is_empty:
+                    updated = dict(item)
+                    updated["geometry"] = g
+                    updated["geometry_normalized"] = True
+                    post_clip[idx] = updated
+
+        return [item for item in post_clip if item is not None]
 
     # ── Stage 4: Color matching with per-color cache ─────────────────────
 
@@ -3319,6 +4507,8 @@ class VectorProcessor:
         color_cache = {}
         matched = []
         sample_logs = []
+        large_distance_count = 0
+        large_distance_warning_count = 0
 
         for item in clipped_shapes:
             rgb = item["color"]
@@ -3360,18 +4550,21 @@ class VectorProcessor:
 
                 # Flag suspiciously large Lab distance (>25 is visually very different)
                 if lab_dist > 25.0:
-                    _log.warning(
-                        "Large color distance in match: %s -> %s (Lab dist=%.1f)",
-                        query_hex, matched_hex, lab_dist,
-                        extra={
-                            "event": "vector_match_color_large_distance",
-                            "query_rgb": list(query_rgb),
-                            "matched_rgb": list(matched_rgb),
-                            "lab_distance": round(lab_dist, 2),
-                            "lut_idx": lut_idx,
-                            "kdtree_size": self.img_processor.kdtree.n if hasattr(self.img_processor.kdtree, 'n') else len(self.img_processor.lut_rgb),
-                        },
-                    )
+                    large_distance_count += 1
+                    if large_distance_warning_count < _VECTOR_LARGE_DISTANCE_WARN_LIMIT:
+                        large_distance_warning_count += 1
+                        _log.warning(
+                            "Large color distance in match: %s -> %s (Lab dist=%.1f)",
+                            query_hex, matched_hex, lab_dist,
+                            extra={
+                                "event": "vector_match_color_large_distance",
+                                "query_rgb": list(query_rgb),
+                                "matched_rgb": list(matched_rgb),
+                                "lab_distance": round(lab_dist, 2),
+                                "lut_idx": lut_idx,
+                                "kdtree_size": self.img_processor.kdtree.n if hasattr(self.img_processor.kdtree, 'n') else len(self.img_processor.lut_rgb),
+                            },
+                        )
 
                 if recipe_log_mode == "full":
                     if query_rgb != rgb:
@@ -3422,6 +4615,12 @@ class VectorProcessor:
                 "shape_count": len(clipped_shapes),
                 "matched_shape_count": len(matched),
                 "unique_query_color_count": len(color_cache),
+                "large_distance_count": large_distance_count,
+                "large_distance_warning_count": large_distance_warning_count,
+                "large_distance_suppressed_count": max(
+                    0,
+                    large_distance_count - large_distance_warning_count,
+                ),
                 "sample_first8": match_samples,
             },
         )
@@ -3756,6 +4955,27 @@ class VectorProcessor:
             where each shape item is ``{'poly': Polygon, 'color': (r,g,b)}``.
         """
         parse_expand_stroke_to_fill = bool(getattr(self, "_parse_expand_stroke_to_fill", True))
+        parse_single_subpath_fast_path = bool(
+            getattr(self, "_parse_single_subpath_fast_path", True)
+        )
+        parse_direct_top_level_paths_fast_path = bool(
+            getattr(self, "_parse_direct_top_level_paths_fast_path", True)
+        )
+        if (
+            parse_direct_top_level_paths_fast_path
+            and not parse_expand_stroke_to_fill
+        ):
+            try:
+                direct_result = _try_parse_strict_top_level_path_svg(
+                    self,
+                    svg_path,
+                    target_width_mm,
+                )
+            except VECTOR_HANDLED_ERRORS:
+                direct_result = None
+            if direct_result is not None:
+                return direct_result
+
         parsed_root, svg_parse_source = _filtered_svg_source_for_vector_parse(
             svg_path,
             parse_expand_stroke_to_fill=parse_expand_stroke_to_fill,
@@ -3773,25 +4993,30 @@ class VectorProcessor:
                     raise ValueError(f"Failed to parse SVG: {fallback_error}") from fallback_error
             else:
                 raise ValueError(f"Failed to parse SVG: {e}") from e
+        if svg is None:
+            raise ValueError("No valid shapes found in SVG")
 
         image_vectorizer_origin = False
+        root = parsed_root
+        filtered_without_xml_root = root is None and svg_parse_source is not svg_path
         try:
-            root = parsed_root if parsed_root is not None else ET.parse(svg_path).getroot()
+            if root is None and not filtered_without_xml_root:
+                root = ET.parse(svg_path).getroot()
             image_vectorizer_origin = root.get("data-lumina-origin") == "image-vectorizer"
         except VECTOR_HANDLED_ERRORS:
+            root = None
             image_vectorizer_origin = False
         self._last_image_vectorizer_bounds = None
-        gradient_defs = VectorProcessor._parse_gradient_defs(svg_path)
+        gradient_defs = (
+            {}
+            if filtered_without_xml_root
+            else VectorProcessor._parse_gradient_defs(svg_path, root=root)
+        )
         _url_re = re.compile(r"url\(#([^)]+)\)")
 
         tol_svg = self.sampling_precision / max(target_width_mm / 100.0, 0.01)
 
-        def _sample_path_coords(path_obj):
-            try:
-                segments = list(path_obj.segments())
-            except Exception:
-                segments = None
-
+        def _sample_segments_coords(path_obj, segments):
             if segments and len(segments) > 1:
                 coords = _flatten_segments(segments, tol_svg)
             else:
@@ -3806,6 +5031,13 @@ class VectorProcessor:
                 except VECTOR_HANDLED_ERRORS:
                     pass
             return coords
+
+        def _sample_path_coords(path_obj):
+            try:
+                segments = list(path_obj.segments())
+            except Exception:
+                segments = None
+            return _sample_segments_coords(path_obj, segments)
 
         def _signed_ring_area(coords):
             if len(coords) < 3:
@@ -3830,6 +5062,30 @@ class VectorProcessor:
 
         def _sample_path_to_polygon(path_obj):
             return _polygon_from_coords(_sample_path_coords(path_obj))
+
+        def _single_subpath_item(path_obj):
+            try:
+                segments = list(path_obj.segments())
+            except Exception:
+                return None
+            if not segments:
+                return None
+
+            move_count = 0
+            for seg in segments:
+                if isinstance(seg, Move):
+                    move_count += 1
+                    if move_count > 1:
+                        return None
+
+            coords = _sample_segments_coords(path_obj, segments)
+            poly = _polygon_from_coords(coords)
+            if poly is None:
+                return None
+            return {
+                "poly": poly,
+                "signed_area": _signed_ring_area(coords),
+            }
 
         def _combine_nonzero_subpaths(subpath_items):
             """Merge subpaths using SVG nonzero winding orientation.
@@ -4048,10 +5304,10 @@ class VectorProcessor:
             return [(p.x, p.y) for p in pts]
 
         raw_shapes = []
+        needs_normalize_key = "_needs_contour_normalize"
         skipped_types = {}
         skipped_gradient_count = 0
         skipped_polygon_count = 0
-        normalize_cache = {}
         _log.debug("Parsing SVG geometry...")
 
         def _sample_stroke_geometry(path_obj, stroke_width_svg, cap_style_name="round", join_style_name="round"):
@@ -4084,6 +5340,12 @@ class VectorProcessor:
             if not isinstance(element, (Path, Shape)):
                 type_name = type(element).__name__
                 skipped_types[type_name] = skipped_types.get(type_name, 0) + 1
+                continue
+
+            if (
+                _svg_element_hidden_by_visibility(element)
+                or _svg_element_opacity(element) < 0.01
+            ):
                 continue
 
             has_fill = (
@@ -4222,27 +5484,35 @@ class VectorProcessor:
 
             fill_hex = _rgb_to_hex(rgb)
 
-            try:
-                subpaths = list(element.as_subpaths())
-            except Exception:
-                subpaths = []
-
-            subpath_items = []
-            for subpath in subpaths:
+            single_subpath_item = (
+                _single_subpath_item(element)
+                if parse_single_subpath_fast_path
+                else None
+            )
+            if single_subpath_item is not None:
+                subpath_items = [single_subpath_item]
+            else:
                 try:
-                    sub_path = subpath if isinstance(subpath, Path) else Path(subpath)
-                    coords = _sample_path_coords(sub_path)
-                    poly = _polygon_from_coords(coords)
+                    subpaths = list(element.as_subpaths())
                 except Exception:
-                    continue
-                if poly is None:
-                    continue
-                subpath_items.append(
-                    {
-                        "poly": poly,
-                        "signed_area": _signed_ring_area(coords),
-                    }
-                )
+                    subpaths = []
+
+                subpath_items = []
+                for subpath in subpaths:
+                    try:
+                        sub_path = subpath if isinstance(subpath, Path) else Path(subpath)
+                        coords = _sample_path_coords(sub_path)
+                        poly = _polygon_from_coords(coords)
+                    except Exception:
+                        continue
+                    if poly is None:
+                        continue
+                    subpath_items.append(
+                        {
+                            "poly": poly,
+                            "signed_area": _signed_ring_area(coords),
+                        }
+                    )
             subpath_polys = [item["poly"] for item in subpath_items]
 
             # --- Fix 4: gradient flattening ---
@@ -4296,12 +5566,7 @@ class VectorProcessor:
                 result_poly = subpath_items[0]["poly"]
             elif len(subpath_polys) > 1:
                 if fill_rule == "evenodd":
-                    combined = subpath_polys[0]
-                    for sp in subpath_polys[1:]:
-                        try:
-                            combined = combined.symmetric_difference(sp)
-                        except Exception:
-                            pass
+                    combined = _combine_evenodd_polygons(subpath_polys)
                 else:
                     combined = _combine_nonzero_subpaths(subpath_items)
 
@@ -4353,11 +5618,6 @@ class VectorProcessor:
                     except VECTOR_HANDLED_ERRORS:
                         pass
 
-            result_poly = _normalize_contours_cached(normalize_cache, result_poly)
-            if result_poly is None or result_poly.is_empty:
-                skipped_polygon_count += 1
-                continue
-
             raw_shapes.append(
                 {
                     "poly": result_poly,
@@ -4366,9 +5626,37 @@ class VectorProcessor:
                     "same_color_stroke": bool(has_stroke and stroke_hex == fill_hex and stroke_width > 0.0),
                     "same_color_stroke_double_buffer": same_color_stroke_double_buffer,
                     "stroke_width_svg": float(stroke_width) if has_stroke else 0.0,
-                    "geometry_normalized": True,
+                    needs_normalize_key: True,
                 }
             )
+
+        pending_positions = []
+        pending_geometries = []
+        for idx, item in enumerate(raw_shapes):
+            if item.get(needs_normalize_key) is True:
+                pending_positions.append(idx)
+                pending_geometries.append(item["poly"])
+
+        if pending_geometries:
+            normalized_geometries = _normalize_contours_many(pending_geometries)
+            dropped_positions = set()
+            for idx, normalized in zip(pending_positions, normalized_geometries):
+                if normalized is None or normalized.is_empty:
+                    dropped_positions.add(idx)
+                    skipped_polygon_count += 1
+                    continue
+                raw_shapes[idx]["poly"] = normalized
+                raw_shapes[idx]["geometry_normalized"] = True
+
+            normalized_shapes = []
+            for idx, item in enumerate(raw_shapes):
+                if idx in dropped_positions:
+                    continue
+                if needs_normalize_key in item:
+                    item = dict(item)
+                    item.pop(needs_normalize_key, None)
+                normalized_shapes.append(item)
+            raw_shapes = normalized_shapes
 
         if skipped_types:
             _log.debug(f"Skipped non-path elements: {skipped_types}")

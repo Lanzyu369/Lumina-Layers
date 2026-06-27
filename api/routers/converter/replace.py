@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from copy import deepcopy
 import os
 import sys
 from typing import NoReturn
@@ -133,6 +134,9 @@ REGION_REQUANTIZE_REQUEST_INVALID_DETAIL = (
 REGION_REQUANTIZE_CACHE_CONFLICT_DETAIL = (
     "Preview cache changed while region re-quantisation was running. "
     "Refresh preview and try again."
+)
+RECIPE_OVERRIDE_APPLY_FAILED_DETAIL = (
+    "Recipe override could not be applied. Check the server log for details."
 )
 
 
@@ -1291,6 +1295,11 @@ def color_highlight(
                     "color_highlight_region_unmapped_group_fallback",
                     extra={
                         "event": "color_highlight_region_unmapped_group_fallback",
+                        "error_type": "GradientRegionMaskMissing",
+                        "error_message": (
+                            "Gradient region mask was empty; using the parent group mask."
+                        ),
+                        "fallback_action": "use_group_mask",
                         "group_index": int(group_idx),
                         "region_index": int(region_idx),
                         "encoded_id": int(encoded_id),
@@ -1974,6 +1983,12 @@ def region_requantize(
                 "region_requantize_unmapped_target_group_fallback",
                 extra={
                     "event": "region_requantize_unmapped_target_group_fallback",
+                    "error_type": "GradientRegionMaskMissing",
+                    "error_message": (
+                        "One or more target region masks were empty; "
+                        "widening them to their parent group mask."
+                    ),
+                    "fallback_action": "widen_to_group_mask",
                     "fallback_targets": fallback_targets,
                     "total_targets": len(target_pairs),
                 },
@@ -3028,6 +3043,27 @@ def apply_recipe_override(
 ) -> RecipeOverrideApplyResponse:
     """Apply a custom recipe override to the selected regions and update preview cache."""
     session_data = _require_session(store, request.session_id)
+    missing_session_value = object()
+    rollback_snapshot = {
+        key: (
+            deepcopy(session_data[key])
+            if key in session_data
+            else missing_session_value
+        )
+        for key in (
+            "preview_cache",
+            "recipe_overrides",
+            "recipe_override_count",
+        )
+    }
+
+    def restore_session_state() -> None:
+        for key, value in rollback_snapshot.items():
+            if value is missing_session_value:
+                session_data.pop(key, None)
+            else:
+                session_data[key] = deepcopy(value)
+
     cache_context = _preview_cache_transaction(
         request.session_id,
         store,
@@ -3362,6 +3398,12 @@ def apply_recipe_override(
                     effective_mask.shape, updated_rgb.shape[:2],
                     extra={
                         "event": "recipe_override_shape_mismatch",
+                        "error_type": "RecipeOverrideMaskShapeMismatch",
+                        "error_message": (
+                            "A recipe override region mask shape did not match "
+                            "the preview image; skipping that mask."
+                        ),
+                        "fallback_action": "skip_region_mask",
                         "region_id": str(_region_id),
                         "mask_shape": list(effective_mask.shape),
                         "matched_rgb_shape": list(updated_rgb.shape[:2]),
@@ -3425,8 +3467,6 @@ def apply_recipe_override(
             }
             for region_id, _region_mask in region_mask_items
         )
-        store.put(request.session_id, "recipe_overrides", existing_overrides)
-        store.put(request.session_id, "recipe_override_count", len(existing_overrides))
 
         preview_bytes = _render_styled_preview_bytes(updated_rgb, cache)
         preview_id = registry.register_bytes(
@@ -3451,6 +3491,8 @@ def apply_recipe_override(
                 "color_conf",
             },
         )
+        store.put(request.session_id, "recipe_overrides", existing_overrides)
+        store.put(request.session_id, "recipe_override_count", len(existing_overrides))
 
         # Async GLB rebuild for the newly applied recipe override. Keeps
         # the override response fast; GLB arrives via /glb-status polling.
@@ -3460,26 +3502,28 @@ def apply_recipe_override(
     except HTTPException:
         raise
     except PreviewCacheRevisionConflict as exc:
+        restore_session_state()
         _raise_replace_cache_conflict(
             exc,
             session_id=request.session_id,
             operation="apply_recipe_override",
         )
     except (ValueError, TypeError, OSError, RuntimeError) as exc:
-        import traceback
+        restore_session_state()
         log.error(
-            "apply-recipe-override failed with %s: %s\n%s",
-            type(exc).__name__,
-            exc,
-            traceback.format_exc(),
+            "Recipe override apply failed",
             extra={
                 "event": "converter_apply_recipe_override_error",
                 "session_id": request.session_id,
+                "status_code": 422,
                 "error_type": type(exc).__name__,
                 "error_message": str(exc),
             },
         )
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=422,
+            detail=RECIPE_OVERRIDE_APPLY_FAILED_DETAIL,
+        ) from exc
     finally:
         cache_context.__exit__(*sys.exc_info())
 

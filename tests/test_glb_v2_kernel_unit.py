@@ -520,10 +520,32 @@ def _simple_mask():
     return mask
 
 
-def test_default_unset_dispatches_to_v1(monkeypatch):
-    """Empty env -> shapely_v1 path (HARD STOP guarded by spec)."""
+def test_default_unset_resolves_to_v2(monkeypatch):
+    """Empty env -> v2 path; v2 is the preview-performance baseline."""
     monkeypatch.delenv("LUMINA_GLB_KERNEL", raising=False)
-    assert s11._resolve_kernel_choice() == "shapely_v1"
+    assert s11._resolve_kernel_choice() == "rasterio_manifold3d"
+
+
+def test_default_unset_uses_v2_when_available(monkeypatch):
+    """Default v2 mode should call the v2 builder when deps are available."""
+    monkeypatch.delenv("LUMINA_GLB_KERNEL", raising=False)
+    monkeypatch.setattr(s11, "_V2_IMPORT_OK", True)
+    calls = {"v2": 0}
+
+    def fake_v2(mask, height, total_layers, rgba, **_kwargs):
+        calls["v2"] += 1
+        mesh = trimesh.creation.box(extents=(1.0, 1.0, float(total_layers)))
+        mesh.visual.face_colors = np.tile(rgba, (len(mesh.faces), 1))
+        return mesh
+
+    monkeypatch.setattr(s11, "_build_color_extruded_mesh_v2", fake_v2)
+
+    mesh = s11._build_color_extruded_mesh(
+        _simple_mask(), height=8, total_layers=3, rgba=_RGBA
+    )
+
+    assert mesh is not None
+    assert calls["v2"] == 1
 
 
 def test_v1_alias_resolves_to_shapely_v1(monkeypatch):

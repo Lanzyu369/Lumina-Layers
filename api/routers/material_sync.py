@@ -504,9 +504,23 @@ async def material_sync_rollback(
             revision_id=payload.revision_id,
         )
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        _raise_material_sync_error(
+            event="material_sync_rollback_failed",
+            exc=exc,
+            status_code=404,
+            detail=MATERIAL_SYNC_ROLLBACK_UNAVAILABLE_DETAIL,
+            material_id=payload.material_id,
+            revision_id=payload.revision_id,
+        )
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        _raise_material_sync_error(
+            event="material_sync_rollback_failed",
+            exc=exc,
+            status_code=422,
+            detail=MATERIAL_SYNC_ROLLBACK_UNAVAILABLE_DETAIL,
+            material_id=payload.material_id,
+            revision_id=payload.revision_id,
+        )
     except OSError as exc:
         _raise_material_sync_error(
             event="material_sync_rollback_failed",

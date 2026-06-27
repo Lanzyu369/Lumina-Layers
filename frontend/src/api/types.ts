@@ -99,6 +99,7 @@ export type ConvertPreviewRequest = ConvertSourceSelection & {
   material_grid_resolution?: number;
   material_backing_material_index?: number;
   large_format_enabled?: boolean;
+  replacement_regions?: ColorReplacementItem[];
 };
 
 export type ConvertGenerateRequest = ConvertPreviewRequest & {
