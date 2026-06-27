@@ -1,11 +1,11 @@
 """SVG/vector GLB preview exporters.
 
 This module keeps vector GLB preview export separate from the large
-``vector_branch`` orchestration file. V1 remains the default exporter; V2 is
-an opt-in local path selected by ``LUMINA_VECTOR_GLB_KERNEL``.
+``vector_branch`` orchestration file. V2 is the default exporter and V1
+remains an explicit fallback selected by ``LUMINA_VECTOR_GLB_KERNEL=v1``.
 
-SVG/vector GLB 预览导出模块。V1 默认保持不变；V2 通过
-``LUMINA_VECTOR_GLB_KERNEL`` 本地开启，并且必须能回退 V1。
+SVG/vector GLB 预览导出模块。V2 是默认导出器；需要锁定旧路径时可通过
+``LUMINA_VECTOR_GLB_KERNEL=v1`` 显式回退 V1。
 """
 
 from __future__ import annotations
@@ -85,17 +85,17 @@ def resolve_vector_glb_kernel_choice() -> str:
     """Return the requested SVG GLB kernel.
 
     Returns:
-        ``"trimesh_v1"`` for the current default path, or
-        ``"rasterio_manifold3d"`` for the opt-in V2 path.
+        ``"rasterio_manifold3d"`` for the default V2 path, or
+        ``"trimesh_v1"`` for the explicit V1 fallback path.
 
-    返回当前 SVG GLB kernel 选择：默认 ``trimesh_v1``，本地开启时返回
-    ``rasterio_manifold3d``。
+    返回当前 SVG GLB kernel 选择：默认 ``rasterio_manifold3d``；显式
+    配置 V1 时返回 ``trimesh_v1``。
     """
 
     raw = (os.environ.get(_VECTOR_GLB_KERNEL_ENV_VAR) or "").strip().lower()
-    if raw in {"", "v1", "trimesh", "trimesh_v1"}:
+    if raw in {"v1", "trimesh", "trimesh_v1"}:
         return "trimesh_v1"
-    if raw in {"v2", "rasterio_manifold3d", "rasterio+manifold3d"}:
+    if raw in {"", "v2", "rasterio_manifold3d", "rasterio+manifold3d"}:
         return "rasterio_manifold3d"
     log.warning(
         "Unknown LUMINA_VECTOR_GLB_KERNEL value, falling back to V1",

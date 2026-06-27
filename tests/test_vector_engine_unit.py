@@ -731,6 +731,77 @@ class TestVectorPreviewBackingMaskRegression:
         assert cache["backing_mask"].shape == cache["mask_solid"].shape
         assert np.count_nonzero(cache["backing_mask"] & ~cache["mask_solid"]) > 0
 
+    def test_preview_cache_rasterizes_shape_masks_without_full_canvas_allocations(self, monkeypatch):
+        shape_a = box(2, 2, 8, 8)
+        shape_b = box(20, 2, 26, 8)
+        shape_c = box(2, 20, 8, 26)
+        analysis = VectorAnalysis(
+            shape_data=[],
+            clipped_shapes=[
+                {"geometry": shape_a, "color": (255, 0, 0), "draw_order": 0},
+                {"geometry": shape_b, "color": (0, 255, 0), "draw_order": 1},
+                {"geometry": shape_c, "color": (0, 0, 255), "draw_order": 2},
+            ],
+            matched_shapes=[
+                {
+                    "geometry": shape_a,
+                    "recipe": [1, 1, 1, 1, 1],
+                    "color": (255, 0, 0),
+                    "matched_rgb": (255, 0, 0),
+                },
+                {
+                    "geometry": shape_b,
+                    "recipe": [2, 2, 2, 2, 2],
+                    "color": (0, 255, 0),
+                    "matched_rgb": (0, 255, 0),
+                },
+                {
+                    "geometry": shape_c,
+                    "recipe": [3, 3, 3, 3, 3],
+                    "color": (0, 0, 255),
+                    "matched_rgb": (0, 0, 255),
+                },
+            ],
+            silhouette=shape_a.union(shape_b).union(shape_c),
+            scale_factor=1.0,
+            bbox=(0.0, 0.0, 40.0, 40.0),
+            color_conf={},
+            slot_names=["White", "Red", "Green", "Blue"],
+            num_channels=4,
+            num_layers=5,
+            preview_colors={
+                0: [255, 255, 255, 255],
+                1: [255, 0, 0, 255],
+                2: [0, 255, 0, 255],
+                3: [0, 0, 255, 255],
+            },
+            stage_timings={},
+        )
+        original_zeros = _ve.np.zeros
+        full_bool_allocations = []
+
+        def spy_zeros(shape, *args, **kwargs):
+            dtype = kwargs.get("dtype")
+            if dtype is None and args:
+                dtype = args[0]
+            if tuple(shape) == (40, 40) and dtype is bool:
+                full_bool_allocations.append(shape)
+            return original_zeros(shape, *args, **kwargs)
+
+        monkeypatch.setattr(_ve.np, "zeros", spy_zeros)
+
+        cache = VectorProcessor.build_preview_cache(
+            analysis,
+            pixels_per_mm=1.0,
+            supersample_preview=1,
+        )
+
+        assert np.count_nonzero(cache["mask_solid"]) > 0
+        assert int(cache["material_matrix"][3, 3, 0]) == 1
+        assert int(cache["material_matrix"][3, 23, 0]) == 2
+        assert int(cache["material_matrix"][23, 3, 0]) == 3
+        assert len(full_bool_allocations) <= 2
+
 
 class TestVectorCoatingBuildMeshRegression:
 

@@ -23,6 +23,7 @@ from unittest.mock import patch
 
 import numpy as np
 import pytest
+from PIL import Image
 
 from api.workers.converter_workers import (
     worker_batch_convert_item,
@@ -411,17 +412,291 @@ def test_worker_generate_preview_accepts_numpy_preview_image(tmp_path) -> None:
     assert call_kwargs["enable_outline"] is True
     assert call_kwargs["outline_width"] == 2.5
     assert result["preview_png_path"] is not None
+    assert result["raw_preview_png_path"] is not None
     assert result["cache_data_path"] is not None
+    assert result["cache_artifact_ref"] is not None
     assert os.path.exists(result["preview_png_path"])
+    assert os.path.exists(result["raw_preview_png_path"])
     assert os.path.exists(result["cache_data_path"])
 
     try:
         with open(result["cache_data_path"], "rb") as handle:
             restored_cache = pickle.load(handle)
-        assert restored_cache["preview_rgba"].shape == (4, 6, 4)
+        assert "preview_rgba" not in restored_cache
+        np.testing.assert_array_equal(
+            np.load(result["cache_artifact_ref"]["fields"]["preview_rgba"]["path"]),
+            preview_img,
+        )
+        np.testing.assert_array_equal(
+            np.asarray(Image.open(result["raw_preview_png_path"])),
+            preview_img,
+        )
     finally:
-        os.unlink(result["preview_png_path"])
-        os.unlink(result["cache_data_path"])
+        cleanup_paths = {
+            result.get("preview_png_path"),
+            result.get("raw_preview_png_path"),
+            result.get("cache_data_path"),
+            *(
+                field_ref["path"]
+                for field_ref in result["cache_artifact_ref"].get("fields", {}).values()
+            ),
+        }
+        for path in cleanup_paths:
+            if path and os.path.exists(path):
+                os.unlink(path)
+
+
+def test_worker_generate_preview_writes_cache_arrays_as_artifact(tmp_path) -> None:
+    preview_img = np.zeros((4, 6, 4), dtype=np.uint8)
+    preview_img[..., 0] = 255
+    matched_rgb = np.zeros((4, 6, 3), dtype=np.uint8)
+    cache_payload = {
+        "preview_rgba": preview_img.copy(),
+        "matched_rgb": matched_rgb,
+        "target_w": 6,
+        "target_h": 4,
+        "color_conf": {},
+    }
+
+    with (
+        patch(
+            "core.converter.generate_preview_cached",
+            return_value=(preview_img, cache_payload, "OK"),
+        ),
+        patch("config.TEMP_DIR", str(tmp_path)),
+    ):
+        result = worker_generate_preview(
+            image_path="image.png",
+            lut_path="lut.npy",
+            target_width_mm=60.0,
+            color_mode="4-Color (RYBW)",
+            modeling_mode="high-fidelity",
+            color_layers=10,
+            layer_height_mm=0.08,
+            quantize_colors=16,
+            enable_cleanup=True,
+        )
+
+    artifact_ref = result["cache_artifact_ref"]
+    assert result["raw_preview_png_path"] is not None
+    assert artifact_ref["metadata"]["target_w"] == 6
+    assert artifact_ref["metadata"]["target_h"] == 4
+    assert set(artifact_ref["fields"]) == {"preview_rgba", "matched_rgb"}
+    try:
+        with open(result["cache_data_path"], "rb") as handle:
+            metadata_pickle = pickle.load(handle)
+        assert "preview_rgba" not in metadata_pickle
+        assert "matched_rgb" not in metadata_pickle
+        np.testing.assert_array_equal(
+            np.load(artifact_ref["fields"]["preview_rgba"]["path"]),
+            preview_img,
+        )
+        np.testing.assert_array_equal(
+            np.load(artifact_ref["fields"]["matched_rgb"]["path"]),
+            matched_rgb,
+        )
+        np.testing.assert_array_equal(
+            np.asarray(Image.open(result["raw_preview_png_path"])),
+            preview_img,
+        )
+    finally:
+        cleanup_paths = {
+            result.get("preview_png_path"),
+            result.get("raw_preview_png_path"),
+            result.get("cache_data_path"),
+            *(
+                field_ref["path"]
+                for field_ref in artifact_ref.get("fields", {}).values()
+            ),
+        }
+        for path in cleanup_paths:
+            if path and os.path.exists(path):
+                os.unlink(path)
+
+
+def test_worker_generate_preview_precomputes_response_payloads(tmp_path) -> None:
+    preview_img = np.zeros((4, 6, 4), dtype=np.uint8)
+    preview_img[..., 3] = 255
+    matched_rgb = np.zeros((4, 6, 3), dtype=np.uint8)
+    matched_rgb[:2, :, :] = [255, 0, 0]
+    matched_rgb[2:, :, :] = [0, 255, 0]
+    quantized_image = matched_rgb.copy()
+    quantized_image[:2, :, :] = [250, 0, 0]
+    mask_solid = np.ones((4, 6), dtype=bool)
+    cache_payload = {
+        "preview_rgba": preview_img.copy(),
+        "matched_rgb": matched_rgb,
+        "quantized_image": quantized_image,
+        "mask_solid": mask_solid,
+        "target_w": 6,
+        "target_h": 4,
+        "color_palette": [
+            {
+                "hex": "#ff0000",
+                "color": (255, 0, 0),
+                "count": 12,
+                "percentage": 50.0,
+            },
+            {
+                "hex": "#00ff00",
+                "color": (0, 255, 0),
+                "count": 12,
+                "percentage": 50.0,
+            },
+        ],
+        "color_conf": {},
+    }
+
+    with (
+        patch(
+            "core.converter.generate_preview_cached",
+            return_value=(preview_img, cache_payload, "OK"),
+        ),
+        patch("config.TEMP_DIR", str(tmp_path)),
+    ):
+        result = worker_generate_preview(
+            image_path="image.png",
+            lut_path="lut.npy",
+            target_width_mm=60.0,
+            color_mode="4-Color (RYBW)",
+            modeling_mode="high-fidelity",
+            color_layers=10,
+            layer_height_mm=0.08,
+            quantize_colors=16,
+            enable_cleanup=True,
+        )
+
+    assert result["response_palette"] == [
+        {
+            "quantized_hex": "#fa0000",
+            "matched_hex": "#ff0000",
+            "pixel_count": 12,
+            "percentage": 50.0,
+        },
+        {
+            "quantized_hex": "#00ff00",
+            "matched_hex": "#00ff00",
+            "pixel_count": 12,
+            "percentage": 50.0,
+        },
+    ]
+    assert isinstance(result["gradient_groups"], list)
+    assert result["gradient_region_id_map_path"] is not None
+    region_id_map = np.load(result["gradient_region_id_map_path"])
+    assert region_id_map.shape == (4, 6)
+    assert region_id_map.dtype == np.uint32
+
+    cleanup_paths = {
+        result.get("preview_png_path"),
+        result.get("raw_preview_png_path"),
+        result.get("cache_data_path"),
+        result.get("gradient_region_id_map_path"),
+        *(
+            field_ref["path"]
+            for field_ref in result["cache_artifact_ref"].get("fields", {}).values()
+        ),
+    }
+    for path in cleanup_paths:
+        if path and os.path.exists(path):
+            os.unlink(path)
+
+
+def test_worker_generate_preview_cleans_temp_artifacts_when_serialization_fails(
+    tmp_path,
+) -> None:
+    preview_img = np.zeros((4, 6, 4), dtype=np.uint8)
+    preview_img[..., 3] = 255
+    matched_rgb = np.zeros((4, 6, 3), dtype=np.uint8)
+    quantized_image = matched_rgb.copy()
+    mask_solid = np.ones((4, 6), dtype=bool)
+    cache_payload = {
+        "preview_rgba": preview_img.copy(),
+        "matched_rgb": matched_rgb,
+        "quantized_image": quantized_image,
+        "mask_solid": mask_solid,
+        "target_w": 6,
+        "target_h": 4,
+        "color_palette": [
+            {
+                "hex": "#000000",
+                "color": (0, 0, 0),
+                "count": 24,
+                "percentage": 100.0,
+            }
+        ],
+        "color_conf": {},
+        "vector_parse_clip_cache_blob": b"parse-clip-artifact",
+    }
+
+    with (
+        patch(
+            "core.converter.generate_preview_cached",
+            return_value=(preview_img, cache_payload, "OK"),
+        ),
+        patch("config.TEMP_DIR", str(tmp_path)),
+        patch("pickle.dump", side_effect=RuntimeError("pickle failed")),
+    ):
+        with pytest.raises(RuntimeError, match="pickle failed"):
+            worker_generate_preview(
+                image_path="image.png",
+                lut_path="lut.npy",
+                target_width_mm=60.0,
+                color_mode="4-Color (RYBW)",
+                modeling_mode="high-fidelity",
+                color_layers=10,
+                layer_height_mm=0.08,
+                quantize_colors=16,
+                enable_cleanup=True,
+            )
+
+    leftovers = [path.name for path in tmp_path.iterdir()]
+    assert leftovers == []
+
+
+def test_worker_generate_preview_splits_vector_parse_clip_cache_blob(tmp_path) -> None:
+    preview_img = np.zeros((4, 6, 4), dtype=np.uint8)
+    cache_payload = {
+        "preview_rgba": preview_img.copy(),
+        "color_conf": {},
+        "vector_parse_clip_cache_blob": b"parse-clip-artifact",
+    }
+
+    with (
+        patch(
+            "core.converter.generate_preview_cached",
+            return_value=(preview_img, cache_payload, "OK"),
+        ),
+        patch("config.TEMP_DIR", str(tmp_path)),
+    ):
+        result = worker_generate_preview(
+            image_path="image.svg",
+            lut_path="lut.npy",
+            target_width_mm=60.0,
+            color_mode="4-Color (RYBW)",
+            modeling_mode="vector",
+            color_layers=10,
+            layer_height_mm=0.08,
+            quantize_colors=16,
+            enable_cleanup=True,
+        )
+
+    assert result["cache_data_path"] is not None
+    assert result["vector_parse_clip_cache_path"] is not None
+    try:
+        with open(result["cache_data_path"], "rb") as handle:
+            restored_cache = pickle.load(handle)
+        assert "vector_parse_clip_cache_blob" not in restored_cache
+        with open(result["vector_parse_clip_cache_path"], "rb") as handle:
+            assert handle.read() == b"parse-clip-artifact"
+    finally:
+        for key in (
+            "preview_png_path",
+            "cache_data_path",
+            "vector_parse_clip_cache_path",
+        ):
+            path = result.get(key)
+            if path and os.path.exists(path):
+                os.unlink(path)
 
 
 def test_worker_generate_preview_no_image_warning_has_actionable_fields(caplog) -> None:

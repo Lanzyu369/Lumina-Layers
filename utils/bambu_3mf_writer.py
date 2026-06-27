@@ -19,7 +19,7 @@ import zipfile
 import json
 import copy
 import re
-from typing import Any, Iterable, List, Dict, Optional
+from typing import Any, BinaryIO, Iterable, List, Dict, Optional
 import numpy as np
 from PIL import Image
 
@@ -39,6 +39,7 @@ log = get_logger(__name__)
 _trimesh = None
 _n3mf = None
 _PREVIEW_PLACEHOLDER_PNG_BYTES: Optional[bytes] = None
+_RAW_ZIP_COPY_CHUNK_SIZE = 1024 * 1024
 
 
 def _get_trimesh():
@@ -1703,10 +1704,9 @@ class BambuStudio3MFWriter:
         关系条目，并把中间产物原子搬到 ``output_path``。
 
         Algorithm:
-        - Iterate the original ZIP entries in order, preserving each entry's
-          ``ZipInfo`` (compress_type, external_attr, date_time, extra) so
-          downstream slicers see byte-identical contents apart from the rels
-          rewrite.
+        - Iterate the original ZIP entries in order. Unchanged members are
+          copied as raw local-header + compressed-data spans so large model
+          XML entries are not decompressed and recompressed.
         - When the entry path is ``_rels/.rels``, parse the XML, append three
           ``<Relationship>`` elements (Id ``cover-rel-1/2/3``, Type from
           ``COVER_THUMBNAIL_SPECS``, Target = ``"/" + spec.zip_path``), and
@@ -1727,7 +1727,10 @@ class BambuStudio3MFWriter:
 
         tmp_path = output_path + ".tmp"
         try:
-            with zipfile.ZipFile(intermediate_path, "r") as src_zip:
+            with zipfile.ZipFile(intermediate_path, "r") as src_zip, open(
+                intermediate_path,
+                "rb",
+            ) as src_file:
                 infos = src_zip.infolist()
                 with zipfile.ZipFile(
                     tmp_path,
@@ -1735,29 +1738,13 @@ class BambuStudio3MFWriter:
                     compression=zipfile.ZIP_DEFLATED,
                 ) as dst_zip:
                     for info in infos:
-                        # Read original bytes once; ZipInfo carries the
-                        # original compression/extra metadata which we
-                        # re-use for the destination entry.
-                        payload = src_zip.read(info.filename)
-                        dst_info = zipfile.ZipInfo(
-                            filename=info.filename,
-                            date_time=info.date_time,
-                        )
-                        dst_info.compress_type = info.compress_type
-                        dst_info.external_attr = info.external_attr
-                        dst_info.extra = info.extra
-                        dst_info.create_system = info.create_system
-                        dst_info.create_version = info.create_version
-                        dst_info.extract_version = info.extract_version
-                        dst_info.flag_bits = info.flag_bits
-                        dst_info.internal_attr = info.internal_attr
-                        if info.comment:
-                            dst_info.comment = info.comment
-
                         if info.filename == rels_path:
+                            payload = src_zip.read(info.filename)
+                            dst_info = self._clone_zipinfo_for_rewrite(info)
                             payload = self._rewrite_rels_xml(payload, rels_namespace)
-
-                        dst_zip.writestr(dst_info, payload)
+                            dst_zip.writestr(dst_info, payload)
+                        else:
+                            self._raw_copy_zip_member(src_file, dst_zip, info)
 
             os.replace(tmp_path, output_path)
         except Exception:
@@ -1769,6 +1756,77 @@ class BambuStudio3MFWriter:
             except OSError:
                 pass
             raise
+
+    @staticmethod
+    def _clone_zipinfo_for_rewrite(info: zipfile.ZipInfo) -> zipfile.ZipInfo:
+        """Copy stable metadata for an entry whose payload must be rewritten."""
+
+        cloned = zipfile.ZipInfo(filename=info.filename, date_time=info.date_time)
+        cloned.compress_type = info.compress_type
+        cloned.external_attr = info.external_attr
+        cloned.extra = info.extra
+        cloned.create_system = info.create_system
+        cloned.create_version = info.create_version
+        cloned.extract_version = info.extract_version
+        cloned.internal_attr = info.internal_attr
+        if info.comment:
+            cloned.comment = info.comment
+        return cloned
+
+    @staticmethod
+    def _clone_zipinfo_for_raw_copy(info: zipfile.ZipInfo) -> zipfile.ZipInfo:
+        """Copy central-directory metadata for an unchanged raw ZIP member."""
+
+        cloned = BambuStudio3MFWriter._clone_zipinfo_for_rewrite(info)
+        cloned.flag_bits = info.flag_bits
+        cloned.CRC = info.CRC
+        cloned.compress_size = info.compress_size
+        cloned.file_size = info.file_size
+        return cloned
+
+    @staticmethod
+    def _raw_copy_zip_member(
+        src_file: BinaryIO,
+        dst_zip: zipfile.ZipFile,
+        info: zipfile.ZipInfo,
+    ) -> None:
+        """Append an unchanged ZIP member without decompressing its payload."""
+
+        end_offset = getattr(info, "_end_offset", None)
+        if not isinstance(end_offset, int) or end_offset < info.header_offset:
+            raise RuntimeError(f"invalid ZIP member span for {info.filename!r}")
+
+        dst_info = BambuStudio3MFWriter._clone_zipinfo_for_raw_copy(info)
+        span_remaining = end_offset - info.header_offset
+
+        # zipfile has no public raw-copy API. This mirrors ZipFile.open(..., 'w')
+        # bookkeeping, then writes the already-compressed local entry bytes.
+        with dst_zip._lock:
+            if dst_zip.fp is None:
+                raise ValueError(
+                    "Attempt to write to ZIP archive that was already closed"
+                )
+            if dst_zip._writing:
+                raise ValueError(
+                    "Can't write to ZIP archive while another write is open"
+                )
+            if dst_zip._seekable:
+                dst_zip.fp.seek(dst_zip.start_dir)
+            dst_info.header_offset = dst_zip.fp.tell()
+            dst_zip._writecheck(dst_info)
+            dst_zip._didModify = True
+
+            src_file.seek(info.header_offset)
+            while span_remaining:
+                chunk = src_file.read(min(_RAW_ZIP_COPY_CHUNK_SIZE, span_remaining))
+                if not chunk:
+                    raise RuntimeError(f"truncated ZIP member {info.filename!r}")
+                dst_zip.fp.write(chunk)
+                span_remaining -= len(chunk)
+
+            dst_zip.filelist.append(dst_info)
+            dst_zip.NameToInfo[dst_info.filename] = dst_info
+            dst_zip.start_dir = dst_zip.fp.tell()
 
     @staticmethod
     def _rewrite_rels_xml(rels_bytes: bytes, rels_namespace: str) -> bytes:
