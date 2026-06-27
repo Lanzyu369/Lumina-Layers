@@ -29,3 +29,15 @@ def test_desktop_build_copies_material_seed_to_packaged_resource_directory() -> 
 
     assert 'MATERIALS_RES_DIR = RESOURCES_DIR / "materials"' in build_script
     assert 'target_seed_path = MATERIALS_RES_DIR / "lumina-materials-seed.zip"' in build_script
+
+
+def test_desktop_build_checks_default_glb_v2_dependencies_before_pyinstaller() -> None:
+    build_script = (ROOT / "scripts" / "build_desktop.py").read_text(encoding="utf-8")
+
+    assert "GLB_V2_REQUIRED_MODULES" in build_script
+    assert "rasterio.features" in build_script
+    assert "manifold3d" in build_script
+
+    deps_index = build_script.index("check_glb_v2_dependencies_available()")
+    pyinstaller_index = build_script.index("pyinstaller lumina_studio.spec")
+    assert deps_index < pyinstaller_index

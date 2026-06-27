@@ -108,7 +108,19 @@ def test_pyinstaller_spec_includes_native_extension_binary() -> None:
 
     assert "clipper2_batch" in spec
     assert "native_binaries" in spec
-    assert "hiddenimports=['clipper2_batch']" in spec
+    assert "backend_hiddenimports" in spec
+
+
+def test_pyinstaller_spec_collects_default_glb_v2_dependencies() -> None:
+    from scripts.build_native_extensions import ROOT
+
+    spec = (ROOT / "lumina_studio.spec").read_text(encoding="utf-8")
+
+    assert "collect_all" in spec
+    assert '"rasterio"' in spec
+    assert '"manifold3d"' in spec
+    assert '"rasterio.features"' in spec
+    assert "glb_v2_binaries" in spec
 
 
 def test_clipper2_extension_exports_difference_paths_api() -> None:

@@ -570,8 +570,9 @@ def _build_color_extruded_mesh_v2(
     pixel-corner polygons (NOT pixel-center, unlike ``cv2.findContours``),
     interior holes preserved, 1-px strips and isolated pixels kept. The
     measured speedup vs v1 on representative reference-image masks is in
-    ``progress/glb-preview-mesh-library-spike.md``; the recommendation is
-    to keep this off by default and opt-in via ``LUMINA_GLB_KERNEL``.
+    ``progress/glb-preview-mesh-library-spike.md``. The dispatcher now uses
+    this v2 path by default and falls back to v1 on import/runtime failure;
+    set ``LUMINA_GLB_KERNEL=v1`` only when the older path must be pinned.
 
     On any failure (import error, geometry error, manifold construction
     error) this helper returns ``None``; the dispatcher in
