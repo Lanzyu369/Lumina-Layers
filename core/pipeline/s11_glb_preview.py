@@ -1546,6 +1546,49 @@ def generate_realtime_glb(cache: dict, output_path: str) -> Optional[str]:
         return None
 
 
+def _should_export_pipeline_scene_for_glb(ctx: dict) -> bool:
+    """Return whether S11 should reuse the final pipeline scene for preview."""
+
+    return (
+        bool(ctx.get("enable_relief"))
+        and str(ctx.get("height_mode") or "").lower() == "heightmap"
+        and isinstance(ctx.get("scene"), trimesh.Scene)
+    )
+
+
+def _export_pipeline_scene_glb(ctx: dict, output_path: str) -> Optional[str]:
+    """Export the already-built pipeline scene for heightmap relief preview."""
+
+    scene = ctx.get("scene")
+    geometry_count = int(len(scene.geometry)) if isinstance(scene, trimesh.Scene) else 0
+    if not isinstance(scene, trimesh.Scene) or len(scene.geometry) == 0:
+        _log.warning(
+            "Heightmap relief GLB preview scene is unavailable",
+            extra={
+                "event": "heightmap_relief_glb_scene_unavailable",
+                "has_scene": isinstance(scene, trimesh.Scene),
+                "geometry_count": geometry_count,
+            },
+        )
+        return None
+
+    try:
+        scene.export(output_path, file_type="glb")
+    except (OSError, ValueError, TypeError, RuntimeError) as exc:
+        _log.warning(
+            "Heightmap relief scene GLB export failed",
+            extra={
+                "event": "heightmap_relief_glb_export_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+                "geometry_count": geometry_count,
+            },
+        )
+        return None
+
+    return output_path if os.path.exists(output_path) else None
+
+
 def run(ctx: dict) -> dict:
     """Generate GLB 3D preview for the converted model.
     为转换后的模型生成 GLB 3D 预览。
@@ -1607,14 +1650,17 @@ def run(ctx: dict) -> dict:
         "target_h": height,
         "target_width_mm": target_width_mm,
     }
-    if bool(ctx.get("high_precision_3d_preview", False)):
-        try:
-            glb_mesh_budget = int(ctx.get("quantize_colors") or 0)
-        except (TypeError, ValueError):
-            glb_mesh_budget = 0
-        if glb_mesh_budget > 128:
-            cache["glb_max_meshes"] = glb_mesh_budget
-    glb_path = generate_segmented_glb(cache, output_path=out_path)
+    if _should_export_pipeline_scene_for_glb(ctx):
+        glb_path = _export_pipeline_scene_glb(ctx, out_path)
+    else:
+        if bool(ctx.get("high_precision_3d_preview", False)):
+            try:
+                glb_mesh_budget = int(ctx.get("quantize_colors") or 0)
+            except (TypeError, ValueError):
+                glb_mesh_budget = 0
+            if glb_mesh_budget > 128:
+                cache["glb_max_meshes"] = glb_mesh_budget
+        glb_path = generate_segmented_glb(cache, output_path=out_path)
 
     ctx["glb_path"] = glb_path
 

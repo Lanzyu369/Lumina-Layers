@@ -8,10 +8,12 @@ Unit tests for pipeline step modules.
 _需求: 9.3_
 """
 
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
 import numpy as np
 import pytest
 import trimesh
-from unittest.mock import MagicMock, patch
 
 from config import ColorSystem, LUTMetadata, ModelingMode, PaletteEntry, PrinterConfig
 
@@ -804,6 +806,57 @@ class TestS08AuxiliaryMeshes:
         assert result["valid_slot_names"] == ["Backing"]
         backing = result["scene"].geometry["Backing"]
         assert list(backing.visual.face_colors[0]) == [0, 255, 255, 255]
+
+
+# ===========================================================================
+# S11 — s11_glb_preview 单元测试
+# ===========================================================================
+
+
+class TestS11GlbPreview:
+    """S11 GLB preview regression tests."""
+
+    def test_heightmap_relief_exports_pipeline_scene_instead_of_flat_segmented_glb(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        from core.pipeline import s11_glb_preview
+
+        scene = trimesh.Scene()
+        mesh = trimesh.creation.box(extents=(1.0, 1.0, 2.0))
+        mesh.visual.face_colors = np.tile(
+            np.array([255, 0, 0, 255], dtype=np.uint8),
+            (len(mesh.faces), 1),
+        )
+        scene.add_geometry(mesh, node_name="ReliefRed", geom_name="ReliefRed")
+
+        def _unexpected_segmented_glb(*_args, **_kwargs):
+            raise AssertionError("heightmap relief preview must use pipeline scene")
+
+        monkeypatch.setattr(s11_glb_preview, "OUTPUT_DIR", str(tmp_path))
+        monkeypatch.setattr(
+            s11_glb_preview,
+            "generate_segmented_glb",
+            _unexpected_segmented_glb,
+        )
+
+        ctx = {
+            "matched_rgb": np.full((2, 2, 3), [255, 0, 0], dtype=np.uint8),
+            "mask_solid": np.ones((2, 2), dtype=bool),
+            "pixel_scale": 1.0,
+            "image_path": str(tmp_path / "heightmap-source.png"),
+            "scene": scene,
+            "enable_relief": True,
+            "height_mode": "heightmap",
+        }
+
+        result = s11_glb_preview.run(ctx)
+
+        glb_path = result["glb_path"]
+        assert glb_path is not None
+        assert glb_path.endswith(".glb")
+        assert (tmp_path / Path(glb_path).name).exists()
 
 
 # ===========================================================================
