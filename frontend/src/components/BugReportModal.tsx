@@ -725,7 +725,6 @@ export function BugReportModal({
       data-testid="bug-report-backdrop"
       className="fixed inset-0 z-[10000] flex items-center justify-center px-4 py-6 backdrop-blur-sm"
       style={{ background: "var(--surface-scrim)" }}
-      onClick={handleCancel}
     >
       <div
         role="dialog"

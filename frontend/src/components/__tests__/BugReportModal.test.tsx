@@ -858,13 +858,28 @@ describe("BugReportModal", () => {
     expect((screen.getByLabelText("问题描述") as HTMLTextAreaElement).value).toBe("");
   });
 
-  it("closes on Escape and backdrop click", () => {
+  it("closes on Escape", () => {
     const onClose = vi.fn();
     render(<BugReportModal open onClose={onClose} />);
 
     fireEvent.keyDown(document, { key: "Escape" });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps draft content when the backdrop is clicked", () => {
+    const onClose = vi.fn();
+    render(<BugReportModal open onClose={onClose} />);
+
+    fireEvent.change(screen.getByLabelText("问题描述"), {
+      target: { value: "Preview failed" },
+    });
     fireEvent.click(screen.getByTestId("bug-report-backdrop"));
 
-    expect(onClose).toHaveBeenCalledTimes(2);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect((screen.getByLabelText("问题描述") as HTMLTextAreaElement).value).toBe(
+      "Preview failed",
+    );
   });
 });

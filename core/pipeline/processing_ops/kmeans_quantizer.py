@@ -36,6 +36,35 @@ def _resolve_cluster_count(requested_colors: int, sample_count: int) -> int:
     return max(1, min(requested_colors, sample_count))
 
 
+def _maybe_return_low_unique_input(
+    rgb: np.ndarray,
+    effective_n_colors: int,
+) -> np.ndarray | None:
+    """Return an exact copy when the input already satisfies the palette cap."""
+
+    if effective_n_colors <= 0:
+        return None
+    rgb_u8 = np.ascontiguousarray(rgb, dtype=np.uint8)
+    flat = rgb_u8.reshape(-1, 3).astype(np.uint32, copy=False)
+    packed = (
+        (flat[:, 0] << np.uint32(16))
+        | (flat[:, 1] << np.uint32(8))
+        | flat[:, 2]
+    )
+    unique_count = int(np.unique(packed).shape[0])
+    if unique_count > effective_n_colors:
+        return None
+    _log.debug(
+        "K-Means skipped because unique RGB count is within budget",
+        extra={
+            "event": "kmeans_low_unique_fast_path",
+            "unique_colors": unique_count,
+            "effective_n_colors": int(effective_n_colors),
+        },
+    )
+    return rgb_u8.copy()
+
+
 KMEANS_PIXEL_THRESHOLD = 500_000
 
 
@@ -297,6 +326,9 @@ def quantize_colors(
             effective_n_colors,
             total_pixels,
         )
+    low_unique_result = _maybe_return_low_unique_input(rgb, effective_n_colors)
+    if low_unique_result is not None:
+        return low_unique_result
 
     # 缓存查找：用轻量指纹（shape + 采样像素 + 参数）避免全量 hash。
     _sample = rgb[:: max(1, rgb.shape[0] // 32), :: max(1, rgb.shape[1] // 32)].tobytes()

@@ -18,7 +18,7 @@ import trimesh
 from scipy.spatial import cKDTree
 from shapely.geometry import box
 
-from core.vector_engine import VectorProcessor
+from core.vector_engine import VectorAnalysis, VectorProcessor
 
 
 def _coincident_pair_count(mesh: trimesh.Trimesh, tol: float = 1e-6) -> int:
@@ -75,21 +75,123 @@ class TestBuildMeshVertexWelding:
             f"vertex pairs, got {remaining}"
         )
 
-    def test_build_mesh_call_site_includes_merge_vertices(self):
+    def test_build_mesh_call_site_uses_fast_concat_then_merge_vertices(self):
         """Governance: the fix in ``build_mesh`` must not regress by removing
-        the ``merge_vertices`` call after ``trimesh.util.concatenate``."""
+        the ``merge_vertices`` call after per-slot mesh concatenation."""
         import inspect
 
         source = inspect.getsource(VectorProcessor.build_mesh)
-        concat_idx = source.find("trimesh.util.concatenate")
-        assert concat_idx >= 0, "build_mesh no longer uses trimesh.util.concatenate"
+        concat_idx = source.find("_concatenate_meshes_fast")
+        assert concat_idx >= 0, "build_mesh must use the vector fast concat helper"
         merge_idx = source.find("merge_vertices", concat_idx)
         assert merge_idx >= 0, (
-            "build_mesh must call merge_vertices() after concatenate() so "
+            "build_mesh must call merge_vertices() after fast concatenation so "
             "coincident border vertices are welded before the scene is "
             "handed to Three.js / exporters"
         )
 
+    def test_build_mesh_fast_concat_does_not_depend_on_trimesh_generic_concatenate(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        left_mesh, right_mesh = self._two_adjacent_extrusions()
+        processor = VectorProcessor.__new__(VectorProcessor)
+
+        def fake_run_length_extrude(*_args, **_kwargs):
+            return {
+                "White": {
+                    "meshes": [left_mesh, right_mesh],
+                    "mat_id": 0,
+                }
+            }
+
+        def fail_generic_concatenate(*_args, **_kwargs):
+            raise AssertionError("build_mesh should use the vector fast concat helper")
+
+        monkeypatch.setattr(
+            VectorProcessor,
+            "_run_length_extrude",
+            staticmethod(fake_run_length_extrude),
+        )
+        monkeypatch.setattr(trimesh.util, "concatenate", fail_generic_concatenate)
+        processor.color_mode = "4-Color (RYBW)"
+        analysis = VectorAnalysis(
+            shape_data=[],
+            clipped_shapes=[],
+            matched_shapes=[],
+            silhouette=None,
+            scale_factor=1.0,
+            bbox=(0.0, 0.0, 10.0, 5.0),
+            color_conf={},
+            slot_names=["White"],
+            num_channels=1,
+            num_layers=1,
+            preview_colors={0: [255, 255, 255, 255], "White": [255, 255, 255, 255]},
+        )
+
+        scene = processor.build_mesh(
+            analysis=analysis,
+            thickness_mm=0.0,
+            structure_mode="Single-sided",
+        )
+
+        combined = scene.geometry["White"]
+        assert float(combined.volume) == pytest.approx(
+            float(left_mesh.volume + right_mesh.volume),
+            rel=1e-6,
+            abs=1e-6,
+        )
+        assert _coincident_pair_count(combined, tol=1e-9) == 0
+
+    def test_build_mesh_fast_concat_accepts_single_array_chunk(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        source_mesh = VectorProcessor._extrude_geometry(
+            box(0.0, 0.0, 2.0, 2.0),
+            height=1.0,
+            z_offset=0.0,
+            scale=1.0,
+        )[0]
+        chunk = (source_mesh.vertices.copy(), source_mesh.faces.copy())
+        processor = VectorProcessor.__new__(VectorProcessor)
+        processor.color_mode = "4-Color (RYBW)"
+
+        def fake_run_length_extrude(*_args, **_kwargs):
+            return {
+                "White": {
+                    "meshes": [chunk],
+                    "mat_id": 0,
+                }
+            }
+
+        monkeypatch.setattr(
+            VectorProcessor,
+            "_run_length_extrude",
+            staticmethod(fake_run_length_extrude),
+        )
+        analysis = VectorAnalysis(
+            shape_data=[],
+            clipped_shapes=[],
+            matched_shapes=[],
+            silhouette=None,
+            scale_factor=1.0,
+            bbox=(0.0, 0.0, 2.0, 2.0),
+            color_conf={},
+            slot_names=["White"],
+            num_channels=1,
+            num_layers=1,
+            preview_colors={0: [255, 255, 255, 255], "White": [255, 255, 255, 255]},
+        )
+
+        scene = processor.build_mesh(
+            analysis=analysis,
+            thickness_mm=0.0,
+            structure_mode="Single-sided",
+        )
+
+        assert sorted(scene.geometry) == ["White"]
+        assert int(len(scene.geometry["White"].faces)) == int(len(source_mesh.faces))
 
 def test_merge_vertices_preserves_volume_of_disjoint_parts():
     """Sanity guard: merging vertices must not collapse geometrically

@@ -33,17 +33,18 @@ _log = get_logger(__name__)
 # ---------------------------------------------------------------------------
 #
 # ``LUMINA_GLB_KERNEL`` selects the per-color extrusion backend used by the
-# S11 segmented-GLB preview. Default is the long-standing Shapely v1 path
-# (RLE -> shapely_box -> unary_union -> trimesh.creation.extrude_polygon),
-# which is the proven production code. ``v2`` opts into the prototype
-# rasterio + manifold3d backend evaluated in
-# ``progress/glb-preview-mesh-library-spike.md``.
-# 该开关用于在生产保留旧 Shapely 实现的同时，按需启用新 rasterio +
-# manifold3d 实现进行回归对比。默认仍走 v1（生产路径），异常时自动回退到
-# v1，确保任何环境（含缺少 wheel 的 Windows arm64）都能继续工作。
+# S11 segmented-GLB preview. Default is the faster rasterio + manifold3d
+# backend, which is the measured preview-performance baseline. Missing native
+# deps or runtime v2 failures fall back to the long-standing Shapely v1 path
+# (RLE -> shapely_box -> unary_union -> trimesh.creation.extrude_polygon).
+# Operators can still force ``v1`` to pin the proven path.
+# 该开关用于选择 GLB 分色预览的 mesh kernel。默认走已经作为性能基准的
+# rasterio + manifold3d v2；缺依赖或运行失败时回退旧 Shapely v1。需要锁定
+# 旧路径时可显式设置 ``v1``。
 #
 # Allowed values (case-insensitive, leading/trailing whitespace stripped):
-#     - ``v1`` / ``shapely`` / ``""`` / unset  -> ``shapely_v1`` (default)
+#     - ``""`` / unset                         -> attempt v2, fallback to v1 (default)
+#     - ``v1`` / ``shapely``                   -> ``shapely_v1``
 #     - ``v2`` / ``rasterio_manifold3d``       -> attempt v2, fallback to v1
 #     - ``auto``                               -> attempt v2 if importable,
 #                                                 silently fallback otherwise
@@ -81,12 +82,12 @@ def _resolve_kernel_choice() -> str:
     返回调用方请求的 kernel 名称；真正的可用性检查由 dispatcher 完成。
     """
     raw = (os.environ.get(_KERNEL_ENV_VAR) or "").strip().lower()
-    if raw in {"", "v1", "shapely", "shapely_v1"}:
-        return "shapely_v1"
-    if raw in {"v2", "rasterio_manifold3d", "rasterio+manifold3d"}:
-        return "rasterio_manifold3d"
     if raw == "auto":
         return "auto"
+    if raw in {"v1", "shapely", "shapely_v1"}:
+        return "shapely_v1"
+    if raw in {"", "v2", "rasterio_manifold3d", "rasterio+manifold3d"}:
+        return "rasterio_manifold3d"
     _log.warning(
         "Unknown LUMINA_GLB_KERNEL value, falling back to shapely_v1",
         extra={
@@ -569,8 +570,9 @@ def _build_color_extruded_mesh_v2(
     pixel-corner polygons (NOT pixel-center, unlike ``cv2.findContours``),
     interior holes preserved, 1-px strips and isolated pixels kept. The
     measured speedup vs v1 on representative reference-image masks is in
-    ``progress/glb-preview-mesh-library-spike.md``; the recommendation is
-    to keep this off by default and opt-in via ``LUMINA_GLB_KERNEL``.
+    ``progress/glb-preview-mesh-library-spike.md``. The dispatcher now uses
+    this v2 path by default and falls back to v1 on import/runtime failure;
+    set ``LUMINA_GLB_KERNEL=v1`` only when the older path must be pinned.
 
     On any failure (import error, geometry error, manifold construction
     error) this helper returns ``None``; the dispatcher in
@@ -898,7 +900,9 @@ def _build_color_extruded_mesh(
 
     Public API: callers in ``generate_segmented_glb`` and
     ``_build_backing_plate_mesh`` keep using this name. Behaviour:
-        - ``LUMINA_GLB_KERNEL`` unset / ``v1`` / ``shapely``  -> v1 (default)
+        - ``LUMINA_GLB_KERNEL`` unset / ``v2``                -> v2, fallback to v1
+                                                                 with warning (default)
+        - ``LUMINA_GLB_KERNEL=v1`` / ``shapely``              -> v1
         - ``LUMINA_GLB_KERNEL=v2``                            -> v2, fallback to v1
         - ``LUMINA_GLB_KERNEL=auto``                          -> v2 if importable,
                                                                  else v1, no warning
@@ -1542,6 +1546,49 @@ def generate_realtime_glb(cache: dict, output_path: str) -> Optional[str]:
         return None
 
 
+def _should_export_pipeline_scene_for_glb(ctx: dict) -> bool:
+    """Return whether S11 should reuse the final pipeline scene for preview."""
+
+    return (
+        bool(ctx.get("enable_relief"))
+        and str(ctx.get("height_mode") or "").lower() == "heightmap"
+        and isinstance(ctx.get("scene"), trimesh.Scene)
+    )
+
+
+def _export_pipeline_scene_glb(ctx: dict, output_path: str) -> Optional[str]:
+    """Export the already-built pipeline scene for heightmap relief preview."""
+
+    scene = ctx.get("scene")
+    geometry_count = int(len(scene.geometry)) if isinstance(scene, trimesh.Scene) else 0
+    if not isinstance(scene, trimesh.Scene) or len(scene.geometry) == 0:
+        _log.warning(
+            "Heightmap relief GLB preview scene is unavailable",
+            extra={
+                "event": "heightmap_relief_glb_scene_unavailable",
+                "has_scene": isinstance(scene, trimesh.Scene),
+                "geometry_count": geometry_count,
+            },
+        )
+        return None
+
+    try:
+        scene.export(output_path, file_type="glb")
+    except (OSError, ValueError, TypeError, RuntimeError) as exc:
+        _log.warning(
+            "Heightmap relief scene GLB export failed",
+            extra={
+                "event": "heightmap_relief_glb_export_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+                "geometry_count": geometry_count,
+            },
+        )
+        return None
+
+    return output_path if os.path.exists(output_path) else None
+
+
 def run(ctx: dict) -> dict:
     """Generate GLB 3D preview for the converted model.
     为转换后的模型生成 GLB 3D 预览。
@@ -1563,11 +1610,24 @@ def run(ctx: dict) -> dict:
         - outline_added (bool): 描边是否已添加
         - target_h (int): 图像高度（像素）
         - transform (np.ndarray): 4x4 变换矩阵
+        - preview_glb_path (str | None): 可复用的已生成预览 GLB 路径
 
     PipelineContext 输出键 / Output keys:
         - glb_path (str | None): GLB 预览文件路径
     """
     _t0 = time.perf_counter()
+
+    reusable_glb_path = ctx.get("preview_glb_path")
+    if isinstance(reusable_glb_path, str) and os.path.exists(reusable_glb_path):
+        _prog = ctx.get("progress")
+        if _prog is not None:
+            _prog(0.90, "复用 3D 预览中... | Reusing 3D preview...")
+        ctx["glb_path"] = reusable_glb_path
+        _elapsed = time.perf_counter() - _t0
+        _hifi_timings = ctx.setdefault("_hifi_timings", {})
+        _hifi_timings["glb_preview_s"] = _elapsed
+        _log.debug(f"glb_preview reused: {_elapsed:.3f}s")
+        return ctx
 
     matched_rgb = ctx["matched_rgb"]
     mask_solid = ctx["mask_solid"]
@@ -1590,14 +1650,17 @@ def run(ctx: dict) -> dict:
         "target_h": height,
         "target_width_mm": target_width_mm,
     }
-    if bool(ctx.get("high_precision_3d_preview", False)):
-        try:
-            glb_mesh_budget = int(ctx.get("quantize_colors") or 0)
-        except (TypeError, ValueError):
-            glb_mesh_budget = 0
-        if glb_mesh_budget > 128:
-            cache["glb_max_meshes"] = glb_mesh_budget
-    glb_path = generate_segmented_glb(cache, output_path=out_path)
+    if _should_export_pipeline_scene_for_glb(ctx):
+        glb_path = _export_pipeline_scene_glb(ctx, out_path)
+    else:
+        if bool(ctx.get("high_precision_3d_preview", False)):
+            try:
+                glb_mesh_budget = int(ctx.get("quantize_colors") or 0)
+            except (TypeError, ValueError):
+                glb_mesh_budget = 0
+            if glb_mesh_budget > 128:
+                cache["glb_max_meshes"] = glb_mesh_budget
+        glb_path = generate_segmented_glb(cache, output_path=out_path)
 
     ctx["glb_path"] = glb_path
 

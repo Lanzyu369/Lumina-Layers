@@ -330,6 +330,25 @@ class TestS03RunMaterialArchiveBranch:
         # Material matrix on rewritten region is no longer all-zeros.
         assert np.any(result["material_matrix"][:, 1:] != 0)
 
+    def test_applies_api_format_replacement_regions_without_processor(self):
+        """Preview replay sends API-format replacement_regions, not a dict."""
+        ctx = _make_material_archive_ctx(None)
+        ctx["replacement_regions"] = [
+            {
+                "quantized_hex": "#c86432",
+                "matched_hex": "#c86432",
+                "replacement_hex": "#14c814",
+            }
+        ]
+        original_col0 = ctx["matched_rgb"][:, 0].copy()
+
+        result = run(ctx)
+
+        rewritten = result["matched_rgb"][:, 1:]
+        assert not np.array_equal(rewritten[0, 0], [200, 100, 50])
+        np.testing.assert_array_equal(result["matched_rgb"][:, 0], original_col0)
+        assert np.any(result["material_matrix"][:, 1:] != 0)
+
     def test_no_warning_when_material_archive_handles_replacement(self, caplog):
         import logging
         ctx = _make_material_archive_ctx({"#c86432": "#14c814"})

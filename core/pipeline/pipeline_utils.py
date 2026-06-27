@@ -123,25 +123,32 @@ def extract_color_palette(preview_cache: dict) -> List[dict]:
 
     total_solid = len(solid_pixels)
 
-    # Find unique colors and their counts
-    # Reshape to (N, 3) and find unique rows
-    unique_colors, counts = np.unique(solid_pixels, axis=0, return_counts=True)
+    # Pack RGB into one uint32 so NumPy can use a fast 1-D unique path.
+    solid_rgb = np.asarray(solid_pixels[:, :3], dtype=np.uint8)
+    packed_rgb = (
+        (solid_rgb[:, 0].astype(np.uint32) << 16)
+        | (solid_rgb[:, 1].astype(np.uint32) << 8)
+        | solid_rgb[:, 2].astype(np.uint32)
+    )
+    unique_colors, counts = np.unique(packed_rgb, return_counts=True)
 
     # Build palette entries
     palette = []
-    for color, count in zip(unique_colors, counts):
-        r, g, b = int(color[0]), int(color[1]), int(color[2])
+    order = np.argsort(-counts, kind="stable")
+    for idx in order:
+        code = int(unique_colors[idx])
+        count = int(counts[idx])
+        r = (code >> 16) & 0xFF
+        g = (code >> 8) & 0xFF
+        b = code & 0xFF
         palette.append(
             {
                 "color": (r, g, b),
                 "hex": f"#{r:02x}{g:02x}{b:02x}",
-                "count": int(count),
+                "count": count,
                 "percentage": round(count / total_solid * 100, 2),
             }
         )
-
-    # Sort by count descending
-    palette.sort(key=lambda x: x["count"], reverse=True)
 
     return palette
 
