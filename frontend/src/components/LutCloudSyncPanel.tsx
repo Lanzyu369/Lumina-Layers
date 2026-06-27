@@ -389,10 +389,18 @@ export default function LutCloudSyncPanel() {
                 <article
                   key={installKey}
                   data-testid="lut-cloud-catalog-card"
-                  className="flex min-w-0 flex-col gap-4 rounded-[22px] border border-slate-200/80 bg-[var(--surface-panel)] p-4 shadow-[var(--shadow-control)] dark:border-slate-800/80"
+                  className="relative flex min-w-0 flex-col gap-4 rounded-[22px] border border-slate-200/80 bg-[var(--surface-panel)] p-4 shadow-[var(--shadow-control)] dark:border-slate-800/80"
                 >
-                  <div className="flex min-w-0 items-start justify-between gap-3">
-                    <div className="min-w-0">
+                  {entry.channel === "official" ? (
+                    <span
+                      data-testid="lut-cloud-official-badge"
+                      className="absolute right-3 top-3 rounded-bl-xl rounded-tr-2xl border border-amber-300/80 bg-amber-100 px-2 py-1 text-[11px] font-bold text-amber-800 shadow-sm dark:border-amber-400/40 dark:bg-amber-400/15 dark:text-amber-100"
+                    >
+                      {t("mat_sync_official_badge")}
+                    </span>
+                  ) : null}
+                  <div className="flex min-w-0 items-start gap-3">
+                    <div className="min-w-0 flex-1 pr-16">
                       <p className="truncate text-sm font-semibold text-slate-900 dark:text-slate-50">
                         {displayName}
                       </p>
@@ -400,11 +408,6 @@ export default function LutCloudSyncPanel() {
                         {maker}
                       </p>
                     </div>
-                    {entry.channel && (
-                      <span className="shrink-0 rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700 dark:bg-blue-950/45 dark:text-blue-300">
-                        {entry.channel}
-                      </span>
-                    )}
                   </div>
 
                   <dl className="grid gap-3 text-xs text-slate-600 dark:text-slate-300">

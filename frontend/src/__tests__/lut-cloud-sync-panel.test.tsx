@@ -53,9 +53,9 @@ describe("LutCloudSyncPanel", () => {
           package_url: "/luts/lut_bw.zip",
           package_sha256: "d".repeat(64),
           package_bytes: 1024,
-          local_path: "Official/BW.json",
-          channel: "official",
-          visibility: "official",
+          local_path: "Community/BW.json",
+          channel: "community",
+          visibility: "community",
           display: {
             name: "BW LUT",
             manufacturer: "Lumina",
@@ -102,6 +102,8 @@ describe("LutCloudSyncPanel", () => {
     expect(await screen.findByText("Official CMYW LUT")).toBeInTheDocument();
     expect(screen.getByTestId("lut-cloud-catalog-count")).toHaveTextContent("2");
     expect(screen.getByTestId("lut-cloud-installed-count")).toHaveTextContent("0");
+    expect(screen.getAllByTestId("lut-cloud-official-badge")).toHaveLength(1);
+    expect(screen.queryByText("community")).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByTestId("lut-cloud-search-input"), {
       target: { value: "CMYW" },
