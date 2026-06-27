@@ -5,6 +5,7 @@ import {
   sortByColorDistance,
 } from '../utils/colorUtils';
 import type { LutColorEntry } from '../api/types';
+import { tRuntime } from '../i18n/runtime';
 const { mockApiFetchLutColors } = vi.hoisted(() => ({
   mockApiFetchLutColors: vi.fn(),
 }));
@@ -135,6 +136,30 @@ describe('Feature: palette-optimization, Property 1: LUT 颜色缓存命中跳�
       }),
       { numRuns: 100 },
     );
+  });
+
+  it('fetchLutColors hides missing LUT backend details', async () => {
+    useConverterStore.setState({
+      lutColors: [],
+      lutColorCards: [],
+      lutColorsLoading: false,
+      lutColorsLutName: '',
+      error: null,
+    });
+    mockApiFetchLutColors.mockRejectedValueOnce({
+      message: 'Request failed with status code 404',
+      response: {
+        status: 404,
+        data: { detail: 'LUT not found: stale-lut' },
+      },
+    });
+
+    await useConverterStore.getState().fetchLutColors('stale-lut');
+
+    const state = useConverterStore.getState();
+    expect(state.error).toBe(tRuntime('lut_error_missing_refresh'));
+    expect(state.error).not.toMatch(/LUT not found/i);
+    expect(state.lutColorsLoading).toBe(false);
   });
 });
 
@@ -390,4 +415,3 @@ describe('Feature: palette-optimization, Property 4: 清空替换归零', () => 
     );
   });
 });
-

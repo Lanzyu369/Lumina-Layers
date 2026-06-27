@@ -57,12 +57,22 @@ def run(ctx: dict) -> dict:
     target_width_mm = ctx['target_width_mm']
     color_layers = ctx.get('color_layers')
     layer_height_mm = ctx.get('layer_height_mm')
+    model_enable = bool(ctx.get('model_enable', False))
+    model_only = bool(ctx.get('model_only', False))
+    model_threshold = ctx.get('model_threshold')
+    model_margin = ctx.get('model_margin')
     color_conf = ctx['color_conf']
     color_mode = ctx['color_mode']
     modeling_mode = ctx.get('modeling_mode')
     quantize_colors = ctx['quantize_colors']
+    enable_cleanup = bool(ctx.get('enable_cleanup', True))
     high_precision_3d_preview = bool(ctx.get('high_precision_3d_preview', False))
     svg_pixels_per_mm = ctx.get('svg_pixels_per_mm')
+    hue_weight = ctx.get('hue_weight', 0.0)
+    chroma_gate = ctx.get('chroma_gate', 15.0)
+    use_lut_constrained = bool(ctx.get('use_lut_constrained', False))
+    auto_dynamic_range = bool(ctx.get('auto_dynamic_range', False))
+    material_source = ctx.get('material_source', 'lut')
     backing_color_id = ctx.get('backing_color_id', 0)
     is_dark = ctx.get('is_dark', True)
     lut_metadata = ctx.get('lut_metadata')
@@ -81,6 +91,10 @@ def run(ctx: dict) -> dict:
         'target_width_mm': target_width_mm,
         'color_layers': color_layers,
         'layer_height_mm': layer_height_mm,
+        'model_enable': model_enable,
+        'model_only': model_only,
+        'model_threshold': model_threshold,
+        'model_margin': model_margin,
         'mask_solid': mask_solid,
         'material_matrix': material_matrix,
         'matched_rgb': matched_rgb,
@@ -89,7 +103,13 @@ def run(ctx: dict) -> dict:
         'color_mode': color_mode,
         'modeling_mode': modeling_mode,
         'quantize_colors': quantize_colors,
+        'enable_cleanup': enable_cleanup,
         'svg_pixels_per_mm': svg_pixels_per_mm,
+        'hue_weight': hue_weight,
+        'chroma_gate': chroma_gate,
+        'use_lut_constrained': use_lut_constrained,
+        'auto_dynamic_range': auto_dynamic_range,
+        'material_source': material_source,
         'backing_color_id': backing_color_id,
         'is_dark': is_dark,
         'bed_label': BedManager.DEFAULT_BED,

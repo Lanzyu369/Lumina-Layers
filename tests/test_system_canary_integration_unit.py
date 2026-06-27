@@ -101,11 +101,22 @@ _HEIC_UNREADABLE_DETAIL = (
 _RAW_UNREADABLE_DETAIL = (
     "RAW 文件解码失败: 请重新上传有效的 RAW 图片，或先转换为 PNG/JPEG 后再试。"
 )
+_HEIC_UNSUPPORTED_DETAIL = (
+    "当前环境暂不支持 HEIC/HEIF 图片，请先转换为 PNG/JPEG 后再上传。"
+)
+_RAW_UNSUPPORTED_DETAIL = (
+    "当前环境暂不支持 RAW 图片，请先转换为 PNG/JPEG 后再上传。"
+)
 _UNREADABLE_IMAGE_FORBIDDEN_FRAGMENTS = (
     "cannot identify image file",
     "Input/output error",
     "LibRaw",
     "output/temp",
+)
+_OPTIONAL_DEPENDENCY_FORBIDDEN_FRAGMENTS = (
+    "pip install",
+    "pillow-heif",
+    "rawpy",
 )
 
 
@@ -354,6 +365,82 @@ class TestSystemImagePreviewCanary:
         records = _records_for_event(caplog, "api_http_error")
         assert len(records) == 1
         assert records[0].error_message == _RAW_UNREADABLE_DETAIL
+        assert _records_for_event(caplog, "api_unhandled_exception") == []
+        assert list(tmp_path.iterdir()) == []
+        assert registry.get_session_entries("preview.png") == {}
+
+    def test_heic_preview_missing_dependency_returns_safe_422(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setattr("config.TEMP_DIR", str(tmp_path))
+        monkeypatch.setattr("api.file_bridge.HAS_HEIF", False)
+        client, registry = _client_with_registry()
+        app_logger = _capture_app_logger(caplog)
+        try:
+            response = client.post(
+                "/api/system/image-preview",
+                files={"file": ("photo.heic", b"not a heic image", "image/heic")},
+            )
+        finally:
+            app_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 422, response.text
+        assert response.json()["detail"] == _HEIC_UNSUPPORTED_DETAIL
+        assert all(
+            fragment not in response.text
+            for fragment in _OPTIONAL_DEPENDENCY_FORBIDDEN_FRAGMENTS
+        )
+        records = _records_for_event(caplog, "api_http_error")
+        assert len(records) == 1
+        assert records[0].error_message == _HEIC_UNSUPPORTED_DETAIL
+        assert all(
+            fragment not in records[0].error_message
+            for fragment in _OPTIONAL_DEPENDENCY_FORBIDDEN_FRAGMENTS
+        )
+        assert _records_for_event(caplog, "api_unhandled_exception") == []
+        assert list(tmp_path.iterdir()) == []
+        assert registry.get_session_entries("preview.png") == {}
+
+    def test_raw_preview_missing_dependency_returns_safe_422(
+        self,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        monkeypatch.setattr("config.TEMP_DIR", str(tmp_path))
+        monkeypatch.setattr("api.file_bridge.HAS_RAW", False)
+        client, registry = _client_with_registry()
+        app_logger = _capture_app_logger(caplog)
+        try:
+            response = client.post(
+                "/api/system/image-preview",
+                files={
+                    "file": (
+                        "photo.dng",
+                        b"not a raw image",
+                        "application/octet-stream",
+                    )
+                },
+            )
+        finally:
+            app_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 422, response.text
+        assert response.json()["detail"] == _RAW_UNSUPPORTED_DETAIL
+        assert all(
+            fragment not in response.text
+            for fragment in _OPTIONAL_DEPENDENCY_FORBIDDEN_FRAGMENTS
+        )
+        records = _records_for_event(caplog, "api_http_error")
+        assert len(records) == 1
+        assert records[0].error_message == _RAW_UNSUPPORTED_DETAIL
+        assert all(
+            fragment not in records[0].error_message
+            for fragment in _OPTIONAL_DEPENDENCY_FORBIDDEN_FRAGMENTS
+        )
         assert _records_for_event(caplog, "api_unhandled_exception") == []
         assert list(tmp_path.iterdir()) == []
         assert registry.get_session_entries("preview.png") == {}

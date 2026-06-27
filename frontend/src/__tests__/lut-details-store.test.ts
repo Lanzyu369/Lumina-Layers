@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { LutDetailsResponse } from "../api/types";
+import { tRuntime } from "../i18n/runtime";
 import { filterLutDetailsCatalog, useLutDetailsStore } from "../stores/lutDetailsStore";
 
 const mockFetchLutDetailsCatalog = vi.fn();
@@ -259,7 +260,7 @@ describe("useLutDetailsStore", () => {
     expect(state.isSelectionDirty).toBe(true);
   });
 
-  it("uses readable backend detail when a LUT detail request fails", async () => {
+  it("uses a user-facing stale LUT message when a LUT detail request fails", async () => {
     mockFetchLutDetailsCatalog.mockResolvedValue({ groups: CATALOG });
     mockFetchLutDetails
       .mockResolvedValueOnce(DETAIL_A)
@@ -275,7 +276,8 @@ describe("useLutDetailsStore", () => {
     await useLutDetailsStore.getState().loadSelectedLut();
 
     const state = useLutDetailsStore.getState();
-    expect(state.error).toBe("LUT not found: stale");
+    expect(state.error).toBe(tRuntime("lut_error_missing_refresh"));
+    expect(state.error).not.toContain("LUT not found");
     expectNoRawHttpError(state.error);
     expect(state.errorKind).toBe("detail");
     expect(state.loadedLutName).toBe("Bambu Lab - PLA - RYBW");

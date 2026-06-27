@@ -156,6 +156,36 @@ describe("BatchResultSummary", () => {
       expect(text).not.toContain("ERR_NETWORK");
     });
 
+    it("hides generic non-error HTTP status text from failed file details", () => {
+      const result: BatchResponse = {
+        status: "failed",
+        message: "all failed",
+        download_url: null,
+        preview_3d_url: null,
+        results: [
+          {
+            filename: "redirected.png",
+            status: "failed",
+            error: "Request failed with status code 302",
+          },
+          {
+            filename: "cached.png",
+            status: "failed",
+            error: "HTTP 304",
+          },
+        ],
+        warnings: [],
+      };
+
+      const { container } = render(<BatchResultSummary result={result} />);
+      const text = container.textContent ?? "";
+      expect(text).toContain("redirected.png");
+      expect(text).toContain("cached.png");
+      expect(text.match(/这个文件无法转换。请重新上传该文件，或查看服务端日志了解详情。/g)).toHaveLength(2);
+      expect(text).not.toContain("Request failed with status code 302");
+      expect(text).not.toContain("HTTP 304");
+    });
+
     it("keeps safe business errors visible in failed file details", () => {
       render(<BatchResultSummary result={allFailedResult} />);
       expect(screen.getByText(/LUT not found/)).toBeInTheDocument();

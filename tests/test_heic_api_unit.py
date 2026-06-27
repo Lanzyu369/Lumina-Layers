@@ -31,6 +31,22 @@ _HEIC_UNREADABLE_DETAIL = (
 _RAW_UNREADABLE_DETAIL = (
     "RAW 文件解码失败: 请重新上传有效的 RAW 图片，或先转换为 PNG/JPEG 后再试。"
 )
+_HEIC_UNSUPPORTED_DETAIL = (
+    "当前环境暂不支持 HEIC/HEIF 图片，请先转换为 PNG/JPEG 后再上传。"
+)
+_RAW_UNSUPPORTED_DETAIL = (
+    "当前环境暂不支持 RAW 图片，请先转换为 PNG/JPEG 后再上传。"
+)
+_OPTIONAL_DEPENDENCY_FORBIDDEN_FRAGMENTS = (
+    "pip install",
+    "pillow-heif",
+    "rawpy",
+)
+
+
+def _assert_no_optional_dependency_detail(detail: str) -> None:
+    for fragment in _OPTIONAL_DEPENDENCY_FORBIDDEN_FRAGMENTS:
+        assert fragment not in detail
 
 
 def _make_upload_file(filename: str, content: bytes = b"fake") -> MagicMock:
@@ -116,7 +132,7 @@ class TestUploadToTempfileWriteSafety:
 # ── Test 1: ensure_png_tempfile raises 422 when HAS_HEIF=False ────────
 # Validates: Requirement 4.1
 class TestEnsurePngRaises422WhenHeifNotInstalled:
-    """HAS_HEIF=False + HEIC upload → HTTP 422 with install guidance."""
+    """HAS_HEIF=False + HEIC upload -> HTTP 422 with safe user guidance."""
 
     def test_heic_extension(self) -> None:
         mock_file = _make_upload_file("photo.heic")
@@ -124,7 +140,8 @@ class TestEnsurePngRaises422WhenHeifNotInstalled:
             with pytest.raises(HTTPException) as exc_info:
                 asyncio.run(ensure_png_tempfile(mock_file))
             assert exc_info.value.status_code == 422
-            assert "pillow-heif" in exc_info.value.detail
+            assert exc_info.value.detail == _HEIC_UNSUPPORTED_DETAIL
+            _assert_no_optional_dependency_detail(exc_info.value.detail)
 
     def test_heif_extension(self) -> None:
         mock_file = _make_upload_file("photo.heif")
@@ -132,7 +149,8 @@ class TestEnsurePngRaises422WhenHeifNotInstalled:
             with pytest.raises(HTTPException) as exc_info:
                 asyncio.run(ensure_png_tempfile(mock_file))
             assert exc_info.value.status_code == 422
-            assert "pillow-heif" in exc_info.value.detail
+            assert exc_info.value.detail == _HEIC_UNSUPPORTED_DETAIL
+            _assert_no_optional_dependency_detail(exc_info.value.detail)
 
     def test_uppercase_heic_extension(self) -> None:
         """Filename with .HEIC (uppercase) should also trigger 422."""
@@ -141,6 +159,8 @@ class TestEnsurePngRaises422WhenHeifNotInstalled:
             with pytest.raises(HTTPException) as exc_info:
                 asyncio.run(ensure_png_tempfile(mock_file))
             assert exc_info.value.status_code == 422
+            assert exc_info.value.detail == _HEIC_UNSUPPORTED_DETAIL
+            _assert_no_optional_dependency_detail(exc_info.value.detail)
 
     def test_cleanup_failure_preserves_unsupported_heic_422(
         self,
@@ -160,7 +180,8 @@ class TestEnsurePngRaises422WhenHeifNotInstalled:
                 asyncio.run(ensure_png_tempfile(mock_file))
 
         assert exc_info.value.status_code == 422
-        assert "pillow-heif" in exc_info.value.detail
+        assert exc_info.value.detail == _HEIC_UNSUPPORTED_DETAIL
+        _assert_no_optional_dependency_detail(exc_info.value.detail)
 
 
 class TestEnsurePngConversionFailureCleanup:
@@ -254,25 +275,29 @@ class TestEnsurePngConversionFailureCleanup:
 
 
 class TestUploadToNdarrayDependencyErrors:
-    """Direct image upload decoding should preserve optional dependency guidance."""
+    """Direct image upload decoding should preserve safe unsupported-format guidance."""
 
-    def test_heic_missing_dependency_preserves_pillow_heif_guidance(self) -> None:
+    def test_heic_missing_dependency_preserves_safe_guidance(self) -> None:
         mock_file = _make_upload_file("photo.heic", content=b"not a heic image")
 
         with patch("api.file_bridge.HAS_HEIF", False):
             with pytest.raises(ValueError) as exc_info:
                 asyncio.run(upload_to_ndarray(mock_file))
 
-        assert "pillow-heif" in str(exc_info.value)
+        detail = str(exc_info.value)
+        assert detail == _HEIC_UNSUPPORTED_DETAIL
+        _assert_no_optional_dependency_detail(detail)
 
-    def test_raw_missing_dependency_preserves_rawpy_guidance(self) -> None:
+    def test_raw_missing_dependency_preserves_safe_guidance(self) -> None:
         mock_file = _make_upload_file("photo.dng", content=b"not a raw image")
 
         with patch("api.file_bridge.HAS_RAW", False):
             with pytest.raises(ValueError) as exc_info:
                 asyncio.run(upload_to_ndarray(mock_file))
 
-        assert "rawpy" in str(exc_info.value)
+        detail = str(exc_info.value)
+        assert detail == _RAW_UNSUPPORTED_DETAIL
+        _assert_no_optional_dependency_detail(detail)
 
 
 class TestEnsurePngRejectsUnsupportedUploads:

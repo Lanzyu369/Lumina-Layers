@@ -824,6 +824,86 @@ def test_colorchecker_confirm_rejects_unreadable_full_artifact_without_path(
     assert "cannot identify image file" not in detail
 
 
+_UNSAFE_JSON_DETAIL_FRAGMENTS = ("Expecting", "line", "column", "char")
+
+
+@pytest.mark.parametrize(
+    ("url", "data", "expected_detail"),
+    [
+        (
+            "/api/extractor/colorchecker-warp-preview",
+            {
+                "colorchecker_source_file_id": "missing-source",
+                "corner_points": "[bad",
+            },
+            "Invalid corner_points JSON. Check the form value and try again.",
+        ),
+        (
+            "/api/extractor/colorchecker-detect-chart",
+            {
+                "colorchecker_source_file_id": "missing-source",
+                "assist_point": "{bad",
+            },
+            "Invalid assist_point JSON. Check the form value and try again.",
+        ),
+        (
+            "/api/extractor/colorchecker-detect-chart",
+            {
+                "colorchecker_source_file_id": "missing-source",
+                "reference_patches": "[bad",
+            },
+            "Invalid reference_patches JSON. Check the form value and try again.",
+        ),
+        (
+            "/api/extractor/colorchecker-detect-chart",
+            {
+                "colorchecker_source_file_id": "missing-source",
+                "reference_patches": json.dumps(_custom_reference_patches()),
+                "reference_source": "{bad",
+            },
+            "Invalid reference_source JSON. Check the form value and try again.",
+        ),
+        (
+            "/api/extractor/colorchecker-calibrate",
+            {
+                "colorchecker_source_file_id": "missing-source",
+                "corner_points": "[bad",
+            },
+            "Invalid corner_points JSON. Check the form value and try again.",
+        ),
+        (
+            "/api/extractor/colorchecker-calibrate",
+            {
+                "colorchecker_source_file_id": "missing-source",
+                "corner_points": "[[0,0],[4,0],[4,3],[0,3]]",
+                "patch_points": "[bad",
+            },
+            "Invalid patch_points JSON. Check the form value and try again.",
+        ),
+        (
+            "/api/extractor/extract",
+            {
+                "corner_points": "[bad",
+            },
+            "Invalid corner_points JSON. Check the form value and try again.",
+        ),
+    ],
+)
+def test_colorchecker_json_parse_errors_hide_parser_details(
+    url,
+    data,
+    expected_detail,
+) -> None:
+    client, _store, _registry = _client_with_state(raise_server_exceptions=False)
+
+    response = client.post(url, data=data)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == expected_detail
+    for fragment in _UNSAFE_JSON_DETAIL_FRAGMENTS:
+        assert fragment not in response.text
+
+
 @pytest.mark.parametrize(
     "patch_points",
     [

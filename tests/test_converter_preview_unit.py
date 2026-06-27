@@ -29,6 +29,7 @@ from PIL import Image
 from api.app import app
 from api.dependencies import get_session_store, get_file_registry, get_worker_pool
 from api.preview_cache_artifacts import (
+    externalize_preview_cache,
     hydrate_preview_cache,
     is_preview_cache_artifact_ref,
 )
@@ -124,6 +125,41 @@ def _create_worker_result_files(cache_data: dict | None = None) -> dict:
         "preview_png_path": png_path,
         "cache_data_path": cache_path,
     }
+
+
+def _create_worker_artifact_result_files() -> tuple[dict, dict]:
+    """Create temp files simulating a worker-side preview-cache artifact."""
+    fd, png_path = tempfile.mkstemp(suffix=".png")
+    os.close(fd)
+    Image.fromarray(_mock_preview_img).save(png_path)
+
+    cache = dict(_mock_cache)
+    cache["preview_rgba"] = np.zeros((80, 120, 4), dtype=np.uint8)
+    cache["preview_rgba"][..., 3] = 255
+    cache["material_matrix"] = np.zeros((80, 120, 5), dtype=np.int16)
+    cache_ref = externalize_preview_cache(
+        "worker-artifact",
+        _test_store,
+        cache,
+    )
+    fd, raw_png_path = tempfile.mkstemp(suffix=".png")
+    os.close(fd)
+    Image.fromarray(cache["preview_rgba"]).save(raw_png_path)
+    fd, cache_path = tempfile.mkstemp(suffix=".pkl")
+    os.close(fd)
+    with open(cache_path, "wb") as f:
+        pickle.dump(dict(cache_ref["metadata"]), f)
+
+    return (
+        {
+            "status_msg": "Preview OK",
+            "preview_png_path": png_path,
+            "cache_data_path": cache_path,
+            "cache_artifact_ref": cache_ref,
+            "raw_preview_png_path": raw_png_path,
+        },
+        cache_ref,
+    )
 
 
 def _make_test_image_buf() -> io.BytesIO:
@@ -664,6 +700,392 @@ class TestSessionContainsPreviewCache:
             material_matrix.astype(np.int16),
         )
 
+    def test_preview_adopts_worker_cache_artifact_ref(self) -> None:
+        """Worker-side cache artifacts should become the session preview cache."""
+        buf = _make_test_image_buf()
+        worker_result, worker_cache_ref = _create_worker_artifact_result_files()
+
+        _mock_pool.submit = AsyncMock(return_value=worker_result)
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+            patch(
+                "api.routers.converter.preview.generate_segmented_glb",
+                return_value=None,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": ("test.png", buf, "image/png")},
+                data={
+                    "lut_name": "test_lut",
+                    "color_mode": "4-Color",
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        session_data = _test_store.get(response.json()["session_id"])
+        assert session_data is not None
+        stored_ref = session_data["preview_cache"]
+        assert is_preview_cache_artifact_ref(stored_ref)
+        assert stored_ref["fields"]["matched_rgb"]["path"] == (
+            worker_cache_ref["fields"]["matched_rgb"]["path"]
+        )
+        assert stored_ref["fields"]["original_matched_rgb"]["path"] == (
+            worker_cache_ref["fields"]["matched_rgb"]["path"]
+        )
+        assert stored_ref["fields"]["material_matrix"]["path"] == (
+            worker_cache_ref["fields"]["material_matrix"]["path"]
+        )
+        assert stored_ref["fields"]["original_material_matrix"]["path"] == (
+            worker_cache_ref["fields"]["material_matrix"]["path"]
+        )
+        tracked_paths = set(_test_store.get_temp_file_paths(response.json()["session_id"]))
+        assert worker_cache_ref["fields"]["matched_rgb"]["path"] in tracked_paths
+        assert worker_cache_ref["fields"]["material_matrix"]["path"] in tracked_paths
+        preview_raw_url = response.json()["dimensions"]["preview_raw_url"]
+        raw_file_id = preview_raw_url.rsplit("/", 1)[-1]
+        raw_entry = _test_registry.get_entry(raw_file_id)
+        assert raw_entry is not None
+        assert raw_entry["path"] == worker_result["raw_preview_png_path"]
+        assert worker_result["raw_preview_png_path"] in tracked_paths
+
+    def test_preview_uses_worker_precomputed_payloads_without_hydrating_inputs(
+        self,
+    ) -> None:
+        """Worker-side palette/groups should avoid main-process input hydration."""
+        buf = _make_test_image_buf()
+        worker_result, _worker_cache_ref = _create_worker_artifact_result_files()
+        expected_palette = [
+            {
+                "quantized_hex": "#00ff00",
+                "matched_hex": "#00ff00",
+                "pixel_count": 4800,
+                "percentage": 50.0,
+            },
+            {
+                "quantized_hex": "#ff0000",
+                "matched_hex": "#ff0000",
+                "pixel_count": 4800,
+                "percentage": 50.0,
+            },
+        ]
+        fd, region_map_path = tempfile.mkstemp(suffix=".npy")
+        os.close(fd)
+        region_map = np.zeros((80, 120), dtype=np.uint32)
+        np.save(region_map_path, region_map)
+        worker_result["response_palette"] = expected_palette
+        worker_result["gradient_groups"] = []
+        worker_result["gradient_region_id_map_path"] = region_map_path
+        hydrate_fields: list[set[str] | None] = []
+
+        def _capture_hydrate(ref: dict, *args, **kwargs) -> dict:
+            hydrate_fields.append(kwargs.get("fields"))
+            return hydrate_preview_cache(ref, *args, **kwargs)
+
+        _mock_pool.submit = AsyncMock(return_value=worker_result)
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+            patch(
+                "api.routers.converter.preview.generate_segmented_glb",
+                return_value=None,
+            ),
+            patch(
+                "api.routers.converter.preview.hydrate_preview_cache",
+                side_effect=_capture_hydrate,
+            ),
+            patch(
+                "api.routers.converter.preview.recompute_gradient_groups_into_session",
+                side_effect=AssertionError(
+                    "route should use worker-computed gradient groups"
+                ),
+            ),
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": ("test.png", buf, "image/png")},
+                data={
+                    "lut_name": "test_lut",
+                    "color_mode": "4-Color",
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["palette"] == expected_palette
+        assert hydrate_fields == [set()]
+        session_data = _test_store.get(body["session_id"])
+        assert session_data is not None
+        assert session_data["gradient_groups"] == []
+        np.testing.assert_array_equal(
+            session_data["gradient_region_id_map"],
+            region_map,
+        )
+        tracked_paths = set(_test_store.get_temp_file_paths(body["session_id"]))
+        assert region_map_path in tracked_paths
+
+    def test_preview_persists_vector_parse_clip_cache_blob_as_metadata_path(
+        self,
+    ) -> None:
+        """Worker vector cache bytes should become a session-owned metadata path."""
+        buf = _make_test_image_buf()
+        cache_with_blob = dict(_mock_cache)
+        cache_with_blob["vector_parse_clip_cache_blob"] = b"parse-clip-cache"
+
+        fd, png_path = tempfile.mkstemp(suffix=".png")
+        os.close(fd)
+        Image.fromarray(_mock_preview_img).save(png_path)
+        fd, cache_path = tempfile.mkstemp(suffix=".pkl")
+        os.close(fd)
+        with open(cache_path, "wb") as handle:
+            pickle.dump(cache_with_blob, handle)
+
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "status_msg": "Preview OK",
+                "preview_png_path": png_path,
+                "cache_data_path": cache_path,
+            }
+        )
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+            patch(
+                "api.routers.converter.preview.generate_segmented_glb",
+                return_value=None,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": ("test.png", buf, "image/png")},
+                data={
+                    "lut_name": "test_lut",
+                    "color_mode": "4-Color",
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        session_data = _test_store.get(response.json()["session_id"])
+        assert session_data is not None
+        cache_ref = session_data["preview_cache"]
+        metadata = cache_ref["metadata"]
+        assert "vector_parse_clip_cache_blob" not in metadata
+        vector_cache_path = metadata["vector_parse_clip_cache_path"]
+        assert os.path.exists(vector_cache_path)
+        with open(vector_cache_path, "rb") as handle:
+            assert handle.read() == b"parse-clip-cache"
+
+    def test_preview_cleans_vector_parse_clip_cache_blob_on_register_failure(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+    ) -> None:
+        """Vector cache fallback files should be removed if session adoption fails."""
+        monkeypatch.setattr("api.routers.converter.preview.TEMP_DIR", str(tmp_path))
+        buf = _make_test_image_buf()
+        cache_with_blob = dict(_mock_cache)
+        cache_with_blob["vector_parse_clip_cache_blob"] = b"parse-clip-cache"
+
+        fd, png_path = tempfile.mkstemp(suffix=".png")
+        os.close(fd)
+        Image.fromarray(_mock_preview_img).save(png_path)
+        fd, cache_path = tempfile.mkstemp(suffix=".pkl")
+        os.close(fd)
+        with open(cache_path, "wb") as handle:
+            pickle.dump(cache_with_blob, handle)
+
+        original_register_temp_file = _test_store.register_temp_file
+        attempted_vector_cache_paths: list[str] = []
+
+        def fail_vector_cache_register(session_id: str, path: str) -> None:
+            if Path(path).name.startswith("vector_parse_clip_cache_"):
+                attempted_vector_cache_paths.append(path)
+                raise OSError("simulated vector cache registration failure")
+            original_register_temp_file(session_id, path)
+
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "status_msg": "Preview OK",
+                "preview_png_path": png_path,
+                "cache_data_path": cache_path,
+            }
+        )
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+            patch(
+                "api.routers.converter.preview.generate_segmented_glb",
+                return_value=None,
+            ),
+            patch.object(
+                _test_store,
+                "register_temp_file",
+                side_effect=fail_vector_cache_register,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": ("test.png", buf, "image/png")},
+                data={
+                    "lut_name": "test_lut",
+                    "color_mode": "4-Color",
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        assert attempted_vector_cache_paths
+        for path in attempted_vector_cache_paths:
+            assert not os.path.exists(path)
+        assert not list(tmp_path.glob("vector_parse_clip_cache_*.pkl"))
+        session_data = _test_store.get(response.json()["session_id"])
+        assert session_data is not None
+        metadata = session_data["preview_cache"]["metadata"]
+        assert "vector_parse_clip_cache_blob" not in metadata
+        assert "vector_parse_clip_cache_path" not in metadata
+
+    def test_preview_skips_oversized_vector_parse_clip_cache_blob(
+        self,
+        monkeypatch,
+    ) -> None:
+        """Oversized vector cache artifacts should not make preview cache grow."""
+        monkeypatch.setenv("LUMINA_VECTOR_PARSE_CLIP_CACHE_MAX_BYTES", "4")
+        buf = _make_test_image_buf()
+        cache_with_blob = dict(_mock_cache)
+        cache_with_blob["vector_parse_clip_cache_blob"] = b"too-large"
+
+        fd, png_path = tempfile.mkstemp(suffix=".png")
+        os.close(fd)
+        Image.fromarray(_mock_preview_img).save(png_path)
+        fd, cache_path = tempfile.mkstemp(suffix=".pkl")
+        os.close(fd)
+        with open(cache_path, "wb") as handle:
+            pickle.dump(cache_with_blob, handle)
+
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "status_msg": "Preview OK",
+                "preview_png_path": png_path,
+                "cache_data_path": cache_path,
+            }
+        )
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+            patch(
+                "api.routers.converter.preview.generate_segmented_glb",
+                return_value=None,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": ("test.png", buf, "image/png")},
+                data={
+                    "lut_name": "test_lut",
+                    "color_mode": "4-Color",
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        session_data = _test_store.get(response.json()["session_id"])
+        assert session_data is not None
+        metadata = session_data["preview_cache"]["metadata"]
+        assert "vector_parse_clip_cache_blob" not in metadata
+        assert "vector_parse_clip_cache_path" not in metadata
+
+    def test_preview_registers_worker_vector_parse_clip_cache_path(
+        self,
+    ) -> None:
+        """Worker-owned vector cache artifacts should be adopted by the session."""
+        buf = _make_test_image_buf()
+
+        fd, png_path = tempfile.mkstemp(suffix=".png")
+        os.close(fd)
+        Image.fromarray(_mock_preview_img).save(png_path)
+        fd, cache_path = tempfile.mkstemp(suffix=".pkl")
+        os.close(fd)
+        with open(cache_path, "wb") as handle:
+            pickle.dump(dict(_mock_cache), handle)
+        fd, vector_cache_path = tempfile.mkstemp(suffix=".pkl")
+        os.close(fd)
+        with open(vector_cache_path, "wb") as handle:
+            handle.write(b"worker-owned-parse-clip-cache")
+
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "status_msg": "Preview OK",
+                "preview_png_path": png_path,
+                "cache_data_path": cache_path,
+                "vector_parse_clip_cache_path": vector_cache_path,
+            }
+        )
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+            patch(
+                "api.routers.converter.preview.generate_segmented_glb",
+                return_value=None,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": ("test.png", buf, "image/png")},
+                data={
+                    "lut_name": "test_lut",
+                    "color_mode": "4-Color",
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        session_data = _test_store.get(response.json()["session_id"])
+        assert session_data is not None
+        metadata = session_data["preview_cache"]["metadata"]
+        assert metadata["vector_parse_clip_cache_path"] == vector_cache_path
+        with open(vector_cache_path, "rb") as handle:
+            assert handle.read() == b"worker-owned-parse-clip-cache"
+
     def test_preview_binds_session_id_before_worker_submit_and_reuses_it(self) -> None:
         """Worker submit should see the same session_id returned by preview."""
         from api.structured_logging import get_session_id
@@ -783,6 +1205,15 @@ class TestSessionContainsPreviewCache:
                     "material_type": "PLA",
                     "vendor": "BambuLab",
                     "db_names": "RYBW_008_5L.json",
+                    "replacement_regions": json.dumps(
+                        [
+                            {
+                                "quantized_hex": "#111111",
+                                "matched_hex": "#111111",
+                                "replacement_hex": "#222222",
+                            },
+                        ],
+                    ),
                     "model_enable": "true",
                     "model_only": "false",
                     "model_threshold": "6.5",
@@ -800,6 +1231,22 @@ class TestSessionContainsPreviewCache:
         assert submitted["model_only"] is False
         assert submitted["model_threshold"] == 6.5
         assert submitted["model_margin"] == 0.9
+        assert submitted["replacement_regions"] == [
+            {
+                "quantized_hex": "#111111",
+                "matched_hex": "#111111",
+                "replacement_hex": "#222222",
+            },
+        ]
+        session_data = _test_store.get(response.json()["session_id"])
+        assert session_data is not None
+        assert session_data["replacement_regions"] == [
+            {
+                "quantized_hex": "#111111",
+                "matched_hex": "#111111",
+                "replacement_hex": "#222222",
+            },
+        ]
 
 
 # =========================================================================
@@ -1383,7 +1830,7 @@ class TestNativeBundleValidation:
         assert response.status_code == 422
         assert "native" in str(response.json()["detail"]).lower()
 
-    def test_preview_returns_json_safe_validation_error_for_invalid_native_bundle_contract(self) -> None:
+    def test_preview_returns_public_error_for_invalid_native_bundle_contract(self) -> None:
         buf = _make_test_image_buf()
 
         response = client.post(
@@ -1397,9 +1844,13 @@ class TestNativeBundleValidation:
         )
 
         assert response.status_code == 422
-        detail = response.json()["detail"]
-        assert isinstance(detail, list)
-        assert "vendor" in str(detail).lower()
+        assert response.json()["detail"] == (
+            "Choose a valid LUT or complete native material source, then try again."
+        )
+        assert "native_bundle requires" not in response.text
+        assert '"input"' not in response.text
+        assert '"ctx"' not in response.text
+        assert "pydantic.dev" not in response.text
 
 
 class TestNativeBundleDbNamesParsing:

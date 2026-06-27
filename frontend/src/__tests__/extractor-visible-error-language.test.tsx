@@ -55,6 +55,9 @@ const rawHttpStatusErrorPattern =
   /Request failed with status code|status code\s+\d{3}\b|\b[45]\d{2}\b/i;
 const readableApiErrorPattern =
   /server hit an internal error|API request failed|服务器发生内部错误|接口请求失败/i;
+const rawUnsupportedDetail =
+  "当前环境暂不支持 RAW 图片，请先转换为 PNG/JPEG 后再上传。";
+const optionalDependencyLeakPattern = /pip install|pillow-heif|rawpy/i;
 
 const sampleReferenceRows = [
   ["Company", "SN:SN-TEST"],
@@ -265,7 +268,7 @@ describe("extractor visible API error language", () => {
   });
 
   it("preserves concrete non-generic extraction errors", async () => {
-    const message = "rawpy is not installed. Install rawpy to import DNG files.";
+    const message = "Color chart corners are outside the uploaded image.";
     useExtractorStore.setState({
       imageFile: new File(["raw"], "calibration.dng", {
         type: "image/x-adobe-dng",
@@ -373,6 +376,26 @@ describe("extractor visible API error language", () => {
 
     await waitFor(() => expect(uploadImagePreview).toHaveBeenCalledWith(rawFile));
     await waitFor(() => expectReadableError(useExtractorStore.getState().error));
+  });
+
+  it("uses user-facing RAW preview upload errors without dependency names", async () => {
+    const rawFile = new File(["raw"], "source.dng", {
+      type: "image/x-adobe-dng",
+    });
+    vi.mocked(uploadImagePreview).mockRejectedValueOnce(
+      new Error(rawUnsupportedDetail),
+    );
+
+    useExtractorStore.getState().setImageFile(rawFile);
+
+    await waitFor(() => expect(uploadImagePreview).toHaveBeenCalledWith(rawFile));
+    await waitFor(() => {
+      const message = useExtractorStore.getState().error;
+      expect(message).toEqual(expect.any(String));
+      expect(message).toContain("RAW");
+      expect(message).toMatch(/PNG\/JPEG|PNG\/JPG|PNG or JPG/);
+      expect(message).not.toMatch(optionalDependencyLeakPattern);
+    });
   });
 });
 

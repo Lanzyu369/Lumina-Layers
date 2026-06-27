@@ -11,6 +11,7 @@ import logging
 import os
 from pathlib import Path, PureWindowsPath
 from types import SimpleNamespace
+from urllib.parse import quote
 from unittest.mock import patch
 
 import numpy as np
@@ -43,6 +44,8 @@ _UNSAFE_ERROR_FRAGMENTS = (
     "lut-secret.json",
 )
 _PRIVATE_WINDOWS_LUT_PATH = r"C:\Users\min\private\native-secret.json"
+_PRIVATE_LUT_NAME = r"C:\Users\min\private\missing-lut.json"
+_LUT_NOT_FOUND_PUBLIC_DETAIL = "Selected LUT was not found or is unavailable."
 
 
 def _assert_public_lut_path(path: str) -> None:
@@ -71,6 +74,24 @@ def _assert_safe_error_detail(response, expected_detail: str) -> None:
     assert response.json()["detail"] == expected_detail
     for fragment in _UNSAFE_ERROR_FRAGMENTS:
         assert fragment not in response.text
+
+
+def _assert_latest_http_error_log_safe(
+    caplog: pytest.LogCaptureFixture,
+    *,
+    expected_detail: str,
+    forbidden_fragments: tuple[str, ...],
+) -> None:
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "api_http_error"
+    ]
+    assert records
+    error_message = str(getattr(records[-1], "error_message", ""))
+    assert error_message == expected_detail
+    for fragment in forbidden_fragments:
+        assert fragment not in error_message
 
 
 def _attach_lut_logger(
@@ -318,6 +339,107 @@ class TestLutErrorBoundary:
         assert len(records) == 1
         assert records[0].error_type == "OSError"
         assert _PRIVATE_ERROR_PATH in records[0].error_message
+
+    @pytest.mark.parametrize(
+        ("method", "url", "json_payload"),
+        [
+            ("GET", f"/api/lut/{quote(_PRIVATE_LUT_NAME, safe='')}/info", None),
+            ("GET", f"/api/lut/{quote(_PRIVATE_LUT_NAME, safe='')}/colors", None),
+            (
+                "POST",
+                "/api/lut/merge",
+                {"primary_name": _PRIVATE_LUT_NAME, "secondary_names": ["secondary"]},
+            ),
+            (
+                "POST",
+                "/api/lut/compare",
+                {"lut_a_name": _PRIVATE_LUT_NAME, "lut_b_name": "secondary"},
+            ),
+            (
+                "POST",
+                f"/api/lut/{quote(_PRIVATE_LUT_NAME, safe='')}/predict-recipe-color",
+                {
+                    "recipe": [0, 0, 0, 0, 0],
+                    "color_layers": 5,
+                    "layer_height_mm": 0.08,
+                    "layer_order": "Top2Bottom",
+                },
+            ),
+            (
+                "POST",
+                f"/api/lut/{quote(_PRIVATE_LUT_NAME, safe='')}/search-recipes",
+                {
+                    "pattern": "WWWWW",
+                    "color_layers": 5,
+                    "layer_height_mm": 0.08,
+                    "layer_order": "Top2Bottom",
+                    "limit": 1,
+                },
+            ),
+        ],
+    )
+    def test_missing_lut_errors_do_not_echo_requested_lut_name(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+        method: str,
+        url: str,
+        json_payload: dict[str, object] | None,
+    ) -> None:
+        monkeypatch.setattr(
+            lut_router.LUTManager,
+            "get_lut_path",
+            staticmethod(lambda _name: None),
+        )
+        app_logger = logging.getLogger("lumina.api.app")
+        app_logger.addHandler(caplog.handler)
+        caplog.set_level(logging.WARNING, logger=app_logger.name)
+
+        try:
+            response = client.request(method, url, json=json_payload)
+        finally:
+            app_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == _LUT_NOT_FOUND_PUBLIC_DETAIL
+        assert _PRIVATE_LUT_NAME not in response.text
+        assert "LUT not found:" not in response.text
+        _assert_latest_http_error_log_safe(
+            caplog,
+            expected_detail=_LUT_NOT_FOUND_PUBLIC_DETAIL,
+            forbidden_fragments=(_PRIVATE_LUT_NAME, "LUT not found:"),
+        )
+
+    def test_missing_lut_details_error_does_not_echo_requested_lut_name(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        class _MissingDetailsService:
+            def get_lut_details(self, _lut_name: str):
+                raise KeyError(_PRIVATE_LUT_NAME)
+
+        service = _MissingDetailsService()
+        monkeypatch.setattr(lut_router, "_lut_details_service", service)
+        monkeypatch.setattr(lut_router, "get_lut_details_service", lambda: service)
+        app_logger = logging.getLogger("lumina.api.app")
+        app_logger.addHandler(caplog.handler)
+        caplog.set_level(logging.WARNING, logger=app_logger.name)
+
+        try:
+            response = client.get(f"/api/lut/{quote(_PRIVATE_LUT_NAME, safe='')}/details")
+        finally:
+            app_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == _LUT_NOT_FOUND_PUBLIC_DETAIL
+        assert _PRIVATE_LUT_NAME not in response.text
+        assert "LUT not found:" not in response.text
+        _assert_latest_http_error_log_safe(
+            caplog,
+            expected_detail=_LUT_NOT_FOUND_PUBLIC_DETAIL,
+            forbidden_fragments=(_PRIVATE_LUT_NAME, "LUT not found:"),
+        )
 
 
 def test_public_color_mode_canonicalizes_legacy_variants() -> None:
@@ -740,7 +862,7 @@ class TestLutInfoNotFound:
     def test_info_returns_404_when_lut_not_found(self, mock_path) -> None:
         response = client.get("/api/lut/NonExistent/info")
         assert response.status_code == 404
-        assert "LUT not found" in response.json()["detail"]
+        assert response.json()["detail"] == _LUT_NOT_FOUND_PUBLIC_DETAIL
 
 
 # =========================================================================
@@ -1816,7 +1938,7 @@ class TestCompareNotFound:
         }
         response = client.post("/api/lut/compare", json=payload)
         assert response.status_code == 404
-        assert "LUT not found" in response.json()["detail"]
+        assert response.json()["detail"] == _LUT_NOT_FOUND_PUBLIC_DETAIL
 
 
 class TestCompareFailureLanguage:

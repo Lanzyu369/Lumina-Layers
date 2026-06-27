@@ -1060,6 +1060,71 @@ describe("native bundle converter flow", () => {
     expect(useConverterStore.getState().sessionId).toBe("session-native");
   });
 
+  it("replays global color replacements when material preview is refreshed", async () => {
+    mocks.convertPreview.mockResolvedValueOnce({
+      session_id: "session-material-refresh",
+      status: "ok",
+      message: "Preview generated",
+      preview_url: "/api/files/material-preview",
+      preview_glb_url: null,
+      palette: [
+        {
+          quantized_hex: "#111111",
+          matched_hex: "#111111",
+          pixel_count: 12,
+          percentage: 100,
+        },
+      ],
+      dimensions: { width: 200, height: 160 },
+    });
+
+    useConverterStore.setState({
+      imageFile: new File(["png"], "material.png", { type: "image/png" }),
+      source_version: "material",
+      selectedMaterialDirNames: [
+        "拓竹/Bambu PLA Basic 黑色",
+        "拓竹/Bambu PLA Basic 玉石白",
+      ],
+      materialLayerCount: 5,
+      materialLayerHeightMm: 0.08,
+      materialBackingMaterialDirName: "拓竹/Bambu PLA Basic 黑色",
+      target_width_mm: 60,
+      color_mode: ColorMode.FOUR_COLOR_RYBW,
+      modeling_mode: ModelingMode.HIGH_FIDELITY,
+      quantize_colors: 48,
+      enable_cleanup: true,
+      hue_enable: false,
+      palette: [
+        {
+          quantized_hex: "111111",
+          matched_hex: "111111",
+          pixel_count: 12,
+          percentage: 100,
+        },
+      ],
+      colorRemapMap: { "111111": "222222" },
+      remapHistory: [{ "111111": "111111" }],
+    } as never);
+
+    await useConverterStore.getState().submitPreview();
+
+    expect(mocks.convertPreview).toHaveBeenCalledOnce();
+    const [, params] = mocks.convertPreview.mock.calls[0];
+    expect(params.replacement_regions).toEqual([
+      {
+        quantized_hex: "#111111",
+        matched_hex: "#111111",
+        replacement_hex: "#222222",
+      },
+    ]);
+    expect(useConverterStore.getState().colorRemapMap).toEqual({
+      "111111": "222222",
+    });
+    expect(useConverterStore.getState().remapHistory).toEqual([
+      { "111111": "111111" },
+    ]);
+  });
+
   it("polls async preview GLB after preview returns no GLB URL", async () => {
     vi.useFakeTimers();
     try {

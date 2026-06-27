@@ -405,6 +405,99 @@ describe("apiClient", () => {
     expect(rejected.response?.data?.detail).toBe("value must be <= 500");
   });
 
+  it("redacts unsafe client-error details before they reach visible UI state", async () => {
+    const unsafeDetails = [
+      "failed to open /Users/min/private/source.png",
+      "failed to open C:\\Users\\min\\private\\source.png",
+      "file_path=/Users/min/private/source.png",
+      "file_path=C:\\Users\\min\\private\\source.png",
+      "Traceback (most recent call last): File /Users/min/app.py",
+      "AxiosError: Request failed with status code 422 at /api/convert/generate",
+      "endpoint=/api/convert/generate",
+    ];
+    const expectedMessage =
+      "The request is missing required data or contains invalid values.";
+
+    for (const detail of unsafeDetails) {
+      const error = new Error("Request failed with status code 422");
+      Object.assign(error, {
+        config: { method: "post", url: "/convert/generate" },
+        response: { status: 422, data: { detail } },
+      });
+      apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+      const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
+      expect(rejected).toMatchObject({ message: expectedMessage });
+      expect(rejected.response?.data?.detail).toBe(expectedMessage);
+      expect(JSON.stringify(rejected.response?.data)).not.toContain(detail);
+      expect(JSON.stringify(vi.mocked(postClientLog).mock.calls)).not.toContain(detail);
+      expect(postClientLog).toHaveBeenCalledWith(
+        "api: request failed",
+        expect.objectContaining({
+          details: expect.objectContaining({
+            response_detail: expect.objectContaining({
+              detail_redacted: true,
+              detail_redaction_reason: "unsafe_client_error_text",
+            }),
+            error_message: expectedMessage,
+          }),
+        }),
+      );
+      expect(
+        JSON.stringify(useActionHistoryStore.getState().history.at(-1)),
+      ).not.toContain(detail);
+      vi.mocked(postClientLog).mockClear();
+      useActionHistoryStore.getState()._resetForTests();
+    }
+  });
+
+  it("redacts unsafe structured and top-level client-error messages", async () => {
+    const expectedMessage =
+      "The request is missing required data or contains invalid values.";
+    for (const data of [
+      {
+        message: "cannot read /Users/min/private/material.json",
+        file_path: "/Users/min/private/material.json",
+      },
+      {
+        code: "material_load_failed",
+        detail: {
+          error: "material_load_failed",
+          message:
+            "Traceback (most recent call last): File /Users/min/materials.py",
+          file_path: "/Users/min/private/material.json",
+        },
+      },
+      { "/Users/min/private/material.json": "failed" },
+    ]) {
+      const error = new Error("Request failed with status code 422");
+      Object.assign(error, {
+        config: { method: "post", url: "/extractor/material-solver-cache/build" },
+        response: { status: 422, data },
+      });
+      apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+      const rejected = await apiClient.post("/extractor/material-solver-cache/build", {}).catch((err) => err);
+      expect(rejected).toMatchObject({ message: expectedMessage });
+      expect(JSON.stringify(rejected.response?.data)).not.toContain("/Users/min");
+      expect(JSON.stringify(rejected.response?.data)).not.toContain("Traceback");
+      expect(JSON.stringify(vi.mocked(postClientLog).mock.calls)).not.toContain(
+        "/Users/min",
+      );
+      const responseDetail =
+        vi.mocked(postClientLog).mock.calls[0]?.[1]?.details?.response_detail;
+      expect(JSON.stringify(responseDetail)).toContain(
+        "unsafe_client_error_text",
+      );
+      expect(JSON.stringify(responseDetail)).not.toContain("/Users/min");
+      expect(
+        JSON.stringify(useActionHistoryStore.getState().history.at(-1)),
+      ).not.toContain("/Users/min");
+      vi.mocked(postClientLog).mockClear();
+      useActionHistoryStore.getState()._resetForTests();
+    }
+  });
+
   it("redacts server error details even when they mention an upstream status", async () => {
     const error = new Error("Request failed with status code 500");
     Object.assign(error, {
@@ -749,6 +842,55 @@ describe("apiClient", () => {
       await expect(downloadResourceBlob("/api/files/preview")).rejects.toThrow(
         "Estimated preview cache arrays exceed the configured limit.",
       );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("redacts unsafe client-error details for failed resource downloads", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValueOnce({
+      ok: false,
+      status: 422,
+      headers: jsonHeaders,
+      json: () =>
+        Promise.resolve({
+          detail: "cannot read /Users/min/private/generated.3mf",
+        }),
+    }) as unknown as typeof fetch;
+
+    try {
+      let caught: unknown;
+      try {
+        await downloadResourceBlob("/api/files/private");
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).message).toBe(
+        "The request is missing required data or contains invalid values.",
+      );
+      expect(JSON.stringify((caught as { response?: { data?: unknown } }).response?.data))
+        .not.toContain("/Users/min/private");
+      expect(JSON.stringify(vi.mocked(postClientLog).mock.calls)).not.toContain(
+        "/Users/min/private",
+      );
+      expect(postClientLog).toHaveBeenCalledWith(
+        "api: request failed",
+        expect.objectContaining({
+          details: expect.objectContaining({
+            response_detail: expect.objectContaining({
+              detail_redacted: true,
+              detail_redaction_reason: "unsafe_client_error_text",
+            }),
+            error_message:
+              "The request is missing required data or contains invalid values.",
+          }),
+        }),
+      );
+      expect(
+        JSON.stringify(useActionHistoryStore.getState().history.at(-1)),
+      ).not.toContain("/Users/min/private");
     } finally {
       globalThis.fetch = originalFetch;
     }

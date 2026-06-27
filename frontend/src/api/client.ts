@@ -111,6 +111,19 @@ function summarizeRedactedServerValue(
   return summary;
 }
 
+function summarizeUnsafeClientValue(
+  field: "detail" | "message" | "body",
+  value: unknown,
+): Record<string, unknown> {
+  const summary = summarizeRedactedServerValue(field, value);
+  if (isRecord(value)) {
+    delete summary[`${field}_keys`];
+    summary[`${field}_key_count`] = Object.keys(value).length;
+  }
+  summary[`${field}_redaction_reason`] = "unsafe_client_error_text";
+  return summary;
+}
+
 function summarizeApiErrorData(
   data: unknown,
   statusCode: number | null = null,
@@ -120,9 +133,15 @@ function summarizeApiErrorData(
     if (redactServerDetails && data != null) {
       return summarizeRedactedServerValue("body", data);
     }
+    if (unsafeTextInUnknown(data)) {
+      return summarizeUnsafeClientValue("body", data);
+    }
     return data ?? null;
   }
   if (Array.isArray(data)) {
+    if (unsafeTextInUnknown(data)) {
+      return summarizeUnsafeClientValue("detail", data);
+    }
     return { item_count: data.length };
   }
 
@@ -131,13 +150,22 @@ function summarizeApiErrorData(
     if (redactServerDetails) {
       return summarizeRedactedServerValue("detail", record.detail);
     }
+    if (unsafeTextInUnknown(record.detail)) {
+      return summarizeUnsafeClientValue("detail", record.detail);
+    }
     return { detail: record.detail };
   }
   if ("message" in record) {
     if (redactServerDetails) {
       return summarizeRedactedServerValue("message", record.message);
     }
+    if (unsafeTextInUnknown(record.message)) {
+      return summarizeUnsafeClientValue("message", record.message);
+    }
     return { message: record.message };
+  }
+  if (unsafeTextInUnknown(record)) {
+    return summarizeUnsafeClientValue("body", record);
   }
   return { keys: Object.keys(record).slice(0, 12) };
 }
@@ -383,6 +411,21 @@ function extractStatusCodeFromGenericErrorMessage(message: string): number | nul
   return Number.isInteger(statusCode) ? statusCode : null;
 }
 
+function unsafeTextInUnknown(value: unknown): boolean {
+  if (typeof value === "string") {
+    return isUnsafeVisibleErrorText(value);
+  }
+  if (Array.isArray(value)) {
+    return value.some(unsafeTextInUnknown);
+  }
+  if (isRecord(value)) {
+    return Object.entries(value).some(
+      ([key, nestedValue]) =>
+        isUnsafeVisibleErrorText(key) || unsafeTextInUnknown(nestedValue),
+    );
+  }
+  return false;
+}
 function cleanHttpStatusSuffix(suffix: string): string {
   const trimmed = suffix.trim();
   if (!trimmed) {
@@ -493,6 +536,9 @@ export function apiErrorToVisibleMessage(
   if (isGenericNoResponseErrorMessage(rawMessage)) {
     return fallbackHttpStatusMessage(null);
   }
+  if (isUnsafeVisibleErrorText(rawMessage)) {
+    return fallback;
+  }
   return rawMessage || fallback;
 }
 
@@ -506,6 +552,11 @@ function buildReadableResponseData(
   }
   if (!isRecord(data)) {
     return { detail: readableMessage };
+  }
+  if (unsafeTextInUnknown(data)) {
+    return "message" in data && !("detail" in data)
+      ? { message: readableMessage }
+      : { detail: readableMessage };
   }
   const detail = data.detail;
   const message = data.message;

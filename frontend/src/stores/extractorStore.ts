@@ -61,6 +61,11 @@ function visibleExtractorError(error: unknown, fallback: string): string {
   return apiErrorToVisibleMessage(error, fallback);
 }
 
+function rawPreviewFailureMessage(error: unknown): string {
+  const detail = visibleExtractorError(error, tRuntime("api_error_http_default"));
+  return tRuntime("extractor_raw_preview_failed", { error: detail });
+}
+
 function normalizeCompactExtractorPage(page: ExtractorPage): ExtractorPage {
   return COMPACT_EXTRACTOR_PAGES.has(page) ? page : ExtractorPageEnum.PAGE_1;
 }
@@ -412,8 +417,8 @@ export const useExtractorStore = create<ExtractorState & ExtractorActions>(
               imageNaturalHeight: height,
             });
           })
-          .catch(() => {
-            set({ error: "RAW 图片预览失败，请检查后端是否安装 rawpy" });
+          .catch((err) => {
+            set({ error: rawPreviewFailureMessage(err) });
           });
         return;
       }

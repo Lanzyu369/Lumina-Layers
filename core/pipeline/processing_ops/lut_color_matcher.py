@@ -19,6 +19,13 @@ from core.predictive_lut import _rgb_to_runtime_opencv_lab, match_unique_colors_
 
 _log = get_logger(__name__)
 _TIE_DISTANCE_ATOL = 1e-12
+_NEUTRAL_INPUT_CHROMA_MAX = 4.0
+_NEUTRAL_CANDIDATE_CHROMA_MAX = 8.0
+_NEUTRAL_QUERY_K = 128
+_NEUTRAL_LIGHTNESS_SLACK = 72.0
+_NEUTRAL_DISTANCE_RATIO = 3.0
+_NEUTRAL_DISTANCE_SLACK = 16.0
+_NEUTRAL_CHROMA_SCORE_WEIGHT = 4.0
 
 
 def _rgb_to_lab(rgb_array: np.ndarray) -> np.ndarray:
@@ -33,6 +40,17 @@ def _rgb_to_lab(rgb_array: np.ndarray) -> np.ndarray:
     if len(original_shape) == 2:
         return lab.reshape(original_shape)
     return lab
+
+
+def _lab_to_lch(lab_array: np.ndarray) -> np.ndarray:
+    """Convert OpenCV LAB values to LCH for achromatic candidate checks."""
+    lab = np.asarray(lab_array, dtype=np.float64)
+    lightness = lab[..., 0]
+    a = lab[..., 1] - 128.0
+    b = lab[..., 2] - 128.0
+    chroma = np.sqrt((a * a) + (b * b))
+    hue = np.degrees(np.arctan2(b, a)) % 360.0
+    return np.stack([lightness, chroma, hue], axis=-1)
 
 
 def _break_nearest_ties_by_rgb_distance(
@@ -94,6 +112,65 @@ def _break_nearest_ties_by_rgb_distance(
     return resolved
 
 
+def _prefer_achromatic_matches_for_neutral_inputs(
+    unique_lab: np.ndarray,
+    lut_lab: np.ndarray,
+    kdtree: KDTree,
+    distances: np.ndarray,
+    indices: np.ndarray,
+) -> np.ndarray:
+    """Prefer nearby achromatic LUT entries for grayscale source colours."""
+    if len(lut_lab) <= 1 or len(unique_lab) == 0:
+        return indices
+
+    input_lch = _lab_to_lch(unique_lab)
+    neutral_rows = np.flatnonzero(input_lch[:, 1] <= _NEUTRAL_INPUT_CHROMA_MAX)
+    if neutral_rows.size == 0:
+        return indices
+
+    k = min(_NEUTRAL_QUERY_K, len(lut_lab))
+    neighbour_distances, neighbour_indices = kdtree.query(unique_lab[neutral_rows], k=k)
+    if k == 1:
+        neighbour_distances = neighbour_distances.reshape(-1, 1)
+        neighbour_indices = neighbour_indices.reshape(-1, 1)
+
+    candidate_lch = _lab_to_lch(lut_lab[neighbour_indices])
+    input_lightness = input_lch[neutral_rows, 0][:, np.newaxis]
+    lightness_delta = np.abs(candidate_lch[:, :, 0] - input_lightness)
+
+    current_distance = np.asarray(distances, dtype=np.float64)[neutral_rows]
+    allowed_lightness_delta = np.maximum(
+        _NEUTRAL_LIGHTNESS_SLACK,
+        current_distance[:, np.newaxis] * _NEUTRAL_DISTANCE_RATIO,
+    )
+    allowed_distance = (
+        current_distance[:, np.newaxis] * _NEUTRAL_DISTANCE_RATIO
+        + _NEUTRAL_DISTANCE_SLACK
+    )
+
+    acceptable = (
+        (candidate_lch[:, :, 1] <= _NEUTRAL_CANDIDATE_CHROMA_MAX)
+        & (lightness_delta <= allowed_lightness_delta)
+        & (neighbour_distances <= allowed_distance)
+    )
+    if not np.any(acceptable):
+        return indices
+
+    resolved = np.asarray(indices, dtype=np.int32).copy()
+    neutral_scores = neighbour_distances + (
+        candidate_lch[:, :, 1] * _NEUTRAL_CHROMA_SCORE_WEIGHT
+    )
+    masked_scores = np.where(acceptable, neutral_scores, np.inf)
+    best_local = np.argmin(masked_scores, axis=1)
+    has_candidate = np.isfinite(masked_scores[np.arange(len(neutral_rows)), best_local])
+    if np.any(has_candidate):
+        selected_rows = neutral_rows[has_candidate]
+        selected_local = best_local[has_candidate]
+        resolved[selected_rows] = neighbour_indices[has_candidate, selected_local].astype(np.int32)
+
+    return resolved
+
+
 def _match_colors_to_db(
     unique_colors: np.ndarray,
     lut_lab: np.ndarray,
@@ -130,6 +207,7 @@ def _match_colors_to_db(
 
     distances, indices = kdtree.query(unique_lab)
     indices = _break_nearest_ties_by_rgb_distance(unique_colors, unique_lab, lut_lab, lut_rgb, kdtree, distances, indices)
+    indices = _prefer_achromatic_matches_for_neutral_inputs(unique_lab, lut_lab, kdtree, distances, indices)
     return np.asarray(indices, dtype=np.int32), np.asarray(distances, dtype=np.float32)
 
 

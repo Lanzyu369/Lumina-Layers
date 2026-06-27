@@ -8,12 +8,108 @@ Unit tests for pipeline step modules.
 _需求: 9.3_
 """
 
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
 import numpy as np
 import pytest
 import trimesh
-from unittest.mock import MagicMock, patch
 
 from config import ColorSystem, LUTMetadata, ModelingMode, PaletteEntry, PrinterConfig
+
+# ===========================================================================
+# S11 — s11_glb_preview 单元测试
+# ===========================================================================
+
+
+class TestS11GlbPreview:
+    """S11 GLB 预览步骤的单元测试。"""
+
+    def test_reuses_existing_preview_glb_without_rebuilding(
+        self,
+        tmp_path,
+        monkeypatch,
+    ) -> None:
+        """同参生成可直接复用已有预览 GLB，避免重复构建 mesh。"""
+        from core.pipeline import s11_glb_preview
+
+        preview_glb_path = tmp_path / "preview.glb"
+        preview_glb_path.write_bytes(b"glb")
+
+        def fail_generate(*_args, **_kwargs):
+            raise AssertionError("S11 should reuse preview_glb_path")
+
+        monkeypatch.setattr(
+            s11_glb_preview,
+            "generate_segmented_glb",
+            fail_generate,
+        )
+
+        result = s11_glb_preview.run({"preview_glb_path": str(preview_glb_path)})
+
+        assert result["glb_path"] == str(preview_glb_path)
+        assert result["_hifi_timings"]["glb_preview_s"] >= 0.0
+
+
+# ===========================================================================
+# S02 — s02_image_processing 单元测试
+# ===========================================================================
+
+
+class TestS02ImageProcessing:
+    """S02 图像处理步骤的单元测试。"""
+
+    def test_reuses_preview_analysis_paths_without_process_image(self, tmp_path):
+        """匹配的预览分析缓存应保留处理器上下文但跳过 process_image。"""
+        from core.pipeline.s02_image_processing import run
+
+        matched_rgb = np.zeros((3, 4, 3), dtype=np.uint8)
+        matched_rgb[..., 0] = 128
+        mask_solid = np.ones((3, 4), dtype=bool)
+        material_matrix = np.zeros((3, 4, 5), dtype=np.uint8)
+
+        matched_path = tmp_path / "matched_rgb.npy"
+        mask_path = tmp_path / "mask_solid.npy"
+        matrix_path = tmp_path / "material_matrix.npy"
+        np.save(matched_path, matched_rgb)
+        np.save(mask_path, mask_solid)
+        np.save(matrix_path, material_matrix)
+
+        ctx = {
+            "actual_lut_path": str(tmp_path / "lut.npy"),
+            "color_mode": "4-Color (RYBW)",
+            "hue_weight": 0.0,
+            "chroma_gate": 15.0,
+            "image_path": str(tmp_path / "input.png"),
+            "target_width_mm": 40.0,
+            "modeling_mode": ModelingMode.HIGH_FIDELITY,
+            "quantize_colors": 48,
+            "enable_cleanup": True,
+            "reuse_preview_analysis": True,
+            "matched_rgb_path": str(matched_path),
+            "mask_solid_path": str(mask_path),
+            "material_matrix_path": str(matrix_path),
+        }
+
+        with patch("core.pipeline.s02_image_processing.LuminaImageProcessor") as processor_cls:
+            processor_cls.return_value.process_image.side_effect = AssertionError(
+                "process_image should not run for reused preview analysis"
+            )
+            result = run(ctx)
+
+        assert "error" not in result
+        np.testing.assert_array_equal(result["matched_rgb"], matched_rgb)
+        np.testing.assert_array_equal(result["mask_solid"], mask_solid)
+        np.testing.assert_array_equal(result["material_matrix"], material_matrix)
+        assert result["target_w"] == 4
+        assert result["target_h"] == 3
+        assert result["pixel_scale"] == pytest.approx(10.0)
+        assert result["mode_info"]["mode"] == ModelingMode.HIGH_FIDELITY
+        assert result["debug_data"] is None
+        assert result["processor"] is processor_cls.return_value
+        processor_cls.assert_called_once()
+        processor_cls.return_value.process_image.assert_not_called()
+
 
 # ===========================================================================
 # S01 — s01_input_validation 单元测试
@@ -113,6 +209,108 @@ class TestS01InputValidation:
         result = run(ctx)
 
         assert result["is_svg_vector"] is True
+
+    def test_five_color_translucent_svg_vector_falls_back_to_high_fidelity(self, tmp_path):
+        """5-Color Extended native vector cannot preserve SVG opacity stacking."""
+        from core.pipeline.s01_input_validation import run
+
+        svg_path = tmp_path / "translucent-line.svg"
+        svg_path.write_text(
+            (
+                '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+                '<rect x="0" y="0" width="100" height="100" fill="#ff0000"/>'
+                '<path d="M0 50 L100 50" stroke="#0000ff" '
+                'stroke-opacity="0.5" stroke-width="20" fill="none"/>'
+                "</svg>"
+            ),
+            encoding="utf-8",
+        )
+
+        ctx = self._make_valid_ctx()
+        ctx["image_path"] = str(svg_path)
+        ctx["modeling_mode"] = ModelingMode.VECTOR
+        ctx["color_mode"] = "5-Color Extended"
+        result = run(ctx)
+
+        assert result["is_svg_vector"] is False
+        assert result["modeling_mode"] == ModelingMode.HIGH_FIDELITY
+        assert result["svg_vector_opacity_fallback"] is True
+
+    def test_five_color_opaque_svg_vector_stays_native(self, tmp_path):
+        """Opaque 5-Color Extended SVGs should keep the native vector path."""
+        from core.pipeline.s01_input_validation import run
+
+        svg_path = tmp_path / "opaque.svg"
+        svg_path.write_text(
+            (
+                '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+                '<rect x="0" y="0" width="100" height="100" fill="#ff0000"/>'
+                "</svg>"
+            ),
+            encoding="utf-8",
+        )
+
+        ctx = self._make_valid_ctx()
+        ctx["image_path"] = str(svg_path)
+        ctx["modeling_mode"] = ModelingMode.VECTOR
+        ctx["color_mode"] = "5-Color Extended"
+        result = run(ctx)
+
+        assert result["is_svg_vector"] is True
+        assert result["modeling_mode"] == ModelingMode.VECTOR
+        assert "svg_vector_opacity_fallback" not in result
+
+    def test_five_color_unused_stylesheet_opacity_stays_native(self, tmp_path):
+        """Unused stylesheet opacity must not downgrade an opaque SVG."""
+        from core.pipeline.s01_input_validation import run
+
+        svg_path = tmp_path / "unused-style-opacity.svg"
+        svg_path.write_text(
+            (
+                '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+                "<style>.unused{opacity:.5}</style>"
+                '<rect x="0" y="0" width="100" height="100" fill="#ff0000"/>'
+                "</svg>"
+            ),
+            encoding="utf-8",
+        )
+
+        ctx = self._make_valid_ctx()
+        ctx["image_path"] = str(svg_path)
+        ctx["modeling_mode"] = ModelingMode.VECTOR
+        ctx["color_mode"] = "5-Color Extended"
+        result = run(ctx)
+
+        assert result["is_svg_vector"] is True
+        assert result["modeling_mode"] == ModelingMode.VECTOR
+        assert "svg_vector_opacity_fallback" not in result
+
+    def test_five_color_matching_stylesheet_opacity_falls_back(self, tmp_path):
+        """Stylesheet opacity should still downgrade when it matches an element."""
+        from core.pipeline.s01_input_validation import run
+
+        svg_path = tmp_path / "matching-style-opacity.svg"
+        svg_path.write_text(
+            (
+                '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+                "<style>.line{stroke-opacity:.5}</style>"
+                '<rect x="0" y="0" width="100" height="100" fill="#ff0000"/>'
+                '<path class="line" d="M0 50 L100 50" stroke="#0000ff" '
+                'stroke-width="20" fill="none"/>'
+                "</svg>"
+            ),
+            encoding="utf-8",
+        )
+
+        ctx = self._make_valid_ctx()
+        ctx["image_path"] = str(svg_path)
+        ctx["modeling_mode"] = ModelingMode.VECTOR
+        ctx["color_mode"] = "5-Color Extended"
+        result = run(ctx)
+
+        assert result["is_svg_vector"] is False
+        assert result["modeling_mode"] == ModelingMode.HIGH_FIDELITY
+        assert result["svg_vector_opacity_fallback"] is True
 
     def test_material_archive_svg_vector_mode_enters_native_vector_branch(self):
         """material_archive + SVG + vector now shares the native vector branch.
@@ -713,6 +911,57 @@ class TestS08AuxiliaryMeshes:
 
 
 # ===========================================================================
+# S11 — s11_glb_preview 单元测试
+# ===========================================================================
+
+
+class TestS11GlbPreview:
+    """S11 GLB preview regression tests."""
+
+    def test_heightmap_relief_exports_pipeline_scene_instead_of_flat_segmented_glb(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        from core.pipeline import s11_glb_preview
+
+        scene = trimesh.Scene()
+        mesh = trimesh.creation.box(extents=(1.0, 1.0, 2.0))
+        mesh.visual.face_colors = np.tile(
+            np.array([255, 0, 0, 255], dtype=np.uint8),
+            (len(mesh.faces), 1),
+        )
+        scene.add_geometry(mesh, node_name="ReliefRed", geom_name="ReliefRed")
+
+        def _unexpected_segmented_glb(*_args, **_kwargs):
+            raise AssertionError("heightmap relief preview must use pipeline scene")
+
+        monkeypatch.setattr(s11_glb_preview, "OUTPUT_DIR", str(tmp_path))
+        monkeypatch.setattr(
+            s11_glb_preview,
+            "generate_segmented_glb",
+            _unexpected_segmented_glb,
+        )
+
+        ctx = {
+            "matched_rgb": np.full((2, 2, 3), [255, 0, 0], dtype=np.uint8),
+            "mask_solid": np.ones((2, 2), dtype=bool),
+            "pixel_scale": 1.0,
+            "image_path": str(tmp_path / "heightmap-source.png"),
+            "scene": scene,
+            "enable_relief": True,
+            "height_mode": "heightmap",
+        }
+
+        result = s11_glb_preview.run(ctx)
+
+        glb_path = result["glb_path"]
+        assert glb_path is not None
+        assert glb_path.endswith(".glb")
+        assert (tmp_path / Path(glb_path).name).exists()
+
+
+# ===========================================================================
 # S12 — s12_result_assembly 单元测试
 # ===========================================================================
 
@@ -890,6 +1139,31 @@ class TestP01PreviewValidation:
         result = run(ctx)
 
         assert result["actual_lut_path"] == "/tmp/uploaded_lut.npy"
+
+    def test_five_color_translucent_svg_vector_preview_falls_back_to_high_fidelity(self, tmp_path):
+        """Preview must choose the same opacity-safe path as final generation."""
+        from core.pipeline.p01_preview_validation import run
+
+        svg_path = tmp_path / "translucent-line.svg"
+        svg_path.write_text(
+            (
+                '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+                '<rect x="0" y="0" width="100" height="100" fill="#ff0000"/>'
+                '<path d="M0 50 L100 50" stroke="#0000ff" '
+                'stroke-opacity="0.5" stroke-width="20" fill="none"/>'
+                "</svg>"
+            ),
+            encoding="utf-8",
+        )
+
+        ctx = self._make_valid_ctx()
+        ctx["image_path"] = str(svg_path)
+        ctx["modeling_mode"] = ModelingMode.VECTOR
+        ctx["color_mode"] = "5-Color Extended"
+        result = run(ctx)
+
+        assert result["modeling_mode"] == ModelingMode.HIGH_FIDELITY
+        assert result["svg_vector_opacity_fallback"] is True
 
     def test_empty_dict_raises_key_error(self):
         """空 dict 应抛出 KeyError。"""
@@ -1123,3 +1397,27 @@ class TestP05PaletteExtraction:
         # 两种颜色各占 50%
         for entry in palette:
             assert entry["percentage"] == 50.0
+
+    def test_palette_extraction_avoids_axis_row_unique(self, monkeypatch):
+        """调色板提取不应对 RGB 行调用 np.unique(axis=0)。"""
+        from core.pipeline import pipeline_utils
+        from core.pipeline.p05_palette_extraction import run
+
+        original_unique = pipeline_utils.np.unique
+
+        def unique_spy(*args, **kwargs):
+            if kwargs.get("axis") == 0:
+                raise AssertionError("row-wise np.unique is too slow for preview palettes")
+            return original_unique(*args, **kwargs)
+
+        monkeypatch.setattr(pipeline_utils.np, "unique", unique_spy)
+
+        h, w = 8, 8
+        matched_rgb = np.zeros((h, w, 3), dtype=np.uint8)
+        matched_rgb[:4, :] = [255, 0, 0]
+        matched_rgb[4:, :] = [0, 0, 255]
+        mask_solid = np.ones((h, w), dtype=bool)
+
+        result = run({"cache": {"matched_rgb": matched_rgb, "mask_solid": mask_solid}})
+
+        assert [entry["count"] for entry in result["cache"]["color_palette"]] == [32, 32]

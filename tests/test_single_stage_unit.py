@@ -314,6 +314,103 @@ def test_material_solver_cache_status_rejects_malformed_local_material(
     assert str(tmp_path) not in detail
 
 
+@pytest.mark.parametrize(
+    ("stage_a_params_file", "unsafe_fragment"),
+    [
+        ("/Users/min/private/stage_A_parameters.json", "/Users/min/private"),
+        (r"C:\Users\min\private\stage_A_parameters.json", r"C:\Users\min"),
+        ("C:/Users/min/private/stage_A_parameters.json", "C:/Users/min"),
+        (r"\\server\share\stage_A_parameters.json", r"\\server\share"),
+        ("../stage_A_parameters.json", "../stage_A_parameters.json"),
+        ("missing_stage_A_parameters.json", "missing_stage_A_parameters.json"),
+    ],
+)
+def test_material_solver_cache_status_redacts_invalid_stage_a_params_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    stage_a_params_file: str,
+    unsafe_fragment: str,
+) -> None:
+    materials_root = tmp_path / "materials"
+    material_dir = materials_root / "BrandA" / "pla-bad"
+    material_dir.mkdir(parents=True)
+    (material_dir / "material.json").write_text(
+        json.dumps(
+            {
+                "brand": "BrandA",
+                "material_name": "Bad Stage A",
+                "stage_a_params_file": stage_a_params_file,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("core.material_lut_synthesis.MATERIALS_DIR", str(materials_root))
+    client, _, _ = _client_with_state()
+
+    response = client.post(
+        "/api/extractor/material-solver-cache/status",
+        data={
+            "material_directory_names": json.dumps(["BrandA/pla-bad"]),
+            "layer_count": "5",
+            "layer_height_mm": "0.1",
+            "substrate": "white",
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "cannot be used by the material solver" in detail
+    assert (
+        "stage_a_params_file must reference an existing file inside the material directory"
+        in detail
+    )
+    assert stage_a_params_file not in detail
+    assert unsafe_fragment not in response.text
+    assert str(tmp_path) not in response.text
+
+
+def test_material_solver_cache_status_accepts_relative_stage_a_params_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    material_dir = materials_root / "BrandA" / "pla-basic"
+    material_dir.mkdir(parents=True)
+    (material_dir / "material.json").write_text(
+        json.dumps(
+            {
+                "brand": "BrandA",
+                "material_name": "PLA Basic",
+                "stage_a_params_file": "stage_A_parameters.json",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (material_dir / "stage_A_parameters.json").write_bytes(
+        _minimal_solver_stage_a_bytes("PLA Basic"),
+    )
+    monkeypatch.setattr("core.material_lut_synthesis.MATERIALS_DIR", str(materials_root))
+    client, _, _ = _client_with_state()
+
+    response = client.post(
+        "/api/extractor/material-solver-cache/status",
+        data={
+            "material_directory_names": json.dumps(["BrandA/pla-basic"]),
+            "layer_count": "5",
+            "layer_height_mm": "0.1",
+            "substrate": "white",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["cached"] is False
+    assert str(tmp_path) not in response.text
+
+
 class _RegisterPathFailingRegistry(FileRegistry):
     """Registry stub that fails before taking ownership of any path."""
 
@@ -3625,6 +3722,71 @@ def test_extractor_save_gradient_card_material_removes_new_archive_on_core_failu
     assert evicted == ["Bambu Lab/PLA Basic"]
 
 
+@pytest.mark.parametrize(
+    ("exception_type", "status_code"),
+    [
+        (FileNotFoundError, 404),
+        (ValueError, 422),
+        (TypeError, 422),
+    ],
+)
+def test_extractor_save_gradient_card_material_redacts_unknown_client_error_detail(
+    monkeypatch,
+    caplog: pytest.LogCaptureFixture,
+    exception_type: type[Exception],
+    status_code: int,
+) -> None:
+    client, store = _client_with_registry(FileRegistry())
+    session_id = _seed_gradient_card_material_session(store)
+    raw_message = (
+        "Saved material archive is invalid at "
+        "/Users/min/private/materials/BrandA/private/material.json"
+    )
+
+    def _fake_save_stage_a_material_archive(**kwargs):
+        raise exception_type(raw_message)
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.save_stage_a_material_archive",
+        _fake_save_stage_a_material_archive,
+    )
+
+    target_loggers = _capture_single_stage_warning_loggers(caplog)
+    try:
+        response = client.post(
+            "/api/extractor/save-gradient-card-material",
+            data={
+                "session_id": session_id,
+                "material_name": "PLA Basic",
+                "brand": "BrandA",
+            },
+        )
+    finally:
+        for target_logger in target_loggers:
+            target_logger.removeHandler(caplog.handler)
+
+    safe_detail = "Gradient card material save failed. Check the server log for details."
+    assert response.status_code == status_code
+    assert response.json()["detail"] == safe_detail
+    assert raw_message not in response.text
+    assert "/Users/min/private" not in response.text
+
+    api_http_records = _records_for_event(caplog, "api_http_error")
+    assert api_http_records
+    assert str(getattr(api_http_records[-1], "error_message", "")) == safe_detail
+    assert raw_message not in str(getattr(api_http_records[-1], "error_message", ""))
+
+    route_records = _records_for_event(
+        caplog,
+        "extractor_save_gradient_card_material_failed",
+    )
+    assert route_records
+    route_record = route_records[-1]
+    assert getattr(route_record, "status_code", None) == status_code
+    assert getattr(route_record, "error_type", None) == exception_type.__name__
+    assert raw_message in str(getattr(route_record, "error_message", ""))
+
+
 def test_gradient_card_stage_a_rejects_unreadable_image_without_pil_detail() -> None:
     client, _store, _registry = _client_with_state()
 
@@ -4424,6 +4586,46 @@ def test_gradient_card_material_delete_route_removes_saved_material(
     assert body["status"] == "ok"
     assert body["directory_name"] == "pla-basic"
     assert body["material_name"] == "PLA Basic"
+
+
+def test_gradient_card_material_delete_route_redacts_storage_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client, _, _ = _client_with_state()
+    private_path = "/Users/min/private/materials/pla-basic"
+
+    def _fail_delete(*, directory_name: str) -> MaterialArchiveDeleteResult:
+        raise OSError(f"permission denied: {private_path}")
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.delete_saved_stage_a_material_archive",
+        _fail_delete,
+    )
+    target_logger = logging.getLogger("lumina.api.routers.single_stage")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.ERROR, logger=target_logger.name)
+
+    try:
+        response = client.delete("/api/extractor/gradient-card-materials/pla-basic")
+    finally:
+        target_logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Gradient card material delete failed. Check the server log for details."
+    )
+    assert "permission denied" not in response.text
+    assert private_path not in response.text
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None)
+        == "extractor_delete_gradient_card_material_failed"
+    ]
+    assert len(records) == 1
+    assert records[0].error_type == "OSError"
+    assert private_path in records[0].error_message
 
 
 def test_export_saved_stage_a_material_archives_writes_manifest_and_files(
@@ -5742,6 +5944,49 @@ def test_gradient_card_material_export_route_returns_download_url(
     assert resolved[0] == str(exported_zip)
 
 
+def test_gradient_card_material_export_route_redacts_storage_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client, _, _ = _client_with_state()
+    private_path = "/Users/min/private/export.zip"
+
+    def _fail_export(*, directory_names: list[str]) -> MaterialArchiveExportResult:
+        raise OSError(f"cannot write {private_path}")
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.export_saved_stage_a_material_archives",
+        _fail_export,
+    )
+    target_logger = logging.getLogger("lumina.api.routers.single_stage")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.ERROR, logger=target_logger.name)
+
+    try:
+        response = client.post(
+            "/api/extractor/gradient-card-materials/export",
+            json={"directory_names": ["pla-basic"]},
+        )
+    finally:
+        target_logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Gradient card material export failed. Check the server log for details."
+    )
+    assert "cannot write" not in response.text
+    assert private_path not in response.text
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None)
+        == "extractor_export_gradient_card_materials_failed"
+    ]
+    assert len(records) == 1
+    assert records[0].error_type == "OSError"
+    assert private_path in records[0].error_message
+
+
 def test_gradient_card_material_export_cleans_archive_when_registry_fails(
     monkeypatch,
     tmp_path: Path,
@@ -5907,9 +6152,10 @@ def test_generate_material_swatch_hides_export_failure_detail(
     assert record.recipe_count == 1
 
 
-def test_generate_material_swatch_rolls_back_download_when_preview_registration_fails(
+def test_generate_material_swatch_preserves_download_when_preview_registration_fails(
     monkeypatch,
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     app = create_app()
     registry = _SwatchRegisterBytesFailingRegistry()
@@ -5941,30 +6187,136 @@ def test_generate_material_swatch_rolls_back_download_when_preview_registration_
         _fake_generate_material_recipe_swatch,
     )
 
-    response = client.post(
-        "/api/extractor/generate-material-swatch",
-        json={
-            "recipes": [
-                {
-                    "directory_names": ["pla-basic"],
-                    "result_hex": "#FFFFFF",
-                    "layer_height_mm": 0.08,
-                    "substrate": "white",
-                }
-            ],
-        },
-    )
+    target_logger = logging.getLogger("lumina.api.routers.single_stage")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.WARNING, logger=target_logger.name)
+    try:
+        response = client.post(
+            "/api/extractor/generate-material-swatch",
+            json={
+                "recipes": [
+                    {
+                        "directory_names": ["pla-basic"],
+                        "result_hex": "#FFFFFF",
+                        "layer_height_mm": 0.08,
+                        "substrate": "white",
+                    }
+                ],
+            },
+        )
+    finally:
+        target_logger.removeHandler(caplog.handler)
 
-    assert response.status_code == 500
-    assert response.json()["detail"] == (
-        "Material swatch file registration failed. "
-        "Check the server log for details."
-    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["download_url"].startswith("/api/files/")
+    assert body["preview_url"] is None
+    download_response = client.get(body["download_url"])
+    assert download_response.status_code == 200
+    assert download_response.content == b"3mf"
     assert "registry byte storage unavailable" not in response.text
     assert registry.path_file_id is not None
-    assert registry.get_entry(registry.path_file_id) is None
-    assert registry.resolve(registry.path_file_id) is None
-    assert not swatch_path.exists()
+    assert registry.get_entry(registry.path_file_id) is not None
+    assert registry.resolve(registry.path_file_id) is not None
+    assert swatch_path.exists()
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None)
+        == "extractor_material_swatch_registration_failed"
+    ]
+    assert len(records) == 1
+    record = records[0]
+    assert record.levelno == logging.WARNING
+    assert record.error_type == "RuntimeError"
+    assert record.error_message == "registry byte storage unavailable"
+    assert record.registration_stage == "preview"
+    assert record.download_id == body["download_url"].rsplit("/", 1)[-1]
+    assert record.recipe_count == 1
+
+
+def test_generate_material_swatch_preserves_download_when_preview_encoding_fails(
+    monkeypatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    app = create_app()
+    registry = FileRegistry()
+    app.dependency_overrides[get_file_registry] = lambda: registry
+    client = TestClient(app, raise_server_exceptions=False)
+    swatch_path = tmp_path / "material-swatch.3mf"
+    swatch_path.write_bytes(b"3mf")
+
+    monkeypatch.setattr(
+        "api.routers.single_stage._load_palette_or_raise",
+        lambda directory_names: [
+            SimpleNamespace(
+                directory_name="pla-basic",
+                name="PLA Basic",
+                estimated_rgb=np.array([255, 255, 255], dtype=np.uint8),
+            )
+        ],
+    )
+
+    def _fake_generate_material_recipe_swatch(*, recipes, **kwargs):
+        return (
+            str(swatch_path),
+            Image.new("RGB", (1, 1), (255, 255, 255)),
+            "ok",
+        )
+
+    monkeypatch.setattr(
+        "core.material_recipe_swatch.generate_material_recipe_swatch",
+        _fake_generate_material_recipe_swatch,
+    )
+
+    def _fail_png_encoding(_image):
+        raise OSError("material preview encoder unavailable")
+    monkeypatch.setattr(file_bridge, "pil_to_png_bytes", _fail_png_encoding)
+
+    target_logger = logging.getLogger("lumina.api.routers.single_stage")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.WARNING, logger=target_logger.name)
+    try:
+        response = client.post(
+            "/api/extractor/generate-material-swatch",
+            json={
+                "recipes": [
+                    {
+                        "directory_names": ["pla-basic"],
+                        "result_hex": "#FFFFFF",
+                        "layer_height_mm": 0.08,
+                        "substrate": "white",
+                    }
+                ],
+            },
+        )
+    finally:
+        target_logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["download_url"].startswith("/api/files/")
+    assert body["preview_url"] is None
+    download_response = client.get(body["download_url"])
+    assert download_response.status_code == 200
+    assert download_response.content == b"3mf"
+    assert "material preview encoder unavailable" not in response.text
+    assert swatch_path.exists()
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None)
+        == "extractor_material_swatch_registration_failed"
+    ]
+    assert len(records) == 1
+    record = records[0]
+    assert record.levelno == logging.WARNING
+    assert record.error_type == "OSError"
+    assert record.error_message == "material preview encoder unavailable"
+    assert record.registration_stage == "preview"
+    assert record.download_id == body["download_url"].rsplit("/", 1)[-1]
+    assert record.recipe_count == 1
 
 
 def test_gradient_card_material_import_route_imports_multiple_archives(

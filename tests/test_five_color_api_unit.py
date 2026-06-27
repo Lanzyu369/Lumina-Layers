@@ -2044,14 +2044,21 @@ def test_get_base_colors_npy():
 
 def test_get_base_colors_not_found():
     """Non-existent LUT returns 404."""
+    private_lut_name = r"C:\Users\min\private\missing-lut.json"
+
     with patch(
         "api.routers.five_color.LUTManager.get_lut_path",
         return_value=None,
     ):
-        resp = client.get("/api/five-color/base-colors", params={"lut_name": "nonexistent"})
+        resp = client.get(
+            "/api/five-color/base-colors",
+            params={"lut_name": private_lut_name},
+        )
 
     assert resp.status_code == 404
-    assert "LUT not found" in resp.json()["detail"]
+    assert resp.json()["detail"] == "Selected LUT was not found or is unavailable."
+    assert private_lut_name not in resp.text
+    assert "LUT not found:" not in resp.text
 
 
 def test_get_base_colors_lut_load_failure_uses_public_error_language():
@@ -3023,11 +3030,11 @@ def test_generate_swatch_hides_export_failure_detail(
     assert record.recipe_count == 1
 
 
-def test_generate_swatch_rolls_back_download_when_preview_registration_fails(
+def test_generate_swatch_preserves_download_when_preview_registration_fails(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Swatch download should be rolled back if preview registration fails."""
+    """Swatch legend registration failure should not discard the 3MF."""
     engine = _FakeSwatchEngine()
     registry = _SwatchRegisterBytesFailingRegistry()
     swatch_path = tmp_path / "swatch.3mf"
@@ -3045,7 +3052,7 @@ def test_generate_swatch_rolls_back_download_when_preview_registration_fails(
 
     target_logger = logging.getLogger("lumina.api.routers.five_color")
     target_logger.addHandler(caplog.handler)
-    caplog.set_level(logging.ERROR, logger=target_logger.name)
+    caplog.set_level(logging.WARNING, logger=target_logger.name)
     try:
         with (
             patch("api.routers.five_color._load_engine", return_value=(engine, "test_lut")),
@@ -3071,13 +3078,13 @@ def test_generate_swatch_rolls_back_download_when_preview_registration_fails(
     finally:
         target_logger.removeHandler(caplog.handler)
 
-    safe_detail = (
-        "Five-color swatch download could not be prepared. "
-        "Try generating the swatch again."
-    )
-
-    assert response.status_code == 500
-    assert response.json()["detail"] == safe_detail
+    assert response.status_code == 200
+    body = response.json()
+    assert body["download_url"].startswith("/api/files/")
+    assert body["preview_url"] is None
+    download_response = failing_client.get(body["download_url"])
+    assert download_response.status_code == 200
+    assert download_response.content == b"3mf"
     assert "registry byte storage unavailable" not in response.text
     assert "Internal server error" not in response.text
     records = [
@@ -3088,10 +3095,11 @@ def test_generate_swatch_rolls_back_download_when_preview_registration_fails(
     ]
     assert len(records) == 1
     record = records[0]
-    assert record.levelname == "ERROR"
+    assert record.levelname == "WARNING"
     assert record.error_type == "RuntimeError"
     assert record.error_message == "registry byte storage unavailable"
     assert record.registration_stage == "preview"
+    assert record.download_id == body["download_url"].rsplit("/", 1)[-1]
     assert record.lut_name == "test_lut"
     assert record.recipe_count == 1
     assert all(
@@ -3099,6 +3107,84 @@ def test_generate_swatch_rolls_back_download_when_preview_registration_fails(
         for record in caplog.records
     )
     assert registry.path_file_id is not None
-    assert registry.get_entry(registry.path_file_id) is None
-    assert registry.resolve(registry.path_file_id) is None
-    assert not swatch_path.exists()
+    assert registry.get_entry(registry.path_file_id) is not None
+    assert registry.resolve(registry.path_file_id) is not None
+    assert swatch_path.exists()
+
+
+def test_generate_swatch_preserves_download_when_preview_encoding_fails(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Legend PNG encoding failure should not discard the 3MF."""
+    engine = _FakeSwatchEngine()
+    registry = FileRegistry()
+    swatch_path = tmp_path / "swatch.3mf"
+    swatch_path.write_bytes(b"3mf")
+    app = create_app()
+    app.dependency_overrides[get_file_registry] = lambda: registry
+    failing_client = TestClient(app, raise_server_exceptions=False)
+
+    def _fake_generate_recipe_swatch(*, recipes, **kwargs):
+        return (
+            str(swatch_path),
+            Image.new("RGB", (1, 1), (255, 255, 255)),
+            "ok",
+        )
+
+    def _fail_png_encoding(_image):
+        raise OSError("preview encoder unavailable")
+
+    target_logger = logging.getLogger("lumina.api.routers.five_color")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.WARNING, logger=target_logger.name)
+    try:
+        with (
+            patch("api.routers.five_color._load_engine", return_value=(engine, "test_lut")),
+            patch(
+                "core.recipe_swatch.generate_recipe_swatch",
+                side_effect=_fake_generate_recipe_swatch,
+            ),
+            patch("api.file_bridge.pil_to_png_bytes", side_effect=_fail_png_encoding),
+        ):
+            response = failing_client.post(
+                "/api/five-color/generate-swatch",
+                json={
+                    "lut_name": "test_lut",
+                    "recipes": [
+                        {
+                            "selected_indices": [0, 1, 2, 3, 4],
+                            "result_hex": "#123456",
+                            "base_color_names": ["ignored"] * 6,
+                            "base_color_hexes": ["#000000"] * 6,
+                        }
+                    ],
+                },
+            )
+    finally:
+        target_logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["download_url"].startswith("/api/files/")
+    assert body["preview_url"] is None
+    download_response = failing_client.get(body["download_url"])
+    assert download_response.status_code == 200
+    assert download_response.content == b"3mf"
+    assert "preview encoder unavailable" not in response.text
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None)
+        == "five_color_generate_swatch_registration_failed"
+    ]
+    assert len(records) == 1
+    record = records[0]
+    assert record.levelname == "WARNING"
+    assert record.error_type == "OSError"
+    assert record.error_message == "preview encoder unavailable"
+    assert record.registration_stage == "preview"
+    assert record.download_id == body["download_url"].rsplit("/", 1)[-1]
+    assert record.lut_name == "test_lut"
+    assert record.recipe_count == 1
+    assert swatch_path.exists()

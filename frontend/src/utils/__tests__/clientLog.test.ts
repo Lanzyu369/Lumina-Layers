@@ -13,6 +13,23 @@ const CLIENT_LOG_SESSION_STORAGE_KEY = "lumina-client-logs-v1";
 const CLIENT_LOG_FLUSH_PUSH_THRESHOLD = 20;
 const CLIENT_LOG_FLUSH_DEBOUNCE_MS = 5000;
 
+function collectObjectKeys(value: unknown, keys: string[] = []): string[] {
+  if (value == null || typeof value !== "object") {
+    return keys;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectObjectKeys(item, keys);
+    }
+    return keys;
+  }
+  for (const [key, nestedValue] of Object.entries(value as Record<string, unknown>)) {
+    keys.push(key);
+    collectObjectKeys(nestedValue, keys);
+  }
+  return keys;
+}
+
 interface MockStorage extends Storage {
   _map: Map<string, string>;
   _setItemSpy: ReturnType<typeof vi.fn>;
@@ -298,6 +315,40 @@ describe("clientLog", () => {
     expect(relayBody).toContain("/api/files/output-model");
   });
 
+  it("redacts local file paths from diagnostic object keys", () => {
+    postClientLog("generate: keyed path diagnostic", {
+      method: "error",
+      scope: "generate",
+      phase: "keyed-path",
+      details: {
+        "/Users/min/private/source.png": "failed",
+        nested: {
+          "C:\\Users\\min\\private\\source.png": "failed",
+        },
+      },
+    });
+
+    const logs = getRecentClientLogs();
+    const serializedLog = JSON.stringify(logs[0]);
+    const relayBody = String(vi.mocked(fetch).mock.calls[0]?.[1]?.body ?? "");
+    const relayPayload = JSON.parse(relayBody) as { details?: unknown };
+    const logKeys = collectObjectKeys(logs[0]?.details).join("\n");
+    const relayKeys = collectObjectKeys(relayPayload.details).join("\n");
+    const consoleLine = String(vi.mocked(console.error).mock.calls[0]?.[0] ?? "");
+
+    expect(serializedLog).not.toContain("/Users/min");
+    expect(relayBody).not.toContain("/Users/min");
+    expect(consoleLine).not.toContain("/Users/min");
+    expect(logKeys).not.toContain("/Users/min");
+    expect(logKeys).not.toContain("C:\\Users\\min");
+    expect(relayKeys).not.toContain("/Users/min");
+    expect(relayKeys).not.toContain("C:\\Users\\min");
+    expect(serializedLog).toContain("<redacted:local-path>");
+    expect(relayBody).toContain("<redacted:local-path>");
+    expect(logKeys).toContain("<redacted:local-path>");
+    expect(relayKeys).toContain("<redacted:local-path>");
+  });
+
   it("exports only the newest bounded logs for bug reports", () => {
     for (let index = 0; index < 600; index += 1) {
       postClientLog(`event-${index}`, { elapsedMs: index });
@@ -433,8 +484,10 @@ describe("clientLog", () => {
           label: "generate: response received",
           elapsed_ms: 3,
           details: {
+            "/Users/min/private/source.png": "failed",
             threemf_disk_path: "/Users/min/output/model.3mf",
             nested: {
+              "C:\\Users\\min\\private\\source.png": "failed",
               file_path: "C:\\tmp\\upload.png",
             },
             message: "failed while reading /private/tmp/lumina/model.3mf",
@@ -445,11 +498,15 @@ describe("clientLog", () => {
 
     const logs = getRecentClientLogs();
     const serializedLog = JSON.stringify(logs[0]);
+    const logKeys = collectObjectKeys(logs[0]?.details).join("\n");
 
     expect(serializedLog).not.toContain("/Users/min");
     expect(serializedLog).not.toContain("C:\\tmp");
     expect(serializedLog).not.toContain("/private/tmp");
+    expect(logKeys).not.toContain("/Users/min");
+    expect(logKeys).not.toContain("C:\\Users\\min");
     expect(serializedLog).toContain("<redacted:local-path>");
+    expect(logKeys).toContain("<redacted:local-path>");
   });
 
   it("dedupes identical persisted+live entries by (timestamp, label, scope, phase)", () => {

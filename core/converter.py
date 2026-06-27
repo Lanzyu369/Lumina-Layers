@@ -247,6 +247,9 @@ def convert_image_to_3d(
     matched_rgb_path: Optional[str] = None,
     mask_solid_path: Optional[str] = None,
     material_matrix_path: Optional[str] = None,
+    reuse_preview_analysis: bool = False,
+    preview_glb_path: Optional[str] = None,
+    vector_parse_clip_cache_path: Optional[str] = None,
     piece_boundary_geometry_path: Optional[str] = None,
     disable_material_dilation: bool = True,
     loop_angle: float = 0.0,
@@ -352,6 +355,7 @@ def generate_preview_cached(
     auto_dynamic_range: bool = False,
     high_precision_3d_preview: bool = False,
     svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
+    replacement_regions=None,
 ):
     """Generate preview and cache data. Thin wrapper, delegates to coordinator.
     生成预览图和缓存数据。薄包装函数，委托给 coordinator。
@@ -446,6 +450,9 @@ def generate_final_model(
     matched_rgb_path: Optional[str] = None,
     mask_solid_path: Optional[str] = None,
     material_matrix_path: Optional[str] = None,
+    reuse_preview_analysis: bool = False,
+    preview_glb_path: Optional[str] = None,
+    vector_parse_clip_cache_path: Optional[str] = None,
     piece_boundary_geometry_path: Optional[str] = None,
     disable_material_dilation: bool = True,
     loop_angle: float = 0.0,
@@ -594,6 +601,9 @@ def generate_final_model(
         matched_rgb_path=matched_rgb_path,
         mask_solid_path=mask_solid_path,
         material_matrix_path=material_matrix_path,
+        reuse_preview_analysis=reuse_preview_analysis,
+        preview_glb_path=preview_glb_path,
+        vector_parse_clip_cache_path=vector_parse_clip_cache_path,
         piece_boundary_geometry_path=piece_boundary_geometry_path,
         disable_material_dilation=disable_material_dilation,
         loop_angle=loop_angle,

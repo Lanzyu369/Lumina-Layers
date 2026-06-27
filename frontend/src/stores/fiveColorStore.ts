@@ -7,8 +7,8 @@ import {
   matchFiveColorByHex,
   generateRecipeSwatch,
 } from "../api/fiveColor";
-import { apiErrorToVisibleMessage } from "../api/client";
 import { useSettingsStore } from "./settingsStore";
+import { lutErrorToVisibleMessage } from "./lutErrorMessages";
 
 // ========== Collected Recipe ==========
 
@@ -53,7 +53,7 @@ function fiveColorErrorMessage(error: unknown, fallbackKey: string): string {
   if (!response || typeof response !== "object") {
     return fallbackKey;
   }
-  return apiErrorToVisibleMessage(error, fallbackKey);
+  return lutErrorToVisibleMessage(error, fallbackKey);
 }
 
 function invalidateMatchColorRequests() {

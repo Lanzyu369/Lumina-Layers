@@ -325,6 +325,28 @@ describe("converter store relief generate flow", () => {
     expect(generateParams.heightmap_max_height).toBeCloseTo(4.2, 10);
   });
 
+  it("shows the generated GLB after heightmap relief generation even when a preview GLB exists", async () => {
+    const useConverterStore = await loadStore();
+    useConverterStore.setState({
+      ...baseReadyState(),
+      sessionId: "session-relief",
+      palette: PREVIEW_PALETTE,
+      previewGlbUrl: "/api/files/flat-preview.glb",
+      spacer_thick: 1.2,
+      enable_relief: true,
+      autoHeightMode: "use-heightmap",
+      color_height_map: { "111111": 0.5 },
+      heightmap_max_height: 3,
+    });
+
+    await useConverterStore.getState().submitGenerate();
+
+    expect(useConverterStore.getState().modelUrl).toBe("/api/files/model.glb");
+    expect(useConverterStore.getState().previewGlbUrl).toBe(
+      "/api/files/flat-preview.glb",
+    );
+  });
+
   it("uses converted relief params inside puzzle generation request params", async () => {
     const useConverterStore = await loadStore();
     useConverterStore.setState({

@@ -79,6 +79,7 @@ from utils.lut_manager import LUTManager
 from .common import (
     BATCH_DOWNLOAD_TTL_SECONDS,
     LUT_DATA_UNAVAILABLE_DETAIL,
+    LUT_SOURCE_SELECTION_INVALID_DETAIL,
     PREVIEW_CACHE_INVALID_DETAIL,
     PREVIEW_CACHE_UNAVAILABLE_DETAIL,
     PREVIEW_COLOR_PALETTE_UNAVAILABLE_DETAIL,
@@ -109,6 +110,10 @@ BATCH_PREVIEW_LIMIT_FALLBACK_MESSAGE: str = (
     "3D preview automatically shows the first models that fit on the current "
     "print bed."
 )
+BATCH_PREVIEW_UNAVAILABLE_MESSAGE: str = (
+    "批量 3MF 下载已生成；网页 3D 预览暂不可用 / The batch 3MF download "
+    "is ready; the browser 3D preview is temporarily unavailable."
+)
 LARGE_FORMAT_GENERATION_FAILED_DETAIL: str = (
     "Large-format generation failed. Try again or check the server log for details."
 )
@@ -124,6 +129,7 @@ BATCH_ITEM_FAILED_DETAIL: str = (
 MODEL_GENERATION_FAILED_DETAIL: str = (
     "3MF generation failed. Re-run preview and try generating the model again."
 )
+_SELECT_ALL_COLOR_REGION_PREFIX = "__select_all_color__:"
 
 
 class _GenerateBody(BaseModel):
@@ -214,6 +220,47 @@ def _require_preview_cache_for_generate(
     return cache, None
 
 
+def _resolve_reusable_preview_glb_path(
+    *,
+    cache: dict,
+    request: ConvertGenerateRequest,
+    sid: str,
+    registry: FileRegistry,
+    reuse_preview_analysis: bool,
+) -> str | None:
+    """Return a ready preview GLB path when generate can reuse preview analysis.
+
+    仅在预览分析参数已确认可复用、GLB 文件仍由同一 session 注册且高精度
+    预览开关一致时，才把现有预览 GLB 传给 worker。
+    """
+    if not reuse_preview_analysis:
+        return None
+
+    preview_high_precision = bool(cache.get("high_precision_3d_preview", False))
+    if preview_high_precision is not bool(request.high_precision_3d_preview):
+        return None
+
+    glb_url = cache.get("glb_url")
+    if not isinstance(glb_url, str) or not glb_url.strip():
+        return None
+    url_path = glb_url.split("?", 1)[0].rstrip("/")
+    file_id = url_path.rsplit("/", 1)[-1] if "/api/files/" in url_path else ""
+    if not file_id:
+        return None
+
+    entry = registry.get_entry(file_id)
+    if entry is None or entry.get("session_id") != sid:
+        return None
+
+    resolved = registry.resolve(file_id)
+    if resolved is None:
+        return None
+    preview_glb_path, _filename = resolved
+    if not os.path.exists(preview_glb_path):
+        return None
+    return preview_glb_path
+
+
 def _cache_field_path_or_tempfile(
     *,
     cache: dict,
@@ -281,6 +328,174 @@ def _require_loadable_material_archive_cache_path(
     return path
 
 
+_MISSING = object()
+_PREVIEW_ANALYSIS_ARRAY_FIELDS = {"matched_rgb", "mask_solid", "material_matrix"}
+
+
+def _cache_has_preview_analysis_fields(
+    cache: dict,
+    cache_ref: dict | None,
+) -> bool:
+    """Return whether cache can provide the arrays needed to skip S02."""
+
+    for field_name in _PREVIEW_ANALYSIS_ARRAY_FIELDS:
+        if cache_ref is not None:
+            path = get_preview_cache_field_path(cache_ref, field_name)
+            if not path or not os.path.exists(path):
+                return False
+        elif cache.get(field_name) is None:
+            return False
+    return True
+
+
+def _enum_value(value: object) -> object:
+    return getattr(value, "value", value)
+
+
+def _nullable_float_equal(left: object, right: object) -> bool:
+    if left is None or right is None:
+        return left is None and right is None
+    try:
+        return math.isclose(float(left), float(right), rel_tol=0.0, abs_tol=1e-9)
+    except (TypeError, ValueError):
+        return False
+
+
+def _preview_analysis_param_matches(
+    cache: dict,
+    key: str,
+    expected: object,
+    *,
+    kind: str,
+) -> bool:
+    value = cache.get(key, _MISSING)
+    if value is _MISSING:
+        return False
+    if kind == "float":
+        return _nullable_float_equal(value, expected)
+    if kind == "int":
+        try:
+            return int(value) == int(expected)
+        except (TypeError, ValueError):
+            return False
+    if kind == "bool":
+        return bool(value) is bool(expected)
+    if kind == "enum":
+        return str(_enum_value(value)) == str(_enum_value(expected))
+    return value == expected
+
+
+def _resolve_optional_preview_default_match(
+    cache: dict,
+    key: str,
+    request_value: object,
+    preview_request_value: object,
+    *,
+    kind: str,
+) -> tuple[object, str]:
+    """Use preview-derived defaults only when both requests omitted the option."""
+
+    if request_value is not None:
+        return request_value, kind
+    if preview_request_value is None:
+        cached_value = cache.get(key, _MISSING)
+        if cached_value is not _MISSING:
+            return cached_value, kind
+    return request_value, "raw"
+
+
+def _can_reuse_preview_analysis(
+    *,
+    cache: dict,
+    cache_ref: dict | None,
+    request: ConvertGenerateRequest,
+    core_modeling_mode: CoreModelingMode,
+    session_material_source: str,
+    replacement_regions: list[dict] | None,
+    recipe_overrides: list[dict] | None,
+    free_color_set: set[str] | list[str] | None,
+    preview_color_layers: object = _MISSING,
+    preview_layer_height_mm: object = _MISSING,
+) -> tuple[bool, str]:
+    """Decide whether generate can skip S02 and load preview analysis arrays.
+
+    只在普通 LUT + raster 默认路径启用。任一分析参数不一致，或遇到
+    会重写颜色/高度/几何语义的高级功能，就回退到完整图像处理。
+    """
+
+    if session_material_source != "lut":
+        return False, "material_source_not_lut"
+    if core_modeling_mode not in {
+        CoreModelingMode.HIGH_FIDELITY,
+        CoreModelingMode.PIXEL,
+    }:
+        return False, "modeling_mode_not_raster"
+    if not _cache_has_preview_analysis_fields(cache, cache_ref):
+        return False, "missing_preview_analysis_fields"
+    if replacement_regions:
+        return False, "replacement_regions_present"
+    if recipe_overrides:
+        return False, "recipe_overrides_present"
+    if free_color_set:
+        return False, "free_color_set_present"
+    if request.enable_relief:
+        return False, "relief_enabled"
+    if request.enable_cloisonne:
+        return False, "cloisonne_enabled"
+    if request.enable_fridge_magnet:
+        return False, "fridge_magnet_enabled"
+    if request.enable_outline:
+        return False, "outline_enabled"
+
+    color_layers_expected, color_layers_kind = _resolve_optional_preview_default_match(
+        cache,
+        "color_layers",
+        request.color_layers,
+        preview_color_layers,
+        kind="int",
+    )
+    layer_height_expected, layer_height_kind = _resolve_optional_preview_default_match(
+        cache,
+        "layer_height_mm",
+        request.layer_height_mm,
+        preview_layer_height_mm,
+        kind="float",
+    )
+
+    checks = (
+        ("target_width_mm", request.target_width_mm, "float"),
+        ("color_mode", request.color_mode, "enum"),
+        ("modeling_mode", core_modeling_mode, "enum"),
+        ("color_layers", color_layers_expected, color_layers_kind),
+        ("layer_height_mm", layer_height_expected, layer_height_kind),
+        ("quantize_colors", request.quantize_colors, "int"),
+        ("enable_cleanup", request.enable_cleanup, "bool"),
+        ("hue_weight", request.hue_weight, "float"),
+        ("chroma_gate", request.chroma_gate, "float"),
+        ("use_lut_constrained", request.use_lut_constrained, "bool"),
+        ("auto_dynamic_range", request.auto_dynamic_range, "bool"),
+        ("model_enable", request.model_enable, "bool"),
+        ("model_only", request.model_only, "bool"),
+        ("model_threshold", request.model_threshold, "float"),
+        ("model_margin", request.model_margin, "float"),
+        ("svg_pixels_per_mm", request.svg_pixels_per_mm, "float"),
+        ("material_source", session_material_source, "raw"),
+    )
+    for key, expected, kind in checks:
+        if kind == "raw":
+            if cache.get(key, _MISSING) != expected:
+                return False, f"param_mismatch:{key}"
+            continue
+        if not _preview_analysis_param_matches(
+            cache,
+            key,
+            expected,
+            kind=kind,
+        ):
+            return False, f"param_mismatch:{key}"
+    return True, "params_match"
+
+
 def _cache_field_array(
     *,
     cache: dict,
@@ -312,6 +527,62 @@ def _cache_field_array(
             ),
         ) from exc
     return hydrated.get(field_name)
+
+
+def _recover_select_all_color_region_mask(
+    *,
+    cache: dict,
+    cache_ref: dict | None,
+    region_id: object,
+) -> np.ndarray | None:
+    """Recover a select-all pseudo-region mask from cached preview colors."""
+
+    if not isinstance(region_id, str):
+        return None
+    if not region_id.startswith(_SELECT_ALL_COLOR_REGION_PREFIX):
+        return None
+
+    color_hex = region_id[len(_SELECT_ALL_COLOR_REGION_PREFIX):].strip().lstrip("#")
+    if len(color_hex) != 6:
+        return None
+    try:
+        target_rgb = np.asarray(
+            [
+                int(color_hex[0:2], 16),
+                int(color_hex[2:4], 16),
+                int(color_hex[4:6], 16),
+            ],
+            dtype=np.uint8,
+        )
+    except ValueError:
+        return None
+
+    matched_rgb = _cache_field_array(
+        cache=cache,
+        cache_ref=cache_ref,
+        field_name="matched_rgb",
+        mmap_mode="r",
+    )
+    mask_solid = _cache_field_array(
+        cache=cache,
+        cache_ref=cache_ref,
+        field_name="mask_solid",
+        mmap_mode="r",
+    )
+    if matched_rgb is None or mask_solid is None:
+        return None
+
+    matched_arr = np.asarray(matched_rgb)
+    if matched_arr.ndim != 3 or matched_arr.shape[2] < 3:
+        return None
+    mask_solid_arr = np.asarray(mask_solid, dtype=bool)
+    if mask_solid_arr.shape != matched_arr.shape[:2]:
+        return None
+
+    color_mask = np.all(matched_arr[..., :3] == target_rgb, axis=-1) & mask_solid_arr
+    if not np.any(color_mask):
+        return None
+    return np.asarray(color_mask, dtype=bool)
 
 
 def _parse_batch_color_height_map(value: str | None) -> dict[str, float] | None:
@@ -685,6 +956,7 @@ def _prepare_recipe_override_worker_inputs(
         raise HTTPException(status_code=409, detail="Preview cache missing material_matrix")
     if not isinstance(region_masks, dict):
         region_masks = {}
+    session_data["selected_region_masks"] = region_masks
 
     material_matrix_override = np.asarray(cached_material_matrix).copy()
     current_layers = int(material_matrix_override.shape[2]) if material_matrix_override.ndim == 3 else 0
@@ -787,6 +1059,15 @@ def _prepare_recipe_override_worker_inputs(
         item_recipe = item["recipe"]
         item_layer_order = item["layer_order"]
         region_mask = region_masks.get(region_id)
+        if region_mask is None:
+            region_mask = _recover_select_all_color_region_mask(
+                cache=cache,
+                cache_ref=cache_ref,
+                region_id=region_id,
+            )
+            if region_mask is not None:
+                region_masks[region_id] = region_mask
+                store.put(sid, "selected_region_masks", region_masks)
         if region_mask is None:
             raise HTTPException(
                 status_code=422,
@@ -908,6 +1189,7 @@ async def convert_generate(
     # Color-card mode: generate SVG from cached palette, swap image_path,
     # and force VECTOR mode so the existing vector branch produces the 3MF.
     # 色卡模式：从缓存调色板生成 SVG，替换 image_path 并强制走矢量分支。
+    generated_color_card_svg = False
     if core_modeling_mode == CoreModelingMode.COLOR_CARD:
         color_palette = cache.get("color_card_source_palette") or cache.get(
             "color_palette",
@@ -925,6 +1207,16 @@ async def convert_generate(
         store.register_temp_file(body.session_id, svg_path)
         image_path = svg_path
         core_modeling_mode = CoreModelingMode.VECTOR
+        generated_color_card_svg = True
+
+    vector_parse_clip_cache_path: str | None = None
+    if core_modeling_mode == CoreModelingMode.VECTOR and not generated_color_card_svg:
+        candidate_vector_cache_path = cache.get("vector_parse_clip_cache_path")
+        if (
+            isinstance(candidate_vector_cache_path, str)
+            and os.path.exists(candidate_vector_cache_path)
+        ):
+            vector_parse_clip_cache_path = candidate_vector_cache_path
 
     # Resolve height_mode for relief branching
     # 解析 height_mode 用于浮雕分支选择
@@ -960,8 +1252,21 @@ async def convert_generate(
     matched_rgb_path: str | None = None
     mask_solid_path: str | None = None
     material_matrix_path: str | None = None
+    reuse_preview_analysis, reuse_preview_analysis_reason = _can_reuse_preview_analysis(
+        cache=cache,
+        cache_ref=cache_ref,
+        request=request,
+        core_modeling_mode=core_modeling_mode,
+        session_material_source=session_material_source,
+        replacement_regions=replacement_regions,
+        recipe_overrides=recipe_overrides,
+        free_color_set=free_color_set,
+        preview_color_layers=session_data.get("color_layers", _MISSING),
+        preview_layer_height_mm=session_data.get("layer_height_mm", _MISSING),
+    )
     should_forward_cached_analysis = (
-        request.use_cached_matched_rgb
+        reuse_preview_analysis
+        or request.use_cached_matched_rgb
         or session_material_source == "material_archive"
     )
     require_cached_material_analysis = session_material_source == "material_archive"
@@ -973,6 +1278,8 @@ async def convert_generate(
             "event": "converter_generate_cached_input_state",
             "use_cached_matched_rgb": request.use_cached_matched_rgb,
             "has_replacement_regions": bool(replacement_regions),
+            "reuse_preview_analysis": reuse_preview_analysis,
+            "reuse_preview_analysis_reason": reuse_preview_analysis_reason,
         },
     )
     if should_forward_cached_analysis:
@@ -1045,6 +1352,20 @@ async def convert_generate(
                     material_matrix_path,
                     "material_matrix",
                 )
+
+    if reuse_preview_analysis and not (
+        matched_rgb_path and mask_solid_path and material_matrix_path
+    ):
+        reuse_preview_analysis = False
+        reuse_preview_analysis_reason = "analysis_paths_unavailable"
+
+    preview_glb_path = _resolve_reusable_preview_glb_path(
+        cache=cache,
+        request=request,
+        sid=body.session_id,
+        registry=registry,
+        reuse_preview_analysis=reuse_preview_analysis,
+    )
 
     override_material_matrix_path, recipe_override_masks_path = _prepare_recipe_override_worker_inputs(
         cache=cache,
@@ -1135,6 +1456,9 @@ async def convert_generate(
         "matched_rgb_path": matched_rgb_path,
         "mask_solid_path": mask_solid_path,
         "material_matrix_path": material_matrix_path,
+        "reuse_preview_analysis": reuse_preview_analysis,
+        "preview_glb_path": preview_glb_path,
+        "vector_parse_clip_cache_path": vector_parse_clip_cache_path,
         "printer_id": request.printer_id,
         "slicer": request.slicer,
         "nozzle_size": request.nozzle_size,
@@ -2255,7 +2579,7 @@ async def convert_batch(
         except ValidationError as exc:
             raise HTTPException(
                 status_code=422,
-                detail=json.loads(exc.json()),
+                detail=LUT_SOURCE_SELECTION_INVALID_DETAIL,
             ) from exc
         try:
             lut_path, resolved_lut_name = LUTManager.resolve_source_selection(
@@ -2577,71 +2901,6 @@ async def convert_batch(
         )
         download_url = f"/api/files/{download_id}"
 
-        preview_items: list[BatchPreviewItem] = []
-        preview_3d_url: str | None = None
-        stage = "layout"
-        preview_successes, preview_layout_result = _select_batch_preview_subset(
-            successes,
-            plate_width_mm=plate_width_mm,
-            plate_depth_mm=plate_depth_mm,
-        )
-        stage = "file_registry"
-        if len(preview_successes) < len(successes):
-            warnings.append(
-                WarningEntry(
-                    code="preview-limited",
-                    message=BATCH_PREVIEW_LIMIT_FALLBACK_MESSAGE,
-                )
-            )
-
-        for idx, wr in enumerate(preview_successes):
-            source_glb = wr.get("preview_glb_path")
-            if not source_glb:
-                continue
-            source_glb_path = Path(source_glb)
-            if not source_glb_path.exists():
-                continue
-
-            fd, preview_copy_str = tempfile.mkstemp(
-                suffix=".glb", dir=TEMP_DIR, prefix=artifact_prefix
-            )
-            os.close(fd)
-            preview_copy_path = Path(preview_copy_str)
-            shutil.copy2(source_glb_path, preview_copy_path)
-            merged_outputs.append(preview_copy_path)
-
-            preview_id = registry.register_path(
-                session_id=f"batch-preview:{batch_run_id}",
-                path=str(preview_copy_path),
-                filename=f"batch_preview_{idx + 1}.glb",
-                ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
-            )
-            preview_url = f"/api/files/{preview_id}"
-            if preview_3d_url is None:
-                preview_3d_url = preview_url
-
-            placement = preview_layout_result.placements[idx]
-            xy = wr["xy_bbox_mm"]
-            preview_filename = f"item_{idx}"
-            try:
-                with open(wr["metadata_sidecar_path"], "r", encoding="utf-8") as f:
-                    preview_sidecar = json.load(f)
-                preview_filename = str(
-                    preview_sidecar.get("source_filename") or preview_filename
-                )
-            except (OSError, json.JSONDecodeError, TypeError, ValueError):
-                pass
-            preview_items.append(
-                BatchPreviewItem(
-                    url=preview_url,
-                    filename=preview_filename,
-                    tx_mm=placement.tx_mm,
-                    ty_mm=placement.ty_mm,
-                    width_mm=float(xy[0]),
-                    depth_mm=float(xy[1]),
-                )
-            )
-
     except Exception as exc:
         # Failure path: log, cleanup, raise HTTP 500
         _safe_log(
@@ -2664,6 +2923,110 @@ async def convert_batch(
             status_code=500,
             detail=BATCH_MERGE_FAILED_DETAIL,
         )
+
+    preview_items: list[BatchPreviewItem] = []
+    preview_3d_url: str | None = None
+    preview_unavailable_reported = False
+
+    def _record_preview_unavailable(exc: Exception, *, preview_stage: str) -> None:
+        nonlocal preview_unavailable_reported
+        _safe_log(
+            "warning",
+            "batch_merge_preview_unavailable",
+            session_id=batch_run_id,
+            error_type=type(exc).__name__,
+            error_message=str(exc),
+            stage=preview_stage,
+        )
+        if not preview_unavailable_reported:
+            warnings.append(
+                WarningEntry(
+                    code="preview-unavailable",
+                    message=BATCH_PREVIEW_UNAVAILABLE_MESSAGE,
+                )
+            )
+            preview_unavailable_reported = True
+
+    preview_stage = "preview_layout"
+    try:
+        preview_successes, preview_layout_result = _select_batch_preview_subset(
+            successes,
+            plate_width_mm=plate_width_mm,
+            plate_depth_mm=plate_depth_mm,
+        )
+        if len(preview_successes) < len(successes):
+            warnings.append(
+                WarningEntry(
+                    code="preview-limited",
+                    message=BATCH_PREVIEW_LIMIT_FALLBACK_MESSAGE,
+                )
+            )
+
+        for idx, wr in enumerate(preview_successes):
+            preview_id: str | None = None
+            preview_copy_path: Path | None = None
+            try:
+                preview_stage = "preview_source"
+                source_glb = wr.get("preview_glb_path")
+                if not source_glb:
+                    continue
+                source_glb_path = Path(source_glb)
+                if not source_glb_path.exists():
+                    continue
+
+                preview_stage = "preview_copy"
+                fd, preview_copy_str = tempfile.mkstemp(
+                    suffix=".glb", dir=TEMP_DIR, prefix=artifact_prefix
+                )
+                os.close(fd)
+                preview_copy_path = Path(preview_copy_str)
+                shutil.copy2(source_glb_path, preview_copy_path)
+
+                preview_stage = "preview_file_registry"
+                preview_id = registry.register_path(
+                    session_id=f"batch-preview:{batch_run_id}",
+                    path=str(preview_copy_path),
+                    filename=f"batch_preview_{idx + 1}.glb",
+                    ttl_seconds=BATCH_DOWNLOAD_TTL_SECONDS,
+                )
+                preview_url = f"/api/files/{preview_id}"
+
+                placement = preview_layout_result.placements[idx]
+                xy = wr["xy_bbox_mm"]
+                preview_filename = f"item_{idx}"
+                try:
+                    with open(wr["metadata_sidecar_path"], "r", encoding="utf-8") as f:
+                        preview_sidecar = json.load(f)
+                    preview_filename = str(
+                        preview_sidecar.get("source_filename") or preview_filename
+                    )
+                except (OSError, json.JSONDecodeError, TypeError, ValueError):
+                    pass
+
+                preview_items.append(
+                    BatchPreviewItem(
+                        url=preview_url,
+                        filename=preview_filename,
+                        tx_mm=placement.tx_mm,
+                        ty_mm=placement.ty_mm,
+                        width_mm=float(xy[0]),
+                        depth_mm=float(xy[1]),
+                    )
+                )
+                if preview_3d_url is None:
+                    preview_3d_url = preview_url
+            except (*ROUTER_HANDLED_ERRORS, IndexError, ValidationError) as exc:
+                if preview_id is not None:
+                    with suppress(Exception):
+                        registry.cleanup_file(preview_id)
+                elif preview_copy_path is not None:
+                    with suppress(OSError):
+                        preview_copy_path.unlink(missing_ok=True)
+                _record_preview_unavailable(exc, preview_stage=preview_stage)
+    except (*ROUTER_HANDLED_ERRORS, IndexError, ValidationError) as exc:
+        preview_items = []
+        preview_3d_url = None
+        _record_preview_unavailable(exc, preview_stage=preview_stage)
 
     # Success path: cleanup intermediate files
     _cleanup_intermediates(intermediates, batch_run_id)
