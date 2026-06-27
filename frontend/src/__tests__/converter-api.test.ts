@@ -98,6 +98,42 @@ describe("convertPreview", () => {
     expect(result.preview_url).toBe("/api/files/prev-abc");
   });
 
+  it("serializes preview replacement regions as JSON FormData", async () => {
+    mockPost.mockResolvedValueOnce({
+      data: {
+        session_id: "sess-replay",
+        status: "ok",
+        message: "Preview generated",
+        preview_url: "/api/files/prev-replay",
+        palette: [],
+        dimensions: { width: 200, height: 150 },
+      },
+    });
+
+    const file = new File(["img-data"], "photo.png", { type: "image/png" });
+    await convertPreview(file, {
+      ...previewParams,
+      replacement_regions: [
+        {
+          quantized_hex: "#111111",
+          matched_hex: "#111111",
+          replacement_hex: "#222222",
+        },
+      ],
+    });
+
+    const formData = mockPost.mock.calls[0][1] as FormData;
+    expect(formData.get("replacement_regions")).toBe(
+      JSON.stringify([
+        {
+          quantized_hex: "#111111",
+          matched_hex: "#111111",
+          replacement_hex: "#222222",
+        },
+      ]),
+    );
+  });
+
   it("propagates network errors", async () => {
     mockPost.mockRejectedValueOnce(new Error("Network Error"));
 

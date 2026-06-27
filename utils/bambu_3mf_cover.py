@@ -23,6 +23,7 @@ from __future__ import annotations
 import io
 import os
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Optional, Tuple, Union
 
 from PIL import Image
@@ -34,6 +35,7 @@ __all__ = [
     "CoverThumbnailBuilder",
     "COVER_THUMBNAIL_SPECS",
     "COVER_PLATE_SPECS",
+    "clear_cover_thumbnail_cache",
 ]
 
 
@@ -175,6 +177,7 @@ class CoverPngBundle:
 # keyed by ``(width, height)``. Each size is encoded at most once per
 # interpreter lifetime.
 _PLACEHOLDER_PNG_CACHE: dict = {}
+_COVER_PATH_BUNDLE_CACHE_SIZE = 64
 
 
 _ALL_SPECS: Tuple[CoverSpec, ...] = COVER_THUMBNAIL_SPECS + COVER_PLATE_SPECS
@@ -425,6 +428,118 @@ def _build_placeholder_bundle(warning: Optional[dict]) -> CoverPngBundle:
     )
 
 
+def _clone_cover_bundle(bundle: CoverPngBundle) -> CoverPngBundle:
+    """Return a shallow-safe copy of a cached cover bundle."""
+
+    return CoverPngBundle(
+        thumbnail_3mf=bundle.thumbnail_3mf,
+        thumbnail_middle=bundle.thumbnail_middle,
+        thumbnail_small=bundle.thumbnail_small,
+        plate_main=bundle.plate_main,
+        plate_no_light=bundle.plate_no_light,
+        is_placeholder=bundle.is_placeholder,
+        warning=dict(bundle.warning) if bundle.warning is not None else None,
+    )
+
+
+def _cover_path_cache_key(
+    source: _CoverSource,
+) -> tuple[str, int, int] | None:
+    """Return a stable cache key for unchanged filesystem cover sources."""
+
+    if not isinstance(source, str):
+        return None
+    try:
+        path_abs = os.path.abspath(source)
+        stat = os.stat(path_abs)
+    except (TypeError, OSError, ValueError):
+        return None
+    return (path_abs, int(stat.st_mtime_ns), int(stat.st_size))
+
+
+@lru_cache(maxsize=_COVER_PATH_BUNDLE_CACHE_SIZE)
+def _build_cover_path_bundle_cached(
+    path_abs: str,
+    _mtime_ns: int,
+    _size_bytes: int,
+) -> CoverPngBundle:
+    """Build and cache cover PNG payloads for an unchanged image path."""
+
+    return _build_cover_bundle_uncached(path_abs)
+
+
+def clear_cover_thumbnail_cache() -> None:
+    """Clear process-local cover thumbnail bundle caches."""
+
+    _build_cover_path_bundle_cached.cache_clear()
+
+
+def _build_cover_bundle_uncached(source: _CoverSource) -> CoverPngBundle:
+    """Decode ``source`` and produce a full ``CoverPngBundle`` without caching."""
+
+    image, decode_warning = _decode_source(source)
+    if image is None:
+        return _build_placeholder_bundle(decode_warning)
+
+    try:
+        return CoverPngBundle(
+            thumbnail_3mf=_encode_png(
+                _letterbox_fit(
+                    image,
+                    (
+                        COVER_THUMBNAIL_SPECS[0].width,
+                        COVER_THUMBNAIL_SPECS[0].height,
+                    ),
+                )
+            ),
+            thumbnail_middle=_encode_png(
+                _letterbox_fit(
+                    image,
+                    (
+                        COVER_THUMBNAIL_SPECS[1].width,
+                        COVER_THUMBNAIL_SPECS[1].height,
+                    ),
+                )
+            ),
+            thumbnail_small=_encode_png(
+                _letterbox_fit(
+                    image,
+                    (
+                        COVER_THUMBNAIL_SPECS[2].width,
+                        COVER_THUMBNAIL_SPECS[2].height,
+                    ),
+                )
+            ),
+            plate_main=_encode_png(
+                _letterbox_fit(
+                    image,
+                    (
+                        COVER_PLATE_SPECS[0].width,
+                        COVER_PLATE_SPECS[0].height,
+                    ),
+                )
+            ),
+            plate_no_light=_encode_png(
+                _letterbox_fit(
+                    image,
+                    (
+                        COVER_PLATE_SPECS[1].width,
+                        COVER_PLATE_SPECS[1].height,
+                    ),
+                )
+            ),
+            is_placeholder=False,
+            warning=None,
+        )
+    except Exception as exc:  # noqa: BLE001 - any encode failure → placeholder
+        warning = {
+            "error_type": _truncate("cover_encode_error", 256),
+            "error_message": _truncate(str(exc), 2048),
+            "fallback_action": "placeholder_written",
+        }
+        return _build_placeholder_bundle(warning)
+
+
 # ---------------------------------------------------------------------------
 # Public builder
 # ---------------------------------------------------------------------------
@@ -457,64 +572,7 @@ class CoverThumbnailBuilder:
             异常不向上传播。
         """
 
-        image, decode_warning = _decode_source(source)
-        if image is None:
-            return _build_placeholder_bundle(decode_warning)
-
-        try:
-            return CoverPngBundle(
-                thumbnail_3mf=_encode_png(
-                    _letterbox_fit(
-                        image,
-                        (
-                            COVER_THUMBNAIL_SPECS[0].width,
-                            COVER_THUMBNAIL_SPECS[0].height,
-                        ),
-                    )
-                ),
-                thumbnail_middle=_encode_png(
-                    _letterbox_fit(
-                        image,
-                        (
-                            COVER_THUMBNAIL_SPECS[1].width,
-                            COVER_THUMBNAIL_SPECS[1].height,
-                        ),
-                    )
-                ),
-                thumbnail_small=_encode_png(
-                    _letterbox_fit(
-                        image,
-                        (
-                            COVER_THUMBNAIL_SPECS[2].width,
-                            COVER_THUMBNAIL_SPECS[2].height,
-                        ),
-                    )
-                ),
-                plate_main=_encode_png(
-                    _letterbox_fit(
-                        image,
-                        (
-                            COVER_PLATE_SPECS[0].width,
-                            COVER_PLATE_SPECS[0].height,
-                        ),
-                    )
-                ),
-                plate_no_light=_encode_png(
-                    _letterbox_fit(
-                        image,
-                        (
-                            COVER_PLATE_SPECS[1].width,
-                            COVER_PLATE_SPECS[1].height,
-                        ),
-                    )
-                ),
-                is_placeholder=False,
-                warning=None,
-            )
-        except Exception as exc:  # noqa: BLE001 - any encode failure → placeholder
-            warning = {
-                "error_type": _truncate("cover_encode_error", 256),
-                "error_message": _truncate(str(exc), 2048),
-                "fallback_action": "placeholder_written",
-            }
-            return _build_placeholder_bundle(warning)
+        cache_key = _cover_path_cache_key(source)
+        if cache_key is not None:
+            return _clone_cover_bundle(_build_cover_path_bundle_cached(*cache_key))
+        return _build_cover_bundle_uncached(source)

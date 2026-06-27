@@ -274,3 +274,88 @@ class TestLayerOrderConversion:
         assert mask_solid.any()
         for y, x in np.argwhere(mask_solid):
             assert int(material_matrix[y, x, 0]) == 2
+
+    def test_api_replacement_regions_are_replayed_for_preview(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Refreshing a material-archive preview must replay global replaces."""
+        image_path = _write_solid_color_png(tmp_path / "orange.png", (200, 100, 50))
+        ctx = _make_ctx(image_path)
+        ctx["enable_cleanup"] = False
+        ctx["replacement_regions"] = [
+            {
+                "matched": "#c86432",
+                "replacement": "#14c814",
+            }
+        ]
+
+        initial_cache = _FakeCache(
+            np.asarray([[200, 100, 50]], dtype=np.uint8),
+            np.asarray([[0, 1, 2, 3, 4]], dtype=np.int32),
+            np.asarray([0.0], dtype=np.float64),
+            5,
+        )
+        replacement_cache = _FakeCache(
+            np.asarray([[10, 200, 20]], dtype=np.uint8),
+            np.asarray([[0, 1, 2, 3, 4]], dtype=np.int32),
+            np.asarray([0.0], dtype=np.float64),
+            5,
+        )
+
+        import core.material_lut_provider as provider
+
+        calls = {"cache": 0, "runtime": 0}
+
+        def fake_load_solver_cache(*args, **kwargs):
+            calls["cache"] += 1
+            if calls["cache"] == 1:
+                return None, 64
+            return replacement_cache, 64
+
+        def fake_load_solver_runtime(*args, **kwargs):
+            calls["runtime"] += 1
+            return initial_cache, 64
+
+        def fake_not_worse(
+            unique_colors,
+            materials,
+            matched_rgb,
+            recipes,
+            delta_e,
+            **kwargs,
+        ):
+            return matched_rgb, recipes, delta_e, {
+                "applied": False,
+                "improved_pixels": 0,
+            }
+
+        monkeypatch.setattr(provider, "load_solver_cache", fake_load_solver_cache)
+        monkeypatch.setattr(provider, "load_solver_runtime", fake_load_solver_runtime)
+        monkeypatch.setattr(
+            "core.material_lut_synthesis.ensure_not_worse_than_smaller_N",
+            fake_not_worse,
+        )
+        monkeypatch.setattr(
+            "core.material_cache.build_material_solver_cache",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("P03 fallback must not call old bucketed builder")
+            ),
+        )
+
+        result = _run_material_archive_branch(ctx)
+
+        assert calls["runtime"] == 1
+        assert calls["cache"] >= 2
+        mask_solid = result["mask_solid"]
+        assert mask_solid.any()
+        np.testing.assert_array_equal(
+            result["matched_rgb"][mask_solid][0],
+            np.asarray([10, 200, 20], dtype=np.uint8),
+        )
+        assert np.all(result["matched_rgb"][mask_solid] == [10, 200, 20])
+        expected_top_to_bottom = np.asarray([4, 3, 2, 1, 0], dtype=np.int32)
+        for y, x in np.argwhere(mask_solid):
+            np.testing.assert_array_equal(
+                result["material_matrix"][y, x, :].astype(np.int32),
+                expected_top_to_bottom,
+            )

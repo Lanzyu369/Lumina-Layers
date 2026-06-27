@@ -16,6 +16,7 @@ import math
 import tempfile
 import os
 import io
+import warnings
 import xml.etree.ElementTree as ET
 from unittest import mock
 import numpy as np
@@ -38,6 +39,7 @@ from core.vector_engine import (
     _parse_svg_transform,
     _parse_gradient_length,
     _union_run_group_geometries,
+    _combine_evenodd_polygons,
     VectorProcessor,
     MIN_SHAPE_AREA_MM2,
 )
@@ -96,9 +98,9 @@ class TestFlattenQuadraticBezier:
 
 
 class TestFlattenArcSegments:
-    """Verify SVG arc segments use vectorized sampling."""
+    """Verify SVG arc sampling keeps the fast paths intentional."""
 
-    def test_arc_sampling_uses_single_vectorized_npoint_call(self, monkeypatch):
+    def test_nondefault_arc_sampling_uses_single_vectorized_npoint_call(self, monkeypatch):
         path = SvgPath("M 10,50 A 40,40 0 0 1 90,50")
         arc = next(seg for seg in path.segments() if isinstance(seg, Arc))
         calls = []
@@ -114,25 +116,70 @@ class TestFlattenArcSegments:
         monkeypatch.setattr(Arc, "npoint", spy_npoint)
         monkeypatch.setattr(Arc, "point", fail_point)
 
-        points = vector_engine._sample_arc_segment_points(arc, sample_count=10)
+        points = vector_engine._sample_arc_segment_points(arc, sample_count=7)
 
-        assert calls == [10]
-        assert len(points) == 10
+        assert calls == [7]
+        assert len(points) == 7
         assert points[-1] == pytest.approx((arc.end.x, arc.end.y))
 
-    def test_default_arc_sampling_reuses_precomputed_positions(self, monkeypatch):
+    def test_default_arc_sampling_uses_scalar_fast_path(self, monkeypatch):
         path = SvgPath("M 10,50 A 40,40 0 0 1 90,50")
         arc = next(seg for seg in path.segments() if isinstance(seg, Arc))
+        expected = [
+            (float(x), float(y))
+            for x, y in np.asarray(arc.npoint(vector_engine._ARC_SAMPLE_POSITIONS_10), dtype=float)
+        ]
 
         def fail_linspace(*_args, **_kwargs):
             raise RuntimeError("default arc sampling should not allocate linspace")
 
+        def fail_npoint(self, _positions):
+            raise AssertionError("default arc sampling should not allocate through Arc.npoint")
+
         monkeypatch.setattr(vector_engine.np, "linspace", fail_linspace)
+        monkeypatch.setattr(Arc, "npoint", fail_npoint)
 
         points = vector_engine._sample_arc_segment_points(arc, sample_count=10)
 
-        assert len(points) == 10
+        assert points == pytest.approx(expected)
         assert points[-1] == pytest.approx((arc.end.x, arc.end.y))
+
+    def test_default_arc_sampling_reuses_start_t_without_rotation_wrapper(self):
+        class FakePoint:
+            def __init__(self, x, y):
+                self.x = x
+                self.y = y
+
+            def __eq__(self, other):
+                return False
+
+        class FakeArc:
+            start = FakePoint(1.0, 0.0)
+            end = FakePoint(0.0, 1.0)
+            center = FakePoint(0.0, 0.0)
+            prx = FakePoint(1.0, 0.0)
+            pry = FakePoint(0.0, 1.0)
+            sweep = np.pi / 2.0
+
+            @property
+            def rx(self):
+                raise AssertionError("default arc sampling should not read Arc.rx after get_start_t")
+
+            @property
+            def ry(self):
+                raise AssertionError("default arc sampling should not read Arc.ry after get_start_t")
+
+            def get_start_t(self):
+                return 0.0
+
+            def get_rotation(self):
+                raise AssertionError("default arc sampling should not call Arc.get_rotation after get_start_t")
+
+        points = vector_engine._sample_arc_segment_points(FakeArc(), sample_count=10)
+
+        assert len(points) == 10
+        assert points[0] == pytest.approx((np.cos(np.pi * 0.05), np.sin(np.pi * 0.05)))
+        assert points[-1] == pytest.approx((0.0, 1.0))
 
 
 # ---------------------------------------------------------------------------
@@ -161,6 +208,101 @@ class TestFillRuleSubpathMerging:
         merged = outer.symmetric_difference(inner)
         expected_area = outer.area - inner.area
         assert merged.area == pytest.approx(expected_area, rel=0.01)
+
+    def test_evenodd_helper_matches_sequential_symmetric_difference(self):
+        """Batch evenodd merge must preserve the existing sequential semantics."""
+        outer, inner = self._make_concentric_squares()
+        island = Polygon([(20, 0), (24, 0), (24, 4), (20, 4)])
+        expected = outer.symmetric_difference(inner).symmetric_difference(island)
+
+        merged = _combine_evenodd_polygons([outer, inner, island])
+
+        assert merged is not None
+        assert merged.area == pytest.approx(expected.area)
+        assert merged.symmetric_difference(expected).area == pytest.approx(0.0)
+
+    def test_evenodd_helper_skips_symmetric_difference_for_disjoint_subpaths(self, monkeypatch):
+        """Disjoint evenodd subpaths are equivalent to a simple polygonal union."""
+        left = Polygon([(0, 0), (2, 0), (2, 2), (0, 2)])
+        right = Polygon([(4, 0), (6, 0), (6, 2), (4, 2)])
+        calls = []
+
+        def fail_symmetric_difference_all(_items):
+            calls.append("called")
+            raise AssertionError("disjoint evenodd subpaths should use the fast path")
+
+        monkeypatch.setattr(
+            vector_engine,
+            "symmetric_difference_all",
+            fail_symmetric_difference_all,
+        )
+
+        merged = _combine_evenodd_polygons([left, right])
+
+        assert calls == []
+        assert merged is not None
+        assert merged.area == pytest.approx(left.area + right.area)
+        assert merged.symmetric_difference(MultiPolygon([left, right])).area == pytest.approx(0.0)
+
+    def test_evenodd_helper_skips_symmetric_difference_for_disjoint_holes(self, monkeypatch):
+        """Contained disjoint holes are equivalent to sequential differences."""
+        outer = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])
+        hole_a = Polygon([(1, 1), (3, 1), (3, 3), (1, 3)])
+        hole_b = Polygon([(6, 6), (8, 6), (8, 8), (6, 8)])
+        calls = []
+
+        def fail_symmetric_difference_all(_items):
+            calls.append("called")
+            raise AssertionError("contained disjoint evenodd holes should use the fast path")
+
+        monkeypatch.setattr(
+            vector_engine,
+            "symmetric_difference_all",
+            fail_symmetric_difference_all,
+        )
+
+        merged = _combine_evenodd_polygons([outer, hole_a, hole_b])
+
+        expected = outer.difference(hole_a).difference(hole_b)
+        assert calls == []
+        assert merged is not None
+        assert merged.area == pytest.approx(expected.area)
+        assert merged.symmetric_difference(expected).area == pytest.approx(0.0)
+
+    def test_evenodd_helper_uses_prepared_container_for_multiple_holes(self, monkeypatch):
+        """Contained disjoint holes should reuse a prepared outer contour for contains checks."""
+        outer = Polygon([(0, 0), (20, 0), (20, 20), (0, 20)])
+        holes = [
+            Polygon([(1, 1), (3, 1), (3, 3), (1, 3)]),
+            Polygon([(5, 5), (7, 5), (7, 7), (5, 7)]),
+            Polygon([(12, 12), (16, 12), (16, 16), (12, 16)]),
+        ]
+        prepared_inputs = []
+        contains_inputs = []
+
+        class PreparedGeometry:
+            def __init__(self, geom):
+                self._geom = geom
+
+            def contains(self, child):
+                contains_inputs.append(child)
+                return self._geom.contains(child)
+
+        def fake_prep(geom):
+            prepared_inputs.append(geom)
+            return PreparedGeometry(geom)
+
+        monkeypatch.setattr(vector_engine, "prep", fake_prep, raising=False)
+
+        merged = _combine_evenodd_polygons([outer, *holes])
+
+        expected = outer
+        for hole in holes:
+            expected = expected.difference(hole)
+        assert prepared_inputs == [outer]
+        assert contains_inputs == holes
+        assert merged is not None
+        assert merged.symmetric_difference(expected).area == pytest.approx(0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -283,17 +425,69 @@ class TestNormalizeContours:
         assert set(seen_predicates) == {"intersects"}
         assert sum(item["geometry"].area for item in result) == pytest.approx(150.0)
 
+    def test_clip_occlusion_uses_disjoint_subset_union_for_multi_occluders(self, monkeypatch):
+        subject = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])
+        left = Polygon([(1, 1), (4, 1), (4, 4), (1, 4)])
+        right = Polygon([(6, 6), (9, 6), (9, 9), (6, 9)])
+        calls = []
+
+        def fake_disjoint_subset_union_all(items):
+            calls.append(len(list(items)))
+            return vector_engine.unary_union(items)
+
+        monkeypatch.setattr(
+            vector_engine,
+            "disjoint_subset_union_all",
+            fake_disjoint_subset_union_all,
+        )
+
+        result = VectorProcessor._clip_occlusion(
+            [
+                {"poly": subject, "color": (255, 0, 0)},
+                {"poly": left, "color": (0, 255, 0)},
+                {"poly": right, "color": (0, 0, 255)},
+            ]
+        )
+
+        assert calls == [2]
+        bottom = next(item for item in result if item["draw_order"] == 0)
+        assert bottom["geometry"].area == pytest.approx(82.0)
+
+    def test_clip_occlusion_falls_back_when_disjoint_subset_union_fails(self, monkeypatch):
+        subject = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])
+        left = Polygon([(1, 1), (4, 1), (4, 4), (1, 4)])
+        right = Polygon([(6, 6), (9, 6), (9, 9), (6, 9)])
+
+        def fail_disjoint_subset_union_all(_items):
+            raise ValueError("force unary_union fallback")
+
+        monkeypatch.setattr(
+            vector_engine,
+            "disjoint_subset_union_all",
+            fail_disjoint_subset_union_all,
+        )
+
+        result = VectorProcessor._clip_occlusion(
+            [
+                {"poly": subject, "color": (255, 0, 0)},
+                {"poly": left, "color": (0, 255, 0)},
+                {"poly": right, "color": (0, 0, 255)},
+            ]
+        )
+
+        bottom = next(item for item in result if item["draw_order"] == 0)
+        assert bottom["geometry"].area == pytest.approx(82.0)
+
     def test_postprocess_clipped_shapes_skips_known_normalized_geometry(self, monkeypatch):
         normalized = Polygon([(0, 0), (5, 0), (5, 5), (0, 5)])
         clipped = Polygon([(10, 0), (15, 0), (15, 5), (10, 5)])
         calls = []
-        original = VectorProcessor._normalize_contours
 
-        def spy_normalize(input_geom, close_delta_mm=0.03):
-            calls.append(id(input_geom))
-            return original(input_geom, close_delta_mm=close_delta_mm)
+        def fake_normalize_many(geometries, close_delta_mm=0.03):
+            calls.append(list(geometries))
+            return list(geometries)
 
-        monkeypatch.setattr(VectorProcessor, "_normalize_contours", staticmethod(spy_normalize))
+        monkeypatch.setattr(vector_engine, "_normalize_contours_many", fake_normalize_many)
 
         result = VectorProcessor._postprocess_clipped_shapes(
             [
@@ -307,7 +501,51 @@ class TestNormalizeContours:
         )
 
         assert result[0]["geometry"] is normalized
-        assert calls == [id(clipped)]
+        assert calls == [[clipped]]
+
+    def test_postprocess_clipped_shapes_batches_unnormalized_geometry(self, monkeypatch):
+        normalized = Polygon([(0, 0), (5, 0), (5, 5), (0, 5)])
+        first = Polygon([(10, 0), (15, 0), (15, 5), (10, 5)])
+        second = Polygon([(20, 0), (25, 0), (25, 5), (20, 5)])
+        calls = []
+
+        def fake_normalize_many(geometries, close_delta_mm=0.03):
+            calls.append((list(geometries), close_delta_mm))
+            return [geom.buffer(0) for geom in geometries]
+
+        monkeypatch.setattr(vector_engine, "_normalize_contours_many", fake_normalize_many, raising=False)
+
+        result = VectorProcessor._postprocess_clipped_shapes(
+            [
+                {
+                    "geometry": normalized,
+                    "color": (255, 255, 255),
+                    "geometry_normalized": True,
+                },
+                {"geometry": first, "color": (255, 0, 0)},
+                {"geometry": second, "color": (0, 0, 255)},
+            ]
+        )
+
+        assert calls == [([first, second], 0.03)]
+        assert result[0]["geometry"] is normalized
+        assert [item["geometry_normalized"] for item in result] == [True, True, True]
+
+    def test_normalize_contours_many_suppresses_batch_buffer_runtime_warnings(self, monkeypatch):
+        geom = Polygon([(0, 0), (5, 0), (5, 5), (0, 5)])
+
+        def noisy_buffer(geometries, *_args, **_kwargs):
+            warnings.warn("invalid value encountered in buffer", RuntimeWarning)
+            return np.asarray(list(geometries), dtype=object)
+
+        monkeypatch.setattr(vector_engine, "shapely_buffer", noisy_buffer)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            result = vector_engine._normalize_contours_many([geom])
+
+        assert result == [geom]
+        assert not [item for item in caught if issubclass(item.category, RuntimeWarning)]
 
     def test_parse_svg_preserves_normalized_marker_on_final_shapes(self):
         svg = (
@@ -329,6 +567,69 @@ class TestNormalizeContours:
 
         assert shapes
         assert shapes[0]["geometry_normalized"] is True
+
+    def test_parse_svg_batches_fill_contour_normalization(self, monkeypatch):
+        svg = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">'
+            '  <rect x="1" y="1" width="4" height="4" fill="rgb(255,0,0)"/>'
+            '  <rect x="10" y="1" width="4" height="4" fill="rgb(0,0,255)"/>'
+            "</svg>"
+        )
+        calls = []
+
+        def fake_normalize_many(geometries, close_delta_mm=0.03):
+            calls.append((list(geometries), close_delta_mm))
+            return list(geometries)
+
+        monkeypatch.setattr(vector_engine, "_normalize_contours_many", fake_normalize_many)
+        fd, path = tempfile.mkstemp(suffix=".svg")
+        try:
+            with os.fdopen(fd, "w") as handle:
+                handle.write(svg)
+            vp = VectorProcessor.__new__(VectorProcessor)
+            vp.sampling_precision = 0.02
+
+            shapes, _scale, _bbox = vp._parse_svg(path, target_width_mm=20.0)
+        finally:
+            os.unlink(path)
+
+        assert len(calls) == 1
+        assert calls[0][1] == 0.03
+        assert len(calls[0][0]) == 2
+        assert [shape["color"] for shape in shapes] == [(255, 0, 0), (0, 0, 255)]
+        assert all(shape["geometry_normalized"] is True for shape in shapes)
+
+    def test_parse_svg_bypasses_as_subpaths_for_single_subpath_paths(self, monkeypatch):
+        svg = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">'
+            '  <path fill="rgb(255,0,0)" d="M 1 1 L 10 1 L 10 10 L 1 10 Z"/>'
+            "</svg>"
+        )
+        calls = []
+        real_as_subpaths = SvgPath.as_subpaths
+
+        def spy_as_subpaths(self):
+            calls.append(self)
+            return real_as_subpaths(self)
+
+        monkeypatch.setattr(SvgPath, "as_subpaths", spy_as_subpaths)
+        fd, path = tempfile.mkstemp(suffix=".svg")
+        try:
+            with os.fdopen(fd, "w") as handle:
+                handle.write(svg)
+            vp = VectorProcessor.__new__(VectorProcessor)
+            vp.sampling_precision = 0.02
+
+            shapes, _scale, _bbox = vp._parse_svg(path, target_width_mm=20.0)
+        finally:
+            os.unlink(path)
+
+        assert len(shapes) == 1
+        assert shapes[0]["color"] == (255, 0, 0)
+        assert shapes[0]["poly"].area == pytest.approx(81.0)
+        assert calls == []
 
     def test_parse_svg_drops_normalized_marker_when_simplify_changes_shape(self):
         svg = (
@@ -400,6 +701,369 @@ class TestNormalizeContours:
 
         assert parsed_fill_none_counts == [0]
         assert [shape["color"] for shape in shapes] == [(255, 0, 0)]
+
+    def test_parse_svg_directly_parses_strict_top_level_paths_without_svg_parse(self, monkeypatch):
+        svg = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">'
+            '  <path class="qq3d-gap-filler" d="M 0 10 L 20 10" '
+            'fill="none" stroke="#0000ff" stroke-width="2"/>'
+            '  <path d="M 1 1 L 10 1 L 10 10 L 1 10 Z" '
+            'fill="#ff0000" fill-rule="evenodd" stroke="none"/>'
+            "</svg>"
+        )
+        fd, path = tempfile.mkstemp(suffix=".svg")
+
+        def fail_svg_parse(*_args, **_kwargs):
+            raise AssertionError("strict generated path SVG should bypass SVG.parse")
+
+        try:
+            with os.fdopen(fd, "w") as handle:
+                handle.write(svg)
+            vp = VectorProcessor.__new__(VectorProcessor)
+            vp.sampling_precision = 0.02
+            vp._parse_expand_stroke_to_fill = False
+            monkeypatch.setattr(vector_engine.SVG, "parse", fail_svg_parse)
+
+            shapes, scale, bbox = vp._parse_svg(path, target_width_mm=20.0)
+        finally:
+            os.unlink(path)
+
+        assert len(shapes) == 1
+        assert shapes[0]["color"] == (255, 0, 0)
+        assert shapes[0]["geometry_normalized"] is True
+        assert scale == pytest.approx(1.0)
+        assert bbox == pytest.approx((0.0, 0.0, 20.0, 20.0))
+
+    @pytest.mark.parametrize(
+        ("case_name", "opacity_markup"),
+        [
+            ("fill_opacity", 'fill-opacity="0"'),
+            ("opacity", 'opacity="0"'),
+            ("style_opacity", 'style="opacity:0"'),
+            ("visibility_hidden", 'visibility="hidden"'),
+            ("style_visibility_hidden", 'style="visibility:hidden"'),
+            ("style_visibility_hidden_important", 'style="visibility:hidden!important"'),
+            ("display_none", 'display="none"'),
+            ("style_display_none", 'style="display:none"'),
+            ("style_display_none_important", 'style="display:none!important"'),
+        ],
+    )
+    def test_direct_parser_falls_back_for_path_visibility(
+        self,
+        tmp_path,
+        monkeypatch,
+        case_name,
+        opacity_markup,
+    ):
+        svg_path = tmp_path / f"transparent_{case_name}.svg"
+        svg_path.write_text(
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">'
+            f'  <path d="M 0 0 L 20 0 L 20 20 L 0 20 Z" fill="#000000" '
+            f'fill-rule="nonzero" {opacity_markup}/>'
+            '  <path d="M 1 1 L 10 1 L 10 10 L 1 10 Z" fill="#ff0000" '
+            'fill-rule="nonzero"/>'
+            "</svg>",
+            encoding="utf-8",
+        )
+        original_parse = vector_engine.SVG.parse
+        parse_calls = []
+
+        def spy_parse(source, *args, **kwargs):
+            parse_calls.append(source)
+            return original_parse(source, *args, **kwargs)
+
+        vp = VectorProcessor.__new__(VectorProcessor)
+        vp.sampling_precision = 0.02
+        vp._parse_expand_stroke_to_fill = False
+        monkeypatch.setattr(vector_engine.SVG, "parse", spy_parse)
+
+        shapes, _scale, _bbox = vp._parse_svg(str(svg_path), target_width_mm=20.0)
+
+        assert parse_calls
+        assert [shape["color"] for shape in shapes] == [(255, 0, 0)]
+
+    @pytest.mark.parametrize(
+        ("case_name", "group_markup"),
+        [
+            ("group_visibility_hidden", 'visibility="hidden"'),
+            ("group_style_visibility_hidden", 'style="visibility:hidden"'),
+        ],
+    )
+    def test_svg_parser_skips_group_hidden_paths(
+        self,
+        tmp_path,
+        case_name,
+        group_markup,
+    ):
+        svg_path = tmp_path / f"hidden_{case_name}.svg"
+        svg_path.write_text(
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">'
+            f'  <g {group_markup}>'
+            '    <path d="M 0 0 L 20 0 L 20 20 L 0 20 Z" fill="#000000" '
+            'fill-rule="nonzero"/>'
+            "  </g>"
+            '  <path d="M 1 1 L 10 1 L 10 10 L 1 10 Z" fill="#ff0000" '
+            'fill-rule="nonzero"/>'
+            "</svg>",
+            encoding="utf-8",
+        )
+
+        vp = VectorProcessor.__new__(VectorProcessor)
+        vp.sampling_precision = 0.02
+        vp._parse_expand_stroke_to_fill = False
+
+        shapes, _scale, _bbox = vp._parse_svg(str(svg_path), target_width_mm=20.0)
+
+        assert [shape["color"] for shape in shapes] == [(255, 0, 0)]
+
+    def test_root_display_none_returns_no_valid_shapes(self, tmp_path):
+        svg_path = tmp_path / "root_display_none.svg"
+        svg_path.write_text(
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" display="none">'
+            '  <path d="M 0 0 L 20 0 L 20 20 L 0 20 Z" fill="#000000" '
+            'fill-rule="nonzero"/>'
+            "</svg>",
+            encoding="utf-8",
+        )
+        vp = VectorProcessor.__new__(VectorProcessor)
+        vp.sampling_precision = 0.02
+        vp._parse_expand_stroke_to_fill = False
+
+        with pytest.raises(ValueError, match="No valid shapes found in SVG"):
+            vp._parse_svg(str(svg_path), target_width_mm=20.0)
+
+    def test_direct_parser_rejects_group_svg_before_gap_filter(self, tmp_path, monkeypatch):
+        svg_path = tmp_path / "grouped.svg"
+        svg_path.write_text(
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">'
+            '  <g>'
+            '    <path class="qq3d-gap-filler" d="M 0 10 L 20 10" '
+            'fill="none" stroke="#0000ff" stroke-width="2"/>'
+            '    <path d="M 1 1 L 10 1 L 10 10 L 1 10 Z" '
+            'fill="#ff0000" fill-rule="evenodd" stroke="none"/>'
+            '  </g>'
+            "</svg>",
+            encoding="utf-8",
+        )
+
+        def fail_gap_filter(_svg_path):
+            raise AssertionError("grouped SVG should be rejected before gap-filler filtering")
+
+        vp = VectorProcessor.__new__(VectorProcessor)
+        vp.sampling_precision = 0.02
+        monkeypatch.setattr(vector_engine, "_fast_filtered_gap_filler_svg_source", fail_gap_filter)
+
+        result = vector_engine._try_parse_strict_top_level_path_svg(
+            vp,
+            str(svg_path),
+            target_width_mm=20.0,
+        )
+
+        assert result is None
+
+    def test_parse_svg_fast_filters_simple_gap_fillers_without_xml_parse(self, monkeypatch):
+        svg = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">'
+            '  <path d="M 0 10 L 20 10" class="qq3d-gap-filler" '
+            'fill="none" stroke="#0000ff" stroke-width="2"/>'
+            '  <path d="M 1 1 L 10 1 L 10 10 L 1 10 Z" fill="#ff0000" stroke="none"/>'
+            "</svg>"
+        )
+        fd, path = tempfile.mkstemp(suffix=".svg")
+        original_parse = vector_engine.SVG.parse
+        parsed_fill_none_counts = []
+
+        def fail_et_parse(_path):
+            raise AssertionError("simple gap-filler prefilter should avoid ET.parse")
+
+        def spy_parse(source, *args, **kwargs):
+            if hasattr(source, "read"):
+                payload = source.read()
+                if isinstance(payload, str):
+                    payload_bytes = payload.encode("utf-8")
+                else:
+                    payload_bytes = payload
+                parse_source = io.BytesIO(payload_bytes)
+            else:
+                payload_bytes = open(source, "rb").read()
+                parse_source = io.BytesIO(payload_bytes)
+            root = ET.fromstring(payload_bytes)
+            parsed_fill_none_counts.append(
+                sum(
+                    1
+                    for elem in root.iter()
+                    if elem.tag.split("}")[-1] == "path"
+                    and str(elem.get("fill", "")).strip().lower() == "none"
+                )
+            )
+            return original_parse(parse_source, *args, **kwargs)
+
+        try:
+            with os.fdopen(fd, "w") as handle:
+                handle.write(svg)
+            vp = VectorProcessor.__new__(VectorProcessor)
+            vp.sampling_precision = 0.02
+            vp._parse_expand_stroke_to_fill = False
+            monkeypatch.setattr(vector_engine.ET, "parse", fail_et_parse)
+            monkeypatch.setattr(vector_engine.SVG, "parse", spy_parse)
+
+            shapes, _scale, _bbox = vp._parse_svg(path, target_width_mm=20.0)
+        finally:
+            os.unlink(path)
+
+        assert parsed_fill_none_counts == [0]
+        assert [shape["color"] for shape in shapes] == [(255, 0, 0)]
+
+    def test_gap_filler_fast_filter_targets_gap_paths_without_broad_path_scan(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        svg_path = tmp_path / "gap.svg"
+        svg_path.write_text(
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">'
+            '  <path d="M 0 10 L 20 10" class="qq3d-gap-filler" '
+            'fill="none" stroke="#0000ff" stroke-width="2"/>'
+            '  <path d="M 1 1 L 10 1 L 10 10 L 1 10 Z" fill="#ff0000" stroke="none"/>'
+            "</svg>",
+            encoding="utf-8",
+        )
+
+        class FailBroadPathScan:
+            def sub(self, *_args, **_kwargs):
+                raise AssertionError("gap filler filter should not scan every self-closing path")
+
+        monkeypatch.setattr(
+            vector_engine,
+            "_SVG_FAST_FILTER_SELF_CLOSING_PATH_RE",
+            FailBroadPathScan(),
+        )
+
+        filtered = vector_engine._fast_filtered_gap_filler_svg_source(str(svg_path))
+
+        assert filtered is not None
+        payload = filtered.getvalue()
+        assert b"qq3d-gap-filler" not in payload
+        assert b'fill="#ff0000"' in payload
+
+    def test_gap_filler_common_layout_skips_per_tag_regexes(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        svg_path = tmp_path / "common-gap.svg"
+        svg_path.write_text(
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">'
+            '  <path class="qq3d-gap-filler" d="M 0 0 L 20 0 L 20 20 Z" '
+            'fill="none" stroke="#0000ff" stroke-width="2" '
+            'stroke-linejoin="round" stroke-linecap="round" '
+            'vector-effect="non-scaling-stroke"/>'
+            '  <path d="M 1 1 L 10 1 L 10 10 L 1 10 Z" fill="#ff0000" stroke="none"/>'
+            "</svg>",
+            encoding="utf-8",
+        )
+
+        class FailSearchRegex:
+            def search(self, *_args, **_kwargs):
+                raise AssertionError("common generated gap-filler should avoid per-tag regexes")
+
+        class FailMatchRegex:
+            def match(self, *_args, **_kwargs):
+                raise AssertionError("common generated gap-filler should avoid per-tag regexes")
+
+        monkeypatch.setattr(vector_engine, "_SVG_FAST_FILTER_PATH_TAG_PREFIX_RE", FailMatchRegex())
+        monkeypatch.setattr(vector_engine, "_SVG_FAST_FILTER_GAP_FILLER_CLASS_RE", FailSearchRegex())
+        monkeypatch.setattr(vector_engine, "_SVG_FAST_FILTER_FILL_NONE_RE", FailSearchRegex())
+        monkeypatch.setattr(vector_engine, "_SVG_FAST_FILTER_ID_ATTR_RE", FailSearchRegex())
+
+        filtered = vector_engine._fast_filtered_gap_filler_svg_source(str(svg_path))
+
+        assert filtered is not None
+        payload = filtered.getvalue()
+        assert b"qq3d-gap-filler" not in payload
+        assert b'fill="#ff0000"' in payload
+
+    def test_gap_filler_common_layout_preserves_id_paths(self, tmp_path):
+        svg_path = tmp_path / "gap-with-id.svg"
+        svg_path.write_text(
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">'
+            '  <path class="qq3d-gap-filler" d="M 0 0 L 20 0 L 20 20 Z" '
+            'id="keep-me" fill="none" stroke="#0000ff" stroke-width="2" '
+            'stroke-linejoin="round" stroke-linecap="round" '
+            'vector-effect="non-scaling-stroke"/>'
+            "</svg>",
+            encoding="utf-8",
+        )
+
+        filtered = vector_engine._fast_filtered_gap_filler_svg_source(str(svg_path))
+
+        assert filtered is None
+
+    def test_parse_svg_reuses_filtered_xml_root_for_gradient_defs(self, monkeypatch):
+        svg = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">'
+            '  <rect x="1" y="1" width="10" height="10" fill="#ff0000"/>'
+            "</svg>"
+        )
+        fd, path = tempfile.mkstemp(suffix=".svg")
+        seen_roots = []
+
+        def spy_parse_gradient_defs(_svg_path, *, root=None):
+            seen_roots.append(root)
+            return {}
+
+        try:
+            with os.fdopen(fd, "w") as handle:
+                handle.write(svg)
+            vp = VectorProcessor.__new__(VectorProcessor)
+            vp.sampling_precision = 0.02
+            monkeypatch.setattr(
+                VectorProcessor,
+                "_parse_gradient_defs",
+                staticmethod(spy_parse_gradient_defs),
+            )
+
+            shapes, _scale, _bbox = vp._parse_svg(path, target_width_mm=20.0)
+        finally:
+            os.unlink(path)
+
+        assert shapes
+        assert len(seen_roots) == 1
+        assert seen_roots[0] is not None
+        assert seen_roots[0].tag.endswith("svg")
+
+    def test_parse_gradient_defs_uses_provided_xml_root_without_reparsing(self, monkeypatch):
+        root = ET.fromstring(
+            '<svg xmlns="http://www.w3.org/2000/svg">'
+            '  <defs>'
+            '    <linearGradient id="g">'
+            '      <stop offset="0%" stop-color="#000000"/>'
+            '      <stop offset="100%" stop-color="#ffffff"/>'
+            "    </linearGradient>"
+            "  </defs>"
+            "</svg>"
+        )
+
+        def fail_parse(_path):
+            raise AssertionError("provided XML root should avoid ET.parse")
+
+        monkeypatch.setattr(vector_engine.ET, "parse", fail_parse)
+
+        gradients = VectorProcessor._parse_gradient_defs("unused.svg", root=root)
+
+        assert sorted(gradients) == ["g"]
+        assert gradients["g"]["type"] == "linear"
+        assert gradients["g"]["stops"] == [(0.0, (0, 0, 0)), (1.0, (255, 255, 255))]
 
     def test_normalize_contours_skips_make_valid_for_valid_polygon(self, monkeypatch):
         geom = Polygon([(0, 0), (20, 0), (20, 20), (0, 20)])
@@ -741,6 +1405,61 @@ class TestVectorNearFillConsistency:
         ]
         assert "match_color" not in shapes[0]
         assert "match_color" not in shapes[2]
+
+
+class TestVectorColorDistanceLogging:
+    """Verify large-distance diagnostics stay bounded for many SVG colours."""
+
+    class _AlwaysFarKdtree:
+        n = 1
+
+        def query(self, _lab):
+            return np.array([100.0]), np.array([0])
+
+    class _FakeImageProcessor:
+        lut_path = "fake.npy"
+        color_mode = "Unit"
+        layer_count = 5
+        hue_matcher = None
+        lut_rgb = np.array([[255, 255, 255]], dtype=np.uint8)
+        lut_lab = np.array([[255.0, 255.0, 255.0]], dtype=np.float64)
+        ref_stacks = np.array([[0, 0, 0, 0, 0]], dtype=np.int16)
+
+        def __init__(self):
+            self.kdtree = TestVectorColorDistanceLogging._AlwaysFarKdtree()
+
+        @staticmethod
+        def _rgb_to_lab(arr):
+            return np.asarray(arr, dtype=np.float64)
+
+    def test_match_colors_caps_large_distance_warning_records(self):
+        vp = VectorProcessor.from_img_processor(
+            self._FakeImageProcessor(),
+            "Unit",
+        )
+        clipped = [
+            {
+                "geometry": Polygon([(idx, 0), (idx + 0.5, 0), (idx + 0.5, 0.5), (idx, 0.5)]),
+                "color": (idx, idx + 1, idx + 2),
+            }
+            for idx in range(10)
+        ]
+
+        with mock.patch.object(vector_engine._log, "warning") as warning_spy:
+            matched = vp._match_colors(
+                clipped,
+                replacement_manager=None,
+                num_channels=1,
+                num_layers=5,
+            )
+
+        large_distance_records = [
+            call
+            for call in warning_spy.call_args_list
+            if (call.kwargs.get("extra") or {}).get("event") == "vector_match_color_large_distance"
+        ]
+        assert len(matched) == 10
+        assert len(large_distance_records) == 8
 
 
 class TestVectorNegativeSpacePreview:

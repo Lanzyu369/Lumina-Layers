@@ -20,6 +20,7 @@ from core.pipeline._input_validation_common import (
     _resolve_lut_path_or_error,
 )
 from core.pipeline.preview_color_utils import build_palette_preview_colors
+from core.pipeline.svg_opacity import should_use_opacity_safe_svg_raster_fallback
 from utils.lut_manager import LUTManager
 
 _log = get_logger(__name__)
@@ -70,6 +71,23 @@ def run(ctx: dict) -> dict:
 
     # ---- quantize_colors clamp ----
     quantize_colors = _clamp_quantize_colors(quantize_colors)
+
+    if should_use_opacity_safe_svg_raster_fallback(
+        image_path=image_path,
+        color_mode=color_mode,
+        modeling_mode=modeling_mode,
+    ):
+        modeling_mode = ModelingMode.HIGH_FIDELITY
+        ctx["modeling_mode"] = modeling_mode
+        ctx["svg_vector_opacity_fallback"] = True
+        _log.debug(
+            "5-Color Extended SVG vector preview uses opacity; routing through raster compositing",
+            extra={
+                "event": "svg_vector_opacity_fallback",
+                "stage": "p01",
+                "color_mode": str(color_mode),
+            },
+        )
 
     # ---- Material-archive branch ----
     if material_source == "material_archive":

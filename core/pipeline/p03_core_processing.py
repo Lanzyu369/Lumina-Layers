@@ -512,6 +512,41 @@ def _run_material_archive_branch(ctx: dict) -> dict:
             target_h, target_w,
         )
 
+        # Re-preview requests can carry the global color replacements already
+        # chosen by the user. Apply them here so the refreshed preview matches
+        # the preserved frontend state before any cleanup mutates pixels.
+        from core.pipeline.s03_color_replacement import (
+            _apply_material_archive_color_replacements,
+            _normalize_color_replacements_input,
+        )
+
+        effective_color_replacements = _normalize_color_replacements_input(
+            ctx.get("replacement_regions")
+        )
+        if effective_color_replacements:
+            matched_rgb, material_matrix, applied_replacements = (
+                _apply_material_archive_color_replacements(
+                    matched_rgb,
+                    material_matrix,
+                    mask_solid,
+                    effective_color_replacements,
+                    materials,
+                    layer_count,
+                    layer_height_mm,
+                    substrate,
+                    grid_resolution=actual_grid or requested_grid,
+                )
+            )
+            _log.debug(
+                "Applied %d material-archive preview color replacements",
+                applied_replacements,
+                extra={
+                    "event": "material_archive_preview_replacements_applied",
+                    "replacement_count": len(effective_color_replacements),
+                    "applied_replacement_count": applied_replacements,
+                },
+            )
+
         # ---- Isolated pixel cleanup (honours the user's ``enable_cleanup`` flag) ----
         # Previously only the LUT pipeline ran cleanup — the material-archive
         # branch silently ignored the checkbox even when ticked in the UI. The

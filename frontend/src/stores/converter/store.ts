@@ -61,7 +61,6 @@ import {
   downloadResourceBlob,
 } from "../../api/client";
 import type { ApiRequestOptions } from "../../api/client";
-import { closeSession as apiCloseSession } from "../../api/session";
 import type { LutColorEntry, LutInfo } from "../../api/types";
 import {
   fetchLutInfo as apiFetchLutInfo,
@@ -5479,6 +5478,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         hue_enable: state.hue_enable,
       });
 
+      const previewReplacementRegions = colorRemapToReplacementRegions(
+        state.colorRemapMap,
+        state.palette,
+      );
+      const shouldReplayGlobalReplacements =
+        previewReplacementRegions.length > 0;
+
       set({
         isLoading: true,
         error: null,
@@ -5541,6 +5547,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           auto_dynamic_range: state.auto_dynamic_range,
           is_dark: useSettingsStore.getState().theme === "dark",
           large_format_enabled: state.largeFormatEnabled,
+          ...(shouldReplayGlobalReplacements
+            ? { replacement_regions: previewReplacementRegions }
+            : {}),
         };
         _logPreviewTimer("request sent");
         _previewClientLog("preview: request sent", {
@@ -5626,8 +5635,12 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           previewGlbUrl: glbUrl,
           previewPerformanceTiming: response.performance_timing ?? null,
           generatePerformanceTiming: null,
-          colorRemapMap: {},
-          remapHistory: [],
+          colorRemapMap: shouldReplayGlobalReplacements
+            ? state.colorRemapMap
+            : {},
+          remapHistory: shouldReplayGlobalReplacements
+            ? state.remapHistory
+            : [],
           replacement_regions: [],
           recipe_overrides: [],
           customRecipeHistory: [],
@@ -6083,19 +6096,25 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         const modelUrl = response.preview_3d_url
           ? `${response.preview_3d_url}`
           : null;
+        const shouldShowGeneratedHeightmapModel =
+          state.enable_relief && state.autoHeightMode === "use-heightmap";
         set({
           isGenerating: false,
           // Keep previewGlbUrl as the 3D viewer source: it renders the
           // pixel-level colour-mixed preview. The generate GLB contains the
           // exact per-material geometry used for 3MF export which looks like
           // solid single-colour blocks and confuses users. Only fall back to
-          // modelUrl when no preview GLB exists (e.g. raster flow).
+          // modelUrl when no preview GLB exists (e.g. raster flow), except
+          // heightmap relief where the generated GLB is the only preview that
+          // preserves per-pixel heightmap geometry.
           // 保留 previewGlbUrl 作为 3D 预览源：它渲染像素级混色预览。
           // generate GLB 是 3MF 导出用的精确分材料几何，看起来是纯色块。
-          // 只在没有 preview GLB 时（如光栅流程）才用 modelUrl。
-          modelUrl: useConverterStore.getState().previewGlbUrl
-            ? null
-            : modelUrl,
+          // 高度图浮雕例外：生成 GLB 才保留逐像素高度图几何。
+          modelUrl: shouldShowGeneratedHeightmapModel
+            ? modelUrl
+            : useConverterStore.getState().previewGlbUrl
+              ? null
+              : modelUrl,
           batchPreviewItems: [],
           threemfDiskPath: null,
           downloadUrl: response.download_url
@@ -6917,8 +6936,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       // and 3D viewer still work after slicer launch / download.
       const keepIds = collectConverterKeepFileIds(state);
       apiCleanupSessionFiles(state.sessionId, keepIds);
-      void apiCloseSession(state.sessionId, keepIds);
-      set({ sessionId: null, isLoading: false });
+      set({ isLoading: false });
     },
   })),
 );

@@ -57,6 +57,23 @@ _TILE_COVER_CANVAS_CACHE: dict = {}
 _TILE_COVER_CANVAS_CACHE_MAX = 4
 
 
+def _cleanup_worker_temp_paths(*paths: str | None) -> None:
+    """Best-effort cleanup for worker-created temp files on local failure."""
+
+    import os as _os
+
+    seen: set[str] = set()
+    for path in paths:
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        try:
+            if _os.path.exists(path):
+                _os.unlink(path)
+        except OSError:
+            pass
+
+
 def _rasterize_canvas_subprocess_entry(
     svg_path: str,
     target_width_mm: float,
@@ -479,6 +496,7 @@ def worker_generate_preview(
     auto_dynamic_range: bool = False,
     high_precision_3d_preview: bool = False,
     svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
+    replacement_regions: list[dict[str, str]] | None = None,
 ) -> dict:
     """Execute preview generation in a worker process.
     在工作进程中执行预览生成。
@@ -548,6 +566,7 @@ def worker_generate_preview(
             "material_source": material_source,
             "selected_material_count": len(selected_materials or []),
             "material_grid_resolution": material_grid_resolution,
+            "replacement_count": len(replacement_regions or []),
             "model_enable": model_enable,
             "model_only": model_only,
             "high_precision_3d_preview": high_precision_3d_preview,
@@ -582,6 +601,7 @@ def worker_generate_preview(
             material_layer_count=material_layer_count,
             material_layer_height_mm=material_layer_height_mm,
             material_grid_resolution=material_grid_resolution,
+            replacement_regions=replacement_regions,
         )
     except (ValueError, TypeError, KeyError, OSError, RuntimeError) as e:
         log.exception(
@@ -629,7 +649,13 @@ def worker_generate_preview(
     result: dict = {
         "status_msg": status_msg,
         "preview_png_path": None,
+        "raw_preview_png_path": None,
         "cache_data_path": None,
+        "cache_artifact_ref": None,
+        "vector_parse_clip_cache_path": None,
+        "response_palette": None,
+        "gradient_groups": None,
+        "gradient_region_id_map_path": None,
     }
 
     if preview_img is None:
@@ -655,26 +681,135 @@ def worker_generate_preview(
     # Write preview image to a temp PNG file
     from config import TEMP_DIR
 
-    _t = _time.perf_counter()
-    if preview_img is not None:
-        fd, png_path = tempfile.mkstemp(suffix=".png", dir=TEMP_DIR)
-        os.close(fd)
-        if isinstance(preview_img, np.ndarray):
-            Image.fromarray(preview_img).save(png_path)
-        else:
-            preview_img.save(png_path)
-        result["preview_png_path"] = png_path
-    _t_png = _time.perf_counter() - _t
+    created_temp_paths: list[str] = []
+    _t_png = 0.0
+    _t_pkl = 0.0
+    try:
+        _t = _time.perf_counter()
+        if preview_img is not None:
+            fd, png_path = tempfile.mkstemp(suffix=".png", dir=TEMP_DIR)
+            os.close(fd)
+            created_temp_paths.append(png_path)
+            if isinstance(preview_img, np.ndarray):
+                Image.fromarray(preview_img).save(png_path)
+            else:
+                preview_img.save(png_path)
+            result["preview_png_path"] = png_path
+        _t_png = _time.perf_counter() - _t
 
-    # Pickle cache data to a temp file
-    _t = _time.perf_counter()
-    if cache_data is not None:
-        fd, cache_path = tempfile.mkstemp(suffix=".pkl", dir=TEMP_DIR)
-        os.close(fd)
-        with open(cache_path, "wb") as f:
-            pickle.dump(cache_data, f)
-        result["cache_data_path"] = cache_path
-    _t_pkl = _time.perf_counter() - _t
+        # Pickle cache data to a temp file
+        _t = _time.perf_counter()
+        if cache_data is not None:
+            vector_parse_clip_cache_blob = None
+            if isinstance(cache_data, dict):
+                vector_parse_clip_cache_blob = cache_data.pop(
+                    "vector_parse_clip_cache_blob",
+                    None,
+                )
+            if isinstance(vector_parse_clip_cache_blob, (bytes, bytearray)):
+                fd, vector_cache_path = tempfile.mkstemp(
+                    prefix="vector_parse_clip_cache_",
+                    suffix=".pkl",
+                    dir=TEMP_DIR,
+                )
+                os.close(fd)
+                created_temp_paths.append(vector_cache_path)
+                with open(vector_cache_path, "wb") as f:
+                    f.write(vector_parse_clip_cache_blob)
+                result["vector_parse_clip_cache_path"] = vector_cache_path
+
+            cache_pickle_payload = cache_data
+            if mode_enum != ModelingMode.COLOR_CARD and isinstance(cache_data, dict):
+                from api.gradient_group_payload import compute_gradient_group_payload
+                raw_preview_rgba = cache_data.get("preview_rgba")
+                if isinstance(raw_preview_rgba, np.ndarray):
+                    fd, raw_png_path = tempfile.mkstemp(
+                        prefix="preview_raw_",
+                        suffix=".png",
+                        dir=TEMP_DIR,
+                    )
+                    os.close(fd)
+                    created_temp_paths.append(raw_png_path)
+                    Image.fromarray(raw_preview_rgba).save(raw_png_path)
+                    result["raw_preview_png_path"] = raw_png_path
+
+                try:
+                    from api.preview_response_payload import (
+                        build_preview_response_palette,
+                    )
+
+                    result["response_palette"] = build_preview_response_palette(cache_data)
+                except (ValueError, TypeError, KeyError) as exc:
+                    log.warning(
+                        "Worker preview response palette precompute failed",
+                        extra={
+                            "event": "worker_preview_response_palette_failed",
+                            "error_type": type(exc).__name__,
+                            "error_message": str(exc),
+                        },
+                    )
+
+                try:
+                    computed_gradient_payload = compute_gradient_group_payload(cache_data)
+                except (ValueError, RuntimeError) as exc:
+                    log.warning(
+                        "Worker gradient-group precompute failed",
+                        extra={
+                            "event": "worker_gradient_groups_failed",
+                            "error_type": type(exc).__name__,
+                            "error_message": str(exc),
+                        },
+                    )
+                    computed_gradient_payload = None
+                if computed_gradient_payload is not None:
+                    gradient_groups, region_id_map = computed_gradient_payload
+                    fd, region_map_path = tempfile.mkstemp(
+                        prefix="gradient_region_id_map_",
+                        suffix=".npy",
+                        dir=TEMP_DIR,
+                    )
+                    os.close(fd)
+                    created_temp_paths.append(region_map_path)
+                    np.save(region_map_path, region_id_map)
+                    result["gradient_groups"] = gradient_groups
+                    result["gradient_region_id_map_path"] = region_map_path
+
+                from api.preview_cache_artifacts import (
+                    externalize_preview_cache_to_artifacts,
+                )
+
+                cache_artifact_ref, _artifact_paths = (
+                    externalize_preview_cache_to_artifacts(
+                        cache_data,
+                        root_dir=TEMP_DIR,
+                    )
+                )
+                created_temp_paths.extend(_artifact_paths)
+                result["cache_artifact_ref"] = cache_artifact_ref
+                cache_pickle_payload = dict(cache_artifact_ref["metadata"])
+
+            fd, cache_path = tempfile.mkstemp(suffix=".pkl", dir=TEMP_DIR)
+            os.close(fd)
+            created_temp_paths.append(cache_path)
+            with open(cache_path, "wb") as f:
+                pickle.dump(cache_pickle_payload, f)
+            result["cache_data_path"] = cache_path
+        _t_pkl = _time.perf_counter() - _t
+    except (OSError, RuntimeError, ValueError, TypeError, pickle.PickleError):
+        _cleanup_worker_temp_paths(*created_temp_paths)
+        raise
+
+    cache_artifact_file_bytes = None
+    if result["cache_artifact_ref"]:
+        cache_artifact_paths = {
+            field_ref["path"]
+            for field_ref in result["cache_artifact_ref"].get("fields", {}).values()
+        }
+        cache_artifact_file_bytes = sum(
+            os.path.getsize(path)
+            for path in cache_artifact_paths
+            if os.path.exists(path)
+        )
 
     log.debug(
         "Worker preview serialization complete",
@@ -685,7 +820,33 @@ def worker_generate_preview(
             "duration_ms": round((_time.perf_counter() - _t_serial_start) * 1000, 3),
             "worker_total_ms": round((_time.perf_counter() - _t_worker_start) * 1000, 3),
             "preview_png_bytes": os.path.getsize(result["preview_png_path"]) if result["preview_png_path"] else None,
+            "raw_preview_png_bytes": (
+                os.path.getsize(result["raw_preview_png_path"])
+                if result["raw_preview_png_path"]
+                else None
+            ),
             "cache_data_bytes": os.path.getsize(result["cache_data_path"]) if result["cache_data_path"] else None,
+            "cache_artifact_file_bytes": cache_artifact_file_bytes,
+            "vector_parse_clip_cache_bytes": (
+                os.path.getsize(result["vector_parse_clip_cache_path"])
+                if result["vector_parse_clip_cache_path"]
+                else None
+            ),
+            "response_palette_count": (
+                len(result["response_palette"])
+                if result["response_palette"] is not None
+                else None
+            ),
+            "gradient_group_count": (
+                len(result["gradient_groups"])
+                if result["gradient_groups"] is not None
+                else None
+            ),
+            "gradient_region_id_map_bytes": (
+                os.path.getsize(result["gradient_region_id_map_path"])
+                if result["gradient_region_id_map_path"]
+                else None
+            ),
         },
     )
 

@@ -60,6 +60,26 @@ def _get_node_mesh(scene: trimesh.Scene, node_name: str) -> trimesh.Trimesh:
     return scene.geometry[geom_name]
 
 
+def _unique_mesh_rgb(mesh: trimesh.Trimesh) -> np.ndarray:
+    """Return unique RGB values from either per-face colors or material color."""
+    face_colors = getattr(mesh.visual, "face_colors", None)
+    if face_colors is not None:
+        face_colors = np.asarray(face_colors)
+        if face_colors.ndim == 2 and face_colors.shape[1] >= 3 and len(face_colors) > 0:
+            return np.unique(face_colors[:, :3], axis=0)
+
+    material = getattr(mesh.visual, "material", None)
+    material_color = getattr(material, "baseColorFactor", None)
+    if material_color is None:
+        material_color = getattr(material, "main_color", None)
+    if material_color is not None:
+        rgb = np.asarray(material_color, dtype=np.uint8).reshape(-1)[:3]
+        if rgb.shape == (3,):
+            return rgb.reshape(1, 3)
+
+    return np.empty((0, 3), dtype=np.uint8)
+
+
 @pytest.fixture
 def out_path(tmp_path) -> str:
     """Per-test session-scoped GLB output path.
@@ -221,9 +241,9 @@ class TestSingleColorImage:
 
         # Verify face color matches
         mesh = color_nodes["color_ff0000"]
-        face_rgb = np.unique(mesh.visual.face_colors[:, :3], axis=0)
-        assert len(face_rgb) == 1
-        assert tuple(face_rgb[0]) == (255, 0, 0)
+        mesh_rgb = _unique_mesh_rgb(mesh)
+        assert len(mesh_rgb) == 1
+        assert tuple(mesh_rgb[0]) == (255, 0, 0)
 
         # Verify Pivot Point constraint: min_z = 0
         assert np.isclose(mesh.vertices[:, 2].min(), 0.0, atol=1e-6)
