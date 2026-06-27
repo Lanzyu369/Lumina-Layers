@@ -1205,6 +1205,15 @@ class TestSessionContainsPreviewCache:
                     "material_type": "PLA",
                     "vendor": "BambuLab",
                     "db_names": "RYBW_008_5L.json",
+                    "replacement_regions": json.dumps(
+                        [
+                            {
+                                "quantized_hex": "#111111",
+                                "matched_hex": "#111111",
+                                "replacement_hex": "#222222",
+                            },
+                        ],
+                    ),
                     "model_enable": "true",
                     "model_only": "false",
                     "model_threshold": "6.5",
@@ -1222,6 +1231,22 @@ class TestSessionContainsPreviewCache:
         assert submitted["model_only"] is False
         assert submitted["model_threshold"] == 6.5
         assert submitted["model_margin"] == 0.9
+        assert submitted["replacement_regions"] == [
+            {
+                "quantized_hex": "#111111",
+                "matched_hex": "#111111",
+                "replacement_hex": "#222222",
+            },
+        ]
+        session_data = _test_store.get(response.json()["session_id"])
+        assert session_data is not None
+        assert session_data["replacement_regions"] == [
+            {
+                "quantized_hex": "#111111",
+                "matched_hex": "#111111",
+                "replacement_hex": "#222222",
+            },
+        ]
 
 
 # =========================================================================

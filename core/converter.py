@@ -355,6 +355,7 @@ def generate_preview_cached(
     auto_dynamic_range: bool = False,
     high_precision_3d_preview: bool = False,
     svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
+    replacement_regions=None,
 ):
     """Generate preview and cache data. Thin wrapper, delegates to coordinator.
     生成预览图和缓存数据。薄包装函数，委托给 coordinator。

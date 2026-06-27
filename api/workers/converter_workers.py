@@ -496,6 +496,7 @@ def worker_generate_preview(
     auto_dynamic_range: bool = False,
     high_precision_3d_preview: bool = False,
     svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
+    replacement_regions: list[dict[str, str]] | None = None,
 ) -> dict:
     """Execute preview generation in a worker process.
     在工作进程中执行预览生成。
@@ -565,6 +566,7 @@ def worker_generate_preview(
             "material_source": material_source,
             "selected_material_count": len(selected_materials or []),
             "material_grid_resolution": material_grid_resolution,
+            "replacement_count": len(replacement_regions or []),
             "model_enable": model_enable,
             "model_only": model_only,
             "high_precision_3d_preview": high_precision_3d_preview,
@@ -599,6 +601,7 @@ def worker_generate_preview(
             material_layer_count=material_layer_count,
             material_layer_height_mm=material_layer_height_mm,
             material_grid_resolution=material_grid_resolution,
+            replacement_regions=replacement_regions,
         )
     except (ValueError, TypeError, KeyError, OSError, RuntimeError) as e:
         log.exception(

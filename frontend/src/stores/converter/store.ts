@@ -5478,6 +5478,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         hue_enable: state.hue_enable,
       });
 
+      const previewReplacementRegions = colorRemapToReplacementRegions(
+        state.colorRemapMap,
+        state.palette,
+      );
+      const shouldReplayGlobalReplacements =
+        previewReplacementRegions.length > 0;
+
       set({
         isLoading: true,
         error: null,
@@ -5540,6 +5547,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           auto_dynamic_range: state.auto_dynamic_range,
           is_dark: useSettingsStore.getState().theme === "dark",
           large_format_enabled: state.largeFormatEnabled,
+          ...(shouldReplayGlobalReplacements
+            ? { replacement_regions: previewReplacementRegions }
+            : {}),
         };
         _logPreviewTimer("request sent");
         _previewClientLog("preview: request sent", {
@@ -5625,8 +5635,12 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           previewGlbUrl: glbUrl,
           previewPerformanceTiming: response.performance_timing ?? null,
           generatePerformanceTiming: null,
-          colorRemapMap: {},
-          remapHistory: [],
+          colorRemapMap: shouldReplayGlobalReplacements
+            ? state.colorRemapMap
+            : {},
+          remapHistory: shouldReplayGlobalReplacements
+            ? state.remapHistory
+            : [],
           replacement_regions: [],
           recipe_overrides: [],
           customRecipeHistory: [],
