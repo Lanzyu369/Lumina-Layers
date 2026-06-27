@@ -4115,6 +4115,206 @@ def test_generate_route_forwards_cache_recovered_virtual_materials(tmp_path) -> 
     assert np.all(material_matrix[mask] == np.array([4, 4, 4, 4, 4, 4, 4]))
 
 
+def test_generate_route_recovers_select_all_recipe_override_mask(tmp_path) -> None:
+    """Select-all recipe overrides must not require a pre-persisted region mask."""
+    _test_store.clear_all()
+    image_path = tmp_path / "input.png"
+    out_path = tmp_path / "out.3mf"
+    Image.fromarray(np.zeros((4, 4, 3), dtype=np.uint8)).save(image_path)
+    out_path.write_bytes(b"3mf")
+
+    session_id = _test_store.create()
+    target_rgb = np.array([0x89, 0x47, 0x35], dtype=np.uint8)
+    matched_rgb = np.zeros((4, 4, 3), dtype=np.uint8)
+    matched_rgb[0, 0] = target_rgb
+    matched_rgb[1, 1] = target_rgb
+    matched_rgb[2, 2] = np.array([0x20, 0x20, 0x20], dtype=np.uint8)
+    expected_mask = np.zeros((4, 4), dtype=bool)
+    expected_mask[0, 0] = True
+    expected_mask[1, 1] = True
+
+    _test_store.put(session_id, "image_path", str(image_path))
+    _test_store.put(session_id, "lut_path", "__material_archive__")
+    _test_store.put(session_id, "material_source", "material_archive")
+    _test_store.put(
+        session_id,
+        "selected_materials",
+        ["mat-black", "mat-cyan", "mat-yellow", "mat-white", "mat-red"],
+    )
+    _test_store.put(session_id, "material_layer_count", 7)
+    _test_store.put(session_id, "material_layer_height_mm", 0.08)
+    _test_store.put(session_id, "replacement_regions", [])
+    _test_store.put(session_id, "free_color_set", set())
+    _test_store.put(
+        session_id,
+        "preview_cache",
+        {
+            "target_w": 4,
+            "target_h": 4,
+            "target_width_mm": 40.0,
+            "matched_rgb": matched_rgb,
+            "mask_solid": np.ones((4, 4), dtype=bool),
+            "material_matrix": np.zeros((4, 4, 7), dtype=np.uint8),
+            "slot_names": ["Black", "Cyan", "Yellow", "White", "Red"],
+            "preview_colors": {
+                0: [16, 16, 16, 255],
+                1: [0, 183, 235, 255],
+                2: [255, 212, 0, 255],
+                3: [245, 245, 245, 255],
+                4: [220, 20, 60, 255],
+            },
+        },
+    )
+
+    _mock_pool.submit = AsyncMock(
+        return_value={
+            "threemf_path": str(out_path),
+            "glb_path": None,
+            "status_msg": "OK",
+        }
+    )
+
+    response = client.post(
+        "/api/convert/generate",
+        json={
+            "session_id": session_id,
+            "params": {
+                "lut_name": "__material_archive__",
+                "modeling_mode": "vector",
+                "target_width_mm": 113,
+                "spacer_thick": 0.24,
+                "structure_mode": "Single-sided",
+                "color_layers": 7,
+                "layer_height_mm": 0.08,
+                "separate_backing": True,
+                "recipe_overrides": [
+                    {
+                        "region_id": "__select_all_color__:894735",
+                        "recipe": [4, 4, 4, 4, 4, 4, 4],
+                        "layer_order": "Top2Bottom",
+                    }
+                ],
+            },
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    submitted_params = _mock_pool.submit.call_args.args[3]
+    assert submitted_params["recipe_override_masks_path"] is not None
+    with open(submitted_params["recipe_override_masks_path"], "rb") as f:
+        masks = pickle.load(f)
+    assert masks.keys() == {"__select_all_color__:894735"}
+    assert np.array_equal(masks["__select_all_color__:894735"], expected_mask)
+
+    material_matrix = np.load(submitted_params["material_matrix_path"])
+    assert np.all(material_matrix[expected_mask] == np.array([4, 4, 4, 4, 4, 4, 4]))
+    assert np.all(material_matrix[2, 2] == np.zeros(7, dtype=np.uint8))
+
+
+def test_generate_route_recovers_select_all_recipe_override_mask_from_artifact_cache(tmp_path) -> None:
+    _test_store.clear_all()
+    image_path = tmp_path / "input.png"
+    out_path = tmp_path / "out.3mf"
+    Image.fromarray(np.zeros((4, 4, 3), dtype=np.uint8)).save(image_path)
+    out_path.write_bytes(b"3mf")
+
+    session_id = _test_store.create()
+    target_rgb = np.array([0x89, 0x47, 0x35], dtype=np.uint8)
+    matched_rgb = np.zeros((4, 4, 3), dtype=np.uint8)
+    matched_rgb[0, 0] = target_rgb
+    matched_rgb[1, 1] = target_rgb
+    expected_mask = np.zeros((4, 4), dtype=bool)
+    expected_mask[0, 0] = True
+    expected_mask[1, 1] = True
+    cache_ref = externalize_preview_cache(
+        session_id,
+        _test_store,
+        {
+            "target_w": 4,
+            "target_h": 4,
+            "target_width_mm": 40.0,
+            "matched_rgb": matched_rgb,
+            "mask_solid": np.ones((4, 4), dtype=bool),
+            "material_matrix": np.zeros((4, 4, 7), dtype=np.uint8),
+            "slot_names": ["Black", "Cyan", "Yellow", "White", "Red"],
+            "preview_colors": {
+                0: [16, 16, 16, 255],
+                1: [0, 183, 235, 255],
+                2: [255, 212, 0, 255],
+                3: [245, 245, 245, 255],
+                4: [220, 20, 60, 255],
+            },
+        },
+        root_dir=tmp_path,
+    )
+
+    _test_store.put(session_id, "image_path", str(image_path))
+    _test_store.put(session_id, "lut_path", "__material_archive__")
+    _test_store.put(session_id, "material_source", "material_archive")
+    _test_store.put(
+        session_id,
+        "selected_materials",
+        ["mat-black", "mat-cyan", "mat-yellow", "mat-white", "mat-red"],
+    )
+    _test_store.put(session_id, "material_layer_count", 7)
+    _test_store.put(session_id, "material_layer_height_mm", 0.08)
+    _test_store.put(session_id, "replacement_regions", [])
+    _test_store.put(session_id, "free_color_set", set())
+    _test_store.put(session_id, "preview_cache", cache_ref)
+
+    _mock_pool.submit = AsyncMock(
+        return_value={
+            "threemf_path": str(out_path),
+            "glb_path": None,
+            "status_msg": "OK",
+        }
+    )
+
+    from api.preview_cache_artifacts import hydrate_preview_cache as real_hydrate_preview_cache
+
+    hydrate_fields: list[frozenset[str]] = []
+
+    def _tracking_hydrate(cache_ref_arg, *, fields=None, mmap_mode=None):
+        hydrate_fields.append(frozenset(fields or ()))
+        return real_hydrate_preview_cache(cache_ref_arg, fields=fields, mmap_mode=mmap_mode)
+
+    with patch("api.routers.converter.generate.hydrate_preview_cache", side_effect=_tracking_hydrate):
+        response = client.post(
+            "/api/convert/generate",
+            json={
+                "session_id": session_id,
+                "params": {
+                    "lut_name": "__material_archive__",
+                    "modeling_mode": "vector",
+                    "target_width_mm": 113,
+                    "spacer_thick": 0.24,
+                    "structure_mode": "Single-sided",
+                    "color_layers": 7,
+                    "layer_height_mm": 0.08,
+                    "separate_backing": True,
+                    "recipe_overrides": [
+                        {
+                            "region_id": "__select_all_color__:894735",
+                            "recipe": [4, 4, 4, 4, 4, 4, 4],
+                            "layer_order": "Top2Bottom",
+                        }
+                    ],
+                },
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert frozenset({"material_matrix"}) in hydrate_fields
+    assert frozenset({"matched_rgb"}) in hydrate_fields
+    assert frozenset({"mask_solid"}) in hydrate_fields
+    assert frozenset() not in hydrate_fields
+
+    submitted_params = _mock_pool.submit.call_args.args[3]
+    with open(submitted_params["recipe_override_masks_path"], "rb") as f:
+        masks = pickle.load(f)
+    assert np.array_equal(masks["__select_all_color__:894735"], expected_mask)
+
+
 def test_generate_route_rejects_stale_recipe_override_artifact_cache(tmp_path) -> None:
     _test_store.clear_all()
     image_path = tmp_path / "input.png"

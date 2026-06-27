@@ -129,6 +129,7 @@ BATCH_ITEM_FAILED_DETAIL: str = (
 MODEL_GENERATION_FAILED_DETAIL: str = (
     "3MF generation failed. Re-run preview and try generating the model again."
 )
+_SELECT_ALL_COLOR_REGION_PREFIX = "__select_all_color__:"
 
 
 class _GenerateBody(BaseModel):
@@ -528,6 +529,62 @@ def _cache_field_array(
     return hydrated.get(field_name)
 
 
+def _recover_select_all_color_region_mask(
+    *,
+    cache: dict,
+    cache_ref: dict | None,
+    region_id: object,
+) -> np.ndarray | None:
+    """Recover a select-all pseudo-region mask from cached preview colors."""
+
+    if not isinstance(region_id, str):
+        return None
+    if not region_id.startswith(_SELECT_ALL_COLOR_REGION_PREFIX):
+        return None
+
+    color_hex = region_id[len(_SELECT_ALL_COLOR_REGION_PREFIX):].strip().lstrip("#")
+    if len(color_hex) != 6:
+        return None
+    try:
+        target_rgb = np.asarray(
+            [
+                int(color_hex[0:2], 16),
+                int(color_hex[2:4], 16),
+                int(color_hex[4:6], 16),
+            ],
+            dtype=np.uint8,
+        )
+    except ValueError:
+        return None
+
+    matched_rgb = _cache_field_array(
+        cache=cache,
+        cache_ref=cache_ref,
+        field_name="matched_rgb",
+        mmap_mode="r",
+    )
+    mask_solid = _cache_field_array(
+        cache=cache,
+        cache_ref=cache_ref,
+        field_name="mask_solid",
+        mmap_mode="r",
+    )
+    if matched_rgb is None or mask_solid is None:
+        return None
+
+    matched_arr = np.asarray(matched_rgb)
+    if matched_arr.ndim != 3 or matched_arr.shape[2] < 3:
+        return None
+    mask_solid_arr = np.asarray(mask_solid, dtype=bool)
+    if mask_solid_arr.shape != matched_arr.shape[:2]:
+        return None
+
+    color_mask = np.all(matched_arr[..., :3] == target_rgb, axis=-1) & mask_solid_arr
+    if not np.any(color_mask):
+        return None
+    return np.asarray(color_mask, dtype=bool)
+
+
 def _parse_batch_color_height_map(value: str | None) -> dict[str, float] | None:
     if not value:
         return None
@@ -899,6 +956,7 @@ def _prepare_recipe_override_worker_inputs(
         raise HTTPException(status_code=409, detail="Preview cache missing material_matrix")
     if not isinstance(region_masks, dict):
         region_masks = {}
+    session_data["selected_region_masks"] = region_masks
 
     material_matrix_override = np.asarray(cached_material_matrix).copy()
     current_layers = int(material_matrix_override.shape[2]) if material_matrix_override.ndim == 3 else 0
@@ -1001,6 +1059,15 @@ def _prepare_recipe_override_worker_inputs(
         item_recipe = item["recipe"]
         item_layer_order = item["layer_order"]
         region_mask = region_masks.get(region_id)
+        if region_mask is None:
+            region_mask = _recover_select_all_color_region_mask(
+                cache=cache,
+                cache_ref=cache_ref,
+                region_id=region_id,
+            )
+            if region_mask is not None:
+                region_masks[region_id] = region_mask
+                store.put(sid, "selected_region_masks", region_masks)
         if region_mask is None:
             raise HTTPException(
                 status_code=422,
