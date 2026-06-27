@@ -210,6 +210,108 @@ class TestS01InputValidation:
 
         assert result["is_svg_vector"] is True
 
+    def test_five_color_translucent_svg_vector_falls_back_to_high_fidelity(self, tmp_path):
+        """5-Color Extended native vector cannot preserve SVG opacity stacking."""
+        from core.pipeline.s01_input_validation import run
+
+        svg_path = tmp_path / "translucent-line.svg"
+        svg_path.write_text(
+            (
+                '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+                '<rect x="0" y="0" width="100" height="100" fill="#ff0000"/>'
+                '<path d="M0 50 L100 50" stroke="#0000ff" '
+                'stroke-opacity="0.5" stroke-width="20" fill="none"/>'
+                "</svg>"
+            ),
+            encoding="utf-8",
+        )
+
+        ctx = self._make_valid_ctx()
+        ctx["image_path"] = str(svg_path)
+        ctx["modeling_mode"] = ModelingMode.VECTOR
+        ctx["color_mode"] = "5-Color Extended"
+        result = run(ctx)
+
+        assert result["is_svg_vector"] is False
+        assert result["modeling_mode"] == ModelingMode.HIGH_FIDELITY
+        assert result["svg_vector_opacity_fallback"] is True
+
+    def test_five_color_opaque_svg_vector_stays_native(self, tmp_path):
+        """Opaque 5-Color Extended SVGs should keep the native vector path."""
+        from core.pipeline.s01_input_validation import run
+
+        svg_path = tmp_path / "opaque.svg"
+        svg_path.write_text(
+            (
+                '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+                '<rect x="0" y="0" width="100" height="100" fill="#ff0000"/>'
+                "</svg>"
+            ),
+            encoding="utf-8",
+        )
+
+        ctx = self._make_valid_ctx()
+        ctx["image_path"] = str(svg_path)
+        ctx["modeling_mode"] = ModelingMode.VECTOR
+        ctx["color_mode"] = "5-Color Extended"
+        result = run(ctx)
+
+        assert result["is_svg_vector"] is True
+        assert result["modeling_mode"] == ModelingMode.VECTOR
+        assert "svg_vector_opacity_fallback" not in result
+
+    def test_five_color_unused_stylesheet_opacity_stays_native(self, tmp_path):
+        """Unused stylesheet opacity must not downgrade an opaque SVG."""
+        from core.pipeline.s01_input_validation import run
+
+        svg_path = tmp_path / "unused-style-opacity.svg"
+        svg_path.write_text(
+            (
+                '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+                "<style>.unused{opacity:.5}</style>"
+                '<rect x="0" y="0" width="100" height="100" fill="#ff0000"/>'
+                "</svg>"
+            ),
+            encoding="utf-8",
+        )
+
+        ctx = self._make_valid_ctx()
+        ctx["image_path"] = str(svg_path)
+        ctx["modeling_mode"] = ModelingMode.VECTOR
+        ctx["color_mode"] = "5-Color Extended"
+        result = run(ctx)
+
+        assert result["is_svg_vector"] is True
+        assert result["modeling_mode"] == ModelingMode.VECTOR
+        assert "svg_vector_opacity_fallback" not in result
+
+    def test_five_color_matching_stylesheet_opacity_falls_back(self, tmp_path):
+        """Stylesheet opacity should still downgrade when it matches an element."""
+        from core.pipeline.s01_input_validation import run
+
+        svg_path = tmp_path / "matching-style-opacity.svg"
+        svg_path.write_text(
+            (
+                '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+                "<style>.line{stroke-opacity:.5}</style>"
+                '<rect x="0" y="0" width="100" height="100" fill="#ff0000"/>'
+                '<path class="line" d="M0 50 L100 50" stroke="#0000ff" '
+                'stroke-width="20" fill="none"/>'
+                "</svg>"
+            ),
+            encoding="utf-8",
+        )
+
+        ctx = self._make_valid_ctx()
+        ctx["image_path"] = str(svg_path)
+        ctx["modeling_mode"] = ModelingMode.VECTOR
+        ctx["color_mode"] = "5-Color Extended"
+        result = run(ctx)
+
+        assert result["is_svg_vector"] is False
+        assert result["modeling_mode"] == ModelingMode.HIGH_FIDELITY
+        assert result["svg_vector_opacity_fallback"] is True
+
     def test_material_archive_svg_vector_mode_enters_native_vector_branch(self):
         """material_archive + SVG + vector now shares the native vector branch.
 
@@ -1037,6 +1139,31 @@ class TestP01PreviewValidation:
         result = run(ctx)
 
         assert result["actual_lut_path"] == "/tmp/uploaded_lut.npy"
+
+    def test_five_color_translucent_svg_vector_preview_falls_back_to_high_fidelity(self, tmp_path):
+        """Preview must choose the same opacity-safe path as final generation."""
+        from core.pipeline.p01_preview_validation import run
+
+        svg_path = tmp_path / "translucent-line.svg"
+        svg_path.write_text(
+            (
+                '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+                '<rect x="0" y="0" width="100" height="100" fill="#ff0000"/>'
+                '<path d="M0 50 L100 50" stroke="#0000ff" '
+                'stroke-opacity="0.5" stroke-width="20" fill="none"/>'
+                "</svg>"
+            ),
+            encoding="utf-8",
+        )
+
+        ctx = self._make_valid_ctx()
+        ctx["image_path"] = str(svg_path)
+        ctx["modeling_mode"] = ModelingMode.VECTOR
+        ctx["color_mode"] = "5-Color Extended"
+        result = run(ctx)
+
+        assert result["modeling_mode"] == ModelingMode.HIGH_FIDELITY
+        assert result["svg_vector_opacity_fallback"] is True
 
     def test_empty_dict_raises_key_error(self):
         """空 dict 应抛出 KeyError。"""
