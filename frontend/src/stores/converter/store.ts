@@ -61,7 +61,6 @@ import {
   downloadResourceBlob,
 } from "../../api/client";
 import type { ApiRequestOptions } from "../../api/client";
-import { closeSession as apiCloseSession } from "../../api/session";
 import type { LutColorEntry, LutInfo } from "../../api/types";
 import {
   fetchLutInfo as apiFetchLutInfo,
@@ -6917,8 +6916,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       // and 3D viewer still work after slicer launch / download.
       const keepIds = collectConverterKeepFileIds(state);
       apiCleanupSessionFiles(state.sessionId, keepIds);
-      void apiCloseSession(state.sessionId, keepIds);
-      set({ sessionId: null, isLoading: false });
+      set({ isLoading: false });
     },
   })),
 );

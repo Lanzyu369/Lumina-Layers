@@ -108,7 +108,7 @@ describe("converter store cleanup behavior", () => {
     );
   });
 
-  it("closes the backend session after download cleanup to release preview cache", async () => {
+  it("keeps the backend session after download cleanup so color edits can continue", async () => {
     const useConverterStore = await loadStore();
 
     useConverterStore.setState({
@@ -132,18 +132,8 @@ describe("converter store cleanup behavior", () => {
         "glb-close",
       ]),
     );
-    expect(closeSessionMock).toHaveBeenCalledOnce();
-    expect(closeSessionMock).toHaveBeenCalledWith(
-      "sess-close",
-      expect.arrayContaining([
-        "download-close",
-        "preview-close",
-        "preview-base-close",
-        "original-close",
-        "glb-close",
-      ]),
-    );
-    expect(useConverterStore.getState().sessionId).toBeNull();
+    expect(closeSessionMock).not.toHaveBeenCalled();
+    expect(useConverterStore.getState().sessionId).toBe("sess-close");
     expect(useConverterStore.getState().downloadUrl).toBe("/api/files/download-close");
   });
 
@@ -163,10 +153,7 @@ describe("converter store cleanup behavior", () => {
       "sess-generated-glb",
       expect.arrayContaining(["download-generated", "generated-glb"]),
     );
-    expect(closeSessionMock).toHaveBeenCalledWith(
-      "sess-generated-glb",
-      expect.arrayContaining(["download-generated", "generated-glb"]),
-    );
+    expect(closeSessionMock).not.toHaveBeenCalled();
   });
 
   it("ignores stale layer image responses after the session changes", async () => {
