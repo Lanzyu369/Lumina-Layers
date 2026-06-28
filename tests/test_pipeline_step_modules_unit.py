@@ -603,6 +603,57 @@ class TestS06VoxelBuilding:
             backing_end - backing_start + 1
         )
 
+    def test_pixel_mode_backing_uses_full_canvas_without_coloring_transparent_pixels(self):
+        """Pixel mode should preserve the requested canvas size with backing only."""
+        from core.pipeline.s06_voxel_building import run
+
+        h, w = 6, 6
+        material_matrix = np.full((h, w, 5), -1, dtype=int)
+        material_matrix[2:4, 1:5, :] = 2
+        mask_solid = np.zeros((h, w), dtype=bool)
+        mask_solid[2:4, 1:5] = True
+        ctx = {
+            **self._make_valid_ctx(),
+            "material_matrix": material_matrix,
+            "mask_solid": mask_solid,
+            "matched_rgb": np.full((h, w, 3), [128, 64, 32], dtype=np.uint8),
+            "backing_color_id": 3,
+            "spacer_thick": 0.16,
+            "modeling_mode": ModelingMode.PIXEL,
+        }
+
+        result = run(ctx)
+        backing_start, backing_end = result["backing_metadata"]["backing_z_range"]
+
+        assert np.all(result["full_matrix"][backing_start: backing_end + 1] == 3)
+        assert np.all(result["full_matrix"][:backing_start, 0, 0] == -1)
+        assert np.all(result["full_matrix"][:backing_start, 2, 1] == 2)
+
+    def test_high_fidelity_backing_stays_on_solid_mask(self):
+        """Non-pixel modes keep transparent margins outside the backing footprint."""
+        from core.pipeline.s06_voxel_building import run
+
+        h, w = 6, 6
+        material_matrix = np.full((h, w, 5), -1, dtype=int)
+        material_matrix[2:4, 1:5, :] = 2
+        mask_solid = np.zeros((h, w), dtype=bool)
+        mask_solid[2:4, 1:5] = True
+        ctx = {
+            **self._make_valid_ctx(),
+            "material_matrix": material_matrix,
+            "mask_solid": mask_solid,
+            "matched_rgb": np.full((h, w, 3), [128, 64, 32], dtype=np.uint8),
+            "backing_color_id": 3,
+            "spacer_thick": 0.16,
+            "modeling_mode": ModelingMode.HIGH_FIDELITY,
+        }
+
+        result = run(ctx)
+        backing_start, backing_end = result["backing_metadata"]["backing_z_range"]
+
+        assert np.all(result["full_matrix"][backing_start: backing_end + 1, 0, 0] == -1)
+        assert np.all(result["full_matrix"][backing_start: backing_end + 1, 2, 1] == 3)
+
     def test_cloisonne_builds_wireframe_without_processor(self):
         """Cloisonne mode must not require ctx["processor"] in material-archive flows."""
         from core.pipeline.s06_voxel_building import run
@@ -1259,6 +1310,33 @@ class TestP04CacheBuilding:
 
         assert cache["modeling_mode"] == ModelingMode.PIXEL
         assert cache["glb_max_meshes"] == 256
+
+    def test_pixel_mode_adds_full_canvas_backing_mask_for_glb_preview(self):
+        """Pixel GLB preview backing should match the requested canvas size."""
+        from core.pipeline.p04_cache_building import run
+
+        ctx = self._make_valid_ctx()
+        ctx["modeling_mode"] = ModelingMode.PIXEL
+        ctx["mask_solid"] = np.zeros((4, 4), dtype=bool)
+        ctx["mask_solid"][1:3, 1:3] = True
+
+        cache = run(ctx)["cache"]
+
+        assert np.all(cache["backing_mask"])
+        assert np.count_nonzero(cache["backing_mask"] & ~cache["mask_solid"]) > 0
+
+    def test_high_fidelity_does_not_add_backing_mask_by_default(self):
+        """High-fidelity GLB preview keeps backing tied to the visible silhouette."""
+        from core.pipeline.p04_cache_building import run
+
+        ctx = self._make_valid_ctx()
+        ctx["modeling_mode"] = ModelingMode.HIGH_FIDELITY
+        ctx["mask_solid"] = np.zeros((4, 4), dtype=bool)
+        ctx["mask_solid"][1:3, 1:3] = True
+
+        cache = run(ctx)["cache"]
+
+        assert "backing_mask" not in cache
 
     def test_high_fidelity_does_not_raise_glb_mesh_budget_by_default(self):
         """High-fidelity mode keeps the default GLB cap unless opted in."""

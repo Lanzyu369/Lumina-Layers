@@ -321,7 +321,47 @@ def _resolve_generation_backing_color_id(
     return int(backing_color_id)
 
 
-def _build_voxel_matrix(material_matrix, mask_solid, spacer_thick, structure_mode, backing_color_id=0):
+def _normalize_backing_mask(backing_mask, mask_solid: np.ndarray) -> np.ndarray | None:
+    """Return a validated backing footprint mask, or None when unavailable."""
+    if backing_mask is None:
+        return None
+    backing_arr = np.asarray(backing_mask, dtype=bool)
+    if backing_arr.shape != mask_solid.shape:
+        raise ValueError(
+            f"backing_mask shape {backing_arr.shape} does not match mask_solid shape {mask_solid.shape}"
+        )
+    return backing_arr
+
+
+def _resolve_flat_backing_mask(ctx: dict, mask_solid: np.ndarray) -> np.ndarray:
+    """Resolve the 2D backing footprint for flat raster voxel builds."""
+    explicit_backing_mask = _normalize_backing_mask(ctx.get("backing_mask"), mask_solid)
+    if explicit_backing_mask is not None:
+        return explicit_backing_mask
+
+    modeling_mode = ctx.get("modeling_mode")
+    modeling_mode_value = getattr(modeling_mode, "value", modeling_mode)
+    if (
+        modeling_mode_value == "pixel"
+        and ctx.get("material_source", "lut") == "lut"
+        and np.any(mask_solid)
+        and not bool(ctx.get("enable_relief", False))
+        and not bool(ctx.get("enable_cloisonne", False))
+        and not (bool(ctx.get("enable_fridge_magnet", False)) and ctx.get("fridge_magnets"))
+    ):
+        return np.ones_like(mask_solid, dtype=bool)
+
+    return mask_solid
+
+
+def _build_voxel_matrix(
+    material_matrix,
+    mask_solid,
+    spacer_thick,
+    structure_mode,
+    backing_color_id=0,
+    backing_mask=None,
+):
     """Build complete voxel matrix with backing layer marked using special material_id.
     构建带底板标记的完整体素矩阵。
 
@@ -332,6 +372,7 @@ def _build_voxel_matrix(material_matrix, mask_solid, spacer_thick, structure_mod
         spacer_thick (float): backing thickness (mm) (底板厚度)
         structure_mode (str): "双面" or "单面" (Double-sided or Single-sided)
         backing_color_id (int): backing material ID (0-7), default is 0 (White)
+        backing_mask (np.ndarray | None): Optional 2D backing footprint mask.
 
     Returns:
         tuple: (full_matrix, backing_metadata)
@@ -343,7 +384,9 @@ def _build_voxel_matrix(material_matrix, mask_solid, spacer_thick, structure_mod
     if material_matrix.ndim != 3:
         raise ValueError(f"material_matrix must be 3D (H, W, N), got shape={material_matrix.shape}")
     target_h, target_w, optical_layers = material_matrix.shape
-    mask_transparent = ~mask_solid
+    backing_mask_arr = _normalize_backing_mask(backing_mask, mask_solid)
+    if backing_mask_arr is None:
+        backing_mask_arr = mask_solid
 
     bottom_voxels = np.transpose(material_matrix, (2, 0, 1))
 
@@ -358,7 +401,7 @@ def _build_voxel_matrix(material_matrix, mask_solid, spacer_thick, structure_mod
 
         # Use backing_color_id parameter to mark backing layer
         spacer = np.full((target_h, target_w), -1, dtype=int)
-        spacer[~mask_transparent] = backing_color_id
+        spacer[backing_mask_arr] = backing_color_id
         for z in range(optical_layers, optical_layers + spacer_layers):
             full_matrix[z] = spacer
 
@@ -373,14 +416,14 @@ def _build_voxel_matrix(material_matrix, mask_solid, spacer_thick, structure_mod
 
         # Use backing_color_id parameter to mark backing layer
         spacer = np.full((target_h, target_w), -1, dtype=int)
-        spacer[~mask_transparent] = backing_color_id
+        spacer[backing_mask_arr] = backing_color_id
         for z in range(optical_layers, total_layers):
             full_matrix[z] = spacer
 
         backing_z_range = (optical_layers, total_layers - 1)
 
     backing_z_min_map, backing_z_max_map = _build_uniform_backing_z_maps(
-        mask_solid,
+        backing_mask_arr,
         backing_z_range[0],
         backing_z_range[1],
     )
@@ -394,7 +437,14 @@ def _build_voxel_matrix(material_matrix, mask_solid, spacer_thick, structure_mod
     return full_matrix, backing_metadata
 
 
-def _build_voxel_matrix_6layer(material_matrix, mask_solid, spacer_thick, structure_mode, backing_color_id=0):
+def _build_voxel_matrix_6layer(
+    material_matrix,
+    mask_solid,
+    spacer_thick,
+    structure_mode,
+    backing_color_id=0,
+    backing_mask=None,
+):
     """Build complete voxel matrix for 6-layer structures (5-Color Extended mode).
     构建 6 层体素矩阵（5-Color Extended 模式）。
 
@@ -409,7 +459,12 @@ def _build_voxel_matrix_6layer(material_matrix, mask_solid, spacer_thick, struct
         tuple: (full_matrix, backing_metadata)
     """
     return _build_voxel_matrix(
-        material_matrix, mask_solid, spacer_thick, structure_mode, backing_color_id=backing_color_id
+        material_matrix,
+        mask_solid,
+        spacer_thick,
+        structure_mode,
+        backing_color_id=backing_color_id,
+        backing_mask=backing_mask,
     )
 
 
@@ -854,8 +909,14 @@ def run(ctx: dict) -> dict:
                 )
             else:
                 # Original flat voxel matrix
+                flat_backing_mask = _resolve_flat_backing_mask(ctx, mask_solid)
                 full_matrix, backing_metadata = _build_voxel_matrix(
-                    material_matrix, mask_solid, spacer_thick, structure_mode, effective_backing_color_id
+                    material_matrix,
+                    mask_solid,
+                    spacer_thick,
+                    structure_mode,
+                    effective_backing_color_id,
+                    backing_mask=flat_backing_mask,
                 )
 
         if enable_fridge_magnet:

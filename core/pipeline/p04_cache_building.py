@@ -120,6 +120,13 @@ def run(ctx: dict) -> dict:
         'slot_names': ctx.get('slot_names'),
     }
     modeling_mode_value = getattr(modeling_mode, "value", modeling_mode)
+    if (
+        modeling_mode_value == "pixel"
+        and material_source == "lut"
+        and np.any(mask_solid)
+    ):
+        cache["backing_mask"] = np.ones_like(mask_solid, dtype=bool)
+
     if modeling_mode_value == "pixel" or high_precision_3d_preview:
         try:
             glb_mesh_budget = int(quantize_colors)
