@@ -35,6 +35,7 @@ from api.preview_cache_artifacts import (
 )
 from api.routers.converter.preview import (
     _enforce_preview_cache_size_limit,
+    _get_large_format_svg_preview_cache_max_bytes,
     _parse_selected_materials,
     _resolve_upload_source_basename,
     convert_preview,
@@ -2102,7 +2103,34 @@ class TestParseSelectedMaterials:
 class TestLargeFormatSvgPreviewCacheSizing:
     """Regression coverage for tall SVG + material archive preview guard."""
 
-    def test_uncapped_tall_svg_preview_exceeds_limit(self, tmp_path) -> None:
+    def test_material_svg_290mm_10_layer_preview_not_limited_by_default(
+        self, tmp_path
+    ) -> None:
+        """LUM-20260628-002 should not be rejected when no cap is configured."""
+        svg_path = tmp_path / "gray_boundary.svg"
+        svg_path.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" '
+            'width="2900" height="2049" viewBox="0 0 2900 2049">'
+            '<path d="M0 0H2900V2049H0Z" fill="#ffffff"/>'
+            "</svg>",
+            encoding="utf-8",
+        )
+
+        _enforce_preview_cache_size_limit(
+            image_path=str(svg_path),
+            target_width_mm=290,
+            modeling_mode="vector",
+            svg_pixels_per_mm=10,
+            color_layers=None,
+            material_layer_count=10,
+            material_source="material_archive",
+            max_bytes=None,
+        )
+
+    def test_tall_svg_preview_rejects_when_positive_cap_is_configured(
+        self, tmp_path
+    ) -> None:
+        """The guardrail still works when an operator explicitly enables a cap."""
         svg_path = tmp_path / "tall.svg"
         svg_path.write_text(
             '<svg xmlns="http://www.w3.org/2000/svg" '
@@ -2112,25 +2140,22 @@ class TestLargeFormatSvgPreviewCacheSizing:
             encoding="utf-8",
         )
 
-        with patch(
-            "api.routers.converter.preview.get_preview_cache_max_bytes",
-            return_value=512 * 1024 * 1024,
-        ):
-            try:
-                _enforce_preview_cache_size_limit(
-                    image_path=str(svg_path),
-                    target_width_mm=170,
-                    modeling_mode="vector",
-                    svg_pixels_per_mm=10,
-                    color_layers=None,
-                    material_layer_count=5,
-                    material_source="material_archive",
-                )
-            except Exception as exc:
-                assert getattr(exc, "status_code", None) == 422
-                assert exc.detail["error"] == "preview_cache_size_limit_exceeded"
-            else:
-                raise AssertionError("uncapped tall SVG preview should exceed the cache guardrail")
+        try:
+            _enforce_preview_cache_size_limit(
+                image_path=str(svg_path),
+                target_width_mm=170,
+                modeling_mode="vector",
+                svg_pixels_per_mm=10,
+                color_layers=None,
+                material_layer_count=5,
+                material_source="material_archive",
+                max_bytes=512 * 1024 * 1024,
+            )
+        except Exception as exc:
+            assert getattr(exc, "status_code", None) == 422
+            assert exc.detail["error"] == "preview_cache_size_limit_exceeded"
+        else:
+            raise AssertionError("explicit 512 MiB cap should reject the preview")
 
     def test_material_archive_svg_uses_compacted_matrix_estimate(self, tmp_path) -> None:
         """Material archive cache estimates should match compact persisted matrices."""
@@ -2156,7 +2181,7 @@ class TestLargeFormatSvgPreviewCacheSizing:
         )
 
     def test_large_format_svg_preview_uses_higher_guardrail(self, tmp_path) -> None:
-        """Tall large-format SVG previews can run full-res without removing all guardrails."""
+        """Positive large-format caps remain available as explicit guardrails."""
         svg_path = tmp_path / "tall.svg"
         svg_path.write_text(
             '<svg xmlns="http://www.w3.org/2000/svg" '
@@ -2176,3 +2201,25 @@ class TestLargeFormatSvgPreviewCacheSizing:
             material_source="material_archive",
             max_bytes=1024 * 1024 * 1024,
         )
+
+    def test_large_format_svg_preview_cap_is_disabled_by_default(
+        self, monkeypatch
+    ) -> None:
+        """Large-format gray deployments should not get a default cache cap."""
+        monkeypatch.delenv(
+            "LUMINA_LARGE_FORMAT_SVG_PREVIEW_CACHE_MAX_BYTES",
+            raising=False,
+        )
+
+        assert _get_large_format_svg_preview_cache_max_bytes() is None
+
+    def test_large_format_svg_preview_cap_uses_positive_env(
+        self, monkeypatch
+    ) -> None:
+        """Large-format cap remains available as an explicit opt-in."""
+        monkeypatch.setenv(
+            "LUMINA_LARGE_FORMAT_SVG_PREVIEW_CACHE_MAX_BYTES",
+            "1073741824",
+        )
+
+        assert _get_large_format_svg_preview_cache_max_bytes() == 1073741824

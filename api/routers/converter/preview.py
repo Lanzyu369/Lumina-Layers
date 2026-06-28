@@ -95,7 +95,6 @@ AUTO_DETECT_COLORS_FAILED_DETAIL = (
 LARGE_FORMAT_SVG_PREVIEW_CACHE_MAX_BYTES_ENV = (
     "LUMINA_LARGE_FORMAT_SVG_PREVIEW_CACHE_MAX_BYTES"
 )
-DEFAULT_LARGE_FORMAT_SVG_PREVIEW_CACHE_MAX_BYTES = 1024 * 1024 * 1024
 LAYER_IMAGES_PREVIEW_CACHE_UNAVAILABLE_DETAIL = (
     "Layer image preview cache is unavailable. "
     "Re-run preview before viewing layer images."
@@ -110,17 +109,20 @@ PREVIEW_RESPONSE_CACHE_FIELDS = {
 }
 
 
-def _get_large_format_svg_preview_cache_max_bytes() -> int:
-    """Return the cache guardrail for full-resolution large-format SVG previews."""
+def _get_large_format_svg_preview_cache_max_bytes() -> int | None:
+    """Return the optional cache guardrail for full-resolution SVG previews.
+
+    返回大画幅 SVG 预览的可选缓存上限；未显式配置时关闭。
+    """
 
     raw = os.getenv(LARGE_FORMAT_SVG_PREVIEW_CACHE_MAX_BYTES_ENV)
     if raw is None or raw.strip() == "":
-        return DEFAULT_LARGE_FORMAT_SVG_PREVIEW_CACHE_MAX_BYTES
+        return None
     try:
         parsed = int(raw)
     except ValueError:
-        return DEFAULT_LARGE_FORMAT_SVG_PREVIEW_CACHE_MAX_BYTES
-    return max(1, parsed)
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _get_vector_parse_clip_cache_max_bytes() -> int:
@@ -390,6 +392,9 @@ def _enforce_preview_cache_size_limit(
 
     拒绝预计 preview cache 大数组超过上限的预览请求。
     """
+    if max_bytes is None:
+        return
+
     dimensions = _estimate_preview_target_dimensions(
         image_path,
         target_width_mm=target_width_mm,
@@ -415,8 +420,7 @@ def _enforce_preview_cache_size_limit(
             selected_material_count=selected_material_count,
         ),
     )
-    resolved_max_bytes = max_bytes if max_bytes is not None else get_preview_cache_max_bytes()
-    if estimate_bytes <= resolved_max_bytes:
+    if estimate_bytes <= max_bytes:
         return
 
     raise HTTPException(
@@ -427,7 +431,7 @@ def _enforce_preview_cache_size_limit(
                 "Estimated preview cache arrays exceed the configured limit."
             ),
             "estimate_bytes": estimate_bytes,
-            "max_bytes": resolved_max_bytes,
+            "max_bytes": max_bytes,
             "estimated_width": width,
             "estimated_height": height,
             "estimated_layers": layers,
@@ -967,6 +971,11 @@ async def convert_preview(
             and modeling_mode == "vector"
             and is_svg_upload
         )
+        preview_cache_max_bytes = (
+            _get_large_format_svg_preview_cache_max_bytes()
+            if use_large_format_svg_guard
+            else get_preview_cache_max_bytes()
+        )
         _enforce_preview_cache_size_limit(
             image_path=temp_path,
             target_width_mm=target_width_mm,
@@ -976,11 +985,7 @@ async def convert_preview(
             material_layer_count=material_layer_count,
             material_source=material_source,
             selected_material_count=len(_selected_mats or []),
-            max_bytes=(
-                _get_large_format_svg_preview_cache_max_bytes()
-                if use_large_format_svg_guard
-                else None
-            ),
+            max_bytes=preview_cache_max_bytes,
         )
         if modeling_mode == "vector" and is_svg_upload:
             svg_large_format_policy = {

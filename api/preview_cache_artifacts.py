@@ -22,7 +22,6 @@ from config import TEMP_DIR
 
 ARTIFACT_SCHEMA = "preview_cache_artifact_v1"
 PREVIEW_CACHE_MAX_BYTES_ENV = "LUMINA_PREVIEW_CACHE_MAX_BYTES"
-DEFAULT_PREVIEW_CACHE_MAX_BYTES = 512 * 1024 * 1024
 LARGE_ARRAY_FIELDS = {
     "matched_rgb",
     "material_matrix",
@@ -427,23 +426,24 @@ def estimate_preview_cache_bytes(
     return matched + rgba + mask + matrix + original
 
 
-def get_preview_cache_max_bytes() -> int:
-    """Return the configured preview-cache byte limit.
+def get_preview_cache_max_bytes() -> int | None:
+    """Return the configured preview-cache byte limit, or None when disabled.
 
-    返回配置的 preview-cache 字节上限。
+    返回配置的 preview-cache 字节上限；未显式配置时返回 None，表示不启用预估拦截。
 
     Returns:
-        int: Limit from ``LUMINA_PREVIEW_CACHE_MAX_BYTES`` or the default
-        512 MiB guardrail when unset/invalid. 字节上限。
+        int | None: Positive limit from ``LUMINA_PREVIEW_CACHE_MAX_BYTES``.
+        Unset, empty, invalid, zero, or negative values disable the guardrail.
+        int | None: 正数上限；未设置、空值、非法值、0 或负数表示关闭。
     """
     raw = os.getenv(PREVIEW_CACHE_MAX_BYTES_ENV)
     if raw is None or raw.strip() == "":
-        return DEFAULT_PREVIEW_CACHE_MAX_BYTES
+        return None
     try:
         parsed = int(raw)
     except (TypeError, ValueError):
-        return DEFAULT_PREVIEW_CACHE_MAX_BYTES
-    return parsed if parsed > 0 else DEFAULT_PREVIEW_CACHE_MAX_BYTES
+        return None
+    return parsed if parsed > 0 else None
 
 
 def get_preview_cache_metadata(cache_or_ref: dict[str, Any]) -> dict[str, Any]:
