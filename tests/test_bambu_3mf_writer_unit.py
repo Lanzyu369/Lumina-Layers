@@ -1864,11 +1864,26 @@ class TestAnycubicWriterMetadata:
         out_path = writer.export()
 
         with zipfile.ZipFile(out_path) as package:
+            model_root = ET.fromstring(package.read("3D/3dmodel.model"))
+            core_ns = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
+            model_metadata = {
+                node.attrib["name"]: (node.text or "")
+                for node in model_root.findall("m:metadata", core_ns)
+            }
             project_settings = json.loads(
                 package.read("Metadata/project_settings.config").decode("utf-8")
             )
+            slice_root = ET.fromstring(package.read("Metadata/slice_info.config"))
+            slice_header = slice_root.find("./header")
+            assert slice_header is not None
+            slice_header_items = {
+                item.attrib["key"]: item.attrib["value"]
+                for item in slice_header.findall("header_item")
+            }
 
         serialized = json.dumps(project_settings, ensure_ascii=False)
+        assert model_metadata["OrcaSlicer"] == "2.4.0"
+        assert slice_header_items["OrcaSlicer-Version"] == "2.4.0"
         assert "Snapmaker PLA Basic @U1" not in serialized
         assert project_settings["printer_settings_id"] == "Snapmaker U1 (0.4 nozzle)"
         assert project_settings["filament_settings_id"] == ["Snapmaker PLA @U1"] * 4
@@ -1953,3 +1968,21 @@ class TestAnycubicWriterMetadata:
         assert header is not None
         header_items = {item.attrib["key"]: item.attrib["value"] for item in header.findall("header_item")}
         assert header_items["X-BBL-Client-Version"] == "02.05.00.66"
+
+    def test_non_h2_0_2_bambu_version_keeps_legacy_client_stamp(self, tmp_path) -> None:
+        writer = writer_module.BambuStudio3MFWriter(
+            output_path=str(tmp_path / "p1s-0_2.3mf"),
+            settings={},
+            color_mode="4-Color",
+            printer_id="bambu-p1s",
+            slicer="BambuStudio",
+            nozzle_size="0.2",
+        )
+
+        assert writer._get_app_version_str() == "BambuStudio-02.04.00.70"
+
+        slice_info = ET.fromstring(writer._build_slice_info_bytes())
+        header = slice_info.find("./header")
+        assert header is not None
+        header_items = {item.attrib["key"]: item.attrib["value"] for item in header.findall("header_item")}
+        assert header_items["X-BBL-Client-Version"] == "02.04.00.70"

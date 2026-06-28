@@ -1562,6 +1562,9 @@ class BambuStudio3MFWriter:
 
         builder.add_namespace("BambuStudio", "http://schemas.bambulab.com/package/2021")
         builder.add_metadata("Application", self._get_app_version_str())
+        orca_version = self._get_orca_slicer_version_tag()
+        if orca_version:
+            builder.add_metadata("OrcaSlicer", orca_version)
         builder.add_metadata("BambuStudio:3mfVersion", "1")
         builder.add_external_model_metadata("BambuStudio:3mfVersion", "1")
 
@@ -1671,6 +1674,34 @@ class BambuStudio3MFWriter:
         if self.printer_id in h2_family:
             return "02.05.00.66"
         return "02.04.00.70"
+
+    @staticmethod
+    def _format_orca_slicer_version_tag(value: object) -> str:
+        raw = str(value or "").strip()
+        for prefix in ("OrcaSlicer-", "BambuStudio-"):
+            if raw.startswith(prefix):
+                raw = raw[len(prefix):]
+                break
+        if re.fullmatch(r"\d+(?:\.\d+){1,3}", raw):
+            parts = [int(part) for part in raw.split(".")]
+            while len(parts) > 3 and parts[-1] == 0:
+                parts.pop()
+            while len(parts) < 3:
+                parts.append(0)
+            return ".".join(str(part) for part in parts)
+        return raw
+
+    def _get_orca_slicer_version_tag(self) -> str | None:
+        """Return the OrcaSlicer metadata tag used to avoid Bambu-project imports."""
+        if self.slicer != "OrcaSlicer":
+            return None
+        raw_version = self._get_registry_source_version()
+        if not raw_version:
+            application_metadata = self._get_app_version_str()
+            if application_metadata.startswith("OrcaSlicer-"):
+                raw_version = application_metadata
+        version_tag = self._format_orca_slicer_version_tag(raw_version)
+        return version_tag or None
 
     def _get_registry_source_version(self) -> str | None:
         """Return source slicer version from generated machine registry if present."""
@@ -2457,6 +2488,13 @@ class BambuStudio3MFWriter:
                     "header_item",
                     attrib={"key": "X-BBL-Client-Version", "value": registry_client_version or ""},
                 )
+                orca_version = self._get_orca_slicer_version_tag()
+                if orca_version:
+                    ET.SubElement(
+                        header,
+                        "header_item",
+                        attrib={"key": "OrcaSlicer-Version", "value": orca_version},
+                    )
 
         tree = ET.ElementTree(config)
         ET.indent(tree, space="  ")
