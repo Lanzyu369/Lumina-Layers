@@ -743,12 +743,15 @@ def _resize_filament_linear_array(
 
     template_count = _template_filament_count(template_settings)
     preserves_group_shape = (
-        key in _FILAMENT_LINEAR_GROUP_ARRAY_KEYS
-        or (
-            key.startswith("filament_")
-            and template_count > 0
-            and len(current) > template_count
-            and len(current) % template_count == 0
+        template_count > 0
+        and material_count <= template_count
+        and (
+            key in _FILAMENT_LINEAR_GROUP_ARRAY_KEYS
+            or (
+                key.startswith("filament_")
+                and len(current) > template_count
+                and len(current) % template_count == 0
+            )
         )
     )
     if preserves_group_shape and template_count > 0 and len(current) % template_count == 0:
@@ -781,6 +784,8 @@ def _resize_filament_square_array(
     template_count = _template_filament_count(template_settings)
     if template_count <= 0:
         return current
+    if material_count > template_count:
+        return current
 
     template_pair_count = template_count * template_count
     if template_pair_count <= 0 or len(current) % template_pair_count != 0:
@@ -804,7 +809,12 @@ def _resize_filament_square_array(
     return result
 
 
-def _validate_trimmed_project_filament_arrays(settings: dict, material_count: int) -> None:
+def _validate_trimmed_project_filament_arrays(
+    settings: dict,
+    material_count: int,
+    *,
+    template_settings: dict,
+) -> None:
     if material_count <= 0:
         raise ValueError("project filament palette is empty")
 
@@ -823,13 +833,25 @@ def _validate_trimmed_project_filament_arrays(settings: dict, material_count: in
             continue
         if key in _FILAMENT_SQUARE_GROUP_ARRAY_KEYS:
             expected_base = material_count * material_count
-            if len(value) < expected_base or len(value) % expected_base != 0:
+            template_value = template_settings.get(key)
+            template_length = len(template_value) if isinstance(template_value, list) else 0
+            preserves_template_shape = template_length > 0 and len(value) == template_length
+            if (
+                not preserves_template_shape
+                and (len(value) < expected_base or len(value) % expected_base != 0)
+            ):
                 raise ValueError(
                     f"project filament matrix '{key}' has {len(value)} entries; "
                     f"expected a multiple of {expected_base}"
                 )
         elif key in _FILAMENT_LINEAR_GROUP_ARRAY_KEYS or _is_filament_linear_array_key(key):
-            if len(value) < material_count or len(value) % material_count != 0:
+            template_value = template_settings.get(key)
+            template_length = len(template_value) if isinstance(template_value, list) else 0
+            preserves_template_shape = template_length > 0 and len(value) == template_length
+            if (
+                not preserves_template_shape
+                and (len(value) < material_count or len(value) % material_count != 0)
+            ):
                 raise ValueError(
                     f"project filament array '{key}' has {len(value)} entries; "
                     f"expected a multiple of {material_count}"
@@ -2218,7 +2240,11 @@ class BambuStudio3MFWriter:
             if isinstance(filament_colour, list):
                 settings["filament_multi_colour"] = list(filament_colour)
             _disable_cut_retraction_filament_overrides(settings, num_colors)
-            _validate_trimmed_project_filament_arrays(settings, num_colors)
+            _validate_trimmed_project_filament_arrays(
+                settings,
+                num_colors,
+                template_settings=template_settings,
+            )
 
         settings.setdefault("single_extruder_multi_material", "1")
         settings.setdefault("enable_prime_tower", "1")
