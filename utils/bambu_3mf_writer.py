@@ -2152,6 +2152,7 @@ class BambuStudio3MFWriter:
         在 ``_rels/.rels`` XML 中追加三条 cover 关系（保留既有 ``rel-1``）。
         """
 
+        ET.register_namespace("", rels_namespace)
         try:
             root = ET.fromstring(rels_bytes)
         except ET.ParseError as exc:

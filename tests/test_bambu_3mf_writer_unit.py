@@ -123,6 +123,53 @@ def test_cover_relationship_postprocess_raw_copies_unchanged_deflated_entries(
     assert len(cover_targets) == 3
 
 
+def test_cover_relationship_postprocess_preserves_root_rels_default_namespace(
+    tmp_path,
+) -> None:
+    """Rewriting 3dmodel first must not leak the 3MF namespace into root rels."""
+    intermediate = tmp_path / "intermediate.3mf"
+    output = tmp_path / "output.3mf"
+    rels_xml = (
+        b'<?xml version="1.0" encoding="UTF-8"?>'
+        b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        b'<Relationship Id="rel0" '
+        b'Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel" '
+        b'Target="/3D/3dmodel.model" />'
+        b"</Relationships>"
+    )
+    model_xml = (
+        b'<?xml version="1.0" encoding="UTF-8"?>'
+        b'<model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" '
+        b'xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06" '
+        b'unit="millimeter" requiredextensions="p">'
+        b'<resources><object id="2" type="model"><mesh><vertices />'
+        b'<triangles /></mesh></object></resources>'
+        b'<build><item objectid="2" /></build>'
+        b"</model>"
+    )
+
+    with zipfile.ZipFile(intermediate, "w") as archive:
+        archive.writestr("3D/3dmodel.model", model_xml)
+        archive.writestr("_rels/.rels", rels_xml)
+
+    writer = BambuStudio3MFWriter(
+        str(output),
+        settings={},
+        color_mode="4-Color",
+        printer_id="bambu-p1s",
+        slicer="BambuStudio",
+    )
+    writer.add_mesh(trimesh.creation.box(extents=[1, 1, 1]), "White", (255, 255, 255))
+
+    writer._inject_cover_relationships_postprocess(str(intermediate), str(output))
+
+    with zipfile.ZipFile(output, "r") as archive:
+        rewritten_rels = archive.read("_rels/.rels")
+
+    assert b"<Relationships xmlns=" in rewritten_rels
+    assert b"ns0:" not in rewritten_rels
+
+
 def test_difference_index_preserves_bambu_project_slot_shape() -> None:
     original = ["bottom_shell_layers;wall_loops", "", "", "", "", ""]
 
