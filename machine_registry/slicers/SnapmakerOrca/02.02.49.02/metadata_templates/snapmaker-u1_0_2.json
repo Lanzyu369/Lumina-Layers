@@ -194,6 +194,9 @@
   "default_filament_profile": [
     "Snapmaker PLA"
   ],
+  "filament_settings_id": [
+    "Snapmaker PLA @U1"
+  ],
   "bed_exclude_area": [
     "0x0"
   ],

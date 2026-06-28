@@ -1999,6 +1999,55 @@ class TestAnycubicWriterMetadata:
         assert "inherits_group" not in project_settings
         assert "different_settings_to_system" not in project_settings
 
+    @pytest.mark.parametrize(
+        ("slicer", "nozzle_size", "device_profile_id", "expected_filament"),
+        [
+            (
+                "OrcaSlicer",
+                "0.6",
+                "OrcaSlicer:snapmaker:snapmaker-u1:0.6",
+                "Snapmaker PLA @U1",
+            ),
+            (
+                "SnapmakerOrca",
+                "0.2",
+                "SnapmakerOrca:snapmaker:snapmaker-u1:0.2",
+                "Snapmaker PLA @U1",
+            ),
+            (
+                "SnapmakerOrca",
+                "0.6",
+                "SnapmakerOrca:snapmaker:snapmaker-u1:0.6",
+                "Snapmaker PLA @U1",
+            ),
+            (
+                "SnapmakerOrca",
+                "0.8",
+                "SnapmakerOrca:snapmaker:snapmaker-u1:0.8",
+                "Snapmaker PLA @U1",
+            ),
+        ],
+    )
+    def test_registry_u1_non_default_nozzles_keep_native_filament_metadata(
+        self,
+        slicer: str,
+        nozzle_size: str,
+        device_profile_id: str,
+        expected_filament: str,
+    ) -> None:
+        template = load_printer_template(
+            "snapmaker-u1",
+            slicer=slicer,
+            nozzle_size=nozzle_size,
+            device_profile_id=device_profile_id,
+        )
+
+        assert template["printer_settings_id"] == (
+            f"Snapmaker U1 ({nozzle_size} nozzle)"
+        )
+        assert template["filament_settings_id"] == [expected_filament] * 8
+        assert template["default_filament_profile"] == ["Snapmaker PLA"]
+
     def test_bambu_export_centers_and_drops_build_item_on_selected_bed(self, tmp_path) -> None:
         writer = writer_module.BambuStudio3MFWriter(
             output_path=str(tmp_path / "bambu-p1s-centered.3mf"),
