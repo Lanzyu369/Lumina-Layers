@@ -64,6 +64,24 @@ def _add_rybw_meshes(writer: BambuStudio3MFWriter) -> None:
         writer.add_mesh(mesh, name, rgb)
 
 
+def _add_8c_meshes(writer: BambuStudio3MFWriter) -> None:
+    for offset, (name, rgb) in enumerate(
+        [
+            ("White", (255, 255, 255)),
+            ("Red", (193, 46, 31)),
+            ("Yellow", (244, 238, 42)),
+            ("Blue", (10, 41, 137)),
+            ("Black", (0, 0, 0)),
+            ("Cyan", (0, 170, 220)),
+            ("Magenta", (210, 40, 150)),
+            ("Green", (0, 174, 66)),
+        ]
+    ):
+        mesh = trimesh.creation.box(extents=[1, 1, 0.08])
+        mesh.apply_translation([offset * 2, 0, 0])
+        writer.add_mesh(mesh, name, rgb)
+
+
 def test_cover_relationship_postprocess_raw_copies_unchanged_deflated_entries(
     tmp_path,
     monkeypatch,
@@ -1870,6 +1888,65 @@ class TestAnycubicWriterMetadata:
                 node.attrib["name"]: (node.text or "")
                 for node in model_root.findall("m:metadata", core_ns)
             }
+            build_item = model_root.find("m:build/m:item", core_ns)
+            project_settings = json.loads(
+                package.read("Metadata/project_settings.config").decode("utf-8")
+            )
+            slice_root = ET.fromstring(package.read("Metadata/slice_info.config"))
+            slice_header = slice_root.find("./header")
+            assert slice_header is not None
+            slice_header_items = {
+                item.attrib["key"]: item.attrib["value"]
+                for item in slice_header.findall("header_item")
+            }
+            root_rels = package.read("_rels/.rels")
+
+        serialized = json.dumps(project_settings, ensure_ascii=False)
+        assert model_metadata["Application"] == "OrcaSlicer-02.04.00.00"
+        assert model_metadata["BambuStudio:3mfVersion"] == "1"
+        assert model_metadata["OrcaSlicer"] == "2.4.0"
+        assert slice_header_items["X-BBL-Client-Type"] == "slicer"
+        assert slice_header_items["X-BBL-Client-Version"] == "02.04.00.00"
+        assert slice_header_items["OrcaSlicer-Version"] == "2.4.0"
+        assert root_rels.startswith(b"<?xml version=")
+        assert b"<Relationships xmlns=" in root_rels
+        assert b"ns0:" not in root_rels
+        assert build_item is not None
+        assert build_item.attrib["printable"] == "1"
+        assert build_item.attrib["auto_drop"] == "1"
+        assert len(build_item.attrib["transform"].split()) == 12
+        assert "Snapmaker PLA Basic @U1" not in serialized
+        assert project_settings["printer_settings_id"] == "Snapmaker U1 (0.4 nozzle)"
+        assert project_settings["filament_settings_id"] == ["Snapmaker PLA @U1"] * 4
+        assert project_settings["default_print_profile"] == "0.20mm Standard @Snapmaker"
+        assert project_settings["default_filament_profile"] == ["Snapmaker PLA"]
+        assert "inherits_group" not in project_settings
+        assert "different_settings_to_system" not in project_settings
+
+    def test_orca_registry_u1_preserves_native_metadata_for_8c_exports(
+        self, tmp_path
+    ) -> None:
+        writer = writer_module.BambuStudio3MFWriter(
+            output_path=str(tmp_path / "snapmaker-u1-orca-registry-8c.3mf"),
+            settings={},
+            color_mode="8-Color",
+            printer_id="snapmaker-u1",
+            slicer="OrcaSlicer",
+            nozzle_size="0.4",
+            device_profile_id="OrcaSlicer:snapmaker:snapmaker-u1:0.4",
+        )
+        _add_8c_meshes(writer)
+
+        out_path = writer.export()
+
+        with zipfile.ZipFile(out_path) as package:
+            model_root = ET.fromstring(package.read("3D/3dmodel.model"))
+            core_ns = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
+            model_metadata = {
+                node.attrib["name"]: (node.text or "")
+                for node in model_root.findall("m:metadata", core_ns)
+            }
+            build_item = model_root.find("m:build/m:item", core_ns)
             project_settings = json.loads(
                 package.read("Metadata/project_settings.config").decode("utf-8")
             )
@@ -1881,14 +1958,12 @@ class TestAnycubicWriterMetadata:
                 for item in slice_header.findall("header_item")
             }
 
-        serialized = json.dumps(project_settings, ensure_ascii=False)
         assert model_metadata["OrcaSlicer"] == "2.4.0"
         assert slice_header_items["OrcaSlicer-Version"] == "2.4.0"
-        assert "Snapmaker PLA Basic @U1" not in serialized
-        assert project_settings["printer_settings_id"] == "Snapmaker U1 (0.4 nozzle)"
-        assert project_settings["filament_settings_id"] == ["Snapmaker PLA @U1"] * 4
-        assert project_settings["default_print_profile"] == "0.20mm Standard @Snapmaker"
-        assert project_settings["default_filament_profile"] == ["Snapmaker PLA"]
+        assert build_item is not None
+        assert build_item.attrib["printable"] == "1"
+        assert build_item.attrib["auto_drop"] == "1"
+        assert project_settings["filament_settings_id"] == ["Snapmaker PLA @U1"] * 8
         assert "inherits_group" not in project_settings
         assert "different_settings_to_system" not in project_settings
 
