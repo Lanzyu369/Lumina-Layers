@@ -1253,6 +1253,32 @@ def test_bambu_registry_project_settings_can_trim_native_template_filament_slots
     assert settings["prime_tower_width"] == "200"
 
 
+def test_bambu_h2c_extends_beyond_native_slots_without_group_vector_bloat() -> None:
+    writer = BambuStudio3MFWriter(
+        "h2c-extended-materials.3mf",
+        settings={},
+        color_mode="8-Color",
+        printer_id="bambu-h2c",
+        slicer="BambuStudio",
+        nozzle_size="0.2",
+        device_profile_id="BambuStudio:bbl:bambu-lab-h2c:0.2",
+        preserve_template_filament_slots=False,
+    )
+    writer._set_project_palette(
+        [f"PETG slot {index}" for index in range(10)],
+        {index: (index * 20, index * 10, index * 5, 255) for index in range(10)},
+    )
+
+    settings = json.loads(writer._build_project_settings_bytes().decode("utf-8"))
+
+    assert len(settings["filament_colour"]) == 10
+    assert len(settings["filament_type"]) == 10
+    assert len(settings["filament_extruder_variant"]) == 10
+    assert len(settings["filament_dev_ams_drying_time"]) == 10
+    assert len(settings["flush_volumes_matrix"]) == 32
+    assert len(settings["flush_volumes_vector"]) == 10
+
+
 class TestAnycubicWriterMetadata:
     def test_writer_base_template_uses_selected_nozzle_size_variant(self) -> None:
         writer = BambuStudio3MFWriter(
