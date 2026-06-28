@@ -50,6 +50,38 @@ def _raw_zip_member_bytes(path: Path, member_name: str) -> bytes:
             return handle.read(info._end_offset - info.header_offset)
 
 
+def _add_rybw_meshes(writer: BambuStudio3MFWriter) -> None:
+    for offset, (name, rgb) in enumerate(
+        [
+            ("White", (255, 255, 255)),
+            ("Red", (193, 46, 31)),
+            ("Yellow", (244, 238, 42)),
+            ("Blue", (10, 41, 137)),
+        ]
+    ):
+        mesh = trimesh.creation.box(extents=[1, 1, 0.08])
+        mesh.apply_translation([offset * 2, 0, 0])
+        writer.add_mesh(mesh, name, rgb)
+
+
+def _add_8c_meshes(writer: BambuStudio3MFWriter) -> None:
+    for offset, (name, rgb) in enumerate(
+        [
+            ("White", (255, 255, 255)),
+            ("Red", (193, 46, 31)),
+            ("Yellow", (244, 238, 42)),
+            ("Blue", (10, 41, 137)),
+            ("Black", (0, 0, 0)),
+            ("Cyan", (0, 170, 220)),
+            ("Magenta", (210, 40, 150)),
+            ("Green", (0, 174, 66)),
+        ]
+    ):
+        mesh = trimesh.creation.box(extents=[1, 1, 0.08])
+        mesh.apply_translation([offset * 2, 0, 0])
+        writer.add_mesh(mesh, name, rgb)
+
+
 def test_cover_relationship_postprocess_raw_copies_unchanged_deflated_entries(
     tmp_path,
     monkeypatch,
@@ -107,6 +139,53 @@ def test_cover_relationship_postprocess_raw_copies_unchanged_deflated_entries(
         if (rel.get("Target") or "").startswith("/Auxiliaries/.thumbnails/")
     ]
     assert len(cover_targets) == 3
+
+
+def test_cover_relationship_postprocess_preserves_root_rels_default_namespace(
+    tmp_path,
+) -> None:
+    """Rewriting 3dmodel first must not leak the 3MF namespace into root rels."""
+    intermediate = tmp_path / "intermediate.3mf"
+    output = tmp_path / "output.3mf"
+    rels_xml = (
+        b'<?xml version="1.0" encoding="UTF-8"?>'
+        b'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        b'<Relationship Id="rel0" '
+        b'Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel" '
+        b'Target="/3D/3dmodel.model" />'
+        b"</Relationships>"
+    )
+    model_xml = (
+        b'<?xml version="1.0" encoding="UTF-8"?>'
+        b'<model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" '
+        b'xmlns:p="http://schemas.microsoft.com/3dmanufacturing/production/2015/06" '
+        b'unit="millimeter" requiredextensions="p">'
+        b'<resources><object id="2" type="model"><mesh><vertices />'
+        b'<triangles /></mesh></object></resources>'
+        b'<build><item objectid="2" /></build>'
+        b"</model>"
+    )
+
+    with zipfile.ZipFile(intermediate, "w") as archive:
+        archive.writestr("3D/3dmodel.model", model_xml)
+        archive.writestr("_rels/.rels", rels_xml)
+
+    writer = BambuStudio3MFWriter(
+        str(output),
+        settings={},
+        color_mode="4-Color",
+        printer_id="bambu-p1s",
+        slicer="BambuStudio",
+    )
+    writer.add_mesh(trimesh.creation.box(extents=[1, 1, 1]), "White", (255, 255, 255))
+
+    writer._inject_cover_relationships_postprocess(str(intermediate), str(output))
+
+    with zipfile.ZipFile(output, "r") as archive:
+        rewritten_rels = archive.read("_rels/.rels")
+
+    assert b"<Relationships xmlns=" in rewritten_rels
+    assert b"ns0:" not in rewritten_rels
 
 
 def test_difference_index_preserves_bambu_project_slot_shape() -> None:
@@ -1788,6 +1867,214 @@ class TestAnycubicWriterMetadata:
             assert header_items["X-ACNext-Client-Type"] == "slicer"
             assert header_items["X-ACNext-Client-Version"] == "1.3.9.4 20260319225535"
 
+    def test_orca_registry_u1_uses_orca_native_filament_metadata(self, tmp_path) -> None:
+        writer = writer_module.BambuStudio3MFWriter(
+            output_path=str(tmp_path / "snapmaker-u1-orca-registry.3mf"),
+            settings={},
+            color_mode="4-Color",
+            printer_id="snapmaker-u1",
+            slicer="OrcaSlicer",
+            nozzle_size="0.4",
+            device_profile_id="OrcaSlicer:snapmaker:snapmaker-u1:0.4",
+        )
+        _add_rybw_meshes(writer)
+
+        out_path = writer.export()
+
+        with zipfile.ZipFile(out_path) as package:
+            model_root = ET.fromstring(package.read("3D/3dmodel.model"))
+            core_ns = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
+            model_metadata = {
+                node.attrib["name"]: (node.text or "")
+                for node in model_root.findall("m:metadata", core_ns)
+            }
+            build_item = model_root.find("m:build/m:item", core_ns)
+            project_settings = json.loads(
+                package.read("Metadata/project_settings.config").decode("utf-8")
+            )
+            slice_root = ET.fromstring(package.read("Metadata/slice_info.config"))
+            slice_header = slice_root.find("./header")
+            assert slice_header is not None
+            slice_header_items = {
+                item.attrib["key"]: item.attrib["value"]
+                for item in slice_header.findall("header_item")
+            }
+            root_rels = package.read("_rels/.rels")
+
+        serialized = json.dumps(project_settings, ensure_ascii=False)
+        assert model_metadata["Application"] == "OrcaSlicer-02.04.00.00"
+        assert model_metadata["BambuStudio:3mfVersion"] == "1"
+        assert model_metadata["OrcaSlicer"] == "2.4.0"
+        assert slice_header_items["X-BBL-Client-Type"] == "slicer"
+        assert slice_header_items["X-BBL-Client-Version"] == "02.04.00.00"
+        assert slice_header_items["OrcaSlicer-Version"] == "2.4.0"
+        assert root_rels.startswith(b"<?xml version=")
+        assert b"<Relationships xmlns=" in root_rels
+        assert b"ns0:" not in root_rels
+        assert build_item is not None
+        assert build_item.attrib["printable"] == "1"
+        assert build_item.attrib["auto_drop"] == "1"
+        assert len(build_item.attrib["transform"].split()) == 12
+        assert "Snapmaker PLA Basic @U1" not in serialized
+        assert project_settings["printer_settings_id"] == "Snapmaker U1 (0.4 nozzle)"
+        assert project_settings["filament_settings_id"] == ["Snapmaker PLA @U1"] * 4
+        assert project_settings["default_print_profile"] == "0.20mm Standard @Snapmaker"
+        assert project_settings["default_filament_profile"] == ["Snapmaker PLA"]
+        assert "inherits_group" not in project_settings
+        assert "different_settings_to_system" not in project_settings
+
+    def test_orca_registry_u1_preserves_native_metadata_for_8c_exports(
+        self, tmp_path
+    ) -> None:
+        writer = writer_module.BambuStudio3MFWriter(
+            output_path=str(tmp_path / "snapmaker-u1-orca-registry-8c.3mf"),
+            settings={},
+            color_mode="8-Color",
+            printer_id="snapmaker-u1",
+            slicer="OrcaSlicer",
+            nozzle_size="0.4",
+            device_profile_id="OrcaSlicer:snapmaker:snapmaker-u1:0.4",
+        )
+        _add_8c_meshes(writer)
+
+        out_path = writer.export()
+
+        with zipfile.ZipFile(out_path) as package:
+            model_root = ET.fromstring(package.read("3D/3dmodel.model"))
+            core_ns = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
+            model_metadata = {
+                node.attrib["name"]: (node.text or "")
+                for node in model_root.findall("m:metadata", core_ns)
+            }
+            build_item = model_root.find("m:build/m:item", core_ns)
+            project_settings = json.loads(
+                package.read("Metadata/project_settings.config").decode("utf-8")
+            )
+            slice_root = ET.fromstring(package.read("Metadata/slice_info.config"))
+            slice_header = slice_root.find("./header")
+            assert slice_header is not None
+            slice_header_items = {
+                item.attrib["key"]: item.attrib["value"]
+                for item in slice_header.findall("header_item")
+            }
+
+        assert model_metadata["OrcaSlicer"] == "2.4.0"
+        assert slice_header_items["OrcaSlicer-Version"] == "2.4.0"
+        assert build_item is not None
+        assert build_item.attrib["printable"] == "1"
+        assert build_item.attrib["auto_drop"] == "1"
+        assert project_settings["filament_settings_id"] == ["Snapmaker PLA @U1"] * 8
+        assert "inherits_group" not in project_settings
+        assert "different_settings_to_system" not in project_settings
+
+    def test_snapmaker_orca_registry_u1_uses_snapmaker_orca_filament_metadata(
+        self, tmp_path
+    ) -> None:
+        writer = writer_module.BambuStudio3MFWriter(
+            output_path=str(tmp_path / "snapmaker-u1-snaporca-registry.3mf"),
+            settings={},
+            color_mode="4-Color",
+            printer_id="snapmaker-u1",
+            slicer="SnapmakerOrca",
+            nozzle_size="0.4",
+            device_profile_id="SnapmakerOrca:snapmaker:snapmaker-u1:0.4",
+        )
+        _add_rybw_meshes(writer)
+
+        out_path = writer.export()
+
+        with zipfile.ZipFile(out_path) as package:
+            project_settings = json.loads(
+                package.read("Metadata/project_settings.config").decode("utf-8")
+            )
+
+        assert project_settings["printer_settings_id"] == "Snapmaker U1 (0.4 nozzle)"
+        assert project_settings["filament_settings_id"] == [
+            "Snapmaker PLA Basic @U1"
+        ] * 4
+        assert project_settings["default_print_profile"] == "0.20mm Standard @Snapmaker"
+        assert project_settings["default_filament_profile"] == [
+            "Snapmaker PLA Basic"
+        ]
+        assert "inherits_group" not in project_settings
+        assert "different_settings_to_system" not in project_settings
+
+    @pytest.mark.parametrize(
+        ("slicer", "nozzle_size", "device_profile_id", "expected_filament"),
+        [
+            (
+                "OrcaSlicer",
+                "0.6",
+                "OrcaSlicer:snapmaker:snapmaker-u1:0.6",
+                "Snapmaker PLA @U1",
+            ),
+            (
+                "SnapmakerOrca",
+                "0.2",
+                "SnapmakerOrca:snapmaker:snapmaker-u1:0.2",
+                "Snapmaker PLA @U1",
+            ),
+            (
+                "SnapmakerOrca",
+                "0.6",
+                "SnapmakerOrca:snapmaker:snapmaker-u1:0.6",
+                "Snapmaker PLA @U1",
+            ),
+            (
+                "SnapmakerOrca",
+                "0.8",
+                "SnapmakerOrca:snapmaker:snapmaker-u1:0.8",
+                "Snapmaker PLA @U1",
+            ),
+        ],
+    )
+    def test_registry_u1_non_default_nozzles_keep_native_filament_metadata(
+        self,
+        slicer: str,
+        nozzle_size: str,
+        device_profile_id: str,
+        expected_filament: str,
+    ) -> None:
+        template = load_printer_template(
+            "snapmaker-u1",
+            slicer=slicer,
+            nozzle_size=nozzle_size,
+            device_profile_id=device_profile_id,
+        )
+
+        assert template["printer_settings_id"] == (
+            f"Snapmaker U1 ({nozzle_size} nozzle)"
+        )
+        assert template["filament_settings_id"] == [expected_filament] * 8
+        assert template["default_filament_profile"] == ["Snapmaker PLA"]
+
+    def test_bambu_export_centers_and_drops_build_item_on_selected_bed(self, tmp_path) -> None:
+        writer = writer_module.BambuStudio3MFWriter(
+            output_path=str(tmp_path / "bambu-p1s-centered.3mf"),
+            settings={},
+            color_mode="4-Color",
+            printer_id="bambu-p1s",
+            slicer="BambuStudio",
+            nozzle_size="0.4",
+        )
+        writer.add_mesh(
+            trimesh.creation.box(extents=[2, 2, 0.4]),
+            "White",
+            (255, 255, 255),
+        )
+
+        out_path = writer.export()
+
+        with zipfile.ZipFile(out_path) as package:
+            model_root = ET.fromstring(package.read("3D/3dmodel.model"))
+
+        core_ns = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
+        build_item = model_root.find("m:build/m:item", core_ns)
+        assert build_item is not None
+        assert build_item.attrib["transform"] == (
+            "1 0 0 0 1 0 0 0 1 128 128 0.2"
+        )
+
     def test_h2d_0_2_bambu_version_uses_h2_family_client_stamp(self, tmp_path) -> None:
         writer = writer_module.BambuStudio3MFWriter(
             output_path=str(tmp_path / "h2d-0_2.3mf"),
@@ -1805,3 +2092,21 @@ class TestAnycubicWriterMetadata:
         assert header is not None
         header_items = {item.attrib["key"]: item.attrib["value"] for item in header.findall("header_item")}
         assert header_items["X-BBL-Client-Version"] == "02.05.00.66"
+
+    def test_non_h2_0_2_bambu_version_keeps_legacy_client_stamp(self, tmp_path) -> None:
+        writer = writer_module.BambuStudio3MFWriter(
+            output_path=str(tmp_path / "p1s-0_2.3mf"),
+            settings={},
+            color_mode="4-Color",
+            printer_id="bambu-p1s",
+            slicer="BambuStudio",
+            nozzle_size="0.2",
+        )
+
+        assert writer._get_app_version_str() == "BambuStudio-02.04.00.70"
+
+        slice_info = ET.fromstring(writer._build_slice_info_bytes())
+        header = slice_info.find("./header")
+        assert header is not None
+        header_items = {item.attrib["key"]: item.attrib["value"] for item in header.findall("header_item")}
+        assert header_items["X-BBL-Client-Version"] == "02.04.00.70"

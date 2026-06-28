@@ -271,7 +271,9 @@ def _align_registry_default_filament_settings_id(
     merged: dict[str, Any],
     registry_template: dict[str, Any],
 ) -> None:
-    default_profiles = registry_template.get("default_filament_profile")
+    default_profiles = registry_template.get("filament_settings_id")
+    if not default_profiles:
+        default_profiles = registry_template.get("default_filament_profile")
     if isinstance(default_profiles, list) and default_profiles:
         default_profile = str(default_profiles[0] or "").strip()
     elif isinstance(default_profiles, str):
@@ -286,6 +288,25 @@ def _align_registry_default_filament_settings_id(
         merged["filament_settings_id"] = [default_profile] * len(existing)
     elif isinstance(existing, str) and existing.strip():
         merged["filament_settings_id"] = default_profile
+
+
+def _is_snapmaker_u1_registry_profile(profile: Any) -> bool:
+    return (
+        str(getattr(profile, "brand", "")).casefold() == "snapmaker"
+        and str(getattr(profile, "display_name", "")).casefold() == "snapmaker u1"
+        and str(getattr(profile, "slicer_id", "")).strip()
+        in {"OrcaSlicer", "SnapmakerOrca"}
+    )
+
+
+def _apply_snapmaker_u1_native_project_shape(
+    settings: dict[str, Any],
+    profile: Any,
+) -> None:
+    if not _is_snapmaker_u1_registry_profile(profile):
+        return
+    settings.pop("inherits_group", None)
+    settings.pop("different_settings_to_system", None)
 
 
 def _replace_nozzle_label(value: object, old_label: str, new_label: str) -> object:
@@ -335,6 +356,7 @@ def _merge_registry_machine_template_into_project_template(
     source_version: str,
     overlay_printer_model: bool = False,
     overlay_machine_settings: bool = False,
+    align_default_filament_settings: bool = False,
     retarget_profile_nozzle_labels: bool = False,
     legacy_nozzle_size: str = "",
     registry_nozzle_size: str = "",
@@ -362,6 +384,14 @@ def _merge_registry_machine_template_into_project_template(
                 merged.get("different_settings_to_system"),
                 _iter_difference_index_keys(registry_template.get("different_settings_to_system")),
             )
+        _align_registry_default_filament_settings_id(merged, registry_template)
+    elif align_default_filament_settings:
+        for key in _REGISTRY_PROJECT_PROFILE_EXACT_KEYS:
+            if key in registry_template:
+                merged[key] = _clean_registry_project_overlay_value(
+                    key,
+                    registry_template[key],
+                )
         _align_registry_default_filament_settings_id(merged, registry_template)
     if retarget_profile_nozzle_labels:
         _retarget_registry_project_profile_nozzle_labels(
@@ -702,6 +732,8 @@ def _should_preserve_template_filament_slots(
     if explicit is not None:
         return bool(explicit)
     if registry_profile is None:
+        return False
+    if _is_snapmaker_u1_registry_profile(registry_profile):
         return False
     return _template_filament_count(template_settings) > material_count
 
@@ -1193,6 +1225,7 @@ def load_printer_template(
                     source_version=profile.source_version,
                     overlay_printer_model=overlay_printer_model,
                     overlay_machine_settings=overlay_machine_settings,
+                    align_default_filament_settings=_is_snapmaker_u1_registry_profile(profile),
                     retarget_profile_nozzle_labels=(
                         registry_nozzle_size != normalized_nozzle_size
                     ),
@@ -1529,6 +1562,9 @@ class BambuStudio3MFWriter:
 
         builder.add_namespace("BambuStudio", "http://schemas.bambulab.com/package/2021")
         builder.add_metadata("Application", self._get_app_version_str())
+        orca_version = self._get_orca_slicer_version_tag()
+        if orca_version:
+            builder.add_metadata("OrcaSlicer", orca_version)
         builder.add_metadata("BambuStudio:3mfVersion", "1")
         builder.add_external_model_metadata("BambuStudio:3mfVersion", "1")
 
@@ -1639,6 +1675,34 @@ class BambuStudio3MFWriter:
             return "02.05.00.66"
         return "02.04.00.70"
 
+    @staticmethod
+    def _format_orca_slicer_version_tag(value: object) -> str:
+        raw = str(value or "").strip()
+        for prefix in ("OrcaSlicer-", "BambuStudio-"):
+            if raw.startswith(prefix):
+                raw = raw[len(prefix):]
+                break
+        if re.fullmatch(r"\d+(?:\.\d+){1,3}", raw):
+            parts = [int(part) for part in raw.split(".")]
+            while len(parts) > 3 and parts[-1] == 0:
+                parts.pop()
+            while len(parts) < 3:
+                parts.append(0)
+            return ".".join(str(part) for part in parts)
+        return raw
+
+    def _get_orca_slicer_version_tag(self) -> str | None:
+        """Return the OrcaSlicer metadata tag used to avoid Bambu-project imports."""
+        if self.slicer != "OrcaSlicer":
+            return None
+        raw_version = self._get_registry_source_version()
+        if not raw_version:
+            application_metadata = self._get_app_version_str()
+            if application_metadata.startswith("OrcaSlicer-"):
+                raw_version = application_metadata
+        version_tag = self._format_orca_slicer_version_tag(raw_version)
+        return version_tag or None
+
     def _get_registry_source_version(self) -> str | None:
         """Return source slicer version from generated machine registry if present."""
         registry_profile = getattr(self, "_registry_device_profile", None)
@@ -1688,6 +1752,65 @@ class BambuStudio3MFWriter:
         将浮点数格式化为稳定的元数据输出字符串。
         """
         return format(float(value), ".15g")
+
+    @staticmethod
+    def _parse_printable_area_point(value: object) -> tuple[float, float] | None:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        parts = re.split(r"[xX,;\\s]+", raw)
+        if len(parts) < 2:
+            return None
+        try:
+            return float(parts[0]), float(parts[1])
+        except ValueError:
+            return None
+
+    def _get_printable_area_center(self) -> tuple[float, float] | None:
+        settings = self._get_base_config_template()
+        raw_area = settings.get("printable_area")
+        if not isinstance(raw_area, list):
+            return None
+        points = [
+            point
+            for point in (
+                self._parse_printable_area_point(item) for item in raw_area
+            )
+            if point is not None
+        ]
+        if len(points) < 2:
+            return None
+        xs = [point[0] for point in points]
+        ys = [point[1] for point in points]
+        return (min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0
+
+    def _get_mesh_bounds(self) -> tuple[np.ndarray, np.ndarray]:
+        bounds: list[np.ndarray] = []
+        for entry in self.objects:
+            mesh_bounds = np.asarray(
+                getattr(entry.mesh, "bounds", np.zeros((2, 3))),
+                dtype=np.float64,
+            )
+            if mesh_bounds.shape == (2, 3):
+                bounds.append(mesh_bounds)
+        if not bounds:
+            zeros = np.zeros(3, dtype=np.float64)
+            return zeros, zeros
+        stacked = np.stack(bounds, axis=0)
+        return stacked[:, 0, :].min(axis=0), stacked[:, 1, :].max(axis=0)
+
+    def _get_build_item_translation(self) -> tuple[float, float, float]:
+        bounds_min, bounds_max = self._get_mesh_bounds()
+        model_center = (bounds_min + bounds_max) / 2.0
+        bed_center = self._get_printable_area_center()
+        if bed_center is None:
+            translate_x = 0.0
+            translate_y = 0.0
+        else:
+            translate_x = float(bed_center[0] - model_center[0])
+            translate_y = float(bed_center[1] - model_center[1])
+        translate_z = float(-bounds_min[2])
+        return translate_x, translate_y, translate_z
 
     def _get_identify_id(self) -> str:
         """Return a slicer-specific plate identify_id value.
@@ -1963,6 +2086,11 @@ class BambuStudio3MFWriter:
                             dst_info = self._clone_zipinfo_for_rewrite(info)
                             payload = self._rewrite_rels_xml(payload, rels_namespace)
                             dst_zip.writestr(dst_info, payload)
+                        elif info.filename == "3D/3dmodel.model":
+                            payload = src_zip.read(info.filename)
+                            dst_info = self._clone_zipinfo_for_rewrite(info)
+                            payload = self._rewrite_main_model_xml(payload)
+                            dst_zip.writestr(dst_info, payload)
                         else:
                             self._raw_copy_zip_member(src_file, dst_zip, info)
 
@@ -2055,6 +2183,7 @@ class BambuStudio3MFWriter:
         在 ``_rels/.rels`` XML 中追加三条 cover 关系（保留既有 ``rel-1``）。
         """
 
+        ET.register_namespace("", rels_namespace)
         try:
             root = ET.fromstring(rels_bytes)
         except ET.ParseError as exc:
@@ -2100,6 +2229,38 @@ class BambuStudio3MFWriter:
         ET.ElementTree(root).write(
             buf, encoding="utf-8", xml_declaration=True
         )
+        return buf.getvalue()
+
+    def _rewrite_main_model_xml(self, model_bytes: bytes) -> bytes:
+        """Write build-item placement metadata expected by Bambu-family slicers."""
+
+        core_namespace = "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"
+        production_namespace = "http://schemas.microsoft.com/3dmanufacturing/production/2015/06"
+        ET.register_namespace("", core_namespace)
+        ET.register_namespace("p", production_namespace)
+        ET.register_namespace("BambuStudio", "http://schemas.bambulab.com/package/2021")
+
+        try:
+            root = ET.fromstring(model_bytes)
+        except ET.ParseError as exc:
+            raise RuntimeError(f"failed to parse 3D/3dmodel.model: {exc}") from exc
+
+        build = root.find(f"{{{core_namespace}}}build")
+        if build is not None:
+            translate_x, translate_y, translate_z = self._get_build_item_translation()
+            build_transform = (
+                "1 0 0 0 1 0 0 0 1 "
+                f"{self._format_number(translate_x)} "
+                f"{self._format_number(translate_y)} "
+                f"{self._format_number(translate_z)}"
+            )
+            for item in build.findall(f"{{{core_namespace}}}item"):
+                item.attrib["transform"] = build_transform
+                if self.slicer == "OrcaSlicer":
+                    item.attrib.setdefault("auto_drop", "1")
+
+        buf = io.BytesIO()
+        ET.ElementTree(root).write(buf, encoding="utf-8", xml_declaration=True)
         return buf.getvalue()
 
     # ------------------------------------------------------------------
@@ -2284,6 +2445,11 @@ class BambuStudio3MFWriter:
                 applied_override_keys,
             )
 
+        _apply_snapmaker_u1_native_project_shape(
+            settings,
+            self._registry_device_profile,
+        )
+
         return json.dumps(settings, indent=4, ensure_ascii=False).encode("utf-8")
 
     def _build_slice_info_bytes(self) -> bytes:
@@ -2322,6 +2488,13 @@ class BambuStudio3MFWriter:
                     "header_item",
                     attrib={"key": "X-BBL-Client-Version", "value": registry_client_version or ""},
                 )
+                orca_version = self._get_orca_slicer_version_tag()
+                if orca_version:
+                    ET.SubElement(
+                        header,
+                        "header_item",
+                        attrib={"key": "OrcaSlicer-Version", "value": orca_version},
+                    )
 
         tree = ET.ElementTree(config)
         ET.indent(tree, space="  ")
