@@ -50,6 +50,20 @@ def _raw_zip_member_bytes(path: Path, member_name: str) -> bytes:
             return handle.read(info._end_offset - info.header_offset)
 
 
+def _add_rybw_meshes(writer: BambuStudio3MFWriter) -> None:
+    for offset, (name, rgb) in enumerate(
+        [
+            ("White", (255, 255, 255)),
+            ("Red", (193, 46, 31)),
+            ("Yellow", (244, 238, 42)),
+            ("Blue", (10, 41, 137)),
+        ]
+    ):
+        mesh = trimesh.creation.box(extents=[1, 1, 0.08])
+        mesh.apply_translation([offset * 2, 0, 0])
+        writer.add_mesh(mesh, name, rgb)
+
+
 def test_cover_relationship_postprocess_raw_copies_unchanged_deflated_entries(
     tmp_path,
     monkeypatch,
@@ -1787,6 +1801,93 @@ class TestAnycubicWriterMetadata:
             header_items = {item.attrib["key"]: item.attrib["value"] for item in header.findall("header_item")}
             assert header_items["X-ACNext-Client-Type"] == "slicer"
             assert header_items["X-ACNext-Client-Version"] == "1.3.9.4 20260319225535"
+
+    def test_orca_registry_u1_uses_orca_native_filament_metadata(self, tmp_path) -> None:
+        writer = writer_module.BambuStudio3MFWriter(
+            output_path=str(tmp_path / "snapmaker-u1-orca-registry.3mf"),
+            settings={},
+            color_mode="4-Color",
+            printer_id="snapmaker-u1",
+            slicer="OrcaSlicer",
+            nozzle_size="0.4",
+            device_profile_id="OrcaSlicer:snapmaker:snapmaker-u1:0.4",
+        )
+        _add_rybw_meshes(writer)
+
+        out_path = writer.export()
+
+        with zipfile.ZipFile(out_path) as package:
+            project_settings = json.loads(
+                package.read("Metadata/project_settings.config").decode("utf-8")
+            )
+
+        serialized = json.dumps(project_settings, ensure_ascii=False)
+        assert "Snapmaker PLA Basic @U1" not in serialized
+        assert project_settings["printer_settings_id"] == "Snapmaker U1 (0.4 nozzle)"
+        assert project_settings["filament_settings_id"] == ["Snapmaker PLA @U1"] * 4
+        assert project_settings["default_print_profile"] == "0.20mm Standard @Snapmaker"
+        assert project_settings["default_filament_profile"] == ["Snapmaker PLA"]
+        assert "inherits_group" not in project_settings
+        assert "different_settings_to_system" not in project_settings
+
+    def test_snapmaker_orca_registry_u1_uses_snapmaker_orca_filament_metadata(
+        self, tmp_path
+    ) -> None:
+        writer = writer_module.BambuStudio3MFWriter(
+            output_path=str(tmp_path / "snapmaker-u1-snaporca-registry.3mf"),
+            settings={},
+            color_mode="4-Color",
+            printer_id="snapmaker-u1",
+            slicer="SnapmakerOrca",
+            nozzle_size="0.4",
+            device_profile_id="SnapmakerOrca:snapmaker:snapmaker-u1:0.4",
+        )
+        _add_rybw_meshes(writer)
+
+        out_path = writer.export()
+
+        with zipfile.ZipFile(out_path) as package:
+            project_settings = json.loads(
+                package.read("Metadata/project_settings.config").decode("utf-8")
+            )
+
+        assert project_settings["printer_settings_id"] == "Snapmaker U1 (0.4 nozzle)"
+        assert project_settings["filament_settings_id"] == [
+            "Snapmaker PLA Basic @U1"
+        ] * 4
+        assert project_settings["default_print_profile"] == "0.20mm Standard @Snapmaker"
+        assert project_settings["default_filament_profile"] == [
+            "Snapmaker PLA Basic"
+        ]
+        assert "inherits_group" not in project_settings
+        assert "different_settings_to_system" not in project_settings
+
+    def test_bambu_export_centers_and_drops_build_item_on_selected_bed(self, tmp_path) -> None:
+        writer = writer_module.BambuStudio3MFWriter(
+            output_path=str(tmp_path / "bambu-p1s-centered.3mf"),
+            settings={},
+            color_mode="4-Color",
+            printer_id="bambu-p1s",
+            slicer="BambuStudio",
+            nozzle_size="0.4",
+        )
+        writer.add_mesh(
+            trimesh.creation.box(extents=[2, 2, 0.4]),
+            "White",
+            (255, 255, 255),
+        )
+
+        out_path = writer.export()
+
+        with zipfile.ZipFile(out_path) as package:
+            model_root = ET.fromstring(package.read("3D/3dmodel.model"))
+
+        core_ns = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
+        build_item = model_root.find("m:build/m:item", core_ns)
+        assert build_item is not None
+        assert build_item.attrib["transform"] == (
+            "1 0 0 0 1 0 0 0 1 128 128 0.2"
+        )
 
     def test_h2d_0_2_bambu_version_uses_h2_family_client_stamp(self, tmp_path) -> None:
         writer = writer_module.BambuStudio3MFWriter(
