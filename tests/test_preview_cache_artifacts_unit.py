@@ -8,6 +8,7 @@ from api.preview_cache_artifacts import (
     PreviewCacheRevisionConflict,
     estimate_preview_cache_bytes,
     externalize_preview_cache,
+    get_preview_cache_max_bytes,
     hydrate_preview_cache,
     hydrate_preview_cache_for_worker,
     is_preview_cache_artifact_ref,
@@ -369,6 +370,29 @@ def test_estimate_preview_cache_bytes_accepts_compact_matrix_itemsize() -> None:
 
     assert legacy_int32 == 1750
     assert compact_int16 == 1150
+
+
+def test_preview_cache_max_bytes_disabled_by_default(monkeypatch) -> None:
+    """Preview cache guardrail is opt-in; unset env disables rejection."""
+    monkeypatch.delenv("LUMINA_PREVIEW_CACHE_MAX_BYTES", raising=False)
+
+    assert get_preview_cache_max_bytes() is None
+
+
+def test_preview_cache_max_bytes_disabled_for_invalid_or_non_positive_env(
+    monkeypatch,
+) -> None:
+    """Invalid, zero, and negative values disable the optional guardrail."""
+    for raw in ("", "not-a-number", "0", "-1"):
+        monkeypatch.setenv("LUMINA_PREVIEW_CACHE_MAX_BYTES", raw)
+        assert get_preview_cache_max_bytes() is None
+
+
+def test_preview_cache_max_bytes_uses_positive_env(monkeypatch) -> None:
+    """A positive env value explicitly enables the guardrail."""
+    monkeypatch.setenv("LUMINA_PREVIEW_CACHE_MAX_BYTES", "1073741824")
+
+    assert get_preview_cache_max_bytes() == 1073741824
 
 
 def test_persist_preview_cache_keeps_artifact_session_externalized(
