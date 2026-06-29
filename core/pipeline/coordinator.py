@@ -97,6 +97,31 @@ def _report_progress(ctx: dict, value: float, desc: str = "") -> None:
         progress(value, desc=desc)
 
 
+def _stop_after_step_if_requested(
+    ctx: dict,
+    label: str,
+    pipeline_t0: float,
+    step_timings: dict,
+) -> bool:
+    if ctx.get("stop_after_step") != label:
+        return False
+    total_s = time.perf_counter() - pipeline_t0
+    ctx["_pipeline_stopped_after"] = label
+    ctx["_pipeline_total_s"] = total_s
+    ctx["_step_timings"] = dict(step_timings)
+    log.debug(
+        "Pipeline stopped after %s in %.2fs",
+        label,
+        total_s,
+        extra={
+            "event": "pipeline_stopped_after_step",
+            "step": label,
+            "duration_ms": round(total_s * 1000, 3),
+        },
+    )
+    return True
+
+
 # ===================================================================
 # Raster pipeline
 # ===================================================================
@@ -133,6 +158,8 @@ def run_raster_pipeline(ctx: dict) -> dict:
     step_timings["S01"] = time.perf_counter() - t0
 
     if ctx.get("error"):
+        return ctx
+    if _stop_after_step_if_requested(ctx, "S01", pipeline_t0, step_timings):
         return ctx
 
     # ---- Vector branch check ----
@@ -174,6 +201,8 @@ def run_raster_pipeline(ctx: dict) -> dict:
                 return ctx
         step_timings[label] = time.perf_counter() - t0
         if ctx.get("error"):
+            return ctx
+        if _stop_after_step_if_requested(ctx, label, pipeline_t0, step_timings):
             return ctx
         _report_progress(ctx, prog_after)
 

@@ -196,6 +196,44 @@ def _build_color_contour_mesh(mask, height, total_layers, rgba):
     return merged
 
 
+def build_image_model_context(
+    *,
+    stop_after_step: str | None = None,
+    progress=None,
+    **kwargs,
+) -> dict:
+    """Build a converter pipeline context for callers that need the scene.
+
+    为需要复用 scene 的调用方构建转换管线上下文。
+
+    Args:
+        stop_after_step: Optional staged pipeline label such as ``"S08"``.
+            可选的分阶段管线停止点，例如 ``"S08"``。
+        progress: Optional progress callback forwarded to the pipeline.
+            可选的进度回调，会透传给管线。
+        **kwargs: Standard converter arguments accepted by ``convert_image_to_3d``.
+            ``convert_image_to_3d`` 接受的标准转换参数。
+
+    Returns:
+        Pipeline context, possibly stopped before final export.
+        管线上下文，可能已在最终导出前停止。
+    """
+
+    ctx = dict(kwargs)
+    ctx["progress"] = progress
+    # Intentional: the API layer produces its own GLB preview, so skip the
+    # heavy SVG->raster 2D preview inside the vector branch coordinator.
+    ctx["need_2d_preview"] = False
+    # Mirror cover source onto a stable ctx key; fall back to image_path so
+    # downstream pipeline stages can pick a sane default without the caller
+    # opting in. 大画幅光栅模式下 image_path 已经是 tile PNG，所以无需 worker
+    # 侧改动即能让每片 3MF 拿到自己的封面图源。
+    ctx["cover_source_path"] = ctx.get("cover_source_path") or ctx.get("image_path")
+    if stop_after_step:
+        ctx["stop_after_step"] = stop_after_step
+    return run_raster_pipeline(ctx)
+
+
 # ========== Main Conversion Function (Thin Wrapper) ==========
 
 
@@ -307,17 +345,7 @@ def convert_image_to_3d(
     separate_backing_color_id = _resolve_converter_separate_backing_color_id(material_source, selected_materials, material_backing_material_index, separate_backing_color_id)
 
     ctx = {k: v for k, v in locals().items() if k != "progress"}
-    ctx["progress"] = progress
-    # Intentional: the API layer produces its own GLB preview, so skip the
-    # heavy SVG→raster 2D preview inside the vector branch coordinator.
-    ctx["need_2d_preview"] = False
-    # Mirror cover source onto a stable ctx key; fall back to image_path so
-    # downstream pipeline stages can pick a sane default without the caller
-    # opting in. 大画幅光栅模式下 image_path 已经是 tile PNG，所以无需 worker
-    # 侧改动即能让每片 3MF 拿到自己的封面图源。
-    ctx["cover_source_path"] = cover_source_path or image_path
-
-    ctx = run_raster_pipeline(ctx)
+    ctx = build_image_model_context(progress=progress, **ctx)
     if ctx.get("error"):
         return None, None, None, ctx["error"], None
     return ctx.get("result_tuple", (None, None, None, "[ERROR] No result", None))
