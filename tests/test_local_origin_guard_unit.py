@@ -84,3 +84,21 @@ def test_require_local_app_origin_rejects_untrusted_sources(
 
     assert exc_info.value.status_code == 403
     assert "local Lumina Studio app" in exc_info.value.detail
+
+
+@pytest.mark.parametrize(
+    ("headers", "client_host"),
+    [
+        ({}, "192.168.1.50"),
+        ({"Origin": "https://attacker.example"}, "127.0.0.1"),
+        ({"Host": "attacker.example"}, "127.0.0.1"),
+        ({"Sec-Fetch-Site": "cross-site"}, "127.0.0.1"),
+    ],
+)
+def test_require_local_app_origin_allows_untrusted_sources_for_public_gray_api(
+    monkeypatch: pytest.MonkeyPatch,
+    headers: dict[str, str],
+    client_host: str,
+) -> None:
+    monkeypatch.setenv("LUMINA_ALLOW_PUBLIC_GRAY_API", "1")
+    require_local_app_origin(_request(headers, client_host=client_host))

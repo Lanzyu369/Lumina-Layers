@@ -23,7 +23,7 @@ from api.colorchecker_artifacts import load_colorchecker_full_rgb, scale_corner_
 from api.dependencies import get_file_registry, get_session_store
 from api.file_bridge import ndarray_to_png_bytes, upload_to_ndarray, upload_to_tempfile
 from api.file_registry import FileRegistry
-from api.local_origin_guard import require_local_app_origin
+from api.local_origin_guard import allow_public_gray_api, require_local_app_origin
 from api.schemas.single_stage import (
     GradientCardMaterialUpdateRequest,
     MaterialLibraryBulkExportRequest,
@@ -449,6 +449,9 @@ def _is_trusted_material_library_request(request: Request) -> tuple[bool, str]:
 
 
 def _enforce_material_library_request(request: Request) -> None:
+    if allow_public_gray_api():
+        return
+
     trusted, reason = _is_trusted_material_library_request(request)
     if trusted:
         return

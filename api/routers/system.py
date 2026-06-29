@@ -24,7 +24,7 @@ import config
 from api.dependencies import get_file_registry, get_session_store
 from api.file_bridge import ensure_png_tempfile
 from api.file_registry import FileRegistry
-from api.local_origin_guard import require_local_app_origin
+from api.local_origin_guard import allow_public_gray_api, require_local_app_origin
 from api.preview_resources import (
     register_preview_for_artifact,
     register_preview_resource_upload,
@@ -213,6 +213,9 @@ def _is_trusted_clear_cache_request(request: Request) -> tuple[bool, str]:
 
 
 def _enforce_clear_cache_origin(request: Request) -> None:
+    if allow_public_gray_api():
+        return
+
     trusted, reason = _is_trusted_clear_cache_request(request)
     if trusted:
         return

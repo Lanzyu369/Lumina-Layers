@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import os
 from urllib.parse import urlsplit
 
 from fastapi import HTTPException, Request
@@ -10,8 +11,17 @@ from fastapi import HTTPException, Request
 LOCAL_APP_ONLY_DETAIL = (
     "This endpoint is only available from the local Lumina Studio app."
 )
+PUBLIC_GRAY_API_ENV = "LUMINA_ALLOW_PUBLIC_GRAY_API"
 _TRUSTED_TEST_CLIENT_HOSTS = {"testclient"}
 _TRUSTED_TEST_HOST_HEADERS = {"testserver"}
+_TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
+
+
+def allow_public_gray_api() -> bool:
+    """Return whether the temporary public gray-server bypass is enabled.
+    返回临时公网灰度服务器旁路是否开启。
+    """
+    return os.environ.get(PUBLIC_GRAY_API_ENV, "").strip().lower() in _TRUTHY_ENV_VALUES
 
 
 def _is_loopback_host(host: str | None) -> bool:
@@ -65,10 +75,14 @@ def require_local_app_origin(request: Request) -> None:
     """Reject browser or remote-client requests outside the local app.
     拒绝不是由本地 Lumina Studio 应用发起的浏览器或远程客户端请求。
 
-    Direct CLI/TestClient calls may omit ``Origin`` and ``Referer``. Those are
-    accepted only when the socket client is loopback (or Starlette TestClient),
-    so binding the API on ``0.0.0.0`` does not bypass the guard.
+    ``LUMINA_ALLOW_PUBLIC_GRAY_API=1`` is a temporary public-gray Docker bypass
+    and must stay unset for packaged local builds.
+    ``LUMINA_ALLOW_PUBLIC_GRAY_API=1`` 仅用于临时公网灰度 Docker，正式本地
+    打包版必须保持未设置。
     """
+    if allow_public_gray_api():
+        return
+
     client_host = _request_client_host(request)
     if not _is_loopback_host(client_host):
         raise HTTPException(status_code=403, detail=LOCAL_APP_ONLY_DETAIL)
