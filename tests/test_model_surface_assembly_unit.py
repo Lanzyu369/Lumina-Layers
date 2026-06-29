@@ -36,6 +36,7 @@ def test_build_embedded_overlay_scene_keeps_bounds_and_adds_base_slot():
         pocket_depth_mm=0.4,
         base_slot_name="surface_base",
         base_color=(245, 245, 245),
+        allow_uncut_base=True,
     )
 
     assert "surface_base" in result.scene.geometry
