@@ -46,6 +46,7 @@ from api.workers.converter_workers import (
     worker_batch_convert_item,
     worker_generate_large_format_svg_native,
     worker_generate_model,
+    worker_generate_model_surface_overlay,
 )
 from core.batch_layout import LayoutResult, XYBBox, layout_shelf_by_row
 from utils.merged_bambu_3mf_writer import (
@@ -129,6 +130,13 @@ BATCH_ITEM_FAILED_DETAIL: str = (
 MODEL_GENERATION_FAILED_DETAIL: str = (
     "3MF generation failed. Re-run preview and try generating the model again."
 )
+MODEL_SURFACE_SOURCE_UNAVAILABLE_DETAIL: str = (
+    "Surface model is unavailable. Re-upload the model, run preview, and try again."
+)
+MODEL_SURFACE_CONFIG_UNAVAILABLE_DETAIL: str = (
+    "Surface overlay configuration is unavailable. Select a model surface, run preview, and try again."
+)
+_MODEL_SURFACE_DEFAULT_POCKET_DEPTH_MM: float = 0.4
 _SELECT_ALL_COLOR_REGION_PREFIX = "__select_all_color__:"
 
 
@@ -137,6 +145,79 @@ class _GenerateBody(BaseModel):
 
     session_id: str
     params: ConvertGenerateRequest
+
+
+def _should_use_model_surface_overlay(session_data: dict) -> bool:
+    """Return whether this generate request should use model-surface assembly."""
+
+    return bool(session_data.get("surface_overlay_enabled"))
+
+
+def _prepare_model_surface_overlay_worker_params(
+    session_data: dict,
+    params: dict,
+) -> dict:
+    """Build picklable worker params for model-surface final generation."""
+
+    model_path = session_data.get("surface_model_path")
+    if not isinstance(model_path, str) or not model_path or not os.path.exists(model_path):
+        raise HTTPException(status_code=409, detail=MODEL_SURFACE_SOURCE_UNAVAILABLE_DETAIL)
+
+    footprint = session_data.get("surface_footprint")
+    if not isinstance(footprint, dict):
+        raise HTTPException(status_code=409, detail=MODEL_SURFACE_CONFIG_UNAVAILABLE_DETAIL)
+
+    worker_params = dict(params)
+    worker_params["surface_model_path"] = model_path
+    worker_params["surface_footprint"] = footprint
+    try:
+        pocket_depth_mm = float(
+            session_data.get(
+                "surface_pocket_depth_mm",
+                _MODEL_SURFACE_DEFAULT_POCKET_DEPTH_MM,
+            )
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=MODEL_SURFACE_CONFIG_UNAVAILABLE_DETAIL,
+        ) from exc
+    if pocket_depth_mm <= 0.0:
+        raise HTTPException(status_code=409, detail=MODEL_SURFACE_CONFIG_UNAVAILABLE_DETAIL)
+    worker_params["surface_pocket_depth_mm"] = pocket_depth_mm
+    worker_params["converter_params"] = _prepare_model_surface_converter_params(
+        session_data,
+        params,
+    )
+    return worker_params
+
+
+def _prepare_model_surface_converter_params(
+    session_data: dict,
+    params: dict,
+) -> dict:
+    """Prepare converter params that build the printable surface artwork only."""
+
+    converter_params = dict(params)
+    target_width_mm = session_data.get("surface_target_width_mm")
+    if target_width_mm is not None:
+        try:
+            converter_params["target_width_mm"] = float(target_width_mm)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=MODEL_SURFACE_CONFIG_UNAVAILABLE_DETAIL,
+            ) from exc
+
+    # Surface overlay uses the uploaded model as the final body. Disable
+    # feature add-ons that would append standalone geometry to the artwork
+    # before it is embedded into the selected face.
+    converter_params["add_loop"] = False
+    converter_params["loop_pos"] = None
+    converter_params["enable_fridge_magnet"] = False
+    converter_params["fridge_magnets"] = []
+    converter_params["enable_base_layer_height_modifier"] = False
+    return converter_params
 
 
 def _remove_temp_path(path: str | None) -> None:
@@ -1484,14 +1565,23 @@ async def convert_generate(
             request,
         )
 
+    worker_fn = worker_generate_model
+    worker_params = params
+    if _should_use_model_surface_overlay(session_data):
+        worker_fn = worker_generate_model_surface_overlay
+        worker_params = _prepare_model_surface_overlay_worker_params(
+            session_data,
+            params,
+        )
+
     # 3. CPU computation offloaded to process pool (only paths and scalars)
     worker_t0 = time.perf_counter()
     try:
         result = await pool.submit(
-            worker_generate_model,
+            worker_fn,
             image_path,
             lut_path,
-            params,
+            worker_params,
         )
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="3MF generation timed out")

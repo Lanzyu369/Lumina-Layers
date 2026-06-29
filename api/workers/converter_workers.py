@@ -1535,6 +1535,126 @@ def worker_generate_model(
     }
 
 
+def worker_generate_model_surface_overlay(
+    image_path: str,
+    lut_path: str,
+    params: dict,
+) -> dict:
+    """Generate a 3MF by embedding image-converter layers into a model surface.
+
+    使用图片转换器色层嵌入模型选中表面并生成 3MF。
+
+    Args:
+        image_path: Already rendered surface artwork PNG path.
+            已渲染好的贴面图片 PNG 路径。
+        lut_path: LUT calibration path forwarded to the converter.
+            透传给转换器的 LUT 校准文件路径。
+        params: Picklable scalar dict containing model path, footprint payload,
+            pocket depth, and converter params.
+            可序列化参数，包含模型路径、表面轮廓、开槽深度与转换参数。
+
+    Returns:
+        Worker result dict compatible with ``convert_generate``.
+        与 ``convert_generate`` 兼容的 worker 结果字典。
+    """
+
+    import os
+    import tempfile
+    import time as _time
+
+    from api.structured_logging import get_logger
+    from config import TEMP_DIR
+    from core.model_surface.pipeline import build_surface_overlay_scene
+    from core.model_surface.serialization import surface_footprint_from_payload
+    from utils.bambu_3mf_writer import export_scene_with_bambu_metadata
+
+    log = get_logger(__name__)
+    normalized_params = _normalize_puzzle_piece_target_width(image_path, params)
+    converter_params = dict(normalized_params.get("converter_params") or {})
+    if not converter_params:
+        converter_params = {
+            key: value
+            for key, value in normalized_params.items()
+            if not str(key).startswith("surface_") and key != "converter_params"
+        }
+
+    footprint_payload = normalized_params.get("surface_footprint")
+    if not isinstance(footprint_payload, dict):
+        raise ValueError("surface_footprint must be a JSON object")
+
+    footprint = surface_footprint_from_payload(footprint_payload)
+    pocket_depth_mm = float(normalized_params.get("surface_pocket_depth_mm", 0.4))
+    model_path = str(normalized_params["surface_model_path"])
+    _t_worker_start = _time.perf_counter()
+    out_path: str | None = None
+    export_ready = False
+    log.debug(
+        "Worker model-surface generation started",
+        extra={
+            "event": "worker_model_surface_started",
+            "image_name": os.path.basename(image_path),
+            "model_name": os.path.basename(model_path),
+            "target_width_mm": converter_params.get("target_width_mm"),
+            "color_mode": converter_params.get("color_mode"),
+            "pocket_depth_mm": pocket_depth_mm,
+        },
+    )
+    try:
+        overlay = build_surface_overlay_scene(
+            model_path=model_path,
+            artwork_image_path=image_path,
+            lut_path=lut_path,
+            converter_params=converter_params,
+            footprint=footprint,
+            pocket_depth_mm=pocket_depth_mm,
+        )
+        fd, out_path = tempfile.mkstemp(suffix=".3mf", dir=TEMP_DIR)
+        os.close(fd)
+        export_scene_with_bambu_metadata(
+            scene=overlay.scene,
+            output_path=out_path,
+            slot_names=overlay.slot_names,
+            preview_colors=overlay.preview_colors,
+            project_slot_names=overlay.slot_names,
+            color_mode=str(converter_params.get("color_mode", "4-Color")),
+            printer_id=str(normalized_params.get("printer_id", "bambu-h2d")),
+            slicer=str(normalized_params.get("slicer", "BambuStudio")),
+            nozzle_size=str(normalized_params.get("nozzle_size", "0.4")),
+            cover_source=image_path,
+            device_profile_id=normalized_params.get("device_profile_id") or None,
+            enable_base_layer_height_modifier=False,
+        )
+        export_ready = True
+    except (ValueError, TypeError, KeyError, OSError, RuntimeError) as exc:
+        if out_path and not export_ready:
+            _cleanup_worker_temp_paths(out_path)
+        log.exception(
+            "Worker model-surface generation failed",
+            extra={
+                "event": "worker_model_surface_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+        raise
+
+    log.debug(
+        "Worker model-surface generation complete",
+        extra={
+            "event": "worker_model_surface_done",
+            "duration_ms": round((_time.perf_counter() - _t_worker_start) * 1000, 3),
+            "threemf_path": out_path,
+            "threemf_bytes": os.path.getsize(out_path) if out_path and os.path.exists(out_path) else None,
+            "slot_count": len(overlay.slot_names),
+        },
+    )
+    return {
+        "threemf_path": out_path,
+        "glb_path": None,
+        "status_msg": "Surface overlay model generated",
+    }
+
+
 def worker_generate_large_format_svg_native(
     image_path: str,
     lut_path: str,

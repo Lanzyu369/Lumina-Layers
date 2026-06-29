@@ -18,11 +18,15 @@ from api.schemas.model_surface import (
 )
 from api.structured_logging import get_logger
 from config import TEMP_DIR
-from core.model_surface.artwork import SurfacePlacement, render_surface_artwork
+from core.model_surface.artwork import render_surface_artwork
 from core.model_surface.footprint import build_surface_footprint
 from core.model_surface.loader import load_model_surface_mesh
 from core.model_surface.selection import select_planar_component
-from core.model_surface.types import EdgeMode, ModelSurfaceError, PlaneFrame, SurfaceFootprint
+from core.model_surface.serialization import (
+    surface_footprint_from_payload,
+    surface_placement_from_payload,
+)
+from core.model_surface.types import ModelSurfaceError
 
 router = APIRouter(prefix="/model-surface")
 log = get_logger(__name__)
@@ -170,8 +174,8 @@ def resolve_surface_preview_config(
         selection_payload = _loads_object(selection_json)
         footprint_payload = _loads_object(footprint_json)
         placement_payload = _loads_object(placement_json)
-        footprint = _surface_footprint_from_payload(footprint_payload)
-        placement = _surface_placement_from_payload(placement_payload)
+        footprint = surface_footprint_from_payload(footprint_payload)
+        placement = surface_placement_from_payload(placement_payload)
         rendered = render_surface_artwork(
             source_path=source_path,
             footprint=footprint,
@@ -205,85 +209,3 @@ def _loads_object(raw: str | None) -> dict:
     if not isinstance(payload, dict):
         raise ValueError("payload must be a JSON object")
     return payload
-
-
-def _surface_footprint_from_payload(payload: dict) -> SurfaceFootprint:
-    frame_payload = payload["frame"]
-    if not isinstance(frame_payload, dict):
-        raise ValueError("footprint.frame must be an object")
-
-    outer = _points_2d(payload["outer"])
-    holes = tuple(_points_2d(hole) for hole in payload.get("holes", []))
-    bounds_min = _point_2d(payload.get("bounds_min")) if payload.get("bounds_min") is not None else _bounds_min(outer)
-    bounds_max = _point_2d(payload.get("bounds_max")) if payload.get("bounds_max") is not None else _bounds_max(outer)
-    width = float(payload.get("bounds_width_mm") or (bounds_max[0] - bounds_min[0]))
-    height = float(payload.get("bounds_height_mm") or (bounds_max[1] - bounds_min[1]))
-    area = float(payload.get("area_mm2") or _polygon_area(outer, holes))
-    return SurfaceFootprint(
-        frame=PlaneFrame(
-            origin=_point_3d(frame_payload["origin"]),
-            normal=_point_3d(frame_payload["normal"]),
-            u_axis=_point_3d(frame_payload["u_axis"]),
-            v_axis=_point_3d(frame_payload["v_axis"]),
-        ),
-        outer=outer,
-        holes=holes,
-        bounds_min=bounds_min,
-        bounds_max=bounds_max,
-        bounds_width_mm=width,
-        bounds_height_mm=height,
-        area_mm2=area,
-        hole_count=int(payload.get("hole_count", len(holes))),
-    )
-
-
-def _surface_placement_from_payload(payload: dict) -> SurfacePlacement:
-    return SurfacePlacement(
-        mode=EdgeMode(str(payload.get("mode", EdgeMode.EDGE_TO_EDGE.value))),
-        offset_x_mm=float(payload.get("offset_x_mm", 0.0)),
-        offset_y_mm=float(payload.get("offset_y_mm", 0.0)),
-        scale=float(payload.get("scale", 1.0)),
-        rotation_deg=float(payload.get("rotation_deg", 0.0)),
-        inset_mm=float(payload.get("inset_mm", 0.0)),
-    )
-
-
-def _points_2d(raw: object) -> tuple[tuple[float, float], ...]:
-    if not isinstance(raw, list | tuple):
-        raise ValueError("2D point ring must be a list")
-    points = tuple(_point_2d(point) for point in raw)
-    if len(points) < 3:
-        raise ValueError("2D point ring must contain at least three points")
-    return points
-
-
-def _point_2d(raw: object) -> tuple[float, float]:
-    if not isinstance(raw, list | tuple) or len(raw) != 2:
-        raise ValueError("2D point must have two numbers")
-    return (float(raw[0]), float(raw[1]))
-
-
-def _point_3d(raw: object) -> tuple[float, float, float]:
-    if not isinstance(raw, list | tuple) or len(raw) != 3:
-        raise ValueError("3D point must have three numbers")
-    return (float(raw[0]), float(raw[1]), float(raw[2]))
-
-
-def _bounds_min(points: tuple[tuple[float, float], ...]) -> tuple[float, float]:
-    return (min(point[0] for point in points), min(point[1] for point in points))
-
-
-def _bounds_max(points: tuple[tuple[float, float], ...]) -> tuple[float, float]:
-    return (max(point[0] for point in points), max(point[1] for point in points))
-
-
-def _polygon_area(
-    outer: tuple[tuple[float, float], ...],
-    holes: tuple[tuple[tuple[float, float], ...], ...],
-) -> float:
-    import shapely.geometry as sg
-
-    polygon = sg.Polygon(outer, holes)
-    if not polygon.is_valid:
-        polygon = polygon.buffer(0)
-    return float(polygon.area)
