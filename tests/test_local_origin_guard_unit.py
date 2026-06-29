@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from fastapi import Request
+from fastapi import HTTPException, Request
 
 from api.local_origin_guard import require_local_app_origin
 
@@ -75,8 +75,30 @@ def test_require_local_app_origin_allows_loopback_sources(
         ),
     ],
 )
-def test_require_local_app_origin_allows_remote_sources(
+def test_require_local_app_origin_rejects_untrusted_sources(
     headers: dict[str, str],
     client_host: str,
 ) -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        require_local_app_origin(_request(headers, client_host=client_host))
+
+    assert exc_info.value.status_code == 403
+    assert "local Lumina Studio app" in exc_info.value.detail
+
+
+@pytest.mark.parametrize(
+    ("headers", "client_host"),
+    [
+        ({}, "192.168.1.50"),
+        ({"Origin": "https://attacker.example"}, "127.0.0.1"),
+        ({"Host": "attacker.example"}, "127.0.0.1"),
+        ({"Sec-Fetch-Site": "cross-site"}, "127.0.0.1"),
+    ],
+)
+def test_require_local_app_origin_allows_untrusted_sources_for_public_gray_api(
+    monkeypatch: pytest.MonkeyPatch,
+    headers: dict[str, str],
+    client_host: str,
+) -> None:
+    monkeypatch.setenv("LUMINA_ALLOW_PUBLIC_GRAY_API", "1")
     require_local_app_origin(_request(headers, client_host=client_host))
