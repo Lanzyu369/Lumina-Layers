@@ -3936,11 +3936,43 @@ def test_list_saved_stage_a_material_archives_reuses_cached_scan(
     assert third[0]["material_name"] == "PLA Basic"
 
 
-def test_gradient_card_material_delete_allows_untrusted_origin(
+def test_gradient_card_material_delete_rejects_untrusted_origin_by_default(
     monkeypatch,
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    client, _, _ = _client_with_state()
+    materials_root = tmp_path / "materials"
+    _write_updatable_material_archive(materials_root, "pla-basic")
+    monkeypatch.setattr(
+        "core.single_stage.materials.MATERIALS_DIR",
+        str(materials_root),
+    )
+    logger = _capture_single_stage_warning_logger(caplog)
+
+    try:
+        response = client.delete(
+            "/api/extractor/gradient-card-materials/pla-basic",
+            headers=_UNTRUSTED_ORIGIN_HEADERS,
+        )
+    finally:
+        logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 403
+    assert (materials_root / "pla-basic").exists()
+    records = _records_for_event(
+        caplog,
+        "extractor_gradient_card_material_library_forbidden",
+    )
+    assert len(records) == 1
+
+
+def test_gradient_card_material_delete_allows_untrusted_origin_for_public_gray_api(
+    monkeypatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv("LUMINA_ALLOW_PUBLIC_GRAY_API", "1")
     client, _, _ = _client_with_state()
     materials_root = tmp_path / "materials"
     _write_updatable_material_archive(materials_root, "pla-basic")
@@ -3968,10 +4000,49 @@ def test_gradient_card_material_delete_allows_untrusted_origin(
     assert records == []
 
 
-def test_gradient_card_material_library_allows_untrusted_origin_with_file_registration(
+def test_gradient_card_material_library_rejects_untrusted_origin_by_default(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    client, _, registry = _client_with_state()
+    archive_path = tmp_path / "material.json"
+    stage_a_path = tmp_path / "stage_A_parameters.json"
+    archive_path.write_text("{}", encoding="utf-8")
+    stage_a_path.write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "api.routers.single_stage.list_saved_stage_a_material_archives",
+        lambda: [
+            {
+                "material_name": "PLA Basic",
+                "directory_name": "pla-basic",
+                "created_at": "2026-04-16T10:00:00Z",
+                "updated_at": "2026-04-16T11:00:00Z",
+                "archive_path": str(archive_path),
+                "stage_a_params_path": str(stage_a_path),
+                "estimated_rgb": [100, 120, 140],
+                "layer_height_mm": 0.04,
+                "mean_delta_e": 1.23,
+                "verification_count": 3,
+                "verification_history": [],
+            }
+        ],
+    )
+
+    response = client.get(
+        "/api/extractor/gradient-card-materials?include_file_urls=true",
+        headers=_UNTRUSTED_ORIGIN_HEADERS,
+    )
+
+    assert response.status_code == 403
+    assert registry.cleanup_expired() == 0
+
+
+def test_gradient_card_material_library_allows_untrusted_origin_for_public_gray_api(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("LUMINA_ALLOW_PUBLIC_GRAY_API", "1")
     client, _, registry = _client_with_state()
     archive_path = tmp_path / "material.json"
     stage_a_path = tmp_path / "stage_A_parameters.json"
@@ -4007,9 +4078,29 @@ def test_gradient_card_material_library_allows_untrusted_origin_with_file_regist
     assert registry.cleanup_expired() == 0
 
 
-def test_gradient_card_material_library_allows_direct_non_loopback_host(
+def test_gradient_card_material_library_rejects_direct_non_loopback_host_by_default(
     monkeypatch,
 ) -> None:
+    client, _, _ = _client_with_state()
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "api.routers.single_stage.list_saved_stage_a_material_archives",
+        lambda: calls.append("list") or [],
+    )
+
+    response = client.get(
+        "/api/extractor/gradient-card-materials",
+        headers={"Host": "studio.lan:8000"},
+    )
+
+    assert response.status_code == 403
+    assert calls == []
+
+
+def test_gradient_card_material_library_allows_direct_non_loopback_host_for_public_gray_api(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("LUMINA_ALLOW_PUBLIC_GRAY_API", "1")
     client, _, _ = _client_with_state()
     calls: list[str] = []
     monkeypatch.setattr(
@@ -4074,9 +4165,29 @@ def test_gradient_card_material_delete_allows_local_origin_even_when_fetch_site_
     assert not (materials_root / "pla-basic").exists()
 
 
-def test_gradient_card_material_library_allows_originless_cross_site_fetch(
+def test_gradient_card_material_library_rejects_originless_cross_site_fetch_by_default(
     monkeypatch,
 ) -> None:
+    client, _, _ = _client_with_state()
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "api.routers.single_stage.list_saved_stage_a_material_archives",
+        lambda: calls.append("list") or [],
+    )
+
+    response = client.get(
+        "/api/extractor/gradient-card-materials",
+        headers={"Host": "localhost:8000", "Sec-Fetch-Site": "cross-site"},
+    )
+
+    assert response.status_code == 403
+    assert calls == []
+
+
+def test_gradient_card_material_library_allows_originless_cross_site_fetch_for_public_gray_api(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("LUMINA_ALLOW_PUBLIC_GRAY_API", "1")
     client, _, _ = _client_with_state()
     calls: list[str] = []
     monkeypatch.setattr(
@@ -4112,10 +4223,11 @@ def test_gradient_card_material_delete_allows_direct_local_request(
     assert not (materials_root / "pla-basic").exists()
 
 
-def test_gradient_card_material_management_routes_allow_untrusted_origin(
+def test_gradient_card_material_management_routes_allow_untrusted_origin_for_public_gray_api(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
+    monkeypatch.setenv("LUMINA_ALLOW_PUBLIC_GRAY_API", "1")
     client, store, _ = _client_with_state()
     session_id = _seed_gradient_card_material_session(store)
     archive_path = tmp_path / "material.json"

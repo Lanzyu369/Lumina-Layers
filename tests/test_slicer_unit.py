@@ -489,7 +489,22 @@ class TestRouterEndpoints:
         assert resp.status_code == 200
         assert resp.json()["slicers"] == []
 
-    def test_detect_allows_untrusted_origin(self):
+    def test_detect_rejects_untrusted_origin_by_default(self):
+        client = _make_client()
+        with patch(
+            "api.routers.slicer.detect_installed_slicers",
+            return_value=[],
+        ) as detect:
+            resp = client.get(
+                "/api/slicer/detect",
+                headers=UNTRUSTED_ORIGIN_HEADERS,
+            )
+
+        assert resp.status_code == 403
+        detect.assert_not_called()
+
+    def test_detect_allows_untrusted_origin_for_public_gray_api(self, monkeypatch):
+        monkeypatch.setenv("LUMINA_ALLOW_PUBLIC_GRAY_API", "1")
         client = _make_client()
         with patch(
             "api.routers.slicer.detect_installed_slicers",
@@ -552,7 +567,27 @@ class TestRouterEndpoints:
         assert data["slicer"]["exe_path"] is None
         assert private_path not in resp.text
 
-    def test_custom_path_validate_allows_untrusted_origin(self):
+    def test_custom_path_validate_rejects_untrusted_origin_by_default(self):
+        client = _make_client()
+        validator = MagicMock(return_value=None)
+        with patch(
+            "api.routers.slicer.validate_custom_slicer_path",
+            validator,
+        ):
+            resp = client.post(
+                "/api/slicer/custom-path/validate",
+                json={"path": "/Applications/Bambu Studio.app"},
+                headers=UNTRUSTED_ORIGIN_HEADERS,
+            )
+
+        assert resp.status_code == 403
+        validator.assert_not_called()
+
+    def test_custom_path_validate_allows_untrusted_origin_for_public_gray_api(
+        self,
+        monkeypatch,
+    ):
+        monkeypatch.setenv("LUMINA_ALLOW_PUBLIC_GRAY_API", "1")
         client = _make_client()
         validator = MagicMock(return_value=None)
         with patch(
@@ -713,11 +748,55 @@ class TestRouterEndpoints:
         assert resp.status_code == 400
         assert resp.json()["message"] == SLICER_LAUNCH_SOURCE_MISSING_MESSAGE
 
-    def test_launch_allows_untrusted_origin(
+    def test_launch_rejects_untrusted_origin_by_default(
         self,
         tmp_path,
         monkeypatch,
     ):
+        output_root = _configure_slicer_output(monkeypatch, tmp_path)
+        f = output_root / "model.3mf"
+        f.write_text("data")
+
+        client = _make_client()
+        auto_slicer = DetectedSlicer(
+            id="bambu_studio",
+            display_name="Bambu Studio",
+            exe_path="/Applications/Bambu Studio.app",
+            source="auto_macos_app",
+        )
+        launch_copy = output_root / "temp" / "launch_copy.3mf"
+        launch_copy.parent.mkdir(parents=True, exist_ok=True)
+        launch_copy.write_text("data")
+        with patch(
+            "api.routers.slicer.detect_installed_slicers",
+            return_value=[auto_slicer],
+        ) as detect, patch(
+            "api.routers.slicer._create_launch_copy",
+            return_value=launch_copy,
+        ) as create_copy, patch(
+            "api.routers.slicer.launch_slicer",
+            return_value=(True, "launched"),
+        ) as launch:
+            resp = client.post(
+                "/api/slicer/launch",
+                json={
+                    "slicer_id": "bambu_studio",
+                    "file_path": str(f),
+                },
+                headers=UNTRUSTED_ORIGIN_HEADERS,
+            )
+
+        assert resp.status_code == 403
+        detect.assert_not_called()
+        create_copy.assert_not_called()
+        launch.assert_not_called()
+
+    def test_launch_allows_untrusted_origin_for_public_gray_api(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        monkeypatch.setenv("LUMINA_ALLOW_PUBLIC_GRAY_API", "1")
         output_root = _configure_slicer_output(monkeypatch, tmp_path)
         f = output_root / "model.3mf"
         f.write_text("data")
