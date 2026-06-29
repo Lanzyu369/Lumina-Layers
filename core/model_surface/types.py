@@ -59,3 +59,48 @@ class LoadedSurfaceMesh:
     path: Path
     mesh: Any
     summary: MeshSummary
+
+
+@dataclass(frozen=True)
+class PlaneFrame:
+    """Local 2D frame anchored on a selected 3D plane.
+
+    锚定在选中三维平面上的局部二维坐标系。
+    """
+
+    origin: tuple[float, float, float]
+    normal: tuple[float, float, float]
+    u_axis: tuple[float, float, float]
+    v_axis: tuple[float, float, float]
+
+
+@dataclass(frozen=True)
+class SurfaceSelection:
+    """Connected planar face selection from a triangle mesh.
+
+    从三角网格中选出的连通平面区域。
+    """
+
+    face_indices: tuple[int, ...]
+    normal: tuple[float, float, float]
+    plane_origin: tuple[float, float, float]
+    area_mm2: float
+    face_count: int
+
+
+@dataclass(frozen=True)
+class SurfaceFootprint:
+    """Projected 2D footprint of a selected model surface.
+
+    选中模型表面投影后的二维轮廓。
+    """
+
+    frame: PlaneFrame
+    outer: tuple[tuple[float, float], ...]
+    holes: tuple[tuple[tuple[float, float], ...], ...]
+    bounds_min: tuple[float, float]
+    bounds_max: tuple[float, float]
+    bounds_width_mm: float
+    bounds_height_mm: float
+    area_mm2: float
+    hole_count: int
