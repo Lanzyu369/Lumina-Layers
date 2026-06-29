@@ -83,6 +83,7 @@ from .common import (
     _validate_material_source,
     recompute_gradient_groups_into_session,
 )
+from .model_surface import resolve_surface_preview_config
 
 router = APIRouter()
 log = get_logger(__name__)
@@ -857,6 +858,10 @@ async def convert_preview(
     ),
     large_format_enabled: bool = Form(False, description="是否处于大画幅模式"),
     replacement_regions: str | None = Form(None, description="颜色替换列表 JSON"),
+    surface_model_file_id: str | None = Form(None, description="Uploaded model file id for surface overlay"),
+    surface_selection_json: str | None = Form(None, description="JSON surface selection payload"),
+    surface_footprint_json: str | None = Form(None, description="JSON surface footprint payload"),
+    surface_placement_json: str | None = Form(None, description="JSON surface placement payload"),
     store: SessionStore = Depends(get_session_store),
     registry: FileRegistry = Depends(get_file_registry),
     pool: WorkerPoolManager = Depends(get_worker_pool),
@@ -871,6 +876,8 @@ async def convert_preview(
     """
     _api_t0 = time.perf_counter()
     temp_path: str | None = None
+    surface_original_image_path: str | None = None
+    surface_config: dict | None = None
     temp_native_bundle_path: str | None = None
     worker_preview_png_path: str | None = None
     worker_raw_preview_png_path: str | None = None
@@ -964,6 +971,18 @@ async def convert_preview(
         # 1. File upload (I/O, main thread)
         _t = time.perf_counter()
         temp_path = await ensure_png_tempfile(image)
+        surface_config = resolve_surface_preview_config(
+            registry=registry,
+            model_file_id=surface_model_file_id,
+            selection_json=surface_selection_json,
+            footprint_json=surface_footprint_json,
+            placement_json=surface_placement_json,
+            source_path=temp_path,
+        )
+        if surface_config is not None:
+            surface_original_image_path = temp_path
+            temp_path = surface_config["surface_artwork_path"]
+            target_width_mm = float(surface_config["target_width_mm"])
         _t_upload = time.perf_counter() - _t
         is_svg_upload = str(temp_path).lower().endswith(".svg")
         use_large_format_svg_guard = (
@@ -1073,7 +1092,11 @@ async def convert_preview(
         raise HTTPException(status_code=500, detail=_PREVIEW_GENERATION_FAILED_DETAIL)
     finally:
         if not worker_completed:
-            _cleanup_pre_session_temp_paths(temp_path, temp_native_bundle_path)
+            _cleanup_pre_session_temp_paths(
+                temp_path,
+                surface_original_image_path,
+                temp_native_bundle_path,
+            )
 
     # 3. Result processing (I/O + Session, main thread)
     result_loaded = False
@@ -1153,6 +1176,7 @@ async def convert_preview(
         if not result_loaded:
             _cleanup_pre_session_temp_paths(
                 temp_path,
+                surface_original_image_path,
                 temp_native_bundle_path,
                 worker_preview_png_path,
                 worker_raw_preview_png_path,
@@ -1364,6 +1388,7 @@ async def convert_preview(
                 registry=registry,
                 extra_temp_paths=(
                     temp_path,
+                    surface_original_image_path,
                     temp_native_bundle_path,
                     worker_preview_png_path,
                     worker_cache_data_path,
@@ -1396,6 +1421,18 @@ async def convert_preview(
     store.put(session_id, "image_path", temp_path)
     source_basename = _resolve_upload_source_basename(image.filename, temp_path)
     store.put(session_id, "source_basename", source_basename)
+    if surface_config is not None:
+        store.put(session_id, "surface_overlay_enabled", True)
+        store.put(session_id, "surface_model_file_id", surface_config["surface_model_file_id"])
+        store.put(session_id, "surface_model_path", surface_config["surface_model_path"])
+        store.put(session_id, "surface_selection", surface_config["surface_selection"])
+        store.put(session_id, "surface_footprint", surface_config["surface_footprint"])
+        store.put(session_id, "surface_placement", surface_config["surface_placement"])
+        store.put(session_id, "surface_artwork_path", surface_config["surface_artwork_path"])
+        store.put(session_id, "surface_target_width_mm", surface_config["target_width_mm"])
+        store.put(session_id, "surface_target_height_mm", surface_config["target_height_mm"])
+        if surface_original_image_path is not None:
+            store.put(session_id, "surface_source_image_path", surface_original_image_path)
     store.put(session_id, "lut_path", lut_path)
     store.put(session_id, "lut_name", resolved_lut_name)
     store.put(session_id, "lut_source_kind", request.source_kind)
@@ -1431,6 +1468,8 @@ async def convert_preview(
     if svg_large_format_policy is not None:
         store.put(session_id, "svg_large_format_policy", svg_large_format_policy)
     store.register_temp_file(session_id, temp_path)
+    if surface_original_image_path is not None:
+        store.register_temp_file(session_id, surface_original_image_path)
     if temp_native_bundle_path is not None:
         store.register_temp_file(session_id, temp_native_bundle_path)
     # Register worker temp files for cleanup
@@ -1469,6 +1508,7 @@ async def convert_preview(
             registry=registry,
             extra_temp_paths=(
                 temp_path,
+                surface_original_image_path,
                 temp_native_bundle_path,
                 worker_preview_png_path,
                 worker_cache_data_path,
@@ -1567,6 +1607,7 @@ async def convert_preview(
             registry=registry,
             extra_temp_paths=(
                 temp_path,
+                surface_original_image_path,
                 temp_native_bundle_path,
                 worker_preview_png_path,
                 worker_cache_data_path,
