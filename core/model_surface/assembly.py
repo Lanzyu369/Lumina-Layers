@@ -40,16 +40,17 @@ def build_embedded_overlay_scene(
         raise ModelSurfaceError("Pocket depth must be positive.")
 
     result_scene = trimesh.Scene()
+    embed_depth_mm = _pattern_depth_mm(pattern_scene)
     base_copy = (
         base_mesh.copy()
         if allow_uncut_base
-        else cut_surface_pocket(base_mesh, footprint, pocket_depth_mm=pocket_depth_mm)
+        else cut_surface_pocket(base_mesh, footprint, pocket_depth_mm=embed_depth_mm)
     )
     base_copy.metadata["name"] = base_slot_name
     _apply_face_color(base_copy, base_color)
     result_scene.add_geometry(base_copy, node_name=base_slot_name, geom_name=base_slot_name)
 
-    transform = _pattern_to_surface_transform(pattern_scene, footprint, pocket_depth_mm)
+    transform = _pattern_to_surface_transform(pattern_scene, footprint, embed_depth_mm)
     slot_names = [base_slot_name]
     preview_colors: dict[str, tuple[int, int, int]] = {base_slot_name: base_color}
     for name, mesh in pattern_scene.geometry.items():
@@ -151,6 +152,16 @@ def _pattern_to_surface_transform(
         - normal * (float(pocket_depth_mm) + float(pattern_min[2]))
     )
     return transform
+
+
+def _pattern_depth_mm(pattern_scene: trimesh.Scene) -> float:
+    bounds = np.asarray(pattern_scene.bounds, dtype=np.float64)
+    if bounds.shape != (2, 3) or not np.all(np.isfinite(bounds)):
+        raise ModelSurfaceError("Overlay pattern scene has invalid bounds.")
+    depth = float(bounds[1, 2] - bounds[0, 2])
+    if depth <= 0.0:
+        raise ModelSurfaceError("Overlay pattern scene has invalid Z depth.")
+    return depth
 
 
 def _footprint_prism_to_surface_transform(

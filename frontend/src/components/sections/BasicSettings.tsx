@@ -194,6 +194,17 @@ export default function BasicSettings() {
     materialLayerCount,
     materialLayerHeightMm,
     materialBackingMaterialDirName,
+    modelSurfaceEnabled,
+    modelSurfaceFile,
+    modelSurfaceSummary,
+    modelSurfaceSelectionId,
+    modelSurfaceSelection,
+    modelSurfaceFootprint,
+    modelSurfacePlacement,
+    modelSurfaceLoading,
+    modelSurfaceSelecting,
+    modelSurfaceError,
+    modelSurfaceWarnings,
     setColorLayers,
     setLayerHeightMm,
     setModelEnable,
@@ -252,6 +263,17 @@ export default function BasicSettings() {
     materialLayerCount: s.materialLayerCount,
     materialLayerHeightMm: s.materialLayerHeightMm,
     materialBackingMaterialDirName: s.materialBackingMaterialDirName,
+    modelSurfaceEnabled: s.modelSurfaceEnabled,
+    modelSurfaceFile: s.modelSurfaceFile,
+    modelSurfaceSummary: s.modelSurfaceSummary,
+    modelSurfaceSelectionId: s.modelSurfaceSelectionId,
+    modelSurfaceSelection: s.modelSurfaceSelection,
+    modelSurfaceFootprint: s.modelSurfaceFootprint,
+    modelSurfacePlacement: s.modelSurfacePlacement,
+    modelSurfaceLoading: s.modelSurfaceLoading,
+    modelSurfaceSelecting: s.modelSurfaceSelecting,
+    modelSurfaceError: s.modelSurfaceError,
+    modelSurfaceWarnings: s.modelSurfaceWarnings,
     setColorLayers: s.setColorLayers,
     setLayerHeightMm: s.setLayerHeightMm,
     setModelEnable: s.setModelEnable,
@@ -298,6 +320,7 @@ export default function BasicSettings() {
   );
 
   const [uploaderExpanded, setUploaderExpanded] = useState(true);
+  const modelSurfaceFileRef = useRef<HTMLInputElement>(null);
   const startupRetryMountedRef = useRef(false);
   const legacyCatalogRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const legacyCatalogStartupAttemptRef = useRef(0);
@@ -369,6 +392,11 @@ export default function BasicSettings() {
   const setLargeFormatEnabled = useConverterStore((s) => s.setLargeFormatEnabled);
   const setTileWidthMm = useConverterStore((s) => s.setTileWidthMm);
   const setTileHeightMm = useConverterStore((s) => s.setTileHeightMm);
+  const setModelSurfaceEnabled = useConverterStore((s) => s.setModelSurfaceEnabled);
+  const uploadModelSurfaceFile = useConverterStore((s) => s.uploadModelSurfaceFile);
+  const clearModelSurface = useConverterStore((s) => s.clearModelSurface);
+  const updateModelSurfacePlacement = useConverterStore((s) => s.updateModelSurfacePlacement);
+  const fitModelSurfaceArtwork = useConverterStore((s) => s.fitModelSurfaceArtwork);
 
   const handleFileReplace = useCallback(
     (file: File) => {
@@ -709,6 +737,13 @@ export default function BasicSettings() {
     if (lutFileRef.current) lutFileRef.current.value = "";
   };
 
+  const handleModelSurfaceUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    await uploadModelSurfaceFile(file);
+    if (modelSurfaceFileRef.current) modelSurfaceFileRef.current.value = "";
+  };
+
   const [isRefreshingLut, setIsRefreshingLut] = useState(false);
   const handleRefreshLut = useCallback(async () => {
     if (isRefreshingLut) return;
@@ -765,6 +800,21 @@ export default function BasicSettings() {
     () => Array.from(new Set([...(previewWarnings ?? []), ...(generatedLargeFormatWarnings ?? [])])),
     [previewWarnings, generatedLargeFormatWarnings],
   );
+  const modelSurfaceExtentsLabel = useMemo(() => {
+    const extents = modelSurfaceSummary?.extents_mm;
+    if (!extents) return null;
+    return extents.map((value) => `${value.toFixed(1)}`).join(" × ");
+  }, [modelSurfaceSummary?.extents_mm]);
+  const modelSurfaceFootprintLabel = useMemo(() => {
+    const width = modelSurfaceFootprint?.bounds_width_mm;
+    const height = modelSurfaceFootprint?.bounds_height_mm;
+    if (typeof width !== "number" || typeof height !== "number") return null;
+    return `${width.toFixed(1)} × ${height.toFixed(1)} mm`;
+  }, [modelSurfaceFootprint]);
+  const modelSurfaceFaceCount =
+    typeof modelSurfaceSelection?.face_count === "number"
+      ? modelSurfaceSelection.face_count
+      : null;
 
   return (
     <div className="flex flex-col gap-4">
@@ -819,6 +869,196 @@ export default function BasicSettings() {
           />
         </>
       )}
+
+      <div className="rounded-lg border border-slate-200/60 bg-slate-100/50 p-3 dark:border-slate-700/40 dark:bg-slate-900/40">
+        <Checkbox
+          label={t("model_surface_enable")}
+          tooltip={t("model_surface_enable_hint")}
+          checked={modelSurfaceEnabled}
+          onChange={setModelSurfaceEnabled}
+        />
+        {modelSurfaceEnabled && (
+          <div className="mt-3 flex flex-col gap-3">
+            <input
+              ref={modelSurfaceFileRef}
+              type="file"
+              accept=".stl,.obj"
+              className="hidden"
+              onChange={(e) => void handleModelSurfaceUpload(e)}
+            />
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => modelSurfaceFileRef.current?.click()}
+                disabled={modelSurfaceLoading}
+                className="rounded-full bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {modelSurfaceFile
+                  ? t("model_surface_replace_model")
+                  : t("model_surface_upload_model")}
+              </button>
+              {modelSurfaceFile && (
+                <button
+                  type="button"
+                  onClick={clearModelSurface}
+                  className="rounded-full border border-slate-200/80 px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+                >
+                  {t("model_surface_clear_model")}
+                </button>
+              )}
+            </div>
+
+            {modelSurfaceFile && (
+              <div className="grid gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+                <div className="flex justify-between gap-3">
+                  <span>{t("model_surface_model_file")}</span>
+                  <span className="min-w-0 truncate text-right text-slate-700 dark:text-slate-200">
+                    {modelSurfaceFile.name}
+                  </span>
+                </div>
+                {modelSurfaceExtentsLabel && (
+                  <div className="flex justify-between gap-3">
+                    <span>{t("model_surface_model_size")}</span>
+                    <span className="text-slate-700 dark:text-slate-200">
+                      {modelSurfaceExtentsLabel} mm
+                    </span>
+                  </div>
+                )}
+                <div className="flex justify-between gap-3">
+                  <span>{t("model_surface_status")}</span>
+                  <span className="text-slate-700 dark:text-slate-200">
+                    {modelSurfaceLoading
+                      ? t("model_surface_status_uploading")
+                      : modelSurfaceSelecting
+                        ? t("model_surface_status_selecting")
+                        : modelSurfaceSelectionId
+                          ? t("model_surface_status_selected")
+                          : t("model_surface_status_select_face")}
+                  </span>
+                </div>
+                {modelSurfaceFootprintLabel && (
+                  <div className="flex justify-between gap-3">
+                    <span>{t("model_surface_selected_size")}</span>
+                    <span className="text-slate-700 dark:text-slate-200">
+                      {modelSurfaceFootprintLabel}
+                    </span>
+                  </div>
+                )}
+                {modelSurfaceFaceCount !== null && (
+                  <div className="flex justify-between gap-3">
+                    <span>{t("model_surface_selected_faces")}</span>
+                    <span className="text-slate-700 dark:text-slate-200">
+                      {modelSurfaceFaceCount}
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {modelSurfaceError && (
+              <StatusBanner tone="error">{modelSurfaceError}</StatusBanner>
+            )}
+            {modelSurfaceWarnings.map((warning) => (
+              <StatusBanner key={warning} tone="warning">
+                {warning}
+              </StatusBanner>
+            ))}
+
+            {modelSurfaceSelectionId && (
+              <div className="flex flex-col gap-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={fitModelSurfaceArtwork}
+                    className="rounded-full border border-slate-200/80 px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+                  >
+                    {t("model_surface_fit")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      updateModelSurfacePlacement({ mode: "edge_to_edge" })
+                    }
+                    className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
+                      modelSurfacePlacement.mode === "edge_to_edge"
+                        ? "bg-blue-600 text-white"
+                        : "border border-slate-200/80 text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+                    }`}
+                  >
+                    {t("model_surface_mode_edge")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => updateModelSurfacePlacement({ mode: "inset" })}
+                    className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
+                      modelSurfacePlacement.mode === "inset"
+                        ? "bg-blue-600 text-white"
+                        : "border border-slate-200/80 text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+                    }`}
+                  >
+                    {t("model_surface_mode_inset")}
+                  </button>
+                </div>
+                <Slider
+                  label={t("model_surface_scale")}
+                  value={modelSurfacePlacement.scale}
+                  min={0.1}
+                  max={3}
+                  step={0.01}
+                  onChange={(scale) => updateModelSurfacePlacement({ scale })}
+                  displayDecimals={2}
+                />
+                <Slider
+                  label={t("model_surface_offset_x")}
+                  value={modelSurfacePlacement.offset_x_mm}
+                  min={-100}
+                  max={100}
+                  step={0.1}
+                  unit="mm"
+                  onChange={(offset_x_mm) =>
+                    updateModelSurfacePlacement({ offset_x_mm })
+                  }
+                />
+                <Slider
+                  label={t("model_surface_offset_y")}
+                  value={modelSurfacePlacement.offset_y_mm}
+                  min={-100}
+                  max={100}
+                  step={0.1}
+                  unit="mm"
+                  onChange={(offset_y_mm) =>
+                    updateModelSurfacePlacement({ offset_y_mm })
+                  }
+                />
+                <Slider
+                  label={t("model_surface_rotation")}
+                  value={modelSurfacePlacement.rotation_deg}
+                  min={-180}
+                  max={180}
+                  step={1}
+                  unit="°"
+                  onChange={(rotation_deg) =>
+                    updateModelSurfacePlacement({ rotation_deg })
+                  }
+                />
+                {modelSurfacePlacement.mode === "inset" && (
+                  <Slider
+                    label={t("model_surface_inset")}
+                    value={modelSurfacePlacement.inset_mm}
+                    min={0}
+                    max={20}
+                    step={0.1}
+                    unit="mm"
+                    onChange={(inset_mm) =>
+                      updateModelSurfacePlacement({ inset_mm })
+                    }
+                  />
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       <RadioGroup
         label={t("basic_source_version_label")}

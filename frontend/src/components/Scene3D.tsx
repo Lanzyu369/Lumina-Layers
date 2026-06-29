@@ -8,6 +8,7 @@ import InteractiveModelViewer from "./InteractiveModelViewer";
 import BedPlatform from "./BedPlatform";
 import KeychainRing3D from "./KeychainRing3D";
 import FridgeMagnet3D from "./FridgeMagnet3D";
+import ModelSurfaceSelector3D from "./ModelSurfaceSelector3D";
 import { useConverterStore } from "../stores/converter";
 import { useSettingsStore } from "../stores/settingsStore";
 import { computeScaleFactor } from "../utils/scaleUtils";
@@ -508,6 +509,12 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const effectiveModelUrl = modelUrl ?? storeModelUrl;
   const batchPreviewItems = useConverterStore((s) => s.batchPreviewItems);
   const previewGlbUrl = useConverterStore((s) => s.previewGlbUrl);
+  const modelSurfaceEnabled = useConverterStore((s) => s.modelSurfaceEnabled);
+  const modelSurfaceFile = useConverterStore((s) => s.modelSurfaceFile);
+  const modelSurfacePreviewUrl = useConverterStore((s) => s.modelSurfacePreviewUrl);
+  const modelSurfaceSelectionId = useConverterStore((s) => s.modelSurfaceSelectionId);
+  const modelSurfaceSelecting = useConverterStore((s) => s.modelSurfaceSelecting);
+  const selectModelSurfaceFace = useConverterStore((s) => s.selectModelSurfaceFace);
   const previewPerformanceTiming = useConverterStore((s) => s.previewPerformanceTiming);
   const generatePerformanceTiming = useConverterStore((s) => s.generatePerformanceTiming);
   const colorRemapMap = useConverterStore((s) => s.colorRemapMap);
@@ -552,6 +559,8 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const selectedFridgeMagnetId = useConverterStore((s) => s.selectedFridgeMagnetId);
   const selectFridgeMagnet = useConverterStore((s) => s.selectFridgeMagnet);
   const updateFridgeMagnetCenter = useConverterStore((s) => s.updateFridgeMagnetCenter);
+  const showModelSurfaceSelector =
+    modelSurfaceEnabled && Boolean(modelSurfacePreviewUrl) && Boolean(modelSurfaceFile);
   const modelBounds = useConverterStore((s) => s.modelBounds);
   const diagnosticsSamplingEnabled = diagnosticsVisible || getThreePerfDebugConfig().enabled;
   const hasPerformanceTiming = Boolean(previewPerformanceTiming || generatePerformanceTiming);
@@ -947,7 +956,16 @@ function Scene3D({ modelUrl }: Scene3DProps) {
           maxDistance={2000}
         />
         <BedPlatform />
-        {batchPreviewItems.length > 0 ? (
+        {showModelSurfaceSelector && modelSurfacePreviewUrl && modelSurfaceFile ? (
+          <ModelSurfaceSelector3D
+            file={modelSurfaceFile}
+            selectionReady={Boolean(modelSurfaceSelectionId)}
+            selecting={modelSurfaceSelecting}
+            onSelectFace={(faceIndex) => {
+              void selectModelSurfaceFace(faceIndex);
+            }}
+          />
+        ) : batchPreviewItems.length > 0 ? (
           <Suspense fallback={null}>
             <BatchPreviewModels
               items={batchPreviewItems}

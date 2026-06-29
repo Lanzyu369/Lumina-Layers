@@ -29,6 +29,9 @@ import type {
   RegionRecipeRequest,
   RegionRecipeResponse,
   AutoDetectColorsResponse,
+  ModelSurfaceHitTriangle,
+  ModelSurfaceSelectResponse,
+  ModelSurfaceUploadResponse,
 } from "./types";
 
 /** 上传图片 + 参数，获取 2D 预览（返回 JSON，含 session_id 和 preview_url） */
@@ -70,6 +73,37 @@ export async function convertGenerate(
     "/convert/generate",
     { session_id: sessionId, params },
     { timeout: 0 },
+  );
+  return response.data;
+}
+
+/** 上传用于覆面的 STL/OBJ 模型。 */
+export async function uploadModelSurface(
+  model: File,
+): Promise<ModelSurfaceUploadResponse> {
+  const fd = new FormData();
+  fd.append("model", model);
+  const response = await apiClient.post<ModelSurfaceUploadResponse>(
+    "/convert/model-surface/upload",
+    fd,
+    { timeout: 0 },
+  );
+  return response.data;
+}
+
+/** 在已上传模型上选择一个平面区域。 */
+export async function selectModelSurface(
+  modelFileId: string,
+  hit: ModelSurfaceHitTriangle,
+): Promise<ModelSurfaceSelectResponse> {
+  const response = await apiClient.post<ModelSurfaceSelectResponse>(
+    "/convert/model-surface/select",
+    {
+      model_file_id: modelFileId,
+      hit,
+      include_same_plane_disconnected: false,
+    },
+    { timeout: 3_600_000 },
   );
   return response.data;
 }

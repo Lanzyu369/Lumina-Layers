@@ -217,6 +217,118 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "打开 QQ 邮箱",
     en: "Open QQ Mail",
   },
+  model_surface_enable: {
+    zh: "模型覆面",
+    en: "Model surface overlay",
+  },
+  model_surface_enable_hint: {
+    zh: "将当前图片贴到上传模型的选中平面，最终导出保持原模型外形尺寸。",
+    en: "Place the current artwork on a selected flat model surface while preserving the source model dimensions.",
+  },
+  model_surface_upload_model: {
+    zh: "上传模型",
+    en: "Upload model",
+  },
+  model_surface_replace_model: {
+    zh: "更换模型",
+    en: "Replace model",
+  },
+  model_surface_clear_model: {
+    zh: "清除",
+    en: "Clear",
+  },
+  model_surface_model_file: {
+    zh: "模型",
+    en: "Model",
+  },
+  model_surface_model_size: {
+    zh: "尺寸",
+    en: "Size",
+  },
+  model_surface_status: {
+    zh: "状态",
+    en: "Status",
+  },
+  model_surface_status_uploading: {
+    zh: "上传中",
+    en: "Uploading",
+  },
+  model_surface_status_selecting: {
+    zh: "选面中",
+    en: "Selecting",
+  },
+  model_surface_status_selected: {
+    zh: "已选面",
+    en: "Surface selected",
+  },
+  model_surface_status_select_face: {
+    zh: "右侧点选面",
+    en: "Pick a face on the right",
+  },
+  model_surface_selected_size: {
+    zh: "选面",
+    en: "Surface",
+  },
+  model_surface_selected_faces: {
+    zh: "面片",
+    en: "Faces",
+  },
+  model_surface_fit: {
+    zh: "自适应",
+    en: "Fit",
+  },
+  model_surface_mode_edge: {
+    zh: "铺满",
+    en: "Edge",
+  },
+  model_surface_mode_inset: {
+    zh: "内缩",
+    en: "Inset",
+  },
+  model_surface_scale: {
+    zh: "贴图缩放",
+    en: "Artwork scale",
+  },
+  model_surface_offset_x: {
+    zh: "水平偏移",
+    en: "Offset X",
+  },
+  model_surface_offset_y: {
+    zh: "垂直偏移",
+    en: "Offset Y",
+  },
+  model_surface_rotation: {
+    zh: "旋转",
+    en: "Rotation",
+  },
+  model_surface_inset: {
+    zh: "内缩距离",
+    en: "Inset",
+  },
+  model_surface_error_select_first: {
+    zh: "请先上传模型并在右侧 3D 预览中选择一个平面。",
+    en: "Upload a model and select a flat surface in the 3D preview first.",
+  },
+  model_surface_error_upload_first: {
+    zh: "请先上传模型。",
+    en: "Upload a model first.",
+  },
+  model_surface_upload_failed: {
+    zh: "模型上传失败",
+    en: "Model upload failed",
+  },
+  model_surface_select_failed: {
+    zh: "选面失败",
+    en: "Surface selection failed",
+  },
+  model_surface_viewer_loading: {
+    zh: "模型加载中",
+    en: "Loading model",
+  },
+  model_surface_viewer_load_failed: {
+    zh: "模型预览加载失败",
+    en: "Model preview failed to load",
+  },
   bug_report_relay_prompt: {
     zh: "本机邮件未成功发送。是否同意将这份反馈转发到 Lumina Studio 官方问题收集服务？",
     en: "Local email delivery did not succeed. Do you agree to forward this report to the Lumina Studio official bug collection service?",

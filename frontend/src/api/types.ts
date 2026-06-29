@@ -100,6 +100,10 @@ export type ConvertPreviewRequest = ConvertSourceSelection & {
   material_backing_material_index?: number;
   large_format_enabled?: boolean;
   replacement_regions?: ColorReplacementItem[];
+  surface_model_file_id?: string;
+  surface_selection_json?: string;
+  surface_footprint_json?: string;
+  surface_placement_json?: string;
 };
 
 export type ConvertGenerateRequest = ConvertPreviewRequest & {
@@ -363,6 +367,45 @@ export interface GenerateResponse {
   preview_3d_url?: string;
   threemf_disk_path?: string;
   performance_timing?: PerformanceTiming | null;
+}
+
+export interface ModelSurfaceMeshSummary {
+  vertex_count: number;
+  face_count: number;
+  bounds_min_mm: [number, number, number];
+  bounds_max_mm: [number, number, number];
+  extents_mm: [number, number, number];
+  is_watertight: boolean;
+  is_winding_consistent: boolean;
+  body_count: number;
+  unit_warning: string | null;
+}
+
+export interface ModelSurfaceUploadResponse {
+  status: string;
+  model_file_id: string;
+  summary: ModelSurfaceMeshSummary;
+  preview_glb_url?: string | null;
+  warnings: string[];
+}
+
+export interface ModelSurfaceHitTriangle {
+  face_index?: number | null;
+  point?: [number, number, number] | null;
+  normal?: [number, number, number] | null;
+  vertices?: [
+    [number, number, number],
+    [number, number, number],
+    [number, number, number],
+  ] | null;
+}
+
+export interface ModelSurfaceSelectResponse {
+  status: string;
+  selection_id: string;
+  selection: Record<string, unknown>;
+  footprint: Record<string, unknown>;
+  warnings: string[];
 }
 
 export interface LutListResponse {

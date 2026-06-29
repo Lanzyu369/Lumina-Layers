@@ -11,8 +11,12 @@ import trimesh
 from api.app import app
 from api.dependencies import get_file_registry, get_session_store, get_worker_pool
 from api.file_registry import FileRegistry
-from api.routers.converter.generate import _should_use_model_surface_overlay
+from api.routers.converter.generate import (
+    _prepare_model_surface_overlay_worker_params,
+    _should_use_model_surface_overlay,
+)
 from api.session_store import SessionStore
+from config import ModelingMode as CoreModelingMode
 from core.model_surface.assembly import OverlaySceneResult
 
 
@@ -127,6 +131,49 @@ def test_generate_routes_model_surface_session_to_overlay_worker(
     assert submitted_params["converter_params"]["model_enable"] is True
     assert "surface_model_path" not in submitted_params["converter_params"]
     assert response.json()["preview_3d_url"] is None
+
+
+def test_model_surface_vector_request_uses_raster_mode_for_rendered_artwork(tmp_path):
+    image_path = tmp_path / "surface-art.png"
+    model_path = tmp_path / "plate.stl"
+    Image.new("RGB", (20, 10), (255, 0, 0)).save(image_path)
+    trimesh.creation.box(extents=(20.0, 10.0, 2.0)).export(model_path)
+
+    worker_params = _prepare_model_surface_overlay_worker_params(
+        {
+            "surface_model_path": str(model_path),
+            "surface_artwork_path": str(image_path),
+            "surface_footprint": {
+                "frame": {
+                    "origin": [0.0, 0.0, 1.0],
+                    "normal": [0.0, 0.0, 1.0],
+                    "u_axis": [1.0, 0.0, 0.0],
+                    "v_axis": [0.0, 1.0, 0.0],
+                },
+                "outer": [
+                    [-10.0, -5.0],
+                    [10.0, -5.0],
+                    [10.0, 5.0],
+                    [-10.0, 5.0],
+                    [-10.0, -5.0],
+                ],
+                "holes": [],
+                "bounds_width_mm": 20.0,
+                "bounds_height_mm": 10.0,
+            },
+        },
+        {
+            "target_width_mm": 20.0,
+            "spacer_thick": 1.2,
+            "structure_mode": "Double-sided",
+            "color_mode": "4-Color (RYBW)",
+            "modeling_mode": CoreModelingMode.VECTOR,
+            "add_loop": True,
+            "loop_pos": "top",
+        },
+    )
+
+    assert worker_params["converter_params"]["modeling_mode"] == CoreModelingMode.HIGH_FIDELITY
 
 
 def test_worker_generate_model_surface_overlay_exports_bambu_3mf(tmp_path):
