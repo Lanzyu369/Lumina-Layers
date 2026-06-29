@@ -489,19 +489,19 @@ class TestRouterEndpoints:
         assert resp.status_code == 200
         assert resp.json()["slicers"] == []
 
-    def test_detect_rejects_untrusted_origin_before_scanning(self):
+    def test_detect_allows_untrusted_origin(self):
         client = _make_client()
         with patch(
             "api.routers.slicer.detect_installed_slicers",
-            side_effect=AssertionError("detect should not run"),
+            return_value=[],
         ):
             resp = client.get(
                 "/api/slicer/detect",
                 headers=UNTRUSTED_ORIGIN_HEADERS,
             )
 
-        assert resp.status_code == 403
-        assert "local Lumina Studio app" in resp.json()["detail"]
+        assert resp.status_code == 200
+        assert resp.json()["slicers"] == []
 
     def test_detect_allows_local_frontend_origin(self):
         client = _make_client()
@@ -552,11 +552,12 @@ class TestRouterEndpoints:
         assert data["slicer"]["exe_path"] is None
         assert private_path not in resp.text
 
-    def test_custom_path_validate_rejects_untrusted_origin_before_path_probe(self):
+    def test_custom_path_validate_allows_untrusted_origin(self):
         client = _make_client()
+        validator = MagicMock(return_value=None)
         with patch(
             "api.routers.slicer.validate_custom_slicer_path",
-            side_effect=AssertionError("path validation should not run"),
+            validator,
         ):
             resp = client.post(
                 "/api/slicer/custom-path/validate",
@@ -564,8 +565,9 @@ class TestRouterEndpoints:
                 headers=UNTRUSTED_ORIGIN_HEADERS,
             )
 
-        assert resp.status_code == 403
-        assert "local Lumina Studio app" in resp.json()["detail"]
+        assert resp.status_code == 400
+        assert resp.json()["status"] == "error"
+        validator.assert_called_once()
 
     def test_custom_path_validate_failure(self):
         client = _make_client()
@@ -711,7 +713,7 @@ class TestRouterEndpoints:
         assert resp.status_code == 400
         assert resp.json()["message"] == SLICER_LAUNCH_SOURCE_MISSING_MESSAGE
 
-    def test_launch_rejects_untrusted_origin_before_copy_or_process_launch(
+    def test_launch_allows_untrusted_origin(
         self,
         tmp_path,
         monkeypatch,
@@ -721,15 +723,24 @@ class TestRouterEndpoints:
         f.write_text("data")
 
         client = _make_client()
+        auto_slicer = DetectedSlicer(
+            id="bambu_studio",
+            display_name="Bambu Studio",
+            exe_path="/Applications/Bambu Studio.app",
+            source="auto_macos_app",
+        )
+        launch_copy = output_root / "temp" / "launch_copy.3mf"
+        launch_copy.parent.mkdir(parents=True, exist_ok=True)
+        launch_copy.write_text("data")
         with patch(
             "api.routers.slicer.detect_installed_slicers",
-            side_effect=AssertionError("detect should not run"),
+            return_value=[auto_slicer],
         ), patch(
             "api.routers.slicer._create_launch_copy",
-            side_effect=AssertionError("copy should not run"),
+            return_value=launch_copy,
         ), patch(
             "api.routers.slicer.launch_slicer",
-            side_effect=AssertionError("launch should not run"),
+            return_value=(True, "launched"),
         ):
             resp = client.post(
                 "/api/slicer/launch",
@@ -740,8 +751,8 @@ class TestRouterEndpoints:
                 headers=UNTRUSTED_ORIGIN_HEADERS,
             )
 
-        assert resp.status_code == 403
-        assert "local Lumina Studio app" in resp.json()["detail"]
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "success"
 
     def test_launch_uses_valid_custom_path(self, tmp_path, monkeypatch):
         output_root = _configure_slicer_output(monkeypatch, tmp_path)

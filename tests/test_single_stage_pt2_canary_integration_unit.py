@@ -411,7 +411,7 @@ def _patch_material_solver_management_dependencies(
         ("/api/extractor/material-solver-runtime/details", _solver_runtime_form_data),
     ],
 )
-def test_material_solver_management_posts_reject_untrusted_origin_before_loading_materials(
+def test_material_solver_management_posts_allow_untrusted_origin(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     path: str,
@@ -426,12 +426,11 @@ def test_material_solver_management_posts_reject_untrusted_origin_before_loading
         headers=UNTRUSTED_ORIGIN_HEADERS,
     )
 
-    assert response.status_code == 403
-    assert "local Lumina Studio app" in response.json()["detail"]
-    assert calls == []
+    assert response.status_code != 403
+    assert calls != []
 
 
-def test_material_solver_cache_list_rejects_untrusted_origin_before_reading_index(
+def test_material_solver_cache_list_allows_untrusted_origin(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client, _, _ = _client_with_state()
@@ -459,9 +458,8 @@ def test_material_solver_cache_list_rejects_untrusted_origin_before_reading_inde
         headers=UNTRUSTED_ORIGIN_HEADERS,
     )
 
-    assert response.status_code == 403
-    assert "local Lumina Studio app" in response.json()["detail"]
-    assert called is False
+    assert response.status_code == 200
+    assert called is True
     assert private_path not in response.text
 
 

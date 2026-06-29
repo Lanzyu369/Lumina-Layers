@@ -61,10 +61,10 @@ class TestGetSettings:
         assert settings["device_profile_id"] == "BambuStudio:bbl:bambu-lab-h2d:0.4"
         assert settings["nozzle_size"] == "0.4"
 
-    def test_get_settings_rejects_untrusted_origin_before_reading_file(self) -> None:
-        """外部网页不能读取本地持久设置。"""
+    def test_get_settings_allows_untrusted_origin(self) -> None:
+        """公网灰度部署允许外部网页读取持久设置。"""
         mock_file = MagicMock()
-        mock_file.exists.side_effect = AssertionError("settings file should not be read")
+        mock_file.exists.return_value = False
 
         with patch("api.routers.system.SETTINGS_FILE", mock_file):
             response = client.get(
@@ -72,8 +72,8 @@ class TestGetSettings:
                 headers=UNTRUSTED_ORIGIN_HEADERS,
             )
 
-        assert response.status_code == 403
-        assert "local Lumina Studio app" in response.json()["detail"]
+        assert response.status_code == 200
+        assert response.json()["status"] == "success"
 
     def test_get_settings_file_exists(self) -> None:
         """文件存在时返回正确数据。"""
@@ -242,8 +242,8 @@ class TestPostSettings:
         written = json.loads(mock_file.write_text.call_args.args[0])
         assert written["device_profile_id"] == "OrcaSlicer:bbl:bambu-lab-p1s:0.2"
 
-    def test_post_settings_rejects_untrusted_origin_before_writing_file(self) -> None:
-        """外部网页不能改写本地持久设置。"""
+    def test_post_settings_allows_untrusted_origin(self) -> None:
+        """公网灰度部署允许外部网页保存设置。"""
         payload = {
             "last_lut": "attacker-lut",
             "last_modeling_mode": "vector",
@@ -260,7 +260,6 @@ class TestPostSettings:
             "enable_base_layer_height_modifier": False,
         }
         mock_file = MagicMock()
-        mock_file.write_text.side_effect = AssertionError("settings file should not be written")
 
         with patch("api.routers.system.SETTINGS_FILE", mock_file):
             response = client.post(
@@ -269,9 +268,9 @@ class TestPostSettings:
                 headers=UNTRUSTED_ORIGIN_HEADERS,
             )
 
-        assert response.status_code == 403
-        assert "local Lumina Studio app" in response.json()["detail"]
-        mock_file.write_text.assert_not_called()
+        assert response.status_code == 200
+        assert response.json()["status"] == "success"
+        mock_file.write_text.assert_called_once()
 
     def test_post_settings_io_error(self) -> None:
         """I/O 错误返回 500，但不暴露本机路径或底层异常。"""

@@ -57,9 +57,6 @@ from core.single_stage.processing import _safe_extract_zip
 _UPLOAD_IMAGE_UNREADABLE_DETAIL = (
     "无法解码图像文件: 请重新上传有效的 PNG、JPEG、HEIC 或 RAW 图片后再试。"
 )
-_MATERIAL_LIBRARY_FORBIDDEN_DETAIL = (
-    "Material library management is only available from the Lumina Studio local app."
-)
 _UNTRUSTED_ORIGIN_HEADERS = {
     "Origin": "https://attacker.example",
     "Host": "localhost:8000",
@@ -3939,7 +3936,7 @@ def test_list_saved_stage_a_material_archives_reuses_cached_scan(
     assert third[0]["material_name"] == "PLA Basic"
 
 
-def test_gradient_card_material_delete_rejects_untrusted_origin_without_removing_saved_material(
+def test_gradient_card_material_delete_allows_untrusted_origin(
     monkeypatch,
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
@@ -3961,23 +3958,17 @@ def test_gradient_card_material_delete_rejects_untrusted_origin_without_removing
     finally:
         logger.removeHandler(caplog.handler)
 
-    assert response.status_code == 403
-    assert response.json() == {"detail": _MATERIAL_LIBRARY_FORBIDDEN_DETAIL}
-    assert (materials_root / "pla-basic").exists()
+    assert response.status_code == 200
+    assert response.json()["directory_name"] == "pla-basic"
+    assert not (materials_root / "pla-basic").exists()
     records = _records_for_event(
         caplog,
         "extractor_gradient_card_material_library_forbidden",
     )
-    assert len(records) == 1
-    record = records[0]
-    assert record.levelno == logging.WARNING
-    assert record.origin == "https://attacker.example"
-    assert record.host == "localhost:8000"
-    assert record.error_type == "ForbiddenMaterialLibraryOrigin"
-    assert record.error_message == _MATERIAL_LIBRARY_FORBIDDEN_DETAIL
+    assert records == []
 
 
-def test_gradient_card_material_library_rejects_untrusted_origin_before_file_registration(
+def test_gradient_card_material_library_allows_untrusted_origin_with_file_registration(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -4011,12 +4002,12 @@ def test_gradient_card_material_library_rejects_untrusted_origin_before_file_reg
         headers=_UNTRUSTED_ORIGIN_HEADERS,
     )
 
-    assert response.status_code == 403
-    assert response.json() == {"detail": _MATERIAL_LIBRARY_FORBIDDEN_DETAIL}
+    assert response.status_code == 200
+    assert response.json()["materials"][0]["directory_name"] == "pla-basic"
     assert registry.cleanup_expired() == 0
 
 
-def test_gradient_card_material_library_rejects_direct_non_loopback_host(
+def test_gradient_card_material_library_allows_direct_non_loopback_host(
     monkeypatch,
 ) -> None:
     client, _, _ = _client_with_state()
@@ -4031,9 +4022,8 @@ def test_gradient_card_material_library_rejects_direct_non_loopback_host(
         headers={"Host": "studio.lan:8000"},
     )
 
-    assert response.status_code == 403
-    assert response.json() == {"detail": _MATERIAL_LIBRARY_FORBIDDEN_DETAIL}
-    assert calls == []
+    assert response.status_code == 200
+    assert calls == ["list"]
 
 
 def test_gradient_card_material_delete_allows_local_frontend_origin(
@@ -4084,7 +4074,7 @@ def test_gradient_card_material_delete_allows_local_origin_even_when_fetch_site_
     assert not (materials_root / "pla-basic").exists()
 
 
-def test_gradient_card_material_library_rejects_originless_cross_site_fetch(
+def test_gradient_card_material_library_allows_originless_cross_site_fetch(
     monkeypatch,
 ) -> None:
     client, _, _ = _client_with_state()
@@ -4099,9 +4089,8 @@ def test_gradient_card_material_library_rejects_originless_cross_site_fetch(
         headers={"Host": "localhost:8000", "Sec-Fetch-Site": "cross-site"},
     )
 
-    assert response.status_code == 403
-    assert response.json() == {"detail": _MATERIAL_LIBRARY_FORBIDDEN_DETAIL}
-    assert calls == []
+    assert response.status_code == 200
+    assert calls == ["list"]
 
 
 def test_gradient_card_material_delete_allows_direct_local_request(
@@ -4123,7 +4112,7 @@ def test_gradient_card_material_delete_allows_direct_local_request(
     assert not (materials_root / "pla-basic").exists()
 
 
-def test_gradient_card_material_management_routes_reject_untrusted_origin_before_side_effects(
+def test_gradient_card_material_management_routes_allow_untrusted_origin(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -4271,9 +4260,7 @@ def test_gradient_card_material_management_routes_reject_untrusted_origin_before
     for label, send_request in requests:
         calls.clear()
         response = send_request()
-        assert response.status_code == 403, label
-        assert response.json() == {"detail": _MATERIAL_LIBRARY_FORBIDDEN_DETAIL}
-        assert calls == [], label
+        assert response.status_code != 403, label
 
 
 def test_gradient_card_material_library_route_lists_saved_materials(

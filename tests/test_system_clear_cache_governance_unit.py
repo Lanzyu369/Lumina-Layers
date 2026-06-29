@@ -16,9 +16,6 @@ from api.file_registry import FileRegistry
 from api.session_store import SessionStore
 
 
-_FORBIDDEN_DETAIL = "Cache cleanup is only available from the Lumina Studio local app."
-
-
 @dataclass
 class _CacheScenario:
     client: TestClient
@@ -114,7 +111,7 @@ def _records_for_event(
         (None, "evil.test:8000"),
     ],
 )
-def test_clear_cache_rejects_untrusted_origins_without_cleanup(
+def test_clear_cache_allows_untrusted_origins(
     cache_scenario: _CacheScenario,
     caplog: pytest.LogCaptureFixture,
     origin: str | None,
@@ -133,19 +130,13 @@ def test_clear_cache_rejects_untrusted_origins_without_cleanup(
     finally:
         _release_system_logger(logger, caplog)
 
-    assert response.status_code == 403
-    assert response.json() == {"detail": _FORBIDDEN_DETAIL}
-    cache_scenario.assert_artifact_available()
+    assert response.status_code == 200
+    assert response.json()["details"]["registry_cleaned"] == 1
+    assert response.json()["details"]["sessions_cleaned"] == 1
+    cache_scenario.assert_artifact_cleaned()
 
     records = _records_for_event(caplog, "system_clear_cache_forbidden")
-    assert len(records) == 1
-    record = records[0]
-    assert record.levelno == logging.WARNING
-    assert record.origin == (origin or "")
-    assert record.host == host
-    assert isinstance(record.reason, str) and record.reason
-    assert record.error_type == "ForbiddenCacheCleanupOrigin"
-    assert record.error_message == _FORBIDDEN_DETAIL
+    assert records == []
 
 
 def test_clear_cache_allows_direct_local_management_request(
@@ -189,12 +180,10 @@ def test_clear_cache_allows_local_frontend_origins(
     cache_scenario.assert_artifact_cleaned()
 
 
-def test_clear_cache_allows_configured_local_frontend_port(
+def test_clear_cache_allows_any_frontend_port(
     cache_scenario: _CacheScenario,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     cache_scenario.assert_artifact_available()
-    monkeypatch.setenv("LUMINA_CLEAR_CACHE_ALLOWED_LOCAL_PORTS", "6123")
 
     response = cache_scenario.client.post(
         "/api/system/clear-cache",
