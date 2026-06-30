@@ -22,7 +22,13 @@ from unittest import mock
 import numpy as np
 import pytest
 from svgelements import Arc, Path as SvgPath
-from shapely.geometry import Polygon, MultiPolygon, GeometryCollection, LineString
+from shapely.geometry import (
+    Polygon,
+    MultiPolygon,
+    GeometryCollection,
+    LineString,
+    box,
+)
 from shapely.ops import unary_union as shapely_unary_union
 
 import core.vector_engine as vector_engine
@@ -1249,6 +1255,156 @@ class TestHueAwareVectorColorMatching:
         assert matched[0]["lut_idx"] == 1
         assert matched[0]["matched_rgb"] == (80, 70, 140)
         assert matched[0]["recipe"] == [1, 1, 1, 1, 1]
+
+
+class TestVectorNearFillConsistency:
+    """Nearby flat SVG fills should share one vector LUT query."""
+
+    class _NearestKdtree:
+        def __init__(self, lut_rgb):
+            self.lut_rgb = np.asarray(lut_rgb, dtype=np.float64)
+            self.n = len(lut_rgb)
+
+        def query(self, lab):
+            lab = np.asarray(lab, dtype=np.float64).reshape(-1, 3)
+            dist = np.linalg.norm(
+                lab[:, None, :] - self.lut_rgb[None, :, :],
+                axis=2,
+            )
+            index = np.argmin(dist, axis=1)
+            return dist[np.arange(len(lab)), index], index
+
+    class _FakeImageProcessor:
+        lut_path = "fake.npy"
+        color_mode = "Unit"
+        hue_matcher = None
+        layer_count = 5
+        lut_rgb = np.array(
+            [
+                [100, 100, 100],
+                [101, 100, 100],
+                [104, 100, 100],
+            ],
+            dtype=np.uint8,
+        )
+        ref_stacks = np.array(
+            [
+                [0, 0, 0, 0, 0],
+                [1, 1, 1, 1, 1],
+                [2, 2, 2, 2, 2],
+            ],
+            dtype=np.int32,
+        )
+        color_conf = {
+            "slots": ["A", "B", "C"],
+            "preview": {
+                0: [100, 100, 100, 255],
+                1: [101, 100, 100, 255],
+                2: [104, 100, 100, 255],
+            },
+            "map": {"A": 0, "B": 1, "C": 2},
+        }
+        slot_names = ["A", "B", "C"]
+        preview_colors = color_conf["preview"]
+
+        def __init__(self):
+            self.kdtree = TestVectorNearFillConsistency._NearestKdtree(
+                self.lut_rgb
+            )
+
+        @staticmethod
+        def _rgb_to_lab(arr):
+            return np.asarray(arr, dtype=np.float64).reshape(-1, 3)
+
+    def _processor(self):
+        return VectorProcessor.from_img_processor(
+            self._FakeImageProcessor(),
+            "Unit",
+        )
+
+    def _write_svg(self, tmp_path, fills):
+        rects = []
+        for idx, fill in enumerate(fills):
+            rects.append(
+                f'<rect x="{idx * 10}" y="0" width="10" height="10" fill="{fill}"/>'
+            )
+        path = tmp_path / "near-fill.svg"
+        path.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 10">'
+            + "".join(rects)
+            + "</svg>",
+            encoding="utf-8",
+        )
+        return path
+
+    def test_nearby_svg_fills_share_one_matched_color(self, tmp_path):
+        from core.pipeline.pipeline_utils import extract_color_palette
+
+        svg_path = self._write_svg(tmp_path, ["#646464", "#656464"])
+        analysis = self._processor().analyze_svg(str(svg_path), target_width_mm=30.0)
+
+        matched_shapes = analysis.matched_shapes
+        assert {tuple(item["color"]) for item in matched_shapes} == {
+            (100, 100, 100),
+            (101, 100, 100),
+        }
+        assert {tuple(item["match_color"]) for item in matched_shapes} == {
+            (100, 100, 100)
+        }
+        assert {tuple(item["matched_rgb"]) for item in matched_shapes} == {
+            (100, 100, 100)
+        }
+        assert {tuple(item["recipe"]) for item in matched_shapes} == {
+            (0, 0, 0, 0, 0)
+        }
+
+        cache = VectorProcessor.build_preview_cache(
+            analysis,
+            pixels_per_mm=1.0,
+            supersample_preview=1,
+        )
+        solid_matched = cache["matched_rgb"][cache["mask_solid"]].reshape(-1, 3)
+        assert {
+            tuple(int(v) for v in row)
+            for row in np.unique(solid_matched, axis=0)
+        } == {(100, 100, 100)}
+
+        palette = extract_color_palette(cache)
+        assert [entry["hex"] for entry in palette] == ["#646464"]
+
+    def test_fill_difference_above_threshold_stays_distinct(self, tmp_path):
+        svg_path = self._write_svg(tmp_path, ["#646464", "#686464"])
+        analysis = self._processor().analyze_svg(str(svg_path), target_width_mm=30.0)
+
+        assert {tuple(item["match_color"]) for item in analysis.matched_shapes} == {
+            (100, 100, 100),
+            (104, 100, 100),
+        }
+        assert {tuple(item["matched_rgb"]) for item in analysis.matched_shapes} == {
+            (100, 100, 100),
+            (104, 100, 100),
+        }
+
+    def test_center_representative_does_not_chain_merge_distant_endpoints(self):
+        processor = self._processor()
+        shapes = [
+            {"color": (100, 100, 100), "geometry": box(0, 0, 1, 1)},
+            {"color": (102, 100, 100), "geometry": box(0, 0, 10, 10)},
+            {"color": (104, 100, 100), "geometry": box(0, 0, 1, 1)},
+        ]
+
+        updated = processor._with_near_fill_match_queries(shapes)
+
+        assert [
+            tuple(item.get("match_color", item["color"]))
+            for item in updated
+        ] == [
+            (102, 100, 100),
+            (102, 100, 100),
+            (104, 100, 100),
+        ]
+        assert "match_color" not in shapes[0]
+        assert "match_color" not in shapes[2]
 
 
 class TestVectorColorDistanceLogging:

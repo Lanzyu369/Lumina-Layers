@@ -3474,7 +3474,13 @@ class VectorProcessor:
                 # 判断会误触发，把深色小碎片全部吸附到大面积锚点色。
 
         t0 = time.perf_counter()
-        matched_shapes = self._match_colors(clipped_shapes, replacement_manager, num_channels, num_layers=num_layers)
+        match_input_shapes = self._with_near_fill_match_queries(clipped_shapes)
+        matched_shapes = self._match_colors(
+            match_input_shapes,
+            replacement_manager,
+            num_channels,
+            num_layers=num_layers,
+        )
         min_hole_area_mm2 = float(getattr(VectorConfig, "MIN_COLOR_HOLE_AREA_MM2", 1.0))
         for idx, item in enumerate(clipped_shapes):
             filtered_geometry = VectorProcessor._filter_backing_holes(
@@ -4459,6 +4465,107 @@ class VectorProcessor:
         return [item for item in post_clip if item is not None]
 
     # ── Stage 4: Color matching with per-color cache ─────────────────────
+
+    def _with_near_fill_match_queries(self, clipped_shapes):
+        """Return shallow-copied shapes with near-identical fills sharing a query."""
+        if getattr(self.img_processor, "solve_for_fills", None) is not None:
+            return clipped_shapes
+
+        threshold = float(
+            getattr(VectorConfig, "VECTOR_NEAR_FILL_QUERY_DELTA_E", 0.0)
+        )
+        if not clipped_shapes or threshold <= 0.0:
+            return clipped_shapes
+
+        stats_by_color = {}
+        for idx, item in enumerate(clipped_shapes):
+            if item.get("match_color") is not None:
+                continue
+            color = item.get("color")
+            try:
+                rgb = (int(color[0]), int(color[1]), int(color[2]))
+            except (TypeError, IndexError, ValueError):
+                continue
+            geom = item.get("geometry")
+            try:
+                area = max(0.0, float(geom.area)) if geom is not None else 0.0
+            except (AttributeError, TypeError, ValueError):
+                area = 0.0
+            stats = stats_by_color.setdefault(
+                rgb,
+                {"area": 0.0, "first_index": idx},
+            )
+            stats["area"] += area
+
+        if len(stats_by_color) < 2:
+            return clipped_shapes
+
+        source_colors = list(stats_by_color)
+        try:
+            source_lab = self.img_processor._rgb_to_lab(
+                np.array(source_colors, dtype=np.uint8)
+            ).reshape(-1, 3).astype(np.float64)
+        except VECTOR_HANDLED_ERRORS:
+            return clipped_shapes
+
+        lab_by_color = {
+            rgb: source_lab[idx]
+            for idx, rgb in enumerate(source_colors)
+        }
+        ordered_colors = sorted(
+            source_colors,
+            key=lambda rgb: (
+                -float(stats_by_color[rgb]["area"]),
+                int(stats_by_color[rgb]["first_index"]),
+                rgb,
+            ),
+        )
+
+        representatives = []
+        representative_members = []
+        representative_by_color = {}
+        for rgb in ordered_colors:
+            rgb_lab = lab_by_color[rgb]
+            chosen = None
+            for group_idx, representative in enumerate(representatives):
+                if all(
+                    float(np.linalg.norm(rgb_lab - lab_by_color[member]))
+                    <= threshold
+                    for member in representative_members[group_idx]
+                ):
+                    chosen = representative
+                    representative_members[group_idx].append(rgb)
+                    break
+            if chosen is None:
+                representatives.append(rgb)
+                representative_members.append([rgb])
+                chosen = rgb
+            representative_by_color[rgb] = chosen
+
+        if all(
+            representative_by_color.get(rgb, rgb) == rgb
+            for rgb in representative_by_color
+        ):
+            return clipped_shapes
+
+        updated_shapes = []
+        changed = False
+        for item in clipped_shapes:
+            color = item.get("color")
+            try:
+                rgb = (int(color[0]), int(color[1]), int(color[2]))
+            except (TypeError, IndexError, ValueError):
+                updated_shapes.append(item)
+                continue
+            representative = representative_by_color.get(rgb, rgb)
+            if representative != rgb and item.get("match_color") is None:
+                updated = dict(item)
+                updated["match_color"] = representative
+                updated_shapes.append(updated)
+                changed = True
+            else:
+                updated_shapes.append(item)
+        return updated_shapes if changed else clipped_shapes
 
     def _match_lut_index_for_rgb(self, query_rgb):
         """Return the LUT index and Lab distance for one RGB query.
