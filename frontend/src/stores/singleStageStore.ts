@@ -315,10 +315,31 @@ function resolveKnownGradientCardDetail(detail: string): string | null {
   return null;
 }
 
+function isTechnicalGradientCardDetail(detail: string): boolean {
+  return (
+    /\b[a-z]+(?:_[a-z0-9]+)+\b/.test(detail) ||
+    /\b(?:traceback|stack trace|exception|valueerror|typeerror|runtimeerror)\b/i.test(detail) ||
+    /(?:^|[\s"'(:])(?:\/(?:users|private|tmp|var|home|volumes)\b|~\/|[a-z]:[\\/]|\\\\)/i.test(detail)
+  );
+}
+
+function resolveKnownOrSafeGradientCardDetail(
+  detail: string,
+  fallback: string,
+): string {
+  return (
+    resolveKnownGradientCardDetail(detail) ??
+    (isTechnicalGradientCardDetail(detail) ? fallback : detail)
+  );
+}
+
 function resolveGradientCardExtractError(err: unknown): string {
   const detail = extractErrorDetail(err);
   if (detail) {
-    return resolveKnownGradientCardDetail(detail) ?? detail;
+    return resolveKnownOrSafeGradientCardDetail(
+      detail,
+      tRuntime("mat_gradient_extract_failed_error"),
+    );
   }
   return tRuntime("mat_gradient_extract_failed_error");
 }
@@ -328,20 +349,24 @@ function resolveGradientCardRotationError(
   substrate: "white" | "black",
 ): string {
   const detail = extractErrorDetail(err);
-  if (detail) {
-    return resolveKnownGradientCardDetail(detail) ?? detail;
-  }
-  return tRuntime(
+  const fallback = tRuntime(
     substrate === "white"
       ? "mat_gradient_rotate_white_failed"
       : "mat_gradient_rotate_black_failed",
   );
+  if (detail) {
+    return resolveKnownOrSafeGradientCardDetail(detail, fallback);
+  }
+  return fallback;
 }
 
 function resolveGradientCardPreviewError(err: unknown): string {
   const detail = extractErrorDetail(err);
   if (detail) {
-    return resolveKnownGradientCardDetail(detail) ?? detail;
+    return resolveKnownOrSafeGradientCardDetail(
+      detail,
+      tRuntime("mat_gradient_invalid_image_error"),
+    );
   }
   return tRuntime("mat_gradient_invalid_image_error");
 }
@@ -369,7 +394,12 @@ function resolveGradientCardSaveError(err: unknown): string {
     if (detail.startsWith(GRADIENT_CARD_IMAGE_SOURCE_MISMATCH_DETAIL_PREFIX)) {
       return tRuntime("mat_gradient_image_source_mismatch_error");
     }
-    return tRuntime("mat_gradient_save_failed_error");
+    if (detail === tRuntime("api_error_http_422")) {
+      return tRuntime("mat_gradient_save_failed_error");
+    }
+    return isTechnicalGradientCardDetail(detail)
+      ? tRuntime("mat_gradient_save_failed_error")
+      : detail;
   }
   return tRuntime("mat_gradient_save_failed_error");
 }

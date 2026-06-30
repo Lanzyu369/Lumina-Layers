@@ -33,7 +33,7 @@ describe("aboutStore", () => {
     const notification = useAboutStore.getState().notification;
     expect(notification?.type).toBe("error");
     expect(notification?.message).toBe(
-      "The server hit an internal error. Check the log for the request ID.",
+      "The server hit an internal error. Try again later, or submit feedback if it keeps happening.",
     );
     expect(notification?.message).not.toMatch(RAW_HTTP_STATUS_PATTERN);
   });

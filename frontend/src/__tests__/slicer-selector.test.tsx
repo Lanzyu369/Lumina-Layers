@@ -221,7 +221,7 @@ describe("SlicerSelector settings linkage", () => {
 
   it("shows a readable message when direct 3MF download validation cannot reach the server", async () => {
     assertResourceDownloadAvailableMock.mockRejectedValueOnce(
-      new Error("API request failed before the server returned a response."),
+      new Error("The request did not receive a server response. Make sure the Lumina backend is running, check the network connection, and try again."),
     );
     useSlicerStore.setState({
       slicers: [],
@@ -260,7 +260,7 @@ describe("SlicerSelector settings linkage", () => {
 
       expect(
         await screen.findByText(
-          "API request failed before the server returned a response.",
+          "The request did not receive a server response. Make sure the Lumina backend is running, check the network connection, and try again.",
         ),
       ).toBeInTheDocument();
       expect(screen.queryByText(/Failed to fetch/)).not.toBeInTheDocument();
@@ -314,7 +314,7 @@ describe("SlicerSelector settings linkage", () => {
       fireEvent.click(screen.getByRole("button", { name: "下载 3MF" }));
 
       expect(
-        await screen.findByText("服务器发生内部错误。请使用请求 ID 查看日志。"),
+        await screen.findByText("服务器发生内部错误。请稍后重试；如果问题持续，请提交反馈。"),
       ).toBeInTheDocument();
       expect(
         screen.queryByText(/Request failed with status code 500/i),

@@ -1,5 +1,6 @@
 import axios from "axios";
 import { postClientLog, summarizeErrorForLog } from "../utils/clientLog";
+import { isUnsafeVisibleErrorText } from "../utils/visibleErrorText";
 import { useActionHistoryStore } from "../stores/actionHistoryStore";
 import { tRuntime } from "../i18n/runtime";
 
@@ -377,7 +378,7 @@ function readableApiErrorMessage(
   if (
     detail &&
     !isGenericHttpDetail(detail, statusCode) &&
-    !unsafeVisibleErrorText(detail)
+    !isUnsafeVisibleErrorText(detail)
   ) {
     return detail;
   }
@@ -412,36 +413,9 @@ function extractStatusCodeFromGenericErrorMessage(message: string): number | nul
   return Number.isInteger(statusCode) ? statusCode : null;
 }
 
-function technicalHttpContextSuffix(suffix: string): boolean {
-  const normalized = suffix.trim().toLowerCase();
-  if (!normalized) {
-    return true;
-  }
-  return (
-    /^\/api(?:\/|\b)\S*$/.test(normalized) ||
-    /^https?:\/\/\S+$/.test(normalized)
-  );
-}
-
-function unsafeVisibleErrorText(value: string): boolean {
-  const text = value.trim();
-  if (!text) {
-    return false;
-  }
-  return (
-    /(?:^|[\s"'(:=[{,])(?:\/(?:users|private|tmp|var|home|volumes|mnt|opt)\b|~\/|[a-z]:[\\/]|\\\\)/i.test(text) ||
-    /\bfile:\/\/\S+/i.test(text) ||
-    /(?:^|[\s"'(:=[{,])\/api(?:\/|\b)\S*/i.test(text) ||
-    /\bhttps?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/\S*)?/i.test(text) ||
-    /\bhttps?:\/\/\S+\/api(?:\/|\b)\S*/i.test(text) ||
-    /\b(?:traceback|stack trace|exception|axioserror|request failed with status code)\b/i.test(text) ||
-    /\b(?:ValueError|RuntimeError|TypeError|OSError|FileNotFoundError|PermissionError|HTTPException):/i.test(text)
-  );
-}
-
 function unsafeTextInUnknown(value: unknown): boolean {
   if (typeof value === "string") {
-    return unsafeVisibleErrorText(value);
+    return isUnsafeVisibleErrorText(value);
   }
   if (Array.isArray(value)) {
     return value.some(unsafeTextInUnknown);
@@ -449,16 +423,11 @@ function unsafeTextInUnknown(value: unknown): boolean {
   if (isRecord(value)) {
     return Object.entries(value).some(
       ([key, nestedValue]) =>
-        unsafeVisibleErrorText(key) || unsafeTextInUnknown(nestedValue),
+        isUnsafeVisibleErrorText(key) || unsafeTextInUnknown(nestedValue),
     );
   }
   return false;
 }
-
-function unsafeVisibleErrorSuffix(suffix: string): boolean {
-  return unsafeVisibleErrorText(suffix);
-}
-
 function cleanHttpStatusSuffix(suffix: string): string {
   const trimmed = suffix.trim();
   if (!trimmed) {
@@ -503,8 +472,7 @@ function statusPrefixedErrorVisibleMessage(
     !suffix ||
     isServerErrorStatus(statusCode) ||
     isGenericHttpDetail(suffix, statusCode) ||
-    technicalHttpContextSuffix(suffix) ||
-    unsafeVisibleErrorSuffix(suffix)
+    isUnsafeVisibleErrorText(suffix)
   ) {
     return fallbackHttpStatusMessage(statusCode, requestId);
   }
@@ -570,7 +538,7 @@ export function apiErrorToVisibleMessage(
   if (isGenericNoResponseErrorMessage(rawMessage)) {
     return fallbackHttpStatusMessage(null);
   }
-  if (unsafeVisibleErrorText(rawMessage)) {
+  if (isUnsafeVisibleErrorText(rawMessage)) {
     return fallback;
   }
   return rawMessage || fallback;
@@ -600,7 +568,8 @@ function buildReadableResponseData(
     const hasReadableDetailMessage =
       typeof detailMessage === "string" &&
       detailMessage.trim().length > 0 &&
-      !isGenericHttpDetail(detailMessage, statusCode);
+      !isGenericHttpDetail(detailMessage, statusCode) &&
+      !isUnsafeVisibleErrorText(detailMessage);
     const hasCodeOnlyDetail =
       typeof detailError === "string" &&
       detailError.trim().length > 0 &&
@@ -615,7 +584,13 @@ function buildReadableResponseData(
       return { ...data, detail: readableMessage };
     }
   }
-  if (typeof detail !== "string" || !isGenericHttpDetail(detail, statusCode)) {
+  if (
+    typeof detail !== "string" ||
+    (
+      !isGenericHttpDetail(detail, statusCode) &&
+      !isUnsafeVisibleErrorText(detail)
+    )
+  ) {
     if (
       typeof message === "string" &&
       isGenericHttpDetail(message, statusCode)
