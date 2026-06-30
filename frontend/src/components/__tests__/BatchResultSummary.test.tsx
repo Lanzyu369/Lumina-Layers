@@ -107,6 +107,55 @@ describe("BatchResultSummary", () => {
       expect(text).not.toContain("Permission denied");
     });
 
+    it("hides internal route and transport errors from failed file details", () => {
+      const result: BatchResponse = {
+        status: "failed",
+        message: "all failed",
+        download_url: null,
+        preview_3d_url: null,
+        results: [
+          {
+            filename: "api.png",
+            status: "failed",
+            error: "No preview cache. Call POST /api/convert/preview first.",
+          },
+          {
+            filename: "route.png",
+            status: "failed",
+            error: "No preview cache. Call POST /convert/preview first.",
+          },
+          {
+            filename: "localhost.png",
+            status: "failed",
+            error: "fetch failed for http://localhost:8000/api/files/model.3mf",
+          },
+          {
+            filename: "axios.png",
+            status: "failed",
+            error: "AxiosError: Request failed with status code 500",
+          },
+          {
+            filename: "network.png",
+            status: "failed",
+            error: "ERR_NETWORK while downloading preview",
+          },
+        ],
+        warnings: [],
+      };
+
+      const { container } = render(<BatchResultSummary result={result} />);
+      const text = container.textContent ?? "";
+      for (const filename of ["api.png", "route.png", "localhost.png", "axios.png", "network.png"]) {
+        expect(text).toContain(filename);
+      }
+      expect(text.match(/这个文件无法转换。请重新上传该文件，或查看服务端日志了解详情。/g)).toHaveLength(5);
+      expect(text).not.toContain("/api/convert/preview");
+      expect(text).not.toContain("/convert/preview");
+      expect(text).not.toContain("http://localhost:8000");
+      expect(text).not.toContain("AxiosError");
+      expect(text).not.toContain("ERR_NETWORK");
+    });
+
     it("hides generic non-error HTTP status text from failed file details", () => {
       const result: BatchResponse = {
         status: "failed",
@@ -135,6 +184,12 @@ describe("BatchResultSummary", () => {
       expect(text.match(/这个文件无法转换。请重新上传该文件，或查看服务端日志了解详情。/g)).toHaveLength(2);
       expect(text).not.toContain("Request failed with status code 302");
       expect(text).not.toContain("HTTP 304");
+    });
+
+    it("keeps safe business errors visible in failed file details", () => {
+      render(<BatchResultSummary result={allFailedResult} />);
+      expect(screen.getByText(/LUT not found/)).toBeInTheDocument();
+      expect(screen.getByText(/Invalid dimensions/)).toBeInTheDocument();
     });
   });
 

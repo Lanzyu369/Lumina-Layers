@@ -29,7 +29,7 @@ const {
   apiErrorToVisibleMessageMock: vi.fn((error: unknown) => {
     const message = error instanceof Error ? error.message : String(error);
     if (message === "Request failed with status code 500") {
-      return "The server hit an internal error. Check the log for the request ID.";
+      return "The server hit an internal error. Try again later, or submit feedback if it keeps happening.";
     }
     if (message === "Request failed with status code 422") {
       return "The request is missing required data or contains invalid values.";
@@ -241,7 +241,7 @@ describe("vectorizerStore", () => {
       }),
     );
     expect(useVectorizerStore.getState().error).toBe(
-      "The server hit an internal error. Check the log for the request ID.",
+      "The server hit an internal error. Try again later, or submit feedback if it keeps happening.",
     );
     expect(useVectorizerStore.getState().error).not.toContain("status code 500");
   });
@@ -372,7 +372,7 @@ describe("VectorizerPanel send-to-converter", () => {
 
     expect(
       await screen.findByText(
-        "The server hit an internal error. Check the log for the request ID.",
+        "The server hit an internal error. Try again later, or submit feedback if it keeps happening.",
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/Request failed with status code 500/i)).not.toBeInTheDocument();
@@ -512,7 +512,7 @@ describe("VectorizerPanel send-to-converter", () => {
 
     expect(
       await screen.findByText(
-        "The server hit an internal error. Check the log for the request ID.",
+        "The server hit an internal error. Try again later, or submit feedback if it keeps happening.",
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/Request failed with status code 500/i)).not.toBeInTheDocument();

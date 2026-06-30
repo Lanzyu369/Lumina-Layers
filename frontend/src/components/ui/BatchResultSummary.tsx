@@ -1,6 +1,7 @@
 import type { BatchResponse } from "../../api/types";
 import { useI18n } from "../../i18n/context";
 import { normalizeResourceUrl } from "../../utils/resourceUrl";
+import { isUnsafeVisibleErrorText } from "../../utils/visibleErrorText";
 
 interface BatchResultSummaryProps {
   result: BatchResponse;
@@ -14,13 +15,7 @@ function shouldHideRawBatchItemError(error: string): boolean {
   const trimmed = error.trim();
   return (
     trimmed === API_BATCH_ITEM_FAILED_DETAIL ||
-    /(?:^|\s)\/(?:Users|home|var|tmp|private|Volumes|opt|mnt|etc)\/[^\s]+/i.test(trimmed) ||
-    /\b[A-Za-z]:\\[^\s]+/.test(trimmed) ||
-    /\\\\[A-Za-z0-9_.-]+\\[^\s]+/.test(trimmed) ||
-    /\bPermission denied\b/i.test(trimmed) ||
-    /\bTraceback\b/i.test(trimmed) ||
-    /\bRequest failed with status code\s+\d{3}\b/i.test(trimmed) ||
-    /^(?:HTTP\s*)?(?:error\s*)?\d{3}\b/i.test(trimmed)
+    isUnsafeVisibleErrorText(trimmed)
   );
 }
 

@@ -312,7 +312,10 @@ describe("submitBatch API 调用和状态管理", () => {
     await useConverterStore.getState().submitBatch();
 
     const state = useConverterStore.getState();
-    expect(state.batchResult).toEqual(mockBatchResponse);
+    expect(state.batchResult).toEqual({
+      ...mockBatchResponse,
+      threemf_disk_path: null,
+    });
     expect(state.batchLoading).toBe(false);
     expect(state.error).toBeNull();
     expect(state.threemfDiskPath).toBeNull();
@@ -360,7 +363,7 @@ describe("submitBatch API 调用和状态管理", () => {
     await useConverterStore.getState().submitBatch();
 
     const state = useConverterStore.getState();
-    expect(state.error).toBe("接口请求在服务器返回响应前失败。");
+    expect(state.error).toBe("请求没有收到服务器响应。请确认 Lumina 后端已启动、网络连接正常，然后重试。");
     expect(state.batchLoading).toBe(false);
     expect(state.batchResult).toBeNull();
   });

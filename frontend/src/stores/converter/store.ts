@@ -1266,6 +1266,11 @@ function collectKeepFileIds(urls: Array<string | null | undefined>): string[] {
   return Array.from(keepIds);
 }
 
+function normalizeStoreResourceUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  return normalizeResourceUrl(url) ?? url ?? null;
+}
+
 export function collectConverterKeepFileIds(state: {
   downloadUrl: string | null;
   previewImageUrl: string | null;
@@ -6203,14 +6208,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           if (shouldIgnoreStaleGenerateResponse()) {
             return null;
           }
+          const downloadUrl = normalizeStoreResourceUrl(puzzleResponse.download_url);
           set({
             isGenerating: false,
             modelUrl: null,
             batchPreviewItems: [],
+            downloadUrl,
             threemfDiskPath: null,
-            downloadUrl: puzzleResponse.download_url
-              ? `${puzzleResponse.download_url}`
-              : null,
             puzzleWarnings: puzzleResponse.warnings ?? [],
             puzzleResolvedRows: puzzleResponse.grid_rows ?? null,
             puzzleResolvedCols: puzzleResponse.grid_cols ?? null,
@@ -6218,7 +6222,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           });
           _logGenerateTimer("puzzle 3mf received");
           _clientLog("generate: puzzle 3mf received", {
-            download_url: puzzleResponse.download_url ?? null,
+            download_url: downloadUrl,
             has_legacy_threemf_disk_path: Boolean(
               puzzleResponse.threemf_disk_path,
             ),
@@ -6258,18 +6262,17 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           if (shouldIgnoreStaleGenerateResponse()) {
             return null;
           }
+          const downloadUrl = normalizeStoreResourceUrl(lfResponse.download_url);
           set({
             isGenerating: false,
             modelUrl: null,
             batchPreviewItems: [],
             threemfDiskPath: null,
-            downloadUrl: lfResponse.download_url
-              ? `${lfResponse.download_url}`
-              : null,
+            downloadUrl,
             largeFormatWarnings: lfResponse.warnings ?? [],
           });
           _clientLog("generate: large-format zip received", {
-            download_url: lfResponse.download_url ?? null,
+            download_url: downloadUrl,
             warning_count: (lfResponse.warnings ?? []).length,
             target_height_mm: state.target_height_mm,
             tile_width_mm: state.tileWidthMm,
@@ -6307,9 +6310,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           download_url: response.download_url ?? null,
           has_legacy_threemf_disk_path: Boolean(response.threemf_disk_path),
         });
-        const modelUrl = response.preview_3d_url
-          ? `${response.preview_3d_url}`
-          : null;
+        const modelUrl = normalizeStoreResourceUrl(response.preview_3d_url);
+        const downloadUrl = normalizeStoreResourceUrl(response.download_url);
         const shouldShowGeneratedHeightmapModel =
           state.enable_relief && state.autoHeightMode === "use-heightmap";
         set({
@@ -6330,17 +6332,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
               ? null
               : modelUrl,
           batchPreviewItems: [],
+          downloadUrl,
           threemfDiskPath: null,
-          downloadUrl: response.download_url
-            ? `${response.download_url}`
-            : null,
           generatePerformanceTiming: response.performance_timing ?? null,
           largeFormatWarnings: [],
         });
         _logGenerateTimer("UI unlocked (isGenerating=false, modelUrl set)");
         _clientLog("generate: UI unlocked", {
           model_url: modelUrl,
-          download_url: response.download_url ?? null,
+          download_url: downloadUrl,
           has_legacy_threemf_disk_path: Boolean(response.threemf_disk_path),
         });
         trackLuminaEvent("lumina_converter_generate_done", {
@@ -6891,8 +6891,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             ...item,
             url: normalizeResourceUrl(item.url) ?? item.url,
           }));
+        const downloadUrl = normalizeStoreResourceUrl(result.download_url);
         set({
-          batchResult: result,
+          batchResult: {
+            ...result,
+            download_url: downloadUrl,
+            threemf_disk_path: null,
+          },
           batchLoading: false,
           batchPreviewItems: previewItems,
           // 批量预览只接受 preview_items。旧的 preview_3d_url 曾经指向
@@ -6901,8 +6906,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           previewGlbUrl: null,
           previewPerformanceTiming: null,
           generatePerformanceTiming: null,
+          downloadUrl,
           threemfDiskPath: null,
-          downloadUrl: result.download_url ? `${result.download_url}` : null,
         });
         trackLuminaEvent("lumina_batch_convert_done", {
           source_version: state.source_version,
