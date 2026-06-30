@@ -11,6 +11,7 @@ Extracted from LuminaImageProcessor._load_lut.
 from api.structured_logging import get_logger
 from dataclasses import replace
 from functools import lru_cache
+from itertools import permutations
 import hashlib
 import os
 import numpy as np
@@ -24,6 +25,9 @@ from core.recipe_order import convert_recipe_between_orders
 from utils.lut_manager import LUTManager
 
 _log = get_logger(__name__)
+
+_LEGACY_4COLOR_REMAP_MAX_CHANNEL_DISTANCE = 80.0
+_LEGACY_4COLOR_REMAP_MIN_SCORE_MARGIN = 120.0
 
 
 def _rgb_to_lab(rgb_array: np.ndarray) -> np.ndarray:
@@ -170,6 +174,112 @@ def _maybe_use_native_bundle_exact_lookup(
 
     bundle_rgb, bundle_stacks = bundle_lookup
     return bundle_rgb, bundle_stacks, True
+
+
+def _legacy_pure_stack_row_index(
+    channel_idx: int,
+    base_count: int,
+    layer_count: int,
+) -> int:
+    row_index = 0
+    place_value = 1
+    for _ in range(layer_count):
+        row_index += int(channel_idx) * place_value
+        place_value *= int(base_count)
+    return row_index
+
+
+def _infer_legacy_4color_channel_remap(
+    measured_colors: np.ndarray,
+    color_mode: str,
+) -> np.ndarray:
+    """Infer raw legacy NPY channel ids from pure-channel measured rows."""
+    identity = np.arange(4, dtype=np.int32)
+    color_conf = ColorSystem.get(color_mode)
+    slots = list(color_conf.get("slots") or [])
+    preview = color_conf.get("preview") or {}
+    if len(slots) != 4:
+        return identity
+
+    canonical_rgb: list[list[int]] = []
+    for slot_idx in range(4):
+        rgba = preview.get(slot_idx)
+        if not rgba or len(rgba) < 3:
+            return identity
+        canonical_rgb.append([int(rgba[0]), int(rgba[1]), int(rgba[2])])
+
+    pure_rows = [
+        _legacy_pure_stack_row_index(channel_idx, 4, PrinterConfig.COLOR_LAYERS)
+        for channel_idx in range(4)
+    ]
+    if measured_colors.shape[0] <= max(pure_rows):
+        return identity
+
+    pure_rgb = measured_colors[pure_rows].astype(np.float64, copy=False)
+    canonical = np.asarray(canonical_rgb, dtype=np.float64)
+    distances = np.linalg.norm(pure_rgb[:, None, :] - canonical[None, :, :], axis=2)
+    scored_perms = sorted(
+        (
+            (
+                float(
+                    sum(
+                        distances[raw_idx, slot_idx]
+                        for raw_idx, slot_idx in enumerate(perm)
+                    )
+                ),
+                perm,
+            )
+            for perm in permutations(range(4))
+        ),
+        key=lambda item: item[0],
+    )
+    best_score, best_perm = scored_perms[0]
+    second_score = scored_perms[1][0] if len(scored_perms) > 1 else float("inf")
+    remap = np.asarray(best_perm, dtype=np.int32)
+    if np.array_equal(remap, identity):
+        return identity
+    matched_distances = np.asarray(
+        [distances[raw_idx, slot_idx] for raw_idx, slot_idx in enumerate(best_perm)],
+        dtype=np.float64,
+    )
+    if (
+        float(np.max(matched_distances)) > _LEGACY_4COLOR_REMAP_MAX_CHANNEL_DISTANCE
+        or (second_score - best_score) < _LEGACY_4COLOR_REMAP_MIN_SCORE_MARGIN
+    ):
+        return identity
+
+    _log.debug(
+        "Legacy 4-color NPY channel order remapped",
+        extra={
+            "event": "legacy_4color_npy_channel_remapped",
+            "color_mode": str(color_mode),
+            "channel_remap": remap.tolist(),
+        },
+    )
+    return remap
+
+
+def _legacy_4color_blue_like_raw_channels(
+    channel_remap: np.ndarray,
+    color_mode: str,
+) -> frozenset[int]:
+    """Return raw channels that map to the mode's blue/cyan-like slot."""
+    color_conf = ColorSystem.get(color_mode)
+    slots = list(color_conf.get("slots") or [])
+    blue_like_slot_ids = {
+        slot_idx
+        for slot_idx, slot_name in enumerate(slots)
+        if str(slot_name).strip().lower() in {"blue", "cyan", "deep blue"}
+    }
+    if not blue_like_slot_ids:
+        return frozenset({3})
+
+    raw_channels = {
+        raw_idx
+        for raw_idx, slot_idx in enumerate(channel_remap.tolist())
+        if int(slot_idx) in blue_like_slot_ids
+    }
+    return frozenset(raw_channels or {3})
 
 
 def load_lut(
@@ -597,6 +707,14 @@ def _load_lut_uncached(
         # Keep original outlier filtering logic (Blue Check)
         base_blue = np.array([30, 100, 200])
         dropped = 0
+        channel_remap = _infer_legacy_4color_channel_remap(
+            measured_colors,
+            color_mode,
+        )
+        blue_like_raw_channels = _legacy_4color_blue_like_raw_channels(
+            channel_remap,
+            color_mode,
+        )
 
         for i in range(1024):
             if i >= total_colors:
@@ -608,15 +726,20 @@ def _load_lut_uncached(
             for _ in range(5):
                 digits.append(temp % 4)
                 temp //= 4
-            stack = convert_recipe_between_orders(digits, "Bottom2Top", "Top2Bottom")
+            raw_stack = convert_recipe_between_orders(digits, "Bottom2Top", "Top2Bottom")
 
             real_rgb = measured_colors[i]
 
-            # Filter outliers: close to blue but doesn't contain blue
+            # Filter outliers against the legacy raw recipe. Some CMYW-family
+            # NPY files need raw channel IDs remapped to canonical slots below,
+            # and their raw blue/cyan-like corner is not always channel 3.
             dist = np.linalg.norm(real_rgb - base_blue)
-            if dist < 60 and 3 not in stack:  # 3 is Blue in RYBW/CMYW
+            if dist < 60 and not any(
+                channel in blue_like_raw_channels for channel in raw_stack
+            ):
                 dropped += 1
                 continue
+            stack = tuple(int(channel_remap[int(channel)]) for channel in raw_stack)
 
             valid_rgb.append(real_rgb)
             valid_stacks.append(stack)
