@@ -141,8 +141,10 @@ def _hashed_lut_reference(path_text: str) -> str:
 
 def _is_absolute_path_like(path_text: str) -> bool:
     windows_path = PureWindowsPath(path_text)
+    normalized = path_text.strip()
     return (
-        Path(path_text).is_absolute()
+        normalized.startswith(("/", "\\"))
+        or Path(path_text).is_absolute()
         or windows_path.is_absolute()
         or bool(windows_path.drive)
     )

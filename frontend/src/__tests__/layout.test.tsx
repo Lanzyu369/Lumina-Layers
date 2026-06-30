@@ -7,6 +7,7 @@ vi.mock("../api/client", () => ({
   default: {
     get: vi.fn(),
   },
+  apiErrorToVisibleMessage: (_error: unknown, fallback: string) => fallback,
 }));
 
 vi.mock("../api/converter", () => ({
@@ -77,14 +78,17 @@ describe("Widget Workspace Layout", () => {
     render(<App />);
 
     fireEvent.click(screen.getByTestId("tab-lut-management"));
+    expect(screen.getByTestId("subtab-lut-library")).toBeInTheDocument();
     expect(screen.getByTestId("subtab-calibration")).toBeInTheDocument();
     expect(screen.getByTestId("subtab-extractor")).toBeInTheDocument();
-    expect(screen.getByTestId("subtab-lut-manager")).toBeInTheDocument();
+    expect(screen.getByTestId("subtab-lut-cloud-sync")).toBeInTheDocument();
+    expect(screen.queryByTestId("subtab-lut-manager")).not.toBeInTheDocument();
     expect(screen.getByTestId("subtab-five-color")).toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId("tab-material-management"));
     expect(screen.getByTestId("subtab-material-library")).toBeInTheDocument();
     expect(screen.getByTestId("subtab-material-cloud-sync")).toBeInTheDocument();
+    expect(screen.queryByTestId("subtab-lut-cloud-sync")).not.toBeInTheDocument();
     expect(screen.getByTestId("subtab-material-recipe")).toBeInTheDocument();
 
     expect(screen.queryByTestId("tab-calibration")).not.toBeInTheDocument();

@@ -3389,13 +3389,13 @@ class VectorProcessor:
         # engine uses the LUT's own color system instead of the stale UI
         # ``color_mode`` preset. Mirrors the raster pipeline logic in S01.
         #
-        # 当 LUT 自带调色板元数据（Merged JSON、反推 LUT 的 .json/.msgpack 等）
+        # 当 LUT 自带调色板元数据（Merged JSON/NPZ、反推 LUT 的 .json/.msgpack 等）
         # 时，用调色板真实条目覆盖 slot_names / preview_colors，避免继承上一次
         # UI 颜色模式（例如 4-Color CMYW）的预设槽位导致串色；同时沿用
         # ``build_palette_preview_colors`` 的规范颜色名兜底，保证 hex_color 缺省
         # 的 ColorDB 条目也能拿到正确 RGBA。
         lut_path = self.img_processor.lut_path
-        if lut_path.endswith((".json", ".msgpack")):
+        if lut_path.endswith((".json", ".msgpack", ".npz")):
             try:
                 from utils.lut_manager import LUTManager
                 from core.pipeline.preview_color_utils import build_palette_preview_colors

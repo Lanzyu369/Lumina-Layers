@@ -12,6 +12,7 @@ export function useAutoPreview(): void {
   const imageFile = useConverterStore((s) => s.imageFile);
   const source_version = useConverterStore((s) => s.source_version);
   const lut_name = useConverterStore((s) => s.lut_name);
+  const lut_names = useConverterStore((s) => s.lut_names);
   const selectedNativeBrandKey = useConverterStore((s) => s.selectedNativeBrandKey);
   const selectedNativeDbNames = useConverterStore((s) => s.selectedNativeDbNames);
   const color_layers = useConverterStore((s) => s.color_layers);
@@ -43,11 +44,15 @@ export function useAutoPreview(): void {
         color_layers ?? "",
         layer_height_mm ?? "",
       ].join("::")
-    : `legacy_single::${lut_name}`;
+    : [
+        lut_names.length > 1 ? "legacy_multi" : "legacy_single",
+        lut_name,
+        lut_names.join("|"),
+      ].join("::");
 
   const isSourceReady = source_version === "native"
     ? selectedNativeBrandKey.length > 0 && selectedNativeDbNames.length > 0
-    : lut_name.length > 0;
+    : (lut_names.length > 0 || lut_name.length > 0);
 
   useEffect(() => {
     // Clear any pending timer on every dependency change

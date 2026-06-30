@@ -8,7 +8,9 @@ export interface ApiRequestOptions {
 }
 
 declare module "axios" {
-  interface AxiosRequestConfig<D = any> extends ApiRequestOptions {}
+  interface AxiosRequestConfig {
+    suppressClientLog?: boolean;
+  }
 }
 
 /**
@@ -427,9 +429,9 @@ function unsafeVisibleErrorText(value: string): boolean {
     return false;
   }
   return (
-    /(?:^|[\s"'(:=\[{,])(?:\/(?:users|private|tmp|var|home|volumes|mnt|opt)\b|~\/|[a-z]:[\\/]|\\\\)/i.test(text) ||
+    /(?:^|[\s"'(:=[{,])(?:\/(?:users|private|tmp|var|home|volumes|mnt|opt)\b|~\/|[a-z]:[\\/]|\\\\)/i.test(text) ||
     /\bfile:\/\/\S+/i.test(text) ||
-    /(?:^|[\s"'(:=\[{,])\/api(?:\/|\b)\S*/i.test(text) ||
+    /(?:^|[\s"'(:=[{,])\/api(?:\/|\b)\S*/i.test(text) ||
     /\bhttps?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/\S*)?/i.test(text) ||
     /\bhttps?:\/\/\S+\/api(?:\/|\b)\S*/i.test(text) ||
     /\b(?:traceback|stack trace|exception|axioserror|request failed with status code)\b/i.test(text) ||

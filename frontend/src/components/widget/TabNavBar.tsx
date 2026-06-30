@@ -13,7 +13,7 @@ import type { TabId } from '../../types/widget';
 import { motion } from 'framer-motion';
 
 type PrimaryTabId = 'converter' | 'lut-management' | 'material-management' | 'vectorizer' | 'settings';
-type LutSubTabId = 'calibration' | 'extractor' | 'lut-manager' | 'lut-details' | 'lut-compare' | 'five-color';
+type LutSubTabId = 'lut-library' | 'calibration' | 'extractor' | 'lut-manager' | 'lut-cloud-sync' | 'lut-details' | 'lut-compare' | 'five-color';
 type MaterialSubTabId =
   | 'gradient-card-generate'
   | 'gradient-card-extract'
@@ -21,7 +21,7 @@ type MaterialSubTabId =
   | 'material-cloud-sync'
   | 'material-recipe';
 
-const LUT_SUB_TAB_IDS: LutSubTabId[] = ['calibration', 'extractor', 'lut-manager', 'lut-details', 'lut-compare', 'five-color'];
+const LUT_SUB_TAB_IDS: LutSubTabId[] = ['lut-library', 'calibration', 'extractor', 'lut-manager', 'lut-cloud-sync', 'lut-details', 'lut-compare', 'five-color'];
 const MATERIAL_SUB_TAB_IDS: MaterialSubTabId[] = ['material-library', 'material-cloud-sync', 'gradient-card-generate', 'gradient-card-extract', 'material-recipe'];
 
 const PRIMARY_TAB_ICONS: Record<PrimaryTabId, React.ReactNode> = {
@@ -104,7 +104,7 @@ export default function TabNavBar({ activeTab, onTabChange, compact = false }: T
               data-testid={`tab-${id}`}
               onClick={() => {
                 if (id === 'lut-management') {
-                  onTabChange(isLutSubTab(activeTab) ? activeTab : 'calibration');
+                  onTabChange(isLutSubTab(activeTab) ? activeTab : 'lut-library');
                   return;
                 }
                 if (id === 'material-management') {

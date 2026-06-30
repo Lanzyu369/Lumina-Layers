@@ -1095,6 +1095,7 @@ export function resolveConverterSourceSelection(
     ConverterState,
     | "source_version"
     | "lut_name"
+    | "lut_names"
     | "nativeBrandGroups"
     | "selectedNativeBrandKey"
     | "selectedNativeDbNames"
@@ -1103,9 +1104,10 @@ export function resolveConverterSourceSelection(
     | "selectedMaterialDirNames"
     | "materialLayerCount"
     | "materialLayerHeightMm"
-  >,
+  > &
+    Partial<Pick<ConverterState, "lutListFull" | "legacyCatalogGroups">>,
 ): {
-  source_kind: "legacy_single" | "native_bundle";
+  source_kind: "legacy_single" | "legacy_multi" | "native_bundle";
   isReady: boolean;
   isMaterial: boolean;
   lut_name: string;
@@ -1137,11 +1139,12 @@ export function resolveConverterSourceSelection(
   }
 
   if (state.source_version === "legacy") {
+    const lutNames = normalizeLegacyLutNames(state.lut_names, state.lut_name);
     return {
-      source_kind: "legacy_single",
-      isReady: state.lut_name.length > 0,
+      source_kind: lutNames.length > 1 ? "legacy_multi" : "legacy_single",
+      isReady: lutNames.length > 0,
       isMaterial: false,
-      lut_name: state.lut_name,
+      lut_name: lutNames[0] ?? "",
       db_names: [],
       native: emptyNative,
       color_layers: null,
@@ -1162,10 +1165,21 @@ export function resolveConverterSourceSelection(
   };
 }
 
-function buildLegacySourceParams(lutName: string) {
+function buildLegacySourceParams(
+  state: Pick<ConverterState, "lut_name" | "lut_names">,
+) {
+  const lutNames = normalizeLegacyLutNames(state.lut_names, state.lut_name);
+  const primaryName = lutNames[0] ?? state.lut_name;
+  if (lutNames.length > 1) {
+    return {
+      source_kind: "legacy_multi" as const,
+      lut_name: primaryName,
+      lut_names: lutNames,
+    };
+  }
   return {
     source_kind: "legacy_single" as const,
-    lut_name: lutName,
+    lut_name: primaryName,
   };
 }
 
@@ -1329,6 +1343,7 @@ export interface ConverterState {
   // 基础参数
   source_version: SourceVersion;
   lut_name: string;
+  lut_names: string[];
   nativeBrandGroups: NativeBrandGroup[];
   nativeBrandGroupsLoading: boolean;
   selectedNativeBrandKey: string;
@@ -1590,6 +1605,7 @@ export interface ConverterActions {
 
   // 参数 setter
   setLutName: (name: string) => void;
+  setLegacyLutNames: (names: string[]) => void;
   setTargetWidthMm: (width: number) => void;
   setTargetHeightMm: (height: number) => void;
   setSpacerThick: (thick: number) => void;
@@ -2087,6 +2103,78 @@ function loadLutName(): string {
   }
 }
 
+function normalizeLegacyLutNames(
+  lutNames: string[] | undefined,
+  fallbackLutName: string,
+): string[] {
+  const ordered = [
+    ...(fallbackLutName ? [fallbackLutName] : []),
+    ...(lutNames ?? []),
+  ];
+  const seen = new Set<string>();
+  return ordered.filter((name) => {
+    const trimmed = name.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      return false;
+    }
+    seen.add(trimmed);
+    return true;
+  });
+}
+
+function areStringArraysEqual(left: string[], right: string[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
+}
+
+function buildLegacySelectionAvailabilityUpdates(
+  state: Pick<
+    ConverterState,
+    | "lut_name"
+    | "lut_names"
+    | "color_layers"
+    | "layer_height_mm"
+    | "model_enable"
+    | "model_only"
+    | "model_threshold"
+    | "model_margin"
+    | "lutListFull"
+    | "legacyCatalogGroups"
+  >,
+  availableNames: Iterable<string>,
+): Partial<ConverterState> {
+  const available = new Set(availableNames);
+  const normalized = normalizeLegacyLutNames(state.lut_names, state.lut_name);
+  if (normalized.length === 0) {
+    return {};
+  }
+  const primary = normalized[0];
+  if (!available.has(primary)) {
+    return {
+      lut_name: "",
+      lut_names: [],
+      selectedLutInfo: null,
+      color_layers: null,
+      layer_height_mm: null,
+      model_enable: false,
+      model_only: false,
+      model_threshold: null,
+      model_margin: null,
+    };
+  }
+
+  const filtered = normalized.filter((name) => available.has(name));
+  if (state.lut_name !== primary || !areStringArraysEqual(state.lut_names, filtered)) {
+    return {
+      lut_name: primary,
+      lut_names: filtered,
+    };
+  }
+  return {};
+}
+
 const SELECTED_MATERIAL_DIR_NAMES_KEY = "lumina_selectedMaterialDirNames";
 const MATERIAL_BACKING_MATERIAL_DIR_NAME_KEY =
   "lumina_materialBackingMaterialDirName";
@@ -2140,13 +2228,16 @@ function persistMaterialBackingMaterialDirName(name: string | null): void {
 
 // ========== Default State ==========
 
+const DEFAULT_LUT_NAME = loadLutName();
+
 export const DEFAULT_STATE: ConverterState = {
   imageFile: null,
   imagePreviewUrl: null,
   aspectRatio: null,
   sessionId: null,
   source_version: "legacy",
-  lut_name: loadLutName(),
+  lut_name: DEFAULT_LUT_NAME,
+  lut_names: normalizeLegacyLutNames([], DEFAULT_LUT_NAME),
   nativeBrandGroups: [],
   nativeBrandGroupsLoading: false,
   selectedNativeBrandKey: "",
@@ -2685,6 +2776,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       const updates: Partial<ConverterState> = {
         source_version: "legacy",
         lut_name: name,
+        lut_names: name ? [name] : [],
         selectedLutInfo: null,
         selectedNativeBrandKey: "",
         selectedNativeDbNames: [],
@@ -2767,6 +2859,105 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       }
     },
 
+    setLegacyLutNames: (names: string[]) => {
+      const state = _get();
+      const normalized = normalizeLegacyLutNames(names, "");
+      const primaryName = normalized[0] ?? "";
+      const lutInfo = primaryName
+        ? state.lutListFull.find((l) => l.name === primaryName)
+        : null;
+      const lutLocation = lutInfo
+        ? findLutLocationByPath(
+            buildLutCatalogIndex(state.legacyCatalogGroups),
+            lutInfo.path,
+          )
+        : null;
+      const updates: Partial<ConverterState> = {
+        source_version: "legacy",
+        lut_name: primaryName,
+        lut_names: normalized,
+        selectedLutInfo: null,
+        selectedNativeBrandKey: "",
+        selectedNativeDbNames: [],
+        color_layers: null,
+        layer_height_mm: null,
+        model_enable: false,
+        model_only: false,
+        model_threshold: null,
+        model_margin: null,
+        ...buildPreviewSessionResetState(),
+      };
+      if (lutLocation) {
+        updates.selectedLegacyManufacturer = lutLocation.manufacturer;
+      }
+      if (lutInfo?.color_mode) {
+        updates.color_mode = normalizePublicColorMode(lutInfo.color_mode);
+      }
+      set(updates);
+      try {
+        if (primaryName) {
+          localStorage.setItem("lumina_lastLut", primaryName);
+        } else {
+          localStorage.removeItem("lumina_lastLut");
+        }
+      } catch {
+        /* noop */
+      }
+      if (primaryName && primaryName !== state.lutColorsLutName) {
+        _get().fetchLutColors(primaryName);
+      }
+      if (primaryName) {
+        void apiFetchLutInfo(primaryName)
+          .then((info) => {
+            const current = _get();
+            if (
+              current.lut_name !== primaryName ||
+              !areStringArraysEqual(
+                normalizeLegacyLutNames(current.lut_names, current.lut_name),
+                normalized,
+              )
+            ) {
+              return;
+            }
+            const normalizedInfo = normalizeLutColorMode(info);
+            const nextUpdates: Partial<ConverterState> = {
+              selectedLutInfo: normalizedInfo,
+            };
+            if (normalizedInfo.color_mode) {
+              nextUpdates.color_mode = normalizePublicColorMode(
+                normalizedInfo.color_mode,
+              );
+            }
+            if (
+              normalizedInfo.supports_predictive_match ||
+              normalizedInfo.supports_dynamic_layer_count
+            ) {
+              const preferredMode =
+                normalizedInfo.supported_modes?.find(
+                  (mode) => mode.color_layers === 5,
+                ) ??
+                normalizedInfo.supported_modes?.find(
+                  (mode) =>
+                    mode.color_layers === normalizedInfo.max_color_layers,
+                ) ??
+                normalizedInfo.supported_modes?.[0];
+              nextUpdates.color_layers =
+                preferredMode?.color_layers ??
+                normalizedInfo.max_color_layers ??
+                null;
+              nextUpdates.layer_height_mm =
+                preferredMode?.layer_height_mm ??
+                normalizedInfo.layer_height_mm ??
+                null;
+            }
+            set(nextUpdates);
+          })
+          .catch(() => {
+            /* best effort */
+          });
+      }
+    },
+
     setLegacyManufacturer: (name: string) => {
       const state = _get();
       const index = buildLutCatalogIndex(state.legacyCatalogGroups);
@@ -2786,6 +2977,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
       if (!keepCurrentLut) {
         updates.lut_name = "";
+        updates.lut_names = [];
         updates.selectedLutInfo = null;
         updates.color_layers = null;
         updates.layer_height_mm = null;
@@ -4923,20 +5115,31 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           lutListLoading: false,
         };
 
-        // If a remembered LUT exists, apply its color_mode
-        const remembered = _get().lut_name;
+        // If a remembered LUT exists, apply its color_mode.
+        const currentState = _get();
+        const selectionState = {
+          ...currentState,
+          lutListFull: luts,
+        };
+        Object.assign(
+          updates,
+          buildLegacySelectionAvailabilityUpdates(
+            selectionState,
+            luts.map((lut) => lut.name),
+          ),
+        );
+        const remembered = updates.lut_name ?? currentState.lut_name;
         if (remembered) {
           const info = luts.find((l) => l.name === remembered);
           if (info && info.color_mode) {
             updates.color_mode = normalizePublicColorMode(info.color_mode);
-          } else if (!info) {
-            // Remembered LUT no longer exists — clear it
-            updates.lut_name = "";
-            try {
-              localStorage.removeItem("lumina_lastLut");
-            } catch {
-              /* noop */
-            }
+          }
+        }
+        if (updates.lut_name === "") {
+          try {
+            localStorage.removeItem("lumina_lastLut");
+          } catch {
+            /* noop */
           }
         }
 
@@ -4966,17 +5169,29 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           nativeBrandGroupsLoading: false,
         };
         const remembered = currentState.lut_name;
+        const selectionState = {
+          ...currentState,
+          lutListFull: legacyLuts,
+        };
+        Object.assign(
+          updates,
+          buildLegacySelectionAvailabilityUpdates(
+            selectionState,
+            legacyLuts.map((lut) => lut.name),
+          ),
+        );
         if (remembered) {
-          const info = legacyLuts.find((lut) => lut.name === remembered);
+          const activeName = updates.lut_name ?? remembered;
+          const info = legacyLuts.find((lut) => lut.name === activeName);
           if (info && info.color_mode) {
             updates.color_mode = normalizePublicColorMode(info.color_mode);
-          } else if (!info) {
-            updates.lut_name = "";
-            try {
-              localStorage.removeItem("lumina_lastLut");
-            } catch {
-              /* noop */
-            }
+          }
+        }
+        if (updates.lut_name === "") {
+          try {
+            localStorage.removeItem("lumina_lastLut");
+          } catch {
+            /* noop */
           }
         }
         const selection =
@@ -5036,7 +5251,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           index.byManufacturer[currentState.selectedLegacyManufacturer]
             ? currentState.selectedLegacyManufacturer
             : "");
-
         set({
           legacyCatalogGroups: groups,
           legacyCatalogLoading: false,
@@ -5503,7 +5717,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             ? buildMaterialSourceParams(state)
             : state.source_version === "native"
               ? buildNativeSourceParams(resolvedSourceSelection, state)
-              : buildLegacySourceParams(state.lut_name);
+              : buildLegacySourceParams(state);
         if (!sourceParams) {
           _previewClientLog(
             "preview: invalid source",
@@ -5861,7 +6075,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             ? buildMaterialSourceParams(state)
             : state.source_version === "native"
               ? buildNativeSourceParams(resolvedSourceSelection, state)
-              : buildLegacySourceParams(state.lut_name);
+              : buildLegacySourceParams(state);
         if (!sourceParams) {
           set({
             isGenerating: false,
@@ -6620,7 +6834,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             ? buildMaterialSourceParams(state)
             : state.source_version === "native"
               ? buildNativeSourceParams(resolvedSourceSelection, state)
-              : buildLegacySourceParams(state.lut_name);
+              : buildLegacySourceParams(state);
         if (!sourceParams) {
           set({
             batchLoading: false,

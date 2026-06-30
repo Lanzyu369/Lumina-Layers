@@ -46,7 +46,7 @@ export interface FridgeMagnetItem {
 export type PuzzleStyle = "regular" | "irregular";
 export type PuzzleSizingMode = "piece_size" | "grid" | "piece_count";
 export type PuzzleConnectorStyle = "classic" | "easy_cut";
-export type SourceKind = "legacy_single" | "native_bundle";
+export type SourceKind = "legacy_single" | "legacy_multi" | "native_bundle";
 
 export interface LutSupportedMode {
   color_layers: number;
@@ -60,6 +60,12 @@ export interface LegacySingleSourceSelection {
   lut_name: string;
 }
 
+export interface LegacyMultiSourceSelection {
+  source_kind: "legacy_multi";
+  lut_name: string;
+  lut_names: string[];
+}
+
 export interface NativeBundleSourceSelection {
   source_kind: "native_bundle";
   material_type: string;
@@ -69,6 +75,7 @@ export interface NativeBundleSourceSelection {
 
 export type ConvertSourceSelection =
   | LegacySingleSourceSelection
+  | LegacyMultiSourceSelection
   | NativeBundleSourceSelection;
 
 // ========== Request Models ==========
@@ -418,6 +425,7 @@ export interface LutDetailsCatalogItem {
   fingerprint: string;
   color_mode: string;
   source_kind: string;
+  compatibility_key?: string;
   manufacturer: string;
   material_type: string;
   manufacturer_source: string;
@@ -432,6 +440,61 @@ export interface LutDetailsCatalogGroup {
 
 export interface LutDetailsCatalogResponse {
   groups: LutDetailsCatalogGroup[];
+}
+
+export interface CloudLutRegistryCatalogRequest {
+  channels?: string[];
+  limit?: number;
+  offset?: number;
+}
+
+export interface CloudLutRegistryCatalogItem {
+  lut_id: string;
+  revision_id: string;
+  content_hash: string;
+  package_url: string;
+  package_sha256: string;
+  package_bytes: number;
+  local_path: string;
+  local_state?: "not_installed" | "installed" | "local_available" | string;
+  local_exists?: boolean;
+  local_match_path?: string | null;
+  installed_path?: string;
+  channel?: string | null;
+  visibility?: string | null;
+  display?: Record<string, unknown> | null;
+  compatibility?: Record<string, unknown> | null;
+  [key: string]: unknown;
+}
+
+export interface CloudLutRegistryCatalogResponse {
+  configured: boolean;
+  channels: string[];
+  items: CloudLutRegistryCatalogItem[];
+  total: number;
+}
+
+export interface CloudLutInstallRecord extends CloudLutRegistryCatalogItem {
+  installed_path: string;
+  installed_at?: string;
+  source_url?: string;
+}
+
+export interface CloudLutInstallRequest {
+  lut_id: string;
+  revision_id: string;
+  channels?: string[];
+}
+
+export interface CloudLutRegistryStatusResponse {
+  configured: boolean;
+  base_url: string | null;
+  channels: string[];
+  installed_count: number;
+  local_lut_count?: number;
+  synced_count?: number;
+  local_luts?: Array<Record<string, unknown>>;
+  installed?: Array<Record<string, unknown>>;
 }
 
 export interface BedSizeItem {
@@ -1574,8 +1637,9 @@ export interface BatchPreviewItem {
 }
 
 export interface BatchConvertParams {
-  source_kind?: "legacy_single" | "native_bundle";
+  source_kind?: "legacy_single" | "legacy_multi" | "native_bundle";
   lut_name?: string;
+  lut_names?: string[];
   material_type?: string;
   vendor?: string;
   db_names?: string[];

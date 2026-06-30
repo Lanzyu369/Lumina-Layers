@@ -54,6 +54,7 @@ function makeLegacyCatalogGroups(): LutDetailsCatalogGroup[] {
           path: "lut-ref/fp-a4.npy",
           fingerprint: "fp-a4",
           color_mode: ColorModeEnum.FOUR_COLOR_RYBW,
+          compatibility_key: "sig-a4",
           source_kind: "legacy_lookup",
           manufacturer: "Brand A",
           material_type: "",
@@ -62,10 +63,24 @@ function makeLegacyCatalogGroups(): LutDetailsCatalogGroup[] {
           search_tokens: ["brand", "a", "4c"],
         },
         {
+          name: "A 4C Alt",
+          path: "lut-ref/fp-a4-alt.npy",
+          fingerprint: "fp-a4-alt",
+          color_mode: ColorModeEnum.FOUR_COLOR_RYBW,
+          compatibility_key: "sig-a4-alt",
+          source_kind: "legacy_lookup",
+          manufacturer: "Brand A",
+          material_type: "",
+          manufacturer_source: "metadata",
+          material_source: "metadata",
+          search_tokens: ["brand", "a", "4c", "alt"],
+        },
+        {
           name: "A 8C",
           path: "lut-ref/fp-a8.npy",
           fingerprint: "fp-a8",
           color_mode: ColorModeEnum.EIGHT_COLOR,
+          compatibility_key: "sig-a8",
           source_kind: "legacy_lookup",
           manufacturer: "Brand A",
           material_type: "",
@@ -83,6 +98,7 @@ function makeLegacyCatalogGroups(): LutDetailsCatalogGroup[] {
           path: "lut-ref/fp-bbw.npy",
           fingerprint: "fp-bbw",
           color_mode: ColorModeEnum.BW,
+          compatibility_key: "sig-bw",
           source_kind: "legacy_lookup",
           manufacturer: "Brand B",
           material_type: "",
@@ -100,6 +116,7 @@ function makeLegacyCatalogGroups(): LutDetailsCatalogGroup[] {
           path: "lut-ref/fp-loose.npy",
           fingerprint: "fp-loose",
           color_mode: ColorModeEnum.MERGED,
+          compatibility_key: "sig-merged",
           source_kind: "legacy_lookup",
           manufacturer: "Unlabeled",
           material_type: "",
@@ -159,6 +176,12 @@ beforeEach(() => {
         color_mode: ColorModeEnum.FOUR_COLOR_RYBW,
         path: "lut-ref/fp-a4.npy",
         fingerprint: "fp-a4",
+      },
+      {
+        name: "Brand A - A4 Alt",
+        color_mode: ColorModeEnum.FOUR_COLOR_RYBW,
+        path: "lut-ref/fp-a4-alt.npy",
+        fingerprint: "fp-a4-alt",
       },
       {
         name: "Brand A - A8",
@@ -457,14 +480,14 @@ describe("BasicSettings", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders the source version selector and legacy LUT dropdown in old mode", () => {
+  it("renders the source version selector and legacy LUT database panel in old mode", () => {
     render(<BasicSettings />);
 
     expect(screen.getByText("来源类型")).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "传统 LUT" })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "反推LUT" })).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "品牌" })).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "LUT" })).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "LUT" })).not.toBeInTheDocument();
   });
 
   it("shows the inferred white material as the base plate when no backing is persisted", async () => {
@@ -514,24 +537,29 @@ describe("BasicSettings", () => {
     await waitFor(() => {
       expect(screen.getByRole("combobox", { name: "品牌" }))
         .toHaveTextContent("Brand A");
-      expect(screen.getByRole("combobox", { name: "LUT" }))
-        .not.toBeDisabled();
+      expect(screen.getByText(/品牌信息/)).toBeInTheDocument();
     });
     expect(useConverterStore.getState().selectedLegacyManufacturer)
       .toBe("Brand A");
     expect(useConverterStore.getState().legacyCatalogGroups).toHaveLength(3);
 
-    const lutDropdown = screen.getByRole("combobox", { name: "LUT" });
-    fireEvent.click(lutDropdown);
-    await waitFor(() => expect(screen.getByRole("listbox")).toBeInTheDocument());
+    await waitFor(() => {
+      expect(screen.getByText(/品牌信息/)).toBeInTheDocument();
+      expect(screen.getAllByText(/数据库/).length).toBeGreaterThan(0);
+    });
+    expect(screen.getByRole("checkbox", { name: "A 4C" })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "A 4C Alt" })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "A 8C" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "A 4C" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "A 8C" }));
 
     await waitFor(() => {
-      expect(lutDropdown).toHaveAttribute("aria-expanded", "true");
-      expect(screen.getByText("4 色")).toBeInTheDocument();
+      expect(useConverterStore.getState().lut_names).toEqual([
+        "Brand A - A4",
+        "Brand A - A8",
+      ]);
     });
-    expect(screen.getByText("8 色")).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "A 4C" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "A 8C" })).toBeInTheDocument();
   });
 
   it("submits the LUTManager name when a catalog LUT path maps to a shorter legacy LUT name", async () => {
@@ -540,15 +568,15 @@ describe("BasicSettings", () => {
     fireEvent.click(screen.getByRole("combobox", { name: "品牌" }));
     fireEvent.click(screen.getByRole("option", { name: "Brand A" }));
 
-    const lutDropdown = screen.getByRole("combobox", { name: "LUT" });
-    await waitFor(() => expect(lutDropdown).not.toBeDisabled());
-    fireEvent.click(lutDropdown);
-    fireEvent.click(screen.getByRole("option", { name: "A 4C" }));
+    await waitFor(() =>
+      expect(screen.getByRole("checkbox", { name: "A 4C" })).toBeEnabled(),
+    );
+    fireEvent.click(screen.getByRole("checkbox", { name: "A 4C" }));
 
     await waitFor(() => {
       expect(useConverterStore.getState().lut_name).toBe("Brand A - A4");
     });
-    expect(lutDropdown).toHaveTextContent("A 4C");
+    expect(screen.getByRole("checkbox", { name: "A 4C" })).toBeChecked();
   });
 
   it("keeps the LUT dropdown disabled until LUTManager names are mapped", () => {
@@ -561,9 +589,7 @@ describe("BasicSettings", () => {
 
     render(<BasicSettings />);
 
-    const lutDropdown = screen.getByRole("combobox", { name: "LUT" });
-    expect(lutDropdown).toBeDisabled();
-    expect(screen.queryByRole("option", { name: "A 4C" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "A 4C" })).not.toBeInTheDocument();
     expect(useConverterStore.getState().lut_name).toBe("");
   });
 

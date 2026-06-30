@@ -9,9 +9,10 @@ including merge parameters, merge statistics, and LUT info queries.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # ========== Models ==========
@@ -100,6 +101,7 @@ class LutDetailsCatalogItem(BaseModel):
     fingerprint: str = Field("", description="文件指纹")
     color_mode: str = Field(..., description="颜色模式")
     source_kind: str = Field("legacy_lookup", description="来源类型")
+    compatibility_key: str = Field("", description="legacy_multi 兼容分组键")
     manufacturer: str = Field(..., description="解析后的厂商")
     material_type: str = Field("", description="解析后的材质")
     manufacturer_source: str = Field(..., description="厂商解析来源")
@@ -220,14 +222,57 @@ class LutSourceSelection(BaseModel):
     LUT 源选择共享契约。
     """
 
-    source_kind: Literal["legacy_single", "native_bundle"] = Field(
+    source_kind: Literal["legacy_single", "legacy_multi", "native_bundle"] = Field(
         "legacy_single",
-        description="源类型：legacy_single | native_bundle",
+        description="源类型：legacy_single | legacy_multi | native_bundle",
     )
     lut_name: str | None = Field(None, description="传统 LUT 名称")
+    lut_names: list[str] = Field(default_factory=list, description="传统 LUT 名称列表")
     material_type: str | None = Field(None, description="原生材料类型")
     vendor: str | None = Field(None, description="原生厂商")
     db_names: list[str] = Field(default_factory=list, description="原生 DB 文件名列表")
+
+    @field_validator("lut_names", mode="before")
+    @classmethod
+    def normalize_lut_names(cls, value: object) -> list[str]:
+        """Normalize legacy LUT name lists from JSON and form-compatible shapes.
+        规范化 JSON/form 兼容形态的传统 LUT 名称列表。
+        """
+
+        if value is None:
+            return []
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return []
+            if stripped.startswith("[") and stripped.endswith("]"):
+                try:
+                    parsed = json.loads(stripped)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(
+                        "lut_names must be a list of strings, JSON array string, or comma-separated string"
+                    ) from exc
+                if not isinstance(parsed, list):
+                    raise ValueError(
+                        "lut_names must be a list of strings, JSON array string, or comma-separated string"
+                    )
+                value = parsed
+            else:
+                return [item.strip() for item in stripped.split(",") if item.strip()]
+
+        if isinstance(value, (list, tuple)):
+            normalized: list[str] = []
+            for item in value:
+                if not isinstance(item, str):
+                    raise ValueError("lut_names entries must be strings")
+                stripped_item = item.strip()
+                if stripped_item:
+                    normalized.append(stripped_item)
+            return normalized
+
+        raise ValueError(
+            "lut_names must be a list of strings, JSON array string, or comma-separated string"
+        )
 
     @model_validator(mode="after")
     def validate_source_selection(self) -> "LutSourceSelection":
@@ -238,6 +283,18 @@ class LutSourceSelection(BaseModel):
         if self.source_kind == "legacy_single":
             if not self.lut_name:
                 raise ValueError("legacy_single requires lut_name")
+            return self
+
+        if self.source_kind == "legacy_multi":
+            normalized: list[str] = []
+            for name in ([self.lut_name] if self.lut_name else []) + list(self.lut_names or []):
+                clean_name = str(name).strip()
+                if clean_name and clean_name not in normalized:
+                    normalized.append(clean_name)
+            if not normalized:
+                raise ValueError("legacy_multi requires lut_names or lut_name")
+            self.lut_names = normalized
+            self.lut_name = normalized[0]
             return self
 
         if self.source_kind == "native_bundle":

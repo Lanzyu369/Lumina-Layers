@@ -2,6 +2,12 @@ import apiClient, { type ApiRequestOptions } from "./client";
 import type {
   CompareRequest,
   CompareResponse,
+  CloudLutInstallRecord,
+  CloudLutInstallRequest,
+  CloudLutRegistryCatalogItem,
+  CloudLutRegistryCatalogRequest,
+  CloudLutRegistryCatalogResponse,
+  CloudLutRegistryStatusResponse,
   LutCatalogResponse,
   LutDetailsCatalogResponse,
   LutDetailsResponse,
@@ -73,6 +79,61 @@ export async function fetchLutDetailsCatalog(
           suppressClientLog: true,
         })
       : await apiClient.get<LutDetailsCatalogResponse>("/lut/details/catalog");
+  return response.data;
+}
+
+/** 上传一个本地 LUT 到 Custom 预设目录。 */
+export async function uploadLocalLut(
+  file: File,
+): Promise<{ status: string; message: string; name: string }> {
+  const formData = new FormData();
+  formData.append("file", file);
+  const response = await apiClient.post<{
+    status: string;
+    message: string;
+    name: string;
+  }>("/lut/upload", formData, { timeout: 3_600_000 });
+  return response.data;
+}
+
+/** 获取云端 LUT registry 目录。 */
+export async function fetchCloudLutRegistryCatalog(
+  request: CloudLutRegistryCatalogRequest = {},
+): Promise<CloudLutRegistryCatalogResponse> {
+  const response = await apiClient.get<CloudLutRegistryCatalogResponse>(
+    "/lut-registry/catalog",
+    {
+      params: {
+        ...(request.channels ? { channel: request.channels } : {}),
+        ...(request.limit !== undefined ? { limit: request.limit } : {}),
+        ...(request.offset !== undefined ? { offset: request.offset } : {}),
+      },
+    },
+  );
+  return response.data;
+}
+
+/** 安装一个云端 LUT registry 目录条目。 */
+export async function installCloudLut(
+  entry: CloudLutRegistryCatalogItem,
+): Promise<CloudLutInstallRecord> {
+  const request: CloudLutInstallRequest = {
+    lut_id: entry.lut_id,
+    revision_id: entry.revision_id,
+  };
+  const response = await apiClient.post<CloudLutInstallRecord>(
+    "/lut-registry/install",
+    request,
+    { timeout: 3_600_000 },
+  );
+  return response.data;
+}
+
+/** 获取本机云端 LUT 同步状态。 */
+export async function fetchCloudLutRegistryStatus(): Promise<CloudLutRegistryStatusResponse> {
+  const response = await apiClient.get<CloudLutRegistryStatusResponse>(
+    "/lut-registry/status",
+  );
   return response.data;
 }
 

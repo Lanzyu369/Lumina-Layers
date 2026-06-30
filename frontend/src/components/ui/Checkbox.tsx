@@ -56,7 +56,9 @@ export default function Checkbox({
       >
         <span className={cx("h-2.5 w-2.5 rounded-sm", checked ? "bg-white" : "bg-transparent")} />
       </span>
-      <span className="font-medium text-slate-700 dark:text-slate-200">{label}</span>
+      <span className="min-w-0 flex-1 whitespace-normal break-words font-medium text-slate-700 dark:text-slate-200">
+        {label}
+      </span>
       {tooltip && (
         <HelpDot
           title={tooltipTitle ?? (typeof label === "string" ? label : "")}

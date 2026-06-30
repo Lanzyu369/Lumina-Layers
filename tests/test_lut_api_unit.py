@@ -25,7 +25,7 @@ from api.routers.lut import _canonicalize_public_color_mode
 from api.services.lut_presentation import public_lut_path_reference
 from api.schemas.converter import ColorMode, ConvertGenerateRequest, ConvertPreviewRequest
 from api.session_store import SessionStore
-from config import LUTMetadata, PaletteEntry
+from config import LUTMetadata, ModelingMode, PaletteEntry
 from core.native_reference import (
     get_reference_db_root,
     NativeReferenceContext,
@@ -103,6 +103,139 @@ def _attach_lut_logger(
     target_logger.addHandler(caplog.handler)
     caplog.set_level(level, logger=target_logger.name)
     return target_logger
+
+
+def test_legacy_multi_runtime_accepts_cross_color_lut_candidates(tmp_path: Path) -> None:
+    from utils.lut_manager import LUTManager
+
+    bw_path = tmp_path / "bw_36.npz"
+    four_path = tmp_path / "four.npz"
+    eight_path = tmp_path / "eight.npz"
+    base_kwargs = {
+        "max_color_layers": 5,
+        "layer_height_mm": 0.08,
+        "line_width_mm": 0.42,
+        "base_layers": 10,
+        "base_channel_idx": 3,
+        "layer_order": "Top2Bottom",
+    }
+    four_meta = LUTMetadata(
+        palette=[
+            PaletteEntry("Red", "PLA Basic"),
+            PaletteEntry("Yellow", "PLA Basic"),
+            PaletteEntry("Blue", "PLA Basic"),
+            PaletteEntry("White", "PLA Basic"),
+        ],
+        color_mode="4-Color (RYBW)",
+        **base_kwargs,
+    )
+    bw_meta = LUTMetadata(
+        palette=[
+            PaletteEntry("White", "PLA Basic"),
+            PaletteEntry("Black", "PLA Basic"),
+        ],
+        color_mode="BW (Black & White)",
+        **base_kwargs,
+    )
+    eight_meta = LUTMetadata(
+        palette=[
+            PaletteEntry("Slot 1 (White)", "PLA Basic"),
+            PaletteEntry("Slot 2 (Cyan)", "PLA Basic"),
+            PaletteEntry("Slot 3 (Magenta)", "PLA Basic"),
+            PaletteEntry("Slot 4 (Yellow)", "PLA Basic"),
+            PaletteEntry("Slot 5 (Black)", "PLA Basic"),
+            PaletteEntry("Slot 6 (Red)", "PLA Basic"),
+            PaletteEntry("Slot 7 (Deep Blue)", "PLA Basic"),
+            PaletteEntry("Slot 8 (Green)", "PLA Basic"),
+        ],
+        color_mode="8-Color Max",
+        **base_kwargs,
+    )
+    bw_rgb = np.asarray(
+        [[255 - idx * 4, 255 - idx * 4, 255 - idx * 4] for idx in range(36)],
+        dtype=np.uint8,
+    )
+    LUTManager.save_npz_with_metadata(
+        str(bw_path),
+        bw_rgb,
+        None,
+        bw_meta,
+    )
+    LUTManager.save_npz_with_metadata(
+        str(four_path),
+        np.asarray([[255, 0, 0]], dtype=np.uint8),
+        np.asarray([[0, 1, 2, 3, 0]], dtype=np.int32),
+        four_meta,
+    )
+    LUTManager.save_npz_with_metadata(
+        str(eight_path),
+        np.asarray([[0, 0, 0]], dtype=np.uint8),
+        np.asarray([[5, 3, 6, 0, 4]], dtype=np.int32),
+        eight_meta,
+    )
+
+    paths = {
+        "bw": str(bw_path),
+        "four": str(four_path),
+        "eight": str(eight_path),
+    }
+    runtime_path = None
+    try:
+        with patch("utils.lut_manager.LUTManager.get_lut_path", side_effect=lambda name: paths.get(name)):
+            runtime_path, display_name = LUTManager.resolve_source_selection(
+                source_kind="legacy_multi",
+                lut_name="bw",
+                lut_names=["bw", "four", "eight"],
+            )
+
+        assert display_name == "bw"
+        runtime_rgb, runtime_stacks, runtime_meta = LUTManager.load_lut_with_metadata(runtime_path)
+        assert runtime_rgb.reshape(-1, 3).shape[0] == 34
+        assert [entry.color for entry in runtime_meta.palette] == [
+            "Slot 1 (White)",
+            "Slot 2 (Cyan)",
+            "Slot 3 (Magenta)",
+            "Slot 4 (Yellow)",
+            "Slot 5 (Black)",
+            "Slot 6 (Red)",
+            "Slot 7 (Deep Blue)",
+            "Slot 8 (Green)",
+        ]
+        assert runtime_meta.color_mode == "Merged"
+        assert runtime_meta.extensions["source_kind"] == "legacy_multi"
+        assert runtime_meta.extensions["selected_lut_names"] == ["bw", "four", "eight"]
+        assert len({tuple(row) for row in runtime_stacks.tolist()}) == 34
+        assert runtime_stacks[-2:].tolist() == [
+            [5, 3, 6, 0, 5],
+            [5, 3, 6, 0, 4],
+        ]
+
+        from core.pipeline.s01_input_validation import run as run_s01
+
+        generate_ctx = run_s01(
+            {
+                "image_path": "/tmp/source.png",
+                "lut_path": runtime_path,
+                "color_mode": "4-Color (RYBW)",
+                "modeling_mode": ModelingMode.HIGH_FIDELITY,
+                "backing_color_id": 0,
+                "separate_backing": False,
+            }
+        )
+        assert generate_ctx["slot_names"] == [
+            "Slot 1 (White)",
+            "Slot 2 (Cyan)",
+            "Slot 3 (Magenta)",
+            "Slot 4 (Yellow)",
+            "Slot 5 (Black)",
+            "Slot 6 (Red)",
+            "Slot 7 (Deep Blue)",
+            "Slot 8 (Green)",
+        ]
+        assert len(generate_ctx["preview_colors"]) == 8
+    finally:
+        if runtime_path:
+            Path(runtime_path).unlink(missing_ok=True)
 
 
 class TestLutErrorBoundary:

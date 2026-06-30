@@ -11,6 +11,7 @@ import {
   RECIPE_IMPORT_WARNING_LUT_MISSING,
   RECIPE_IMPORT_WARNING_PUZZLE_CONFLICT_LARGE_FORMAT,
   RECIPE_IMPORT_WARNING_PUZZLE_CONFLICT_LOOP,
+  RECIPE_IMPORT_WARNING_SECONDARY_LUT_MISSING,
 } from "../recipe/importRecipe";
 import { migrateRecipe } from "../recipe/migration";
 import type { LuminaRecipe } from "../recipe/types";
@@ -424,6 +425,36 @@ describe("recipe/importRecipe", () => {
 
       expect(state.lut_name).toBe(""); // Empty — user must select manually
       expect(warnings).toContain(RECIPE_IMPORT_WARNING_LUT_MISSING);
+    });
+
+    it("restores existing secondary legacy LUT names and warns for missing ones", () => {
+      const recipe = createTestRecipe();
+      recipe.recipe.converter!.source = {
+        source_version: "legacy",
+        selected_legacy_lut_names: ["MyLUT", "OtherLUT", "MissingLUT"],
+        selected_native_brand_key: "",
+        selected_native_db_names: [],
+        color_layers: null,
+        layer_height_mm: null,
+        model_enable: false,
+        model_only: false,
+        model_threshold: null,
+        model_margin: null,
+        selected_material_dir_names: [],
+        material_layer_count: 5,
+        material_layer_height_mm: 0.08,
+        material_backing_material_dir_name: null,
+      };
+
+      const { state, warnings } = restoreConverterRecipe(
+        recipe,
+        LOCAL_LUTS,
+        LOCAL_FINGERPRINTS,
+      );
+
+      expect(state.lut_name).toBe("MyLUT");
+      expect(state.lut_names).toEqual(["MyLUT", "OtherLUT"]);
+      expect(warnings).toContain(RECIPE_IMPORT_WARNING_SECONDARY_LUT_MISSING);
     });
 
     it("clears session and preview state", () => {

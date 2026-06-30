@@ -41,6 +41,7 @@ export interface BugReportContextPayload {
   };
   color_mode: string | null;
   lut_name: string | null;
+  lut_names?: string[];
   source_version: "legacy" | "native" | "material" | null;
   selected_native_brand_key: string | null;
   selected_native_db_names: string[];

@@ -41,6 +41,7 @@ import {
 import { StatusBanner, workstationInputClass } from "../ui/panelPrimitives";
 import {
   buildLutCatalogIndex,
+  getBucketDisplayColorMode,
   listBucketsForManufacturer,
   normalizeLutPath,
   type ColorModeBucket,
@@ -99,14 +100,25 @@ function resolveRecipeImportError(
   }
   return t("recipe_import_error_unreadable");
 }
-const LEGACY_BUCKET_I18N_KEY: Record<ColorModeBucket, string> = {
-  BW: "basic_lut_color_mode_bw",
+const LEGACY_BUCKET_I18N_KEY: Partial<Record<ColorModeBucket, string>> = {
+  [ColorMode.BW]: "basic_lut_color_mode_bw",
+  [ColorMode.FOUR_COLOR_CMYW]: "basic_lut_color_mode_4color_cmyw",
+  [ColorMode.FOUR_COLOR_RYBW]: "basic_lut_color_mode_4color_rybw",
+  [ColorMode.FIVE_COLOR_EXT]: "basic_lut_color_mode_5color_ext",
+  "5-Color Extended (1444)": "basic_lut_color_mode_5color_ext_1444",
+  [ColorMode.SIX_COLOR]: "basic_lut_color_mode_6color_cmywgk",
+  [ColorMode.SIX_COLOR_RYBW]: "basic_lut_color_mode_6color_rybwgk",
+  [ColorMode.EIGHT_COLOR]: "basic_lut_color_mode_8color_max",
+  [ColorMode.MERGED]: "basic_lut_color_mode_merged",
   "4-Color": "basic_lut_color_mode_4color",
-  "5-Color Extended": "basic_lut_color_mode_5color_ext",
   "6-Color": "basic_lut_color_mode_6color",
   "8-Color": "basic_lut_color_mode_8color",
-  Merged: "basic_lut_color_mode_merged",
 };
+
+function legacyBucketLabel(bucket: ColorModeBucket, t: (key: string) => string): string {
+  const key = LEGACY_BUCKET_I18N_KEY[bucket];
+  return key ? t(key) : bucket;
+}
 
 function ColorModeDots({ mode }: { mode: string }) {
   if (mode === ColorMode.MERGED) {
@@ -156,6 +168,7 @@ export default function BasicSettings() {
     imagePreviewUrl,
     source_version,
     lut_name,
+    lut_names,
     lutListFull,
     lutListLoading,
     legacyCatalogGroups,
@@ -207,6 +220,7 @@ export default function BasicSettings() {
     setNativeSupportedMode,
     setNativeDbNames,
     setLegacyManufacturer,
+    setLegacyLutNames,
     fetchLutList,
     fetchLegacyCatalog,
   } = useConverterStore(useShallow((s) => ({
@@ -214,6 +228,7 @@ export default function BasicSettings() {
     imagePreviewUrl: s.imagePreviewUrl,
     source_version: s.source_version,
     lut_name: s.lut_name,
+    lut_names: s.lut_names,
     lutListFull: s.lutListFull,
     lutListLoading: s.lutListLoading,
     legacyCatalogGroups: s.legacyCatalogGroups,
@@ -265,6 +280,7 @@ export default function BasicSettings() {
     setNativeSupportedMode: s.setNativeSupportedMode,
     setNativeDbNames: s.setNativeDbNames,
     setLegacyManufacturer: s.setLegacyManufacturer,
+    setLegacyLutNames: s.setLegacyLutNames,
     fetchLutList: s.fetchLutList,
     fetchLegacyCatalog: s.fetchLegacyCatalog,
   })));
@@ -274,6 +290,7 @@ export default function BasicSettings() {
       resolveConverterSourceSelection({
         source_version,
         lut_name,
+        lut_names,
         nativeBrandGroups,
         selectedNativeBrandKey,
         selectedNativeDbNames,
@@ -282,10 +299,13 @@ export default function BasicSettings() {
         selectedMaterialDirNames,
         materialLayerCount,
         materialLayerHeightMm,
+        lutListFull,
+        legacyCatalogGroups,
       }),
     [
       source_version,
       lut_name,
+      lut_names,
       nativeBrandGroups,
       selectedNativeBrandKey,
       selectedNativeDbNames,
@@ -294,6 +314,8 @@ export default function BasicSettings() {
       selectedMaterialDirNames,
       materialLayerCount,
       materialLayerHeightMm,
+      lutListFull,
+      legacyCatalogGroups,
     ],
   );
 
@@ -540,25 +562,79 @@ export default function BasicSettings() {
     if (!selectedLegacyManufacturer) {
       return [];
     }
-    return listBucketsForManufacturer(lutIndex, selectedLegacyManufacturer)
-      .map((bucket) => ({
-        label: t(LEGACY_BUCKET_I18N_KEY[bucket]),
-        options:
-          lutIndex.byManufacturerAndBucket[selectedLegacyManufacturer]?.[
-            bucket
-          ]?.map((item) => {
-            const legacyName = lutNameByPath.get(normalizeLutPath(item.path));
-            if (!legacyName) {
-              return null;
-            }
-            return {
-              label: item.name,
-              value: legacyName,
-            };
-          }).filter((option) => option !== null) ?? [],
-      }))
+    const buckets = listBucketsForManufacturer(lutIndex, selectedLegacyManufacturer);
+    const bucketModes = new Map(
+      buckets.map((bucket) => [
+        bucket,
+        getBucketDisplayColorMode(lutIndex, selectedLegacyManufacturer, bucket),
+      ]),
+    );
+    const visibleGroups = buckets
+      .map((bucket) => {
+        const displayMode = bucketModes.get(bucket) ?? bucket;
+        const baseLabel = legacyBucketLabel(displayMode, t);
+        return {
+          displayMode,
+          baseLabel,
+          options:
+            lutIndex.byManufacturerAndBucket[selectedLegacyManufacturer]?.[
+              bucket
+            ]?.map((item) => {
+              const legacyName = lutNameByPath.get(normalizeLutPath(item.path));
+              if (!legacyName) {
+                return null;
+              }
+              return {
+                label: item.name,
+                value: legacyName,
+              };
+            }).filter((option) => option !== null) ?? [],
+        };
+      })
       .filter((group) => group.options.length > 0);
+    const modeCounts = new Map<string, number>();
+    for (const group of visibleGroups) {
+      modeCounts.set(group.displayMode, (modeCounts.get(group.displayMode) ?? 0) + 1);
+    }
+    const modePositions = new Map<string, number>();
+    return visibleGroups.map((group) => {
+      const position = (modePositions.get(group.displayMode) ?? 0) + 1;
+      modePositions.set(group.displayMode, position);
+      return {
+        label:
+          (modeCounts.get(group.displayMode) ?? 0) > 1
+            ? `${group.baseLabel} #${position}`
+            : group.baseLabel,
+        options: group.options,
+      };
+    });
   }, [lutIndex, selectedLegacyManufacturer, t, lutNameByPath]);
+  const selectedLegacyBrandInfo = useMemo(() => {
+    if (!selectedLegacyManufacturer) {
+      return null;
+    }
+    const group = legacyCatalogGroups.find(
+      (candidate) => candidate.manufacturer === selectedLegacyManufacturer,
+    );
+    const materialTypes = Array.from(
+      new Set(
+        (group?.items ?? [])
+          .map((item) => item.material_type.trim())
+          .filter(Boolean),
+      ),
+    ).sort((a, b) => a.localeCompare(b));
+    return {
+      displayName:
+        selectedLegacyManufacturer === "Unlabeled"
+          ? t("basic_lut_unlabeled_brand")
+          : selectedLegacyManufacturer,
+      materialTypes,
+      vendor:
+        selectedLegacyManufacturer === "Unlabeled"
+          ? t("basic_lut_unlabeled_brand")
+          : selectedLegacyManufacturer,
+    };
+  }, [legacyCatalogGroups, selectedLegacyManufacturer, t]);
 
   // --- Material library for material-archive mode ---
   const [materialLibrary, setMaterialLibrary] = useState<SavedMaterialLibraryItem[]>([]);
@@ -913,10 +989,13 @@ export default function BasicSettings() {
           <LegacyLutSelector
             manufacturer={selectedLegacyManufacturer}
             lutName={lut_name}
+            selectedLutNames={lut_names.length > 0 ? lut_names : (lut_name ? [lut_name] : [])}
             manufacturerOptions={manufacturerOptions}
             groupedLutOptions={groupedLutOptions}
+            brandInfo={selectedLegacyBrandInfo}
             onManufacturerChange={setLegacyManufacturer}
             onLutChange={setLutName}
+            onLutSelectionChange={setLegacyLutNames}
             onRefresh={() => void handleRefreshLut()}
             onUploadClick={() => lutFileRef.current?.click()}
             loading={legacyCatalogLoading}
@@ -932,6 +1011,13 @@ export default function BasicSettings() {
               upload: `+ ${t("basic_lut_upload")}`,
               loadingHint: t("basic_brand_loading"),
               noBrandHint: t("basic_lut_no_brand_hint"),
+              multiSelect: t("basic_lut_multi_select"),
+              selectedCount: t("basic_lut_selected_count"),
+              brandInfo: t("basic_native_brand_summary_label"),
+              materialType: t("basic_native_material_label"),
+              vendor: t("basic_native_vendor_label"),
+              database: t("basic_native_db_label"),
+              databasePlaceholder: t("basic_native_db_placeholder"),
             }}
           />
           <input

@@ -41,6 +41,7 @@ class LutCatalogItemSummary:
     fingerprint: str
     color_mode: str
     source_kind: str
+    compatibility_key: str
     manufacturer: str
     material_type: str
     manufacturer_source: str
@@ -156,6 +157,7 @@ class LutCatalogIndexer:
                 fingerprint=parsed.fingerprint,
                 color_mode=parsed.color_mode,
                 source_kind=parsed.source_kind,
+                compatibility_key=parsed.compatibility_key,
                 manufacturer=identity.manufacturer,
                 material_type=identity.material_type,
                 manufacturer_source=identity.manufacturer_source,

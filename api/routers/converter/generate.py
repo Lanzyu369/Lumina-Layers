@@ -627,7 +627,10 @@ def _normalize_batch_string_list(value: list[str] | str | None) -> list[str]:
                 return [str(item).strip() for item in parsed if str(item).strip()]
         return [item.strip() for item in stripped.split(",") if item.strip()]
 
-    normalized = [str(item).strip() for item in value if str(item).strip()]
+    try:
+        normalized = [str(item).strip() for item in value if str(item).strip()]
+    except TypeError:
+        return []
     if len(normalized) == 1:
         stripped = normalized[0]
         if stripped.startswith("[") and stripped.endswith("]"):
@@ -2483,8 +2486,9 @@ def _select_batch_preview_subset(
 @router.post("/batch")
 async def convert_batch(
     images: list[UploadFile] = File(..., description="批量图像"),
-    source_kind: str = Form("legacy_single", description="源类型: legacy_single | native_bundle"),
+    source_kind: str = Form("legacy_single", description="源类型: legacy_single | legacy_multi | native_bundle"),
     lut_name: str | None = Form(None, description="LUT 名称"),
+    lut_names: list[str] | str | None = Form(None, description="传统 LUT 名称列表"),
     material_type: str | None = Form(None, description="原生材料类型"),
     vendor: str | None = Form(None, description="原生厂商"),
     db_names: list[str] | str | None = Form(None, description="原生 DB 名称列表"),
@@ -2566,11 +2570,13 @@ async def convert_batch(
         resolved_source_kind = "legacy_single"
     else:
         normalized_db_names = _normalize_batch_string_list(db_names)
+        normalized_lut_names = _normalize_batch_string_list(lut_names)
         try:
             source_selection = LutSourceSelection.model_validate(
                 {
                     "source_kind": source_kind,
                     "lut_name": lut_name,
+                    "lut_names": normalized_lut_names,
                     "material_type": material_type,
                     "vendor": vendor,
                     "db_names": normalized_db_names,
@@ -2582,19 +2588,24 @@ async def convert_batch(
                 detail=LUT_SOURCE_SELECTION_INVALID_DETAIL,
             ) from exc
         try:
+            source_kwargs = {
+                "source_kind": source_selection.source_kind,
+                "lut_name": source_selection.lut_name,
+                "material_type": source_selection.material_type,
+                "vendor": source_selection.vendor,
+                "db_names": source_selection.db_names,
+            }
+            if source_selection.source_kind == "legacy_multi":
+                source_kwargs["lut_names"] = source_selection.lut_names
             lut_path, resolved_lut_name = LUTManager.resolve_source_selection(
-                source_kind=source_selection.source_kind,
-                lut_name=source_selection.lut_name,
-                material_type=source_selection.material_type,
-                vendor=source_selection.vendor,
-                db_names=source_selection.db_names,
+                **source_kwargs
             )
         except ValueError as exc:
             detail = str(exc)
             status_code = 404 if detail.startswith("LUT not found:") else 422
             raise HTTPException(status_code=status_code, detail=detail) from exc
         resolved_source_kind = source_selection.source_kind
-        if resolved_source_kind == "native_bundle":
+        if resolved_source_kind in ("native_bundle", "legacy_multi"):
             resolved_lut_path = os.path.abspath(lut_path)
             try:
                 Path(resolved_lut_path).resolve().relative_to(Path(TEMP_DIR).resolve())
@@ -2603,59 +2614,63 @@ async def convert_batch(
             else:
                 temp_native_bundle_path = resolved_lut_path
 
-    # Validate modeling_mode string (main thread)
     try:
-        resolved_modeling_mode = CoreModelingMode(modeling_mode)
-    except ValueError:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Invalid modeling_mode: {modeling_mode}",
+        # Validate modeling_mode string (main thread)
+        try:
+            resolved_modeling_mode = CoreModelingMode(modeling_mode)
+        except ValueError:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid modeling_mode: {modeling_mode}",
+            )
+        if resolved_modeling_mode == CoreModelingMode.COLOR_CARD:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Batch conversion does not support color-card mode. "
+                    "Use single-image preview and generate instead."
+                ),
+            )
+        try:
+            svg_pixels_per_mm = normalize_svg_pixels_per_mm(svg_pixels_per_mm)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        resolved_height_mode = height_mode or "color"
+        parsed_color_height_map = (
+            _parse_batch_color_height_map(color_height_map)
+            if enable_relief
+            else None
         )
-    if resolved_modeling_mode == CoreModelingMode.COLOR_CARD:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "Batch conversion does not support color-card mode. "
-                "Use single-image preview and generate instead."
-            ),
+        if enable_relief and resolved_height_mode == "heightmap":
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Batch heightmap relief is not supported. "
+                    "Use color relief or single-image generation."
+                ),
+            )
+        if enable_relief and resolved_height_mode != "color":
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid height_mode: {resolved_height_mode}",
+            )
+        if enable_relief and not parsed_color_height_map:
+            raise HTTPException(
+                status_code=422,
+                detail="Batch relief requires color_height_map",
+            )
+        _validate_material_archive_relief_minimum_height(
+            enable_relief=enable_relief,
+            material_source=material_source,
+            height_mode=resolved_height_mode,
+            color_height_map=parsed_color_height_map,
+            heightmap_max_height=heightmap_max_height,
+            material_layer_count=material_layer_count,
+            requested_color_layers=color_layers,
         )
-    try:
-        svg_pixels_per_mm = normalize_svg_pixels_per_mm(svg_pixels_per_mm)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    resolved_height_mode = height_mode or "color"
-    parsed_color_height_map = (
-        _parse_batch_color_height_map(color_height_map)
-        if enable_relief
-        else None
-    )
-    if enable_relief and resolved_height_mode == "heightmap":
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "Batch heightmap relief is not supported. "
-                "Use color relief or single-image generation."
-            ),
-        )
-    if enable_relief and resolved_height_mode != "color":
-        raise HTTPException(
-            status_code=422,
-            detail=f"Invalid height_mode: {resolved_height_mode}",
-        )
-    if enable_relief and not parsed_color_height_map:
-        raise HTTPException(
-            status_code=422,
-            detail="Batch relief requires color_height_map",
-        )
-    _validate_material_archive_relief_minimum_height(
-        enable_relief=enable_relief,
-        material_source=material_source,
-        height_mode=resolved_height_mode,
-        color_height_map=parsed_color_height_map,
-        heightmap_max_height=heightmap_max_height,
-        material_layer_count=material_layer_count,
-        requested_color_layers=color_layers,
-    )
+    except Exception:
+        _remove_temp_path(temp_native_bundle_path)
+        raise
 
     # --- batch_run_id: unique per-request identifier for structured logging
     # and artifact naming. Independent of request.state.request_id (R9 §1).

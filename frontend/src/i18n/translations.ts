@@ -1651,6 +1651,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "LUT 合并",
     en: "LUT Merge",
   },
+  "tab.lutLibrary": {
+    zh: "LUT库",
+    en: "LUT Library",
+  },
+  "tab.lutCloudSync": {
+    zh: "云端 LUT 库",
+    en: "Cloud LUT Library",
+  },
   "tab.lutDetails": {
     zh: "LUT 详情",
     en: "LUT Details",
@@ -3354,6 +3362,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "请先选择品牌",
     en: "Pick a brand first",
   },
+  basic_lut_multi_select: {
+    zh: "同组多选 LUT",
+    en: "Multi-select LUTs in this group",
+  },
+  basic_lut_selected_count: {
+    zh: "已选",
+    en: "Selected",
+  },
   basic_lut_color_mode_bw: {
     zh: "黑白",
     en: "BW",
@@ -3362,17 +3378,41 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "4 色",
     en: "4-Color",
   },
+  basic_lut_color_mode_4color_cmyw: {
+    zh: "4 色 CMYW",
+    en: "4-Color (CMYW)",
+  },
+  basic_lut_color_mode_4color_rybw: {
+    zh: "4 色 RYBW",
+    en: "4-Color (RYBW)",
+  },
   basic_lut_color_mode_5color_ext: {
     zh: "5 色扩展",
     en: "5-Color Extended",
+  },
+  basic_lut_color_mode_5color_ext_1444: {
+    zh: "5 色扩展 1444",
+    en: "5-Color Extended (1444)",
   },
   basic_lut_color_mode_6color: {
     zh: "6 色",
     en: "6-Color",
   },
+  basic_lut_color_mode_6color_cmywgk: {
+    zh: "6 色 CMYWGK",
+    en: "6-Color (CMYWGK 1296)",
+  },
+  basic_lut_color_mode_6color_rybwgk: {
+    zh: "6 色 RYBWGK",
+    en: "6-Color (RYBWGK 1296)",
+  },
   basic_lut_color_mode_8color: {
     zh: "8 色",
     en: "8-Color",
+  },
+  basic_lut_color_mode_8color_max: {
+    zh: "8 色 Max",
+    en: "8-Color Max",
   },
   basic_lut_color_mode_merged: {
     zh: "合并 LUT",
@@ -6069,6 +6109,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "LUT 已降级匹配（名称相同但指纹不一致）",
     en: "LUT matched by name but fingerprint differs — colors may vary",
   },
+  recipe_import_warning_secondary_lut_missing: {
+    zh: "部分多选 LUT 在本机未找到，已从导入选择中移除。",
+    en: "Some selected LUTs were not found locally and were removed from the imported selection.",
+  },
   recipe_import_warning_fridge_conflict_puzzle: {
     zh: "导入的配方同时启用了冰箱贴模式和拼图模式。为保持状态有效，拼图模式已被禁用。",
     en: "The imported recipe enabled both fridge magnet mode and puzzle mode. Puzzle mode has been disabled to keep the state valid.",
@@ -6910,6 +6954,214 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   mat_gradient_library_import_hint: {
     zh: "可一次选择多个 ZIP；导出文件也可再次批量导入。",
     en: "You can choose multiple ZIP files at once, and exported bundles can be imported again in bulk.",
+  },
+  lut_library_title: {
+    zh: "LUT库",
+    en: "LUT Library",
+  },
+  lut_library_total_label: {
+    zh: "本地 LUT",
+    en: "Local LUTs",
+  },
+  lut_library_cloud_label: {
+    zh: "云端安装",
+    en: "Cloud Installed",
+  },
+  lut_library_custom_label: {
+    zh: "自定义",
+    en: "Custom",
+  },
+  lut_library_mode_count_label: {
+    zh: "颜色模式",
+    en: "Color Modes",
+  },
+  lut_library_refresh_btn: {
+    zh: "刷新本地库",
+    en: "Refresh Library",
+  },
+  lut_library_upload_btn: {
+    zh: "导入 LUT 文件",
+    en: "Import LUT File",
+  },
+  lut_library_search_placeholder: {
+    zh: "搜索名称、厂商、路径、颜色模式",
+    en: "Search name, maker, path, or color mode",
+  },
+  lut_library_loading: {
+    zh: "正在加载本地 LUT...",
+    en: "Loading local LUTs...",
+  },
+  lut_library_empty: {
+    zh: "没有匹配的本地 LUT。",
+    en: "No matching local LUTs.",
+  },
+  lut_library_load_failed: {
+    zh: "读取本地 LUT 库失败",
+    en: "Failed to load local LUT library",
+  },
+  lut_library_upload_success: {
+    zh: "LUT 已导入本地库。",
+    en: "LUT imported into the local library.",
+  },
+  lut_library_upload_failed: {
+    zh: "LUT 导入失败",
+    en: "LUT import failed",
+  },
+  lut_library_group_count: {
+    zh: "{count} 个 LUT",
+    en: "{count} LUTs",
+  },
+  lut_library_origin_cloud: {
+    zh: "云端",
+    en: "Cloud",
+  },
+  lut_library_origin_custom: {
+    zh: "自定义",
+    en: "Custom",
+  },
+  lut_library_origin_preset: {
+    zh: "预设",
+    en: "Preset",
+  },
+  lut_library_color_mode_label: {
+    zh: "颜色模式",
+    en: "Color Mode",
+  },
+  lut_library_source_kind_label: {
+    zh: "来源类型",
+    en: "Source Kind",
+  },
+  lut_library_path_label: {
+    zh: "路径",
+    en: "Path",
+  },
+  lut_library_fingerprint_label: {
+    zh: "指纹",
+    en: "Fingerprint",
+  },
+  lut_library_details_btn: {
+    zh: "查看详情",
+    en: "View Details",
+  },
+  lut_library_unknown: {
+    zh: "未知",
+    en: "Unknown",
+  },
+  lut_sync_title: {
+    zh: "云端 LUT 库",
+    en: "Cloud LUT Library",
+  },
+  lut_sync_catalog_count_label: {
+    zh: "云端条目",
+    en: "Cloud Items",
+  },
+  lut_sync_catalog_loaded_inline: {
+    zh: "已加载 {loaded} / {total} 个云端 LUT",
+    en: "Loaded {loaded} / {total} cloud LUTs",
+  },
+  lut_sync_installed_count_label: {
+    zh: "已安装",
+    en: "Installed",
+  },
+  lut_sync_config_label: {
+    zh: "远端配置",
+    en: "Remote",
+  },
+  lut_sync_configured: {
+    zh: "已配置",
+    en: "Configured",
+  },
+  lut_sync_not_configured: {
+    zh: "未配置",
+    en: "Not configured",
+  },
+  lut_sync_refresh_btn: {
+    zh: "刷新云端目录",
+    en: "Refresh Catalog",
+  },
+  lut_sync_load_more_btn: {
+    zh: "加载更多",
+    en: "Load More",
+  },
+  lut_sync_status_failed: {
+    zh: "读取云端 LUT 库失败",
+    en: "Failed to load cloud LUT library",
+  },
+  lut_sync_catalog_not_configured: {
+    zh: "尚未配置云端 LUT 库。本地 LUT 仍可离线使用；配置 LUMINA_LUT_REGISTRY_URL 后会显示云端 LUT。",
+    en: "Cloud LUT registry is not configured. Local LUTs remain available offline; configure LUMINA_LUT_REGISTRY_URL to show cloud LUTs.",
+  },
+  lut_sync_catalog_refresh_success: {
+    zh: "云端 LUT 目录已刷新。",
+    en: "Cloud LUT catalog refreshed.",
+  },
+  lut_sync_search_placeholder: {
+    zh: "搜索名称、厂商、路径或 ID",
+    en: "Search name, maker, path, or ID",
+  },
+  lut_sync_install_btn: {
+    zh: "下载到本地",
+    en: "Download",
+  },
+  lut_sync_installed_btn: {
+    zh: "已安装",
+    en: "Installed",
+  },
+  lut_sync_local_available_btn: {
+    zh: "已安装",
+    en: "Installed",
+  },
+  lut_sync_install_success: {
+    zh: "LUT 已下载并安装到本地。",
+    en: "LUT downloaded and installed locally.",
+  },
+  lut_sync_install_failed: {
+    zh: "LUT 下载失败",
+    en: "LUT download failed",
+  },
+  lut_sync_catalog_empty: {
+    zh: "没有匹配的云端 LUT。",
+    en: "No matching cloud LUTs.",
+  },
+  lut_sync_loading: {
+    zh: "正在加载云端 LUT...",
+    en: "Loading cloud LUTs...",
+  },
+  lut_sync_package_size_label: {
+    zh: "体积",
+    en: "Size",
+  },
+  lut_sync_content_fingerprint_label: {
+    zh: "内容指纹",
+    en: "Fingerprint",
+  },
+  lut_sync_color_mode_label: {
+    zh: "颜色模式",
+    en: "Color Mode",
+  },
+  lut_sync_catalog_state_label: {
+    zh: "状态",
+    en: "Status",
+  },
+  lut_sync_catalog_state_not_installed: {
+    zh: "未下载",
+    en: "Not Downloaded",
+  },
+  lut_sync_catalog_state_installed: {
+    zh: "已安装",
+    en: "Installed",
+  },
+  lut_sync_catalog_state_local_available: {
+    zh: "已安装",
+    en: "Installed",
+  },
+  lut_sync_local_path_label: {
+    zh: "本地路径",
+    en: "Local Path",
+  },
+  lut_sync_unknown: {
+    zh: "未知",
+    en: "Unknown",
   },
   mat_sync_title: {
     zh: "云端耗材库",

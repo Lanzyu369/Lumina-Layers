@@ -31,6 +31,20 @@ function ensureHash(hex: string): string {
   return hex.startsWith("#") ? hex : `#${hex}`;
 }
 
+function normalizeLegacyLutNames(state: ConverterState): string[] {
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const rawName of state.lut_names.length > 0 ? state.lut_names : [state.lut_name]) {
+    const name = rawName.trim();
+    if (!name || seen.has(name)) {
+      continue;
+    }
+    seen.add(name);
+    names.push(name);
+  }
+  return names;
+}
+
 function cloneVirtualMaterials(
   materials: Array<{ name: string; hex: string }> | undefined,
 ): Array<{ name: string; hex: string }> | undefined {
@@ -104,6 +118,7 @@ export function exportConverterRecipe(
   for (const [hex, height] of Object.entries(state.color_height_map)) {
     normalizedHeightMap[ensureHash(hex)] = height;
   }
+  const selectedLegacyLutNames = normalizeLegacyLutNames(state);
 
   const lutRef: LutReference = {
     name: state.lut_name,
@@ -127,6 +142,9 @@ export function exportConverterRecipe(
     },
     source: {
       source_version: state.source_version,
+      ...(state.source_version === "legacy" && selectedLegacyLutNames.length > 0
+        ? { selected_legacy_lut_names: selectedLegacyLutNames }
+        : {}),
       selected_native_brand_key: state.selectedNativeBrandKey,
       selected_native_db_names: [...state.selectedNativeDbNames],
       color_layers: state.color_layers,
