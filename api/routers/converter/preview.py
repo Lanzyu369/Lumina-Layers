@@ -89,6 +89,9 @@ log = get_logger(__name__)
 _PREVIEW_GENERATION_FAILED_DETAIL = (
     "Preview generation failed. Re-run preview and try again."
 )
+_CROP_FAILED_DETAIL = (
+    "Image crop failed. Please retry or choose a different image."
+)
 AUTO_DETECT_COLORS_FAILED_DETAIL = (
     "颜色分析失败，请重新上传图片，或手动设置颜色数后继续。"
 )
@@ -784,11 +787,22 @@ async def crop_image(
         w, h = ImagePreprocessor.get_image_dimensions(cropped_path)
 
         # 5. Register cropped file and return response
-        file_id = registry.register_path(
-            str(uuid.uuid4()),
-            cropped_path,
-            ttl_seconds=EPHEMERAL_PREVIEW_TTL_SECONDS,
-        )
+        try:
+            file_id = registry.register_path(
+                str(uuid.uuid4()),
+                cropped_path,
+                ttl_seconds=EPHEMERAL_PREVIEW_TTL_SECONDS,
+            )
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            log.error(
+                "Crop result registration failed",
+                extra={
+                    "event": "converter_crop_registration_failed",
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                },
+            )
+            raise HTTPException(status_code=500, detail=_CROP_FAILED_DETAIL) from exc
         registered_result = True
         return CropResponse(
             status="ok",

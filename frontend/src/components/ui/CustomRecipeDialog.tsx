@@ -35,6 +35,43 @@ interface PaletteOption {
   hex?: string | null;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasCustomRecipeValidationPath(error: unknown): boolean {
+  const response = isRecord(error) && isRecord(error.response) ? error.response : null;
+  const data = isRecord(response?.data) ? response.data : null;
+  const detail = data?.detail;
+  if (!Array.isArray(detail)) {
+    return false;
+  }
+  return detail.some((item) => {
+    const loc = isRecord(item) ? item.loc : null;
+    if (!Array.isArray(loc)) {
+      return false;
+    }
+    const parts = loc.map((part) => String(part));
+    return (
+      parts.length === 2 &&
+        parts[0] === "body" &&
+        (parts[1] === "recipe" || parts[1] === "region_ids")
+    ) || (
+      parts.length === 4 &&
+        parts[0] === "body" &&
+        parts[1] === "virtual_materials" &&
+        parts[3] === "hex"
+    );
+  });
+}
+
+function resolveCustomRecipeError(error: unknown, fallback: string): string {
+  if (hasCustomRecipeValidationPath(error)) {
+    return fallback;
+  }
+  return apiErrorToVisibleMessage(error, fallback);
+}
+
 interface Props {
   open: boolean;
   sessionId: string;
@@ -870,7 +907,7 @@ export default function CustomRecipeDialog({
       setPrediction(response);
       setLastPredictFromModel(true);
     } catch (err) {
-      const message = apiErrorToVisibleMessage(
+      const message = resolveCustomRecipeError(
         err,
         t("recipe_custom_predict_failed"),
       );
@@ -969,7 +1006,7 @@ export default function CustomRecipeDialog({
       }
     } catch (err) {
       setErrorKind("unknown");
-      setError(apiErrorToVisibleMessage(err, t("recipe_custom_apply_failed")));
+      setError(resolveCustomRecipeError(err, t("recipe_custom_apply_failed")));
     } finally {
       setIsApplying(false);
     }

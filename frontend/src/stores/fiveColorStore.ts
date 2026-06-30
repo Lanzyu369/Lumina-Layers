@@ -45,6 +45,31 @@ let baseColorsRequestSequence = 0;
 let queryRequestSequence = 0;
 let matchColorRequestSequence = 0;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasBackendValidationPath(error: unknown): boolean {
+  const response = isRecord(error) && isRecord(error.response) ? error.response : null;
+  const data = isRecord(response?.data) ? response.data : null;
+  const detail = data?.detail;
+  if (!Array.isArray(detail)) {
+    return false;
+  }
+  return detail.some((item) => {
+    const loc = isRecord(item) ? item.loc : null;
+    if (!Array.isArray(loc)) {
+      return false;
+    }
+    return loc.some((part) => {
+      if (typeof part !== "string") {
+        return false;
+      }
+      return part === "body" || part === "recipes" || part === "selected_indices";
+    });
+  });
+}
+
 function fiveColorErrorMessage(error: unknown, fallbackKey: string): string {
   if (!error || typeof error !== "object") {
     return fallbackKey;
@@ -54,6 +79,14 @@ function fiveColorErrorMessage(error: unknown, fallbackKey: string): string {
     return fallbackKey;
   }
   return lutErrorToVisibleMessage(error, fallbackKey);
+}
+
+function fiveColorSwatchErrorMessage(error: unknown): string {
+  const fallbackKey = "five_color_error_generate_swatch_failed";
+  if (hasBackendValidationPath(error)) {
+    return fallbackKey;
+  }
+  return fiveColorErrorMessage(error, fallbackKey);
 }
 
 function invalidateMatchColorRequests() {
@@ -517,7 +550,7 @@ export const useFiveColorStore = create<FiveColorState & FiveColorActions>()(
           });
         } catch (error) {
           set({
-            error: fiveColorErrorMessage(error, "five_color_error_generate_swatch_failed"),
+            error: fiveColorSwatchErrorMessage(error),
             isGeneratingSwatch: false,
           });
         }
