@@ -186,16 +186,20 @@ class TestCropTempFileLifecycle:
         monkeypatch.setattr(config, "TEMP_DIR", str(tmp_path))
         test_app = create_app()
         test_app.dependency_overrides[get_file_registry] = lambda: FailingRegistry()
-        isolated_client = TestClient(test_app)
+        isolated_client = TestClient(test_app, raise_server_exceptions=False)
         buf = _make_rgb_png(20, 10)
 
-        with pytest.raises(RuntimeError, match="registry unavailable"):
-            isolated_client.post(
-                "/api/convert/crop",
-                files={"image": ("test.png", buf, "image/png")},
-                data={"x": "0", "y": "0", "width": "5", "height": "5"},
-            )
+        response = isolated_client.post(
+            "/api/convert/crop",
+            files={"image": ("test.png", buf, "image/png")},
+            data={"x": "0", "y": "0", "width": "5", "height": "5"},
+        )
 
+        assert response.status_code == 500
+        assert response.json() == {
+            "detail": "Image crop failed. Please retry or choose a different image.",
+        }
+        assert "registry unavailable" not in response.text
         assert sorted(tmp_path.iterdir()) == []
 
 

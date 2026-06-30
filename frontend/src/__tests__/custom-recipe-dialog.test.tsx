@@ -88,6 +88,21 @@ function renderDialog(
   return render(<CustomRecipeDialog {...baseProps} {...overrides} />);
 }
 
+function apiValidationFailure(
+  loc: Array<string | number>,
+  msg = "Field required",
+) {
+  return Object.assign(new Error("Request failed with status code 422"), {
+    response: {
+      status: 422,
+      data: {
+        detail: [{ loc, msg }],
+      },
+      headers: {},
+    },
+  });
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -233,6 +248,42 @@ describe("CustomRecipeDialog", () => {
     expect(banner.className).not.toContain("amber");
   });
 
+  it("hides backend validation paths from prediction failures", async () => {
+    predictCustomRecipeMock.mockRejectedValueOnce(
+      apiValidationFailure(["body", "recipe"], "Recipe is required"),
+    );
+    renderDialog();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "recipe_custom_predict" }),
+    );
+
+    const banner = await screen.findByTestId("recipe-error-banner");
+    expect(banner).toHaveTextContent("recipe_custom_predict_failed");
+    expect(banner).not.toHaveTextContent("body.recipe");
+    expect(banner).not.toHaveTextContent("recipe: Recipe is required");
+    expect(banner).not.toHaveTextContent("Request failed with status code 422");
+    expect(banner.className).toContain("red");
+    expect(banner.className).not.toContain("amber");
+  });
+
+  it("keeps non-target prediction validation details visible", async () => {
+    predictCustomRecipeMock.mockRejectedValueOnce(
+      apiValidationFailure(["body", "layer_order"], "Layer order is invalid"),
+    );
+    renderDialog();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "recipe_custom_predict" }),
+    );
+
+    const banner = await screen.findByTestId("recipe-error-banner");
+    expect(banner).toHaveTextContent("body.layer_order: Layer order is invalid");
+    expect(banner).not.toHaveTextContent("recipe_custom_predict_failed");
+    expect(banner.className).toContain("red");
+    expect(banner.className).not.toContain("amber");
+  });
+
   it("stays open after a successful apply and shows the applied banner", async () => {
     applyRecipeOverrideMock.mockResolvedValueOnce(applyResponse());
     const onClose = vi.fn();
@@ -266,6 +317,24 @@ describe("CustomRecipeDialog", () => {
     const banner = await screen.findByTestId("recipe-error-banner");
     expect(banner).toHaveTextContent("服务器发生内部错误");
     expect(banner).not.toHaveTextContent("Request failed with status code 500");
+  });
+
+  it("hides backend validation paths from apply failures", async () => {
+    applyRecipeOverrideMock.mockRejectedValueOnce(
+      apiValidationFailure(
+        ["body", "virtual_materials", 0, "hex"],
+        "String should match pattern",
+      ),
+    );
+    renderDialog();
+
+    fireEvent.click(screen.getByRole("button", { name: "recipe_custom_apply" }));
+
+    const banner = await screen.findByTestId("recipe-error-banner");
+    expect(banner).toHaveTextContent("recipe_custom_apply_failed");
+    expect(banner).not.toHaveTextContent("body.virtual_materials.0.hex");
+    expect(banner).not.toHaveTextContent("virtual_materials");
+    expect(banner).not.toHaveTextContent("Request failed with status code 422");
   });
 
   it("restores the prior recipe when the undo button is clicked", () => {
