@@ -5395,6 +5395,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           return; // Superseded by a newer request.
         }
         set({
+          materialSuggestions: null,
+          materialSuggestionsTargetHex: cleaned,
           materialSuggestionsLoading: false,
           materialSuggestionsError: visibleConverterError(
             err,
