@@ -1657,7 +1657,7 @@ class BambuStudio3MFWriter:
             if application_metadata:
                 return application_metadata
         _VERSION_MAP = {
-            "SnapmakerOrca": "BambuStudio-2.2.4",
+            "SnapmakerOrca": "SnapmakerOrca-02.02.49.02",
             "ElegooSlicer": "ElegooSlicer-1.3.2.9",
             "OrcaSlicer": "BambuStudio-2.3.2-rc2",
             "AnycubicSlicerNext": "BambuStudio-1.3.9.4",
@@ -1674,6 +1674,10 @@ class BambuStudio3MFWriter:
         if self.printer_id in h2_family:
             return "02.05.00.66"
         return "02.04.00.70"
+
+    def _get_snapmaker_orca_client_version(self) -> str:
+        """Return the Snapmaker Orca client-version stamp."""
+        return "02.02.49.02"
 
     @staticmethod
     def _format_orca_slicer_version_tag(value: object) -> str:
@@ -2482,6 +2486,15 @@ class BambuStudio3MFWriter:
                     attrib={"key": "X-BBL-Client-Version", "value": registry_client_version or "01.03.02.09"},
                 )
                 ET.SubElement(header, "header_item", attrib={"key": "X-BBL-Client-Name", "value": "ElegooSlicer"})
+            elif self.slicer == "SnapmakerOrca":
+                ET.SubElement(
+                    header,
+                    "header_item",
+                    attrib={
+                        "key": "X-BBL-Client-Version",
+                        "value": registry_client_version or self._get_snapmaker_orca_client_version(),
+                    },
+                )
             else:
                 ET.SubElement(
                     header,
