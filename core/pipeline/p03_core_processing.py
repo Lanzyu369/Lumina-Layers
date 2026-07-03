@@ -288,21 +288,34 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     #    背景时，AA 混合完全发生在 RGB 上而 alpha 仍为 255，因此只有频次信号
     #    可靠，alpha 阈值无效。)
     #
-    # 2. **Raster path** (PNG/JPG/HEIC). Apply edge-preserving smoothing,
-    #    then K-Means. The K-Means quantizer now always honours the
-    #    ``unique RGB count <= quantize_colors_n`` contract (the per-channel
-    #    post-blur that used to violate it has been removed), so the
-    #    material-archive solver and its cache receive a palette bounded
-    #    by the user's requested colour count.
-    #    (K-Means 量化器已恒定满足调色板契约，之前会把 unique 数炸到
-    #    10-100 倍的后量化 medianBlur 已整块删除，耗材档案分支也不再需要
-    #    显式跳过。)
+    # 2. **Raster path** (PNG/JPG/HEIC). High-fidelity raster previews still
+    #    apply edge-preserving smoothing before K-Means. Pixel-mode raster art
+    #    preserves the nearest-resized source palette when it fits the user's
+    #    colour budget; if it exceeds the budget, K-Means runs on those raw
+    #    pixels directly instead of synthesizing boundary colours first.
+    #    (高保真栅格仍先做边缘保持平滑再 K-Means；像素模式保留最近邻缩放后的
+    #    原始色板，超出预算时也直接量化原始像素，避免先平滑出边界脏色。)
+    modeling_mode_value = getattr(modeling_mode, "value", modeling_mode)
     if is_svg:
         quantized_image = _snap_svg_to_fill_palette(
             rgb_arr=rgb_arr,
             mask_transparent=mask_transparent,
             quantize_budget=quantize_colors_n,
         )
+    elif modeling_mode_value == ModelingMode.PIXEL.value:
+        visible_rgb = rgb_arr[mask_solid].reshape(-1, 3)
+        if visible_rgb.size == 0:
+            quantized_image = rgb_arr.copy()
+        else:
+            unique_visible = np.unique(visible_rgb, axis=0)
+            if unique_visible.shape[0] <= quantize_colors_n:
+                quantized_image = rgb_arr.copy()
+            else:
+                # Pixel mode must not blur hard-edged source art. If the
+                # visible palette exceeds the requested budget, quantize the
+                # nearest-resized pixels directly instead of synthesizing
+                # boundary colors through the high-fidelity smoothing path.
+                quantized_image = kmeans_quantize(rgb_arr, quantize_colors_n)
     else:
         rgb_processed = apply_bilateral_filter(rgb_arr, 10)
         rgb_processed = apply_median_filter(rgb_processed, 0)
