@@ -802,6 +802,91 @@ class TestVectorPreviewBackingMaskRegression:
         assert int(cache["material_matrix"][23, 3, 0]) == 3
         assert len(full_bool_allocations) <= 2
 
+    def test_preview_cache_uses_compact_signed_material_matrix_dtype(self):
+        shape = box(0, 0, 10, 10)
+        analysis = VectorAnalysis(
+            shape_data=[],
+            clipped_shapes=[
+                {"geometry": shape, "color": (255, 0, 0), "draw_order": 0}
+            ],
+            matched_shapes=[
+                {
+                    "geometry": shape,
+                    "recipe": [-1, 0, 1, 7],
+                    "color": (255, 0, 0),
+                    "matched_rgb": (255, 0, 0),
+                }
+            ],
+            silhouette=shape,
+            scale_factor=1.0,
+            bbox=(0.0, 0.0, 10.0, 10.0),
+            color_conf={},
+            slot_names=[
+                "Air",
+                "White",
+                "Red",
+                "Green",
+                "Blue",
+                "Yellow",
+                "Cyan",
+                "Black",
+            ],
+            num_channels=8,
+            num_layers=4,
+            preview_colors={},
+            stage_timings={},
+        )
+
+        cache = VectorProcessor.build_preview_cache(
+            analysis,
+            pixels_per_mm=1.0,
+            supersample_preview=1,
+        )
+
+        assert cache["material_matrix"].dtype == np.dtype(np.int8)
+        np.testing.assert_array_equal(
+            cache["material_matrix"][1, 1],
+            np.asarray([-1, 0, 1, 7], dtype=np.int8),
+        )
+
+    def test_preview_cache_promotes_material_matrix_dtype_for_large_indices(self):
+        shape = box(0, 0, 10, 10)
+        analysis = VectorAnalysis(
+            shape_data=[],
+            clipped_shapes=[
+                {"geometry": shape, "color": (255, 0, 0), "draw_order": 0}
+            ],
+            matched_shapes=[
+                {
+                    "geometry": shape,
+                    "recipe": [0, 128],
+                    "color": (255, 0, 0),
+                    "matched_rgb": (255, 0, 0),
+                }
+            ],
+            silhouette=shape,
+            scale_factor=1.0,
+            bbox=(0.0, 0.0, 10.0, 10.0),
+            color_conf={},
+            slot_names=["0", "128"],
+            num_channels=129,
+            num_layers=2,
+            preview_colors={},
+            stage_timings={},
+        )
+
+        cache = VectorProcessor.build_preview_cache(
+            analysis,
+            pixels_per_mm=1.0,
+            supersample_preview=1,
+        )
+
+        assert cache["material_matrix"].dtype == np.dtype(np.int16)
+        np.testing.assert_array_equal(
+            cache["material_matrix"][1, 1],
+            np.asarray([0, 128], dtype=np.int16),
+        )
+
 
 class TestVectorCoatingBuildMeshRegression:
 

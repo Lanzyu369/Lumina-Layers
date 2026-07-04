@@ -1589,6 +1589,30 @@ class VectorAnalysis:
     image_vectorizer_bounds: object | None = None
 
 
+def _signed_dtype_for_int_range(min_value: int, max_value: int) -> np.dtype:
+    """Return the smallest signed dtype that can hold the integer range."""
+
+    for dtype in (np.int8, np.int16, np.int32, np.int64):
+        info = np.iinfo(dtype)
+        if min_value >= info.min and max_value <= info.max:
+            return np.dtype(dtype)
+    return np.dtype(np.int64)
+
+
+def _material_matrix_dtype_for_vector_analysis(analysis: "VectorAnalysis") -> np.dtype:
+    """Return the compact material-matrix dtype needed by an analysis."""
+
+    min_value = -1
+    max_value = max(0, int(getattr(analysis, "num_channels", 0) or 0) - 1)
+    num_layers = max(0, int(getattr(analysis, "num_layers", 0) or 0))
+    for shape in getattr(analysis, "matched_shapes", []) or []:
+        for raw_value in (shape.get("recipe") or [])[:num_layers]:
+            value = int(raw_value)
+            min_value = min(min_value, value)
+            max_value = max(max_value, value)
+    return _signed_dtype_for_int_range(min_value, max_value)
+
+
 def apply_recipe_overrides_to_analysis(
     analysis: "VectorAnalysis",
     *,
@@ -4032,7 +4056,12 @@ class VectorProcessor:
         matched_rgb = np.full((h_px, w_px, 3), 255, dtype=np.uint8)
         quantized_image = np.full((h_px, w_px, 3), 255, dtype=np.uint8)
         mask_solid = np.zeros((h_px, w_px), dtype=bool)
-        material_matrix = np.full((h_px, w_px, analysis.num_layers), -1, dtype=np.int16)
+        material_matrix_dtype = _material_matrix_dtype_for_vector_analysis(analysis)
+        material_matrix = np.full(
+            (h_px, w_px, analysis.num_layers),
+            -1,
+            dtype=material_matrix_dtype,
+        )
 
         ss = max(1, int(supersample_preview))
         ss_h = h_px * ss
@@ -4250,7 +4279,11 @@ class VectorProcessor:
             )
 
             recipe = shape.get("recipe") or []
-            recipe_full = np.full((analysis.num_layers,), -1, dtype=np.int16)
+            recipe_full = np.full(
+                (analysis.num_layers,),
+                -1,
+                dtype=material_matrix_dtype,
+            )
             for idx, value in enumerate(recipe[: analysis.num_layers]):
                 recipe_full[idx] = int(value)
 
