@@ -295,7 +295,46 @@ def test_catalog_marks_existing_local_lut_available(
 ) -> None:
     local_lut = _isolated_lut_dir / "Official" / "Test" / "Readable LUT.json"
     local_lut.parent.mkdir(parents=True)
-    local_lut.write_text('{"color_mode":"4-Color (RYBW)","entries":[]}', encoding="utf-8")
+    lut_bytes = b'{"color_mode":"4-Color (RYBW)","entries":[]}'
+    local_lut.write_bytes(lut_bytes)
+    content_hash = _registry_lut_content_hash("Official/Test/Readable LUT.json", lut_bytes)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "items": [
+                    {
+                        "lut_id": "registry-lut",
+                        "revision_id": "rev-1",
+                        "content_hash": "sha256:" + content_hash,
+                        "local_path": "Official/Test/Readable LUT.json",
+                        "package_url": "/packages/one.zip",
+                    }
+                ],
+                "total": 1,
+            },
+        )
+
+    monkeypatch.setenv("LUMINA_LUT_REGISTRY_URL", "https://registry.example/api/material-registry/v1")
+
+    payload = sync.fetch_remote_catalog(
+        client=httpx.Client(transport=httpx.MockTransport(handler))
+    )
+
+    item = payload["items"][0]
+    assert item["local_state"] == "local_available"
+    assert item["local_exists"] is True
+    assert item["local_match_path"] == "Official/Test/Readable LUT.json"
+
+
+def test_catalog_does_not_mark_path_match_available_when_content_hash_differs(
+    _isolated_lut_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    local_lut = _isolated_lut_dir / "Official" / "Test" / "Readable LUT.json"
+    local_lut.parent.mkdir(parents=True)
+    local_lut.write_bytes(b'{"color_mode":"4-Color (RYBW)","entries":[]}')
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -321,8 +360,8 @@ def test_catalog_marks_existing_local_lut_available(
     )
 
     item = payload["items"][0]
-    assert item["local_state"] == "local_available"
-    assert item["local_exists"] is True
+    assert item["local_state"] == "not_installed"
+    assert item["local_exists"] is False
     assert item["local_match_path"] == "Official/Test/Readable LUT.json"
 
 
@@ -1150,6 +1189,7 @@ def test_install_requires_package_integrity_fields(
 def test_router_catalog_status_install_success(monkeypatch: pytest.MonkeyPatch) -> None:
     bundle = _bundle_bytes()
     entry = _entry(bundle)
+    invalidations: list[bool] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/luts/catalog"):
@@ -1158,6 +1198,10 @@ def test_router_catalog_status_install_success(monkeypatch: pytest.MonkeyPatch) 
 
     monkeypatch.setenv("LUMINA_LUT_REGISTRY_URL", "https://registry.example/api/material-registry/v1")
     monkeypatch.setattr(sync, "_make_http_client", lambda: httpx.Client(transport=httpx.MockTransport(handler)))
+    monkeypatch.setattr(
+        "api.routers.lut_registry.invalidate_lut_details_service_cache",
+        lambda: invalidations.append(True),
+    )
     client = TestClient(create_app())
 
     catalog = client.get("/api/lut-registry/catalog")
@@ -1173,6 +1217,7 @@ def test_router_catalog_status_install_success(monkeypatch: pytest.MonkeyPatch) 
     assert status.json()["configured"] is True
     assert installed.status_code == 200
     assert installed.json()["lut_id"] == entry["lut_id"]
+    assert invalidations == [True]
 
 
 def test_router_maps_config_and_package_errors(monkeypatch: pytest.MonkeyPatch) -> None:

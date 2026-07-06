@@ -225,7 +225,7 @@ def _resolve_lut_details_service():
     return _lut_details_service
 
 
-def _invalidate_lut_details_service_cache() -> None:
+def invalidate_lut_details_service_cache() -> None:
     """Drop cached LUT catalog/list state after LUT files change.
     在 LUT 文件变更后丢弃 LUT 目录/列表缓存状态。
     """
@@ -237,6 +237,10 @@ def _invalidate_lut_details_service_cache() -> None:
     LUTManager.invalidate_source_catalog_cache()
     LUTManager.invalidate_native_source_index_cache()
     get_lut_details_service.cache_clear()
+
+
+def _invalidate_lut_details_service_cache() -> None:
+    invalidate_lut_details_service_cache()
 
 
 @router.get("/list")

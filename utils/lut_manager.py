@@ -1018,23 +1018,18 @@ class LUTManager:
             raise ValueError("legacy_multi requires lut_names or lut_name")
         return normalized
 
-    @staticmethod
-    def _palette_signature(metadata: LUTMetadata) -> tuple[tuple[str, str, str | None, str | None], ...]:
-        return tuple(
-            (
-                str(entry.color),
-                str(entry.material),
-                entry.hex_color,
-                entry.color_name,
-            )
-            for entry in metadata.palette
-        )
-
     @classmethod
     def _legacy_multi_compatibility_signature(cls, metadata: LUTMetadata) -> dict[str, Any]:
+        """Return the runtime compatibility shape for legacy_multi LUTs.
+
+        返回传统多选 LUT 的运行时兼容形状。
+
+        The signature intentionally excludes color_mode and palette contents:
+        multi-select combines 2/4/6/8-color legacy LUTs into a wider runtime
+        palette, so those fields are expected to differ across selected LUTs.
+        """
+
         return {
-            "color_mode": str(metadata.color_mode or ""),
-            "palette": cls._palette_signature(metadata),
             "max_color_layers": int(metadata.max_color_layers),
             "layer_height_mm": round(float(metadata.layer_height_mm), 6),
             "line_width_mm": round(float(metadata.line_width_mm), 6),
@@ -1202,6 +1197,7 @@ class LUTManager:
             "layer_height_mm": round(float(metadata.layer_height_mm), 6),
             "line_width_mm": round(float(metadata.line_width_mm), 6),
             "base_layers": int(metadata.base_layers),
+            "base_channel_idx": int(metadata.base_channel_idx),
             "layer_order": str(metadata.layer_order),
         }
 

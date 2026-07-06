@@ -166,6 +166,65 @@ def test_collect_sync_attachments_copies_original_and_final(
     assert any(getattr(r, "attachment_kind", None) == "final_artifact" for r in attachment_logs)
 
 
+def test_collect_sync_attachments_preserves_legacy_multi_lut_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Multi-select legacy LUT reports keep every selected LUT.
+
+    传统多选 LUT 的反馈包必须保留所有选中 LUT。
+    """
+
+    repo_root = tmp_path / "repo"
+    lut_root = repo_root / "lut-preset"
+    custom_lut = lut_root / "Custom" / "CustomA.json"
+    preset_lut = lut_root / "Preset" / "PresetB.npy"
+    custom_lut.parent.mkdir(parents=True)
+    preset_lut.parent.mkdir(parents=True)
+    custom_lut.write_bytes(b'{"color_mode":"4-Color"}')
+    preset_lut.write_bytes(b"LUT-NPY")
+    monkeypatch.setattr("api.feedback_assembler.REPO_ROOT", repo_root)
+    monkeypatch.setattr(
+        LUTManager,
+        "get_lut_path",
+        staticmethod(
+            lambda name: {
+                "CustomA": str(custom_lut),
+                "PresetB": str(preset_lut),
+            }.get(name)
+        ),
+    )
+
+    ticket_dir = tmp_path / "LUM-20260707-001"
+    ticket_dir.mkdir()
+    payload: dict[str, Any] = {
+        "ticket_id": "LUM-20260707-001",
+        "context": {
+            "active_tab": "converter",
+            "source_version": "legacy",
+            "lut_name": "CustomA",
+            "lut_names": ["CustomA", "PresetB"],
+        },
+    }
+
+    result = collect_sync_attachments(
+        ticket_dir=ticket_dir,
+        payload=payload,
+        file_registry=_MockFileRegistry({}),
+        now=now_beijing(),
+    )
+
+    assert result.lut["status"] == "attached"
+    assert result.lut["kind"] == "multiple"
+    assert result.lut["names"] == ["CustomA", "PresetB"]
+    assert [item["name"] for item in result.lut["items"]] == ["CustomA", "PresetB"]
+    assert result.lut["items"][0]["status"] == "attached"
+    assert result.lut["items"][0]["filename"] == "lut_1.json"
+    assert (ticket_dir / "lut_1.json").read_bytes() == b'{"color_mode":"4-Color"}'
+    assert result.lut["items"][1]["status"] == "preset_reference_only"
+    assert result.lut["items"][1]["preset_relative_path"] == "lut-preset/Preset/PresetB.npy"
+
+
 def test_collect_sync_attachments_marks_copy_failures_explicitly(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

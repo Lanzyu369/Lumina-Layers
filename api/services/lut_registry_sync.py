@@ -285,6 +285,14 @@ def _catalog_item_local_presence(
             _safe_lut_path_under_root(item.get("local_path"), cloud=True)
         )
     if local_path is not None:
+        expected_hash = _hex_digest(item.get("content_hash"))
+        local_hash = _local_lut_content_hash(local_path, item.get("local_path"))
+        if expected_hash and local_hash != expected_hash:
+            return {
+                "local_state": "not_installed",
+                "local_exists": False,
+                "local_match_path": _relative_lut_preset_path(local_path),
+            }
         return {
             "local_state": "local_available",
             "local_exists": True,
@@ -296,6 +304,15 @@ def _catalog_item_local_presence(
         "local_exists": False,
         "local_match_path": None,
     }
+
+
+def _local_lut_content_hash(path: Path, catalog_local_path: Any) -> str | None:
+    try:
+        file_hash = _sha256(path.read_bytes())
+    except OSError:
+        return None
+    logical_name = PurePosixPath(str(catalog_local_path or path.name).replace("\\", "/")).name
+    return _sha256(f"{logical_name}:{file_hash}".encode("utf-8"))
 
 
 def _normalize_catalog_item(

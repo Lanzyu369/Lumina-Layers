@@ -382,6 +382,7 @@ class BugReportContext(BaseModel):
     active_session_ids: BugReportSessionIds
     color_mode: str | None = Field(default=None, max_length=64)
     lut_name: str | None = Field(default=None, max_length=256)
+    lut_names: list[str] = Field(default_factory=list, max_length=32)
     source_version: Literal["legacy", "native", "material"] | None = None
     selected_native_brand_key: str | None = Field(default=None, max_length=128)
     selected_native_db_names: list[str] = Field(default_factory=list, max_length=128)
@@ -407,6 +408,27 @@ class BugReportContext(BaseModel):
     # 采集自 ConverterStore 的分组高级生成参数。此处仅做形状校验（dict 或 null），
     # 真正的深度/大小裁剪由 submit_bug_report 中的专用 sanitizer 完成，便于复用。
     advanced_params: dict[str, Any] | None = None
+
+    @field_validator("lut_names", mode="before")
+    @classmethod
+    def _validate_lut_names(cls, value: Any) -> list[str]:
+        """Bound legacy multi-LUT names captured for repro.
+
+        限制用于复现的传统多选 LUT 名称列表。
+        """
+
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            return []
+        normalized: list[str] = []
+        for item in value[:32]:
+            if not isinstance(item, str):
+                continue
+            clean = item.strip()
+            if clean and len(clean) <= 256 and clean not in normalized:
+                normalized.append(clean)
+        return normalized
 
     @field_validator("recent_client_logs", mode="before")
     @classmethod

@@ -16,6 +16,7 @@ from api.services.lut_registry_sync import (
     install_lut_package,
     registry_status,
 )
+from api.routers.lut import invalidate_lut_details_service_cache
 from api.structured_logging import get_logger
 
 router = APIRouter(prefix="/api/lut-registry", tags=["LUT Registry"])
@@ -58,6 +59,7 @@ def install(request: LutRegistryInstallRequest) -> dict[str, Any]:
             revision_id=request.revision_id,
             channels=request.channels,
         )
+        invalidate_lut_details_service_cache()
     except (LutRegistryConfigError, LutRegistryRemoteError, LutRegistryPackageError) as exc:
         raise _to_http_exception(exc) from exc
 

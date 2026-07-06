@@ -160,9 +160,7 @@ export default function LutLibraryPanel() {
 
   const openDetails = useCallback(async (item: LutDetailsCatalogItem) => {
     const store = useLutDetailsStore.getState();
-    if (store.catalog.length === 0) {
-      await store.fetchCatalog();
-    }
+    await store.fetchCatalog();
     useLutDetailsStore.getState().setQuery("");
     useLutDetailsStore.getState().selectManufacturer(item.manufacturer);
     useLutDetailsStore.getState().selectLut(item.name);
