@@ -94,4 +94,15 @@ describe("LutLibraryPanel", () => {
     expect(fetchLutDetailsCatalog).toHaveBeenCalledTimes(2);
     expect(await screen.findByTestId("lut-library-success")).toHaveTextContent("LUT uploaded");
   });
+
+  it("refreshes the details catalog before opening a library LUT", async () => {
+    render(<LutLibraryPanel />);
+
+    const [card] = await screen.findAllByTestId("lut-library-card");
+    fireEvent.click(within(card).getByRole("button", { name: /详情|details/i }));
+
+    await waitFor(() => {
+      expect(fetchLutDetailsCatalog).toHaveBeenCalledTimes(2);
+    });
+  });
 });
