@@ -85,6 +85,64 @@ NON_FATAL_GLB_ERRORS = (
 )
 
 
+def _integer_value_bounds(value: object) -> tuple[int, int] | None:
+    if value is None:
+        return None
+    try:
+        array = np.asarray(value)
+    except (TypeError, ValueError):
+        return None
+    if array.size == 0:
+        return None
+    if not np.issubdtype(array.dtype, np.integer):
+        try:
+            array = array.astype(np.int64)
+        except (TypeError, ValueError, OverflowError):
+            return None
+    return int(array.min()), int(array.max())
+
+
+def _material_matrix_dtype_for_bounds(min_value: int, max_value: int) -> np.dtype:
+    for dtype in (np.int8, np.int16, np.int32, np.int64):
+        info = np.iinfo(dtype)
+        if min_value >= info.min and max_value <= info.max:
+            return np.dtype(dtype)
+    return np.dtype(np.int64)
+
+
+def _ensure_material_matrix_signed_capacity(
+    material_matrix: np.ndarray,
+    *candidate_values: object,
+) -> np.ndarray:
+    """Return a signed matrix dtype wide enough for pending material ids."""
+
+    if material_matrix.size:
+        min_value = int(material_matrix.min())
+        max_value = int(material_matrix.max())
+    else:
+        min_value = 0
+        max_value = 0
+    for value in candidate_values:
+        bounds = _integer_value_bounds(value)
+        if bounds is None:
+            continue
+        min_value = min(min_value, bounds[0])
+        max_value = max(max_value, bounds[1])
+
+    target_dtype = _material_matrix_dtype_for_bounds(min_value, max_value)
+    if (
+        np.issubdtype(material_matrix.dtype, np.signedinteger)
+        and material_matrix.dtype == target_dtype
+    ):
+        return material_matrix
+    if (
+        np.issubdtype(material_matrix.dtype, np.signedinteger)
+        and material_matrix.dtype.itemsize > target_dtype.itemsize
+    ):
+        return material_matrix
+    return material_matrix.astype(target_dtype, copy=False)
+
+
 def _validate_material_source(material_source: str) -> str:
     """Validate converter color-source selector from API form inputs."""
 

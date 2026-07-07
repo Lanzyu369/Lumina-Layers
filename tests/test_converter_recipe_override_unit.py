@@ -957,6 +957,90 @@ def test_apply_recipe_override_accepts_virtual_materials_and_extends_palette(
     ]
 
 
+def test_apply_recipe_override_preserves_high_virtual_material_indices(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    client, store, _registry = _client_with_state()
+    lut_path = tmp_path / "ref.msgpack"
+    lut_path.write_bytes(b"package")
+
+    session_id = store.create()
+    matched_rgb = np.zeros((4, 4, 3), dtype=np.uint8)
+    material_matrix = np.zeros((4, 4, 2), dtype=np.int32)
+    mask = np.zeros((4, 4), dtype=bool)
+    mask[1:3, 1:3] = True
+    preview_cache = {
+        "matched_rgb": matched_rgb,
+        "material_matrix": material_matrix,
+        "mask_solid": np.ones((4, 4), dtype=bool),
+        "color_layers": 2,
+        "layer_height_mm": 0.08,
+        "preview_colors": {0: [245, 245, 245, 255]},
+        "slot_names": ["White"],
+        "color_conf": {
+            "preview": {0: [245, 245, 245, 255]},
+            "slots": ["White"],
+        },
+    }
+    preview_cache_ref = externalize_preview_cache(
+        session_id,
+        store,
+        preview_cache,
+        root_dir=tmp_path,
+    )
+    assert preview_cache_ref["fields"]["material_matrix"]["dtype"] == "int8"
+    store.put(session_id, "lut_path", str(lut_path))
+    store.put(session_id, "preview_cache", preview_cache_ref)
+    store.put(session_id, "selected_region_mask", mask)
+    store.put(session_id, "selected_region_id", "region-1")
+    store.put(session_id, "selected_region_masks", {"region-1": mask})
+
+    palette_entry_cls = type(
+        "_PaletteEntry", (), {"__init__": lambda self, color: setattr(self, "color", color)}
+    )
+    metadata = LUTMetadata(
+        max_color_layers=2, layer_height_mm=0.08, base_channel_idx=0
+    )
+    metadata.palette = [palette_entry_cls(f"slot-{idx}") for idx in range(1024)]
+    metadata.layer_order = "Top2Bottom"
+    monkeypatch.setattr(
+        "api.routers.converter.replace.LUTManager.load_lut_with_metadata",
+        lambda _path: (np.zeros((0, 3), dtype=np.uint8), None, metadata),
+    )
+    monkeypatch.setattr(
+        "api.routers.converter.replace.schedule_glb_build",
+        lambda *_args, **_kwargs: None,
+    )
+
+    response = client.post(
+        "/api/convert/apply-recipe-override",
+        json={
+            "session_id": session_id,
+            "region_ids": ["region-1"],
+            "recipe": [0, 1024],
+            "layer_order": "Top2Bottom",
+            "color_layers": 2,
+            "layer_height_mm": 0.08,
+            "virtual_materials": [{"name": "HighVirtual", "hex": "#222222"}],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    session_data = store.get(session_id)
+    assert session_data is not None
+    updated_cache = hydrate_preview_cache(
+        session_data["preview_cache"],
+        fields={"material_matrix"},
+    )
+    updated_matrix = updated_cache["material_matrix"]
+    assert updated_matrix.dtype == np.dtype(np.int16)
+    np.testing.assert_array_equal(
+        updated_matrix[mask],
+        np.tile(np.array([0, 1024], dtype=np.int16), (int(mask.sum()), 1)),
+    )
+
+
 def test_apply_recipe_override_does_not_pollute_shared_color_system(
     monkeypatch,
     tmp_path: Path,
@@ -1497,6 +1581,61 @@ def test_generate_worker_inputs_pads_grown_layers_with_mask_solid_aware_fill(
     # 实体非 override 像素：原有层 0..2 保持 0，扩展层 3..5 为 base_channel_idx。
     assert np.all(written[1, 1, :3] == 0)
     assert np.all(written[1, 1, 3:] == 0)
+
+
+def test_generate_worker_inputs_preserve_high_virtual_material_indices(
+    tmp_path: Path,
+) -> None:
+    from api.routers.converter.generate import (
+        _prepare_recipe_override_worker_inputs,
+    )
+    from api.schemas.converter import ConvertGenerateRequest
+
+    store = SessionStore(ttl=1800)
+    session_id = store.create()
+    material_matrix = np.zeros((4, 4, 2), dtype=np.int8)
+    override_mask = np.zeros((4, 4), dtype=bool)
+    override_mask[1:3, 1:3] = True
+    cache = {
+        "material_matrix": material_matrix,
+        "mask_solid": np.ones((4, 4), dtype=bool),
+        "lut_metadata": LUTMetadata(
+            max_color_layers=2,
+            layer_height_mm=0.08,
+            base_channel_idx=0,
+        ),
+    }
+    cache["lut_metadata"].layer_order = "Top2Bottom"
+    session_data = {"selected_region_masks": {"region-1": override_mask}}
+    recipe_overrides = [
+        {
+            "region_id": "region-1",
+            "recipe": [0, 1024],
+            "layer_order": "Top2Bottom",
+        }
+    ]
+    request = ConvertGenerateRequest(
+        lut_name="test-lut",
+        color_layers=2,
+        recipe_overrides=recipe_overrides,
+    )
+
+    mm_path, _masks_path = _prepare_recipe_override_worker_inputs(
+        cache=cache,
+        session_data=session_data,
+        recipe_overrides=recipe_overrides,
+        request=request,
+        sid=session_id,
+        store=store,
+    )
+    assert mm_path is not None
+
+    written = np.load(mm_path)
+    assert written.dtype == np.dtype(np.int16)
+    np.testing.assert_array_equal(
+        written[override_mask],
+        np.tile(np.array([0, 1024], dtype=np.int16), (int(override_mask.sum()), 1)),
+    )
 
 
 def test_generate_worker_inputs_material_archive_pad_uses_inferred_base_channel(

@@ -77,9 +77,10 @@ def test_externalize_preview_cache_writes_arrays_and_manifest(
         assert field_path.parent == tmp_path
         assert str(field_path) in tracked_paths
         assert field_ref["revision"] == 1
-        assert field_ref["nbytes"] == cache[field_name].nbytes
+        stored = np.load(field_path)
+        assert field_ref["nbytes"] == stored.nbytes
         assert field_ref["sha256"]
-        np.testing.assert_array_equal(np.load(field_path), cache[field_name])
+        np.testing.assert_array_equal(stored, cache[field_name])
 
 
 def test_externalize_preview_cache_reuses_artifact_for_same_array_object(
@@ -131,6 +132,76 @@ def test_externalize_preview_cache_reuses_artifact_for_same_array_object(
         np.load(stored["fields"]["original_matched_rgb"]["path"]),
         cache["matched_rgb"],
     )
+
+
+def test_externalize_preview_cache_compacts_material_matrix_artifacts(
+    tmp_path: Path,
+) -> None:
+    store = SessionStore()
+    session_id = store.create("sid-artifact-compact-material")
+    material_matrix = np.array(
+        [
+            [[-1, 0], [1, 2]],
+            [[3, 4], [5, 7]],
+        ],
+        dtype=np.int32,
+    )
+    cache = {
+        "matched_rgb": np.zeros((2, 2, 3), dtype=np.uint8),
+        "material_matrix": material_matrix,
+        "original_material_matrix": material_matrix,
+        "mask_solid": np.ones((2, 2), dtype=bool),
+        "target_w": 2,
+        "target_h": 2,
+    }
+
+    ref = externalize_preview_cache(
+        session_id,
+        store,
+        cache,
+        root_dir=tmp_path,
+    )
+
+    material_ref = ref["fields"]["material_matrix"]
+    original_ref = ref["fields"]["original_material_matrix"]
+    assert material_ref["path"] == original_ref["path"]
+    assert material_ref["dtype"] == "int8"
+    assert material_ref["nbytes"] == material_matrix.size
+    stored = np.load(material_ref["path"])
+    assert stored.dtype == np.dtype(np.int8)
+    np.testing.assert_array_equal(stored, material_matrix.astype(np.int8))
+
+
+def test_externalize_preview_cache_preserves_material_archive_index_capacity(
+    tmp_path: Path,
+) -> None:
+    store = SessionStore()
+    session_id = store.create("sid-artifact-material-archive-capacity")
+    material_matrix = np.zeros((2, 2, 2), dtype=np.int32)
+    cache = {
+        "matched_rgb": np.zeros((2, 2, 3), dtype=np.uint8),
+        "material_matrix": material_matrix,
+        "mask_solid": np.ones((2, 2), dtype=bool),
+        "target_w": 2,
+        "target_h": 2,
+        "material_source": "material_archive",
+        "selected_material_count": 200,
+    }
+
+    ref = externalize_preview_cache(
+        session_id,
+        store,
+        cache,
+        root_dir=tmp_path,
+    )
+
+    material_ref = ref["fields"]["material_matrix"]
+    assert material_ref["dtype"] == "int16"
+    stored = np.load(material_ref["path"])
+    assert stored.dtype == np.dtype(np.int16)
+
+    stored[0, 0] = np.array([0, 199], dtype=stored.dtype)
+    assert stored[0, 0].tolist() == [0, 199]
 
 
 def test_externalize_preview_cache_cleans_partial_artifacts_on_write_failure(
