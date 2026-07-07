@@ -156,6 +156,24 @@ def _failed_lut(
     }
 
 
+def _empty_lut_attachment() -> dict[str, Any]:
+    """Return the default LUT attachment shape.
+
+    返回 LUT 附件默认结构，保证单选、多选、缺失路径字段一致。
+    """
+
+    return {
+        "status": "not_applicable",
+        "kind": None,
+        "name": None,
+        "preset_relative_path": None,
+        "filename": None,
+        "sha256": None,
+        "size_bytes": None,
+        "metadata": {},
+    }
+
+
 def _original_image_expected(context: dict[str, Any]) -> bool:
     ref = context.get("active_original_image_ref")
     return isinstance(ref, dict) and _is_non_empty_string(ref.get("session_id"))
@@ -859,16 +877,7 @@ def _collect_final_artifact(
 
 def _collect_lut(ticket_dir: Path, context: dict[str, Any]) -> dict[str, Any]:
     """Build the ``lut`` attachment dict."""
-    base = {
-        "status": "not_applicable",
-        "kind": None,
-        "name": None,
-        "preset_relative_path": None,
-        "filename": None,
-        "sha256": None,
-        "size_bytes": None,
-        "metadata": {},
-    }
+    base = _empty_lut_attachment()
     if context.get("source_version") == "material":
         return base
     if context.get("source_version") == "native":
@@ -929,7 +938,7 @@ def _collect_single_lut(
     found = _find_lut_file(lut_name)
     if found is None:
         return {
-            **base,
+            **_empty_lut_attachment(),
             "status": "unavailable",
             "name": lut_name,
         }
