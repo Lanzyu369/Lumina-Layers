@@ -254,7 +254,6 @@ describe("MaterialColorPicker", () => {
     });
     expect(screen.getAllByRole("button", { name: /ΔE=/ })).toHaveLength(2);
 
-    useConverterStore.getState().setPendingReplacement(null);
     await act(async () => {
       fireEvent.change(hexInput, { target: { value: failedTarget } });
       fireEvent.click(
@@ -265,6 +264,39 @@ describe("MaterialColorPicker", () => {
     expect(useConverterStore.getState().materialSuggestions).toBeNull();
     expect(useConverterStore.getState().pendingReplacement).toBeNull();
     expect(screen.queryByRole("button", { name: /ΔE=/ })).toBeNull();
+  });
+
+  it("clears stale pending replacement after an empty target submit", async () => {
+    const firstTarget = "#123409";
+    const emptyTarget = "#12340A";
+    fetchMaterialColorSuggestionsMock
+      .mockResolvedValueOnce(_stubResponse(firstTarget))
+      .mockResolvedValueOnce(_stubResponse(emptyTarget, { suggestions: [] }));
+    useConverterStore.setState({
+      selectionMode: "select-all",
+      selectedColor: null,
+      selectedColors: new Set(["d2aeb4", "cb9994"]),
+    });
+    render(<MaterialColorPicker />);
+
+    const hexInput = screen.getByPlaceholderText(/#RRGGBB/i) as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(hexInput, { target: { value: firstTarget } });
+      fireEvent.click(
+        screen.getByRole("button", { name: /suggest colors|生成建议/i }),
+      );
+    });
+    expect(useConverterStore.getState().pendingReplacement).not.toBeNull();
+
+    await act(async () => {
+      fireEvent.change(hexInput, { target: { value: emptyTarget } });
+      fireEvent.click(
+        screen.getByRole("button", { name: /suggest colors|生成建议/i }),
+      );
+    });
+
+    expect(useConverterStore.getState().materialSuggestions?.suggestions).toEqual([]);
+    expect(useConverterStore.getState().pendingReplacement).toBeNull();
   });
 
   it("surfaces error state from the store", async () => {

@@ -107,11 +107,19 @@ export default function MaterialColorPicker() {
         nextState.materialSuggestionsTargetHex === normalizedTarget
           ? nextState.materialSuggestions?.suggestions[0]
           : null;
-      if (firstSuggestion) {
-        stagePendingReplacement(firstSuggestion.hex);
+      const staged = firstSuggestion
+        ? stagePendingReplacement(firstSuggestion.hex)
+        : false;
+      if (!staged) {
+        setPendingReplacement(null);
       }
     },
-    [fetchSuggestions, hasMaterials, stagePendingReplacement],
+    [
+      fetchSuggestions,
+      hasMaterials,
+      stagePendingReplacement,
+      setPendingReplacement,
+    ],
   );
 
   const handleSuggestionClick = useCallback(
