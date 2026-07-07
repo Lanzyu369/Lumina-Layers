@@ -1461,6 +1461,7 @@ export interface ConverterState {
   autoHeightMode: AutoHeightMode;
   heightmapFile: File | null;
   heightmapThumbnailUrl: string | null;
+  heightmapUploadSessionId: string | null;
 
   // 3D 预览
   previewGlbUrl: string | null;
@@ -2324,6 +2325,7 @@ export const DEFAULT_STATE: ConverterState = {
   autoHeightMode: "darker-higher" as AutoHeightMode,
   heightmapFile: null,
   heightmapThumbnailUrl: null,
+  heightmapUploadSessionId: null,
   previewGlbUrl: null,
   previewPerformanceTiming: null,
   generatePerformanceTiming: null,
@@ -4984,16 +4986,33 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       set({ color_height_map: heightMap });
     },
 
-    setAutoHeightMode: (mode: AutoHeightMode) => set({ autoHeightMode: mode }),
+    setAutoHeightMode: (mode: AutoHeightMode) =>
+      set((state) => ({
+        autoHeightMode: mode,
+        ...(mode === "use-heightmap" && state.autoHeightMode !== "use-heightmap"
+          ? {
+              color_height_map: {},
+              heightmapThumbnailUrl: null,
+              heightmapUploadSessionId: null,
+            }
+          : {}),
+      })),
 
     // --- 高度图 ---
-    setHeightmapFile: (file: File | null) => set({ heightmapFile: file }),
+    setHeightmapFile: (file: File | null) =>
+      set({
+        heightmapFile: file,
+        heightmapThumbnailUrl: null,
+        color_height_map: {},
+        heightmapUploadSessionId: null,
+      }),
 
     uploadHeightmap: async () => {
       const state = _get();
       const clearHeightmapUploadState = {
         heightmapThumbnailUrl: null,
         color_height_map: {},
+        heightmapUploadSessionId: null,
       };
       if (!state.heightmapFile || !state.sessionId) {
         set({
@@ -5018,6 +5037,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           isLoading: false,
           heightmapThumbnailUrl: thumbnailUrl,
           color_height_map: response.color_height_map,
+          heightmapUploadSessionId: requestedSessionId,
         });
       } catch (err) {
         if (_get().sessionId !== requestedSessionId) {
@@ -5846,7 +5866,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           },
           palette: normalizedPalette,
           ...(shouldResetHeightmapMapping
-            ? { color_height_map: {}, heightmapThumbnailUrl: null }
+            ? {
+                color_height_map: {},
+                heightmapThumbnailUrl: null,
+                heightmapUploadSessionId: null,
+              }
             : autoReliefHeightMap
               ? { color_height_map: autoReliefHeightMap }
               : {}),
@@ -6000,6 +6024,17 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       if (autoReliefHeightMap) {
         set({ color_height_map: autoReliefHeightMap });
         state = _get();
+      }
+      const hasCurrentHeightmapUpload =
+        state.heightmapUploadSessionId === sessionId &&
+        Object.keys(state.color_height_map).length > 0;
+      if (
+        state.enable_relief &&
+        state.autoHeightMode === "use-heightmap" &&
+        !hasCurrentHeightmapUpload
+      ) {
+        set({ error: "请先上传高度图并获取高度映射后再生成" });
+        return null;
       }
       // Requirement 10.4: enable_relief 为 true 且 color_height_map 为空时阻止生成
       if (
