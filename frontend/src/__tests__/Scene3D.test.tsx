@@ -17,6 +17,10 @@ vi.mock("../components/InteractiveModelViewer", () => ({
     return null;
   },
   extractHexFromMeshName: (name: string) => name.slice(6),
+  resolvePreviewColorLayerHeightMm: (height?: number) => {
+    const value = typeof height === "number" ? height : NaN;
+    return Number.isFinite(value) && value > 0 ? value : 0.4;
+  },
 }));
 vi.mock("../components/BedPlatform", () => ({ default: () => null }));
 vi.mock("../components/KeychainRing3D", () => ({ default: () => null }));
@@ -390,6 +394,18 @@ beforeEach(() => {
       render(<Scene3D />);
 
       expect(capturedInteractiveViewerProps?.enableFridgeMagnet).toBe(true);
+    });
+
+    it("passes material stack height into InteractiveModelViewer", () => {
+      useConverterStore.setState({
+        previewGlbUrl: "/api/files/mock-preview.glb",
+        color_layers: 10,
+        layer_height_mm: 0.08,
+      });
+
+      render(<Scene3D />);
+
+      expect(capturedInteractiveViewerProps?.colorLayerHeightMm).toBeCloseTo(0.8, 5);
     });
 
     it("does not render the proxy layer when fridge mode is disabled", () => {
