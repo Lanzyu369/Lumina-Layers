@@ -157,7 +157,7 @@ Rules currently used by the writer:
 - Bambu `0.4`: `02.05.00.66`
 - Bambu H2 family `0.2`: `02.05.00.66`
 - Orca: `BambuStudio-2.3.2-rc2`
-- Snapmaker: `BambuStudio-2.2.4`
+- Snapmaker: `SnapmakerOrca-02.02.49.02`
 - Elegoo: `ElegooSlicer-1.3.2.9`
 - Anycubic: `BambuStudio-1.3.9.4`
 
