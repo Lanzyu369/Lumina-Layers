@@ -33,6 +33,10 @@ ORIGINAL_ARRAY_FIELDS = {
     "original_matched_rgb",
     "original_material_matrix",
 }
+_MATERIAL_MATRIX_FIELDS = {
+    "material_matrix",
+    "original_material_matrix",
+}
 
 
 class PreviewCacheRevisionConflict(RuntimeError):
@@ -285,25 +289,36 @@ def externalize_preview_cache_to_artifacts(
         artifact manifest 与唯一文件路径列表；调用方负责注册或清理。
     """
     fields: dict[str, dict[str, Any]] = {}
-    metadata: dict[str, Any] = {}
+    metadata: dict[str, Any] = {
+        key: deepcopy(value)
+        for key, value in cache.items()
+        if not isinstance(value, np.ndarray)
+    }
     artifact_paths: list[str] = []
     artifact_dir = Path(root_dir) if root_dir is not None else Path(TEMP_DIR)
-    field_refs_by_array_id: dict[int, dict[str, Any]] = {}
+    field_refs_by_array_id: dict[tuple[int, bool], dict[str, Any]] = {}
 
     try:
         for key, value in cache.items():
             if isinstance(value, np.ndarray):
-                array_id = id(value)
+                array_id = (id(value), key in _MATERIAL_MATRIX_FIELDS)
                 existing_ref = field_refs_by_array_id.get(array_id)
                 if existing_ref is not None:
                     fields[key] = dict(existing_ref)
                     continue
-                path, field_ref = _write_new_array_field(key, value, artifact_dir)
+                artifact_value = _prepare_array_for_artifact(
+                    key,
+                    value,
+                    metadata,
+                )
+                path, field_ref = _write_new_array_field(
+                    key,
+                    artifact_value,
+                    artifact_dir,
+                )
                 artifact_paths.append(path)
                 fields[key] = field_ref
                 field_refs_by_array_id[array_id] = dict(field_ref)
-            else:
-                metadata[key] = deepcopy(value)
     except Exception:
         for path in set(artifact_paths):
             _delete_if_exists(path)
@@ -318,6 +333,63 @@ def externalize_preview_cache_to_artifacts(
         },
         artifact_paths,
     )
+
+
+def _selected_material_count_from_metadata(metadata: dict[str, Any]) -> int | None:
+    raw_count = metadata.get("selected_material_count")
+    if raw_count is not None:
+        try:
+            count = int(raw_count)
+        except (TypeError, ValueError):
+            count = 0
+        if count > 0:
+            return count
+    selected_materials = metadata.get("selected_materials")
+    if isinstance(selected_materials, (list, tuple)):
+        return len(selected_materials)
+    return None
+
+
+def _compact_material_matrix_array(
+    array: np.ndarray,
+    metadata: dict[str, Any],
+) -> np.ndarray:
+    """Return material-matrix arrays in the smallest signed integer dtype."""
+
+    if not np.issubdtype(array.dtype, np.integer):
+        return array
+    if array.size:
+        min_value = int(array.min())
+        max_value = int(array.max())
+    else:
+        min_value = -1
+        max_value = 0
+    if metadata.get("material_source") == "material_archive":
+        selected_material_count = _selected_material_count_from_metadata(metadata)
+        if selected_material_count is None:
+            max_value = max(max_value, np.iinfo(np.int16).max)
+        else:
+            max_value = max(max_value, selected_material_count - 1)
+    for dtype in (np.int8, np.int16, np.int32, np.int64):
+        info = np.iinfo(dtype)
+        if min_value >= info.min and max_value <= info.max:
+            target_dtype = np.dtype(dtype)
+            break
+    else:
+        target_dtype = np.dtype(np.int64)
+    if array.dtype == target_dtype:
+        return array
+    return array.astype(target_dtype, copy=False)
+
+
+def _prepare_array_for_artifact(
+    field_name: str,
+    value: np.ndarray,
+    metadata: dict[str, Any],
+) -> np.ndarray:
+    if field_name in _MATERIAL_MATRIX_FIELDS:
+        return _compact_material_matrix_array(value, metadata)
+    return value
 
 
 def hydrate_preview_cache(
@@ -519,9 +591,14 @@ def save_preview_cache_fields(
             raise TypeError(f"Preview cache field {field_name!r} must be a NumPy array")
         existing = updated["fields"].get(field_name)
         revision = int(existing.get("revision", 0)) + 1 if existing else 1
-        path, field_ref = _write_new_array_field(
+        artifact_array = _prepare_array_for_artifact(
             field_name,
             array,
+            updated.get("metadata", {}),
+        )
+        path, field_ref = _write_new_array_field(
+            field_name,
+            artifact_array,
             artifact_dir,
             revision=revision,
         )

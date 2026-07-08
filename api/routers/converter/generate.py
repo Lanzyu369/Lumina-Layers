@@ -85,6 +85,7 @@ from .common import (
     PREVIEW_COLOR_PALETTE_UNAVAILABLE_DETAIL,
     ROUTER_HANDLED_ERRORS,
     SOURCE_IMAGE_UNAVAILABLE_DETAIL,
+    _ensure_material_matrix_signed_capacity,
     _require_session,
     _resolve_material_backing_index,
     _validate_material_source,
@@ -1032,11 +1033,11 @@ def _prepare_recipe_override_worker_inputs(
                     "re-run preview before generating with recipe overrides."
                 ),
             )
-        # uint dtypes would wrap ``-1`` into ``255`` and reintroduce the bug
-        # under a different channel id; promote to signed first.
-        # uint 类型会把 -1 绕回 255 把同一个 bug 换个编号复现，先升到 signed。
-        if np.issubdtype(material_matrix_override.dtype, np.unsignedinteger):
-            material_matrix_override = material_matrix_override.astype(np.int32)
+        material_matrix_override = _ensure_material_matrix_signed_capacity(
+            material_matrix_override,
+            -1,
+            base_channel_idx,
+        )
         pad_slab = np.full(
             (
                 material_matrix_override.shape[0],
@@ -1092,6 +1093,11 @@ def _prepare_recipe_override_worker_inputs(
                 status_code=422,
                 detail=f"Recipe override has {len(recipe)} layers but target mode is {target_layers}",
             )
+        material_matrix_override = _ensure_material_matrix_signed_capacity(
+            material_matrix_override,
+            recipe,
+            base_channel_idx,
+        )
         material_matrix_override[np.asarray(region_mask, dtype=bool)] = np.asarray(
             recipe,
             dtype=material_matrix_override.dtype,
