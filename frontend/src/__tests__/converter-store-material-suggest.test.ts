@@ -105,6 +105,10 @@ describe("converter store — fetchMaterialSuggestions", () => {
   it("records error state and clears loading on API failure", async () => {
     const useConverterStore = await loadStore();
     resetStore(useConverterStore);
+    useConverterStore.setState({
+      materialSuggestions: stubResponse(),
+      materialSuggestionsTargetHex: "#C86432",
+    });
     fetchMaterialColorSuggestionsMock.mockRejectedValueOnce(
       new Error("boom"),
     );
@@ -113,6 +117,7 @@ describe("converter store — fetchMaterialSuggestions", () => {
 
     const s = useConverterStore.getState();
     expect(s.materialSuggestions).toBeNull();
+    expect(s.materialSuggestionsTargetHex).toBe("#808080");
     expect(s.materialSuggestionsLoading).toBe(false);
     expect(s.materialSuggestionsError).toBe("boom");
   });

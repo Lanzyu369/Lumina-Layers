@@ -191,6 +191,114 @@ describe("MaterialColorPicker", () => {
     expect(pending!.targetHex).toBe(target.replace("#", "").toLowerCase());
   });
 
+  it("stages the first achievable suggestion when submitting a target for a selected gradient group", async () => {
+    const target = "#123406";
+    fetchMaterialColorSuggestionsMock.mockResolvedValueOnce(
+      _stubResponse(target, {
+        suggestions: [
+          {
+            hex: "#654321",
+            rgb: [101, 67, 33],
+            delta_e: 0.7,
+            recipe: [0, 1, 2, 1, 0],
+            recipe_display: "[0,1,2,1,0]",
+          },
+        ],
+      }),
+    );
+    useConverterStore.setState({
+      selectionMode: "select-all",
+      selectedColor: null,
+      selectedColors: new Set(["d2aeb4", "cb9994"]),
+    });
+    render(<MaterialColorPicker />);
+
+    const hexInput = screen.getByPlaceholderText(/#RRGGBB/i) as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(hexInput, { target: { value: target } });
+      fireEvent.click(
+        screen.getByRole("button", { name: /suggest colors|生成建议/i }),
+      );
+    });
+
+    const pending = useConverterStore.getState().pendingReplacement;
+    expect(pending).not.toBeNull();
+    expect(pending!.mode).toBe("select-all");
+    expect(pending!.sourceHex).toBe("d2aeb4");
+    expect(pending!.sourceColors).toEqual(["d2aeb4", "cb9994"]);
+    expect(pending!.targetHex).toBe("654321");
+    expect(
+      screen.getByRole("button", { name: /confirm|确认替换/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("clears stale suggestions and does not stage a replacement after a failed target submit", async () => {
+    const firstTarget = "#123407";
+    const failedTarget = "#123408";
+    fetchMaterialColorSuggestionsMock
+      .mockResolvedValueOnce(_stubResponse(firstTarget))
+      .mockRejectedValueOnce(new Error("boom solver"));
+    useConverterStore.setState({
+      selectionMode: "select-all",
+      selectedColor: null,
+      selectedColors: new Set(["d2aeb4", "cb9994"]),
+    });
+    render(<MaterialColorPicker />);
+
+    const hexInput = screen.getByPlaceholderText(/#RRGGBB/i) as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(hexInput, { target: { value: firstTarget } });
+      fireEvent.click(
+        screen.getByRole("button", { name: /suggest colors|生成建议/i }),
+      );
+    });
+    expect(screen.getAllByRole("button", { name: /ΔE=/ })).toHaveLength(2);
+
+    await act(async () => {
+      fireEvent.change(hexInput, { target: { value: failedTarget } });
+      fireEvent.click(
+        screen.getByRole("button", { name: /suggest colors|生成建议/i }),
+      );
+    });
+
+    expect(useConverterStore.getState().materialSuggestions).toBeNull();
+    expect(useConverterStore.getState().pendingReplacement).toBeNull();
+    expect(screen.queryByRole("button", { name: /ΔE=/ })).toBeNull();
+  });
+
+  it("clears stale pending replacement after an empty target submit", async () => {
+    const firstTarget = "#123409";
+    const emptyTarget = "#12340A";
+    fetchMaterialColorSuggestionsMock
+      .mockResolvedValueOnce(_stubResponse(firstTarget))
+      .mockResolvedValueOnce(_stubResponse(emptyTarget, { suggestions: [] }));
+    useConverterStore.setState({
+      selectionMode: "select-all",
+      selectedColor: null,
+      selectedColors: new Set(["d2aeb4", "cb9994"]),
+    });
+    render(<MaterialColorPicker />);
+
+    const hexInput = screen.getByPlaceholderText(/#RRGGBB/i) as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(hexInput, { target: { value: firstTarget } });
+      fireEvent.click(
+        screen.getByRole("button", { name: /suggest colors|生成建议/i }),
+      );
+    });
+    expect(useConverterStore.getState().pendingReplacement).not.toBeNull();
+
+    await act(async () => {
+      fireEvent.change(hexInput, { target: { value: emptyTarget } });
+      fireEvent.click(
+        screen.getByRole("button", { name: /suggest colors|生成建议/i }),
+      );
+    });
+
+    expect(useConverterStore.getState().materialSuggestions?.suggestions).toEqual([]);
+    expect(useConverterStore.getState().pendingReplacement).toBeNull();
+  });
+
   it("surfaces error state from the store", async () => {
     const target = "#123404";
     fetchMaterialColorSuggestionsMock.mockRejectedValueOnce(
