@@ -100,6 +100,38 @@ const UNASSIGNED_BRAND_GROUP_KEY = "__unassigned__";
 const getMaterialBrandGroupKey = (brand: string | null): string =>
   brand ?? UNASSIGNED_BRAND_GROUP_KEY;
 
+const normalizeMaterialIdentityText = (value: string | null | undefined): string =>
+  (value ?? "").trim().toLocaleLowerCase();
+
+const getMaterialIdentityKey = (item: SavedMaterialLibraryItem): string =>
+  `${normalizeMaterialIdentityText(getMaterialBrand(item))}\u0000${normalizeMaterialIdentityText(item.material_name)}`;
+
+const getMaterialSortTimestamp = (item: SavedMaterialLibraryItem): number => {
+  const value = item.updated_at || item.created_at;
+  if (!value) {
+    return 0;
+  }
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const compareMaterialLibraryItems = (
+  left: SavedMaterialLibraryItem,
+  right: SavedMaterialLibraryItem,
+): number => {
+  const leftName = normalizeMaterialIdentityText(left.material_name);
+  const rightName = normalizeMaterialIdentityText(right.material_name);
+  const byName = leftName.localeCompare(rightName);
+  if (byName !== 0) {
+    return byName;
+  }
+  const byTimestamp = getMaterialSortTimestamp(right) - getMaterialSortTimestamp(left);
+  if (byTimestamp !== 0) {
+    return byTimestamp;
+  }
+  return left.directory_name.localeCompare(right.directory_name);
+};
+
 type MaterialLibraryBrandGroup = {
   brand: string | null;
   items: SavedMaterialLibraryItem[];
@@ -183,6 +215,14 @@ export default function MaterialLibraryPanel() {
 
   const selectedCount = selectedDirectoryNames.length;
   const allSelected = materials.length > 0 && selectedCount === materials.length;
+  const materialDuplicateCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const item of materials) {
+      const key = getMaterialIdentityKey(item);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return counts;
+  }, [materials]);
   const groupedMaterials = useMemo<MaterialLibraryBrandGroup[]>(() => {
     const groups = new Map<string, SavedMaterialLibraryItem[]>();
     const unassigned: SavedMaterialLibraryItem[] = [];
@@ -201,10 +241,10 @@ export default function MaterialLibraryPanel() {
     }
     const result: MaterialLibraryBrandGroup[] = Array.from(groups, ([brand, items]) => ({
       brand,
-      items,
+      items: [...items].sort(compareMaterialLibraryItems),
     }));
     if (unassigned.length > 0) {
-      result.push({ brand: null, items: unassigned });
+      result.push({ brand: null, items: [...unassigned].sort(compareMaterialLibraryItems) });
     }
     return result;
   }, [materials]);
@@ -278,6 +318,8 @@ export default function MaterialLibraryPanel() {
     const confirmed = window.confirm(
       tRuntime("mat_gradient_library_delete_confirm", {
         materialName: item.material_name,
+        directoryName: item.directory_name,
+        updatedAt: formatCreatedAt(item.updated_at || item.created_at),
       }),
     );
     if (!confirmed) {
@@ -302,7 +344,7 @@ export default function MaterialLibraryPanel() {
     } finally {
       setPendingDeleteDirectoryName(null);
     }
-  }, [t]);
+  }, [formatCreatedAt, t]);
 
   const toggleMaterialSelection = useCallback((directoryName: string) => {
     setSelectedDirectoryNames((previous) =>
@@ -712,6 +754,9 @@ export default function MaterialLibraryPanel() {
                   const estimatedHex = estimatedRgb ? toHex(estimatedRgb) : "-";
                   const itemBrand = getMaterialBrand(item);
                   const itemBrandLabel = itemBrand ?? t("mat_gradient_library_brand_unassigned");
+                  const duplicateCount = materialDuplicateCounts.get(getMaterialIdentityKey(item)) ?? 1;
+                  const createdAtLabel = formatCreatedAt(item.created_at);
+                  const updatedAtLabel = formatCreatedAt(item.updated_at);
                   return (
                     <section
                       key={`${item.directory_name}-${item.material_name}`}
@@ -753,8 +798,28 @@ export default function MaterialLibraryPanel() {
                                 {itemBrandLabel}
                               </span>
                               <span className="min-w-0 truncate">{item.material_name}</span>
+                              {duplicateCount > 1 ? (
+                                <span
+                                  data-testid="material-library-duplicate-badge"
+                                  className="shrink-0 rounded-full border border-amber-200/90 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700 dark:border-amber-400/30 dark:bg-amber-400/10 dark:text-amber-200"
+                                >
+                                  {tRuntime("mat_gradient_library_duplicate_badge", {
+                                    count: duplicateCount,
+                                  })}
+                                </span>
+                              ) : null}
                             </h3>
                             <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{estimatedHex}</p>
+                            <p
+                              data-testid="material-library-item-meta"
+                              className="mt-1 break-all text-xs leading-5 text-slate-500 dark:text-slate-400"
+                            >
+                              {tRuntime("mat_gradient_library_card_meta", {
+                                directoryName: item.directory_name,
+                                createdAt: createdAtLabel,
+                                updatedAt: updatedAtLabel,
+                              })}
+                            </p>
                           </div>
                         </div>
                       </div>
@@ -765,7 +830,7 @@ export default function MaterialLibraryPanel() {
                       {t("mat_gradient_library_created_at_label")}
                     </dt>
                     <dd className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">
-                      {formatCreatedAt(item.created_at)}
+                      {createdAtLabel}
                     </dd>
                   </div>
                   <div className={`${mutedSectionCardClass} px-4 py-3`}>
@@ -773,7 +838,7 @@ export default function MaterialLibraryPanel() {
                       {t("mat_gradient_library_updated_at_label")}
                     </dt>
                     <dd className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-50">
-                      {formatCreatedAt(item.updated_at)}
+                      {updatedAtLabel}
                     </dd>
                   </div>
                   <div className={`${mutedSectionCardClass} px-4 py-3`}>
