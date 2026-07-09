@@ -16,6 +16,145 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-07-09",
+    title: {
+      zh: "Lumina Layers — 6 月下旬至 7 月更新速览",
+      en: "Lumina Layers — Late June to July updates",
+    },
+    sections: [
+      {
+        category: { zh: "新功能", en: "New" },
+        items: [
+          {
+            zh: "6 月 30 日：云端 LUT 库上线，可以直接从云端浏览、安装和刷新 LUT；传统 LUT 也支持同组多选，做颜色匹配时不用再手动合并成一个文件。",
+            en: "June 30: The cloud LUT library is now available for browsing, installing, and refreshing LUTs, and traditional LUTs can be selected together in compatible groups without first merging them into one file.",
+          },
+          {
+            zh: "6 月 30 日：LUT 详情、云端安装状态和官方/社区角标做了统一，装过的云端 LUT 更容易看出来源和当前状态。",
+            en: "June 30: LUT details, cloud install state, and official/community badges are now aligned, so installed cloud LUTs are easier to identify and trust.",
+          },
+          {
+            zh: "7 月 9 日：云端耗材库和云端 LUT 库的连接说明补齐了，团队测试时能更快确认当前线上数量、连接地址和维护流程。",
+            en: "July 9: The cloud material and LUT connection guide is now complete, making it easier for the team to check current totals, connection settings, and maintenance steps.",
+          },
+        ],
+      },
+      {
+        category: { zh: "颜色工作站", en: "Color Workstation" },
+        items: [
+          {
+            zh: "6 月 27 日：刷新预览后，已经做过的区域改色会继续带到新的预览和生成里，不会突然回到旧颜色。",
+            en: "June 27: Region recolours now carry through preview refreshes and final generation instead of unexpectedly falling back to the old colours.",
+          },
+          {
+            zh: "6 月 27 日：全选区域后再套用自定义配方时，生成的 3MF 会继续使用选中的区域，不会出现部分区域没有被替换的问题。",
+            en: "June 27: When applying a custom recipe after selecting all regions, the exported 3MF now keeps the intended regions instead of leaving part of the artwork unchanged.",
+          },
+          {
+            zh: "7 月 8 日：更换耗材渐变或目标材料后，旧的替换选择会被清掉，避免确认窗口里混入上一轮残留颜色。",
+            en: "July 8: Changing a material gradient or target material now clears stale replacement choices, so the confirmation step no longer mixes in colours from the previous attempt.",
+          },
+        ],
+      },
+      {
+        category: { zh: "校准 & 材料", en: "Calibration & Materials" },
+        items: [
+          {
+            zh: "6 月 27 日：传统 LUT 处理灰色和黑色时更稳，灰色作品不容易被匹配成偏脏或偏彩的结果。",
+            en: "June 27: Legacy LUT matching is steadier for grey and black inputs, reducing muddy or overly colourful results on grey artwork.",
+          },
+          {
+            zh: "6 月 30 日：老 NPY LUT 的 CMYW、蓝色通道和多色槽位识别更准确，旧 LUT 参与多选时更不容易选错颜色顺序。",
+            en: "June 30: Older NPY LUT files now recognise CMYW, blue-channel, and multi-colour slots more accurately, so multi-select is less likely to use the wrong colour order.",
+          },
+          {
+            zh: "7 月 7 日：云端 LUT 安装后会刷新详情和列表；提交问题反馈时，多选 LUT 里缺失的项目也会被逐项写清楚，方便复现。",
+            en: "July 7: Cloud LUT installs now refresh the details and list, and bug reports describe each selected LUT separately, including any missing item, so issues are easier to reproduce.",
+          },
+        ],
+      },
+      {
+        category: { zh: "预览 & 交互", en: "Preview & Interaction" },
+        items: [
+          {
+            zh: "6 月 27 日：SVG 矢量预览和建模速度提升，复杂图形等待时间更短，打包版本也带上了默认 3D 预览依赖。",
+            en: "June 27: SVG vector previews and model preparation are faster for complex artwork, and 3D preview support is steadier in packaged builds.",
+          },
+          {
+            zh: "6 月 27 日：高度图浮雕现在能正常显示 3D 几何，不会只看到空白或缺少浮雕形状。",
+            en: "June 27: Heightmap relief previews now show the actual 3D geometry instead of appearing blank or missing the relief shape.",
+          },
+          {
+            zh: "6 月 29 日：复杂预览的容量保护改为按需开启，默认情况下不会再因为过于保守的保护规则提前拦住可处理的作品。",
+            en: "June 29: Preview size protection is now opt-in, so Lumina no longer blocks artwork too early because of overly cautious default limits.",
+          },
+          {
+            zh: "7 月 7 日：像素模式会保留原画布尺寸，3D 预览和底板大小不再因为像素图尺寸信息丢失而偏小或偏大。",
+            en: "July 7: Pixel mode now preserves the source canvas size, keeping the 3D preview and backing from shrinking or growing because size details were lost.",
+          },
+          {
+            zh: "7 月 8 日：耗材档案预览会保留像素调色板，像素风作品不再因为预览材料信息变化而冒出细碎杂色。",
+            en: "July 8: Material-profile previews now preserve pixel palettes, reducing tiny speckles when preview material details change.",
+          },
+          {
+            zh: "7 月 8 日：大画幅 SVG 的预览大小估算更贴近实际，能处理的大图不会再被误判成超出限制。",
+            en: "July 8: Large-format SVG size checks now better match real preview cost, so processable large artwork is not rejected as oversized.",
+          },
+        ],
+      },
+      {
+        category: { zh: "矢量化", en: "Vectorisation" },
+        items: [
+          {
+            zh: "6 月 27 日：半透明 5 色 SVG 的叠色更可靠，透明或半透明区域不容易在生成时盖错层。",
+            en: "June 27: Translucent 5-colour SVG stacking is more reliable, so transparent and semi-transparent areas are less likely to land on the wrong layer.",
+          },
+          {
+            zh: "6 月 27 日：耗材档案导出 3MF 时会按实际需要整理耗材槽，不再多占空槽或把不该打印的槽写进去。",
+            en: "June 27: Material-profile 3MF exports now keep only the filament slots they actually need, avoiding extra empty or unused slots.",
+          },
+          {
+            zh: "6 月 28 日：H2C 等扩展材料模板导出矢量 3MF 时，会保留更长的材料配置，不容易再提示矢量内容过长。",
+            en: "June 28: H2C and other extended material templates now keep their longer material setup in vector 3MF exports, reducing false 'too long' failures.",
+          },
+          {
+            zh: "6 月 30 日：颜色非常接近的 SVG 填充会保持一致分组，预览和生成时不容易把同一种颜色拆成不同结果。",
+            en: "June 30: Very similar SVG fill colours are grouped more consistently, so preview and generation are less likely to split one intended colour into different results.",
+          },
+        ],
+      },
+      {
+        category: { zh: "稳定性", en: "Stability" },
+        items: [
+          {
+            zh: "6 月 27 日：下载 3MF 后，来源会话会保留到下载真正完成，切换或关闭页面时更不容易丢最终文件。",
+            en: "June 27: After a 3MF is generated, the finished file stays available long enough for the download, reducing lost files after switching or closing views.",
+          },
+          {
+            zh: "6 月 27 日：问题反馈窗口点到背景时不会直接丢掉已经写好的内容，草稿更安全。",
+            en: "June 27: Clicking outside the bug report window no longer discards the text you already typed, making drafts safer.",
+          },
+          {
+            zh: "6 月 29 日：Snapmaker U1 和 OrcaSlicer 导出的 3MF 会保留更多机器与耗材信息，切片软件识别更稳定。",
+            en: "June 29: Snapmaker U1 and OrcaSlicer 3MF exports now keep more machine and filament details, making slicer recognition more stable.",
+          },
+          {
+            zh: "6 月 29 日：灰色作品会走更严格的来源保护，减少特殊输入导致颜色处理不一致的情况。",
+            en: "June 29: Grey artwork now uses stricter safeguards, reducing cases where unusual inputs could lead to inconsistent colour handling.",
+          },
+          {
+            zh: "6 月 30 日：配方、裁剪和冲突提示继续换成更容易理解的说法，尽量不再把内部路径或技术细节直接展示给用户。",
+            en: "June 30: Recipe, crop, and conflict messages now use clearer wording and avoid exposing internal paths or technical details to users.",
+          },
+          {
+            zh: "7 月 8 日：Snapmaker U1 的 OrcaSlicer 信息再次补齐，缺少部分机型信息时也会用可靠的默认值兜底。",
+            en: "July 8: Snapmaker U1 exports for OrcaSlicer now fill in reliable defaults when some machine details are missing.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-06-23",
     title: {
       zh: "Lumina Layers — 近期更新速览",
