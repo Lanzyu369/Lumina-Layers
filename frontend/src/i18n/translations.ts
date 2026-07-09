@@ -7464,8 +7464,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "No saved material archives yet. Save one from Gradient Card Extract first.",
   },
   mat_gradient_library_updated_at_label: {
-    zh: "最近验证",
-    en: "Last Verified",
+    zh: "最近更新",
+    en: "Last Updated",
   },
   mat_gradient_library_created_at_label: {
     zh: "创建时间",
@@ -7580,12 +7580,12 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "{count} copies",
   },
   mat_gradient_library_card_meta: {
-    zh: "目录：{directoryName} · 创建：{createdAt} · 最近验证：{updatedAt}",
-    en: "Directory: {directoryName} · Created: {createdAt} · Last verified: {updatedAt}",
+    zh: "目录：{directoryName} · 创建：{createdAt} · 最近更新：{updatedAt}",
+    en: "Directory: {directoryName} · Created: {createdAt} · Last updated: {updatedAt}",
   },
   mat_gradient_library_delete_confirm: {
-    zh: "确认删除这份耗材「{materialName}」？\n目录：{directoryName}\n最近验证：{updatedAt}\n此操作只删除当前服务器上的这份本地耗材档案，且不可撤销。",
-    en: 'Delete this material copy "{materialName}"?\nDirectory: {directoryName}\nLast verified: {updatedAt}\nThis only deletes this local material archive on the current server and cannot be undone.',
+    zh: "确认删除这份耗材「{materialName}」？\n目录：{directoryName}\n最近更新：{updatedAt}\n此操作只删除当前服务器上的这份本地耗材档案，且不可撤销。",
+    en: 'Delete this material copy "{materialName}"?\nDirectory: {directoryName}\nLast updated: {updatedAt}\nThis only deletes this local material archive on the current server and cannot be undone.',
   },
   mat_gradient_library_delete_success: {
     zh: "耗材已删除。",

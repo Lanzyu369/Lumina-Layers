@@ -571,6 +571,13 @@ describe("MaterialLibraryPanel", () => {
           layer_height_mm: 0.04,
           mean_delta_e: 1.23,
           verification_count: 3,
+          verification_history: [
+            {
+              verification_index: 3,
+              captured_at: "2026-07-09T14:59:00Z",
+              mean_delta_e: 1.23,
+            },
+          ],
         },
         {
           material_name: "PLA Basic",
@@ -584,6 +591,13 @@ describe("MaterialLibraryPanel", () => {
           layer_height_mm: 0.04,
           mean_delta_e: 2.34,
           verification_count: 1,
+          verification_history: [
+            {
+              verification_index: 1,
+              captured_at: "2026-05-21T16:19:50Z",
+              mean_delta_e: 2.34,
+            },
+          ],
         },
       ],
     });
@@ -610,6 +624,8 @@ describe("MaterialLibraryPanel", () => {
     const cards = screen.getAllByTestId("material-library-item");
     expect(within(cards[0]).getByTestId("material-library-duplicate-badge")).toHaveTextContent(/同名 2 份|2 copies/i);
     expect(within(cards[0]).getByTestId("material-library-item-meta")).toHaveTextContent("Brand/PLA Basic_20260709_145858");
+    expect(within(cards[0]).getByTestId("material-library-item-meta")).toHaveTextContent(/最近更新|Last updated/i);
+    expect(within(cards[0]).getByTestId("material-library-item-meta")).not.toHaveTextContent(/最近验证|Last verified/i);
     expect(within(cards[0]).getByTestId("material-library-item-meta")).toHaveTextContent("2026");
 
     fireEvent.click(within(cards[1]).getByRole("button", { name: /删除耗材|delete material/i }));
@@ -620,6 +636,8 @@ describe("MaterialLibraryPanel", () => {
     const confirmMessage = String(confirmSpy.mock.calls[0]?.[0] ?? "");
     expect(confirmMessage).toContain("PLA Basic");
     expect(confirmMessage).toContain("Brand/PLA Basic_20260521_161941");
+    expect(confirmMessage).toMatch(/最近更新|Last updated/);
+    expect(confirmMessage).not.toMatch(/最近验证|Last verified/);
     expect(confirmMessage).toContain("2026");
   });
 
