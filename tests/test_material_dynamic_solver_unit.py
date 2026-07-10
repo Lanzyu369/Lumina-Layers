@@ -10,6 +10,8 @@ import numpy as np
 import pytest
 
 import core.material_dynamic_solver as dynamic_solver
+from core.material_cache import MaterialSolverCache
+from core.material_candidate_cache import MaterialCandidateRuntime
 from core.material_dynamic_solver import (
     DynamicCandidateCatalog,
     _delta_e00_numba_scalar,
@@ -19,7 +21,12 @@ from core.material_dynamic_solver import (
     build_dynamic_candidate_catalog,
     search_dynamic_catalog_exact,
 )
-from core.material_color_solver import rgb_to_lab
+from core.material_color_solver import (
+    MaterialParams,
+    forward_batch_model,
+    linear_to_srgb_uint8,
+    rgb_to_lab,
+)
 
 
 SHARMA_CIEDE2000_PAIRS = (
@@ -74,6 +81,14 @@ def test_dynamic_solver_module_and_public_api_exist() -> None:
         "_delta_e00_numpy",
         "_delta_e00_numba_scalar",
         "DynamicMaterialSolverError",
+        "DynamicMaterialCandidateError",
+        "DynamicMaterialSolveConfig",
+        "DynamicMaterialLayerOption",
+        "DynamicMaterialColorMatch",
+        "DynamicMaterialSolveResult",
+        "MaterialLayerBenefitPoint",
+        "solve_dynamic_material_colors",
+        "build_material_layer_benefit_curve",
         "_search_exact_numpy",
         "_search_exact_numba_kernel",
     ):
@@ -528,3 +543,386 @@ def test_search_rejects_invalid_targets_and_bounds(
             min_layers,
             max_layers,
         )
+
+
+def _task1b_material(name: str, equilibrium: tuple[float, float, float]) -> MaterialParams:
+    return MaterialParams(
+        name=name,
+        directory_name=name.lower(),
+        E=np.asarray(equilibrium, dtype=np.float64),
+        k=np.asarray([8.0, 8.0, 8.0], dtype=np.float64),
+        C0_white=np.ones(3, dtype=np.float64),
+        estimated_rgb=np.asarray(np.round(np.asarray(equilibrium) * 255), dtype=np.uint8),
+    )
+
+
+def _task1b_runtime(recipes: np.ndarray, layer_count: int) -> MaterialCandidateRuntime:
+    rows = int(recipes.shape[0])
+    return MaterialCandidateRuntime(
+        candidate_recipes=np.asarray(recipes, dtype=np.uint8),
+        achieved_srgb=np.full((rows, 3), 255, dtype=np.uint8),
+        achieved_lab=np.zeros((rows, 3), dtype=np.float64),
+        pinned_mask=np.zeros(rows, dtype=np.bool_),
+        metadata={
+            "layer_count": layer_count,
+            "layer_height_mm": 0.08,
+            "substrate": "white",
+            "palette_hash": "test",
+            "grid_resolution": 8,
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    (
+        {"min_layer_count": 4, "max_layer_count": 10, "delta_e00_tolerance": 0.5},
+        {"min_layer_count": 8, "max_layer_count": 7, "delta_e00_tolerance": 0.5},
+        {"min_layer_count": 5, "max_layer_count": 10, "delta_e00_tolerance": 5.1},
+        {"min_layer_count": 5, "max_layer_count": 10, "delta_e00_tolerance": np.nan},
+    ),
+)
+def test_dynamic_solve_config_rejects_invalid_bounds_and_tolerance(
+    kwargs: dict[str, object],
+) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        dynamic_solver.DynamicMaterialSolveConfig(**kwargs)
+
+
+def test_dynamic_solve_prefixes_backing_and_resimulates_full_print_recipe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    materials = [
+        _task1b_material("Backing", (0.95, 0.95, 0.95)),
+        _task1b_material("Blue", (0.05, 0.10, 0.85)),
+    ]
+    runtimes = {
+        5: _task1b_runtime(np.asarray([[1, 1, 1, 1, 1]]), 5),
+        6: _task1b_runtime(np.asarray([[0, 0, 0, 0, 0, 0]]), 6),
+    }
+    monkeypatch.setattr(dynamic_solver, "canonical_palette_order", lambda _m: [0, 1])
+    expected_print = np.asarray([[0, 1, 1, 1, 1, 1]], dtype=np.int32)
+    target = linear_to_srgb_uint8(
+        forward_batch_model(expected_print, materials, 0.08, np.ones(3))
+    )
+
+    result = dynamic_solver.solve_dynamic_material_colors(
+        target,
+        materials,
+        backing_material_index=0,
+        layer_height_mm=0.08,
+        substrate="white",
+        config=dynamic_solver.DynamicMaterialSolveConfig(5, 6, 0.0),
+        runtime_loader=lambda _m, k, _h, _s: (runtimes[k], k),
+    )
+
+    match = result.matches[0]
+    assert match.selected.actual_layer_count == 5
+    assert match.selected.actual_recipe_bottom_to_top == (1, 1, 1, 1, 1)
+    assert match.selected.print_recipe_bottom_to_top == (0, 1, 1, 1, 1, 1)
+    assert match.selected.matched_srgb == tuple(int(value) for value in target[0])
+
+
+def test_dynamic_solve_selects_shortest_cap_on_tolerance_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    materials = [_task1b_material("Only", (0.3, 0.4, 0.5))]
+    runtimes = {
+        5: _task1b_runtime(np.zeros((1, 5), dtype=np.uint8), 5),
+        6: _task1b_runtime(np.zeros((1, 6), dtype=np.uint8), 6),
+    }
+    monkeypatch.setattr(dynamic_solver, "canonical_palette_order", lambda _m: [0])
+
+    def fake_search(*_args: object, **_kwargs: object) -> dynamic_solver.ExactDynamicSearchResult:
+        return dynamic_solver.ExactDynamicSearchResult(
+            cumulative_best_candidate_indices=np.asarray([[0, 0]]),
+            cumulative_best_delta_e00=np.asarray([[1.5, 1.0]]),
+            fixed_max_delta_e00=np.asarray([1.0]),
+            engine="numpy",
+        )
+
+    monkeypatch.setattr(dynamic_solver, "search_dynamic_catalog_exact", fake_search)
+    result = dynamic_solver.solve_dynamic_material_colors(
+        np.asarray([[100, 110, 120]], dtype=np.uint8),
+        materials,
+        backing_material_index=0,
+        layer_height_mm=0.08,
+        substrate="white",
+        config=dynamic_solver.DynamicMaterialSolveConfig(5, 6, 0.5),
+        runtime_loader=lambda _m, k, _h, _s: (runtimes[k], None),
+    )
+
+    match = result.matches[0]
+    assert match.selected.max_effective_layer_count == 5
+    assert match.best_range.max_effective_layer_count == 6
+    assert match.delta_e00_sacrifice == pytest.approx(0.5)
+    assert tuple(option.max_effective_layer_count for option in match.layer_cap_options) == (5, 6)
+
+
+def test_material_layer_benefit_curve_is_pixel_weighted() -> None:
+    option_a5 = dynamic_solver.DynamicMaterialLayerOption(5, 5, (0, 0, 0), (0,) * 5, (0,) * 6, 4.0)
+    option_a6 = dynamic_solver.DynamicMaterialLayerOption(6, 6, (0, 0, 0), (0,) * 6, (0,) * 6, 2.0)
+    option_b5 = dynamic_solver.DynamicMaterialLayerOption(5, 5, (0, 0, 0), (0,) * 5, (0,) * 6, 1.0)
+    option_b6 = dynamic_solver.DynamicMaterialLayerOption(6, 6, (0, 0, 0), (0,) * 6, (0,) * 6, 0.5)
+    matches = (
+        dynamic_solver.DynamicMaterialColorMatch(
+            (1, 2, 3),
+            option_a5,
+            option_a6,
+            2.0,
+            2.0,
+            (option_a5, option_a6),
+        ),
+        dynamic_solver.DynamicMaterialColorMatch(
+            (4, 5, 6),
+            option_b5,
+            option_b6,
+            0.5,
+            0.5,
+            (option_b5, option_b6),
+        ),
+    )
+
+    curve = dynamic_solver.build_material_layer_benefit_curve(matches, [1, 3])
+
+    assert [point.weighted_mean_delta_e00 for point in curve] == pytest.approx([1.75, 0.875])
+    assert [point.marginal_delta_e00_reduction for point in curve] == pytest.approx([0.0, 0.875])
+
+
+def _task1b_legacy_cache(
+    recipes: np.ndarray,
+    uniform_recipes: np.ndarray,
+    layer_count: int,
+) -> MaterialSolverCache:
+    row_count = int(recipes.shape[0])
+    uniform_count = int(uniform_recipes.shape[0])
+    return MaterialSolverCache(
+        lab_centers=np.zeros((row_count, 3), dtype=np.float32),
+        recipes=np.asarray(recipes, dtype=np.uint8),
+        achieved_srgb=np.full((row_count, 3), 250, dtype=np.uint8),
+        achieved_lab=np.zeros((row_count, 3), dtype=np.float32),
+        center_delta_e=np.zeros(row_count, dtype=np.float32),
+        uniform_recipes=np.asarray(uniform_recipes, dtype=np.uint8),
+        uniform_achieved_srgb=np.full((uniform_count, 3), 251, dtype=np.uint8),
+        metadata={
+            "layer_count": layer_count,
+            "layer_height_mm": 0.08,
+            "substrate": "white",
+            "palette_hash": "test",
+            "grid_resolution": 8,
+        },
+    )
+
+
+def test_dynamic_solve_validates_backing_index_before_loading() -> None:
+    calls: list[int] = []
+    materials = [_task1b_material("Only", (0.2, 0.3, 0.4))]
+
+    with pytest.raises(ValueError, match="backing_material_index"):
+        dynamic_solver.solve_dynamic_material_colors(
+            np.asarray([[1, 2, 3]], dtype=np.uint8),
+            materials,
+            backing_material_index=1,
+            layer_height_mm=0.08,
+            substrate="white",
+            config=dynamic_solver.DynamicMaterialSolveConfig(5, 5, 0.5),
+            runtime_loader=lambda _m, k, _h, _s: (calls.append(k), None),
+        )
+
+    assert calls == []
+
+
+def test_dynamic_solve_adapts_both_runtime_shapes_maps_canonical_order_and_calls_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    materials = [
+        _task1b_material("UserZero", (0.8, 0.1, 0.1)),
+        _task1b_material("UserOne", (0.1, 0.1, 0.8)),
+    ]
+    runtimes = {
+        5: _task1b_runtime(np.asarray([[0, 0, 0, 0, 0]]), 5),
+        6: _task1b_legacy_cache(
+            np.asarray([[0, 0, 0, 0, 0, 0]]),
+            np.asarray([[1, 1, 1, 1, 1, 1]]),
+            6,
+        ),
+    }
+    load_calls: list[int] = []
+    simulated_recipes: list[np.ndarray] = []
+    exact_calls = 0
+    original_search = dynamic_solver.search_dynamic_catalog_exact
+    monkeypatch.setattr(dynamic_solver, "canonical_palette_order", lambda _m: [1, 0])
+
+    def loader(_m: list[MaterialParams], k: int, _h: float, _s: str) -> tuple[object, int]:
+        load_calls.append(k)
+        return runtimes[k], 8
+
+    def capture_forward(
+        recipes: np.ndarray,
+        mats: list[MaterialParams],
+        height: float,
+        substrate_linear: np.ndarray,
+    ) -> np.ndarray:
+        simulated_recipes.append(np.asarray(recipes).copy())
+        return forward_batch_model(recipes, mats, height, substrate_linear)
+
+    def count_search(*args: object, **kwargs: object) -> dynamic_solver.ExactDynamicSearchResult:
+        nonlocal exact_calls
+        exact_calls += 1
+        return original_search(*args, **kwargs)
+
+    monkeypatch.setattr(dynamic_solver, "forward_batch_model", capture_forward)
+    monkeypatch.setattr(dynamic_solver, "search_dynamic_catalog_exact", count_search)
+    result = dynamic_solver.solve_dynamic_material_colors(
+        np.asarray([[20, 20, 180]], dtype=np.uint8),
+        materials,
+        backing_material_index=0,
+        layer_height_mm=0.08,
+        substrate="white",
+        config=dynamic_solver.DynamicMaterialSolveConfig(5, 6, 0.5),
+        runtime_loader=loader,
+    )
+
+    assert load_calls == [5, 6]
+    assert exact_calls == 1
+    assert result.candidate_count_before_dedup == 3
+    np.testing.assert_array_equal(simulated_recipes[0], [[0, 1, 1, 1, 1, 1]])
+    np.testing.assert_array_equal(
+        simulated_recipes[1],
+        [[1, 1, 1, 1, 1, 1], [0, 0, 0, 0, 0, 0]],
+    )
+
+
+@pytest.mark.parametrize(
+    ("runtime", "expected_phase"),
+    (
+        (None, "runtime_load"),
+        (_task1b_runtime(np.empty((0, 5), dtype=np.uint8), 5), "candidate_recipes"),
+        (_task1b_runtime(np.zeros((1, 4), dtype=np.uint8), 5), "candidate_recipes"),
+        (_task1b_runtime(np.zeros((1, 5), dtype=np.uint8), 6), "runtime_metadata"),
+    ),
+)
+def test_dynamic_solve_reports_layer_and_phase_for_invalid_runtime(
+    runtime: object,
+    expected_phase: str,
+) -> None:
+    materials = [_task1b_material("Only", (0.2, 0.3, 0.4))]
+
+    with pytest.raises(dynamic_solver.DynamicMaterialCandidateError) as caught:
+        dynamic_solver.solve_dynamic_material_colors(
+            np.asarray([[1, 2, 3]], dtype=np.uint8),
+            materials,
+            backing_material_index=0,
+            layer_height_mm=0.08,
+            substrate="white",
+            config=dynamic_solver.DynamicMaterialSolveConfig(5, 5, 0.5),
+            runtime_loader=lambda _m, _k, _h, _s: (runtime, None),
+        )
+
+    assert caught.value.layer_count == 5
+    assert caught.value.phase == expected_phase
+
+
+def test_dynamic_solve_reports_full_stack_simulation_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    materials = [_task1b_material("Only", (0.2, 0.3, 0.4))]
+    runtime = _task1b_runtime(np.zeros((1, 5), dtype=np.uint8), 5)
+    monkeypatch.setattr(
+        dynamic_solver,
+        "forward_batch_model",
+        lambda *_args, **_kwargs: np.full((1, 3), np.nan),
+    )
+
+    with pytest.raises(dynamic_solver.DynamicMaterialCandidateError) as caught:
+        dynamic_solver.solve_dynamic_material_colors(
+            np.asarray([[1, 2, 3]], dtype=np.uint8),
+            materials,
+            0,
+            0.08,
+            "white",
+            dynamic_solver.DynamicMaterialSolveConfig(5, 5, 0.5),
+            runtime_loader=lambda _m, _k, _h, _s: (runtime, None),
+        )
+
+    assert caught.value.layer_count == 5
+    assert caught.value.phase == "full_stack_simulation"
+
+
+def test_dynamic_solve_tolerance_zero_selects_strict_range_best(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    materials = [
+        _task1b_material("Backing", (0.9, 0.9, 0.9)),
+        _task1b_material("Color", (0.1, 0.2, 0.8)),
+    ]
+    runtimes = {
+        5: _task1b_runtime(np.ones((1, 5), dtype=np.uint8), 5),
+        6: _task1b_runtime(np.ones((1, 6), dtype=np.uint8), 6),
+    }
+    monkeypatch.setattr(dynamic_solver, "canonical_palette_order", lambda _m: [0, 1])
+
+    def fake_search(*_args: object, **_kwargs: object) -> dynamic_solver.ExactDynamicSearchResult:
+        return dynamic_solver.ExactDynamicSearchResult(
+            cumulative_best_candidate_indices=np.asarray([[0, 1]]),
+            cumulative_best_delta_e00=np.asarray([[1.0000001, 1.0]]),
+            fixed_max_delta_e00=np.asarray([1.0]),
+            engine="numpy",
+        )
+
+    monkeypatch.setattr(dynamic_solver, "search_dynamic_catalog_exact", fake_search)
+    result = dynamic_solver.solve_dynamic_material_colors(
+        np.asarray([[20, 30, 180]], dtype=np.uint8),
+        materials,
+        0,
+        0.08,
+        "white",
+        dynamic_solver.DynamicMaterialSolveConfig(5, 6, 0.0),
+        runtime_loader=lambda _m, k, _h, _s: (runtimes[k], None),
+    )
+
+    assert result.matches[0].selected.max_effective_layer_count == 6
+    assert result.matches[0].delta_e00_sacrifice == 0.0
+
+
+def test_dynamic_solve_rejects_nonfinite_fixed_max_baseline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    materials = [_task1b_material("Only", (0.2, 0.3, 0.4))]
+    runtime = _task1b_runtime(np.zeros((1, 5), dtype=np.uint8), 5)
+
+    def fake_search(*_args: object, **_kwargs: object) -> dynamic_solver.ExactDynamicSearchResult:
+        return dynamic_solver.ExactDynamicSearchResult(
+            cumulative_best_candidate_indices=np.asarray([[0]]),
+            cumulative_best_delta_e00=np.asarray([[1.0]]),
+            fixed_max_delta_e00=np.asarray([np.inf]),
+            engine="numpy",
+        )
+
+    monkeypatch.setattr(dynamic_solver, "search_dynamic_catalog_exact", fake_search)
+    with pytest.raises(dynamic_solver.DynamicMaterialCandidateError) as caught:
+        dynamic_solver.solve_dynamic_material_colors(
+            np.asarray([[20, 30, 40]], dtype=np.uint8),
+            materials,
+            0,
+            0.08,
+            "white",
+            dynamic_solver.DynamicMaterialSolveConfig(5, 5, 0.0),
+            runtime_loader=lambda _m, _k, _h, _s: (runtime, None),
+        )
+
+    assert caught.value.layer_count == 5
+    assert caught.value.phase == "fixed_max_baseline"
+
+
+@pytest.mark.parametrize("pixel_counts", ([1], [1, 0], [1, -1], [1, 1.5], [1, True]))
+def test_material_layer_benefit_curve_rejects_invalid_pixel_counts(
+    pixel_counts: list[object],
+) -> None:
+    option = dynamic_solver.DynamicMaterialLayerOption(5, 5, (0, 0, 0), (0,) * 5, (0,) * 5, 1.0)
+    match = dynamic_solver.DynamicMaterialColorMatch(
+        (0, 0, 0), option, option, 1.0, 0.0, (option,)
+    )
+
+    with pytest.raises((TypeError, ValueError)):
+        dynamic_solver.build_material_layer_benefit_curve((match, match), pixel_counts)

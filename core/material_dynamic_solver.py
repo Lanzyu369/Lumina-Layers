@@ -7,13 +7,21 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable, Sequence
 
 import numpy as np
 from numba import njit, prange
 
 from core.colorchecker.color_metrics import delta_e_2000
-from core.material_color_solver import rgb_to_lab
+from core.material_cache import MaterialSolverCache, canonical_palette_order
+from core.material_candidate_cache import MaterialCandidateRuntime
+from core.material_color_solver import (
+    MaterialParams,
+    forward_batch_model,
+    linear_to_srgb_uint8,
+    rgb_to_lab,
+)
+from core.material_lut_provider import load_solver_runtime
 
 
 MIN_DYNAMIC_LAYER_COUNT = 5
@@ -26,6 +34,159 @@ class DynamicMaterialSolverError(RuntimeError):
 
     当所有动态精确搜索引擎均失败时抛出。
     """
+
+
+class DynamicMaterialCandidateError(RuntimeError):
+    """Report a failed dynamic candidate construction stage.
+
+    报告动态候选构建阶段失败。
+
+    Attributes:
+        layer_count: Effective layer count being processed. 正在处理的有效层数。
+        phase: Stable construction phase label. 稳定的候选构建阶段标识。
+    """
+
+    def __init__(self, message: str, *, layer_count: int, phase: str) -> None:
+        self.layer_count = int(layer_count)
+        self.phase = str(phase)
+        super().__init__(
+            f"dynamic material candidate failed: layer_count={self.layer_count} "
+            f"phase={self.phase}: {message}"
+        )
+
+
+@dataclass(frozen=True)
+class DynamicMaterialSolveConfig:
+    """Configure exact dynamic material-layer selection.
+
+    配置精确动态耗材层数选择。
+
+    Attributes:
+        min_layer_count: Smallest allowed effective layer count. 最小有效层数。
+        max_layer_count: Largest allowed effective layer count. 最大有效层数。
+        delta_e00_tolerance: Allowed CIEDE2000 loss when selecting a shorter
+            recipe. 选择更短配方时允许的 CIEDE2000 损失。
+    """
+
+    min_layer_count: int
+    max_layer_count: int
+    delta_e00_tolerance: float
+
+    def __post_init__(self) -> None:
+        minimum = _validate_layer_bound(self.min_layer_count, "min_layer_count")
+        maximum = _validate_layer_bound(self.max_layer_count, "max_layer_count")
+        if minimum > maximum:
+            raise ValueError("min_layer_count must not exceed max_layer_count")
+        tolerance = self.delta_e00_tolerance
+        if isinstance(tolerance, (bool, np.bool_)) or not isinstance(
+            tolerance,
+            (int, float, np.integer, np.floating),
+        ):
+            raise TypeError("delta_e00_tolerance must be a real number")
+        normalized_tolerance = float(tolerance)
+        if not math.isfinite(normalized_tolerance):
+            raise ValueError("delta_e00_tolerance must be finite")
+        if not 0.0 <= normalized_tolerance <= 5.0:
+            raise ValueError("delta_e00_tolerance must be between 0 and 5")
+        object.__setattr__(self, "min_layer_count", minimum)
+        object.__setattr__(self, "max_layer_count", maximum)
+        object.__setattr__(self, "delta_e00_tolerance", normalized_tolerance)
+
+
+@dataclass(frozen=True)
+class DynamicMaterialLayerOption:
+    """Describe the exact match available at one effective-layer cap.
+
+    描述某个有效层数上限对应的精确匹配结果。
+
+    Attributes:
+        max_effective_layer_count: Effective-layer cap represented by this
+            option. 此选项对应的有效层数上限。
+        actual_layer_count: Actual color-recipe length. 实际颜色配方层数。
+        matched_srgb: Simulated printed sRGB color. 模拟打印后的 sRGB 颜色。
+        actual_recipe_bottom_to_top: Unpadded Bottom-to-Top recipe. 未补位的
+            自底向上实际配方。
+        print_recipe_bottom_to_top: Maximum-width Bottom-to-Top print recipe.
+            最大宽度的自底向上打印配方。
+        delta_e00: Exact CIEDE2000 distance to the target. 与目标色的精确
+            CIEDE2000 色差。
+    """
+
+    max_effective_layer_count: int
+    actual_layer_count: int
+    matched_srgb: tuple[int, int, int]
+    actual_recipe_bottom_to_top: tuple[int, ...]
+    print_recipe_bottom_to_top: tuple[int, ...]
+    delta_e00: float
+
+
+@dataclass(frozen=True)
+class DynamicMaterialColorMatch:
+    """Collect dynamic-layer choices for one target color.
+
+    汇总单个目标颜色的动态层数选择。
+
+    Attributes:
+        target_srgb: Requested target sRGB color. 请求的目标 sRGB 颜色。
+        selected: Earliest option within tolerance. 容差内最短的选项。
+        best_range: Exact best option across the full range. 整个范围内的精确
+            最佳选项。
+        fixed_max_delta_e00: Exact fixed-maximum-layer baseline. 固定最大层数的
+            精确基线色差。
+        delta_e00_sacrifice: Selected distance minus range-best distance.
+            所选方案相对范围最佳方案的色差损失。
+        layer_cap_options: Exact cumulative option for every allowed cap.
+            每个允许层数上限的精确累计选项。
+    """
+
+    target_srgb: tuple[int, int, int]
+    selected: DynamicMaterialLayerOption
+    best_range: DynamicMaterialLayerOption
+    fixed_max_delta_e00: float
+    delta_e00_sacrifice: float
+    layer_cap_options: tuple[DynamicMaterialLayerOption, ...]
+
+
+@dataclass(frozen=True)
+class DynamicMaterialSolveResult:
+    """Return all exact dynamic material matches and diagnostics.
+
+    返回全部精确动态耗材匹配结果及诊断信息。
+
+    Attributes:
+        matches: One match per input target. 每个输入目标对应一个匹配结果。
+        engine: Exact search engine used. 使用的精确搜索引擎。
+        candidate_count_before_dedup: Candidate rows before RGB deduplication.
+            RGB 去重前的候选行数。
+        candidate_count_after_dedup: Candidate rows after RGB deduplication.
+            RGB 去重后的候选行数。
+        layer_counts: Inclusive effective-layer range. 有效层数范围（含边界）。
+    """
+
+    matches: tuple[DynamicMaterialColorMatch, ...]
+    engine: str
+    candidate_count_before_dedup: int
+    candidate_count_after_dedup: int
+    layer_counts: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class MaterialLayerBenefitPoint:
+    """Describe weighted color-error benefit at one layer cap.
+
+    描述某一层数上限对应的加权色差收益。
+
+    Attributes:
+        max_effective_layer_count: Effective-layer cap. 有效层数上限。
+        weighted_mean_delta_e00: Pixel-weighted mean exact CIEDE2000.
+            按像素加权的精确 CIEDE2000 均值。
+        marginal_delta_e00_reduction: Reduction from the preceding cap, or
+            zero for the first point. 相对前一层数上限的色差降低量；首点为零。
+    """
+
+    max_effective_layer_count: int
+    weighted_mean_delta_e00: float
+    marginal_delta_e00_reduction: float
 
 
 @dataclass(frozen=True)
@@ -681,3 +842,523 @@ def search_dynamic_catalog_exact(
         else:
             message = "exact dynamic search failed in the numpy engine"
         raise DynamicMaterialSolverError(message) from exc
+
+
+MaterialRuntimeLoader = Callable[
+    [list[MaterialParams], int, float, str],
+    tuple[MaterialSolverCache | MaterialCandidateRuntime | None, int | None],
+]
+
+
+def _candidate_failure(
+    message: str,
+    *,
+    layer_count: int,
+    phase: str,
+    cause: Exception | None = None,
+) -> DynamicMaterialCandidateError:
+    error = DynamicMaterialCandidateError(
+        message,
+        layer_count=layer_count,
+        phase=phase,
+    )
+    if cause is not None:
+        error.__cause__ = cause
+    return error
+
+
+def _normalize_runtime_recipe_table(
+    value: Any,
+    *,
+    layer_count: int,
+    material_count: int,
+    phase: str,
+) -> np.ndarray:
+    recipes = np.asarray(value)
+    if recipes.ndim != 2:
+        raise _candidate_failure(
+            f"recipe table must be two-dimensional, got {recipes.shape}",
+            layer_count=layer_count,
+            phase=phase,
+        )
+    if recipes.shape[1] != layer_count:
+        raise _candidate_failure(
+            f"recipe width {recipes.shape[1]} does not match layer count",
+            layer_count=layer_count,
+            phase=phase,
+        )
+    if recipes.shape[0] == 0:
+        return np.empty((0, layer_count), dtype=np.int32)
+    try:
+        return _coerce_integral_array(
+            recipes,
+            name="runtime recipes",
+            dtype=np.int32,
+            minimum=0,
+            maximum=material_count - 1,
+        )
+    except (TypeError, ValueError) as exc:
+        raise _candidate_failure(
+            str(exc),
+            layer_count=layer_count,
+            phase=phase,
+            cause=exc,
+        )
+
+
+def _runtime_recipes_canonical(
+    runtime: MaterialSolverCache | MaterialCandidateRuntime,
+    *,
+    layer_count: int,
+    material_count: int,
+) -> np.ndarray:
+    try:
+        runtime_layer_count = int(runtime.layer_count)
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        raise _candidate_failure(
+            "runtime does not expose a valid layer count",
+            layer_count=layer_count,
+            phase="runtime_metadata",
+            cause=exc,
+        )
+    if runtime_layer_count != layer_count:
+        raise _candidate_failure(
+            f"runtime layer count is {runtime_layer_count}",
+            layer_count=layer_count,
+            phase="runtime_metadata",
+        )
+
+    if isinstance(runtime, MaterialCandidateRuntime):
+        recipes = _normalize_runtime_recipe_table(
+            runtime.candidate_recipes,
+            layer_count=layer_count,
+            material_count=material_count,
+            phase="candidate_recipes",
+        )
+    elif isinstance(runtime, MaterialSolverCache):
+        recipes = _normalize_runtime_recipe_table(
+            runtime.recipes,
+            layer_count=layer_count,
+            material_count=material_count,
+            phase="cache_recipes",
+        )
+        uniform_input = np.asarray(runtime.uniform_recipes)
+        if uniform_input.size:
+            uniform = _normalize_runtime_recipe_table(
+                uniform_input,
+                layer_count=layer_count,
+                material_count=material_count,
+                phase="cache_uniform_recipes",
+            )
+            recipes = np.concatenate((recipes, uniform), axis=0)
+    else:
+        raise _candidate_failure(
+            f"unsupported runtime type {type(runtime).__name__}",
+            layer_count=layer_count,
+            phase="runtime_type",
+        )
+
+    if recipes.shape[0] == 0:
+        raise _candidate_failure(
+            "runtime contains no candidate recipes",
+            layer_count=layer_count,
+            phase="candidate_recipes",
+        )
+    return recipes
+
+
+def _layer_option_from_catalog(
+    catalog: DynamicCandidateCatalog,
+    candidate_index: int,
+    layer_cap: int,
+    delta_e00: float,
+) -> DynamicMaterialLayerOption:
+    actual_count = int(catalog.minimum_actual_layer_counts[candidate_index])
+    print_recipe_array = catalog.print_recipes[candidate_index]
+    actual_recipe_array = print_recipe_array[-actual_count:]
+    return DynamicMaterialLayerOption(
+        max_effective_layer_count=int(layer_cap),
+        actual_layer_count=actual_count,
+        matched_srgb=tuple(int(value) for value in catalog.score_srgb[candidate_index]),
+        actual_recipe_bottom_to_top=tuple(int(value) for value in actual_recipe_array),
+        print_recipe_bottom_to_top=tuple(int(value) for value in print_recipe_array),
+        delta_e00=float(delta_e00),
+    )
+
+
+def _build_dynamic_candidate_catalog_from_runtimes(
+    materials: list[MaterialParams],
+    backing_index: int,
+    layer_height_mm: float,
+    substrate: str,
+    config: DynamicMaterialSolveConfig,
+    runtime_loader: MaterialRuntimeLoader,
+) -> tuple[DynamicCandidateCatalog, int, tuple[int, ...]]:
+    canonical_to_user = np.asarray(
+        canonical_palette_order(materials),
+        dtype=np.int32,
+    )
+    if canonical_to_user.shape != (len(materials),):
+        raise ValueError("canonical palette mapping has an invalid shape")
+    substrate_linear = (
+        np.ones(3, dtype=np.float64)
+        if substrate == "white"
+        else np.zeros(3, dtype=np.float64)
+    )
+    layer_counts = tuple(range(config.min_layer_count, config.max_layer_count + 1))
+    all_print_recipes: list[np.ndarray] = []
+    all_score_srgb: list[np.ndarray] = []
+    all_actual_counts: list[np.ndarray] = []
+
+    for layer_count in layer_counts:
+        try:
+            loaded = runtime_loader(
+                materials,
+                layer_count,
+                layer_height_mm,
+                substrate,
+            )
+        except Exception as exc:
+            raise _candidate_failure(
+                str(exc),
+                layer_count=layer_count,
+                phase="runtime_load",
+                cause=exc,
+            )
+        if not isinstance(loaded, tuple) or len(loaded) != 2:
+            raise _candidate_failure(
+                "runtime loader must return a two-item tuple",
+                layer_count=layer_count,
+                phase="runtime_load",
+            )
+        runtime, _diagnostic_resolution = loaded
+        if runtime is None:
+            raise _candidate_failure(
+                "runtime loader returned no runtime",
+                layer_count=layer_count,
+                phase="runtime_load",
+            )
+        canonical_recipes = _runtime_recipes_canonical(
+            runtime,
+            layer_count=layer_count,
+            material_count=len(materials),
+        )
+        user_recipes = canonical_to_user[canonical_recipes]
+        padding_count = config.max_layer_count - layer_count
+        if padding_count:
+            padding = np.full(
+                (user_recipes.shape[0], padding_count),
+                backing_index,
+                dtype=np.int32,
+            )
+            print_recipes = np.concatenate((padding, user_recipes), axis=1)
+        else:
+            print_recipes = np.asarray(user_recipes, dtype=np.int32)
+        try:
+            simulated_linear = forward_batch_model(
+                print_recipes,
+                materials,
+                layer_height_mm,
+                substrate_linear,
+            )
+            if simulated_linear.shape != (print_recipes.shape[0], 3):
+                raise ValueError(
+                    f"simulation returned shape {simulated_linear.shape}"
+                )
+            if not np.all(np.isfinite(simulated_linear)):
+                raise ValueError("simulation returned non-finite colors")
+            simulated_srgb = linear_to_srgb_uint8(simulated_linear)
+        except Exception as exc:
+            raise _candidate_failure(
+                str(exc),
+                layer_count=layer_count,
+                phase="full_stack_simulation",
+                cause=exc,
+            )
+        if simulated_srgb.shape != (print_recipes.shape[0], 3):
+            raise _candidate_failure(
+                f"simulation returned shape {simulated_srgb.shape}",
+                layer_count=layer_count,
+                phase="full_stack_simulation",
+            )
+        all_print_recipes.append(print_recipes)
+        all_score_srgb.append(simulated_srgb)
+        all_actual_counts.append(
+            np.full(print_recipes.shape[0], layer_count, dtype=np.int16)
+        )
+
+    print_recipes = np.concatenate(all_print_recipes, axis=0)
+    scored_srgb = np.concatenate(all_score_srgb, axis=0)
+    actual_counts = np.concatenate(all_actual_counts, axis=0)
+    catalog = build_dynamic_candidate_catalog(
+        scored_srgb,
+        print_recipes,
+        actual_counts,
+        config.max_layer_count,
+    )
+    return catalog, int(print_recipes.shape[0]), layer_counts
+
+
+def _build_dynamic_color_matches(
+    targets: np.ndarray,
+    catalog: DynamicCandidateCatalog,
+    search: ExactDynamicSearchResult,
+    layer_counts: tuple[int, ...],
+    tolerance: float,
+) -> tuple[DynamicMaterialColorMatch, ...]:
+    matches: list[DynamicMaterialColorMatch] = []
+    for target_index, target in enumerate(targets):
+        options: list[DynamicMaterialLayerOption] = []
+        for cap_offset, layer_cap in enumerate(layer_counts):
+            candidate_index = int(
+                search.cumulative_best_candidate_indices[target_index, cap_offset]
+            )
+            delta_e00 = float(
+                search.cumulative_best_delta_e00[target_index, cap_offset]
+            )
+            if (
+                candidate_index < 0
+                or candidate_index >= catalog.score_srgb.shape[0]
+                or not math.isfinite(delta_e00)
+            ):
+                raise _candidate_failure(
+                    "no candidate is available for this layer cap",
+                    layer_count=layer_cap,
+                    phase="exact_search",
+                )
+            options.append(
+                _layer_option_from_catalog(
+                    catalog,
+                    candidate_index,
+                    layer_cap,
+                    delta_e00,
+                )
+            )
+        fixed_max_delta_e00 = float(search.fixed_max_delta_e00[target_index])
+        if not math.isfinite(fixed_max_delta_e00):
+            raise _candidate_failure(
+                "fixed maximum-layer baseline is unavailable",
+                layer_count=layer_counts[-1],
+                phase="fixed_max_baseline",
+            )
+        best_range = options[-1]
+        threshold = best_range.delta_e00 + tolerance
+        selected = next(option for option in options if option.delta_e00 <= threshold)
+        sacrifice = selected.delta_e00 - best_range.delta_e00
+        if sacrifice < 0.0 and abs(sacrifice) < 1e-12:
+            sacrifice = 0.0
+        matches.append(
+            DynamicMaterialColorMatch(
+                target_srgb=tuple(int(value) for value in target),
+                selected=selected,
+                best_range=best_range,
+                fixed_max_delta_e00=fixed_max_delta_e00,
+                delta_e00_sacrifice=float(sacrifice),
+                layer_cap_options=tuple(options),
+            )
+        )
+    return tuple(matches)
+
+
+def solve_dynamic_material_colors(
+    target_srgb: np.ndarray,
+    materials: list[MaterialParams],
+    backing_material_index: int,
+    layer_height_mm: float,
+    substrate: str,
+    config: DynamicMaterialSolveConfig,
+    runtime_loader: MaterialRuntimeLoader = load_solver_runtime,
+) -> DynamicMaterialSolveResult:
+    """Build padded candidates and solve every target with exact CIEDE2000.
+
+    构建补位后的候选，并以精确 CIEDE2000 求解每个目标颜色。
+
+    Args:
+        target_srgb: Target sRGB rows shaped ``(T, 3)``. 形状为 ``(T, 3)`` 的
+            目标 sRGB 行。
+        materials: Material parameters in caller/user order. 按调用方或用户顺序
+            排列的耗材参数。
+        backing_material_index: Caller-order material used to pad the
+            substrate-adjacent side. 用于非观赏面补位的调用方顺序耗材索引。
+        layer_height_mm: Physical thickness of every printed layer. 每一打印层的
+            物理厚度（毫米）。
+        substrate: Substrate color, ``"white"`` or ``"black"``. 基底颜色，
+            为 ``"white"`` 或 ``"black"``。
+        config: Validated dynamic solve range and tolerance. 已验证的动态求解范围
+            与容差。
+        runtime_loader: Candidate runtime loader called once per allowed layer
+            count. 每个允许层数调用一次的候选运行时加载器。
+
+    Returns:
+        DynamicMaterialSolveResult: Exact per-target choices and candidate
+            diagnostics. 每个目标的精确选项和候选诊断信息。
+
+    Raises:
+        TypeError: If configuration, materials, indices, targets, or loader
+            values have incompatible types. 当配置、耗材、索引、目标或加载器
+            返回值类型不兼容时抛出。
+        ValueError: If target values, backing index, thickness, or substrate are
+            invalid. 当目标值、基板耗材索引、层厚或基底无效时抛出。
+        DynamicMaterialCandidateError: If any layer runtime/candidate table is
+            missing or malformed, simulation fails, a cap has no candidate, or
+            the fixed-max baseline is unavailable. 当任一层运行时或候选表缺失、
+            格式错误、模拟失败、某层数上限无候选或固定最大层数基线不可用时抛出。
+        DynamicMaterialSolverError: If both exact search engines fail. 当两个
+            精确搜索引擎均失败时抛出。
+    """
+    if not isinstance(config, DynamicMaterialSolveConfig):
+        raise TypeError("config must be a DynamicMaterialSolveConfig")
+    if not isinstance(materials, list) or not materials:
+        raise ValueError("materials must be a non-empty list")
+    if not all(isinstance(material, MaterialParams) for material in materials):
+        raise TypeError("materials must contain MaterialParams values")
+    if isinstance(backing_material_index, (bool, np.bool_)) or not isinstance(
+        backing_material_index,
+        (int, np.integer),
+    ):
+        raise TypeError("backing_material_index must be an integer")
+    backing_index = int(backing_material_index)
+    if not 0 <= backing_index < len(materials):
+        raise ValueError("backing_material_index is outside the material palette")
+    if isinstance(layer_height_mm, (bool, np.bool_)) or not isinstance(
+        layer_height_mm,
+        (int, float, np.integer, np.floating),
+    ):
+        raise TypeError("layer_height_mm must be a real number")
+    normalized_height = float(layer_height_mm)
+    if not math.isfinite(normalized_height) or normalized_height <= 0.0:
+        raise ValueError("layer_height_mm must be finite and positive")
+    normalized_substrate = str(substrate).lower()
+    if normalized_substrate not in {"white", "black"}:
+        raise ValueError("substrate must be 'white' or 'black'")
+
+    target_input = np.asarray(target_srgb)
+    if target_input.ndim != 2 or target_input.shape[1] != 3:
+        raise ValueError("target_srgb must have shape (T, 3)")
+    targets = _coerce_integral_array(
+        target_input,
+        name="target_srgb",
+        dtype=np.uint8,
+        minimum=0,
+        maximum=255,
+    )
+
+    catalog, candidate_count_before_dedup, layer_counts = (
+        _build_dynamic_candidate_catalog_from_runtimes(
+            materials,
+            backing_index,
+            normalized_height,
+            normalized_substrate,
+            config,
+            runtime_loader,
+        )
+    )
+    search = search_dynamic_catalog_exact(
+        targets,
+        catalog,
+        config.min_layer_count,
+        config.max_layer_count,
+    )
+    matches = _build_dynamic_color_matches(
+        targets,
+        catalog,
+        search,
+        layer_counts,
+        config.delta_e00_tolerance,
+    )
+
+    return DynamicMaterialSolveResult(
+        matches=matches,
+        engine=search.engine,
+        candidate_count_before_dedup=candidate_count_before_dedup,
+        candidate_count_after_dedup=int(catalog.score_srgb.shape[0]),
+        layer_counts=layer_counts,
+    )
+
+
+def build_material_layer_benefit_curve(
+    matches: Sequence[DynamicMaterialColorMatch],
+    pixel_counts: Sequence[int],
+) -> tuple[MaterialLayerBenefitPoint, ...]:
+    """Build the pixel-weighted exact CIEDE2000 layer-benefit curve.
+
+    构建按像素加权的精确 CIEDE2000 层数收益曲线。
+
+    Args:
+        matches: Dynamic matches in target-color order. 按目标颜色顺序排列的
+            动态匹配结果。
+        pixel_counts: One positive pixel count per match. 每个匹配结果对应一个
+            正像素数。
+
+    Returns:
+        tuple[MaterialLayerBenefitPoint, ...]: One weighted point per effective
+            layer cap. 每个有效层数上限对应一个加权收益点。
+
+    Raises:
+        TypeError: If matches or pixel counts have incompatible value types.
+            当匹配结果或像素数类型不兼容时抛出。
+        ValueError: If lengths, counts, or layer-cap layouts are invalid.
+            当长度、像素数或层数上限布局无效时抛出。
+    """
+    normalized_matches = tuple(matches)
+    normalized_counts = tuple(pixel_counts)
+    if len(normalized_matches) != len(normalized_counts):
+        raise ValueError("pixel_counts must contain one value per match")
+    if not normalized_matches:
+        return ()
+    if not all(
+        isinstance(match, DynamicMaterialColorMatch)
+        for match in normalized_matches
+    ):
+        raise TypeError("matches must contain DynamicMaterialColorMatch values")
+    counts: list[int] = []
+    for value in normalized_counts:
+        if isinstance(value, (bool, np.bool_)) or not isinstance(
+            value,
+            (int, np.integer),
+        ):
+            raise TypeError("pixel counts must be integers")
+        count = int(value)
+        if count <= 0:
+            raise ValueError("pixel counts must be positive")
+        counts.append(count)
+
+    expected_caps = tuple(
+        option.max_effective_layer_count
+        for option in normalized_matches[0].layer_cap_options
+    )
+    if not expected_caps:
+        raise ValueError("matches must contain at least one layer-cap option")
+    for match in normalized_matches:
+        caps = tuple(
+            option.max_effective_layer_count
+            for option in match.layer_cap_options
+        )
+        if caps != expected_caps:
+            raise ValueError("all matches must use identical layer caps")
+
+    weights = np.asarray(counts, dtype=np.float64)
+    means: list[float] = []
+    for cap_offset in range(len(expected_caps)):
+        values = np.asarray(
+            [
+                match.layer_cap_options[cap_offset].delta_e00
+                for match in normalized_matches
+            ],
+            dtype=np.float64,
+        )
+        if not np.all(np.isfinite(values)):
+            raise ValueError("layer-cap Delta-E00 values must be finite")
+        means.append(float(np.average(values, weights=weights)))
+
+    points: list[MaterialLayerBenefitPoint] = []
+    for index, (layer_cap, mean) in enumerate(zip(expected_caps, means)):
+        marginal = 0.0 if index == 0 else means[index - 1] - mean
+        points.append(
+            MaterialLayerBenefitPoint(
+                max_effective_layer_count=int(layer_cap),
+                weighted_mean_delta_e00=mean,
+                marginal_delta_e00_reduction=float(marginal),
+            )
+        )
+    return tuple(points)
