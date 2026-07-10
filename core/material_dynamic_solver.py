@@ -33,6 +33,22 @@ class DynamicCandidateCatalog:
     """Lossless catalog of scored material candidates.
 
     已评分耗材候选的无损目录。
+
+    Attributes:
+        score_srgb: Unique scored sRGB rows as ``uint8`` with shape ``(U, 3)``.
+            唯一的已评分 sRGB 行，类型为 ``uint8``，形状为 ``(U, 3)``。
+        score_lab: Repository-standard Lab rows as ``float64`` with shape
+            ``(U, 3)``. 使用项目标准转换得到的 ``float64`` Lab 行，形状为
+            ``(U, 3)``。
+        print_recipes: Fixed-width Bottom-to-Top material recipes with shape
+            ``(U, max_layer_count)``. 固定宽度的自底向上材料配方，形状为
+            ``(U, max_layer_count)``。
+        minimum_actual_layer_counts: Shortest actual recipe length retained for
+            each scored color. 每个评分颜色保留的最短实际配方层数。
+        max_layer_reachable: Whether any source row for a scored color was built
+            at the catalog maximum. 对应评分颜色是否存在达到目录最大层数的源行。
+        source_indices: Retained source-row indices in stable catalog order.
+            按稳定目录顺序保留的源行索引。
     """
 
     score_srgb: np.ndarray
@@ -89,6 +105,16 @@ class ExactDynamicSearchResult:
     """Exact per-layer-cap search results.
 
     每个层数上限对应的精确搜索结果。
+
+    Attributes:
+        cumulative_best_candidate_indices: Best catalog index for every target
+            and allowed layer cap. 每个目标颜色、每个允许层数上限对应的最佳目录索引。
+        cumulative_best_delta_e00: Exact CIEDE2000 value paired with every best
+            candidate index. 与每个最佳候选索引对应的精确 CIEDE2000 值。
+        fixed_max_delta_e00: Exact fixed-maximum baseline for every target.
+            每个目标颜色对应的精确固定最大层数基线。
+        engine: Engine that produced the result, either ``"numba"`` or
+            ``"numpy"``. 生成结果的引擎，为 ``"numba"`` 或 ``"numpy"``。
     """
 
     cumulative_best_candidate_indices: np.ndarray
@@ -444,6 +470,29 @@ def build_dynamic_candidate_catalog(
     """Build a losslessly deduplicated candidate catalog.
 
     构建无损去重的候选目录。
+
+    Args:
+        score_srgb: Source scored sRGB rows with shape ``(N, 3)`` and values
+            losslessly convertible to ``uint8``. 源评分 sRGB 行，形状为
+            ``(N, 3)``，数值必须可无损转换为 ``uint8``。
+        print_recipes_bottom_to_top: Fixed-width Bottom-to-Top source recipes
+            with shape ``(N, max_layer_count)``. 固定宽度的自底向上源配方，
+            形状为 ``(N, max_layer_count)``。
+        actual_layer_counts: Actual recipe length for every source row.
+            每个源行对应的实际配方层数。
+        max_layer_count: Catalog maximum layer count in the inclusive range
+            ``5..10``. 目录最大层数，取值范围为 ``5..10``（含边界）。
+
+    Returns:
+        DynamicCandidateCatalog: Immutable catalog containing exact-RGB unique
+            colors and their deterministic retained recipes. 包含精确 RGB 唯一
+            颜色及其确定性保留配方的不可变目录。
+
+    Raises:
+        TypeError: If a bound is not an integer or an input contains values with
+            an incompatible dtype. 当层数边界不是整数，或输入值类型不兼容时抛出。
+        ValueError: If shapes, values, row counts, recipe widths, or layer counts
+            are invalid. 当形状、数值、行数、配方宽度或层数无效时抛出。
     """
     normalized_max = _validate_layer_bound(max_layer_count, "max_layer_count")
 
@@ -534,6 +583,37 @@ def search_dynamic_catalog_exact(
     """Search a candidate catalog with exhaustive CIEDE2000 scoring.
 
     使用穷举 CIEDE2000 评分搜索候选目录。
+
+    Args:
+        target_srgb: Target sRGB rows with shape ``(T, 3)`` and values losslessly
+            convertible to ``uint8``. 目标 sRGB 行，形状为 ``(T, 3)``，数值必须
+            可无损转换为 ``uint8``。
+        catalog: Losslessly deduplicated dynamic candidate catalog.
+            无损去重后的动态候选目录。
+        min_layer_count: First allowed layer cap in the inclusive range
+            ``5..10``. 最小允许层数上限，取值范围为 ``5..10``（含边界）。
+        max_layer_count: Last allowed layer cap in the inclusive range ``5..10``;
+            it must not be less than ``min_layer_count`` or exceed the catalog
+            recipe width. 最大允许层数上限，取值范围为 ``5..10``（含边界），
+            不得小于 ``min_layer_count`` 或超过目录配方宽度。
+        prefer_numba: Try the exact parallel Numba engine before the exact
+            chunked NumPy engine. 是否优先尝试精确并行 Numba 引擎，再回退到
+            精确分块 NumPy 引擎。
+
+    Returns:
+        ExactDynamicSearchResult: Exact cumulative frontiers, fixed-maximum
+            baselines, and the engine name. 精确累计前沿、固定最大层数基线和
+            引擎名称。
+
+    Raises:
+        TypeError: If ``catalog`` has the wrong type, a bound is not an integer,
+            or target values have an incompatible dtype. 当 ``catalog`` 类型错误、
+            层数边界不是整数或目标值类型不兼容时抛出。
+        ValueError: If target/catalog shapes, values, population, layer counts,
+            or bounds are invalid. 当目标或目录的形状、数值、候选数量、层数或
+            边界无效时抛出。
+        DynamicMaterialSolverError: If every selected exact engine fails at call
+            time. 当所有选定的精确引擎均在调用时失败时抛出。
     """
     normalized_min = _validate_layer_bound(min_layer_count, "min_layer_count")
     normalized_max = _validate_layer_bound(max_layer_count, "max_layer_count")

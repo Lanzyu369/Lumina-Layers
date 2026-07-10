@@ -15,6 +15,7 @@ from core.material_dynamic_solver import (
     _delta_e00_numba_scalar,
     _delta_e00_numpy,
     _delta_e00_scalar,
+    _search_exact_numpy,
     build_dynamic_candidate_catalog,
     search_dynamic_catalog_exact,
 )
@@ -317,6 +318,51 @@ def test_exact_numpy_and_numba_match_exhaustive_random_frontiers() -> None:
     np.testing.assert_allclose(
         numba_result.fixed_max_delta_e00,
         expected_fixed,
+        rtol=0.0,
+        atol=1e-12,
+    )
+
+
+def test_numpy_chunks_keep_global_indices_ties_and_fixed_max_reduction() -> None:
+    target_lab = np.asarray(
+        [[50.0, 0.0, 0.0], [60.0, 0.0, 0.0]],
+        dtype=np.float64,
+    )
+    candidate_lab = np.asarray(
+        [
+            [50.0, 10.0, 0.0],
+            [50.0, 1.0, 0.0],
+            [50.0, 1.0, 0.0],
+            [60.0, 0.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+
+    indices, values, fixed = _search_exact_numpy(
+        target_lab,
+        candidate_lab,
+        np.asarray([5, 5, 5, 6], dtype=np.int16),
+        np.asarray([False, False, True, True]),
+        5,
+        6,
+        candidate_chunk_size=2,
+    )
+
+    # Candidates 1 and 2 straddle a chunk boundary and are exact ties.
+    np.testing.assert_array_equal(indices[0], [1, 1])
+    assert values[0, 0] == pytest.approx(
+        _delta_e00_scalar(target_lab[0], candidate_lab[1])
+    )
+    # Candidate 3 is local offset 1 in the second chunk but global index 3.
+    assert indices[1, 1] == 3
+    assert values[1, 1] == 0.0
+    # Fixed-max reduction independently selects global indices 2 and 3.
+    np.testing.assert_allclose(
+        fixed,
+        [
+            _delta_e00_scalar(target_lab[0], candidate_lab[2]),
+            _delta_e00_scalar(target_lab[1], candidate_lab[3]),
+        ],
         rtol=0.0,
         atol=1e-12,
     )
