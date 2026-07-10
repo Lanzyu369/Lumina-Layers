@@ -823,6 +823,63 @@ def test_dynamic_solve_reports_layer_and_phase_for_invalid_runtime(
     assert caught.value.phase == expected_phase
 
 
+def test_dynamic_solve_translates_ragged_runtime_recipes_to_candidate_error() -> None:
+    materials = [_task1b_material("Only", (0.2, 0.3, 0.4))]
+    runtime = MaterialCandidateRuntime(
+        candidate_recipes=[[0, 0, 0, 0, 0], [0, 0, 0, 0]],
+        achieved_srgb=np.zeros((2, 3), dtype=np.uint8),
+        achieved_lab=np.zeros((2, 3), dtype=np.float64),
+        pinned_mask=np.zeros(2, dtype=np.bool_),
+        metadata={
+            "layer_count": 5,
+            "layer_height_mm": 0.08,
+            "substrate": "white",
+            "palette_hash": "test",
+            "grid_resolution": 8,
+        },
+    )
+
+    with pytest.raises(dynamic_solver.DynamicMaterialCandidateError) as caught:
+        dynamic_solver.solve_dynamic_material_colors(
+            np.asarray([[1, 2, 3]], dtype=np.uint8),
+            materials,
+            0,
+            0.08,
+            "white",
+            dynamic_solver.DynamicMaterialSolveConfig(5, 5, 0.5),
+            runtime_loader=lambda _m, _k, _h, _s: (runtime, None),
+        )
+
+    assert caught.value.layer_count == 5
+    assert caught.value.phase == "candidate_recipes"
+
+
+@pytest.mark.parametrize(
+    "runtime_layer_count",
+    [float("inf"), float("nan"), 5.5, True],
+)
+def test_dynamic_solve_rejects_invalid_runtime_layer_count_metadata(
+    runtime_layer_count: object,
+) -> None:
+    materials = [_task1b_material("Only", (0.2, 0.3, 0.4))]
+    runtime = _task1b_runtime(np.zeros((1, 5), dtype=np.uint8), 5)
+    runtime.metadata["layer_count"] = runtime_layer_count
+
+    with pytest.raises(dynamic_solver.DynamicMaterialCandidateError) as caught:
+        dynamic_solver.solve_dynamic_material_colors(
+            np.asarray([[1, 2, 3]], dtype=np.uint8),
+            materials,
+            0,
+            0.08,
+            "white",
+            dynamic_solver.DynamicMaterialSolveConfig(5, 5, 0.5),
+            runtime_loader=lambda _m, _k, _h, _s: (runtime, None),
+        )
+
+    assert caught.value.layer_count == 5
+    assert caught.value.phase == "runtime_metadata"
+
+
 def test_dynamic_solve_reports_full_stack_simulation_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

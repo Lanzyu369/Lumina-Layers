@@ -874,7 +874,15 @@ def _normalize_runtime_recipe_table(
     material_count: int,
     phase: str,
 ) -> np.ndarray:
-    recipes = np.asarray(value)
+    try:
+        recipes = np.asarray(value)
+    except Exception as exc:
+        raise _candidate_failure(
+            f"recipe table cannot be converted to an array: {exc}",
+            layer_count=layer_count,
+            phase=phase,
+            cause=exc,
+        )
     if recipes.ndim != 2:
         raise _candidate_failure(
             f"recipe table must be two-dimensional, got {recipes.shape}",
@@ -897,7 +905,7 @@ def _normalize_runtime_recipe_table(
             minimum=0,
             maximum=material_count - 1,
         )
-    except (TypeError, ValueError) as exc:
+    except Exception as exc:
         raise _candidate_failure(
             str(exc),
             layer_count=layer_count,
@@ -913,8 +921,19 @@ def _runtime_recipes_canonical(
     material_count: int,
 ) -> np.ndarray:
     try:
-        runtime_layer_count = int(runtime.layer_count)
-    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        raw_layer_count = runtime.metadata["layer_count"]
+        if isinstance(raw_layer_count, (bool, np.bool_)) or not isinstance(
+            raw_layer_count,
+            (int, float, np.integer, np.floating),
+        ):
+            raise TypeError("runtime layer count must be an integer")
+        numeric_layer_count = float(raw_layer_count)
+        if not math.isfinite(numeric_layer_count):
+            raise ValueError("runtime layer count must be finite")
+        if numeric_layer_count != math.floor(numeric_layer_count):
+            raise ValueError("runtime layer count must be integral")
+        runtime_layer_count = int(numeric_layer_count)
+    except Exception as exc:
         raise _candidate_failure(
             "runtime does not expose a valid layer count",
             layer_count=layer_count,
@@ -942,7 +961,15 @@ def _runtime_recipes_canonical(
             material_count=material_count,
             phase="cache_recipes",
         )
-        uniform_input = np.asarray(runtime.uniform_recipes)
+        try:
+            uniform_input = np.asarray(runtime.uniform_recipes)
+        except Exception as exc:
+            raise _candidate_failure(
+                f"uniform recipe table cannot be converted to an array: {exc}",
+                layer_count=layer_count,
+                phase="cache_uniform_recipes",
+                cause=exc,
+            )
         if uniform_input.size:
             uniform = _normalize_runtime_recipe_table(
                 uniform_input,
