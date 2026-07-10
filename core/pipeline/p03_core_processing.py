@@ -117,9 +117,12 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     耗材档案模式处理：量化图像，通过求解运行时生成配方。
 
     Solver selection:
-      1. Try to load a persisted :class:`core.material_cache.MaterialSolverCache`.
-      2. When no persisted cache exists, build a bounded candidate runtime.
-      3. Resolve recipes through the shared ``lookup`` duck-typed contract.
+      1. Dynamic mode delegates all sorted targets to the exact CIEDE2000
+         dynamic solver and consumes fixed-width padded recipes.
+      2. Fixed mode tries a persisted
+         :class:`core.material_cache.MaterialSolverCache`.
+      3. When no persisted fixed cache exists, build a bounded runtime and
+         resolve recipes through the shared ``lookup`` contract.
     The choice is recorded in ``ctx["material_solver_info"]`` so the UI can
     show whether the cache was used.
     """
@@ -142,7 +145,17 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     modeling_mode = ctx["modeling_mode"]
     quantize_colors_n = ctx["quantize_colors"]
     materials = ctx["_material_params"]
-    layer_count = int(ctx.get("color_layers") or 5)
+    fixed_layer_count = int(ctx.get("color_layers") or 5)
+    dynamic_layer_count_enabled = bool(
+        ctx.get("material_dynamic_layer_count_enabled", False)
+    )
+    # Keep disabled-mode compatibility exact: stale or malformed dynamic-only
+    # values are ignored unless the feature is enabled. The solver config owns
+    # validation and normalization when dynamic mode is active.
+    dynamic_min_layer_count = ctx.get("material_min_layer_count", 5)
+    dynamic_max_layer_count = ctx.get("material_max_layer_count", 10)
+    dynamic_delta_e00_tolerance = ctx.get("material_delta_e00_tolerance", 0.5)
+    layer_count = fixed_layer_count
     layer_height_mm = float(ctx.get("layer_height_mm") or 0.08)
     substrate = str(ctx.get("material_substrate") or "white")
     requested_grid = int(ctx.get("grid_resolution") or DEFAULT_GRID_RESOLUTION)
@@ -188,33 +201,36 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     # Auto dynamic range only benefits from a persisted legacy cache's
     # ``lab_centers``. Do not build a candidate runtime before quantization:
     # transparent/empty inputs should not allocate candidate arrays at all.
-    try:
-        cache, actual_grid = load_solver_cache(
-            materials=materials,
-            layer_count=layer_count,
-            layer_height_mm=layer_height_mm,
-            substrate=substrate,
-            grid_resolution=requested_grid,
-        )
-    except (MemoryError, RuntimeError, ValueError) as exc:
-        _log.error(
-            "Material solver cache load failed: %s",
-            exc,
-            extra={
-                "event": "material_solver_cache_load_failed",
-                "material_count": len(materials),
-                "layer_count": layer_count,
-                "layer_height_mm": layer_height_mm,
-                "substrate": substrate,
-                "error_type": type(exc).__name__,
-                "error_message": str(exc),
-            },
-        )
-        ctx["error"] = (
-            "[P03] 耗材求解缓存加载失败。"
-            " / Material solver cache load failed."
-        )
-        return ctx
+    cache = None
+    actual_grid = None
+    if not dynamic_layer_count_enabled:
+        try:
+            cache, actual_grid = load_solver_cache(
+                materials=materials,
+                layer_count=layer_count,
+                layer_height_mm=layer_height_mm,
+                substrate=substrate,
+                grid_resolution=requested_grid,
+            )
+        except (MemoryError, RuntimeError, ValueError) as exc:
+            _log.error(
+                "Material solver cache load failed: %s",
+                exc,
+                extra={
+                    "event": "material_solver_cache_load_failed",
+                    "material_count": len(materials),
+                    "layer_count": layer_count,
+                    "layer_height_mm": layer_height_mm,
+                    "substrate": substrate,
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                },
+            )
+            ctx["error"] = (
+                "[P03] 耗材求解缓存加载失败。"
+                " / Material solver cache load failed."
+            )
+            return ctx
 
     # ---- Auto dynamic range (optional) ----
     if ctx.get("auto_dynamic_range"):
@@ -337,7 +353,60 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     solver_t0 = time.perf_counter()
     solver_path: str
     solver_meta: dict = {}
-    if cache is None and unique_colors.shape[0] > 0:
+    dynamic_layer_info: dict | None = None
+    if dynamic_layer_count_enabled:
+        from core import material_dynamic_solver as dynamic_solver
+        from core.pipeline.material_dynamic_layers import (
+            _record_dynamic_material_error,
+            _solve_dynamic_material_targets,
+        )
+
+        if "material_backing_material_index" in ctx:
+            backing_material_index = ctx.get("material_backing_material_index")
+        else:
+            backing_material_index = ctx.get("material_base_channel_idx")
+        if unique_colors.shape[0] > 0:
+            counted_colors, pixel_counts = np.unique(
+                quantized_image[mask_solid].reshape(-1, 3),
+                axis=0,
+                return_counts=True,
+            )
+        else:
+            pixel_counts = np.zeros((0,), dtype=np.int64)
+        try:
+            if unique_colors.shape[0] > 0 and not np.array_equal(
+                counted_colors, unique_colors
+            ):
+                raise ValueError(
+                    "pixel-count color order does not match sorted unique colors"
+                )
+            (
+                matched_rgb_unique,
+                recipes_unique,
+                delta_e,
+                dynamic_layer_info,
+                solver_meta,
+            ) = _solve_dynamic_material_targets(
+                unique_colors=unique_colors,
+                pixel_counts=pixel_counts,
+                materials=materials,
+                backing_material_index=backing_material_index,
+                layer_height_mm=layer_height_mm,
+                substrate=substrate,
+                min_layer_count=dynamic_min_layer_count,
+                max_layer_count=dynamic_max_layer_count,
+                delta_e00_tolerance=dynamic_delta_e00_tolerance,
+            )
+        except (
+            dynamic_solver.DynamicMaterialCandidateError,
+            dynamic_solver.DynamicMaterialSolverError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            return _record_dynamic_material_error(ctx, exc)
+        layer_count = int(dynamic_layer_info["max_layer_count"])
+        solver_path = "dynamic_exact"
+    elif cache is None and unique_colors.shape[0] > 0:
         try:
             cache, actual_grid = load_solver_runtime(
                 materials=materials,
@@ -366,7 +435,11 @@ def _run_material_archive_branch(ctx: dict) -> dict:
                 "or build a persisted cache first."
             )
             return ctx
-    if cache is not None and unique_colors.shape[0] > 0:
+    if (
+        not dynamic_layer_count_enabled
+        and cache is not None
+        and unique_colors.shape[0] > 0
+    ):
         cache_mode = str(getattr(cache, "mode", "bucketed"))
         cache_metadata = getattr(cache, "metadata", {}) or {}
         cache_layer_count = int(getattr(cache, "layer_count", layer_count))
@@ -402,7 +475,7 @@ def _run_material_archive_branch(ctx: dict) -> dict:
                 "unique_color_count": int(unique_colors.shape[0]),
             },
         )
-    elif unique_colors.shape[0] == 0:
+    elif not dynamic_layer_count_enabled and unique_colors.shape[0] == 0:
         matched_rgb_unique = np.zeros((0, 3), dtype=np.uint8)
         recipes_unique = np.zeros((0, layer_count), dtype=np.int32)
         delta_e = np.zeros((0,), dtype=np.float64)
@@ -426,7 +499,7 @@ def _run_material_archive_branch(ctx: dict) -> dict:
                 str(getattr(cache, "mode", "candidate_hybrid")) if cache else "none"
             ),
         }
-    else:
+    elif not dynamic_layer_count_enabled:
         ctx["error"] = (
             "[P03] 未能加载或构建耗材求解运行时。"
             " / No material solver runtime could be loaded or built."
@@ -448,13 +521,15 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     # skip this expensive pass, preserving the large-palette OOM guard.
     # 仅当 runtime 已完整覆盖 M**N 且组合数很小时才做跨 N 保底；近似候选
     # runtime 和分桶缓存仍跳过，避免回到大调色板 OOM 路径。
-    _run_cross_n = should_run_cross_n_fallback(
-        solver_path=solver_path,
-        runtime=cache,
-        unique_color_count=int(unique_colors.shape[0]),
-        material_count=len(materials),
-        layer_count=layer_count,
-    )
+    _run_cross_n = False
+    if not dynamic_layer_count_enabled:
+        _run_cross_n = should_run_cross_n_fallback(
+            solver_path=solver_path,
+            runtime=cache,
+            unique_color_count=int(unique_colors.shape[0]),
+            material_count=len(materials),
+            layer_count=layer_count,
+        )
     if _run_cross_n:
         fallback_t0 = time.perf_counter()
         matched_rgb_unique, recipes_unique, delta_e, fallback_stats = (
@@ -504,7 +579,7 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     # while the voxel builders in S06 assume ``Top2Bottom`` (index 0 =
     # viewing surface). Reverse the recipe columns once here so downstream
     # ``material_matrix`` matches the pipeline convention.
-    if recipes_unique.shape[1] > 1:
+    if not dynamic_layer_count_enabled and recipes_unique.shape[1] > 1:
         recipes_unique = np.ascontiguousarray(recipes_unique[:, ::-1])
 
     # ---- Map pixels ----
@@ -537,6 +612,13 @@ def _run_material_archive_branch(ctx: dict) -> dict:
             ctx.get("replacement_regions")
         )
         if effective_color_replacements:
+            if dynamic_layer_count_enabled:
+                error = dynamic_solver.DynamicMaterialCandidateError(
+                    "dynamic color replacements must be resolved before mapping",
+                    layer_count=layer_count,
+                    phase="color_replacements",
+                )
+                return _record_dynamic_material_error(ctx, error)
             matched_rgb, material_matrix, applied_replacements = (
                 _apply_material_archive_color_replacements(
                     matched_rgb,
@@ -587,6 +669,9 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     ctx["debug_data"] = None
     ctx["quantized_image"] = quantized_image
     ctx["lut_match_info"] = None
+    if dynamic_layer_count_enabled:
+        ctx["color_layers"] = layer_count
+        ctx["material_dynamic_layer_info"] = dynamic_layer_info
     ctx["material_solver_info"] = {
         "path": solver_path,
         "layer_count": layer_count,
