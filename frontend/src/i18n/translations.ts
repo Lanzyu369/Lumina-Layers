@@ -1793,6 +1793,38 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "高级",
     en: "Advanced",
   },
+  "settings.completion_notifications_heading": {
+    zh: "完成通知",
+    en: "Completion notifications",
+  },
+  "settings.completion_notifications_description": {
+    zh: "浏览器通知会在预览、模型生成、批量生成和校准生成完成时提醒你。此设置仅保存在当前浏览器中。",
+    en: "Browser notifications alert you when preview, model generation, batch generation, or calibration generation finishes. This setting is stored only in this browser.",
+  },
+  "settings.completion_notifications_enable_label": {
+    zh: "启用浏览器完成通知",
+    en: "Enable browser completion notifications",
+  },
+  "settings.completion_notifications_granted": {
+    zh: "浏览器已允许通知。开启后，此设备会收到完成提醒。",
+    en: "Browser permission is granted. When enabled, this device will receive completion alerts.",
+  },
+  "settings.completion_notifications_denied": {
+    zh: "浏览器已拒绝通知权限，功能保持关闭。请在浏览器的站点设置中允许通知后重试。",
+    en: "The browser denied notification permission, so the feature remains off. Allow notifications in the browser's site settings, then try again.",
+  },
+  "settings.completion_notifications_default": {
+    zh: "尚未授予浏览器通知权限。开启时浏览器会询问；若关闭或忽略提示，功能会保持关闭。",
+    en: "Browser notification permission has not been granted. The browser will ask when you enable it; dismissing the prompt keeps the feature off.",
+  },
+  "settings.completion_notifications_unsupported": {
+    zh: "当前浏览器不支持通知，功能保持关闭。",
+    en: "This browser does not support notifications, so the feature remains off.",
+  },
+  "settings.completion_notifications_request_failed": {
+    zh: "请求浏览器通知权限失败，功能保持关闭。请稍后重试。",
+    en: "The notification permission request failed, so the feature remains off. Please try again later.",
+  },
   "settings.solver_cache_density_heading": {
     zh: "穷举数量",
     en: "Exhaustive density",
