@@ -1353,8 +1353,20 @@ def solve_dynamic_material_colors(
     else:
         from core.material_dynamic_catalog_cache import (
             build_dynamic_catalog_cache_key,
+            dynamic_material_canonical_order,
             load_or_build_dynamic_candidate_catalog,
         )
+
+        canonical_to_user = np.asarray(
+            dynamic_material_canonical_order(materials),
+            dtype=np.int32,
+        )
+        user_to_canonical = np.empty(len(materials), dtype=np.int32)
+        user_to_canonical[canonical_to_user] = np.arange(
+            len(materials), dtype=np.int32
+        )
+        canonical_materials = [materials[int(index)] for index in canonical_to_user]
+        canonical_backing_index = int(user_to_canonical[backing_index])
 
         def production_runtime_loader(
             loader_materials: list[MaterialParams],
@@ -1382,15 +1394,25 @@ def solve_dynamic_material_colors(
         )
 
         def build_catalog() -> tuple[DynamicCandidateCatalog, int]:
-            built_catalog, before_count, _built_layer_counts = (
+            canonical_catalog, before_count, _built_layer_counts = (
                 _build_dynamic_candidate_catalog_from_runtimes(
-                    materials,
-                    backing_index,
+                    canonical_materials,
+                    canonical_backing_index,
                     normalized_height,
                     normalized_substrate,
                     config,
                     production_runtime_loader,
                 )
+            )
+            built_catalog = DynamicCandidateCatalog(
+                score_srgb=canonical_catalog.score_srgb,
+                score_lab=canonical_catalog.score_lab,
+                print_recipes=canonical_to_user[canonical_catalog.print_recipes],
+                minimum_actual_layer_counts=(
+                    canonical_catalog.minimum_actual_layer_counts
+                ),
+                max_layer_reachable=canonical_catalog.max_layer_reachable,
+                source_indices=canonical_catalog.source_indices,
             )
             return built_catalog, before_count
 

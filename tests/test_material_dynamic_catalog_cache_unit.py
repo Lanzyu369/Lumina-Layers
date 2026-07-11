@@ -175,6 +175,10 @@ def test_cache_key_covers_version_palette_backing_range_height_substrate_and_bud
     assert len(variants) == 7
 
 
+def test_identity_safe_candidate_universe_uses_new_algorithm_version() -> None:
+    assert DYNAMIC_CATALOG_ALGORITHM_VERSION == "dynamic-ciede2000-v2"
+
+
 def test_catalog_round_trip_rebinds_canonical_recipes_to_current_user_order(
     tmp_path: Path,
 ) -> None:
@@ -564,6 +568,121 @@ def test_production_solver_pins_candidate_budget_for_every_layer_and_skips_fixed
     ]
 
 
+def test_production_solver_duplicate_optics_fresh_and_hit_preserve_identities(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    materials = _duplicate_optical_materials()
+    runtimes = {
+        layer_count: _runtime(
+            np.asarray(
+                [
+                    [0] * layer_count,
+                    [1] * layer_count,
+                ],
+                dtype=np.uint8,
+            ),
+            layer_count,
+        )
+        for layer_count in (5, 6)
+    }
+    loader_orders: list[tuple[str, ...]] = []
+
+    def dynamic_loader(
+        loader_materials: list[MaterialParams],
+        layer_count: int,
+        _layer_height_mm: float,
+        _substrate: str,
+        *,
+        candidate_budget: int,
+        cache_root: str | Path | None = None,
+    ) -> tuple[MaterialCandidateRuntime, int]:
+        del candidate_budget, cache_root
+        loader_orders.append(
+            tuple(material.directory_name for material in loader_materials)
+        )
+        return runtimes[layer_count], 8
+
+    monkeypatch.setattr(
+        dynamic_solver,
+        "load_dynamic_candidate_runtime",
+        dynamic_loader,
+    )
+    config = dynamic_solver.DynamicMaterialSolveConfig(5, 6, 0.5)
+    targets = np.asarray([[120, 90, 60]], dtype=np.uint8)
+    hit_root = tmp_path / "hit"
+    fresh_root = tmp_path / "fresh"
+
+    original_fresh = dynamic_solver.solve_dynamic_material_colors(
+        targets,
+        materials,
+        backing_material_index=0,
+        layer_height_mm=0.08,
+        substrate="white",
+        config=config,
+        catalog_cache_root=hit_root,
+    )
+    reversed_materials = list(reversed(materials))
+    reversed_hit = dynamic_solver.solve_dynamic_material_colors(
+        targets,
+        reversed_materials,
+        backing_material_index=1,
+        layer_height_mm=0.08,
+        substrate="white",
+        config=config,
+        catalog_cache_root=hit_root,
+    )
+    reversed_fresh = dynamic_solver.solve_dynamic_material_colors(
+        targets,
+        reversed_materials,
+        backing_material_index=1,
+        layer_height_mm=0.08,
+        substrate="white",
+        config=config,
+        catalog_cache_root=fresh_root,
+    )
+
+    def recipe_identities(recipe, palette) -> tuple[str, ...]:
+        return tuple(
+            palette[index].directory_name
+            for index in recipe
+        )
+
+    assert len(loader_orders) == 4
+    assert len(set(loader_orders)) == 1
+    original_option = original_fresh.matches[0].selected
+    hit_option = reversed_hit.matches[0].selected
+    fresh_option = reversed_fresh.matches[0].selected
+    assert recipe_identities(
+        original_option.actual_recipe_bottom_to_top,
+        materials,
+    ) == recipe_identities(
+        hit_option.actual_recipe_bottom_to_top,
+        reversed_materials,
+    )
+    assert recipe_identities(
+        hit_option.actual_recipe_bottom_to_top,
+        reversed_materials,
+    ) == recipe_identities(
+        fresh_option.actual_recipe_bottom_to_top,
+        reversed_materials,
+    )
+    assert recipe_identities(
+        hit_option.print_recipe_bottom_to_top,
+        reversed_materials,
+    ) == recipe_identities(
+        fresh_option.print_recipe_bottom_to_top,
+        reversed_materials,
+    )
+    assert recipe_identities(
+        hit_option.print_recipe_bottom_to_top,
+        reversed_materials,
+    )[0] == materials[0].directory_name
+    assert hit_option.matched_srgb == (
+        fresh_option.matched_srgb
+    )
+
+
 def test_dynamic_runtime_provider_bypasses_legacy_fixed_cache(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -716,6 +835,119 @@ def test_cache_emits_structured_hit_miss_build_and_corruption_logs(
     assert warning_level == "WARNING"
     assert warning["error_type"]
     assert warning["error_message"]
+
+
+def test_invalid_builder_catalog_is_typed_failure_and_is_not_persisted(
+    tmp_path: Path,
+) -> None:
+    materials = _materials()
+    key = _key(materials)
+    valid = _catalog()
+    invalid = dynamic_solver.DynamicCandidateCatalog(
+        score_srgb=valid.score_srgb,
+        score_lab=valid.score_lab,
+        print_recipes=valid.print_recipes,
+        minimum_actual_layer_counts=valid.minimum_actual_layer_counts,
+        max_layer_reachable=valid.max_layer_reachable,
+        source_indices=np.asarray([0, 0], dtype=np.int64),
+    )
+    path = dynamic_catalog_cache_file_path(key, cache_root=tmp_path)
+
+    with pytest.raises(dynamic_solver.DynamicMaterialCandidateError) as caught:
+        load_or_build_dynamic_candidate_catalog(
+            materials=materials,
+            key=key,
+            builder=lambda: (invalid, 3),
+            cache_root=tmp_path,
+        )
+
+    assert caught.value.phase == "dynamic_catalog_cache_build"
+    assert not path.exists()
+
+
+def test_corrupt_rebuild_rejects_invalid_builder_without_replacing_entry(
+    tmp_path: Path,
+) -> None:
+    materials = _materials()
+    key = _key(materials)
+    valid = _catalog()
+    invalid = dynamic_solver.DynamicCandidateCatalog(
+        score_srgb=valid.score_srgb,
+        score_lab=valid.score_lab,
+        print_recipes=valid.print_recipes,
+        minimum_actual_layer_counts=valid.minimum_actual_layer_counts,
+        max_layer_reachable=np.asarray([False, False], dtype=np.bool_),
+        source_indices=valid.source_indices,
+    )
+    path = dynamic_catalog_cache_file_path(key, cache_root=tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"corrupt")
+
+    with pytest.raises(dynamic_solver.DynamicMaterialCandidateError) as caught:
+        load_or_build_dynamic_candidate_catalog(
+            materials=materials,
+            key=key,
+            builder=lambda: (invalid, 3),
+            cache_root=tmp_path,
+        )
+
+    assert caught.value.phase == "dynamic_catalog_cache_build"
+    assert not path.exists()
+    assert len(list(path.parent.glob(path.name + ".corrupt-*"))) == 1
+
+
+def test_cache_build_failure_emits_paired_structured_failed_event(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records: list[tuple[str, dict[str, object]]] = []
+
+    def capture_debug(_message: str, *, extra: dict[str, object]) -> None:
+        records.append(("DEBUG", extra))
+
+    def capture_warning(_message: str, *, extra: dict[str, object]) -> None:
+        records.append(("WARNING", extra))
+
+    monkeypatch.setattr(catalog_cache._log, "debug", capture_debug)
+    monkeypatch.setattr(catalog_cache._log, "warning", capture_warning)
+    materials = _materials()
+    key = _key(materials)
+
+    def failing_builder() -> tuple[dynamic_solver.DynamicCandidateCatalog, int]:
+        raise RuntimeError("catalog exploded")
+
+    with pytest.raises(dynamic_solver.DynamicMaterialCandidateError):
+        load_or_build_dynamic_candidate_catalog(
+            materials=materials,
+            key=key,
+            builder=failing_builder,
+            cache_root=tmp_path,
+        )
+
+    init_events = [
+        extra
+        for _level, extra in records
+        if extra["event"] == "dynamic_material_catalog_cache_build_init"
+    ]
+    failed_events = [
+        (level, extra)
+        for level, extra in records
+        if extra["event"] == "dynamic_material_catalog_cache_build_failed"
+    ]
+    done_events = [
+        extra
+        for _level, extra in records
+        if extra["event"] == "dynamic_material_catalog_cache_build_done"
+    ]
+    assert len(init_events) == 1
+    assert len(failed_events) == 1
+    assert done_events == []
+    level, failed = failed_events[0]
+    assert level == "WARNING"
+    assert failed["error_type"] == "RuntimeError"
+    assert failed["error_message"] == "catalog exploded"
+    assert failed["cache_key"]
+    assert failed["layer_count"] == key.max_layer_count
 
 
 def test_custom_runtime_loader_bypasses_persistent_catalog_cache(

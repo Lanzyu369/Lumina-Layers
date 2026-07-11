@@ -31,7 +31,7 @@ from core.material_dynamic_solver import (
 
 
 DYNAMIC_CATALOG_SCHEMA_VERSION = 1
-DYNAMIC_CATALOG_ALGORITHM_VERSION = "dynamic-ciede2000-v1"
+DYNAMIC_CATALOG_ALGORITHM_VERSION = "dynamic-ciede2000-v2"
 _DYNAMIC_CACHE_SUBDIRECTORY = "dynamic-catalogs"
 _CACHE_LOCK_TIMEOUT_SECONDS = 30.0
 _PAYLOAD_FIELDS = {
@@ -174,13 +174,21 @@ def _dynamic_palette_identity_fingerprint(
     return hashlib.sha256("|".join(identities).encode("utf-8")).hexdigest()
 
 
-def _dynamic_canonical_palette_order(
+def dynamic_material_canonical_order(
     materials: list[MaterialParams],
-) -> list[int]:
+) -> tuple[int, ...]:
+    """Return identity-safe canonical indices for dynamic catalog building.
+
+    返回用于动态目录构建的身份安全规范索引。
+    """
+
+    _validate_materials(materials)
     identities = [
         _dynamic_material_identity_fingerprint(material) for material in materials
     ]
-    return sorted(range(len(materials)), key=lambda index: (identities[index], index))
+    return tuple(
+        sorted(range(len(materials)), key=lambda index: (identities[index], index))
+    )
 
 
 def build_dynamic_catalog_cache_key(
@@ -303,7 +311,7 @@ def _canonical_index_maps(
     materials: list[MaterialParams],
 ) -> tuple[np.ndarray, np.ndarray]:
     canonical_to_user = np.asarray(
-        _dynamic_canonical_palette_order(materials), dtype=np.int32
+        dynamic_material_canonical_order(materials), dtype=np.int32
     )
     if canonical_to_user.shape != (len(materials),):
         raise ValueError("canonical material order has an invalid shape")
@@ -474,7 +482,7 @@ def _prepare_catalog_payload(
         "candidate_count_before_dedup": before_count,
         "candidate_count_after_dedup": after_count,
     }
-    return {
+    payload = {
         "score_srgb": np.asarray(catalog.score_srgb, dtype=np.uint8),
         "score_lab": np.asarray(catalog.score_lab, dtype=np.float64),
         "print_recipes_canonical": np.asarray(canonical_recipes, dtype=np.int32),
@@ -487,6 +495,17 @@ def _prepare_catalog_payload(
         "source_indices": np.asarray(catalog.source_indices, dtype=np.int64),
         "metadata_json": _metadata_bytes(metadata),
     }
+    _validated_loaded_catalog(
+        payload={
+            field: payload[field]
+            for field in _PAYLOAD_FIELDS
+            if field != "metadata_json"
+        },
+        metadata=metadata,
+        materials=materials,
+        key=key,
+    )
+    return payload
 
 
 def _write_catalog_payload_unlocked(
@@ -862,9 +881,27 @@ def load_or_build_dynamic_candidate_catalog(
                 candidate_count_before_dedup=before_count,
             )
             _write_catalog_payload_unlocked(path, payload)
-        except DynamicMaterialCandidateError:
-            raise
         except Exception as exc:
+            diagnostic_error = exc.__cause__ or exc
+            failure_phase = (
+                exc.phase
+                if isinstance(exc, DynamicMaterialCandidateError)
+                else "dynamic_catalog_cache_build"
+            )
+            _log.warning(
+                "Dynamic material catalog build failed",
+                extra={
+                    "event": "dynamic_material_catalog_cache_build_failed",
+                    "error_type": type(diagnostic_error).__name__,
+                    "error_message": str(diagnostic_error),
+                    "cache_key": key_id,
+                    "layer_count": key.max_layer_count,
+                    "phase": failure_phase,
+                    "rebuilt_corrupt": rebuilt_corrupt,
+                },
+            )
+            if isinstance(exc, DynamicMaterialCandidateError):
+                raise
             raise DynamicMaterialCandidateError(
                 "dynamic candidate catalog build or write failed",
                 layer_count=key.max_layer_count,
