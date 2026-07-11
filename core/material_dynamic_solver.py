@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Sequence
 
 import numpy as np
@@ -14,14 +15,17 @@ from numba import njit, prange
 
 from core.colorchecker.color_metrics import delta_e_2000
 from core.material_cache import MaterialSolverCache, canonical_palette_order
-from core.material_candidate_cache import MaterialCandidateRuntime
+from core.material_candidate_cache import (
+    PREVIEW_SAFE_CANDIDATE_BUDGET,
+    MaterialCandidateRuntime,
+)
 from core.material_color_solver import (
     MaterialParams,
     forward_batch_model,
     linear_to_srgb_uint8,
     rgb_to_lab,
 )
-from core.material_lut_provider import load_solver_runtime
+from core.material_lut_provider import load_dynamic_candidate_runtime
 
 
 MIN_DYNAMIC_LAYER_COUNT = 5
@@ -1240,7 +1244,10 @@ def solve_dynamic_material_colors(
     layer_height_mm: float,
     substrate: str,
     config: DynamicMaterialSolveConfig,
-    runtime_loader: MaterialRuntimeLoader = load_solver_runtime,
+    runtime_loader: MaterialRuntimeLoader | None = None,
+    *,
+    material_candidate_budget: int = PREVIEW_SAFE_CANDIDATE_BUDGET,
+    catalog_cache_root: str | Path | None = None,
 ) -> DynamicMaterialSolveResult:
     """Build padded candidates and solve every target with exact CIEDE2000.
 
@@ -1259,8 +1266,15 @@ def solve_dynamic_material_colors(
             为 ``"white"`` 或 ``"black"``。
         config: Validated dynamic solve range and tolerance. 已验证的动态求解范围
             与容差。
-        runtime_loader: Candidate runtime loader called once per allowed layer
-            count. 每个允许层数调用一次的候选运行时加载器。
+        runtime_loader: Optional custom candidate runtime loader called once per
+            allowed layer count. Supplying one bypasses persistent catalog
+            caching. 可选自定义候选运行时加载器；每个允许层数调用一次，传入时
+            绕过持久目录缓存。
+        material_candidate_budget: Explicit production candidate budget pinned
+            identically for every allowed layer. 生产路径在所有层数统一固定使用的
+            显式候选预算。
+        catalog_cache_root: Optional persistent catalog/candidate cache root.
+            可选持久目录及候选缓存根目录。
 
     Returns:
         DynamicMaterialSolveResult: Exact per-target choices and candidate
@@ -1304,6 +1318,14 @@ def solve_dynamic_material_colors(
     normalized_substrate = str(substrate).lower()
     if normalized_substrate not in {"white", "black"}:
         raise ValueError("substrate must be 'white' or 'black'")
+    if isinstance(material_candidate_budget, (bool, np.bool_)) or not isinstance(
+        material_candidate_budget,
+        (int, np.integer),
+    ):
+        raise TypeError("material_candidate_budget must be an integer")
+    candidate_budget = int(material_candidate_budget)
+    if candidate_budget <= 0:
+        raise ValueError("material_candidate_budget must be positive")
 
     target_input = np.asarray(target_srgb)
     if target_input.ndim != 2 or target_input.shape[1] != 3:
@@ -1316,16 +1338,72 @@ def solve_dynamic_material_colors(
         maximum=255,
     )
 
-    catalog, candidate_count_before_dedup, layer_counts = (
-        _build_dynamic_candidate_catalog_from_runtimes(
-            materials,
-            backing_index,
-            normalized_height,
-            normalized_substrate,
-            config,
-            runtime_loader,
+    layer_counts = tuple(range(config.min_layer_count, config.max_layer_count + 1))
+    if runtime_loader is not None:
+        catalog, candidate_count_before_dedup, layer_counts = (
+            _build_dynamic_candidate_catalog_from_runtimes(
+                materials,
+                backing_index,
+                normalized_height,
+                normalized_substrate,
+                config,
+                runtime_loader,
+            )
         )
-    )
+    else:
+        from core.material_dynamic_catalog_cache import (
+            build_dynamic_catalog_cache_key,
+            load_or_build_dynamic_candidate_catalog,
+        )
+
+        def production_runtime_loader(
+            loader_materials: list[MaterialParams],
+            layer_count: int,
+            loader_height: float,
+            loader_substrate: str,
+        ) -> tuple[MaterialCandidateRuntime | None, int | None]:
+            return load_dynamic_candidate_runtime(
+                loader_materials,
+                layer_count,
+                loader_height,
+                loader_substrate,
+                candidate_budget=candidate_budget,
+                cache_root=catalog_cache_root,
+            )
+
+        cache_key = build_dynamic_catalog_cache_key(
+            materials,
+            backing_material_index=backing_index,
+            layer_height_mm=normalized_height,
+            substrate=normalized_substrate,
+            min_layer_count=config.min_layer_count,
+            max_layer_count=config.max_layer_count,
+            candidate_budget=candidate_budget,
+        )
+
+        def build_catalog() -> tuple[DynamicCandidateCatalog, int]:
+            built_catalog, before_count, _built_layer_counts = (
+                _build_dynamic_candidate_catalog_from_runtimes(
+                    materials,
+                    backing_index,
+                    normalized_height,
+                    normalized_substrate,
+                    config,
+                    production_runtime_loader,
+                )
+            )
+            return built_catalog, before_count
+
+        cached_catalog = load_or_build_dynamic_candidate_catalog(
+            materials=materials,
+            key=cache_key,
+            builder=build_catalog,
+            cache_root=catalog_cache_root,
+        )
+        catalog = cached_catalog.catalog
+        candidate_count_before_dedup = (
+            cached_catalog.candidate_count_before_dedup
+        )
     search = search_dynamic_catalog_exact(
         targets,
         catalog,

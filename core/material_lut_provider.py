@@ -283,6 +283,66 @@ def load_solver_runtime(
     return runtime, runtime.grid_resolution
 
 
+def load_dynamic_candidate_runtime(
+    materials: list[MaterialParams],
+    layer_count: int,
+    layer_height_mm: float,
+    substrate: str = "white",
+    *,
+    candidate_budget: int = PREVIEW_SAFE_CANDIDATE_BUDGET,
+    cache_root: str | Path | None = None,
+) -> tuple["MaterialCandidateRuntime", int | None]:
+    """Load/build one pinned-budget candidate runtime for dynamic solving.
+
+    为动态求解加载或构建一个固定预算的候选运行时。
+
+    Unlike :func:`load_solver_runtime`, this function never probes a legacy
+    fixed-grid :class:`MaterialSolverCache`. A single explicit candidate budget
+    therefore identifies the same bounded universe at every effective layer,
+    even if legacy cache files are added later.
+
+    与 :func:`load_solver_runtime` 不同，本函数绝不探测旧的固定网格
+    :class:`MaterialSolverCache`。因此同一个显式候选预算在每个有效层数上始终
+    对应同一个有界候选宇宙，不会因后来新增旧缓存而改变。
+
+    Args:
+        materials: Material palette. 耗材调色板。
+        layer_count: Effective recipe layer count. 有效配方层数。
+        layer_height_mm: Physical layer height in millimeters. 物理层高。
+        substrate: Optical substrate, ``white`` or ``black``. 光学基底。
+        candidate_budget: Explicit candidate budget used for this layer.
+            本层使用的显式候选预算。
+        cache_root: Optional candidate-runtime cache root. 可选候选缓存根目录。
+
+    Returns:
+        tuple[MaterialCandidateRuntime, int | None]: Candidate runtime and its
+        diagnostic grid resolution. 候选运行时及诊断网格分辨率。
+    """
+
+    config = MaterialCandidateCacheConfig.persisted_for_budget(
+        int(candidate_budget)
+    )
+    persisted_runtime = load_material_candidate_runtime(
+        materials,
+        int(layer_count),
+        float(layer_height_mm),
+        str(substrate),
+        candidate_budget=int(config.candidate_budget),
+        cache_root=cache_root,
+    )
+    if persisted_runtime is not None:
+        return persisted_runtime, persisted_runtime.grid_resolution
+
+    runtime = build_material_candidate_runtime(
+        materials=materials,
+        layer_count=int(layer_count),
+        layer_height_mm=float(layer_height_mm),
+        substrate=str(substrate),
+        config=config,
+    )
+    return runtime, runtime.grid_resolution
+
+
 def clear_memo_caches() -> None:
     """Drop all process-local memo caches.
     清空所有进程内 memo 缓存。
