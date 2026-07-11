@@ -5904,6 +5904,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           gradientGroupsSessionId: null,
           gradientSelection: null,
         });
+        let heightmapReuploadFailed = false;
         if (
           shouldReuploadHeightmap &&
           _get().sessionId === response.session_id
@@ -5913,11 +5914,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           if (
             signal.aborted ||
             _previewAbortController?.signal !== signal ||
-            latestState.sessionId !== response.session_id ||
-            latestState.error
+            latestState.sessionId !== response.session_id
           ) {
             return;
           }
+          heightmapReuploadFailed = Boolean(latestState.error);
         }
         if (!glbUrl) {
           _get()._pollAsyncGlb();
@@ -5943,7 +5944,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           warning_count: (response.warnings ?? []).length,
           palette_count: normalizedPalette.length,
         });
-        notifyCompletion("preview");
+        if (!heightmapReuploadFailed) {
+          notifyCompletion("preview");
+        }
         // 预览绑定会话后，拉取会话所绑定 LUT 的通道调色板，便于自定义配方编辑器
         // 在材料档案 / 原生打包流程里也能显示按通道顺序的耗材列表。
         // After the preview binds a session, refresh the channel palette for

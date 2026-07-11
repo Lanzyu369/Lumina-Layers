@@ -193,6 +193,13 @@ describe("SettingsPanel completion notifications", () => {
 
     await waitFor(() => {
       expect(requestPermissionMock).toHaveBeenCalledTimes(1);
+      expect(
+        screen.getByRole("switch", {
+          name: translations[
+            "settings.completion_notifications_enable_label"
+          ].zh,
+        }),
+      ).toBeEnabled();
     });
     expect(
       screen.getByText(
@@ -221,6 +228,11 @@ describe("SettingsPanel completion notifications", () => {
         translations["settings.completion_notifications_request_failed"].zh,
       ),
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole("switch", {
+        name: translations["settings.completion_notifications_enable_label"].zh,
+      }),
+    ).toBeEnabled();
     expect(
       useSettingsStore.getState().enableCompletionNotifications,
     ).toBe(false);

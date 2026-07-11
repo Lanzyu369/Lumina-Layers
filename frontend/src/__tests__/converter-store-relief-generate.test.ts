@@ -151,6 +151,7 @@ describe("converter store relief generate flow", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.resetModules();
+    localStorage.removeItem("lumina-settings");
     Object.defineProperty(URL, "createObjectURL", {
       configurable: true,
       value: vi.fn(() => "blob:mock-url"),
@@ -615,6 +616,8 @@ describe("converter store relief generate flow", () => {
     expect(state.heightmapThumbnailUrl).toBeNull();
     expect(state.error).toBe("heightmap upload failed");
     expect(mocks.showBrowserCompletionNotification).not.toHaveBeenCalled();
+    expect(mocks.fetchSessionLutInfo).toHaveBeenCalledWith("session-relief");
+    expect(mocks.fetchGradientGroups).toHaveBeenCalled();
 
     const result = await useConverterStore.getState().submitFullPipeline();
 
