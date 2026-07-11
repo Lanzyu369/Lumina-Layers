@@ -19,6 +19,7 @@ import pytest
 
 from core.material_color_solver import MaterialParams
 from core.pipeline.s03_color_replacement import (
+    _apply_dynamic_material_archive_color_replacements,
     _apply_material_archive_color_replacements,
     run,
 )
@@ -42,6 +43,96 @@ _SMALL_PALETTE = [
     _mat("Blue", E=(0.05, 0.1, 0.6), k=(4.0, 4.0, 4.0)),
     _mat("White", E=(0.95, 0.95, 0.95), k=(0.5, 0.5, 0.5)),
 ]
+
+
+def test_dynamic_replacement_reuses_seen_target_and_solves_only_unseen() -> None:
+    matched = np.asarray([[[100, 0, 0], [0, 100, 0]]], dtype=np.uint8)
+    matrix = np.zeros((1, 2, 7), dtype=np.int32)
+    solid = np.ones((1, 2), dtype=bool)
+    seen_entry = {
+        "target_srgb": [10, 20, 30],
+        "matched_srgb": [11, 22, 33],
+        "actual_layer_count": 5,
+        "padding_layer_count": 2,
+        "actual_recipe_top_to_bottom": [0, 1, 2, 1, 0],
+        "print_recipe_top_to_bottom": [0, 1, 2, 1, 0, 2, 2],
+        "layer_cap_options": [
+            {"max_effective_layer_count": 5, "delta_e00": 1.0},
+            {"max_effective_layer_count": 6, "delta_e00": 0.8},
+            {"max_effective_layer_count": 7, "delta_e00": 0.7},
+        ],
+    }
+    unseen_entry = {
+        "target_srgb": [40, 50, 60],
+        "matched_srgb": [44, 55, 66],
+        "actual_layer_count": 6,
+        "padding_layer_count": 1,
+        "actual_recipe_top_to_bottom": [1, 2, 1, 0, 1, 2],
+        "print_recipe_top_to_bottom": [1, 2, 1, 0, 1, 2, 2],
+        "layer_cap_options": [
+            {"max_effective_layer_count": 5, "delta_e00": 2.0},
+            {"max_effective_layer_count": 6, "delta_e00": 1.5},
+            {"max_effective_layer_count": 7, "delta_e00": 1.0},
+        ],
+    }
+    existing_info = {
+        "enabled": True,
+        "min_layer_count": 5,
+        "max_layer_count": 7,
+        "delta_e00_tolerance": 0.5,
+        "engine": "numba",
+        "colors": [seen_entry],
+        "benefit_curve": [],
+    }
+    new_info = {
+        **existing_info,
+        "colors": [unseen_entry],
+    }
+
+    with patch(
+        "core.pipeline.s03_color_replacement._solve_dynamic_material_targets",
+        return_value=(
+            np.asarray([[44, 55, 66]], dtype=np.uint8),
+            np.asarray([unseen_entry["print_recipe_top_to_bottom"]], dtype=np.int32),
+            np.asarray([1.0], dtype=np.float64),
+            new_info,
+            {"dynamic_engine": "numba"},
+        ),
+    ) as exact_solve:
+        out_rgb, out_matrix, applied, merged_info, solver_info = (
+            _apply_dynamic_material_archive_color_replacements(
+                matched,
+                matrix,
+                solid,
+                {
+                    "#640000": "#0a141e",
+                    "#006400": "#28323c",
+                },
+                _SMALL_PALETTE,
+                backing_material_index=2,
+                min_layer_count=5,
+                max_layer_count=7,
+                delta_e00_tolerance=0.5,
+                layer_height_mm=0.08,
+                substrate="white",
+                dynamic_layer_info=existing_info,
+                material_solver_info={"path": "dynamic_exact"},
+            )
+        )
+
+    np.testing.assert_array_equal(
+        exact_solve.call_args.kwargs["unique_colors"],
+        np.asarray([[40, 50, 60]], dtype=np.uint8),
+    )
+    assert applied == 2
+    assert out_matrix.shape == (1, 2, 7)
+    np.testing.assert_array_equal(out_rgb[0, 0], [11, 22, 33])
+    np.testing.assert_array_equal(out_rgb[0, 1], [44, 55, 66])
+    assert [entry["target_srgb"] for entry in merged_info["colors"]] == [
+        [10, 20, 30],
+        [40, 50, 60],
+    ]
+    assert solver_info["dynamic_engine"] == "numba"
 
 
 def _make_material_archive_ctx(
@@ -318,6 +409,47 @@ class TestS03RunMaterialArchiveBranch:
         assert result["color_conf"]["preview"][native_count] == [17, 17, 17, 255]
         assert np.all(result["material_matrix"][mask] == native_count)
 
+    def test_dynamic_recipe_override_uses_saved_full_print_recipe(self, tmp_path):
+        ctx = _make_material_archive_ctx(None)
+        mask = np.zeros(ctx["mask_solid"].shape, dtype=bool)
+        mask[1:, 1:3] = True
+        masks_path = tmp_path / "dynamic_recipe_masks.pkl"
+        with open(masks_path, "wb") as file_obj:
+            pickle.dump({"region-1": mask}, file_obj)
+
+        actual = [2, 1, 0, 1, 1]
+        print_recipe = [2, 1, 0, 1, 1, 2, 2]
+        ctx.update(
+            {
+                "material_dynamic_layer_count_enabled": True,
+                "material_min_layer_count": 5,
+                "material_max_layer_count": 7,
+                "material_backing_material_index": 2,
+                "color_layers": 7,
+                "material_matrix": np.zeros((3, 4, 7), dtype=np.int32),
+                "recipe_override_masks_path": os.fspath(masks_path),
+                "recipe_overrides": [
+                    {
+                        "region_id": "region-1",
+                        "recipe": actual,
+                        "layer_order": "Top2Bottom",
+                        "color_layers": 5,
+                        "actual_recipe_top_to_bottom": actual,
+                        "print_recipe_top_to_bottom": print_recipe,
+                        "actual_layer_count": 5,
+                        "padding_layer_count": 2,
+                    }
+                ],
+            }
+        )
+
+        result = run(ctx)
+
+        np.testing.assert_array_equal(
+            result["material_matrix"][mask],
+            np.broadcast_to(print_recipe, (int(np.sum(mask)), 7)),
+        )
+
     def test_applies_replacement_without_processor(self):
         ctx = _make_material_archive_ctx({"#c86432": "#14c814"})
         original_col0 = ctx["matched_rgb"][:, 0].copy()
@@ -329,6 +461,48 @@ class TestS03RunMaterialArchiveBranch:
         np.testing.assert_array_equal(result["matched_rgb"][:, 0], original_col0)
         # Material matrix on rewritten region is no longer all-zeros.
         assert np.any(result["material_matrix"][:, 1:] != 0)
+
+    def test_dynamic_mode_dispatches_to_exact_replacement_helper(self):
+        ctx = _make_material_archive_ctx({"#c86432": "#14c814"})
+        ctx.update(
+            {
+                "material_dynamic_layer_count_enabled": True,
+                "material_min_layer_count": 5,
+                "material_max_layer_count": 7,
+                "material_delta_e00_tolerance": 0.5,
+                "material_backing_material_index": 2,
+                "color_layers": 7,
+                "material_matrix": np.zeros((3, 4, 7), dtype=np.int32),
+                "material_dynamic_layer_info": {"colors": []},
+                "material_solver_info": {"path": "dynamic_exact"},
+            }
+        )
+        exact_rgb = ctx["matched_rgb"].copy()
+        exact_rgb[:, 1:] = [10, 200, 20]
+        exact_matrix = ctx["material_matrix"].copy()
+        exact_matrix[:, 1:] = [0, 1, 2, 1, 0, 2, 2]
+        exact_info = {"enabled": True, "colors": [{"target_srgb": [20, 200, 20]}]}
+
+        with patch(
+            "core.pipeline.s03_color_replacement._apply_dynamic_material_archive_color_replacements",
+            return_value=(
+                exact_rgb,
+                exact_matrix,
+                1,
+                exact_info,
+                {"path": "dynamic_exact", "dynamic_engine": "numba"},
+            ),
+        ) as dynamic_apply, patch(
+            "core.pipeline.s03_color_replacement._apply_material_archive_color_replacements",
+            side_effect=AssertionError("fixed replacement helper must not run"),
+        ):
+            result = run(ctx)
+
+        dynamic_apply.assert_called_once()
+        np.testing.assert_array_equal(result["matched_rgb"], exact_rgb)
+        np.testing.assert_array_equal(result["material_matrix"], exact_matrix)
+        assert result["material_dynamic_layer_info"] == exact_info
+        assert result["material_solver_info"]["dynamic_engine"] == "numba"
 
     def test_applies_api_format_replacement_regions_without_processor(self):
         """Preview replay sends API-format replacement_regions, not a dict."""

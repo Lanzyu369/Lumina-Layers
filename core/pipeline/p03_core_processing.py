@@ -603,6 +603,7 @@ def _run_material_archive_branch(ctx: dict) -> dict:
         # chosen by the user. Apply them here so the refreshed preview matches
         # the preserved frontend state before any cleanup mutates pixels.
         from core.pipeline.s03_color_replacement import (
+            _apply_dynamic_material_archive_color_replacements,
             _apply_material_archive_color_replacements,
             _normalize_color_replacements_input,
         )
@@ -612,25 +613,56 @@ def _run_material_archive_branch(ctx: dict) -> dict:
         )
         if effective_color_replacements:
             if dynamic_layer_count_enabled:
-                error = dynamic_solver.DynamicMaterialCandidateError(
-                    "dynamic color replacements must be resolved before mapping",
-                    layer_count=layer_count,
-                    phase="color_replacements",
+                try:
+                    (
+                        matched_rgb,
+                        material_matrix,
+                        applied_replacements,
+                        dynamic_layer_info,
+                        replacement_solver_meta,
+                    ) = _apply_dynamic_material_archive_color_replacements(
+                        matched_rgb,
+                        material_matrix,
+                        mask_solid,
+                        effective_color_replacements,
+                        materials,
+                        backing_material_index=int(backing_material_index),
+                        min_layer_count=int(dynamic_min_layer_count),
+                        max_layer_count=int(dynamic_max_layer_count),
+                        delta_e00_tolerance=float(
+                            dynamic_delta_e00_tolerance
+                        ),
+                        layer_height_mm=layer_height_mm,
+                        substrate=substrate,
+                        dynamic_layer_info=dynamic_layer_info,
+                        material_solver_info={
+                            "path": solver_path,
+                            "layer_count": layer_count,
+                            **solver_meta,
+                        },
+                    )
+                    solver_meta.update(replacement_solver_meta)
+                except (
+                    dynamic_solver.DynamicMaterialCandidateError,
+                    dynamic_solver.DynamicMaterialSolverError,
+                    TypeError,
+                    ValueError,
+                ) as exc:
+                    return _record_dynamic_material_error(ctx, exc)
+            else:
+                matched_rgb, material_matrix, applied_replacements = (
+                    _apply_material_archive_color_replacements(
+                        matched_rgb,
+                        material_matrix,
+                        mask_solid,
+                        effective_color_replacements,
+                        materials,
+                        layer_count,
+                        layer_height_mm,
+                        substrate,
+                        grid_resolution=actual_grid or requested_grid,
+                    )
                 )
-                return _record_dynamic_material_error(ctx, error)
-            matched_rgb, material_matrix, applied_replacements = (
-                _apply_material_archive_color_replacements(
-                    matched_rgb,
-                    material_matrix,
-                    mask_solid,
-                    effective_color_replacements,
-                    materials,
-                    layer_count,
-                    layer_height_mm,
-                    substrate,
-                    grid_resolution=actual_grid or requested_grid,
-                )
-            )
             _log.debug(
                 "Applied %d material-archive preview color replacements",
                 applied_replacements,

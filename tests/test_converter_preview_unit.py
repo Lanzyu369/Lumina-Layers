@@ -537,8 +537,8 @@ class TestPreviewMaterialSourceValidation:
         ensure_png.assert_not_called()
         _mock_pool.submit.assert_not_called()
 
-    def test_dynamic_material_replacements_reject_before_upload(self) -> None:
-        """Task 3A must reject unsupported replacement solving before I/O."""
+    def test_dynamic_material_replacements_reach_exact_worker_path(self) -> None:
+        """Task 3B replays dynamic replacements in the exact worker path."""
         buf = _make_test_image_buf()
         _mock_pool.submit = AsyncMock(return_value=_create_worker_result_files())
 
@@ -565,10 +565,20 @@ class TestPreviewMaterialSourceValidation:
                 },
             )
 
-        assert response.status_code == 422
-        assert "replacement" in str(response.json()["detail"]).lower()
-        ensure_png.assert_not_called()
-        _mock_pool.submit.assert_not_called()
+        assert response.status_code == 200, response.text
+        ensure_png.assert_awaited_once()
+        call_args = _mock_pool.submit.call_args.args
+        submitted = dict(
+            zip(inspect.signature(worker_generate_preview).parameters, call_args[1:])
+        )
+        assert submitted["material_dynamic_layer_count_enabled"] is True
+        assert submitted["replacement_regions"] == [
+            {
+                "quantized_hex": "#111111",
+                "matched_hex": "#222222",
+                "replacement_hex": "#333333",
+            }
+        ]
 
 
 # =========================================================================

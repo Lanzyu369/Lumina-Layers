@@ -2160,6 +2160,72 @@ def test_apply_recipe_override_endpoint_supports_material_archive_session(
     ]
 
 
+def test_dynamic_material_override_pads_backing_and_persists_actual_recipe(
+    monkeypatch,
+) -> None:
+    client, store, _registry = _client_with_state()
+    session_id, mask = _seed_material_archive_session(store, layer_count=7)
+    store.put(session_id, "material_dynamic_layer_count_enabled", True)
+    store.put(session_id, "material_min_layer_count", 5)
+    store.put(session_id, "material_max_layer_count", 7)
+    store.put(session_id, "material_delta_e00_tolerance", 0.5)
+    store.put(session_id, "material_backing_material_index", 4)
+
+    seen_bottom_to_top: list[list[int]] = []
+
+    def fake_forward_model(recipe, materials, *, layer_height_mm):
+        seen_bottom_to_top.append([int(value) for value in recipe])
+        return np.asarray([0.25, 0.5, 0.75], dtype=np.float64)
+
+    monkeypatch.setattr(
+        "api.routers.converter.replace.load_multiple_materials",
+        lambda _paths: [object()] * 5,
+    )
+    monkeypatch.setattr(
+        "api.routers.converter.replace.forward_model",
+        fake_forward_model,
+    )
+    monkeypatch.setattr(
+        "api.routers.converter.replace.schedule_glb_build",
+        lambda *_args, **_kwargs: None,
+    )
+
+    response = client.post(
+        "/api/convert/apply-recipe-override",
+        json={
+            "session_id": session_id,
+            "region_ids": ["region-1"],
+            "recipe": [2, 1, 0, 1, 1],
+            "layer_order": "Top2Bottom",
+            "color_layers": 5,
+            "layer_height_mm": 0.08,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert seen_bottom_to_top == [[4, 4, 1, 1, 0, 1, 2]]
+    session_data = store.get(session_id)
+    updated_cache = session_data["preview_cache"]
+    assert updated_cache["material_matrix"].shape[2] == 7
+    assert np.all(
+        updated_cache["material_matrix"][mask]
+        == np.asarray([2, 1, 0, 1, 1, 4, 4], dtype=np.int32)
+    )
+    assert session_data["recipe_overrides"] == [
+        {
+            "region_id": "region-1",
+            "recipe": [2, 1, 0, 1, 1],
+            "layer_order": "Top2Bottom",
+            "color_layers": 5,
+            "layer_height_mm": 0.08,
+            "actual_recipe_top_to_bottom": [2, 1, 0, 1, 1],
+            "print_recipe_top_to_bottom": [2, 1, 0, 1, 1, 4, 4],
+            "actual_layer_count": 5,
+            "padding_layer_count": 2,
+        }
+    ]
+
+
 def test_apply_recipe_override_material_archive_extends_palette_with_virtuals(
     monkeypatch,
     tmp_path: Path,
@@ -2282,6 +2348,61 @@ def test_region_recipe_endpoint_returns_current_stack_top2bottom() -> None:
     assert entry["recipe"] == [3, 2, 1, 0, 4]
     assert entry["color_layers"] == 5
     assert entry["layer_order"] == "Top2Bottom"
+
+
+def test_dynamic_region_recipe_reads_saved_actual_depth_without_trimming_backing() -> None:
+    client, store, _registry = _client_with_state()
+    session_id = store.create()
+    actual = [2, 1, 0, 1, 1]
+    print_recipe = [2, 1, 0, 1, 1, 1, 1]
+    material_matrix = np.zeros((2, 2, 7), dtype=np.int32)
+    material_matrix[:, :] = print_recipe
+    mask = np.ones((2, 2), dtype=bool)
+    store.put(
+        session_id,
+        "preview_cache",
+        {
+            "material_matrix": material_matrix,
+            "mask_solid": mask,
+            "color_layers": 7,
+            "layer_height_mm": 0.08,
+            "material_dynamic_layer_info": {"colors": []},
+        },
+    )
+    store.put(session_id, "material_dynamic_layer_count_enabled", True)
+    store.put(session_id, "material_min_layer_count", 5)
+    store.put(session_id, "material_max_layer_count", 7)
+    store.put(session_id, "selected_region_masks", {"region-1": mask})
+    store.put(
+        session_id,
+        "recipe_overrides",
+        [
+            {
+                "region_id": "region-1",
+                "recipe": actual,
+                "layer_order": "Top2Bottom",
+                "color_layers": 5,
+                "actual_recipe_top_to_bottom": actual,
+                "print_recipe_top_to_bottom": print_recipe,
+                "actual_layer_count": 5,
+                "padding_layer_count": 2,
+            }
+        ],
+    )
+
+    response = client.post(
+        "/api/convert/region-recipe",
+        json={
+            "session_id": session_id,
+            "region_ids": ["region-1"],
+            "layer_order": "Top2Bottom",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    entry = response.json()["recipes"][0]
+    assert entry["recipe"] == actual
+    assert entry["color_layers"] == 5
 
 
 def test_region_recipe_artifact_cache_avoids_common_full_hydrate(tmp_path: Path) -> None:

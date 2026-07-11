@@ -256,6 +256,79 @@ def test_dynamic_dispatch_maps_mixed_recipes_and_weighted_benefit_curve(
     assert solver_info["dynamic_engine"] == "numba"
 
 
+def test_dynamic_preview_replay_applies_exact_replacements_and_merges_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rgba = np.asarray(
+        [
+            [[10, 20, 30, 255], [10, 20, 30, 255]],
+            [[10, 20, 30, 255], [200, 210, 220, 255]],
+        ],
+        dtype=np.uint8,
+    )
+    ctx = _base_ctx(_write_rgba(tmp_path / "dynamic-replace.png", rgba))
+    _enable_dynamic(ctx)
+    ctx["replacement_regions"] = [
+        {
+            "quantized_hex": "#0a141e",
+            "matched_hex": "#0b151f",
+            "replacement_hex": "#28323c",
+        }
+    ]
+    monkeypatch.setattr(
+        "core.material_dynamic_solver.solve_dynamic_material_colors",
+        lambda *args, **kwargs: _dynamic_result(),
+    )
+    merged_info = {
+        "enabled": True,
+        "colors": [{"target_srgb": [40, 50, 60]}],
+        "benefit_curve": [],
+    }
+    calls: list[dict] = []
+
+    def fake_apply(
+        matched_rgb,
+        material_matrix,
+        mask_solid,
+        replacements,
+        materials,
+        **kwargs,
+    ):
+        calls.append(
+            {
+                "replacements": replacements,
+                "dynamic_layer_info": kwargs["dynamic_layer_info"],
+                "material_solver_info": kwargs["material_solver_info"],
+            }
+        )
+        updated_rgb = matched_rgb.copy()
+        updated_rgb[0, 0] = [44, 55, 66]
+        updated_matrix = material_matrix.copy()
+        updated_matrix[0, 0] = [1, 2, 1, 0, 2, 0, 0]
+        return (
+            updated_rgb,
+            updated_matrix,
+            1,
+            merged_info,
+            {"dynamic_engine": "numba", "replacement_merge": True},
+        )
+
+    monkeypatch.setattr(
+        "core.pipeline.s03_color_replacement._apply_dynamic_material_archive_color_replacements",
+        fake_apply,
+    )
+
+    result = _run_material_archive_branch(ctx)
+
+    assert len(calls) == 1
+    assert calls[0]["replacements"] == {"#0b151f": "#28323c"}
+    assert calls[0]["dynamic_layer_info"]["enabled"] is True
+    assert result["material_dynamic_layer_info"] == merged_info
+    assert result["material_solver_info"]["replacement_merge"] is True
+    np.testing.assert_array_equal(result["matched_rgb"][0, 0], [44, 55, 66])
+
+
 def test_dynamic_uses_base_channel_when_explicit_backing_is_absent(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
