@@ -299,11 +299,14 @@ def load_dynamic_candidate_runtime(
     Unlike :func:`load_solver_runtime`, this function never probes a legacy
     fixed-grid :class:`MaterialSolverCache`. A single explicit candidate budget
     therefore identifies the same bounded universe at every effective layer,
-    even if legacy cache files are added later.
+    even if legacy cache files are added later. Palettes containing duplicate
+    optical fingerprints also bypass the optical-only persisted runtime so the
+    fresh runtime preserves the current material identities and order.
 
     与 :func:`load_solver_runtime` 不同，本函数绝不探测旧的固定网格
     :class:`MaterialSolverCache`。因此同一个显式候选预算在每个有效层数上始终
-    对应同一个有界候选宇宙，不会因后来新增旧缓存而改变。
+    对应同一个有界候选宇宙，不会因后来新增旧缓存而改变。若调色板包含重复
+    光学指纹，也会绕过仅按光学参数持久化的运行时，以当前耗材身份和顺序重建。
 
     Args:
         materials: Material palette. 耗材调色板。
@@ -322,14 +325,22 @@ def load_dynamic_candidate_runtime(
     config = MaterialCandidateCacheConfig.persisted_for_budget(
         int(candidate_budget)
     )
-    persisted_runtime = load_material_candidate_runtime(
-        materials,
-        int(layer_count),
-        float(layer_height_mm),
-        str(substrate),
-        candidate_budget=int(config.candidate_budget),
-        cache_root=cache_root,
+    optical_fingerprints = [
+        _material_cache._material_fingerprint(material) for material in materials
+    ]
+    has_duplicate_optics = len(set(optical_fingerprints)) != len(
+        optical_fingerprints
     )
+    persisted_runtime = None
+    if not has_duplicate_optics:
+        persisted_runtime = load_material_candidate_runtime(
+            materials,
+            int(layer_count),
+            float(layer_height_mm),
+            str(substrate),
+            candidate_budget=int(config.candidate_budget),
+            cache_root=cache_root,
+        )
     if persisted_runtime is not None:
         return persisted_runtime, persisted_runtime.grid_resolution
 

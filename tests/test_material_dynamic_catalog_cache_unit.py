@@ -7,6 +7,11 @@ from __future__ import annotations
 
 import json
 import os
+import struct
+import threading
+import time
+import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -47,6 +52,14 @@ def _materials() -> list[MaterialParams]:
     return [
         _material("Red", (0.85, 0.08, 0.06)),
         _material("Blue", (0.05, 0.10, 0.85)),
+    ]
+
+
+def _duplicate_optical_materials() -> list[MaterialParams]:
+    optics = (0.42, 0.31, 0.18)
+    return [
+        _material("Identity A", optics),
+        _material("Identity B", optics),
     ]
 
 
@@ -100,6 +113,31 @@ def _runtime(recipes: np.ndarray, layer_count: int) -> MaterialCandidateRuntime:
             "palette_hash": "test",
             "grid_resolution": 8,
         },
+    )
+
+
+def _rewrite_npz(path: Path, mutate) -> None:
+    with np.load(path, allow_pickle=False) as loaded:
+        payload = {name: np.array(loaded[name], copy=True) for name in loaded.files}
+    mutate(payload)
+    with path.open("wb") as handle:
+        np.savez_compressed(handle, **payload)
+
+
+def _metadata_from_payload(payload: dict[str, np.ndarray]) -> dict[str, object]:
+    return json.loads(payload["metadata_json"].tobytes().decode("utf-8"))
+
+
+def _store_metadata(
+    payload: dict[str, np.ndarray], metadata: dict[str, object]
+) -> None:
+    payload["metadata_json"] = np.frombuffer(
+        json.dumps(
+            metadata,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8"),
+        dtype=np.uint8,
     )
 
 
@@ -166,6 +204,36 @@ def test_catalog_round_trip_rebinds_canonical_recipes_to_current_user_order(
         1 - original.print_recipes,
     )
     assert loaded.candidate_count_before_dedup == 3
+
+
+def test_duplicate_optical_material_identities_keep_key_backing_and_rebind_stable(
+    tmp_path: Path,
+) -> None:
+    materials = _duplicate_optical_materials()
+    original = _catalog()
+    key = _key(materials, backing_material_index=0)
+    save_dynamic_candidate_catalog(
+        original,
+        materials=materials,
+        key=key,
+        candidate_count_before_dedup=3,
+        cache_root=tmp_path,
+    )
+
+    reversed_materials = list(reversed(materials))
+    reversed_key = _key(reversed_materials, backing_material_index=1)
+    loaded = load_dynamic_candidate_catalog(
+        materials=reversed_materials,
+        key=reversed_key,
+        cache_root=tmp_path,
+    )
+
+    assert reversed_key == key
+    assert loaded is not None
+    np.testing.assert_array_equal(
+        loaded.catalog.print_recipes,
+        1 - original.print_recipes,
+    )
 
 
 def test_cache_hit_is_bit_identical_to_fresh_build_and_does_not_rebuild(
@@ -264,6 +332,7 @@ def test_corrupt_entry_is_removed_and_explicitly_rebuilt(tmp_path: Path) -> None
     assert result.cache_hit is False
     assert result.rebuilt_corrupt is True
     assert path.exists()
+    assert len(list(path.parent.glob(path.name + ".corrupt-*"))) == 1
     assert load_dynamic_candidate_catalog(
         materials=materials,
         key=key,
@@ -291,6 +360,133 @@ def test_invalid_payload_raises_corruption_instead_of_becoming_a_hit(
             key=key,
             cache_root=tmp_path,
         )
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    (
+        lambda payload: payload.__setitem__(
+            "source_indices", np.asarray([0, 0], dtype=np.int64)
+        ),
+        lambda payload: payload.__setitem__(
+            "source_indices", np.asarray([0, 3], dtype=np.int64)
+        ),
+        lambda payload: payload.__setitem__(
+            "score_srgb",
+            np.asarray([[12, 34, 56], [12, 34, 56]], dtype=np.uint8),
+        ),
+        lambda payload: payload.__setitem__(
+            "max_layer_reachable", np.asarray([False, False], dtype=np.bool_)
+        ),
+        lambda payload: (
+            payload.__setitem__(
+                "minimum_actual_layer_counts", np.asarray([5, 6], dtype=np.int16)
+            ),
+            payload.__setitem__(
+                "max_layer_reachable", np.asarray([True, False], dtype=np.bool_)
+            ),
+        ),
+    ),
+    ids=(
+        "duplicate-source-index",
+        "source-index-out-of-range",
+        "duplicate-rgb",
+        "no-fixed-max-candidate",
+        "max-count-not-reachable",
+    ),
+)
+def test_catalog_payload_rejects_cross_field_invariant_corruption(
+    tmp_path: Path,
+    mutate,
+) -> None:
+    materials = _materials()
+    key = _key(materials)
+    path = save_dynamic_candidate_catalog(
+        _catalog(),
+        materials=materials,
+        key=key,
+        candidate_count_before_dedup=3,
+        cache_root=tmp_path,
+    )
+    _rewrite_npz(path, mutate)
+
+    with pytest.raises(DynamicCatalogCacheCorruptionError):
+        load_dynamic_candidate_catalog(
+            materials=materials,
+            key=key,
+            cache_root=tmp_path,
+        )
+
+
+def test_catalog_payload_rejects_backing_identity_mismatch(tmp_path: Path) -> None:
+    materials = _materials()
+    key = _key(materials)
+    path = save_dynamic_candidate_catalog(
+        _catalog(),
+        materials=materials,
+        key=key,
+        candidate_count_before_dedup=3,
+        cache_root=tmp_path,
+    )
+
+    def corrupt(payload: dict[str, np.ndarray]) -> None:
+        metadata = _metadata_from_payload(payload)
+        backing_index = 1 - int(metadata["canonical_backing_material_index"])
+        metadata["canonical_backing_material_index"] = backing_index
+        payload["print_recipes_canonical"][0, 0] = backing_index
+        _store_metadata(payload, metadata)
+
+    _rewrite_npz(path, corrupt)
+
+    with pytest.raises(DynamicCatalogCacheCorruptionError):
+        load_dynamic_candidate_catalog(
+            materials=materials,
+            key=key,
+            cache_root=tmp_path,
+        )
+
+
+def test_flipped_compressed_bytes_are_quarantined_and_rebuilt(tmp_path: Path) -> None:
+    materials = _materials()
+    key = _key(materials)
+    path = save_dynamic_candidate_catalog(
+        _catalog(),
+        materials=materials,
+        key=key,
+        candidate_count_before_dedup=3,
+        cache_root=tmp_path,
+    )
+    raw = bytearray(path.read_bytes())
+    with zipfile.ZipFile(path) as archive:
+        member = archive.getinfo("source_indices.npy")
+        header = raw[member.header_offset : member.header_offset + 30]
+        filename_length, extra_length = struct.unpack_from("<HH", header, 26)
+        data_start = member.header_offset + 30 + filename_length + extra_length
+        raw[data_start + max(0, member.compress_size // 2)] ^= 0xFF
+    path.write_bytes(raw)
+    build_calls = 0
+
+    def builder() -> tuple[dynamic_solver.DynamicCandidateCatalog, int]:
+        nonlocal build_calls
+        build_calls += 1
+        return _catalog(), 3
+
+    result = load_or_build_dynamic_candidate_catalog(
+        materials=materials,
+        key=key,
+        builder=builder,
+        cache_root=tmp_path,
+    )
+
+    assert build_calls == 1
+    assert result.rebuilt_corrupt is True
+    assert len(list(path.parent.glob(path.name + ".corrupt-*"))) == 1
+
+    assert load_dynamic_candidate_catalog(
+        materials=materials,
+        key=key,
+        cache_root=tmp_path,
+    ) is not None
 
 
 def test_persisted_payload_contains_catalog_only_and_never_target_results(
@@ -401,6 +597,125 @@ def test_dynamic_runtime_provider_bypasses_legacy_fixed_cache(
     assert loaded is runtime
     assert diagnostic_grid == runtime.grid_resolution
     assert candidate_calls == [PREVIEW_SAFE_CANDIDATE_BUDGET]
+
+
+def test_dynamic_runtime_provider_skips_optical_only_cache_for_duplicate_optics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    materials = _duplicate_optical_materials()
+    runtime = _runtime(np.asarray([[0, 1, 0, 1, 0]], dtype=np.uint8), 5)
+    build_orders: list[list[str]] = []
+    monkeypatch.setattr(
+        material_provider,
+        "load_material_candidate_runtime",
+        lambda *_args, **_kwargs: pytest.fail(
+            "duplicate optical identities must bypass persisted candidate runtimes"
+        ),
+    )
+
+    def build_runtime(*, materials, **_kwargs):
+        build_orders.append([material.directory_name for material in materials])
+        return runtime
+
+    monkeypatch.setattr(
+        material_provider,
+        "build_material_candidate_runtime",
+        build_runtime,
+    )
+
+    loaded, _diagnostic_grid = material_provider.load_dynamic_candidate_runtime(
+        materials,
+        5,
+        0.08,
+        "white",
+        candidate_budget=PREVIEW_SAFE_CANDIDATE_BUDGET,
+    )
+
+    assert loaded is runtime
+    assert build_orders == [["identity a", "identity b"]]
+
+
+def test_concurrent_miss_builds_once_and_second_caller_hits(tmp_path: Path) -> None:
+    materials = _materials()
+    key = _key(materials)
+    start = threading.Barrier(2)
+    build_lock = threading.Lock()
+    build_calls = 0
+
+    def builder() -> tuple[dynamic_solver.DynamicCandidateCatalog, int]:
+        nonlocal build_calls
+        with build_lock:
+            build_calls += 1
+        time.sleep(0.1)
+        return _catalog(), 3
+
+    def invoke():
+        start.wait(timeout=2)
+        return load_or_build_dynamic_candidate_catalog(
+            materials=materials,
+            key=key,
+            builder=builder,
+            cache_root=tmp_path,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _value: invoke(), range(2)))
+
+    assert build_calls == 1
+    assert sorted(result.cache_hit for result in results) == [False, True]
+
+
+def test_cache_emits_structured_hit_miss_build_and_corruption_logs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records: list[tuple[str, dict[str, object]]] = []
+
+    def capture_debug(_message: str, *, extra: dict[str, object]) -> None:
+        records.append(("DEBUG", extra))
+
+    def capture_warning(_message: str, *, extra: dict[str, object]) -> None:
+        records.append(("WARNING", extra))
+
+    monkeypatch.setattr(catalog_cache._log, "debug", capture_debug)
+    monkeypatch.setattr(catalog_cache._log, "warning", capture_warning)
+    materials = _materials()
+    key = _key(materials)
+
+    def builder() -> tuple[dynamic_solver.DynamicCandidateCatalog, int]:
+        return _catalog(), 3
+
+    load_or_build_dynamic_candidate_catalog(
+        materials=materials,
+        key=key,
+        builder=builder,
+        cache_root=tmp_path,
+    )
+    load_or_build_dynamic_candidate_catalog(
+        materials=materials,
+        key=key,
+        builder=builder,
+        cache_root=tmp_path,
+    )
+    path = dynamic_catalog_cache_file_path(key, cache_root=tmp_path)
+    path.write_bytes(b"corrupt")
+    load_or_build_dynamic_candidate_catalog(
+        materials=materials,
+        key=key,
+        builder=builder,
+        cache_root=tmp_path,
+    )
+
+    events = {extra["event"]: (level, extra) for level, extra in records}
+    assert "dynamic_material_catalog_cache_miss" in events
+    assert "dynamic_material_catalog_cache_build_done" in events
+    assert "dynamic_material_catalog_cache_hit" in events
+    warning_level, warning = events[
+        "dynamic_material_catalog_cache_corrupt_rebuild"
+    ]
+    assert warning_level == "WARNING"
+    assert warning["error_type"]
+    assert warning["error_message"]
 
 
 def test_custom_runtime_loader_bypasses_persistent_catalog_cache(

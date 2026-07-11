@@ -9,18 +9,19 @@ import hashlib
 import json
 import math
 import os
+import threading
+import time
 import uuid
+import zipfile
+import zlib
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable
 
 import numpy as np
 
-from core.material_cache import (
-    canonical_palette_order,
-    default_cache_directory,
-    fingerprint_palette,
-)
+from api.structured_logging import get_logger
+from core.material_cache import _material_fingerprint, default_cache_directory
 from core.material_candidate_cache import HYBRID_CANDIDATE_ALGORITHM_VERSION
 from core.material_color_solver import MaterialParams, rgb_to_lab
 from core.material_dynamic_solver import (
@@ -32,6 +33,7 @@ from core.material_dynamic_solver import (
 DYNAMIC_CATALOG_SCHEMA_VERSION = 1
 DYNAMIC_CATALOG_ALGORITHM_VERSION = "dynamic-ciede2000-v1"
 _DYNAMIC_CACHE_SUBDIRECTORY = "dynamic-catalogs"
+_CACHE_LOCK_TIMEOUT_SECONDS = 30.0
 _PAYLOAD_FIELDS = {
     "score_srgb",
     "score_lab",
@@ -41,6 +43,9 @@ _PAYLOAD_FIELDS = {
     "source_indices",
     "metadata_json",
 }
+_log = get_logger(__name__)
+_thread_locks_guard = threading.Lock()
+_thread_locks: dict[str, threading.RLock] = {}
 
 
 class DynamicCatalogCacheCorruptionError(ValueError):
@@ -62,8 +67,8 @@ class DynamicCatalogCacheKey:
             有界候选来源算法版本。
         palette_fingerprint: Order-independent material palette fingerprint.
             与耗材顺序无关的调色板指纹。
-        backing_material_fingerprint: Content fingerprint of the selected
-            backing material. 所选基板耗材的内容指纹。
+        backing_material_fingerprint: Identity and optical fingerprint of the
+            selected backing material. 所选基板耗材的身份与光学指纹。
         material_count: Number of materials in the palette. 调色板耗材数。
         layer_height_mm: Physical layer height. 物理层高。
         substrate: White or black optical substrate. 光学基底。
@@ -119,8 +124,8 @@ class DynamicCatalogCacheResult(CachedDynamicCandidateCatalog):
     Attributes:
         cache_hit: Whether the catalog came from a validated cache entry.
             是否命中已验证缓存条目。
-        rebuilt_corrupt: Whether one corrupt entry was removed before build.
-            构建前是否移除了一个损坏条目。
+        rebuilt_corrupt: Whether one corrupt entry was quarantined before build.
+            构建前是否隔离了一个损坏条目。
     """
 
     cache_hit: bool
@@ -135,6 +140,47 @@ def _validate_materials(materials: list[MaterialParams]) -> None:
         raise ValueError("materials must be a non-empty list")
     if not all(isinstance(material, MaterialParams) for material in materials):
         raise TypeError("materials must contain MaterialParams values")
+
+
+def _normalized_material_identity(material: MaterialParams) -> tuple[str, str]:
+    return (
+        str(material.directory_name).strip().casefold(),
+        str(material.name).strip().casefold(),
+    )
+
+
+def _dynamic_material_identity_fingerprint(material: MaterialParams) -> str:
+    """Hash stable material identity together with optical parameters.
+
+    将稳定耗材身份与光学参数共同哈希。
+    """
+
+    directory_name, name = _normalized_material_identity(material)
+    payload = {
+        "directory_name": directory_name,
+        "name": name,
+        "optical_fingerprint": _material_fingerprint(material),
+    }
+    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _dynamic_palette_identity_fingerprint(
+    materials: list[MaterialParams],
+) -> str:
+    identities = sorted(
+        _dynamic_material_identity_fingerprint(material) for material in materials
+    )
+    return hashlib.sha256("|".join(identities).encode("utf-8")).hexdigest()
+
+
+def _dynamic_canonical_palette_order(
+    materials: list[MaterialParams],
+) -> list[int]:
+    identities = [
+        _dynamic_material_identity_fingerprint(material) for material in materials
+    ]
+    return sorted(range(len(materials)), key=lambda index: (identities[index], index))
 
 
 def build_dynamic_catalog_cache_key(
@@ -210,9 +256,9 @@ def build_dynamic_catalog_cache_key(
     return DynamicCatalogCacheKey(
         algorithm_version=normalized_version,
         candidate_source_version=HYBRID_CANDIDATE_ALGORITHM_VERSION,
-        palette_fingerprint=fingerprint_palette(materials),
-        backing_material_fingerprint=fingerprint_palette(
-            [materials[backing_index]]
+        palette_fingerprint=_dynamic_palette_identity_fingerprint(materials),
+        backing_material_fingerprint=_dynamic_material_identity_fingerprint(
+            materials[backing_index]
         ),
         material_count=len(materials),
         layer_height_mm=height,
@@ -256,7 +302,9 @@ def dynamic_catalog_cache_file_path(
 def _canonical_index_maps(
     materials: list[MaterialParams],
 ) -> tuple[np.ndarray, np.ndarray]:
-    canonical_to_user = np.asarray(canonical_palette_order(materials), dtype=np.int32)
+    canonical_to_user = np.asarray(
+        _dynamic_canonical_palette_order(materials), dtype=np.int32
+    )
     if canonical_to_user.shape != (len(materials),):
         raise ValueError("canonical material order has an invalid shape")
     user_to_canonical = np.empty(len(materials), dtype=np.int32)
@@ -272,7 +320,8 @@ def _canonical_backing_index(
     matches = [
         index
         for index, material in enumerate(materials)
-        if fingerprint_palette([material]) == key.backing_material_fingerprint
+        if _dynamic_material_identity_fingerprint(material)
+        == key.backing_material_fingerprint
     ]
     if not matches:
         raise ValueError("backing material fingerprint is absent from the palette")
@@ -287,6 +336,177 @@ def _metadata_bytes(metadata: dict[str, object]) -> np.ndarray:
         separators=(",", ":"),
     ).encode("utf-8")
     return np.frombuffer(encoded, dtype=np.uint8)
+
+
+def _thread_lock_for(path: Path) -> threading.RLock:
+    lock_key = str(path.resolve()).casefold()
+    with _thread_locks_guard:
+        lock = _thread_locks.get(lock_key)
+        if lock is None:
+            lock = threading.RLock()
+            _thread_locks[lock_key] = lock
+        return lock
+
+
+class _DynamicCatalogKeyLock:
+    """Serialize one cache key across threads and operating-system processes."""
+
+    def __init__(self, path: Path, *, layer_count: int) -> None:
+        self._lock_path = path.with_name(path.name + ".lock")
+        self._layer_count = int(layer_count)
+        self._thread_lock = _thread_lock_for(self._lock_path)
+        self._thread_acquired = False
+        self._handle = None
+
+    def __enter__(self) -> "_DynamicCatalogKeyLock":
+        try:
+            self._lock_path.parent.mkdir(parents=True, exist_ok=True)
+            self._thread_acquired = self._thread_lock.acquire(
+                timeout=_CACHE_LOCK_TIMEOUT_SECONDS
+            )
+            if not self._thread_acquired:
+                raise TimeoutError("thread lock timed out")
+            self._handle = self._lock_path.open("a+b")
+            self._handle.seek(0, os.SEEK_END)
+            if self._handle.tell() == 0:
+                self._handle.write(b"\0")
+                self._handle.flush()
+            deadline = time.monotonic() + _CACHE_LOCK_TIMEOUT_SECONDS
+            while True:
+                try:
+                    self._acquire_process_lock()
+                    return self
+                except (BlockingIOError, PermissionError):
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("process lock timed out")
+                    time.sleep(0.05)
+        except Exception as exc:
+            self._release_resources()
+            raise DynamicMaterialCandidateError(
+                "dynamic catalog cache lock could not be acquired",
+                layer_count=self._layer_count,
+                phase="dynamic_catalog_cache_lock",
+            ) from exc
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        if self._handle is not None:
+            try:
+                self._release_process_lock()
+            finally:
+                self._release_resources()
+        else:
+            self._release_resources()
+
+    def _acquire_process_lock(self) -> None:
+        if self._handle is None:
+            raise RuntimeError("cache lock file is not open")
+        self._handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(self._handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(self._handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def _release_process_lock(self) -> None:
+        if self._handle is None:
+            return
+        self._handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(self._handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(self._handle.fileno(), fcntl.LOCK_UN)
+
+    def _release_resources(self) -> None:
+        if self._handle is not None:
+            self._handle.close()
+            self._handle = None
+        if self._thread_acquired:
+            self._thread_lock.release()
+            self._thread_acquired = False
+
+
+def _prepare_catalog_payload(
+    catalog: DynamicCandidateCatalog,
+    *,
+    materials: list[MaterialParams],
+    key: DynamicCatalogCacheKey,
+    candidate_count_before_dedup: int,
+) -> dict[str, np.ndarray]:
+    _validate_materials(materials)
+    if not isinstance(catalog, DynamicCandidateCatalog):
+        raise TypeError("catalog must be a DynamicCandidateCatalog")
+    if key.palette_fingerprint != _dynamic_palette_identity_fingerprint(materials):
+        raise ValueError("cache key does not match the material palette")
+    before_count = int(candidate_count_before_dedup)
+    after_count = int(catalog.score_srgb.shape[0])
+    if before_count < after_count:
+        raise ValueError("candidate_count_before_dedup cannot be smaller than catalog")
+    if catalog.print_recipes.shape[1] != key.max_layer_count:
+        raise ValueError("catalog recipe width does not match the cache key")
+    if np.any(catalog.print_recipes < 0) or np.any(
+        catalog.print_recipes >= len(materials)
+    ):
+        raise ValueError("catalog recipes contain invalid user material indices")
+
+    canonical_to_user, user_to_canonical = _canonical_index_maps(materials)
+    canonical_recipes = user_to_canonical[catalog.print_recipes]
+    canonical_backing = _canonical_backing_index(materials, key, user_to_canonical)
+    canonical_identities = [
+        _dynamic_material_identity_fingerprint(materials[int(user_index)])
+        for user_index in canonical_to_user
+    ]
+    metadata: dict[str, object] = {
+        "schema_version": DYNAMIC_CATALOG_SCHEMA_VERSION,
+        "key": key.as_metadata(),
+        "recipe_index_space": "canonical",
+        "canonical_material_identity_fingerprints": canonical_identities,
+        "canonical_backing_material_index": canonical_backing,
+        "canonical_backing_material_fingerprint": canonical_identities[
+            canonical_backing
+        ],
+        "candidate_count_before_dedup": before_count,
+        "candidate_count_after_dedup": after_count,
+    }
+    return {
+        "score_srgb": np.asarray(catalog.score_srgb, dtype=np.uint8),
+        "score_lab": np.asarray(catalog.score_lab, dtype=np.float64),
+        "print_recipes_canonical": np.asarray(canonical_recipes, dtype=np.int32),
+        "minimum_actual_layer_counts": np.asarray(
+            catalog.minimum_actual_layer_counts, dtype=np.int16
+        ),
+        "max_layer_reachable": np.asarray(
+            catalog.max_layer_reachable, dtype=np.bool_
+        ),
+        "source_indices": np.asarray(catalog.source_indices, dtype=np.int64),
+        "metadata_json": _metadata_bytes(metadata),
+    }
+
+
+def _write_catalog_payload_unlocked(
+    path: Path,
+    payload: dict[str, np.ndarray],
+) -> None:
+    temporary = path.with_name(
+        f"{path.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}"
+    )
+    try:
+        with temporary.open("wb") as handle:
+            np.savez_compressed(handle, **payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def save_dynamic_candidate_catalog(
@@ -314,65 +534,16 @@ def save_dynamic_candidate_catalog(
         Path: Atomically replaced NPZ path. 原子替换后的 NPZ 路径。
     """
 
-    _validate_materials(materials)
-    if not isinstance(catalog, DynamicCandidateCatalog):
-        raise TypeError("catalog must be a DynamicCandidateCatalog")
-    if key.palette_fingerprint != fingerprint_palette(materials):
-        raise ValueError("cache key does not match the material palette")
-    before_count = int(candidate_count_before_dedup)
-    after_count = int(catalog.score_srgb.shape[0])
-    if before_count < after_count:
-        raise ValueError("candidate_count_before_dedup cannot be smaller than catalog")
-    if catalog.print_recipes.shape[1] != key.max_layer_count:
-        raise ValueError("catalog recipe width does not match the cache key")
-    if np.any(catalog.print_recipes < 0) or np.any(
-        catalog.print_recipes >= len(materials)
-    ):
-        raise ValueError("catalog recipes contain invalid user material indices")
-
-    _canonical_to_user, user_to_canonical = _canonical_index_maps(materials)
-    canonical_recipes = user_to_canonical[catalog.print_recipes]
-    canonical_backing = _canonical_backing_index(materials, key, user_to_canonical)
-    metadata: dict[str, object] = {
-        "schema_version": DYNAMIC_CATALOG_SCHEMA_VERSION,
-        "key": key.as_metadata(),
-        "recipe_index_space": "canonical",
-        "canonical_backing_material_index": canonical_backing,
-        "candidate_count_before_dedup": before_count,
-        "candidate_count_after_dedup": after_count,
-    }
-
+    payload = _prepare_catalog_payload(
+        catalog,
+        materials=materials,
+        key=key,
+        candidate_count_before_dedup=candidate_count_before_dedup,
+    )
     path = dynamic_catalog_cache_file_path(key, cache_root=cache_root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(
-        f"{path.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}"
-    )
-    try:
-        with temporary.open("wb") as handle:
-            np.savez_compressed(
-                handle,
-                score_srgb=np.asarray(catalog.score_srgb, dtype=np.uint8),
-                score_lab=np.asarray(catalog.score_lab, dtype=np.float64),
-                print_recipes_canonical=np.asarray(
-                    canonical_recipes, dtype=np.int32
-                ),
-                minimum_actual_layer_counts=np.asarray(
-                    catalog.minimum_actual_layer_counts, dtype=np.int16
-                ),
-                max_layer_reachable=np.asarray(
-                    catalog.max_layer_reachable, dtype=np.bool_
-                ),
-                source_indices=np.asarray(catalog.source_indices, dtype=np.int64),
-                metadata_json=_metadata_bytes(metadata),
-            )
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
+    with _DynamicCatalogKeyLock(path, layer_count=key.max_layer_count):
+        _write_catalog_payload_unlocked(path, payload)
     return path
 
 
@@ -396,6 +567,13 @@ def _validated_loaded_catalog(
         _corruption("dynamic catalog key mismatch")
     if metadata.get("recipe_index_space") != "canonical":
         _corruption("dynamic catalog recipes are not canonical indices")
+    canonical_to_user, _user_to_canonical = _canonical_index_maps(materials)
+    canonical_identities = [
+        _dynamic_material_identity_fingerprint(materials[int(user_index)])
+        for user_index in canonical_to_user
+    ]
+    if metadata.get("canonical_material_identity_fingerprints") != canonical_identities:
+        _corruption("dynamic catalog canonical material identities are invalid")
 
     expected_dtypes = {
         "score_srgb": np.dtype(np.uint8),
@@ -429,6 +607,8 @@ def _validated_loaded_catalog(
         _corruption("dynamic catalog vector field shape is invalid")
     if not np.all(np.isfinite(score_lab)):
         _corruption("dynamic catalog score_lab contains non-finite values")
+    if np.unique(score_srgb, axis=0).shape[0] != row_count:
+        _corruption("dynamic catalog score_srgb rows are not unique")
     expected_lab = np.asarray(rgb_to_lab(score_srgb), dtype=np.float64)
     if not np.array_equal(score_lab, expected_lab):
         _corruption("dynamic catalog score_lab violates the scoring contract")
@@ -440,9 +620,6 @@ def _validated_loaded_catalog(
         minimum_counts > key.max_layer_count
     ):
         _corruption("dynamic catalog actual layer counts are outside the key range")
-    if np.any(source_indices < 0):
-        _corruption("dynamic catalog source indices must be non-negative")
-
     try:
         before_count = int(metadata["candidate_count_before_dedup"])
         after_count = int(metadata["candidate_count_after_dedup"])
@@ -451,8 +628,25 @@ def _validated_loaded_catalog(
         _corruption("dynamic catalog count metadata is invalid", cause=exc)
     if before_count < row_count or after_count != row_count:
         _corruption("dynamic catalog candidate counts are inconsistent")
+    if (
+        np.any(source_indices < 0)
+        or np.any(source_indices >= before_count)
+        or np.unique(source_indices).shape[0] != row_count
+    ):
+        _corruption("dynamic catalog source indices are invalid")
     if not 0 <= canonical_backing < len(materials):
         _corruption("dynamic catalog canonical backing index is invalid")
+    if (
+        metadata.get("canonical_backing_material_fingerprint")
+        != key.backing_material_fingerprint
+        or canonical_identities[canonical_backing]
+        != key.backing_material_fingerprint
+    ):
+        _corruption("dynamic catalog canonical backing identity is invalid")
+    if not np.any(max_reachable):
+        _corruption("dynamic catalog has no fixed-maximum reachable candidate")
+    if np.any((minimum_counts == key.max_layer_count) & (~max_reachable)):
+        _corruption("dynamic catalog maximum-layer candidates are not reachable")
     for row_index, actual_count in enumerate(minimum_counts):
         padding_count = key.max_layer_count - int(actual_count)
         if padding_count and np.any(
@@ -460,7 +654,6 @@ def _validated_loaded_catalog(
         ):
             _corruption("dynamic catalog backing padding is inconsistent")
 
-    canonical_to_user, _user_to_canonical = _canonical_index_maps(materials)
     user_recipes = canonical_to_user[canonical_recipes]
     catalog = DynamicCandidateCatalog(
         score_srgb=score_srgb,
@@ -473,6 +666,51 @@ def _validated_loaded_catalog(
     return CachedDynamicCandidateCatalog(
         catalog=catalog,
         candidate_count_before_dedup=before_count,
+    )
+
+
+def _load_dynamic_candidate_catalog_unlocked(
+    *,
+    materials: list[MaterialParams],
+    key: DynamicCatalogCacheKey,
+    path: Path,
+) -> CachedDynamicCandidateCatalog | None:
+    if not path.exists():
+        return None
+    try:
+        with np.load(path, allow_pickle=False) as loaded:
+            if set(loaded.files) != _PAYLOAD_FIELDS:
+                _corruption("dynamic catalog payload fields are invalid")
+            payload = {
+                field: np.array(loaded[field], copy=True)
+                for field in _PAYLOAD_FIELDS
+                if field != "metadata_json"
+            }
+            metadata_raw = np.array(loaded["metadata_json"], copy=True)
+    except DynamicCatalogCacheCorruptionError:
+        raise
+    except (
+        OSError,
+        ValueError,
+        KeyError,
+        EOFError,
+        zipfile.BadZipFile,
+        zlib.error,
+    ) as exc:
+        _corruption("dynamic catalog NPZ cannot be loaded", cause=exc)
+    if metadata_raw.dtype != np.uint8 or metadata_raw.ndim != 1:
+        _corruption("dynamic catalog metadata_json encoding is invalid")
+    try:
+        metadata = json.loads(metadata_raw.tobytes().decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        _corruption("dynamic catalog metadata_json is invalid", cause=exc)
+    if not isinstance(metadata, dict):
+        _corruption("dynamic catalog metadata must be an object")
+    return _validated_loaded_catalog(
+        payload=payload,
+        metadata=metadata,
+        materials=materials,
+        key=key,
     )
 
 
@@ -501,39 +739,15 @@ def load_dynamic_candidate_catalog(
     """
 
     _validate_materials(materials)
-    if key.palette_fingerprint != fingerprint_palette(materials):
+    if key.palette_fingerprint != _dynamic_palette_identity_fingerprint(materials):
         raise ValueError("cache key does not match the material palette")
     path = dynamic_catalog_cache_file_path(key, cache_root=cache_root)
-    if not path.exists():
-        return None
-    try:
-        with np.load(path, allow_pickle=False) as loaded:
-            if set(loaded.files) != _PAYLOAD_FIELDS:
-                _corruption("dynamic catalog payload fields are invalid")
-            payload = {
-                field: np.array(loaded[field], copy=True)
-                for field in _PAYLOAD_FIELDS
-                if field != "metadata_json"
-            }
-            metadata_raw = np.asarray(loaded["metadata_json"])
-    except DynamicCatalogCacheCorruptionError:
-        raise
-    except (OSError, ValueError, KeyError) as exc:
-        _corruption("dynamic catalog NPZ cannot be loaded", cause=exc)
-    if metadata_raw.dtype != np.uint8 or metadata_raw.ndim != 1:
-        _corruption("dynamic catalog metadata_json encoding is invalid")
-    try:
-        metadata = json.loads(metadata_raw.tobytes().decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
-        _corruption("dynamic catalog metadata_json is invalid", cause=exc)
-    if not isinstance(metadata, dict):
-        _corruption("dynamic catalog metadata must be an object")
-    return _validated_loaded_catalog(
-        payload=payload,
-        metadata=metadata,
-        materials=materials,
-        key=key,
-    )
+    with _DynamicCatalogKeyLock(path, layer_count=key.max_layer_count):
+        return _load_dynamic_candidate_catalog_unlocked(
+            materials=materials,
+            key=key,
+            path=path,
+        )
 
 
 def load_or_build_dynamic_candidate_catalog(
@@ -563,55 +777,112 @@ def load_or_build_dynamic_candidate_catalog(
             fails. 缓存移除、构建或原子写入失败。
     """
 
+    _validate_materials(materials)
+    if key.palette_fingerprint != _dynamic_palette_identity_fingerprint(materials):
+        raise ValueError("cache key does not match the material palette")
     path = dynamic_catalog_cache_file_path(key, cache_root=cache_root)
-    rebuilt_corrupt = False
-    try:
-        loaded = load_dynamic_candidate_catalog(
-            materials=materials,
-            key=key,
-            cache_root=cache_root,
-        )
-    except DynamicCatalogCacheCorruptionError:
-        rebuilt_corrupt = True
+    key_id = path.stem
+    with _DynamicCatalogKeyLock(path, layer_count=key.max_layer_count):
+        rebuilt_corrupt = False
         try:
-            path.unlink(missing_ok=True)
-        except OSError as exc:
-            raise DynamicMaterialCandidateError(
-                "corrupt dynamic catalog could not be removed",
-                layer_count=key.max_layer_count,
-                phase="dynamic_catalog_cache_load",
-            ) from exc
-        loaded = None
-    if loaded is not None:
-        return DynamicCatalogCacheResult(
-            catalog=loaded.catalog,
-            candidate_count_before_dedup=loaded.candidate_count_before_dedup,
-            cache_hit=True,
-            rebuilt_corrupt=False,
-        )
+            loaded = _load_dynamic_candidate_catalog_unlocked(
+                materials=materials,
+                key=key,
+                path=path,
+            )
+        except DynamicCatalogCacheCorruptionError as exc:
+            rebuilt_corrupt = True
+            quarantine = path.with_name(
+                f"{path.name}.corrupt-{os.getpid()}-{uuid.uuid4().hex}"
+            )
+            try:
+                os.replace(path, quarantine)
+            except FileNotFoundError:
+                quarantine = None
+            except OSError as quarantine_exc:
+                raise DynamicMaterialCandidateError(
+                    "corrupt dynamic catalog could not be quarantined",
+                    layer_count=key.max_layer_count,
+                    phase="dynamic_catalog_cache_load",
+                ) from quarantine_exc
+            _log.warning(
+                "Corrupt dynamic material catalog quarantined for rebuild",
+                extra={
+                    "event": "dynamic_material_catalog_cache_corrupt_rebuild",
+                    "error_type": type(exc.__cause__ or exc).__name__,
+                    "error_message": str(exc),
+                    "cache_key": key_id,
+                    "quarantine_name": quarantine.name if quarantine else None,
+                    "layer_count": key.max_layer_count,
+                },
+            )
+            loaded = None
+        if loaded is not None:
+            _log.debug(
+                "Dynamic material catalog cache hit",
+                extra={
+                    "event": "dynamic_material_catalog_cache_hit",
+                    "cache_key": key_id,
+                    "candidate_count": int(loaded.catalog.score_srgb.shape[0]),
+                    "layer_count": key.max_layer_count,
+                },
+            )
+            return DynamicCatalogCacheResult(
+                catalog=loaded.catalog,
+                candidate_count_before_dedup=loaded.candidate_count_before_dedup,
+                cache_hit=True,
+                rebuilt_corrupt=False,
+            )
 
-    try:
-        catalog, before_count = builder()
-        if not isinstance(catalog, DynamicCandidateCatalog):
-            raise TypeError("builder must return a DynamicCandidateCatalog")
-        save_dynamic_candidate_catalog(
-            catalog,
-            materials=materials,
-            key=key,
-            candidate_count_before_dedup=before_count,
-            cache_root=cache_root,
+        _log.debug(
+            "Dynamic material catalog cache miss",
+            extra={
+                "event": "dynamic_material_catalog_cache_miss",
+                "cache_key": key_id,
+                "rebuilt_corrupt": rebuilt_corrupt,
+                "layer_count": key.max_layer_count,
+            },
         )
-    except DynamicMaterialCandidateError:
-        raise
-    except Exception as exc:
-        raise DynamicMaterialCandidateError(
-            "dynamic candidate catalog build or write failed",
-            layer_count=key.max_layer_count,
-            phase="dynamic_catalog_cache_build",
-        ) from exc
-    return DynamicCatalogCacheResult(
-        catalog=catalog,
-        candidate_count_before_dedup=int(before_count),
-        cache_hit=False,
-        rebuilt_corrupt=rebuilt_corrupt,
-    )
+        _log.debug(
+            "Dynamic material catalog build started",
+            extra={
+                "event": "dynamic_material_catalog_cache_build_init",
+                "cache_key": key_id,
+                "candidate_budget": key.candidate_budget,
+                "min_layer_count": key.min_layer_count,
+                "max_layer_count": key.max_layer_count,
+            },
+        )
+        try:
+            catalog, before_count = builder()
+            payload = _prepare_catalog_payload(
+                catalog,
+                materials=materials,
+                key=key,
+                candidate_count_before_dedup=before_count,
+            )
+            _write_catalog_payload_unlocked(path, payload)
+        except DynamicMaterialCandidateError:
+            raise
+        except Exception as exc:
+            raise DynamicMaterialCandidateError(
+                "dynamic candidate catalog build or write failed",
+                layer_count=key.max_layer_count,
+                phase="dynamic_catalog_cache_build",
+            ) from exc
+        _log.debug(
+            "Dynamic material catalog build completed",
+            extra={
+                "event": "dynamic_material_catalog_cache_build_done",
+                "cache_key": key_id,
+                "candidate_count_before_dedup": int(before_count),
+                "candidate_count_after_dedup": int(catalog.score_srgb.shape[0]),
+                "layer_count": key.max_layer_count,
+            },
+        )
+        return DynamicCatalogCacheResult(
+            catalog=catalog,
+            candidate_count_before_dedup=int(before_count),
+            cache_hit=False,
+            rebuilt_corrupt=rebuilt_corrupt,
+        )
