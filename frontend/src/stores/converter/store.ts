@@ -3281,6 +3281,14 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       })),
     setMaterialBackingMaterialDirName: (name: string | null) => {
       persistMaterialBackingMaterialDirName(name);
+      if (isDynamicMaterialActive(_get())) {
+        invalidateDynamicMaterialWork();
+        set({
+          materialBackingMaterialDirName: name,
+          ...buildDynamicMaterialResetState(),
+        });
+        return;
+      }
       set({
         materialBackingMaterialDirName: name,
         modelUrl: null,

@@ -198,4 +198,23 @@ describe("converter store dynamic material layer count", () => {
       materialLayerBenefitCurve: [STALE_BENEFIT_POINT],
     });
   });
+  it("keeps fixed-mode backing selection behavior unchanged", () => {
+    useConverterStore.setState({
+      source_version: "material",
+      materialDynamicLayerCountEnabled: false,
+    } as never);
+    seedPreviewArtifacts();
+
+    useConverterStore
+      .getState()
+      .setMaterialBackingMaterialDirName("brand/pla-blue");
+
+    expect(useConverterStore.getState()).toMatchObject({
+      materialBackingMaterialDirName: "brand/pla-blue",
+      sessionId: "stale-session",
+      previewImageUrl: "/stale-preview.png",
+      materialDynamicRecipes: [STALE_DYNAMIC_RECIPE],
+      materialLayerBenefitCurve: [STALE_BENEFIT_POINT],
+    });
+  });
 });
