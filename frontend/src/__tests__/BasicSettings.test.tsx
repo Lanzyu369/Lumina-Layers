@@ -219,6 +219,11 @@ beforeEach(() => {
     enable_relief: false,
     previewWarnings: [],
     largeFormatWarnings: [],
+    materialDynamicLayerCountEnabled: false,
+    materialMinLayerCount: 5,
+    materialMaxLayerCount: 10,
+    materialDynamicRecipes: [],
+    materialLayerBenefitCurve: [],
   });
 });
 
@@ -516,6 +521,90 @@ describe("BasicSettings", () => {
     await waitFor(() => {
       expect(backingDropdown).toHaveTextContent("3. White PLA");
     });
+  });
+
+  it("shows fixed material layers by default and swaps to the dynamic range controls", () => {
+    useConverterStore.setState({
+      source_version: "material",
+      selectedMaterialDirNames: ["brand/pla-white"],
+      materialLayerCount: 7,
+      materialDynamicLayerCountEnabled: false,
+      materialMinLayerCount: 5,
+      materialMaxLayerCount: 10,
+    } as never);
+
+    render(<BasicSettings />);
+
+    const dynamicToggle = screen.getByRole("checkbox", {
+      name: /动态调整有效叠层数/,
+    });
+    expect(dynamicToggle).not.toBeChecked();
+    expect(screen.getByRole("slider", { name: "叠色层数" })).toHaveValue("7");
+    expect(
+      screen.queryByRole("slider", { name: "最小有效叠层数" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "穷举缓存…" })).toBeInTheDocument();
+
+    fireEvent.click(dynamicToggle);
+
+    expect(useConverterStore.getState().materialDynamicLayerCountEnabled).toBe(
+      true,
+    );
+    expect(
+      screen.queryByRole("slider", { name: "叠色层数" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("slider", { name: "最小有效叠层数" }),
+    ).toHaveAttribute("step", "1");
+    expect(
+      screen.getByRole("slider", { name: "最大有效叠层数" }),
+    ).toHaveAttribute("max", "10");
+    expect(screen.getByText(/范围内自动加载/)).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "穷举缓存…" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("couples dynamic material range controls in both edit directions", () => {
+    useConverterStore.setState({
+      source_version: "material",
+      materialDynamicLayerCountEnabled: true,
+      materialMinLayerCount: 5,
+      materialMaxLayerCount: 7,
+    } as never);
+
+    render(<BasicSettings />);
+
+    fireEvent.change(
+      screen.getByRole("slider", { name: "最小有效叠层数" }),
+      { target: { value: "9" } },
+    );
+    expect(useConverterStore.getState()).toMatchObject({
+      materialMinLayerCount: 9,
+      materialMaxLayerCount: 9,
+    });
+
+    fireEvent.change(
+      screen.getByRole("slider", { name: "最大有效叠层数" }),
+      { target: { value: "6" } },
+    );
+    expect(useConverterStore.getState()).toMatchObject({
+      materialMinLayerCount: 6,
+      materialMaxLayerCount: 6,
+    });
+  });
+
+  it("does not expose dynamic material controls for non-material sources", () => {
+    useConverterStore.setState({
+      source_version: "legacy",
+      materialDynamicLayerCountEnabled: true,
+    } as never);
+
+    render(<BasicSettings />);
+
+    expect(
+      screen.queryByRole("checkbox", { name: "动态调整有效叠层数" }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows brand options from the loaded legacy details catalog", () => {

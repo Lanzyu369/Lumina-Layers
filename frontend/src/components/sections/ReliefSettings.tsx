@@ -31,6 +31,8 @@ export default function ReliefSettings() {
     modeling_mode,
     source_version,
     materialLayerCount,
+    materialDynamicLayerCountEnabled,
+    materialMaxLayerCount,
     spacer_thick,
   } = useConverterStore(useShallow((s) => ({
     enable_relief: s.enable_relief,
@@ -41,6 +43,8 @@ export default function ReliefSettings() {
     modeling_mode: s.modeling_mode,
     source_version: s.source_version,
     materialLayerCount: s.materialLayerCount,
+    materialDynamicLayerCountEnabled: s.materialDynamicLayerCountEnabled,
+    materialMaxLayerCount: s.materialMaxLayerCount,
     spacer_thick: s.spacer_thick,
   })));
 
@@ -48,6 +52,8 @@ export default function ReliefSettings() {
   const minimumReliefHeight = getMaterialArchiveReliefMinimumExtraHeight({
     source_version,
     materialLayerCount,
+    materialDynamicLayerCountEnabled,
+    materialMaxLayerCount,
     spacer_thick,
   });
 

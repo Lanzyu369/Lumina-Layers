@@ -3,6 +3,8 @@ import { useShallow } from "zustand/react/shallow";
 import {
   useConverterStore,
   ACCEPT_IMAGE_FORMATS,
+  MATERIAL_DYNAMIC_LAYER_COUNT_MAX,
+  MATERIAL_DYNAMIC_LAYER_COUNT_MIN,
   inferDefaultMaterialBackingDirName,
   isValidImageType,
   resolveConverterSourceSelection,
@@ -205,6 +207,9 @@ export default function BasicSettings() {
     generatedLargeFormatWarnings,
     selectedMaterialDirNames,
     materialLayerCount,
+    materialDynamicLayerCountEnabled,
+    materialMinLayerCount,
+    materialMaxLayerCount,
     materialLayerHeightMm,
     materialBackingMaterialDirName,
     setColorLayers,
@@ -214,6 +219,9 @@ export default function BasicSettings() {
     setSourceVersion,
     setSelectedMaterialDirNames,
     setMaterialLayerCount,
+    setMaterialDynamicLayerCountEnabled,
+    setMaterialMinLayerCount,
+    setMaterialMaxLayerCount,
     setMaterialLayerHeightMm,
     setMaterialBackingMaterialDirName,
     setNativeBrandKey,
@@ -265,6 +273,9 @@ export default function BasicSettings() {
     generatedLargeFormatWarnings: s.largeFormatWarnings,
     selectedMaterialDirNames: s.selectedMaterialDirNames,
     materialLayerCount: s.materialLayerCount,
+    materialDynamicLayerCountEnabled: s.materialDynamicLayerCountEnabled,
+    materialMinLayerCount: s.materialMinLayerCount,
+    materialMaxLayerCount: s.materialMaxLayerCount,
     materialLayerHeightMm: s.materialLayerHeightMm,
     materialBackingMaterialDirName: s.materialBackingMaterialDirName,
     setColorLayers: s.setColorLayers,
@@ -274,6 +285,9 @@ export default function BasicSettings() {
     setSourceVersion: s.setSourceVersion,
     setSelectedMaterialDirNames: s.setSelectedMaterialDirNames,
     setMaterialLayerCount: s.setMaterialLayerCount,
+    setMaterialDynamicLayerCountEnabled: s.setMaterialDynamicLayerCountEnabled,
+    setMaterialMinLayerCount: s.setMaterialMinLayerCount,
+    setMaterialMaxLayerCount: s.setMaterialMaxLayerCount,
     setMaterialLayerHeightMm: s.setMaterialLayerHeightMm,
     setMaterialBackingMaterialDirName: s.setMaterialBackingMaterialDirName,
     setNativeBrandKey: s.setNativeBrandKey,
@@ -952,15 +966,48 @@ export default function BasicSettings() {
             onCancel={() => setMaterialPickerOpen(false)}
           />
 
-          <Slider
-            label={t("basic_material_layer_count_label")}
-            tooltip={t("basic_material_layer_count_hint")}
-            value={materialLayerCount}
-            min={5}
-            max={10}
-            step={1}
-            onChange={(v) => setMaterialLayerCount(Math.round(v))}
+          <Checkbox
+            label={t("basic_material_dynamic_layer_count_label")}
+            tooltip={t("basic_material_dynamic_layer_count_hint")}
+            checked={materialDynamicLayerCountEnabled}
+            onChange={setMaterialDynamicLayerCountEnabled}
           />
+
+          {materialDynamicLayerCountEnabled ? (
+            <>
+              <Slider
+                label={t("basic_material_min_layer_count_label")}
+                tooltip={t("basic_material_min_layer_count_hint")}
+                value={materialMinLayerCount}
+                min={MATERIAL_DYNAMIC_LAYER_COUNT_MIN}
+                max={MATERIAL_DYNAMIC_LAYER_COUNT_MAX}
+                step={1}
+                onChange={(v) => setMaterialMinLayerCount(Math.round(v))}
+              />
+              <Slider
+                label={t("basic_material_max_layer_count_label")}
+                tooltip={t("basic_material_max_layer_count_hint")}
+                value={materialMaxLayerCount}
+                min={MATERIAL_DYNAMIC_LAYER_COUNT_MIN}
+                max={MATERIAL_DYNAMIC_LAYER_COUNT_MAX}
+                step={1}
+                onChange={(v) => setMaterialMaxLayerCount(Math.round(v))}
+              />
+              <StatusBanner tone="info">
+                {t("basic_material_dynamic_range_hint")}
+              </StatusBanner>
+            </>
+          ) : (
+            <Slider
+              label={t("basic_material_layer_count_label")}
+              tooltip={t("basic_material_layer_count_hint")}
+              value={materialLayerCount}
+              min={5}
+              max={10}
+              step={1}
+              onChange={(v) => setMaterialLayerCount(Math.round(v))}
+            />
+          )}
 
           <Dropdown
             label={t("basic_material_layer_height_label")}
@@ -978,11 +1025,13 @@ export default function BasicSettings() {
             placeholder={t("basic_material_backing_placeholder")}
           />
 
-          <MaterialSolverCacheDialog
-            materialDirectoryNames={selectedMaterialDirNames}
-            layerCount={materialLayerCount}
-            layerHeightMm={materialLayerHeightMm}
-          />
+          {!materialDynamicLayerCountEnabled && (
+            <MaterialSolverCacheDialog
+              materialDirectoryNames={selectedMaterialDirNames}
+              layerCount={materialLayerCount}
+              layerHeightMm={materialLayerHeightMm}
+            />
+          )}
         </div>
       ) : source_version === "legacy" ? (
         <>

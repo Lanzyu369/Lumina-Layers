@@ -10,6 +10,9 @@ import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
 import { apiErrorToVisibleMessage } from "../api/client";
 import { clearCache, getMachineRegistryAssetUrl, getPrinters, getSlicers } from "../api/system";
 import {
+  MATERIAL_DELTA_E00_TOLERANCE_MAX,
+  MATERIAL_DELTA_E00_TOLERANCE_MIN,
+  MATERIAL_DELTA_E00_TOLERANCE_STEP,
   SVG_PIXELS_PER_MM_DEFAULT,
   SVG_PIXELS_PER_MM_MAX,
   SVG_PIXELS_PER_MM_MIN,
@@ -113,6 +116,12 @@ export default function SettingsPanel() {
   const setSvgPixelsPerMm = useSettingsStore((s) => s.setSvgPixelsPerMm);
   const resetSvgPixelsPerMm = useSettingsStore(
     (s) => s.resetSvgPixelsPerMm,
+  );
+  const materialDeltaE00Tolerance = useSettingsStore(
+    (s) => s.materialDeltaE00Tolerance,
+  );
+  const setMaterialDeltaE00Tolerance = useSettingsStore(
+    (s) => s.setMaterialDeltaE00Tolerance,
   );
   const autoReplaceGradientBanding = useSettingsStore(
     (s) => s.autoReplaceGradientBanding,
@@ -747,6 +756,34 @@ export default function SettingsPanel() {
               {t("settings.solver_cache_density_default_hint")}
             </StatusBanner>
           )}
+        </div>
+
+        <div
+          data-testid="settings-material-delta-e00-tolerance-section"
+          className="flex flex-col gap-4 border-t border-slate-200/60 pt-5 dark:border-slate-700/60"
+        >
+          <div>
+            <h5 className="text-sm font-semibold text-slate-900 dark:text-slate-50">
+              {t("settings.material_delta_e00_tolerance_heading")}
+            </h5>
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              {t("settings.material_delta_e00_tolerance_description")}
+            </p>
+          </div>
+          <Slider
+            label={t("settings.material_delta_e00_tolerance_label")}
+            tooltip={t("settings.material_delta_e00_tolerance_tip")}
+            value={materialDeltaE00Tolerance}
+            min={MATERIAL_DELTA_E00_TOLERANCE_MIN}
+            max={MATERIAL_DELTA_E00_TOLERANCE_MAX}
+            step={MATERIAL_DELTA_E00_TOLERANCE_STEP}
+            displayDecimals={1}
+            minInputWidthCh={4}
+            onChange={setMaterialDeltaE00Tolerance}
+          />
+          <StatusBanner tone="info">
+            {t("settings.material_delta_e00_tolerance_default_hint")}
+          </StatusBanner>
         </div>
 
         <div

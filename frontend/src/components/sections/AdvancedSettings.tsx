@@ -1,4 +1,7 @@
-import { useConverterStore } from "../../stores/converter";
+import {
+  isDynamicMaterialActive,
+  useConverterStore,
+} from "../../stores/converter";
 import { useI18n } from "../../i18n/context";
 import Slider from "../ui/Slider";
 import Checkbox from "../ui/Checkbox";
@@ -13,6 +16,9 @@ export default function AdvancedSettings() {
   const high_precision_3d_preview = useConverterStore((s) => s.high_precision_3d_preview);
   const chroma_gate = useConverterStore((s) => s.chroma_gate);
   const quantize_colors_unlocked = useConverterStore((s) => s.quantize_colors_unlocked);
+  const dynamicMaterialLayerCountActive = useConverterStore((s) =>
+    isDynamicMaterialActive(s),
+  );
   const setEnableCleanup = useConverterStore((s) => s.setEnableCleanup);
   const setSeparateBacking = useConverterStore((s) => s.setSeparateBacking);
   const setHueEnable = useConverterStore((s) => s.setHueEnable);
@@ -56,12 +62,27 @@ export default function AdvancedSettings() {
       />
       <Checkbox
         label={t("adv_hue_protection")}
-        tooltip={use_lut_constrained ? t("adv_hue_protection_disabled_hint") : t("adv_hue_protection_hint")}
-        disabled={use_lut_constrained}
-        checked={hue_enable && !use_lut_constrained}
+        tooltip={
+          dynamicMaterialLayerCountActive
+            ? t("adv_hue_protection_dynamic_hint")
+            : use_lut_constrained
+              ? t("adv_hue_protection_disabled_hint")
+              : t("adv_hue_protection_hint")
+        }
+        disabled={use_lut_constrained || dynamicMaterialLayerCountActive}
+        checked={
+          hue_enable &&
+          !use_lut_constrained &&
+          !dynamicMaterialLayerCountActive
+        }
         onChange={setHueEnable}
       />
-      {hue_enable && !use_lut_constrained && (
+      {dynamicMaterialLayerCountActive && (
+        <p className="text-xs leading-5 text-slate-500 dark:text-slate-400">
+          {t("adv_hue_protection_dynamic_hint")}
+        </p>
+      )}
+      {hue_enable && !use_lut_constrained && !dynamicMaterialLayerCountActive && (
         <Slider label={t("adv_chroma_gate")} tooltip={t("adv_chroma_gate_hint")} value={chroma_gate} min={0} max={50} step={1} onChange={setChromaGate} />
       )}
       <Checkbox

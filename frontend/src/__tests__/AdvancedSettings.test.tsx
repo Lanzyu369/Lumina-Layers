@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import AdvancedSettings from "../components/sections/AdvancedSettings";
 import { useConverterStore } from "../stores/converter";
 
@@ -13,6 +13,8 @@ beforeEach(() => {
     high_precision_3d_preview: false,
     chroma_gate: 15,
     quantize_colors_unlocked: false,
+    source_version: "legacy",
+    materialDynamicLayerCountEnabled: false,
   } as never);
 });
 
@@ -109,5 +111,47 @@ describe("AdvancedSettings — LUT-Constrained K-Means toggle", () => {
     expect(
       screen.queryByRole("slider", { name: /暗色彩度门槛/ }),
     ).not.toBeInTheDocument();
+  });
+
+  it("disables hue and hides chroma while exact dynamic material matching owns scoring", () => {
+    useConverterStore.setState({
+      source_version: "material",
+      materialDynamicLayerCountEnabled: true,
+      hue_enable: true,
+      use_lut_constrained: false,
+    } as never);
+
+    render(<AdvancedSettings />);
+
+    const hueCheckbox = screen.getByRole("checkbox", { name: /色相保护/ });
+    expect(hueCheckbox).toBeDisabled();
+    expect(hueCheckbox).not.toBeChecked();
+    expect(
+      screen.queryByRole("slider", { name: /暗色彩度门槛/ }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText(/精确 CIEDE2000/)).toBeInTheDocument();
+  });
+
+  it("restores hue availability outside material mode without resurrecting it on return", () => {
+    useConverterStore.setState({
+      source_version: "legacy",
+      materialDynamicLayerCountEnabled: true,
+      hue_enable: false,
+    } as never);
+
+    render(<AdvancedSettings />);
+
+    const hueCheckbox = screen.getByRole("checkbox", { name: /色相保护/ });
+    expect(hueCheckbox).toBeEnabled();
+    fireEvent.click(hueCheckbox);
+    expect(useConverterStore.getState().hue_enable).toBe(true);
+
+    act(() => {
+      useConverterStore.getState().setSourceVersion("material");
+    });
+
+    expect(hueCheckbox).toBeDisabled();
+    expect(hueCheckbox).not.toBeChecked();
+    expect(useConverterStore.getState().hue_enable).toBe(false);
   });
 });

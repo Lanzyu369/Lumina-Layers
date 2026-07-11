@@ -186,4 +186,24 @@ describe("SettingsPanel base-layer-height modifier", () => {
 
     useI18nSpy.mockRestore();
   });
+
+  it("renders the persisted dynamic material Delta-E00 tolerance slider contract", async () => {
+    renderPanel();
+
+    const slider = await screen.findByRole("slider", {
+      name: "动态叠层 ΔE00 容差",
+    });
+    expect(slider).toHaveAttribute("min", "0");
+    expect(slider).toHaveAttribute("max", "5");
+    expect(slider).toHaveAttribute("step", "0.1");
+
+    fireEvent.change(slider, { target: { value: "1.26" } });
+
+    expect(useSettingsStore.getState().materialDeltaE00Tolerance).toBe(1.3);
+    expect(
+      screen.getByRole("textbox", {
+        name: "动态叠层 ΔE00 容差 value",
+      }),
+    ).toHaveValue("1.3");
+  });
 });

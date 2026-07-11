@@ -88,7 +88,10 @@ import {
   summarizeFileForLog,
 } from "../../utils/clientLog";
 import { trackLuminaEvent } from "../../analytics/umami";
-import { registerGeneratedArtifactInvalidator } from "../generatedArtifactInvalidation";
+import {
+  registerGeneratedArtifactInvalidator,
+  registerPreviewArtifactInvalidator,
+} from "../generatedArtifactInvalidation";
 import { uploadImagePreview } from "../../api/system";
 import { tRuntime } from "../../i18n/runtime";
 import { fetchMaterialColorSuggestions } from "../../api/materialCache";
@@ -257,12 +260,44 @@ export function clampValue(value: number, min: number, max: number): number {
 const RELIEF_MIN_EXTRA_HEIGHT_MM = 0.08;
 const RELIEF_MAX_EXTRA_HEIGHT_MM = 15.0;
 const MATERIAL_ARCHIVE_RELIEF_LAYER_HEIGHT_MM = 0.08;
+export const MATERIAL_DYNAMIC_LAYER_COUNT_MIN = 5;
+export const MATERIAL_DYNAMIC_LAYER_COUNT_MAX = 10;
+
+function normalizeDynamicMaterialLayerCount(
+  value: number,
+  fallback: number,
+): number {
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+  return clampValue(
+    Math.round(value),
+    MATERIAL_DYNAMIC_LAYER_COUNT_MIN,
+    MATERIAL_DYNAMIC_LAYER_COUNT_MAX,
+  );
+}
 
 type MaterialArchiveReliefMinimumState = {
   source_version: SourceVersion;
   materialLayerCount: number;
+  materialDynamicLayerCountEnabled?: boolean;
+  materialMaxLayerCount?: number;
   spacer_thick: number;
 };
+
+type DynamicMaterialActivationState = {
+  source_version: SourceVersion;
+  materialDynamicLayerCountEnabled: boolean;
+};
+
+export function isDynamicMaterialActive(
+  state: DynamicMaterialActivationState,
+): boolean {
+  return (
+    state.source_version === "material" &&
+    state.materialDynamicLayerCountEnabled === true
+  );
+}
 
 export function getMaterialArchiveReliefMinimumTotalHeight(
   state: MaterialArchiveReliefMinimumState,
@@ -270,8 +305,11 @@ export function getMaterialArchiveReliefMinimumTotalHeight(
   if (state.source_version !== "material") {
     return RELIEF_MIN_EXTRA_HEIGHT_MM;
   }
+  const layerCount = state.materialDynamicLayerCountEnabled
+    ? (state.materialMaxLayerCount ?? state.materialLayerCount)
+    : state.materialLayerCount;
   return (
-    Math.max(1, Math.round(state.materialLayerCount)) *
+    Math.max(1, Math.round(layerCount)) *
     MATERIAL_ARCHIVE_RELIEF_LAYER_HEIGHT_MM
   );
 }
@@ -1372,6 +1410,11 @@ export interface ConverterState {
   materialLayerCount: number;
   materialLayerHeightMm: number;
   materialBackingMaterialDirName: string | null;
+  materialDynamicLayerCountEnabled: boolean;
+  materialMinLayerCount: number;
+  materialMaxLayerCount: number;
+  materialDynamicRecipes: Array<Record<string, unknown>>;
+  materialLayerBenefitCurve: Array<Record<string, unknown>>;
 
   // 高级设置
   quantize_colors: number;
@@ -1911,6 +1954,9 @@ export interface ConverterActions {
   setSourceVersion: (version: SourceVersion) => void;
   setSelectedMaterialDirNames: (names: string[]) => void;
   setMaterialLayerCount: (count: number) => void;
+  setMaterialDynamicLayerCountEnabled: (enabled: boolean) => void;
+  setMaterialMinLayerCount: (count: number) => void;
+  setMaterialMaxLayerCount: (count: number) => void;
   setMaterialLayerHeightMm: (height: number) => void;
   setMaterialBackingMaterialDirName: (name: string | null) => void;
   setNativeBrandKey: (brandKey: string) => void;
@@ -2028,6 +2074,8 @@ function buildPreviewSessionResetState(): Partial<ConverterState> {
     threemfDiskPath: null,
     downloadUrl: null,
     palette: [],
+    materialDynamicRecipes: [],
+    materialLayerBenefitCurve: [],
     colorContours: {},
     colorRemapMap: {},
     remapHistory: [],
@@ -2264,6 +2312,11 @@ export const DEFAULT_STATE: ConverterState = {
   materialLayerCount: 5,
   materialLayerHeightMm: 0.08,
   materialBackingMaterialDirName: loadMaterialBackingMaterialDirName(),
+  materialDynamicLayerCountEnabled: false,
+  materialMinLayerCount: MATERIAL_DYNAMIC_LAYER_COUNT_MIN,
+  materialMaxLayerCount: MATERIAL_DYNAMIC_LAYER_COUNT_MAX,
+  materialDynamicRecipes: [],
+  materialLayerBenefitCurve: [],
   quantize_colors: 48,
   quantize_colors_unlocked: false,
   high_precision_3d_preview: false,
@@ -3025,6 +3078,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         if (version === "material") {
           return {
             source_version: "material",
+            hue_enable: state.materialDynamicLayerCountEnabled
+              ? false
+              : state.hue_enable,
             model_enable: false,
             model_only: false,
             model_threshold: null,
@@ -3081,6 +3137,81 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
                 getMaterialArchiveReliefMinimumExtraHeight({
                   ...state,
                   materialLayerCount,
+                }),
+                RELIEF_MAX_EXTRA_HEIGHT_MM,
+              )
+            : state.heightmap_max_height,
+          ...buildPreviewSessionResetState(),
+        };
+      }),
+    setMaterialDynamicLayerCountEnabled: (enabled: boolean) =>
+      set((state) => ({
+        materialDynamicLayerCountEnabled: enabled,
+        hue_enable: enabled ? false : state.hue_enable,
+        heightmap_max_height:
+          enabled && state.enable_relief
+            ? clampValue(
+                state.heightmap_max_height,
+                getMaterialArchiveReliefMinimumExtraHeight({
+                  ...state,
+                  materialDynamicLayerCountEnabled: true,
+                }),
+                RELIEF_MAX_EXTRA_HEIGHT_MM,
+              )
+            : state.heightmap_max_height,
+        ...buildPreviewSessionResetState(),
+      })),
+    setMaterialMinLayerCount: (count: number) =>
+      set((state) => {
+        const materialMinLayerCount = normalizeDynamicMaterialLayerCount(
+          count,
+          state.materialMinLayerCount,
+        );
+        const materialMaxLayerCount = Math.max(
+          normalizeDynamicMaterialLayerCount(
+            state.materialMaxLayerCount,
+            MATERIAL_DYNAMIC_LAYER_COUNT_MAX,
+          ),
+          materialMinLayerCount,
+        );
+        return {
+          materialMinLayerCount,
+          materialMaxLayerCount,
+          heightmap_max_height: state.enable_relief
+            ? clampValue(
+                state.heightmap_max_height,
+                getMaterialArchiveReliefMinimumExtraHeight({
+                  ...state,
+                  materialMaxLayerCount,
+                }),
+                RELIEF_MAX_EXTRA_HEIGHT_MM,
+              )
+            : state.heightmap_max_height,
+          ...buildPreviewSessionResetState(),
+        };
+      }),
+    setMaterialMaxLayerCount: (count: number) =>
+      set((state) => {
+        const materialMaxLayerCount = normalizeDynamicMaterialLayerCount(
+          count,
+          state.materialMaxLayerCount,
+        );
+        const materialMinLayerCount = Math.min(
+          normalizeDynamicMaterialLayerCount(
+            state.materialMinLayerCount,
+            MATERIAL_DYNAMIC_LAYER_COUNT_MIN,
+          ),
+          materialMaxLayerCount,
+        );
+        return {
+          materialMinLayerCount,
+          materialMaxLayerCount,
+          heightmap_max_height: state.enable_relief
+            ? clampValue(
+                state.heightmap_max_height,
+                getMaterialArchiveReliefMinimumExtraHeight({
+                  ...state,
+                  materialMaxLayerCount,
                 }),
                 RELIEF_MAX_EXTRA_HEIGHT_MM,
               )
@@ -3340,11 +3471,12 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         downloadUrl: null,
       }),
     setHueEnable: (enabled: boolean) =>
-      set({
-        hue_enable: enabled,
+      set((state) => ({
+        hue_enable:
+          enabled && isDynamicMaterialActive(state) ? false : enabled,
         threemfDiskPath: null,
         downloadUrl: null,
-      }),
+      })),
     setUseLutConstrained: (enabled: boolean) =>
       set({ use_lut_constrained: enabled }),
     setAutoDynamicRange: (enabled: boolean) =>
@@ -7168,4 +7300,11 @@ registerGeneratedArtifactInvalidator(() => {
     threemfDiskPath: null,
     downloadUrl: null,
   });
+});
+
+registerPreviewArtifactInvalidator(() => {
+  if (!isDynamicMaterialActive(useConverterStore.getState())) {
+    return;
+  }
+  useConverterStore.setState(buildPreviewSessionResetState());
 });
