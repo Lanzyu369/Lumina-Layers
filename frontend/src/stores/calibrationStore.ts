@@ -7,11 +7,21 @@ import {
   generateSingleStageKit,
 } from "../api/calibration";
 import { tRuntime } from "../i18n/runtime";
+import {
+  showBrowserCompletionNotification,
+  type CompletionNotificationKind,
+} from "../utils/browserNotifications";
 import { clampValue } from "./converter";
 import { useSettingsStore } from "./settingsStore";
 
 export type CalibrationWorkflow = "legacy" | "single-stage";
 const SINGLE_STAGE_LAYER_HEIGHT_OPTIONS = [0.04, 0.08, 0.1] as const;
+
+function notifyCompletion(kind: CompletionNotificationKind): void {
+  const settings = useSettingsStore.getState();
+  if (!settings.enableCompletionNotifications) return;
+  showBrowserCompletionNotification(kind, settings.language);
+}
 
 /** Backing thickness slider bounds (mm). Mirrors the backend
  * `MIN_BACKING_THICKNESS_MM` / `MAX_BACKING_THICKNESS_MM` constants. */
@@ -210,6 +220,7 @@ export const useCalibrationStore = create<
         statusMessage: response.message,
         isLoading: false,
       });
+      notifyCompletion("calibration");
     } catch (err) {
       set({
         error: calibrationErrorToVisibleMessage(err),
@@ -248,6 +259,7 @@ export const useCalibrationStore = create<
         statusMessage: response.message,
         isLoading: false,
       });
+      notifyCompletion("calibration");
     } catch (err) {
       set({
         error: calibrationErrorToVisibleMessage(err),

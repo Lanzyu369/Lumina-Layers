@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   convertGeneratePuzzle: vi.fn(),
   applyRecipeOverride: vi.fn(),
   getGlbStatus: vi.fn(),
+  showBrowserCompletionNotification: vi.fn(),
 }));
 
 vi.mock("../../api/converter", async () => {
@@ -43,6 +44,11 @@ vi.mock("../../api/lut", async () => {
     fetchLutDetailsCatalog: vi.fn(),
   };
 });
+
+vi.mock("../../utils/browserNotifications", () => ({
+  showBrowserCompletionNotification:
+    mocks.showBrowserCompletionNotification,
+}));
 
 function resetStore(): void {
   useConverterStore.setState({
@@ -192,6 +198,11 @@ describe("native bundle converter flow", () => {
     mocks.convertGeneratePuzzle.mockReset();
     mocks.applyRecipeOverride.mockReset();
     mocks.getGlbStatus.mockReset();
+    mocks.showBrowserCompletionNotification.mockReset();
+    useSettingsStore.setState({
+      enableCompletionNotifications: false,
+      language: "zh",
+    });
   });
 
   it("resets selected DBs to the brand defaults when the brand changes", () => {
@@ -321,6 +332,10 @@ describe("native bundle converter flow", () => {
       model_enable: true,
       model_only: false,
     } as never);
+    useSettingsStore.setState({
+      enableCompletionNotifications: true,
+      language: "en",
+    });
 
     await useConverterStore.getState().submitGenerate();
 
@@ -335,6 +350,10 @@ describe("native bundle converter flow", () => {
     expect(state.largeFormatWarnings).toEqual([
       "Raster fallback was used for this large-format SVG request.",
     ]);
+    expect(mocks.showBrowserCompletionNotification).toHaveBeenCalledWith(
+      "generation",
+      "en",
+    );
   });
 
   it("submitGenerate omits recipe_overrides when local override state is empty", async () => {
@@ -352,11 +371,19 @@ describe("native bundle converter flow", () => {
       sessionId: "session-legacy",
       recipe_overrides: [],
     } as never);
+    useSettingsStore.setState({
+      enableCompletionNotifications: true,
+      language: "zh",
+    });
 
     await useConverterStore.getState().submitGenerate();
 
     const [, params] = mocks.convertGenerate.mock.calls.at(-1)!;
     expect(params.recipe_overrides).toBeUndefined();
+    expect(mocks.showBrowserCompletionNotification).toHaveBeenCalledWith(
+      "generation",
+      "zh",
+    );
   });
 
   it("ignores a stale regular generate response after the session changes", async () => {
@@ -413,6 +440,10 @@ describe("native bundle converter flow", () => {
       preview_3d_url: string;
     }>();
     mocks.convertGenerate.mockReturnValueOnce(stale.promise);
+    useSettingsStore.setState({
+      enableCompletionNotifications: true,
+      language: "en",
+    });
 
     seedLegacyGenerateState("session-old");
     const oldRequest = useConverterStore.getState().submitGenerate();
@@ -441,6 +472,21 @@ describe("native bundle converter flow", () => {
     expect(state.modelUrl).toBeNull();
     expect(state.isGenerating).toBe(false);
     expect(state.error).toBeNull();
+    expect(mocks.showBrowserCompletionNotification).not.toHaveBeenCalled();
+  });
+
+  it("does not notify when regular generation fails", async () => {
+    mocks.convertGenerate.mockRejectedValueOnce(new Error("generation failed"));
+    useSettingsStore.setState({
+      enableCompletionNotifications: true,
+      language: "en",
+    });
+    seedLegacyGenerateState("session-failure");
+
+    await useConverterStore.getState().submitGenerate();
+
+    expect(useConverterStore.getState().error).not.toBeNull();
+    expect(mocks.showBrowserCompletionNotification).not.toHaveBeenCalled();
   });
 
   it("ignores a stale regular generate response from an older request in the same session", async () => {
@@ -1411,6 +1457,10 @@ describe("native bundle converter flow", () => {
     useConverterStore.getState().setModelEnable(true);
     useConverterStore.getState().setModelThreshold(6.5);
     useConverterStore.getState().setModelMargin(0.9);
+    useSettingsStore.setState({
+      enableCompletionNotifications: true,
+      language: "en",
+    });
 
     await useConverterStore.getState().submitPreview();
 
@@ -1432,6 +1482,10 @@ describe("native bundle converter flow", () => {
     });
     expect(params).not.toHaveProperty("lut_name");
     expect(useConverterStore.getState().sessionId).toBe("session-native");
+    expect(mocks.showBrowserCompletionNotification).toHaveBeenCalledWith(
+      "preview",
+      "en",
+    );
   });
 
   it("replays global color replacements when material preview is refreshed", async () => {
@@ -1664,6 +1718,7 @@ describe("native bundle converter flow", () => {
     expect(params).not.toHaveProperty("lut_name");
     expect(result).toBe("/api/files/native-model.glb");
     expect(useConverterStore.getState().downloadUrl).toBe("/api/files/native-model");
+    expect(mocks.showBrowserCompletionNotification).not.toHaveBeenCalled();
   });
 
   it("submitGenerate uses the puzzle endpoint when puzzle mode is enabled", async () => {
@@ -1721,6 +1776,8 @@ describe("native bundle converter flow", () => {
     } as never);
     useSettingsStore.setState({
       deviceProfileId: "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
+      enableCompletionNotifications: true,
+      language: "zh",
     } as never);
 
     const result = await useConverterStore.getState().submitGenerate();
@@ -1743,6 +1800,10 @@ describe("native bundle converter flow", () => {
     });
     expect(result).toBeNull();
     expect(useConverterStore.getState().downloadUrl).toBe("/api/files/puzzle-model");
+    expect(mocks.showBrowserCompletionNotification).toHaveBeenCalledWith(
+      "generation",
+      "zh",
+    );
   });
 
   it("submitGenerate forwards fridge magnet fields to the backend payload", async () => {

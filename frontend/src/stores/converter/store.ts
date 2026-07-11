@@ -93,6 +93,10 @@ import { uploadImagePreview } from "../../api/system";
 import { tRuntime } from "../../i18n/runtime";
 import { fetchMaterialColorSuggestions } from "../../api/materialCache";
 import { fetchGradientGroups as apiFetchGradientGroups } from "../../api/converter";
+import {
+  showBrowserCompletionNotification,
+  type CompletionNotificationKind,
+} from "../../utils/browserNotifications";
 import type {
   GradientGroupItem,
   GradientSelectionSource,
@@ -109,6 +113,12 @@ type LuminaWindow = Window & {
 };
 
 const BATCH_PREVIEW_BROWSER_SAFE_LIMIT = 96;
+
+function notifyCompletion(kind: CompletionNotificationKind): void {
+  const settings = useSettingsStore.getState();
+  if (!settings.enableCompletionNotifications) return;
+  showBrowserCompletionNotification(kind, settings.language);
+}
 
 function looksLikeWhiteMaterialLabel(label: string | null | undefined): boolean {
   const text = String(label ?? "").trim().toLowerCase();
@@ -5927,6 +5937,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           warning_count: (response.warnings ?? []).length,
           palette_count: normalizedPalette.length,
         });
+        notifyCompletion("preview");
         // 预览绑定会话后，拉取会话所绑定 LUT 的通道调色板，便于自定义配方编辑器
         // 在材料档案 / 原生打包流程里也能显示按通道顺序的耗材列表。
         // After the preview binds a session, refresh the channel palette for
@@ -6244,6 +6255,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             elapsed_ms: getElapsedMsSince(_generateStartTime),
             warning_count: (puzzleResponse.warnings ?? []).length,
           });
+          notifyCompletion("generation");
           return null;
         }
 
@@ -6291,6 +6303,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             elapsed_ms: getElapsedMsSince(_generateStartTime),
             warning_count: (lfResponse.warnings ?? []).length,
           });
+          notifyCompletion("generation");
           return null;
         }
 
@@ -6356,6 +6369,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           elapsed_ms: getElapsedMsSince(_generateStartTime),
           warning_count: 0,
         });
+        notifyCompletion("generation");
         return modelUrl;
       } catch (err) {
         if (shouldIgnoreStaleGenerateResponse()) {
@@ -6920,6 +6934,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           elapsed_ms: getElapsedMsSince(batchStartTime),
           preview_item_count: previewItems.length,
         });
+        notifyCompletion("batch");
       } catch (err) {
         set({
           batchLoading: false,
