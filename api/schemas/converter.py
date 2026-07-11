@@ -14,6 +14,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from api.dynamic_material_settings import normalize_dynamic_material_settings
 from api.schemas.lut import LutSourceSelection
 from config import (
     SVG_PIXELS_PER_MM_DEFAULT,
@@ -29,6 +30,25 @@ SVG_PIXELS_PER_MM_DESCRIPTION = (
     "高保真 SVG 采样密度（px/mm）；仅高保真模式处理 SVG 时生效，"
     "直接矢量模式不使用此参数"
 )
+
+
+def _validate_dynamic_material_model(model: BaseModel) -> BaseModel:
+    """Normalize dynamic-layer fields shared by preview and generate models."""
+    enabled, minimum, maximum, tolerance = normalize_dynamic_material_settings(
+        material_source="material_archive",
+        enabled=getattr(model, "material_dynamic_layer_count_enabled"),
+        min_layer_count=getattr(model, "material_min_layer_count"),
+        max_layer_count=getattr(model, "material_max_layer_count"),
+        delta_e00_tolerance=getattr(model, "material_delta_e00_tolerance"),
+        hue_weight=getattr(model, "hue_weight"),
+    )
+    # Preserve ``model_fields_set`` so generate can distinguish an omitted field
+    # (inherit preview state) from an explicit value (must match preview state).
+    object.__setattr__(model, "material_dynamic_layer_count_enabled", enabled)
+    object.__setattr__(model, "material_min_layer_count", minimum)
+    object.__setattr__(model, "material_max_layer_count", maximum)
+    object.__setattr__(model, "material_delta_e00_tolerance", tolerance)
+    return model
 
 # ========== Enums ==========
 
@@ -322,6 +342,18 @@ class ConvertPreviewRequest(LutSourceSelection):
         ge=0,
         description="耗材档案模式底板耗材索引（基于 selected_materials 的 0-based 索引）",
     )
+    material_dynamic_layer_count_enabled: bool = Field(
+        False,
+        description="启用耗材模式动态有效叠层数",
+    )
+    material_min_layer_count: int = Field(5, ge=5, le=10, description="最小有效叠层数")
+    material_max_layer_count: int = Field(10, ge=5, le=10, description="最大有效叠层数")
+    material_delta_e00_tolerance: float = Field(
+        0.5,
+        ge=0.0,
+        le=5.0,
+        description="短配方允许的 CIEDE2000 色差损失",
+    )
     use_lut_constrained: bool = Field(False, description="启用高精度LUT约束颜色匹配（实验性）")
     auto_dynamic_range: bool = Field(False, description="启用自动动态范围压缩（实验性）")
     high_precision_3d_preview: bool = Field(False, description="启用3D高精度颜色预览")
@@ -335,6 +367,13 @@ class ConvertPreviewRequest(LutSourceSelection):
     @classmethod
     def validate_svg_pixels_per_mm(cls, value: float) -> float:
         return normalize_svg_pixels_per_mm(value)
+
+    @model_validator(mode="after")
+    def validate_dynamic_material_settings(self) -> "ConvertPreviewRequest":
+        """Validate dynamic material range and hue compatibility.
+        校验动态耗材层数范围与色相兼容性。
+        """
+        return _validate_dynamic_material_model(self)  # type: ignore[return-value]
 
 
 class RecipeOverrideItem(BaseModel):
@@ -466,6 +505,18 @@ class ConvertGenerateRequest(LutSourceSelection):
         ge=0,
         description="耗材档案模式底板耗材索引（基于 selected_materials 的 0-based 索引）",
     )
+    material_dynamic_layer_count_enabled: bool = Field(
+        False,
+        description="启用耗材模式动态有效叠层数",
+    )
+    material_min_layer_count: int = Field(5, ge=5, le=10, description="最小有效叠层数")
+    material_max_layer_count: int = Field(10, ge=5, le=10, description="最大有效叠层数")
+    material_delta_e00_tolerance: float = Field(
+        0.5,
+        ge=0.0,
+        le=5.0,
+        description="短配方允许的 CIEDE2000 色差损失",
+    )
     use_lut_constrained: bool = Field(False, description="启用高精度LUT约束颜色匹配（实验性）")
     auto_dynamic_range: bool = Field(False, description="启用自动动态范围压缩（实验性）")
     high_precision_3d_preview: bool = Field(False, description="启用3D高精度颜色预览")
@@ -532,6 +583,13 @@ class ConvertGenerateRequest(LutSourceSelection):
     @classmethod
     def validate_svg_pixels_per_mm(cls, value: float) -> float:
         return normalize_svg_pixels_per_mm(value)
+
+    @model_validator(mode="after")
+    def validate_dynamic_material_settings(self) -> "ConvertGenerateRequest":
+        """Validate dynamic material range and hue compatibility.
+        校验动态耗材层数范围与色相兼容性。
+        """
+        return _validate_dynamic_material_model(self)  # type: ignore[return-value]
 
 
 class LargeFormatGenerateRequest(BaseModel):

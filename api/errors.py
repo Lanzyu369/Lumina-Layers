@@ -6,6 +6,10 @@ from dataclasses import dataclass
 
 from fastapi import HTTPException
 from core.errors import CoreDependencyError, CoreError, CoreProcessingError, CoreValidationError
+from core.material_dynamic_solver import (
+    DynamicMaterialCandidateError,
+    DynamicMaterialSolverError,
+)
 
 
 @dataclass
@@ -49,6 +53,41 @@ def to_http_exception(exc: Exception, context: str) -> HTTPException:
     """
     if isinstance(exc, HTTPException):
         return exc
+    if isinstance(exc, DynamicMaterialCandidateError):
+        no_candidate = exc.phase in {"exact_search", "fixed_max_baseline"}
+        return HTTPException(
+            status_code=409 if no_candidate else 503,
+            detail={
+                "code": (
+                    "dynamic_material_no_candidate"
+                    if no_candidate
+                    else "dynamic_material_solver_unavailable"
+                ),
+                "message": (
+                    "No exact dynamic material candidate is available for this target."
+                    if no_candidate
+                    else "The exact dynamic material solver is temporarily unavailable."
+                ),
+                "target_srgb": (
+                    list(exc.target_srgb) if exc.target_srgb is not None else None
+                ),
+                "layer_count": exc.layer_count,
+                "stage": exc.phase,
+            },
+        )
+    if isinstance(exc, DynamicMaterialSolverError):
+        return HTTPException(
+            status_code=503,
+            detail={
+                "code": "dynamic_material_solver_unavailable",
+                "message": (
+                    "The exact dynamic material solver is temporarily unavailable."
+                ),
+                "target_srgb": None,
+                "layer_count": None,
+                "stage": "exact_search_engine",
+            },
+        )
     if isinstance(exc, DomainError):
         return HTTPException(status_code=exc.status_code, detail=exc.detail)
     if isinstance(exc, CoreValidationError):

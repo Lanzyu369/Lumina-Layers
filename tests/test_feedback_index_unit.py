@@ -121,6 +121,30 @@ def test_basic_payload_renders_all_sections(tmp_path: Path) -> None:
     assert "sess-aaa" in md
 
 
+def test_dynamic_material_snapshot_and_repro_hint_are_rendered(tmp_path: Path) -> None:
+    payload = _sample_payload()
+    payload["context"].update(
+        {
+            "material_dynamic_layer_count_enabled": True,
+            "material_min_layer_count": 5,
+            "material_max_layer_count": 9,
+            "material_delta_e00_tolerance": 0.4,
+        }
+    )
+
+    markdown = generate_index_markdown(
+        "LUM-20260511-001",
+        tmp_path,
+        payload,
+    )
+
+    assert "material_dynamic_layer_count_enabled: True" in markdown
+    assert "material_min_layer_count: 5" in markdown
+    assert "material_max_layer_count: 9" in markdown
+    assert "material_delta_e00_tolerance: 0.4" in markdown
+    assert "Dynamic material layers were enabled (5-9" in markdown
+
+
 def test_api_error_in_history_produces_suggestion(tmp_path: Path) -> None:
     payload = _sample_payload()
     md = generate_index_markdown("LUM-20260511-001", tmp_path, payload)

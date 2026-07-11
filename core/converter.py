@@ -117,6 +117,38 @@ except ImportError:
 log = logging.getLogger(__name__)
 
 
+def _raise_dynamic_material_pipeline_error(ctx: dict) -> None:
+    """Re-raise a typed dynamic failure retained by a pipeline coordinator.
+
+    重新抛出管线协调器保留的动态类型化失败。
+
+    Args:
+        ctx: Completed or failed pipeline context. 已完成或失败的管线上下文。
+
+    Raises:
+        DynamicMaterialCandidateError: When candidate construction or lookup
+            failed. 候选构建或查找失败时抛出。
+        DynamicMaterialSolverError: When both exact engines failed. 两个精确
+            引擎均失败时抛出。
+    """
+    envelope = ctx.get("material_dynamic_layer_error")
+    if not isinstance(envelope, dict):
+        return
+    failure = envelope.get("exception")
+    if failure is None:
+        return
+    from core.material_dynamic_solver import (
+        DynamicMaterialCandidateError,
+        DynamicMaterialSolverError,
+    )
+
+    if isinstance(
+        failure,
+        (DynamicMaterialCandidateError, DynamicMaterialSolverError),
+    ):
+        raise failure
+
+
 def _resolve_material_archive_backing_color_id(
     selected_materials: Optional[List[str]],
     material_backing_material_index: Optional[int],
@@ -278,6 +310,10 @@ def convert_image_to_3d(
     svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
     *,
     cover_source_path: Optional[str] = None,
+    material_dynamic_layer_count_enabled: bool = False,
+    material_min_layer_count: int = 5,
+    material_max_layer_count: int = 10,
+    material_delta_e00_tolerance: float = 0.5,
 ):
     """Main conversion function: Convert image to 3D model.
     主要转换函数：将图像转换为 3D 模型。
@@ -300,6 +336,14 @@ def convert_image_to_3d(
         device_profile_id: Optional generated machine registry device profile
             selection forwarded to 3MF export.
             (可选的机器注册表设备配置 ID，透传给 3MF 导出)
+        material_dynamic_layer_count_enabled: Enable exact dynamic effective
+            layers for material archives. (为耗材档案启用精确动态有效层数)
+        material_min_layer_count: Minimum dynamic effective layers. (动态最小
+            有效层数)
+        material_max_layer_count: Maximum dynamic effective and physical
+            layers. (动态最大有效层数及物理模型层数)
+        material_delta_e00_tolerance: Allowed CIEDE2000 loss when preferring a
+            shorter recipe. (优先短配方时允许的 CIEDE2000 损失)
 
     Returns:
         Tuple of (3mf_path, glb_path, preview_image, status_message, recipe_path)
@@ -318,6 +362,7 @@ def convert_image_to_3d(
     ctx["cover_source_path"] = cover_source_path or image_path
 
     ctx = run_raster_pipeline(ctx)
+    _raise_dynamic_material_pipeline_error(ctx)
     if ctx.get("error"):
         return None, None, None, ctx["error"], None
     return ctx.get("result_tuple", (None, None, None, "[ERROR] No result", None))
@@ -356,15 +401,34 @@ def generate_preview_cached(
     high_precision_3d_preview: bool = False,
     svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
     replacement_regions=None,
+    material_backing_material_index: Optional[int] = None,
+    material_dynamic_layer_count_enabled: bool = False,
+    material_min_layer_count: int = 5,
+    material_max_layer_count: int = 10,
+    material_delta_e00_tolerance: float = 0.5,
 ):
     """Generate preview and cache data. Thin wrapper, delegates to coordinator.
     生成预览图和缓存数据。薄包装函数，委托给 coordinator。
+
+    Args:
+        material_backing_material_index: Selected backing material index.
+            (用户选择的基板耗材索引)
+        material_dynamic_layer_count_enabled: Enable exact dynamic effective
+            layers. (启用精确动态有效层数)
+        material_min_layer_count: Minimum dynamic effective layers. (动态最小
+            有效层数)
+        material_max_layer_count: Maximum dynamic effective and physical
+            layers. (动态最大有效层数及物理模型层数)
+        material_delta_e00_tolerance: Allowed CIEDE2000 loss for shorter
+            recipes. (短配方允许的 CIEDE2000 损失)
+
     Returns:
         tuple: (display_image, cache_data, status_message)
     """
     ctx = {k: v for k, v in locals().items()}
 
     ctx = run_preview_pipeline(ctx)
+    _raise_dynamic_material_pipeline_error(ctx)
     if ctx.get("error"):
         return None, None, ctx["error"]
     return ctx.get("display_image"), ctx.get("cache"), ctx.get("status_msg", "[OK]")
@@ -481,6 +545,10 @@ def generate_final_model(
     svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
     *,
     cover_source_path: Optional[str] = None,
+    material_dynamic_layer_count_enabled: bool = False,
+    material_min_layer_count: int = 5,
+    material_max_layer_count: int = 10,
+    material_delta_e00_tolerance: float = 0.5,
 ):
     """Wrapper function for generating final model.
     包装函数，用于生成最终模型。
@@ -501,6 +569,14 @@ def generate_final_model(
         device_profile_id: Optional generated machine registry device profile
             selection forwarded to ``convert_image_to_3d`` and 3MF export.
             (可选的机器注册表设备配置 ID，透传到主转换与 3MF 导出)
+        material_dynamic_layer_count_enabled: Enable exact dynamic effective
+            layers. (启用精确动态有效层数)
+        material_min_layer_count: Minimum dynamic effective layers. (动态最小
+            有效层数)
+        material_max_layer_count: Maximum dynamic effective and physical
+            layers. (动态最大有效层数及物理模型层数)
+        material_delta_e00_tolerance: Allowed CIEDE2000 loss for shorter
+            recipes. (短配方允许的 CIEDE2000 损失)
     """
     # Convert backing color name to ID or use special marker for separate backing
     try:
@@ -629,6 +705,10 @@ def generate_final_model(
         use_lut_constrained=use_lut_constrained,
         auto_dynamic_range=auto_dynamic_range,
         high_precision_3d_preview=high_precision_3d_preview,
+        material_dynamic_layer_count_enabled=material_dynamic_layer_count_enabled,
+        material_min_layer_count=material_min_layer_count,
+        material_max_layer_count=material_max_layer_count,
+        material_delta_e00_tolerance=material_delta_e00_tolerance,
         cover_source_path=cover_source_path,
     )
 

@@ -42,17 +42,59 @@ class DynamicMaterialCandidateError(RuntimeError):
     报告动态候选构建阶段失败。
 
     Attributes:
+        target_srgb: Optional target color associated with the failure. 与失败
+            关联的可选目标色。
         layer_count: Effective layer count being processed. 正在处理的有效层数。
         phase: Stable construction phase label. 稳定的候选构建阶段标识。
     """
 
-    def __init__(self, message: str, *, layer_count: int, phase: str) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        layer_count: int,
+        phase: str,
+        target_srgb: tuple[int, int, int] | None = None,
+    ) -> None:
+        self.message = str(message)
         self.layer_count = int(layer_count)
         self.phase = str(phase)
+        self.target_srgb = (
+            tuple(int(value) for value in target_srgb)
+            if target_srgb is not None
+            else None
+        )
+        if self.target_srgb is not None and len(self.target_srgb) != 3:
+            raise ValueError("target_srgb must contain exactly three channels")
+        target_text = (
+            f" target_srgb={self.target_srgb}"
+            if self.target_srgb is not None
+            else ""
+        )
         super().__init__(
             f"dynamic material candidate failed: layer_count={self.layer_count} "
-            f"phase={self.phase}: {message}"
+            f"phase={self.phase}{target_text}: {self.message}"
         )
+
+    def __reduce__(self) -> tuple:
+        return (
+            _restore_dynamic_material_candidate_error,
+            (self.message, self.layer_count, self.phase, self.target_srgb),
+        )
+
+
+def _restore_dynamic_material_candidate_error(
+    message: str,
+    layer_count: int,
+    phase: str,
+    target_srgb: tuple[int, int, int] | None,
+) -> DynamicMaterialCandidateError:
+    return DynamicMaterialCandidateError(
+        message,
+        layer_count=layer_count,
+        phase=phase,
+        target_srgb=target_srgb,
+    )
 
 
 @dataclass(frozen=True)
@@ -855,12 +897,14 @@ def _candidate_failure(
     *,
     layer_count: int,
     phase: str,
+    target_srgb: tuple[int, int, int] | None = None,
     cause: Exception | None = None,
 ) -> DynamicMaterialCandidateError:
     error = DynamicMaterialCandidateError(
         message,
         layer_count=layer_count,
         phase=phase,
+        target_srgb=target_srgb,
     )
     if cause is not None:
         error.__cause__ = cause
@@ -1152,6 +1196,7 @@ def _build_dynamic_color_matches(
                     "no candidate is available for this layer cap",
                     layer_count=layer_cap,
                     phase="exact_search",
+                    target_srgb=tuple(int(value) for value in target),
                 )
             options.append(
                 _layer_option_from_catalog(
@@ -1167,6 +1212,7 @@ def _build_dynamic_color_matches(
                 "fixed maximum-layer baseline is unavailable",
                 layer_count=layer_counts[-1],
                 phase="fixed_max_baseline",
+                target_srgb=tuple(int(value) for value in target),
             )
         best_range = options[-1]
         threshold = best_range.delta_e00 + tolerance

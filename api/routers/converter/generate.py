@@ -73,6 +73,10 @@ from core.vector_large_format import (
     normalize_large_format_source_basename,
 )
 from core.material_lut_synthesis import infer_material_archive_base_channel_idx
+from core.material_dynamic_solver import (
+    DynamicMaterialCandidateError,
+    DynamicMaterialSolverError,
+)
 from core.single_stage import record_material_usage
 from utils.lut_manager import LUTManager
 
@@ -87,7 +91,10 @@ from .common import (
     SOURCE_IMAGE_UNAVAILABLE_DETAIL,
     _ensure_material_matrix_signed_capacity,
     _require_session,
+    _resolve_session_dynamic_material_settings,
     _resolve_material_backing_index,
+    _handle_core_error,
+    _validate_dynamic_material_settings,
     _validate_material_source,
     _validate_material_archive_relief_minimum_height,
 )
@@ -1218,6 +1225,16 @@ async def convert_generate(
         core_modeling_mode = CoreModelingMode.VECTOR
         generated_color_card_svg = True
 
+    dynamic_material_settings = _resolve_session_dynamic_material_settings(
+        session_data=session_data,
+        request=request,
+        material_source=str(session_material_source or "lut"),
+        native_svg_vector=(
+            core_modeling_mode == CoreModelingMode.VECTOR
+            and str(image_path).lower().endswith(".svg")
+        ),
+    )
+
     vector_parse_clip_cache_path: str | None = None
     if core_modeling_mode == CoreModelingMode.VECTOR and not generated_color_card_svg:
         candidate_vector_cache_path = cache.get("vector_parse_clip_cache_path")
@@ -1474,6 +1491,10 @@ async def convert_generate(
         "device_profile_id": request.device_profile_id,
         "enable_base_layer_height_modifier": request.enable_base_layer_height_modifier,
         "material_source": session_material_source,
+        "material_dynamic_layer_count_enabled": dynamic_material_settings[0],
+        "material_min_layer_count": dynamic_material_settings[1],
+        "material_max_layer_count": dynamic_material_settings[2],
+        "material_delta_e00_tolerance": dynamic_material_settings[3],
     }
     if session_material_source == "material_archive":
         selected_materials = session_data.get("selected_materials") or []
@@ -1504,6 +1525,8 @@ async def convert_generate(
         )
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="3MF generation timed out")
+    except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as exc:
+        _handle_core_error(exc, "3MF generation")
     except ROUTER_HANDLED_ERRORS as exc:
         raise HTTPException(
             status_code=500,
@@ -1695,6 +1718,14 @@ def _resolve_large_format_shared_params(
     recipe_override_masks_path: str | None = None,
     material_matrix_path: str | None = None,
 ) -> dict:
+    dynamic_material_settings = _resolve_session_dynamic_material_settings(
+        session_data=session_data,
+        request=request,
+        material_source=str(session_data.get("material_source") or "lut"),
+        # Material-archive SVG requests are rasterized before this helper's
+        # worker params are consumed, so this is not native vector matching.
+        native_svg_vector=False,
+    )
     replacement_regions = session_data.get("replacement_regions") or None
     if request.replacement_regions is not None:
         replacement_regions = [
@@ -1783,6 +1814,10 @@ def _resolve_large_format_shared_params(
         "device_profile_id": request.device_profile_id,
         "enable_base_layer_height_modifier": request.enable_base_layer_height_modifier,
         "relief_global_max_height": relief_global_max_height,
+        "material_dynamic_layer_count_enabled": dynamic_material_settings[0],
+        "material_min_layer_count": dynamic_material_settings[1],
+        "material_max_layer_count": dynamic_material_settings[2],
+        "material_delta_e00_tolerance": dynamic_material_settings[3],
     }
     if str(session_data.get("material_source") or "lut") == "material_archive":
         params["material_source"] = "material_archive"
@@ -1851,6 +1886,8 @@ async def _generate_large_format_svg_native(
         )
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="Large-format SVG generation timed out")
+    except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as e:
+        _handle_core_error(e, "large-format SVG generation")
     except ROUTER_HANDLED_ERRORS as e:
         _log_large_format_failure(
             session_id=sid,
@@ -2072,6 +2109,8 @@ async def _generate_large_format_raster(
                     errors.append(f"{label}: generation failed — {result.get('status_msg', 'unknown')}")
             except asyncio.TimeoutError:
                 errors.append(f"{label}: generation timed out")
+            except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as e:
+                _handle_core_error(e, "large-format tile generation")
             except ROUTER_HANDLED_ERRORS as e:
                 errors.append(f"{label}: {e}")
 
@@ -2501,6 +2540,16 @@ async def convert_batch(
     material_source: str = Form("lut", description="颜色来源: lut | material_archive"),
     selected_materials: list[str] | str | None = Form(None, description="已选耗材目录名列表"),
     material_layer_count: int | None = Form(None, ge=1, le=20, description="耗材模式叠色层数"),
+    material_dynamic_layer_count_enabled: bool = Form(
+        False,
+        description="启用耗材模式动态有效叠层数",
+    ),
+    material_min_layer_count: int = Form(5, description="最小有效叠层数 (5-10)"),
+    material_max_layer_count: int = Form(10, description="最大有效叠层数 (5-10)"),
+    material_delta_e00_tolerance: float = Form(
+        0.5,
+        description="短配方允许的 CIEDE2000 色差损失 (0-5)",
+    ),
     material_layer_height_mm: float | None = Form(None, gt=0.0, le=1.0, description="耗材模式层高 (mm)"),
     material_grid_resolution: int | None = Form(None, description="耗材穷举缓存网格分辨率"),
     material_backing_material_index: int | None = Form(None, ge=0, description="耗材档案底板耗材索引"),
@@ -2563,6 +2612,7 @@ async def convert_batch(
     material_source = _validate_material_source(material_source)
     image_count = len(images)
     selected_material_names: list[str] = []
+    resolved_material_backing_index = 0
     temp_native_bundle_path: str | None = None
     if material_source == "material_archive":
         selected_material_names = _normalize_batch_string_list(selected_materials)
@@ -2571,6 +2621,10 @@ async def convert_batch(
                 status_code=422,
                 detail="Batch material archive mode requires selected_materials",
             )
+        resolved_material_backing_index = _resolve_material_backing_index(
+            selected_material_names,
+            material_backing_material_index,
+        )
         lut_path = "__material_archive__"
         resolved_lut_name = "__material_archive__"
         resolved_source_kind = "legacy_single"
@@ -2629,6 +2683,26 @@ async def convert_batch(
                 status_code=422,
                 detail=f"Invalid modeling_mode: {modeling_mode}",
             )
+        (
+            material_dynamic_layer_count_enabled,
+            material_min_layer_count,
+            material_max_layer_count,
+            material_delta_e00_tolerance,
+        ) = _validate_dynamic_material_settings(
+            material_source=material_source,
+            enabled=material_dynamic_layer_count_enabled,
+            min_layer_count=material_min_layer_count,
+            max_layer_count=material_max_layer_count,
+            delta_e00_tolerance=material_delta_e00_tolerance,
+            hue_weight=hue_weight,
+            native_svg_vector=(
+                resolved_modeling_mode == CoreModelingMode.VECTOR
+                and any(
+                    str(upload.filename or "").lower().endswith(".svg")
+                    for upload in images
+                )
+            ),
+        )
         if resolved_modeling_mode == CoreModelingMode.COLOR_CARD:
             raise HTTPException(
                 status_code=422,
@@ -2671,7 +2745,11 @@ async def convert_batch(
             height_mode=resolved_height_mode,
             color_height_map=parsed_color_height_map,
             heightmap_max_height=heightmap_max_height,
-            material_layer_count=material_layer_count,
+            material_layer_count=(
+                material_max_layer_count
+                if material_dynamic_layer_count_enabled
+                else material_layer_count
+            ),
             requested_color_layers=color_layers,
         )
     except Exception:
@@ -2729,11 +2807,15 @@ async def convert_batch(
                 material_layer_count,
                 material_layer_height_mm,
                 material_grid_resolution,
-                material_backing_material_index,
+                resolved_material_backing_index,
                 use_lut_constrained,
                 auto_dynamic_range,
                 high_precision_3d_preview,
                 device_profile_id,
+                material_dynamic_layer_count_enabled,
+                material_min_layer_count,
+                material_max_layer_count,
+                material_delta_e00_tolerance,
             )
 
             # 3. Result processing (main thread)
@@ -2777,6 +2859,8 @@ async def convert_batch(
                     error="Batch item conversion timed out",
                 )
             )
+        except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as e:
+            _handle_core_error(e, "batch material generation")
         except ROUTER_HANDLED_ERRORS as e:
             _log_batch_item_failure(
                 batch_run_id=batch_run_id,

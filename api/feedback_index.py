@@ -225,6 +225,21 @@ def _reproduction_suggestion(
             )
     if (
         context.get("source_version") == "material"
+        and context.get("material_dynamic_layer_count_enabled") is True
+    ):
+        minimum = context.get("material_min_layer_count")
+        maximum = context.get("material_max_layer_count")
+        tolerance = context.get("material_delta_e00_tolerance")
+        lines.append(
+            "用户启用了耗材档案动态层数"
+            f"（{minimum}-{maximum} 层，ΔE00 容差 {tolerance}）；"
+            "复现时保持相同基板耗材和范围。"
+            " / Dynamic material layers were enabled "
+            f"({minimum}-{maximum}, ΔE00 tolerance {tolerance}); preserve the "
+            "backing material and range when reproducing."
+        )
+    elif (
+        context.get("source_version") == "material"
         and context.get("material_layer_count") is not None
     ):
         layers = context.get("material_layer_count")
@@ -455,6 +470,10 @@ def generate_index_markdown(
         "lut_name",
         "selected_material_dir_names",
         "material_layer_count",
+        "material_dynamic_layer_count_enabled",
+        "material_min_layer_count",
+        "material_max_layer_count",
+        "material_delta_e00_tolerance",
         "material_layer_height_mm",
         "material_backing_material_dir_name",
     ):

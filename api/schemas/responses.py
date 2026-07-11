@@ -882,6 +882,8 @@ class PreviewResponse(BaseModel):
     contours: Optional[dict[str, list[list[list[float]]]]] = None
     warnings: list[str] = Field(default_factory=list)
     performance_timing: Optional[PerformanceTimingResponse] = None
+    material_dynamic_recipes: Optional[list[dict[str, Any]]] = None
+    material_layer_benefit_curve: Optional[list[dict[str, Any]]] = None
 
 
 class ColorReplaceResponse(BaseModel):

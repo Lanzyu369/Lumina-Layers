@@ -497,6 +497,11 @@ def worker_generate_preview(
     high_precision_3d_preview: bool = False,
     svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
     replacement_regions: list[dict[str, str]] | None = None,
+    material_backing_material_index: int | None = None,
+    material_dynamic_layer_count_enabled: bool = False,
+    material_min_layer_count: int = 5,
+    material_max_layer_count: int = 10,
+    material_delta_e00_tolerance: float = 0.5,
 ) -> dict:
     """Execute preview generation in a worker process.
     在工作进程中执行预览生成。
@@ -519,6 +524,16 @@ def worker_generate_preview(
         svg_pixels_per_mm (float): High-fidelity SVG raster density in px/mm.
             (高保真 SVG 光栅化采样密度，单位 px/mm)
         is_dark (bool): Dark theme flag for 2D preview bed colors. (深色主题标志)
+        material_backing_material_index: Selected backing material index.
+            (用户选择的基板耗材索引)
+        material_dynamic_layer_count_enabled: Enable exact dynamic effective
+            layers. (启用精确动态有效层数)
+        material_min_layer_count: Minimum dynamic effective layers. (动态最小
+            有效层数)
+        material_max_layer_count: Maximum dynamic effective and physical
+            layers. (动态最大有效层数及物理模型层数)
+        material_delta_e00_tolerance: Allowed CIEDE2000 loss for shorter
+            recipes. (短配方允许的 CIEDE2000 损失)
 
     Returns:
         dict: Result dictionary with keys: (结果字典，包含以下键)
@@ -601,6 +616,13 @@ def worker_generate_preview(
             material_layer_count=material_layer_count,
             material_layer_height_mm=material_layer_height_mm,
             material_grid_resolution=material_grid_resolution,
+            material_backing_material_index=material_backing_material_index,
+            material_dynamic_layer_count_enabled=(
+                material_dynamic_layer_count_enabled
+            ),
+            material_min_layer_count=material_min_layer_count,
+            material_max_layer_count=material_max_layer_count,
+            material_delta_e00_tolerance=material_delta_e00_tolerance,
             replacement_regions=replacement_regions,
         )
     except (ValueError, TypeError, KeyError, OSError, RuntimeError) as e:
@@ -1197,6 +1219,10 @@ def worker_batch_convert_item(
     auto_dynamic_range: bool = False,
     high_precision_3d_preview: bool = False,
     device_profile_id: str | None = None,
+    material_dynamic_layer_count_enabled: bool = False,
+    material_min_layer_count: int = 5,
+    material_max_layer_count: int = 10,
+    material_delta_e00_tolerance: float = 0.5,
 ) -> dict:
     """Execute a single batch conversion item in a worker process.
     在工作进程中执行单个批量转换项。
@@ -1246,6 +1272,14 @@ def worker_batch_convert_item(
         enable_base_layer_height_modifier: Whether to keep the Bambu-family
             coarse base-layer setting from user settings. (是否沿用设置页
             的底板粗层高开关)
+        material_dynamic_layer_count_enabled: Enable exact dynamic effective
+            layers. (启用精确动态有效层数)
+        material_min_layer_count: Minimum dynamic effective layers. (动态最小
+            有效层数)
+        material_max_layer_count: Maximum dynamic effective and physical
+            layers. (动态最大有效层数及物理模型层数)
+        material_delta_e00_tolerance: Allowed CIEDE2000 loss for shorter
+            recipes. (短配方允许的 CIEDE2000 损失)
 
     Returns:
         dict: Result dictionary with the following keys:
@@ -1314,6 +1348,10 @@ def worker_batch_convert_item(
         use_lut_constrained=use_lut_constrained,
         auto_dynamic_range=auto_dynamic_range,
         high_precision_3d_preview=high_precision_3d_preview,
+        material_dynamic_layer_count_enabled=material_dynamic_layer_count_enabled,
+        material_min_layer_count=material_min_layer_count,
+        material_max_layer_count=material_max_layer_count,
+        material_delta_e00_tolerance=material_delta_e00_tolerance,
     )
 
     # Conversion failure surfaces as no 3MF; keep the legacy contract

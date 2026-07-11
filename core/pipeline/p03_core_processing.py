@@ -361,9 +361,8 @@ def _run_material_archive_branch(ctx: dict) -> dict:
             _solve_dynamic_material_targets,
         )
 
-        if "material_backing_material_index" in ctx:
-            backing_material_index = ctx.get("material_backing_material_index")
-        else:
+        backing_material_index = ctx.get("material_backing_material_index")
+        if backing_material_index is None:
             backing_material_index = ctx.get("material_base_channel_idx")
         if unique_colors.shape[0] > 0:
             counted_colors, pixel_counts = np.unique(

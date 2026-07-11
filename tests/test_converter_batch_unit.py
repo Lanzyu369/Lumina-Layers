@@ -15,6 +15,7 @@ Validates:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import io
 import json
 import os
@@ -669,6 +670,10 @@ class TestBatchWorkerPoolSubmit:
                     "material_layer_height_mm": "0.06",
                     "material_grid_resolution": "33",
                     "material_backing_material_index": "1",
+                    "material_dynamic_layer_count_enabled": "true",
+                    "material_min_layer_count": "6",
+                    "material_max_layer_count": "9",
+                    "material_delta_e00_tolerance": "0.4",
                 },
             )
 
@@ -683,6 +688,18 @@ class TestBatchWorkerPoolSubmit:
         assert call_args[0][31] == 0.06
         assert call_args[0][32] == 33
         assert call_args[0][33] == 1
+        from api.workers.converter_workers import worker_batch_convert_item
+
+        submitted = dict(
+            zip(
+                inspect.signature(worker_batch_convert_item).parameters,
+                call_args.args[1:],
+            )
+        )
+        assert submitted["material_dynamic_layer_count_enabled"] is True
+        assert submitted["material_min_layer_count"] == 6
+        assert submitted["material_max_layer_count"] == 9
+        assert submitted["material_delta_e00_tolerance"] == 0.4
 
     def test_batch_submits_native_bundle_source_to_worker(self) -> None:
         """Batch endpoint resolves reverse-LUT native bundle params."""

@@ -55,6 +55,10 @@ from core.puzzle import (
     resolve_puzzle_mask_geometry,
 )
 from core.puzzle_3mf import PuzzlePiece3MFSource, assemble_puzzle_3mf
+from core.material_dynamic_solver import (
+    DynamicMaterialCandidateError,
+    DynamicMaterialSolverError,
+)
 
 from .common import (
     BATCH_DOWNLOAD_TTL_SECONDS,
@@ -65,6 +69,7 @@ from .common import (
     SOURCE_IMAGE_UNAVAILABLE_DETAIL,
     _handle_core_error,
     _require_session,
+    _resolve_session_dynamic_material_settings,
     _resolve_material_backing_index,
     _validate_material_archive_relief_minimum_height,
 )
@@ -788,6 +793,13 @@ async def generate_puzzle(
         if generate_params.modeling_mode == ModelingMode.VECTOR
         else CoreModelingMode(generate_params.modeling_mode.value)
     )
+    dynamic_material_settings = _resolve_session_dynamic_material_settings(
+        session_data=session_data,
+        request=generate_params,
+        material_source=str(session_material_source or "lut"),
+        # Puzzle vector requests are deliberately rasterized to high fidelity.
+        native_svg_vector=False,
+    )
     height_mode = generate_params.height_mode or "color"
     _validate_material_archive_relief_minimum_height(
         enable_relief=generate_params.enable_relief,
@@ -873,6 +885,10 @@ async def generate_puzzle(
             "nozzle_size": generate_params.nozzle_size,
             "device_profile_id": generate_params.device_profile_id,
             "relief_global_max_height": relief_global_max_height,
+            "material_dynamic_layer_count_enabled": dynamic_material_settings[0],
+            "material_min_layer_count": dynamic_material_settings[1],
+            "material_max_layer_count": dynamic_material_settings[2],
+            "material_delta_e00_tolerance": dynamic_material_settings[3],
         }
         if session_material_source == "material_archive":
             selected_materials = session_data.get("selected_materials") or []
@@ -938,6 +954,8 @@ async def generate_puzzle(
                 store.register_temp_file(sid, glb_path)
         except asyncio.TimeoutError:
             errors.append(f"{piece.label}: generation timed out")
+        except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as exc:
+            _handle_core_error(exc, "puzzle piece generation")
         except ROUTER_HANDLED_ERRORS as exc:
             errors.append(f"{piece.label}: {exc}")
 

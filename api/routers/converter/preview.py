@@ -65,6 +65,10 @@ from core.converter import generate_empty_bed_glb, generate_segmented_glb
 from core.naming import generate_segmented_glb_filename
 from core.heightmap_loader import HeightmapLoader
 from core.image_preprocessor import ImagePreprocessor
+from core.material_dynamic_solver import (
+    DynamicMaterialCandidateError,
+    DynamicMaterialSolverError,
+)
 from core.vector_large_format import inspect_svg_large_format_support, normalize_large_format_source_basename
 from utils.lut_manager import LUTManager
 
@@ -80,6 +84,7 @@ from .common import (
     _require_preview_cache,
     _require_session,
     _resolve_material_backing_index,
+    _validate_dynamic_material_settings,
     _validate_material_source,
     recompute_gradient_groups_into_session,
 )
@@ -225,14 +230,19 @@ def _estimate_preview_layers(
     *,
     color_layers: int | None,
     material_layer_count: int | None,
+    material_dynamic_layer_count_enabled: bool = False,
+    material_max_layer_count: int = 10,
     material_source: str,
 ) -> int:
     """Return a conservative layer count for preview-cache size estimates.
 
     返回用于 preview-cache 大小估算的保守叠色层数。
     """
-    if material_source == "material_archive" and material_layer_count:
-        return max(1, int(material_layer_count))
+    if material_source == "material_archive":
+        if material_dynamic_layer_count_enabled:
+            return max(1, int(material_max_layer_count))
+        if material_layer_count:
+            return max(1, int(material_layer_count))
     if color_layers:
         return max(1, int(color_layers))
     return 5
@@ -399,6 +409,8 @@ def _enforce_preview_cache_size_limit(
     svg_pixels_per_mm: float,
     color_layers: int | None,
     material_layer_count: int | None,
+    material_dynamic_layer_count_enabled: bool = False,
+    material_max_layer_count: int = 10,
     material_source: str,
     selected_material_count: int | None = None,
     max_bytes: int | None = None,
@@ -423,6 +435,8 @@ def _enforce_preview_cache_size_limit(
     layers = _estimate_preview_layers(
         color_layers=color_layers,
         material_layer_count=material_layer_count,
+        material_dynamic_layer_count_enabled=material_dynamic_layer_count_enabled,
+        material_max_layer_count=material_max_layer_count,
         material_source=material_source,
     )
     estimate_bytes = estimate_preview_cache_bytes(
@@ -871,6 +885,16 @@ async def convert_preview(
     material_source: str = Form("lut", description="颜色来源: lut | material_archive"),
     selected_materials: list[str] | str | None = Form(None, description="已选耗材目录名列表"),
     material_layer_count: int | None = Form(None, description="耗材模式叠色层数 (5-10)"),
+    material_dynamic_layer_count_enabled: bool = Form(
+        False,
+        description="启用耗材模式动态有效叠层数",
+    ),
+    material_min_layer_count: int = Form(5, description="最小有效叠层数 (5-10)"),
+    material_max_layer_count: int = Form(10, description="最大有效叠层数 (5-10)"),
+    material_delta_e00_tolerance: float = Form(
+        0.5,
+        description="短配方允许的 CIEDE2000 色差损失 (0-5)",
+    ),
     material_layer_height_mm: float | None = Form(None, description="耗材模式层高 (mm)"),
     material_grid_resolution: int | None = Form(
         None,
@@ -913,6 +937,23 @@ async def convert_preview(
     worker_gradient_region_id_map: np.ndarray | None = None
     svg_large_format_policy = None
     material_source = _validate_material_source(material_source)
+    (
+        material_dynamic_layer_count_enabled,
+        material_min_layer_count,
+        material_max_layer_count,
+        material_delta_e00_tolerance,
+    ) = _validate_dynamic_material_settings(
+        material_source=material_source,
+        enabled=material_dynamic_layer_count_enabled,
+        min_layer_count=material_min_layer_count,
+        max_layer_count=material_max_layer_count,
+        delta_e00_tolerance=material_delta_e00_tolerance,
+        hue_weight=hue_weight,
+        native_svg_vector=(
+            modeling_mode == "vector"
+            and str(image.filename or "").lower().endswith(".svg")
+        ),
+    )
     try:
         svg_pixels_per_mm = normalize_svg_pixels_per_mm(svg_pixels_per_mm)
     except ValueError as exc:
@@ -1027,6 +1068,10 @@ async def convert_preview(
             svg_pixels_per_mm=svg_pixels_per_mm,
             color_layers=color_layers,
             material_layer_count=material_layer_count,
+            material_dynamic_layer_count_enabled=(
+                material_dynamic_layer_count_enabled
+            ),
+            material_max_layer_count=material_max_layer_count,
             material_source=material_source,
             selected_material_count=len(_selected_mats or []),
             max_bytes=preview_cache_max_bytes,
@@ -1100,11 +1145,18 @@ async def convert_preview(
             high_precision_3d_preview,
             svg_pixels_per_mm,
             parsed_replacement_regions,
+            _material_backing_index,
+            material_dynamic_layer_count_enabled,
+            material_min_layer_count,
+            material_max_layer_count,
+            material_delta_e00_tolerance,
         )
         _t_worker = time.perf_counter() - _t
         worker_completed = True
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="Preview generation timed out")
+    except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as e:
+        _handle_core_error(e, "preview generation")
     except ROUTER_HANDLED_ERRORS as e:
         log.exception(
             "Preview generation failed",
@@ -1456,6 +1508,18 @@ async def convert_preview(
     store.put(session_id, "model_threshold", model_threshold)
     store.put(session_id, "model_margin", model_margin)
     store.put(session_id, "material_source", material_source)
+    store.put(
+        session_id,
+        "material_dynamic_layer_count_enabled",
+        material_dynamic_layer_count_enabled,
+    )
+    store.put(session_id, "material_min_layer_count", material_min_layer_count)
+    store.put(session_id, "material_max_layer_count", material_max_layer_count)
+    store.put(
+        session_id,
+        "material_delta_e00_tolerance",
+        material_delta_e00_tolerance,
+    )
     if material_source == "material_archive":
         store.put(session_id, "selected_materials", _selected_mats or [])
         store.put(session_id, "material_layer_count", material_layer_count)
@@ -1567,6 +1631,11 @@ async def convert_preview(
     contours_data: dict[str, list[list[list[float]]]] | None = None
     if cache_data and "color_contours" in cache_data:
         contours_data = cache_data["color_contours"]
+    dynamic_layer_info = (
+        cache_data.get("material_dynamic_layer_info")
+        if isinstance(cache_data, dict)
+        else None
+    )
 
     _t_api_total = time.perf_counter() - _api_t0
     performance_timing = {
@@ -1604,6 +1673,16 @@ async def convert_preview(
             contours=contours_data,
             warnings=list((svg_large_format_policy or {}).get("warnings", [])),
             performance_timing=performance_timing,
+            material_dynamic_recipes=(
+                dynamic_layer_info.get("colors")
+                if isinstance(dynamic_layer_info, dict)
+                else None
+            ),
+            material_layer_benefit_curve=(
+                dynamic_layer_info.get("benefit_curve")
+                if isinstance(dynamic_layer_info, dict)
+                else None
+            ),
         )
     except (*ROUTER_HANDLED_ERRORS, ValidationError):
         _rollback_preview_session_after_failure(

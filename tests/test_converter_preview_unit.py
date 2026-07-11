@@ -677,12 +677,30 @@ class TestSessionContainsPreviewCache:
                         [f"material-{i}" for i in range(18)]
                     ),
                     "material_layer_count": "9",
+                    "material_dynamic_layer_count_enabled": "true",
+                    "material_min_layer_count": "6",
+                    "material_max_layer_count": "9",
+                    "material_delta_e00_tolerance": "0.4",
+                    "material_backing_material_index": "1",
                 },
             )
 
         assert response.status_code == 200
+        call_args = _mock_pool.submit.call_args.args
+        submitted = dict(
+            zip(inspect.signature(worker_generate_preview).parameters, call_args[1:])
+        )
+        assert submitted["material_backing_material_index"] == 1
+        assert submitted["material_dynamic_layer_count_enabled"] is True
+        assert submitted["material_min_layer_count"] == 6
+        assert submitted["material_max_layer_count"] == 9
+        assert submitted["material_delta_e00_tolerance"] == 0.4
         session_data = _test_store.get(response.json()["session_id"])
         assert session_data is not None
+        assert session_data["material_dynamic_layer_count_enabled"] is True
+        assert session_data["material_min_layer_count"] == 6
+        assert session_data["material_max_layer_count"] == 9
+        assert session_data["material_delta_e00_tolerance"] == 0.4
         cache_ref = session_data["preview_cache"]
         assert cache_ref["fields"]["material_matrix"]["dtype"] == "int8"
         assert cache_ref["fields"]["original_material_matrix"]["dtype"] == "int8"
