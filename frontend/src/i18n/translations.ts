@@ -949,6 +949,40 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "ℹ️ 3D preview simplified",
   },
 
+  // ==================== Browser Completion Notifications ====================
+  "completion_notification.preview.title": {
+    zh: "预览已完成",
+    en: "Preview complete",
+  },
+  "completion_notification.preview.body": {
+    zh: "预览已准备好，可以查看。",
+    en: "Your preview is ready to inspect.",
+  },
+  "completion_notification.generation.title": {
+    zh: "模型生成已完成",
+    en: "Model generation complete",
+  },
+  "completion_notification.generation.body": {
+    zh: "模型已准备好，可以下载或发送到切片软件。",
+    en: "Your model is ready to download or send to a slicer.",
+  },
+  "completion_notification.batch.title": {
+    zh: "批量生成已完成",
+    en: "Batch generation complete",
+  },
+  "completion_notification.batch.body": {
+    zh: "批量生成结果已准备好。",
+    en: "Your batch results are ready.",
+  },
+  "completion_notification.calibration.title": {
+    zh: "校准生成已完成",
+    en: "Calibration generation complete",
+  },
+  "completion_notification.calibration.body": {
+    zh: "校准文件已准备好。",
+    en: "Your calibration files are ready.",
+  },
+
   // ==================== Palette / Replacement ====================
   palette_empty: {
     zh: "暂无颜色，请先生成预览。",

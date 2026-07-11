@@ -101,34 +101,110 @@ describe("browser notification permission", () => {
 });
 
 describe("browser completion notification delivery", () => {
-  it("creates a Chinese notification payload", () => {
+  it("creates exact Chinese and English payloads for every completion kind", () => {
     stubNotification("granted");
-
-    expect(showBrowserCompletionNotification("preview", "zh")).toBe(true);
-    expect(notificationCalls).toEqual([
+    const expectedPayloads: Array<{
+      kind: CompletionNotificationKind;
+      language: "zh" | "en";
+      call: NotificationCall;
+    }> = [
       {
-        title: "预览已完成",
-        options: {
-          body: "预览已准备好，可以查看。",
-          tag: "lumina-completion-preview",
+        kind: "preview",
+        language: "zh",
+        call: {
+          title: "预览已完成",
+          options: {
+            body: "预览已准备好，可以查看。",
+            tag: "lumina-completion-preview",
+          },
         },
       },
-    ]);
-  });
-
-  it("creates an English notification payload", () => {
-    stubNotification("granted");
-
-    expect(showBrowserCompletionNotification("generation", "en")).toBe(true);
-    expect(notificationCalls).toEqual([
       {
-        title: "Model generation complete",
-        options: {
-          body: "Your model is ready to download or send to a slicer.",
-          tag: "lumina-completion-generation",
+        kind: "preview",
+        language: "en",
+        call: {
+          title: "Preview complete",
+          options: {
+            body: "Your preview is ready to inspect.",
+            tag: "lumina-completion-preview",
+          },
         },
       },
-    ]);
+      {
+        kind: "generation",
+        language: "zh",
+        call: {
+          title: "模型生成已完成",
+          options: {
+            body: "模型已准备好，可以下载或发送到切片软件。",
+            tag: "lumina-completion-generation",
+          },
+        },
+      },
+      {
+        kind: "generation",
+        language: "en",
+        call: {
+          title: "Model generation complete",
+          options: {
+            body: "Your model is ready to download or send to a slicer.",
+            tag: "lumina-completion-generation",
+          },
+        },
+      },
+      {
+        kind: "batch",
+        language: "zh",
+        call: {
+          title: "批量生成已完成",
+          options: {
+            body: "批量生成结果已准备好。",
+            tag: "lumina-completion-batch",
+          },
+        },
+      },
+      {
+        kind: "batch",
+        language: "en",
+        call: {
+          title: "Batch generation complete",
+          options: {
+            body: "Your batch results are ready.",
+            tag: "lumina-completion-batch",
+          },
+        },
+      },
+      {
+        kind: "calibration",
+        language: "zh",
+        call: {
+          title: "校准生成已完成",
+          options: {
+            body: "校准文件已准备好。",
+            tag: "lumina-completion-calibration",
+          },
+        },
+      },
+      {
+        kind: "calibration",
+        language: "en",
+        call: {
+          title: "Calibration generation complete",
+          options: {
+            body: "Your calibration files are ready.",
+            tag: "lumina-completion-calibration",
+          },
+        },
+      },
+    ];
+
+    for (const { kind, language } of expectedPayloads) {
+      expect(showBrowserCompletionNotification(kind, language)).toBe(true);
+    }
+
+    expect(notificationCalls).toEqual(
+      expectedPayloads.map(({ call }) => call),
+    );
   });
 
   it("uses stable tags for every completion kind", () => {

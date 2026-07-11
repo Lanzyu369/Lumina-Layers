@@ -1,3 +1,5 @@
+import { translations } from "../i18n/translations";
+
 export type CompletionNotificationKind =
   | "preview"
   | "generation"
@@ -9,65 +11,34 @@ export type BrowserNotificationPermission =
   | "unsupported"
   | "error";
 
-interface CompletionNotificationMessage {
-  tag: string;
-  zh: {
-    title: string;
-    body: string;
+type CompletionNotificationMessageMap = {
+  [Kind in CompletionNotificationKind]: {
+    tag: `lumina-completion-${Kind}`;
+    titleKey: `completion_notification.${Kind}.title`;
+    bodyKey: `completion_notification.${Kind}.body`;
   };
-  en: {
-    title: string;
-    body: string;
-  };
-}
+};
 
-const COMPLETION_NOTIFICATION_MESSAGES: Record<
-  CompletionNotificationKind,
-  CompletionNotificationMessage
-> = {
+const COMPLETION_NOTIFICATION_MESSAGES: CompletionNotificationMessageMap = {
   preview: {
     tag: "lumina-completion-preview",
-    zh: {
-      title: "预览已完成",
-      body: "预览已准备好，可以查看。",
-    },
-    en: {
-      title: "Preview complete",
-      body: "Your preview is ready to inspect.",
-    },
+    titleKey: "completion_notification.preview.title",
+    bodyKey: "completion_notification.preview.body",
   },
   generation: {
     tag: "lumina-completion-generation",
-    zh: {
-      title: "模型生成已完成",
-      body: "模型已准备好，可以下载或发送到切片软件。",
-    },
-    en: {
-      title: "Model generation complete",
-      body: "Your model is ready to download or send to a slicer.",
-    },
+    titleKey: "completion_notification.generation.title",
+    bodyKey: "completion_notification.generation.body",
   },
   batch: {
     tag: "lumina-completion-batch",
-    zh: {
-      title: "批量生成已完成",
-      body: "批量生成结果已准备好。",
-    },
-    en: {
-      title: "Batch generation complete",
-      body: "Your batch results are ready.",
-    },
+    titleKey: "completion_notification.batch.title",
+    bodyKey: "completion_notification.batch.body",
   },
   calibration: {
     tag: "lumina-completion-calibration",
-    zh: {
-      title: "校准生成已完成",
-      body: "校准文件已准备好。",
-    },
-    en: {
-      title: "Calibration generation complete",
-      body: "Your calibration files are ready.",
-    },
+    titleKey: "completion_notification.calibration.title",
+    bodyKey: "completion_notification.calibration.body",
   },
 };
 
@@ -104,11 +75,12 @@ export function showBrowserCompletionNotification(
   }
 
   const message = COMPLETION_NOTIFICATION_MESSAGES[kind];
-  const localizedMessage = message[language];
 
   try {
-    new Notification(localizedMessage.title, {
-      body: localizedMessage.body,
+    const title = translations[message.titleKey][language];
+    const body = translations[message.bodyKey][language];
+    new Notification(title, {
+      body,
       tag: message.tag,
     });
     return true;
