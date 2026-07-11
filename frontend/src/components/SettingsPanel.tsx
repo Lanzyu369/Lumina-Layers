@@ -785,9 +785,7 @@ export default function SettingsPanel() {
               {t("settings.completion_notifications_enable_label")}
               <HelpDot
                 title={t("settings.completion_notifications_enable_label")}
-                description={t(
-                  "settings.completion_notifications_description",
-                )}
+                description={t("settings.completion_notifications_hint")}
               />
             </span>
             <Switch

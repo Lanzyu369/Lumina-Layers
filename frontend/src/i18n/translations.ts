@@ -1805,6 +1805,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "启用浏览器完成通知",
     en: "Enable browser completion notifications",
   },
+  "settings.completion_notifications_hint": {
+    zh: "开启时浏览器会申请通知权限；允许后，预览和生成任务完成时会在此设备提醒你。",
+    en: "Enabling this asks the browser for notification permission. Once allowed, this device alerts you when preview and generation tasks finish.",
+  },
   "settings.completion_notifications_granted": {
     zh: "浏览器已允许通知。开启后，此设备会收到完成提醒。",
     en: "Browser permission is granted. When enabled, this device will receive completion alerts.",

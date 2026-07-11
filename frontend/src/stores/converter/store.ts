@@ -5909,7 +5909,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           _get().sessionId === response.session_id
         ) {
           await _get().uploadHeightmap();
-          if (_get().sessionId !== response.session_id) {
+          const latestState = _get();
+          if (
+            signal.aborted ||
+            _previewAbortController?.signal !== signal ||
+            latestState.sessionId !== response.session_id ||
+            latestState.error
+          ) {
             return;
           }
         }

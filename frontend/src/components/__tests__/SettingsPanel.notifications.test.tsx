@@ -181,6 +181,51 @@ describe("SettingsPanel completion notifications", () => {
     ).toBe(false);
   });
 
+  it("keeps the setting off when the permission prompt is dismissed", async () => {
+    requestPermissionMock.mockResolvedValue("default");
+    renderPanel();
+
+    fireEvent.click(
+      screen.getByRole("switch", {
+        name: translations["settings.completion_notifications_enable_label"].zh,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(requestPermissionMock).toHaveBeenCalledTimes(1);
+    });
+    expect(
+      screen.getByText(
+        translations["settings.completion_notifications_default"].zh,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      useSettingsStore.getState().enableCompletionNotifications,
+    ).toBe(false);
+  });
+
+  it("keeps the setting off and explains permission request failures", async () => {
+    requestPermissionMock.mockRejectedValue(
+      new Error("notification permission failed"),
+    );
+    renderPanel();
+
+    fireEvent.click(
+      screen.getByRole("switch", {
+        name: translations["settings.completion_notifications_enable_label"].zh,
+      }),
+    );
+
+    expect(
+      await screen.findByText(
+        translations["settings.completion_notifications_request_failed"].zh,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      useSettingsStore.getState().enableCompletionNotifications,
+    ).toBe(false);
+  });
+
   it("disables the switch and explains when notifications are unsupported", () => {
     vi.stubGlobal("Notification", undefined);
     renderPanel();

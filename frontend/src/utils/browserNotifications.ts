@@ -19,6 +19,10 @@ type CompletionNotificationMessageMap = {
   };
 };
 
+type RenotifyNotificationOptions = NotificationOptions & {
+  renotify: boolean;
+};
+
 const COMPLETION_NOTIFICATION_MESSAGES: CompletionNotificationMessageMap = {
   preview: {
     tag: "lumina-completion-preview",
@@ -79,10 +83,12 @@ export function showBrowserCompletionNotification(
   try {
     const title = translations[message.titleKey][language];
     const body = translations[message.bodyKey][language];
-    new Notification(title, {
+    const options: RenotifyNotificationOptions = {
       body,
       tag: message.tag,
-    });
+      renotify: true,
+    };
+    new Notification(title, options);
     return true;
   } catch {
     return false;

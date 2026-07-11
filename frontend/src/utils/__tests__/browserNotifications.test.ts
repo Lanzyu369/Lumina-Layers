@@ -7,9 +7,13 @@ import {
   type CompletionNotificationKind,
 } from "../browserNotifications";
 
+type RenotifyNotificationOptions = NotificationOptions & {
+  renotify?: boolean;
+};
+
 interface NotificationCall {
   title: string;
-  options?: NotificationOptions;
+  options?: RenotifyNotificationOptions;
 }
 
 const notificationCalls: NotificationCall[] = [];
@@ -18,7 +22,7 @@ class MockNotification {
   static permission: NotificationPermission = "default";
   static requestPermission = vi.fn<() => Promise<NotificationPermission>>();
 
-  constructor(title: string, options?: NotificationOptions) {
+  constructor(title: string, options?: RenotifyNotificationOptions) {
     notificationCalls.push({ title, options });
   }
 }
@@ -116,6 +120,7 @@ describe("browser completion notification delivery", () => {
           options: {
             body: "预览已准备好，可以查看。",
             tag: "lumina-completion-preview",
+            renotify: true,
           },
         },
       },
@@ -127,6 +132,7 @@ describe("browser completion notification delivery", () => {
           options: {
             body: "Your preview is ready to inspect.",
             tag: "lumina-completion-preview",
+            renotify: true,
           },
         },
       },
@@ -138,6 +144,7 @@ describe("browser completion notification delivery", () => {
           options: {
             body: "模型已准备好，可以下载或发送到切片软件。",
             tag: "lumina-completion-generation",
+            renotify: true,
           },
         },
       },
@@ -149,6 +156,7 @@ describe("browser completion notification delivery", () => {
           options: {
             body: "Your model is ready to download or send to a slicer.",
             tag: "lumina-completion-generation",
+            renotify: true,
           },
         },
       },
@@ -160,6 +168,7 @@ describe("browser completion notification delivery", () => {
           options: {
             body: "批量生成结果已准备好。",
             tag: "lumina-completion-batch",
+            renotify: true,
           },
         },
       },
@@ -171,6 +180,7 @@ describe("browser completion notification delivery", () => {
           options: {
             body: "Your batch results are ready.",
             tag: "lumina-completion-batch",
+            renotify: true,
           },
         },
       },
@@ -182,6 +192,7 @@ describe("browser completion notification delivery", () => {
           options: {
             body: "校准文件已准备好。",
             tag: "lumina-completion-calibration",
+            renotify: true,
           },
         },
       },
@@ -193,6 +204,7 @@ describe("browser completion notification delivery", () => {
           options: {
             body: "Your calibration files are ready.",
             tag: "lumina-completion-calibration",
+            renotify: true,
           },
         },
       },
@@ -230,6 +242,9 @@ describe("browser completion notification delivery", () => {
       "lumina-completion-batch",
       "lumina-completion-calibration",
     ]);
+    expect(notificationCalls.every((call) => call.options?.renotify)).toBe(
+      true,
+    );
   });
 
   it("does not create a notification without granted permission", () => {
