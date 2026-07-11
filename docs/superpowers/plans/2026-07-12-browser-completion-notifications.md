@@ -129,7 +129,7 @@ const handleCompletionNotificationsChange = async (enabled: boolean) => {
 };
 ```
 
-Render the new block with `Switch`, `WikiTooltip`, and `StatusBanner`; disable the switch only while requesting or when unsupported. Denied and error states must tell users the feature remains off.
+Render the new block with `Switch`, an inline `HelpDot` beside the visible label, and `StatusBanner`; disable the switch only while requesting or when unsupported. Denied and error states must tell users the feature remains off.
 
 - [ ] **Step 7: Add store and component tests**
 
