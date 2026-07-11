@@ -291,6 +291,7 @@ def test_dynamic_preview_replay_applies_exact_replacements_and_merges_metadata(
         matched_rgb,
         material_matrix,
         mask_solid,
+        target_rgb_map,
         replacements,
         materials,
         **kwargs,
@@ -312,6 +313,7 @@ def test_dynamic_preview_replay_applies_exact_replacements_and_merges_metadata(
             1,
             merged_info,
             {"dynamic_engine": "numba", "replacement_merge": True},
+            np.asarray(target_rgb_map).copy(),
         )
 
     monkeypatch.setattr(

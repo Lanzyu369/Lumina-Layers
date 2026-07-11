@@ -15,6 +15,11 @@ from fastapi.testclient import TestClient
 from api.app import create_app
 from api.dependencies import get_file_registry, get_session_store
 from api.file_registry import FileRegistry
+from api.preview_cache_artifacts import (
+    externalize_preview_cache,
+    hydrate_preview_cache,
+    is_preview_cache_artifact_ref,
+)
 from api.session_store import SessionStore
 from core.material_dynamic_solver import DynamicMaterialCandidateError
 
@@ -57,6 +62,10 @@ def test_automatic_dynamic_sync_uses_exact_solver_and_saves_metadata() -> None:
     cache = {
         "material_matrix": np.zeros((1, 2, 7), dtype=np.int16),
         "mask_solid": np.ones((1, 2), dtype=bool),
+        "quantized_image": np.asarray(
+            [[[10, 20, 30], [1, 2, 3]]],
+            dtype=np.uint8,
+        ),
     }
     diff_mask = np.asarray([[True, False]])
     updated_rgb = np.asarray([[[10, 20, 30], [1, 2, 3]]], dtype=np.uint8)
@@ -158,6 +167,10 @@ def test_region_read_uses_saved_actual_recipe_with_real_backing_layers() -> None
     resolved = resolve(
         session_data={
             "material_dynamic_layer_count_enabled": True,
+            "material_min_layer_count": 5,
+            "material_max_layer_count": 7,
+            "selected_materials": ["mat-a", "mat-b", "mat-c"],
+            "material_backing_material_index": 1,
             "recipe_overrides": [
                 {
                     "region_id": "region-1",
@@ -178,12 +191,49 @@ def test_region_read_uses_saved_actual_recipe_with_real_backing_layers() -> None
     assert resolved == actual_recipe
 
 
+def test_region_read_rejects_non_backing_print_tail() -> None:
+    from api.routers.converter import replace
+
+    actual_recipe = [2, 1, 0, 1, 1]
+    invalid_print = [2, 1, 0, 1, 1, 2, 2]
+    with pytest.raises(HTTPException) as exc_info:
+        replace._resolve_dynamic_region_actual_recipe(
+            session_data={
+                "material_dynamic_layer_count_enabled": True,
+                "material_min_layer_count": 5,
+                "material_max_layer_count": 7,
+                "selected_materials": ["mat-a", "mat-b", "mat-c"],
+                "material_backing_material_index": 1,
+                "recipe_overrides": [
+                    {
+                        "region_id": "region-1",
+                        "actual_recipe_top_to_bottom": actual_recipe,
+                        "print_recipe_top_to_bottom": invalid_print,
+                        "actual_layer_count": 5,
+                        "padding_layer_count": 2,
+                    }
+                ],
+            },
+            cache={"material_dynamic_layer_info": {"colors": []}},
+            region_id="region-1",
+            print_recipe_top_to_bottom=invalid_print,
+        )
+
+    assert exc_info.value.status_code == 409
+
+
 def test_region_read_rejects_missing_dynamic_actual_metadata() -> None:
     from api.routers.converter import replace
 
     with pytest.raises(HTTPException) as exc_info:
         replace._resolve_dynamic_region_actual_recipe(
-            session_data={"recipe_overrides": []},
+            session_data={
+                "material_min_layer_count": 5,
+                "material_max_layer_count": 7,
+                "selected_materials": ["mat-a", "mat-b"],
+                "material_backing_material_index": 1,
+                "recipe_overrides": [],
+            },
             cache={"material_dynamic_layer_info": {"colors": []}},
             region_id="region-1",
             print_recipe_top_to_bottom=[2, 1, 0, 1, 1, 1, 1],
@@ -234,6 +284,10 @@ def test_automatic_sync_reuses_seen_target_merges_unseen_and_reweights_benefit()
     cache = {
         "material_matrix": np.zeros((1, 2, 7), dtype=np.int16),
         "mask_solid": np.ones((1, 2), dtype=bool),
+        "quantized_image": np.asarray(
+            [[[10, 20, 30], [40, 50, 60]]],
+            dtype=np.uint8,
+        ),
         "material_dynamic_layer_info": {
             "enabled": True,
             "min_layer_count": 5,
@@ -306,6 +360,80 @@ def test_automatic_sync_reuses_seen_target_merges_unseen_and_reweights_benefit()
     ]
 
 
+def test_api_benefit_weights_use_target_map_when_matched_colors_collide() -> None:
+    from api.routers.converter import replace
+
+    target_a = [10, 20, 30]
+    target_b = [40, 50, 60]
+    matched = [9, 9, 9]
+
+    def entry(target, delta, recipe):
+        return {
+            "target_srgb": target,
+            "matched_srgb": matched,
+            "actual_layer_count": 5,
+            "padding_layer_count": 2,
+            "actual_recipe_top_to_bottom": recipe[:5],
+            "print_recipe_top_to_bottom": recipe,
+            "layer_cap_options": [
+                {"max_effective_layer_count": cap, "delta_e00": delta}
+                for cap in (5, 6, 7)
+            ],
+        }
+
+    entries = [
+        entry(target_a, 1.0, [0, 1, 0, 1, 0, 1, 1]),
+        entry(target_b, 3.0, [1, 0, 1, 0, 1, 1, 1]),
+    ]
+    target_map = np.asarray(
+        [[target_a, target_b, target_b, target_b]],
+        dtype=np.uint8,
+    )
+    cache = {
+        "material_matrix": np.zeros((1, 4, 7), dtype=np.int16),
+        "mask_solid": np.ones((1, 4), dtype=bool),
+        "quantized_image": target_map.copy(),
+        "material_dynamic_layer_info": {
+            "enabled": True,
+            "min_layer_count": 5,
+            "max_layer_count": 7,
+            "delta_e00_tolerance": 0.5,
+            "colors": entries,
+            "benefit_curve": [],
+        },
+    }
+    session_data = {
+        "selected_materials": ["mat-a", "mat-b"],
+        "material_backing_material_index": 1,
+        "material_dynamic_layer_count_enabled": True,
+        "material_min_layer_count": 5,
+        "material_max_layer_count": 7,
+        "material_delta_e00_tolerance": 0.5,
+        "material_layer_height_mm": 0.08,
+    }
+    updated_rgb = target_map.copy()
+
+    with patch.object(
+        replace,
+        "load_multiple_materials",
+        return_value=[object(), object()],
+    ), patch.object(
+        replace,
+        "_solve_dynamic_material_targets",
+        side_effect=AssertionError("both exact targets should be reused"),
+    ):
+        replace._sync_material_archive_matrix_for_diff(
+            session_data,
+            cache,
+            np.ones((1, 4), dtype=bool),
+            updated_rgb,
+        )
+
+    curve = cache["material_dynamic_layer_info"]["benefit_curve"]
+    assert curve[0]["weighted_mean_delta_e00"] == 2.5
+    np.testing.assert_array_equal(cache["quantized_image"], target_map)
+
+
 def test_dynamic_exact_failure_rolls_back_rgb_matrix_and_metadata() -> None:
     from api.routers.converter import replace
 
@@ -334,6 +462,7 @@ def test_dynamic_exact_failure_rolls_back_rgb_matrix_and_metadata() -> None:
         {
             "matched_rgb": matched.copy(),
             "material_matrix": matrix.copy(),
+            "quantized_image": matched.copy(),
             "mask_solid": np.ones((2, 2), dtype=bool),
             "preview_rgba": np.dstack(
                 [matched.copy(), np.full((2, 2), 255, dtype=np.uint8)]
@@ -389,3 +518,105 @@ def test_dynamic_exact_failure_rolls_back_rgb_matrix_and_metadata() -> None:
     assert rolled_back["material_dynamic_layer_info"] == dynamic_info
     assert rolled_back["material_solver_info"] == solver_info
     assert store.get(session_id)["replacement_regions"] == []
+
+
+def test_dynamic_exact_failure_keeps_artifact_cache_revisions_and_data(
+    tmp_path,
+) -> None:
+    from api.routers.converter import replace
+
+    app = create_app()
+    store = SessionStore(ttl=1800)
+    registry = FileRegistry()
+    app.dependency_overrides[get_session_store] = lambda: store
+    app.dependency_overrides[get_file_registry] = lambda: registry
+    client = TestClient(app)
+
+    session_id = store.create()
+    matched = np.full((2, 2, 3), [10, 20, 30], dtype=np.uint8)
+    matrix = np.zeros((2, 2, 7), dtype=np.int16)
+    dynamic_info = {
+        "enabled": True,
+        "min_layer_count": 5,
+        "max_layer_count": 7,
+        "delta_e00_tolerance": 0.5,
+        "colors": [],
+        "benefit_curve": [],
+    }
+    solver_info = {"path": "dynamic_exact", "dynamic_engine": "numba"}
+    cache_ref = externalize_preview_cache(
+        session_id,
+        store,
+        {
+            "matched_rgb": matched.copy(),
+            "material_matrix": matrix.copy(),
+            "quantized_image": matched.copy(),
+            "mask_solid": np.ones((2, 2), dtype=bool),
+            "preview_rgba": np.dstack(
+                [matched.copy(), np.full((2, 2), 255, dtype=np.uint8)]
+            ),
+            "color_layers": 7,
+            "layer_height_mm": 0.08,
+            "material_dynamic_layer_info": dynamic_info,
+            "material_solver_info": solver_info,
+        },
+        root_dir=tmp_path,
+    )
+    store.put(session_id, "preview_cache", cache_ref)
+    initial_revisions = {
+        name: field["revision"] for name, field in cache_ref["fields"].items()
+    }
+    for key, value in {
+        "material_source": "material_archive",
+        "selected_materials": ["mat-a", "mat-b"],
+        "material_backing_material_index": 1,
+        "material_dynamic_layer_count_enabled": True,
+        "material_min_layer_count": 5,
+        "material_max_layer_count": 7,
+        "material_delta_e00_tolerance": 0.5,
+        "material_layer_height_mm": 0.08,
+        "replacement_regions": [],
+        "replacement_history": [],
+    }.items():
+        store.put(session_id, key, value)
+
+    failure = DynamicMaterialCandidateError(
+        "no exact candidate",
+        target_srgb=(40, 50, 60),
+        layer_count=7,
+        phase="exact_search",
+    )
+    with patch.object(
+        replace,
+        "load_multiple_materials",
+        return_value=[object(), object()],
+    ), patch.object(
+        replace,
+        "_solve_dynamic_material_targets",
+        side_effect=failure,
+    ):
+        response = client.post(
+            "/api/convert/replace-color",
+            json={
+                "session_id": session_id,
+                "selected_color": "#0a141e",
+                "replacement_color": "#28323c",
+            },
+        )
+
+    assert response.status_code == 409, response.text
+    persisted_ref = store.get(session_id)["preview_cache"]
+    assert is_preview_cache_artifact_ref(persisted_ref)
+    assert {
+        name: field["revision"]
+        for name, field in persisted_ref["fields"].items()
+    } == initial_revisions
+    hydrated = hydrate_preview_cache(
+        persisted_ref,
+        fields={"matched_rgb", "material_matrix", "quantized_image"},
+    )
+    np.testing.assert_array_equal(hydrated["matched_rgb"], matched)
+    np.testing.assert_array_equal(hydrated["material_matrix"], matrix)
+    np.testing.assert_array_equal(hydrated["quantized_image"], matched)
+    assert hydrated["material_dynamic_layer_info"] == dynamic_info
+    assert hydrated["material_solver_info"] == solver_info

@@ -18,7 +18,10 @@ from copy import deepcopy
 import pickle
 import numpy as np
 
-from core.pipeline.material_dynamic_layers import _solve_dynamic_material_targets
+from core.pipeline.material_dynamic_layers import (
+    _record_dynamic_material_error,
+    _solve_dynamic_material_targets,
+)
 from core.pipeline.pipeline_utils import _hex_to_rgb_tuple
 
 _log = get_logger(__name__)
@@ -351,7 +354,7 @@ def _apply_material_archive_color_replacements(
 
 def _dynamic_material_benefit_curve(
     color_entries: list[dict],
-    matched_rgb: np.ndarray,
+    target_rgb_map: np.ndarray,
     mask_solid: np.ndarray,
 ) -> list[dict]:
     """Reweight exact layer-cap results for the current raster.
@@ -364,11 +367,11 @@ def _dynamic_material_benefit_curve(
     for entry in color_entries:
         if not isinstance(entry, dict):
             continue
-        matched = entry.get("matched_srgb")
+        target = entry.get("target_srgb")
         options = entry.get("layer_cap_options")
         if (
-            not isinstance(matched, (list, tuple))
-            or len(matched) != 3
+            not isinstance(target, (list, tuple))
+            or len(target) != 3
             or not isinstance(options, list)
             or not options
         ):
@@ -384,10 +387,10 @@ def _dynamic_material_benefit_curve(
                 continue
         if not option_map:
             continue
-        matched_row = np.asarray(matched, dtype=np.uint8)
+        target_row = np.asarray(target, dtype=np.uint8)
         count = int(
             np.sum(
-                np.all(np.asarray(matched_rgb) == matched_row, axis=-1)
+                np.all(np.asarray(target_rgb_map) == target_row, axis=-1)
                 & np.asarray(mask_solid, dtype=bool)
             )
         )
@@ -424,6 +427,7 @@ def _apply_dynamic_material_archive_color_replacements(
     matched_rgb: np.ndarray,
     material_matrix: np.ndarray,
     mask_solid: np.ndarray,
+    target_rgb_map: np.ndarray,
     color_replacements: dict[str, str],
     materials: list,
     *,
@@ -435,7 +439,7 @@ def _apply_dynamic_material_archive_color_replacements(
     substrate: str,
     dynamic_layer_info: dict | None,
     material_solver_info: dict | None,
-) -> tuple[np.ndarray, np.ndarray, int, dict, dict]:
+) -> tuple[np.ndarray, np.ndarray, int, dict, dict, np.ndarray]:
     """Apply replacements through the exact dynamic material solver.
 
     Reuses entries for exact target RGB values, solves only unseen targets,
@@ -448,8 +452,28 @@ def _apply_dynamic_material_archive_color_replacements(
 
     current_info = deepcopy(dynamic_layer_info or {})
     current_solver_info = deepcopy(material_solver_info or {})
+    if not isinstance(target_rgb_map, np.ndarray):
+        raise DynamicMaterialCandidateError(
+            "dynamic target RGB map is unavailable or inconsistent",
+            layer_count=int(max_layer_count),
+            phase="target_map",
+        )
+    target_map = np.asarray(target_rgb_map, dtype=np.uint8)
+    if target_map.shape != np.asarray(matched_rgb).shape:
+        raise DynamicMaterialCandidateError(
+            "dynamic target RGB map is unavailable or inconsistent",
+            layer_count=int(max_layer_count),
+            phase="target_map",
+        )
     if not color_replacements:
-        return matched_rgb, material_matrix, 0, current_info, current_solver_info
+        return (
+            matched_rgb,
+            material_matrix,
+            0,
+            current_info,
+            current_solver_info,
+            target_map,
+        )
     if not materials:
         raise DynamicMaterialCandidateError(
             "selected material parameters are unavailable",
@@ -467,16 +491,21 @@ def _apply_dynamic_material_archive_color_replacements(
     jobs: list[tuple[tuple[int, int, int], np.ndarray]] = []
     target_counts: dict[tuple[int, int, int], int] = {}
     target_order: list[tuple[int, int, int]] = []
+    updated_target_map = target_map.copy()
     for orig_hex, replacement_hex in color_replacements.items():
         try:
             original = _hex_to_rgb_tuple(orig_hex)
             target = _hex_to_rgb_tuple(replacement_hex)
         except ValueError as exc:
             _log.warning(
-                "Skipping invalid dynamic replacement %s→%s: %s",
-                orig_hex,
-                replacement_hex,
-                exc,
+                "Invalid dynamic material replacement skipped",
+                extra={
+                    "event": "dynamic_material_replacement_invalid_hex",
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                    "original_hex": str(orig_hex),
+                    "replacement_hex": str(replacement_hex),
+                },
             )
             continue
         original_mask = (
@@ -490,13 +519,24 @@ def _apply_dynamic_material_archive_color_replacements(
             continue
         target_key = tuple(int(value) for value in target)
         jobs.append((target_key, original_mask))
+        updated_target_map[original_mask] = np.asarray(
+            target_key,
+            dtype=np.uint8,
+        )
         if target_key not in target_counts:
             target_order.append(target_key)
             target_counts[target_key] = 0
         target_counts[target_key] += int(np.sum(original_mask))
 
     if not jobs:
-        return matched_rgb, material_matrix, 0, current_info, current_solver_info
+        return (
+            matched_rgb,
+            material_matrix,
+            0,
+            current_info,
+            current_solver_info,
+            target_map,
+        )
 
     config_matches = (
         int(current_info.get("min_layer_count", min_layer_count))
@@ -602,14 +642,21 @@ def _apply_dynamic_material_archive_color_replacements(
             "colors": merged_colors,
             "benefit_curve": _dynamic_material_benefit_curve(
                 merged_colors,
-                new_rgb,
+                updated_target_map,
                 np.asarray(mask_solid, dtype=bool),
             ),
         }
     )
     merged_solver_info = current_solver_info
     merged_solver_info.update(new_solver_info)
-    return new_rgb, new_matrix, len(jobs), merged_info, merged_solver_info
+    return (
+        new_rgb,
+        new_matrix,
+        len(jobs),
+        merged_info,
+        merged_solver_info,
+        updated_target_map,
+    )
 
 
 def _normalize_color_replacements_input(color_replacements):
@@ -960,34 +1007,54 @@ def run(ctx: dict) -> dict:
         substrate_mat = str(ctx.get("material_substrate") or "white")
         grid_res = ctx.get("grid_resolution")
         if bool(ctx.get("material_dynamic_layer_count_enabled", False)):
+            from core.material_dynamic_solver import (
+                DynamicMaterialCandidateError,
+                DynamicMaterialSolverError,
+            )
+
             backing_index = ctx.get("material_backing_material_index")
             if backing_index is None:
                 backing_index = ctx.get("material_base_channel_idx", 0)
-            (
-                matched_rgb,
-                material_matrix,
-                applied,
-                dynamic_layer_info,
-                material_solver_info,
-            ) = _apply_dynamic_material_archive_color_replacements(
-                matched_rgb,
-                material_matrix,
-                mask_solid,
-                effective_color_replacements,
-                mats,
-                backing_material_index=int(backing_index),
-                min_layer_count=int(ctx.get("material_min_layer_count") or 5),
-                max_layer_count=int(ctx.get("material_max_layer_count") or 10),
-                delta_e00_tolerance=float(
-                    ctx.get("material_delta_e00_tolerance", 0.5)
-                ),
-                layer_height_mm=layer_height_mat,
-                substrate=substrate_mat,
-                dynamic_layer_info=ctx.get("material_dynamic_layer_info"),
-                material_solver_info=ctx.get("material_solver_info"),
-            )
+            try:
+                (
+                    matched_rgb,
+                    material_matrix,
+                    applied,
+                    dynamic_layer_info,
+                    material_solver_info,
+                    quantized_image,
+                ) = _apply_dynamic_material_archive_color_replacements(
+                    matched_rgb,
+                    material_matrix,
+                    mask_solid,
+                    ctx.get("quantized_image"),
+                    effective_color_replacements,
+                    mats,
+                    backing_material_index=int(backing_index),
+                    min_layer_count=int(
+                        ctx.get("material_min_layer_count") or 5
+                    ),
+                    max_layer_count=int(
+                        ctx.get("material_max_layer_count") or 10
+                    ),
+                    delta_e00_tolerance=float(
+                        ctx.get("material_delta_e00_tolerance", 0.5)
+                    ),
+                    layer_height_mm=layer_height_mat,
+                    substrate=substrate_mat,
+                    dynamic_layer_info=ctx.get("material_dynamic_layer_info"),
+                    material_solver_info=ctx.get("material_solver_info"),
+                )
+            except (
+                DynamicMaterialCandidateError,
+                DynamicMaterialSolverError,
+                TypeError,
+                ValueError,
+            ) as exc:
+                return _record_dynamic_material_error(ctx, exc)
             ctx["material_dynamic_layer_info"] = dynamic_layer_info
             ctx["material_solver_info"] = material_solver_info
+            ctx["quantized_image"] = quantized_image
             ctx["color_layers"] = int(material_matrix.shape[2])
         else:
             matched_rgb, material_matrix, applied = (

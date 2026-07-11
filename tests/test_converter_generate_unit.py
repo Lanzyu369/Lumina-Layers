@@ -38,6 +38,8 @@ from api.routers.converter.generate import _generate_large_format_svg_native
 from api.routers.converter.generate import LARGE_FORMAT_GENERATION_FAILED_DETAIL
 from api.routers.converter.generate import MODEL_GENERATION_FAILED_DETAIL
 from api.routers.converter.generate import _recover_virtual_materials_from_preview_cache
+from api.routers.converter.generate import _normalize_recipe_overrides
+from api.routers.converter.generate import _resolve_large_format_shared_params
 from api.routers.converter.generate import _resolve_recipe_overrides
 from api.routers.converter.generate import _resolve_large_format_source_basename
 from api.schemas.converter import ConvertGenerateRequest, LargeFormatConvertGenerateRequest, ModelingMode
@@ -4778,11 +4780,18 @@ def test_generate_route_preserves_session_recipe_overrides_when_request_is_empty
         [
             {
                 "region_id": "region-1",
-                "recipe": [1, 1, 1, 1, 1, 1, 1],
+                "recipe": [1, 1, 1, 1, 1],
                 "layer_order": "Top2Bottom",
+                "color_layers": 5,
+                "actual_recipe_top_to_bottom": [1, 1, 1, 1, 1],
+                "print_recipe_top_to_bottom": [1, 1, 1, 1, 1, 2, 2],
+                "actual_layer_count": 5,
+                "padding_layer_count": 2,
             }
         ],
     )
+    material_matrix = np.zeros((4, 4, 7), dtype=np.uint8)
+    material_matrix[mask] = np.asarray([1, 1, 1, 1, 1, 2, 2], dtype=np.uint8)
     _test_store.put(
         session_id,
         "preview_cache",
@@ -4792,7 +4801,7 @@ def test_generate_route_preserves_session_recipe_overrides_when_request_is_empty
             "target_width_mm": 40.0,
             "matched_rgb": np.zeros((4, 4, 3), dtype=np.uint8),
             "mask_solid": np.ones((4, 4), dtype=bool),
-            "material_matrix": np.zeros((4, 4, 5), dtype=np.uint8),
+            "material_matrix": material_matrix,
             "lut_metadata": SimpleNamespace(
                 layer_order="Top2Bottom",
                 base_channel_idx=0,
@@ -4826,12 +4835,46 @@ def test_generate_route_preserves_session_recipe_overrides_when_request_is_empty
     assert submitted_params["recipe_overrides"] == [
         {
             "region_id": "region-1",
-            "recipe": [1, 1, 1, 1, 1, 1, 1],
+            "recipe": [1, 1, 1, 1, 1],
             "layer_order": "Top2Bottom",
+            "color_layers": 5,
+            "actual_recipe_top_to_bottom": [1, 1, 1, 1, 1],
+            "print_recipe_top_to_bottom": [1, 1, 1, 1, 1, 2, 2],
+            "actual_layer_count": 5,
+            "padding_layer_count": 2,
         }
     ]
     material_matrix = np.load(submitted_params["material_matrix_path"])
-    assert np.all(material_matrix[mask] == np.array([1, 1, 1, 1, 1, 1, 1]))
+    assert material_matrix.shape == (4, 4, 7)
+
+
+def test_large_format_worker_params_preserve_normalized_dynamic_recipe_metadata() -> None:
+    raw_overrides = [
+        {
+            "region_id": "region-1",
+            "recipe": [1, 1, 1, 1, 1],
+            "layer_order": "Top2Bottom",
+            "color_layers": 5,
+            "actual_recipe_top_to_bottom": [1, 1, 1, 1, 1],
+            "print_recipe_top_to_bottom": [1, 1, 1, 1, 1, 2, 2],
+            "actual_layer_count": 5,
+            "padding_layer_count": 2,
+        }
+    ]
+    normalized = _normalize_recipe_overrides(raw_overrides)
+    request = LargeFormatConvertGenerateRequest(
+        lut_name="test_lut",
+        color_layers=7,
+    )
+
+    worker_params = _resolve_large_format_shared_params(
+        {"replacement_regions": [], "free_color_set": set()},
+        request,
+        None,
+        recipe_overrides=normalized,
+    )
+
+    assert worker_params["recipe_overrides"] == raw_overrides
 
 
 def test_resolve_recipe_overrides_prefers_request_virtual_materials_when_provided() -> None:

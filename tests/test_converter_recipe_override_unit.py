@@ -134,6 +134,7 @@ def test_apply_recipe_override_endpoint_updates_preview_cache(
     mask[1:3, 1:3] = True
     preview_cache = {
         "matched_rgb": matched_rgb.copy(),
+        "quantized_image": matched_rgb.copy(),
         "material_matrix": material_matrix.copy(),
         "mask_solid": np.ones((4, 4), dtype=bool),
         "color_layers": 5,
@@ -220,6 +221,7 @@ def test_apply_recipe_override_redacts_unexpected_file_errors(
     mask[1:3, 1:3] = True
     preview_cache = {
         "matched_rgb": matched_rgb.copy(),
+        "quantized_image": matched_rgb.copy(),
         "material_matrix": material_matrix.copy(),
         "mask_solid": np.ones((4, 4), dtype=bool),
         "color_layers": 5,
@@ -825,6 +827,7 @@ def test_apply_recipe_override_handoff_to_generate_uses_session_persisted_region
             "region_id": "region-1",
             "recipe": [1, 1, 1, 1, 1],
             "layer_order": "Top2Bottom",
+            "color_layers": 5,
         }
     ]
 
@@ -2026,6 +2029,7 @@ def _seed_material_archive_session(
     mask[1:3, 1:3] = True
     preview_cache = {
         "matched_rgb": matched_rgb.copy(),
+        "quantized_image": matched_rgb.copy(),
         "material_matrix": material_matrix.copy(),
         "mask_solid": np.ones((4, 4), dtype=bool),
         "color_layers": layer_count,
@@ -2372,6 +2376,8 @@ def test_dynamic_region_recipe_reads_saved_actual_depth_without_trimming_backing
     store.put(session_id, "material_dynamic_layer_count_enabled", True)
     store.put(session_id, "material_min_layer_count", 5)
     store.put(session_id, "material_max_layer_count", 7)
+    store.put(session_id, "selected_materials", ["mat-a", "mat-b", "mat-c"])
+    store.put(session_id, "material_backing_material_index", 1)
     store.put(session_id, "selected_region_masks", {"region-1": mask})
     store.put(
         session_id,

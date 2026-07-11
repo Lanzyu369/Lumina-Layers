@@ -620,10 +620,12 @@ def _run_material_archive_branch(ctx: dict) -> dict:
                         applied_replacements,
                         dynamic_layer_info,
                         replacement_solver_meta,
+                        quantized_image,
                     ) = _apply_dynamic_material_archive_color_replacements(
                         matched_rgb,
                         material_matrix,
                         mask_solid,
+                        quantized_image,
                         effective_color_replacements,
                         materials,
                         backing_material_index=int(backing_material_index),

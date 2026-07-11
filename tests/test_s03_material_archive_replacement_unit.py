@@ -18,6 +18,7 @@ import numpy as np
 import pytest
 
 from core.material_color_solver import MaterialParams
+from core.material_dynamic_solver import DynamicMaterialSolverError
 from core.pipeline.s03_color_replacement import (
     _apply_dynamic_material_archive_color_replacements,
     _apply_material_archive_color_replacements,
@@ -99,11 +100,19 @@ def test_dynamic_replacement_reuses_seen_target_and_solves_only_unseen() -> None
             {"dynamic_engine": "numba"},
         ),
     ) as exact_solve:
-        out_rgb, out_matrix, applied, merged_info, solver_info = (
+        (
+            out_rgb,
+            out_matrix,
+            applied,
+            merged_info,
+            solver_info,
+            updated_target_map,
+        ) = (
             _apply_dynamic_material_archive_color_replacements(
                 matched,
                 matrix,
                 solid,
+                matched.copy(),
                 {
                     "#640000": "#0a141e",
                     "#006400": "#28323c",
@@ -128,11 +137,86 @@ def test_dynamic_replacement_reuses_seen_target_and_solves_only_unseen() -> None
     assert out_matrix.shape == (1, 2, 7)
     np.testing.assert_array_equal(out_rgb[0, 0], [11, 22, 33])
     np.testing.assert_array_equal(out_rgb[0, 1], [44, 55, 66])
+    np.testing.assert_array_equal(
+        updated_target_map,
+        np.asarray([[[10, 20, 30], [40, 50, 60]]], dtype=np.uint8),
+    )
     assert [entry["target_srgb"] for entry in merged_info["colors"]] == [
         [10, 20, 30],
         [40, 50, 60],
     ]
     assert solver_info["dynamic_engine"] == "numba"
+
+
+def test_dynamic_replacement_benefit_uses_target_map_on_matched_collision() -> None:
+    source_a = [100, 0, 0]
+    source_b = [0, 100, 0]
+    target_a = [10, 20, 30]
+    target_b = [40, 50, 60]
+    matched = [9, 9, 9]
+    input_rgb = np.asarray([[source_a, source_b, source_b, source_b]], dtype=np.uint8)
+    target_map = input_rgb.copy()
+
+    def entry(target, delta, recipe):
+        return {
+            "target_srgb": target,
+            "matched_srgb": matched,
+            "actual_layer_count": 5,
+            "padding_layer_count": 2,
+            "actual_recipe_top_to_bottom": recipe[:5],
+            "print_recipe_top_to_bottom": recipe,
+            "layer_cap_options": [
+                {"max_effective_layer_count": cap, "delta_e00": delta}
+                for cap in (5, 6, 7)
+            ],
+        }
+
+    info = {
+        "enabled": True,
+        "min_layer_count": 5,
+        "max_layer_count": 7,
+        "delta_e00_tolerance": 0.5,
+        "colors": [
+            entry(target_a, 1.0, [0, 1, 0, 1, 0, 2, 2]),
+            entry(target_b, 3.0, [1, 0, 1, 0, 1, 2, 2]),
+        ],
+        "benefit_curve": [],
+    }
+
+    with patch(
+        "core.pipeline.s03_color_replacement._solve_dynamic_material_targets",
+        side_effect=AssertionError("both exact targets should be reused"),
+    ):
+        (
+            _out_rgb,
+            _out_matrix,
+            applied,
+            merged_info,
+            _solver_info,
+            updated_target_map,
+        ) = _apply_dynamic_material_archive_color_replacements(
+            input_rgb,
+            np.zeros((1, 4, 7), dtype=np.int32),
+            np.ones((1, 4), dtype=bool),
+            target_map,
+            {"#640000": "#0a141e", "#006400": "#28323c"},
+            _SMALL_PALETTE,
+            backing_material_index=2,
+            min_layer_count=5,
+            max_layer_count=7,
+            delta_e00_tolerance=0.5,
+            layer_height_mm=0.08,
+            substrate="white",
+            dynamic_layer_info=info,
+            material_solver_info={"path": "dynamic_exact"},
+        )
+
+    assert applied == 2
+    assert merged_info["benefit_curve"][0]["weighted_mean_delta_e00"] == 2.5
+    np.testing.assert_array_equal(
+        updated_target_map,
+        np.asarray([[target_a, target_b, target_b, target_b]], dtype=np.uint8),
+    )
 
 
 def _make_material_archive_ctx(
@@ -427,6 +511,7 @@ class TestS03RunMaterialArchiveBranch:
                 "material_backing_material_index": 2,
                 "color_layers": 7,
                 "material_matrix": np.zeros((3, 4, 7), dtype=np.int32),
+                "quantized_image": ctx["matched_rgb"].copy(),
                 "recipe_override_masks_path": os.fspath(masks_path),
                 "recipe_overrides": [
                     {
@@ -473,6 +558,7 @@ class TestS03RunMaterialArchiveBranch:
                 "material_backing_material_index": 2,
                 "color_layers": 7,
                 "material_matrix": np.zeros((3, 4, 7), dtype=np.int32),
+                "quantized_image": ctx["matched_rgb"].copy(),
                 "material_dynamic_layer_info": {"colors": []},
                 "material_solver_info": {"path": "dynamic_exact"},
             }
@@ -491,6 +577,7 @@ class TestS03RunMaterialArchiveBranch:
                 1,
                 exact_info,
                 {"path": "dynamic_exact", "dynamic_engine": "numba"},
+                ctx["quantized_image"].copy(),
             ),
         ) as dynamic_apply, patch(
             "core.pipeline.s03_color_replacement._apply_material_archive_color_replacements",
@@ -503,6 +590,45 @@ class TestS03RunMaterialArchiveBranch:
         np.testing.assert_array_equal(result["material_matrix"], exact_matrix)
         assert result["material_dynamic_layer_info"] == exact_info
         assert result["material_solver_info"]["dynamic_engine"] == "numba"
+
+    def test_dynamic_generation_failure_records_typed_pipeline_envelope(self):
+        from core import converter
+
+        ctx = _make_material_archive_ctx({"#c86432": "#14c814"})
+        ctx.update(
+            {
+                "material_dynamic_layer_count_enabled": True,
+                "material_min_layer_count": 5,
+                "material_max_layer_count": 7,
+                "material_delta_e00_tolerance": 0.5,
+                "material_backing_material_index": 2,
+                "color_layers": 7,
+                "material_matrix": np.zeros((3, 4, 7), dtype=np.int32),
+                "quantized_image": ctx["matched_rgb"].copy(),
+                "material_dynamic_layer_info": {
+                    "enabled": True,
+                    "min_layer_count": 5,
+                    "max_layer_count": 7,
+                    "delta_e00_tolerance": 0.5,
+                    "colors": [],
+                    "benefit_curve": [],
+                },
+            }
+        )
+        failure = DynamicMaterialSolverError("both exact engines failed")
+
+        with patch(
+            "core.pipeline.s03_color_replacement._solve_dynamic_material_targets",
+            side_effect=failure,
+        ):
+            result = run(ctx)
+
+        envelope = result["material_dynamic_layer_error"]
+        assert envelope["exception"] is failure
+        assert envelope["error_type"] == "DynamicMaterialSolverError"
+        with pytest.raises(DynamicMaterialSolverError) as exc_info:
+            converter._raise_dynamic_material_pipeline_error(result)
+        assert exc_info.value is failure
 
     def test_applies_api_format_replacement_regions_without_processor(self):
         """Preview replay sends API-format replacement_regions, not a dict."""

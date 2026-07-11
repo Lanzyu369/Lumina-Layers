@@ -177,6 +177,8 @@ def _with_original_preview_cache_refs(ref: dict) -> dict:
         fields["original_matched_rgb"] = dict(fields["matched_rgb"])
     if "material_matrix" in fields:
         fields["original_material_matrix"] = dict(fields["material_matrix"])
+    if "quantized_image" in fields:
+        fields["original_quantized_image"] = dict(fields["quantized_image"])
     return updated
 _DEFAULT_GENERATE_SEGMENTED_GLB = generate_segmented_glb
 
@@ -1444,6 +1446,10 @@ async def convert_preview(
             cache_with_originals["original_matched_rgb"] = cache_data["matched_rgb"]
         if "material_matrix" in cache_data:
             cache_with_originals["original_material_matrix"] = cache_data["material_matrix"]
+        if "quantized_image" in cache_data:
+            cache_with_originals["original_quantized_image"] = cache_data[
+                "quantized_image"
+            ]
         cache_with_originals = _compact_preview_cache_material_matrices(
             cache_with_originals,
         )

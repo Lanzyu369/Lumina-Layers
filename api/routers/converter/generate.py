@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
+from copy import deepcopy
 import json
 import math
 import os
@@ -669,6 +670,19 @@ def _normalize_recipe_overrides(recipe_overrides: object | None) -> list[dict[st
                 "region_ids": getattr(item, "region_ids", None),
                 "recipe": getattr(item, "recipe", None),
                 "layer_order": getattr(item, "layer_order", None),
+                "color_layers": getattr(item, "color_layers", None),
+                "actual_recipe_top_to_bottom": getattr(
+                    item,
+                    "actual_recipe_top_to_bottom",
+                    None,
+                ),
+                "print_recipe_top_to_bottom": getattr(
+                    item,
+                    "print_recipe_top_to_bottom",
+                    None,
+                ),
+                "actual_layer_count": getattr(item, "actual_layer_count", None),
+                "padding_layer_count": getattr(item, "padding_layer_count", None),
                 "virtual_materials": getattr(item, "virtual_materials", None),
             }
 
@@ -716,6 +730,23 @@ def _normalize_recipe_overrides(recipe_overrides: object | None) -> list[dict[st
                 "recipe": list(recipe_values),
                 "layer_order": str(layer_order or "Top2Bottom"),
             }
+            for count_field in (
+                "color_layers",
+                "actual_layer_count",
+                "padding_layer_count",
+            ):
+                raw_count = item_data.get(count_field)
+                if raw_count is not None:
+                    payload[count_field] = int(raw_count)
+            for recipe_field in (
+                "actual_recipe_top_to_bottom",
+                "print_recipe_top_to_bottom",
+            ):
+                raw_recipe = item_data.get(recipe_field)
+                if raw_recipe is not None:
+                    payload[recipe_field] = [
+                        int(value) for value in raw_recipe
+                    ]
             if virtuals_payload:
                 payload["virtual_materials"] = [
                     dict(entry) for entry in virtuals_payload
@@ -723,6 +754,39 @@ def _normalize_recipe_overrides(recipe_overrides: object | None) -> list[dict[st
             normalized.append(payload)
 
     return normalized or None
+
+
+def _serialize_recipe_override_for_worker(
+    item: dict[str, object],
+) -> dict[str, object]:
+    """Serialize one normalized override without dropping dynamic metadata.
+
+    序列化单个归一化覆盖项，并保留动态实际/打印配方元数据。
+    """
+
+    payload: dict[str, object] = {
+        "region_id": item["region_id"],
+        "recipe": list(item["recipe"]),
+        "layer_order": item["layer_order"],
+    }
+    for count_field in (
+        "color_layers",
+        "actual_layer_count",
+        "padding_layer_count",
+    ):
+        if item.get(count_field) is not None:
+            payload[count_field] = int(item[count_field])
+    for recipe_field in (
+        "actual_recipe_top_to_bottom",
+        "print_recipe_top_to_bottom",
+    ):
+        if item.get(recipe_field) is not None:
+            payload[recipe_field] = list(item[recipe_field])
+    if item.get("virtual_materials"):
+        payload["virtual_materials"] = [
+            dict(vm) for vm in item["virtual_materials"]
+        ]
+    return payload
 
 
 def _rgba_to_hex(value: object) -> str | None:
@@ -915,9 +979,12 @@ def _resolve_recipe_overrides(
             request_overrides,
         )
 
+    session_items_by_region: dict[str, dict[str, object]] = {}
     session_virtuals_by_region: dict[str, list[dict[str, str]]] = {}
     for session_item in session_overrides:
         region_id = session_item.get("region_id")
+        if isinstance(region_id, str) and region_id:
+            session_items_by_region[region_id] = session_item
         virtuals = session_item.get("virtual_materials")
         if isinstance(region_id, str) and region_id and virtuals:
             session_virtuals_by_region[region_id] = [
@@ -925,14 +992,30 @@ def _resolve_recipe_overrides(
             ]
 
     for item in request_overrides:
-        if item.get("virtual_materials"):
-            continue
         region_id = item.get("region_id")
         if not isinstance(region_id, str):
             continue
-        backfill = session_virtuals_by_region.get(region_id)
-        if backfill:
-            item["virtual_materials"] = [dict(entry) for entry in backfill]
+        session_item = session_items_by_region.get(region_id)
+        if (
+            session_item is not None
+            and item.get("recipe") == session_item.get("recipe")
+            and item.get("layer_order") == session_item.get("layer_order")
+        ):
+            for field_name in (
+                "color_layers",
+                "actual_recipe_top_to_bottom",
+                "print_recipe_top_to_bottom",
+                "actual_layer_count",
+                "padding_layer_count",
+            ):
+                if item.get(field_name) is None and session_item.get(
+                    field_name
+                ) is not None:
+                    item[field_name] = deepcopy(session_item[field_name])
+        if not item.get("virtual_materials"):
+            backfill = session_virtuals_by_region.get(region_id)
+            if backfill:
+                item["virtual_materials"] = [dict(entry) for entry in backfill]
 
     return _backfill_recipe_override_virtual_materials(
         session_data,
@@ -1438,25 +1521,7 @@ async def convert_generate(
         "replacement_regions": replacement_regions,
         "recipe_overrides": (
             [
-                {
-                    "region_id": item["region_id"],
-                    "recipe": list(item["recipe"]),
-                    "layer_order": item["layer_order"],
-                    # Forward the per-region virtual materials to the worker
-                    # so the pipeline can rebuild the extended palette inside
-                    # the CPU-offloaded process.
-                    # 把 per-region 的虚拟耗材一起传给 worker，方便在 CPU 进程
-                    # 里重建扩展调色板。
-                    **(
-                        {
-                            "virtual_materials": [
-                                dict(vm) for vm in item["virtual_materials"]
-                            ]
-                        }
-                        if item.get("virtual_materials")
-                        else {}
-                    ),
-                }
+                _serialize_recipe_override_for_worker(item)
                 for item in recipe_overrides
             ]
             if recipe_overrides is not None
@@ -1765,25 +1830,7 @@ def _resolve_large_format_shared_params(
         "replacement_regions": replacement_regions,
         "recipe_overrides": (
             [
-                {
-                    "region_id": item["region_id"],
-                    "recipe": list(item["recipe"]),
-                    "layer_order": item["layer_order"],
-                    # Forward the per-region virtual materials to the worker
-                    # so the pipeline can rebuild the extended palette inside
-                    # the CPU-offloaded process.
-                    # 把 per-region 的虚拟耗材一起传给 worker，方便在 CPU 进程
-                    # 里重建扩展调色板。
-                    **(
-                        {
-                            "virtual_materials": [
-                                dict(vm) for vm in item["virtual_materials"]
-                            ]
-                        }
-                        if item.get("virtual_materials")
-                        else {}
-                    ),
-                }
+                _serialize_recipe_override_for_worker(item)
                 for item in recipe_overrides
             ]
             if recipe_overrides is not None
