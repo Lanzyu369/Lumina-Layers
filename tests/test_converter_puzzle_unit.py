@@ -376,6 +376,53 @@ def test_generate_puzzle_worker_missing_output_uses_public_error_detail(tmp_path
     assert raw_status in logged_error
 
 
+def test_generate_puzzle_inherits_dynamic_settings_and_maps_typed_error() -> None:
+    from core.material_dynamic_solver import DynamicMaterialCandidateError
+
+    session_id, _preview_cache = _make_session()
+    _test_store.put(session_id, "material_source", "material_archive")
+    _test_store.put(session_id, "selected_materials", ["mat-a", "mat-b"])
+    _test_store.put(session_id, "material_layer_count", 10)
+    _test_store.put(session_id, "material_dynamic_layer_count_enabled", True)
+    _test_store.put(session_id, "material_min_layer_count", 6)
+    _test_store.put(session_id, "material_max_layer_count", 8)
+    _test_store.put(session_id, "material_delta_e00_tolerance", 0.4)
+    captured: dict[str, object] = {}
+
+    async def _raise_typed(
+        _func: object,
+        _piece_image_path: str,
+        _lut_path: str,
+        worker_params: dict[str, object],
+    ) -> dict[str, object]:
+        captured.update(worker_params)
+        raise DynamicMaterialCandidateError(
+            "no candidate",
+            target_srgb=(12, 34, 56),
+            layer_count=6,
+            phase="exact_search",
+        )
+
+    _mock_pool.submit = AsyncMock(side_effect=_raise_typed)
+    body = _build_generate_body(session_id)
+    body["params"]["rows"] = 1
+    body["params"]["cols"] = 1
+    body["params"]["target_piece_count"] = 1
+    body["params"]["params"]["lut_name"] = "__material_archive__"
+
+    try:
+        response = client.post("/api/convert/generate-puzzle", json=body)
+    finally:
+        _test_store.close(session_id)
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "dynamic_material_no_candidate"
+    assert captured["material_dynamic_layer_count_enabled"] is True
+    assert captured["material_min_layer_count"] == 6
+    assert captured["material_max_layer_count"] == 8
+    assert captured["material_delta_e00_tolerance"] == 0.4
+
+
 def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> None:
     """Puzzle generation should align per-piece helper assets to the worker raster grid."""
 

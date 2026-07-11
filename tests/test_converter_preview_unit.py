@@ -537,6 +537,39 @@ class TestPreviewMaterialSourceValidation:
         ensure_png.assert_not_called()
         _mock_pool.submit.assert_not_called()
 
+    def test_dynamic_material_replacements_reject_before_upload(self) -> None:
+        """Task 3A must reject unsupported replacement solving before I/O."""
+        buf = _make_test_image_buf()
+        _mock_pool.submit = AsyncMock(return_value=_create_worker_result_files())
+
+        with patch(
+            "api.routers.converter.preview.ensure_png_tempfile",
+            new=AsyncMock(return_value="/tmp/uploaded.png"),
+        ) as ensure_png:
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": ("test.png", buf, "image/png")},
+                data={
+                    "material_source": "material_archive",
+                    "selected_materials": json.dumps(["mat-a", "mat-b"]),
+                    "material_dynamic_layer_count_enabled": "true",
+                    "replacement_regions": json.dumps(
+                        [
+                            {
+                                "quantized_hex": "#111111",
+                                "matched_hex": "#222222",
+                                "replacement_hex": "#333333",
+                            }
+                        ]
+                    ),
+                },
+            )
+
+        assert response.status_code == 422
+        assert "replacement" in str(response.json()["detail"]).lower()
+        ensure_png.assert_not_called()
+        _mock_pool.submit.assert_not_called()
+
 
 # =========================================================================
 # 2. Session contains preview_cache - Requirement 5.2
@@ -719,6 +752,58 @@ class TestSessionContainsPreviewCache:
             loaded_cache["original_material_matrix"],
             material_matrix.astype(np.int8),
         )
+
+    def test_preview_copies_dynamic_recipes_and_benefit_curve(self) -> None:
+        recipes = [
+            {
+                "target_srgb": [240, 220, 200],
+                "actual_layer_count": 6,
+                "delta_e00": 0.3,
+            }
+        ]
+        benefit_curve = [
+            {
+                "max_effective_layer_count": 6,
+                "weighted_delta_e00": 0.3,
+                "marginal_improvement": 0.2,
+            }
+        ]
+        worker_result = _create_worker_result_files(
+            {
+                **_mock_cache,
+                "material_dynamic_layer_info": {
+                    "colors": recipes,
+                    "benefit_curve": benefit_curve,
+                },
+            }
+        )
+        _mock_pool.submit = AsyncMock(return_value=worker_result)
+
+        with (
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+            patch(
+                "api.routers.converter.preview.generate_segmented_glb",
+                return_value=None,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={
+                    "image": ("test.png", _make_test_image_buf(), "image/png")
+                },
+                data={
+                    "material_source": "material_archive",
+                    "selected_materials": json.dumps(["mat-a", "mat-b"]),
+                    "material_dynamic_layer_count_enabled": "true",
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["material_dynamic_recipes"] == recipes
+        assert response.json()["material_layer_benefit_curve"] == benefit_curve
 
     def test_preview_adopts_worker_cache_artifact_ref(self) -> None:
         """Worker-side cache artifacts should become the session preview cache."""

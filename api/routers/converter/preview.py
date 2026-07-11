@@ -961,6 +961,14 @@ async def convert_preview(
     parsed_replacement_regions = _parse_preview_replacement_regions(
         replacement_regions,
     )
+    if material_dynamic_layer_count_enabled and parsed_replacement_regions:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Dynamic material layer count does not yet support color "
+                "replacements. Re-run preview without replacements."
+            ),
+        )
 
     _selected_mats: list[str] | None = None
     _material_backing_index = 0

@@ -373,6 +373,14 @@ def _resolve_material_archive_optical_layer_count(
     requested_color_layers: object | None = None,
     recipe_overrides: list[dict[str, object]] | None = None,
 ) -> int | None:
+    if session_data and bool(
+        session_data.get("material_dynamic_layer_count_enabled", False)
+    ):
+        dynamic_maximum = _positive_int(
+            session_data.get("material_max_layer_count", 10)
+        )
+        return dynamic_maximum if dynamic_maximum is not None else 10
+
     candidates: list[int] = []
 
     cache_ref_depth = _cache_material_matrix_depth(cache_ref)

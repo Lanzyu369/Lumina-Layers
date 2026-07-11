@@ -974,6 +974,58 @@ class TestBatchCleanup:
         for p in intermediate_3mf_paths + intermediate_glb_paths:
             assert not os.path.exists(p), f"Intermediate file not cleaned: {p}"
 
+    def test_batch_typed_dynamic_failure_cleans_prior_successes(self) -> None:
+        from core.material_dynamic_solver import DynamicMaterialCandidateError
+
+        first_result = _make_worker_result("ok.png", 30.0, 20.0)
+        uploaded_paths = iter([_make_fake_3mf(".png"), _make_fake_3mf(".png")])
+        call_count = 0
+
+        async def _mock_submit(_fn, *_args, **_kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return first_result
+            raise DynamicMaterialCandidateError(
+                "no candidate",
+                target_srgb=(12, 34, 56),
+                layer_count=6,
+                phase="exact_search",
+            )
+
+        _mock_pool.submit = AsyncMock(side_effect=_mock_submit)
+        artifact_paths = [
+            first_result["threemf_path"],
+            first_result["preview_glb_path"],
+            first_result["metadata_sidecar_path"],
+        ]
+
+        try:
+            with patch(
+                "api.routers.converter.generate.ensure_png_tempfile",
+                new=AsyncMock(side_effect=lambda _upload: next(uploaded_paths)),
+            ):
+                response = client.post(
+                    "/api/convert/batch",
+                    files=[
+                        ("images", _make_test_image_buf("ok.png")),
+                        ("images", _make_test_image_buf("fail.png")),
+                    ],
+                    data={
+                        "material_source": "material_archive",
+                        "selected_materials": json.dumps(["mat-a", "mat-b"]),
+                        "material_dynamic_layer_count_enabled": "true",
+                    },
+                )
+            remaining = [path for path in artifact_paths if os.path.exists(path)]
+        finally:
+            for path in artifact_paths:
+                if path and os.path.exists(path):
+                    os.remove(path)
+
+        assert response.status_code == 409
+        assert remaining == []
+
 
 # =========================================================================
 # 7. Batch Merge Flow — 5 example tests (R10 §4, P11, P12)

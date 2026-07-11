@@ -227,6 +227,24 @@ def test_generate_request_rejects_dynamic_native_svg_derived_flow() -> None:
     assert exc_info.value.status_code == 422
 
 
+def test_dynamic_relief_depth_ignores_legacy_fixed_layer_count() -> None:
+    from api.routers.converter.common import (
+        _resolve_material_archive_optical_layer_count,
+    )
+
+    resolved = _resolve_material_archive_optical_layer_count(
+        session_data={
+            "material_dynamic_layer_count_enabled": True,
+            "material_min_layer_count": 5,
+            "material_max_layer_count": 6,
+            "material_layer_count": 10,
+        },
+        material_layer_count=10,
+    )
+
+    assert resolved == 6
+
+
 @pytest.mark.parametrize(
     ("phase", "expected_status", "expected_code"),
     [

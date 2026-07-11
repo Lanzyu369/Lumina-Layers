@@ -1182,6 +1182,23 @@ async def convert_generate(
     else:
         lut_path = "__material_archive__"
 
+    # Resolve the preview-session contract before any generated SVG or temp
+    # artifact is created. Color-card mode is implemented by native SVG vector
+    # generation and is therefore unsupported for dynamic material matching.
+    core_modeling_mode = CoreModelingMode(request.modeling_mode.value)
+    dynamic_material_settings = _resolve_session_dynamic_material_settings(
+        session_data=session_data,
+        request=request,
+        material_source=str(session_material_source or "lut"),
+        native_svg_vector=(
+            core_modeling_mode == CoreModelingMode.COLOR_CARD
+            or (
+                core_modeling_mode == CoreModelingMode.VECTOR
+                and str(image_path).lower().endswith(".svg")
+            )
+        ),
+    )
+
     # Merge replacement_regions: prefer session state, fall back to request body
     replacement_regions = session_data.get("replacement_regions") or None
     if request.replacement_regions is not None:
@@ -1198,9 +1215,6 @@ async def convert_generate(
     free_color_set = session_data.get("free_color_set") or None
     if request.free_color_set is not None:
         free_color_set = request.free_color_set
-
-    # Convert API ModelingMode enum to core ModelingMode enum
-    core_modeling_mode = CoreModelingMode(request.modeling_mode.value)
 
     # Color-card mode: generate SVG from cached palette, swap image_path,
     # and force VECTOR mode so the existing vector branch produces the 3MF.
@@ -1224,16 +1238,6 @@ async def convert_generate(
         image_path = svg_path
         core_modeling_mode = CoreModelingMode.VECTOR
         generated_color_card_svg = True
-
-    dynamic_material_settings = _resolve_session_dynamic_material_settings(
-        session_data=session_data,
-        request=request,
-        material_source=str(session_material_source or "lut"),
-        native_svg_vector=(
-            core_modeling_mode == CoreModelingMode.VECTOR
-            and str(image_path).lower().endswith(".svg")
-        ),
-    )
 
     vector_parse_clip_cache_path: str | None = None
     if core_modeling_mode == CoreModelingMode.VECTOR and not generated_color_card_svg:
@@ -1714,18 +1718,16 @@ def _resolve_large_format_shared_params(
     request,
     relief_global_max_height: float | None,
     *,
+    dynamic_material_settings: tuple[bool, int, int, float] = (
+        False,
+        5,
+        10,
+        0.5,
+    ),
     recipe_overrides: list[dict[str, object]] | None = None,
     recipe_override_masks_path: str | None = None,
     material_matrix_path: str | None = None,
 ) -> dict:
-    dynamic_material_settings = _resolve_session_dynamic_material_settings(
-        session_data=session_data,
-        request=request,
-        material_source=str(session_data.get("material_source") or "lut"),
-        # Material-archive SVG requests are rasterized before this helper's
-        # worker params are consumed, so this is not native vector matching.
-        native_svg_vector=False,
-    )
     replacement_regions = session_data.get("replacement_regions") or None
     if request.replacement_regions is not None:
         replacement_regions = [
@@ -1860,12 +1862,19 @@ async def _generate_large_format_svg_native(
     store: SessionStore,
     registry: FileRegistry,
     pool: WorkerPoolManager,
+    dynamic_material_settings: tuple[bool, int, int, float] = (
+        False,
+        5,
+        10,
+        0.5,
+    ),
     warnings: list[str] | None = None,
 ) -> dict:
     shared_params = _resolve_large_format_shared_params(
         session_data,
         request,
         _resolve_relief_global_max_height(session_data, request),
+        dynamic_material_settings=dynamic_material_settings,
         recipe_overrides=recipe_overrides,
         recipe_override_masks_path=recipe_override_masks_path,
         material_matrix_path=material_matrix_path,
@@ -1951,6 +1960,12 @@ async def _generate_large_format_raster(
     store: SessionStore,
     registry: FileRegistry,
     pool: WorkerPoolManager,
+    dynamic_material_settings: tuple[bool, int, int, float] = (
+        False,
+        5,
+        10,
+        0.5,
+    ),
     warnings: list[str] | None = None,
 ) -> dict:
     with Image.open(image_path) as img:
@@ -2017,6 +2032,7 @@ async def _generate_large_format_raster(
         session_data,
         request,
         _resolve_relief_global_max_height(session_data, request),
+        dynamic_material_settings=dynamic_material_settings,
         recipe_overrides=recipe_overrides,
         recipe_override_masks_path=recipe_override_masks_path,
         material_matrix_path=material_matrix_path,
@@ -2220,6 +2236,14 @@ async def convert_generate_large_format(
         lut_path = "__material_archive__"
     elif not lut_path or not os.path.exists(lut_path):
         raise HTTPException(status_code=409, detail=LUT_DATA_UNAVAILABLE_DETAIL)
+    dynamic_material_settings = _resolve_session_dynamic_material_settings(
+        session_data=session_data,
+        request=request,
+        material_source=str(session_material_source or "lut"),
+        # Material-archive SVG requests are rasterized before matching, so v1
+        # never enters native SVG dynamic matching from this route.
+        native_svg_vector=False,
+    )
     _require_heightmap_for_relief(session_data, request)
     recipe_overrides = _resolve_recipe_overrides(session_data, request)
     _validate_material_archive_relief_minimum_height(
@@ -2285,6 +2309,7 @@ async def convert_generate_large_format(
                 store=store,
                 registry=registry,
                 pool=pool,
+                dynamic_material_settings=dynamic_material_settings,
                 warnings=warnings,
             )
         else:
@@ -2316,6 +2341,7 @@ async def convert_generate_large_format(
                     store=store,
                     registry=registry,
                     pool=pool,
+                    dynamic_material_settings=dynamic_material_settings,
                     warnings=fallback_warnings,
                 )
             finally:
@@ -2338,6 +2364,7 @@ async def convert_generate_large_format(
             store=store,
             registry=registry,
             pool=pool,
+            dynamic_material_settings=dynamic_material_settings,
             warnings=warnings,
         )
 
@@ -2860,6 +2887,15 @@ async def convert_batch(
                 )
             )
         except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as e:
+            for prior_result in successful_entries:
+                _remove_temp_paths(
+                    [
+                        prior_result.get("threemf_path"),
+                        prior_result.get("preview_glb_path"),
+                        prior_result.get("metadata_sidecar_path"),
+                    ]
+                )
+            _remove_temp_path(temp_native_bundle_path)
             _handle_core_error(e, "batch material generation")
         except ROUTER_HANDLED_ERRORS as e:
             _log_batch_item_failure(

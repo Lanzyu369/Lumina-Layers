@@ -541,6 +541,95 @@ class TestGenerateParameterCompleteness:
         assert submitted_params["modeling_mode"] == CoreModelingMode.VECTOR
         assert submitted_params["vector_parse_clip_cache_path"] is None
 
+    def test_dynamic_color_card_rejects_before_svg_or_session_mutation(
+        self,
+        tmp_path,
+    ) -> None:
+        _test_store.clear_all()
+        image_path = tmp_path / "input.png"
+        Image.fromarray(np.zeros((4, 4, 3), dtype=np.uint8)).save(image_path)
+        sid = _test_store.create()
+        _test_store.put(sid, "image_path", str(image_path))
+        _test_store.put(sid, "lut_path", "__material_archive__")
+        _test_store.put(sid, "material_source", "material_archive")
+        _test_store.put(sid, "selected_materials", ["mat-a", "mat-b"])
+        _test_store.put(sid, "material_dynamic_layer_count_enabled", True)
+        _test_store.put(sid, "material_min_layer_count", 5)
+        _test_store.put(sid, "material_max_layer_count", 8)
+        _test_store.put(sid, "material_delta_e00_tolerance", 0.5)
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {
+                "target_w": 4,
+                "target_h": 4,
+                "target_width_mm": 40.0,
+                "color_palette": [{"hex": "#ff0000"}],
+                "matched_rgb": np.zeros((4, 4, 3), dtype=np.uint8),
+                "mask_solid": np.ones((4, 4), dtype=bool),
+                "material_matrix": np.zeros((4, 4, 8), dtype=np.uint8),
+            },
+        )
+        _mock_pool.submit = AsyncMock()
+
+        with (
+            patch("core.color_card.generate_color_card_svg") as generate_svg,
+            patch.object(_test_store, "register_temp_file") as register_temp,
+        ):
+            generate_svg.return_value = str(tmp_path / "card.svg")
+            response = client.post(
+                "/api/convert/generate",
+                json={
+                    "session_id": sid,
+                    "params": {
+                        "lut_name": "__material_archive__",
+                        "modeling_mode": "color-card",
+                    },
+                },
+            )
+
+        assert response.status_code == 422
+        generate_svg.assert_not_called()
+        register_temp.assert_not_called()
+        _mock_pool.submit.assert_not_called()
+
+    def test_color_card_endpoint_rejects_dynamic_session_before_svg(
+        self,
+    ) -> None:
+        _test_store.clear_all()
+        sid = _test_store.create()
+        _test_store.put(sid, "lut_path", "__material_archive__")
+        _test_store.put(sid, "material_source", "material_archive")
+        _test_store.put(sid, "material_dynamic_layer_count_enabled", True)
+        _test_store.put(sid, "material_min_layer_count", 5)
+        _test_store.put(sid, "material_max_layer_count", 8)
+        _test_store.put(sid, "material_delta_e00_tolerance", 0.5)
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {
+                "target_w": 4,
+                "target_h": 4,
+                "target_width_mm": 40.0,
+                "color_palette": [{"hex": "#ff0000"}],
+            },
+        )
+        _mock_pool.submit = AsyncMock()
+
+        with (
+            patch("core.color_card.generate_color_card_svg") as generate_svg,
+            patch.object(_test_store, "register_temp_file") as register_temp,
+        ):
+            response = client.post(
+                "/api/convert/color-card",
+                json={"session_id": sid},
+            )
+
+        assert response.status_code == 422
+        generate_svg.assert_not_called()
+        register_temp.assert_not_called()
+        _mock_pool.submit.assert_not_called()
+
     def test_color_card_endpoint_reads_artifact_metadata_without_hydrating(
         self,
         tmp_path,
@@ -1872,6 +1961,212 @@ class TestLargeFormatDimensionsAndRouting:
         )
 
         assert resolved == "bad_name"
+
+    def test_large_format_inherits_dynamic_settings_before_helper(self) -> None:
+        sid, _image_path, _lut_path = _create_raster_large_format_session(
+            _test_store
+        )
+        _test_store.put(sid, "material_source", "material_archive")
+        _test_store.put(sid, "selected_materials", ["mat-a", "mat-b"])
+        _test_store.put(sid, "material_layer_count", 10)
+        _test_store.put(sid, "material_dynamic_layer_count_enabled", True)
+        _test_store.put(sid, "material_min_layer_count", 6)
+        _test_store.put(sid, "material_max_layer_count", 8)
+        _test_store.put(sid, "material_delta_e00_tolerance", 0.4)
+        _test_store.put(sid, "recipe_overrides", [])
+
+        payload = {
+            "session_id": sid,
+            "params": {
+                "target_height_mm": 60.0,
+                "tile_width_mm": 40.0,
+                "tile_height_mm": 40.0,
+                "params": {
+                    "lut_name": "__material_archive__",
+                    "modeling_mode": "high-fidelity",
+                    "target_width_mm": 90.0,
+                },
+            },
+        }
+        raster_response = {
+            "status": "ok",
+            "message": "raster",
+            "download_url": "/api/files/raster",
+            "tile_count": 4,
+            "grid_cols": 2,
+            "grid_rows": 2,
+            "warnings": [],
+        }
+
+        with patch(
+            "api.routers.converter.generate._generate_large_format_raster",
+            return_value=raster_response,
+        ) as raster_helper:
+            response = client.post(
+                "/api/convert/generate-large-format",
+                json=payload,
+            )
+
+        assert response.status_code == 200, response.text
+        assert raster_helper.call_args.kwargs["dynamic_material_settings"] == (
+            True,
+            6,
+            8,
+            0.4,
+        )
+
+    def test_large_format_dynamic_mismatch_rejects_before_temp_preparation(
+        self,
+    ) -> None:
+        from api.routers.converter.common import (
+            _resolve_session_dynamic_material_settings,
+        )
+
+        sid, _image_path, _lut_path = _create_raster_large_format_session(
+            _test_store
+        )
+        _test_store.put(sid, "material_source", "material_archive")
+        _test_store.put(sid, "selected_materials", ["mat-a", "mat-b"])
+        _test_store.put(sid, "material_dynamic_layer_count_enabled", True)
+        _test_store.put(sid, "material_min_layer_count", 5)
+        _test_store.put(sid, "material_max_layer_count", 8)
+        _test_store.put(sid, "material_delta_e00_tolerance", 0.5)
+
+        payload = {
+            "session_id": sid,
+            "params": {
+                "target_height_mm": 60.0,
+                "tile_width_mm": 40.0,
+                "tile_height_mm": 40.0,
+                "params": {
+                    "lut_name": "__material_archive__",
+                    "modeling_mode": "high-fidelity",
+                    "target_width_mm": 90.0,
+                    "material_max_layer_count": 9,
+                },
+            },
+        }
+
+        async def _late_validate(**kwargs):
+            _resolve_session_dynamic_material_settings(
+                session_data=kwargs["session_data"],
+                request=kwargs["request"],
+                material_source="material_archive",
+            )
+            raise AssertionError("mismatch validation did not run")
+
+        with (
+            patch(
+                "api.routers.converter.generate._prepare_recipe_override_worker_inputs",
+                return_value=(None, None),
+            ) as prepare_inputs,
+            patch(
+                "api.routers.converter.generate._generate_large_format_raster",
+                side_effect=_late_validate,
+            ) as raster_helper,
+        ):
+            response = client.post(
+                "/api/convert/generate-large-format",
+                json=payload,
+            )
+
+        assert response.status_code == 409
+        assert response.json()["detail"]["code"] == (
+            "dynamic_material_preview_mismatch"
+        )
+        prepare_inputs.assert_not_called()
+        raster_helper.assert_not_called()
+
+    def test_large_format_dynamic_mismatch_rejects_before_svg_rasterization(
+        self,
+    ) -> None:
+        sid, _svg_path, _lut_path = _create_svg_session(
+            _test_store,
+            native_tiling_supported=True,
+        )
+        _test_store.put(sid, "material_source", "material_archive")
+        _test_store.put(sid, "selected_materials", ["mat-a", "mat-b"])
+        _test_store.put(sid, "material_dynamic_layer_count_enabled", True)
+        _test_store.put(sid, "material_min_layer_count", 5)
+        _test_store.put(sid, "material_max_layer_count", 8)
+        _test_store.put(sid, "material_delta_e00_tolerance", 0.5)
+        payload = {
+            "session_id": sid,
+            "params": {
+                "target_height_mm": 60.0,
+                "tile_width_mm": 40.0,
+                "tile_height_mm": 40.0,
+                "params": {
+                    "lut_name": "__material_archive__",
+                    "modeling_mode": "vector",
+                    "target_width_mm": 90.0,
+                    "material_max_layer_count": 9,
+                },
+            },
+        }
+
+        with (
+            patch(
+                "api.routers.converter.generate._rasterize_svg_for_large_format_fallback"
+            ) as rasterize_svg,
+            patch.object(_test_store, "register_temp_file") as register_temp,
+            patch.object(_test_store, "put") as store_put,
+        ):
+            response = client.post(
+                "/api/convert/generate-large-format",
+                json=payload,
+            )
+
+        assert response.status_code == 409
+        rasterize_svg.assert_not_called()
+        register_temp.assert_not_called()
+        store_put.assert_not_called()
+
+    def test_large_format_maps_typed_dynamic_worker_error(self) -> None:
+        from core.material_dynamic_solver import DynamicMaterialCandidateError
+
+        sid, _image_path, _lut_path = _create_raster_large_format_session(
+            _test_store
+        )
+        _test_store.put(sid, "material_source", "material_archive")
+        _test_store.put(sid, "selected_materials", ["mat-a", "mat-b"])
+        _test_store.put(sid, "material_layer_count", 10)
+        _test_store.put(sid, "material_dynamic_layer_count_enabled", True)
+        _test_store.put(sid, "material_min_layer_count", 6)
+        _test_store.put(sid, "material_max_layer_count", 8)
+        _test_store.put(sid, "material_delta_e00_tolerance", 0.4)
+        _test_store.put(sid, "recipe_overrides", [])
+        _mock_pool.submit = AsyncMock(
+            side_effect=DynamicMaterialCandidateError(
+                "no candidate",
+                target_srgb=(12, 34, 56),
+                layer_count=6,
+                phase="exact_search",
+            )
+        )
+        payload = {
+            "session_id": sid,
+            "params": {
+                "target_height_mm": 60.0,
+                "tile_width_mm": 90.0,
+                "tile_height_mm": 60.0,
+                "params": {
+                    "lut_name": "__material_archive__",
+                    "modeling_mode": "high-fidelity",
+                    "target_width_mm": 90.0,
+                },
+            },
+        }
+
+        response = client.post(
+            "/api/convert/generate-large-format",
+            json=payload,
+        )
+
+        assert response.status_code == 409
+        assert response.json()["detail"]["code"] == (
+            "dynamic_material_no_candidate"
+        )
 
     def test_large_format_svg_width_only_derives_height_and_uses_native_path(self) -> None:
         sid, svg_path, lut_path = _create_svg_session(_test_store, native_tiling_supported=True)
@@ -3577,6 +3872,67 @@ def test_generate_route_infers_material_archive_white_backing_when_unspecified(t
     assert response.status_code == 200, response.text
     submitted_params = _mock_pool.submit.call_args.args[3]
     assert submitted_params["material_backing_material_index"] == 2
+
+
+def test_generate_route_inherits_dynamic_settings_and_maps_typed_error(
+    tmp_path,
+) -> None:
+    from core.material_dynamic_solver import DynamicMaterialCandidateError
+
+    _test_store.clear_all()
+    image_path = tmp_path / "input.png"
+    Image.fromarray(np.zeros((4, 4, 3), dtype=np.uint8)).save(image_path)
+    sid = _test_store.create()
+    _test_store.put(sid, "image_path", str(image_path))
+    _test_store.put(sid, "lut_path", "__material_archive__")
+    _test_store.put(sid, "material_source", "material_archive")
+    _test_store.put(sid, "selected_materials", ["mat-a", "mat-b"])
+    _test_store.put(sid, "material_layer_count", 10)
+    _test_store.put(sid, "material_dynamic_layer_count_enabled", True)
+    _test_store.put(sid, "material_min_layer_count", 6)
+    _test_store.put(sid, "material_max_layer_count", 8)
+    _test_store.put(sid, "material_delta_e00_tolerance", 0.4)
+    _test_store.put(sid, "replacement_regions", [])
+    _test_store.put(sid, "free_color_set", set())
+    _test_store.put(
+        sid,
+        "preview_cache",
+        {
+            "target_w": 4,
+            "target_h": 4,
+            "target_width_mm": 40.0,
+            "matched_rgb": np.zeros((4, 4, 3), dtype=np.uint8),
+            "mask_solid": np.ones((4, 4), dtype=bool),
+            "material_matrix": np.zeros((4, 4, 8), dtype=np.uint8),
+        },
+    )
+    captured: dict[str, object] = {}
+
+    async def _raise_typed(_worker, _image, _lut, params):
+        captured.update(params)
+        raise DynamicMaterialCandidateError(
+            "no candidate",
+            target_srgb=(12, 34, 56),
+            layer_count=6,
+            phase="exact_search",
+        )
+
+    _mock_pool.submit = AsyncMock(side_effect=_raise_typed)
+
+    response = client.post(
+        "/api/convert/generate",
+        json={
+            "session_id": sid,
+            "params": {"lut_name": "__material_archive__"},
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "dynamic_material_no_candidate"
+    assert captured["material_dynamic_layer_count_enabled"] is True
+    assert captured["material_min_layer_count"] == 6
+    assert captured["material_max_layer_count"] == 8
+    assert captured["material_delta_e00_tolerance"] == 0.4
 
 
 def test_generate_route_rejects_material_archive_relief_color_height_below_optical_depth(tmp_path) -> None:
