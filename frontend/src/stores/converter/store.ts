@@ -23,6 +23,8 @@ import type {
   LutDetailsCatalogGroup,
   LutColorsCard,
   PerformanceTiming,
+  DynamicMaterialRecipe,
+  MaterialLayerBenefitPoint,
 } from "../../api/types";
 import {
   ColorMode as ColorModeEnum,
@@ -290,6 +292,13 @@ type DynamicMaterialActivationState = {
   materialDynamicLayerCountEnabled: boolean;
 };
 
+type MaterialPrintLayerCountState = {
+  source_version: SourceVersion;
+  materialLayerCount: number;
+  materialDynamicLayerCountEnabled?: boolean;
+  materialMaxLayerCount?: number;
+};
+
 export function isDynamicMaterialActive(
   state: DynamicMaterialActivationState,
 ): boolean {
@@ -297,6 +306,33 @@ export function isDynamicMaterialActive(
     state.source_version === "material" &&
     state.materialDynamicLayerCountEnabled === true
   );
+}
+
+function resolveMaterialPrintLayerCount(
+  state: MaterialPrintLayerCountState,
+): number {
+  return state.source_version === "material" &&
+    state.materialDynamicLayerCountEnabled === true
+    ? (state.materialMaxLayerCount ?? state.materialLayerCount)
+    : state.materialLayerCount;
+}
+
+function resolveColorMatchingWeights(
+  state: Pick<
+    ConverterState,
+    | "source_version"
+    | "materialDynamicLayerCountEnabled"
+    | "hue_enable"
+    | "chroma_gate"
+  >,
+): { hue_weight: number; chroma_gate: number } {
+  if (isDynamicMaterialActive(state)) {
+    return { hue_weight: 0, chroma_gate: 0 };
+  }
+  return {
+    hue_weight: state.hue_enable ? 0.5 : 0,
+    chroma_gate: state.hue_enable ? state.chroma_gate : 0,
+  };
 }
 
 export function getMaterialArchiveReliefMinimumTotalHeight(
@@ -1143,7 +1179,15 @@ export function resolveConverterSourceSelection(
     | "materialLayerCount"
     | "materialLayerHeightMm"
   > &
-    Partial<Pick<ConverterState, "lutListFull" | "legacyCatalogGroups">>,
+    Partial<
+      Pick<
+        ConverterState,
+        | "lutListFull"
+        | "legacyCatalogGroups"
+        | "materialDynamicLayerCountEnabled"
+        | "materialMaxLayerCount"
+      >
+    >,
 ): {
   source_kind: "legacy_single" | "legacy_multi" | "native_bundle";
   isReady: boolean;
@@ -1171,7 +1215,7 @@ export function resolveConverterSourceSelection(
       lut_name: "",
       db_names: [],
       native: emptyNative,
-      color_layers: state.materialLayerCount ?? 5,
+      color_layers: resolveMaterialPrintLayerCount(state),
       layer_height_mm: state.materialLayerHeightMm ?? 0.08,
     };
   }
@@ -1225,9 +1269,13 @@ function buildMaterialSourceParams(
   state: Pick<
     ConverterState,
     | "selectedMaterialDirNames"
+    | "source_version"
     | "materialLayerCount"
     | "materialLayerHeightMm"
     | "materialBackingMaterialDirName"
+    | "materialDynamicLayerCountEnabled"
+    | "materialMinLayerCount"
+    | "materialMaxLayerCount"
   >,
 ) {
   const settingsState = useSettingsStore.getState();
@@ -1242,16 +1290,21 @@ function buildMaterialSourceParams(
   const backingMaterialIndex = resolvedBackingDirName
     ? state.selectedMaterialDirNames.indexOf(resolvedBackingDirName)
     : -1;
+  const printLayerCount = resolveMaterialPrintLayerCount(state);
   return {
     source_kind: "legacy_single" as const,
     lut_name: "__material_archive__",
     material_source: "material_archive" as const,
     selected_materials: state.selectedMaterialDirNames,
-    material_layer_count: state.materialLayerCount,
+    material_layer_count: printLayerCount,
     material_layer_height_mm: state.materialLayerHeightMm,
     material_grid_resolution: materialGridResolution,
     material_backing_material_index:
       backingMaterialIndex >= 0 ? backingMaterialIndex : 0,
+    material_dynamic_layer_count_enabled: isDynamicMaterialActive(state),
+    material_min_layer_count: state.materialMinLayerCount,
+    material_max_layer_count: state.materialMaxLayerCount,
+    material_delta_e00_tolerance: settingsState.materialDeltaE00Tolerance,
   };
 }
 
@@ -1413,8 +1466,8 @@ export interface ConverterState {
   materialDynamicLayerCountEnabled: boolean;
   materialMinLayerCount: number;
   materialMaxLayerCount: number;
-  materialDynamicRecipes: Array<Record<string, unknown>>;
-  materialLayerBenefitCurve: Array<Record<string, unknown>>;
+  materialDynamicRecipes: DynamicMaterialRecipe[];
+  materialLayerBenefitCurve: MaterialLayerBenefitPoint[];
 
   // 高级设置
   quantize_colors: number;
@@ -2045,6 +2098,8 @@ const DEFAULT_LAYER_IMAGES_STATE = {
 const INVALIDATE_LAYER_IMAGES_AFTER_REPLACE = {
   layerImages: [] as { layer_index: number; name: string; url: string }[],
   layerImagesSourceKey: null as string | null,
+  materialDynamicRecipes: [] as DynamicMaterialRecipe[],
+  materialLayerBenefitCurve: [] as MaterialLayerBenefitPoint[],
 } as const;
 
 const DEFAULT_PUZZLE_PREVIEW_STATE = {
@@ -5875,7 +5930,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           ...sourceParams,
           color_layers:
             state.source_version === "material"
-              ? state.materialLayerCount
+              ? resolveMaterialPrintLayerCount(state)
               : sourceParams.source_kind === "native_bundle"
                 ? (sourceParams.color_layers ?? undefined)
                 : (state.color_layers ?? undefined),
@@ -5894,8 +5949,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           enable_outline: state.enable_outline,
           outline_width: state.outline_width,
           svg_pixels_per_mm: useSettingsStore.getState().svgPixelsPerMm,
-          hue_weight: state.hue_enable ? 0.5 : 0.0,
-          chroma_gate: state.hue_enable ? state.chroma_gate : 0,
+          ...resolveColorMatchingWeights(state),
           use_lut_constrained: state.use_lut_constrained,
           auto_dynamic_range: state.auto_dynamic_range,
           is_dark: useSettingsStore.getState().theme === "dark",
@@ -5942,7 +5996,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           normalizedPalette,
         );
         const resolvedColorLayers = sourceSelection.isMaterial
-          ? state.materialLayerCount
+          ? resolveMaterialPrintLayerCount(state)
           : sourceSelection.source_kind === "native_bundle"
             ? (sourceSelection.color_layers ?? null)
             : state.color_layers;
@@ -5979,6 +6033,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             match_mode: response.lut_match_mode ?? "legacy",
           },
           palette: normalizedPalette,
+          materialDynamicRecipes: response.material_dynamic_recipes ?? [],
+          materialLayerBenefitCurve:
+            response.material_layer_benefit_curve ?? [],
           ...(shouldResetHeightmapMapping
             ? { color_height_map: {}, heightmapThumbnailUrl: null }
             : autoReliefHeightMap
@@ -6248,13 +6305,17 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         const baseParams = {
           ...sourceParams,
           color_layers:
-            sourceParams.source_kind === "native_bundle"
-              ? (sourceParams.color_layers ?? undefined)
-              : (state.color_layers ?? undefined),
+            state.source_version === "material"
+              ? resolveMaterialPrintLayerCount(state)
+              : sourceParams.source_kind === "native_bundle"
+                ? (sourceParams.color_layers ?? undefined)
+                : (state.color_layers ?? undefined),
           layer_height_mm:
-            sourceParams.source_kind === "native_bundle"
-              ? (sourceParams.layer_height_mm ?? undefined)
-              : (state.layer_height_mm ?? undefined),
+            state.source_version === "material"
+              ? state.materialLayerHeightMm
+              : sourceParams.source_kind === "native_bundle"
+                ? (sourceParams.layer_height_mm ?? undefined)
+                : (state.layer_height_mm ?? undefined),
           target_width_mm: state.target_width_mm,
           color_mode: colorMode,
           modeling_mode: state.modeling_mode,
@@ -6262,8 +6323,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           high_precision_3d_preview: state.high_precision_3d_preview,
           enable_cleanup: state.enable_cleanup,
           svg_pixels_per_mm: useSettingsStore.getState().svgPixelsPerMm,
-          hue_weight: state.hue_enable ? 0.5 : 0.0,
-          chroma_gate: state.hue_enable ? state.chroma_gate : 0,
+          ...resolveColorMatchingWeights(state),
           use_lut_constrained: state.use_lut_constrained,
           auto_dynamic_range: state.auto_dynamic_range,
           is_dark: useSettingsStore.getState().theme === "dark",
@@ -6985,7 +7045,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           modeling_mode: state.modeling_mode,
           color_layers:
             state.source_version === "material"
-              ? state.materialLayerCount
+              ? resolveMaterialPrintLayerCount(state)
               : sourceParams.source_kind === "native_bundle"
                 ? (sourceParams.color_layers ?? undefined)
                 : (state.color_layers ?? undefined),
@@ -6999,8 +7059,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           high_precision_3d_preview: state.high_precision_3d_preview,
           enable_cleanup: state.enable_cleanup,
           svg_pixels_per_mm: settings.svgPixelsPerMm,
-          hue_weight: state.hue_enable ? 0.5 : 0.0,
-          chroma_gate: state.hue_enable ? state.chroma_gate : 0,
+          ...resolveColorMatchingWeights(state),
           use_lut_constrained: state.use_lut_constrained,
           auto_dynamic_range: state.auto_dynamic_range,
           enable_relief: state.enable_relief,

@@ -105,6 +105,10 @@ export type ConvertPreviewRequest = ConvertSourceSelection & {
   material_layer_height_mm?: number;
   material_grid_resolution?: number;
   material_backing_material_index?: number;
+  material_dynamic_layer_count_enabled?: boolean;
+  material_min_layer_count?: number;
+  material_max_layer_count?: number;
+  material_delta_e00_tolerance?: number;
   large_format_enabled?: boolean;
   replacement_regions?: ColorReplacementItem[];
 };
@@ -279,6 +283,38 @@ export interface PaletteEntry {
   percentage: number; // 占比百分比
 }
 
+/** One exact cumulative dynamic-layer option for a target color. */
+export interface DynamicMaterialLayerCapOption {
+  max_effective_layer_count: number;
+  actual_layer_count: number;
+  matched_srgb: [number, number, number];
+  actual_recipe_top_to_bottom: number[];
+  print_recipe_top_to_bottom: number[];
+  delta_e00: number;
+}
+
+/** Exact dynamic material recipe metadata returned for one target color. */
+export interface DynamicMaterialRecipe {
+  target_srgb: [number, number, number];
+  matched_srgb: [number, number, number];
+  actual_layer_count: number;
+  padding_layer_count: number;
+  actual_recipe_top_to_bottom: number[];
+  print_recipe_top_to_bottom: number[];
+  selected_delta_e00: number;
+  best_range_delta_e00: number;
+  fixed_max_delta_e00: number;
+  delta_e00_sacrifice: number;
+  layer_cap_options: DynamicMaterialLayerCapOption[];
+}
+
+/** Pixel-weighted exact Delta-E00 result at one effective-layer cap. */
+export interface MaterialLayerBenefitPoint {
+  max_effective_layer_count: number;
+  weighted_mean_delta_e00: number;
+  marginal_delta_e00_reduction: number;
+}
+
 /** 自动高度分配模式 */
 export type AutoHeightMode =
   | "darker-higher"
@@ -334,6 +370,8 @@ export interface PreviewResponse {
   contours?: Record<string, number[][][]> | null; // hex -> list of contour polygons (world coords mm)
   warnings: string[];
   performance_timing?: PerformanceTiming | null;
+  material_dynamic_recipes?: DynamicMaterialRecipe[] | null;
+  material_layer_benefit_curve?: MaterialLayerBenefitPoint[] | null;
 }
 
 /** 大画幅生成请求，嵌套 ConvertGenerateRequest + 切片参数 */
@@ -1649,6 +1687,10 @@ export interface BatchConvertParams {
   material_layer_height_mm?: number;
   material_grid_resolution?: number;
   material_backing_material_index?: number;
+  material_dynamic_layer_count_enabled?: boolean;
+  material_min_layer_count?: number;
+  material_max_layer_count?: number;
+  material_delta_e00_tolerance?: number;
   target_width_mm: number;
   spacer_thick: number;
   structure_mode: string;

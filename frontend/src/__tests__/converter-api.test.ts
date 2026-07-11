@@ -134,6 +134,38 @@ describe("convertPreview", () => {
     );
   });
 
+  it("serializes exact dynamic material preview fields into FormData", async () => {
+    mockPost.mockResolvedValueOnce({
+      data: {
+        session_id: "sess-dynamic",
+        status: "ok",
+        message: "Preview generated",
+        preview_url: "/api/files/dynamic-prev",
+        preview_glb_url: null,
+        palette: [],
+        dimensions: { width: 200, height: 150 },
+      },
+    });
+
+    const file = new File(["img-data"], "photo.png", { type: "image/png" });
+    await convertPreview(file, {
+      ...previewParams,
+      lut_name: "__material_archive__",
+      material_source: "material_archive",
+      selected_materials: ["brand/white", "brand/blue"],
+      material_dynamic_layer_count_enabled: true,
+      material_min_layer_count: 6,
+      material_max_layer_count: 9,
+      material_delta_e00_tolerance: 0.7,
+    });
+
+    const formData = mockPost.mock.calls[0][1] as FormData;
+    expect(formData.get("material_dynamic_layer_count_enabled")).toBe("true");
+    expect(formData.get("material_min_layer_count")).toBe("6");
+    expect(formData.get("material_max_layer_count")).toBe("9");
+    expect(formData.get("material_delta_e00_tolerance")).toBe("0.7");
+  });
+
   it("propagates network errors", async () => {
     mockPost.mockRejectedValueOnce(new Error("Network Error"));
 
@@ -260,6 +292,10 @@ describe("convertBatch", () => {
       material_layer_height_mm: 0.06,
       material_grid_resolution: 33,
       material_backing_material_index: 1,
+      material_dynamic_layer_count_enabled: true,
+      material_min_layer_count: 6,
+      material_max_layer_count: 9,
+      material_delta_e00_tolerance: 0.7,
       color_layers: 7,
       layer_height_mm: 0.06,
     });
@@ -275,6 +311,10 @@ describe("convertBatch", () => {
     expect(formData.get("material_layer_height_mm")).toBe("0.06");
     expect(formData.get("material_grid_resolution")).toBe("33");
     expect(formData.get("material_backing_material_index")).toBe("1");
+    expect(formData.get("material_dynamic_layer_count_enabled")).toBe("true");
+    expect(formData.get("material_min_layer_count")).toBe("6");
+    expect(formData.get("material_max_layer_count")).toBe("9");
+    expect(formData.get("material_delta_e00_tolerance")).toBe("0.7");
   });
 
   it("serializes native reverse LUT batch fields into FormData", async () => {

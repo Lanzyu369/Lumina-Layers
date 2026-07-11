@@ -4620,6 +4620,54 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "替换色",
     en: "Replaced",
   },
+  palette_dynamic_actual_layers: {
+    zh: "实际层数",
+    en: "Actual layers",
+  },
+  palette_dynamic_saved_layers: {
+    zh: "节省层数",
+    en: "Layers saved",
+  },
+  palette_dynamic_selected_delta_e00: {
+    zh: "当前 ΔE00",
+    en: "Selected ΔE00",
+  },
+  palette_dynamic_fixed_delta_e00: {
+    zh: "固定最大层数 ΔE00",
+    en: "Fixed-max ΔE00",
+  },
+  palette_dynamic_best_delta_e00: {
+    zh: "范围最佳 ΔE00",
+    en: "Range-best ΔE00",
+  },
+  palette_dynamic_sacrifice: {
+    zh: "容差损失",
+    en: "Tolerance loss",
+  },
+  palette_dynamic_benefit_title: {
+    zh: "全图层数收益",
+    en: "Whole-image layer benefit",
+  },
+  palette_dynamic_benefit_layer: {
+    zh: "{count} 层",
+    en: "{count} layers",
+  },
+  palette_dynamic_benefit_mean: {
+    zh: "平均 ΔE00 {value}",
+    en: "Mean ΔE00 {value}",
+  },
+  palette_dynamic_benefit_baseline: {
+    zh: "起始层数",
+    en: "Starting layer count",
+  },
+  palette_dynamic_benefit_no_improvement: {
+    zh: "无改善",
+    en: "No improvement",
+  },
+  palette_dynamic_benefit_marginal: {
+    zh: "边际改善 {value}",
+    en: "Marginal gain {value}",
+  },
   palette_undo: {
     zh: "撤销",
     en: "Undo",
