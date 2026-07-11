@@ -6,7 +6,13 @@ import {
   it,
   vi,
 } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 
 vi.mock("../../api/system", () => ({
   clearCache: vi.fn(),
@@ -123,6 +129,19 @@ describe("SettingsPanel completion notifications", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("shows an accessible inline help trigger for the notification label", () => {
+    renderPanel();
+
+    const notificationSection = screen.getByTestId(
+      "settings-completion-notifications-section",
+    );
+    expect(
+      within(notificationSection).getByRole("button", {
+        name: translations["settings.completion_notifications_enable_label"].zh,
+      }),
+    ).toHaveTextContent("?");
   });
 
   it("enables the persisted setting after permission is granted", async () => {

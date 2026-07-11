@@ -37,6 +37,7 @@ import {
 import { retryAsync } from "../utils/retryAsync";
 import Button from "./ui/Button";
 import Dropdown from "./ui/Dropdown";
+import HelpDot from "./ui/HelpDot";
 import Slider from "./ui/Slider";
 import Switch from "./ui/Switch";
 import WikiTooltip from "./ui/WikiTooltip";
@@ -780,28 +781,28 @@ export default function SettingsPanel() {
             </p>
           </div>
           <div className="flex items-center justify-between gap-3">
-            <span className="text-sm font-medium text-slate-900 dark:text-slate-50">
+            <span className="flex items-center gap-1.5 text-sm font-medium text-slate-900 dark:text-slate-50">
               {t("settings.completion_notifications_enable_label")}
-            </span>
-            <WikiTooltip
-              title={t("settings.completion_notifications_enable_label")}
-              description={t("settings.completion_notifications_description")}
-              placement="left"
-            >
-              <Switch
-                checked={enableCompletionNotifications}
-                onChange={(enabled) => {
-                  void handleCompletionNotificationsChange(enabled);
-                }}
-                disabled={
-                  notificationPermissionLoading ||
-                  notificationPermission === "unsupported"
-                }
-                ariaLabel={t(
-                  "settings.completion_notifications_enable_label",
+              <HelpDot
+                title={t("settings.completion_notifications_enable_label")}
+                description={t(
+                  "settings.completion_notifications_description",
                 )}
               />
-            </WikiTooltip>
+            </span>
+            <Switch
+              checked={enableCompletionNotifications}
+              onChange={(enabled) => {
+                void handleCompletionNotificationsChange(enabled);
+              }}
+              disabled={
+                notificationPermissionLoading ||
+                notificationPermission === "unsupported"
+              }
+              ariaLabel={t(
+                "settings.completion_notifications_enable_label",
+              )}
+            />
           </div>
           <StatusBanner
             tone={completionNotificationStatus.tone}
