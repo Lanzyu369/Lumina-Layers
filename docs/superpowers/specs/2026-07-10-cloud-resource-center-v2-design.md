@@ -1,6 +1,6 @@
 # 云耗材与云 LUT 资源中心 v2 设计
 
-状态：三次设计复核修订稿
+状态：四次设计复核修订稿
 日期：2026-07-10
 目标仓库：Lumina Studio、Lumina Material Registry、Lumina Materials
 替代范围：现有“耗材库 / 云端耗材”和“LUT 库 / 云端 LUT”分裂式管理体验
@@ -278,11 +278,40 @@ Studio 在开放对应领域的任何 mutating endpoint 前扫描未完成 journ
 }
 ```
 
-每个 revision 具有 `available | pending_gc | deleting | gc_conflict | quarantined_recovery | deleted` 持久状态，并有跨进程 revision lock；Resolver 创建 lease 与 GC 关闭 lease admission 必须使用同一把锁，不能只靠先后扫描 lease 目录。
+每个 revision 具有 `available | pending_gc | deleting | gc_conflict | quarantined_recovery | deleted` 持久状态，并有跨进程 revision lock。lease 的 create、renew/heartbeat、release 和 stale-delete，以及 revision 的 GC 状态转换，必须全部经过同一个 lease service 并持有该 revision lock；任何调用方都不得直接覆盖、重建或删除 lease 文件。
 
-Resolver 的顺序固定为：获取 revision lock -> 读取最新 revision 状态和索引 generation -> 只允许 `available` -> 验证 payload -> 以临时文件 + fsync + 原子 rename 创建 `_sync/leases/<lease_id>.json` -> 再次确认状态/generation 未变 -> 返回 immutable path -> 释放锁。lease 记录 session/job ID、主进程 PID 与启动标识、exact revision、revision fencing generation、创建时间、heartbeat/expiry。`pending_gc` 是禁止新 lease 的第一道 fence，`deleting` 是删除阶段 fence；任一非 `available` 状态都必须拒绝。active/previous revision 命中非 `available` 视为 `local_index_recovery_required`，不再处于 slot 的历史 revision 返回 `revision_unavailable`，都不能先返回 path 后补 lease。
+持久 lease schema 固定为：
 
-主进程持有租约并把 immutable path 作为标量传给 worker；worker 不重新解析“当前版本”。正常完成、会话关闭或取消时释放租约；启动恢复只清理 PID/start marker 已失效或超过 TTL 且无活动 session 的 stale lease。仅 heartbeat 超时不足以回收仍有有效 PID/start marker 或活动 session/job 的 lease。
+```json
+{
+  "schema_version": "1.0",
+  "lease_id": "lease_...",
+  "source_registry": "public-default",
+  "resource_kind": "lut",
+  "resource_id": "lut_...",
+  "revision_id": "rev_...",
+  "revision_fencing_generation": 7,
+  "lease_version": 3,
+  "session_id": "session_...",
+  "job_id": "job_...",
+  "owner_pid": 1234,
+  "owner_start_marker": "process-start-...",
+  "created_at": "2026-07-10T00:00:00Z",
+  "heartbeat_at": "2026-07-10T00:01:00Z",
+  "expires_at": "2026-07-10T00:03:00Z"
+}
+```
+
+四类 lease 操作使用以下硬合同：
+
+- **Create**：获取 revision lock，重读 revision record，只允许 `lifecycle_state=available`；验证 payload 后以 `revision_fencing_generation=current`、`lease_version=1` 写临时文件，fsync，原子 rename 为 `_sync/leases/<lease_id>.json`，再 fsync leases 目录。lease ID 已存在时失败，不能覆盖。只有文件持久化且状态/fence 再次匹配后才返回 immutable path。
+- **Renew/heartbeat**：调用方提交上次成功响应中的 `expected_revision_fencing_generation` 和 `expected_lease_version`。lease service 获取 revision lock 后重新读取 revision 与 lease；只允许 revision 为 `available`，或 lease 已存在且 revision 为 `pending_gc`；同时要求 lease ID、resource/revision、owner PID/start marker、session/job、fence 和 version 全部匹配。成功时只更新 heartbeat/expiry，把 `lease_version + 1` 以临时文件 + fsync + 原子 replace 持久化，并返回新 version。续租不得创建缺失 lease，也不得根据调用方缓存内容重写整份文件。
+- **Release**：调用方提交 expected fence/version；获取 revision lock，重读 lease 并核对 resource/revision、owner、fence 和 `lease_version`。匹配时 unlink 后 fsync leases 目录；文件已不存在视为幂等成功，identity/fence/version 不匹配则返回 `resource_lease_fenced`，不能删除其他 lease。主进程必须先停止自己的 heartbeat，再以最后成功 version 释放，避免同一 owner 自己制造 renew/release 竞态。
+- **Stale-delete**：恢复器/GC 获取 revision lock 后重读 lease version/fence、PID/start marker、session/job 和 expiry。只有 owner 已失效且不存在活动 session/job，或 session/job 已明确终止且无活动 owner 时才可删除；TTL/heartbeat 超时本身不是充分条件。删除前再次 CAS version/fence，unlink 后 fsync leases 目录。renew 与 stale-delete 因同锁串行，失败一方必须重读，不能使用锁外快照继续。
+
+`pending_gc` 关闭新 Create，但允许已经存在且身份/fence 匹配的 lease Renew，使长工作流不会仅因进入回收队列而被误判 stale。主进程持有租约并把 immutable path 作为标量传给 worker；worker 不重新解析“当前版本”。任何 renew 返回 `resource_lease_fenced` 或 `revision_unavailable` 时，主进程必须停止向该 payload 发起新 I/O 并取消/失败当前工作流，不能忽略错误继续运行。
+
+Create/Renew 崩溃留下的 `.tmp` 不是有效 lease，扫描器和 GC 必须忽略。启动恢复在 revision lock 下只保留已原子发布的正式 lease 文件；临时文件与正式文件 version/fence 无法完全对应时直接删除临时文件，绝不用临时文件复活或覆盖正式 lease。
 
 生命周期规则：
 
@@ -296,7 +325,9 @@ Resolver 的顺序固定为：获取 revision lock -> 读取最新 revision 状�
 
 “只保留 current + previous”是可回退 slot 的逻辑上限。有活动租约的更老 revision 可以临时超出该上限，但不再作为可回退选项；租约释放后再由 GC 回收。这样一次工作流不会混用更新前后两个版本。
 
-把 revision 从 active/previous slot 移到 GC 队列的资源事务，必须在同一 revision lock 内先持久化为 `pending_gc`，再切换 slot；从该时刻起 Resolver 已不能创建新 lease。GC 协议固定为：获取 revision lock -> 确认 revision 仍为 `pending_gc` 且不是 active/previous -> 清理可证明 stale 的 lease；若仍有有效 lease则保持 `pending_gc` 并退出 -> 有效 lease 为零时获取 global commit lock，通过 journal/index generation 把状态持久化为 `deleting` -> 在仍持有 revision lock 时再次扫描 lease 为零 -> 释放 global/revision lock 后执行 11.4 的 ownership preflight 与删除。删除成功提交 `deleted`；出现内容冲突则提交 `gc_conflict` 并保留全部文件。崩溃恢复遇到 `deleting` 时根据 GC journal 继续逐文件幂等删除，或在尚未删除任何文件且 payload 仍完整时恢复为 `pending_gc`，不得直接恢复为 `available`。
+把 revision 从 active/previous slot 移到 GC 队列的资源事务，必须在同一 revision lock 内先持久化为 `pending_gc`，再切换 slot；从该时刻起 Resolver 已不能创建新 lease。GC 协议固定为：获取 revision lock -> 确认 revision 仍为 `pending_gc` 且不是 active/previous -> 按上述 CAS 规则清理可证明 stale 的 lease；若仍有有效 lease则保持 `pending_gc` 并退出 -> 有效 lease 为零时获取 global commit lock，把 `fencing_generation + 1` 与 `lifecycle_state=deleting` 在同一 journal/index generation 事务中持久化 -> 在仍持有 revision lock 时再次扫描 lease 为零 -> 释放 global/revision lock 后执行 11.4 的 ownership preflight 与删除。
+
+因此延迟 heartbeat 只有两种顺序：它先取得锁并成功续租，GC 随后看到有效 lease 并退出；或 GC 先删除 stale lease/推进 fence 到 `deleting`，heartbeat 随后因 lease 缺失、状态不允许、fence 或 version 不匹配而返回 `resource_lease_fenced`，且绝不能重建文件。删除成功提交 `deleted`；出现内容冲突则提交 `gc_conflict` 并保留全部文件。崩溃恢复遇到 `deleting` 时根据 GC journal 继续逐文件幂等删除，或在尚未删除任何文件且 payload 仍完整时恢复为 `pending_gc`；恢复为 `pending_gc` 仍保留已推进的 fence，旧 heartbeat 继续失效，不得直接恢复为 `available`。
 
 ## 7. 三仓职责
 
@@ -463,6 +494,7 @@ v1 保留 `offset`、可选 `limit` 和旧响应计数字段，且未传 `limit`
   "contract_version": "2.0",
   "resource_kind": "lut",
   "catalog_generation": "cat_01J...",
+  "authorization_generation": "auth_01J...",
   "items": [],
   "page": {
     "limit": 50,
@@ -473,9 +505,9 @@ v1 保留 `offset`、可选 `limit` 和旧响应计数字段，且未传 `limit`
 }
 ```
 
-第一页创建一个有界生命周期的只读 catalog snapshot；`catalog_generation` 标识该 snapshot。Cursor 是不透明、带完整性保护且有过期时间的 token，至少绑定 `resource_kind`、principal/channel 授权指纹、snapshot generation、规范化查询/筛选 digest、sort、固定 page limit 和最后一项稳定排序 tuple。`updated_desc` 使用 `(updated_at, resource_id)`，`downloads_desc` 使用 snapshot 中的 `(download_count, resource_id)`；后续下载量或 catalog 变化不能改变同一 snapshot 的翻页结果。
+第一页创建一个有界生命周期的只读 catalog snapshot；`catalog_generation` 标识内容 snapshot，`authorization_generation` 标识生成该可见集合时的授权策略版本。Cursor 是不透明、带完整性保护且有过期时间的 token，至少绑定 `resource_kind`、principal/token-scope 指纹、channel、authorization generation、snapshot generation、规范化查询/筛选 digest、sort、固定 page limit 和最后一项稳定排序 tuple。指纹由 Registry 对 token ID + scope version 做服务端 HMAC，不含原 token；它只作为 opaque cursor 内服务端校验的私有 claim，不单独进入响应或日志。`updated_desc` 使用 `(updated_at, resource_id)`，`downloads_desc` 使用 snapshot 中的 `(download_count, resource_id)`；后续下载量或 catalog 变化不能改变同一 snapshot 的翻页结果。
 
-客户端后续页只需提交 `cursor`。若同时重复 `q`、筛选、sort 或 limit，它们必须与 cursor 绑定值完全一致，否则返回 `400 catalog_cursor_query_mismatch`。篡改、格式错误或用于另一领域/principal 的 cursor 返回 `400 catalog_cursor_invalid`；snapshot/cursor 过期返回 `410 catalog_cursor_expired`。结束页必须同时满足 `has_more=false` 和 `next_cursor=null`；非结束页必须提供非空 `next_cursor`。服务端默认 snapshot TTL 为 15 分钟，并允许配置延长，但不能在同一 cursor 链中缩短已经承诺的 expiry。
+客户端后续页只需提交 `cursor`。若同时重复 `q`、筛选、sort 或 limit，它们必须与 cursor 绑定值完全一致，否则返回 `400 catalog_cursor_query_mismatch`。篡改、格式错误、用于另一领域/principal，或 token scope/authorization generation 已变化的 cursor 返回 `400 catalog_cursor_invalid` 并要求重新请求第一页；snapshot/cursor 过期返回 `410 catalog_cursor_expired`。结束页必须同时满足 `has_more=false` 和 `next_cursor=null`；非结束页必须提供非空 `next_cursor`。服务端默认 snapshot TTL 为 15 分钟，并允许配置延长，但不能在同一 cursor 链中缩短已经承诺的 expiry。
 
 ### 8.4 详情与历史
 
@@ -881,9 +913,26 @@ revision 状态固定为 `pending | approved | withdrawn | rejected | purged`。
 
 四个 Studio exact 路由对“资源/revision 不存在、调用者无权、envelope revoked、withdrawn/rejected/pending/purged”统一返回相同的 `404 revision_not_found` 状态、公共响应体和日志脱敏级别，不能用 `403/410`、响应字段或显著不同的错误文本泄露私有 revision 是否存在。只有独立、要求 maintainer scope 的维护审计 API 可以区分真实状态。任何失败都不能退回 latest revision。
 
-详情成功响应包含 8.6 节全部绑定字段、`authorization_generation`、当前 active `envelope_id` 和该 envelope 的 package URL/hash/bytes。Registry 存储对象路径永不直接公开；`.../package` 要求 query 中的 `envelope_id` 与该 revision 当前 active envelope 完全一致，每次请求都按最新 authorization generation 重新授权并由同源 Registry 直接流式返回，不重定向，并在响应头回显 `X-Lumina-Envelope-ID`。旧/revoked envelope ID 即使核心 revision 相同也按统一 `404 revision_not_found` 拒绝。package 响应使用 `Cache-Control: no-store`；catalog/detail 使用包含 authorization generation 的 ETag、`must-revalidate` 和最多 60 秒 freshness。
+详情成功响应包含 8.6 节全部绑定字段、`authorization_generation`、当前 active `envelope_id` 和该 envelope 的 package URL/hash/bytes。Registry 存储对象路径永不直接公开；`.../package` 要求 query 中的 `envelope_id` 与该 revision 当前 active envelope 完全一致，每次请求都按最新 authorization generation 重新授权并由同源 Registry 直接流式返回，不重定向，并在响应头回显 `X-Lumina-Envelope-ID`。旧/revoked envelope ID 即使核心 revision 相同也按统一 `404 revision_not_found` 拒绝。
 
-approve、withdraw 或 channel/visibility 变化必须在同一 Registry 事务中先撤销旧 envelope route、推进 authorization/catalog generation，再发布新可见投影；部署层按 resource/envelope surrogate key 主动清除 catalog/detail CDN 缓存。旧 package bytes 可留在不可公开访问的审计存储，但旧 `package_url` 不再可下载。Studio 在安装前永远重新取 exact detail，不能仅凭 catalog 缓存下载；遇到 `revision_not_found` 时立即失效该 resource 的 catalog/detail/package 元数据缓存，并把本地已安装副本保留为可离线使用。
+HTTP 与客户端缓存策略按授权模式分离：
+
+- 未携带 token 且结果仅含 `official/community` public 内容的 catalog/detail 可以返回 `Cache-Control: public, max-age=60, must-revalidate` 和 `Vary: Authorization, Accept-Encoding`。ETag 必须包含 catalog/detail payload hash 与 `authorization_generation`；响应带可用于精确清理的 registry/resource/publisher/channel/envelope surrogate keys。CDN 必须配置为 Authorization 非空时绕过 public cache。
+- 任何携带 Authorization 的请求，以及任何可能包含 `team/private/restricted` 内容的 catalog/detail，统一返回 `Cache-Control: private, no-store` 和 `Vary: Authorization`。Registry/CDN 不保存，Studio 不写磁盘离线缓存、不放入共享内存 cache，也不能在登出、token 切换或另一个 Registry 配置间复用。原始 token 及其可逆 hash 永不进入 cache key、cursor、日志或响应。
+- 所有 package 响应无论 public/restricted 都使用 `Cache-Control: private, no-store`，并在每次请求执行 live authorization、active envelope、hash 和 bytes 绑定。离线可用性来自已验证的本地 immutable 安装，不来自缓存 package ZIP。
+
+Registry 授权/可见性变更使用以下失效矩阵；每项都在同一数据库事务中先更新策略状态，再推进 generation，最后发布新投影，事务提交后清理对应 surrogate keys：
+
+| 事件 | envelope 动作 | generation 与 cursor | 必须清理的缓存范围 |
+|---|---|---|---|
+| revision approve 或新 approved revision | 创建新 active envelope | 推进 catalog + resource authorization generation | resource、publisher、目标 channel 的 catalog/detail |
+| withdraw/reject/purge、资源下架或恢复公开 | 撤销旧 active envelope；恢复时创建新 envelope | 推进 catalog + resource authorization generation，旧 cursor 失效 | resource、旧/新 channel、旧 envelope |
+| channel、visibility 或 channel access policy 变化 | 撤销旧 envelope；仍 approved 时按新策略重建 | 推进 catalog + registry/channel authorization generation，旧 cursor 失效 | resource、旧/新 channel、旧/新 visibility |
+| publisher kind/name/ownership 变化 | manifest/envelope 字段受影响时撤销并重建 | 推进 catalog + publisher/resource authorization generation | publisher 下全部 catalog 条目、受影响 detail/envelope |
+| publisher 禁用、封禁或恢复 | 禁用/封禁时撤销其全部 active envelope；恢复时逐项新建 | 推进 catalog + publisher authorization generation，全部旧 cursor 失效 | publisher 的所有 resource/detail/channel/envelope |
+| token scope/version 变更、撤销或 Registry read policy 变化 | 不改变 public envelope；restricted 下载继续 live auth | 推进 token/policy authorization generation，旧 principal fingerprint/cursor 失效 | 所有受影响的 restricted 上游缓存；Studio 因 no-store 本应无持久副本 |
+
+旧 package bytes 可留在不可公开访问的审计存储，但旧 `package_url` 不再可下载。Studio 在安装前永远重新取 exact detail，不能仅凭 catalog 缓存下载；遇到 `revision_not_found`、authorization generation 变化或 envelope ID 变化时立即失效该 resource 的 catalog/detail/package 元数据，并把本地已安装副本保留为可离线使用。
 
 ### 12.2 配方与可复现性 provenance
 
@@ -1033,7 +1082,7 @@ Bug report 请求在现有 `context` 下增加可选 `resource_provenance`，使
 
 - “我的资源”从本机索引立即加载，全部本地工作流继续可用。
 - 云资源库显示最近一次成功 catalog 缓存及更新时间。
-- 离线缓存允许搜索和查看已缓存详情，但禁用安装、更新和远程历史下载。
+- 离线缓存只允许搜索和查看最后一次匿名 public snapshot/详情；authenticated/restricted 响应不落盘。离线时禁用安装、更新和远程历史下载。
 - 无缓存时显示“当前无法连接资源库”，不能显示为“0 个资源”。
 
 ### 14.2 错误分类
@@ -1047,6 +1096,7 @@ Bug report 请求在现有 `context` 下增加可选 `resource_provenance`，使
 - revision_not_found
 - revision_unavailable
 - resource_in_use
+- resource_lease_fenced
 - resource_cutover_busy
 - package_origin_invalid
 - package_download_failed
@@ -1071,8 +1121,12 @@ Bug report 请求在现有 `context` 下增加可选 `resource_provenance`，使
 
 ## 15. 缓存与一致性
 
-- Catalog 缓存按 Registry 配置、channel 和查询条件隔离。
-- 详情缓存按领域 ID + revision ID 隔离。
+- Studio 只持久化匿名 public catalog/detail。公共 Catalog lookup key 固定为 `(registry_key, resource_kind, auth_mode=anonymous_public, normalized_channels, normalized_query_filters_sort)`；实际 versioned entry key 还必须包含 `catalog_generation` 和 `authorization_generation`，并保存 ETag/fetched_at。联网命中必须 revalidate，只有 304/响应 generation 一致时才能让 lookup pointer 继续指向该 versioned entry。
+- 公共详情 key 固定为 `(registry_key, resource_kind, resource_id, revision_id, auth_mode=anonymous_public, authorization_generation, active_envelope_id)`。latest detail 先解析成 exact revision 再缓存，不能用缺 revision 的别名覆盖历史详情。
+- 带 token 或 restricted 响应遵循 12.1 的 `private, no-store`：Studio 不持久化、不进入跨请求共享 cache。若以后要支持 restricted 离线目录，必须另做加密、按 principal/token-scope HMAC fingerprint 隔离的版本化设计，不能在 v2 中复用 public cache。
+- cache key 只使用稳定 `registry_key`，不含带凭据 URL；principal fingerprint 只能由 Registry 生成并用于 cursor 验证，不在 Studio 本地派生或记录原 token。
+- 离线时可以显示最后一次 public snapshot，但必须标记 fetched_at/离线状态；该 snapshot 只用于浏览，不能授权 install/update/exact download。联网恢复后的第一步是 revalidate authorization/catalog generation。
+- Registry 按 12.1 失效矩阵推进 generation 和清理 CDN/server cache；Studio 收到 generation/envelope 变化、统一 404 或 token/config 切换时，清除所有受影响 public metadata，并直接丢弃当前请求的 restricted 内存结果。
 - 安装、更新、回退、修复和卸载成功后，统一触发领域缓存失效。
 - LUT 必须刷新 LUT catalog、详情、颜色网格、KD-Tree 和转换器选择数据。
 - 耗材必须刷新耗材列表、详情、求解器输入和使用状态，不删除可重建缓存以外的用户数据。
@@ -1101,11 +1155,12 @@ Bug report 请求在现有 `context` 下增加可选 `resource_provenance`，使
 ### 17.1 Registry
 
 - v1 Catalog 在 181+ 条数据、未传 limit 时仍返回全部；保留多 revision、旧 hash 与旧字段。
-- v2 Catalog 查询、筛选、排序、稳定 snapshot/cursor 分页和每个逻辑资源只返回最新 approved revision；固定 envelope、结束页双条件、query/principal/domain 绑定、篡改、过期和下载量跨页变化。
+- v2 Catalog 查询、筛选、排序、稳定 snapshot/cursor 分页和每个逻辑资源只返回最新 approved revision；固定 envelope、结束页双条件、query/principal/domain/authorization-generation 绑定、scope 变更、篡改、过期和下载量跨页变化。
 - capability 缺失/旧版本/支持 v2 三种协商结果。
 - 详情、历史和预览响应。
 - exact revision detail/package 覆盖匿名/read-token/maintainer 与 public/restricted/withdrawn/pending/rejected/purged 的授权矩阵；未知、无权和不可见 revision 对外均为相同 404。
-- channel/visibility/withdraw 变更撤销旧 envelope、推进 authorization generation、清理缓存；旧 package URL 不可再读，Studio 重新解析时不能使用 stale envelope。
+- public catalog/detail 的 cache header、ETag、surrogate key、`Vary: Authorization`、Authorization cache bypass 和 60 秒 revalidate；带 token/restricted catalog/detail 与所有 package 必须 `private, no-store`，并验证 CDN/server 不保存。
+- 对 revision 状态、channel/visibility/policy、publisher kind/name/ownership/封禁、token scope/version/revoke 的每一矩阵事件验证 generation、cursor、envelope 和缓存清理；旧 package URL 不可再读。
 - `publisher_kind` 权限：普通上传不能设置 lumina。
 - 下载量只在有效下载计数，不改变 package hash。
 - 上传、批准、拒绝、下架和 channel/visibility 重写。
@@ -1132,7 +1187,7 @@ Bug report 请求在现有 `context` 下增加可选 `resource_provenance`，使
 - 安装、更新、回退、卸载、修复和采用本地等价内容的状态机。
 - managed installed 与 local equivalent 不混淆。
 - update/rollback/repair 时 existing workflow 固定旧 immutable revision；卸载/delete 和 GC 在 lease 下被阻止。
-- 用可控 barrier 交错 Resolver 与 GC：GC 零 lease 检查前后创建 lease、`available -> pending_gc -> deleting` 各边界请求 Resolver、GC 崩溃恢复；证明 `pending_gc` 后不能新建 lease，工作流拿到 path 前 lease 已持久化。
+- 用可控 barrier 交错 lease create/renew/release/stale-delete 与 GC：覆盖 renew 先成功则 GC 等待、GC 先清 stale/推进 fence 则迟到 heartbeat 返回 `resource_lease_fenced` 且不能重建文件、pending_gc 中既有 lease 可续租但不能新建、停止 heartbeat 后以最后 version release、stale-delete 与 renew version CAS、renew 临时文件崩溃恢复。
 - 当前 + 上一版本保留策略。
 - 下载中断、hash 不符、无效 manifest、内容不可加载和原子切换失败。
 - 对 `prepared`、staged rename 已完成但 journal 仍为 `prepared`、`revision_published`、index replaced、journal committed 各阶段做进程崩溃/断电注入并验证启动恢复；另覆盖 final/staging 同时存在、final hash 不符和无关 generation 前进。
@@ -1144,6 +1199,7 @@ Bug report 请求在现有 `context` 下增加可选 `resource_provenance`，使
 - schema v3 配方、PNG 分享卡、bug report provenance round-trip 与 exact revision 重装；覆盖多 LUT 顺序、多耗材 slot、backing index、null 本地引用、hash algorithm 和数组长度/index/name 拒绝路径。
 - managed file 被修改、增加 sidecar 或替换为 symlink/reparse point 时卸载 fail closed 且不删任何文件；detach 只解除管理。
 - 安装后 catalog/详情/转换器缓存刷新。
+- public catalog/detail cache key 包含 registry/kind/query 与 authorization/catalog generation/envelope；token/restricted 结果不落盘也不跨请求共享，覆盖 token/config/principal 切换、统一 404 和 publisher 封禁后的失效。
 - 源会话切换或关闭后的资源可用性。
 - Windows/macOS/Linux 路径与大小写行为。
 - 结构化日志质量门禁。
@@ -1277,11 +1333,11 @@ python scripts/run_vitest.py run src/__tests__/material-cloud-sync-panel.test.ts
 15. Registry v1 在无 limit、181+ 条目和多 revision 下保持现有完整响应；v2 分页不会影响旧 Studio。
 16. Material/LUT canonical hash 算法有显式版本、固定输入字节和三仓 byte-identical 黄金夹具。
 17. 每个事务阶段崩溃后能确定性恢复，包括 rename 已完成而 journal 仍为 `prepared`；两个资源并发提交不会 lost update，casefold 路径不会双重占用。
-18. 预览/生成固定 exact immutable revision；`pending_gc/deleting` 关闭新 lease，更新、回退、修复和 GC 不会改变已有租约中的 payload。
+18. 预览/生成固定 exact immutable revision；lease create/renew/release/stale-delete 共用 revision lock、fence 和 version CAS，`pending_gc` 关闭新 lease，迟到 heartbeat 不能在 `deleting` 后复活租约或改变已有租约中的 payload。
 19. cutover 按领域关闭 admission 并排空在途 writer；提交后 v2 是该领域唯一 writer，混合 cutover 状态、旧 endpoint、legacy refresh 和旧 UI 都不能绕过 v2 合同。
 20. local copy、deferred migration 和有序 exact provenance 重启后不丢失；多 LUT、多耗材和 backing 映射不移位，历史配方可按 exact revision 重装。
 21. 卸载/GC 删除前逐文件核对安装时 hash；文件被修改或含未知 sidecar 时 fail closed 且不删除用户内容。
-22. exact revision 的 principal/channel/state 授权不泄露私有记录；旧 envelope 和缓存撤销后不能继续下载，Studio 不使用 stale package 元数据。
+22. exact revision 的 principal/channel/state 授权不泄露私有记录；带 token/restricted 响应不缓存，所有授权/发布者/可见性变更推进 generation 并撤销 envelope/cache，Studio 不跨主体复用或使用 stale package 元数据。
 23. v2 cursor 与领域、principal、snapshot、查询和排序绑定；结束、篡改、过期和查询不匹配都有固定 envelope 与错误语义。
 
 ## 22. 设计取舍总结
