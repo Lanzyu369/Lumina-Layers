@@ -16,6 +16,24 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-07-12",
+    title: {
+      zh: "Lumina Layers — 6 月下旬至 7 月更新速览",
+      en: "Lumina Layers — Late June to July updates",
+    },
+    sections: [
+      {
+        category: { zh: "校准 & 材料", en: "Calibration & Materials" },
+        items: [
+          {
+            zh: "7 月 12 日：耗材库里的无境新材已更名为 Karvax；之前选过这家耗材的配方和底板耗材会自动继续对应到新名称。",
+            en: "July 12: Wujing materials in the library are now called Karvax, and previously saved material and backing selections will automatically carry over to the new name.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-07-09",
     title: {
       zh: "Lumina Layers — 6 月下旬至 7 月更新速览",
