@@ -4676,7 +4676,11 @@ class VectorProcessor:
                         matched_rgb = tuple(int(c) for c in self.img_processor.lut_rgb[lut_idx])
 
                 stack = self.img_processor.ref_stacks[lut_idx]
-                recipe = [min(int(stack[z]), num_channels - 1) for z in range(min(num_layers, len(stack)))]
+                recipe = _normalise_cached_stack_for_vector_recipe(
+                    stack,
+                    target_layers=min(int(num_layers), len(stack)),
+                    num_channels=num_channels,
+                )
                 color_cache[query_rgb] = {
                     "recipe": recipe,
                     "matched_rgb": matched_rgb,

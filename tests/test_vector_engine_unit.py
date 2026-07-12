@@ -262,6 +262,41 @@ class TestRunLengthExtrude:
 
         assert len(result) == 0
 
+    def test_five_color_air_padded_base_recipe_extrudes_full_faceup_height(self):
+        """5-color base LUT rows use -1 padding but vector meshes need solid layers."""
+        geom = box(0, 0, 10, 10)
+        vp = object.__new__(VectorProcessor)
+        vp.img_processor = types.SimpleNamespace(
+            lut_rgb=np.array([[255, 255, 255]], dtype=np.uint8),
+            ref_stacks=np.array([[-1, 0, 0, 0, 0, 0]], dtype=np.int32),
+        )
+
+        with patch.object(VectorProcessor, "_match_lut_index_for_rgb", return_value=(0, 0.0)):
+            matched = vp._match_colors(
+                [{"geometry": geom, "color": (255, 255, 255)}],
+                replacement_manager=None,
+                num_channels=5,
+                num_layers=6,
+            )
+
+        assert matched[0]["recipe"] == [0, 0, 0, 0, 0, 0]
+
+        result = VectorProcessor._run_length_extrude(
+            matched,
+            num_layers=6,
+            layer_h=self.LAYER_H,
+            num_channels=5,
+            slot_names=["White", "Red", "Yellow", "Blue", "Black"],
+            scale_factor=1.0,
+            face_up=True,
+            optical_z_base=0.24,
+        )
+
+        assert len(result["White"]["meshes"]) == 1
+        z_min, z_max = result["White"]["meshes"][0].bounds[:, 2]
+        assert z_min == pytest.approx(0.24)
+        assert z_max == pytest.approx(0.24 + 6 * self.LAYER_H)
+
 
 # =====================================================================
 # 3. Output ordering
