@@ -264,3 +264,25 @@ def test_list_ignores_nested_material_json_inside_another_material(tmp_path: Pat
     dir_names = {item["directory_name"] for item in items}
     assert "outer" in dir_names
     assert "outer/unexpected_child" not in dir_names
+
+
+def test_karvax_catalog_replaces_the_former_wujing_brand() -> None:
+    """The bundled catalog uses Karvax consistently after the supplier rename."""
+    materials_root = Path(__file__).resolve().parents[1] / "materials"
+    legacy_root = materials_root / "无境新材"
+    karvax_root = materials_root / "Karvax"
+
+    assert not legacy_root.exists()
+
+    archives = sorted(karvax_root.rglob("material.json"))
+    assert archives
+    for archive_path in archives:
+        archive_text = archive_path.read_text(encoding="utf-8")
+        archive = json.loads(archive_text)
+        stage_a_text = (archive_path.parent / "stage_A_parameters.json").read_text(
+            encoding="utf-8"
+        )
+
+        assert archive["brand"] == "Karvax"
+        assert "无境新材" not in archive_text
+        assert "无境新材" not in stage_a_text

@@ -2,10 +2,12 @@
   "param_type": "stage_A",
   "meta": {
     "schema_version": "1.0",
-    "generated_at": "2026-05-04T09:44:12.598051+00:00",
+    "generated_at": "2026-05-04T09:49:28.529465+00:00",
     "source": "lumina_gradient_card_extract",
     "workflow": "single-stage-kit",
-    "warnings": [],
+    "warnings": [
+      "Stage A 拟合误差较高，请检查图像方向和角点选择。"
+    ],
     "image_source": "raw",
     "verification_count": 1,
     "aggregation_method": "refit_combined_samples",
@@ -19,11 +21,15 @@
         {
           "index": 0,
           "is_fresh": true,
-          "bias_flag_count": 0,
-          "bias_flags": [],
-          "structural_flag_count": 0,
-          "structural_flags": [],
-          "white_c0_avg": 0.701204,
+          "bias_flag_count": 1,
+          "bias_flags": [
+            "mean_de_gt_3"
+          ],
+          "structural_flag_count": 1,
+          "structural_flags": [
+            "mean_de_gt_3"
+          ],
+          "white_c0_avg": 0.713313,
           "image_source": "raw",
           "cross_val_rmse": null
         }
@@ -35,16 +41,16 @@
     "channels": [
       {
         "channel_index": 0,
-        "color_name": "无境新材 PLA 拓竹绿",
+        "color_name": "Karvax PLA 暖黄",
         "E": [
-          0.001227,
-          0.428521,
-          0.130632
+          0.858651,
+          0.535453,
+          0.066456
         ],
         "k": [
-          11.52946,
-          2.24589,
-          10.461701
+          1.349812,
+          3.149221,
+          16.591541
         ]
       }
     ],
@@ -54,9 +60,9 @@
         "substrate_id": "white",
         "display_name": "White",
         "C0": [
-          0.686685,
-          0.723055,
-          0.693872
+          0.701102,
+          0.730461,
+          0.708376
         ]
       },
       {
@@ -64,9 +70,9 @@
         "substrate_id": "black",
         "display_name": "Black",
         "C0": [
-          0.024158,
-          0.028426,
-          0.025187
+          0.027321,
+          0.031896,
+          0.027321
         ]
       }
     ]
@@ -74,30 +80,30 @@
   "fitted_substrates": {
     "white": {
       "C0": [
-        0.686685,
-        0.723055,
-        0.693872
+        0.701102,
+        0.730461,
+        0.708376
       ]
     },
     "black": {
       "C0": [
-        0.024158,
-        0.028426,
-        0.025187
+        0.027321,
+        0.031896,
+        0.027321
       ]
     }
   },
   "validation": {
     "overall": {
-      "mean_delta_e": 2.722774130326513,
-      "max_delta_e": 8.162327924377982,
-      "rmse_linear": 0.013547583273960715,
+      "mean_delta_e": 4.053217022008102,
+      "max_delta_e": 9.858422041359805,
+      "rmse_linear": 0.036560171107552226,
       "channel_rmse": [
-        0.008365110614951207,
-        0.01758791087681558,
-        0.013088214281693407
+        0.05750440098875462,
+        0.021179920580731572,
+        0.015955975851038067
       ],
-      "best_run_mean_delta_e": 2.722774130326513,
+      "best_run_mean_delta_e": 4.053217022008102,
       "verification_count": 1,
       "aggregation_method": "refit_combined_samples",
       "selected_run_count": 1,
