@@ -27,6 +27,14 @@ function makeEntry(version: string): AnnouncementEntry {
 }
 
 describe("useAnnouncement", () => {
+  it("announces the Karvax material brand rename in the latest update", () => {
+    expect(ANNOUNCEMENTS[0]?.version).toBe("2026-07-12");
+    const items = ANNOUNCEMENTS[0]?.sections.flatMap((section) => section.items) ?? [];
+
+    expect(items.some((item) => item.zh.includes("Karvax") && item.en.includes("Karvax")))
+      .toBe(true);
+  });
+
   it("case-1 首次访问", async () => {
     const { result } = renderHook(() => useAnnouncement());
 
