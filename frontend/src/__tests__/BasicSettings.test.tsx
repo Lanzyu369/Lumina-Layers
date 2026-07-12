@@ -518,6 +518,50 @@ describe("BasicSettings", () => {
     });
   });
 
+  it("reconciles renamed material selections imported after the library loads", async () => {
+    vi.mocked(extractorApi.listGradientCardMaterials).mockResolvedValueOnce({
+      status: "success",
+      message: "ok",
+      materials: [makeMaterial("Karvax/Karvax PLA 耀石黑", "Karvax PLA 耀石黑")],
+    });
+    useConverterStore.setState({
+      source_version: "material",
+      selectedMaterialDirNames: [],
+      materialBackingMaterialDirName: null,
+    });
+
+    render(<BasicSettings />);
+
+    fireEvent.click(screen.getByTestId("material-picker-trigger"));
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("material-picker-brand-group-toggle"),
+      ).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId("material-picker-brand-group-toggle"));
+    await screen.findByText("Karvax PLA 耀石黑");
+
+    act(() => {
+      useConverterStore.getState().importRecipeState(
+        {
+          source_version: "material",
+          selectedMaterialDirNames: ["无境新材/无境新材 PLA 耀石黑"],
+          materialBackingMaterialDirName: "无境新材/无境新材 PLA 耀石黑",
+        },
+        new File(["recipe"], "recipe.png", { type: "image/png" }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(useConverterStore.getState().selectedMaterialDirNames).toEqual([
+        "Karvax/Karvax PLA 耀石黑",
+      ]);
+      expect(useConverterStore.getState().materialBackingMaterialDirName).toBe(
+        "Karvax/Karvax PLA 耀石黑",
+      );
+    });
+  });
+
   it("shows brand options from the loaded legacy details catalog", () => {
     render(<BasicSettings />);
 

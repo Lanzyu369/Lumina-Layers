@@ -639,49 +639,61 @@ export default function BasicSettings() {
   // --- Material library for material-archive mode ---
   const [materialLibrary, setMaterialLibrary] = useState<SavedMaterialLibraryItem[]>([]);
   const [materialLibraryLoading, setMaterialLibraryLoading] = useState(false);
+  const [materialLibraryLoaded, setMaterialLibraryLoaded] = useState(false);
   useEffect(() => {
-    if (source_version !== "material") return;
+    if (source_version !== "material") {
+      setMaterialLibraryLoaded(false);
+      return;
+    }
     let cancelled = false;
     setMaterialLibraryLoading(true);
+    setMaterialLibraryLoaded(false);
     listGradientCardMaterials()
       .then((res) => {
         if (cancelled) return;
         const materials = res.materials ?? [];
         setMaterialLibrary(materials);
-        // One-shot migration: legacy selections (flat directory_names stored
-        // in localStorage before the brand-subdirectory feature) are remapped
-        // to the current nested directory_name so cache/status/build calls
-        // don't 404. Unresolvable entries are dropped.
-        // 一次性迁移：把 localStorage 里的旧扁平 directory_name 映射到新的
-        // 嵌套名，避免求解器缓存接口 404。
-        const { names: reconciled, changed } = reconcileDirectoryNames(
-          selectedMaterialDirNames,
-          materials,
-        );
-        if (changed) {
-          setSelectedMaterialDirNames(reconciled);
-        }
-        if (materialBackingMaterialDirName) {
-          const backing = reconcileDirectoryNames(
-            [materialBackingMaterialDirName],
-            materials,
-          );
-          if (backing.changed) {
-            setMaterialBackingMaterialDirName(backing.names[0] ?? null);
-          }
-        }
+        setMaterialLibraryLoaded(true);
       })
       .catch(() => {
-        if (!cancelled) setMaterialLibrary([]);
+        if (!cancelled) {
+          setMaterialLibrary([]);
+          setMaterialLibraryLoaded(false);
+        }
       })
       .finally(() => {
         if (!cancelled) setMaterialLibraryLoading(false);
       });
     return () => { cancelled = true; };
-    // selectedMaterialDirNames intentionally omitted: the migration must run
-    // after the fresh library arrives, not on every selection change.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source_version]);
+
+  useEffect(() => {
+    if (source_version !== "material" || !materialLibraryLoaded) return;
+    const { names: reconciled, changed } = reconcileDirectoryNames(
+      selectedMaterialDirNames,
+      materialLibrary,
+    );
+    if (changed) {
+      setSelectedMaterialDirNames(reconciled);
+    }
+    if (materialBackingMaterialDirName) {
+      const backing = reconcileDirectoryNames(
+        [materialBackingMaterialDirName],
+        materialLibrary,
+      );
+      if (backing.changed) {
+        setMaterialBackingMaterialDirName(backing.names[0] ?? null);
+      }
+    }
+  }, [
+    materialBackingMaterialDirName,
+    materialLibrary,
+    materialLibraryLoaded,
+    selectedMaterialDirNames,
+    setMaterialBackingMaterialDirName,
+    setSelectedMaterialDirNames,
+    source_version,
+  ]);
 
   const [materialPickerOpen, setMaterialPickerOpen] = useState(false);
   const handleMaterialPickerConfirm = useCallback(

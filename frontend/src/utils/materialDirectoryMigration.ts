@@ -19,14 +19,10 @@ export interface DirectoryNameCandidate {
 
 const MATERIAL_BRAND_DIRECTORY_RENAMES = [["无境新材", "Karvax"]] as const;
 
-const resolveRenamedBrandDirectoryName = (
-  directoryName: string,
-  knownDirectoryNames: ReadonlySet<string>,
-): string | null => {
+const renameFormerBrandDirectoryName = (directoryName: string): string | null => {
   for (const [formerBrand, currentBrand] of MATERIAL_BRAND_DIRECTORY_RENAMES) {
-    if (!directoryName.startsWith(`${formerBrand}/`)) continue;
-    const renamedDirectoryName = directoryName.replaceAll(formerBrand, currentBrand);
-    return knownDirectoryNames.has(renamedDirectoryName) ? renamedDirectoryName : null;
+    if (!directoryName.startsWith(formerBrand)) continue;
+    return directoryName.replaceAll(formerBrand, currentBrand);
   }
   return null;
 };
@@ -97,11 +93,19 @@ export function reconcileDirectoryNames(
       next.push(name);
       continue;
     }
-    const renamedDirectoryName = resolveRenamedBrandDirectoryName(name, knownDirNames);
+    const renamedDirectoryName = renameFormerBrandDirectoryName(name);
     if (renamedDirectoryName) {
-      next.push(renamedDirectoryName);
-      changed = true;
-      continue;
+      if (knownDirNames.has(renamedDirectoryName)) {
+        next.push(renamedDirectoryName);
+        changed = true;
+        continue;
+      }
+      const renamedLegacyMapped = legacyMap.get(renamedDirectoryName);
+      if (renamedLegacyMapped && knownDirNames.has(renamedLegacyMapped)) {
+        next.push(renamedLegacyMapped);
+        changed = true;
+        continue;
+      }
     }
     const mapped = legacyMap.get(name);
     if (mapped && knownDirNames.has(mapped)) {
