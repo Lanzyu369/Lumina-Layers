@@ -102,6 +102,11 @@ import {
   buildLutCatalogIndex,
   findLutLocationByPath,
 } from "./legacyLutSelection";
+import {
+  isSvgImageFile,
+  rotateImageFile,
+  type ImageRotationDegrees,
+} from "../../utils/imageRotation";
 
 type LuminaWindow = Window & {
   __luminaGenerateStart?: number;
@@ -1606,6 +1611,7 @@ export interface ConverterState {
 export interface ConverterActions {
   // 图片
   setImageFile: (file: File | null) => void;
+  rotateImageForExport: (degrees: ImageRotationDegrees) => Promise<void>;
   loadVectorizedSvgIntoConverter: (file: File) => void;
 
   // 参数 setter
@@ -2665,21 +2671,29 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       }
 
       if (!file) {
+        const currentMode = _get().modeling_mode;
         set({
           imageFile: null,
           imagePreviewUrl: null,
           aspectRatio: null,
+          modeling_mode: currentMode === ModelingModeEnum.VECTOR
+            ? ModelingModeEnum.HIGH_FIDELITY
+            : currentMode,
           ...buildPreviewSessionResetState(),
         });
         return;
       }
 
       if (isRawFileConverter(file)) {
-        const shouldOpenCrop = _get().enableCrop;
+        const currentState = _get();
+        const shouldOpenCrop = currentState.enableCrop;
         set({
           imageFile: file,
           imagePreviewUrl: null,
           aspectRatio: null,
+          modeling_mode: currentState.modeling_mode === ModelingModeEnum.VECTOR
+            ? ModelingModeEnum.HIGH_FIDELITY
+            : currentState.modeling_mode,
           ...buildPreviewSessionResetState(),
           cropModalOpen: shouldOpenCrop,
         });
@@ -2713,14 +2727,43 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       };
       img.src = previewUrl;
 
-      const shouldOpenCrop = _get().enableCrop;
+      const currentState = _get();
+      const shouldOpenCrop = currentState.enableCrop;
+      const modelingMode = currentState.modeling_mode === ModelingModeEnum.VECTOR && !isSvgImageFile(file)
+        ? ModelingModeEnum.HIGH_FIDELITY
+        : currentState.modeling_mode;
       set({
         imageFile: file,
         imagePreviewUrl: previewUrl,
+        modeling_mode: modelingMode,
         ...buildPreviewSessionResetState(),
         cropModalOpen: shouldOpenCrop,
       });
       console.log("[DEBUG] setImageFile: cleared layerImages");
+    },
+
+    rotateImageForExport: async (degrees: ImageRotationDegrees) => {
+      const state = _get();
+      if (!state.imageFile || !state.imagePreviewUrl || state.batchMode) {
+        return;
+      }
+      set({ isLoading: true, error: null });
+      try {
+        const rotatedFile = await rotateImageFile(
+          state.imageFile,
+          state.imagePreviewUrl,
+          degrees,
+        );
+        _get().setImageFile(rotatedFile);
+      } catch (err) {
+        set({
+          error: visibleConverterError(err, tRuntime("basic_image_rotation_failed")),
+        });
+      } finally {
+        if (_get().isLoading) {
+          set({ isLoading: false });
+        }
+      }
     },
 
     loadVectorizedSvgIntoConverter: (file: File) => {
@@ -3265,8 +3308,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       })),
     setColorMode: (mode: ColorMode) =>
       set({ color_mode: mode, threemfDiskPath: null, downloadUrl: null }),
-    setModelingMode: (mode: ModelingMode) =>
-      set({ modeling_mode: mode, threemfDiskPath: null, downloadUrl: null }),
+    setModelingMode: (mode: ModelingMode) => {
+      const state = _get();
+      if (mode === ModelingModeEnum.VECTOR && !isSvgImageFile(state.imageFile)) {
+        return;
+      }
+      set({ modeling_mode: mode, threemfDiskPath: null, downloadUrl: null });
+    },
     setColorLayers: (layers: number | null) =>
       set({
         color_layers:

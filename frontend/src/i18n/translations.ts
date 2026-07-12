@@ -3334,6 +3334,22 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "上传后裁剪",
     en: "Crop After Upload",
   },
+  basic_image_rotation_label: {
+    zh: "图像旋转",
+    en: "Image Rotation",
+  },
+  basic_image_rotation_apply: {
+    zh: "应用旋转",
+    en: "Apply Rotation",
+  },
+  basic_image_rotation_hint: {
+    zh: "旋转会直接更新当前图片；后续预览和导出都会使用旋转后的图像。",
+    en: "Rotation updates the current image; later previews and exports use the rotated image.",
+  },
+  basic_image_rotation_failed: {
+    zh: "图像旋转失败",
+    en: "Failed to rotate image",
+  },
   basic_lut_label: {
     zh: "LUT",
     en: "LUT",
