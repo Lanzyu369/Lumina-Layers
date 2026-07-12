@@ -2,7 +2,7 @@
 
 ## Goal
 
-Add an opt-in browser setting that requests notification permission from a user gesture and sends Windows system notifications when long-running Lumina work completes successfully.
+Add an opt-in browser setting that requests notification permission from a user gesture and sends Windows or macOS system notifications when long-running Lumina work completes successfully.
 
 The initial completion coverage is:
 
@@ -53,6 +53,8 @@ Create `frontend/src/utils/browserNotifications.ts` with a narrow interface:
 - construct a browser `Notification` only when permission is `granted`
 - catch all permission and delivery errors and return a result instead of throwing
 
+Permission requests use both the standards-based Promise result and the legacy callback result. Modern browsers settle through the Promise, while older macOS Safari releases that return no Promise settle through the callback. The adapter accepts whichever channel resolves first and ignores the duplicate result in browsers that support both.
+
 Each completion kind uses a stable `tag` so repeated work of the same type does not create an unbounded notification stack.
 
 ### Settings state and UI
@@ -91,6 +93,7 @@ Completion notifications use concise bilingual copy:
 ### Unit and component tests
 
 - notification adapter: unsupported API, existing permission states, permission request success/failure, bilingual payloads, stable tags, and constructor failure isolation
+- macOS Safari compatibility: callback-only permission requests and hybrid callback-plus-Promise requests
 - settings store: default-off state, setter behavior, and legacy hydration fallback
 - Settings page: granted, denied, unsupported, and disable flows
 - converter store: preview, normal generation, puzzle generation, large-format generation, and batch success call the adapter only when enabled; failures and stale responses remain silent
@@ -101,6 +104,7 @@ Completion notifications use concise bilingual copy:
 - focused Vitest suites through `python scripts/run_vitest.py`
 - full frontend TypeScript build and ESLint
 - browser run on the local FastAPI/Vite application: enable the option, grant site permission, complete a preview and a generation, and confirm browser notifications are requested and delivered
+- macOS verification when a Mac runner is available: exercise Safari's permission prompt and confirm delivery in macOS Notification Center
 - process cleanup after browser verification
 
 ## Risks and Mitigations

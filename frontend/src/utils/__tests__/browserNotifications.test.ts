@@ -82,6 +82,43 @@ describe("browser notification permission", () => {
     expect(MockNotification.requestPermission).toHaveBeenCalledOnce();
   });
 
+  it("supports callback-only permission requests used by older macOS Safari", async () => {
+    class CallbackOnlyNotification {
+      static permission: NotificationPermission = "default";
+
+      static requestPermission(
+        callback?: NotificationPermissionCallback,
+      ): void {
+        callback?.("granted");
+      }
+    }
+
+    vi.stubGlobal("Notification", CallbackOnlyNotification);
+
+    await expect(requestBrowserNotificationPermission()).resolves.toBe(
+      "granted",
+    );
+  });
+
+  it("settles once when a browser supports both callback and Promise results", async () => {
+    class HybridNotification {
+      static permission: NotificationPermission = "default";
+
+      static requestPermission(
+        callback?: NotificationPermissionCallback,
+      ): Promise<NotificationPermission> {
+        callback?.("granted");
+        return Promise.resolve("denied");
+      }
+    }
+
+    vi.stubGlobal("Notification", HybridNotification);
+
+    await expect(requestBrowserNotificationPermission()).resolves.toBe(
+      "granted",
+    );
+  });
+
   it("returns error when requesting permission throws", async () => {
     stubNotification("default");
     MockNotification.requestPermission.mockRejectedValue(

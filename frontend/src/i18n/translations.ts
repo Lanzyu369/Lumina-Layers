@@ -1798,24 +1798,24 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Completion notifications",
   },
   "settings.completion_notifications_description": {
-    zh: "浏览器通知会在预览、模型生成、批量生成和校准生成完成时提醒你。此设置仅保存在当前浏览器中。",
-    en: "Browser notifications alert you when preview, model generation, batch generation, or calibration generation finishes. This setting is stored only in this browser.",
+    zh: "浏览器通知会在 Windows 或 macOS 上，于预览、模型生成、批量生成和校准生成完成时提醒你。此设置仅保存在当前浏览器中。",
+    en: "Browser notifications alert you on Windows or macOS when preview, model generation, batch generation, or calibration generation finishes. This setting is stored only in this browser.",
   },
   "settings.completion_notifications_enable_label": {
     zh: "启用浏览器完成通知",
     en: "Enable browser completion notifications",
   },
   "settings.completion_notifications_hint": {
-    zh: "开启时浏览器会申请通知权限；允许后，预览和生成任务完成时会在此设备提醒你。",
-    en: "Enabling this asks the browser for notification permission. Once allowed, this device alerts you when preview and generation tasks finish.",
+    zh: "开启时浏览器会申请通知权限；允许后，完成提醒会显示在 Windows 通知中心或 macOS 通知中心。",
+    en: "Enabling this asks the browser for notification permission. Once allowed, completion alerts appear in Windows Notification Center or macOS Notification Center.",
   },
   "settings.completion_notifications_granted": {
     zh: "浏览器已允许通知。开启后，此设备会收到完成提醒。",
     en: "Browser permission is granted. When enabled, this device will receive completion alerts.",
   },
   "settings.completion_notifications_denied": {
-    zh: "浏览器已拒绝通知权限，功能保持关闭。请在浏览器的站点设置中允许通知后重试。",
-    en: "The browser denied notification permission, so the feature remains off. Allow notifications in the browser's site settings, then try again.",
+    zh: "浏览器已拒绝通知权限，功能保持关闭。请在浏览器的网站通知设置中允许；macOS 还需确认“系统设置 > 通知”未关闭浏览器通知。",
+    en: "The browser denied notification permission, so the feature remains off. Allow it in the browser's website notification settings; on macOS, also check that the browser is enabled under System Settings > Notifications.",
   },
   "settings.completion_notifications_default": {
     zh: "尚未授予浏览器通知权限。开启时浏览器会询问；若关闭或忽略提示，功能会保持关闭。",

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add an opt-in browser permission flow and reliable Windows completion notifications for converter preview/generation, batch generation, and calibration generation.
+**Goal:** Add an opt-in browser permission flow and reliable Windows/macOS completion notifications for converter preview/generation, batch generation, and calibration generation.
 
 **Architecture:** Keep permission and Notification API handling in one defensive browser adapter. Persist only a client-side boolean in `settingsStore`, expose it through the existing Settings page, and invoke the adapter from authoritative success convergence points so failure, cancellation, and stale-response paths stay silent.
 
@@ -56,11 +56,11 @@ export function showBrowserCompletionNotification(
 ): boolean;
 ```
 
-`requestBrowserNotificationPermission()` returns an existing `granted` or `denied` state without calling `requestPermission()`, calls it only for `default`, and returns `error` on an exception. `showBrowserCompletionNotification()` creates `new Notification(title, { body, tag })` and never throws.
+`requestBrowserNotificationPermission()` returns an existing `granted` or `denied` state without calling `requestPermission()`, calls it only for `default`, and returns `error` on an exception. It must accept both the Promise result used by modern browsers and the callback-only result used by older macOS Safari releases, settling exactly once if a browser supplies both. `showBrowserCompletionNotification()` creates `new Notification(title, { body, tag })` and never throws.
 
 - [ ] **Step 2: Add adapter regression tests**
 
-Use `vi.stubGlobal("Notification", MockNotification)` and restore globals after each test. Cover unsupported, granted without a request, denied without a request, request success, request exception, Chinese and English payloads, stable tags, and a throwing constructor.
+Use `vi.stubGlobal("Notification", MockNotification)` and restore globals after each test. Cover unsupported, granted without a request, denied without a request, Promise request success, callback-only macOS Safari success, hybrid callback-plus-Promise settlement, request exception, Chinese and English payloads, stable tags, and a throwing constructor.
 
 - [ ] **Step 3: Run the adapter tests**
 
@@ -219,7 +219,7 @@ Expected: all commands exit 0. Do not weaken lint, TypeScript, or test configura
 
 - [ ] **Step 15: Run browser verification**
 
-Start the application with the project launcher, open `http://localhost:5174`, navigate to Settings, enable completion notifications, grant the browser prompt, and verify the enabled status. Complete one real preview and one real generation using a repository sample asset. Confirm the browser constructs the corresponding notification payloads and, where the controlled browser exposes it, the Windows notification toast appears.
+Start the application with the project launcher, open `http://localhost:5174`, navigate to Settings, enable completion notifications, grant the browser prompt, and verify the enabled status. Complete one real preview and one real generation using a repository sample asset. Confirm the browser constructs the corresponding notification payloads and, where the controlled browser exposes it, the Windows or macOS notification toast appears. On macOS, verify Safari's callback-compatible permission path and Notification Center delivery when a Mac runner is available.
 
 - [ ] **Step 16: Clean up and independently review**
 

@@ -23,6 +23,10 @@ type RenotifyNotificationOptions = NotificationOptions & {
   renotify: boolean;
 };
 
+type CompatibleNotificationPermissionRequest = (
+  callback?: NotificationPermissionCallback,
+) => Promise<NotificationPermission> | undefined;
+
 const COMPLETION_NOTIFICATION_MESSAGES: CompletionNotificationMessageMap = {
   preview: {
     tag: "lumina-completion-preview",
@@ -63,11 +67,32 @@ export async function requestBrowserNotificationPermission(): Promise<BrowserNot
     return currentPermission;
   }
 
-  try {
-    return await Notification.requestPermission();
-  } catch {
-    return "error";
-  }
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (permission: BrowserNotificationPermission) => {
+      if (settled) return;
+      settled = true;
+      resolve(permission);
+    };
+
+    try {
+      const requestPermission = Notification.requestPermission.bind(
+        Notification,
+      ) as CompatibleNotificationPermissionRequest;
+      const permissionPromise = requestPermission((permission) => {
+        settle(permission);
+      });
+
+      if (permissionPromise) {
+        void permissionPromise.then(
+          (permission) => settle(permission),
+          () => settle("error"),
+        );
+      }
+    } catch {
+      settle("error");
+    }
+  });
 }
 
 export function showBrowserCompletionNotification(

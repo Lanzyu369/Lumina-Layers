@@ -138,6 +138,11 @@ describe("SettingsPanel completion notifications", () => {
       "settings-completion-notifications-section",
     );
     expect(
+      within(notificationSection).getByText(
+        translations["settings.completion_notifications_description"].zh,
+      ),
+    ).toBeInTheDocument();
+    expect(
       within(notificationSection).getByRole("button", {
         name: translations["settings.completion_notifications_enable_label"].zh,
       }),
