@@ -5,6 +5,8 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import inspect
+import subprocess
+import sys
 
 import numpy as np
 import pytest
@@ -65,6 +67,27 @@ SHARMA_CIEDE2000_PAIRS = (
     ((6.7747, -0.2908, -2.4247), (5.8714, -0.0985, -2.2286), 0.6377),
     ((2.0776, 0.0795, -1.1350), (0.9033, -0.0636, -0.5514), 0.9082),
 )
+
+
+def test_solver_imports_without_numba() -> None:
+    script = """
+import builtins
+real_import = builtins.__import__
+def blocked_import(name, *args, **kwargs):
+    if name == 'numba' or name.startswith('numba.'):
+        raise ImportError('numba intentionally unavailable')
+    return real_import(name, *args, **kwargs)
+builtins.__import__ = blocked_import
+import core.material_dynamic_solver as solver
+assert solver._NUMBA_AVAILABLE is False
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_dynamic_solver_module_and_public_api_exist() -> None:

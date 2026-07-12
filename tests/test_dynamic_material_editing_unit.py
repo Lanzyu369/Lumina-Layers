@@ -61,7 +61,7 @@ def test_automatic_dynamic_sync_uses_exact_solver_and_saves_metadata() -> None:
     }
     cache = {
         "material_matrix": np.zeros((1, 2, 7), dtype=np.int16),
-        "mask_solid": np.ones((1, 2), dtype=bool),
+        "mask_solid": np.asarray([[True, False]], dtype=bool),
         "quantized_image": np.asarray(
             [[[10, 20, 30], [1, 2, 3]]],
             dtype=np.uint8,
@@ -242,7 +242,7 @@ def test_region_read_rejects_missing_dynamic_actual_metadata() -> None:
     assert exc_info.value.status_code == 409
 
 
-def test_automatic_sync_reuses_seen_target_merges_unseen_and_reweights_benefit() -> None:
+def test_automatic_sync_resolves_and_rebuilds_complete_target_set() -> None:
     from api.routers.converter import replace
 
     seen_entry = {
@@ -304,14 +304,30 @@ def test_automatic_sync_reuses_seen_target_merges_unseen_and_reweights_benefit()
         dtype=np.uint8,
     )
     diff_mask = np.ones((1, 2), dtype=bool)
-    unseen_info = {
+    full_info = {
         "enabled": True,
         "min_layer_count": 5,
         "max_layer_count": 7,
         "delta_e00_tolerance": 0.4,
         "engine": "numba",
-        "colors": [unseen_entry],
-        "benefit_curve": [],
+        "colors": [seen_entry, unseen_entry],
+        "benefit_curve": [
+            {
+                "max_effective_layer_count": 5,
+                "weighted_mean_delta_e00": 1.5,
+                "marginal_delta_e00_reduction": 0.0,
+            },
+            {
+                "max_effective_layer_count": 6,
+                "weighted_mean_delta_e00": 1.15,
+                "marginal_delta_e00_reduction": 0.35,
+            },
+            {
+                "max_effective_layer_count": 7,
+                "weighted_mean_delta_e00": 0.85,
+                "marginal_delta_e00_reduction": 0.3,
+            },
+        ],
     }
 
     with (
@@ -320,13 +336,16 @@ def test_automatic_sync_reuses_seen_target_merges_unseen_and_reweights_benefit()
             replace,
             "_solve_dynamic_material_targets",
             return_value=(
-                np.asarray([[44, 55, 66]], dtype=np.uint8),
+                np.asarray([[11, 22, 33], [44, 55, 66]], dtype=np.uint8),
                 np.asarray(
-                    [unseen_entry["print_recipe_top_to_bottom"]],
+                    [
+                        seen_entry["print_recipe_top_to_bottom"],
+                        unseen_entry["print_recipe_top_to_bottom"],
+                    ],
                     dtype=np.int32,
                 ),
-                np.asarray([1.0]),
-                unseen_info,
+                np.asarray([0.7, 1.0]),
+                full_info,
                 {"dynamic_engine": "numba"},
             ),
         ) as exact_solve,
@@ -341,7 +360,7 @@ def test_automatic_sync_reuses_seen_target_merges_unseen_and_reweights_benefit()
     solved_targets = exact_solve.call_args.kwargs["unique_colors"]
     np.testing.assert_array_equal(
         solved_targets,
-        np.asarray([[40, 50, 60]], dtype=np.uint8),
+        np.asarray([[10, 20, 30], [40, 50, 60]], dtype=np.uint8),
     )
     assert [
         entry["target_srgb"]
@@ -413,6 +432,20 @@ def test_api_benefit_weights_use_target_map_when_matched_colors_collide() -> Non
     }
     updated_rgb = target_map.copy()
 
+    solved_info = {
+        "enabled": True,
+        "min_layer_count": 5,
+        "max_layer_count": 7,
+        "delta_e00_tolerance": 0.5,
+        "colors": entries,
+        "benefit_curve": [
+            {
+                "max_effective_layer_count": 5,
+                "weighted_mean_delta_e00": 2.5,
+                "marginal_delta_e00_reduction": 0.0,
+            }
+        ],
+    }
     with patch.object(
         replace,
         "load_multiple_materials",
@@ -420,8 +453,17 @@ def test_api_benefit_weights_use_target_map_when_matched_colors_collide() -> Non
     ), patch.object(
         replace,
         "_solve_dynamic_material_targets",
-        side_effect=AssertionError("both exact targets should be reused"),
-    ):
+        return_value=(
+            np.asarray([matched, matched], dtype=np.uint8),
+            np.asarray(
+                [entry["print_recipe_top_to_bottom"] for entry in entries],
+                dtype=np.int32,
+            ),
+            np.asarray([1.0, 3.0], dtype=np.float64),
+            solved_info,
+            {"dynamic_engine": "numba"},
+        ),
+    ) as exact_solve:
         replace._sync_material_archive_matrix_for_diff(
             session_data,
             cache,
@@ -431,6 +473,10 @@ def test_api_benefit_weights_use_target_map_when_matched_colors_collide() -> Non
 
     curve = cache["material_dynamic_layer_info"]["benefit_curve"]
     assert curve[0]["weighted_mean_delta_e00"] == 2.5
+    np.testing.assert_array_equal(
+        exact_solve.call_args.kwargs["pixel_counts"],
+        np.asarray([1, 3], dtype=np.int64),
+    )
     np.testing.assert_array_equal(cache["quantized_image"], target_map)
 
 

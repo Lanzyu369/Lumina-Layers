@@ -352,77 +352,6 @@ def _apply_material_archive_color_replacements(
     return new_matched_rgb, new_material_matrix, applied
 
 
-def _dynamic_material_benefit_curve(
-    color_entries: list[dict],
-    target_rgb_map: np.ndarray,
-    mask_solid: np.ndarray,
-) -> list[dict]:
-    """Reweight exact layer-cap results for the current raster.
-
-    按当前栅格像素数重新加权逐层精确结果。
-    """
-
-    weighted_entries: list[tuple[int, dict[int, float]]] = []
-    layer_caps: set[int] = set()
-    for entry in color_entries:
-        if not isinstance(entry, dict):
-            continue
-        target = entry.get("target_srgb")
-        options = entry.get("layer_cap_options")
-        if (
-            not isinstance(target, (list, tuple))
-            or len(target) != 3
-            or not isinstance(options, list)
-            or not options
-        ):
-            continue
-        option_map: dict[int, float] = {}
-        for option in options:
-            if not isinstance(option, dict):
-                continue
-            try:
-                cap = int(option["max_effective_layer_count"])
-                option_map[cap] = float(option["delta_e00"])
-            except (KeyError, TypeError, ValueError):
-                continue
-        if not option_map:
-            continue
-        target_row = np.asarray(target, dtype=np.uint8)
-        count = int(
-            np.sum(
-                np.all(np.asarray(target_rgb_map) == target_row, axis=-1)
-                & np.asarray(mask_solid, dtype=bool)
-            )
-        )
-        if count <= 0:
-            continue
-        weighted_entries.append((count, option_map))
-        layer_caps.update(option_map)
-
-    curve: list[dict] = []
-    previous: float | None = None
-    for cap in sorted(layer_caps):
-        values = [
-            (count, options[cap])
-            for count, options in weighted_entries
-            if cap in options
-        ]
-        if not values:
-            continue
-        total = sum(count for count, _value in values)
-        mean = sum(count * value for count, value in values) / total
-        marginal = 0.0 if previous is None else max(0.0, previous - mean)
-        curve.append(
-            {
-                "max_effective_layer_count": int(cap),
-                "weighted_mean_delta_e00": round(float(mean), 12),
-                "marginal_delta_e00_reduction": round(float(marginal), 12),
-            }
-        )
-        previous = mean
-    return curve
-
-
 def _apply_dynamic_material_archive_color_replacements(
     matched_rgb: np.ndarray,
     material_matrix: np.ndarray,
@@ -442,10 +371,12 @@ def _apply_dynamic_material_archive_color_replacements(
 ) -> tuple[np.ndarray, np.ndarray, int, dict, dict, np.ndarray]:
     """Apply replacements through the exact dynamic material solver.
 
-    Reuses entries for exact target RGB values, solves only unseen targets,
-    and preserves the configured maximum-width print matrix.
+    Re-solves the complete current target set because the fixed-maximum
+    comparison uses request-local target coherence. Every automatic target is
+    then rebuilt from the same solve, preserving the configured print width.
 
-    复用完全相同目标 RGB 的精确结果，仅求解未见目标，并保持最大宽度打印矩阵。
+    重新求解当前完整目标集合，因为固定最大层数基线使用请求内目标色一致性；
+    随后用同一次求解重建全部自动目标，并保持最大宽度打印矩阵。
     """
 
     from core.material_dynamic_solver import DynamicMaterialCandidateError
@@ -489,8 +420,7 @@ def _apply_dynamic_material_archive_color_replacements(
         )
 
     jobs: list[tuple[tuple[int, int, int], np.ndarray]] = []
-    target_counts: dict[tuple[int, int, int], int] = {}
-    target_order: list[tuple[int, int, int]] = []
+    solid_mask = np.asarray(mask_solid, dtype=bool)
     updated_target_map = target_map.copy()
     for orig_hex, replacement_hex in color_replacements.items():
         try:
@@ -513,7 +443,7 @@ def _apply_dynamic_material_archive_color_replacements(
                 np.asarray(matched_rgb) == np.asarray(original, dtype=np.uint8),
                 axis=-1,
             )
-            & np.asarray(mask_solid, dtype=bool)
+            & solid_mask
         )
         if not np.any(original_mask):
             continue
@@ -523,10 +453,6 @@ def _apply_dynamic_material_archive_color_replacements(
             target_key,
             dtype=np.uint8,
         )
-        if target_key not in target_counts:
-            target_order.append(target_key)
-            target_counts[target_key] = 0
-        target_counts[target_key] += int(np.sum(original_mask))
 
     if not jobs:
         return (
@@ -538,67 +464,48 @@ def _apply_dynamic_material_archive_color_replacements(
             target_map,
         )
 
-    config_matches = (
-        int(current_info.get("min_layer_count", min_layer_count))
-        == int(min_layer_count)
-        and int(current_info.get("max_layer_count", max_layer_count))
-        == int(max_layer_count)
-        and float(current_info.get("delta_e00_tolerance", delta_e00_tolerance))
-        == float(delta_e00_tolerance)
+    target_rows, target_counts = np.unique(
+        updated_target_map[solid_mask],
+        axis=0,
+        return_counts=True,
     )
-    existing_colors = current_info.get("colors") if config_matches else []
+    if target_rows.shape[0] == 0:
+        raise DynamicMaterialCandidateError(
+            "dynamic replacement target image contains no printable colours",
+            target_srgb=jobs[0][0],
+            layer_count=int(max_layer_count),
+            phase="target_map",
+        )
+    (
+        _resolved,
+        _recipes,
+        _delta_e00,
+        new_info,
+        new_solver_info,
+    ) = _solve_dynamic_material_targets(
+        unique_colors=np.asarray(target_rows, dtype=np.uint8),
+        pixel_counts=np.asarray(target_counts, dtype=np.int64),
+        materials=materials,
+        backing_material_index=int(backing_material_index),
+        layer_height_mm=float(layer_height_mm),
+        substrate=str(substrate),
+        min_layer_count=int(min_layer_count),
+        max_layer_count=int(max_layer_count),
+        delta_e00_tolerance=float(delta_e00_tolerance),
+    )
+    solved_colors = new_info.get("colors") if isinstance(new_info, dict) else None
     entries_by_target: dict[tuple[int, int, int], dict] = {}
-    merged_order: list[tuple[int, int, int]] = []
-    for entry in existing_colors if isinstance(existing_colors, list) else []:
+    for entry in solved_colors if isinstance(solved_colors, list) else []:
         if not isinstance(entry, dict):
             continue
         target = entry.get("target_srgb")
-        if not isinstance(target, (list, tuple)) or len(target) != 3:
-            continue
-        key = tuple(int(value) for value in target)
-        if key not in entries_by_target:
-            merged_order.append(key)
-        entries_by_target[key] = deepcopy(entry)
-
-    unseen = [key for key in target_order if key not in entries_by_target]
-    new_info: dict = {}
-    new_solver_info: dict = {}
-    if unseen:
-        (
-            _resolved,
-            _recipes,
-            _delta_e00,
-            new_info,
-            new_solver_info,
-        ) = _solve_dynamic_material_targets(
-            unique_colors=np.asarray(unseen, dtype=np.uint8),
-            pixel_counts=np.asarray(
-                [target_counts[key] for key in unseen],
-                dtype=np.int64,
-            ),
-            materials=materials,
-            backing_material_index=int(backing_material_index),
-            layer_height_mm=float(layer_height_mm),
-            substrate=str(substrate),
-            min_layer_count=int(min_layer_count),
-            max_layer_count=int(max_layer_count),
-            delta_e00_tolerance=float(delta_e00_tolerance),
-        )
-        new_colors = new_info.get("colors") if isinstance(new_info, dict) else None
-        for entry in new_colors if isinstance(new_colors, list) else []:
-            if not isinstance(entry, dict):
-                continue
-            target = entry.get("target_srgb")
-            if not isinstance(target, (list, tuple)) or len(target) != 3:
-                continue
-            key = tuple(int(value) for value in target)
-            if key not in entries_by_target:
-                merged_order.append(key)
-            entries_by_target[key] = deepcopy(entry)
+        if isinstance(target, (list, tuple)) and len(target) == 3:
+            entries_by_target[tuple(int(value) for value in target)] = entry
 
     new_rgb = np.asarray(matched_rgb).copy()
     new_matrix = matrix.copy()
-    for target, original_mask in jobs:
+    for target_row in target_rows:
+        target = tuple(int(value) for value in target_row)
         entry = entries_by_target.get(target)
         if entry is None:
             raise DynamicMaterialCandidateError(
@@ -621,39 +528,20 @@ def _apply_dynamic_material_archive_color_replacements(
                 layer_count=int(max_layer_count),
                 phase="result_validation",
             )
-        new_rgb[original_mask] = np.asarray(achieved, dtype=np.uint8)
-        new_matrix[original_mask] = np.asarray(
+        target_mask = np.all(updated_target_map == target_row, axis=-1) & solid_mask
+        new_rgb[target_mask] = np.asarray(achieved, dtype=np.uint8)
+        new_matrix[target_mask] = np.asarray(
             print_recipe,
             dtype=new_matrix.dtype,
         )
 
-    merged_colors = [entries_by_target[key] for key in merged_order]
-    merged_info = deepcopy(current_info if config_matches else {})
-    if isinstance(new_info, dict):
-        merged_info.update(
-            {key: deepcopy(value) for key, value in new_info.items() if key not in {"colors", "benefit_curve"}}
-        )
-    merged_info.update(
-        {
-            "enabled": True,
-            "min_layer_count": int(min_layer_count),
-            "max_layer_count": int(max_layer_count),
-            "delta_e00_tolerance": float(delta_e00_tolerance),
-            "colors": merged_colors,
-            "benefit_curve": _dynamic_material_benefit_curve(
-                merged_colors,
-                updated_target_map,
-                np.asarray(mask_solid, dtype=bool),
-            ),
-        }
-    )
     merged_solver_info = current_solver_info
     merged_solver_info.update(new_solver_info)
     return (
         new_rgb,
         new_matrix,
         len(jobs),
-        merged_info,
+        new_info,
         merged_solver_info,
         updated_target_map,
     )

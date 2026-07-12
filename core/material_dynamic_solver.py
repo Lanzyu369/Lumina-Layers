@@ -11,7 +11,25 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 import numpy as np
-from numba import njit, prange
+
+try:
+    from numba import njit, prange
+
+    _NUMBA_AVAILABLE = True
+except ImportError:  # pragma: no cover - exercised through import isolation
+    _NUMBA_AVAILABLE = False
+
+    def njit(*args, **_kwargs):
+        """Return a no-op decorator when Numba is not installed."""
+
+        if args and callable(args[0]):
+            return args[0]
+        return lambda function: function
+
+    def prange(*args):
+        """Use the built-in range only for import-time fallback definitions."""
+
+        return range(*args)
 
 from core.colorchecker.color_metrics import delta_e_2000
 from core.material_cache import MaterialSolverCache, canonical_palette_order
@@ -862,7 +880,7 @@ def search_dynamic_catalog_exact(
         normalized_max,
     )
     numba_error: Exception | None = None
-    if prefer_numba:
+    if prefer_numba and _NUMBA_AVAILABLE:
         try:
             indices, values, fixed = _search_exact_numba_kernel(*kernel_arguments)
             return ExactDynamicSearchResult(

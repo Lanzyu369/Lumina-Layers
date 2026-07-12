@@ -4,6 +4,7 @@ import type { ConverterState } from "../stores/converter/store";
 import { DEFAULT_STATE } from "../stores/converter";
 import type { SettingsState } from "../stores/settingsStore";
 import { DEFAULT_SETTINGS } from "../stores/settingsStore";
+import type { DynamicMaterialRecipe } from "../api/types";
 
 function makeState(overrides?: Partial<ConverterState>): ConverterState {
   return { ...DEFAULT_STATE, ...overrides } as ConverterState;
@@ -165,6 +166,42 @@ describe("recipe/exportRecipe", () => {
         "LUT-A",
         "LUT-B",
       ]);
+    });
+
+    it("exports dynamic material settings and exact recipe metadata", () => {
+      const dynamicRecipe: DynamicMaterialRecipe = {
+        target_srgb: [240, 220, 200],
+        matched_srgb: [238, 218, 198],
+        actual_layer_count: 5,
+        padding_layer_count: 2,
+        actual_recipe_top_to_bottom: [0, 1, 0, 1, 0],
+        print_recipe_top_to_bottom: [0, 1, 0, 1, 0, 1, 1],
+        selected_delta_e00: 0.7,
+        best_range_delta_e00: 0.4,
+        fixed_max_delta_e00: 0.5,
+        delta_e00_sacrifice: 0.3,
+        layer_cap_options: [],
+      };
+      const recipe = exportConverterRecipe(
+        makeState({
+          source_version: "material",
+          materialDynamicLayerCountEnabled: true,
+          materialMinLayerCount: 5,
+          materialMaxLayerCount: 7,
+          materialDynamicRecipes: [dynamicRecipe],
+        }),
+        makeSettings({ materialDeltaE00Tolerance: 0.7 }),
+        "fp",
+      );
+
+      expect(recipe.source).toMatchObject({
+        material_dynamic_layer_count_enabled: true,
+        material_min_layer_count: 5,
+        material_max_layer_count: 7,
+        material_delta_e00_tolerance: 0.7,
+      });
+      expect(recipe.material_dynamic?.recipes[0]).toEqual(dynamicRecipe);
+      expect(recipe.material_dynamic?.recipes[0]).not.toBe(dynamicRecipe);
     });
 
     it("exports large format parameters", () => {

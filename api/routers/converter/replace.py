@@ -786,96 +786,74 @@ def _sync_material_archive_matrix_for_diff(
         updated_target_map[diff_mask] = np.asarray(updated_rgb, dtype=np.uint8)[
             diff_mask
         ]
-        target_rgbs = np.unique(
-            updated_target_map[diff_mask],
+        solid_mask = np.asarray(cache.get("mask_solid"), dtype=bool)
+        target_rgbs, target_pixel_counts = np.unique(
+            updated_target_map[solid_mask],
             axis=0,
-        ).astype(np.uint8, copy=False)
-        target_pixel_counts = np.asarray(
-            [
-                int(
-                    np.sum(
-                        np.all(updated_target_map == color, axis=-1)
-                        & diff_mask
-                    )
-                )
-                for color in target_rgbs
-            ],
-            dtype=np.int64,
+            return_counts=True,
         )
+        if target_rgbs.shape[0] == 0:
+            raise DynamicMaterialCandidateError(
+                "dynamic replacement target image contains no printable colours",
+                layer_count=max_layer_count,
+                phase="target_map",
+            )
         backing_index = _resolve_material_backing_index(
             selected_materials,
             session_data.get("material_backing_material_index"),
         )
-        existing_info = deepcopy(cache.get("material_dynamic_layer_info") or {})
         min_layer_count = int(session_data.get("material_min_layer_count") or 5)
         tolerance = float(session_data.get("material_delta_e00_tolerance", 0.5))
-        config_matches = (
-            isinstance(existing_info, dict)
-            and int(existing_info.get("min_layer_count", min_layer_count))
-            == min_layer_count
-            and int(existing_info.get("max_layer_count", max_layer_count))
-            == max_layer_count
-            and float(existing_info.get("delta_e00_tolerance", tolerance))
-            == tolerance
+        (
+            _resolved_rgb,
+            _print_recipes,
+            _delta_e00,
+            new_info,
+            new_solver_info,
+        ) = _solve_dynamic_material_targets(
+            unique_colors=np.asarray(target_rgbs, dtype=np.uint8),
+            pixel_counts=np.asarray(target_pixel_counts, dtype=np.int64),
+            materials=materials,
+            backing_material_index=backing_index,
+            layer_height_mm=layer_height_mm,
+            substrate=substrate,
+            min_layer_count=min_layer_count,
+            max_layer_count=max_layer_count,
+            delta_e00_tolerance=tolerance,
         )
-        existing_colors = existing_info.get("colors") if config_matches else None
+        new_colors = new_info.get("colors") if isinstance(new_info, dict) else None
         entries_by_target: dict[tuple[int, int, int], dict] = {}
-        ordered_targets: list[tuple[int, int, int]] = []
-        for entry in existing_colors if isinstance(existing_colors, list) else []:
+        for entry in new_colors if isinstance(new_colors, list) else []:
             if not isinstance(entry, dict):
                 continue
             raw_target = entry.get("target_srgb")
             if not isinstance(raw_target, (list, tuple)) or len(raw_target) != 3:
                 continue
             key = tuple(int(value) for value in raw_target)
-            if key not in entries_by_target:
-                ordered_targets.append(key)
-            entries_by_target[key] = deepcopy(entry)
+            entries_by_target[key] = entry
 
-        unseen_rows: list[list[int]] = []
-        unseen_counts: list[int] = []
-        for target_row, count in zip(target_rgbs, target_pixel_counts):
-            key = tuple(int(value) for value in target_row)
-            if key in entries_by_target:
-                continue
-            unseen_rows.append(list(key))
-            unseen_counts.append(int(count))
-
-        new_info: dict | None = None
-        new_solver_info: dict = {}
-        if unseen_rows:
-            (
-                _resolved_rgb,
-                _print_recipes,
-                _delta_e00,
-                new_info,
-                new_solver_info,
-            ) = _solve_dynamic_material_targets(
-                unique_colors=np.asarray(unseen_rows, dtype=np.uint8),
-                pixel_counts=np.asarray(unseen_counts, dtype=np.int64),
-                materials=materials,
-                backing_material_index=backing_index,
-                layer_height_mm=layer_height_mm,
-                substrate=substrate,
-                min_layer_count=min_layer_count,
-                max_layer_count=max_layer_count,
-                delta_e00_tolerance=tolerance,
-            )
-            new_colors = new_info.get("colors") if isinstance(new_info, dict) else None
-            for entry in new_colors if isinstance(new_colors, list) else []:
-                if not isinstance(entry, dict):
+        # Manual region recipes remain authoritative. Rebuild every other
+        # pixel from the complete fresh solve so unchanged automatic colours
+        # cannot retain stale request-local fixed baselines.
+        # 手动区域配方保持权威；其余像素全部使用完整新求解重建，避免未变目标色
+        # 留下过期的请求级固定层数基线。
+        manual_mask = np.zeros(solid_mask.shape, dtype=bool)
+        region_masks = session_data.get("selected_region_masks") or {}
+        if isinstance(region_masks, dict):
+            for override in session_data.get("recipe_overrides") or []:
+                if not isinstance(override, dict):
                     continue
-                raw_target = entry.get("target_srgb")
-                if not isinstance(raw_target, (list, tuple)) or len(raw_target) != 3:
-                    continue
-                key = tuple(int(value) for value in raw_target)
-                if key not in entries_by_target:
-                    ordered_targets.append(key)
-                entries_by_target[key] = deepcopy(entry)
+                region_mask = region_masks.get(str(override.get("region_id") or ""))
+                if (
+                    isinstance(region_mask, np.ndarray)
+                    and region_mask.shape == solid_mask.shape
+                ):
+                    manual_mask |= np.asarray(region_mask, dtype=bool)
+        automatic_mask = solid_mask & ~manual_mask
 
         new_material_matrix = material_matrix_arr.copy()
         target_masks = [
-            np.all(updated_target_map == color, axis=-1) & diff_mask
+            np.all(updated_target_map == color, axis=-1) & automatic_mask
             for color in target_rgbs
         ]
         for color, color_mask in zip(target_rgbs, target_masks):
@@ -910,37 +888,13 @@ def _sync_material_archive_matrix_for_diff(
                 copy=False,
             )
 
-        merged_colors = [entries_by_target[key] for key in ordered_targets]
-        merged_info = deepcopy(existing_info) if config_matches else {}
-        if isinstance(new_info, dict):
-            merged_info.update(
-                {
-                    key: deepcopy(value)
-                    for key, value in new_info.items()
-                    if key not in {"colors", "benefit_curve"}
-                }
-            )
-        merged_info.update(
-            {
-                "enabled": True,
-                "min_layer_count": min_layer_count,
-                "max_layer_count": max_layer_count,
-                "delta_e00_tolerance": tolerance,
-                "colors": merged_colors,
-                "benefit_curve": _recompute_dynamic_material_benefit_curve(
-                    merged_colors,
-                    updated_target_map,
-                    np.asarray(cache.get("mask_solid"), dtype=bool),
-                ),
-            }
-        )
         solver_info = deepcopy(cache.get("material_solver_info") or {})
         solver_info.update(new_solver_info)
         cache["material_matrix"] = new_material_matrix
         cache["quantized_image"] = updated_target_map
         cache["color_layers"] = max_layer_count
         cache["layer_height_mm"] = float(layer_height_mm)
-        cache["material_dynamic_layer_info"] = merged_info
+        cache["material_dynamic_layer_info"] = new_info
         cache["material_solver_info"] = solver_info
         return
 

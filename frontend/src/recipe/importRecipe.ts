@@ -3,7 +3,15 @@
  * 配方导入适配器：解析配方文件并映射回 converter store 状态。
  */
 
-import type { AssetEntry, LuminaRecipe } from "./types";
+import type {
+  AssetEntry,
+  ConverterRecipeSource,
+  LuminaRecipe,
+} from "./types";
+import {
+  MATERIAL_DYNAMIC_LAYER_COUNT_MAX,
+  MATERIAL_DYNAMIC_LAYER_COUNT_MIN,
+} from "../stores/converter/store";
 import type { ConverterState } from "../stores/converter/store";
 import type {
   ColorReplacementItem,
@@ -36,6 +44,36 @@ function cloneVirtualMaterials(
     name: material.name,
     hex: material.hex,
   }));
+}
+
+function normalizeImportedDynamicLayerCount(
+  value: unknown,
+  fallback: number,
+): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.min(
+    MATERIAL_DYNAMIC_LAYER_COUNT_MAX,
+    Math.max(MATERIAL_DYNAMIC_LAYER_COUNT_MIN, Math.round(value)),
+  );
+}
+
+function resolveImportedDynamicLayerBounds(
+  source: ConverterRecipeSource | undefined,
+): { minimum: number; maximum: number } {
+  const minimum = normalizeImportedDynamicLayerCount(
+    source?.material_min_layer_count,
+    MATERIAL_DYNAMIC_LAYER_COUNT_MIN,
+  );
+  const maximum = normalizeImportedDynamicLayerCount(
+    source?.material_max_layer_count,
+    MATERIAL_DYNAMIC_LAYER_COUNT_MAX,
+  );
+  return {
+    minimum: Math.min(minimum, maximum),
+    maximum: Math.max(minimum, maximum),
+  };
 }
 
 // ========== Source detection ==========
@@ -324,6 +362,10 @@ export function restoreConverterRecipe(
     warnings.push(RECIPE_IMPORT_WARNING_LUT_MISSING);
   }
   const source = conv.source;
+  const dynamicBounds = resolveImportedDynamicLayerBounds(source);
+  const dynamicMaterialEnabled =
+    source?.source_version === "material" &&
+    source.material_dynamic_layer_count_enabled === true;
   const restoredLegacyLutNames = restoreLegacyLutNames(
     lutName,
     source?.selected_legacy_lut_names,
@@ -478,7 +520,7 @@ export function restoreConverterRecipe(
     quantize_colors: conv.base.quantize_colors,
     high_precision_3d_preview: Boolean(conv.base.high_precision_3d_preview),
     enable_cleanup: conv.base.enable_cleanup,
-    hue_enable: conv.base.hue_enable,
+    hue_enable: dynamicMaterialEnabled ? false : conv.base.hue_enable,
     chroma_gate: conv.base.chroma_gate,
     selectedNativeBrandKey: source?.selected_native_brand_key ?? "",
     selectedNativeDbNames: [...(source?.selected_native_db_names ?? [])],
@@ -492,6 +534,13 @@ export function restoreConverterRecipe(
     materialLayerCount: source?.material_layer_count ?? 5,
     materialLayerHeightMm: source?.material_layer_height_mm ?? 0.08,
     materialBackingMaterialDirName: source?.material_backing_material_dir_name ?? null,
+    materialDynamicLayerCountEnabled: dynamicMaterialEnabled,
+    materialMinLayerCount: dynamicBounds.minimum,
+    materialMaxLayerCount: dynamicBounds.maximum,
+    // Exported result metadata is historical evidence only. A new preview
+    // must recompute it for the imported image/material runtime.
+    materialDynamicRecipes: [],
+    materialLayerBenefitCurve: [],
 
     // Geometry
     spacer_thick: resolveFridgeMagnetSpacerThick(

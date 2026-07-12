@@ -257,6 +257,46 @@ describe("recipe/importRecipe", () => {
       expect(state.materialBackingMaterialDirName).toBe("brand/white");
     });
 
+    it("restores dynamic material bounds but requires a fresh solve", () => {
+      const recipe = createTestRecipe();
+      recipe.recipe.converter!.base.hue_enable = true;
+      recipe.recipe.converter!.source = {
+        source_version: "material",
+        selected_native_brand_key: "",
+        selected_native_db_names: [],
+        color_layers: null,
+        layer_height_mm: null,
+        model_enable: false,
+        model_only: false,
+        model_threshold: null,
+        model_margin: null,
+        selected_material_dir_names: ["brand/red", "brand/white"],
+        material_layer_count: 7,
+        material_layer_height_mm: 0.08,
+        material_backing_material_dir_name: "brand/white",
+        material_dynamic_layer_count_enabled: true,
+        material_min_layer_count: 5,
+        material_max_layer_count: 7,
+        material_delta_e00_tolerance: 0.7,
+      };
+
+      const { state } = restoreConverterRecipe(
+        recipe,
+        LOCAL_LUTS,
+        LOCAL_FINGERPRINTS,
+      );
+
+      expect(state).toMatchObject({
+        source_version: "material",
+        materialDynamicLayerCountEnabled: true,
+        materialMinLayerCount: 5,
+        materialMaxLayerCount: 7,
+        hue_enable: false,
+        materialDynamicRecipes: [],
+        materialLayerBenefitCurve: [],
+      });
+    });
+
     it("normalizes puzzle-specific mutually exclusive settings from imported recipes", () => {
       const recipe = createTestRecipe();
       recipe.recipe.converter!.geometry.add_loop = true;

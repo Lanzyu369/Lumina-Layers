@@ -15,7 +15,11 @@ import { buildAssetEntry, sha256String } from "./utils";
 import { colorRemapToReplacementRegions } from "../utils/colorUtils";
 import type { ConverterState } from "../stores/converter/store";
 import type { SettingsState } from "../stores/settingsStore";
-import type { ColorReplacementItem } from "../api/types";
+import type {
+  ColorReplacementItem,
+  DynamicMaterialRecipe,
+  MaterialLayerBenefitPoint,
+} from "../api/types";
 import {
   MIN_COVER_WIDTH,
   computeFooterLayout,
@@ -62,6 +66,32 @@ function virtualMaterialsField(
 ): { virtual_materials?: Array<{ name: string; hex: string }> } {
   const cloned = cloneVirtualMaterials(materials);
   return cloned ? { virtual_materials: cloned } : {};
+}
+
+function cloneDynamicMaterialRecipe(
+  recipe: DynamicMaterialRecipe,
+): DynamicMaterialRecipe {
+  return {
+    ...recipe,
+    target_srgb: [...recipe.target_srgb],
+    matched_srgb: [...recipe.matched_srgb],
+    actual_recipe_top_to_bottom: [...recipe.actual_recipe_top_to_bottom],
+    print_recipe_top_to_bottom: [...recipe.print_recipe_top_to_bottom],
+    layer_cap_options: recipe.layer_cap_options.map((option) => ({
+      ...option,
+      matched_srgb: [...option.matched_srgb],
+      actual_recipe_top_to_bottom: [
+        ...option.actual_recipe_top_to_bottom,
+      ],
+      print_recipe_top_to_bottom: [...option.print_recipe_top_to_bottom],
+    })),
+  };
+}
+
+function cloneMaterialLayerBenefitCurve(
+  curve: MaterialLayerBenefitPoint[],
+): MaterialLayerBenefitPoint[] {
+  return curve.map((point) => ({ ...point }));
 }
 
 // ========== App version ==========
@@ -119,6 +149,10 @@ export function exportConverterRecipe(
     normalizedHeightMap[ensureHash(hex)] = height;
   }
   const selectedLegacyLutNames = normalizeLegacyLutNames(state);
+  const isMaterialSource = state.source_version === "material";
+  const hasDynamicResult =
+    state.materialDynamicRecipes.length > 0 ||
+    state.materialLayerBenefitCurve.length > 0;
 
   const lutRef: LutReference = {
     name: state.lut_name,
@@ -157,7 +191,31 @@ export function exportConverterRecipe(
       material_layer_count: state.materialLayerCount,
       material_layer_height_mm: state.materialLayerHeightMm,
       material_backing_material_dir_name: state.materialBackingMaterialDirName,
+      ...(isMaterialSource
+        ? {
+            material_dynamic_layer_count_enabled:
+              state.materialDynamicLayerCountEnabled,
+            material_min_layer_count: state.materialMinLayerCount,
+            material_max_layer_count: state.materialMaxLayerCount,
+            material_delta_e00_tolerance:
+              settings.materialDeltaE00Tolerance,
+          }
+        : {}),
     },
+    ...(isMaterialSource &&
+    state.materialDynamicLayerCountEnabled &&
+    hasDynamicResult
+      ? {
+          material_dynamic: {
+            recipes: state.materialDynamicRecipes.map(
+              cloneDynamicMaterialRecipe,
+            ),
+            benefit_curve: cloneMaterialLayerBenefitCurve(
+              state.materialLayerBenefitCurve,
+            ),
+          },
+        }
+      : {}),
     geometry: {
       spacer_thick: state.enable_fridge_magnet
         ? state.base_spacer_thick

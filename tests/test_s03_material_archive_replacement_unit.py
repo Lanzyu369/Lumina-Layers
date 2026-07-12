@@ -46,7 +46,7 @@ _SMALL_PALETTE = [
 ]
 
 
-def test_dynamic_replacement_reuses_seen_target_and_solves_only_unseen() -> None:
+def test_dynamic_replacement_resolves_complete_current_target_set() -> None:
     matched = np.asarray([[[100, 0, 0], [0, 100, 0]]], dtype=np.uint8)
     matrix = np.zeros((1, 2, 7), dtype=np.int32)
     solid = np.ones((1, 2), dtype=bool)
@@ -87,15 +87,21 @@ def test_dynamic_replacement_reuses_seen_target_and_solves_only_unseen() -> None
     }
     new_info = {
         **existing_info,
-        "colors": [unseen_entry],
+        "colors": [seen_entry, unseen_entry],
     }
 
     with patch(
         "core.pipeline.s03_color_replacement._solve_dynamic_material_targets",
         return_value=(
-            np.asarray([[44, 55, 66]], dtype=np.uint8),
-            np.asarray([unseen_entry["print_recipe_top_to_bottom"]], dtype=np.int32),
-            np.asarray([1.0], dtype=np.float64),
+            np.asarray([[11, 22, 33], [44, 55, 66]], dtype=np.uint8),
+            np.asarray(
+                [
+                    seen_entry["print_recipe_top_to_bottom"],
+                    unseen_entry["print_recipe_top_to_bottom"],
+                ],
+                dtype=np.int32,
+            ),
+            np.asarray([0.7, 1.0], dtype=np.float64),
             new_info,
             {"dynamic_engine": "numba"},
         ),
@@ -131,7 +137,7 @@ def test_dynamic_replacement_reuses_seen_target_and_solves_only_unseen() -> None
 
     np.testing.assert_array_equal(
         exact_solve.call_args.kwargs["unique_colors"],
-        np.asarray([[40, 50, 60]], dtype=np.uint8),
+        np.asarray([[10, 20, 30], [40, 50, 60]], dtype=np.uint8),
     )
     assert applied == 2
     assert out_matrix.shape == (1, 2, 7)
@@ -183,10 +189,29 @@ def test_dynamic_replacement_benefit_uses_target_map_on_matched_collision() -> N
         "benefit_curve": [],
     }
 
+    info["benefit_curve"] = [
+        {
+            "max_effective_layer_count": 5,
+            "weighted_mean_delta_e00": 2.5,
+            "marginal_delta_e00_reduction": 0.0,
+        }
+    ]
     with patch(
         "core.pipeline.s03_color_replacement._solve_dynamic_material_targets",
-        side_effect=AssertionError("both exact targets should be reused"),
-    ):
+        return_value=(
+            np.asarray([matched, matched], dtype=np.uint8),
+            np.asarray(
+                [
+                    info["colors"][0]["print_recipe_top_to_bottom"],
+                    info["colors"][1]["print_recipe_top_to_bottom"],
+                ],
+                dtype=np.int32,
+            ),
+            np.asarray([1.0, 3.0], dtype=np.float64),
+            info,
+            {"dynamic_engine": "numba"},
+        ),
+    ) as exact_solve:
         (
             _out_rgb,
             _out_matrix,
@@ -212,6 +237,10 @@ def test_dynamic_replacement_benefit_uses_target_map_on_matched_collision() -> N
         )
 
     assert applied == 2
+    np.testing.assert_array_equal(
+        exact_solve.call_args.kwargs["pixel_counts"],
+        np.asarray([1, 3], dtype=np.int64),
+    )
     assert merged_info["benefit_curve"][0]["weighted_mean_delta_e00"] == 2.5
     np.testing.assert_array_equal(
         updated_target_map,

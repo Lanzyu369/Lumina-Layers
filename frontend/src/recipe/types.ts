@@ -6,7 +6,11 @@
  * V1: 全站统一配方 schema，首批仅接入 converter。
  */
 
-import type { FridgeMagnetItem } from "../api/types";
+import type {
+  DynamicMaterialRecipe,
+  FridgeMagnetItem,
+  MaterialLayerBenefitPoint,
+} from "../api/types";
 
 // ========== Asset ==========
 
@@ -176,6 +180,15 @@ export interface ConverterRecipeSource {
   material_layer_count: number;
   material_layer_height_mm: number;
   material_backing_material_dir_name: string | null;
+  material_dynamic_layer_count_enabled?: boolean;
+  material_min_layer_count?: number;
+  material_max_layer_count?: number;
+  material_delta_e00_tolerance?: number;
+}
+
+export interface ConverterRecipeMaterialDynamic {
+  recipes: DynamicMaterialRecipe[];
+  benefit_curve: MaterialLayerBenefitPoint[];
 }
 
 // ========== Converter Recipe (combined) ==========
@@ -183,6 +196,7 @@ export interface ConverterRecipeSource {
 export interface ConverterRecipe {
   base: ConverterRecipeBase;
   source?: ConverterRecipeSource;
+  material_dynamic?: ConverterRecipeMaterialDynamic;
   geometry: ConverterRecipeGeometry;
   relief: ConverterRecipeRelief;
   outline: ConverterRecipeOutline;
