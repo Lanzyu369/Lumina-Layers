@@ -1,6 +1,6 @@
 # 云耗材与云 LUT 资源中心 v2 设计
 
-状态：二次设计复核修订稿
+状态：三次设计复核修订稿
 日期：2026-07-10
 目标仓库：Lumina Studio、Lumina Material Registry、Lumina Materials
 替代范围：现有“耗材库 / 云端耗材”和“LUT 库 / 云端 LUT”分裂式管理体验
@@ -204,10 +204,10 @@ lut-preset/_sync/resource-store/<registry_key>/<lut_id>/<revision_id>-<hash12>/.
 3. 校验 package URL 与 Registry 同源，禁止重定向；限制响应大小、Content-Length、下载时间和压缩包大小。
 4. 校验 `package_sha256`，安全读取 ZIP，并按 8.6 节逐字段绑定 record、manifest 和 payload。
 5. 在与最终 revision 目录同一文件系统的 `_sync/transactions/<txid>/staged/` 解压，调用领域加载器验证，并 fsync 每个文件和 staging 目录。staging 不得放在系统临时盘。
-6. 写入并 fsync 持久事务日志 `_sync/transactions/<txid>/journal.json`，状态为 `prepared`，内容包括 `base_generation`、目标 immutable path、casefold path reservation、before/after resource record 和逐文件 ownership manifest。
-7. 获取“同一资源”跨进程操作锁，再获取短时全局 commit 锁。全局锁保护共享索引、路径 reservation、事务状态和 generation，不在持锁期间下载或解析大文件。
+6. 写入并 fsync 持久事务日志 `_sync/transactions/<txid>/journal.json`，状态为 `prepared`，内容包括 `base_generation`、目标 immutable path、casefold path reservation、before/after resource record、staged tree digest 和逐文件 ownership manifest。journal 必须包含足够信息，使恢复进程不依赖已经消失的 staging 也能验证最终 revision 是否正是该事务发布的内容。
+7. 获取“同一资源”跨进程操作锁；若事务改变 active/previous/GC 状态，再按 revision ID 排序获取相关 revision lock；最后获取短时全局 commit 锁。全局锁保护共享索引、路径 reservation、事务状态和 generation，不在持锁期间下载或解析大文件。全系统锁顺序固定为 resource lock -> 排序后的 revision lock -> global commit lock；只需要后级锁的代码可以从后级开始，但任何代码都不能持有后级锁再反向获取前级锁。
 8. 在锁内重新读取索引；只有 `generation == base_generation` 且 canonical/casefold 目标路径仍未被其他资源占用时才提交。否则释放锁、重算 delta 后重试或返回 `resource_commit_conflict`。
-9. 把 staged revision 原子重命名到从未存在过的 immutable revision path，fsync 其父目录，并把 journal 更新为 `revision_published`。
+9. 把 staged revision 原子重命名到经锁内确认从未存在过的 immutable revision path，fsync 其父目录，再把 journal 原子更新并 fsync 为 `revision_published`。rename 与 journal 更新之间仍是明确的可崩溃窗口，必须由下述恢复表处理，不能假设二者原子完成。
 10. 将 after record 合并到最新索引，写入 `generation + 1` 的临时索引，fsync 文件，原子替换正式索引，再 fsync 父目录。随后把 journal 更新为 `committed`。
 11. 提交后释放锁，统一刷新 LUT 详情/catalog/KD-Tree、耗材列表和相关运行时缓存；上一 rollback slot 或过期 revision 只进入异步 GC，不在主事务内删除。
 
@@ -215,14 +215,16 @@ POSIX 使用文件与父目录 fsync；Windows 使用同卷原子 replace、文�
 
 #### 启动恢复
 
-Studio 在开放任何 mutating endpoint 前扫描未完成 journal：
+Studio 在开放对应领域的任何 mutating endpoint 前扫描未完成 journal。恢复按固定锁顺序获取同一 resource 锁、journal 涉及的 revision lock 和全局 commit 锁，读取最新索引，并优先判断索引是否已经包含该 `transaction_id`/after record，然后按下列互斥组合处理：
 
-- `prepared` 且最终 revision 不存在：删除 staging，标记 `aborted`。
-- `revision_published`、最终 revision 完整且索引仍是 `base_generation`：获取全局锁并按 journal 的 after record 确定性前滚。
+- 索引已经包含 `transaction_id`/after record，但 journal 未完成：验证最终 revision 后把 journal 标记为 `committed`；验证失败则关闭该领域写入并返回 `local_index_recovery_required`，不得把损坏内容当成已提交。
+- `prepared` 且最终 revision 不存在：若 staging 仍存在则只删除该事务自己的 staging；若 staging 也不存在则直接收敛。两种情况都保持 before record 并标记 `aborted`。
+- `prepared` 且最终 revision 已存在：这是“rename 完成、`revision_published` journal 尚未写入”的规定恢复分支。要求 staging 已不存在，最终目录不是 symlink/reparse point，目录只含 journal 声明的 `managed_files[]`，逐文件 bytes/hash、staged tree digest、content hash、目标 reservation 和 after record 全部匹配。验证通过后先把 journal 持久化为 `revision_published`，再进入下述正常前滚；不得重新下载或再次 rename。
+- 上一分支中若 staging 与 final 同时存在、final 被其他 transaction/index 引用、文件或 reservation 任一不匹配，则把该 revision 状态标记为 `quarantined_recovery`、保持路径 reservation、禁止 Resolver 暴露，并关闭该领域写入。恢复器不删除、不覆盖、不移动不确定内容；repair dry-run 必须显示 journal/final/staging 差异，由显式 `--apply` 决定隔离清理或恢复。
+- `revision_published`、最终 revision 完整且索引仍是 `base_generation`：按 journal 的 after record 确定性前滚。
 - `revision_published` 且全局 generation 已被其他资源推进：若 journal 中该 resource 的 before record 与 path-reservation precondition 在最新索引中仍完全成立，则把同一 delta rebase 到最新 generation 后前滚；不能只因无关资源提交就进入 repair。
-- `revision_published` 但最终 revision 校验失败：删除未被索引引用的 revision；若存在旧 active record，保持旧 active。
-- 索引已经包含 `transaction_id`/after record，但 journal 未完成：标记 `committed` 并进入正常 GC。
-- 同一 resource 的 before record 或 path reservation 与 journal 冲突：停止写入，返回 `local_index_recovery_required`，由 repair dry-run 给出方案，禁止猜测覆盖。
+- `revision_published` 但最终 revision 校验失败：标记 `quarantined_recovery` 并保持旧 active record；只有能够逐文件证明该目录由本事务创建且未被任何索引/lease 引用时，repair `--apply` 才能删除，启动恢复本身不执行猜测性删除。
+- 同一 resource 的 before record 或 path reservation 与 journal 冲突：停止该领域写入，返回 `local_index_recovery_required`，由 repair dry-run 给出方案，禁止猜测覆盖。
 
 因此断电可能留下可识别的 staging 或 orphan immutable revision，但不能留下“无 current”、半个 payload 或无法判断的新文件/旧索引组合。
 
@@ -276,7 +278,11 @@ Studio 在开放任何 mutating endpoint 前扫描未完成 journal：
 }
 ```
 
-Resolver 创建持久 lease 文件 `_sync/leases/<lease_id>.json`，记录 session/job ID、主进程 PID 与启动标识、exact revision、创建时间、heartbeat/expiry。主进程持有租约并把 immutable path 作为标量传给 worker；worker 不重新解析“当前版本”。正常完成、会话关闭或取消时释放租约；启动恢复只清理 PID/start marker 已失效或超过 TTL 且无活动 session 的 stale lease。
+每个 revision 具有 `available | pending_gc | deleting | gc_conflict | quarantined_recovery | deleted` 持久状态，并有跨进程 revision lock；Resolver 创建 lease 与 GC 关闭 lease admission 必须使用同一把锁，不能只靠先后扫描 lease 目录。
+
+Resolver 的顺序固定为：获取 revision lock -> 读取最新 revision 状态和索引 generation -> 只允许 `available` -> 验证 payload -> 以临时文件 + fsync + 原子 rename 创建 `_sync/leases/<lease_id>.json` -> 再次确认状态/generation 未变 -> 返回 immutable path -> 释放锁。lease 记录 session/job ID、主进程 PID 与启动标识、exact revision、revision fencing generation、创建时间、heartbeat/expiry。`pending_gc` 是禁止新 lease 的第一道 fence，`deleting` 是删除阶段 fence；任一非 `available` 状态都必须拒绝。active/previous revision 命中非 `available` 视为 `local_index_recovery_required`，不再处于 slot 的历史 revision 返回 `revision_unavailable`，都不能先返回 path 后补 lease。
+
+主进程持有租约并把 immutable path 作为标量传给 worker；worker 不重新解析“当前版本”。正常完成、会话关闭或取消时释放租约；启动恢复只清理 PID/start marker 已失效或超过 TTL 且无活动 session 的 stale lease。仅 heartbeat 超时不足以回收仍有有效 PID/start marker 或活动 session/job 的 lease。
 
 生命周期规则：
 
@@ -286,9 +292,11 @@ Resolver 创建持久 lease 文件 `_sync/leases/<lease_id>.json`，记录 sessi
 | rollback | 允许切换未来 active；已租用 revision 保持原路径与内容 |
 | repair | 发布或重新验证新 immutable revision；不得原地修改租用中的 payload |
 | uninstall/delete | 按产品决策阻止并返回 `resource_in_use` |
-| previous/GC 清理 | 标记 `pending_gc`，最后一个 lease 释放后才执行 |
+| previous/GC 清理 | 标记 `pending_gc`；按下述原子协议关闭新 lease 后才执行 |
 
 “只保留 current + previous”是可回退 slot 的逻辑上限。有活动租约的更老 revision 可以临时超出该上限，但不再作为可回退选项；租约释放后再由 GC 回收。这样一次工作流不会混用更新前后两个版本。
+
+把 revision 从 active/previous slot 移到 GC 队列的资源事务，必须在同一 revision lock 内先持久化为 `pending_gc`，再切换 slot；从该时刻起 Resolver 已不能创建新 lease。GC 协议固定为：获取 revision lock -> 确认 revision 仍为 `pending_gc` 且不是 active/previous -> 清理可证明 stale 的 lease；若仍有有效 lease则保持 `pending_gc` 并退出 -> 有效 lease 为零时获取 global commit lock，通过 journal/index generation 把状态持久化为 `deleting` -> 在仍持有 revision lock 时再次扫描 lease 为零 -> 释放 global/revision lock 后执行 11.4 的 ownership preflight 与删除。删除成功提交 `deleted`；出现内容冲突则提交 `gc_conflict` 并保留全部文件。崩溃恢复遇到 `deleting` 时根据 GC journal 继续逐文件幂等删除，或在尚未删除任何文件且 payload 仍完整时恢复为 `pending_gc`，不得直接恢复为 `available`。
 
 ## 7. 三仓职责
 
@@ -374,6 +382,7 @@ Capability 响应固定为：
 - `revision_id`
 - `content_hash_algorithm`
 - `content_hash`
+- `envelope_id`
 - `package_url`
 - `package_sha256`
 - `package_bytes`
@@ -404,7 +413,8 @@ v2 LUT 条目形状示例：
   "revision_id": "rev_example",
   "content_hash_algorithm": "lumina-lut-file-bytes-v1",
   "content_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-  "package_url": "/api/material-registry/v2/luts/lut_example/revisions/rev_example/package",
+  "envelope_id": "env_example_01",
+  "package_url": "/api/material-registry/v2/luts/lut_example/revisions/rev_example/package?envelope_id=env_example_01",
   "package_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
   "package_bytes": 12345,
   "publisher_kind": "community",
@@ -446,7 +456,26 @@ v2 Catalog 支持：
 
 v1 保留 `offset`、可选 `limit` 和旧响应计数字段，且未传 `limit` 时必须返回全部匹配项。v2 默认 `limit=50`、最大 `100`，新客户端使用 cursor，避免目录更新或下载量变化导致 offset 重复/漏项。
 
-Cursor 必须包含排序键和资源 ID 稳定次序。按下载量排序时使用请求开始时的分页快照或等价稳定游标，不能因翻页期间计数变化而重复或遗漏同一资源。
+两个 v2 领域 endpoint 使用相同 envelope；`resource_kind` 与 `items[]` 中领域 ID 必须和路由一致：
+
+```json
+{
+  "contract_version": "2.0",
+  "resource_kind": "lut",
+  "catalog_generation": "cat_01J...",
+  "items": [],
+  "page": {
+    "limit": 50,
+    "returned": 0,
+    "has_more": false,
+    "next_cursor": null
+  }
+}
+```
+
+第一页创建一个有界生命周期的只读 catalog snapshot；`catalog_generation` 标识该 snapshot。Cursor 是不透明、带完整性保护且有过期时间的 token，至少绑定 `resource_kind`、principal/channel 授权指纹、snapshot generation、规范化查询/筛选 digest、sort、固定 page limit 和最后一项稳定排序 tuple。`updated_desc` 使用 `(updated_at, resource_id)`，`downloads_desc` 使用 snapshot 中的 `(download_count, resource_id)`；后续下载量或 catalog 变化不能改变同一 snapshot 的翻页结果。
+
+客户端后续页只需提交 `cursor`。若同时重复 `q`、筛选、sort 或 limit，它们必须与 cursor 绑定值完全一致，否则返回 `400 catalog_cursor_query_mismatch`。篡改、格式错误或用于另一领域/principal 的 cursor 返回 `400 catalog_cursor_invalid`；snapshot/cursor 过期返回 `410 catalog_cursor_expired`。结束页必须同时满足 `has_more=false` 和 `next_cursor=null`；非结束页必须提供非空 `next_cursor`。服务端默认 snapshot TTL 为 15 分钟，并允许配置延长，但不能在同一 cursor 链中缩短已经承诺的 expiry。
 
 ### 8.4 详情与历史
 
@@ -516,6 +545,8 @@ material.json:<material_file_sha256>\nstage_A_parameters.json:<stage_a_file_sha2
 - 每个必需 file 的 role、path、bytes 和 sha256
 - 下载响应的 `package_sha256` 和 `package_bytes`
 
+active envelope 还必须单独绑定：exact detail 的 `envelope_id` 等于受信 package URL query，且等于下载响应 `X-Lumina-Envelope-ID`；实际下载 bytes 的 SHA-256/长度等于 exact detail 的 `package_sha256/package_bytes`。`envelope_id` 是 Registry 分发记录字段，不要求写入核心 manifest，因此 channel/visibility 重打包不会改变核心 revision 身份。
+
 任一字段不一致都以 `registry_package_binding_mismatch` 失败；不得只验证 ZIP 自洽后继续安装。
 
 ### 8.7 跨仓黄金夹具
@@ -564,17 +595,27 @@ Materials 与 Studio vendoring 完全相同的 fixture bytes，并保存 `UPSTRE
 ```json
 {
   "schema_version": "1.0",
-  "resource_store_version": "2.0",
-  "cutover_state": "v2_committed",
   "domains": {
-    "material": {"catalog_version": "2", "actions": ["install", "update", "rollback", "uninstall", "repair", "update_all"]},
-    "lut": {"catalog_version": "2", "actions": ["install", "update", "rollback", "uninstall", "repair", "update_all"]}
+    "material": {
+      "resource_store_version": "2.0",
+      "cutover_state": "v2_committed",
+      "adapter_generation": "resources-v2-1",
+      "catalog_version": "2",
+      "actions": ["install", "update", "rollback", "uninstall", "repair", "update_all"]
+    },
+    "lut": {
+      "resource_store_version": "1.0",
+      "cutover_state": "v1_active",
+      "adapter_generation": null,
+      "catalog_version": "1",
+      "actions": []
+    }
   },
   "legacy_response_versions": {"material_sync": "1.0", "lut_registry": "1.0"}
 }
 ```
 
-新前端只有看到受支持的 `resource_store_version` 和 domain action 后才显示对应按钮。旧 status/catalog endpoint 从 v2 store 生成 legacy response projection，保持旧字段、空值、计数和 HTTP 状态合同；不得读取或写入独立 v1 索引作为第二事实源。
+cutover/store/action 都是领域状态，不提供会掩盖混合状态的根级 `resource_store_version` 或 `cutover_state`。新前端只有看到目标 domain 的 `resource_store_version=2.0`、`cutover_state=v2_committed` 和具体 action 三者同时满足后才显示对应按钮；一个领域完成切换不能解锁另一个领域。`migration_prepared`、只读 repair 或未知状态一律返回空的 mutating `actions`。旧 status/catalog endpoint 在该领域 cutover 后从 v2 store 生成 legacy response projection，保持旧字段、空值、计数和 HTTP 状态合同；不得读取或写入独立 v1 索引作为第二事实源。
 
 ### 9.4 Legacy mutating endpoint 规则
 
@@ -582,13 +623,15 @@ cutover 前，v1 是唯一写入者；cutover 提交后，v2 store 是唯一写�
 
 - multipart `/api/material-sync/install` 通过 v2 importer 登记 `local_import`，但保持旧响应。
 - `/install-from-registry` 和 LUT `/install` 通过 v2 transaction manager 安装受管理资源。
-- 旧 `/api/material-sync/refresh` 显式调用时适配到 v2 `update_all`；scheduler 不再调用它。
+- 旧 `/api/material-sync/refresh` 显式调用时进入独立 `legacy_refresh_catalog_install` adapter，不能映射成只处理已安装资源的 v2 `update_all`。adapter 仍按当前配置调用一次无 limit 的 v1 material catalog，按返回顺序检查全部 revision：本地已有相同 material/revision/content hash 时计入 `skipped_count`；无论逻辑 material 以前是否安装，只要该 exact revision 尚不存在，就经 v2 install transaction 安装，因此仍包含“安装 catalog 中缺失资源”的行为；单项失败继续处理其余项。
 - 旧按路径编辑接口遇到 managed resource 返回 `409 managed_resource_read_only`；用户必须创建本地副本。
 - 旧按路径删除接口遇到 managed resource 返回 `409 managed_resource_read_only`，不能把 path delete 暗中解释为卸载。
 - 旧按路径编辑/删除本地资源仍必须进入 v2 local-resource service，并执行 path safety、lease 和用户确认语义。
 - 所有旧接口都必须对 active lease 返回 `409 resource_in_use`，并使用同一稳定错误映射。
 
 保留旧页面仅表示保留旧展示和请求形状，不表示允许 v1 直接写磁盘。新 UI 回滚也只能关闭入口并继续使用 v2 store；cutover 后不得自动降级回 v1 writer。
+
+`legacy_refresh_catalog_install` 必须保持 `/refresh` 的无请求体合同、HTTP 错误映射，以及 `status/message/registry_url/channels/checked_count/installed_count/skipped_count/failed_count/installed_materials/failures` 响应形状和 partial-success 语义。它可以把安装结果存到 immutable v2 store，并受 current+previous/GC 策略约束，但不能把缺失项改报为 skip，也不能改用 v2 latest-only cursor catalog。新 `/update-all` 只更新已受管理且有新 revision 的资源，两者使用独立路由、服务方法和合同测试；scheduler 只调用只读 check，不调用其中任一写 adapter。
 
 ### 9.5 共享前端 Resource View Model
 
@@ -690,17 +733,17 @@ Registry 审核和 Studio 安装都必须拒绝：
 
 ### 11.4 删除与覆盖的所有权证明
 
-卸载、previous GC、repair 清理和任何会移除文件的操作都先执行完整 preflight：
+卸载、previous GC、repair 清理和任何会移除文件的操作都先执行 6.5 节的删除 fence：资源事务把离开 slot 的目标持久化为 `pending_gc` 以关闭新 lease admission，确认有效 lease 为零后再持久化为 `deleting`。只有已进入 `deleting` 的 revision 才执行完整 preflight：
 
 1. 重新解析每个 `managed_files[]` path，确认仍在对应 immutable revision 根目录。
 2. 确认文件仍是普通文件，不是 symlink/reparse point 或其他特殊对象。
 3. 重新核对 bytes 和 SHA-256。
 4. 扫描 revision 目录，确认不存在 manifest 未声明的本地 sidecar。
-5. 检查 revision 没有活动 lease。
+5. 在同一 revision lock 下再次检查 revision 状态仍为 `deleting`、fencing generation 未变且有效 lease 为零。
 
 任一已管理文件不匹配或出现未知 sidecar 时，整个删除事务 fail closed 为 `local_path_conflict`，默认不删除任何文件。用户可以选择“解除管理”，它只移除 active/ownership 关系并把现有内容登记为本地资源，绝不删除磁盘内容；不提供跳过冲突文件后继续部分卸载的隐式行为。
 
-preflight 全部通过后，只删除 `managed_files[]` 中仍匹配的文件，再按 deepest-first 对 `created_directories[]` 执行 rmdir；非空目录保留。索引、journal 与文件删除仍使用 6.1 节 generation/事务恢复协议。
+preflight 全部通过后，只删除 `managed_files[]` 中仍匹配的文件，再按 deepest-first 对 `created_directories[]` 执行 rmdir；非空目录保留。索引、journal 与文件删除仍使用 6.1 节 generation/事务恢复协议。Studio 内所有 Resolver/生命周期操作都受 revision lock 和 fencing generation 约束；外部进程在 preflight 后改变文件会让下一次逐文件 identity/hash guard 失败并收敛为 `gc_conflict`，不能继续删除剩余文件。
 
 ## 12. 本地索引 v2
 
@@ -713,6 +756,7 @@ preflight 全部通过后，只删除 `managed_files[]` 中仍匹配的文件，
   "generation": 42,
   "cutover": {
     "state": "v2_committed",
+    "adapter_generation": "resources-v2-1",
     "committed_at": "2026-07-10T00:00:00Z",
     "legacy_index_sha256": "sha256:..."
   },
@@ -725,8 +769,11 @@ preflight 全部通过后，只删除 `managed_files[]` 中仍匹配的文件，
       "publisher_kind": "community",
       "active": {
         "revision_id": "rev_current",
+        "lifecycle_state": "available",
+        "fencing_generation": 7,
         "content_hash_algorithm": "lumina-lut-file-bytes-v1",
         "content_hash": "sha256:...",
+        "envelope_id": "env_current",
         "package_sha256": "sha256:...",
         "package_bytes": 12345,
         "logical_path": "Brand/example.npy",
@@ -745,8 +792,11 @@ preflight 全部通过后，只删除 `managed_files[]` 中仍匹配的文件，
       },
       "previous": {
         "revision_id": "rev_previous",
+        "lifecycle_state": "available",
+        "fencing_generation": 3,
         "content_hash_algorithm": "lumina-lut-file-bytes-v1",
         "content_hash": "sha256:...",
+        "envelope_id": "env_previous",
         "immutable_path": "_sync/resource-store/public-default/lut_example/rev_previous-fedcba987654",
         "managed_files": [
           {
@@ -774,8 +824,10 @@ preflight 全部通过后，只删除 `managed_files[]` 中仍匹配的文件，
       ],
       "source_ref": {
         "source_registry": "public-default",
+        "resource_kind": "lut",
         "resource_id": "lut_example",
         "revision_id": "rev_current",
+        "content_hash_algorithm": "lumina-lut-file-bytes-v1",
         "content_hash": "sha256:..."
       },
       "migration_state": "resolved",
@@ -799,9 +851,10 @@ preflight 全部通过后，只删除 `managed_files[]` 中仍匹配的文件，
 - 每次 schema 迁移前保留带时间戳备份。
 - 索引不存 token、绝对路径或可由 package 伪造的信任结果。
 - `previous` 最多一项。
-- `pending_gc` 可以临时保存因 lease 无法删除的旧 revision，但不作为可回退版本。
+- active、previous 和 `pending_gc[]` 使用同一 revision record schema，每项都持久化 `lifecycle_state` 与单调递增的 `fencing_generation`；active/previous 只能是 `available`。
+- `pending_gc` 可以临时保存因 lease 无法删除的旧 revision，但不作为可回退版本；其中条目可处于 `pending_gc/deleting/gc_conflict/quarantined_recovery`。完成删除后只在最小审计 history 中记 `deleted`，不保留可解析 path。
 - `local_resources` 必须为 `local_import`、`local_copy`、`legacy_unresolved` 和 `local_equivalent` 分配稳定 UUID 型 `local_id`；重启和重新扫描不得因显示名变化创建新身份。
-- `local_copy.source_ref`、`local_equivalent.source_ref` 和 deferred migration state 必须持久化。它们不授予删除所有权。
+- `local_copy.source_ref`、`local_equivalent.source_ref` 和 deferred migration state 必须持久化；source ref 包含 registry、kind、ID、revision、`content_hash_algorithm` 和 hash。它们不授予删除所有权。
 - `observed_files` 只记录扫描时事实，用于变化检测；它不是 `managed_files`，删除本地资源仍要求用户显式确认。
 - `path_reservations` 的 key 使用 Unicode normalization、POSIX 分隔符和 casefold 后的领域逻辑路径。
 - `legacy_aliases` 只用于在旧 catalog/扫描器中抑制迁移前物理副本的重复展示；它不授予删除所有权。
@@ -812,15 +865,29 @@ preflight 全部通过后，只删除 `managed_files[]` 中仍匹配的文件，
 Registry v2 为两个领域提供受 channel/token 授权的 exact revision 路由：
 
 - `GET /api/material-registry/v2/materials/{material_id}/revisions/{revision_id}`
-- `GET /api/material-registry/v2/materials/{material_id}/revisions/{revision_id}/package`
+- `GET /api/material-registry/v2/materials/{material_id}/revisions/{revision_id}/package?envelope_id={envelope_id}`
 - `GET /api/material-registry/v2/luts/{lut_id}/revisions/{revision_id}`
-- `GET /api/material-registry/v2/luts/{lut_id}/revisions/{revision_id}/package`
+- `GET /api/material-registry/v2/luts/{lut_id}/revisions/{revision_id}/package?envelope_id={envelope_id}`
 
-详情响应包含 8.6 节全部绑定字段和当前有效 package envelope。下架、无权限或已物理清除的 revision 返回可区分错误，不能退回 latest revision。
+revision 状态固定为 `pending | approved | withdrawn | rejected | purged`。新 revision 发布后，旧 revision 只要未被撤下就继续保持 `approved`，它只是从 v2 主 catalog 的 latest 卡片中退出，不因“不是最新”而失去 exact reinstall 能力。每个 approved revision 只有一个当前 `active` package envelope；channel/visibility/publisher 变化会生成新 envelope，并把旧 envelope 标记为 `revoked`。
+
+授权矩阵如下：
+
+| 调用主体 | approved public (`official/community`) | approved restricted (`team/private`) | pending/rejected/withdrawn/purged |
+|---|---|---|---|
+| 匿名或无 read token 的 Studio | channel 与 visibility 都允许公开且 envelope active 时可读 | 不可读 | 不可读 |
+| 带 Registry read token 的 Studio | 可读 | 仅 token scope 同时允许目标 registry、channel 和 visibility 时可读 | 不可读 |
+| 带 maintainer scope 的维护端 | 公共 exact 路由仍按普通读取规则；维护审计 API 可查看真实状态 | 维护审计 API 可按 scope 查看 | 仅维护审计 API 返回真实状态；是否保留 package 由服务端 retention policy 决定，Studio 不使用该路径 |
+
+四个 Studio exact 路由对“资源/revision 不存在、调用者无权、envelope revoked、withdrawn/rejected/pending/purged”统一返回相同的 `404 revision_not_found` 状态、公共响应体和日志脱敏级别，不能用 `403/410`、响应字段或显著不同的错误文本泄露私有 revision 是否存在。只有独立、要求 maintainer scope 的维护审计 API 可以区分真实状态。任何失败都不能退回 latest revision。
+
+详情成功响应包含 8.6 节全部绑定字段、`authorization_generation`、当前 active `envelope_id` 和该 envelope 的 package URL/hash/bytes。Registry 存储对象路径永不直接公开；`.../package` 要求 query 中的 `envelope_id` 与该 revision 当前 active envelope 完全一致，每次请求都按最新 authorization generation 重新授权并由同源 Registry 直接流式返回，不重定向，并在响应头回显 `X-Lumina-Envelope-ID`。旧/revoked envelope ID 即使核心 revision 相同也按统一 `404 revision_not_found` 拒绝。package 响应使用 `Cache-Control: no-store`；catalog/detail 使用包含 authorization generation 的 ETag、`must-revalidate` 和最多 60 秒 freshness。
+
+approve、withdraw 或 channel/visibility 变化必须在同一 Registry 事务中先撤销旧 envelope route、推进 authorization/catalog generation，再发布新可见投影；部署层按 resource/envelope surrogate key 主动清除 catalog/detail CDN 缓存。旧 package bytes 可留在不可公开访问的审计存储，但旧 `package_url` 不再可下载。Studio 在安装前永远重新取 exact detail，不能仅凭 catalog 缓存下载；遇到 `revision_not_found` 时立即失效该 resource 的 catalog/detail/package 元数据缓存，并把本地已安装副本保留为可离线使用。
 
 ### 12.2 配方与可复现性 provenance
 
-新保存的配方、分享卡和 bug-report reproduction 在原有名称字段之外增加可选引用：
+公共 `ResourceRevisionRef` 固定为：
 
 ```json
 {
@@ -833,7 +900,66 @@ Registry v2 为两个领域提供受 channel/token 授权的 exact revision 路�
 }
 ```
 
-导入旧数据时该对象可缺失，并继续现有名称/附件兼容；对象存在时必须优先按 exact revision 解析，hash 不匹配不得静默改用 latest 或同名资源。该字段要同步更新 share-card schema、导入/导出 adapter、round-trip 测试、feedback assembler 和 bug reproduction loader。
+`source_registry` 是 Studio 配置 key，不是 URL；六个字段必须全有或整个 ref 为 `null`。本地索引中的 `local_copy.source_ref`、`local_equivalent.source_ref` 也使用该完整对象，包括 `resource_kind` 和 `content_hash_algorithm`；它只用于追溯，不授予所有权。
+
+新导出的 JSON 配方和 PNG 分享卡使用 Lumina Recipe `schema_version=3`，在现有 `recipe.converter.source` 下增加唯一字段 `resource_provenance`，其基数和顺序固定如下：
+
+```json
+{
+  "schema_version": "1.0",
+  "legacy_luts": [
+    {
+      "selection_index": 0,
+      "name": "Example LUT",
+      "resource": {
+        "source_registry": "public-default",
+        "resource_kind": "lut",
+        "resource_id": "lut_example",
+        "revision_id": "rev_current",
+        "content_hash_algorithm": "lumina-lut-file-bytes-v1",
+        "content_hash": "sha256:..."
+      }
+    }
+  ],
+  "materials": [
+    {
+      "slot_index": 0,
+      "directory_name": "Brand/PLA Red",
+      "resource": {
+        "source_registry": "public-default",
+        "resource_kind": "material",
+        "resource_id": "mat_example",
+        "revision_id": "rev_material",
+        "content_hash_algorithm": "lumina-material-required-files-v1",
+        "content_hash": "sha256:..."
+      }
+    }
+  ],
+  "backing_material": {
+    "directory_name": "Brand/PLA Red",
+    "selected_material_index": 0,
+    "resource": {
+      "source_registry": "public-default",
+      "resource_kind": "material",
+      "resource_id": "mat_example",
+      "revision_id": "rev_material",
+      "content_hash_algorithm": "lumina-material-required-files-v1",
+      "content_hash": "sha256:..."
+    }
+  }
+}
+```
+
+映射规则是硬合同：
+
+- `legacy_luts.length` 必须等于 `selected_legacy_lut_names.length`，`selection_index` 从 0 连续递增，`name` 与同位置名称一致。多 LUT 不得按 ID、名称或 hash 重新排序/去重；legacy 模式的 `base.lut` 继续投影第 0 项用于旧客户端，但 exact 解析以该有序数组为准。
+- `materials.length` 必须等于 `selected_material_dir_names.length`，`slot_index` 从 0 连续递增，`directory_name` 与同位置目录一致；切片、调色板和 3MF 映射都按这个 slot 顺序消费，不能按品牌或名称重排。
+- `backing_material` 是单值或 `null`。当它来自已选耗材时，`selected_material_index` 必须是 `materials[]` 的有效下标，directory 和 resource 必须与该项完全相同；若兼容旧数据时只有独立 backing 名称，index 和 resource 都为 `null`，不得猜测最相近 slot。
+- 某个选择是纯本地或尚未解析时保留该位置、名称和 index，只把该项 `resource` 设为 `null`；禁止删除 null 项导致后续位置错位。
+
+Bug report 请求在现有 `context` 下增加可选 `resource_provenance`，使用与配方完全相同的 shape、基数和顺序；feedback assembler 原样写入 `reproduction.json.context.resource_provenance`，loader 先验证位置映射再解析 exact revision。PNG 分享卡内嵌的是同一份 schema v3 Recipe，不维护第二套 provenance 格式。
+
+导入 v1/v2 配方或旧 bug report 时 `resource_provenance` 可缺失，并继续现有名称/附件兼容；v3 对象存在时必须先校验数组长度/index/name，再按 exact revision 解析。resource hash 或算法不匹配时不得静默改用 latest、同名资源或同一 material ID 的其他 revision。share-card schema、导入/导出 adapter、integrity hash、round-trip 测试、feedback API/assembler 和 bug reproduction loader 必须在同一 Studio 实施阶段更新。
 
 ## 13. 迁移设计
 
@@ -874,21 +1000,23 @@ Registry v2 为两个领域提供受 channel/token 授权的 exact revision 路�
   "schema_version": "1.0",
   "state": "v2_committed",
   "store_id": "uuid",
+  "adapter_generation": "resources-v2-1",
   "committed_generation": 0,
   "legacy_index_sha256": "sha256:...",
   "committed_at": "2026-07-10T00:00:00Z"
 }
 ```
 
-允许状态只有 `v1_active`、`migration_prepared` 和 `v2_committed`：
+允许状态只有 `v1_active`、`migration_prepared` 和 `v2_committed`。每个领域还必须有一个所有 legacy/new mutating handler、scheduler 写任务和 repair `--apply` 共享的 admission gate；handler 只有先在 gate 内登记 in-flight writer 后才能读取或修改该领域状态。cutover 固定执行以下顺序：
 
-1. `v1_active`：旧 writer 可写；v2 只能扫描和构建 shadow。
-2. `migration_prepared`：进程获取全局 commit 锁，所有 mutating endpoint 暂停；重新核对旧 index hash 和所有 `base_fingerprints`。
-3. 若任一 fingerprint 变化，回到 `v1_active` 并重建 shadow；不合并不确定变化。
-4. 若一致，写入并 fsync v2 index generation 0，再原子写 marker 为 `v2_committed`，fsync 父目录。
-5. marker 提交后恢复 endpoint；所有 legacy/new endpoint 只能调用 v2 store。
+1. `v1_active`：旧 writer 可写；v2 只能扫描和构建 shadow。切换进程先关闭目标领域 admission，不影响另一个领域。
+2. 等待该领域已经登记的所有在途 v1 writer 和 scheduler 写任务排空到零；等待期间不能持有它们完成所需的 resource/global commit lock。超过有界 drain timeout 则重新开放 v1 admission、保持 `v1_active` 并报告 `resource_cutover_busy`，不能带着在途 writer 继续。
+3. writer 归零后获取目标领域全局 commit lock；admission 在整个 commit 期间保持关闭。在锁内持久化 marker 为 `migration_prepared`，重新读取旧 index hash、所有 `base_fingerprints`、path reservation 和 shadow generation，执行一次最终 CAS。
+4. 若任一 fingerprint/CAS 变化，丢弃该 shadow，持久化回 `v1_active`，释放锁后重新开放旧 admission 并重建；不合并不确定变化。
+5. 若一致，确认当前二进制声明支持 marker 中的 `adapter_generation`，写入并 fsync v2 index generation 0，再原子写 marker 为 `v2_committed`，fsync 父目录。所有 legacy handler 在 admission 后按 marker 选择静态注册的 v2 adapter；不能依赖仅存于内存、重启会丢失的临时路由切换。随后让该领域 capability 发布同一 adapter generation、`v2_committed` 和 actions。
+6. 只有 marker、adapter selection 和 capability 三者收敛后才释放 commit lock、重新开放该领域 admission。此后所有 legacy/new endpoint 只能调用 v2 store；另一个领域可仍处于 `v1_active` 或 `migration_prepared`。旧二进制若不认识已提交的 adapter generation 必须保持该领域只读，不能退回 v1 writer。
 
-启动时 marker 为 `migration_prepared` 则默认保持写入关闭，按备份 hash、shadow generation 和 journal 判定回到 `v1_active` 或完成 `v2_committed`；无法证明时进入只读 repair 模式。
+启动时 marker 为 `migration_prepared` 则默认保持该领域 admission 关闭，先确认没有上次进程的有效 writer lease，再按备份 hash、shadow generation、route-adapter generation 和 journal 判定回到 `v1_active` 或完成 `v2_committed`；无法证明时进入该领域只读 repair 模式。进程重启本身不构成“在途 writer 已排空”的证明，旧 writer 必须由 PID/start marker 和持久 writer lease 判死。
 
 `v2_committed` 是不可自动逆转的 writer 边界。关闭 feature flag 或回退前端只影响 UI；若 v2 本身故障，只能在停机维护中使用已验证备份和 repair 命令恢复，不能让 v1 与 v2 再次并发写入。
 
@@ -896,7 +1024,7 @@ Registry v2 为两个领域提供受 channel/token 授权的 exact revision 路�
 
 - `legacy_unresolved` 保存本地 canonical hash、扫描 generation、候选 registry key 和 `migration_state=deferred`，离线重启后不得丢失。
 - Catalog 恢复后只按 8.6 canonical hash 建立候选；一个 hash 对应多个云端身份时保持 unresolved，并要求用户选择，不能任取第一个。
-- exact provenance 引用缺失时，Studio 调用 12.1 exact revision detail/package；404、无权限或 hash 不符直接报告，不能安装 latest 代替。
+- exact provenance 引用缺失时，Studio 调用 12.1 exact revision detail/package；Registry 统一 `revision_not_found` 或本地 hash/算法不符都直接报告，不能安装 latest 代替。
 - 成功重装产生新的 managed immutable revision；历史配方继续固定原 revision，不因 active pointer 变化而改写。
 
 ## 14. 离线与错误体验
@@ -917,7 +1045,9 @@ Registry v2 为两个领域提供受 channel/token 授权的 exact revision 路�
 - registry_contract_unsupported
 - resource_not_found
 - revision_not_found
+- revision_unavailable
 - resource_in_use
+- resource_cutover_busy
 - package_origin_invalid
 - package_download_failed
 - package_size_invalid
@@ -933,6 +1063,9 @@ Registry v2 为两个领域提供受 channel/token 授权的 exact revision 路�
 - local_index_recovery_required
 - local_install_damaged
 - managed_resource_read_only
+- catalog_cursor_invalid
+- catalog_cursor_query_mismatch
+- catalog_cursor_expired
 
 用户文案说明可采取的下一步，技术详情进入日志。错误中不回显 token、私有 URL 查询参数或绝对路径。
 
@@ -968,10 +1101,11 @@ Registry v2 为两个领域提供受 channel/token 授权的 exact revision 路�
 ### 17.1 Registry
 
 - v1 Catalog 在 181+ 条数据、未传 limit 时仍返回全部；保留多 revision、旧 hash 与旧字段。
-- v2 Catalog 查询、筛选、排序、稳定 cursor 分页和每个逻辑资源只返回最新 approved revision。
+- v2 Catalog 查询、筛选、排序、稳定 snapshot/cursor 分页和每个逻辑资源只返回最新 approved revision；固定 envelope、结束页双条件、query/principal/domain 绑定、篡改、过期和下载量跨页变化。
 - capability 缺失/旧版本/支持 v2 三种协商结果。
 - 详情、历史和预览响应。
-- exact revision detail/package 的 channel/token 授权、404 与下架语义。
+- exact revision detail/package 覆盖匿名/read-token/maintainer 与 public/restricted/withdrawn/pending/rejected/purged 的授权矩阵；未知、无权和不可见 revision 对外均为相同 404。
+- channel/visibility/withdraw 变更撤销旧 envelope、推进 authorization generation、清理缓存；旧 package URL 不可再读，Studio 重新解析时不能使用 stale envelope。
 - `publisher_kind` 权限：普通上传不能设置 lumina。
 - 下载量只在有效下载计数，不改变 package hash。
 - 上传、批准、拒绝、下架和 channel/visibility 重写。
@@ -998,14 +1132,16 @@ Registry v2 为两个领域提供受 channel/token 授权的 exact revision 路�
 - 安装、更新、回退、卸载、修复和采用本地等价内容的状态机。
 - managed installed 与 local equivalent 不混淆。
 - update/rollback/repair 时 existing workflow 固定旧 immutable revision；卸载/delete 和 GC 在 lease 下被阻止。
+- 用可控 barrier 交错 Resolver 与 GC：GC 零 lease 检查前后创建 lease、`available -> pending_gc -> deleting` 各边界请求 Resolver、GC 崩溃恢复；证明 `pending_gc` 后不能新建 lease，工作流拿到 path 前 lease 已持久化。
 - 当前 + 上一版本保留策略。
 - 下载中断、hash 不符、无效 manifest、内容不可加载和原子切换失败。
-- 对 `prepared`、`revision_published`、index replaced、journal committed 各阶段做进程崩溃/断电注入并验证启动恢复。
+- 对 `prepared`、staged rename 已完成但 journal 仍为 `prepared`、`revision_published`、index replaced、journal committed 各阶段做进程崩溃/断电注入并验证启动恢复；另覆盖 final/staging 同时存在、final hash 不符和无关 generation 前进。
 - 两个不同资源并发提交无 lost update；同资源并发互斥；Unicode/casefold 相同路径 reservation 冲突。
-- v1 -> v2 shadow/cutover、marker 各阶段、无网络迁移、损坏索引恢复和 dry-run repair。
+- v1 -> v2 shadow/cutover、marker 各阶段、无网络迁移、损坏索引恢复和 dry-run repair；分别覆盖 material 已 committed/LUT 仍 active 的 capability，以及 close admission 后等待在途 v1 writer drain、drain timeout 和 prepared 状态重启。
 - cutover 后所有 legacy mutating endpoint 只写 v2；legacy path edit/delete 不能绕过 managed read-only 和 lease。
+- legacy `/material-sync/refresh` 在 cutover 后仍安装 catalog 中本机缺失资源、跳过 exact 已有 revision、逐项部分失败并保持旧响应；证明它与只更新 managed resource 的新 `update-all` 不同。
 - `local_import/local_copy/legacy_unresolved/local_equivalent` 重启后 local_id、source_ref 和 deferred state 保持。
-- 配方、分享卡、bug report provenance round-trip 与 exact revision 重装。
+- schema v3 配方、PNG 分享卡、bug report provenance round-trip 与 exact revision 重装；覆盖多 LUT 顺序、多耗材 slot、backing index、null 本地引用、hash algorithm 和数组长度/index/name 拒绝路径。
 - managed file 被修改、增加 sidecar 或替换为 symlink/reparse point 时卸载 fail closed 且不删任何文件；detach 只解除管理。
 - 安装后 catalog/详情/转换器缓存刷新。
 - 源会话切换或关闭后的资源可用性。
@@ -1015,6 +1151,7 @@ Registry v2 为两个领域提供受 channel/token 授权的 exact revision 路�
 ### 17.4 Studio 前端
 
 - 云资源库 / 我的资源双视图。
+- capability 按领域 gate：material `v2_committed`/LUT `v1_active` 及反向组合都只解锁已提交领域，未知 adapter generation 或 `migration_prepared` 不显示写操作。
 - 快速入口、搜索、筛选、排序、cursor 加载和空/离线/错误状态。
 - 官方/社区角标只读取 publisher kind。
 - 所有本地状态与允许动作映射。
@@ -1139,11 +1276,13 @@ python scripts/run_vitest.py run src/__tests__/material-cloud-sync-panel.test.ts
 14. 所有测试服务、浏览器 profile 和长运行进程在验收结束后清理。
 15. Registry v1 在无 limit、181+ 条目和多 revision 下保持现有完整响应；v2 分页不会影响旧 Studio。
 16. Material/LUT canonical hash 算法有显式版本、固定输入字节和三仓 byte-identical 黄金夹具。
-17. 每个事务阶段崩溃后能确定性恢复；两个资源并发提交不会 lost update，casefold 路径不会双重占用。
-18. 预览/生成固定 exact immutable revision；更新、回退、修复和 GC 不会改变租约中的 payload。
-19. cutover 后 v2 是唯一 writer，旧 endpoint 和旧 UI 不能绕过只读、所有权或使用中保护。
-20. local copy、deferred migration 和 exact provenance 重启后不丢失，历史配方可按 exact revision 重装。
+17. 每个事务阶段崩溃后能确定性恢复，包括 rename 已完成而 journal 仍为 `prepared`；两个资源并发提交不会 lost update，casefold 路径不会双重占用。
+18. 预览/生成固定 exact immutable revision；`pending_gc/deleting` 关闭新 lease，更新、回退、修复和 GC 不会改变已有租约中的 payload。
+19. cutover 按领域关闭 admission 并排空在途 writer；提交后 v2 是该领域唯一 writer，混合 cutover 状态、旧 endpoint、legacy refresh 和旧 UI 都不能绕过 v2 合同。
+20. local copy、deferred migration 和有序 exact provenance 重启后不丢失；多 LUT、多耗材和 backing 映射不移位，历史配方可按 exact revision 重装。
 21. 卸载/GC 删除前逐文件核对安装时 hash；文件被修改或含未知 sidecar 时 fail closed 且不删除用户内容。
+22. exact revision 的 principal/channel/state 授权不泄露私有记录；旧 envelope 和缓存撤销后不能继续下载，Studio 不使用 stale package 元数据。
+23. v2 cursor 与领域、principal、snapshot、查询和排序绑定；结束、篡改、过期和查询不匹配都有固定 envelope 与错误语义。
 
 ## 22. 设计取舍总结
 
