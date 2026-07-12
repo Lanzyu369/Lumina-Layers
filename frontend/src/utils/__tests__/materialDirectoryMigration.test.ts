@@ -76,6 +76,19 @@ describe("reconcileDirectoryNames", () => {
     expect(result.names).toEqual(["B", "瑞贝思/瑞贝思 PLA 白", "A"]);
   });
 
+  it("migrates selections for the renamed Karvax brand", () => {
+    const result = reconcileDirectoryNames(
+      ["无境新材/无境新材 PLA 耀石黑", "无境新材/品红_20260428_205254"],
+      lib(["Karvax/Karvax PLA 耀石黑", "Karvax/品红_20260428_205254"]),
+    );
+
+    expect(result.changed).toBe(true);
+    expect(result.names).toEqual([
+      "Karvax/Karvax PLA 耀石黑",
+      "Karvax/品红_20260428_205254",
+    ]);
+  });
+
   it("short-circuits on an empty selection", () => {
     const result = reconcileDirectoryNames([], lib(["A/B"]));
     expect(result.changed).toBe(false);
