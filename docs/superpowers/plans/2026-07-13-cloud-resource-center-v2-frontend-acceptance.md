@@ -607,7 +607,7 @@ Own child process groups and close them in `finally`; timeout escalates TERM the
 
 - [ ] **Step 3: Configure a repeatable external-origin browser suite**
 
-`frontend/playwright.config.ts` requires absolute `STUDIO_EXTERNAL_URL` and `EVIDENCE_DIR` and obtains the URL only through `resolveExternalResourceCenterUrl()`. That helper uses the platform URL parser and hostname facts rather than substring-matching the complete URL. Reject `localhost` (including a trailing dot and `.localhost` names), every address in `127.0.0.0/8`, IPv6 `::1`, IPv4-mapped loopback, URL user info, non-HTTP(S), and any evidence path inside the Studio checkout. `frontend/src/__tests__/dev-server-config.test.ts` covers `127.0.0.0`, `127.0.0.1`, `127.0.0.2`, `127.1.2.3`, `127.255.255.255`, the adjacent accepted `126.255.255.255`/`128.0.0.0`, bracketed `::1`, mapped loopback, `localhost.`, and a `.localhost` name so no one-literal shell guard can replace the parser. Define Chromium projects `desktop-light`/`desktop-dark` at `1440x900` and `mobile-light`/`mobile-dark` at `390x844`, one worker, no retries locally, trace/video on first failure, and screenshot output under `$EVIDENCE_DIR/{projectName}`. It does not start a local web server.
+`frontend/playwright.config.ts` requires absolute `STUDIO_EXTERNAL_URL` and `EVIDENCE_DIR` and obtains the URL only through `resolveExternalResourceCenterUrl()`. That helper uses the WHATWG `URL` parser and its canonical hostname rather than substring-matching the complete URL. Reject `localhost` (including a trailing dot and `.localhost` names), every address in `127.0.0.0/8`, IPv6 `::1`, IPv4-mapped loopback, unspecified `0.0.0.0`/`::`, URL user info, non-HTTP(S), port zero/invalid/out-of-range ports, and any evidence path inside the Studio checkout. `frontend/src/__tests__/dev-server-config.test.ts` covers `127.0.0.0`, `127.0.0.1`, `127.0.0.2`, `127.1.2.3`, `127.255.255.255`, browser-canonicalized `0177.0.0.1`, `0x7f.0.0.1`, `2130706433`, and percent-encoded loopback spellings, the adjacent accepted `126.255.255.255`/`128.0.0.0`, bracketed `::1`/`::`, mapped loopback, `localhost.`, a `.localhost` name, and port `0`/nondecimal/`65536` boundaries so no one-literal shell guard or non-WHATWG parser can replace it. Define Chromium projects `desktop-light`/`desktop-dark` at `1440x900` and `mobile-light`/`mobile-dark` at `390x844`, one worker, no retries locally, trace/video on first failure, and screenshot output under `$EVIDENCE_DIR/{projectName}`. It does not start a local web server.
 
 `resource-center-v2.spec.ts` uses accessible roles/names first and stable `data-testid` only for repeated resource identities. It records console errors, failed requests, response bodies/headers for Studio API calls, and browser storage keys. Fail the test if any browser-visible value contains `Authorization`, bearer text, token-like query keys, Registry package URL/envelope, a POSIX/macOS or Windows user-home absolute path, or an absolute managed payload path.
 
@@ -621,14 +621,27 @@ For a predeployed staging run, require staging HTTPS behind its authenticated pr
 : "${STUDIO_EXTERNAL_URL:?set the staging or LAN Studio URL}"
 python - "$STUDIO_EXTERNAL_URL" <<'PY'
 import ipaddress
+import re
 import sys
 from urllib.parse import urlsplit
 
-parsed = urlsplit(sys.argv[1])
+raw_url = sys.argv[1]
+parsed = urlsplit(raw_url)
 host = (parsed.hostname or "").rstrip(".").casefold()
+try:
+    parsed_port = parsed.port
+except ValueError as exc:
+    raise SystemExit("STUDIO_EXTERNAL_URL has an invalid port") from exc
+
 if (
     parsed.scheme != "https"
     or not host
+    or parsed_port == 0
+    or not host.isascii()
+    or "%" in host
+    or "\\" in raw_url
+    or raw_url != raw_url.strip()
+    or any(ord(character) <= 0x20 or ord(character) == 0x7F for character in raw_url)
     or parsed.username is not None
     or parsed.password is not None
     or parsed.path not in ("", "/")
@@ -642,15 +655,26 @@ try:
 except ValueError:
     address = None
 
+# WHATWG accepts legacy 1-4 part octal/hex/integer IPv4 spellings. Refuse
+# every numeric-looking form that is not already canonical dotted decimal.
+ipv4_parts = host.split(".")
+looks_like_ipv4 = 1 <= len(ipv4_parts) <= 4 and all(
+    re.fullmatch(r"(?:0[xX][0-9a-fA-F]+|[0-9]+)", part)
+    for part in ipv4_parts
+)
+noncanonical_ipv4 = looks_like_ipv4 and (
+    address is None or address.version != 4 or str(address) != host
+)
 mapped = getattr(address, "ipv4_mapped", None)
 if (
     host == "localhost"
     or host.endswith(".localhost")
-    or host.startswith("127.")
+    or noncanonical_ipv4
     or (address is not None and address.is_loopback)
+    or (address is not None and address.is_unspecified)
     or (mapped is not None and mapped.is_loopback)
 ):
-    raise SystemExit("STUDIO_EXTERNAL_URL must not use a loopback host")
+    raise SystemExit("STUDIO_EXTERNAL_URL must not use a loopback or unspecified host")
 PY
 ```
 
