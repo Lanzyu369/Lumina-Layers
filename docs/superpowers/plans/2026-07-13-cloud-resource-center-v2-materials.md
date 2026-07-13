@@ -532,7 +532,8 @@ test "$(cat "$LUMINA_MATERIALS_AUDIT_ROOT/.owner")" = 'lumina-materials-audit-v1
 git ls-files -z 'packages/*.zip' 'packages/**/*.zip' 'lut-packages/*.zip' 'lut-packages/**/*.zip' | xargs -0 shasum -a 256 > "$LUMINA_MATERIALS_AUDIT_ROOT/exact-head.sha256"
 diff "$LUMINA_MATERIALS_AUDIT_ROOT/before.sha256" "$LUMINA_MATERIALS_AUDIT_ROOT/exact-head.sha256"
 git diff --check origin/master...HEAD
-test -z "$(git status --short --untracked-files=no)"
+TRACKED_STATUS=$(git status --short --untracked-files=no)
+test -z "$TRACKED_STATUS"
 ```
 
 Expected: the exact committed head passes, the tracked tree is clean, and the archive list still equals the pre-implementation baseline. A generated file, formatter change, or follow-up fix creates a new head and invalidates the prior evidence. Retain the owner-marked audit root until merge/evidence acceptance; cleanup is a separate operator action that revalidates canonical parent, fixed generated basename, sentinel identity/mode/bytes, and never accepts an inherited arbitrary path. The PR body must include Registry fixture commit/SHA evidence, package before/after/exact-head checksum diff, metadata counts, publisher counts, deterministic build proof, validation output, and exact-head hygiene scan.

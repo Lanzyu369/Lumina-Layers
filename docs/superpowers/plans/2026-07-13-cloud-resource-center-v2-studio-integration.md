@@ -1093,7 +1093,8 @@ After the Step 6 commit, rerun Steps 2, 3, and 5 plus the managed-read/legacy-wr
 ```bash
 set -euo pipefail
 git diff --check origin/dev-refactor...HEAD
-test -z "$(git status --short --untracked-files=no)"
+TRACKED_STATUS=$(git status --short --untracked-files=no)
+test -z "$TRACKED_STATUS"
 ```
 
 Expected: all backend, frontend, logging, session-lifecycle, inventory, and hygiene gates bind the committed exact head. Any follow-up change invalidates this evidence.

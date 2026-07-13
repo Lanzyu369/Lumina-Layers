@@ -1212,7 +1212,8 @@ After the Step 7 commit, rerun the complete Step 5 test/probe/migration block an
 ```bash
 set -euo pipefail
 git diff --check origin/master...HEAD
-test -z "$(git status --short --untracked-files=no)"
+TRACKED_STATUS=$(git status --short --untracked-files=no)
+test -z "$TRACKED_STATUS"
 ```
 
 Expected: the committed head, not the pre-commit worktree, passes every gate and the tracked tree is clean. Any formatter, generated file, documentation correction, or follow-up fix creates a new head and invalidates prior rollout evidence.

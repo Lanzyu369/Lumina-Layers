@@ -1300,7 +1300,8 @@ python tests/resource_store_fixture_factory.py rehearse-store-release \
   --repair-script scripts/repair_resource_store.py
 python scripts/check_tracked_delta_hygiene.py --base origin/dev-refactor
 git diff --check origin/dev-refactor...HEAD
-test -z "$(git status --short --untracked-files=no)"
+TRACKED_STATUS=$(git status --short --untracked-files=no)
+test -z "$TRACKED_STATUS"
 ```
 
 Expected: the exact committed head passes and the tracked tree is clean. Any formatter, generated artifact, documentation correction, or follow-up fix changes HEAD and invalidates earlier evidence.
