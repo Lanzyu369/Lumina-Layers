@@ -593,7 +593,7 @@ Record test IDs/commits in an external evidence manifest. Never use production/u
 
 Write unit tests first for exact clean commit verification, refusal of the primary Studio/material/LUT roots, symlink/reparse destinations, evidence inside any checkout, loopback bind host, occupied/fixed port reuse, child startup failure, timeout, SIGINT, crash between every phase, secret redaction, and an outside sentinel that must remain byte-identical.
 
-`scripts/run_resource_center_e2e.py` requires explicit `--registry-checkout`, `--materials-checkout`, `--evidence-dir`, and non-loopback `--bind-host`. It verifies exact clean commits, creates a UUID temporary run root outside all checkouts, and uses `git archive` plus a path-safe tar extractor to materialize exact Studio/Registry/Materials HEADs there; it never runs a service against a source checkout. After checking free space and `frontend/pnpm-lock.yaml`/package-manager identity, copy the prepared frontend `node_modules` tree into the archived frontend without following links outside that dependency tree. `LUMINA_VITE_CACHE_DIR`, build output, test results, browser profile, logs, output, feedback, Registry data, and Studio material/LUT roots all point inside the run/evidence roots. Set `PYTHONDONTWRITEBYTECODE=1` for Python children. Add `resolveViteCacheDir()` and `resolveResourceE2EHttpsEnabled()` to `frontend/devServerConfig.ts`, consume both in `vite.config.ts`, and test default/absolute-cache/exact-`1` HTTPS override. The config imports `@vitejs/plugin-basic-ssl` as a development plugin but never adds it to `optimizeDeps.include`; only browser runtime package `lucide-react` enters that list.
+`scripts/run_resource_center_e2e.py` requires explicit `--registry-checkout`, `--materials-checkout`, `--evidence-dir`, and non-loopback `--bind-host`. It verifies exact clean commits, creates a UUID temporary run root outside all checkouts, and uses `git archive` plus a path-safe tar extractor to materialize exact Studio/Registry/Materials HEADs there; it never runs a service against a source checkout. After checking free space and `frontend/pnpm-lock.yaml`/package-manager identity, copy the prepared frontend `node_modules` tree into the archived frontend without following links outside that dependency tree. `LUMINA_VITE_CACHE_DIR`, build output, test results, browser profile, logs, output, feedback, Registry data, and Studio material/LUT roots all point inside the run/evidence roots. Set `PYTHONDONTWRITEBYTECODE=1` for Python children. Add `resolveViteCacheDir()`, `resolveResourceE2EHttpsEnabled()`, and `resolveExternalResourceCenterUrl()` to `frontend/devServerConfig.ts`; consume the first two in `vite.config.ts` and the last in `frontend/playwright.config.ts`. Test cache defaults/absolute paths, exact-`1` HTTPS override, and every external-host boundary in `frontend/src/__tests__/dev-server-config.test.ts`. The config imports `@vitejs/plugin-basic-ssl` as a development plugin but never adds it to `optimizeDeps.include`; only browser runtime package `lucide-react` enters that list.
 
 Copy only fixture/source packages into disposable service data and write a safe fixture manifest with per-Playwright-project unique resource IDs/logical paths. Generate one non-secret run-scoped Registry key matching the production contract and pass it as both material/LUT key because both domains use this same disposable authority. Generate maintainer/approver/read/cursor secrets in memory with `secrets.token_urlsafe`, pass them only through child environments, and redact environment/headers/argv/output; no token enters evidence or disk. One phase restarts Studio with a different safe Registry key against the same URL and proves the old namespace is not reused, then restores the original key and revalidates online.
 
@@ -607,7 +607,7 @@ Own child process groups and close them in `finally`; timeout escalates TERM the
 
 - [ ] **Step 3: Configure a repeatable external-origin browser suite**
 
-`frontend/playwright.config.ts` requires absolute `STUDIO_EXTERNAL_URL` and `EVIDENCE_DIR`. Reject loopback hosts (`localhost`, `127.0.0.0/8`, `::1`), URL user info, non-HTTP(S), and any evidence path inside the Studio checkout. Define Chromium projects `desktop-light`/`desktop-dark` at `1440x900` and `mobile-light`/`mobile-dark` at `390x844`, one worker, no retries locally, trace/video on first failure, and screenshot output under `$EVIDENCE_DIR/{projectName}`. It does not start a local web server.
+`frontend/playwright.config.ts` requires absolute `STUDIO_EXTERNAL_URL` and `EVIDENCE_DIR` and obtains the URL only through `resolveExternalResourceCenterUrl()`. That helper uses the platform URL parser and hostname facts rather than substring-matching the complete URL. Reject `localhost` (including a trailing dot and `.localhost` names), every address in `127.0.0.0/8`, IPv6 `::1`, IPv4-mapped loopback, URL user info, non-HTTP(S), and any evidence path inside the Studio checkout. `frontend/src/__tests__/dev-server-config.test.ts` covers `127.0.0.0`, `127.0.0.1`, `127.0.0.2`, `127.1.2.3`, `127.255.255.255`, the adjacent accepted `126.255.255.255`/`128.0.0.0`, bracketed `::1`, mapped loopback, `localhost.`, and a `.localhost` name so no one-literal shell guard can replace the parser. Define Chromium projects `desktop-light`/`desktop-dark` at `1440x900` and `mobile-light`/`mobile-dark` at `390x844`, one worker, no retries locally, trace/video on first failure, and screenshot output under `$EVIDENCE_DIR/{projectName}`. It does not start a local web server.
 
 `resource-center-v2.spec.ts` uses accessible roles/names first and stable `data-testid` only for repeated resource identities. It records console errors, failed requests, response bodies/headers for Studio API calls, and browser storage keys. Fail the test if any browser-visible value contains `Authorization`, bearer text, token-like query keys, Registry package URL/envelope, a POSIX/macOS or Windows user-home absolute path, or an absolute managed payload path.
 
@@ -619,9 +619,39 @@ For a predeployed staging run, require staging HTTPS behind its authenticated pr
 
 ```bash
 : "${STUDIO_EXTERNAL_URL:?set the staging or LAN Studio URL}"
-case "$STUDIO_EXTERNAL_URL" in
-  *localhost*|*127.0.0.1*|*\[::1\]*) exit 1 ;;
-esac
+python - "$STUDIO_EXTERNAL_URL" <<'PY'
+import ipaddress
+import sys
+from urllib.parse import urlsplit
+
+parsed = urlsplit(sys.argv[1])
+host = (parsed.hostname or "").rstrip(".").casefold()
+if (
+    parsed.scheme != "https"
+    or not host
+    or parsed.username is not None
+    or parsed.password is not None
+    or parsed.path not in ("", "/")
+    or parsed.query
+    or parsed.fragment
+):
+    raise SystemExit("STUDIO_EXTERNAL_URL must be one complete HTTPS origin")
+
+try:
+    address = ipaddress.ip_address(host)
+except ValueError:
+    address = None
+
+mapped = getattr(address, "ipv4_mapped", None)
+if (
+    host == "localhost"
+    or host.endswith(".localhost")
+    or host.startswith("127.")
+    or (address is not None and address.is_loopback)
+    or (mapped is not None and mapped.is_loopback)
+):
+    raise SystemExit("STUDIO_EXTERNAL_URL must not use a loopback host")
+PY
 ```
 
 Open `$STUDIO_EXTERNAL_URL`. Confirm browser network requests call Studio-relative APIs and Studio alone calls Registry.
