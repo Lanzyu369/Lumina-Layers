@@ -29,9 +29,15 @@ import {
   resolvePrinterOptionId,
   resolveSlicerOptionId,
 } from "../utils/settingsOptionIds";
+import {
+  getBrowserNotificationPermission,
+  requestBrowserNotificationPermission,
+  type BrowserNotificationPermission,
+} from "../utils/browserNotifications";
 import { retryAsync } from "../utils/retryAsync";
 import Button from "./ui/Button";
 import Dropdown from "./ui/Dropdown";
+import HelpDot from "./ui/HelpDot";
 import Slider from "./ui/Slider";
 import Switch from "./ui/Switch";
 import WikiTooltip from "./ui/WikiTooltip";
@@ -47,6 +53,35 @@ import {
 const SETTINGS_OPTIONS_RETRY_ATTEMPTS = 6;
 const SETTINGS_OPTIONS_RETRY_DELAY_MS = 1000;
 const SETTINGS_OPTIONS_NOT_CANCELLED = () => false;
+
+const COMPLETION_NOTIFICATION_STATUS: Record<
+  BrowserNotificationPermission,
+  {
+    tone: "info" | "success" | "warning" | "error";
+    translationKey: string;
+  }
+> = {
+  granted: {
+    tone: "success",
+    translationKey: "settings.completion_notifications_granted",
+  },
+  denied: {
+    tone: "error",
+    translationKey: "settings.completion_notifications_denied",
+  },
+  default: {
+    tone: "info",
+    translationKey: "settings.completion_notifications_default",
+  },
+  unsupported: {
+    tone: "warning",
+    translationKey: "settings.completion_notifications_unsupported",
+  },
+  error: {
+    tone: "error",
+    translationKey: "settings.completion_notifications_request_failed",
+  },
+};
 
 type CancellationCheck = () => boolean;
 
@@ -66,6 +101,12 @@ export default function SettingsPanel() {
   const [clearing, setClearing] = useState(false);
   const [cacheResult, setCacheResult] = useState<string | null>(null);
   const [customSlicerPathInput, setCustomSlicerPathInput] = useState("");
+  const [notificationPermission, setNotificationPermission] =
+    useState<BrowserNotificationPermission>(() =>
+      getBrowserNotificationPermission(),
+    );
+  const [notificationPermissionLoading, setNotificationPermissionLoading] =
+    useState(false);
 
   // Printer list state (task 5.2)
   const [printers, setPrinters] = useState<PrinterInfo[]>([]);
@@ -97,6 +138,12 @@ export default function SettingsPanel() {
   const syncToBackend = useSettingsStore((s) => s.syncToBackend);
   const enableWittyLoading = useSettingsStore((s) => s.enableWittyLoading);
   const setEnableWittyLoading = useSettingsStore((s) => s.setEnableWittyLoading);
+  const enableCompletionNotifications = useSettingsStore(
+    (s) => s.enableCompletionNotifications,
+  );
+  const setEnableCompletionNotifications = useSettingsStore(
+    (s) => s.setEnableCompletionNotifications,
+  );
   const enableSolverCacheGridSelection = useSettingsStore(
     (s) => s.enableSolverCacheGridSelection,
   );
@@ -133,6 +180,19 @@ export default function SettingsPanel() {
   useEffect(() => {
     setCustomSlicerPathInput(customSlicerPath);
   }, [customSlicerPath]);
+
+  useEffect(() => {
+    if (
+      enableCompletionNotifications &&
+      notificationPermission !== "granted"
+    ) {
+      setEnableCompletionNotifications(false);
+    }
+  }, [
+    enableCompletionNotifications,
+    notificationPermission,
+    setEnableCompletionNotifications,
+  ]);
 
   const loadPrinterOptions = useCallback(async (
     isCancelled: CancellationCheck = SETTINGS_OPTIONS_NOT_CANCELLED,
@@ -388,6 +448,22 @@ export default function SettingsPanel() {
       setClearing(false);
     }
   };
+
+  const handleCompletionNotificationsChange = async (enabled: boolean) => {
+    if (!enabled) {
+      setEnableCompletionNotifications(false);
+      return;
+    }
+
+    setNotificationPermissionLoading(true);
+    const permission = await requestBrowserNotificationPermission();
+    setNotificationPermission(permission);
+    setEnableCompletionNotifications(permission === "granted");
+    setNotificationPermissionLoading(false);
+  };
+
+  const completionNotificationStatus =
+    COMPLETION_NOTIFICATION_STATUS[notificationPermission];
 
   return (
     <motion.aside
@@ -693,8 +769,54 @@ export default function SettingsPanel() {
         </div>
 
         <div
-          data-testid="settings-solver-cache-density-section"
+          data-testid="settings-completion-notifications-section"
           className="flex flex-col gap-4"
+        >
+          <div>
+            <h5 className="text-sm font-semibold text-slate-900 dark:text-slate-50">
+              {t("settings.completion_notifications_heading")}
+            </h5>
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              {t("settings.completion_notifications_description")}
+            </p>
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <span className="flex items-center gap-1.5 text-sm font-medium text-slate-900 dark:text-slate-50">
+              {t("settings.completion_notifications_enable_label")}
+              <HelpDot
+                title={t("settings.completion_notifications_enable_label")}
+                description={t("settings.completion_notifications_hint")}
+              />
+            </span>
+            <Switch
+              checked={enableCompletionNotifications}
+              onChange={(enabled) => {
+                void handleCompletionNotificationsChange(enabled);
+              }}
+              disabled={
+                notificationPermissionLoading ||
+                notificationPermission === "unsupported"
+              }
+              ariaLabel={t(
+                "settings.completion_notifications_enable_label",
+              )}
+            />
+          </div>
+          <StatusBanner
+            tone={completionNotificationStatus.tone}
+            role={
+              completionNotificationStatus.tone === "error"
+                ? "alert"
+                : undefined
+            }
+          >
+            {t(completionNotificationStatus.translationKey)}
+          </StatusBanner>
+        </div>
+
+        <div
+          data-testid="settings-solver-cache-density-section"
+          className="flex flex-col gap-4 border-t border-slate-200/60 pt-5 dark:border-slate-700/60"
         >
           <div>
             <h5 className="text-sm font-semibold text-slate-900 dark:text-slate-50">
