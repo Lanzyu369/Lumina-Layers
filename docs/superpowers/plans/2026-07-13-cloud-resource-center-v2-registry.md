@@ -1190,9 +1190,6 @@ Implement `scripts/check_tracked_delta_hygiene.py --base origin/master` with the
 ```bash
 set -euo pipefail
 git diff --check origin/master...HEAD
-if git ls-files | rg '(^|/)(data/|logs/|\.env|__pycache__/|.*\.sqlite3(-wal|-shm)?$)'; then
-  exit 1
-fi
 python scripts/check_tracked_delta_hygiene.py --base origin/master
 ```
 

@@ -397,9 +397,6 @@ In Studio:
 ```bash
 set -euo pipefail
 git diff --check origin/dev-refactor...HEAD
-if git ls-files | rg '(^|/)(\.env|user_settings\.json|data/|logs/|\.idea/|\.vscode/|__pycache__/|\.DS_Store$)'; then
-  exit 1
-fi
 python scripts/check_tracked_delta_hygiene.py --base origin/dev-refactor
 python scripts/scan_resource_center_evidence.py --checkout "$PWD" --evidence-dir "$EVIDENCE_DIR"
 ```
