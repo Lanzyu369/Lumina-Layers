@@ -336,9 +336,13 @@ Update `frontend/src/data/announcements.ts` using `docs/announcement-maintenance
 
 ```bash
 set -euo pipefail
-RUN_ID=$(date -u +%Y%m%dT%H%M%SZ)
-EVIDENCE_DIR="${TMPDIR:-/tmp}/lumina-resource-center-v2-${RUN_ID}"
-mkdir -p "$EVIDENCE_DIR"
+: "${LUMINA_EVIDENCE_PARENT:?set an owner-only parent outside all repositories}"
+test -d "$LUMINA_EVIDENCE_PARENT"
+EVIDENCE_DIR=$(mktemp -d "$LUMINA_EVIDENCE_PARENT/lumina-resource-center-v2.XXXXXX")
+chmod 700 "$EVIDENCE_DIR"
+printf '%s\n' 'lumina-resource-center-v2-evidence-v1' > "$EVIDENCE_DIR/.owner"
+chmod 600 "$EVIDENCE_DIR/.owner"
+export EVIDENCE_DIR
 ```
 - Do not commit browser profiles, downloaded packages, runtime databases, or screenshots with private data
 
