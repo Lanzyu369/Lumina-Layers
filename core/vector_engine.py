@@ -2288,18 +2288,20 @@ def _normalise_cached_stack_for_vector_recipe(
         return []
 
     flat = np.asarray(stack, dtype=np.int32).reshape(-1)
-    clamped_values = [
+    clamped_printable_values = [
         min(int(value), int(num_channels) - 1)
         for value in flat[:target_layers].tolist()
         if int(value) >= 0
     ]
-    filler = int(clamped_values[-1]) if clamped_values else 0
+    filler = int(clamped_printable_values[-1]) if clamped_printable_values else 0
+    unique_printable_values = set(clamped_printable_values)
+    fill_air_padding = len(unique_printable_values) == 1
 
     recipe: list[int] = []
     for raw_value in flat[:target_layers]:
         value = int(raw_value)
         if value < 0:
-            recipe.append(filler)
+            recipe.append(filler if fill_air_padding else value)
         else:
             recipe.append(min(value, int(num_channels) - 1))
 
