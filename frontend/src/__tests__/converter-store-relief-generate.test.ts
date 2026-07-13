@@ -385,7 +385,7 @@ describe("converter store relief generate flow", () => {
     expect(result).toBeNull();
     expect(mocks.convertGenerate).not.toHaveBeenCalled();
     expect(useConverterStore.getState().error).toBe(
-      "请先上传高度图并获取高度映射后再生成",
+      "relief_heightmap_generate_requires_upload",
     );
   });
 
@@ -651,7 +651,7 @@ describe("converter store relief generate flow", () => {
     expect(result).toBeNull();
     expect(mocks.convertPreview).toHaveBeenCalledOnce();
     expect(mocks.convertGenerate).not.toHaveBeenCalled();
-    expect(state.error).toBe("请先上传高度图并获取高度映射后再生成");
+    expect(state.error).toBe("relief_heightmap_generate_requires_upload");
   });
 
   it("does not overwrite an existing manual color height map after preview refreshes the palette", async () => {
@@ -693,7 +693,7 @@ describe("converter store relief generate flow", () => {
     expect(result).toBeNull();
     expect(mocks.convertGenerate).not.toHaveBeenCalled();
     expect(useConverterStore.getState().error).toBe(
-      "请先上传高度图并获取高度映射后再生成",
+      "relief_heightmap_generate_requires_upload",
     );
   });
 });

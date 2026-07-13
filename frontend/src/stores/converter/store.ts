@@ -206,6 +206,10 @@ function visibleConverterError(error: unknown, fallback: string): string {
   return apiErrorToVisibleMessage(error, fallback);
 }
 
+export const CONVERTER_ERROR_KEYS = {
+  heightmapUploadRequired: "relief_heightmap_generate_requires_upload",
+} as const;
+
 function rawPreviewFailureMessage(error: unknown): string {
   const detail = visibleConverterError(error, tRuntime("api_error_http_default"));
   return tRuntime("converter_raw_preview_failed", { error: detail });
@@ -6033,7 +6037,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         state.autoHeightMode === "use-heightmap" &&
         !hasCurrentHeightmapUpload
       ) {
-        set({ error: "请先上传高度图并获取高度映射后再生成" });
+        set({ error: CONVERTER_ERROR_KEYS.heightmapUploadRequired });
         return null;
       }
       // Requirement 10.4: enable_relief 为 true 且 color_height_map 为空时阻止生成
@@ -6043,7 +6047,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       ) {
         // Requirement 10.3: 高度图模式时给出更具体的提示
         if (state.autoHeightMode === "use-heightmap") {
-          set({ error: "请先上传高度图并获取高度映射后再生成" });
+          set({ error: CONVERTER_ERROR_KEYS.heightmapUploadRequired });
         } else {
           set({ error: "请先设置颜色高度映射后再生成" });
         }

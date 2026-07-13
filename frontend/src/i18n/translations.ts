@@ -4140,6 +4140,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "高度图",
     en: "Heightmap",
   },
+  relief_heightmap_generate_requires_upload: {
+    zh: "请先上传高度图并获取高度映射后再生成",
+    en: "Upload a heightmap and generate its height mapping before generating the model.",
+  },
   relief_file_selected: {
     zh: "已选择",
     en: "Selected",
