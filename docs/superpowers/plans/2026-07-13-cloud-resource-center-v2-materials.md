@@ -109,6 +109,7 @@ The test requires `checksum_manifest_sha256` to be one lowercase raw 64-hex dige
 - [ ] **Step 2: Run and verify failure**
 
 ```bash
+set -euo pipefail
 .venv/bin/python -m pytest tests/test_registry_contract_fixtures.py -v
 ```
 
@@ -123,6 +124,7 @@ It never performs network access, never accepts a branch name, and never stores 
 - [ ] **Step 4: Vendor and validate exact bytes**
 
 ```bash
+set -euo pipefail
 REGISTRY_CHECKOUT=../Lumina-material-registry
 REGISTRY_FIXTURE_COMMIT=$(git -C "$REGISTRY_CHECKOUT" rev-parse HEAD)
 .venv/bin/python scripts/sync_registry_fixtures.py \
@@ -137,6 +139,7 @@ Expected: the test passes and `UPSTREAM.json` contains only repository, commit, 
 - [ ] **Step 5: Commit**
 
 ```bash
+set -euo pipefail
 git add scripts/sync_registry_fixtures.py tests/fixtures/registry-contract-v2/UPSTREAM.json tests/fixtures/registry-contract-v2/accepted/material-v2.zip tests/fixtures/registry-contract-v2/accepted/material-v2-v1-envelope.zip tests/fixtures/registry-contract-v2/accepted/lut-legacy-v1.zip tests/fixtures/registry-contract-v2/accepted/lut-v2.zip tests/fixtures/registry-contract-v2/accepted/lut-v2-v1-envelope.zip tests/fixtures/registry-contract-v2/accepted/lut-v2-community-envelope.zip tests/fixtures/registry-contract-v2/rejected/path-traversal.zip tests/fixtures/registry-contract-v2/rejected/casefold-collision.zip tests/fixtures/registry-contract-v2/rejected/symlink.zip tests/fixtures/registry-contract-v2/rejected/file-hash-mismatch.zip tests/fixtures/registry-contract-v2/rejected/record-binding-mismatch.zip tests/fixtures/registry-contract-v2/rejected/manifest-too-large.zip tests/fixtures/registry-contract-v2/rejected/manifest-duplicate-key.zip tests/fixtures/registry-contract-v2/rejected/manifest-depth-overflow.zip tests/fixtures/registry-contract-v2/rejected/npy-header-overflow.zip tests/fixtures/registry-contract-v2/rejected/npz-inner-bomb.zip tests/fixtures/registry-contract-v2/EXPECTED.json tests/fixtures/registry-contract-v2/SHA256SUMS.json tests/test_registry_contract_fixtures.py
 git commit -m "test(contracts): vendor registry v2 package fixtures"
 ```
@@ -159,6 +162,7 @@ Run every accepted Registry fixture through the correct Materials validator and 
 - [ ] **Step 2: Verify the tests detect current drift**
 
 ```bash
+set -euo pipefail
 .venv/bin/python -m pytest tests/test_registry_contract_fixtures.py -k validator -v
 ```
 
@@ -237,6 +241,7 @@ Require new/v2 aggregate `content_hash` and exported `package_sha256` to be lowe
 - [ ] **Step 5: Run parity and old-package validation**
 
 ```bash
+set -euo pipefail
 .venv/bin/python -m pytest tests/test_registry_contract_fixtures.py tests/test_package_manifest.py tests/test_lut_package_manifest.py -q
 .venv/bin/python scripts/validate_packages.py --packages packages
 .venv/bin/python scripts/validate_lut_packages.py --packages lut-packages
@@ -247,6 +252,7 @@ Expected: tests pass and counts remain exactly 174 materials and 67 LUTs.
 - [ ] **Step 6: Commit**
 
 ```bash
+set -euo pipefail
 git add requirements-dev.txt scripts/package_contract.py scripts/material_bundle.py scripts/lut_bundle.py tests/test_registry_contract_fixtures.py tests/test_package_manifest.py tests/test_lut_package_manifest.py
 git commit -m "refactor(packages): align validators with registry contracts"
 ```
@@ -261,9 +267,9 @@ git commit -m "refactor(packages): align validators with registry contracts"
 
 - [ ] **Step 1: Write inventory completeness and semantics tests**
 
-Build the expected key set from all validated packages as `material:{material_id}` and `lut:{lut_id}`. Assert the inventory has exactly that set, no duplicate ID, no missing resource, and no unreferenced resource. Every record must have non-empty `publisher_key`, `publisher_name`, `title`, `summary`, `brand`, normalized tags, a bounded explicit compatibility object, and explicit validated `channel`/`visibility` distribution values.
+Build the expected resource key set from all validated packages as `material:{material_id}` and `lut:{lut_id}`, and the exact revision-distribution key set as `material:{material_id}:{revision_id}` or `lut:{lut_id}:{revision_id}`. Assert `resources` has exactly the first set and `revision_distributions` has exactly the second, with no duplicate, missing, or unreferenced entry. Every resource record must have non-empty `publisher_key`, `publisher_name`, `title`, `summary`, `brand`, normalized tags, and a bounded explicit compatibility object, and must not contain `channel`, `visibility`, or `source_policy`. Every revision-distribution record contains exactly `resource_kind`, domain ID, `revision_id`, `channel`, `visibility`, and `source_policy`; distribution and its review provenance are never inherited from a mutable resource-level default.
 
-Assert all existing LUT records use `publisher_kind="community"`, `channel="community"`, and `visibility="community"`. Assert any record with `publisher_kind="lumina"` also has `lumina_approval.reference` and `lumina_approval.approved_at`; do not infer approval from `official/`, channel, visibility, brand, filename, or source directory. A community publisher may retain a legacy public material distribution channel; tests prove channel never changes the source badge.
+Assert all existing LUT resource records use `publisher_kind="community"` and every existing LUT revision-distribution record uses `channel="community"` plus `visibility="community"`. Assert any resource record with `publisher_kind="lumina"` also has `lumina_approval.reference` and `lumina_approval.approved_at`; do not infer approval from `official/`, channel, visibility, brand, filename, or source directory. A community publisher may retain a legacy public material revision distribution; tests prove channel never changes the source badge and changing one revision's pair cannot rewrite another revision.
 
 - [ ] **Step 2: Define the inventory schema**
 
@@ -287,7 +293,14 @@ Use this stable top-level structure:
       "summary": "Community-shared LUT for 4-Color RYBW workflows.",
       "brand": "Example",
       "tags": ["LUT", "4-Color RYBW"],
-      "compatibility": {"color_modes": ["4-color-rybw"]},
+      "compatibility": {"color_modes": ["4-color-rybw"]}
+    }
+  },
+  "revision_distributions": {
+    "lut:lut_example:rev_example": {
+      "resource_kind": "lut",
+      "lut_id": "lut_example",
+      "revision_id": "rev_example",
       "channel": "community",
       "visibility": "community",
       "source_policy": "existing_repository_content"
@@ -296,17 +309,18 @@ Use this stable top-level structure:
 }
 ```
 
-`publisher_key` is a repository-local opaque slug used only for an explicitly reviewed Registry publisher mapping; it is not a badge or proof by itself. `publisher_name="Lumina Community"` is a neutral migration label, not an ownership claim. Brand remains a separate display/search field. Future contributors must supply their explicit publisher key and display name in metadata.
+`publisher_key` is a repository-local opaque slug used only for an explicitly reviewed Registry publisher mapping; it is not a badge or proof by itself. `publisher_name="Lumina Community"` is a neutral migration label, not an ownership claim. Brand remains a separate display/search field. Future contributors must supply their explicit publisher key and display name in resource metadata plus an explicit distribution record for each new revision. Registry may later publish different reviewed envelopes for revisions of the same logical resource; import therefore joins only the exact revision key and never copies a resource-level pair over all revisions.
 
 - [ ] **Step 3: Implement deterministic inventory generation**
 
-`resource_metadata.py bootstrap` reads validated package display/compatibility/distribution facts only. It sets every unconfirmed publisher to community and assigns a unique per-resource key using `legacy-` plus the first 24 hex characters of SHA-256 over UTF-8 `resource_kind + ":" + resource_id`; equal names therefore never group ownership. It derives title from explicit display title/name then logical filename, derives brand from display manufacturer/brand then `Unknown brand`, creates a factual kind/compatibility summary, and sorts keys/tags. Existing LUT distribution is normalized explicitly to `community/community`; material channel/visibility is copied only from the validated immutable manifest and remains independent of publisher kind. It never sets `lumina`, rewrites package bytes, or treats brand/channel/path as publisher.
+`resource_metadata.py bootstrap` reads validated package display/compatibility/distribution facts only. It sets every unconfirmed publisher to community and assigns a unique per-resource key using `legacy-` plus the first 24 hex characters of SHA-256 over UTF-8 `resource_kind + ":" + resource_id`; equal names therefore never group ownership. It derives title from explicit display title/name then logical filename, derives brand from display manufacturer/brand then `Unknown brand`, creates a factual kind/compatibility summary, and sorts keys/tags. Separately, it emits one exact `revision_distributions` entry per validated archive: every existing LUT revision is normalized explicitly to `community/community`, while each material revision copies only its own immutable manifest pair. Distribution remains independent of publisher kind and never flows from one revision to another. It never sets `lumina`, rewrites package bytes, or treats brand/channel/path as publisher.
 
-The loader normalizes metadata to NFC and enforces the cross-repository UTF-8 byte limits exactly: publisher/title/brand `1..128`, summary `0..1024`, at most 32 unique casefold-safe tags of `1..64`, and JSON-only compatibility depth `4`, aggregate nodes `128`, keys `64`, key bytes `64`, and string-value bytes `256`. Strict numeric compatibility values must be finite integers/floats with absolute value at most `1_000_000_000`, and booleans must not pass an integer branch. Every new approval/group/source timestamp uses the master contract's exact `YYYY-MM-DDTHH:MM:SSZ` UTC form with a valid `1970..9999` date; offsets, fractions, leap seconds, impossible dates, and whitespace are rejected rather than normalized. It rejects empty required strings, HTML/script content, control/bidi-override characters, dedicated external preview/package/authority URL fields, unknown fields, duplicate normalized keys/tags, out-of-range/non-finite numbers, unsupported publisher kind, unsupported channel/visibility, malformed publisher key, and mismatched kind/ID; plain summary text is never interpreted as HTML or an executable link. Publisher keys are 1-64 lowercase ASCII characters matching `[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?`. The checked-in v2.0 `channel` allowlist is exactly `official`, `community`, and `team`; the `visibility` allowlist is exactly `official`, `community`, `team`, and `private`. A record is ordinary public content only when both values are official/community. Any other allowed pair is restricted, including design `team/private` and historical `team/team`; metadata tooling preserves that exact pair and never normalizes `private` to `team` or changes publisher attribution. Multiple records may share a publisher key only when kind/name are identical and a checked-in `publisher_group_approval` gives a nonempty public reference plus approval timestamp; `lumina` additionally requires `lumina_approval`. The Registry still independently authorizes and records the external-key mapping and may apply an approver-reviewed envelope policy without changing source package bytes.
+The loader normalizes metadata to NFC and enforces the cross-repository UTF-8 byte limits exactly: publisher/title/brand `1..128`, summary `0..1024`, at most 32 unique casefold-safe tags of `1..64`, and JSON-only compatibility depth `4`, aggregate nodes `128`, keys `64`, key bytes `64`, and string-value bytes `256`. Strict numeric compatibility values must be finite integers/floats with absolute value at most `1_000_000_000`, and booleans must not pass an integer branch. Every new approval/group/source timestamp uses the master contract's exact `YYYY-MM-DDTHH:MM:SSZ` UTC form with a valid `1970..9999` date; offsets, fractions, leap seconds, impossible dates, and whitespace are rejected rather than normalized. It rejects empty required strings, HTML/script content, control/bidi-override characters, dedicated external preview/package/authority URL fields, unknown fields, resource-level channel/visibility/source-policy fields, duplicate normalized keys/tags, out-of-range/non-finite numbers, unsupported publisher kind, unsupported channel/visibility, malformed publisher key, and mismatched kind/ID/revision; plain summary text is never interpreted as HTML or an executable link. Publisher keys are 1-64 lowercase ASCII characters matching `[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?`. The checked-in v2.0 revision-distribution `channel` allowlist is exactly `official`, `community`, and `team`; the `visibility` allowlist is exactly `official`, `community`, `team`, and `private`. A revision is ordinary public content only when both values are official/community. Any other allowed pair is restricted, including design `team/private` and historical `team/team`; metadata tooling preserves that exact pair and never normalizes `private` to `team` or changes publisher attribution. Multiple resource records may share a publisher key only when kind/name are identical and a checked-in `publisher_group_approval` gives a nonempty public reference plus approval timestamp; `lumina` additionally requires `lumina_approval`. The Registry still independently authorizes and records the external-key mapping and may apply an approver-reviewed revision envelope policy without changing source package bytes or the Materials proposal for a different revision.
 
 - [ ] **Step 4: Generate and review the complete inventory**
 
 ```bash
+set -euo pipefail
 .venv/bin/python -m scripts.resource_metadata bootstrap \
   --materials packages \
   --luts lut-packages \
@@ -314,11 +328,12 @@ The loader normalizes metadata to NFC and enforces the cross-repository UTF-8 by
 .venv/bin/python -m pytest tests/test_resource_metadata_v2.py -q
 ```
 
-Expected: all 241 package entries map to their logical resource keys; every current LUT is community publisher plus community channel/visibility; no empty user-facing or distribution metadata remains.
+Expected: all 241 package entries map to their logical resource keys and exact revision-distribution keys; every current LUT is a community publisher with community/community on each revision; no empty user-facing or distribution metadata remains.
 
 - [ ] **Step 5: Commit**
 
 ```bash
+set -euo pipefail
 git add schemas/resource-metadata-v2.schema.json scripts/resource_metadata.py manifests/resource-metadata-v2.json tests/test_resource_metadata_v2.py
 git commit -m "feat(metadata): declare resource publisher and discovery fields"
 ```
@@ -341,48 +356,63 @@ For existing material 2.0 and LUT 1.0 identities, rerun the full builders agains
 - [ ] **Step 2: Verify current material nondeterminism and schema failures**
 
 ```bash
+set -euo pipefail
 .venv/bin/python -m pytest tests/test_package_determinism_v2.py -v
 ```
 
 Expected: FAIL because the material builder uses current timestamps/schema 2.0 and LUT builds schema 1.0.
 
-- [ ] **Step 3: Implement manifest constructors**
+- [ ] **Step 3: Freeze the pre-implementation archive baseline outside the repository**
 
-Material 2.1 archives contain exactly one package record with algorithm, canonical hash, channel, visibility, local directory, display/compatibility, and exactly one required record for each material role. LUT 2.0 archives contain exactly one LUT record with algorithm, raw-byte hash, one LUT role, local path without `lut-preset/` or duplicated `Cloud/`, display, and compatibility. Bulk builds emit multiple immutable archives; neither builder creates a multi-resource envelope.
+Before editing either builder, create a private audit root below an operator-owned `0700` parent outside every checkout and package root. The audit root basename must be generated from `lumina-materials-audit.XXXXXX`, contain an exclusive `0600` sentinel with the exact literal `lumina-materials-audit-v1`, and record the exact starting commit plus sorted tracked material/LUT archive SHA-256 list. Persist the resulting root path in the collaboration evidence; do not place a pointer in the repository and do not delete this root until the exact-head Materials PR has merged and its evidence is accepted.
+
+```bash
+set -euo pipefail
+: "${LUMINA_AUDIT_PARENT:?set a private audit parent outside all repositories}"
+test -d "$LUMINA_AUDIT_PARENT"
+LUMINA_MATERIALS_AUDIT_ROOT=$(mktemp -d "$LUMINA_AUDIT_PARENT/lumina-materials-audit.XXXXXX")
+export LUMINA_MATERIALS_AUDIT_ROOT
+printf '%s\n' 'lumina-materials-audit-v1' > "$LUMINA_MATERIALS_AUDIT_ROOT/.owner"
+chmod 600 "$LUMINA_MATERIALS_AUDIT_ROOT/.owner"
+git rev-parse HEAD > "$LUMINA_MATERIALS_AUDIT_ROOT/base-commit.txt"
+git ls-files -z 'packages/*.zip' 'packages/**/*.zip' 'lut-packages/*.zip' 'lut-packages/**/*.zip' | xargs -0 shasum -a 256 > "$LUMINA_MATERIALS_AUDIT_ROOT/before.sha256"
+```
+
+Validate through a small test helper that the audit root's canonical parent equals the configured audit parent, its basename matches the fixed prefix plus six generated characters, the sentinel is a one-link owner-only regular file with exact bytes, and neither path is inside a Git worktree. Any inherited/arbitrary path fails rather than being cleaned or overwritten.
+
+- [ ] **Step 4: Implement manifest constructors**
+
+Material 2.1 archives contain exactly one package record with algorithm, canonical hash, channel, visibility, local directory, display/compatibility, and exactly one required record for each material role. LUT 2.0 archives contain exactly one LUT record with algorithm, raw-byte hash, channel, visibility, one LUT role, local path without `lut-preset/` or duplicated `Cloud/`, display, and compatibility. Each constructor receives the exact revision-distribution record and rejects a kind/ID/revision mismatch; it never reads a resource-level default. Bulk builds emit multiple immutable archives; neither builder creates a multi-resource envelope.
 
 Use deterministic member order: payload records sorted by normalized path, then manifest last. Open the archive with explicit `ZIP_DEFLATED`, `compresslevel=9`, and strict timestamps; every member uses the fixed timestamp/mode and canonical compact JSON uses a final newline. New manifests omit `exported_at` and every other wall-clock/build-machine field. CI's supported Python/zlib matrix runs the exact-byte test; any runtime that produces drift is rejected for publishing instead of replacing an existing revision.
 
 Both top-level builders expose the same explicit CLI shape used by the gate: `--check`, `--source PATH`, and `--packages PATH`. Defaults remain their current repository directories for maintainer compatibility; supplied paths must be repository-relative or validated test-temp roots and may not escape through symlinks. `--check` never changes archives, manifests, source files, or mtimes.
 
-- [ ] **Step 4: Add immutable collision handling and check-only mode**
+- [ ] **Step 5: Add immutable collision handling and check-only mode**
 
 Before writing, scan all current archives and map `(kind,id,revision)` to validated schema, package SHA, canonical core identity, immutable manifest display snapshot, and exact payload file records. For any existing legacy or new-schema key, compare current source required payload bytes/roles and canonical core identity to that immutable archive; exact core parity returns `legacy_existing` or `new_existing` without reconstructing/recompressing from the mutable metadata inventory, while any core change raises `immutable revision changed; allocate a new revision`. A display/inventory difference is reported separately as `metadata_envelope_change` and is valid input to Registry metadata export, never a package-byte conflict. An explicit reproducibility test may reconstruct a new-schema archive from the archive's own frozen manifest snapshot and must obtain byte-identical SHA; it must not substitute today's inventory. A missing key uses the new schema plus current inventory snapshot, writes to a sibling temporary file, validates, fsyncs, and performs atomic no-replace publication only to a previously absent destination.
 
 `--check` validates existing core parity and computes only missing new-schema outputs in a temporary directory, reporting `legacy_existing`/`new_existing`/`metadata_envelope_change`/`create`/`conflict` without modifying the repository. Run the repository-wide build/check command over all 174 material and 67 LUT packages in tests and assert zero core conflict, zero archive change, and no accidental schema rewrite; metadata-envelope changes are listed deterministically and do not make the command fail.
 
-- [ ] **Step 5: Run tests and prove existing bytes did not change**
-
-Before implementation, save tracked ZIP hashes outside the repo:
+- [ ] **Step 6: Run tests and prove existing bytes did not change**
 
 ```bash
-git ls-files -z 'packages/*.zip' 'packages/**/*.zip' 'lut-packages/*.zip' 'lut-packages/**/*.zip' | xargs -0 shasum -a 256 > /tmp/lumina-materials-before.sha256
-```
-
-After implementation:
-
-```bash
+set -euo pipefail
+: "${LUMINA_MATERIALS_AUDIT_ROOT:?set the owner-marked root created before implementation}"
+test "$(cat "$LUMINA_MATERIALS_AUDIT_ROOT/.owner")" = 'lumina-materials-audit-v1'
 .venv/bin/python -m pytest tests/test_package_determinism_v2.py tests/test_package_manifest.py tests/test_lut_package_manifest.py -q
 .venv/bin/python scripts/build_packages.py --check --source materials-src --packages packages
 .venv/bin/python scripts/build_lut_packages.py --check --source luts-src --packages lut-packages
-git ls-files -z 'packages/*.zip' 'packages/**/*.zip' 'lut-packages/*.zip' 'lut-packages/**/*.zip' | xargs -0 shasum -a 256 > /tmp/lumina-materials-after.sha256
-diff /tmp/lumina-materials-before.sha256 /tmp/lumina-materials-after.sha256
+git ls-files -z 'packages/*.zip' 'packages/**/*.zip' 'lut-packages/*.zip' 'lut-packages/**/*.zip' | xargs -0 shasum -a 256 > "$LUMINA_MATERIALS_AUDIT_ROOT/after.sha256"
+diff "$LUMINA_MATERIALS_AUDIT_ROOT/before.sha256" "$LUMINA_MATERIALS_AUDIT_ROOT/after.sha256"
 ```
 
 Expected: tests pass; both check commands report 174/67 existing identities with zero conflict/create; `diff` prints nothing.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
+set -euo pipefail
 git add scripts/material_bundle.py scripts/lut_bundle.py scripts/build_packages.py scripts/build_lut_packages.py tests/test_package_determinism_v2.py
 git commit -m "feat(packages): build immutable material and LUT v2 revisions"
 ```
@@ -395,20 +425,33 @@ git commit -m "feat(packages): build immutable material and LUT v2 revisions"
 
 - [ ] **Step 1: Write an exact export-shape test**
 
-Require top-level `source_repository="lumina-layer-studio/Lumina-materials"`, the exact 40-character source commit, inventory schema/hash, and package count. For every package revision, require one deterministic record containing kind, ID, revision, schema, canonical algorithm/hash, optional opaque legacy hash, `package_sha256`, `package_bytes`, logical path, publisher key/kind/name plus public approval references, display fields, channel, visibility, compatibility, and file records. Canonical content/package hashes use the v2 prefixed encoding; file hashes remain raw 64-hex. It must not contain package URL, token, local absolute path, Registry approval status, ownership key, internal publisher ID, or active envelope ID.
+Require top-level `source_repository="lumina-layer-studio/Lumina-materials"`, the exact 40-character source commit, inventory schema/hash, and package count. For every package revision, require one deterministic record containing kind, ID, revision, schema, canonical algorithm/hash, optional opaque legacy hash, `package_sha256`, `package_bytes`, `source_archive_path`, logical path, publisher key/kind/name plus public approval references, display fields, the channel/visibility/source policy joined from that exact `revision_distributions` key, compatibility, and file records. `source_archive_path` is normalized repository-relative POSIX text and is below exactly `packages/` for material or `lut-packages/` for LUT; it may not be absolute, traverse, repeat either root, name a symlink/special file, or use the wrong domain root. Canonical content/package hashes use the v2 prefixed encoding; file hashes remain raw 64-hex. It must not contain package URL, token, local absolute path, Registry approval status, ownership key, internal publisher ID, or active envelope ID.
+
+This repository's merge gate is intentionally independent of Registry Task 9, which is merged later. Tests validate the complete export against this checked-in strict schema, the vendored Registry v2 hash/path/package fixtures, and an independently decoded expected normalized proposal; they compare every exact revision pair after a local serialize/parse round trip. The production Registry import parser round-trip belongs to Registry Task 9 and its release gate. A missing, extra, stale, or cross-revision distribution fails before output, but Materials never imports unmerged Registry application code just to pass its own PR.
 
 Here `package_sha256/package_bytes` identify the immutable Materials source archive only. They never claim to be either Registry envelope artifact: approval revalidates this source and deterministically publishes separate v1-compatible and v2 package representations with Registry-owned paths/hashes/bytes. The export carries no artifact representation, envelope ID, or derived compatibility-package hash. Contract tests use the vendored pair to prove Registry projection changes transport representation without changing the normalized core identity.
 
 - [ ] **Step 2: Implement export from validated facts**
 
-The exporter joins immutable package validation records to the current `resource-metadata-v2.json` by kind/ID. It requires package core identity/file facts to match the source revision but deliberately overlays the inventory's current reviewed display/publisher/distribution proposal; those mutable fields need not equal the source archive's frozen display snapshot and never change `package_sha256`, revision ID, or canonical content hash. It obtains the source commit with `git rev-parse HEAD`, refuses a dirty metadata/package tree, missing metadata, or core identity/hash mismatch, and writes sorted UTF-8 JSON atomically. Registry treats the external publisher key as an untrusted mapping request and the resource as pending metadata input; it still revalidates source package bytes and requires Registry approver authorization before creating/reusing an external-key mapping or applying approver-only fields.
+The exporter requires explicit `--source-commit <40-lowercase-hex>` for release output; a local check-only invocation may resolve exact `HEAD^{commit}` once and prints that pin. It joins immutable package validation records to current resource display/publisher/compatibility metadata by kind/ID and to distribution by the complete kind/ID/revision key. It requires package core identity/file facts to match the source revision but deliberately overlays only those exact current reviewed proposals; mutable display and that revision's distribution need not equal the source archive's frozen display snapshot and never change `package_sha256`, revision ID, or canonical content hash. It resolves the commit object once and then reads metadata, inventory, tree modes, and archive blobs only from that immutable Git commit through bounded `git cat-file --batch`/tree plumbing with literal path bytes and no worktree, external filter, hook, or smudge output. It materializes the required regular blobs into a new private owner-marked root outside the checkout, validates that root through shared no-follow path primitives, and derives `source_archive_path` from the commit tree. Missing, duplicate, untracked, symlink/submodule/non-regular mode, casefold collision, wrong-root, oversized object, extra candidate archive, commit/object mismatch, or any output not byte-identical to the Git blob fails closed. A concurrent worktree edit, index change, branch switch, archive replacement, or clean-check race cannot affect emitted bytes or `source_commit`; tests place barriers at each boundary. It never overwrites a historical revision pair from the latest resource or a sibling revision. It refuses a dirty starting metadata/package index/worktree for operator clarity, but cleanliness is not provenance authority; the pinned Git objects are. It rejects missing/extra/stale revision distribution or core identity/hash mismatch and writes sorted UTF-8 JSON atomically. Registry treats the external publisher key and revision distribution as untrusted mapping/policy requests and still independently materializes the same commit objects, revalidates source package bytes, and requires approver authorization before creating/reusing an external-key mapping or applying approver-only fields.
 
 - [ ] **Step 3: Run a deterministic export comparison**
 
 ```bash
-.venv/bin/python scripts/export_registry_metadata.py --output /tmp/resources-a.json
-.venv/bin/python scripts/export_registry_metadata.py --output /tmp/resources-b.json
-cmp /tmp/resources-a.json /tmp/resources-b.json
+set -euo pipefail
+EXPORT_AUDIT_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/lumina-materials-export.XXXXXX")
+printf '%s\n' 'lumina-materials-export-v1' > "$EXPORT_AUDIT_ROOT/.owner"
+cleanup_export_audit() {
+  test "$(cat "$EXPORT_AUDIT_ROOT/.owner")" = 'lumina-materials-export-v1'
+  case "$(basename "$EXPORT_AUDIT_ROOT")" in lumina-materials-export.??????) ;; *) return 1 ;; esac
+  rm -rf -- "$EXPORT_AUDIT_ROOT"
+}
+trap cleanup_export_audit EXIT
+SOURCE_COMMIT=$(git rev-parse 'HEAD^{commit}')
+case "$SOURCE_COMMIT" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;; *) exit 1 ;; esac
+.venv/bin/python scripts/export_registry_metadata.py --source-commit "$SOURCE_COMMIT" --output "$EXPORT_AUDIT_ROOT/resources-a.json"
+.venv/bin/python scripts/export_registry_metadata.py --source-commit "$SOURCE_COMMIT" --output "$EXPORT_AUDIT_ROOT/resources-b.json"
+cmp "$EXPORT_AUDIT_ROOT/resources-a.json" "$EXPORT_AUDIT_ROOT/resources-b.json"
 ```
 
 Expected: `cmp` exits `0`.
@@ -416,6 +459,7 @@ Expected: `cmp` exits `0`.
 - [ ] **Step 4: Commit**
 
 ```bash
+set -euo pipefail
 git add scripts/export_registry_metadata.py tests/test_resource_metadata_v2.py
 git commit -m "feat(metadata): export validated registry resource records"
 ```
@@ -432,7 +476,7 @@ git commit -m "feat(metadata): export validated registry resource records"
 
 - [ ] **Step 1: Add tracked-file and text-content guards**
 
-Reject tracked `.env`, tokens/private keys/config, `user_settings.json`, SQLite/database files, logs, reports generated by local runs, `.idea`, `.vscode`, `__pycache__`, `.pytest_cache`, `.DS_Store`, POSIX/macOS or Windows user-home absolute paths, and literal assignments to sensitive `LUMINA_*TOKEN`, `*SECRET`, or `*KEY` variables. Ignore binary ZIP payload scanning, but validate their manifests and paths through package validators.
+`scripts/check_repository_hygiene.py --base origin/master` rejects forbidden tracked pathnames and only text findings newly introduced relative to the exact target-branch blob: `.env`, tokens/private keys/config, `user_settings.json`, SQLite/database files, logs, locally generated reports, `.idea`, `.vscode`, `__pycache__`, `.pytest_cache`, `.DS_Store`, concrete macOS/Linux root-or-user homes, Windows profiles, the exact current checkout path, and literal assignments to sensitive `LUMINA_*TOKEN`, `*SECRET`, or `*KEY` variables. Obtain changed entries and base/HEAD blobs with NUL-safe Git plumbing; compare rename/copy sources and per-rule finding multisets so an accepted old finding cannot whitelist a new one. Never walk untracked/ignored agent state. Construct concrete-home regular expressions at runtime from segments so the scanner source may document bare policy prefixes without matching itself. Scan tracked text through deterministic bounded byte decoding and reject symlink/special tracked entries; ignore binary ZIP text only on exact package paths, then validate their manifests/paths through package validators. Tests cover existing baseline findings, new occurrences, rename/copy/delete, malicious filenames, missing/non-ancestor base, binary/oversized blobs, and current-checkout self-matching.
 
 - [ ] **Step 2: Extend validation summaries**
 
@@ -457,10 +501,11 @@ The guide gives manufacturers and individual users separate examples that conver
 - [ ] **Step 4: Run the complete gate**
 
 ```bash
+set -euo pipefail
 .venv/bin/python -m pytest tests -q
 .venv/bin/python scripts/validate_packages.py --packages packages
 .venv/bin/python scripts/validate_lut_packages.py --packages lut-packages
-.venv/bin/python scripts/check_repository_hygiene.py
+.venv/bin/python scripts/check_repository_hygiene.py --base origin/master
 git diff --check origin/master...HEAD
 ```
 
@@ -469,11 +514,28 @@ Expected: all commands exit `0`; package totals remain 174 and 67; existing ZIP 
 - [ ] **Step 5: Commit and open the PR**
 
 ```bash
+set -euo pipefail
 git add scripts/check_repository_hygiene.py tests/test_repository_hygiene.py scripts/validate_packages.py scripts/validate_lut_packages.py CONTRIBUTING.md README.md
 git commit -m "chore(validation): gate resource content releases"
 ```
 
-The PR body must include Registry fixture commit/SHA evidence, package before/after checksum diff, metadata counts, publisher counts, deterministic build proof, validation output, and hygiene scan.
+- [ ] **Step 6: Re-run the complete gate against the committed exact head**
+
+```bash
+set -euo pipefail
+: "${LUMINA_MATERIALS_AUDIT_ROOT:?set the owner-marked pre-implementation audit root}"
+test "$(cat "$LUMINA_MATERIALS_AUDIT_ROOT/.owner")" = 'lumina-materials-audit-v1'
+.venv/bin/python -m pytest tests -q
+.venv/bin/python scripts/validate_packages.py --packages packages
+.venv/bin/python scripts/validate_lut_packages.py --packages lut-packages
+.venv/bin/python scripts/check_repository_hygiene.py --base origin/master
+git ls-files -z 'packages/*.zip' 'packages/**/*.zip' 'lut-packages/*.zip' 'lut-packages/**/*.zip' | xargs -0 shasum -a 256 > "$LUMINA_MATERIALS_AUDIT_ROOT/exact-head.sha256"
+diff "$LUMINA_MATERIALS_AUDIT_ROOT/before.sha256" "$LUMINA_MATERIALS_AUDIT_ROOT/exact-head.sha256"
+git diff --check origin/master...HEAD
+test -z "$(git status --short --untracked-files=no)"
+```
+
+Expected: the exact committed head passes, the tracked tree is clean, and the archive list still equals the pre-implementation baseline. A generated file, formatter change, or follow-up fix creates a new head and invalidates the prior evidence. Retain the owner-marked audit root until merge/evidence acceptance; cleanup is a separate operator action that revalidates canonical parent, fixed generated basename, sentinel identity/mode/bytes, and never accepts an inherited arbitrary path. The PR body must include Registry fixture commit/SHA evidence, package before/after/exact-head checksum diff, metadata counts, publisher counts, deterministic build proof, validation output, and exact-head hygiene scan.
 
 ## Materials Merge Gate
 
@@ -482,11 +544,15 @@ Do not merge until:
 - vendored fixture bytes match the merged Registry fixture commit exactly;
 - both local validators agree with Registry expected projections;
 - all 174 material and 67 LUT existing packages still validate and have unchanged bytes;
+- the owner-marked external archive baseline is captured before any builder implementation, retained through exact-head review, and the final tracked archive list/hash manifest is byte-identical to that baseline;
 - metadata covers every logical resource exactly once and every existing LUT is community;
+- `revision_distributions` covers every package revision exactly once, preserves independent channel/visibility pairs, and passes the independent Materials export round trip without latest-revision overwrite; Registry Task 9 owns the later production-import round trip;
 - every publisher key is explicit; bootstrap keys are per-resource, grouped keys have public approval evidence, and equal names never imply shared ownership;
 - no resource becomes `lumina` from path/channel/brand inference;
 - material 2.1 and LUT 2.0 builds are byte-deterministic and collision-safe;
+- both new manifest constructors require the exact revision channel and visibility; LUT 2.0 cannot omit either field;
 - legacy LUT v1 identity remains intact while canonical v2 projection is available;
-- Registry metadata export contains no authority-bearing URL/token/envelope/status fields;
+- Registry metadata export requires one explicit exact 40-hex source commit, reads metadata/tree modes/archive blobs only from that immutable Git object graph with bounded plumbing, and is unaffected by concurrent checkout/index/branch/archive changes;
+- Registry metadata export contains one exact safe `source_archive_path` per revision and no authority-bearing URL/token/envelope/status fields; Registry independently materializes the same source commit and owns any durable copied source-package path;
 - full tests, validators, diff check, and repository hygiene scan pass;
 - exact-head independent review has no blocking finding.
