@@ -753,10 +753,14 @@ Run:
 
 ```bash
 set -euo pipefail
-rg -n 'LUTManager\.(get_lut_path|get_all_lut_files|resolve_source_selection|load_lut_with_metadata)|load_multiple_materials|load_materials\(' api core utils --glob '*.py'
+INVENTORY_SCAN_STATUS=0
+rg -n 'LUTManager\.(get_lut_path|get_all_lut_files|resolve_source_selection|load_lut_with_metadata)|load_multiple_materials|load_materials\(' api core utils --glob '*.py' || INVENTORY_SCAN_STATUS=$?
+if [ "$INVENTORY_SCAN_STATUS" -gt 1 ]; then
+  exit "$INVENTORY_SCAN_STATUS"
+fi
 ```
 
-Classify every result as list projection, local-only read, or workflow payload read. Put the reviewed inventory in the PR body. Every managed payload read must resolve/lease; list projection may use aliases; pure local reads retain safe local resolution.
+Status `0` supplies inventory rows; status `1` records an explicit empty inventory; status `2+` is a scanner error and fails the step. Classify every result as list projection, local-only read, or workflow payload read. Put the reviewed inventory, including the explicit empty result when applicable, in the PR body. Every managed payload read must resolve/lease; list projection may use aliases; pure local reads retain safe local resolution.
 
 - [ ] **Step 2: Write end-to-end workflow resolver tests**
 

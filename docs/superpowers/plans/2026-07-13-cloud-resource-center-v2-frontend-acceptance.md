@@ -581,10 +581,14 @@ Expected: all exit `0`.
 
 ```bash
 set -euo pipefail
-rg -n '(#[0-9a-fA-F]{3,8}|bg-white|text-black|rounded-(2xl|3xl|full)|tracking-tight|tracking-\[-|gradient|blur-[23]xl)' frontend/src/features/resources
+DESIGN_SCAN_STATUS=0
+rg -n '(#[0-9a-fA-F]{3,8}|bg-white|text-black|rounded-(2xl|3xl|full)|tracking-tight|tracking-\[-|gradient|blur-[23]xl)' frontend/src/features/resources || DESIGN_SCAN_STATUS=$?
+if [ "$DESIGN_SCAN_STATUS" -gt 1 ]; then
+  exit "$DESIGN_SCAN_STATUS"
+fi
 ```
 
-Review every match. Semantic `rounded-full` is allowed only for circular icon controls/badges, never text command pills where a standard button/icon works. Raw colors/negative tracking/decorative gradients are removed.
+Status `0` means review every match; status `1` is the desired no-match clean state; status `2+` is a real scanner error and fails the step. Semantic `rounded-full` is allowed only for circular icon controls/badges, never text command pills where a standard button/icon works. Raw colors/negative tracking/decorative gradients are removed.
 
 - [ ] **Step 5: Record the verification-only head**
 
