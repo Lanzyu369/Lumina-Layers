@@ -684,10 +684,36 @@ def _run_material_archive_branch(ctx: dict) -> dict:
         # （此前只有 LUT 路径跑清理，耗材档案分支静默忽略前端 checkbox；新版清理
         # 函数不依赖 LUT，同一调用对两条路径都适用。）
         if ctx.get("enable_cleanup", True):
-            from core.isolated_pixel_cleanup import cleanup_isolated_pixels
-            matched_rgb, material_matrix = cleanup_isolated_pixels(
-                material_matrix, matched_rgb
-            )
+            if dynamic_layer_count_enabled:
+                from core.isolated_pixel_cleanup import (
+                    cleanup_isolated_pixels_with_target_map,
+                )
+                from core.pipeline.material_dynamic_layers import (
+                    recompute_dynamic_material_benefit_curve,
+                )
+
+                matched_rgb, material_matrix, quantized_image = (
+                    cleanup_isolated_pixels_with_target_map(
+                        material_matrix,
+                        matched_rgb,
+                        quantized_image,
+                    )
+                )
+                if isinstance(dynamic_layer_info, dict):
+                    colors = dynamic_layer_info.get("colors")
+                    dynamic_layer_info["benefit_curve"] = (
+                        recompute_dynamic_material_benefit_curve(
+                            colors if isinstance(colors, list) else [],
+                            quantized_image,
+                            mask_solid,
+                        )
+                    )
+            else:
+                from core.isolated_pixel_cleanup import cleanup_isolated_pixels
+
+                matched_rgb, material_matrix = cleanup_isolated_pixels(
+                    material_matrix, matched_rgb
+                )
 
     # ---- Transparent pixels → -1 in material_matrix ----
     material_matrix[mask_transparent] = -1

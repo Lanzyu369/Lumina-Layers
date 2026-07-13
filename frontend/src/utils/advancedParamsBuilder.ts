@@ -23,7 +23,10 @@ import type {
   FridgeMagnetItem,
   RecipeOverrideItem,
 } from "../api/types";
-import { SVG_PIXELS_PER_MM_DEFAULT } from "../stores/settingsStore";
+import {
+  MATERIAL_DELTA_E00_TOLERANCE_DEFAULT,
+  SVG_PIXELS_PER_MM_DEFAULT,
+} from "../stores/settingsStore";
 
 /**
  * Hard limits enforced on the advanced_params payload before size
@@ -46,6 +49,7 @@ const MAX_RECIPE_OVERRIDES = 32;
 export interface BuildAdvancedParamsOptions {
   maxBytes: number;
   svgPixelsPerMm?: number;
+  materialDeltaE00Tolerance?: number;
 }
 
 /**
@@ -124,6 +128,7 @@ function buildGeneration(
   state: ConverterState,
   options: BuildAdvancedParamsOptions,
 ): AdvancedParamsGeneration {
+  const isMaterialSource = state.source_version === "material";
   return {
     structure_mode: state.structure_mode,
     modeling_mode: state.modeling_mode,
@@ -146,6 +151,22 @@ function buildGeneration(
     use_lut_constrained: state.use_lut_constrained,
     auto_dynamic_range: state.auto_dynamic_range,
     separate_backing: state.separate_backing,
+    material_dynamic_layer_count_enabled:
+      isMaterialSource && state.materialDynamicLayerCountEnabled,
+    material_min_layer_count: isMaterialSource
+      ? state.materialMinLayerCount
+      : null,
+    material_max_layer_count: isMaterialSource
+      ? state.materialMaxLayerCount
+      : null,
+    material_backing_material_dir_name: isMaterialSource
+      ? state.materialBackingMaterialDirName
+      : null,
+    material_delta_e00_tolerance: isMaterialSource
+      ? typeof options.materialDeltaE00Tolerance === "number"
+        ? options.materialDeltaE00Tolerance
+        : MATERIAL_DELTA_E00_TOLERANCE_DEFAULT
+      : null,
   };
 }
 

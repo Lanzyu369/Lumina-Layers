@@ -47,6 +47,10 @@ export interface BugReportContextPayload {
   selected_native_db_names: string[];
   selected_material_dir_names: string[];
   material_layer_count: number | null;
+  material_dynamic_layer_count_enabled?: boolean | null;
+  material_min_layer_count?: number | null;
+  material_max_layer_count?: number | null;
+  material_delta_e00_tolerance?: number | null;
   material_layer_height_mm: number | null;
   material_backing_material_dir_name: string | null;
   recent_client_logs: ReadonlyArray<ClientLogEntry>;

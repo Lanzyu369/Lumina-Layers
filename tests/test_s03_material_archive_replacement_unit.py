@@ -564,6 +564,75 @@ class TestS03RunMaterialArchiveBranch:
             np.broadcast_to(print_recipe, (int(np.sum(mask)), 7)),
         )
 
+    def test_dynamic_recipe_overrides_remap_distinct_virtuals_globally(
+        self,
+        tmp_path,
+    ):
+        ctx = _make_material_archive_ctx(None)
+        native_count = len(_SMALL_PALETTE)
+        first_mask = np.zeros(ctx["mask_solid"].shape, dtype=bool)
+        second_mask = np.zeros(ctx["mask_solid"].shape, dtype=bool)
+        first_mask[0, 0] = True
+        second_mask[0, 1] = True
+        masks_path = tmp_path / "dynamic_virtual_masks.pkl"
+        with open(masks_path, "wb") as file_obj:
+            pickle.dump(
+                {"region-a": first_mask, "region-b": second_mask},
+                file_obj,
+            )
+
+        local_virtual = native_count
+        actual = [local_virtual] * 5
+        print_recipe = actual + [2, 2]
+        ctx.update(
+            {
+                "material_dynamic_layer_count_enabled": True,
+                "material_min_layer_count": 5,
+                "material_max_layer_count": 7,
+                "material_backing_material_index": 2,
+                "color_layers": 7,
+                "material_matrix": np.zeros((3, 4, 7), dtype=np.int32),
+                "recipe_override_masks_path": os.fspath(masks_path),
+                "recipe_overrides": [
+                    {
+                        "region_id": "region-a",
+                        "recipe": actual,
+                        "layer_order": "Top2Bottom",
+                        "actual_recipe_top_to_bottom": actual,
+                        "print_recipe_top_to_bottom": print_recipe,
+                        "actual_layer_count": 5,
+                        "padding_layer_count": 2,
+                        "virtual_materials": [
+                            {"name": "Virtual A", "hex": "#111111"}
+                        ],
+                    },
+                    {
+                        "region_id": "region-b",
+                        "recipe": actual,
+                        "layer_order": "Top2Bottom",
+                        "actual_recipe_top_to_bottom": actual,
+                        "print_recipe_top_to_bottom": print_recipe,
+                        "actual_layer_count": 5,
+                        "padding_layer_count": 2,
+                        "virtual_materials": [
+                            {"name": "Virtual B", "hex": "#222222"}
+                        ],
+                    },
+                ],
+            }
+        )
+
+        result = run(ctx)
+
+        np.testing.assert_array_equal(
+            result["material_matrix"][first_mask][0],
+            [native_count] * 5 + [2, 2],
+        )
+        np.testing.assert_array_equal(
+            result["material_matrix"][second_mask][0],
+            [native_count + 1] * 5 + [2, 2],
+        )
+
     def test_applies_replacement_without_processor(self):
         ctx = _make_material_archive_ctx({"#c86432": "#14c814"})
         original_col0 = ctx["matched_rgb"][:, 0].copy()

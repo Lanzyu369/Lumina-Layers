@@ -91,6 +91,7 @@ function readSnapshot(): WorkflowSnapshot {
     advanced_params: buildAdvancedParams(converter, widget.activeTab, {
       maxBytes: 4096,
       svgPixelsPerMm: settings.svgPixelsPerMm,
+      materialDeltaE00Tolerance: settings.materialDeltaE00Tolerance,
     }),
   };
 }

@@ -106,10 +106,61 @@ def cleanup_isolated_pixels(
         shapes/dtypes as the inputs.
     """
     del lut_rgb, ref_stacks  # silence unused-arg; kwargs kept for API parity
+    cleaned_rgb, cleaned_mat, _cleaned_target = _cleanup_isolated_pixels(
+        material_matrix,
+        matched_rgb,
+    )
+    return cleaned_rgb, cleaned_mat
+
+
+def cleanup_isolated_pixels_with_target_map(
+    material_matrix: np.ndarray,
+    matched_rgb: np.ndarray,
+    target_rgb_map: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Clean isolated output pixels and preserve their final target ownership.
+
+    清理孤立输出像素，并同步复制来源邻居的目标色归属，使动态层数收益曲线
+    可以按最终打印矩阵重新加权。
+
+    Args:
+        material_matrix: ``(H, W, N)`` material stack tensor.
+            ``(H, W, N)`` 材料堆叠张量。
+        matched_rgb: ``(H, W, 3)`` simulated output colors.
+            ``(H, W, 3)`` 模拟输出颜色。
+        target_rgb_map: ``(H, W, 3)`` target-color ownership map.
+            ``(H, W, 3)`` 目标色归属图。
+
+    Returns:
+        Cleaned output colors, material stacks, and target-color map.
+        清理后的输出颜色、材料堆叠和目标色归属图。
+    """
+    target_map = np.asarray(target_rgb_map)
+    if target_map.shape != np.asarray(matched_rgb).shape:
+        raise ValueError(
+            "target_rgb_map must have the same shape as matched_rgb"
+        )
+    cleaned_rgb, cleaned_mat, cleaned_target = _cleanup_isolated_pixels(
+        material_matrix,
+        matched_rgb,
+        target_map,
+    )
+    if cleaned_target is None:  # pragma: no cover - guarded by target_map input
+        raise RuntimeError("cleaned target map is unavailable")
+    return cleaned_rgb, cleaned_mat, cleaned_target
+
+
+def _cleanup_isolated_pixels(
+    material_matrix: np.ndarray,
+    matched_rgb: np.ndarray,
+    target_rgb_map: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+    """Shared cleanup implementation with optional target ownership copying."""
     import time
 
     cleaned_mat = material_matrix.copy()
     cleaned_rgb = matched_rgb.copy()
+    cleaned_target = target_rgb_map.copy() if target_rgb_map is not None else None
     H, W = material_matrix.shape[:2]
     total_pixels = H * W
 
@@ -125,6 +176,8 @@ def cleanup_isolated_pixels(
         for (i, j), (mode_enc, (ni, nj)) in mode_sources.items():
             cleaned_mat[i, j] = material_matrix[ni, nj]
             cleaned_rgb[i, j] = matched_rgb[ni, nj]
+            if cleaned_target is not None and target_rgb_map is not None:
+                cleaned_target[i, j] = target_rgb_map[ni, nj]
             encoded[i, j] = mode_enc
             replaced += 1
     ratio = (replaced / total_pixels * 100) if total_pixels > 0 else 0.0
@@ -138,4 +191,4 @@ def cleanup_isolated_pixels(
         extra["merged_count"] = replaced
     _log.info("Isolated pixels cleaned", extra=extra)
 
-    return cleaned_rgb, cleaned_mat
+    return cleaned_rgb, cleaned_mat, cleaned_target

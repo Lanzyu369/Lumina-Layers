@@ -133,6 +133,18 @@ export function collectBugReportContext(): BugReportContextPayload {
     selected_native_db_names: isNativeSource ? converter.selectedNativeDbNames : [],
     selected_material_dir_names: isMaterialSource ? converter.selectedMaterialDirNames : [],
     material_layer_count: isMaterialSource ? converter.materialLayerCount : null,
+    material_dynamic_layer_count_enabled: isMaterialSource
+      ? converter.materialDynamicLayerCountEnabled
+      : null,
+    material_min_layer_count: isMaterialSource
+      ? converter.materialMinLayerCount
+      : null,
+    material_max_layer_count: isMaterialSource
+      ? converter.materialMaxLayerCount
+      : null,
+    material_delta_e00_tolerance: isMaterialSource
+      ? settings.materialDeltaE00Tolerance
+      : null,
     material_layer_height_mm: isMaterialSource ? converter.materialLayerHeightMm : null,
     material_backing_material_dir_name: isMaterialSource ? converter.materialBackingMaterialDirName : null,
     recent_client_logs: getRecentClientLogs(),
@@ -146,6 +158,7 @@ export function collectBugReportContext(): BugReportContextPayload {
     advanced_params: buildAdvancedParams(converter, widget.activeTab, {
       maxBytes: 8192,
       svgPixelsPerMm: settings.svgPixelsPerMm,
+      materialDeltaE00Tolerance: settings.materialDeltaE00Tolerance,
     }),
   };
 }

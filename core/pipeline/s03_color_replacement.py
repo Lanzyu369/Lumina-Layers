@@ -1147,6 +1147,11 @@ def run(ctx: dict) -> dict:
                     recipe_raw = [
                         int(local_map.get(int(v), int(v))) for v in recipe_raw
                     ]
+                    if dynamic_print_recipe is not None:
+                        dynamic_print_recipe = [
+                            int(local_map.get(int(v), int(v)))
+                            for v in dynamic_print_recipe
+                        ]
                 recipe_order = str(item.get("layer_order", target_order))
                 if dynamic_print_recipe is not None:
                     normalized_recipe = dynamic_print_recipe

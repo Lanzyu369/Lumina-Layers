@@ -256,6 +256,39 @@ def test_dynamic_dispatch_maps_mixed_recipes_and_weighted_benefit_curve(
     assert solver_info["dynamic_engine"] == "numba"
 
 
+def test_dynamic_cleanup_reweights_benefit_curve_for_final_target_map(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = [10, 20, 30, 255]
+    second = [200, 210, 220, 255]
+    rgba = np.asarray(
+        [[first] * 3, [first, second, first], [first] * 3],
+        dtype=np.uint8,
+    )
+    ctx = _base_ctx(_write_rgba(tmp_path / "cleanup.png", rgba))
+    ctx["target_width_mm"] = 0.3
+    ctx["enable_cleanup"] = True
+    _enable_dynamic(ctx)
+    monkeypatch.setattr(
+        "core.material_dynamic_solver.solve_dynamic_material_colors",
+        lambda *args, **kwargs: _dynamic_result(),
+    )
+
+    result = _run_material_archive_branch(ctx)
+
+    assert "error" not in result, result.get("material_dynamic_layer_error")
+    np.testing.assert_array_equal(result["quantized_image"][1, 1], first[:3])
+    np.testing.assert_array_equal(
+        result["material_matrix"][1, 1],
+        result["material_matrix"][0, 0],
+    )
+    curve = result["material_dynamic_layer_info"]["benefit_curve"]
+    assert [point["weighted_mean_delta_e00"] for point in curve] == pytest.approx(
+        [3.0, 2.0, 1.0]
+    )
+
+
 def test_dynamic_preview_replay_applies_exact_replacements_and_merges_metadata(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -8,6 +8,87 @@ from __future__ import annotations
 import numpy as np
 
 
+def recompute_dynamic_material_benefit_curve(
+    color_entries: list[dict],
+    target_rgb_map: np.ndarray,
+    mask_solid: np.ndarray | None,
+) -> list[dict]:
+    """Reweight saved exact layer results for the final target ownership map.
+
+    按最终目标色归属图重新加权已保存的逐层精确结果。
+    """
+    rgb = np.asarray(target_rgb_map, dtype=np.uint8)
+    solid = (
+        np.asarray(mask_solid, dtype=bool)
+        if isinstance(mask_solid, np.ndarray)
+        else np.ones(rgb.shape[:2], dtype=bool)
+    )
+    weighted_entries: list[tuple[int, dict[int, float]]] = []
+    all_layer_caps: set[int] = set()
+    for entry in color_entries:
+        if not isinstance(entry, dict):
+            continue
+        target = entry.get("target_srgb")
+        options = entry.get("layer_cap_options")
+        if (
+            not isinstance(target, (list, tuple))
+            or len(target) != 3
+            or not isinstance(options, list)
+            or not options
+        ):
+            continue
+        option_map: dict[int, float] = {}
+        for option in options:
+            if not isinstance(option, dict):
+                continue
+            try:
+                layer_cap = int(option["max_effective_layer_count"])
+                delta_e00 = float(option["delta_e00"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            option_map[layer_cap] = delta_e00
+        if not option_map:
+            continue
+        target_row = np.asarray(target, dtype=np.uint8)
+        pixel_count = int(np.sum(np.all(rgb == target_row, axis=-1) & solid))
+        if pixel_count <= 0:
+            continue
+        weighted_entries.append((pixel_count, option_map))
+        all_layer_caps.update(option_map)
+
+    if not weighted_entries or not all_layer_caps:
+        return []
+
+    benefit_curve: list[dict] = []
+    previous_mean: float | None = None
+    for layer_cap in sorted(all_layer_caps):
+        applicable = [
+            (pixel_count, options[layer_cap])
+            for pixel_count, options in weighted_entries
+            if layer_cap in options
+        ]
+        if not applicable:
+            continue
+        total_pixels = sum(pixel_count for pixel_count, _ in applicable)
+        weighted_mean = sum(
+            pixel_count * delta_e00 for pixel_count, delta_e00 in applicable
+        ) / total_pixels
+        marginal = (
+            0.0
+            if previous_mean is None
+            else max(0.0, previous_mean - weighted_mean)
+        )
+        benefit_curve.append(
+            {
+                "max_effective_layer_count": int(layer_cap),
+                "weighted_mean_delta_e00": round(float(weighted_mean), 12),
+                "marginal_delta_e00_reduction": round(float(marginal), 12),
+            }
+        )
+        previous_mean = weighted_mean
+    return benefit_curve
+
+
 def _dynamic_option_metadata(option) -> dict:
     """Serialize one solver option in the pipeline Top-to-Bottom convention.
     按管线自顶向下层序序列化单个动态求解选项。
