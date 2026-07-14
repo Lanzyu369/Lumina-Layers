@@ -8,6 +8,66 @@ from __future__ import annotations
 import numpy as np
 
 
+_RGB_COUNT_CHUNK_PIXELS = 32_768
+
+
+def _pack_rgb24_rows(rgb_rows: np.ndarray) -> np.ndarray:
+    """Pack ``(N, 3)`` uint8 RGB rows into collision-free uint32 keys."""
+    packed = rgb_rows[:, 0].astype(np.uint32)
+    np.left_shift(packed, np.uint32(16), out=packed)
+    green = rgb_rows[:, 1].astype(np.uint32)
+    np.left_shift(green, np.uint32(8), out=green)
+    np.bitwise_or(packed, green, out=packed)
+    np.bitwise_or(packed, rgb_rows[:, 2], out=packed)
+    return packed
+
+
+def _count_target_keys_in_chunks(
+    rgb: np.ndarray,
+    solid: np.ndarray,
+    target_keys: np.ndarray,
+) -> np.ndarray:
+    """Count exact target RGB keys without allocating a full-image key array."""
+    counts = np.zeros(target_keys.size, dtype=np.int64)
+    if target_keys.size == 0 or rgb.size == 0:
+        return counts
+
+    search_keys = np.empty(target_keys.size + 1, dtype=np.uint32)
+    search_keys[:-1] = target_keys
+    search_keys[-1] = np.uint32(0xFFFFFFFF)
+    height, width = rgb.shape[:2]
+    rows_per_chunk = max(1, _RGB_COUNT_CHUNK_PIXELS // max(1, width))
+    for row_start in range(0, height, rows_per_chunk):
+        row_end = min(height, row_start + rows_per_chunk)
+        row_count = row_end - row_start
+        columns_per_chunk = max(1, _RGB_COUNT_CHUNK_PIXELS // row_count)
+        for column_start in range(0, width, columns_per_chunk):
+            column_end = min(width, column_start + columns_per_chunk)
+            rgb_rows = rgb[
+                row_start:row_end,
+                column_start:column_end,
+            ].reshape(-1, 3)
+            solid_rows = solid[
+                row_start:row_end,
+                column_start:column_end,
+            ].reshape(-1)
+            if not np.any(solid_rows):
+                continue
+            visible_rows = (
+                rgb_rows if np.all(solid_rows) else rgb_rows[solid_rows]
+            )
+            packed = _pack_rgb24_rows(visible_rows)
+            positions = np.searchsorted(search_keys, packed)
+            matches = search_keys[positions] == packed
+            if not np.any(matches):
+                continue
+            counts += np.bincount(
+                positions[matches],
+                minlength=target_keys.size,
+            )
+    return counts
+
+
 def recompute_dynamic_material_benefit_curve(
     color_entries: list[dict],
     target_rgb_map: np.ndarray,
@@ -23,8 +83,8 @@ def recompute_dynamic_material_benefit_curve(
         if isinstance(mask_solid, np.ndarray)
         else np.ones(rgb.shape[:2], dtype=bool)
     )
-    weighted_entries: list[tuple[int, dict[int, float]]] = []
-    all_layer_caps: set[int] = set()
+    solid = np.broadcast_to(solid, rgb.shape[:2])
+    parsed_entries: list[tuple[int, dict[int, float]]] = []
     for entry in color_entries:
         if not isinstance(entry, dict):
             continue
@@ -50,28 +110,55 @@ def recompute_dynamic_material_benefit_curve(
         if not option_map:
             continue
         target_row = np.asarray(target, dtype=np.uint8)
-        pixel_count = int(np.sum(np.all(rgb == target_row, axis=-1) & solid))
-        if pixel_count <= 0:
-            continue
-        weighted_entries.append((pixel_count, option_map))
-        all_layer_caps.update(option_map)
+        target_key = (
+            (int(target_row[0]) << 16)
+            | (int(target_row[1]) << 8)
+            | int(target_row[2])
+        )
+        parsed_entries.append((target_key, option_map))
 
-    if not weighted_entries or not all_layer_caps:
+    if not parsed_entries:
+        return []
+
+    entry_keys = np.fromiter(
+        (target_key for target_key, _options in parsed_entries),
+        dtype=np.uint32,
+        count=len(parsed_entries),
+    )
+    target_keys = np.unique(entry_keys)
+    target_counts = _count_target_keys_in_chunks(rgb, solid, target_keys)
+    entry_positions = np.searchsorted(target_keys, entry_keys)
+    entry_counts = target_counts[entry_positions]
+
+    all_layer_caps: set[int] = set()
+    for pixel_count_raw, (_target_key, option_map) in zip(
+        entry_counts,
+        parsed_entries,
+    ):
+        if int(pixel_count_raw) > 0:
+            all_layer_caps.update(option_map)
+
+    if not all_layer_caps:
         return []
 
     benefit_curve: list[dict] = []
     previous_mean: float | None = None
     for layer_cap in sorted(all_layer_caps):
-        applicable = [
-            (pixel_count, options[layer_cap])
-            for pixel_count, options in weighted_entries
-            if layer_cap in options
-        ]
-        if not applicable:
-            continue
-        total_pixels = sum(pixel_count for pixel_count, _ in applicable)
+        total_pixels = sum(
+            int(pixel_count_raw)
+            for pixel_count_raw, (_target_key, options) in zip(
+                entry_counts,
+                parsed_entries,
+            )
+            if int(pixel_count_raw) > 0 and layer_cap in options
+        )
         weighted_mean = sum(
-            pixel_count * delta_e00 for pixel_count, delta_e00 in applicable
+            int(pixel_count_raw) * options[layer_cap]
+            for pixel_count_raw, (_target_key, options) in zip(
+                entry_counts,
+                parsed_entries,
+            )
+            if int(pixel_count_raw) > 0 and layer_cap in options
         ) / total_pixels
         marginal = (
             0.0
