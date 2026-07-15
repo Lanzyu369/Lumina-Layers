@@ -18,9 +18,11 @@ import os
 import io
 import warnings
 import xml.etree.ElementTree as ET
+from types import SimpleNamespace
 from unittest import mock
 import numpy as np
 import pytest
+from PIL import Image
 from svgelements import Arc, Path as SvgPath
 from shapely.geometry import (
     Polygon,
@@ -79,6 +81,111 @@ class TestFlattenCubicBezier:
         out_fine = [(r, 0.0)]
         _flatten_cubic(r, 0, r, k*r, k*r, r, 0, r, tolerance=0.01, out=out_fine, depth=0)
         assert len(out_fine) > len(out_coarse)
+
+
+class TestNativeVectorRelief:
+    """Relief changes per-shape backing height without rasterizing SVG colors."""
+
+    @staticmethod
+    def _analysis():
+        left = box(0, 0, 10, 10)
+        right = box(10, 0, 20, 10)
+        shapes = [
+            {
+                "geometry": left,
+                "recipe": [0, 0],
+                "color": (255, 0, 0),
+                "matched_rgb": (255, 0, 0),
+            },
+            {
+                "geometry": right,
+                "recipe": [1, 1],
+                "color": (255, 255, 255),
+                "matched_rgb": (255, 255, 255),
+            },
+        ]
+        return SimpleNamespace(
+            matched_shapes=shapes,
+            clipped_shapes=[
+                {"geometry": left, "color": (255, 0, 0)},
+                {"geometry": right, "color": (255, 255, 255)},
+            ],
+            silhouette=left.union(right),
+            image_vectorizer_bounds=None,
+            scale_factor=1.0,
+            bbox=(0.0, 0.0, 20.0, 10.0),
+            slot_names=["Red", "White"],
+            num_channels=2,
+            num_layers=2,
+            preview_colors={
+                0: [255, 0, 0, 255],
+                1: [255, 255, 255, 255],
+            },
+            stage_timings={},
+        )
+
+    @staticmethod
+    def _processor():
+        processor = object.__new__(VectorProcessor)
+        processor.color_mode = "4-Color RYBW"
+        processor.enable_native_vector_mesh = False
+        processor.enable_fridge_magnet = False
+        processor.enable_coating = False
+        processor.enable_outline = False
+        return processor
+
+    def test_color_relief_keeps_optical_thickness_and_xy_geometry(self):
+        flat_scene = self._processor().build_mesh(
+            self._analysis(),
+            thickness_mm=1.0,
+            structure_mode="Single-sided",
+        )
+        relief_scene = self._processor().build_mesh(
+            self._analysis(),
+            thickness_mm=1.0,
+            structure_mode="Single-sided",
+            enable_relief=True,
+            height_mode="color",
+            color_height_map={"#ff0000": 1.04, "#ffffff": 2.0},
+        )
+
+        for slot_name in ("Red", "White"):
+            flat = flat_scene.geometry[slot_name]
+            relief = relief_scene.geometry[slot_name]
+            assert relief.extents[:2] == pytest.approx(flat.extents[:2])
+            assert relief.extents[2] == pytest.approx(flat.extents[2])
+
+        assert relief_scene.geometry["Red"].bounds[:, 2] == pytest.approx(
+            [0.88, 1.04]
+        )
+        assert relief_scene.geometry["White"].bounds[:, 2] == pytest.approx(
+            [1.84, 2.0]
+        )
+        assert relief_scene.geometry["Board"].bounds[:, 2] == pytest.approx(
+            [0.0, 1.84]
+        )
+
+    def test_heightmap_assigns_height_to_existing_svg_regions(self, tmp_path):
+        heightmap = np.full((10, 20), 255, dtype=np.uint8)
+        heightmap[:, :10] = 0
+        heightmap_path = tmp_path / "heightmap.png"
+        Image.fromarray(heightmap).save(heightmap_path)
+
+        scene = self._processor().build_mesh(
+            self._analysis(),
+            thickness_mm=1.0,
+            structure_mode="Single-sided",
+            enable_relief=True,
+            height_mode="heightmap",
+            heightmap_path=str(heightmap_path),
+            heightmap_max_height=2.0,
+        )
+
+        assert scene.geometry["Red"].bounds[:, 2] == pytest.approx([1.84, 2.0])
+        assert scene.geometry["White"].bounds[:, 2] == pytest.approx([0.88, 1.04])
+        assert scene.geometry["Red"].extents[2] == pytest.approx(
+            scene.geometry["White"].extents[2]
+        )
 
 
 class TestFlattenQuadraticBezier:

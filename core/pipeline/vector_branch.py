@@ -1176,7 +1176,7 @@ def _update_bambu_base_layer_ctx_for_vector(
 
     if is_double:
         face_orientation = "double"
-    elif is_5color:
+    elif is_5color or bool(ctx.get("enable_relief", False)):
         face_orientation = "up"
     else:
         face_orientation = "down"
@@ -1967,6 +1967,15 @@ def _run_vector_branch(ctx: dict) -> dict:
                     if separate_backing
                     else backing_channel_idx
                 )
+            for relief_key in (
+                "enable_relief",
+                "height_mode",
+                "color_height_map",
+                "heightmap_path",
+                "heightmap_max_height",
+            ):
+                if accepts_var_kwargs or relief_key in parameters:
+                    build_mesh_kwargs[relief_key] = ctx.get(relief_key)
 
         # Diagnostic 8/8: sample recipes about to enter build_mesh.
         recipe_samples = []

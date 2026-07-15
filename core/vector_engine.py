@@ -3559,6 +3559,11 @@ class VectorProcessor:
         structure_mode: str = "Single-sided",
         progress_fn=None,
         backing_color_id: int = 0,
+        enable_relief: bool = False,
+        height_mode: str = "color",
+        color_height_map: dict[str, float] | None = None,
+        heightmap_path: str | None = None,
+        heightmap_max_height: float | None = None,
     ) -> trimesh.Scene:
         """Extrude analyzed vector shapes into a trimesh Scene.
         将分析后的矢量形状挤出为 trimesh Scene。
@@ -3576,6 +3581,16 @@ class VectorProcessor:
                 （底板几何体使用的材质槽索引，默认 0 以保持历史行为；
                 耗材档案或分离底板流程会传入用户选择的底板槽位，
                 预览/导出才能反映实际选中的耗材颜色。）
+            enable_relief: Build variable-height backing from existing SVG
+                regions.（是否按现有 SVG 色块生成可变高度底板。）
+            height_mode: ``color`` or ``heightmap`` height source.
+                （高度来源：按颜色或高度图。）
+            color_height_map: Matched RGB hex to absolute model height in mm.
+                （匹配色十六进制值到模型绝对高度的映射。）
+            heightmap_path: Optional grayscale heightmap path.
+                （可选灰度高度图路径。）
+            heightmap_max_height: Maximum heightmap model height in mm.
+                （高度图模型最大高度，单位毫米。）
 
         Returns:
             A ``trimesh.Scene`` with one geometry per material slot.
@@ -3607,7 +3622,7 @@ class VectorProcessor:
         is_5color = "5-Color Extended" in self.color_mode
         is_single_sided = "单面" in structure_mode_value or "Single" in structure_mode_value
         mirror_transform = None
-        if is_single_sided and not is_5color:
+        if is_single_sided and not is_5color and not enable_relief:
             model_width_mm = bbox[2] * scale_factor
             mirror_transform = np.array(
                 [[-1.0, 0.0, 0.0, model_width_mm], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
@@ -3653,7 +3668,24 @@ class VectorProcessor:
                 )
             return self._run_length_extrude(**kwargs)
 
-        if is_5color:
+        if enable_relief and is_single_sided and not is_5color:
+            meshes_by_slot = self._build_relief_meshes(
+                matched_shapes=matched_shapes,
+                num_layers=num_layers,
+                layer_h=layer_h,
+                num_channels=num_channels,
+                slot_names=slot_names,
+                scale_factor=scale_factor,
+                backing_color_id=backing_color_id,
+                default_height_mm=thickness_mm,
+                height_mode=height_mode,
+                color_height_map=color_height_map,
+                heightmap_path=heightmap_path,
+                heightmap_max_height=heightmap_max_height,
+                bbox=bbox,
+                extrude_cache=extrude_cache,
+            )
+        elif is_5color:
             meshes_by_slot = _run_length_extrude_with_optional_native(
                 matched_shapes=matched_shapes,
                 num_layers=num_layers,
@@ -3699,7 +3731,12 @@ class VectorProcessor:
             backing_z_start = num_layers * layer_h
 
         backing_sil = None
-        if thickness_mm > 0 and silhouette is not None and not silhouette.is_empty:
+        if (
+            not (enable_relief and is_single_sided and not is_5color)
+            and thickness_mm > 0
+            and silhouette is not None
+            and not silhouette.is_empty
+        ):
             _log.debug("Generating backing: %s layers (%smm)", backing_layer_count, thickness_mm)
             backing_sil = self._normalize_contours(silhouette, close_delta_mm=0.4)
             if backing_sil is None or backing_sil.is_empty:
@@ -3874,6 +3911,182 @@ class VectorProcessor:
         _log.debug("Extrude cache entries: %s", stage_timings["extrude_cache_entries"])
         _log.debug("Scene complete: %s objects", len(scene.geometry))
         return scene
+
+    @staticmethod
+    def _build_relief_meshes(
+        *,
+        matched_shapes,
+        num_layers,
+        layer_h,
+        num_channels,
+        slot_names,
+        scale_factor,
+        backing_color_id,
+        default_height_mm,
+        height_mode,
+        color_height_map,
+        heightmap_path,
+        heightmap_max_height,
+        bbox,
+        extrude_cache,
+    ):
+        """Extrude existing SVG regions at configured heights.
+
+        This deliberately reuses ``matched_shapes``. Relief changes only each
+        region's backing depth and optical Z offset; it never rasterizes SVG
+        colour geometry into voxels.
+
+        直接复用 ``matched_shapes``：浮雕只改变各色块的底板深度和光学层
+        Z 偏移，不把 SVG 色块重新栅格化成体素。
+        """
+        normalized_heights: dict[str, float] = {}
+        for raw_key, raw_height in (color_height_map or {}).items():
+            key = str(raw_key).strip().lower()
+            if not key.startswith("#"):
+                key = f"#{key}"
+            try:
+                height = float(raw_height)
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(height) and height > 0:
+                normalized_heights[key] = height
+
+        resolved_height_mode = str(height_mode or "color").lower()
+        sampled_height_matrix = None
+        if resolved_height_mode == "heightmap":
+            if not heightmap_path:
+                raise ValueError("Native SVG heightmap relief requires heightmap_path")
+            from core.heightmap_loader import HeightmapLoader
+
+            bbox_width = float(bbox[2])
+            bbox_height = float(bbox[3])
+            if bbox_width <= 0 or bbox_height <= 0:
+                raise ValueError("Native SVG relief requires a positive SVG bounding box")
+            sample_width = max(
+                2,
+                min(1600, int(round(bbox_width * float(scale_factor) * 4.0))),
+            )
+            sample_height = max(
+                2,
+                int(round(sample_width * bbox_height / bbox_width)),
+            )
+            heightmap_result = HeightmapLoader.load_and_process(
+                heightmap_path=str(heightmap_path),
+                target_w=sample_width,
+                target_h=sample_height,
+                max_relief_height=float(heightmap_max_height or default_height_mm),
+                base_thickness=float(default_height_mm),
+            )
+            if not heightmap_result.get("success"):
+                raise ValueError(
+                    str(heightmap_result.get("error") or "Heightmap processing failed")
+                )
+            sampled_height_matrix = np.asarray(
+                heightmap_result["height_matrix"], dtype=np.float32
+            )
+        elif resolved_height_mode != "color":
+            raise ValueError(f"Unsupported native SVG relief height mode: {height_mode}")
+
+        minimum_total_layers = max(1, int(num_layers)) + 1
+        default_total_layers = max(
+            minimum_total_layers,
+            int(np.ceil(max(float(default_height_mm), layer_h) / layer_h)),
+        )
+        optical_groups: dict[tuple[int, int, int, int], list] = {}
+        backing_groups: dict[int, list] = {}
+
+        for item in matched_shapes:
+            geometry = item.get("geometry")
+            recipe = [int(value) for value in (item.get("recipe") or [])]
+            if geometry is None or geometry.is_empty or not recipe:
+                continue
+            rgb = item.get("matched_rgb") or item.get("color") or ()
+            try:
+                color_key = f"#{int(rgb[0]):02x}{int(rgb[1]):02x}{int(rgb[2]):02x}"
+            except (TypeError, ValueError, IndexError):
+                color_key = ""
+            if sampled_height_matrix is not None:
+                sample_point = geometry.representative_point()
+                x_ratio = (float(sample_point.x) - float(bbox[0])) / float(bbox[2])
+                y_ratio = (float(sample_point.y) - float(bbox[1])) / float(bbox[3])
+                sample_x = int(
+                    np.clip(
+                        round(x_ratio * (sampled_height_matrix.shape[1] - 1)),
+                        0,
+                        sampled_height_matrix.shape[1] - 1,
+                    )
+                )
+                sample_y = int(
+                    np.clip(
+                        round(y_ratio * (sampled_height_matrix.shape[0] - 1)),
+                        0,
+                        sampled_height_matrix.shape[0] - 1,
+                    )
+                )
+                requested_height = float(sampled_height_matrix[sample_y, sample_x])
+            else:
+                requested_height = normalized_heights.get(color_key)
+            if requested_height is None:
+                total_layers = default_total_layers
+            else:
+                total_layers = max(
+                    minimum_total_layers,
+                    int(np.ceil(requested_height / layer_h)),
+                )
+
+            backing_layers = total_layers - int(num_layers)
+            backing_groups.setdefault(backing_layers, []).append(geometry)
+            layers_to_use = min(int(num_layers), len(recipe))
+            for channel, runs in VectorProcessor._build_channel_runs(
+                recipe,
+                layers_to_use,
+                int(num_channels),
+            ).items():
+                if channel >= len(slot_names):
+                    continue
+                for run_start, run_end in runs:
+                    optical_groups.setdefault(
+                        (total_layers, channel, run_start, run_end), []
+                    ).append(geometry)
+
+        meshes_by_slot: dict[str, dict] = {}
+        for (total_layers, channel, run_start, run_end), geometries in optical_groups.items():
+            merged = _union_run_group_geometries(geometries)
+            inverted_start = (int(num_layers) - 1) - run_end
+            inverted_end = (int(num_layers) - 1) - run_start
+            z_offset = (total_layers - int(num_layers) + inverted_start) * layer_h
+            height = (inverted_end - inverted_start + 1) * layer_h
+            slot_name = slot_names[channel]
+            entry = meshes_by_slot.setdefault(
+                slot_name,
+                {"meshes": [], "mat_id": channel},
+            )
+            entry["meshes"].extend(
+                VectorProcessor._extrude_geometry(
+                    merged,
+                    height=height,
+                    z_offset=z_offset,
+                    scale=scale_factor,
+                    extrude_cache=extrude_cache,
+                )
+            )
+
+        board_entry = meshes_by_slot.setdefault(
+            "Board",
+            {"meshes": [], "mat_id": int(backing_color_id)},
+        )
+        for backing_layers, geometries in backing_groups.items():
+            merged = _union_run_group_geometries(geometries)
+            board_entry["meshes"].extend(
+                VectorProcessor._extrude_geometry(
+                    merged,
+                    height=backing_layers * layer_h,
+                    z_offset=0.0,
+                    scale=scale_factor,
+                    extrude_cache=extrude_cache,
+                )
+            )
+        return meshes_by_slot
 
     def svg_to_mesh(
         self,

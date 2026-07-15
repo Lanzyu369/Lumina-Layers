@@ -423,13 +423,23 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
 
     _mock_pool.submit = AsyncMock(side_effect=_submit_stub)
 
+    generate_body = _build_generate_body(session_id)
+    generate_body["params"]["params"].update(
+        {
+            "modeling_mode": "vector",
+            "enable_relief": True,
+            "height_mode": "color",
+            "color_height_map": {"#ff0000": 2.2, "#00ff00": 2.6},
+        }
+    )
+
     with patch(
         "api.routers.converter.puzzle.assemble_puzzle_3mf",
         side_effect=_assemble_stub,
     ):
         response = client.post(
             "/api/convert/generate-puzzle",
-            json=_build_generate_body(session_id),
+            json=generate_body,
         )
 
     assert response.status_code == 200
@@ -444,6 +454,13 @@ def test_generate_puzzle_assembles_single_3mf_and_passes_piece_matched_rgb() -> 
     assert all(params["add_loop"] is False for params in submitted_params)
     assert all(params["enable_fridge_magnet"] is False for params in submitted_params)
     assert all(params["fridge_magnets"] == [] for params in submitted_params)
+    assert all(params["modeling_mode"] == ModelingMode.HIGH_FIDELITY for params in submitted_params)
+    assert all(params["enable_relief"] is True for params in submitted_params)
+    assert all(params["height_mode"] == "color" for params in submitted_params)
+    assert all(
+        params["color_height_map"] == {"#ff0000": 2.2, "#00ff00": 2.6}
+        for params in submitted_params
+    )
     assert len(assembled_calls) == 1
     assert assembled_calls[0]["piece_count"] == 6
     assert assembled_calls[0]["printer_id"] == "bambu-h2d"
@@ -742,6 +759,7 @@ def test_generate_puzzle_resizes_heightmap_crop_to_worker_grid() -> None:
 
     _mock_pool.submit = AsyncMock(side_effect=_submit_stub)
     body = _build_generate_body(session_id)
+    body["params"]["params"]["modeling_mode"] = "vector"
     body["params"]["params"]["enable_relief"] = True
     body["params"]["params"]["height_mode"] = "heightmap"
     body["params"]["params"]["heightmap_max_height"] = 4.0
@@ -755,6 +773,10 @@ def test_generate_puzzle_resizes_heightmap_crop_to_worker_grid() -> None:
     assert response.status_code == 200
     assert submitted_params
     assert all("heightmap_path" in params for params in submitted_params)
+    assert all(
+        params["modeling_mode"] == ModelingMode.HIGH_FIDELITY
+        for params in submitted_params
+    )
 
     layout = build_puzzle_layout(
         PuzzleLayoutConfig(

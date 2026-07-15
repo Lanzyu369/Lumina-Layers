@@ -5,7 +5,6 @@ import {
   useConverterStore,
 } from "../../stores/converter";
 import type { AutoHeightMode } from "../../api/types";
-import { ModelingMode } from "../../api/types";
 import Checkbox from "../ui/Checkbox";
 import Slider from "../ui/Slider";
 import Dropdown from "../ui/Dropdown";
@@ -28,7 +27,6 @@ export default function ReliefSettings() {
     autoHeightMode,
     heightmapFile,
     heightmapThumbnailUrl,
-    modeling_mode,
     source_version,
     materialLayerCount,
     spacer_thick,
@@ -38,13 +36,11 @@ export default function ReliefSettings() {
     autoHeightMode: s.autoHeightMode,
     heightmapFile: s.heightmapFile,
     heightmapThumbnailUrl: s.heightmapThumbnailUrl,
-    modeling_mode: s.modeling_mode,
     source_version: s.source_version,
     materialLayerCount: s.materialLayerCount,
     spacer_thick: s.spacer_thick,
   })));
 
-  const isVector = modeling_mode === ModelingMode.VECTOR;
   const minimumReliefHeight = getMaterialArchiveReliefMinimumExtraHeight({
     source_version,
     materialLayerCount,
@@ -86,17 +82,11 @@ export default function ReliefSettings() {
     <div className="flex flex-col gap-4">
         <Checkbox
           label={t("relief_enable")}
-          checked={isVector ? false : enable_relief}
+          checked={enable_relief}
           onChange={setEnableRelief}
-          disabled={isVector}
         />
-        {isVector && (
-          <p className="text-[clamp(0.6rem,0.8vw,0.7rem)] text-slate-400 dark:text-slate-500">
-            {t("relief_vector_unsupported")}
-          </p>
-        )}
 
-        {enable_relief && !isVector && (
+        {enable_relief && (
           <>
             <Slider
               label={t("relief_max_height")}

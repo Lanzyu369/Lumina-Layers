@@ -11,7 +11,7 @@ export const ANNOUNCEMENT_STORAGE_KEY = "lumina-announcement-dismissed";
  * 服务器可能隔几天才更新一次；这里按条数保留最近的历史记录，
  * 避免用户只看到最新一天而漏掉中间几天的变化。
  */
-export const ANNOUNCEMENT_HISTORY_LIMIT = 14;
+export const ANNOUNCEMENT_HISTORY_LIMIT = 15;
 
 export interface UseAnnouncementResult {
   visible: boolean;

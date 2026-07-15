@@ -27,9 +27,25 @@ function makeEntry(version: string): AnnouncementEntry {
 }
 
 describe("useAnnouncement", () => {
-  it("announces the Karvax material brand rename in the latest update", () => {
-    expect(ANNOUNCEMENTS[0]?.version).toBe("2026-07-12");
+  it("announces SVG vector relief support in the latest update", () => {
+    expect(ANNOUNCEMENTS[0]?.version).toBe("2026-07-15");
     const items = ANNOUNCEMENTS[0]?.sections.flatMap((section) => section.items) ?? [];
+
+    expect(
+      items.some(
+        (item) =>
+          item.zh.includes("SVG") &&
+          item.zh.includes("浮雕") &&
+          item.en.includes("SVG") &&
+          item.en.toLowerCase().includes("relief"),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps the Karvax material rename in announcement history", () => {
+    const items = ANNOUNCEMENTS.flatMap((entry) =>
+      entry.sections.flatMap((section) => section.items),
+    );
 
     expect(items.some((item) => item.zh.includes("Karvax") && item.en.includes("Karvax")))
       .toBe(true);
