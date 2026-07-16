@@ -3968,7 +3968,10 @@ class VectorProcessor:
             )
             sample_height = max(
                 2,
-                int(round(sample_width * bbox_height / bbox_width)),
+                min(
+                    1600,
+                    int(round(sample_width * bbox_height / bbox_width)),
+                ),
             )
             heightmap_result = HeightmapLoader.load_and_process(
                 heightmap_path=str(heightmap_path),
@@ -3988,9 +3991,13 @@ class VectorProcessor:
             raise ValueError(f"Unsupported native SVG relief height mode: {height_mode}")
 
         minimum_total_layers = max(1, int(num_layers)) + 1
+        default_backing_layers = max(
+            1,
+            int(round(max(float(default_height_mm), layer_h) / layer_h)),
+        )
         default_total_layers = max(
             minimum_total_layers,
-            int(np.ceil(max(float(default_height_mm), layer_h) / layer_h)),
+            default_backing_layers + int(num_layers),
         )
         optical_groups: dict[tuple[int, int, int, int], list] = {}
         backing_groups: dict[int, list] = {}

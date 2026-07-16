@@ -187,6 +187,117 @@ class TestNativeVectorRelief:
             scene.geometry["White"].extents[2]
         )
 
+    def test_unmapped_color_preserves_default_backing_depth(self):
+        scene = self._processor().build_mesh(
+            self._analysis(),
+            thickness_mm=1.2,
+            structure_mode="Single-sided",
+            enable_relief=True,
+            height_mode="color",
+            color_height_map={"#ff0000": 1.04},
+        )
+
+        assert scene.geometry["White"].bounds[:, 2] == pytest.approx(
+            [1.2, 1.36]
+        )
+        assert scene.geometry["Board"].bounds[:, 2] == pytest.approx(
+            [0.0, 1.2]
+        )
+
+    def test_heightmap_sampling_caps_extreme_svg_height(self):
+        analysis = self._analysis()
+        analysis.bbox = (0.0, 0.0, 1.0, 100_000.0)
+
+        with mock.patch(
+            "core.heightmap_loader.HeightmapLoader.load_and_process",
+            return_value={
+                "success": True,
+                "height_matrix": np.ones((2, 2), dtype=np.float32),
+            },
+        ) as load_heightmap:
+            self._processor().build_mesh(
+                analysis,
+                thickness_mm=1.0,
+                structure_mode="Single-sided",
+                enable_relief=True,
+                height_mode="heightmap",
+                heightmap_path="heightmap.png",
+                heightmap_max_height=2.0,
+            )
+
+        assert load_heightmap.call_args.kwargs["target_w"] <= 1600
+        assert load_heightmap.call_args.kwargs["target_h"] <= 1600
+
+    @pytest.mark.parametrize("layer_count", [2, 4, 5, 7])
+    def test_material_archive_global_layer_count_preserves_optical_stack(
+        self,
+        layer_count,
+    ):
+        recipe = [index % 2 for index in range(layer_count)]
+        target_height = 2.0
+        layer_h = 0.08
+        matched_shapes = [
+            {
+                "geometry": box(0, 0, 10, 10),
+                "recipe": recipe,
+                "color": (255, 0, 0),
+                "matched_rgb": (255, 0, 0),
+            }
+        ]
+        result = VectorProcessor._build_relief_meshes(
+            matched_shapes=matched_shapes,
+            num_layers=layer_count,
+            layer_h=layer_h,
+            num_channels=2,
+            slot_names=["Material A", "Material B"],
+            scale_factor=1.0,
+            backing_color_id=1,
+            default_height_mm=1.2,
+            height_mode="color",
+            color_height_map={"#ff0000": target_height},
+            heightmap_path=None,
+            heightmap_max_height=None,
+            bbox=(0.0, 0.0, 10.0, 10.0),
+            extrude_cache={},
+        )
+        flat_result = VectorProcessor._run_length_extrude(
+            matched_shapes=matched_shapes,
+            num_layers=layer_count,
+            layer_h=layer_h,
+            num_channels=2,
+            slot_names=["Material A", "Material B"],
+            scale_factor=1.0,
+            extrude_cache={},
+        )
+
+        for slot_name in ("Material A", "Material B"):
+            flat_meshes = flat_result[slot_name]["meshes"]
+            relief_meshes = result[slot_name]["meshes"]
+            flat_front_intervals = sorted(
+                (float(mesh.bounds[0, 2]), float(mesh.bounds[1, 2]))
+                for mesh in flat_meshes
+            )
+            relief_front_intervals = sorted(
+                (
+                    target_height - float(mesh.bounds[1, 2]),
+                    target_height - float(mesh.bounds[0, 2]),
+                )
+                for mesh in relief_meshes
+            )
+            assert np.allclose(relief_front_intervals, flat_front_intervals)
+            assert sum(abs(float(mesh.volume)) for mesh in relief_meshes) == pytest.approx(
+                sum(abs(float(mesh.volume)) for mesh in flat_meshes)
+            )
+            assert np.vstack([mesh.bounds[:, :2] for mesh in relief_meshes]) == pytest.approx(
+                np.vstack([mesh.bounds[:, :2] for mesh in flat_meshes])
+            )
+
+        board = result["Board"]
+        assert board["mat_id"] == 1
+        assert board["meshes"][0].bounds[:, 2] == pytest.approx(
+            [0.0, target_height - layer_count * layer_h]
+        )
+
 
 class TestFlattenQuadraticBezier:
     """Verify adaptive quadratic Bézier subdivision."""
