@@ -16,6 +16,24 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-07-15",
+    title: {
+      zh: "Lumina Layers — 6 月下旬至 7 月更新速览",
+      en: "Lumina Layers — Late June to July updates",
+    },
+    sections: [
+      {
+        category: { zh: "新功能", en: "New" },
+        items: [
+          {
+            zh: "7 月 15 日：SVG 在矢量模式下现在也能使用颜色深浅或高度图生成浮雕；生成时只调整背板高度，原有叠色层数、顺序和厚度保持不变。",
+            en: "July 15: SVG artwork in Vector mode can now create reliefs from colour depth or a heightmap; generation changes only the backing height while keeping the existing colour-layer count, order, and thickness.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-07-12",
     title: {
       zh: "Lumina Layers — 6 月下旬至 7 月更新速览",

@@ -210,6 +210,28 @@ class TestS01InputValidation:
 
         assert result["is_svg_vector"] is True
 
+    @pytest.mark.parametrize("height_mode", ["color", "heightmap"])
+    def test_svg_vector_relief_stays_on_native_vector_pipeline(
+        self,
+        height_mode,
+    ):
+        """SVG relief must preserve native vector geometry instead of voxelizing it."""
+        from core.pipeline.s01_input_validation import run
+
+        ctx = self._make_valid_ctx()
+        ctx.update(
+            image_path="/tmp/test.svg",
+            modeling_mode=ModelingMode.VECTOR,
+            enable_relief=True,
+            height_mode=height_mode,
+        )
+
+        result = run(ctx)
+
+        assert result["is_svg_vector"] is True
+        assert result["modeling_mode"] == ModelingMode.VECTOR
+        assert "svg_vector_relief_fallback" not in result
+
     def test_five_color_translucent_svg_vector_falls_back_to_high_fidelity(self, tmp_path):
         """5-Color Extended native vector cannot preserve SVG opacity stacking."""
         from core.pipeline.s01_input_validation import run

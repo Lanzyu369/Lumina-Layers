@@ -840,6 +840,57 @@ describe("native bundle converter flow", () => {
     expect(state.model_margin).toBeNull();
   });
 
+  it.each([
+    ["setLutName", "catalog"],
+    ["setLutName", "async info"],
+    ["setLegacyLutNames", "catalog"],
+    ["setLegacyLutNames", "async info"],
+  ] as const)(
+    "clears vector relief when %s resolves 5-color from %s",
+    async (setterName, source) => {
+      const lutName = `legacy-five-${setterName}-${source}`;
+      const hasCatalogColorMode = source === "catalog";
+      vi.mocked(lutApi.fetchLutInfo).mockResolvedValueOnce({
+        name: lutName,
+        color_mode: ColorMode.FIVE_COLOR_EXT,
+        color_count: 5,
+      } as never);
+      useConverterStore.setState({
+        lutListFull: hasCatalogColorMode
+          ? [
+              {
+                name: lutName,
+                color_mode: ColorMode.FIVE_COLOR_EXT,
+                path: `/${lutName}.npy`,
+                fingerprint: `fp-${lutName}`,
+              },
+            ]
+          : [],
+        lutColorsLutName: lutName,
+        modeling_mode: ModelingMode.VECTOR,
+        structure_mode: StructureMode.SINGLE_SIDED,
+        color_mode: ColorMode.FOUR_COLOR_RYBW,
+      } as never);
+      useConverterStore.getState().setEnableRelief(true);
+
+      if (setterName === "setLutName") {
+        useConverterStore.getState().setLutName(lutName);
+      } else {
+        useConverterStore.getState().setLegacyLutNames([lutName]);
+      }
+      if (!hasCatalogColorMode) {
+        expect(useConverterStore.getState().enable_relief).toBe(true);
+        await Promise.resolve();
+        await Promise.resolve();
+      }
+
+      expect(useConverterStore.getState().color_mode).toBe(
+        ColorMode.FIVE_COLOR_EXT,
+      );
+      expect(useConverterStore.getState().enable_relief).toBe(false);
+    },
+  );
+
   it("normalizes legacy 8-Color LUT info before storing state and sending requests", async () => {
     vi.mocked(lutApi.fetchLutInfo).mockResolvedValueOnce({
       name: "legacy-eight",

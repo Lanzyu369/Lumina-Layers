@@ -853,6 +853,24 @@ function normalizeLutColorMode<T extends { color_mode?: string }>(info: T): T {
     : { ...info, color_mode: colorMode };
 }
 
+function normalizeLutDrivenReliefState(
+  state: Pick<
+    ConverterState,
+    "color_mode" | "enable_relief" | "modeling_mode"
+  >,
+  updates: Partial<ConverterState>,
+): Partial<ConverterState> {
+  const nextColorMode = updates.color_mode ?? state.color_mode;
+  const nextModelingMode = updates.modeling_mode ?? state.modeling_mode;
+  if (
+    nextModelingMode === ModelingModeEnum.VECTOR &&
+    nextColorMode === ColorModeEnum.FIVE_COLOR_EXT
+  ) {
+    return { ...updates, enable_relief: false };
+  }
+  return updates;
+}
+
 function normalizeLutGroups<
   TGroup extends { items?: TItem[] },
   TItem extends { color_mode?: string },
@@ -2852,7 +2870,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       if (lutInfo && lutInfo.color_mode) {
         updates.color_mode = normalizePublicColorMode(lutInfo.color_mode);
       }
-      set(updates);
+      set((current) => normalizeLutDrivenReliefState(current, updates));
       try {
         localStorage.setItem("lumina_lastLut", name);
       } catch {
@@ -2909,7 +2927,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
               nextUpdates.color_layers = null;
               nextUpdates.layer_height_mm = null;
             }
-            set(nextUpdates);
+            set((current) =>
+              normalizeLutDrivenReliefState(current, nextUpdates),
+            );
           })
           .catch(() => {
             /* best effort */
@@ -2951,7 +2971,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       if (lutInfo?.color_mode) {
         updates.color_mode = normalizePublicColorMode(lutInfo.color_mode);
       }
-      set(updates);
+      set((current) => normalizeLutDrivenReliefState(current, updates));
       try {
         if (primaryName) {
           localStorage.setItem("lumina_lastLut", primaryName);
@@ -3008,7 +3028,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
                 normalizedInfo.layer_height_mm ??
                 null;
             }
-            set(nextUpdates);
+            set((current) =>
+              normalizeLutDrivenReliefState(current, nextUpdates),
+            );
           })
           .catch(() => {
             /* best effort */
@@ -3310,20 +3332,42 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     setStructureMode: (mode: StructureMode) =>
       set((state) => ({
         structure_mode:
-          state.enable_fridge_magnet && mode !== StructureModeEnum.SINGLE_SIDED
+          (state.enable_fridge_magnet ||
+            (state.enable_relief &&
+              state.modeling_mode === ModelingModeEnum.VECTOR)) &&
+          mode !== StructureModeEnum.SINGLE_SIDED
             ? StructureModeEnum.SINGLE_SIDED
             : mode,
         threemfDiskPath: null,
         downloadUrl: null,
       })),
     setColorMode: (mode: ColorMode) =>
-      set({ color_mode: mode, threemfDiskPath: null, downloadUrl: null }),
+      set((state) => ({
+        color_mode: mode,
+        enable_relief:
+          state.modeling_mode === ModelingModeEnum.VECTOR &&
+          mode === ColorModeEnum.FIVE_COLOR_EXT
+            ? false
+            : state.enable_relief,
+        threemfDiskPath: null,
+        downloadUrl: null,
+      })),
     setModelingMode: (mode: ModelingMode) => {
       const state = _get();
       if (mode === ModelingModeEnum.VECTOR && !isSvgImageFile(state.imageFile)) {
         return;
       }
-      set({ modeling_mode: mode, threemfDiskPath: null, downloadUrl: null });
+      set({
+        modeling_mode: mode,
+        enable_relief:
+          mode === ModelingModeEnum.VECTOR &&
+          (state.color_mode === ColorModeEnum.FIVE_COLOR_EXT ||
+            state.structure_mode !== StructureModeEnum.SINGLE_SIDED)
+            ? false
+            : state.enable_relief,
+        threemfDiskPath: null,
+        downloadUrl: null,
+      });
     },
     setColorLayers: (layers: number | null) =>
       set({
@@ -3613,6 +3657,14 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     // --- 浮雕（互斥） ---
     setEnableRelief: (enabled: boolean) => {
       set((state) => {
+        if (
+          enabled &&
+          state.modeling_mode === ModelingModeEnum.VECTOR &&
+          (state.color_mode === ColorModeEnum.FIVE_COLOR_EXT ||
+            state.structure_mode !== StructureModeEnum.SINGLE_SIDED)
+        ) {
+          return state;
+        }
         const minimumReliefExtraHeight = getMaterialArchiveReliefMinimumExtraHeight(state);
         const reliefMaxHeight = enabled
           ? clampValue(

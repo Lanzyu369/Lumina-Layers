@@ -188,16 +188,25 @@ def _shape_recipe0_histogram(matched_shapes: list) -> dict:
     }
 
 
-def _make_vector_glb_preview_scene(scene, *, structure_mode: object, color_mode: object):
+def _make_vector_glb_preview_scene(
+    scene,
+    *,
+    structure_mode: object,
+    color_mode: object,
+    enable_relief: bool = False,
+):
     """Return a display-oriented copy of a vector scene for GLB previews.
 
-    Single-sided 4-color vector exports place the backing above the color
+    Flat single-sided 4-color vector exports place the backing above the color
     layers for print assembly. The app preview is a display surface, so it
-    mirrors only the GLB source scene and keeps the 3MF/export scene unchanged.
+    mirrors only that flat GLB source scene and keeps relief scenes unchanged.
 
     单面 4 色矢量导出的打印 scene 会把底板放在颜色层上方；应用内 3D 预览是
     展示面，因此只镜像 GLB 的输入 scene，不改变 3MF 导出的原始几何。
     """
+
+    if enable_relief:
+        return scene
 
     structure_value = str(structure_mode or "")
     color_mode_value = str(color_mode or "")
@@ -1176,7 +1185,7 @@ def _update_bambu_base_layer_ctx_for_vector(
 
     if is_double:
         face_orientation = "double"
-    elif is_5color:
+    elif is_5color or bool(ctx.get("enable_relief", False)):
         face_orientation = "up"
     else:
         face_orientation = "down"
@@ -1971,6 +1980,15 @@ def _run_vector_branch(ctx: dict) -> dict:
                     if separate_backing
                     else backing_channel_idx
                 )
+            for relief_key in (
+                "enable_relief",
+                "height_mode",
+                "color_height_map",
+                "heightmap_path",
+                "heightmap_max_height",
+            ):
+                if accepts_var_kwargs or relief_key in parameters:
+                    build_mesh_kwargs[relief_key] = ctx.get(relief_key)
 
         # Diagnostic 8/8: sample recipes about to enter build_mesh.
         recipe_samples = []
@@ -2366,6 +2384,7 @@ def _run_vector_branch(ctx: dict) -> dict:
                 scene,
                 structure_mode=structure_mode,
                 color_mode=vec_color_mode,
+                enable_relief=bool(ctx.get("enable_relief", False)),
             )
             vector_glb_preview.export_vector_glb_preview(
                 scene=glb_source_scene,

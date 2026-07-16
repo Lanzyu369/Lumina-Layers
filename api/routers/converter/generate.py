@@ -29,7 +29,13 @@ from api.preview_cache_artifacts import (
     hydrate_preview_cache,
     is_preview_cache_artifact_ref,
 )
-from api.schemas.converter import ConvertGenerateRequest, LargeFormatGenerateRequest
+from api.schemas.converter import (
+    ColorMode,
+    ConvertGenerateRequest,
+    LargeFormatGenerateRequest,
+    ModelingMode,
+    StructureMode,
+)
 from api.schemas.lut import LutSourceSelection
 from api.schemas.responses import (
     BatchItemResult,
@@ -1140,6 +1146,29 @@ def _has_requested_fridge_magnet_cavities(request: ConvertGenerateRequest) -> bo
     return bool(request.enable_fridge_magnet)
 
 
+def _validate_native_vector_relief_compatibility(
+    request: ConvertGenerateRequest,
+) -> None:
+    """Reject native SVG relief branches that would otherwise export flat.
+
+    拒绝会静默退回平面模型的原生 SVG 浮雕组合。
+    """
+
+    if not request.enable_relief or request.modeling_mode != ModelingMode.VECTOR:
+        return
+    if (
+        request.structure_mode != StructureMode.SINGLE_SIDED
+        or request.color_mode == ColorMode.FIVE_COLOR_EXT
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Native SVG relief supports only single-sided, "
+                "non-5-Color Extended models."
+            ),
+        )
+
+
 @router.post("/generate")
 async def convert_generate(
     body: _GenerateBody,
@@ -1162,6 +1191,7 @@ async def convert_generate(
     cache, cache_ref = _require_preview_cache_for_generate(session_data)
 
     request = body.params
+    _validate_native_vector_relief_compatibility(request)
 
     # Retrieve paths stored during preview
     image_path: str | None = session_data.get("image_path")
@@ -1835,20 +1865,39 @@ async def _generate_large_format_svg_native(
         recipe_override_masks_path=recipe_override_masks_path,
         material_matrix_path=material_matrix_path,
     )
+    native_heightmap_path: str | None = None
+    if request.enable_relief and (request.height_mode or "color") == "heightmap":
+        heightmap_grayscale = session_data.get("heightmap_grayscale")
+        if heightmap_grayscale is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Heightmap is required when heightmap relief is enabled.",
+            )
+        fd, native_heightmap_path = tempfile.mkstemp(suffix=".png", dir=TEMP_DIR)
+        os.close(fd)
+        try:
+            Image.fromarray(heightmap_grayscale).save(native_heightmap_path)
+        except (OSError, ValueError, TypeError):
+            _remove_temp_path(native_heightmap_path)
+            raise
+        shared_params["heightmap_path"] = native_heightmap_path
     try:
-        result = await pool.submit(
-            worker_generate_large_format_svg_native,
-            image_path,
-            lut_path,
-            {
-                **shared_params,
-                "tile_name_prefix": source_basename,
-                "total_width_mm": total_width_mm,
-                "total_height_mm": total_height_mm,
-                "tile_width_mm": tile_width_mm,
-                "tile_height_mm": tile_height_mm,
-            },
-        )
+        try:
+            result = await pool.submit(
+                worker_generate_large_format_svg_native,
+                image_path,
+                lut_path,
+                {
+                    **shared_params,
+                    "tile_name_prefix": source_basename,
+                    "total_width_mm": total_width_mm,
+                    "total_height_mm": total_height_mm,
+                    "tile_width_mm": tile_width_mm,
+                    "tile_height_mm": tile_height_mm,
+                },
+            )
+        finally:
+            _remove_temp_path(native_heightmap_path)
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="Large-format SVG generation timed out")
     except ROUTER_HANDLED_ERRORS as e:
@@ -2165,6 +2214,7 @@ async def convert_generate_large_format(
 
     lf = body.params
     request = lf.params
+    _validate_native_vector_relief_compatibility(request)
 
     if _has_requested_fridge_magnet_cavities(request):
         raise HTTPException(
@@ -2665,6 +2715,18 @@ async def convert_batch(
                 status_code=422,
                 detail="Batch relief requires color_height_map",
             )
+        if enable_relief and resolved_modeling_mode == CoreModelingMode.VECTOR:
+            if (
+                structure_mode != StructureMode.SINGLE_SIDED.value
+                or color_mode == ColorMode.FIVE_COLOR_EXT.value
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "Native SVG relief supports only single-sided, "
+                        "non-5-Color Extended models."
+                    ),
+                )
         _validate_material_archive_relief_minimum_height(
             enable_relief=enable_relief,
             material_source=material_source,

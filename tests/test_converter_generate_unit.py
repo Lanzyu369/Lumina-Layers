@@ -40,7 +40,14 @@ from api.routers.converter.generate import MODEL_GENERATION_FAILED_DETAIL
 from api.routers.converter.generate import _recover_virtual_materials_from_preview_cache
 from api.routers.converter.generate import _resolve_recipe_overrides
 from api.routers.converter.generate import _resolve_large_format_source_basename
-from api.schemas.converter import ConvertGenerateRequest, LargeFormatConvertGenerateRequest, ModelingMode
+from api.routers.converter.generate import _validate_native_vector_relief_compatibility
+from api.schemas.converter import (
+    ColorMode,
+    ConvertGenerateRequest,
+    LargeFormatConvertGenerateRequest,
+    ModelingMode,
+    StructureMode,
+)
 from api.schemas.system import UserSettings
 from api.session_store import SessionStore
 from api.worker_pool import WorkerPoolManager
@@ -1766,6 +1773,132 @@ class TestGenerateRegistryFailureCleanup:
         assert not zip_path.exists()
 
     @pytest.mark.asyncio
+    async def test_large_format_svg_native_forwards_color_relief_params(
+        self,
+        tmp_path,
+    ) -> None:
+        image_path = tmp_path / "source.svg"
+        lut_path = tmp_path / "source.npy"
+        zip_path = tmp_path / "tiles.zip"
+        image_path.write_text("<svg/>", encoding="utf-8")
+        lut_path.write_bytes(b"lut")
+        zip_path.write_bytes(b"zip")
+        captured_params = {}
+
+        async def _submit(_fn, _image_path, _lut_path, params):
+            captured_params.update(params)
+            return {
+                "zip_path": str(zip_path),
+                "tile_count": 1,
+                "grid_cols": 1,
+                "grid_rows": 1,
+                "warnings": [],
+            }
+
+        request = LargeFormatConvertGenerateRequest(
+            total_width_mm=20.0,
+            total_height_mm=20.0,
+            tile_width_mm=20.0,
+            tile_height_mm=20.0,
+            lut_name="test_lut",
+            enable_relief=True,
+            height_mode="color",
+            color_height_map={"#ff0000": 2.4},
+            heightmap_max_height=3.2,
+        )
+        registry = FileRegistry()
+
+        result = await _generate_large_format_svg_native(
+            image_path=str(image_path),
+            lut_path=str(lut_path),
+            source_basename="source",
+            recipe_overrides=None,
+            recipe_override_masks_path=None,
+            material_matrix_path=None,
+            total_width_mm=20.0,
+            total_height_mm=20.0,
+            tile_width_mm=20.0,
+            tile_height_mm=20.0,
+            request=request,
+            session_data={},
+            sid="session-color",
+            store=_test_store,
+            registry=registry,
+            pool=SimpleNamespace(submit=AsyncMock(side_effect=_submit)),
+            warnings=[],
+        )
+
+        assert result["status"] == "ok"
+        assert captured_params["enable_relief"] is True
+        assert captured_params["height_mode"] == "color"
+        assert captured_params["color_height_map"] == {"#ff0000": 2.4}
+        assert captured_params["heightmap_max_height"] == pytest.approx(3.2)
+
+    @pytest.mark.asyncio
+    async def test_large_format_svg_native_materializes_heightmap_for_worker(
+        self,
+        tmp_path,
+    ) -> None:
+        image_path = tmp_path / "source.svg"
+        lut_path = tmp_path / "source.npy"
+        zip_path = tmp_path / "tiles.zip"
+        image_path.write_text("<svg/>", encoding="utf-8")
+        lut_path.write_bytes(b"lut")
+        zip_path.write_bytes(b"zip")
+        heightmap = np.arange(32, dtype=np.uint8).reshape(4, 8)
+        captured_path = None
+
+        async def _submit(_fn, _image_path, _lut_path, params):
+            nonlocal captured_path
+            captured_path = params["heightmap_path"]
+            assert os.path.exists(captured_path)
+            with Image.open(captured_path) as loaded:
+                assert np.array_equal(np.asarray(loaded), heightmap)
+            return {
+                "zip_path": str(zip_path),
+                "tile_count": 1,
+                "grid_cols": 1,
+                "grid_rows": 1,
+                "warnings": [],
+            }
+
+        request = LargeFormatConvertGenerateRequest(
+            total_width_mm=20.0,
+            total_height_mm=20.0,
+            tile_width_mm=20.0,
+            tile_height_mm=20.0,
+            lut_name="test_lut",
+            enable_relief=True,
+            height_mode="heightmap",
+            heightmap_max_height=3.2,
+        )
+        registry = FileRegistry()
+
+        result = await _generate_large_format_svg_native(
+            image_path=str(image_path),
+            lut_path=str(lut_path),
+            source_basename="source",
+            recipe_overrides=None,
+            recipe_override_masks_path=None,
+            material_matrix_path=None,
+            total_width_mm=20.0,
+            total_height_mm=20.0,
+            tile_width_mm=20.0,
+            tile_height_mm=20.0,
+            request=request,
+            session_data={"heightmap_grayscale": heightmap},
+            sid="session-heightmap",
+            store=_test_store,
+            registry=registry,
+            pool=SimpleNamespace(submit=AsyncMock(side_effect=_submit)),
+            warnings=[],
+        )
+
+        assert result["status"] == "ok"
+        assert captured_path is not None
+        assert not os.path.exists(captured_path)
+
+    @pytest.mark.asyncio
     async def test_large_format_raster_registry_failure_cleans_unregistered_zip(
         self,
         tmp_path,
@@ -3372,6 +3505,34 @@ def test_convert_generate_request_accepts_native_bundle_source() -> None:
     assert request.vendor == "BambuLab"
     assert request.db_names == ["RYBW_008_5L"]
     assert request.nozzle_size == "0.4"
+
+
+@pytest.mark.parametrize(
+    ("structure_mode", "color_mode"),
+    [
+        (StructureMode.DOUBLE_SIDED, ColorMode.FOUR_COLOR_RYBW),
+        (StructureMode.SINGLE_SIDED, ColorMode.FIVE_COLOR_EXT),
+    ],
+)
+def test_native_vector_relief_validation_rejects_flat_export_branches(
+    structure_mode: StructureMode,
+    color_mode: ColorMode,
+) -> None:
+    request = ConvertGenerateRequest(
+        lut_name="test-lut",
+        modeling_mode=ModelingMode.VECTOR,
+        structure_mode=structure_mode,
+        color_mode=color_mode,
+        enable_relief=True,
+        height_mode="color",
+        color_height_map={"#ff0000": 2.0},
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _validate_native_vector_relief_compatibility(request)
+
+    assert exc_info.value.status_code == 422
+    assert "Native SVG relief supports only" in str(exc_info.value.detail)
 
 
 def test_resolve_recipe_overrides_uses_session_when_request_array_is_empty() -> None:
