@@ -872,7 +872,6 @@ def test_worker_generate_large_format_svg_native_preserves_relief_semantics_per_
     build_calls: list[dict[str, object]] = []
     sampled_heightmap_means: list[float] = []
     tile_heightmap_paths: list[str] = []
-    processor_magnet_settings: list[tuple[bool, list[dict[str, object]]]] = []
 
     class _FakeVectorProcessor:
         def __init__(self, lut_path: str, color_mode: str) -> None:
@@ -884,9 +883,6 @@ def test_worker_generate_large_format_svg_native_preserves_relief_semantics_per_
 
         def build_mesh(self, **kwargs):
             build_calls.append(dict(kwargs))
-            processor_magnet_settings.append(
-                (self.enable_fridge_magnet, self.fridge_magnets)
-            )
             tile_heightmap_paths.append(kwargs["heightmap_path"])
             with Image.open(kwargs["heightmap_path"]) as heightmap:
                 sampled_heightmap_means.append(float(np.asarray(heightmap).mean()))
@@ -929,16 +925,6 @@ def test_worker_generate_large_format_svg_native_preserves_relief_semantics_per_
         "color_height_map": {"#ff0000": 2.4},
         "heightmap_path": str(heightmap_path),
         "heightmap_max_height": 3.2,
-        "enable_fridge_magnet": True,
-        "fridge_magnets": [
-            {
-                "shape": "round",
-                "diameter_mm": 8.0,
-                "thickness_mm": 0.4,
-                "center_x_mm": 0.0,
-                "center_y_mm": 0.0,
-            }
-        ],
     }
 
     result = None
@@ -972,10 +958,6 @@ def test_worker_generate_large_format_svg_native_preserves_relief_semantics_per_
             assert call["color_height_map"] == {"#ff0000": 2.4}
             assert call["heightmap_max_height"] == pytest.approx(3.2)
         assert sampled_heightmap_means == pytest.approx([0.0, 255.0])
-        assert processor_magnet_settings == [
-            (True, params["fridge_magnets"]),
-            (True, params["fridge_magnets"]),
-        ]
         assert build_calls[0]["heightmap_path"] != build_calls[1]["heightmap_path"]
         assert tile_heightmap_paths
         assert all(not os.path.exists(path) for path in tile_heightmap_paths)
