@@ -1635,6 +1635,15 @@ def worker_generate_large_format_svg_native(
     try:
         for tile in tile_analyses:
             tile_processor = VectorProcessor(lut_path, params["color_mode"])
+            tile_processor.auto_dynamic_range = bool(
+                params.get("auto_dynamic_range", False)
+            )
+            tile_processor.enable_fridge_magnet = bool(
+                params.get("enable_fridge_magnet", False)
+            )
+            tile_processor.fridge_magnets = list(
+                params.get("fridge_magnets") or []
+            )
             tile_heightmap_path = None
             if full_heightmap is not None:
                 hm_width, hm_height = full_heightmap.size
@@ -1652,8 +1661,8 @@ def worker_generate_large_format_svg_native(
                     dir=TEMP_DIR,
                 )
                 os.close(fd_heightmap)
-                heightmap_tile.save(tile_heightmap_path)
                 tile_cleanup_paths.add(tile_heightmap_path)
+                heightmap_tile.save(tile_heightmap_path)
             scene = tile_processor.build_mesh(
                 analysis=tile.analysis,
                 thickness_mm=float(params["spacer_thick"]),

@@ -872,6 +872,7 @@ def test_worker_generate_large_format_svg_native_preserves_relief_semantics_per_
     build_calls: list[dict[str, object]] = []
     sampled_heightmap_means: list[float] = []
     tile_heightmap_paths: list[str] = []
+    processor_magnet_settings: list[tuple[bool, list[dict[str, object]]]] = []
 
     class _FakeVectorProcessor:
         def __init__(self, lut_path: str, color_mode: str) -> None:
@@ -883,6 +884,9 @@ def test_worker_generate_large_format_svg_native_preserves_relief_semantics_per_
 
         def build_mesh(self, **kwargs):
             build_calls.append(dict(kwargs))
+            processor_magnet_settings.append(
+                (self.enable_fridge_magnet, self.fridge_magnets)
+            )
             tile_heightmap_paths.append(kwargs["heightmap_path"])
             with Image.open(kwargs["heightmap_path"]) as heightmap:
                 sampled_heightmap_means.append(float(np.asarray(heightmap).mean()))
@@ -925,6 +929,16 @@ def test_worker_generate_large_format_svg_native_preserves_relief_semantics_per_
         "color_height_map": {"#ff0000": 2.4},
         "heightmap_path": str(heightmap_path),
         "heightmap_max_height": 3.2,
+        "enable_fridge_magnet": True,
+        "fridge_magnets": [
+            {
+                "shape": "round",
+                "diameter_mm": 8.0,
+                "thickness_mm": 0.4,
+                "center_x_mm": 0.0,
+                "center_y_mm": 0.0,
+            }
+        ],
     }
 
     result = None
@@ -958,12 +972,87 @@ def test_worker_generate_large_format_svg_native_preserves_relief_semantics_per_
             assert call["color_height_map"] == {"#ff0000": 2.4}
             assert call["heightmap_max_height"] == pytest.approx(3.2)
         assert sampled_heightmap_means == pytest.approx([0.0, 255.0])
+        assert processor_magnet_settings == [
+            (True, params["fridge_magnets"]),
+            (True, params["fridge_magnets"]),
+        ]
         assert build_calls[0]["heightmap_path"] != build_calls[1]["heightmap_path"]
         assert tile_heightmap_paths
         assert all(not os.path.exists(path) for path in tile_heightmap_paths)
     finally:
         if result is not None and os.path.exists(result["zip_path"]):
             os.unlink(result["zip_path"])
+
+
+def test_worker_generate_large_format_svg_native_cleans_heightmap_when_save_fails(
+    tmp_path,
+) -> None:
+    """A failed tile-heightmap save must not leak its mkstemp file."""
+
+    class _FakeVectorProcessor:
+        def __init__(self, lut_path: str, color_mode: str) -> None:
+            self.color_mode = color_mode
+
+        def analyze_svg(self, **_kwargs):
+            return "analysis"
+
+    heightmap_path = tmp_path / "heightmap.png"
+    Image.fromarray(np.zeros((4, 4), dtype=np.uint8)).save(heightmap_path)
+    tile = SimpleNamespace(
+        label="R1C1",
+        spec=SimpleNamespace(x0_mm=0.0, y0_mm=0.0, x1_mm=40.0, y1_mm=40.0),
+        analysis=SimpleNamespace(preview_colors={}, slot_names=[]),
+    )
+    params = {
+        "total_width_mm": 40.0,
+        "total_height_mm": 40.0,
+        "tile_width_mm": 40.0,
+        "tile_height_mm": 40.0,
+        "spacer_thick": 1.2,
+        "structure_mode": "Single-sided",
+        "color_mode": "4-Color",
+        "replacement_regions": [],
+        "enable_relief": True,
+        "height_mode": "heightmap",
+        "heightmap_path": str(heightmap_path),
+        "heightmap_max_height": 3.2,
+    }
+    created_heightmap_paths: list[str] = []
+    original_mkstemp = __import__("tempfile").mkstemp
+
+    def _capture_mkstemp(*args, **kwargs):
+        fd, path = original_mkstemp(*args, **kwargs)
+        if kwargs.get("suffix") == ".png":
+            created_heightmap_paths.append(path)
+        return fd, path
+
+    try:
+        with (
+            patch(
+                "core.pipeline.s03_color_replacement._normalize_color_replacements_input",
+                return_value={},
+            ),
+            patch("core.vector_engine.VectorProcessor", _FakeVectorProcessor),
+            patch(
+                "core.vector_large_format.slice_vector_analysis_into_tiles",
+                return_value=[tile],
+            ),
+            patch("tempfile.mkstemp", side_effect=_capture_mkstemp),
+            patch.object(Image.Image, "save", side_effect=OSError("disk full")),
+        ):
+            with pytest.raises(OSError, match="disk full"):
+                worker_generate_large_format_svg_native(
+                    "image.svg",
+                    "lut.npy",
+                    params,
+                )
+
+        assert created_heightmap_paths
+        assert all(not os.path.exists(path) for path in created_heightmap_paths)
+    finally:
+        for path in created_heightmap_paths:
+            if os.path.exists(path):
+                os.unlink(path)
 
 
 def test_worker_generate_large_format_svg_native_raises_when_all_tiles_are_empty() -> None:
