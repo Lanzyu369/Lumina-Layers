@@ -871,6 +871,7 @@ def test_worker_generate_large_format_svg_native_preserves_relief_semantics_per_
 
     build_calls: list[dict[str, object]] = []
     sampled_heightmap_means: list[float] = []
+    sampled_heightmap_sizes: list[tuple[int, int]] = []
     tile_heightmap_paths: list[str] = []
 
     class _FakeVectorProcessor:
@@ -886,22 +887,31 @@ def test_worker_generate_large_format_svg_native_preserves_relief_semantics_per_
             tile_heightmap_paths.append(kwargs["heightmap_path"])
             with Image.open(kwargs["heightmap_path"]) as heightmap:
                 sampled_heightmap_means.append(float(np.asarray(heightmap).mean()))
+                sampled_heightmap_sizes.append(heightmap.size)
             fake_geom = SimpleNamespace(vertices=[(0, 0, 0)], faces=[(0, 0, 0)])
             return SimpleNamespace(geometry={"Slot1": fake_geom})
 
     heightmap_path = tmp_path / "heightmap.png"
-    heightmap = np.zeros((4, 8), dtype=np.uint8)
-    heightmap[:, 4:] = 255
+    heightmap = np.zeros((7, 9), dtype=np.uint8)
+    heightmap[:4, 5:] = 64
+    heightmap[4:, :5] = 128
+    heightmap[4:, 5:] = 255
     Image.fromarray(heightmap).save(heightmap_path)
 
-    def _tile(label: str, x0_mm: float, x1_mm: float):
+    def _tile(
+        label: str,
+        x0_mm: float,
+        y0_mm: float,
+        x1_mm: float,
+        y1_mm: float,
+    ):
         return SimpleNamespace(
             label=label,
             spec=SimpleNamespace(
                 x0_mm=x0_mm,
-                y0_mm=0.0,
+                y0_mm=y0_mm,
                 x1_mm=x1_mm,
-                y1_mm=40.0,
+                y1_mm=y1_mm,
             ),
             analysis=SimpleNamespace(
                 preview_colors={0: [255, 0, 0, 255]},
@@ -911,10 +921,10 @@ def test_worker_generate_large_format_svg_native_preserves_relief_semantics_per_
 
     params = {
         "tile_name_prefix": "relief",
-        "total_width_mm": 80.0,
-        "total_height_mm": 40.0,
+        "total_width_mm": 70.0,
+        "total_height_mm": 50.0,
         "tile_width_mm": 40.0,
-        "tile_height_mm": 40.0,
+        "tile_height_mm": 30.0,
         "spacer_thick": 1.2,
         "structure_mode": "Single-sided",
         "color_mode": "4-Color",
@@ -936,7 +946,12 @@ def test_worker_generate_large_format_svg_native_preserves_relief_semantics_per_
         patch("core.vector_engine.VectorProcessor", _FakeVectorProcessor),
         patch(
             "core.vector_large_format.slice_vector_analysis_into_tiles",
-            return_value=[_tile("R1C1", 0.0, 40.0), _tile("R1C2", 40.0, 80.0)],
+            return_value=[
+                _tile("R1C1", 0.0, 0.0, 40.0, 30.0),
+                _tile("R1C2", 40.0, 0.0, 70.0, 30.0),
+                _tile("R2C1", 0.0, 30.0, 40.0, 50.0),
+                _tile("R2C2", 40.0, 30.0, 70.0, 50.0),
+            ],
         ),
         patch("api.workers.converter_workers._rasterize_tile_for_cover", return_value=None),
         patch(
@@ -951,15 +966,17 @@ def test_worker_generate_large_format_svg_native_preserves_relief_semantics_per_
         )
 
     try:
-        assert len(build_calls) == 2
+        assert len(build_calls) == 4
         for call in build_calls:
             assert call["enable_relief"] is True
             assert call["height_mode"] == "heightmap"
             assert call["color_height_map"] == {"#ff0000": 2.4}
             assert call["heightmap_max_height"] == pytest.approx(3.2)
-        assert sampled_heightmap_means == pytest.approx([0.0, 255.0])
-        assert build_calls[0]["heightmap_path"] != build_calls[1]["heightmap_path"]
-        assert tile_heightmap_paths
+        assert sampled_heightmap_means == pytest.approx(
+            [0.0, 64.0, 128.0, 255.0]
+        )
+        assert sampled_heightmap_sizes == [(5, 4), (4, 4), (5, 3), (4, 3)]
+        assert len(set(tile_heightmap_paths)) == 4
         assert all(not os.path.exists(path) for path in tile_heightmap_paths)
     finally:
         if result is not None and os.path.exists(result["zip_path"]):

@@ -17,6 +17,7 @@ from unittest.mock import patch
 import pytest
 import numpy as np
 from shapely.geometry import Point, Polygon, box
+from shapely.ops import unary_union
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
@@ -730,12 +731,12 @@ class TestVectorFridgeMagnetBuildMeshRegression:
             clipped_shapes=[],
             matched_shapes=[
                 {
-                    "geometry": box(0, 0, 10, 20),
+                    "geometry": box(0, 0, 13, 20),
                     "recipe": [1, 1, 1, 1, 1],
                     "color": (255, 0, 0),
                 },
                 {
-                    "geometry": box(10, 0, 20, 20),
+                    "geometry": box(13, 0, 20, 20),
                     "recipe": [1, 1, 1, 1, 1],
                     "color": (0, 255, 0),
                 },
@@ -798,19 +799,45 @@ class TestVectorFridgeMagnetBuildMeshRegression:
             for kwargs, slabs in slab_calls
             if kwargs["cavity_specs"]
         ]
-        assert len(affected_calls) == 1
-        slab_kwargs, slabs = affected_calls[0]
-        assert slab_kwargs["outer_side"] == "low"
-        outer_shell = next(slab for slab in slabs if slab["kind"] == "outer_shell")
-        cavity_band = next(slab for slab in slabs if slab["kind"] == "cavity_band")
-        inner_backing = next(slab for slab in slabs if slab["kind"] == "inner_backing")
-        assert outer_shell["z_offset"] == pytest.approx(0.0)
-        assert outer_shell["height"] == pytest.approx(0.4)
-        assert cavity_band["z_offset"] == pytest.approx(0.4)
-        assert cavity_band["height"] == pytest.approx(0.4)
-        assert not cavity_band["geometry"].contains(Point(13.0, 12.0))
-        assert inner_backing["z_offset"] == pytest.approx(0.8)
-        assert inner_backing["geometry"].contains(Point(13.0, 12.0))
+        assert len(affected_calls) == 2
+        clipped_footprints = sorted(
+            [kwargs["cavity_specs"][0]["geometry"] for kwargs, _ in affected_calls],
+            key=lambda geometry: geometry.bounds[0],
+        )
+        assert clipped_footprints[0].bounds == pytest.approx(
+            (11.0, 10.0, 13.0, 14.0)
+        )
+        assert clipped_footprints[1].bounds == pytest.approx(
+            (13.0, 10.0, 15.0, 14.0)
+        )
+        reassembled_footprint = unary_union(clipped_footprints)
+        assert reassembled_footprint.symmetric_difference(
+            cavity_specs[0]["geometry"]
+        ).area == pytest.approx(0.0, abs=1e-9)
+        assert reassembled_footprint.centroid.x == pytest.approx(13.0)
+        assert reassembled_footprint.centroid.y == pytest.approx(12.0)
+
+        for slab_kwargs, slabs in affected_calls:
+            assert slab_kwargs["outer_side"] == "low"
+            footprint_probe = slab_kwargs["cavity_specs"][0][
+                "geometry"
+            ].representative_point()
+            outer_shell = next(
+                slab for slab in slabs if slab["kind"] == "outer_shell"
+            )
+            cavity_band = next(
+                slab for slab in slabs if slab["kind"] == "cavity_band"
+            )
+            inner_backing = next(
+                slab for slab in slabs if slab["kind"] == "inner_backing"
+            )
+            assert outer_shell["z_offset"] == pytest.approx(0.0)
+            assert outer_shell["height"] == pytest.approx(0.4)
+            assert cavity_band["z_offset"] == pytest.approx(0.4)
+            assert cavity_band["height"] == pytest.approx(0.4)
+            assert not cavity_band["geometry"].contains(footprint_probe)
+            assert inner_backing["z_offset"] == pytest.approx(0.8)
+            assert inner_backing["geometry"].contains(footprint_probe)
 
 
 class TestVectorBackingColorIdRegression:
