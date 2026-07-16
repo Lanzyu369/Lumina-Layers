@@ -25,6 +25,7 @@ from core.pipeline.s11_glb_preview import generate_realtime_glb
 _TOTAL_LAYERS_IN_GLB = 25
 
 COLOR_NODE_RE = re.compile(r"^color_([0-9a-f]{6})$")
+LAYERED_COLOR_NODE_RE = re.compile(r"^color_([0-9a-f]{6})_m(\d{3})_l(\d{3})$")
 
 
 def _make_cache(
@@ -49,6 +50,16 @@ def _get_color_nodes(scene: trimesh.Scene) -> dict[str, trimesh.Trimesh]:
     for node_name in scene.graph.nodes_geometry:
         m = COLOR_NODE_RE.match(node_name)
         if m:
+            _, geom_name = scene.graph[node_name]
+            nodes[node_name] = scene.geometry[geom_name]
+    return nodes
+
+
+def _get_layered_color_nodes(scene: trimesh.Scene) -> dict[str, trimesh.Trimesh]:
+    """Extract material-layered color_<hex>_m###_l### GLB nodes."""
+    nodes: dict[str, trimesh.Trimesh] = {}
+    for node_name in scene.graph.nodes_geometry:
+        if LAYERED_COLOR_NODE_RE.match(node_name):
             _, geom_name = scene.graph[node_name]
             nodes[node_name] = scene.geometry[geom_name]
     return nodes
@@ -374,6 +385,58 @@ class TestSingleColorImage:
         assert canvas_mesh.bounds[1][0] == pytest.approx(
             w * PrinterConfig.NOZZLE_WIDTH
         )
+
+    def test_material_archive_glb_uses_material_matrix_layers(
+        self,
+        out_path: str,
+    ) -> None:
+        """Material archive previews should render physical layers, not matched RGB slabs."""
+        h, w = 4, 4
+        matched_rgb = np.full((h, w, 3), [20, 30, 40], dtype=np.uint8)
+        mask_solid = np.ones((h, w), dtype=bool)
+        material_matrix = np.zeros((h, w, 3), dtype=np.int16)
+        material_matrix[:, :, 0] = 0
+        material_matrix[:, :, 1] = 1
+        material_matrix[:, :, 2] = 2
+
+        cache = _make_cache(matched_rgb, mask_solid, target_width_mm=4.0)
+        cache.update(
+            {
+                "material_source": "material_archive",
+                "material_matrix": material_matrix,
+                "layer_height_mm": 0.1,
+                "preview_colors": {
+                    0: [255, 0, 0, 255],
+                    1: [0, 255, 0, 255],
+                    2: [0, 0, 255, 255],
+                },
+                "slot_names": ["red", "green", "blue"],
+            }
+        )
+
+        glb_path = generate_segmented_glb(cache, output_path=out_path)
+
+        assert glb_path is not None
+        scene = trimesh.load(glb_path)
+        layered_nodes = _get_layered_color_nodes(scene)
+
+        assert sorted(layered_nodes) == [
+            "color_0000ff_m002_l002",
+            "color_00ff00_m001_l001",
+            "color_ff0000_m000_l000",
+        ]
+        assert "color_141e28" not in _get_color_nodes(scene)
+
+        assert layered_nodes["color_ff0000_m000_l000"].bounds[:, 2] == pytest.approx(
+            [0.2, 0.3]
+        )
+        assert layered_nodes["color_00ff00_m001_l001"].bounds[:, 2] == pytest.approx(
+            [0.1, 0.2]
+        )
+        assert layered_nodes["color_0000ff_m002_l002"].bounds[:, 2] == pytest.approx(
+            [0.0, 0.1]
+        )
+        assert cache["color_contours"].keys() == {"141e28"}
 
     def test_none_target_width_uses_nozzle_width_fallback_for_realtime_glb(
         self,

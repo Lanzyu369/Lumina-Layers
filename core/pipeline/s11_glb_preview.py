@@ -992,6 +992,163 @@ def _assign_mesh_material_rgba(
     )
 
 
+def _coerce_preview_rgba(raw: object) -> np.ndarray | None:
+    """Return an RGBA uint8 row from preview colour metadata."""
+
+    try:
+        arr = np.asarray(raw, dtype=np.uint8).reshape(-1)
+    except (TypeError, ValueError):
+        return None
+    if arr.shape[0] < 3:
+        return None
+    if arr.shape[0] >= 4:
+        return arr[:4].copy()
+    return np.array([int(arr[0]), int(arr[1]), int(arr[2]), 255], dtype=np.uint8)
+
+
+def _preview_rgba_for_material(cache: dict, material_id: int) -> np.ndarray:
+    preview_colors = cache.get("preview_colors")
+    slot_names = cache.get("slot_names")
+    candidates: list[object] = []
+    if isinstance(preview_colors, dict):
+        candidates.append(preview_colors.get(material_id))
+        candidates.append(preview_colors.get(str(material_id)))
+        if isinstance(slot_names, (list, tuple)) and material_id < len(slot_names):
+            candidates.append(preview_colors.get(slot_names[material_id]))
+
+    color_conf = cache.get("color_conf") or {}
+    if isinstance(color_conf, dict):
+        conf_preview = color_conf.get("preview")
+        conf_slots = color_conf.get("slots")
+        if isinstance(conf_preview, dict):
+            candidates.append(conf_preview.get(material_id))
+            candidates.append(conf_preview.get(str(material_id)))
+            if isinstance(conf_slots, (list, tuple)) and material_id < len(conf_slots):
+                candidates.append(conf_preview.get(conf_slots[material_id]))
+
+    for candidate in candidates:
+        rgba = _coerce_preview_rgba(candidate)
+        if rgba is not None:
+            return rgba
+    return np.array([128, 128, 128, 255], dtype=np.uint8)
+
+
+def _material_matrix_for_segmented_glb(
+    cache: dict,
+    mask_solid: np.ndarray,
+) -> np.ndarray | None:
+    """Return material_matrix only for material-archive GLB previews."""
+
+    if str(cache.get("material_source") or "lut") != "material_archive":
+        return None
+    material_matrix = cache.get("material_matrix")
+    if material_matrix is None:
+        return None
+    try:
+        arr = np.asarray(material_matrix)
+    except (TypeError, ValueError):
+        return None
+    if arr.ndim != 3 or arr.shape[:2] != mask_solid.shape or arr.shape[2] <= 0:
+        _log.warning(
+            "Material-archive preview cache has invalid material_matrix shape",
+            extra={
+                "event": "segmented_glb_material_matrix_invalid",
+                "material_matrix_shape": list(getattr(arr, "shape", ())),
+                "mask_solid_shape": list(mask_solid.shape),
+                "error_type": "ValueError",
+            },
+        )
+        return None
+    return arr
+
+
+def _resize_material_matrix_nearest(
+    material_matrix: np.ndarray,
+    width: int,
+    height: int,
+) -> np.ndarray:
+    layers = [
+        cv2.resize(
+            material_matrix[:, :, layer_idx],
+            (width, height),
+            interpolation=cv2.INTER_NEAREST,
+        )
+        for layer_idx in range(int(material_matrix.shape[2]))
+    ]
+    return np.stack(layers, axis=2).astype(material_matrix.dtype, copy=False)
+
+
+def _resolve_material_layer_height_mm(cache: dict) -> float:
+    try:
+        value = float(cache.get("layer_height_mm"))
+    except (TypeError, ValueError):
+        value = 0.0
+    if np.isfinite(value) and value > 0:
+        return value
+    return float(PrinterConfig.LAYER_HEIGHT)
+
+
+def _add_material_matrix_color_meshes(
+    *,
+    scene: trimesh.Scene,
+    cache: dict,
+    material_matrix: np.ndarray,
+    mask_solid: np.ndarray,
+    height: int,
+    pixel_scale: float,
+    assign_face_colors: bool,
+) -> int:
+    """Add one physical preview mesh per material/layer from material_matrix."""
+
+    layer_count = int(material_matrix.shape[2])
+    layer_height_mm = _resolve_material_layer_height_mm(cache)
+    scale_transform = np.eye(4)
+    scale_transform[0, 0] = pixel_scale
+    scale_transform[1, 1] = pixel_scale
+    scale_transform[2, 2] = layer_height_mm
+
+    added = 0
+    for layer_idx in range(layer_count):
+        layer = material_matrix[:, :, layer_idx]
+        valid_ids = np.unique(layer[np.logical_and(mask_solid, layer >= 0)])
+        z_offset_mm = float(layer_count - layer_idx - 1) * layer_height_mm
+        for raw_material_id in valid_ids:
+            material_id = int(raw_material_id)
+            color_match = np.logical_and(mask_solid, layer == material_id)
+            if not np.any(color_match):
+                continue
+            rgba = _preview_rgba_for_material(cache, material_id)
+            mesh = _build_color_extruded_mesh(
+                color_match,
+                height,
+                1,
+                rgba,
+                assign_face_colors=assign_face_colors,
+            )
+            if mesh is None:
+                continue
+            if not assign_face_colors:
+                _assign_mesh_material_rgba(
+                    mesh,
+                    rgba,
+                    material_name=f"material_{material_id:03d}_layer_{layer_idx:03d}",
+                )
+            mesh.apply_transform(scale_transform)
+            min_z = mesh.vertices[:, 2].min()
+            if min_z != 0.0:
+                mesh.vertices[:, 2] -= min_z
+            if z_offset_mm != 0.0:
+                mesh.vertices[:, 2] += z_offset_mm
+            hex_name = f"{int(rgba[0]):02x}{int(rgba[1]):02x}{int(rgba[2]):02x}"
+            scene.add_geometry(
+                mesh,
+                node_name=f"color_{hex_name}_m{material_id:03d}_l{layer_idx:03d}",
+            )
+            added += 1
+
+    return added
+
+
 def _build_backing_plate_mesh(
     mask_solid: np.ndarray,
     height: int,
@@ -1163,6 +1320,7 @@ def generate_segmented_glb(
 
     if matched_rgb is None or mask_solid is None:
         return None
+    material_matrix = _material_matrix_for_segmented_glb(cache, mask_solid)
     if backing_mask is not None:
         try:
             backing_mask = np.asarray(backing_mask, dtype=bool)
@@ -1225,6 +1383,12 @@ def generate_segmented_glb(
                     (new_w, new_h),
                     interpolation=cv2.INTER_NEAREST,
                 ).astype(bool)
+            if material_matrix is not None:
+                material_matrix = _resize_material_matrix_nearest(
+                    material_matrix,
+                    new_w,
+                    new_h,
+                )
             height, width = new_h, new_w
             shrink = 0.0
         else:
@@ -1308,6 +1472,7 @@ def generate_segmented_glb(
         total_layers = 25
         scene = trimesh.Scene()
         contours_data: dict[str, list[list[list[float]]]] = {}
+        use_material_matrix_meshes = material_matrix is not None
 
         pixel_scale = _resolve_glb_pixel_scale(target_width_mm, width)
         scale_transform = np.eye(4)
@@ -1335,25 +1500,26 @@ def generate_segmented_glb(
             color_match = color_match_flat.reshape(height, width)
             _t_mask_build += time.perf_counter() - _mask_t0
 
-            mesh = _build_color_extruded_mesh(
-                color_match,
-                height,
-                total_layers,
-                rgba,
-                assign_face_colors=not use_material_color,
-            )
-            if mesh is not None:
-                if use_material_color:
-                    _assign_mesh_material_rgba(
-                        mesh,
-                        rgba,
-                        material_name=f"color_{hex_name}_material",
-                    )
-                mesh.apply_transform(scale_transform)
-                min_z = mesh.vertices[:, 2].min()
-                if min_z != 0.0:
-                    mesh.vertices[:, 2] -= min_z
-                scene.add_geometry(mesh, node_name=f"color_{hex_name}")
+            if not use_material_matrix_meshes:
+                mesh = _build_color_extruded_mesh(
+                    color_match,
+                    height,
+                    total_layers,
+                    rgba,
+                    assign_face_colors=not use_material_color,
+                )
+                if mesh is not None:
+                    if use_material_color:
+                        _assign_mesh_material_rgba(
+                            mesh,
+                            rgba,
+                            material_name=f"color_{hex_name}_material",
+                        )
+                    mesh.apply_transform(scale_transform)
+                    min_z = mesh.vertices[:, 2].min()
+                    if min_z != 0.0:
+                        mesh.vertices[:, 2] -= min_z
+                    scene.add_geometry(mesh, node_name=f"color_{hex_name}")
 
             # Reuse same color_match for contour extraction
             mask_u8 = color_match.astype(np.uint8) * 255
@@ -1369,6 +1535,17 @@ def generate_segmented_glb(
                 if color_contour_list:
                     contours_data[hex_name] = color_contour_list
             color_match_flat[idxs] = False
+
+        if material_matrix is not None:
+            _add_material_matrix_color_meshes(
+                scene=scene,
+                cache=cache,
+                material_matrix=material_matrix,
+                mask_solid=mask_solid,
+                height=height,
+                pixel_scale=pixel_scale,
+                assign_face_colors=not use_material_color,
+            )
 
         _t_mesh_loop = time.perf_counter() - _t
 

@@ -4,7 +4,9 @@ import { OrbitControls, Environment, Html } from "@react-three/drei";
 import { LIGHTING_CONFIG } from "./lightingConfig";
 import * as THREE from "three";
 import { computeFitDistance } from "./ModelViewer";
-import InteractiveModelViewer from "./InteractiveModelViewer";
+import InteractiveModelViewer, {
+  resolvePreviewColorLayerHeightMm,
+} from "./InteractiveModelViewer";
 import BedPlatform from "./BedPlatform";
 import KeychainRing3D from "./KeychainRing3D";
 import FridgeMagnet3D from "./FridgeMagnet3D";
@@ -374,6 +376,7 @@ interface BatchPreviewModelsProps {
   wireHeightMm: number;
   enableFridgeMagnet: boolean;
   rasterCellSize?: number;
+  colorLayerHeightMm: number;
 }
 
 function BatchPreviewModels({
@@ -391,6 +394,7 @@ function BatchPreviewModels({
   wireHeightMm,
   enableFridgeMagnet,
   rasterCellSize,
+  colorLayerHeightMm,
 }: BatchPreviewModelsProps) {
   const camera = useThree((state) => state.camera);
   const controls = useThree((state) => state.controls);
@@ -482,6 +486,7 @@ function BatchPreviewModels({
             rasterCellSize={rasterCellSize}
             puzzleOverlayEnabled={false}
             puzzleOverlayUrl={null}
+            colorLayerHeightMm={colorLayerHeightMm}
           />
         </group>
       ))}
@@ -521,6 +526,8 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const enableCloisonne = useConverterStore((s) => s.enable_cloisonne);
   const wireWidthMm = useConverterStore((s) => s.wire_width_mm);
   const wireHeightMm = useConverterStore((s) => s.wire_height_mm);
+  const colorLayers = useConverterStore((s) => s.color_layers);
+  const layerHeightMm = useConverterStore((s) => s.layer_height_mm);
   const puzzleEnabled = useConverterStore((s) => s.puzzleEnabled);
   const puzzleOverlayUrl = useConverterStore((s) => s.puzzleOverlayUrl);
 
@@ -537,6 +544,11 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const rasterCellSize = previewWidth && previewPixelWidth && previewPixelWidth > 0
     ? previewWidth / previewPixelWidth
     : undefined;
+  const colorLayerHeightMm = resolvePreviewColorLayerHeightMm(
+    typeof colorLayers === "number" && typeof layerHeightMm === "number"
+      ? colorLayers * layerHeightMm
+      : undefined,
+  );
 
   // Keychain ring params
   const addLoop = useConverterStore((s) => s.add_loop);
@@ -964,6 +976,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
               wireHeightMm={wireHeightMm}
               enableFridgeMagnet={enableFridgeMagnet}
               rasterCellSize={rasterCellSize}
+              colorLayerHeightMm={colorLayerHeightMm}
             />
           </Suspense>
         ) : effectiveModelUrl ? (
@@ -987,6 +1000,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
               rasterCellSize={rasterCellSize}
               puzzleOverlayEnabled={puzzleEnabled && Boolean(puzzleOverlayUrl)}
               puzzleOverlayUrl={puzzleOverlayUrl}
+              colorLayerHeightMm={colorLayerHeightMm}
             />
           </Suspense>
         ) : previewGlbUrl ? (
@@ -1010,6 +1024,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
               rasterCellSize={rasterCellSize}
               puzzleOverlayEnabled={puzzleEnabled && Boolean(puzzleOverlayUrl)}
               puzzleOverlayUrl={puzzleOverlayUrl}
+              colorLayerHeightMm={colorLayerHeightMm}
             />
           </Suspense>
         ) : null}
