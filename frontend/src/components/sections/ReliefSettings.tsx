@@ -4,7 +4,12 @@ import {
   getMaterialArchiveReliefMinimumExtraHeight,
   useConverterStore,
 } from "../../stores/converter";
-import type { AutoHeightMode } from "../../api/types";
+import {
+  ColorMode,
+  ModelingMode,
+  StructureMode,
+  type AutoHeightMode,
+} from "../../api/types";
 import Checkbox from "../ui/Checkbox";
 import Slider from "../ui/Slider";
 import Dropdown from "../ui/Dropdown";
@@ -30,6 +35,9 @@ export default function ReliefSettings() {
     source_version,
     materialLayerCount,
     spacer_thick,
+    color_mode,
+    modeling_mode,
+    structure_mode,
   } = useConverterStore(useShallow((s) => ({
     enable_relief: s.enable_relief,
     heightmap_max_height: s.heightmap_max_height,
@@ -39,7 +47,15 @@ export default function ReliefSettings() {
     source_version: s.source_version,
     materialLayerCount: s.materialLayerCount,
     spacer_thick: s.spacer_thick,
+    color_mode: s.color_mode,
+    modeling_mode: s.modeling_mode,
+    structure_mode: s.structure_mode,
   })));
+
+  const isUnsupportedVectorRelief =
+    modeling_mode === ModelingMode.VECTOR &&
+    (color_mode === ColorMode.FIVE_COLOR_EXT ||
+      structure_mode !== StructureMode.SINGLE_SIDED);
 
   const minimumReliefHeight = getMaterialArchiveReliefMinimumExtraHeight({
     source_version,
@@ -84,6 +100,12 @@ export default function ReliefSettings() {
           label={t("relief_enable")}
           checked={enable_relief}
           onChange={setEnableRelief}
+          disabled={isUnsupportedVectorRelief}
+          tooltip={
+            isUnsupportedVectorRelief
+              ? t("relief_vector_unsupported_mode")
+              : undefined
+          }
         />
 
         {enable_relief && (

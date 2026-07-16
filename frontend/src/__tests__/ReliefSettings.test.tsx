@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 
-import { ModelingMode } from "../api/types";
+import { ColorMode, ModelingMode, StructureMode } from "../api/types";
 import ReliefSettings from "../components/sections/ReliefSettings";
 import { useConverterStore } from "../stores/converter";
 
@@ -9,6 +9,8 @@ describe("ReliefSettings", () => {
   beforeEach(() => {
     useConverterStore.setState({
       modeling_mode: ModelingMode.VECTOR,
+      color_mode: ColorMode.FOUR_COLOR_RYBW,
+      structure_mode: StructureMode.SINGLE_SIDED,
       enable_relief: false,
       autoHeightMode: "darker-higher",
       heightmapFile: null,
@@ -45,5 +47,28 @@ describe("ReliefSettings", () => {
     expect(
       screen.getByRole("button", { name: "拖拽图片或点击上传" }),
     ).toBeInTheDocument();
+  });
+
+  it("disables relief controls for 5-Color Extended vector mode", () => {
+    useConverterStore.setState({ color_mode: ColorMode.FIVE_COLOR_EXT });
+
+    render(<ReliefSettings />);
+
+    expect(
+      screen.getByRole("checkbox", { name: /启用浮雕/ }),
+    ).toBeDisabled();
+  });
+
+  it("disables relief controls for double-sided vector mode", () => {
+    useConverterStore.setState({
+      modeling_mode: ModelingMode.VECTOR,
+      structure_mode: StructureMode.DOUBLE_SIDED,
+    });
+
+    render(<ReliefSettings />);
+
+    expect(
+      screen.getByRole("checkbox", { name: /启用浮雕/ }),
+    ).toBeDisabled();
   });
 });

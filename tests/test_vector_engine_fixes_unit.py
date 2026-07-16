@@ -165,6 +165,31 @@ class TestNativeVectorRelief:
             [0.0, 1.84]
         )
 
+    @pytest.mark.parametrize(
+        ("color_mode", "structure_mode"),
+        [
+            ("5-Color Extended", "Single-sided"),
+            ("4-Color RYBW", "Double-sided"),
+        ],
+    )
+    def test_unsupported_vector_relief_combinations_raise_deterministically(
+        self,
+        color_mode,
+        structure_mode,
+    ):
+        processor = self._processor()
+        processor.color_mode = color_mode
+
+        with pytest.raises(ValueError, match="Native SVG relief supports only"):
+            processor.build_mesh(
+                self._analysis(),
+                thickness_mm=1.0,
+                structure_mode=structure_mode,
+                enable_relief=True,
+                height_mode="color",
+                color_height_map={"#ff0000": 1.04, "#ffffff": 2.0},
+            )
+
     def test_heightmap_assigns_height_to_existing_svg_regions(self, tmp_path):
         heightmap = np.full((10, 20), 255, dtype=np.uint8)
         heightmap[:, :10] = 0

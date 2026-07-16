@@ -40,7 +40,14 @@ from api.routers.converter.generate import MODEL_GENERATION_FAILED_DETAIL
 from api.routers.converter.generate import _recover_virtual_materials_from_preview_cache
 from api.routers.converter.generate import _resolve_recipe_overrides
 from api.routers.converter.generate import _resolve_large_format_source_basename
-from api.schemas.converter import ConvertGenerateRequest, LargeFormatConvertGenerateRequest, ModelingMode
+from api.routers.converter.generate import _validate_native_vector_relief_compatibility
+from api.schemas.converter import (
+    ColorMode,
+    ConvertGenerateRequest,
+    LargeFormatConvertGenerateRequest,
+    ModelingMode,
+    StructureMode,
+)
 from api.schemas.system import UserSettings
 from api.session_store import SessionStore
 from api.worker_pool import WorkerPoolManager
@@ -3498,6 +3505,34 @@ def test_convert_generate_request_accepts_native_bundle_source() -> None:
     assert request.vendor == "BambuLab"
     assert request.db_names == ["RYBW_008_5L"]
     assert request.nozzle_size == "0.4"
+
+
+@pytest.mark.parametrize(
+    ("structure_mode", "color_mode"),
+    [
+        (StructureMode.DOUBLE_SIDED, ColorMode.FOUR_COLOR_RYBW),
+        (StructureMode.SINGLE_SIDED, ColorMode.FIVE_COLOR_EXT),
+    ],
+)
+def test_native_vector_relief_validation_rejects_flat_export_branches(
+    structure_mode: StructureMode,
+    color_mode: ColorMode,
+) -> None:
+    request = ConvertGenerateRequest(
+        lut_name="test-lut",
+        modeling_mode=ModelingMode.VECTOR,
+        structure_mode=structure_mode,
+        color_mode=color_mode,
+        enable_relief=True,
+        height_mode="color",
+        color_height_map={"#ff0000": 2.0},
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        _validate_native_vector_relief_compatibility(request)
+
+    assert exc_info.value.status_code == 422
+    assert "Native SVG relief supports only" in str(exc_info.value.detail)
 
 
 def test_resolve_recipe_overrides_uses_session_when_request_array_is_empty() -> None:

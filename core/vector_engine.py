@@ -3621,6 +3621,11 @@ class VectorProcessor:
         extrude_cache = {}
         is_5color = "5-Color Extended" in self.color_mode
         is_single_sided = "单面" in structure_mode_value or "Single" in structure_mode_value
+        if enable_relief and (is_5color or not is_single_sided):
+            raise ValueError(
+                "Native SVG relief supports only single-sided, non-5-Color "
+                "Extended models."
+            )
         mirror_transform = None
         if is_single_sided and not is_5color and not enable_relief:
             model_width_mm = bbox[2] * scale_factor

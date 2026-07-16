@@ -4124,6 +4124,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "启用浮雕",
     en: "Enable Relief",
   },
+  relief_vector_unsupported_mode: {
+    zh: "原生 SVG 浮雕目前仅支持非五色扩展的单面模式。",
+    en: "Native SVG relief currently supports only single-sided, non-5-Color Extended mode.",
+  },
   relief_max_height: {
     zh: "最大高度",
     en: "Max Height",

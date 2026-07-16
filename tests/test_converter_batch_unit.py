@@ -23,6 +23,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import numpy as np
+import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
@@ -862,6 +863,42 @@ class TestBatchWorkerPoolSubmit:
         assert response.status_code == 422
         assert "color_height_map" in response.json()["detail"]
         assert _mock_pool.submit.call_count == 0
+
+    @pytest.mark.parametrize(
+        ("structure_mode", "color_mode"),
+        [
+            ("Double-sided", "4-Color (RYBW)"),
+            ("Single-sided", "5-Color Extended"),
+        ],
+    )
+    def test_batch_rejects_unsupported_native_vector_relief(
+        self,
+        structure_mode,
+        color_mode,
+    ) -> None:
+        _mock_pool.submit = AsyncMock()
+
+        with patch(
+            "api.routers.converter.generate.LUTManager.get_lut_path",
+            return_value="/tmp/fake.npy",
+        ):
+            response = client.post(
+                "/api/convert/batch",
+                files=[("images", _make_test_image_buf("test.svg"))],
+                data={
+                    "lut_name": "test_lut",
+                    "modeling_mode": "vector",
+                    "structure_mode": structure_mode,
+                    "color_mode": color_mode,
+                    "enable_relief": "true",
+                    "height_mode": "color",
+                    "color_height_map": json.dumps({"#ff0000": 2.0}),
+                },
+            )
+
+        assert response.status_code == 422
+        assert "Native SVG relief supports only" in response.json()["detail"]
+        _mock_pool.submit.assert_not_called()
 
     def test_batch_rejects_heightmap_relief_before_worker(self) -> None:
         """Batch keeps its existing color-relief-only contract for SVGs."""

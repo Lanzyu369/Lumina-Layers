@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useConverterStore } from '../../stores/converter';
 import { DEFAULT_STATE } from '../../stores/converter';
-import { ModelingMode, StructureMode } from '../../api/types';
+import { ColorMode, ModelingMode, StructureMode } from '../../api/types';
 import { uploadImagePreview } from '../../api/system';
 
 vi.mock('../../api/system', () => ({
@@ -497,6 +497,92 @@ describe('setEnableRelief auto-initialization', () => {
     useConverterStore.getState().setEnableRelief(true);
 
     expect(useConverterStore.getState().enable_cloisonne).toBe(false);
+  });
+
+  it('does not enable relief in 5-Color Extended mode', () => {
+    useConverterStore.setState({
+      modeling_mode: ModelingMode.VECTOR,
+      color_mode: ColorMode.FIVE_COLOR_EXT,
+      structure_mode: StructureMode.SINGLE_SIDED,
+      enable_fridge_magnet: false,
+    });
+
+    useConverterStore.getState().setEnableRelief(true);
+
+    expect(useConverterStore.getState().enable_relief).toBe(false);
+  });
+
+  it('does not enable relief in double-sided vector mode', () => {
+    useConverterStore.setState({
+      modeling_mode: ModelingMode.VECTOR,
+      color_mode: ColorMode.FOUR_COLOR_RYBW,
+      structure_mode: StructureMode.DOUBLE_SIDED,
+      enable_fridge_magnet: false,
+    });
+
+    useConverterStore.getState().setEnableRelief(true);
+
+    expect(useConverterStore.getState().enable_relief).toBe(false);
+  });
+
+  it('disables relief when switching to 5-Color Extended mode', () => {
+    useConverterStore.setState({
+      modeling_mode: ModelingMode.VECTOR,
+      structure_mode: StructureMode.SINGLE_SIDED,
+      enable_relief: true,
+    });
+
+    useConverterStore.getState().setColorMode(ColorMode.FIVE_COLOR_EXT);
+
+    expect(useConverterStore.getState().enable_relief).toBe(false);
+  });
+
+  it('disables relief when entering vector mode with 5-Color Extended', () => {
+    useConverterStore.setState({
+      modeling_mode: ModelingMode.HIGH_FIDELITY,
+      color_mode: ColorMode.FIVE_COLOR_EXT,
+      structure_mode: StructureMode.SINGLE_SIDED,
+      enable_relief: true,
+      imageFile: new File(["<svg/>"], "relief.svg", {
+        type: "image/svg+xml",
+      }),
+    });
+
+    useConverterStore.getState().setModelingMode(ModelingMode.VECTOR);
+
+    expect(useConverterStore.getState().enable_relief).toBe(false);
+  });
+
+  it('disables relief when entering vector mode with double-sided structure', () => {
+    useConverterStore.setState({
+      modeling_mode: ModelingMode.HIGH_FIDELITY,
+      color_mode: ColorMode.FOUR_COLOR_RYBW,
+      structure_mode: StructureMode.DOUBLE_SIDED,
+      enable_relief: true,
+      imageFile: new File(["<svg/>"], "relief.svg", {
+        type: "image/svg+xml",
+      }),
+    });
+
+    useConverterStore.getState().setModelingMode(ModelingMode.VECTOR);
+
+    expect(useConverterStore.getState().enable_relief).toBe(false);
+  });
+
+  it('keeps single-sided structure while relief is enabled', () => {
+    useConverterStore.setState({
+      modeling_mode: ModelingMode.VECTOR,
+      color_mode: ColorMode.FOUR_COLOR_RYBW,
+      enable_relief: true,
+      enable_fridge_magnet: false,
+      structure_mode: StructureMode.SINGLE_SIDED,
+    });
+
+    useConverterStore.getState().setStructureMode(StructureMode.DOUBLE_SIDED);
+
+    expect(useConverterStore.getState().structure_mode).toBe(
+      StructureMode.SINGLE_SIDED,
+    );
   });
 });
 
