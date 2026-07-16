@@ -864,6 +864,108 @@ def test_worker_generate_large_format_svg_native_uses_sanitized_tile_prefix_in_z
             os.unlink(result["zip_path"])
 
 
+def test_worker_generate_large_format_svg_native_preserves_relief_semantics_per_tile(
+    tmp_path,
+) -> None:
+    """Each native SVG tile receives relief settings and its global heightmap crop."""
+
+    build_calls: list[dict[str, object]] = []
+    sampled_heightmap_means: list[float] = []
+    tile_heightmap_paths: list[str] = []
+
+    class _FakeVectorProcessor:
+        def __init__(self, lut_path: str, color_mode: str) -> None:
+            self.lut_path = lut_path
+            self.color_mode = color_mode
+
+        def analyze_svg(self, **_kwargs):
+            return "analysis"
+
+        def build_mesh(self, **kwargs):
+            build_calls.append(dict(kwargs))
+            tile_heightmap_paths.append(kwargs["heightmap_path"])
+            with Image.open(kwargs["heightmap_path"]) as heightmap:
+                sampled_heightmap_means.append(float(np.asarray(heightmap).mean()))
+            fake_geom = SimpleNamespace(vertices=[(0, 0, 0)], faces=[(0, 0, 0)])
+            return SimpleNamespace(geometry={"Slot1": fake_geom})
+
+    heightmap_path = tmp_path / "heightmap.png"
+    heightmap = np.zeros((4, 8), dtype=np.uint8)
+    heightmap[:, 4:] = 255
+    Image.fromarray(heightmap).save(heightmap_path)
+
+    def _tile(label: str, x0_mm: float, x1_mm: float):
+        return SimpleNamespace(
+            label=label,
+            spec=SimpleNamespace(
+                x0_mm=x0_mm,
+                y0_mm=0.0,
+                x1_mm=x1_mm,
+                y1_mm=40.0,
+            ),
+            analysis=SimpleNamespace(
+                preview_colors={0: [255, 0, 0, 255]},
+                slot_names=["Slot1"],
+            ),
+        )
+
+    params = {
+        "tile_name_prefix": "relief",
+        "total_width_mm": 80.0,
+        "total_height_mm": 40.0,
+        "tile_width_mm": 40.0,
+        "tile_height_mm": 40.0,
+        "spacer_thick": 1.2,
+        "structure_mode": "Single-sided",
+        "color_mode": "4-Color",
+        "replacement_regions": [],
+        "separate_backing": False,
+        "enable_relief": True,
+        "height_mode": "heightmap",
+        "color_height_map": {"#ff0000": 2.4},
+        "heightmap_path": str(heightmap_path),
+        "heightmap_max_height": 3.2,
+    }
+
+    result = None
+    with (
+        patch(
+            "core.pipeline.s03_color_replacement._normalize_color_replacements_input",
+            return_value={},
+        ),
+        patch("core.vector_engine.VectorProcessor", _FakeVectorProcessor),
+        patch(
+            "core.vector_large_format.slice_vector_analysis_into_tiles",
+            return_value=[_tile("R1C1", 0.0, 40.0), _tile("R1C2", 40.0, 80.0)],
+        ),
+        patch("api.workers.converter_workers._rasterize_tile_for_cover", return_value=None),
+        patch(
+            "utils.bambu_3mf_writer.export_scene_with_bambu_metadata",
+            side_effect=lambda *, output_path, **_kwargs: open(output_path, "wb").close(),
+        ),
+    ):
+        result = worker_generate_large_format_svg_native(
+            "image.svg",
+            "lut.npy",
+            params,
+        )
+
+    try:
+        assert len(build_calls) == 2
+        for call in build_calls:
+            assert call["enable_relief"] is True
+            assert call["height_mode"] == "heightmap"
+            assert call["color_height_map"] == {"#ff0000": 2.4}
+            assert call["heightmap_max_height"] == pytest.approx(3.2)
+        assert sampled_heightmap_means == pytest.approx([0.0, 255.0])
+        assert build_calls[0]["heightmap_path"] != build_calls[1]["heightmap_path"]
+        assert tile_heightmap_paths
+        assert all(not os.path.exists(path) for path in tile_heightmap_paths)
+    finally:
+        if result is not None and os.path.exists(result["zip_path"]):
+            os.unlink(result["zip_path"])
+
+
 def test_worker_generate_large_format_svg_native_raises_when_all_tiles_are_empty() -> None:
     """Native SVG worker should surface the empty-slice failure clearly."""
 

@@ -1566,6 +1566,7 @@ def worker_generate_large_format_svg_native(
     import zipfile
 
     import trimesh
+    from PIL import Image
 
     from api.structured_logging import get_logger
     from config import TEMP_DIR
@@ -1620,14 +1621,49 @@ def worker_generate_large_format_svg_native(
     tile_cleanup_paths: set[str] = set()
     zip_path: str | None = None
     zip_ready = False
+    full_heightmap = None
+    if bool(params.get("enable_relief", False)) and str(
+        params.get("height_mode") or "color"
+    ).lower() == "heightmap":
+        heightmap_path = params.get("heightmap_path")
+        if not heightmap_path:
+            raise ValueError(
+                "Native SVG large-format heightmap relief requires heightmap_path"
+            )
+        with Image.open(str(heightmap_path)) as heightmap_image:
+            full_heightmap = heightmap_image.convert("L").copy()
     try:
         for tile in tile_analyses:
             tile_processor = VectorProcessor(lut_path, params["color_mode"])
+            tile_heightmap_path = None
+            if full_heightmap is not None:
+                hm_width, hm_height = full_heightmap.size
+                px_x0 = int(round(tile.spec.x0_mm / total_width_mm * hm_width))
+                px_y0 = int(round(tile.spec.y0_mm / total_height_mm * hm_height))
+                px_x1 = int(round(tile.spec.x1_mm / total_width_mm * hm_width))
+                px_y1 = int(round(tile.spec.y1_mm / total_height_mm * hm_height))
+                px_x0 = min(max(px_x0, 0), max(hm_width - 1, 0))
+                px_y0 = min(max(px_y0, 0), max(hm_height - 1, 0))
+                px_x1 = min(max(px_x1, px_x0 + 1), hm_width)
+                px_y1 = min(max(px_y1, px_y0 + 1), hm_height)
+                heightmap_tile = full_heightmap.crop((px_x0, px_y0, px_x1, px_y1))
+                fd_heightmap, tile_heightmap_path = tempfile.mkstemp(
+                    suffix=".png",
+                    dir=TEMP_DIR,
+                )
+                os.close(fd_heightmap)
+                heightmap_tile.save(tile_heightmap_path)
+                tile_cleanup_paths.add(tile_heightmap_path)
             scene = tile_processor.build_mesh(
                 analysis=tile.analysis,
                 thickness_mm=float(params["spacer_thick"]),
                 structure_mode=params["structure_mode"],
                 backing_color_id=requested_backing_color_id,
+                enable_relief=bool(params.get("enable_relief", False)),
+                height_mode=str(params.get("height_mode") or "color"),
+                color_height_map=params.get("color_height_map"),
+                heightmap_path=tile_heightmap_path,
+                heightmap_max_height=params.get("heightmap_max_height"),
             )
             if len(scene.geometry) == 0:
                 # Empty downstream geometry: same semantics as a slicing-time

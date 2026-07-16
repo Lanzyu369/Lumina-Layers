@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 import pytest
 import numpy as np
-from shapely.geometry import Polygon, box
+from shapely.geometry import Point, Polygon, box
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
@@ -547,8 +547,15 @@ class TestVectorPublicApiCompatibility:
             "structure_mode",
             "progress_fn",
             "backing_color_id",
+            "enable_relief",
+            "height_mode",
+            "color_height_map",
+            "heightmap_path",
+            "heightmap_max_height",
         ]
         assert params["backing_color_id"].default == 0
+        assert params["enable_relief"].default is False
+        assert params["height_mode"].default == "color"
 
     def test_svg_to_mesh_signature_remains_backward_compatible(self):
         params = inspect.signature(VectorProcessor.svg_to_mesh).parameters
@@ -608,6 +615,202 @@ class TestVectorFridgeMagnetBuildMeshRegression:
         assert board_with_cavity.volume < board_without_cavity.volume
         assert board_with_cavity.bounds[0][0] == pytest.approx(board_without_cavity.bounds[0][0])
         assert board_with_cavity.bounds[1][0] == pytest.approx(board_without_cavity.bounds[1][0])
+
+    @pytest.mark.parametrize(
+        ("magnet", "expected_footprint_area"),
+        [
+            (
+                {
+                    "id": "magnet-round",
+                    "shape": "round",
+                    "preset_key": "round-8",
+                    "diameter_mm": 8.0,
+                    "width_mm": None,
+                    "height_mm": None,
+                    "thickness_mm": 0.4,
+                    "center_x_mm": 3.0,
+                    "center_y_mm": -2.0,
+                },
+                Point(0, 0).buffer(4.0, resolution=32).area,
+            ),
+            (
+                {
+                    "id": "magnet-rect",
+                    "shape": "rect",
+                    "preset_key": "rect-custom",
+                    "diameter_mm": None,
+                    "width_mm": 6.0,
+                    "height_mm": 4.0,
+                    "thickness_mm": 0.4,
+                    "center_x_mm": -3.0,
+                    "center_y_mm": 2.0,
+                },
+                24.0,
+            ),
+        ],
+    )
+    def test_relief_build_mesh_preserves_fridge_cavity_geometry(
+        self,
+        magnet,
+        expected_footprint_area,
+    ):
+        """Relief changes backing height without dropping cavity settings."""
+        processor = _make_parse_only_processor()
+        analysis = VectorAnalysis(
+            shape_data=[],
+            clipped_shapes=[
+                {
+                    "geometry": box(0, 0, 20, 20),
+                    "color": (255, 0, 0),
+                    "draw_order": 0,
+                }
+            ],
+            matched_shapes=[
+                {
+                    "geometry": box(0, 0, 20, 20),
+                    "recipe": [1, 1, 1, 1, 1],
+                    "color": (255, 0, 0),
+                }
+            ],
+            silhouette=box(0, 0, 20, 20),
+            scale_factor=1.0,
+            bbox=(0.0, 0.0, 20.0, 20.0),
+            color_conf={},
+            slot_names=["White", "Cyan"],
+            num_channels=2,
+            num_layers=5,
+            preview_colors={
+                0: [255, 255, 255, 255],
+                1: [0, 255, 255, 255],
+            },
+            stage_timings={},
+        )
+
+        processor.enable_fridge_magnet = False
+        board_without_cavity = processor.build_mesh(
+            analysis=analysis,
+            thickness_mm=1.2,
+            structure_mode="Single-sided",
+            enable_relief=True,
+        ).geometry["Board"]
+
+        processor.enable_fridge_magnet = True
+        processor.fridge_magnets = [magnet]
+        board_with_cavity = processor.build_mesh(
+            analysis=analysis,
+            thickness_mm=1.2,
+            structure_mode="Single-sided",
+            enable_relief=True,
+        ).geometry["Board"]
+
+        assert board_without_cavity.volume == pytest.approx(480.0)
+        assert board_with_cavity.volume == pytest.approx(
+            board_without_cavity.volume - expected_footprint_area * magnet["thickness_mm"],
+            abs=1e-3,
+        )
+        assert board_with_cavity.bounds[0][2] == pytest.approx(0.0)
+        assert board_with_cavity.bounds[1][2] == pytest.approx(1.2)
+
+    def test_relief_cavity_uses_global_xy_origin_and_non_optical_z_side(self):
+        """Variable backing groups share one footprint and open away from optics."""
+        processor = _make_parse_only_processor()
+        processor.enable_fridge_magnet = True
+        processor.fridge_magnets = [
+            {
+                "id": "offset-round",
+                "shape": "round",
+                "diameter_mm": 4.0,
+                "thickness_mm": 0.4,
+                "center_x_mm": 3.0,
+                "center_y_mm": -2.0,
+            }
+        ]
+        analysis = VectorAnalysis(
+            shape_data=[],
+            clipped_shapes=[],
+            matched_shapes=[
+                {
+                    "geometry": box(0, 0, 10, 20),
+                    "recipe": [1, 1, 1, 1, 1],
+                    "color": (255, 0, 0),
+                },
+                {
+                    "geometry": box(10, 0, 20, 20),
+                    "recipe": [1, 1, 1, 1, 1],
+                    "color": (0, 255, 0),
+                },
+            ],
+            silhouette=box(0, 0, 20, 20),
+            scale_factor=1.0,
+            bbox=(0.0, 0.0, 20.0, 20.0),
+            color_conf={},
+            slot_names=["White", "Cyan"],
+            num_channels=2,
+            num_layers=5,
+            preview_colors={0: [255, 255, 255, 255], 1: [0, 255, 255, 255]},
+            stage_timings={},
+        )
+
+        original_specs = VectorProcessor._build_vector_fridge_cavity_specs
+        original_slabs = VectorProcessor._build_backing_cavity_slabs
+        specs_calls = []
+        slab_calls = []
+
+        def _capture_specs(*args, **kwargs):
+            result = original_specs(*args, **kwargs)
+            specs_calls.append((kwargs, result))
+            return result
+
+        def _capture_slabs(*args, **kwargs):
+            result = original_slabs(*args, **kwargs)
+            slab_calls.append((kwargs, result))
+            return result
+
+        with (
+            patch.object(
+                VectorProcessor,
+                "_build_vector_fridge_cavity_specs",
+                side_effect=_capture_specs,
+            ),
+            patch.object(
+                VectorProcessor,
+                "_build_backing_cavity_slabs",
+                side_effect=_capture_slabs,
+            ),
+        ):
+            processor.build_mesh(
+                analysis=analysis,
+                thickness_mm=1.2,
+                structure_mode="Single-sided",
+                enable_relief=True,
+                color_height_map={"#ff0000": 1.6, "#00ff00": 2.4},
+            )
+
+        assert len(specs_calls) == 1
+        specs_kwargs, cavity_specs = specs_calls[0]
+        assert specs_kwargs["backing_sil"].bounds == pytest.approx((0.0, 0.0, 20.0, 20.0))
+        assert len(cavity_specs) == 1
+        assert cavity_specs[0]["geometry"].centroid.x == pytest.approx(13.0)
+        assert cavity_specs[0]["geometry"].centroid.y == pytest.approx(12.0)
+
+        affected_calls = [
+            (kwargs, slabs)
+            for kwargs, slabs in slab_calls
+            if kwargs["cavity_specs"]
+        ]
+        assert len(affected_calls) == 1
+        slab_kwargs, slabs = affected_calls[0]
+        assert slab_kwargs["outer_side"] == "low"
+        outer_shell = next(slab for slab in slabs if slab["kind"] == "outer_shell")
+        cavity_band = next(slab for slab in slabs if slab["kind"] == "cavity_band")
+        inner_backing = next(slab for slab in slabs if slab["kind"] == "inner_backing")
+        assert outer_shell["z_offset"] == pytest.approx(0.0)
+        assert outer_shell["height"] == pytest.approx(0.4)
+        assert cavity_band["z_offset"] == pytest.approx(0.4)
+        assert cavity_band["height"] == pytest.approx(0.4)
+        assert not cavity_band["geometry"].contains(Point(13.0, 12.0))
+        assert inner_backing["z_offset"] == pytest.approx(0.8)
+        assert inner_backing["geometry"].contains(Point(13.0, 12.0))
 
 
 class TestVectorBackingColorIdRegression:

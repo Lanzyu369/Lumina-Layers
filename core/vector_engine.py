@@ -3684,6 +3684,8 @@ class VectorProcessor:
                 heightmap_max_height=heightmap_max_height,
                 bbox=bbox,
                 extrude_cache=extrude_cache,
+                enable_fridge_magnet=enable_fridge_magnet,
+                fridge_magnets=fridge_magnets,
             )
         elif is_5color:
             meshes_by_slot = _run_length_extrude_with_optional_native(
@@ -3929,6 +3931,8 @@ class VectorProcessor:
         heightmap_max_height,
         bbox,
         extrude_cache,
+        enable_fridge_magnet=False,
+        fridge_magnets=None,
     ):
         """Extrude existing SVG regions at configured heights.
 
@@ -4082,17 +4086,55 @@ class VectorProcessor:
             "Board",
             {"meshes": [], "mat_id": int(backing_color_id)},
         )
+        full_backing_sil = _union_run_group_geometries(
+            [
+                geometry
+                for geometries in backing_groups.values()
+                for geometry in geometries
+            ]
+        )
+        cavity_specs = []
+        if enable_fridge_magnet and not full_backing_sil.is_empty:
+            maximum_backing_height = max(backing_groups, default=0) * layer_h
+            cavity_specs = VectorProcessor._build_vector_fridge_cavity_specs(
+                backing_sil=full_backing_sil,
+                fridge_magnets=fridge_magnets or [],
+                bbox=bbox,
+                scale_factor=scale_factor,
+                backing_height=maximum_backing_height,
+            )
         for backing_layers, geometries in backing_groups.items():
             merged = _union_run_group_geometries(geometries)
-            board_entry["meshes"].extend(
-                VectorProcessor._extrude_geometry(
-                    merged,
-                    height=backing_layers * layer_h,
-                    z_offset=0.0,
-                    scale=scale_factor,
-                    extrude_cache=extrude_cache,
+            backing_height = backing_layers * layer_h
+            group_cavity_specs = []
+            for spec in cavity_specs:
+                clipped = VectorProcessor._extract_polygonal_geometry(
+                    make_valid(merged.intersection(spec["geometry"]))
                 )
+                if clipped is not None and not clipped.is_empty:
+                    group_cavity_specs.append(
+                        {
+                            "geometry": clipped,
+                            "depth_mm": spec["depth_mm"],
+                        }
+                    )
+            backing_slabs = VectorProcessor._build_backing_cavity_slabs(
+                backing_sil=merged,
+                backing_z_start=0.0,
+                backing_height=backing_height,
+                cavity_specs=group_cavity_specs,
+                outer_side="low",
             )
+            for slab in backing_slabs:
+                board_entry["meshes"].extend(
+                    VectorProcessor._extrude_geometry(
+                        slab["geometry"],
+                        height=slab["height"],
+                        z_offset=slab["z_offset"],
+                        scale=scale_factor,
+                        extrude_cache=extrude_cache,
+                    )
+                )
         return meshes_by_slot
 
     def svg_to_mesh(

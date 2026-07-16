@@ -1835,20 +1835,39 @@ async def _generate_large_format_svg_native(
         recipe_override_masks_path=recipe_override_masks_path,
         material_matrix_path=material_matrix_path,
     )
+    native_heightmap_path: str | None = None
+    if request.enable_relief and (request.height_mode or "color") == "heightmap":
+        heightmap_grayscale = session_data.get("heightmap_grayscale")
+        if heightmap_grayscale is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Heightmap is required when heightmap relief is enabled.",
+            )
+        fd, native_heightmap_path = tempfile.mkstemp(suffix=".png", dir=TEMP_DIR)
+        os.close(fd)
+        try:
+            Image.fromarray(heightmap_grayscale).save(native_heightmap_path)
+        except (OSError, ValueError, TypeError):
+            _remove_temp_path(native_heightmap_path)
+            raise
+        shared_params["heightmap_path"] = native_heightmap_path
     try:
-        result = await pool.submit(
-            worker_generate_large_format_svg_native,
-            image_path,
-            lut_path,
-            {
-                **shared_params,
-                "tile_name_prefix": source_basename,
-                "total_width_mm": total_width_mm,
-                "total_height_mm": total_height_mm,
-                "tile_width_mm": tile_width_mm,
-                "tile_height_mm": tile_height_mm,
-            },
-        )
+        try:
+            result = await pool.submit(
+                worker_generate_large_format_svg_native,
+                image_path,
+                lut_path,
+                {
+                    **shared_params,
+                    "tile_name_prefix": source_basename,
+                    "total_width_mm": total_width_mm,
+                    "total_height_mm": total_height_mm,
+                    "tile_width_mm": tile_width_mm,
+                    "tile_height_mm": tile_height_mm,
+                },
+            )
+        finally:
+            _remove_temp_path(native_heightmap_path)
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="Large-format SVG generation timed out")
     except ROUTER_HANDLED_ERRORS as e:
