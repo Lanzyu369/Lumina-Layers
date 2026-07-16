@@ -1,9 +1,19 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 
 import { ColorMode, ModelingMode, StructureMode } from "../api/types";
 import ReliefSettings from "../components/sections/ReliefSettings";
 import { useConverterStore } from "../stores/converter";
+
+vi.mock("../api/lut", async () => {
+  const actual = await vi.importActual<typeof import("../api/lut")>(
+    "../api/lut",
+  );
+  return {
+    ...actual,
+    fetchLutInfo: vi.fn(() => new Promise(() => {})),
+  };
+});
 
 describe("ReliefSettings", () => {
   beforeEach(() => {
@@ -70,5 +80,31 @@ describe("ReliefSettings", () => {
     expect(
       screen.getByRole("checkbox", { name: /启用浮雕/ }),
     ).toBeDisabled();
+  });
+
+  it("clears and hides relief controls after selecting a 5-color LUT", () => {
+    useConverterStore.setState({
+      lutListFull: [
+        {
+          name: "legacy-five",
+          color_mode: ColorMode.FIVE_COLOR_EXT,
+          path: "/legacy-five.npy",
+          fingerprint: "fp-five",
+        },
+      ],
+      lutColorsLutName: "legacy-five",
+    } as never);
+    render(<ReliefSettings />);
+    fireEvent.click(screen.getByRole("checkbox", { name: "启用浮雕" }));
+    expect(screen.getByRole("slider", { name: "最大高度" })).toBeInTheDocument();
+
+    act(() => {
+      useConverterStore.getState().setLutName("legacy-five");
+    });
+
+    const checkbox = screen.getByRole("checkbox", { name: /启用浮雕/ });
+    expect(checkbox).toBeDisabled();
+    expect(checkbox).not.toBeChecked();
+    expect(screen.queryByRole("slider", { name: "最大高度" })).toBeNull();
   });
 });
