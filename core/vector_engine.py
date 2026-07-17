@@ -31,6 +31,7 @@ import cv2
 from dataclasses import dataclass, field
 from svgelements import SVG, Path, Shape, Move, Line, Close, CubicBezier, QuadraticBezier, Arc, Color
 from shapely.geometry import Polygon, MultiPolygon, LineString, Point, box
+from shapely.geometry.polygon import orient
 from shapely import affinity
 try:
     from shapely import buffer as shapely_buffer
@@ -816,6 +817,329 @@ def _concatenate_meshes_fast(meshes):
     vertices = np.vstack(vertices_parts)
     faces = np.vstack(faces_parts)
     return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+
+
+def _build_atomic_prism_mesh(
+    polygon: Polygon,
+    *,
+    z_start: float,
+    z_end: float,
+    scale_factor: float,
+) -> trimesh.Trimesh | None:
+    """Extrude one planar cell with deterministic shared-edge diagonals."""
+
+    base_meshes = VectorProcessor._extrude_geometry(
+        polygon,
+        height=z_end - z_start,
+        z_offset=z_start,
+        scale=scale_factor,
+    )
+    if not base_meshes:
+        return None
+    base = base_meshes[0]
+    base_vertices = np.asarray(base.vertices, dtype=np.float64)
+    base_faces = np.asarray(base.faces, dtype=np.int64)
+    face_z = base_vertices[base_faces, 2]
+    cap_mask = np.ptp(face_z, axis=1) <= 1e-9
+    parts = [
+        trimesh.Trimesh(
+            vertices=base_vertices.copy(),
+            faces=base_faces[cap_mask],
+            process=False,
+        )
+    ]
+
+    oriented = orient(polygon, sign=1.0)
+    rings = [oriented.exterior, *oriented.interiors]
+    side_vertices = []
+    side_faces = []
+    for ring in rings:
+        coordinates = list(ring.coords)
+        for start, end in zip(coordinates, coordinates[1:]):
+            start_xy = (float(start[0]) * scale_factor, float(start[1]) * scale_factor)
+            end_xy = (float(end[0]) * scale_factor, float(end[1]) * scale_factor)
+            if start_xy == end_xy:
+                continue
+            vertex_offset = len(side_vertices)
+            side_vertices.extend(
+                [
+                    (start_xy[0], start_xy[1], z_start),
+                    (end_xy[0], end_xy[1], z_start),
+                    (start_xy[0], start_xy[1], z_end),
+                    (end_xy[0], end_xy[1], z_end),
+                ]
+            )
+            start_bottom = vertex_offset
+            end_bottom = vertex_offset + 1
+            start_top = vertex_offset + 2
+            end_top = vertex_offset + 3
+            if start_xy < end_xy:
+                side_faces.extend(
+                    [
+                        (start_bottom, end_bottom, end_top),
+                        (start_bottom, end_top, start_top),
+                    ]
+                )
+            else:
+                side_faces.extend(
+                    [
+                        (start_top, start_bottom, end_bottom),
+                        (start_top, end_bottom, end_top),
+                    ]
+                )
+
+    if side_faces:
+        parts.append(
+            trimesh.Trimesh(
+                vertices=np.asarray(side_vertices, dtype=np.float64),
+                faces=np.asarray(side_faces, dtype=np.int64),
+                process=False,
+            )
+        )
+    return _concatenate_meshes_fast(parts)
+
+
+def _linework_node_coordinates(linework) -> np.ndarray:
+    """Collect unique XY nodes from noded Shapely boundary linework."""
+
+    coordinates = []
+    pending = [linework]
+    while pending:
+        geometry = pending.pop()
+        if geometry is None or geometry.is_empty:
+            continue
+        if hasattr(geometry, "geoms"):
+            pending.extend(geometry.geoms)
+        elif hasattr(geometry, "coords"):
+            coordinates.extend((float(x), float(y)) for x, y, *_ in geometry.coords)
+    if not coordinates:
+        return np.empty((0, 2), dtype=np.float64)
+    return np.unique(np.asarray(coordinates, dtype=np.float64), axis=0)
+
+
+def _densify_ring_with_nodes(ring, nodes: np.ndarray) -> list[tuple[float, float]]:
+    """Insert every nearly-collinear overlay node into one polygon ring."""
+
+    source = [(float(x), float(y)) for x, y, *_ in ring.coords]
+    if len(source) < 2 or len(nodes) == 0:
+        return source
+    tolerance = 1e-10
+    densified = [source[0]]
+    for start, end in zip(source, source[1:]):
+        start_arr = np.asarray(start, dtype=np.float64)
+        vector = np.asarray(end, dtype=np.float64) - start_arr
+        length_sq = float(np.dot(vector, vector))
+        if length_sq <= tolerance * tolerance:
+            continue
+        lower = np.minimum(start_arr, np.asarray(end)) - tolerance
+        upper = np.maximum(start_arr, np.asarray(end)) + tolerance
+        candidates = nodes[np.all((nodes >= lower) & (nodes <= upper), axis=1)]
+        if len(candidates):
+            offsets = candidates - start_arr
+            cross = np.abs(vector[0] * offsets[:, 1] - vector[1] * offsets[:, 0])
+            parameters = offsets @ vector / length_sq
+            interior = (
+                (cross <= tolerance * np.sqrt(length_sq))
+                & (parameters > tolerance)
+                & (parameters < 1.0 - tolerance)
+            )
+            if np.any(interior):
+                selected = candidates[interior]
+                selected_parameters = parameters[interior]
+                for point in selected[np.argsort(selected_parameters)]:
+                    coordinate = (float(point[0]), float(point[1]))
+                    if coordinate != densified[-1]:
+                        densified.append(coordinate)
+        if end != densified[-1]:
+            densified.append(end)
+    if densified[-1] != densified[0]:
+        densified.append(densified[0])
+    return densified
+
+
+def _densify_polygon_with_nodes(polygon: Polygon, nodes: np.ndarray) -> Polygon:
+    """Return ``polygon`` with matching vertex splits on every shared edge."""
+
+    densified = Polygon(
+        _densify_ring_with_nodes(polygon.exterior, nodes),
+        [_densify_ring_with_nodes(interior, nodes) for interior in polygon.interiors],
+    )
+    return densified if densified.is_valid and not densified.is_empty else polygon
+
+
+def _split_mesh_t_junctions(mesh: trimesh.Trimesh) -> None:
+    """Split boundary triangle edges at existing collinear mesh vertices."""
+
+    tolerance = 1e-9
+    for _ in range(1024):
+        edges = np.asarray(mesh.edges_sorted, dtype=np.int64)
+        if len(edges) == 0:
+            return
+        _, inverse, counts = np.unique(
+            edges,
+            axis=0,
+            return_inverse=True,
+            return_counts=True,
+        )
+        boundary_rows = np.flatnonzero(counts[inverse] == 1)
+        if len(boundary_rows) == 0:
+            return
+
+        vertices = np.asarray(mesh.vertices, dtype=np.float64)
+        faces = np.asarray(mesh.faces, dtype=np.int64)
+        split_applied = False
+        for edge_row in boundary_rows:
+            edge = edges[edge_row]
+            edge_start = vertices[edge[0]]
+            edge_vector = vertices[edge[1]] - edge_start
+            length_sq = float(np.dot(edge_vector, edge_vector))
+            if length_sq <= tolerance * tolerance:
+                continue
+            offsets = vertices - edge_start
+            parameters = offsets @ edge_vector / length_sq
+            projections = edge_start + parameters[:, None] * edge_vector
+            distances = np.linalg.norm(vertices - projections, axis=1)
+            candidate_mask = (
+                (distances <= tolerance)
+                & (parameters > tolerance)
+                & (parameters < 1.0 - tolerance)
+            )
+            candidate_indices = np.flatnonzero(candidate_mask)
+            if len(candidate_indices) == 0:
+                continue
+
+            face_index = int(mesh.edges_face[edge_row])
+            face = faces[face_index]
+            directed_start = None
+            directed_end = None
+            opposite = None
+            for index in range(3):
+                start_index = int(face[index])
+                end_index = int(face[(index + 1) % 3])
+                if {start_index, end_index} == {int(edge[0]), int(edge[1])}:
+                    directed_start = start_index
+                    directed_end = end_index
+                    opposite = int(face[(index + 2) % 3])
+                    break
+            if directed_start is None or directed_end is None or opposite is None:
+                continue
+
+            direction = vertices[directed_end] - vertices[directed_start]
+            direction_length_sq = float(np.dot(direction, direction))
+            directed_parameters = (
+                (vertices[candidate_indices] - vertices[directed_start]) @ direction
+                / direction_length_sq
+            )
+            ordered_candidates = candidate_indices[np.argsort(directed_parameters)]
+            edge_chain = [directed_start, *ordered_candidates.tolist(), directed_end]
+            replacement_faces = np.asarray(
+                [
+                    (edge_chain[index], edge_chain[index + 1], opposite)
+                    for index in range(len(edge_chain) - 1)
+                ],
+                dtype=np.int64,
+            )
+            mesh.faces = np.vstack(
+                (faces[:face_index], replacement_faces, faces[face_index + 1 :])
+            )
+            split_applied = True
+            break
+        if not split_applied:
+            return
+
+
+def _finalize_prism_meshes(
+    prism_parts: list[trimesh.Trimesh],
+) -> trimesh.Trimesh | None:
+    """Remove internal faces and repair T-junctions within one solid volume."""
+
+    if not prism_parts:
+        return None
+    combined = _concatenate_meshes_fast(prism_parts)
+    combined.merge_vertices()
+    sorted_faces = np.sort(np.asarray(combined.faces, dtype=np.int64), axis=1)
+    _, inverse, counts = np.unique(
+        sorted_faces,
+        axis=0,
+        return_inverse=True,
+        return_counts=True,
+    )
+    combined.update_faces(counts[inverse] == 1)
+    _split_mesh_t_junctions(combined)
+    combined.remove_unreferenced_vertices()
+    return combined
+
+
+def _build_stepped_volume_mesh(
+    slabs: list[dict],
+    *,
+    scale_factor: float,
+) -> trimesh.Trimesh | None:
+    """Build one exposed boundary mesh from arbitrary stacked 2D slabs."""
+
+    valid_slabs = []
+    z_boundaries: set[float] = set()
+    for slab in slabs:
+        geometry = slab.get("geometry")
+        z_offset = float(slab.get("z_offset", 0.0))
+        height = float(slab.get("height", 0.0))
+        if geometry is None or geometry.is_empty or height <= 1e-9:
+            continue
+        z_end = z_offset + height
+        valid_slabs.append((geometry, z_offset, z_end))
+        z_boundaries.add(round(z_offset, 9))
+        z_boundaries.add(round(z_end, 9))
+
+    ordered_z = sorted(z_boundaries)
+    if len(ordered_z) < 2:
+        return None
+
+    interval_footprints = []
+    for z_start, z_end in zip(ordered_z, ordered_z[1:]):
+        z_mid = (z_start + z_end) * 0.5
+        active_geometries = [
+            geometry
+            for geometry, slab_start, slab_end in valid_slabs
+            if slab_start < z_mid < slab_end
+        ]
+        footprint = (
+            _union_run_group_geometries(active_geometries)
+            if active_geometries
+            else None
+        )
+        interval_footprints.append((z_start, z_end, footprint))
+
+    footprints = [
+        footprint
+        for _z_start, _z_end, footprint in interval_footprints
+        if footprint is not None and not footprint.is_empty
+    ]
+    if not footprints:
+        return None
+    noded_boundaries = unary_union([footprint.boundary for footprint in footprints])
+    boundary_nodes = _linework_node_coordinates(noded_boundaries)
+    atomic_cells = [
+        _densify_polygon_with_nodes(cell, boundary_nodes)
+        for cell in polygonize(noded_boundaries)
+        if not cell.is_empty and cell.area > 1e-12
+    ]
+
+    prism_parts: list[trimesh.Trimesh] = []
+    for z_start, z_end, footprint in interval_footprints:
+        if footprint is None or footprint.is_empty:
+            continue
+        for cell in atomic_cells:
+            if not footprint.covers(cell.representative_point()):
+                continue
+            prism = _build_atomic_prism_mesh(
+                cell,
+                z_start=z_start,
+                z_end=z_end,
+                scale_factor=scale_factor,
+            )
+            if prism is not None and len(prism.faces) > 0:
+                prism_parts.append(prism)
+    return _finalize_prism_meshes(prism_parts)
 
 
 def _normalize_contours_cached(cache, geom, close_delta_mm=0.03):
@@ -4093,6 +4417,7 @@ class VectorProcessor:
             "Board",
             {"meshes": [], "mat_id": int(backing_color_id)},
         )
+        backing_volume_slabs = []
         full_backing_sil = _union_run_group_geometries(
             [
                 geometry
@@ -4133,15 +4458,13 @@ class VectorProcessor:
                 outer_side="low",
             )
             for slab in backing_slabs:
-                board_entry["meshes"].extend(
-                    VectorProcessor._extrude_geometry(
-                        slab["geometry"],
-                        height=slab["height"],
-                        z_offset=slab["z_offset"],
-                        scale=scale_factor,
-                        extrude_cache=extrude_cache,
-                    )
-                )
+                backing_volume_slabs.append(slab)
+        board_mesh = _build_stepped_volume_mesh(
+            backing_volume_slabs,
+            scale_factor=scale_factor,
+        )
+        if board_mesh is not None and len(board_mesh.faces) > 0:
+            board_entry["meshes"].append(board_mesh)
         return meshes_by_slot
 
     def svg_to_mesh(
