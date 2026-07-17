@@ -1111,7 +1111,7 @@ def _build_stepped_volume_mesh(
     """Build one exposed boundary mesh from arbitrary stacked 2D slabs."""
 
     valid_slabs = []
-    z_boundaries: set[float] = set()
+    slab_geometries = []
     for slab in slabs:
         geometry = slab.get("geometry")
         z_offset = float(slab.get("z_offset", 0.0))
@@ -1119,7 +1119,63 @@ def _build_stepped_volume_mesh(
         if geometry is None or geometry.is_empty or height <= 1e-9:
             continue
         z_end = z_offset + height
-        valid_slabs.append((geometry, z_offset, z_end))
+        polygon_parts = (
+            [geometry]
+            if geometry.geom_type == "Polygon"
+            else list(geometry.geoms)
+            if geometry.geom_type == "MultiPolygon"
+            else []
+        )
+        for polygon in polygon_parts:
+            if polygon.is_empty or polygon.area <= 1e-12:
+                continue
+            valid_slabs.append((polygon, z_offset, z_end))
+            slab_geometries.append(polygon)
+
+    if not valid_slabs:
+        return None
+    combined_footprint = _union_run_group_geometries(slab_geometries)
+    components = (
+        [combined_footprint]
+        if combined_footprint.geom_type == "Polygon"
+        else list(combined_footprint.geoms)
+        if combined_footprint.geom_type == "MultiPolygon"
+        else []
+    )
+    component_slabs: list[list[tuple[Polygon, float, float]]] = [
+        [] for _component in components
+    ]
+    for geometry, z_offset, z_end in valid_slabs:
+        representative_point = geometry.representative_point()
+        for component_index, component in enumerate(components):
+            if component.covers(representative_point):
+                component_slabs[component_index].append((geometry, z_offset, z_end))
+                break
+
+    component_meshes = [
+        mesh
+        for grouped_slabs in component_slabs
+        if grouped_slabs
+        for mesh in [
+            _build_connected_stepped_volume_mesh(
+                grouped_slabs,
+                scale_factor=scale_factor,
+            )
+        ]
+        if mesh is not None
+    ]
+    return _concatenate_meshes_fast(component_meshes) if component_meshes else None
+
+
+def _build_connected_stepped_volume_mesh(
+    valid_slabs: list[tuple[Polygon, float, float]],
+    *,
+    scale_factor: float,
+) -> trimesh.Trimesh | None:
+    """Build one edge-connected stepped volume using only its own Z levels."""
+
+    z_boundaries: set[float] = set()
+    for _geometry, z_offset, z_end in valid_slabs:
         z_boundaries.add(round(z_offset, 9))
         z_boundaries.add(round(z_end, 9))
 
@@ -4244,10 +4300,11 @@ class VectorProcessor:
             # ``_extrude_geometry`` calls so Three.js / exporters do not render
             # visible seams along shape boundaries. 对相邻 shape 独立 extrude
             # 后重合的边界顶点做焊接，避免下游 mesh 渲染/导出在形状边界出现缝隙。
-            try:
-                combined.merge_vertices()
-            except Exception:
-                pass
+            if not data.get("topology_finalized", False):
+                try:
+                    combined.merge_vertices()
+                except Exception:
+                    pass
             self._fix_coordinates(combined, svg_height_mm)
             if mirror_transform is not None:
                 combined.apply_transform(mirror_transform)
@@ -4448,8 +4505,13 @@ class VectorProcessor:
 
         board_entry = meshes_by_slot.setdefault(
             "Board",
-            {"meshes": [], "mat_id": int(backing_color_id)},
+            {
+                "meshes": [],
+                "mat_id": int(backing_color_id),
+                "topology_finalized": True,
+            },
         )
+        board_entry["topology_finalized"] = True
         backing_volume_slabs = []
         full_backing_sil = _union_run_group_geometries(
             [

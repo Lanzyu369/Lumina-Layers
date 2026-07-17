@@ -154,6 +154,93 @@ def test_relief_backing_keeps_corner_touching_shells_separate(
     assert float(board.volume) == pytest.approx(1.0 + right_height)
 
 
+def test_relief_backing_scales_by_connected_component() -> None:
+    """Unrelated height levels must not subdivide disconnected regions."""
+
+    region_count = 40
+    board = _build_stepped_volume_mesh(
+        [
+            {
+                "geometry": box(index * 2.0, 0.0, index * 2.0 + 1.0, 1.0),
+                "z_offset": 0.0,
+                "height": 1.0 + index * 0.01,
+            }
+            for index in range(region_count)
+        ],
+        scale_factor=1.0,
+    )
+
+    assert board is not None
+    assert board.is_watertight
+    assert len(board.split(only_watertight=False)) == region_count
+    assert len(board.faces) <= region_count * 20
+
+
+def test_corner_touching_relief_stays_watertight_through_build_and_glb(
+    tmp_path,
+) -> None:
+    """Scene assembly and preview export must preserve independent shells."""
+
+    from core.pipeline.vector_glb_preview import export_vector_glb_preview
+
+    svg_path = tmp_path / "corner-touch.svg"
+    svg_path.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" '
+        'viewBox="0 0 20 20">'
+        '<rect x="0" y="0" width="10" height="10" fill="#ff0000"/>'
+        '<rect x="10" y="10" width="10" height="10" fill="#00ff00"/>'
+        "</svg>",
+        encoding="utf-8",
+    )
+    repository_root = Path(__file__).resolve().parents[1]
+    processor = VectorProcessor(
+        str(
+            repository_root
+            / "lut-preset"
+            / "Custom"
+            / "Bambulab&PLA&RYBW&红-黄-蓝-白.npy"
+        ),
+        "4-Color (RYBW)",
+    )
+    analysis = processor.analyze_svg(str(svg_path), target_width_mm=20.0)
+    height_map = {
+        f"#{red:02x}{green:02x}{blue:02x}": 1.0 + index * 0.8
+        for index, (red, green, blue) in enumerate(
+            sorted(
+                {
+                    tuple(int(value) for value in shape["matched_rgb"][:3])
+                    for shape in analysis.matched_shapes
+                }
+            )
+        )
+    }
+    scene = processor.build_mesh(
+        analysis=analysis,
+        thickness_mm=1.0,
+        structure_mode="Single-sided",
+        enable_relief=True,
+        height_mode="color",
+        color_height_map=height_map,
+    )
+
+    assert scene.geometry["Board"].is_watertight
+    assert len(scene.geometry["Board"].split(only_watertight=False)) == 2
+    glb_path = tmp_path / "corner-touch-preview.glb"
+    export_vector_glb_preview(
+        scene=scene,
+        output_path=str(glb_path),
+        structure_mode="Single-sided",
+        color_mode="4-Color (RYBW)",
+        preview_colors=analysis.preview_colors,
+        slot_list=list(analysis.slot_names),
+        analysis=analysis,
+        ctx={"enable_relief": True},
+    )
+    loaded = trimesh.load(glb_path, force="scene", process=False)
+    assert loaded.geometry["backing_plate"].is_watertight
+    assert len(loaded.geometry["backing_plate"].split(only_watertight=False)) == 2
+
+
 def test_relief_backing_glb_round_trip_stays_watertight(tmp_path) -> None:
     """The repaired topology must survive the actual preview file format."""
 
