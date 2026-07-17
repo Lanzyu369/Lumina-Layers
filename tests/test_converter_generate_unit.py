@@ -39,6 +39,7 @@ from api.routers.converter.generate import LARGE_FORMAT_CACHED_ANALYSIS_INVALID_
 from api.routers.converter.generate import LARGE_FORMAT_GENERATION_FAILED_DETAIL
 from api.routers.converter.generate import MODEL_GENERATION_FAILED_DETAIL
 from api.routers.converter.generate import _recover_virtual_materials_from_preview_cache
+from api.routers.converter.generate import _resolve_large_format_shared_params
 from api.routers.converter.generate import _resolve_recipe_overrides
 from api.routers.converter.generate import _resolve_large_format_source_basename
 from api.routers.converter.generate import _validate_native_vector_relief_compatibility
@@ -52,6 +53,7 @@ from api.schemas.converter import (
 from api.schemas.system import UserSettings
 from api.session_store import SessionStore
 from api.worker_pool import WorkerPoolManager
+from api.workers.converter_workers import LargeFormatCachedAnalysisError
 from config import ModelingMode as CoreModelingMode
 from core.converter import _resolve_material_archive_backing_color_id
 
@@ -242,6 +244,7 @@ def _large_format_payload(
     use_cached_matched_rgb: bool,
     target_width_mm: float = 120.0,
     target_height_mm: float = 80.0,
+    request_overrides: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Build a large-format route payload with explicit physical dimensions."""
 
@@ -256,6 +259,7 @@ def _large_format_payload(
                 "modeling_mode": modeling_mode,
                 "target_width_mm": target_width_mm,
                 "use_cached_matched_rgb": use_cached_matched_rgb,
+                **(request_overrides or {}),
             },
         },
     }
@@ -2042,6 +2046,40 @@ class TestLargeFormatCachedAnalysisRouting:
         return matched_rgb, mask_solid, material_matrix
 
     @staticmethod
+    def _semantic_cache_metadata(
+        *,
+        modeling_mode: ModelingMode,
+        target_width_mm: float = 120.0,
+        material_source: str = "lut",
+    ) -> dict[str, object]:
+        """Return the canonical preview-analysis parameters for one request."""
+
+        request = LargeFormatConvertGenerateRequest(
+            lut_name="test_lut",
+            modeling_mode=modeling_mode,
+            target_width_mm=target_width_mm,
+        )
+        return {
+            "target_width_mm": target_width_mm,
+            "color_mode": request.color_mode.value,
+            "modeling_mode": request.modeling_mode.value,
+            "color_layers": 5,
+            "layer_height_mm": 0.08,
+            "quantize_colors": request.quantize_colors,
+            "enable_cleanup": request.enable_cleanup,
+            "hue_weight": request.hue_weight,
+            "chroma_gate": request.chroma_gate,
+            "use_lut_constrained": request.use_lut_constrained,
+            "auto_dynamic_range": request.auto_dynamic_range,
+            "model_enable": request.model_enable,
+            "model_only": request.model_only,
+            "model_threshold": request.model_threshold,
+            "model_margin": request.model_margin,
+            "svg_pixels_per_mm": request.svg_pixels_per_mm,
+            "material_source": material_source,
+        }
+
+    @staticmethod
     def _put_legacy_cache(
         sid: str,
         *,
@@ -2050,6 +2088,7 @@ class TestLargeFormatCachedAnalysisRouting:
         material_matrix: object,
         target_w: object = 12,
         target_h: object = 8,
+        modeling_mode: ModelingMode = ModelingMode.VECTOR,
     ) -> None:
         _test_store.put(
             sid,
@@ -2057,7 +2096,9 @@ class TestLargeFormatCachedAnalysisRouting:
             {
                 "target_w": target_w,
                 "target_h": target_h,
-                "target_width_mm": 60.0,
+                **TestLargeFormatCachedAnalysisRouting._semantic_cache_metadata(
+                    modeling_mode=modeling_mode,
+                ),
                 "matched_rgb": matched_rgb,
                 "mask_solid": mask_solid,
                 "material_matrix": material_matrix,
@@ -2105,6 +2146,52 @@ class TestLargeFormatCachedAnalysisRouting:
                 if os.path.exists(path):
                     os.unlink(path)
 
+    def test_large_format_cached_native_worker_error_returns_sanitized_409(
+        self,
+    ) -> None:
+        """A post-validation cache failure must not leak its private path."""
+
+        sid, svg_path, lut_path = _create_svg_session(
+            _test_store,
+            native_tiling_supported=True,
+        )
+        matched_rgb, mask_solid, material_matrix = self._analysis_arrays()
+        self._put_legacy_cache(
+            sid,
+            matched_rgb=matched_rgb,
+            mask_solid=mask_solid,
+            material_matrix=material_matrix,
+        )
+        private_path = "/Users/min/private/deleted-preview-cache.npy"
+        _mock_pool.submit = AsyncMock(
+            side_effect=LargeFormatCachedAnalysisError(
+                f"cannot read {private_path}: file disappeared"
+            )
+        )
+
+        try:
+            response = client.post(
+                "/api/convert/generate-large-format",
+                json=_large_format_payload(
+                    sid,
+                    modeling_mode="vector",
+                    use_cached_matched_rgb=True,
+                ),
+            )
+
+            assert response.status_code == 409, response.text
+            assert (
+                response.json()["detail"]
+                == LARGE_FORMAT_CACHED_ANALYSIS_INVALID_DETAIL
+            )
+            assert private_path not in response.text
+            assert "file disappeared" not in response.text
+        finally:
+            _test_store.close(sid)
+            for path in (svg_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
     def test_large_format_cached_native_svg_forwards_artifact_paths_without_hydration(
         self,
         tmp_path,
@@ -2120,7 +2207,7 @@ class TestLargeFormatCachedAnalysisRouting:
             {
                 "target_w": 12,
                 "target_h": 8,
-                "target_width_mm": 60.0,
+                **self._semantic_cache_metadata(modeling_mode=ModelingMode.VECTOR),
                 "matched_rgb": matched_rgb,
                 "mask_solid": mask_solid,
                 "material_matrix": material_matrix,
@@ -2171,6 +2258,7 @@ class TestLargeFormatCachedAnalysisRouting:
             matched_rgb=matched_rgb,
             mask_solid=mask_solid,
             material_matrix=material_matrix,
+            modeling_mode=ModelingMode.HIGH_FIDELITY,
         )
         _test_store.put(sid, "recipe_overrides", [])
         _test_store.put(sid, "selected_region_masks", {})
@@ -2199,6 +2287,249 @@ class TestLargeFormatCachedAnalysisRouting:
             for path in (image_path, lut_path):
                 if os.path.exists(path):
                     os.unlink(path)
+
+    @pytest.mark.parametrize(
+        ("request_overrides", "target_width_mm"),
+        [
+            ({"target_width_mm": 121.0}, 120.0),
+            ({"color_mode": "8-Color Max"}, 120.0),
+            ({"modeling_mode": "pixel"}, 120.0),
+            ({"color_layers": 8}, 120.0),
+            ({"layer_height_mm": 0.12}, 120.0),
+            ({"quantize_colors": 64}, 120.0),
+            ({"enable_cleanup": False}, 120.0),
+            ({"hue_weight": 0.5}, 120.0),
+            ({"chroma_gate": 10.0}, 120.0),
+            ({"use_lut_constrained": True}, 120.0),
+            ({"auto_dynamic_range": True}, 120.0),
+            ({"model_enable": True}, 120.0),
+            ({"model_only": True}, 120.0),
+            ({"model_threshold": 0.25}, 120.0),
+            ({"model_margin": 0.05}, 120.0),
+            ({"svg_pixels_per_mm": 8.0}, 120.0),
+        ],
+    )
+    def test_large_format_cached_semantic_mismatch_requires_new_preview(
+        self,
+        request_overrides: dict[str, object],
+        target_width_mm: float,
+    ) -> None:
+        """Every analysis-affecting request change must reject stale arrays."""
+
+        sid, image_path, lut_path = _create_raster_large_format_session(_test_store)
+        matched_rgb, mask_solid, material_matrix = self._analysis_arrays()
+        self._put_legacy_cache(
+            sid,
+            matched_rgb=matched_rgb,
+            mask_solid=mask_solid,
+            material_matrix=material_matrix,
+            modeling_mode=ModelingMode.HIGH_FIDELITY,
+        )
+        _mock_pool.submit = AsyncMock()
+
+        try:
+            with patch(
+                "api.routers.converter.generate._generate_large_format_raster",
+                return_value=_large_format_success_response("raster"),
+            ) as raster_helper:
+                response = client.post(
+                    "/api/convert/generate-large-format",
+                    json=_large_format_payload(
+                        sid,
+                        modeling_mode="high-fidelity",
+                        use_cached_matched_rgb=True,
+                        target_width_mm=target_width_mm,
+                        request_overrides=request_overrides,
+                    ),
+                )
+
+            assert response.status_code == 409, response.text
+            assert response.json()["detail"] == LARGE_FORMAT_CACHED_ANALYSIS_INVALID_DETAIL
+            raster_helper.assert_not_called()
+            _mock_pool.submit.assert_not_called()
+        finally:
+            _test_store.close(sid)
+            for path in (image_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    def test_large_format_cached_material_source_mismatch_requires_new_preview(
+        self,
+    ) -> None:
+        sid, image_path, lut_path = _create_raster_large_format_session(_test_store)
+        matched_rgb, mask_solid, material_matrix = self._analysis_arrays()
+        self._put_legacy_cache(
+            sid,
+            matched_rgb=matched_rgb,
+            mask_solid=mask_solid,
+            material_matrix=material_matrix,
+            modeling_mode=ModelingMode.HIGH_FIDELITY,
+        )
+        _test_store.put(sid, "material_source", "material_archive")
+        _mock_pool.submit = AsyncMock()
+
+        try:
+            with patch(
+                "api.routers.converter.generate._generate_large_format_raster",
+                return_value=_large_format_success_response("raster"),
+            ) as raster_helper:
+                response = client.post(
+                    "/api/convert/generate-large-format",
+                    json=_large_format_payload(
+                        sid,
+                        modeling_mode="high-fidelity",
+                        use_cached_matched_rgb=True,
+                    ),
+                )
+
+            assert response.status_code == 409, response.text
+            assert response.json()["detail"] == LARGE_FORMAT_CACHED_ANALYSIS_INVALID_DETAIL
+            raster_helper.assert_not_called()
+            _mock_pool.submit.assert_not_called()
+        finally:
+            _test_store.close(sid)
+            for path in (image_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    def test_large_format_cached_old_metadata_requires_new_preview(self) -> None:
+        """Old caches without semantic fields are unsafe for explicit reuse."""
+
+        sid, image_path, lut_path = _create_raster_large_format_session(_test_store)
+        matched_rgb, mask_solid, material_matrix = self._analysis_arrays()
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {
+                "target_w": 12,
+                "target_h": 8,
+                "target_width_mm": 120.0,
+                "matched_rgb": matched_rgb,
+                "mask_solid": mask_solid,
+                "material_matrix": material_matrix,
+            },
+        )
+
+        try:
+            with patch(
+                "api.routers.converter.generate._generate_large_format_raster",
+                return_value=_large_format_success_response("raster"),
+            ) as raster_helper:
+                response = client.post(
+                    "/api/convert/generate-large-format",
+                    json=_large_format_payload(
+                        sid,
+                        modeling_mode="high-fidelity",
+                        use_cached_matched_rgb=True,
+                    ),
+                )
+
+            assert response.status_code == 409, response.text
+            assert response.json()["detail"] == LARGE_FORMAT_CACHED_ANALYSIS_INVALID_DETAIL
+            raster_helper.assert_not_called()
+        finally:
+            _test_store.close(sid)
+            for path in (image_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    def test_large_format_semantic_mismatch_is_ignored_when_cache_flag_false(
+        self,
+    ) -> None:
+        """Ordinary generation must not validate or consume stale analysis."""
+
+        sid, svg_path, lut_path = _create_svg_session(
+            _test_store,
+            native_tiling_supported=True,
+        )
+        matched_rgb, mask_solid, material_matrix = self._analysis_arrays()
+        self._put_legacy_cache(
+            sid,
+            matched_rgb=matched_rgb,
+            mask_solid=mask_solid,
+            material_matrix=material_matrix,
+            modeling_mode=ModelingMode.VECTOR,
+        )
+
+        try:
+            with patch(
+                "api.routers.converter.generate._generate_large_format_raster",
+                return_value=_large_format_success_response("raster"),
+            ) as raster_helper:
+                response = client.post(
+                    "/api/convert/generate-large-format",
+                    json=_large_format_payload(
+                        sid,
+                        modeling_mode="vector",
+                        use_cached_matched_rgb=False,
+                        request_overrides={
+                            "color_mode": "8-Color Max",
+                            "modeling_mode": "pixel",
+                            "color_layers": 8,
+                        },
+                    ),
+                )
+
+            assert response.status_code == 200, response.text
+            kwargs = raster_helper.call_args.kwargs
+            assert kwargs["matched_rgb_path"] is None
+            assert kwargs["mask_solid_path"] is None
+            assert kwargs["material_matrix_path"] is None
+        finally:
+            _test_store.close(sid)
+            for path in (svg_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    @pytest.mark.parametrize(
+        ("cached_analysis_is_final", "expected_replacements"),
+        [
+            (True, None),
+            (
+                False,
+                [
+                    {
+                        "quantized_hex": "#ff0000",
+                        "matched_hex": "#ff0000",
+                        "replacement_hex": "#0000ff",
+                    }
+                ],
+            ),
+        ],
+    )
+    def test_large_format_native_shared_params_apply_global_mapping_at_most_once(
+        self,
+        cached_analysis_is_final: bool,
+        expected_replacements: list[dict[str, str]] | None,
+    ) -> None:
+        """A complete final cache must override native SVG global mappings."""
+
+        replacement_regions = [
+            {
+                "quantized_hex": "#ff0000",
+                "matched_hex": "#ff0000",
+                "replacement_hex": "#0000ff",
+            }
+        ]
+        request = LargeFormatConvertGenerateRequest(
+            lut_name="test_lut",
+            modeling_mode=ModelingMode.VECTOR,
+        )
+
+        params = _resolve_large_format_shared_params(
+            {
+                "material_source": "lut",
+                "replacement_regions": replacement_regions,
+            },
+            request,
+            None,
+            matched_rgb_path="matched.npy",
+            mask_solid_path="mask.npy",
+            material_matrix_path="material.npy",
+            cached_analysis_is_final=cached_analysis_is_final,
+        )
+
+        assert params["replacement_regions"] == expected_replacements
 
     @pytest.mark.parametrize(
         "malformed_case",
@@ -3286,6 +3617,196 @@ class TestLargeFormatDimensionsAndRouting:
             for path in (image_path, threemf_path):
                 if os.path.exists(path):
                     os.unlink(path)
+
+    @pytest.mark.parametrize(
+        (
+            "source_size",
+            "cache_size",
+            "total_width_mm",
+            "tile_width_mm",
+        ),
+        [
+            ((20, 20), (2, 2), 10.0, 1.0),
+            ((100, 100), (100, 100), 10.000001, 10.0),
+        ],
+        ids=("cache-grid-too-small", "rounded-tail-collapses"),
+    )
+    @pytest.mark.asyncio
+    async def test_large_format_cached_raster_rejects_collapsed_tile_bounds_before_submit(
+        self,
+        tmp_path,
+        source_size: tuple[int, int],
+        cache_size: tuple[int, int],
+        total_width_mm: float,
+        tile_width_mm: float,
+    ) -> None:
+        """Every physical tile must occupy source and cache pixels."""
+
+        source_width, source_height = source_size
+        cache_width, cache_height = cache_size
+        image_path = tmp_path / "source.png"
+        lut_path = tmp_path / "lut.npy"
+        matched_path = tmp_path / "matched.npy"
+        mask_path = tmp_path / "mask.npy"
+        material_path = tmp_path / "material.npy"
+        Image.fromarray(
+            np.zeros((source_height, source_width, 3), dtype=np.uint8)
+        ).save(image_path)
+        lut_path.write_bytes(b"lut")
+        np.save(
+            matched_path,
+            np.zeros((cache_height, cache_width, 3), dtype=np.uint8),
+        )
+        np.save(mask_path, np.ones((cache_height, cache_width), dtype=bool))
+        np.save(
+            material_path,
+            np.zeros((cache_height, cache_width, 5), dtype=np.int16),
+        )
+
+        worker_output = tmp_path / "unexpected-tile.3mf"
+        worker_output.write_bytes(b"3mf")
+        mock_pool = SimpleNamespace(
+            submit=AsyncMock(
+                return_value={
+                    "threemf_path": str(worker_output),
+                    "status_msg": "ok",
+                }
+            )
+        )
+        registry = MagicMock(spec=FileRegistry)
+        registry.register_path.return_value = "unexpected-download"
+        request = LargeFormatConvertGenerateRequest(
+            lut_name="test_lut",
+            modeling_mode=ModelingMode.HIGH_FIDELITY,
+        )
+        created_temp_paths: list[str] = []
+        original_mkstemp = tempfile.mkstemp
+
+        def _record_mkstemp(*args: object, **kwargs: object):
+            fd, path = original_mkstemp(*args, **kwargs)
+            created_temp_paths.append(path)
+            return fd, path
+
+        try:
+            with (
+                patch(
+                    "api.routers.converter.generate.tempfile.mkstemp",
+                    side_effect=_record_mkstemp,
+                ),
+                pytest.raises(HTTPException) as exc_info,
+            ):
+                await _generate_large_format_raster(
+                    image_path=str(image_path),
+                    lut_path=str(lut_path),
+                    source_basename="poster",
+                    recipe_overrides=None,
+                    recipe_override_masks_path=None,
+                    matched_rgb_path=str(matched_path),
+                    mask_solid_path=str(mask_path),
+                    material_matrix_path=str(material_path),
+                    total_width_mm=total_width_mm,
+                    total_height_mm=10.0,
+                    tile_width_mm=tile_width_mm,
+                    tile_height_mm=10.0,
+                    request=request,
+                    session_data={},
+                    sid="collapsed-grid-session",
+                    store=SessionStore(ttl=1800),
+                    registry=registry,
+                    pool=mock_pool,
+                )
+
+            assert exc_info.value.status_code == 409
+            assert (
+                exc_info.value.detail
+                == LARGE_FORMAT_CACHED_ANALYSIS_INVALID_DETAIL
+            )
+            mock_pool.submit.assert_not_called()
+            registry.register_path.assert_not_called()
+            assert created_temp_paths == []
+            assert matched_path.exists()
+            assert mask_path.exists()
+            assert material_path.exists()
+        finally:
+            for path in created_temp_paths:
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    @pytest.mark.asyncio
+    async def test_large_format_cached_raster_keeps_nonempty_259_by_400_grid(
+        self,
+        tmp_path,
+    ) -> None:
+        """A normal 259×400 grid tiled at 210 mm must keep all four tiles."""
+
+        image_path = tmp_path / "source.png"
+        lut_path = tmp_path / "lut.npy"
+        matched_path = tmp_path / "matched.npy"
+        mask_path = tmp_path / "mask.npy"
+        material_path = tmp_path / "material.npy"
+        Image.fromarray(np.zeros((400, 259, 3), dtype=np.uint8)).save(image_path)
+        lut_path.write_bytes(b"lut")
+        np.save(matched_path, np.zeros((400, 259, 3), dtype=np.uint8))
+        np.save(mask_path, np.ones((400, 259), dtype=bool))
+        np.save(material_path, np.zeros((400, 259, 5), dtype=np.int16))
+
+        captured_shapes: list[
+            tuple[tuple[int, int], tuple[int, int]]
+        ] = []
+
+        async def _submit(_fn, tile_path, _lut_path, tile_params):
+            with Image.open(tile_path) as tile_image:
+                source_shape = (tile_image.height, tile_image.width)
+            cache_shape = np.load(tile_params["material_matrix_path"]).shape[:2]
+            captured_shapes.append((source_shape, cache_shape))
+            output_path = tmp_path / f"tile-{len(captured_shapes)}.3mf"
+            output_path.write_bytes(b"3mf")
+            return {"threemf_path": str(output_path), "status_msg": "ok"}
+
+        registry = FileRegistry()
+        mock_pool = SimpleNamespace(submit=AsyncMock(side_effect=_submit))
+        request = LargeFormatConvertGenerateRequest(
+            lut_name="test_lut",
+            modeling_mode=ModelingMode.HIGH_FIDELITY,
+        )
+        download_id: str | None = None
+        try:
+            result = await _generate_large_format_raster(
+                image_path=str(image_path),
+                lut_path=str(lut_path),
+                source_basename="poster",
+                recipe_overrides=None,
+                recipe_override_masks_path=None,
+                matched_rgb_path=str(matched_path),
+                mask_solid_path=str(mask_path),
+                material_matrix_path=str(material_path),
+                total_width_mm=259.0,
+                total_height_mm=400.0,
+                tile_width_mm=210.0,
+                tile_height_mm=210.0,
+                request=request,
+                session_data={},
+                sid="normal-grid-session",
+                store=SessionStore(ttl=1800),
+                registry=registry,
+                pool=mock_pool,
+            )
+
+            download_id = result["download_url"].rsplit("/", 1)[-1]
+            expected_shapes = [
+                ((210, 210), (210, 210)),
+                ((210, 49), (210, 49)),
+                ((190, 210), (190, 210)),
+                ((190, 49), (190, 49)),
+            ]
+            assert result["tile_count"] == 4
+            assert result["grid_cols"] == 2
+            assert result["grid_rows"] == 2
+            assert captured_shapes == expected_shapes
+            assert mock_pool.submit.call_count == 4
+        finally:
+            if download_id is not None:
+                registry.cleanup_file(download_id)
 
     @pytest.mark.asyncio
     async def test_large_format_cached_raster_crops_spatial_arrays_by_physical_grid(

@@ -269,6 +269,108 @@ class TestS02ImageProcessing:
         assert after_s03["material_matrix"].shape[:2] == (3, 4)
         assert after_s03["_material_params"] is materials
 
+    @pytest.mark.parametrize(
+        ("cached_analysis_is_final", "expect_preserved"),
+        [(True, True), (False, False)],
+    )
+    def test_large_format_final_cache_controls_replacement_reapplication(
+        self,
+        tmp_path,
+        cached_analysis_is_final: bool,
+        expect_preserved: bool,
+    ) -> None:
+        """S02→S03 must treat a reused final trio as authoritative state."""
+
+        from api.routers.converter.generate import _resolve_large_format_shared_params
+        from api.schemas.converter import (
+            LargeFormatConvertGenerateRequest,
+            ModelingMode as ApiModelingMode,
+        )
+        from core.pipeline import s02_image_processing
+        from core.pipeline import s03_color_replacement
+
+        base_ctx, _rgb, _mask, _matrix, materials = (
+            self._material_archive_reuse_context(tmp_path)
+        )
+        final_matched_rgb = np.array(
+            [[[200, 100, 50], [50, 70, 200]]],
+            dtype=np.uint8,
+        )
+        final_mask_solid = np.ones((1, 2), dtype=bool)
+        final_material_matrix = np.array(
+            [[[7, 7, 7, 7, 7], [2, 2, 2, 2, 2]]],
+            dtype=np.int16,
+        )
+        matched_path = tmp_path / "final-matched.npy"
+        mask_path = tmp_path / "final-mask.npy"
+        material_path = tmp_path / "final-material.npy"
+        np.save(matched_path, final_matched_rgb)
+        np.save(mask_path, final_mask_solid)
+        np.save(material_path, final_material_matrix)
+
+        session_data = {
+            "material_source": "material_archive",
+            "selected_materials": ["red", "blue", "white"],
+            "material_layer_count": 5,
+            "material_layer_height_mm": 0.08,
+            "material_grid_resolution": 64,
+            "replacement_regions": [
+                {
+                    "quantized_hex": "#c86432",
+                    "matched_hex": "#c86432",
+                    "replacement_hex": "#3246c8",
+                }
+            ],
+        }
+        request = LargeFormatConvertGenerateRequest(
+            lut_name="__material_archive__",
+            modeling_mode=ApiModelingMode.HIGH_FIDELITY,
+        )
+        ctx = _resolve_large_format_shared_params(
+            session_data,
+            request,
+            None,
+            matched_rgb_path=str(matched_path),
+            mask_solid_path=str(mask_path),
+            material_matrix_path=str(material_path),
+            cached_analysis_is_final=cached_analysis_is_final,
+        )
+        ctx.update(
+            {
+                "image_path": base_ctx["image_path"],
+                "target_width_mm": 20.0,
+                "reuse_preview_analysis": True,
+                "_material_params": materials,
+                "material_substrate": "white",
+                "grid_resolution": 64,
+            }
+        )
+
+        after_s02 = s02_image_processing.run(ctx)
+        after_s03 = s03_color_replacement.run(after_s02)
+
+        if expect_preserved:
+            assert ctx["replacement_regions"] is None
+            np.testing.assert_array_equal(
+                after_s03["matched_rgb"],
+                final_matched_rgb,
+            )
+            np.testing.assert_array_equal(
+                after_s03["material_matrix"],
+                final_material_matrix,
+            )
+            np.testing.assert_array_equal(
+                after_s03["material_matrix"][0, 0],
+                np.array([7, 7, 7, 7, 7], dtype=np.int16),
+            )
+        else:
+            assert ctx["replacement_regions"] == session_data["replacement_regions"]
+            assert not np.array_equal(after_s03["matched_rgb"], final_matched_rgb)
+            assert not np.array_equal(
+                after_s03["material_matrix"],
+                final_material_matrix,
+            )
+
 
 # ===========================================================================
 # S01 — s01_input_validation 单元测试

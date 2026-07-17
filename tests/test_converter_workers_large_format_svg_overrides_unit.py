@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import pickle
 import tempfile
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -13,7 +14,10 @@ import pytest
 from scipy.spatial import cKDTree
 from shapely.geometry import box
 
-from api.workers.converter_workers import worker_generate_large_format_svg_native
+from api.workers.converter_workers import (
+    LargeFormatCachedAnalysisError,
+    worker_generate_large_format_svg_native,
+)
 from core.vector_engine import (
     VectorAnalysis,
     VectorProcessor as _RealVectorProcessor,
@@ -160,6 +164,70 @@ def _save_cache_paths(
     return str(matched_path), str(mask_path), str(material_path)
 
 
+def test_large_format_cached_analysis_error_is_top_level_picklable() -> None:
+    """The process pool must be able to return the typed cache failure."""
+
+    original = LargeFormatCachedAnalysisError("cache changed after validation")
+    restored = pickle.loads(pickle.dumps(original))
+    assert type(restored) is LargeFormatCachedAnalysisError
+    assert str(restored) == str(original)
+
+
+@pytest.mark.parametrize("mutation", ["delete", "replace"])
+def test_native_worker_wraps_cache_changed_after_route_validation(
+    tmp_path,
+    mutation: str,
+) -> None:
+    """TOCTOU cache read/parse failures must use the typed worker error."""
+
+    analysis = _analysis(
+        [_red_shape(1.0, 1.0, 9.0, 9.0)],
+        width_mm=10.0,
+        height_mm=10.0,
+    )
+    matched_path, mask_path, material_path = _save_cache_paths(
+        tmp_path,
+        np.full((100, 100, 3), [255, 0, 0], dtype=np.uint8),
+        np.ones((100, 100), dtype=bool),
+        np.ones((100, 100, 5), dtype=np.int16),
+    )
+    if mutation == "delete":
+        os.unlink(mask_path)
+    else:
+        with open(material_path, "wb") as handle:
+            handle.write(b"not-a-numpy-array")
+
+    class _FakeVectorProcessor(_SlicerCompatibleProcessor):
+        def __init__(self, _lut_path: str, _color_mode: str) -> None:
+            self.img_processor = _fake_img_processor()
+
+        def analyze_svg(self, **_kwargs: object) -> VectorAnalysis:
+            return analysis
+
+    params = _params(
+        total_width_mm=10.0,
+        total_height_mm=10.0,
+        tile_width_mm=10.0,
+        tile_height_mm=10.0,
+    )
+    params.update(
+        matched_rgb_path=matched_path,
+        mask_solid_path=mask_path,
+        material_matrix_path=material_path,
+    )
+    slicer = MagicMock(side_effect=AssertionError("slicer must not run"))
+
+    with (
+        patch("core.vector_engine.VectorProcessor", _FakeVectorProcessor),
+        patch("core.vector_large_format.slice_vector_analysis_into_tiles", slicer),
+        pytest.raises(LargeFormatCachedAnalysisError) as exc_info,
+    ):
+        worker_generate_large_format_svg_native("image.svg", "lut.npy", params)
+
+    assert isinstance(exc_info.value.__cause__, (OSError, ValueError))
+    slicer.assert_not_called()
+
+
 def test_native_worker_applies_full_analysis_overrides_before_slicing(tmp_path) -> None:
     events: list[str] = []
     analysis = _analysis(
@@ -243,7 +311,10 @@ def test_native_worker_applies_full_analysis_overrides_before_slicing(tmp_path) 
             os.unlink(result["zip_path"])
 
 
-@pytest.mark.parametrize("malformed_case", ["grid_mismatch", "matched_rank"])
+@pytest.mark.parametrize(
+    "malformed_case",
+    ["grid_mismatch", "matched_rank", "mask_dtype", "material_dtype"],
+)
 def test_native_worker_strict_malformed_cache_stops_before_slicing_or_zip(
     tmp_path,
     malformed_case: str,
@@ -253,14 +324,19 @@ def test_native_worker_strict_malformed_cache_stops_before_slicing_or_zip(
         width_mm=10.0,
         height_mm=10.0,
     )
+    matched = np.full((100, 100, 3), [255, 0, 0], dtype=np.uint8)
+    mask = np.ones((100, 100), dtype=bool)
+    material = np.ones((100, 100, 5), dtype=np.int16)
     if malformed_case == "grid_mismatch":
         matched = np.full((99, 100, 3), [255, 0, 0], dtype=np.uint8)
         mask = np.ones((99, 100), dtype=bool)
         material = np.ones((99, 100, 5), dtype=np.int16)
-    else:
+    elif malformed_case == "matched_rank":
         matched = np.zeros((100,), dtype=np.uint8)
-        mask = np.ones((100, 100), dtype=bool)
-        material = np.ones((100, 100, 5), dtype=np.int16)
+    elif malformed_case == "mask_dtype":
+        mask = np.ones((100, 100), dtype=np.uint8)
+    else:
+        material = np.ones((100, 100, 5), dtype=np.float32)
     matched_path, mask_path, material_path = _save_cache_paths(
         tmp_path,
         matched,
@@ -301,7 +377,7 @@ def test_native_worker_strict_malformed_cache_stops_before_slicing_or_zip(
         patch("core.vector_large_format.slice_vector_analysis_into_tiles", slicer),
         patch("tempfile.mkstemp", side_effect=_capture_mkstemp),
     ):
-        with pytest.raises(ValueError):
+        with pytest.raises(LargeFormatCachedAnalysisError):
             worker_generate_large_format_svg_native("image.svg", "lut.npy", params)
 
     slicer.assert_not_called()

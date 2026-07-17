@@ -57,6 +57,13 @@ _TILE_COVER_CANVAS_CACHE: dict = {}
 _TILE_COVER_CANVAS_CACHE_MAX = 4
 
 
+class LargeFormatCachedAnalysisError(RuntimeError):
+    """A native SVG cached analysis artifact is unreadable or incompatible.
+
+    原生 SVG 大画幅缓存分析文件无法读取、解析或与当前网格不兼容。
+    """
+
+
 def _cleanup_worker_temp_paths(*paths: str | None) -> None:
     """Best-effort cleanup for worker-created temp files on local failure."""
 
@@ -1604,14 +1611,13 @@ def worker_generate_large_format_svg_native(
     mask_solid_path = params.get("mask_solid_path")
     material_matrix_path = params.get("material_matrix_path")
     if matched_rgb_path or mask_solid_path:
-        if not matched_rgb_path or not mask_solid_path or not material_matrix_path:
-            raise ValueError(
-                "Native SVG cached overrides require matched_rgb, mask_solid, "
-                "and material_matrix inputs."
-            )
-
         loaded_arrays: list[np.ndarray] = []
         try:
+            if not matched_rgb_path or not mask_solid_path or not material_matrix_path:
+                raise ValueError(
+                    "Native SVG cached overrides require matched_rgb, mask_solid, "
+                    "and material_matrix inputs."
+                )
             for cache_path in (
                 matched_rgb_path,
                 mask_solid_path,
@@ -1648,6 +1654,15 @@ def worker_generate_large_format_svg_native(
                 max_width_px=int(matched_rgb.shape[1]),
                 strict=True,
             )
+        except (
+            OSError,
+            ValueError,
+            TypeError,
+            KeyError,
+            EOFError,
+            zipfile.BadZipFile,
+        ) as exc:
+            raise LargeFormatCachedAnalysisError(str(exc)) from exc
         finally:
             for loaded in loaded_arrays:
                 mmap_obj = getattr(loaded, "_mmap", None)

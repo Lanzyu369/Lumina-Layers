@@ -32,6 +32,7 @@ from api.preview_cache_artifacts import (
 from api.schemas.converter import (
     ColorMode,
     ConvertGenerateRequest,
+    LargeFormatConvertGenerateRequest,
     LargeFormatGenerateRequest,
     ModelingMode,
     StructureMode,
@@ -49,6 +50,7 @@ from api.session_store import SessionStore
 from api.structured_logging import get_logger
 from api.worker_pool import WorkerPoolManager
 from api.workers.converter_workers import (
+    LargeFormatCachedAnalysisError,
     worker_batch_convert_item,
     worker_generate_large_format_svg_native,
     worker_generate_model,
@@ -531,6 +533,97 @@ def _resolve_optional_preview_default_match(
     return request_value, "raw"
 
 
+def _preview_analysis_params_match(
+    *,
+    cache: dict,
+    request: ConvertGenerateRequest,
+    core_modeling_mode: CoreModelingMode,
+    session_material_source: str,
+    target_width_mm: float | None,
+    preview_color_layers: object = _MISSING,
+    preview_layer_height_mm: object = _MISSING,
+) -> tuple[bool, str]:
+    """Compare request semantics with the analysis stored by preview.
+
+    比较生成请求与预览缓存中的分析语义，并统一处理可选层数/层高默认值。
+    """
+
+    color_layers_expected, color_layers_kind = _resolve_optional_preview_default_match(
+        cache,
+        "color_layers",
+        request.color_layers,
+        preview_color_layers,
+        kind="int",
+    )
+    layer_height_expected, layer_height_kind = _resolve_optional_preview_default_match(
+        cache,
+        "layer_height_mm",
+        request.layer_height_mm,
+        preview_layer_height_mm,
+        kind="float",
+    )
+
+    checks = (
+        ("target_width_mm", target_width_mm, "float"),
+        ("color_mode", request.color_mode, "enum"),
+        ("modeling_mode", core_modeling_mode, "enum"),
+        ("color_layers", color_layers_expected, color_layers_kind),
+        ("layer_height_mm", layer_height_expected, layer_height_kind),
+        ("quantize_colors", request.quantize_colors, "int"),
+        ("enable_cleanup", request.enable_cleanup, "bool"),
+        ("hue_weight", request.hue_weight, "float"),
+        ("chroma_gate", request.chroma_gate, "float"),
+        ("use_lut_constrained", request.use_lut_constrained, "bool"),
+        ("auto_dynamic_range", request.auto_dynamic_range, "bool"),
+        ("model_enable", request.model_enable, "bool"),
+        ("model_only", request.model_only, "bool"),
+        ("model_threshold", request.model_threshold, "float"),
+        ("model_margin", request.model_margin, "float"),
+        ("svg_pixels_per_mm", request.svg_pixels_per_mm, "float"),
+        ("material_source", str(session_material_source or "lut"), "raw"),
+    )
+    for key, expected, kind in checks:
+        if kind == "raw":
+            if cache.get(key, _MISSING) != expected:
+                return False, f"param_mismatch:{key}"
+            continue
+        if not _preview_analysis_param_matches(
+            cache,
+            key,
+            expected,
+            kind=kind,
+        ):
+            return False, f"param_mismatch:{key}"
+    return True, "params_match"
+
+
+def _require_large_format_cached_analysis_semantics(
+    *,
+    cache: dict,
+    request: LargeFormatConvertGenerateRequest,
+    total_width_mm: float,
+    session_material_source: str,
+    preview_color_layers: object = _MISSING,
+    preview_layer_height_mm: object = _MISSING,
+) -> None:
+    """Reject a structurally valid cache produced with different semantics."""
+
+    matches, _reason = _preview_analysis_params_match(
+        cache=cache,
+        request=request,
+        core_modeling_mode=CoreModelingMode(request.modeling_mode.value),
+        session_material_source=session_material_source,
+        target_width_mm=total_width_mm,
+        preview_color_layers=preview_color_layers,
+        preview_layer_height_mm=preview_layer_height_mm,
+    )
+    if not matches:
+        raise HTTPException(
+            status_code=409,
+            detail=LARGE_FORMAT_CACHED_ANALYSIS_INVALID_DETAIL,
+        )
+
+
 def _can_reuse_preview_analysis(
     *,
     cache: dict,
@@ -574,53 +667,15 @@ def _can_reuse_preview_analysis(
     if request.enable_outline:
         return False, "outline_enabled"
 
-    color_layers_expected, color_layers_kind = _resolve_optional_preview_default_match(
-        cache,
-        "color_layers",
-        request.color_layers,
-        preview_color_layers,
-        kind="int",
+    return _preview_analysis_params_match(
+        cache=cache,
+        request=request,
+        core_modeling_mode=core_modeling_mode,
+        session_material_source=session_material_source,
+        target_width_mm=request.target_width_mm,
+        preview_color_layers=preview_color_layers,
+        preview_layer_height_mm=preview_layer_height_mm,
     )
-    layer_height_expected, layer_height_kind = _resolve_optional_preview_default_match(
-        cache,
-        "layer_height_mm",
-        request.layer_height_mm,
-        preview_layer_height_mm,
-        kind="float",
-    )
-
-    checks = (
-        ("target_width_mm", request.target_width_mm, "float"),
-        ("color_mode", request.color_mode, "enum"),
-        ("modeling_mode", core_modeling_mode, "enum"),
-        ("color_layers", color_layers_expected, color_layers_kind),
-        ("layer_height_mm", layer_height_expected, layer_height_kind),
-        ("quantize_colors", request.quantize_colors, "int"),
-        ("enable_cleanup", request.enable_cleanup, "bool"),
-        ("hue_weight", request.hue_weight, "float"),
-        ("chroma_gate", request.chroma_gate, "float"),
-        ("use_lut_constrained", request.use_lut_constrained, "bool"),
-        ("auto_dynamic_range", request.auto_dynamic_range, "bool"),
-        ("model_enable", request.model_enable, "bool"),
-        ("model_only", request.model_only, "bool"),
-        ("model_threshold", request.model_threshold, "float"),
-        ("model_margin", request.model_margin, "float"),
-        ("svg_pixels_per_mm", request.svg_pixels_per_mm, "float"),
-        ("material_source", session_material_source, "raw"),
-    )
-    for key, expected, kind in checks:
-        if kind == "raw":
-            if cache.get(key, _MISSING) != expected:
-                return False, f"param_mismatch:{key}"
-            continue
-        if not _preview_analysis_param_matches(
-            cache,
-            key,
-            expected,
-            kind=kind,
-        ):
-            return False, f"param_mismatch:{key}"
-    return True, "params_match"
 
 
 def _cache_field_array(
@@ -1846,6 +1901,7 @@ def _resolve_large_format_shared_params(
     matched_rgb_path: str | None = None,
     mask_solid_path: str | None = None,
     material_matrix_path: str | None = None,
+    cached_analysis_is_final: bool = False,
 ) -> dict:
     replacement_regions = session_data.get("replacement_regions") or None
     if request.replacement_regions is not None:
@@ -1853,6 +1909,8 @@ def _resolve_large_format_shared_params(
             {"quantized_hex": r.quantized_hex, "matched_hex": r.matched_hex, "replacement_hex": r.replacement_hex}
             for r in request.replacement_regions
         ]
+    if cached_analysis_is_final:
+        replacement_regions = None
     free_color_set = session_data.get("free_color_set") or None
     if request.free_color_set is not None:
         free_color_set = request.free_color_set
@@ -1961,6 +2019,41 @@ def _resolve_large_format_source_basename(session_data: dict, image_path: str) -
     return normalize_large_format_source_basename(os.path.splitext(os.path.basename(image_path))[0])
 
 
+def _validated_large_format_axis_boundaries(
+    *,
+    total_mm: float,
+    tile_mm: float,
+    source_pixels: int,
+    cache_pixels: int,
+) -> tuple[list[int], list[int]]:
+    """Project every physical tile boundary onto source and cache grids."""
+
+    tile_count = max(1, math.ceil(total_mm / tile_mm))
+    physical_boundaries_mm = [
+        min(index * tile_mm, total_mm)
+        for index in range(tile_count + 1)
+    ]
+
+    def _project(pixel_extent: int) -> list[int]:
+        return [
+            min(int(round(boundary_mm * pixel_extent / total_mm)), pixel_extent)
+            for boundary_mm in physical_boundaries_mm
+        ]
+
+    source_boundaries = _project(source_pixels)
+    cache_boundaries = _project(cache_pixels)
+    if any(
+        current <= previous
+        for boundaries in (source_boundaries, cache_boundaries)
+        for previous, current in zip(boundaries, boundaries[1:])
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=LARGE_FORMAT_CACHED_ANALYSIS_INVALID_DETAIL,
+        )
+    return source_boundaries, cache_boundaries
+
+
 async def _generate_large_format_svg_native(
     *,
     image_path: str,
@@ -1992,6 +2085,14 @@ async def _generate_large_format_svg_native(
         matched_rgb_path=matched_rgb_path,
         mask_solid_path=mask_solid_path,
         material_matrix_path=material_matrix_path,
+        cached_analysis_is_final=all(
+            path is not None
+            for path in (
+                matched_rgb_path,
+                mask_solid_path,
+                material_matrix_path,
+            )
+        ),
     )
     native_heightmap_path: str | None = None
     if request.enable_relief and (request.height_mode or "color") == "heightmap":
@@ -2028,6 +2129,17 @@ async def _generate_large_format_svg_native(
             _remove_temp_path(native_heightmap_path)
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="Large-format SVG generation timed out")
+    except LargeFormatCachedAnalysisError as e:
+        _log_large_format_failure(
+            session_id=sid,
+            failure_kind="cached_analysis",
+            error_type=type(e).__name__,
+            error_message=str(e),
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=LARGE_FORMAT_CACHED_ANALYSIS_INVALID_DETAIL,
+        ) from e
     except ROUTER_HANDLED_ERRORS as e:
         _log_large_format_failure(
             session_id=sid,
@@ -2217,6 +2329,27 @@ async def _generate_large_format_raster(
     px_per_mm_y = px_h / total_height_mm
     cols = max(1, math.ceil(total_width_mm / tile_width_mm))
     rows = max(1, math.ceil(total_height_mm / tile_height_mm))
+    source_x_boundaries: list[int] | None = None
+    source_y_boundaries: list[int] | None = None
+    cache_x_boundaries: list[int] | None = None
+    cache_y_boundaries: list[int] | None = None
+    if cached_analysis_requested:
+        source_x_boundaries, cache_x_boundaries = (
+            _validated_large_format_axis_boundaries(
+                total_mm=total_width_mm,
+                tile_mm=tile_width_mm,
+                source_pixels=px_w,
+                cache_pixels=spatial_target_w,
+            )
+        )
+        source_y_boundaries, cache_y_boundaries = (
+            _validated_large_format_axis_boundaries(
+                total_mm=total_height_mm,
+                tile_mm=tile_height_mm,
+                source_pixels=px_h,
+                cache_pixels=spatial_target_h,
+            )
+        )
     shared_params = _resolve_large_format_shared_params(
         session_data,
         request,
@@ -2226,6 +2359,7 @@ async def _generate_large_format_raster(
         matched_rgb_path=None,
         mask_solid_path=None,
         material_matrix_path=None,
+        cached_analysis_is_final=cached_analysis_requested,
     )
     shared_params["reuse_preview_analysis"] = False
     if str(image_path).lower().endswith(".png") and shared_params["modeling_mode"] == CoreModelingMode.VECTOR:
@@ -2247,10 +2381,18 @@ async def _generate_large_format_raster(
                 y1_mm = min(y0_mm + tile_height_mm, total_height_mm)
                 cur_tile_w = x1_mm - x0_mm
 
-                px_x0 = int(round(x0_mm * px_per_mm_x))
-                px_y0 = int(round(y0_mm * px_per_mm_y))
-                px_x1 = min(int(round(x1_mm * px_per_mm_x)), px_w)
-                px_y1 = min(int(round(y1_mm * px_per_mm_y)), px_h)
+                if source_x_boundaries is not None:
+                    px_x0 = source_x_boundaries[c]
+                    px_x1 = source_x_boundaries[c + 1]
+                else:
+                    px_x0 = int(round(x0_mm * px_per_mm_x))
+                    px_x1 = min(int(round(x1_mm * px_per_mm_x)), px_w)
+                if source_y_boundaries is not None:
+                    px_y0 = source_y_boundaries[r]
+                    px_y1 = source_y_boundaries[r + 1]
+                else:
+                    px_y0 = int(round(y0_mm * px_per_mm_y))
+                    px_y1 = min(int(round(y1_mm * px_per_mm_y)), px_h)
 
                 tile_img = full_img.crop((px_x0, px_y0, px_x1, px_y1))
                 fd, tile_path = tempfile.mkstemp(suffix=".png", dir=TEMP_DIR)
@@ -2267,20 +2409,38 @@ async def _generate_large_format_raster(
                     route_local_cleanup_paths.add(hm_tile_path)
                     tile_params["heightmap_path"] = hm_tile_path
                 if full_material_matrix is not None and spatial_target_w > 0 and spatial_target_h > 0:
-                    spatial_x0 = int(
-                        round(x0_mm * (spatial_target_w / total_width_mm))
-                    )
-                    spatial_y0 = int(
-                        round(y0_mm * (spatial_target_h / total_height_mm))
-                    )
-                    spatial_x1 = min(
-                        int(round(x1_mm * (spatial_target_w / total_width_mm))),
-                        spatial_target_w,
-                    )
-                    spatial_y1 = min(
-                        int(round(y1_mm * (spatial_target_h / total_height_mm))),
-                        spatial_target_h,
-                    )
+                    if cache_x_boundaries is not None:
+                        spatial_x0 = cache_x_boundaries[c]
+                        spatial_x1 = cache_x_boundaries[c + 1]
+                    else:
+                        spatial_x0 = int(
+                            round(x0_mm * (spatial_target_w / total_width_mm))
+                        )
+                        spatial_x1 = min(
+                            int(
+                                round(
+                                    x1_mm
+                                    * (spatial_target_w / total_width_mm)
+                                )
+                            ),
+                            spatial_target_w,
+                        )
+                    if cache_y_boundaries is not None:
+                        spatial_y0 = cache_y_boundaries[r]
+                        spatial_y1 = cache_y_boundaries[r + 1]
+                    else:
+                        spatial_y0 = int(
+                            round(y0_mm * (spatial_target_h / total_height_mm))
+                        )
+                        spatial_y1 = min(
+                            int(
+                                round(
+                                    y1_mm
+                                    * (spatial_target_h / total_height_mm)
+                                )
+                            ),
+                            spatial_target_h,
+                        )
                     material_matrix_tile = full_material_matrix[
                         spatial_y0:spatial_y1,
                         spatial_x0:spatial_x1,
@@ -2487,6 +2647,15 @@ async def convert_generate_large_format(
         request,
         lf.target_height_mm,
     )
+    if request.use_cached_matched_rgb is True:
+        _require_large_format_cached_analysis_semantics(
+            cache=cache,
+            request=request,
+            total_width_mm=total_w_mm,
+            session_material_source=str(session_material_source or "lut"),
+            preview_color_layers=session_data.get("color_layers"),
+            preview_layer_height_mm=session_data.get("layer_height_mm"),
+        )
     source_basename = _resolve_large_format_source_basename(session_data, image_path)
 
     override_material_matrix_path, recipe_override_masks_path = _prepare_recipe_override_worker_inputs(
