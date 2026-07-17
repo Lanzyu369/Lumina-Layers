@@ -2209,6 +2209,34 @@ class TestStandardCachedAnalysisRouting:
         finally:
             _test_store.close(sid)
 
+    def test_generate_explicit_cache_inherits_preview_layer_settings(
+        self,
+        tmp_path,
+    ) -> None:
+        """An omitted generate value inherits the explicit preview setting."""
+
+        from core.preview_analysis_cache import REQUIRED_PREVIEW_ANALYSIS_REUSE
+
+        sid, payload = self._create_session(
+            tmp_path,
+            modeling_mode=ModelingMode.VECTOR,
+            color_layers=5,
+            layer_height_mm=0.08,
+        )
+        payload["params"]["color_layers"] = None
+        payload["params"]["layer_height_mm"] = None
+        try:
+            response = client.post("/api/convert/generate", json=payload)
+
+            assert response.status_code == 200, response.text
+            submitted_params = _mock_pool.submit.call_args.args[3]
+            assert (
+                submitted_params["reuse_preview_analysis"]
+                == REQUIRED_PREVIEW_ANALYSIS_REUSE
+            )
+        finally:
+            _test_store.close(sid)
+
     @pytest.mark.parametrize(
         ("modeling_mode", "material_source", "invalid_arrays"),
         [

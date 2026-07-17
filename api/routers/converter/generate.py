@@ -534,11 +534,13 @@ def _resolve_optional_preview_default_match(
     *,
     kind: str,
 ) -> tuple[object, str]:
-    """Use preview-derived defaults only when both requests omitted the option."""
+    """Resolve an omitted generate option against preview provenance."""
 
     if request_value is not None:
         return request_value, kind
-    if preview_request_value is None:
+    if preview_request_value is not _MISSING:
+        if preview_request_value is not None:
+            return preview_request_value, kind
         cached_value = cache.get(key, _MISSING)
         if cached_value is not _MISSING:
             return cached_value, kind
