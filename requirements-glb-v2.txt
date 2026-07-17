@@ -1,7 +1,8 @@
-# Native preview and SVG relief mesh-kernel dependencies.
-# Basic source/development installs may omit this file and retain the exact
-# Shapely/Trimesh runtime fallbacks. Formal Electron desktop release builds must
-# install it and fail fast if either module cannot load; packaged users must not
-# silently fall back to the substantially slower Python relief implementation.
+# Optional native preview and SVG relief mesh-kernel dependencies.
+# Keep these outside requirements.txt so basic installs are not blocked on
+# platforms without native wheels or build tooling. Runtime default is the
+# v2 preview kernel and the fast watertight SVG relief union; install this file
+# to match the performance baseline. If these deps are absent, both paths keep
+# their exact Shapely/Trimesh fallback behavior.
 rasterio>=1.5.0
 manifold3d>=3.4.0

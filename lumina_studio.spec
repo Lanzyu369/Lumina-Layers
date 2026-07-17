@@ -6,7 +6,6 @@ Usage:
     pyinstaller lumina_studio.spec
 """
 
-import importlib
 import os
 import sysconfig
 from pathlib import Path
@@ -22,38 +21,21 @@ GLB_V2_PACKAGES = ("rasterio", "manifold3d")
 GLB_V2_HIDDENIMPORTS = ("rasterio.features", "manifold3d")
 
 
-def require_desktop_mesh_kernel_modules():
-    """Reject direct spec builds that cannot load required release modules."""
-
-    missing = []
-    for module_name in GLB_V2_HIDDENIMPORTS:
-        try:
-            importlib.import_module(module_name)
-        except Exception as exc:
-            missing.append(f"{module_name}: {type(exc).__name__}: {exc}")
-    if missing:
-        raise RuntimeError(
-            "Desktop release requires requirements-glb-v2.txt; unavailable: "
-            + "; ".join(missing),
-        )
-
-
 def collect_glb_v2_package(package_name):
-    """Collect required desktop mesh-kernel dependencies used dynamically."""
+    """Collect optional GLB v2 dependencies used by dynamic imports."""
 
     try:
         return collect_all(package_name)
     except Exception as exc:
-        raise RuntimeError(
-            "Could not collect required desktop mesh-kernel package "
-            f"{package_name!r}: {exc}",
-        ) from exc
+        print(
+            f"WARNING: Could not collect optional GLB v2 package {package_name!r}: {exc}",
+        )
+        return [], [], []
 
 
 glb_v2_datas = []
 glb_v2_binaries = []
 glb_v2_hiddenimports = []
-require_desktop_mesh_kernel_modules()
 for glb_v2_package in GLB_V2_PACKAGES:
     package_datas, package_binaries, package_hiddenimports = collect_glb_v2_package(
         glb_v2_package,

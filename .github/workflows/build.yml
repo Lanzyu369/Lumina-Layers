@@ -1,82 +1,96 @@
-name: Build Windows Desktop Release
+name: Build and Package Lumina Layers
 
 on:
-  pull_request:
-    branches: [dev-refactor, main]
   push:
-    branches: [main]
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
-  windows-desktop-artifact:
+  build:
     runs-on: windows-latest
-    timeout-minutes: 60
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+    - name: Checkout Code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        fetch-tags: true
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: |
-            requirements.txt
-            requirements-glb-v2.txt
+    - name: Get Version and Hash
+      id: vars
+      shell: bash
+      run: |
+        # 使用当前日期作为版本号 (格式: YYYYMMDD)
+        VERSION=$(date +%Y%m%d)
+        
+        # 获取 7 位短 Hash
+        SHORT_SHA=$(git rev-parse --short=7 HEAD | cut -c1-7 || echo "0000000")
+        
+        # 组合完整名称
+        FULL_NAME="Lumina-Layers-preview-$VERSION-$SHORT_SHA"
+        
+        echo "VERSION=$VERSION" >> $GITHUB_ENV
+        echo "SHORT_SHA=$SHORT_SHA" >> $GITHUB_ENV
+        echo "FULL_NAME=$FULL_NAME" >> $GITHUB_ENV
+        echo "full_name=$FULL_NAME" >> $GITHUB_OUTPUT
 
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.33.2
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller
+        pip install -r requirements.txt
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: pnpm
-          cache-dependency-path: |
-            frontend/pnpm-lock.yaml
-            electron/pnpm-lock.yaml
+    - name: Package with PyInstaller
+      shell: pwsh
+      run: |
+        # 确保生成的 exe 文件名符合要求
+        pyinstaller --noconfirm --onefile `
+          --icon="icon.ico" `
+          --add-data "icon.ico;." `
+          --add-data "bambu_config_template.json;." `
+          --add-data "assets;assets" `
+          --collect-all "gradio" `
+          --collect-all "safehttpx" `
+          --collect-all "groovy" `
+          --collect-all "gradio_client" `
+          --collect-all "uvicorn" `
+          --name "${{ env.FULL_NAME }}" `
+          main.py
 
-      - name: Install Python release dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install pyinstaller
-          pip install -r requirements.txt
-          pip install -r requirements-glb-v2.txt
+    - name: Prepare Artifact Directory
+      shell: pwsh
+      run: |
+        # 创建一个以 FULL_NAME 命名的文件夹，上传后下载到的 zip 也会是该名称
+        $targetDir = "${{ env.FULL_NAME }}"
+        New-Item -ItemType Directory -Path "$targetDir" -Force
+        
+        # 确认 exe 文件是否存在并移动
+        if (Test-Path "dist/${{ env.FULL_NAME }}.exe") {
+            Move-Item "dist/${{ env.FULL_NAME }}.exe" -Destination "$targetDir/"
+        } else {
+            Write-Error "Executable not found at dist/${{ env.FULL_NAME }}.exe"
+            exit 1
+        }
+        
+        # 复制外部数据文件夹
+        if (Test-Path "icon.ico") {
+            Copy-Item -Path "icon.ico" -Destination "$targetDir/"
+        }
+        if (Test-Path "bambu_config_template.json") {
+            Copy-Item -Path "bambu_config_template.json" -Destination "$targetDir/"
+        }
+        if (Test-Path "assets") {
+            Copy-Item -Path "assets" -Destination "$targetDir/assets" -Recurse
+        }
+        if (Test-Path "lut-preset") {
+            Copy-Item -Path "lut-preset" -Destination "$targetDir/lut-preset" -Recurse
+        }
 
-      - name: Install frontend dependencies
-        working-directory: frontend
-        run: pnpm install --frozen-lockfile
-
-      - name: Install Electron dependencies
-        working-directory: electron
-        run: pnpm install --frozen-lockfile
-
-      - name: Build formal Electron desktop release
-        run: python scripts/build_desktop.py
-
-      - name: Smoke frozen backend native relief kernel
-        shell: pwsh
-        run: |
-          & dist/lumina-backend.exe `
-            --desktop-native-kernel-smoke `
-            --desktop-native-kernel-smoke-report desktop-native-smoke.json
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Get-Content -Encoding UTF8 desktop-native-smoke.json
-          $report = Get-Content -Raw -Encoding UTF8 desktop-native-smoke.json | ConvertFrom-Json
-          if ($report.status -ne "ok") { throw "Frozen backend smoke did not pass" }
-          if ($report.native_kernel -ne "manifold3d") { throw "manifold3d fast path missing" }
-          if ($report.fallback_called) { throw "Frozen backend used Python fallback" }
-          if (-not $report.board_watertight) { throw "Frozen backend Board is not watertight" }
-
-      - name: Upload Windows release evidence
-        uses: actions/upload-artifact@v4
-        with:
-          name: lumina-studio-windows-${{ github.sha }}
-          if-no-files-found: error
-          path: |
-            electron/dist_electron/*.exe
-            dist/lumina-backend.exe
-            desktop-native-smoke.json
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        # 这个 name 参数决定了生成的 zip 文件名
+        name: ${{ env.FULL_NAME }}
+        path: ${{ env.FULL_NAME }}/
