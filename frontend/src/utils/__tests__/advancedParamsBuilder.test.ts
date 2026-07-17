@@ -106,6 +106,7 @@ function makeHeavyState(): ConverterState {
     loop_position_preset: "top-right",
     puzzleEnabled: true,
     largeFormatEnabled: true,
+    regionReplacementCount: 9,
     replacement_regions: Array.from({ length: 50 }, (_, i) =>
       makeReplacementRegion(i),
     ),
@@ -298,6 +299,52 @@ describe("buildAdvancedParams — groups populated when toggles enabled", () => 
     expect(result.color_replacement).not.toHaveProperty(
       "replacement_regions_truncated",
     );
+  });
+
+  it("keeps spatial edit count separate while merging true global remaps", () => {
+    const storedGlobal = makeReplacementRegion(0);
+    const state = makeState({
+      replacement_regions: [storedGlobal],
+      colorRemapMap: { aabbcc: "ddeeff" },
+      palette: [
+        {
+          quantized_hex: "112233",
+          matched_hex: "aabbcc",
+          pixel_count: 42,
+          percentage: 1,
+        },
+      ],
+      regionReplacementCount: 4,
+    });
+
+    const result = buildAdvancedParams(state, "converter", {
+      maxBytes: 8192,
+    }) as AdvancedParamsFull;
+
+    expect(result.color_replacement.spatial_edit_count).toBe(4);
+    expect(result.color_replacement.replacement_regions).toEqual([
+      storedGlobal,
+      {
+        quantized_hex: "#112233",
+        matched_hex: "#aabbcc",
+        replacement_hex: "#ddeeff",
+      },
+    ]);
+  });
+
+  it("normalizes an invalid negative spatial edit count without inventing a global mapping", () => {
+    const state = makeState({
+      regionReplacementCount: -3,
+      replacement_regions: [],
+      colorRemapMap: {},
+    });
+
+    const result = buildAdvancedParams(state, "converter", {
+      maxBytes: 8192,
+    }) as AdvancedParamsFull;
+
+    expect(result.color_replacement.spatial_edit_count).toBe(0);
+    expect(result.color_replacement.replacement_regions).toBeNull();
   });
 
   it("nulls detail fields when toggles are off", () => {
@@ -640,6 +687,7 @@ describe("buildAdvancedParams — tiered size trimming", () => {
     expect(byteLen(r2)).toBeLessThanOrEqual(r2Bytes);
 
     expect(r3._dropped_tiers).toEqual([1, 2, 3]);
+    expect(r3.color_replacement.spatial_edit_count).toBe(9);
     expect(byteLen(r3)).toBeLessThanOrEqual(r3Bytes);
 
     expect(r4._dropped_tiers).toEqual([1, 2, 3, 4]);

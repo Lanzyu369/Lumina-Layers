@@ -24,6 +24,7 @@ import type {
   RecipeOverrideItem,
 } from "../api/types";
 import { SVG_PIXELS_PER_MM_DEFAULT } from "../stores/settingsStore";
+import { colorRemapToReplacementRegions } from "./colorUtils";
 
 /**
  * Hard limits enforced on the advanced_params payload before size
@@ -311,8 +312,12 @@ function buildLargeFormat(state: ConverterState): AdvancedParamsLargeFormat {
 function buildColorReplacement(
   state: ConverterState,
 ): AdvancedParamsColorReplacement {
+  const globalReplacementRegions = [
+    ...state.replacement_regions,
+    ...colorRemapToReplacementRegions(state.colorRemapMap, state.palette),
+  ];
   const { regions, truncated } = serializeReplacementRegions(
-    state.replacement_regions,
+    globalReplacementRegions,
   );
   const { colors, truncated: freeColorsTruncated } = serializeFreeColorSet(
     state.free_color_set,
@@ -321,6 +326,9 @@ function buildColorReplacement(
     serializeRecipeOverrides(state.recipe_overrides);
   const result: AdvancedParamsColorReplacement = {
     replacement_regions: regions,
+    spatial_edit_count: Number.isFinite(state.regionReplacementCount)
+      ? Math.max(0, Math.trunc(state.regionReplacementCount))
+      : 0,
     free_color_set: colors,
     recipe_overrides: overrides,
   };

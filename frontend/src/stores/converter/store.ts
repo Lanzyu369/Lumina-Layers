@@ -4321,7 +4321,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         set({ error: "Please select a connected region first" });
         return;
       }
-      const sourceColorHex = state.regionData.colorHex;
       set({ replacePreviewLoading: true, error: null });
       try {
         const response = await apiRegionReplace(state.sessionId, `#${newHex}`);
@@ -4347,19 +4346,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         if (response.color_contours) {
           updates.colorContours = response.color_contours;
         }
-
-        // 记录替换到 replacement_regions，供分享卡导出使用
-        const paletteEntry = state.palette.find(
-          (p) => p.matched_hex === sourceColorHex,
-        );
-        updates.replacement_regions = [
-          ..._get().replacement_regions,
-          {
-            quantized_hex: paletteEntry?.quantized_hex ?? sourceColorHex,
-            matched_hex: sourceColorHex,
-            replacement_hex: newHex,
-          },
-        ];
 
         // 不递增 regionReplacementCount（已在 confirmReplacement 中处理）
         set(updates);
@@ -4946,22 +4932,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             if (response.color_contours) {
               updates.colorContours = response.color_contours;
             }
-            // Record per-region replacement entries for share-card export.
-            // 记录每个区域的替换条目，供分享卡导出使用。
-            const newEntries: ColorReplacementItem[] = regions.map((region) => {
-              const pe = curState.palette.find(
-                (p) => p.matched_hex === region.colorHex,
-              );
-              return {
-                quantized_hex: pe?.quantized_hex ?? region.colorHex,
-                matched_hex: region.colorHex,
-                replacement_hex: pending.targetHex,
-              };
-            });
-            updates.replacement_regions = [
-              ..._get().replacement_regions,
-              ...newEntries,
-            ];
             set(updates);
             _get()._pollAsyncGlb();
           } catch (err) {
@@ -6181,7 +6151,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       });
       _startGenerateTimer();
       try {
-        // 合并 colorRemapMap 转换的 replacement_regions 与已有的 replacement_regions
+        // Merge global-only replacement mappings. Spatial edits stay in the
+        // session preview cache and are selected by use_cached_matched_rgb.
+        // 仅合并全局替色映射；空间局部改色保留在会话预览缓存中。
         let mergedReplacements: ColorReplacementItem[] | undefined =
           state.replacement_regions.length > 0
             ? [...state.replacement_regions]
