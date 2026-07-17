@@ -127,6 +127,10 @@ LARGE_FORMAT_GENERATION_FAILED_DETAIL: str = (
 LARGE_FORMAT_RECIPE_OVERRIDE_LOAD_FAILED_DETAIL: str = (
     "Large-format recipe override data could not be loaded. Re-run preview and try again."
 )
+LARGE_FORMAT_CACHED_ANALYSIS_INVALID_DETAIL: str = (
+    "Large-format cached preview data is unavailable or invalid. "
+    "Re-run preview and try again."
+)
 BATCH_MERGE_FAILED_DETAIL: str = (
     "Batch 3MF merge failed. Try again or check the server log for details."
 )
@@ -294,6 +298,115 @@ def _cache_field_path_or_tempfile(
     np.save(temp_path, array)
     store.register_temp_file(sid, temp_path)
     return temp_path
+
+
+def _close_numpy_load_result(loaded: object) -> None:
+    """Close resources held by ``np.load(..., mmap_mode='r')``."""
+
+    close = getattr(loaded, "close", None)
+    if callable(close):
+        close()
+    mmap_obj = getattr(loaded, "_mmap", None)
+    if mmap_obj is not None and not getattr(mmap_obj, "closed", False):
+        mmap_obj.close()
+
+
+def _load_large_format_cache_array_spec(path: str) -> tuple[tuple[int, ...], np.dtype]:
+    """Read only shape/dtype metadata from one private preview artifact."""
+
+    loaded = np.load(path, mmap_mode="r", allow_pickle=False)
+    try:
+        if not isinstance(loaded, np.ndarray):
+            raise ValueError("preview cache field is not a NumPy array")
+        return tuple(int(size) for size in loaded.shape), loaded.dtype
+    finally:
+        _close_numpy_load_result(loaded)
+
+
+def _cache_grid_dimension_matches(value: object, expected: int) -> bool:
+    """Return whether optional cache metadata is exactly one integer size."""
+
+    if value is None:
+        return True
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return numeric.is_integer() and int(numeric) == expected
+
+
+def _resolve_validated_large_format_cached_analysis_paths(
+    *,
+    cache: dict,
+    cache_ref: dict | None,
+    sid: str,
+    store: SessionStore,
+) -> tuple[str, str, str]:
+    """Resolve and validate the three spatial preview-cache arrays together."""
+
+    try:
+        matched_rgb_path = _cache_field_path_or_tempfile(
+            cache=cache,
+            cache_ref=cache_ref,
+            field_name="matched_rgb",
+            sid=sid,
+            store=store,
+        )
+        mask_solid_path = _cache_field_path_or_tempfile(
+            cache=cache,
+            cache_ref=cache_ref,
+            field_name="mask_solid",
+            sid=sid,
+            store=store,
+        )
+        material_matrix_path = _cache_field_path_or_tempfile(
+            cache=cache,
+            cache_ref=cache_ref,
+            field_name="material_matrix",
+            sid=sid,
+            store=store,
+        )
+        if not matched_rgb_path or not mask_solid_path or not material_matrix_path:
+            raise ValueError("preview cache analysis fields are incomplete")
+
+        matched_shape, matched_dtype = _load_large_format_cache_array_spec(
+            matched_rgb_path
+        )
+        mask_shape, mask_dtype = _load_large_format_cache_array_spec(mask_solid_path)
+        material_shape, material_dtype = _load_large_format_cache_array_spec(
+            material_matrix_path
+        )
+
+        if len(matched_shape) != 3 or matched_shape[2] != 3:
+            raise ValueError("matched_rgb must have shape (H, W, 3)")
+        if matched_dtype != np.dtype(np.uint8):
+            raise ValueError("matched_rgb must use uint8")
+        if len(mask_shape) != 2 or mask_dtype != np.dtype(np.bool_):
+            raise ValueError("mask_solid must have shape (H, W) and bool dtype")
+        if (
+            len(material_shape) != 3
+            or material_shape[2] <= 0
+            or not np.issubdtype(material_dtype, np.integer)
+        ):
+            raise ValueError(
+                "material_matrix must have shape (H, W, N) and integer dtype"
+            )
+
+        spatial_shape = matched_shape[:2]
+        if mask_shape != spatial_shape or material_shape[:2] != spatial_shape:
+            raise ValueError("preview cache analysis fields use different grids")
+        target_h, target_w = spatial_shape
+        if not _cache_grid_dimension_matches(cache.get("target_h"), target_h):
+            raise ValueError("preview cache target_h does not match array grid")
+        if not _cache_grid_dimension_matches(cache.get("target_w"), target_w):
+            raise ValueError("preview cache target_w does not match array grid")
+    except (OSError, ValueError, TypeError, KeyError, EOFError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=LARGE_FORMAT_CACHED_ANALYSIS_INVALID_DETAIL,
+        ) from exc
+
+    return matched_rgb_path, mask_solid_path, material_matrix_path
 
 
 def _require_loadable_material_archive_cache_path(
@@ -1723,6 +1836,8 @@ def _resolve_large_format_shared_params(
     *,
     recipe_overrides: list[dict[str, object]] | None = None,
     recipe_override_masks_path: str | None = None,
+    matched_rgb_path: str | None = None,
+    mask_solid_path: str | None = None,
     material_matrix_path: str | None = None,
 ) -> dict:
     replacement_regions = session_data.get("replacement_regions") or None
@@ -1806,6 +1921,8 @@ def _resolve_large_format_shared_params(
         "use_lut_constrained": request.use_lut_constrained,
         "auto_dynamic_range": request.auto_dynamic_range,
         "high_precision_3d_preview": request.high_precision_3d_preview,
+        "matched_rgb_path": matched_rgb_path,
+        "mask_solid_path": mask_solid_path,
         "material_matrix_path": material_matrix_path,
         "printer_id": request.printer_id,
         "slicer": request.slicer,
@@ -1845,6 +1962,8 @@ async def _generate_large_format_svg_native(
     recipe_overrides: list[dict[str, object]] | None,
     recipe_override_masks_path: str | None,
     material_matrix_path: str | None,
+    matched_rgb_path: str | None = None,
+    mask_solid_path: str | None = None,
     total_width_mm: float,
     total_height_mm: float,
     tile_width_mm: float,
@@ -1863,6 +1982,8 @@ async def _generate_large_format_svg_native(
         _resolve_relief_global_max_height(session_data, request),
         recipe_overrides=recipe_overrides,
         recipe_override_masks_path=recipe_override_masks_path,
+        matched_rgb_path=matched_rgb_path,
+        mask_solid_path=mask_solid_path,
         material_matrix_path=material_matrix_path,
     )
     native_heightmap_path: str | None = None
@@ -1953,6 +2074,8 @@ async def _generate_large_format_raster(
     recipe_overrides: list[dict[str, object]] | None,
     recipe_override_masks_path: str | None,
     material_matrix_path: str | None,
+    matched_rgb_path: str | None = None,
+    mask_solid_path: str | None = None,
     total_width_mm: float,
     total_height_mm: float,
     tile_width_mm: float,
@@ -1975,51 +2098,113 @@ async def _generate_large_format_raster(
     errors: list[str] = []
     zip_path: str | None = None
     zip_ready = False
+    full_matched_rgb: np.ndarray | None = None
+    full_mask_solid: np.ndarray | None = None
     full_material_matrix: np.ndarray | None = None
-    full_recipe_override_masks: dict[str, np.ndarray] | None = None
-    override_target_w = 0
-    override_target_h = 0
-    if recipe_overrides and material_matrix_path is not None:
+    spatial_target_w = 0
+    spatial_target_h = 0
+    cached_analysis_requested = (
+        matched_rgb_path is not None or mask_solid_path is not None
+    )
+    if cached_analysis_requested and not (
+        matched_rgb_path is not None
+        and mask_solid_path is not None
+        and material_matrix_path is not None
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=LARGE_FORMAT_CACHED_ANALYSIS_INVALID_DETAIL,
+        )
+
+    if material_matrix_path is not None:
+        loading_role = "material_matrix"
+        loading_path = material_matrix_path
         try:
-            full_material_matrix = np.load(material_matrix_path)
+            if cached_analysis_requested:
+                loading_role = "matched_rgb"
+                loading_path = matched_rgb_path
+                full_matched_rgb = np.load(matched_rgb_path, allow_pickle=False)
+                loading_role = "mask_solid"
+                loading_path = mask_solid_path
+                full_mask_solid = np.load(mask_solid_path, allow_pickle=False)
+            loading_role = "material_matrix"
+            loading_path = material_matrix_path
+            full_material_matrix = np.load(material_matrix_path, allow_pickle=False)
         except (OSError, ValueError, TypeError) as exc:
             _log_large_format_failure(
                 session_id=sid,
-                failure_kind="recipe_override_matrix",
+                failure_kind=(
+                    "cached_analysis"
+                    if cached_analysis_requested
+                    else "recipe_override_matrix"
+                ),
                 error_type=type(exc).__name__,
                 error_message=str(exc),
-                artifact_role="material_matrix",
-                path=material_matrix_path,
+                artifact_role=loading_role,
+                path=loading_path,
+            )
+            raise HTTPException(
+                status_code=409 if cached_analysis_requested else 500,
+                detail=(
+                    LARGE_FORMAT_CACHED_ANALYSIS_INVALID_DETAIL
+                    if cached_analysis_requested
+                    else LARGE_FORMAT_RECIPE_OVERRIDE_LOAD_FAILED_DETAIL
+                ),
+            ) from exc
+
+        if cached_analysis_requested:
+            cached_analysis_valid = (
+                isinstance(full_matched_rgb, np.ndarray)
+                and full_matched_rgb.ndim == 3
+                and full_matched_rgb.shape[2] == 3
+                and full_matched_rgb.dtype == np.uint8
+                and isinstance(full_mask_solid, np.ndarray)
+                and full_mask_solid.ndim == 2
+                and full_mask_solid.dtype == np.bool_
+                and isinstance(full_material_matrix, np.ndarray)
+                and full_material_matrix.ndim == 3
+                and full_material_matrix.shape[2] > 0
+                and np.issubdtype(full_material_matrix.dtype, np.integer)
+                and full_matched_rgb.shape[:2] == full_mask_solid.shape
+                and full_material_matrix.shape[:2] == full_mask_solid.shape
+            )
+            if not cached_analysis_valid:
+                raise HTTPException(
+                    status_code=409,
+                    detail=LARGE_FORMAT_CACHED_ANALYSIS_INVALID_DETAIL,
+                )
+        elif not isinstance(full_material_matrix, np.ndarray) or full_material_matrix.ndim != 3:
+            raise HTTPException(
+                status_code=500,
+                detail="Large-format recipe override matrix must be 3-dimensional",
+            )
+
+        spatial_target_h, spatial_target_w = full_material_matrix.shape[:2]
+
+    # The final material matrix already contains every recipe override. Keep
+    # loading the legacy mask artifact here so corrupt recipe-only requests
+    # retain their deterministic error, but never pass masks to tile workers
+    # and apply the same edit a second time.
+    if recipe_overrides and recipe_override_masks_path is not None:
+        try:
+            with open(recipe_override_masks_path, "rb") as f:
+                loaded_masks = pickle.load(f)
+        except (OSError, ValueError, TypeError, pickle.PickleError) as exc:
+            _log_large_format_failure(
+                session_id=sid,
+                failure_kind="recipe_override_masks",
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+                artifact_role="recipe_override_masks",
+                path=recipe_override_masks_path,
             )
             raise HTTPException(
                 status_code=500,
                 detail=LARGE_FORMAT_RECIPE_OVERRIDE_LOAD_FAILED_DETAIL,
-            )
-        if full_material_matrix.ndim != 3:
-            raise HTTPException(status_code=500, detail="Large-format recipe override matrix must be 3-dimensional")
-        override_target_h, override_target_w = full_material_matrix.shape[:2]
-        if recipe_override_masks_path is not None:
-            try:
-                with open(recipe_override_masks_path, "rb") as f:
-                    loaded_masks = pickle.load(f)
-            except (OSError, ValueError, TypeError, pickle.PickleError) as exc:
-                _log_large_format_failure(
-                    session_id=sid,
-                    failure_kind="recipe_override_masks",
-                    error_type=type(exc).__name__,
-                    error_message=str(exc),
-                    artifact_role="recipe_override_masks",
-                    path=recipe_override_masks_path,
-                )
-                raise HTTPException(
-                    status_code=500,
-                    detail=LARGE_FORMAT_RECIPE_OVERRIDE_LOAD_FAILED_DETAIL,
-                )
-            if isinstance(loaded_masks, dict):
-                full_recipe_override_masks = {
-                    str(region_id): np.asarray(mask, dtype=bool)
-                    for region_id, mask in loaded_masks.items()
-                }
+            ) from exc
+        if isinstance(loaded_masks, dict):
+            for mask in loaded_masks.values():
+                np.asarray(mask, dtype=bool)
 
     px_per_mm_x = px_w / total_width_mm
     px_per_mm_y = px_h / total_height_mm
@@ -2030,9 +2215,12 @@ async def _generate_large_format_raster(
         request,
         _resolve_relief_global_max_height(session_data, request),
         recipe_overrides=recipe_overrides,
-        recipe_override_masks_path=recipe_override_masks_path,
-        material_matrix_path=material_matrix_path,
+        recipe_override_masks_path=None,
+        matched_rgb_path=None,
+        mask_solid_path=None,
+        material_matrix_path=None,
     )
+    shared_params["reuse_preview_analysis"] = False
     if str(image_path).lower().endswith(".png") and shared_params["modeling_mode"] == CoreModelingMode.VECTOR:
         shared_params["modeling_mode"] = CoreModelingMode.HIGH_FIDELITY
     hm_gray = (
@@ -2071,33 +2259,59 @@ async def _generate_large_format_raster(
                     Image.fromarray(hm_tile).save(hm_tile_path)
                     route_local_cleanup_paths.add(hm_tile_path)
                     tile_params["heightmap_path"] = hm_tile_path
-                if full_material_matrix is not None and override_target_w > 0 and override_target_h > 0:
-                    ov_x0 = int(round(x0_mm * (override_target_w / total_width_mm)))
-                    ov_y0 = int(round(y0_mm * (override_target_h / total_height_mm)))
-                    ov_x1 = min(int(round(x1_mm * (override_target_w / total_width_mm))), override_target_w)
-                    ov_y1 = min(int(round(y1_mm * (override_target_h / total_height_mm))), override_target_h)
-                    material_matrix_tile = full_material_matrix[ov_y0:ov_y1, ov_x0:ov_x1, :]
+                if full_material_matrix is not None and spatial_target_w > 0 and spatial_target_h > 0:
+                    spatial_x0 = int(
+                        round(x0_mm * (spatial_target_w / total_width_mm))
+                    )
+                    spatial_y0 = int(
+                        round(y0_mm * (spatial_target_h / total_height_mm))
+                    )
+                    spatial_x1 = min(
+                        int(round(x1_mm * (spatial_target_w / total_width_mm))),
+                        spatial_target_w,
+                    )
+                    spatial_y1 = min(
+                        int(round(y1_mm * (spatial_target_h / total_height_mm))),
+                        spatial_target_h,
+                    )
+                    material_matrix_tile = full_material_matrix[
+                        spatial_y0:spatial_y1,
+                        spatial_x0:spatial_x1,
+                        :,
+                    ]
                     fd_mm, mm_tile_path = tempfile.mkstemp(suffix=".npy", dir=TEMP_DIR)
                     os.close(fd_mm)
-                    np.save(mm_tile_path, material_matrix_tile)
                     route_local_cleanup_paths.add(mm_tile_path)
+                    np.save(mm_tile_path, material_matrix_tile)
                     tile_params["material_matrix_path"] = mm_tile_path
                     tile_params["recipe_override_masks_path"] = None
-
-                    selected_mask_tiles: dict[str, np.ndarray] = {}
-                    for region_id, mask in (full_recipe_override_masks or {}).items():
-                        if mask.shape != (override_target_h, override_target_w):
-                            continue
-                        mask_tile = mask[ov_y0:ov_y1, ov_x0:ov_x1]
-                        if mask_tile.any():
-                            selected_mask_tiles[region_id] = mask_tile
-                    if selected_mask_tiles:
-                        fd_masks, masks_tile_path = tempfile.mkstemp(suffix=".pkl", dir=TEMP_DIR)
-                        os.close(fd_masks)
-                        with open(masks_tile_path, "wb") as f:
-                            pickle.dump(selected_mask_tiles, f)
-                        route_local_cleanup_paths.add(masks_tile_path)
-                        tile_params["recipe_override_masks_path"] = masks_tile_path
+                    if full_matched_rgb is not None and full_mask_solid is not None:
+                        matched_rgb_tile = full_matched_rgb[
+                            spatial_y0:spatial_y1,
+                            spatial_x0:spatial_x1,
+                            :,
+                        ]
+                        mask_solid_tile = full_mask_solid[
+                            spatial_y0:spatial_y1,
+                            spatial_x0:spatial_x1,
+                        ]
+                        fd_rgb, rgb_tile_path = tempfile.mkstemp(
+                            suffix=".npy",
+                            dir=TEMP_DIR,
+                        )
+                        os.close(fd_rgb)
+                        route_local_cleanup_paths.add(rgb_tile_path)
+                        np.save(rgb_tile_path, matched_rgb_tile)
+                        fd_mask, mask_tile_path = tempfile.mkstemp(
+                            suffix=".npy",
+                            dir=TEMP_DIR,
+                        )
+                        os.close(fd_mask)
+                        route_local_cleanup_paths.add(mask_tile_path)
+                        np.save(mask_tile_path, mask_solid_tile)
+                        tile_params["matched_rgb_path"] = rgb_tile_path
+                        tile_params["mask_solid_path"] = mask_tile_path
+                        tile_params["reuse_preview_analysis"] = True
 
                 label = format_large_format_tile_label(
                     source_basename=source_basename,
@@ -2249,7 +2463,22 @@ async def convert_generate_large_format(
     sid = body.session_id
     total_w_mm, total_h_mm = _resolve_large_format_dimensions(cache, request, lf.target_height_mm)
     source_basename = _resolve_large_format_source_basename(session_data, image_path)
-    material_matrix_path, recipe_override_masks_path = _prepare_recipe_override_worker_inputs(
+    matched_rgb_path: str | None = None
+    mask_solid_path: str | None = None
+    cached_material_matrix_path: str | None = None
+    if request.use_cached_matched_rgb is True:
+        (
+            matched_rgb_path,
+            mask_solid_path,
+            cached_material_matrix_path,
+        ) = _resolve_validated_large_format_cached_analysis_paths(
+            cache=cache,
+            cache_ref=cache_ref,
+            sid=sid,
+            store=store,
+        )
+
+    override_material_matrix_path, recipe_override_masks_path = _prepare_recipe_override_worker_inputs(
         cache=cache,
         cache_ref=cache_ref,
         session_data=session_data,
@@ -2257,6 +2486,11 @@ async def convert_generate_large_format(
         request=request,
         sid=sid,
         store=store,
+    )
+    material_matrix_path = (
+        override_material_matrix_path
+        if override_material_matrix_path is not None
+        else cached_material_matrix_path
     )
     tile_w_mm = lf.tile_width_mm
     tile_h_mm = lf.tile_height_mm
@@ -2285,6 +2519,8 @@ async def convert_generate_large_format(
                 source_basename=source_basename,
                 recipe_overrides=recipe_overrides,
                 recipe_override_masks_path=recipe_override_masks_path,
+                matched_rgb_path=matched_rgb_path,
+                mask_solid_path=mask_solid_path,
                 material_matrix_path=material_matrix_path,
                 total_width_mm=total_w_mm,
                 total_height_mm=total_h_mm,
@@ -2316,6 +2552,8 @@ async def convert_generate_large_format(
                     source_basename=source_basename,
                     recipe_overrides=recipe_overrides,
                     recipe_override_masks_path=recipe_override_masks_path,
+                    matched_rgb_path=matched_rgb_path,
+                    mask_solid_path=mask_solid_path,
                     material_matrix_path=material_matrix_path,
                     total_width_mm=total_w_mm,
                     total_height_mm=total_h_mm,
@@ -2338,6 +2576,8 @@ async def convert_generate_large_format(
             source_basename=source_basename,
             recipe_overrides=recipe_overrides,
             recipe_override_masks_path=recipe_override_masks_path,
+            matched_rgb_path=matched_rgb_path,
+            mask_solid_path=mask_solid_path,
             material_matrix_path=material_matrix_path,
             total_width_mm=total_w_mm,
             total_height_mm=total_h_mm,

@@ -1977,6 +1977,7 @@ def apply_matched_rgb_overrides_to_analysis(
     img_processor,
     pixels_per_mm: float = 10.0,
     max_width_px: int = 1600,
+    strict: bool = False,
 ) -> int:
     """Propagate region-level ``matched_rgb`` edits into ``matched_shapes``.
     把 ``cache.matched_rgb`` 上的像素级改色回写到 ``analysis.matched_shapes``。
@@ -2017,6 +2018,8 @@ def apply_matched_rgb_overrides_to_analysis(
             （``analyze_svg`` 返回的分析结果，就地修改）
         matched_rgb: ``(H, W, 3) uint8`` array taken from ``cache["matched_rgb"]``.
             （取自 ``cache["matched_rgb"]`` 的预览栅格）
+        material_matrix: Optional ``(H, W, N)`` integer recipe grid.
+            （可选的 ``(H, W, N)`` 整数配方网格）
         mask_solid: ``(H, W) bool`` array taken from ``cache["mask_solid"]``.
             （取自 ``cache["mask_solid"]`` 的实体像素掩码）
         img_processor: Object exposing ``_rgb_to_lab``, ``kdtree``,
@@ -2028,16 +2031,21 @@ def apply_matched_rgb_overrides_to_analysis(
             （预览网格密度，需与 ``build_preview_cache`` 一致）
         max_width_px: Preview-grid width cap. Same constraint.
             （预览网格宽度上限，同上）
+        strict: Raise ``ValueError`` for invalid cache inputs or grid
+            mismatches instead of logging and returning zero. A valid cache
+            that changes no shapes still returns zero normally.
+            （缓存输入或网格无效时抛出 ``ValueError``；合法但无修改仍返回零）
 
     Returns:
         int: Number of shapes whose ``matched_rgb`` was rewritten.
             （颜色被改写的 shape 数量）
     """
     if matched_rgb is None or mask_solid is None:
+        if strict:
+            raise ValueError("matched_rgb and mask_solid are required")
         return 0
-    if not analysis.matched_shapes:
+    if not analysis.matched_shapes and not strict:
         return 0
-
     real_w = float(analysis.bbox[2])
     real_h = float(analysis.bbox[3])
     sf = float(analysis.scale_factor)
@@ -2057,6 +2065,7 @@ def apply_matched_rgb_overrides_to_analysis(
     coord_scale = sf * ppm
 
     matched_arr = np.asarray(matched_rgb)
+    raw_mask_arr = np.asarray(mask_solid)
     mask_arr = np.asarray(mask_solid, dtype=bool)
     if matched_arr.ndim != 3 or matched_arr.shape[2] != 3 or matched_arr.dtype != np.uint8:
         error_message = (
@@ -2073,7 +2082,24 @@ def apply_matched_rgb_overrides_to_analysis(
                 "matched_rgb_dtype": str(matched_arr.dtype),
             },
         )
+        if strict:
+            raise ValueError(error_message)
         return 0
+    if strict and raw_mask_arr.dtype != np.dtype(np.bool_):
+        error_message = (
+            f"mask_solid dtype {raw_mask_arr.dtype} is not bool"
+        )
+        _log.warning(
+            "Vector matched RGB overrides skipped because mask dtype is invalid",
+            extra={
+                "event": "vector_overrides_input_invalid",
+                "error_type": "ValueError",
+                "error_message": error_message,
+                "mask_solid_shape": list(raw_mask_arr.shape),
+                "mask_solid_dtype": str(raw_mask_arr.dtype),
+            },
+        )
+        raise ValueError(error_message)
     if matched_arr.shape[:2] != (h_px, w_px) or mask_arr.shape != (h_px, w_px):
         error_message = (
             f"matched_rgb/mask_solid shape {matched_arr.shape[:2]}/{mask_arr.shape} "
@@ -2090,6 +2116,8 @@ def apply_matched_rgb_overrides_to_analysis(
                 "expected_shape": [int(h_px), int(w_px)],
             },
         )
+        if strict:
+            raise ValueError(error_message)
         return 0
 
     def _iter_polygons(geom):
@@ -2133,30 +2161,63 @@ def apply_matched_rgb_overrides_to_analysis(
 
     num_channels = int(getattr(analysis, "num_channels", 0) or 0)
     num_layers = int(getattr(analysis, "num_layers", 0) or 0)
-    if num_channels <= 0 or num_layers <= 0:
+    if (num_channels <= 0 or num_layers <= 0) and not strict:
         return 0
 
-    lut_rgb = img_processor.lut_rgb
-    ref_stacks = img_processor.ref_stacks
     matrix_arr = None
     if material_matrix is not None:
         candidate_matrix = np.asarray(material_matrix)
-        if candidate_matrix.ndim == 3 and candidate_matrix.shape[:2] == (h_px, w_px):
+        matrix_grid_is_valid = (
+            candidate_matrix.ndim == 3
+            and candidate_matrix.shape[:2] == (h_px, w_px)
+        )
+        matrix_dtype_is_valid = np.issubdtype(candidate_matrix.dtype, np.integer)
+        matrix_channels_are_valid = (
+            candidate_matrix.ndim == 3 and candidate_matrix.shape[2] > 0
+        )
+        if matrix_grid_is_valid and (
+            not strict or (matrix_dtype_is_valid and matrix_channels_are_valid)
+        ):
             matrix_arr = candidate_matrix
         else:
+            if strict:
+                error_message = (
+                    f"material_matrix shape/dtype "
+                    f"{candidate_matrix.shape}/{candidate_matrix.dtype} "
+                    f"does not match non-empty integer preview grid "
+                    f"{(h_px, w_px)}"
+                )
+            else:
+                error_message = (
+                    f"material_matrix shape {candidate_matrix.shape} "
+                    f"does not match preview grid {(h_px, w_px)}"
+                )
             _log.warning(
                 "Vector material matrix overrides skipped because cache grid mismatched analysis",
                 extra={
                     "event": "vector_material_matrix_grid_mismatch",
                     "error_type": "ValueError",
-                    "error_message": (
-                        f"material_matrix shape {candidate_matrix.shape} "
-                        f"does not match preview grid {(h_px, w_px)}"
-                    ),
+                    "error_message": error_message,
                     "material_matrix_shape": list(candidate_matrix.shape),
+                    **(
+                        {"material_matrix_dtype": str(candidate_matrix.dtype)}
+                        if strict
+                        else {}
+                    ),
                     "expected_shape": [int(h_px), int(w_px)],
                 },
             )
+            if strict:
+                raise ValueError(error_message)
+
+    if not analysis.matched_shapes:
+        return 0
+
+    if num_channels <= 0 or num_layers <= 0:
+        return 0
+
+    lut_rgb = img_processor.lut_rgb
+    ref_stacks = img_processor.ref_stacks
 
     changed = 0
     per_shape_diag: list[dict] = []

@@ -450,6 +450,89 @@ class TestApplyMatchedRgbOverrides:
         assert getattr(record, "expected_shape") == [100, 100]
         assert getattr(record, "error_type") == "ValueError"
 
+    @pytest.mark.parametrize(
+        "invalid_case",
+        [
+            "matched_dtype",
+            "mask_dtype",
+            "spatial_grid",
+            "material_rank",
+            "material_dtype",
+            "material_grid",
+            "material_empty_channels",
+        ],
+    )
+    def test_strict_mode_raises_for_invalid_cache_inputs(self, invalid_case):
+        """Worker-bound strict mode must reject every malformed cache grid."""
+
+        analysis = _make_two_shape_analysis()
+        img_processor = _build_fake_img_processor()
+        matched_rgb, mask_solid, h_px, w_px = _build_grid_arrays(analysis)
+        material_matrix = np.ones((h_px, w_px, 5), dtype=np.int16)
+
+        if invalid_case == "matched_dtype":
+            matched_rgb = matched_rgb.astype(np.int16)
+        elif invalid_case == "mask_dtype":
+            mask_solid = mask_solid.astype(np.uint8)
+        elif invalid_case == "spatial_grid":
+            mask_solid = mask_solid[:-1, :]
+        elif invalid_case == "material_rank":
+            material_matrix = material_matrix[..., 0]
+        elif invalid_case == "material_dtype":
+            material_matrix = material_matrix.astype(np.float32)
+        elif invalid_case == "material_grid":
+            material_matrix = material_matrix[:, :-1, :]
+        elif invalid_case == "material_empty_channels":
+            material_matrix = material_matrix[..., :0]
+
+        with pytest.raises(ValueError):
+            apply_matched_rgb_overrides_to_analysis(
+                analysis,
+                matched_rgb=matched_rgb,
+                material_matrix=material_matrix,
+                mask_solid=mask_solid,
+                img_processor=img_processor,
+                strict=True,
+            )
+
+    def test_strict_mode_validates_cache_even_when_analysis_has_no_shapes(self):
+        """An empty SVG must not turn malformed worker input into success."""
+
+        analysis = _make_two_shape_analysis()
+        analysis.matched_shapes = []
+        matched_rgb, mask_solid, h_px, w_px = _build_grid_arrays(analysis)
+
+        with pytest.raises(ValueError):
+            apply_matched_rgb_overrides_to_analysis(
+                analysis,
+                matched_rgb=matched_rgb.astype(np.int16),
+                material_matrix=np.ones((h_px, w_px, 5), dtype=np.int16),
+                mask_solid=mask_solid,
+                img_processor=_build_fake_img_processor(),
+                strict=True,
+            )
+
+    def test_strict_mode_allows_valid_zero_change(self):
+        """A valid cache with no edits is success, not a strict-mode failure."""
+
+        analysis = _make_two_shape_analysis()
+        img_processor = _build_fake_img_processor()
+        matched_rgb, mask_solid, h_px, w_px = _build_grid_arrays(analysis)
+        material_matrix = np.zeros((h_px, w_px, 5), dtype=np.int16)
+        material_matrix[: h_px // 2, :, :] = 1
+        material_matrix[h_px // 2 :, :, :] = 2
+
+        changed = apply_matched_rgb_overrides_to_analysis(
+            analysis,
+            matched_rgb=matched_rgb,
+            material_matrix=material_matrix,
+            mask_solid=mask_solid,
+            img_processor=img_processor,
+            strict=True,
+        )
+
+        assert changed == 0
+
 
 @pytest.mark.skipif(
     apply_matched_rgb_overrides_to_analysis is not None,

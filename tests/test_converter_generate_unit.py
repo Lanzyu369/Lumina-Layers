@@ -220,6 +220,46 @@ def _create_raster_large_format_session(store: SessionStore) -> tuple[str, str, 
     return sid, image_path, lut_path
 
 
+def _large_format_success_response(kind: str) -> dict[str, object]:
+    """Return a complete large-format helper response for route isolation."""
+
+    return {
+        "status": "ok",
+        "message": kind,
+        "download_url": f"/api/files/{kind}",
+        "tile_count": 1,
+        "grid_cols": 1,
+        "grid_rows": 1,
+        "warnings": [],
+    }
+
+
+def _large_format_payload(
+    sid: str,
+    *,
+    modeling_mode: str,
+    use_cached_matched_rgb: bool,
+    target_width_mm: float = 120.0,
+    target_height_mm: float = 80.0,
+) -> dict[str, object]:
+    """Build a large-format route payload with explicit physical dimensions."""
+
+    return {
+        "session_id": sid,
+        "params": {
+            "target_height_mm": target_height_mm,
+            "tile_width_mm": 40.0,
+            "tile_height_mm": 40.0,
+            "params": {
+                "lut_name": "test_lut",
+                "modeling_mode": modeling_mode,
+                "target_width_mm": target_width_mm,
+                "use_cached_matched_rgb": use_cached_matched_rgb,
+            },
+        },
+    }
+
+
 # =========================================================================
 # 1. Session not found returns 404
 # =========================================================================
@@ -1990,6 +2030,322 @@ class TestLargeFormatFridgeMagnetValidation:
         assert "fridge magnet" in response.json()["detail"].lower()
 
 
+class TestLargeFormatCachedAnalysisRouting:
+    """Verify large-format routes preserve validated spatial preview edits."""
+
+    @staticmethod
+    def _analysis_arrays() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        matched_rgb = np.arange(8 * 12 * 3, dtype=np.uint8).reshape(8, 12, 3)
+        mask_solid = (np.arange(8 * 12).reshape(8, 12) % 3) != 0
+        material_matrix = np.arange(8 * 12 * 5, dtype=np.int16).reshape(8, 12, 5)
+        return matched_rgb, mask_solid, material_matrix
+
+    @staticmethod
+    def _put_legacy_cache(
+        sid: str,
+        *,
+        matched_rgb: object,
+        mask_solid: object,
+        material_matrix: object,
+        target_w: int = 12,
+        target_h: int = 8,
+    ) -> None:
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {
+                "target_w": target_w,
+                "target_h": target_h,
+                "target_width_mm": 60.0,
+                "matched_rgb": matched_rgb,
+                "mask_solid": mask_solid,
+                "material_matrix": material_matrix,
+            },
+        )
+
+    def test_large_format_cached_native_svg_forwards_legacy_arrays(self) -> None:
+        sid, svg_path, lut_path = _create_svg_session(
+            _test_store,
+            native_tiling_supported=True,
+        )
+        matched_rgb, mask_solid, material_matrix = self._analysis_arrays()
+        self._put_legacy_cache(
+            sid,
+            matched_rgb=matched_rgb,
+            mask_solid=mask_solid,
+            material_matrix=material_matrix,
+        )
+
+        try:
+            with patch(
+                "api.routers.converter.generate._generate_large_format_svg_native",
+                return_value=_large_format_success_response("native"),
+            ) as native_helper:
+                response = client.post(
+                    "/api/convert/generate-large-format",
+                    json=_large_format_payload(
+                        sid,
+                        modeling_mode="vector",
+                        use_cached_matched_rgb=True,
+                    ),
+                )
+
+            assert response.status_code == 200, response.text
+            kwargs = native_helper.call_args.kwargs
+            for key in ("matched_rgb_path", "mask_solid_path", "material_matrix_path"):
+                assert kwargs[key] is not None
+                assert os.path.isfile(kwargs[key])
+            assert np.array_equal(np.load(kwargs["matched_rgb_path"]), matched_rgb)
+            assert np.array_equal(np.load(kwargs["mask_solid_path"]), mask_solid)
+            assert np.array_equal(np.load(kwargs["material_matrix_path"]), material_matrix)
+        finally:
+            _test_store.close(sid)
+            for path in (svg_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    def test_large_format_cached_native_svg_forwards_artifact_paths_without_hydration(
+        self,
+        tmp_path,
+    ) -> None:
+        sid, svg_path, lut_path = _create_svg_session(
+            _test_store,
+            native_tiling_supported=True,
+        )
+        matched_rgb, mask_solid, material_matrix = self._analysis_arrays()
+        cache_ref = externalize_preview_cache(
+            sid,
+            _test_store,
+            {
+                "target_w": 12,
+                "target_h": 8,
+                "target_width_mm": 60.0,
+                "matched_rgb": matched_rgb,
+                "mask_solid": mask_solid,
+                "material_matrix": material_matrix,
+            },
+            root_dir=tmp_path,
+        )
+        _test_store.put(sid, "preview_cache", cache_ref)
+
+        try:
+            with (
+                patch(
+                    "api.routers.converter.generate.hydrate_preview_cache",
+                    side_effect=AssertionError("large-format cache must not hydrate arrays"),
+                ),
+                patch(
+                    "api.routers.converter.generate._generate_large_format_svg_native",
+                    return_value=_large_format_success_response("native"),
+                ) as native_helper,
+            ):
+                response = client.post(
+                    "/api/convert/generate-large-format",
+                    json=_large_format_payload(
+                        sid,
+                        modeling_mode="vector",
+                        use_cached_matched_rgb=True,
+                    ),
+                )
+
+            assert response.status_code == 200, response.text
+            kwargs = native_helper.call_args.kwargs
+            assert kwargs["matched_rgb_path"] == cache_ref["fields"]["matched_rgb"]["path"]
+            assert kwargs["mask_solid_path"] == cache_ref["fields"]["mask_solid"]["path"]
+            assert kwargs["material_matrix_path"] == cache_ref["fields"]["material_matrix"]["path"]
+            assert np.array_equal(np.load(kwargs["matched_rgb_path"]), matched_rgb)
+            assert np.array_equal(np.load(kwargs["mask_solid_path"]), mask_solid)
+            assert np.array_equal(np.load(kwargs["material_matrix_path"]), material_matrix)
+        finally:
+            _test_store.close(sid)
+            for path in (svg_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    def test_large_format_cached_raster_forwards_validated_paths(self) -> None:
+        sid, image_path, lut_path = _create_raster_large_format_session(_test_store)
+        matched_rgb, mask_solid, material_matrix = self._analysis_arrays()
+        self._put_legacy_cache(
+            sid,
+            matched_rgb=matched_rgb,
+            mask_solid=mask_solid,
+            material_matrix=material_matrix,
+        )
+        _test_store.put(sid, "recipe_overrides", [])
+        _test_store.put(sid, "selected_region_masks", {})
+
+        try:
+            with patch(
+                "api.routers.converter.generate._generate_large_format_raster",
+                return_value=_large_format_success_response("raster"),
+            ) as raster_helper:
+                response = client.post(
+                    "/api/convert/generate-large-format",
+                    json=_large_format_payload(
+                        sid,
+                        modeling_mode="high-fidelity",
+                        use_cached_matched_rgb=True,
+                    ),
+                )
+
+            assert response.status_code == 200, response.text
+            kwargs = raster_helper.call_args.kwargs
+            assert np.array_equal(np.load(kwargs["matched_rgb_path"]), matched_rgb)
+            assert np.array_equal(np.load(kwargs["mask_solid_path"]), mask_solid)
+            assert np.array_equal(np.load(kwargs["material_matrix_path"]), material_matrix)
+        finally:
+            _test_store.close(sid)
+            for path in (image_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    @pytest.mark.parametrize(
+        "malformed_case",
+        [
+            "missing",
+            "unreadable",
+            "matched_wrong_rank",
+            "matched_wrong_dtype",
+            "mask_wrong_rank",
+            "mask_wrong_dtype",
+            "material_wrong_rank",
+            "material_wrong_dtype",
+            "material_empty_channels",
+            "spatial_mismatch",
+            "metadata_mismatch",
+        ],
+    )
+    def test_large_format_cached_malformed_cache_returns_safe_409(
+        self,
+        malformed_case: str,
+        tmp_path,
+    ) -> None:
+        sid, svg_path, lut_path = _create_svg_session(
+            _test_store,
+            native_tiling_supported=True,
+        )
+        matched_rgb, mask_solid, material_matrix = self._analysis_arrays()
+        local_secret_path: str | None = None
+        target_w = 12
+        target_h = 8
+
+        if malformed_case == "missing":
+            material_matrix = None
+        elif malformed_case == "unreadable":
+            cache_ref = externalize_preview_cache(
+                sid,
+                _test_store,
+                {
+                    "target_w": target_w,
+                    "target_h": target_h,
+                    "target_width_mm": 60.0,
+                    "matched_rgb": matched_rgb,
+                    "mask_solid": mask_solid,
+                    "material_matrix": material_matrix,
+                },
+                root_dir=tmp_path,
+            )
+            unreadable_path = tmp_path / "private-cache-mask.npy"
+            unreadable_path.write_bytes(b"not-a-numpy-array")
+            cache_ref["fields"]["mask_solid"]["path"] = str(unreadable_path)
+            local_secret_path = str(unreadable_path)
+            _test_store.put(sid, "preview_cache", cache_ref)
+        elif malformed_case == "matched_wrong_rank":
+            matched_rgb = matched_rgb[..., 0]
+        elif malformed_case == "matched_wrong_dtype":
+            matched_rgb = matched_rgb.astype(np.int16)
+        elif malformed_case == "mask_wrong_rank":
+            mask_solid = mask_solid[..., None]
+        elif malformed_case == "mask_wrong_dtype":
+            mask_solid = mask_solid.astype(np.uint8)
+        elif malformed_case == "material_wrong_rank":
+            material_matrix = material_matrix[..., 0]
+        elif malformed_case == "material_wrong_dtype":
+            material_matrix = material_matrix.astype(np.float32)
+        elif malformed_case == "material_empty_channels":
+            material_matrix = material_matrix[..., :0]
+        elif malformed_case == "spatial_mismatch":
+            material_matrix = material_matrix[:-1, :, :]
+        elif malformed_case == "metadata_mismatch":
+            target_h = 7
+
+        if malformed_case != "unreadable":
+            self._put_legacy_cache(
+                sid,
+                matched_rgb=matched_rgb,
+                mask_solid=mask_solid,
+                material_matrix=material_matrix,
+                target_w=target_w,
+                target_h=target_h,
+            )
+
+        target_height_mm = 70.0 if malformed_case == "metadata_mismatch" else 80.0
+        try:
+            with patch(
+                "api.routers.converter.generate._generate_large_format_svg_native",
+                return_value=_large_format_success_response("native"),
+            ) as native_helper:
+                response = client.post(
+                    "/api/convert/generate-large-format",
+                    json=_large_format_payload(
+                        sid,
+                        modeling_mode="vector",
+                        use_cached_matched_rgb=True,
+                        target_height_mm=target_height_mm,
+                    ),
+                )
+
+            assert response.status_code == 409, response.text
+            detail = response.json()["detail"]
+            assert "re-run preview" in detail.lower()
+            if local_secret_path is not None:
+                assert local_secret_path not in detail
+            native_helper.assert_not_called()
+        finally:
+            _test_store.close(sid)
+            for path in (svg_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    def test_large_format_cached_flag_false_ignores_malformed_cache(self) -> None:
+        sid, svg_path, lut_path = _create_svg_session(
+            _test_store,
+            native_tiling_supported=True,
+        )
+        matched_rgb, mask_solid, material_matrix = self._analysis_arrays()
+        self._put_legacy_cache(
+            sid,
+            matched_rgb=matched_rgb.astype(np.float32),
+            mask_solid=mask_solid[..., None],
+            material_matrix=material_matrix[:-1, :, :],
+        )
+
+        try:
+            with patch(
+                "api.routers.converter.generate._generate_large_format_svg_native",
+                return_value=_large_format_success_response("native"),
+            ) as native_helper:
+                response = client.post(
+                    "/api/convert/generate-large-format",
+                    json=_large_format_payload(
+                        sid,
+                        modeling_mode="vector",
+                        use_cached_matched_rgb=False,
+                    ),
+                )
+
+            assert response.status_code == 200, response.text
+            kwargs = native_helper.call_args.kwargs
+            assert kwargs["matched_rgb_path"] is None
+            assert kwargs["mask_solid_path"] is None
+            assert kwargs["material_matrix_path"] is None
+        finally:
+            _test_store.close(sid)
+            for path in (svg_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
+
 class TestLargeFormatDimensionsAndRouting:
     """Verify large-format ratio resolution and SVG routing behavior."""
 
@@ -2835,7 +3191,358 @@ class TestLargeFormatDimensionsAndRouting:
                 if os.path.exists(path):
                     os.unlink(path)
 
-    def test_large_format_raster_helper_slices_recipe_override_artifacts_per_tile(self) -> None:
+    @pytest.mark.asyncio
+    async def test_large_format_cached_raster_crops_spatial_arrays_by_physical_grid(
+        self,
+        tmp_path,
+    ) -> None:
+        image_path = tmp_path / "source.png"
+        lut_path = tmp_path / "lut.npy"
+        Image.fromarray(np.zeros((13, 19, 3), dtype=np.uint8)).save(image_path)
+        lut_path.write_bytes(b"lut")
+
+        yy, xx = np.indices((8, 10))
+        matched_rgb = np.stack(
+            [yy.astype(np.uint8), xx.astype(np.uint8), (yy * 10 + xx).astype(np.uint8)],
+            axis=-1,
+        )
+        mask_solid = ((yy + xx) % 2 == 0)
+        material_matrix = np.stack(
+            [yy * 100 + xx, yy * 100 + xx + 1000, yy * 100 + xx + 2000],
+            axis=-1,
+        ).astype(np.int16)
+        matched_path = tmp_path / "matched.npy"
+        mask_path = tmp_path / "mask.npy"
+        material_path = tmp_path / "material.npy"
+        np.save(matched_path, matched_rgb)
+        np.save(mask_path, mask_solid)
+        np.save(material_path, material_matrix)
+
+        captured: list[dict[str, object]] = []
+        route_local_paths: list[str] = []
+
+        async def _submit(_fn, tile_path, _lut_path, tile_params):
+            assert os.path.exists(tile_path)
+            paths = [
+                tile_params["matched_rgb_path"],
+                tile_params["mask_solid_path"],
+                tile_params["material_matrix_path"],
+            ]
+            assert all(path and os.path.exists(path) for path in paths)
+            route_local_paths.extend([tile_path, *paths])
+            captured.append(
+                {
+                    "matched": np.load(paths[0]),
+                    "mask": np.load(paths[1]),
+                    "material": np.load(paths[2]),
+                    "reuse": tile_params["reuse_preview_analysis"],
+                    "recipe_masks": tile_params["recipe_override_masks_path"],
+                }
+            )
+            tile_output = tmp_path / f"tile-{len(captured)}.3mf"
+            tile_output.write_bytes(b"3mf")
+            return {"threemf_path": str(tile_output), "status_msg": "ok"}
+
+        store = SessionStore(ttl=1800)
+        registry = FileRegistry()
+        sid = store.create()
+        request = LargeFormatConvertGenerateRequest(
+            lut_name="test_lut",
+            modeling_mode=ModelingMode.HIGH_FIDELITY,
+        )
+        download_id: str | None = None
+        try:
+            result = await _generate_large_format_raster(
+                image_path=str(image_path),
+                lut_path=str(lut_path),
+                source_basename="poster",
+                recipe_overrides=None,
+                recipe_override_masks_path=None,
+                matched_rgb_path=str(matched_path),
+                mask_solid_path=str(mask_path),
+                material_matrix_path=str(material_path),
+                total_width_mm=100.0,
+                total_height_mm=80.0,
+                tile_width_mm=50.0,
+                tile_height_mm=40.0,
+                request=request,
+                session_data={},
+                sid=sid,
+                store=store,
+                registry=registry,
+                pool=SimpleNamespace(submit=AsyncMock(side_effect=_submit)),
+            )
+
+            download_id = result["download_url"].rsplit("/", 1)[-1]
+            expected_bounds = [
+                (slice(0, 4), slice(0, 5)),
+                (slice(0, 4), slice(5, 10)),
+                (slice(4, 8), slice(0, 5)),
+                (slice(4, 8), slice(5, 10)),
+            ]
+            assert len(captured) == 4
+            for tile, (ys, xs) in zip(captured, expected_bounds):
+                assert tile["matched"].shape[:2] == tile["mask"].shape
+                assert tile["matched"].shape[:2] == tile["material"].shape[:2]
+                assert np.array_equal(tile["matched"], matched_rgb[ys, xs])
+                assert np.array_equal(tile["mask"], mask_solid[ys, xs])
+                assert np.array_equal(tile["material"], material_matrix[ys, xs])
+                assert tile["reuse"] is True
+                assert tile["recipe_masks"] is None
+            assert route_local_paths
+            assert all(not os.path.exists(path) for path in route_local_paths)
+            assert matched_path.exists()
+            assert mask_path.exists()
+            assert material_path.exists()
+        finally:
+            if download_id is not None:
+                registry.cleanup_file(download_id)
+            store.clear_all()
+
+    @pytest.mark.asyncio
+    async def test_large_format_cached_raster_cleans_spatial_tile_paths_on_failure(
+        self,
+        tmp_path,
+    ) -> None:
+        image_path = tmp_path / "source.png"
+        lut_path = tmp_path / "lut.npy"
+        Image.fromarray(np.zeros((9, 13, 3), dtype=np.uint8)).save(image_path)
+        lut_path.write_bytes(b"lut")
+        matched_path = tmp_path / "matched.npy"
+        mask_path = tmp_path / "mask.npy"
+        material_path = tmp_path / "material.npy"
+        np.save(matched_path, np.zeros((6, 8, 3), dtype=np.uint8))
+        np.save(mask_path, np.ones((6, 8), dtype=bool))
+        np.save(material_path, np.zeros((6, 8, 5), dtype=np.int16))
+        route_local_paths: list[str] = []
+
+        async def _fail(_fn, tile_path, _lut_path, tile_params):
+            paths = [
+                tile_params["matched_rgb_path"],
+                tile_params["mask_solid_path"],
+                tile_params["material_matrix_path"],
+            ]
+            assert all(path and os.path.exists(path) for path in paths)
+            route_local_paths.extend([tile_path, *paths])
+            raise RuntimeError("worker failed")
+
+        store = SessionStore(ttl=1800)
+        sid = store.create()
+        request = LargeFormatConvertGenerateRequest(
+            lut_name="test_lut",
+            modeling_mode=ModelingMode.HIGH_FIDELITY,
+        )
+        try:
+            with pytest.raises(HTTPException) as exc_info:
+                await _generate_large_format_raster(
+                    image_path=str(image_path),
+                    lut_path=str(lut_path),
+                    source_basename="poster",
+                    recipe_overrides=None,
+                    recipe_override_masks_path=None,
+                    matched_rgb_path=str(matched_path),
+                    mask_solid_path=str(mask_path),
+                    material_matrix_path=str(material_path),
+                    total_width_mm=80.0,
+                    total_height_mm=60.0,
+                    tile_width_mm=80.0,
+                    tile_height_mm=60.0,
+                    request=request,
+                    session_data={},
+                    sid=sid,
+                    store=store,
+                    registry=FileRegistry(),
+                    pool=SimpleNamespace(submit=AsyncMock(side_effect=_fail)),
+                )
+
+            assert exc_info.value.status_code == 500
+            assert route_local_paths
+            assert all(not os.path.exists(path) for path in route_local_paths)
+            assert matched_path.exists()
+            assert mask_path.exists()
+            assert material_path.exists()
+        finally:
+            store.clear_all()
+
+    @pytest.mark.asyncio
+    async def test_large_format_cached_raster_uses_final_recipe_matrix_once(
+        self,
+        tmp_path,
+    ) -> None:
+        image_path = tmp_path / "source.png"
+        lut_path = tmp_path / "lut.npy"
+        Image.fromarray(np.zeros((11, 17, 3), dtype=np.uint8)).save(image_path)
+        lut_path.write_bytes(b"lut")
+        matched_rgb = np.full((4, 8, 3), [255, 0, 0], dtype=np.uint8)
+        mask_solid = np.ones((4, 8), dtype=bool)
+        final_material_matrix = np.full((4, 8, 5), 1, dtype=np.int16)
+        final_material_matrix[:, 4:, :] = 2
+        override_mask = np.zeros((4, 8), dtype=bool)
+        override_mask[:2, 2:6] = True
+        final_material_matrix[override_mask, :] = np.array(
+            [3, 1, 3, 1, 3],
+            dtype=np.int16,
+        )
+
+        matched_path = tmp_path / "matched.npy"
+        mask_path = tmp_path / "mask.npy"
+        material_path = tmp_path / "final-material.npy"
+        recipe_masks_path = tmp_path / "recipe-masks.pkl"
+        np.save(matched_path, matched_rgb)
+        np.save(mask_path, mask_solid)
+        np.save(material_path, final_material_matrix)
+        with open(recipe_masks_path, "wb") as handle:
+            pickle.dump({"region-1": override_mask}, handle)
+
+        captured_matrices: list[np.ndarray] = []
+        captured_masks_paths: list[str | None] = []
+
+        async def _submit(_fn, _tile_path, _lut_path, tile_params):
+            matched_tile = np.load(tile_params["matched_rgb_path"])
+            mask_tile = np.load(tile_params["mask_solid_path"])
+            material_tile = np.load(tile_params["material_matrix_path"])
+            assert matched_tile.shape[:2] == mask_tile.shape == material_tile.shape[:2]
+            captured_matrices.append(material_tile)
+            captured_masks_paths.append(tile_params["recipe_override_masks_path"])
+            output_path = tmp_path / f"recipe-tile-{len(captured_matrices)}.3mf"
+            output_path.write_bytes(b"3mf")
+            return {"threemf_path": str(output_path), "status_msg": "ok"}
+
+        store = SessionStore(ttl=1800)
+        registry = FileRegistry()
+        sid = store.create()
+        request = LargeFormatConvertGenerateRequest(
+            lut_name="test_lut",
+            modeling_mode=ModelingMode.HIGH_FIDELITY,
+        )
+        download_id: str | None = None
+        try:
+            result = await _generate_large_format_raster(
+                image_path=str(image_path),
+                lut_path=str(lut_path),
+                source_basename="poster",
+                recipe_overrides=[
+                    {
+                        "region_id": "region-1",
+                        "recipe": [3, 1, 3, 1, 3],
+                        "layer_order": "Top2Bottom",
+                    }
+                ],
+                recipe_override_masks_path=str(recipe_masks_path),
+                matched_rgb_path=str(matched_path),
+                mask_solid_path=str(mask_path),
+                material_matrix_path=str(material_path),
+                total_width_mm=80.0,
+                total_height_mm=40.0,
+                tile_width_mm=40.0,
+                tile_height_mm=40.0,
+                request=request,
+                session_data={},
+                sid=sid,
+                store=store,
+                registry=registry,
+                pool=SimpleNamespace(submit=AsyncMock(side_effect=_submit)),
+            )
+
+            download_id = result["download_url"].rsplit("/", 1)[-1]
+            assert len(captured_matrices) == 2
+            assert np.array_equal(captured_matrices[0], final_material_matrix[:, :4])
+            assert np.array_equal(captured_matrices[1], final_material_matrix[:, 4:])
+            assert np.all(captured_matrices[0][0, 0] == 1)
+            assert np.array_equal(
+                captured_matrices[0][0, 2],
+                np.array([3, 1, 3, 1, 3]),
+            )
+            assert np.all(captured_matrices[1][3, 3] == 2)
+            assert captured_masks_paths == [None, None]
+        finally:
+            if download_id is not None:
+                registry.cleanup_file(download_id)
+            store.clear_all()
+
+    @pytest.mark.asyncio
+    async def test_large_format_cached_material_archive_raster_keeps_spatial_inputs(
+        self,
+        tmp_path,
+    ) -> None:
+        image_path = tmp_path / "source.png"
+        Image.fromarray(np.zeros((15, 21, 4), dtype=np.uint8)).save(image_path)
+        matched_rgb = np.arange(6 * 10 * 3, dtype=np.uint8).reshape(6, 10, 3)
+        mask_solid = np.ones((6, 10), dtype=bool)
+        material_matrix = np.arange(6 * 10 * 4, dtype=np.int16).reshape(6, 10, 4)
+        matched_path = tmp_path / "matched.npy"
+        mask_path = tmp_path / "mask.npy"
+        material_path = tmp_path / "material.npy"
+        np.save(matched_path, matched_rgb)
+        np.save(mask_path, mask_solid)
+        np.save(material_path, material_matrix)
+        captured: list[dict[str, object]] = []
+
+        async def _submit(_fn, _tile_path, _lut_path, tile_params):
+            arrays = [
+                np.load(tile_params["matched_rgb_path"]),
+                np.load(tile_params["mask_solid_path"]),
+                np.load(tile_params["material_matrix_path"]),
+            ]
+            assert arrays[0].shape[:2] == arrays[1].shape == arrays[2].shape[:2]
+            captured.append(
+                {
+                    "arrays": arrays,
+                    "material_source": tile_params["material_source"],
+                    "reuse": tile_params["reuse_preview_analysis"],
+                }
+            )
+            output_path = tmp_path / f"archive-tile-{len(captured)}.3mf"
+            output_path.write_bytes(b"3mf")
+            return {"threemf_path": str(output_path), "status_msg": "ok"}
+
+        store = SessionStore(ttl=1800)
+        registry = FileRegistry()
+        sid = store.create()
+        request = LargeFormatConvertGenerateRequest(
+            lut_name="__material_archive__",
+            modeling_mode=ModelingMode.HIGH_FIDELITY,
+        )
+        download_id: str | None = None
+        try:
+            result = await _generate_large_format_raster(
+                image_path=str(image_path),
+                lut_path="__material_archive__",
+                source_basename="poster",
+                recipe_overrides=None,
+                recipe_override_masks_path=None,
+                matched_rgb_path=str(matched_path),
+                mask_solid_path=str(mask_path),
+                material_matrix_path=str(material_path),
+                total_width_mm=100.0,
+                total_height_mm=60.0,
+                tile_width_mm=50.0,
+                tile_height_mm=30.0,
+                request=request,
+                session_data={
+                    "material_source": "material_archive",
+                    "selected_materials": ["mat-a", "mat-b"],
+                    "material_layer_count": 4,
+                    "material_layer_height_mm": 0.08,
+                    "material_grid_resolution": 64,
+                    "material_backing_material_index": 1,
+                },
+                sid=sid,
+                store=store,
+                registry=registry,
+                pool=SimpleNamespace(submit=AsyncMock(side_effect=_submit)),
+            )
+
+            download_id = result["download_url"].rsplit("/", 1)[-1]
+            assert len(captured) == 4
+            assert all(item["material_source"] == "material_archive" for item in captured)
+            assert all(item["reuse"] is True for item in captured)
+        finally:
+            if download_id is not None:
+                registry.cleanup_file(download_id)
+            store.clear_all()
+
+    def test_large_format_raster_recipe_override_only_slices_final_matrix_once(self) -> None:
         fd_img, image_path = tempfile.mkstemp(suffix=".png")
         os.close(fd_img)
         fd_lut, lut_path = tempfile.mkstemp(suffix=".npy")
@@ -2864,6 +3571,8 @@ class TestLargeFormatDimensionsAndRouting:
         mock_pool = MagicMock(spec=WorkerPoolManager)
         captured_paths: list[str] = []
         captured_shapes: dict[str, tuple[int, ...]] = {}
+        captured_recipe_mask_paths: list[str | None] = []
+        captured_reuse_flags: list[bool] = []
 
         async def _mock_submit(_fn, _tile_path, _lut_path, tile_params):
             matrix_path = tile_params["material_matrix_path"]
@@ -2874,13 +3583,13 @@ class TestLargeFormatDimensionsAndRouting:
                     _tile_path,
                     heightmap_path,
                     matrix_path,
-                    masks_path,
                 ]
             )
             captured_shapes["matrix"] = tuple(np.load(matrix_path).shape)
-            with open(masks_path, "rb") as mask_file:
-                sliced_masks = pickle.load(mask_file)
-            captured_shapes["mask"] = tuple(sliced_masks["region-1"].shape)
+            captured_recipe_mask_paths.append(masks_path)
+            captured_reuse_flags.append(bool(tile_params["reuse_preview_analysis"]))
+            assert tile_params["matched_rgb_path"] is None
+            assert tile_params["mask_solid_path"] is None
             with Image.open(heightmap_path) as hm_img:
                 captured_shapes["heightmap"] = hm_img.size
             with Image.open(_tile_path) as tile_img:
@@ -2933,9 +3642,10 @@ class TestLargeFormatDimensionsAndRouting:
             zip_path, _filename = registry.resolve(download_id)
             assert os.path.exists(zip_path)
             assert captured_shapes["matrix"] == (4, 4, 5)
-            assert captured_shapes["mask"] == (4, 4)
             assert captured_shapes["tile"] == (10, 20)
             assert captured_shapes["heightmap"] == (10, 20)
+            assert captured_recipe_mask_paths == [None, None]
+            assert captured_reuse_flags == [False, False]
             assert captured_paths
             assert all(not os.path.exists(path) for path in captured_paths)
             entry = registry.get_entry(download_id)
