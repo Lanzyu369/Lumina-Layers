@@ -269,12 +269,12 @@ class TestS02ImageProcessing:
         assert after_s03["material_matrix"].shape[:2] == (3, 4)
         assert after_s03["_material_params"] is materials
 
-    def test_recipe_only_final_matrix_survives_global_replacement_pipeline(
+    def test_recipe_only_final_matrix_aligns_to_fresh_non_divisible_lut_grid(
         self,
         tmp_path,
         monkeypatch,
     ) -> None:
-        """Real prepare + S02→S03 keeps recipes and physical global color."""
+        """Real LUT S02→S03 aligns recipe authority to a fresh tile grid."""
 
         from api.routers.converter.generate import (
             _prepare_recipe_override_worker_inputs,
@@ -292,9 +292,14 @@ class TestS02ImageProcessing:
         )
         lut_path.write_bytes(b"lut")
 
-        processed_rgb = np.full((1, 4, 3), [255, 0, 0], dtype=np.uint8)
-        processed_matrix = np.ones((1, 4, 5), dtype=np.int16)
-        mask_solid = np.ones((1, 4), dtype=bool)
+        # The whole-image preview artifact has four columns, while fresh S02
+        # resolves this non-divisible tile to five. This is the production
+        # mismatch that previously made S03 silently discard every recipe.
+        processed_rgb = np.full((1, 5, 3), [255, 0, 0], dtype=np.uint8)
+        processed_matrix = np.ones((1, 5, 5), dtype=np.int16)
+        mask_solid = np.ones((1, 5), dtype=bool)
+        preview_matrix = np.ones((1, 4, 5), dtype=np.int16)
+        preview_mask_solid = np.ones((1, 4), dtype=bool)
         region_1_mask = np.array([[True, True, False, False]], dtype=bool)
         region_2_mask = np.array([[False, True, True, False]], dtype=bool)
         authority_mask = region_1_mask | region_2_mask
@@ -317,8 +322,8 @@ class TestS02ImageProcessing:
         store = SessionStore(ttl=1800)
         sid = store.create()
         cache = {
-            "material_matrix": processed_matrix.copy(),
-            "mask_solid": mask_solid.copy(),
+            "material_matrix": preview_matrix.copy(),
+            "mask_solid": preview_mask_solid.copy(),
             "lut_metadata": LUTMetadata(
                 max_color_layers=5,
                 layer_height_mm=0.08,
@@ -366,8 +371,18 @@ class TestS02ImageProcessing:
         # Global recoloring must update the physical stack outside recipe
         # coverage while the recipe union remains authoritative. Later recipe
         # wins at the overlap (column 1).
-        expected_final_matrix = prepared_before_global.copy()
-        expected_final_matrix[0, 3] = 2
+        expected_final_matrix = np.array(
+            [
+                [
+                    [5, 5, 5, 5, 5],
+                    [7, 7, 7, 7, 7],
+                    [7, 7, 7, 7, 7],
+                    [7, 7, 7, 7, 7],
+                    [2, 2, 2, 2, 2],
+                ]
+            ],
+            dtype=np.int16,
+        )
 
         class _FakeTree:
             @staticmethod
@@ -399,8 +414,8 @@ class TestS02ImageProcessing:
                     "matched_rgb": processed_rgb.copy(),
                     "material_matrix": processed_matrix.copy(),
                     "mask_solid": mask_solid.copy(),
-                    "dimensions": (4, 1),
-                    "pixel_scale": 10.0,
+                    "dimensions": (5, 1),
+                    "pixel_scale": 8.0,
                     "mode_info": {"mode": ModelingMode.HIGH_FIDELITY},
                 }
 
@@ -447,7 +462,7 @@ class TestS02ImageProcessing:
             assert processor.process_calls == 1
             np.testing.assert_array_equal(
                 after_s03["matched_rgb"],
-                np.full((1, 4, 3), [0, 255, 0], dtype=np.uint8),
+                np.full((1, 5, 3), [0, 255, 0], dtype=np.uint8),
             )
             np.testing.assert_array_equal(
                 after_s03["material_matrix"],
@@ -455,6 +470,133 @@ class TestS02ImageProcessing:
             )
         finally:
             store.clear_all()
+
+    def test_recipe_only_final_matrix_aligns_to_fresh_material_archive_grid(
+        self,
+        tmp_path,
+        monkeypatch,
+    ) -> None:
+        """Real material-archive S02→S03 uses the same safe grid alignment."""
+
+        from core.pipeline import p03_core_processing
+        from core.pipeline import s02_image_processing
+        from core.pipeline import s03_color_replacement
+
+        source_path = tmp_path / "source-tile.png"
+        Image.fromarray(np.zeros((3, 7, 3), dtype=np.uint8)).save(source_path)
+
+        final_matrix = np.array(
+            [
+                [
+                    [6, 6, 6, 6, 6],
+                    [6, 6, 6, 6, 6],
+                    [1, 1, 1, 1, 1],
+                    [1, 1, 1, 1, 1],
+                ]
+            ],
+            dtype=np.int16,
+        )
+        authority_mask = np.array([[True, True, False, False]], dtype=bool)
+        final_matrix_path = tmp_path / "final-material.npy"
+        authority_mask_path = tmp_path / "final-material-authority.npy"
+        np.save(final_matrix_path, final_matrix)
+        np.save(authority_mask_path, authority_mask)
+
+        fresh_rgb = np.full((1, 5, 3), [180, 120, 80], dtype=np.uint8)
+        fresh_matrix = np.full((1, 5, 5), 3, dtype=np.int16)
+        fresh_mask = np.ones((1, 5), dtype=bool)
+
+        def _run_fresh_material_archive(ctx: dict) -> dict:
+            ctx.update(
+                {
+                    "matched_rgb": fresh_rgb.copy(),
+                    "material_matrix": fresh_matrix.copy(),
+                    "mask_solid": fresh_mask.copy(),
+                    "target_w": 5,
+                    "target_h": 1,
+                    "pixel_scale": 8.0,
+                    "mode_info": {
+                        "mode": ModelingMode.HIGH_FIDELITY,
+                        "lut_match_mode": "material_archive",
+                    },
+                    "debug_data": None,
+                }
+            )
+            return ctx
+
+        monkeypatch.setattr(
+            p03_core_processing,
+            "_run_material_archive_branch",
+            _run_fresh_material_archive,
+        )
+        ctx = {
+            "image_path": str(source_path),
+            "target_width_mm": 40.0,
+            "modeling_mode": ModelingMode.HIGH_FIDELITY,
+            "quantize_colors": 8,
+            "material_source": "material_archive",
+            "reuse_preview_analysis": False,
+            "material_matrix_path": str(final_matrix_path),
+            "final_material_matrix_is_authoritative": True,
+            "final_material_matrix_authority_mask_path": str(
+                authority_mask_path
+            ),
+            "recipe_overrides": [
+                {
+                    "region_id": "region-1",
+                    "recipe": [6, 6, 6, 6, 6],
+                    "layer_order": "Top2Bottom",
+                }
+            ],
+            "recipe_override_masks_path": None,
+        }
+
+        after_s02 = s02_image_processing.run(ctx)
+        after_s03 = s03_color_replacement.run(after_s02)
+
+        expected = np.array(
+            [
+                [
+                    [6, 6, 6, 6, 6],
+                    [6, 6, 6, 6, 6],
+                    [1, 1, 1, 1, 1],
+                    [1, 1, 1, 1, 1],
+                    [1, 1, 1, 1, 1],
+                ]
+            ],
+            dtype=np.int16,
+        )
+        np.testing.assert_array_equal(after_s03["material_matrix"], expected)
+        np.testing.assert_array_equal(after_s03["matched_rgb"], fresh_rgb)
+
+    def test_recipe_only_final_matrix_rejects_unsafe_channel_alignment(
+        self,
+        tmp_path,
+    ) -> None:
+        """Spatial alignment must not hide incompatible recipe layer counts."""
+
+        from core.pipeline import s03_color_replacement
+
+        final_matrix_path = tmp_path / "final-material.npy"
+        authority_mask_path = tmp_path / "final-material-authority.npy"
+        np.save(final_matrix_path, np.zeros((1, 4, 6), dtype=np.int16))
+        np.save(authority_mask_path, np.ones((1, 4), dtype=bool))
+        ctx = {
+            "matched_rgb": np.zeros((1, 5, 3), dtype=np.uint8),
+            "material_matrix": np.zeros((1, 5, 5), dtype=np.int16),
+            "mask_solid": np.ones((1, 5), dtype=bool),
+            "material_matrix_path": str(final_matrix_path),
+            "final_material_matrix_is_authoritative": True,
+            "final_material_matrix_authority_mask_path": str(
+                authority_mask_path
+            ),
+        }
+
+        with pytest.raises(
+            ValueError,
+            match="layer count does not match processed material matrix",
+        ):
+            s03_color_replacement.run(ctx)
 
     @pytest.mark.parametrize(
         ("cached_analysis_is_final", "expect_preserved"),
