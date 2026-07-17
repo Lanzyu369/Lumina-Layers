@@ -16,6 +16,24 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-07-18",
+    title: {
+      zh: "Lumina Layers — 6 月下旬至 7 月更新速览",
+      en: "Lumina Layers — Late June to July updates",
+    },
+    sections: [
+      {
+        category: { zh: "稳定性", en: "Stability" },
+        items: [
+          {
+            zh: "7 月 18 日：大画幅作品只调整选中区域的颜色时，下载文件现在会和分层预览保持一致；画面中其他相同颜色的区域不会再一起变色。",
+            en: "July 18: Large-format downloads now match the layer preview after recolouring a selected area, without changing other areas that happen to use the same colour.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-07-15",
     title: {
       zh: "Lumina Layers — 6 月下旬至 7 月更新速览",
