@@ -12,7 +12,7 @@ import cv2
 import numpy as np
 import pytest
 from scipy.spatial import cKDTree
-from shapely.geometry import box
+from shapely.geometry import MultiPolygon, box
 
 from api.workers.converter_workers import (
     LargeFormatCachedAnalysisError,
@@ -545,6 +545,101 @@ def test_native_worker_projects_three_disconnected_local_edits_into_tiles(
             [((0, 0, 255), (3, 3, 1, 3, 3))],
         ]
         assert exported_slots == [{"Red", "Green"}, {"Blue"}]
+    finally:
+        if result is not None and os.path.exists(result["zip_path"]):
+            os.unlink(result["zip_path"])
+
+
+def test_native_worker_splits_compound_recipe_before_tile_boundary(tmp_path) -> None:
+    """One compound path keeps component recipes when a component crosses tiles."""
+
+    crossing = box(5.5, 0.5, 6.5, 3.5)
+    unselected = box(7.0, 0.5, 11.5, 3.5)
+    compound = _red_shape(0.0, 0.0, 1.0, 1.0)
+    compound["geometry"] = MultiPolygon([crossing, unselected])
+    compound["source_id"] = "one-svg-path"
+    analysis = _analysis([compound], width_mm=12.0, height_mm=4.0)
+
+    matched = np.full((40, 120, 3), [255, 0, 0], dtype=np.uint8)
+    mask = np.ones((40, 120), dtype=bool)
+    material = np.ones((40, 120, 5), dtype=np.int16)
+    matched[5:36, 55:66, :] = (0, 0, 255)
+    material[5:36, 55:66, :] = np.array([3, 1, 3, 1, 3])
+    matched_path, mask_path, material_path = _save_cache_paths(
+        tmp_path,
+        matched,
+        mask,
+        material,
+    )
+    tile_summaries: list[tuple[str, list[tuple]]] = []
+
+    class _FakeVectorProcessor(_SlicerCompatibleProcessor):
+        def __init__(self, _lut_path: str, _color_mode: str) -> None:
+            self.color_mode = "4-Color"
+            self.img_processor = _fake_img_processor()
+
+        def analyze_svg(self, **_kwargs: object) -> VectorAnalysis:
+            return analysis
+
+        def build_mesh(
+            self,
+            *,
+            analysis: VectorAnalysis,
+            **_kwargs: object,
+        ) -> SimpleNamespace:
+            summary = [
+                (
+                    tuple(round(value, 3) for value in shape["geometry"].bounds),
+                    tuple(shape["recipe"]),
+                    str(shape["source_id"]),
+                )
+                for shape in analysis.matched_shapes
+            ]
+            tile_summaries.append((str(analysis.bbox), summary))
+            used_slots = {
+                analysis.slot_names[int(shape["recipe"][0])]
+                for shape in analysis.matched_shapes
+            }
+            return _scene_for_slots(used_slots)
+
+    params = _params(
+        total_width_mm=12.0,
+        total_height_mm=4.0,
+        tile_width_mm=6.0,
+        tile_height_mm=4.0,
+    )
+    params.update(
+        matched_rgb_path=matched_path,
+        mask_solid_path=mask_path,
+        material_matrix_path=material_path,
+    )
+
+    result = None
+    with (
+        patch("core.vector_engine.VectorProcessor", _FakeVectorProcessor),
+        patch("api.workers.converter_workers._rasterize_tile_for_cover", return_value=None),
+        patch(
+            "utils.bambu_3mf_writer.export_scene_with_bambu_metadata",
+            side_effect=_write_export,
+        ),
+    ):
+        result = worker_generate_large_format_svg_native("image.svg", "lut.npy", params)
+
+    try:
+        assert result["tile_count"] == 2
+        assert tile_summaries == [
+            (
+                "(0.0, 0.0, 6.0, 4.0)",
+                [((5.5, 0.5, 6.0, 3.5), (3, 1, 3, 1, 3), "one-svg-path")],
+            ),
+            (
+                "(0.0, 0.0, 6.0, 4.0)",
+                [
+                    ((0.0, 0.5, 0.5, 3.5), (3, 1, 3, 1, 3), "one-svg-path"),
+                    ((1.0, 0.5, 5.5, 3.5), (1, 1, 1, 1, 1), "one-svg-path"),
+                ],
+            ),
+        ]
     finally:
         if result is not None and os.path.exists(result["zip_path"]):
             os.unlink(result["zip_path"])

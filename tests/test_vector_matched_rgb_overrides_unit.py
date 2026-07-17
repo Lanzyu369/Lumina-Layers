@@ -24,7 +24,7 @@ import types
 import numpy as np
 import pytest
 from scipy.spatial import cKDTree
-from shapely.geometry import box
+from shapely.geometry import GeometryCollection, MultiPolygon, box
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
@@ -197,6 +197,47 @@ def _build_grid_arrays(
     return matched_rgb, mask_solid, h_px, w_px
 
 
+def _make_compound_analysis(geometry) -> "VectorAnalysis":
+    """Build one red source record containing disconnected components."""
+
+    shape = {
+        "geometry": geometry,
+        "color": (255, 0, 0),
+        "matched_rgb": (255, 0, 0),
+        "lut_idx": 1,
+        "recipe": [1, 1, 1, 1, 1],
+        "source_id": "compound-source",
+        "draw_order": 7,
+    }
+    return VectorAnalysis(
+        shape_data=[],
+        clipped_shapes=[dict(shape)],
+        matched_shapes=[shape],
+        silhouette=geometry,
+        scale_factor=1.0,
+        bbox=(0.0, 0.0, 12.0, 4.0),
+        color_conf={"slots": ["W", "R", "G", "B"], "preview": {}},
+        slot_names=["W", "R", "G", "B"],
+        num_channels=4,
+        num_layers=5,
+        preview_colors={
+            0: [255, 255, 255, 255],
+            1: [255, 0, 0, 255],
+            2: [0, 255, 0, 255],
+            3: [0, 0, 255, 255],
+        },
+    )
+
+
+def _compound_cache_arrays() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return a red 12x4 mm cache on the helper's 10 px/mm grid."""
+
+    matched_rgb = np.full((40, 120, 3), [255, 0, 0], dtype=np.uint8)
+    mask_solid = np.ones((40, 120), dtype=bool)
+    material_matrix = np.ones((40, 120, 5), dtype=np.int16)
+    return matched_rgb, mask_solid, material_matrix
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -323,6 +364,114 @@ class TestApplyMatchedRgbOverrides:
         assert changed == 0
         assert analysis.matched_shapes[0]["recipe"] == [1, 1, 1, 1, 1]
         assert analysis.matched_shapes[1]["recipe"] == [2, 2, 2, 2, 2]
+
+    @pytest.mark.parametrize(
+        "compound_factory",
+        [
+            pytest.param(MultiPolygon, id="multipolygon"),
+            pytest.param(GeometryCollection, id="geometry-collection"),
+        ],
+    )
+    def test_small_disconnected_component_keeps_its_local_recipe(
+        self,
+        compound_factory,
+    ):
+        """A small edited island must not lose the vote to a larger sibling."""
+
+        small = box(0.5, 0.5, 1.5, 1.5)
+        large = box(4.0, 0.5, 11.5, 3.5)
+        analysis = _make_compound_analysis(compound_factory([small, large]))
+        matched_rgb, mask_solid, material_matrix = _compound_cache_arrays()
+        matched_rgb[5:16, 5:16, :] = (0, 0, 255)
+        material_matrix[5:16, 5:16, :] = np.array([3, 1, 3, 1, 3])
+
+        changed = apply_matched_rgb_overrides_to_analysis(
+            analysis,
+            matched_rgb=matched_rgb,
+            material_matrix=material_matrix,
+            mask_solid=mask_solid,
+            img_processor=_build_fake_img_processor(),
+        )
+
+        assert changed == 1
+        assert len(analysis.matched_shapes) == 2
+        small_record, large_record = analysis.matched_shapes
+        assert small_record["geometry"].equals(small)
+        assert small_record["matched_rgb"] == (0, 0, 255)
+        assert small_record["recipe"] == [3, 1, 3, 1, 3]
+        assert large_record["geometry"].equals(large)
+        assert large_record["matched_rgb"] == (255, 0, 0)
+        assert large_record["recipe"] == [1, 1, 1, 1, 1]
+        assert [record["source_id"] for record in analysis.matched_shapes] == [
+            "compound-source",
+            "compound-source",
+        ]
+        assert [record["draw_order"] for record in analysis.matched_shapes] == [7, 7]
+
+    def test_large_disconnected_component_does_not_recolor_small_sibling(self):
+        """A dominant edited island must not recolor an unselected sibling."""
+
+        small = box(0.5, 0.5, 1.5, 1.5)
+        large = box(4.0, 0.5, 11.5, 3.5)
+        analysis = _make_compound_analysis(MultiPolygon([small, large]))
+        matched_rgb, mask_solid, material_matrix = _compound_cache_arrays()
+        matched_rgb[5:36, 40:116, :] = (0, 255, 0)
+        material_matrix[5:36, 40:116, :] = np.array([2, 1, 2, 1, 2])
+
+        changed = apply_matched_rgb_overrides_to_analysis(
+            analysis,
+            matched_rgb=matched_rgb,
+            material_matrix=material_matrix,
+            mask_solid=mask_solid,
+            img_processor=_build_fake_img_processor(),
+        )
+
+        assert changed == 1
+        assert len(analysis.matched_shapes) == 2
+        small_record, large_record = analysis.matched_shapes
+        assert small_record["geometry"].equals(small)
+        assert small_record["matched_rgb"] == (255, 0, 0)
+        assert small_record["recipe"] == [1, 1, 1, 1, 1]
+        assert large_record["geometry"].equals(large)
+        assert large_record["matched_rgb"] == (0, 255, 0)
+        assert large_record["recipe"] == [2, 1, 2, 1, 2]
+
+    def test_compound_zero_change_and_uniform_global_change_keep_one_record(self):
+        """Only divergent component assignments require structural splitting."""
+
+        small = box(0.5, 0.5, 1.5, 1.5)
+        large = box(4.0, 0.5, 11.5, 3.5)
+        geometry = MultiPolygon([small, large])
+        matched_rgb, mask_solid, material_matrix = _compound_cache_arrays()
+        analysis = _make_compound_analysis(geometry)
+
+        unchanged = apply_matched_rgb_overrides_to_analysis(
+            analysis,
+            matched_rgb=matched_rgb,
+            material_matrix=material_matrix,
+            mask_solid=mask_solid,
+            img_processor=_build_fake_img_processor(),
+        )
+
+        assert unchanged == 0
+        assert len(analysis.matched_shapes) == 1
+        assert analysis.matched_shapes[0]["geometry"].equals(geometry)
+
+        matched_rgb[:, :, :] = (0, 0, 255)
+        material_matrix[:, :, :] = np.array([3, 3, 1, 3, 3])
+        changed = apply_matched_rgb_overrides_to_analysis(
+            analysis,
+            matched_rgb=matched_rgb,
+            material_matrix=material_matrix,
+            mask_solid=mask_solid,
+            img_processor=_build_fake_img_processor(),
+        )
+
+        assert changed == 2
+        assert len(analysis.matched_shapes) == 1
+        assert analysis.matched_shapes[0]["geometry"].equals(geometry)
+        assert analysis.matched_shapes[0]["matched_rgb"] == (0, 0, 255)
+        assert analysis.matched_shapes[0]["recipe"] == [3, 3, 1, 3, 3]
 
     def test_material_matrix_recipe_is_used_when_rgb_is_unchanged(self):
         analysis = _make_two_shape_analysis()
