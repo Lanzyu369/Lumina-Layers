@@ -141,13 +141,59 @@ def test_face_up_z_range() -> None:
         color_height_mm=1.6,
         nozzle_mm=0.4,
         face="up",
+        initial_layer_height_mm=0.08,
     )
 
     assert xml_bytes is not None
     min_z, max_z, layer_height = _parse_range(xml_bytes)
     assert min_z == 0.0
     assert max_z == 2.0
-    assert layer_height == 0.2
+    assert layer_height == 0.16
+
+
+def test_face_up_accounts_for_fixed_initial_layer_height() -> None:
+    xml_bytes = _call_build_layer_config_ranges_xml(
+        base_height_mm=0.24,
+        color_height_mm=0.4,
+        nozzle_mm=0.4,
+        face="up",
+        fine_layer_height_mm=0.08,
+        initial_layer_height_mm=0.08,
+    )
+
+    assert xml_bytes is not None
+    assert _parse_range(xml_bytes)[2] == pytest.approx(0.16)
+
+
+@pytest.mark.parametrize("initial_layer_height", [None, 0.0, float("nan")])
+def test_face_up_skips_when_initial_layer_height_is_unknown_or_invalid(
+    initial_layer_height: float | None,
+) -> None:
+    assert (
+        _call_build_layer_config_ranges_xml(
+            base_height_mm=0.24,
+            color_height_mm=0.4,
+            nozzle_mm=0.4,
+            face="up",
+            fine_layer_height_mm=0.08,
+            initial_layer_height_mm=initial_layer_height,
+        )
+        is None
+    )
+
+
+def test_face_up_skips_when_remaining_backing_has_no_safe_coarse_height() -> None:
+    assert (
+        _call_build_layer_config_ranges_xml(
+            base_height_mm=0.24,
+            color_height_mm=0.4,
+            nozzle_mm=0.2,
+            face="up",
+            fine_layer_height_mm=0.08,
+            initial_layer_height_mm=0.08,
+        )
+        is None
+    )
 
 
 def test_face_down_z_range() -> None:
@@ -292,17 +338,18 @@ def test_e2e_writer_produces_valid_xml(tmp_path) -> None:
     assert "/Metadata/layer_config_ranges.xml" in rel_targets
 
 
-def test_writer_forwards_fine_height_and_strict_printer_limits(tmp_path, monkeypatch) -> None:
+def test_writer_forwards_layer_heights_and_strict_printer_limits(tmp_path, monkeypatch) -> None:
     output_path = tmp_path / "writer-layer-height-limits.3mf"
     writer = _make_writer(
         str(output_path),
-        settings={"layer_height": "0.06"},
+        settings={"layer_height": "0.06", "initial_layer_height": "0.20"},
         base_height_mm=0.24,
         color_height_mm=0.4,
         face_orientation="down",
         nozzle_size="0.2",
     )
     template = writer._get_base_config_template()
+    template["initial_layer_print_height"] = "0.10"
     template["min_layer_height"] = ["0.04", "0.06", "invalid"]
     template["max_layer_height"] = ["0.14", "0.12", None]
     monkeypatch.setattr(writer, "_get_base_config_template", lambda: template)
@@ -319,8 +366,33 @@ def test_writer_forwards_fine_height_and_strict_printer_limits(tmp_path, monkeyp
     writer.export()
 
     assert captured["fine_layer_height_mm"] == pytest.approx(0.06)
+    assert captured["initial_layer_height_mm"] == pytest.approx(0.10)
     assert captured["min_layer_height_mm"] == pytest.approx(0.06)
     assert captured["max_layer_height_mm"] == pytest.approx(0.12)
+
+
+def test_writer_skips_face_up_modifier_when_canonical_initial_height_is_missing(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    output_path = tmp_path / "missing-initial-layer-height.3mf"
+    writer = _make_writer(
+        str(output_path),
+        base_height_mm=0.24,
+        color_height_mm=0.4,
+        face_orientation="up",
+        nozzle_size="0.4",
+    )
+    template = writer._get_base_config_template()
+    template.pop("initial_layer_print_height", None)
+    template["initial_layer_height"] = "0.08"
+    monkeypatch.setattr(writer, "_get_base_config_template", lambda: template)
+    writer.add_mesh(_make_box_mesh(), "Slot 1", (255, 0, 0))
+
+    writer.export()
+
+    with zipfile.ZipFile(output_path) as package:
+        assert "Metadata/layer_config_ranges.xml" not in package.namelist()
 
 
 @pytest.mark.parametrize(
@@ -382,6 +454,7 @@ def test_layer_config_property_divisibility_bounds_and_z_order(
         nozzle_mm=nozzle,
         face=face,
         fine_layer_height_mm=0.04,
+        initial_layer_height_mm=0.04,
         min_layer_height_mm=0.04,
         max_layer_height_mm=max_layer_height,
     )
@@ -392,8 +465,12 @@ def test_layer_config_property_divisibility_bounds_and_z_order(
     min_z, max_z, layer_height = _parse_range(xml_bytes)
     layer_ticks = round(layer_height / 0.02)
     assert layer_height == pytest.approx(layer_ticks * 0.02)
-    assert base_ticks % layer_ticks == 0
-    assert base_ticks // layer_ticks >= 2
+    if face == "up":
+        assert (base_ticks - 2) % layer_ticks == 0
+        assert (base_ticks - 2) // layer_ticks >= 1
+    else:
+        assert base_ticks % layer_ticks == 0
+        assert base_ticks // layer_ticks >= 2
     assert layer_height > 0.04
     assert layer_height <= max_layer_height + 1e-9
     assert layer_height <= nozzle * 0.7 + 1e-9

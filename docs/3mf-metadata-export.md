@@ -310,15 +310,18 @@ For multi-color FDM prints, the solid-color base plate often dominates print
 time while contributing nothing to color fidelity. Bambu-family slicers accept
 a per-Z-range `layer_height` override via `Metadata/layer_config_ranges.xml`.
 Lumina Studio targets half the nozzle diameter, then selects the nearest safe
-height that divides the backing exactly and stays inside the selected printer's
-limits. Colored layers keep the configured fine height; measured base-plate
-time savings are 40–60% depending on geometry.
+height that lands exactly on the backing boundary and stays inside the selected
+printer's limits. For a backing that starts on the build plate, the slicer's
+fixed first-layer height is accounted for separately. Colored layers keep the
+configured fine height; measured base-plate time savings are 40–60% depending
+on geometry.
 
 对于多色 FDM 打印，纯色底板往往占据最大打印耗时，却对最终色彩效果
 没有贡献。Bambu 系切片器支持通过 `Metadata/layer_config_ranges.xml`
 按 Z 区间覆盖 `layer_height`。Lumina Studio 以喷嘴直径的一半为目标，随后
-选择既能整除底板厚度、又符合当前机型限制的最接近层高。彩色层仍保持原
-层高，底板耗时通常可节省 40–60%。
+选择既能准确落在底板边界、又符合当前机型限制的最接近层高。底板贴着热床
+时，切片器固定的首层层高会单独计入。彩色层仍保持原层高，底板耗时通常可
+节省 40–60%。
 
 ### Formula / 计算规则
 
@@ -326,13 +329,16 @@ time savings are 40–60% depending on geometry.
 |---|---|
 | `target_layer_height` | `nozzle_diameter × 0.5` |
 | Candidate grid / 候选网格 | `0.02 mm` increments / 以 `0.02 mm` 递增 |
-| Required divisibility / 必须整除 | `base_height_mm % candidate == 0` |
+| Backing above colours (`face=down`) / 底板在彩色层上方 | `base_height_mm % candidate == 0` |
+| Backing on build plate (`face=up`) / 底板贴热床 | `(base_height_mm - initial_layer_print_height) % candidate == 0` |
 | Printer bounds / 机型限制 | shared `min_layer_height` / `max_layer_height`, plus `candidate ≤ nozzle_diameter × 0.7` |
-| Minimum backing layers / 最少底板层数 | `base_height_mm / candidate ≥ 2` |
+| Minimum backing layers / 最少底板层数 | two coarse layers for `face=down`; one fixed first layer + one coarse layer for `face=up` / `face=down` 至少两层粗层，`face=up` 至少一层固定首层加一层粗层 |
 | Selection / 选择方式 | nearest to target; lower value wins a tie / 最接近目标，等距时取较小值 |
-| `0.4` nozzle + `0.40` base | `0.20 mm` |
-| `0.2` nozzle + `0.40` base | `0.10 mm` |
-| `0.2` or `0.4` nozzle + `0.24` base | `0.12 mm` |
+| `face=down`, `0.4` nozzle + `0.40` base | `0.20 mm` |
+| `face=down`, `0.2` nozzle + `0.40` base | `0.10 mm` |
+| `face=down`, `0.2` or `0.4` nozzle + `0.24` base | `0.12 mm` |
+| `face=up`, `0.4` nozzle + `0.24` base + `0.08` first layer | `0.16 mm` after the `0.08 mm` first layer / `0.08 mm` 首层后使用 `0.16 mm` |
+| `face=up`, `0.2` nozzle + `0.24` base + `0.08` first layer | skip (the required `0.16 mm` exceeds the printer limit) / 跳过（所需 `0.16 mm` 超出机型限制） |
 | `base_height_mm` | `backing_layer_count × PrinterConfig.LAYER_HEIGHT` |
 | `color_height_mm` | `num_color_layers × PrinterConfig.LAYER_HEIGHT` |
 
@@ -350,7 +356,8 @@ The writer skips emitting `layer_config_ranges.xml` when any of:
 
 - toggle is off (`enable_base_layer_height_modifier=False`)
 - `base_height_mm ≤ 0` (no backing)
-- no `0.02 mm` candidate divides the backing exactly
+- no `0.02 mm` candidate lands exactly on the backing boundary after accounting
+  for the fixed first layer when applicable
 - every divisible candidate is outside the selected printer's layer-height
   limits, is not coarser than the configured fine height, or would leave fewer
   than two backing layers

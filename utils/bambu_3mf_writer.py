@@ -1069,21 +1069,43 @@ def _resolve_compatible_base_layer_height_mm(
     base_height_mm: float,
     nozzle_mm: float,
     fine_layer_height_mm: float,
+    fixed_first_layer_height_mm: float = 0.0,
     min_layer_height_mm: float | None = None,
     max_layer_height_mm: float | None = None,
 ) -> float | None:
-    """Return a safe coarse height that divides the backing exactly."""
+    """Return a safe coarse height that ends exactly at the backing boundary."""
     base_height = float(base_height_mm)
     nozzle = float(nozzle_mm)
     fine_layer_height = float(fine_layer_height_mm)
-    if base_height <= 0 or nozzle <= 0 or fine_layer_height < 0:
+    fixed_first_layer_height = float(fixed_first_layer_height_mm)
+    if not all(
+        math.isfinite(value)
+        for value in (base_height, nozzle, fine_layer_height, fixed_first_layer_height)
+    ):
+        return None
+    if (
+        base_height <= 0
+        or nozzle <= 0
+        or fine_layer_height < 0
+        or fixed_first_layer_height < 0
+        or fixed_first_layer_height >= base_height
+    ):
         return None
 
     base_ticks = round(base_height / _LAYER_HEIGHT_GRID_MM)
+    fixed_first_layer_ticks = round(fixed_first_layer_height / _LAYER_HEIGHT_GRID_MM)
     if base_ticks <= 0:
         return None
     if abs(base_height - base_ticks * _LAYER_HEIGHT_GRID_MM) > 1e-9:
         return None
+    if abs(
+        fixed_first_layer_height
+        - fixed_first_layer_ticks * _LAYER_HEIGHT_GRID_MM
+    ) > 1e-9:
+        return None
+
+    adjustable_ticks = base_ticks - fixed_first_layer_ticks
+    minimum_adjustable_layers = 1 if fixed_first_layer_ticks else 2
 
     lower_bound = fine_layer_height
     if min_layer_height_mm is not None:
@@ -1102,8 +1124,11 @@ def _resolve_compatible_base_layer_height_mm(
         return None
 
     candidate_tick_values: list[int] = []
-    for candidate_ticks in range(1, base_ticks // 2 + 1):
-        if base_ticks % candidate_ticks:
+    for candidate_ticks in range(
+        1,
+        adjustable_ticks // minimum_adjustable_layers + 1,
+    ):
+        if adjustable_ticks % candidate_ticks:
             continue
         candidate = candidate_ticks * _LAYER_HEIGHT_GRID_MM
         if candidate <= fine_layer_height + 1e-9:
@@ -1149,6 +1174,7 @@ def build_layer_config_ranges_xml(
     nozzle_mm: float,
     face: str,
     fine_layer_height_mm: float = 0.08,
+    initial_layer_height_mm: float | None = None,
     min_layer_height_mm: float | None = None,
     max_layer_height_mm: float | None = None,
     object_id: int = 1,
@@ -1167,6 +1193,10 @@ def build_layer_config_ranges_xml(
             （朝向选择器："up"、"down" 或 "double"）
         fine_layer_height_mm (float): Fine printing layer height in millimetres.
             （细层高打印层高，单位为毫米）
+        initial_layer_height_mm (float | None): Actual slicer first-layer height.
+            Required for ``face="up"``; an unknown value safely skips the
+            modifier.（切片器实际首层层高；``face="up"`` 时必须提供，
+            未知时安全跳过修改器）
         min_layer_height_mm (float | None): Optional printer minimum layer height.
             （打印机允许的可选最小层高）
         max_layer_height_mm (float | None): Optional printer maximum layer height.
@@ -1186,6 +1216,11 @@ def build_layer_config_ranges_xml(
     color_height = float(color_height_mm)
     nozzle = float(nozzle_mm)
     fine_layer_height = float(fine_layer_height_mm)
+    initial_layer_height = (
+        None
+        if initial_layer_height_mm is None
+        else float(initial_layer_height_mm)
+    )
     normalized_face = str(face).strip().lower()
 
     if base_height <= 0:
@@ -1196,11 +1231,21 @@ def build_layer_config_ranges_xml(
         return None
     if normalized_face == "double":
         return None
+    if normalized_face == "up":
+        if (
+            initial_layer_height is None
+            or not math.isfinite(initial_layer_height)
+            or initial_layer_height <= 0
+        ):
+            return None
 
     coarse_lh = _resolve_compatible_base_layer_height_mm(
         base_height_mm=base_height,
         nozzle_mm=nozzle,
         fine_layer_height_mm=fine_layer_height,
+        fixed_first_layer_height_mm=(
+            float(initial_layer_height) if normalized_face == "up" else 0.0
+        ),
         min_layer_height_mm=min_layer_height_mm,
         max_layer_height_mm=max_layer_height_mm,
     )
@@ -1968,12 +2013,17 @@ class BambuStudio3MFWriter:
                 fine_layer_height = float(self.settings["layer_height"])
             except (KeyError, TypeError, ValueError):
                 fine_layer_height = float(self.DEFAULT_SETTINGS["layer_height"])
+            try:
+                initial_layer_height = float(template["initial_layer_print_height"])
+            except (KeyError, TypeError, ValueError):
+                initial_layer_height = None
             lcr_bytes = build_layer_config_ranges_xml(
                 base_height_mm=self.base_height_mm,
                 color_height_mm=self.color_height_mm,
                 nozzle_mm=float(self.nozzle_size),
                 face=self.face_orientation,
                 fine_layer_height_mm=fine_layer_height,
+                initial_layer_height_mm=initial_layer_height,
                 min_layer_height_mm=min_layer_height,
                 max_layer_height_mm=max_layer_height,
                 object_id=1,

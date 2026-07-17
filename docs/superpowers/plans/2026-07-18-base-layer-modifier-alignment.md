@@ -62,17 +62,22 @@ def _resolve_compatible_base_layer_height_mm(
     base_height_mm: float,
     nozzle_mm: float,
     fine_layer_height_mm: float,
+    fixed_first_layer_height_mm: float = 0.0,
     min_layer_height_mm: float | None = None,
     max_layer_height_mm: float | None = None,
 ) -> float | None:
     # Convert to 0.02 mm ticks, filter exact divisors and select the candidate
-    # nearest nozzle_mm * 0.5. Require at least two backing layers.
+    # nearest nozzle_mm * 0.5. For face=up, subtract the slicer's fixed
+    # initial_layer_print_height before testing exact boundary alignment.
+    # Require at least two backing layers in total.
 ```
 
 - [ ] **Step 2: Make `build_layer_config_ranges_xml` skip double-sided faces and call the resolver**
 
 The builder must return `None` when the resolver returns no candidate. Add
-optional keyword-only `min_layer_height_mm` and `max_layer_height_mm` inputs.
+optional keyword-only `initial_layer_height_mm`, `min_layer_height_mm`, and
+`max_layer_height_mm` inputs. An unknown initial height must skip `face=up`
+metadata instead of guessing a slicer fallback.
 
 - [ ] **Step 3: Run the regression tests and verify GREEN**
 
@@ -85,9 +90,14 @@ Expected: all selected tests pass.
 For every emitted XML payload assert:
 
 ```python
-layer_count = base_height_mm / layer_height_mm
+adjustable_height = (
+    base_height_mm - initial_layer_height_mm
+    if face == "up"
+    else base_height_mm
+)
+layer_count = adjustable_height / layer_height_mm
 assert layer_count == pytest.approx(round(layer_count))
-assert layer_count >= 2
+assert layer_count >= (1 if face == "up" else 2)
 assert layer_height_mm > fine_layer_height_mm
 assert layer_height_mm <= max_layer_height_mm
 ```
@@ -108,7 +118,8 @@ Expected: PASS with no failures.
 
 Patch `_get_base_config_template` to return `min_layer_height=["0.04"]` and
 `max_layer_height=["0.14"]`; patch `build_layer_config_ranges_xml`; assert the
-writer forwards `0.04`, `0.14`, and its configured fine layer height.
+writer forwards `0.04`, `0.14`, its configured fine layer height, and the
+template's effective `initial_layer_print_height`.
 
 - [ ] **Step 2: Verify RED**
 
@@ -119,7 +130,7 @@ builder call.
 
 Use the largest valid minimum and smallest valid maximum from scalar or list
 template settings. Pass them together with the actual `self.settings` layer
-height when building metadata.
+height and the template's `initial_layer_print_height` when building metadata.
 
 - [ ] **Step 4: Verify GREEN and run writer integrations**
 
@@ -176,6 +187,11 @@ python -m pytest tests/test_bambu_layer_config_ranges_unit.py tests/test_pipelin
 Slice a 1.04 mm box representing `0.4 + 0.24 + 0.4` mm. Verify the corrected
 double-sided export has no `Metadata/layer_config_ranges.xml`, 13 layers, and a
 final `Z_HEIGHT` of 1.04 mm.
+
+Also slice a `face=up` model with a 0.24 mm backing plus five 0.08 mm colour
+layers. Verify the 0.4 mm nozzle uses Z heights `0.08, 0.24, 0.32, 0.40, 0.48,
+0.56, 0.64`, the 0.2 mm nozzle safely skips the modifier, and both preserve all
+five colour layers through Z 0.64 mm.
 
 - [ ] **Step 3: Run hygiene checks**
 
