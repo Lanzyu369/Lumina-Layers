@@ -4402,6 +4402,217 @@ class TestLargeFormatDimensionsAndRouting:
                     os.unlink(path)
 
     @pytest.mark.asyncio
+    async def test_recipe_authority_survives_non_divisible_route_and_fresh_s02_grids(
+        self,
+        tmp_path,
+        monkeypatch,
+    ) -> None:
+        """Four physical tiles align recipe authority to each fresh S02 grid.
+
+        LUT and material-archive entry points have equivalent direct S02→S03
+        coverage in ``test_pipeline_step_modules_unit.py``. This route-level
+        test exercises their shared recipe-authority alignment after the real
+        19×13 source and 100×68 recipe cache are cropped into four tiles.
+        """
+
+        from core.image_processing import (
+            LuminaImageProcessor as RealLuminaImageProcessor,
+        )
+        from core.pipeline import s02_image_processing
+        from core.pipeline import s03_color_replacement
+
+        image_path = tmp_path / "source.png"
+        lut_path = tmp_path / "lut.npy"
+        material_matrix_path = tmp_path / "final-material.npy"
+        recipe_masks_path = tmp_path / "recipe-masks.pkl"
+        Image.fromarray(np.zeros((13, 19, 3), dtype=np.uint8)).save(image_path)
+        lut_path.write_bytes(b"lut")
+
+        final_material_matrix = np.ones((68, 100, 5), dtype=np.int16)
+        authority_mask = np.zeros((68, 100), dtype=bool)
+        authority_mask[5:35, 5:45] = True
+        authority_mask[5:35, 55:95] = True
+        authority_mask[43:65, 5:45] = True
+        authority_mask[43:65, 55:95] = True
+        final_material_matrix[authority_mask] = 7
+        np.save(material_matrix_path, final_material_matrix)
+        with open(recipe_masks_path, "wb") as handle:
+            pickle.dump({"region-1": authority_mask}, handle)
+
+        class _FakeTree:
+            @staticmethod
+            def query(_values):
+                return np.array([0.0]), np.array([1])
+
+        class _GridOnlyProcessor:
+            def __init__(self, *_args, **_kwargs) -> None:
+                self.enable_cleanup = True
+                self.last_match_info = None
+                self.kdtree = _FakeTree()
+                self.ref_stacks = np.array(
+                    [[1, 1, 1, 1, 1], [2, 2, 2, 2, 2]],
+                    dtype=np.int16,
+                )
+                self.lut_rgb = np.array(
+                    [[255, 0, 0], [0, 255, 0]],
+                    dtype=np.uint8,
+                )
+
+            @staticmethod
+            def _rgb_to_lab(values: np.ndarray) -> np.ndarray:
+                return np.asarray(values, dtype=np.float64)
+
+            def process_image(
+                self,
+                *,
+                image_path: str,
+                target_width_mm: float,
+                modeling_mode,
+                **_kwargs,
+            ) -> dict:
+                with Image.open(image_path) as tile_image:
+                    target_w, target_h, pixel_scale = (
+                        RealLuminaImageProcessor._calc_dimensions(
+                            self,
+                            tile_image,
+                            target_width_mm,
+                            modeling_mode,
+                        )
+                    )
+                return {
+                    "matched_rgb": np.full(
+                        (target_h, target_w, 3),
+                        [255, 0, 0],
+                        dtype=np.uint8,
+                    ),
+                    "material_matrix": np.ones(
+                        (target_h, target_w, 5),
+                        dtype=np.int16,
+                    ),
+                    "mask_solid": np.ones((target_h, target_w), dtype=bool),
+                    "dimensions": (target_w, target_h),
+                    "pixel_scale": pixel_scale,
+                    "mode_info": {"mode": modeling_mode},
+                }
+
+        monkeypatch.setattr(s02_image_processing, "LUTManager", None)
+        monkeypatch.setattr(
+            s02_image_processing,
+            "LuminaImageProcessor",
+            _GridOnlyProcessor,
+        )
+
+        observed: list[dict[str, tuple[int, int]]] = []
+        worker_outputs: list[str] = []
+
+        async def _submit(_fn, tile_path, worker_lut_path, tile_params):
+            with Image.open(tile_path) as tile_image:
+                source_shape = (tile_image.height, tile_image.width)
+            matrix_crop = np.load(
+                tile_params["material_matrix_path"],
+                allow_pickle=False,
+            )
+            authority_crop = np.load(
+                tile_params["final_material_matrix_authority_mask_path"],
+                allow_pickle=False,
+            )
+            ctx = dict(tile_params)
+            ctx.update(
+                {
+                    "actual_lut_path": worker_lut_path,
+                    "image_path": tile_path,
+                }
+            )
+            after_s02 = s02_image_processing.run(ctx)
+            after_s03 = s03_color_replacement.run(after_s02)
+
+            target_shape = after_s03["material_matrix"].shape[:2]
+            expected_authority = np.asarray(
+                Image.fromarray(authority_crop.astype(np.uint8)).resize(
+                    (target_shape[1], target_shape[0]),
+                    resample=Image.Resampling.NEAREST,
+                ),
+                dtype=bool,
+            )
+            assert np.any(expected_authority)
+            assert np.any(~expected_authority)
+            assert np.all(
+                after_s03["material_matrix"][expected_authority] == 7
+            )
+            assert np.all(
+                after_s03["material_matrix"][~expected_authority] == 2
+            )
+            observed.append(
+                {
+                    "source": source_shape,
+                    "cache": matrix_crop.shape[:2],
+                    "fresh": target_shape,
+                }
+            )
+            output_path = tmp_path / f"tile-{len(observed)}.3mf"
+            output_path.write_bytes(b"3mf")
+            worker_outputs.append(str(output_path))
+            return {"threemf_path": str(output_path), "status_msg": "ok"}
+
+        store = SessionStore(ttl=1800)
+        registry = FileRegistry()
+        sid = store.create()
+        request = LargeFormatConvertGenerateRequest(
+            lut_name="test_lut",
+            modeling_mode=ModelingMode.HIGH_FIDELITY,
+        )
+        download_id: str | None = None
+        try:
+            result = await _generate_large_format_raster(
+                image_path=str(image_path),
+                lut_path=str(lut_path),
+                source_basename="poster",
+                recipe_overrides=[
+                    {
+                        "region_id": "region-1",
+                        "recipe": [7, 7, 7, 7, 7],
+                        "layer_order": "Top2Bottom",
+                    }
+                ],
+                recipe_override_masks_path=str(recipe_masks_path),
+                material_matrix_path=str(material_matrix_path),
+                final_material_matrix_is_authoritative=True,
+                total_width_mm=10.0,
+                total_height_mm=6.8,
+                tile_width_mm=5.0,
+                tile_height_mm=4.0,
+                request=request,
+                session_data={
+                    "replacement_regions": [
+                        {
+                            "quantized_hex": "#ff0000",
+                            "matched_hex": "#ff0000",
+                            "replacement_hex": "#00ff00",
+                        }
+                    ]
+                },
+                sid=sid,
+                store=store,
+                registry=registry,
+                pool=SimpleNamespace(submit=AsyncMock(side_effect=_submit)),
+            )
+
+            download_id = result["download_url"].rsplit("/", 1)[-1]
+            assert observed == [
+                {"source": (8, 10), "cache": (40, 50), "fresh": (40, 50)},
+                {"source": (8, 9), "cache": (40, 50), "fresh": (44, 50)},
+                {"source": (5, 10), "cache": (28, 50), "fresh": (25, 50)},
+                {"source": (5, 9), "cache": (28, 50), "fresh": (27, 50)},
+            ]
+        finally:
+            if download_id is not None:
+                registry.cleanup_file(download_id)
+            store.clear_all()
+            for output_path in worker_outputs:
+                if os.path.exists(output_path):
+                    os.unlink(output_path)
+
+    @pytest.mark.asyncio
     async def test_large_format_recipe_authority_mask_tile_path_cleans_on_failure(
         self,
         tmp_path,
