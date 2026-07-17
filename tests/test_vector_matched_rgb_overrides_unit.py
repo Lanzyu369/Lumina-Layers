@@ -577,6 +577,7 @@ class TestRunVectorBranchWiring:
         helper_call_log: list[dict],
         *,
         helper_result: int = 0,
+        helper_error: Exception | None = None,
         recipe_call_log: list[dict] | None = None,
     ):
         """Build the patch context shared by both wiring tests.
@@ -627,6 +628,8 @@ class TestRunVectorBranchWiring:
 
         def _fake_helper(*args, **kwargs):
             helper_call_log.append({"args": args, "kwargs": kwargs})
+            if helper_error is not None:
+                raise helper_error
             return helper_result
 
         def _fake_recipe_helper(*args, **kwargs):
@@ -757,6 +760,63 @@ class TestRunVectorBranchWiring:
 
         assert "error" not in result
         assert helper_calls == []
+
+    def test_required_cache_projection_error_aborts_vector_generation(
+        self,
+        tmp_path,
+    ) -> None:
+        """A required spatial cache error must not continue to 3MF export."""
+
+        from unittest.mock import patch
+
+        from config import ModelingMode
+        from core.errors import CachedPreviewAnalysisError
+        from core.pipeline import coordinator
+        from core.preview_analysis_cache import REQUIRED_PREVIEW_ANALYSIS_REUSE
+
+        matched_rgb_path = tmp_path / "matched.npy"
+        mask_solid_path = tmp_path / "mask.npy"
+        material_matrix_path = tmp_path / "material.npy"
+        np.save(matched_rgb_path, np.zeros((4, 4, 3), dtype=np.uint8))
+        np.save(mask_solid_path, np.ones((4, 4), dtype=bool))
+        np.save(material_matrix_path, np.ones((4, 4, 5), dtype=np.int32))
+
+        captured: dict = {}
+        helper_calls: list[dict] = []
+        cms = self._patch_dependencies(
+            captured,
+            helper_calls,
+            helper_error=ValueError("cached grid is incompatible"),
+        )
+
+        with cms[0], cms[1], cms[2], cms[3], cms[4], cms[5], patch(
+            "config.MODELS_DIR", str(tmp_path)
+        ), patch("config.OUTPUT_DIR", str(tmp_path)), pytest.raises(
+            CachedPreviewAnalysisError
+        ):
+            coordinator._run_vector_branch(
+                {
+                    "image_path": str(tmp_path / "vector.svg"),
+                    "actual_lut_path": str(tmp_path / "fake.json"),
+                    "color_mode": "5-Color Extended",
+                    "modeling_mode": ModelingMode.VECTOR,
+                    "target_width_mm": 40.0,
+                    "spacer_thick": 1.6,
+                    "structure_mode": "单面",
+                    "need_2d_preview": False,
+                    "printer_id": "bambu-h2d",
+                    "slicer": "BambuStudio",
+                    "nozzle_size": "0.4",
+                    "matched_rgb_path": str(matched_rgb_path),
+                    "mask_solid_path": str(mask_solid_path),
+                    "material_matrix_path": str(material_matrix_path),
+                    "reuse_preview_analysis": REQUIRED_PREVIEW_ANALYSIS_REUSE,
+                }
+            )
+
+        assert len(helper_calls) == 1
+        assert helper_calls[0]["kwargs"]["strict"] is True
+        assert captured == {}
 
     def test_recipe_helper_uses_preview_cache_grid_when_svg_density_differs(self, tmp_path):
         """Recipe override masks are preview-cache artifacts, not generation rasters."""

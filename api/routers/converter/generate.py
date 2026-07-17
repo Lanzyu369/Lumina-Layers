@@ -56,6 +56,8 @@ from api.workers.converter_workers import (
     worker_generate_model,
 )
 from core.batch_layout import LayoutResult, XYBBox, layout_shelf_by_row
+from core.errors import CachedPreviewAnalysisError
+from core.preview_analysis_cache import REQUIRED_PREVIEW_ANALYSIS_REUSE
 from utils.merged_bambu_3mf_writer import (
     MergedBambu3MFWriter,
     MergedItem,
@@ -131,6 +133,10 @@ LARGE_FORMAT_RECIPE_OVERRIDE_LOAD_FAILED_DETAIL: str = (
 )
 LARGE_FORMAT_CACHED_ANALYSIS_INVALID_DETAIL: str = (
     "Large-format cached preview data is unavailable or invalid. "
+    "Re-run preview and try again."
+)
+STANDARD_CACHED_ANALYSIS_INVALID_DETAIL: str = (
+    "Cached preview data is unavailable or invalid. "
     "Re-run preview and try again."
 )
 BATCH_MERGE_FAILED_DETAIL: str = (
@@ -343,8 +349,12 @@ def _resolve_validated_large_format_cached_analysis_paths(
     cache_ref: dict | None,
     sid: str,
     store: SessionStore,
+    invalid_detail: str = LARGE_FORMAT_CACHED_ANALYSIS_INVALID_DETAIL,
 ) -> tuple[str, str, str]:
-    """Resolve and validate the three spatial preview-cache arrays together."""
+    """Resolve and validate all three spatial preview-cache arrays together.
+
+    一次性解析并严格校验空间编辑所需的三个预览缓存数组，避免半套缓存被转发。
+    """
 
     try:
         matched_rgb_path = _cache_field_path_or_tempfile(
@@ -412,7 +422,7 @@ def _resolve_validated_large_format_cached_analysis_paths(
     ) as exc:
         raise HTTPException(
             status_code=409,
-            detail=LARGE_FORMAT_CACHED_ANALYSIS_INVALID_DETAIL,
+            detail=invalid_detail,
         ) from exc
 
     return matched_rgb_path, mask_solid_path, material_matrix_path
@@ -621,6 +631,36 @@ def _require_large_format_cached_analysis_semantics(
         raise HTTPException(
             status_code=409,
             detail=LARGE_FORMAT_CACHED_ANALYSIS_INVALID_DETAIL,
+        )
+
+
+def _require_standard_cached_analysis_semantics(
+    *,
+    cache: dict,
+    request: ConvertGenerateRequest,
+    core_modeling_mode: CoreModelingMode,
+    session_material_source: str,
+    preview_color_layers: object = _MISSING,
+    preview_layer_height_mm: object = _MISSING,
+) -> None:
+    """Reject explicit standard cache reuse with mismatched semantics.
+
+    普通生成显式要求复用空间编辑缓存时，若分析参数与当前请求不同则拒绝生成。
+    """
+
+    matches, _reason = _preview_analysis_params_match(
+        cache=cache,
+        request=request,
+        core_modeling_mode=core_modeling_mode,
+        session_material_source=session_material_source,
+        target_width_mm=request.target_width_mm,
+        preview_color_layers=preview_color_layers,
+        preview_layer_height_mm=preview_layer_height_mm,
+    )
+    if not matches:
+        raise HTTPException(
+            status_code=409,
+            detail=STANDARD_CACHED_ANALYSIS_INVALID_DETAIL,
         )
 
 
@@ -1478,6 +1518,29 @@ async def convert_generate(
         preview_color_layers=session_data.get("color_layers", _MISSING),
         preview_layer_height_mm=session_data.get("layer_height_mm", _MISSING),
     )
+    if request.use_cached_matched_rgb:
+        (
+            matched_rgb_path,
+            mask_solid_path,
+            material_matrix_path,
+        ) = _resolve_validated_large_format_cached_analysis_paths(
+            cache=cache,
+            cache_ref=cache_ref,
+            sid=body.session_id,
+            store=store,
+            invalid_detail=STANDARD_CACHED_ANALYSIS_INVALID_DETAIL,
+        )
+        _require_standard_cached_analysis_semantics(
+            cache=cache,
+            request=request,
+            core_modeling_mode=core_modeling_mode,
+            session_material_source=str(session_material_source or "lut"),
+            preview_color_layers=session_data.get("color_layers", _MISSING),
+            preview_layer_height_mm=session_data.get(
+                "layer_height_mm",
+                _MISSING,
+            ),
+        )
     should_forward_cached_analysis = (
         reuse_preview_analysis
         or request.use_cached_matched_rgb
@@ -1497,13 +1560,14 @@ async def convert_generate(
         },
     )
     if should_forward_cached_analysis:
-        matched_rgb_path = _cache_field_path_or_tempfile(
-            cache=cache,
-            cache_ref=cache_ref,
-            field_name="matched_rgb",
-            sid=body.session_id,
-            store=store,
-        )
+        if matched_rgb_path is None:
+            matched_rgb_path = _cache_field_path_or_tempfile(
+                cache=cache,
+                cache_ref=cache_ref,
+                field_name="matched_rgb",
+                sid=body.session_id,
+                store=store,
+            )
         if require_cached_material_analysis:
             matched_rgb_path = _require_loadable_material_archive_cache_path(
                 matched_rgb_path,
@@ -1541,26 +1605,28 @@ async def convert_generate(
             # silently drops every /region-replace mutation.
             # 把 mask_solid 与 matched_rgb 一起透传给 worker，让矢量分支
             # 可以在求交后回写颜色；不传就会丢掉用户的区域替换。
-            mask_solid_path = _cache_field_path_or_tempfile(
-                cache=cache,
-                cache_ref=cache_ref,
-                field_name="mask_solid",
-                sid=body.session_id,
-                store=store,
-            )
+            if mask_solid_path is None:
+                mask_solid_path = _cache_field_path_or_tempfile(
+                    cache=cache,
+                    cache_ref=cache_ref,
+                    field_name="mask_solid",
+                    sid=body.session_id,
+                    store=store,
+                )
             if require_cached_material_analysis:
                 mask_solid_path = _require_loadable_material_archive_cache_path(
                     mask_solid_path,
                     "mask_solid",
                 )
 
-            material_matrix_path = _cache_field_path_or_tempfile(
-                cache=cache,
-                cache_ref=cache_ref,
-                field_name="material_matrix",
-                sid=body.session_id,
-                store=store,
-            )
+            if material_matrix_path is None:
+                material_matrix_path = _cache_field_path_or_tempfile(
+                    cache=cache,
+                    cache_ref=cache_ref,
+                    field_name="material_matrix",
+                    sid=body.session_id,
+                    store=store,
+                )
             if require_cached_material_analysis:
                 material_matrix_path = _require_loadable_material_archive_cache_path(
                     material_matrix_path,
@@ -1670,7 +1736,11 @@ async def convert_generate(
         "matched_rgb_path": matched_rgb_path,
         "mask_solid_path": mask_solid_path,
         "material_matrix_path": material_matrix_path,
-        "reuse_preview_analysis": reuse_preview_analysis,
+        "reuse_preview_analysis": (
+            REQUIRED_PREVIEW_ANALYSIS_REUSE
+            if request.use_cached_matched_rgb
+            else reuse_preview_analysis
+        ),
         "preview_glb_path": preview_glb_path,
         "vector_parse_clip_cache_path": vector_parse_clip_cache_path,
         "printer_id": request.printer_id,
@@ -1709,6 +1779,11 @@ async def convert_generate(
         )
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="3MF generation timed out")
+    except CachedPreviewAnalysisError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=STANDARD_CACHED_ANALYSIS_INVALID_DETAIL,
+        ) from exc
     except ROUTER_HANDLED_ERRORS as exc:
         raise HTTPException(
             status_code=500,

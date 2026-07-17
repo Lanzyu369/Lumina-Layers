@@ -1445,6 +1445,7 @@ def worker_generate_model(
 
     from api.structured_logging import get_logger
     from core.converter import generate_final_model
+    from core.errors import CachedPreviewAnalysisError
 
     log = get_logger(__name__)
     normalized_params = _normalize_puzzle_piece_target_width(image_path, params)
@@ -1507,7 +1508,14 @@ def worker_generate_model(
             lut_path=lut_path,
             **normalized_params,
         )
-    except (ValueError, TypeError, KeyError, OSError, RuntimeError) as e:
+    except (
+        CachedPreviewAnalysisError,
+        ValueError,
+        TypeError,
+        KeyError,
+        OSError,
+        RuntimeError,
+    ) as e:
         log.exception(
             "Worker model generation failed",
             extra={

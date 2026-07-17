@@ -813,6 +813,11 @@ class TestGenerateParameterCompleteness:
         out_path.write_bytes(b"3mf")
 
         sid = _test_store.create()
+        request = ConvertGenerateRequest(
+            lut_name="test_lut",
+            target_width_mm=40.0,
+            use_cached_matched_rgb=True,
+        )
         cache_ref = externalize_preview_cache(
             sid,
             _test_store,
@@ -820,6 +825,22 @@ class TestGenerateParameterCompleteness:
                 "target_w": 4,
                 "target_h": 4,
                 "target_width_mm": 40.0,
+                "color_mode": request.color_mode.value,
+                "modeling_mode": request.modeling_mode.value,
+                "color_layers": request.color_layers,
+                "layer_height_mm": request.layer_height_mm,
+                "quantize_colors": request.quantize_colors,
+                "enable_cleanup": request.enable_cleanup,
+                "hue_weight": request.hue_weight,
+                "chroma_gate": request.chroma_gate,
+                "use_lut_constrained": request.use_lut_constrained,
+                "auto_dynamic_range": request.auto_dynamic_range,
+                "model_enable": request.model_enable,
+                "model_only": request.model_only,
+                "model_threshold": request.model_threshold,
+                "model_margin": request.model_margin,
+                "svg_pixels_per_mm": request.svg_pixels_per_mm,
+                "material_source": "lut",
                 "matched_rgb": np.zeros((4, 4, 3), dtype=np.uint8),
                 "mask_solid": np.ones((4, 4), dtype=bool),
                 "material_matrix": np.zeros((4, 4, 5), dtype=np.uint8),
@@ -847,10 +868,7 @@ class TestGenerateParameterCompleteness:
                 "/api/convert/generate",
                 json={
                     "session_id": sid,
-                    "params": {
-                        "lut_name": "test_lut",
-                        "use_cached_matched_rgb": True,
-                    },
+                    "params": request.model_dump(mode="json"),
                 },
             )
 
@@ -2034,6 +2052,253 @@ class TestLargeFormatFridgeMagnetValidation:
 
         assert response.status_code == 422
         assert "fridge magnet" in response.json()["detail"].lower()
+
+
+class TestStandardCachedAnalysisRouting:
+    """Explicit standard-generation cache reuse must fail closed."""
+
+    _INVALID_DETAIL = (
+        "Cached preview data is unavailable or invalid. "
+        "Re-run preview and try again."
+    )
+
+    @staticmethod
+    def _semantic_cache_metadata(
+        request: ConvertGenerateRequest,
+        *,
+        material_source: str,
+    ) -> dict[str, object]:
+        """Return analysis metadata matching one standard generate request."""
+
+        return {
+            "target_width_mm": request.target_width_mm,
+            "color_mode": request.color_mode.value,
+            "modeling_mode": request.modeling_mode.value,
+            "color_layers": request.color_layers,
+            "layer_height_mm": request.layer_height_mm,
+            "quantize_colors": request.quantize_colors,
+            "enable_cleanup": request.enable_cleanup,
+            "hue_weight": request.hue_weight,
+            "chroma_gate": request.chroma_gate,
+            "use_lut_constrained": request.use_lut_constrained,
+            "auto_dynamic_range": request.auto_dynamic_range,
+            "model_enable": request.model_enable,
+            "model_only": request.model_only,
+            "model_threshold": request.model_threshold,
+            "model_margin": request.model_margin,
+            "svg_pixels_per_mm": request.svg_pixels_per_mm,
+            "material_source": material_source,
+        }
+
+    def _create_session(
+        self,
+        tmp_path,
+        *,
+        modeling_mode: ModelingMode,
+        material_source: str = "lut",
+        matched_rgb: object | None = None,
+        mask_solid: object | None = None,
+        material_matrix: object | None = None,
+        cache_overrides: dict[str, object] | None = None,
+    ) -> tuple[str, dict[str, object]]:
+        """Create one route-isolated standard cached-generation session."""
+
+        image_path = tmp_path / (
+            "source.svg" if modeling_mode == ModelingMode.VECTOR else "source.png"
+        )
+        if modeling_mode == ModelingMode.VECTOR:
+            image_path.write_text(
+                '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40">'
+                '<rect width="40" height="40" fill="#fff"/></svg>',
+                encoding="utf-8",
+            )
+        else:
+            Image.fromarray(np.zeros((4, 4, 3), dtype=np.uint8)).save(image_path)
+
+        lut_path = tmp_path / "source.npy"
+        lut_path.write_bytes(b"lut")
+        out_path = tmp_path / "out.3mf"
+        out_path.write_bytes(b"3mf")
+
+        request = ConvertGenerateRequest(
+            lut_name=(
+                "__material_archive__"
+                if material_source == "material_archive"
+                else "test_lut"
+            ),
+            modeling_mode=modeling_mode,
+            target_width_mm=40.0,
+            color_layers=5,
+            layer_height_mm=0.08,
+            use_cached_matched_rgb=True,
+        )
+        cache = {
+            "target_w": 4,
+            "target_h": 4,
+            **self._semantic_cache_metadata(
+                request,
+                material_source=material_source,
+            ),
+            "matched_rgb": (
+                np.zeros((4, 4, 3), dtype=np.uint8)
+                if matched_rgb is None
+                else matched_rgb
+            ),
+            "mask_solid": (
+                np.ones((4, 4), dtype=bool)
+                if mask_solid is None
+                else mask_solid
+            ),
+            "material_matrix": (
+                np.zeros((4, 4, 5), dtype=np.int16)
+                if material_matrix is None
+                else material_matrix
+            ),
+            **(cache_overrides or {}),
+        }
+
+        sid = _test_store.create()
+        _test_store.put(sid, "preview_cache", cache)
+        _test_store.put(sid, "image_path", str(image_path))
+        _test_store.put(sid, "lut_path", str(lut_path))
+        _test_store.put(sid, "material_source", material_source)
+        _test_store.put(sid, "color_layers", 5)
+        _test_store.put(sid, "layer_height_mm", 0.08)
+        _test_store.put(sid, "replacement_regions", [])
+        _test_store.put(sid, "free_color_set", set())
+        if material_source == "material_archive":
+            _test_store.put(sid, "selected_materials", [])
+
+        _mock_pool.submit = AsyncMock(
+            return_value={
+                "threemf_path": str(out_path),
+                "glb_path": None,
+                "status_msg": "OK",
+            }
+        )
+        return sid, {
+            "session_id": sid,
+            "params": request.model_dump(mode="json"),
+        }
+
+    @pytest.mark.parametrize(
+        ("modeling_mode", "material_source", "invalid_arrays"),
+        [
+            (
+                ModelingMode.HIGH_FIDELITY,
+                "lut",
+                {"matched_rgb": np.zeros((4, 4), dtype=np.uint8)},
+            ),
+            (
+                ModelingMode.VECTOR,
+                "lut",
+                {"mask_solid": np.ones((4, 4), dtype=np.uint8)},
+            ),
+            (
+                ModelingMode.HIGH_FIDELITY,
+                "material_archive",
+                {"material_matrix": np.zeros((4, 4, 5), dtype=np.float32)},
+            ),
+        ],
+    )
+    def test_generate_explicit_cache_rejects_malformed_trio_before_worker(
+        self,
+        tmp_path,
+        modeling_mode: ModelingMode,
+        material_source: str,
+        invalid_arrays: dict[str, np.ndarray],
+    ) -> None:
+        """Raster, vector, and archive paths must reject malformed arrays."""
+
+        sid, payload = self._create_session(
+            tmp_path,
+            modeling_mode=modeling_mode,
+            material_source=material_source,
+            **invalid_arrays,
+        )
+        try:
+            response = client.post("/api/convert/generate", json=payload)
+
+            assert response.status_code == 409, response.text
+            assert response.json()["detail"] == self._INVALID_DETAIL
+            _mock_pool.submit.assert_not_called()
+        finally:
+            _test_store.close(sid)
+
+    def test_generate_explicit_cache_rejects_semantic_mismatch_before_worker(
+        self,
+        tmp_path,
+    ) -> None:
+        """Explicit reuse must not forward arrays created with stale params."""
+
+        sid, payload = self._create_session(
+            tmp_path,
+            modeling_mode=ModelingMode.HIGH_FIDELITY,
+            cache_overrides={"enable_cleanup": False},
+        )
+        try:
+            response = client.post("/api/convert/generate", json=payload)
+
+            assert response.status_code == 409, response.text
+            assert response.json()["detail"] == self._INVALID_DETAIL
+            _mock_pool.submit.assert_not_called()
+        finally:
+            _test_store.close(sid)
+
+    def test_generate_explicit_cache_rejects_deleted_artifact_before_worker(
+        self,
+        tmp_path,
+    ) -> None:
+        """An artifact removed after preview must require a fresh preview."""
+
+        sid, payload = self._create_session(
+            tmp_path,
+            modeling_mode=ModelingMode.HIGH_FIDELITY,
+        )
+        cache = _test_store.get(sid)["preview_cache"]
+        cache_ref = externalize_preview_cache(
+            sid,
+            _test_store,
+            cache,
+            root_dir=tmp_path / "cache",
+        )
+        _test_store.put(sid, "preview_cache", cache_ref)
+        os.unlink(cache_ref["fields"]["mask_solid"]["path"])
+        try:
+            response = client.post("/api/convert/generate", json=payload)
+
+            assert response.status_code == 409, response.text
+            assert response.json()["detail"] == self._INVALID_DETAIL
+            _mock_pool.submit.assert_not_called()
+        finally:
+            _test_store.close(sid)
+
+    def test_generate_required_cache_worker_error_returns_safe_409(
+        self,
+        tmp_path,
+    ) -> None:
+        """A post-validation worker failure must request a new preview."""
+
+        from core.errors import CachedPreviewAnalysisError
+
+        sid, payload = self._create_session(
+            tmp_path,
+            modeling_mode=ModelingMode.VECTOR,
+        )
+        private_path = "/Users/min/private/deleted-preview-cache.npy"
+        _mock_pool.submit = AsyncMock(
+            side_effect=CachedPreviewAnalysisError(
+                f"cannot read {private_path}"
+            )
+        )
+        try:
+            response = client.post("/api/convert/generate", json=payload)
+
+            assert response.status_code == 409, response.text
+            assert response.json()["detail"] == self._INVALID_DETAIL
+            assert private_path not in response.text
+        finally:
+            _test_store.close(sid)
 
 
 class TestLargeFormatCachedAnalysisRouting:

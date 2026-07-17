@@ -111,6 +111,33 @@ class TestS02ImageProcessing:
         processor_cls.assert_called_once()
         processor_cls.return_value.process_image.assert_not_called()
 
+    def test_required_preview_analysis_rejects_wrong_rank_instead_of_fallback(
+        self,
+        tmp_path,
+    ) -> None:
+        """Spatial edits must never fall back to a fresh S02 analysis."""
+
+        from core.pipeline.s02_image_processing import _load_reused_preview_analysis
+        from core.errors import CachedPreviewAnalysisError
+        from core.preview_analysis_cache import REQUIRED_PREVIEW_ANALYSIS_REUSE
+
+        matched_path = tmp_path / "matched_rgb.npy"
+        mask_path = tmp_path / "mask_solid.npy"
+        matrix_path = tmp_path / "material_matrix.npy"
+        np.save(matched_path, np.zeros((3, 4), dtype=np.uint8))
+        np.save(mask_path, np.ones((3, 4), dtype=bool))
+        np.save(matrix_path, np.zeros((3, 4, 5), dtype=np.int16))
+
+        with pytest.raises(CachedPreviewAnalysisError):
+            _load_reused_preview_analysis(
+                {
+                    "reuse_preview_analysis": REQUIRED_PREVIEW_ANALYSIS_REUSE,
+                    "matched_rgb_path": str(matched_path),
+                    "mask_solid_path": str(mask_path),
+                    "material_matrix_path": str(matrix_path),
+                }
+            )
+
     @staticmethod
     def _material_archive_reuse_context(
         tmp_path,
