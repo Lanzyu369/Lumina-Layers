@@ -35,6 +35,7 @@ from api.preview_cache_artifacts import externalize_preview_cache
 from api.routers.converter.color_card import _COLOR_CARD_GENERATION_FAILED_DETAIL
 from api.routers.converter.generate import _generate_large_format_raster
 from api.routers.converter.generate import _generate_large_format_svg_native
+from api.routers.converter.generate import LARGE_FORMAT_CACHED_ANALYSIS_INVALID_DETAIL
 from api.routers.converter.generate import LARGE_FORMAT_GENERATION_FAILED_DETAIL
 from api.routers.converter.generate import MODEL_GENERATION_FAILED_DETAIL
 from api.routers.converter.generate import _recover_virtual_materials_from_preview_cache
@@ -2047,8 +2048,8 @@ class TestLargeFormatCachedAnalysisRouting:
         matched_rgb: object,
         mask_solid: object,
         material_matrix: object,
-        target_w: int = 12,
-        target_h: int = 8,
+        target_w: object = 12,
+        target_h: object = 8,
     ) -> None:
         _test_store.put(
             sid,
@@ -2213,6 +2214,10 @@ class TestLargeFormatCachedAnalysisRouting:
             "material_empty_channels",
             "spatial_mismatch",
             "metadata_mismatch",
+            "target_w_non_numeric",
+            "target_h_non_numeric",
+            "missing_metadata",
+            "corrupt_zip_artifact",
         ],
     )
     def test_large_format_cached_malformed_cache_returns_safe_409(
@@ -2228,6 +2233,7 @@ class TestLargeFormatCachedAnalysisRouting:
         local_secret_path: str | None = None
         target_w = 12
         target_h = 8
+        cache_already_stored = False
 
         if malformed_case == "missing":
             material_matrix = None
@@ -2250,6 +2256,7 @@ class TestLargeFormatCachedAnalysisRouting:
             cache_ref["fields"]["mask_solid"]["path"] = str(unreadable_path)
             local_secret_path = str(unreadable_path)
             _test_store.put(sid, "preview_cache", cache_ref)
+            cache_already_stored = True
         elif malformed_case == "matched_wrong_rank":
             matched_rgb = matched_rgb[..., 0]
         elif malformed_case == "matched_wrong_dtype":
@@ -2268,8 +2275,44 @@ class TestLargeFormatCachedAnalysisRouting:
             material_matrix = material_matrix[:-1, :, :]
         elif malformed_case == "metadata_mismatch":
             target_h = 7
+        elif malformed_case == "target_w_non_numeric":
+            target_w = "bad"
+        elif malformed_case == "target_h_non_numeric":
+            target_h = "bad"
+        elif malformed_case == "missing_metadata":
+            _test_store.put(
+                sid,
+                "preview_cache",
+                {
+                    "target_width_mm": 60.0,
+                    "matched_rgb": matched_rgb,
+                    "mask_solid": mask_solid,
+                    "material_matrix": material_matrix,
+                },
+            )
+            cache_already_stored = True
+        elif malformed_case == "corrupt_zip_artifact":
+            cache_ref = externalize_preview_cache(
+                sid,
+                _test_store,
+                {
+                    "target_w": target_w,
+                    "target_h": target_h,
+                    "target_width_mm": 60.0,
+                    "matched_rgb": matched_rgb,
+                    "mask_solid": mask_solid,
+                    "material_matrix": material_matrix,
+                },
+                root_dir=tmp_path,
+            )
+            corrupt_path = tmp_path / "private-corrupt-cache.npz"
+            corrupt_path.write_bytes(b"PK\x03\x04truncated-private-archive")
+            cache_ref["fields"]["material_matrix"]["path"] = str(corrupt_path)
+            local_secret_path = str(corrupt_path)
+            _test_store.put(sid, "preview_cache", cache_ref)
+            cache_already_stored = True
 
-        if malformed_case != "unreadable":
+        if not cache_already_stored:
             self._put_legacy_cache(
                 sid,
                 matched_rgb=matched_rgb,
@@ -2297,6 +2340,7 @@ class TestLargeFormatCachedAnalysisRouting:
 
             assert response.status_code == 409, response.text
             detail = response.json()["detail"]
+            assert detail == LARGE_FORMAT_CACHED_ANALYSIS_INVALID_DETAIL
             assert "re-run preview" in detail.lower()
             if local_secret_path is not None:
                 assert local_secret_path not in detail
@@ -2319,6 +2363,58 @@ class TestLargeFormatCachedAnalysisRouting:
             mask_solid=mask_solid[..., None],
             material_matrix=material_matrix[:-1, :, :],
         )
+
+        try:
+            with patch(
+                "api.routers.converter.generate._generate_large_format_svg_native",
+                return_value=_large_format_success_response("native"),
+            ) as native_helper:
+                response = client.post(
+                    "/api/convert/generate-large-format",
+                    json=_large_format_payload(
+                        sid,
+                        modeling_mode="vector",
+                        use_cached_matched_rgb=False,
+                    ),
+                )
+
+            assert response.status_code == 200, response.text
+            kwargs = native_helper.call_args.kwargs
+            assert kwargs["matched_rgb_path"] is None
+            assert kwargs["mask_solid_path"] is None
+            assert kwargs["material_matrix_path"] is None
+        finally:
+            _test_store.close(sid)
+            for path in (svg_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    def test_large_format_cached_flag_false_ignores_corrupt_analysis_artifact(
+        self,
+        tmp_path,
+    ) -> None:
+        sid, svg_path, lut_path = _create_svg_session(
+            _test_store,
+            native_tiling_supported=True,
+        )
+        matched_rgb, mask_solid, material_matrix = self._analysis_arrays()
+        cache_ref = externalize_preview_cache(
+            sid,
+            _test_store,
+            {
+                "target_w": 12,
+                "target_h": 8,
+                "target_width_mm": 60.0,
+                "matched_rgb": matched_rgb,
+                "mask_solid": mask_solid,
+                "material_matrix": material_matrix,
+            },
+            root_dir=tmp_path,
+        )
+        corrupt_path = tmp_path / "ignored-corrupt-cache.npz"
+        corrupt_path.write_bytes(b"PK\x03\x04truncated-private-archive")
+        cache_ref["fields"]["matched_rgb"]["path"] = str(corrupt_path)
+        _test_store.put(sid, "preview_cache", cache_ref)
 
         try:
             with patch(

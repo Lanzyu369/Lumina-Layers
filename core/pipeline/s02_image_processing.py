@@ -107,8 +107,52 @@ def run(ctx: dict) -> dict:
     """
     # ---- Material-archive branch ----
     if ctx.get("material_source") == "material_archive":
-        from core.pipeline.p03_core_processing import _run_material_archive_branch
         ctx['lut_metadata'] = None
+        reuse_started = time.perf_counter()
+        reused_analysis = _load_reused_preview_analysis(ctx)
+        if reused_analysis is not None:
+            matched_rgb, mask_solid, material_matrix = reused_analysis
+            target_h, target_w = mask_solid.shape
+            target_width_mm = float(ctx['target_width_mm'])
+            pixel_scale = (
+                target_width_mm / float(target_w)
+                if target_w > 0
+                else 0.0
+            )
+            modeling_mode = _normalize_modeling_mode(ctx.get('modeling_mode'))
+            ctx['matched_rgb'] = matched_rgb
+            ctx['material_matrix'] = material_matrix
+            ctx['mask_solid'] = mask_solid
+            ctx['target_w'] = int(target_w)
+            ctx['target_h'] = int(target_h)
+            ctx['pixel_scale'] = pixel_scale
+            ctx['mode_info'] = {
+                'mode': modeling_mode,
+                'lut_match_mode': 'material_archive',
+            }
+            ctx['debug_data'] = None
+            ctx['lut_match_info'] = None
+            elapsed = time.perf_counter() - reuse_started
+            ctx.setdefault('_hifi_timings', {})['image_proc_s'] = elapsed
+            _log.debug(
+                "material archive preview analysis reused: %.3fs, "
+                "%sx%spx, scale=%smm/px",
+                elapsed,
+                target_w,
+                target_h,
+                pixel_scale,
+                extra={
+                    "event": "s02_preview_analysis_reused",
+                    "duration_ms": round(elapsed * 1000, 3),
+                    "width": int(target_w),
+                    "height": int(target_h),
+                    "pixel_scale": pixel_scale,
+                    "mode": "material_archive",
+                },
+            )
+            return ctx
+
+        from core.pipeline.p03_core_processing import _run_material_archive_branch
         return _run_material_archive_branch(ctx)
 
     actual_lut_path = ctx['actual_lut_path']

@@ -324,10 +324,10 @@ def _load_large_format_cache_array_spec(path: str) -> tuple[tuple[int, ...], np.
 
 
 def _cache_grid_dimension_matches(value: object, expected: int) -> bool:
-    """Return whether optional cache metadata is exactly one integer size."""
+    """Return whether required cache metadata is exactly one integer size."""
 
     if value is None:
-        return True
+        return False
     try:
         numeric = float(value)
     except (TypeError, ValueError, OverflowError):
@@ -400,7 +400,14 @@ def _resolve_validated_large_format_cached_analysis_paths(
             raise ValueError("preview cache target_h does not match array grid")
         if not _cache_grid_dimension_matches(cache.get("target_w"), target_w):
             raise ValueError("preview cache target_w does not match array grid")
-    except (OSError, ValueError, TypeError, KeyError, EOFError) as exc:
+    except (
+        OSError,
+        ValueError,
+        TypeError,
+        KeyError,
+        EOFError,
+        zipfile.BadZipFile,
+    ) as exc:
         raise HTTPException(
             status_code=409,
             detail=LARGE_FORMAT_CACHED_ANALYSIS_INVALID_DETAIL,
@@ -2461,8 +2468,6 @@ async def convert_generate_large_format(
     )
 
     sid = body.session_id
-    total_w_mm, total_h_mm = _resolve_large_format_dimensions(cache, request, lf.target_height_mm)
-    source_basename = _resolve_large_format_source_basename(session_data, image_path)
     matched_rgb_path: str | None = None
     mask_solid_path: str | None = None
     cached_material_matrix_path: str | None = None
@@ -2477,6 +2482,12 @@ async def convert_generate_large_format(
             sid=sid,
             store=store,
         )
+    total_w_mm, total_h_mm = _resolve_large_format_dimensions(
+        cache,
+        request,
+        lf.target_height_mm,
+    )
+    source_basename = _resolve_large_format_source_basename(session_data, image_path)
 
     override_material_matrix_path, recipe_override_masks_path = _prepare_recipe_override_worker_inputs(
         cache=cache,

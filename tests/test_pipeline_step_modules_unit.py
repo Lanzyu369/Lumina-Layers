@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
+from PIL import Image
 import pytest
 import trimesh
 
@@ -109,6 +110,164 @@ class TestS02ImageProcessing:
         assert result["processor"] is processor_cls.return_value
         processor_cls.assert_called_once()
         processor_cls.return_value.process_image.assert_not_called()
+
+    @staticmethod
+    def _material_archive_reuse_context(
+        tmp_path,
+        *,
+        color_replacements: dict[str, str] | None = None,
+    ) -> tuple[dict, np.ndarray, np.ndarray, np.ndarray, list]:
+        from core.material_color_solver import MaterialParams
+
+        source_path = tmp_path / "source-tile.png"
+        Image.fromarray(np.zeros((11, 17, 3), dtype=np.uint8)).save(source_path)
+
+        matched_rgb = np.full((3, 4, 3), [200, 100, 50], dtype=np.uint8)
+        matched_rgb[:, 0] = [50, 70, 200]
+        mask_solid = np.ones((3, 4), dtype=bool)
+        mask_solid[0, 0] = False
+        material_matrix = np.zeros((3, 4, 5), dtype=np.int16)
+        material_matrix[:, 0, :] = 1
+
+        matched_path = tmp_path / "archive-matched.npy"
+        mask_path = tmp_path / "archive-mask.npy"
+        material_path = tmp_path / "archive-material.npy"
+        np.save(matched_path, matched_rgb)
+        np.save(mask_path, mask_solid)
+        np.save(material_path, material_matrix)
+
+        def _material(
+            name: str,
+            equilibrium: tuple[float, float, float],
+            absorption: tuple[float, float, float],
+        ) -> MaterialParams:
+            return MaterialParams(
+                name=name,
+                directory_name=name.lower(),
+                E=np.asarray(equilibrium, dtype=np.float64),
+                k=np.asarray(absorption, dtype=np.float64),
+                C0_white=np.ones(3, dtype=np.float64),
+                estimated_rgb=np.asarray(
+                    [int(round(255 * component)) for component in equilibrium],
+                    dtype=np.uint8,
+                ),
+            )
+
+        materials = [
+            _material("Red", (0.6, 0.05, 0.05), (4.0, 4.0, 4.0)),
+            _material("Blue", (0.05, 0.1, 0.6), (4.0, 4.0, 4.0)),
+            _material("White", (0.95, 0.95, 0.95), (0.5, 0.5, 0.5)),
+        ]
+        ctx = {
+            "image_path": str(source_path),
+            "target_width_mm": 40.0,
+            "modeling_mode": ModelingMode.HIGH_FIDELITY,
+            "quantize_colors": 8,
+            "material_source": "material_archive",
+            "_material_params": materials,
+            "selected_materials": ["red", "blue", "white"],
+            "color_layers": 5,
+            "layer_height_mm": 0.08,
+            "material_substrate": "white",
+            "reuse_preview_analysis": True,
+            "matched_rgb_path": str(matched_path),
+            "mask_solid_path": str(mask_path),
+            "material_matrix_path": str(material_path),
+            "color_replacements": color_replacements,
+            "replacement_regions": None,
+        }
+        return ctx, matched_rgb, mask_solid, material_matrix, materials
+
+    def test_material_archive_reuses_spatial_analysis_before_solver(
+        self,
+        tmp_path,
+        monkeypatch,
+    ) -> None:
+        """S02+S03 must consume tile-cache grids even when source pixels differ."""
+
+        from core.pipeline import p03_core_processing
+        from core.pipeline import s02_image_processing
+        from core.pipeline import s03_color_replacement
+
+        ctx, matched_rgb, mask_solid, material_matrix, materials = (
+            self._material_archive_reuse_context(tmp_path)
+        )
+
+        def _fail_material_solver(_ctx: dict) -> dict:
+            raise AssertionError("material solver must not run for validated reuse")
+
+        def _fail_lut_processor(*_args, **_kwargs):
+            raise AssertionError("material archive reuse must not create LUT processor")
+
+        monkeypatch.setattr(
+            p03_core_processing,
+            "_run_material_archive_branch",
+            _fail_material_solver,
+        )
+        monkeypatch.setattr(
+            s02_image_processing,
+            "LuminaImageProcessor",
+            _fail_lut_processor,
+        )
+
+        after_s02 = s02_image_processing.run(ctx)
+        after_s03 = s03_color_replacement.run(after_s02)
+
+        np.testing.assert_array_equal(after_s03["matched_rgb"], matched_rgb)
+        np.testing.assert_array_equal(after_s03["mask_solid"], mask_solid)
+        np.testing.assert_array_equal(after_s03["material_matrix"], material_matrix)
+        assert after_s03["target_w"] == 4
+        assert after_s03["target_h"] == 3
+        assert after_s03["pixel_scale"] == pytest.approx(10.0)
+        assert after_s03["mode_info"] == {
+            "mode": ModelingMode.HIGH_FIDELITY,
+            "lut_match_mode": "material_archive",
+        }
+        assert after_s03["lut_metadata"] is None
+        assert after_s03.get("processor") is None
+        assert after_s03["_material_params"] is materials
+
+    def test_material_archive_reused_grid_keeps_global_replacements_working(
+        self,
+        tmp_path,
+        monkeypatch,
+    ) -> None:
+        """Real S03 replacement solving must still use preserved material params."""
+
+        from core.pipeline import p03_core_processing
+        from core.pipeline import s02_image_processing
+        from core.pipeline import s03_color_replacement
+
+        ctx, matched_rgb, mask_solid, material_matrix, materials = (
+            self._material_archive_reuse_context(
+                tmp_path,
+                color_replacements={"#c86432": "#14c814"},
+            )
+        )
+
+        def _fail_material_solver(_ctx: dict) -> dict:
+            raise AssertionError("material solver must not rebuild reused analysis")
+
+        monkeypatch.setattr(
+            p03_core_processing,
+            "_run_material_archive_branch",
+            _fail_material_solver,
+        )
+
+        after_s02 = s02_image_processing.run(ctx)
+        after_s03 = s03_color_replacement.run(after_s02)
+
+        np.testing.assert_array_equal(after_s03["matched_rgb"][:, 0], matched_rgb[:, 0])
+        np.testing.assert_array_equal(
+            after_s03["material_matrix"][:, 0],
+            material_matrix[:, 0],
+        )
+        assert not np.array_equal(after_s03["matched_rgb"][:, 1:], matched_rgb[:, 1:])
+        assert np.any(after_s03["material_matrix"][:, 1:] != material_matrix[:, 1:])
+        np.testing.assert_array_equal(after_s03["mask_solid"], mask_solid)
+        assert after_s03["matched_rgb"].shape[:2] == (3, 4)
+        assert after_s03["material_matrix"].shape[:2] == (3, 4)
+        assert after_s03["_material_params"] is materials
 
 
 # ===========================================================================
