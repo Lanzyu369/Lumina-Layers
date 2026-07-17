@@ -128,6 +128,32 @@ def test_relief_backing_splits_t_junctions_on_shared_curves() -> None:
     assert float(board.volume) == pytest.approx(expected_volume)
 
 
+@pytest.mark.parametrize("right_height", [1.0, 1.8])
+def test_relief_backing_keeps_corner_touching_shells_separate(
+    right_height: float,
+) -> None:
+    """Point-touching regions must remain independent manifold shells."""
+
+    lower_left = box(0.0, 0.0, 1.0, 1.0)
+    upper_right = box(1.0, 1.0, 2.0, 2.0)
+    board = _build_stepped_volume_mesh(
+        [
+            {"geometry": lower_left, "z_offset": 0.0, "height": 1.0},
+            {
+                "geometry": upper_right,
+                "z_offset": 0.0,
+                "height": right_height,
+            },
+        ],
+        scale_factor=1.0,
+    )
+
+    assert board is not None
+    assert board.is_watertight
+    assert len(board.split(only_watertight=False)) == 2
+    assert float(board.volume) == pytest.approx(1.0 + right_height)
+
+
 def test_relief_backing_glb_round_trip_stays_watertight(tmp_path) -> None:
     """The repaired topology must survive the actual preview file format."""
 

@@ -1051,23 +1051,56 @@ def _split_mesh_t_junctions(mesh: trimesh.Trimesh) -> None:
 def _finalize_prism_meshes(
     prism_parts: list[trimesh.Trimesh],
 ) -> trimesh.Trimesh | None:
-    """Remove internal faces and repair T-junctions within one solid volume."""
+    """Remove internal faces while preserving point-touching solid shells."""
 
     if not prism_parts:
         return None
-    combined = _concatenate_meshes_fast(prism_parts)
-    combined.merge_vertices()
-    sorted_faces = np.sort(np.asarray(combined.faces, dtype=np.int64), axis=1)
-    _, inverse, counts = np.unique(
-        sorted_faces,
-        axis=0,
-        return_inverse=True,
-        return_counts=True,
-    )
-    combined.update_faces(counts[inverse] == 1)
-    _split_mesh_t_junctions(combined)
-    combined.remove_unreferenced_vertices()
-    return combined
+
+    parents = list(range(len(prism_parts)))
+
+    def find(part_index: int) -> int:
+        while parents[part_index] != part_index:
+            parents[part_index] = parents[parents[part_index]]
+            part_index = parents[part_index]
+        return part_index
+
+    def union(left_index: int, right_index: int) -> None:
+        left_root = find(left_index)
+        right_root = find(right_index)
+        if left_root != right_root:
+            parents[right_root] = left_root
+
+    face_owners: dict[tuple[tuple[float, float, float], ...], int] = {}
+    for part_index, prism in enumerate(prism_parts):
+        vertices = np.asarray(prism.vertices, dtype=np.float64)
+        for face in np.asarray(prism.faces, dtype=np.int64):
+            coordinates = np.round(vertices[face], decimals=9)
+            face_key = tuple(sorted(tuple(point) for point in coordinates))
+            owner = face_owners.setdefault(face_key, part_index)
+            if owner != part_index:
+                union(part_index, owner)
+
+    grouped_parts: dict[int, list[trimesh.Trimesh]] = {}
+    for part_index, prism in enumerate(prism_parts):
+        grouped_parts.setdefault(find(part_index), []).append(prism)
+
+    finalized_groups = []
+    for connected_parts in grouped_parts.values():
+        combined = _concatenate_meshes_fast(connected_parts)
+        combined.merge_vertices()
+        sorted_faces = np.sort(np.asarray(combined.faces, dtype=np.int64), axis=1)
+        _, inverse, counts = np.unique(
+            sorted_faces,
+            axis=0,
+            return_inverse=True,
+            return_counts=True,
+        )
+        combined.update_faces(counts[inverse] == 1)
+        _split_mesh_t_junctions(combined)
+        combined.remove_unreferenced_vertices()
+        finalized_groups.append(combined)
+
+    return _concatenate_meshes_fast(finalized_groups)
 
 
 def _build_stepped_volume_mesh(
