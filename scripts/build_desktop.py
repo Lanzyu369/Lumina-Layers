@@ -72,8 +72,8 @@ def build_native_extensions_optional() -> bool:
     return True
 
 
-def check_glb_v2_dependencies_available() -> bool:
-    """Warn when desktop builds cannot bundle the default GLB v2 preview path."""
+def require_desktop_mesh_kernel_dependencies() -> None:
+    """Fail a desktop release build when required native kernels cannot load."""
 
     missing = []
     for module_name in GLB_V2_REQUIRED_MODULES:
@@ -83,17 +83,18 @@ def check_glb_v2_dependencies_available() -> bool:
             missing.append((module_name, exc))
 
     if not missing:
-        print("  GLB v2 preview dependencies available for packaging.")
-        return True
+        print("  Required desktop mesh-kernel dependencies are available.")
+        return
 
-    print(
-        "WARNING: GLB v2 preview dependencies are missing; packaged preview "
-        "generation will fall back to v1 unless these modules are installed.",
+    details = "; ".join(
+        f"{module_name}: {type(exc).__name__}: {exc}"
+        for module_name, exc in missing
     )
-    print("  Install with: pip install -r requirements-glb-v2.txt")
-    for module_name, exc in missing:
-        print(f"  - {module_name}: {exc}")
-    return False
+    raise RuntimeError(
+        "Desktop release requires rasterio.features and manifold3d. "
+        "Install them with `pip install -r requirements-glb-v2.txt`. "
+        f"Unavailable modules: {details}",
+    )
 
 
 def parse_args():
@@ -130,8 +131,8 @@ def main():
     print("\n[2/6] Building optional backend native extensions...")
     native_vector_mesh_enabled = build_native_extensions_optional()
 
-    print("\n[3/6] Checking GLB v2 desktop packaging dependencies...")
-    check_glb_v2_dependencies_available()
+    print("\n[3/6] Checking required desktop mesh-kernel dependencies...")
+    require_desktop_mesh_kernel_dependencies()
 
     print("\n[4/6] Building backend (PyInstaller)...")
     run("pyinstaller lumina_studio.spec", cwd=str(ROOT))

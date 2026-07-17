@@ -53,9 +53,27 @@ and platforms without a compatible wheel; neither path rasterizes vector outline
 - Existing vector relief, mesh welding, GLB orientation, and converter tests must
   remain green.
 
+## Desktop release contract
+
+Source and basic development installs may omit `requirements-glb-v2.txt`; the
+exact Python fallback remains available there for compatibility. The formal
+Windows desktop release is different: `python scripts/build_desktop.py` is the
+single supported Electron packaging entry point and must run with both
+`rasterio.features` and `manifold3d` installed and importable.
+
+The release workflow builds through that entry point, not the legacy standalone
+`main.py` PyInstaller command. Both `build_desktop.py` and direct execution of
+`lumina_studio.spec` fail before producing a release when either required module
+cannot load. After PyInstaller and Electron packaging, CI executes the frozen
+`lumina-backend.exe --desktop-native-kernel-smoke` command. The command imports
+both native packages from the frozen application, forbids the Python relief
+fallback, constructs a two-height vector relief Board, and reports water-tight
+bounds and volume evidence. The Windows installer, frozen backend, and JSON
+smoke report are uploaded together as the release-gate artifact.
+
 ## Non-goals
 
-- No move of native wheels into the base `requirements.txt`; the dependency
-  remains optional and is already part of GLB v2/desktop/Docker deployments.
+- No move of native wheels into the base `requirements.txt`; they remain optional
+  for source installs but mandatory for formal Electron desktop releases.
 - No frontend rendering changes.
 - No redesign of optical layer geometry or relief height sampling.
