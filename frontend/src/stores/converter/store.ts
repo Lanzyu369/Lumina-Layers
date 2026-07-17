@@ -4347,8 +4347,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           updates.colorContours = response.color_contours;
         }
 
-        // 不递增 regionReplacementCount（已在 confirmReplacement 中处理）
-        set(updates);
+        // Only a successful response proves that the spatial mutation reached
+        // the session cache. Read the live count here so overlapping requests
+        // cannot overwrite one another with an earlier snapshot.
+        // 仅成功响应才能证明空间编辑已写入 session cache；读取最新计数，避免
+        // 并发请求用旧快照相互覆盖。
+        set((current) => ({
+          ...updates,
+          regionReplacementCount: current.regionReplacementCount + 1,
+        }));
         _get()._pollAsyncGlb();
       } catch (err) {
         set({
@@ -4908,8 +4915,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           if (batchItems.length === 0) break;
           set({
             replacePreviewLoading: true,
-            regionReplacementCount:
-              curState.regionReplacementCount + batchItems.length,
             threemfDiskPath: null,
             downloadUrl: null,
           });
@@ -4932,7 +4937,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             if (response.color_contours) {
               updates.colorContours = response.color_contours;
             }
-            set(updates);
+            set((current) => ({
+              ...updates,
+              regionReplacementCount:
+                current.regionReplacementCount + batchItems.length,
+            }));
             _get()._pollAsyncGlb();
           } catch (err) {
             set({
@@ -4948,11 +4957,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         case "current":
         case "region": {
           // 不更新 colorRemapMap（避免 3D 预览全局变色）
-          // 仅递增 regionReplacementCount 并调用后端区域替换
+          // regionReplacementCount 由成功的后端响应递增；缺少选区时保持不变。
           const curState = _get();
-          set({
-            regionReplacementCount: curState.regionReplacementCount + 1,
-          });
           // 调用后端 region-replace → 2D 预览精确区域替换
           if (curState.regionData) {
             await _get().applyRegionReplace(pending.targetHex);

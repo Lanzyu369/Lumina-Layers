@@ -215,6 +215,83 @@ describe("color replace architecture", () => {
     expect(state.regionReplacementCount).toBe(5);
   });
 
+  it("does not count a connected-region edit when the API rejects", async () => {
+    const { regionReplace } = await import("../api/converter");
+    (regionReplace as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error("region replace failed"),
+    );
+    const globalSentinel = [
+      {
+        quantized_hex: "#102030",
+        matched_hex: "#405060",
+        replacement_hex: "#708090",
+      },
+    ];
+    resetStore();
+    useConverterStore.setState({
+      sessionId: "test-session",
+      replacement_regions: globalSentinel,
+      regionReplacementCount: 6,
+      regionData: {
+        regionId: "connected-region",
+        colorHex: "#aabbcc",
+        pixelCount: 20,
+        previewUrl: "/api/files/highlight",
+        clickX: 8,
+        clickY: 9,
+      },
+      pendingReplacement: {
+        sourceHex: "aabbcc",
+        targetHex: "ddeeff",
+        mode: "current",
+      },
+    });
+
+    await useConverterStore.getState().confirmReplacement();
+
+    const state = useConverterStore.getState();
+    expect(regionReplace).toHaveBeenCalledTimes(1);
+    expect(state.regionReplacementCount).toBe(6);
+    expect(state.replacement_regions).toEqual(globalSentinel);
+    expect(state.replacePreviewLoading).toBe(false);
+    expect(state.error).toBeTruthy();
+  });
+
+  it.each(["current", "region"] as const)(
+    "does not count or request a %s edit without selected region data",
+    async (mode) => {
+      const { regionReplace } = await import("../api/converter");
+      const globalSentinel = [
+        {
+          quantized_hex: "#102030",
+          matched_hex: "#405060",
+          replacement_hex: "#708090",
+        },
+      ];
+      resetStore();
+      useConverterStore.setState({
+        sessionId: "test-session",
+        replacement_regions: globalSentinel,
+        regionReplacementCount: 6,
+        regionData: null,
+        pendingReplacement: {
+          sourceHex: "aabbcc",
+          targetHex: "ddeeff",
+          mode,
+        },
+      });
+
+      await useConverterStore.getState().confirmReplacement();
+
+      const state = useConverterStore.getState();
+      expect(regionReplace).not.toHaveBeenCalled();
+      expect(state.regionReplacementCount).toBe(6);
+      expect(state.replacement_regions).toEqual(globalSentinel);
+      expect(state.replacePreviewLoading).toBe(false);
+      expect(state.error).toBeNull();
+    },
+  );
+
   it("keeps a successful multi-region batch out of global replacement mappings", async () => {
     const { regionReplaceBatch } = await import("../api/converter");
     (regionReplaceBatch as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -259,6 +336,80 @@ describe("color replace architecture", () => {
     expect(state.previewImageUrl).toBe("/api/files/batch-preview");
     expect(JSON.stringify(state.replacement_regions)).toBe(beforeJson);
     expect(state.regionReplacementCount).toBe(5);
+  });
+
+  it("does not count a multi-region batch when the API rejects", async () => {
+    const { regionReplaceBatch } = await import("../api/converter");
+    (regionReplaceBatch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error("batch replace failed"),
+    );
+    const globalSentinel = [
+      {
+        quantized_hex: "#102030",
+        matched_hex: "#405060",
+        replacement_hex: "#708090",
+      },
+    ];
+    resetStore();
+    useConverterStore.setState({
+      sessionId: "test-session",
+      replacement_regions: globalSentinel,
+      regionReplacementCount: 3,
+      pendingReplacement: {
+        sourceHex: "aabbcc",
+        targetHex: "ddeeff",
+        mode: "multi-select",
+        sourceRegions: toRegions(["aabbcc", "112233"]),
+      },
+    });
+
+    await useConverterStore.getState().confirmReplacement();
+
+    const state = useConverterStore.getState();
+    expect(regionReplaceBatch).toHaveBeenCalledTimes(1);
+    expect(state.regionReplacementCount).toBe(3);
+    expect(state.replacement_regions).toEqual(globalSentinel);
+    expect(state.replacePreviewLoading).toBe(false);
+    expect(state.error).toBeTruthy();
+  });
+
+  it("does not count or request a multi-region batch without valid coordinates", async () => {
+    const { regionReplaceBatch } = await import("../api/converter");
+    const globalSentinel = [
+      {
+        quantized_hex: "#102030",
+        matched_hex: "#405060",
+        replacement_hex: "#708090",
+      },
+    ];
+    resetStore();
+    useConverterStore.setState({
+      sessionId: "test-session",
+      replacement_regions: globalSentinel,
+      regionReplacementCount: 3,
+      pendingReplacement: {
+        sourceHex: "aabbcc",
+        targetHex: "ddeeff",
+        mode: "multi-select",
+        sourceRegions: [
+          {
+            regionId: "missing-coordinates",
+            colorHex: "#aabbcc",
+            pixelCount: 10,
+            previewUrl: "/mock",
+          },
+        ],
+      },
+    });
+
+    await useConverterStore.getState().confirmReplacement();
+
+    const state = useConverterStore.getState();
+    expect(regionReplaceBatch).not.toHaveBeenCalled();
+    expect(state.regionReplacementCount).toBe(3);
+    expect(state.replacement_regions).toEqual(globalSentinel);
+    expect(state.replacePreviewLoading).toBe(false);
+    expect(state.error).toBeNull();
   });
 
   it("select-all writes map and snapshot", async () => {
