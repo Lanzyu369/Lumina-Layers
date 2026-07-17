@@ -44,10 +44,11 @@ def _parse_range(xml_bytes: bytes, expected_object_id: str = "1") -> tuple[float
 
 
 def _make_writer(output_path: str, **kwargs) -> BambuStudio3MFWriter:
+    settings = kwargs.pop("settings", {})
     try:
         return BambuStudio3MFWriter(
             output_path,
-            settings={},
+            settings=settings,
             color_mode="4-Color",
             printer_id="bambu-h2d",
             slicer="BambuStudio",
@@ -164,19 +165,29 @@ def test_face_down_z_range() -> None:
     assert layer_height == 0.2
 
 
-def test_face_double_z_range() -> None:
+def test_face_double_skips_layer_config() -> None:
+    assert (
+        _call_build_layer_config_ranges_xml(
+            base_height_mm=0.24,
+            color_height_mm=0.4,
+            nozzle_mm=0.4,
+            face="double",
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize("nozzle_mm", [0.2, 0.4])
+def test_non_divisible_nominal_height_resolves_to_012(nozzle_mm: float) -> None:
     xml_bytes = _call_build_layer_config_ranges_xml(
-        base_height_mm=0.8,
-        color_height_mm=2.4,
-        nozzle_mm=0.4,
-        face="double",
+        base_height_mm=0.24,
+        color_height_mm=0.4,
+        nozzle_mm=nozzle_mm,
+        face="down",
     )
 
     assert xml_bytes is not None
-    min_z, max_z, layer_height = _parse_range(xml_bytes)
-    assert min_z == 2.4
-    assert max_z == 3.2
-    assert layer_height == 0.2
+    assert _parse_range(xml_bytes)[2] == pytest.approx(0.12)
 
 
 def test_nozzle_02_uses_01mm() -> None:
@@ -191,6 +202,33 @@ def test_nozzle_02_uses_01mm() -> None:
     assert xml_bytes is not None
     _, _, layer_height = _parse_range(xml_bytes)
     assert layer_height == 0.1
+
+
+def test_skips_when_no_compatible_height_is_within_limits() -> None:
+    assert (
+        _call_build_layer_config_ranges_xml(
+            base_height_mm=0.32,
+            color_height_mm=0.4,
+            nozzle_mm=0.2,
+            face="down",
+            fine_layer_height_mm=0.08,
+            min_layer_height_mm=0.04,
+            max_layer_height_mm=0.14,
+        )
+        is None
+    )
+
+
+def test_equal_distance_candidates_choose_lower_height() -> None:
+    xml_bytes = _call_build_layer_config_ranges_xml(
+        base_height_mm=0.48,
+        color_height_mm=0.4,
+        nozzle_mm=0.4,
+        face="down",
+    )
+
+    assert xml_bytes is not None
+    assert _parse_range(xml_bytes)[2] == pytest.approx(0.16)
 
 
 def test_e2e_writer_produces_valid_xml(tmp_path) -> None:
@@ -254,6 +292,37 @@ def test_e2e_writer_produces_valid_xml(tmp_path) -> None:
     assert "/Metadata/layer_config_ranges.xml" in rel_targets
 
 
+def test_writer_forwards_fine_height_and_strict_printer_limits(tmp_path, monkeypatch) -> None:
+    output_path = tmp_path / "writer-layer-height-limits.3mf"
+    writer = _make_writer(
+        str(output_path),
+        settings={"layer_height": "0.06"},
+        base_height_mm=0.24,
+        color_height_mm=0.4,
+        face_orientation="down",
+        nozzle_size="0.2",
+    )
+    template = writer._get_base_config_template()
+    template["min_layer_height"] = ["0.04", "0.06", "invalid"]
+    template["max_layer_height"] = ["0.14", "0.12", None]
+    monkeypatch.setattr(writer, "_get_base_config_template", lambda: template)
+
+    captured: dict[str, object] = {}
+
+    def capture_builder_call(**kwargs) -> None:
+        captured.update(kwargs)
+        return None
+
+    monkeypatch.setattr(writer_module, "build_layer_config_ranges_xml", capture_builder_call)
+    writer.add_mesh(_make_box_mesh(), "Slot 1", (255, 0, 0))
+
+    writer.export()
+
+    assert captured["fine_layer_height_mm"] == pytest.approx(0.06)
+    assert captured["min_layer_height_mm"] == pytest.approx(0.06)
+    assert captured["max_layer_height_mm"] == pytest.approx(0.12)
+
+
 @pytest.mark.parametrize(
     ("slicer", "printer_id"),
     [
@@ -293,25 +362,45 @@ def test_bambu_family_layer_config_ranges_is_linked(
 
 @given(
     nozzle=st.sampled_from([0.2, 0.4]),
-    base=st.floats(min_value=0.08, max_value=5.0, allow_nan=False, allow_infinity=False),
-    color=st.floats(min_value=0.08, max_value=20.0, allow_nan=False, allow_infinity=False),
-    face=st.sampled_from(["up", "down", "double"]),
+    base_ticks=st.integers(min_value=4, max_value=250),
+    color_ticks=st.integers(min_value=4, max_value=1000),
+    face=st.sampled_from(["up", "down"]),
+    max_layer_height=st.sampled_from([0.12, 0.14, 0.28]),
 )
-def test_layer_config_property_layer_height_and_z_order(
+def test_layer_config_property_divisibility_bounds_and_z_order(
     nozzle: float,
-    base: float,
-    color: float,
+    base_ticks: int,
+    color_ticks: int,
     face: str,
+    max_layer_height: float,
 ) -> None:
+    base = base_ticks * 0.02
+    color = color_ticks * 0.02
     xml_bytes = _call_build_layer_config_ranges_xml(
         base_height_mm=base,
         color_height_mm=color,
         nozzle_mm=nozzle,
         face=face,
         fine_layer_height_mm=0.04,
+        min_layer_height_mm=0.04,
+        max_layer_height_mm=max_layer_height,
     )
 
-    assert xml_bytes is not None
+    if xml_bytes is None:
+        return
+
     min_z, max_z, layer_height = _parse_range(xml_bytes)
-    assert layer_height == nozzle * 0.5
+    layer_ticks = round(layer_height / 0.02)
+    assert layer_height == pytest.approx(layer_ticks * 0.02)
+    assert base_ticks % layer_ticks == 0
+    assert base_ticks // layer_ticks >= 2
+    assert layer_height > 0.04
+    assert layer_height <= max_layer_height + 1e-9
+    assert layer_height <= nozzle * 0.7 + 1e-9
     assert max_z > min_z
+    if face == "up":
+        assert min_z == pytest.approx(0.0)
+        assert max_z == pytest.approx(base)
+    else:
+        assert min_z == pytest.approx(color)
+        assert max_z == pytest.approx(color + base)

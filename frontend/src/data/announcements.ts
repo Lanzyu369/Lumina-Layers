@@ -16,6 +16,24 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-07-18",
+    title: {
+      zh: "Lumina Layers — 6 月下旬至 7 月更新速览",
+      en: "Lumina Layers — Late June to July updates",
+    },
+    sections: [
+      {
+        category: { zh: "稳定性", en: "Stability" },
+        items: [
+          {
+            zh: "7 月 18 日：生成 3MF 时，底板层高现在会自动对齐实际底板厚度；双面作品和不适合加速的厚度会安全跳过，避免顶部叠色少层或成品变薄。",
+            en: "July 18: Base-layer heights now align with the actual backing thickness when generating a 3MF. Double-sided prints and thicknesses that cannot be sped up safely are skipped, preventing missing top colour layers or a thinner result.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-07-15",
     title: {
       zh: "Lumina Layers — 6 月下旬至 7 月更新速览",

@@ -27,9 +27,25 @@ function makeEntry(version: string): AnnouncementEntry {
 }
 
 describe("useAnnouncement", () => {
-  it("announces SVG vector relief support in the latest update", () => {
-    expect(ANNOUNCEMENTS[0]?.version).toBe("2026-07-15");
+  it("announces the base-layer alignment fix in the latest update", () => {
+    expect(ANNOUNCEMENTS[0]?.version).toBe("2026-07-18");
     const items = ANNOUNCEMENTS[0]?.sections.flatMap((section) => section.items) ?? [];
+
+    expect(
+      items.some(
+        (item) =>
+          item.zh.includes("底板层高") &&
+          item.zh.includes("双面") &&
+          item.en.toLowerCase().includes("base-layer") &&
+          item.en.toLowerCase().includes("double-sided"),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps SVG vector relief support in announcement history", () => {
+    const items = ANNOUNCEMENTS.flatMap((entry) =>
+      entry.sections.flatMap((section) => section.items),
+    );
 
     expect(
       items.some(

@@ -1960,8 +1960,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Base-plate layer-height modifier",
   },
   "settings.base_layer_height_modifier_desc": {
-    zh: "在 3MF 里写入 layer_config_ranges，让底板用喷嘴直径一半的粗层高打印（0.4 → 0.2 mm，0.2 → 0.1 mm），显著缩短底板耗时。仅对 Bambu 系切片器生效；双面模型会自动跳过。",
-    en: "Writes layer_config_ranges so the base plate prints at half the nozzle diameter (0.4 → 0.2 mm, 0.2 → 0.1 mm), noticeably reducing base-plate time. Bambu-family slicers only; skipped for double-sided prints.",
+    zh: "生成 3MF 时会自动选择能整除底板厚度、且符合当前机型限制的较粗层高，缩短底板耗时并避免余数导致少层。双面模型或没有安全可选值时会自动跳过；仅对 Bambu 系切片器生效。",
+    en: "When generating a 3MF, automatically selects a coarser height that divides the base-plate thickness exactly and fits the selected printer, reducing print time without losing a remainder layer. Skipped for double-sided prints or when no safe value exists; Bambu-family slicers only.",
   },
   "settings.custom_slicer_path": {
     zh: "手动切片软件路径",
