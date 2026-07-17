@@ -1087,19 +1087,21 @@ def _build_mock_worker_result(
 ) -> dict[str, Any]:
     name = getattr(worker_fn, "__name__", "")
     if name == "worker_generate_preview":
-        color_mode = _mock_preview_color_mode_from_worker_args(worker_args)
-        if _is_vector_preview_worker_args(worker_args):
+        preview_contract = _mock_preview_worker_contract(worker_fn, worker_args)
+        if preview_contract["is_vector"]:
             return _build_mock_vector_preview_result(
                 created_paths,
                 np_module,
                 image_cls,
-                color_mode,
+                preview_contract["color_mode"],
+                preview_contract["metadata"],
             )
         return _build_mock_preview_result(
             created_paths,
             np_module,
             image_cls,
-            color_mode,
+            preview_contract["color_mode"],
+            preview_contract["metadata"],
         )
     if name in {
         "worker_generate_model",
@@ -1121,24 +1123,61 @@ def _build_mock_worker_result(
     raise QualityCheckError(f"Unexpected worker submitted in fast mode: {name}")
 
 
-def _mock_preview_color_mode_from_worker_args(worker_args: Sequence[Any]) -> str:
-    if len(worker_args) <= 5:
-        return DEFAULT_COLOR_MODE
-    value = worker_args[5]
-    enum_value = getattr(value, "value", None)
-    if isinstance(enum_value, str):
-        return enum_value
-    if isinstance(value, str) and value:
-        return value
-    return DEFAULT_COLOR_MODE
+def _mock_preview_worker_contract(
+    worker_fn: Callable[..., Any],
+    worker_args: Sequence[Any],
+) -> dict[str, Any]:
+    """Bind fast-gate inputs to the current preview-worker signature.
 
+    通过真实 worker 签名绑定 mock 参数，避免新增位置参数后静默错位。
+    """
 
-def _is_vector_preview_worker_args(worker_args: Sequence[Any]) -> bool:
-    if len(worker_args) < 7:
-        return False
-    image_path = str(worker_args[0])
-    modeling_mode = str(worker_args[6])
-    return image_path.lower().endswith(".svg") and modeling_mode == VECTOR_MODELING_MODE
+    import inspect
+
+    try:
+        bound = inspect.signature(worker_fn).bind(*worker_args)
+    except TypeError as exc:
+        raise QualityCheckError(
+            "Fast-mode preview mock no longer matches worker_generate_preview"
+        ) from exc
+    bound.apply_defaults()
+    arguments = bound.arguments
+
+    def _enum_text(name: str, default: str) -> str:
+        value = arguments.get(name, default)
+        enum_value = getattr(value, "value", value)
+        return str(enum_value) if enum_value is not None else default
+
+    color_mode = _enum_text("color_mode", DEFAULT_COLOR_MODE)
+    modeling_mode = _enum_text("modeling_mode", DEFAULT_MODELING_MODE)
+    metadata = {
+        "target_width_mm": float(arguments["target_width_mm"]),
+        "color_mode": color_mode,
+        "modeling_mode": modeling_mode,
+        "color_layers": arguments.get("color_layers"),
+        "layer_height_mm": arguments.get("layer_height_mm"),
+        "quantize_colors": int(arguments["quantize_colors"]),
+        "enable_cleanup": bool(arguments["enable_cleanup"]),
+        "hue_weight": float(arguments["hue_weight"]),
+        "chroma_gate": float(arguments["chroma_gate"]),
+        "use_lut_constrained": bool(arguments["use_lut_constrained"]),
+        "auto_dynamic_range": bool(arguments["auto_dynamic_range"]),
+        "model_enable": bool(arguments["model_enable"]),
+        "model_only": bool(arguments["model_only"]),
+        "model_threshold": arguments.get("model_threshold"),
+        "model_margin": arguments.get("model_margin"),
+        "svg_pixels_per_mm": float(arguments["svg_pixels_per_mm"]),
+        "material_source": str(arguments["material_source"]),
+    }
+    image_path = str(arguments.get("image_path", ""))
+    return {
+        "color_mode": color_mode,
+        "is_vector": (
+            image_path.lower().endswith(".svg")
+            and modeling_mode == VECTOR_MODELING_MODE
+        ),
+        "metadata": metadata,
+    }
 
 
 def _build_mock_preview_result(
@@ -1146,6 +1185,7 @@ def _build_mock_preview_result(
     np_module: Any,
     image_cls: Any,
     color_mode: str,
+    preview_analysis_metadata: Mapping[str, Any],
 ) -> dict[str, Any]:
     import pickle
 
@@ -1178,6 +1218,7 @@ def _build_mock_preview_result(
         "preview_colors": preview_colors,
         "slot_names": slots,
     }
+    cache.update(preview_analysis_metadata)
     cache_path = _make_temp_path(".pkl", created_paths)
     with cache_path.open("wb") as handle:
         pickle.dump(cache, handle)
@@ -1194,6 +1235,7 @@ def _build_mock_vector_preview_result(
     np_module: Any,
     image_cls: Any,
     color_mode: str,
+    preview_analysis_metadata: Mapping[str, Any],
 ) -> dict[str, Any]:
     import pickle
 
@@ -1231,6 +1273,7 @@ def _build_mock_vector_preview_result(
         "color_contours": {},
         "lut_match_info": {"match_mode": "mock-vector"},
     }
+    cache.update(preview_analysis_metadata)
     cache_path = _make_temp_path(".pkl", created_paths)
     with cache_path.open("wb") as handle:
         pickle.dump(cache, handle)

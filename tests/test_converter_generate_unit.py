@@ -2096,6 +2096,8 @@ class TestStandardCachedAnalysisRouting:
         *,
         modeling_mode: ModelingMode,
         material_source: str = "lut",
+        color_layers: int | None = 5,
+        layer_height_mm: float | None = 0.08,
         matched_rgb: object | None = None,
         mask_solid: object | None = None,
         material_matrix: object | None = None,
@@ -2128,8 +2130,8 @@ class TestStandardCachedAnalysisRouting:
             ),
             modeling_mode=modeling_mode,
             target_width_mm=40.0,
-            color_layers=5,
-            layer_height_mm=0.08,
+            color_layers=color_layers,
+            layer_height_mm=layer_height_mm,
             use_cached_matched_rgb=True,
         )
         cache = {
@@ -2162,8 +2164,8 @@ class TestStandardCachedAnalysisRouting:
         _test_store.put(sid, "image_path", str(image_path))
         _test_store.put(sid, "lut_path", str(lut_path))
         _test_store.put(sid, "material_source", material_source)
-        _test_store.put(sid, "color_layers", 5)
-        _test_store.put(sid, "layer_height_mm", 0.08)
+        _test_store.put(sid, "color_layers", color_layers)
+        _test_store.put(sid, "layer_height_mm", layer_height_mm)
         _test_store.put(sid, "replacement_regions", [])
         _test_store.put(sid, "free_color_set", set())
         if material_source == "material_archive":
@@ -2180,6 +2182,32 @@ class TestStandardCachedAnalysisRouting:
             "session_id": sid,
             "params": request.model_dump(mode="json"),
         }
+
+    def test_generate_explicit_cache_accepts_matching_omitted_layer_defaults(
+        self,
+        tmp_path,
+    ) -> None:
+        """Fresh preview/generate requests may both omit optional layer values."""
+
+        from core.preview_analysis_cache import REQUIRED_PREVIEW_ANALYSIS_REUSE
+
+        sid, payload = self._create_session(
+            tmp_path,
+            modeling_mode=ModelingMode.VECTOR,
+            color_layers=None,
+            layer_height_mm=None,
+        )
+        try:
+            response = client.post("/api/convert/generate", json=payload)
+
+            assert response.status_code == 200, response.text
+            submitted_params = _mock_pool.submit.call_args.args[3]
+            assert (
+                submitted_params["reuse_preview_analysis"]
+                == REQUIRED_PREVIEW_ANALYSIS_REUSE
+            )
+        finally:
+            _test_store.close(sid)
 
     @pytest.mark.parametrize(
         ("modeling_mode", "material_source", "invalid_arrays"),

@@ -513,6 +513,8 @@ def _preview_analysis_param_matches(
     if kind == "float":
         return _nullable_float_equal(value, expected)
     if kind == "int":
+        if value is None or expected is None:
+            return value is None and expected is None
         try:
             return int(value) == int(expected)
         except (TypeError, ValueError):
