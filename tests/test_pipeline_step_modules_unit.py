@@ -269,6 +269,193 @@ class TestS02ImageProcessing:
         assert after_s03["material_matrix"].shape[:2] == (3, 4)
         assert after_s03["_material_params"] is materials
 
+    def test_recipe_only_final_matrix_survives_global_replacement_pipeline(
+        self,
+        tmp_path,
+        monkeypatch,
+    ) -> None:
+        """Real prepare + S02→S03 keeps recipes and physical global color."""
+
+        from api.routers.converter.generate import (
+            _prepare_recipe_override_worker_inputs,
+        )
+        from api.schemas.converter import ConvertGenerateRequest
+        from api.session_store import SessionStore
+        from core.pipeline import s02_image_processing
+        from core.pipeline import s03_color_replacement
+
+        source_path = tmp_path / "source.png"
+        lut_path = tmp_path / "lut.npy"
+        authority_mask_path = tmp_path / "final-material-authority-mask.npy"
+        Image.fromarray(np.full((1, 4, 3), [255, 0, 0], dtype=np.uint8)).save(
+            source_path
+        )
+        lut_path.write_bytes(b"lut")
+
+        processed_rgb = np.full((1, 4, 3), [255, 0, 0], dtype=np.uint8)
+        processed_matrix = np.ones((1, 4, 5), dtype=np.int16)
+        mask_solid = np.ones((1, 4), dtype=bool)
+        region_1_mask = np.array([[True, True, False, False]], dtype=bool)
+        region_2_mask = np.array([[False, True, True, False]], dtype=bool)
+        authority_mask = region_1_mask | region_2_mask
+        recipe_overrides = [
+            {
+                "region_id": "region-1",
+                "recipe": [5, 5, 5, 5, 5],
+                "layer_order": "Top2Bottom",
+            },
+            {
+                "region_id": "region-2",
+                "recipe": [7, 7, 7, 7, 7],
+                "layer_order": "Top2Bottom",
+            },
+        ]
+
+        # Use the actual route helper. It starts from the stale preview matrix
+        # and applies only custom recipes; it does not replay imported global
+        # color mappings. Column 3 therefore remains stack 1 in this artifact.
+        store = SessionStore(ttl=1800)
+        sid = store.create()
+        cache = {
+            "material_matrix": processed_matrix.copy(),
+            "mask_solid": mask_solid.copy(),
+            "lut_metadata": LUTMetadata(
+                max_color_layers=5,
+                layer_height_mm=0.08,
+                base_channel_idx=0,
+            ),
+        }
+        session_data = {
+            "selected_region_masks": {
+                "region-1": region_1_mask,
+                "region-2": region_2_mask,
+            }
+        }
+        request = ConvertGenerateRequest(
+            lut_name="test-lut",
+            color_layers=5,
+            recipe_overrides=recipe_overrides,
+        )
+        final_matrix_path, recipe_masks_path = (
+            _prepare_recipe_override_worker_inputs(
+                cache=cache,
+                session_data=session_data,
+                recipe_overrides=recipe_overrides,
+                request=request,
+                sid=sid,
+                store=store,
+            )
+        )
+        assert final_matrix_path is not None
+        assert recipe_masks_path is not None
+        prepared_matrix = np.load(final_matrix_path)
+        prepared_before_global = np.array(
+            [
+                [
+                    [5, 5, 5, 5, 5],
+                    [7, 7, 7, 7, 7],
+                    [7, 7, 7, 7, 7],
+                    [1, 1, 1, 1, 1],
+                ]
+            ],
+            dtype=np.int16,
+        )
+        np.testing.assert_array_equal(prepared_matrix, prepared_before_global)
+        np.save(authority_mask_path, authority_mask)
+
+        # Global recoloring must update the physical stack outside recipe
+        # coverage while the recipe union remains authoritative. Later recipe
+        # wins at the overlap (column 1).
+        expected_final_matrix = prepared_before_global.copy()
+        expected_final_matrix[0, 3] = 2
+
+        class _FakeTree:
+            @staticmethod
+            def query(_values):
+                return np.array([0.0]), np.array([1])
+
+        class _FakeProcessor:
+            def __init__(self, *_args, **_kwargs) -> None:
+                self.enable_cleanup = True
+                self.last_match_info = None
+                self.kdtree = _FakeTree()
+                self.ref_stacks = np.array(
+                    [[1, 1, 1, 1, 1], [2, 2, 2, 2, 2]],
+                    dtype=np.int16,
+                )
+                self.lut_rgb = np.array(
+                    [[255, 0, 0], [0, 255, 0]],
+                    dtype=np.uint8,
+                )
+                self.process_calls = 0
+
+            @staticmethod
+            def _rgb_to_lab(values: np.ndarray) -> np.ndarray:
+                return np.asarray(values, dtype=np.float64)
+
+            def process_image(self, **_kwargs) -> dict:
+                self.process_calls += 1
+                return {
+                    "matched_rgb": processed_rgb.copy(),
+                    "material_matrix": processed_matrix.copy(),
+                    "mask_solid": mask_solid.copy(),
+                    "dimensions": (4, 1),
+                    "pixel_scale": 10.0,
+                    "mode_info": {"mode": ModelingMode.HIGH_FIDELITY},
+                }
+
+        monkeypatch.setattr(s02_image_processing, "LUTManager", None)
+        monkeypatch.setattr(
+            s02_image_processing,
+            "LuminaImageProcessor",
+            _FakeProcessor,
+        )
+        ctx = {
+            "actual_lut_path": str(lut_path),
+            "color_mode": "4-Color (RYBW)",
+            "image_path": str(source_path),
+            "target_width_mm": 40.0,
+            "modeling_mode": ModelingMode.HIGH_FIDELITY,
+            "quantize_colors": 8,
+            "enable_cleanup": True,
+            "reuse_preview_analysis": False,
+            "matched_rgb_path": None,
+            "mask_solid_path": None,
+            "material_matrix_path": str(final_matrix_path),
+            "final_material_matrix_is_authoritative": True,
+            "final_material_matrix_authority_mask_path": str(
+                authority_mask_path
+            ),
+            "replacement_regions": [
+                {
+                    "quantized_hex": "#ff0000",
+                    "matched_hex": "#ff0000",
+                    "replacement_hex": "#00ff00",
+                }
+            ],
+            "recipe_overrides": recipe_overrides,
+            # Large-format raster tiling deliberately consumes the already
+            # final matrix and does not forward whole-image masks to workers.
+            "recipe_override_masks_path": None,
+        }
+
+        try:
+            after_s02 = s02_image_processing.run(ctx)
+            processor = after_s02["processor"]
+            after_s03 = s03_color_replacement.run(after_s02)
+
+            assert processor.process_calls == 1
+            np.testing.assert_array_equal(
+                after_s03["matched_rgb"],
+                np.full((1, 4, 3), [0, 255, 0], dtype=np.uint8),
+            )
+            np.testing.assert_array_equal(
+                after_s03["material_matrix"],
+                expected_final_matrix,
+            )
+        finally:
+            store.clear_all()
+
     @pytest.mark.parametrize(
         ("cached_analysis_is_final", "expect_preserved"),
         [(True, True), (False, False)],

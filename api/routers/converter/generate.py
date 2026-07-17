@@ -1902,6 +1902,8 @@ def _resolve_large_format_shared_params(
     mask_solid_path: str | None = None,
     material_matrix_path: str | None = None,
     cached_analysis_is_final: bool = False,
+    final_material_matrix_is_authoritative: bool = False,
+    final_material_matrix_authority_mask_path: str | None = None,
 ) -> dict:
     replacement_regions = session_data.get("replacement_regions") or None
     if request.replacement_regions is not None:
@@ -1989,6 +1991,12 @@ def _resolve_large_format_shared_params(
         "matched_rgb_path": matched_rgb_path,
         "mask_solid_path": mask_solid_path,
         "material_matrix_path": material_matrix_path,
+        "final_material_matrix_is_authoritative": (
+            final_material_matrix_is_authoritative
+        ),
+        "final_material_matrix_authority_mask_path": (
+            final_material_matrix_authority_mask_path
+        ),
         "printer_id": request.printer_id,
         "slicer": request.slicer,
         "nozzle_size": request.nozzle_size,
@@ -2195,6 +2203,7 @@ async def _generate_large_format_raster(
     material_matrix_path: str | None,
     matched_rgb_path: str | None = None,
     mask_solid_path: str | None = None,
+    final_material_matrix_is_authoritative: bool = False,
     total_width_mm: float,
     total_height_mm: float,
     tile_width_mm: float,
@@ -2220,6 +2229,7 @@ async def _generate_large_format_raster(
     full_matched_rgb: np.ndarray | None = None
     full_mask_solid: np.ndarray | None = None
     full_material_matrix: np.ndarray | None = None
+    full_authoritative_material_mask: np.ndarray | None = None
     spatial_target_w = 0
     spatial_target_h = 0
     cached_analysis_requested = (
@@ -2300,14 +2310,41 @@ async def _generate_large_format_raster(
 
         spatial_target_h, spatial_target_w = full_material_matrix.shape[:2]
 
-    # The final material matrix already contains every recipe override. Keep
-    # loading the legacy mask artifact here so corrupt recipe-only requests
-    # retain their deterministic error, but never pass masks to tile workers
-    # and apply the same edit a second time.
+    # The final material matrix already contains every recipe override, but a
+    # recipe-only artifact does not necessarily contain imported global color
+    # mappings outside those regions. Merge the original masks into one
+    # authority mask; each tile worker will restore only those recipe pixels
+    # after applying global/scoped mappings. We still do not pass the legacy
+    # per-region mask pickle, so recipes are not recomputed a second time.
     if recipe_overrides and recipe_override_masks_path is not None:
         try:
             with open(recipe_override_masks_path, "rb") as f:
                 loaded_masks = pickle.load(f)
+            if cached_analysis_requested:
+                # A complete cached trio owns the whole matrix, so preserve
+                # the legacy contract: deserialize masks only as a corruption
+                # check and do not make their shape a new prerequisite.
+                if isinstance(loaded_masks, dict):
+                    for mask in loaded_masks.values():
+                        np.asarray(mask, dtype=bool)
+            else:
+                if not isinstance(loaded_masks, dict) or not loaded_masks:
+                    raise ValueError(
+                        "Recipe override masks must be a non-empty mapping"
+                    )
+                if full_material_matrix is None:
+                    raise ValueError("Recipe override material matrix is missing")
+                full_authoritative_material_mask = np.zeros(
+                    full_material_matrix.shape[:2],
+                    dtype=bool,
+                )
+                for mask in loaded_masks.values():
+                    mask_array = np.asarray(mask, dtype=bool)
+                    if mask_array.shape != full_material_matrix.shape[:2]:
+                        raise ValueError(
+                            "Recipe override mask shape does not match material matrix"
+                        )
+                    full_authoritative_material_mask |= mask_array
         except (OSError, ValueError, TypeError, pickle.PickleError) as exc:
             _log_large_format_failure(
                 session_id=sid,
@@ -2321,9 +2358,6 @@ async def _generate_large_format_raster(
                 status_code=500,
                 detail=LARGE_FORMAT_RECIPE_OVERRIDE_LOAD_FAILED_DETAIL,
             ) from exc
-        if isinstance(loaded_masks, dict):
-            for mask in loaded_masks.values():
-                np.asarray(mask, dtype=bool)
 
     px_per_mm_x = px_w / total_width_mm
     px_per_mm_y = px_h / total_height_mm
@@ -2360,6 +2394,11 @@ async def _generate_large_format_raster(
         mask_solid_path=None,
         material_matrix_path=None,
         cached_analysis_is_final=cached_analysis_requested,
+        final_material_matrix_is_authoritative=(
+            final_material_matrix_is_authoritative
+            or cached_analysis_requested
+        ),
+        final_material_matrix_authority_mask_path=None,
     )
     shared_params["reuse_preview_analysis"] = False
     if str(image_path).lower().endswith(".png") and shared_params["modeling_mode"] == CoreModelingMode.VECTOR:
@@ -2452,6 +2491,25 @@ async def _generate_large_format_raster(
                     np.save(mm_tile_path, material_matrix_tile)
                     tile_params["material_matrix_path"] = mm_tile_path
                     tile_params["recipe_override_masks_path"] = None
+                    if (
+                        final_material_matrix_is_authoritative
+                        and not cached_analysis_requested
+                        and full_authoritative_material_mask is not None
+                    ):
+                        authority_mask_tile = full_authoritative_material_mask[
+                            spatial_y0:spatial_y1,
+                            spatial_x0:spatial_x1,
+                        ]
+                        fd_authority, authority_mask_tile_path = tempfile.mkstemp(
+                            suffix=".npy",
+                            dir=TEMP_DIR,
+                        )
+                        os.close(fd_authority)
+                        route_local_cleanup_paths.add(authority_mask_tile_path)
+                        np.save(authority_mask_tile_path, authority_mask_tile)
+                        tile_params[
+                            "final_material_matrix_authority_mask_path"
+                        ] = authority_mask_tile_path
                     if full_matched_rgb is not None and full_mask_solid is not None:
                         matched_rgb_tile = full_matched_rgb[
                             spatial_y0:spatial_y1,
@@ -2672,6 +2730,9 @@ async def convert_generate_large_format(
         if override_material_matrix_path is not None
         else cached_material_matrix_path
     )
+    final_material_matrix_is_authoritative = (
+        override_material_matrix_path is not None
+    )
     tile_w_mm = lf.tile_width_mm
     tile_h_mm = lf.tile_height_mm
 
@@ -2735,6 +2796,9 @@ async def convert_generate_large_format(
                     matched_rgb_path=matched_rgb_path,
                     mask_solid_path=mask_solid_path,
                     material_matrix_path=material_matrix_path,
+                    final_material_matrix_is_authoritative=(
+                        final_material_matrix_is_authoritative
+                    ),
                     total_width_mm=total_w_mm,
                     total_height_mm=total_h_mm,
                     tile_width_mm=tile_w_mm,
@@ -2759,6 +2823,9 @@ async def convert_generate_large_format(
             matched_rgb_path=matched_rgb_path,
             mask_solid_path=mask_solid_path,
             material_matrix_path=material_matrix_path,
+            final_material_matrix_is_authoritative=(
+                final_material_matrix_is_authoritative
+            ),
             total_width_mm=total_w_mm,
             total_height_mm=total_h_mm,
             tile_width_mm=tile_w_mm,

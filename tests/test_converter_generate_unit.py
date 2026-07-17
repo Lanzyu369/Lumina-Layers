@@ -14,6 +14,7 @@ Validates:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import os
 import pickle
@@ -3024,6 +3025,119 @@ class TestLargeFormatDimensionsAndRouting:
         finally:
             _test_store.clear_all()
 
+    def test_large_format_recipe_only_route_marks_final_matrix_authoritative(
+        self,
+    ) -> None:
+        """Recipe-only generation must not depend on the cached-trio flag."""
+
+        sid, image_path, lut_path = _create_raster_large_format_session(_test_store)
+        _test_store.put(
+            sid,
+            "replacement_regions",
+            [
+                {
+                    "quantized_hex": "#ff0000",
+                    "matched_hex": "#ff0000",
+                    "replacement_hex": "#00ff00",
+                }
+            ],
+        )
+        payload = _large_format_payload(
+            sid,
+            modeling_mode="high-fidelity",
+            use_cached_matched_rgb=False,
+            target_width_mm=90.0,
+            target_height_mm=60.0,
+        )
+
+        try:
+            with patch(
+                "api.routers.converter.generate._generate_large_format_raster",
+                return_value=_large_format_success_response("raster"),
+            ) as raster_helper:
+                response = client.post(
+                    "/api/convert/generate-large-format",
+                    json=payload,
+                )
+
+            assert response.status_code == 200, response.text
+            kwargs = raster_helper.call_args.kwargs
+            assert kwargs["matched_rgb_path"] is None
+            assert kwargs["mask_solid_path"] is None
+            assert kwargs["material_matrix_path"] is not None
+            assert os.path.exists(kwargs["material_matrix_path"])
+            assert kwargs["final_material_matrix_is_authoritative"] is True
+        finally:
+            _test_store.close(sid)
+            for path in (image_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    @pytest.mark.parametrize(
+        (
+            "cached_analysis_is_final",
+            "final_material_matrix_is_authoritative",
+        ),
+        [(False, False), (False, True), (True, True)],
+        ids=("ordinary", "recipe-only", "complete-trio"),
+    )
+    def test_large_format_shared_params_separate_rgb_and_matrix_finality(
+        self,
+        cached_analysis_is_final: bool,
+        final_material_matrix_is_authoritative: bool,
+    ) -> None:
+        """Final recipes keep global RGB mapping unless the full trio is final."""
+
+        assert "final_material_matrix_is_authoritative" in inspect.signature(
+            _resolve_large_format_shared_params
+        ).parameters
+        assert "final_material_matrix_authority_mask_path" in inspect.signature(
+            _resolve_large_format_shared_params
+        ).parameters
+        replacement_regions = [
+            {
+                "quantized_hex": "#ff0000",
+                "matched_hex": "#ff0000",
+                "replacement_hex": "#00ff00",
+            }
+        ]
+        params = _resolve_large_format_shared_params(
+            {"material_source": "lut", "replacement_regions": replacement_regions},
+            LargeFormatConvertGenerateRequest(
+                lut_name="test_lut",
+                modeling_mode=ModelingMode.HIGH_FIDELITY,
+            ),
+            None,
+            material_matrix_path=(
+                "final-material.npy"
+                if final_material_matrix_is_authoritative
+                else None
+            ),
+            cached_analysis_is_final=cached_analysis_is_final,
+            final_material_matrix_is_authoritative=(
+                final_material_matrix_is_authoritative
+            ),
+            final_material_matrix_authority_mask_path=(
+                "recipe-authority-mask.npy"
+                if final_material_matrix_is_authoritative
+                and not cached_analysis_is_final
+                else None
+            ),
+        )
+
+        assert params["final_material_matrix_is_authoritative"] is (
+            final_material_matrix_is_authoritative
+        )
+        assert params["replacement_regions"] == (
+            None if cached_analysis_is_final else replacement_regions
+        )
+        assert params["final_material_matrix_authority_mask_path"] == (
+            "recipe-authority-mask.npy"
+            if final_material_matrix_is_authoritative
+            and not cached_analysis_is_final
+            else None
+        )
+
     def test_large_format_artifact_cache_uses_metadata_without_hydrating(
         self,
         tmp_path,
@@ -4175,8 +4289,10 @@ class TestLargeFormatDimensionsAndRouting:
         with open(lut_path, "wb") as lut_file:
             lut_file.write(b"lut")
         np.save(material_matrix_path, np.zeros((4, 8, 5), dtype=np.uint8))
+        authority_mask = np.zeros((4, 8), dtype=bool)
+        authority_mask[:2, 2:6] = True
         with open(recipe_override_masks_path, "wb") as mask_file:
-            pickle.dump({"region-1": np.ones((4, 8), dtype=bool)}, mask_file)
+            pickle.dump({"region-1": authority_mask}, mask_file)
         with open(threemf_path, "wb") as threemf_file:
             threemf_file.write(b"3mf")
 
@@ -4189,22 +4305,29 @@ class TestLargeFormatDimensionsAndRouting:
         captured_paths: list[str] = []
         captured_shapes: dict[str, tuple[int, ...]] = {}
         captured_recipe_mask_paths: list[str | None] = []
+        captured_authority_masks: list[np.ndarray] = []
         captured_reuse_flags: list[bool] = []
 
         async def _mock_submit(_fn, _tile_path, _lut_path, tile_params):
             matrix_path = tile_params["material_matrix_path"]
             masks_path = tile_params["recipe_override_masks_path"]
+            authority_mask_path = tile_params[
+                "final_material_matrix_authority_mask_path"
+            ]
             heightmap_path = tile_params["heightmap_path"]
             captured_paths.extend(
                 [
                     _tile_path,
                     heightmap_path,
                     matrix_path,
+                    authority_mask_path,
                 ]
             )
             captured_shapes["matrix"] = tuple(np.load(matrix_path).shape)
             captured_recipe_mask_paths.append(masks_path)
+            captured_authority_masks.append(np.load(authority_mask_path))
             captured_reuse_flags.append(bool(tile_params["reuse_preview_analysis"]))
+            assert tile_params["final_material_matrix_is_authoritative"] is True
             assert tile_params["matched_rgb_path"] is None
             assert tile_params["mask_solid_path"] is None
             with Image.open(heightmap_path) as hm_img:
@@ -4239,6 +4362,7 @@ class TestLargeFormatDimensionsAndRouting:
                     ],
                     recipe_override_masks_path=recipe_override_masks_path,
                     material_matrix_path=material_matrix_path,
+                    final_material_matrix_is_authoritative=True,
                     total_width_mm=80.0,
                     total_height_mm=40.0,
                     tile_width_mm=40.0,
@@ -4262,6 +4386,8 @@ class TestLargeFormatDimensionsAndRouting:
             assert captured_shapes["tile"] == (10, 20)
             assert captured_shapes["heightmap"] == (10, 20)
             assert captured_recipe_mask_paths == [None, None]
+            assert np.array_equal(captured_authority_masks[0], authority_mask[:, :4])
+            assert np.array_equal(captured_authority_masks[1], authority_mask[:, 4:])
             assert captured_reuse_flags == [False, False]
             assert captured_paths
             assert all(not os.path.exists(path) for path in captured_paths)
@@ -4274,6 +4400,81 @@ class TestLargeFormatDimensionsAndRouting:
             for path in (image_path, lut_path, material_matrix_path, recipe_override_masks_path, threemf_path):
                 if os.path.exists(path):
                     os.unlink(path)
+
+    @pytest.mark.asyncio
+    async def test_large_format_recipe_authority_mask_tile_path_cleans_on_failure(
+        self,
+        tmp_path,
+    ) -> None:
+        image_path = tmp_path / "source.png"
+        lut_path = tmp_path / "lut.npy"
+        material_matrix_path = tmp_path / "final-material.npy"
+        recipe_masks_path = tmp_path / "recipe-masks.pkl"
+        Image.fromarray(np.zeros((20, 20, 3), dtype=np.uint8)).save(image_path)
+        lut_path.write_bytes(b"lut")
+        np.save(
+            material_matrix_path,
+            np.zeros((4, 4, 5), dtype=np.int16),
+        )
+        with open(recipe_masks_path, "wb") as handle:
+            pickle.dump(
+                {"region-1": np.eye(4, dtype=bool)},
+                handle,
+            )
+
+        route_local_paths: list[str] = []
+
+        async def _fail(_fn, tile_path, _lut_path, tile_params):
+            paths = [
+                tile_path,
+                tile_params["material_matrix_path"],
+                tile_params["final_material_matrix_authority_mask_path"],
+            ]
+            assert all(path and os.path.exists(path) for path in paths)
+            route_local_paths.extend(paths)
+            raise RuntimeError("worker failed")
+
+        store = SessionStore(ttl=1800)
+        sid = store.create()
+        request = LargeFormatConvertGenerateRequest(
+            lut_name="test_lut",
+            modeling_mode=ModelingMode.HIGH_FIDELITY,
+        )
+        try:
+            with pytest.raises(HTTPException) as exc_info:
+                await _generate_large_format_raster(
+                    image_path=str(image_path),
+                    lut_path=str(lut_path),
+                    source_basename="poster",
+                    recipe_overrides=[
+                        {
+                            "region_id": "region-1",
+                            "recipe": [1, 1, 1, 1, 1],
+                            "layer_order": "Top2Bottom",
+                        }
+                    ],
+                    recipe_override_masks_path=str(recipe_masks_path),
+                    material_matrix_path=str(material_matrix_path),
+                    final_material_matrix_is_authoritative=True,
+                    total_width_mm=40.0,
+                    total_height_mm=40.0,
+                    tile_width_mm=40.0,
+                    tile_height_mm=40.0,
+                    request=request,
+                    session_data={},
+                    sid=sid,
+                    store=store,
+                    registry=FileRegistry(),
+                    pool=SimpleNamespace(submit=AsyncMock(side_effect=_fail)),
+                )
+
+            assert exc_info.value.status_code == 500
+            assert route_local_paths
+            assert all(not os.path.exists(path) for path in route_local_paths)
+            assert material_matrix_path.exists()
+            assert recipe_masks_path.exists()
+        finally:
+            store.clear_all()
 
     def test_large_format_raster_tile_timeout_is_reported_per_tile(self) -> None:
         fd_img, image_path = tempfile.mkstemp(suffix=".png")

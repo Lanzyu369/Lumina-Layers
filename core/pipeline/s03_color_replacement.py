@@ -583,6 +583,8 @@ def run(ctx: dict) -> dict:
         - replacement_regions (list | None): 区域替换列表
         - matched_rgb_path (str | None): 预计算 matched_rgb .npy 文件路径
         - material_matrix_path (str | None): 预计算 material_matrix .npy 文件路径
+        - final_material_matrix_is_authoritative (bool): 颜色映射后保留最终材料矩阵
+        - final_material_matrix_authority_mask_path (str | None): 最终矩阵权威区域
 
     PipelineContext 输出键 / Output keys:
         - matched_rgb (np.ndarray): 更新后的 RGB（如有替换）
@@ -601,6 +603,14 @@ def run(ctx: dict) -> dict:
     replacement_regions = ctx.get("replacement_regions")
     matched_rgb_path = ctx.get("matched_rgb_path")
     material_matrix_path = ctx.get("material_matrix_path")
+    final_material_matrix_is_authoritative = bool(
+        ctx.get("final_material_matrix_is_authoritative", False)
+    )
+    final_material_matrix_authority_mask_path = ctx.get(
+        "final_material_matrix_authority_mask_path"
+    )
+    authoritative_material_matrix = None
+    authoritative_material_mask = None
     recipe_overrides = ctx.get("recipe_overrides") or []
     recipe_override_masks_path = ctx.get("recipe_override_masks_path")
     lut_metadata = ctx.get("lut_metadata")
@@ -654,6 +664,39 @@ def run(ctx: dict) -> dict:
                 )
             else:
                 material_matrix = override_material_matrix
+                if final_material_matrix_is_authoritative:
+                    authoritative_material_matrix = np.array(
+                        override_material_matrix,
+                        copy=True,
+                    )
+                    if final_material_matrix_authority_mask_path is not None:
+                        try:
+                            loaded_authority_mask = np.load(
+                                final_material_matrix_authority_mask_path,
+                                allow_pickle=False,
+                            )
+                            if loaded_authority_mask.shape != material_matrix.shape[:2]:
+                                _log.warning(
+                                    "final material matrix authority mask shape %s "
+                                    "does not match material matrix shape %s; "
+                                    "ignoring final matrix authority",
+                                    loaded_authority_mask.shape,
+                                    material_matrix.shape[:2],
+                                )
+                                authoritative_material_matrix = None
+                            else:
+                                authoritative_material_mask = np.asarray(
+                                    loaded_authority_mask,
+                                    dtype=bool,
+                                ) & np.asarray(mask_solid, dtype=bool)
+                        except (OSError, ValueError, TypeError) as exc:
+                            _log.warning(
+                                "Failed to load final material matrix authority "
+                                "mask '%s': %s; ignoring final matrix authority",
+                                final_material_matrix_authority_mask_path,
+                                exc,
+                            )
+                            authoritative_material_matrix = None
         except (OSError, ValueError, TypeError) as e:
             _log.warning(
                 f"Failed to load material_matrix_path '{material_matrix_path}': {e}, "
@@ -932,6 +975,21 @@ def run(ctx: dict) -> dict:
             _resolve_lut_index_for_rgb,
             processor.ref_stacks,
         )
+
+    if authoritative_material_matrix is not None:
+        # Complete cached analysis owns the whole matrix. Recipe-only
+        # large-format inputs own only the union of their recipe regions:
+        # global/scoped mappings must remain physically effective everywhere
+        # else, even when an imported replacement list was never baked into
+        # the preview cache used by the route helper.
+        # 完整缓存分析拥有整张矩阵；recipe-only 大画幅只在配方区域
+        # union 内拥有最终权威。其他像素保留本轮全局/区域替色的实体矩阵。
+        if authoritative_material_mask is None:
+            material_matrix = authoritative_material_matrix
+        else:
+            material_matrix[authoritative_material_mask] = (
+                authoritative_material_matrix[authoritative_material_mask]
+            )
 
     ctx["matched_rgb"] = matched_rgb
     ctx["material_matrix"] = material_matrix
