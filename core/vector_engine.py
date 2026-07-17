@@ -1108,7 +1108,61 @@ def _build_stepped_volume_mesh(
     *,
     scale_factor: float,
 ) -> trimesh.Trimesh | None:
-    """Build one exposed boundary mesh from arbitrary stacked 2D slabs."""
+    """Build a watertight stepped volume, preferring the native union kernel."""
+
+    prepared = _prepare_stepped_volume_slabs(slabs)
+    if prepared is None:
+        return None
+    valid_slabs, component_slabs = prepared
+
+    if _load_relief_manifold3d() is not None:
+        try:
+            native_mesh = _build_stepped_volume_mesh_manifold_prepared(
+                component_slabs,
+                scale_factor=scale_factor,
+            )
+            if _validate_stepped_volume_mesh(
+                native_mesh,
+                valid_slabs=valid_slabs,
+                component_count=len(component_slabs),
+                scale_factor=scale_factor,
+            ):
+                return native_mesh
+            raise ValueError("native relief mesh failed topology validation")
+        except VECTOR_HANDLED_ERRORS as exc:
+            _log.warning(
+                "Native relief mesh union failed; rebuilding with exact Python fallback",
+                extra={
+                    "event": "vector_relief_native_union_fallback",
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                    "fallback_kernel": "python_atomic_prisms",
+                },
+            )
+
+    return _build_stepped_volume_mesh_python_prepared(
+        component_slabs,
+        scale_factor=scale_factor,
+    )
+
+
+def _load_relief_manifold3d():
+    """Return the optional manifold3d module, or ``None`` when unavailable."""
+
+    try:
+        import manifold3d as m3d
+    except (ImportError, OSError):
+        return None
+    return m3d
+
+
+def _prepare_stepped_volume_slabs(
+    slabs: list[dict],
+) -> tuple[
+    list[tuple[Polygon, float, float]],
+    list[list[tuple[Polygon, float, float]]],
+] | None:
+    """Validate slab records and group them by area-connected XY footprint."""
 
     valid_slabs = []
     slab_geometries = []
@@ -1152,22 +1206,236 @@ def _build_stepped_volume_mesh(
                 component_slabs[component_index].append((geometry, z_offset, z_end))
                 break
 
-    component_meshes = [
-        mesh
-        for grouped_slabs in component_slabs
-        if grouped_slabs
-        for mesh in [
-            _build_connected_stepped_volume_mesh(
-                grouped_slabs,
-                scale_factor=scale_factor,
-            )
+    populated_components = [group for group in component_slabs if group]
+    if not populated_components:
+        return None
+    return valid_slabs, populated_components
+
+
+def _stepped_volume_expected_metrics(
+    valid_slabs: list[tuple[Polygon, float, float]],
+    *,
+    scale_factor: float,
+) -> tuple[np.ndarray, float] | None:
+    """Return expected bounds and volume directly from the slab union."""
+
+    scale = float(scale_factor)
+    if not np.isfinite(scale) or scale <= 0.0:
+        return None
+    z_boundaries = sorted(
+        {
+            round(z_value, 9)
+            for _geometry, z_start, z_end in valid_slabs
+            for z_value in (z_start, z_end)
+        }
+    )
+    if len(z_boundaries) < 2:
+        return None
+
+    volume = 0.0
+    active_footprints = []
+    for z_start, z_end in zip(z_boundaries, z_boundaries[1:]):
+        z_mid = (z_start + z_end) * 0.5
+        active = [
+            geometry
+            for geometry, slab_start, slab_end in valid_slabs
+            if slab_start < z_mid < slab_end
         ]
-        if mesh is not None
-    ]
+        if not active:
+            continue
+        footprint = _union_run_group_geometries(active)
+        if footprint is None or footprint.is_empty:
+            continue
+        active_footprints.append(footprint)
+        volume += float(footprint.area) * (z_end - z_start) * scale * scale
+    if not active_footprints or volume <= 0.0:
+        return None
+
+    footprint_union = _union_run_group_geometries(active_footprints)
+    min_x, min_y, max_x, max_y = footprint_union.bounds
+    bounds = np.asarray(
+        [
+            [min_x * scale, min_y * scale, z_boundaries[0]],
+            [max_x * scale, max_y * scale, z_boundaries[-1]],
+        ],
+        dtype=np.float64,
+    )
+    return bounds, volume
+
+
+def _validate_stepped_volume_mesh(
+    mesh: trimesh.Trimesh | None,
+    *,
+    valid_slabs: list[tuple[Polygon, float, float]],
+    component_count: int,
+    scale_factor: float,
+) -> bool:
+    """Reject incomplete or semantically different native-kernel results."""
+
+    if mesh is None or len(mesh.vertices) == 0 or len(mesh.faces) == 0:
+        return False
+    vertices = np.asarray(mesh.vertices, dtype=np.float64)
+    if not np.all(np.isfinite(vertices)) or not mesh.is_watertight:
+        return False
+    expected = _stepped_volume_expected_metrics(
+        valid_slabs,
+        scale_factor=scale_factor,
+    )
+    if expected is None:
+        return False
+    expected_bounds, expected_volume = expected
+    if not np.allclose(mesh.bounds, expected_bounds, rtol=1e-7, atol=5e-6):
+        return False
+    if not np.isclose(
+        abs(float(mesh.volume)),
+        expected_volume,
+        rtol=1e-6,
+        atol=1e-6,
+    ):
+        return False
+    # Native construction is performed independently for each area-connected
+    # footprint, so point-touching bodies cannot be fused.  Do not compare
+    # ``mesh.split`` here: an enclosed cavity adds a separate *surface shell*
+    # even though it is still part of one connected solid volume.
+    return component_count > 0
+
+
+def _manifold_polygon_contours(
+    polygon: Polygon,
+    *,
+    scale_factor: float,
+) -> list[np.ndarray]:
+    """Convert one Shapely polygon to open, scaled manifold contours."""
+
+    contours = []
+    for ring in (polygon.exterior, *polygon.interiors):
+        coordinates = np.asarray(ring.coords, dtype=np.float64)
+        if coordinates.ndim != 2 or coordinates.shape[0] < 4:
+            continue
+        coordinates = coordinates[:-1, :2] * float(scale_factor)
+        if len(coordinates) >= 3 and np.all(np.isfinite(coordinates)):
+            contours.append(coordinates)
+    return contours
+
+
+def _build_stepped_volume_mesh_manifold_prepared(
+    component_slabs: list[list[tuple[Polygon, float, float]]],
+    *,
+    scale_factor: float,
+) -> trimesh.Trimesh | None:
+    """Union extruded slabs per area-connected component with manifold3d."""
+
+    m3d = _load_relief_manifold3d()
+    if m3d is None:
+        return None
+    component_meshes = []
+    for grouped_slabs in component_slabs:
+        solids = []
+        slabs_by_z: dict[tuple[float, float], list[Polygon]] = {}
+        for polygon, z_start, z_end in grouped_slabs:
+            slabs_by_z.setdefault((z_start, z_end), []).append(polygon)
+        for (z_start, z_end), polygons in slabs_by_z.items():
+            contours = [
+                contour
+                for polygon in polygons
+                for contour in _manifold_polygon_contours(
+                    polygon,
+                    scale_factor=scale_factor,
+                )
+            ]
+            if not contours:
+                continue
+            section = m3d.CrossSection(contours, m3d.FillRule.EvenOdd)
+            solid = section.extrude(z_end - z_start).translate((0.0, 0.0, z_start))
+            if not solid.is_empty():
+                solids.append(solid)
+        if not solids:
+            return None
+        unioned = m3d.Manifold.batch_boolean(solids, m3d.OpType.Add)
+        if unioned.is_empty() or unioned.status() != m3d.Error.NoError:
+            return None
+        mesh_data = unioned.to_mesh()
+        vertices = np.asarray(mesh_data.vert_properties, dtype=np.float64)
+        faces = np.asarray(mesh_data.tri_verts, dtype=np.int64)
+        if vertices.ndim != 2 or vertices.shape[1] < 3 or faces.size == 0:
+            return None
+        component_mesh = trimesh.Trimesh(
+            vertices=vertices[:, :3].copy(),
+            faces=faces.copy(),
+            process=False,
+        )
+        if not component_mesh.is_watertight:
+            return None
+        component_meshes.append(component_mesh)
+    if len(component_meshes) != len(component_slabs):
+        return None
+    return _concatenate_meshes_fast(component_meshes)
+
+
+def _build_stepped_volume_mesh_manifold(
+    slabs: list[dict],
+    *,
+    scale_factor: float,
+) -> trimesh.Trimesh | None:
+    """Build slabs with manifold3d without applying the Python fallback."""
+
+    prepared = _prepare_stepped_volume_slabs(slabs)
+    if prepared is None:
+        return None
+    valid_slabs, component_slabs = prepared
+    mesh = _build_stepped_volume_mesh_manifold_prepared(
+        component_slabs,
+        scale_factor=scale_factor,
+    )
+    return (
+        mesh
+        if _validate_stepped_volume_mesh(
+            mesh,
+            valid_slabs=valid_slabs,
+            component_count=len(component_slabs),
+            scale_factor=scale_factor,
+        )
+        else None
+    )
+
+
+def _build_stepped_volume_mesh_python_prepared(
+    component_slabs: list[list[tuple[Polygon, float, float]]],
+    *,
+    scale_factor: float,
+) -> trimesh.Trimesh | None:
+    """Build every component with the exact atomic-prism fallback."""
+
+    component_meshes = []
+    for grouped_slabs in component_slabs:
+        mesh = _build_connected_stepped_volume_mesh_python(
+            grouped_slabs,
+            scale_factor=scale_factor,
+        )
+        if mesh is None:
+            return None
+        component_meshes.append(mesh)
     return _concatenate_meshes_fast(component_meshes) if component_meshes else None
 
 
-def _build_connected_stepped_volume_mesh(
+def _build_stepped_volume_mesh_python(
+    slabs: list[dict],
+    *,
+    scale_factor: float,
+) -> trimesh.Trimesh | None:
+    """Build slabs with the exact Python algorithm and no native kernel."""
+
+    prepared = _prepare_stepped_volume_slabs(slabs)
+    if prepared is None:
+        return None
+    _valid_slabs, component_slabs = prepared
+    return _build_stepped_volume_mesh_python_prepared(
+        component_slabs,
+        scale_factor=scale_factor,
+    )
+
+
+def _build_connected_stepped_volume_mesh_python(
     valid_slabs: list[tuple[Polygon, float, float]],
     *,
     scale_factor: float,

@@ -4,9 +4,9 @@
 
 **Goal:** Generate watertight native SVG relief backing meshes without internal walls between adjacent height regions.
 
-**Architecture:** Normalize existing backing/cavity slabs into Z intervals and build a single exposed boundary mesh from interval footprints. Reuse Shapely boolean operations and the current Trimesh extrusion helper, leaving public converter contracts unchanged.
+**Architecture:** Normalize existing backing/cavity slabs, prefer direct native solid union through the existing optional `manifold3d` dependency, and retain the current exact atomic-prism implementation as an all-or-nothing fallback. Public converter contracts remain unchanged.
 
-**Tech Stack:** Python, NumPy, Shapely, Trimesh, pytest
+**Tech Stack:** Python, NumPy, Shapely, Trimesh, optional manifold3d, pytest
 
 ---
 
@@ -101,3 +101,28 @@ Stage only the design, plan, implementation, and regression test. Commit with:
 
 Push `MOVIBALE/fix/svg-relief-nonmanifold-preview` and open a draft PR against
 `dev-refactor` with root cause, user impact, and verification evidence.
+
+### Task 5: Restore the performance contract
+
+**Files:**
+- Modify: `core/vector_engine.py`
+- Modify: `tests/test_vector_engine_mesh_weld_unit.py`
+- Modify: `requirements-glb-v2.txt`
+- Add: `.github/workflows/relief-native-kernel.yml`
+
+- [ ] **Step 1: Add fast-kernel and forced-fallback regressions**
+
+Cover cavities, non-zero Z, XY scaling, point contacts, missing imports, runtime
+failures, and invalid native results. Assert that fallback rebuilds the whole Board.
+
+- [ ] **Step 2: Adopt direct native union**
+
+Extrude each merged slab as a manifold CrossSection and batch-union each
+area-connected footprint. Validate bounds, volume, finite coordinates, and
+watertightness before accepting the result.
+
+- [ ] **Step 3: Prove deployment and performance behavior**
+
+Run the focused tests with the optional dependency installed, add a Windows CI
+job that exercises both kernels, and benchmark the real UI-equivalent
+Preview-to-Generate flow against the original base and the exact watertight head.

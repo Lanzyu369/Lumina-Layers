@@ -20,6 +20,7 @@ import trimesh
 from scipy.spatial import cKDTree
 from shapely.geometry import Polygon, box
 
+import core.vector_engine as vector_engine
 from core.vector_engine import (
     VectorAnalysis,
     VectorProcessor,
@@ -174,6 +175,215 @@ def test_relief_backing_scales_by_connected_component() -> None:
     assert board.is_watertight
     assert len(board.split(only_watertight=False)) == region_count
     assert len(board.faces) <= region_count * 20
+
+
+def _native_kernel_contract_slabs() -> list[dict]:
+    """Return a stepped solid that exercises holes, offsets, and XY scaling."""
+
+    outer = box(-2.0, 3.0, 8.0, 13.0)
+    cavity = box(1.0, 6.0, 3.0, 8.0)
+    return [
+        {"geometry": outer, "z_offset": 0.35, "height": 0.4},
+        {
+            "geometry": outer.difference(cavity),
+            "z_offset": 0.75,
+            "height": 0.6,
+        },
+        {"geometry": outer, "z_offset": 1.35, "height": 0.25},
+    ]
+
+
+@pytest.mark.skipif(
+    vector_engine._load_relief_manifold3d() is None,
+    reason="optional manifold3d fast kernel is not installed",
+)
+def test_relief_backing_uses_native_kernel_without_python_finalize(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Installed manifold3d must bypass the expensive atomic-prism fallback."""
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("Python atomic-prism fallback was unexpectedly used")
+
+    monkeypatch.setattr(
+        vector_engine,
+        "_build_stepped_volume_mesh_python_prepared",
+        fail_if_called,
+    )
+    board = _build_stepped_volume_mesh(
+        _native_kernel_contract_slabs(),
+        scale_factor=1.7,
+    )
+
+    assert board is not None
+    assert board.is_watertight
+    np.testing.assert_allclose(
+        board.bounds,
+        [[-3.4, 5.1, 0.35], [13.6, 22.1, 1.6]],
+    )
+    assert float(board.volume) == pytest.approx(
+        (100.0 * 0.4 + 96.0 * 0.6 + 100.0 * 0.25) * 1.7**2,
+        rel=1e-6,
+    )
+
+
+def test_relief_backing_missing_native_dependency_uses_exact_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Base installs and unsupported wheels must retain watertight correctness."""
+
+    fallback_calls = 0
+    real_fallback = vector_engine._build_stepped_volume_mesh_python_prepared
+
+    def counted_fallback(*args, **kwargs):
+        nonlocal fallback_calls
+        fallback_calls += 1
+        return real_fallback(*args, **kwargs)
+
+    monkeypatch.setattr(vector_engine, "_load_relief_manifold3d", lambda: None)
+    monkeypatch.setattr(
+        vector_engine,
+        "_build_stepped_volume_mesh_python_prepared",
+        counted_fallback,
+    )
+    board = _build_stepped_volume_mesh(
+        _native_kernel_contract_slabs(),
+        scale_factor=1.7,
+    )
+
+    assert fallback_calls == 1
+    assert board is not None
+    assert board.is_watertight
+    assert float(board.volume) == pytest.approx(
+        (100.0 * 0.4 + 96.0 * 0.6 + 100.0 * 0.25) * 1.7**2,
+    )
+
+
+@pytest.mark.skipif(
+    vector_engine._load_relief_manifold3d() is None,
+    reason="optional manifold3d fast kernel is not installed",
+)
+def test_relief_backing_native_and_python_kernels_preserve_topology() -> None:
+    """Fast and fallback kernels must agree on cavities and point contacts."""
+
+    slabs = _native_kernel_contract_slabs()
+    native = vector_engine._build_stepped_volume_mesh_manifold(
+        slabs,
+        scale_factor=1.7,
+    )
+    fallback = vector_engine._build_stepped_volume_mesh_python(
+        slabs,
+        scale_factor=1.7,
+    )
+
+    assert native is not None
+    assert fallback is not None
+    assert native.is_watertight
+    assert fallback.is_watertight
+    np.testing.assert_allclose(native.bounds, fallback.bounds, atol=1e-8)
+    assert float(native.volume) == pytest.approx(
+        float(fallback.volume),
+        rel=1e-6,
+        abs=1e-6,
+    )
+
+    point_touching = [
+        {"geometry": box(0.0, 0.0, 1.0, 1.0), "z_offset": 0.2, "height": 1.0},
+        {"geometry": box(1.0, 1.0, 2.0, 2.0), "z_offset": 0.2, "height": 1.8},
+    ]
+    native_point_touch = vector_engine._build_stepped_volume_mesh_manifold(
+        point_touching,
+        scale_factor=1.0,
+    )
+    fallback_point_touch = vector_engine._build_stepped_volume_mesh_python(
+        point_touching,
+        scale_factor=1.0,
+    )
+    assert native_point_touch is not None
+    assert fallback_point_touch is not None
+    assert len(native_point_touch.split(only_watertight=False)) == 2
+    assert len(fallback_point_touch.split(only_watertight=False)) == 2
+
+
+@pytest.mark.skipif(
+    vector_engine._load_relief_manifold3d() is None,
+    reason="optional manifold3d fast kernel is not installed",
+)
+def test_relief_backing_native_groups_same_z_fragments_before_union() -> None:
+    """One height slab must not become many independently triangulated solids."""
+
+    base = box(0.0, 0.0, 12.0, 4.0)
+    raised_fragments = [
+        box(index * 2.0, 0.0, index * 2.0 + 1.0, 4.0)
+        for index in range(6)
+    ]
+    slabs = [
+        {"geometry": base, "z_offset": 0.0, "height": 0.5},
+        *[
+            {"geometry": fragment, "z_offset": 0.5, "height": 0.7}
+            for fragment in raised_fragments
+        ],
+    ]
+    native = vector_engine._build_stepped_volume_mesh_manifold(
+        slabs,
+        scale_factor=1.0,
+    )
+    fallback = vector_engine._build_stepped_volume_mesh_python(
+        slabs,
+        scale_factor=1.0,
+    )
+
+    assert native is not None
+    assert fallback is not None
+    assert native.is_watertight
+    assert float(native.volume) == pytest.approx(float(fallback.volume))
+    assert len(native.faces) < len(fallback.faces)
+
+
+@pytest.mark.parametrize("native_failure", ["exception", "invalid_mesh"])
+def test_relief_backing_native_failure_rebuilds_whole_board_with_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    native_failure: str,
+) -> None:
+    """A failed or invalid native result must never leak a partial Board."""
+
+    fallback_calls = 0
+    real_fallback = vector_engine._build_stepped_volume_mesh_python_prepared
+
+    def counted_fallback(*args, **kwargs):
+        nonlocal fallback_calls
+        fallback_calls += 1
+        return real_fallback(*args, **kwargs)
+
+    if native_failure == "exception":
+        def broken_native(*_args, **_kwargs):
+            raise RuntimeError("simulated manifold3d runtime failure")
+    else:
+        def broken_native(*_args, **_kwargs):
+            return trimesh.creation.box(extents=(1.0, 1.0, 1.0))
+
+    monkeypatch.setattr(
+        vector_engine,
+        "_build_stepped_volume_mesh_manifold_prepared",
+        broken_native,
+    )
+    monkeypatch.setattr(
+        vector_engine,
+        "_build_stepped_volume_mesh_python_prepared",
+        counted_fallback,
+    )
+    board = _build_stepped_volume_mesh(
+        _native_kernel_contract_slabs(),
+        scale_factor=1.7,
+    )
+
+    assert fallback_calls == 1
+    assert board is not None
+    assert board.is_watertight
+    np.testing.assert_allclose(
+        board.bounds,
+        [[-3.4, 5.1, 0.35], [13.6, 22.1, 1.6]],
+    )
 
 
 def test_corner_touching_relief_stays_watertight_through_build_and_glb(

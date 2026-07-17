@@ -17,19 +17,24 @@ work.
 
 ## Design
 
-Convert the existing backing and cavity slab records into one boundary mesh:
+Prefer the project's existing optional `manifold3d` kernel for the expensive
+solid-union step:
 
-1. Collect every distinct Z boundary from the slab records.
-2. For each adjacent Z interval, union all active 2D footprints.
-3. Generate only the vertical walls of each interval footprint.
-4. At each interface, generate an upward cap for `lower - upper` and a downward
-   cap for `upper - lower`.
-5. Generate the bottom and top caps at the outermost boundaries.
-6. Concatenate and weld the boundary pieces into one `Board` mesh.
+1. Normalize the existing backing and cavity slab records and group them by
+   area-connected XY footprint. Point-touching footprints stay separate.
+2. Convert every already-merged polygon (including interior rings) to a
+   `CrossSection`, extrude it at its existing Z offset, and union the solids in
+   each group with `Manifold.batch_boolean(..., OpType.Add)`.
+3. Validate the complete result against the source slabs: finite coordinates,
+   watertight topology, expected bounds, and analytical union volume.
+4. If `manifold3d` is missing, cannot load on the host, raises at runtime, or
+   returns an invalid result, discard the complete native result and rebuild
+   the whole Board with the current exact Python atomic-prism algorithm.
 
-This constructs the boundary of the volume rather than concatenating overlapping
-closed prisms. It uses the existing Shapely and Trimesh dependencies and preserves
-vector outlines without rasterization.
+The preferred path asks the native kernel to construct the union boundary
+directly, avoiding hundreds of temporary closed prisms and Python tuple-based
+internal-face deletion. The exact fallback preserves correctness on base installs
+and platforms without a compatible wheel; neither path rasterizes vector outlines.
 
 ## Validation
 
@@ -38,12 +43,19 @@ vector outlines without rasterization.
 - A same-height control must preserve bounds and volume.
 - A cavity profile that removes and later restores an interior footprint must
   remain watertight and preserve the cavity volume.
+- The fast and forced-fallback kernels must agree for non-zero Z offsets, XY
+  scaling, cavities, and point-touching independent shells.
+- Import failures, native runtime failures, and invalid native results must use
+  the exact whole-Board fallback without losing geometry.
 - Exporting and loading the minimal relief as GLB must preserve watertightness.
+- Windows CI must install the optional kernel requirements and run both the fast
+  and forced-fallback regression paths.
 - Existing vector relief, mesh welding, GLB orientation, and converter tests must
   remain green.
 
 ## Non-goals
 
-- No optional mesh-kernel dependency changes.
+- No move of native wheels into the base `requirements.txt`; the dependency
+  remains optional and is already part of GLB v2/desktop/Docker deployments.
 - No frontend rendering changes.
 - No redesign of optical layer geometry or relief height sampling.
