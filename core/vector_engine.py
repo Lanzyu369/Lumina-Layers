@@ -31,6 +31,7 @@ import cv2
 from dataclasses import dataclass, field
 from svgelements import SVG, Path, Shape, Move, Line, Close, CubicBezier, QuadraticBezier, Arc, Color
 from shapely.geometry import Polygon, MultiPolygon, LineString, Point, box
+from shapely.geometry.polygon import orient
 from shapely import affinity
 try:
     from shapely import buffer as shapely_buffer
@@ -816,6 +817,686 @@ def _concatenate_meshes_fast(meshes):
     vertices = np.vstack(vertices_parts)
     faces = np.vstack(faces_parts)
     return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+
+
+def _build_atomic_prism_mesh(
+    polygon: Polygon,
+    *,
+    z_start: float,
+    z_end: float,
+    scale_factor: float,
+) -> trimesh.Trimesh | None:
+    """Extrude one planar cell with deterministic shared-edge diagonals."""
+
+    base_meshes = VectorProcessor._extrude_geometry(
+        polygon,
+        height=z_end - z_start,
+        z_offset=z_start,
+        scale=scale_factor,
+    )
+    if not base_meshes:
+        return None
+    base = base_meshes[0]
+    base_vertices = np.asarray(base.vertices, dtype=np.float64)
+    base_faces = np.asarray(base.faces, dtype=np.int64)
+    face_z = base_vertices[base_faces, 2]
+    cap_mask = np.ptp(face_z, axis=1) <= 1e-9
+    parts = [
+        trimesh.Trimesh(
+            vertices=base_vertices.copy(),
+            faces=base_faces[cap_mask],
+            process=False,
+        )
+    ]
+
+    oriented = orient(polygon, sign=1.0)
+    rings = [oriented.exterior, *oriented.interiors]
+    side_vertices = []
+    side_faces = []
+    for ring in rings:
+        coordinates = list(ring.coords)
+        for start, end in zip(coordinates, coordinates[1:]):
+            start_xy = (float(start[0]) * scale_factor, float(start[1]) * scale_factor)
+            end_xy = (float(end[0]) * scale_factor, float(end[1]) * scale_factor)
+            if start_xy == end_xy:
+                continue
+            vertex_offset = len(side_vertices)
+            side_vertices.extend(
+                [
+                    (start_xy[0], start_xy[1], z_start),
+                    (end_xy[0], end_xy[1], z_start),
+                    (start_xy[0], start_xy[1], z_end),
+                    (end_xy[0], end_xy[1], z_end),
+                ]
+            )
+            start_bottom = vertex_offset
+            end_bottom = vertex_offset + 1
+            start_top = vertex_offset + 2
+            end_top = vertex_offset + 3
+            if start_xy < end_xy:
+                side_faces.extend(
+                    [
+                        (start_bottom, end_bottom, end_top),
+                        (start_bottom, end_top, start_top),
+                    ]
+                )
+            else:
+                side_faces.extend(
+                    [
+                        (start_top, start_bottom, end_bottom),
+                        (start_top, end_bottom, end_top),
+                    ]
+                )
+
+    if side_faces:
+        parts.append(
+            trimesh.Trimesh(
+                vertices=np.asarray(side_vertices, dtype=np.float64),
+                faces=np.asarray(side_faces, dtype=np.int64),
+                process=False,
+            )
+        )
+    return _concatenate_meshes_fast(parts)
+
+
+def _linework_node_coordinates(linework) -> np.ndarray:
+    """Collect unique XY nodes from noded Shapely boundary linework."""
+
+    coordinates = []
+    pending = [linework]
+    while pending:
+        geometry = pending.pop()
+        if geometry is None or geometry.is_empty:
+            continue
+        if hasattr(geometry, "geoms"):
+            pending.extend(geometry.geoms)
+        elif hasattr(geometry, "coords"):
+            coordinates.extend((float(x), float(y)) for x, y, *_ in geometry.coords)
+    if not coordinates:
+        return np.empty((0, 2), dtype=np.float64)
+    return np.unique(np.asarray(coordinates, dtype=np.float64), axis=0)
+
+
+def _densify_ring_with_nodes(ring, nodes: np.ndarray) -> list[tuple[float, float]]:
+    """Insert every nearly-collinear overlay node into one polygon ring."""
+
+    source = [(float(x), float(y)) for x, y, *_ in ring.coords]
+    if len(source) < 2 or len(nodes) == 0:
+        return source
+    tolerance = 1e-10
+    densified = [source[0]]
+    for start, end in zip(source, source[1:]):
+        start_arr = np.asarray(start, dtype=np.float64)
+        vector = np.asarray(end, dtype=np.float64) - start_arr
+        length_sq = float(np.dot(vector, vector))
+        if length_sq <= tolerance * tolerance:
+            continue
+        lower = np.minimum(start_arr, np.asarray(end)) - tolerance
+        upper = np.maximum(start_arr, np.asarray(end)) + tolerance
+        candidates = nodes[np.all((nodes >= lower) & (nodes <= upper), axis=1)]
+        if len(candidates):
+            offsets = candidates - start_arr
+            cross = np.abs(vector[0] * offsets[:, 1] - vector[1] * offsets[:, 0])
+            parameters = offsets @ vector / length_sq
+            interior = (
+                (cross <= tolerance * np.sqrt(length_sq))
+                & (parameters > tolerance)
+                & (parameters < 1.0 - tolerance)
+            )
+            if np.any(interior):
+                selected = candidates[interior]
+                selected_parameters = parameters[interior]
+                for point in selected[np.argsort(selected_parameters)]:
+                    coordinate = (float(point[0]), float(point[1]))
+                    if coordinate != densified[-1]:
+                        densified.append(coordinate)
+        if end != densified[-1]:
+            densified.append(end)
+    if densified[-1] != densified[0]:
+        densified.append(densified[0])
+    return densified
+
+
+def _densify_polygon_with_nodes(polygon: Polygon, nodes: np.ndarray) -> Polygon:
+    """Return ``polygon`` with matching vertex splits on every shared edge."""
+
+    densified = Polygon(
+        _densify_ring_with_nodes(polygon.exterior, nodes),
+        [_densify_ring_with_nodes(interior, nodes) for interior in polygon.interiors],
+    )
+    return densified if densified.is_valid and not densified.is_empty else polygon
+
+
+def _split_mesh_t_junctions(mesh: trimesh.Trimesh) -> None:
+    """Split boundary triangle edges at existing collinear mesh vertices."""
+
+    tolerance = 1e-9
+    for _ in range(1024):
+        edges = np.asarray(mesh.edges_sorted, dtype=np.int64)
+        if len(edges) == 0:
+            return
+        _, inverse, counts = np.unique(
+            edges,
+            axis=0,
+            return_inverse=True,
+            return_counts=True,
+        )
+        boundary_rows = np.flatnonzero(counts[inverse] == 1)
+        if len(boundary_rows) == 0:
+            return
+
+        vertices = np.asarray(mesh.vertices, dtype=np.float64)
+        faces = np.asarray(mesh.faces, dtype=np.int64)
+        split_applied = False
+        for edge_row in boundary_rows:
+            edge = edges[edge_row]
+            edge_start = vertices[edge[0]]
+            edge_vector = vertices[edge[1]] - edge_start
+            length_sq = float(np.dot(edge_vector, edge_vector))
+            if length_sq <= tolerance * tolerance:
+                continue
+            offsets = vertices - edge_start
+            parameters = offsets @ edge_vector / length_sq
+            projections = edge_start + parameters[:, None] * edge_vector
+            distances = np.linalg.norm(vertices - projections, axis=1)
+            candidate_mask = (
+                (distances <= tolerance)
+                & (parameters > tolerance)
+                & (parameters < 1.0 - tolerance)
+            )
+            candidate_indices = np.flatnonzero(candidate_mask)
+            if len(candidate_indices) == 0:
+                continue
+
+            face_index = int(mesh.edges_face[edge_row])
+            face = faces[face_index]
+            directed_start = None
+            directed_end = None
+            opposite = None
+            for index in range(3):
+                start_index = int(face[index])
+                end_index = int(face[(index + 1) % 3])
+                if {start_index, end_index} == {int(edge[0]), int(edge[1])}:
+                    directed_start = start_index
+                    directed_end = end_index
+                    opposite = int(face[(index + 2) % 3])
+                    break
+            if directed_start is None or directed_end is None or opposite is None:
+                continue
+
+            direction = vertices[directed_end] - vertices[directed_start]
+            direction_length_sq = float(np.dot(direction, direction))
+            directed_parameters = (
+                (vertices[candidate_indices] - vertices[directed_start]) @ direction
+                / direction_length_sq
+            )
+            ordered_candidates = candidate_indices[np.argsort(directed_parameters)]
+            edge_chain = [directed_start, *ordered_candidates.tolist(), directed_end]
+            replacement_faces = np.asarray(
+                [
+                    (edge_chain[index], edge_chain[index + 1], opposite)
+                    for index in range(len(edge_chain) - 1)
+                ],
+                dtype=np.int64,
+            )
+            mesh.faces = np.vstack(
+                (faces[:face_index], replacement_faces, faces[face_index + 1 :])
+            )
+            split_applied = True
+            break
+        if not split_applied:
+            return
+
+
+def _finalize_prism_meshes(
+    prism_parts: list[trimesh.Trimesh],
+) -> trimesh.Trimesh | None:
+    """Remove internal faces while preserving point-touching solid shells."""
+
+    if not prism_parts:
+        return None
+
+    parents = list(range(len(prism_parts)))
+
+    def find(part_index: int) -> int:
+        while parents[part_index] != part_index:
+            parents[part_index] = parents[parents[part_index]]
+            part_index = parents[part_index]
+        return part_index
+
+    def union(left_index: int, right_index: int) -> None:
+        left_root = find(left_index)
+        right_root = find(right_index)
+        if left_root != right_root:
+            parents[right_root] = left_root
+
+    face_owners: dict[tuple[tuple[float, float, float], ...], int] = {}
+    for part_index, prism in enumerate(prism_parts):
+        vertices = np.asarray(prism.vertices, dtype=np.float64)
+        for face in np.asarray(prism.faces, dtype=np.int64):
+            coordinates = np.round(vertices[face], decimals=9)
+            face_key = tuple(sorted(tuple(point) for point in coordinates))
+            owner = face_owners.setdefault(face_key, part_index)
+            if owner != part_index:
+                union(part_index, owner)
+
+    grouped_parts: dict[int, list[trimesh.Trimesh]] = {}
+    for part_index, prism in enumerate(prism_parts):
+        grouped_parts.setdefault(find(part_index), []).append(prism)
+
+    finalized_groups = []
+    for connected_parts in grouped_parts.values():
+        combined = _concatenate_meshes_fast(connected_parts)
+        combined.merge_vertices()
+        sorted_faces = np.sort(np.asarray(combined.faces, dtype=np.int64), axis=1)
+        _, inverse, counts = np.unique(
+            sorted_faces,
+            axis=0,
+            return_inverse=True,
+            return_counts=True,
+        )
+        combined.update_faces(counts[inverse] == 1)
+        _split_mesh_t_junctions(combined)
+        combined.remove_unreferenced_vertices()
+        finalized_groups.append(combined)
+
+    return _concatenate_meshes_fast(finalized_groups)
+
+
+def _build_stepped_volume_mesh(
+    slabs: list[dict],
+    *,
+    scale_factor: float,
+) -> trimesh.Trimesh | None:
+    """Build a watertight stepped volume, preferring the native union kernel."""
+
+    prepared = _prepare_stepped_volume_slabs(slabs)
+    if prepared is None:
+        return None
+    valid_slabs, component_slabs = prepared
+
+    if _load_relief_manifold3d() is not None:
+        try:
+            native_mesh = _build_stepped_volume_mesh_manifold_prepared(
+                component_slabs,
+                scale_factor=scale_factor,
+            )
+            if _validate_stepped_volume_mesh(
+                native_mesh,
+                valid_slabs=valid_slabs,
+                component_count=len(component_slabs),
+                scale_factor=scale_factor,
+            ):
+                return native_mesh
+            raise ValueError("native relief mesh failed topology validation")
+        except VECTOR_HANDLED_ERRORS as exc:
+            _log.warning(
+                "Native relief mesh union failed; rebuilding with exact Python fallback",
+                extra={
+                    "event": "vector_relief_native_union_fallback",
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                    "fallback_kernel": "python_atomic_prisms",
+                },
+            )
+
+    return _build_stepped_volume_mesh_python_prepared(
+        component_slabs,
+        scale_factor=scale_factor,
+    )
+
+
+def _load_relief_manifold3d():
+    """Return the optional manifold3d module, or ``None`` when unavailable."""
+
+    try:
+        import manifold3d as m3d
+    except (ImportError, OSError):
+        return None
+    return m3d
+
+
+def _prepare_stepped_volume_slabs(
+    slabs: list[dict],
+) -> tuple[
+    list[tuple[Polygon, float, float]],
+    list[list[tuple[Polygon, float, float]]],
+] | None:
+    """Validate slab records and group them by area-connected XY footprint."""
+
+    valid_slabs = []
+    slab_geometries = []
+    for slab in slabs:
+        geometry = slab.get("geometry")
+        z_offset = float(slab.get("z_offset", 0.0))
+        height = float(slab.get("height", 0.0))
+        if geometry is None or geometry.is_empty or height <= 1e-9:
+            continue
+        z_end = z_offset + height
+        polygon_parts = (
+            [geometry]
+            if geometry.geom_type == "Polygon"
+            else list(geometry.geoms)
+            if geometry.geom_type == "MultiPolygon"
+            else []
+        )
+        for polygon in polygon_parts:
+            if polygon.is_empty or polygon.area <= 1e-12:
+                continue
+            valid_slabs.append((polygon, z_offset, z_end))
+            slab_geometries.append(polygon)
+
+    if not valid_slabs:
+        return None
+    combined_footprint = _union_run_group_geometries(slab_geometries)
+    components = (
+        [combined_footprint]
+        if combined_footprint.geom_type == "Polygon"
+        else list(combined_footprint.geoms)
+        if combined_footprint.geom_type == "MultiPolygon"
+        else []
+    )
+    component_slabs: list[list[tuple[Polygon, float, float]]] = [
+        [] for _component in components
+    ]
+    for geometry, z_offset, z_end in valid_slabs:
+        representative_point = geometry.representative_point()
+        for component_index, component in enumerate(components):
+            if component.covers(representative_point):
+                component_slabs[component_index].append((geometry, z_offset, z_end))
+                break
+
+    populated_components = [group for group in component_slabs if group]
+    if not populated_components:
+        return None
+    return valid_slabs, populated_components
+
+
+def _stepped_volume_expected_metrics(
+    valid_slabs: list[tuple[Polygon, float, float]],
+    *,
+    scale_factor: float,
+) -> tuple[np.ndarray, float] | None:
+    """Return expected bounds and volume directly from the slab union."""
+
+    scale = float(scale_factor)
+    if not np.isfinite(scale) or scale <= 0.0:
+        return None
+    z_boundaries = sorted(
+        {
+            round(z_value, 9)
+            for _geometry, z_start, z_end in valid_slabs
+            for z_value in (z_start, z_end)
+        }
+    )
+    if len(z_boundaries) < 2:
+        return None
+
+    volume = 0.0
+    active_footprints = []
+    for z_start, z_end in zip(z_boundaries, z_boundaries[1:]):
+        z_mid = (z_start + z_end) * 0.5
+        active = [
+            geometry
+            for geometry, slab_start, slab_end in valid_slabs
+            if slab_start < z_mid < slab_end
+        ]
+        if not active:
+            continue
+        footprint = _union_run_group_geometries(active)
+        if footprint is None or footprint.is_empty:
+            continue
+        active_footprints.append(footprint)
+        volume += float(footprint.area) * (z_end - z_start) * scale * scale
+    if not active_footprints or volume <= 0.0:
+        return None
+
+    footprint_union = _union_run_group_geometries(active_footprints)
+    min_x, min_y, max_x, max_y = footprint_union.bounds
+    bounds = np.asarray(
+        [
+            [min_x * scale, min_y * scale, z_boundaries[0]],
+            [max_x * scale, max_y * scale, z_boundaries[-1]],
+        ],
+        dtype=np.float64,
+    )
+    return bounds, volume
+
+
+def _validate_stepped_volume_mesh(
+    mesh: trimesh.Trimesh | None,
+    *,
+    valid_slabs: list[tuple[Polygon, float, float]],
+    component_count: int,
+    scale_factor: float,
+) -> bool:
+    """Reject incomplete or semantically different native-kernel results."""
+
+    if mesh is None or len(mesh.vertices) == 0 or len(mesh.faces) == 0:
+        return False
+    vertices = np.asarray(mesh.vertices, dtype=np.float64)
+    if not np.all(np.isfinite(vertices)) or not mesh.is_watertight:
+        return False
+    expected = _stepped_volume_expected_metrics(
+        valid_slabs,
+        scale_factor=scale_factor,
+    )
+    if expected is None:
+        return False
+    expected_bounds, expected_volume = expected
+    if not np.allclose(mesh.bounds, expected_bounds, rtol=1e-7, atol=5e-6):
+        return False
+    if not np.isclose(
+        abs(float(mesh.volume)),
+        expected_volume,
+        rtol=1e-6,
+        atol=1e-6,
+    ):
+        return False
+    # Native construction is performed independently for each area-connected
+    # footprint, so point-touching bodies cannot be fused.  Do not compare
+    # ``mesh.split`` here: an enclosed cavity adds a separate *surface shell*
+    # even though it is still part of one connected solid volume.
+    return component_count > 0
+
+
+def _manifold_polygon_contours(
+    polygon: Polygon,
+    *,
+    scale_factor: float,
+) -> list[np.ndarray]:
+    """Convert one Shapely polygon to open, scaled manifold contours."""
+
+    contours = []
+    for ring in (polygon.exterior, *polygon.interiors):
+        coordinates = np.asarray(ring.coords, dtype=np.float64)
+        if coordinates.ndim != 2 or coordinates.shape[0] < 4:
+            continue
+        coordinates = coordinates[:-1, :2] * float(scale_factor)
+        if len(coordinates) >= 3 and np.all(np.isfinite(coordinates)):
+            contours.append(coordinates)
+    return contours
+
+
+def _build_stepped_volume_mesh_manifold_prepared(
+    component_slabs: list[list[tuple[Polygon, float, float]]],
+    *,
+    scale_factor: float,
+) -> trimesh.Trimesh | None:
+    """Union extruded slabs per area-connected component with manifold3d."""
+
+    m3d = _load_relief_manifold3d()
+    if m3d is None:
+        return None
+    component_meshes = []
+    for grouped_slabs in component_slabs:
+        solids = []
+        slabs_by_z: dict[tuple[float, float], list[Polygon]] = {}
+        for polygon, z_start, z_end in grouped_slabs:
+            slabs_by_z.setdefault((z_start, z_end), []).append(polygon)
+        for (z_start, z_end), polygons in slabs_by_z.items():
+            contours = [
+                contour
+                for polygon in polygons
+                for contour in _manifold_polygon_contours(
+                    polygon,
+                    scale_factor=scale_factor,
+                )
+            ]
+            if not contours:
+                continue
+            section = m3d.CrossSection(contours, m3d.FillRule.EvenOdd)
+            solid = section.extrude(z_end - z_start).translate((0.0, 0.0, z_start))
+            if not solid.is_empty():
+                solids.append(solid)
+        if not solids:
+            return None
+        unioned = m3d.Manifold.batch_boolean(solids, m3d.OpType.Add)
+        if unioned.is_empty() or unioned.status() != m3d.Error.NoError:
+            return None
+        mesh_data = unioned.to_mesh()
+        vertices = np.asarray(mesh_data.vert_properties, dtype=np.float64)
+        faces = np.asarray(mesh_data.tri_verts, dtype=np.int64)
+        if vertices.ndim != 2 or vertices.shape[1] < 3 or faces.size == 0:
+            return None
+        component_mesh = trimesh.Trimesh(
+            vertices=vertices[:, :3].copy(),
+            faces=faces.copy(),
+            process=False,
+        )
+        if not component_mesh.is_watertight:
+            return None
+        component_meshes.append(component_mesh)
+    if len(component_meshes) != len(component_slabs):
+        return None
+    return _concatenate_meshes_fast(component_meshes)
+
+
+def _build_stepped_volume_mesh_manifold(
+    slabs: list[dict],
+    *,
+    scale_factor: float,
+) -> trimesh.Trimesh | None:
+    """Build slabs with manifold3d without applying the Python fallback."""
+
+    prepared = _prepare_stepped_volume_slabs(slabs)
+    if prepared is None:
+        return None
+    valid_slabs, component_slabs = prepared
+    mesh = _build_stepped_volume_mesh_manifold_prepared(
+        component_slabs,
+        scale_factor=scale_factor,
+    )
+    return (
+        mesh
+        if _validate_stepped_volume_mesh(
+            mesh,
+            valid_slabs=valid_slabs,
+            component_count=len(component_slabs),
+            scale_factor=scale_factor,
+        )
+        else None
+    )
+
+
+def _build_stepped_volume_mesh_python_prepared(
+    component_slabs: list[list[tuple[Polygon, float, float]]],
+    *,
+    scale_factor: float,
+) -> trimesh.Trimesh | None:
+    """Build every component with the exact atomic-prism fallback."""
+
+    component_meshes = []
+    for grouped_slabs in component_slabs:
+        mesh = _build_connected_stepped_volume_mesh_python(
+            grouped_slabs,
+            scale_factor=scale_factor,
+        )
+        if mesh is None:
+            return None
+        component_meshes.append(mesh)
+    return _concatenate_meshes_fast(component_meshes) if component_meshes else None
+
+
+def _build_stepped_volume_mesh_python(
+    slabs: list[dict],
+    *,
+    scale_factor: float,
+) -> trimesh.Trimesh | None:
+    """Build slabs with the exact Python algorithm and no native kernel."""
+
+    prepared = _prepare_stepped_volume_slabs(slabs)
+    if prepared is None:
+        return None
+    _valid_slabs, component_slabs = prepared
+    return _build_stepped_volume_mesh_python_prepared(
+        component_slabs,
+        scale_factor=scale_factor,
+    )
+
+
+def _build_connected_stepped_volume_mesh_python(
+    valid_slabs: list[tuple[Polygon, float, float]],
+    *,
+    scale_factor: float,
+) -> trimesh.Trimesh | None:
+    """Build one edge-connected stepped volume using only its own Z levels."""
+
+    z_boundaries: set[float] = set()
+    for _geometry, z_offset, z_end in valid_slabs:
+        z_boundaries.add(round(z_offset, 9))
+        z_boundaries.add(round(z_end, 9))
+
+    ordered_z = sorted(z_boundaries)
+    if len(ordered_z) < 2:
+        return None
+
+    interval_footprints = []
+    for z_start, z_end in zip(ordered_z, ordered_z[1:]):
+        z_mid = (z_start + z_end) * 0.5
+        active_geometries = [
+            geometry
+            for geometry, slab_start, slab_end in valid_slabs
+            if slab_start < z_mid < slab_end
+        ]
+        footprint = (
+            _union_run_group_geometries(active_geometries)
+            if active_geometries
+            else None
+        )
+        interval_footprints.append((z_start, z_end, footprint))
+
+    footprints = [
+        footprint
+        for _z_start, _z_end, footprint in interval_footprints
+        if footprint is not None and not footprint.is_empty
+    ]
+    if not footprints:
+        return None
+    noded_boundaries = unary_union([footprint.boundary for footprint in footprints])
+    boundary_nodes = _linework_node_coordinates(noded_boundaries)
+    atomic_cells = [
+        _densify_polygon_with_nodes(cell, boundary_nodes)
+        for cell in polygonize(noded_boundaries)
+        if not cell.is_empty and cell.area > 1e-12
+    ]
+
+    prism_parts: list[trimesh.Trimesh] = []
+    for z_start, z_end, footprint in interval_footprints:
+        if footprint is None or footprint.is_empty:
+            continue
+        for cell in atomic_cells:
+            if not footprint.covers(cell.representative_point()):
+                continue
+            prism = _build_atomic_prism_mesh(
+                cell,
+                z_start=z_start,
+                z_end=z_end,
+                scale_factor=scale_factor,
+            )
+            if prism is not None and len(prism.faces) > 0:
+                prism_parts.append(prism)
+    return _finalize_prism_meshes(prism_parts)
 
 
 def _normalize_contours_cached(cache, geom, close_delta_mm=0.03):
@@ -3887,10 +4568,11 @@ class VectorProcessor:
             # ``_extrude_geometry`` calls so Three.js / exporters do not render
             # visible seams along shape boundaries. 对相邻 shape 独立 extrude
             # 后重合的边界顶点做焊接，避免下游 mesh 渲染/导出在形状边界出现缝隙。
-            try:
-                combined.merge_vertices()
-            except Exception:
-                pass
+            if not data.get("topology_finalized", False):
+                try:
+                    combined.merge_vertices()
+                except Exception:
+                    pass
             self._fix_coordinates(combined, svg_height_mm)
             if mirror_transform is not None:
                 combined.apply_transform(mirror_transform)
@@ -4091,8 +4773,14 @@ class VectorProcessor:
 
         board_entry = meshes_by_slot.setdefault(
             "Board",
-            {"meshes": [], "mat_id": int(backing_color_id)},
+            {
+                "meshes": [],
+                "mat_id": int(backing_color_id),
+                "topology_finalized": True,
+            },
         )
+        board_entry["topology_finalized"] = True
+        backing_volume_slabs = []
         full_backing_sil = _union_run_group_geometries(
             [
                 geometry
@@ -4133,15 +4821,13 @@ class VectorProcessor:
                 outer_side="low",
             )
             for slab in backing_slabs:
-                board_entry["meshes"].extend(
-                    VectorProcessor._extrude_geometry(
-                        slab["geometry"],
-                        height=slab["height"],
-                        z_offset=slab["z_offset"],
-                        scale=scale_factor,
-                        extrude_cache=extrude_cache,
-                    )
-                )
+                backing_volume_slabs.append(slab)
+        board_mesh = _build_stepped_volume_mesh(
+            backing_volume_slabs,
+            scale_factor=scale_factor,
+        )
+        if board_mesh is not None and len(board_mesh.faces) > 0:
+            board_entry["meshes"].append(board_mesh)
         return meshes_by_slot
 
     def svg_to_mesh(
