@@ -1,8 +1,8 @@
 const INTERNAL_ROUTE_RE =
-  /(?:^|[\s"'(:=\[{,])\/(?:api|convert|extractor|lut|single-stage|feedback|files|materials|material-sync|vectorizer|calibration|settings|system)(?=$|[/?#\s"'.,;:)\]}])/i;
+  /(?:^|[\s"'(:=[{,])\/(?:api|convert|extractor|lut|single-stage|feedback|files|materials|material-sync|vectorizer|calibration|settings|system)(?=$|[/?#\s"'.,;:)\]}])/i;
 
 const LOCAL_PATH_RE =
-  /(?:^|[\s"'(:=\[{,])(?:\/(?:users|private|tmp|var|home|volumes|opt|mnt|etc)\b|~\/|[a-z]:[\\/]|\\\\)/i;
+  /(?:^|[\s"'(:=[{,])(?:\/(?:users|private|tmp|var|home|volumes|opt|mnt|etc)\b|~\/|[a-z]:[\\/]|\\\\)/i;
 
 const FILE_URL_RE = /\bfile:\/\/\S+/i;
 const HTTP_URL_RE = /\bhttps?:\/\/\S+/i;

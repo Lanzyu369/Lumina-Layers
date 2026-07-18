@@ -106,6 +106,7 @@ function makeHeavyState(): ConverterState {
     loop_position_preset: "top-right",
     puzzleEnabled: true,
     largeFormatEnabled: true,
+    regionReplacementCount: 9,
     replacement_regions: Array.from({ length: 50 }, (_, i) =>
       makeReplacementRegion(i),
     ),
@@ -300,6 +301,96 @@ describe("buildAdvancedParams — groups populated when toggles enabled", () => 
     );
   });
 
+  it("keeps spatial edit count separate while merging true global remaps", () => {
+    const storedGlobal = makeReplacementRegion(0);
+    const state = makeState({
+      replacement_regions: [storedGlobal],
+      colorRemapMap: { aabbcc: "ddeeff" },
+      palette: [
+        {
+          quantized_hex: "112233",
+          matched_hex: "aabbcc",
+          pixel_count: 42,
+          percentage: 1,
+        },
+      ],
+      regionReplacementCount: 4,
+    });
+
+    const result = buildAdvancedParams(state, "converter", {
+      maxBytes: 8192,
+    }) as AdvancedParamsFull;
+
+    expect(result.color_replacement.spatial_edit_count).toBe(4);
+    expect(result.color_replacement.replacement_regions).toEqual([
+      storedGlobal,
+      {
+        quantized_hex: "#112233",
+        matched_hex: "#aabbcc",
+        replacement_hex: "#ddeeff",
+      },
+    ]);
+  });
+
+  it("deduplicates normalized global sources and lets the live remap win", () => {
+    const untouched = makeReplacementRegion(8);
+    const state = makeState({
+      replacement_regions: [
+        {
+          quantized_hex: "#111111",
+          matched_hex: "#AaBbCc",
+          replacement_hex: "#000000",
+        },
+        {
+          quantized_hex: "#222222",
+          matched_hex: "aabbcc",
+          replacement_hex: "#333333",
+        },
+        untouched,
+      ],
+      colorRemapMap: { aabbcc: "ddeeff" },
+      palette: [
+        {
+          quantized_hex: "445566",
+          matched_hex: "aabbcc",
+          pixel_count: 42,
+          percentage: 1,
+        },
+      ],
+    });
+
+    const result = buildAdvancedParams(state, "converter", {
+      maxBytes: 8192,
+    }) as AdvancedParamsFull;
+
+    expect(result.color_replacement.replacement_regions).toEqual([
+      {
+        quantized_hex: "#445566",
+        matched_hex: "#aabbcc",
+        replacement_hex: "#ddeeff",
+      },
+      untouched,
+    ]);
+    expect(result.color_replacement).not.toHaveProperty(
+      "replacement_regions_truncated",
+    );
+  });
+
+  it("normalizes an invalid negative spatial edit count without inventing a global mapping", () => {
+    const state = makeState({
+      regionReplacementCount: -3,
+      replacement_regions: [],
+      colorRemapMap: {},
+    });
+
+    const result = buildAdvancedParams(state, "converter", {
+      maxBytes: 8192,
+    }) as AdvancedParamsFull;
+
+    expect(result.color_replacement.spatial_edit_count).toBe(0);
+    expect(result.color_replacement.replacement_regions).toBeNull();
+  });
+
   it("nulls detail fields when toggles are off", () => {
     const result = buildAdvancedParams(makeState(), "converter", {
       maxBytes: 8192,
@@ -410,6 +501,69 @@ describe("buildAdvancedParams — length cap truncation", () => {
     expect(result.color_replacement.replacement_regions).not.toBeNull();
     expect(result.color_replacement.replacement_regions).toHaveLength(32);
     expect(result.color_replacement.replacement_regions_truncated).toBe(true);
+  });
+
+  it("deduplicates before capping more than 32 unique global sources", () => {
+    const stored = Array.from({ length: 31 }, (_, i) =>
+      makeReplacementRegion(i),
+    );
+    const duplicateSource = stored[0].matched_hex;
+    const state = makeState({
+      replacement_regions: stored,
+      colorRemapMap: {
+        [duplicateSource]: "#fefefe",
+        aa0001: "bb0001",
+        aa0002: "bb0002",
+      },
+      palette: [
+        {
+          quantized_hex: "#010101",
+          matched_hex: duplicateSource,
+          pixel_count: 1,
+          percentage: 1,
+        },
+        {
+          quantized_hex: "aa0001",
+          matched_hex: "aa0001",
+          pixel_count: 1,
+          percentage: 1,
+        },
+        {
+          quantized_hex: "aa0002",
+          matched_hex: "aa0002",
+          pixel_count: 1,
+          percentage: 1,
+        },
+      ],
+      regionReplacementCount: 7,
+    });
+
+    const result = buildAdvancedParams(state, "converter", {
+      maxBytes: 1_000_000,
+    }) as AdvancedParamsFull;
+    const regions = result.color_replacement.replacement_regions!;
+    const normalizedDuplicateSource = duplicateSource
+      .replace(/^#/, "")
+      .toLowerCase();
+
+    expect(regions).toHaveLength(32);
+    expect(
+      regions.filter(
+        (item) =>
+          item.matched_hex.replace(/^#/, "").toLowerCase() ===
+          normalizedDuplicateSource,
+      ),
+    ).toEqual([
+      {
+        quantized_hex: "#010101",
+        matched_hex: duplicateSource,
+        replacement_hex: "#fefefe",
+      },
+    ]);
+    expect(regions.some((item) => item.matched_hex === "#aa0001")).toBe(true);
+    expect(regions.some((item) => item.matched_hex === "#aa0002")).toBe(false);
+    expect(result.color_replacement.replacement_regions_truncated).toBe(true);
+    expect(result.color_replacement.spatial_edit_count).toBe(7);
   });
 
   it("caps free_color_set at 64 items and sets free_color_set_truncated", () => {
@@ -640,6 +794,7 @@ describe("buildAdvancedParams — tiered size trimming", () => {
     expect(byteLen(r2)).toBeLessThanOrEqual(r2Bytes);
 
     expect(r3._dropped_tiers).toEqual([1, 2, 3]);
+    expect(r3.color_replacement.spatial_edit_count).toBe(9);
     expect(byteLen(r3)).toBeLessThanOrEqual(r3Bytes);
 
     expect(r4._dropped_tiers).toEqual([1, 2, 3, 4]);

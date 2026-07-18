@@ -57,6 +57,13 @@ _TILE_COVER_CANVAS_CACHE: dict = {}
 _TILE_COVER_CANVAS_CACHE_MAX = 4
 
 
+class LargeFormatCachedAnalysisError(RuntimeError):
+    """A native SVG cached analysis artifact is unreadable or incompatible.
+
+    原生 SVG 大画幅缓存分析文件无法读取、解析或与当前网格不兼容。
+    """
+
+
 def _cleanup_worker_temp_paths(*paths: str | None) -> None:
     """Best-effort cleanup for worker-created temp files on local failure."""
 
@@ -1438,6 +1445,7 @@ def worker_generate_model(
 
     from api.structured_logging import get_logger
     from core.converter import generate_final_model
+    from core.errors import CachedPreviewAnalysisError
 
     log = get_logger(__name__)
     normalized_params = _normalize_puzzle_piece_target_width(image_path, params)
@@ -1500,7 +1508,14 @@ def worker_generate_model(
             lut_path=lut_path,
             **normalized_params,
         )
-    except (ValueError, TypeError, KeyError, OSError, RuntimeError) as e:
+    except (
+        CachedPreviewAnalysisError,
+        ValueError,
+        TypeError,
+        KeyError,
+        OSError,
+        RuntimeError,
+    ) as e:
         log.exception(
             "Worker model generation failed",
             extra={
@@ -1565,13 +1580,17 @@ def worker_generate_large_format_svg_native(
     import tempfile
     import zipfile
 
+    import numpy as np
     import trimesh
     from PIL import Image
 
     from api.structured_logging import get_logger
     from config import TEMP_DIR
     from core.pipeline.s03_color_replacement import _normalize_color_replacements_input
-    from core.vector_engine import VectorProcessor
+    from core.vector_engine import (
+        VectorProcessor,
+        apply_matched_rgb_overrides_to_analysis,
+    )
     from core.vector_large_format import format_large_format_tile_label, slice_vector_analysis_into_tiles
     from utils.bambu_3mf_writer import export_scene_with_bambu_metadata
 
@@ -1596,6 +1615,68 @@ def worker_generate_large_format_svg_native(
         target_width_mm=total_width_mm,
         color_replacements=vector_replacements,
     )
+    matched_rgb_path = params.get("matched_rgb_path")
+    mask_solid_path = params.get("mask_solid_path")
+    material_matrix_path = params.get("material_matrix_path")
+    if matched_rgb_path or mask_solid_path:
+        loaded_arrays: list[np.ndarray] = []
+        try:
+            if not matched_rgb_path or not mask_solid_path or not material_matrix_path:
+                raise ValueError(
+                    "Native SVG cached overrides require matched_rgb, mask_solid, "
+                    "and material_matrix inputs."
+                )
+            for cache_path in (
+                matched_rgb_path,
+                mask_solid_path,
+                material_matrix_path,
+            ):
+                loaded = np.load(
+                    str(cache_path),
+                    mmap_mode="r",
+                    allow_pickle=False,
+                )
+                if not isinstance(loaded, np.ndarray):
+                    close_loaded = getattr(loaded, "close", None)
+                    if callable(close_loaded):
+                        close_loaded()
+                    raise ValueError("Native SVG cached override is not a NumPy array")
+                loaded_arrays.append(loaded)
+
+            matched_rgb, mask_solid, material_matrix = loaded_arrays
+            if matched_rgb.ndim != 3:
+                raise ValueError("Native SVG matched_rgb cache must be 3-dimensional")
+            analysis_width_mm = float(analysis.bbox[2]) * float(
+                analysis.scale_factor
+            )
+            if analysis_width_mm <= 0:
+                raise ValueError("Native SVG analysis width must be positive")
+            cache_pixels_per_mm = float(matched_rgb.shape[1]) / analysis_width_mm
+            apply_matched_rgb_overrides_to_analysis(
+                analysis,
+                matched_rgb=matched_rgb,
+                mask_solid=mask_solid,
+                material_matrix=material_matrix,
+                img_processor=vector_processor.img_processor,
+                pixels_per_mm=cache_pixels_per_mm,
+                max_width_px=int(matched_rgb.shape[1]),
+                strict=True,
+            )
+        except (
+            OSError,
+            ValueError,
+            TypeError,
+            KeyError,
+            EOFError,
+            zipfile.BadZipFile,
+        ) as exc:
+            raise LargeFormatCachedAnalysisError(str(exc)) from exc
+        finally:
+            for loaded in loaded_arrays:
+                mmap_obj = getattr(loaded, "_mmap", None)
+                if mmap_obj is not None and not getattr(mmap_obj, "closed", False):
+                    mmap_obj.close()
+
     tile_analyses = slice_vector_analysis_into_tiles(
         analysis=analysis,
         total_width_mm=total_width_mm,

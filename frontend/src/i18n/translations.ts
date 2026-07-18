@@ -6223,6 +6223,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "导入的配方启用了拼图背面标签。当前版本暂不支持背面标签，已自动关闭。",
     en: "The imported recipe enabled puzzle back labels. Back labels are not available in this version and have been disabled.",
   },
+  recipe_import_warning_spatial_edits_not_serialized: {
+    zh: "连通区域的局部改色仅属于当前会话，未写入分享配方；导入后需要重新应用。",
+    en: "Connected-region color edits belong to the current session and were not saved in the shared recipe; reapply them after import.",
+  },
   recipe_import_schema_newer: {
     zh: "配方版本较新，部分参数可能无法恢复",
     en: "Recipe uses a newer schema version — some parameters may not restore",

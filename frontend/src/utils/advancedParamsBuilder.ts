@@ -24,6 +24,7 @@ import type {
   RecipeOverrideItem,
 } from "../api/types";
 import { SVG_PIXELS_PER_MM_DEFAULT } from "../stores/settingsStore";
+import { colorRemapToReplacementRegions } from "./colorUtils";
 
 /**
  * Hard limits enforced on the advanced_params payload before size
@@ -311,8 +312,16 @@ function buildLargeFormat(state: ConverterState): AdvancedParamsLargeFormat {
 function buildColorReplacement(
   state: ConverterState,
 ): AdvancedParamsColorReplacement {
-  const { regions, truncated } = serializeReplacementRegions(
+  const liveReplacementRegions = colorRemapToReplacementRegions(
+    state.colorRemapMap,
+    state.palette,
+  );
+  const globalReplacementRegions = mergeGlobalReplacementRegions(
     state.replacement_regions,
+    liveReplacementRegions,
+  );
+  const { regions, truncated } = serializeReplacementRegions(
+    globalReplacementRegions,
   );
   const { colors, truncated: freeColorsTruncated } = serializeFreeColorSet(
     state.free_color_set,
@@ -321,6 +330,9 @@ function buildColorReplacement(
     serializeRecipeOverrides(state.recipe_overrides);
   const result: AdvancedParamsColorReplacement = {
     replacement_regions: regions,
+    spatial_edit_count: Number.isFinite(state.regionReplacementCount)
+      ? Math.max(0, Math.trunc(state.regionReplacementCount))
+      : 0,
     free_color_set: colors,
     recipe_overrides: overrides,
   };
@@ -352,6 +364,33 @@ function serializeFileMetadata(file: File | null): FileMetadata | null {
 
 function ensureHash(hex: string): string {
   return hex.startsWith("#") ? hex : `#${hex}`;
+}
+
+function normalizeReplacementSource(hex: string): string {
+  return hex.trim().replace(/^#/, "").toLowerCase();
+}
+
+/**
+ * Merge persisted and live global remaps by the source color used downstream.
+ * Live store mappings are authoritative because they reflect the latest user
+ * choice; deduplicating before serialization prevents stale duplicates from
+ * consuming the 32-item telemetry allowance.
+ *
+ * 按下游实际使用的源色合并持久化与实时全局映射。实时映射代表用户最新选择，
+ * 因此覆盖旧记录；在序列化前去重，避免陈旧重复项占用 32 条遥测上限。
+ */
+function mergeGlobalReplacementRegions(
+  persisted: ColorReplacementItem[],
+  live: ColorReplacementItem[],
+): ColorReplacementItem[] {
+  const bySource = new Map<string, ColorReplacementItem>();
+  for (const item of [...persisted, ...live]) {
+    const source =
+      normalizeReplacementSource(item.matched_hex) ||
+      normalizeReplacementSource(item.quantized_hex);
+    bySource.set(source, item);
+  }
+  return Array.from(bySource.values());
 }
 
 function trimColorHeightMap(map: Record<string, number>): {

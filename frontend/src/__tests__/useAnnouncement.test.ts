@@ -27,6 +27,21 @@ function makeEntry(version: string): AnnouncementEntry {
 }
 
 describe("useAnnouncement", () => {
+  it("announces scoped large-format recolouring in the latest update", () => {
+    expect(ANNOUNCEMENTS[0]?.version).toBe("2026-07-18");
+    const items = ANNOUNCEMENTS[0]?.sections.flatMap((section) => section.items) ?? [];
+
+    expect(
+      items.some(
+        (item) =>
+          item.zh.includes("大画幅") &&
+          item.zh.includes("选中区域") &&
+          item.en.includes("Large-format") &&
+          item.en.includes("selected area"),
+      ),
+    ).toBe(true);
+  });
+
   it("announces the base-layer alignment fix in the latest update", () => {
     expect(ANNOUNCEMENTS[0]?.version).toBe("2026-07-18");
     const items = ANNOUNCEMENTS[0]?.sections.flatMap((section) => section.items) ?? [];
@@ -43,9 +58,8 @@ describe("useAnnouncement", () => {
   });
 
   it("keeps SVG vector relief support in announcement history", () => {
-    const items = ANNOUNCEMENTS.flatMap((entry) =>
-      entry.sections.flatMap((section) => section.items),
-    );
+    const reliefEntry = ANNOUNCEMENTS.find((entry) => entry.version === "2026-07-15");
+    const items = reliefEntry?.sections.flatMap((section) => section.items) ?? [];
 
     expect(
       items.some(
@@ -208,8 +222,8 @@ describe("selectAnnouncementHistory", () => {
   });
 
   it("默认历史条数足够覆盖这次 5 月更新回顾", () => {
-    expect(ANNOUNCEMENT_HISTORY_LIMIT).toBeGreaterThanOrEqual(7);
-    expect(selectAnnouncementHistory(ANNOUNCEMENTS).length).toBeGreaterThanOrEqual(7);
+    expect(ANNOUNCEMENT_HISTORY_LIMIT).toBeGreaterThanOrEqual(16);
+    expect(selectAnnouncementHistory(ANNOUNCEMENTS).length).toBeGreaterThanOrEqual(16);
     expect(selectAnnouncementHistory(ANNOUNCEMENTS).map((e) => e.version)).toContain(
       "2026-05-05",
     );
