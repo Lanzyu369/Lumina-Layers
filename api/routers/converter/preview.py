@@ -77,6 +77,7 @@ from .common import (
     ROUTER_HANDLED_ERRORS,
     _handle_core_error,
     _image_to_png_bytes,
+    _public_pipeline_validation_detail,
     _require_preview_cache,
     _require_session,
     _resolve_material_backing_index,
@@ -1106,6 +1107,9 @@ async def convert_preview(
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="Preview generation timed out")
     except ROUTER_HANDLED_ERRORS as e:
+        public_detail = _public_pipeline_validation_detail(e)
+        if public_detail is not None:
+            raise HTTPException(status_code=422, detail=public_detail) from e
         log.exception(
             "Preview generation failed",
             extra={

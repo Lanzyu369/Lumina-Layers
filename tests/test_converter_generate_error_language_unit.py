@@ -24,6 +24,14 @@ from api.session_store import SessionStore
 from api.worker_pool import WorkerPoolManager
 
 
+VECTOR_SVG_REQUIRED_DETAIL = (
+    "⚠️ Vector Native mode requires SVG files!\n\n"
+    "Your file is not an SVG. Please either:\n"
+    "• Upload an SVG file, or\n"
+    "• Switch to 'High-Fidelity' or 'Pixel Art' mode"
+)
+
+
 def _assert_public_converter_detail(detail: str) -> None:
     assert "Call POST" not in detail
     assert "POST" not in detail
@@ -146,3 +154,24 @@ def test_generate_missing_worker_output_uses_public_error_language(tmp_path: Pat
     )
     assert private_path not in response.text
     assert "permission denied" not in response.text
+
+
+def test_generate_known_vector_source_mismatch_returns_actionable_validation_error(
+    tmp_path: Path,
+) -> None:
+    pool = MagicMock(spec=WorkerPoolManager)
+    pool.submit = AsyncMock(
+        return_value={
+            "threemf_path": None,
+            "glb_path": None,
+            "status_msg": VECTOR_SVG_REQUIRED_DETAIL,
+        }
+    )
+
+    response = _post_generate_with_pool(tmp_path, pool)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == {
+        "error": "vector_native_requires_svg",
+        "message": VECTOR_SVG_REQUIRED_DETAIL,
+    }

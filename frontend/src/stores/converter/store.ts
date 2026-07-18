@@ -6746,11 +6746,22 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
       const state = _get();
       const inBatchMode = state.batchFiles.length > 0;
+      const selectedFiles = [
+        ...state.batchFiles,
+        ...(state.imageFile ? [state.imageFile] : []),
+        ...validFiles,
+      ];
+      const compatibleModelingMode =
+        state.modeling_mode === ModelingModeEnum.VECTOR &&
+        selectedFiles.some((file) => !isSvgFile(file))
+          ? ModelingModeEnum.HIGH_FIDELITY
+          : state.modeling_mode;
 
       // Already in BatchMode → append new files
       if (inBatchMode) {
         set({
           batchFiles: [...state.batchFiles, ...validFiles],
+          modeling_mode: compatibleModelingMode,
           batchMode: true,
           batchResult: null,
         });
@@ -6760,7 +6771,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       if (validFiles.length === 1) {
         const singleFile = validFiles[0];
         const isSvg = isSvgFile(singleFile);
-        const autoModelingMode = isSvg ? ModelingModeEnum.VECTOR : undefined;
+        const autoModelingMode = isSvg
+          ? ModelingModeEnum.VECTOR
+          : compatibleModelingMode;
 
         if (state.imageFile) {
           const prev = state.imagePreviewUrl;
@@ -6787,6 +6800,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             ...EMPTY_LUT_MATCH_STATE,
             puzzleEnabled: false,
             ...DEFAULT_PUZZLE_PREVIEW_STATE,
+            modeling_mode: compatibleModelingMode,
             batchMode: true,
             hasManualPreview: false,
             layerImages: [],
@@ -6819,6 +6833,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             ...EMPTY_LUT_MATCH_STATE,
             puzzleEnabled: false,
             ...DEFAULT_PUZZLE_PREVIEW_STATE,
+            modeling_mode: compatibleModelingMode,
             batchMode: false,
             hasManualPreview: false,
             cropModalOpen: state.enableCrop,
@@ -6878,7 +6893,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           layerImages: [],
           layerImagesOpen: false,
           batchResult: null,
-          ...(autoModelingMode ? { modeling_mode: autoModelingMode } : {}),
+          modeling_mode: autoModelingMode,
         });
         return;
       }
@@ -6914,6 +6929,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         ...EMPTY_LUT_MATCH_STATE,
         puzzleEnabled: false,
         ...DEFAULT_PUZZLE_PREVIEW_STATE,
+        modeling_mode: compatibleModelingMode,
         batchMode: true,
         hasManualPreview: false,
         layerImages: [],

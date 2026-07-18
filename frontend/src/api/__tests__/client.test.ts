@@ -89,6 +89,39 @@ describe("apiClient", () => {
     ).not.toContain("worker crashed");
   });
 
+  it("does not expose a mapped validation code when the response status is 500", async () => {
+    useSettingsStore.setState({ language: "zh" });
+    const privateMessage =
+      "Vector validation failed at /Users/min/private/source.png";
+    const error = new Error("Request failed with status code 500");
+    Object.assign(error, {
+      config: { method: "post", url: "/convert/generate" },
+      response: {
+        status: 500,
+        headers: { "x-request-id": "req-500-vector" },
+        data: {
+          detail: {
+            error: "vector_native_requires_svg",
+            message: privateMessage,
+          },
+        },
+      },
+    });
+    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+    const rejected = await apiClient
+      .post("/convert/generate", {})
+      .catch((err) => err);
+
+    const expectedMessage = "服务器发生内部错误。请求 ID：req-500-vector。";
+    expect(rejected).toMatchObject({ message: expectedMessage });
+    expect(rejected.response?.data?.detail).toBe(expectedMessage);
+    expect(JSON.stringify(rejected.response?.data)).not.toContain(privateMessage);
+    expect(JSON.stringify(vi.mocked(postClientLog).mock.calls)).not.toContain(
+      privateMessage,
+    );
+  });
+
   it("keeps suppressed background probes out of client logs and action history", async () => {
     const error = new Error("Request failed with status code 503");
     Object.assign(error, {
@@ -140,6 +173,77 @@ describe("apiClient", () => {
       }),
     );
   });
+
+  it.each([
+    {
+      language: "en" as const,
+      expected:
+        "Vector Native mode requires an SVG file. Upload an SVG, or switch to High-Fidelity or Pixel Art mode.",
+    },
+    {
+      language: "zh" as const,
+      expected:
+        "矢量建模模式仅支持 SVG 文件。请上传 SVG，或切换到“高保真”或“像素艺术”模式。",
+    },
+  ])(
+    "translates the structured SVG requirement in $language",
+    async ({ language, expected }) => {
+      useSettingsStore.setState({ language });
+      const safeEnglishFallback =
+        "⚠️ Vector Native mode requires SVG files!\n\n" +
+        "Your file is not an SVG. Please either:\n" +
+        "• Upload an SVG file, or\n" +
+        "• Switch to 'High-Fidelity' or 'Pixel Art' mode";
+      const detail = {
+        error: "vector_native_requires_svg",
+        message: safeEnglishFallback,
+      };
+      const error = new Error("Request failed with status code 422");
+      Object.assign(error, {
+        config: { method: "post", url: "/convert/generate" },
+        response: { status: 422, data: { detail } },
+      });
+      apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+      const rejected = await apiClient
+        .post("/convert/generate", {})
+        .catch((err) => err);
+
+      expect(rejected).toMatchObject({ message: expected });
+      expect(rejected.response?.data?.detail).toEqual(detail);
+    },
+  );
+
+  it.each([
+    "future_validation_code",
+    "constructor",
+    "toString",
+    "__proto__",
+  ])(
+    "uses the safe fallback message for unknown structured code %s",
+    async (errorCode) => {
+      useSettingsStore.setState({ language: "zh" });
+      const safeFallback = "This validation message is safe to display.";
+      const error = new Error("Request failed with status code 422");
+      Object.assign(error, {
+        config: { method: "post", url: "/convert/generate" },
+        response: {
+          status: 422,
+          data: {
+            detail: {
+              error: errorCode,
+              message: safeFallback,
+            },
+          },
+        },
+      });
+      apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+      await expect(apiClient.post("/convert/generate", {})).rejects.toMatchObject({
+        message: safeFallback,
+      });
+    },
+  );
 
   it("uses structured detail object messages before HTTP status fallbacks", async () => {
     const error = new Error("Request failed with status code 422");
