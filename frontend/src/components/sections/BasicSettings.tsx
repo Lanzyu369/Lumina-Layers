@@ -79,7 +79,7 @@ function snapThicknessToLayerGrid(value: number): number {
   const lowerLayerCount = Math.floor(scaledLayerCount);
   // Match Python round() in the generation pipeline: exact half layers tie to even.
   // 与生成管线的 Python round() 保持一致：正好半层时取最近的偶数层。
-  const isHalfLayer = Math.abs(scaledLayerCount - lowerLayerCount - 0.5) < 1e-9;
+  const isHalfLayer = scaledLayerCount - lowerLayerCount === 0.5;
   const layerCount = isHalfLayer
     ? lowerLayerCount + (lowerLayerCount % 2)
     : Math.round(scaledLayerCount);
