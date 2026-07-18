@@ -70,6 +70,15 @@ const GENERIC_HTTP_STATUS_ERROR_RE =
 const STARTUP_LUT_RETRY_DELAY_MS = 5_000;
 const STARTUP_LUT_ATTEMPT_LIMIT = 2;
 
+function snapThicknessToLayerGrid(value: number): number {
+  const clamped = Math.min(
+    THICKNESS_SLIDER_MAX_MM,
+    Math.max(THICKNESS_SLIDER_MIN_MM, value),
+  );
+  const layerCount = Math.round(clamped / THICKNESS_LAYER_STEP_MM);
+  return Number((layerCount * THICKNESS_LAYER_STEP_MM).toFixed(2));
+}
+
 function hasApiErrorResponse(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && "response" in error);
 }
@@ -404,6 +413,11 @@ export default function BasicSettings() {
   const [selectedImageRotation, setSelectedImageRotation] = useState<ImageRotationDegrees>(90);
   const isVectorModelingAvailable = isSvgImageFile(imageFile);
   const disabledModelingModes = isVectorModelingAvailable ? [] : [ModelingMode.VECTOR];
+
+  const handleSpacerThickChange = useCallback(
+    (value: number) => setSpacerThick(snapThicknessToLayerGrid(value)),
+    [setSpacerThick],
+  );
 
   const handleFileReplace = useCallback(
     (file: File) => {
@@ -1312,7 +1326,7 @@ export default function BasicSettings() {
         max={THICKNESS_SLIDER_MAX_MM}
         step={THICKNESS_LAYER_STEP_MM}
         unit="mm"
-        onChange={setSpacerThick}
+        onChange={handleSpacerThickChange}
       />
 
       <RadioGroup

@@ -835,6 +835,18 @@ describe("BasicSettings", () => {
     }
   });
 
+  it("snaps manually entered thickness to the exported 0.08mm layer grid", async () => {
+    render(<BasicSettings />);
+
+    const input = screen.getByRole("textbox", { name: "厚度 value" });
+    fireEvent.change(input, { target: { value: "0.3" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(useConverterStore.getState().spacer_thick).toBeCloseTo(0.32, 10);
+    expect(useConverterStore.getState().base_spacer_thick).toBeCloseTo(0.32, 10);
+    await waitFor(() => expect(input).toHaveValue("0.32"));
+  });
+
   it("disables structure and large-format controls while fridge mode is enabled", () => {
     useConverterStore.setState({
       enable_fridge_magnet: true,
