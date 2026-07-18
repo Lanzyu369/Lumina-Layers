@@ -26,6 +26,10 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
         category: { zh: "稳定性", en: "Stability" },
         items: [
           {
+            zh: "7 月 18 日：生成 3MF 时，底板层高现在会自动对齐实际底板厚度；双面作品、浮雕和不适合加速的厚度会安全跳过，避免顶部叠色少层或成品变薄。",
+            en: "July 18: Base-layer heights now align with the actual backing thickness when generating a 3MF. Double-sided prints, reliefs, and thicknesses that cannot be sped up safely are skipped, preventing missing top colour layers or a thinner result.",
+          },
+          {
             zh: "7 月 18 日：大画幅作品只调整选中区域的颜色时，下载文件现在会和分层预览保持一致；画面中其他相同颜色的区域不会再一起变色。",
             en: "July 18: Large-format downloads now match the layer preview after recolouring a selected area, without changing other areas that happen to use the same colour.",
           },

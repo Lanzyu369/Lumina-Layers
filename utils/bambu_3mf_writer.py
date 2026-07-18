@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import io
+import math
 import os
 import sys
 import tempfile
@@ -40,6 +41,8 @@ _trimesh = None
 _n3mf = None
 _PREVIEW_PLACEHOLDER_PNG_BYTES: Optional[bytes] = None
 _RAW_ZIP_COPY_CHUNK_SIZE = 1024 * 1024
+_LAYER_HEIGHT_GRID_MM = 0.02
+_MAX_LAYER_HEIGHT_NOZZLE_RATIO = 0.7
 
 
 def _get_trimesh():
@@ -1061,6 +1064,109 @@ def _disable_cut_retraction_filament_overrides(settings: dict, num_colors: int) 
         settings["long_retractions_when_cut"] = ["0"] * len(long_retractions)
 
 
+def _resolve_compatible_base_layer_height_mm(
+    *,
+    base_height_mm: float,
+    nozzle_mm: float,
+    fine_layer_height_mm: float,
+    fixed_first_layer_height_mm: float = 0.0,
+    min_layer_height_mm: float | None = None,
+    max_layer_height_mm: float | None = None,
+) -> float | None:
+    """Return a safe coarse height that ends exactly at the backing boundary."""
+    base_height = float(base_height_mm)
+    nozzle = float(nozzle_mm)
+    fine_layer_height = float(fine_layer_height_mm)
+    fixed_first_layer_height = float(fixed_first_layer_height_mm)
+    if not all(
+        math.isfinite(value)
+        for value in (base_height, nozzle, fine_layer_height, fixed_first_layer_height)
+    ):
+        return None
+    if (
+        base_height <= 0
+        or nozzle <= 0
+        or fine_layer_height < 0
+        or fixed_first_layer_height < 0
+        or fixed_first_layer_height >= base_height
+    ):
+        return None
+
+    base_ticks = round(base_height / _LAYER_HEIGHT_GRID_MM)
+    fixed_first_layer_ticks = round(fixed_first_layer_height / _LAYER_HEIGHT_GRID_MM)
+    if base_ticks <= 0:
+        return None
+    if abs(base_height - base_ticks * _LAYER_HEIGHT_GRID_MM) > 1e-9:
+        return None
+    if abs(
+        fixed_first_layer_height
+        - fixed_first_layer_ticks * _LAYER_HEIGHT_GRID_MM
+    ) > 1e-9:
+        return None
+
+    adjustable_ticks = base_ticks - fixed_first_layer_ticks
+    minimum_adjustable_layers = 1 if fixed_first_layer_ticks else 2
+
+    lower_bound = fine_layer_height
+    if min_layer_height_mm is not None:
+        minimum = float(min_layer_height_mm)
+        if not math.isfinite(minimum) or minimum <= 0:
+            return None
+        lower_bound = max(lower_bound, minimum - 1e-9)
+
+    upper_bound = nozzle * _MAX_LAYER_HEIGHT_NOZZLE_RATIO
+    if max_layer_height_mm is not None:
+        maximum = float(max_layer_height_mm)
+        if not math.isfinite(maximum) or maximum <= 0:
+            return None
+        upper_bound = min(upper_bound, maximum)
+    if upper_bound <= fine_layer_height:
+        return None
+
+    candidate_tick_values: list[int] = []
+    for candidate_ticks in range(
+        1,
+        adjustable_ticks // minimum_adjustable_layers + 1,
+    ):
+        if adjustable_ticks % candidate_ticks:
+            continue
+        candidate = candidate_ticks * _LAYER_HEIGHT_GRID_MM
+        if candidate <= fine_layer_height + 1e-9:
+            continue
+        if candidate < lower_bound - 1e-9 or candidate > upper_bound + 1e-9:
+            continue
+        candidate_tick_values.append(candidate_ticks)
+
+    if not candidate_tick_values:
+        return None
+    nominal_ticks = nozzle * 0.5 / _LAYER_HEIGHT_GRID_MM
+    selected_ticks = min(
+        candidate_tick_values,
+        key=lambda candidate_ticks: (abs(candidate_ticks - nominal_ticks), candidate_ticks),
+    )
+    return selected_ticks * _LAYER_HEIGHT_GRID_MM
+
+
+def _strict_printer_layer_height_limits(template: dict) -> tuple[float | None, float | None]:
+    """Return the strict limits shared by every nozzle in a printer template."""
+
+    def positive_floats(raw_value: Any) -> list[float]:
+        values = raw_value if isinstance(raw_value, (list, tuple)) else [raw_value]
+        parsed: list[float] = []
+        for value in values:
+            try:
+                candidate = float(value)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(candidate) and candidate > 0:
+                parsed.append(candidate)
+        return parsed
+
+    minimums = positive_floats(template.get("min_layer_height"))
+    maximums = positive_floats(template.get("max_layer_height"))
+    return (max(minimums) if minimums else None, min(maximums) if maximums else None)
+
+
 def build_layer_config_ranges_xml(
     *,
     base_height_mm: float,
@@ -1068,6 +1174,9 @@ def build_layer_config_ranges_xml(
     nozzle_mm: float,
     face: str,
     fine_layer_height_mm: float = 0.08,
+    initial_layer_height_mm: float | None = None,
+    min_layer_height_mm: float | None = None,
+    max_layer_height_mm: float | None = None,
     object_id: int = 1,
 ) -> bytes | None:
     """Build Metadata/layer_config_ranges.xml for base-plate coarse layer height.
@@ -1084,6 +1193,14 @@ def build_layer_config_ranges_xml(
             （朝向选择器："up"、"down" 或 "double"）
         fine_layer_height_mm (float): Fine printing layer height in millimetres.
             （细层高打印层高，单位为毫米）
+        initial_layer_height_mm (float | None): Actual slicer first-layer height.
+            Required for ``face="up"``; an unknown value safely skips the
+            modifier.（切片器实际首层层高；``face="up"`` 时必须提供，
+            未知时安全跳过修改器）
+        min_layer_height_mm (float | None): Optional printer minimum layer height.
+            （打印机允许的可选最小层高）
+        max_layer_height_mm (float | None): Optional printer maximum layer height.
+            （打印机允许的可选最大层高）
         object_id (int): One-based model-object index written into the XML payload.
             （写入 XML 载荷的模型对象序号，从 1 开始）
 
@@ -1099,16 +1216,40 @@ def build_layer_config_ranges_xml(
     color_height = float(color_height_mm)
     nozzle = float(nozzle_mm)
     fine_layer_height = float(fine_layer_height_mm)
+    initial_layer_height = (
+        None
+        if initial_layer_height_mm is None
+        else float(initial_layer_height_mm)
+    )
     normalized_face = str(face).strip().lower()
 
-    coarse_lh = nozzle * 0.5
     if base_height <= 0:
-        return None
-    if coarse_lh <= fine_layer_height:
         return None
     if color_height < 0 or nozzle <= 0:
         return None
     if normalized_face not in _VALID_LAYER_CONFIG_FACES:
+        return None
+    if normalized_face == "double":
+        return None
+    if normalized_face == "up":
+        if (
+            initial_layer_height is None
+            or not math.isfinite(initial_layer_height)
+            or initial_layer_height <= 0
+        ):
+            return None
+
+    coarse_lh = _resolve_compatible_base_layer_height_mm(
+        base_height_mm=base_height,
+        nozzle_mm=nozzle,
+        fine_layer_height_mm=fine_layer_height,
+        fixed_first_layer_height_mm=(
+            float(initial_layer_height) if normalized_face == "up" else 0.0
+        ),
+        min_layer_height_mm=min_layer_height_mm,
+        max_layer_height_mm=max_layer_height_mm,
+    )
+    if coarse_lh is None:
         return None
 
     if normalized_face == "up":
@@ -1354,6 +1495,7 @@ class BambuStudio3MFWriter:
         watermark: str = "LuminaStudio",
         *,
         enable_base_layer_height_modifier: bool = True,
+        enable_relief: bool = False,
         base_height_mm: float = 0.0,
         color_height_mm: float = 0.0,
         face_orientation: str = "down",
@@ -1375,6 +1517,10 @@ class BambuStudio3MFWriter:
             watermark (str): Watermark text embedded in the 3MF ZIP structure. (嵌入 3MF ZIP 结构的水印文本)
             enable_base_layer_height_modifier (bool): Whether to emit layer_config_ranges.xml.
                 （是否输出 layer_config_ranges.xml）
+            enable_relief (bool): Whether variable-height relief geometry is enabled. Relief
+                exports never emit ``layer_config_ranges.xml`` because no single global
+                backing range is safe.（是否启用可变高度浮雕；浮雕不存在全局安全的
+                底板区间，因此始终不输出 ``layer_config_ranges.xml``。）
             base_height_mm (float): Backing/base thickness used for coarse layer-height override.
                 （用于粗层高覆盖的底板厚度）
             color_height_mm (float): Colored-region thickness used to place the override range.
@@ -1422,7 +1568,10 @@ class BambuStudio3MFWriter:
             else None
         )
         self.watermark = watermark
-        self.enable_base_layer_height_modifier = bool(enable_base_layer_height_modifier)
+        self.enable_relief = bool(enable_relief)
+        self.enable_base_layer_height_modifier = bool(
+            enable_base_layer_height_modifier
+        ) and not self.enable_relief
         self.base_height_mm = float(base_height_mm)
         self.color_height_mm = float(color_height_mm)
         normalized_face_orientation = str(face_orientation).strip().lower()
@@ -1862,15 +2011,29 @@ class BambuStudio3MFWriter:
                     ),
                 ]
             )
-        if self.enable_base_layer_height_modifier:
+        if self.enable_base_layer_height_modifier and not self.enable_relief:
             # Bambu/Orca layer_config_ranges keys are one-based model-object
             # indexes, not 3MF resource/build object ids. Lumina emits one
             # assembled model object here; puzzle exports strip this metadata.
+            template = self._get_base_config_template()
+            min_layer_height, max_layer_height = _strict_printer_layer_height_limits(template)
+            try:
+                fine_layer_height = float(self.settings["layer_height"])
+            except (KeyError, TypeError, ValueError):
+                fine_layer_height = float(self.DEFAULT_SETTINGS["layer_height"])
+            try:
+                initial_layer_height = float(template["initial_layer_print_height"])
+            except (KeyError, TypeError, ValueError):
+                initial_layer_height = None
             lcr_bytes = build_layer_config_ranges_xml(
                 base_height_mm=self.base_height_mm,
                 color_height_mm=self.color_height_mm,
                 nozzle_mm=float(self.nozzle_size),
                 face=self.face_orientation,
+                fine_layer_height_mm=fine_layer_height,
+                initial_layer_height_mm=initial_layer_height,
+                min_layer_height_mm=min_layer_height,
+                max_layer_height_mm=max_layer_height,
                 object_id=1,
             )
             if lcr_bytes is not None:
@@ -2701,6 +2864,7 @@ def export_scene_with_bambu_metadata(
     project_slot_names: Optional[List[str]] = None,
     *,
     enable_base_layer_height_modifier: bool = True,
+    enable_relief: bool = False,
     base_height_mm: float = 0.0,
     color_height_mm: float = 0.0,
     face_orientation: str = "down",
@@ -2727,6 +2891,9 @@ def export_scene_with_bambu_metadata(
             in exported project metadata when available. (可选，导出项目元数据时应保留的完整来源调色板/材料名称)
         enable_base_layer_height_modifier (bool): Whether to emit layer_config_ranges.xml.
             （是否输出 layer_config_ranges.xml）
+        enable_relief (bool): Whether variable-height relief geometry is enabled. Relief
+            exports never emit ``layer_config_ranges.xml``.（是否启用可变高度浮雕；
+            浮雕导出始终不输出 ``layer_config_ranges.xml``。）
         base_height_mm (float): Backing/base thickness used for coarse layer-height override.
             （用于粗层高覆盖的底板厚度）
         color_height_mm (float): Colored-region thickness used to place the override range.
@@ -2790,9 +2957,13 @@ def export_scene_with_bambu_metadata(
         "cover_source": cover_source,
         "device_profile_id": device_profile_id,
         "preserve_template_filament_slots": preserve_template_filament_slots,
+        "enable_relief": bool(enable_relief),
     }
     writer = BambuStudio3MFWriter(**writer_kwargs)
-    writer.enable_base_layer_height_modifier = bool(enable_base_layer_height_modifier)
+    writer.enable_relief = bool(enable_relief)
+    writer.enable_base_layer_height_modifier = bool(
+        enable_base_layer_height_modifier
+    ) and not writer.enable_relief
     writer.base_height_mm = float(base_height_mm)
     writer.color_height_mm = float(color_height_mm)
     normalized_face_orientation = str(face_orientation).strip().lower()

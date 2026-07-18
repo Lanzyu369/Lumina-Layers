@@ -74,7 +74,9 @@ def _update_bambu_base_layer_ctx_from_voxels(
     ctx["bambu_base_height_mm"] = float(base_height_mm)
     ctx["bambu_color_height_mm"] = float(color_height_mm)
     ctx["bambu_face_orientation"] = face_orientation
-    ctx["enable_base_layer_height_modifier"] = bool(ctx.get("enable_base_layer_height_modifier", True))
+    ctx["enable_base_layer_height_modifier"] = bool(
+        ctx.get("enable_base_layer_height_modifier", True)
+    ) and not bool(ctx.get("enable_relief", False))
 
 
 def _normalize_color_height_map(color_height_map: dict[str, float]) -> dict[str, float]:

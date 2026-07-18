@@ -1195,7 +1195,9 @@ def _update_bambu_base_layer_ctx_for_vector(
     ctx["bambu_base_height_mm"] = float(base_height_mm)
     ctx["bambu_color_height_mm"] = float(color_height_mm)
     ctx["bambu_face_orientation"] = face_orientation
-    ctx["enable_base_layer_height_modifier"] = bool(ctx.get("enable_base_layer_height_modifier", True))
+    ctx["enable_base_layer_height_modifier"] = bool(
+        ctx.get("enable_base_layer_height_modifier", True)
+    ) and not bool(ctx.get("enable_relief", False))
 
 
 # ===================================================================
@@ -2392,7 +2394,11 @@ def _run_vector_branch(ctx: dict) -> dict:
             slicer=ctx.get("slicer", "BambuStudio"),
             nozzle_size=ctx.get("nozzle_size", "0.4"),
             project_slot_names=vec_slot_list,
-            enable_base_layer_height_modifier=bool(ctx.get("enable_base_layer_height_modifier", True)),
+            enable_base_layer_height_modifier=(
+                bool(ctx.get("enable_base_layer_height_modifier", True))
+                and not bool(ctx.get("enable_relief", False))
+            ),
+            enable_relief=bool(ctx.get("enable_relief", False)),
             base_height_mm=float(ctx.get("bambu_base_height_mm", 0.0)),
             color_height_mm=float(ctx.get("bambu_color_height_mm", 0.0)),
             face_orientation=str(ctx.get("bambu_face_orientation", "down")),
