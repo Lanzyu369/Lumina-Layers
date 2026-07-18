@@ -1110,14 +1110,14 @@ def _resolve_compatible_base_layer_height_mm(
     lower_bound = fine_layer_height
     if min_layer_height_mm is not None:
         minimum = float(min_layer_height_mm)
-        if minimum <= 0:
+        if not math.isfinite(minimum) or minimum <= 0:
             return None
         lower_bound = max(lower_bound, minimum - 1e-9)
 
     upper_bound = nozzle * _MAX_LAYER_HEIGHT_NOZZLE_RATIO
     if max_layer_height_mm is not None:
         maximum = float(max_layer_height_mm)
-        if maximum <= 0:
+        if not math.isfinite(maximum) or maximum <= 0:
             return None
         upper_bound = min(upper_bound, maximum)
     if upper_bound <= fine_layer_height:

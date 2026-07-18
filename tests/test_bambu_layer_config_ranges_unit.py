@@ -265,6 +265,34 @@ def test_skips_when_no_compatible_height_is_within_limits() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("bound_name", "bound_value"),
+    [
+        pytest.param("min_layer_height_mm", float("nan"), id="min-nan"),
+        pytest.param("min_layer_height_mm", float("inf"), id="min-positive-inf"),
+        pytest.param("min_layer_height_mm", float("-inf"), id="min-negative-inf"),
+        pytest.param("max_layer_height_mm", float("nan"), id="max-nan"),
+        pytest.param("max_layer_height_mm", float("inf"), id="max-positive-inf"),
+        pytest.param("max_layer_height_mm", float("-inf"), id="max-negative-inf"),
+    ],
+)
+def test_skips_when_optional_layer_height_bound_is_non_finite(
+    bound_name: str,
+    bound_value: float,
+) -> None:
+    assert (
+        _call_build_layer_config_ranges_xml(
+            base_height_mm=0.24,
+            color_height_mm=0.4,
+            nozzle_mm=0.4,
+            face="down",
+            fine_layer_height_mm=0.08,
+            **{bound_name: bound_value},
+        )
+        is None
+    )
+
+
 def test_equal_distance_candidates_choose_lower_height() -> None:
     xml_bytes = _call_build_layer_config_ranges_xml(
         base_height_mm=0.48,
