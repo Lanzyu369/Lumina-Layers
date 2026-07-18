@@ -290,6 +290,89 @@ describe('SVG vector mode guard', () => {
       URL.revokeObjectURL = originalRevokeObjectURL;
     }
   });
+
+  it('downgrades vector mode when selecting a raster image through the upload handler', () => {
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    URL.createObjectURL = vi.fn(() => 'blob:raster-upload-preview');
+    URL.revokeObjectURL = vi.fn();
+
+    try {
+      const pngFile = new File(['png'], 'input.png', { type: 'image/png' });
+      useConverterStore.setState({ modeling_mode: ModelingMode.VECTOR });
+
+      useConverterStore.getState().handleFilesSelect([pngFile]);
+
+      expect(useConverterStore.getState().modeling_mode).toBe(ModelingMode.HIGH_FIDELITY);
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+    }
+  });
+
+  it('downgrades vector mode when selecting multiple raster images', () => {
+    const firstPng = new File(['png-a'], 'first.png', { type: 'image/png' });
+    const secondPng = new File(['png-b'], 'second.png', { type: 'image/png' });
+    useConverterStore.setState({ modeling_mode: ModelingMode.VECTOR });
+
+    useConverterStore.getState().handleFilesSelect([firstPng, secondPng]);
+
+    expect(useConverterStore.getState().batchMode).toBe(true);
+    expect(useConverterStore.getState().modeling_mode).toBe(ModelingMode.HIGH_FIDELITY);
+  });
+
+  it('downgrades a VECTOR SVG to HIGH_FIDELITY when a PNG is appended', () => {
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    URL.createObjectURL = vi.fn(() => 'blob:svg-upload-preview');
+    URL.revokeObjectURL = vi.fn();
+
+    try {
+      const svgFile = new File(['<svg/>'], 'first.svg', { type: 'image/svg+xml' });
+      const pngFile = new File(['png'], 'second.png', { type: 'image/png' });
+
+      useConverterStore.getState().handleFilesSelect([svgFile]);
+      expect(useConverterStore.getState().modeling_mode).toBe(ModelingMode.VECTOR);
+
+      useConverterStore.getState().handleFilesSelect([pngFile]);
+
+      const state = useConverterStore.getState();
+      expect(state.batchFiles).toEqual([svgFile, pngFile]);
+      expect(state.batchMode).toBe(true);
+      expect(state.imageFile).toBeNull();
+      expect(state.modeling_mode).toBe(ModelingMode.HIGH_FIDELITY);
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+    }
+  });
+
+  it('downgrades an existing VECTOR SVG batch when a PNG is appended', () => {
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    URL.createObjectURL = vi.fn(() => 'blob:svg-batch-preview');
+    URL.revokeObjectURL = vi.fn();
+
+    try {
+      const firstSvg = new File(['<svg/>'], 'first.svg', { type: 'image/svg+xml' });
+      const secondSvg = new File(['<svg/>'], 'second.svg', { type: 'image/svg+xml' });
+      const pngFile = new File(['png'], 'third.png', { type: 'image/png' });
+
+      useConverterStore.getState().handleFilesSelect([firstSvg]);
+      useConverterStore.getState().handleFilesSelect([secondSvg]);
+      expect(useConverterStore.getState().modeling_mode).toBe(ModelingMode.VECTOR);
+
+      useConverterStore.getState().handleFilesSelect([pngFile]);
+
+      const state = useConverterStore.getState();
+      expect(state.batchFiles).toEqual([firstSvg, secondSvg, pngFile]);
+      expect(state.batchMode).toBe(true);
+      expect(state.modeling_mode).toBe(ModelingMode.HIGH_FIDELITY);
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+    }
+  });
 });
 
 describe('RAW image preview upload failures', () => {

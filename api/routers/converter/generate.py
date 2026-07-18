@@ -96,6 +96,7 @@ from .common import (
     ROUTER_HANDLED_ERRORS,
     SOURCE_IMAGE_UNAVAILABLE_DETAIL,
     _ensure_material_matrix_signed_capacity,
+    _public_pipeline_validation_detail,
     _require_session,
     _resolve_material_backing_index,
     _validate_material_source,
@@ -149,6 +150,19 @@ MODEL_GENERATION_FAILED_DETAIL: str = (
     "3MF generation failed. Re-run preview and try generating the model again."
 )
 _SELECT_ALL_COLOR_REGION_PREFIX = "__select_all_color__:"
+
+
+def _model_generation_failure_exception(status_msg: object) -> HTTPException:
+    """Map known public validation failures without exposing internal errors.
+    映射已知且可公开的校验错误，同时避免泄露内部错误信息。
+    """
+    public_detail = _public_pipeline_validation_detail(status_msg)
+    if public_detail is not None:
+        return HTTPException(
+            status_code=422,
+            detail=public_detail,
+        )
+    return HTTPException(status_code=500, detail=MODEL_GENERATION_FAILED_DETAIL)
 
 
 class _GenerateBody(BaseModel):
@@ -1848,10 +1862,7 @@ async def convert_generate(
     status_msg: str = result.get("status_msg", "")
 
     if not threemf_path or not os.path.exists(threemf_path):
-        raise HTTPException(
-            status_code=500,
-            detail=MODEL_GENERATION_FAILED_DETAIL,
-        )
+        raise _model_generation_failure_exception(status_msg)
 
     # Register output files via FileRegistry
     sid = body.session_id
