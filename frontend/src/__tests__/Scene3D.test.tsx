@@ -407,15 +407,24 @@ beforeEach(() => {
       expect(camera.far).toBeGreaterThan(2_000);
     });
 
-    it("updates clipping planes when the orbit distance changes", () => {
+    it("subscribes when default orbit controls register after the first render", () => {
       const controls = createMockControls();
       const threeState = getMockThreeState();
-      threeState.controls = controls;
 
-      render(<Scene3D />);
+      const { rerender } = render(<Scene3D />);
+      expect(threeState.controls).toBeNull();
+
+      act(() => {
+        threeState.controls = controls;
+        rerender(<Scene3D />);
+      });
 
       expect(threeState.camera.near).toBeCloseTo(4.75, 1);
       expect(threeState.camera.far).toBeGreaterThan(4_700);
+      expect(controls.addEventListener).toHaveBeenCalledWith(
+        "change",
+        expect.any(Function),
+      );
 
       act(() => {
         threeState.camera.position.set(0, 0, 2_000);
