@@ -290,6 +290,36 @@ describe('SVG vector mode guard', () => {
       URL.revokeObjectURL = originalRevokeObjectURL;
     }
   });
+
+  it('downgrades vector mode when selecting a raster image through the upload handler', () => {
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    URL.createObjectURL = vi.fn(() => 'blob:raster-upload-preview');
+    URL.revokeObjectURL = vi.fn();
+
+    try {
+      const pngFile = new File(['png'], 'input.png', { type: 'image/png' });
+      useConverterStore.setState({ modeling_mode: ModelingMode.VECTOR });
+
+      useConverterStore.getState().handleFilesSelect([pngFile]);
+
+      expect(useConverterStore.getState().modeling_mode).toBe(ModelingMode.HIGH_FIDELITY);
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+    }
+  });
+
+  it('downgrades vector mode when selecting multiple raster images', () => {
+    const firstPng = new File(['png-a'], 'first.png', { type: 'image/png' });
+    const secondPng = new File(['png-b'], 'second.png', { type: 'image/png' });
+    useConverterStore.setState({ modeling_mode: ModelingMode.VECTOR });
+
+    useConverterStore.getState().handleFilesSelect([firstPng, secondPng]);
+
+    expect(useConverterStore.getState().batchMode).toBe(true);
+    expect(useConverterStore.getState().modeling_mode).toBe(ModelingMode.HIGH_FIDELITY);
+  });
 });
 
 describe('RAW image preview upload failures', () => {

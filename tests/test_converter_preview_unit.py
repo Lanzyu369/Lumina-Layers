@@ -46,6 +46,9 @@ from api.file_registry import FileRegistry
 from api.worker_pool import WorkerPoolManager
 from api.workers.converter_workers import worker_generate_preview
 from config import TEMP_DIR
+from core.pipeline._input_validation_common import (
+    VECTOR_NATIVE_REQUIRES_SVG_DETAIL,
+)
 
 # Isolated store/registry per test module to avoid cross-test pollution
 _test_store: SessionStore = SessionStore(ttl=1800)
@@ -1760,6 +1763,36 @@ class TestGeneralExceptionReturns500:
         assert log_extra["error_type"] == "RuntimeError"
         assert log_extra["error_message"] == response.json()["detail"]
         assert private_path not in log_extra["error_message"]
+
+    def test_preview_vector_source_mismatch_returns_actionable_422(self) -> None:
+        """Known VECTOR + raster validation errors must remain user-visible."""
+        buf = _make_test_image_buf()
+        _mock_pool.submit = AsyncMock(
+            side_effect=RuntimeError(VECTOR_NATIVE_REQUIRES_SVG_DETAIL)
+        )
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": ("test.png", buf, "image/png")},
+                data={
+                    "lut_name": "test_lut",
+                    "color_mode": "4-Color",
+                    "modeling_mode": "vector",
+                },
+            )
+
+        assert response.status_code == 422
+        assert response.json()["detail"] == VECTOR_NATIVE_REQUIRES_SVG_DETAIL
 
     def test_preview_missing_worker_output_uses_public_error_language(self) -> None:
         """Worker status_msg should not leak local paths when no PNG is returned."""

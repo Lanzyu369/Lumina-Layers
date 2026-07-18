@@ -22,6 +22,9 @@ from api.session_store import SessionStore
 from api.structured_logging import bind_session_id, get_logger
 from config import PrinterConfig
 from core.material_lut_synthesis import infer_material_archive_base_channel_idx
+from core.pipeline._input_validation_common import (
+    VECTOR_NATIVE_REQUIRES_SVG_DETAIL,
+)
 
 EPHEMERAL_PREVIEW_TTL_SECONDS = 600
 BATCH_DOWNLOAD_TTL_SECONDS = 3600
@@ -83,6 +86,16 @@ NON_FATAL_GLB_ERRORS = (
     RuntimeError,
     cv2.error,
 )
+
+
+def _public_pipeline_validation_detail(status_msg: object) -> str | None:
+    """Return a public detail for known pipeline validation failures.
+    为已知管线校验错误返回可公开的错误详情。
+    """
+    raw_status = str(status_msg or "").strip()
+    if "Vector Native mode requires SVG files" in raw_status:
+        return VECTOR_NATIVE_REQUIRES_SVG_DETAIL
+    return None
 
 
 def _integer_value_bounds(value: object) -> tuple[int, int] | None:

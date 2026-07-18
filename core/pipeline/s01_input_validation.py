@@ -18,6 +18,7 @@ from config import ColorSystem, ModelingMode
 from core.pipeline._input_validation_common import (
     _apply_material_archive_branch,
     _resolve_lut_path_or_error,
+    _validate_vector_svg_input,
 )
 from core.pipeline.preview_color_utils import build_palette_preview_colors
 from core.pipeline.svg_opacity import should_use_opacity_safe_svg_raster_fallback
@@ -170,23 +171,13 @@ def run(ctx: dict) -> dict:
     # gate is widened to cover both ``lut`` and ``material_archive``.
     # 耗材档案 + 矢量模式过去走的是栅格 P03，2D 预览硬边像素 +
     # 偶发杂色；现在改为复用同一条矢量管线，只替换颜色匹配器。
-    is_svg_vector = (
-        modeling_mode == ModelingMode.VECTOR
-        and isinstance(image_path, str)
-        and image_path.lower().endswith(".svg")
+    is_svg_vector = _validate_vector_svg_input(
+        ctx,
+        image_path=image_path,
+        modeling_mode=modeling_mode,
     )
-    ctx["is_svg_vector"] = is_svg_vector
-
-    # 矢量模式但非 SVG 文件 → 提前报错
-    if modeling_mode == ModelingMode.VECTOR and not is_svg_vector:
-        if isinstance(image_path, str) and not image_path.lower().endswith(".svg"):
-            ctx["error"] = (
-                "⚠️ Vector Native mode requires SVG files!\n\n"
-                "Your file is not an SVG. Please either:\n"
-                "• Upload an SVG file, or\n"
-                "• Switch to 'High-Fidelity' or 'Pixel Art' mode"
-            )
-            return ctx
+    if ctx.get("error"):
+        return ctx
 
     _log.debug(
         "conversion parameters resolved",

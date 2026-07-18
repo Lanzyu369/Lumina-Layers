@@ -141,6 +141,25 @@ describe("apiClient", () => {
     );
   });
 
+  it("preserves the actionable SVG requirement from converter validation", async () => {
+    const detail =
+      "⚠️ Vector Native mode requires SVG files!\n\n" +
+      "Your file is not an SVG. Please either:\n" +
+      "• Upload an SVG file, or\n" +
+      "• Switch to 'High-Fidelity' or 'Pixel Art' mode";
+    const error = new Error("Request failed with status code 422");
+    Object.assign(error, {
+      config: { method: "post", url: "/convert/generate" },
+      response: { status: 422, data: { detail } },
+    });
+    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+    const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
+
+    expect(rejected).toMatchObject({ message: detail });
+    expect(rejected.response?.data?.detail).toBe(detail);
+  });
+
   it("uses structured detail object messages before HTTP status fallbacks", async () => {
     const error = new Error("Request failed with status code 422");
     Object.assign(error, {
