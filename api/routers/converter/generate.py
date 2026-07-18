@@ -547,6 +547,35 @@ def _resolve_optional_preview_default_match(
     return request_value, "raw"
 
 
+def _resolve_effective_cached_layer_settings(
+    *,
+    cache: dict,
+    request: ConvertGenerateRequest,
+    preview_color_layers: object = _MISSING,
+    preview_layer_height_mm: object = _MISSING,
+) -> tuple[int | None, float | None]:
+    """Return the layer settings represented by validated cached analysis."""
+
+    color_layers, _color_layers_kind = _resolve_optional_preview_default_match(
+        cache,
+        "color_layers",
+        request.color_layers,
+        preview_color_layers,
+        kind="int",
+    )
+    layer_height_mm, _layer_height_kind = _resolve_optional_preview_default_match(
+        cache,
+        "layer_height_mm",
+        request.layer_height_mm,
+        preview_layer_height_mm,
+        kind="float",
+    )
+    return (
+        int(color_layers) if color_layers is not None else None,
+        float(layer_height_mm) if layer_height_mm is not None else None,
+    )
+
+
 def _preview_analysis_params_match(
     *,
     cache: dict,
@@ -1544,6 +1573,24 @@ async def convert_generate(
                 "layer_height_mm",
                 _MISSING,
             ),
+        )
+    if reuse_preview_analysis or request.use_cached_matched_rgb:
+        effective_color_layers, effective_layer_height_mm = (
+            _resolve_effective_cached_layer_settings(
+                cache=cache,
+                request=request,
+                preview_color_layers=session_data.get("color_layers", _MISSING),
+                preview_layer_height_mm=session_data.get(
+                    "layer_height_mm",
+                    _MISSING,
+                ),
+            )
+        )
+        request = request.model_copy(
+            update={
+                "color_layers": effective_color_layers,
+                "layer_height_mm": effective_layer_height_mm,
+            }
         )
     should_forward_cached_analysis = (
         reuse_preview_analysis
@@ -2792,6 +2839,20 @@ async def convert_generate_large_format(
             session_material_source=str(session_material_source or "lut"),
             preview_color_layers=session_data.get("color_layers"),
             preview_layer_height_mm=session_data.get("layer_height_mm"),
+        )
+        effective_color_layers, effective_layer_height_mm = (
+            _resolve_effective_cached_layer_settings(
+                cache=cache,
+                request=request,
+                preview_color_layers=session_data.get("color_layers"),
+                preview_layer_height_mm=session_data.get("layer_height_mm"),
+            )
+        )
+        request = request.model_copy(
+            update={
+                "color_layers": effective_color_layers,
+                "layer_height_mm": effective_layer_height_mm,
+            }
         )
     source_basename = _resolve_large_format_source_basename(session_data, image_path)
 

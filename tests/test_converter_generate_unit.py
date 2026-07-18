@@ -1022,6 +1022,8 @@ class TestGenerateParameterCompleteness:
         assert submitted_params["matched_rgb_path"] == cache_ref["fields"]["matched_rgb"]["path"]
         assert submitted_params["mask_solid_path"] == cache_ref["fields"]["mask_solid"]["path"]
         assert submitted_params["material_matrix_path"] == cache_ref["fields"]["material_matrix"]["path"]
+        assert submitted_params["color_layers"] == 5
+        assert submitted_params["layer_height_mm"] == pytest.approx(0.08)
 
     def test_generate_forwards_ready_preview_glb_when_analysis_params_match(
         self,
@@ -2220,8 +2222,8 @@ class TestStandardCachedAnalysisRouting:
         sid, payload = self._create_session(
             tmp_path,
             modeling_mode=ModelingMode.VECTOR,
-            color_layers=5,
-            layer_height_mm=0.08,
+            color_layers=6,
+            layer_height_mm=0.12,
         )
         payload["params"]["color_layers"] = None
         payload["params"]["layer_height_mm"] = None
@@ -2234,6 +2236,8 @@ class TestStandardCachedAnalysisRouting:
                 submitted_params["reuse_preview_analysis"]
                 == REQUIRED_PREVIEW_ANALYSIS_REUSE
             )
+            assert submitted_params["color_layers"] == 6
+            assert submitted_params["layer_height_mm"] == pytest.approx(0.12)
         finally:
             _test_store.close(sid)
 
@@ -2604,6 +2608,50 @@ class TestLargeFormatCachedAnalysisRouting:
             assert np.array_equal(np.load(kwargs["matched_rgb_path"]), matched_rgb)
             assert np.array_equal(np.load(kwargs["mask_solid_path"]), mask_solid)
             assert np.array_equal(np.load(kwargs["material_matrix_path"]), material_matrix)
+        finally:
+            _test_store.close(sid)
+            for path in (image_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    def test_large_format_cached_request_inherits_preview_layer_settings(self) -> None:
+        sid, image_path, lut_path = _create_raster_large_format_session(_test_store)
+        matched_rgb, mask_solid, material_matrix = self._analysis_arrays()
+        self._put_legacy_cache(
+            sid,
+            matched_rgb=matched_rgb,
+            mask_solid=mask_solid,
+            material_matrix=material_matrix,
+            modeling_mode=ModelingMode.HIGH_FIDELITY,
+        )
+        session_data = _test_store.get(sid)
+        cache = session_data["preview_cache"]
+        cache["color_layers"] = 6
+        cache["layer_height_mm"] = 0.12
+        _test_store.put(sid, "preview_cache", cache)
+        _test_store.put(sid, "color_layers", 6)
+        _test_store.put(sid, "layer_height_mm", 0.12)
+        _test_store.put(sid, "recipe_overrides", [])
+        _test_store.put(sid, "selected_region_masks", {})
+
+        try:
+            with patch(
+                "api.routers.converter.generate._generate_large_format_raster",
+                return_value=_large_format_success_response("raster"),
+            ) as raster_helper:
+                response = client.post(
+                    "/api/convert/generate-large-format",
+                    json=_large_format_payload(
+                        sid,
+                        modeling_mode="high-fidelity",
+                        use_cached_matched_rgb=True,
+                    ),
+                )
+
+            assert response.status_code == 200, response.text
+            effective_request = raster_helper.call_args.kwargs["request"]
+            assert effective_request.color_layers == 6
+            assert effective_request.layer_height_mm == pytest.approx(0.12)
         finally:
             _test_store.close(sid)
             for path in (image_path, lut_path):
