@@ -2658,6 +2658,7 @@ def apply_matched_rgb_overrides_to_analysis(
     img_processor,
     pixels_per_mm: float = 10.0,
     max_width_px: int = 1600,
+    strict: bool = False,
 ) -> int:
     """Propagate region-level ``matched_rgb`` edits into ``matched_shapes``.
     把 ``cache.matched_rgb`` 上的像素级改色回写到 ``analysis.matched_shapes``。
@@ -2672,15 +2673,18 @@ def apply_matched_rgb_overrides_to_analysis(
     1. Reproducing the same preview grid ``build_preview_cache`` uses
        so the ``matched_rgb`` / ``mask_solid`` arrays line up pixel-for-
        pixel with the analysis geometry.
-    2. Rasterising each ``analysis.matched_shapes`` entry into its own
-       boolean mask and intersecting it with ``mask_solid`` (background
-       pixels are ignored so a "carved out" hole cannot poison the
-       per-shape colour vote).
-    3. Picking the dominant RGB inside the effective mask. If it differs
-       from ``shape['matched_rgb']`` we re-run the same KDTree lookup
-       ``_match_colors`` uses so the new ``matched_rgb`` / ``recipe``
-       come from the LUT — guaranteeing the generated 3MF stays inside
-       the user's calibrated material set.
+    2. Rasterising every connected polygon component in
+       ``analysis.matched_shapes`` into its own boolean mask and
+       intersecting it with ``mask_solid`` (background pixels are ignored
+       so a "carved out" hole cannot poison the component colour vote).
+    3. Picking the dominant RGB and recipe inside each effective mask. If
+       disconnected components of one compound SVG shape resolve to
+       different assignments, that source record is split while preserving
+       its non-geometry metadata and source order. Uniform/no-op compound
+       shapes retain their original geometry.
+    4. Re-running the same KDTree lookup ``_match_colors`` uses so every new
+       ``matched_rgb`` / ``recipe`` stays inside the user's calibrated
+       material set.
 
     The helper preserves every public surface (the module exports it,
     nothing else changes) and is therefore opt-in for callers that have
@@ -2689,15 +2693,17 @@ def apply_matched_rgb_overrides_to_analysis(
     2D 预览 / GLB 走 ``cache.matched_rgb``，``/region-replace`` 之类
     端点会按 mask 改写它，但生成阶段的矢量分支以前只从 SVG fill 复算
     颜色，用户的空间改色被静默丢弃。本 helper 复现 ``build_preview_cache``
-    网格，逐 shape 求 mask，与 ``mask_solid`` 求交后取 dominant RGB，
-    若与原 ``matched_rgb`` 不一致则重新走 KDTree 查 LUT，把新颜色和配方
-    回写到 ``matched_shapes``，让 3MF 与 2D 预览保持一致。
+    网格，按连通 polygon component 求 mask，与 ``mask_solid`` 求交后取
+    dominant RGB/recipe。复合路径的各断开分量若结果不同才拆成独立记录，
+    再把新颜色和配方回写到 ``matched_shapes``，让 3MF 与 2D 预览保持一致。
 
     Args:
         analysis: ``VectorAnalysis`` from ``analyze_svg``; mutated in place.
             （``analyze_svg`` 返回的分析结果，就地修改）
         matched_rgb: ``(H, W, 3) uint8`` array taken from ``cache["matched_rgb"]``.
             （取自 ``cache["matched_rgb"]`` 的预览栅格）
+        material_matrix: Optional ``(H, W, N)`` integer recipe grid.
+            （可选的 ``(H, W, N)`` 整数配方网格）
         mask_solid: ``(H, W) bool`` array taken from ``cache["mask_solid"]``.
             （取自 ``cache["mask_solid"]`` 的实体像素掩码）
         img_processor: Object exposing ``_rgb_to_lab``, ``kdtree``,
@@ -2709,16 +2715,21 @@ def apply_matched_rgb_overrides_to_analysis(
             （预览网格密度，需与 ``build_preview_cache`` 一致）
         max_width_px: Preview-grid width cap. Same constraint.
             （预览网格宽度上限，同上）
+        strict: Raise ``ValueError`` for invalid cache inputs or grid
+            mismatches instead of logging and returning zero. A valid cache
+            that changes no shapes still returns zero normally.
+            （缓存输入或网格无效时抛出 ``ValueError``；合法但无修改仍返回零）
 
     Returns:
-        int: Number of shapes whose ``matched_rgb`` was rewritten.
-            （颜色被改写的 shape 数量）
+        int: Number of connected components whose material assignment changed.
+            （材质分配被改写的连通分量数量）
     """
     if matched_rgb is None or mask_solid is None:
+        if strict:
+            raise ValueError("matched_rgb and mask_solid are required")
         return 0
-    if not analysis.matched_shapes:
+    if not analysis.matched_shapes and not strict:
         return 0
-
     real_w = float(analysis.bbox[2])
     real_h = float(analysis.bbox[3])
     sf = float(analysis.scale_factor)
@@ -2738,6 +2749,7 @@ def apply_matched_rgb_overrides_to_analysis(
     coord_scale = sf * ppm
 
     matched_arr = np.asarray(matched_rgb)
+    raw_mask_arr = np.asarray(mask_solid)
     mask_arr = np.asarray(mask_solid, dtype=bool)
     if matched_arr.ndim != 3 or matched_arr.shape[2] != 3 or matched_arr.dtype != np.uint8:
         error_message = (
@@ -2754,7 +2766,24 @@ def apply_matched_rgb_overrides_to_analysis(
                 "matched_rgb_dtype": str(matched_arr.dtype),
             },
         )
+        if strict:
+            raise ValueError(error_message)
         return 0
+    if strict and raw_mask_arr.dtype != np.dtype(np.bool_):
+        error_message = (
+            f"mask_solid dtype {raw_mask_arr.dtype} is not bool"
+        )
+        _log.warning(
+            "Vector matched RGB overrides skipped because mask dtype is invalid",
+            extra={
+                "event": "vector_overrides_input_invalid",
+                "error_type": "ValueError",
+                "error_message": error_message,
+                "mask_solid_shape": list(raw_mask_arr.shape),
+                "mask_solid_dtype": str(raw_mask_arr.dtype),
+            },
+        )
+        raise ValueError(error_message)
     if matched_arr.shape[:2] != (h_px, w_px) or mask_arr.shape != (h_px, w_px):
         error_message = (
             f"matched_rgb/mask_solid shape {matched_arr.shape[:2]}/{mask_arr.shape} "
@@ -2771,15 +2800,20 @@ def apply_matched_rgb_overrides_to_analysis(
                 "expected_shape": [int(h_px), int(w_px)],
             },
         )
+        if strict:
+            raise ValueError(error_message)
         return 0
 
-    def _iter_polygons(geom):
+    def _iter_polygon_components(geom):
         if geom is None or geom.is_empty:
             return []
         if geom.geom_type == "Polygon":
             return [geom]
-        if geom.geom_type == "MultiPolygon":
-            return list(geom.geoms)
+        if geom.geom_type in ("MultiPolygon", "GeometryCollection"):
+            components = []
+            for child in geom.geoms:
+                components.extend(_iter_polygon_components(child))
+            return components
         return []
 
     def _coords_to_pts(coords):
@@ -2796,7 +2830,7 @@ def apply_matched_rgb_overrides_to_analysis(
     def _shape_mask(geom):
         region = np.zeros((h_px, w_px), dtype=np.uint8)
         painted = False
-        for poly in _iter_polygons(geom):
+        for poly in _iter_polygon_components(geom):
             if poly.is_empty:
                 continue
             ext_pts = _coords_to_pts(np.array(poly.exterior.coords))
@@ -2814,43 +2848,91 @@ def apply_matched_rgb_overrides_to_analysis(
 
     num_channels = int(getattr(analysis, "num_channels", 0) or 0)
     num_layers = int(getattr(analysis, "num_layers", 0) or 0)
-    if num_channels <= 0 or num_layers <= 0:
+    if (num_channels <= 0 or num_layers <= 0) and not strict:
         return 0
 
-    lut_rgb = img_processor.lut_rgb
-    ref_stacks = img_processor.ref_stacks
     matrix_arr = None
     if material_matrix is not None:
         candidate_matrix = np.asarray(material_matrix)
-        if candidate_matrix.ndim == 3 and candidate_matrix.shape[:2] == (h_px, w_px):
+        matrix_grid_is_valid = (
+            candidate_matrix.ndim == 3
+            and candidate_matrix.shape[:2] == (h_px, w_px)
+        )
+        matrix_dtype_is_valid = np.issubdtype(candidate_matrix.dtype, np.integer)
+        matrix_channels_are_valid = (
+            candidate_matrix.ndim == 3 and candidate_matrix.shape[2] > 0
+        )
+        if matrix_grid_is_valid and (
+            not strict or (matrix_dtype_is_valid and matrix_channels_are_valid)
+        ):
             matrix_arr = candidate_matrix
         else:
+            if strict:
+                error_message = (
+                    f"material_matrix shape/dtype "
+                    f"{candidate_matrix.shape}/{candidate_matrix.dtype} "
+                    f"does not match non-empty integer preview grid "
+                    f"{(h_px, w_px)}"
+                )
+            else:
+                error_message = (
+                    f"material_matrix shape {candidate_matrix.shape} "
+                    f"does not match preview grid {(h_px, w_px)}"
+                )
             _log.warning(
                 "Vector material matrix overrides skipped because cache grid mismatched analysis",
                 extra={
                     "event": "vector_material_matrix_grid_mismatch",
                     "error_type": "ValueError",
-                    "error_message": (
-                        f"material_matrix shape {candidate_matrix.shape} "
-                        f"does not match preview grid {(h_px, w_px)}"
-                    ),
+                    "error_message": error_message,
                     "material_matrix_shape": list(candidate_matrix.shape),
+                    **(
+                        {"material_matrix_dtype": str(candidate_matrix.dtype)}
+                        if strict
+                        else {}
+                    ),
                     "expected_shape": [int(h_px), int(w_px)],
                 },
             )
+            if strict:
+                raise ValueError(error_message)
+
+    if not analysis.matched_shapes:
+        return 0
+
+    if num_channels <= 0 or num_layers <= 0:
+        return 0
+
+    lut_rgb = img_processor.lut_rgb
+    ref_stacks = img_processor.ref_stacks
 
     changed = 0
     per_shape_diag: list[dict] = []
-    for shape_idx, shape in enumerate(analysis.matched_shapes):
-        geom = shape.get("geometry")
-        if geom is None or getattr(geom, "is_empty", False):
-            continue
+
+    def _material_state(
+        shape: dict,
+    ) -> tuple[tuple[int, ...] | None, tuple[int, ...]]:
+        rgb = shape.get("matched_rgb")
+        try:
+            rgb_state = tuple(int(c) for c in rgb)
+        except (TypeError, ValueError):
+            rgb_state = None
+        recipe_state = tuple(int(v) for v in (shape.get("recipe") or []))
+        return rgb_state, recipe_state
+
+    def _project_component(
+        *,
+        shape_idx: int,
+        component_idx: int,
+        shape: dict,
+        geom,
+    ) -> dict | None:
         shape_mask = _shape_mask(geom)
         if shape_mask is None:
-            continue
+            return None
         effective_mask = np.logical_and(shape_mask, mask_arr)
         if not np.any(effective_mask):
-            continue
+            return None
 
         pixels = matched_arr[effective_mask]
         codes = (
@@ -2871,7 +2953,7 @@ def apply_matched_rgb_overrides_to_analysis(
         try:
             lut_idx = int(np.atleast_1d(index)[0])
         except (TypeError, ValueError, IndexError):
-            continue
+            return None
         new_matched_rgb = tuple(int(c) for c in lut_rgb[lut_idx])
 
         stack_source = "ref_stacks_fallback"
@@ -2899,7 +2981,6 @@ def apply_matched_rgb_overrides_to_analysis(
             num_channels=num_channels,
         )
 
-        prev_rgb = shape.get("matched_rgb")
         prev_recipe = [int(v) for v in shape.get("recipe", [])]
 
         if len(per_shape_diag) < 24:
@@ -2910,6 +2991,7 @@ def apply_matched_rgb_overrides_to_analysis(
             per_shape_diag.append(
                 {
                     "shape_idx": int(shape_idx),
+                    "component_idx": int(component_idx),
                     "area": round(area, 3),
                     "effective_pixels": int(np.count_nonzero(effective_mask)),
                     "dominant_rgb": list(dominant_rgb),
@@ -2923,17 +3005,66 @@ def apply_matched_rgb_overrides_to_analysis(
                 }
             )
 
-        if (
-            isinstance(prev_rgb, tuple)
-            and tuple(int(c) for c in prev_rgb) == new_matched_rgb
-            and prev_recipe == new_recipe
-        ):
+        assignment_changed = _material_state(shape) != (
+            new_matched_rgb,
+            tuple(new_recipe),
+        )
+        return {
+            "matched_rgb": new_matched_rgb,
+            "lut_idx": lut_idx,
+            "recipe": new_recipe,
+            "changed": assignment_changed,
+        }
+
+    projected_shapes: list[dict] = []
+    for shape_idx, shape in enumerate(analysis.matched_shapes):
+        geom = shape.get("geometry")
+        if geom is None or getattr(geom, "is_empty", False):
+            projected_shapes.append(shape)
             continue
 
-        shape["matched_rgb"] = new_matched_rgb
-        shape["lut_idx"] = lut_idx
-        shape["recipe"] = new_recipe
-        changed += 1
+        components = _iter_polygon_components(geom)
+        if not components:
+            projected_shapes.append(shape)
+            continue
+
+        component_records: list[dict] = []
+        changed_components = 0
+        for component_idx, component in enumerate(components):
+            component_record = dict(shape)
+            component_record["geometry"] = component
+            projection = _project_component(
+                shape_idx=shape_idx,
+                component_idx=component_idx,
+                shape=shape,
+                geom=component,
+            )
+            if projection is not None and projection["changed"]:
+                component_record["matched_rgb"] = projection["matched_rgb"]
+                component_record["lut_idx"] = projection["lut_idx"]
+                component_record["recipe"] = projection["recipe"]
+                changed_components += 1
+            component_records.append(component_record)
+
+        component_states = [_material_state(record) for record in component_records]
+        if len(set(component_states)) <= 1:
+            # Preserve the original compound geometry whenever every connected
+            # component resolves to the same material assignment. This keeps
+            # zero-change and global-replacement exports structurally stable.
+            if component_records and changed_components:
+                uniform_record = component_records[0]
+                shape["matched_rgb"] = uniform_record.get("matched_rgb")
+                shape["lut_idx"] = uniform_record.get("lut_idx")
+                shape["recipe"] = list(uniform_record.get("recipe") or [])
+            projected_shapes.append(shape)
+        else:
+            # Downstream tiling and mesh construction consume records by value,
+            # not by list index. Shallow copies retain source identity, draw
+            # order, slot metadata, and any future non-geometry fields.
+            projected_shapes.extend(component_records)
+        changed += changed_components
+
+    analysis.matched_shapes = projected_shapes
 
     # Diagnostic: emit per-shape majority vote details.
     if per_shape_diag:

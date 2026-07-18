@@ -39,8 +39,8 @@ interface ConfirmReplacementOutput {
  * 纯函数，复制 confirmReplacement 的核心分支逻辑。
  *
  * - select-all: updates colorRemapMap with sourceHex → targetHex
- * - multi-select: updates colorRemapMap for all sourceColors → targetHex
- * - current/region: does NOT update colorRemapMap, only increments regionReplacementCount
+ * - current/region: does NOT update colorRemapMap, only increments regionReplacementCount by 1
+ * - multi-select: does NOT update colorRemapMap, increments the spatial edit count by region count
  */
 function computeConfirmReplacementStateUpdate(
   input: ConfirmReplacementInput,
@@ -54,14 +54,11 @@ function computeConfirmReplacementStateUpdate(
       regionReplacementCount: currentRegionReplacementCount + 1,
     };
   } else if (selectionMode === "multi-select") {
-    // multi-select: update colorRemapMap for all sourceColors
-    const newMap = { ...currentColorRemapMap };
-    for (const hex of sourceColors ?? []) {
-      newMap[hex] = targetHex;
-    }
+    // multi-select is a spatial batch, not a whole-image hex remap.
     return {
-      colorRemapMap: newMap,
-      regionReplacementCount: currentRegionReplacementCount,
+      colorRemapMap: { ...currentColorRemapMap },
+      regionReplacementCount:
+        currentRegionReplacementCount + (sourceColors?.length ?? 0),
     };
   } else {
     // select-all: update colorRemapMap with single mapping
@@ -106,9 +103,9 @@ describe("Feature: region-replace-generate-fix — Property 1: colorRemapMap 更
    * **Validates: Requirements 2.1, 2.2, 2.3, 3.1, 3.2, 9.1, 9.2**
    *
    * Property 1: For any pending replacement and any selection mode,
-   * confirmReplacement updates colorRemapMap if and only if mode is
-   * select-all or multi-select. When mode is current or region,
-   * colorRemapMap remains unchanged and only regionReplacementCount increments.
+   * confirmReplacement updates colorRemapMap only for select-all. Connected
+   * single-region and multi-select batch paths remain spatial and advance
+   * regionReplacementCount so generation reuses cached matched RGB.
    */
 
   describe("current/region modes: colorRemapMap unchanged, regionReplacementCount increments", () => {
@@ -177,8 +174,8 @@ describe("Feature: region-replace-generate-fix — Property 1: colorRemapMap 更
     });
   });
 
-  describe("multi-select mode: colorRemapMap updated for all sourceColors, regionReplacementCount unchanged", () => {
-    it("colorRemapMap maps every sourceColor to targetHex after multi-select", () => {
+  describe("multi-select mode: colorRemapMap unchanged, regionReplacementCount increments by region count", () => {
+    it("keeps global mappings unchanged and records every spatial edit", () => {
       fc.assert(
         fc.property(
           hexColorArray,
@@ -195,20 +192,10 @@ describe("Feature: region-replace-generate-fix — Property 1: colorRemapMap 更
               sourceColors,
             });
 
-            // Every sourceColor must map to targetHex
-            for (const hex of sourceColors) {
-              expect(result.colorRemapMap[hex]).toBe(targetHex);
-            }
-
-            // Pre-existing mappings not in sourceColors must be preserved
-            for (const [key, value] of Object.entries(initialMap)) {
-              if (!sourceColors.includes(key)) {
-                expect(result.colorRemapMap[key]).toBe(value);
-              }
-            }
-
-            // regionReplacementCount must NOT change
-            expect(result.regionReplacementCount).toBe(initialCount);
+            expect(result.colorRemapMap).toEqual(initialMap);
+            expect(result.regionReplacementCount).toBe(
+              initialCount + sourceColors.length,
+            );
           },
         ),
         { numRuns: 200 },
@@ -216,8 +203,8 @@ describe("Feature: region-replace-generate-fix — Property 1: colorRemapMap 更
     });
   });
 
-  describe("biconditional: colorRemapMap changes iff mode is select-all or multi-select", () => {
-    it("for any mode, colorRemapMap changes ↔ mode ∈ {select-all, multi-select}", () => {
+  describe("biconditional: colorRemapMap changes iff mode is select-all", () => {
+    it("for any mode, only select-all changes the global map", () => {
       fc.assert(
         fc.property(
           anyMode,
@@ -239,14 +226,14 @@ describe("Feature: region-replace-generate-fix — Property 1: colorRemapMap 更
               sourceColors,
             });
 
-            const isGlobalMode = mode === "select-all" || mode === "multi-select";
+            const isGlobalMode = mode === "select-all";
             const mapChanged =
               JSON.stringify(result.colorRemapMap) !== JSON.stringify(initialMap);
 
             // colorRemapMap changes if and only if mode is global
             expect(mapChanged).toBe(isGlobalMode);
 
-            // regionReplacementCount changes if and only if mode is region-local
+            // regionReplacementCount changes if and only if mode is region-local.
             const countChanged = result.regionReplacementCount !== initialCount;
             expect(countChanged).toBe(!isGlobalMode);
           },
@@ -483,17 +470,14 @@ describe("Feature: region-replace-generate-fix — Property 4: clearAllRemaps �
 });
 
 
-// ========== 单元测试: select-all/multi-select 模式不受影响 ==========
+// ========== 单元测试: global select-all 与 spatial multi-select 保持隔离 ==========
 
-describe("select-all/multi-select 模式不受影响", () => {
+describe("select-all global mapping and multi-select spatial cache stay distinct", () => {
   /**
    * **Validates: Requirements 9.1, 9.2, 9.3**
    *
-   * Unit tests verifying that select-all and multi-select modes
-   * continue to work correctly after the region-replace fix:
-   * - colorRemapMap is updated as expected
-   * - regionReplacementCount is NOT modified
-   * - Pre-existing mappings are preserved
+   * Unit tests verifying that select-all remains a global mapping while
+   * multi-select remains a spatial batch tracked by regionReplacementCount.
    */
 
   describe("select-all 模式正常更新 colorRemapMap (Req 9.1)", () => {
@@ -553,8 +537,8 @@ describe("select-all/multi-select 模式不受影响", () => {
     });
   });
 
-  describe("multi-select 模式正常批量更新 colorRemapMap (Req 9.2)", () => {
-    it("should map all sourceColors to targetHex", () => {
+  describe("multi-select records a local cached batch (Req 9.2)", () => {
+    it("keeps the global map empty and increments once per source region", () => {
       const result = computeConfirmReplacementStateUpdate({
         selectionMode: "multi-select",
         sourceHex: "ff0000",
@@ -564,15 +548,11 @@ describe("select-all/multi-select 模式不受影响", () => {
         sourceColors: ["ff0000", "00ff00", "0000ff"],
       });
 
-      expect(result.colorRemapMap).toEqual({
-        ff0000: "ffffff",
-        "00ff00": "ffffff",
-        "0000ff": "ffffff",
-      });
-      expect(result.regionReplacementCount).toBe(0);
+      expect(result.colorRemapMap).toEqual({});
+      expect(result.regionReplacementCount).toBe(3);
     });
 
-    it("should not increment regionReplacementCount", () => {
+    it("adds the batch size to an existing spatial edit count", () => {
       const result = computeConfirmReplacementStateUpdate({
         selectionMode: "multi-select",
         sourceHex: "aabbcc",
@@ -582,10 +562,10 @@ describe("select-all/multi-select 模式不受影响", () => {
         sourceColors: ["aabbcc", "ddeeff"],
       });
 
-      expect(result.regionReplacementCount).toBe(3);
+      expect(result.regionReplacementCount).toBe(5);
     });
 
-    it("should preserve pre-existing mappings not in sourceColors", () => {
+    it("preserves every pre-existing global mapping", () => {
       const existing = { "111111": "222222" };
       const result = computeConfirmReplacementStateUpdate({
         selectionMode: "multi-select",
@@ -596,28 +576,8 @@ describe("select-all/multi-select 模式不受影响", () => {
         sourceColors: ["ff0000", "00ff00"],
       });
 
-      expect(result.colorRemapMap).toEqual({
-        "111111": "222222",
-        ff0000: "000000",
-        "00ff00": "000000",
-      });
-    });
-
-    it("should overwrite existing mappings for colors in sourceColors", () => {
-      const existing = { ff0000: "aaaaaa", "00ff00": "bbbbbb" };
-      const result = computeConfirmReplacementStateUpdate({
-        selectionMode: "multi-select",
-        sourceHex: "ff0000",
-        targetHex: "000000",
-        currentColorRemapMap: existing,
-        currentRegionReplacementCount: 0,
-        sourceColors: ["ff0000", "00ff00"],
-      });
-
-      expect(result.colorRemapMap).toEqual({
-        ff0000: "000000",
-        "00ff00": "000000",
-      });
+      expect(result.colorRemapMap).toEqual(existing);
+      expect(result.regionReplacementCount).toBe(2);
     });
 
     it("should handle empty sourceColors gracefully", () => {
@@ -631,13 +591,13 @@ describe("select-all/multi-select 模式不受影响", () => {
         sourceColors: [],
       });
 
-      // No new mappings added, existing preserved
+      // No spatial regions means no count change; global mappings stay intact.
       expect(result.colorRemapMap).toEqual({ "111111": "222222" });
       expect(result.regionReplacementCount).toBe(0);
     });
   });
 
-  describe("select-all/multi-select 生成 3MF 时通过 replacement_regions 应用全局替换 (Req 9.3)", () => {
+  describe("generation chooses global mappings or cached spatial analysis by mode (Req 9.3)", () => {
     it("select-all: regionReplacementCount stays 0, so use_cached_matched_rgb would be false", () => {
       const result = computeConfirmReplacementStateUpdate({
         selectionMode: "select-all",
@@ -652,7 +612,7 @@ describe("select-all/multi-select 模式不受影响", () => {
       expect(computeUseCachedMatchedRgb(result.regionReplacementCount)).toBe(false);
     });
 
-    it("multi-select: regionReplacementCount stays 0, so use_cached_matched_rgb would be false", () => {
+    it("multi-select: positive regionReplacementCount reuses cached matched RGB", () => {
       const result = computeConfirmReplacementStateUpdate({
         selectionMode: "multi-select",
         sourceHex: "ff0000",
@@ -662,9 +622,9 @@ describe("select-all/multi-select 模式不受影响", () => {
         sourceColors: ["ff0000", "0000ff"],
       });
 
-      // regionReplacementCount unchanged → generate uses normal path (replacement_regions)
-      expect(result.regionReplacementCount).toBe(0);
-      expect(computeUseCachedMatchedRgb(result.regionReplacementCount)).toBe(false);
+      expect(result.colorRemapMap).toEqual({});
+      expect(result.regionReplacementCount).toBe(2);
+      expect(computeUseCachedMatchedRgb(result.regionReplacementCount)).toBe(true);
     });
   });
 });

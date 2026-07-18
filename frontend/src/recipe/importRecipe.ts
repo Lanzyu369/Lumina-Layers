@@ -60,6 +60,8 @@ export const RECIPE_IMPORT_WARNING_PUZZLE_CONFLICT_LOOP =
   "recipe_import_warning_puzzle_conflict_loop";
 export const RECIPE_IMPORT_WARNING_BACK_LABELS_UNAVAILABLE =
   "recipe_import_warning_back_labels_unavailable";
+export const RECIPE_IMPORT_WARNING_SPATIAL_EDITS_NOT_SERIALIZED =
+  "recipe_import_warning_spatial_edits_not_serialized";
 
 export const RECIPE_IMPORT_NOT_SHARE_CARD_ERROR =
   "PNG file does not contain Lumina recipe metadata";

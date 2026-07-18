@@ -257,8 +257,10 @@ export interface AdvancedParamsLargeFormat {
 }
 
 /**
- * Color-replacement regions captured for the generation.
- * 本次生成采集到的颜色替换区域。
+ * Global color mappings and the scalar count of session-scoped spatial edits
+ * captured for the generation. Spatial masks and coordinates are never stored.
+ *
+ * 本次生成采集到的全局颜色映射，以及会话级空间编辑次数标量；不保存掩码或坐标。
  *
  * `replacement_regions` is capped at 32 items; overflow sets
  * `replacement_regions_truncated: true`. An empty list is normalized to
@@ -267,8 +269,11 @@ export interface AdvancedParamsLargeFormat {
  * 空列表统一归一化为 null，便于下游用同一条件判断"无替换"。
  */
 export interface AdvancedParamsColorReplacement {
+  /** Global whole-image mappings only. / 仅包含全图颜色映射。 */
   replacement_regions: ColorReplacementScalarItem[] | null;
   replacement_regions_truncated?: boolean;
+  /** Non-negative count of session-scoped spatial edits. / 会话级空间编辑的非负次数。 */
+  spatial_edit_count: number;
   free_color_set: string[] | null;
   free_color_set_truncated?: boolean;
   recipe_overrides: AdvancedParamsRecipeOverride[] | null;
