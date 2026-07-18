@@ -192,12 +192,14 @@ describe("SettingsPanel base-layer-height modifier", () => {
 
     expect(description.zh).toContain("计入固定首层");
     expect(description.zh).toContain("准确落在底板边界");
+    expect(description.zh).toContain("浮雕");
     expect(description.zh).toContain("双面");
     expect(description.zh).toContain("没有安全可选值");
     expect(description.zh).not.toContain("整除底板厚度");
 
     expect(description.en).toContain("accounts for the fixed first layer");
     expect(description.en).toContain("lands exactly on the backing boundary");
+    expect(description.en).toContain("relief");
     expect(description.en).toContain("double-sided");
     expect(description.en).toContain("no safe value exists");
     expect(description.en).not.toContain("divides the base-plate thickness exactly");

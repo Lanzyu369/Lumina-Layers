@@ -50,8 +50,10 @@ describe("useAnnouncement", () => {
       items.some(
         (item) =>
           item.zh.includes("底板层高") &&
+          item.zh.includes("浮雕") &&
           item.zh.includes("双面") &&
           item.en.toLowerCase().includes("base-layer") &&
+          item.en.toLowerCase().includes("relief") &&
           item.en.toLowerCase().includes("double-sided"),
       ),
     ).toBe(true);

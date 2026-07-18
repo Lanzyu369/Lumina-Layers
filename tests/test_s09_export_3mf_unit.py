@@ -30,6 +30,7 @@ def test_s09_passes_full_slot_names_to_exporter(monkeypatch, tmp_path) -> None:
         watermark: str = "LuminaStudio",
         project_slot_names=None,
         enable_base_layer_height_modifier: bool = True,
+        enable_relief: bool = False,
         base_height_mm: float = 0.0,
         color_height_mm: float = 0.0,
         face_orientation: str = "down",
@@ -48,6 +49,7 @@ def test_s09_passes_full_slot_names_to_exporter(monkeypatch, tmp_path) -> None:
         captured["project_slot_names"] = list(project_slot_names) if project_slot_names is not None else None
         captured["watermark"] = watermark
         captured["enable_base_layer_height_modifier"] = enable_base_layer_height_modifier
+        captured["enable_relief"] = enable_relief
         captured["base_height_mm"] = base_height_mm
         captured["color_height_mm"] = color_height_mm
         captured["face_orientation"] = face_orientation
@@ -141,6 +143,30 @@ def test_s09_passes_base_layer_kwargs_when_ctx_has_them(tmp_path) -> None:
     assert kwargs["base_height_mm"] == 0.8
     assert kwargs["color_height_mm"] == 2.4
     assert kwargs["face_orientation"] == "down"
+
+
+def test_s09_relief_export_disables_base_modifier_at_handoff(tmp_path) -> None:
+    with patch.object(s09_export_3mf, "MODELS_DIR", str(tmp_path)), patch.object(
+        s09_export_3mf,
+        "generate_model_filename",
+        lambda *_args: "relief.3mf",
+    ), patch.object(s09_export_3mf, "export_scene_with_bambu_metadata", autospec=True) as mock_export:
+        mock_export.return_value = str(tmp_path / "relief.3mf")
+
+        s09_export_3mf.run(
+            _make_minimal_s09_ctx(
+                tmp_path,
+                enable_relief=True,
+                enable_base_layer_height_modifier=True,
+                bambu_base_height_mm=1.2,
+                bambu_color_height_mm=0.56,
+                bambu_face_orientation="up",
+            )
+        )
+
+    kwargs = mock_export.call_args.kwargs
+    assert kwargs["enable_relief"] is True
+    assert kwargs["enable_base_layer_height_modifier"] is False
 
 
 def test_s09_falls_back_to_safe_defaults_when_ctx_missing_keys(tmp_path) -> None:

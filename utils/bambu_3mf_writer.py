@@ -1495,6 +1495,7 @@ class BambuStudio3MFWriter:
         watermark: str = "LuminaStudio",
         *,
         enable_base_layer_height_modifier: bool = True,
+        enable_relief: bool = False,
         base_height_mm: float = 0.0,
         color_height_mm: float = 0.0,
         face_orientation: str = "down",
@@ -1516,6 +1517,10 @@ class BambuStudio3MFWriter:
             watermark (str): Watermark text embedded in the 3MF ZIP structure. (嵌入 3MF ZIP 结构的水印文本)
             enable_base_layer_height_modifier (bool): Whether to emit layer_config_ranges.xml.
                 （是否输出 layer_config_ranges.xml）
+            enable_relief (bool): Whether variable-height relief geometry is enabled. Relief
+                exports never emit ``layer_config_ranges.xml`` because no single global
+                backing range is safe.（是否启用可变高度浮雕；浮雕不存在全局安全的
+                底板区间，因此始终不输出 ``layer_config_ranges.xml``。）
             base_height_mm (float): Backing/base thickness used for coarse layer-height override.
                 （用于粗层高覆盖的底板厚度）
             color_height_mm (float): Colored-region thickness used to place the override range.
@@ -1563,7 +1568,10 @@ class BambuStudio3MFWriter:
             else None
         )
         self.watermark = watermark
-        self.enable_base_layer_height_modifier = bool(enable_base_layer_height_modifier)
+        self.enable_relief = bool(enable_relief)
+        self.enable_base_layer_height_modifier = bool(
+            enable_base_layer_height_modifier
+        ) and not self.enable_relief
         self.base_height_mm = float(base_height_mm)
         self.color_height_mm = float(color_height_mm)
         normalized_face_orientation = str(face_orientation).strip().lower()
@@ -2003,7 +2011,7 @@ class BambuStudio3MFWriter:
                     ),
                 ]
             )
-        if self.enable_base_layer_height_modifier:
+        if self.enable_base_layer_height_modifier and not self.enable_relief:
             # Bambu/Orca layer_config_ranges keys are one-based model-object
             # indexes, not 3MF resource/build object ids. Lumina emits one
             # assembled model object here; puzzle exports strip this metadata.
@@ -2856,6 +2864,7 @@ def export_scene_with_bambu_metadata(
     project_slot_names: Optional[List[str]] = None,
     *,
     enable_base_layer_height_modifier: bool = True,
+    enable_relief: bool = False,
     base_height_mm: float = 0.0,
     color_height_mm: float = 0.0,
     face_orientation: str = "down",
@@ -2882,6 +2891,9 @@ def export_scene_with_bambu_metadata(
             in exported project metadata when available. (可选，导出项目元数据时应保留的完整来源调色板/材料名称)
         enable_base_layer_height_modifier (bool): Whether to emit layer_config_ranges.xml.
             （是否输出 layer_config_ranges.xml）
+        enable_relief (bool): Whether variable-height relief geometry is enabled. Relief
+            exports never emit ``layer_config_ranges.xml``.（是否启用可变高度浮雕；
+            浮雕导出始终不输出 ``layer_config_ranges.xml``。）
         base_height_mm (float): Backing/base thickness used for coarse layer-height override.
             （用于粗层高覆盖的底板厚度）
         color_height_mm (float): Colored-region thickness used to place the override range.
@@ -2945,9 +2957,13 @@ def export_scene_with_bambu_metadata(
         "cover_source": cover_source,
         "device_profile_id": device_profile_id,
         "preserve_template_filament_slots": preserve_template_filament_slots,
+        "enable_relief": bool(enable_relief),
     }
     writer = BambuStudio3MFWriter(**writer_kwargs)
-    writer.enable_base_layer_height_modifier = bool(enable_base_layer_height_modifier)
+    writer.enable_relief = bool(enable_relief)
+    writer.enable_base_layer_height_modifier = bool(
+        enable_base_layer_height_modifier
+    ) and not writer.enable_relief
     writer.base_height_mm = float(base_height_mm)
     writer.color_height_mm = float(color_height_mm)
     normalized_face_orientation = str(face_orientation).strip().lower()

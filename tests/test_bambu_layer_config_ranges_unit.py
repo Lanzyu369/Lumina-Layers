@@ -101,6 +101,25 @@ def test_skip_when_toggle_off(tmp_path) -> None:
         assert "Metadata/layer_config_ranges.xml" not in package.namelist()
 
 
+def test_skip_when_relief_is_enabled_even_if_modifier_toggle_is_on(tmp_path) -> None:
+    output_path = tmp_path / "relief.3mf"
+    writer = _make_writer(
+        str(output_path),
+        enable_base_layer_height_modifier=True,
+        enable_relief=True,
+        base_height_mm=1.2,
+        color_height_mm=0.56,
+        face_orientation="up",
+        nozzle_size="0.4",
+    )
+    writer.add_mesh(_make_box_mesh(), "Slot 1", (255, 0, 0))
+
+    writer.export()
+
+    with zipfile.ZipFile(output_path) as package:
+        assert "Metadata/layer_config_ranges.xml" not in package.namelist()
+
+
 def test_skip_when_base_zero() -> None:
     assert (
         _call_build_layer_config_ranges_xml(

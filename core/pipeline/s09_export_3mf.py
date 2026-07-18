@@ -211,7 +211,11 @@ def run(ctx: dict) -> dict:
             printer_id=ctx.get("printer_id", "bambu-h2d"),
             slicer=ctx.get("slicer", "BambuStudio"),
             nozzle_size=ctx.get("nozzle_size", "0.4"),
-            enable_base_layer_height_modifier=bool(ctx.get("enable_base_layer_height_modifier", True)),
+            enable_base_layer_height_modifier=(
+                bool(ctx.get("enable_base_layer_height_modifier", True))
+                and not bool(ctx.get("enable_relief", False))
+            ),
+            enable_relief=bool(ctx.get("enable_relief", False)),
             base_height_mm=float(ctx.get("bambu_base_height_mm", 0.0)),
             color_height_mm=float(ctx.get("bambu_color_height_mm", 0.0)),
             face_orientation=str(ctx.get("bambu_face_orientation", "down")),
