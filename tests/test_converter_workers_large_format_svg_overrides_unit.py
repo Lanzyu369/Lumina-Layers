@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 import cv2
 import numpy as np
 import pytest
+import trimesh
 from scipy.spatial import cKDTree
 from shapely.geometry import MultiPolygon, box
 
@@ -702,6 +703,350 @@ def test_native_worker_keeps_pure_global_replacement_flow(tmp_path) -> None:
         assert received_replacements == [{"#ff0000": "#00ff00"}]
         assert tile_colors == [(0, 255, 0)]
         assert result["tile_count"] == 1
+    finally:
+        if result is not None and os.path.exists(result["zip_path"]):
+            os.unlink(result["zip_path"])
+
+
+def test_native_worker_applies_recipe_override_before_cross_tile_slicing(
+    tmp_path,
+) -> None:
+    crossing = box(5.5, 0.5, 6.5, 3.5)
+    unselected = box(7.0, 0.5, 11.5, 3.5)
+    compound_shape = _red_shape(0.0, 0.0, 1.0, 1.0)
+    compound_shape["geometry"] = MultiPolygon([crossing, unselected])
+    compound_shape["source_id"] = "one-svg-path"
+    analysis = _analysis([compound_shape], width_mm=12.0, height_mm=4.0)
+    region_mask = np.zeros((40, 120), dtype=bool)
+    region_mask[5:36, 55:66] = True
+    masks_path = tmp_path / "recipe-masks.pkl"
+    with masks_path.open("wb") as handle:
+        pickle.dump({"region-1": region_mask}, handle)
+
+    tile_records: list[tuple[tuple[float, ...], tuple[int, ...], str]] = []
+    exported: list[dict[str, object]] = []
+
+    class _FakeVectorProcessor(_SlicerCompatibleProcessor):
+        def __init__(self, _lut_path: str, _color_mode: str) -> None:
+            self.color_mode = "4-Color"
+            self.img_processor = _fake_img_processor()
+
+        def analyze_svg(self, **_kwargs: object) -> VectorAnalysis:
+            return analysis
+
+        def build_mesh(
+            self,
+            *,
+            analysis: VectorAnalysis,
+            **_kwargs: object,
+        ) -> SimpleNamespace:
+            tile_records.extend(
+                (
+                    tuple(round(value, 3) for value in shape["geometry"].bounds),
+                    tuple(int(value) for value in shape["recipe"]),
+                    str(shape["source_id"]),
+                )
+                for shape in analysis.matched_shapes
+            )
+            used_slots = {
+                analysis.slot_names[int(shape["recipe"][0])]
+                for shape in analysis.matched_shapes
+            }
+            return _scene_for_slots(used_slots)
+
+    def _capture_export(*, output_path: str, **kwargs: object) -> None:
+        exported.append(dict(kwargs))
+        _write_export(output_path=output_path)
+
+    params = _params(
+        total_width_mm=12.0,
+        total_height_mm=4.0,
+        tile_width_mm=6.0,
+        tile_height_mm=4.0,
+    )
+    params.update(
+        color_layers=5,
+        recipe_overrides=[
+            {
+                "region_id": "region-1",
+                "recipe": [4, 4, 4, 4, 4],
+                "layer_order": "Top2Bottom",
+                "virtual_materials": [{"name": "Gold", "hex": "#CFA13A"}],
+            }
+        ],
+        recipe_override_masks_path=str(masks_path),
+    )
+
+    result = None
+    with (
+        patch("core.vector_engine.VectorProcessor", _FakeVectorProcessor),
+        patch(
+            "api.workers.converter_workers._rasterize_tile_for_cover",
+            return_value=None,
+        ),
+        patch(
+            "utils.bambu_3mf_writer.export_scene_with_bambu_metadata",
+            side_effect=_capture_export,
+        ),
+    ):
+        result = worker_generate_large_format_svg_native(
+            "image.svg",
+            "lut.npy",
+            params,
+        )
+
+    try:
+        assert result["tile_count"] == 2
+        assert tile_records == [
+            ((5.5, 0.5, 6.0, 3.5), (4, 4, 4, 4, 4), "one-svg-path"),
+            ((0.0, 0.5, 0.5, 3.5), (4, 4, 4, 4, 4), "one-svg-path"),
+            ((1.0, 0.5, 5.5, 3.5), (1, 1, 1, 1, 1), "one-svg-path"),
+        ]
+        assert len(exported) == 2
+        assert all(
+            item["project_slot_names"] == ["White", "Red", "Green", "Blue", "Gold"]
+            for item in exported
+        )
+    finally:
+        if result is not None and os.path.exists(result["zip_path"]):
+            os.unlink(result["zip_path"])
+
+
+def test_native_worker_pads_non_override_shapes_with_lut_base_channel(
+    tmp_path,
+) -> None:
+    analysis = _analysis(
+        [
+            _red_shape(0.5, 0.5, 5.5, 3.5),
+            _red_shape(6.5, 0.5, 11.5, 3.5),
+        ],
+        width_mm=12.0,
+        height_mm=4.0,
+    )
+    region_mask = np.zeros((40, 120), dtype=bool)
+    region_mask[:, :60] = True
+    masks_path = tmp_path / "recipe-masks.pkl"
+    with masks_path.open("wb") as handle:
+        pickle.dump({"region-1": region_mask}, handle)
+
+    tile_recipes: list[tuple[int, ...]] = []
+
+    class _FakeVectorProcessor(_SlicerCompatibleProcessor):
+        def __init__(self, _lut_path: str, _color_mode: str) -> None:
+            self.color_mode = "4-Color"
+            self.img_processor = _fake_img_processor()
+
+        def analyze_svg(self, **_kwargs: object) -> VectorAnalysis:
+            return analysis
+
+        def build_mesh(
+            self,
+            *,
+            analysis: VectorAnalysis,
+            **_kwargs: object,
+        ) -> SimpleNamespace:
+            tile_recipes.extend(
+                tuple(int(value) for value in shape["recipe"])
+                for shape in analysis.matched_shapes
+            )
+            return _scene_for_slots({"Blue"})
+
+    params = _params(
+        total_width_mm=12.0,
+        total_height_mm=4.0,
+        tile_width_mm=6.0,
+        tile_height_mm=4.0,
+    )
+    params.update(
+        color_layers=7,
+        base_channel_idx=2,
+        recipe_overrides=[
+            {
+                "region_id": "region-1",
+                "recipe": [3, 3, 3, 3, 3, 3, 3],
+                "layer_order": "Top2Bottom",
+            }
+        ],
+        recipe_override_masks_path=str(masks_path),
+    )
+
+    result = None
+    with (
+        patch("core.vector_engine.VectorProcessor", _FakeVectorProcessor),
+        patch(
+            "api.workers.converter_workers._rasterize_tile_for_cover",
+            return_value=None,
+        ),
+        patch(
+            "utils.bambu_3mf_writer.export_scene_with_bambu_metadata",
+            side_effect=_write_export,
+        ),
+    ):
+        result = worker_generate_large_format_svg_native(
+            "image.svg",
+            "lut.npy",
+            params,
+        )
+
+    try:
+        assert result["tile_count"] == 2
+        assert tile_recipes == [
+            (3, 3, 3, 3, 3, 3, 3),
+            (1, 1, 1, 1, 1, 2, 2),
+        ]
+    finally:
+        if result is not None and os.path.exists(result["zip_path"]):
+            os.unlink(result["zip_path"])
+
+
+@pytest.mark.parametrize("separate_backing", [False, True])
+@pytest.mark.parametrize("layer_height_mm", [0.10, 0.12])
+def test_native_worker_uses_material_archive_vector_semantics_per_tile(
+    tmp_path,
+    separate_backing: bool,
+    layer_height_mm: float,
+) -> None:
+    analysis = _analysis(
+        [_red_shape(1.0, 1.0, 9.0, 9.0)],
+        width_mm=10.0,
+        height_mm=10.0,
+    )
+    analysis.slot_names = ["Archive Red", "Archive Blue", "Archive White"]
+    analysis.preview_colors = {
+        0: [220, 20, 30, 255],
+        1: [20, 30, 220, 255],
+        2: [245, 245, 245, 255],
+    }
+    analysis.color_conf = {
+        "slots": list(analysis.slot_names),
+        "preview": dict(analysis.preview_colors),
+    }
+    analysis.num_channels = 3
+    analysis.matched_shapes[0]["recipe"] = [0] * 7
+
+    backing_ids: list[int] = []
+    exported: list[dict[str, object]] = []
+
+    class _MaterialProcessor(_SlicerCompatibleProcessor):
+        color_mode = "Material Archive"
+        img_processor = object()
+
+        @staticmethod
+        def analyze_svg(**_kwargs: object) -> VectorAnalysis:
+            return analysis
+
+        @staticmethod
+        def build_mesh(
+            *,
+            backing_color_id: int,
+            **_kwargs: object,
+        ) -> SimpleNamespace:
+            backing_ids.append(backing_color_id)
+            scene = trimesh.Scene()
+            red_mesh = trimesh.creation.box(extents=(1.0, 1.0, 0.12))
+            red_mesh.visual.face_colors = [220, 20, 30, 255]
+            scene.add_geometry(red_mesh, geom_name="Archive Red")
+            board_mesh = trimesh.creation.box(extents=(2.0, 2.0, 0.12))
+            board_mesh.visual.face_colors = [245, 245, 245, 255]
+            scene.add_geometry(board_mesh, geom_name="Board")
+            return scene
+
+    processor = _MaterialProcessor()
+
+    def _validate_material_ctx(
+        ctx: dict[str, object],
+        **_kwargs: object,
+    ) -> str:
+        ctx.update(
+            {
+                "actual_lut_path": "__material_archive__",
+                "_material_params": [object(), object(), object()],
+                "slot_names": list(analysis.slot_names),
+                "preview_colors": dict(analysis.preview_colors),
+                "material_base_channel_idx": 2,
+                "color_layers": 7,
+                "layer_height_mm": layer_height_mm,
+            }
+        )
+        return "validated"
+
+    def _capture_export(*, output_path: str, **kwargs: object) -> None:
+        exported.append(dict(kwargs))
+        _write_export(output_path=output_path)
+
+    params = _params(
+        total_width_mm=10.0,
+        total_height_mm=10.0,
+        tile_width_mm=10.0,
+        tile_height_mm=10.0,
+    )
+    params.update(
+        material_source="material_archive",
+        separate_backing=separate_backing,
+        selected_materials=[
+            "brand/archive-red",
+            "brand/archive-blue",
+            "brand/archive-white",
+        ],
+        material_layer_count=7,
+        material_layer_height_mm=layer_height_mm,
+        material_grid_resolution=64,
+        material_backing_material_index=2,
+        layer_height_mm=layer_height_mm,
+    )
+
+    result = None
+    with (
+        patch(
+            "core.pipeline._input_validation_common._apply_material_archive_branch",
+            side_effect=_validate_material_ctx,
+        ) as validate_material,
+        patch(
+            "core.pipeline.vector_branch._build_vector_processor",
+            return_value=processor,
+        ) as build_processor,
+        patch(
+            "api.workers.converter_workers._rasterize_tile_for_cover",
+            return_value=None,
+        ),
+        patch(
+            "utils.bambu_3mf_writer.export_scene_with_bambu_metadata",
+            side_effect=_capture_export,
+        ),
+    ):
+        result = worker_generate_large_format_svg_native(
+            "image.svg",
+            "__material_archive__",
+            params,
+        )
+
+    try:
+        assert result["tile_count"] == 1
+        validate_material.assert_called_once()
+        build_processor.assert_called_once()
+        assert getattr(processor, "layer_height_mm", None) == pytest.approx(
+            layer_height_mm
+        )
+        assert backing_ids == [2]
+        assert len(exported) == 1
+        exported_scene = exported[0]["scene"]
+        if separate_backing:
+            assert set(exported_scene.geometry) == {"Archive Red", "Board"}
+            assert exported_scene.geometry["Board"].metadata[
+                "bambu_material_name"
+            ] == "Archive White"
+            assert exported[0]["slot_names"] == ["Archive Red", "Board"]
+        else:
+            assert set(exported_scene.geometry) == {"Archive Red", "Archive White"}
+            assert exported[0]["slot_names"] == ["Archive Red", "Archive White"]
+        assert exported[0]["project_slot_names"] == analysis.slot_names
+        assert exported[0]["preserve_template_filament_slots"] is False
+        expected_layer_height = f"{layer_height_mm:g}"
+        assert exported[0]["settings"]["layer_height"] == expected_layer_height
+        assert (
+            exported[0]["settings"]["initial_layer_height"]
+            == expected_layer_height
+        )
     finally:
         if result is not None and os.path.exists(result["zip_path"]):
             os.unlink(result["zip_path"])

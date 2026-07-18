@@ -1586,12 +1586,22 @@ def worker_generate_large_format_svg_native(
 
     from api.structured_logging import get_logger
     from config import TEMP_DIR
-    from core.pipeline.s03_color_replacement import _normalize_color_replacements_input
-    from core.vector_engine import (
-        VectorProcessor,
-        apply_matched_rgb_overrides_to_analysis,
+    from core.pipeline._input_validation_common import (
+        _apply_material_archive_branch,
     )
-    from core.vector_large_format import format_large_format_tile_label, slice_vector_analysis_into_tiles
+    from core.pipeline.s03_color_replacement import _normalize_color_replacements_input
+    from core.pipeline.vector_branch import (
+        _build_vector_processor,
+        _resolve_vector_layer_height_mm,
+    )
+    from core.vector_engine import (
+        apply_matched_rgb_overrides_to_analysis,
+        apply_recipe_overrides_to_analysis,
+    )
+    from core.vector_large_format import (
+        format_large_format_tile_label,
+        slice_vector_analysis_into_tiles,
+    )
     from utils.bambu_3mf_writer import export_scene_with_bambu_metadata
 
     log = get_logger(__name__)
@@ -1608,7 +1618,29 @@ def worker_generate_large_format_svg_native(
     grid_rows = max(1, math.ceil(total_height_mm / tile_height_mm))
     expected_total_tiles = grid_cols * grid_rows
 
-    vector_processor = VectorProcessor(lut_path, params["color_mode"])
+    material_source = str(params.get("material_source") or "lut")
+    worker_ctx = dict(params)
+    worker_ctx["actual_lut_path"] = lut_path
+    if material_source == "material_archive":
+        validation_outcome = _apply_material_archive_branch(
+            worker_ctx,
+            log=log,
+            event_prefix="large_format_svg",
+        )
+        if validation_outcome == "error":
+            raise ValueError(
+                str(
+                    worker_ctx.get("error")
+                    or "Material archive validation failed for native SVG tiling"
+                )
+            )
+
+    vector_processor = _build_vector_processor(
+        worker_ctx,
+        fallback_color_mode=str(params["color_mode"]),
+    )
+    layer_height_mm = _resolve_vector_layer_height_mm(worker_ctx)
+    vector_processor.layer_height_mm = layer_height_mm
     vector_processor.auto_dynamic_range = bool(params.get("auto_dynamic_range", False))
     analysis = vector_processor.analyze_svg(
         svg_path=image_path,
@@ -1677,6 +1709,98 @@ def worker_generate_large_format_svg_native(
                 if mmap_obj is not None and not getattr(mmap_obj, "closed", False):
                     mmap_obj.close()
 
+    recipe_overrides = params.get("recipe_overrides") or []
+    recipe_override_masks_path = params.get("recipe_override_masks_path")
+    if recipe_overrides and recipe_override_masks_path:
+        import pickle
+
+        try:
+            with open(str(recipe_override_masks_path), "rb") as mask_file:
+                region_masks = pickle.load(mask_file)
+            if not isinstance(region_masks, dict) or not region_masks:
+                raise ValueError("Native SVG recipe override masks are missing")
+
+            override_region_ids = {
+                str(item.get("region_id") or "").strip()
+                for item in recipe_overrides
+                if isinstance(item, dict)
+            }
+            override_region_ids.discard("")
+            missing_region_ids = sorted(
+                region_id
+                for region_id in override_region_ids
+                if region_id not in region_masks
+            )
+            if missing_region_ids:
+                raise ValueError(
+                    "Native SVG recipe override masks are incomplete"
+                )
+
+            normalized_masks = {
+                str(region_id): np.asarray(mask, dtype=bool)
+                for region_id, mask in region_masks.items()
+            }
+            mask_shapes = {
+                tuple(mask.shape)
+                for mask in normalized_masks.values()
+                if mask.ndim == 2
+            }
+            if (
+                len(mask_shapes) != 1
+                or any(mask.ndim != 2 for mask in normalized_masks.values())
+            ):
+                raise ValueError(
+                    "Native SVG recipe override masks must share one 2D grid"
+                )
+
+            mask_height_px, mask_width_px = next(iter(mask_shapes))
+            if mask_width_px <= 0 or mask_height_px <= 0:
+                raise ValueError(
+                    "Native SVG recipe override mask dimensions must be positive"
+                )
+            analysis_width_mm = float(analysis.bbox[2]) * float(
+                analysis.scale_factor
+            )
+            analysis_height_mm = float(analysis.bbox[3]) * float(
+                analysis.scale_factor
+            )
+            if analysis_width_mm <= 0 or analysis_height_mm <= 0:
+                raise ValueError("Native SVG analysis dimensions must be positive")
+            recipe_pixels_per_mm = float(mask_width_px) / analysis_width_mm
+            expected_mask_height = max(
+                1,
+                int(round(analysis_height_mm * recipe_pixels_per_mm)),
+            )
+            if expected_mask_height != mask_height_px:
+                raise ValueError(
+                    "Native SVG recipe override mask aspect ratio does not "
+                    "match the vector analysis"
+                )
+
+            apply_recipe_overrides_to_analysis(
+                analysis,
+                recipe_overrides=recipe_overrides,
+                region_masks=normalized_masks,
+                target_layers=worker_ctx.get("color_layers"),
+                base_channel_idx=int(
+                    worker_ctx.get("material_base_channel_idx")
+                    if worker_ctx.get("material_base_channel_idx") is not None
+                    else worker_ctx.get("base_channel_idx", 0)
+                ),
+                pixels_per_mm=recipe_pixels_per_mm,
+                max_width_px=int(mask_width_px),
+                img_processor=vector_processor.img_processor,
+            )
+        except (
+            OSError,
+            ValueError,
+            TypeError,
+            KeyError,
+            EOFError,
+            pickle.PickleError,
+        ) as exc:
+            raise LargeFormatCachedAnalysisError(str(exc)) from exc
+
     tile_analyses = slice_vector_analysis_into_tiles(
         analysis=analysis,
         total_width_mm=total_width_mm,
@@ -1693,10 +1817,17 @@ def worker_generate_large_format_svg_native(
 
     # Resolve the backing material slot once; tiles share the palette.
     # 底板材质槽在整批 tile 中共用，解析一次即可。
+    raw_backing_color_id = params.get("backing_color_id", 0)
+    if material_source == "material_archive":
+        raw_backing_color_id = params.get("material_backing_material_index")
+        if raw_backing_color_id is None:
+            raw_backing_color_id = worker_ctx.get("material_base_channel_idx", 0)
     try:
-        requested_backing_color_id = int(params.get("backing_color_id", 0) or 0)
+        requested_backing_color_id = int(raw_backing_color_id or 0)
     except (TypeError, ValueError):
         requested_backing_color_id = 0
+
+    layer_height_setting = f"{layer_height_mm:g}"
 
     successful_paths: list[tuple[str, str]] = []
     tile_cleanup_paths: set[str] = set()
@@ -1715,7 +1846,7 @@ def worker_generate_large_format_svg_native(
             full_heightmap = heightmap_image.convert("L").copy()
     try:
         for tile in tile_analyses:
-            tile_processor = VectorProcessor(lut_path, params["color_mode"])
+            tile_processor = vector_processor
             tile_heightmap_path = None
             if full_heightmap is not None:
                 hm_width, hm_height = full_heightmap.size
@@ -1775,13 +1906,29 @@ def worker_generate_large_format_svg_native(
                     merged = trimesh.util.concatenate([target_geom, board_geom])
                     merged.visual.face_colors = target_geom.visual.face_colors
                     merged.metadata["name"] = target_slot
+                    merged.metadata["bambu_material_name"] = target_slot
                     scene.geometry[target_slot] = merged
+                    del scene.geometry["Board"]
+                elif target_slot:
+                    backing_color = preview_colors.get(
+                        target_slot,
+                        preview_colors.get(
+                            tile_backing_slot_index,
+                            [255, 255, 255, 255],
+                        ),
+                    )
+                    board_geom.visual.face_colors = backing_color
+                    board_geom.metadata["name"] = target_slot
+                    board_geom.metadata["bambu_material_name"] = target_slot
+                    scene.geometry[target_slot] = board_geom
                     del scene.geometry["Board"]
             elif board_geom is not None and separate_backing:
                 preview_colors["Board"] = preview_colors.get(
                     tile_backing_slot_index,
                     preview_colors.get(0, [255, 255, 255, 255]),
                 )
+                if target_slot:
+                    board_geom.metadata["bambu_material_name"] = target_slot
 
             slot_export_names: list[str] = []
             for geom_name, geom in scene.geometry.items():
@@ -1870,8 +2017,8 @@ def worker_generate_large_format_svg_native(
                 slot_names=slot_export_names,
                 preview_colors=preview_colors,
                 settings={
-                    "layer_height": "0.08",
-                    "initial_layer_height": "0.08",
+                    "layer_height": layer_height_setting,
+                    "initial_layer_height": layer_height_setting,
                     "wall_loops": "1",
                     "top_shell_layers": "0",
                     "bottom_shell_layers": "1",
@@ -1892,8 +2039,12 @@ def worker_generate_large_format_svg_native(
                 printer_id=params.get("printer_id", "bambu-h2d"),
                 slicer=params.get("slicer", "BambuStudio"),
                 nozzle_size=params.get("nozzle_size", "0.4"),
+                project_slot_names=slot_names,
                 cover_source=tile_cover,
                 device_profile_id=params.get("device_profile_id") or None,
+                preserve_template_filament_slots=(
+                    False if material_source == "material_archive" else None
+                ),
             )
             successful_paths.append(
                 (

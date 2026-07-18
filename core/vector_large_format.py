@@ -15,9 +15,16 @@ SVG_LARGE_FORMAT_PREVIEW_FALLBACK_WARNING = (
     "Native vector large-format is unavailable for this SVG; large-format generation will fall back to raster tiling."
 )
 SVG_LARGE_FORMAT_GENERATE_FALLBACK_WARNING = "Raster fallback was used for this large-format SVG request."
+SVG_LARGE_FORMAT_NATIVE_FAILURE_FALLBACK_WARNING = (
+    "Native vector generation failed; raster fallback was used for this "
+    "large-format SVG request."
+)
 SVG_LARGE_FORMAT_DENSITY_REDUCED_WARNING = (
     "Raster fallback density was reduced to keep SVG large-format generation within the pixel budget."
 )
+
+SVG_LARGE_FORMAT_FALLBACK_UNSUPPORTED_FEATURE = "unsupported_svg_feature"
+SVG_LARGE_FORMAT_FALLBACK_NATIVE_FAILURE = "native_vector_failure"
 
 _UNSUPPORTED_LARGE_FORMAT_TAGS = {
     "text",

@@ -9,6 +9,9 @@ vi.mock("../api/client", () => ({
     get: vi.fn().mockResolvedValue({ data: { status: "ok" } }),
     post: vi.fn(),
   },
+  apiErrorToVisibleMessage: vi.fn(
+    (_error: unknown, fallback = "Request failed") => fallback,
+  ),
 }));
 
 // Mock Scene3D to avoid Three.js rendering in jsdom

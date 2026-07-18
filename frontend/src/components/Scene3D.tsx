@@ -13,6 +13,7 @@ import FridgeMagnet3D from "./FridgeMagnet3D";
 import { useConverterStore } from "../stores/converter";
 import { useSettingsStore } from "../stores/settingsStore";
 import { computeScaleFactor } from "../utils/scaleUtils";
+import { resolveCameraClippingPlanes } from "../utils/cameraDepthPrecision";
 import { useI18n } from "../i18n/context";
 import { useThemeConfig } from "../hooks/useThemeConfig";
 import { useWittyMessage } from "../hooks/useWittyMessage";
@@ -50,6 +51,25 @@ interface SceneDiagnosticsSnapshot {
   renderer: ReturnType<typeof getRendererInfoSnapshot>;
   heap: ReturnType<typeof getHeapMemorySnapshot>;
   fps: number | null;
+}
+
+const DEFAULT_CAMERA_POSITION = [0, -57, 474] as const;
+const DEFAULT_ORBIT_TARGET = [0, -20, 0] as const;
+const DEFAULT_CAMERA_CLIPPING_PLANES = resolveCameraClippingPlanes(
+  Math.hypot(
+    DEFAULT_CAMERA_POSITION[0] - DEFAULT_ORBIT_TARGET[0],
+    DEFAULT_CAMERA_POSITION[1] - DEFAULT_ORBIT_TARGET[1],
+    DEFAULT_CAMERA_POSITION[2] - DEFAULT_ORBIT_TARGET[2],
+  ),
+);
+const CLIPPING_PLANE_RELATIVE_TOLERANCE = 1e-6;
+
+function clippingPlaneNeedsUpdate(currentValue: number, nextValue: number): boolean {
+  const tolerance = Math.max(
+    Number.EPSILON,
+    Math.abs(nextValue) * CLIPPING_PLANE_RELATIVE_TOLERANCE,
+  );
+  return Math.abs(currentValue - nextValue) > tolerance;
 }
 
 function formatTimingMs(value: number | null | undefined): string {
@@ -225,6 +245,63 @@ function CameraDebugHelper() {
       delete window.__luminaCameraDebug;
     };
   }, [camera, controls]);
+  return null;
+}
+
+/**
+ * Keep perspective depth precision high enough for 0.08 mm material layers.
+ * 动态收紧相机裁剪范围，避免 0.08 mm 材料层发生深度冲突。
+ */
+function CameraDepthPrecisionGuard() {
+  const camera = useThree((state) => state.camera);
+  const controls = useThree((state) => state.controls);
+  const invalidate = useThree((state) => state.invalidate);
+
+  useEffect(() => {
+    const perspectiveCamera = camera as THREE.PerspectiveCamera;
+    if (!perspectiveCamera.isPerspectiveCamera) {
+      return;
+    }
+
+    const orbitControls =
+      controls && "target" in controls
+        ? (controls as {
+            target?: THREE.Vector3 | null;
+            addEventListener?: (type: "change", listener: () => void) => void;
+            removeEventListener?: (type: "change", listener: () => void) => void;
+          })
+        : null;
+
+    const syncClippingPlanes = () => {
+      const target = orbitControls?.target;
+      const distanceToTarget = target
+        ? perspectiveCamera.position.distanceTo(target)
+        : Math.hypot(
+            perspectiveCamera.position.x,
+            perspectiveCamera.position.y,
+            perspectiveCamera.position.z,
+          );
+      const clippingPlanes = resolveCameraClippingPlanes(distanceToTarget);
+      if (
+        !clippingPlaneNeedsUpdate(perspectiveCamera.near, clippingPlanes.near) &&
+        !clippingPlaneNeedsUpdate(perspectiveCamera.far, clippingPlanes.far)
+      ) {
+        return;
+      }
+
+      perspectiveCamera.near = clippingPlanes.near;
+      perspectiveCamera.far = clippingPlanes.far;
+      perspectiveCamera.updateProjectionMatrix();
+      invalidate();
+    };
+
+    syncClippingPlanes();
+    orbitControls?.addEventListener?.("change", syncClippingPlanes);
+    return () => {
+      orbitControls?.removeEventListener?.("change", syncClippingPlanes);
+    };
+  }, [camera, controls, invalidate]);
+
   return null;
 }
 
@@ -887,7 +964,12 @@ function Scene3D({ modelUrl }: Scene3DProps) {
 
       <Canvas
         frameloop="demand"
-        camera={{ position: [0, -57, 474], fov: 45 }}
+        camera={{
+          position: [...DEFAULT_CAMERA_POSITION],
+          fov: 45,
+          near: DEFAULT_CAMERA_CLIPPING_PLANES.near,
+          far: DEFAULT_CAMERA_CLIPPING_PLANES.far,
+        }}
         gl={{ preserveDrawingBuffer: true, toneMapping: THREE.NeutralToneMapping }}
         onPointerMissed={() => {
           if (enableFridgeMagnet) {
@@ -937,6 +1019,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
           onSample={handleDiagnosticsSample}
         />
         <CameraDebugHelper />
+        <CameraDepthPrecisionGuard />
         <ThemeUpdater />
         <CanvasInteractionBridge />
         <Suspense fallback={null}>

@@ -76,7 +76,10 @@ from core.pipeline.processing_ops.svg_rasterizer import rasterize_svg
 from core.recipe_order import convert_recipe_between_orders
 from core.vector_large_format import (
     SVG_LARGE_FORMAT_DENSITY_REDUCED_WARNING,
+    SVG_LARGE_FORMAT_FALLBACK_NATIVE_FAILURE,
+    SVG_LARGE_FORMAT_FALLBACK_UNSUPPORTED_FEATURE,
     SVG_LARGE_FORMAT_GENERATE_FALLBACK_WARNING,
+    SVG_LARGE_FORMAT_NATIVE_FAILURE_FALLBACK_WARNING,
     choose_svg_raster_fallback_density,
     format_large_format_tile_label,
     inspect_svg_large_format_support,
@@ -2220,6 +2223,7 @@ async def _generate_large_format_svg_native(
     registry: FileRegistry,
     pool: WorkerPoolManager,
     warnings: list[str] | None = None,
+    base_channel_idx: int = 0,
 ) -> dict:
     shared_params = _resolve_large_format_shared_params(
         session_data,
@@ -2239,6 +2243,7 @@ async def _generate_large_format_svg_native(
             )
         ),
     )
+    shared_params["base_channel_idx"] = int(base_channel_idx)
     native_heightmap_path: str | None = None
     if request.enable_relief and (request.height_mode or "color") == "heightmap":
         heightmap_grayscale = session_data.get("heightmap_grayscale")
@@ -2352,6 +2357,7 @@ async def _generate_large_format_raster(
     registry: FileRegistry,
     pool: WorkerPoolManager,
     warnings: list[str] | None = None,
+    log_tile_failures: bool = True,
 ) -> dict:
     with Image.open(image_path) as img:
         px_w, px_h = img.size
@@ -2701,13 +2707,14 @@ async def _generate_large_format_raster(
                 errors.append(f"{label}: {e}")
 
         if not successful_paths:
-            for raw_error in errors[:5]:
-                _log_large_format_failure(
-                    session_id=sid,
-                    failure_kind="tile_failed",
-                    error_type="LargeFormatTileFailure",
-                    error_message=raw_error,
-                )
+            if log_tile_failures:
+                for raw_error in errors[:5]:
+                    _log_large_format_failure(
+                        session_id=sid,
+                        failure_kind="tile_failed",
+                        error_type="LargeFormatTileFailure",
+                        error_message=raw_error,
+                    )
             raise HTTPException(status_code=500, detail=LARGE_FORMAT_GENERATION_FAILED_DETAIL)
 
         fd, zip_path = tempfile.mkstemp(suffix=".zip", dir=TEMP_DIR)
@@ -2770,7 +2777,13 @@ def _rasterize_svg_for_large_format_fallback(
     raster_rgba = rasterize_svg(svg_path, total_width_mm, pixels_per_mm=density)
     fd, png_path = tempfile.mkstemp(suffix=".png", dir=TEMP_DIR)
     os.close(fd)
-    Image.fromarray(raster_rgba).save(png_path)
+    save_completed = False
+    try:
+        Image.fromarray(raster_rgba).save(png_path)
+        save_completed = True
+    finally:
+        if not save_completed:
+            _remove_temp_path(png_path)
     return png_path, density_warnings
 
 
@@ -2888,8 +2901,10 @@ async def convert_generate_large_format(
     tile_h_mm = lf.tile_height_mm
 
     warnings: list[str] = []
+    fallback_reason: str | None = None
+    native_fallback_error: HTTPException | None = None
+    native_fallback_cause: Exception | None = None
     is_svg_vector = str(image_path).lower().endswith(".svg") and request.modeling_mode.value == "vector"
-    prefer_raster_svg = bool(recipe_overrides) or session_material_source == "material_archive"
     if is_svg_vector:
         policy = session_data.get("svg_large_format_policy")
         if not isinstance(policy, dict) or policy.get("inspection_source") not in {
@@ -2904,40 +2919,87 @@ async def convert_generate_large_format(
             store.put(sid, "svg_large_format_policy", policy)
         warnings.extend(list(policy.get("warnings", [])))
 
-        if bool(policy.get("native_tiling_supported", False)) and not prefer_raster_svg:
-            result = await _generate_large_format_svg_native(
-                image_path=image_path,
-                lut_path=lut_path,
-                source_basename=source_basename,
-                recipe_overrides=recipe_overrides,
-                recipe_override_masks_path=recipe_override_masks_path,
-                matched_rgb_path=matched_rgb_path,
-                mask_solid_path=mask_solid_path,
-                material_matrix_path=material_matrix_path,
-                total_width_mm=total_w_mm,
-                total_height_mm=total_h_mm,
-                tile_width_mm=tile_w_mm,
-                tile_height_mm=tile_h_mm,
-                request=request,
-                session_data=session_data,
-                sid=sid,
-                store=store,
-                registry=registry,
-                pool=pool,
-                warnings=warnings,
-            )
-        else:
-            fallback_png_path, density_warnings = _rasterize_svg_for_large_format_fallback(
-                svg_path=image_path,
-                total_width_mm=total_w_mm,
-                total_height_mm=total_h_mm,
-                sid=sid,
-                store=store,
-            )
-            fallback_warnings = warnings + [SVG_LARGE_FORMAT_GENERATE_FALLBACK_WARNING]
-            if not prefer_raster_svg:
-                fallback_warnings += density_warnings
+        result: dict | None = None
+        if bool(policy.get("native_tiling_supported", False)):
             try:
+                result = await _generate_large_format_svg_native(
+                    image_path=image_path,
+                    lut_path=lut_path,
+                    source_basename=source_basename,
+                    recipe_overrides=recipe_overrides,
+                    recipe_override_masks_path=recipe_override_masks_path,
+                    matched_rgb_path=matched_rgb_path,
+                    mask_solid_path=mask_solid_path,
+                    material_matrix_path=material_matrix_path,
+                    total_width_mm=total_w_mm,
+                    total_height_mm=total_h_mm,
+                    tile_width_mm=tile_w_mm,
+                    tile_height_mm=tile_h_mm,
+                    request=request,
+                    session_data=session_data,
+                    sid=sid,
+                    store=store,
+                    registry=registry,
+                    pool=pool,
+                    warnings=warnings,
+                    base_channel_idx=int(
+                        getattr(cache.get("lut_metadata"), "base_channel_idx", 0)
+                        or 0
+                    ),
+                )
+            except HTTPException as exc:
+                if exc.status_code not in {500, 504}:
+                    raise
+                native_fallback_error = exc
+                native_fallback_cause = exc
+            except Exception as exc:  # noqa: BLE001 - endpoint recovery boundary
+                native_fallback_error = HTTPException(
+                    status_code=500,
+                    detail=LARGE_FORMAT_GENERATION_FAILED_DETAIL,
+                )
+                native_fallback_cause = exc
+
+            if native_fallback_error is not None:
+                fallback_reason = SVG_LARGE_FORMAT_FALLBACK_NATIVE_FAILURE
+                warnings.append(
+                    SVG_LARGE_FORMAT_NATIVE_FAILURE_FALLBACK_WARNING
+                )
+                fallback_cause = native_fallback_cause or native_fallback_error
+                error_message = (
+                    str(fallback_cause.detail)
+                    if isinstance(fallback_cause, HTTPException)
+                    else str(fallback_cause)
+                )
+                log.warning(
+                    "Native large-format SVG generation failed; using raster fallback",
+                    extra={
+                        "event": "converter_large_format_svg_fallback",
+                        "session_id": sid,
+                        "fallback_reason": fallback_reason,
+                        "error_type": type(fallback_cause).__name__,
+                        "error_message": error_message[:2048],
+                    },
+                )
+        else:
+            fallback_reason = SVG_LARGE_FORMAT_FALLBACK_UNSUPPORTED_FEATURE
+
+        if result is None:
+            fallback_png_path: str | None = None
+            try:
+                (
+                    fallback_png_path,
+                    density_warnings,
+                ) = _rasterize_svg_for_large_format_fallback(
+                    svg_path=image_path,
+                    total_width_mm=total_w_mm,
+                    total_height_mm=total_h_mm,
+                    sid=sid,
+                    store=store,
+                )
+                fallback_warnings = warnings + [
+                    SVG_LARGE_FORMAT_GENERATE_FALLBACK_WARNING
+                ]
+                fallback_warnings += density_warnings
                 result = await _generate_large_format_raster(
                     image_path=fallback_png_path,
                     lut_path=lut_path,
@@ -2961,9 +3023,26 @@ async def convert_generate_large_format(
                     registry=registry,
                     pool=pool,
                     warnings=fallback_warnings,
+                    log_tile_failures=native_fallback_error is None,
                 )
+            except Exception as fallback_exc:  # noqa: BLE001 - recovery boundary
+                if native_fallback_error is None:
+                    raise
+                fallback_error_message = (
+                    str(fallback_exc.detail)
+                    if isinstance(fallback_exc, HTTPException)
+                    else str(fallback_exc)
+                )
+                _log_large_format_failure(
+                    session_id=sid,
+                    failure_kind="raster_fallback_failed",
+                    error_type=type(fallback_exc).__name__,
+                    error_message=fallback_error_message[:2048],
+                )
+                raise native_fallback_error from fallback_exc
             finally:
-                _remove_temp_path(fallback_png_path)
+                if fallback_png_path is not None:
+                    _remove_temp_path(fallback_png_path)
     else:
         result = await _generate_large_format_raster(
             image_path=image_path,
@@ -3000,7 +3079,8 @@ async def convert_generate_large_format(
             "tile_width_mm": lf.tile_width_mm,
             "tile_height_mm": lf.tile_height_mm,
             "is_svg_vector": is_svg_vector,
-            "prefer_raster_svg": prefer_raster_svg,
+            "prefer_raster_svg": fallback_reason is not None,
+            "fallback_reason": fallback_reason,
             "recipe_override_count": len(recipe_overrides or []),
             "warning_count": len(result.get("warnings", [])),
         },

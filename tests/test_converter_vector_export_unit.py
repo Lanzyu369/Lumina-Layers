@@ -5,9 +5,11 @@ Validates that:
     2. The slot_names passed to the exporter match the final scene geometry keys.
 """
 
-import sys
+import json
 import os
+import sys
 import types
+import zipfile
 from unittest.mock import patch, MagicMock
 
 # Add project root to path
@@ -92,6 +94,71 @@ class TestVectorBranchExport:
 
         mock_bambu_export.assert_called_once()
 
+    @patch("core.pipeline.vector_glb_preview.export_vector_glb_preview")
+    @patch("core.vector_engine.VectorProcessor")
+    def test_effective_layer_height_reaches_processor_and_project_settings(
+        self,
+        MockVP,
+        mock_glb_export,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Ordinary vector export must use the same effective layer height as preview/tiles."""
+        from config import ModelingMode
+
+        svg_file = tmp_path / "custom-layer-height.svg"
+        svg_file.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="50" height="50">'
+            '<rect x="0" y="0" width="50" height="50" fill="#ff0000"/>'
+            "</svg>"
+        )
+
+        fake_scene = trimesh.Scene()
+        mesh = trimesh.creation.box(extents=[10, 10, 2.6])
+        mesh.metadata["name"] = "White"
+        fake_scene.add_geometry(mesh, geom_name="White")
+        fake_processor = _build_fake_processor(fake_scene)
+        MockVP.return_value = fake_processor
+
+        dummy_lut = str(tmp_path / "custom-layer-height.npy")
+        np.save(dummy_lut, np.zeros(10))
+
+        import config
+
+        monkeypatch.setattr(config, "MODELS_DIR", str(tmp_path))
+        monkeypatch.setattr(config, "OUTPUT_DIR", str(tmp_path))
+        mock_glb_export.return_value = str(tmp_path / "preview.glb")
+
+        from core.converter import convert_image_to_3d
+
+        result = convert_image_to_3d(
+            image_path=str(svg_file),
+            lut_path=dummy_lut,
+            target_width_mm=50.0,
+            spacer_thick=1.2,
+            structure_mode="Double-sided",
+            color_mode="4-Color",
+            add_loop=False,
+            loop_width=5,
+            loop_length=20,
+            loop_hole=3,
+            loop_pos="Top",
+            modeling_mode=ModelingMode.VECTOR,
+            color_layers=7,
+            layer_height_mm=0.10,
+        )
+
+        model_path = result[0]
+        assert model_path is not None
+        with zipfile.ZipFile(model_path) as archive:
+            project_settings = json.loads(
+                archive.read("Metadata/project_settings.config").decode("utf-8")
+            )
+
+        assert fake_processor.layer_height_mm == pytest.approx(0.10)
+        assert project_settings["layer_height"] == "0.1"
+        assert project_settings["initial_layer_height"] == "0.1"
+
     @patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata")
     @patch("core.vector_engine.VectorProcessor")
     def test_slot_names_match_scene_geometry(self, MockVP, mock_bambu_export, tmp_path):
@@ -142,9 +209,16 @@ class TestVectorBranchExport:
         assert kwargs["settings"]["initial_layer_line_width"] == "0.22"
         assert kwargs["device_profile_id"] == "BambuStudio:bbl:bambu-lab-h2d:0.2"
 
+    @patch("core.pipeline.vector_glb_preview.export_vector_glb_preview")
     @patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata")
     @patch("core.vector_engine.VectorProcessor")
-    def test_backing_color_id_merges_board_into_selected_slot(self, MockVP, mock_bambu_export, tmp_path):
+    def test_backing_color_id_merges_board_into_selected_slot(
+        self,
+        MockVP,
+        mock_bambu_export,
+        _mock_glb_export,
+        tmp_path,
+    ):
         from config import ModelingMode
 
         svg_file = tmp_path / "material-backing.svg"

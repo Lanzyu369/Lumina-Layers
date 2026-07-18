@@ -459,7 +459,7 @@ describe("BasicSettings", () => {
     expect(screen.getByText("new.jpg")).toBeInTheDocument();
   });
 
-  it("renders large-format warnings when present", () => {
+  it("localizes large-format fallback warnings and shows the reason", () => {
     useConverterStore.setState({
       largeFormatEnabled: false,
       previewWarnings: [
@@ -467,16 +467,20 @@ describe("BasicSettings", () => {
       ],
       largeFormatWarnings: [
         "Raster fallback was used for this large-format SVG request.",
+        "Native vector generation failed; raster fallback was used for this large-format SVG request.",
       ],
     });
 
     render(<BasicSettings />);
 
     expect(
-      screen.getByText(/Native vector large-format is unavailable/i),
+      screen.getByText("此 SVG 含有原生大画幅暂不支持的特性（text），已改用栅格切片。"),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/Raster fallback was used/i),
+      screen.getByText("本次大画幅 SVG 已改用栅格切片。"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("原生矢量切片生成失败，已自动改用栅格切片。"),
     ).toBeInTheDocument();
   });
 
