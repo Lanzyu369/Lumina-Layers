@@ -24,6 +24,7 @@ Public callables (re-exported by ``coordinator`` for backward compatibility):
 from __future__ import annotations
 
 import inspect
+import math
 import os
 import time
 
@@ -1357,6 +1358,22 @@ def _log_vector_color_drift_diagnostics(analysis, raster_cache) -> None:
     )
 
 
+def _resolve_vector_layer_height_mm(ctx: dict) -> float:
+    """Return the validated effective layer height for native vector flows.
+
+    普通矢量生成、预览与大画幅切片必须共享同一有效层高；缺失或非法值
+    回退到打印机配置默认值，保持历史 0.08 mm 行为。
+    """
+    fallback = float(PrinterConfig.LAYER_HEIGHT)
+    try:
+        layer_height_mm = float(ctx.get("layer_height_mm") or fallback)
+    except (TypeError, ValueError):
+        return fallback
+    if not math.isfinite(layer_height_mm) or layer_height_mm <= 0:
+        return fallback
+    return layer_height_mm
+
+
 def _build_vector_processor(ctx: dict, *, fallback_color_mode: str):
     """Build a ``VectorProcessor`` for the current ctx.
 
@@ -1381,6 +1398,7 @@ def _build_vector_processor(ctx: dict, *, fallback_color_mode: str):
     """
     from core.vector_engine import VectorProcessor
 
+    layer_height_mm = _resolve_vector_layer_height_mm(ctx)
     has_hue_settings = "hue_weight" in ctx or "chroma_gate" in ctx
     try:
         hue_weight = float(ctx.get("hue_weight") or 0.0)
@@ -1405,7 +1423,6 @@ def _build_vector_processor(ctx: dict, *, fallback_color_mode: str):
                 "_material_params; did P01 / S01 validation run?"
             )
         layer_count = int(ctx.get("color_layers") or 5)
-        layer_height_mm = float(ctx.get("layer_height_mm") or 0.08)
         substrate = str(ctx.get("material_substrate") or "white")
         slot_names = list(ctx.get("slot_names") or [])
         preview_colors = dict(ctx.get("preview_colors") or {})
@@ -1444,6 +1461,7 @@ def _build_vector_processor(ctx: dict, *, fallback_color_mode: str):
             )
         except (TypeError, ValueError):
             processor.gradient_color_bands = 16
+        processor.layer_height_mm = layer_height_mm
         return processor
 
     actual_lut_path = ctx.get("actual_lut_path")
@@ -1453,7 +1471,13 @@ def _build_vector_processor(ctx: dict, *, fallback_color_mode: str):
             "hue_weight": hue_weight,
             "chroma_gate": chroma_gate,
         }
-    return VectorProcessor(actual_lut_path, fallback_color_mode, **processor_kwargs)
+    processor = VectorProcessor(
+        actual_lut_path,
+        fallback_color_mode,
+        **processor_kwargs,
+    )
+    processor.layer_height_mm = layer_height_mm
+    return processor
 
 
 def _run_vector_preview_branch(ctx: dict) -> dict:
@@ -2295,9 +2319,10 @@ def _run_vector_branch(ctx: dict) -> dict:
             return ctx
 
         _lw = _resolve_vector_line_width_mm(ctx.get("nozzle_size", "0.4"))
+        layer_height_setting = f"{_resolve_vector_layer_height_mm(ctx):g}"
         vec_print_settings = {
-            "layer_height": "0.08",
-            "initial_layer_height": "0.08",
+            "layer_height": layer_height_setting,
+            "initial_layer_height": layer_height_setting,
             "wall_loops": "1",
             "top_shell_layers": "0",
             "bottom_shell_layers": "1",

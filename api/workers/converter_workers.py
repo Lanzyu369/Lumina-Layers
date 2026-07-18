@@ -1590,7 +1590,10 @@ def worker_generate_large_format_svg_native(
         _apply_material_archive_branch,
     )
     from core.pipeline.s03_color_replacement import _normalize_color_replacements_input
-    from core.pipeline.vector_branch import _build_vector_processor
+    from core.pipeline.vector_branch import (
+        _build_vector_processor,
+        _resolve_vector_layer_height_mm,
+    )
     from core.vector_engine import (
         apply_matched_rgb_overrides_to_analysis,
         apply_recipe_overrides_to_analysis,
@@ -1636,12 +1639,7 @@ def worker_generate_large_format_svg_native(
         worker_ctx,
         fallback_color_mode=str(params["color_mode"]),
     )
-    try:
-        layer_height_mm = float(worker_ctx.get("layer_height_mm") or 0.08)
-    except (TypeError, ValueError):
-        layer_height_mm = 0.08
-    if not math.isfinite(layer_height_mm) or layer_height_mm <= 0:
-        layer_height_mm = 0.08
+    layer_height_mm = _resolve_vector_layer_height_mm(worker_ctx)
     vector_processor.layer_height_mm = layer_height_mm
     vector_processor.auto_dynamic_range = bool(params.get("auto_dynamic_range", False))
     analysis = vector_processor.analyze_svg(

@@ -900,9 +900,11 @@ def test_native_worker_pads_non_override_shapes_with_lut_base_channel(
 
 
 @pytest.mark.parametrize("separate_backing", [False, True])
+@pytest.mark.parametrize("layer_height_mm", [0.10, 0.12])
 def test_native_worker_uses_material_archive_vector_semantics_per_tile(
     tmp_path,
     separate_backing: bool,
+    layer_height_mm: float,
 ) -> None:
     analysis = _analysis(
         [_red_shape(1.0, 1.0, 9.0, 9.0)],
@@ -963,7 +965,7 @@ def test_native_worker_uses_material_archive_vector_semantics_per_tile(
                 "preview_colors": dict(analysis.preview_colors),
                 "material_base_channel_idx": 2,
                 "color_layers": 7,
-                "layer_height_mm": 0.12,
+                "layer_height_mm": layer_height_mm,
             }
         )
         return "validated"
@@ -987,10 +989,10 @@ def test_native_worker_uses_material_archive_vector_semantics_per_tile(
             "brand/archive-white",
         ],
         material_layer_count=7,
-        material_layer_height_mm=0.12,
+        material_layer_height_mm=layer_height_mm,
         material_grid_resolution=64,
         material_backing_material_index=2,
-        layer_height_mm=0.12,
+        layer_height_mm=layer_height_mm,
     )
 
     result = None
@@ -1022,7 +1024,9 @@ def test_native_worker_uses_material_archive_vector_semantics_per_tile(
         assert result["tile_count"] == 1
         validate_material.assert_called_once()
         build_processor.assert_called_once()
-        assert getattr(processor, "layer_height_mm", None) == pytest.approx(0.12)
+        assert getattr(processor, "layer_height_mm", None) == pytest.approx(
+            layer_height_mm
+        )
         assert backing_ids == [2]
         assert len(exported) == 1
         exported_scene = exported[0]["scene"]
@@ -1037,7 +1041,12 @@ def test_native_worker_uses_material_archive_vector_semantics_per_tile(
             assert exported[0]["slot_names"] == ["Archive Red", "Archive White"]
         assert exported[0]["project_slot_names"] == analysis.slot_names
         assert exported[0]["preserve_template_filament_slots"] is False
-        assert exported[0]["settings"]["layer_height"] == "0.12"
+        expected_layer_height = f"{layer_height_mm:g}"
+        assert exported[0]["settings"]["layer_height"] == expected_layer_height
+        assert (
+            exported[0]["settings"]["initial_layer_height"]
+            == expected_layer_height
+        )
     finally:
         if result is not None and os.path.exists(result["zip_path"]):
             os.unlink(result["zip_path"])
