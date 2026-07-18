@@ -645,6 +645,47 @@ class TestVectorPublicApiCompatibility:
             "progress_fn",
         ]
 
+    def test_build_mesh_uses_processor_layer_height_override(self):
+        processor = _make_parse_only_processor()
+        processor.layer_height_mm = 0.12
+        analysis = VectorAnalysis(
+            shape_data=[],
+            clipped_shapes=[
+                {
+                    "geometry": box(0, 0, 10, 10),
+                    "color": (255, 0, 0),
+                    "draw_order": 0,
+                }
+            ],
+            matched_shapes=[
+                {
+                    "geometry": box(0, 0, 10, 10),
+                    "recipe": [1, 1, 1, 1, 1],
+                    "color": (255, 0, 0),
+                }
+            ],
+            silhouette=box(0, 0, 10, 10),
+            scale_factor=1.0,
+            bbox=(0.0, 0.0, 10.0, 10.0),
+            color_conf={},
+            slot_names=["White", "Cyan"],
+            num_channels=2,
+            num_layers=5,
+            preview_colors={
+                0: [255, 255, 255, 255],
+                1: [0, 255, 255, 255],
+            },
+            stage_timings={},
+        )
+
+        scene = processor.build_mesh(
+            analysis=analysis,
+            thickness_mm=0.0,
+            structure_mode="Single-sided",
+        )
+
+        assert scene.geometry["Cyan"].extents[2] == pytest.approx(0.6)
+
 
 class TestVectorFridgeMagnetBuildMeshRegression:
 

@@ -4066,6 +4066,26 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "自动切割为多片 3MF 压缩包",
     en: "Auto-tiled into a ZIP of 3MF files",
   },
+  large_format_warning_native_unavailable: {
+    zh: "此 SVG 暂不支持原生大画幅切片，已改用栅格切片。",
+    en: "This SVG is not supported by native large-format tiling, so raster tiling was used.",
+  },
+  large_format_warning_unsupported_features: {
+    zh: "此 SVG 含有原生大画幅暂不支持的特性（{features}），已改用栅格切片。",
+    en: "This SVG uses features unsupported by native large-format tiling ({features}), so raster tiling was used.",
+  },
+  large_format_warning_raster_fallback: {
+    zh: "本次大画幅 SVG 已改用栅格切片。",
+    en: "Raster tiling was used for this large-format SVG.",
+  },
+  large_format_warning_native_failure: {
+    zh: "原生矢量切片生成失败，已自动改用栅格切片。",
+    en: "Native vector tiling failed, so raster tiling was used automatically.",
+  },
+  large_format_warning_density_reduced: {
+    zh: "为避免超过像素预算，栅格切片清晰度已自动降低。",
+    en: "Raster tiling density was reduced automatically to stay within the pixel budget.",
+  },
   basic_tile_width: {
     zh: "切片宽度",
     en: "Tile Width",

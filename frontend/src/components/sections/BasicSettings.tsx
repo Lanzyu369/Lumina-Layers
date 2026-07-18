@@ -69,6 +69,40 @@ const GENERIC_HTTP_STATUS_ERROR_RE =
   /(?:Request failed with status code|HTTP(?:\s+error)?|status(?:\s+code)?)\s*\d{3}\b/i;
 const STARTUP_LUT_RETRY_DELAY_MS = 5_000;
 const STARTUP_LUT_ATTEMPT_LIMIT = 2;
+const LARGE_FORMAT_PREVIEW_FALLBACK_PREFIX =
+  "Native vector large-format is unavailable for this SVG; large-format generation will fall back to raster tiling.";
+const LARGE_FORMAT_GENERATE_FALLBACK_WARNING =
+  "Raster fallback was used for this large-format SVG request.";
+const LARGE_FORMAT_NATIVE_FAILURE_WARNING =
+  "Native vector generation failed; raster fallback was used for this large-format SVG request.";
+const LARGE_FORMAT_DENSITY_REDUCED_WARNING =
+  "Raster fallback density was reduced to keep SVG large-format generation within the pixel budget.";
+
+function localizeLargeFormatWarning(
+  warning: string,
+  t: (key: string) => string,
+): string {
+  if (warning.startsWith(LARGE_FORMAT_PREVIEW_FALLBACK_PREFIX)) {
+    const unsupportedFeatures = warning.match(/Unsupported features:\s*(.+?)\.?$/i)?.[1];
+    if (unsupportedFeatures) {
+      return t("large_format_warning_unsupported_features").replace(
+        "{features}",
+        unsupportedFeatures,
+      );
+    }
+    return t("large_format_warning_native_unavailable");
+  }
+  if (warning === LARGE_FORMAT_GENERATE_FALLBACK_WARNING) {
+    return t("large_format_warning_raster_fallback");
+  }
+  if (warning === LARGE_FORMAT_NATIVE_FAILURE_WARNING) {
+    return t("large_format_warning_native_failure");
+  }
+  if (warning === LARGE_FORMAT_DENSITY_REDUCED_WARNING) {
+    return t("large_format_warning_density_reduced");
+  }
+  return warning;
+}
 
 function hasApiErrorResponse(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && "response" in error);
@@ -867,8 +901,15 @@ export default function BasicSettings() {
   }, [largeFormatEnabled, target_width_mm, target_height_mm, tileWidthMm, tileHeightMm]);
 
   const mergedLargeFormatWarnings = useMemo(
-    () => Array.from(new Set([...(previewWarnings ?? []), ...(generatedLargeFormatWarnings ?? [])])),
-    [previewWarnings, generatedLargeFormatWarnings],
+    () =>
+      Array.from(
+        new Set(
+          [...(previewWarnings ?? []), ...(generatedLargeFormatWarnings ?? [])].map(
+            (warning) => localizeLargeFormatWarning(warning, t),
+          ),
+        ),
+      ),
+    [previewWarnings, generatedLargeFormatWarnings, t],
   );
 
   return (

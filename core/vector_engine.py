@@ -2321,9 +2321,9 @@ def apply_recipe_overrides_to_analysis(
     - Rasterises each ``analysis.matched_shapes`` entry onto the same grid
       used by :meth:`VectorProcessor.build_preview_cache` so the preview-time
       region masks line up pixel-for-pixel.
-    - Picks the dominant region (by mask overlap) for each shape; shapes
-      whose footprint sits mostly inside a region mask inherit that
-      region's recipe.
+    - Picks the dominant region (by mask overlap) for each connected polygon
+      component. Compound SVG paths are split only when their disconnected
+      components resolve to different recipes, preserving source metadata.
     - Translates each override recipe into the vector internal order
       (``Top2Bottom`` — recipe[0] is the visible face at z=0) and pads it
       up to the effective layer count with the base backing channel.
@@ -2493,13 +2493,16 @@ def apply_recipe_overrides_to_analysis(
         )
 
     # --- Rasterise every shape onto the preview grid ---
-    def _iter_polygons(geom):
+    def _iter_polygon_components(geom):
         if geom is None or geom.is_empty:
             return []
         if geom.geom_type == "Polygon":
             return [geom]
-        if geom.geom_type == "MultiPolygon":
-            return list(geom.geoms)
+        if geom.geom_type in ("MultiPolygon", "GeometryCollection"):
+            components = []
+            for child in geom.geoms:
+                components.extend(_iter_polygon_components(child))
+            return components
         return []
 
     def _coords_to_pts(coords):
@@ -2516,7 +2519,7 @@ def apply_recipe_overrides_to_analysis(
     def _shape_mask(geom):
         region = np.zeros((h_px, w_px), dtype=np.uint8)
         painted = False
-        for poly in _iter_polygons(geom):
+        for poly in _iter_polygon_components(geom):
             if poly.is_empty:
                 continue
             ext_pts = _coords_to_pts(np.array(poly.exterior.coords))
@@ -2532,11 +2535,7 @@ def apply_recipe_overrides_to_analysis(
             return None
         return region.astype(bool)
 
-    shape_masks: list = []
-    for shape in analysis.matched_shapes:
-        shape_masks.append(_shape_mask(shape.get("geometry")))
-
-    # --- Pick the dominant region for every shape (majority wins) ---
+    # --- Pick the dominant region for every connected component ---
     override_by_region: dict[str, dict] = {}
     for item in recipe_overrides:
         if not isinstance(item, dict):
@@ -2545,13 +2544,13 @@ def apply_recipe_overrides_to_analysis(
         if rid:
             override_by_region[rid] = item
 
-    shape_overrides: dict[int, dict] = {}
-    for shape_idx, mask in enumerate(shape_masks):
+    def _select_override(geometry) -> dict | None:
+        mask = _shape_mask(geometry)
         if mask is None:
-            continue
+            return None
         shape_px = int(mask.sum())
         if shape_px == 0:
-            continue
+            return None
         best_rid: str | None = None
         best_overlap = 0
         for rid, rmask in normalised_masks.items():
@@ -2560,17 +2559,12 @@ def apply_recipe_overrides_to_analysis(
                 best_overlap = overlap
                 best_rid = rid
         if best_rid is None:
-            continue
+            return None
         if best_overlap / shape_px < min_overlap_ratio:
-            continue
-        item = override_by_region.get(best_rid)
-        if item is not None:
-            shape_overrides[shape_idx] = item
+            return None
+        return override_by_region.get(best_rid)
 
-    # --- Apply recipes: overridden shapes use user recipe, others get padded ---
-    overridden_count = 0
-    for shape_idx, shape in enumerate(analysis.matched_shapes):
-        override = shape_overrides.get(shape_idx)
+    def _resolve_recipe(shape: dict, override: dict | None) -> tuple[list[int], bool]:
         if override is not None:
             raw_recipe = [int(v) for v in override.get("recipe", [])]
             rid = str(override.get("region_id", "")).strip()
@@ -2590,19 +2584,56 @@ def apply_recipe_overrides_to_analysis(
                 int(base_channel_idx),
                 "Top2Bottom",
             )
-            shape["recipe"] = padded
-            overridden_count += 1
+            return padded, True
+
+        existing = [int(v) for v in shape.get("recipe") or []]
+        if len(existing) < effective_target:
+            existing = pad_recipe_to_layer_count(
+                existing,
+                effective_target,
+                int(base_channel_idx),
+                "Top2Bottom",
+            )
+        elif len(existing) > effective_target:
+            existing = existing[:effective_target]
+        return existing, False
+
+    # --- Apply recipes per connected component and split only on divergence ---
+    overridden_count = 0
+    projected_shapes: list[dict] = []
+    for shape in analysis.matched_shapes:
+        geometry = shape.get("geometry")
+        components = _iter_polygon_components(geometry)
+        if len(components) <= 1:
+            override = _select_override(components[0] if components else geometry)
+            shape["recipe"], was_overridden = _resolve_recipe(shape, override)
+            overridden_count += int(was_overridden)
+            projected_shapes.append(shape)
+            continue
+
+        component_records: list[dict] = []
+        for component in components:
+            component_record = dict(shape)
+            component_record["geometry"] = component
+            override = _select_override(component)
+            component_record["recipe"], was_overridden = _resolve_recipe(
+                component_record,
+                override,
+            )
+            overridden_count += int(was_overridden)
+            component_records.append(component_record)
+
+        component_recipes = {
+            tuple(int(value) for value in record.get("recipe") or [])
+            for record in component_records
+        }
+        if len(component_recipes) <= 1:
+            shape["recipe"] = list(component_records[0].get("recipe") or [])
+            projected_shapes.append(shape)
         else:
-            existing = [int(v) for v in shape.get("recipe") or []]
-            if len(existing) < effective_target:
-                shape["recipe"] = pad_recipe_to_layer_count(
-                    existing,
-                    effective_target,
-                    int(base_channel_idx),
-                    "Top2Bottom",
-                )
-            elif len(existing) > effective_target:
-                shape["recipe"] = existing[:effective_target]
+            projected_shapes.extend(component_records)
+
+    analysis.matched_shapes = projected_shapes
 
     analysis.num_layers = int(effective_target)
 
@@ -3193,6 +3224,7 @@ class VectorProcessor:
         self.enable_outline = False
         self.outline_width_mm = 0.0
         self.expand_stroke_to_fill = False
+        self.layer_height_mm = float(PrinterConfig.LAYER_HEIGHT)
 
     @classmethod
     def from_img_processor(
@@ -4431,7 +4463,14 @@ class VectorProcessor:
         structure_mode_value = str(getattr(structure_mode, "value", structure_mode))
 
         # === Stage 5: Run-length extrude per channel ===
-        layer_h = PrinterConfig.LAYER_HEIGHT
+        try:
+            layer_h = float(
+                getattr(self, "layer_height_mm", PrinterConfig.LAYER_HEIGHT)
+            )
+        except (TypeError, ValueError):
+            layer_h = float(PrinterConfig.LAYER_HEIGHT)
+        if not math.isfinite(layer_h) or layer_h <= 0:
+            layer_h = float(PrinterConfig.LAYER_HEIGHT)
         extrude_cache = {}
         is_5color = "5-Color Extended" in self.color_mode
         is_single_sided = "单面" in structure_mode_value or "Single" in structure_mode_value

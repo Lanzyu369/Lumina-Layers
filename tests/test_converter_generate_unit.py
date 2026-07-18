@@ -3324,6 +3324,7 @@ class TestLargeFormatDimensionsAndRouting:
                 "api.routers.converter.generate._generate_large_format_raster",
                 return_value=fallback_response,
             ) as raster_helper,
+            patch("api.routers.converter.generate.log.info") as log_info,
         ):
             response = client.post("/api/convert/generate-large-format", json=payload)
 
@@ -3333,6 +3334,13 @@ class TestLargeFormatDimensionsAndRouting:
         raster_helper.assert_called_once()
         assert raster_helper.call_args.kwargs["source_basename"] == "source-artwork"
         assert any("raster fallback" in warning.lower() for warning in body["warnings"])
+        done_fields = next(
+            call.kwargs["extra"]
+            for call in log_info.call_args_list
+            if call.kwargs.get("extra", {}).get("event")
+            == "converter_generate_large_format_done"
+        )
+        assert done_fields["fallback_reason"] == "unsupported_svg_feature"
 
     def test_large_format_route_passes_recipe_override_artifacts_to_raster_helper(self) -> None:
         sid, image_path, lut_path = _create_raster_large_format_session(_test_store)
@@ -3736,12 +3744,15 @@ class TestLargeFormatDimensionsAndRouting:
                 if os.path.exists(path):
                     os.unlink(path)
 
-    def test_large_format_svg_with_recipe_overrides_uses_raster_path_even_when_native_supported(self) -> None:
+    def test_large_format_svg_with_recipe_overrides_uses_native_path_when_supported(self) -> None:
         sid, _svg_path, _lut_path = _create_svg_session(_test_store, native_tiling_supported=True)
         session_data = _test_store.get(sid)
         assert session_data is not None
         session_data["preview_cache"]["material_matrix"] = np.zeros((4, 4, 5), dtype=np.uint8)
-        session_data["preview_cache"]["lut_metadata"] = SimpleNamespace(layer_order="Top2Bottom", base_channel_idx=0)
+        session_data["preview_cache"]["lut_metadata"] = SimpleNamespace(
+            layer_order="Top2Bottom",
+            base_channel_idx=2,
+        )
         session_data["selected_region_masks"] = {"region-1": np.ones((4, 4), dtype=bool)}
 
         payload = {
@@ -3765,26 +3776,249 @@ class TestLargeFormatDimensionsAndRouting:
             },
         }
 
-        raster_response = {
+        native_response = {
             "status": "ok",
-            "message": "raster",
-            "download_url": "/api/files/raster",
+            "message": "native",
+            "download_url": "/api/files/native",
             "tile_count": 4,
             "grid_cols": 2,
             "grid_rows": 2,
-            "warnings": ["Raster fallback was used for this large-format SVG request."],
+            "warnings": [],
         }
 
         with (
-            patch("api.routers.converter.generate._generate_large_format_svg_native") as native_helper,
-            patch("api.routers.converter.generate._generate_large_format_raster", return_value=raster_response) as raster_helper,
+            patch(
+                "api.routers.converter.generate._generate_large_format_svg_native",
+                return_value=native_response,
+            ) as native_helper,
+            patch(
+                "api.routers.converter.generate._generate_large_format_raster",
+            ) as raster_helper,
         ):
             response = client.post("/api/convert/generate-large-format", json=payload)
 
         assert response.status_code == 200
-        native_helper.assert_not_called()
-        raster_helper.assert_called_once()
-        assert any("raster fallback" in warning.lower() for warning in response.json()["warnings"])
+        native_helper.assert_called_once()
+        raster_helper.assert_not_called()
+        kwargs = native_helper.call_args.kwargs
+        assert kwargs["recipe_overrides"] == [
+            {
+                "region_id": "region-1",
+                "recipe": [1, 1, 1, 1, 1],
+                "layer_order": "Top2Bottom",
+            }
+        ]
+        assert kwargs["recipe_override_masks_path"] is not None
+        assert os.path.exists(kwargs["recipe_override_masks_path"])
+        assert kwargs["material_matrix_path"] is not None
+        assert os.path.exists(kwargs["material_matrix_path"])
+        assert kwargs["base_channel_idx"] == 2
+        assert response.json()["warnings"] == []
+
+    def test_large_format_svg_material_archive_uses_native_path_when_supported(self) -> None:
+        sid, svg_path, lut_path = _create_svg_session(
+            _test_store,
+            native_tiling_supported=True,
+        )
+        _test_store.put(sid, "material_source", "material_archive")
+        _test_store.put(
+            sid,
+            "selected_materials",
+            ["brand/red", "brand/blue", "brand/white"],
+        )
+        _test_store.put(sid, "material_layer_count", 7)
+        _test_store.put(sid, "material_layer_height_mm", 0.12)
+        _test_store.put(sid, "material_grid_resolution", 64)
+        _test_store.put(sid, "material_backing_material_index", 2)
+
+        payload = {
+            "session_id": sid,
+            "params": {
+                "target_height_mm": 60.0,
+                "tile_width_mm": 40.0,
+                "tile_height_mm": 40.0,
+                "params": {
+                    "lut_name": "__material_archive__",
+                    "modeling_mode": "vector",
+                    "target_width_mm": 90.0,
+                    "color_layers": 7,
+                    "layer_height_mm": 0.12,
+                    "material_backing_material_index": 2,
+                },
+            },
+        }
+
+        with (
+            patch(
+                "api.routers.converter.generate._generate_large_format_svg_native",
+                return_value=_large_format_success_response("native-archive"),
+            ) as native_helper,
+            patch(
+                "api.routers.converter.generate._generate_large_format_raster",
+            ) as raster_helper,
+        ):
+            response = client.post("/api/convert/generate-large-format", json=payload)
+
+        try:
+            assert response.status_code == 200, response.text
+            native_helper.assert_called_once()
+            raster_helper.assert_not_called()
+            kwargs = native_helper.call_args.kwargs
+            assert kwargs["lut_path"] == "__material_archive__"
+            assert kwargs["session_data"]["selected_materials"] == [
+                "brand/red",
+                "brand/blue",
+                "brand/white",
+            ]
+            assert kwargs["session_data"]["material_backing_material_index"] == 2
+            assert response.json()["warnings"] == []
+        finally:
+            _test_store.close(sid)
+            for path in (svg_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    @pytest.mark.parametrize(
+        ("native_error", "expected_error_type"),
+        [
+            (
+                HTTPException(
+                    status_code=500,
+                    detail=LARGE_FORMAT_GENERATION_FAILED_DETAIL,
+                ),
+                "HTTPException",
+            ),
+            (AssertionError("native tile invariant failed"), "AssertionError"),
+        ],
+    )
+    def test_large_format_svg_native_failure_falls_back_to_raster(
+        self,
+        native_error: Exception,
+        expected_error_type: str,
+    ) -> None:
+        sid, svg_path, lut_path = _create_svg_session(
+            _test_store,
+            native_tiling_supported=True,
+        )
+
+        async def _fallback_response(**kwargs: object) -> dict[str, object]:
+            return {
+                **_large_format_success_response("raster-fallback"),
+                "warnings": list(kwargs["warnings"]),
+            }
+
+        try:
+            with (
+                patch(
+                    "api.routers.converter.generate._generate_large_format_svg_native",
+                    side_effect=native_error,
+                ) as native_helper,
+                patch(
+                    "api.routers.converter.generate._rasterize_svg_for_large_format_fallback",
+                    return_value=("/tmp/native-failure-fallback.png", []),
+                ),
+                patch(
+                    "api.routers.converter.generate._generate_large_format_raster",
+                    side_effect=_fallback_response,
+                ) as raster_helper,
+                patch("api.routers.converter.generate.log.warning") as log_warning,
+            ):
+                response = client.post(
+                    "/api/convert/generate-large-format",
+                    json=_large_format_payload(
+                        sid,
+                        modeling_mode="vector",
+                        use_cached_matched_rgb=False,
+                    ),
+                )
+
+            assert response.status_code == 200, response.text
+            native_helper.assert_called_once()
+            raster_helper.assert_called_once()
+            warnings = response.json()["warnings"]
+            assert any("native vector generation failed" in item.lower() for item in warnings)
+            assert any("raster fallback" in item.lower() for item in warnings)
+            fallback_fields = next(
+                call.kwargs["extra"]
+                for call in log_warning.call_args_list
+                if call.kwargs.get("extra", {}).get("event")
+                == "converter_large_format_svg_fallback"
+            )
+            assert fallback_fields["fallback_reason"] == "native_vector_failure"
+            assert fallback_fields["error_type"] == expected_error_type
+        finally:
+            _test_store.close(sid)
+            for path in (svg_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    @pytest.mark.parametrize("fallback_stage", ["rasterize", "generate"])
+    def test_large_format_svg_double_failure_returns_bounded_native_error(
+        self,
+        fallback_stage: str,
+    ) -> None:
+        sid, svg_path, lut_path = _create_svg_session(
+            _test_store,
+            native_tiling_supported=True,
+        )
+        rasterize_error = (
+            OSError("fallback rasterize failed")
+            if fallback_stage == "rasterize"
+            else None
+        )
+        expected_error_message = (
+            "fallback rasterize failed"
+            if fallback_stage == "rasterize"
+            else "fallback archive write failed"
+        )
+
+        try:
+            with (
+                patch(
+                    "api.routers.converter.generate._generate_large_format_svg_native",
+                    side_effect=AssertionError("native tile invariant failed"),
+                ) as native_helper,
+                patch(
+                    "api.routers.converter.generate._rasterize_svg_for_large_format_fallback",
+                    return_value=("/tmp/native-failure-fallback.png", []),
+                    side_effect=rasterize_error,
+                ) as rasterize_helper,
+                patch(
+                    "api.routers.converter.generate._generate_large_format_raster",
+                    side_effect=OSError("fallback archive write failed"),
+                ) as raster_helper,
+                patch(
+                    "api.routers.converter.generate._log_large_format_failure",
+                ) as failure_log,
+            ):
+                response = client.post(
+                    "/api/convert/generate-large-format",
+                    json=_large_format_payload(
+                        sid,
+                        modeling_mode="vector",
+                        use_cached_matched_rgb=False,
+                    ),
+                )
+
+            assert response.status_code == 500
+            assert response.json()["detail"] == LARGE_FORMAT_GENERATION_FAILED_DETAIL
+            native_helper.assert_called_once()
+            rasterize_helper.assert_called_once()
+            if fallback_stage == "rasterize":
+                raster_helper.assert_not_called()
+            else:
+                raster_helper.assert_called_once()
+            failure_log.assert_called_once_with(
+                session_id=sid,
+                failure_kind="raster_fallback_failed",
+                error_type="OSError",
+                error_message=expected_error_message,
+            )
+        finally:
+            _test_store.close(sid)
+            for path in (svg_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
 
     def test_large_format_reinspects_unmarked_svg_policy_before_using_native_path(self) -> None:
         sid, _svg_path, _lut_path = _create_svg_session(_test_store, native_tiling_supported=True)
@@ -3960,14 +4194,26 @@ class TestLargeFormatDimensionsAndRouting:
             for level, event, fields in log_calls
             if event == "converter_large_format_failed"
         ]
-        assert len(failure_logs) == 1
-        level, fields = failure_logs[0]
+        assert len(failure_logs) == 2
+        failures_by_kind = {
+            str(fields["failure_kind"]): (level, fields)
+            for level, fields in failure_logs
+        }
+        level, fields = failures_by_kind["svg_native_worker"]
         assert level == "error"
         assert fields["session_id"] == sid
-        assert fields["failure_kind"] == "svg_native_worker"
         assert fields["error_type"] == "ValueError"
         assert private_path in str(fields["error_message"])
         assert "Permission denied" in str(fields["error_message"])
+        fallback_level, fallback_fields = failures_by_kind[
+            "raster_fallback_failed"
+        ]
+        assert fallback_level == "error"
+        assert fallback_fields["session_id"] == sid
+        assert fallback_fields["error_type"] == "HTTPException"
+        assert fallback_fields["error_message"] == (
+            LARGE_FORMAT_GENERATION_FAILED_DETAIL
+        )
 
     def test_large_format_raster_helper_writes_sanitized_zip_entry_names(self) -> None:
         fd_img, image_path = tempfile.mkstemp(suffix=".png")
