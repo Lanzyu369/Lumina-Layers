@@ -75,7 +75,14 @@ function snapThicknessToLayerGrid(value: number): number {
     THICKNESS_SLIDER_MAX_MM,
     Math.max(THICKNESS_SLIDER_MIN_MM, value),
   );
-  const layerCount = Math.round(clamped / THICKNESS_LAYER_STEP_MM);
+  const scaledLayerCount = clamped / THICKNESS_LAYER_STEP_MM;
+  const lowerLayerCount = Math.floor(scaledLayerCount);
+  // Match Python round() in the generation pipeline: exact half layers tie to even.
+  // 与生成管线的 Python round() 保持一致：正好半层时取最近的偶数层。
+  const isHalfLayer = Math.abs(scaledLayerCount - lowerLayerCount - 0.5) < 1e-9;
+  const layerCount = isHalfLayer
+    ? lowerLayerCount + (lowerLayerCount % 2)
+    : Math.round(scaledLayerCount);
   return Number((layerCount * THICKNESS_LAYER_STEP_MM).toFixed(2));
 }
 
@@ -413,11 +420,6 @@ export default function BasicSettings() {
   const [selectedImageRotation, setSelectedImageRotation] = useState<ImageRotationDegrees>(90);
   const isVectorModelingAvailable = isSvgImageFile(imageFile);
   const disabledModelingModes = isVectorModelingAvailable ? [] : [ModelingMode.VECTOR];
-
-  const handleSpacerThickChange = useCallback(
-    (value: number) => setSpacerThick(snapThicknessToLayerGrid(value)),
-    [setSpacerThick],
-  );
 
   const handleFileReplace = useCallback(
     (file: File) => {
@@ -1326,7 +1328,8 @@ export default function BasicSettings() {
         max={THICKNESS_SLIDER_MAX_MM}
         step={THICKNESS_LAYER_STEP_MM}
         unit="mm"
-        onChange={handleSpacerThickChange}
+        onChange={setSpacerThick}
+        normalizeTextValue={snapThicknessToLayerGrid}
       />
 
       <RadioGroup
