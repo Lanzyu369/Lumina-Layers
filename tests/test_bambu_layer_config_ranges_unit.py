@@ -461,7 +461,8 @@ def test_bambu_family_layer_config_ranges_is_linked(
 
 
 @given(
-    nozzle=st.sampled_from([0.2, 0.4]),
+    nozzle=st.sampled_from([0.2, 0.25, 0.4, 0.6, 0.8]),
+    fine_layer_height=st.sampled_from([0.04, 0.06, 0.08, 0.12, 0.16]),
     base_ticks=st.integers(min_value=4, max_value=250),
     color_ticks=st.integers(min_value=4, max_value=1000),
     face=st.sampled_from(["up", "down"]),
@@ -469,6 +470,7 @@ def test_bambu_family_layer_config_ranges_is_linked(
 )
 def test_layer_config_property_divisibility_bounds_and_z_order(
     nozzle: float,
+    fine_layer_height: float,
     base_ticks: int,
     color_ticks: int,
     face: str,
@@ -481,7 +483,7 @@ def test_layer_config_property_divisibility_bounds_and_z_order(
         color_height_mm=color,
         nozzle_mm=nozzle,
         face=face,
-        fine_layer_height_mm=0.04,
+        fine_layer_height_mm=fine_layer_height,
         initial_layer_height_mm=0.04,
         min_layer_height_mm=0.04,
         max_layer_height_mm=max_layer_height,
@@ -499,7 +501,7 @@ def test_layer_config_property_divisibility_bounds_and_z_order(
     else:
         assert base_ticks % layer_ticks == 0
         assert base_ticks // layer_ticks >= 2
-    assert layer_height > 0.04
+    assert layer_height > fine_layer_height
     assert layer_height <= max_layer_height + 1e-9
     assert layer_height <= nozzle * 0.7 + 1e-9
     assert max_z > min_z
