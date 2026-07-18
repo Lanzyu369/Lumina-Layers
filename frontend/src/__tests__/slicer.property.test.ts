@@ -170,6 +170,11 @@ describe("Property 3: 参数变更使 threemfDiskPath 失效", () => {
 
   it("setModelingMode invalidates threemfDiskPath for any modeling mode", () => {
     const modelingModes = Object.values(ModelingMode);
+    useConverterStore.setState({
+      imageFile: new File(["<svg />"], "property-input.svg", {
+        type: "image/svg+xml",
+      }),
+    });
     fc.assert(
       fc.property(
         fc.constantFrom(...modelingModes),
