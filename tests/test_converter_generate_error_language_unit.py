@@ -171,4 +171,7 @@ def test_generate_known_vector_source_mismatch_returns_actionable_validation_err
     response = _post_generate_with_pool(tmp_path, pool)
 
     assert response.status_code == 422
-    assert response.json()["detail"] == VECTOR_SVG_REQUIRED_DETAIL
+    assert response.json()["detail"] == {
+        "error": "vector_native_requires_svg",
+        "message": VECTOR_SVG_REQUIRED_DETAIL,
+    }

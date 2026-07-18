@@ -91,6 +91,26 @@ def run(ctx: dict) -> dict:
         ctx["error"] = "[ERROR] Please upload an image"
         return ctx
 
+    # ---- SVG 矢量模式检测 ----
+    # ``material_archive`` previously bailed out of the SVG-native
+    # branch and forced its SVG inputs through the raster ``P03``
+    # path, which rasterised to pixels and snapped each pixel to the
+    # fill palette before the material solver ran. The downside was
+    # hard pixel edges with occasional 1-px misclassified colours
+    # along strokes — visually distinct from the LUT-vector preview.
+    # Material vector mode now reuses the same parse → clip → mesh /
+    # preview pipeline and only swaps the per-fill matcher, so the
+    # gate is widened to cover both ``lut`` and ``material_archive``.
+    # 耗材档案 + 矢量模式过去走的是栅格 P03，2D 预览硬边像素 +
+    # 偶发杂色；现在改为复用同一条矢量管线，只替换颜色匹配器。
+    _validate_vector_svg_input(
+        ctx,
+        image_path=image_path,
+        modeling_mode=modeling_mode,
+    )
+    if ctx.get("error"):
+        return ctx
+
     # ---- Material-archive branch ----
     if material_source == "material_archive":
         outcome = _apply_material_archive_branch(
@@ -158,26 +178,6 @@ def run(ctx: dict) -> dict:
     ctx["separate_backing"] = separate_backing
     ctx["backing_color_id"] = backing_color_id
     ctx["separate_backing_color_id"] = separate_backing_color_id
-
-    # ---- SVG 矢量模式检测 ----
-    # ``material_archive`` previously bailed out of the SVG-native
-    # branch and forced its SVG inputs through the raster ``P03``
-    # path, which rasterised to pixels and snapped each pixel to the
-    # fill palette before the material solver ran. The downside was
-    # hard pixel edges with occasional 1-px misclassified colours
-    # along strokes — visually distinct from the LUT-vector preview.
-    # Material vector mode now reuses the same parse → clip → mesh /
-    # preview pipeline and only swaps the per-fill matcher, so the
-    # gate is widened to cover both ``lut`` and ``material_archive``.
-    # 耗材档案 + 矢量模式过去走的是栅格 P03，2D 预览硬边像素 +
-    # 偶发杂色；现在改为复用同一条矢量管线，只替换颜色匹配器。
-    is_svg_vector = _validate_vector_svg_input(
-        ctx,
-        image_path=image_path,
-        modeling_mode=modeling_mode,
-    )
-    if ctx.get("error"):
-        return ctx
 
     _log.debug(
         "conversion parameters resolved",

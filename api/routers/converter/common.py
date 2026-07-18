@@ -28,6 +28,7 @@ from core.pipeline._input_validation_common import (
 
 EPHEMERAL_PREVIEW_TTL_SECONDS = 600
 BATCH_DOWNLOAD_TTL_SECONDS = 3600
+VECTOR_NATIVE_REQUIRES_SVG_ERROR = "vector_native_requires_svg"
 PREVIEW_CACHE_UNAVAILABLE_DETAIL = (
     "Preview data is unavailable. Re-run preview and try again."
 )
@@ -88,13 +89,16 @@ NON_FATAL_GLB_ERRORS = (
 )
 
 
-def _public_pipeline_validation_detail(status_msg: object) -> str | None:
+def _public_pipeline_validation_detail(status_msg: object) -> dict[str, str] | None:
     """Return a public detail for known pipeline validation failures.
     为已知管线校验错误返回可公开的错误详情。
     """
     raw_status = str(status_msg or "").strip()
     if "Vector Native mode requires SVG files" in raw_status:
-        return VECTOR_NATIVE_REQUIRES_SVG_DETAIL
+        return {
+            "error": VECTOR_NATIVE_REQUIRES_SVG_ERROR,
+            "message": VECTOR_NATIVE_REQUIRES_SVG_DETAIL,
+        }
     return None
 
 

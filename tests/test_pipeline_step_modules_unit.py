@@ -839,6 +839,28 @@ class TestS01InputValidation:
         assert result["is_svg_vector"] is False
         assert "Vector Native mode requires SVG files" in result["error"]
 
+    def test_material_archive_vector_mode_rejects_non_svg_before_material_loading(self):
+        """材料生成应在加载耗材前拒绝 VECTOR + 非 SVG 输入。"""
+        from core.pipeline.s01_input_validation import run
+
+        ctx = self._make_valid_ctx()
+        ctx.update(
+            {
+                "image_path": "/tmp/input.png",
+                "modeling_mode": ModelingMode.VECTOR,
+                "material_source": "material_archive",
+                "selected_materials": ["fake/material"],
+            }
+        )
+
+        with patch(
+            "core.pipeline.s01_input_validation._apply_material_archive_branch",
+        ) as apply_material_archive_branch:
+            result = run(ctx)
+
+        assert "Vector Native mode requires SVG files" in result["error"]
+        apply_material_archive_branch.assert_not_called()
+
     @pytest.mark.parametrize("height_mode", ["color", "heightmap"])
     def test_svg_vector_relief_stays_on_native_vector_pipeline(
         self,

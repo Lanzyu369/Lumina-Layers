@@ -1792,7 +1792,10 @@ class TestGeneralExceptionReturns500:
             )
 
         assert response.status_code == 422
-        assert response.json()["detail"] == VECTOR_NATIVE_REQUIRES_SVG_DETAIL
+        assert response.json()["detail"] == {
+            "error": "vector_native_requires_svg",
+            "message": VECTOR_NATIVE_REQUIRES_SVG_DETAIL,
+        }
 
     def test_preview_missing_worker_output_uses_public_error_language(self) -> None:
         """Worker status_msg should not leak local paths when no PNG is returned."""

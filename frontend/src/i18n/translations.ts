@@ -129,6 +129,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "请求缺少必填数据或包含无效值。",
     en: "The request is missing required data or contains invalid values.",
   },
+  api_error_vector_native_requires_svg: {
+    zh: "矢量建模模式仅支持 SVG 文件。请上传 SVG，或切换到“高保真”或“像素艺术”模式。",
+    en: "Vector Native mode requires an SVG file. Upload an SVG, or switch to High-Fidelity or Pixel Art mode.",
+  },
   api_error_http_429: {
     zh: "请求过于频繁，请稍后再试。",
     en: "Too many requests were sent. Please wait and try again.",
