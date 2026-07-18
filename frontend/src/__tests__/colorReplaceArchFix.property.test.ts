@@ -81,6 +81,16 @@ function toRegions(colors: string[]): RegionData[] {
   }));
 }
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("color replace architecture", () => {
   beforeEach(() => {
     resetStore();
@@ -257,6 +267,81 @@ describe("color replace architecture", () => {
     expect(state.error).toBeTruthy();
   });
 
+  it("ignores a connected-region success response after the session changes", async () => {
+    const { regionReplace } = await import("../api/converter");
+    const response = deferred<Awaited<ReturnType<typeof regionReplace>>>();
+    (regionReplace as ReturnType<typeof vi.fn>).mockReturnValueOnce(
+      response.promise,
+    );
+    resetStore();
+    useConverterStore.setState({
+      sessionId: "session-a",
+      regionReplacementCount: 4,
+      regionData: toRegions(["aabbcc"])[0],
+      previewImageUrl: "/api/files/session-a.png",
+      previewBaseImageUrl: "/api/files/session-a.png",
+    });
+
+    const request = useConverterStore
+      .getState()
+      .applyRegionReplace("ddeeff");
+    expect(regionReplace).toHaveBeenCalledWith("session-a", "#ddeeff");
+
+    const sessionBRegion = toRegions(["112233"])[0];
+    useConverterStore.setState({
+      sessionId: "session-b",
+      regionReplacementCount: 0,
+      regionData: sessionBRegion,
+      previewImageUrl: "/api/files/session-b.png",
+      previewBaseImageUrl: "/api/files/session-b.png",
+      replacePreviewLoading: false,
+      error: null,
+    });
+    response.resolve({
+      preview_url: "/api/files/stale-session-a.png",
+      preview_glb_url: null,
+      color_contours: null,
+      message: "ok",
+    });
+    await request;
+
+    const state = useConverterStore.getState();
+    expect(state.sessionId).toBe("session-b");
+    expect(state.regionReplacementCount).toBe(0);
+    expect(state.regionData).toEqual(sessionBRegion);
+    expect(state.previewImageUrl).toBe("/api/files/session-b.png");
+    expect(state.previewBaseImageUrl).toBe("/api/files/session-b.png");
+  });
+
+  it("ignores a connected-region failure after the session changes", async () => {
+    const { regionReplace } = await import("../api/converter");
+    const response = deferred<Awaited<ReturnType<typeof regionReplace>>>();
+    (regionReplace as ReturnType<typeof vi.fn>).mockReturnValueOnce(
+      response.promise,
+    );
+    resetStore();
+    useConverterStore.setState({
+      sessionId: "session-a",
+      regionData: toRegions(["aabbcc"])[0],
+    });
+
+    const request = useConverterStore
+      .getState()
+      .applyRegionReplace("ddeeff");
+    useConverterStore.setState({
+      sessionId: "session-b",
+      replacePreviewLoading: true,
+      error: "session-b-error",
+    });
+    response.reject(new Error("stale session-a failure"));
+    await request;
+
+    const state = useConverterStore.getState();
+    expect(state.sessionId).toBe("session-b");
+    expect(state.replacePreviewLoading).toBe(true);
+    expect(state.error).toBe("session-b-error");
+  });
+
   it.each(["current", "region"] as const)(
     "does not count or request a %s edit without selected region data",
     async (mode) => {
@@ -371,6 +456,96 @@ describe("color replace architecture", () => {
     expect(state.replacement_regions).toEqual(globalSentinel);
     expect(state.replacePreviewLoading).toBe(false);
     expect(state.error).toBeTruthy();
+  });
+
+  it("ignores a multi-region success response after the session changes", async () => {
+    const { regionReplaceBatch } = await import("../api/converter");
+    const response = deferred<Awaited<ReturnType<typeof regionReplaceBatch>>>();
+    (regionReplaceBatch as ReturnType<typeof vi.fn>).mockReturnValueOnce(
+      response.promise,
+    );
+    const sourceRegions = toRegions([
+      "aabbcc",
+      "112233",
+      "223344",
+      "334455",
+      "445566",
+      "556677",
+    ]);
+    resetStore();
+    useConverterStore.setState({
+      sessionId: "session-a",
+      pendingReplacement: {
+        sourceHex: "aabbcc",
+        targetHex: "ddeeff",
+        mode: "multi-select",
+        sourceRegions,
+      },
+    });
+
+    const request = useConverterStore.getState().confirmReplacement();
+    expect(regionReplaceBatch).toHaveBeenCalledTimes(1);
+
+    const sessionBRegion = toRegions(["778899"])[0];
+    useConverterStore.setState({
+      sessionId: "session-b",
+      regionReplacementCount: 0,
+      regionData: sessionBRegion,
+      selectedRegions: [sessionBRegion],
+      selectedColor: "778899",
+      previewImageUrl: "/api/files/session-b.png",
+      previewBaseImageUrl: "/api/files/session-b.png",
+      replacePreviewLoading: false,
+      error: null,
+    });
+    response.resolve({
+      preview_url: "/api/files/stale-session-a.png",
+      preview_glb_url: null,
+      color_contours: null,
+      message: "ok",
+    });
+    await request;
+
+    const state = useConverterStore.getState();
+    expect(state.sessionId).toBe("session-b");
+    expect(state.regionReplacementCount).toBe(0);
+    expect(state.regionData).toEqual(sessionBRegion);
+    expect(state.selectedRegions).toEqual([sessionBRegion]);
+    expect(state.selectedColor).toBe("778899");
+    expect(state.previewImageUrl).toBe("/api/files/session-b.png");
+    expect(state.previewBaseImageUrl).toBe("/api/files/session-b.png");
+  });
+
+  it("ignores a multi-region failure after the session changes", async () => {
+    const { regionReplaceBatch } = await import("../api/converter");
+    const response = deferred<Awaited<ReturnType<typeof regionReplaceBatch>>>();
+    (regionReplaceBatch as ReturnType<typeof vi.fn>).mockReturnValueOnce(
+      response.promise,
+    );
+    resetStore();
+    useConverterStore.setState({
+      sessionId: "session-a",
+      pendingReplacement: {
+        sourceHex: "aabbcc",
+        targetHex: "ddeeff",
+        mode: "multi-select",
+        sourceRegions: toRegions(["aabbcc", "112233"]),
+      },
+    });
+
+    const request = useConverterStore.getState().confirmReplacement();
+    useConverterStore.setState({
+      sessionId: "session-b",
+      replacePreviewLoading: true,
+      error: "session-b-error",
+    });
+    response.reject(new Error("stale session-a failure"));
+    await request;
+
+    const state = useConverterStore.getState();
+    expect(state.sessionId).toBe("session-b");
+    expect(state.replacePreviewLoading).toBe(true);
+    expect(state.error).toBe("session-b-error");
   });
 
   it("does not count or request a multi-region batch without valid coordinates", async () => {

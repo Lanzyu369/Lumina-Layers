@@ -2070,6 +2070,7 @@ function buildPreviewSessionResetState(): Partial<ConverterState> {
     customRecipeHistory: [],
     free_color_set: new Set<string>(),
     regionReplacementCount: 0,
+    replacePreviewLoading: false,
     selectedColor: null,
     selectedColors: new Set<string>(),
     regionData: null,
@@ -4313,7 +4314,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     // --- 连通区域替换 ---
     applyRegionReplace: async (newHex: string) => {
       const state = _get();
-      if (!state.sessionId) {
+      const sid = state.sessionId;
+      if (!sid) {
         set({ error: "请先预览图片" });
         return;
       }
@@ -4323,7 +4325,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       }
       set({ replacePreviewLoading: true, error: null });
       try {
-        const response = await apiRegionReplace(state.sessionId, `#${newHex}`);
+        const response = await apiRegionReplace(sid, `#${newHex}`);
+        if (_get().sessionId !== sid) {
+          return;
+        }
         const updates: Partial<ConverterState> = {
           previewImageUrl: normalizeResourceUrl(response.preview_url),
           previewBaseImageUrl: normalizeResourceUrl(response.preview_url),
@@ -4358,6 +4363,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         }));
         _get()._pollAsyncGlb();
       } catch (err) {
+        if (_get().sessionId !== sid) {
+          return;
+        }
         set({
           replacePreviewLoading: false,
           error: visibleConverterError(err, "区域颜色替换失败"),
@@ -4383,6 +4391,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           gradientGroupIndex: groupIndex,
           gradientRegionIndex: regionIndex,
         });
+        if (_get().sessionId !== sid) {
+          return;
+        }
         const updates: Partial<ConverterState> = {
           previewImageUrl: normalizeResourceUrl(response.preview_url),
           previewBaseImageUrl: normalizeResourceUrl(response.preview_url),
@@ -4403,7 +4414,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           // has just mutated) rather than re-running the fresh-pipeline,
           // exactly like applyRegionReplace does.
           // 与 applyRegionReplace 一致：让 generate 走 use_cached_matched_rgb。
-          regionReplacementCount: state.regionReplacementCount + 1,
           ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
         };
         if (response.preview_glb_url) {
@@ -4414,9 +4424,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         if (response.color_contours) {
           updates.colorContours = response.color_contours;
         }
-        set(updates);
+        set((current) => ({
+          ...updates,
+          regionReplacementCount: current.regionReplacementCount + 1,
+        }));
         _get()._pollAsyncGlb();
       } catch (err) {
+        if (_get().sessionId !== sid) {
+          return;
+        }
         set({
           replacePreviewLoading: false,
           error: visibleConverterError(err, "区域颜色替换失败"),
@@ -4557,6 +4573,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             replacementColor: `#${targetHex}`,
           })),
         );
+        if (_get().sessionId !== sid) {
+          return;
+        }
         const updates: Partial<ConverterState> = {
           previewImageUrl: normalizeResourceUrl(response.preview_url),
           previewBaseImageUrl: normalizeResourceUrl(response.preview_url),
@@ -4572,7 +4591,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           selectedColors: new Set<string>(),
           selectedColor: null,
           regionData: null,
-          regionReplacementCount: state.regionReplacementCount + regions.length,
           ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
         };
         if (response.preview_glb_url) {
@@ -4583,9 +4601,16 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         if (response.color_contours) {
           updates.colorContours = response.color_contours;
         }
-        set(updates);
+        set((current) => ({
+          ...updates,
+          regionReplacementCount:
+            current.regionReplacementCount + regions.length,
+        }));
         _get()._pollAsyncGlb();
       } catch (err) {
+        if (_get().sessionId !== sid) {
+          return;
+        }
         set({
           replacePreviewLoading: false,
           error: visibleConverterError(err, "合并去海带纹失败"),
@@ -4634,6 +4659,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           })),
           clamped,
         );
+        if (_get().sessionId !== sid) {
+          return;
+        }
         const updates: Partial<ConverterState> = {
           previewImageUrl: normalizeResourceUrl(response.preview_url),
           previewBaseImageUrl: normalizeResourceUrl(response.preview_url),
@@ -4647,7 +4675,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           selectedColors: new Set<string>(),
           selectedColor: null,
           regionData: null,
-          regionReplacementCount: state.regionReplacementCount + regions.length,
           ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
         };
         if (!usingExplicitTargets) {
@@ -4678,9 +4705,16 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           updates.gradientGroupsLoading = false;
           updates.gradientGroupsSessionId = sid;
         }
-        set(updates);
+        set((current) => ({
+          ...updates,
+          regionReplacementCount:
+            current.regionReplacementCount + regions.length,
+        }));
         _get()._pollAsyncGlb();
       } catch (err) {
+        if (_get().sessionId !== sid) {
+          return;
+        }
         set({
           replacePreviewLoading: false,
           error: visibleConverterError(err, "区域二次量化失败"),
@@ -4707,6 +4741,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             replacementColor: `#${hexNoHash}`,
           })),
         );
+        if (_get().sessionId !== sid) {
+          return;
+        }
         const updates: Partial<ConverterState> = {
           previewImageUrl: normalizeResourceUrl(response.preview_url),
           previewBaseImageUrl: normalizeResourceUrl(response.preview_url),
@@ -4718,7 +4755,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           selectedColors: new Set<string>(),
           selectedColor: null,
           regionData: null,
-          regionReplacementCount: state.regionReplacementCount + regions.length,
           ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
         };
         if (response.preview_glb_url) {
@@ -4729,9 +4765,16 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         if (response.color_contours) {
           updates.colorContours = response.color_contours;
         }
-        set(updates);
+        set((current) => ({
+          ...updates,
+          regionReplacementCount:
+            current.regionReplacementCount + regions.length,
+        }));
         _get()._pollAsyncGlb();
       } catch (err) {
+        if (_get().sessionId !== sid) {
+          return;
+        }
         set({
           replacePreviewLoading: false,
           error: visibleConverterError(err, "合并换色失败"),
@@ -4920,6 +4963,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           });
           try {
             const response = await apiRegionReplaceBatch(sid, batchItems);
+            if (_get().sessionId !== sid) {
+              return;
+            }
             const updates: Partial<ConverterState> = {
               previewImageUrl: normalizeResourceUrl(response.preview_url),
               previewBaseImageUrl: normalizeResourceUrl(response.preview_url),
@@ -4944,6 +4990,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             }));
             _get()._pollAsyncGlb();
           } catch (err) {
+            if (_get().sessionId !== sid) {
+              return;
+            }
             set({
               replacePreviewLoading: false,
               error: visibleConverterError(
@@ -5679,6 +5728,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       set({ replacePreviewLoading: true, error: null });
       try {
         const response = await apiRegionReplace(sid, `#${rep}`, scope);
+        if (_get().sessionId !== sid) {
+          return;
+        }
         const updates: Partial<ConverterState> = {
           previewImageUrl: normalizeResourceUrl(response.preview_url),
           previewBaseImageUrl: normalizeResourceUrl(response.preview_url),
@@ -5689,7 +5741,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           selectedColors: new Set<string>(),
           selectedColor: null,
           regionData: null,
-          regionReplacementCount: state.regionReplacementCount + 1,
           ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
         };
         if (response.preview_glb_url) {
@@ -5700,9 +5751,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         if (response.color_contours) {
           updates.colorContours = response.color_contours;
         }
-        set(updates);
+        set((current) => ({
+          ...updates,
+          regionReplacementCount: current.regionReplacementCount + 1,
+        }));
         _get()._pollAsyncGlb();
       } catch (err) {
+        if (_get().sessionId !== sid) {
+          return;
+        }
         set({
           replacePreviewLoading: false,
           error: visibleConverterError(err, "去海带纹替换失败"),
