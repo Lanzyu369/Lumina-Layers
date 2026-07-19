@@ -71,6 +71,10 @@ describe("converter relief error language", () => {
         translations[CONVERTER_ERROR_KEYS.heightmapUploadRequired].en,
       ),
     ).toBeInTheDocument();
-    expect(screen.queryByText("请先上传高度图并获取高度映射后再生成")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        translations[CONVERTER_ERROR_KEYS.heightmapUploadRequired].zh,
+      ),
+    ).not.toBeInTheDocument();
   });
 });

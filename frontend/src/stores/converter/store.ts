@@ -225,6 +225,14 @@ export const CONVERTER_ERROR_KEYS = {
   heightmapUploadRequired: "relief_heightmap_generate_requires_upload",
 } as const;
 
+function clearedHeightmapUploadState() {
+  return {
+    heightmapThumbnailUrl: null,
+    color_height_map: {},
+    heightmapUploadSessionId: null,
+  };
+}
+
 function rawPreviewFailureMessage(error: unknown): string {
   const detail = visibleConverterError(error, tRuntime("api_error_http_default"));
   return tRuntime("converter_raw_preview_failed", { error: detail });
@@ -5129,46 +5137,44 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       set((state) => ({
         autoHeightMode: mode,
         ...(mode === "use-heightmap" && state.autoHeightMode !== "use-heightmap"
-          ? {
-              color_height_map: {},
-              heightmapThumbnailUrl: null,
-              heightmapUploadSessionId: null,
-            }
+          ? clearedHeightmapUploadState()
           : {}),
       })),
 
     // --- 高度图 ---
     setHeightmapFile: (file: File | null) =>
       set({
+        ...clearedHeightmapUploadState(),
         heightmapFile: file,
-        heightmapThumbnailUrl: null,
-        color_height_map: {},
-        heightmapUploadSessionId: null,
+        isLoading: false,
       }),
 
     uploadHeightmap: async () => {
       const state = _get();
-      const clearHeightmapUploadState = {
-        heightmapThumbnailUrl: null,
-        color_height_map: {},
-        heightmapUploadSessionId: null,
-      };
       if (!state.heightmapFile || !state.sessionId) {
         set({
-          ...clearHeightmapUploadState,
+          ...clearedHeightmapUploadState(),
           error: "请先上传高度图文件并完成预览",
         });
         return;
       }
       const requestedSessionId = state.sessionId;
+      const requestedHeightmapFile = state.heightmapFile;
+      const isCurrentHeightmapUpload = () => {
+        const currentState = _get();
+        return (
+          currentState.sessionId === requestedSessionId &&
+          currentState.heightmapFile === requestedHeightmapFile
+        );
+      };
       set({ isLoading: true, error: null });
       try {
         const response = await apiUploadHeightmap(
-          state.heightmapFile,
+          requestedHeightmapFile,
           requestedSessionId,
           state.heightmap_max_height,
         );
-        if (_get().sessionId !== requestedSessionId) {
+        if (!isCurrentHeightmapUpload()) {
           return;
         }
         const thumbnailUrl = `${response.thumbnail_url}`;
@@ -5179,11 +5185,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           heightmapUploadSessionId: requestedSessionId,
         });
       } catch (err) {
-        if (_get().sessionId !== requestedSessionId) {
+        if (!isCurrentHeightmapUpload()) {
           return;
         }
         set({
-          ...clearHeightmapUploadState,
+          ...clearedHeightmapUploadState(),
           isLoading: false,
           error: visibleConverterError(err, "Heightmap upload failed"),
         });
@@ -6015,11 +6021,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           },
           palette: normalizedPalette,
           ...(shouldResetHeightmapMapping
-            ? {
-                color_height_map: {},
-                heightmapThumbnailUrl: null,
-                heightmapUploadSessionId: null,
-              }
+            ? clearedHeightmapUploadState()
             : autoReliefHeightMap
               ? { color_height_map: autoReliefHeightMap }
               : {}),
