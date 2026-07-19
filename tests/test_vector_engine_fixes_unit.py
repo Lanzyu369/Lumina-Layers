@@ -229,6 +229,28 @@ class TestNativeVectorRelief:
             [0.0, 1.2]
         )
 
+    def test_color_relief_uses_stable_identity_after_display_color_collision(self):
+        analysis = self._analysis()
+        for shape in analysis.matched_shapes:
+            shape["height_identity_rgb"] = shape["matched_rgb"]
+            shape["matched_rgb"] = (64, 64, 64)
+
+        scene = self._processor().build_mesh(
+            analysis,
+            thickness_mm=1.0,
+            structure_mode="Single-sided",
+            enable_relief=True,
+            height_mode="color",
+            color_height_map={"#ff0000": 1.04, "#ffffff": 2.0},
+        )
+
+        assert scene.geometry["Red"].bounds[:, 2] == pytest.approx(
+            [0.88, 1.04]
+        )
+        assert scene.geometry["White"].bounds[:, 2] == pytest.approx(
+            [1.84, 2.0]
+        )
+
     def test_heightmap_sampling_caps_extreme_svg_height(self):
         analysis = self._analysis()
         analysis.bbox = (0.0, 0.0, 1.0, 100_000.0)
@@ -1499,6 +1521,59 @@ class TestHueAwareVectorColorMatching:
         assert matched[0]["matched_rgb"] == (80, 70, 140)
         assert matched[0]["recipe"] == [1, 1, 1, 1, 1]
 
+    def test_match_colors_keeps_pre_replacement_identity_and_recipe(self):
+        from core.color_replacement import ColorReplacementManager
+
+        class _NearestKdtree:
+            n = 2
+
+            def query(self, lab):
+                values = np.asarray(lab, dtype=np.float64).reshape(-1, 3)
+                palette = np.asarray(
+                    [[255, 0, 0], [0, 0, 255]],
+                    dtype=np.float64,
+                )
+                distances = np.linalg.norm(
+                    values[:, None, :] - palette[None, :, :],
+                    axis=2,
+                )
+                indices = np.argmin(distances, axis=1)
+                return distances[np.arange(len(values)), indices], indices
+
+        processor = SimpleNamespace(
+            hue_matcher=None,
+            kdtree=_NearestKdtree(),
+            lut_rgb=np.asarray([[255, 0, 0], [0, 0, 255]], dtype=np.uint8),
+            lut_lab=np.asarray([[255, 0, 0], [0, 0, 255]], dtype=np.float64),
+            ref_stacks=np.asarray(
+                [[0, 0, 0, 0, 0], [1, 1, 1, 1, 1]],
+                dtype=np.int16,
+            ),
+            _rgb_to_lab=lambda rgb: np.asarray(rgb, dtype=np.float64),
+        )
+        vector_processor = VectorProcessor.from_img_processor(processor, "Unit")
+        replacement_manager = ColorReplacementManager.from_dict(
+            {"#ff0000": "#0000ff"}
+        )
+
+        matched = vector_processor._match_colors(
+            [
+                {
+                    "geometry": box(0, 0, 1, 1),
+                    "color": (255, 0, 0),
+                }
+            ],
+            replacement_manager=replacement_manager,
+            num_channels=2,
+            num_layers=5,
+        )
+
+        assert matched[0]["matched_rgb"] == (0, 0, 255)
+        assert matched[0]["recipe"] == [1, 1, 1, 1, 1]
+        assert matched[0]["height_identity_rgb"] == (255, 0, 0)
+        assert matched[0]["original_recipe"] == [0, 0, 0, 0, 0]
+        assert "original_lut_idx" not in matched[0]
+
 
 class TestVectorNearFillConsistency:
     """Nearby flat SVG fills should share one vector LUT query."""
@@ -1606,6 +1681,9 @@ class TestVectorNearFillConsistency:
             pixels_per_mm=1.0,
             supersample_preview=1,
         )
+        assert cache["matched_rgb"] is cache["original_matched_rgb"]
+        assert cache["matched_rgb"] is cache["height_identity_rgb"]
+        assert cache["material_matrix"] is cache["original_material_matrix"]
         solid_matched = cache["matched_rgb"][cache["mask_solid"]].reshape(-1, 3)
         assert {
             tuple(int(v) for v in row)

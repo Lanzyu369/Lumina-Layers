@@ -78,6 +78,17 @@ def run(ctx: dict) -> dict:
     lut_metadata = ctx.get('lut_metadata')
     debug_data = ctx.get('debug_data')
     quantized_image = ctx.get('quantized_image')
+    original_matched_rgb = np.asarray(
+        ctx.get('original_matched_rgb', matched_rgb),
+        dtype=np.uint8,
+    )
+    height_identity_rgb = np.asarray(
+        ctx.get('height_identity_rgb', original_matched_rgb),
+        dtype=np.uint8,
+    )
+    original_material_matrix = np.asarray(
+        ctx.get('original_material_matrix', material_matrix),
+    )
 
     # ---- 构建 preview_rgba ----
     preview_rgba = np.zeros((target_h, target_w, 4), dtype=np.uint8)
@@ -98,6 +109,9 @@ def run(ctx: dict) -> dict:
         'mask_solid': mask_solid,
         'material_matrix': material_matrix,
         'matched_rgb': matched_rgb,
+        'original_matched_rgb': original_matched_rgb,
+        'height_identity_rgb': height_identity_rgb,
+        'original_material_matrix': original_material_matrix,
         'preview_rgba': preview_rgba.copy(),
         'color_conf': color_conf,
         'color_mode': color_mode,

@@ -38,6 +38,17 @@ setup_module(None)
 client: TestClient = TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_cache_mutation_tests_from_async_glb(monkeypatch):
+    """These tests own cache semantics; GLB rebuilds have dedicated coverage."""
+
+    monkeypatch.setattr(
+        replace_router,
+        "schedule_glb_build",
+        lambda *_args, **_kwargs: "test-glb-token",
+    )
+
+
 def setup_function() -> None:
     global _test_store, _test_registry
     _clear_logging_context()
@@ -102,6 +113,7 @@ def _create_lut_session(tmp_path: Path) -> str:
     }
     cache = {
         "matched_rgb": matched.copy(),
+        "height_identity_rgb": matched.copy(),
         "quantized_image": matched.copy(),
         "mask_solid": mask_solid,
         "material_matrix": material_matrix.copy(),
@@ -169,6 +181,9 @@ class TestReplaceColorLayerSync:
             cache["matched_rgb"][0, 0],
             np.asarray([0, 0, 255], dtype=np.uint8),
         )
+        np.testing.assert_array_equal(cache["height_identity_rgb"], np.full(
+            (3, 3, 3), [255, 0, 0], dtype=np.uint8
+        ))
 
         layers = get_layer_images(session_id=sid, store=_test_store, registry=_test_registry)
         layer0 = _decode_layer_png(layers["layers"][0]["url"])
@@ -196,6 +211,10 @@ class TestReplaceColorLayerSync:
         expected_stack = np.asarray([1, 1], dtype=np.int16)
         np.testing.assert_array_equal(cache["material_matrix"][0, 0], expected_stack)
         np.testing.assert_array_equal(cache["material_matrix"][2, 2], np.asarray([0, 0], dtype=np.int16))
+        np.testing.assert_array_equal(
+            cache["height_identity_rgb"],
+            np.full((3, 3, 3), [255, 0, 0], dtype=np.uint8),
+        )
 
     def test_region_replace_artifact_cache_avoids_common_full_hydrate(
         self,
@@ -295,6 +314,9 @@ class TestReplaceColorLayerSync:
             reset_cache["material_matrix"],
             _test_store.get(sid)["original_material_matrix"],
         )
+        np.testing.assert_array_equal(
+            reset_cache["height_identity_rgb"], reset_cache["matched_rgb"]
+        )
 
 
 class TestMaterialArchiveReplaceLayerSync:
@@ -306,6 +328,7 @@ class TestMaterialArchiveReplaceLayerSync:
         mask_solid = np.ones((2, 2), dtype=bool)
         cache = {
             "matched_rgb": matched.copy(),
+            "height_identity_rgb": matched.copy(),
             "quantized_image": matched.copy(),
             "mask_solid": mask_solid,
             "material_matrix": material_matrix.copy(),
@@ -363,6 +386,7 @@ class TestMaterialArchiveReplaceLayerSync:
             updated_cache["matched_rgb"][0, 0],
             np.asarray([12, 34, 56], dtype=np.uint8),
         )
+        np.testing.assert_array_equal(updated_cache["height_identity_rgb"], matched)
         np.testing.assert_array_equal(
             updated_cache["material_matrix"][0, 0],
             np.asarray([4, 3, 2, 1, 0], dtype=np.int16),

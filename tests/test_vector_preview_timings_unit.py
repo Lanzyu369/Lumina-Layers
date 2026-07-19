@@ -183,3 +183,88 @@ def test_vector_preview_branch_preserves_backing_mask_in_cache() -> None:
         "svg_pixels_per_mm": 8.0,
         "material_source": "lut",
     }
+
+
+def test_vector_preview_replacements_keep_pristine_height_and_recipe() -> None:
+    """Native SVG re-preview applies display remaps after stable identity capture."""
+    from core.pipeline.vector_branch import _run_vector_preview_branch
+    from core.vector_engine import VectorAnalysis
+
+    visible_shape = box(0, 0, 10, 10)
+    analysis = VectorAnalysis(
+        shape_data=[],
+        clipped_shapes=[
+            {"geometry": visible_shape, "color": (255, 0, 0), "draw_order": 0}
+        ],
+        matched_shapes=[
+            {
+                "geometry": visible_shape,
+                "recipe": [1, 1, 1, 1, 1],
+                "original_recipe": [0, 0, 0, 0, 0],
+                "color": (255, 0, 0),
+                "matched_rgb": (0, 0, 255),
+                "height_identity_rgb": (255, 0, 0),
+            }
+        ],
+        silhouette=visible_shape,
+        scale_factor=1.0,
+        bbox=(0.0, 0.0, 10.0, 10.0),
+        color_conf={},
+        slot_names=["Red", "Blue"],
+        num_channels=2,
+        num_layers=5,
+        preview_colors={
+            0: [255, 0, 0, 255],
+            1: [0, 0, 255, 255],
+        },
+        stage_timings={},
+    )
+    captured: dict = {}
+
+    def analyze_svg(**kwargs):
+        captured.update(kwargs)
+        return analysis
+
+    ctx = {
+        "image_path": "replacement.svg",
+        "color_mode": "4-Color RYBW",
+        "target_width_mm": 10.0,
+        "actual_lut_path": "fake.npy",
+        "modeling_mode": "vector",
+        "color_layers": 5,
+        "layer_height_mm": 0.08,
+        "quantize_colors": 64,
+        "enable_cleanup": False,
+        "material_source": "lut",
+        "backing_color_id": 0,
+        "is_dark": True,
+        "replacement_regions": [
+            {
+                "matched_hex": "#ff0000",
+                "replacement_hex": "#0000ff",
+            }
+        ],
+    }
+
+    with (
+        patch(
+            "core.pipeline.vector_branch._build_vector_processor",
+            return_value=SimpleNamespace(analyze_svg=analyze_svg),
+        ),
+        patch(
+            "core.pipeline.vector_branch.p06_bed_rendering.run",
+            side_effect=lambda value: value,
+        ),
+        patch("core.pipeline.vector_branch.extract_color_palette", return_value=[]),
+    ):
+        result = _run_vector_preview_branch(ctx)
+
+    assert "error" not in result
+    assert captured["color_replacements"] == {"#ff0000": "#0000ff"}
+    cache = result["cache"]
+    solid = cache["mask_solid"]
+    assert np.all(cache["matched_rgb"][solid] == [0, 0, 255])
+    assert np.all(cache["original_matched_rgb"][solid] == [255, 0, 0])
+    assert cache["original_matched_rgb"] is cache["height_identity_rgb"]
+    assert np.all(cache["material_matrix"][solid] == 1)
+    assert np.all(cache["original_material_matrix"][solid] == 0)

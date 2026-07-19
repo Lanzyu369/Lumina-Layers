@@ -436,6 +436,69 @@ class TestApplyMatchedRgbOverrides:
         assert large_record["matched_rgb"] == (0, 255, 0)
         assert large_record["recipe"] == [2, 1, 2, 1, 2]
 
+    def test_same_display_assignment_keeps_distinct_component_height_identities(self):
+        """Two source heights may collide on one achieved display colour."""
+
+        small = box(0.5, 0.5, 1.5, 1.5)
+        large = box(4.0, 0.5, 11.5, 3.5)
+        analysis = _make_compound_analysis(MultiPolygon([small, large]))
+        analysis.matched_shapes[0]["matched_rgb"] = (0, 0, 255)
+        analysis.matched_shapes[0]["recipe"] = [3, 3, 3, 3, 3]
+        matched_rgb, mask_solid, material_matrix = _compound_cache_arrays()
+        matched_rgb[:, :, :] = (0, 0, 255)
+        material_matrix[:, :, :] = 3
+        height_identity_rgb = np.full_like(matched_rgb, (255, 0, 0))
+        height_identity_rgb[5:36, 40:116, :] = (0, 255, 0)
+
+        changed = apply_matched_rgb_overrides_to_analysis(
+            analysis,
+            matched_rgb=matched_rgb,
+            height_identity_rgb=height_identity_rgb,
+            material_matrix=material_matrix,
+            mask_solid=mask_solid,
+            img_processor=_build_fake_img_processor(),
+        )
+
+        assert changed == 0
+        assert len(analysis.matched_shapes) == 2
+        assert analysis.matched_shapes[0]["matched_rgb"] == (0, 0, 255)
+        assert analysis.matched_shapes[1]["matched_rgb"] == (0, 0, 255)
+        assert analysis.matched_shapes[0]["height_identity_rgb"] == (255, 0, 0)
+        assert analysis.matched_shapes[1]["height_identity_rgb"] == (0, 255, 0)
+        assert all(
+            "original_lut_idx" not in shape
+            for shape in analysis.matched_shapes
+        )
+
+    def test_partial_component_replacement_preserves_source_height_identity(self):
+        """A locally replaced component and its sibling retain one source height."""
+
+        small = box(0.5, 0.5, 1.5, 1.5)
+        large = box(4.0, 0.5, 11.5, 3.5)
+        analysis = _make_compound_analysis(MultiPolygon([small, large]))
+        matched_rgb, mask_solid, material_matrix = _compound_cache_arrays()
+        matched_rgb[5:16, 5:16, :] = (0, 0, 255)
+        material_matrix[5:16, 5:16, :] = 3
+        height_identity_rgb = np.full_like(matched_rgb, (255, 0, 0))
+
+        changed = apply_matched_rgb_overrides_to_analysis(
+            analysis,
+            matched_rgb=matched_rgb,
+            height_identity_rgb=height_identity_rgb,
+            material_matrix=material_matrix,
+            mask_solid=mask_solid,
+            img_processor=_build_fake_img_processor(),
+        )
+
+        assert changed == 1
+        assert len(analysis.matched_shapes) == 2
+        assert analysis.matched_shapes[0]["matched_rgb"] == (0, 0, 255)
+        assert analysis.matched_shapes[1]["matched_rgb"] == (255, 0, 0)
+        assert {
+            shape["height_identity_rgb"]
+            for shape in analysis.matched_shapes
+        } == {(255, 0, 0)}
+
     def test_compound_zero_change_and_uniform_global_change_keep_one_record(self):
         """Only divergent component assignments require structural splitting."""
 
@@ -818,9 +881,14 @@ class TestRunVectorBranchWiring:
         from core.pipeline import coordinator
 
         matched_rgb_path = tmp_path / "matched.npy"
+        height_identity_rgb_path = tmp_path / "height-identity.npy"
         mask_solid_path = tmp_path / "mask.npy"
         material_matrix_path = tmp_path / "material.npy"
         np.save(matched_rgb_path, np.zeros((4, 4, 3), dtype=np.uint8))
+        np.save(
+            height_identity_rgb_path,
+            np.full((4, 4, 3), [255, 0, 0], dtype=np.uint8),
+        )
         np.save(mask_solid_path, np.ones((4, 4), dtype=bool))
         np.save(material_matrix_path, np.ones((4, 4, 5), dtype=np.int32))
 
@@ -845,6 +913,7 @@ class TestRunVectorBranchWiring:
                 "nozzle_size": "0.4",
                 "svg_pixels_per_mm": 5.0,
                 "matched_rgb_path": str(matched_rgb_path),
+                "height_identity_rgb_path": str(height_identity_rgb_path),
                 "mask_solid_path": str(mask_solid_path),
                 "material_matrix_path": str(material_matrix_path),
             }
@@ -855,12 +924,14 @@ class TestRunVectorBranchWiring:
         assert len(helper_calls) == 1
         kwargs = helper_calls[0]["kwargs"]
         assert "matched_rgb" in kwargs
+        assert "height_identity_rgb" in kwargs
         assert "mask_solid" in kwargs
         assert "material_matrix" in kwargs
         # These arrays come from the preview cache, which is currently built
         # at 10 px/mm even when the generate request uses another SVG density.
         assert kwargs["pixels_per_mm"] == 10.0
         assert kwargs["material_matrix"].shape == (4, 4, 5)
+        assert np.all(kwargs["height_identity_rgb"] == [255, 0, 0])
         # img_processor must be the FakeVectorProcessor's stub attribute,
         # not some unrelated object — the helper relies on its KDTree.
         # img_processor 必须是分支构造的处理器持有的对象，否则 helper 会

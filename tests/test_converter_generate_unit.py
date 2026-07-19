@@ -765,6 +765,9 @@ class TestGenerateParameterCompleteness:
         sid: str = _create_session_with_preview_and_files(_test_store)
         preview_cache = _test_store.get(sid)["preview_cache"]
         preview_cache["matched_rgb"] = np.zeros((4, 4, 3), dtype=np.uint8)
+        preview_cache["height_identity_rgb"] = np.full(
+            (4, 4, 3), [190, 230, 248], dtype=np.uint8
+        )
         preview_cache["mask_solid"] = np.ones((4, 4), dtype=bool)
         preview_cache["material_matrix"] = np.ones((4, 4, 5), dtype=np.int32)
         _test_store.put(sid, "preview_cache", preview_cache)
@@ -792,11 +795,16 @@ class TestGenerateParameterCompleteness:
         assert response.status_code == 200
         submitted_params = _mock_pool.submit.call_args.args[3]
         assert submitted_params["matched_rgb_path"] is not None
+        assert submitted_params["height_identity_rgb_path"] is not None
         assert submitted_params["mask_solid_path"] is not None
         assert submitted_params["material_matrix_path"] is not None
         np.testing.assert_array_equal(
             np.load(submitted_params["material_matrix_path"]),
             preview_cache["material_matrix"],
+        )
+        np.testing.assert_array_equal(
+            np.load(submitted_params["height_identity_rgb_path"]),
+            preview_cache["height_identity_rgb"],
         )
 
     def test_generate_artifact_cache_forwards_field_paths_without_hydrating(
@@ -842,6 +850,9 @@ class TestGenerateParameterCompleteness:
                 "svg_pixels_per_mm": request.svg_pixels_per_mm,
                 "material_source": "lut",
                 "matched_rgb": np.zeros((4, 4, 3), dtype=np.uint8),
+                "height_identity_rgb": np.full(
+                    (4, 4, 3), [190, 230, 248], dtype=np.uint8
+                ),
                 "mask_solid": np.ones((4, 4), dtype=bool),
                 "material_matrix": np.zeros((4, 4, 5), dtype=np.uint8),
             },
@@ -875,6 +886,7 @@ class TestGenerateParameterCompleteness:
         assert response.status_code == 200, response.text
         submitted_params = _mock_pool.submit.call_args.args[3]
         assert submitted_params["matched_rgb_path"] == cache_ref["fields"]["matched_rgb"]["path"]
+        assert submitted_params["height_identity_rgb_path"] == cache_ref["fields"]["height_identity_rgb"]["path"]
         assert submitted_params["mask_solid_path"] == cache_ref["fields"]["mask_solid"]["path"]
         assert submitted_params["material_matrix_path"] == cache_ref["fields"]["material_matrix"]["path"]
 

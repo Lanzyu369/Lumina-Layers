@@ -992,6 +992,82 @@ def _assign_mesh_material_rgba(
     )
 
 
+def _remove_mesh_horizontal_caps(
+    mesh: trimesh.Trimesh,
+    *,
+    remove_bottom: bool,
+) -> trimesh.Trimesh | None:
+    """Drop the hidden bottom cap while retaining relief-visible surfaces."""
+
+    if len(mesh.faces) == 0 or len(mesh.vertices) == 0:
+        return None
+    face_z = np.asarray(mesh.vertices)[np.asarray(mesh.faces), 2]
+    min_z = float(np.min(face_z))
+    keep = np.ones(len(mesh.faces), dtype=bool)
+    if remove_bottom:
+        keep &= ~np.all(np.isclose(face_z, min_z, atol=1e-9), axis=1)
+    if not np.any(keep):
+        return None
+    mesh.update_faces(keep)
+    mesh.remove_unreferenced_vertices()
+    return mesh
+
+
+def _concatenate_layered_mesh_parts(
+    parts: list[trimesh.Trimesh],
+    *,
+    metadata: dict,
+) -> trimesh.Trimesh | None:
+    """Concatenate independently coloured parts without merging vertex ranges."""
+
+    if not parts:
+        return None
+    combined = trimesh.util.concatenate(parts)
+    combined.metadata.update(metadata)
+    return combined
+
+
+def _rgb_code_to_hex(code: int) -> str:
+    return f"{(code >> 16) & 0xFF:02x}{(code >> 8) & 0xFF:02x}{code & 0xFF:02x}"
+
+
+def _rgb_codes(rgb: np.ndarray) -> np.ndarray:
+    values = np.asarray(rgb, dtype=np.uint32)
+    return (values[..., 0] << 16) | (values[..., 1] << 8) | values[..., 2]
+
+
+def _resolve_height_identity_rgb(
+    cache: dict,
+    matched_rgb: np.ndarray,
+) -> np.ndarray:
+    """Return the stable per-pixel relief identity, falling back safely."""
+
+    candidate = cache.get("height_identity_rgb")
+    if candidate is None:
+        candidate = cache.get("original_matched_rgb")
+    try:
+        identity = np.asarray(candidate, dtype=np.uint8)
+    except (TypeError, ValueError):
+        identity = np.asarray(matched_rgb, dtype=np.uint8)
+    if identity.shape != matched_rgb.shape:
+        error_message = (
+            "height_identity_rgb shape does not match matched_rgb; "
+            "falling back to current display colours"
+        )
+        _log.warning(
+            "Height identity shape mismatch; using current matched RGB",
+            extra={
+                "event": "segmented_glb_height_identity_shape_mismatch",
+                "error_type": "ValueError",
+                "error_message": error_message,
+                "height_identity_shape": list(identity.shape),
+                "matched_rgb_shape": list(matched_rgb.shape),
+            },
+        )
+        identity = np.asarray(matched_rgb, dtype=np.uint8)
+    return identity
+
+
 def _coerce_preview_rgba(raw: object) -> np.ndarray | None:
     """Return an RGBA uint8 row from preview colour metadata."""
 
@@ -1096,9 +1172,15 @@ def _add_material_matrix_color_meshes(
     mask_solid: np.ndarray,
     height: int,
     pixel_scale: float,
-    assign_face_colors: bool,
 ) -> int:
-    """Add one physical preview mesh per material/layer from material_matrix."""
+    """Add one vertex-coloured physical mesh per native optical layer.
+
+    Display colours are preserved as compact vertex ranges in GLTF extras
+    while geometry count remains ``O(layer_count)`` instead of
+    ``O(material_count * layer_count)``. Layer 0 is represented exclusively
+    by the solver-coloured appearance shell. Omitting a second layer-0 shell
+    prevents coplanar side walls and z-fighting in the normal viewer.
+    """
 
     layer_count = int(material_matrix.shape[2])
     layer_height_mm = _resolve_material_layer_height_mm(cache)
@@ -1108,10 +1190,13 @@ def _add_material_matrix_color_meshes(
     scale_transform[2, 2] = layer_height_mm
 
     added = 0
-    for layer_idx in range(layer_count):
+    for layer_idx in range(1, layer_count):
         layer = material_matrix[:, :, layer_idx]
         valid_ids = np.unique(layer[np.logical_and(mask_solid, layer >= 0)])
         z_offset_mm = float(layer_count - layer_idx - 1) * layer_height_mm
+        parts: list[trimesh.Trimesh] = []
+        material_segments: list[dict[str, int | str]] = []
+        vertex_cursor = 0
         for raw_material_id in valid_ids:
             material_id = int(raw_material_id)
             color_match = np.logical_and(mask_solid, layer == material_id)
@@ -1123,28 +1208,49 @@ def _add_material_matrix_color_meshes(
                 height,
                 1,
                 rgba,
-                assign_face_colors=assign_face_colors,
+                assign_face_colors=False,
             )
             if mesh is None:
                 continue
-            if not assign_face_colors:
-                _assign_mesh_material_rgba(
-                    mesh,
-                    rgba,
-                    material_name=f"material_{material_id:03d}_layer_{layer_idx:03d}",
-                )
             mesh.apply_transform(scale_transform)
-            min_z = mesh.vertices[:, 2].min()
+            min_z = float(mesh.vertices[:, 2].min())
             if min_z != 0.0:
                 mesh.vertices[:, 2] -= min_z
             if z_offset_mm != 0.0:
                 mesh.vertices[:, 2] += z_offset_mm
-            hex_name = f"{int(rgba[0]):02x}{int(rgba[1]):02x}{int(rgba[2]):02x}"
-            scene.add_geometry(
-                mesh,
-                node_name=f"color_{hex_name}_m{material_id:03d}_l{layer_idx:03d}",
+            material_segments.append(
+                {
+                    "display_hex": (
+                        f"{int(rgba[0]):02x}{int(rgba[1]):02x}"
+                        f"{int(rgba[2]):02x}"
+                    ),
+                    "vertex_start": vertex_cursor,
+                    "vertex_count": int(len(mesh.vertices)),
+                }
             )
-            added += 1
+            vertex_cursor += int(len(mesh.vertices))
+            parts.append(mesh)
+
+        combined = _concatenate_layered_mesh_parts(
+            parts,
+            metadata={
+                "material_segments": material_segments,
+            },
+        )
+        if combined is None:
+            continue
+        _assign_mesh_material_rgba(
+            combined,
+            np.array([255, 255, 255, 255], dtype=np.uint8),
+            material_name=f"layered_physical_{layer_idx:03d}_palette",
+        )
+        node_name = f"color_layered_physical_l{layer_idx:03d}"
+        scene.add_geometry(
+            combined,
+            node_name=node_name,
+            geom_name=node_name,
+        )
+        added += 1
 
     return added
 
@@ -1247,8 +1353,15 @@ def generate_segmented_glb(
     output_path: str,
     max_meshes: int = 128,
 ) -> Optional[str]:
-    """Generate a color-segmented GLB preview with one named Mesh per color.
-    生成按颜色分段的 GLB 预览，每种颜色一个独立 Mesh。
+    """Generate a color-segmented GLB with a bounded scene-node contract.
+    生成按颜色分段、且场景节点总数受控的 GLB 预览。
+
+    LUT previews retain named colour meshes for legacy viewer compatibility.
+    Material-archive previews batch the optical appearance into one mesh and
+    emit at most one physical mesh for each lower layer; display colour,
+    relief-height identity, and physical-layer display colours remain separate.
+    LUT 预览继续保留历史命名色块；耗材档案预览把外观合批为一个 mesh，
+    其余物理层每层至多一个 mesh，同时保留显示色、高度身份与物理层预览色。
 
     Args:
         cache (dict): Preview cache dict containing at least:
@@ -1266,11 +1379,11 @@ def generate_segmented_glb(
             - target_width_mm: physical width in mm; missing/null legacy
               values fall back to ``PrinterConfig.NOZZLE_WIDTH`` per pixel.
             - glb_max_meshes (optional): per-session override that bumps
-              the merge cap above the function default. Set by edit
+              the retained-colour merge cap above the function default. Set by edit
               endpoints (e.g. ``/region-requantize``) that intentionally
               add many low-frequency colours which would otherwise be
               wiped out by the default 128-mesh merge.
-              可选：调用方写入的 mesh 数上限覆盖。例如二次量化会引入
+              可选：调用方写入的保留颜色数上限覆盖。例如二次量化会引入
               大量低频新色，若按默认 128 合并它们会被丢回原色，导致 GLB
               和 2D 预览不一致。
         output_path (str): Required absolute path the exported GLB is written to.
@@ -1285,8 +1398,8 @@ def generate_segmented_glb(
             ``OUTPUT_DIR`` 得到）。共用同一进程级路径会跨会话覆写彼此的 GLB，
             表现为“3D 预览串联”；详见
             ``progress/glb-internals-audit-2026-04-30.md``。
-        max_meshes (int): Default Mesh count before merging when no cache
-            override is present (default 128).
+        max_meshes (int): Default retained-colour limit before low-frequency
+            colours are merged when no cache override is present (default 128).
 
     Returns:
         str: Path to the exported GLB file (== ``output_path`` on success),
@@ -1320,6 +1433,7 @@ def generate_segmented_glb(
 
     if matched_rgb is None or mask_solid is None:
         return None
+    height_identity_rgb = _resolve_height_identity_rgb(cache, matched_rgb)
     material_matrix = _material_matrix_for_segmented_glb(cache, mask_solid)
     if backing_mask is not None:
         try:
@@ -1372,6 +1486,11 @@ def generate_segmented_glb(
             new_h = height // scale_factor
             new_w = width // scale_factor
             matched_rgb = cv2.resize(matched_rgb, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+            height_identity_rgb = cv2.resize(
+                height_identity_rgb,
+                (new_w, new_h),
+                interpolation=cv2.INTER_NEAREST,
+            )
             mask_solid = cv2.resize(
                 mask_solid.astype(np.uint8),
                 (new_w, new_h),
@@ -1467,7 +1586,9 @@ def generate_segmented_glb(
             color_indices[code_idx] = solid_idx[inverse == code_idx]
         _t_merge = time.perf_counter() - _t
 
-        # 4. Build per-color Meshes + Extract 2D contours (single pass)
+        # 4. Build colour geometry + extract 2D contours (single pass).
+        # Material archives concatenate the colour parts into one appearance
+        # node after this loop, so unique colours do not multiply draw calls.
         _t = time.perf_counter()
         total_layers = 25
         scene = trimesh.Scene()
@@ -1482,6 +1603,21 @@ def generate_segmented_glb(
 
         flat_total = width * height
         color_match_flat = np.zeros(flat_total, dtype=bool)
+        appearance_match_flat = np.zeros(flat_total, dtype=bool)
+        material_scale_transform = None
+        material_layer_count = 0
+        material_layer_height_mm = 0.0
+        appearance_parts: list[trimesh.Trimesh] = []
+        height_segments: list[dict[str, int | str]] = []
+        appearance_vertex_cursor = 0
+        height_identity_codes_flat = _rgb_codes(height_identity_rgb).reshape(-1)
+        if material_matrix is not None:
+            material_layer_count = int(material_matrix.shape[2])
+            material_layer_height_mm = _resolve_material_layer_height_mm(cache)
+            material_scale_transform = np.eye(4)
+            material_scale_transform[0, 0] = pixel_scale
+            material_scale_transform[1, 1] = pixel_scale
+            material_scale_transform[2, 2] = material_layer_height_mm
         _t_mask_build = 0.0
         requested_kernel = _resolve_kernel_choice()
         use_material_color = requested_kernel in {"rasterio_manifold3d", "auto"}
@@ -1500,7 +1636,58 @@ def generate_segmented_glb(
             color_match = color_match_flat.reshape(height, width)
             _t_mask_build += time.perf_counter() - _mask_t0
 
-            if not use_material_matrix_meshes:
+            if use_material_matrix_meshes:
+                # Build appearance shells by stable relief identity, not by
+                # physical material. This sole layer-0 shell carries exact 2D
+                # display colours plus immutable per-vertex height ranges.
+                # Keeping only viewer-consumed vertex ranges avoids a second
+                # coplanar shell and geometry multiplication by colour ×
+                # material.
+                top_z_offset_mm = (
+                    float(material_layer_count - 1) * material_layer_height_mm
+                )
+                identity_codes_for_color = height_identity_codes_flat[idxs]
+                for raw_height_code in np.unique(identity_codes_for_color):
+                    height_code = int(raw_height_code)
+                    height_idxs = idxs[
+                        identity_codes_for_color == raw_height_code
+                    ]
+                    appearance_match_flat[height_idxs] = True
+                    appearance_mesh = _build_color_extruded_mesh(
+                        appearance_match_flat.reshape(height, width),
+                        height,
+                        1,
+                        rgba,
+                        assign_face_colors=False,
+                    )
+                    appearance_match_flat[height_idxs] = False
+                    if appearance_mesh is None:
+                        continue
+                    appearance_mesh = _remove_mesh_horizontal_caps(
+                        appearance_mesh,
+                        remove_bottom=True,
+                    )
+                    if appearance_mesh is None:
+                        continue
+                    appearance_mesh.apply_transform(material_scale_transform)
+                    appearance_min_z = float(
+                        appearance_mesh.vertices[:, 2].min()
+                    )
+                    if appearance_min_z != 0.0:
+                        appearance_mesh.vertices[:, 2] -= appearance_min_z
+                    if top_z_offset_mm != 0.0:
+                        appearance_mesh.vertices[:, 2] += top_z_offset_mm
+                    height_segments.append(
+                        {
+                            "height_key": _rgb_code_to_hex(height_code),
+                            "display_hex": hex_name,
+                            "vertex_start": appearance_vertex_cursor,
+                            "vertex_count": int(len(appearance_mesh.vertices)),
+                        }
+                    )
+                    appearance_vertex_cursor += int(len(appearance_mesh.vertices))
+                    appearance_parts.append(appearance_mesh)
+            else:
                 mesh = _build_color_extruded_mesh(
                     color_match,
                     height,
@@ -1537,6 +1724,24 @@ def generate_segmented_glb(
             color_match_flat[idxs] = False
 
         if material_matrix is not None:
+            appearance_mesh = _concatenate_layered_mesh_parts(
+                appearance_parts,
+                metadata={
+                    "height_segments": height_segments,
+                },
+            )
+            if appearance_mesh is not None:
+                _assign_mesh_material_rgba(
+                    appearance_mesh,
+                    np.array([255, 255, 255, 255], dtype=np.uint8),
+                    material_name="layered_appearance_palette",
+                )
+                appearance_node_name = "color_layered_appearance_l000"
+                scene.add_geometry(
+                    appearance_mesh,
+                    node_name=appearance_node_name,
+                    geom_name=appearance_node_name,
+                )
             _add_material_matrix_color_meshes(
                 scene=scene,
                 cache=cache,
@@ -1544,7 +1749,6 @@ def generate_segmented_glb(
                 mask_solid=mask_solid,
                 height=height,
                 pixel_scale=pixel_scale,
-                assign_face_colors=not use_material_color,
             )
 
         _t_mesh_loop = time.perf_counter() - _t

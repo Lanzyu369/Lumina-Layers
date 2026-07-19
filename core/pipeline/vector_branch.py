@@ -1497,6 +1497,13 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
     lut_metadata = ctx.get("lut_metadata")
     preview_timing: dict[str, float] = {}
     vector_preview_total_t0 = time.perf_counter()
+    vector_replacements = _normalize_color_replacements_input(
+        ctx.get("replacement_regions")
+    )
+    if not vector_replacements:
+        vector_replacements = _normalize_color_replacements_input(
+            ctx.get("color_replacements")
+        )
 
     try:
         from core.vector_engine import VectorProcessor  # noqa: F401  -- re-imported for typing parity
@@ -1508,7 +1515,7 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
         analysis = vec_processor.analyze_svg(
             svg_path=image_path,
             target_width_mm=target_width_mm,
-            color_replacements=None,
+            color_replacements=vector_replacements,
         )
         preview_timing.update(
             {
@@ -1558,6 +1565,19 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
         if str(ctx.get("material_source") or "lut") == "material_archive":
             _log_vector_color_drift_diagnostics(analysis, raster_cache)
 
+        pristine_matched_rgb = raster_cache.get(
+            "original_matched_rgb",
+            raster_cache.get("height_identity_rgb", raster_cache["matched_rgb"]),
+        )
+        height_identity_rgb = raster_cache.get(
+            "height_identity_rgb",
+            pristine_matched_rgb,
+        )
+        pristine_material_matrix = raster_cache.get(
+            "original_material_matrix",
+            raster_cache["material_matrix"],
+        )
+
         cache = {
             "target_w": raster_cache["target_w"],
             "target_h": raster_cache["target_h"],
@@ -1567,6 +1587,9 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
             "backing_mask": raster_cache.get("backing_mask"),
             "material_matrix": raster_cache["material_matrix"],
             "matched_rgb": raster_cache["matched_rgb"],
+            "original_matched_rgb": pristine_matched_rgb,
+            "height_identity_rgb": height_identity_rgb,
+            "original_material_matrix": pristine_material_matrix,
             "preview_rgba": raster_cache["preview_rgba"].copy(),
             "color_conf": analysis.color_conf,
             "color_mode": color_mode,
@@ -1638,7 +1661,10 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
         cache["color_palette"] = extract_color_palette(cache)
 
         ctx["matched_rgb"] = raster_cache["matched_rgb"]
+        ctx["original_matched_rgb"] = pristine_matched_rgb
+        ctx["height_identity_rgb"] = height_identity_rgb
         ctx["material_matrix"] = raster_cache["material_matrix"]
+        ctx["original_material_matrix"] = pristine_material_matrix
         ctx["mask_solid"] = raster_cache["mask_solid"]
         ctx["backing_mask"] = raster_cache.get("backing_mask")
         ctx["target_w"] = raster_cache["target_w"]
@@ -1760,6 +1786,7 @@ def _run_vector_branch(ctx: dict) -> dict:
     requested_color_layers = ctx.get("color_layers")
     lut_metadata = ctx.get("lut_metadata")
     matched_rgb_path = ctx.get("matched_rgb_path")
+    height_identity_rgb_path = ctx.get("height_identity_rgb_path")
     mask_solid_path = ctx.get("mask_solid_path")
     material_matrix_path = ctx.get("material_matrix_path")
     vector_preview_pixels_per_mm = 10.0
@@ -1874,6 +1901,12 @@ def _run_vector_branch(ctx: dict) -> dict:
                         material_matrix_path,
                         allow_pickle=False,
                     )
+                cached_height_identity_rgb = None
+                if height_identity_rgb_path:
+                    cached_height_identity_rgb = np.load(
+                        height_identity_rgb_path,
+                        allow_pickle=False,
+                    )
 
                 # Diagnostic 2/4: material_matrix loaded from disk (post pad).
                 if cached_material_matrix is not None:
@@ -1895,6 +1928,7 @@ def _run_vector_branch(ctx: dict) -> dict:
                 rewritten = apply_matched_rgb_overrides_to_analysis(
                     analysis,
                     matched_rgb=cached_matched_rgb,
+                    height_identity_rgb=cached_height_identity_rgb,
                     material_matrix=cached_material_matrix,
                     mask_solid=cached_mask_solid,
                     img_processor=vec_processor.img_processor,
@@ -1923,6 +1957,9 @@ def _run_vector_branch(ctx: dict) -> dict:
                             "event": "vector_matched_rgb_overrides_applied",
                             "shapes_rewritten": int(rewritten),
                             "matched_rgb_path": str(matched_rgb_path),
+                            "height_identity_rgb_path": str(
+                                height_identity_rgb_path or ""
+                            ),
                             "mask_solid_path": str(mask_solid_path),
                         },
                     )
@@ -1938,6 +1975,9 @@ def _run_vector_branch(ctx: dict) -> dict:
                         "error_type": type(exc).__name__,
                         "error_message": str(exc),
                         "matched_rgb_path": str(matched_rgb_path),
+                        "height_identity_rgb_path": str(
+                            height_identity_rgb_path or ""
+                        ),
                         "mask_solid_path": str(mask_solid_path),
                     },
                 )

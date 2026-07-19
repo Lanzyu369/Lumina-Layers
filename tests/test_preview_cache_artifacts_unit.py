@@ -90,6 +90,7 @@ def test_externalize_preview_cache_reuses_artifact_for_same_array_object(
     session_id = store.create("sid-artifact-alias")
     cache = _make_cache()
     cache["original_matched_rgb"] = cache["matched_rgb"]
+    cache["height_identity_rgb"] = cache["matched_rgb"]
     cache["original_material_matrix"] = cache["material_matrix"]
 
     ref = externalize_preview_cache(
@@ -102,10 +103,55 @@ def test_externalize_preview_cache_reuses_artifact_for_same_array_object(
     assert ref["fields"]["original_matched_rgb"]["path"] == (
         ref["fields"]["matched_rgb"]["path"]
     )
+    assert ref["fields"]["height_identity_rgb"]["path"] == (
+        ref["fields"]["original_matched_rgb"]["path"]
+    )
     assert ref["fields"]["original_material_matrix"]["path"] == (
         ref["fields"]["material_matrix"]["path"]
     )
     assert len(store.get_temp_file_paths(session_id)) == 3
+
+
+def test_replaced_cache_separates_current_but_aliases_pristine_identity(
+    tmp_path: Path,
+) -> None:
+    """Artifact bytes match the guard when only current replacement arrays split."""
+
+    store = SessionStore()
+    session_id = store.create("sid-artifact-replaced-alias")
+    cache = _make_cache()
+    pristine_rgb = cache["matched_rgb"]
+    pristine_matrix = cache["material_matrix"]
+    cache["matched_rgb"] = np.full_like(pristine_rgb, 42)
+    cache["material_matrix"] = np.full_like(pristine_matrix, 2)
+    cache["original_matched_rgb"] = pristine_rgb
+    cache["height_identity_rgb"] = pristine_rgb
+    cache["original_material_matrix"] = pristine_matrix
+    cache["preview_rgba"] = np.zeros((2, 2, 4), dtype=np.uint8)
+
+    ref = externalize_preview_cache(
+        session_id,
+        store,
+        cache,
+        root_dir=tmp_path,
+    )
+
+    fields = ref["fields"]
+    assert fields["matched_rgb"]["path"] != fields["original_matched_rgb"]["path"]
+    assert fields["height_identity_rgb"]["path"] == fields["original_matched_rgb"]["path"]
+    assert fields["material_matrix"]["path"] != fields["original_material_matrix"]["path"]
+    unique_refs = {
+        field_ref["path"]: field_ref
+        for field_ref in fields.values()
+    }
+    actual_bytes = sum(int(field_ref["nbytes"]) for field_ref in unique_refs.values())
+    assert actual_bytes == estimate_preview_cache_bytes(
+        width=2,
+        height=2,
+        layers=2,
+        include_original=True,
+        matrix_itemsize=1,
+    )
 
     store.put(session_id, "preview_cache", ref)
     session_data = store.get(session_id)
@@ -130,7 +176,7 @@ def test_externalize_preview_cache_reuses_artifact_for_same_array_object(
     )
     np.testing.assert_array_equal(
         np.load(stored["fields"]["original_matched_rgb"]["path"]),
-        cache["matched_rgb"],
+        pristine_rgb,
     )
 
 

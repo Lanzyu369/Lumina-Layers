@@ -132,16 +132,21 @@ def _create_worker_result_files(cache_data: dict | None = None) -> dict:
     }
 
 
-def _create_worker_artifact_result_files() -> tuple[dict, dict]:
+def _create_worker_artifact_result_files(
+    cache_data: dict | None = None,
+) -> tuple[dict, dict]:
     """Create temp files simulating a worker-side preview-cache artifact."""
     fd, png_path = tempfile.mkstemp(suffix=".png")
     os.close(fd)
     Image.fromarray(_mock_preview_img).save(png_path)
 
-    cache = dict(_mock_cache)
-    cache["preview_rgba"] = np.zeros((80, 120, 4), dtype=np.uint8)
+    cache = dict(cache_data if cache_data is not None else _mock_cache)
+    cache.setdefault("preview_rgba", np.zeros((80, 120, 4), dtype=np.uint8))
     cache["preview_rgba"][..., 3] = 255
-    cache["material_matrix"] = np.zeros((80, 120, 5), dtype=np.int16)
+    cache.setdefault(
+        "material_matrix",
+        np.zeros((80, 120, 5), dtype=np.int16),
+    )
     cache_ref = externalize_preview_cache(
         "worker-artifact",
         _test_store,
@@ -761,6 +766,107 @@ class TestSessionContainsPreviewCache:
         assert raw_entry is not None
         assert raw_entry["path"] == worker_result["raw_preview_png_path"]
         assert worker_result["raw_preview_png_path"] in tracked_paths
+
+    def test_preview_replacement_cache_reset_restores_worker_pristine_arrays(
+        self,
+    ) -> None:
+        """Explicit worker originals must survive route adoption and reset."""
+        buf = _make_test_image_buf()
+        pristine_rgb = np.full((80, 120, 3), [10, 20, 30], dtype=np.uint8)
+        replaced_rgb = np.full((80, 120, 3), [40, 50, 60], dtype=np.uint8)
+        pristine_matrix = np.zeros((80, 120, 5), dtype=np.int16)
+        replaced_matrix = np.full((80, 120, 5), 3, dtype=np.int16)
+        worker_result, worker_cache_ref = _create_worker_artifact_result_files(
+            {
+                **_mock_cache,
+                "matched_rgb": replaced_rgb,
+                "height_identity_rgb": pristine_rgb.copy(),
+                "original_matched_rgb": pristine_rgb.copy(),
+                "material_matrix": replaced_matrix,
+                "original_material_matrix": pristine_matrix.copy(),
+                "preview_rgba": np.dstack(
+                    [replaced_rgb, np.full((80, 120), 255, dtype=np.uint8)]
+                ),
+            }
+        )
+        _mock_pool.submit = AsyncMock(return_value=worker_result)
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+            patch(
+                "api.routers.converter.preview.generate_segmented_glb",
+                return_value=None,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": ("test.png", buf, "image/png")},
+                data={
+                    "lut_name": "test_lut",
+                    "color_mode": "4-Color",
+                    "replacement_regions": json.dumps(
+                        [
+                            {
+                                "quantized_hex": "#0a141e",
+                                "matched_hex": "#0a141e",
+                                "replacement_hex": "#28323c",
+                            }
+                        ]
+                    ),
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        sid = response.json()["session_id"]
+        stored_ref = _test_store.get(sid)["preview_cache"]
+        assert stored_ref["fields"]["original_matched_rgb"]["path"] == (
+            worker_cache_ref["fields"]["original_matched_rgb"]["path"]
+        )
+        assert stored_ref["fields"]["height_identity_rgb"]["path"] == (
+            worker_cache_ref["fields"]["height_identity_rgb"]["path"]
+        )
+        assert stored_ref["fields"]["original_material_matrix"]["path"] == (
+            worker_cache_ref["fields"]["original_material_matrix"]["path"]
+        )
+        before_reset = hydrate_preview_cache(
+            stored_ref,
+            fields={
+                "matched_rgb",
+                "height_identity_rgb",
+                "original_matched_rgb",
+                "material_matrix",
+                "original_material_matrix",
+            },
+        )
+        np.testing.assert_array_equal(before_reset["matched_rgb"], replaced_rgb)
+        np.testing.assert_array_equal(before_reset["material_matrix"], replaced_matrix)
+        np.testing.assert_array_equal(before_reset["height_identity_rgb"], pristine_rgb)
+
+        with patch(
+            "api.routers.converter.replace.schedule_glb_build",
+            return_value="test-reset-token",
+        ):
+            reset_response = client.post(
+                "/api/convert/reset-replacements",
+                json={"session_id": sid},
+            )
+
+        assert reset_response.status_code == 200, reset_response.text
+        reset_ref = _test_store.get(sid)["preview_cache"]
+        after_reset = hydrate_preview_cache(
+            reset_ref,
+            fields={"matched_rgb", "height_identity_rgb", "material_matrix"},
+        )
+        np.testing.assert_array_equal(after_reset["matched_rgb"], pristine_rgb)
+        np.testing.assert_array_equal(after_reset["material_matrix"], pristine_matrix)
+        np.testing.assert_array_equal(after_reset["height_identity_rgb"], pristine_rgb)
 
     def test_preview_uses_worker_precomputed_payloads_without_hydrating_inputs(
         self,

@@ -2684,6 +2684,7 @@ def apply_matched_rgb_overrides_to_analysis(
     analysis: "VectorAnalysis",
     *,
     matched_rgb: np.ndarray,
+    height_identity_rgb: np.ndarray | None = None,
     material_matrix: np.ndarray | None = None,
     mask_solid: np.ndarray,
     img_processor,
@@ -2733,6 +2734,9 @@ def apply_matched_rgb_overrides_to_analysis(
             （``analyze_svg`` 返回的分析结果，就地修改）
         matched_rgb: ``(H, W, 3) uint8`` array taken from ``cache["matched_rgb"]``.
             （取自 ``cache["matched_rgb"]`` 的预览栅格）
+        height_identity_rgb: Optional pristine ``(H, W, 3) uint8`` height
+            identity grid. Display replacements never mutate this grid.
+            （可选的 pristine 高度身份栅格；显示替色不会修改它）
         material_matrix: Optional ``(H, W, N)`` integer recipe grid.
             （可选的 ``(H, W, N)`` 整数配方网格）
         mask_solid: ``(H, W) bool`` array taken from ``cache["mask_solid"]``.
@@ -2800,6 +2804,36 @@ def apply_matched_rgb_overrides_to_analysis(
         if strict:
             raise ValueError(error_message)
         return 0
+
+    identity_arr = None
+    if height_identity_rgb is not None:
+        candidate_identity = np.asarray(height_identity_rgb)
+        identity_is_valid = (
+            candidate_identity.ndim == 3
+            and candidate_identity.shape == matched_arr.shape
+            and candidate_identity.dtype == np.uint8
+        )
+        if not identity_is_valid:
+            error_message = (
+                f"height_identity_rgb shape/dtype "
+                f"{candidate_identity.shape}/{candidate_identity.dtype} "
+                f"does not match matched_rgb {matched_arr.shape}/uint8"
+            )
+            _log.warning(
+                "Vector height identity projection skipped because input is invalid",
+                extra={
+                    "event": "vector_height_identity_input_invalid",
+                    "error_type": "ValueError",
+                    "error_message": error_message,
+                    "height_identity_rgb_shape": list(candidate_identity.shape),
+                    "height_identity_rgb_dtype": str(candidate_identity.dtype),
+                    "matched_rgb_shape": list(matched_arr.shape),
+                },
+            )
+            if strict:
+                raise ValueError(error_message)
+        else:
+            identity_arr = candidate_identity
     if strict and raw_mask_arr.dtype != np.dtype(np.bool_):
         error_message = (
             f"mask_solid dtype {raw_mask_arr.dtype} is not bool"
@@ -2951,6 +2985,29 @@ def apply_matched_rgb_overrides_to_analysis(
         recipe_state = tuple(int(v) for v in (shape.get("recipe") or []))
         return rgb_state, recipe_state
 
+    def _height_identity_state(shape: dict) -> tuple[int, ...] | None:
+        rgb = shape.get("height_identity_rgb")
+        if rgb is None:
+            rgb = shape.get("matched_rgb") or shape.get("color")
+        try:
+            return tuple(int(c) for c in rgb)
+        except (TypeError, ValueError):
+            return None
+
+    def _dominant_rgb(pixels: np.ndarray) -> tuple[int, int, int]:
+        codes = (
+            pixels[:, 0].astype(np.uint32) * np.uint32(65536)
+            + pixels[:, 1].astype(np.uint32) * np.uint32(256)
+            + pixels[:, 2].astype(np.uint32)
+        )
+        uniq, counts = np.unique(codes, return_counts=True)
+        dominant_code = int(uniq[int(np.argmax(counts))])
+        return (
+            (dominant_code >> 16) & 0xFF,
+            (dominant_code >> 8) & 0xFF,
+            dominant_code & 0xFF,
+        )
+
     def _project_component(
         *,
         shape_idx: int,
@@ -2965,19 +3022,15 @@ def apply_matched_rgb_overrides_to_analysis(
         if not np.any(effective_mask):
             return None
 
-        pixels = matched_arr[effective_mask]
-        codes = (
-            pixels[:, 0].astype(np.uint32) * np.uint32(65536)
-            + pixels[:, 1].astype(np.uint32) * np.uint32(256)
-            + pixels[:, 2].astype(np.uint32)
-        )
-        uniq, counts = np.unique(codes, return_counts=True)
-        dominant_code = int(uniq[int(np.argmax(counts))])
-        dominant_rgb = (
-            (dominant_code >> 16) & 0xFF,
-            (dominant_code >> 8) & 0xFF,
-            dominant_code & 0xFF,
-        )
+        dominant_rgb = _dominant_rgb(matched_arr[effective_mask])
+        if identity_arr is not None:
+            dominant_height_identity = _dominant_rgb(
+                identity_arr[effective_mask]
+            )
+        else:
+            dominant_height_identity = _height_identity_state(shape)
+            if dominant_height_identity is None:
+                dominant_height_identity = dominant_rgb
 
         query_lab = img_processor._rgb_to_lab(np.array([dominant_rgb], dtype=np.uint8))
         _, index = img_processor.kdtree.query(query_lab)
@@ -3040,10 +3093,23 @@ def apply_matched_rgb_overrides_to_analysis(
             new_matched_rgb,
             tuple(new_recipe),
         )
+
+        identity_lab = img_processor._rgb_to_lab(
+            np.array([dominant_height_identity], dtype=np.uint8)
+        )
+        _, identity_index = img_processor.kdtree.query(identity_lab)
+        identity_lut_idx = int(np.atleast_1d(identity_index)[0])
+        original_recipe = _normalise_cached_stack_for_vector_recipe(
+            ref_stacks[identity_lut_idx],
+            target_layers=num_layers,
+            num_channels=num_channels,
+        )
         return {
             "matched_rgb": new_matched_rgb,
             "lut_idx": lut_idx,
             "recipe": new_recipe,
+            "height_identity_rgb": dominant_height_identity,
+            "original_recipe": original_recipe,
             "changed": assignment_changed,
         }
 
@@ -3070,23 +3136,40 @@ def apply_matched_rgb_overrides_to_analysis(
                 shape=shape,
                 geom=component,
             )
-            if projection is not None and projection["changed"]:
+            if projection is not None:
                 component_record["matched_rgb"] = projection["matched_rgb"]
                 component_record["lut_idx"] = projection["lut_idx"]
                 component_record["recipe"] = projection["recipe"]
-                changed_components += 1
+                component_record["height_identity_rgb"] = projection[
+                    "height_identity_rgb"
+                ]
+                component_record["original_recipe"] = projection[
+                    "original_recipe"
+                ]
+                if projection["changed"]:
+                    changed_components += 1
             component_records.append(component_record)
 
-        component_states = [_material_state(record) for record in component_records]
+        component_states = [
+            (_material_state(record), _height_identity_state(record))
+            for record in component_records
+        ]
         if len(set(component_states)) <= 1:
             # Preserve the original compound geometry whenever every connected
             # component resolves to the same material assignment. This keeps
             # zero-change and global-replacement exports structurally stable.
-            if component_records and changed_components:
+            if component_records:
                 uniform_record = component_records[0]
-                shape["matched_rgb"] = uniform_record.get("matched_rgb")
-                shape["lut_idx"] = uniform_record.get("lut_idx")
-                shape["recipe"] = list(uniform_record.get("recipe") or [])
+                if changed_components:
+                    shape["matched_rgb"] = uniform_record.get("matched_rgb")
+                    shape["lut_idx"] = uniform_record.get("lut_idx")
+                    shape["recipe"] = list(uniform_record.get("recipe") or [])
+                shape["height_identity_rgb"] = uniform_record.get(
+                    "height_identity_rgb"
+                )
+                shape["original_recipe"] = list(
+                    uniform_record.get("original_recipe") or []
+                )
             projected_shapes.append(shape)
         else:
             # Downstream tiling and mesh construction consume records by value,
@@ -4870,7 +4953,12 @@ class VectorProcessor:
             recipe = [int(value) for value in (item.get("recipe") or [])]
             if geometry is None or geometry.is_empty or not recipe:
                 continue
-            rgb = item.get("matched_rgb") or item.get("color") or ()
+            rgb = (
+                item.get("height_identity_rgb")
+                or item.get("matched_rgb")
+                or item.get("color")
+                or ()
+            )
             try:
                 color_key = f"#{int(rgb[0]):02x}{int(rgb[1]):02x}{int(rgb[2]):02x}"
             except (TypeError, ValueError, IndexError):
@@ -5179,6 +5267,7 @@ class VectorProcessor:
         # displayed as default black when a caller previews ``matched_rgb``
         # without compositing alpha.
         matched_rgb = np.full((h_px, w_px, 3), 255, dtype=np.uint8)
+        height_identity_rgb = np.full((h_px, w_px, 3), 255, dtype=np.uint8)
         quantized_image = np.full((h_px, w_px, 3), 255, dtype=np.uint8)
         mask_solid = np.zeros((h_px, w_px), dtype=bool)
         material_matrix_dtype = _material_matrix_dtype_for_vector_analysis(analysis)
@@ -5187,6 +5276,7 @@ class VectorProcessor:
             -1,
             dtype=material_matrix_dtype,
         )
+        original_material_matrix = np.full_like(material_matrix, -1)
 
         ss = max(1, int(supersample_preview))
         ss_h = h_px * ss
@@ -5402,6 +5492,13 @@ class VectorProcessor:
                 shape.get("color") or shape.get("matched_rgb") or (0, 0, 0),
                 dtype=np.uint8,
             )
+            height_identity_color = np.array(
+                shape.get("height_identity_rgb")
+                or shape.get("matched_rgb")
+                or shape.get("color")
+                or (0, 0, 0),
+                dtype=np.uint8,
+            )
 
             recipe = shape.get("recipe") or []
             recipe_full = np.full(
@@ -5411,6 +5508,14 @@ class VectorProcessor:
             )
             for idx, value in enumerate(recipe[: analysis.num_layers]):
                 recipe_full[idx] = int(value)
+            original_recipe = shape.get("original_recipe") or recipe
+            original_recipe_full = np.full(
+                (analysis.num_layers,),
+                -1,
+                dtype=material_matrix_dtype,
+            )
+            for idx, value in enumerate(original_recipe[: analysis.num_layers]):
+                original_recipe_full[idx] = int(value)
 
             for poly in _iter_polygons(geom):
                 if poly.is_empty:
@@ -5420,9 +5525,19 @@ class VectorProcessor:
                     continue
 
                 _assign_local_mask(matched_rgb, region_mask, matched_color)
+                _assign_local_mask(
+                    height_identity_rgb,
+                    region_mask,
+                    height_identity_color,
+                )
                 _assign_local_mask(quantized_image, region_mask, source_color)
                 _assign_local_mask(mask_solid, region_mask, True)
                 _assign_local_mask(material_matrix, region_mask, recipe_full)
+                _assign_local_mask(
+                    original_material_matrix,
+                    region_mask,
+                    original_recipe_full,
+                )
 
                 if preview_rgba_ss is not None:
                     # preview_rgba is display-only and already supersampled +
@@ -5464,16 +5579,29 @@ class VectorProcessor:
             preview_rgba[mask_solid, :3] = matched_rgb[mask_solid]
             preview_rgba[mask_solid, 3] = 255
 
+        # Preserve object identity for pristine snapshots. The artifact
+        # externalizer deduplicates by ndarray identity, so an unmodified
+        # vector preview writes one RGB and one recipe grid rather than
+        # redundant current/original/height copies. Replaced outputs remain
+        # distinct while original_matched_rgb and height_identity_rgb alias.
+        if np.array_equal(matched_rgb, height_identity_rgb):
+            matched_rgb = height_identity_rgb
+        if np.array_equal(material_matrix, original_material_matrix):
+            material_matrix = original_material_matrix
+
         return {
             "target_w": w_px,
             "target_h": h_px,
             "target_width_mm": w_mm,
             "pixel_scale": (w_mm / w_px) if w_px > 0 else 0.0,
             "matched_rgb": matched_rgb,
+            "original_matched_rgb": height_identity_rgb,
+            "height_identity_rgb": height_identity_rgb,
             "quantized_image": quantized_image,
             "mask_solid": mask_solid,
             "backing_mask": backing_mask if np.any(backing_mask) else mask_solid.copy(),
             "material_matrix": material_matrix,
+            "original_material_matrix": original_material_matrix,
             "preview_rgba": preview_rgba,
         }
 
@@ -5788,9 +5916,21 @@ class VectorProcessor:
                 recipe = cached["recipe"]
                 matched_rgb = cached["matched_rgb"]
                 lut_idx = cached["lut_idx"]
+                height_identity_rgb = cached["height_identity_rgb"]
+                original_recipe = cached["original_recipe"]
             else:
-                lut_idx, lab_dist = self._match_lut_index_for_rgb(query_rgb)
-                matched_rgb = tuple(int(c) for c in self.img_processor.lut_rgb[lut_idx])
+                identity_lut_idx, lab_dist = self._match_lut_index_for_rgb(query_rgb)
+                height_identity_rgb = tuple(
+                    int(c) for c in self.img_processor.lut_rgb[identity_lut_idx]
+                )
+                original_stack = self.img_processor.ref_stacks[identity_lut_idx]
+                original_recipe = _normalise_cached_stack_for_vector_recipe(
+                    original_stack,
+                    target_layers=min(int(num_layers), len(original_stack)),
+                    num_channels=num_channels,
+                )
+                lut_idx = identity_lut_idx
+                matched_rgb = height_identity_rgb
 
                 if replacement_manager is not None:
                     replacement = replacement_manager.get_replacement(matched_rgb)
@@ -5810,6 +5950,8 @@ class VectorProcessor:
                     "recipe": recipe,
                     "matched_rgb": matched_rgb,
                     "lut_idx": lut_idx,
+                    "height_identity_rgb": height_identity_rgb,
+                    "original_recipe": original_recipe,
                     "lab_dist": lab_dist,
                 }
 
@@ -5854,6 +5996,8 @@ class VectorProcessor:
                     "match_color": query_rgb,
                     "matched_rgb": matched_rgb,
                     "lut_idx": int(lut_idx),
+                    "height_identity_rgb": height_identity_rgb,
+                    "original_recipe": list(original_recipe),
                 }
             )
 

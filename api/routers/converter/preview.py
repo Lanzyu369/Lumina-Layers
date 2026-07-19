@@ -170,9 +170,16 @@ def _with_original_preview_cache_refs(ref: dict) -> dict:
     }
     fields = updated["fields"]
     if "matched_rgb" in fields:
-        fields["original_matched_rgb"] = dict(fields["matched_rgb"])
+        fields.setdefault("original_matched_rgb", dict(fields["matched_rgb"]))
+        fields.setdefault(
+            "height_identity_rgb",
+            dict(fields["original_matched_rgb"]),
+        )
     if "material_matrix" in fields:
-        fields["original_material_matrix"] = dict(fields["material_matrix"])
+        fields.setdefault(
+            "original_material_matrix",
+            dict(fields["material_matrix"]),
+        )
     return updated
 _DEFAULT_GENERATE_SEGMENTED_GLB = generate_segmented_glb
 
@@ -1393,17 +1400,29 @@ async def convert_preview(
     if cache_session_value is None and cache_data is not None:
         cache_with_originals = dict(cache_data)
         if "matched_rgb" in cache_data:
-            cache_with_originals["original_matched_rgb"] = cache_data["matched_rgb"]
+            cache_with_originals.setdefault(
+                "original_matched_rgb",
+                cache_data["matched_rgb"],
+            )
+            cache_with_originals.setdefault(
+                "height_identity_rgb",
+                cache_with_originals["original_matched_rgb"],
+            )
         if "material_matrix" in cache_data:
-            cache_with_originals["original_material_matrix"] = cache_data["material_matrix"]
+            cache_with_originals.setdefault(
+                "original_material_matrix",
+                cache_data["material_matrix"],
+            )
         cache_with_originals = _compact_preview_cache_material_matrices(
             cache_with_originals,
         )
         try:
-            cache_session_value = externalize_preview_cache(
-                session_id,
-                store,
-                cache_with_originals,
+            cache_session_value = _with_original_preview_cache_refs(
+                externalize_preview_cache(
+                    session_id,
+                    store,
+                    cache_with_originals,
+                )
             )
         except ROUTER_HANDLED_ERRORS:
             _rollback_preview_session_after_failure(

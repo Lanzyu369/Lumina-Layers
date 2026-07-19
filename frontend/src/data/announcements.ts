@@ -16,6 +16,24 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-07-19",
+    title: {
+      zh: "Lumina Layers — 6 月下旬至 7 月更新速览",
+      en: "Lumina Layers — Late June to July updates",
+    },
+    sections: [
+      {
+        category: { zh: "预览 & 交互", en: "Preview & Interaction" },
+        items: [
+          {
+            zh: "7 月 19 日：耗材档案的 3D 预览现在会按配方叠色显示最终模拟颜色，同时保留真实层数和厚度；画面不会再被最上层耗材色遮住或异常偏亮，浮雕预览也能看出高度差。",
+            en: "July 19: Material-profile 3D previews now show the final simulated recipe colours while keeping the real layer count and thickness. The top filament no longer hides the blended result or makes it look unusually bright, and relief height differences are visible again.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-07-18",
     title: {
       zh: "Lumina Layers — 6 月下旬至 7 月更新速览",

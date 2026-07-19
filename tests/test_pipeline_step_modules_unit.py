@@ -1183,6 +1183,71 @@ class TestS03ColorReplacement:
 
         np.testing.assert_array_equal(result["material_matrix"], original_mat)
 
+    def test_reused_preview_loads_immutable_height_identity_path(self, tmp_path):
+        """S03 must load source-height identities independently of display RGB."""
+        from core.pipeline.s03_color_replacement import run
+
+        ctx = self._make_valid_ctx()
+        ctx["matched_rgb"][:] = [244, 100, 41]
+        height_identity = np.empty_like(ctx["matched_rgb"])
+        height_identity[:, :2] = [190, 230, 248]
+        height_identity[:, 2:] = [17, 34, 51]
+        identity_path = tmp_path / "height_identity_rgb.npy"
+        np.save(identity_path, height_identity)
+        ctx["height_identity_rgb_path"] = str(identity_path)
+
+        result = run(ctx)
+
+        np.testing.assert_array_equal(result["matched_rgb"], ctx["matched_rgb"])
+        np.testing.assert_array_equal(
+            result["height_identity_rgb"], height_identity
+        )
+
+    def test_legacy_matched_path_becomes_default_height_identity(self, tmp_path):
+        """Old callers without the new keyword inherit the final cached RGB."""
+        from core.pipeline.s03_color_replacement import run
+
+        ctx = self._make_valid_ctx()
+        cached_matched = np.full_like(ctx["matched_rgb"], [12, 34, 56])
+        matched_path = tmp_path / "cached_matched_rgb.npy"
+        np.save(matched_path, cached_matched)
+        ctx["matched_rgb_path"] = str(matched_path)
+
+        result = run(ctx)
+
+        np.testing.assert_array_equal(result["matched_rgb"], cached_matched)
+        np.testing.assert_array_equal(
+            result["height_identity_rgb"], cached_matched
+        )
+
+    def test_identity_validates_against_final_matched_grid_not_s02_grid(
+        self,
+        tmp_path,
+    ):
+        """Matched/identity artifacts may share a valid grid unlike S02 RGB."""
+        from core.pipeline.s03_color_replacement import run
+
+        ctx = self._make_valid_ctx()
+        ctx["mask_solid"] = np.ones((2, 3), dtype=bool)
+        ctx["material_matrix"] = np.zeros((2, 3, 5), dtype=int)
+        cached_matched = np.full((2, 3, 3), [244, 100, 41], dtype=np.uint8)
+        height_identity = np.empty_like(cached_matched)
+        height_identity[:, :1] = [190, 230, 248]
+        height_identity[:, 1:] = [17, 34, 51]
+        matched_path = tmp_path / "different_grid_matched.npy"
+        identity_path = tmp_path / "different_grid_identity.npy"
+        np.save(matched_path, cached_matched)
+        np.save(identity_path, height_identity)
+        ctx["matched_rgb_path"] = str(matched_path)
+        ctx["height_identity_rgb_path"] = str(identity_path)
+
+        result = run(ctx)
+
+        np.testing.assert_array_equal(result["matched_rgb"], cached_matched)
+        np.testing.assert_array_equal(
+            result["height_identity_rgb"], height_identity
+        )
+
     def test_missing_matched_rgb_raises_key_error(self):
         """缺失 matched_rgb 键应抛出 KeyError。"""
         from core.pipeline.s03_color_replacement import run
@@ -1267,6 +1332,36 @@ class TestS06VoxelBuilding:
         assert "total_layers" in result
         assert isinstance(result["full_matrix"], np.ndarray)
         assert result["full_matrix"].ndim == 3  # (Z, H, W)
+
+    def test_run_uses_stable_height_identity_after_display_color_collision(self):
+        """S06 entrypoint must retain distinct source heights after one achieved RGB."""
+        from core.pipeline.s06_voxel_building import run
+
+        achieved_rgb = np.array([244, 100, 41], dtype=np.uint8)
+        source_low = np.array([190, 230, 248], dtype=np.uint8)
+        source_high = np.array([17, 34, 51], dtype=np.uint8)
+        ctx = self._make_valid_ctx()
+        ctx.update(
+            {
+                "material_matrix": np.zeros((1, 2, 5), dtype=int),
+                "mask_solid": np.ones((1, 2), dtype=bool),
+                "matched_rgb": np.array(
+                    [[achieved_rgb, achieved_rgb]], dtype=np.uint8
+                ),
+                "height_identity_rgb": np.array(
+                    [[source_low, source_high]], dtype=np.uint8
+                ),
+                "enable_relief": True,
+                "color_height_map": {"bee6f8": 0.48, "112233": 2.0},
+            }
+        )
+
+        result = run(ctx)
+
+        filled_layers = np.count_nonzero(result["full_matrix"] >= 0, axis=0)
+        assert filled_layers[0, 0] == 6
+        assert filled_layers[0, 1] == 25
+        assert result["backing_metadata"]["max_height_mm"] == pytest.approx(2.0)
 
     def test_native_reference_sources_use_metadata_base_channel_for_backing_layers(self):
         """原生/参考 LUT 的底板应使用 metadata.base_channel_idx，而不是通用 backing_color_id。"""
@@ -2080,6 +2175,45 @@ class TestP04CacheBuilding:
         ]
         for key in expected_keys:
             assert key in cache, f"cache 缺少键: {key}"
+
+    def test_cache_preserves_explicit_pristine_replacement_artifacts(self):
+        """P04 must carry worker-owned reset and height identity arrays."""
+        from core.pipeline.p04_cache_building import run
+
+        ctx = self._make_valid_ctx()
+        original_rgb = np.full_like(ctx["matched_rgb"], [10, 20, 30])
+        original_matrix = np.full_like(ctx["material_matrix"], 2)
+        ctx["original_matched_rgb"] = original_rgb
+        ctx["height_identity_rgb"] = original_rgb
+        ctx["original_material_matrix"] = original_matrix
+        ctx["matched_rgb"][:] = [40, 50, 60]
+        ctx["material_matrix"][:] = 3
+
+        cache = run(ctx)["cache"]
+
+        np.testing.assert_array_equal(cache["matched_rgb"], ctx["matched_rgb"])
+        np.testing.assert_array_equal(cache["material_matrix"], ctx["material_matrix"])
+        np.testing.assert_array_equal(cache["original_matched_rgb"], original_rgb)
+        np.testing.assert_array_equal(cache["height_identity_rgb"], original_rgb)
+        np.testing.assert_array_equal(
+            cache["original_material_matrix"],
+            original_matrix,
+        )
+        assert cache["original_matched_rgb"] is original_rgb
+        assert cache["height_identity_rgb"] is original_rgb
+        assert cache["original_material_matrix"] is original_matrix
+
+    def test_cache_aliases_current_arrays_when_preview_has_no_replacements(self):
+        """No-remap previews must not allocate duplicate pristine arrays."""
+        from core.pipeline.p04_cache_building import run
+
+        ctx = self._make_valid_ctx()
+
+        cache = run(ctx)["cache"]
+
+        assert cache["original_matched_rgb"] is cache["matched_rgb"]
+        assert cache["height_identity_rgb"] is cache["matched_rgb"]
+        assert cache["original_material_matrix"] is cache["material_matrix"]
 
     def test_pixel_mode_uses_quantize_colors_as_glb_mesh_budget(self):
         """Pixel previews should keep the user's high colour budget in GLB."""

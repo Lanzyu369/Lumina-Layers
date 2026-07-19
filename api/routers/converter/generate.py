@@ -1554,6 +1554,7 @@ async def convert_generate(
     # 2a. Serialize cached matched_rgb to temp file if requested
     # 当存在区域替换时，将缓存的 matched_rgb 序列化为临时文件供 Worker 使用
     matched_rgb_path: str | None = None
+    height_identity_rgb_path: str | None = None
     mask_solid_path: str | None = None
     material_matrix_path: str | None = None
     reuse_preview_analysis, reuse_preview_analysis_reason = _can_reuse_preview_analysis(
@@ -1641,6 +1642,23 @@ async def convert_generate(
                 matched_rgb_path,
                 "matched_rgb",
             )
+        height_identity_rgb_path = _cache_field_path_or_tempfile(
+            cache=cache,
+            cache_ref=cache_ref,
+            field_name="height_identity_rgb",
+            sid=body.session_id,
+            store=store,
+        )
+        if height_identity_rgb_path is None:
+            height_identity_rgb_path = _cache_field_path_or_tempfile(
+                cache=cache,
+                cache_ref=cache_ref,
+                field_name="original_matched_rgb",
+                sid=body.session_id,
+                store=store,
+            )
+        if height_identity_rgb_path is None:
+            height_identity_rgb_path = matched_rgb_path
         if matched_rgb_path is not None:
             cached_matched_rgb = cache.get("matched_rgb")
             field_ref = (
@@ -1802,6 +1820,7 @@ async def convert_generate(
         "auto_dynamic_range": request.auto_dynamic_range,
         "high_precision_3d_preview": request.high_precision_3d_preview,
         "matched_rgb_path": matched_rgb_path,
+        "height_identity_rgb_path": height_identity_rgb_path,
         "mask_solid_path": mask_solid_path,
         "material_matrix_path": material_matrix_path,
         "reuse_preview_analysis": (

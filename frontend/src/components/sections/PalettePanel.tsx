@@ -241,6 +241,7 @@ export default function PalettePanel({
   const remapHistory = useConverterStore((s) => s.remapHistory);
   const undoColorRemap = useConverterStore((s) => s.undoColorRemap);
   const clearAllRemaps = useConverterStore((s) => s.clearAllRemaps);
+  const replacePreviewLoading = useConverterStore((s) => s.replacePreviewLoading);
   const heightmap_max_height = useConverterStore((s) => s.heightmap_max_height);
   const selectionMode = useConverterStore((s) => s.selectionMode);
   const setSelectionMode = useConverterStore((s) => s.setSelectionMode);
@@ -389,14 +390,14 @@ export default function PalettePanel({
                   variant="secondary"
                   size="sm"
                   onClick={undoColorRemap}
-                  disabled={!hasHistory}
+                  disabled={!hasHistory || replacePreviewLoading}
                 />
                 <Button
                   label={t("palette_clear_remaps")}
                   variant="secondary"
                   size="sm"
                   onClick={clearAllRemaps}
-                  disabled={!hasRemaps}
+                  disabled={!hasRemaps || replacePreviewLoading}
                 />
               </ToolbarGroup>
 

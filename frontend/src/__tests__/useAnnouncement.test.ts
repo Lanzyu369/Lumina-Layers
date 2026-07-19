@@ -27,9 +27,26 @@ function makeEntry(version: string): AnnouncementEntry {
 }
 
 describe("useAnnouncement", () => {
-  it("announces scoped large-format recolouring in the latest update", () => {
-    expect(ANNOUNCEMENTS[0]?.version).toBe("2026-07-18");
+  it("announces the material-profile 3D preview fix in the latest update", () => {
+    expect(ANNOUNCEMENTS[0]?.version).toBe("2026-07-19");
     const items = ANNOUNCEMENTS[0]?.sections.flatMap((section) => section.items) ?? [];
+
+    expect(
+      items.some(
+        (item) =>
+          item.zh.includes("耗材档案") &&
+          item.zh.includes("模拟颜色") &&
+          item.zh.includes("浮雕") &&
+          item.en.includes("Material-profile") &&
+          item.en.toLowerCase().includes("simulated recipe colours") &&
+          item.en.toLowerCase().includes("relief"),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps scoped large-format recolouring in announcement history", () => {
+    const entry = ANNOUNCEMENTS.find((item) => item.version === "2026-07-18");
+    const items = entry?.sections.flatMap((section) => section.items) ?? [];
 
     expect(
       items.some(
@@ -42,9 +59,9 @@ describe("useAnnouncement", () => {
     ).toBe(true);
   });
 
-  it("announces the base-layer alignment fix in the latest update", () => {
-    expect(ANNOUNCEMENTS[0]?.version).toBe("2026-07-18");
-    const items = ANNOUNCEMENTS[0]?.sections.flatMap((section) => section.items) ?? [];
+  it("keeps the base-layer alignment fix in announcement history", () => {
+    const entry = ANNOUNCEMENTS.find((item) => item.version === "2026-07-18");
+    const items = entry?.sections.flatMap((section) => section.items) ?? [];
 
     expect(
       items.some(
@@ -224,8 +241,8 @@ describe("selectAnnouncementHistory", () => {
   });
 
   it("默认历史条数足够覆盖这次 5 月更新回顾", () => {
-    expect(ANNOUNCEMENT_HISTORY_LIMIT).toBeGreaterThanOrEqual(16);
-    expect(selectAnnouncementHistory(ANNOUNCEMENTS).length).toBeGreaterThanOrEqual(16);
+    expect(ANNOUNCEMENT_HISTORY_LIMIT).toBeGreaterThanOrEqual(17);
+    expect(selectAnnouncementHistory(ANNOUNCEMENTS).length).toBeGreaterThanOrEqual(17);
     expect(selectAnnouncementHistory(ANNOUNCEMENTS).map((e) => e.version)).toContain(
       "2026-05-05",
     );

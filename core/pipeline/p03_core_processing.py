@@ -525,61 +525,74 @@ def _run_material_archive_branch(ctx: dict) -> dict:
             target_h, target_w,
         )
 
-        # Re-preview requests can carry the global color replacements already
-        # chosen by the user. Apply them here so the refreshed preview matches
-        # the preserved frontend state before any cleanup mutates pixels.
-        from core.pipeline.s03_color_replacement import (
-            _apply_material_archive_color_replacements,
-            _normalize_color_replacements_input,
+    # ---- Isolated pixel cleanup (honours the user's ``enable_cleanup`` flag) ----
+    # Cleanup belongs to the pristine analysis. Re-preview replacements must be
+    # applied afterwards so reset/undo returns to exactly the same cleaned grid
+    # as a preview that carried no replacements.
+    # 清理属于 pristine 分析；重预览携带的替色必须在其后应用，确保 reset/undo
+    # 精确回到未替色预览的同一份已清理网格。
+    if ctx.get("enable_cleanup", True):
+        from core.isolated_pixel_cleanup import cleanup_isolated_pixels
+
+        matched_rgb, material_matrix = cleanup_isolated_pixels(
+            material_matrix,
+            matched_rgb,
         )
 
-        effective_color_replacements = _normalize_color_replacements_input(
-            ctx.get("replacement_regions")
-        )
-        if effective_color_replacements:
-            matched_rgb, material_matrix, applied_replacements = (
-                _apply_material_archive_color_replacements(
-                    matched_rgb,
-                    material_matrix,
-                    mask_solid,
-                    effective_color_replacements,
-                    materials,
-                    layer_count,
-                    layer_height_mm,
-                    substrate,
-                    grid_resolution=actual_grid or requested_grid,
-                )
-            )
-            _log.debug(
-                "Applied %d material-archive preview color replacements",
-                applied_replacements,
-                extra={
-                    "event": "material_archive_preview_replacements_applied",
-                    "replacement_count": len(effective_color_replacements),
-                    "applied_replacement_count": applied_replacements,
-                },
-            )
-
-        # ---- Isolated pixel cleanup (honours the user's ``enable_cleanup`` flag) ----
-        # Previously only the LUT pipeline ran cleanup — the material-archive
-        # branch silently ignored the checkbox even when ticked in the UI. The
-        # palette-preserving implementation in ``cleanup_isolated_pixels`` works
-        # in both pipelines (it copies stacks/RGB straight from the neighbour
-        # contributing the 8-neighbour mode), so the same call now serves both.
-        # （此前只有 LUT 路径跑清理，耗材档案分支静默忽略前端 checkbox；新版清理
-        # 函数不依赖 LUT，同一调用对两条路径都适用。）
-        if ctx.get("enable_cleanup", True):
-            from core.isolated_pixel_cleanup import cleanup_isolated_pixels
-            matched_rgb, material_matrix = cleanup_isolated_pixels(
-                material_matrix, matched_rgb
-            )
-
-    # ---- Transparent pixels → -1 in material_matrix ----
+    # Transparent pixels are air in both current and pristine recipes.
     material_matrix[mask_transparent] = -1
+
+    # Capture stable reset/relief identity before any display replacement.
+    # These are immutable semantic aliases, not independent working buffers:
+    # the replacement helper allocates current copies only when a mapping
+    # actually touches pixels. Keeping the pristine arrays aliased avoids
+    # tripling large preview caches in the overwhelmingly common no-remap flow.
+    # 这里保存的是不可变语义别名，而不是三份工作副本；只有替色真正命中时，
+    # helper 才会分配 current 副本，避免普通预览无谓放大内存和落盘缓存。
+    original_matched_rgb = np.asarray(matched_rgb, dtype=np.uint8)
+    original_material_matrix = np.asarray(material_matrix)
+    height_identity_rgb = original_matched_rgb
+
+    # Re-preview requests can carry global replacements already chosen by the
+    # user. Apply them only to the current display/recipe arrays.
+    from core.pipeline.s03_color_replacement import (
+        _apply_material_archive_color_replacements,
+        _normalize_color_replacements_input,
+    )
+
+    effective_color_replacements = _normalize_color_replacements_input(
+        ctx.get("replacement_regions")
+    )
+    if effective_color_replacements:
+        matched_rgb, material_matrix, applied_replacements = (
+            _apply_material_archive_color_replacements(
+                matched_rgb,
+                material_matrix,
+                mask_solid,
+                effective_color_replacements,
+                materials,
+                layer_count,
+                layer_height_mm,
+                substrate,
+                grid_resolution=actual_grid or requested_grid,
+            )
+        )
+        _log.debug(
+            "Applied %d material-archive preview color replacements",
+            applied_replacements,
+            extra={
+                "event": "material_archive_preview_replacements_applied",
+                "replacement_count": len(effective_color_replacements),
+                "applied_replacement_count": applied_replacements,
+            },
+        )
 
     # ---- Write output ----
     ctx["matched_rgb"] = matched_rgb
     ctx["material_matrix"] = material_matrix
+    ctx["original_matched_rgb"] = original_matched_rgb
+    ctx["height_identity_rgb"] = height_identity_rgb
+    ctx["original_material_matrix"] = original_material_matrix
     ctx["mask_solid"] = mask_solid
     ctx["target_w"] = target_w
     ctx["target_h"] = target_h

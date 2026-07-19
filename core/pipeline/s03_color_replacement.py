@@ -675,6 +675,7 @@ def run(ctx: dict) -> dict:
         - color_replacements (dict | None): 全局颜色替换映射
         - replacement_regions (list | None): 区域替换列表
         - matched_rgb_path (str | None): 预计算 matched_rgb .npy 文件路径
+        - height_identity_rgb_path (str | None): 稳定高度身份 RGB .npy 路径
         - material_matrix_path (str | None): 预计算 material_matrix .npy 文件路径
         - final_material_matrix_is_authoritative (bool): 颜色映射后保留最终材料矩阵
         - final_material_matrix_authority_mask_path (str | None): 最终矩阵权威区域
@@ -682,6 +683,7 @@ def run(ctx: dict) -> dict:
     PipelineContext 输出键 / Output keys:
         - matched_rgb (np.ndarray): 更新后的 RGB（如有替换）
         - material_matrix (np.ndarray): 更新后的材料矩阵（如有替换）
+        - height_identity_rgb (np.ndarray): 替换前的稳定逐像素高度身份
     """
     _t0 = time.perf_counter()
 
@@ -695,6 +697,7 @@ def run(ctx: dict) -> dict:
     color_replacements = ctx.get("color_replacements")
     replacement_regions = ctx.get("replacement_regions")
     matched_rgb_path = ctx.get("matched_rgb_path")
+    height_identity_rgb_path = ctx.get("height_identity_rgb_path")
     material_matrix_path = ctx.get("material_matrix_path")
     final_material_matrix_is_authoritative = bool(
         ctx.get("final_material_matrix_is_authoritative", False)
@@ -713,39 +716,104 @@ def run(ctx: dict) -> dict:
     # ---- Override matched_rgb with pre-computed array if provided ----
     if matched_rgb_path is not None:
         try:
-            override_rgb = np.load(matched_rgb_path)
-            if override_rgb.shape != matched_rgb.shape:
+            override_rgb = np.asarray(
+                np.load(matched_rgb_path, allow_pickle=False),
+                dtype=np.uint8,
+            )
+            override_has_valid_rank = (
+                override_rgb.ndim == 3 and override_rgb.shape[2] == 3
+            )
+            override_matches_spatial_grid = (
+                override_has_valid_rank
+                and override_rgb.shape[:2] == mask_solid.shape
+                and override_rgb.shape[:2] == material_matrix.shape[:2]
+            )
+            if not override_matches_spatial_grid:
+                error_message = (
+                    f"matched_rgb_path shape {override_rgb.shape} does not "
+                    "match the material/mask grid"
+                )
                 _log.warning(
-                    f"matched_rgb_path shape {override_rgb.shape} "
-                    f"does not match processed shape {matched_rgb.shape}, ignoring override"
+                    "Ignoring matched RGB artifact with an incompatible grid",
+                    extra={
+                        "event": "matched_rgb_artifact_shape_mismatch",
+                        "error_type": "ValueError",
+                        "error_message": error_message,
+                        "path": str(matched_rgb_path),
+                    },
                 )
             else:
-                # Detect pixels that differ between original and override
-                diff_mask = np.any(matched_rgb != override_rgb, axis=-1) & mask_solid
-                if np.any(diff_mask) and processor is not None:
-                    diff_pixels = override_rgb[diff_mask]  # (N, 3)
-                    unique_colors = np.unique(diff_pixels, axis=0)
-                    for color in unique_colors:
-                        color_mask = np.all(override_rgb == color, axis=-1) & diff_mask
-                        repl_lab = processor._rgb_to_lab(color.reshape(1, 3))
-                        _, lut_idx = processor.kdtree.query(repl_lab)
-                        new_stacks = processor.ref_stacks[lut_idx[0]]
-                        material_matrix[color_mask] = new_stacks
+                if override_rgb.shape == matched_rgb.shape:
+                    # Detect pixels that differ between original and override.
+                    diff_mask = np.any(matched_rgb != override_rgb, axis=-1) & mask_solid
+                    if np.any(diff_mask) and processor is not None:
+                        diff_pixels = override_rgb[diff_mask]  # (N, 3)
+                        unique_colors = np.unique(diff_pixels, axis=0)
+                        for color in unique_colors:
+                            color_mask = np.all(override_rgb == color, axis=-1) & diff_mask
+                            repl_lab = processor._rgb_to_lab(color.reshape(1, 3))
+                            _, lut_idx = processor.kdtree.query(repl_lab)
+                            new_stacks = processor.ref_stacks[lut_idx[0]]
+                            material_matrix[color_mask] = new_stacks
+                        _log.debug(
+                            f"matched_rgb override applied: "
+                            f"{np.sum(diff_mask)} pixels updated across {len(unique_colors)} colors"
+                        )
+                    elif np.any(diff_mask):
+                        _log.debug(
+                            "matched_rgb override: %d differing pixels skipped "
+                            "(no LUT processor in material-archive mode)",
+                            int(np.sum(diff_mask)),
+                        )
+                else:
                     _log.debug(
-                        f"matched_rgb override applied: "
-                        f"{np.sum(diff_mask)} pixels updated across {len(unique_colors)} colors"
-                    )
-                elif np.any(diff_mask):
-                    _log.debug(
-                        "matched_rgb override: %d differing pixels skipped "
-                        "(no LUT processor in material-archive mode)",
-                        int(np.sum(diff_mask)),
+                        "matched_rgb override replaced the provisional S02 grid: %s -> %s",
+                        tuple(matched_rgb.shape),
+                        tuple(override_rgb.shape),
                     )
                 matched_rgb = override_rgb
         except (OSError, ValueError, TypeError) as e:
             _log.warning(
-                f"Failed to load matched_rgb_path '{matched_rgb_path}': {e}, " f"using original processed result"
+                "Failed to load matched RGB artifact; using S02 result",
+                extra={
+                    "event": "matched_rgb_artifact_load_failed",
+                    "error_type": type(e).__name__,
+                    "error_message": str(e),
+                    "path": str(matched_rgb_path),
+                },
             )
+
+    # Relief height identity is independent from display colour, but its
+    # spatial contract is defined by the final pre-replacement matched RGB.
+    # Resolve cached matched_rgb first; then load the explicit identity or,
+    # for legacy callers, snapshot that final matched plane.
+    height_identity_rgb = None
+    if height_identity_rgb_path is not None:
+        try:
+            loaded_identity = np.load(
+                height_identity_rgb_path,
+                allow_pickle=False,
+            )
+            if loaded_identity.shape != matched_rgb.shape:
+                raise ValueError(
+                    "height identity shape does not match final matched RGB"
+                )
+            height_identity_rgb = np.asarray(
+                loaded_identity,
+                dtype=np.uint8,
+            )
+        except (OSError, ValueError, TypeError) as exc:
+            _log.warning(
+                "Failed to load height identity artifact; using final matched RGB",
+                extra={
+                    "event": "height_identity_artifact_load_failed",
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                    "path": str(height_identity_rgb_path),
+                },
+            )
+    if height_identity_rgb is None:
+        height_identity_rgb = np.asarray(matched_rgb, dtype=np.uint8).copy()
 
     if material_matrix_path is not None:
         try:
@@ -1074,6 +1142,7 @@ def run(ctx: dict) -> dict:
 
     ctx["matched_rgb"] = matched_rgb
     ctx["material_matrix"] = material_matrix
+    ctx["height_identity_rgb"] = height_identity_rgb
 
     _elapsed = time.perf_counter() - _t0
     _hifi_timings = ctx.get("_hifi_timings", {})

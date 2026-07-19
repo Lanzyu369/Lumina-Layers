@@ -1767,8 +1767,8 @@ export interface ConverterActions {
 
   // 颜色替换（纯前端）
   applyColorRemap: (origHex: string, newHex: string) => void;
-  undoColorRemap: () => void;
-  clearAllRemaps: () => void;
+  undoColorRemap: () => Promise<void>;
+  clearAllRemaps: () => Promise<void>;
 
   // 浮雕高度
   updateColorHeight: (hex: string, heightMm: number) => void;
@@ -5035,69 +5035,189 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       _get().submitSingleReplace(origHex, newHex);
     },
 
-    undoColorRemap: () => {
+    undoColorRemap: async () => {
       const state = _get();
+      if (state.replacePreviewLoading) return;
       if (state.remapHistory.length === 0) return;
+      if (state.regionReplacementCount > 0) {
+        set({
+          error: "存在局部替换时不能撤销全图替换；请使用清空替换。",
+        });
+        return;
+      }
+      const sid = state.sessionId;
       const newHistory = [...state.remapHistory];
       const previousMap = newHistory.pop()!;
-      set({
+      if (!sid) {
+        set({
+          colorRemapMap: previousMap,
+          remapHistory: newHistory,
+          threemfDiskPath: null,
+          downloadUrl: null,
+          error: null,
+        });
+        return;
+      }
+      set({ replacePreviewLoading: true, error: null });
+
+      let resetResponse: Awaited<ReturnType<typeof apiResetReplacements>>;
+      try {
+        // Rebuild the backend from pristine pixels before replaying the
+        // previous whole-colour map. Applying the old map to an already
+        // recoloured cache cannot reliably undo a replacement.
+        resetResponse = await apiResetReplacements(sid);
+      } catch (err) {
+        if (_get().sessionId !== sid) return;
+        set({
+          replacePreviewLoading: false,
+          error: visibleConverterError(err, "撤销颜色替换失败"),
+        });
+        return;
+      }
+      if (_get().sessionId !== sid) return;
+
+      let previewUrl = normalizeResourceUrl(resetResponse.preview_url);
+      let previewGlbUrl = resetResponse.preview_glb_url
+        ? normalizeResourceUrl(resetResponse.preview_glb_url)
+        : undefined;
+      const replayItems = Object.entries(previousMap).map(
+        ([origHex, newHex]) => ({
+          selectedColor: `#${origHex.replace(/^#/, "").toLowerCase()}`,
+          replacementColor: `#${newHex.replace(/^#/, "").toLowerCase()}`,
+        }),
+      );
+      if (replayItems.length > 0) {
+        try {
+          const replayResponse = await apiReplaceColorsBatch(sid, replayItems);
+          if (_get().sessionId !== sid) return;
+          previewUrl = normalizeResourceUrl(replayResponse.preview_url);
+          if (replayResponse.preview_3d_url) {
+            previewGlbUrl = normalizeResourceUrl(
+              replayResponse.preview_3d_url,
+            );
+          }
+        } catch (err) {
+          if (_get().sessionId !== sid) return;
+          const resetUrl = normalizeResourceUrl(resetResponse.preview_url);
+          const resetUpdates: Partial<ConverterState> = {
+            colorRemapMap: {},
+            remapHistory: [],
+            replacement_regions: [],
+            threemfDiskPath: null,
+            downloadUrl: null,
+            regionReplacementCount: 0,
+            regionData: null,
+            selectedRegions: [],
+            gradientSelection: null,
+            selectedGradientRegions: [],
+            selectedColors: new Set<string>(),
+            selectedColor: null,
+            pendingReplacement: null,
+            previewImageUrl: resetUrl,
+            originalPreviewUrl: resetUrl,
+            previewBaseImageUrl: resetUrl,
+            previewGlbUrl: resetResponse.preview_glb_url
+              ? normalizeResourceUrl(resetResponse.preview_glb_url)
+              : null,
+            replacePreviewLoading: false,
+            error: visibleConverterError(err, "撤销颜色替换失败"),
+            ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
+          };
+          set(resetUpdates);
+          _get()._pollAsyncGlb();
+          return;
+        }
+      }
+
+      const updates: Partial<ConverterState> = {
         colorRemapMap: previousMap,
         remapHistory: newHistory,
         threemfDiskPath: null,
         downloadUrl: null,
-      });
-      if (Object.keys(previousMap).length === 0) {
-        const originalUrl = _get().originalPreviewUrl;
-        set({
-          previewImageUrl: originalUrl,
-          previewBaseImageUrl: originalUrl,
-        });
-      } else {
-        _get().submitReplacePreview();
-      }
-    },
-
-    clearAllRemaps: () => {
-      const state = _get();
-      set({
-        colorRemapMap: {},
-        remapHistory: [],
+        previewImageUrl: previewUrl,
+        previewBaseImageUrl: previewUrl,
         replacement_regions: [],
-        threemfDiskPath: null,
-        downloadUrl: null,
+        regionReplacementCount: 0,
         regionData: null,
         selectedRegions: [],
-        regionReplacementCount: 0,
-      });
+        gradientSelection: null,
+        selectedGradientRegions: [],
+        selectedColors: new Set<string>(),
+        selectedColor: null,
+        pendingReplacement: null,
+        replacePreviewLoading: false,
+        ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
+      };
+      updates.previewGlbUrl = previewGlbUrl ?? null;
+      set(updates);
+      _get()._pollAsyncGlb();
+    },
+
+    clearAllRemaps: async () => {
+      const state = _get();
+      if (state.replacePreviewLoading) return;
+      const sid = state.sessionId;
       // 调用后端清空 replacement_regions 并从原始 matched_rgb 重新生成预览和 GLB
       // 不能依赖 originalPreviewUrl，因为 region-replace 会修改后端缓存的 matched_rgb
-      if (state.sessionId) {
-        apiResetReplacements(state.sessionId)
-          .then((res) => {
-            const url = `${res.preview_url}`;
-            const updates: Partial<ConverterState> = {
-              previewImageUrl: url,
-              originalPreviewUrl: url,
-              previewBaseImageUrl: url,
-            };
-            if (res.preview_glb_url) {
-              updates.previewGlbUrl = `${res.preview_glb_url}`;
-            }
-            set(updates);
-            _get()._pollAsyncGlb();
-          })
-          .catch(() => {
-            const fallback = _get().originalPreviewUrl;
-            set({
-              previewImageUrl: fallback,
-              previewBaseImageUrl: fallback,
-            });
-          });
-      } else {
+      if (!sid) {
         const originalUrl = state.originalPreviewUrl;
         set({
+          colorRemapMap: {},
+          remapHistory: [],
+          replacement_regions: [],
+          threemfDiskPath: null,
+          downloadUrl: null,
+          regionData: null,
+          selectedRegions: [],
+          gradientSelection: null,
+          selectedGradientRegions: [],
+          selectedColors: new Set<string>(),
+          selectedColor: null,
+          pendingReplacement: null,
+          regionReplacementCount: 0,
           previewImageUrl: originalUrl,
           previewBaseImageUrl: originalUrl,
+          replacePreviewLoading: false,
+          error: null,
+        });
+        return;
+      }
+      set({ replacePreviewLoading: true, error: null });
+
+      try {
+        const response = await apiResetReplacements(sid);
+        if (_get().sessionId !== sid) return;
+        const url = normalizeResourceUrl(response.preview_url);
+        const updates: Partial<ConverterState> = {
+          colorRemapMap: {},
+          remapHistory: [],
+          replacement_regions: [],
+          threemfDiskPath: null,
+          downloadUrl: null,
+          regionData: null,
+          selectedRegions: [],
+          gradientSelection: null,
+          selectedGradientRegions: [],
+          selectedColors: new Set<string>(),
+          selectedColor: null,
+          pendingReplacement: null,
+          regionReplacementCount: 0,
+          previewImageUrl: url,
+          originalPreviewUrl: url,
+          previewBaseImageUrl: url,
+          previewGlbUrl: response.preview_glb_url
+            ? normalizeResourceUrl(response.preview_glb_url)
+            : null,
+          replacePreviewLoading: false,
+          ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
+        };
+        set(updates);
+        _get()._pollAsyncGlb();
+      } catch (err) {
+        if (_get().sessionId !== sid) return;
+        set({
+          replacePreviewLoading: false,
+          error: visibleConverterError(err, "清空颜色替换失败"),
         });
       }
     },
@@ -6014,6 +6134,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           selectedColors: new Set<string>(),
           regionData: null,
           selectedRegions: [],
+          selectedGradientRegions: [],
           pendingReplacement: null,
           preview_width_mm: state.target_width_mm,
           preview_height_mm: state.target_height_mm,

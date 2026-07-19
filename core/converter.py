@@ -277,6 +277,7 @@ def convert_image_to_3d(
     high_precision_3d_preview: bool = False,
     svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
     *,
+    height_identity_rgb_path: Optional[str] = None,
     final_material_matrix_is_authoritative: bool = False,
     final_material_matrix_authority_mask_path: Optional[str] = None,
     cover_source_path: Optional[str] = None,
@@ -302,6 +303,12 @@ def convert_image_to_3d(
         device_profile_id: Optional generated machine registry device profile
             selection forwarded to 3MF export.
             (可选的机器注册表设备配置 ID，透传给 3MF 导出)
+        height_identity_rgb_path: Optional ``.npy`` path containing immutable
+            per-pixel source RGB identities used for relief-height lookup after
+            display-colour replacement. This is keyword-only so legacy
+            positional callers retain their original argument binding.
+            (可选的 ``.npy`` 路径，保存颜色替换前、用于浮雕高度查找的稳定逐像素
+            RGB 身份；该参数仅允许关键字传入，以保持旧位置参数调用语义不变)
         final_material_matrix_is_authoritative: Preserve a precomputed final
             material matrix after color mappings update display RGB.
             (颜色映射更新显示 RGB 后，仍保留预计算的最终材料矩阵)
@@ -490,6 +497,7 @@ def generate_final_model(
     material_backing_material_index: Optional[int] = None,
     svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
     *,
+    height_identity_rgb_path: Optional[str] = None,
     final_material_matrix_is_authoritative: bool = False,
     final_material_matrix_authority_mask_path: Optional[str] = None,
     cover_source_path: Optional[str] = None,
@@ -513,6 +521,11 @@ def generate_final_model(
         device_profile_id: Optional generated machine registry device profile
             selection forwarded to ``convert_image_to_3d`` and 3MF export.
             (可选的机器注册表设备配置 ID，透传到主转换与 3MF 导出)
+        height_identity_rgb_path: Optional ``.npy`` path containing immutable
+            per-pixel source RGB identities for relief-height lookup. It is
+            keyword-only to preserve all legacy positional argument bindings.
+            (可选的 ``.npy`` 路径，保存浮雕高度查找使用的稳定逐像素源 RGB 身份；
+            该参数仅允许关键字传入，以保持全部旧位置参数调用语义不变)
         final_material_matrix_is_authoritative: Preserve a precomputed final
             material matrix after color mappings update display RGB.
             (颜色映射更新显示 RGB 后，仍保留预计算的最终材料矩阵)
@@ -619,6 +632,7 @@ def generate_final_model(
         hue_weight=hue_weight,
         chroma_gate=chroma_gate,
         matched_rgb_path=matched_rgb_path,
+        height_identity_rgb_path=height_identity_rgb_path,
         mask_solid_path=mask_solid_path,
         material_matrix_path=material_matrix_path,
         reuse_preview_analysis=reuse_preview_analysis,
