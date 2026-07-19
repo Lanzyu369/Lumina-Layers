@@ -110,6 +110,7 @@ export interface SettingsState {
   enableBlur: boolean;
   enableFancyLoading: boolean;
   enableWittyLoading: boolean;
+  enableCompletionNotifications: boolean;
   paletteMode: "swatch" | "card";
   printerModel: string;
   slicerSoftware: string;
@@ -162,6 +163,7 @@ export interface SettingsActions {
   setEnableBlur: (enabled: boolean) => void;
   setEnableFancyLoading: (enabled: boolean) => void;
   setEnableWittyLoading: (enabled: boolean) => void;
+  setEnableCompletionNotifications: (enabled: boolean) => void;
   setPaletteMode: (mode: "swatch" | "card") => void;
   setPrinterModel: (id: string) => void;
   setSlicerSoftware: (id: string) => void;
@@ -193,6 +195,7 @@ export const DEFAULT_SETTINGS: SettingsState = {
   enableBlur: true,
   enableFancyLoading: true,
   enableWittyLoading: true,
+  enableCompletionNotifications: false,
   paletteMode: "swatch",
   printerModel: "bambu-h2d",
   slicerSoftware: "BambuStudio",
@@ -400,6 +403,9 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
 
       setEnableWittyLoading: (enabled: boolean) =>
         set({ enableWittyLoading: enabled }),
+
+      setEnableCompletionNotifications: (enabled: boolean) =>
+        set({ enableCompletionNotifications: enabled }),
 
       setPaletteMode: (mode: "swatch" | "card") => set({ paletteMode: mode }),
 

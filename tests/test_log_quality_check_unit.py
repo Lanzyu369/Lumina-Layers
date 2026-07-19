@@ -345,6 +345,70 @@ def test_fast_mode_app_mounts_local_development_routes() -> None:
     assert "/api/calibration/generate-single-stage-kit" in paths
 
 
+def test_mock_preview_worker_contract_binds_current_worker_signature() -> None:
+    """Fast-gate preview caches must carry the real worker semantics."""
+
+    from api.workers.converter_workers import worker_generate_preview
+
+    worker_args = (
+        "source.svg",
+        "lut.json",
+        60.0,
+        log_quality_check.DEFAULT_COLOR_MODE,
+        log_quality_check.VECTOR_MODELING_MODE,
+        None,
+        None,
+        48,
+        True,
+        False,
+        2.0,
+        True,
+        False,
+        False,
+        None,
+        None,
+        0.0,
+        15.0,
+        False,
+        "lut",
+        None,
+        None,
+        None,
+        None,
+        False,
+        False,
+        10.0,
+        None,
+    )
+
+    contract = log_quality_check._mock_preview_worker_contract(
+        worker_generate_preview,
+        worker_args,
+    )
+
+    assert contract["is_vector"] is True
+    assert contract["color_mode"] == log_quality_check.DEFAULT_COLOR_MODE
+    assert contract["metadata"] == {
+        "target_width_mm": 60.0,
+        "color_mode": log_quality_check.DEFAULT_COLOR_MODE,
+        "modeling_mode": log_quality_check.VECTOR_MODELING_MODE,
+        "color_layers": None,
+        "layer_height_mm": None,
+        "quantize_colors": 48,
+        "enable_cleanup": True,
+        "hue_weight": 0.0,
+        "chroma_gate": 15.0,
+        "use_lut_constrained": False,
+        "auto_dynamic_range": False,
+        "model_enable": False,
+        "model_only": False,
+        "model_threshold": None,
+        "model_margin": None,
+        "svg_pixels_per_mm": 10.0,
+        "material_source": "lut",
+    }
+
+
 def test_fit_stage_a_workflow_step_is_first_class() -> None:
     workflow = _parse_workflow("fit_stage_a")
 

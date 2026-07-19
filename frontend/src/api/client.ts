@@ -200,6 +200,10 @@ function formatValidationDetails(details: unknown[]): string | null {
   return messages.length > 0 ? messages.join("; ") : null;
 }
 
+const STRUCTURED_DETAIL_TRANSLATION_KEYS: ReadonlyMap<string, string> = new Map([
+  ["vector_native_requires_svg", "api_error_vector_native_requires_svg"],
+]);
+
 function extractReadableDetail(data: unknown): string | null {
   if (typeof data === "string" && data.trim()) {
     return data.trim();
@@ -220,6 +224,13 @@ function extractReadableDetail(data: unknown): string | null {
   }
 
   if (isRecord(detail)) {
+    const detailError = detail.error;
+    if (typeof detailError === "string") {
+      const translationKey = STRUCTURED_DETAIL_TRANSLATION_KEYS.get(detailError);
+      if (translationKey) {
+        return tRuntime(translationKey);
+      }
+    }
     const detailMessage = detail.message;
     if (typeof detailMessage === "string" && detailMessage.trim()) {
       return detailMessage.trim();

@@ -38,3 +38,16 @@ class CoreProcessingError(CoreError):
 
     def __init__(self, detail: str):
         super().__init__(detail=detail, error_type="core_processing_error")
+
+
+class CachedPreviewAnalysisError(CoreError):
+    """Raised when explicitly required preview analysis cannot be consumed.
+
+    当用户的空间编辑要求复用预览分析，而缓存三件套无法安全读取或投影时抛出。
+    """
+
+    def __init__(self, detail: str):
+        super().__init__(
+            detail=detail,
+            error_type="cached_preview_analysis_error",
+        )

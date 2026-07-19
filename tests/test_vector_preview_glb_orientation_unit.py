@@ -34,6 +34,22 @@ def test_single_sided_vector_glb_preview_mirrors_front_face_up() -> None:
     assert preview.geometry["Board"].bounds[1][2] < preview.geometry["Red"].bounds[0][2]
 
 
+def test_single_sided_vector_relief_glb_preview_keeps_face_up_scene() -> None:
+    scene = trimesh.Scene()
+    scene.add_geometry(_box_between(0.0, 1.2), geom_name="Board")
+    scene.add_geometry(_box_between(1.205, 1.685), geom_name="Red")
+
+    preview = _make_vector_glb_preview_scene(
+        scene,
+        structure_mode="Single-sided",
+        color_mode="4-Color (RYBW)",
+        enable_relief=True,
+    )
+
+    assert preview is scene
+    assert preview.geometry["Board"].bounds[1][2] < preview.geometry["Red"].bounds[0][2]
+
+
 def test_double_sided_vector_glb_preview_keeps_export_scene() -> None:
     scene = _make_single_sided_scene()
     preview = _make_vector_glb_preview_scene(

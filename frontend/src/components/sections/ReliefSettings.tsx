@@ -4,8 +4,12 @@ import {
   getMaterialArchiveReliefMinimumExtraHeight,
   useConverterStore,
 } from "../../stores/converter";
-import type { AutoHeightMode } from "../../api/types";
-import { ModelingMode } from "../../api/types";
+import {
+  ColorMode,
+  ModelingMode,
+  StructureMode,
+  type AutoHeightMode,
+} from "../../api/types";
 import Checkbox from "../ui/Checkbox";
 import Slider from "../ui/Slider";
 import Dropdown from "../ui/Dropdown";
@@ -28,23 +32,31 @@ export default function ReliefSettings() {
     autoHeightMode,
     heightmapFile,
     heightmapThumbnailUrl,
-    modeling_mode,
     source_version,
     materialLayerCount,
     spacer_thick,
+    color_mode,
+    modeling_mode,
+    structure_mode,
   } = useConverterStore(useShallow((s) => ({
     enable_relief: s.enable_relief,
     heightmap_max_height: s.heightmap_max_height,
     autoHeightMode: s.autoHeightMode,
     heightmapFile: s.heightmapFile,
     heightmapThumbnailUrl: s.heightmapThumbnailUrl,
-    modeling_mode: s.modeling_mode,
     source_version: s.source_version,
     materialLayerCount: s.materialLayerCount,
     spacer_thick: s.spacer_thick,
+    color_mode: s.color_mode,
+    modeling_mode: s.modeling_mode,
+    structure_mode: s.structure_mode,
   })));
 
-  const isVector = modeling_mode === ModelingMode.VECTOR;
+  const isUnsupportedVectorRelief =
+    modeling_mode === ModelingMode.VECTOR &&
+    (color_mode === ColorMode.FIVE_COLOR_EXT ||
+      structure_mode !== StructureMode.SINGLE_SIDED);
+
   const minimumReliefHeight = getMaterialArchiveReliefMinimumExtraHeight({
     source_version,
     materialLayerCount,
@@ -86,17 +98,17 @@ export default function ReliefSettings() {
     <div className="flex flex-col gap-4">
         <Checkbox
           label={t("relief_enable")}
-          checked={isVector ? false : enable_relief}
+          checked={enable_relief}
           onChange={setEnableRelief}
-          disabled={isVector}
+          disabled={isUnsupportedVectorRelief}
+          tooltip={
+            isUnsupportedVectorRelief
+              ? t("relief_vector_unsupported_mode")
+              : undefined
+          }
         />
-        {isVector && (
-          <p className="text-[clamp(0.6rem,0.8vw,0.7rem)] text-slate-400 dark:text-slate-500">
-            {t("relief_vector_unsupported")}
-          </p>
-        )}
 
-        {enable_relief && !isVector && (
+        {enable_relief && (
           <>
             <Slider
               label={t("relief_max_height")}

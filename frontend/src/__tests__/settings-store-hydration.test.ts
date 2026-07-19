@@ -82,6 +82,26 @@ describe("settings store hydration and base-layer modifier wiring", () => {
     ).toBe(true);
   });
 
+  it("hydrates older snapshots with completion notifications disabled", async () => {
+    localStorage.setItem(
+      "lumina-settings",
+      JSON.stringify({
+        state: {
+          theme: "dark",
+        },
+        version: 1,
+      }),
+    );
+
+    const settingsStoreModule = await import("../stores/settingsStore");
+
+    expect(
+      settingsStoreModule.useSettingsStore.getState()
+        .enableCompletionNotifications,
+    ).toBe(false);
+    expect(settingsStoreModule.useSettingsStore.getState().theme).toBe("dark");
+  });
+
   it("setEnableBaseLayerHeightModifier updates state and invalidates generated artifacts", async () => {
     const { settingsStoreModule, artifactModule } = await loadStores();
 

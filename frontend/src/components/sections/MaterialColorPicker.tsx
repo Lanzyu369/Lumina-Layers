@@ -46,18 +46,9 @@ export default function MaterialColorPicker() {
 
   const hasMaterials = (selectedMaterialDirNames ?? []).length > 0;
 
-  const handleSubmitTarget = useCallback(
-    (normalizedTarget: string) => {
-      if (!hasMaterials) return;
-      void fetchSuggestions(normalizedTarget);
-    },
-    [fetchSuggestions, hasMaterials],
-  );
-
-  const handleSuggestionClick = useCallback(
-    (item: MaterialColorSuggestionItem) => {
-      if (replacePreviewLoading) return;
-      const hexNoHash = item.hex.replace(/^#/, "").toLowerCase();
+  const stagePendingReplacement = useCallback(
+    (target: string, options: { requireSource: boolean } = { requireSource: true }) => {
+      const hexNoHash = target.replace(/^#/, "").toLowerCase();
       switch (selectionMode) {
         case "select-all": {
           const colors =
@@ -66,43 +57,79 @@ export default function MaterialColorPicker() {
               : selectedColor
                 ? [selectedColor]
                 : [];
-          if (colors.length === 0) return;
+          if (colors.length === 0) return false;
           setPendingReplacement({
             sourceHex: colors[0],
             targetHex: hexNoHash,
             mode: "select-all",
             sourceColors: colors.length > 1 ? colors : undefined,
           });
-          break;
+          return true;
         }
         case "multi-select": {
-          if (selectedRegions.length === 0) return;
+          if (selectedRegions.length === 0) return false;
           setPendingReplacement({
             sourceHex: selectedColor ?? "",
             targetHex: hexNoHash,
             mode: "multi-select",
             sourceRegions: [...selectedRegions],
           });
-          break;
+          return true;
         }
         case "current":
         case "region": {
+          if (options.requireSource && !selectedColor) return false;
           setPendingReplacement({
             sourceHex: selectedColor ?? "",
             targetHex: hexNoHash,
             mode: selectionMode,
           });
-          break;
+          return true;
         }
       }
     },
     [
-      replacePreviewLoading,
       selectionMode,
       selectedColors,
       selectedRegions,
       selectedColor,
       setPendingReplacement,
+    ],
+  );
+
+  const handleSubmitTarget = useCallback(
+    async (normalizedTarget: string) => {
+      if (!hasMaterials) return;
+      await fetchSuggestions(normalizedTarget);
+      const nextState = useConverterStore.getState();
+      const firstSuggestion =
+        nextState.materialSuggestionsError == null &&
+        nextState.materialSuggestionsTargetHex === normalizedTarget
+          ? nextState.materialSuggestions?.suggestions[0]
+          : null;
+      const staged = firstSuggestion
+        ? stagePendingReplacement(firstSuggestion.hex)
+        : false;
+      if (!staged) {
+        setPendingReplacement(null);
+      }
+    },
+    [
+      fetchSuggestions,
+      hasMaterials,
+      stagePendingReplacement,
+      setPendingReplacement,
+    ],
+  );
+
+  const handleSuggestionClick = useCallback(
+    (item: MaterialColorSuggestionItem) => {
+      if (replacePreviewLoading) return;
+      stagePendingReplacement(item.hex, { requireSource: false });
+    },
+    [
+      replacePreviewLoading,
+      stagePendingReplacement,
     ],
   );
 
@@ -278,7 +305,7 @@ export default function MaterialColorPicker() {
 interface TargetColorInputRowProps {
   initialTarget: string;
   loading: boolean;
-  onSubmit: (normalizedTarget: string) => void;
+  onSubmit: (normalizedTarget: string) => void | Promise<void>;
 }
 
 /**

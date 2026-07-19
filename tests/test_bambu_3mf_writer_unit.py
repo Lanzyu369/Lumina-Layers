@@ -1984,10 +1984,26 @@ class TestAnycubicWriterMetadata:
         out_path = writer.export()
 
         with zipfile.ZipFile(out_path) as package:
+            model_root = ET.fromstring(package.read("3D/3dmodel.model"))
+            core_ns = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
+            model_metadata = {
+                node.attrib["name"]: (node.text or "")
+                for node in model_root.findall("m:metadata", core_ns)
+            }
             project_settings = json.loads(
                 package.read("Metadata/project_settings.config").decode("utf-8")
             )
+            slice_root = ET.fromstring(package.read("Metadata/slice_info.config"))
+            slice_header = slice_root.find("./header")
+            assert slice_header is not None
+            slice_header_items = {
+                item.attrib["key"]: item.attrib["value"]
+                for item in slice_header.findall("header_item")
+            }
 
+        assert model_metadata["Application"] == "SnapmakerOrca-02.02.49.02"
+        assert slice_header_items["X-BBL-Client-Type"] == "slicer"
+        assert slice_header_items["X-BBL-Client-Version"] == "02.02.49.02"
         assert project_settings["printer_settings_id"] == "Snapmaker U1 (0.4 nozzle)"
         assert project_settings["filament_settings_id"] == [
             "Snapmaker PLA Basic @U1"
@@ -1998,6 +2014,47 @@ class TestAnycubicWriterMetadata:
         ]
         assert "inherits_group" not in project_settings
         assert "different_settings_to_system" not in project_settings
+
+    def test_snapmaker_orca_u1_without_device_profile_uses_snapmaker_metadata_fallback(
+        self, tmp_path
+    ) -> None:
+        writer = writer_module.BambuStudio3MFWriter(
+            output_path=str(tmp_path / "snapmaker-u1-snaporca-fallback.3mf"),
+            settings={},
+            color_mode="4-Color",
+            printer_id="snapmaker-u1",
+            slicer="SnapmakerOrca",
+            nozzle_size="0.4",
+        )
+        _add_rybw_meshes(writer)
+
+        out_path = writer.export()
+
+        with zipfile.ZipFile(out_path) as package:
+            model_root = ET.fromstring(package.read("3D/3dmodel.model"))
+            core_ns = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
+            model_metadata = {
+                node.attrib["name"]: (node.text or "")
+                for node in model_root.findall("m:metadata", core_ns)
+            }
+            project_settings = json.loads(
+                package.read("Metadata/project_settings.config").decode("utf-8")
+            )
+            slice_root = ET.fromstring(package.read("Metadata/slice_info.config"))
+            slice_header = slice_root.find("./header")
+            assert slice_header is not None
+            slice_header_items = {
+                item.attrib["key"]: item.attrib["value"]
+                for item in slice_header.findall("header_item")
+            }
+
+        assert model_metadata["Application"] == "SnapmakerOrca-02.02.49.02"
+        assert slice_header_items["X-BBL-Client-Type"] == "slicer"
+        assert slice_header_items["X-BBL-Client-Version"] == "02.02.49.02"
+        assert project_settings["printer_settings_id"] == "Snapmaker U1 (0.4 nozzle)"
+        assert project_settings["filament_settings_id"] == [
+            "Snapmaker PLA Basic @U1"
+        ] * 4
 
     @pytest.mark.parametrize(
         ("slicer", "nozzle_size", "device_profile_id", "expected_filament"),

@@ -24,6 +24,7 @@ Public callables (re-exported by ``coordinator`` for backward compatibility):
 from __future__ import annotations
 
 import inspect
+import math
 import os
 import time
 
@@ -36,6 +37,7 @@ from shapely.validation import make_valid
 
 from api.structured_logging import get_logger
 from config import BedManager, PrinterConfig, normalize_nozzle_size
+from core.errors import CachedPreviewAnalysisError
 from core.geometry_utils import create_keychain_loop
 from core.pipeline import p06_bed_rendering, s09_export_3mf, vector_glb_preview
 from core.pipeline.pipeline_utils import extract_color_palette
@@ -44,6 +46,7 @@ from core.pipeline.processing_ops.svg_rasterizer import rasterize_svg
 from core.pipeline.s08_auxiliary_meshes import (
     _coerce_preview_rgba,
 )
+from core.preview_analysis_cache import preview_analysis_reuse_is_required
 
 # ---------------------------------------------------------------------------
 # Cycle-safe re-import of small helpers that originate in coordinator.
@@ -188,16 +191,25 @@ def _shape_recipe0_histogram(matched_shapes: list) -> dict:
     }
 
 
-def _make_vector_glb_preview_scene(scene, *, structure_mode: object, color_mode: object):
+def _make_vector_glb_preview_scene(
+    scene,
+    *,
+    structure_mode: object,
+    color_mode: object,
+    enable_relief: bool = False,
+):
     """Return a display-oriented copy of a vector scene for GLB previews.
 
-    Single-sided 4-color vector exports place the backing above the color
+    Flat single-sided 4-color vector exports place the backing above the color
     layers for print assembly. The app preview is a display surface, so it
-    mirrors only the GLB source scene and keeps the 3MF/export scene unchanged.
+    mirrors only that flat GLB source scene and keeps relief scenes unchanged.
 
     单面 4 色矢量导出的打印 scene 会把底板放在颜色层上方；应用内 3D 预览是
     展示面，因此只镜像 GLB 的输入 scene，不改变 3MF 导出的原始几何。
     """
+
+    if enable_relief:
+        return scene
 
     structure_value = str(structure_mode or "")
     color_mode_value = str(color_mode or "")
@@ -1176,7 +1188,7 @@ def _update_bambu_base_layer_ctx_for_vector(
 
     if is_double:
         face_orientation = "double"
-    elif is_5color:
+    elif is_5color or bool(ctx.get("enable_relief", False)):
         face_orientation = "up"
     else:
         face_orientation = "down"
@@ -1184,7 +1196,9 @@ def _update_bambu_base_layer_ctx_for_vector(
     ctx["bambu_base_height_mm"] = float(base_height_mm)
     ctx["bambu_color_height_mm"] = float(color_height_mm)
     ctx["bambu_face_orientation"] = face_orientation
-    ctx["enable_base_layer_height_modifier"] = bool(ctx.get("enable_base_layer_height_modifier", True))
+    ctx["enable_base_layer_height_modifier"] = bool(
+        ctx.get("enable_base_layer_height_modifier", True)
+    ) and not bool(ctx.get("enable_relief", False))
 
 
 # ===================================================================
@@ -1344,6 +1358,22 @@ def _log_vector_color_drift_diagnostics(analysis, raster_cache) -> None:
     )
 
 
+def _resolve_vector_layer_height_mm(ctx: dict) -> float:
+    """Return the validated effective layer height for native vector flows.
+
+    普通矢量生成、预览与大画幅切片必须共享同一有效层高；缺失或非法值
+    回退到打印机配置默认值，保持历史 0.08 mm 行为。
+    """
+    fallback = float(PrinterConfig.LAYER_HEIGHT)
+    try:
+        layer_height_mm = float(ctx.get("layer_height_mm") or fallback)
+    except (TypeError, ValueError):
+        return fallback
+    if not math.isfinite(layer_height_mm) or layer_height_mm <= 0:
+        return fallback
+    return layer_height_mm
+
+
 def _build_vector_processor(ctx: dict, *, fallback_color_mode: str):
     """Build a ``VectorProcessor`` for the current ctx.
 
@@ -1368,6 +1398,7 @@ def _build_vector_processor(ctx: dict, *, fallback_color_mode: str):
     """
     from core.vector_engine import VectorProcessor
 
+    layer_height_mm = _resolve_vector_layer_height_mm(ctx)
     has_hue_settings = "hue_weight" in ctx or "chroma_gate" in ctx
     try:
         hue_weight = float(ctx.get("hue_weight") or 0.0)
@@ -1392,7 +1423,6 @@ def _build_vector_processor(ctx: dict, *, fallback_color_mode: str):
                 "_material_params; did P01 / S01 validation run?"
             )
         layer_count = int(ctx.get("color_layers") or 5)
-        layer_height_mm = float(ctx.get("layer_height_mm") or 0.08)
         substrate = str(ctx.get("material_substrate") or "white")
         slot_names = list(ctx.get("slot_names") or [])
         preview_colors = dict(ctx.get("preview_colors") or {})
@@ -1431,6 +1461,7 @@ def _build_vector_processor(ctx: dict, *, fallback_color_mode: str):
             )
         except (TypeError, ValueError):
             processor.gradient_color_bands = 16
+        processor.layer_height_mm = layer_height_mm
         return processor
 
     actual_lut_path = ctx.get("actual_lut_path")
@@ -1440,7 +1471,13 @@ def _build_vector_processor(ctx: dict, *, fallback_color_mode: str):
             "hue_weight": hue_weight,
             "chroma_gate": chroma_gate,
         }
-    return VectorProcessor(actual_lut_path, fallback_color_mode, **processor_kwargs)
+    processor = VectorProcessor(
+        actual_lut_path,
+        fallback_color_mode,
+        **processor_kwargs,
+    )
+    processor.layer_height_mm = layer_height_mm
+    return processor
 
 
 def _run_vector_preview_branch(ctx: dict) -> dict:
@@ -1533,7 +1570,23 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
             "preview_rgba": raster_cache["preview_rgba"].copy(),
             "color_conf": analysis.color_conf,
             "color_mode": color_mode,
+            "color_layers": ctx.get("color_layers"),
+            "layer_height_mm": ctx.get("layer_height_mm"),
+            "model_enable": bool(ctx.get("model_enable", False)),
+            "model_only": bool(ctx.get("model_only", False)),
+            "model_threshold": ctx.get("model_threshold"),
+            "model_margin": ctx.get("model_margin"),
+            "material_source": ctx.get("material_source", "lut"),
+            "modeling_mode": ctx.get("modeling_mode"),
             "quantize_colors": quantize_colors,
+            "enable_cleanup": bool(ctx.get("enable_cleanup", True)),
+            "svg_pixels_per_mm": ctx.get("svg_pixels_per_mm"),
+            "hue_weight": ctx.get("hue_weight", 0.0),
+            "chroma_gate": ctx.get("chroma_gate", 15.0),
+            "use_lut_constrained": bool(
+                ctx.get("use_lut_constrained", False)
+            ),
+            "auto_dynamic_range": bool(ctx.get("auto_dynamic_range", False)),
             "backing_color_id": backing_color_id,
             "is_dark": is_dark,
             "bed_label": BedManager.DEFAULT_BED,
@@ -1791,13 +1844,36 @@ def _run_vector_branch(ctx: dict) -> dict:
         # \u628a ColorWorkstation \u7684\u533a\u57df\u6539\u8272\uff08/region-replace \u7b49\u7aef\u70b9\uff09\u56de\u5199\u5230
         # analysis.matched_shapes\uff0c\u5426\u5219\u77e2\u91cf 3MF \u4f1a\u4e22\u5931\u6240\u6709\u7a7a\u95f4\u66ff\u6362\uff0c\u9020\u6210
         # "2D \u9884\u89c8\u53d8\u4e86\u3001\u6700\u7ec8\u6a21\u578b\u6ca1\u53d8" \u7684\u73b0\u8c61\u3002
+        cached_analysis_required = preview_analysis_reuse_is_required(
+            ctx.get("reuse_preview_analysis")
+        )
+        if cached_analysis_required and not (
+            matched_rgb_path and mask_solid_path and material_matrix_path
+        ):
+            raise CachedPreviewAnalysisError(
+                "Required vector preview analysis artifacts are incomplete"
+            )
         if matched_rgb_path and mask_solid_path:
             try:
-                cached_matched_rgb = np.load(matched_rgb_path)
-                cached_mask_solid = np.load(mask_solid_path).astype(bool)
+                cached_matched_rgb = np.load(
+                    matched_rgb_path,
+                    allow_pickle=False,
+                )
+                raw_mask_solid = np.load(
+                    mask_solid_path,
+                    allow_pickle=False,
+                )
+                cached_mask_solid = (
+                    raw_mask_solid
+                    if cached_analysis_required
+                    else raw_mask_solid.astype(bool)
+                )
                 cached_material_matrix = None
                 if material_matrix_path:
-                    cached_material_matrix = np.load(material_matrix_path)
+                    cached_material_matrix = np.load(
+                        material_matrix_path,
+                        allow_pickle=False,
+                    )
 
                 # Diagnostic 2/4: material_matrix loaded from disk (post pad).
                 if cached_material_matrix is not None:
@@ -1823,6 +1899,7 @@ def _run_vector_branch(ctx: dict) -> dict:
                     mask_solid=cached_mask_solid,
                     img_processor=vec_processor.img_processor,
                     pixels_per_mm=vector_preview_pixels_per_mm,
+                    strict=cached_analysis_required,
                 )
                 # Diagnostic 3/4: shape recipe[0] distribution after
                 # apply_matched_rgb_overrides_to_analysis.
@@ -1850,6 +1927,10 @@ def _run_vector_branch(ctx: dict) -> dict:
                         },
                     )
             except COORDINATOR_HANDLED_ERRORS as exc:
+                if cached_analysis_required:
+                    raise CachedPreviewAnalysisError(
+                        "Required vector preview analysis could not be projected"
+                    ) from exc
                 log.warning(
                     "Failed to apply vector matched RGB overrides",
                     extra={
@@ -1967,6 +2048,15 @@ def _run_vector_branch(ctx: dict) -> dict:
                     if separate_backing
                     else backing_channel_idx
                 )
+            for relief_key in (
+                "enable_relief",
+                "height_mode",
+                "color_height_map",
+                "heightmap_path",
+                "heightmap_max_height",
+            ):
+                if accepts_var_kwargs or relief_key in parameters:
+                    build_mesh_kwargs[relief_key] = ctx.get(relief_key)
 
         # Diagnostic 8/8: sample recipes about to enter build_mesh.
         recipe_samples = []
@@ -2229,9 +2319,10 @@ def _run_vector_branch(ctx: dict) -> dict:
             return ctx
 
         _lw = _resolve_vector_line_width_mm(ctx.get("nozzle_size", "0.4"))
+        layer_height_setting = f"{_resolve_vector_layer_height_mm(ctx):g}"
         vec_print_settings = {
-            "layer_height": "0.08",
-            "initial_layer_height": "0.08",
+            "layer_height": layer_height_setting,
+            "initial_layer_height": layer_height_setting,
             "wall_loops": "1",
             "top_shell_layers": "0",
             "bottom_shell_layers": "1",
@@ -2328,7 +2419,11 @@ def _run_vector_branch(ctx: dict) -> dict:
             slicer=ctx.get("slicer", "BambuStudio"),
             nozzle_size=ctx.get("nozzle_size", "0.4"),
             project_slot_names=vec_slot_list,
-            enable_base_layer_height_modifier=bool(ctx.get("enable_base_layer_height_modifier", True)),
+            enable_base_layer_height_modifier=(
+                bool(ctx.get("enable_base_layer_height_modifier", True))
+                and not bool(ctx.get("enable_relief", False))
+            ),
+            enable_relief=bool(ctx.get("enable_relief", False)),
             base_height_mm=float(ctx.get("bambu_base_height_mm", 0.0)),
             color_height_mm=float(ctx.get("bambu_color_height_mm", 0.0)),
             face_orientation=str(ctx.get("bambu_face_orientation", "down")),
@@ -2362,6 +2457,7 @@ def _run_vector_branch(ctx: dict) -> dict:
                 scene,
                 structure_mode=structure_mode,
                 color_mode=vec_color_mode,
+                enable_relief=bool(ctx.get("enable_relief", False)),
             )
             vector_glb_preview.export_vector_glb_preview(
                 scene=glb_source_scene,
@@ -2449,6 +2545,9 @@ def _run_vector_branch(ctx: dict) -> dict:
             },
         )
         return ctx
+
+    except CachedPreviewAnalysisError:
+        raise
 
     except ModuleNotFoundError as e:
         error_msg = f"Vector processing failed: {e}"

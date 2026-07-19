@@ -255,6 +255,126 @@ class TestApplyMaterialArchiveColorReplacements:
 class TestS03RunMaterialArchiveBranch:
     """Integration checks: the S03 run() step dispatches to the helper."""
 
+    def test_recipe_matrix_authority_is_scoped_after_global_replacement(
+        self,
+        tmp_path,
+    ) -> None:
+        """Real prepare keeps archive global stacks outside recipe coverage."""
+
+        from api.routers.converter.generate import (
+            _prepare_recipe_override_worker_inputs,
+        )
+        from api.schemas.converter import ConvertGenerateRequest
+        from api.session_store import SessionStore
+
+        ctx = _make_material_archive_ctx({"#c86432": "#14c814"})
+        recipe_mask = np.zeros(ctx["mask_solid"].shape, dtype=bool)
+        recipe_mask[0, 1] = True
+        recipe_overrides = [
+            {
+                "region_id": "region-1",
+                "recipe": [2, 2, 2, 2, 2],
+                "layer_order": "Top2Bottom",
+            }
+        ]
+        store = SessionStore(ttl=1800)
+        sid = store.create()
+        session_data = {
+            "material_source": "material_archive",
+            "selected_region_masks": {"region-1": recipe_mask},
+        }
+        request = ConvertGenerateRequest(
+            lut_name="__material_archive__",
+            color_layers=5,
+            recipe_overrides=recipe_overrides,
+        )
+        matrix_path, masks_path = _prepare_recipe_override_worker_inputs(
+            cache={
+                "material_matrix": ctx["material_matrix"].copy(),
+                "mask_solid": ctx["mask_solid"].copy(),
+                "lut_metadata": None,
+            },
+            session_data=session_data,
+            recipe_overrides=recipe_overrides,
+            request=request,
+            sid=sid,
+            store=store,
+        )
+        assert matrix_path is not None
+        assert masks_path is not None
+        prepared_matrix = np.load(matrix_path)
+        assert np.all(prepared_matrix[recipe_mask] == 2)
+        assert np.all(prepared_matrix[~recipe_mask] == 0)
+
+        authority_mask_path = tmp_path / "archive-recipe-authority.npy"
+        np.save(authority_mask_path, recipe_mask)
+        ctx.update(
+            {
+                "material_matrix_path": matrix_path,
+                "final_material_matrix_is_authoritative": True,
+                "final_material_matrix_authority_mask_path": os.fspath(
+                    authority_mask_path
+                ),
+                "recipe_overrides": recipe_overrides,
+                # Large-format tiles consume the prepared matrix and do not
+                # re-run the whole-image recipe mask artifact in the worker.
+                "recipe_override_masks_path": None,
+            }
+        )
+
+        solved_recipe = np.asarray([0, 1, 2, 1, 0], dtype=np.int32)
+
+        class _StubCache:
+            @staticmethod
+            def lookup(targets, _materials):
+                count = targets.shape[0]
+                return (
+                    np.tile(
+                        np.asarray([[10, 200, 20]], dtype=np.uint8),
+                        (count, 1),
+                    ),
+                    np.tile(solved_recipe, (count, 1)),
+                    np.full(count, 0.5, dtype=np.float32),
+                )
+
+        def _keep_baseline(
+            _targets,
+            _materials,
+            matched_rgb_unique,
+            recipes_unique,
+            delta_e,
+            **_kwargs,
+        ):
+            return matched_rgb_unique, recipes_unique, delta_e, {
+                "applied": False,
+                "improved_pixels": 0,
+            }
+
+        try:
+            with patch(
+                "core.material_lut_provider.load_solver_cache",
+                return_value=(_StubCache(), 64),
+            ), patch(
+                "core.material_lut_synthesis.ensure_not_worse_than_smaller_N",
+                side_effect=_keep_baseline,
+            ):
+                result = run(ctx)
+
+            # Solver recipes are Bottom2Top; S03 stores Top2Bottom.
+            expected_global_recipe = solved_recipe[::-1]
+            global_only_mask = np.zeros(recipe_mask.shape, dtype=bool)
+            global_only_mask[:, 1:] = True
+            global_only_mask &= ~recipe_mask
+            assert np.all(
+                result["material_matrix"][global_only_mask]
+                == expected_global_recipe
+            )
+            assert np.all(result["material_matrix"][recipe_mask] == 2)
+            assert np.all(result["material_matrix"][:, 0] == 0)
+            assert np.all(result["matched_rgb"][:, 1:] == [10, 200, 20])
+        finally:
+            store.clear_all()
+
     def test_recipe_override_virtual_material_extends_export_palette(self, tmp_path):
         """Material-archive generation must register virtual recipe channels.
 

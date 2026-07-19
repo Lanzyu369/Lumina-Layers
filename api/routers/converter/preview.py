@@ -77,6 +77,7 @@ from .common import (
     ROUTER_HANDLED_ERRORS,
     _handle_core_error,
     _image_to_png_bytes,
+    _public_pipeline_validation_detail,
     _require_preview_cache,
     _require_session,
     _resolve_material_backing_index,
@@ -104,6 +105,8 @@ LAYER_IMAGES_PREVIEW_CACHE_UNAVAILABLE_DETAIL = (
 )
 VECTOR_PARSE_CLIP_CACHE_MAX_BYTES_ENV = "LUMINA_VECTOR_PARSE_CLIP_CACHE_MAX_BYTES"
 DEFAULT_VECTOR_PARSE_CLIP_CACHE_MAX_BYTES = 64 * 1024 * 1024
+# Keep this aligned with VectorProcessor.build_preview_cache's default width cap.
+VECTOR_PREVIEW_CACHE_MAX_WIDTH_PX = 1600
 PREVIEW_RESPONSE_CACHE_FIELDS = {
     "matched_rgb",
     "mask_solid",
@@ -242,7 +245,7 @@ def _preview_material_matrix_dtype_for_range(
 ) -> np.dtype:
     """Return the smallest signed preview-cache dtype for material indices."""
 
-    for dtype in (np.int16, np.int32, np.int64):
+    for dtype in (np.int8, np.int16, np.int32, np.int64):
         info = np.iinfo(dtype)
         if min_value >= info.min and max_value <= info.max:
             return np.dtype(dtype)
@@ -256,9 +259,14 @@ def _estimate_material_matrix_itemsize(
 ) -> int | None:
     """Estimate persisted material-matrix item size for preview-cache guardrails."""
 
-    if material_source != "material_archive":
-        return None
-    max_material_index = max(0, int(selected_material_count or 0) - 1)
+    if material_source == "material_archive":
+        if selected_material_count is None:
+            return np.dtype(np.int16).itemsize
+        max_material_index = max(0, int(selected_material_count) - 1)
+    else:
+        # Legacy/native LUT stacks use supported color-channel indices, currently
+        # bounded by the 8-color modes, and are compacted before persistence.
+        max_material_index = 7
     return _preview_material_matrix_dtype_for_range(-1, max_material_index).itemsize
 
 
@@ -360,7 +368,12 @@ def _estimate_preview_target_dimensions(
         aspect_ratio = _parse_svg_aspect_ratio(image_path)
         if aspect_ratio is None:
             return None
-        return width, max(1, int(width * aspect_ratio))
+        height = max(1, int(width * aspect_ratio))
+        if modeling_mode == "vector" and width > VECTOR_PREVIEW_CACHE_MAX_WIDTH_PX:
+            ratio = VECTOR_PREVIEW_CACHE_MAX_WIDTH_PX / width
+            width = VECTOR_PREVIEW_CACHE_MAX_WIDTH_PX
+            height = max(1, int(round(height * ratio)))
+        return width, height
 
     try:
         with Image.open(image_path) as img:
@@ -1094,6 +1107,9 @@ async def convert_preview(
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="Preview generation timed out")
     except ROUTER_HANDLED_ERRORS as e:
+        public_detail = _public_pipeline_validation_detail(e)
+        if public_detail is not None:
+            raise HTTPException(status_code=422, detail=public_detail) from e
         log.exception(
             "Preview generation failed",
             extra={

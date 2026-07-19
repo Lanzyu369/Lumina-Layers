@@ -22,9 +22,13 @@ from api.session_store import SessionStore
 from api.structured_logging import bind_session_id, get_logger
 from config import PrinterConfig
 from core.material_lut_synthesis import infer_material_archive_base_channel_idx
+from core.pipeline._input_validation_common import (
+    VECTOR_NATIVE_REQUIRES_SVG_DETAIL,
+)
 
 EPHEMERAL_PREVIEW_TTL_SECONDS = 600
 BATCH_DOWNLOAD_TTL_SECONDS = 3600
+VECTOR_NATIVE_REQUIRES_SVG_ERROR = "vector_native_requires_svg"
 PREVIEW_CACHE_UNAVAILABLE_DETAIL = (
     "Preview data is unavailable. Re-run preview and try again."
 )
@@ -83,6 +87,77 @@ NON_FATAL_GLB_ERRORS = (
     RuntimeError,
     cv2.error,
 )
+
+
+def _public_pipeline_validation_detail(status_msg: object) -> dict[str, str] | None:
+    """Return a public detail for known pipeline validation failures.
+    为已知管线校验错误返回可公开的错误详情。
+    """
+    raw_status = str(status_msg or "").strip()
+    if "Vector Native mode requires SVG files" in raw_status:
+        return {
+            "error": VECTOR_NATIVE_REQUIRES_SVG_ERROR,
+            "message": VECTOR_NATIVE_REQUIRES_SVG_DETAIL,
+        }
+    return None
+
+
+def _integer_value_bounds(value: object) -> tuple[int, int] | None:
+    if value is None:
+        return None
+    try:
+        array = np.asarray(value)
+    except (TypeError, ValueError):
+        return None
+    if array.size == 0:
+        return None
+    if not np.issubdtype(array.dtype, np.integer):
+        try:
+            array = array.astype(np.int64)
+        except (TypeError, ValueError, OverflowError):
+            return None
+    return int(array.min()), int(array.max())
+
+
+def _material_matrix_dtype_for_bounds(min_value: int, max_value: int) -> np.dtype:
+    for dtype in (np.int8, np.int16, np.int32, np.int64):
+        info = np.iinfo(dtype)
+        if min_value >= info.min and max_value <= info.max:
+            return np.dtype(dtype)
+    return np.dtype(np.int64)
+
+
+def _ensure_material_matrix_signed_capacity(
+    material_matrix: np.ndarray,
+    *candidate_values: object,
+) -> np.ndarray:
+    """Return a signed matrix dtype wide enough for pending material ids."""
+
+    if material_matrix.size:
+        min_value = int(material_matrix.min())
+        max_value = int(material_matrix.max())
+    else:
+        min_value = 0
+        max_value = 0
+    for value in candidate_values:
+        bounds = _integer_value_bounds(value)
+        if bounds is None:
+            continue
+        min_value = min(min_value, bounds[0])
+        max_value = max(max_value, bounds[1])
+
+    target_dtype = _material_matrix_dtype_for_bounds(min_value, max_value)
+    if (
+        np.issubdtype(material_matrix.dtype, np.signedinteger)
+        and material_matrix.dtype == target_dtype
+    ):
+        return material_matrix
+    if (
+        np.issubdtype(material_matrix.dtype, np.signedinteger)
+        and material_matrix.dtype.itemsize > target_dtype.itemsize
+    ):
+        return material_matrix
+    return material_matrix.astype(target_dtype, copy=False)
 
 
 def _validate_material_source(material_source: str) -> str:

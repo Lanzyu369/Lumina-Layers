@@ -3,6 +3,9 @@ import * as THREE from "three";
 import {
   computeOutlinePreviewHeight,
   extractHexFromMeshName,
+  isLayeredMaterialColorMeshName,
+  resolvePreviewColorLayerHeightMm,
+  shouldApplyColorRemapToMeshName,
 } from "../components/InteractiveModelViewer";
 import { materializePositionAttributeForGeometryBake } from "../utils/threeQuantizedGeometry";
 
@@ -47,6 +50,50 @@ describe("computeOutlinePreviewHeight", () => {
     expect(
       computeOutlinePreviewHeight(1.2, "Single-sided", true, { ff0000: 2.5, "00ff00": 1.5 }, 12),
     ).toBeCloseTo(3.7, 5);
+  });
+
+  it("uses the active material layer stack height for single-sided preview", () => {
+    expect(
+      computeOutlinePreviewHeight(1.2, "Single-sided", false, {}, 12, 0.8),
+    ).toBeCloseTo(2.0, 5);
+  });
+
+  it("keeps double-sided dynamic material layer stacks in the outline height", () => {
+    expect(
+      computeOutlinePreviewHeight(1.2, "Double-sided", false, {}, 12, 0.8),
+    ).toBeCloseTo(2.8, 5);
+  });
+});
+
+describe("resolvePreviewColorLayerHeightMm", () => {
+  it("falls back to the legacy five-layer height for invalid values", () => {
+    expect(resolvePreviewColorLayerHeightMm(undefined)).toBeCloseTo(0.4, 5);
+    expect(resolvePreviewColorLayerHeightMm(0)).toBeCloseTo(0.4, 5);
+  });
+
+  it("returns the caller-provided positive material stack height", () => {
+    expect(resolvePreviewColorLayerHeightMm(0.8)).toBeCloseTo(0.8, 5);
+  });
+});
+
+describe("isLayeredMaterialColorMeshName", () => {
+  it("recognizes material archive layer mesh names", () => {
+    expect(isLayeredMaterialColorMeshName("color_ff0000_m000_l009")).toBe(true);
+  });
+
+  it("does not classify legacy color meshes as material archive layer meshes", () => {
+    expect(isLayeredMaterialColorMeshName("color_ff0000")).toBe(false);
+    expect(isLayeredMaterialColorMeshName("color_ff0000_chunk001")).toBe(false);
+  });
+});
+
+describe("shouldApplyColorRemapToMeshName", () => {
+  it("keeps legacy color mesh optimistic remaps enabled", () => {
+    expect(shouldApplyColorRemapToMeshName("color_ff0000")).toBe(true);
+  });
+
+  it("does not apply matched-hex remaps to physical material layer meshes", () => {
+    expect(shouldApplyColorRemapToMeshName("color_ff0000_m000_l009")).toBe(false);
   });
 });
 

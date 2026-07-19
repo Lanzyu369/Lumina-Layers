@@ -4,14 +4,23 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from fastapi import APIRouter, FastAPI
+
 from api.routers.converter import router as converter_router
 from api.routers.extractor import router as extractor_router
+
+
+def _router_openapi_paths(router: APIRouter) -> set[str]:
+    """Return mounted paths without depending on FastAPI route internals."""
+    probe_app = FastAPI()
+    probe_app.include_router(router)
+    return set(probe_app.openapi()["paths"])
 
 
 def test_converter_router_prefix_and_key_paths() -> None:
     """Converter package router should preserve external route contract."""
     assert converter_router.prefix == "/api/convert"
-    paths = {route.path for route in converter_router.routes}
+    paths = _router_openapi_paths(converter_router)
     assert "/api/convert/preview" in paths
     assert "/api/convert/generate" in paths
     assert "/api/convert/batch" in paths
@@ -36,7 +45,7 @@ def test_converter_and_material_lut_paths_mounted_in_main_app() -> None:
     """
     from api.app import app
 
-    paths = {route.path for route in app.routes}
+    paths = set(app.openapi()["paths"])
     assert "/api/convert/preview" in paths
     assert "/api/convert/generate" in paths
     assert "/api/convert/replace-color" in paths

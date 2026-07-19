@@ -307,6 +307,15 @@ vi.mock("../api/calibration", () => ({
   generateSingleStageKit: vi.fn(),
 }));
 
+const notificationMocks = vi.hoisted(() => ({
+  showBrowserCompletionNotification: vi.fn(),
+}));
+
+vi.mock("../utils/browserNotifications", () => ({
+  showBrowserCompletionNotification:
+    notificationMocks.showBrowserCompletionNotification,
+}));
+
 const mockCalibrationGenerate = vi.mocked(calibrationGenerate);
 const mockGenerateSingleStageKit = vi.mocked(generateSingleStageKit);
 
@@ -420,6 +429,30 @@ describe("Feature: calibration-tab-integration, Property 6: API 请求载荷与 
       }),
       { numRuns: 100 },
     );
+    expect(
+      notificationMocks.showBrowserCompletionNotification,
+    ).not.toHaveBeenCalled();
+  });
+
+  it("notifies after legacy calibration succeeds", async () => {
+    useSettingsStore.setState({
+      enableCompletionNotifications: true,
+      language: "en",
+    });
+    mockCalibrationGenerate.mockResolvedValueOnce({
+      status: "ok",
+      message: "success",
+      download_url: "/test.3mf",
+      threemf_disk_path: "/tmp/test.3mf",
+      preview_url: null,
+      layer_urls: null,
+    });
+
+    await useCalibrationStore.getState().submitLegacyGenerate();
+
+    expect(
+      notificationMocks.showBrowserCompletionNotification,
+    ).toHaveBeenCalledWith("calibration", "en");
   });
 
   it("submitGenerate sends single-stage layer height when workflow is single-stage", async () => {
@@ -430,6 +463,10 @@ describe("Feature: calibration-tab-integration, Property 6: API 请求载荷与 
       substrateDisplayName: "White",
       materialDefault: "PLA Basic",
       singleStageLayerHeightMm: 0.1,
+    });
+    useSettingsStore.setState({
+      enableCompletionNotifications: true,
+      language: "zh",
     });
 
     mockGenerateSingleStageKit.mockResolvedValueOnce({
@@ -456,5 +493,30 @@ describe("Feature: calibration-tab-integration, Property 6: API 请求载荷与 
       "Sample",
     ]);
     expect(useCalibrationStore.getState().singleStageJobs).toEqual([]);
+    expect(
+      notificationMocks.showBrowserCompletionNotification,
+    ).toHaveBeenCalledWith("calibration", "zh");
+  });
+
+  it("does not notify when either calibration workflow fails", async () => {
+    useSettingsStore.setState({ enableCompletionNotifications: true });
+    mockCalibrationGenerate.mockRejectedValueOnce(new Error("legacy failed"));
+
+    await useCalibrationStore.getState().submitLegacyGenerate();
+
+    useCalibrationStore.setState({
+      workflow: "single-stage",
+      error: null,
+    });
+    mockGenerateSingleStageKit.mockRejectedValueOnce(
+      new Error("single-stage failed"),
+    );
+
+    await useCalibrationStore.getState().submitSingleStageGenerate();
+
+    expect(useCalibrationStore.getState().error).not.toBeNull();
+    expect(
+      notificationMocks.showBrowserCompletionNotification,
+    ).not.toHaveBeenCalled();
   });
 });

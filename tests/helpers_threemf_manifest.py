@@ -226,10 +226,10 @@ def expected_family_signature(printer_id: str, slicer: str, nozzle_size: str) ->
         }
     if slicer == "SnapmakerOrca":
         return {
-            "application": "BambuStudio-2.2.4",
+            "application": "SnapmakerOrca-02.02.49.02",
             "slice_header": {
                 "X-BBL-Client-Type": "slicer",
-                "X-BBL-Client-Version": "",
+                "X-BBL-Client-Version": "02.02.49.02",
             },
             "requires_filament_sequence": False,
             "requires_cut_information": False,

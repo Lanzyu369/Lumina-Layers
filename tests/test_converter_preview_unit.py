@@ -34,6 +34,7 @@ from api.preview_cache_artifacts import (
     is_preview_cache_artifact_ref,
 )
 from api.routers.converter.preview import (
+    _compact_preview_cache_material_matrices,
     _enforce_preview_cache_size_limit,
     _get_large_format_svg_preview_cache_max_bytes,
     _parse_selected_materials,
@@ -45,6 +46,9 @@ from api.file_registry import FileRegistry
 from api.worker_pool import WorkerPoolManager
 from api.workers.converter_workers import worker_generate_preview
 from config import TEMP_DIR
+from core.pipeline._input_validation_common import (
+    VECTOR_NATIVE_REQUIRES_SVG_DETAIL,
+)
 
 # Isolated store/registry per test module to avoid cross-test pollution
 _test_store: SessionStore = SessionStore(ttl=1800)
@@ -644,7 +648,7 @@ class TestSessionContainsPreviewCache:
         )
 
     def test_preview_compacts_material_matrix_before_externalizing(self) -> None:
-        """Material matrices should not keep int32 when a signed int16 fits."""
+        """Material matrices should not keep int32 when a smaller signed dtype fits."""
         buf = _make_test_image_buf()
         material_matrix = np.full((80, 120, 9), 17, dtype=np.int32)
         material_matrix[0, 0, :] = -1
@@ -683,22 +687,22 @@ class TestSessionContainsPreviewCache:
         session_data = _test_store.get(response.json()["session_id"])
         assert session_data is not None
         cache_ref = session_data["preview_cache"]
-        assert cache_ref["fields"]["material_matrix"]["dtype"] == "int16"
-        assert cache_ref["fields"]["original_material_matrix"]["dtype"] == "int16"
+        assert cache_ref["fields"]["material_matrix"]["dtype"] == "int8"
+        assert cache_ref["fields"]["original_material_matrix"]["dtype"] == "int8"
 
         loaded_cache = hydrate_preview_cache(
             cache_ref,
             fields={"material_matrix", "original_material_matrix"},
         )
-        assert loaded_cache["material_matrix"].dtype == np.int16
-        assert loaded_cache["original_material_matrix"].dtype == np.int16
+        assert loaded_cache["material_matrix"].dtype == np.int8
+        assert loaded_cache["original_material_matrix"].dtype == np.int8
         np.testing.assert_array_equal(
             loaded_cache["material_matrix"],
-            material_matrix.astype(np.int16),
+            material_matrix.astype(np.int8),
         )
         np.testing.assert_array_equal(
             loaded_cache["original_material_matrix"],
-            material_matrix.astype(np.int16),
+            material_matrix.astype(np.int8),
         )
 
     def test_preview_adopts_worker_cache_artifact_ref(self) -> None:
@@ -1760,6 +1764,39 @@ class TestGeneralExceptionReturns500:
         assert log_extra["error_message"] == response.json()["detail"]
         assert private_path not in log_extra["error_message"]
 
+    def test_preview_vector_source_mismatch_returns_actionable_422(self) -> None:
+        """Known VECTOR + raster validation errors must remain user-visible."""
+        buf = _make_test_image_buf()
+        _mock_pool.submit = AsyncMock(
+            side_effect=RuntimeError(VECTOR_NATIVE_REQUIRES_SVG_DETAIL)
+        )
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": ("test.png", buf, "image/png")},
+                data={
+                    "lut_name": "test_lut",
+                    "color_mode": "4-Color",
+                    "modeling_mode": "vector",
+                },
+            )
+
+        assert response.status_code == 422
+        assert response.json()["detail"] == {
+            "error": "vector_native_requires_svg",
+            "message": VECTOR_NATIVE_REQUIRES_SVG_DETAIL,
+        }
+
     def test_preview_missing_worker_output_uses_public_error_language(self) -> None:
         """Worker status_msg should not leak local paths when no PNG is returned."""
         buf = _make_test_image_buf()
@@ -2103,6 +2140,82 @@ class TestParseSelectedMaterials:
 class TestLargeFormatSvgPreviewCacheSizing:
     """Regression coverage for tall SVG + material archive preview guard."""
 
+    def test_legacy_large_format_svg_uses_compact_matrix_estimate(
+        self, tmp_path
+    ) -> None:
+        """LUM-20260629-002 should fit a 1 GiB cap after runtime-sized estimate."""
+        svg_path = tmp_path / "large.svg"
+        svg_path.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" '
+            'width="4990" height="6987" viewBox="0 0 4990 6987">'
+            '<path d="M0 0H4990V6987H0Z" fill="#ffffff"/>'
+            "</svg>",
+            encoding="utf-8",
+        )
+
+        _enforce_preview_cache_size_limit(
+            image_path=str(svg_path),
+            target_width_mm=499,
+            modeling_mode="vector",
+            svg_pixels_per_mm=10,
+            color_layers=None,
+            material_layer_count=None,
+            material_source="lut",
+            max_bytes=1024 * 1024 * 1024,
+        )
+
+    def test_vector_svg_preview_estimate_matches_runtime_width_cap(
+        self, tmp_path
+    ) -> None:
+        """Large vector SVG estimates should match the 1600px preview cache cap."""
+        svg_path = tmp_path / "large.svg"
+        svg_path.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" '
+            'width="4990" height="6987" viewBox="0 0 4990 6987">'
+            '<path d="M0 0H4990V6987H0Z" fill="#ffffff"/>'
+            "</svg>",
+            encoding="utf-8",
+        )
+
+        try:
+            _enforce_preview_cache_size_limit(
+                image_path=str(svg_path),
+                target_width_mm=499,
+                modeling_mode="vector",
+                svg_pixels_per_mm=10,
+                color_layers=None,
+                material_layer_count=None,
+                material_source="lut",
+                max_bytes=1,
+            )
+        except Exception as exc:
+            assert getattr(exc, "status_code", None) == 422
+            assert exc.detail["error"] == "preview_cache_size_limit_exceeded"
+            assert exc.detail["estimated_width"] == 1600
+            assert exc.detail["estimated_height"] == 2240
+        else:
+            raise AssertionError("explicit 1 byte cap should reject the preview")
+
+    def test_material_matrix_compaction_uses_int8_for_small_signed_indices(
+        self,
+    ) -> None:
+        """Small material indices should be stored using the smallest signed dtype."""
+        material_matrix = np.array(
+            [[[-1, 0, 1, 7], [2, 3, 4, 5]]],
+            dtype=np.int32,
+        )
+
+        compacted = _compact_preview_cache_material_matrices(
+            {
+                "material_matrix": material_matrix,
+                "original_material_matrix": material_matrix.copy(),
+            }
+        )
+
+        assert compacted["material_matrix"].dtype == np.dtype(np.int8)
+        assert compacted["original_material_matrix"].dtype == np.dtype(np.int8)
+        np.testing.assert_array_equal(compacted["material_matrix"], material_matrix)
+
     def test_material_svg_290mm_10_layer_preview_not_limited_by_default(
         self, tmp_path
     ) -> None:
@@ -2149,13 +2262,13 @@ class TestLargeFormatSvgPreviewCacheSizing:
                 color_layers=None,
                 material_layer_count=5,
                 material_source="material_archive",
-                max_bytes=512 * 1024 * 1024,
+                max_bytes=256 * 1024 * 1024,
             )
         except Exception as exc:
             assert getattr(exc, "status_code", None) == 422
             assert exc.detail["error"] == "preview_cache_size_limit_exceeded"
         else:
-            raise AssertionError("explicit 512 MiB cap should reject the preview")
+            raise AssertionError("explicit 256 MiB cap should reject the preview")
 
     def test_material_archive_svg_uses_compacted_matrix_estimate(self, tmp_path) -> None:
         """Material archive cache estimates should match compact persisted matrices."""

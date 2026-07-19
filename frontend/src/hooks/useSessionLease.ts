@@ -10,7 +10,7 @@ import { useActionHistoryStore } from "../stores/actionHistoryStore";
 import type { Workstream } from "../types/actionHistory";
 
 const HEARTBEAT_INTERVAL_MS = 2 * 60 * 1000;
-const SESSION_CLOSE_DELAY_MS = 0;
+const SESSION_CLOSE_DELAY_MS = 30_000;
 const EMPTY_KEEP_FILE_IDS: readonly string[] = [];
 const pendingSessionCloseTimers = new Map<string, number>();
 

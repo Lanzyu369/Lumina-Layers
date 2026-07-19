@@ -10,6 +10,7 @@ import {
   detectColorEdges,
   rasterizeColorMeshesToGrid,
   resetCloisonneWireGeometryDisposeForTests,
+  selectVisibleCloisonneColorMeshes,
 } from "../components/CloisonneWire3D";
 import { materializePositionAttributeForGeometryBake } from "../utils/threeQuantizedGeometry";
 
@@ -233,6 +234,26 @@ describe("CloisonneWire3D — Unit Tests", () => {
       for (let i = 0; i < edges.length; i++) {
         expect(edges[i]).toBe(0);
       }
+    });
+  });
+
+  describe("material archive layer filtering", () => {
+    it("uses only the visible top material layer for cloisonne boundaries", () => {
+      const top = createRectMesh(0, 0, 4, 4);
+      top.name = "color_ff0000_m000_l000";
+      const hidden = createRectMesh(4, 0, 4, 4);
+      hidden.name = "color_0000ff_m001_l001";
+      const selected = selectVisibleCloisonneColorMeshes([top, hidden]);
+      expect(selected).toEqual([top]);
+    });
+
+    it("keeps legacy color meshes unchanged", () => {
+      const red = createRectMesh(0, 0, 4, 4);
+      red.name = "color_ff0000";
+      const blue = createRectMesh(4, 0, 4, 4);
+      blue.name = "color_0000ff";
+      const meshes = [red, blue];
+      expect(selectVisibleCloisonneColorMeshes(meshes)).toBe(meshes);
     });
   });
 

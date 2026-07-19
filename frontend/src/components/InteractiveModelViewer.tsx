@@ -64,11 +64,30 @@ export interface InteractiveModelViewerProps {
   rasterCellSize?: number;
   puzzleOverlayEnabled?: boolean;
   puzzleOverlayUrl?: string | null;
+  colorLayerHeightMm?: number;
 }
 
-/** Color layer thickness in mm (5 layers × 0.08mm). */
-const COLOR_LAYER_HEIGHT = 0.4;
+/** Default color layer thickness in mm (5 layers x 0.08mm). */
+export const DEFAULT_COLOR_LAYER_HEIGHT_MM = 0.4;
 const PREVIEW_CANVAS_BOUNDS_NODE_NAME = "preview_canvas_bounds";
+const MATERIAL_LAYER_MESH_RE = /^color_[0-9a-fA-F]{6}_m\d+_l\d+$/;
+
+export function resolvePreviewColorLayerHeightMm(
+  colorLayerHeightMm?: number,
+): number {
+  const value = typeof colorLayerHeightMm === "number" ? colorLayerHeightMm : NaN;
+  return Number.isFinite(value) && value > 0
+    ? value
+    : DEFAULT_COLOR_LAYER_HEIGHT_MM;
+}
+
+export function isLayeredMaterialColorMeshName(meshName: string): boolean {
+  return MATERIAL_LAYER_MESH_RE.test(meshName);
+}
+
+export function shouldApplyColorRemapToMeshName(meshName: string): boolean {
+  return !isLayeredMaterialColorMeshName(meshName);
+}
 
 export function computeOutlinePreviewHeight(
   spacerThick: number,
@@ -76,16 +95,18 @@ export function computeOutlinePreviewHeight(
   enableRelief: boolean,
   colorHeightMap: Record<string, number>,
   fallbackModelMaxZ: number,
+  colorLayerHeightMm: number = DEFAULT_COLOR_LAYER_HEIGHT_MM,
 ): number {
   const safeSpacerThick = Number.isFinite(spacerThick)
     ? Math.max(0, spacerThick)
     : 0;
+  const resolvedColorLayerHeight = resolvePreviewColorLayerHeightMm(colorLayerHeightMm);
   const reliefHeights = Object.values(colorHeightMap).filter(
     (height) => Number.isFinite(height) && height > 0,
   );
   const colorLayerHeight = enableRelief && reliefHeights.length > 0
-    ? Math.max(COLOR_LAYER_HEIGHT, ...reliefHeights)
-    : COLOR_LAYER_HEIGHT * (structureMode.includes("Double") ? 2 : 1);
+    ? Math.max(resolvedColorLayerHeight, ...reliefHeights)
+    : resolvedColorLayerHeight * (structureMode.includes("Double") ? 2 : 1);
   const livePreviewHeight = safeSpacerThick + colorLayerHeight;
   if (livePreviewHeight > 0) {
     return livePreviewHeight;
@@ -112,10 +133,12 @@ function InteractiveModelViewer({
   rasterCellSize,
   puzzleOverlayEnabled = false,
   puzzleOverlayUrl = null,
+  colorLayerHeightMm = DEFAULT_COLOR_LAYER_HEIGHT_MM,
 }: InteractiveModelViewerProps) {
   const { scene } = useGLTF(url);
   const groupRef = useRef<THREE.Group>(null);
   useGltfCacheLifecycle(url, useGLTF.clear);
+  const previewColorLayerHeightMm = resolvePreviewColorLayerHeightMm(colorLayerHeightMm);
 
   useEffect(() => {
     debugThreeLog("InteractiveModelViewer.lifecycle", {
@@ -434,6 +457,7 @@ function InteractiveModelViewer({
     enableRelief,
     colorHeightMap,
     modelBounds?.maxZ ?? 0,
+    previewColorLayerHeightMm,
   );
 
   // ---- White backing plate mesh ----
@@ -512,18 +536,19 @@ function InteractiveModelViewer({
 
     for (const mesh of colorMeshes) {
       const origHex = extractHexFromMeshName(mesh.name);
+      const isLayeredMaterialMesh = isLayeredMaterialColorMeshName(mesh.name);
       const mat = mesh.material as THREE.MeshBasicMaterial;
 
-      // Color replacement — drive the colour solely from mat.color.
-      // Each color_<hex> mesh is single-colour, and the GLB also bakes that
-      // same hex into per-vertex colors. With vertexColors enabled, three.js
-      // multiplies mat.color × vertex colour, applying the hex twice (white
-      // stays white, but mid/dark tones get squared → far darker, higher
-      // contrast than the 2D preview). Disable vertexColors so the chip
-      // shows the exact hex once, matching 2D and supporting colour remap.
-      mat.vertexColors = false;
-      const remappedHex = colorRemapMap[origHex] || origHex;
-      mat.color.set(`#${remappedHex}`);
+      if (shouldApplyColorRemapToMeshName(mesh.name)) {
+        // Color replacement — drive the colour solely from mat.color.
+        // Each legacy color_<hex> mesh is single-colour, and the GLB also bakes
+        // that same hex into per-vertex colors. With vertexColors enabled,
+        // three.js multiplies mat.color × vertex colour, applying the hex
+        // twice. Disable vertexColors so the chip shows the exact hex once.
+        mat.vertexColors = false;
+        const remappedHex = colorRemapMap[origHex] || origHex;
+        mat.color.set(`#${remappedHex}`);
+      }
 
       // Keep all meshes fully opaque and unchanged
       mat.opacity = 1.0;
@@ -539,13 +564,16 @@ function InteractiveModelViewer({
         ? mesh.geometry.boundingBox.max.z - mesh.geometry.boundingBox.min.z
         : 1;
 
-      if (enableRelief && baseHeight > 0) {
+      if (isLayeredMaterialMesh) {
+        // Material-archive GLBs already encode each physical layer at native height.
+        mesh.scale.z = 1;
+      } else if (enableRelief && baseHeight > 0) {
         // Relief mode: each color gets its own height from colorHeightMap
-        const heightMm = colorHeightMap[origHex] ?? COLOR_LAYER_HEIGHT;
+        const heightMm = colorHeightMap[origHex] ?? previewColorLayerHeightMm;
         mesh.scale.z = nativeH > 0 ? heightMm / nativeH : 1;
       } else {
-        // Normal mode: scale to COLOR_LAYER_HEIGHT (0.4mm)
-        mesh.scale.z = nativeH > 0 ? COLOR_LAYER_HEIGHT / nativeH : 1;
+        // Normal mode: scale to the active preview color-layer height.
+        mesh.scale.z = nativeH > 0 ? previewColorLayerHeightMm / nativeH : 1;
       }
 
       // Position color layer on top of the backing plate (top face at Z=spacerThick)
@@ -561,7 +589,7 @@ function InteractiveModelViewer({
         mirror.position.z = 0; // grow downward from bottom of backing plate
       }
     }
-  }, [colorMeshes, mirrorMeshes, colorRemapMap, colorHeightMap, enableRelief, baseHeight, modelBounds, sceneCenter, spacerThick, isDoubleSided, backingMesh, backingPlateMesh]);
+  }, [colorMeshes, mirrorMeshes, colorRemapMap, colorHeightMap, enableRelief, baseHeight, modelBounds, sceneCenter, spacerThick, isDoubleSided, backingMesh, backingPlateMesh, previewColorLayerHeightMm]);
 
   // Double-sided mirror meshes are defined above (before useEffect).
 
@@ -596,6 +624,7 @@ function InteractiveModelViewer({
         colorMeshes={colorMeshes}
         backingPlateMesh={backingMesh}
         spacerThick={spacerThick}
+        colorLayerHeightMm={previewColorLayerHeightMm}
       />
       <PuzzleOverlay3D
         enabled={puzzleOverlayEnabled}
