@@ -266,6 +266,27 @@ describe("useAutoPreview", () => {
     expect(mockSubmitPreview).toHaveBeenCalledTimes(1);
   });
 
+  it("does not regenerate when a material preview response synchronizes compatibility fields", () => {
+    renderHook(() => useAutoPreview());
+
+    act(() => {
+      establishMaterialPreviewBaseline();
+    });
+
+    act(() => {
+      useConverterStore.setState({
+        color_layers: 10,
+        layer_height_mm: 0.04,
+      });
+      vi.advanceTimersByTime(300);
+    });
+
+    expect(mockSubmitPreview).not.toHaveBeenCalled();
+    expect(useConverterStore.getState().sessionId).toBe(
+      "material-session-old",
+    );
+  });
+
   it.each([
     ["modeling mode", { modeling_mode: ModelingMode.PIXEL }],
     ["cleanup", { enable_cleanup: false }],
