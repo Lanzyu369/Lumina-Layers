@@ -24,6 +24,7 @@ function resetStore(): void {
     nativeBrandGroupsLoading: false,
     selectedNativeBrandKey: '',
     selectedNativeDbNames: [],
+    sessionId: null,
     selectedColor: null,
     colorRemapMap: {},
     remapHistory: [],

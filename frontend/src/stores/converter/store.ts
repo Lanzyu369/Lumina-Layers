@@ -1953,6 +1953,7 @@ export interface ConverterActions {
     layer_height_mm: number;
   }) => void;
   setNativeDbNames: (dbNames: string[]) => void;
+  invalidatePreviewForAutoRefresh: () => void;
   submitPreview: () => Promise<void>;
   submitGenerate: () => Promise<string | null>;
 
@@ -5921,6 +5922,46 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       await _get().submitReplacePreview();
     },
 
+    invalidatePreviewForAutoRefresh: () => {
+      if (_previewAbortController) {
+        _previewAbortController.abort();
+        _previewAbortController = null;
+      }
+      _gradientGroupsAbortController?.abort();
+      _gradientGroupsAbortController = null;
+      _glbPollSequence += 1;
+
+      set({
+        sessionId: null,
+        isLoading: false,
+        previewImageUrl: null,
+        originalPreviewUrl: null,
+        previewBaseImageUrl: null,
+        previewGlbUrl: null,
+        modelUrl: null,
+        previewPerformanceTiming: null,
+        generatePerformanceTiming: null,
+        batchPreviewItems: [],
+        threemfDiskPath: null,
+        downloadUrl: null,
+        replacePreviewLoading: false,
+        preview_width_mm: null,
+        preview_height_mm: null,
+        preview_spacer_thick: null,
+        previewPixelWidth: null,
+        previewPixelHeight: null,
+        modelBounds: null,
+        gradientGroups: null,
+        gradientGroupsLoading: false,
+        gradientGroupsError: null,
+        gradientGroupsSessionId: null,
+        gradientSelection: null,
+        selectedGradientRegions: [],
+        ...DEFAULT_LAYER_IMAGES_STATE,
+        ...DEFAULT_PUZZLE_PREVIEW_STATE,
+      });
+    },
+
     submitPreview: async () => {
       const state = _get();
       if (!state.imageFile) {
@@ -5972,7 +6013,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       set({
         isLoading: true,
         error: null,
-        hasManualPreview: false,
+        hasManualPreview: true,
         previewWarnings: [],
         largeFormatWarnings: [],
         ...DEFAULT_LAYER_IMAGES_STATE,
