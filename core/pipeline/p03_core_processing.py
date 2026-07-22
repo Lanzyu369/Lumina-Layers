@@ -10,6 +10,8 @@ P03 — 核心图像处理（量化 + LUT 匹配）。
 """
 
 
+from copy import deepcopy
+
 from api.structured_logging import get_logger
 import time
 
@@ -757,134 +759,159 @@ def _run_material_archive_branch(ctx: dict) -> dict:
             target_h, target_w,
         )
 
-        # Re-preview requests can carry the global color replacements already
-        # chosen by the user. Apply them here so the refreshed preview matches
-        # the preserved frontend state before any cleanup mutates pixels.
-        from core.pipeline.s03_color_replacement import (
-            _apply_dynamic_material_archive_color_replacements,
-            _apply_material_archive_color_replacements,
-            _normalize_color_replacements_input,
-        )
-
-        effective_color_replacements = _normalize_color_replacements_input(
-            ctx.get("replacement_regions")
-        )
-        if effective_color_replacements:
-            if dynamic_layer_count_enabled:
-                try:
-                    (
-                        matched_rgb,
-                        material_matrix,
-                        applied_replacements,
-                        dynamic_layer_info,
-                        replacement_solver_meta,
-                        quantized_image,
-                    ) = _apply_dynamic_material_archive_color_replacements(
-                        matched_rgb,
-                        material_matrix,
-                        mask_solid,
-                        quantized_image,
-                        effective_color_replacements,
-                        materials,
-                        backing_material_index=int(backing_material_index),
-                        min_layer_count=int(dynamic_min_layer_count),
-                        max_layer_count=int(dynamic_max_layer_count),
-                        delta_e00_tolerance=float(
-                            dynamic_delta_e00_tolerance
-                        ),
-                        layer_height_mm=layer_height_mm,
-                        substrate=substrate,
-                        dynamic_layer_info=dynamic_layer_info,
-                        material_solver_info={
-                            "path": solver_path,
-                            "layer_count": layer_count,
-                            **solver_meta,
-                        },
-                    )
-                    solver_meta.update(replacement_solver_meta)
-                except (
-                    dynamic_solver.DynamicMaterialCandidateError,
-                    dynamic_solver.DynamicMaterialSolverError,
-                    TypeError,
-                    ValueError,
-                ) as exc:
-                    return _record_dynamic_material_error(ctx, exc)
-            else:
-                matched_rgb, material_matrix, applied_replacements = (
-                    _apply_material_archive_color_replacements(
-                        matched_rgb,
-                        material_matrix,
-                        mask_solid,
-                        effective_color_replacements,
-                        materials,
-                        layer_count,
-                        layer_height_mm,
-                        substrate,
-                        grid_resolution=actual_grid or requested_grid,
-                    )
-                )
-            _log.debug(
-                "Applied %d material-archive preview color replacements",
-                applied_replacements,
-                extra={
-                    "event": "material_archive_preview_replacements_applied",
-                    "replacement_count": len(effective_color_replacements),
-                    "applied_replacement_count": applied_replacements,
-                },
+    # ---- Isolated pixel cleanup (honours the user's ``enable_cleanup`` flag) ----
+    # Cleanup belongs to the pristine analysis. Re-preview replacements must be
+    # applied afterwards so reset/undo returns to exactly the same cleaned grid
+    # as a preview that carried no replacements.
+    # 清理属于 pristine 分析；重预览携带的替色必须在其后应用，确保 reset/undo
+    # 精确回到未替色预览的同一份已清理网格。
+    if ctx.get("enable_cleanup", True):
+        if dynamic_layer_count_enabled:
+            from core.isolated_pixel_cleanup import (
+                cleanup_isolated_pixels_with_target_map,
+            )
+            from core.pipeline.material_dynamic_layers import (
+                recompute_dynamic_material_benefit_curve,
             )
 
-        # ---- Isolated pixel cleanup (honours the user's ``enable_cleanup`` flag) ----
-        # Previously only the LUT pipeline ran cleanup — the material-archive
-        # branch silently ignored the checkbox even when ticked in the UI. The
-        # palette-preserving implementation in ``cleanup_isolated_pixels`` works
-        # in both pipelines (it copies stacks/RGB straight from the neighbour
-        # contributing the 8-neighbour mode), so the same call now serves both.
-        # （此前只有 LUT 路径跑清理，耗材档案分支静默忽略前端 checkbox；新版清理
-        # 函数不依赖 LUT，同一调用对两条路径都适用。）
-        if ctx.get("enable_cleanup", True):
-            if dynamic_layer_count_enabled:
-                from core.isolated_pixel_cleanup import (
-                    cleanup_isolated_pixels_with_target_map,
+            matched_rgb, material_matrix, quantized_image = (
+                cleanup_isolated_pixels_with_target_map(
+                    material_matrix,
+                    matched_rgb,
+                    quantized_image,
                 )
-                from core.pipeline.material_dynamic_layers import (
-                    recompute_dynamic_material_benefit_curve,
-                )
-
-                matched_rgb, material_matrix, quantized_image = (
-                    cleanup_isolated_pixels_with_target_map(
-                        material_matrix,
-                        matched_rgb,
+            )
+            if isinstance(dynamic_layer_info, dict):
+                colors = dynamic_layer_info.get("colors")
+                dynamic_layer_info["benefit_curve"] = (
+                    recompute_dynamic_material_benefit_curve(
+                        colors if isinstance(colors, list) else [],
                         quantized_image,
+                        mask_solid,
                     )
                 )
-                if isinstance(dynamic_layer_info, dict):
-                    colors = dynamic_layer_info.get("colors")
-                    dynamic_layer_info["benefit_curve"] = (
-                        recompute_dynamic_material_benefit_curve(
-                            colors if isinstance(colors, list) else [],
-                            quantized_image,
-                            mask_solid,
-                        )
-                    )
-            else:
-                from core.isolated_pixel_cleanup import cleanup_isolated_pixels
+        else:
+            from core.isolated_pixel_cleanup import cleanup_isolated_pixels
 
-                matched_rgb, material_matrix = cleanup_isolated_pixels(
-                    material_matrix, matched_rgb
-                )
+            matched_rgb, material_matrix = cleanup_isolated_pixels(
+                material_matrix,
+                matched_rgb,
+            )
 
-    # ---- Transparent pixels → -1 in material_matrix ----
+    # Transparent pixels are air in both current and pristine recipes.
     material_matrix[mask_transparent] = -1
+
+    # Capture stable reset/relief identity before any display replacement.
+    # These are immutable semantic aliases, not independent working buffers:
+    # the replacement helper allocates current copies only when a mapping
+    # actually touches pixels. Keeping the pristine arrays aliased avoids
+    # tripling large preview caches in the overwhelmingly common no-remap flow.
+    # 这里保存的是不可变语义别名，而不是三份工作副本；只有替色真正命中时，
+    # helper 才会分配 current 副本，避免普通预览无谓放大内存和落盘缓存。
+    original_matched_rgb = np.asarray(matched_rgb, dtype=np.uint8)
+    original_material_matrix = np.asarray(material_matrix)
+    original_quantized_image = np.asarray(quantized_image, dtype=np.uint8)
+    height_identity_rgb = original_matched_rgb
+    original_dynamic_layer_info = (
+        deepcopy(dynamic_layer_info)
+        if isinstance(dynamic_layer_info, dict)
+        else None
+    )
+    original_material_solver_info = {
+        "path": solver_path,
+        "layer_count": layer_count,
+        "layer_height_mm": layer_height_mm,
+        "substrate": substrate,
+        "elapsed_seconds": solver_elapsed,
+        "unique_color_count": int(unique_colors.shape[0]),
+        "mean_delta_e": float(np.mean(delta_e)) if delta_e.size else 0.0,
+        "max_delta_e": float(np.max(delta_e)) if delta_e.size else 0.0,
+        **deepcopy(solver_meta),
+    }
+
+    # Re-preview requests can carry global replacements already chosen by the
+    # user. Apply them only to the current display/recipe arrays.
+    from core.pipeline.s03_color_replacement import (
+        _apply_dynamic_material_archive_color_replacements,
+        _apply_material_archive_color_replacements,
+        _normalize_color_replacements_input,
+    )
+
+    effective_color_replacements = _normalize_color_replacements_input(
+        ctx.get("replacement_regions")
+    )
+    applied_replacements = 0
+    if effective_color_replacements:
+        if dynamic_layer_count_enabled:
+            try:
+                (
+                    matched_rgb,
+                    material_matrix,
+                    applied_replacements,
+                    dynamic_layer_info,
+                    replacement_solver_meta,
+                    quantized_image,
+                ) = _apply_dynamic_material_archive_color_replacements(
+                    matched_rgb,
+                    material_matrix,
+                    mask_solid,
+                    quantized_image,
+                    effective_color_replacements,
+                    materials,
+                    backing_material_index=int(backing_material_index),
+                    min_layer_count=int(dynamic_min_layer_count),
+                    max_layer_count=int(dynamic_max_layer_count),
+                    delta_e00_tolerance=float(dynamic_delta_e00_tolerance),
+                    layer_height_mm=layer_height_mm,
+                    substrate=substrate,
+                    dynamic_layer_info=dynamic_layer_info,
+                    material_solver_info=original_material_solver_info,
+                )
+                solver_meta.update(replacement_solver_meta)
+            except (
+                dynamic_solver.DynamicMaterialCandidateError,
+                dynamic_solver.DynamicMaterialSolverError,
+                TypeError,
+                ValueError,
+            ) as exc:
+                return _record_dynamic_material_error(ctx, exc)
+        else:
+            matched_rgb, material_matrix, applied_replacements = (
+                _apply_material_archive_color_replacements(
+                    matched_rgb,
+                    material_matrix,
+                    mask_solid,
+                    effective_color_replacements,
+                    materials,
+                    layer_count,
+                    layer_height_mm,
+                    substrate,
+                    grid_resolution=actual_grid or requested_grid,
+                )
+            )
+        _log.debug(
+            "Applied %d material-archive preview color replacements",
+            applied_replacements,
+            extra={
+                "event": "material_archive_preview_replacements_applied",
+                "replacement_count": len(effective_color_replacements),
+                "applied_replacement_count": applied_replacements,
+            },
+        )
 
     # ---- Write output ----
     ctx["matched_rgb"] = matched_rgb
     ctx["material_matrix"] = material_matrix
+    ctx["original_matched_rgb"] = original_matched_rgb
+    ctx["height_identity_rgb"] = height_identity_rgb
+    ctx["original_material_matrix"] = original_material_matrix
     ctx["mask_solid"] = mask_solid
     ctx["target_w"] = target_w
     ctx["target_h"] = target_h
     ctx["pixel_scale"] = pixel_scale
     ctx["debug_data"] = None
     ctx["quantized_image"] = quantized_image
+    ctx["original_quantized_image"] = original_quantized_image
     ctx["lut_match_info"] = None
     if dynamic_layer_count_enabled:
         if isinstance(dynamic_layer_info, dict):
@@ -892,12 +919,29 @@ def _run_material_archive_branch(ctx: dict) -> dict:
             # target ownership after the solver constructs its initial curve.
             # This path is still wholly automatic, so record the final
             # coverage explicitly rather than leaving a stale denominator.
+            if applied_replacements > 0:
+                from core.pipeline.material_dynamic_layers import (
+                    recompute_dynamic_material_benefit_curve,
+                )
+
+                colors = dynamic_layer_info.get("colors")
+                dynamic_layer_info["benefit_curve"] = (
+                    recompute_dynamic_material_benefit_curve(
+                        colors if isinstance(colors, list) else [],
+                        quantized_image,
+                        mask_solid,
+                    )
+                )
             dynamic_layer_info["benefit_curve_scope"] = "all_printable_pixels"
             dynamic_layer_info["benefit_curve_pixel_count"] = int(
                 np.count_nonzero(mask_solid)
             )
         ctx["color_layers"] = layer_count
         ctx["material_dynamic_layer_info"] = dynamic_layer_info
+        if original_dynamic_layer_info is not None:
+            ctx["original_material_dynamic_layer_info"] = (
+                original_dynamic_layer_info
+            )
     ctx["material_solver_info"] = {
         "path": solver_path,
         "layer_count": layer_count,
@@ -909,6 +953,8 @@ def _run_material_archive_branch(ctx: dict) -> dict:
         "max_delta_e": float(np.max(delta_e)) if delta_e.size else 0.0,
         **solver_meta,
     }
+    if dynamic_layer_count_enabled:
+        ctx["original_material_solver_info"] = original_material_solver_info
     # mode_info is consumed by S04 (debug preview) and S12 (result assembly).
     # Material-archive mode does not run a LUT-based color matcher, so we
     # populate a placeholder match mode so the contract stays consistent.

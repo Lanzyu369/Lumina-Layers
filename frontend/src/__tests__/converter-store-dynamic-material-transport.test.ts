@@ -401,7 +401,10 @@ describe("dynamic material response lifecycle", () => {
 
   it("does not let an older preview overwrite a changed dynamic configuration", async () => {
     seedMaterialState(true);
-    let resolveOldPreview: ((value: ReturnType<typeof previewResponse>) => void) | null = null;
+    let resolveOldPreview: (value: ReturnType<typeof previewResponse>) => void =
+      () => {
+        throw new Error("The deferred preview resolver was not initialized.");
+      };
     mocks.convertPreview.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
@@ -419,7 +422,7 @@ describe("dynamic material response lifecycle", () => {
     useSettingsStore.getState().setMaterialDeltaE00Tolerance(0.9);
     expect(mocks.convertPreview.mock.calls[0][2]?.aborted).toBe(true);
 
-    resolveOldPreview?.(
+    resolveOldPreview(
       previewResponse({
         session_id: "stale-dynamic-session",
         material_dynamic_recipes: DYNAMIC_RECIPES,

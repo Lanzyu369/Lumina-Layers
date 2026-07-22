@@ -81,6 +81,21 @@ describe("recipe/exportRecipe", () => {
       expect(recipe.color_ops.replacement_regions[1].matched_hex).toBe("#dd0000");
     });
 
+    it("does not serialize spatial edit count as a global color mapping", () => {
+      const state = makeState({
+        regionReplacementCount: 3,
+        replacement_regions: [],
+        colorRemapMap: {},
+      });
+
+      const recipe = exportConverterRecipe(state, makeSettings(), "fp");
+
+      expect(recipe.color_ops.replacement_regions).toEqual([]);
+      expect(JSON.stringify(recipe.color_ops)).not.toContain(
+        "regionReplacementCount",
+      );
+    });
+
     it("serializes free_color_set with '#' prefix", () => {
       const state = makeState({
         free_color_set: new Set(["ff0000", "00ff00"]),

@@ -129,6 +129,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "请求缺少必填数据或包含无效值。",
     en: "The request is missing required data or contains invalid values.",
   },
+  api_error_vector_native_requires_svg: {
+    zh: "矢量建模模式仅支持 SVG 文件。请上传 SVG，或切换到“高保真”或“像素艺术”模式。",
+    en: "Vector Native mode requires an SVG file. Upload an SVG, or switch to High-Fidelity or Pixel Art mode.",
+  },
   api_error_http_429: {
     zh: "请求过于频繁，请稍后再试。",
     en: "Too many requests were sent. Please wait and try again.",
@@ -949,6 +953,40 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "ℹ️ 3D preview simplified",
   },
 
+  // ==================== Browser Completion Notifications ====================
+  "completion_notification.preview.title": {
+    zh: "预览已完成",
+    en: "Preview complete",
+  },
+  "completion_notification.preview.body": {
+    zh: "预览已准备好，可以查看。",
+    en: "Your preview is ready to inspect.",
+  },
+  "completion_notification.generation.title": {
+    zh: "模型生成已完成",
+    en: "Model generation complete",
+  },
+  "completion_notification.generation.body": {
+    zh: "模型已准备好，可以下载或发送到切片软件。",
+    en: "Your model is ready to download or send to a slicer.",
+  },
+  "completion_notification.batch.title": {
+    zh: "批量生成已完成",
+    en: "Batch generation complete",
+  },
+  "completion_notification.batch.body": {
+    zh: "批量生成结果已准备好。",
+    en: "Your batch results are ready.",
+  },
+  "completion_notification.calibration.title": {
+    zh: "校准生成已完成",
+    en: "Calibration generation complete",
+  },
+  "completion_notification.calibration.body": {
+    zh: "校准文件已准备好。",
+    en: "Your calibration files are ready.",
+  },
+
   // ==================== Palette / Replacement ====================
   palette_empty: {
     zh: "暂无颜色，请先生成预览。",
@@ -1759,6 +1797,42 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "高级",
     en: "Advanced",
   },
+  "settings.completion_notifications_heading": {
+    zh: "完成通知",
+    en: "Completion notifications",
+  },
+  "settings.completion_notifications_description": {
+    zh: "浏览器通知会在 Windows 或 macOS 上，于预览、模型生成、批量生成和校准生成完成时提醒你。此设置仅保存在当前浏览器中。",
+    en: "Browser notifications alert you on Windows or macOS when preview, model generation, batch generation, or calibration generation finishes. This setting is stored only in this browser.",
+  },
+  "settings.completion_notifications_enable_label": {
+    zh: "启用浏览器完成通知",
+    en: "Enable browser completion notifications",
+  },
+  "settings.completion_notifications_hint": {
+    zh: "开启时浏览器会申请通知权限；允许后，完成提醒会显示在 Windows 通知中心或 macOS 通知中心。",
+    en: "Enabling this asks the browser for notification permission. Once allowed, completion alerts appear in Windows Notification Center or macOS Notification Center.",
+  },
+  "settings.completion_notifications_granted": {
+    zh: "浏览器已允许通知。开启后，此设备会收到完成提醒。",
+    en: "Browser permission is granted. When enabled, this device will receive completion alerts.",
+  },
+  "settings.completion_notifications_denied": {
+    zh: "浏览器已拒绝通知权限，功能保持关闭。请在浏览器的网站通知设置中允许；macOS 还需确认“系统设置 > 通知”未关闭浏览器通知。",
+    en: "The browser denied notification permission, so the feature remains off. Allow it in the browser's website notification settings; on macOS, also check that the browser is enabled under System Settings > Notifications.",
+  },
+  "settings.completion_notifications_default": {
+    zh: "尚未授予浏览器通知权限。开启时浏览器会询问；若关闭或忽略提示，功能会保持关闭。",
+    en: "Browser notification permission has not been granted. The browser will ask when you enable it; dismissing the prompt keeps the feature off.",
+  },
+  "settings.completion_notifications_unsupported": {
+    zh: "当前浏览器不支持通知，功能保持关闭。",
+    en: "This browser does not support notifications, so the feature remains off.",
+  },
+  "settings.completion_notifications_request_failed": {
+    zh: "请求浏览器通知权限失败，功能保持关闭。请稍后重试。",
+    en: "The notification permission request failed, so the feature remains off. Please try again later.",
+  },
   "settings.solver_cache_density_heading": {
     zh: "穷举数量",
     en: "Exhaustive density",
@@ -1906,8 +1980,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Base-plate layer-height modifier",
   },
   "settings.base_layer_height_modifier_desc": {
-    zh: "在 3MF 里写入 layer_config_ranges，让底板用喷嘴直径一半的粗层高打印（0.4 → 0.2 mm，0.2 → 0.1 mm），显著缩短底板耗时。仅对 Bambu 系切片器生效；双面模型会自动跳过。",
-    en: "Writes layer_config_ranges so the base plate prints at half the nozzle diameter (0.4 → 0.2 mm, 0.2 → 0.1 mm), noticeably reducing base-plate time. Bambu-family slicers only; skipped for double-sided prints.",
+    zh: "生成 3MF 时会计入固定首层，并选择能准确落在底板边界、且符合当前机型限制的较粗层高，缩短底板耗时并避免余数导致少层。浮雕、双面模型或没有安全可选值时会自动跳过；仅对 Bambu 系切片器生效。",
+    en: "When generating a 3MF, this accounts for the fixed first layer and selects a compatible coarser height that lands exactly on the backing boundary and fits the selected printer, reducing print time without losing a remainder layer. It is skipped for reliefs, double-sided prints, or when no safe value exists; Bambu-family slicers only.",
   },
   "settings.custom_slicer_path": {
     zh: "手动切片软件路径",
@@ -3350,6 +3424,22 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "上传后裁剪",
     en: "Crop After Upload",
   },
+  basic_image_rotation_label: {
+    zh: "图像旋转",
+    en: "Image Rotation",
+  },
+  basic_image_rotation_apply: {
+    zh: "应用旋转",
+    en: "Apply Rotation",
+  },
+  basic_image_rotation_hint: {
+    zh: "旋转会直接更新当前图片；后续预览和导出都会使用旋转后的图像。",
+    en: "Rotation updates the current image; later previews and exports use the rotated image.",
+  },
+  basic_image_rotation_failed: {
+    zh: "图像旋转失败",
+    en: "Failed to rotate image",
+  },
   basic_lut_label: {
     zh: "LUT",
     en: "LUT",
@@ -4024,6 +4114,26 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "自动切割为多片 3MF 压缩包",
     en: "Auto-tiled into a ZIP of 3MF files",
   },
+  large_format_warning_native_unavailable: {
+    zh: "此 SVG 暂不支持原生大画幅切片，已改用栅格切片。",
+    en: "This SVG is not supported by native large-format tiling, so raster tiling was used.",
+  },
+  large_format_warning_unsupported_features: {
+    zh: "此 SVG 含有原生大画幅暂不支持的特性（{features}），已改用栅格切片。",
+    en: "This SVG uses features unsupported by native large-format tiling ({features}), so raster tiling was used.",
+  },
+  large_format_warning_raster_fallback: {
+    zh: "本次大画幅 SVG 已改用栅格切片。",
+    en: "Raster tiling was used for this large-format SVG.",
+  },
+  large_format_warning_native_failure: {
+    zh: "原生矢量切片生成失败，已自动改用栅格切片。",
+    en: "Native vector tiling failed, so raster tiling was used automatically.",
+  },
+  large_format_warning_density_reduced: {
+    zh: "为避免超过像素预算，栅格切片清晰度已自动降低。",
+    en: "Raster tiling density was reduced automatically to stay within the pixel budget.",
+  },
   basic_tile_width: {
     zh: "切片宽度",
     en: "Tile Width",
@@ -4156,9 +4266,9 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "启用浮雕",
     en: "Enable Relief",
   },
-  relief_vector_unsupported: {
-    zh: "矢量模式暂不支持浮雕",
-    en: "Relief is not supported in Vector mode",
+  relief_vector_unsupported_mode: {
+    zh: "原生 SVG 浮雕目前仅支持非五色扩展的单面模式。",
+    en: "Native SVG relief currently supports only single-sided, non-5-Color Extended mode.",
   },
   relief_max_height: {
     zh: "最大高度",
@@ -6236,6 +6346,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   recipe_import_warning_back_labels_unavailable: {
     zh: "导入的配方启用了拼图背面标签。当前版本暂不支持背面标签，已自动关闭。",
     en: "The imported recipe enabled puzzle back labels. Back labels are not available in this version and have been disabled.",
+  },
+  recipe_import_warning_spatial_edits_not_serialized: {
+    zh: "连通区域的局部改色仅属于当前会话，未写入分享配方；导入后需要重新应用。",
+    en: "Connected-region color edits belong to the current session and were not saved in the shared recipe; reapply them after import.",
   },
   recipe_import_schema_newer: {
     zh: "配方版本较新，部分参数可能无法恢复",

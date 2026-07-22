@@ -269,6 +269,12 @@ export interface RegionRecipeResponse {
   recipes: RegionRecipeEntry[];
 }
 
+/**
+ * Whole-image color mapping applied to every matching LUT color.
+ * This type never represents a connected-region mask or other spatial edit.
+ *
+ * 全图颜色映射：应用于所有匹配的 LUT 颜色；不表示连通区域掩码或其它空间编辑。
+ */
 export interface ColorReplacementItem {
   quantized_hex: string;
   matched_hex: string;

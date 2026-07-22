@@ -24,6 +24,7 @@ ARTIFACT_SCHEMA = "preview_cache_artifact_v1"
 PREVIEW_CACHE_MAX_BYTES_ENV = "LUMINA_PREVIEW_CACHE_MAX_BYTES"
 LARGE_ARRAY_FIELDS = {
     "matched_rgb",
+    "height_identity_rgb",
     "material_matrix",
     "mask_solid",
     "preview_rgba",

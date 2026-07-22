@@ -16,6 +16,82 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-07-19",
+    title: {
+      zh: "Lumina Layers — 6 月下旬至 7 月更新速览",
+      en: "Lumina Layers — Late June to July updates",
+    },
+    sections: [
+      {
+        category: { zh: "预览 & 交互", en: "Preview & Interaction" },
+        items: [
+          {
+            zh: "7 月 19 日：耗材档案的 3D 预览现在会按配方叠色显示最终模拟颜色，同时保留真实层数和厚度；画面不会再被最上层耗材色遮住或异常偏亮，浮雕预览也能看出高度差。",
+            en: "July 19: Material-profile 3D previews now show the final simulated recipe colours while keeping the real layer count and thickness. The top filament no longer hides the blended result or makes it look unusually bright, and relief height differences are visible again.",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    version: "2026-07-18",
+    title: {
+      zh: "Lumina Layers — 6 月下旬至 7 月更新速览",
+      en: "Lumina Layers — Late June to July updates",
+    },
+    sections: [
+      {
+        category: { zh: "稳定性", en: "Stability" },
+        items: [
+          {
+            zh: "7 月 18 日：生成 3MF 时，底板层高现在会自动对齐实际底板厚度；双面作品、浮雕和不适合加速的厚度会安全跳过，避免顶部叠色少层或成品变薄。",
+            en: "July 18: Base-layer heights now align with the actual backing thickness when generating a 3MF. Double-sided prints, reliefs, and thicknesses that cannot be sped up safely are skipped, preventing missing top colour layers or a thinner result.",
+          },
+          {
+            zh: "7 月 18 日：大画幅作品只调整选中区域的颜色时，下载文件现在会和分层预览保持一致；画面中其他相同颜色的区域不会再一起变色。",
+            en: "July 18: Large-format downloads now match the layer preview after recolouring a selected area, without changing other areas that happen to use the same colour.",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    version: "2026-07-15",
+    title: {
+      zh: "Lumina Layers — 6 月下旬至 7 月更新速览",
+      en: "Lumina Layers — Late June to July updates",
+    },
+    sections: [
+      {
+        category: { zh: "新功能", en: "New" },
+        items: [
+          {
+            zh: "7 月 15 日：SVG 在矢量模式下现在也能使用颜色深浅或高度图生成浮雕；生成时只调整背板高度，原有叠色层数、顺序和厚度保持不变。",
+            en: "July 15: SVG artwork in Vector mode can now create reliefs from colour depth or a heightmap; generation changes only the backing height while keeping the existing colour-layer count, order, and thickness.",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    version: "2026-07-12",
+    title: {
+      zh: "Lumina Layers — 6 月下旬至 7 月更新速览",
+      en: "Lumina Layers — Late June to July updates",
+    },
+    sections: [
+      {
+        category: { zh: "校准 & 材料", en: "Calibration & Materials" },
+        items: [
+          {
+            zh: "7 月 12 日：耗材库里的无境新材已更名为 Karvax；之前选过这家耗材的配方和底板耗材会自动继续对应到新名称。",
+            en: "July 12: Wujing materials in the library are now called Karvax, and previously saved material and backing selections will automatically carry over to the new name.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-07-09",
     title: {
       zh: "Lumina Layers — 6 月下旬至 7 月更新速览",

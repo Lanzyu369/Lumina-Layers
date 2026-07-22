@@ -12,8 +12,10 @@ import {
   parseRecipeFile,
   RECIPE_IMPORT_WARNING_LUT_DEGRADED,
   RECIPE_IMPORT_WARNING_LUT_MISSING,
+  RECIPE_IMPORT_WARNING_SPATIAL_EDITS_NOT_SERIALIZED,
   restoreConverterRecipe,
 } from "../recipe/importRecipe";
+import { annotateSpatialEditCompatibility } from "../recipe/importFlow";
 import { embedRecipeInPng, extractRecipeFromPng, hasLuminaRecipe } from "../recipe/pngMetadata";
 import { migrateRecipe } from "../recipe/migration";
 import { DEFAULT_STATE } from "../stores/converter";
@@ -22,6 +24,7 @@ import type { ConverterState } from "../stores/converter/store";
 import type { LutInfo, ColorReplacementItem } from "../api/types";
 import { ColorMode } from "../api/types";
 import type { LuminaRecipe, RecipeCover } from "../recipe/types";
+import { translations } from "../i18n/translations";
 
 // ========== Helpers ==========
 
@@ -358,6 +361,72 @@ describe("recipe integration", () => {
       expect(restored.lut_name).toBe("TestLUT");
       expect(restored.target_width_mm).toBe(60);
       expect(restored.add_loop).toBe(true);
+    });
+  });
+
+  describe("session-scoped spatial edit compatibility", () => {
+    it("marks PNG and sidecar recipes as degraded and warns on import", async () => {
+      const { recipe } = await buildTestRecipe({
+        lut_name: "TestLUT",
+        regionReplacementCount: 2,
+        replacement_regions: [],
+        colorRemapMap: {},
+      });
+
+      expect(RECIPE_IMPORT_WARNING_SPATIAL_EDITS_NOT_SERIALIZED).toBe(
+        "recipe_import_warning_spatial_edits_not_serialized",
+      );
+      annotateSpatialEditCompatibility(recipe, 2);
+      annotateSpatialEditCompatibility(recipe, 2);
+
+      expect(recipe.recipe.converter?.color_ops.replacement_regions).toEqual([]);
+      expect(recipe.compat.degraded_fields).toEqual([
+        "converter.color_ops.spatial_region_edits",
+      ]);
+      expect(recipe.warnings).toEqual([
+        RECIPE_IMPORT_WARNING_SPATIAL_EDITS_NOT_SERIALIZED,
+      ]);
+
+      const png = await embedRecipeInPng(
+        createMinimalPng(),
+        recipe,
+        recipe.integrity.recipe_sha256,
+      );
+      const files = [
+        new File([png], "spatial-share.png", { type: "image/png" }),
+        new File([JSON.stringify(recipe)], "spatial-share.lumina.json", {
+          type: "application/json",
+        }),
+      ];
+
+      for (const file of files) {
+        const parsed = await parseRecipeFile(file);
+        const restored = restoreConverterRecipe(parsed.recipe, LOCAL_LUTS, LOCAL_FP);
+        expect(restored.warnings).toContain(
+          RECIPE_IMPORT_WARNING_SPATIAL_EDITS_NOT_SERIALIZED,
+        );
+      }
+
+      expect(
+        translations[RECIPE_IMPORT_WARNING_SPATIAL_EDITS_NOT_SERIALIZED].zh,
+      ).toContain("当前会话");
+      expect(
+        translations[RECIPE_IMPORT_WARNING_SPATIAL_EDITS_NOT_SERIALIZED].en,
+      ).toContain("current session");
+    });
+
+    it("does not mark a recipe when no spatial edits exist", async () => {
+      const { recipe } = await buildTestRecipe({
+        lut_name: "TestLUT",
+        regionReplacementCount: 0,
+      });
+
+      annotateSpatialEditCompatibility(recipe, 0);
+
+      expect(recipe.compat.degraded_fields).toBeUndefined();
+      expect(recipe.warnings).not.toContain(
+        RECIPE_IMPORT_WARNING_SPATIAL_EDITS_NOT_SERIALIZED,
+      );
     });
   });
 

@@ -93,6 +93,11 @@ export interface ConverterRecipeCoating {
 }
 
 export interface ConverterRecipeColorOps {
+  /**
+   * Global whole-image color mappings only. Session-scoped spatial edits
+   * are intentionally not serialized in the recipe schema.
+   * 仅保存全图颜色映射；会话级空间局部改色不写入配方 schema。
+   */
   replacement_regions: Array<{
     quantized_hex: string;
     matched_hex: string;

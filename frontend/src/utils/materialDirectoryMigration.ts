@@ -17,6 +17,16 @@ export interface DirectoryNameCandidate {
   directory_name: string;
 }
 
+const MATERIAL_BRAND_DIRECTORY_RENAMES = [["无境新材", "Karvax"]] as const;
+
+const renameFormerBrandDirectoryName = (directoryName: string): string | null => {
+  for (const [formerBrand, currentBrand] of MATERIAL_BRAND_DIRECTORY_RENAMES) {
+    if (!directoryName.startsWith(formerBrand)) continue;
+    return directoryName.replaceAll(formerBrand, currentBrand);
+  }
+  return null;
+};
+
 /**
  * Build a lookup that maps a legacy flat name (e.g. ``"瑞贝思 PLA 白"``) to
  * the unique current directory_name (e.g. ``"瑞贝思/瑞贝思 PLA 白"``).
@@ -82,6 +92,20 @@ export function reconcileDirectoryNames(
     if (knownDirNames.has(name)) {
       next.push(name);
       continue;
+    }
+    const renamedDirectoryName = renameFormerBrandDirectoryName(name);
+    if (renamedDirectoryName) {
+      if (knownDirNames.has(renamedDirectoryName)) {
+        next.push(renamedDirectoryName);
+        changed = true;
+        continue;
+      }
+      const renamedLegacyMapped = legacyMap.get(renamedDirectoryName);
+      if (renamedLegacyMapped && knownDirNames.has(renamedLegacyMapped)) {
+        next.push(renamedLegacyMapped);
+        changed = true;
+        continue;
+      }
     }
     const mapped = legacyMap.get(name);
     if (mapped && knownDirNames.has(mapped)) {

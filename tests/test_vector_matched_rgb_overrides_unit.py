@@ -24,7 +24,7 @@ import types
 import numpy as np
 import pytest
 from scipy.spatial import cKDTree
-from shapely.geometry import box
+from shapely.geometry import GeometryCollection, MultiPolygon, box
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
@@ -197,6 +197,47 @@ def _build_grid_arrays(
     return matched_rgb, mask_solid, h_px, w_px
 
 
+def _make_compound_analysis(geometry) -> "VectorAnalysis":
+    """Build one red source record containing disconnected components."""
+
+    shape = {
+        "geometry": geometry,
+        "color": (255, 0, 0),
+        "matched_rgb": (255, 0, 0),
+        "lut_idx": 1,
+        "recipe": [1, 1, 1, 1, 1],
+        "source_id": "compound-source",
+        "draw_order": 7,
+    }
+    return VectorAnalysis(
+        shape_data=[],
+        clipped_shapes=[dict(shape)],
+        matched_shapes=[shape],
+        silhouette=geometry,
+        scale_factor=1.0,
+        bbox=(0.0, 0.0, 12.0, 4.0),
+        color_conf={"slots": ["W", "R", "G", "B"], "preview": {}},
+        slot_names=["W", "R", "G", "B"],
+        num_channels=4,
+        num_layers=5,
+        preview_colors={
+            0: [255, 255, 255, 255],
+            1: [255, 0, 0, 255],
+            2: [0, 255, 0, 255],
+            3: [0, 0, 255, 255],
+        },
+    )
+
+
+def _compound_cache_arrays() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return a red 12x4 mm cache on the helper's 10 px/mm grid."""
+
+    matched_rgb = np.full((40, 120, 3), [255, 0, 0], dtype=np.uint8)
+    mask_solid = np.ones((40, 120), dtype=bool)
+    material_matrix = np.ones((40, 120, 5), dtype=np.int16)
+    return matched_rgb, mask_solid, material_matrix
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -324,6 +365,177 @@ class TestApplyMatchedRgbOverrides:
         assert analysis.matched_shapes[0]["recipe"] == [1, 1, 1, 1, 1]
         assert analysis.matched_shapes[1]["recipe"] == [2, 2, 2, 2, 2]
 
+    @pytest.mark.parametrize(
+        "compound_factory",
+        [
+            pytest.param(MultiPolygon, id="multipolygon"),
+            pytest.param(GeometryCollection, id="geometry-collection"),
+        ],
+    )
+    def test_small_disconnected_component_keeps_its_local_recipe(
+        self,
+        compound_factory,
+    ):
+        """A small edited island must not lose the vote to a larger sibling."""
+
+        small = box(0.5, 0.5, 1.5, 1.5)
+        large = box(4.0, 0.5, 11.5, 3.5)
+        analysis = _make_compound_analysis(compound_factory([small, large]))
+        matched_rgb, mask_solid, material_matrix = _compound_cache_arrays()
+        matched_rgb[5:16, 5:16, :] = (0, 0, 255)
+        material_matrix[5:16, 5:16, :] = np.array([3, 1, 3, 1, 3])
+
+        changed = apply_matched_rgb_overrides_to_analysis(
+            analysis,
+            matched_rgb=matched_rgb,
+            material_matrix=material_matrix,
+            mask_solid=mask_solid,
+            img_processor=_build_fake_img_processor(),
+        )
+
+        assert changed == 1
+        assert len(analysis.matched_shapes) == 2
+        small_record, large_record = analysis.matched_shapes
+        assert small_record["geometry"].equals(small)
+        assert small_record["matched_rgb"] == (0, 0, 255)
+        assert small_record["recipe"] == [3, 1, 3, 1, 3]
+        assert large_record["geometry"].equals(large)
+        assert large_record["matched_rgb"] == (255, 0, 0)
+        assert large_record["recipe"] == [1, 1, 1, 1, 1]
+        assert [record["source_id"] for record in analysis.matched_shapes] == [
+            "compound-source",
+            "compound-source",
+        ]
+        assert [record["draw_order"] for record in analysis.matched_shapes] == [7, 7]
+
+    def test_large_disconnected_component_does_not_recolor_small_sibling(self):
+        """A dominant edited island must not recolor an unselected sibling."""
+
+        small = box(0.5, 0.5, 1.5, 1.5)
+        large = box(4.0, 0.5, 11.5, 3.5)
+        analysis = _make_compound_analysis(MultiPolygon([small, large]))
+        matched_rgb, mask_solid, material_matrix = _compound_cache_arrays()
+        matched_rgb[5:36, 40:116, :] = (0, 255, 0)
+        material_matrix[5:36, 40:116, :] = np.array([2, 1, 2, 1, 2])
+
+        changed = apply_matched_rgb_overrides_to_analysis(
+            analysis,
+            matched_rgb=matched_rgb,
+            material_matrix=material_matrix,
+            mask_solid=mask_solid,
+            img_processor=_build_fake_img_processor(),
+        )
+
+        assert changed == 1
+        assert len(analysis.matched_shapes) == 2
+        small_record, large_record = analysis.matched_shapes
+        assert small_record["geometry"].equals(small)
+        assert small_record["matched_rgb"] == (255, 0, 0)
+        assert small_record["recipe"] == [1, 1, 1, 1, 1]
+        assert large_record["geometry"].equals(large)
+        assert large_record["matched_rgb"] == (0, 255, 0)
+        assert large_record["recipe"] == [2, 1, 2, 1, 2]
+
+    def test_same_display_assignment_keeps_distinct_component_height_identities(self):
+        """Two source heights may collide on one achieved display colour."""
+
+        small = box(0.5, 0.5, 1.5, 1.5)
+        large = box(4.0, 0.5, 11.5, 3.5)
+        analysis = _make_compound_analysis(MultiPolygon([small, large]))
+        analysis.matched_shapes[0]["matched_rgb"] = (0, 0, 255)
+        analysis.matched_shapes[0]["recipe"] = [3, 3, 3, 3, 3]
+        matched_rgb, mask_solid, material_matrix = _compound_cache_arrays()
+        matched_rgb[:, :, :] = (0, 0, 255)
+        material_matrix[:, :, :] = 3
+        height_identity_rgb = np.full_like(matched_rgb, (255, 0, 0))
+        height_identity_rgb[5:36, 40:116, :] = (0, 255, 0)
+
+        changed = apply_matched_rgb_overrides_to_analysis(
+            analysis,
+            matched_rgb=matched_rgb,
+            height_identity_rgb=height_identity_rgb,
+            material_matrix=material_matrix,
+            mask_solid=mask_solid,
+            img_processor=_build_fake_img_processor(),
+        )
+
+        assert changed == 0
+        assert len(analysis.matched_shapes) == 2
+        assert analysis.matched_shapes[0]["matched_rgb"] == (0, 0, 255)
+        assert analysis.matched_shapes[1]["matched_rgb"] == (0, 0, 255)
+        assert analysis.matched_shapes[0]["height_identity_rgb"] == (255, 0, 0)
+        assert analysis.matched_shapes[1]["height_identity_rgb"] == (0, 255, 0)
+        assert all(
+            "original_lut_idx" not in shape
+            for shape in analysis.matched_shapes
+        )
+
+    def test_partial_component_replacement_preserves_source_height_identity(self):
+        """A locally replaced component and its sibling retain one source height."""
+
+        small = box(0.5, 0.5, 1.5, 1.5)
+        large = box(4.0, 0.5, 11.5, 3.5)
+        analysis = _make_compound_analysis(MultiPolygon([small, large]))
+        matched_rgb, mask_solid, material_matrix = _compound_cache_arrays()
+        matched_rgb[5:16, 5:16, :] = (0, 0, 255)
+        material_matrix[5:16, 5:16, :] = 3
+        height_identity_rgb = np.full_like(matched_rgb, (255, 0, 0))
+
+        changed = apply_matched_rgb_overrides_to_analysis(
+            analysis,
+            matched_rgb=matched_rgb,
+            height_identity_rgb=height_identity_rgb,
+            material_matrix=material_matrix,
+            mask_solid=mask_solid,
+            img_processor=_build_fake_img_processor(),
+        )
+
+        assert changed == 1
+        assert len(analysis.matched_shapes) == 2
+        assert analysis.matched_shapes[0]["matched_rgb"] == (0, 0, 255)
+        assert analysis.matched_shapes[1]["matched_rgb"] == (255, 0, 0)
+        assert {
+            shape["height_identity_rgb"]
+            for shape in analysis.matched_shapes
+        } == {(255, 0, 0)}
+
+    def test_compound_zero_change_and_uniform_global_change_keep_one_record(self):
+        """Only divergent component assignments require structural splitting."""
+
+        small = box(0.5, 0.5, 1.5, 1.5)
+        large = box(4.0, 0.5, 11.5, 3.5)
+        geometry = MultiPolygon([small, large])
+        matched_rgb, mask_solid, material_matrix = _compound_cache_arrays()
+        analysis = _make_compound_analysis(geometry)
+
+        unchanged = apply_matched_rgb_overrides_to_analysis(
+            analysis,
+            matched_rgb=matched_rgb,
+            material_matrix=material_matrix,
+            mask_solid=mask_solid,
+            img_processor=_build_fake_img_processor(),
+        )
+
+        assert unchanged == 0
+        assert len(analysis.matched_shapes) == 1
+        assert analysis.matched_shapes[0]["geometry"].equals(geometry)
+
+        matched_rgb[:, :, :] = (0, 0, 255)
+        material_matrix[:, :, :] = np.array([3, 3, 1, 3, 3])
+        changed = apply_matched_rgb_overrides_to_analysis(
+            analysis,
+            matched_rgb=matched_rgb,
+            material_matrix=material_matrix,
+            mask_solid=mask_solid,
+            img_processor=_build_fake_img_processor(),
+        )
+
+        assert changed == 2
+        assert len(analysis.matched_shapes) == 1
+        assert analysis.matched_shapes[0]["geometry"].equals(geometry)
+        assert analysis.matched_shapes[0]["matched_rgb"] == (0, 0, 255)
+        assert analysis.matched_shapes[0]["recipe"] == [3, 3, 1, 3, 3]
+
     def test_material_matrix_recipe_is_used_when_rgb_is_unchanged(self):
         analysis = _make_two_shape_analysis()
         img_processor = _build_fake_img_processor()
@@ -450,6 +662,89 @@ class TestApplyMatchedRgbOverrides:
         assert getattr(record, "expected_shape") == [100, 100]
         assert getattr(record, "error_type") == "ValueError"
 
+    @pytest.mark.parametrize(
+        "invalid_case",
+        [
+            "matched_dtype",
+            "mask_dtype",
+            "spatial_grid",
+            "material_rank",
+            "material_dtype",
+            "material_grid",
+            "material_empty_channels",
+        ],
+    )
+    def test_strict_mode_raises_for_invalid_cache_inputs(self, invalid_case):
+        """Worker-bound strict mode must reject every malformed cache grid."""
+
+        analysis = _make_two_shape_analysis()
+        img_processor = _build_fake_img_processor()
+        matched_rgb, mask_solid, h_px, w_px = _build_grid_arrays(analysis)
+        material_matrix = np.ones((h_px, w_px, 5), dtype=np.int16)
+
+        if invalid_case == "matched_dtype":
+            matched_rgb = matched_rgb.astype(np.int16)
+        elif invalid_case == "mask_dtype":
+            mask_solid = mask_solid.astype(np.uint8)
+        elif invalid_case == "spatial_grid":
+            mask_solid = mask_solid[:-1, :]
+        elif invalid_case == "material_rank":
+            material_matrix = material_matrix[..., 0]
+        elif invalid_case == "material_dtype":
+            material_matrix = material_matrix.astype(np.float32)
+        elif invalid_case == "material_grid":
+            material_matrix = material_matrix[:, :-1, :]
+        elif invalid_case == "material_empty_channels":
+            material_matrix = material_matrix[..., :0]
+
+        with pytest.raises(ValueError):
+            apply_matched_rgb_overrides_to_analysis(
+                analysis,
+                matched_rgb=matched_rgb,
+                material_matrix=material_matrix,
+                mask_solid=mask_solid,
+                img_processor=img_processor,
+                strict=True,
+            )
+
+    def test_strict_mode_validates_cache_even_when_analysis_has_no_shapes(self):
+        """An empty SVG must not turn malformed worker input into success."""
+
+        analysis = _make_two_shape_analysis()
+        analysis.matched_shapes = []
+        matched_rgb, mask_solid, h_px, w_px = _build_grid_arrays(analysis)
+
+        with pytest.raises(ValueError):
+            apply_matched_rgb_overrides_to_analysis(
+                analysis,
+                matched_rgb=matched_rgb.astype(np.int16),
+                material_matrix=np.ones((h_px, w_px, 5), dtype=np.int16),
+                mask_solid=mask_solid,
+                img_processor=_build_fake_img_processor(),
+                strict=True,
+            )
+
+    def test_strict_mode_allows_valid_zero_change(self):
+        """A valid cache with no edits is success, not a strict-mode failure."""
+
+        analysis = _make_two_shape_analysis()
+        img_processor = _build_fake_img_processor()
+        matched_rgb, mask_solid, h_px, w_px = _build_grid_arrays(analysis)
+        material_matrix = np.zeros((h_px, w_px, 5), dtype=np.int16)
+        material_matrix[: h_px // 2, :, :] = 1
+        material_matrix[h_px // 2 :, :, :] = 2
+
+        changed = apply_matched_rgb_overrides_to_analysis(
+            analysis,
+            matched_rgb=matched_rgb,
+            material_matrix=material_matrix,
+            mask_solid=mask_solid,
+            img_processor=img_processor,
+            strict=True,
+        )
+
+        assert changed == 0
+
 
 @pytest.mark.skipif(
     apply_matched_rgb_overrides_to_analysis is not None,
@@ -494,6 +789,7 @@ class TestRunVectorBranchWiring:
         helper_call_log: list[dict],
         *,
         helper_result: int = 0,
+        helper_error: Exception | None = None,
         recipe_call_log: list[dict] | None = None,
     ):
         """Build the patch context shared by both wiring tests.
@@ -544,6 +840,8 @@ class TestRunVectorBranchWiring:
 
         def _fake_helper(*args, **kwargs):
             helper_call_log.append({"args": args, "kwargs": kwargs})
+            if helper_error is not None:
+                raise helper_error
             return helper_result
 
         def _fake_recipe_helper(*args, **kwargs):
@@ -583,9 +881,14 @@ class TestRunVectorBranchWiring:
         from core.pipeline import coordinator
 
         matched_rgb_path = tmp_path / "matched.npy"
+        height_identity_rgb_path = tmp_path / "height-identity.npy"
         mask_solid_path = tmp_path / "mask.npy"
         material_matrix_path = tmp_path / "material.npy"
         np.save(matched_rgb_path, np.zeros((4, 4, 3), dtype=np.uint8))
+        np.save(
+            height_identity_rgb_path,
+            np.full((4, 4, 3), [255, 0, 0], dtype=np.uint8),
+        )
         np.save(mask_solid_path, np.ones((4, 4), dtype=bool))
         np.save(material_matrix_path, np.ones((4, 4, 5), dtype=np.int32))
 
@@ -610,6 +913,7 @@ class TestRunVectorBranchWiring:
                 "nozzle_size": "0.4",
                 "svg_pixels_per_mm": 5.0,
                 "matched_rgb_path": str(matched_rgb_path),
+                "height_identity_rgb_path": str(height_identity_rgb_path),
                 "mask_solid_path": str(mask_solid_path),
                 "material_matrix_path": str(material_matrix_path),
             }
@@ -620,12 +924,14 @@ class TestRunVectorBranchWiring:
         assert len(helper_calls) == 1
         kwargs = helper_calls[0]["kwargs"]
         assert "matched_rgb" in kwargs
+        assert "height_identity_rgb" in kwargs
         assert "mask_solid" in kwargs
         assert "material_matrix" in kwargs
         # These arrays come from the preview cache, which is currently built
         # at 10 px/mm even when the generate request uses another SVG density.
         assert kwargs["pixels_per_mm"] == 10.0
         assert kwargs["material_matrix"].shape == (4, 4, 5)
+        assert np.all(kwargs["height_identity_rgb"] == [255, 0, 0])
         # img_processor must be the FakeVectorProcessor's stub attribute,
         # not some unrelated object — the helper relies on its KDTree.
         # img_processor 必须是分支构造的处理器持有的对象，否则 helper 会
@@ -674,6 +980,63 @@ class TestRunVectorBranchWiring:
 
         assert "error" not in result
         assert helper_calls == []
+
+    def test_required_cache_projection_error_aborts_vector_generation(
+        self,
+        tmp_path,
+    ) -> None:
+        """A required spatial cache error must not continue to 3MF export."""
+
+        from unittest.mock import patch
+
+        from config import ModelingMode
+        from core.errors import CachedPreviewAnalysisError
+        from core.pipeline import coordinator
+        from core.preview_analysis_cache import REQUIRED_PREVIEW_ANALYSIS_REUSE
+
+        matched_rgb_path = tmp_path / "matched.npy"
+        mask_solid_path = tmp_path / "mask.npy"
+        material_matrix_path = tmp_path / "material.npy"
+        np.save(matched_rgb_path, np.zeros((4, 4, 3), dtype=np.uint8))
+        np.save(mask_solid_path, np.ones((4, 4), dtype=bool))
+        np.save(material_matrix_path, np.ones((4, 4, 5), dtype=np.int32))
+
+        captured: dict = {}
+        helper_calls: list[dict] = []
+        cms = self._patch_dependencies(
+            captured,
+            helper_calls,
+            helper_error=ValueError("cached grid is incompatible"),
+        )
+
+        with cms[0], cms[1], cms[2], cms[3], cms[4], cms[5], patch(
+            "config.MODELS_DIR", str(tmp_path)
+        ), patch("config.OUTPUT_DIR", str(tmp_path)), pytest.raises(
+            CachedPreviewAnalysisError
+        ):
+            coordinator._run_vector_branch(
+                {
+                    "image_path": str(tmp_path / "vector.svg"),
+                    "actual_lut_path": str(tmp_path / "fake.json"),
+                    "color_mode": "5-Color Extended",
+                    "modeling_mode": ModelingMode.VECTOR,
+                    "target_width_mm": 40.0,
+                    "spacer_thick": 1.6,
+                    "structure_mode": "单面",
+                    "need_2d_preview": False,
+                    "printer_id": "bambu-h2d",
+                    "slicer": "BambuStudio",
+                    "nozzle_size": "0.4",
+                    "matched_rgb_path": str(matched_rgb_path),
+                    "mask_solid_path": str(mask_solid_path),
+                    "material_matrix_path": str(material_matrix_path),
+                    "reuse_preview_analysis": REQUIRED_PREVIEW_ANALYSIS_REUSE,
+                }
+            )
+
+        assert len(helper_calls) == 1
+        assert helper_calls[0]["kwargs"]["strict"] is True
+        assert captured == {}
 
     def test_recipe_helper_uses_preview_cache_grid_when_svg_density_differs(self, tmp_path):
         """Recipe override masks are preview-cache artifacts, not generation rasters."""

@@ -332,6 +332,14 @@ def _format_advanced_params_section(context: dict[str, Any]) -> str:
         else:
             lines.append(f"- {toggle_key}: {_MISSING}")
 
+    color_replacement = ap.get("color_replacement")
+    spatial_edit_count = (
+        color_replacement.get("spatial_edit_count", _MISSING)
+        if isinstance(color_replacement, dict)
+        else _MISSING
+    )
+    lines.append(f"- spatial_edit_count: {_safe_str(spatial_edit_count)}")
+
     return "\n".join(lines) + "\n"
 
 

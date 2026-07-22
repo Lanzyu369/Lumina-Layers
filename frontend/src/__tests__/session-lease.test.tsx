@@ -91,7 +91,14 @@ describe("useSessionLease", () => {
     expect(closeSessionMock).not.toHaveBeenCalled();
 
     await act(async () => {
-      vi.runOnlyPendingTimers();
+      vi.advanceTimersByTime(29_999);
+      await Promise.resolve();
+    });
+
+    expect(closeSessionMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      vi.advanceTimersByTime(1);
       await Promise.resolve();
     });
 
@@ -119,7 +126,14 @@ describe("useSessionLease", () => {
     expect(closeSessionMock).not.toHaveBeenCalled();
 
     await act(async () => {
-      vi.runOnlyPendingTimers();
+      vi.advanceTimersByTime(29_999);
+      await Promise.resolve();
+    });
+
+    expect(closeSessionMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      vi.advanceTimersByTime(1);
       await Promise.resolve();
     });
 

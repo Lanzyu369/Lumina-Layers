@@ -51,25 +51,27 @@ function isLayerCapOption(
   if (!isRecord(value)) {
     return false;
   }
+  const maxEffectiveLayerCount = value.max_effective_layer_count;
+  const actualLayerCount = value.actual_layer_count;
   const actual = value.actual_recipe_top_to_bottom;
   const printable = value.print_recipe_top_to_bottom;
   return (
-    isPositiveInteger(value.max_effective_layer_count) &&
-    value.max_effective_layer_count >= 5 &&
-    value.max_effective_layer_count <= 10 &&
-    isPositiveInteger(value.actual_layer_count) &&
-    value.actual_layer_count >= 5 &&
-    value.actual_layer_count <= 10 &&
+    isPositiveInteger(maxEffectiveLayerCount) &&
+    maxEffectiveLayerCount >= 5 &&
+    maxEffectiveLayerCount <= 10 &&
+    isPositiveInteger(actualLayerCount) &&
+    actualLayerCount >= 5 &&
+    actualLayerCount <= 10 &&
     isRgbTuple(value.matched_srgb) &&
     isRecipeIndexes(actual) &&
-    actual.length === value.actual_layer_count &&
-    value.actual_layer_count <= value.max_effective_layer_count &&
+    actual.length === actualLayerCount &&
+    actualLayerCount <= maxEffectiveLayerCount &&
     isRecipeIndexes(printable) &&
-    printable.length >= value.actual_layer_count &&
+    printable.length >= actualLayerCount &&
     actual.every((entry, index) => printable[index] === entry) &&
     printable
-      .slice(value.actual_layer_count)
-      .every((entry) => entry === printable[value.actual_layer_count]) &&
+      .slice(actualLayerCount)
+      .every((entry) => entry === printable[actualLayerCount]) &&
     isNonNegativeFiniteNumber(value.delta_e00)
   );
 }
@@ -83,6 +85,8 @@ function isDynamicMaterialRecipe(
   const actual = value.actual_recipe_top_to_bottom;
   const printable = value.print_recipe_top_to_bottom;
   const options = value.layer_cap_options;
+  const actualLayerCount = value.actual_layer_count;
+  const paddingLayerCount = value.padding_layer_count;
   if (
     !isRecipeIndexes(actual) ||
     !isRecipeIndexes(printable) ||
@@ -101,24 +105,24 @@ function isDynamicMaterialRecipe(
         ? [option.print_recipe_top_to_bottom[option.actual_layer_count]]
         : [],
     ),
-    ...(printable.length > (value.actual_layer_count as number)
-      ? [printable[value.actual_layer_count as number]]
+    ...(isPositiveInteger(actualLayerCount) && printable.length > actualLayerCount
+      ? [printable[actualLayerCount]]
       : []),
   ];
   return (
     isRgbTuple(value.target_srgb) &&
     isRgbTuple(value.matched_srgb) &&
-    isPositiveInteger(value.actual_layer_count) &&
-    value.actual_layer_count >= 5 &&
-    value.actual_layer_count <= 10 &&
-    isNonNegativeInteger(value.padding_layer_count) &&
-    actual.length === value.actual_layer_count &&
+    isPositiveInteger(actualLayerCount) &&
+    actualLayerCount >= 5 &&
+    actualLayerCount <= 10 &&
+    isNonNegativeInteger(paddingLayerCount) &&
+    actual.length === actualLayerCount &&
     printable.length ===
-      value.actual_layer_count + value.padding_layer_count &&
+      actualLayerCount + paddingLayerCount &&
     actual.every((entry, index) => printable[index] === entry) &&
     printable
-      .slice(value.actual_layer_count)
-      .every((entry) => entry === printable[value.actual_layer_count]) &&
+      .slice(actualLayerCount)
+      .every((entry) => entry === printable[actualLayerCount]) &&
     isNonNegativeFiniteNumber(value.selected_delta_e00) &&
     isNonNegativeFiniteNumber(value.best_range_delta_e00) &&
     isNonNegativeFiniteNumber(value.fixed_max_delta_e00) &&
@@ -134,7 +138,7 @@ function isDynamicMaterialRecipe(
     backingValues.every((entry) => entry === backingValues[0]) &&
     options.some(
       (option) =>
-        option.actual_layer_count === value.actual_layer_count &&
+        option.actual_layer_count === actualLayerCount &&
         option.delta_e00 === value.selected_delta_e00 &&
         option.matched_srgb.every(
           (entry, index) => entry === (value.matched_srgb as number[])[index],
@@ -203,34 +207,39 @@ export function restoreImportedDynamicMaterialMetadata(
   value: unknown,
   applicable: boolean,
 ): ConverterRecipeMaterialDynamic {
+  if (!applicable || !isRecord(value)) {
+    return emptyDynamicMaterialMetadata();
+  }
+  const recipes = value.recipes;
+  const benefitCurve = value.benefit_curve;
   if (
-    !applicable ||
-    !isRecord(value) ||
-    !Array.isArray(value.recipes) ||
-    !value.recipes.every(isDynamicMaterialRecipe) ||
-    !Array.isArray(value.benefit_curve) ||
-    !value.benefit_curve.every(isMaterialLayerBenefitPoint) ||
-    value.recipes.some((recipe) => {
-      const expectedCaps = value.recipes[0].layer_cap_options.map(
-        (option) => option.max_effective_layer_count,
-      );
-      return (
-        recipe.layer_cap_options.length !== expectedCaps.length ||
+    !Array.isArray(recipes) ||
+    !recipes.every(isDynamicMaterialRecipe) ||
+    !Array.isArray(benefitCurve) ||
+    !benefitCurve.every(isMaterialLayerBenefitPoint)
+  ) {
+    return emptyDynamicMaterialMetadata();
+  }
+  const expectedCaps = recipes[0]?.layer_cap_options.map(
+    (option) => option.max_effective_layer_count,
+  );
+  if (
+    recipes.some(
+      (recipe) =>
+        recipe.layer_cap_options.length !== (expectedCaps?.length ?? 0) ||
         recipe.layer_cap_options.some(
           (option, index) =>
-            option.max_effective_layer_count !== expectedCaps[index],
-        )
-      );
-    }) ||
-    (value.recipes.length > 0 &&
-      value.benefit_curve.length !==
-        value.recipes[0].layer_cap_options.length) ||
-    value.benefit_curve.some(
+            option.max_effective_layer_count !== expectedCaps?.[index],
+        ),
+    ) ||
+    (recipes.length > 0 &&
+      benefitCurve.length !== recipes[0].layer_cap_options.length) ||
+    benefitCurve.some(
       (point, index) =>
         point.max_effective_layer_count !==
-        value.recipes[0]?.layer_cap_options[index]?.max_effective_layer_count,
+        recipes[0]?.layer_cap_options[index]?.max_effective_layer_count,
     )
-) {
+  ) {
     return emptyDynamicMaterialMetadata();
   }
   const rawScope = value.scope;
@@ -242,8 +251,8 @@ export function restoreImportedDynamicMaterialMetadata(
     return emptyDynamicMaterialMetadata();
   }
   return {
-    recipes: value.recipes.map(cloneDynamicMaterialRecipe),
-    benefit_curve: cloneMaterialLayerBenefitCurve(value.benefit_curve),
+    recipes: recipes.map(cloneDynamicMaterialRecipe),
+    benefit_curve: cloneMaterialLayerBenefitCurve(benefitCurve),
     // Cards written before coverage metadata described the full printable
     // image, so retain that established interpretation on import.
     scope: rawScope ?? "all_printable_pixels",

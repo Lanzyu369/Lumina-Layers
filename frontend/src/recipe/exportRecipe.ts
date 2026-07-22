@@ -95,7 +95,9 @@ export function exportConverterRecipe(
   settings: SettingsState,
   lutFingerprint: string,
 ): ConverterRecipe {
-  // Merge colorRemapMap into replacement_regions
+  // Merge global-only colorRemapMap entries into global replacement_regions.
+  // Spatial region edits remain session-scoped and are never serialized here.
+  // 这里只合并全局替色映射；空间局部改色仅存在于当前会话。
   let mergedReplacements: ColorReplacementItem[] = [
     ...state.replacement_regions,
   ];

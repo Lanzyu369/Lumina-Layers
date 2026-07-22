@@ -31,6 +31,10 @@ describe("collectBugReportContext", () => {
       downloadUrl: null,
       threemfDiskPath: null,
       largeFormatEnabled: false,
+      replacement_regions: [],
+      colorRemapMap: {},
+      palette: [],
+      regionReplacementCount: 0,
       free_color_set: new Set(),
       recipe_overrides: [],
     });
@@ -334,6 +338,16 @@ describe("collectBugReportContext", () => {
       largeFormatEnabled: true,
       tileWidthMm: 200,
       tileHeightMm: 180,
+      colorRemapMap: { aabbcc: "ddeeff" },
+      palette: [
+        {
+          quantized_hex: "112233",
+          matched_hex: "aabbcc",
+          pixel_count: 42,
+          percentage: 1,
+        },
+      ],
+      regionReplacementCount: 3,
       free_color_set: new Set(["ff0000"]),
       recipe_overrides: [
         {
@@ -370,6 +384,14 @@ describe("collectBugReportContext", () => {
     expect(advanced.large_format.tileHeightMm).toBe(180);
 
     expect(advanced.color_replacement.free_color_set).toEqual(["#ff0000"]);
+    expect(advanced.color_replacement.spatial_edit_count).toBe(3);
+    expect(advanced.color_replacement.replacement_regions).toEqual([
+      {
+        quantized_hex: "#112233",
+        matched_hex: "#aabbcc",
+        replacement_hex: "#ddeeff",
+      },
+    ]);
     expect(advanced.color_replacement.recipe_overrides).toEqual([
       {
         region_id: "region-a",

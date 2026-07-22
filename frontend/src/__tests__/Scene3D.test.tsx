@@ -17,6 +17,10 @@ vi.mock("../components/InteractiveModelViewer", () => ({
     return null;
   },
   extractHexFromMeshName: (name: string) => name.slice(6),
+  resolvePreviewColorLayerHeightMm: (height?: number) => {
+    const value = typeof height === "number" ? height : NaN;
+    return Number.isFinite(value) && value > 0 ? value : 0.4;
+  },
 }));
 vi.mock("../components/BedPlatform", () => ({ default: () => null }));
 vi.mock("../components/KeychainRing3D", () => ({ default: () => null }));
@@ -75,6 +79,28 @@ function createMockGl() {
 
 type MockControlEvent = "start" | "change" | "end";
 
+type MockVector3 = {
+  x: number;
+  y: number;
+  z: number;
+  set: (nextX: number, nextY: number, nextZ: number) => MockVector3;
+  distanceTo: (other: MockVector3) => number;
+};
+
+function createMockVector3(x: number, y: number, z: number): MockVector3 {
+  const vector = { x, y, z } as MockVector3;
+  vector.set = vi.fn((nextX: number, nextY: number, nextZ: number) => {
+    vector.x = nextX;
+    vector.y = nextY;
+    vector.z = nextZ;
+    return vector;
+  });
+  vector.distanceTo = vi.fn((other: MockVector3) =>
+    Math.hypot(vector.x - other.x, vector.y - other.y, vector.z - other.z),
+  );
+  return vector;
+}
+
 function createMockControls() {
   const listeners: Record<MockControlEvent, Set<() => void>> = {
     start: new Set(),
@@ -83,6 +109,10 @@ function createMockControls() {
   };
 
   return {
+    target: createMockVector3(0, -20, 0),
+    minDistance: 10,
+    maxDistance: 2_000,
+    update: vi.fn(),
     addEventListener: vi.fn((type: MockControlEvent, listener: () => void) => {
       listeners[type].add(listener);
     }),
@@ -110,7 +140,15 @@ function createMockControls() {
 type MockThreeState = {
   gl: ReturnType<typeof createMockGl>;
   scene: { children: THREE.Object3D[] };
-  camera: { position: { x: number; y: number; z: number } };
+  camera: {
+    isPerspectiveCamera: true;
+    position: MockVector3;
+    near: number;
+    far: number;
+    fov: number;
+    lookAt: ReturnType<typeof vi.fn>;
+    updateProjectionMatrix: ReturnType<typeof vi.fn>;
+  };
   controls: ReturnType<typeof createMockControls> | null;
   invalidate: ReturnType<typeof vi.fn>;
 };
@@ -120,7 +158,15 @@ function getMockThreeState(): MockThreeState {
     mockThreeState = {
       gl: createMockGl(),
       scene: { children: [] as THREE.Object3D[] },
-      camera: { position: { x: 0, y: 0, z: 0 } },
+      camera: {
+        isPerspectiveCamera: true,
+        position: createMockVector3(0, -57, 474),
+        near: 0.1,
+        far: 2_000,
+        fov: 45,
+        lookAt: vi.fn(),
+        updateProjectionMatrix: vi.fn(),
+      },
       controls: null,
       invalidate: vi.fn(),
     };
@@ -349,6 +395,66 @@ beforeEach(() => {
     });
   });
 
+  describe("camera depth precision", () => {
+    it("starts with clipping planes that separate thin material layers", () => {
+      render(<Scene3D />);
+
+      const camera = capturedCanvasProps.camera as {
+        near?: number;
+        far?: number;
+      };
+      expect(camera.near).toBeGreaterThan(1);
+      expect(camera.far).toBeGreaterThan(2_000);
+    });
+
+    it("subscribes when default orbit controls register after the first render", () => {
+      const controls = createMockControls();
+      const threeState = getMockThreeState();
+
+      const { rerender } = render(<Scene3D />);
+      expect(threeState.controls).toBeNull();
+
+      act(() => {
+        threeState.controls = controls;
+        rerender(<Scene3D />);
+      });
+
+      expect(threeState.camera.near).toBeCloseTo(4.75, 1);
+      expect(threeState.camera.far).toBeGreaterThan(4_700);
+      expect(controls.addEventListener).toHaveBeenCalledWith(
+        "change",
+        expect.any(Function),
+      );
+
+      act(() => {
+        threeState.camera.position.set(0, 0, 2_000);
+        controls.target.set(0, 0, 0);
+        controls.emit("change");
+      });
+
+      expect(threeState.camera.near).toBe(20);
+      expect(threeState.camera.far).toBe(20_000);
+      expect(threeState.camera.updateProjectionMatrix).toHaveBeenCalled();
+    });
+
+    it("does not rebuild the projection matrix for rotation-only changes", () => {
+      const controls = createMockControls();
+      const threeState = getMockThreeState();
+      threeState.controls = controls;
+
+      render(<Scene3D />);
+      const orbitDistance = threeState.camera.position.distanceTo(controls.target);
+      threeState.camera.updateProjectionMatrix.mockClear();
+
+      act(() => {
+        threeState.camera.position.set(orbitDistance, controls.target.y, 0);
+        controls.emit("change");
+      });
+
+      expect(threeState.camera.updateProjectionMatrix).not.toHaveBeenCalled();
+    });
+  });
+
   describe("puzzle overlay wiring", () => {
     it("passes the live puzzle overlay into InteractiveModelViewer", () => {
       useConverterStore.setState({
@@ -390,6 +496,18 @@ beforeEach(() => {
       render(<Scene3D />);
 
       expect(capturedInteractiveViewerProps?.enableFridgeMagnet).toBe(true);
+    });
+
+    it("passes material stack height into InteractiveModelViewer", () => {
+      useConverterStore.setState({
+        previewGlbUrl: "/api/files/mock-preview.glb",
+        color_layers: 10,
+        layer_height_mm: 0.08,
+      });
+
+      render(<Scene3D />);
+
+      expect(capturedInteractiveViewerProps?.colorLayerHeightMm).toBeCloseTo(0.8, 5);
     });
 
     it("does not render the proxy layer when fridge mode is disabled", () => {

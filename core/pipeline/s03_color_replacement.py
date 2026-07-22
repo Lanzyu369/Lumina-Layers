@@ -27,6 +27,99 @@ from core.pipeline.pipeline_utils import _hex_to_rgb_tuple
 _log = get_logger(__name__)
 
 
+def _resize_spatial_nearest(
+    values: np.ndarray,
+    target_shape: tuple[int, int],
+) -> np.ndarray:
+    """Resize the first two axes with pixel-center nearest-neighbor sampling."""
+
+    source = np.asarray(values)
+    if source.ndim < 2:
+        raise ValueError("Authoritative recipe artifact must have spatial axes")
+    source_h, source_w = source.shape[:2]
+    target_h, target_w = target_shape
+    if source_h <= 0 or source_w <= 0 or target_h <= 0 or target_w <= 0:
+        raise ValueError("Authoritative recipe artifact has an empty spatial grid")
+    if (source_h, source_w) == (target_h, target_w):
+        return source
+
+    y_indices = np.minimum(
+        ((np.arange(target_h, dtype=np.float64) + 0.5) * source_h / target_h).astype(
+            np.intp
+        ),
+        source_h - 1,
+    )
+    x_indices = np.minimum(
+        ((np.arange(target_w, dtype=np.float64) + 0.5) * source_w / target_w).astype(
+            np.intp
+        ),
+        source_w - 1,
+    )
+    return source[y_indices[:, None], x_indices[None, :], ...]
+
+
+def _prepare_authoritative_material_override(
+    override_material_matrix: np.ndarray,
+    processed_material_matrix: np.ndarray,
+    mask_solid: np.ndarray,
+    authority_mask_path: str | None,
+) -> tuple[np.ndarray, np.ndarray | None]:
+    """Validate and align a final material matrix to the fresh S02 grid.
+
+    Recipe-only large-format workers run S02 on a freshly cropped tile. Its
+    integer pixel grid can differ by one pixel from the corresponding preview
+    cache crop. In that case the final recipe matrix and its authority mask are
+    sampled together onto S02's canonical grid. A complete cached trio has no
+    authority mask and must already match exactly.
+    """
+
+    override = np.asarray(override_material_matrix)
+    processed = np.asarray(processed_material_matrix)
+    solid = np.asarray(mask_solid)
+    if override.ndim != 3 or processed.ndim != 3:
+        raise ValueError("Authoritative material matrix must be 3-dimensional")
+    if not np.issubdtype(override.dtype, np.integer):
+        raise ValueError("Authoritative material matrix must use an integer dtype")
+    if override.shape[2] != processed.shape[2]:
+        raise ValueError(
+            "Authoritative material matrix layer count does not match "
+            "processed material matrix"
+        )
+    if solid.ndim != 2 or solid.shape != processed.shape[:2]:
+        raise ValueError(
+            "Processed solid mask shape does not match processed material matrix"
+        )
+
+    if authority_mask_path is None:
+        if override.shape != processed.shape:
+            raise ValueError(
+                "Complete authoritative material matrix shape does not match "
+                "processed material matrix"
+            )
+        return np.array(override, copy=True), None
+
+    try:
+        loaded_mask = np.load(authority_mask_path, allow_pickle=False)
+    except (OSError, ValueError, TypeError) as exc:
+        raise ValueError("Failed to load final material matrix authority mask") from exc
+    authority_mask = np.asarray(loaded_mask)
+    if authority_mask.ndim != 2:
+        raise ValueError("Final material matrix authority mask must be 2-dimensional")
+    if authority_mask.shape != override.shape[:2]:
+        raise ValueError(
+            "Final material matrix authority mask shape does not match "
+            "authoritative material matrix"
+        )
+
+    target_shape = processed.shape[:2]
+    aligned_override = _resize_spatial_nearest(override, target_shape)
+    aligned_mask = _resize_spatial_nearest(authority_mask, target_shape)
+    return (
+        np.array(aligned_override, copy=True),
+        np.asarray(aligned_mask, dtype=bool) & np.asarray(solid, dtype=bool),
+    )
+
+
 def _extend_ctx_palette_with_virtuals(
     ctx: dict,
     lut_palette_length: int,
@@ -782,11 +875,15 @@ def run(ctx: dict) -> dict:
         - color_replacements (dict | None): 全局颜色替换映射
         - replacement_regions (list | None): 区域替换列表
         - matched_rgb_path (str | None): 预计算 matched_rgb .npy 文件路径
+        - height_identity_rgb_path (str | None): 稳定高度身份 RGB .npy 路径
         - material_matrix_path (str | None): 预计算 material_matrix .npy 文件路径
+        - final_material_matrix_is_authoritative (bool): 颜色映射后保留最终材料矩阵
+        - final_material_matrix_authority_mask_path (str | None): 最终矩阵权威区域
 
     PipelineContext 输出键 / Output keys:
         - matched_rgb (np.ndarray): 更新后的 RGB（如有替换）
         - material_matrix (np.ndarray): 更新后的材料矩阵（如有替换）
+        - height_identity_rgb (np.ndarray): 替换前的稳定逐像素高度身份
     """
     _t0 = time.perf_counter()
 
@@ -800,7 +897,16 @@ def run(ctx: dict) -> dict:
     color_replacements = ctx.get("color_replacements")
     replacement_regions = ctx.get("replacement_regions")
     matched_rgb_path = ctx.get("matched_rgb_path")
+    height_identity_rgb_path = ctx.get("height_identity_rgb_path")
     material_matrix_path = ctx.get("material_matrix_path")
+    final_material_matrix_is_authoritative = bool(
+        ctx.get("final_material_matrix_is_authoritative", False)
+    )
+    final_material_matrix_authority_mask_path = ctx.get(
+        "final_material_matrix_authority_mask_path"
+    )
+    authoritative_material_matrix = None
+    authoritative_material_mask = None
     recipe_overrides = ctx.get("recipe_overrides") or []
     recipe_override_masks_path = ctx.get("recipe_override_masks_path")
     lut_metadata = ctx.get("lut_metadata")
@@ -813,44 +919,126 @@ def run(ctx: dict) -> dict:
     # ---- Override matched_rgb with pre-computed array if provided ----
     if matched_rgb_path is not None:
         try:
-            override_rgb = np.load(matched_rgb_path)
-            if override_rgb.shape != matched_rgb.shape:
+            override_rgb = np.asarray(
+                np.load(matched_rgb_path, allow_pickle=False),
+                dtype=np.uint8,
+            )
+            override_has_valid_rank = (
+                override_rgb.ndim == 3 and override_rgb.shape[2] == 3
+            )
+            override_matches_spatial_grid = (
+                override_has_valid_rank
+                and override_rgb.shape[:2] == mask_solid.shape
+                and override_rgb.shape[:2] == material_matrix.shape[:2]
+            )
+            if not override_matches_spatial_grid:
+                error_message = (
+                    f"matched_rgb_path shape {override_rgb.shape} does not "
+                    "match the material/mask grid"
+                )
                 _log.warning(
-                    f"matched_rgb_path shape {override_rgb.shape} "
-                    f"does not match processed shape {matched_rgb.shape}, ignoring override"
+                    "Ignoring matched RGB artifact with an incompatible grid",
+                    extra={
+                        "event": "matched_rgb_artifact_shape_mismatch",
+                        "error_type": "ValueError",
+                        "error_message": error_message,
+                        "path": str(matched_rgb_path),
+                    },
                 )
             else:
-                # Detect pixels that differ between original and override
-                diff_mask = np.any(matched_rgb != override_rgb, axis=-1) & mask_solid
-                if np.any(diff_mask) and processor is not None:
-                    diff_pixels = override_rgb[diff_mask]  # (N, 3)
-                    unique_colors = np.unique(diff_pixels, axis=0)
-                    for color in unique_colors:
-                        color_mask = np.all(override_rgb == color, axis=-1) & diff_mask
-                        repl_lab = processor._rgb_to_lab(color.reshape(1, 3))
-                        _, lut_idx = processor.kdtree.query(repl_lab)
-                        new_stacks = processor.ref_stacks[lut_idx[0]]
-                        material_matrix[color_mask] = new_stacks
+                if override_rgb.shape == matched_rgb.shape:
+                    # Detect pixels that differ between original and override.
+                    diff_mask = np.any(matched_rgb != override_rgb, axis=-1) & mask_solid
+                    if np.any(diff_mask) and processor is not None:
+                        diff_pixels = override_rgb[diff_mask]  # (N, 3)
+                        unique_colors = np.unique(diff_pixels, axis=0)
+                        for color in unique_colors:
+                            color_mask = np.all(override_rgb == color, axis=-1) & diff_mask
+                            repl_lab = processor._rgb_to_lab(color.reshape(1, 3))
+                            _, lut_idx = processor.kdtree.query(repl_lab)
+                            new_stacks = processor.ref_stacks[lut_idx[0]]
+                            material_matrix[color_mask] = new_stacks
+                        _log.debug(
+                            f"matched_rgb override applied: "
+                            f"{np.sum(diff_mask)} pixels updated across {len(unique_colors)} colors"
+                        )
+                    elif np.any(diff_mask):
+                        _log.debug(
+                            "matched_rgb override: %d differing pixels skipped "
+                            "(no LUT processor in material-archive mode)",
+                            int(np.sum(diff_mask)),
+                        )
+                else:
                     _log.debug(
-                        f"matched_rgb override applied: "
-                        f"{np.sum(diff_mask)} pixels updated across {len(unique_colors)} colors"
-                    )
-                elif np.any(diff_mask):
-                    _log.debug(
-                        "matched_rgb override: %d differing pixels skipped "
-                        "(no LUT processor in material-archive mode)",
-                        int(np.sum(diff_mask)),
+                        "matched_rgb override replaced the provisional S02 grid: %s -> %s",
+                        tuple(matched_rgb.shape),
+                        tuple(override_rgb.shape),
                     )
                 matched_rgb = override_rgb
         except (OSError, ValueError, TypeError) as e:
             _log.warning(
-                f"Failed to load matched_rgb_path '{matched_rgb_path}': {e}, " f"using original processed result"
+                "Failed to load matched RGB artifact; using S02 result",
+                extra={
+                    "event": "matched_rgb_artifact_load_failed",
+                    "error_type": type(e).__name__,
+                    "error_message": str(e),
+                    "path": str(matched_rgb_path),
+                },
             )
+
+    # Relief height identity is independent from display colour, but its
+    # spatial contract is defined by the final pre-replacement matched RGB.
+    # Resolve cached matched_rgb first; then load the explicit identity or,
+    # for legacy callers, snapshot that final matched plane.
+    height_identity_rgb = None
+    if height_identity_rgb_path is not None:
+        try:
+            loaded_identity = np.load(
+                height_identity_rgb_path,
+                allow_pickle=False,
+            )
+            if loaded_identity.shape != matched_rgb.shape:
+                raise ValueError(
+                    "height identity shape does not match final matched RGB"
+                )
+            height_identity_rgb = np.asarray(
+                loaded_identity,
+                dtype=np.uint8,
+            )
+        except (OSError, ValueError, TypeError) as exc:
+            _log.warning(
+                "Failed to load height identity artifact; using final matched RGB",
+                extra={
+                    "event": "height_identity_artifact_load_failed",
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                    "path": str(height_identity_rgb_path),
+                },
+            )
+    if height_identity_rgb is None:
+        height_identity_rgb = np.asarray(matched_rgb, dtype=np.uint8).copy()
 
     if material_matrix_path is not None:
         try:
-            override_material_matrix = np.load(material_matrix_path)
-            if override_material_matrix.shape != material_matrix.shape:
+            override_material_matrix = np.load(
+                material_matrix_path,
+                allow_pickle=False,
+            )
+            if final_material_matrix_is_authoritative:
+                (
+                    authoritative_material_matrix,
+                    authoritative_material_mask,
+                ) = _prepare_authoritative_material_override(
+                    override_material_matrix,
+                    material_matrix,
+                    mask_solid,
+                    final_material_matrix_authority_mask_path,
+                )
+                material_matrix = np.array(
+                    authoritative_material_matrix,
+                    copy=True,
+                )
+            elif override_material_matrix.shape != material_matrix.shape:
                 _log.warning(
                     f"material_matrix_path shape {override_material_matrix.shape} "
                     f"does not match processed shape {material_matrix.shape}, ignoring override"
@@ -858,6 +1046,10 @@ def run(ctx: dict) -> dict:
             else:
                 material_matrix = override_material_matrix
         except (OSError, ValueError, TypeError) as e:
+            if final_material_matrix_is_authoritative:
+                raise ValueError(
+                    f"Invalid authoritative material matrix artifact: {e}"
+                ) from e
             _log.warning(
                 f"Failed to load material_matrix_path '{material_matrix_path}': {e}, "
                 f"using original processed result"
@@ -1254,8 +1446,24 @@ def run(ctx: dict) -> dict:
             processor.ref_stacks,
         )
 
+    if authoritative_material_matrix is not None:
+        # Complete cached analysis owns the whole matrix. Recipe-only
+        # large-format inputs own only the union of their recipe regions:
+        # global/scoped mappings must remain physically effective everywhere
+        # else, even when an imported replacement list was never baked into
+        # the preview cache used by the route helper.
+        # 完整缓存分析拥有整张矩阵；recipe-only 大画幅只在配方区域
+        # union 内拥有最终权威。其他像素保留本轮全局/区域替色的实体矩阵。
+        if authoritative_material_mask is None:
+            material_matrix = authoritative_material_matrix
+        else:
+            material_matrix[authoritative_material_mask] = (
+                authoritative_material_matrix[authoritative_material_mask]
+            )
+
     ctx["matched_rgb"] = matched_rgb
     ctx["material_matrix"] = material_matrix
+    ctx["height_identity_rgb"] = height_identity_rgb
 
     _elapsed = time.perf_counter() - _t0
     _hifi_timings = ctx.get("_hifi_timings", {})

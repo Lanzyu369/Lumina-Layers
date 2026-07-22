@@ -271,6 +271,7 @@ def _full_advanced_params() -> dict[str, object]:
         "fridge_magnet": {"enable_fridge_magnet": True},
         "puzzle": {"puzzleEnabled": False},
         "large_format": {"largeFormatEnabled": True},
+        "color_replacement": {"spatial_edit_count": 3},
     }
 
 
@@ -301,6 +302,7 @@ def test_index_renders_advanced_params_section_with_eight_toggles(tmp_path: Path
     assert "- enable_fridge_magnet: enabled" in md
     assert "- puzzleEnabled: disabled" in md
     assert "- largeFormatEnabled: enabled" in md
+    assert "- spatial_edit_count: 3" in md
 
     # Section ordering: Workflow Snapshot → Advanced Generation Parameters → Recent Actions.
     idx_snapshot = md.index("## Workflow Snapshot")

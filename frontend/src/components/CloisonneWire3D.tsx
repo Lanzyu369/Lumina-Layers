@@ -333,8 +333,31 @@ export function maskIntersection(
 
 // ========== React Component ==========
 
-/** Color layer thickness in mm (5 layers × 0.08mm), consistent with InteractiveModelViewer. */
-export const COLOR_LAYER_HEIGHT = 0.4;
+/** Default color layer thickness in mm (5 layers x 0.08mm), consistent with InteractiveModelViewer. */
+export const DEFAULT_COLOR_LAYER_HEIGHT_MM = 0.4;
+
+export function resolveCloisonneColorLayerHeightMm(
+  colorLayerHeightMm?: number,
+): number {
+  const value = typeof colorLayerHeightMm === "number" ? colorLayerHeightMm : NaN;
+  return Number.isFinite(value) && value > 0
+    ? value
+    : DEFAULT_COLOR_LAYER_HEIGHT_MM;
+}
+
+const MATERIAL_LAYER_MESH_RE = /^color_[0-9a-fA-F]{6}_m\d+_l\d+$/;
+const TOP_MATERIAL_LAYER_MESH_RE = /^color_[0-9a-fA-F]{6}_m\d+_l000$/;
+
+export function selectVisibleCloisonneColorMeshes(
+  colorMeshes: THREE.Mesh[],
+): THREE.Mesh[] {
+  const layeredMeshes = colorMeshes.filter((mesh) => MATERIAL_LAYER_MESH_RE.test(mesh.name));
+  if (layeredMeshes.length === 0) {
+    return colorMeshes;
+  }
+  const topLayerMeshes = layeredMeshes.filter((mesh) => TOP_MATERIAL_LAYER_MESH_RE.test(mesh.name));
+  return topLayerMeshes.length > 0 ? topLayerMeshes : layeredMeshes;
+}
 
 /** Gold color for cloisonné wires. */
 export const WIRE_COLOR = 0xdaa520;
@@ -356,6 +379,7 @@ export interface CloisonneWire3DProps {
   colorMeshes: THREE.Mesh[];
   backingPlateMesh: THREE.Mesh | null;
   spacerThick: number;
+  colorLayerHeightMm?: number;
 }
 
 /**
@@ -489,23 +513,26 @@ export default function CloisonneWire3D({
   colorMeshes,
   backingPlateMesh,
   spacerThick,
+  colorLayerHeightMm,
 }: CloisonneWire3DProps) {
+  const resolvedColorLayerHeightMm = resolveCloisonneColorLayerHeightMm(colorLayerHeightMm);
   const geometry = useMemo(() => {
     const buildStart = performance.now();
     // Guard: early returns for invalid states
     if (!enabled) return null;
-    if (colorMeshes.length === 0) return null;
+    const visibleColorMeshes = selectVisibleCloisonneColorMeshes(colorMeshes);
+    if (visibleColorMeshes.length === 0) return null;
     if (wireWidthMm <= 0 || wireHeightMm <= 0) return null;
 
     // 1. Derive grid parameters (cellSize, origin, dimensions)
-    const gridParams = deriveGridParams(backingPlateMesh, colorMeshes);
+    const gridParams = deriveGridParams(backingPlateMesh, visibleColorMeshes);
     if (!gridParams) return null;
 
     const { cellSize, originX, originY, gridW, gridH } = gridParams;
 
     // 2. Rasterize all color meshes to a shared color grid
     const colorGrid = rasterizeColorMeshesToGrid(
-      colorMeshes, cellSize, originX, originY, gridW, gridH,
+      visibleColorMeshes, cellSize, originX, originY, gridW, gridH,
     );
 
     // 3. Detect color edges via 4-neighbor comparison
@@ -531,15 +558,15 @@ export default function CloisonneWire3D({
     if (rects.length === 0) return null;
 
     // 7. Extrude rectangles into 3D geometry
-    //    Bottom at Z = spacerThick + COLOR_LAYER_HEIGHT
+    //    Bottom at Z = spacerThick + resolved color-layer height
     //    pad = 0 since our grid has no extra padding (unlike OutlineFrame3D)
     const geo = extrudeRectangles(
       rects, originX, originY, cellSize, wireHeightMm, 0,
     );
     if (!geo) return null;
 
-    // 8. Translate geometry so bottom sits at Z = spacerThick + COLOR_LAYER_HEIGHT
-    const baseZ = spacerThick + COLOR_LAYER_HEIGHT;
+    // 8. Translate geometry so bottom sits at Z = spacerThick + color-layer height
+    const baseZ = spacerThick + resolvedColorLayerHeightMm;
     geo.translate(0, 0, baseZ);
 
     const position = geo.getAttribute("position");
@@ -556,11 +583,11 @@ export default function CloisonneWire3D({
       rect_count: rects.length,
       vertex_count: position.count,
       triangle_count: triangleCount,
-      color_meshes: summarizeMeshList(colorMeshes),
+      color_meshes: summarizeMeshList(visibleColorMeshes),
     });
 
     return geo;
-  }, [enabled, wireWidthMm, wireHeightMm, colorMeshes, backingPlateMesh, spacerThick]);
+  }, [enabled, wireWidthMm, wireHeightMm, colorMeshes, backingPlateMesh, spacerThick, resolvedColorLayerHeightMm]);
 
   useEffect(() => {
     cancelPendingCloisonneWireGeometryDispose(geometry);

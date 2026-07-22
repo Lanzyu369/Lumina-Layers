@@ -751,12 +751,31 @@ def test_apply_recipe_override_handoff_to_generate_uses_session_persisted_region
         "matched_rgb": matched_rgb.copy(),
         "material_matrix": material_matrix.copy(),
         "mask_solid": np.ones((4, 4), dtype=bool),
+        "target_w": 4,
+        "target_h": 4,
+        "target_width_mm": 60.0,
+        "color_mode": "4-Color (RYBW)",
+        "modeling_mode": "high-fidelity",
         "color_layers": 5,
         "layer_height_mm": 0.08,
+        "quantize_colors": 48,
+        "enable_cleanup": True,
+        "hue_weight": 0.0,
+        "chroma_gate": 15.0,
+        "use_lut_constrained": False,
+        "auto_dynamic_range": False,
+        "model_enable": False,
+        "model_only": False,
+        "model_threshold": None,
+        "model_margin": None,
+        "svg_pixels_per_mm": 10.0,
+        "material_source": "lut",
     }
     store.put(session_id, "image_path", str(image_path))
     store.put(session_id, "lut_path", str(lut_path))
     store.put(session_id, "preview_cache", preview_cache)
+    store.put(session_id, "color_layers", 5)
+    store.put(session_id, "layer_height_mm", 0.08)
     store.put(session_id, "selected_region_mask", mask)
     store.put(session_id, "selected_region_id", "region-1")
     store.put(session_id, "selected_region_masks", {"region-1": mask})

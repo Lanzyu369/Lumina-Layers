@@ -82,6 +82,7 @@ from .common import (
     ROUTER_HANDLED_ERRORS,
     _handle_core_error,
     _image_to_png_bytes,
+    _public_pipeline_validation_detail,
     _require_preview_cache,
     _require_session,
     _resolve_material_backing_index,
@@ -176,19 +177,31 @@ def _with_original_preview_cache_refs(ref: dict) -> dict:
     }
     fields = updated["fields"]
     if "matched_rgb" in fields:
-        fields["original_matched_rgb"] = dict(fields["matched_rgb"])
+        fields.setdefault("original_matched_rgb", dict(fields["matched_rgb"]))
+        fields.setdefault(
+            "height_identity_rgb",
+            dict(fields["original_matched_rgb"]),
+        )
     if "material_matrix" in fields:
-        fields["original_material_matrix"] = dict(fields["material_matrix"])
+        fields.setdefault(
+            "original_material_matrix",
+            dict(fields["material_matrix"]),
+        )
     if "quantized_image" in fields:
-        fields["original_quantized_image"] = dict(fields["quantized_image"])
+        fields.setdefault(
+            "original_quantized_image",
+            dict(fields["quantized_image"]),
+        )
     metadata = updated["metadata"]
     if "material_dynamic_layer_info" in metadata:
-        metadata["original_material_dynamic_layer_info"] = copy.deepcopy(
-            metadata["material_dynamic_layer_info"]
+        metadata.setdefault(
+            "original_material_dynamic_layer_info",
+            copy.deepcopy(metadata["material_dynamic_layer_info"]),
         )
     if "material_solver_info" in metadata:
-        metadata["original_material_solver_info"] = copy.deepcopy(
-            metadata["material_solver_info"]
+        metadata.setdefault(
+            "original_material_solver_info",
+            copy.deepcopy(metadata["material_solver_info"]),
         )
     return updated
 _DEFAULT_GENERATE_SEGMENTED_GLB = generate_segmented_glb
@@ -1186,6 +1199,9 @@ async def convert_preview(
     except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as e:
         _handle_core_error(e, "preview generation")
     except ROUTER_HANDLED_ERRORS as e:
+        public_detail = _public_pipeline_validation_detail(e)
+        if public_detail is not None:
+            raise HTTPException(status_code=422, detail=public_detail) from e
         log.exception(
             "Preview generation failed",
             extra={
@@ -1469,29 +1485,44 @@ async def convert_preview(
     if cache_session_value is None and cache_data is not None:
         cache_with_originals = dict(cache_data)
         if "matched_rgb" in cache_data:
-            cache_with_originals["original_matched_rgb"] = cache_data["matched_rgb"]
+            cache_with_originals.setdefault(
+                "original_matched_rgb",
+                cache_data["matched_rgb"],
+            )
+            cache_with_originals.setdefault(
+                "height_identity_rgb",
+                cache_with_originals["original_matched_rgb"],
+            )
         if "material_matrix" in cache_data:
-            cache_with_originals["original_material_matrix"] = cache_data["material_matrix"]
+            cache_with_originals.setdefault(
+                "original_material_matrix",
+                cache_data["material_matrix"],
+            )
         if "quantized_image" in cache_data:
-            cache_with_originals["original_quantized_image"] = cache_data[
-                "quantized_image"
-            ]
+            cache_with_originals.setdefault(
+                "original_quantized_image",
+                cache_data["quantized_image"],
+            )
         if "material_dynamic_layer_info" in cache_data:
-            cache_with_originals["original_material_dynamic_layer_info"] = (
-                copy.deepcopy(cache_data["material_dynamic_layer_info"])
+            cache_with_originals.setdefault(
+                "original_material_dynamic_layer_info",
+                copy.deepcopy(cache_data["material_dynamic_layer_info"]),
             )
         if "material_solver_info" in cache_data:
-            cache_with_originals["original_material_solver_info"] = copy.deepcopy(
-                cache_data["material_solver_info"]
+            cache_with_originals.setdefault(
+                "original_material_solver_info",
+                copy.deepcopy(cache_data["material_solver_info"]),
             )
         cache_with_originals = _compact_preview_cache_material_matrices(
             cache_with_originals,
         )
         try:
-            cache_session_value = externalize_preview_cache(
-                session_id,
-                store,
-                cache_with_originals,
+            cache_session_value = _with_original_preview_cache_refs(
+                externalize_preview_cache(
+                    session_id,
+                    store,
+                    cache_with_originals,
+                )
             )
         except ROUTER_HANDLED_ERRORS:
             _rollback_preview_session_after_failure(

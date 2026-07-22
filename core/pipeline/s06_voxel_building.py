@@ -74,7 +74,9 @@ def _update_bambu_base_layer_ctx_from_voxels(
     ctx["bambu_base_height_mm"] = float(base_height_mm)
     ctx["bambu_color_height_mm"] = float(color_height_mm)
     ctx["bambu_face_orientation"] = face_orientation
-    ctx["enable_base_layer_height_modifier"] = bool(ctx.get("enable_base_layer_height_modifier", True))
+    ctx["enable_base_layer_height_modifier"] = bool(
+        ctx.get("enable_base_layer_height_modifier", True)
+    ) and not bool(ctx.get("enable_relief", False))
 
 
 def _normalize_color_height_map(color_height_map: dict[str, float]) -> dict[str, float]:
@@ -538,6 +540,7 @@ def _build_relief_voxel_matrix(
     pixel_scale,
     height_matrix=None,
     global_max_height=None,
+    height_identity_rgb=None,
 ):
     """Build 2.5D relief voxel matrix with per-color or per-pixel variable heights.
     构建 2.5D 浮雕体素矩阵，支持按颜色或按像素的可变高度。
@@ -553,7 +556,11 @@ def _build_relief_voxel_matrix(
     - Top layers (optical): Z=(Target_Z - optical thickness) to Z=Target_Z - filled with material layers
 
     Args:
-        matched_rgb (np.ndarray): (H, W, 3) RGB color array after K-Means matching
+        matched_rgb (np.ndarray): (H, W, 3) display RGB after replacements.
+        height_identity_rgb (np.ndarray | None): Stable (H, W, 3) source RGB
+            used only for color-height lookup. Replacements must never mutate
+            this identity plane. When omitted, ``matched_rgb`` preserves the
+            legacy behaviour.
         material_matrix (np.ndarray): (H, W, N) material matrix for optical layers
         mask_solid (np.ndarray): (H, W) boolean mask of solid pixels
         color_height_map (dict): dict mapping hex colors to heights in mm
@@ -571,6 +578,15 @@ def _build_relief_voxel_matrix(
     color_height_map = _normalize_color_height_map(color_height_map)
 
     target_h, target_w = material_matrix.shape[:2]
+    height_lookup_rgb = (
+        np.asarray(height_identity_rgb, dtype=np.uint8)
+        if height_identity_rgb is not None
+        else np.asarray(matched_rgb, dtype=np.uint8)
+    )
+    if height_lookup_rgb.shape != (target_h, target_w, 3):
+        raise ValueError(
+            "height_identity_rgb shape must match the material matrix grid"
+        )
 
     # Material archives can use more than the legacy 5 optical layers. Relief
     # must preserve the full recipe depth instead of truncating to 5.
@@ -592,9 +608,9 @@ def _build_relief_voxel_matrix(
         pixel_heights = np.full((target_h, target_w), default_height, dtype=np.float32)
         if color_height_map:
             rgb_codes = (
-                matched_rgb[..., 0].astype(np.int32) * 65536
-                + matched_rgb[..., 1].astype(np.int32) * 256
-                + matched_rgb[..., 2].astype(np.int32)
+                height_lookup_rgb[..., 0].astype(np.int32) * 65536
+                + height_lookup_rgb[..., 1].astype(np.int32) * 256
+                + height_lookup_rgb[..., 2].astype(np.int32)
             )
             for hex_color, height in color_height_map.items():
                 hex_clean = hex_color.lstrip("#")
@@ -780,6 +796,7 @@ def run(ctx: dict) -> dict:
     heightmap_path = ctx.get("heightmap_path")
     heightmap_max_height = ctx.get("heightmap_max_height")
     matched_rgb = ctx["matched_rgb"]
+    height_identity_rgb = ctx.get("height_identity_rgb")
     pixel_scale = ctx["pixel_scale"]
     relief_global_max_height = ctx.get("relief_global_max_height")
     enable_fridge_magnet = ctx.get("enable_fridge_magnet", False)
@@ -891,6 +908,7 @@ def run(ctx: dict) -> dict:
                     pixel_scale=pixel_scale,
                     height_matrix=heightmap_height_matrix,
                     global_max_height=relief_global_max_height,
+                    height_identity_rgb=height_identity_rgb,
                 )
             elif enable_relief and height_mode == "color" and color_height_map:
                 _log.debug(f"2.5D Relief Mode ENABLED")
@@ -906,6 +924,7 @@ def run(ctx: dict) -> dict:
                     backing_color_id=effective_backing_color_id,
                     pixel_scale=pixel_scale,
                     global_max_height=relief_global_max_height,
+                    height_identity_rgb=height_identity_rgb,
                 )
             else:
                 # Original flat voxel matrix

@@ -310,6 +310,9 @@ def convert_image_to_3d(
     high_precision_3d_preview: bool = False,
     svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
     *,
+    height_identity_rgb_path: Optional[str] = None,
+    final_material_matrix_is_authoritative: bool = False,
+    final_material_matrix_authority_mask_path: Optional[str] = None,
     cover_source_path: Optional[str] = None,
     material_dynamic_layer_count_enabled: bool = False,
     material_min_layer_count: int = 5,
@@ -348,8 +351,22 @@ def convert_image_to_3d(
         quantized_image_path: Optional dynamic preview-analysis asset used
             together with the other authority arrays when puzzle generation
             explicitly reuses a confirmed material matrix.
-            (拼图生成明确复用已确认耗材矩阵时，与其他权威数组一同使用的可选
-            动态预览分析资产)
+             (拼图生成明确复用已确认耗材矩阵时，与其他权威数组一同使用的可选
+             动态预览分析资产)
+        height_identity_rgb_path: Optional ``.npy`` path containing immutable
+            per-pixel source RGB identities used for relief-height lookup after
+            display-colour replacement. This is keyword-only so legacy
+            positional callers retain their original argument binding.
+            (可选的 ``.npy`` 路径，保存颜色替换前、用于浮雕高度查找的稳定逐像素
+            RGB 身份；该参数仅允许关键字传入，以保持旧位置参数调用语义不变)
+        final_material_matrix_is_authoritative: Preserve a precomputed final
+            material matrix after color mappings update display RGB.
+            (颜色映射更新显示 RGB 后，仍保留预计算的最终材料矩阵)
+        final_material_matrix_authority_mask_path: Optional ``.npy`` boolean
+            mask limiting final-matrix authority to recipe pixels. A missing
+            mask means the complete matrix is authoritative.
+             (可选 ``.npy`` 布尔掩码，把最终矩阵权威限定在配方像素；
+             未提供时整张矩阵权威生效)
 
     Returns:
         Tuple of (3mf_path, glb_path, preview_image, status_message, recipe_path)
@@ -554,6 +571,9 @@ def generate_final_model(
     material_backing_material_index: Optional[int] = None,
     svg_pixels_per_mm: float = SVG_PIXELS_PER_MM_DEFAULT,
     *,
+    height_identity_rgb_path: Optional[str] = None,
+    final_material_matrix_is_authoritative: bool = False,
+    final_material_matrix_authority_mask_path: Optional[str] = None,
     cover_source_path: Optional[str] = None,
     material_dynamic_layer_count_enabled: bool = False,
     material_min_layer_count: int = 5,
@@ -586,7 +606,20 @@ def generate_final_model(
         material_max_layer_count: Maximum dynamic effective and physical
             layers. (动态最大有效层数及物理模型层数)
         material_delta_e00_tolerance: Allowed CIEDE2000 loss for shorter
-            recipes. (短配方允许的 CIEDE2000 损失)
+             recipes. (短配方允许的 CIEDE2000 损失)
+        height_identity_rgb_path: Optional ``.npy`` path containing immutable
+            per-pixel source RGB identities for relief-height lookup. It is
+            keyword-only to preserve all legacy positional argument bindings.
+            (可选的 ``.npy`` 路径，保存浮雕高度查找使用的稳定逐像素源 RGB 身份；
+            该参数仅允许关键字传入，以保持全部旧位置参数调用语义不变)
+        final_material_matrix_is_authoritative: Preserve a precomputed final
+            material matrix after color mappings update display RGB.
+            (颜色映射更新显示 RGB 后，仍保留预计算的最终材料矩阵)
+        final_material_matrix_authority_mask_path: Optional ``.npy`` boolean
+            mask limiting final-matrix authority to recipe pixels. A missing
+            mask means the complete matrix is authoritative.
+             (可选 ``.npy`` 布尔掩码，把最终矩阵权威限定在配方像素；
+             未提供时整张矩阵权威生效)
     """
     # Convert backing color name to ID or use special marker for separate backing
     try:
@@ -685,6 +718,7 @@ def generate_final_model(
         hue_weight=hue_weight,
         chroma_gate=chroma_gate,
         matched_rgb_path=matched_rgb_path,
+        height_identity_rgb_path=height_identity_rgb_path,
         mask_solid_path=mask_solid_path,
         quantized_image_path=quantized_image_path,
         material_matrix_path=material_matrix_path,
@@ -705,6 +739,12 @@ def generate_final_model(
         center_on_bed=center_on_bed,
         relief_global_max_height=relief_global_max_height,
         progress=progress,
+        final_material_matrix_is_authoritative=(
+            final_material_matrix_is_authoritative
+        ),
+        final_material_matrix_authority_mask_path=(
+            final_material_matrix_authority_mask_path
+        ),
         enable_fridge_magnet=enable_fridge_magnet,
         fridge_magnets=fridge_magnets,
         material_source=material_source,

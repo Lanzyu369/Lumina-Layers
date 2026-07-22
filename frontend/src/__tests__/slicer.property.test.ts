@@ -94,7 +94,7 @@ describe("Slicer Launch Integration — Property-Based Tests", () => {
 
 // ========== Property 3: 参数变更使 threemfDiskPath 失效 ==========
 
-import { useConverterStore } from "../stores/converter";
+import { DEFAULT_STATE, useConverterStore } from "../stores/converter";
 import { ColorMode, ModelingMode, StructureMode } from "../api/types";
 
 /**
@@ -120,8 +120,10 @@ describe("Property 3: 参数变更使 threemfDiskPath 失效", () => {
   }
 
   beforeEach(() => {
-    // Reset store to default state before each test
+    // Reset the complete converter state so property tests cannot leak
+    // mutually constrained generation parameters into the next test.
     useConverterStore.setState({
+      ...DEFAULT_STATE,
       threemfDiskPath: null,
       downloadUrl: null,
       colorRemapMap: {},
@@ -170,6 +172,11 @@ describe("Property 3: 参数变更使 threemfDiskPath 失效", () => {
 
   it("setModelingMode invalidates threemfDiskPath for any modeling mode", () => {
     const modelingModes = Object.values(ModelingMode);
+    useConverterStore.setState({
+      imageFile: new File(["<svg />"], "property-input.svg", {
+        type: "image/svg+xml",
+      }),
+    });
     fc.assert(
       fc.property(
         fc.constantFrom(...modelingModes),
@@ -229,6 +236,28 @@ describe("Property 3: 参数变更使 threemfDiskPath 失效", () => {
       }),
       { numRuns: 100 }
     );
+  });
+
+  it("rejects vector relief for double-sided output without invalidating the artifact", () => {
+    useConverterStore.setState({
+      imageFile: new File(["<svg />"], "vector-input.svg", {
+        type: "image/svg+xml",
+      }),
+      color_mode: ColorMode.FOUR_COLOR_RYBW,
+      modeling_mode: ModelingMode.VECTOR,
+      structure_mode: StructureMode.DOUBLE_SIDED,
+      enable_relief: false,
+    });
+    seedThreemfPath();
+
+    useConverterStore.getState().setEnableRelief(true);
+
+    expect(useConverterStore.getState()).toMatchObject({
+      enable_relief: false,
+      structure_mode: StructureMode.DOUBLE_SIDED,
+      threemfDiskPath: "/some/path.3mf",
+      downloadUrl: "/api/files/test",
+    });
   });
 
   it("setEnableOutline invalidates threemfDiskPath for any boolean", () => {

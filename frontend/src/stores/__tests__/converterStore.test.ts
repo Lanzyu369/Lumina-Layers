@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useConverterStore } from '../../stores/converter';
 import { DEFAULT_STATE } from '../../stores/converter';
-import { StructureMode } from '../../api/types';
+import { ColorMode, ModelingMode, StructureMode } from '../../api/types';
 import { uploadImagePreview } from '../../api/system';
 
 vi.mock('../../api/system', () => ({
@@ -247,6 +247,134 @@ describe('handleFilesSelect clears stale puzzle state', () => {
   });
 });
 
+
+describe('SVG vector mode guard', () => {
+  beforeEach(() => {
+    resetConverterState({
+      imageFile: null,
+      imagePreviewUrl: null,
+      modeling_mode: ModelingMode.HIGH_FIDELITY,
+    });
+  });
+
+  it('prevents selecting vector mode before an SVG is loaded', () => {
+    useConverterStore.getState().setModelingMode(ModelingMode.VECTOR);
+
+    expect(useConverterStore.getState().modeling_mode).toBe(ModelingMode.HIGH_FIDELITY);
+  });
+
+  it('allows selecting vector mode when current image is SVG', () => {
+    const svgFile = new File(['<svg/>'], 'input.svg', { type: 'image/svg+xml' });
+    useConverterStore.setState({ imageFile: svgFile });
+
+    useConverterStore.getState().setModelingMode(ModelingMode.VECTOR);
+
+    expect(useConverterStore.getState().modeling_mode).toBe(ModelingMode.VECTOR);
+  });
+
+  it('downgrades vector mode when replacing SVG with a raster image', () => {
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    URL.createObjectURL = vi.fn(() => 'blob:raster-preview');
+    URL.revokeObjectURL = vi.fn();
+
+    try {
+      const pngFile = new File(['png'], 'input.png', { type: 'image/png' });
+      useConverterStore.setState({ modeling_mode: ModelingMode.VECTOR });
+
+      useConverterStore.getState().setImageFile(pngFile);
+
+      expect(useConverterStore.getState().modeling_mode).toBe(ModelingMode.HIGH_FIDELITY);
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+    }
+  });
+
+  it('downgrades vector mode when selecting a raster image through the upload handler', () => {
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    URL.createObjectURL = vi.fn(() => 'blob:raster-upload-preview');
+    URL.revokeObjectURL = vi.fn();
+
+    try {
+      const pngFile = new File(['png'], 'input.png', { type: 'image/png' });
+      useConverterStore.setState({ modeling_mode: ModelingMode.VECTOR });
+
+      useConverterStore.getState().handleFilesSelect([pngFile]);
+
+      expect(useConverterStore.getState().modeling_mode).toBe(ModelingMode.HIGH_FIDELITY);
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+    }
+  });
+
+  it('downgrades vector mode when selecting multiple raster images', () => {
+    const firstPng = new File(['png-a'], 'first.png', { type: 'image/png' });
+    const secondPng = new File(['png-b'], 'second.png', { type: 'image/png' });
+    useConverterStore.setState({ modeling_mode: ModelingMode.VECTOR });
+
+    useConverterStore.getState().handleFilesSelect([firstPng, secondPng]);
+
+    expect(useConverterStore.getState().batchMode).toBe(true);
+    expect(useConverterStore.getState().modeling_mode).toBe(ModelingMode.HIGH_FIDELITY);
+  });
+
+  it('downgrades a VECTOR SVG to HIGH_FIDELITY when a PNG is appended', () => {
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    URL.createObjectURL = vi.fn(() => 'blob:svg-upload-preview');
+    URL.revokeObjectURL = vi.fn();
+
+    try {
+      const svgFile = new File(['<svg/>'], 'first.svg', { type: 'image/svg+xml' });
+      const pngFile = new File(['png'], 'second.png', { type: 'image/png' });
+
+      useConverterStore.getState().handleFilesSelect([svgFile]);
+      expect(useConverterStore.getState().modeling_mode).toBe(ModelingMode.VECTOR);
+
+      useConverterStore.getState().handleFilesSelect([pngFile]);
+
+      const state = useConverterStore.getState();
+      expect(state.batchFiles).toEqual([svgFile, pngFile]);
+      expect(state.batchMode).toBe(true);
+      expect(state.imageFile).toBeNull();
+      expect(state.modeling_mode).toBe(ModelingMode.HIGH_FIDELITY);
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+    }
+  });
+
+  it('downgrades an existing VECTOR SVG batch when a PNG is appended', () => {
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    URL.createObjectURL = vi.fn(() => 'blob:svg-batch-preview');
+    URL.revokeObjectURL = vi.fn();
+
+    try {
+      const firstSvg = new File(['<svg/>'], 'first.svg', { type: 'image/svg+xml' });
+      const secondSvg = new File(['<svg/>'], 'second.svg', { type: 'image/svg+xml' });
+      const pngFile = new File(['png'], 'third.png', { type: 'image/png' });
+
+      useConverterStore.getState().handleFilesSelect([firstSvg]);
+      useConverterStore.getState().handleFilesSelect([secondSvg]);
+      expect(useConverterStore.getState().modeling_mode).toBe(ModelingMode.VECTOR);
+
+      useConverterStore.getState().handleFilesSelect([pngFile]);
+
+      const state = useConverterStore.getState();
+      expect(state.batchFiles).toEqual([firstSvg, secondSvg, pngFile]);
+      expect(state.batchMode).toBe(true);
+      expect(state.modeling_mode).toBe(ModelingMode.HIGH_FIDELITY);
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+    }
+  });
+});
+
 describe('RAW image preview upload failures', () => {
   beforeEach(() => {
     resetConverterState({
@@ -452,6 +580,92 @@ describe('setEnableRelief auto-initialization', () => {
     useConverterStore.getState().setEnableRelief(true);
 
     expect(useConverterStore.getState().enable_cloisonne).toBe(false);
+  });
+
+  it('does not enable relief in 5-Color Extended mode', () => {
+    useConverterStore.setState({
+      modeling_mode: ModelingMode.VECTOR,
+      color_mode: ColorMode.FIVE_COLOR_EXT,
+      structure_mode: StructureMode.SINGLE_SIDED,
+      enable_fridge_magnet: false,
+    });
+
+    useConverterStore.getState().setEnableRelief(true);
+
+    expect(useConverterStore.getState().enable_relief).toBe(false);
+  });
+
+  it('does not enable relief in double-sided vector mode', () => {
+    useConverterStore.setState({
+      modeling_mode: ModelingMode.VECTOR,
+      color_mode: ColorMode.FOUR_COLOR_RYBW,
+      structure_mode: StructureMode.DOUBLE_SIDED,
+      enable_fridge_magnet: false,
+    });
+
+    useConverterStore.getState().setEnableRelief(true);
+
+    expect(useConverterStore.getState().enable_relief).toBe(false);
+  });
+
+  it('disables relief when switching to 5-Color Extended mode', () => {
+    useConverterStore.setState({
+      modeling_mode: ModelingMode.VECTOR,
+      structure_mode: StructureMode.SINGLE_SIDED,
+      enable_relief: true,
+    });
+
+    useConverterStore.getState().setColorMode(ColorMode.FIVE_COLOR_EXT);
+
+    expect(useConverterStore.getState().enable_relief).toBe(false);
+  });
+
+  it('disables relief when entering vector mode with 5-Color Extended', () => {
+    useConverterStore.setState({
+      modeling_mode: ModelingMode.HIGH_FIDELITY,
+      color_mode: ColorMode.FIVE_COLOR_EXT,
+      structure_mode: StructureMode.SINGLE_SIDED,
+      enable_relief: true,
+      imageFile: new File(["<svg/>"], "relief.svg", {
+        type: "image/svg+xml",
+      }),
+    });
+
+    useConverterStore.getState().setModelingMode(ModelingMode.VECTOR);
+
+    expect(useConverterStore.getState().enable_relief).toBe(false);
+  });
+
+  it('disables relief when entering vector mode with double-sided structure', () => {
+    useConverterStore.setState({
+      modeling_mode: ModelingMode.HIGH_FIDELITY,
+      color_mode: ColorMode.FOUR_COLOR_RYBW,
+      structure_mode: StructureMode.DOUBLE_SIDED,
+      enable_relief: true,
+      imageFile: new File(["<svg/>"], "relief.svg", {
+        type: "image/svg+xml",
+      }),
+    });
+
+    useConverterStore.getState().setModelingMode(ModelingMode.VECTOR);
+
+    expect(useConverterStore.getState().enable_relief).toBe(false);
+  });
+
+  it('keeps single-sided structure while relief is enabled', () => {
+    useConverterStore.setState({
+      modeling_mode: ModelingMode.VECTOR,
+      color_mode: ColorMode.FOUR_COLOR_RYBW,
+      enable_relief: true,
+      enable_fridge_magnet: false,
+      structure_mode: StructureMode.SINGLE_SIDED,
+    });
+
+    useConverterStore.getState().setStructureMode(StructureMode.DOUBLE_SIDED);
+
+    expect(useConverterStore.getState().structure_mode).toBe(
+      StructureMode.SINGLE_SIDED,
+    );
   });
 });
 

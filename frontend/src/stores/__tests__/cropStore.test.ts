@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useConverterStore } from '../converter';
 import { ModelingMode } from '../../api/types';
+import { tRuntime } from '../../i18n/runtime';
 
 /**
  * cropStore 单元测试
@@ -77,7 +78,7 @@ describe('submitCrop', () => {
     await useConverterStore.getState().submitCrop(0, 0, 100, 100);
 
     const state = useConverterStore.getState();
-    expect(state.error).toBe('Network error');
+    expect(state.error).toBe(tRuntime('api_error_no_response'));
     expect(state.isCropping).toBe(false);
     expect(state.cropModalOpen).toBe(true); // stays open on failure
   });
