@@ -902,6 +902,137 @@ describe('ColorPreview2D hover inspector', () => {
     expect(releasePointerCapture).toHaveBeenCalledWith(3);
   });
 
+  it('uses Space+left drag for panning without replacing ordinary left-click selection', () => {
+    const detectRegion = vi.fn();
+    useConverterStore.setState({ detectRegion });
+
+    render(<ColorPreview2D />);
+    flushPendingImages('/preview.png');
+
+    const container = screen.getByTestId('color-preview-2d-container');
+    mockPreviewRect(container);
+    const setPointerCapture = vi.fn();
+    const releasePointerCapture = vi.fn();
+    Object.defineProperty(container, 'setPointerCapture', {
+      configurable: true,
+      value: setPointerCapture,
+    });
+    Object.defineProperty(container, 'releasePointerCapture', {
+      configurable: true,
+      value: releasePointerCapture,
+    });
+
+    fireEvent.click(container, { button: 0, clientX: 120, clientY: 150 });
+    expect(detectRegion).toHaveBeenCalledTimes(1);
+
+    fireEvent.pointerEnter(container);
+    const spaceDown = new KeyboardEvent('keydown', {
+      bubbles: true,
+      cancelable: true,
+      code: 'Space',
+      key: ' ',
+    });
+    act(() => {
+      window.dispatchEvent(spaceDown);
+    });
+    expect(spaceDown.defaultPrevented).toBe(true);
+    expect(container).toHaveAttribute('data-space-pan-active', 'true');
+
+    fireEvent.pointerDown(container, {
+      pointerId: 8,
+      button: 0,
+      clientX: 120,
+      clientY: 150,
+    });
+    fireEvent.pointerMove(container, {
+      pointerId: 8,
+      buttons: 1,
+      clientX: 155,
+      clientY: 175,
+    });
+
+    const spaceUp = new KeyboardEvent('keyup', {
+      bubbles: true,
+      cancelable: true,
+      code: 'Space',
+      key: ' ',
+    });
+    act(() => {
+      window.dispatchEvent(spaceUp);
+    });
+    expect(spaceUp.defaultPrevented).toBe(true);
+    expect(releasePointerCapture).toHaveBeenCalledWith(8);
+    expect(container).not.toHaveAttribute('data-space-pan-active');
+
+    // The compatibility click from Space+left is consumed, then normal left
+    // clicks immediately return to the existing color-selection path.
+    fireEvent.click(container, { button: 0, clientX: 155, clientY: 175 });
+    expect(detectRegion).toHaveBeenCalledTimes(1);
+    fireEvent.click(container, { button: 0, clientX: 120, clientY: 150 });
+    expect(detectRegion).toHaveBeenCalledTimes(2);
+    expect(setPointerCapture).toHaveBeenCalledWith(8);
+  });
+
+  it('pans with the middle button, blocks auto-scroll, and clears cancelled drags', () => {
+    const detectRegion = vi.fn();
+    useConverterStore.setState({ detectRegion });
+
+    render(<ColorPreview2D />);
+    flushPendingImages('/preview.png');
+
+    const container = screen.getByTestId('color-preview-2d-container');
+    mockPreviewRect(container);
+    const setPointerCapture = vi.fn();
+    const releasePointerCapture = vi.fn();
+    Object.defineProperty(container, 'setPointerCapture', {
+      configurable: true,
+      value: setPointerCapture,
+    });
+    Object.defineProperty(container, 'releasePointerCapture', {
+      configurable: true,
+      value: releasePointerCapture,
+    });
+
+    const pointerDownAllowed = fireEvent.pointerDown(container, {
+      pointerId: 9,
+      button: 1,
+      clientX: 120,
+      clientY: 150,
+    });
+    fireEvent.pointerMove(container, {
+      pointerId: 9,
+      buttons: 4,
+      clientX: 150,
+      clientY: 170,
+    });
+    fireEvent.pointerCancel(container, { pointerId: 9, button: 1 });
+    const auxClick = new MouseEvent('auxclick', {
+      bubbles: true,
+      cancelable: true,
+      button: 1,
+    });
+    const auxClickAllowed = container.dispatchEvent(auxClick);
+
+    expect(pointerDownAllowed).toBe(false);
+    expect(auxClickAllowed).toBe(false);
+    expect(setPointerCapture).toHaveBeenCalledWith(9);
+    expect(releasePointerCapture).toHaveBeenCalledWith(9);
+
+    fireEvent.pointerDown(container, {
+      pointerId: 10,
+      button: 1,
+      clientX: 120,
+      clientY: 150,
+    });
+    act(() => {
+      window.dispatchEvent(new Event('blur'));
+    });
+    expect(releasePointerCapture).toHaveBeenCalledWith(10);
+
+    fireEvent.click(container, { button: 0, clientX: 120, clientY: 150 });
+    expect(detectRegion).toHaveBeenCalledTimes(1);
+  });
+
   it('releases layer hover data after hover leaves and the release delay expires', async () => {
     useConverterStore.setState({
       ...DEFAULT_STATE,

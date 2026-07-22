@@ -215,6 +215,31 @@ describe("FridgeMagnet3D", () => {
     expect(mockControls.enabled).toBe(true);
   });
 
+  it("leaves primary pointerdown to camera panning while the Space modifier is active", () => {
+    const onSelectMagnet = vi.fn();
+    const onUpdateMagnetCenter = vi.fn();
+    const { container } = render(
+      <FridgeMagnet3D
+        enabled={true}
+        cameraPanModifierActive={true}
+        modelBounds={modelBounds}
+        magnets={[roundMagnet]}
+        scaleX={1}
+        scaleY={1}
+        selectedMagnetId={null}
+        onSelectMagnet={onSelectMagnet}
+        onUpdateMagnetCenter={onUpdateMagnetCenter}
+      />,
+    );
+
+    const proxy = container.querySelector('group[name="fridge-magnet-proxy-magnet-round"]');
+    fireEvent.pointerDown(proxy as Element, { button: 0, clientX: 100, clientY: 100 });
+
+    expect(onSelectMagnet).not.toHaveBeenCalled();
+    expect(onUpdateMagnetCenter).not.toHaveBeenCalled();
+    expect(mockControls.enabled).toBe(true);
+  });
+
   it("keeps dragging after pointerout and still completes on pointerup", () => {
     const onUpdateMagnetCenter = vi.fn();
 

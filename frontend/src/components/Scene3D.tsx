@@ -1,4 +1,13 @@
-import { Suspense, useRef, useState, useEffect, useCallback, useMemo } from "react";
+import {
+  Suspense,
+  useRef,
+  useState,
+  useEffect,
+  useCallback,
+  useMemo,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { OrbitControls, Environment, Html } from "@react-three/drei";
 import { LIGHTING_CONFIG } from "./lightingConfig";
@@ -17,6 +26,7 @@ import { resolveCameraClippingPlanes } from "../utils/cameraDepthPrecision";
 import { useI18n } from "../i18n/context";
 import { useThemeConfig } from "../hooks/useThemeConfig";
 import { useWittyMessage } from "../hooks/useWittyMessage";
+import { useSpacePanModifier } from "../hooks/useSpacePanModifier";
 import {
   debugThreeLog,
   getHeapMemorySnapshot,
@@ -47,6 +57,11 @@ interface Scene3DProps {
   modelUrl?: string;
 }
 
+interface ActiveOrbitPanPointer {
+  pointerId: number;
+  spaceModified: boolean;
+}
+
 interface SceneDiagnosticsSnapshot {
   renderer: ReturnType<typeof getRendererInfoSnapshot>;
   heap: ReturnType<typeof getHeapMemorySnapshot>;
@@ -63,6 +78,21 @@ const DEFAULT_CAMERA_CLIPPING_PLANES = resolveCameraClippingPlanes(
   ),
 );
 const CLIPPING_PLANE_RELATIVE_TOLERANCE = 1e-6;
+
+function dispatchPointerCancel(element: HTMLElement, pointerId: number): void {
+  let event: Event;
+  if (typeof PointerEvent === "function") {
+    event = new PointerEvent("pointercancel", {
+      bubbles: true,
+      cancelable: true,
+      pointerId,
+    });
+  } else {
+    event = new Event("pointercancel", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "pointerId", { configurable: true, value: pointerId });
+  }
+  element.dispatchEvent(event);
+}
 
 function clippingPlaneNeedsUpdate(currentValue: number, nextValue: number): boolean {
   const tolerance = Math.max(
@@ -576,10 +606,97 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const themeColors = useThemeConfig();
   const containerRef = useRef<HTMLDivElement>(null);
   const glRef = useRef<THREE.WebGLRenderer | null>(null);
+  const activeOrbitPanPointerRef = useRef<ActiveOrbitPanPointer | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [diagnostics, setDiagnostics] = useState<SceneDiagnosticsSnapshot | null>(null);
   const [diagnosticsVisible, setDiagnosticsVisible] = useState(false);
   const [performanceVisible, setPerformanceVisible] = useState(false);
+
+  const cancelOrbitPanPointer = useCallback((spaceOnly: boolean) => {
+    const activePointer = activeOrbitPanPointerRef.current;
+    if (!activePointer || (spaceOnly && !activePointer.spaceModified)) {
+      return;
+    }
+    activeOrbitPanPointerRef.current = null;
+    const canvas = glRef.current?.domElement ?? containerRef.current?.querySelector("canvas");
+    if (canvas) {
+      dispatchPointerCancel(canvas, activePointer.pointerId);
+    }
+  }, []);
+  const handleSpacePanDeactivate = useCallback(() => {
+    cancelOrbitPanPointer(true);
+  }, [cancelOrbitPanPointer]);
+  const {
+    isActive: isSpacePanActive,
+    isActiveRef: isSpacePanActiveRef,
+    handlePointerEnter: handleSpacePanPointerEnter,
+    handlePointerLeave: handleSpacePanPointerLeave,
+  } = useSpacePanModifier({ onDeactivate: handleSpacePanDeactivate });
+  const orbitMouseButtons = useMemo(
+    () => ({
+      LEFT: isSpacePanActive ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE,
+      MIDDLE: THREE.MOUSE.PAN,
+      RIGHT: THREE.MOUSE.PAN,
+    }),
+    [isSpacePanActive],
+  );
+
+  const handleViewportPointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const spaceModified = event.button === 0 && isSpacePanActiveRef.current;
+      if (!spaceModified && event.button !== 1 && event.button !== 2) {
+        return;
+      }
+      if (spaceModified || event.button === 1) {
+        event.preventDefault();
+      }
+      activeOrbitPanPointerRef.current = {
+        pointerId: event.pointerId,
+        spaceModified,
+      };
+    },
+    [isSpacePanActiveRef],
+  );
+  const finishViewportPointer = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (activeOrbitPanPointerRef.current?.pointerId === event.pointerId) {
+      activeOrbitPanPointerRef.current = null;
+    }
+  }, []);
+  const handleViewportMouseDown = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>) => {
+      if (
+        event.button === 1
+        || (event.button === 0 && isSpacePanActiveRef.current)
+      ) {
+        event.preventDefault();
+      }
+    },
+    [isSpacePanActiveRef],
+  );
+  const handleViewportAuxClick = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    if (event.button === 1) {
+      event.preventDefault();
+    }
+  }, []);
+
+  useEffect(() => {
+    const handleWindowPointerEnd = (event: PointerEvent) => {
+      if (activeOrbitPanPointerRef.current?.pointerId === event.pointerId) {
+        activeOrbitPanPointerRef.current = null;
+      }
+    };
+    const handleWindowBlur = () => cancelOrbitPanPointer(false);
+
+    window.addEventListener("pointerup", handleWindowPointerEnd);
+    window.addEventListener("pointercancel", handleWindowPointerEnd);
+    window.addEventListener("blur", handleWindowBlur);
+    return () => {
+      window.removeEventListener("pointerup", handleWindowPointerEnd);
+      window.removeEventListener("pointercancel", handleWindowPointerEnd);
+      window.removeEventListener("blur", handleWindowBlur);
+      cancelOrbitPanPointer(false);
+    };
+  }, [cancelOrbitPanPointer]);
 
   // Witty Loading Messages (Req 1.4 & Enhancements)
   const isLoading = useConverterStore((s) => s.isLoading);
@@ -776,6 +893,14 @@ function Scene3D({ modelUrl }: Scene3DProps) {
       ref={containerRef}
       className="relative w-full h-full"
       data-testid="scene3d-container"
+      data-space-pan-active={isSpacePanActive || undefined}
+      onMouseDown={handleViewportMouseDown}
+      onAuxClick={handleViewportAuxClick}
+      onPointerEnter={handleSpacePanPointerEnter}
+      onPointerLeave={handleSpacePanPointerLeave}
+      onPointerDown={handleViewportPointerDown}
+      onPointerUp={finishViewportPointer}
+      onPointerCancel={finishViewportPointer}
     >
       {/* Floating action buttons — bottom-right with right-dock avoidance.
        * 浮动按钮组：右下角悬浮，依赖 WidgetWorkspace 注入的
@@ -1040,6 +1165,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
           dampingFactor={0.1}
           minDistance={10}
           maxDistance={2000}
+          mouseButtons={orbitMouseButtons}
         />
         <BedPlatform />
         {batchPreviewItems.length > 0 ? (
@@ -1122,6 +1248,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
             offsetY={loopOffsetY}
             positionPreset={loopPositionPreset}
             modelBounds={modelBounds}
+            cameraPanModifierActive={isSpacePanActive}
           />
         )}
         {batchPreviewItems.length === 0 && enableFridgeMagnet && modelBounds && fridgeMagnets.length > 0 && (
@@ -1134,6 +1261,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
             scaleY={scaleY}
             onSelectMagnet={selectFridgeMagnet}
             onUpdateMagnetCenter={updateFridgeMagnetCenter}
+            cameraPanModifierActive={isSpacePanActive}
           />
         )}
 

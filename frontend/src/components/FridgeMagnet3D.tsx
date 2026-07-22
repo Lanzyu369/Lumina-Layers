@@ -50,6 +50,7 @@ export interface FridgeMagnetModelBounds {
 
 export interface FridgeMagnet3DProps {
   enabled: boolean;
+  cameraPanModifierActive?: boolean;
   modelBounds: FridgeMagnetModelBounds | null;
   magnets: FridgeMagnetItem[];
   scaleX: number;
@@ -192,6 +193,7 @@ export function getInitialDragPoint(
 
 function FridgeMagnetProxy({
   magnet,
+  cameraPanModifierActive,
   modelBounds,
   scaleX,
   scaleY,
@@ -200,6 +202,7 @@ function FridgeMagnetProxy({
   onUpdateMagnetCenter,
 }: {
   magnet: FridgeMagnetItem;
+  cameraPanModifierActive: boolean;
   modelBounds: FridgeMagnetModelBounds;
   scaleX: number;
   scaleY: number;
@@ -300,7 +303,7 @@ function FridgeMagnetProxy({
 
   const handlePointerDown = useCallback(
     (event: ThreeEvent<PointerEvent>) => {
-      if (event.button !== 0) {
+      if (cameraPanModifierActive || event.button !== 0) {
         return;
       }
       event.stopPropagation();
@@ -325,6 +328,7 @@ function FridgeMagnetProxy({
       magnet.center_x_mm,
       magnet.center_y_mm,
       magnet.id,
+      cameraPanModifierActive,
       onSelectMagnet,
       scaleX,
       scaleY,
@@ -465,6 +469,7 @@ function FridgeMagnetProxy({
 
 function FridgeMagnet3D({
   enabled,
+  cameraPanModifierActive = false,
   modelBounds,
   magnets,
   scaleX,
@@ -483,6 +488,7 @@ function FridgeMagnet3D({
         <FridgeMagnetProxy
           key={magnet.id}
           magnet={magnet}
+          cameraPanModifierActive={cameraPanModifierActive}
           modelBounds={modelBounds}
           scaleX={scaleX}
           scaleY={scaleY}
