@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-06-09T00:00:00+08:00",
+  "generated_at": "2026-07-22T19:06:23+08:00",
   "slicers": [
     {
       "slicer_id": "BambuStudio",
@@ -2019,6 +2019,178 @@
         }
       ],
       "client_version": "1.4.1.2 20260604104233"
+    },
+    {
+      "slicer_id": "FlashStudio",
+      "display_name": "Flash Studio Desktop",
+      "source_kind": "local_install",
+      "source_version": "02.01.01.00",
+      "profile_format": "bambu_orca",
+      "application_metadata": "BambuStudio-2.3.2",
+      "sidecar_policy": "orca_like",
+      "machines": [
+        {
+          "machine_profile_id": "FlashStudio:flashforge:flashforge-ad5x",
+          "display_name": "Flashforge AD5X",
+          "brand": "Flashforge",
+          "vendor_key": "Flashforge",
+          "bed_width": 220,
+          "bed_depth": 220,
+          "bed_height": 220,
+          "thumbnail": "slicers/FlashStudio/02.01.01.00/assets/flashforge-ad5x_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "FlashStudio:flashforge:flashforge-ad5x:0.25",
+              "nozzle_size": "0.25",
+              "source_profile_name": "Flashforge AD5X 0.25 nozzle",
+              "template": "slicers/FlashStudio/02.01.01.00/metadata_templates/flashforge-ad5x_0_25.json",
+              "revision": "sha256:c64cfd9480c2237c7c9b3849ece001dde1cc6cac2d356721fa0371d6dc6dcd51",
+              "supported": true
+            },
+            {
+              "device_profile_id": "FlashStudio:flashforge:flashforge-ad5x:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Flashforge AD5X 0.4 nozzle",
+              "template": "slicers/FlashStudio/02.01.01.00/metadata_templates/flashforge-ad5x_0_4.json",
+              "revision": "sha256:eb2db708a32c0a0cd4321e9476ca1509cd682b1a62c552c13d4e026d51bcdad0",
+              "supported": true
+            }
+          ]
+        },
+        {
+          "machine_profile_id": "FlashStudio:flashforge:flashforge-creator-5",
+          "display_name": "Flashforge Creator 5",
+          "brand": "Flashforge",
+          "vendor_key": "Flashforge",
+          "bed_width": 256,
+          "bed_depth": 256,
+          "bed_height": 256,
+          "thumbnail": "slicers/FlashStudio/02.01.01.00/assets/flashforge-creator-5_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "FlashStudio:flashforge:flashforge-creator-5:0.25",
+              "nozzle_size": "0.25",
+              "source_profile_name": "Flashforge Creator 5 0.25 nozzle",
+              "template": "slicers/FlashStudio/02.01.01.00/metadata_templates/flashforge-creator-5_0_25.json",
+              "revision": "sha256:6e872ccb1802815511051ec9befbe10fdf99ef367459c33f7f8fb5f9573f23cd",
+              "supported": true
+            },
+            {
+              "device_profile_id": "FlashStudio:flashforge:flashforge-creator-5:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Flashforge Creator 5 0.4 nozzle",
+              "template": "slicers/FlashStudio/02.01.01.00/metadata_templates/flashforge-creator-5_0_4.json",
+              "revision": "sha256:66c185dfc74c9403ccd745380c660d315453d5ab60524eb9edeec14c9982ee60",
+              "supported": true
+            }
+          ]
+        },
+        {
+          "machine_profile_id": "FlashStudio:flashforge:flashforge-creator-5-pro",
+          "display_name": "Flashforge Creator 5 Pro",
+          "brand": "Flashforge",
+          "vendor_key": "Flashforge",
+          "bed_width": 256,
+          "bed_depth": 256,
+          "bed_height": 256,
+          "thumbnail": "slicers/FlashStudio/02.01.01.00/assets/flashforge-creator-5-pro_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "FlashStudio:flashforge:flashforge-creator-5-pro:0.25",
+              "nozzle_size": "0.25",
+              "source_profile_name": "Flashforge Creator 5 Pro 0.25 nozzle",
+              "template": "slicers/FlashStudio/02.01.01.00/metadata_templates/flashforge-creator-5-pro_0_25.json",
+              "revision": "sha256:9da5657d8993c89e0bbe57e189f95afb7a1a39612b516a1ecc20eb6c31ee228b",
+              "supported": true
+            },
+            {
+              "device_profile_id": "FlashStudio:flashforge:flashforge-creator-5-pro:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Flashforge Creator 5 Pro 0.4 nozzle",
+              "template": "slicers/FlashStudio/02.01.01.00/metadata_templates/flashforge-creator-5-pro_0_4.json",
+              "revision": "sha256:0137bf2510d8d92f06f18b83e07ab6d971b92d75c6cd7f6c510d1b7da2a3e1f2",
+              "supported": true
+            }
+          ]
+        },
+        {
+          "machine_profile_id": "FlashStudio:flashforge:flashforge-guider-3-ultra",
+          "display_name": "Flashforge Guider 3 Ultra",
+          "brand": "Flashforge",
+          "vendor_key": "Flashforge",
+          "bed_width": 300,
+          "bed_depth": 330,
+          "bed_height": 600,
+          "thumbnail": "slicers/FlashStudio/02.01.01.00/assets/flashforge-guider-3-ultra_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "FlashStudio:flashforge:flashforge-guider-3-ultra:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Flashforge Guider 3 Ultra 0.4 Nozzle",
+              "template": "slicers/FlashStudio/02.01.01.00/metadata_templates/flashforge-guider-3-ultra_0_4.json",
+              "revision": "sha256:e85f3618040edbdf7dec9125ce7dbf76f57a5a2b19b0cf9e8bc044d507bcfcc2",
+              "supported": true
+            }
+          ]
+        },
+        {
+          "machine_profile_id": "FlashStudio:flashforge:flashforge-guider4",
+          "display_name": "Flashforge Guider4",
+          "brand": "Flashforge",
+          "vendor_key": "Flashforge",
+          "bed_width": 300,
+          "bed_depth": 300,
+          "bed_height": 300,
+          "thumbnail": "slicers/FlashStudio/02.01.01.00/assets/flashforge-guider4_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "FlashStudio:flashforge:flashforge-guider4:0.25",
+              "nozzle_size": "0.25",
+              "source_profile_name": "Flashforge Guider4 0.25 nozzle",
+              "template": "slicers/FlashStudio/02.01.01.00/metadata_templates/flashforge-guider4_0_25.json",
+              "revision": "sha256:50faa5d09d0eef1a6025d0648627a6cc433fa9f5a28b22c1b96848fbeea25e16",
+              "supported": true
+            },
+            {
+              "device_profile_id": "FlashStudio:flashforge:flashforge-guider4:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Flashforge Guider4 0.4 nozzle",
+              "template": "slicers/FlashStudio/02.01.01.00/metadata_templates/flashforge-guider4_0_4.json",
+              "revision": "sha256:7cbadd0c783f685942c9914d9262791aff8ebfb155ff2cbf27ac632ce2cf314d",
+              "supported": true
+            }
+          ]
+        },
+        {
+          "machine_profile_id": "FlashStudio:flashforge:flashforge-guider4-pro",
+          "display_name": "Flashforge Guider4 Pro",
+          "brand": "Flashforge",
+          "vendor_key": "Flashforge",
+          "bed_width": 300,
+          "bed_depth": 300,
+          "bed_height": 300,
+          "thumbnail": "slicers/FlashStudio/02.01.01.00/assets/flashforge-guider4-pro_cover.png",
+          "nozzles": [
+            {
+              "device_profile_id": "FlashStudio:flashforge:flashforge-guider4-pro:0.25",
+              "nozzle_size": "0.25",
+              "source_profile_name": "Flashforge Guider4 Pro 0.25 nozzle",
+              "template": "slicers/FlashStudio/02.01.01.00/metadata_templates/flashforge-guider4-pro_0_25.json",
+              "revision": "sha256:a4de2a2358a51538b1f3df6787cb97ff8bb8d0eaf4a150d2bdd1590b929ed176",
+              "supported": true
+            },
+            {
+              "device_profile_id": "FlashStudio:flashforge:flashforge-guider4-pro:0.4",
+              "nozzle_size": "0.4",
+              "source_profile_name": "Flashforge Guider4 Pro 0.4 nozzle",
+              "template": "slicers/FlashStudio/02.01.01.00/metadata_templates/flashforge-guider4-pro_0_4.json",
+              "revision": "sha256:aabf7d1dde6636f5ac3e9bc30c38523d50cdb28b53443ce272c07b0f986df4fc",
+              "supported": true
+            }
+          ]
+        }
+      ],
+      "client_version": ""
     }
   ]
 }

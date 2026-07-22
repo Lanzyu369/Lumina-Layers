@@ -21,7 +21,11 @@ const arbSettings = fc.record({
   lastBedLabel: fc.string({ maxLength: 50 }),
   cropEnabled: fc.boolean(),
   lastSlicerId: fc.string({ maxLength: 50 }),
-  nozzleSize: fc.constantFrom("0.2" as const, "0.4" as const),
+  nozzleSize: fc.constantFrom(
+    "0.2" as const,
+    "0.25" as const,
+    "0.4" as const,
+  ),
 });
 
 // ========== Property 1: Settings persist round-trip ==========

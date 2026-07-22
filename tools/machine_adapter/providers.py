@@ -48,6 +48,13 @@ PROVIDERS: dict[str, MachineAdapterProvider] = {
         sidecar_policy="anycubic_next",
         default_vendor_keys=("Anycubic",),
     ),
+    "FlashStudio": MachineAdapterProvider(
+        slicer_id="FlashStudio",
+        display_name="Flash Studio Desktop",
+        profile_format="bambu_orca",
+        sidecar_policy="orca_like",
+        default_vendor_keys=("Flashforge",),
+    ),
 }
 
 

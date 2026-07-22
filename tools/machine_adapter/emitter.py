@@ -16,6 +16,7 @@ _BRAND_BY_VENDOR_KEY = {
     "ELEGOO": "Elegoo",
     "Elegoo": "Elegoo",
     "Anycubic": "Anycubic",
+    "Flashforge": "Flashforge",
 }
 
 
@@ -106,7 +107,18 @@ def _content_revision(settings: dict[str, Any], source_hashes: list[str], source
 def _application_metadata(provider: MachineAdapterProvider, source_version: str) -> str:
     if provider.slicer_id == "ElegooSlicer":
         return f"ElegooSlicer-{source_version}"
+    if provider.slicer_id == "FlashStudio":
+        return "BambuStudio-2.3.2"
     return f"BambuStudio-{source_version}"
+
+
+def _project_format_version(provider: MachineAdapterProvider, source_version: str) -> str:
+    """Return the project schema version written inside exported 3MF files."""
+
+    application = _application_metadata(provider, source_version)
+    if application.startswith("BambuStudio-"):
+        return application.removeprefix("BambuStudio-")
+    return source_version
 
 
 def build_device_registry_entry(
@@ -129,6 +141,11 @@ def build_device_registry_entry(
         source_profile_name=profile.name,
         slicer_id=provider.slicer_id,
     )
+    if provider.slicer_id == "FlashStudio":
+        # Flash Studio's installed profile bundle has its own revision number
+        # (for example 02.01.01.00), while saved projects use the underlying
+        # Bambu project schema version (2.3.2). Keep those two concepts apart.
+        template["version"] = _project_format_version(provider, safe_source_version)
     revision = _content_revision(template, source_hashes, safe_source_version)
     bed_width, bed_depth = _bed_size(settings)
 

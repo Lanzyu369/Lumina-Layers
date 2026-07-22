@@ -15,6 +15,7 @@ import os
 import sys
 import tempfile
 import time
+import uuid
 import xml.etree.ElementTree as ET
 import zipfile
 import json
@@ -302,6 +303,10 @@ def _is_snapmaker_u1_registry_profile(profile: Any) -> bool:
     )
 
 
+def _is_flashstudio_registry_profile(profile: Any) -> bool:
+    return str(getattr(profile, "slicer_id", "")).strip() == "FlashStudio"
+
+
 def _apply_snapmaker_u1_native_project_shape(
     settings: dict[str, Any],
     profile: Any,
@@ -359,6 +364,7 @@ def _merge_registry_machine_template_into_project_template(
     source_version: str,
     overlay_printer_model: bool = False,
     overlay_machine_settings: bool = False,
+    overlay_all_native_settings: bool = False,
     align_default_filament_settings: bool = False,
     retarget_profile_nozzle_labels: bool = False,
     legacy_nozzle_size: str = "",
@@ -375,7 +381,16 @@ def _merge_registry_machine_template_into_project_template(
     for key in _REGISTRY_PROJECT_TEMPLATE_OVERLAY_KEYS:
         if key in registry_template:
             merged[key] = _clean_registry_project_overlay_value(key, registry_template[key])
-    if overlay_machine_settings:
+    if overlay_all_native_settings:
+        for key, value in registry_template.items():
+            merged[key] = _clean_registry_project_overlay_value(key, value)
+        if "different_settings_to_system" in registry_template:
+            merged["different_settings_to_system"] = _normalize_difference_index(
+                merged.get("different_settings_to_system"),
+                _iter_difference_index_keys(registry_template.get("different_settings_to_system")),
+            )
+        _align_registry_default_filament_settings_id(merged, registry_template)
+    elif overlay_machine_settings:
         for key, value in registry_template.items():
             if (
                 key in _REGISTRY_MACHINE_PROJECT_OVERLAY_EXACT_KEYS
@@ -407,7 +422,7 @@ def _merge_registry_machine_template_into_project_template(
         merged["printer_model"] = copy.deepcopy(registry_template["printer_model"])
 
     if source_version and (
-        overlay_machine_settings
+        overlay_machine_settings or overlay_all_native_settings
         or _should_use_registry_source_version(merged.get("version"), source_version)
     ):
         merged["version"] = source_version
@@ -738,6 +753,11 @@ def _should_preserve_template_filament_slots(
         return False
     if _is_snapmaker_u1_registry_profile(registry_profile):
         return False
+    if _is_flashstudio_registry_profile(registry_profile):
+        # A manually saved Flash Studio project contracts its filament arrays
+        # to the active project palette, even when the source template carries
+        # a wider generic palette. Preserve that project-level shape.
+        return False
     return _template_filament_count(template_settings) > material_count
 
 
@@ -920,6 +940,34 @@ def _apply_filament_array_overrides(
                 merged_multi = list(multi_colour)
                 merged_multi[: len(values)] = values
                 settings["filament_multi_colour"] = merged_multi
+
+
+def _apply_flashstudio_project_metadata(settings: dict, material_count: int) -> None:
+    """Apply Flash Studio 2.3.2 routing metadata without changing process values.
+
+    补齐 Flash Studio 2.3.2 的耗材路由元数据，但不修改 Lumina 工艺参数。
+    """
+
+    if material_count <= 0:
+        return
+    raw_variants = settings.get("printer_extruder_variant")
+    variants = raw_variants if isinstance(raw_variants, list) else []
+    default_variant = str(variants[0] if variants else "Direct Drive Standard")
+    raw_volume_types = settings.get("default_nozzle_volume_type")
+    volume_types = raw_volume_types if isinstance(raw_volume_types, list) else []
+    default_volume_type = str(volume_types[0] if volume_types else "Standard")
+
+    settings["default_bed_type"] = str(settings.get("default_bed_type") or "")
+    settings["filament_colour_type"] = ["1"] * material_count
+    settings["filament_extruder_variant"] = [default_variant] * material_count
+    settings["filament_map"] = ["1"] * material_count
+    settings["filament_map_mode"] = "Auto For Flush"
+    settings["filament_printable"] = ["3"] * material_count
+    settings["filament_self_index"] = [
+        str(index) for index in range(1, material_count + 1)
+    ]
+    settings["nozzle_volume_type"] = [default_volume_type] * material_count
+    settings["printer_agent"] = str(settings.get("printer_agent") or "")
 
 
 def _iter_difference_index_keys(value: Any) -> list[str]:
@@ -1310,6 +1358,13 @@ def load_printer_template(
     normalized_slicer = normalize_slicer_software_id(str(slicer or ""))
     normalized_nozzle_size = normalize_nozzle_size(nozzle_size) or "0.4"
     registry_nozzle_size = format_native_nozzle_size(nozzle_size) or normalized_nozzle_size
+    configured_profile = get_printer_profile(printer_id)
+    if registry_nozzle_size in configured_profile.supported_nozzle_sizes:
+        legacy_nozzle_size = registry_nozzle_size
+    elif normalized_nozzle_size in configured_profile.supported_nozzle_sizes:
+        legacy_nozzle_size = normalized_nozzle_size
+    else:
+        legacy_nozzle_size = "0.4"
     if device_profile_id:
         registry_root = _resolve_machine_registry_root()
         registry_path = os.path.join(registry_root, "registry.json")
@@ -1339,10 +1394,11 @@ def load_printer_template(
             legacy_template_entry = _load_legacy_project_template_if_available(
                 printer_id,
                 normalized_slicer,
-                normalized_nozzle_size,
+                legacy_nozzle_size,
             )
             overlay_printer_model = False
             overlay_machine_settings = False
+            overlay_all_native_settings = False
             if legacy_template_entry is None:
                 legacy_template_entry = _load_registry_compatibility_project_template_if_available(
                     profile,
@@ -1351,6 +1407,11 @@ def load_printer_template(
                 )
                 overlay_printer_model = legacy_template_entry is not None
                 overlay_machine_settings = legacy_template_entry is not None
+            if _is_flashstudio_registry_profile(profile):
+                # Flash Studio resolves a complete native machine preset when
+                # the user switches machines. Apply the same full machine
+                # shape before Lumina's protected process values are emitted.
+                overlay_all_native_settings = True
             if legacy_template_entry is not None:
                 legacy_template, legacy_template_path = legacy_template_entry
                 legacy_stat = os.stat(legacy_template_path)
@@ -1363,14 +1424,19 @@ def load_printer_template(
                 template = _merge_registry_machine_template_into_project_template(
                     legacy_template,
                     registry_template,
-                    source_version=profile.source_version,
+                    source_version=(
+                        ""
+                        if _is_flashstudio_registry_profile(profile)
+                        else profile.source_version
+                    ),
                     overlay_printer_model=overlay_printer_model,
                     overlay_machine_settings=overlay_machine_settings,
+                    overlay_all_native_settings=overlay_all_native_settings,
                     align_default_filament_settings=_is_snapmaker_u1_registry_profile(profile),
                     retarget_profile_nozzle_labels=(
-                        registry_nozzle_size != normalized_nozzle_size
+                        registry_nozzle_size != legacy_nozzle_size
                     ),
-                    legacy_nozzle_size=normalized_nozzle_size,
+                    legacy_nozzle_size=legacy_nozzle_size,
                     registry_nozzle_size=registry_nozzle_size,
                 )
             else:
@@ -1392,12 +1458,12 @@ def load_printer_template(
         if os.environ.get("LUMINA_MACHINE_REGISTRY_DIR"):
             raise ValueError(f"Machine registry not found: {registry_path}")
 
-    cache_key = f"{printer_id}:{normalized_slicer}:{normalized_nozzle_size}:legacy"
+    cache_key = f"{printer_id}:{normalized_slicer}:{registry_nozzle_size}:legacy"
     if cache_key in _PRINTER_TEMPLATE_CACHE:
         return copy.deepcopy(_PRINTER_TEMPLATE_CACHE[cache_key])
 
-    profile = get_printer_profile(printer_id)
-    template_file = profile.get_template_file(normalized_slicer, nozzle_size=normalized_nozzle_size)
+    profile = configured_profile
+    template_file = profile.get_template_file(normalized_slicer, nozzle_size=nozzle_size)
 
     # Resolve printer_profiles/ directory
     base_dir = _resource_base_dir()
@@ -1542,7 +1608,12 @@ class BambuStudio3MFWriter:
                 filament arrays to the selected palette.（是否保留注册表模板的原生
                 耗材槽数量；``None`` 保持旧自动逻辑，``False`` 按已选调色板裁剪。）
         """
-        from config import format_native_nozzle_size, normalize_nozzle_size, normalize_slicer_software_id
+        from config import (
+            format_native_nozzle_size,
+            get_printer_profile,
+            normalize_nozzle_size,
+            normalize_slicer_software_id,
+        )
 
         self.output_path = output_path
         self.settings = {**self.DEFAULT_SETTINGS, **(settings or {})}
@@ -1552,9 +1623,11 @@ class BambuStudio3MFWriter:
         self.slicer = normalize_slicer_software_id(slicer)
         self.device_profile_id = str(device_profile_id or "").strip() or None
         legacy_nozzle_size = normalize_nozzle_size(nozzle_size) or "0.4"
+        native_nozzle_size = format_native_nozzle_size(nozzle_size) or legacy_nozzle_size
+        configured_nozzle_sizes = get_printer_profile(printer_id).supported_nozzle_sizes
         self.nozzle_size = (
-            format_native_nozzle_size(nozzle_size) or legacy_nozzle_size
-            if self.device_profile_id
+            native_nozzle_size
+            if self.device_profile_id or native_nozzle_size in configured_nozzle_sizes
             else legacy_nozzle_size
         )
         self._registry_device_profile = (
@@ -1715,6 +1788,28 @@ class BambuStudio3MFWriter:
         if orca_version:
             builder.add_metadata("OrcaSlicer", orca_version)
         builder.add_metadata("BambuStudio:3mfVersion", "1")
+        if self.slicer == "FlashStudio":
+            for key, value in (
+                ("Copyright", ""),
+                ("CreationDate", ""),
+                ("Description", ""),
+                ("Designer", ""),
+                ("DesignerCover", ""),
+                ("DesignerUserId", ""),
+                ("License", ""),
+                ("ModificationDate", ""),
+                ("Origin", ""),
+                (
+                    "Thumbnail_Middle",
+                    "/Auxiliaries/.thumbnails/thumbnail_middle.png",
+                ),
+                (
+                    "Thumbnail_Small",
+                    "/Auxiliaries/.thumbnails/thumbnail_small.png",
+                ),
+                ("Title", ""),
+            ):
+                builder.add_metadata(key, value)
         builder.add_external_model_metadata("BambuStudio:3mfVersion", "1")
 
         material_palette, material_indices = self._build_material_palette()
@@ -1810,6 +1905,7 @@ class BambuStudio3MFWriter:
             "ElegooSlicer": "ElegooSlicer-1.3.2.9",
             "OrcaSlicer": "BambuStudio-2.3.2-rc2",
             "AnycubicSlicerNext": "BambuStudio-1.3.9.4",
+            "FlashStudio": "BambuStudio-2.3.2",
         }
         if self.slicer == "BambuStudio":
             return f"BambuStudio-{self._get_bambu_client_version()}"
@@ -2050,6 +2146,21 @@ class BambuStudio3MFWriter:
                 ("Metadata/pick_1.png", "image/png", placeholder_2x2),
             ]
         )
+        if self.slicer == "FlashStudio":
+            parts.extend(
+                [
+                    (
+                        "Metadata/plate_1_small.png",
+                        "image/png",
+                        self._build_flashstudio_plate_small_bytes(bundle.plate_main),
+                    ),
+                    (
+                        "Metadata/plate_1.json",
+                        "application/json",
+                        self._build_flashstudio_plate_json_bytes(),
+                    ),
+                ]
+            )
         # Auxiliaries/.thumbnails/* — package-level cover thumbnails referenced
         # from _rels/.rels (post-processed in _inject_cover_relationships_postprocess).
         cover_part_payloads = (
@@ -2446,6 +2557,15 @@ class BambuStudio3MFWriter:
         config = ET.Element("config")
 
         obj_elem = ET.SubElement(config, "object", attrib={"id": str(assembly_id)})
+        if self.slicer == "FlashStudio":
+            ET.SubElement(
+                obj_elem,
+                "metadata",
+                attrib={
+                    "key": "name",
+                    "value": os.path.splitext(os.path.basename(self.output_path))[0],
+                },
+            )
         ET.SubElement(obj_elem, "metadata", attrib={"key": "extruder", "value": "1"})
 
         source_file = os.path.basename(self.output_path)
@@ -2499,6 +2619,18 @@ class BambuStudio3MFWriter:
         ET.SubElement(plate, "metadata", attrib={"key": "locked", "value": "false"})
         if not self._is_anycubic_slicer():
             ET.SubElement(plate, "metadata", attrib={"key": "filament_map_mode", "value": "Auto For Flush"})
+        if self.slicer == "FlashStudio":
+            material_palette, _ = self._build_material_palette()
+            ET.SubElement(
+                plate,
+                "metadata",
+                attrib={
+                    "key": "filament_maps",
+                    "value": " ".join(
+                        str(index) for index in range(1, len(material_palette) + 1)
+                    ),
+                },
+            )
         ET.SubElement(plate, "metadata", attrib={"key": "thumbnail_file", "value": "Metadata/plate_1.png"})
         ET.SubElement(
             plate, "metadata", attrib={"key": "thumbnail_no_light_file", "value": "Metadata/plate_no_light_1.png"}
@@ -2563,6 +2695,8 @@ class BambuStudio3MFWriter:
             preserve_template_slots=preserve_template_filament_slots,
         )
         _apply_material_filament_metadata(settings, template_settings, material_palette)
+        if self.slicer == "FlashStudio":
+            _apply_flashstudio_project_metadata(settings, num_colors)
         if not preserve_template_filament_slots:
             filament_colour = settings.get("filament_colour")
             if isinstance(filament_colour, list):
@@ -2658,6 +2792,15 @@ class BambuStudio3MFWriter:
                         "value": registry_client_version or self._get_snapmaker_orca_client_version(),
                     },
                 )
+            elif self.slicer == "FlashStudio":
+                ET.SubElement(
+                    header,
+                    "header_item",
+                    attrib={
+                        "key": "X-BBL-Client-Version",
+                        "value": "",
+                    },
+                )
             else:
                 ET.SubElement(
                     header,
@@ -2671,6 +2814,21 @@ class BambuStudio3MFWriter:
                         "header_item",
                         attrib={"key": "OrcaSlicer-Version", "value": orca_version},
                     )
+
+        if self.slicer == "FlashStudio":
+            uuid_seed = ":".join(
+                [
+                    "lumina-flashstudio",
+                    self.printer_id,
+                    self.nozzle_size,
+                    *(entry.object_name for entry in self.objects),
+                ]
+            )
+            ET.SubElement(
+                header,
+                "uuid",
+                attrib={"value": uuid.uuid5(uuid.NAMESPACE_URL, uuid_seed).hex},
+            )
 
         tree = ET.ElementTree(config)
         ET.indent(tree, space="  ")
@@ -2759,6 +2917,91 @@ class BambuStudio3MFWriter:
             image.save(buffer, format="PNG", optimize=True)
             _PREVIEW_PLACEHOLDER_PNG_BYTES = buffer.getvalue()
         return _PREVIEW_PLACEHOLDER_PNG_BYTES
+
+    @staticmethod
+    def _build_flashstudio_plate_small_bytes(plate_main: bytes) -> bytes:
+        """Build Flash Studio's native 128x128 plate preview.
+
+        构建 Flash Studio 原生的 128x128 ``plate_1_small.png``。
+        """
+
+        with Image.open(io.BytesIO(plate_main)) as image:
+            resized = image.convert("RGBA").resize(
+                (128, 128),
+                Image.Resampling.LANCZOS,
+            )
+            buffer = io.BytesIO()
+            resized.save(buffer, format="PNG", optimize=True)
+            return buffer.getvalue()
+
+    def _build_flashstudio_plate_json_bytes(self) -> bytes:
+        """Build Flash Studio plate summary while retaining Lumina process values.
+
+        构建 Flash Studio 的盘面摘要；层高等工艺值继续读取 Lumina 设置，
+        不复制参考 3MF 的具体切片任务数据。
+        """
+
+        translate_x, translate_y, _ = self._get_build_item_translation()
+        all_boxes: list[tuple[float, float, float, float]] = []
+        try:
+            layer_height = float(self.settings.get("layer_height", "0.08"))
+        except (TypeError, ValueError):
+            layer_height = 0.08
+
+        for entry in self.objects:
+            bounds = np.asarray(
+                getattr(entry.mesh, "bounds", np.zeros((2, 3))),
+                dtype=np.float64,
+            )
+            if bounds.shape != (2, 3):
+                continue
+            bbox = (
+                float(bounds[0, 0] + translate_x),
+                float(bounds[0, 1] + translate_y),
+                float(bounds[1, 0] + translate_x),
+                float(bounds[1, 1] + translate_y),
+            )
+            all_boxes.append(bbox)
+
+        if all_boxes:
+            bbox_all = [
+                min(box[0] for box in all_boxes),
+                min(box[1] for box in all_boxes),
+                max(box[2] for box in all_boxes),
+                max(box[3] for box in all_boxes),
+            ]
+        else:
+            bbox_all = [0.0, 0.0, 0.0, 0.0]
+
+        object_entries: list[dict[str, Any]] = []
+        if all_boxes:
+            # Flash Studio summarizes a multi-part/material assembly as one
+            # printable plate object. Wipe-tower and timing entries are added
+            # by the slicer only after slicing and must not be fabricated here.
+            object_entries.append(
+                {
+                    "area": max(0.0, bbox_all[2] - bbox_all[0])
+                    * max(0.0, bbox_all[3] - bbox_all[1]),
+                    "bbox": bbox_all,
+                    "id": 1,
+                    "layer_height": layer_height,
+                    "name": os.path.splitext(os.path.basename(self.output_path))[0],
+                }
+            )
+
+        payload = {
+            "bbox_all": bbox_all,
+            "bbox_objects": object_entries,
+            "bed_type": "textured_plate",
+            "filament_colors": [],
+            "filament_ids": [],
+            "first_extruder": 0,
+            "first_layer_time": 0.0,
+            "is_seq_print": False,
+            "nozzle_diameter": float(self.nozzle_size),
+            "version": 2,
+        }
+        return json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
 
     # ------------------------------------------------------------------
     # Config template & filament arrays (unchanged logic)

@@ -68,6 +68,23 @@ def test_bundled_machine_registry_keeps_upgraded_ac_and_elegoo_versions() -> Non
     assert elegoo["source_version"] == "01.05.01.06"
     assert elegoo["application_metadata"] == "ElegooSlicer-01.05.01.06"
 
+    flash_studio = slicers["FlashStudio"][0]
+    assert flash_studio["source_version"] == "02.01.01.00"
+    assert flash_studio["application_metadata"] == "BambuStudio-2.3.2"
+    assert flash_studio["client_version"] == ""
+    assert flash_studio["sidecar_policy"] == "orca_like"
+    assert {
+        machine["display_name"]: [nozzle["nozzle_size"] for nozzle in machine["nozzles"]]
+        for machine in flash_studio["machines"]
+    } == {
+        "Flashforge AD5X": ["0.25", "0.4"],
+        "Flashforge Creator 5": ["0.25", "0.4"],
+        "Flashforge Creator 5 Pro": ["0.25", "0.4"],
+        "Flashforge Guider 3 Ultra": ["0.4"],
+        "Flashforge Guider4": ["0.25", "0.4"],
+        "Flashforge Guider4 Pro": ["0.25", "0.4"],
+    }
+
 
 def test_bundled_machine_registry_contains_acceptance_profiles() -> None:
     ids = _device_ids(_load_registry())
@@ -80,4 +97,11 @@ def test_bundled_machine_registry_contains_acceptance_profiles() -> None:
         "BambuStudio:bbl:bambu-lab-x2d:0.4",
         "BambuStudio:bbl:bambu-lab-a2l:0.4",
         "SnapmakerOrca:snapmaker:snapmaker-u1:0.4",
+        "FlashStudio:flashforge:flashforge-ad5x:0.25",
+        "FlashStudio:flashforge:flashforge-ad5x:0.4",
+        "FlashStudio:flashforge:flashforge-creator-5:0.4",
+        "FlashStudio:flashforge:flashforge-creator-5-pro:0.25",
+        "FlashStudio:flashforge:flashforge-guider-3-ultra:0.4",
+        "FlashStudio:flashforge:flashforge-guider4:0.4",
+        "FlashStudio:flashforge:flashforge-guider4-pro:0.25",
     } <= ids

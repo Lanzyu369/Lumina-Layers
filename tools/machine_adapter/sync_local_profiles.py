@@ -23,14 +23,17 @@ LOCAL_SLICER_SYSTEM_DIRS: dict[str, str] = {
     "SnapmakerOrca": "Snapmaker_Orca/system",
     "ElegooSlicer": "ElegooSlicer/system",
     "AnycubicSlicerNext": "AnycubicSlicerNext/system",
+    "FlashStudio": "Orca-Flashforge/system",
 }
 
 APPLICATION_METADATA_OVERRIDES: dict[str, str] = {
     "AnycubicSlicerNext": "AnycubicSlicerNext-1.4.1.2",
+    "FlashStudio": "BambuStudio-2.3.2",
 }
 
 CLIENT_VERSION_OVERRIDES: dict[str, str] = {
     "AnycubicSlicerNext": "1.4.1.2 20260604104233",
+    "FlashStudio": "",
 }
 
 _OFFICIAL_ORCA_COVER_ASSETS: tuple[tuple[str, str, str], ...] = (

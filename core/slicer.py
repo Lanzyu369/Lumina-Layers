@@ -45,6 +45,16 @@ KNOWN_SLICERS: dict[str, dict] = {
         ],
         "display_name": "Anycubic Slicer Next",
     },
+    "flash_studio": {
+        "match": [
+            "flash studio desktop",
+            "flash studio",
+            "flashstudio",
+            "orca-flashforge",
+            "orca flashforge",
+        ],
+        "display_name": "Flash Studio Desktop",
+    },
     "prusa_slicer": {
         "match": ["prusaslicer", "prusa slicer"],
         "display_name": "PrusaSlicer",
@@ -131,9 +141,11 @@ def _find_exe_in_directory(directory: str, hint: str = "") -> str | None:
     # Prefer exe whose name contains the hint keyword
     if hint:
         for c in candidates:
-            # Compare with hyphens/underscores stripped for fuzzy match
-            basename = os.path.basename(c).lower().replace("-", "").replace("_", "")
-            if hint in basename:
+            # Compare punctuation-insensitively so e.g. ``flashstudio`` matches
+            # the installed executable ``flash studio.exe``.
+            basename = re.sub(r"[^a-z0-9]+", "", os.path.basename(c).lower())
+            normalized_hint = re.sub(r"[^a-z0-9]+", "", hint.lower())
+            if normalized_hint and normalized_hint in basename:
                 return c
     return candidates[0]
 
