@@ -2230,6 +2230,124 @@ def test_dynamic_material_override_pads_backing_and_persists_actual_recipe(
     ]
 
 
+def test_dynamic_manual_override_reweights_curve_for_automatic_pixels_only(
+    monkeypatch,
+) -> None:
+    """A manual target equal to an auto target must not dilute the auto curve."""
+
+    client, store, _registry = _client_with_state()
+    session_id, manual_mask = _seed_material_archive_session(store, layer_count=7)
+    session_data = store.get(session_id)
+    assert session_data is not None
+    session_data.update(
+        {
+            "material_dynamic_layer_count_enabled": True,
+            "material_min_layer_count": 5,
+            "material_max_layer_count": 7,
+            "material_delta_e00_tolerance": 0.5,
+            "material_backing_material_index": 4,
+        }
+    )
+
+    target_a = [10, 20, 30]
+    target_b = [40, 50, 60]
+
+    def dynamic_entry(target: list[int], delta: float) -> dict:
+        actual = [0, 1, 2, 3, 0]
+        printable = [*actual, 4, 4]
+        return {
+            "target_srgb": target,
+            "matched_srgb": target,
+            "actual_layer_count": 5,
+            "padding_layer_count": 2,
+            "actual_recipe_top_to_bottom": actual,
+            "print_recipe_top_to_bottom": printable,
+            "selected_delta_e00": delta,
+            "best_range_delta_e00": delta,
+            "fixed_max_delta_e00": delta,
+            "delta_e00_sacrifice": 0.0,
+            "layer_cap_options": [
+                {
+                    "max_effective_layer_count": cap,
+                    "actual_layer_count": 5,
+                    "matched_srgb": target,
+                    "actual_recipe_top_to_bottom": actual,
+                    "print_recipe_top_to_bottom": printable,
+                    "delta_e00": delta,
+                }
+                for cap in (5, 6, 7)
+            ],
+        }
+
+    cache = dict(session_data["preview_cache"])
+    target_map = np.full((4, 4, 3), target_b, dtype=np.uint8)
+    target_map[0, :, :] = target_a
+    cache.update(
+        {
+            "matched_rgb": target_map.copy(),
+            "quantized_image": target_map.copy(),
+            "material_matrix": np.zeros((4, 4, 7), dtype=np.int32),
+            "mask_solid": np.ones((4, 4), dtype=bool),
+            "material_dynamic_layer_info": {
+                "enabled": True,
+                "min_layer_count": 5,
+                "max_layer_count": 7,
+                "delta_e00_tolerance": 0.5,
+                "colors": [dynamic_entry(target_a, 1.0), dynamic_entry(target_b, 3.0)],
+                "benefit_curve": [],
+                "benefit_curve_scope": "all_printable_pixels",
+                "benefit_curve_pixel_count": 16,
+            },
+        }
+    )
+    store.put(session_id, "preview_cache", cache)
+
+    monkeypatch.setattr(
+        "api.routers.converter.replace.load_multiple_materials",
+        lambda _paths: [object()] * 5,
+    )
+    monkeypatch.setattr(
+        "api.routers.converter.replace.forward_model",
+        lambda *_args, **_kwargs: np.asarray([0.1, 0.2, 0.3]),
+    )
+    monkeypatch.setattr(
+        "api.routers.converter.replace.linear_to_srgb_float",
+        lambda _linear: np.asarray(target_b, dtype=np.float64) / 255.0,
+    )
+    monkeypatch.setattr(
+        "api.routers.converter.replace.schedule_glb_build",
+        lambda *_args, **_kwargs: None,
+    )
+
+    response = client.post(
+        "/api/convert/apply-recipe-override",
+        json={
+            "session_id": session_id,
+            "region_ids": ["region-1"],
+            "recipe": [2, 1, 0, 1, 1],
+            "layer_order": "Top2Bottom",
+            "color_layers": 5,
+            "layer_height_mm": 0.08,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["material_layer_benefit_scope"] == "automatic_pixels"
+    assert payload["material_layer_benefit_pixel_count"] == 12
+    # The four manual B pixels would make the all-pixel mean 2.5. The curve
+    # must only weight automatic pixels: 4 A at ΔE00=1 and 8 B at ΔE00=3.
+    assert payload["material_layer_benefit_curve"][0][
+        "weighted_mean_delta_e00"
+    ] == pytest.approx(28.0 / 12.0)
+
+    updated_cache = store.get(session_id)["preview_cache"]
+    assert np.all(updated_cache["quantized_image"][manual_mask] == target_b)
+    assert updated_cache["material_dynamic_layer_info"][
+        "benefit_curve_pixel_count"
+    ] == 12
+
+
 def test_apply_recipe_override_material_archive_extends_palette_with_virtuals(
     monkeypatch,
     tmp_path: Path,

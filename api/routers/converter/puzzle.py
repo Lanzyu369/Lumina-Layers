@@ -13,8 +13,10 @@ import hashlib
 import io
 import json
 import os
+import pickle
 import tempfile
 import uuid
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -71,7 +73,12 @@ from .common import (
     _require_session,
     _resolve_session_dynamic_material_settings,
     _resolve_material_backing_index,
+    _validate_unique_dynamic_material_selection,
     _validate_material_archive_relief_minimum_height,
+)
+from .generate import (
+    _resolve_recipe_overrides,
+    _serialize_recipe_override_for_worker,
 )
 
 router = APIRouter()
@@ -87,6 +94,31 @@ _PUZZLE_PIECE_GENERATION_FAILED_DETAIL = (
     "Puzzle generation failed for one or more pieces. Re-run preview and "
     "try generating the puzzle again."
 )
+_DYNAMIC_PUZZLE_ANALYSIS_UNAVAILABLE_DETAIL = (
+    "Dynamic puzzle preview analysis is incomplete or inconsistent. "
+    "Re-run preview before generating puzzle pieces."
+)
+
+
+@dataclass(frozen=True)
+class PuzzlePieceWorkerAssets:
+    """Raster inputs for one puzzle worker, kept in one typed container.
+    单个拼图 worker 的栅格输入，统一放在强类型容器中。
+
+    Dynamic material generation additionally carries the cropped authority
+    arrays from the confirmed preview. Keeping these fields together avoids
+    positional tuple mistakes that could pair a matrix with another piece.
+    动态耗材生成还携带来自已确认预览的裁切权威数组。将这些字段放在一起可避免
+    位置元组错配，例如把一个拼图块的矩阵配给另一个拼图块。
+    """
+
+    bbox_px: tuple[int, int, int, int]
+    rgba: np.ndarray
+    matched_rgb: np.ndarray
+    boundary_payload: dict[str, Any]
+    mask_solid: np.ndarray | None = None
+    quantized_image: np.ndarray | None = None
+    material_matrix: np.ndarray | None = None
 
 
 class _PuzzleLayoutPreviewBody(BaseModel):
@@ -148,6 +180,56 @@ def _require_puzzle_cache(
             ),
         ) from exc
     return loaded
+
+
+def _require_dynamic_puzzle_analysis(
+    cache: dict[str, Any],
+    *,
+    max_layer_count: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Return validated authority arrays for dynamic-material puzzle output.
+    返回已校验的动态耗材拼图权威数组。
+
+    Dynamic piece generation must not fall back to solving from RGB. The
+    preview matrix can encode accepted manual recipes and virtual materials,
+    so every source array has to be present, aligned, and at the preview's
+    physical max-layer depth before any worker is scheduled.
+    动态拼图生成绝不能退回为根据 RGB 重算。预览矩阵可能编码已确认的手工配方和
+    虚拟耗材，因此在调度 worker 前，所有源数组必须存在、对齐，并且具有预览的
+    物理最大层深。
+    """
+
+    matched_rgb = cache.get("matched_rgb")
+    mask_solid = cache.get("mask_solid")
+    quantized_image = cache.get("quantized_image")
+    material_matrix = cache.get("material_matrix")
+    if not all(
+        isinstance(value, np.ndarray)
+        for value in (matched_rgb, mask_solid, quantized_image, material_matrix)
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=_DYNAMIC_PUZZLE_ANALYSIS_UNAVAILABLE_DETAIL,
+        )
+    if (
+        matched_rgb.dtype != np.uint8
+        or matched_rgb.ndim != 3
+        or matched_rgb.shape[2] != 3
+    ):
+        raise HTTPException(status_code=409, detail=_DYNAMIC_PUZZLE_ANALYSIS_UNAVAILABLE_DETAIL)
+    image_shape = matched_rgb.shape[:2]
+    if (
+        mask_solid.dtype != np.bool_
+        or mask_solid.shape != image_shape
+        or quantized_image.dtype != np.uint8
+        or quantized_image.shape != matched_rgb.shape
+        or material_matrix.dtype != np.int32
+        or material_matrix.ndim != 3
+        or material_matrix.shape[:2] != image_shape
+        or material_matrix.shape[2] != int(max_layer_count)
+    ):
+        raise HTTPException(status_code=409, detail=_DYNAMIC_PUZZLE_ANALYSIS_UNAVAILABLE_DETAIL)
+    return matched_rgb, mask_solid, quantized_image, material_matrix
 
 
 def _piece_boundary_geometry_payload(piece: PuzzlePiece, bbox_px: tuple[int, int, int, int]) -> dict[str, Any]:
@@ -422,6 +504,27 @@ def _crop_piece_arrays(
     return bbox_px, rgba_crop, matched_crop
 
 
+def _crop_dynamic_piece_analysis(
+    mask_solid: np.ndarray,
+    quantized_image: np.ndarray,
+    material_matrix: np.ndarray,
+    piece: PuzzlePiece,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Crop dynamic authority arrays and clear pixels outside the piece.
+    裁切动态权威数组，并清空拼图块之外的像素。
+    """
+
+    bbox_px, local_mask = rasterize_piece_mask(piece)
+    x0, y0, x1, y1 = bbox_px
+    piece_mask = np.array(mask_solid[y0:y1, x0:x1], copy=True)
+    piece_mask &= local_mask.astype(bool, copy=False)
+    piece_quantized = np.array(quantized_image[y0:y1, x0:x1], copy=True)
+    piece_matrix = np.array(material_matrix[y0:y1, x0:x1], copy=True)
+    piece_quantized[~piece_mask] = 0
+    piece_matrix[~piece_mask] = -1
+    return piece_mask, piece_quantized, piece_matrix
+
+
 def _resolve_piece_worker_raster_size(piece: PuzzlePiece) -> tuple[int, int]:
     """Resolve the exact raster size the worker will rebuild for one piece.
     解析 worker 最终会为单个拼图块重建的精确光栅尺寸。
@@ -445,15 +548,53 @@ def _resolve_piece_worker_raster_size(piece: PuzzlePiece) -> tuple[int, int]:
 
 
 def _resize_piece_array_nearest(array: np.ndarray, target_size: tuple[int, int]) -> np.ndarray:
-    """Resize a cropped puzzle asset using nearest-neighbor sampling.
-    使用最近邻重采样裁切后的拼图资产。
+    """Resize a cropped puzzle asset with Pillow's established nearest semantics.
+    使用 Pillow 既有的最近邻语义重采样裁切后的拼图资产。
+
+    Preview RGB assets have historically been resized by Pillow.  Reusing that
+    exact mapping preserves the established pixel contract while processing
+    dynamic authority assets whose bool and multi-channel int32 forms Pillow
+    cannot load directly as one image.
+    预览 RGB 资产历来由 Pillow 重采样。复用其精确映射可保持既有像素契约，
+    同时处理 Pillow 不能直接作为单张图加载的 bool 和多通道 int32 动态权威资产。
     """
 
     target_w, target_h = (max(1, int(target_size[0])), max(1, int(target_size[1])))
+    if array.ndim < 2:
+        raise ValueError("Puzzle worker asset must have at least two dimensions.")
     if array.shape[1] == target_w and array.shape[0] == target_h:
         return np.array(array, copy=True)
-    resized = Image.fromarray(array).resize((target_w, target_h), Image.Resampling.NEAREST)
-    return np.array(resized, copy=True)
+
+    def _resize_single_channel(channel: np.ndarray) -> np.ndarray:
+        if channel.dtype == np.bool_:
+            resized_mask = Image.fromarray(
+                channel.astype(np.uint8, copy=False)
+            ).resize((target_w, target_h), Image.Resampling.NEAREST)
+            return np.asarray(resized_mask, dtype=np.uint8).astype(bool, copy=False)
+        try:
+            resized = Image.fromarray(channel).resize(
+                (target_w, target_h),
+                Image.Resampling.NEAREST,
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "Puzzle worker asset has an unsupported dtype for nearest resampling."
+            ) from exc
+        return np.array(resized, dtype=channel.dtype, copy=True)
+
+    if array.ndim == 2:
+        return _resize_single_channel(array)
+    if array.ndim != 3:
+        raise ValueError("Puzzle worker asset must be a 2D or 3D array.")
+    if array.dtype == np.uint8 and array.shape[2] in {3, 4}:
+        return np.array(
+            Image.fromarray(array).resize((target_w, target_h), Image.Resampling.NEAREST),
+            copy=True,
+        )
+    return np.stack(
+        [_resize_single_channel(array[..., channel]) for channel in range(array.shape[2])],
+        axis=2,
+    )
 
 
 def _rescale_piece_boundary_payload(
@@ -495,7 +636,11 @@ def _prepare_piece_worker_assets(
     source_rgba: np.ndarray,
     matched_rgb: np.ndarray,
     piece: PuzzlePiece,
-) -> tuple[tuple[int, int, int, int], np.ndarray, np.ndarray, dict[str, Any]]:
+    *,
+    mask_solid: np.ndarray | None = None,
+    quantized_image: np.ndarray | None = None,
+    material_matrix: np.ndarray | None = None,
+) -> PuzzlePieceWorkerAssets:
     """Prepare raster and boundary assets aligned to the worker grid.
     准备与 worker 栅格严格对齐的拼图块图像与边界资产。
     """
@@ -512,12 +657,101 @@ def _prepare_piece_worker_assets(
         boundary_payload,
         inset_px=_PUZZLE_BOUNDARY_INSET_MM * _PUZZLE_WORKER_PIXELS_PER_MM,
     )
-    return (
-        bbox_px,
-        _resize_piece_array_nearest(piece_rgba, target_size),
-        _resize_piece_array_nearest(piece_matched, target_size),
-        boundary_payload,
+    dynamic_assets = (mask_solid, quantized_image, material_matrix)
+    if any(asset is not None for asset in dynamic_assets) and not all(
+        asset is not None for asset in dynamic_assets
+    ):
+        raise ValueError("Dynamic puzzle assets must be supplied together.")
+
+    piece_mask: np.ndarray | None = None
+    piece_quantized: np.ndarray | None = None
+    piece_matrix: np.ndarray | None = None
+    if all(asset is not None for asset in dynamic_assets):
+        piece_mask, piece_quantized, piece_matrix = _crop_dynamic_piece_analysis(
+            mask_solid,
+            quantized_image,
+            material_matrix,
+            piece,
+        )
+        piece_matched = np.array(piece_matched, copy=True)
+        piece_matched[~piece_mask] = 0
+
+    return PuzzlePieceWorkerAssets(
+        bbox_px=bbox_px,
+        rgba=_resize_piece_array_nearest(piece_rgba, target_size),
+        matched_rgb=_resize_piece_array_nearest(piece_matched, target_size),
+        boundary_payload=boundary_payload,
+        mask_solid=(
+            _resize_piece_array_nearest(piece_mask, target_size)
+            if piece_mask is not None
+            else None
+        ),
+        quantized_image=(
+            _resize_piece_array_nearest(piece_quantized, target_size)
+            if piece_quantized is not None
+            else None
+        ),
+        material_matrix=(
+            _resize_piece_array_nearest(piece_matrix, target_size)
+            if piece_matrix is not None
+            else None
+        ),
     )
+
+
+def _prepare_piece_recipe_override_masks(
+    *,
+    region_masks: object,
+    recipe_overrides: list[dict[str, object]] | None,
+    piece: PuzzlePiece,
+    source_shape: tuple[int, int],
+    target_size: tuple[int, int],
+    piece_solid_mask: np.ndarray,
+) -> dict[str, np.ndarray]:
+    """Crop persisted override masks onto one dynamic puzzle worker grid.
+    将持久化的配方覆盖掩码裁切到一个动态拼图 worker 栅格。
+
+    The copied material matrix is authoritative for the selected stacks, but
+    S03 still needs these masks to rebuild the matching virtual-material
+    palette in the isolated worker process. Every declared override therefore
+    needs a source-sized mask; silently omitting one can leave an out-of-range
+    material index in the matrix without its colour definition.
+    已复制的材料矩阵是所选堆栈的权威数据，但隔离 worker 内的 S03 仍需这些
+    掩码来重建对应的虚拟耗材调色板。因此每个已声明覆盖都必须有与源图同尺寸的
+    掩码；静默漏掉一个会让矩阵出现没有颜色定义的越界材料索引。
+    """
+    if not recipe_overrides:
+        return {}
+    if not isinstance(region_masks, dict):
+        raise ValueError("dynamic puzzle recipe override masks are unavailable")
+
+    bbox_px, local_piece_mask = rasterize_piece_mask(piece)
+    x0, y0, x1, y1 = bbox_px
+    cropped_masks: dict[str, np.ndarray] = {}
+    for item in recipe_overrides:
+        region_id = str(item.get("region_id") or "").strip()
+        if not region_id:
+            raise ValueError("dynamic puzzle recipe override is missing region_id")
+        raw_mask = region_masks.get(region_id)
+        if raw_mask is None:
+            raise ValueError(
+                f"dynamic puzzle recipe override mask is missing for {region_id}"
+            )
+        mask = np.asarray(raw_mask, dtype=bool)
+        if mask.shape != source_shape:
+            raise ValueError(
+                f"dynamic puzzle recipe override mask for {region_id} has "
+                f"shape {mask.shape}, expected {source_shape}"
+            )
+        piece_mask = np.array(mask[y0:y1, x0:x1], copy=True)
+        piece_mask &= local_piece_mask.astype(bool, copy=False)
+        piece_mask = _resize_piece_array_nearest(piece_mask, target_size)
+        if piece_mask.shape != piece_solid_mask.shape:
+            raise ValueError("dynamic puzzle override mask does not match worker grid")
+        piece_mask &= np.asarray(piece_solid_mask, dtype=bool)
+        if np.any(piece_mask):
+            cropped_masks[region_id] = piece_mask
+    return cropped_masks
 
 
 def _save_png_array(session_id: str, store: SessionStore, array: np.ndarray, prefix: str) -> str:
@@ -558,6 +792,23 @@ def _save_npy_array(session_id: str, store: SessionStore, array: np.ndarray, pre
     fd, path = tempfile.mkstemp(prefix=prefix, suffix=".npy", dir=TEMP_DIR)
     os.close(fd)
     np.save(path, array)
+    store.register_temp_file(session_id, path)
+    return path
+
+
+def _save_pickle_payload(
+    session_id: str,
+    store: SessionStore,
+    payload: object,
+    prefix: str,
+) -> str:
+    """Persist a trusted intra-process payload for a worker and register it.
+    持久化可信的进程内 worker 载荷并注册清理。
+    """
+    fd, path = tempfile.mkstemp(prefix=prefix, suffix=".pkl", dir=TEMP_DIR)
+    os.close(fd)
+    with open(path, "wb") as handle:
+        pickle.dump(payload, handle, protocol=pickle.HIGHEST_PROTOCOL)
     store.register_temp_file(session_id, path)
     return path
 
@@ -743,11 +994,6 @@ async def generate_puzzle(
 
     session_data = _require_session(store, body.session_id)
     preview_cache_ref = session_data.get("preview_cache")
-    cache = _require_puzzle_cache(
-        session_data,
-        fields={"matched_rgb", "mask_solid", "preview_rgba"},
-    )
-
     request = body.params
     generate_params = request.params
     if generate_params.enable_fridge_magnet:
@@ -760,9 +1006,46 @@ async def generate_puzzle(
             detail="Puzzle back-label engraving is not implemented yet. Disable it before generating puzzle pieces.",
         )
 
+    session_material_source = session_data.get("material_source", "lut")
+    dynamic_material_settings = _resolve_session_dynamic_material_settings(
+        session_data=session_data,
+        request=generate_params,
+        material_source=str(session_material_source or "lut"),
+        # Puzzle vector requests are deliberately rasterized to high fidelity.
+        native_svg_vector=False,
+    )
+    if (
+        session_material_source == "material_archive"
+        and dynamic_material_settings[0]
+    ):
+        _validate_unique_dynamic_material_selection(
+            session_data.get("selected_materials") or []
+        )
+
+    cache_fields = {"matched_rgb", "mask_solid", "preview_rgba"}
+    if (
+        session_material_source == "material_archive"
+        and dynamic_material_settings[0]
+    ):
+        cache_fields.update({"quantized_image", "material_matrix"})
+    cache = _require_puzzle_cache(session_data, fields=cache_fields)
+    dynamic_puzzle_analysis: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None = None
+    dynamic_recipe_overrides: list[dict[str, object]] | None = None
+    if (
+        session_material_source == "material_archive"
+        and dynamic_material_settings[0]
+    ):
+        dynamic_puzzle_analysis = _require_dynamic_puzzle_analysis(
+            cache,
+            max_layer_count=dynamic_material_settings[2],
+        )
+        dynamic_recipe_overrides = _resolve_recipe_overrides(
+            session_data,
+            generate_params,
+        )
+
     image_path: str | None = session_data.get("image_path")
     lut_path: str | None = session_data.get("lut_path")
-    session_material_source = session_data.get("material_source", "lut")
     if not image_path or not os.path.exists(image_path):
         raise HTTPException(status_code=409, detail=SOURCE_IMAGE_UNAVAILABLE_DETAIL)
     if session_material_source == "material_archive":
@@ -785,6 +1068,15 @@ async def generate_puzzle(
     except ROUTER_HANDLED_ERRORS as exc:
         _handle_core_error(exc, "Puzzle generation setup")
 
+    if (
+        dynamic_puzzle_analysis is not None
+        and source_rgba.shape[:2] != dynamic_puzzle_analysis[0].shape[:2]
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=_DYNAMIC_PUZZLE_ANALYSIS_UNAVAILABLE_DETAIL,
+        )
+
     free_color_set = _resolve_free_color_set(session_data, generate_params)
     relief_global_max_height = _resolve_relief_global_max_height(session_data, generate_params)
 
@@ -792,13 +1084,6 @@ async def generate_puzzle(
         CoreModelingMode.HIGH_FIDELITY
         if generate_params.modeling_mode == ModelingMode.VECTOR
         else CoreModelingMode(generate_params.modeling_mode.value)
-    )
-    dynamic_material_settings = _resolve_session_dynamic_material_settings(
-        session_data=session_data,
-        request=generate_params,
-        material_source=str(session_material_source or "lut"),
-        # Puzzle vector requests are deliberately rasterized to high fidelity.
-        native_svg_vector=False,
     )
     height_mode = generate_params.height_mode or "color"
     _validate_material_archive_relief_minimum_height(
@@ -817,26 +1102,45 @@ async def generate_puzzle(
 
     sid = body.session_id
     base_name = os.path.splitext(os.path.basename(image_path))[0] or "puzzle"
+    selected_materials = (
+        list(session_data.get("selected_materials") or [])
+        if session_material_source == "material_archive"
+        else []
+    )
     futures: list[asyncio.Future] = []
     piece_records: list[PuzzlePiece] = []
     skipped_transparent_labels: list[str] = []
 
     for piece in layout.pieces:
-        bbox_px, piece_rgba, piece_matched, piece_boundary_payload = _prepare_piece_worker_assets(
+        dynamic_asset_kwargs: dict[str, np.ndarray] = {}
+        if dynamic_puzzle_analysis is not None:
+            (
+                _dynamic_matched_rgb,
+                dynamic_mask_solid,
+                dynamic_quantized_image,
+                dynamic_material_matrix,
+            ) = dynamic_puzzle_analysis
+            dynamic_asset_kwargs = {
+                "mask_solid": dynamic_mask_solid,
+                "quantized_image": dynamic_quantized_image,
+                "material_matrix": dynamic_material_matrix,
+            }
+        assets = _prepare_piece_worker_assets(
             source_rgba,
             matched_rgb,
             piece,
+            **dynamic_asset_kwargs,
         )
-        if not np.any(piece_rgba[..., 3] >= 10):
+        if not np.any(assets.rgba[..., 3] >= 10):
             skipped_transparent_labels.append(piece.label)
             continue
         piece_prefix = f"puzzle_{piece.label}_"
-        piece_image_path = _save_png_array(sid, store, piece_rgba, piece_prefix)
-        piece_matched_path = _save_npy_array(sid, store, piece_matched, piece_prefix)
+        piece_image_path = _save_png_array(sid, store, assets.rgba, piece_prefix)
+        piece_matched_path = _save_npy_array(sid, store, assets.matched_rgb, piece_prefix)
         piece_boundary_path = _save_json_payload(
             sid,
             store,
-            piece_boundary_payload,
+            assets.boundary_payload,
             piece_prefix,
         )
 
@@ -890,8 +1194,81 @@ async def generate_puzzle(
             "material_max_layer_count": dynamic_material_settings[2],
             "material_delta_e00_tolerance": dynamic_material_settings[3],
         }
+        if dynamic_puzzle_analysis is not None:
+            if (
+                assets.mask_solid is None
+                or assets.quantized_image is None
+                or assets.material_matrix is None
+            ):
+                raise RuntimeError("Dynamic puzzle worker assets were not prepared.")
+            worker_params.update(
+                {
+                    "mask_solid_path": _save_npy_array(
+                        sid, store, assets.mask_solid, piece_prefix
+                    ),
+                    "quantized_image_path": _save_npy_array(
+                        sid, store, assets.quantized_image, piece_prefix
+                    ),
+                    "material_matrix_path": _save_npy_array(
+                        sid, store, assets.material_matrix, piece_prefix
+                    ),
+                    "reuse_preview_analysis": True,
+                }
+            )
+            if dynamic_recipe_overrides:
+                try:
+                    piece_override_masks = _prepare_piece_recipe_override_masks(
+                        region_masks=session_data.get("selected_region_masks"),
+                        recipe_overrides=dynamic_recipe_overrides,
+                        piece=piece,
+                        source_shape=dynamic_puzzle_analysis[1].shape,
+                        target_size=(assets.mask_solid.shape[1], assets.mask_solid.shape[0]),
+                        piece_solid_mask=assets.mask_solid,
+                    )
+                except (TypeError, ValueError) as exc:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "Dynamic puzzle recipe-override analysis is incomplete. "
+                            "Re-run preview before generating puzzle pieces."
+                        ),
+                    ) from exc
+                worker_params["recipe_overrides"] = [
+                    _serialize_recipe_override_for_worker(item)
+                    for item in dynamic_recipe_overrides
+                ]
+                if piece_override_masks:
+                    worker_params["recipe_override_masks_path"] = (
+                        _save_pickle_payload(
+                            sid,
+                            store,
+                            piece_override_masks,
+                            piece_prefix,
+                        )
+                    )
+                elif np.any(
+                    assets.material_matrix[np.asarray(assets.mask_solid, dtype=bool)]
+                    >= len(selected_materials)
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "Dynamic puzzle virtual-material metadata is incomplete. "
+                            "Re-run preview before generating puzzle pieces."
+                        ),
+                    )
+            elif np.any(
+                assets.material_matrix[np.asarray(assets.mask_solid, dtype=bool)]
+                >= len(selected_materials)
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Dynamic puzzle virtual-material metadata is unavailable. "
+                        "Re-run preview before generating puzzle pieces."
+                    ),
+                )
         if session_material_source == "material_archive":
-            selected_materials = session_data.get("selected_materials") or []
             worker_params["material_source"] = "material_archive"
             worker_params["selected_materials"] = selected_materials
             worker_params["material_layer_count"] = session_data.get("material_layer_count")
@@ -920,7 +1297,7 @@ async def generate_puzzle(
         if generate_params.enable_relief and height_mode == "heightmap":
             if heightmap_grayscale is None:
                 raise HTTPException(status_code=409, detail="Heightmap missing. Upload heightmap before puzzle generation.")
-            x0, y0, x1, y1 = bbox_px
+            x0, y0, x1, y1 = assets.bbox_px
             piece_heightmap = np.array(heightmap_grayscale[y0:y1, x0:x1], copy=True)
             piece_heightmap = _resize_piece_array_nearest(
                 piece_heightmap,

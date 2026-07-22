@@ -15,11 +15,11 @@ import { buildAssetEntry, sha256String } from "./utils";
 import { colorRemapToReplacementRegions } from "../utils/colorUtils";
 import type { ConverterState } from "../stores/converter/store";
 import type { SettingsState } from "../stores/settingsStore";
-import type {
-  ColorReplacementItem,
-  DynamicMaterialRecipe,
-  MaterialLayerBenefitPoint,
-} from "../api/types";
+import type { ColorReplacementItem } from "../api/types";
+import {
+  cloneDynamicMaterialRecipe,
+  cloneMaterialLayerBenefitCurve,
+} from "./dynamicMaterialMetadata";
 import {
   MIN_COVER_WIDTH,
   computeFooterLayout,
@@ -66,32 +66,6 @@ function virtualMaterialsField(
 ): { virtual_materials?: Array<{ name: string; hex: string }> } {
   const cloned = cloneVirtualMaterials(materials);
   return cloned ? { virtual_materials: cloned } : {};
-}
-
-function cloneDynamicMaterialRecipe(
-  recipe: DynamicMaterialRecipe,
-): DynamicMaterialRecipe {
-  return {
-    ...recipe,
-    target_srgb: [...recipe.target_srgb],
-    matched_srgb: [...recipe.matched_srgb],
-    actual_recipe_top_to_bottom: [...recipe.actual_recipe_top_to_bottom],
-    print_recipe_top_to_bottom: [...recipe.print_recipe_top_to_bottom],
-    layer_cap_options: recipe.layer_cap_options.map((option) => ({
-      ...option,
-      matched_srgb: [...option.matched_srgb],
-      actual_recipe_top_to_bottom: [
-        ...option.actual_recipe_top_to_bottom,
-      ],
-      print_recipe_top_to_bottom: [...option.print_recipe_top_to_bottom],
-    })),
-  };
-}
-
-function cloneMaterialLayerBenefitCurve(
-  curve: MaterialLayerBenefitPoint[],
-): MaterialLayerBenefitPoint[] {
-  return curve.map((point) => ({ ...point }));
 }
 
 // ========== App version ==========
@@ -213,6 +187,8 @@ export function exportConverterRecipe(
             benefit_curve: cloneMaterialLayerBenefitCurve(
               state.materialLayerBenefitCurve,
             ),
+            scope: state.materialLayerBenefitScope,
+            pixel_count: state.materialLayerBenefitPixelCount,
           },
         }
       : {}),

@@ -180,12 +180,32 @@ def dynamic_material_canonical_order(
     """Return identity-safe canonical indices for dynamic catalog building.
 
     返回用于动态目录构建的身份安全规范索引。
+
+    Args:
+        materials: Non-empty material palette in current user order. 当前用户
+            顺序的非空耗材列表。
+
+    Returns:
+        tuple[int, ...]: Original palette indices sorted by stable material
+            identity and optical properties. 按稳定耗材身份和光学参数排序后的
+            原始列表索引。
+
+    Raises:
+        TypeError: If an entry is not a ``MaterialParams`` instance. 列表项
+            不是 ``MaterialParams`` 实例。
+        ValueError: If ``materials`` is not a non-empty list or contains
+            duplicate material identities. ``materials`` 不是非空列表，或包含
+            重复耗材身份。
     """
 
     _validate_materials(materials)
     identities = [
         _dynamic_material_identity_fingerprint(material) for material in materials
     ]
+    if len(identities) != len(set(identities)):
+        raise ValueError(
+            "dynamic material catalog does not support duplicate material identities"
+        )
     return tuple(
         sorted(range(len(materials)), key=lambda index: (identities[index], index))
     )

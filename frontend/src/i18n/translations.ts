@@ -1819,13 +1819,9 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "动态叠层 ΔE00 容差",
     en: "Dynamic-layer ΔE00 tolerance",
   },
-  "settings.material_delta_e00_tolerance_tip": {
+  "settings.material_delta_e00_tolerance_hint": {
     zh: "程序先求出范围内的精确 CIEDE2000 最佳值，再选择不超过最佳值加此容差的最短配方。允许范围 0.0–5.0，步进 0.1。",
     en: "The solver first finds the exact CIEDE2000 optimum in range, then chooses the shortest recipe no worse than that optimum plus this tolerance. Allowed range: 0.0–5.0 in 0.1 steps.",
-  },
-  "settings.material_delta_e00_tolerance_default_hint": {
-    zh: "默认值为 0.5。设为 0.0 时只接受范围内的严格最优结果。",
-    en: "Default is 0.5. Set it to 0.0 to accept only the strict optimum within the configured range.",
   },
   "settings.svg_pixels_per_mm_heading": {
     zh: "高保真 SVG 采样密度",
@@ -4647,6 +4643,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   palette_dynamic_benefit_title: {
     zh: "全图层数收益",
     en: "Whole-image layer benefit",
+  },
+  palette_dynamic_benefit_scope_automatic: {
+    zh: "仅自动求解区域（{count} 像素）",
+    en: "Automatic-solver region only ({count} pixels)",
   },
   palette_dynamic_benefit_layer: {
     zh: "{count} 层",

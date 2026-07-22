@@ -772,7 +772,7 @@ export default function SettingsPanel() {
           </div>
           <Slider
             label={t("settings.material_delta_e00_tolerance_label")}
-            tooltip={t("settings.material_delta_e00_tolerance_tip")}
+            tooltip={t("settings.material_delta_e00_tolerance_hint")}
             value={materialDeltaE00Tolerance}
             min={MATERIAL_DELTA_E00_TOLERANCE_MIN}
             max={MATERIAL_DELTA_E00_TOLERANCE_MAX}
@@ -781,9 +781,6 @@ export default function SettingsPanel() {
             minInputWidthCh={4}
             onChange={setMaterialDeltaE00Tolerance}
           />
-          <StatusBanner tone="info">
-            {t("settings.material_delta_e00_tolerance_default_hint")}
-          </StatusBanner>
         </div>
 
         <div

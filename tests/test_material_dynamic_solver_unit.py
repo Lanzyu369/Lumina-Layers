@@ -458,6 +458,55 @@ def test_exact_search_uses_ciede2000_not_cie76_ordering() -> None:
     assert result.cumulative_best_delta_e00[0, 0] == pytest.approx(ciede2000[1])
 
 
+def test_exact_search_does_not_drop_ciede2000_winner_after_cie76_top_4096() -> None:
+    """Keep a ΔE00 optimum even when CIE76 would exclude it from Top-4096.
+
+    防止先用 CIE76 取 Top-4096 时丢失真正的 ΔE00 最优候选。
+    """
+    target = np.asarray([[223, 149, 167]], dtype=np.uint8)
+    cie76_decoy = np.asarray([[184, 137, 148]], dtype=np.uint8)
+    ciede2000_winner = np.asarray([[187, 141, 147]], dtype=np.uint8)
+    target_lab = rgb_to_lab(target)[0]
+    decoy_lab = rgb_to_lab(cie76_decoy)[0]
+    winner_lab = rgb_to_lab(ciede2000_winner)[0]
+
+    # The catalog is the exact-search seam: use 4,096 distinct source rows
+    # that share the CIE76-favoured score, then place the ΔE00 winner just
+    # beyond their legacy prefilter boundary.
+    source_rows = np.arange(4_097, dtype=np.int64)
+    score_srgb = np.column_stack(
+        (
+            (source_rows >> 8) & 0xFF,
+            source_rows & 0xFF,
+            np.full(source_rows.size, 1, dtype=np.int64),
+        )
+    ).astype(np.uint8)
+    score_lab = np.repeat(decoy_lab.reshape(1, 3), 4_097, axis=0)
+    score_lab[-1] = winner_lab
+    catalog = DynamicCandidateCatalog(
+        score_srgb=score_srgb,
+        score_lab=score_lab,
+        print_recipes=np.zeros((4_097, 5), dtype=np.int32),
+        minimum_actual_layer_counts=np.full(4_097, 5, dtype=np.int16),
+        max_layer_reachable=np.ones(4_097, dtype=bool),
+        source_indices=source_rows,
+    )
+
+    cie76 = np.linalg.norm(catalog.score_lab - target_lab, axis=1)
+    ciede2000 = _delta_e00_numpy(
+        np.broadcast_to(target_lab, catalog.score_lab.shape),
+        catalog.score_lab,
+    )
+    legacy_top_4096 = np.argsort(cie76, kind="stable")[:4_096]
+    assert 4_096 not in legacy_top_4096
+    assert int(np.argmin(ciede2000)) == 4_096
+
+    result = search_dynamic_catalog_exact(target, catalog, 5, 5, prefer_numba=False)
+
+    assert result.cumulative_best_candidate_indices[0, 0] == 4_096
+    assert result.fixed_max_delta_e00[0] == pytest.approx(ciede2000[4_096])
+
+
 def test_search_has_exact_frontier_interface_without_tolerance() -> None:
     signature = inspect.signature(search_dynamic_catalog_exact)
 

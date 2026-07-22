@@ -19,6 +19,7 @@ from PIL import Image
 from pydantic import ValidationError
 
 from api.dependencies import get_file_registry, get_session_store, get_worker_pool
+from api.dynamic_material_response import dynamic_material_result_from_cache
 from api.file_bridge import ensure_png_tempfile, ndarray_to_png_bytes
 from api.file_registry import FileRegistry
 from api.preview_response_payload import build_preview_response_palette
@@ -85,6 +86,7 @@ from .common import (
     _require_session,
     _resolve_material_backing_index,
     _validate_dynamic_material_settings,
+    _validate_unique_dynamic_material_selection,
     _validate_material_source,
     recompute_gradient_groups_into_session,
 )
@@ -179,6 +181,15 @@ def _with_original_preview_cache_refs(ref: dict) -> dict:
         fields["original_material_matrix"] = dict(fields["material_matrix"])
     if "quantized_image" in fields:
         fields["original_quantized_image"] = dict(fields["quantized_image"])
+    metadata = updated["metadata"]
+    if "material_dynamic_layer_info" in metadata:
+        metadata["original_material_dynamic_layer_info"] = copy.deepcopy(
+            metadata["material_dynamic_layer_info"]
+        )
+    if "material_solver_info" in metadata:
+        metadata["original_material_solver_info"] = copy.deepcopy(
+            metadata["material_solver_info"]
+        )
     return updated
 _DEFAULT_GENERATE_SEGMENTED_GLB = generate_segmented_glb
 
@@ -299,13 +310,26 @@ def _compact_material_matrix_array(array: np.ndarray) -> np.ndarray:
 
 
 def _compact_preview_cache_material_matrices(cache: dict) -> dict:
-    """Return cache with material matrices stored in compact signed dtypes."""
+    """Compact fixed matrices but retain dynamic authority matrices as int32.
+
+    动态耗材矩阵是拼图/生成复用的权威分析资产，不能在预览缓存外置前降级为
+    int8/int16；P03 会严格校验其 ``int32`` 协议。普通固定层数矩阵仍按原有
+    规则压缩以控制缓存体积。
+    """
 
     compacted = dict(cache)
+    dynamic_info = compacted.get("material_dynamic_layer_info")
+    preserve_dynamic_int32 = isinstance(dynamic_info, dict) and bool(
+        dynamic_info.get("enabled")
+    )
     for field_name in ("material_matrix", "original_material_matrix"):
         value = compacted.get(field_name)
         if isinstance(value, np.ndarray):
-            compacted[field_name] = _compact_material_matrix_array(value)
+            compacted[field_name] = (
+                value.astype(np.int32, copy=False)
+                if preserve_dynamic_int32
+                else _compact_material_matrix_array(value)
+            )
     return compacted
 
 
@@ -976,6 +1000,8 @@ async def convert_preview(
             _selected_mats,
             material_backing_material_index,
         )
+        if material_dynamic_layer_count_enabled:
+            _validate_unique_dynamic_material_selection(_selected_mats)
 
     # Material-archive mode: skip LUT resolution entirely
     if material_source == "material_archive":
@@ -1450,6 +1476,14 @@ async def convert_preview(
             cache_with_originals["original_quantized_image"] = cache_data[
                 "quantized_image"
             ]
+        if "material_dynamic_layer_info" in cache_data:
+            cache_with_originals["original_material_dynamic_layer_info"] = (
+                copy.deepcopy(cache_data["material_dynamic_layer_info"])
+            )
+        if "material_solver_info" in cache_data:
+            cache_with_originals["original_material_solver_info"] = copy.deepcopy(
+                cache_data["material_solver_info"]
+            )
         cache_with_originals = _compact_preview_cache_material_matrices(
             cache_with_originals,
         )
@@ -1637,11 +1671,7 @@ async def convert_preview(
     contours_data: dict[str, list[list[list[float]]]] | None = None
     if cache_data and "color_contours" in cache_data:
         contours_data = cache_data["color_contours"]
-    dynamic_layer_info = (
-        cache_data.get("material_dynamic_layer_info")
-        if isinstance(cache_data, dict)
-        else None
-    )
+    dynamic_result = dynamic_material_result_from_cache(cache_data)
 
     _t_api_total = time.perf_counter() - _api_t0
     performance_timing = {
@@ -1679,16 +1709,7 @@ async def convert_preview(
             contours=contours_data,
             warnings=list((svg_large_format_policy or {}).get("warnings", [])),
             performance_timing=performance_timing,
-            material_dynamic_recipes=(
-                dynamic_layer_info.get("colors")
-                if isinstance(dynamic_layer_info, dict)
-                else None
-            ),
-            material_layer_benefit_curve=(
-                dynamic_layer_info.get("benefit_curve")
-                if isinstance(dynamic_layer_info, dict)
-                else None
-            ),
+            **dynamic_result.model_dump(),
         )
     except (*ROUTER_HANDLED_ERRORS, ValidationError):
         _rollback_preview_session_after_failure(

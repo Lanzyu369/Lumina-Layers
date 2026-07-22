@@ -3,6 +3,10 @@ import { applyImport } from "../recipe/importFlow";
 import type { RestoreResult } from "../recipe/importRecipe";
 import type { ConverterRecipeDevice, LuminaRecipe } from "../recipe/types";
 import type { PrinterInfo } from "../api/types";
+import type {
+  DynamicMaterialRecipe,
+  MaterialLayerBenefitPoint,
+} from "../api/types";
 import { DEFAULT_STATE, useConverterStore } from "../stores/converter";
 import { DEFAULT_SETTINGS, useSettingsStore } from "../stores/settingsStore";
 
@@ -200,6 +204,48 @@ describe("recipe/importFlow", () => {
     applyImport(restoreResult);
 
     expect(useSettingsStore.getState().materialDeltaE00Tolerance).toBe(0.8);
+  });
+
+  it("keeps imported dynamic result evidence after setImageFile invalidation", () => {
+    const dynamicRecipe: DynamicMaterialRecipe = {
+      target_srgb: [240, 220, 200],
+      matched_srgb: [238, 218, 198],
+      actual_layer_count: 5,
+      padding_layer_count: 2,
+      actual_recipe_top_to_bottom: [0, 1, 0, 1, 0],
+      print_recipe_top_to_bottom: [0, 1, 0, 1, 0, 1, 1],
+      selected_delta_e00: 0.7,
+      best_range_delta_e00: 0.4,
+      fixed_max_delta_e00: 0.5,
+      delta_e00_sacrifice: 0.3,
+      layer_cap_options: [],
+    };
+    const benefitCurve: MaterialLayerBenefitPoint[] = [
+      {
+        max_effective_layer_count: 5,
+        weighted_mean_delta_e00: 0.7,
+        marginal_delta_e00_reduction: 0.2,
+      },
+    ];
+    const restoreResult: RestoreResult = {
+      state: {
+        source_version: "material",
+        materialDynamicLayerCountEnabled: true,
+        materialDynamicRecipes: [dynamicRecipe],
+        materialLayerBenefitCurve: benefitCurve,
+      },
+      assetFile: new File(["test"], "source.png", { type: "image/png" }),
+      heightmapFile: null,
+      warnings: [],
+      recipe: makeRecipe(),
+    };
+
+    applyImport(restoreResult);
+
+    expect(useConverterStore.getState()).toMatchObject({
+      materialDynamicRecipes: [dynamicRecipe],
+      materialLayerBenefitCurve: benefitCurve,
+    });
   });
 
   it("resolves device profile from imported printer slicer and nozzle when older recipe lacks it", () => {

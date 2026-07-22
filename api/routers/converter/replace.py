@@ -12,8 +12,8 @@ import uuid
 import cv2
 import numpy as np
 from fastapi import APIRouter, Depends, HTTPException
-
 from api.dependencies import get_file_registry, get_session_store
+from api.dynamic_material_response import dynamic_material_result_from_cache
 from api.file_registry import FileRegistry
 from api.schemas.converter import (
     ColorHighlightRequest,
@@ -64,9 +64,12 @@ from core.material_lut_synthesis import (
     solve_image_colors_optimal,
 )
 from core.material_color_solver import forward_model, linear_to_srgb_float
+from core.material_dynamic_replacement import (
+    rebuild_dynamic_material_after_replacement,
+)
 from core.pipeline.material_dynamic_layers import (
-    _solve_dynamic_material_targets,
     recompute_dynamic_material_benefit_curve,
+    solve_dynamic_material_targets,
 )
 from core.pipeline.processing_ops.lut_loader import load_lut
 from core.predictive_lut import predict_recipe_color
@@ -108,6 +111,9 @@ from .async_glb import schedule_glb_build
 
 router = APIRouter()
 log = get_logger(__name__)
+# Compatibility seam for focused tests of the synchronous core adapter. Product
+# routes call the public solver through ``core.material_dynamic_replacement``.
+_solve_dynamic_material_targets = solve_dynamic_material_targets
 _DEFAULT_GENERATE_SEGMENTED_GLB = generate_segmented_glb
 _SELECT_ALL_COLOR_REGION_PREFIX = "__select_all_color__:"
 _PREVIEW_CACHE_TRANSACTION_ENTER_ERRORS = (
@@ -149,7 +155,9 @@ _REPLACEMENT_CACHE_METADATA_FIELDS = {
     "color_layers",
     "layer_height_mm",
     "material_dynamic_layer_info",
+    "original_material_dynamic_layer_info",
     "material_solver_info",
+    "original_material_solver_info",
 }
 
 
@@ -687,13 +695,6 @@ def _sync_material_archive_matrix_for_diff(
         from core.material_dynamic_solver import DynamicMaterialCandidateError
 
         max_layer_count = int(session_data.get("material_max_layer_count") or 10)
-        material_matrix_arr = np.asarray(material_matrix)
-        if material_matrix_arr.shape[2] != max_layer_count:
-            raise DynamicMaterialCandidateError(
-                "dynamic material matrix width does not match configured maximum",
-                layer_count=max_layer_count,
-                phase="result_validation",
-            )
         target_rgb_map = cache.get("quantized_image")
         if (
             not isinstance(target_rgb_map, np.ndarray)
@@ -704,37 +705,18 @@ def _sync_material_archive_matrix_for_diff(
                 layer_count=max_layer_count,
                 phase="target_map",
             )
-        updated_target_map = np.asarray(target_rgb_map, dtype=np.uint8).copy()
-        updated_target_map[diff_mask] = np.asarray(updated_rgb, dtype=np.uint8)[
-            diff_mask
-        ]
-        solid_mask = np.asarray(cache.get("mask_solid"), dtype=bool)
-        target_rgbs, target_pixel_counts = np.unique(
-            updated_target_map[solid_mask],
-            axis=0,
-            return_counts=True,
-        )
-        if target_rgbs.shape[0] == 0:
-            raise DynamicMaterialCandidateError(
-                "dynamic replacement target image contains no printable colours",
-                layer_count=max_layer_count,
-                phase="target_map",
-            )
         backing_index = _resolve_material_backing_index(
             selected_materials,
             session_data.get("material_backing_material_index"),
         )
         min_layer_count = int(session_data.get("material_min_layer_count") or 5)
         tolerance = float(session_data.get("material_delta_e00_tolerance", 0.5))
-        (
-            _resolved_rgb,
-            _print_recipes,
-            _delta_e00,
-            new_info,
-            new_solver_info,
-        ) = _solve_dynamic_material_targets(
-            unique_colors=np.asarray(target_rgbs, dtype=np.uint8),
-            pixel_counts=np.asarray(target_pixel_counts, dtype=np.int64),
+        result = rebuild_dynamic_material_after_replacement(
+            updated_rgb=np.asarray(updated_rgb, dtype=np.uint8),
+            diff_mask=np.asarray(diff_mask, dtype=bool),
+            target_rgb_map=target_rgb_map,
+            solid_mask=np.asarray(cache.get("mask_solid"), dtype=bool),
+            material_matrix=np.asarray(material_matrix),
             materials=materials,
             backing_material_index=backing_index,
             layer_height_mm=layer_height_mm,
@@ -742,82 +724,18 @@ def _sync_material_archive_matrix_for_diff(
             min_layer_count=min_layer_count,
             max_layer_count=max_layer_count,
             delta_e00_tolerance=tolerance,
+            region_masks=session_data.get("selected_region_masks"),
+            recipe_overrides=session_data.get("recipe_overrides"),
+            existing_solver_info=cache.get("material_solver_info"),
+            solver=_solve_dynamic_material_targets,
         )
-        new_colors = new_info.get("colors") if isinstance(new_info, dict) else None
-        entries_by_target: dict[tuple[int, int, int], dict] = {}
-        for entry in new_colors if isinstance(new_colors, list) else []:
-            if not isinstance(entry, dict):
-                continue
-            raw_target = entry.get("target_srgb")
-            if not isinstance(raw_target, (list, tuple)) or len(raw_target) != 3:
-                continue
-            key = tuple(int(value) for value in raw_target)
-            entries_by_target[key] = entry
-
-        # Manual region recipes remain authoritative. Rebuild every other
-        # pixel from the complete fresh solve so unchanged automatic colours
-        # cannot retain stale request-local fixed baselines.
-        # 手动区域配方保持权威；其余像素全部使用完整新求解重建，避免未变目标色
-        # 留下过期的请求级固定层数基线。
-        manual_mask = np.zeros(solid_mask.shape, dtype=bool)
-        region_masks = session_data.get("selected_region_masks") or {}
-        if isinstance(region_masks, dict):
-            for override in session_data.get("recipe_overrides") or []:
-                if not isinstance(override, dict):
-                    continue
-                region_mask = region_masks.get(str(override.get("region_id") or ""))
-                if (
-                    isinstance(region_mask, np.ndarray)
-                    and region_mask.shape == solid_mask.shape
-                ):
-                    manual_mask |= np.asarray(region_mask, dtype=bool)
-        automatic_mask = solid_mask & ~manual_mask
-
-        new_material_matrix = material_matrix_arr.copy()
-        target_masks = [
-            np.all(updated_target_map == color, axis=-1) & automatic_mask
-            for color in target_rgbs
-        ]
-        for color, color_mask in zip(target_rgbs, target_masks):
-            key = tuple(int(value) for value in color)
-            entry = entries_by_target.get(key)
-            if entry is None:
-                raise DynamicMaterialCandidateError(
-                    "no dynamic metadata entry is available for a replacement target",
-                    target_srgb=key,
-                    layer_count=max_layer_count,
-                    phase="exact_search",
-                )
-            matched_values = entry.get("matched_srgb")
-            print_values = entry.get("print_recipe_top_to_bottom")
-            if (
-                not isinstance(matched_values, (list, tuple))
-                or len(matched_values) != 3
-                or not isinstance(print_values, (list, tuple))
-                or len(print_values) != max_layer_count
-            ):
-                raise DynamicMaterialCandidateError(
-                    "dynamic replacement metadata is inconsistent",
-                    target_srgb=key,
-                    layer_count=max_layer_count,
-                    phase="result_validation",
-                )
-            if not np.any(color_mask):
-                continue
-            updated_rgb[color_mask] = np.asarray(matched_values, dtype=np.uint8)
-            new_material_matrix[color_mask] = np.asarray(print_values).astype(
-                new_material_matrix.dtype,
-                copy=False,
-            )
-
-        solver_info = deepcopy(cache.get("material_solver_info") or {})
-        solver_info.update(new_solver_info)
-        cache["material_matrix"] = new_material_matrix
-        cache["quantized_image"] = updated_target_map
+        updated_rgb[...] = result.matched_rgb
+        cache["material_matrix"] = result.material_matrix
+        cache["quantized_image"] = result.target_rgb_map
         cache["color_layers"] = max_layer_count
         cache["layer_height_mm"] = float(layer_height_mm)
-        cache["material_dynamic_layer_info"] = new_info
-        cache["material_solver_info"] = solver_info
+        cache["material_dynamic_layer_info"] = result.dynamic_layer_info
+        cache["material_solver_info"] = result.solver_info
         return
 
     grid_resolution = int(
@@ -927,8 +845,8 @@ def _sync_material_matrix_after_rgb_change(
         _sync_material_archive_matrix_for_diff(session_data, cache, diff_mask, updated_rgb)
     else:
         _sync_lut_material_matrix_for_diff(session_data, cache, diff_mask, updated_rgb)
-
     cache["color_palette"] = extract_color_palette(cache)
+
 
 # Extend base tuple with IndexError for array-index operations
 # in region-detect / region-replace endpoints.
@@ -949,18 +867,8 @@ def replace_color(
     store: SessionStore = Depends(get_session_store),
     registry: FileRegistry = Depends(get_file_registry),
 ) -> ColorReplaceResponse:
-    """Replace a single color in the current session preview (synchronous).
-    替换当前 session 预览中的单个颜色（同步执行）。
-
-    This endpoint is intentionally kept synchronous (no process pool offload)
-    because the computation is lightweight: it operates on the cached
-    matched_rgb array (small preview image) with simple NumPy mask operations
-    over a small number of user-driven color replacements (typically 1-10).
-    The heavy image processing was already completed in the /preview step.
-    此端点有意保持同步执行（不卸载到进程池），因为计算量很小：
-    仅对缓存的 matched_rgb 数组（小尺寸预览图）执行简单的 NumPy 掩码操作，
-    颜色替换数量由用户驱动（通常 1-10 个）。
-    繁重的图像处理已在 /preview 步骤中完成。
+    """Replace one colour and keep the dynamic matrix/cache coherent.
+    替换一个颜色，并保持动态矩阵与缓存一致。
 
     Args:
         request (ColorReplaceRequest): Color replacement parameters. (颜色替换参数)
@@ -1028,10 +936,7 @@ def replace_color(
             # Update cache so 3D preview reflects replacements
             cache["matched_rgb"] = replaced_rgb
             _sync_material_matrix_after_rgb_change(
-                session_data,
-                cache,
-                previous_rgb,
-                replaced_rgb,
+                session_data, cache, previous_rgb, replaced_rgb
             )
 
             # Generate styled preview PNG (with bed grid and transparency)
@@ -1099,6 +1004,7 @@ def replace_color(
         preview_url=f"/api/files/{preview_id}",
         preview_3d_url=glb_url,
         replacement_count=len(current_regions),
+        **dynamic_material_result_from_cache(cache).model_dump(),
     )
 
 
@@ -1111,10 +1017,14 @@ def reset_replacements(
     """Reset all color replacements and restore original preview.
     重置所有颜色替换并恢复原始预览。
 
-    Clears replacement_regions and replacement_history from the session,
-    then regenerates the preview from the original matched_rgb cache.
-    清空 session 中的 replacement_regions 和 replacement_history，
-    然后从原始 matched_rgb 缓存重新生成预览。
+    Clears replacement and manual-recipe state from the session, then
+    regenerates the preview from the original matched_rgb cache. A manual
+    override cannot remain active after its matrix has been restored to the
+    preview snapshot, otherwise a later generate request would silently
+    re-apply it.
+    清空 session 中的替换和手工配方状态，然后从原始 matched_rgb 缓存重新生成
+    预览。矩阵已恢复到预览快照后，手工覆盖不能继续保留，否则后续 generate
+    会静默把它重新应用。
 
     Args:
         request (ResetReplacementsRequest): Reset request with session_id. (重置请求)
@@ -1146,9 +1056,14 @@ def reset_replacements(
             },
         ) as cache:
             regions_cleared = len(session_data.get("replacement_regions", []))
+            recipe_overrides_cleared = len(
+                session_data.get("recipe_overrides") or []
+            )
             # Clear replacement state
             store.put(request.session_id, "replacement_regions", [])
             store.put(request.session_id, "replacement_history", [])
+            store.put(request.session_id, "recipe_overrides", [])
+            store.put(request.session_id, "recipe_override_count", 0)
             history_truncated = 0
             previous_rgb = np.asarray(cache.get("matched_rgb")).copy()
 
@@ -1191,6 +1106,28 @@ def reset_replacements(
                 )
             if original_quantized_image is not None:
                 cache["quantized_image"] = original_quantized_image.copy()
+            original_dynamic_info = cache.get(
+                "original_material_dynamic_layer_info"
+            )
+            original_solver_info = cache.get("original_material_solver_info")
+            if isinstance(original_dynamic_info, dict):
+                cache["material_dynamic_layer_info"] = deepcopy(
+                    original_dynamic_info
+                )
+            elif bool(
+                session_data.get("material_dynamic_layer_count_enabled", False)
+            ):
+                # Legacy sessions did not snapshot the original dynamic
+                # metadata. Returning the post-edit curve after restoring the
+                # original RGB/matrix would be incorrect, so make absence
+                # explicit and let the next preview rebuild authoritative data.
+                cache.pop("material_dynamic_layer_info", None)
+            if isinstance(original_solver_info, dict):
+                cache["material_solver_info"] = deepcopy(original_solver_info)
+            elif bool(
+                session_data.get("material_dynamic_layer_count_enabled", False)
+            ):
+                cache.pop("material_solver_info", None)
             cache["color_palette"] = extract_color_palette(cache)
             persisted_cache = cache.commit(
                 _dirty_array_fields(
@@ -1228,6 +1165,7 @@ def reset_replacements(
             "event": "converter_reset_replacements_done",
             "session_id": request.session_id,
             "regions_cleared": regions_cleared,
+            "recipe_overrides_cleared": recipe_overrides_cleared,
             "history_truncated": history_truncated,
         },
     )
@@ -1236,6 +1174,7 @@ def reset_replacements(
         message="All replacements cleared",
         preview_url=f"/api/files/{preview_id}",
         preview_glb_url=glb_url,
+        **dynamic_material_result_from_cache(cache).model_dump(),
     )
 
 
@@ -1733,9 +1672,9 @@ def region_replace(
     """Replace color only within the previously detected connected region.
     仅替换先前检测到的连通区域内的颜色。
 
-    This endpoint is synchronous because it performs a simple masked
-    pixel assignment on the cached matched_rgb array (small preview image).
-    此端点同步执行，因为仅对缓存的 matched_rgb 数组执行简单的掩码像素赋值。
+    Fixed-layer edits perform a simple masked assignment. Dynamic material
+    edits re-solve the complete automatic target map before committing.
+    固定层数编辑只执行简单掩码赋值；动态耗材编辑会在提交前重求解完整自动目标图。
 
     Args:
         request (RegionReplaceRequest): Region replacement parameters. (区域替换参数)
@@ -1878,10 +1817,7 @@ def region_replace(
         cache["matched_rgb"] = replaced_rgb
         _t_sync = _time.perf_counter()
         _sync_material_matrix_after_rgb_change(
-            session_data,
-            cache,
-            matched_rgb,
-            replaced_rgb,
+            session_data, cache, matched_rgb, replaced_rgb
         )
         _sync_ms = (_time.perf_counter() - _t_sync) * 1000
 
@@ -1974,6 +1910,7 @@ def region_replace(
         preview_glb_url=glb_url,
         color_contours=contours_data,
         message="Region color replaced successfully",
+        **dynamic_material_result_from_cache(cache).model_dump(),
     )
 
 
@@ -2378,6 +2315,7 @@ def region_requantize(
             f"{request.local_quantize_colors} colours; rewrote {rewritten_px} pixels."
         ),
         gradient_groups=refreshed_groups,
+        **dynamic_material_result_from_cache(cache).model_dump(),
     )
 
 
@@ -2643,6 +2581,7 @@ def replace_colors_batch(
         preview_url=f"/api/files/{preview_id}",
         preview_3d_url=glb_url,
         replacement_count=len(request.replacements),
+        **dynamic_material_result_from_cache(cache).model_dump(),
     )
 
 
@@ -2781,6 +2720,7 @@ def region_replace_batch(
         preview_glb_url=glb_url,
         color_contours=contours_data,
         message=f"Batch replaced {len(request.items)} regions successfully",
+        **dynamic_material_result_from_cache(cache).model_dump(),
     )
 
 
@@ -3926,12 +3866,41 @@ def apply_recipe_override(
             if isinstance(dynamic_info, dict):
                 dynamic_info = deepcopy(dynamic_info)
                 colors = dynamic_info.get("colors")
+                solid_mask = np.asarray(cache.get("mask_solid"), dtype=bool)
+                if solid_mask.shape != updated_target_map.shape[:2]:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "Dynamic printable mask is inconsistent. "
+                            "Re-run preview."
+                        ),
+                    )
+                manual_mask = np.zeros(solid_mask.shape, dtype=bool)
+                region_masks = session_data.get("selected_region_masks") or {}
+                if isinstance(region_masks, dict):
+                    for override in session_data.get("recipe_overrides") or []:
+                        if not isinstance(override, dict):
+                            continue
+                        region_mask = region_masks.get(
+                            str(override.get("region_id") or "")
+                        )
+                        if (
+                            isinstance(region_mask, np.ndarray)
+                            and region_mask.shape == solid_mask.shape
+                        ):
+                            manual_mask |= np.asarray(region_mask, dtype=bool)
+                manual_mask |= combined_override_mask & solid_mask
+                automatic_mask = solid_mask & ~manual_mask
                 dynamic_info["benefit_curve"] = (
                     recompute_dynamic_material_benefit_curve(
                         colors if isinstance(colors, list) else [],
                         updated_target_map,
-                        cache.get("mask_solid"),
+                        automatic_mask,
                     )
+                )
+                dynamic_info["benefit_curve_scope"] = "automatic_pixels"
+                dynamic_info["benefit_curve_pixel_count"] = int(
+                    np.count_nonzero(automatic_mask)
                 )
                 cache["material_dynamic_layer_info"] = dynamic_info
 
@@ -4088,6 +4057,7 @@ def apply_recipe_override(
             str(runtime_mode_key) if runtime_mode_key is not None else None
         ),
         override_count=len(existing_overrides),
+        **dynamic_material_result_from_cache(cache).model_dump(),
     )
 
 

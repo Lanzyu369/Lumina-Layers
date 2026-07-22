@@ -6,6 +6,7 @@ import {
   invalidateGeneratedArtifacts,
   invalidatePreviewArtifacts,
 } from "./generatedArtifactInvalidation";
+import { invalidatePreviewRequest } from "./previewRequestCoordinator";
 
 // ========== State Interface ==========
 
@@ -503,6 +504,7 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
       },
 
       setMaterialDeltaE00Tolerance: (value: number) => {
+        invalidatePreviewRequest();
         set({
           materialDeltaE00Tolerance:
             normalizeMaterialDeltaE00Tolerance(value),

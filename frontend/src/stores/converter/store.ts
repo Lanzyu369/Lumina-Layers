@@ -24,7 +24,9 @@ import type {
   LutColorsCard,
   PerformanceTiming,
   DynamicMaterialRecipe,
+  DynamicMaterialResultResponse,
   MaterialLayerBenefitPoint,
+  MaterialLayerBenefitScope,
 } from "../../api/types";
 import {
   ColorMode as ColorModeEnum,
@@ -107,6 +109,11 @@ import {
   buildLutCatalogIndex,
   findLutLocationByPath,
 } from "./legacyLutSelection";
+import {
+  beginPreviewRequest,
+  invalidatePreviewRequest,
+  isCurrentPreviewRequest,
+} from "../previewRequestCoordinator";
 
 type LuminaWindow = Window & {
   __luminaGenerateStart?: number;
@@ -1468,6 +1475,8 @@ export interface ConverterState {
   materialMaxLayerCount: number;
   materialDynamicRecipes: DynamicMaterialRecipe[];
   materialLayerBenefitCurve: MaterialLayerBenefitPoint[];
+  materialLayerBenefitScope: MaterialLayerBenefitScope;
+  materialLayerBenefitPixelCount: number;
 
   // 高级设置
   quantize_colors: number;
@@ -2098,9 +2107,26 @@ const DEFAULT_LAYER_IMAGES_STATE = {
 const INVALIDATE_LAYER_IMAGES_AFTER_REPLACE = {
   layerImages: [] as { layer_index: number; name: string; url: string }[],
   layerImagesSourceKey: null as string | null,
-  materialDynamicRecipes: [] as DynamicMaterialRecipe[],
-  materialLayerBenefitCurve: [] as MaterialLayerBenefitPoint[],
 } as const;
+
+function dynamicMaterialResultState(
+  response: DynamicMaterialResultResponse,
+): Pick<
+  ConverterState,
+  | "materialDynamicRecipes"
+  | "materialLayerBenefitCurve"
+  | "materialLayerBenefitScope"
+  | "materialLayerBenefitPixelCount"
+> {
+  return {
+    materialDynamicRecipes: response.material_dynamic_recipes ?? [],
+    materialLayerBenefitCurve: response.material_layer_benefit_curve ?? [],
+    materialLayerBenefitScope:
+      response.material_layer_benefit_scope ?? "all_printable_pixels",
+    materialLayerBenefitPixelCount:
+      response.material_layer_benefit_pixel_count ?? 0,
+  };
+}
 
 const DEFAULT_PUZZLE_PREVIEW_STATE = {
   puzzleOverlayUrl: null,
@@ -2131,6 +2157,8 @@ function buildPreviewSessionResetState(): Partial<ConverterState> {
     palette: [],
     materialDynamicRecipes: [],
     materialLayerBenefitCurve: [],
+    materialLayerBenefitScope: "all_printable_pixels",
+    materialLayerBenefitPixelCount: 0,
     colorContours: {},
     colorRemapMap: {},
     remapHistory: [],
@@ -2372,6 +2400,8 @@ export const DEFAULT_STATE: ConverterState = {
   materialMaxLayerCount: MATERIAL_DYNAMIC_LAYER_COUNT_MAX,
   materialDynamicRecipes: [],
   materialLayerBenefitCurve: [],
+  materialLayerBenefitScope: "all_printable_pixels",
+  materialLayerBenefitPixelCount: 0,
   quantize_colors: 48,
   quantize_colors_unlocked: false,
   high_precision_3d_preview: false,
@@ -2496,10 +2526,6 @@ export const DEFAULT_STATE: ConverterState = {
   regionReplacementCount: 0,
   hasManualPreview: false,
 };
-
-// ========== Preview AbortController ==========
-
-let _previewAbortController: AbortController | null = null;
 
 // ========== Client-side timing log (writes to server log) ==========
 let _previewStartTime: number | null = null;
@@ -2832,10 +2858,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     },
 
     loadVectorizedSvgIntoConverter: (file: File) => {
-      if (_previewAbortController) {
-        _previewAbortController.abort();
-        _previewAbortController = null;
-      }
+      invalidatePreviewRequest();
       _gradientGroupsAbortController?.abort();
       _gradientGroupsAbortController = null;
 
@@ -3199,7 +3222,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           ...buildPreviewSessionResetState(),
         };
       }),
-    setMaterialDynamicLayerCountEnabled: (enabled: boolean) =>
+    setMaterialDynamicLayerCountEnabled: (enabled: boolean) => {
+      invalidatePreviewRequest();
       set((state) => ({
         materialDynamicLayerCountEnabled: enabled,
         hue_enable: enabled ? false : state.hue_enable,
@@ -3215,8 +3239,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
               )
             : state.heightmap_max_height,
         ...buildPreviewSessionResetState(),
-      })),
-    setMaterialMinLayerCount: (count: number) =>
+      }));
+    },
+    setMaterialMinLayerCount: (count: number) => {
+      invalidatePreviewRequest();
       set((state) => {
         const materialMinLayerCount = normalizeDynamicMaterialLayerCount(
           count,
@@ -3244,8 +3270,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             : state.heightmap_max_height,
           ...buildPreviewSessionResetState(),
         };
-      }),
-    setMaterialMaxLayerCount: (count: number) =>
+      });
+    },
+    setMaterialMaxLayerCount: (count: number) => {
+      invalidatePreviewRequest();
       set((state) => {
         const materialMaxLayerCount = normalizeDynamicMaterialLayerCount(
           count,
@@ -3273,7 +3301,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             : state.heightmap_max_height,
           ...buildPreviewSessionResetState(),
         };
-      }),
+      });
+    },
     setMaterialLayerHeightMm: (height: number) =>
       set(() => ({
         materialLayerHeightMm: height,
@@ -4174,6 +4203,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           previewImageUrl: normalizeResourceUrl(response.preview_url),
           previewBaseImageUrl: normalizeResourceUrl(response.preview_url),
           ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
+          ...dynamicMaterialResultState(response),
         };
         if (response.preview_3d_url) {
           updates.previewGlbUrl = normalizeResourceUrl(response.preview_3d_url);
@@ -4417,6 +4447,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           threemfDiskPath: null,
           downloadUrl: null,
           ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
+          ...dynamicMaterialResultState(response),
         };
 
         // 更新 3D 预览 GLB URL（仅当后端返回非空 URL 时）
@@ -4496,6 +4527,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           // 与 applyRegionReplace 一致：让 generate 走 use_cached_matched_rgb。
           regionReplacementCount: state.regionReplacementCount + 1,
           ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
+          ...dynamicMaterialResultState(response),
         };
         if (response.preview_glb_url) {
           updates.previewGlbUrl = normalizeResourceUrl(
@@ -4665,6 +4697,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           regionData: null,
           regionReplacementCount: state.regionReplacementCount + regions.length,
           ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
+          ...dynamicMaterialResultState(response),
         };
         if (response.preview_glb_url) {
           updates.previewGlbUrl = normalizeResourceUrl(
@@ -4740,6 +4773,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           regionData: null,
           regionReplacementCount: state.regionReplacementCount + regions.length,
           ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
+          ...dynamicMaterialResultState(response),
         };
         if (!usingExplicitTargets) {
           updates.gradientSelection = null;
@@ -4811,6 +4845,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           regionData: null,
           regionReplacementCount: state.regionReplacementCount + regions.length,
           ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
+          ...dynamicMaterialResultState(response),
         };
         if (response.preview_glb_url) {
           updates.previewGlbUrl = normalizeResourceUrl(
@@ -4846,10 +4881,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         set({ error: "请先选择区域" });
         return;
       }
-      const resolvedLayers = Math.max(
-        recipe.length,
-        state.color_layers ?? recipe.length,
-      );
+      // Dynamic sessions transport the user's actual recipe length. The
+      // preview's physical print depth remains in the session and the backend
+      // pads it with the configured backing material; sending the maximum
+      // depth here turns a valid short recipe into a 422 mismatch.
+      const resolvedLayers = isDynamicMaterialActive(state)
+        ? recipe.length
+        : Math.max(recipe.length, state.color_layers ?? recipe.length);
       const resolvedHeight =
         state.layer_height_mm ?? state.selectedLutInfo?.layer_height_mm ?? 0.08;
       // Deep-copy virtuals to isolate the payload / state from later
@@ -4885,6 +4923,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             ? normalizeResourceUrl(response.preview_glb_url)
             : current.previewGlbUrl,
           ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
+          ...dynamicMaterialResultState(response),
           color_layers: Math.max(current.color_layers ?? 0, resolvedLayers),
           layer_height_mm: resolvedHeight,
           recipe_overrides: [
@@ -5021,6 +5060,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
               regionData: null,
               selectedColor: null,
               ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
+              ...dynamicMaterialResultState(response),
             };
             if (response.preview_glb_url) {
               updates.previewGlbUrl = normalizeResourceUrl(
@@ -5122,6 +5162,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         colorRemapMap: {},
         remapHistory: [],
         replacement_regions: [],
+        recipe_overrides: [],
         threemfDiskPath: null,
         downloadUrl: null,
         regionData: null,
@@ -5138,6 +5179,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
               previewImageUrl: url,
               originalPreviewUrl: url,
               previewBaseImageUrl: url,
+              recipe_overrides: [],
+              ...dynamicMaterialResultState(res),
             };
             if (res.preview_glb_url) {
               updates.previewGlbUrl = `${res.preview_glb_url}`;
@@ -5799,6 +5842,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           regionData: null,
           regionReplacementCount: state.regionReplacementCount + 1,
           ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
+          ...dynamicMaterialResultState(response),
         };
         if (response.preview_glb_url) {
           updates.previewGlbUrl = normalizeResourceUrl(
@@ -5871,12 +5915,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         return;
       }
 
-      // Cancel any in-flight preview request
-      if (_previewAbortController) {
-        _previewAbortController.abort();
-      }
-      _previewAbortController = new AbortController();
-      const { signal } = _previewAbortController;
+      const previewRequest = beginPreviewRequest();
+      const { signal } = previewRequest;
 
       _previewStartTime = performance.now();
       (window as LuminaWindow).__luminaPreviewStart = _previewStartTime;
@@ -5982,7 +6022,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           previewParams,
           signal,
         );
-        if (signal.aborted || _previewAbortController?.signal !== signal) {
+        if (!isCurrentPreviewRequest(previewRequest)) {
           return;
         }
         _logPreviewTimer("response received");
@@ -6040,9 +6080,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             match_mode: response.lut_match_mode ?? "legacy",
           },
           palette: normalizedPalette,
-          materialDynamicRecipes: response.material_dynamic_recipes ?? [],
-          materialLayerBenefitCurve:
-            response.material_layer_benefit_curve ?? [],
+          ...dynamicMaterialResultState(response),
           ...(shouldResetHeightmapMapping
             ? { color_height_map: {}, heightmapThumbnailUrl: null }
             : autoReliefHeightMap
@@ -6145,6 +6183,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         // 非阻塞拉取渐变分组：后端已在预览流程中同步算完，这里只是读缓存。
         void _get().fetchGradientGroups(previewSessionId);
       } catch (err) {
+        if (!isCurrentPreviewRequest(previewRequest)) {
+          return;
+        }
         // Ignore aborted requests (user started a new preview)
         if (err instanceof Error && err.name === "CanceledError") {
           _previewClientLog(
@@ -6171,7 +6212,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           "error",
         );
       } finally {
-        _endPreviewTimer();
+        if (isCurrentPreviewRequest(previewRequest)) {
+          _endPreviewTimer();
+        }
       }
     },
 
@@ -7150,6 +7193,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           previewImageUrl: normalizeResourceUrl(response.preview_url),
           previewBaseImageUrl: normalizeResourceUrl(response.preview_url),
           ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
+          ...dynamicMaterialResultState(response),
         };
         if (response.preview_3d_url) {
           updates.previewGlbUrl = normalizeResourceUrl(response.preview_3d_url);
@@ -7206,6 +7250,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           previewImageUrl: normalizeResourceUrl(response.preview_url),
           previewBaseImageUrl: normalizeResourceUrl(response.preview_url),
           ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
+          ...dynamicMaterialResultState(response),
         };
         if (response.preview_3d_url) {
           updates.previewGlbUrl = normalizeResourceUrl(response.preview_3d_url);
@@ -7338,6 +7383,20 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
       // 2. Set image file (creates blob URL, triggers preview flow)
       _get().setImageFile(imageFile);
+
+      // setImageFile invalidates preview-derived state. Restore only the
+      // validated dynamic metadata carried by the imported recipe so it
+      // remains available as historical export evidence until a fresh
+      // preview response replaces it.
+      set({
+        materialDynamicRecipes: partial.materialDynamicRecipes ?? [],
+        materialLayerBenefitCurve:
+          partial.materialLayerBenefitCurve ?? [],
+        materialLayerBenefitScope:
+          partial.materialLayerBenefitScope ?? "all_printable_pixels",
+        materialLayerBenefitPixelCount:
+          partial.materialLayerBenefitPixelCount ?? 0,
+      });
 
       // 3. Restore crop setting
       set({ enableCrop: prevEnableCrop });

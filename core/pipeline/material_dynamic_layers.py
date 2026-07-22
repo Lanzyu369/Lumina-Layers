@@ -76,6 +76,24 @@ def recompute_dynamic_material_benefit_curve(
     """Reweight saved exact layer results for the final target ownership map.
 
     按最终目标色归属图重新加权已保存的逐层精确结果。
+
+    Args:
+        color_entries: Saved exact results grouped by target color, including
+            per-layer-cap Delta-E00 values. 按目标色分组的已保存精确结果，包含
+            各层数上限对应的 Delta-E00。
+        target_rgb_map: Final ``H x W x 3`` uint8-compatible target ownership
+            map. 最终的 ``H x W x 3``、可转换为 uint8 的目标色归属图。
+        mask_solid: Optional ``H x W`` solid-pixel mask. ``None`` treats every
+            pixel as solid. 可选的 ``H x W`` 实体像素掩码；``None`` 表示所有
+            像素均为实体。
+
+    Returns:
+        list[dict]: Layer-cap benefit points weighted by final target ownership.
+            按最终目标归属加权的逐层数上限收益点。
+
+    Raises:
+        ValueError: If the target map or solid mask has an incompatible shape.
+            目标图或实体掩码形状不兼容。
     """
     rgb = np.asarray(target_rgb_map, dtype=np.uint8)
     solid = (
@@ -194,7 +212,7 @@ def _dynamic_option_metadata(option) -> dict:
     }
 
 
-def _solve_dynamic_material_targets(
+def solve_dynamic_material_targets(
     *,
     unique_colors: np.ndarray,
     pixel_counts: np.ndarray,
@@ -215,6 +233,36 @@ def _solve_dynamic_material_targets(
 
     精确求解器持有自底向上的领域配方；本边界仅反转一次，使所有下游消费者
     获得管线统一的自顶向下层序。
+
+    Args:
+        unique_colors: Sorted unique target RGB rows.
+            已排序的唯一目标 RGB 行。
+        pixel_counts: Pixel ownership count for every target row.
+            每个目标颜色对应的像素归属数量。
+        materials: Ordered material palette used by the exact solver.
+            精确求解器使用的有序耗材列表。
+        backing_material_index: Palette index used for backing padding.
+            用于底板补层的耗材索引。
+        layer_height_mm: Physical height of one printed layer in millimetres.
+            单层打印高度，单位为毫米。
+        substrate: Substrate identifier passed to optical mixing.
+            传给光学混色计算的底材标识。
+        min_layer_count: Minimum allowed effective layer count.
+            允许的最小有效层数。
+        max_layer_count: Maximum print depth and effective layer cap.
+            最大打印深度及有效层数上限。
+        delta_e00_tolerance: Allowed colour-error sacrifice for fewer layers.
+            为减少层数允许牺牲的色差阈值。
+
+    Returns:
+        Matched RGB rows, padded print recipes, selected colour errors,
+        serializable dynamic metadata, and solver summary metadata.
+        匹配 RGB、补层打印配方、所选色差、可序列化动态元数据及求解摘要。
+
+    Raises:
+        DynamicMaterialCandidateError: If configuration, backing material, or
+            an exact solver result is invalid.
+            当配置、底板耗材或精确求解结果无效时抛出。
     """
     from core import material_dynamic_solver as dynamic_solver
 
@@ -251,6 +299,8 @@ def _solve_dynamic_material_targets(
             "candidate_count_after_dedup": 0,
             "colors": [],
             "benefit_curve": [],
+            "benefit_curve_scope": "all_printable_pixels",
+            "benefit_curve_pixel_count": 0,
         }
         solver_meta = {
             "dynamic_engine": "none",
@@ -374,6 +424,8 @@ def _solve_dynamic_material_targets(
         ),
         "colors": color_entries,
         "benefit_curve": benefit_curve,
+        "benefit_curve_scope": "all_printable_pixels",
+        "benefit_curve_pixel_count": int(np.sum(pixel_counts, dtype=np.int64)),
     }
     solver_meta = {
         "dynamic_engine": str(solve_result.engine),
@@ -394,6 +446,11 @@ def _solve_dynamic_material_targets(
         dynamic_info,
         solver_meta,
     )
+
+
+# Backward-compatible internal alias for staged pipeline modules and focused
+# tests. New cross-module callers use the public name above.
+_solve_dynamic_material_targets = solve_dynamic_material_targets
 
 
 def _record_dynamic_material_error(ctx: dict, exc: Exception) -> dict:

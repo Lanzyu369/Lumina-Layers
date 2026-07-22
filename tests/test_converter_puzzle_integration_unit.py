@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import pickle
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -84,6 +85,38 @@ def _seed_puzzle_generate_session(store: SessionStore, tmp_path) -> str:
     store.put(session_id, "lut_path", str(lut_path))
     store.register_temp_file(session_id, str(image_path))
     store.register_temp_file(session_id, str(lut_path))
+    return session_id
+
+
+def _seed_dynamic_puzzle_generate_session(store: SessionStore, tmp_path) -> str:
+    """Seed a material-archive puzzle preview with authority dynamic arrays."""
+
+    session_id = _seed_puzzle_generate_session(store, tmp_path)
+    session_data = store.get(session_id)
+    assert session_data is not None
+    cache = dict(session_data["preview_cache"])
+    matched_rgb = cache["matched_rgb"]
+    mask_solid = cache["mask_solid"]
+    max_layers = 6
+    material_matrix = np.full(
+        (*mask_solid.shape, max_layers),
+        -1,
+        dtype=np.int32,
+    )
+    material_matrix[mask_solid] = [2, 1, 2, 1, 0, 0]
+    cache["quantized_image"] = np.array(matched_rgb, copy=True)
+    cache["material_matrix"] = material_matrix
+    cache["material_dynamic_layer_info"] = {"enabled": True}
+    store.put(session_id, "preview_cache", cache)
+    store.put(session_id, "material_source", "material_archive")
+    store.put(session_id, "selected_materials", ["White", "Red", "Blue"])
+    store.put(session_id, "material_layer_count", max_layers)
+    store.put(session_id, "material_layer_height_mm", 0.08)
+    store.put(session_id, "material_backing_material_index", 0)
+    store.put(session_id, "material_dynamic_layer_count_enabled", True)
+    store.put(session_id, "material_min_layer_count", 5)
+    store.put(session_id, "material_max_layer_count", max_layers)
+    store.put(session_id, "material_delta_e00_tolerance", 0.5)
     return session_id
 
 
@@ -175,9 +208,12 @@ def test_prepare_piece_worker_assets_adds_actual_cut_clearance() -> None:
         centroid_mm=(2.0, 2.0),
     )
 
-    _bbox_px, _piece_rgba, _piece_matched, boundary_payload = (
-        puzzle_router._prepare_piece_worker_assets(source_rgba, matched_rgb, piece)
+    assets = puzzle_router._prepare_piece_worker_assets(
+        source_rgba,
+        matched_rgb,
+        piece,
     )
+    boundary_payload = assets.boundary_payload
 
     polygon = boundary_payload["polygon_px"]
     x_values = [point[0] for point in polygon]
@@ -355,3 +391,237 @@ class TestGeneratePuzzleCanary:
         assert record.warning_count == len(body["warnings"])
         assert record.skipped_transparent_count == 0
         assert record.download_id == download_id
+
+
+class TestDynamicPuzzlePreviewReuse:
+    """Dynamic puzzle pieces must carry preview authority arrays to P03."""
+
+    def test_dynamic_puzzle_accepts_externalized_int32_authority_assets(
+        self,
+        puzzle_harness,
+        tmp_path,
+    ) -> None:
+        """Artifact persistence must not compact the dynamic authority matrix."""
+
+        store: SessionStore = puzzle_harness["store"]
+        client: TestClient = puzzle_harness["client"]
+        pool: MagicMock = puzzle_harness["pool"]
+        session_id = _seed_dynamic_puzzle_generate_session(store, tmp_path)
+        session_data = store.get(session_id)
+        assert session_data is not None
+        cache_ref = externalize_preview_cache(
+            session_id,
+            store,
+            session_data["preview_cache"],
+            root_dir=tmp_path,
+        )
+        store.put(session_id, "preview_cache", cache_ref)
+        assert np.load(
+            cache_ref["fields"]["material_matrix"]["path"],
+            allow_pickle=False,
+        ).dtype == np.int32
+
+        piece_index = 0
+
+        async def _submit_stub(*args, **_kwargs) -> dict[str, object]:
+            nonlocal piece_index
+            piece_index += 1
+            path = tmp_path / f"externalized-dynamic-piece-{piece_index}.3mf"
+            path.write_bytes(b"piece-3mf")
+            return {"threemf_path": str(path), "glb_path": None, "status_msg": "ok"}
+
+        def _assemble_stub(*, output_path: str, **_kwargs) -> str:
+            Path(output_path).write_bytes(b"combined-3mf")
+            return output_path
+
+        pool.submit = AsyncMock(side_effect=_submit_stub)
+        with patch(
+            "api.routers.converter.puzzle.assemble_puzzle_3mf",
+            side_effect=_assemble_stub,
+        ):
+            response = client.post(
+                "/api/convert/generate-puzzle",
+                json=_generate_puzzle_body(session_id),
+            )
+
+        assert response.status_code == 200, response.text
+        assert pool.submit.await_count == 4
+
+    def test_dynamic_puzzle_crops_and_resamples_authority_assets(
+        self,
+        puzzle_harness,
+        tmp_path,
+    ) -> None:
+        store: SessionStore = puzzle_harness["store"]
+        pool: MagicMock = puzzle_harness["pool"]
+        client: TestClient = puzzle_harness["client"]
+        session_id = _seed_dynamic_puzzle_generate_session(store, tmp_path)
+        captured_params: list[dict[str, object]] = []
+        piece_index = 0
+
+        async def _submit_stub(*args, **_kwargs) -> dict[str, object]:
+            nonlocal piece_index
+            piece_index += 1
+            captured_params.append(args[3])
+            path = tmp_path / f"dynamic-piece-{piece_index}.3mf"
+            path.write_bytes(b"piece-3mf")
+            return {"threemf_path": str(path), "glb_path": None, "status_msg": "ok"}
+
+        def _assemble_stub(*, output_path: str, **_kwargs) -> str:
+            Path(output_path).write_bytes(b"combined-3mf")
+            return output_path
+
+        pool.submit = AsyncMock(side_effect=_submit_stub)
+        with patch(
+            "api.routers.converter.puzzle.assemble_puzzle_3mf",
+            side_effect=_assemble_stub,
+        ):
+            response = client.post(
+                "/api/convert/generate-puzzle",
+                json=_generate_puzzle_body(session_id),
+            )
+
+        assert response.status_code == 200, response.text
+        assert len(captured_params) == 4
+        for params in captured_params:
+            assert params["reuse_preview_analysis"] is True
+            assert params["material_dynamic_layer_count_enabled"] is True
+            assert params["material_max_layer_count"] == 6
+            matched = np.load(params["matched_rgb_path"], allow_pickle=False)
+            mask_solid = np.load(params["mask_solid_path"], allow_pickle=False)
+            quantized = np.load(params["quantized_image_path"], allow_pickle=False)
+            matrix = np.load(params["material_matrix_path"], allow_pickle=False)
+            assert matched.dtype == np.uint8
+            assert mask_solid.dtype == np.bool_
+            assert quantized.dtype == np.uint8
+            assert matrix.dtype == np.int32
+            assert matched.shape[:2] == mask_solid.shape
+            assert quantized.shape == matched.shape
+            assert matrix.shape == (*mask_solid.shape, 6)
+            assert np.all(matrix[~mask_solid] == -1)
+
+    def test_dynamic_puzzle_missing_authority_asset_returns_repreview_error(
+        self,
+        puzzle_harness,
+        tmp_path,
+    ) -> None:
+        store: SessionStore = puzzle_harness["store"]
+        pool: MagicMock = puzzle_harness["pool"]
+        client: TestClient = puzzle_harness["client"]
+        session_id = _seed_dynamic_puzzle_generate_session(store, tmp_path)
+        session_data = store.get(session_id)
+        assert session_data is not None
+        cache = dict(session_data["preview_cache"])
+        cache.pop("quantized_image")
+        store.put(session_id, "preview_cache", cache)
+
+        response = client.post(
+            "/api/convert/generate-puzzle",
+            json=_generate_puzzle_body(session_id),
+        )
+
+        assert response.status_code == 409
+        assert "Re-run preview" in response.json()["detail"]
+        pool.submit.assert_not_called()
+
+    def test_dynamic_puzzle_forwards_manual_virtual_recipe_context(
+        self,
+        puzzle_harness,
+        tmp_path,
+    ) -> None:
+        """A copied dynamic matrix must retain its virtual-palette definition."""
+
+        store: SessionStore = puzzle_harness["store"]
+        pool: MagicMock = puzzle_harness["pool"]
+        client: TestClient = puzzle_harness["client"]
+        session_id = _seed_dynamic_puzzle_generate_session(store, tmp_path)
+        session_data = store.get(session_id)
+        assert session_data is not None
+        cache = dict(session_data["preview_cache"])
+        virtual_mask = np.zeros((80, 120), dtype=bool)
+        virtual_mask[:40, :60] = True
+        cache["material_matrix"][virtual_mask] = [3, 1, 0, 1, 0, 0]
+        store.put(session_id, "preview_cache", cache)
+        store.put(
+            session_id,
+            "recipe_overrides",
+            [
+                {
+                    "region_id": "virtual-region",
+                    "recipe": [3, 1, 0, 1, 0],
+                    "layer_order": "Top2Bottom",
+                    "actual_recipe_top_to_bottom": [3, 1, 0, 1, 0],
+                    "print_recipe_top_to_bottom": [3, 1, 0, 1, 0, 0],
+                    "actual_layer_count": 5,
+                    "padding_layer_count": 1,
+                    "virtual_materials": [
+                        {"name": "Custom Violet", "hex": "#8A2BE2"}
+                    ],
+                }
+            ],
+        )
+        store.put(session_id, "selected_region_masks", {"virtual-region": virtual_mask})
+
+        captured_params: list[dict[str, object]] = []
+        piece_index = 0
+
+        async def _submit_stub(*args, **_kwargs) -> dict[str, object]:
+            nonlocal piece_index
+            piece_index += 1
+            captured_params.append(args[3])
+            path = tmp_path / f"virtual-piece-{piece_index}.3mf"
+            path.write_bytes(b"piece-3mf")
+            return {"threemf_path": str(path), "glb_path": None, "status_msg": "ok"}
+
+        def _assemble_stub(*, output_path: str, **_kwargs) -> str:
+            Path(output_path).write_bytes(b"combined-3mf")
+            return output_path
+
+        pool.submit = AsyncMock(side_effect=_submit_stub)
+        with patch(
+            "api.routers.converter.puzzle.assemble_puzzle_3mf",
+            side_effect=_assemble_stub,
+        ):
+            response = client.post(
+                "/api/convert/generate-puzzle",
+                json=_generate_puzzle_body(session_id),
+            )
+
+        assert response.status_code == 200, response.text
+        params_with_virtual_region = [
+            params
+            for params in captured_params
+            if params.get("recipe_override_masks_path")
+        ]
+        assert params_with_virtual_region
+        params = params_with_virtual_region[0]
+        overrides = params["recipe_overrides"]
+        assert isinstance(overrides, list)
+        assert overrides[0]["virtual_materials"] == [
+            {"name": "Custom Violet", "hex": "#8A2BE2"}
+        ]
+        with open(params["recipe_override_masks_path"], "rb") as handle:
+            masks = pickle.load(handle)
+        assert "virtual-region" in masks
+        assert masks["virtual-region"].dtype == np.bool_
+        assert masks["virtual-region"].shape == np.load(
+            params["mask_solid_path"], allow_pickle=False
+        ).shape
+
+    def test_dynamic_puzzle_rejects_backing_override_mismatch(
+        self,
+        puzzle_harness,
+        tmp_path,
+    ) -> None:
+        store: SessionStore = puzzle_harness["store"]
+        pool: MagicMock = puzzle_harness["pool"]
+        client: TestClient = puzzle_harness["client"]
+        session_id = _seed_dynamic_puzzle_generate_session(store, tmp_path)
+        body = _generate_puzzle_body(session_id)
+        body["params"]["params"]["material_backing_material_index"] = 1
+
+        response = client.post("/api/convert/generate-puzzle", json=body)
+
+        assert response.status_code == 409
+        assert "material_backing_material_index" in response.json()["detail"]["fields"]
+        pool.submit.assert_not_called()

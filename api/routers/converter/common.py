@@ -276,6 +276,22 @@ def _resolve_session_dynamic_material_settings(
             matches = request_value == session_value
         if not matches:
             mismatches.append(field_name)
+    if (
+        material_source == "material_archive"
+        and session_values["material_dynamic_layer_count_enabled"]
+        and "material_backing_material_index" in fields_set
+    ):
+        selected_materials = session_data.get("selected_materials") or []
+        session_backing_index = _resolve_material_backing_index(
+            selected_materials,
+            session_data.get("material_backing_material_index"),
+        )
+        requested_backing_index = _resolve_material_backing_index(
+            selected_materials,
+            getattr(request, "material_backing_material_index", None),
+        )
+        if requested_backing_index != session_backing_index:
+            mismatches.append("material_backing_material_index")
     if mismatches:
         raise HTTPException(
             status_code=409,
@@ -540,6 +556,27 @@ def _resolve_material_backing_index(
             detail="material_backing_material_index requires selected_materials.",
         )
     return index
+
+
+def _validate_unique_dynamic_material_selection(
+    selected_materials: object,
+) -> None:
+    """Reject ambiguous duplicate material identities before exact solving.
+
+    动态精确求解前拒绝含义不明确的重复耗材身份。
+    """
+
+    if not isinstance(selected_materials, (list, tuple)):
+        return
+    identities = [str(item).strip().casefold() for item in selected_materials]
+    if len(identities) != len(set(identities)):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Dynamic material mode does not allow duplicate "
+                "selected_materials identities."
+            ),
+        )
 
 
 def _image_to_png_bytes(img: object) -> bytes:

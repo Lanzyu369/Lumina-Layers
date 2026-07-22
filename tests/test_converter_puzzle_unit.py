@@ -379,7 +379,12 @@ def test_generate_puzzle_worker_missing_output_uses_public_error_detail(tmp_path
 def test_generate_puzzle_inherits_dynamic_settings_and_maps_typed_error() -> None:
     from core.material_dynamic_solver import DynamicMaterialCandidateError
 
-    session_id, _preview_cache = _make_session()
+    session_id, preview_cache = _make_session()
+    preview_cache["quantized_image"] = np.array(preview_cache["matched_rgb"], copy=True)
+    preview_cache["material_matrix"] = np.zeros(
+        (*preview_cache["mask_solid"].shape, 8),
+        dtype=np.int32,
+    )
     _test_store.put(session_id, "material_source", "material_archive")
     _test_store.put(session_id, "selected_materials", ["mat-a", "mat-b"])
     _test_store.put(session_id, "material_layer_count", 10)

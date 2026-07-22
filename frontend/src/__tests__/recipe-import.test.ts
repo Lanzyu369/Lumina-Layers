@@ -15,10 +15,69 @@ import {
 } from "../recipe/importRecipe";
 import { migrateRecipe } from "../recipe/migration";
 import type { LuminaRecipe } from "../recipe/types";
-import type { LutInfo } from "../api/types";
+import type {
+  DynamicMaterialRecipe,
+  LutInfo,
+  MaterialLayerBenefitPoint,
+} from "../api/types";
 import { ColorMode } from "../api/types";
+import { exportConverterRecipe } from "../recipe/exportRecipe";
+import type { ConverterState } from "../stores/converter/store";
+import { DEFAULT_STATE } from "../stores/converter";
+import { DEFAULT_SETTINGS } from "../stores/settingsStore";
 
 // ========== Helpers ==========
+
+const DYNAMIC_RECIPE: DynamicMaterialRecipe = {
+  target_srgb: [240, 220, 200],
+  matched_srgb: [238, 218, 198],
+  actual_layer_count: 5,
+  padding_layer_count: 2,
+  actual_recipe_top_to_bottom: [0, 1, 0, 1, 0],
+  print_recipe_top_to_bottom: [0, 1, 0, 1, 0, 1, 1],
+  selected_delta_e00: 0.7,
+  best_range_delta_e00: 0.4,
+  fixed_max_delta_e00: 0.5,
+  delta_e00_sacrifice: 0.3,
+  layer_cap_options: ([5, 6, 7] as const).map((cap) => ({
+      max_effective_layer_count: cap,
+      actual_layer_count: 5,
+      matched_srgb: [238, 218, 198],
+      actual_recipe_top_to_bottom: [0, 1, 0, 1, 0],
+      print_recipe_top_to_bottom: [0, 1, 0, 1, 0, 1, 1],
+      delta_e00: 0.7,
+    })),
+};
+
+const BENEFIT_CURVE: MaterialLayerBenefitPoint[] = ([5, 6, 7] as const).map(
+  (cap) => ({
+    max_effective_layer_count: cap,
+    weighted_mean_delta_e00: 0.7,
+    marginal_delta_e00_reduction: 0.2,
+  }),
+);
+
+function enableDynamicMaterial(recipe: LuminaRecipe): void {
+  recipe.recipe.converter!.source = {
+    source_version: "material",
+    selected_native_brand_key: "",
+    selected_native_db_names: [],
+    color_layers: null,
+    layer_height_mm: null,
+    model_enable: false,
+    model_only: false,
+    model_threshold: null,
+    model_margin: null,
+    selected_material_dir_names: ["brand/red", "brand/white"],
+    material_layer_count: 7,
+    material_layer_height_mm: 0.08,
+    material_backing_material_dir_name: "brand/white",
+    material_dynamic_layer_count_enabled: true,
+    material_min_layer_count: 5,
+    material_max_layer_count: 7,
+    material_delta_e00_tolerance: 0.7,
+  };
+}
 
 function createTestRecipe(overrides?: Partial<LuminaRecipe>): LuminaRecipe {
   return {
@@ -257,28 +316,10 @@ describe("recipe/importRecipe", () => {
       expect(state.materialBackingMaterialDirName).toBe("brand/white");
     });
 
-    it("restores dynamic material bounds but requires a fresh solve", () => {
+    it("restores dynamic material bounds and keeps absent result metadata empty", () => {
       const recipe = createTestRecipe();
       recipe.recipe.converter!.base.hue_enable = true;
-      recipe.recipe.converter!.source = {
-        source_version: "material",
-        selected_native_brand_key: "",
-        selected_native_db_names: [],
-        color_layers: null,
-        layer_height_mm: null,
-        model_enable: false,
-        model_only: false,
-        model_threshold: null,
-        model_margin: null,
-        selected_material_dir_names: ["brand/red", "brand/white"],
-        material_layer_count: 7,
-        material_layer_height_mm: 0.08,
-        material_backing_material_dir_name: "brand/white",
-        material_dynamic_layer_count_enabled: true,
-        material_min_layer_count: 5,
-        material_max_layer_count: 7,
-        material_delta_e00_tolerance: 0.7,
-      };
+      enableDynamicMaterial(recipe);
 
       const { state } = restoreConverterRecipe(
         recipe,
@@ -295,6 +336,116 @@ describe("recipe/importRecipe", () => {
         materialDynamicRecipes: [],
         materialLayerBenefitCurve: [],
       });
+    });
+
+    it("deep-clones valid imported dynamic result metadata", () => {
+      const recipe = createTestRecipe();
+      enableDynamicMaterial(recipe);
+      const importedMetadata = {
+        recipes: [DYNAMIC_RECIPE],
+        benefit_curve: BENEFIT_CURVE,
+      };
+      recipe.recipe.converter!.material_dynamic = importedMetadata;
+
+      const { state } = restoreConverterRecipe(
+        recipe,
+        LOCAL_LUTS,
+        LOCAL_FINGERPRINTS,
+      );
+
+      expect(state.materialDynamicRecipes).toEqual([DYNAMIC_RECIPE]);
+      expect(state.materialLayerBenefitCurve).toEqual(BENEFIT_CURVE);
+      expect(state.materialDynamicRecipes).not.toBe(importedMetadata.recipes);
+      expect(state.materialDynamicRecipes![0]).not.toBe(DYNAMIC_RECIPE);
+      expect(state.materialDynamicRecipes![0].target_srgb).not.toBe(
+        DYNAMIC_RECIPE.target_srgb,
+      );
+      expect(state.materialDynamicRecipes![0].layer_cap_options[0]).not.toBe(
+        DYNAMIC_RECIPE.layer_cap_options[0],
+      );
+      expect(state.materialLayerBenefitCurve).not.toBe(BENEFIT_CURVE);
+      expect(state.materialLayerBenefitCurve![0]).not.toBe(BENEFIT_CURVE[0]);
+      expect(state.materialLayerBenefitScope).toBe("all_printable_pixels");
+      expect(state.materialLayerBenefitPixelCount).toBe(0);
+    });
+
+    it("clears invalid or inapplicable imported dynamic result metadata", () => {
+      const invalidRecipe = createTestRecipe();
+      enableDynamicMaterial(invalidRecipe);
+      (
+        invalidRecipe.recipe.converter as unknown as {
+          material_dynamic: unknown;
+        }
+      ).material_dynamic = {
+        recipes: [
+          {
+            ...DYNAMIC_RECIPE,
+            print_recipe_top_to_bottom: [0],
+          },
+        ],
+        benefit_curve: BENEFIT_CURVE,
+      };
+
+      const invalidState = restoreConverterRecipe(
+        invalidRecipe,
+        LOCAL_LUTS,
+        LOCAL_FINGERPRINTS,
+      ).state;
+      expect(invalidState.materialDynamicRecipes).toEqual([]);
+      expect(invalidState.materialLayerBenefitCurve).toEqual([]);
+
+      const inapplicableRecipe = createTestRecipe();
+      inapplicableRecipe.recipe.converter!.material_dynamic = {
+        recipes: [DYNAMIC_RECIPE],
+        benefit_curve: BENEFIT_CURVE,
+      };
+      const inapplicableState = restoreConverterRecipe(
+        inapplicableRecipe,
+        LOCAL_LUTS,
+        LOCAL_FINGERPRINTS,
+      ).state;
+      expect(inapplicableState.materialDynamicRecipes).toEqual([]);
+      expect(inapplicableState.materialLayerBenefitCurve).toEqual([]);
+    });
+
+    it("preserves dynamic result metadata across export-import-export", () => {
+      const state = {
+        ...DEFAULT_STATE,
+        source_version: "material",
+        selectedMaterialDirNames: ["brand/red", "brand/white"],
+        materialBackingMaterialDirName: "brand/white",
+        materialDynamicLayerCountEnabled: true,
+        materialMinLayerCount: 5,
+        materialMaxLayerCount: 7,
+        materialDynamicRecipes: [DYNAMIC_RECIPE],
+        materialLayerBenefitCurve: BENEFIT_CURVE,
+        materialLayerBenefitScope: "automatic_pixels",
+        materialLayerBenefitPixelCount: 37,
+      } as ConverterState;
+      const firstExport = exportConverterRecipe(
+        state,
+        { ...DEFAULT_SETTINGS, materialDeltaE00Tolerance: 0.7 },
+        "fp123",
+      );
+      const recipe = createTestRecipe();
+      recipe.recipe.converter = firstExport;
+      const restored = restoreConverterRecipe(
+        recipe,
+        LOCAL_LUTS,
+        LOCAL_FINGERPRINTS,
+      );
+      const secondExport = exportConverterRecipe(
+        { ...state, ...restored.state } as ConverterState,
+        { ...DEFAULT_SETTINGS, materialDeltaE00Tolerance: 0.7 },
+        "fp123",
+      );
+
+      expect(secondExport.material_dynamic).toEqual(
+        firstExport.material_dynamic,
+      );
+      expect(secondExport.material_dynamic).not.toBe(
+        firstExport.material_dynamic,
+      );
     });
 
     it("normalizes puzzle-specific mutually exclusive settings from imported recipes", () => {

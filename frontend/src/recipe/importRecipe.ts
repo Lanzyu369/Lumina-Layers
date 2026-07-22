@@ -26,6 +26,7 @@ import {
   normalizeFridgeMagnetItems,
   resolveFridgeMagnetSpacerThick,
 } from "../constants/fridgeMagnets";
+import { restoreImportedDynamicMaterialMetadata } from "./dynamicMaterialMetadata";
 
 // ========== Hex normalization ==========
 
@@ -366,6 +367,10 @@ export function restoreConverterRecipe(
   const dynamicMaterialEnabled =
     source?.source_version === "material" &&
     source.material_dynamic_layer_count_enabled === true;
+  const importedDynamicMaterial = restoreImportedDynamicMaterialMetadata(
+    conv.material_dynamic,
+    dynamicMaterialEnabled,
+  );
   const restoredLegacyLutNames = restoreLegacyLutNames(
     lutName,
     source?.selected_legacy_lut_names,
@@ -537,10 +542,14 @@ export function restoreConverterRecipe(
     materialDynamicLayerCountEnabled: dynamicMaterialEnabled,
     materialMinLayerCount: dynamicBounds.minimum,
     materialMaxLayerCount: dynamicBounds.maximum,
-    // Exported result metadata is historical evidence only. A new preview
-    // must recompute it for the imported image/material runtime.
-    materialDynamicRecipes: [],
-    materialLayerBenefitCurve: [],
+    // Imported results are historical evidence only. Generation does not
+    // consume them; the next successful preview replaces them with current
+    // backend results for the imported image/material runtime.
+    materialDynamicRecipes: importedDynamicMaterial.recipes,
+    materialLayerBenefitCurve: importedDynamicMaterial.benefit_curve,
+    materialLayerBenefitScope:
+      importedDynamicMaterial.scope ?? "all_printable_pixels",
+    materialLayerBenefitPixelCount: importedDynamicMaterial.pixel_count ?? 0,
 
     // Geometry
     spacer_thick: resolveFridgeMagnetSpacerThick(

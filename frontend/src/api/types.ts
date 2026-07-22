@@ -241,7 +241,9 @@ export interface RecipeOverrideApplyRequest extends RecipePredictRequest {
   region_ids?: string[];
 }
 
-export interface RecipeOverrideApplyResponse extends RecipePredictResponse {
+export interface RecipeOverrideApplyResponse
+  extends RecipePredictResponse,
+    DynamicMaterialResultResponse {
   preview_url: string;
   preview_glb_url?: string | null;
   override_count: number;
@@ -315,6 +317,19 @@ export interface MaterialLayerBenefitPoint {
   marginal_delta_e00_reduction: number;
 }
 
+/** Pixel population represented by a dynamic layer benefit curve. */
+export type MaterialLayerBenefitScope =
+  | "all_printable_pixels"
+  | "automatic_pixels";
+
+/** Dynamic result fields shared by preview and post-edit responses. */
+export interface DynamicMaterialResultResponse {
+  material_dynamic_recipes?: DynamicMaterialRecipe[] | null;
+  material_layer_benefit_curve?: MaterialLayerBenefitPoint[] | null;
+  material_layer_benefit_scope?: MaterialLayerBenefitScope | null;
+  material_layer_benefit_pixel_count?: number | null;
+}
+
 /** 自动高度分配模式 */
 export type AutoHeightMode =
   | "darker-higher"
@@ -353,7 +368,7 @@ export interface PerformanceTiming {
 }
 
 /** 预览接口响应，包含 session_id 和预览图 URL */
-export interface PreviewResponse {
+export interface PreviewResponse extends DynamicMaterialResultResponse {
   session_id: string;
   status: string;
   message: string;
@@ -370,8 +385,6 @@ export interface PreviewResponse {
   contours?: Record<string, number[][][]> | null; // hex -> list of contour polygons (world coords mm)
   warnings: string[];
   performance_timing?: PerformanceTiming | null;
-  material_dynamic_recipes?: DynamicMaterialRecipe[] | null;
-  material_layer_benefit_curve?: MaterialLayerBenefitPoint[] | null;
 }
 
 /** 大画幅生成请求，嵌套 ConvertGenerateRequest + 切片参数 */
@@ -1869,7 +1882,7 @@ export interface MaterialRecipeSwatchResponse {
 
 // ========== Color Replace Models ==========
 
-export interface ColorReplaceResponse {
+export interface ColorReplaceResponse extends DynamicMaterialResultResponse {
   status: string;
   message: string;
   preview_url: string;
@@ -1902,7 +1915,7 @@ export interface RegionDetectResponse {
 }
 
 /** 区域替换响应 */
-export interface RegionReplaceResponse {
+export interface RegionReplaceResponse extends DynamicMaterialResultResponse {
   preview_url: string;
   preview_glb_url?: string | null;
   color_contours?: Record<string, number[][][]> | null;

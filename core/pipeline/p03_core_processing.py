@@ -112,6 +112,90 @@ def _snap_svg_to_fill_palette(
     return quantized_image
 
 
+def _load_dynamic_preview_analysis(
+    ctx: dict,
+    *,
+    max_layer_count: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
+    """Load the complete dynamic preview analysis for a puzzle worker.
+    为拼图 worker 加载完整的动态预览分析资产。
+
+    This is deliberately narrower than the LUT preview reuse path. Dynamic
+    material matrices are authoritative solver output: recreating them from
+    ``matched_rgb`` would silently discard accepted recipe overrides or
+    virtual-material choices. Only callers that explicitly request reuse and
+    provide all four persisted arrays may take this path.
+    该分支比 LUT 预览复用更严格。动态耗材矩阵是权威求解结果；仅用
+    ``matched_rgb`` 重算会静默丢失已确认的配方覆盖或虚拟耗材选择。只有明确
+    请求复用且提供全部四个持久化数组的调用方才能进入该路径。
+
+    Args:
+        ctx: Pipeline context containing the four ``.npy`` asset paths.
+            (包含四个 ``.npy`` 资产路径的流水线上下文)
+        max_layer_count: Required physical matrix depth for dynamic mode.
+            (动态模式要求的物理矩阵层深)
+
+    Returns:
+        tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
+            ``matched_rgb``, ``mask_solid``, ``quantized_image``, and the
+            authoritative ``material_matrix``; ``None`` when reuse was not
+            requested. (依次为 ``matched_rgb``、``mask_solid``、
+            ``quantized_image`` 与权威 ``material_matrix``；未请求复用时
+            返回 ``None``)
+
+    Raises:
+        ValueError: If an asset is absent or its shape/dtype is inconsistent.
+            (资产缺失或其形状/数据类型不一致时抛出)
+        OSError: If a persisted asset cannot be read. (无法读取持久化资产时抛出)
+    """
+
+    if not (
+        bool(ctx.get("reuse_preview_analysis"))
+        and bool(ctx.get("material_dynamic_layer_count_enabled"))
+    ):
+        return None
+
+    paths = {
+        "matched_rgb": ctx.get("matched_rgb_path"),
+        "mask_solid": ctx.get("mask_solid_path"),
+        "quantized_image": ctx.get("quantized_image_path"),
+        "material_matrix": ctx.get("material_matrix_path"),
+    }
+    missing = [name for name, path in paths.items() if not isinstance(path, str) or not path]
+    if missing:
+        raise ValueError(
+            "dynamic preview-analysis reuse requires "
+            + ", ".join(sorted(missing))
+        )
+
+    matched_rgb = np.load(paths["matched_rgb"], allow_pickle=False)
+    mask_solid = np.load(paths["mask_solid"], allow_pickle=False)
+    quantized_image = np.load(paths["quantized_image"], allow_pickle=False)
+    material_matrix = np.load(paths["material_matrix"], allow_pickle=False)
+
+    if (
+        matched_rgb.dtype != np.uint8
+        or matched_rgb.ndim != 3
+        or matched_rgb.shape[2] != 3
+    ):
+        raise ValueError("dynamic preview matched_rgb must be HxWx3 uint8")
+    image_shape = matched_rgb.shape[:2]
+    if mask_solid.dtype != np.bool_ or mask_solid.shape != image_shape:
+        raise ValueError("dynamic preview mask_solid must be HxW bool")
+    if quantized_image.dtype != np.uint8 or quantized_image.shape != matched_rgb.shape:
+        raise ValueError("dynamic preview quantized_image must match matched_rgb")
+    if (
+        material_matrix.dtype != np.int32
+        or material_matrix.ndim != 3
+        or material_matrix.shape[:2] != image_shape
+        or material_matrix.shape[2] != int(max_layer_count)
+    ):
+        raise ValueError(
+            "dynamic preview material_matrix must be HxWxmax_layer_count int32"
+        )
+    return matched_rgb, mask_solid, quantized_image, material_matrix
+
+
 def _run_material_archive_branch(ctx: dict) -> dict:
     """Material-archive processing: quantize image, solve recipes via runtime.
     耗材档案模式处理：量化图像，通过求解运行时生成配方。
@@ -159,6 +243,80 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     layer_height_mm = float(ctx.get("layer_height_mm") or 0.08)
     substrate = str(ctx.get("material_substrate") or "white")
     requested_grid = int(ctx.get("grid_resolution") or DEFAULT_GRID_RESOLUTION)
+
+    reused_analysis = None
+    if dynamic_layer_count_enabled and bool(ctx.get("reuse_preview_analysis")):
+        try:
+            reused_analysis = _load_dynamic_preview_analysis(
+                ctx,
+                max_layer_count=int(dynamic_max_layer_count),
+            )
+        except (OSError, ValueError, TypeError) as exc:
+            ctx["error"] = (
+                "[P03] 动态拼图预览分析资产无效，请重新预览。"
+                " / Dynamic puzzle preview-analysis assets are invalid. Re-run preview."
+            )
+            _log.warning(
+                "Dynamic preview-analysis reuse rejected",
+                extra={
+                    "event": "p03_dynamic_preview_reuse_rejected",
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                },
+            )
+            return ctx
+    if reused_analysis is not None:
+        matched_rgb, mask_solid, quantized_image, material_matrix = reused_analysis
+        target_h, target_w = mask_solid.shape
+        layer_count = int(material_matrix.shape[2])
+        pixel_scale = float(target_width_mm) / float(max(1, target_w))
+        ctx["matched_rgb"] = matched_rgb
+        ctx["material_matrix"] = material_matrix
+        ctx["mask_solid"] = mask_solid
+        ctx["target_w"] = target_w
+        ctx["target_h"] = target_h
+        ctx["pixel_scale"] = pixel_scale
+        ctx["debug_data"] = None
+        ctx["quantized_image"] = quantized_image
+        ctx["lut_match_info"] = None
+        ctx["color_layers"] = layer_count
+        ctx["material_dynamic_layer_info"] = {
+            "enabled": True,
+            "min_layer_count": int(dynamic_min_layer_count),
+            "max_layer_count": layer_count,
+            "benefit_curve_scope": "all_printable_pixels",
+            "benefit_curve_pixel_count": int(np.count_nonzero(mask_solid)),
+            "preview_matrix_reuse": True,
+        }
+        ctx["material_solver_info"] = {
+            "path": "preview_matrix_reuse",
+            "layer_count": layer_count,
+            "layer_height_mm": layer_height_mm,
+            "substrate": substrate,
+            "unique_color_count": int(
+                np.unique(quantized_image[mask_solid].reshape(-1, 3), axis=0).shape[0]
+            )
+            if np.any(mask_solid)
+            else 0,
+        }
+        ctx["mode_info"] = {
+            "mode": ctx.get("modeling_mode"),
+            "lut_match_mode": "material_archive",
+        }
+        ctx["preview_matrix_reuse"] = True
+        elapsed = time.perf_counter() - _t0
+        ctx.setdefault("_preview_timings", {})["p03_s"] = elapsed
+        _log.debug(
+            "material_archive preview matrix reused: %.3fs",
+            elapsed,
+            extra={
+                "event": "p03_dynamic_preview_matrix_reused",
+                "target_width": target_w,
+                "target_height": target_h,
+                "layer_count": layer_count,
+            },
+        )
+        return ctx
 
     # ---- Load and resize ----
     PIXELS_PER_MM = SVG_PIXELS_PER_MM_DEFAULT
@@ -729,6 +887,15 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     ctx["quantized_image"] = quantized_image
     ctx["lut_match_info"] = None
     if dynamic_layer_count_enabled:
+        if isinstance(dynamic_layer_info, dict):
+            # Preview-time replacements and isolated-pixel cleanup can change
+            # target ownership after the solver constructs its initial curve.
+            # This path is still wholly automatic, so record the final
+            # coverage explicitly rather than leaving a stale denominator.
+            dynamic_layer_info["benefit_curve_scope"] = "all_printable_pixels"
+            dynamic_layer_info["benefit_curve_pixel_count"] = int(
+                np.count_nonzero(mask_solid)
+            )
         ctx["color_layers"] = layer_count
         ctx["material_dynamic_layer_info"] = dynamic_layer_info
     ctx["material_solver_info"] = {

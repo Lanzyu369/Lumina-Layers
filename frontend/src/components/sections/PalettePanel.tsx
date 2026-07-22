@@ -303,6 +303,12 @@ export default function PalettePanel({
   const materialLayerBenefitCurve = useConverterStore(
     (s) => s.materialLayerBenefitCurve,
   );
+  const materialLayerBenefitScope = useConverterStore(
+    (s) => s.materialLayerBenefitScope,
+  );
+  const materialLayerBenefitPixelCount = useConverterStore(
+    (s) => s.materialLayerBenefitPixelCount,
+  );
   const selectedLutInfo = useConverterStore((s) => s.selectedLutInfo);
   const sessionId = useConverterStore((s) => s.sessionId);
   const color_layers = useConverterStore((s) => s.color_layers);
@@ -630,7 +636,11 @@ export default function PalettePanel({
             <FreeColorSummary freeColors={free_color_set} />
           </div>
 
-          <MaterialLayerBenefitCurve points={materialLayerBenefitCurve} />
+          <MaterialLayerBenefitCurve
+            points={materialLayerBenefitCurve}
+            scope={materialLayerBenefitScope}
+            pixelCount={materialLayerBenefitPixelCount}
+          />
 
           {/* Palette items */}
           <div
@@ -760,8 +770,14 @@ export default function PalettePanel({
             // 路径也必须保持一致。
             layerImages: [] as typeof state.layerImages,
             layerImagesSourceKey: null,
-            materialDynamicRecipes: [],
-            materialLayerBenefitCurve: [],
+            materialDynamicRecipes: response.material_dynamic_recipes ?? [],
+            materialLayerBenefitCurve:
+              response.material_layer_benefit_curve ?? [],
+            materialLayerBenefitScope:
+              response.material_layer_benefit_scope ??
+              "all_printable_pixels",
+            materialLayerBenefitPixelCount:
+              response.material_layer_benefit_pixel_count ?? 0,
           }));
           useConverterStore.getState()._pollAsyncGlb();
         }}

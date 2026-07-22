@@ -278,6 +278,7 @@ def convert_image_to_3d(
     chroma_gate: float = 15.0,
     matched_rgb_path: Optional[str] = None,
     mask_solid_path: Optional[str] = None,
+    quantized_image_path: Optional[str] = None,
     material_matrix_path: Optional[str] = None,
     reuse_preview_analysis: bool = False,
     preview_glb_path: Optional[str] = None,
@@ -344,6 +345,11 @@ def convert_image_to_3d(
             layers. (动态最大有效层数及物理模型层数)
         material_delta_e00_tolerance: Allowed CIEDE2000 loss when preferring a
             shorter recipe. (优先短配方时允许的 CIEDE2000 损失)
+        quantized_image_path: Optional dynamic preview-analysis asset used
+            together with the other authority arrays when puzzle generation
+            explicitly reuses a confirmed material matrix.
+            (拼图生成明确复用已确认耗材矩阵时，与其他权威数组一同使用的可选
+            动态预览分析资产)
 
     Returns:
         Tuple of (3mf_path, glb_path, preview_image, status_message, recipe_path)
@@ -421,6 +427,9 @@ def generate_preview_cached(
             layers. (动态最大有效层数及物理模型层数)
         material_delta_e00_tolerance: Allowed CIEDE2000 loss for shorter
             recipes. (短配方允许的 CIEDE2000 损失)
+        quantized_image_path: Optional dynamic preview-analysis asset
+            forwarded with the authority matrix for puzzle reuse.
+            (拼图复用时随权威矩阵透传的可选动态预览分析资产)
 
     Returns:
         tuple: (display_image, cache_data, status_message)
@@ -513,6 +522,7 @@ def generate_final_model(
     chroma_gate: float = 15.0,
     matched_rgb_path: Optional[str] = None,
     mask_solid_path: Optional[str] = None,
+    quantized_image_path: Optional[str] = None,
     material_matrix_path: Optional[str] = None,
     reuse_preview_analysis: bool = False,
     preview_glb_path: Optional[str] = None,
@@ -676,6 +686,7 @@ def generate_final_model(
         chroma_gate=chroma_gate,
         matched_rgb_path=matched_rgb_path,
         mask_solid_path=mask_solid_path,
+        quantized_image_path=quantized_image_path,
         material_matrix_path=material_matrix_path,
         reuse_preview_analysis=reuse_preview_analysis,
         preview_glb_path=preview_glb_path,

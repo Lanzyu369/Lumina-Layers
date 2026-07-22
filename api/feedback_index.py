@@ -591,10 +591,23 @@ def generate_summary_text(ticket_id: str, payload: dict[str, Any]) -> str:
 
     material_block = ""
     if source_version == "material":
-        material_block = (
-            f"选中耗材：{', '.join(material_dirs) if material_dirs else '(未选择)'}；"
-            f"层数：{layer_count}；层高：{layer_height}mm；底板：{backing}。"
+        selected_materials = (
+            ", ".join(material_dirs) if material_dirs else "(未选择)"
         )
+        if context.get("material_dynamic_layer_count_enabled") is True:
+            minimum = context.get("material_min_layer_count")
+            maximum = context.get("material_max_layer_count")
+            tolerance = context.get("material_delta_e00_tolerance")
+            material_block = (
+                f"选中耗材：{selected_materials}；动态层数：开启；"
+                f"最小层数：{minimum}；最大层数：{maximum}；"
+                f"ΔE00 容差：{tolerance}；层高：{layer_height}mm；底板：{backing}。"
+            )
+        else:
+            material_block = (
+                f"选中耗材：{selected_materials}；"
+                f"层数：{layer_count}；层高：{layer_height}mm；底板：{backing}。"
+            )
 
     advanced_line = _render_advanced_params_summary_safe(context)
 

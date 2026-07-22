@@ -1,14 +1,21 @@
-import type { MaterialLayerBenefitPoint } from "../../api/types";
+import type {
+  MaterialLayerBenefitPoint,
+  MaterialLayerBenefitScope,
+} from "../../api/types";
 import { useI18n } from "../../i18n/context";
 import { cx, workstationInsetCardClass } from "../ui/panelPrimitives";
 
 interface MaterialLayerBenefitCurveProps {
   points: MaterialLayerBenefitPoint[];
+  scope: MaterialLayerBenefitScope;
+  pixelCount: number;
 }
 
 /** Compact, accessible summary of exact Delta-E00 gains by layer cap. */
 export default function MaterialLayerBenefitCurve({
   points,
+  scope,
+  pixelCount,
 }: MaterialLayerBenefitCurveProps) {
   const { t } = useI18n();
   if (points.length === 0) {
@@ -25,6 +32,14 @@ export default function MaterialLayerBenefitCurve({
       <h3 className="text-[11px] font-semibold text-slate-700 dark:text-slate-200">
         {title}
       </h3>
+      {scope === "automatic_pixels" && (
+        <p className="mt-0.5 text-[10px] text-slate-500 dark:text-slate-400">
+          {t("palette_dynamic_benefit_scope_automatic").replace(
+            "{count}",
+            String(pixelCount),
+          )}
+        </p>
+      )}
       <ul className="mt-1.5 grid grid-cols-[repeat(auto-fit,minmax(8.5rem,1fr))] gap-1.5">
         {points.map((point, index) => {
           const layerText = t("palette_dynamic_benefit_layer").replace(

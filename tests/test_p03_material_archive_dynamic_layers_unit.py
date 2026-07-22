@@ -589,3 +589,82 @@ def test_dynamic_flag_false_keeps_fixed_solver_output_unchanged(
     np.testing.assert_array_equal(explicit["material_matrix"], legacy["material_matrix"])
     assert explicit["material_solver_info"]["path"] == legacy["material_solver_info"]["path"]
     assert "material_dynamic_layer_info" not in explicit
+
+
+def test_dynamic_preview_matrix_reuse_skips_solver_and_preserves_authority_assets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Puzzle reuse must retain the accepted dynamic matrix without re-solving."""
+
+    max_layers = 7
+    matched_rgb = np.asarray(
+        [
+            [[12, 34, 56], [78, 90, 12]],
+            [[34, 56, 78], [90, 12, 34]],
+        ],
+        dtype=np.uint8,
+    )
+    mask_solid = np.asarray([[True, True], [True, False]], dtype=bool)
+    quantized_image = matched_rgb.copy()
+    material_matrix = np.full((2, 2, max_layers), -1, dtype=np.int32)
+    material_matrix[0, 0] = [2, 1, 2, 1, 1, 0, 0]
+    material_matrix[0, 1] = [1, 2, 1, 2, 1, 0, 0]
+    material_matrix[1, 0] = [2, 2, 1, 1, 2, 0, 0]
+
+    paths = {}
+    for name, array in {
+        "matched_rgb": matched_rgb,
+        "mask_solid": mask_solid,
+        "quantized_image": quantized_image,
+        "material_matrix": material_matrix,
+    }.items():
+        path = tmp_path / f"{name}.npy"
+        np.save(path, array)
+        paths[f"{name}_path"] = str(path)
+
+    ctx = _base_ctx(tmp_path / "must-not-be-opened.png")
+    _enable_dynamic(ctx, maximum=max_layers)
+    ctx.update(paths)
+    ctx["reuse_preview_analysis"] = True
+
+    monkeypatch.setattr(
+        "core.material_dynamic_solver.solve_dynamic_material_colors",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("preview matrix reuse must not invoke the dynamic solver")
+        ),
+    )
+
+    result = _run_material_archive_branch(ctx)
+
+    np.testing.assert_array_equal(result["matched_rgb"], matched_rgb)
+    np.testing.assert_array_equal(result["mask_solid"], mask_solid)
+    np.testing.assert_array_equal(result["quantized_image"], quantized_image)
+    np.testing.assert_array_equal(result["material_matrix"], material_matrix)
+    assert result["material_matrix"].dtype == np.int32
+    assert result["color_layers"] == max_layers
+    assert result["preview_matrix_reuse"] is True
+    assert result["material_solver_info"]["path"] == "preview_matrix_reuse"
+    assert result["material_dynamic_layer_info"]["preview_matrix_reuse"] is True
+
+
+def test_dynamic_preview_matrix_reuse_rejects_incomplete_assets(
+    tmp_path: Path,
+) -> None:
+    """Incomplete dynamic analysis must fail rather than falling back to a solver."""
+
+    ctx = _base_ctx(tmp_path / "must-not-be-opened.png")
+    _enable_dynamic(ctx, maximum=7)
+    ctx.update(
+        {
+            "reuse_preview_analysis": True,
+            "matched_rgb_path": str(tmp_path / "matched.npy"),
+            "mask_solid_path": str(tmp_path / "mask.npy"),
+            "material_matrix_path": str(tmp_path / "matrix.npy"),
+        }
+    )
+
+    result = _run_material_archive_branch(ctx)
+
+    assert "error" in result
+    assert "Re-run preview" in result["error"]

@@ -15,6 +15,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from api.dynamic_material_settings import normalize_dynamic_material_settings
+from api.schemas.dynamic_material import DynamicMaterialResultResponse
 from api.schemas.lut import LutSourceSelection
 from config import (
     SVG_PIXELS_PER_MM_DEFAULT,
@@ -204,38 +205,6 @@ class VirtualMaterial(BaseModel):
         ...,
         pattern=r"^#[0-9A-Fa-f]{6}$",
         description="耗材外观 hex (#RRGGBB)。",
-    )
-
-
-class RecipeOverrideItem(BaseModel):
-    """Region-scoped recipe override.
-    区域级配方覆盖项。
-    """
-
-    region_id: str = Field(..., description="区域 ID")
-    recipe: List[int] = Field(..., min_length=1, description="覆盖配方（通道索引序列）")
-    layer_order: str = Field("Top2Bottom", description="配方层序")
-    color_layers: int | None = Field(None, ge=1, le=20, description="实际配方层数")
-    actual_recipe_top_to_bottom: list[int] | None = Field(
-        None,
-        min_length=1,
-        max_length=20,
-        description="动态模式实际 Top-to-Bottom 配方",
-    )
-    print_recipe_top_to_bottom: list[int] | None = Field(
-        None,
-        min_length=1,
-        max_length=20,
-        description="动态模式补齐后的 Top-to-Bottom 打印配方",
-    )
-    actual_layer_count: int | None = Field(None, ge=1, le=20)
-    padding_layer_count: int | None = Field(None, ge=0, le=20)
-    virtual_materials: list[VirtualMaterial] | None = Field(
-        default=None,
-        description=(
-            "可选：配方里 >= LUT.N 的索引对应的虚拟耗材。Optional extra materials "
-            "referenced by recipe indices that sit beyond the LUT palette length."
-        ),
     )
 
 
@@ -1279,7 +1248,7 @@ class RegionRequantizeRequest(BaseModel):
     )
 
 
-class RegionReplaceResponse(BaseModel):
+class RegionReplaceResponse(DynamicMaterialResultResponse):
     """Response model for region color replacement.
     区域颜色替换的响应模型。
 

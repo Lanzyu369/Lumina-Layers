@@ -767,15 +767,32 @@ class TestSessionContainsPreviewCache:
         recipes = [
             {
                 "target_srgb": [240, 220, 200],
+                "matched_srgb": [238, 218, 198],
                 "actual_layer_count": 6,
-                "delta_e00": 0.3,
+                "padding_layer_count": 0,
+                "actual_recipe_top_to_bottom": [0, 1, 0, 1, 0, 1],
+                "print_recipe_top_to_bottom": [0, 1, 0, 1, 0, 1],
+                "selected_delta_e00": 0.3,
+                "best_range_delta_e00": 0.2,
+                "fixed_max_delta_e00": 0.4,
+                "delta_e00_sacrifice": 0.1,
+                "layer_cap_options": [
+                    {
+                        "max_effective_layer_count": 6,
+                        "actual_layer_count": 6,
+                        "matched_srgb": [238, 218, 198],
+                        "actual_recipe_top_to_bottom": [0, 1, 0, 1, 0, 1],
+                        "print_recipe_top_to_bottom": [0, 1, 0, 1, 0, 1],
+                        "delta_e00": 0.3,
+                    }
+                ],
             }
         ]
         benefit_curve = [
             {
                 "max_effective_layer_count": 6,
-                "weighted_delta_e00": 0.3,
-                "marginal_improvement": 0.2,
+                "weighted_mean_delta_e00": 0.3,
+                "marginal_delta_e00_reduction": 0.2,
             }
         ]
         worker_result = _create_worker_result_files(

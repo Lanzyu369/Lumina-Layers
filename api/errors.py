@@ -49,7 +49,18 @@ class UpstreamDomainError(DomainError):  # Reserved for future use
 
 def to_http_exception(exc: Exception, context: str) -> HTTPException:
     """Map domain/unknown exceptions to stable HTTPException.
+
     将领域异常和未知异常映射为稳定的 HTTPException。
+
+    Args:
+        exc: Exception raised by the domain, core, or boundary layer. 领域层、
+            核心层或边界层抛出的异常。
+        context: Safe operation label used in the fallback error message.
+            用于兜底错误消息的安全操作标签。
+
+    Returns:
+        HTTPException: Existing HTTP exception or a stable mapped response.
+            原有 HTTP 异常，或映射后的稳定 HTTP 响应异常。
     """
     if isinstance(exc, HTTPException):
         return exc

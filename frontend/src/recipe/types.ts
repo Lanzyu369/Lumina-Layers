@@ -10,6 +10,7 @@ import type {
   DynamicMaterialRecipe,
   FridgeMagnetItem,
   MaterialLayerBenefitPoint,
+  MaterialLayerBenefitScope,
 } from "../api/types";
 
 // ========== Asset ==========
@@ -189,6 +190,10 @@ export interface ConverterRecipeSource {
 export interface ConverterRecipeMaterialDynamic {
   recipes: DynamicMaterialRecipe[];
   benefit_curve: MaterialLayerBenefitPoint[];
+  /** Missing on legacy cards; import treats it as all printable pixels. */
+  scope?: MaterialLayerBenefitScope;
+  /** Effective pixel count represented by ``benefit_curve``. */
+  pixel_count?: number;
 }
 
 // ========== Converter Recipe (combined) ==========

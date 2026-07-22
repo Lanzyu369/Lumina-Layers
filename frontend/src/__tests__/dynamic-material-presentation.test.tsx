@@ -146,6 +146,26 @@ describe("dynamic material palette presentation", () => {
     expect(within(region).getByText("起始层数")).toBeInTheDocument();
   });
 
+  it("marks a curve recalculated for only the automatic-solver pixels", () => {
+    useConverterStore.setState({
+      materialLayerBenefitCurve: [
+        {
+          max_effective_layer_count: 5,
+          weighted_mean_delta_e00: 3.4,
+          marginal_delta_e00_reduction: 0,
+        },
+      ],
+      materialLayerBenefitScope: "automatic_pixels",
+      materialLayerBenefitPixelCount: 42,
+    } as never);
+
+    render(<PalettePanel />);
+
+    expect(
+      screen.getByText("仅自动求解区域（42 像素）"),
+    ).toBeInTheDocument();
+  });
+
   it("distinguishes zero improvement from a positive marginal reduction", () => {
     useConverterStore.setState({
       materialLayerBenefitCurve: [

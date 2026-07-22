@@ -13,7 +13,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from api.app import create_app
-from api.dependencies import get_file_registry, get_session_store
+from api.dependencies import get_file_registry, get_session_store, get_worker_pool
 from api.file_registry import FileRegistry
 from api.preview_cache_artifacts import (
     externalize_preview_cache,
@@ -22,6 +22,177 @@ from api.preview_cache_artifacts import (
 )
 from api.session_store import SessionStore
 from core.material_dynamic_solver import DynamicMaterialCandidateError
+
+
+def test_legacy_dynamic_reset_clears_stale_post_edit_metadata() -> None:
+    from api.routers.converter import replace
+
+    app = create_app()
+    store = SessionStore(ttl=1800)
+    registry = FileRegistry()
+    app.dependency_overrides[get_session_store] = lambda: store
+    app.dependency_overrides[get_file_registry] = lambda: registry
+    app.dependency_overrides[get_worker_pool] = lambda: MagicMock()
+    client = TestClient(app)
+    session_id = store.create()
+    original = np.full((1, 1, 3), [10, 20, 30], dtype=np.uint8)
+    edited = np.full((1, 1, 3), [40, 50, 60], dtype=np.uint8)
+    original_matrix = np.zeros((1, 1, 7), dtype=np.int16)
+    store.put(
+        session_id,
+        "preview_cache",
+        {
+            "matched_rgb": edited,
+            "original_matched_rgb": original,
+            "material_matrix": np.ones((1, 1, 7), dtype=np.int16),
+            "original_material_matrix": original_matrix,
+            "quantized_image": edited.copy(),
+            "original_quantized_image": original.copy(),
+            "mask_solid": np.ones((1, 1), dtype=bool),
+            "material_dynamic_layer_info": {
+                "colors": [{"target_srgb": [40, 50, 60]}],
+                "benefit_curve": [],
+            },
+        },
+    )
+    store.put(session_id, "material_dynamic_layer_count_enabled", True)
+    store.put(session_id, "replacement_regions", [])
+    store.put(session_id, "replacement_history", [])
+
+    try:
+        with patch.object(replace, "schedule_glb_build", return_value=None):
+            response = client.post(
+                "/api/convert/reset-replacements",
+                json={"session_id": session_id},
+            )
+        assert response.status_code == 200, response.text
+        assert response.json()["material_dynamic_recipes"] is None
+        reset_cache = store.get(session_id)["preview_cache"]
+        assert "material_dynamic_layer_info" not in reset_cache
+        np.testing.assert_array_equal(reset_cache["matched_rgb"], original)
+        np.testing.assert_array_equal(
+            reset_cache["material_matrix"], original_matrix
+        )
+    finally:
+        client.close()
+        registry.clear_all()
+        store.clear_all()
+        app.dependency_overrides.clear()
+
+
+def test_dynamic_reset_restores_preview_metadata_with_authority_arrays() -> None:
+    """Reset restores the preview's matrix, targets, and matching metadata."""
+
+    from api.routers.converter import replace
+
+    app = create_app()
+    store = SessionStore(ttl=1800)
+    registry = FileRegistry()
+    app.dependency_overrides[get_session_store] = lambda: store
+    app.dependency_overrides[get_file_registry] = lambda: registry
+    app.dependency_overrides[get_worker_pool] = lambda: MagicMock()
+    client = TestClient(app)
+    session_id = store.create()
+    original_rgb = np.full((1, 1, 3), [10, 20, 30], dtype=np.uint8)
+    edited_rgb = np.full((1, 1, 3), [90, 80, 70], dtype=np.uint8)
+    original_matrix = np.asarray([[[0, 1, 0, 1, 0, 0, 0]]], dtype=np.int32)
+    original_info = {
+        "enabled": True,
+        "min_layer_count": 5,
+        "max_layer_count": 7,
+        "delta_e00_tolerance": 0.5,
+        "colors": [
+            {
+                "target_srgb": [10, 20, 30],
+                "matched_srgb": [11, 22, 33],
+                "actual_layer_count": 5,
+                "padding_layer_count": 2,
+                "actual_recipe_top_to_bottom": [0, 1, 0, 1, 0],
+                "print_recipe_top_to_bottom": [0, 1, 0, 1, 0, 0, 0],
+                "selected_delta_e00": 0.2,
+                "best_range_delta_e00": 0.1,
+                "fixed_max_delta_e00": 0.3,
+                "delta_e00_sacrifice": 0.1,
+                "layer_cap_options": [
+                    {
+                        "max_effective_layer_count": cap,
+                        "actual_layer_count": 5,
+                        "matched_srgb": [11, 22, 33],
+                        "actual_recipe_top_to_bottom": [0, 1, 0, 1, 0],
+                        "print_recipe_top_to_bottom": [0, 1, 0, 1, 0, 0, 0],
+                        "delta_e00": 0.2,
+                    }
+                    for cap in (5, 6, 7)
+                ],
+            }
+        ],
+        "benefit_curve": [
+            {
+                "max_effective_layer_count": cap,
+                "weighted_mean_delta_e00": 0.2,
+                "marginal_delta_e00_reduction": 0.0,
+            }
+            for cap in (5, 6, 7)
+        ],
+        "benefit_curve_scope": "all_printable_pixels",
+        "benefit_curve_pixel_count": 1,
+    }
+    original_solver = {"path": "dynamic_exact", "dynamic_engine": "numpy"}
+    store.put(
+        session_id,
+        "preview_cache",
+        {
+            "matched_rgb": edited_rgb,
+            "original_matched_rgb": original_rgb,
+            "material_matrix": np.full((1, 1, 7), 1, dtype=np.int32),
+            "original_material_matrix": original_matrix,
+            "quantized_image": edited_rgb.copy(),
+            "original_quantized_image": original_rgb.copy(),
+            "mask_solid": np.ones((1, 1), dtype=bool),
+            "material_dynamic_layer_info": {"colors": [], "benefit_curve": []},
+            "original_material_dynamic_layer_info": original_info,
+            "material_solver_info": {"path": "post_edit"},
+            "original_material_solver_info": original_solver,
+        },
+    )
+    store.put(session_id, "material_dynamic_layer_count_enabled", True)
+    store.put(session_id, "replacement_regions", [{"id": "edited"}])
+    store.put(session_id, "replacement_history", [{"id": "edited"}])
+    store.put(session_id, "recipe_overrides", [{"region_id": "manual"}])
+    store.put(session_id, "recipe_override_count", 1)
+
+    try:
+        with patch.object(replace, "schedule_glb_build", return_value=None):
+            response = client.post(
+                "/api/convert/reset-replacements",
+                json={"session_id": session_id},
+            )
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["material_dynamic_recipes"] == original_info["colors"]
+        assert payload["material_layer_benefit_curve"] == original_info[
+            "benefit_curve"
+        ]
+        assert payload["material_layer_benefit_scope"] == "all_printable_pixels"
+        assert payload["material_layer_benefit_pixel_count"] == 1
+
+        reset_cache = store.get(session_id)["preview_cache"]
+        np.testing.assert_array_equal(reset_cache["matched_rgb"], original_rgb)
+        np.testing.assert_array_equal(
+            reset_cache["material_matrix"], original_matrix
+        )
+        np.testing.assert_array_equal(
+            reset_cache["quantized_image"], original_rgb
+        )
+        assert reset_cache["material_dynamic_layer_info"] == original_info
+        assert reset_cache["material_solver_info"] == original_solver
+        assert store.get(session_id)["recipe_overrides"] == []
+        assert store.get(session_id)["recipe_override_count"] == 0
+    finally:
+        client.close()
+        registry.clear_all()
+        store.clear_all()
+        app.dependency_overrides.clear()
 
 
 def test_automatic_dynamic_sync_uses_exact_solver_and_saves_metadata() -> None:
@@ -106,7 +277,11 @@ def test_automatic_dynamic_sync_uses_exact_solver_and_saves_metadata() -> None:
     exact_solve.assert_called_once()
     np.testing.assert_array_equal(updated_rgb[0, 0], matched[0])
     np.testing.assert_array_equal(cache["material_matrix"][0, 0], print_recipe[0])
-    assert cache["material_dynamic_layer_info"] == dynamic_info
+    assert cache["material_dynamic_layer_info"] == {
+        **dynamic_info,
+        "benefit_curve_scope": "all_printable_pixels",
+        "benefit_curve_pixel_count": 1,
+    }
     assert cache["material_solver_info"] == solver_info
 
 
@@ -541,11 +716,7 @@ def test_dynamic_exact_failure_rolls_back_rgb_matrix_and_metadata() -> None:
     )
     with patch.object(
         replace,
-        "load_multiple_materials",
-        return_value=[object(), object()],
-    ), patch.object(
-        replace,
-        "_solve_dynamic_material_targets",
+        "_sync_material_matrix_after_rgb_change",
         side_effect=failure,
     ):
         response = client.post(
@@ -634,11 +805,7 @@ def test_dynamic_exact_failure_keeps_artifact_cache_revisions_and_data(
     )
     with patch.object(
         replace,
-        "load_multiple_materials",
-        return_value=[object(), object()],
-    ), patch.object(
-        replace,
-        "_solve_dynamic_material_targets",
+        "_sync_material_matrix_after_rgb_change",
         side_effect=failure,
     ):
         response = client.post(

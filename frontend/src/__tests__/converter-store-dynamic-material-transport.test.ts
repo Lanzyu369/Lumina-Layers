@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   convertBatch: vi.fn(),
   replaceColorsBatch: vi.fn(),
   applyRecipeOverride: vi.fn(),
+  resetReplacements: vi.fn(),
   fetchGradientGroups: vi.fn(),
   fetchSessionLutInfo: vi.fn(),
 }));
@@ -21,6 +22,7 @@ vi.mock("../api/converter", async () => {
     convertBatch: mocks.convertBatch,
     replaceColorsBatch: mocks.replaceColorsBatch,
     applyRecipeOverride: mocks.applyRecipeOverride,
+    resetReplacements: mocks.resetReplacements,
     fetchGradientGroups: mocks.fetchGradientGroups,
   };
 });
@@ -60,6 +62,22 @@ const BENEFIT_CURVE = [
     max_effective_layer_count: 5,
     weighted_mean_delta_e00: 2.5,
     marginal_delta_e00_reduction: 0,
+  },
+];
+
+const UPDATED_DYNAMIC_RECIPES = [
+  {
+    ...DYNAMIC_RECIPES[0],
+    matched_srgb: [41, 51, 61] as [number, number, number],
+    selected_delta_e00: 0.8,
+  },
+];
+
+const UPDATED_BENEFIT_CURVE = [
+  {
+    ...BENEFIT_CURVE[0],
+    weighted_mean_delta_e00: 1.8,
+    marginal_delta_e00_reduction: 0.7,
   },
 ];
 
@@ -139,6 +157,16 @@ describe("dynamic material request transport", () => {
       preview_items: [],
       results: [],
       warnings: [],
+    });
+    mocks.resetReplacements.mockResolvedValue({
+      status: "ok",
+      message: "Reset",
+      preview_url: "/api/files/reset.png",
+      preview_glb_url: null,
+      material_dynamic_recipes: DYNAMIC_RECIPES,
+      material_layer_benefit_curve: BENEFIT_CURVE,
+      material_layer_benefit_scope: "all_printable_pixels",
+      material_layer_benefit_pixel_count: 10,
     });
   });
 
@@ -239,6 +267,8 @@ describe("dynamic material response lifecycle", () => {
         previewResponse({
           material_dynamic_recipes: DYNAMIC_RECIPES,
           material_layer_benefit_curve: BENEFIT_CURVE,
+          material_layer_benefit_scope: "all_printable_pixels",
+          material_layer_benefit_pixel_count: 10,
         }),
       )
       .mockResolvedValueOnce(
@@ -249,6 +279,8 @@ describe("dynamic material response lifecycle", () => {
     expect(useConverterStore.getState()).toMatchObject({
       materialDynamicRecipes: DYNAMIC_RECIPES,
       materialLayerBenefitCurve: BENEFIT_CURVE,
+      materialLayerBenefitScope: "all_printable_pixels",
+      materialLayerBenefitPixelCount: 10,
     });
 
     await useConverterStore.getState().submitPreview();
@@ -258,7 +290,7 @@ describe("dynamic material response lifecycle", () => {
     });
   });
 
-  it("clears dynamic result metadata after a backend color replacement", async () => {
+  it("adopts recomputed dynamic metadata after a backend color replacement", async () => {
     vi.useFakeTimers();
     try {
       mocks.replaceColorsBatch.mockResolvedValue({
@@ -267,6 +299,10 @@ describe("dynamic material response lifecycle", () => {
         preview_url: "/api/files/replaced.png",
         preview_3d_url: "/api/files/replaced.glb",
         replacement_count: 1,
+        material_dynamic_recipes: UPDATED_DYNAMIC_RECIPES,
+        material_layer_benefit_curve: UPDATED_BENEFIT_CURVE,
+        material_layer_benefit_scope: "automatic_pixels",
+        material_layer_benefit_pixel_count: 6,
       });
       useConverterStore.setState({
         sessionId: "dynamic-session",
@@ -278,15 +314,17 @@ describe("dynamic material response lifecycle", () => {
       await useConverterStore.getState().applyBatchColorRemap("ffffff");
 
       expect(useConverterStore.getState()).toMatchObject({
-        materialDynamicRecipes: [],
-        materialLayerBenefitCurve: [],
+        materialDynamicRecipes: UPDATED_DYNAMIC_RECIPES,
+        materialLayerBenefitCurve: UPDATED_BENEFIT_CURVE,
+        materialLayerBenefitScope: "automatic_pixels",
+        materialLayerBenefitPixelCount: 6,
       });
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("clears dynamic result metadata after a manual recipe edit", async () => {
+  it("adopts recomputed dynamic metadata after a manual recipe edit", async () => {
     vi.useFakeTimers();
     try {
       mocks.applyRecipeOverride.mockResolvedValue({
@@ -295,6 +333,10 @@ describe("dynamic material response lifecycle", () => {
         preview_url: "/api/files/manual.png",
         preview_glb_url: "/api/files/manual.glb",
         applied_region_ids: ["region-1"],
+        material_dynamic_recipes: UPDATED_DYNAMIC_RECIPES,
+        material_layer_benefit_curve: UPDATED_BENEFIT_CURVE,
+        material_layer_benefit_scope: "automatic_pixels",
+        material_layer_benefit_pixel_count: 4,
       });
       useConverterStore.setState({
         sessionId: "dynamic-session",
@@ -308,12 +350,91 @@ describe("dynamic material response lifecycle", () => {
         .getState()
         .applyCustomRecipeOverride(["region-1"], [1, 0, 1, 0, 1]);
 
+      expect(mocks.applyRecipeOverride).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // The backend validates dynamic ``color_layers`` against the actual
+          // short recipe, while its session-owned max still controls printing.
+          color_layers: 5,
+        }),
+      );
+
       expect(useConverterStore.getState()).toMatchObject({
-        materialDynamicRecipes: [],
-        materialLayerBenefitCurve: [],
+        materialDynamicRecipes: UPDATED_DYNAMIC_RECIPES,
+        materialLayerBenefitCurve: UPDATED_BENEFIT_CURVE,
+        materialLayerBenefitScope: "automatic_pixels",
+        materialLayerBenefitPixelCount: 4,
       });
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("resets local manual overrides with the backend preview snapshot", async () => {
+    useConverterStore.setState({
+      sessionId: "dynamic-session",
+      recipe_overrides: [
+        {
+          region_id: "region-1",
+          recipe: [1, 0, 1, 0, 1],
+          layer_order: "Top2Bottom",
+        },
+      ],
+      materialDynamicRecipes: UPDATED_DYNAMIC_RECIPES,
+      materialLayerBenefitCurve: UPDATED_BENEFIT_CURVE,
+      materialLayerBenefitScope: "automatic_pixels",
+      materialLayerBenefitPixelCount: 4,
+    } as never);
+
+    useConverterStore.getState().clearAllRemaps();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(mocks.resetReplacements).toHaveBeenCalledWith("dynamic-session");
+    expect(useConverterStore.getState()).toMatchObject({
+      recipe_overrides: [],
+      materialDynamicRecipes: DYNAMIC_RECIPES,
+      materialLayerBenefitCurve: BENEFIT_CURVE,
+      materialLayerBenefitScope: "all_printable_pixels",
+      materialLayerBenefitPixelCount: 10,
+    });
+  });
+
+  it("does not let an older preview overwrite a changed dynamic configuration", async () => {
+    seedMaterialState(true);
+    let resolveOldPreview: ((value: ReturnType<typeof previewResponse>) => void) | null = null;
+    mocks.convertPreview.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveOldPreview = resolve;
+        }),
+    );
+
+    const pendingPreview = useConverterStore.getState().submitPreview();
+    await Promise.resolve();
+    expect(mocks.convertPreview).toHaveBeenCalledTimes(1);
+
+    useConverterStore.getState().setMaterialDynamicLayerCountEnabled(false);
+    useConverterStore.getState().setMaterialMinLayerCount(5);
+    useConverterStore.getState().setMaterialMaxLayerCount(8);
+    useSettingsStore.getState().setMaterialDeltaE00Tolerance(0.9);
+    expect(mocks.convertPreview.mock.calls[0][2]?.aborted).toBe(true);
+
+    resolveOldPreview?.(
+      previewResponse({
+        session_id: "stale-dynamic-session",
+        material_dynamic_recipes: DYNAMIC_RECIPES,
+        material_layer_benefit_curve: BENEFIT_CURVE,
+      }),
+    );
+    await pendingPreview;
+
+    expect(useConverterStore.getState()).toMatchObject({
+      sessionId: null,
+      materialDynamicRecipes: [],
+      materialLayerBenefitCurve: [],
+      materialDynamicLayerCountEnabled: false,
+      materialMinLayerCount: 5,
+      materialMaxLayerCount: 8,
+    });
   });
 });

@@ -96,6 +96,7 @@ from .common import (
     _resolve_material_backing_index,
     _handle_core_error,
     _validate_dynamic_material_settings,
+    _validate_unique_dynamic_material_selection,
     _validate_material_source,
     _validate_material_archive_relief_minimum_height,
 )
@@ -1281,6 +1282,16 @@ async def convert_generate(
             )
         ),
     )
+    if (
+        session_material_source == "material_archive"
+        and dynamic_material_settings[0]
+    ):
+        # Preview normally rejects this already. Keep generation defensive so
+        # a restored or legacy session cannot let an ambiguous catalog cache
+        # identity reach the exact solver.
+        _validate_unique_dynamic_material_selection(
+            session_data.get("selected_materials") or []
+        )
 
     # Merge replacement_regions: prefer session state, fall back to request body
     replacement_regions = session_data.get("replacement_regions") or None
@@ -2291,6 +2302,13 @@ async def convert_generate_large_format(
         # never enters native SVG dynamic matching from this route.
         native_svg_vector=False,
     )
+    if (
+        session_material_source == "material_archive"
+        and dynamic_material_settings[0]
+    ):
+        _validate_unique_dynamic_material_selection(
+            session_data.get("selected_materials") or []
+        )
     _require_heightmap_for_relief(session_data, request)
     recipe_overrides = _resolve_recipe_overrides(session_data, request)
     _validate_material_archive_relief_minimum_height(
@@ -2777,6 +2795,11 @@ async def convert_batch(
                 )
             ),
         )
+        if (
+            material_source == "material_archive"
+            and material_dynamic_layer_count_enabled
+        ):
+            _validate_unique_dynamic_material_selection(selected_material_names)
         if resolved_modeling_mode == CoreModelingMode.COLOR_CARD:
             raise HTTPException(
                 status_code=422,

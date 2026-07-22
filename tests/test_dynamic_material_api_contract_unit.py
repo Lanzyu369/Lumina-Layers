@@ -131,6 +131,87 @@ def test_preview_response_dynamic_fields_are_optional_for_old_clients() -> None:
     assert benefit.is_required() is False
 
 
+def _valid_dynamic_recipe_payload() -> dict:
+    return {
+        "target_srgb": [10, 20, 30],
+        "matched_srgb": [11, 22, 33],
+        "actual_layer_count": 5,
+        "padding_layer_count": 2,
+        "actual_recipe_top_to_bottom": [0, 1, 2, 3, 0],
+        "print_recipe_top_to_bottom": [0, 1, 2, 3, 0, 4, 4],
+        "selected_delta_e00": 0.2,
+        "best_range_delta_e00": 0.1,
+        "fixed_max_delta_e00": 0.3,
+        "delta_e00_sacrifice": 0.1,
+        "layer_cap_options": [
+            {
+                "max_effective_layer_count": cap,
+                "actual_layer_count": 5,
+                "matched_srgb": [11, 22, 33],
+                "actual_recipe_top_to_bottom": [0, 1, 2, 3, 0],
+                "print_recipe_top_to_bottom": [0, 1, 2, 3, 0, 4, 4],
+                "delta_e00": 0.2,
+            }
+            for cap in (5, 6, 7)
+        ],
+    }
+
+
+def test_dynamic_response_models_validate_nested_public_contract() -> None:
+    from pydantic import ValidationError
+
+    from api.schemas.dynamic_material import DynamicMaterialResultResponse
+
+    payload = _valid_dynamic_recipe_payload()
+    result = DynamicMaterialResultResponse.model_validate(
+        {
+            "material_dynamic_recipes": [payload],
+                "material_layer_benefit_curve": [
+                    {
+                        "max_effective_layer_count": cap,
+                        "weighted_mean_delta_e00": 0.2,
+                        "marginal_delta_e00_reduction": 0.0,
+                    }
+                    for cap in (5, 6, 7)
+                ],
+        }
+    )
+    assert result.material_dynamic_recipes is not None
+    assert result.material_dynamic_recipes[0].target_srgb == (10, 20, 30)
+
+    invalid_rgb = dict(payload)
+    invalid_rgb["target_srgb"] = [10, 20, 999]
+    with pytest.raises(ValidationError):
+        DynamicMaterialResultResponse.model_validate(
+            {"material_dynamic_recipes": [invalid_rgb]}
+        )
+
+    invalid_length = dict(payload)
+    invalid_length["actual_recipe_top_to_bottom"] = [0, 1]
+    with pytest.raises(ValidationError):
+        DynamicMaterialResultResponse.model_validate(
+            {"material_dynamic_recipes": [invalid_length]}
+        )
+
+
+def test_edit_responses_share_typed_dynamic_result_fields() -> None:
+    from api.schemas.converter import RegionReplaceResponse
+    from api.schemas.responses import (
+        ColorReplaceResponse,
+        RecipeOverrideApplyResponse,
+        ResetReplacementsResponse,
+    )
+
+    for model_type in (
+        ColorReplaceResponse,
+        RegionReplaceResponse,
+        RecipeOverrideApplyResponse,
+        ResetReplacementsResponse,
+    ):
+        assert "material_dynamic_recipes" in model_type.model_fields
+        assert "material_layer_benefit_curve" in model_type.model_fields
+
+
 def test_request_schema_defaults_and_dynamic_hue_validation() -> None:
     from pydantic import ValidationError
 
@@ -206,6 +287,57 @@ def test_generate_request_rejects_explicit_dynamic_preview_mismatch() -> None:
     assert exc_info.value.detail["fields"] == [
         "material_dynamic_layer_count_enabled"
     ]
+
+
+def test_generate_request_rejects_dynamic_backing_mismatch_with_field_name() -> None:
+    """A cached dynamic matrix cannot be reused with another backing slot."""
+
+    from api.routers.converter.common import (
+        _resolve_session_dynamic_material_settings,
+    )
+    from api.schemas.converter import ConvertGenerateRequest
+
+    request = ConvertGenerateRequest.model_validate(
+        {
+            "lut_name": "test-lut",
+            "material_backing_material_index": 1,
+        }
+    )
+    session_data = {
+        "selected_materials": ["base", "red"],
+        "material_backing_material_index": 0,
+        "material_dynamic_layer_count_enabled": True,
+        "material_min_layer_count": 5,
+        "material_max_layer_count": 7,
+        "material_delta_e00_tolerance": 0.5,
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        _resolve_session_dynamic_material_settings(
+            session_data=session_data,
+            request=request,
+            material_source="material_archive",
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["code"] == "dynamic_material_preview_mismatch"
+    assert exc_info.value.detail["fields"] == [
+        "material_backing_material_index"
+    ]
+
+
+def test_dynamic_material_selection_rejects_duplicate_cache_identities() -> None:
+    from api.routers.converter.common import _validate_unique_dynamic_material_selection
+
+    _validate_unique_dynamic_material_selection(["brand/base", "brand/red"])
+
+    with pytest.raises(HTTPException) as exc_info:
+        _validate_unique_dynamic_material_selection(
+            ["Brand/Base", " brand/base "]
+        )
+
+    assert exc_info.value.status_code == 422
+    assert "duplicate" in str(exc_info.value.detail).lower()
 
 
 def test_generate_request_rejects_dynamic_native_svg_derived_flow() -> None:
