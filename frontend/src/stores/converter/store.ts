@@ -1632,6 +1632,23 @@ export interface ConverterState {
 
   // 当前图片是否已手动点击过预览按钮（自动预览的前置条件）
   hasManualPreview: boolean;
+
+  /**
+   * An established preview was invalidated and still needs one debounced
+   * refresh. Store-owned so the obligation survives hook unmount/remount.
+   * 已有预览失效后仍欠一次防抖刷新；由 store 持有以跨越 Hook 重挂载。
+   */
+  previewAutoRefreshPending: boolean;
+
+  /**
+   * Monotonic ownership revision for preview inputs/results. Any action that
+   * clears the preview increments it so an older response cannot bind later.
+   * 预览输入/结果所有权版本；清空预览时递增，拒绝旧响应回写。
+   */
+  previewRequestRevision: number;
+
+  /** Monotonic counter bumped whenever a valid preview request starts. */
+  previewSubmissionSequence: number;
 }
 
 // ========== Actions Interface ==========
@@ -2048,7 +2065,15 @@ const DEFAULT_PUZZLE_PREVIEW_STATE = {
 
 const DEFAULT_PUZZLE_LAYOUT_SEED = 0;
 
-function buildPreviewSessionResetState(): Partial<ConverterState> {
+function buildPreviewSessionResetState(
+  current: Pick<
+    ConverterState,
+    "hasManualPreview" | "previewAutoRefreshPending" | "previewRequestRevision"
+  >,
+  preserveAutoRefreshEligibility = false,
+): Partial<ConverterState> {
+  const previewAutoRefreshPending = preserveAutoRefreshEligibility &&
+    (current.hasManualPreview || current.previewAutoRefreshPending);
   return {
     sessionId: null,
     isLoading: false,
@@ -2084,6 +2109,8 @@ function buildPreviewSessionResetState(): Partial<ConverterState> {
     previewPixelHeight: null,
     modelBounds: null,
     hasManualPreview: false,
+    previewAutoRefreshPending,
+    previewRequestRevision: current.previewRequestRevision + 1,
     ...EMPTY_LUT_MATCH_STATE,
     ...DEFAULT_LAYER_IMAGES_STATE,
     ...DEFAULT_PUZZLE_PREVIEW_STATE,
@@ -2423,6 +2450,9 @@ export const DEFAULT_STATE: ConverterState = {
   pendingReplacement: null,
   regionReplacementCount: 0,
   hasManualPreview: false,
+  previewAutoRefreshPending: false,
+  previewRequestRevision: 0,
+  previewSubmissionSequence: 0,
 };
 
 // ========== Preview AbortController ==========
@@ -2606,6 +2636,20 @@ const GLB_POLL_MAX_MS = 5 * 60_000;
 // 变了就退出，避免多路 polling 互相覆盖 previewGlbUrl。
 let _glbPollSequence = 0;
 let _generateRequestSequence = 0;
+let _previewRequestSequence = 0;
+
+/** Cancel every async task owned by the current preview input. */
+function _cancelPreviewWork(): void {
+  _previewRequestSequence += 1;
+  if (_previewAbortController) {
+    _previewAbortController.abort();
+    _previewAbortController = null;
+  }
+  _gradientGroupsAbortController?.abort();
+  _gradientGroupsAbortController = null;
+  _glbPollSequence += 1;
+  _endPreviewTimer();
+}
 
 function _isCurrentGenerateRequest(
   sequence: number,
@@ -2694,14 +2738,17 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
     // --- 图片 ---
     setImageFile: (file: File | null) => {
+      _cancelPreviewWork();
+
       // Revoke previous blob URL to avoid memory leaks
-      const prev = _get().imagePreviewUrl;
+      const currentState = _get();
+      const prev = currentState.imagePreviewUrl;
       if (prev && prev.startsWith("blob:")) {
         URL.revokeObjectURL(prev);
       }
 
       if (!file) {
-        const currentMode = _get().modeling_mode;
+        const currentMode = currentState.modeling_mode;
         set({
           imageFile: null,
           imagePreviewUrl: null,
@@ -2709,14 +2756,14 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           modeling_mode: currentMode === ModelingModeEnum.VECTOR
             ? ModelingModeEnum.HIGH_FIDELITY
             : currentMode,
-          ...buildPreviewSessionResetState(),
+          ...buildPreviewSessionResetState(currentState),
         });
         return;
       }
 
       if (isRawFileConverter(file)) {
-        const currentState = _get();
         const shouldOpenCrop = currentState.enableCrop;
+        const nextPreviewRevision = currentState.previewRequestRevision + 1;
         set({
           imageFile: file,
           imagePreviewUrl: null,
@@ -2724,12 +2771,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           modeling_mode: currentState.modeling_mode === ModelingModeEnum.VECTOR
             ? ModelingModeEnum.HIGH_FIDELITY
             : currentState.modeling_mode,
-          ...buildPreviewSessionResetState(),
+          ...buildPreviewSessionResetState(currentState),
           cropModalOpen: shouldOpenCrop,
         });
         uploadImagePreview(file)
           .then(({ preview_url, width, height }) => {
-            if (_get().imageFile !== file) {
+            if (
+              _get().imageFile !== file ||
+              _get().previewRequestRevision !== nextPreviewRevision
+            ) {
               return;
             }
             set({
@@ -2739,7 +2789,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             });
           })
           .catch((err) => {
-            if (_get().imageFile !== file) {
+            if (
+              _get().imageFile !== file ||
+              _get().previewRequestRevision !== nextPreviewRevision
+            ) {
               return;
             }
             set({ error: rawPreviewFailureMessage(err) });
@@ -2748,16 +2801,22 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       }
 
       const previewUrl = URL.createObjectURL(file);
+      const nextPreviewRevision = currentState.previewRequestRevision + 1;
 
       // Calculate aspect ratio from image dimensions
       const img = new Image();
       img.onload = () => {
+        if (
+          _get().imageFile !== file ||
+          _get().previewRequestRevision !== nextPreviewRevision
+        ) {
+          return;
+        }
         const ratio = img.naturalWidth / img.naturalHeight;
         set({ aspectRatio: ratio });
       };
       img.src = previewUrl;
 
-      const currentState = _get();
       const shouldOpenCrop = currentState.enableCrop;
       const modelingMode = currentState.modeling_mode === ModelingModeEnum.VECTOR && !isSvgImageFile(file)
         ? ModelingModeEnum.HIGH_FIDELITY
@@ -2766,7 +2825,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         imageFile: file,
         imagePreviewUrl: previewUrl,
         modeling_mode: modelingMode,
-        ...buildPreviewSessionResetState(),
+        ...buildPreviewSessionResetState(currentState),
         cropModalOpen: shouldOpenCrop,
       });
       console.log("[DEBUG] setImageFile: cleared layerImages");
@@ -2797,21 +2856,24 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     },
 
     loadVectorizedSvgIntoConverter: (file: File) => {
-      if (_previewAbortController) {
-        _previewAbortController.abort();
-        _previewAbortController = null;
-      }
-      _gradientGroupsAbortController?.abort();
-      _gradientGroupsAbortController = null;
+      _cancelPreviewWork();
 
-      const prev = _get().imagePreviewUrl;
+      const currentState = _get();
+      const prev = currentState.imagePreviewUrl;
       if (prev && prev.startsWith("blob:")) {
         URL.revokeObjectURL(prev);
       }
 
       const previewUrl = URL.createObjectURL(file);
+      const nextPreviewRevision = currentState.previewRequestRevision + 1;
       const img = new Image();
       img.onload = () => {
+        if (
+          _get().imageFile !== file ||
+          _get().previewRequestRevision !== nextPreviewRevision
+        ) {
+          return;
+        }
         set({ aspectRatio: img.naturalWidth / img.naturalHeight });
       };
       img.src = previewUrl;
@@ -2820,7 +2882,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         imageFile: file,
         imagePreviewUrl: previewUrl,
         aspectRatio: null,
-        ...buildPreviewSessionResetState(),
+        ...buildPreviewSessionResetState(currentState),
         modeling_mode: ModelingModeEnum.VECTOR,
         isLoading: false,
         error: null,
@@ -2864,7 +2926,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         model_only: false,
         model_threshold: null,
         model_margin: null,
-        ...buildPreviewSessionResetState(),
+        ...buildPreviewSessionResetState(state, true),
       };
       if (lutLocation) {
         updates.selectedLegacyManufacturer = lutLocation.manufacturer;
@@ -2965,7 +3027,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         model_only: false,
         model_threshold: null,
         model_margin: null,
-        ...buildPreviewSessionResetState(),
+        ...buildPreviewSessionResetState(state, true),
       };
       if (lutLocation) {
         updates.selectedLegacyManufacturer = lutLocation.manufacturer;
@@ -3067,7 +3129,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         updates.model_only = false;
         updates.model_threshold = null;
         updates.model_margin = null;
-        Object.assign(updates, buildPreviewSessionResetState());
+        Object.assign(updates, buildPreviewSessionResetState(state, true));
         try {
           localStorage.removeItem("lumina_lastLut");
         } catch {
@@ -3095,7 +3157,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             model_only: false,
             model_threshold: null,
             model_margin: null,
-            ...buildPreviewSessionResetState(),
+            ...buildPreviewSessionResetState(state, true),
           };
         }
 
@@ -3106,7 +3168,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             model_only: false,
             model_threshold: null,
             model_margin: null,
-            ...buildPreviewSessionResetState(),
+            ...buildPreviewSessionResetState(state, true),
           };
         }
 
@@ -3127,7 +3189,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           color_layers: preferredMode?.color_layers ?? null,
           layer_height_mm: preferredMode?.layer_height_mm ?? null,
           ...buildNativeModelState(selectedBrand, state),
-          ...buildPreviewSessionResetState(),
+          ...buildPreviewSessionResetState(state, true),
         };
       }),
 
@@ -3143,7 +3205,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         return {
           selectedMaterialDirNames: names,
           materialBackingMaterialDirName: nextBacking,
-          ...buildPreviewSessionResetState(),
+          ...buildPreviewSessionResetState(state, true),
         };
       });
     },
@@ -3162,13 +3224,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
                 RELIEF_MAX_EXTRA_HEIGHT_MM,
               )
             : state.heightmap_max_height,
-          ...buildPreviewSessionResetState(),
+          ...buildPreviewSessionResetState(state, true),
         };
       }),
     setMaterialLayerHeightMm: (height: number) =>
-      set(() => ({
+      set((state) => ({
         materialLayerHeightMm: height,
-        ...buildPreviewSessionResetState(),
+        ...buildPreviewSessionResetState(state, true),
       })),
     setMaterialBackingMaterialDirName: (name: string | null) => {
       persistMaterialBackingMaterialDirName(name);
@@ -3193,7 +3255,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             color_layers: null,
             layer_height_mm: null,
             ...buildNativeModelDefaults(null),
-            ...buildPreviewSessionResetState(),
+            ...buildPreviewSessionResetState(state, true),
           };
         }
 
@@ -3209,7 +3271,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           color_layers: preferredMode?.color_layers ?? null,
           layer_height_mm: preferredMode?.layer_height_mm ?? null,
           ...buildNativeModelState(selectedBrand, state),
-          ...buildPreviewSessionResetState(),
+          ...buildPreviewSessionResetState(state, true),
         };
       }),
 
@@ -3224,7 +3286,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             source_version: "native",
             color_layers: mode.color_layers,
             layer_height_mm: mode.layer_height_mm,
-            ...buildPreviewSessionResetState(),
+            ...buildPreviewSessionResetState(state, true),
           };
         }
         const supported = getSupportedModeByPair(
@@ -3242,14 +3304,14 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             source_version: "native",
             color_layers: preferred?.color_layers ?? null,
             layer_height_mm: preferred?.layer_height_mm ?? null,
-            ...buildPreviewSessionResetState(),
+            ...buildPreviewSessionResetState(state, true),
           };
         }
         return {
           source_version: "native",
           color_layers: supported.color_layers,
           layer_height_mm: supported.layer_height_mm,
-          ...buildPreviewSessionResetState(),
+          ...buildPreviewSessionResetState(state, true),
         };
       }),
 
@@ -3265,7 +3327,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         return {
           source_version: "native",
           selectedNativeDbNames: normalized,
-          ...buildPreviewSessionResetState(),
+          ...buildPreviewSessionResetState(state, true),
         };
       }),
 
@@ -5923,15 +5985,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     },
 
     invalidatePreviewForAutoRefresh: () => {
-      if (_previewAbortController) {
-        _previewAbortController.abort();
-        _previewAbortController = null;
-      }
-      _gradientGroupsAbortController?.abort();
-      _gradientGroupsAbortController = null;
-      _glbPollSequence += 1;
+      _cancelPreviewWork();
 
-      set({
+      set((current) => ({
         sessionId: null,
         isLoading: false,
         previewImageUrl: null,
@@ -5957,9 +6013,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         gradientGroupsSessionId: null,
         gradientSelection: null,
         selectedGradientRegions: [],
+        previewAutoRefreshPending: true,
+        previewRequestRevision: current.previewRequestRevision + 1,
         ...DEFAULT_LAYER_IMAGES_STATE,
         ...DEFAULT_PUZZLE_PREVIEW_STATE,
-      });
+      }));
     },
 
     submitPreview: async () => {
@@ -5981,12 +6039,26 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         return;
       }
 
-      // Cancel any in-flight preview request
+      // Cancel any in-flight preview request and claim a fresh ownership id.
       if (_previewAbortController) {
         _previewAbortController.abort();
       }
-      _previewAbortController = new AbortController();
-      const { signal } = _previewAbortController;
+      const requestController = new AbortController();
+      _previewAbortController = requestController;
+      const { signal } = requestController;
+      const previewRequestSequence = ++_previewRequestSequence;
+      const previewRequestRevision = state.previewRequestRevision;
+      const previewImageFile = state.imageFile;
+      const isStalePreviewRequest = (): boolean => {
+        const latest = _get();
+        return (
+          signal.aborted ||
+          _previewAbortController !== requestController ||
+          _previewRequestSequence !== previewRequestSequence ||
+          latest.previewRequestRevision !== previewRequestRevision ||
+          latest.imageFile !== previewImageFile
+        );
+      };
 
       _previewStartTime = performance.now();
       (window as LuminaWindow).__luminaPreviewStart = _previewStartTime;
@@ -6014,6 +6086,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         isLoading: true,
         error: null,
         hasManualPreview: true,
+        previewAutoRefreshPending: false,
+        previewSubmissionSequence: state.previewSubmissionSequence + 1,
         previewWarnings: [],
         largeFormatWarnings: [],
         ...DEFAULT_LAYER_IMAGES_STATE,
@@ -6093,7 +6167,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           previewParams,
           signal,
         );
-        if (signal.aborted || _previewAbortController?.signal !== signal) {
+        if (isStalePreviewRequest()) {
           return;
         }
         _logPreviewTimer("response received");
@@ -6187,6 +6261,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           previewWarnings: response.warnings ?? [],
           largeFormatWarnings: [],
           hasManualPreview: true,
+          previewAutoRefreshPending: false,
           layerImages: [],
           layerImagesOpen: false,
           // Reset gradient-group cache so the panel shows loading while the
@@ -6207,8 +6282,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           await _get().uploadHeightmap();
           const latestState = _get();
           if (
-            signal.aborted ||
-            _previewAbortController?.signal !== signal ||
+            isStalePreviewRequest() ||
             latestState.sessionId !== response.session_id
           ) {
             return;
@@ -6264,6 +6338,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         // 非阻塞拉取渐变分组：后端已在预览流程中同步算完，这里只是读缓存。
         void _get().fetchGradientGroups(previewSessionId);
       } catch (err) {
+        if (isStalePreviewRequest()) {
+          return;
+        }
         // Ignore aborted requests (user started a new preview)
         if (err instanceof Error && err.name === "CanceledError") {
           _previewClientLog(
@@ -6290,7 +6367,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           "error",
         );
       } finally {
-        _endPreviewTimer();
+        if (
+          _previewRequestSequence === previewRequestSequence &&
+          _previewAbortController === requestController
+        ) {
+          _previewAbortController = null;
+          _endPreviewTimer();
+        }
       }
     },
 
@@ -6736,8 +6819,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           type: "image/png",
         });
 
+        const currentState = _get();
+        if (currentState.imageFile !== state.imageFile) {
+          set({ isCropping: false });
+          return;
+        }
+        _cancelPreviewWork();
+
         // Revoke previous preview URL
-        const prev = _get().imagePreviewUrl;
+        const prev = currentState.imagePreviewUrl;
         if (prev) URL.revokeObjectURL(prev);
 
         const newPreviewUrl = URL.createObjectURL(croppedFile);
@@ -6749,6 +6839,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           imageFile: croppedFile,
           imagePreviewUrl: newPreviewUrl,
           aspectRatio: ratio,
+          ...buildPreviewSessionResetState(currentState),
           cropModalOpen: false,
           isCropping: false,
         });
@@ -6801,6 +6892,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     removeBatchFile: (index: number) => {
       const state = _get();
       const remaining = state.batchFiles.filter((_, i) => i !== index);
+      _cancelPreviewWork();
+      const nextPreviewRevision = state.previewRequestRevision + 1;
 
       if (remaining.length === 1) {
         // Auto-downgrade: move last file to imageFile, exit BatchMode
@@ -6813,10 +6906,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             aspectRatio: null,
             batchMode: false,
             hasManualPreview: false,
+            previewAutoRefreshPending: false,
+            previewRequestRevision: nextPreviewRevision,
           });
           uploadImagePreview(lastFile)
             .then(({ preview_url, width, height }) => {
-              if (_get().imageFile !== lastFile) {
+              if (
+                _get().imageFile !== lastFile ||
+                _get().previewRequestRevision !== nextPreviewRevision
+              ) {
                 return;
               }
               set({
@@ -6826,7 +6924,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
               });
             })
             .catch((err) => {
-              if (_get().imageFile !== lastFile) {
+              if (
+                _get().imageFile !== lastFile ||
+                _get().previewRequestRevision !== nextPreviewRevision
+              ) {
                 return;
               }
               set({ error: rawPreviewFailureMessage(err) });
@@ -6835,6 +6936,12 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           const previewUrl = URL.createObjectURL(lastFile);
           const img = new Image();
           img.onload = () => {
+            if (
+              _get().imageFile !== lastFile ||
+              _get().previewRequestRevision !== nextPreviewRevision
+            ) {
+              return;
+            }
             set({ aspectRatio: img.naturalWidth / img.naturalHeight });
           };
           img.src = previewUrl;
@@ -6845,6 +6952,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             imagePreviewUrl: previewUrl,
             batchMode: false,
             hasManualPreview: false,
+            previewAutoRefreshPending: false,
+            previewRequestRevision: nextPreviewRevision,
           });
         }
       } else if (remaining.length === 0) {
@@ -6874,14 +6983,24 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           batchMode: false,
           batchResult: null,
           hasManualPreview: false,
+          previewAutoRefreshPending: false,
+          previewRequestRevision: nextPreviewRevision,
         });
       } else {
         // Still in BatchMode with multiple files
-        set({ batchFiles: remaining, batchResult: null });
+        set({
+          batchFiles: remaining,
+          batchResult: null,
+          hasManualPreview: false,
+          previewAutoRefreshPending: false,
+          previewRequestRevision: nextPreviewRevision,
+        });
       }
     },
 
-    clearBatchFiles: () =>
+    clearBatchFiles: () => {
+      const state = _get();
+      _cancelPreviewWork();
       set({
         batchFiles: [],
         batchResult: null,
@@ -6896,8 +7015,12 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         generatePerformanceTiming: null,
         previewWarnings: [],
         largeFormatWarnings: [],
+        hasManualPreview: false,
+        previewAutoRefreshPending: false,
+        previewRequestRevision: state.previewRequestRevision + 1,
         ...DEFAULT_PUZZLE_PREVIEW_STATE,
-      }),
+      });
+    },
 
     handleFilesSelect: (files: File[]) => {
       // Filter out falsy values and invalid formats
@@ -6907,6 +7030,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       if (validFiles.length === 0) return;
 
       const state = _get();
+      _cancelPreviewWork();
       const inBatchMode = state.batchFiles.length > 0;
       const selectedFiles = [
         ...state.batchFiles,
@@ -6926,6 +7050,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           modeling_mode: compatibleModelingMode,
           batchMode: true,
           batchResult: null,
+          hasManualPreview: false,
+          previewAutoRefreshPending: false,
+          previewRequestRevision: state.previewRequestRevision + 1,
         });
         return;
       }
@@ -6965,6 +7092,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             modeling_mode: compatibleModelingMode,
             batchMode: true,
             hasManualPreview: false,
+            previewAutoRefreshPending: false,
+            previewRequestRevision: state.previewRequestRevision + 1,
             layerImages: [],
             layerImagesOpen: false,
             batchResult: null,
@@ -6974,6 +7103,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
         if (isRawFileConverter(singleFile)) {
           const prev = state.imagePreviewUrl;
+          const nextPreviewRevision = state.previewRequestRevision + 1;
           if (prev && prev.startsWith("blob:")) URL.revokeObjectURL(prev);
           set({
             imageFile: singleFile,
@@ -6998,6 +7128,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             modeling_mode: compatibleModelingMode,
             batchMode: false,
             hasManualPreview: false,
+            previewAutoRefreshPending: false,
+            previewRequestRevision: nextPreviewRevision,
             cropModalOpen: state.enableCrop,
             layerImages: [],
             layerImagesOpen: false,
@@ -7005,7 +7137,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           });
           uploadImagePreview(singleFile)
             .then(({ preview_url, width, height }) => {
-              if (_get().imageFile !== singleFile) {
+              if (
+                _get().imageFile !== singleFile ||
+                _get().previewRequestRevision !== nextPreviewRevision
+              ) {
                 return;
               }
               set({
@@ -7015,7 +7150,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
               });
             })
             .catch((err) => {
-              if (_get().imageFile !== singleFile) {
+              if (
+                _get().imageFile !== singleFile ||
+                _get().previewRequestRevision !== nextPreviewRevision
+              ) {
                 return;
               }
               set({ error: rawPreviewFailureMessage(err) });
@@ -7024,8 +7162,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         }
 
         const previewUrl = URL.createObjectURL(singleFile);
+        const nextPreviewRevision = state.previewRequestRevision + 1;
         const img = new Image();
         img.onload = () => {
+          if (
+            _get().imageFile !== singleFile ||
+            _get().previewRequestRevision !== nextPreviewRevision
+          ) {
+            return;
+          }
           set({ aspectRatio: img.naturalWidth / img.naturalHeight });
         };
         img.src = previewUrl;
@@ -7051,6 +7196,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           ...DEFAULT_PUZZLE_PREVIEW_STATE,
           batchMode: false,
           hasManualPreview: false,
+          previewAutoRefreshPending: false,
+          previewRequestRevision: nextPreviewRevision,
           cropModalOpen: isSvg ? false : state.enableCrop,
           layerImages: [],
           layerImagesOpen: false,
@@ -7094,6 +7241,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         modeling_mode: compatibleModelingMode,
         batchMode: true,
         hasManualPreview: false,
+        previewAutoRefreshPending: false,
+        previewRequestRevision: state.previewRequestRevision + 1,
         layerImages: [],
         layerImagesOpen: false,
         batchResult: null,

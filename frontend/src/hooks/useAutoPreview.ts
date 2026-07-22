@@ -33,6 +33,13 @@ export function useAutoPreview(): void {
   const imageFile = useConverterStore((state) => state.imageFile);
   const cropModalOpen = useConverterStore((state) => state.cropModalOpen);
   const hasManualPreview = useConverterStore((state) => state.hasManualPreview);
+  const isLoading = useConverterStore((state) => state.isLoading);
+  const refreshPending = useConverterStore(
+    (state) => state.previewAutoRefreshPending,
+  );
+  const submissionSequence = useConverterStore(
+    (state) => state.previewSubmissionSequence,
+  );
   const submitPreview = useConverterStore((state) => state.submitPreview);
   const invalidatePreview = useConverterStore(
     (state) => state.invalidatePreviewForAutoRefresh,
@@ -83,16 +90,13 @@ export function useAutoPreview(): void {
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastTriggeredRef = useRef<AutoPreviewSnapshot | null>(null);
-  const hadManualPreviewRef = useRef(false);
+  const lastSubmissionSequenceRef = useRef(submissionSequence);
 
   useEffect(() => {
     if (timerRef.current !== null) {
       clearTimeout(timerRef.current);
       timerRef.current = null;
     }
-
-    const previouslyHadManualPreview = hadManualPreviewRef.current;
-    hadManualPreviewRef.current = hasManualPreview;
 
     if (!imageFile || cropModalOpen) {
       return;
@@ -104,29 +108,53 @@ export function useAutoPreview(): void {
       settingsKey,
     };
     const previousSnapshot = lastTriggeredRef.current;
-    const hasBaselineForCurrentImage =
-      previousSnapshot?.imageFile === imageFile;
+    const submissionStarted =
+      lastSubmissionSequenceRef.current !== submissionSequence;
+    lastSubmissionSequenceRef.current = submissionSequence;
+    const scheduleRefresh = () => {
+      timerRef.current = setTimeout(() => {
+        const latest = useConverterStore.getState();
+        if (!latest.previewAutoRefreshPending || latest.isLoading) {
+          return;
+        }
+        lastTriggeredRef.current = currentSnapshot;
+        void submitPreview();
+      }, 300);
 
-    // A false -> true transition means a manual preview just established a
-    // new authoritative baseline. Seed it without immediately submitting a
-    // duplicate request, including after the source selection changed.
-    // false -> true 表示手动预览刚建立了新的权威基线；只记录，不重复提交。
-    if (
-      hasManualPreview &&
-      (!previouslyHadManualPreview || previousSnapshot === null)
-    ) {
+      return () => {
+        if (timerRef.current !== null) {
+          clearTimeout(timerRef.current);
+          timerRef.current = null;
+        }
+      };
+    };
+
+    // A manual click (or the auto timer itself) owns the current snapshot.
+    // Seed it even when a mocked/fast response finishes before this effect.
+    // 手动点击或自动定时器已认领当前参数；即使响应极快也不能再重复提交。
+    if (submissionStarted || isLoading) {
       lastTriggeredRef.current = currentSnapshot;
       return;
     }
 
-    // Source/material setters clear hasManualPreview together with the stale
-    // session. Keep auto-refresh eligibility for the same image, while a new
-    // File object still requires its first explicit preview.
-    // 来源参数会随旧会话一起清掉 hasManualPreview；同一图片仍保留自动刷新资格。
-    if (
-      (!hasManualPreview && !hasBaselineForCurrentImage) ||
-      previousSnapshot === null
-    ) {
+    // A store-owned pending refresh survives A→B→A and hook remounts. It is
+    // intentionally checked before sameSnapshot: identical parameters do not
+    // make an already-cleared result valid again.
+    // pending 先于参数相等判断：参数改回 A，不代表被清空的 A 结果仍然有效。
+    if (refreshPending) {
+      if (!isSourceReady) {
+        return;
+      }
+      return scheduleRefresh();
+    }
+
+    if (!hasManualPreview) {
+      return;
+    }
+
+    // Seed an already-established result on initial mount without submitting.
+    if (previousSnapshot === null) {
+      lastTriggeredRef.current = currentSnapshot;
       return;
     }
 
@@ -143,25 +171,18 @@ export function useAutoPreview(): void {
       return;
     }
 
-    timerRef.current = setTimeout(() => {
-      lastTriggeredRef.current = currentSnapshot;
-      void submitPreview();
-    }, 300);
-
-    return () => {
-      if (timerRef.current !== null) {
-        clearTimeout(timerRef.current);
-        timerRef.current = null;
-      }
-    };
+    return scheduleRefresh();
   }, [
     cropModalOpen,
     hasManualPreview,
     imageFile,
     inputKey,
     invalidatePreview,
+    isLoading,
     isSourceReady,
+    refreshPending,
     settingsKey,
+    submissionSequence,
     submitPreview,
   ]);
 }

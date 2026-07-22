@@ -266,6 +266,93 @@ describe("useAutoPreview", () => {
     expect(mockSubmitPreview).toHaveBeenCalledTimes(1);
   });
 
+  it("regenerates when parameters return to the last successful snapshot after invalidation", () => {
+    renderHook(() => useAutoPreview());
+
+    act(() => {
+      establishMaterialPreviewBaseline();
+    });
+
+    act(() => {
+      useConverterStore.getState().setQuantizeColors(8);
+    });
+    act(() => {
+      vi.advanceTimersByTime(150);
+      useConverterStore.getState().setQuantizeColors(48);
+    });
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+
+    expect(useConverterStore.getState().previewImageUrl).toBeNull();
+    expect(mockSubmitPreview).toHaveBeenCalledTimes(1);
+  });
+
+  it("regenerates after confirming the unchanged material selection cleared the result", () => {
+    renderHook(() => useAutoPreview());
+
+    act(() => {
+      establishMaterialPreviewBaseline();
+    });
+    act(() => {
+      useConverterStore.getState().setSelectedMaterialDirNames([
+        "profile/yellow",
+        "profile/black",
+      ]);
+    });
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+
+    expect(useConverterStore.getState().previewImageUrl).toBeNull();
+    expect(mockSubmitPreview).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a pending refresh across an actual hook unmount and remount", () => {
+    const firstMount = renderHook(() => useAutoPreview());
+
+    act(() => {
+      establishMaterialPreviewBaseline();
+    });
+    act(() => {
+      useConverterStore.getState().setQuantizeColors(8);
+    });
+
+    firstMount.unmount();
+    renderHook(() => useAutoPreview());
+
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+
+    expect(mockSubmitPreview).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels the automatic timer when the user submits the pending preview manually", () => {
+    mockSubmitPreview.mockImplementation(async () => {
+      useConverterStore.setState({
+        isLoading: true,
+        hasManualPreview: true,
+      });
+    });
+    renderHook(() => useAutoPreview());
+
+    act(() => {
+      establishMaterialPreviewBaseline();
+    });
+    act(() => {
+      useConverterStore.getState().setQuantizeColors(8);
+    });
+    act(() => {
+      void useConverterStore.getState().submitPreview();
+    });
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+
+    expect(mockSubmitPreview).toHaveBeenCalledTimes(1);
+  });
+
   it("does not regenerate when a material preview response synchronizes compatibility fields", () => {
     renderHook(() => useAutoPreview());
 
