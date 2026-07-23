@@ -183,9 +183,9 @@ def _resolve_surface_display_stack(
     ctx: dict,
     full_matrix: np.ndarray,
 ) -> tuple[np.ndarray, tuple[float, ...]]:
-    """Return display-only voxels ordered from model interior to viewing face.
+    """Return display voxels with embedded Z order and standard print orientation.
 
-    返回从模型内侧到观赏面的纯展示体素及其逐层物理厚度。
+    返回按嵌入方向排列并保持标准打印朝向的纯展示体素。
     """
 
     if full_matrix.ndim != 3:
@@ -232,7 +232,13 @@ def _resolve_surface_display_stack(
 
     face_orientation = str(ctx.get("bambu_face_orientation", "down") or "down").lower()
     if face_orientation == "down":
-        display_matrix = np.flip(full_matrix[:display_layer_count], axis=0)
+        # Match the regular raster exporter: reverse the display stack so its
+        # viewing layer faces outward, and keep the X mirror required when the
+        # decorated face is printed against the build plate.
+        display_matrix = np.flip(
+            full_matrix[:display_layer_count],
+            axis=(0, 2),
+        )
     elif face_orientation == "up":
         display_matrix = full_matrix[-display_layer_count:]
     else:

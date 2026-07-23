@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 import trimesh
@@ -58,7 +60,7 @@ def test_build_embedded_overlay_scene_keeps_bounds_and_adds_base_slot():
     assert result.scene.bounds[1][2] == pytest.approx(base.bounds[1][2])
 
 
-def test_build_embedded_overlay_scene_preserves_transparent_canvas_margins():
+def test_build_embedded_overlay_scene_preserves_face_down_mirror_and_canvas_margins():
     full_matrix = np.full((1, 10, 20), -1, dtype=np.int16)
     full_matrix[0, 1:3, 2:6] = 0
     pattern = _build_pattern_scene(
@@ -105,11 +107,51 @@ def test_build_embedded_overlay_scene_preserves_transparent_canvas_margins():
     )
 
     artwork_bounds = np.asarray(result.scene.geometry["Artwork"].bounds)
-    np.testing.assert_allclose(artwork_bounds[:, 0], [-8.0, -4.0], atol=1e-6)
+    np.testing.assert_allclose(artwork_bounds[:, 0], [4.0, 8.0], atol=1e-6)
     np.testing.assert_allclose(artwork_bounds[:, 1], [2.0, 4.0], atol=1e-6)
     np.testing.assert_allclose(
         artwork_bounds[1, :2] - artwork_bounds[0, :2],
         [4.0, 2.0],
+        atol=1e-6,
+    )
+
+
+def test_native_vector_pattern_preserves_face_down_export_mirror():
+    artwork = trimesh.creation.box(extents=(2.0, 6.0, 0.08))
+    artwork.apply_translation((3.0, 5.0, 0.04))
+    export_mirror = np.asarray(
+        [
+            [-1.0, 0.0, 0.0, 20.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ]
+    )
+    artwork.apply_transform(export_mirror)
+    source_scene = trimesh.Scene({"Black": artwork})
+
+    pattern = _build_pattern_scene(
+        {
+            "is_svg_vector": True,
+            "scene": source_scene,
+            "vector_analysis": SimpleNamespace(
+                slot_names=("Black",),
+                bbox=(0.0, 0.0, 20.0, 10.0),
+                scale_factor=1.0,
+                num_layers=1,
+            ),
+            "layer_height_mm": 0.08,
+        }
+    )
+
+    np.testing.assert_allclose(
+        source_scene.geometry["Black"].bounds[:, 0],
+        [16.0, 18.0],
+        atol=1e-6,
+    )
+    np.testing.assert_allclose(
+        pattern.geometry["Black"].bounds[:, 0],
+        [16.0, 18.0],
         atol=1e-6,
     )
 

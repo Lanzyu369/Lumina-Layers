@@ -1339,7 +1339,7 @@ function useSurfaceArtworkImage(artworkUrl: string | null | undefined): HTMLImag
 
 export function configureSurfaceArtworkTextureForPreview(texture: THREE.Texture): void {
   texture.colorSpace = THREE.SRGBColorSpace;
-  texture.flipY = false;
+  texture.flipY = true;
   texture.generateMipmaps = false;
   texture.minFilter = THREE.LinearFilter;
   texture.magFilter = THREE.LinearFilter;
