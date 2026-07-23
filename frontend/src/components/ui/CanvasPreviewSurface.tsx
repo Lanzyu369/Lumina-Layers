@@ -22,6 +22,10 @@ import {
   type CanvasPreviewRenderingQuality,
 } from "./canvasPreviewUtils"
 import { useI18n } from "../../i18n/context"
+import {
+  useSpacePanModifier,
+  type SpacePanDeactivateReason,
+} from "../../hooks/useSpacePanModifier"
 
 export interface CanvasPreviewSurfaceReadyPayload {
   image: HTMLImageElement
@@ -49,6 +53,8 @@ interface CanvasPreviewSurfaceProps {
   wheelZoomSensitivity?: number
   wheelZoomStepMultiplier?: number
   resetOnDoubleClick?: boolean
+  middleButtonPanEnabled?: boolean
+  spacePanEnabled?: boolean
   renderingQuality?: CanvasPreviewRenderingQuality
   onHoverSample?: (sample: CanvasPreviewHoverSample | null) => void
   onClickSample?: (sample: CanvasPreviewHoverSample, event: ReactMouseEvent<HTMLDivElement>) => void
@@ -77,6 +83,8 @@ export default function CanvasPreviewSurface({
   wheelZoomSensitivity = 0.001,
   wheelZoomStepMultiplier,
   resetOnDoubleClick = false,
+  middleButtonPanEnabled = false,
+  spacePanEnabled = false,
   renderingQuality = "default",
   onHoverSample,
   onClickSample,
@@ -97,12 +105,52 @@ export default function CanvasPreviewSurface({
   const translateAtDragStartRef = useRef({ x: 0, y: 0 })
   const dragMovedRef = useRef(false)
   const activePointerIdRef = useRef<number | null>(null)
+  const activeDragButtonRef = useRef<number | null>(null)
+  const activeDragSourceRef = useRef<"pointer" | "space-left" | null>(null)
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 })
   const [naturalSize, setNaturalSize] = useState({ width: 0, height: 0 })
   const [scale, setScale] = useState(1)
   const [translate, setTranslate] = useState({ x: 0, y: 0 })
-  const [isDragging, setIsDragging] = useState(false)
   const [failedSrc, setFailedSrc] = useState<string | null>(null)
+
+  const finishActiveDrag = useCallback((pointerId?: number, cancelled = false) => {
+    const activePointerId = activePointerIdRef.current
+    if (activePointerId === null || (pointerId !== undefined && pointerId !== activePointerId)) {
+      return
+    }
+
+    const container = containerRef.current
+    try {
+      container?.releasePointerCapture?.(activePointerId)
+    } catch {
+      // The browser may already have released capture after pointercancel/lostcapture.
+    }
+    activePointerIdRef.current = null
+    activeDragButtonRef.current = null
+    activeDragSourceRef.current = null
+    if (cancelled) {
+      dragMovedRef.current = false
+    }
+  }, [])
+
+  const handleSpacePanDeactivate = useCallback(
+    (reason: SpacePanDeactivateReason) => {
+      if (activeDragSourceRef.current !== "space-left") {
+        return
+      }
+      finishActiveDrag(undefined, reason !== "keyup")
+    },
+    [finishActiveDrag],
+  )
+  const {
+    isActive: isSpacePanActive,
+    isActiveRef: isSpacePanActiveRef,
+    handlePointerEnter: handleSpacePanPointerEnter,
+    handlePointerLeave: handleSpacePanPointerLeave,
+  } = useSpacePanModifier({
+    enabled: spacePanEnabled,
+    onDeactivate: handleSpacePanDeactivate,
+  })
 
   const naturalSizeRef = useRef(naturalSize)
   const scaleRef = useRef(scale)
@@ -211,10 +259,9 @@ export default function CanvasPreviewSurface({
   useEffect(() => {
     lastPointerClientRef.current = null
     dragMovedRef.current = false
-    activePointerIdRef.current = null
-    setIsDragging(false)
+    finishActiveDrag(undefined, true)
     emitHoverSample(null)
-  }, [emitHoverSample, src])
+  }, [emitHoverSample, finishActiveDrag, src])
 
   useEffect(() => {
     if (!interactionsDisabled) {
@@ -223,10 +270,29 @@ export default function CanvasPreviewSurface({
 
     lastPointerClientRef.current = null
     dragMovedRef.current = false
-    activePointerIdRef.current = null
-    setIsDragging(false)
+    finishActiveDrag(undefined, true)
     emitHoverSample(null)
-  }, [emitHoverSample, interactionsDisabled])
+  }, [emitHoverSample, finishActiveDrag, interactionsDisabled])
+
+  useEffect(() => {
+    const handleWindowPointerUp = (event: globalThis.PointerEvent) => {
+      finishActiveDrag(event.pointerId)
+    }
+    const handleWindowPointerCancel = (event: globalThis.PointerEvent) => {
+      finishActiveDrag(event.pointerId, true)
+    }
+    const handleWindowBlur = () => finishActiveDrag(undefined, true)
+
+    window.addEventListener("pointerup", handleWindowPointerUp)
+    window.addEventListener("pointercancel", handleWindowPointerCancel)
+    window.addEventListener("blur", handleWindowBlur)
+    return () => {
+      window.removeEventListener("pointerup", handleWindowPointerUp)
+      window.removeEventListener("pointercancel", handleWindowPointerCancel)
+      window.removeEventListener("blur", handleWindowBlur)
+      finishActiveDrag(undefined, true)
+    }
+  }, [finishActiveDrag])
 
   useEffect(() => {
     notifySurfaceReady(null)
@@ -383,9 +449,13 @@ export default function CanvasPreviewSurface({
         return
       }
 
-      const dragAllowed = canStartDrag
+      const isSpaceLeftDrag = spacePanEnabled
+        && isSpacePanActiveRef.current
+        && event.button === 0
+      const isMiddleButtonDrag = middleButtonPanEnabled && event.button === 1
+      const dragAllowed = isSpaceLeftDrag || isMiddleButtonDrag || (canStartDrag
         ? canStartDrag(event, { scale: scaleRef.current })
-        : true
+        : true)
       if (!dragAllowed) {
         return
       }
@@ -393,14 +463,24 @@ export default function CanvasPreviewSurface({
       event.preventDefault()
       lastPointerClientRef.current = null
       emitHoverSample(null)
-      dragMovedRef.current = false
+      // A Space+left gesture must never fall through to the normal click
+      // selection path, even when the pointer barely moves.
+      dragMovedRef.current = isSpaceLeftDrag
       activePointerIdRef.current = event.pointerId
-      setIsDragging(true)
+      activeDragButtonRef.current = event.button
+      activeDragSourceRef.current = isSpaceLeftDrag ? "space-left" : "pointer"
       dragStartRef.current = { x: event.clientX, y: event.clientY }
-      translateAtDragStartRef.current = { ...translate }
+      translateAtDragStartRef.current = { ...translateRef.current }
       event.currentTarget.setPointerCapture?.(event.pointerId)
     },
-    [canStartDrag, emitHoverSample, interactionsDisabled, translate],
+    [
+      canStartDrag,
+      emitHoverSample,
+      interactionsDisabled,
+      isSpacePanActiveRef,
+      middleButtonPanEnabled,
+      spacePanEnabled,
+    ],
   )
 
   const handlePointerMove = useCallback(
@@ -411,10 +491,13 @@ export default function CanvasPreviewSurface({
         return
       }
 
-      if (isDragging && activePointerIdRef.current === event.pointerId) {
+      if (activePointerIdRef.current === event.pointerId) {
         const dx = event.clientX - dragStartRef.current.x
         const dy = event.clientY - dragStartRef.current.y
-        if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+        if (
+          activeDragButtonRef.current === 0
+          && (Math.abs(dx) > 3 || Math.abs(dy) > 3)
+        ) {
           dragMovedRef.current = true
         }
         setTranslate({
@@ -429,42 +512,53 @@ export default function CanvasPreviewSurface({
       lastPointerClientRef.current = { x: event.clientX, y: event.clientY }
       emitHoverSample(mapPointerToHoverSample(event.clientX, event.clientY))
     },
-    [emitHoverSample, interactionsDisabled, isDragging, mapPointerToHoverSample],
+    [emitHoverSample, interactionsDisabled, mapPointerToHoverSample],
   )
 
-  const endPointerDrag = useCallback((event: PointerEvent<HTMLDivElement>) => {
-    if (activePointerIdRef.current !== null && activePointerIdRef.current === event.pointerId) {
-      event.currentTarget.releasePointerCapture?.(event.pointerId)
-    }
-    activePointerIdRef.current = null
-    setIsDragging(false)
-  }, [])
-
   const handlePointerUp = useCallback((event: PointerEvent<HTMLDivElement>) => {
-    endPointerDrag(event)
-  }, [endPointerDrag])
+    finishActiveDrag(event.pointerId)
+  }, [finishActiveDrag])
 
   const handlePointerCancel = useCallback((event: PointerEvent<HTMLDivElement>) => {
-    endPointerDrag(event)
-    dragMovedRef.current = false
+    finishActiveDrag(event.pointerId, true)
     lastPointerClientRef.current = null
     emitHoverSample(null)
-  }, [emitHoverSample, endPointerDrag])
+  }, [emitHoverSample, finishActiveDrag])
 
   const handleLostPointerCapture = useCallback(() => {
     activePointerIdRef.current = null
-    setIsDragging(false)
+    activeDragButtonRef.current = null
+    activeDragSourceRef.current = null
   }, [])
 
   const handlePointerLeave = useCallback(() => {
-    if (isDragging) {
+    if (activePointerIdRef.current !== null) {
       return
     }
-    setIsDragging(false)
     dragMovedRef.current = false
     lastPointerClientRef.current = null
     emitHoverSample(null)
-  }, [emitHoverSample, isDragging])
+  }, [emitHoverSample])
+
+  const handleMouseDown = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    if (
+      (middleButtonPanEnabled && event.button === 1)
+      || (spacePanEnabled && isSpacePanActiveRef.current && event.button === 0)
+    ) {
+      event.preventDefault()
+    }
+  }, [isSpacePanActiveRef, middleButtonPanEnabled, spacePanEnabled])
+
+  const handleAuxClick = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    if (middleButtonPanEnabled && event.button === 1) {
+      event.preventDefault()
+    }
+  }, [middleButtonPanEnabled])
+
+  const handleSurfacePointerLeave = useCallback(() => {
+    handleSpacePanPointerLeave()
+    handlePointerLeave()
+  }, [handlePointerLeave, handleSpacePanPointerLeave])
 
   const handleClick = useCallback(
     (event: ReactMouseEvent<HTMLDivElement>) => {
@@ -499,13 +593,19 @@ export default function CanvasPreviewSurface({
       <div
         ref={containerRef}
         data-testid={dataTestId}
+        data-space-pan-active={isSpacePanActive || undefined}
+        data-preview-translate-x={translate.x}
+        data-preview-translate-y={translate.y}
         className={`relative h-full w-full overflow-hidden ${className ?? ""} ${surfaceClassName ?? "cursor-grab active:cursor-grabbing"}`.trim()}
         onContextMenu={(event) => event.preventDefault()}
+        onMouseDown={handleMouseDown}
+        onAuxClick={handleAuxClick}
+        onPointerEnter={handleSpacePanPointerEnter}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerCancel}
-        onPointerLeave={handlePointerLeave}
+        onPointerLeave={handleSurfacePointerLeave}
         onLostPointerCapture={handleLostPointerCapture}
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, act, fireEvent } from "@testing-library/react";
 import type * as THREE from "three";
+import { MOUSE } from "three";
 import { useConverterStore } from "../stores/converter";
 
 // Mock i18n — return key as-is
@@ -34,8 +35,12 @@ vi.mock("../components/FridgeMagnet3D", () => ({
 
 // Mock @react-three/drei — Environment renders a queryable DOM element
 // Boolean false is dropped by React DOM, so we explicitly map props to data-* attributes
+let capturedOrbitControlsProps: Record<string, unknown> = {};
 vi.mock("@react-three/drei", () => ({
-  OrbitControls: () => null,
+  OrbitControls: (props: Record<string, unknown>) => {
+    capturedOrbitControlsProps = props;
+    return null;
+  },
   Environment: (props: Record<string, unknown>) => (
     <div
       data-testid="mock-environment"
@@ -192,6 +197,7 @@ import Scene3D from "../components/Scene3D";
 describe("Scene3D", () => {
 beforeEach(() => {
     capturedCanvasProps = {};
+    capturedOrbitControlsProps = {};
     capturedInteractiveViewerProps = null;
     capturedFridgeMagnet3DProps = null;
     document.body.classList.remove("lumina-canvas-orbiting");
@@ -339,6 +345,104 @@ beforeEach(() => {
       });
 
       expect(useConverterStore.getState().selectedFridgeMagnetId).toBeNull();
+    });
+  });
+
+  describe("viewport pan gestures", () => {
+    it("maps middle/right drag to pan and temporarily maps Space+left to pan", () => {
+      render(<Scene3D />);
+
+      const defaultButtons = capturedOrbitControlsProps.mouseButtons as {
+        LEFT: number;
+        MIDDLE: number;
+        RIGHT: number;
+      };
+      expect(defaultButtons).toEqual({
+        LEFT: MOUSE.ROTATE,
+        MIDDLE: MOUSE.PAN,
+        RIGHT: MOUSE.PAN,
+      });
+
+      const container = screen.getByTestId("scene3d-container");
+      const pointerCancel = vi.fn();
+      getMockThreeState().gl.domElement.addEventListener("pointercancel", pointerCancel);
+      fireEvent.pointerEnter(container);
+      const spaceDown = new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        code: "Space",
+        key: " ",
+      });
+      act(() => {
+        window.dispatchEvent(spaceDown);
+      });
+
+      expect(spaceDown.defaultPrevented).toBe(true);
+      expect(container).toHaveAttribute("data-space-pan-active", "true");
+      expect(capturedOrbitControlsProps.mouseButtons).toEqual({
+        LEFT: MOUSE.PAN,
+        MIDDLE: MOUSE.PAN,
+        RIGHT: MOUSE.PAN,
+      });
+
+      const pointerDownAllowed = fireEvent.pointerDown(container, {
+        pointerId: 31,
+        button: 0,
+      });
+      expect(pointerDownAllowed).toBe(false);
+
+      const spaceUp = new KeyboardEvent("keyup", {
+        bubbles: true,
+        cancelable: true,
+        code: "Space",
+        key: " ",
+      });
+      act(() => {
+        window.dispatchEvent(spaceUp);
+      });
+
+      expect(spaceUp.defaultPrevented).toBe(true);
+      expect(pointerCancel).toHaveBeenCalledTimes(1);
+      expect(container).not.toHaveAttribute("data-space-pan-active");
+      expect(capturedOrbitControlsProps.mouseButtons).toEqual({
+        LEFT: MOUSE.ROTATE,
+        MIDDLE: MOUSE.PAN,
+        RIGHT: MOUSE.PAN,
+      });
+    });
+
+    it("prevents middle-button auto-scroll and clears the Space modifier on blur", () => {
+      render(<Scene3D />);
+      const container = screen.getByTestId("scene3d-container");
+
+      expect(fireEvent.mouseDown(container, { button: 1 })).toBe(false);
+      const auxClick = new MouseEvent("auxclick", {
+        bubbles: true,
+        cancelable: true,
+        button: 1,
+      });
+      expect(container.dispatchEvent(auxClick)).toBe(false);
+
+      fireEvent.pointerEnter(container);
+      act(() => {
+        window.dispatchEvent(new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          code: "Space",
+          key: " ",
+        }));
+      });
+      expect(container).toHaveAttribute("data-space-pan-active", "true");
+
+      act(() => {
+        window.dispatchEvent(new Event("blur"));
+      });
+      expect(container).not.toHaveAttribute("data-space-pan-active");
+      expect(capturedOrbitControlsProps.mouseButtons).toEqual({
+        LEFT: MOUSE.ROTATE,
+        MIDDLE: MOUSE.PAN,
+        RIGHT: MOUSE.PAN,
+      });
     });
   });
 
