@@ -89,6 +89,29 @@ describe("Slider value preservation", () => {
     expect(onChange.mock.calls.at(-1)?.[0]).toBeCloseTo(1.17, 10);
   });
 
+  it("uses an optional text normalizer for both the emitted and displayed value", () => {
+    const onChange = vi.fn();
+    render(
+      <Slider
+        label="Thickness"
+        value={0.32}
+        min={0.24}
+        max={3.44}
+        step={0.08}
+        onChange={onChange}
+        normalizeTextValue={() => 0.32}
+      />,
+    );
+
+    const text = screen.getByLabelText("Thickness value") as HTMLInputElement;
+    fireEvent.focus(text);
+    fireEvent.change(text, { target: { value: "0.36" } });
+    fireEvent.blur(text);
+
+    expect(onChange).toHaveBeenLastCalledWith(0.32);
+    expect(text).toHaveValue("0.32");
+  });
+
   it("clamps text input into [min, max]", () => {
     const onChange = vi.fn();
     render(

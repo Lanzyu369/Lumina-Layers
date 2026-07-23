@@ -839,6 +839,39 @@ describe("BasicSettings", () => {
     }
   });
 
+  it("snaps manually entered thickness to the exported 0.08mm layer grid", async () => {
+    render(<BasicSettings />);
+
+    const input = screen.getByRole("textbox", { name: "厚度 value" });
+    fireEvent.change(input, { target: { value: "0.3" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(useConverterStore.getState().spacer_thick).toBeCloseTo(0.32, 10);
+    expect(useConverterStore.getState().base_spacer_thick).toBeCloseTo(0.32, 10);
+    await waitFor(() => expect(input).toHaveValue("0.32"));
+
+    fireEvent.change(input, { target: { value: "0.36" } });
+    fireEvent.blur(input);
+
+    expect(useConverterStore.getState().spacer_thick).toBeCloseTo(0.32, 10);
+    expect(useConverterStore.getState().base_spacer_thick).toBeCloseTo(0.32, 10);
+    await waitFor(() => expect(input).toHaveValue("0.32"));
+
+    fireEvent.change(input, { target: { value: "1.88" } });
+    fireEvent.blur(input);
+
+    expect(useConverterStore.getState().spacer_thick).toBeCloseTo(1.84, 10);
+    expect(useConverterStore.getState().base_spacer_thick).toBeCloseTo(1.84, 10);
+    await waitFor(() => expect(input).toHaveValue("1.84"));
+
+    fireEvent.change(input, { target: { value: "2.36" } });
+    fireEvent.blur(input);
+
+    expect(useConverterStore.getState().spacer_thick).toBeCloseTo(2.32, 10);
+    expect(useConverterStore.getState().base_spacer_thick).toBeCloseTo(2.32, 10);
+    await waitFor(() => expect(input).toHaveValue("2.32"));
+  });
+
   it("disables structure and large-format controls while fridge mode is enabled", () => {
     useConverterStore.setState({
       enable_fridge_magnet: true,

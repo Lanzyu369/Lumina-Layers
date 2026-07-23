@@ -104,6 +104,22 @@ function localizeLargeFormatWarning(
   return warning;
 }
 
+function snapThicknessToLayerGrid(value: number): number {
+  const clamped = Math.min(
+    THICKNESS_SLIDER_MAX_MM,
+    Math.max(THICKNESS_SLIDER_MIN_MM, value),
+  );
+  const scaledLayerCount = clamped / THICKNESS_LAYER_STEP_MM;
+  const lowerLayerCount = Math.floor(scaledLayerCount);
+  // Match Python round() in the generation pipeline: exact half layers tie to even.
+  // 与生成管线的 Python round() 保持一致：正好半层时取最近的偶数层。
+  const isHalfLayer = scaledLayerCount - lowerLayerCount === 0.5;
+  const layerCount = isHalfLayer
+    ? lowerLayerCount + (lowerLayerCount % 2)
+    : Math.round(scaledLayerCount);
+  return Number((layerCount * THICKNESS_LAYER_STEP_MM).toFixed(2));
+}
+
 function hasApiErrorResponse(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && "response" in error);
 }
@@ -1354,6 +1370,7 @@ export default function BasicSettings() {
         step={THICKNESS_LAYER_STEP_MM}
         unit="mm"
         onChange={setSpacerThick}
+        normalizeTextValue={snapThicknessToLayerGrid}
       />
 
       <RadioGroup
