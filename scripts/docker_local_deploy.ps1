@@ -5,6 +5,8 @@ param(
     [string]$MaterialsSeedPath = "",
     [string]$MaterialsSeedUrl = "",
     [string]$MaterialsSeedSha256 = "",
+    [string]$MaterialRegistryUrl = "",
+    [string]$MaterialRegistryChannels = "",
     [string]$ImageName = "lumina-layers:local-latest",
     [string]$ContainerName = "lumina-layers-local",
     [string]$PublicHost = "localhost",
@@ -92,11 +94,46 @@ function Read-EnvFile {
     return $values
 }
 
+function Resolve-ConfiguredEnvironmentValue {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [string]$Override = "",
+        [Parameter(Mandatory = $true)][hashtable]$EnvFileValues
+    )
+
+    if ($Override.Trim()) {
+        return $Override.Trim()
+    }
+    if ($EnvFileValues.ContainsKey($Name) -and $EnvFileValues[$Name]) {
+        return [string]$EnvFileValues[$Name]
+    }
+    $processValue = [Environment]::GetEnvironmentVariable($Name, "Process")
+    if ($processValue) {
+        return $processValue
+    }
+    return ""
+}
+
 if (-not $RepoRoot.Trim()) {
     $RepoRoot = (Resolve-Path (Join-Path $ScriptDir "..")).Path
 }
 $RepoRoot = (Resolve-Path $RepoRoot).Path
 $localEnv = Read-EnvFile (Join-Path $RepoRoot ".env.local")
+$resolvedMaterialRegistryUrl = Resolve-ConfiguredEnvironmentValue `
+    -Name "LUMINA_MATERIAL_REGISTRY_URL" `
+    -Override $MaterialRegistryUrl `
+    -EnvFileValues $localEnv
+$resolvedMaterialRegistryChannels = Resolve-ConfiguredEnvironmentValue `
+    -Name "LUMINA_MATERIAL_REGISTRY_CHANNELS" `
+    -Override $MaterialRegistryChannels `
+    -EnvFileValues $localEnv
+if (
+    $resolvedMaterialRegistryUrl -and
+    -not $resolvedMaterialRegistryUrl.StartsWith("http://") -and
+    -not $resolvedMaterialRegistryUrl.StartsWith("https://")
+) {
+    throw "MaterialRegistryUrl must be http:// or https://."
+}
 $RuntimeRoot = Ensure-Directory $RuntimeRoot
 $outputDir = Ensure-Directory (Join-Path $RuntimeRoot "output")
 $logsDir = Ensure-Directory (Join-Path $RuntimeRoot "logs")
@@ -211,6 +248,35 @@ if ($MaterialsSeedSha256.Trim()) {
     $runArgs += @("-e", "LUMINA_MATERIALS_SEED_SHA256=$MaterialsSeedSha256")
 }
 
+$containerEnvValues = @{}
+$materialRegistryEnvOverrides = @{
+    "LUMINA_MATERIAL_REGISTRY_URL" = $resolvedMaterialRegistryUrl
+    "LUMINA_MATERIAL_REGISTRY_CHANNELS" = $resolvedMaterialRegistryChannels
+}
+$materialRegistryEnvKeys = @(
+    "LUMINA_MATERIAL_REGISTRY_URL",
+    "LUMINA_MATERIAL_REGISTRY_CHANNELS",
+    "LUMINA_MATERIAL_REGISTRY_TOKEN",
+    "LUMINA_MATERIAL_REGISTRY_TIMEOUT_S",
+    "LUMINA_MATERIAL_SYNC_STARTUP_REFRESH",
+    "LUMINA_MATERIAL_SYNC_REFRESH_INTERVAL_S"
+)
+foreach ($key in $materialRegistryEnvKeys) {
+    $override = if ($materialRegistryEnvOverrides.ContainsKey($key)) {
+        [string]$materialRegistryEnvOverrides[$key]
+    }
+    else {
+        ""
+    }
+    $value = Resolve-ConfiguredEnvironmentValue `
+        -Name $key `
+        -Override $override `
+        -EnvFileValues $localEnv
+    if ($value) {
+        $containerEnvValues[$key] = $value
+    }
+}
+
 $feedbackEnvKeys = @(
     "LUMINA_FEEDBACK_SMTP_HOST",
     "LUMINA_FEEDBACK_SMTP_PORT",
@@ -226,12 +292,36 @@ $feedbackEnvKeys = @(
 )
 foreach ($key in $feedbackEnvKeys) {
     if ($localEnv.ContainsKey($key) -and $localEnv[$key]) {
-        $runArgs += @("-e", "${key}=$($localEnv[$key])")
+        $containerEnvValues[$key] = [string]$localEnv[$key]
     }
 }
 
-$runArgs += $ImageName
-Invoke-Checked "docker" $runArgs
+$previousProcessEnv = @{}
+try {
+    foreach ($key in $containerEnvValues.Keys) {
+        $previousProcessEnv[$key] = [Environment]::GetEnvironmentVariable(
+            $key,
+            "Process"
+        )
+        [Environment]::SetEnvironmentVariable(
+            $key,
+            [string]$containerEnvValues[$key],
+            "Process"
+        )
+        $runArgs += @("-e", $key)
+    }
+    $runArgs += $ImageName
+    Invoke-Checked "docker" $runArgs
+}
+finally {
+    foreach ($key in $previousProcessEnv.Keys) {
+        [Environment]::SetEnvironmentVariable(
+            $key,
+            $previousProcessEnv[$key],
+            "Process"
+        )
+    }
+}
 
 Write-Host ""
 Write-Host "Lumina local Docker deployment started."
@@ -253,6 +343,18 @@ Write-Host "Workers       : max=$MaxWorkers recycle=$WorkerMaxTasksPerChild aren
 Write-Host "Cache budget  : ${SolverCacheBuildMemoryLimitMb}MB"
 Write-Host "GLB kernel   : $GlbKernel"
 Write-Host "Vector GLB   : $VectorGlbKernel"
+if ($resolvedMaterialRegistryUrl) {
+    $registryChannels = if ($resolvedMaterialRegistryChannels) {
+        $resolvedMaterialRegistryChannels
+    }
+    else {
+        "official"
+    }
+    Write-Host "Registry     : $resolvedMaterialRegistryUrl ($registryChannels)"
+}
+else {
+    Write-Host "Registry     : <not configured>"
+}
 Write-Host ""
 Write-Host "Useful commands:"
 Write-Host "  docker logs -f $ContainerName"

@@ -75,6 +75,30 @@ def test_local_docker_deploy_accepts_optional_material_seed() -> None:
     assert "lumina-materials-seed.zip" in dockerfile
 
 
+def test_local_docker_deploy_forwards_material_registry_configuration() -> None:
+    deploy_script = _read_repo_text("scripts/docker_local_deploy.ps1")
+    auto_update_script = _read_repo_text("scripts/docker_auto_update.ps1")
+
+    assert '[string]$MaterialRegistryUrl = ""' in deploy_script
+    assert '[string]$MaterialRegistryChannels = ""' in deploy_script
+    for key in (
+        "LUMINA_MATERIAL_REGISTRY_URL",
+        "LUMINA_MATERIAL_REGISTRY_CHANNELS",
+        "LUMINA_MATERIAL_REGISTRY_TOKEN",
+        "LUMINA_MATERIAL_REGISTRY_TIMEOUT_S",
+        "LUMINA_MATERIAL_SYNC_STARTUP_REFRESH",
+        "LUMINA_MATERIAL_SYNC_REFRESH_INTERVAL_S",
+    ):
+        assert f'"{key}"' in deploy_script
+    assert '$runArgs += @("-e", $key)' in deploy_script
+    assert "LUMINA_MATERIAL_REGISTRY_TOKEN=$" not in deploy_script
+
+    assert '[string]$MaterialRegistryUrl = ""' in auto_update_script
+    assert '[string]$MaterialRegistryChannels = ""' in auto_update_script
+    assert '"-MaterialRegistryUrl", $MaterialRegistryUrl' in auto_update_script
+    assert '"-MaterialRegistryChannels", $MaterialRegistryChannels' in auto_update_script
+
+
 def test_local_docker_serves_built_frontend_dist_on_public_port() -> None:
     dockerfile = _read_repo_text("Dockerfile")
     deploy_script = _read_repo_text("scripts/docker_local_deploy.ps1")

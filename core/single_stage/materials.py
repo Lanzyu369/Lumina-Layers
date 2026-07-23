@@ -34,7 +34,17 @@ _MATERIAL_REGISTRY_REFRESH_PACKAGE_FAILURE_DETAIL = (
     "Material registry package could not be installed. "
     "Check the package and try refreshing again."
 )
+_MATERIAL_REGISTRY_AMBIGUOUS_REVISION_FAILURE_DETAIL = (
+    "ambiguous_revision: Registry returned multiple revisions for one material; "
+    "automatic installation was skipped."
+)
+_MATERIAL_REGISTRY_AMBIGUOUS_LOCAL_MATCH_FAILURE_DETAIL = (
+    "ambiguous_local_match: Multiple local materials have the same Registry signature; "
+    "automatic installation was skipped."
+)
 _MATERIAL_REGISTRY_REFRESH_PUBLIC_ERROR_PREFIXES = {
+    "ambiguous_revision:": _MATERIAL_REGISTRY_AMBIGUOUS_REVISION_FAILURE_DETAIL,
+    "ambiguous_local_match:": _MATERIAL_REGISTRY_AMBIGUOUS_LOCAL_MATCH_FAILURE_DETAIL,
     "Material registry package exceeds maximum size": (
         "Material registry package exceeds maximum size."
     ),
@@ -1994,6 +2004,22 @@ def _local_material_sync_entries(target_root: Path) -> list[dict[str, Any]]:
     return entries
 
 
+def _local_material_paths_by_sync_signature(
+    target_root: Path,
+) -> dict[tuple[str, str], list[Path]]:
+    paths_by_signature: dict[tuple[str, str], list[Path]] = {}
+    for entry in _local_material_sync_entries(target_root):
+        signature = _material_sync_signature(entry)
+        local_directory = str(entry.get("local_directory") or "")
+        if signature is None or not local_directory:
+            continue
+        material_dir = target_root / Path(local_directory)
+        paths_by_signature.setdefault(signature, []).append(material_dir)
+    for material_paths in paths_by_signature.values():
+        material_paths.sort(key=lambda path: str(path).casefold())
+    return paths_by_signature
+
+
 def _material_sync_status_cache_key(target_root: Path) -> str:
     try:
         return str(target_root.resolve())
@@ -2286,6 +2312,7 @@ def _record_material_sync_entries(
     *,
     target_root: Path,
     installed_packages: list[tuple[dict[str, Any], Path]],
+    source: str = "package",
 ) -> None:
     if not installed_packages:
         return
@@ -2315,7 +2342,7 @@ def _record_material_sync_entries(
             "revision_id": str(package["revision_id"]),
             "content_hash": str(package["content_hash"]),
             "channel": str(package.get("channel") or "manual"),
-            "source": "package",
+            "source": source,
             "local_directory": _relative_directory_name(target_root, destination_dir),
             "display_brand": str(display.get("brand") or ""),
             "display_name": str(display.get("material_name") or destination_dir.name),
@@ -2326,6 +2353,57 @@ def _record_material_sync_entries(
         installed[material_id] = next_entry
     index["last_sync_at"] = now
     _write_material_sync_index(target_root, index)
+
+
+def _adopt_existing_local_material_bundle_revision(
+    *,
+    target_root: Path,
+    package: dict[str, Any],
+    local_paths_by_signature: dict[tuple[str, str], list[Path]],
+) -> Path | None:
+    signature = _material_sync_signature(package)
+    if signature is None:
+        return None
+    candidate_paths = local_paths_by_signature.get(signature, [])
+    if not candidate_paths:
+        return None
+    if len(candidate_paths) > 1:
+        raise ValueError(_MATERIAL_REGISTRY_AMBIGUOUS_LOCAL_MATCH_FAILURE_DETAIL)
+
+    material_id = str(package.get("material_id") or "")
+    index = _load_material_sync_index(target_root)
+    installed = index.get("installed")
+    if isinstance(installed, dict):
+        for indexed_material_id, raw_entry in installed.items():
+            if str(indexed_material_id) == material_id or not isinstance(raw_entry, dict):
+                continue
+            if _material_sync_signature(raw_entry) == signature:
+                raise ValueError(_MATERIAL_REGISTRY_AMBIGUOUS_LOCAL_MATCH_FAILURE_DETAIL)
+
+    candidate_path = candidate_paths[0]
+    try:
+        local_package, _files_to_write = _build_material_bundle_package_manifest(
+            target_root=target_root,
+            material_dir=candidate_path,
+        )
+    except (
+        FileNotFoundError,
+        OSError,
+        TypeError,
+        ValueError,
+        json.JSONDecodeError,
+        UnicodeDecodeError,
+    ):
+        return None
+    if _material_sync_signature(local_package) != signature:
+        return None
+
+    _record_material_sync_entries(
+        target_root=target_root,
+        installed_packages=[(package, candidate_path)],
+        source="registry_adopted",
+    )
+    return candidate_path
 
 
 def _record_material_registry_refresh(
@@ -5419,6 +5497,19 @@ def refresh_material_sync_from_registry(
             except ValueError as exc:
                 raise ValueError("Material registry catalog response is invalid") from exc
 
+            revisions_by_material: dict[str, set[str]] = {}
+            for entry in catalog_entries:
+                material_id = str(entry.get("material_id") or "").strip()
+                revision_id = str(entry.get("revision_id") or "").strip()
+                if material_id and revision_id:
+                    revisions_by_material.setdefault(material_id, set()).add(revision_id)
+            ambiguous_material_ids = {
+                material_id
+                for material_id, revision_ids in revisions_by_material.items()
+                if len(revision_ids) > 1
+            }
+            local_paths_by_signature = _local_material_paths_by_sync_signature(target_root)
+
             installed_materials: list[dict[str, Any]] = []
             failures: list[dict[str, str]] = []
             skipped_count = 0
@@ -5441,6 +5532,19 @@ def refresh_material_sync_from_registry(
                         },
                         include_revision_history=True,
                     ) is not None:
+                        skipped_count += 1
+                        continue
+                    if material_id in ambiguous_material_ids:
+                        raise ValueError(
+                            _MATERIAL_REGISTRY_AMBIGUOUS_REVISION_FAILURE_DETAIL
+                        )
+
+                    adopted_path = _adopt_existing_local_material_bundle_revision(
+                        target_root=target_root,
+                        package=entry,
+                        local_paths_by_signature=local_paths_by_signature,
+                    )
+                    if adopted_path is not None:
                         skipped_count += 1
                         continue
 
