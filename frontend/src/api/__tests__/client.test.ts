@@ -140,6 +140,22 @@ describe("apiClient", () => {
     expect(useActionHistoryStore.getState().history).toHaveLength(0);
   });
 
+  it("keeps intentional request cancellation out of client error diagnostics", async () => {
+    const error = Object.assign(new Error("canceled"), {
+      name: "CanceledError",
+      code: "ERR_CANCELED",
+      __CANCEL__: true,
+      config: { method: "post", url: "/convert/preview" },
+    });
+    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+    await expect(apiClient.post("/convert/preview", {})).rejects.toBe(error);
+
+    expect(error.message).toBe("canceled");
+    expect(postClientLog).not.toHaveBeenCalled();
+    expect(useActionHistoryStore.getState().history).toHaveLength(0);
+  });
+
   it("turns FastAPI validation details into a readable rejected message", async () => {
     const error = new Error("Request failed with status code 422");
     Object.assign(error, {

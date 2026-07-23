@@ -268,6 +268,57 @@ describe('矢量化 SVG 导入', () => {
     expect(state.previewWarnings).toEqual([]);
   });
 
+  it.each([
+    ['首次', false, null],
+    ['既有', true, 'established-session'],
+  ])('%s预览请求保持自动刷新资格，允许参数变化取消在途请求', async (
+    _label,
+    initialManualPreview,
+    initialSessionId,
+  ) => {
+    let resolvePreview!: (value: Awaited<ReturnType<typeof convertPreview>>) => void;
+    mockConvertPreview.mockImplementation(
+      () => new Promise((resolve) => {
+        resolvePreview = resolve;
+      }),
+    );
+    useConverterStore.setState({
+      imageFile: new File(['old'], 'old.png', { type: 'image/png' }),
+      source_version: 'legacy',
+      lut_name: 'test-lut',
+      lut_names: ['test-lut'],
+      cropModalOpen: false,
+      hasManualPreview: initialManualPreview,
+      sessionId: initialSessionId,
+      previewImageUrl: initialSessionId
+        ? '/api/files/established-preview'
+        : null,
+    });
+
+    const previewPromise = useConverterStore.getState().submitPreview();
+
+    expect(useConverterStore.getState().isLoading).toBe(true);
+    expect(useConverterStore.getState().hasManualPreview).toBe(true);
+
+    useConverterStore.getState().invalidatePreviewForAutoRefresh();
+    resolvePreview({
+      session_id: 'obsolete-session',
+      status: 'ok',
+      message: 'obsolete',
+      preview_url: '/api/files/obsolete-preview',
+      preview_glb_url: '/api/files/obsolete-glb',
+      palette: [],
+      dimensions: { width: 10, height: 10 },
+      warnings: [],
+    });
+    await previewPromise;
+
+    const finalState = useConverterStore.getState();
+    expect(finalState.sessionId).toBeNull();
+    expect(finalState.previewImageUrl).toBeNull();
+    expect(finalState.previewGlbUrl).toBeNull();
+  });
+
   it('setImageFile 保持通用入口原有裁剪行为', () => {
     const svgFile = new File(['<svg/>'], 'manual.svg', {
       type: 'image/svg+xml',

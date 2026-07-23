@@ -865,6 +865,9 @@ export async function assertResourceDownloadAvailable(
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
+    if (axios.isCancel(error) || error?.code === "ERR_CANCELED") {
+      return Promise.reject(error);
+    }
     const response = error?.response;
     const config = error?.config;
     const suppressClientLog = config?.suppressClientLog === true;
