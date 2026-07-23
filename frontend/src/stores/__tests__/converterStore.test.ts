@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useConverterStore } from '../../stores/converter';
-import { DEFAULT_STATE } from '../../stores/converter';
+import { CONVERTER_ERROR_KEYS, DEFAULT_STATE } from '../../stores/converter';
 import { ColorMode, ModelingMode, StructureMode } from '../../api/types';
 import { uploadImagePreview } from '../../api/system';
 
@@ -155,7 +155,9 @@ describe('submitGenerate 浮雕验证', () => {
     const result = await useConverterStore.getState().submitGenerate();
 
     expect(result).toBeNull();
-    expect(useConverterStore.getState().error).toBe('请先上传高度图并获取高度映射后再生成');
+    expect(useConverterStore.getState().error).toBe(
+      CONVERTER_ERROR_KEYS.heightmapUploadRequired,
+    );
     expect(useConverterStore.getState().isLoading).toBe(false);
   });
 
@@ -175,7 +177,7 @@ describe('submitGenerate 浮雕验证', () => {
     // It should have attempted the API call (error will be from network, not validation)
     const error = useConverterStore.getState().error;
     expect(error).not.toBe('请先设置颜色高度映射后再生成');
-    expect(error).not.toBe('请先上传高度图并获取高度映射后再生成');
+    expect(error).not.toBe(CONVERTER_ERROR_KEYS.heightmapUploadRequired);
   });
 
   it('enable_relief 为 false 时不检查 color_height_map', async () => {
@@ -189,7 +191,7 @@ describe('submitGenerate 浮雕验证', () => {
 
     const error = useConverterStore.getState().error;
     expect(error).not.toBe('请先设置颜色高度映射后再生成');
-    expect(error).not.toBe('请先上传高度图并获取高度映射后再生成');
+    expect(error).not.toBe(CONVERTER_ERROR_KEYS.heightmapUploadRequired);
   });
 });
 

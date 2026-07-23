@@ -801,7 +801,7 @@ export default function ActionBar() {
       )}
 
       {error && (
-        <div className="text-xs text-red-500 dark:text-red-400">{error}</div>
+        <div className="text-xs text-red-500 dark:text-red-400">{t(error)}</div>
       )}
 
       <BedSizeSelector />

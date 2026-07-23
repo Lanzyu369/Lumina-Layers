@@ -221,6 +221,18 @@ function visibleConverterError(error: unknown, fallback: string): string {
   return apiErrorToVisibleMessage(error, fallback);
 }
 
+export const CONVERTER_ERROR_KEYS = {
+  heightmapUploadRequired: "relief_heightmap_generate_requires_upload",
+} as const;
+
+function clearedHeightmapUploadState() {
+  return {
+    heightmapThumbnailUrl: null,
+    color_height_map: {},
+    heightmapUploadSessionId: null,
+  };
+}
+
 function rawPreviewFailureMessage(error: unknown): string {
   const detail = visibleConverterError(error, tRuntime("api_error_http_default"));
   return tRuntime("converter_raw_preview_failed", { error: detail });
@@ -1494,6 +1506,7 @@ export interface ConverterState {
   autoHeightMode: AutoHeightMode;
   heightmapFile: File | null;
   heightmapThumbnailUrl: string | null;
+  heightmapUploadSessionId: string | null;
 
   // 3D 预览
   previewGlbUrl: string | null;
@@ -2387,6 +2400,7 @@ export const DEFAULT_STATE: ConverterState = {
   autoHeightMode: "darker-higher" as AutoHeightMode,
   heightmapFile: null,
   heightmapThumbnailUrl: null,
+  heightmapUploadSessionId: null,
   previewGlbUrl: null,
   previewPerformanceTiming: null,
   generatePerformanceTiming: null,
@@ -5308,33 +5322,48 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       set({ color_height_map: heightMap });
     },
 
-    setAutoHeightMode: (mode: AutoHeightMode) => set({ autoHeightMode: mode }),
+    setAutoHeightMode: (mode: AutoHeightMode) =>
+      set((state) => ({
+        autoHeightMode: mode,
+        ...(mode === "use-heightmap" && state.autoHeightMode !== "use-heightmap"
+          ? clearedHeightmapUploadState()
+          : {}),
+      })),
 
     // --- 高度图 ---
-    setHeightmapFile: (file: File | null) => set({ heightmapFile: file }),
+    setHeightmapFile: (file: File | null) =>
+      set({
+        ...clearedHeightmapUploadState(),
+        heightmapFile: file,
+        isLoading: false,
+      }),
 
     uploadHeightmap: async () => {
       const state = _get();
-      const clearHeightmapUploadState = {
-        heightmapThumbnailUrl: null,
-        color_height_map: {},
-      };
       if (!state.heightmapFile || !state.sessionId) {
         set({
-          ...clearHeightmapUploadState,
+          ...clearedHeightmapUploadState(),
           error: "请先上传高度图文件并完成预览",
         });
         return;
       }
       const requestedSessionId = state.sessionId;
+      const requestedHeightmapFile = state.heightmapFile;
+      const isCurrentHeightmapUpload = () => {
+        const currentState = _get();
+        return (
+          currentState.sessionId === requestedSessionId &&
+          currentState.heightmapFile === requestedHeightmapFile
+        );
+      };
       set({ isLoading: true, error: null });
       try {
         const response = await apiUploadHeightmap(
-          state.heightmapFile,
+          requestedHeightmapFile,
           requestedSessionId,
           state.heightmap_max_height,
         );
-        if (_get().sessionId !== requestedSessionId) {
+        if (!isCurrentHeightmapUpload()) {
           return;
         }
         const thumbnailUrl = `${response.thumbnail_url}`;
@@ -5342,13 +5371,14 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           isLoading: false,
           heightmapThumbnailUrl: thumbnailUrl,
           color_height_map: response.color_height_map,
+          heightmapUploadSessionId: requestedSessionId,
         });
       } catch (err) {
-        if (_get().sessionId !== requestedSessionId) {
+        if (!isCurrentHeightmapUpload()) {
           return;
         }
         set({
-          ...clearHeightmapUploadState,
+          ...clearedHeightmapUploadState(),
           isLoading: false,
           error: visibleConverterError(err, "Heightmap upload failed"),
         });
@@ -6227,7 +6257,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           },
           palette: normalizedPalette,
           ...(shouldResetHeightmapMapping
-            ? { color_height_map: {}, heightmapThumbnailUrl: null }
+            ? clearedHeightmapUploadState()
             : autoReliefHeightMap
               ? { color_height_map: autoReliefHeightMap }
               : {}),
@@ -6399,6 +6429,17 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         set({ color_height_map: autoReliefHeightMap });
         state = _get();
       }
+      const hasCurrentHeightmapUpload =
+        state.heightmapUploadSessionId === sessionId &&
+        Object.keys(state.color_height_map).length > 0;
+      if (
+        state.enable_relief &&
+        state.autoHeightMode === "use-heightmap" &&
+        !hasCurrentHeightmapUpload
+      ) {
+        set({ error: CONVERTER_ERROR_KEYS.heightmapUploadRequired });
+        return null;
+      }
       // Requirement 10.4: enable_relief 为 true 且 color_height_map 为空时阻止生成
       if (
         state.enable_relief &&
@@ -6406,7 +6447,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       ) {
         // Requirement 10.3: 高度图模式时给出更具体的提示
         if (state.autoHeightMode === "use-heightmap") {
-          set({ error: "请先上传高度图并获取高度映射后再生成" });
+          set({ error: CONVERTER_ERROR_KEYS.heightmapUploadRequired });
         } else {
           set({ error: "请先设置颜色高度映射后再生成" });
         }
