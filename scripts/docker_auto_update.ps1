@@ -74,9 +74,15 @@ function Invoke-Deploy {
         "-RepoRoot", $RepoRoot,
         "-RuntimeRoot", $RuntimeRoot,
         "-ImageName", $ImageName,
-        "-ContainerName", $ContainerName,
-        "-MaterialRegistryUrl", $MaterialRegistryUrl,
-        "-MaterialRegistryChannels", $MaterialRegistryChannels,
+        "-ContainerName", $ContainerName
+    )
+    if ($MaterialRegistryUrl.Trim()) {
+        $deployArgs += @("-MaterialRegistryUrl", $MaterialRegistryUrl)
+    }
+    if ($MaterialRegistryChannels.Trim()) {
+        $deployArgs += @("-MaterialRegistryChannels", $MaterialRegistryChannels)
+    }
+    $deployArgs += @(
         "-PublicHost", $PublicHost,
         "-PublicFrontendPort", $PublicFrontendPort,
         "-PublicBackendPort", $PublicBackendPort,

@@ -7,7 +7,11 @@ through PowerShell deployment scripts.
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -95,8 +99,54 @@ def test_local_docker_deploy_forwards_material_registry_configuration() -> None:
 
     assert '[string]$MaterialRegistryUrl = ""' in auto_update_script
     assert '[string]$MaterialRegistryChannels = ""' in auto_update_script
-    assert '"-MaterialRegistryUrl", $MaterialRegistryUrl' in auto_update_script
-    assert '"-MaterialRegistryChannels", $MaterialRegistryChannels' in auto_update_script
+    assert "if ($MaterialRegistryUrl.Trim())" in auto_update_script
+    assert (
+        '$deployArgs += @("-MaterialRegistryUrl", $MaterialRegistryUrl)'
+        in auto_update_script
+    )
+    assert "if ($MaterialRegistryChannels.Trim())" in auto_update_script
+    assert (
+        '$deployArgs += @("-MaterialRegistryChannels", $MaterialRegistryChannels)'
+        in auto_update_script
+    )
+
+
+def test_local_docker_deploy_accepts_omitted_registry_overrides(
+    tmp_path: Path,
+) -> None:
+    powershell = shutil.which("powershell")
+    if powershell is None:
+        pytest.skip("Windows PowerShell is not available")
+
+    runtime_root = tmp_path / "runtime"
+    lut_preset_root = runtime_root / "lut-preset"
+    lut_preset_root.mkdir(parents=True)
+    lut_preset_root.joinpath(".test-seed").write_text("seeded", encoding="utf-8")
+    completed = subprocess.run(
+        [
+            powershell,
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(ROOT / "scripts" / "docker_local_deploy.ps1"),
+            "-RepoRoot",
+            str(ROOT),
+            "-RuntimeRoot",
+            str(runtime_root),
+            "-SkipBuild",
+            "-NoStart",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert (runtime_root / "user_settings.json").is_file()
 
 
 def test_local_docker_serves_built_frontend_dist_on_public_port() -> None:

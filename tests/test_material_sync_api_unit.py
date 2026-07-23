@@ -1890,6 +1890,96 @@ def test_refresh_material_sync_from_registry_adopts_exact_local_material(
     assert installed["source"] == "registry_adopted"
 
 
+@pytest.mark.parametrize(
+    "material_order",
+    [
+        ("mat_a", "mat_b"),
+        ("mat_b", "mat_a"),
+    ],
+)
+def test_refresh_material_sync_from_registry_rejects_ambiguous_catalog_adoption(
+    tmp_path: Path,
+    material_order: tuple[str, str],
+) -> None:
+    materials_root = tmp_path / "materials"
+    package_path = tmp_path / "material_package.zip"
+    content_hash = _write_v2_material_package(
+        package_path,
+        material_id="mat_source",
+        revision_id="rev_source",
+    )
+    local_material_dir = materials_root / "BrandA" / "pla-basic"
+    local_material_dir.mkdir(parents=True)
+    with zipfile.ZipFile(package_path, "r") as archive:
+        local_material_dir.joinpath("material.json").write_bytes(
+            archive.read("materials/BrandA/pla-basic/material.json")
+        )
+        local_material_dir.joinpath("stage_A_parameters.json").write_bytes(
+            archive.read("materials/BrandA/pla-basic/stage_A_parameters.json")
+        )
+    original_payloads = {
+        path.name: path.read_bytes()
+        for path in local_material_dir.iterdir()
+        if path.is_file()
+    }
+    requested_paths: list[str] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        requested_paths.append(request.url.path)
+        if request.url.path == "/v1/materials/catalog":
+            return httpx.Response(
+                200,
+                json={
+                    "schema_version": "1.0",
+                    "materials": [
+                        {
+                            "material_id": material_id,
+                            "revision_id": f"rev_{material_id[-1]}",
+                            "content_hash": content_hash,
+                            "channel": "official",
+                            "local_directory": "BrandA/pla-basic",
+                            "package_url": f"/v1/packages/{material_id}.zip",
+                            "package_sha256": "a" * 64,
+                        }
+                        for material_id in material_order
+                    ],
+                },
+            )
+        return httpx.Response(500, content=b"package download must not run")
+
+    result = refresh_material_sync_from_registry(
+        registry_url="https://registry.test/v1",
+        materials_dir=str(materials_root),
+        transport=httpx.MockTransport(_handler),
+    )
+
+    assert result["checked_count"] == 2
+    assert result["installed_count"] == 0
+    assert result["skipped_count"] == 0
+    assert result["failed_count"] == 2
+    assert {failure["material_id"] for failure in result["failures"]} == {
+        "mat_a",
+        "mat_b",
+    }
+    assert all(
+        failure["error"].startswith("ambiguous_local_match:")
+        for failure in result["failures"]
+    )
+    assert requested_paths == ["/v1/materials/catalog"]
+    assert {
+        path.name: path.read_bytes()
+        for path in local_material_dir.iterdir()
+        if path.is_file()
+    } == original_payloads
+    index = json.loads((materials_root / "_sync" / "index.json").read_text("utf-8"))
+    assert index["installed"] == {}
+    registry_state = index["registries"]["https://registry.test/v1"]
+    assert registry_state["checked_count"] == 2
+    assert registry_state["installed_count"] == 0
+    assert registry_state["skipped_count"] == 0
+    assert registry_state["failed_count"] == 2
+
+
 def test_refresh_material_sync_from_registry_preserves_modified_local_material(
     tmp_path: Path,
 ) -> None:

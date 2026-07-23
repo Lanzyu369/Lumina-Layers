@@ -39,8 +39,8 @@ _MATERIAL_REGISTRY_AMBIGUOUS_REVISION_FAILURE_DETAIL = (
     "automatic installation was skipped."
 )
 _MATERIAL_REGISTRY_AMBIGUOUS_LOCAL_MATCH_FAILURE_DETAIL = (
-    "ambiguous_local_match: Multiple local materials have the same Registry signature; "
-    "automatic installation was skipped."
+    "ambiguous_local_match: Local content cannot be matched to one Registry material "
+    "unambiguously; automatic installation was skipped."
 )
 _MATERIAL_REGISTRY_REFRESH_PUBLIC_ERROR_PREFIXES = {
     "ambiguous_revision:": _MATERIAL_REGISTRY_AMBIGUOUS_REVISION_FAILURE_DETAIL,
@@ -5508,6 +5508,20 @@ def refresh_material_sync_from_registry(
                 for material_id, revision_ids in revisions_by_material.items()
                 if len(revision_ids) > 1
             }
+            material_ids_by_signature: dict[tuple[str, str], set[str]] = {}
+            for entry in catalog_entries:
+                material_id = str(entry.get("material_id") or "").strip()
+                revision_id = str(entry.get("revision_id") or "").strip()
+                signature = _material_sync_signature(entry)
+                if material_id and revision_id and signature is not None:
+                    material_ids_by_signature.setdefault(signature, set()).add(
+                        material_id
+                    )
+            ambiguous_catalog_signatures = {
+                signature
+                for signature, material_ids in material_ids_by_signature.items()
+                if len(material_ids) > 1
+            }
             local_paths_by_signature = _local_material_paths_by_sync_signature(target_root)
 
             installed_materials: list[dict[str, Any]] = []
@@ -5537,6 +5551,14 @@ def refresh_material_sync_from_registry(
                     if material_id in ambiguous_material_ids:
                         raise ValueError(
                             _MATERIAL_REGISTRY_AMBIGUOUS_REVISION_FAILURE_DETAIL
+                        )
+                    entry_signature = _material_sync_signature(entry)
+                    if (
+                        entry_signature in ambiguous_catalog_signatures
+                        and local_paths_by_signature.get(entry_signature)
+                    ):
+                        raise ValueError(
+                            _MATERIAL_REGISTRY_AMBIGUOUS_LOCAL_MATCH_FAILURE_DETAIL
                         )
 
                     adopted_path = _adopt_existing_local_material_bundle_revision(
