@@ -329,9 +329,21 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "铺满",
     en: "Edge",
   },
+  model_surface_mode_edge_hint: {
+    zh: "让贴图覆盖到选中面的外轮廓和孔洞边缘。",
+    en: "Extend the artwork to the selected surface outline and hole edges.",
+  },
   model_surface_mode_inset: {
     zh: "内缩",
     en: "Inset",
+  },
+  model_surface_mode_inset_hint: {
+    zh: "按设定距离从选中面的边缘向内退让。",
+    en: "Keep the artwork inside the selected surface edges by the specified distance.",
+  },
+  model_surface_edge_mode: {
+    zh: "覆面边界模式",
+    en: "Overlay edge mode",
   },
   model_surface_scale: {
     zh: "贴图缩放",
@@ -352,6 +364,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   model_surface_inset: {
     zh: "内缩距离",
     en: "Inset",
+  },
+  model_surface_inset_hint: {
+    zh: "设置贴图与选中面边缘之间的退让距离，单位为毫米。",
+    en: "Set the clearance between the artwork and selected surface edges in millimetres.",
   },
   model_surface_error_select_first: {
     zh: "请先上传模型并在右侧 3D 预览中选择一个平面。",
@@ -6774,6 +6790,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   recipe_export_error_preview_load: {
     zh: "预览图已失效，请重新生成预览后再导出。",
     en: "The preview image is no longer available. Generate a new preview before exporting.",
+  },
+  recipe_export_model_surface_unavailable: {
+    zh: "模型覆面暂不支持配方导出，因为配方无法包含上传模型和选面。",
+    en: "Recipe export is unavailable for model surface overlays because the uploaded model and selected face cannot be included yet.",
   },
   recipe_export_error_unknown: {
     zh: "导出没有完成，请稍后重试。",

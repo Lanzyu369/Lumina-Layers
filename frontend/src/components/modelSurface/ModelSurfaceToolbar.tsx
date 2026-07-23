@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { useI18n } from "../../i18n/context";
+import type { ModelSurfacePlacement } from "../../stores/converter";
 import WikiTooltip from "../ui/WikiTooltip";
 import {
   CameraIcon,
@@ -107,10 +108,12 @@ export function ModelSurfaceToolbar({
   selecting,
   candidateCount,
   selectionMode,
+  placement,
   display,
   contextualPanel,
   onSetTool,
   onFitArtwork,
+  onUpdatePlacement,
   onFlipView,
   onSelectionModeChange,
   onToggleDisplay,
@@ -125,10 +128,12 @@ export function ModelSurfaceToolbar({
   selecting: boolean;
   candidateCount: number;
   selectionMode: SurfaceSelectionMode;
+  placement: ModelSurfacePlacement;
   display: ViewDisplayOptions;
   contextualPanel?: ReactNode;
   onSetTool: (tool: SurfaceTool) => void;
   onFitArtwork?: () => void;
+  onUpdatePlacement?: (updates: Partial<ModelSurfacePlacement>) => void;
   onFlipView: () => void;
   onSelectionModeChange: (mode: SurfaceSelectionMode) => void;
   onToggleDisplay: (key: keyof ViewDisplayOptions) => void;
@@ -200,6 +205,11 @@ export function ModelSurfaceToolbar({
     + (selectionMode === mode
       ? "border-blue-500/70 bg-blue-500/18 text-blue-700 dark:text-blue-200"
       : "border-slate-200/80 bg-slate-100/85 text-slate-600 hover:bg-slate-200/90 dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-300 dark:hover:bg-slate-800/80");
+  const placementModeButtonClass = (active: boolean): string =>
+    "inline-flex h-7 items-center justify-center rounded-lg px-2 text-[11px] font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-45 "
+    + (active
+      ? "bg-blue-500/20 text-blue-700 dark:text-blue-200"
+      : "text-slate-600 hover:bg-slate-200/90 dark:text-slate-300 dark:hover:bg-slate-800/80");
 
   useEffect(() => {
     const previousActiveTool = previousActiveToolRef.current;
@@ -476,6 +486,79 @@ export function ModelSurfaceToolbar({
       >
         <CameraIcon />
       </SurfaceToolButton>
+      <div
+        role="group"
+        aria-label={t("model_surface_edge_mode")}
+        className="inline-flex h-8 flex-shrink-0 items-center rounded-xl border border-slate-200/80 bg-slate-100/78 p-0.5 dark:border-slate-700/80 dark:bg-slate-900/70"
+      >
+        <WikiTooltip
+          title={t("model_surface_mode_edge")}
+          description={t("model_surface_mode_edge_hint")}
+          placement="bottom"
+          delay={0}
+          asChild
+        >
+          <button
+            type="button"
+            aria-label={t("model_surface_mode_edge")}
+            aria-pressed={placement.mode === "edge_to_edge"}
+            disabled={!canTransform || !onUpdatePlacement}
+            onClick={() => onUpdatePlacement?.({ mode: "edge_to_edge" })}
+            className={placementModeButtonClass(placement.mode === "edge_to_edge")}
+          >
+            {t("model_surface_mode_edge")}
+          </button>
+        </WikiTooltip>
+        <WikiTooltip
+          title={t("model_surface_mode_inset")}
+          description={t("model_surface_mode_inset_hint")}
+          placement="bottom"
+          delay={0}
+          asChild
+        >
+          <button
+            type="button"
+            aria-label={t("model_surface_mode_inset")}
+            aria-pressed={placement.mode === "inset"}
+            disabled={!canTransform || !onUpdatePlacement}
+            onClick={() => onUpdatePlacement?.({ mode: "inset" })}
+            className={placementModeButtonClass(placement.mode === "inset")}
+          >
+            {t("model_surface_mode_inset")}
+          </button>
+        </WikiTooltip>
+      </div>
+      <WikiTooltip
+        title={t("model_surface_inset")}
+        description={t("model_surface_inset_hint")}
+        placement="bottom"
+        delay={0}
+        asChild
+      >
+        <label className="inline-flex h-8 flex-shrink-0 items-center gap-1 rounded-xl border border-slate-200/80 bg-slate-100/78 px-2 text-[11px] font-semibold text-slate-600 dark:border-slate-700/80 dark:bg-slate-900/70 dark:text-slate-300">
+          <span>{t("model_surface_inset")}</span>
+          <input
+            type="number"
+            min="0"
+            step="0.1"
+            value={placement.inset_mm}
+            aria-label={t("model_surface_inset")}
+            disabled={
+              placement.mode !== "inset"
+              || !canTransform
+              || !onUpdatePlacement
+            }
+            onChange={(event) => {
+              const value = event.currentTarget.valueAsNumber;
+              if (Number.isFinite(value)) {
+                onUpdatePlacement?.({ inset_mm: value });
+              }
+            }}
+            className="h-6 w-14 rounded-lg border border-slate-200/80 bg-slate-50 px-1.5 text-right text-[11px] font-semibold text-slate-700 outline-none focus:border-blue-500 focus:ring-2 focus:ring-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-45 dark:border-slate-700/80 dark:bg-slate-950/70 dark:text-slate-200"
+          />
+          <span aria-hidden="true">{t("common_unit_mm")}</span>
+        </label>
+      </WikiTooltip>
     </>
   );
 

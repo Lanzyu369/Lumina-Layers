@@ -12,6 +12,7 @@ MODEL_SURFACE_DISPLAY_Z_BOUNDS_KEY = "model_surface_display_z_bounds_mm"
 MODEL_SURFACE_DISPLAY_LAYER_HEIGHTS_KEY = (
     "model_surface_display_layer_heights_mm"
 )
+MODEL_SURFACE_LOGICAL_XY_BOUNDS_KEY = "model_surface_logical_xy_bounds_mm"
 
 
 @dataclass(frozen=True)
@@ -177,23 +178,20 @@ def _pattern_to_surface_transform(
     footprint: SurfaceFootprint,
     pocket_depth_mm: float,
 ) -> np.ndarray:
-    bounds = np.asarray(pattern_scene.bounds, dtype=np.float64)
-    if bounds.shape != (2, 3) or not np.all(np.isfinite(bounds)):
-        raise ModelSurfaceError("Overlay pattern scene has invalid bounds.")
-
-    pattern_min, pattern_max = bounds
+    logical_min_x, logical_min_y, logical_max_x, logical_max_y = (
+        _pattern_xy_bounds_mm(pattern_scene)
+    )
     logical_z_min, _logical_z_max = _pattern_z_bounds_mm(pattern_scene)
-    pattern_size = pattern_max - pattern_min
-    if pattern_size[0] <= 0.0 or pattern_size[1] <= 0.0:
-        raise ModelSurfaceError("Overlay pattern scene has invalid XY size.")
+    pattern_width = logical_max_x - logical_min_x
+    pattern_height = logical_max_y - logical_min_y
 
     u_axis = np.asarray(footprint.frame.u_axis, dtype=np.float64)
     v_axis = np.asarray(footprint.frame.v_axis, dtype=np.float64)
     normal = np.asarray(footprint.frame.normal, dtype=np.float64)
     origin = np.asarray(footprint.frame.origin, dtype=np.float64)
     min_x, min_y = footprint.bounds_min
-    scale_x = float(footprint.bounds_width_mm) / float(pattern_size[0])
-    scale_y = float(footprint.bounds_height_mm) / float(pattern_size[1])
+    scale_x = float(footprint.bounds_width_mm) / pattern_width
+    scale_y = float(footprint.bounds_height_mm) / pattern_height
 
     transform = np.eye(4)
     transform[:3, 0] = u_axis * scale_x
@@ -201,8 +199,8 @@ def _pattern_to_surface_transform(
     transform[:3, 2] = normal
     transform[:3, 3] = (
         origin
-        + u_axis * (float(min_x) - scale_x * float(pattern_min[0]))
-        + v_axis * (float(min_y) - scale_y * float(pattern_min[1]))
+        + u_axis * (float(min_x) - scale_x * logical_min_x)
+        + v_axis * (float(min_y) - scale_y * logical_min_y)
         - normal * (float(pocket_depth_mm) + logical_z_min)
     )
     return transform
@@ -293,6 +291,49 @@ def _available_surface_depth_mm(
             "Unable to determine the available model thickness at the selected surface."
         )
     return min(local_depths)
+
+
+def _pattern_xy_bounds_mm(
+    pattern_scene: trimesh.Scene,
+) -> tuple[float, float, float, float]:
+    bounds = np.asarray(pattern_scene.bounds, dtype=np.float64)
+    if bounds.shape != (2, 3) or not np.all(np.isfinite(bounds)):
+        raise ModelSurfaceError("Overlay pattern scene has invalid bounds.")
+    actual_min_x = float(bounds[0, 0])
+    actual_min_y = float(bounds[0, 1])
+    actual_max_x = float(bounds[1, 0])
+    actual_max_y = float(bounds[1, 1])
+    raw_bounds = pattern_scene.metadata.get(MODEL_SURFACE_LOGICAL_XY_BOUNDS_KEY)
+    if raw_bounds is None:
+        logical_bounds = (
+            actual_min_x,
+            actual_min_y,
+            actual_max_x,
+            actual_max_y,
+        )
+    else:
+        try:
+            logical_bounds = tuple(float(value) for value in raw_bounds)
+        except (TypeError, ValueError) as exc:
+            raise ModelSurfaceError(
+                "Overlay pattern logical XY bounds are invalid."
+            ) from exc
+        if len(logical_bounds) != 4 or not np.all(np.isfinite(logical_bounds)):
+            raise ModelSurfaceError("Overlay pattern logical XY bounds are invalid.")
+
+    logical_min_x, logical_min_y, logical_max_x, logical_max_y = logical_bounds
+    if logical_max_x <= logical_min_x or logical_max_y <= logical_min_y:
+        raise ModelSurfaceError("Overlay pattern scene has invalid logical XY size.")
+    if (
+        actual_min_x < logical_min_x - 1e-9
+        or actual_min_y < logical_min_y - 1e-9
+        or actual_max_x > logical_max_x + 1e-9
+        or actual_max_y > logical_max_y + 1e-9
+    ):
+        raise ModelSurfaceError(
+            "Overlay pattern geometry exceeds its logical XY bounds."
+        )
+    return logical_bounds
 
 
 def _first_triangle_hit_distance(

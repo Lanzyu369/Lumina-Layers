@@ -7,6 +7,7 @@ from core.converter import build_image_model_context
 from core.model_surface.assembly import (
     MODEL_SURFACE_DISPLAY_LAYER_HEIGHTS_KEY,
     MODEL_SURFACE_DISPLAY_Z_BOUNDS_KEY,
+    MODEL_SURFACE_LOGICAL_XY_BOUNDS_KEY,
     OverlaySceneResult,
     apply_model_transform_to_overlay_scene,
     build_embedded_overlay_scene,
@@ -87,6 +88,12 @@ def _build_pattern_scene(ctx: dict):
         )
         pattern_scene.metadata[MODEL_SURFACE_DISPLAY_LAYER_HEIGHTS_KEY] = (
             layer_heights_mm
+        )
+        pattern_scene.metadata[MODEL_SURFACE_LOGICAL_XY_BOUNDS_KEY] = (
+            0.0,
+            0.0,
+            float(pattern_matrix.shape[2]) * float(pixel_scale),
+            float(target_h) * float(pixel_scale),
         )
         return pattern_scene
     raise ModelSurfaceError("Converter did not produce a display voxel stack.")

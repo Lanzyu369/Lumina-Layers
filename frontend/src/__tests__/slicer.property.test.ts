@@ -7,6 +7,7 @@
 import { describe, it, beforeEach, expect } from "vitest";
 import * as fc from "fast-check";
 import { resolveSelectedSlicerId } from "../stores/slicerStore";
+import type { SlicerInfo } from "../api/types";
 
 // ========== Pure mapping logic extracted from ConverterStore.submitGenerate ==========
 
@@ -399,10 +400,15 @@ describe("Property 5: 切片软件偏好恢复与回退", () => {
     "Cura",
   );
 
+  const makeSlicerInfo = (id: string): SlicerInfo => ({
+    id,
+    display_name: id,
+  });
+
   /** Arbitrary: array of slicer objects with unique ids */
   const slicerListArb = fc
     .uniqueArray(slicerIdArb, { minLength: 0, maxLength: 20, comparator: (a, b) => a === b })
-    .map((ids) => ids.map((id) => ({ id })));
+    .map((ids) => ids.map(makeSlicerInfo));
 
   it("when the configured slicer exists in the list, result prefers that slicer", () => {
     fc.assert(
@@ -415,7 +421,7 @@ describe("Property 5: 切片软件偏好恢复与回退", () => {
           if (!preferredId) return true;
           const withConfigured = slicers.some((s) => s.id === preferredId)
             ? slicers
-            : [{ id: preferredId }, ...slicers];
+            : [makeSlicerInfo(preferredId), ...slicers];
           const result = resolveSelectedSlicerId(withConfigured, lastSlicerId, slicerSoftware);
           return result === preferredId;
         }

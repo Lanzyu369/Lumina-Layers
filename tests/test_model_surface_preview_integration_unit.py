@@ -166,6 +166,90 @@ def test_preview_attaches_model_surface_config(monkeypatch, tmp_path, preview_st
         assert rendered.getpixel((90, 30))[3] == 255
 
 
+def test_vector_preview_keeps_model_surface_svg_native(tmp_path, preview_state):
+    store, _registry, pool = preview_state
+    model_path = tmp_path / "plate.stl"
+    svg_path = tmp_path / "art.svg"
+    trimesh.creation.box(extents=(20.0, 10.0, 2.0)).export(model_path)
+    svg_path.write_text(
+        """
+        <svg xmlns="http://www.w3.org/2000/svg"
+             width="40" height="20" viewBox="0 0 40 20">
+          <path d="M0 0H40V20H0Z" fill="#ff0000"/>
+        </svg>
+        """,
+        encoding="utf-8",
+    )
+    client = TestClient(app, raise_server_exceptions=False)
+
+    with model_path.open("rb") as handle:
+        upload = client.post(
+            "/api/convert/model-surface/upload",
+            files={"model": ("plate.stl", handle, "application/octet-stream")},
+        ).json()
+    selected = client.post(
+        "/api/convert/model-surface/select",
+        json={
+            "model_file_id": upload["model_file_id"],
+            "hit": {"candidate_id": upload["surface_candidates"][0]["id"]},
+        },
+    ).json()
+
+    submitted_paths: list[str] = []
+
+    async def fake_submit(_fn, *args):
+        submitted_paths.append(str(args[0]))
+        return _fake_worker_result(tmp_path)
+
+    pool.submit = AsyncMock(side_effect=fake_submit)
+
+    with (
+        patch(
+            "api.routers.converter.preview.LUTManager.resolve_source_selection",
+            return_value=("/tmp/fake.npy", "Fake LUT"),
+        ),
+        patch(
+            "api.routers.converter.preview.generate_segmented_glb",
+            return_value=None,
+        ),
+    ):
+        with svg_path.open("rb") as handle:
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": ("art.svg", handle, "image/svg+xml")},
+                data={
+                    "lut_name": "default",
+                    "target_width_mm": "20",
+                    "color_mode": "4-Color (RYBW)",
+                    "modeling_mode": "vector",
+                    "quantize_colors": "8",
+                    "enable_cleanup": "true",
+                    "surface_model_file_id": upload["model_file_id"],
+                    "surface_selection_json": json.dumps(selected["selection"]),
+                    "surface_footprint_json": json.dumps(selected["footprint"]),
+                    "surface_placement_json": json.dumps(
+                        {
+                            "mode": "edge_to_edge",
+                            "offset_x_mm": 0,
+                            "offset_y_mm": 0,
+                            "scale": 1,
+                            "rotation_deg": 0,
+                            "inset_mm": 0,
+                        }
+                    ),
+                },
+            )
+
+    assert response.status_code == 200, response.text
+    assert len(submitted_paths) == 1
+    assert submitted_paths[0].endswith(".svg")
+    session = store.get(response.json()["session_id"])
+    assert session is not None
+    assert session["modeling_mode"] == "vector"
+    assert session["surface_artwork_path"].endswith(".svg")
+    assert session["image_path"] == session["surface_artwork_path"]
+
+
 def test_preview_rejects_selection_from_a_different_uploaded_model(
     tmp_path,
     preview_state,

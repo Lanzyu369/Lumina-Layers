@@ -1560,8 +1560,8 @@ def worker_generate_model_surface_overlay(
     使用图片转换器色层嵌入模型选中表面并生成 3MF。
 
     Args:
-        image_path: Already rendered surface artwork PNG path.
-            已渲染好的贴面图片 PNG 路径。
+        image_path: Already rendered surface artwork path (PNG or SVG).
+            已渲染好的贴面画面路径（PNG 或 SVG）。
         lut_path: LUT calibration path forwarded to the converter.
             透传给转换器的 LUT 校准文件路径。
         params: Picklable scalar dict containing model path, footprint payload,

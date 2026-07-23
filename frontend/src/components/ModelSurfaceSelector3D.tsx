@@ -19,9 +19,9 @@ import { disposeMaterial, disposeObjectTree } from "../utils/threeDisposal";
 import { useThemeConfig } from "../hooks/useThemeConfig";
 import { computeFitDistance } from "./ModelViewer";
 import {
-  computeArtworkCoverDrawSize,
-  computeArtworkCoverDrawSizeMm,
   computeArtworkCanvasTransform,
+  computeArtworkPlacementDrawSize,
+  computeArtworkPlacementDrawSizeMm,
   computeArtworkPlacementDragUpdate,
   computeSurfaceArtworkCanvasSize,
   computeSurfaceArtworkPreviewBudget,
@@ -1265,12 +1265,14 @@ function drawSurfaceArtworkCanvas(
     : 0;
   const availableWidth = Math.max(1, widthPx - insetPx * 2);
   const availableHeight = Math.max(1, heightPx - insetPx * 2);
-  const { width: targetWidth, height: targetHeight } = computeArtworkCoverDrawSize({
+  const { width: targetWidth, height: targetHeight } = computeArtworkPlacementDrawSize({
     sourceWidth: image.naturalWidth || image.width,
     sourceHeight: image.naturalHeight || image.height,
     availableWidth,
     availableHeight,
     scale: placement.scale,
+    mode: placement.mode,
+    rotationDeg: placement.rotation_deg,
   });
   const transform = computeArtworkCanvasTransform({
     widthPx,
@@ -1370,12 +1372,14 @@ function useSurfaceArtworkTexture(
     const sourceWidth = image.naturalWidth || image.width;
     const sourceHeight = image.naturalHeight || image.height;
     const insetMm = placement.mode === "inset" ? Math.max(0, placement.inset_mm) : 0;
-    const artworkSizeMm = computeArtworkCoverDrawSizeMm({
+    const artworkSizeMm = computeArtworkPlacementDrawSizeMm({
       sourceWidth,
       sourceHeight,
       availableWidthMm: Math.max(0.001, surface.widthMm - insetMm * 2),
       availableHeightMm: Math.max(0.001, surface.heightMm - insetMm * 2),
       scale: placement.scale,
+      mode: placement.mode,
+      rotationDeg: placement.rotation_deg,
     });
     const canvas = drawSurfaceArtworkCanvas(
       image,
@@ -4240,10 +4244,12 @@ export default function ModelSurfaceSelector3D({
         selecting={selecting}
         candidateCount={showSurfaceCandidates ? selectableCandidates.length : 0}
         selectionMode={surfaceSelectionMode}
+        placement={placement}
         display={viewDisplay}
         contextualPanel={contextualRotationPanel}
         onSetTool={handleSetTool}
         onFitArtwork={onFitArtwork}
+        onUpdatePlacement={onUpdatePlacement}
         onFlipView={handleFlipView}
         onSelectionModeChange={handleSelectionModeChange}
         onToggleDisplay={handleToggleDisplay}

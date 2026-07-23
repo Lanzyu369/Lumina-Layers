@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { applyImport } from "../recipe/importFlow";
+import {
+  applyImport,
+  exportShareCard,
+  exportSidecar,
+  MODEL_SURFACE_RECIPE_EXPORT_UNAVAILABLE_ERROR,
+} from "../recipe/importFlow";
 import type { RestoreResult } from "../recipe/importRecipe";
 import type { ConverterRecipeDevice, LuminaRecipe } from "../recipe/types";
 import type { PrinterInfo } from "../api/types";
@@ -189,6 +194,21 @@ describe("recipe/importFlow", () => {
     expect(useSettingsStore.getState().nozzleSize).toBe("0.2");
     expect(useSettingsStore.getState().deviceProfileId).toBe(
       "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
+    );
+  });
+
+  it.each([
+    ["share card", exportShareCard],
+    ["JSON sidecar", exportSidecar],
+  ])("rejects incomplete model-surface %s exports", async (_label, exporter) => {
+    useConverterStore.setState({
+      modelSurfaceEnabled: true,
+      imageFile: new File(["image"], "source.png", { type: "image/png" }),
+      previewImageUrl: "/api/files/preview.png",
+    });
+
+    await expect(exporter()).rejects.toThrow(
+      MODEL_SURFACE_RECIPE_EXPORT_UNAVAILABLE_ERROR,
     );
   });
 });

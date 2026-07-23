@@ -4,7 +4,11 @@ import { useState } from "react";
 import * as THREE from "three";
 import type { ModelSurfacePlacement } from "../stores/converter";
 import { useSettingsStore } from "../stores/settingsStore";
-import { computeArtworkCanvasTransform } from "../components/modelSurface/artworkPlacement";
+import {
+  computeArtworkCanvasTransform,
+  computeArtworkPlacementDrawSize,
+  computeArtworkPlacementDrawSizeMm,
+} from "../components/modelSurface/artworkPlacement";
 import {
   CanvasOverlayHtml,
   getCanvasOverlayFrame,
@@ -177,6 +181,74 @@ describe("ModelSurfaceSelector3D", () => {
       width: 160,
       height: 80,
     });
+  });
+
+  it("contains inset artwork using its rotated bounding box in pixels and millimetres", () => {
+    const rotationDeg = 17;
+    const rotationRadians = THREE.MathUtils.degToRad(rotationDeg);
+    const assertContained = (
+      size: { width: number; height: number },
+      availableWidth: number,
+      availableHeight: number,
+      tolerance: number,
+    ) => {
+      const rotatedWidth =
+        Math.abs(size.width * Math.cos(rotationRadians))
+        + Math.abs(size.height * Math.sin(rotationRadians));
+      const rotatedHeight =
+        Math.abs(size.width * Math.sin(rotationRadians))
+        + Math.abs(size.height * Math.cos(rotationRadians));
+      expect(rotatedWidth).toBeLessThanOrEqual(availableWidth + tolerance);
+      expect(rotatedHeight).toBeLessThanOrEqual(availableHeight + tolerance);
+      expect(Math.max(rotatedWidth, rotatedHeight)).toBeGreaterThanOrEqual(
+        Math.max(availableWidth, availableHeight) - tolerance,
+      );
+    };
+
+    const pixelSize = computeArtworkPlacementDrawSize({
+      sourceWidth: 40,
+      sourceHeight: 80,
+      availableWidth: 160,
+      availableHeight: 160,
+      scale: 1,
+      mode: "inset",
+      rotationDeg,
+    });
+    const millimetreSize = computeArtworkPlacementDrawSizeMm({
+      sourceWidth: 40,
+      sourceHeight: 80,
+      availableWidthMm: 16,
+      availableHeightMm: 16,
+      scale: 1,
+      mode: "inset",
+      rotationDeg,
+    });
+
+    assertContained(pixelSize, 160, 160, 1);
+    assertContained(millimetreSize, 16, 16, 0.001);
+  });
+
+  it("covers the surface corners with rotated edge-to-edge artwork", () => {
+    const rotationDeg = 17;
+    const rotationRadians = THREE.MathUtils.degToRad(rotationDeg);
+    const size = computeArtworkPlacementDrawSize({
+      sourceWidth: 40,
+      sourceHeight: 40,
+      availableWidth: 160,
+      availableHeight: 160,
+      scale: 1,
+      mode: "edge_to_edge",
+      rotationDeg,
+    });
+    const requiredLocalWidth =
+      Math.abs(160 * Math.cos(rotationRadians))
+      + Math.abs(160 * Math.sin(rotationRadians));
+    const requiredLocalHeight =
+      Math.abs(160 * Math.sin(rotationRadians))
+      + Math.abs(160 * Math.cos(rotationRadians));
+
+    expect(size.width).toBeGreaterThanOrEqual(requiredLocalWidth);
+    expect(size.height).toBeGreaterThanOrEqual(requiredLocalHeight);
   });
 
   it("keeps screen-fixed overlays above the 3D scene stacking context", () => {
@@ -566,6 +638,71 @@ describe("ModelSurfaceSelector3D", () => {
     fireEvent.click(within(viewToolbar).getByRole("button", { name: "网格线" }));
 
     expect(onBedGridVisibleChange).toHaveBeenCalledWith(false);
+  });
+
+  it("exposes edge-to-edge and inset placement controls in the artwork toolbar", async () => {
+    vi.spyOn(THREE.Box3.prototype, "setFromObject").mockImplementation(function (this: THREE.Box3) {
+      this.min.set(-10, -5, 0);
+      this.max.set(10, 5, 2);
+      return this;
+    });
+    Object.defineProperty(HTMLElement.prototype, "updateMatrixWorld", {
+      configurable: true,
+      value: vi.fn(),
+    });
+    const file = new File(["solid"], "plate.stl");
+    vi.spyOn(file, "arrayBuffer").mockResolvedValue(new ArrayBuffer(16));
+    const onUpdatePlacement = vi.fn();
+    const footprint = {
+      frame: {
+        origin: [0, 0, 1] as [number, number, number],
+        normal: [0, 0, 1] as [number, number, number],
+        u_axis: [1, 0, 0] as [number, number, number],
+        v_axis: [0, 1, 0] as [number, number, number],
+      },
+      bounds_min: [-10, -5] as [number, number],
+      bounds_max: [10, 5] as [number, number],
+      bounds_width_mm: 20,
+      bounds_height_mm: 10,
+      outer: [[-10, -5], [10, -5], [10, 5], [-10, 5], [-10, -5]] as [number, number][],
+      holes: [],
+    };
+
+    render(
+      <ModelSurfaceSelector3D
+        file={file}
+        artworkUrl="blob:artwork"
+        selectionReady
+        selecting={false}
+        footprint={footprint}
+        placement={{
+          mode: "inset",
+          offset_x_mm: 0,
+          offset_y_mm: 0,
+          scale: 1,
+          rotation_deg: 0,
+          inset_mm: 1.5,
+        }}
+        onSelectFace={vi.fn()}
+        onUpdatePlacement={onUpdatePlacement}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("tab", { name: "覆面编辑" }));
+    const toolbar = screen.getByRole("toolbar", { name: "模型覆面二级工具栏" });
+    const edgeButton = within(toolbar).getByRole("button", { name: "铺满" });
+    const insetButton = within(toolbar).getByRole("button", { name: "内缩" });
+    const insetInput = within(toolbar).getByRole("spinbutton", { name: "内缩距离" });
+
+    expect(edgeButton).toHaveAttribute("aria-pressed", "false");
+    expect(insetButton).toHaveAttribute("aria-pressed", "true");
+    expect(insetInput).toHaveValue(1.5);
+
+    fireEvent.click(edgeButton);
+    expect(onUpdatePlacement).toHaveBeenCalledWith({ mode: "edge_to_edge" });
+
+    fireEvent.change(insetInput, { target: { value: "2.4" } });
+    expect(onUpdatePlacement).toHaveBeenCalledWith({ inset_mm: 2.4 });
   });
 
   it("defaults the selected-surface toolbar away from the top-center work area", async () => {
@@ -3908,6 +4045,35 @@ describe("ModelSurfaceSelector3D", () => {
     ).toEqual({ offset_x_mm: -1.4, offset_y_mm: 0 });
   });
 
+  it("uses the rotated artwork bounding box for move edge snapping", () => {
+    const update = computeArtworkPlacementDragUpdate({
+      tool: "move",
+      center: [0, 0],
+      startPoint: [0, 0],
+      currentPoint: [3.2, 0],
+      startPlacement: {
+        mode: "edge_to_edge",
+        offset_x_mm: 0,
+        offset_y_mm: 0,
+        scale: 1,
+        rotation_deg: 45,
+        inset_mm: 0,
+      },
+      surfaceBounds: {
+        min: [-10, -10],
+        max: [10, 10],
+      },
+      artworkSizeMm: {
+        width: 10,
+        height: 10,
+      },
+      snapThresholdMm: 0.5,
+    });
+
+    expect(update.offset_x_mm).toBeCloseTo(10 - Math.sqrt(50), 6);
+    expect(update.offset_y_mm).toBe(0);
+  });
+
   it("computes artwork rotation and scale updates from surface-local drag points", () => {
     const startPlacement = {
       mode: "edge_to_edge" as const,
@@ -4962,6 +5128,116 @@ describe("ModelSurfaceSelector3D", () => {
       toneMapped: false,
     });
     expect(shadedBodyMaterialOptions).toEqual([]);
+  });
+
+  it("draws rotated inset artwork inside the preview clearance", async () => {
+    vi.spyOn(THREE.Box3.prototype, "setFromObject").mockImplementation(function (this: THREE.Box3) {
+      this.min.set(-10, -10, 0);
+      this.max.set(10, 10, 2);
+      return this;
+    });
+    Object.defineProperty(HTMLElement.prototype, "updateMatrixWorld", {
+      configurable: true,
+      value: vi.fn(),
+    });
+    const drawImage = vi.fn();
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(
+      ((contextId: string) =>
+        contextId === "2d"
+          ? ({
+              clearRect: vi.fn(),
+              save: vi.fn(),
+              translate: vi.fn(),
+              rotate: vi.fn(),
+              drawImage,
+              restore: vi.fn(),
+              beginPath: vi.fn(),
+              moveTo: vi.fn(),
+              lineTo: vi.fn(),
+              closePath: vi.fn(),
+              fill: vi.fn(),
+              globalCompositeOperation: "source-over",
+            } as unknown as CanvasRenderingContext2D)
+          : null) as typeof HTMLCanvasElement.prototype.getContext,
+    );
+    const originalImage = window.Image;
+    class TestImage {
+      naturalWidth = 40;
+      naturalHeight = 80;
+      width = 40;
+      height = 80;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+
+      set src(_value: string) {
+        queueMicrotask(() => this.onload?.());
+      }
+    }
+    Object.defineProperty(window, "Image", {
+      configurable: true,
+      writable: true,
+      value: TestImage,
+    });
+    const file = new File(["solid"], "plate.stl");
+    vi.spyOn(file, "arrayBuffer").mockResolvedValue(new ArrayBuffer(16));
+    const footprint = {
+      frame: {
+        origin: [0, 0, 1] as [number, number, number],
+        normal: [0, 0, 1] as [number, number, number],
+        u_axis: [1, 0, 0] as [number, number, number],
+        v_axis: [0, 1, 0] as [number, number, number],
+      },
+      bounds_min: [-10, -10] as [number, number],
+      bounds_max: [10, 10] as [number, number],
+      bounds_width_mm: 20,
+      bounds_height_mm: 20,
+      outer: [[-10, -10], [10, -10], [10, 10], [-10, 10], [-10, -10]] as [number, number][],
+      holes: [],
+    };
+
+    try {
+      render(
+        <ModelSurfaceSelector3D
+          file={file}
+          artworkUrl="blob:artwork"
+          selectionReady
+          selecting={false}
+          footprint={footprint}
+          placement={{
+            mode: "inset",
+            offset_x_mm: 0,
+            offset_y_mm: 0,
+            scale: 1,
+            rotation_deg: 17,
+            inset_mm: 2,
+          }}
+          onSelectFace={vi.fn()}
+          onUpdatePlacement={vi.fn()}
+        />,
+      );
+
+      await waitFor(() => expect(drawImage).toHaveBeenCalled());
+      const call = drawImage.mock.calls.at(-1);
+      const targetWidth = Number(call?.[3]);
+      const targetHeight = Number(call?.[4]);
+      const rotationRadians = THREE.MathUtils.degToRad(17);
+      const rotatedWidth =
+        Math.abs(targetWidth * Math.cos(rotationRadians))
+        + Math.abs(targetHeight * Math.sin(rotationRadians));
+      const rotatedHeight =
+        Math.abs(targetWidth * Math.sin(rotationRadians))
+        + Math.abs(targetHeight * Math.cos(rotationRadians));
+
+      expect(rotatedWidth).toBeLessThanOrEqual(161);
+      expect(rotatedHeight).toBeLessThanOrEqual(161);
+      expect(Math.max(rotatedWidth, rotatedHeight)).toBeCloseTo(160, 0);
+    } finally {
+      Object.defineProperty(window, "Image", {
+        configurable: true,
+        writable: true,
+        value: originalImage,
+      });
+    }
   });
 
   it("renders selected artwork at full opacity so model facets cannot bleed through", async () => {

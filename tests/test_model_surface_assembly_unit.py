@@ -5,10 +5,13 @@ import pytest
 import trimesh
 
 from core.model_surface.assembly import (
+    MODEL_SURFACE_LOGICAL_XY_BOUNDS_KEY,
     OverlaySceneResult,
+    _pattern_xy_bounds_mm,
     apply_model_transform_to_overlay_scene,
     build_embedded_overlay_scene,
 )
+from core.model_surface.pipeline import _build_pattern_scene
 from core.model_surface.types import ModelSurfaceError, PlaneFrame, SurfaceFootprint
 
 
@@ -53,6 +56,72 @@ def test_build_embedded_overlay_scene_keeps_bounds_and_adds_base_slot():
     )
     assert result.scene.bounds[0][2] == pytest.approx(base.bounds[0][2])
     assert result.scene.bounds[1][2] == pytest.approx(base.bounds[1][2])
+
+
+def test_build_embedded_overlay_scene_preserves_transparent_canvas_margins():
+    full_matrix = np.full((1, 10, 20), -1, dtype=np.int16)
+    full_matrix[0, 1:3, 2:6] = 0
+    pattern = _build_pattern_scene(
+        {
+            "full_matrix": full_matrix,
+            "slot_names": ["Artwork"],
+            "preview_colors": {0: [255, 0, 0, 255]},
+            "target_h": 10,
+            "pixel_scale": 1.0,
+            "color_layers": 1,
+            "layer_height_mm": 0.08,
+            "bambu_face_orientation": "down",
+        }
+    )
+    assert pattern.metadata[MODEL_SURFACE_LOGICAL_XY_BOUNDS_KEY] == pytest.approx(
+        (0.0, 0.0, 20.0, 10.0)
+    )
+    base = trimesh.creation.box(extents=(20.0, 10.0, 3.0))
+    footprint = SurfaceFootprint(
+        frame=PlaneFrame(
+            origin=(0.0, 0.0, 1.5),
+            normal=(0.0, 0.0, 1.0),
+            u_axis=(1.0, 0.0, 0.0),
+            v_axis=(0.0, 1.0, 0.0),
+        ),
+        outer=((-10.0, -5.0), (10.0, -5.0), (10.0, 5.0), (-10.0, 5.0)),
+        holes=(),
+        bounds_min=(-10.0, -5.0),
+        bounds_max=(10.0, 5.0),
+        bounds_width_mm=20.0,
+        bounds_height_mm=10.0,
+        area_mm2=200.0,
+        hole_count=0,
+    )
+
+    result = build_embedded_overlay_scene(
+        base_mesh=base,
+        pattern_scene=pattern,
+        footprint=footprint,
+        pocket_depth_mm=0.08,
+        base_slot_name="surface_base",
+        base_color=(245, 245, 245),
+        allow_uncut_base=True,
+    )
+
+    artwork_bounds = np.asarray(result.scene.geometry["Artwork"].bounds)
+    np.testing.assert_allclose(artwork_bounds[:, 0], [-8.0, -4.0], atol=1e-6)
+    np.testing.assert_allclose(artwork_bounds[:, 1], [2.0, 4.0], atol=1e-6)
+    np.testing.assert_allclose(
+        artwork_bounds[1, :2] - artwork_bounds[0, :2],
+        [4.0, 2.0],
+        atol=1e-6,
+    )
+
+
+def test_pattern_logical_xy_bounds_reject_geometry_outside_canvas():
+    color = trimesh.creation.box(extents=(4.0, 2.0, 0.08))
+    color.apply_translation((3.0, 2.0, 0.04))
+    pattern = trimesh.Scene({"Artwork": color})
+    pattern.metadata[MODEL_SURFACE_LOGICAL_XY_BOUNDS_KEY] = (0.0, 0.0, 4.0, 4.0)
+
+    with pytest.raises(ModelSurfaceError, match="exceeds its logical XY bounds"):
+        _pattern_xy_bounds_mm(pattern)
 
 
 def test_build_embedded_overlay_scene_embeds_full_pattern_depth():

@@ -297,7 +297,7 @@ export interface ModelSurfaceModelRotation {
   z_deg: number;
 }
 
-const DEFAULT_MODEL_SURFACE_PLACEMENT: ModelSurfacePlacement = {
+export const DEFAULT_MODEL_SURFACE_PLACEMENT: ModelSurfacePlacement = {
   mode: "edge_to_edge",
   offset_x_mm: 0,
   offset_y_mm: 0,
@@ -306,7 +306,7 @@ const DEFAULT_MODEL_SURFACE_PLACEMENT: ModelSurfacePlacement = {
   inset_mm: 0,
 };
 
-const DEFAULT_MODEL_SURFACE_MODEL_ROTATION: ModelSurfaceModelRotation = {
+export const DEFAULT_MODEL_SURFACE_MODEL_ROTATION: ModelSurfaceModelRotation = {
   x_deg: 0,
   y_deg: 0,
   z_deg: 0,

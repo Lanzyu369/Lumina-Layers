@@ -238,7 +238,6 @@ def _prepare_model_surface_converter_params(
     """Prepare converter params that build the printable surface artwork only."""
 
     converter_params = dict(params)
-    _normalize_model_surface_artwork_mode(session_data, converter_params)
     # A surface overlay has exactly one viewing side. Reusing the regular
     # double-sided voxel layout would add a second colour stack behind the
     # uploaded model and make it reappear in later slicer layers.
@@ -265,30 +264,6 @@ def _prepare_model_surface_converter_params(
     converter_params["enable_coating"] = False
     converter_params["enable_base_layer_height_modifier"] = False
     return converter_params
-
-
-def _normalize_model_surface_artwork_mode(
-    session_data: dict,
-    converter_params: dict,
-) -> None:
-    """Normalize converter mode for rendered surface artwork.
-
-    规范化已渲染覆面贴图的转换模式。
-    """
-
-    artwork_path = session_data.get("surface_artwork_path") or session_data.get("image_path")
-    if not isinstance(artwork_path, str):
-        return
-
-    modeling_mode = converter_params.get("modeling_mode")
-    modeling_mode_value = (
-        modeling_mode.value if hasattr(modeling_mode, "value") else modeling_mode
-    )
-    if (
-        str(artwork_path).lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
-        and modeling_mode_value == CoreModelingMode.VECTOR.value
-    ):
-        converter_params["modeling_mode"] = CoreModelingMode.HIGH_FIDELITY
 
 
 def _remove_temp_path(path: str | None) -> None:

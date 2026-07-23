@@ -59,11 +59,16 @@ def test_generate_routes_model_surface_session_to_overlay_worker(
 ):
     store, _registry, pool = generate_state
     original_image_path = tmp_path / "uploaded-art.png"
-    rendered_surface_art_path = tmp_path / "surface-rendered-art.png"
+    rendered_surface_art_path = tmp_path / "surface-rendered-art.svg"
     lut_path = tmp_path / "lut.npy"
     model_path = tmp_path / "plate.stl"
     Image.new("RGB", (20, 10), (0, 0, 255)).save(original_image_path)
-    Image.new("RGBA", (20, 10), (255, 0, 0, 255)).save(rendered_surface_art_path)
+    rendered_surface_art_path.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 10">'
+        '<path d="M0 0H20V10H0Z" fill="#ff0000"/>'
+        "</svg>",
+        encoding="utf-8",
+    )
     lut_path.write_bytes(b"lut")
     trimesh.creation.box(extents=(20.0, 10.0, 2.0)).export(model_path)
 
@@ -118,6 +123,7 @@ def test_generate_routes_model_surface_session_to_overlay_worker(
             "params": {
                 "target_width_mm": 20.0,
                 "lut_name": "default",
+                "modeling_mode": CoreModelingMode.VECTOR.value,
                 "add_loop": True,
                 "enable_fridge_magnet": True,
                 "model_enable": True,
@@ -140,6 +146,10 @@ def test_generate_routes_model_surface_session_to_overlay_worker(
     assert submitted_params["surface_pocket_depth_mm"] == pytest.approx(0.4)
     assert submitted_params["surface_footprint"]["bounds_width_mm"] == 20.0
     assert submitted_params["converter_params"]["target_width_mm"] == 20.0
+    assert (
+        submitted_params["converter_params"]["modeling_mode"]
+        == CoreModelingMode.VECTOR.value
+    )
     assert submitted_params["converter_params"]["structure_mode"] == "Single-sided"
     assert submitted_params["converter_params"]["add_loop"] is False
     assert submitted_params["converter_params"]["enable_fridge_magnet"] is False
@@ -148,10 +158,15 @@ def test_generate_routes_model_surface_session_to_overlay_worker(
     assert response.json()["preview_3d_url"] is None
 
 
-def test_model_surface_vector_request_uses_raster_mode_for_rendered_artwork(tmp_path):
-    image_path = tmp_path / "surface-art.png"
+def test_model_surface_vector_request_is_never_silently_downgraded(tmp_path):
+    image_path = tmp_path / "surface-art.svg"
     model_path = tmp_path / "plate.stl"
-    Image.new("RGB", (20, 10), (255, 0, 0)).save(image_path)
+    image_path.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 10">'
+        '<path d="M0 0H20V10H0Z" fill="#ff0000"/>'
+        "</svg>",
+        encoding="utf-8",
+    )
     trimesh.creation.box(extents=(20.0, 10.0, 2.0)).export(model_path)
 
     worker_params = _prepare_model_surface_overlay_worker_params(
@@ -191,7 +206,7 @@ def test_model_surface_vector_request_uses_raster_mode_for_rendered_artwork(tmp_
         },
     )
 
-    assert worker_params["converter_params"]["modeling_mode"] == CoreModelingMode.HIGH_FIDELITY
+    assert worker_params["converter_params"]["modeling_mode"] == CoreModelingMode.VECTOR
     assert worker_params["converter_params"]["structure_mode"] == "Single-sided"
     assert worker_params["converter_params"]["enable_relief"] is False
     assert worker_params["converter_params"]["enable_cloisonne"] is False

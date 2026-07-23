@@ -8,6 +8,7 @@ import type {
   AdvancedParamsGeneration,
   AdvancedParamsLargeFormat,
   AdvancedParamsLoop,
+  AdvancedParamsModelSurface,
   AdvancedParamsCloisonne,
   AdvancedParamsCoating,
   AdvancedParamsOutline,
@@ -108,6 +109,7 @@ function buildFullParams(
     fridge_magnet: buildFridgeMagnet(state),
     puzzle: buildPuzzle(state),
     large_format: buildLargeFormat(state),
+    model_surface: buildModelSurface(state),
     color_replacement: buildColorReplacement(state),
   };
 }
@@ -309,6 +311,65 @@ function buildLargeFormat(state: ConverterState): AdvancedParamsLargeFormat {
   };
 }
 
+function buildModelSurface(
+  state: ConverterState,
+): AdvancedParamsModelSurface {
+  if (!state.modelSurfaceEnabled) {
+    return {
+      enabled: false,
+      model_file: null,
+      model_file_id: null,
+      selection_id: null,
+      selected_face_count: null,
+      footprint: null,
+      placement: null,
+      model_rotation: null,
+    };
+  }
+
+  const selection = state.modelSurfaceSelection;
+  const footprint = state.modelSurfaceFootprint;
+  const selectedFaceCount =
+    readFiniteNumber(selection, "face_count") ??
+    readArrayLength(selection, "face_indices");
+  const footprintWidth = readFiniteNumber(footprint, "bounds_width_mm");
+  const footprintHeight = readFiniteNumber(footprint, "bounds_height_mm");
+  const footprintHoleCount =
+    readFiniteNumber(footprint, "hole_count") ??
+    readArrayLength(footprint, "holes");
+
+  return {
+    enabled: true,
+    model_file: serializeFileMetadata(state.modelSurfaceFile),
+    model_file_id: state.modelSurfaceModelFileId,
+    selection_id: state.modelSurfaceSelectionId,
+    selected_face_count: selectedFaceCount,
+    footprint:
+      footprintWidth !== null ||
+      footprintHeight !== null ||
+      footprintHoleCount !== null
+        ? {
+            width_mm: footprintWidth,
+            height_mm: footprintHeight,
+            hole_count: footprintHoleCount,
+          }
+        : null,
+    placement: {
+      mode: state.modelSurfacePlacement.mode,
+      offset_x_mm: state.modelSurfacePlacement.offset_x_mm,
+      offset_y_mm: state.modelSurfacePlacement.offset_y_mm,
+      scale: state.modelSurfacePlacement.scale,
+      rotation_deg: state.modelSurfacePlacement.rotation_deg,
+      inset_mm: state.modelSurfacePlacement.inset_mm,
+    },
+    model_rotation: {
+      x_deg: state.modelSurfaceModelRotation.x_deg,
+      y_deg: state.modelSurfaceModelRotation.y_deg,
+      z_deg: state.modelSurfaceModelRotation.z_deg,
+    },
+  };
+}
+
 function buildColorReplacement(
   state: ConverterState,
 ): AdvancedParamsColorReplacement {
@@ -360,6 +421,24 @@ function serializeFileMetadata(file: File | null): FileMetadata | null {
     size: file.size,
     type: file.type,
   };
+}
+
+function readFiniteNumber(
+  value: Record<string, unknown> | null,
+  key: string,
+): number | null {
+  const candidate = value?.[key];
+  return typeof candidate === "number" && Number.isFinite(candidate)
+    ? candidate
+    : null;
+}
+
+function readArrayLength(
+  value: Record<string, unknown> | null,
+  key: string,
+): number | null {
+  const candidate = value?.[key];
+  return Array.isArray(candidate) ? candidate.length : null;
 }
 
 function ensureHash(hex: string): string {

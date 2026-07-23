@@ -36,6 +36,16 @@ interface ArtworkCoverSizeMmInput {
   scale: number;
 }
 
+interface ArtworkPlacementSizeInput extends ArtworkCoverSizeInput {
+  mode: ModelSurfacePlacement["mode"];
+  rotationDeg: number;
+}
+
+interface ArtworkPlacementSizeMmInput extends ArtworkCoverSizeMmInput {
+  mode: ModelSurfacePlacement["mode"];
+  rotationDeg: number;
+}
+
 interface ArtworkCanvasTransformInput {
   widthPx: number;
   heightPx: number;
@@ -164,6 +174,21 @@ function snapArtworkOffsetToSurfaceEdges({
   ];
 }
 
+function getRotatedArtworkBoundsSize(
+  artworkSizeMm: { width: number; height: number },
+  rotationDeg: number,
+): { width: number; height: number } {
+  const rotationRadians = THREE.MathUtils.degToRad(
+    Number.isFinite(rotationDeg) ? rotationDeg : 0,
+  );
+  const cosine = Math.abs(Math.cos(rotationRadians));
+  const sine = Math.abs(Math.sin(rotationRadians));
+  return {
+    width: artworkSizeMm.width * cosine + artworkSizeMm.height * sine,
+    height: artworkSizeMm.width * sine + artworkSizeMm.height * cosine,
+  };
+}
+
 export function computeArtworkPlacementDragUpdate({
   tool,
   center,
@@ -184,7 +209,10 @@ export function computeArtworkPlacementDragUpdate({
           offset: nextOffset,
           center,
           bounds: surfaceBounds,
-          artworkSizeMm,
+          artworkSizeMm: getRotatedArtworkBoundsSize(
+            artworkSizeMm,
+            startPlacement.rotation_deg,
+          ),
           thresholdMm: snapThresholdMm,
         })
       : nextOffset;
@@ -259,6 +287,26 @@ export function computeArtworkCoverDrawSize({
   availableHeight,
   scale,
 }: ArtworkCoverSizeInput): { width: number; height: number } {
+  return computeArtworkPlacementDrawSize({
+    sourceWidth,
+    sourceHeight,
+    availableWidth,
+    availableHeight,
+    scale,
+    mode: "edge_to_edge",
+    rotationDeg: 0,
+  });
+}
+
+export function computeArtworkPlacementDrawSize({
+  sourceWidth,
+  sourceHeight,
+  availableWidth,
+  availableHeight,
+  scale,
+  mode,
+  rotationDeg,
+}: ArtworkPlacementSizeInput): { width: number; height: number } {
   if (
     sourceWidth <= 0
     || sourceHeight <= 0
@@ -267,13 +315,19 @@ export function computeArtworkCoverDrawSize({
   ) {
     return { width: 1, height: 1 };
   }
-  const coverRatio = Math.max(
-    availableWidth / sourceWidth,
-    availableHeight / sourceHeight,
-  ) * Math.max(scale, 0.001);
+  const artworkScale = computeArtworkPlacementScale({
+    sourceWidth,
+    sourceHeight,
+    availableWidth,
+    availableHeight,
+    scale,
+    mode,
+    rotationDeg,
+  });
+  const roundSize = mode === "inset" ? Math.floor : Math.ceil;
   return {
-    width: Math.max(1, Math.round(sourceWidth * coverRatio)),
-    height: Math.max(1, Math.round(sourceHeight * coverRatio)),
+    width: Math.max(1, roundSize(sourceWidth * artworkScale)),
+    height: Math.max(1, roundSize(sourceHeight * artworkScale)),
   };
 }
 
@@ -384,6 +438,26 @@ export function computeArtworkCoverDrawSizeMm({
   availableHeightMm,
   scale,
 }: ArtworkCoverSizeMmInput): { width: number; height: number } {
+  return computeArtworkPlacementDrawSizeMm({
+    sourceWidth,
+    sourceHeight,
+    availableWidthMm,
+    availableHeightMm,
+    scale,
+    mode: "edge_to_edge",
+    rotationDeg: 0,
+  });
+}
+
+export function computeArtworkPlacementDrawSizeMm({
+  sourceWidth,
+  sourceHeight,
+  availableWidthMm,
+  availableHeightMm,
+  scale,
+  mode,
+  rotationDeg,
+}: ArtworkPlacementSizeMmInput): { width: number; height: number } {
   if (
     sourceWidth <= 0
     || sourceHeight <= 0
@@ -392,12 +466,52 @@ export function computeArtworkCoverDrawSizeMm({
   ) {
     return { width: 1, height: 1 };
   }
-  const coverRatio = Math.max(
-    availableWidthMm / sourceWidth,
-    availableHeightMm / sourceHeight,
-  ) * Math.max(scale, 0.001);
+  const artworkScale = computeArtworkPlacementScale({
+    sourceWidth,
+    sourceHeight,
+    availableWidth: availableWidthMm,
+    availableHeight: availableHeightMm,
+    scale,
+    mode,
+    rotationDeg,
+  });
   return {
-    width: Math.max(0.001, sourceWidth * coverRatio),
-    height: Math.max(0.001, sourceHeight * coverRatio),
+    width: Math.max(0.001, sourceWidth * artworkScale),
+    height: Math.max(0.001, sourceHeight * artworkScale),
   };
+}
+
+function computeArtworkPlacementScale({
+  sourceWidth,
+  sourceHeight,
+  availableWidth,
+  availableHeight,
+  scale,
+  mode,
+  rotationDeg,
+}: ArtworkPlacementSizeInput): number {
+  const rotationRadians = THREE.MathUtils.degToRad(
+    Number.isFinite(rotationDeg) ? rotationDeg : 0,
+  );
+  const cosine = Math.abs(Math.cos(rotationRadians));
+  const sine = Math.abs(Math.sin(rotationRadians));
+  let fitRatio: number;
+  if (mode === "inset") {
+    const rotatedSourceWidth = sourceWidth * cosine + sourceHeight * sine;
+    const rotatedSourceHeight = sourceWidth * sine + sourceHeight * cosine;
+    fitRatio = Math.min(
+      availableWidth / rotatedSourceWidth,
+      availableHeight / rotatedSourceHeight,
+    );
+  } else {
+    const requiredLocalWidth =
+      availableWidth * cosine + availableHeight * sine;
+    const requiredLocalHeight =
+      availableWidth * sine + availableHeight * cosine;
+    fitRatio = Math.max(
+      requiredLocalWidth / sourceWidth,
+      requiredLocalHeight / sourceHeight,
+    );
+  }
+  return fitRatio * Math.max(scale, 0.001);
 }
