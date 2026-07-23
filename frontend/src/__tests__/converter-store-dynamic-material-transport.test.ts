@@ -208,6 +208,28 @@ describe("dynamic material request transport", () => {
     });
   });
 
+  it("can send cached spatial state together with a confirmed global remap", async () => {
+    seedMaterialState(true);
+    useConverterStore.setState({
+      sessionId: "dynamic-session",
+      palette: previewResponse().palette,
+      regionReplacementCount: 1,
+      colorRemapMap: { "#141e28": "#abcdef" },
+    });
+
+    await useConverterStore.getState().submitGenerate();
+
+    const [, params] = mocks.convertGenerate.mock.calls[0];
+    expect(params.use_cached_matched_rgb).toBe(true);
+    expect(params.replacement_regions).toEqual([
+      {
+        quantized_hex: "#112233",
+        matched_hex: "#141e28",
+        replacement_hex: "#abcdef",
+      },
+    ]);
+  });
+
   it("sends the same dynamic contract for batch", async () => {
     seedMaterialState(true);
     useConverterStore.setState({

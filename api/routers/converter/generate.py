@@ -1886,7 +1886,16 @@ async def convert_generate(
         "modeling_mode": core_modeling_mode,
         "quantize_colors": request.quantize_colors,
         "svg_pixels_per_mm": request.svg_pixels_per_mm,
-        "replacement_regions": replacement_regions,
+        # Dynamic cache reuse already contains every confirmed RGB, recipe,
+        # and solver-metadata edit. Replaying its mappings in S03 would solve
+        # the same edits twice and require a target map outside S02's final-
+        # generation cache contract. Keep legacy fixed-layer replay unchanged.
+        # 动态缓存已包含确认后的最终编辑，不再重放全局替色；固定层路径保持原语义。
+        "replacement_regions": (
+            None
+            if request.use_cached_matched_rgb and dynamic_material_settings[0]
+            else replacement_regions
+        ),
         "recipe_overrides": (
             [
                 _serialize_recipe_override_for_worker(item)

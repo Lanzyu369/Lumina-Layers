@@ -2344,6 +2344,80 @@ class TestStandardCachedAnalysisRouting:
             _test_store.close(sid)
 
     @pytest.mark.parametrize(
+        ("dynamic_enabled", "expect_replay"),
+        [(True, False), (False, True)],
+        ids=("dynamic-final-cache", "fixed-layer-legacy-replay"),
+    )
+    def test_generate_cached_analysis_only_skips_dynamic_replacement_replay(
+        self,
+        tmp_path,
+        dynamic_enabled: bool,
+        expect_replay: bool,
+    ) -> None:
+        """Only dynamic final caches suppress already-applied replacements."""
+
+        from core.preview_analysis_cache import REQUIRED_PREVIEW_ANALYSIS_REUSE
+
+        max_layer_count = 6
+        sid, payload = self._create_session(
+            tmp_path,
+            modeling_mode=ModelingMode.HIGH_FIDELITY,
+            material_source="material_archive",
+            color_layers=max_layer_count,
+            material_matrix=np.zeros(
+                (4, 4, max_layer_count),
+                dtype=np.int32,
+            ),
+        )
+        dynamic_settings = {
+            "material_dynamic_layer_count_enabled": dynamic_enabled,
+            "material_min_layer_count": 5,
+            "material_max_layer_count": max_layer_count,
+            "material_delta_e00_tolerance": 0.5,
+        }
+        for key, value in dynamic_settings.items():
+            _test_store.put(sid, key, value)
+        _test_store.put(sid, "selected_materials", ["mat-a", "mat-b"])
+        _test_store.put(
+            sid,
+            "replacement_regions",
+            [
+                {
+                    "selected_color": "#112233",
+                    "replacement_color": "#778899",
+                }
+            ],
+        )
+        payload["params"].update(dynamic_settings)
+        requested_replacements = [
+            {
+                "quantized_hex": "#112233",
+                "matched_hex": "#445566",
+                "replacement_hex": "#778899",
+            }
+        ]
+        payload["params"]["replacement_regions"] = requested_replacements
+
+        try:
+            response = client.post("/api/convert/generate", json=payload)
+
+            assert response.status_code == 200, response.text
+            submitted_params = _mock_pool.submit.call_args.args[3]
+            assert (
+                submitted_params["reuse_preview_analysis"]
+                == REQUIRED_PREVIEW_ANALYSIS_REUSE
+            )
+            assert submitted_params["replacement_regions"] == (
+                requested_replacements if expect_replay else None
+            )
+            assert submitted_params["matched_rgb_path"] is not None
+            assert submitted_params["mask_solid_path"] is not None
+            assert submitted_params["material_matrix_path"] is not None
+            assert "quantized_image_path" not in submitted_params
+        finally:
+            _test_store.close(sid)
+
+    @pytest.mark.parametrize(
         ("modeling_mode", "material_source", "invalid_arrays"),
         [
             (
@@ -5115,7 +5189,7 @@ class TestLargeFormatDimensionsAndRouting:
             store.clear_all()
 
     @pytest.mark.asyncio
-    async def test_large_format_cached_material_archive_raster_keeps_spatial_inputs(
+    async def test_large_format_cached_dynamic_material_raster_keeps_spatial_inputs(
         self,
         tmp_path,
     ) -> None:
@@ -5123,7 +5197,7 @@ class TestLargeFormatDimensionsAndRouting:
         Image.fromarray(np.zeros((15, 21, 4), dtype=np.uint8)).save(image_path)
         matched_rgb = np.arange(6 * 10 * 3, dtype=np.uint8).reshape(6, 10, 3)
         mask_solid = np.ones((6, 10), dtype=bool)
-        material_matrix = np.arange(6 * 10 * 4, dtype=np.int16).reshape(6, 10, 4)
+        material_matrix = np.arange(6 * 10 * 6, dtype=np.int32).reshape(6, 10, 6)
         matched_path = tmp_path / "matched.npy"
         mask_path = tmp_path / "mask.npy"
         material_path = tmp_path / "material.npy"
@@ -5133,6 +5207,7 @@ class TestLargeFormatDimensionsAndRouting:
         captured: list[dict[str, object]] = []
 
         async def _submit(_fn, _tile_path, _lut_path, tile_params):
+            assert _fn.__name__ == "worker_generate_model"
             arrays = [
                 np.load(tile_params["matched_rgb_path"]),
                 np.load(tile_params["mask_solid_path"]),
@@ -5144,6 +5219,10 @@ class TestLargeFormatDimensionsAndRouting:
                     "arrays": arrays,
                     "material_source": tile_params["material_source"],
                     "reuse": tile_params["reuse_preview_analysis"],
+                    "dynamic_enabled": tile_params[
+                        "material_dynamic_layer_count_enabled"
+                    ],
+                    "dynamic_max": tile_params["material_max_layer_count"],
                 }
             )
             output_path = tmp_path / f"archive-tile-{len(captured)}.3mf"
@@ -5176,7 +5255,7 @@ class TestLargeFormatDimensionsAndRouting:
                 session_data={
                     "material_source": "material_archive",
                     "selected_materials": ["mat-a", "mat-b"],
-                    "material_layer_count": 4,
+                    "material_layer_count": 6,
                     "material_layer_height_mm": 0.08,
                     "material_grid_resolution": 64,
                     "material_backing_material_index": 1,
@@ -5185,12 +5264,15 @@ class TestLargeFormatDimensionsAndRouting:
                 store=store,
                 registry=registry,
                 pool=SimpleNamespace(submit=AsyncMock(side_effect=_submit)),
+                dynamic_material_settings=(True, 5, 6, 0.5),
             )
 
             download_id = result["download_url"].rsplit("/", 1)[-1]
             assert len(captured) == 4
             assert all(item["material_source"] == "material_archive" for item in captured)
             assert all(item["reuse"] is True for item in captured)
+            assert all(item["dynamic_enabled"] is True for item in captured)
+            assert all(item["dynamic_max"] == 6 for item in captured)
         finally:
             if download_id is not None:
                 registry.cleanup_file(download_id)
