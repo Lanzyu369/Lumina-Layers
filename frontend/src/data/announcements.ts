@@ -16,6 +16,24 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-07-22",
+    title: {
+      zh: "Lumina Layers — 6 月下旬至 7 月更新速览",
+      en: "Lumina Layers — Late June to July updates",
+    },
+    sections: [
+      {
+        category: { zh: "新功能", en: "New" },
+        items: [
+          {
+            zh: "7 月 22 日：Flash Studio Desktop 适配现按软件正式清单支持 Flashforge AD5X、Creator 5 / 5 Pro、Guider 3 Ultra、Guider4 / 4 Pro；喷嘴选项按机型提供且最大为 0.4 毫米，Guider 3 Ultra 支持 0.4 毫米，其余五台支持 0.25、0.4 毫米。导出的 3MF 使用 Flash Studio 实际的 2.3.2 项目格式，同时保留 Lumina 工艺参数。",
+            en: "July 22: Flash Studio Desktop support now follows its official machine list for the Flashforge AD5X, Creator 5 / 5 Pro, Guider 3 Ultra, and Guider4 / 4 Pro. Nozzles are machine-specific and capped at 0.4 mm: Guider 3 Ultra supports 0.4 mm, while the other five models support 0.25 and 0.4 mm. Exported 3MF files use Flash Studio's observed 2.3.2 project format while retaining Lumina process settings.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-07-19",
     title: {
       zh: "Lumina Layers — 6 月下旬至 7 月更新速览",

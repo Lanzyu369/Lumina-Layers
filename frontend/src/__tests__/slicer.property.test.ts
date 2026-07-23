@@ -534,7 +534,7 @@ import {
  * Feature: slicer-launch-integration, Property 6: 品牌配色映射完整性
  * **Validates: Requirements 6.1, 6.2**
  *
- * For any 已知切片软件 ID（bambu_studio、orca_slicer、elegoo_slicer、prusa_slicer、cura），
+ * For any known slicer ID, the brand mapping returns complete Tailwind classes.
  * 品牌配色映射应返回包含 bg、hover、text 三个非空 Tailwind CSS 类名的对象。
  */
 describe("Property 6: 品牌配色映射完整性", () => {
@@ -542,6 +542,7 @@ describe("Property 6: 品牌配色映射完整性", () => {
     "bambu_studio",
     "orca_slicer",
     "anycubic_slicer_next",
+    "flash_studio",
     "elegoo_slicer",
     "prusa_slicer",
     "cura",
@@ -584,7 +585,7 @@ describe("Property 6: 品牌配色映射完整性", () => {
     );
   });
 
-  it("SLICER_BRAND_COLORS contains exactly the 6 known slicer IDs", () => {
+  it("SLICER_BRAND_COLORS contains exactly the 7 known slicer IDs", () => {
     const keys = Object.keys(SLICER_BRAND_COLORS).sort();
     const expected = [...KNOWN_SLICER_IDS].sort();
     expect(keys).toEqual(expected);

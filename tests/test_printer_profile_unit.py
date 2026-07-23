@@ -105,6 +105,9 @@ class TestNormalizeSettingsIdentifiers:
     def test_normalize_anycubic_slicer_software_id(self) -> None:
         assert normalize_slicer_software_id("anycubic_slicer_next") == "AnycubicSlicerNext"
 
+    def test_normalize_flash_studio_software_id(self) -> None:
+        assert normalize_slicer_software_id("flash studio desktop") == "FlashStudio"
+
 
 class TestProfileRequiredFields:
     """Every profile has all required fields."""
@@ -144,6 +147,68 @@ class TestLoadPrinterTemplate:
         assert template["printer_model"] == "Anycubic Kobra S1"
         assert template["printable_area"] == ["0x0", "250x0", "250x250", "0x250"]
         assert template["printable_height"] == "250"
+
+    @pytest.mark.parametrize(
+        ("printer_id", "model", "nozzle_size", "physical_tools", "source_profile_name"),
+        [
+            *[
+                ("flashforge-ad5x", "Flashforge AD5X", nozzle, 1, f"Flashforge AD5X {nozzle} nozzle")
+                for nozzle in ("0.25", "0.4")
+            ],
+            *[
+                ("flashforge-creator-5", "Flashforge Creator 5", nozzle, 4, f"Flashforge Creator 5 {nozzle} nozzle")
+                for nozzle in ("0.25", "0.4")
+            ],
+            *[
+                ("flashforge-creator-5-pro", "Flashforge Creator 5 Pro", nozzle, 4, f"Flashforge Creator 5 Pro {nozzle} nozzle")
+                for nozzle in ("0.25", "0.4")
+            ],
+            ("flashforge-guider-3-ultra", "Flashforge Guider 3 Ultra", "0.4", 2, "Flashforge Guider 3 Ultra 0.4 Nozzle"),
+            *[
+                (
+                    "flashforge-guider4",
+                    "Flashforge Guider4",
+                    nozzle,
+                    1,
+                    f"Flashforge Guider4 {nozzle} nozzle",
+                )
+                for nozzle in ("0.25", "0.4")
+            ],
+            *[
+                (
+                    "flashforge-guider4-pro",
+                    "Flashforge Guider4 Pro",
+                    nozzle,
+                    1,
+                    f"Flashforge Guider4 Pro {nozzle} nozzle",
+                )
+                for nozzle in ("0.25", "0.4")
+            ],
+        ],
+    )
+    def test_flashforge_templates_keep_native_nozzle_and_machine_identity(
+        self,
+        printer_id: str,
+        model: str,
+        nozzle_size: str,
+        physical_tools: int,
+        source_profile_name: str,
+    ) -> None:
+        profile = get_printer_profile(printer_id)
+        template_name = profile.get_template_file("FlashStudio", nozzle_size=nozzle_size)
+        template = load_printer_template(
+            printer_id,
+            slicer="FlashStudio",
+            nozzle_size=nozzle_size,
+        )
+
+        assert (Path("printer_profiles") / template_name).exists()
+        assert template["printer_model"] == model
+        assert template["printer_settings_id"] == source_profile_name
+        assert template["nozzle_diameter"] == [nozzle_size] * physical_tools
+        assert template["version"] == "2.3.2"
+        assert template["filament_vendor"] == ["Flashforge"] * 8
+        assert "Flashforge" in str(template["default_filament_profile"])
 
     def test_load_printer_template_reads_0_2_variant(self) -> None:
         template = load_printer_template("bambu-p1s", nozzle_size=0.2)
@@ -217,18 +282,26 @@ class TestTemplateCache:
 
 
 class TestCheckedInNozzleVariants:
-    """Repository contains generated 0.2 template siblings for every base template."""
+    """Repository contains 0.2 siblings for profiles that declare 0.2 support."""
 
     def test_every_base_template_has_0_2_sibling(self) -> None:
         profiles_dir = Path(__file__).resolve().parents[1] / "printer_profiles"
-        base_templates = sorted(
-            path for path in profiles_dir.glob("*.json")
-            if not path.name.endswith("_0_2.json")
-        )
+        base_template_names: set[str] = set()
+        for profile in list_printer_profiles():
+            if "0.2" not in profile.supported_nozzle_sizes:
+                continue
+            slicers = list(profile.slicer_templates)
+            if profile.template_file.startswith("bambu_"):
+                slicers.append("BambuStudio")
+            for slicer in slicers:
+                base_template_names.add(profile.get_template_file(slicer, nozzle_size="0.4"))
 
         missing = [
-            path.name for path in base_templates
-            if not path.with_name(f"{path.stem}_0_2.json").exists()
+            name
+            for name in sorted(base_template_names)
+            if not (profiles_dir / name).with_name(
+                f"{Path(name).stem}_0_2.json"
+            ).exists()
         ]
 
         assert not missing, f"Missing 0.2 template siblings: {missing}"

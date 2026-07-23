@@ -16,6 +16,7 @@ import {
   SVG_PIXELS_PER_MM_STEP,
   SOLVER_CACHE_GRID_RESOLUTIONS,
   useSettingsStore,
+  type NozzleSize,
   type SolverCacheGridResolution,
 } from "../stores/settingsStore";
 import { useSlicerStore } from "../stores/slicerStore";
@@ -314,7 +315,7 @@ export default function SettingsPanel() {
     }
 
     if (nextNozzleSize !== nozzleSize) {
-      setNozzleSize(nextNozzleSize as "0.2" | "0.4");
+      setNozzleSize(nextNozzleSize as NozzleSize);
       didNormalize = true;
     }
 
@@ -354,7 +355,7 @@ export default function SettingsPanel() {
       setLastBedLabel(`${selected.bed_width}×${selected.bed_depth} mm`);
       const nextNozzleSize = resolveNozzleSizeOption(nozzleSize, selected, resolvedSlicerSoftware);
       if (nextNozzleSize !== nozzleSize) {
-        setNozzleSize(nextNozzleSize as "0.2" | "0.4");
+        setNozzleSize(nextNozzleSize as NozzleSize);
       }
       const nextDeviceProfileId = resolveDeviceProfileOptionId(
         deviceProfileId,
@@ -386,7 +387,7 @@ export default function SettingsPanel() {
     }
     const nextNozzleSize = resolveNozzleSizeOption(nozzleSize, resolvedPrinter, id);
     if (nextNozzleSize !== nozzleSize) {
-      setNozzleSize(nextNozzleSize as "0.2" | "0.4");
+      setNozzleSize(nextNozzleSize as NozzleSize);
     }
     const nextDeviceProfileId = resolveDeviceProfileOptionId(
       deviceProfileId,
@@ -406,7 +407,7 @@ export default function SettingsPanel() {
       setLastBedLabel(`${printer.bed_width}×${printer.bed_depth} mm`);
     }
     if (value !== nozzleSize) {
-      setNozzleSize(value as "0.2" | "0.4");
+      setNozzleSize(value as NozzleSize);
     }
     const nextDeviceProfileId = resolveDeviceProfileOptionId(
       deviceProfileId,

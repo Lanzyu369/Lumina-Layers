@@ -19,6 +19,7 @@ const SLICERS: SlicerOption[] = [
   { id: "BambuStudio", display_name: "BambuStudio" },
   { id: "OrcaSlicer", display_name: "OrcaSlicer" },
   { id: "AnycubicSlicerNext", display_name: "Anycubic Slicer Next" },
+  { id: "FlashStudio", display_name: "Flash Studio Desktop" },
 ];
 
 const PRINTERS: PrinterInfo[] = [
@@ -177,10 +178,30 @@ const MULTI_SOURCE_ELEGOO_CC2: PrinterInfo = {
   ],
 };
 
+const FLASHFORGE_GUIDER_3_ULTRA: PrinterInfo = {
+  id: "flashforge-guider-3-ultra",
+  display_name: "Flashforge Guider 3 Ultra",
+  brand: "Flashforge",
+  bed_width: 300,
+  bed_depth: 330,
+  bed_height: 600,
+  supported_nozzle_sizes: ["0.4"],
+  supported_slicers: ["FlashStudio"],
+  device_profiles: ["0.4"].map((nozzleSize) => ({
+    device_profile_id: `FlashStudio:flashforge:flashforge-guider-3-ultra:${nozzleSize}`,
+    slicer_id: "FlashStudio",
+    nozzle_size: nozzleSize,
+    source_profile_name: `Flashforge Guider 3 Ultra ${nozzleSize} Nozzle`,
+    revision: `sha256:flash-guider-${nozzleSize}`,
+    supported: true,
+  })),
+};
+
 describe("settingsOptionIds", () => {
   it("normalizes legacy slicer ids", () => {
     expect(normalizeSlicerOptionId("orca_slicer")).toBe("OrcaSlicer");
     expect(normalizeSlicerOptionId("anycubic_slicer_next")).toBe("AnycubicSlicerNext");
+    expect(normalizeSlicerOptionId("flash studio desktop")).toBe("FlashStudio");
     expect(normalizeSlicerOptionId("prusa_slicer")).toBe("PrusaSlicer");
     expect(normalizeSlicerOptionId("ultimaker-cura")).toBe("Cura");
     expect(normalizeSlicerOptionId("BambuStudio")).toBe("BambuStudio");
@@ -189,6 +210,8 @@ describe("settingsOptionIds", () => {
   it("maps canonical slicer software ids to detected slicer ids", () => {
     expect(getDetectedSlicerIdForSoftware("AnycubicSlicerNext")).toBe("anycubic_slicer_next");
     expect(getDetectedSlicerIdForSoftware("anycubic_slicer")).toBe("anycubic_slicer_next");
+    expect(getDetectedSlicerIdForSoftware("FlashStudio")).toBe("flash_studio");
+    expect(getDetectedSlicerIdForSoftware("flashforge")).toBe("flash_studio");
     expect(getDetectedSlicerIdForSoftware("OrcaSlicer")).toBe("orca_slicer");
     expect(getDetectedSlicerIdForSoftware("prusa_slicer")).toBe("prusa_slicer");
     expect(getDetectedSlicerIdForSoftware("ultimaker cura")).toBe("cura");
@@ -196,6 +219,7 @@ describe("settingsOptionIds", () => {
 
   it("returns readable slicer software display names", () => {
     expect(getSlicerSoftwareDisplayName("AnycubicSlicerNext")).toBe("Anycubic Slicer Next");
+    expect(getSlicerSoftwareDisplayName("flash_studio")).toBe("Flash Studio Desktop");
     expect(getSlicerSoftwareDisplayName("prusa_slicer")).toBe("PrusaSlicer");
     expect(getSlicerSoftwareDisplayName("ultimaker-cura")).toBe("Ultimaker Cura");
   });
@@ -229,12 +253,12 @@ describe("settingsOptionIds", () => {
     expect(resolveNozzleSizeOption("", undefined)).toBe("0.4");
   });
 
-  it("derives only Lumina-supported nozzle sizes from slicer-scoped registry device profiles", () => {
+  it("derives only enabled nozzle sizes from slicer-scoped registry profiles", () => {
     expect(getPrinterNozzleSizeOptions(PRINTERS[0], "BambuStudio")).toEqual(["0.2", "0.4"]);
     expect(getPrinterNozzleSizeOptions(PRINTERS[0], "OrcaSlicer")).toEqual(["0.2"]);
   });
 
-  it("keeps native 0.25 mm Anycubic profiles selectable without exposing 0.6 or 0.8", () => {
+  it("keeps native 0.25 mm Anycubic profiles selectable without broadening its UI", () => {
     expect(getPrinterNozzleSizeOptions(PRINTERS[3], "AnycubicSlicerNext")).toEqual([
       "0.25",
       "0.4",
@@ -247,6 +271,20 @@ describe("settingsOptionIds", () => {
         "0.25",
       ),
     ).toBe("AnycubicSlicerNext:anycubic:anycubic-kobra-x:0.25");
+  });
+
+  it("caps Flash Studio options at the nozzles supported by the machine", () => {
+    expect(
+      getPrinterNozzleSizeOptions(FLASHFORGE_GUIDER_3_ULTRA, "FlashStudio"),
+    ).toEqual(["0.4"]);
+    expect(
+      resolveDeviceProfileOptionId(
+        "",
+        FLASHFORGE_GUIDER_3_ULTRA,
+        "FlashStudio",
+        "0.4",
+      ),
+    ).toBe("FlashStudio:flashforge:flashforge-guider-3-ultra:0.4");
   });
 
   it("keeps slicer-scoped machine ids separate", () => {
@@ -302,12 +340,14 @@ describe("settingsOptionIds", () => {
       expect(isBambuFamilySlicer("BambuStudio")).toBe(true);
       expect(isBambuFamilySlicer("OrcaSlicer")).toBe(true);
       expect(isBambuFamilySlicer("AnycubicSlicerNext")).toBe(true);
+      expect(isBambuFamilySlicer("FlashStudio")).toBe(true);
     });
 
     it("returns true for legacy aliases", () => {
       expect(isBambuFamilySlicer("bambu")).toBe(true);
       expect(isBambuFamilySlicer("orca_slicer")).toBe(true);
       expect(isBambuFamilySlicer("snapmaker orca")).toBe(true);
+      expect(isBambuFamilySlicer("flashforge")).toBe(true);
     });
 
     it("returns false for non-Bambu-family and empty values", () => {

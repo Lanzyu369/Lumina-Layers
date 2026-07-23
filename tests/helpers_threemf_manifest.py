@@ -258,6 +258,17 @@ def expected_family_signature(printer_id: str, slicer: str, nozzle_size: str) ->
             "requires_cut_information": False,
             "requires_custom_gcode": True,
         }
+    if slicer == "FlashStudio":
+        return {
+            "application": "BambuStudio-2.3.2",
+            "slice_header": {
+                "X-BBL-Client-Type": "slicer",
+                "X-BBL-Client-Version": "",
+            },
+            "requires_filament_sequence": False,
+            "requires_cut_information": False,
+            "requires_custom_gcode": False,
+        }
     raise ValueError(f"Unsupported slicer family: {slicer}")
 
 

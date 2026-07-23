@@ -27,9 +27,9 @@ function makeEntry(version: string): AnnouncementEntry {
 }
 
 describe("useAnnouncement", () => {
-  it("announces the material-profile 3D preview fix in the latest update", () => {
-    expect(ANNOUNCEMENTS[0]?.version).toBe("2026-07-19");
-    const items = ANNOUNCEMENTS[0]?.sections.flatMap((section) => section.items) ?? [];
+  it("keeps the material-profile 3D preview fix in announcement history", () => {
+    const entry = ANNOUNCEMENTS.find((item) => item.version === "2026-07-19");
+    const items = entry?.sections.flatMap((section) => section.items) ?? [];
 
     expect(
       items.some(
@@ -40,6 +40,27 @@ describe("useAnnouncement", () => {
           item.en.includes("Material-profile") &&
           item.en.toLowerCase().includes("simulated recipe colours") &&
           item.en.toLowerCase().includes("relief"),
+      ),
+    ).toBe(true);
+  });
+
+  it("announces Flash Studio Desktop and Flashforge multicolor support", () => {
+    expect(ANNOUNCEMENTS[0]?.version).toBe("2026-07-22");
+    const items = ANNOUNCEMENTS[0]?.sections.flatMap((section) => section.items) ?? [];
+
+    expect(
+      items.some(
+        (item) =>
+          item.zh.includes("Flash Studio Desktop") &&
+          item.zh.includes("AD5X") &&
+          item.zh.includes("Creator 5") &&
+          item.zh.includes("Guider 3 Ultra") &&
+          item.zh.includes("Guider4") &&
+          item.en.includes("Flash Studio Desktop") &&
+          item.en.includes("0.25") &&
+          item.en.includes("0.4") &&
+          item.en.includes("2.3.2") &&
+          item.en.includes("Lumina process settings"),
       ),
     ).toBe(true);
   });
@@ -241,8 +262,8 @@ describe("selectAnnouncementHistory", () => {
   });
 
   it("默认历史条数足够覆盖这次 5 月更新回顾", () => {
-    expect(ANNOUNCEMENT_HISTORY_LIMIT).toBeGreaterThanOrEqual(17);
-    expect(selectAnnouncementHistory(ANNOUNCEMENTS).length).toBeGreaterThanOrEqual(17);
+    expect(ANNOUNCEMENT_HISTORY_LIMIT).toBeGreaterThanOrEqual(18);
+    expect(selectAnnouncementHistory(ANNOUNCEMENTS).length).toBeGreaterThanOrEqual(18);
     expect(selectAnnouncementHistory(ANNOUNCEMENTS).map((e) => e.version)).toContain(
       "2026-05-05",
     );

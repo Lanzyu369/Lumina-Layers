@@ -27,6 +27,7 @@ SLICER_COVERAGE: list[tuple[str, str, str]] = [
     ("elegoo-cc2", "ElegooSlicer", "0.4"),
     ("snapmaker-u1", "SnapmakerOrca", "0.4"),
     ("anycubic-kobra-x", "AnycubicSlicerNext", "0.4"),
+    ("flashforge-ad5x", "FlashStudio", "0.25"),
 ]
 
 
