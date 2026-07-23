@@ -27,6 +27,100 @@ function makeEntry(version: string): AnnouncementEntry {
 }
 
 describe("useAnnouncement", () => {
+  it("keeps the material-profile 3D preview fix in announcement history", () => {
+    const entry = ANNOUNCEMENTS.find((item) => item.version === "2026-07-19");
+    const items = entry?.sections.flatMap((section) => section.items) ?? [];
+
+    expect(
+      items.some(
+        (item) =>
+          item.zh.includes("耗材档案") &&
+          item.zh.includes("模拟颜色") &&
+          item.zh.includes("浮雕") &&
+          item.en.includes("Material-profile") &&
+          item.en.toLowerCase().includes("simulated recipe colours") &&
+          item.en.toLowerCase().includes("relief"),
+      ),
+    ).toBe(true);
+  });
+
+  it("announces Flash Studio Desktop and Flashforge multicolor support", () => {
+    expect(ANNOUNCEMENTS[0]?.version).toBe("2026-07-22");
+    const items = ANNOUNCEMENTS[0]?.sections.flatMap((section) => section.items) ?? [];
+
+    expect(
+      items.some(
+        (item) =>
+          item.zh.includes("Flash Studio Desktop") &&
+          item.zh.includes("AD5X") &&
+          item.zh.includes("Creator 5") &&
+          item.zh.includes("Guider 3 Ultra") &&
+          item.zh.includes("Guider4") &&
+          item.en.includes("Flash Studio Desktop") &&
+          item.en.includes("0.25") &&
+          item.en.includes("0.4") &&
+          item.en.includes("2.3.2") &&
+          item.en.includes("Lumina process settings"),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps scoped large-format recolouring in announcement history", () => {
+    const entry = ANNOUNCEMENTS.find((item) => item.version === "2026-07-18");
+    const items = entry?.sections.flatMap((section) => section.items) ?? [];
+
+    expect(
+      items.some(
+        (item) =>
+          item.zh.includes("大画幅") &&
+          item.zh.includes("选中区域") &&
+          item.en.includes("Large-format") &&
+          item.en.includes("selected area"),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps the base-layer alignment fix in announcement history", () => {
+    const entry = ANNOUNCEMENTS.find((item) => item.version === "2026-07-18");
+    const items = entry?.sections.flatMap((section) => section.items) ?? [];
+
+    expect(
+      items.some(
+        (item) =>
+          item.zh.includes("底板层高") &&
+          item.zh.includes("浮雕") &&
+          item.zh.includes("双面") &&
+          item.en.toLowerCase().includes("base-layer") &&
+          item.en.toLowerCase().includes("relief") &&
+          item.en.toLowerCase().includes("double-sided"),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps SVG vector relief support in announcement history", () => {
+    const reliefEntry = ANNOUNCEMENTS.find((entry) => entry.version === "2026-07-15");
+    const items = reliefEntry?.sections.flatMap((section) => section.items) ?? [];
+
+    expect(
+      items.some(
+        (item) =>
+          item.zh.includes("SVG") &&
+          item.zh.includes("浮雕") &&
+          item.en.includes("SVG") &&
+          item.en.toLowerCase().includes("relief"),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps the Karvax material rename in announcement history", () => {
+    const items = ANNOUNCEMENTS.flatMap((entry) =>
+      entry.sections.flatMap((section) => section.items),
+    );
+
+    expect(items.some((item) => item.zh.includes("Karvax") && item.en.includes("Karvax")))
+      .toBe(true);
+  });
+
   it("case-1 首次访问", async () => {
     const { result } = renderHook(() => useAnnouncement());
 
@@ -168,8 +262,8 @@ describe("selectAnnouncementHistory", () => {
   });
 
   it("默认历史条数足够覆盖这次 5 月更新回顾", () => {
-    expect(ANNOUNCEMENT_HISTORY_LIMIT).toBeGreaterThanOrEqual(7);
-    expect(selectAnnouncementHistory(ANNOUNCEMENTS).length).toBeGreaterThanOrEqual(7);
+    expect(ANNOUNCEMENT_HISTORY_LIMIT).toBeGreaterThanOrEqual(18);
+    expect(selectAnnouncementHistory(ANNOUNCEMENTS).length).toBeGreaterThanOrEqual(18);
     expect(selectAnnouncementHistory(ANNOUNCEMENTS).map((e) => e.version)).toContain(
       "2026-05-05",
     );

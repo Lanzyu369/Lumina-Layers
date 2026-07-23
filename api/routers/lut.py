@@ -115,6 +115,16 @@ _LUT_RECIPE_SEARCH_FAILED_DETAIL = (
 _LUT_NOT_FOUND_DETAIL = "Selected LUT was not found or is unavailable."
 
 
+def _is_lut_sync_index_path(path: str) -> bool:
+    try:
+        resolved = Path(path).resolve()
+        preset_root = Path(LUTManager.LUT_PRESET_DIR).resolve()
+        relative = resolved.relative_to(preset_root)
+    except (OSError, ValueError):
+        return False
+    return bool(relative.parts and relative.parts[0] == "_sync")
+
+
 def _lut_error_fields(exc: Exception) -> dict[str, str]:
     return {
         "error_type": type(exc).__name__,
@@ -215,7 +225,7 @@ def _resolve_lut_details_service():
     return _lut_details_service
 
 
-def _invalidate_lut_details_service_cache() -> None:
+def invalidate_lut_details_service_cache() -> None:
     """Drop cached LUT catalog/list state after LUT files change.
     在 LUT 文件变更后丢弃 LUT 目录/列表缓存状态。
     """
@@ -227,6 +237,10 @@ def _invalidate_lut_details_service_cache() -> None:
     LUTManager.invalidate_source_catalog_cache()
     LUTManager.invalidate_native_source_index_cache()
     get_lut_details_service.cache_clear()
+
+
+def _invalidate_lut_details_service_cache() -> None:
+    invalidate_lut_details_service_cache()
 
 
 @router.get("/list")
@@ -335,6 +349,7 @@ def get_lut_details_catalog() -> LutDetailsCatalogResponse:
                         fingerprint=item.fingerprint,
                         color_mode=_canonicalize_public_color_mode(item.color_mode),
                         source_kind=item.source_kind,
+                        compatibility_key=getattr(item, "compatibility_key", ""),
                         manufacturer=item.manufacturer,
                         material_type=item.material_type,
                         manufacturer_source=item.manufacturer_source,
@@ -342,9 +357,11 @@ def get_lut_details_catalog() -> LutDetailsCatalogResponse:
                         search_tokens=list(item.search_tokens),
                     )
                     for item in group.items
+                    if not _is_lut_sync_index_path(item.path)
                 ],
             )
             for group in catalog.groups
+            if any(not _is_lut_sync_index_path(item.path) for item in group.items)
         ]
     )
 

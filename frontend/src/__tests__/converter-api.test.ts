@@ -189,6 +189,33 @@ describe("convertPreview", () => {
     expect(formData.has("model_margin")).toBe(false);
     expect(result.session_id).toBe("sess-native");
   });
+
+  it("serializes legacy multi LUT names into FormData", async () => {
+    mockPost.mockResolvedValueOnce({
+      data: {
+        session_id: "sess-legacy-multi",
+        status: "ok",
+        message: "Preview generated",
+        preview_url: "/api/files/legacy-multi-prev",
+        palette: [],
+        dimensions: { width: 200, height: 150 },
+      },
+    });
+
+    const file = new File(["img-data"], "photo.png", { type: "image/png" });
+    await convertPreview(file, {
+      ...previewParams,
+      source_kind: "legacy_multi",
+      lut_name: "lut-a",
+      lut_names: ["lut-a", "lut-b"],
+    });
+
+    const [, rawFormData] = mockPost.mock.calls[0];
+    const formData = rawFormData as FormData;
+    expect(formData.get("source_kind")).toBe("legacy_multi");
+    expect(formData.get("lut_name")).toBe("lut-a");
+    expect(formData.get("lut_names")).toBe(JSON.stringify(["lut-a", "lut-b"]));
+  });
 });
 
 describe("convertBatch", () => {
@@ -298,6 +325,33 @@ describe("convertBatch", () => {
     expect(formData.get("auto_dynamic_range")).toBe("true");
     expect(formData.get("high_precision_3d_preview")).toBe("true");
   });
+
+  it("serializes legacy multi LUT names into batch FormData", async () => {
+    mockPost.mockResolvedValueOnce({
+      data: {
+        status: "ok",
+        message: "Batch generated",
+        download_url: "/api/files/batch.3mf",
+        preview_3d_url: null,
+        preview_items: [],
+        results: [],
+        warnings: [],
+      },
+    });
+
+    await convertBatch([new File(["a"], "a.png", { type: "image/png" })], {
+      ...baseBatchParams,
+      source_kind: "legacy_multi",
+      lut_name: "lut-a",
+      lut_names: ["lut-a", "lut-b"],
+    });
+
+    const [, rawFormData] = mockPost.mock.calls[0];
+    const formData = rawFormData as FormData;
+    expect(formData.get("source_kind")).toBe("legacy_multi");
+    expect(formData.get("lut_name")).toBe("lut-a");
+    expect(formData.get("lut_names")).toBe(JSON.stringify(["lut-a", "lut-b"]));
+  });
 });
 
 describe("convertGenerate", () => {
@@ -383,6 +437,31 @@ describe("convertGenerate", () => {
     expect(body.params.replacement_regions).toEqual([
       { quantized_hex: "#AAA", matched_hex: "#BBB", replacement_hex: "#CCC" },
     ]);
+  });
+
+  it("keeps lut_name as the first legacy multi LUT while sending all lut_names", async () => {
+    mockPost.mockResolvedValueOnce({
+      data: { status: "ok", message: "done", download_url: "/api/files/x" },
+    });
+
+    const paramsWithMultiLuts: ConvertGenerateRequest = {
+      ...generateParams,
+      source_kind: "legacy_multi",
+      lut_name: "lut-a",
+      lut_names: ["lut-a", "lut-b"],
+    };
+
+    await convertGenerate("sess-xyz", paramsWithMultiLuts);
+
+    const body = mockPost.mock.calls[0][1] as { session_id: string; params: ConvertGenerateRequest };
+    const params = body.params as {
+      source_kind?: string;
+      lut_name?: string;
+      lut_names?: string[];
+    };
+    expect(params.source_kind).toBe("legacy_multi");
+    expect(params.lut_name).toBe("lut-a");
+    expect(params.lut_names).toEqual(["lut-a", "lut-b"]);
   });
 
   it("propagates 4xx errors", async () => {

@@ -103,7 +103,7 @@ describe("BasicSettings recipe import visible errors", () => {
       const error = useConverterStore.getState().error;
       expect(error).toBeTruthy();
       expect(error).not.toMatch(RAW_HTTP_STATUS_PATTERN);
-      expect(error).toBe("导入失败：服务器发生内部错误。请使用请求 ID 查看日志。");
+      expect(error).toBe("导入失败：服务器发生内部错误。请稍后重试；如果问题持续，请提交反馈。");
     });
   });
 

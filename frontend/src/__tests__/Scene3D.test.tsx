@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, act, fireEvent } from "@testing-library/react";
 import * as THREE from "three";
+import { MOUSE } from "three";
 import { useConverterStore } from "../stores/converter";
 
 // Mock i18n — return key as-is
@@ -17,6 +18,10 @@ vi.mock("../components/InteractiveModelViewer", () => ({
     return null;
   },
   extractHexFromMeshName: (name: string) => name.slice(6),
+  resolvePreviewColorLayerHeightMm: (height?: number) => {
+    const value = typeof height === "number" ? height : NaN;
+    return Number.isFinite(value) && value > 0 ? value : 0.4;
+  },
 }));
 let capturedBedPlatformProps: Record<string, unknown> | null = null;
 vi.mock("../components/BedPlatform", () => ({
@@ -43,8 +48,12 @@ vi.mock("../components/FridgeMagnet3D", () => ({
 
 // Mock @react-three/drei — Environment renders a queryable DOM element
 // Boolean false is dropped by React DOM, so we explicitly map props to data-* attributes
+let capturedOrbitControlsProps: Record<string, unknown> = {};
 vi.mock("@react-three/drei", () => ({
-  OrbitControls: () => null,
+  OrbitControls: (props: Record<string, unknown>) => {
+    capturedOrbitControlsProps = props;
+    return null;
+  },
   Environment: (props: Record<string, unknown>) => (
     <div
       data-testid="mock-environment"
@@ -88,6 +97,30 @@ function createMockGl() {
 
 type MockControlEvent = "start" | "change" | "end";
 
+type MockVector3 = {
+  x: number;
+  y: number;
+  z: number;
+  set: (nextX: number, nextY: number, nextZ: number) => MockVector3;
+  distanceTo: (other: MockVector3) => number;
+  length: () => number;
+};
+
+function createMockVector3(x: number, y: number, z: number): MockVector3 {
+  const vector = { x, y, z } as MockVector3;
+  vector.set = vi.fn((nextX: number, nextY: number, nextZ: number) => {
+    vector.x = nextX;
+    vector.y = nextY;
+    vector.z = nextZ;
+    return vector;
+  });
+  vector.distanceTo = vi.fn((other: MockVector3) =>
+    Math.hypot(vector.x - other.x, vector.y - other.y, vector.z - other.z),
+  );
+  vector.length = vi.fn(() => Math.hypot(vector.x, vector.y, vector.z));
+  return vector;
+}
+
 function createMockControls() {
   const listeners: Record<MockControlEvent, Set<() => void>> = {
     start: new Set(),
@@ -96,7 +129,10 @@ function createMockControls() {
   };
 
   return {
-    target: new THREE.Vector3(),
+    target: createMockVector3(0, -20, 0),
+    minDistance: 10,
+    maxDistance: 2_000,
+    update: vi.fn(),
     addEventListener: vi.fn((type: MockControlEvent, listener: () => void) => {
       listeners[type].add(listener);
     }),
@@ -124,7 +160,15 @@ function createMockControls() {
 type MockThreeState = {
   gl: ReturnType<typeof createMockGl>;
   scene: { children: THREE.Object3D[] };
-  camera: THREE.PerspectiveCamera;
+  camera: {
+    isPerspectiveCamera: true;
+    position: MockVector3;
+    near: number;
+    far: number;
+    fov: number;
+    lookAt: ReturnType<typeof vi.fn>;
+    updateProjectionMatrix: ReturnType<typeof vi.fn>;
+  };
   controls: ReturnType<typeof createMockControls> | null;
   invalidate: ReturnType<typeof vi.fn>;
 };
@@ -134,7 +178,15 @@ function getMockThreeState(): MockThreeState {
     mockThreeState = {
       gl: createMockGl(),
       scene: { children: [] as THREE.Object3D[] },
-      camera: new THREE.PerspectiveCamera(45, 1, 0.1, 2000),
+      camera: {
+        isPerspectiveCamera: true,
+        position: createMockVector3(0, -57, 474),
+        near: 0.1,
+        far: 2_000,
+        fov: 45,
+        lookAt: vi.fn(),
+        updateProjectionMatrix: vi.fn(),
+      },
       controls: null,
       invalidate: vi.fn(),
     };
@@ -163,6 +215,7 @@ import Scene3D, {
 describe("Scene3D", () => {
 beforeEach(() => {
     capturedCanvasProps = {};
+    capturedOrbitControlsProps = {};
     capturedInteractiveViewerProps = null;
     capturedBedPlatformProps = null;
     capturedModelSurfaceSelectorProps = null;
@@ -353,6 +406,104 @@ beforeEach(() => {
     });
   });
 
+  describe("viewport pan gestures", () => {
+    it("maps middle/right drag to pan and temporarily maps Space+left to pan", () => {
+      render(<Scene3D />);
+
+      const defaultButtons = capturedOrbitControlsProps.mouseButtons as {
+        LEFT: number;
+        MIDDLE: number;
+        RIGHT: number;
+      };
+      expect(defaultButtons).toEqual({
+        LEFT: MOUSE.ROTATE,
+        MIDDLE: MOUSE.PAN,
+        RIGHT: MOUSE.PAN,
+      });
+
+      const container = screen.getByTestId("scene3d-container");
+      const pointerCancel = vi.fn();
+      getMockThreeState().gl.domElement.addEventListener("pointercancel", pointerCancel);
+      fireEvent.pointerEnter(container);
+      const spaceDown = new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        code: "Space",
+        key: " ",
+      });
+      act(() => {
+        window.dispatchEvent(spaceDown);
+      });
+
+      expect(spaceDown.defaultPrevented).toBe(true);
+      expect(container).toHaveAttribute("data-space-pan-active", "true");
+      expect(capturedOrbitControlsProps.mouseButtons).toEqual({
+        LEFT: MOUSE.PAN,
+        MIDDLE: MOUSE.PAN,
+        RIGHT: MOUSE.PAN,
+      });
+
+      const pointerDownAllowed = fireEvent.pointerDown(container, {
+        pointerId: 31,
+        button: 0,
+      });
+      expect(pointerDownAllowed).toBe(false);
+
+      const spaceUp = new KeyboardEvent("keyup", {
+        bubbles: true,
+        cancelable: true,
+        code: "Space",
+        key: " ",
+      });
+      act(() => {
+        window.dispatchEvent(spaceUp);
+      });
+
+      expect(spaceUp.defaultPrevented).toBe(true);
+      expect(pointerCancel).toHaveBeenCalledTimes(1);
+      expect(container).not.toHaveAttribute("data-space-pan-active");
+      expect(capturedOrbitControlsProps.mouseButtons).toEqual({
+        LEFT: MOUSE.ROTATE,
+        MIDDLE: MOUSE.PAN,
+        RIGHT: MOUSE.PAN,
+      });
+    });
+
+    it("prevents middle-button auto-scroll and clears the Space modifier on blur", () => {
+      render(<Scene3D />);
+      const container = screen.getByTestId("scene3d-container");
+
+      expect(fireEvent.mouseDown(container, { button: 1 })).toBe(false);
+      const auxClick = new MouseEvent("auxclick", {
+        bubbles: true,
+        cancelable: true,
+        button: 1,
+      });
+      expect(container.dispatchEvent(auxClick)).toBe(false);
+
+      fireEvent.pointerEnter(container);
+      act(() => {
+        window.dispatchEvent(new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          code: "Space",
+          key: " ",
+        }));
+      });
+      expect(container).toHaveAttribute("data-space-pan-active", "true");
+
+      act(() => {
+        window.dispatchEvent(new Event("blur"));
+      });
+      expect(container).not.toHaveAttribute("data-space-pan-active");
+      expect(capturedOrbitControlsProps.mouseButtons).toEqual({
+        LEFT: MOUSE.ROTATE,
+        MIDDLE: MOUSE.PAN,
+        RIGHT: MOUSE.PAN,
+      });
+    });
+  });
+
   describe("orbit demand rendering", () => {
     it("keeps a precise depth range when orbit zoom moves the camera beyond it", () => {
       const controls = createMockControls();
@@ -424,6 +575,66 @@ beforeEach(() => {
       });
 
       expect(document.body.classList.contains("lumina-canvas-orbiting")).toBe(false);
+    });
+  });
+
+  describe("camera depth precision", () => {
+    it("starts with clipping planes that separate thin material layers", () => {
+      render(<Scene3D />);
+
+      const camera = capturedCanvasProps.camera as {
+        near?: number;
+        far?: number;
+      };
+      expect(camera.near).toBeGreaterThan(1);
+      expect(camera.far).toBeGreaterThan(2_000);
+    });
+
+    it("subscribes when default orbit controls register after the first render", () => {
+      const controls = createMockControls();
+      const threeState = getMockThreeState();
+
+      const { rerender } = render(<Scene3D />);
+      expect(threeState.controls).toBeNull();
+
+      act(() => {
+        threeState.controls = controls;
+        rerender(<Scene3D />);
+      });
+
+      expect(threeState.camera.near).toBeCloseTo(4.75, 1);
+      expect(threeState.camera.far).toBeGreaterThan(4_700);
+      expect(controls.addEventListener).toHaveBeenCalledWith(
+        "change",
+        expect.any(Function),
+      );
+
+      act(() => {
+        threeState.camera.position.set(0, 0, 2_000);
+        controls.target.set(0, 0, 0);
+        controls.emit("change");
+      });
+
+      expect(threeState.camera.near).toBe(20);
+      expect(threeState.camera.far).toBe(20_000);
+      expect(threeState.camera.updateProjectionMatrix).toHaveBeenCalled();
+    });
+
+    it("does not rebuild the projection matrix for rotation-only changes", () => {
+      const controls = createMockControls();
+      const threeState = getMockThreeState();
+      threeState.controls = controls;
+
+      render(<Scene3D />);
+      const orbitDistance = threeState.camera.position.distanceTo(controls.target);
+      threeState.camera.updateProjectionMatrix.mockClear();
+
+      act(() => {
+        threeState.camera.position.set(orbitDistance, controls.target.y, 0);
+        controls.emit("change");
+      });
+
+      expect(threeState.camera.updateProjectionMatrix).not.toHaveBeenCalled();
     });
   });
 
@@ -609,6 +820,18 @@ beforeEach(() => {
       render(<Scene3D />);
 
       expect(capturedInteractiveViewerProps?.enableFridgeMagnet).toBe(true);
+    });
+
+    it("passes material stack height into InteractiveModelViewer", () => {
+      useConverterStore.setState({
+        previewGlbUrl: "/api/files/mock-preview.glb",
+        color_layers: 10,
+        layer_height_mm: 0.08,
+      });
+
+      render(<Scene3D />);
+
+      expect(capturedInteractiveViewerProps?.colorLayerHeightMm).toBeCloseTo(0.8, 5);
     });
 
     it("does not render the proxy layer when fridge mode is disabled", () => {

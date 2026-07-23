@@ -44,6 +44,28 @@ def test_discover_local_import_sources_keeps_anycubic_client_version_overrides(t
     assert source.client_version == "1.4.1.2 20260604104233"
 
 
+def test_discover_local_import_sources_keeps_flash_studio_version_contract(tmp_path):
+    appdata_root = tmp_path / "AppData" / "Roaming"
+    flash_root = appdata_root / "Orca-Flashforge" / "system"
+    (flash_root / "Flashforge" / "machine").mkdir(parents=True)
+    (flash_root / "Flashforge.json").write_text(
+        '{"version":"02.01.01.00"}',
+        encoding="utf-8",
+    )
+
+    sources = discover_local_import_sources(
+        appdata_root=appdata_root,
+        slicer_ids=("FlashStudio",),
+    )
+
+    assert len(sources) == 1
+    source = sources[0]
+    assert source.source_root == flash_root
+    assert source.source_version == "02.01.01.00"
+    assert source.application_metadata == "BambuStudio-2.3.2"
+    assert source.client_version == ""
+
+
 def test_discover_local_asset_roots_includes_snapmaker_web_images(tmp_path):
     appdata_root = tmp_path / "AppData" / "Roaming"
     image_dir = (

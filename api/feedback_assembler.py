@@ -156,6 +156,24 @@ def _failed_lut(
     }
 
 
+def _empty_lut_attachment() -> dict[str, Any]:
+    """Return the default LUT attachment shape.
+
+    返回 LUT 附件默认结构，保证单选、多选、缺失路径字段一致。
+    """
+
+    return {
+        "status": "not_applicable",
+        "kind": None,
+        "name": None,
+        "preset_relative_path": None,
+        "filename": None,
+        "sha256": None,
+        "size_bytes": None,
+        "metadata": {},
+    }
+
+
 def _original_image_expected(context: dict[str, Any]) -> bool:
     ref = context.get("active_original_image_ref")
     return isinstance(ref, dict) and _is_non_empty_string(ref.get("session_id"))
@@ -177,12 +195,35 @@ def _lut_expected(context: dict[str, Any]) -> bool:
     source_version = context.get("source_version")
     return (
         source_version in {None, "legacy"}
-        and _is_non_empty_string(context.get("lut_name"))
+        and len(_lut_names_from_context(context)) > 0
     )
 
 
 def _lut_critical_for_finalize(context: dict[str, Any]) -> bool:
     return context.get("active_tab") == "converter" and _lut_expected(context)
+
+
+def _lut_names_from_context(context: dict[str, Any]) -> list[str]:
+    """Return bounded, de-duplicated legacy LUT names from bug context.
+
+    从 bug 上下文提取有界、去重的传统 LUT 名称列表。
+    """
+
+    names: list[str] = []
+    primary = context.get("lut_name")
+    if _is_non_empty_string(primary):
+        names.append(str(primary).strip())
+    raw_names = context.get("lut_names")
+    if isinstance(raw_names, list):
+        for item in raw_names:
+            if not _is_non_empty_string(item):
+                continue
+            clean = str(item).strip()
+            if clean and clean not in names:
+                names.append(clean)
+            if len(names) >= 32:
+                break
+    return names
 
 
 def _file_registry_entries_for(file_registry, session_id: str | None) -> dict[str, dict]:
@@ -605,13 +646,15 @@ def collect_sync_attachments(
         )
     except Exception as exc:
         if _lut_expected(context):
-            lut_name = context.get("lut_name")
+            lut_names = _lut_names_from_context(context)
             lut = _failed_lut(
-                str(lut_name) if lut_name is not None else None,
+                lut_names[0] if lut_names else None,
                 None,
                 type(exc).__name__,
                 "LUT could not be saved.",
             )
+            if len(lut_names) > 1:
+                lut["names"] = lut_names
         log.warning(
             "LUT collection crashed.",
             extra={
@@ -834,23 +877,56 @@ def _collect_final_artifact(
 
 def _collect_lut(ticket_dir: Path, context: dict[str, Any]) -> dict[str, Any]:
     """Build the ``lut`` attachment dict."""
-    base = {
-        "status": "not_applicable",
-        "kind": None,
-        "name": None,
-        "preset_relative_path": None,
-        "filename": None,
-        "sha256": None,
-        "size_bytes": None,
-        "metadata": {},
-    }
+    base = _empty_lut_attachment()
     if context.get("source_version") == "material":
         return base
     if context.get("source_version") == "native":
         return base
-    lut_name = context.get("lut_name")
-    if not lut_name:
+    lut_names = _lut_names_from_context(context)
+    if not lut_names:
         return base
+
+    items = [
+        _collect_single_lut(
+            ticket_dir,
+            lut_name,
+            filename_prefix="lut" if len(lut_names) == 1 else f"lut_{index}",
+        )
+        for index, lut_name in enumerate(lut_names, start=1)
+    ]
+    if len(items) == 1:
+        return items[0]
+
+    aggregate = {
+        **base,
+        "status": "attached" if all(item.get("status") in {"attached", "preset_reference_only"} for item in items) else "partial",
+        "kind": "multiple",
+        "name": lut_names[0],
+        "names": lut_names,
+        "items": items,
+    }
+    failed = [
+        item
+        for item in items
+        if item.get("status") not in {"attached", "preset_reference_only"}
+    ]
+    if failed:
+        aggregate["error_type"] = "PartialLutCollection"
+        aggregate["error_message"] = "One or more LUTs could not be saved."
+    return aggregate
+
+
+def _collect_single_lut(
+    ticket_dir: Path,
+    lut_name: str,
+    *,
+    filename_prefix: str,
+) -> dict[str, Any]:
+    """Collect one legacy LUT attachment or preset reference.
+
+    收集一个传统 LUT 附件或预设引用。
+    """
+
     if not _is_lut_name_path_safe(lut_name):
         return _failed_lut(
             str(lut_name),
@@ -862,7 +938,7 @@ def _collect_lut(ticket_dir: Path, context: dict[str, Any]) -> dict[str, Any]:
     found = _find_lut_file(lut_name)
     if found is None:
         return {
-            **base,
+            **_empty_lut_attachment(),
             "status": "unavailable",
             "name": lut_name,
         }
@@ -894,7 +970,7 @@ def _collect_lut(ticket_dir: Path, context: dict[str, Any]) -> dict[str, Any]:
         )
     if is_custom:
         suffix = found.suffix.lower()
-        dst = ticket_dir / f"lut{suffix}"
+        dst = ticket_dir / f"{filename_prefix}{suffix}"
         try:
             shutil.copy2(found, dst)
         except OSError as exc:
@@ -1095,6 +1171,35 @@ def _attached_lut_manifest_matches_file(
     return True
 
 
+def _lut_attachment_is_complete(
+    ticket_dir: Path,
+    attachment: dict[str, Any],
+) -> bool:
+    """Validate a collected LUT attachment item.
+
+    校验已收集的单个 LUT 附件条目。
+    """
+
+    if attachment.get("status") == "preset_reference_only":
+        return _preset_lut_manifest_is_valid(attachment)
+    if attachment.get("status") != "attached":
+        return False
+    lut_path = _attachment_file_path(
+        ticket_dir,
+        attachment,
+        failure_message="LUT is missing from the ticket directory.",
+    )
+    if lut_path is None:
+        return False
+    if not _attached_lut_manifest_matches_file(attachment, lut_path):
+        return False
+    return _attachment_metadata_is_valid(
+        attachment,
+        required_text_fields=("kind", "name"),
+        path=lut_path,
+    )
+
+
 def _attachment_section(
     attachments: dict[str, Any],
     key: str,
@@ -1170,27 +1275,16 @@ def _critical_sync_attachments_complete(
 
     if _lut_critical_for_finalize(context):
         lut = _attachment_section(attachments, "lut")
-        if lut.get("status") == "preset_reference_only":
-            if not _preset_lut_manifest_is_valid(lut):
-                complete = False
-        elif lut.get("status") != "attached":
+        raw_items = lut.get("items")
+        if isinstance(raw_items, list) and raw_items:
+            for raw_item in raw_items:
+                if not isinstance(raw_item, dict):
+                    complete = False
+                    continue
+                if not _lut_attachment_is_complete(ticket_dir, raw_item):
+                    complete = False
+        elif not _lut_attachment_is_complete(ticket_dir, lut):
             complete = False
-        else:
-            lut_path = _attachment_file_path(
-                ticket_dir,
-                lut,
-                failure_message="LUT is missing from the ticket directory.",
-            )
-            if lut_path is None:
-                complete = False
-            elif not _attached_lut_manifest_matches_file(lut, lut_path):
-                complete = False
-            elif not _attachment_metadata_is_valid(
-                lut,
-                required_text_fields=("kind", "name"),
-                path=lut_path,
-            ):
-                complete = False
 
     return complete
 

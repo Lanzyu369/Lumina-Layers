@@ -18,11 +18,19 @@ import os
 import io
 import warnings
 import xml.etree.ElementTree as ET
+from types import SimpleNamespace
 from unittest import mock
 import numpy as np
 import pytest
+from PIL import Image
 from svgelements import Arc, Path as SvgPath
-from shapely.geometry import Polygon, MultiPolygon, GeometryCollection, LineString
+from shapely.geometry import (
+    Polygon,
+    MultiPolygon,
+    GeometryCollection,
+    LineString,
+    box,
+)
 from shapely.ops import unary_union as shapely_unary_union
 
 import core.vector_engine as vector_engine
@@ -73,6 +81,269 @@ class TestFlattenCubicBezier:
         out_fine = [(r, 0.0)]
         _flatten_cubic(r, 0, r, k*r, k*r, r, 0, r, tolerance=0.01, out=out_fine, depth=0)
         assert len(out_fine) > len(out_coarse)
+
+
+class TestNativeVectorRelief:
+    """Relief changes per-shape backing height without rasterizing SVG colors."""
+
+    @staticmethod
+    def _analysis():
+        left = box(0, 0, 10, 10)
+        right = box(10, 0, 20, 10)
+        shapes = [
+            {
+                "geometry": left,
+                "recipe": [0, 0],
+                "color": (255, 0, 0),
+                "matched_rgb": (255, 0, 0),
+            },
+            {
+                "geometry": right,
+                "recipe": [1, 1],
+                "color": (255, 255, 255),
+                "matched_rgb": (255, 255, 255),
+            },
+        ]
+        return SimpleNamespace(
+            matched_shapes=shapes,
+            clipped_shapes=[
+                {"geometry": left, "color": (255, 0, 0)},
+                {"geometry": right, "color": (255, 255, 255)},
+            ],
+            silhouette=left.union(right),
+            image_vectorizer_bounds=None,
+            scale_factor=1.0,
+            bbox=(0.0, 0.0, 20.0, 10.0),
+            slot_names=["Red", "White"],
+            num_channels=2,
+            num_layers=2,
+            preview_colors={
+                0: [255, 0, 0, 255],
+                1: [255, 255, 255, 255],
+            },
+            stage_timings={},
+        )
+
+    @staticmethod
+    def _processor():
+        processor = object.__new__(VectorProcessor)
+        processor.color_mode = "4-Color RYBW"
+        processor.enable_native_vector_mesh = False
+        processor.enable_fridge_magnet = False
+        processor.enable_coating = False
+        processor.enable_outline = False
+        return processor
+
+    def test_color_relief_keeps_optical_thickness_and_xy_geometry(self):
+        flat_scene = self._processor().build_mesh(
+            self._analysis(),
+            thickness_mm=1.0,
+            structure_mode="Single-sided",
+        )
+        relief_scene = self._processor().build_mesh(
+            self._analysis(),
+            thickness_mm=1.0,
+            structure_mode="Single-sided",
+            enable_relief=True,
+            height_mode="color",
+            color_height_map={"#ff0000": 1.04, "#ffffff": 2.0},
+        )
+
+        for slot_name in ("Red", "White"):
+            flat = flat_scene.geometry[slot_name]
+            relief = relief_scene.geometry[slot_name]
+            assert relief.extents[:2] == pytest.approx(flat.extents[:2])
+            assert relief.extents[2] == pytest.approx(flat.extents[2])
+
+        assert relief_scene.geometry["Red"].bounds[:, 2] == pytest.approx(
+            [0.88, 1.04]
+        )
+        assert relief_scene.geometry["White"].bounds[:, 2] == pytest.approx(
+            [1.84, 2.0]
+        )
+        assert relief_scene.geometry["Board"].bounds[:, 2] == pytest.approx(
+            [0.0, 1.84]
+        )
+
+    @pytest.mark.parametrize(
+        ("color_mode", "structure_mode"),
+        [
+            ("5-Color Extended", "Single-sided"),
+            ("4-Color RYBW", "Double-sided"),
+        ],
+    )
+    def test_unsupported_vector_relief_combinations_raise_deterministically(
+        self,
+        color_mode,
+        structure_mode,
+    ):
+        processor = self._processor()
+        processor.color_mode = color_mode
+
+        with pytest.raises(ValueError, match="Native SVG relief supports only"):
+            processor.build_mesh(
+                self._analysis(),
+                thickness_mm=1.0,
+                structure_mode=structure_mode,
+                enable_relief=True,
+                height_mode="color",
+                color_height_map={"#ff0000": 1.04, "#ffffff": 2.0},
+            )
+
+    def test_heightmap_assigns_height_to_existing_svg_regions(self, tmp_path):
+        heightmap = np.full((10, 20), 255, dtype=np.uint8)
+        heightmap[:, :10] = 0
+        heightmap_path = tmp_path / "heightmap.png"
+        Image.fromarray(heightmap).save(heightmap_path)
+
+        scene = self._processor().build_mesh(
+            self._analysis(),
+            thickness_mm=1.0,
+            structure_mode="Single-sided",
+            enable_relief=True,
+            height_mode="heightmap",
+            heightmap_path=str(heightmap_path),
+            heightmap_max_height=2.0,
+        )
+
+        assert scene.geometry["Red"].bounds[:, 2] == pytest.approx([1.84, 2.0])
+        assert scene.geometry["White"].bounds[:, 2] == pytest.approx([0.88, 1.04])
+        assert scene.geometry["Red"].extents[2] == pytest.approx(
+            scene.geometry["White"].extents[2]
+        )
+
+    def test_unmapped_color_preserves_default_backing_depth(self):
+        scene = self._processor().build_mesh(
+            self._analysis(),
+            thickness_mm=1.2,
+            structure_mode="Single-sided",
+            enable_relief=True,
+            height_mode="color",
+            color_height_map={"#ff0000": 1.04},
+        )
+
+        assert scene.geometry["White"].bounds[:, 2] == pytest.approx(
+            [1.2, 1.36]
+        )
+        assert scene.geometry["Board"].bounds[:, 2] == pytest.approx(
+            [0.0, 1.2]
+        )
+
+    def test_color_relief_uses_stable_identity_after_display_color_collision(self):
+        analysis = self._analysis()
+        for shape in analysis.matched_shapes:
+            shape["height_identity_rgb"] = shape["matched_rgb"]
+            shape["matched_rgb"] = (64, 64, 64)
+
+        scene = self._processor().build_mesh(
+            analysis,
+            thickness_mm=1.0,
+            structure_mode="Single-sided",
+            enable_relief=True,
+            height_mode="color",
+            color_height_map={"#ff0000": 1.04, "#ffffff": 2.0},
+        )
+
+        assert scene.geometry["Red"].bounds[:, 2] == pytest.approx(
+            [0.88, 1.04]
+        )
+        assert scene.geometry["White"].bounds[:, 2] == pytest.approx(
+            [1.84, 2.0]
+        )
+
+    def test_heightmap_sampling_caps_extreme_svg_height(self):
+        analysis = self._analysis()
+        analysis.bbox = (0.0, 0.0, 1.0, 100_000.0)
+
+        with mock.patch(
+            "core.heightmap_loader.HeightmapLoader.load_and_process",
+            return_value={
+                "success": True,
+                "height_matrix": np.ones((2, 2), dtype=np.float32),
+            },
+        ) as load_heightmap:
+            self._processor().build_mesh(
+                analysis,
+                thickness_mm=1.0,
+                structure_mode="Single-sided",
+                enable_relief=True,
+                height_mode="heightmap",
+                heightmap_path="heightmap.png",
+                heightmap_max_height=2.0,
+            )
+
+        assert load_heightmap.call_args.kwargs["target_w"] <= 1600
+        assert load_heightmap.call_args.kwargs["target_h"] <= 1600
+
+    @pytest.mark.parametrize("layer_count", [2, 4, 5, 7])
+    def test_material_archive_global_layer_count_preserves_optical_stack(
+        self,
+        layer_count,
+    ):
+        recipe = [index % 2 for index in range(layer_count)]
+        target_height = 2.0
+        layer_h = 0.08
+        matched_shapes = [
+            {
+                "geometry": box(0, 0, 10, 10),
+                "recipe": recipe,
+                "color": (255, 0, 0),
+                "matched_rgb": (255, 0, 0),
+            }
+        ]
+        result = VectorProcessor._build_relief_meshes(
+            matched_shapes=matched_shapes,
+            num_layers=layer_count,
+            layer_h=layer_h,
+            num_channels=2,
+            slot_names=["Material A", "Material B"],
+            scale_factor=1.0,
+            backing_color_id=1,
+            default_height_mm=1.2,
+            height_mode="color",
+            color_height_map={"#ff0000": target_height},
+            heightmap_path=None,
+            heightmap_max_height=None,
+            bbox=(0.0, 0.0, 10.0, 10.0),
+            extrude_cache={},
+        )
+        flat_result = VectorProcessor._run_length_extrude(
+            matched_shapes=matched_shapes,
+            num_layers=layer_count,
+            layer_h=layer_h,
+            num_channels=2,
+            slot_names=["Material A", "Material B"],
+            scale_factor=1.0,
+            extrude_cache={},
+        )
+
+        for slot_name in ("Material A", "Material B"):
+            flat_meshes = flat_result[slot_name]["meshes"]
+            relief_meshes = result[slot_name]["meshes"]
+            flat_front_intervals = sorted(
+                (float(mesh.bounds[0, 2]), float(mesh.bounds[1, 2]))
+                for mesh in flat_meshes
+            )
+            relief_front_intervals = sorted(
+                (
+                    target_height - float(mesh.bounds[1, 2]),
+                    target_height - float(mesh.bounds[0, 2]),
+                )
+                for mesh in relief_meshes
+            )
+            assert np.allclose(relief_front_intervals, flat_front_intervals)
+            assert sum(abs(float(mesh.volume)) for mesh in relief_meshes) == pytest.approx(
+                sum(abs(float(mesh.volume)) for mesh in flat_meshes)
+            )
+            assert np.vstack([mesh.bounds[:, :2] for mesh in relief_meshes]) == pytest.approx(
+                np.vstack([mesh.bounds[:, :2] for mesh in flat_meshes])
+            )
+
+        board = result["Board"]
+        assert board["mat_id"] == 1
+        assert board["meshes"][0].bounds[:, 2] == pytest.approx(
+            [0.0, target_height - layer_count * layer_h]
+        )
 
 
 class TestFlattenQuadraticBezier:
@@ -1249,6 +1520,212 @@ class TestHueAwareVectorColorMatching:
         assert matched[0]["lut_idx"] == 1
         assert matched[0]["matched_rgb"] == (80, 70, 140)
         assert matched[0]["recipe"] == [1, 1, 1, 1, 1]
+
+    def test_match_colors_keeps_pre_replacement_identity_and_recipe(self):
+        from core.color_replacement import ColorReplacementManager
+
+        class _NearestKdtree:
+            n = 2
+
+            def query(self, lab):
+                values = np.asarray(lab, dtype=np.float64).reshape(-1, 3)
+                palette = np.asarray(
+                    [[255, 0, 0], [0, 0, 255]],
+                    dtype=np.float64,
+                )
+                distances = np.linalg.norm(
+                    values[:, None, :] - palette[None, :, :],
+                    axis=2,
+                )
+                indices = np.argmin(distances, axis=1)
+                return distances[np.arange(len(values)), indices], indices
+
+        processor = SimpleNamespace(
+            hue_matcher=None,
+            kdtree=_NearestKdtree(),
+            lut_rgb=np.asarray([[255, 0, 0], [0, 0, 255]], dtype=np.uint8),
+            lut_lab=np.asarray([[255, 0, 0], [0, 0, 255]], dtype=np.float64),
+            ref_stacks=np.asarray(
+                [[0, 0, 0, 0, 0], [1, 1, 1, 1, 1]],
+                dtype=np.int16,
+            ),
+            _rgb_to_lab=lambda rgb: np.asarray(rgb, dtype=np.float64),
+        )
+        vector_processor = VectorProcessor.from_img_processor(processor, "Unit")
+        replacement_manager = ColorReplacementManager.from_dict(
+            {"#ff0000": "#0000ff"}
+        )
+
+        matched = vector_processor._match_colors(
+            [
+                {
+                    "geometry": box(0, 0, 1, 1),
+                    "color": (255, 0, 0),
+                }
+            ],
+            replacement_manager=replacement_manager,
+            num_channels=2,
+            num_layers=5,
+        )
+
+        assert matched[0]["matched_rgb"] == (0, 0, 255)
+        assert matched[0]["recipe"] == [1, 1, 1, 1, 1]
+        assert matched[0]["height_identity_rgb"] == (255, 0, 0)
+        assert matched[0]["original_recipe"] == [0, 0, 0, 0, 0]
+        assert "original_lut_idx" not in matched[0]
+
+
+class TestVectorNearFillConsistency:
+    """Nearby flat SVG fills should share one vector LUT query."""
+
+    class _NearestKdtree:
+        def __init__(self, lut_rgb):
+            self.lut_rgb = np.asarray(lut_rgb, dtype=np.float64)
+            self.n = len(lut_rgb)
+
+        def query(self, lab):
+            lab = np.asarray(lab, dtype=np.float64).reshape(-1, 3)
+            dist = np.linalg.norm(
+                lab[:, None, :] - self.lut_rgb[None, :, :],
+                axis=2,
+            )
+            index = np.argmin(dist, axis=1)
+            return dist[np.arange(len(lab)), index], index
+
+    class _FakeImageProcessor:
+        lut_path = "fake.npy"
+        color_mode = "Unit"
+        hue_matcher = None
+        layer_count = 5
+        lut_rgb = np.array(
+            [
+                [100, 100, 100],
+                [101, 100, 100],
+                [104, 100, 100],
+            ],
+            dtype=np.uint8,
+        )
+        ref_stacks = np.array(
+            [
+                [0, 0, 0, 0, 0],
+                [1, 1, 1, 1, 1],
+                [2, 2, 2, 2, 2],
+            ],
+            dtype=np.int32,
+        )
+        color_conf = {
+            "slots": ["A", "B", "C"],
+            "preview": {
+                0: [100, 100, 100, 255],
+                1: [101, 100, 100, 255],
+                2: [104, 100, 100, 255],
+            },
+            "map": {"A": 0, "B": 1, "C": 2},
+        }
+        slot_names = ["A", "B", "C"]
+        preview_colors = color_conf["preview"]
+
+        def __init__(self):
+            self.kdtree = TestVectorNearFillConsistency._NearestKdtree(
+                self.lut_rgb
+            )
+
+        @staticmethod
+        def _rgb_to_lab(arr):
+            return np.asarray(arr, dtype=np.float64).reshape(-1, 3)
+
+    def _processor(self):
+        return VectorProcessor.from_img_processor(
+            self._FakeImageProcessor(),
+            "Unit",
+        )
+
+    def _write_svg(self, tmp_path, fills):
+        rects = []
+        for idx, fill in enumerate(fills):
+            rects.append(
+                f'<rect x="{idx * 10}" y="0" width="10" height="10" fill="{fill}"/>'
+            )
+        path = tmp_path / "near-fill.svg"
+        path.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 10">'
+            + "".join(rects)
+            + "</svg>",
+            encoding="utf-8",
+        )
+        return path
+
+    def test_nearby_svg_fills_share_one_matched_color(self, tmp_path):
+        from core.pipeline.pipeline_utils import extract_color_palette
+
+        svg_path = self._write_svg(tmp_path, ["#646464", "#656464"])
+        analysis = self._processor().analyze_svg(str(svg_path), target_width_mm=30.0)
+
+        matched_shapes = analysis.matched_shapes
+        assert {tuple(item["color"]) for item in matched_shapes} == {
+            (100, 100, 100),
+            (101, 100, 100),
+        }
+        assert {tuple(item["match_color"]) for item in matched_shapes} == {
+            (100, 100, 100)
+        }
+        assert {tuple(item["matched_rgb"]) for item in matched_shapes} == {
+            (100, 100, 100)
+        }
+        assert {tuple(item["recipe"]) for item in matched_shapes} == {
+            (0, 0, 0, 0, 0)
+        }
+
+        cache = VectorProcessor.build_preview_cache(
+            analysis,
+            pixels_per_mm=1.0,
+            supersample_preview=1,
+        )
+        assert cache["matched_rgb"] is cache["original_matched_rgb"]
+        assert cache["matched_rgb"] is cache["height_identity_rgb"]
+        assert cache["material_matrix"] is cache["original_material_matrix"]
+        solid_matched = cache["matched_rgb"][cache["mask_solid"]].reshape(-1, 3)
+        assert {
+            tuple(int(v) for v in row)
+            for row in np.unique(solid_matched, axis=0)
+        } == {(100, 100, 100)}
+
+        palette = extract_color_palette(cache)
+        assert [entry["hex"] for entry in palette] == ["#646464"]
+
+    def test_fill_difference_above_threshold_stays_distinct(self, tmp_path):
+        svg_path = self._write_svg(tmp_path, ["#646464", "#686464"])
+        analysis = self._processor().analyze_svg(str(svg_path), target_width_mm=30.0)
+
+        assert {tuple(item["match_color"]) for item in analysis.matched_shapes} == {
+            (100, 100, 100),
+            (104, 100, 100),
+        }
+        assert {tuple(item["matched_rgb"]) for item in analysis.matched_shapes} == {
+            (100, 100, 100),
+            (104, 100, 100),
+        }
+
+    def test_center_representative_does_not_chain_merge_distant_endpoints(self):
+        processor = self._processor()
+        shapes = [
+            {"color": (100, 100, 100), "geometry": box(0, 0, 1, 1)},
+            {"color": (102, 100, 100), "geometry": box(0, 0, 10, 10)},
+            {"color": (104, 100, 100), "geometry": box(0, 0, 1, 1)},
+        ]
+
+        updated = processor._with_near_fill_match_queries(shapes)
+
+        assert [
+            tuple(item.get("match_color", item["color"]))
+            for item in updated
+        ] == [
+            (102, 100, 100),
+            (102, 100, 100),
+            (104, 100, 100),
+        ]
+        assert "match_color" not in shapes[0]
+        assert "match_color" not in shapes[2]
 
 
 class TestVectorColorDistanceLogging:

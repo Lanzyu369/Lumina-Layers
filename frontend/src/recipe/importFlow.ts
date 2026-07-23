@@ -8,7 +8,11 @@ import { useSettingsStore } from "../stores/settingsStore";
 import { useWidgetStore } from "../stores/widgetStore";
 import { getPrinters } from "../api/system";
 import type { PrinterInfo } from "../api/types";
-import { parseRecipeFile, restoreConverterRecipe } from "./importRecipe";
+import {
+  parseRecipeFile,
+  RECIPE_IMPORT_WARNING_SPATIAL_EDITS_NOT_SERIALIZED,
+  restoreConverterRecipe,
+} from "./importRecipe";
 import { hasLuminaRecipe } from "./pngMetadata";
 import type { LuminaRecipe } from "./types";
 import type { RestoreResult } from "./importRecipe";
@@ -17,6 +21,49 @@ import {
   resolveDeviceProfileOptionId,
   resolvePrinterOptionId,
 } from "../utils/settingsOptionIds";
+
+const SPATIAL_EDIT_DEGRADED_FIELD =
+  "converter.color_ops.spatial_region_edits";
+
+/**
+ * Mark a full recipe when session-scoped spatial edits were intentionally
+ * omitted. The recipe section and schema stay unchanged; import surfaces the
+ * warning through the existing localized warning mechanism.
+ *
+ * 当会话级空间局部改色被有意省略时标记完整配方。配方内容与 schema 保持不变，
+ * 导入时通过现有本地化警告机制提示用户。
+ *
+ * @param recipe - Full recipe built for a share PNG or JSON sidecar.
+ * @param spatialEditCount - Number of connected-region edits in the session.
+ * @returns The same recipe object after compatibility metadata is updated.
+ */
+export function annotateSpatialEditCompatibility(
+  recipe: LuminaRecipe,
+  spatialEditCount: number,
+): LuminaRecipe {
+  if (!Number.isFinite(spatialEditCount) || spatialEditCount <= 0) {
+    return recipe;
+  }
+
+  const degradedFields = recipe.compat.degraded_fields ?? [];
+  if (!degradedFields.includes(SPATIAL_EDIT_DEGRADED_FIELD)) {
+    recipe.compat.degraded_fields = [
+      ...degradedFields,
+      SPATIAL_EDIT_DEGRADED_FIELD,
+    ];
+  }
+  if (
+    !recipe.warnings.includes(
+      RECIPE_IMPORT_WARNING_SPATIAL_EDITS_NOT_SERIALIZED,
+    )
+  ) {
+    recipe.warnings = [
+      ...recipe.warnings,
+      RECIPE_IMPORT_WARNING_SPATIAL_EDITS_NOT_SERIALIZED,
+    ];
+  }
+  return recipe;
+}
 
 // ========== Share card detection ==========
 
@@ -222,7 +269,10 @@ export async function exportShareCard(): Promise<void> {
   );
 
   // 4. Build full recipe
-  const fullRecipe = await buildFullRecipe(converterRecipe, cover, assets);
+  const fullRecipe = annotateSpatialEditCompatibility(
+    await buildFullRecipe(converterRecipe, cover, assets),
+    converterState.regionReplacementCount,
+  );
 
   // 5. Compute recipe JSON SHA-256
   const recipeJsonForHash = JSON.stringify(fullRecipe.recipe);
@@ -271,7 +321,10 @@ export async function exportSidecar(): Promise<void> {
   );
 
   const { cover } = await buildCoverImage(converterState.previewImageUrl);
-  const fullRecipe = await buildFullRecipe(converterRecipe, cover, assets);
+  const fullRecipe = annotateSpatialEditCompatibility(
+    await buildFullRecipe(converterRecipe, cover, assets),
+    converterState.regionReplacementCount,
+  );
 
   const json = JSON.stringify(fullRecipe, null, 2);
   const blob = new Blob([json], { type: "application/json" });

@@ -14,7 +14,9 @@ import numpy as np
 
 from api.structured_logging import get_logger
 from config import SVG_PIXELS_PER_MM_DEFAULT, ModelingMode
+from core.errors import CachedPreviewAnalysisError
 from core.image_processing import LuminaImageProcessor
+from core.preview_analysis_cache import preview_analysis_reuse_is_required
 
 _log = get_logger(__name__)
 
@@ -35,20 +37,35 @@ def _normalize_modeling_mode(value):
 
 
 def _load_reused_preview_analysis(ctx: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
-    """Load preview analysis arrays when generate can safely skip processing."""
+    """Load preview arrays, failing closed when spatial edits require them.
+
+    加载预览分析数组；若空间编辑明确要求复用，则任何缺失、损坏或结构不匹配
+    都会终止生成，而不是静默回退到新的图像分析。
+    """
 
     if not ctx.get("reuse_preview_analysis"):
         return None
+    cache_is_required = preview_analysis_reuse_is_required(
+        ctx.get("reuse_preview_analysis")
+    )
     matched_rgb_path = ctx.get("matched_rgb_path")
     mask_solid_path = ctx.get("mask_solid_path")
     material_matrix_path = ctx.get("material_matrix_path")
     if not (matched_rgb_path and mask_solid_path and material_matrix_path):
+        if cache_is_required:
+            raise CachedPreviewAnalysisError(
+                "Required preview analysis artifacts are incomplete"
+            )
         return None
     try:
         matched_rgb = np.load(matched_rgb_path, allow_pickle=False)
         mask_solid = np.load(mask_solid_path, allow_pickle=False)
         material_matrix = np.load(material_matrix_path, allow_pickle=False)
     except (OSError, ValueError, TypeError) as exc:
+        if cache_is_required:
+            raise CachedPreviewAnalysisError(
+                "Required preview analysis artifact is unreadable"
+            ) from exc
         _log.warning(
             "Preview analysis reuse failed; falling back to image processing",
             extra={
@@ -59,11 +76,27 @@ def _load_reused_preview_analysis(ctx: dict) -> tuple[np.ndarray, np.ndarray, np
         )
         return None
 
-    if matched_rgb.ndim != 3 or matched_rgb.shape[-1] != 3:
-        return None
-    if mask_solid.ndim != 2 or material_matrix.ndim != 3:
-        return None
-    if matched_rgb.shape[:2] != mask_solid.shape or material_matrix.shape[:2] != mask_solid.shape:
+    arrays_are_well_shaped = (
+        matched_rgb.ndim == 3
+        and matched_rgb.shape[-1] == 3
+        and mask_solid.ndim == 2
+        and material_matrix.ndim == 3
+        and material_matrix.shape[-1] > 0
+        and matched_rgb.shape[:2] == mask_solid.shape
+        and material_matrix.shape[:2] == mask_solid.shape
+    )
+    required_dtypes_are_valid = (
+        matched_rgb.dtype == np.uint8
+        and mask_solid.dtype == np.bool_
+        and np.issubdtype(material_matrix.dtype, np.integer)
+    )
+    if not arrays_are_well_shaped or (
+        cache_is_required and not required_dtypes_are_valid
+    ):
+        if cache_is_required:
+            raise CachedPreviewAnalysisError(
+                "Required preview analysis arrays are structurally incompatible"
+            )
         return None
     if matched_rgb.dtype != np.uint8:
         matched_rgb = matched_rgb.astype(np.uint8, copy=False)
@@ -107,8 +140,52 @@ def run(ctx: dict) -> dict:
     """
     # ---- Material-archive branch ----
     if ctx.get("material_source") == "material_archive":
-        from core.pipeline.p03_core_processing import _run_material_archive_branch
         ctx['lut_metadata'] = None
+        reuse_started = time.perf_counter()
+        reused_analysis = _load_reused_preview_analysis(ctx)
+        if reused_analysis is not None:
+            matched_rgb, mask_solid, material_matrix = reused_analysis
+            target_h, target_w = mask_solid.shape
+            target_width_mm = float(ctx['target_width_mm'])
+            pixel_scale = (
+                target_width_mm / float(target_w)
+                if target_w > 0
+                else 0.0
+            )
+            modeling_mode = _normalize_modeling_mode(ctx.get('modeling_mode'))
+            ctx['matched_rgb'] = matched_rgb
+            ctx['material_matrix'] = material_matrix
+            ctx['mask_solid'] = mask_solid
+            ctx['target_w'] = int(target_w)
+            ctx['target_h'] = int(target_h)
+            ctx['pixel_scale'] = pixel_scale
+            ctx['mode_info'] = {
+                'mode': modeling_mode,
+                'lut_match_mode': 'material_archive',
+            }
+            ctx['debug_data'] = None
+            ctx['lut_match_info'] = None
+            elapsed = time.perf_counter() - reuse_started
+            ctx.setdefault('_hifi_timings', {})['image_proc_s'] = elapsed
+            _log.debug(
+                "material archive preview analysis reused: %.3fs, "
+                "%sx%spx, scale=%smm/px",
+                elapsed,
+                target_w,
+                target_h,
+                pixel_scale,
+                extra={
+                    "event": "s02_preview_analysis_reused",
+                    "duration_ms": round(elapsed * 1000, 3),
+                    "width": int(target_w),
+                    "height": int(target_h),
+                    "pixel_scale": pixel_scale,
+                    "mode": "material_archive",
+                },
+            )
+            return ctx
+
+        from core.pipeline.p03_core_processing import _run_material_archive_branch
         return _run_material_archive_branch(ctx)
 
     actual_lut_path = ctx['actual_lut_path']

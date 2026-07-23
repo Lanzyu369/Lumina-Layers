@@ -310,7 +310,7 @@ describe("fiveColorStore LUT switching", () => {
     expect(state.isGeneratingSwatch).toBe(false);
   });
 
-  it("preserves validation details when swatch generation fails", async () => {
+  it("hides backend validation paths when swatch generation fails", async () => {
     useFiveColorStore.setState({
       lutName: "test-lut",
       collectedRecipes: [staleRecipe],
@@ -329,9 +329,9 @@ describe("fiveColorStore LUT switching", () => {
     await useFiveColorStore.getState().generateSwatch();
 
     const state = useFiveColorStore.getState();
-    expect(state.error).toBe(
-      "body.recipes.0.selected_indices: Recipe must contain exactly five material indices",
-    );
+    expect(state.error).toBe("five_color_error_generate_swatch_failed");
+    expect(state.error).not.toContain("body.recipes.0.selected_indices");
+    expect(state.error).not.toContain("selected_indices");
     expect(state.isGeneratingSwatch).toBe(false);
   });
 

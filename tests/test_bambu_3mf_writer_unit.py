@@ -2,13 +2,16 @@
 
 import json
 import math
+from io import BytesIO
 from pathlib import Path
+import re
 import zipfile
 import xml.etree.ElementTree as ET
 from types import SimpleNamespace
 
 import pytest
 import trimesh
+from PIL import Image
 
 from utils import bambu_3mf_writer as writer_module
 from utils.bambu_3mf_writer import BambuStudio3MFWriter, load_printer_template
@@ -534,6 +537,20 @@ def _count_object_model_geometry(archive: zipfile.ZipFile) -> tuple[int, int]:
                 "X-BBL-Client-Name": "ElegooSlicer",
             },
         ),
+        (
+            "flashforge-ad5x",
+            "FlashStudio",
+            "FlashStudio:flashforge:flashforge-ad5x:0.4",
+            "FlashStudio:flashforge:flashforge-ad5x",
+            "02.01.01.00",
+            "BambuStudio-2.3.2",
+            "",
+            "orca_like",
+            "Flashforge AD5X",
+            "Flashforge",
+            "Flashforge",
+            {"X-BBL-Client-Version": ""},
+        ),
     ],
 )
 def test_registry_ac_and_elegoo_exports_keep_native_identity_and_geometry(
@@ -613,6 +630,9 @@ def test_registry_ac_and_elegoo_exports_keep_native_identity_and_geometry(
             assert "Metadata/custom_gcode_per_layer.xml" not in entries
             assert "Metadata/filament_sequence.json" not in entries
             assert "Metadata/cut_information.xml" not in entries
+        if slicer == "FlashStudio":
+            assert "OrcaSlicer-Version" not in slice_header
+            assert "OrcaSlicer" not in package_text
 
 
 def test_load_printer_template_merges_registry_device_profile_into_legacy_project_template(
@@ -905,6 +925,273 @@ def test_writer_uses_registry_application_metadata_for_slice_info(tmp_path, monk
         for item in header.findall("header_item")
     }
     assert values["X-BBL-Client-Version"] == "99.88.77.66"
+
+
+def test_flash_studio_fallback_metadata_matches_native_export_without_device_profile(tmp_path) -> None:
+    writer = BambuStudio3MFWriter(
+        str(tmp_path / "flash-studio-fallback.3mf"),
+        settings={},
+        color_mode="4-Color",
+        printer_id="flashforge-ad5x",
+        slicer="FlashStudio",
+        nozzle_size="0.25",
+    )
+
+    assert writer._get_app_version_str() == "BambuStudio-2.3.2"
+    root = ET.fromstring(writer._build_slice_info_bytes())
+    header = root.find("header")
+    assert header is not None
+    values = {
+        item.attrib["key"]: item.attrib["value"]
+        for item in header.findall("header_item")
+    }
+    assert values == {
+        "X-BBL-Client-Type": "slicer",
+        "X-BBL-Client-Version": "",
+    }
+    uuid_node = header.find("uuid")
+    assert uuid_node is not None
+    assert re.fullmatch(r"[0-9a-f]{32}", uuid_node.attrib["value"])
+
+
+def test_bundled_flash_studio_quarter_profile_exports_native_package(tmp_path) -> None:
+    output_path = tmp_path / "flash-studio-creator-5-quarter.3mf"
+    writer_module._PRINTER_TEMPLATE_CACHE.clear()
+    writer = BambuStudio3MFWriter(
+        str(output_path),
+        settings={},
+        color_mode="4-Color",
+        printer_id="flashforge-creator-5",
+        slicer="FlashStudio",
+        nozzle_size="0.25",
+        device_profile_id=(
+            "FlashStudio:flashforge:flashforge-creator-5:0.25"
+        ),
+    )
+    _add_rybw_meshes(writer)
+    writer.export()
+
+    with zipfile.ZipFile(output_path, "r") as archive:
+        entries = set(archive.namelist())
+        project = json.loads(
+            archive.read("Metadata/project_settings.config").decode("utf-8")
+        )
+        slice_root = ET.fromstring(archive.read("Metadata/slice_info.config"))
+        slice_header = {
+            item.attrib["key"]: item.attrib["value"]
+            for item in slice_root.findall("./header/header_item")
+        }
+        plate = json.loads(archive.read("Metadata/plate_1.json").decode("utf-8"))
+        plate_small = Image.open(BytesIO(archive.read("Metadata/plate_1_small.png")))
+        model_settings = ET.fromstring(archive.read("Metadata/model_settings.config"))
+        model_text = archive.read("3D/3dmodel.model").decode("utf-8")
+        model_root = ET.fromstring(model_text)
+        rels_root = ET.fromstring(archive.read("_rels/.rels"))
+
+    assert project["printer_model"] == "Flashforge Creator 5"
+    assert project["printer_settings_id"] == "Flashforge Creator 5 0.25 nozzle"
+    assert project["nozzle_diameter"] == ["0.25"] * 4
+    assert (
+        project["default_print_profile"]
+        == "0.20mm Standard @Flashforge AD5M Pro 0.4 Nozzle"
+    )
+    assert project["default_filament_profile"] == [
+        "Flashforge Generic PLA"
+    ]
+    assert project["version"] == "2.3.2"
+    assert project["auxiliary_fan"] == "1"
+    assert project["before_layer_change_gcode"] == ";BEFORE_LAYER_CHANGE\n;[layer_z]"
+    assert project["layer_height"] == "0.08"
+    assert project["initial_layer_print_height"] == "0.08"
+    assert project["wall_generator"] == "arachne"
+    assert project["sparse_infill_density"] == "100%"
+    assert project["filament_map_mode"] == "Auto For Flush"
+    for key in (
+        "filament_colour",
+        "filament_multi_colour",
+        "filament_settings_id",
+        "filament_type",
+        "filament_vendor",
+    ):
+        assert len(project[key]) == 4
+    assert project["filament_self_index"] == ["1", "2", "3", "4"]
+    assert project["filament_extruder_variant"] == ["Direct Drive Standard"] * 4
+    assert slice_header == {
+        "X-BBL-Client-Type": "slicer",
+        "X-BBL-Client-Version": "",
+    }
+    uuid_node = slice_root.find("./header/uuid")
+    assert uuid_node is not None
+    assert re.fullmatch(r"[0-9a-f]{32}", uuid_node.attrib["value"])
+    assert plate["version"] == 2
+    assert plate["nozzle_diameter"] == pytest.approx(0.25)
+    assert all(item["layer_height"] == pytest.approx(0.08) for item in plate["bbox_objects"])
+    assert len(plate["bbox_objects"]) == 1
+    assert plate["bbox_objects"][0]["name"] == output_path.stem
+    assert plate["first_layer_time"] == pytest.approx(0.0)
+    assert not any(item["name"] == "wipe_tower" for item in plate["bbox_objects"])
+    assert plate_small.size == (128, 128)
+    plate_metadata = {
+        item.attrib["key"]: item.attrib["value"]
+        for item in model_settings.findall("./plate/metadata")
+    }
+    assert plate_metadata["filament_maps"] == "1 2 3 4"
+    object_metadata = {
+        item.attrib["key"]: item.attrib["value"]
+        for item in model_settings.findall("./object/metadata")
+    }
+    assert object_metadata["name"] == output_path.stem
+    assert '<metadata name="Application">BambuStudio-2.3.2</metadata>' in model_text
+    model_metadata = {
+        item.attrib["name"]: item.text or ""
+        for item in model_root
+        if item.tag.endswith("metadata")
+    }
+    assert model_metadata["Thumbnail_Middle"] == (
+        "/Auxiliaries/.thumbnails/thumbnail_middle.png"
+    )
+    assert model_metadata["Thumbnail_Small"] == (
+        "/Auxiliaries/.thumbnails/thumbnail_small.png"
+    )
+    relationships = list(rels_root)
+    assert len(relationships) == 4
+    assert "OrcaSlicer" not in model_text
+    assert "Metadata/plate_1.json" in entries
+    assert "Metadata/plate_1_small.png" in entries
+    assert {
+        "Auxiliaries/.thumbnails/thumbnail_3mf.png",
+        "Auxiliaries/.thumbnails/thumbnail_middle.png",
+        "Auxiliaries/.thumbnails/thumbnail_small.png",
+    }.issubset(entries)
+    assert "Metadata/filament_sequence.json" not in entries
+    assert "Metadata/cut_information.xml" not in entries
+    assert "Metadata/custom_gcode_per_layer.xml" not in entries
+
+
+def test_flash_studio_creator_5_pro_matches_manual_project_shape(tmp_path) -> None:
+    """C5 Pro exports combine native machine fields with Lumina process values."""
+
+    writer_module._PRINTER_TEMPLATE_CACHE.clear()
+    writer = BambuStudio3MFWriter(
+        str(tmp_path / "creator-5-pro-manual-shape.3mf"),
+        settings={},
+        color_mode="4-Color",
+        printer_id="flashforge-creator-5-pro",
+        slicer="FlashStudio",
+        nozzle_size="0.4",
+        device_profile_id=(
+            "FlashStudio:flashforge:flashforge-creator-5-pro:0.4"
+        ),
+    )
+    _add_rybw_meshes(writer)
+
+    project = json.loads(writer._build_project_settings_bytes().decode("utf-8"))
+
+    assert project["version"] == "2.3.2"
+    assert project["printer_model"] == "Flashforge Creator 5 Pro"
+    assert project["printer_settings_id"] == (
+        "Flashforge Creator 5 Pro 0.4 nozzle"
+    )
+    assert project["nozzle_diameter"] == ["0.4"] * 4
+    assert project["default_print_profile"] == (
+        "0.20mm Standard @Flashforge AD5M Pro 0.4 Nozzle"
+    )
+    assert project["print_settings_id"] == "0.20mm Standard @FF C5"
+    assert project["auxiliary_fan"] == "1"
+    assert project["bed_mesh_max"] == "99999,99999"
+    assert project["bed_mesh_min"] == "-99999,-99999"
+    assert project["before_layer_change_gcode"] == (
+        ";BEFORE_LAYER_CHANGE\n;[layer_z]"
+    )
+    assert project["default_filament_profile"] == ["Flashforge Generic PLA"]
+    for key in (
+        "filament_colour",
+        "filament_multi_colour",
+        "filament_settings_id",
+        "filament_type",
+        "filament_vendor",
+        "nozzle_temperature",
+        "bed_temperature",
+    ):
+        assert len(project[key]) == 4
+
+    # Native machine metadata must not replace Lumina's print process.
+    assert project["layer_height"] == "0.08"
+    assert project["initial_layer_height"] == "0.08"
+    assert project["wall_loops"] == "1"
+    assert project["wall_generator"] == "arachne"
+    assert project["sparse_infill_density"] == "100%"
+    assert project["sparse_infill_pattern"] == "zig-zag"
+    assert project["print_speed"] == "100"
+    assert project["travel_speed"] == "150"
+
+
+@pytest.mark.parametrize(
+    (
+        "printer_id",
+        "nozzle_size",
+        "device_profile_id",
+        "printer_model",
+        "printer_settings_id",
+        "printer_variant",
+        "nozzle_diameter",
+        "default_print_profile",
+    ),
+    [
+        (
+            "flashforge-guider-3-ultra",
+            "0.4",
+            "FlashStudio:flashforge:flashforge-guider-3-ultra:0.4",
+            "Flashforge Guider 3 Ultra",
+            "Flashforge Guider 3 Ultra 0.4 Nozzle",
+            "0.4",
+            ["0.4", "0.4"],
+            "0.20mm Standard @Flashforge G3U 0.4 Nozzle",
+        ),
+    ],
+)
+def test_bundled_flash_studio_profiles_keep_machine_specific_nozzle_metadata(
+    tmp_path,
+    printer_id,
+    nozzle_size,
+    device_profile_id,
+    printer_model,
+    printer_settings_id,
+    printer_variant,
+    nozzle_diameter,
+    default_print_profile,
+) -> None:
+    output_path = tmp_path / f"flash-studio-{printer_id}-{nozzle_size}.3mf"
+    writer_module._PRINTER_TEMPLATE_CACHE.clear()
+    writer = BambuStudio3MFWriter(
+        str(output_path),
+        settings={},
+        color_mode="4-Color",
+        printer_id=printer_id,
+        slicer="FlashStudio",
+        nozzle_size=nozzle_size,
+        device_profile_id=device_profile_id,
+    )
+    _add_rybw_meshes(writer)
+    writer.export()
+
+    with zipfile.ZipFile(output_path, "r") as archive:
+        entries = set(archive.namelist())
+        project = json.loads(
+            archive.read("Metadata/project_settings.config").decode("utf-8")
+        )
+        model_text = archive.read("3D/3dmodel.model").decode("utf-8")
+
+    assert project["printer_model"] == printer_model
+    assert project["printer_settings_id"] == printer_settings_id
+    assert project["printer_variant"] == printer_variant
+    assert project["nozzle_diameter"] == nozzle_diameter
+    assert project["default_print_profile"] == default_print_profile
+    assert project["print_settings_id"] == default_print_profile
+    assert '<metadata name="Application">BambuStudio-2.3.2</metadata>' in model_text
+    assert "Metadata/filament_sequence.json" not in entries
+    assert "Metadata/cut_information.xml" not in entries
+    assert "Metadata/custom_gcode_per_layer.xml" not in entries
 
 
 def test_writer_base_template_uses_registry_device_profile(tmp_path, monkeypatch) -> None:
@@ -2136,10 +2423,26 @@ class TestAnycubicWriterMetadata:
         out_path = writer.export()
 
         with zipfile.ZipFile(out_path) as package:
+            model_root = ET.fromstring(package.read("3D/3dmodel.model"))
+            core_ns = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
+            model_metadata = {
+                node.attrib["name"]: (node.text or "")
+                for node in model_root.findall("m:metadata", core_ns)
+            }
             project_settings = json.loads(
                 package.read("Metadata/project_settings.config").decode("utf-8")
             )
+            slice_root = ET.fromstring(package.read("Metadata/slice_info.config"))
+            slice_header = slice_root.find("./header")
+            assert slice_header is not None
+            slice_header_items = {
+                item.attrib["key"]: item.attrib["value"]
+                for item in slice_header.findall("header_item")
+            }
 
+        assert model_metadata["Application"] == "SnapmakerOrca-02.02.49.02"
+        assert slice_header_items["X-BBL-Client-Type"] == "slicer"
+        assert slice_header_items["X-BBL-Client-Version"] == "02.02.49.02"
         assert project_settings["printer_settings_id"] == "Snapmaker U1 (0.4 nozzle)"
         assert project_settings["filament_settings_id"] == [
             "Snapmaker PLA Basic @U1"
@@ -2150,6 +2453,47 @@ class TestAnycubicWriterMetadata:
         ]
         assert "inherits_group" not in project_settings
         assert "different_settings_to_system" not in project_settings
+
+    def test_snapmaker_orca_u1_without_device_profile_uses_snapmaker_metadata_fallback(
+        self, tmp_path
+    ) -> None:
+        writer = writer_module.BambuStudio3MFWriter(
+            output_path=str(tmp_path / "snapmaker-u1-snaporca-fallback.3mf"),
+            settings={},
+            color_mode="4-Color",
+            printer_id="snapmaker-u1",
+            slicer="SnapmakerOrca",
+            nozzle_size="0.4",
+        )
+        _add_rybw_meshes(writer)
+
+        out_path = writer.export()
+
+        with zipfile.ZipFile(out_path) as package:
+            model_root = ET.fromstring(package.read("3D/3dmodel.model"))
+            core_ns = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
+            model_metadata = {
+                node.attrib["name"]: (node.text or "")
+                for node in model_root.findall("m:metadata", core_ns)
+            }
+            project_settings = json.loads(
+                package.read("Metadata/project_settings.config").decode("utf-8")
+            )
+            slice_root = ET.fromstring(package.read("Metadata/slice_info.config"))
+            slice_header = slice_root.find("./header")
+            assert slice_header is not None
+            slice_header_items = {
+                item.attrib["key"]: item.attrib["value"]
+                for item in slice_header.findall("header_item")
+            }
+
+        assert model_metadata["Application"] == "SnapmakerOrca-02.02.49.02"
+        assert slice_header_items["X-BBL-Client-Type"] == "slicer"
+        assert slice_header_items["X-BBL-Client-Version"] == "02.02.49.02"
+        assert project_settings["printer_settings_id"] == "Snapmaker U1 (0.4 nozzle)"
+        assert project_settings["filament_settings_id"] == [
+            "Snapmaker PLA Basic @U1"
+        ] * 4
 
     @pytest.mark.parametrize(
         ("slicer", "nozzle_size", "device_profile_id", "expected_filament"),

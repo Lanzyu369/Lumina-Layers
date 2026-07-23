@@ -18,6 +18,7 @@ import time
 import cv2
 
 from api.structured_logging import get_logger
+from core.errors import CachedPreviewAnalysisError
 from core.pipeline import (
     s01_input_validation,
     s02_image_processing,
@@ -172,6 +173,8 @@ def run_raster_pipeline(ctx: dict) -> dict:
         t0 = time.perf_counter()
         try:
             ctx = module.run(ctx)
+        except CachedPreviewAnalysisError:
+            raise
         except COORDINATOR_HANDLED_ERRORS as exc:
             if optional:
                 log.warning(

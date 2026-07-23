@@ -18,6 +18,7 @@ from core.pipeline._input_validation_common import (
     _apply_material_archive_branch,
     _clamp_quantize_colors,
     _resolve_lut_path_or_error,
+    _validate_vector_svg_input,
 )
 from core.pipeline.preview_color_utils import build_palette_preview_colors
 from core.pipeline.svg_opacity import should_use_opacity_safe_svg_raster_fallback
@@ -43,6 +44,7 @@ def run(ctx: dict) -> dict:
         - quantize_colors (int): clamp 到 [8, 8192] 范围后的量化颜色数
         - preview_colors (dict): 材料ID到RGBA颜色的映射
         - slot_names (list): 材料槽位名称列表
+        - is_svg_vector (bool): 是否为 SVG 矢量模式
 
     Raises:
         KeyError: 缺少必需的输入键时抛出
@@ -89,6 +91,14 @@ def run(ctx: dict) -> dict:
             },
         )
 
+    _validate_vector_svg_input(
+        ctx,
+        image_path=image_path,
+        modeling_mode=modeling_mode,
+    )
+    if ctx.get("error"):
+        return ctx
+
     # ---- Material-archive branch ----
     if material_source == "material_archive":
         outcome = _apply_material_archive_branch(
@@ -127,7 +137,7 @@ def run(ctx: dict) -> dict:
     if "layer_height_mm" not in ctx:
         ctx["layer_height_mm"] = None
 
-    if actual_lut_path.endswith((".json", ".msgpack", ".npy")):
+    if actual_lut_path.endswith((".json", ".msgpack", ".npy", ".npz")):
         try:
             _, _, lut_metadata = LUTManager.load_lut_with_metadata(actual_lut_path)
             if ctx.get("color_layers") is None:

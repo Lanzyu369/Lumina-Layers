@@ -77,6 +77,7 @@ from .common import (
     ROUTER_HANDLED_ERRORS,
     _handle_core_error,
     _image_to_png_bytes,
+    _public_pipeline_validation_detail,
     _require_preview_cache,
     _require_session,
     _resolve_material_backing_index,
@@ -90,6 +91,9 @@ log = get_logger(__name__)
 _PREVIEW_GENERATION_FAILED_DETAIL = (
     "Preview generation failed. Re-run preview and try again."
 )
+_CROP_FAILED_DETAIL = (
+    "Image crop failed. Please retry or choose a different image."
+)
 AUTO_DETECT_COLORS_FAILED_DETAIL = (
     "颜色分析失败，请重新上传图片，或手动设置颜色数后继续。"
 )
@@ -102,6 +106,8 @@ LAYER_IMAGES_PREVIEW_CACHE_UNAVAILABLE_DETAIL = (
 )
 VECTOR_PARSE_CLIP_CACHE_MAX_BYTES_ENV = "LUMINA_VECTOR_PARSE_CLIP_CACHE_MAX_BYTES"
 DEFAULT_VECTOR_PARSE_CLIP_CACHE_MAX_BYTES = 64 * 1024 * 1024
+# Keep this aligned with VectorProcessor.build_preview_cache's default width cap.
+VECTOR_PREVIEW_CACHE_MAX_WIDTH_PX = 1600
 PREVIEW_RESPONSE_CACHE_FIELDS = {
     "matched_rgb",
     "mask_solid",
@@ -165,9 +171,16 @@ def _with_original_preview_cache_refs(ref: dict) -> dict:
     }
     fields = updated["fields"]
     if "matched_rgb" in fields:
-        fields["original_matched_rgb"] = dict(fields["matched_rgb"])
+        fields.setdefault("original_matched_rgb", dict(fields["matched_rgb"]))
+        fields.setdefault(
+            "height_identity_rgb",
+            dict(fields["original_matched_rgb"]),
+        )
     if "material_matrix" in fields:
-        fields["original_material_matrix"] = dict(fields["material_matrix"])
+        fields.setdefault(
+            "original_material_matrix",
+            dict(fields["material_matrix"]),
+        )
     return updated
 _DEFAULT_GENERATE_SEGMENTED_GLB = generate_segmented_glb
 
@@ -240,7 +253,7 @@ def _preview_material_matrix_dtype_for_range(
 ) -> np.dtype:
     """Return the smallest signed preview-cache dtype for material indices."""
 
-    for dtype in (np.int16, np.int32, np.int64):
+    for dtype in (np.int8, np.int16, np.int32, np.int64):
         info = np.iinfo(dtype)
         if min_value >= info.min and max_value <= info.max:
             return np.dtype(dtype)
@@ -254,9 +267,14 @@ def _estimate_material_matrix_itemsize(
 ) -> int | None:
     """Estimate persisted material-matrix item size for preview-cache guardrails."""
 
-    if material_source != "material_archive":
-        return None
-    max_material_index = max(0, int(selected_material_count or 0) - 1)
+    if material_source == "material_archive":
+        if selected_material_count is None:
+            return np.dtype(np.int16).itemsize
+        max_material_index = max(0, int(selected_material_count) - 1)
+    else:
+        # Legacy/native LUT stacks use supported color-channel indices, currently
+        # bounded by the 8-color modes, and are compacted before persistence.
+        max_material_index = 7
     return _preview_material_matrix_dtype_for_range(-1, max_material_index).itemsize
 
 
@@ -358,7 +376,12 @@ def _estimate_preview_target_dimensions(
         aspect_ratio = _parse_svg_aspect_ratio(image_path)
         if aspect_ratio is None:
             return None
-        return width, max(1, int(width * aspect_ratio))
+        height = max(1, int(width * aspect_ratio))
+        if modeling_mode == "vector" and width > VECTOR_PREVIEW_CACHE_MAX_WIDTH_PX:
+            ratio = VECTOR_PREVIEW_CACHE_MAX_WIDTH_PX / width
+            width = VECTOR_PREVIEW_CACHE_MAX_WIDTH_PX
+            height = max(1, int(round(height * ratio)))
+        return width, height
 
     try:
         with Image.open(image_path) as img:
@@ -531,7 +554,10 @@ def _normalize_db_names(db_names: list[str] | str | None) -> list[str]:
                 return [item for item in parsed if isinstance(item, str)]
         return [db_names]
 
-    normalized = list(db_names)
+    try:
+        normalized = list(db_names)
+    except TypeError:
+        return []
     if len(normalized) == 1 and isinstance(normalized[0], str):
         value = normalized[0].strip()
         if value.startswith("[") and value.endswith("]"):
@@ -782,11 +808,22 @@ async def crop_image(
         w, h = ImagePreprocessor.get_image_dimensions(cropped_path)
 
         # 5. Register cropped file and return response
-        file_id = registry.register_path(
-            str(uuid.uuid4()),
-            cropped_path,
-            ttl_seconds=EPHEMERAL_PREVIEW_TTL_SECONDS,
-        )
+        try:
+            file_id = registry.register_path(
+                str(uuid.uuid4()),
+                cropped_path,
+                ttl_seconds=EPHEMERAL_PREVIEW_TTL_SECONDS,
+            )
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            log.error(
+                "Crop result registration failed",
+                extra={
+                    "event": "converter_crop_registration_failed",
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                },
+            )
+            raise HTTPException(status_code=500, detail=_CROP_FAILED_DETAIL) from exc
         registered_result = True
         return CropResponse(
             status="ok",
@@ -806,8 +843,9 @@ async def crop_image(
 @router.post("/preview")
 async def convert_preview(
     image: UploadFile = File(..., description="输入图像"),
-    source_kind: str = Form("legacy_single", description="源类型: legacy_single | native_bundle"),
+    source_kind: str = Form("legacy_single", description="源类型: legacy_single | legacy_multi | native_bundle"),
     lut_name: str | None = Form(None, description="LUT 名称"),
+    lut_names: list[str] | str | None = Form(None, description="传统 LUT 名称列表"),
     material_type: str | None = Form(None, description="原生材料类型"),
     vendor: str | None = Form(None, description="原生厂商"),
     db_names: list[str] | str | None = Form(None, description="原生 DB 名称列表"),
@@ -915,7 +953,14 @@ async def convert_preview(
     # Material-archive mode: skip LUT resolution entirely
     if material_source == "material_archive":
         request = LutSourceSelection.model_validate(
-            {"source_kind": "legacy_single", "lut_name": "__material_archive__", "material_type": None, "vendor": None, "db_names": []}
+            {
+                "source_kind": "legacy_single",
+                "lut_name": "__material_archive__",
+                "lut_names": [],
+                "material_type": None,
+                "vendor": None,
+                "db_names": [],
+            }
         )
         lut_path = "__material_archive__"
         resolved_lut_name = "__material_archive__"
@@ -923,10 +968,12 @@ async def convert_preview(
     else:
         try:
             normalized_db_names = _normalize_db_names(db_names)
+            normalized_lut_names = _normalize_db_names(lut_names)
             request = LutSourceSelection.model_validate(
                 {
                     "source_kind": source_kind,
                     "lut_name": lut_name,
+                    "lut_names": normalized_lut_names,
                     "material_type": material_type,
                     "vendor": vendor,
                     "db_names": normalized_db_names,
@@ -939,12 +986,17 @@ async def convert_preview(
             ) from exc
 
         try:
+            source_kwargs = {
+                "source_kind": request.source_kind,
+                "lut_name": request.lut_name,
+                "material_type": request.material_type,
+                "vendor": request.vendor,
+                "db_names": request.db_names,
+            }
+            if request.source_kind == "legacy_multi":
+                source_kwargs["lut_names"] = request.lut_names
             lut_path, resolved_lut_name = LUTManager.resolve_source_selection(
-                source_kind=request.source_kind,
-                lut_name=request.lut_name,
-                material_type=request.material_type,
-                vendor=request.vendor,
-                db_names=request.db_names,
+                **source_kwargs
             )
         except ValueError as exc:
             detail = str(exc)
@@ -952,7 +1004,7 @@ async def convert_preview(
             raise HTTPException(status_code=status_code, detail=detail) from exc
 
         resolved_lut_path = os.path.abspath(lut_path)
-    if request.source_kind == "native_bundle":
+    if request.source_kind in ("native_bundle", "legacy_multi"):
         try:
             Path(resolved_lut_path).resolve().relative_to(Path(TEMP_DIR).resolve())
         except ValueError:
@@ -1083,6 +1135,9 @@ async def convert_preview(
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="Preview generation timed out")
     except ROUTER_HANDLED_ERRORS as e:
+        public_detail = _public_pipeline_validation_detail(e)
+        if public_detail is not None:
+            raise HTTPException(status_code=422, detail=public_detail) from e
         log.exception(
             "Preview generation failed",
             extra={
@@ -1371,17 +1426,29 @@ async def convert_preview(
     if cache_session_value is None and cache_data is not None:
         cache_with_originals = dict(cache_data)
         if "matched_rgb" in cache_data:
-            cache_with_originals["original_matched_rgb"] = cache_data["matched_rgb"]
+            cache_with_originals.setdefault(
+                "original_matched_rgb",
+                cache_data["matched_rgb"],
+            )
+            cache_with_originals.setdefault(
+                "height_identity_rgb",
+                cache_with_originals["original_matched_rgb"],
+            )
         if "material_matrix" in cache_data:
-            cache_with_originals["original_material_matrix"] = cache_data["material_matrix"]
+            cache_with_originals.setdefault(
+                "original_material_matrix",
+                cache_data["material_matrix"],
+            )
         cache_with_originals = _compact_preview_cache_material_matrices(
             cache_with_originals,
         )
         try:
-            cache_session_value = externalize_preview_cache(
-                session_id,
-                store,
-                cache_with_originals,
+            cache_session_value = _with_original_preview_cache_refs(
+                externalize_preview_cache(
+                    session_id,
+                    store,
+                    cache_with_originals,
+                )
             )
         except ROUTER_HANDLED_ERRORS:
             _rollback_preview_session_after_failure(
@@ -1439,6 +1506,7 @@ async def convert_preview(
     store.put(session_id, "lut_path", lut_path)
     store.put(session_id, "lut_name", resolved_lut_name)
     store.put(session_id, "lut_source_kind", request.source_kind)
+    store.put(session_id, "lut_names", list(request.lut_names))
     store.put(session_id, "lut_material_type", request.material_type)
     store.put(session_id, "lut_vendor", request.vendor)
     store.put(session_id, "lut_db_names", list(request.db_names))

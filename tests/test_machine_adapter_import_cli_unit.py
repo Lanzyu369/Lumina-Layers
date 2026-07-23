@@ -5,7 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from tools.machine_adapter.import_profiles import ImportSource, _asset_slug, run_import, run_import_sources
+from tools.machine_adapter.import_profiles import (
+    ImportSource,
+    _asset_slug,
+    _copy_thumbnail_file,
+    run_import,
+    run_import_sources,
+)
 
 
 def _write_machine_profile(
@@ -16,6 +22,19 @@ def _write_machine_profile(
     path = machine_dir / filename
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_copy_thumbnail_file_bounds_oversized_raster_assets(tmp_path):
+    from PIL import Image
+
+    source = tmp_path / "source.png"
+    destination = tmp_path / "output" / "cover.png"
+    Image.new("RGBA", (3000, 2400), (255, 255, 255, 255)).save(source)
+
+    _copy_thumbnail_file(source, destination)
+
+    with Image.open(destination) as image:
+        assert image.size == (1000, 800)
 
 
 def test_run_import_writes_registry_and_templates(tmp_path):
@@ -559,6 +578,183 @@ def test_run_import_preserves_native_quarter_mm_nozzle_profiles(tmp_path):
     assert nozzle["nozzle_size"] == "0.25"
     assert nozzle["device_profile_id"] == "AnycubicSlicerNext:anycubic:anycubic-kobra-x:0.25"
     assert nozzle["template"].endswith("anycubic-kobra-x_0_25.json")
+
+
+def test_run_import_flash_studio_keeps_current_multicolor_models_and_nozzles(tmp_path):
+    source_root = tmp_path / "profiles"
+    machine_dir = source_root / "Flashforge" / "machine"
+    _write_machine_profile(
+        machine_dir,
+        "fdm_common.json",
+        {
+            "type": "machine",
+            "name": "fdm_common",
+            "instantiation": "false",
+            "printable_height": "256",
+            "printable_area": ["0x0", "256x0", "256x256", "0x256"],
+        },
+    )
+    model_nozzles = {
+        "Flashforge AD5X": ("0.25", "0.4", "0.6", "0.8"),
+        "Flashforge Creator 5": ("0.25", "0.4", "0.6", "0.8"),
+        "Flashforge Creator 5 Pro": ("0.25", "0.4", "0.6", "0.8"),
+        "Flashforge Guider 3 Ultra": ("0.4", "0.6", "0.8"),
+        "Flashforge Guider4": ("0.25", "0.4", "0.4HF", "0.6", "0.6HF", "0.8HF"),
+        "Flashforge Guider4 Pro": ("0.25", "0.4", "0.4HF", "0.6", "0.6HF", "0.8HF"),
+        "Flashforge Adventurer 5M": ("0.25", "0.4", "0.6", "0.8"),
+        "Flashforge Creator 5S": ("0.4", "0.6", "0.8"),
+    }
+    registered_profile_names: list[str] = []
+    for model, variants in model_nozzles.items():
+        for variant in variants:
+            nozzle = variant.removesuffix("HF")
+            if model.startswith("Flashforge Creator 5S"):
+                physical_tools = 6
+            elif model in {"Flashforge Creator 5", "Flashforge Creator 5 Pro"}:
+                physical_tools = 4
+            elif model == "Flashforge Guider 3 Ultra" and nozzle == "0.4":
+                physical_tools = 2
+            else:
+                physical_tools = 1
+            profile_name = f"{model} {variant.replace('HF', ' HF')} nozzle"
+            _write_machine_profile(
+                machine_dir,
+                f"{profile_name}.json",
+                {
+                    "type": "machine",
+                    "name": profile_name,
+                    "inherits": "fdm_common",
+                    "instantiation": "true",
+                    "printer_model": model,
+                    "printer_variant": variant,
+                    "nozzle_diameter": [nozzle] * physical_tools,
+                    "single_extruder_multi_material": (
+                        "1" if model in {
+                            "Flashforge AD5X",
+                            "Flashforge Guider4",
+                            "Flashforge Guider4 Pro",
+                        } else "0"
+                    ),
+                },
+            )
+            if model != "Flashforge Creator 5S":
+                registered_profile_names.append(profile_name)
+    (source_root / "Flashforge.json").write_text(
+        json.dumps(
+            {
+                "version": "02.01.01.00",
+                "machine_list": [
+                    {"name": name, "sub_path": f"machine/{name}.json"}
+                    for name in registered_profile_names
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    output_root = tmp_path / "machine_registry"
+    result = run_import(
+        slicer_id="FlashStudio",
+        source_root=source_root,
+        source_version="02.01.01.00",
+        vendor_keys=("Flashforge",),
+        output_root=output_root,
+        application_metadata="BambuStudio-2.3.2",
+        client_version="",
+    )
+
+    assert result.device_count == 11
+    registry = json.loads((output_root / "registry.json").read_text(encoding="utf-8"))
+    slicer = registry["slicers"][0]
+    assert slicer["application_metadata"] == "BambuStudio-2.3.2"
+    assert slicer["client_version"] == ""
+    assert [machine["display_name"] for machine in slicer["machines"]] == [
+        "Flashforge AD5X",
+        "Flashforge Creator 5",
+        "Flashforge Creator 5 Pro",
+        "Flashforge Guider 3 Ultra",
+        "Flashforge Guider4",
+        "Flashforge Guider4 Pro",
+    ]
+    assert {
+        machine["display_name"]: [nozzle["nozzle_size"] for nozzle in machine["nozzles"]]
+        for machine in slicer["machines"]
+    } == {
+        "Flashforge AD5X": ["0.25", "0.4"],
+        "Flashforge Creator 5": ["0.25", "0.4"],
+        "Flashforge Creator 5 Pro": ["0.25", "0.4"],
+        "Flashforge Guider 3 Ultra": ["0.4"],
+        "Flashforge Guider4": ["0.25", "0.4"],
+        "Flashforge Guider4 Pro": ["0.25", "0.4"],
+    }
+    guider4 = next(
+        machine for machine in slicer["machines"]
+        if machine["display_name"] == "Flashforge Guider4"
+    )
+    assert [nozzle["source_profile_name"] for nozzle in guider4["nozzles"]] == [
+        "Flashforge Guider4 0.25 nozzle",
+        "Flashforge Guider4 0.4 nozzle",
+    ]
+
+
+def test_run_import_flash_studio_defaults_native_project_identity(tmp_path):
+    source_root = tmp_path / "profiles"
+    machine_dir = source_root / "Flashforge" / "machine"
+    _write_machine_profile(
+        machine_dir,
+        "fdm_common.json",
+        {
+            "type": "machine",
+            "name": "fdm_common",
+            "instantiation": "false",
+            "printable_height": "220",
+            "printable_area": ["0x0", "220x0", "220x220", "0x220"],
+        },
+    )
+    profile_name = "Flashforge AD5X 0.4 nozzle"
+    _write_machine_profile(
+        machine_dir,
+        f"{profile_name}.json",
+        {
+            "type": "machine",
+            "name": profile_name,
+            "inherits": "fdm_common",
+            "instantiation": "true",
+            "printer_model": "Flashforge AD5X",
+            "printer_variant": "0.4",
+            "nozzle_diameter": ["0.4"],
+            "single_extruder_multi_material": "1",
+        },
+    )
+    (source_root / "Flashforge.json").write_text(
+        json.dumps(
+            {
+                "version": "02.01.01.00",
+                "machine_list": [
+                    {"name": profile_name, "sub_path": f"machine/{profile_name}.json"}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    output_root = tmp_path / "machine_registry"
+    result = run_import(
+        slicer_id="FlashStudio",
+        source_root=source_root,
+        source_version="02.01.01.00",
+        vendor_keys=("Flashforge",),
+        output_root=output_root,
+    )
+
+    assert result.device_count == 1
+    registry = json.loads((output_root / "registry.json").read_text(encoding="utf-8"))
+    slicer = registry["slicers"][0]
+    assert slicer["application_metadata"] == "BambuStudio-2.3.2"
+    assert slicer["client_version"] == ""
+    template_path = slicer["machines"][0]["nozzles"][0]["template"]
+    template = json.loads((output_root / template_path).read_text(encoding="utf-8"))
+    assert template["version"] == "2.3.2"
 
 
 def test_run_import_sources_reuses_cover_assets_from_other_sources(tmp_path):

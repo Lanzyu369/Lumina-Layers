@@ -70,7 +70,7 @@ describe("calibration visible error language", () => {
     const error = useCalibrationStore.getState().error;
     expect(error).toBeTruthy();
     expect(error).not.toMatch(RAW_HTTP_STATUS_PATTERN);
-    expect(error).toBe("服务器发生内部错误。请使用请求 ID 查看日志。");
+    expect(error).toBe("服务器发生内部错误。请稍后重试；如果问题持续，请提交反馈。");
     expect(useCalibrationStore.getState().isLoading).toBe(false);
   });
 
@@ -85,7 +85,7 @@ describe("calibration visible error language", () => {
     const error = useCalibrationStore.getState().error;
     expect(error).toBeTruthy();
     expect(error).not.toMatch(RAW_HTTP_STATUS_PATTERN);
-    expect(error).toBe("服务器发生内部错误。请使用请求 ID 查看日志。");
+    expect(error).toBe("服务器发生内部错误。请稍后重试；如果问题持续，请提交反馈。");
     expect(useCalibrationStore.getState().isLoading).toBe(false);
   });
 

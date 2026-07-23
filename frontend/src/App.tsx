@@ -33,6 +33,8 @@ import GradientCardExtractPanel from "./components/GradientCardExtractPanel";
 import MaterialCloudSyncPanel from "./components/MaterialCloudSyncPanel";
 import MaterialLibraryPanel from "./components/MaterialLibraryPanel";
 import MaterialRecipeQueryPanel from "./components/MaterialRecipeQueryPanel";
+import LutCloudSyncPanel from "./components/LutCloudSyncPanel";
+import LutLibraryPanel from "./components/LutLibraryPanel";
 import LutComparePanel from "./components/LutComparePanel";
 import LutManagerPanel from "./components/LutManagerPanel";
 import FiveColorQueryPanel from "./components/FiveColorQueryPanel";
@@ -472,7 +474,9 @@ function AppContent() {
           </div>
         )}
 
+        {activeTab === 'lut-library' && <LutLibraryPanel />}
         {activeTab === 'lut-manager' && <LutManagerPanel />}
+        {activeTab === 'lut-cloud-sync' && <LutCloudSyncPanel />}
         {activeTab === 'lut-details' && <LutDetailsPanel />}
         {activeTab === 'lut-compare' && <LutComparePanel />}
         {activeTab === 'five-color' && (

@@ -14,6 +14,7 @@ byte-for-byte. This protects the FROZEN canonical 14/30 INFO budget per
 ``AGENTS.md`` Logging Governance.
 
 公共点：
+- ``_validate_vector_svg_input(ctx, *, image_path, modeling_mode)``
 - ``_resolve_lut_path_or_error(ctx, *, error_prefix)``
 - ``_apply_material_archive_branch(ctx, *, log, event_prefix, ...)``
 - ``_clamp_quantize_colors(value)``
@@ -24,6 +25,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from config import ModelingMode
 from core.material_cache import ALLOWED_GRID_RESOLUTIONS, DEFAULT_GRID_RESOLUTION
 from core.material_lut_provider import load_materials
 from core.material_lut_synthesis import (
@@ -34,10 +36,54 @@ from core.material_lut_synthesis import (
 
 
 __all__ = [
+    "VECTOR_NATIVE_REQUIRES_SVG_DETAIL",
     "_clamp_quantize_colors",
     "_resolve_lut_path_or_error",
     "_apply_material_archive_branch",
+    "_validate_vector_svg_input",
 ]
+
+
+VECTOR_NATIVE_REQUIRES_SVG_DETAIL = (
+    "⚠️ Vector Native mode requires SVG files!\n\n"
+    "Your file is not an SVG. Please either:\n"
+    "• Upload an SVG file, or\n"
+    "• Switch to 'High-Fidelity' or 'Pixel Art' mode"
+)
+
+
+def _validate_vector_svg_input(
+    ctx: dict,
+    *,
+    image_path: object,
+    modeling_mode: ModelingMode,
+) -> bool:
+    """Validate and record whether an input can use native vector modeling.
+    校验并记录输入是否可以使用原生矢量建模。
+
+    Args:
+        ctx: Pipeline context updated with ``is_svg_vector`` and, on mismatch,
+            a user-facing ``error``.
+        image_path: Source image path.
+        modeling_mode: Normalized modeling mode.
+
+    Returns:
+        Whether the input is an SVG using native vector mode.
+    """
+    is_svg_vector = (
+        modeling_mode == ModelingMode.VECTOR
+        and isinstance(image_path, str)
+        and image_path.lower().endswith(".svg")
+    )
+    ctx["is_svg_vector"] = is_svg_vector
+    if (
+        modeling_mode == ModelingMode.VECTOR
+        and not is_svg_vector
+        and isinstance(image_path, str)
+        and not image_path.lower().endswith(".svg")
+    ):
+        ctx["error"] = VECTOR_NATIVE_REQUIRES_SVG_DETAIL
+    return is_svg_vector
 
 
 def _clamp_quantize_colors(value: int) -> int:

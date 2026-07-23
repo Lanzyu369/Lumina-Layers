@@ -59,7 +59,7 @@ GOVERNANCE_SCAN_ROOTS = [
     ROOT / "core",
     ROOT / "utils",
 ]
-EXCEPT_EXCEPTION_BASELINE = 66
+EXCEPT_EXCEPTION_BASELINE = 69
 LOG_METHODS = {"debug", "info", "warning", "error", "exception", "critical", "log"}
 VECTOR_STRUCTURED_EVENTS = {
     "vector_branch_init",
@@ -235,6 +235,7 @@ CONVERTER_STRUCTURED_EVENTS = {
     "converter_generate_large_format_done",
     "converter_generate_download_registration_failed",
     "converter_generate_glb_registration_failed",
+    "converter_crop_registration_failed",
     "color_card_download_registration_failed",
     "color_card_glb_registration_failed",
     "converter_large_format_failed",
@@ -399,7 +400,21 @@ def test_no_business_print_in_hot_paths() -> None:
 def test_except_exception_count_does_not_increase() -> None:
     """Catch-all exceptions may exist but should not grow.
 
-    Baseline last bumped from 65 -> 66 by the extractor final LUT download
+    Baseline last bumped from 67 -> 69 by the two native large-format SVG
+    recovery boundaries in ``api/routers/converter/generate.py``. Native vector
+    generation and its raster fallback can fail through third-party geometry,
+    image, or archive exceptions that do not share a domain exception type. The
+    route logs actionable structured diagnostics and attempts the documented
+    raster fallback; if that fallback also fails, it re-raises a bounded
+    native-generation error instead of reporting success.
+
+    Previous baseline bump from 66 -> 67 came from the native bundle batch-generation
+    validation cleanup guard in ``api/routers/converter/generate.py``. That
+    guard removes a route-owned temporary native bundle if validation fails
+    after the bundle is materialized, then re-raises the original exception;
+    it does not swallow or remap the failure.
+
+    Previous baseline bump from 65 -> 66 came from the extractor final LUT download
     registration cleanup guard in ``api/routers/extractor.py``. That guard
     runs after a route-owned ``extractor_lut_*`` copy has been written but
     before it is registered with ``FileRegistry``; it removes the orphan copy,

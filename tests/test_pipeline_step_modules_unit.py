@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
+from PIL import Image
 import pytest
 import trimesh
 
@@ -109,6 +110,622 @@ class TestS02ImageProcessing:
         assert result["processor"] is processor_cls.return_value
         processor_cls.assert_called_once()
         processor_cls.return_value.process_image.assert_not_called()
+
+    def test_required_preview_analysis_rejects_wrong_rank_instead_of_fallback(
+        self,
+        tmp_path,
+    ) -> None:
+        """Spatial edits must never fall back to a fresh S02 analysis."""
+
+        from core.pipeline.s02_image_processing import _load_reused_preview_analysis
+        from core.errors import CachedPreviewAnalysisError
+        from core.preview_analysis_cache import REQUIRED_PREVIEW_ANALYSIS_REUSE
+
+        matched_path = tmp_path / "matched_rgb.npy"
+        mask_path = tmp_path / "mask_solid.npy"
+        matrix_path = tmp_path / "material_matrix.npy"
+        np.save(matched_path, np.zeros((3, 4), dtype=np.uint8))
+        np.save(mask_path, np.ones((3, 4), dtype=bool))
+        np.save(matrix_path, np.zeros((3, 4, 5), dtype=np.int16))
+
+        with pytest.raises(CachedPreviewAnalysisError):
+            _load_reused_preview_analysis(
+                {
+                    "reuse_preview_analysis": REQUIRED_PREVIEW_ANALYSIS_REUSE,
+                    "matched_rgb_path": str(matched_path),
+                    "mask_solid_path": str(mask_path),
+                    "material_matrix_path": str(matrix_path),
+                }
+            )
+
+    @staticmethod
+    def _material_archive_reuse_context(
+        tmp_path,
+        *,
+        color_replacements: dict[str, str] | None = None,
+    ) -> tuple[dict, np.ndarray, np.ndarray, np.ndarray, list]:
+        from core.material_color_solver import MaterialParams
+
+        source_path = tmp_path / "source-tile.png"
+        Image.fromarray(np.zeros((11, 17, 3), dtype=np.uint8)).save(source_path)
+
+        matched_rgb = np.full((3, 4, 3), [200, 100, 50], dtype=np.uint8)
+        matched_rgb[:, 0] = [50, 70, 200]
+        mask_solid = np.ones((3, 4), dtype=bool)
+        mask_solid[0, 0] = False
+        material_matrix = np.zeros((3, 4, 5), dtype=np.int16)
+        material_matrix[:, 0, :] = 1
+
+        matched_path = tmp_path / "archive-matched.npy"
+        mask_path = tmp_path / "archive-mask.npy"
+        material_path = tmp_path / "archive-material.npy"
+        np.save(matched_path, matched_rgb)
+        np.save(mask_path, mask_solid)
+        np.save(material_path, material_matrix)
+
+        def _material(
+            name: str,
+            equilibrium: tuple[float, float, float],
+            absorption: tuple[float, float, float],
+        ) -> MaterialParams:
+            return MaterialParams(
+                name=name,
+                directory_name=name.lower(),
+                E=np.asarray(equilibrium, dtype=np.float64),
+                k=np.asarray(absorption, dtype=np.float64),
+                C0_white=np.ones(3, dtype=np.float64),
+                estimated_rgb=np.asarray(
+                    [int(round(255 * component)) for component in equilibrium],
+                    dtype=np.uint8,
+                ),
+            )
+
+        materials = [
+            _material("Red", (0.6, 0.05, 0.05), (4.0, 4.0, 4.0)),
+            _material("Blue", (0.05, 0.1, 0.6), (4.0, 4.0, 4.0)),
+            _material("White", (0.95, 0.95, 0.95), (0.5, 0.5, 0.5)),
+        ]
+        ctx = {
+            "image_path": str(source_path),
+            "target_width_mm": 40.0,
+            "modeling_mode": ModelingMode.HIGH_FIDELITY,
+            "quantize_colors": 8,
+            "material_source": "material_archive",
+            "_material_params": materials,
+            "selected_materials": ["red", "blue", "white"],
+            "color_layers": 5,
+            "layer_height_mm": 0.08,
+            "material_substrate": "white",
+            "reuse_preview_analysis": True,
+            "matched_rgb_path": str(matched_path),
+            "mask_solid_path": str(mask_path),
+            "material_matrix_path": str(material_path),
+            "color_replacements": color_replacements,
+            "replacement_regions": None,
+        }
+        return ctx, matched_rgb, mask_solid, material_matrix, materials
+
+    def test_material_archive_reuses_spatial_analysis_before_solver(
+        self,
+        tmp_path,
+        monkeypatch,
+    ) -> None:
+        """S02+S03 must consume tile-cache grids even when source pixels differ."""
+
+        from core.pipeline import p03_core_processing
+        from core.pipeline import s02_image_processing
+        from core.pipeline import s03_color_replacement
+
+        ctx, matched_rgb, mask_solid, material_matrix, materials = (
+            self._material_archive_reuse_context(tmp_path)
+        )
+
+        def _fail_material_solver(_ctx: dict) -> dict:
+            raise AssertionError("material solver must not run for validated reuse")
+
+        def _fail_lut_processor(*_args, **_kwargs):
+            raise AssertionError("material archive reuse must not create LUT processor")
+
+        monkeypatch.setattr(
+            p03_core_processing,
+            "_run_material_archive_branch",
+            _fail_material_solver,
+        )
+        monkeypatch.setattr(
+            s02_image_processing,
+            "LuminaImageProcessor",
+            _fail_lut_processor,
+        )
+
+        after_s02 = s02_image_processing.run(ctx)
+        after_s03 = s03_color_replacement.run(after_s02)
+
+        np.testing.assert_array_equal(after_s03["matched_rgb"], matched_rgb)
+        np.testing.assert_array_equal(after_s03["mask_solid"], mask_solid)
+        np.testing.assert_array_equal(after_s03["material_matrix"], material_matrix)
+        assert after_s03["target_w"] == 4
+        assert after_s03["target_h"] == 3
+        assert after_s03["pixel_scale"] == pytest.approx(10.0)
+        assert after_s03["mode_info"] == {
+            "mode": ModelingMode.HIGH_FIDELITY,
+            "lut_match_mode": "material_archive",
+        }
+        assert after_s03["lut_metadata"] is None
+        assert after_s03.get("processor") is None
+        assert after_s03["_material_params"] is materials
+
+    def test_material_archive_reused_grid_keeps_global_replacements_working(
+        self,
+        tmp_path,
+        monkeypatch,
+    ) -> None:
+        """Real S03 replacement solving must still use preserved material params."""
+
+        from core.pipeline import p03_core_processing
+        from core.pipeline import s02_image_processing
+        from core.pipeline import s03_color_replacement
+
+        ctx, matched_rgb, mask_solid, material_matrix, materials = (
+            self._material_archive_reuse_context(
+                tmp_path,
+                color_replacements={"#c86432": "#14c814"},
+            )
+        )
+
+        def _fail_material_solver(_ctx: dict) -> dict:
+            raise AssertionError("material solver must not rebuild reused analysis")
+
+        monkeypatch.setattr(
+            p03_core_processing,
+            "_run_material_archive_branch",
+            _fail_material_solver,
+        )
+
+        after_s02 = s02_image_processing.run(ctx)
+        after_s03 = s03_color_replacement.run(after_s02)
+
+        np.testing.assert_array_equal(after_s03["matched_rgb"][:, 0], matched_rgb[:, 0])
+        np.testing.assert_array_equal(
+            after_s03["material_matrix"][:, 0],
+            material_matrix[:, 0],
+        )
+        assert not np.array_equal(after_s03["matched_rgb"][:, 1:], matched_rgb[:, 1:])
+        assert np.any(after_s03["material_matrix"][:, 1:] != material_matrix[:, 1:])
+        np.testing.assert_array_equal(after_s03["mask_solid"], mask_solid)
+        assert after_s03["matched_rgb"].shape[:2] == (3, 4)
+        assert after_s03["material_matrix"].shape[:2] == (3, 4)
+        assert after_s03["_material_params"] is materials
+
+    def test_recipe_only_final_matrix_aligns_to_fresh_non_divisible_lut_grid(
+        self,
+        tmp_path,
+        monkeypatch,
+    ) -> None:
+        """Real LUT S02→S03 aligns recipe authority to a fresh tile grid."""
+
+        from api.routers.converter.generate import (
+            _prepare_recipe_override_worker_inputs,
+        )
+        from api.schemas.converter import ConvertGenerateRequest
+        from api.session_store import SessionStore
+        from core.pipeline import s02_image_processing
+        from core.pipeline import s03_color_replacement
+
+        source_path = tmp_path / "source.png"
+        lut_path = tmp_path / "lut.npy"
+        authority_mask_path = tmp_path / "final-material-authority-mask.npy"
+        Image.fromarray(np.full((1, 4, 3), [255, 0, 0], dtype=np.uint8)).save(
+            source_path
+        )
+        lut_path.write_bytes(b"lut")
+
+        # The whole-image preview artifact has four columns, while fresh S02
+        # resolves this non-divisible tile to five. This is the production
+        # mismatch that previously made S03 silently discard every recipe.
+        processed_rgb = np.full((1, 5, 3), [255, 0, 0], dtype=np.uint8)
+        processed_matrix = np.ones((1, 5, 5), dtype=np.int16)
+        mask_solid = np.ones((1, 5), dtype=bool)
+        preview_matrix = np.ones((1, 4, 5), dtype=np.int16)
+        preview_mask_solid = np.ones((1, 4), dtype=bool)
+        region_1_mask = np.array([[True, True, False, False]], dtype=bool)
+        region_2_mask = np.array([[False, True, True, False]], dtype=bool)
+        authority_mask = region_1_mask | region_2_mask
+        recipe_overrides = [
+            {
+                "region_id": "region-1",
+                "recipe": [5, 5, 5, 5, 5],
+                "layer_order": "Top2Bottom",
+            },
+            {
+                "region_id": "region-2",
+                "recipe": [7, 7, 7, 7, 7],
+                "layer_order": "Top2Bottom",
+            },
+        ]
+
+        # Use the actual route helper. It starts from the stale preview matrix
+        # and applies only custom recipes; it does not replay imported global
+        # color mappings. Column 3 therefore remains stack 1 in this artifact.
+        store = SessionStore(ttl=1800)
+        sid = store.create()
+        cache = {
+            "material_matrix": preview_matrix.copy(),
+            "mask_solid": preview_mask_solid.copy(),
+            "lut_metadata": LUTMetadata(
+                max_color_layers=5,
+                layer_height_mm=0.08,
+                base_channel_idx=0,
+            ),
+        }
+        session_data = {
+            "selected_region_masks": {
+                "region-1": region_1_mask,
+                "region-2": region_2_mask,
+            }
+        }
+        request = ConvertGenerateRequest(
+            lut_name="test-lut",
+            color_layers=5,
+            recipe_overrides=recipe_overrides,
+        )
+        final_matrix_path, recipe_masks_path = (
+            _prepare_recipe_override_worker_inputs(
+                cache=cache,
+                session_data=session_data,
+                recipe_overrides=recipe_overrides,
+                request=request,
+                sid=sid,
+                store=store,
+            )
+        )
+        assert final_matrix_path is not None
+        assert recipe_masks_path is not None
+        prepared_matrix = np.load(final_matrix_path)
+        prepared_before_global = np.array(
+            [
+                [
+                    [5, 5, 5, 5, 5],
+                    [7, 7, 7, 7, 7],
+                    [7, 7, 7, 7, 7],
+                    [1, 1, 1, 1, 1],
+                ]
+            ],
+            dtype=np.int16,
+        )
+        np.testing.assert_array_equal(prepared_matrix, prepared_before_global)
+        np.save(authority_mask_path, authority_mask)
+
+        # Global recoloring must update the physical stack outside recipe
+        # coverage while the recipe union remains authoritative. Later recipe
+        # wins at the overlap (column 1).
+        expected_final_matrix = np.array(
+            [
+                [
+                    [5, 5, 5, 5, 5],
+                    [7, 7, 7, 7, 7],
+                    [7, 7, 7, 7, 7],
+                    [7, 7, 7, 7, 7],
+                    [2, 2, 2, 2, 2],
+                ]
+            ],
+            dtype=np.int16,
+        )
+
+        class _FakeTree:
+            @staticmethod
+            def query(_values):
+                return np.array([0.0]), np.array([1])
+
+        class _FakeProcessor:
+            def __init__(self, *_args, **_kwargs) -> None:
+                self.enable_cleanup = True
+                self.last_match_info = None
+                self.kdtree = _FakeTree()
+                self.ref_stacks = np.array(
+                    [[1, 1, 1, 1, 1], [2, 2, 2, 2, 2]],
+                    dtype=np.int16,
+                )
+                self.lut_rgb = np.array(
+                    [[255, 0, 0], [0, 255, 0]],
+                    dtype=np.uint8,
+                )
+                self.process_calls = 0
+
+            @staticmethod
+            def _rgb_to_lab(values: np.ndarray) -> np.ndarray:
+                return np.asarray(values, dtype=np.float64)
+
+            def process_image(self, **_kwargs) -> dict:
+                self.process_calls += 1
+                return {
+                    "matched_rgb": processed_rgb.copy(),
+                    "material_matrix": processed_matrix.copy(),
+                    "mask_solid": mask_solid.copy(),
+                    "dimensions": (5, 1),
+                    "pixel_scale": 8.0,
+                    "mode_info": {"mode": ModelingMode.HIGH_FIDELITY},
+                }
+
+        monkeypatch.setattr(s02_image_processing, "LUTManager", None)
+        monkeypatch.setattr(
+            s02_image_processing,
+            "LuminaImageProcessor",
+            _FakeProcessor,
+        )
+        ctx = {
+            "actual_lut_path": str(lut_path),
+            "color_mode": "4-Color (RYBW)",
+            "image_path": str(source_path),
+            "target_width_mm": 40.0,
+            "modeling_mode": ModelingMode.HIGH_FIDELITY,
+            "quantize_colors": 8,
+            "enable_cleanup": True,
+            "reuse_preview_analysis": False,
+            "matched_rgb_path": None,
+            "mask_solid_path": None,
+            "material_matrix_path": str(final_matrix_path),
+            "final_material_matrix_is_authoritative": True,
+            "final_material_matrix_authority_mask_path": str(
+                authority_mask_path
+            ),
+            "replacement_regions": [
+                {
+                    "quantized_hex": "#ff0000",
+                    "matched_hex": "#ff0000",
+                    "replacement_hex": "#00ff00",
+                }
+            ],
+            "recipe_overrides": recipe_overrides,
+            # Large-format raster tiling deliberately consumes the already
+            # final matrix and does not forward whole-image masks to workers.
+            "recipe_override_masks_path": None,
+        }
+
+        try:
+            after_s02 = s02_image_processing.run(ctx)
+            processor = after_s02["processor"]
+            after_s03 = s03_color_replacement.run(after_s02)
+
+            assert processor.process_calls == 1
+            np.testing.assert_array_equal(
+                after_s03["matched_rgb"],
+                np.full((1, 5, 3), [0, 255, 0], dtype=np.uint8),
+            )
+            np.testing.assert_array_equal(
+                after_s03["material_matrix"],
+                expected_final_matrix,
+            )
+        finally:
+            store.clear_all()
+
+    def test_recipe_only_final_matrix_aligns_to_fresh_material_archive_grid(
+        self,
+        tmp_path,
+        monkeypatch,
+    ) -> None:
+        """Real material-archive S02→S03 uses the same safe grid alignment."""
+
+        from core.pipeline import p03_core_processing
+        from core.pipeline import s02_image_processing
+        from core.pipeline import s03_color_replacement
+
+        source_path = tmp_path / "source-tile.png"
+        Image.fromarray(np.zeros((3, 7, 3), dtype=np.uint8)).save(source_path)
+
+        final_matrix = np.array(
+            [
+                [
+                    [6, 6, 6, 6, 6],
+                    [6, 6, 6, 6, 6],
+                    [1, 1, 1, 1, 1],
+                    [1, 1, 1, 1, 1],
+                ]
+            ],
+            dtype=np.int16,
+        )
+        authority_mask = np.array([[True, True, False, False]], dtype=bool)
+        final_matrix_path = tmp_path / "final-material.npy"
+        authority_mask_path = tmp_path / "final-material-authority.npy"
+        np.save(final_matrix_path, final_matrix)
+        np.save(authority_mask_path, authority_mask)
+
+        fresh_rgb = np.full((1, 5, 3), [180, 120, 80], dtype=np.uint8)
+        fresh_matrix = np.full((1, 5, 5), 3, dtype=np.int16)
+        fresh_mask = np.ones((1, 5), dtype=bool)
+
+        def _run_fresh_material_archive(ctx: dict) -> dict:
+            ctx.update(
+                {
+                    "matched_rgb": fresh_rgb.copy(),
+                    "material_matrix": fresh_matrix.copy(),
+                    "mask_solid": fresh_mask.copy(),
+                    "target_w": 5,
+                    "target_h": 1,
+                    "pixel_scale": 8.0,
+                    "mode_info": {
+                        "mode": ModelingMode.HIGH_FIDELITY,
+                        "lut_match_mode": "material_archive",
+                    },
+                    "debug_data": None,
+                }
+            )
+            return ctx
+
+        monkeypatch.setattr(
+            p03_core_processing,
+            "_run_material_archive_branch",
+            _run_fresh_material_archive,
+        )
+        ctx = {
+            "image_path": str(source_path),
+            "target_width_mm": 40.0,
+            "modeling_mode": ModelingMode.HIGH_FIDELITY,
+            "quantize_colors": 8,
+            "material_source": "material_archive",
+            "reuse_preview_analysis": False,
+            "material_matrix_path": str(final_matrix_path),
+            "final_material_matrix_is_authoritative": True,
+            "final_material_matrix_authority_mask_path": str(
+                authority_mask_path
+            ),
+            "recipe_overrides": [
+                {
+                    "region_id": "region-1",
+                    "recipe": [6, 6, 6, 6, 6],
+                    "layer_order": "Top2Bottom",
+                }
+            ],
+            "recipe_override_masks_path": None,
+        }
+
+        after_s02 = s02_image_processing.run(ctx)
+        after_s03 = s03_color_replacement.run(after_s02)
+
+        expected = np.array(
+            [
+                [
+                    [6, 6, 6, 6, 6],
+                    [6, 6, 6, 6, 6],
+                    [1, 1, 1, 1, 1],
+                    [1, 1, 1, 1, 1],
+                    [1, 1, 1, 1, 1],
+                ]
+            ],
+            dtype=np.int16,
+        )
+        np.testing.assert_array_equal(after_s03["material_matrix"], expected)
+        np.testing.assert_array_equal(after_s03["matched_rgb"], fresh_rgb)
+
+    def test_recipe_only_final_matrix_rejects_unsafe_channel_alignment(
+        self,
+        tmp_path,
+    ) -> None:
+        """Spatial alignment must not hide incompatible recipe layer counts."""
+
+        from core.pipeline import s03_color_replacement
+
+        final_matrix_path = tmp_path / "final-material.npy"
+        authority_mask_path = tmp_path / "final-material-authority.npy"
+        np.save(final_matrix_path, np.zeros((1, 4, 6), dtype=np.int16))
+        np.save(authority_mask_path, np.ones((1, 4), dtype=bool))
+        ctx = {
+            "matched_rgb": np.zeros((1, 5, 3), dtype=np.uint8),
+            "material_matrix": np.zeros((1, 5, 5), dtype=np.int16),
+            "mask_solid": np.ones((1, 5), dtype=bool),
+            "material_matrix_path": str(final_matrix_path),
+            "final_material_matrix_is_authoritative": True,
+            "final_material_matrix_authority_mask_path": str(
+                authority_mask_path
+            ),
+        }
+
+        with pytest.raises(
+            ValueError,
+            match="layer count does not match processed material matrix",
+        ):
+            s03_color_replacement.run(ctx)
+
+    @pytest.mark.parametrize(
+        ("cached_analysis_is_final", "expect_preserved"),
+        [(True, True), (False, False)],
+    )
+    def test_large_format_final_cache_controls_replacement_reapplication(
+        self,
+        tmp_path,
+        cached_analysis_is_final: bool,
+        expect_preserved: bool,
+    ) -> None:
+        """S02→S03 must treat a reused final trio as authoritative state."""
+
+        from api.routers.converter.generate import _resolve_large_format_shared_params
+        from api.schemas.converter import (
+            LargeFormatConvertGenerateRequest,
+            ModelingMode as ApiModelingMode,
+        )
+        from core.pipeline import s02_image_processing
+        from core.pipeline import s03_color_replacement
+
+        base_ctx, _rgb, _mask, _matrix, materials = (
+            self._material_archive_reuse_context(tmp_path)
+        )
+        final_matched_rgb = np.array(
+            [[[200, 100, 50], [50, 70, 200]]],
+            dtype=np.uint8,
+        )
+        final_mask_solid = np.ones((1, 2), dtype=bool)
+        final_material_matrix = np.array(
+            [[[7, 7, 7, 7, 7], [2, 2, 2, 2, 2]]],
+            dtype=np.int16,
+        )
+        matched_path = tmp_path / "final-matched.npy"
+        mask_path = tmp_path / "final-mask.npy"
+        material_path = tmp_path / "final-material.npy"
+        np.save(matched_path, final_matched_rgb)
+        np.save(mask_path, final_mask_solid)
+        np.save(material_path, final_material_matrix)
+
+        session_data = {
+            "material_source": "material_archive",
+            "selected_materials": ["red", "blue", "white"],
+            "material_layer_count": 5,
+            "material_layer_height_mm": 0.08,
+            "material_grid_resolution": 64,
+            "replacement_regions": [
+                {
+                    "quantized_hex": "#c86432",
+                    "matched_hex": "#c86432",
+                    "replacement_hex": "#3246c8",
+                }
+            ],
+        }
+        request = LargeFormatConvertGenerateRequest(
+            lut_name="__material_archive__",
+            modeling_mode=ApiModelingMode.HIGH_FIDELITY,
+        )
+        ctx = _resolve_large_format_shared_params(
+            session_data,
+            request,
+            None,
+            matched_rgb_path=str(matched_path),
+            mask_solid_path=str(mask_path),
+            material_matrix_path=str(material_path),
+            cached_analysis_is_final=cached_analysis_is_final,
+        )
+        ctx.update(
+            {
+                "image_path": base_ctx["image_path"],
+                "target_width_mm": 20.0,
+                "reuse_preview_analysis": True,
+                "_material_params": materials,
+                "material_substrate": "white",
+                "grid_resolution": 64,
+            }
+        )
+
+        after_s02 = s02_image_processing.run(ctx)
+        after_s03 = s03_color_replacement.run(after_s02)
+
+        if expect_preserved:
+            assert ctx["replacement_regions"] is None
+            np.testing.assert_array_equal(
+                after_s03["matched_rgb"],
+                final_matched_rgb,
+            )
+            np.testing.assert_array_equal(
+                after_s03["material_matrix"],
+                final_material_matrix,
+            )
+            np.testing.assert_array_equal(
+                after_s03["material_matrix"][0, 0],
+                np.array([7, 7, 7, 7, 7], dtype=np.int16),
+            )
+        else:
+            assert ctx["replacement_regions"] == session_data["replacement_regions"]
+            assert not np.array_equal(after_s03["matched_rgb"], final_matched_rgb)
+            assert not np.array_equal(
+                after_s03["material_matrix"],
+                final_material_matrix,
+            )
 
 
 # ===========================================================================
@@ -209,6 +826,62 @@ class TestS01InputValidation:
         result = run(ctx)
 
         assert result["is_svg_vector"] is True
+
+    def test_vector_mode_rejects_non_svg_input(self):
+        """S01 应保留 VECTOR + 非 SVG 的既有校验行为。"""
+        from core.pipeline.s01_input_validation import run
+
+        ctx = self._make_valid_ctx()
+        ctx["modeling_mode"] = ModelingMode.VECTOR
+
+        result = run(ctx)
+
+        assert result["is_svg_vector"] is False
+        assert "Vector Native mode requires SVG files" in result["error"]
+
+    def test_material_archive_vector_mode_rejects_non_svg_before_material_loading(self):
+        """材料生成应在加载耗材前拒绝 VECTOR + 非 SVG 输入。"""
+        from core.pipeline.s01_input_validation import run
+
+        ctx = self._make_valid_ctx()
+        ctx.update(
+            {
+                "image_path": "/tmp/input.png",
+                "modeling_mode": ModelingMode.VECTOR,
+                "material_source": "material_archive",
+                "selected_materials": ["fake/material"],
+            }
+        )
+
+        with patch(
+            "core.pipeline.s01_input_validation._apply_material_archive_branch",
+        ) as apply_material_archive_branch:
+            result = run(ctx)
+
+        assert "Vector Native mode requires SVG files" in result["error"]
+        apply_material_archive_branch.assert_not_called()
+
+    @pytest.mark.parametrize("height_mode", ["color", "heightmap"])
+    def test_svg_vector_relief_stays_on_native_vector_pipeline(
+        self,
+        height_mode,
+    ):
+        """SVG relief must preserve native vector geometry instead of voxelizing it."""
+        from core.pipeline.s01_input_validation import run
+
+        ctx = self._make_valid_ctx()
+        ctx.update(
+            image_path="/tmp/test.svg",
+            modeling_mode=ModelingMode.VECTOR,
+            enable_relief=True,
+            height_mode=height_mode,
+        )
+
+        result = run(ctx)
+
+        assert result["is_svg_vector"] is True
+        assert result["modeling_mode"] == ModelingMode.VECTOR
+        assert "svg_vector_relief_fallback" not in result
 
     def test_five_color_translucent_svg_vector_falls_back_to_high_fidelity(self, tmp_path):
         """5-Color Extended native vector cannot preserve SVG opacity stacking."""
@@ -413,6 +1086,50 @@ class TestS01InputValidation:
         with pytest.raises(KeyError):
             run({})
 
+    def test_npz_runtime_lut_uses_metadata_palette_slots(self):
+        """legacy_multi 的 .npz 运行时 LUT 应使用 metadata palette 作为材料槽。"""
+        from core.pipeline.s01_input_validation import run
+
+        palette = [
+            PaletteEntry("White", "PLA", "#FFFFFF"),
+            PaletteEntry("Red", "PLA", "#DC143C"),
+            PaletteEntry("Yellow", "PLA", "#FFE600"),
+            PaletteEntry("Blue", "PLA", "#0064F0"),
+            PaletteEntry("Cyan", "PLA", "#0086D6"),
+            PaletteEntry("Magenta", "PLA", "#EC008C"),
+            PaletteEntry("Black", "PLA", "#000000"),
+            PaletteEntry("Green", "PLA", "#00AE42"),
+        ]
+        metadata = LUTMetadata(
+            palette=palette,
+            color_mode="Merged",
+            max_color_layers=5,
+            layer_height_mm=0.08,
+        )
+        ctx = self._make_valid_ctx()
+        ctx["lut_path"] = "/tmp/legacy_multi_runtime.npz"
+        ctx["color_mode"] = "4-Color (RYBW)"
+
+        with patch(
+            "core.pipeline.s01_input_validation.LUTManager.load_lut_with_metadata",
+            return_value=(np.zeros((1, 3), dtype=np.uint8), np.zeros((1, 5), dtype=np.int32), metadata),
+        ):
+            result = run(ctx)
+
+        assert result["slot_names"] == [
+            "White",
+            "Red",
+            "Yellow",
+            "Blue",
+            "Cyan",
+            "Magenta",
+            "Black",
+            "Green",
+        ]
+        assert len(result["preview_colors"]) == 8
+        assert result["color_layers"] == 5
+        assert result["layer_height_mm"] == 0.08
+
 
 # ===========================================================================
 # S03 — s03_color_replacement 单元测试
@@ -465,6 +1182,71 @@ class TestS03ColorReplacement:
         result = run(ctx)
 
         np.testing.assert_array_equal(result["material_matrix"], original_mat)
+
+    def test_reused_preview_loads_immutable_height_identity_path(self, tmp_path):
+        """S03 must load source-height identities independently of display RGB."""
+        from core.pipeline.s03_color_replacement import run
+
+        ctx = self._make_valid_ctx()
+        ctx["matched_rgb"][:] = [244, 100, 41]
+        height_identity = np.empty_like(ctx["matched_rgb"])
+        height_identity[:, :2] = [190, 230, 248]
+        height_identity[:, 2:] = [17, 34, 51]
+        identity_path = tmp_path / "height_identity_rgb.npy"
+        np.save(identity_path, height_identity)
+        ctx["height_identity_rgb_path"] = str(identity_path)
+
+        result = run(ctx)
+
+        np.testing.assert_array_equal(result["matched_rgb"], ctx["matched_rgb"])
+        np.testing.assert_array_equal(
+            result["height_identity_rgb"], height_identity
+        )
+
+    def test_legacy_matched_path_becomes_default_height_identity(self, tmp_path):
+        """Old callers without the new keyword inherit the final cached RGB."""
+        from core.pipeline.s03_color_replacement import run
+
+        ctx = self._make_valid_ctx()
+        cached_matched = np.full_like(ctx["matched_rgb"], [12, 34, 56])
+        matched_path = tmp_path / "cached_matched_rgb.npy"
+        np.save(matched_path, cached_matched)
+        ctx["matched_rgb_path"] = str(matched_path)
+
+        result = run(ctx)
+
+        np.testing.assert_array_equal(result["matched_rgb"], cached_matched)
+        np.testing.assert_array_equal(
+            result["height_identity_rgb"], cached_matched
+        )
+
+    def test_identity_validates_against_final_matched_grid_not_s02_grid(
+        self,
+        tmp_path,
+    ):
+        """Matched/identity artifacts may share a valid grid unlike S02 RGB."""
+        from core.pipeline.s03_color_replacement import run
+
+        ctx = self._make_valid_ctx()
+        ctx["mask_solid"] = np.ones((2, 3), dtype=bool)
+        ctx["material_matrix"] = np.zeros((2, 3, 5), dtype=int)
+        cached_matched = np.full((2, 3, 3), [244, 100, 41], dtype=np.uint8)
+        height_identity = np.empty_like(cached_matched)
+        height_identity[:, :1] = [190, 230, 248]
+        height_identity[:, 1:] = [17, 34, 51]
+        matched_path = tmp_path / "different_grid_matched.npy"
+        identity_path = tmp_path / "different_grid_identity.npy"
+        np.save(matched_path, cached_matched)
+        np.save(identity_path, height_identity)
+        ctx["matched_rgb_path"] = str(matched_path)
+        ctx["height_identity_rgb_path"] = str(identity_path)
+
+        result = run(ctx)
+
+        np.testing.assert_array_equal(result["matched_rgb"], cached_matched)
+        np.testing.assert_array_equal(
+            result["height_identity_rgb"], height_identity
+        )
 
     def test_missing_matched_rgb_raises_key_error(self):
         """缺失 matched_rgb 键应抛出 KeyError。"""
@@ -551,6 +1333,36 @@ class TestS06VoxelBuilding:
         assert isinstance(result["full_matrix"], np.ndarray)
         assert result["full_matrix"].ndim == 3  # (Z, H, W)
 
+    def test_run_uses_stable_height_identity_after_display_color_collision(self):
+        """S06 entrypoint must retain distinct source heights after one achieved RGB."""
+        from core.pipeline.s06_voxel_building import run
+
+        achieved_rgb = np.array([244, 100, 41], dtype=np.uint8)
+        source_low = np.array([190, 230, 248], dtype=np.uint8)
+        source_high = np.array([17, 34, 51], dtype=np.uint8)
+        ctx = self._make_valid_ctx()
+        ctx.update(
+            {
+                "material_matrix": np.zeros((1, 2, 5), dtype=int),
+                "mask_solid": np.ones((1, 2), dtype=bool),
+                "matched_rgb": np.array(
+                    [[achieved_rgb, achieved_rgb]], dtype=np.uint8
+                ),
+                "height_identity_rgb": np.array(
+                    [[source_low, source_high]], dtype=np.uint8
+                ),
+                "enable_relief": True,
+                "color_height_map": {"bee6f8": 0.48, "112233": 2.0},
+            }
+        )
+
+        result = run(ctx)
+
+        filled_layers = np.count_nonzero(result["full_matrix"] >= 0, axis=0)
+        assert filled_layers[0, 0] == 6
+        assert filled_layers[0, 1] == 25
+        assert result["backing_metadata"]["max_height_mm"] == pytest.approx(2.0)
+
     def test_native_reference_sources_use_metadata_base_channel_for_backing_layers(self):
         """原生/参考 LUT 的底板应使用 metadata.base_channel_idx，而不是通用 backing_color_id。"""
         from core.pipeline.s06_voxel_building import run
@@ -602,6 +1414,57 @@ class TestS06VoxelBuilding:
         assert result["full_matrix"][backing_start: backing_end + 1, 0, 0].tolist() == [3] * (
             backing_end - backing_start + 1
         )
+
+    def test_pixel_mode_backing_uses_full_canvas_without_coloring_transparent_pixels(self):
+        """Pixel mode should preserve the requested canvas size with backing only."""
+        from core.pipeline.s06_voxel_building import run
+
+        h, w = 6, 6
+        material_matrix = np.full((h, w, 5), -1, dtype=int)
+        material_matrix[2:4, 1:5, :] = 2
+        mask_solid = np.zeros((h, w), dtype=bool)
+        mask_solid[2:4, 1:5] = True
+        ctx = {
+            **self._make_valid_ctx(),
+            "material_matrix": material_matrix,
+            "mask_solid": mask_solid,
+            "matched_rgb": np.full((h, w, 3), [128, 64, 32], dtype=np.uint8),
+            "backing_color_id": 3,
+            "spacer_thick": 0.16,
+            "modeling_mode": ModelingMode.PIXEL,
+        }
+
+        result = run(ctx)
+        backing_start, backing_end = result["backing_metadata"]["backing_z_range"]
+
+        assert np.all(result["full_matrix"][backing_start: backing_end + 1] == 3)
+        assert np.all(result["full_matrix"][:backing_start, 0, 0] == -1)
+        assert np.all(result["full_matrix"][:backing_start, 2, 1] == 2)
+
+    def test_high_fidelity_backing_stays_on_solid_mask(self):
+        """Non-pixel modes keep transparent margins outside the backing footprint."""
+        from core.pipeline.s06_voxel_building import run
+
+        h, w = 6, 6
+        material_matrix = np.full((h, w, 5), -1, dtype=int)
+        material_matrix[2:4, 1:5, :] = 2
+        mask_solid = np.zeros((h, w), dtype=bool)
+        mask_solid[2:4, 1:5] = True
+        ctx = {
+            **self._make_valid_ctx(),
+            "material_matrix": material_matrix,
+            "mask_solid": mask_solid,
+            "matched_rgb": np.full((h, w, 3), [128, 64, 32], dtype=np.uint8),
+            "backing_color_id": 3,
+            "spacer_thick": 0.16,
+            "modeling_mode": ModelingMode.HIGH_FIDELITY,
+        }
+
+        result = run(ctx)
+        backing_start, backing_end = result["backing_metadata"]["backing_z_range"]
+
+        assert np.all(result["full_matrix"][backing_start: backing_end + 1, 0, 0] == -1)
+        assert np.all(result["full_matrix"][backing_start: backing_end + 1, 2, 1] == 3)
 
     def test_cloisonne_builds_wireframe_without_processor(self):
         """Cloisonne mode must not require ctx["processor"] in material-archive flows."""
@@ -1127,6 +1990,28 @@ class TestP01PreviewValidation:
 
         assert result["modeling_mode"] == ModelingMode.HIGH_FIDELITY
 
+    def test_material_archive_vector_mode_rejects_non_svg_before_material_loading(self):
+        """材料预览应在加载耗材前拒绝 VECTOR + 非 SVG 输入。"""
+        from core.pipeline.p01_preview_validation import run
+
+        ctx = self._make_valid_ctx()
+        ctx.update(
+            {
+                "image_path": "/tmp/input.png",
+                "modeling_mode": ModelingMode.VECTOR,
+                "material_source": "material_archive",
+                "selected_materials": ["fake/material"],
+            }
+        )
+
+        with patch(
+            "core.pipeline.p01_preview_validation._apply_material_archive_branch",
+        ) as apply_material_archive_branch:
+            result = run(ctx)
+
+        assert "Vector Native mode requires SVG files" in result["error"]
+        apply_material_archive_branch.assert_not_called()
+
     def test_file_like_object_lut_path(self):
         """file-like 对象的 lut_path 应正确解析。"""
         from core.pipeline.p01_preview_validation import run
@@ -1171,6 +2056,50 @@ class TestP01PreviewValidation:
 
         with pytest.raises(KeyError):
             run({})
+
+    def test_npz_runtime_lut_uses_metadata_palette_slots(self):
+        """legacy_multi 的 .npz 预览运行时 LUT 应保留 union palette 槽位。"""
+        from core.pipeline.p01_preview_validation import run
+
+        palette = [
+            PaletteEntry("White", "PLA", "#FFFFFF"),
+            PaletteEntry("Red", "PLA", "#DC143C"),
+            PaletteEntry("Yellow", "PLA", "#FFE600"),
+            PaletteEntry("Blue", "PLA", "#0064F0"),
+            PaletteEntry("Cyan", "PLA", "#0086D6"),
+            PaletteEntry("Magenta", "PLA", "#EC008C"),
+            PaletteEntry("Black", "PLA", "#000000"),
+            PaletteEntry("Green", "PLA", "#00AE42"),
+        ]
+        metadata = LUTMetadata(
+            palette=palette,
+            color_mode="Merged",
+            max_color_layers=5,
+            layer_height_mm=0.08,
+        )
+        ctx = self._make_valid_ctx()
+        ctx["lut_path"] = "/tmp/legacy_multi_runtime.npz"
+        ctx["color_mode"] = "4-Color (RYBW)"
+
+        with patch(
+            "core.pipeline.p01_preview_validation.LUTManager.load_lut_with_metadata",
+            return_value=(np.zeros((1, 3), dtype=np.uint8), np.zeros((1, 5), dtype=np.int32), metadata),
+        ):
+            result = run(ctx)
+
+        assert result["slot_names"] == [
+            "White",
+            "Red",
+            "Yellow",
+            "Blue",
+            "Cyan",
+            "Magenta",
+            "Black",
+            "Green",
+        ]
+        assert len(result["preview_colors"]) == 8
+        assert result["color_layers"] == 5
+        assert result["layer_height_mm"] == 0.08
 
 
 # ===========================================================================
@@ -1247,6 +2176,45 @@ class TestP04CacheBuilding:
         for key in expected_keys:
             assert key in cache, f"cache 缺少键: {key}"
 
+    def test_cache_preserves_explicit_pristine_replacement_artifacts(self):
+        """P04 must carry worker-owned reset and height identity arrays."""
+        from core.pipeline.p04_cache_building import run
+
+        ctx = self._make_valid_ctx()
+        original_rgb = np.full_like(ctx["matched_rgb"], [10, 20, 30])
+        original_matrix = np.full_like(ctx["material_matrix"], 2)
+        ctx["original_matched_rgb"] = original_rgb
+        ctx["height_identity_rgb"] = original_rgb
+        ctx["original_material_matrix"] = original_matrix
+        ctx["matched_rgb"][:] = [40, 50, 60]
+        ctx["material_matrix"][:] = 3
+
+        cache = run(ctx)["cache"]
+
+        np.testing.assert_array_equal(cache["matched_rgb"], ctx["matched_rgb"])
+        np.testing.assert_array_equal(cache["material_matrix"], ctx["material_matrix"])
+        np.testing.assert_array_equal(cache["original_matched_rgb"], original_rgb)
+        np.testing.assert_array_equal(cache["height_identity_rgb"], original_rgb)
+        np.testing.assert_array_equal(
+            cache["original_material_matrix"],
+            original_matrix,
+        )
+        assert cache["original_matched_rgb"] is original_rgb
+        assert cache["height_identity_rgb"] is original_rgb
+        assert cache["original_material_matrix"] is original_matrix
+
+    def test_cache_aliases_current_arrays_when_preview_has_no_replacements(self):
+        """No-remap previews must not allocate duplicate pristine arrays."""
+        from core.pipeline.p04_cache_building import run
+
+        ctx = self._make_valid_ctx()
+
+        cache = run(ctx)["cache"]
+
+        assert cache["original_matched_rgb"] is cache["matched_rgb"]
+        assert cache["height_identity_rgb"] is cache["matched_rgb"]
+        assert cache["original_material_matrix"] is cache["material_matrix"]
+
     def test_pixel_mode_uses_quantize_colors_as_glb_mesh_budget(self):
         """Pixel previews should keep the user's high colour budget in GLB."""
         from core.pipeline.p04_cache_building import run
@@ -1259,6 +2227,33 @@ class TestP04CacheBuilding:
 
         assert cache["modeling_mode"] == ModelingMode.PIXEL
         assert cache["glb_max_meshes"] == 256
+
+    def test_pixel_mode_adds_full_canvas_backing_mask_for_glb_preview(self):
+        """Pixel GLB preview backing should match the requested canvas size."""
+        from core.pipeline.p04_cache_building import run
+
+        ctx = self._make_valid_ctx()
+        ctx["modeling_mode"] = ModelingMode.PIXEL
+        ctx["mask_solid"] = np.zeros((4, 4), dtype=bool)
+        ctx["mask_solid"][1:3, 1:3] = True
+
+        cache = run(ctx)["cache"]
+
+        assert np.all(cache["backing_mask"])
+        assert np.count_nonzero(cache["backing_mask"] & ~cache["mask_solid"]) > 0
+
+    def test_high_fidelity_does_not_add_backing_mask_by_default(self):
+        """High-fidelity GLB preview keeps backing tied to the visible silhouette."""
+        from core.pipeline.p04_cache_building import run
+
+        ctx = self._make_valid_ctx()
+        ctx["modeling_mode"] = ModelingMode.HIGH_FIDELITY
+        ctx["mask_solid"] = np.zeros((4, 4), dtype=bool)
+        ctx["mask_solid"][1:3, 1:3] = True
+
+        cache = run(ctx)["cache"]
+
+        assert "backing_mask" not in cache
 
     def test_high_fidelity_does_not_raise_glb_mesh_budget_by_default(self):
         """High-fidelity mode keeps the default GLB cap unless opted in."""

@@ -397,6 +397,45 @@ class TestGetPrinters:
         assert "nozzle_count" not in first
         assert "is_dual_head" not in first
 
+    def test_get_printers_exposes_flashforge_multicolor_registry_profiles(self) -> None:
+        response = client.get("/api/system/printers")
+
+        assert response.status_code == 200
+        printers = response.json()["printers"]
+        expected_nozzles = {
+            "flashforge-ad5x": ["0.25", "0.4"],
+            "flashforge-creator-5": ["0.25", "0.4"],
+            "flashforge-creator-5-pro": ["0.25", "0.4"],
+            "flashforge-guider-3-ultra": ["0.4"],
+            "flashforge-guider4": ["0.25", "0.4"],
+            "flashforge-guider4-pro": ["0.25", "0.4"],
+        }
+        flashforge_printers = {
+            printer["id"]: printer
+            for printer in printers
+            if printer["id"] in expected_nozzles
+        }
+        assert set(flashforge_printers) == set(expected_nozzles)
+        for printer_id, nozzle_sizes in expected_nozzles.items():
+            printer = flashforge_printers[printer_id]
+            assert printer["supported_slicers"] == ["FlashStudio"]
+            assert [
+                profile["nozzle_size"]
+                for profile in printer["device_profiles"]
+                if profile["slicer_id"] == "FlashStudio"
+            ] == nozzle_sizes
+        ad5x = flashforge_printers["flashforge-ad5x"]
+        assert ad5x["thumbnail"].endswith("flashforge-ad5x_cover.png")
+
+    def test_get_slicers_exposes_flash_studio_desktop(self) -> None:
+        response = client.get("/api/system/slicers")
+
+        assert response.status_code == 200
+        assert {
+            "id": "FlashStudio",
+            "display_name": "Flash Studio Desktop",
+        } in response.json()["slicers"]
+
     def test_get_printers_attaches_registry_device_profiles(self, tmp_path, monkeypatch) -> None:
         registry_root = tmp_path / "machine_registry"
         registry_root.mkdir()

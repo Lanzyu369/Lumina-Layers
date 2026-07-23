@@ -4,11 +4,9 @@
 
 These tests cover task 9 of the ``3mf-cover-thumbnail`` spec:
 
-- Five slicer IDs (``BambuStudio`` / ``OrcaSlicer`` / ``SnapmakerOrca`` /
-  ``ElegooSlicer`` / ``AnycubicSlicerNext``) all emit structurally complete
-  3MF packages: ``[Content_Types].xml`` (single ``png`` ``Default``),
-  ``_rels/.rels`` (OPC ``rel-1`` plus three cover relationships whose URIs
-  match the Glossary), and three ``Auxiliaries/.thumbnails/*.png`` parts.
+- All six slicer IDs emit structurally complete 3MF packages. Flash Studio
+  keeps both the package-level ``Auxiliaries/.thumbnails/*.png`` cover contract
+  and its native ``Metadata/plate_1_small.png`` / ``plate_1.json`` sidecars.
 - ``Metadata/model_settings.config`` / ``project_settings.config`` /
   ``slice_info.config`` byte-equality across ``cover_source=None`` vs
   real-image variants — only PNG byte assets driven by ``cover_source`` are
@@ -57,7 +55,7 @@ _BAMBU_COVER_SMALL_TYPE = (
     "http://schemas.bambulab.com/package/2021/cover-thumbnail-small"
 )
 
-# (printer_id, slicer) — covers the five slicer IDs accepted by
+# (printer_id, slicer) — covers the six slicer IDs accepted by
 # ``BambuStudio3MFWriter._get_app_version_str``. The printer_id values match
 # templates that ship in the repo (see ``tests/test_bambu_3mf_png_integrity_unit.py``).
 SLICER_MATRIX: list[tuple[str, str]] = [
@@ -66,7 +64,9 @@ SLICER_MATRIX: list[tuple[str, str]] = [
     ("snapmaker-u1", "SnapmakerOrca"),
     ("elegoo-cc2", "ElegooSlicer"),
     ("anycubic-kobra-x", "AnycubicSlicerNext"),
+    ("flashforge-ad5x", "FlashStudio"),
 ]
+AUX_COVER_SLICER_MATRIX = list(SLICER_MATRIX)
 
 NOZZLE = "0.4"
 
@@ -82,6 +82,7 @@ _METADATA_CONFIG_PATHS: tuple[str, ...] = (
 _COVER_DRIVEN_PNG_PATHS: frozenset[str] = frozenset(
     {
         "Metadata/plate_1.png",
+        "Metadata/plate_1_small.png",
         "Metadata/plate_no_light_1.png",
         "Auxiliaries/.thumbnails/thumbnail_3mf.png",
         "Auxiliaries/.thumbnails/thumbnail_middle.png",
@@ -193,8 +194,8 @@ class TestCrossSlicerStructure:
 
     @pytest.mark.parametrize(
         ("printer_id", "slicer"),
-        SLICER_MATRIX,
-        ids=[s for _, s in SLICER_MATRIX],
+        AUX_COVER_SLICER_MATRIX,
+        ids=[s for _, s in AUX_COVER_SLICER_MATRIX],
     )
     def test_three_thumbnail_pngs_present_and_decodable(
         self,
@@ -255,8 +256,8 @@ class TestCrossSlicerStructure:
 
     @pytest.mark.parametrize(
         ("printer_id", "slicer"),
-        SLICER_MATRIX,
-        ids=[s for _, s in SLICER_MATRIX],
+        AUX_COVER_SLICER_MATRIX,
+        ids=[s for _, s in AUX_COVER_SLICER_MATRIX],
     )
     def test_rels_has_opc_plus_two_bambu_cover_relationships_with_glossary_uris(
         self,
@@ -324,8 +325,11 @@ class TestCrossSlicerStructure:
         assert len(targets_3dmodel) == 1, (
             f"{slicer}: rel-1 (/3D/3dmodel.model) must remain after rels rewrite"
         )
-        # Total of 4 relationships (rel-1 + three cover relations).
-        assert len(rels) == 4, f"{slicer}: expected 4 relationships, got {len(rels)}"
+        # All supported projects keep rel-1 plus three package cover links.
+        expected_count = 4
+        assert len(rels) == expected_count, (
+            f"{slicer}: expected {expected_count} relationships, got {len(rels)}"
+        )
         # All Ids unique.
         ids = [rel.get("Id") for rel in rels]
         assert len(set(ids)) == len(ids), f"{slicer}: duplicate Id values: {ids}"
@@ -461,8 +465,8 @@ class TestSilentPlaceholderAcrossSlicers:
 
     @pytest.mark.parametrize(
         ("printer_id", "slicer"),
-        SLICER_MATRIX,
-        ids=[s for _, s in SLICER_MATRIX],
+        AUX_COVER_SLICER_MATRIX,
+        ids=[s for _, s in AUX_COVER_SLICER_MATRIX],
     )
     def test_three_thumbnails_are_legal_white_placeholders(
         self,
@@ -495,8 +499,8 @@ class TestSilentPlaceholderAcrossSlicers:
 
     @pytest.mark.parametrize(
         ("printer_id", "slicer"),
-        SLICER_MATRIX,
-        ids=[s for _, s in SLICER_MATRIX],
+        AUX_COVER_SLICER_MATRIX,
+        ids=[s for _, s in AUX_COVER_SLICER_MATRIX],
     )
     def test_silent_export_still_writes_three_cover_relationships(
         self,

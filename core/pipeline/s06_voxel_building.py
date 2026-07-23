@@ -74,7 +74,9 @@ def _update_bambu_base_layer_ctx_from_voxels(
     ctx["bambu_base_height_mm"] = float(base_height_mm)
     ctx["bambu_color_height_mm"] = float(color_height_mm)
     ctx["bambu_face_orientation"] = face_orientation
-    ctx["enable_base_layer_height_modifier"] = bool(ctx.get("enable_base_layer_height_modifier", True))
+    ctx["enable_base_layer_height_modifier"] = bool(
+        ctx.get("enable_base_layer_height_modifier", True)
+    ) and not bool(ctx.get("enable_relief", False))
 
 
 def _normalize_color_height_map(color_height_map: dict[str, float]) -> dict[str, float]:
@@ -321,7 +323,47 @@ def _resolve_generation_backing_color_id(
     return int(backing_color_id)
 
 
-def _build_voxel_matrix(material_matrix, mask_solid, spacer_thick, structure_mode, backing_color_id=0):
+def _normalize_backing_mask(backing_mask, mask_solid: np.ndarray) -> np.ndarray | None:
+    """Return a validated backing footprint mask, or None when unavailable."""
+    if backing_mask is None:
+        return None
+    backing_arr = np.asarray(backing_mask, dtype=bool)
+    if backing_arr.shape != mask_solid.shape:
+        raise ValueError(
+            f"backing_mask shape {backing_arr.shape} does not match mask_solid shape {mask_solid.shape}"
+        )
+    return backing_arr
+
+
+def _resolve_flat_backing_mask(ctx: dict, mask_solid: np.ndarray) -> np.ndarray:
+    """Resolve the 2D backing footprint for flat raster voxel builds."""
+    explicit_backing_mask = _normalize_backing_mask(ctx.get("backing_mask"), mask_solid)
+    if explicit_backing_mask is not None:
+        return explicit_backing_mask
+
+    modeling_mode = ctx.get("modeling_mode")
+    modeling_mode_value = getattr(modeling_mode, "value", modeling_mode)
+    if (
+        modeling_mode_value == "pixel"
+        and ctx.get("material_source", "lut") == "lut"
+        and np.any(mask_solid)
+        and not bool(ctx.get("enable_relief", False))
+        and not bool(ctx.get("enable_cloisonne", False))
+        and not (bool(ctx.get("enable_fridge_magnet", False)) and ctx.get("fridge_magnets"))
+    ):
+        return np.ones_like(mask_solid, dtype=bool)
+
+    return mask_solid
+
+
+def _build_voxel_matrix(
+    material_matrix,
+    mask_solid,
+    spacer_thick,
+    structure_mode,
+    backing_color_id=0,
+    backing_mask=None,
+):
     """Build complete voxel matrix with backing layer marked using special material_id.
     构建带底板标记的完整体素矩阵。
 
@@ -332,6 +374,7 @@ def _build_voxel_matrix(material_matrix, mask_solid, spacer_thick, structure_mod
         spacer_thick (float): backing thickness (mm) (底板厚度)
         structure_mode (str): "双面" or "单面" (Double-sided or Single-sided)
         backing_color_id (int): backing material ID (0-7), default is 0 (White)
+        backing_mask (np.ndarray | None): Optional 2D backing footprint mask.
 
     Returns:
         tuple: (full_matrix, backing_metadata)
@@ -343,7 +386,9 @@ def _build_voxel_matrix(material_matrix, mask_solid, spacer_thick, structure_mod
     if material_matrix.ndim != 3:
         raise ValueError(f"material_matrix must be 3D (H, W, N), got shape={material_matrix.shape}")
     target_h, target_w, optical_layers = material_matrix.shape
-    mask_transparent = ~mask_solid
+    backing_mask_arr = _normalize_backing_mask(backing_mask, mask_solid)
+    if backing_mask_arr is None:
+        backing_mask_arr = mask_solid
 
     bottom_voxels = np.transpose(material_matrix, (2, 0, 1))
 
@@ -358,7 +403,7 @@ def _build_voxel_matrix(material_matrix, mask_solid, spacer_thick, structure_mod
 
         # Use backing_color_id parameter to mark backing layer
         spacer = np.full((target_h, target_w), -1, dtype=int)
-        spacer[~mask_transparent] = backing_color_id
+        spacer[backing_mask_arr] = backing_color_id
         for z in range(optical_layers, optical_layers + spacer_layers):
             full_matrix[z] = spacer
 
@@ -373,14 +418,14 @@ def _build_voxel_matrix(material_matrix, mask_solid, spacer_thick, structure_mod
 
         # Use backing_color_id parameter to mark backing layer
         spacer = np.full((target_h, target_w), -1, dtype=int)
-        spacer[~mask_transparent] = backing_color_id
+        spacer[backing_mask_arr] = backing_color_id
         for z in range(optical_layers, total_layers):
             full_matrix[z] = spacer
 
         backing_z_range = (optical_layers, total_layers - 1)
 
     backing_z_min_map, backing_z_max_map = _build_uniform_backing_z_maps(
-        mask_solid,
+        backing_mask_arr,
         backing_z_range[0],
         backing_z_range[1],
     )
@@ -394,7 +439,14 @@ def _build_voxel_matrix(material_matrix, mask_solid, spacer_thick, structure_mod
     return full_matrix, backing_metadata
 
 
-def _build_voxel_matrix_6layer(material_matrix, mask_solid, spacer_thick, structure_mode, backing_color_id=0):
+def _build_voxel_matrix_6layer(
+    material_matrix,
+    mask_solid,
+    spacer_thick,
+    structure_mode,
+    backing_color_id=0,
+    backing_mask=None,
+):
     """Build complete voxel matrix for 6-layer structures (5-Color Extended mode).
     构建 6 层体素矩阵（5-Color Extended 模式）。
 
@@ -409,7 +461,12 @@ def _build_voxel_matrix_6layer(material_matrix, mask_solid, spacer_thick, struct
         tuple: (full_matrix, backing_metadata)
     """
     return _build_voxel_matrix(
-        material_matrix, mask_solid, spacer_thick, structure_mode, backing_color_id=backing_color_id
+        material_matrix,
+        mask_solid,
+        spacer_thick,
+        structure_mode,
+        backing_color_id=backing_color_id,
+        backing_mask=backing_mask,
     )
 
 
@@ -483,6 +540,7 @@ def _build_relief_voxel_matrix(
     pixel_scale,
     height_matrix=None,
     global_max_height=None,
+    height_identity_rgb=None,
 ):
     """Build 2.5D relief voxel matrix with per-color or per-pixel variable heights.
     构建 2.5D 浮雕体素矩阵，支持按颜色或按像素的可变高度。
@@ -498,7 +556,11 @@ def _build_relief_voxel_matrix(
     - Top layers (optical): Z=(Target_Z - optical thickness) to Z=Target_Z - filled with material layers
 
     Args:
-        matched_rgb (np.ndarray): (H, W, 3) RGB color array after K-Means matching
+        matched_rgb (np.ndarray): (H, W, 3) display RGB after replacements.
+        height_identity_rgb (np.ndarray | None): Stable (H, W, 3) source RGB
+            used only for color-height lookup. Replacements must never mutate
+            this identity plane. When omitted, ``matched_rgb`` preserves the
+            legacy behaviour.
         material_matrix (np.ndarray): (H, W, N) material matrix for optical layers
         mask_solid (np.ndarray): (H, W) boolean mask of solid pixels
         color_height_map (dict): dict mapping hex colors to heights in mm
@@ -516,6 +578,15 @@ def _build_relief_voxel_matrix(
     color_height_map = _normalize_color_height_map(color_height_map)
 
     target_h, target_w = material_matrix.shape[:2]
+    height_lookup_rgb = (
+        np.asarray(height_identity_rgb, dtype=np.uint8)
+        if height_identity_rgb is not None
+        else np.asarray(matched_rgb, dtype=np.uint8)
+    )
+    if height_lookup_rgb.shape != (target_h, target_w, 3):
+        raise ValueError(
+            "height_identity_rgb shape must match the material matrix grid"
+        )
 
     # Material archives can use more than the legacy 5 optical layers. Relief
     # must preserve the full recipe depth instead of truncating to 5.
@@ -537,9 +608,9 @@ def _build_relief_voxel_matrix(
         pixel_heights = np.full((target_h, target_w), default_height, dtype=np.float32)
         if color_height_map:
             rgb_codes = (
-                matched_rgb[..., 0].astype(np.int32) * 65536
-                + matched_rgb[..., 1].astype(np.int32) * 256
-                + matched_rgb[..., 2].astype(np.int32)
+                height_lookup_rgb[..., 0].astype(np.int32) * 65536
+                + height_lookup_rgb[..., 1].astype(np.int32) * 256
+                + height_lookup_rgb[..., 2].astype(np.int32)
             )
             for hex_color, height in color_height_map.items():
                 hex_clean = hex_color.lstrip("#")
@@ -725,6 +796,7 @@ def run(ctx: dict) -> dict:
     heightmap_path = ctx.get("heightmap_path")
     heightmap_max_height = ctx.get("heightmap_max_height")
     matched_rgb = ctx["matched_rgb"]
+    height_identity_rgb = ctx.get("height_identity_rgb")
     pixel_scale = ctx["pixel_scale"]
     relief_global_max_height = ctx.get("relief_global_max_height")
     enable_fridge_magnet = ctx.get("enable_fridge_magnet", False)
@@ -836,6 +908,7 @@ def run(ctx: dict) -> dict:
                     pixel_scale=pixel_scale,
                     height_matrix=heightmap_height_matrix,
                     global_max_height=relief_global_max_height,
+                    height_identity_rgb=height_identity_rgb,
                 )
             elif enable_relief and height_mode == "color" and color_height_map:
                 _log.debug(f"2.5D Relief Mode ENABLED")
@@ -851,11 +924,18 @@ def run(ctx: dict) -> dict:
                     backing_color_id=effective_backing_color_id,
                     pixel_scale=pixel_scale,
                     global_max_height=relief_global_max_height,
+                    height_identity_rgb=height_identity_rgb,
                 )
             else:
                 # Original flat voxel matrix
+                flat_backing_mask = _resolve_flat_backing_mask(ctx, mask_solid)
                 full_matrix, backing_metadata = _build_voxel_matrix(
-                    material_matrix, mask_solid, spacer_thick, structure_mode, effective_backing_color_id
+                    material_matrix,
+                    mask_solid,
+                    spacer_thick,
+                    structure_mode,
+                    effective_backing_color_id,
+                    backing_mask=flat_backing_mask,
                 )
 
         if enable_fridge_magnet:

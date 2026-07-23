@@ -2,6 +2,10 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { BatchResponse } from "../../api/types";
 import { StructureMode, ColorMode, ModelingMode } from "../../api/types";
 
+const notificationMocks = vi.hoisted(() => ({
+  showBrowserCompletionNotification: vi.fn(),
+}));
+
 // Mock the converter API module
 vi.mock("../../api/converter", () => ({
   convertBatch: vi.fn(),
@@ -13,6 +17,11 @@ vi.mock("../../api/converter", () => ({
   uploadHeightmap: vi.fn(),
   fetchLutColors: vi.fn(),
   cropImage: vi.fn(),
+}));
+
+vi.mock("../../utils/browserNotifications", () => ({
+  showBrowserCompletionNotification:
+    notificationMocks.showBrowserCompletionNotification,
 }));
 
 import { useConverterStore } from "../converter";
@@ -34,6 +43,8 @@ function resetStore(): void {
     deviceProfileId: "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
     enableBaseLayerHeightModifier: false,
     svgPixelsPerMm: 10,
+    enableCompletionNotifications: false,
+    language: "zh",
   });
   useConverterStore.setState({
     batchMode: true,
@@ -137,6 +148,9 @@ describe("submitBatch API 调用和状态管理", () => {
       device_profile_id: "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
       enable_base_layer_height_modifier: false,
     });
+    expect(
+      notificationMocks.showBrowserCompletionNotification,
+    ).not.toHaveBeenCalled();
   });
 
   it("submitBatch 会把 2.5D 浮雕参数传给批量生成 API", async () => {
@@ -283,6 +297,10 @@ describe("submitBatch API 调用和状态管理", () => {
   it("submitBatch 开始时 batchLoading 为 true", async () => {
     const files = [new File(["a"], "img.png", { type: "image/png" })];
     useConverterStore.setState({ batchFiles: files });
+    useSettingsStore.setState({
+      enableCompletionNotifications: true,
+      language: "zh",
+    });
 
     // Use a deferred promise to control when the API resolves
     let resolveApi!: (value: BatchResponse) => void;
@@ -296,11 +314,15 @@ describe("submitBatch API 调用和状态管理", () => {
     // While the API is pending, batchLoading should be true
     expect(useConverterStore.getState().batchLoading).toBe(true);
 
+    useSettingsStore.setState({ language: "en" });
     resolveApi(mockBatchResponse);
     await submitPromise;
 
     // After completion, batchLoading should be false
     expect(useConverterStore.getState().batchLoading).toBe(false);
+    expect(
+      notificationMocks.showBrowserCompletionNotification,
+    ).toHaveBeenCalledWith("batch", "en");
   });
 
   // Requirement 5.3: batchResult 在请求完成后正确存储
@@ -312,7 +334,10 @@ describe("submitBatch API 调用和状态管理", () => {
     await useConverterStore.getState().submitBatch();
 
     const state = useConverterStore.getState();
-    expect(state.batchResult).toEqual(mockBatchResponse);
+    expect(state.batchResult).toEqual({
+      ...mockBatchResponse,
+      threemf_disk_path: null,
+    });
     expect(state.batchLoading).toBe(false);
     expect(state.error).toBeNull();
     expect(state.threemfDiskPath).toBeNull();
@@ -355,14 +380,18 @@ describe("submitBatch API 调用和状态管理", () => {
   it("submitBatch API 错误时设置 error 并将 batchLoading 恢复为 false", async () => {
     const files = [new File(["a"], "img.png", { type: "image/png" })];
     useConverterStore.setState({ batchFiles: files });
+    useSettingsStore.setState({ enableCompletionNotifications: true });
     mockedConvertBatch.mockRejectedValueOnce(new Error("Network error"));
 
     await useConverterStore.getState().submitBatch();
 
     const state = useConverterStore.getState();
-    expect(state.error).toBe("接口请求在服务器返回响应前失败。");
+    expect(state.error).toBe("请求没有收到服务器响应。请确认 Lumina 后端已启动、网络连接正常，然后重试。");
     expect(state.batchLoading).toBe(false);
     expect(state.batchResult).toBeNull();
+    expect(
+      notificationMocks.showBrowserCompletionNotification,
+    ).not.toHaveBeenCalled();
   });
 
   // Requirement 6.4: 重新发起批量生成时清空之前的 batchResult

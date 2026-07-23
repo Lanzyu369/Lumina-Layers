@@ -12,13 +12,21 @@ normals on two touching but vertex-disjoint surfaces, producing the visible
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 import trimesh
 from scipy.spatial import cKDTree
-from shapely.geometry import box
+from shapely.geometry import Polygon, box
 
-from core.vector_engine import VectorAnalysis, VectorProcessor
+import core.vector_engine as vector_engine
+from core.vector_engine import (
+    VectorAnalysis,
+    VectorProcessor,
+    _build_stepped_volume_mesh,
+    _concatenate_meshes_fast,
+)
 
 
 def _coincident_pair_count(mesh: trimesh.Trimesh, tol: float = 1e-6) -> int:
@@ -28,6 +36,489 @@ def _coincident_pair_count(mesh: trimesh.Trimesh, tol: float = 1e-6) -> int:
     tree = cKDTree(mesh.vertices)
     pairs = tree.query_pairs(r=tol, output_type="ndarray")
     return int(pairs.shape[0])
+
+
+def _build_two_height_relief_board() -> trimesh.Trimesh:
+    """Build the minimal adjacent-height board that reproduced broken faces."""
+
+    matched_shapes = [
+        {
+            "geometry": box(0.0, 0.0, 5.0, 5.0),
+            "recipe": [0],
+            "matched_rgb": (255, 0, 0),
+        },
+        {
+            "geometry": box(5.0, 0.0, 10.0, 5.0),
+            "recipe": [0],
+            "matched_rgb": (0, 255, 0),
+        },
+    ]
+    meshes_by_slot = VectorProcessor._build_relief_meshes(
+        matched_shapes=matched_shapes,
+        num_layers=1,
+        layer_h=0.2,
+        num_channels=1,
+        slot_names=["White"],
+        scale_factor=1.0,
+        backing_color_id=0,
+        default_height_mm=1.0,
+        height_mode="color",
+        color_height_map={"#ff0000": 1.0, "#00ff00": 2.0},
+        heightmap_path=None,
+        heightmap_max_height=None,
+        bbox=(0.0, 0.0, 10.0, 5.0),
+        extrude_cache={},
+    )
+    board = _concatenate_meshes_fast(meshes_by_slot["Board"]["meshes"])
+    board.merge_vertices()
+    return board
+
+
+def test_relief_backing_welds_adjacent_height_steps() -> None:
+    """Different backing heights must form one closed stepped solid."""
+
+    board = _build_two_height_relief_board()
+
+    assert board.is_watertight
+    np.testing.assert_allclose(board.bounds, [[0.0, 0.0, 0.0], [10.0, 5.0, 1.8]])
+    assert float(board.volume) == pytest.approx(65.0)
+
+
+def test_relief_backing_volume_preserves_internal_cavity_profile() -> None:
+    """A cavity that closes above its opening must remain a closed volume."""
+
+    outer = box(0.0, 0.0, 10.0, 10.0)
+    cavity = box(4.0, 4.0, 6.0, 6.0)
+    board = _build_stepped_volume_mesh(
+        [
+            {"geometry": outer, "z_offset": 0.0, "height": 0.4},
+            {
+                "geometry": outer.difference(cavity),
+                "z_offset": 0.4,
+                "height": 0.6,
+            },
+            {"geometry": outer, "z_offset": 1.0, "height": 0.4},
+        ],
+        scale_factor=1.0,
+    )
+
+    assert board is not None
+    assert board.is_watertight
+    assert float(board.volume) == pytest.approx(137.6)
+
+
+def test_relief_backing_splits_t_junctions_on_shared_curves() -> None:
+    """A tall region edge must align with multiple shorter neighbours."""
+
+    left = Polygon([(0.0, 0.0), (5.0, 0.0), (6.0, 10.0), (0.0, 10.0)])
+    shared_midpoint = (5.5 + 1e-12, 5.0)
+    right_lower = Polygon([(5.0, 0.0), (10.0, 0.0), (10.0, 5.0), shared_midpoint])
+    right_upper = Polygon([shared_midpoint, (10.0, 5.0), (10.0, 10.0), (6.0, 10.0)])
+    board = _build_stepped_volume_mesh(
+        [
+            {"geometry": left, "z_offset": 0.0, "height": 1.8},
+            {"geometry": right_lower, "z_offset": 0.0, "height": 0.8},
+            {"geometry": right_upper, "z_offset": 0.0, "height": 1.4},
+        ],
+        scale_factor=1.0,
+    )
+
+    assert board is not None
+    assert board.is_watertight
+    expected_volume = left.area * 1.8 + right_lower.area * 0.8 + right_upper.area * 1.4
+    assert float(board.volume) == pytest.approx(expected_volume)
+
+
+@pytest.mark.parametrize("right_height", [1.0, 1.8])
+def test_relief_backing_keeps_corner_touching_shells_separate(
+    right_height: float,
+) -> None:
+    """Point-touching regions must remain independent manifold shells."""
+
+    lower_left = box(0.0, 0.0, 1.0, 1.0)
+    upper_right = box(1.0, 1.0, 2.0, 2.0)
+    board = _build_stepped_volume_mesh(
+        [
+            {"geometry": lower_left, "z_offset": 0.0, "height": 1.0},
+            {
+                "geometry": upper_right,
+                "z_offset": 0.0,
+                "height": right_height,
+            },
+        ],
+        scale_factor=1.0,
+    )
+
+    assert board is not None
+    assert board.is_watertight
+    assert len(board.split(only_watertight=False)) == 2
+    assert float(board.volume) == pytest.approx(1.0 + right_height)
+
+
+def test_relief_backing_scales_by_connected_component() -> None:
+    """Unrelated height levels must not subdivide disconnected regions."""
+
+    region_count = 40
+    board = _build_stepped_volume_mesh(
+        [
+            {
+                "geometry": box(index * 2.0, 0.0, index * 2.0 + 1.0, 1.0),
+                "z_offset": 0.0,
+                "height": 1.0 + index * 0.01,
+            }
+            for index in range(region_count)
+        ],
+        scale_factor=1.0,
+    )
+
+    assert board is not None
+    assert board.is_watertight
+    assert len(board.split(only_watertight=False)) == region_count
+    assert len(board.faces) <= region_count * 20
+
+
+def _native_kernel_contract_slabs() -> list[dict]:
+    """Return a stepped solid that exercises holes, offsets, and XY scaling."""
+
+    outer = box(-2.0, 3.0, 8.0, 13.0)
+    cavity = box(1.0, 6.0, 3.0, 8.0)
+    return [
+        {"geometry": outer, "z_offset": 0.35, "height": 0.4},
+        {
+            "geometry": outer.difference(cavity),
+            "z_offset": 0.75,
+            "height": 0.6,
+        },
+        {"geometry": outer, "z_offset": 1.35, "height": 0.25},
+    ]
+
+
+@pytest.mark.skipif(
+    vector_engine._load_relief_manifold3d() is None,
+    reason="optional manifold3d fast kernel is not installed",
+)
+def test_relief_backing_uses_native_kernel_without_python_finalize(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Installed manifold3d must bypass the expensive atomic-prism fallback."""
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("Python atomic-prism fallback was unexpectedly used")
+
+    monkeypatch.setattr(
+        vector_engine,
+        "_build_stepped_volume_mesh_python_prepared",
+        fail_if_called,
+    )
+    board = _build_stepped_volume_mesh(
+        _native_kernel_contract_slabs(),
+        scale_factor=1.7,
+    )
+
+    assert board is not None
+    assert board.is_watertight
+    np.testing.assert_allclose(
+        board.bounds,
+        [[-3.4, 5.1, 0.35], [13.6, 22.1, 1.6]],
+    )
+    assert float(board.volume) == pytest.approx(
+        (100.0 * 0.4 + 96.0 * 0.6 + 100.0 * 0.25) * 1.7**2,
+        rel=1e-6,
+    )
+
+
+def test_relief_backing_missing_native_dependency_uses_exact_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Base installs and unsupported wheels must retain watertight correctness."""
+
+    fallback_calls = 0
+    real_fallback = vector_engine._build_stepped_volume_mesh_python_prepared
+
+    def counted_fallback(*args, **kwargs):
+        nonlocal fallback_calls
+        fallback_calls += 1
+        return real_fallback(*args, **kwargs)
+
+    monkeypatch.setattr(vector_engine, "_load_relief_manifold3d", lambda: None)
+    monkeypatch.setattr(
+        vector_engine,
+        "_build_stepped_volume_mesh_python_prepared",
+        counted_fallback,
+    )
+    board = _build_stepped_volume_mesh(
+        _native_kernel_contract_slabs(),
+        scale_factor=1.7,
+    )
+
+    assert fallback_calls == 1
+    assert board is not None
+    assert board.is_watertight
+    assert float(board.volume) == pytest.approx(
+        (100.0 * 0.4 + 96.0 * 0.6 + 100.0 * 0.25) * 1.7**2,
+    )
+
+
+@pytest.mark.skipif(
+    vector_engine._load_relief_manifold3d() is None,
+    reason="optional manifold3d fast kernel is not installed",
+)
+def test_relief_backing_native_and_python_kernels_preserve_topology() -> None:
+    """Fast and fallback kernels must agree on cavities and point contacts."""
+
+    slabs = _native_kernel_contract_slabs()
+    native = vector_engine._build_stepped_volume_mesh_manifold(
+        slabs,
+        scale_factor=1.7,
+    )
+    fallback = vector_engine._build_stepped_volume_mesh_python(
+        slabs,
+        scale_factor=1.7,
+    )
+
+    assert native is not None
+    assert fallback is not None
+    assert native.is_watertight
+    assert fallback.is_watertight
+    np.testing.assert_allclose(native.bounds, fallback.bounds, atol=1e-8)
+    assert float(native.volume) == pytest.approx(
+        float(fallback.volume),
+        rel=1e-6,
+        abs=1e-6,
+    )
+
+    point_touching = [
+        {"geometry": box(0.0, 0.0, 1.0, 1.0), "z_offset": 0.2, "height": 1.0},
+        {"geometry": box(1.0, 1.0, 2.0, 2.0), "z_offset": 0.2, "height": 1.8},
+    ]
+    native_point_touch = vector_engine._build_stepped_volume_mesh_manifold(
+        point_touching,
+        scale_factor=1.0,
+    )
+    fallback_point_touch = vector_engine._build_stepped_volume_mesh_python(
+        point_touching,
+        scale_factor=1.0,
+    )
+    assert native_point_touch is not None
+    assert fallback_point_touch is not None
+    assert len(native_point_touch.split(only_watertight=False)) == 2
+    assert len(fallback_point_touch.split(only_watertight=False)) == 2
+
+
+@pytest.mark.skipif(
+    vector_engine._load_relief_manifold3d() is None,
+    reason="optional manifold3d fast kernel is not installed",
+)
+def test_relief_backing_native_groups_same_z_fragments_before_union() -> None:
+    """One height slab must not become many independently triangulated solids."""
+
+    base = box(0.0, 0.0, 12.0, 4.0)
+    raised_fragments = [
+        box(index * 2.0, 0.0, index * 2.0 + 1.0, 4.0)
+        for index in range(6)
+    ]
+    slabs = [
+        {"geometry": base, "z_offset": 0.0, "height": 0.5},
+        *[
+            {"geometry": fragment, "z_offset": 0.5, "height": 0.7}
+            for fragment in raised_fragments
+        ],
+    ]
+    native = vector_engine._build_stepped_volume_mesh_manifold(
+        slabs,
+        scale_factor=1.0,
+    )
+    fallback = vector_engine._build_stepped_volume_mesh_python(
+        slabs,
+        scale_factor=1.0,
+    )
+
+    assert native is not None
+    assert fallback is not None
+    assert native.is_watertight
+    assert float(native.volume) == pytest.approx(float(fallback.volume))
+    assert len(native.faces) < len(fallback.faces)
+
+
+@pytest.mark.parametrize("native_failure", ["exception", "invalid_mesh"])
+def test_relief_backing_native_failure_rebuilds_whole_board_with_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    native_failure: str,
+) -> None:
+    """A failed or invalid native result must never leak a partial Board."""
+
+    fallback_calls = 0
+    real_fallback = vector_engine._build_stepped_volume_mesh_python_prepared
+
+    def counted_fallback(*args, **kwargs):
+        nonlocal fallback_calls
+        fallback_calls += 1
+        return real_fallback(*args, **kwargs)
+
+    if native_failure == "exception":
+        def broken_native(*_args, **_kwargs):
+            raise RuntimeError("simulated manifold3d runtime failure")
+    else:
+        def broken_native(*_args, **_kwargs):
+            return trimesh.creation.box(extents=(1.0, 1.0, 1.0))
+
+    monkeypatch.setattr(
+        vector_engine,
+        "_build_stepped_volume_mesh_manifold_prepared",
+        broken_native,
+    )
+    monkeypatch.setattr(
+        vector_engine,
+        "_build_stepped_volume_mesh_python_prepared",
+        counted_fallback,
+    )
+    board = _build_stepped_volume_mesh(
+        _native_kernel_contract_slabs(),
+        scale_factor=1.7,
+    )
+
+    assert fallback_calls == 1
+    assert board is not None
+    assert board.is_watertight
+    np.testing.assert_allclose(
+        board.bounds,
+        [[-3.4, 5.1, 0.35], [13.6, 22.1, 1.6]],
+    )
+
+
+def test_corner_touching_relief_stays_watertight_through_build_and_glb(
+    tmp_path,
+) -> None:
+    """Scene assembly and preview export must preserve independent shells."""
+
+    from core.pipeline.vector_glb_preview import export_vector_glb_preview
+
+    svg_path = tmp_path / "corner-touch.svg"
+    svg_path.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" '
+        'viewBox="0 0 20 20">'
+        '<rect x="0" y="0" width="10" height="10" fill="#ff0000"/>'
+        '<rect x="10" y="10" width="10" height="10" fill="#00ff00"/>'
+        "</svg>",
+        encoding="utf-8",
+    )
+    repository_root = Path(__file__).resolve().parents[1]
+    processor = VectorProcessor(
+        str(
+            repository_root
+            / "lut-preset"
+            / "Custom"
+            / "Bambulab&PLA&RYBW&红-黄-蓝-白.npy"
+        ),
+        "4-Color (RYBW)",
+    )
+    analysis = processor.analyze_svg(str(svg_path), target_width_mm=20.0)
+    height_map = {
+        f"#{red:02x}{green:02x}{blue:02x}": 1.0 + index * 0.8
+        for index, (red, green, blue) in enumerate(
+            sorted(
+                {
+                    tuple(int(value) for value in shape["matched_rgb"][:3])
+                    for shape in analysis.matched_shapes
+                }
+            )
+        )
+    }
+    scene = processor.build_mesh(
+        analysis=analysis,
+        thickness_mm=1.0,
+        structure_mode="Single-sided",
+        enable_relief=True,
+        height_mode="color",
+        color_height_map=height_map,
+    )
+
+    assert scene.geometry["Board"].is_watertight
+    assert len(scene.geometry["Board"].split(only_watertight=False)) == 2
+    glb_path = tmp_path / "corner-touch-preview.glb"
+    export_vector_glb_preview(
+        scene=scene,
+        output_path=str(glb_path),
+        structure_mode="Single-sided",
+        color_mode="4-Color (RYBW)",
+        preview_colors=analysis.preview_colors,
+        slot_list=list(analysis.slot_names),
+        analysis=analysis,
+        ctx={"enable_relief": True},
+    )
+    loaded = trimesh.load(glb_path, force="scene", process=False)
+    assert loaded.geometry["backing_plate"].is_watertight
+    assert len(loaded.geometry["backing_plate"].split(only_watertight=False)) == 2
+
+
+def test_relief_backing_glb_round_trip_stays_watertight(tmp_path) -> None:
+    """The repaired topology must survive the actual preview file format."""
+
+    board = _build_two_height_relief_board()
+    scene = trimesh.Scene()
+    scene.add_geometry(board, geom_name="Board", node_name="Board")
+    glb_path = tmp_path / "two-height-relief.glb"
+    glb_path.write_bytes(scene.export(file_type="glb"))
+
+    loaded = trimesh.load(glb_path, force="scene", process=False)
+    loaded_board = next(iter(loaded.geometry.values()))
+    assert loaded_board.is_watertight
+    assert float(loaded_board.volume) == pytest.approx(65.0)
+
+
+def test_real_svg_relief_preview_glb_is_watertight(tmp_path) -> None:
+    """The reported illustrated SVG must export without broken mesh faces."""
+
+    from core.pipeline.vector_glb_preview import export_vector_glb_preview
+
+    repository_root = Path(__file__).resolve().parents[1]
+    processor = VectorProcessor(
+        str(
+            repository_root
+            / "lut-preset"
+            / "Custom"
+            / "Bambulab&PLA&RYBW&红-黄-蓝-白.npy"
+        ),
+        "4-Color (RYBW)",
+    )
+    analysis = processor.analyze_svg(
+        str(repository_root / "test_images" / "1.svg"),
+        target_width_mm=100.0,
+    )
+    matched_colors = sorted(
+        {
+            tuple(int(value) for value in shape["matched_rgb"][:3])
+            for shape in analysis.matched_shapes
+        }
+    )
+    height_map = {
+        f"#{red:02x}{green:02x}{blue:02x}": 1.0 + (index % 3) * 0.8
+        for index, (red, green, blue) in enumerate(matched_colors)
+    }
+    scene = processor.build_mesh(
+        analysis=analysis,
+        thickness_mm=1.0,
+        structure_mode="Single-sided",
+        enable_relief=True,
+        height_mode="color",
+        color_height_map=height_map,
+    )
+
+    assert scene.geometry["Board"].is_watertight
+    glb_path = tmp_path / "illustrated-relief-preview.glb"
+    export_vector_glb_preview(
+        scene=scene,
+        output_path=str(glb_path),
+        structure_mode="Single-sided",
+        color_mode="4-Color (RYBW)",
+        preview_colors=analysis.preview_colors,
+        slot_list=list(analysis.slot_names),
+        analysis=analysis,
+        ctx={"enable_relief": True},
+    )
+    loaded = trimesh.load(glb_path, force="scene", process=False)
+    assert "backing_plate" in loaded.geometry
+    assert loaded.geometry["backing_plate"].is_watertight
 
 
 class TestBuildMeshVertexWelding:

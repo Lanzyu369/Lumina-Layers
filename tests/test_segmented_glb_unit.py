@@ -5,9 +5,11 @@ Lumina Studio - 按颜色分组 GLB 预览模型单元测试 (Unit Tests)
 Requirements: 1.1, 1.5
 """
 
+import json
 import logging
 import os
 import re
+import struct
 import sys
 
 import numpy as np
@@ -25,6 +27,7 @@ from core.pipeline.s11_glb_preview import generate_realtime_glb
 _TOTAL_LAYERS_IN_GLB = 25
 
 COLOR_NODE_RE = re.compile(r"^color_([0-9a-f]{6})$")
+LAYERED_COLOR_NODE_RE = re.compile(r"^color_([0-9a-f]{6})_m(\d{3})_l(\d{3})$")
 
 
 def _make_cache(
@@ -54,10 +57,56 @@ def _get_color_nodes(scene: trimesh.Scene) -> dict[str, trimesh.Trimesh]:
     return nodes
 
 
+def _get_layered_color_nodes(scene: trimesh.Scene) -> dict[str, trimesh.Trimesh]:
+    """Extract material-layered color_<hex>_m###_l### GLB nodes."""
+    nodes: dict[str, trimesh.Trimesh] = {}
+    for node_name in scene.graph.nodes_geometry:
+        if LAYERED_COLOR_NODE_RE.match(node_name):
+            _, geom_name = scene.graph[node_name]
+            nodes[node_name] = scene.geometry[geom_name]
+    return nodes
+
+
 def _get_node_mesh(scene: trimesh.Scene, node_name: str) -> trimesh.Trimesh:
     """Return the mesh attached to a named GLB node."""
     _, geom_name = scene.graph[node_name]
     return scene.geometry[geom_name]
+
+
+def _load_glb_json(glb_path: str) -> dict:
+    """Read the JSON chunk from a binary glTF file."""
+    with open(glb_path, "rb") as handle:
+        header = handle.read(12)
+        magic, version, _total_length = struct.unpack("<4sII", header)
+        assert magic == b"glTF"
+        assert version == 2
+        while chunk_header := handle.read(8):
+            chunk_length, chunk_type = struct.unpack("<II", chunk_header)
+            chunk_data = handle.read(chunk_length)
+            if chunk_type == 0x4E4F534A:  # JSON
+                return json.loads(chunk_data.rstrip(b" \x00").decode("utf-8"))
+    raise AssertionError("GLB does not contain a JSON chunk")
+
+
+def _assert_nodes_have_no_vertex_color(
+    glb_path: str,
+    node_names: set[str],
+) -> None:
+    """Assert selected glTF nodes do not persist a COLOR_0 attribute."""
+    document = _load_glb_json(glb_path)
+    matched_nodes = {
+        node["name"]: node
+        for node in document.get("nodes", [])
+        if node.get("name") in node_names
+    }
+    assert set(matched_nodes) == node_names
+    for node_name, node in matched_nodes.items():
+        mesh_index = node.get("mesh")
+        assert isinstance(mesh_index, int), f"{node_name} has no glTF mesh"
+        primitives = document["meshes"][mesh_index].get("primitives", [])
+        assert primitives, f"{node_name} has no glTF primitive"
+        for primitive in primitives:
+            assert "COLOR_0" not in primitive.get("attributes", {}), node_name
 
 
 def _unique_mesh_rgb(mesh: trimesh.Trimesh) -> np.ndarray:
@@ -78,6 +127,54 @@ def _unique_mesh_rgb(mesh: trimesh.Trimesh) -> np.ndarray:
             return rgb.reshape(1, 3)
 
     return np.empty((0, 3), dtype=np.uint8)
+
+
+def _segment_display_rgb(mesh: trimesh.Trimesh, field_name: str) -> np.ndarray:
+    """Decode unique display colours from compact GLTF segment metadata."""
+
+    hex_values = {
+        str(segment["display_hex"]).replace("#", "").lower()
+        for segment in mesh.metadata[field_name]
+    }
+    return np.array(
+        [
+            [
+                int(hex_value[0:2], 16),
+                int(hex_value[2:4], 16),
+                int(hex_value[4:6], 16),
+            ]
+            for hex_value in sorted(hex_values)
+        ],
+        dtype=np.uint8,
+    )
+
+
+def _triangle_signatures(mesh: trimesh.Trimesh) -> set[tuple[tuple[float, ...], ...]]:
+    """Return orientation-independent triangle coordinates for overlap checks."""
+
+    triangles = np.asarray(mesh.vertices, dtype=np.float64)[np.asarray(mesh.faces)]
+    return {
+        tuple(sorted(tuple(np.round(vertex, 8)) for vertex in triangle))
+        for triangle in triangles
+    }
+
+
+def _assert_minimal_layered_metadata(mesh: trimesh.Trimesh, field_name: str) -> None:
+    """Layered GLBs expose only fields consumed by the interactive viewer."""
+
+    assert "top_material_identity" not in mesh.metadata
+    assert "lumina_role" not in mesh.metadata
+    assert "layer_index" not in mesh.metadata
+    assert mesh.metadata[field_name]
+    required_fields = {
+        "display_hex",
+        "vertex_start",
+        "vertex_count",
+    }
+    if field_name == "height_segments":
+        required_fields.add("height_key")
+    for segment in mesh.metadata[field_name]:
+        assert set(segment) == required_fields
 
 
 @pytest.fixture
@@ -374,6 +471,346 @@ class TestSingleColorImage:
         assert canvas_mesh.bounds[1][0] == pytest.approx(
             w * PrinterConfig.NOZZLE_WIDTH
         )
+
+    def test_material_archive_glb_uses_material_matrix_layers(
+        self,
+        out_path: str,
+    ) -> None:
+        """Material previews keep physical layers but use composite colour on top."""
+        h, w = 4, 4
+        matched_rgb = np.full((h, w, 3), [20, 30, 40], dtype=np.uint8)
+        mask_solid = np.ones((h, w), dtype=bool)
+        material_matrix = np.zeros((h, w, 3), dtype=np.int16)
+        material_matrix[:, :, 0] = 0
+        material_matrix[:, :, 1] = 1
+        material_matrix[:, :, 2] = 2
+
+        cache = _make_cache(matched_rgb, mask_solid, target_width_mm=4.0)
+        cache.update(
+            {
+                "material_source": "material_archive",
+                "material_matrix": material_matrix,
+                "layer_height_mm": 0.1,
+                "preview_colors": {
+                    0: [255, 0, 0, 255],
+                    1: [0, 255, 0, 255],
+                    2: [0, 0, 255, 255],
+                },
+                "slot_names": ["red", "green", "blue"],
+            }
+        )
+
+        glb_path = generate_segmented_glb(cache, output_path=out_path)
+
+        assert glb_path is not None
+        scene = trimesh.load(glb_path)
+        node_names = set(scene.graph.nodes_geometry)
+        assert {
+            "color_layered_appearance_l000",
+            "color_layered_physical_l001",
+            "color_layered_physical_l002",
+        }.issubset(node_names)
+        assert "color_layered_physical_l000" not in node_names
+        assert "color_141e28" not in _get_color_nodes(scene)
+        expected_layers = {
+            "color_layered_physical_l001": ([0, 255, 0], [0.1, 0.2]),
+            "color_layered_physical_l002": ([0, 0, 255], [0.0, 0.1]),
+        }
+        for node_name, (expected_rgb, expected_z) in expected_layers.items():
+            mesh = _get_node_mesh(scene, node_name)
+            assert mesh.bounds[:, 2] == pytest.approx(expected_z)
+            np.testing.assert_array_equal(
+                _segment_display_rgb(mesh, "material_segments"),
+                np.asarray(expected_rgb, dtype=np.uint8).reshape(1, 3),
+            )
+            _assert_minimal_layered_metadata(mesh, "material_segments")
+
+        appearance = _get_node_mesh(scene, "color_layered_appearance_l000")
+        assert appearance.bounds[:, 2] == pytest.approx([0.2, 0.3])
+        np.testing.assert_array_equal(
+            _segment_display_rgb(appearance, "height_segments"),
+            matched_rgb[0, 0].reshape(1, 3),
+        )
+        _assert_minimal_layered_metadata(appearance, "height_segments")
+        assert cache["color_contours"].keys() == {"141e28"}
+
+    def test_material_archive_glb_visible_top_matches_2d_composite_colors(
+        self,
+        out_path: str,
+    ) -> None:
+        """The appearance face must use the same composite colours as the 2D preview.
+
+        Two recipes can share the same physical top filament while producing
+        different optical colours because their lower layers differ. Rendering
+        only the opaque top-filament colour makes every such recipe look the
+        same in 3D even though ``matched_rgb`` (and the printed result) differs.
+        """
+        h, w = 4, 4
+        left_rgb = np.array([20, 30, 40], dtype=np.uint8)
+        right_rgb = np.array([200, 210, 220], dtype=np.uint8)
+        matched_rgb = np.empty((h, w, 3), dtype=np.uint8)
+        matched_rgb[:, :2] = left_rgb
+        matched_rgb[:, 2:] = right_rgb
+        mask_solid = np.ones((h, w), dtype=bool)
+
+        material_matrix = np.empty((h, w, 3), dtype=np.int16)
+        material_matrix[:, :, 0] = 0  # Same physical appearance-face filament.
+        material_matrix[:, :2, 1:] = np.array([1, 2], dtype=np.int16)
+        material_matrix[:, 2:, 1:] = np.array([2, 1], dtype=np.int16)
+
+        cache = _make_cache(matched_rgb, mask_solid, target_width_mm=4.0)
+        cache.update(
+            {
+                "material_source": "material_archive",
+                "material_matrix": material_matrix,
+                "layer_height_mm": 0.1,
+                "preview_colors": {
+                    0: [255, 0, 0, 255],
+                    1: [0, 255, 0, 255],
+                    2: [0, 0, 255, 255],
+                },
+                "slot_names": ["red", "green", "blue"],
+            }
+        )
+
+        glb_path = generate_segmented_glb(cache, output_path=out_path)
+
+        assert glb_path is not None
+        scene = trimesh.load(glb_path)
+        appearance = _get_node_mesh(scene, "color_layered_appearance_l000")
+        assert appearance.bounds[:, 2] == pytest.approx([0.2, 0.3])
+        np.testing.assert_array_equal(
+            _segment_display_rgb(appearance, "height_segments"),
+            np.stack([left_rgb, right_rgb]),
+        )
+        assert {
+            segment["display_hex"]
+            for segment in appearance.metadata["height_segments"]
+        } == {"141e28", "c8d2dc"}
+        _assert_minimal_layered_metadata(appearance, "height_segments")
+
+        expected_physical_layers = {
+            "color_layered_physical_l001": (
+                np.array([[0, 0, 255], [0, 255, 0]], dtype=np.uint8),
+                [0.1, 0.2],
+            ),
+            "color_layered_physical_l002": (
+                np.array([[0, 0, 255], [0, 255, 0]], dtype=np.uint8),
+                [0.0, 0.1],
+            ),
+        }
+        layered_meshes = [appearance]
+        for node_name, (expected_rgb, expected_z) in expected_physical_layers.items():
+            mesh = _get_node_mesh(scene, node_name)
+            layered_meshes.append(mesh)
+            assert mesh.bounds[:, 2] == pytest.approx(expected_z)
+            np.testing.assert_array_equal(
+                _segment_display_rgb(mesh, "material_segments"),
+                expected_rgb,
+            )
+
+        color_bounds = np.array([mesh.bounds for mesh in layered_meshes], dtype=np.float64)
+        assert float(color_bounds[:, 0, 2].min()) == pytest.approx(0.0)
+        assert float(color_bounds[:, 1, 2].max()) == pytest.approx(0.3)
+
+    def test_single_layer_material_archive_uses_composite_appearance_color(
+        self,
+        out_path: str,
+    ) -> None:
+        """A one-layer recipe still needs the predicted appearance colour."""
+        matched_rgb = np.full((3, 3, 3), [90, 120, 150], dtype=np.uint8)
+        mask_solid = np.ones((3, 3), dtype=bool)
+        material_matrix = np.full((3, 3, 1), 4, dtype=np.int16)
+        cache = _make_cache(matched_rgb, mask_solid, target_width_mm=3.0)
+        cache.update(
+            {
+                "material_source": "material_archive",
+                "material_matrix": material_matrix,
+                "layer_height_mm": 0.08,
+                "preview_colors": {4: [255, 0, 0, 255]},
+            }
+        )
+
+        glb_path = generate_segmented_glb(cache, output_path=out_path)
+
+        assert glb_path is not None
+        scene = trimesh.load(glb_path)
+        node_names = set(scene.graph.nodes_geometry)
+        assert "color_layered_appearance_l000" in node_names
+        assert not any(
+            name.startswith("color_layered_physical_l") for name in node_names
+        )
+        appearance = _get_node_mesh(scene, "color_layered_appearance_l000")
+        assert appearance.bounds[:, 2] == pytest.approx([0.0, 0.08])
+        np.testing.assert_array_equal(
+            _segment_display_rgb(appearance, "height_segments"),
+            matched_rgb[0, 0].reshape(1, 3),
+        )
+        _assert_minimal_layered_metadata(appearance, "height_segments")
+
+    def test_material_archive_glb_batches_layers_and_preserves_height_identity_collisions(
+        self,
+        out_path: str,
+    ) -> None:
+        """One achieved display colour may retain multiple source height identities."""
+        h, w = 4, 6
+        achieved_rgb = np.array([244, 100, 41], dtype=np.uint8)
+        source_low = np.array([190, 230, 248], dtype=np.uint8)
+        source_high = np.array([17, 34, 51], dtype=np.uint8)
+        matched_rgb = np.full((h, w, 3), achieved_rgb, dtype=np.uint8)
+        height_identity_rgb = np.empty_like(matched_rgb)
+        height_identity_rgb[:, :3] = source_low
+        height_identity_rgb[:, 3:] = source_high
+        mask_solid = np.ones((h, w), dtype=bool)
+
+        material_matrix = np.empty((h, w, 3), dtype=np.int16)
+        material_matrix[:, :, 0] = np.arange(w, dtype=np.int16) % 2
+        material_matrix[:, :, 1] = 1
+        material_matrix[:, :, 2] = 0
+
+        cache = _make_cache(matched_rgb, mask_solid, target_width_mm=6.0)
+        cache.update(
+            {
+                "material_source": "material_archive",
+                "material_matrix": material_matrix,
+                "height_identity_rgb": height_identity_rgb,
+                "layer_height_mm": 0.08,
+                "preview_colors": {
+                    0: [255, 255, 255, 255],
+                    1: [0, 0, 0, 255],
+                },
+            }
+        )
+
+        glb_path = generate_segmented_glb(cache, output_path=out_path)
+
+        assert glb_path is not None
+        scene = trimesh.load(glb_path, force="scene")
+        node_names = set(scene.graph.nodes_geometry)
+        assert "color_layered_appearance_l000" in node_names
+        assert {
+            "color_layered_physical_l001",
+            "color_layered_physical_l002",
+        }.issubset(node_names)
+
+        appearance = _get_node_mesh(scene, "color_layered_appearance_l000")
+        height_keys = {
+            item["height_key"] for item in appearance.metadata["height_segments"]
+        }
+        assert height_keys == {"bee6f8", "112233"}
+        np.testing.assert_array_equal(
+            _segment_display_rgb(appearance, "height_segments"),
+            achieved_rgb.reshape(1, 3),
+        )
+        layered_nodes = {
+            name
+            for name in node_names
+            if name == "color_layered_appearance_l000"
+            or name.startswith("color_layered_physical_l")
+        }
+        _assert_nodes_have_no_vertex_color(glb_path, layered_nodes)
+
+        assert "color_layered_physical_l000" not in node_names
+        _assert_minimal_layered_metadata(appearance, "height_segments")
+        appearance_triangles = _triangle_signatures(appearance)
+        for node_name in node_names:
+            if not node_name.startswith("color_layered_physical_l"):
+                continue
+            physical = _get_node_mesh(scene, node_name)
+            assert appearance_triangles.isdisjoint(
+                _triangle_signatures(physical)
+            ), f"appearance and {node_name} must not contain coplanar triangles"
+
+    @pytest.mark.parametrize(
+        ("height", "width", "color_count", "layer_count", "max_nodes", "max_faces", "max_bytes"),
+        [
+            (80, 128, 128, 10, 13, 30_000, 500_000),
+            (50, 96, 48, 5, 8, 18_000, 350_000),
+        ],
+    )
+    def test_material_archive_layered_glb_has_a_total_geometry_budget(
+        self,
+        tmp_path,
+        height: int,
+        width: int,
+        color_count: int,
+        layer_count: int,
+        max_nodes: int,
+        max_faces: int,
+        max_bytes: int,
+    ) -> None:
+        """Composite colours must not multiply final meshes by materials/layers."""
+        palette = np.array(
+            [
+                [
+                    (idx * 47 + 13) % 256,
+                    (idx * 83 + 29) % 256,
+                    (idx * 131 + 71) % 256,
+                ]
+                for idx in range(color_count)
+            ],
+            dtype=np.uint8,
+        )
+        matched_rgb = np.empty((height, width, 3), dtype=np.uint8)
+        for x in range(width):
+            matched_rgb[:, x] = palette[x % color_count]
+        mask_solid = np.ones((height, width), dtype=bool)
+        material_matrix = np.empty((height, width, layer_count), dtype=np.int16)
+        for layer_idx in range(layer_count):
+            rows = np.arange(height, dtype=np.int16)[:, None]
+            material_matrix[:, :, layer_idx] = (
+                rows // max(1, height // 10) + layer_idx
+            ) % 10
+
+        cache = _make_cache(
+            matched_rgb,
+            mask_solid,
+            target_width_mm=float(width),
+        )
+        cache.update(
+            {
+                "material_source": "material_archive",
+                "material_matrix": material_matrix,
+                "height_identity_rgb": matched_rgb.copy(),
+                "layer_height_mm": 0.08,
+                "preview_colors": {
+                    material_id: [
+                        (material_id * 31) % 256,
+                        (material_id * 67) % 256,
+                        (material_id * 101) % 256,
+                        255,
+                    ]
+                    for material_id in range(10)
+                },
+            }
+        )
+        output_path = str(
+            tmp_path / f"budget-{color_count}c-{layer_count}l.glb"
+        )
+
+        glb_path = generate_segmented_glb(cache, output_path=output_path)
+
+        assert glb_path is not None
+        scene = trimesh.load(glb_path, force="scene")
+        geometry_count = len(scene.geometry)
+        graph_node_count = len(scene.graph.nodes_geometry)
+        face_count = sum(len(mesh.faces) for mesh in scene.geometry.values())
+        assert geometry_count <= max_nodes
+        assert graph_node_count <= max_nodes
+        node_names = set(scene.graph.nodes_geometry)
+        assert sum(
+            name == "color_layered_appearance_l000" for name in node_names
+        ) == 1
+        assert {
+            f"color_layered_physical_l{layer_idx:03d}"
+            for layer_idx in range(1, layer_count)
+        }.issubset(node_names)
+        assert "color_layered_physical_l000" not in node_names
+        assert sum(
+            name.startswith("color_layered_physical_l") for name in node_names
+        ) == layer_count - 1
+        assert face_count <= max_faces
+        assert os.path.getsize(glb_path) <= max_bytes
 
     def test_none_target_width_uses_nozzle_width_fallback_for_realtime_glb(
         self,

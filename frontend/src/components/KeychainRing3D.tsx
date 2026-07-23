@@ -69,6 +69,7 @@ export function resetKeychainRingGeometryDisposeForTests(): void {
 
 export interface KeychainRing3DProps {
   enabled: boolean;
+  cameraPanModifierActive?: boolean;
   width: number; // mm, 2-10
   length: number; // mm, 4-15
   hole: number; // mm, 1-5
@@ -177,6 +178,7 @@ const OFFSET_CLAMP = 200;
 
 function KeychainRing3D({
   enabled,
+  cameraPanModifierActive = false,
   width,
   length,
   hole,
@@ -260,6 +262,9 @@ function KeychainRing3D({
 
   const handlePointerDown = useCallback(
     (e: ThreeEvent<PointerEvent>) => {
+      if (cameraPanModifierActive || e.button !== 0) {
+        return;
+      }
       e.stopPropagation();
       setIsDragging(true);
       isDraggingRef.current = true;
@@ -272,7 +277,7 @@ function KeychainRing3D({
       setControlsEnabled(false);
       document.body.style.cursor = "grabbing";
     },
-    [offsetX, offsetY, setControlsEnabled],
+    [cameraPanModifierActive, offsetX, offsetY, setControlsEnabled],
   );
 
   // Window-level pointermove + pointerup during drag — never loses tracking.

@@ -23,14 +23,7 @@ LOCAL_SLICER_SYSTEM_DIRS: dict[str, str] = {
     "SnapmakerOrca": "Snapmaker_Orca/system",
     "ElegooSlicer": "ElegooSlicer/system",
     "AnycubicSlicerNext": "AnycubicSlicerNext/system",
-}
-
-APPLICATION_METADATA_OVERRIDES: dict[str, str] = {
-    "AnycubicSlicerNext": "AnycubicSlicerNext-1.4.1.2",
-}
-
-CLIENT_VERSION_OVERRIDES: dict[str, str] = {
-    "AnycubicSlicerNext": "1.4.1.2 20260604104233",
+    "FlashStudio": "Orca-Flashforge/system",
 }
 
 _OFFICIAL_ORCA_COVER_ASSETS: tuple[tuple[str, str, str], ...] = (
@@ -118,8 +111,8 @@ def discover_local_import_sources(
                     source_root=source_root,
                     source_version=_vendor_source_version(source_root, vendor_key),
                     vendor_keys=(vendor_key,),
-                    application_metadata=APPLICATION_METADATA_OVERRIDES.get(slicer_id),
-                    client_version=CLIENT_VERSION_OVERRIDES.get(slicer_id),
+                    application_metadata=provider.default_application_metadata,
+                    client_version=provider.default_client_version,
                 )
             )
     return sources

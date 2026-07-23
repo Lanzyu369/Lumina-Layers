@@ -94,6 +94,7 @@ instance/
 
 # Sphinx documentation
 docs/_build/
+docs/private/
 
 # PyBuilder
 .pybuilder/
@@ -343,6 +344,10 @@ feedback/
 # Ad-hoc gate side-effects in lut-preset/Custom (lut_merge, lut_upload runners)
 lut-preset/Custom/Merged_*.npz
 lut-preset/Custom/synthetic_lut*.json
+
+# Cloud LUT registry local install/runtime sync outputs
+lut-preset/Cloud/
+lut-preset/_sync/luts/
 
 # Cascade per-round working files (historical prompts / PR bodies / patches)
 # Tracked: progress/governance-roadmap.md, progress/round-17-onwards-master-plan.md

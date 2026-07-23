@@ -20,6 +20,7 @@ import numpy as np
 import pytest
 from shapely.geometry import box
 
+from config import LUTMetadata, PaletteEntry, PrinterConfig
 from core.vector_matchers import MATERIAL_ARCHIVE_LUT_SENTINEL
 
 
@@ -51,7 +52,7 @@ def _material_archive_ctx() -> dict:
     }
 
 
-def _patch_material_cache_resolution():
+def _patch_material_cache_resolution(layer_count: int = 5):
     """Patch the cache resolution helpers so the matcher can be built
     without touching disk or running the real Beer-Lambert solver.
 
@@ -82,7 +83,7 @@ def _patch_material_cache_resolution():
     # patch 必须指向 ``core.material_cache`` 这个真正的来源模块。
     return patch(
         "core.material_cache.load_material_solver_cache_with_fallback",
-        return_value=(_StubSolverCache(5), 64),
+        return_value=(_StubSolverCache(layer_count), 64),
     )
 
 
@@ -132,6 +133,27 @@ class TestBuildVectorProcessorRouting:
         )
         factory_mock.assert_not_called()
 
+    def test_lut_source_without_override_keeps_default_layer_height(self):
+        from core.pipeline.vector_branch import _build_vector_processor
+
+        ctx = {
+            "material_source": "lut",
+            "actual_lut_path": "/tmp/test.npy",
+        }
+
+        with patch(
+            "core.vector_engine.VectorProcessor.__init__",
+            return_value=None,
+        ):
+            processor = _build_vector_processor(
+                ctx,
+                fallback_color_mode="4-Color (RYBW)",
+            )
+
+        assert processor.layer_height_mm == pytest.approx(
+            PrinterConfig.LAYER_HEIGHT
+        )
+
     def test_material_archive_source_uses_matcher(self):
         from core.pipeline.vector_branch import _build_vector_processor
         from core.vector_matchers import MaterialVectorMatcher
@@ -166,6 +188,58 @@ class TestBuildVectorProcessorRouting:
             vp = _build_vector_processor(ctx, fallback_color_mode="4-Color (RYBW)")
 
         assert vp.gradient_color_bands == 24
+
+    def test_material_archive_custom_layer_height_drives_double_sided_mesh_z(self):
+        from core.pipeline.vector_branch import _build_vector_processor
+        from core.vector_engine import VectorAnalysis
+
+        ctx = _material_archive_ctx()
+        ctx["color_layers"] = 7
+        ctx["layer_height_mm"] = 0.10
+
+        with _patch_material_cache_resolution(layer_count=7):
+            processor = _build_vector_processor(
+                ctx,
+                fallback_color_mode="4-Color (RYBW)",
+            )
+
+        geometry = box(0, 0, 10, 10)
+        analysis = VectorAnalysis(
+            shape_data=[],
+            clipped_shapes=[
+                {
+                    "geometry": geometry,
+                    "color": (255, 0, 0),
+                    "draw_order": 0,
+                }
+            ],
+            matched_shapes=[
+                {
+                    "geometry": geometry,
+                    "recipe": [1] * 7,
+                    "color": (255, 0, 0),
+                }
+            ],
+            silhouette=geometry,
+            scale_factor=1.0,
+            bbox=(0.0, 0.0, 10.0, 10.0),
+            color_conf=ctx["color_conf"],
+            slot_names=ctx["slot_names"],
+            num_channels=3,
+            num_layers=7,
+            preview_colors=ctx["preview_colors"],
+            stage_timings={},
+        )
+
+        scene = processor.build_mesh(
+            analysis=analysis,
+            thickness_mm=1.2,
+            structure_mode="Double-sided",
+        )
+
+        assert processor.layer_height_mm == pytest.approx(0.10)
+        assert scene.bounds[0][2] == pytest.approx(0.0)
+        assert scene.bounds[1][2] == pytest.approx(2.6)
 
     def test_material_archive_without_materials_raises(self):
         from core.pipeline.vector_branch import _build_vector_processor
@@ -322,6 +396,88 @@ class TestAnalyzeSvgConsumesMatcherColorConf:
         # the LUT path used the historical ColorSystem.get lookup
         # (otherwise we would see ``slots=["A", "B"]``).
         assert analysis.num_channels == 4
+
+    def test_npz_lut_path_uses_metadata_palette_slots(self):
+        # legacy_multi resolves to a temporary .npz. The vector branch must
+        # still use its metadata palette; otherwise channels above the UI
+        # color mode's default slot count are skipped during mesh building.
+        from core.vector_engine import VectorProcessor
+
+        class _FakeLutProcessor:
+            lut_path = "/tmp/legacy_multi_runtime.npz"
+            lut_rgb = np.zeros((2, 3), dtype=np.uint8)
+
+            @staticmethod
+            def _rgb_to_lab(arr):
+                from core.vector_matchers import _rgb_to_lab_static
+
+                return _rgb_to_lab_static(arr)
+
+        vp = VectorProcessor.from_img_processor(_FakeLutProcessor(), "4-Color (RYBW)")
+
+        from shapely.geometry import Polygon
+
+        fake_shape = {
+            "geometry": Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
+            "color": (255, 0, 0),
+            "draw_order": 0,
+        }
+        metadata = LUTMetadata(
+            palette=[
+                PaletteEntry("White", "PLA", "#FFFFFF"),
+                PaletteEntry("Red", "PLA", "#DC143C"),
+                PaletteEntry("Yellow", "PLA", "#FFE600"),
+                PaletteEntry("Blue", "PLA", "#0064F0"),
+                PaletteEntry("Cyan", "PLA", "#0086D6"),
+                PaletteEntry("Magenta", "PLA", "#EC008C"),
+                PaletteEntry("Black", "PLA", "#000000"),
+                PaletteEntry("Green", "PLA", "#00AE42"),
+            ],
+            color_mode="Merged",
+            max_color_layers=5,
+            layer_height_mm=0.08,
+        )
+        with patch.object(
+            vp, "_parse_svg",
+            return_value=([{"poly": fake_shape["geometry"], "color": fake_shape["color"]}], 1.0, (0, 0, 1, 1)),
+        ), patch.object(
+            vp, "_clip_occlusion",
+            return_value=([fake_shape], None),
+        ), patch(
+            "core.vector_engine._VECTOR_PARSE_CLIP_CACHE",
+            new={},
+        ), patch(
+            "utils.lut_manager.LUTManager.load_lut_with_metadata",
+            return_value=(np.zeros((2, 3), dtype=np.uint8), np.zeros((2, 5), dtype=np.int32), metadata),
+        ), patch.object(
+            vp,
+            "_match_colors",
+            return_value=[
+                {
+                    "geometry": fake_shape["geometry"],
+                    "recipe": [0, 1, 2, 3, 6],
+                    "color": (255, 0, 0),
+                    "matched_rgb": (255, 0, 0),
+                    "lut_idx": 0,
+                }
+            ],
+        ):
+            analysis = vp.analyze_svg(
+                svg_path="/tmp/legacy.svg",
+                target_width_mm=10.0,
+            )
+
+        assert analysis.slot_names == [
+            "White",
+            "Red",
+            "Yellow",
+            "Blue",
+            "Cyan",
+            "Magenta",
+            "Black",
+            "Green",
+        ]
+        assert analysis.num_channels == 8
 
     def test_material_archive_gradient_svg_presolves_mid_green(self, tmp_path):
         from core.vector_engine import VectorProcessor

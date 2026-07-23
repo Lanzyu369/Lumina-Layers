@@ -37,6 +37,7 @@ export const SLICER_BRAND_COLORS: Record<string, SlicerBrandStyle> = {
   orca_slicer:   { bg: "bg-blue-600",   hover: "hover:bg-blue-700",   text: "text-white" },
   elegoo_slicer: { bg: "bg-sky-500",    hover: "hover:bg-sky-600",    text: "text-white" },
   anycubic_slicer_next: { bg: "bg-red-600", hover: "hover:bg-red-700", text: "text-white" },
+  flash_studio: { bg: "bg-indigo-600", hover: "hover:bg-indigo-700", text: "text-white" },
   prusa_slicer:  { bg: "bg-orange-500", hover: "hover:bg-orange-600", text: "text-white" },
   cura:          { bg: "bg-blue-400",   hover: "hover:bg-blue-500",   text: "text-white" },
 };

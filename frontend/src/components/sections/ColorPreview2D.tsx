@@ -880,6 +880,8 @@ export default function ColorPreview2D({
         onClickSample={handleClick}
         onSurfaceReady={handleSurfaceReady}
         onScaleChange={setZoom}
+        middleButtonPanEnabled
+        spacePanEnabled
         canStartDrag={(event) => event.button === 2}
       />
       {hoverInspectorOverlay}

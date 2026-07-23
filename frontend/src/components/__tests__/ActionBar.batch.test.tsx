@@ -546,7 +546,7 @@ describe("ActionBar — auto batch mode", () => {
     fireEvent.click(screen.getByRole("button", { name: "导出分享卡" }));
 
     await waitFor(() => {
-      expect(screen.getByText(/导出失败：服务器发生内部错误。请使用请求 ID 查看日志。/)).toBeInTheDocument();
+      expect(screen.getByText(/导出失败：服务器发生内部错误。请稍后重试；如果问题持续，请提交反馈。/)).toBeInTheDocument();
     });
     expect(screen.queryByText(/Request failed with status code 500/)).not.toBeInTheDocument();
   });

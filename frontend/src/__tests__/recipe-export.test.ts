@@ -80,6 +80,21 @@ describe("recipe/exportRecipe", () => {
       expect(recipe.color_ops.replacement_regions[1].matched_hex).toBe("#dd0000");
     });
 
+    it("does not serialize spatial edit count as a global color mapping", () => {
+      const state = makeState({
+        regionReplacementCount: 3,
+        replacement_regions: [],
+        colorRemapMap: {},
+      });
+
+      const recipe = exportConverterRecipe(state, makeSettings(), "fp");
+
+      expect(recipe.color_ops.replacement_regions).toEqual([]);
+      expect(JSON.stringify(recipe.color_ops)).not.toContain(
+        "regionReplacementCount",
+      );
+    });
+
     it("serializes free_color_set with '#' prefix", () => {
       const state = makeState({
         free_color_set: new Set(["ff0000", "00ff00"]),
@@ -150,6 +165,21 @@ describe("recipe/exportRecipe", () => {
         material_layer_height_mm: 0.06,
         material_backing_material_dir_name: "brand/white",
       });
+    });
+
+    it("exports selected legacy LUT names for multi-select restore", () => {
+      const state = makeState({
+        source_version: "legacy",
+        lut_name: "LUT-A",
+        lut_names: ["LUT-A", "LUT-B", "LUT-A", ""],
+      });
+
+      const recipe = exportConverterRecipe(state, makeSettings(), "fp");
+
+      expect(recipe.source!.selected_legacy_lut_names).toEqual([
+        "LUT-A",
+        "LUT-B",
+      ]);
     });
 
     it("exports large format parameters", () => {

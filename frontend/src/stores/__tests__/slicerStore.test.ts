@@ -94,7 +94,7 @@ describe("detectSlicers", () => {
     const error = useSlicerStore.getState().error;
     expect(error).toBeTruthy();
     expect(error).not.toMatch(RAW_HTTP_STATUS_PATTERN);
-    expect(error).toBe("服务器发生内部错误。请使用请求 ID 查看日志。");
+    expect(error).toBe("服务器发生内部错误。请稍后重试；如果问题持续，请提交反馈。");
   });
 
   it("检测到空列表时 selectedSlicerId 为 null", async () => {
@@ -383,7 +383,7 @@ describe("launchSlicer", () => {
     const state = useSlicerStore.getState();
     expect(state.error).toBeTruthy();
     expect(state.error).not.toMatch(RAW_HTTP_STATUS_PATTERN);
-    expect(state.error).toBe("服务器发生内部错误。请使用请求 ID 查看日志。");
+    expect(state.error).toBe("服务器发生内部错误。请稍后重试；如果问题持续，请提交反馈。");
     expect(state.isLaunching).toBe(false);
     expect(state.launchMessage).toBeNull();
   });

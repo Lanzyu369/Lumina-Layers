@@ -616,6 +616,7 @@ class VectorConfig:
     MATERIAL_VECTOR_SMALL_SHAPE_SNAP_MAX_AREA_RATIO: float = 0.01
     MATERIAL_VECTOR_SMALL_SHAPE_SNAP_MIN_ANCHOR_AREA_RATIO: float = 0.03
     MATERIAL_VECTOR_SMALL_SHAPE_SNAP_DELTA_E: float = 20.0
+    VECTOR_NEAR_FILL_QUERY_DELTA_E: float = 2.0
 
     # Boolean operation tolerance
     BUFFER_TOLERANCE: float = 0.0  # Shapely buffer precision
@@ -695,6 +696,11 @@ LEGACY_SLICER_ID_ALIASES: dict[str, str] = {
     "anycubic slicer next": "AnycubicSlicerNext",
     "anycubicslicer": "AnycubicSlicerNext",
     "anycubicslicernext": "AnycubicSlicerNext",
+    "flashforge": "FlashStudio",
+    "flash_studio": "FlashStudio",
+    "flash studio": "FlashStudio",
+    "flash studio desktop": "FlashStudio",
+    "flashstudio": "FlashStudio",
 }
 
 
@@ -841,14 +847,19 @@ class PrinterProfile:
         normalized_slicer = normalize_slicer_software_id(slicer)
         template_file = self.slicer_templates.get(normalized_slicer, self.template_file)
 
+        native_size = format_native_nozzle_size(nozzle_size)
         normalized_size = normalize_nozzle_size(nozzle_size)
-        if normalized_size is None or normalized_size == "0.4":
-            return template_file
-        if normalized_size not in self.supported_nozzle_sizes:
+        if native_size in self.supported_nozzle_sizes:
+            selected_size = native_size
+        elif normalized_size in self.supported_nozzle_sizes:
+            selected_size = normalized_size
+        else:
+            selected_size = None
+        if selected_size is None or selected_size == "0.4":
             return template_file
 
         stem, ext = os.path.splitext(template_file)
-        return f"{stem}_{normalized_size.replace('.', '_')}{ext}"
+        return f"{stem}_{selected_size.replace('.', '_')}{ext}"
 
 
 # Supported slicer software list
@@ -858,6 +869,7 @@ SUPPORTED_SLICERS: list[dict[str, str]] = [
     {"id": "SnapmakerOrca", "display_name": "Snapmaker Orca"},
     {"id": "ElegooSlicer", "display_name": "ElegooSlicer"},
     {"id": "AnycubicSlicerNext", "display_name": "Anycubic Slicer Next"},
+    {"id": "FlashStudio", "display_name": "Flash Studio Desktop"},
 ]
 
 DEFAULT_SLICER_ID: str = "BambuStudio"
@@ -1101,6 +1113,84 @@ PRINTER_PROFILES: dict[str, PrinterProfile] = {
         is_dual_head=False,
         template_file="anycubic_kobra_x.json",
         slicer_templates={"AnycubicSlicerNext": "anycubic_kobra_x.json"},
+    ),
+    "flashforge-ad5x": PrinterProfile(
+        id="flashforge-ad5x",
+        display_name="Flashforge AD5X",
+        brand="Flashforge",
+        bed_width=220,
+        bed_depth=220,
+        bed_height=220,
+        nozzle_count=1,
+        is_dual_head=False,
+        template_file="flashforge_ad5x.json",
+        slicer_templates={"FlashStudio": "flashforge_ad5x.json"},
+        supported_nozzle_sizes=("0.25", "0.4"),
+    ),
+    "flashforge-creator-5": PrinterProfile(
+        id="flashforge-creator-5",
+        display_name="Flashforge Creator 5",
+        brand="Flashforge",
+        bed_width=256,
+        bed_depth=256,
+        bed_height=256,
+        nozzle_count=4,
+        is_dual_head=False,
+        template_file="flashforge_creator_5.json",
+        slicer_templates={"FlashStudio": "flashforge_creator_5.json"},
+        supported_nozzle_sizes=("0.25", "0.4"),
+    ),
+    "flashforge-creator-5-pro": PrinterProfile(
+        id="flashforge-creator-5-pro",
+        display_name="Flashforge Creator 5 Pro",
+        brand="Flashforge",
+        bed_width=256,
+        bed_depth=256,
+        bed_height=256,
+        nozzle_count=4,
+        is_dual_head=False,
+        template_file="flashforge_creator_5_pro.json",
+        slicer_templates={"FlashStudio": "flashforge_creator_5_pro.json"},
+        supported_nozzle_sizes=("0.25", "0.4"),
+    ),
+    "flashforge-guider-3-ultra": PrinterProfile(
+        id="flashforge-guider-3-ultra",
+        display_name="Flashforge Guider 3 Ultra",
+        brand="Flashforge",
+        bed_width=300,
+        bed_depth=330,
+        bed_height=600,
+        nozzle_count=2,
+        is_dual_head=True,
+        template_file="flashforge_guider_3_ultra.json",
+        slicer_templates={"FlashStudio": "flashforge_guider_3_ultra.json"},
+        supported_nozzle_sizes=("0.4",),
+    ),
+    "flashforge-guider4": PrinterProfile(
+        id="flashforge-guider4",
+        display_name="Flashforge Guider4",
+        brand="Flashforge",
+        bed_width=300,
+        bed_depth=300,
+        bed_height=300,
+        nozzle_count=1,
+        is_dual_head=False,
+        template_file="flashforge_guider4.json",
+        slicer_templates={"FlashStudio": "flashforge_guider4.json"},
+        supported_nozzle_sizes=("0.25", "0.4"),
+    ),
+    "flashforge-guider4-pro": PrinterProfile(
+        id="flashforge-guider4-pro",
+        display_name="Flashforge Guider4 Pro",
+        brand="Flashforge",
+        bed_width=300,
+        bed_depth=300,
+        bed_height=300,
+        nozzle_count=1,
+        is_dual_head=False,
+        template_file="flashforge_guider4_pro.json",
+        slicer_templates={"FlashStudio": "flashforge_guider4_pro.json"},
+        supported_nozzle_sizes=("0.25", "0.4"),
     ),
 }
 

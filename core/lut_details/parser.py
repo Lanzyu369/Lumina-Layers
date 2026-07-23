@@ -31,6 +31,7 @@ class ParsedLut:
     color_mode: str
     color_count: int
     source_kind: str
+    compatibility_key: str
     rgb: np.ndarray
     lab: np.ndarray
     metadata: LUTMetadata
@@ -101,6 +102,7 @@ class LutParser:
             color_mode=color_mode,
             color_count=color_count,
             source_kind=metadata.get_source_kind(),
+            compatibility_key=LUTManager.legacy_multi_compatibility_key(metadata),
             rgb=rgb,
             lab=lab,
             metadata=metadata,

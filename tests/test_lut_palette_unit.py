@@ -214,6 +214,264 @@ class TestLUTManager:
         ]
         assert result["preview_colors"][1][:3] != ColorSystem.SIX_COLOR_RYBW["preview"][1][:3]
 
+    def test_legacy_cmyw_npy_reindexes_swapped_pure_channels(self):
+        """Legacy 1024-row NPY stacks should map raw channels to CMYW slots."""
+        from core.pipeline.processing_ops.lut_loader import load_lut
+
+        rgb = np.zeros((1024, 3), dtype=np.uint8)
+        rgb[0] = [240, 240, 240]       # raw channel 0 -> White
+        rgb[341] = [0, 134, 214]       # raw channel 1 -> Cyan
+        rgb[682] = [244, 238, 42]      # raw channel 2 -> Yellow
+        rgb[1023] = [236, 0, 140]      # raw channel 3 -> Magenta
+
+        with tempfile.NamedTemporaryFile(suffix="_CMYW.npy", delete=False) as f:
+            tmp_path = f.name
+            np.save(tmp_path, rgb)
+
+        try:
+            loaded = load_lut(tmp_path, "4-Color (CMYW)")
+            stacks = loaded["ref_stacks"]
+
+            yellow_rows = np.where(
+                np.all(loaded["lut_rgb"] == [244, 238, 42], axis=1)
+            )[0]
+            magenta_rows = np.where(
+                np.all(loaded["lut_rgb"] == [236, 0, 140], axis=1)
+            )[0]
+
+            assert yellow_rows.size == 1
+            assert magenta_rows.size == 1
+            np.testing.assert_array_equal(stacks[yellow_rows[0]], [3, 3, 3, 3, 3])
+            np.testing.assert_array_equal(stacks[magenta_rows[0]], [2, 2, 2, 2, 2])
+        finally:
+            os.unlink(tmp_path)
+
+    def test_legacy_cmyw_npy_remap_does_not_drop_raw_blue_corner(self):
+        """Outlier filtering must run before legacy raw channel remap."""
+        from core.pipeline.processing_ops.lut_loader import load_lut
+
+        rgb = np.zeros((1024, 3), dtype=np.uint8)
+        rgb[0] = [240, 240, 240]       # raw channel 0 -> White
+        rgb[341] = [236, 0, 140]       # raw channel 1 -> Magenta
+        rgb[682] = [244, 238, 42]      # raw channel 2 -> Yellow
+        rgb[1023] = [0, 134, 214]      # raw channel 3 -> Cyan/Blue corner
+
+        with tempfile.NamedTemporaryFile(suffix="_CMYW.npy", delete=False) as f:
+            tmp_path = f.name
+            np.save(tmp_path, rgb)
+
+        try:
+            loaded = load_lut(tmp_path, "4-Color (CMYW)")
+            cyan_rows = np.where(
+                np.all(loaded["lut_rgb"] == [0, 134, 214], axis=1)
+            )[0]
+
+            assert cyan_rows.size == 1
+            np.testing.assert_array_equal(
+                loaded["ref_stacks"][cyan_rows[0]],
+                [1, 1, 1, 1, 1],
+            )
+        finally:
+            os.unlink(tmp_path)
+
+    def test_legacy_cmyw_npy_remap_keeps_raw_channel_zero_blue_like_corner(self):
+        """CMYW legacy NPY can store the blue/cyan-like corner in raw channel 0."""
+        from core.pipeline.processing_ops.lut_loader import load_lut
+
+        rgb = np.zeros((1024, 3), dtype=np.uint8)
+        rgb[0] = [30, 100, 200]        # raw channel 0 -> Blue/Cyan-like
+        rgb[341] = [236, 0, 140]       # raw channel 1 -> Magenta
+        rgb[682] = [244, 238, 42]      # raw channel 2 -> Yellow
+        rgb[1023] = [240, 240, 240]    # raw channel 3 -> White
+
+        with tempfile.NamedTemporaryFile(suffix="_BMYW.npy", delete=False) as f:
+            tmp_path = f.name
+            np.save(tmp_path, rgb)
+
+        try:
+            loaded = load_lut(tmp_path, "4-Color (CMYW)")
+            blue_rows = np.where(
+                np.all(loaded["lut_rgb"] == [30, 100, 200], axis=1)
+            )[0]
+
+            assert blue_rows.size == 1
+            np.testing.assert_array_equal(
+                loaded["ref_stacks"][blue_rows[0]],
+                [1, 1, 1, 1, 1],
+            )
+            assert loaded["lut_rgb"].shape[0] == 1024
+        finally:
+            os.unlink(tmp_path)
+
+    def test_legacy_cmyw_npy_low_confidence_corner_keeps_identity_stacks(self):
+        """Do not remap all stacks when one pure-channel corner is not credible."""
+        from core.pipeline.processing_ops.lut_loader import load_lut
+
+        rgb = np.zeros((1024, 3), dtype=np.uint8)
+        rgb[0] = [240, 240, 240]       # raw channel 0 -> White
+        rgb[341] = [0, 134, 214]       # raw channel 1 -> Cyan
+        rgb[682] = [244, 238, 42]      # raw channel 2 -> Yellow
+        rgb[1023] = [20, 20, 20]       # raw channel 3 missing Magenta
+
+        with tempfile.NamedTemporaryFile(suffix="_CMYW.npy", delete=False) as f:
+            tmp_path = f.name
+            np.save(tmp_path, rgb)
+
+        try:
+            loaded = load_lut(tmp_path, "4-Color (CMYW)")
+
+            np.testing.assert_array_equal(
+                loaded["ref_stacks"][682],
+                [2, 2, 2, 2, 2],
+            )
+            np.testing.assert_array_equal(
+                loaded["ref_stacks"][1023],
+                [3, 3, 3, 3, 3],
+            )
+        finally:
+            os.unlink(tmp_path)
+
+    @pytest.mark.parametrize(
+        "corner_rgb",
+        [
+            [0, 0, 0],
+            [128, 128, 128],
+        ],
+    )
+    def test_legacy_cmyw_npy_ambiguous_corners_keep_identity_stacks(self, corner_rgb):
+        """All-black or grayscale pure-channel corners are not enough to remap."""
+        from core.pipeline.processing_ops.lut_loader import load_lut
+
+        rgb = np.zeros((1024, 3), dtype=np.uint8)
+        rgb[0] = corner_rgb
+        rgb[341] = corner_rgb
+        rgb[682] = corner_rgb
+        rgb[1023] = corner_rgb
+
+        with tempfile.NamedTemporaryFile(suffix="_CMYW.npy", delete=False) as f:
+            tmp_path = f.name
+            np.save(tmp_path, rgb)
+
+        try:
+            loaded = load_lut(tmp_path, "4-Color (CMYW)")
+
+            np.testing.assert_array_equal(
+                loaded["ref_stacks"][341],
+                [1, 1, 1, 1, 1],
+            )
+            np.testing.assert_array_equal(
+                loaded["ref_stacks"][682],
+                [2, 2, 2, 2, 2],
+            )
+            np.testing.assert_array_equal(
+                loaded["ref_stacks"][1023],
+                [3, 3, 3, 3, 3],
+            )
+        finally:
+            os.unlink(tmp_path)
+
+    def test_legacy_rybw_npy_keeps_blue_outlier_filter(self):
+        """Near-blue rows still drop when the raw legacy stack has no Blue."""
+        from core.pipeline.processing_ops.lut_loader import load_lut
+
+        rgb = np.zeros((1024, 3), dtype=np.uint8)
+        rgb[0] = [240, 240, 240]
+        rgb[1] = [30, 100, 200]        # near blue, raw stack has no channel 3
+        rgb[341] = [220, 20, 60]
+        rgb[682] = [255, 230, 0]
+        rgb[1023] = [0, 100, 240]
+
+        with tempfile.NamedTemporaryFile(suffix="_RYBW.npy", delete=False) as f:
+            tmp_path = f.name
+            np.save(tmp_path, rgb)
+
+        try:
+            loaded = load_lut(tmp_path, "4-Color (RYBW)")
+
+            assert not np.any(np.all(loaded["lut_rgb"] == [30, 100, 200], axis=1))
+        finally:
+            os.unlink(tmp_path)
+
+    def test_cmyw_keyed_json_with_explicit_stacks_is_not_remapped(self):
+        """Explicit keyed JSON stacks return as stored, bypassing legacy NPY remap."""
+        from core.pipeline.processing_ops.lut_loader import load_lut
+
+        rgb = np.array(
+            [
+                [0, 134, 214],
+                [244, 238, 42],
+            ],
+            dtype=np.uint8,
+        )
+        stacks = np.array(
+            [
+                [3, 2, 1, 0, 3],
+                [1, 1, 2, 2, 3],
+            ],
+            dtype=np.int32,
+        )
+        metadata = LUTMetadata(
+            color_mode="4-Color (CMYW)",
+            palette=[
+                PaletteEntry(color="White"),
+                PaletteEntry(color="Cyan"),
+                PaletteEntry(color="Magenta"),
+                PaletteEntry(color="Yellow"),
+            ],
+        )
+
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            tmp_path = f.name
+
+        try:
+            LUTManager.save_keyed_json(tmp_path, rgb, stacks, metadata)
+            loaded = load_lut(tmp_path, "4-Color (CMYW)")
+
+            np.testing.assert_array_equal(loaded["lut_rgb"], rgb)
+            np.testing.assert_array_equal(loaded["ref_stacks"], stacks)
+        finally:
+            os.unlink(tmp_path)
+
+    def test_rybw_npz_with_explicit_stacks_is_not_remapped(self):
+        """Explicit NPZ stacks return as stored, bypassing legacy NPY remap."""
+        from core.pipeline.processing_ops.lut_loader import load_lut
+
+        rgb = np.array(
+            [
+                [30, 100, 200],
+                [255, 230, 0],
+            ],
+            dtype=np.uint8,
+        )
+        stacks = np.array(
+            [
+                [0, 3, 3, 2, 1],
+                [2, 2, 1, 0, 3],
+            ],
+            dtype=np.int32,
+        )
+        metadata = LUTMetadata(
+            color_mode="4-Color (RYBW)",
+            palette=[
+                PaletteEntry(color="White"),
+                PaletteEntry(color="Red"),
+                PaletteEntry(color="Yellow"),
+                PaletteEntry(color="Blue"),
+            ],
+        )
+
+        with tempfile.NamedTemporaryFile(suffix=".npz", delete=False) as f:
+            tmp_path = f.name
+
+        try:
+            LUTManager.save_npz_with_metadata(tmp_path, rgb, stacks, metadata)
+            loaded = load_lut(tmp_path, "4-Color (RYBW)")
+
+            np.testing.assert_array_equal(loaded["lut_rgb"], rgb)
+            np.testing.assert_array_equal(loaded["ref_stacks"], stacks)
+        finally:
+            os.unlink(tmp_path)
+
     def test_smart_6color_stacks_asset_contract(self):
         from core import calibration
 

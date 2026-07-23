@@ -1,10 +1,21 @@
-import { Suspense, useRef, useState, useEffect, useCallback, useMemo } from "react";
+import {
+  Suspense,
+  useRef,
+  useState,
+  useEffect,
+  useCallback,
+  useMemo,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { OrbitControls, Environment, Html } from "@react-three/drei";
 import { LIGHTING_CONFIG } from "./lightingConfig";
 import * as THREE from "three";
 import { computeFitDistance } from "./ModelViewer";
-import InteractiveModelViewer from "./InteractiveModelViewer";
+import InteractiveModelViewer, {
+  resolvePreviewColorLayerHeightMm,
+} from "./InteractiveModelViewer";
 import BedPlatform from "./BedPlatform";
 import KeychainRing3D from "./KeychainRing3D";
 import FridgeMagnet3D from "./FridgeMagnet3D";
@@ -12,9 +23,11 @@ import ModelSurfaceSelector3D from "./ModelSurfaceSelector3D";
 import { useConverterStore } from "../stores/converter";
 import { useSettingsStore } from "../stores/settingsStore";
 import { computeScaleFactor } from "../utils/scaleUtils";
+import { resolveCameraClippingPlanes } from "../utils/cameraDepthPrecision";
 import { useI18n } from "../i18n/context";
 import { useThemeConfig } from "../hooks/useThemeConfig";
 import { useWittyMessage } from "../hooks/useWittyMessage";
+import { useSpacePanModifier } from "../hooks/useSpacePanModifier";
 import {
   debugThreeLog,
   getHeapMemorySnapshot,
@@ -107,10 +120,49 @@ export function computePreviewCameraOrbitConfig(
   };
 }
 
+interface ActiveOrbitPanPointer {
+  pointerId: number;
+  spaceModified: boolean;
+}
+
 interface SceneDiagnosticsSnapshot {
   renderer: ReturnType<typeof getRendererInfoSnapshot>;
   heap: ReturnType<typeof getHeapMemorySnapshot>;
   fps: number | null;
+}
+
+const DEFAULT_CAMERA_POSITION = [0, -57, 474] as const;
+const DEFAULT_ORBIT_TARGET = [0, -20, 0] as const;
+const DEFAULT_CAMERA_CLIPPING_PLANES = resolveCameraClippingPlanes(
+  Math.hypot(
+    DEFAULT_CAMERA_POSITION[0] - DEFAULT_ORBIT_TARGET[0],
+    DEFAULT_CAMERA_POSITION[1] - DEFAULT_ORBIT_TARGET[1],
+    DEFAULT_CAMERA_POSITION[2] - DEFAULT_ORBIT_TARGET[2],
+  ),
+);
+const CLIPPING_PLANE_RELATIVE_TOLERANCE = 1e-6;
+
+function dispatchPointerCancel(element: HTMLElement, pointerId: number): void {
+  let event: Event;
+  if (typeof PointerEvent === "function") {
+    event = new PointerEvent("pointercancel", {
+      bubbles: true,
+      cancelable: true,
+      pointerId,
+    });
+  } else {
+    event = new Event("pointercancel", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "pointerId", { configurable: true, value: pointerId });
+  }
+  element.dispatchEvent(event);
+}
+
+function clippingPlaneNeedsUpdate(currentValue: number, nextValue: number): boolean {
+  const tolerance = Math.max(
+    Number.EPSILON,
+    Math.abs(nextValue) * CLIPPING_PLANE_RELATIVE_TOLERANCE,
+  );
+  return Math.abs(currentValue - nextValue) > tolerance;
 }
 
 function formatTimingMs(value: number | null | undefined): string {
@@ -344,6 +396,63 @@ function PreviewCameraRangeBridge({
 }
 
 /**
+ * Keep perspective depth precision high enough for 0.08 mm material layers.
+ * 动态收紧相机裁剪范围，避免 0.08 mm 材料层发生深度冲突。
+ */
+function CameraDepthPrecisionGuard() {
+  const camera = useThree((state) => state.camera);
+  const controls = useThree((state) => state.controls);
+  const invalidate = useThree((state) => state.invalidate);
+
+  useEffect(() => {
+    const perspectiveCamera = camera as THREE.PerspectiveCamera;
+    if (!perspectiveCamera.isPerspectiveCamera) {
+      return;
+    }
+
+    const orbitControls =
+      controls && "target" in controls
+        ? (controls as {
+            target?: THREE.Vector3 | null;
+            addEventListener?: (type: "change", listener: () => void) => void;
+            removeEventListener?: (type: "change", listener: () => void) => void;
+          })
+        : null;
+
+    const syncClippingPlanes = () => {
+      const target = orbitControls?.target;
+      const distanceToTarget = target
+        ? perspectiveCamera.position.distanceTo(target)
+        : Math.hypot(
+            perspectiveCamera.position.x,
+            perspectiveCamera.position.y,
+            perspectiveCamera.position.z,
+          );
+      const clippingPlanes = resolveCameraClippingPlanes(distanceToTarget);
+      if (
+        !clippingPlaneNeedsUpdate(perspectiveCamera.near, clippingPlanes.near) &&
+        !clippingPlaneNeedsUpdate(perspectiveCamera.far, clippingPlanes.far)
+      ) {
+        return;
+      }
+
+      perspectiveCamera.near = clippingPlanes.near;
+      perspectiveCamera.far = clippingPlanes.far;
+      perspectiveCamera.updateProjectionMatrix();
+      invalidate();
+    };
+
+    syncClippingPlanes();
+    orbitControls?.addEventListener?.("change", syncClippingPlanes);
+    return () => {
+      orbitControls?.removeEventListener?.("change", syncClippingPlanes);
+    };
+  }, [camera, controls, invalidate]);
+
+  return null;
+}
+
+/**
  * Inner component that syncs the Canvas clear color with the active theme.
  * Canvas 内部组件，将清除色与当前主题同步。
  */
@@ -537,6 +646,7 @@ interface BatchPreviewModelsProps {
   wireHeightMm: number;
   enableFridgeMagnet: boolean;
   rasterCellSize?: number;
+  colorLayerHeightMm: number;
 }
 
 function BatchPreviewModels({
@@ -554,6 +664,7 @@ function BatchPreviewModels({
   wireHeightMm,
   enableFridgeMagnet,
   rasterCellSize,
+  colorLayerHeightMm,
 }: BatchPreviewModelsProps) {
   const camera = useThree((state) => state.camera);
   const controls = useThree((state) => state.controls);
@@ -645,6 +756,7 @@ function BatchPreviewModels({
             rasterCellSize={rasterCellSize}
             puzzleOverlayEnabled={false}
             puzzleOverlayUrl={null}
+            colorLayerHeightMm={colorLayerHeightMm}
           />
         </group>
       ))}
@@ -657,11 +769,98 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const themeColors = useThemeConfig();
   const containerRef = useRef<HTMLDivElement>(null);
   const glRef = useRef<THREE.WebGLRenderer | null>(null);
+  const activeOrbitPanPointerRef = useRef<ActiveOrbitPanPointer | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [diagnostics, setDiagnostics] = useState<SceneDiagnosticsSnapshot | null>(null);
   const [diagnosticsVisible, setDiagnosticsVisible] = useState(false);
   const [performanceVisible, setPerformanceVisible] = useState(false);
   const [modelSurfaceBedGridVisible, setModelSurfaceBedGridVisible] = useState(true);
+
+  const cancelOrbitPanPointer = useCallback((spaceOnly: boolean) => {
+    const activePointer = activeOrbitPanPointerRef.current;
+    if (!activePointer || (spaceOnly && !activePointer.spaceModified)) {
+      return;
+    }
+    activeOrbitPanPointerRef.current = null;
+    const canvas = glRef.current?.domElement ?? containerRef.current?.querySelector("canvas");
+    if (canvas) {
+      dispatchPointerCancel(canvas, activePointer.pointerId);
+    }
+  }, []);
+  const handleSpacePanDeactivate = useCallback(() => {
+    cancelOrbitPanPointer(true);
+  }, [cancelOrbitPanPointer]);
+  const {
+    isActive: isSpacePanActive,
+    isActiveRef: isSpacePanActiveRef,
+    handlePointerEnter: handleSpacePanPointerEnter,
+    handlePointerLeave: handleSpacePanPointerLeave,
+  } = useSpacePanModifier({ onDeactivate: handleSpacePanDeactivate });
+  const orbitMouseButtons = useMemo(
+    () => ({
+      LEFT: isSpacePanActive ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE,
+      MIDDLE: THREE.MOUSE.PAN,
+      RIGHT: THREE.MOUSE.PAN,
+    }),
+    [isSpacePanActive],
+  );
+
+  const handleViewportPointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const spaceModified = event.button === 0 && isSpacePanActiveRef.current;
+      if (!spaceModified && event.button !== 1 && event.button !== 2) {
+        return;
+      }
+      if (spaceModified || event.button === 1) {
+        event.preventDefault();
+      }
+      activeOrbitPanPointerRef.current = {
+        pointerId: event.pointerId,
+        spaceModified,
+      };
+    },
+    [isSpacePanActiveRef],
+  );
+  const finishViewportPointer = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (activeOrbitPanPointerRef.current?.pointerId === event.pointerId) {
+      activeOrbitPanPointerRef.current = null;
+    }
+  }, []);
+  const handleViewportMouseDown = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>) => {
+      if (
+        event.button === 1
+        || (event.button === 0 && isSpacePanActiveRef.current)
+      ) {
+        event.preventDefault();
+      }
+    },
+    [isSpacePanActiveRef],
+  );
+  const handleViewportAuxClick = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    if (event.button === 1) {
+      event.preventDefault();
+    }
+  }, []);
+
+  useEffect(() => {
+    const handleWindowPointerEnd = (event: PointerEvent) => {
+      if (activeOrbitPanPointerRef.current?.pointerId === event.pointerId) {
+        activeOrbitPanPointerRef.current = null;
+      }
+    };
+    const handleWindowBlur = () => cancelOrbitPanPointer(false);
+
+    window.addEventListener("pointerup", handleWindowPointerEnd);
+    window.addEventListener("pointercancel", handleWindowPointerEnd);
+    window.addEventListener("blur", handleWindowBlur);
+    return () => {
+      window.removeEventListener("pointerup", handleWindowPointerEnd);
+      window.removeEventListener("pointercancel", handleWindowPointerEnd);
+      window.removeEventListener("blur", handleWindowBlur);
+      cancelOrbitPanPointer(false);
+    };
+  }, [cancelOrbitPanPointer]);
 
   // Witty Loading Messages (Req 1.4 & Enhancements)
   const isLoading = useConverterStore((s) => s.isLoading);
@@ -699,6 +898,8 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const enableCloisonne = useConverterStore((s) => s.enable_cloisonne);
   const wireWidthMm = useConverterStore((s) => s.wire_width_mm);
   const wireHeightMm = useConverterStore((s) => s.wire_height_mm);
+  const colorLayers = useConverterStore((s) => s.color_layers);
+  const layerHeightMm = useConverterStore((s) => s.layer_height_mm);
   const puzzleEnabled = useConverterStore((s) => s.puzzleEnabled);
   const puzzleOverlayUrl = useConverterStore((s) => s.puzzleOverlayUrl);
 
@@ -715,6 +916,11 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const rasterCellSize = previewWidth && previewPixelWidth && previewPixelWidth > 0
     ? previewWidth / previewPixelWidth
     : undefined;
+  const colorLayerHeightMm = resolvePreviewColorLayerHeightMm(
+    typeof colorLayers === "number" && typeof layerHeightMm === "number"
+      ? colorLayers * layerHeightMm
+      : undefined,
+  );
 
   // Keychain ring params
   const addLoop = useConverterStore((s) => s.add_loop);
@@ -872,6 +1078,14 @@ function Scene3D({ modelUrl }: Scene3DProps) {
       ref={containerRef}
       className="relative w-full h-full"
       data-testid="scene3d-container"
+      data-space-pan-active={isSpacePanActive || undefined}
+      onMouseDown={handleViewportMouseDown}
+      onAuxClick={handleViewportAuxClick}
+      onPointerEnter={handleSpacePanPointerEnter}
+      onPointerLeave={handleSpacePanPointerLeave}
+      onPointerDown={handleViewportPointerDown}
+      onPointerUp={finishViewportPointer}
+      onPointerCancel={finishViewportPointer}
     >
       {/* Floating action buttons — top-right with right-dock avoidance.
        * 浮动按钮组：右上角悬浮，依赖 WidgetWorkspace 注入的
@@ -1060,7 +1274,12 @@ function Scene3D({ modelUrl }: Scene3DProps) {
 
       <Canvas
         frameloop="demand"
-        camera={{ position: [0, -57, 474], fov: 45 }}
+        camera={{
+          position: [...DEFAULT_CAMERA_POSITION],
+          fov: 45,
+          near: DEFAULT_CAMERA_CLIPPING_PLANES.near,
+          far: DEFAULT_CAMERA_CLIPPING_PLANES.far,
+        }}
         gl={{ preserveDrawingBuffer: true, toneMapping: THREE.NeutralToneMapping }}
         onPointerMissed={() => {
           if (enableFridgeMagnet) {
@@ -1120,6 +1339,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
           scaleX={scaleX}
           scaleY={scaleY}
         />
+        <CameraDepthPrecisionGuard />
         <ThemeUpdater />
         <CanvasInteractionBridge />
         <Suspense fallback={null}>
@@ -1140,6 +1360,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
           dampingFactor={0.1}
           minDistance={10}
           maxDistance={2000}
+          mouseButtons={orbitMouseButtons}
         />
         <BedPlatform
           surfaceModelActive={showModelSurfaceSelector}
@@ -1180,6 +1401,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
               wireHeightMm={wireHeightMm}
               enableFridgeMagnet={enableFridgeMagnet}
               rasterCellSize={rasterCellSize}
+              colorLayerHeightMm={colorLayerHeightMm}
             />
           </Suspense>
         ) : effectiveModelUrl ? (
@@ -1203,6 +1425,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
               rasterCellSize={rasterCellSize}
               puzzleOverlayEnabled={puzzleEnabled && Boolean(puzzleOverlayUrl)}
               puzzleOverlayUrl={puzzleOverlayUrl}
+              colorLayerHeightMm={colorLayerHeightMm}
             />
           </Suspense>
         ) : previewGlbUrl ? (
@@ -1226,6 +1449,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
               rasterCellSize={rasterCellSize}
               puzzleOverlayEnabled={puzzleEnabled && Boolean(puzzleOverlayUrl)}
               puzzleOverlayUrl={puzzleOverlayUrl}
+              colorLayerHeightMm={colorLayerHeightMm}
             />
           </Suspense>
         ) : null}
@@ -1240,6 +1464,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
             offsetY={loopOffsetY}
             positionPreset={loopPositionPreset}
             modelBounds={modelBounds}
+            cameraPanModifierActive={isSpacePanActive}
           />
         )}
         {batchPreviewItems.length === 0 && enableFridgeMagnet && modelBounds && fridgeMagnets.length > 0 && (
@@ -1252,6 +1477,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
             scaleY={scaleY}
             onSelectMagnet={selectFridgeMagnet}
             onUpdateMagnetCenter={updateFridgeMagnetCenter}
+            cameraPanModifierActive={isSpacePanActive}
           />
         )}
 

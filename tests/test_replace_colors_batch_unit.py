@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 from api.app import create_app
 from api.dependencies import get_file_registry, get_session_store
 from api.file_registry import FileRegistry
+from api.routers.converter import replace as replace_router
 from api.session_store import SessionStore
 from core.gradient_group_analyzer import REGION_ID_ENCODING_MULTIPLIER
 
@@ -28,6 +29,17 @@ from core.gradient_group_analyzer import REGION_ID_ENCODING_MULTIPLIER
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _isolate_batch_cache_tests_from_async_glb(monkeypatch):
+    """Batch endpoint assertions must not leak real GLB worker threads."""
+
+    monkeypatch.setattr(
+        replace_router,
+        "schedule_glb_build",
+        lambda *_args, **_kwargs: "test-glb-token",
+    )
 
 
 def _make_client(
@@ -48,7 +60,11 @@ def _make_client(
     app.dependency_overrides[get_file_registry] = lambda: registry
 
     sid = store.create()
-    cache: dict = {"matched_rgb": matched_rgb.copy()}
+    cache: dict = {
+        "matched_rgb": matched_rgb.copy(),
+        "original_matched_rgb": matched_rgb.copy(),
+        "height_identity_rgb": matched_rgb.copy(),
+    }
     if mask_solid is not None:
         cache["mask_solid"] = mask_solid.copy()
     if quantized_image is not None:
@@ -112,6 +128,47 @@ class TestReplaceColorsBatch:
         updated = store.get(sid)["preview_cache"]["matched_rgb"]
         assert np.all(updated[:2, :] == (0, 0, 255)), "red → blue"
         assert np.all(updated[2:, :] == (255, 255, 0)), "green → yellow"
+        np.testing.assert_array_equal(
+            store.get(sid)["preview_cache"]["height_identity_rgb"],
+            matched,
+        )
+
+    def test_batch_reset_and_replay_never_rekeys_height_identity(
+        self, red_green_canvas: tuple[np.ndarray, np.ndarray, np.ndarray]
+    ) -> None:
+        """Undo-style reset/replay changes display RGB, never height identity."""
+        matched, mask_solid, quantized = red_green_canvas
+        client, sid, store = _make_client(
+            matched, mask_solid=mask_solid, quantized_image=quantized
+        )
+        batch_payload = {
+            "session_id": sid,
+            "replacements": [
+                {"selected_color": "#ff0000", "replacement_color": "#0000ff"},
+                {"selected_color": "#00ff00", "replacement_color": "#ffff00"},
+            ],
+        }
+
+        assert client.post(
+            "/api/convert/replace-colors-batch", json=batch_payload
+        ).status_code == 200
+        np.testing.assert_array_equal(
+            store.get(sid)["preview_cache"]["height_identity_rgb"], matched
+        )
+
+        assert client.post(
+            "/api/convert/reset-replacements", json={"session_id": sid}
+        ).status_code == 200
+        reset_cache = store.get(sid)["preview_cache"]
+        np.testing.assert_array_equal(reset_cache["matched_rgb"], matched)
+        np.testing.assert_array_equal(reset_cache["height_identity_rgb"], matched)
+
+        assert client.post(
+            "/api/convert/replace-colors-batch", json=batch_payload
+        ).status_code == 200
+        replay_cache = store.get(sid)["preview_cache"]
+        assert not np.array_equal(replay_cache["matched_rgb"], matched)
+        np.testing.assert_array_equal(replay_cache["height_identity_rgb"], matched)
 
     def test_batch_appends_all_regions_and_single_history_snapshot(
         self, red_green_canvas: tuple[np.ndarray, np.ndarray, np.ndarray]
@@ -254,6 +311,9 @@ class TestRegionReplaceBatch:
         outside = np.r_[0:10, 40:60, 90:100]
         assert np.all(updated[:, outside] == (255, 0, 0)), (
             "pixels outside any gradient region stay red"
+        )
+        np.testing.assert_array_equal(
+            store.get(sid)["preview_cache"]["height_identity_rgb"], matched
         )
 
     def test_batch_preserves_gradient_region_id_map(
@@ -427,3 +487,6 @@ class TestRegionReplaceBatch:
         updated = store.get(sid)["preview_cache"]["matched_rgb"]
         assert np.all(updated[:, 10:40] == (0, 255, 0)), "region 1 → green"
         assert np.all(updated[:, 60:90] == (0, 255, 0)), "region 2 → green"
+        np.testing.assert_array_equal(
+            store.get(sid)["preview_cache"]["height_identity_rgb"], matched
+        )

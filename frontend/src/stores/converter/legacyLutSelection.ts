@@ -1,18 +1,22 @@
+import { ColorMode } from "../../api/types";
 import type {
   LutDetailsCatalogGroup,
   LutDetailsCatalogItem,
 } from "../../api/types";
 
 export const COLOR_MODE_BUCKETS = [
-  "BW",
-  "4-Color",
+  ColorMode.BW,
+  ColorMode.FOUR_COLOR_CMYW,
+  ColorMode.FOUR_COLOR_RYBW,
   "5-Color Extended",
-  "6-Color",
-  "8-Color",
-  "Merged",
+  "5-Color Extended (1444)",
+  ColorMode.SIX_COLOR,
+  ColorMode.SIX_COLOR_RYBW,
+  ColorMode.EIGHT_COLOR,
+  ColorMode.MERGED,
 ] as const;
 
-export type ColorModeBucket = (typeof COLOR_MODE_BUCKETS)[number];
+export type ColorModeBucket = string;
 
 export interface LutCatalogIndex {
   groups: LutDetailsCatalogGroup[];
@@ -25,6 +29,10 @@ export interface LutCatalogIndex {
   bucketOf: Record<string, ColorModeBucket>;
   manufacturerByPath: Record<string, string>;
   bucketByPath: Record<string, ColorModeBucket>;
+  colorModeByManufacturerAndBucket: Record<
+    string,
+    Record<ColorModeBucket, string>
+  >;
 }
 
 export function normalizeLutPath(path: string): string {
@@ -32,25 +40,29 @@ export function normalizeLutPath(path: string): string {
 }
 
 export function getColorModeBucket(colorMode: string): ColorModeBucket {
-  const normalized = colorMode.toLowerCase();
-  if (normalized.includes("4-color")) return "4-Color";
-  if (normalized.includes("5-color")) return "5-Color Extended";
-  if (normalized.includes("6-color")) return "6-Color";
-  if (normalized.includes("8-color")) return "8-Color";
-  if (normalized.includes("merged")) return "Merged";
-  if (normalized.includes("bw")) return "BW";
-  return "Merged";
+  return colorMode.trim() || "Unknown";
 }
 
-function createEmptyBucketMap(): Record<ColorModeBucket, LutDetailsCatalogItem[]> {
-  const buckets = Object.create(null) as Record<
-    ColorModeBucket,
-    LutDetailsCatalogItem[]
-  >;
-  for (const bucket of COLOR_MODE_BUCKETS) {
-    buckets[bucket] = [];
+export function getCompatibilityBucket(
+  item: LutDetailsCatalogItem,
+): ColorModeBucket {
+  return item.compatibility_key?.trim() || getColorModeBucket(item.color_mode);
+}
+
+function getColorModeSortIndex(bucket: string): number {
+  const exactIndex = COLOR_MODE_BUCKETS.findIndex((candidate) => candidate === bucket);
+  if (exactIndex >= 0) {
+    return exactIndex;
   }
-  return buckets;
+
+  const normalized = bucket.toLowerCase();
+  if (normalized.includes("bw")) return 0;
+  if (normalized.includes("4-color")) return 1;
+  if (normalized.includes("5-color")) return 3;
+  if (normalized.includes("6-color")) return 5;
+  if (normalized.includes("8-color")) return 7;
+  if (normalized.includes("merged")) return 8;
+  return COLOR_MODE_BUCKETS.length;
 }
 
 export function buildLutCatalogIndex(
@@ -66,14 +78,22 @@ export function buildLutCatalogIndex(
   const bucketOf: Record<string, ColorModeBucket> = Object.create(null);
   const manufacturerByPath: Record<string, string> = Object.create(null);
   const bucketByPath: Record<string, ColorModeBucket> = Object.create(null);
+  const colorModeByManufacturerAndBucket: Record<
+    string,
+    Record<ColorModeBucket, string>
+  > = Object.create(null);
 
   for (const group of groups) {
     const manufacturer = group.manufacturer;
     byManufacturer[manufacturer] ??= [];
-    byManufacturerAndBucket[manufacturer] ??= createEmptyBucketMap();
+    byManufacturerAndBucket[manufacturer] ??= Object.create(null);
+    colorModeByManufacturerAndBucket[manufacturer] ??= Object.create(null);
 
     for (const item of group.items ?? []) {
       const bucket = getColorModeBucket(item.color_mode);
+      byManufacturerAndBucket[manufacturer][bucket] ??= [];
+      colorModeByManufacturerAndBucket[manufacturer][bucket] ??=
+        getColorModeBucket(item.color_mode);
       byManufacturer[manufacturer].push(item);
       byManufacturerAndBucket[manufacturer][bucket].push(item);
       manufacturerOf[item.name] = manufacturer;
@@ -91,6 +111,7 @@ export function buildLutCatalogIndex(
     bucketOf,
     manufacturerByPath,
     bucketByPath,
+    colorModeByManufacturerAndBucket,
   };
 }
 
@@ -134,5 +155,31 @@ export function listBucketsForManufacturer(
   if (!buckets) {
     return [];
   }
-  return COLOR_MODE_BUCKETS.filter((bucket) => buckets[bucket].length > 0);
+  const colorModes = index.colorModeByManufacturerAndBucket[manufacturer] ?? {};
+  return Object.keys(buckets)
+    .filter((bucket) => buckets[bucket].length > 0)
+    .sort((left, right) => {
+      const leftMode = colorModes[left] ?? left;
+      const rightMode = colorModes[right] ?? right;
+      const rankDiff =
+        getColorModeSortIndex(leftMode) - getColorModeSortIndex(rightMode);
+      if (rankDiff !== 0) {
+        return rankDiff;
+      }
+      const modeDiff = leftMode.localeCompare(rightMode);
+      if (modeDiff !== 0) {
+        return modeDiff;
+      }
+      return left.localeCompare(right);
+    });
+}
+
+export function getBucketDisplayColorMode(
+  index: LutCatalogIndex,
+  manufacturer: string,
+  bucket: ColorModeBucket,
+): string {
+  return (
+    index.colorModeByManufacturerAndBucket[manufacturer]?.[bucket] ?? bucket
+  );
 }

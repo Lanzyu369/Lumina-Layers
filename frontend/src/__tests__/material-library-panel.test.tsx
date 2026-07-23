@@ -554,6 +554,105 @@ describe("MaterialLibraryPanel", () => {
     expect(screen.queryByText("PLA Basic")).not.toBeInTheDocument();
   });
 
+  it("surfaces duplicate dates and directory in the card and delete confirmation", async () => {
+    vi.mocked(listGradientCardMaterials).mockResolvedValue({
+      status: "ok",
+      message: "Loaded 2 saved materials",
+      materials: [
+        {
+          material_name: "PLA Basic",
+          directory_name: "Brand/PLA Basic_20260709_145858",
+          brand: "Brand",
+          created_at: "2026-07-09T14:58:58Z",
+          updated_at: "2026-07-09T15:30:00Z",
+          material_file_url: "/api/files/material-json-new",
+          stage_a_params_url: "/api/files/stage-a-json-new",
+          estimated_rgb: [100, 120, 140],
+          layer_height_mm: 0.04,
+          mean_delta_e: 1.23,
+          verification_count: 3,
+          verification_history: [
+            {
+              verification_index: 3,
+              captured_at: "2026-07-09T14:59:00Z",
+              mean_delta_e: 1.23,
+              estimated_rgb: [100, 120, 140],
+              estimated_k: [1.1, 1.2, 1.3],
+              e_values: [0.21, 0.31, 0.41],
+              k_values: [1.1, 1.2, 1.3],
+              white_c0_values: [0.91, 0.92, 0.93],
+              black_c0_values: [0.11, 0.12, 0.13],
+            },
+          ],
+        },
+        {
+          material_name: "PLA Basic",
+          directory_name: "Brand/PLA Basic_20260521_161941",
+          brand: "Brand",
+          created_at: "2026-05-21T16:19:41Z",
+          updated_at: "2026-05-21T16:30:00Z",
+          material_file_url: "/api/files/material-json-old",
+          stage_a_params_url: "/api/files/stage-a-json-old",
+          estimated_rgb: [90, 110, 130],
+          layer_height_mm: 0.04,
+          mean_delta_e: 2.34,
+          verification_count: 1,
+          verification_history: [
+            {
+              verification_index: 1,
+              captured_at: "2026-05-21T16:19:50Z",
+              mean_delta_e: 2.34,
+              estimated_rgb: [90, 110, 130],
+              estimated_k: [1.0, 1.1, 1.2],
+              e_values: [0.2, 0.3, 0.4],
+              k_values: [1.0, 1.1, 1.2],
+              white_c0_values: [0.9, 0.91, 0.92],
+              black_c0_values: [0.1, 0.11, 0.12],
+            },
+          ],
+        },
+      ],
+    });
+    vi.mocked(deleteGradientCardMaterial).mockResolvedValue({
+      status: "ok",
+      message: "deleted",
+      directory_name: "Brand/PLA Basic_20260521_161941",
+      material_name: "PLA Basic",
+    });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(<MaterialLibraryPanel />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("material-library-brand-group")).toBeInTheDocument();
+    });
+
+    expandAllMaterialLibraryGroups();
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("material-library-item")).toHaveLength(2);
+    });
+
+    const cards = screen.getAllByTestId("material-library-item");
+    expect(within(cards[0]).getByTestId("material-library-duplicate-badge")).toHaveTextContent(/同名 2 份|2 copies/i);
+    expect(within(cards[0]).getByTestId("material-library-item-meta")).toHaveTextContent("Brand/PLA Basic_20260709_145858");
+    expect(within(cards[0]).getByTestId("material-library-item-meta")).toHaveTextContent(/最近更新|Last updated/i);
+    expect(within(cards[0]).getByTestId("material-library-item-meta")).not.toHaveTextContent(/最近验证|Last verified/i);
+    expect(within(cards[0]).getByTestId("material-library-item-meta")).toHaveTextContent("2026");
+
+    fireEvent.click(within(cards[1]).getByRole("button", { name: /删除耗材|delete material/i }));
+
+    await waitFor(() => {
+      expect(deleteGradientCardMaterial).toHaveBeenCalledWith("Brand/PLA Basic_20260521_161941");
+    });
+    const confirmMessage = String(confirmSpy.mock.calls[0]?.[0] ?? "");
+    expect(confirmMessage).toContain("PLA Basic");
+    expect(confirmMessage).toContain("Brand/PLA Basic_20260521_161941");
+    expect(confirmMessage).toMatch(/最近更新|Last updated/);
+    expect(confirmMessage).not.toMatch(/最近验证|Last verified/);
+    expect(confirmMessage).toContain("2026");
+  });
+
   it("shows the empty state when no materials exist", async () => {
     vi.mocked(listGradientCardMaterials).mockResolvedValue({
       status: "ok",
@@ -578,7 +677,7 @@ describe("MaterialLibraryPanel", () => {
     render(<MaterialLibraryPanel />);
 
     const error = await screen.findByTestId("material-library-error");
-    expect(error).toHaveTextContent("服务器发生内部错误。请使用请求 ID 查看日志。");
+    expect(error).toHaveTextContent("服务器发生内部错误。请稍后重试；如果问题持续，请提交反馈。");
     expect(error).not.toHaveTextContent("Request failed with status code 500");
   });
 
@@ -669,7 +768,7 @@ describe("MaterialLibraryPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: /导出所选耗材|export selected/i }));
 
     const error = await screen.findByTestId("material-library-error");
-    expect(error).toHaveTextContent("服务器发生内部错误。请使用请求 ID 查看日志。");
+    expect(error).toHaveTextContent("服务器发生内部错误。请稍后重试；如果问题持续，请提交反馈。");
     expect(error).not.toHaveTextContent("Request failed with status code 500");
   });
 

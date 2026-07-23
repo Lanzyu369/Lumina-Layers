@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   convertGeneratePuzzle: vi.fn(),
   applyRecipeOverride: vi.fn(),
   getGlbStatus: vi.fn(),
+  showBrowserCompletionNotification: vi.fn(),
 }));
 
 vi.mock("../../api/converter", async () => {
@@ -43,6 +44,11 @@ vi.mock("../../api/lut", async () => {
     fetchLutDetailsCatalog: vi.fn(),
   };
 });
+
+vi.mock("../../utils/browserNotifications", () => ({
+  showBrowserCompletionNotification:
+    mocks.showBrowserCompletionNotification,
+}));
 
 function resetStore(): void {
   useConverterStore.setState({
@@ -184,6 +190,7 @@ function seedLegacyGenerateState(
 
 describe("native bundle converter flow", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     resetStore();
     mocks.convertPreview.mockReset();
     mocks.convertGenerate.mockReset();
@@ -191,6 +198,11 @@ describe("native bundle converter flow", () => {
     mocks.convertGeneratePuzzle.mockReset();
     mocks.applyRecipeOverride.mockReset();
     mocks.getGlbStatus.mockReset();
+    mocks.showBrowserCompletionNotification.mockReset();
+    useSettingsStore.setState({
+      enableCompletionNotifications: false,
+      language: "zh",
+    });
   });
 
   it("resets selected DBs to the brand defaults when the brand changes", () => {
@@ -298,7 +310,7 @@ describe("native bundle converter flow", () => {
     mocks.convertGenerateLargeFormat.mockResolvedValue({
       status: "ok",
       message: "Generated 4 tiles",
-      download_url: "/api/files/lf-zip",
+      download_url: "http://localhost:8000/api/files/lf-zip",
       tile_count: 4,
       grid_cols: 2,
       grid_rows: 2,
@@ -320,6 +332,10 @@ describe("native bundle converter flow", () => {
       model_enable: true,
       model_only: false,
     } as never);
+    useSettingsStore.setState({
+      enableCompletionNotifications: true,
+      language: "en",
+    });
 
     await useConverterStore.getState().submitGenerate();
 
@@ -334,6 +350,10 @@ describe("native bundle converter flow", () => {
     expect(state.largeFormatWarnings).toEqual([
       "Raster fallback was used for this large-format SVG request.",
     ]);
+    expect(mocks.showBrowserCompletionNotification).toHaveBeenCalledWith(
+      "generation",
+      "en",
+    );
   });
 
   it("submitGenerate omits recipe_overrides when local override state is empty", async () => {
@@ -351,11 +371,19 @@ describe("native bundle converter flow", () => {
       sessionId: "session-legacy",
       recipe_overrides: [],
     } as never);
+    useSettingsStore.setState({
+      enableCompletionNotifications: true,
+      language: "zh",
+    });
 
     await useConverterStore.getState().submitGenerate();
 
     const [, params] = mocks.convertGenerate.mock.calls.at(-1)!;
     expect(params.recipe_overrides).toBeUndefined();
+    expect(mocks.showBrowserCompletionNotification).toHaveBeenCalledWith(
+      "generation",
+      "zh",
+    );
   });
 
   it("ignores a stale regular generate response after the session changes", async () => {
@@ -412,6 +440,10 @@ describe("native bundle converter flow", () => {
       preview_3d_url: string;
     }>();
     mocks.convertGenerate.mockReturnValueOnce(stale.promise);
+    useSettingsStore.setState({
+      enableCompletionNotifications: true,
+      language: "en",
+    });
 
     seedLegacyGenerateState("session-old");
     const oldRequest = useConverterStore.getState().submitGenerate();
@@ -440,6 +472,21 @@ describe("native bundle converter flow", () => {
     expect(state.modelUrl).toBeNull();
     expect(state.isGenerating).toBe(false);
     expect(state.error).toBeNull();
+    expect(mocks.showBrowserCompletionNotification).not.toHaveBeenCalled();
+  });
+
+  it("does not notify when regular generation fails", async () => {
+    mocks.convertGenerate.mockRejectedValueOnce(new Error("generation failed"));
+    useSettingsStore.setState({
+      enableCompletionNotifications: true,
+      language: "en",
+    });
+    seedLegacyGenerateState("session-failure");
+
+    await useConverterStore.getState().submitGenerate();
+
+    expect(useConverterStore.getState().error).not.toBeNull();
+    expect(mocks.showBrowserCompletionNotification).not.toHaveBeenCalled();
   });
 
   it("ignores a stale regular generate response from an older request in the same session", async () => {
@@ -793,6 +840,57 @@ describe("native bundle converter flow", () => {
     expect(state.model_margin).toBeNull();
   });
 
+  it.each([
+    ["setLutName", "catalog"],
+    ["setLutName", "async info"],
+    ["setLegacyLutNames", "catalog"],
+    ["setLegacyLutNames", "async info"],
+  ] as const)(
+    "clears vector relief when %s resolves 5-color from %s",
+    async (setterName, source) => {
+      const lutName = `legacy-five-${setterName}-${source}`;
+      const hasCatalogColorMode = source === "catalog";
+      vi.mocked(lutApi.fetchLutInfo).mockResolvedValueOnce({
+        name: lutName,
+        color_mode: ColorMode.FIVE_COLOR_EXT,
+        color_count: 5,
+      } as never);
+      useConverterStore.setState({
+        lutListFull: hasCatalogColorMode
+          ? [
+              {
+                name: lutName,
+                color_mode: ColorMode.FIVE_COLOR_EXT,
+                path: `/${lutName}.npy`,
+                fingerprint: `fp-${lutName}`,
+              },
+            ]
+          : [],
+        lutColorsLutName: lutName,
+        modeling_mode: ModelingMode.VECTOR,
+        structure_mode: StructureMode.SINGLE_SIDED,
+        color_mode: ColorMode.FOUR_COLOR_RYBW,
+      } as never);
+      useConverterStore.getState().setEnableRelief(true);
+
+      if (setterName === "setLutName") {
+        useConverterStore.getState().setLutName(lutName);
+      } else {
+        useConverterStore.getState().setLegacyLutNames([lutName]);
+      }
+      if (!hasCatalogColorMode) {
+        expect(useConverterStore.getState().enable_relief).toBe(true);
+        await Promise.resolve();
+        await Promise.resolve();
+      }
+
+      expect(useConverterStore.getState().color_mode).toBe(
+        ColorMode.FIVE_COLOR_EXT,
+      );
+      expect(useConverterStore.getState().enable_relief).toBe(false);
+    },
+  );
+
   it("normalizes legacy 8-Color LUT info before storing state and sending requests", async () => {
     vi.mocked(lutApi.fetchLutInfo).mockResolvedValueOnce({
       name: "legacy-eight",
@@ -861,6 +959,379 @@ describe("native bundle converter flow", () => {
     await useConverterStore.getState().submitGenerate();
     const generateParams = mocks.convertGenerate.mock.calls[0][1];
     expect(generateParams.color_mode).toBe(ColorMode.EIGHT_COLOR);
+  });
+
+  it("keeps legacy multi-select names across color-mode buckets", () => {
+    vi.mocked(lutApi.fetchLutInfo).mockResolvedValueOnce({
+      name: "legacy-rybw",
+      color_mode: ColorMode.FOUR_COLOR_RYBW,
+      color_count: 4,
+    } as never);
+
+    useConverterStore.setState({
+      legacyCatalogGroups: [
+        {
+          manufacturer: "Brand A",
+          items: [
+            {
+              name: "A RYBW",
+              path: "/legacy-rybw.npy",
+              fingerprint: "fp-rybw",
+              color_mode: ColorMode.FOUR_COLOR_RYBW,
+              compatibility_key: "sig-rybw",
+              source_kind: "legacy_lookup",
+              manufacturer: "Brand A",
+              material_type: "",
+              manufacturer_source: "metadata",
+              material_source: "metadata",
+              search_tokens: ["rybw"],
+            },
+            {
+              name: "A RYBW Alt",
+              path: "/legacy-rybw-alt.npy",
+              fingerprint: "fp-rybw-alt",
+              color_mode: ColorMode.FOUR_COLOR_RYBW,
+              compatibility_key: "sig-rybw",
+              source_kind: "legacy_lookup",
+              manufacturer: "Brand A",
+              material_type: "",
+              manufacturer_source: "metadata",
+              material_source: "metadata",
+              search_tokens: ["rybw", "alt"],
+            },
+            {
+              name: "A 8C",
+              path: "/legacy-eight.npy",
+              fingerprint: "fp-eight",
+              color_mode: ColorMode.EIGHT_COLOR,
+              compatibility_key: "sig-eight",
+              source_kind: "legacy_lookup",
+              manufacturer: "Brand A",
+              material_type: "",
+              manufacturer_source: "metadata",
+              material_source: "metadata",
+              search_tokens: ["eight"],
+            },
+          ],
+        },
+      ],
+      lutListFull: [
+        {
+          name: "legacy-rybw",
+          color_mode: ColorMode.FOUR_COLOR_RYBW,
+          path: "/legacy-rybw.npy",
+          fingerprint: "fp-rybw",
+        },
+        {
+          name: "legacy-eight",
+          color_mode: ColorMode.EIGHT_COLOR,
+          path: "/legacy-eight.npy",
+          fingerprint: "fp-eight",
+        },
+        {
+          name: "legacy-rybw-alt",
+          color_mode: ColorMode.FOUR_COLOR_RYBW,
+          path: "/legacy-rybw-alt.npy",
+          fingerprint: "fp-rybw-alt",
+        },
+      ],
+    } as never);
+
+    useConverterStore.getState().setLegacyLutNames([
+      "legacy-rybw",
+      "legacy-eight",
+      "legacy-rybw-alt",
+    ]);
+
+    const state = useConverterStore.getState();
+    expect(state.lut_name).toBe("legacy-rybw");
+    expect(state.lut_names).toEqual([
+      "legacy-rybw",
+      "legacy-eight",
+      "legacy-rybw-alt",
+    ]);
+    expect(state.selectedLegacyManufacturer).toBe("Brand A");
+  });
+
+  it("keeps same-color-mode legacy names when compatibility keys differ", () => {
+    vi.mocked(lutApi.fetchLutInfo).mockResolvedValueOnce({
+      name: "legacy-a",
+      color_mode: ColorMode.FOUR_COLOR_RYBW,
+      color_count: 4,
+    } as never);
+
+    useConverterStore.setState({
+      legacyCatalogGroups: [
+        {
+          manufacturer: "Brand A",
+          items: [
+            {
+              name: "A RYBW",
+              path: "/legacy-a.npy",
+              fingerprint: "fp-a",
+              color_mode: ColorMode.FOUR_COLOR_RYBW,
+              compatibility_key: "sig-a",
+              source_kind: "legacy_lookup",
+              manufacturer: "Brand A",
+              material_type: "",
+              manufacturer_source: "metadata",
+              material_source: "metadata",
+              search_tokens: ["a"],
+            },
+            {
+              name: "B RYBW",
+              path: "/legacy-b.npy",
+              fingerprint: "fp-b",
+              color_mode: ColorMode.FOUR_COLOR_RYBW,
+              compatibility_key: "sig-b",
+              source_kind: "legacy_lookup",
+              manufacturer: "Brand A",
+              material_type: "",
+              manufacturer_source: "metadata",
+              material_source: "metadata",
+              search_tokens: ["b"],
+            },
+          ],
+        },
+      ],
+      lutListFull: [
+        {
+          name: "legacy-a",
+          color_mode: ColorMode.FOUR_COLOR_RYBW,
+          path: "/legacy-a.npy",
+          fingerprint: "fp-a",
+        },
+        {
+          name: "legacy-b",
+          color_mode: ColorMode.FOUR_COLOR_RYBW,
+          path: "/legacy-b.npy",
+          fingerprint: "fp-b",
+        },
+      ],
+    } as never);
+
+    useConverterStore.getState().setLegacyLutNames(["legacy-a", "legacy-b"]);
+
+    expect(useConverterStore.getState().lut_names).toEqual(["legacy-a", "legacy-b"]);
+  });
+
+  it("keeps legacy multi-select names when LUT list loads after details catalog", async () => {
+    vi.mocked(lutApi.fetchLutInfo).mockResolvedValue({
+      name: "legacy-a",
+      color_mode: ColorMode.FOUR_COLOR_RYBW,
+      color_count: 4,
+    } as never);
+    vi.mocked(lutApi.fetchLutDetailsCatalog).mockResolvedValueOnce({
+      groups: [
+        {
+          manufacturer: "Brand A",
+          items: [
+            {
+              name: "Display A",
+              path: "/legacy-a.npy",
+              fingerprint: "fp-a",
+              color_mode: ColorMode.FOUR_COLOR_RYBW,
+              compatibility_key: "sig-a",
+              source_kind: "legacy_lookup",
+              manufacturer: "Brand A",
+              material_type: "",
+              manufacturer_source: "metadata",
+              material_source: "metadata",
+              search_tokens: ["a"],
+            },
+            {
+              name: "Display B",
+              path: "/legacy-b.npy",
+              fingerprint: "fp-b",
+              color_mode: ColorMode.FOUR_COLOR_RYBW,
+              compatibility_key: "sig-b",
+              source_kind: "legacy_lookup",
+              manufacturer: "Brand A",
+              material_type: "",
+              manufacturer_source: "metadata",
+              material_source: "metadata",
+              search_tokens: ["b"],
+            },
+          ],
+        },
+      ],
+    });
+    vi.mocked(lutApi.fetchLutCatalog).mockResolvedValueOnce({
+      legacy_groups: [
+        {
+          group_name: "Legacy",
+          items: [
+            { name: "legacy-a", color_mode: ColorMode.FOUR_COLOR_RYBW, path: "/legacy-a.npy", fingerprint: "fp-a" },
+            { name: "legacy-b", color_mode: ColorMode.FOUR_COLOR_RYBW, path: "/legacy-b.npy", fingerprint: "fp-b" },
+          ],
+        },
+      ],
+      native_brand_groups: [],
+    });
+
+    useConverterStore.setState({
+      source_version: "legacy",
+      lut_name: "legacy-a",
+      lut_names: ["legacy-a", "legacy-b"],
+      lutListFull: [],
+      legacyCatalogGroups: [],
+    } as never);
+
+    await useConverterStore.getState().fetchLegacyCatalog();
+    expect(useConverterStore.getState().lut_names).toEqual(["legacy-a", "legacy-b"]);
+
+    await useConverterStore.getState().fetchLutCatalog();
+
+    expect(useConverterStore.getState().lut_names).toEqual(["legacy-a", "legacy-b"]);
+  });
+
+  it("submitPreview sends legacy_multi names across compatibility keys", async () => {
+    mocks.convertPreview.mockResolvedValueOnce({
+      session_id: "session-legacy",
+      status: "ok",
+      message: "Preview generated",
+      preview_url: "/api/files/legacy-preview",
+      preview_glb_url: null,
+      palette: [],
+      dimensions: { width: 200, height: 160 },
+    });
+
+    useConverterStore.setState({
+      imageFile: new File(["png"], "legacy.png", { type: "image/png" }),
+      source_version: "legacy",
+      lut_name: "legacy-a",
+      lut_names: ["legacy-a", "legacy-b"],
+      target_width_mm: 90,
+      color_mode: ColorMode.FOUR_COLOR_RYBW,
+      modeling_mode: ModelingMode.HIGH_FIDELITY,
+      quantize_colors: 48,
+      enable_cleanup: true,
+      hue_enable: false,
+      legacyCatalogGroups: [
+        {
+          manufacturer: "Brand A",
+          items: [
+            {
+              name: "Display A",
+              path: "/legacy-a.npy",
+              fingerprint: "fp-a",
+              color_mode: ColorMode.FOUR_COLOR_RYBW,
+              compatibility_key: "sig-a",
+              source_kind: "legacy_lookup",
+              manufacturer: "Brand A",
+              material_type: "",
+              manufacturer_source: "metadata",
+              material_source: "metadata",
+              search_tokens: ["a"],
+            },
+            {
+              name: "Display B",
+              path: "/legacy-b.npy",
+              fingerprint: "fp-b",
+              color_mode: ColorMode.FOUR_COLOR_RYBW,
+              compatibility_key: "sig-b",
+              source_kind: "legacy_lookup",
+              manufacturer: "Brand A",
+              material_type: "",
+              manufacturer_source: "metadata",
+              material_source: "metadata",
+              search_tokens: ["b"],
+            },
+          ],
+        },
+      ],
+      lutListFull: [
+        {
+          name: "legacy-a",
+          color_mode: ColorMode.FOUR_COLOR_RYBW,
+          path: "/legacy-a.npy",
+          fingerprint: "fp-a",
+        },
+        {
+          name: "legacy-b",
+          color_mode: ColorMode.FOUR_COLOR_RYBW,
+          path: "/legacy-b.npy",
+          fingerprint: "fp-b",
+        },
+      ],
+    } as never);
+
+    await useConverterStore.getState().submitPreview();
+
+    const [, params] = mocks.convertPreview.mock.calls[0];
+    expect(params).toMatchObject({
+      source_kind: "legacy_multi",
+      lut_name: "legacy-a",
+      lut_names: ["legacy-a", "legacy-b"],
+    });
+  });
+
+  it("submitPreview keeps legacy_multi names even before catalog compatibility resolves", async () => {
+    mocks.convertPreview.mockResolvedValueOnce({
+      session_id: "session-legacy",
+      status: "ok",
+      message: "Preview generated",
+      preview_url: "/api/files/legacy-preview",
+      preview_glb_url: null,
+      palette: [],
+      dimensions: { width: 200, height: 160 },
+    });
+
+    useConverterStore.setState({
+      imageFile: new File(["png"], "legacy.png", { type: "image/png" }),
+      source_version: "legacy",
+      lut_name: "legacy-a",
+      lut_names: ["legacy-a", "legacy-b"],
+      target_width_mm: 90,
+      color_mode: ColorMode.FOUR_COLOR_RYBW,
+      modeling_mode: ModelingMode.HIGH_FIDELITY,
+      quantize_colors: 48,
+      enable_cleanup: true,
+      hue_enable: false,
+      legacyCatalogGroups: [
+        {
+          manufacturer: "Brand A",
+          items: [
+            {
+              name: "Display A",
+              path: "/legacy-a.npy",
+              fingerprint: "fp-a",
+              color_mode: ColorMode.FOUR_COLOR_RYBW,
+              compatibility_key: "sig-a",
+              source_kind: "legacy_lookup",
+              manufacturer: "Brand A",
+              material_type: "",
+              manufacturer_source: "metadata",
+              material_source: "metadata",
+              search_tokens: ["a"],
+            },
+            {
+              name: "Display B",
+              path: "/legacy-b.npy",
+              fingerprint: "fp-b",
+              color_mode: ColorMode.FOUR_COLOR_RYBW,
+              compatibility_key: "sig-b",
+              source_kind: "legacy_lookup",
+              manufacturer: "Brand A",
+              material_type: "",
+              manufacturer_source: "metadata",
+              material_source: "metadata",
+              search_tokens: ["b"],
+            },
+          ],
+        },
+      ],
+      lutListFull: [],
+    } as never);
+
+    await useConverterStore.getState().submitPreview();
+
+    const [, params] = mocks.convertPreview.mock.calls[0];
+    expect(params).toMatchObject({
+      source_kind: "legacy_multi",
+      lut_name: "legacy-a",
+      lut_names: ["legacy-a", "legacy-b"],
+    });
   });
 
   it("hydrates the legacy LUT list from the catalog response", async () => {
@@ -1037,6 +1508,10 @@ describe("native bundle converter flow", () => {
     useConverterStore.getState().setModelEnable(true);
     useConverterStore.getState().setModelThreshold(6.5);
     useConverterStore.getState().setModelMargin(0.9);
+    useSettingsStore.setState({
+      enableCompletionNotifications: true,
+      language: "en",
+    });
 
     await useConverterStore.getState().submitPreview();
 
@@ -1058,6 +1533,10 @@ describe("native bundle converter flow", () => {
     });
     expect(params).not.toHaveProperty("lut_name");
     expect(useConverterStore.getState().sessionId).toBe("session-native");
+    expect(mocks.showBrowserCompletionNotification).toHaveBeenCalledWith(
+      "preview",
+      "en",
+    );
   });
 
   it("replays global color replacements when material preview is refreshed", async () => {
@@ -1230,8 +1709,8 @@ describe("native bundle converter flow", () => {
     mocks.convertGenerate.mockResolvedValueOnce({
       status: "ok",
       message: "Model generated",
-      download_url: "/api/files/native-model",
-      preview_3d_url: "/api/files/native-model.glb",
+      download_url: "http://localhost:8000/api/files/native-model",
+      preview_3d_url: "http://localhost:8000/api/files/native-model.glb",
     });
 
     useConverterStore.setState({
@@ -1289,13 +1768,15 @@ describe("native bundle converter flow", () => {
     });
     expect(params).not.toHaveProperty("lut_name");
     expect(result).toBe("/api/files/native-model.glb");
+    expect(useConverterStore.getState().downloadUrl).toBe("/api/files/native-model");
+    expect(mocks.showBrowserCompletionNotification).not.toHaveBeenCalled();
   });
 
   it("submitGenerate uses the puzzle endpoint when puzzle mode is enabled", async () => {
     mocks.convertGeneratePuzzle.mockResolvedValueOnce({
       status: "ok",
       message: "Generated puzzle",
-      download_url: "/api/files/puzzle-model",
+      download_url: "http://localhost:8000/api/files/puzzle-model",
       threemf_disk_path: "E:/tmp/puzzle.3mf",
       piece_count: 6,
       grid_cols: 3,
@@ -1346,6 +1827,8 @@ describe("native bundle converter flow", () => {
     } as never);
     useSettingsStore.setState({
       deviceProfileId: "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
+      enableCompletionNotifications: true,
+      language: "zh",
     } as never);
 
     const result = await useConverterStore.getState().submitGenerate();
@@ -1368,6 +1851,10 @@ describe("native bundle converter flow", () => {
     });
     expect(result).toBeNull();
     expect(useConverterStore.getState().downloadUrl).toBe("/api/files/puzzle-model");
+    expect(mocks.showBrowserCompletionNotification).toHaveBeenCalledWith(
+      "generation",
+      "zh",
+    );
   });
 
   it("submitGenerate forwards fridge magnet fields to the backend payload", async () => {

@@ -23,6 +23,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import numpy as np
+import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
@@ -561,7 +562,7 @@ class TestBatchWorkerPoolSubmit:
             patch(
                 "api.routers.converter.generate.ensure_png_tempfile",
                 new_callable=AsyncMock,
-                return_value="/tmp/uploaded.png",
+                return_value="/tmp/uploaded.svg",
             ),
             patch(
                 "utils.merged_bambu_3mf_writer.MergedBambu3MFWriter.write",
@@ -570,14 +571,14 @@ class TestBatchWorkerPoolSubmit:
         ):
             response = client.post(
                 "/api/convert/batch",
-                files=[("images", _make_test_image_buf("test.png"))],
+                files=[("images", _make_test_image_buf("test.svg"))],
                 data={
                     "lut_name": "test_lut",
                     "target_width_mm": "80.0",
                     "spacer_thick": "1.4",
                     "structure_mode": "Single-sided",
                     "color_mode": "8-Color Max",
-                    "modeling_mode": "high-fidelity",
+                    "modeling_mode": "vector",
                     "color_layers": "10",
                     "layer_height_mm": "0.08",
                     "quantize_colors": "64",
@@ -610,13 +611,13 @@ class TestBatchWorkerPoolSubmit:
         assert call_args[0][0] is worker_batch_convert_item
 
         # Verify file path and lut_path are passed as scalars
-        assert call_args[0][1] == "/tmp/uploaded.png"  # image_path
+        assert call_args[0][1] == "/tmp/uploaded.svg"  # image_path
         assert call_args[0][2] == "/tmp/fake.npy"  # lut_path
         assert call_args[0][3] == 80.0  # target_width_mm
         assert call_args[0][4] == 1.4
         assert call_args[0][5] == "Single-sided"
         assert call_args[0][6] == "8-Color Max"
-        assert call_args[0][7] == "high-fidelity"
+        assert call_args[0][7] == "vector"
         assert call_args[0][8] == 10
         assert call_args[0][9] == 0.08
         assert call_args[0][10] == 64
@@ -862,6 +863,65 @@ class TestBatchWorkerPoolSubmit:
         assert response.status_code == 422
         assert "color_height_map" in response.json()["detail"]
         assert _mock_pool.submit.call_count == 0
+
+    @pytest.mark.parametrize(
+        ("structure_mode", "color_mode"),
+        [
+            ("Double-sided", "4-Color (RYBW)"),
+            ("Single-sided", "5-Color Extended"),
+        ],
+    )
+    def test_batch_rejects_unsupported_native_vector_relief(
+        self,
+        structure_mode,
+        color_mode,
+    ) -> None:
+        _mock_pool.submit = AsyncMock()
+
+        with patch(
+            "api.routers.converter.generate.LUTManager.get_lut_path",
+            return_value="/tmp/fake.npy",
+        ):
+            response = client.post(
+                "/api/convert/batch",
+                files=[("images", _make_test_image_buf("test.svg"))],
+                data={
+                    "lut_name": "test_lut",
+                    "modeling_mode": "vector",
+                    "structure_mode": structure_mode,
+                    "color_mode": color_mode,
+                    "enable_relief": "true",
+                    "height_mode": "color",
+                    "color_height_map": json.dumps({"#ff0000": 2.0}),
+                },
+            )
+
+        assert response.status_code == 422
+        assert "Native SVG relief supports only" in response.json()["detail"]
+        _mock_pool.submit.assert_not_called()
+
+    def test_batch_rejects_heightmap_relief_before_worker(self) -> None:
+        """Batch keeps its existing color-relief-only contract for SVGs."""
+        _mock_pool.submit = AsyncMock()
+
+        with patch(
+            "api.routers.converter.generate.LUTManager.get_lut_path",
+            return_value="/tmp/fake.npy",
+        ):
+            response = client.post(
+                "/api/convert/batch",
+                files=[("images", _make_test_image_buf("test.svg"))],
+                data={
+                    "lut_name": "test_lut",
+                    "modeling_mode": "vector",
+                    "enable_relief": "true",
+                    "height_mode": "heightmap",
+                },
+            )
+
+        assert response.status_code == 422
+        assert "not supported" in response.json()["detail"].lower()
+        _mock_pool.submit.assert_not_called()
 
 
 class TestBatchCleanup:

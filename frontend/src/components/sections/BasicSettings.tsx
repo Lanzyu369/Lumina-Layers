@@ -39,8 +39,10 @@ import {
   type RecipeFileSource,
 } from "../../recipe/importRecipe";
 import { StatusBanner, workstationInputClass } from "../ui/panelPrimitives";
+import { isSvgImageFile, type ImageRotationDegrees } from "../../utils/imageRotation";
 import {
   buildLutCatalogIndex,
+  getBucketDisplayColorMode,
   listBucketsForManufacturer,
   normalizeLutPath,
   type ColorModeBucket,
@@ -105,6 +107,57 @@ function isInsideModelSurfaceDropZone(target: EventTarget | null): boolean {
   return target instanceof Element && Boolean(target.closest("[data-model-surface-drop-zone='true']"));
 }
 
+const LARGE_FORMAT_PREVIEW_FALLBACK_PREFIX =
+  "Native vector large-format is unavailable for this SVG; large-format generation will fall back to raster tiling.";
+const LARGE_FORMAT_GENERATE_FALLBACK_WARNING =
+  "Raster fallback was used for this large-format SVG request.";
+const LARGE_FORMAT_NATIVE_FAILURE_WARNING =
+  "Native vector generation failed; raster fallback was used for this large-format SVG request.";
+const LARGE_FORMAT_DENSITY_REDUCED_WARNING =
+  "Raster fallback density was reduced to keep SVG large-format generation within the pixel budget.";
+
+function localizeLargeFormatWarning(
+  warning: string,
+  t: (key: string) => string,
+): string {
+  if (warning.startsWith(LARGE_FORMAT_PREVIEW_FALLBACK_PREFIX)) {
+    const unsupportedFeatures = warning.match(/Unsupported features:\s*(.+?)\.?$/i)?.[1];
+    if (unsupportedFeatures) {
+      return t("large_format_warning_unsupported_features").replace(
+        "{features}",
+        unsupportedFeatures,
+      );
+    }
+    return t("large_format_warning_native_unavailable");
+  }
+  if (warning === LARGE_FORMAT_GENERATE_FALLBACK_WARNING) {
+    return t("large_format_warning_raster_fallback");
+  }
+  if (warning === LARGE_FORMAT_NATIVE_FAILURE_WARNING) {
+    return t("large_format_warning_native_failure");
+  }
+  if (warning === LARGE_FORMAT_DENSITY_REDUCED_WARNING) {
+    return t("large_format_warning_density_reduced");
+  }
+  return warning;
+}
+
+function snapThicknessToLayerGrid(value: number): number {
+  const clamped = Math.min(
+    THICKNESS_SLIDER_MAX_MM,
+    Math.max(THICKNESS_SLIDER_MIN_MM, value),
+  );
+  const scaledLayerCount = clamped / THICKNESS_LAYER_STEP_MM;
+  const lowerLayerCount = Math.floor(scaledLayerCount);
+  // Match Python round() in the generation pipeline: exact half layers tie to even.
+  // 与生成管线的 Python round() 保持一致：正好半层时取最近的偶数层。
+  const isHalfLayer = scaledLayerCount - lowerLayerCount === 0.5;
+  const layerCount = isHalfLayer
+    ? lowerLayerCount + (lowerLayerCount % 2)
+    : Math.round(scaledLayerCount);
+  return Number((layerCount * THICKNESS_LAYER_STEP_MM).toFixed(2));
+}
+
 function hasApiErrorResponse(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && "response" in error);
 }
@@ -136,14 +189,31 @@ function resolveRecipeImportError(
   }
   return t("recipe_import_error_unreadable");
 }
-const LEGACY_BUCKET_I18N_KEY: Record<ColorModeBucket, string> = {
-  BW: "basic_lut_color_mode_bw",
+const IMAGE_ROTATION_OPTIONS: { label: string; value: string }[] = [
+  { label: "90°", value: "90" },
+  { label: "180°", value: "180" },
+  { label: "270°", value: "270" },
+];
+
+const LEGACY_BUCKET_I18N_KEY: Partial<Record<ColorModeBucket, string>> = {
+  [ColorMode.BW]: "basic_lut_color_mode_bw",
+  [ColorMode.FOUR_COLOR_CMYW]: "basic_lut_color_mode_4color_cmyw",
+  [ColorMode.FOUR_COLOR_RYBW]: "basic_lut_color_mode_4color_rybw",
+  [ColorMode.FIVE_COLOR_EXT]: "basic_lut_color_mode_5color_ext",
+  "5-Color Extended (1444)": "basic_lut_color_mode_5color_ext_1444",
+  [ColorMode.SIX_COLOR]: "basic_lut_color_mode_6color_cmywgk",
+  [ColorMode.SIX_COLOR_RYBW]: "basic_lut_color_mode_6color_rybwgk",
+  [ColorMode.EIGHT_COLOR]: "basic_lut_color_mode_8color_max",
+  [ColorMode.MERGED]: "basic_lut_color_mode_merged",
   "4-Color": "basic_lut_color_mode_4color",
-  "5-Color Extended": "basic_lut_color_mode_5color_ext",
   "6-Color": "basic_lut_color_mode_6color",
   "8-Color": "basic_lut_color_mode_8color",
-  Merged: "basic_lut_color_mode_merged",
 };
+
+function legacyBucketLabel(bucket: ColorModeBucket, t: (key: string) => string): string {
+  const key = LEGACY_BUCKET_I18N_KEY[bucket];
+  return key ? t(key) : bucket;
+}
 
 function ColorModeDots({ mode }: { mode: string }) {
   if (mode === ColorMode.MERGED) {
@@ -194,6 +264,7 @@ export default function BasicSettings() {
     imagePreviewUrl,
     source_version,
     lut_name,
+    lut_names,
     lutListFull,
     lutListLoading,
     legacyCatalogGroups,
@@ -220,6 +291,7 @@ export default function BasicSettings() {
     isCropping,
     batchMode,
     batchFiles,
+    isLoading,
     largeFormatEnabled,
     enable_fridge_magnet,
     puzzleEnabled,
@@ -256,6 +328,7 @@ export default function BasicSettings() {
     setNativeSupportedMode,
     setNativeDbNames,
     setLegacyManufacturer,
+    setLegacyLutNames,
     fetchLutList,
     fetchLegacyCatalog,
   } = useConverterStore(useShallow((s) => ({
@@ -263,6 +336,7 @@ export default function BasicSettings() {
     imagePreviewUrl: s.imagePreviewUrl,
     source_version: s.source_version,
     lut_name: s.lut_name,
+    lut_names: s.lut_names,
     lutListFull: s.lutListFull,
     lutListLoading: s.lutListLoading,
     legacyCatalogGroups: s.legacyCatalogGroups,
@@ -289,6 +363,7 @@ export default function BasicSettings() {
     isCropping: s.isCropping,
     batchMode: s.batchMode,
     batchFiles: s.batchFiles,
+    isLoading: s.isLoading,
     largeFormatEnabled: s.largeFormatEnabled,
     enable_fridge_magnet: s.enable_fridge_magnet,
     puzzleEnabled: s.puzzleEnabled,
@@ -325,6 +400,7 @@ export default function BasicSettings() {
     setNativeSupportedMode: s.setNativeSupportedMode,
     setNativeDbNames: s.setNativeDbNames,
     setLegacyManufacturer: s.setLegacyManufacturer,
+    setLegacyLutNames: s.setLegacyLutNames,
     fetchLutList: s.fetchLutList,
     fetchLegacyCatalog: s.fetchLegacyCatalog,
   })));
@@ -334,6 +410,7 @@ export default function BasicSettings() {
       resolveConverterSourceSelection({
         source_version,
         lut_name,
+        lut_names,
         nativeBrandGroups,
         selectedNativeBrandKey,
         selectedNativeDbNames,
@@ -342,10 +419,13 @@ export default function BasicSettings() {
         selectedMaterialDirNames,
         materialLayerCount,
         materialLayerHeightMm,
+        lutListFull,
+        legacyCatalogGroups,
       }),
     [
       source_version,
       lut_name,
+      lut_names,
       nativeBrandGroups,
       selectedNativeBrandKey,
       selectedNativeDbNames,
@@ -354,6 +434,8 @@ export default function BasicSettings() {
       selectedMaterialDirNames,
       materialLayerCount,
       materialLayerHeightMm,
+      lutListFull,
+      legacyCatalogGroups,
     ],
   );
 
@@ -434,6 +516,10 @@ export default function BasicSettings() {
   const setModelSurfaceEnabled = useConverterStore((s) => s.setModelSurfaceEnabled);
   const uploadModelSurfaceFile = useConverterStore((s) => s.uploadModelSurfaceFile);
   const clearModelSurface = useConverterStore((s) => s.clearModelSurface);
+  const rotateImageForExport = useConverterStore((s) => s.rotateImageForExport);
+  const [selectedImageRotation, setSelectedImageRotation] = useState<ImageRotationDegrees>(90);
+  const isVectorModelingAvailable = isSvgImageFile(imageFile);
+  const disabledModelingModes = isVectorModelingAvailable ? [] : [ModelingMode.VECTOR];
 
   const handleFileReplace = useCallback(
     (file: File) => {
@@ -676,72 +762,138 @@ export default function BasicSettings() {
     if (!selectedLegacyManufacturer) {
       return [];
     }
-    return listBucketsForManufacturer(lutIndex, selectedLegacyManufacturer)
-      .map((bucket) => ({
-        label: t(LEGACY_BUCKET_I18N_KEY[bucket]),
-        options:
-          lutIndex.byManufacturerAndBucket[selectedLegacyManufacturer]?.[
-            bucket
-          ]?.map((item) => {
-            const legacyName = lutNameByPath.get(normalizeLutPath(item.path));
-            if (!legacyName) {
-              return null;
-            }
-            return {
-              label: item.name,
-              value: legacyName,
-            };
-          }).filter((option) => option !== null) ?? [],
-      }))
+    const buckets = listBucketsForManufacturer(lutIndex, selectedLegacyManufacturer);
+    const bucketModes = new Map(
+      buckets.map((bucket) => [
+        bucket,
+        getBucketDisplayColorMode(lutIndex, selectedLegacyManufacturer, bucket),
+      ]),
+    );
+    const visibleGroups = buckets
+      .map((bucket) => {
+        const displayMode = bucketModes.get(bucket) ?? bucket;
+        const baseLabel = legacyBucketLabel(displayMode, t);
+        return {
+          displayMode,
+          baseLabel,
+          options:
+            lutIndex.byManufacturerAndBucket[selectedLegacyManufacturer]?.[
+              bucket
+            ]?.map((item) => {
+              const legacyName = lutNameByPath.get(normalizeLutPath(item.path));
+              if (!legacyName) {
+                return null;
+              }
+              return {
+                label: item.name,
+                value: legacyName,
+              };
+            }).filter((option) => option !== null) ?? [],
+        };
+      })
       .filter((group) => group.options.length > 0);
+    const modeCounts = new Map<string, number>();
+    for (const group of visibleGroups) {
+      modeCounts.set(group.displayMode, (modeCounts.get(group.displayMode) ?? 0) + 1);
+    }
+    const modePositions = new Map<string, number>();
+    return visibleGroups.map((group) => {
+      const position = (modePositions.get(group.displayMode) ?? 0) + 1;
+      modePositions.set(group.displayMode, position);
+      return {
+        label:
+          (modeCounts.get(group.displayMode) ?? 0) > 1
+            ? `${group.baseLabel} #${position}`
+            : group.baseLabel,
+        options: group.options,
+      };
+    });
   }, [lutIndex, selectedLegacyManufacturer, t, lutNameByPath]);
+  const selectedLegacyBrandInfo = useMemo(() => {
+    if (!selectedLegacyManufacturer) {
+      return null;
+    }
+    const group = legacyCatalogGroups.find(
+      (candidate) => candidate.manufacturer === selectedLegacyManufacturer,
+    );
+    const materialTypes = Array.from(
+      new Set(
+        (group?.items ?? [])
+          .map((item) => item.material_type.trim())
+          .filter(Boolean),
+      ),
+    ).sort((a, b) => a.localeCompare(b));
+    return {
+      displayName:
+        selectedLegacyManufacturer === "Unlabeled"
+          ? t("basic_lut_unlabeled_brand")
+          : selectedLegacyManufacturer,
+      materialTypes,
+      vendor:
+        selectedLegacyManufacturer === "Unlabeled"
+          ? t("basic_lut_unlabeled_brand")
+          : selectedLegacyManufacturer,
+    };
+  }, [legacyCatalogGroups, selectedLegacyManufacturer, t]);
 
   // --- Material library for material-archive mode ---
   const [materialLibrary, setMaterialLibrary] = useState<SavedMaterialLibraryItem[]>([]);
   const [materialLibraryLoading, setMaterialLibraryLoading] = useState(false);
+  const [materialLibraryLoaded, setMaterialLibraryLoaded] = useState(false);
   useEffect(() => {
-    if (source_version !== "material") return;
+    if (source_version !== "material") {
+      setMaterialLibraryLoaded(false);
+      return;
+    }
     let cancelled = false;
     setMaterialLibraryLoading(true);
+    setMaterialLibraryLoaded(false);
     listGradientCardMaterials()
       .then((res) => {
         if (cancelled) return;
         const materials = res.materials ?? [];
         setMaterialLibrary(materials);
-        // One-shot migration: legacy selections (flat directory_names stored
-        // in localStorage before the brand-subdirectory feature) are remapped
-        // to the current nested directory_name so cache/status/build calls
-        // don't 404. Unresolvable entries are dropped.
-        // 一次性迁移：把 localStorage 里的旧扁平 directory_name 映射到新的
-        // 嵌套名，避免求解器缓存接口 404。
-        const { names: reconciled, changed } = reconcileDirectoryNames(
-          selectedMaterialDirNames,
-          materials,
-        );
-        if (changed) {
-          setSelectedMaterialDirNames(reconciled);
-        }
-        if (materialBackingMaterialDirName) {
-          const backing = reconcileDirectoryNames(
-            [materialBackingMaterialDirName],
-            materials,
-          );
-          if (backing.changed) {
-            setMaterialBackingMaterialDirName(backing.names[0] ?? null);
-          }
-        }
+        setMaterialLibraryLoaded(true);
       })
       .catch(() => {
-        if (!cancelled) setMaterialLibrary([]);
+        if (!cancelled) {
+          setMaterialLibrary([]);
+          setMaterialLibraryLoaded(false);
+        }
       })
       .finally(() => {
         if (!cancelled) setMaterialLibraryLoading(false);
       });
     return () => { cancelled = true; };
-    // selectedMaterialDirNames intentionally omitted: the migration must run
-    // after the fresh library arrives, not on every selection change.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source_version]);
+
+  useEffect(() => {
+    if (source_version !== "material" || !materialLibraryLoaded) return;
+    const { names: reconciled, changed } = reconcileDirectoryNames(
+      selectedMaterialDirNames,
+      materialLibrary,
+    );
+    if (changed) {
+      setSelectedMaterialDirNames(reconciled);
+    }
+    if (materialBackingMaterialDirName) {
+      const backing = reconcileDirectoryNames(
+        [materialBackingMaterialDirName],
+        materialLibrary,
+      );
+      if (backing.changed) {
+        setMaterialBackingMaterialDirName(backing.names[0] ?? null);
+      }
+    }
+  }, [
+    materialBackingMaterialDirName,
+    materialLibrary,
+    materialLibraryLoaded,
+    selectedMaterialDirNames,
+    setMaterialBackingMaterialDirName,
+    setSelectedMaterialDirNames,
+    source_version,
+  ]);
 
   const [materialPickerOpen, setMaterialPickerOpen] = useState(false);
   const handleMaterialPickerConfirm = useCallback(
@@ -905,6 +1057,10 @@ export default function BasicSettings() {
     void submitCrop(data.x, data.y, data.width, data.height);
   };
 
+  const handleApplyImageRotation = useCallback(() => {
+    void rotateImageForExport(selectedImageRotation);
+  }, [rotateImageForExport, selectedImageRotation]);
+
   const handleNativeDbToggle = (dbName: string) => {
     if (!selectedNativeBrand) return;
     const nextNames = selectedNativeDbSet.has(dbName)
@@ -943,8 +1099,15 @@ export default function BasicSettings() {
   }, [largeFormatEnabled, target_width_mm, target_height_mm, tileWidthMm, tileHeightMm]);
 
   const mergedLargeFormatWarnings = useMemo(
-    () => Array.from(new Set([...(previewWarnings ?? []), ...(generatedLargeFormatWarnings ?? [])])),
-    [previewWarnings, generatedLargeFormatWarnings],
+    () =>
+      Array.from(
+        new Set(
+          [...(previewWarnings ?? []), ...(generatedLargeFormatWarnings ?? [])].map(
+            (warning) => localizeLargeFormatWarning(warning, t),
+          ),
+        ),
+      ),
+    [previewWarnings, generatedLargeFormatWarnings, t],
   );
   const modelSurfaceExtentsLabel = useMemo(() => {
     const extents = modelSurfaceSummary?.extents_mm;
@@ -1045,6 +1208,29 @@ export default function BasicSettings() {
             checked={enableCrop}
             onChange={setEnableCrop}
           />
+
+          <div className="rounded-[22px] border border-slate-200/70 bg-slate-100/50 p-3 dark:border-slate-700/50 dark:bg-slate-900/45">
+            <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+              <Dropdown
+                label={t("basic_image_rotation_label")}
+                value={String(selectedImageRotation)}
+                options={IMAGE_ROTATION_OPTIONS}
+                onChange={(value) => setSelectedImageRotation(Number(value) as ImageRotationDegrees)}
+                disabled={isLoading}
+              />
+              <button
+                type="button"
+                onClick={handleApplyImageRotation}
+                disabled={!imageFile || !imagePreviewUrl || isLoading}
+                className="min-h-11 rounded-[22px] border border-[color:var(--surface-outline)] bg-[color:var(--surface-section-muted)] px-4 py-2 text-sm font-medium text-slate-700 shadow-[var(--shadow-control)] transition-all hover:bg-[color:var(--surface-panel-strong)] disabled:cursor-not-allowed disabled:opacity-45 dark:text-slate-200"
+              >
+                {t("basic_image_rotation_apply")}
+              </button>
+            </div>
+            <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
+              {t("basic_image_rotation_hint")}
+            </p>
+          </div>
 
           <CropModal
             open={cropModalOpen}
@@ -1261,10 +1447,13 @@ export default function BasicSettings() {
           <LegacyLutSelector
             manufacturer={selectedLegacyManufacturer}
             lutName={lut_name}
+            selectedLutNames={lut_names.length > 0 ? lut_names : (lut_name ? [lut_name] : [])}
             manufacturerOptions={manufacturerOptions}
             groupedLutOptions={groupedLutOptions}
+            brandInfo={selectedLegacyBrandInfo}
             onManufacturerChange={setLegacyManufacturer}
             onLutChange={setLutName}
+            onLutSelectionChange={setLegacyLutNames}
             onRefresh={() => void handleRefreshLut()}
             onUploadClick={() => lutFileRef.current?.click()}
             loading={legacyCatalogLoading}
@@ -1280,6 +1469,13 @@ export default function BasicSettings() {
               upload: `+ ${t("basic_lut_upload")}`,
               loadingHint: t("basic_brand_loading"),
               noBrandHint: t("basic_lut_no_brand_hint"),
+              multiSelect: t("basic_lut_multi_select"),
+              selectedCount: t("basic_lut_selected_count"),
+              brandInfo: t("basic_native_brand_summary_label"),
+              materialType: t("basic_native_material_label"),
+              vendor: t("basic_native_vendor_label"),
+              database: t("basic_native_db_label"),
+              databasePlaceholder: t("basic_native_db_placeholder"),
             }}
           />
           <input
@@ -1523,6 +1719,7 @@ export default function BasicSettings() {
         step={THICKNESS_LAYER_STEP_MM}
         unit="mm"
         onChange={setSpacerThick}
+        normalizeTextValue={snapThicknessToLayerGrid}
       />
 
       {!modelSurfaceEnabled && (
@@ -1541,6 +1738,7 @@ export default function BasicSettings() {
         value={modeling_mode}
         options={modelingModeOptions}
         onChange={(v) => setModelingMode(v as ModelingMode)}
+        disabledValues={disabledModelingModes}
       />
 
       <QuantizeColorsControl />

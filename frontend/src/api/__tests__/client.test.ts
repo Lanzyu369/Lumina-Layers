@@ -89,6 +89,39 @@ describe("apiClient", () => {
     ).not.toContain("worker crashed");
   });
 
+  it("does not expose a mapped validation code when the response status is 500", async () => {
+    useSettingsStore.setState({ language: "zh" });
+    const privateMessage =
+      "Vector validation failed at /Users/min/private/source.png";
+    const error = new Error("Request failed with status code 500");
+    Object.assign(error, {
+      config: { method: "post", url: "/convert/generate" },
+      response: {
+        status: 500,
+        headers: { "x-request-id": "req-500-vector" },
+        data: {
+          detail: {
+            error: "vector_native_requires_svg",
+            message: privateMessage,
+          },
+        },
+      },
+    });
+    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+    const rejected = await apiClient
+      .post("/convert/generate", {})
+      .catch((err) => err);
+
+    const expectedMessage = "服务器发生内部错误。请求 ID：req-500-vector。";
+    expect(rejected).toMatchObject({ message: expectedMessage });
+    expect(rejected.response?.data?.detail).toBe(expectedMessage);
+    expect(JSON.stringify(rejected.response?.data)).not.toContain(privateMessage);
+    expect(JSON.stringify(vi.mocked(postClientLog).mock.calls)).not.toContain(
+      privateMessage,
+    );
+  });
+
   it("keeps suppressed background probes out of client logs and action history", async () => {
     const error = new Error("Request failed with status code 503");
     Object.assign(error, {
@@ -103,6 +136,22 @@ describe("apiClient", () => {
       message: "Server temporarily unavailable. Please try again later.",
     });
 
+    expect(postClientLog).not.toHaveBeenCalled();
+    expect(useActionHistoryStore.getState().history).toHaveLength(0);
+  });
+
+  it("keeps intentional request cancellation out of client error diagnostics", async () => {
+    const error = Object.assign(new Error("canceled"), {
+      name: "CanceledError",
+      code: "ERR_CANCELED",
+      __CANCEL__: true,
+      config: { method: "post", url: "/convert/preview" },
+    });
+    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+    await expect(apiClient.post("/convert/preview", {})).rejects.toBe(error);
+
+    expect(error.message).toBe("canceled");
     expect(postClientLog).not.toHaveBeenCalled();
     expect(useActionHistoryStore.getState().history).toHaveLength(0);
   });
@@ -140,6 +189,77 @@ describe("apiClient", () => {
       }),
     );
   });
+
+  it.each([
+    {
+      language: "en" as const,
+      expected:
+        "Vector Native mode requires an SVG file. Upload an SVG, or switch to High-Fidelity or Pixel Art mode.",
+    },
+    {
+      language: "zh" as const,
+      expected:
+        "矢量建模模式仅支持 SVG 文件。请上传 SVG，或切换到“高保真”或“像素艺术”模式。",
+    },
+  ])(
+    "translates the structured SVG requirement in $language",
+    async ({ language, expected }) => {
+      useSettingsStore.setState({ language });
+      const safeEnglishFallback =
+        "⚠️ Vector Native mode requires SVG files!\n\n" +
+        "Your file is not an SVG. Please either:\n" +
+        "• Upload an SVG file, or\n" +
+        "• Switch to 'High-Fidelity' or 'Pixel Art' mode";
+      const detail = {
+        error: "vector_native_requires_svg",
+        message: safeEnglishFallback,
+      };
+      const error = new Error("Request failed with status code 422");
+      Object.assign(error, {
+        config: { method: "post", url: "/convert/generate" },
+        response: { status: 422, data: { detail } },
+      });
+      apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+      const rejected = await apiClient
+        .post("/convert/generate", {})
+        .catch((err) => err);
+
+      expect(rejected).toMatchObject({ message: expected });
+      expect(rejected.response?.data?.detail).toEqual(detail);
+    },
+  );
+
+  it.each([
+    "future_validation_code",
+    "constructor",
+    "toString",
+    "__proto__",
+  ])(
+    "uses the safe fallback message for unknown structured code %s",
+    async (errorCode) => {
+      useSettingsStore.setState({ language: "zh" });
+      const safeFallback = "This validation message is safe to display.";
+      const error = new Error("Request failed with status code 422");
+      Object.assign(error, {
+        config: { method: "post", url: "/convert/generate" },
+        response: {
+          status: 422,
+          data: {
+            detail: {
+              error: errorCode,
+              message: safeFallback,
+            },
+          },
+        },
+      });
+      apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+      await expect(apiClient.post("/convert/generate", {})).rejects.toMatchObject({
+        message: safeFallback,
+      });
+    },
+  );
 
   it("uses structured detail object messages before HTTP status fallbacks", async () => {
     const error = new Error("Request failed with status code 422");
@@ -317,7 +437,7 @@ describe("apiClient", () => {
     apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
 
     const expectedMessage =
-      "The server hit an internal error. Check the log for the request ID.";
+      "The server hit an internal error. Try again later, or submit feedback if it keeps happening.";
     const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
     expect(rejected).toMatchObject({ message: expectedMessage });
     expect(rejected.response?.data?.detail).toBe(expectedMessage);
@@ -511,7 +631,7 @@ describe("apiClient", () => {
 
     const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
     const expectedMessage =
-      "The server hit an internal error. Check the log for the request ID.";
+      "The server hit an internal error. Try again later, or submit feedback if it keeps happening.";
     expect(rejected).toMatchObject({
       message: expectedMessage,
     });
@@ -523,7 +643,7 @@ describe("apiClient", () => {
 
   it("redacts top-level and structured server error messages", async () => {
     const expectedMessage =
-      "The server hit an internal error. Check the log for the request ID.";
+      "The server hit an internal error. Try again later, or submit feedback if it keeps happening.";
     for (const data of [
       { message: "worker crashed" },
       { detail: { message: "worker crashed", error: "worker_crashed" } },
@@ -558,7 +678,7 @@ describe("apiClient", () => {
     apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
 
     await expect(apiClient.post("/convert/generate", {})).rejects.toMatchObject({
-      message: "The server hit an internal error. Check the log for the request ID.",
+      message: "The server hit an internal error. Try again later, or submit feedback if it keeps happening.",
     });
   });
 
@@ -573,6 +693,56 @@ describe("apiClient", () => {
     await expect(apiClient.get("/missing-preview.png")).rejects.toMatchObject({
       message: "The requested resource was not found or has expired.",
     });
+  });
+
+  it("redacts technical API guidance from conflict details", async () => {
+    const error = new Error("Request failed with status code 409");
+    Object.assign(error, {
+      config: { method: "post", url: "/convert/generate" },
+      response: {
+        status: 409,
+        data: {
+          detail: "No preview cache. Call POST /api/convert/preview first.",
+        },
+      },
+    });
+    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+    const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
+
+    expect(rejected).toMatchObject({
+      message: "The request conflicts with the current server state.",
+    });
+    expect(rejected.response?.data?.detail).toBe(
+      "The request conflicts with the current server state.",
+    );
+    expect(JSON.stringify(rejected)).not.toContain("Call POST");
+    expect(JSON.stringify(rejected)).not.toContain("/api/convert/preview");
+  });
+
+  it("redacts technical route guidance when the backend omits the /api prefix", async () => {
+    const error = new Error("Request failed with status code 409");
+    Object.assign(error, {
+      config: { method: "post", url: "/convert/generate" },
+      response: {
+        status: 409,
+        data: {
+          detail: "No preview cache. Call POST /convert/preview first.",
+        },
+      },
+    });
+    apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+    const rejected = await apiClient.post("/convert/generate", {}).catch((err) => err);
+
+    expect(rejected).toMatchObject({
+      message: "The request conflicts with the current server state.",
+    });
+    expect(rejected.response?.data?.detail).toBe(
+      "The request conflicts with the current server state.",
+    );
+    expect(JSON.stringify(rejected)).not.toContain("Call POST");
+    expect(JSON.stringify(rejected)).not.toContain("/convert/preview");
   });
 
   it("uses a language fallback for unknown client errors without exposing status numbers", async () => {
@@ -594,7 +764,7 @@ describe("apiClient", () => {
       apiErrorToVisibleMessage(
         new Error("Request failed with status code 500"),
       ),
-    ).toBe("The server hit an internal error. Check the log for the request ID.");
+    ).toBe("The server hit an internal error. Try again later, or submit feedback if it keeps happening.");
     expect(
       apiErrorToVisibleMessage(new Error("Request failed with status code 422")),
     ).toBe("The request is missing required data or contains invalid values.");
@@ -608,7 +778,7 @@ describe("apiClient", () => {
       apiErrorToVisibleMessage(
         new Error("Request failed with status code 500 at /api/files/output-model"),
       ),
-    ).toBe("The server hit an internal error. Check the log for the request ID.");
+    ).toBe("The server hit an internal error. Try again later, or submit feedback if it keeps happening.");
     expect(
       apiErrorToVisibleMessage(new Error("HTTP 402: /api/convert/generate")),
     ).toBe(
@@ -619,7 +789,7 @@ describe("apiClient", () => {
         new Error("AxiosError: Request failed with status code 500"),
         "操作失败",
       ),
-    ).toBe("The server hit an internal error. Check the log for the request ID.");
+    ).toBe("The server hit an internal error. Try again later, or submit feedback if it keeps happening.");
     expect(
       apiErrorToVisibleMessage(
         new Error("HTTP 422: Selected material is missing"),
@@ -645,7 +815,7 @@ describe("apiClient", () => {
       "attempt invalid",
     );
     expect(apiErrorToVisibleMessage(new Error("HTTP 500: worker crashed"))).toBe(
-      "The server hit an internal error. Check the log for the request ID.",
+      "The server hit an internal error. Try again later, or submit feedback if it keeps happening.",
     );
     expect(apiErrorToVisibleMessage(new Error("value must be <= 500"))).toBe(
       "value must be <= 500",
@@ -660,7 +830,7 @@ describe("apiClient", () => {
     ]) {
       const message = apiErrorToVisibleMessage(error);
       expect(message).toBe(
-        "API request failed before the server returned a response.",
+        "The request did not receive a server response. Make sure the Lumina backend is running, check the network connection, and try again.",
       );
       expect(message).not.toMatch(/Network Error|Failed to fetch|timeout of/i);
     }
@@ -861,7 +1031,7 @@ describe("apiClient", () => {
       }
       expect(caught).toBeInstanceOf(Error);
       expect((caught as Error).message).toBe(
-        "API request failed before the server returned a response.",
+        "The request did not receive a server response. Make sure the Lumina backend is running, check the network connection, and try again.",
       );
       expect((caught as Error).message).not.toContain("Failed to fetch");
       expect((caught as Error).cause).toBeInstanceOf(TypeError);
@@ -874,7 +1044,7 @@ describe("apiClient", () => {
           (caught as Error & { response?: { data: { detail?: unknown } } })
             .response?.data.detail
         ),
-      ).toBe("API request failed before the server returned a response.");
+      ).toBe("The request did not receive a server response. Make sure the Lumina backend is running, check the network connection, and try again.");
       expect(
         (
           (caught as Error & { response?: { data: { url?: unknown } } })
@@ -893,7 +1063,7 @@ describe("apiClient", () => {
             status_code: null,
             request_id: null,
             error_message:
-              "API request failed before the server returned a response.",
+              "The request did not receive a server response. Make sure the Lumina backend is running, check the network connection, and try again.",
           }),
         }),
       );
@@ -924,7 +1094,7 @@ describe("apiClient", () => {
       }
       expect(caught).toBeInstanceOf(Error);
       expect((caught as Error).message).toBe(
-        "API request failed before the server returned a response.",
+        "The request did not receive a server response. Make sure the Lumina backend is running, check the network connection, and try again.",
       );
       expect((caught as Error).message).not.toContain("NetworkError");
       expect((caught as Error).cause).toBeInstanceOf(TypeError);
@@ -955,7 +1125,7 @@ describe("apiClient", () => {
       }
       expect(caught).toBeInstanceOf(Error);
       expect((caught as Error).message).toBe(
-        "The server hit an internal error. Check the log for the request ID.",
+        "The server hit an internal error. Try again later, or submit feedback if it keeps happening.",
       );
       expect(JSON.stringify((caught as { response?: { data?: unknown } }).response?.data))
         .not.toContain("worker crashed");
@@ -1007,7 +1177,7 @@ describe("apiClient", () => {
       }
       expect(caught).toBeInstanceOf(Error);
       expect((caught as Error).message).toBe(
-        "The server hit an internal error. Check the log for the request ID.",
+        "The server hit an internal error. Try again later, or submit feedback if it keeps happening.",
       );
       expect(JSON.stringify((caught as { response?: { data?: unknown } }).response?.data))
         .not.toContain("worker crashed");
@@ -1059,7 +1229,7 @@ describe("apiClient", () => {
       }
       expect(caught).toBeInstanceOf(Error);
       expect((caught as Error).message).toBe(
-        "API request failed before the server returned a response.",
+        "The request did not receive a server response. Make sure the Lumina backend is running, check the network connection, and try again.",
       );
       expect((caught as Error).message).not.toContain("Failed to fetch");
       expect((caught as Error).cause).toBeInstanceOf(TypeError);

@@ -31,6 +31,7 @@ import cv2
 from dataclasses import dataclass, field
 from svgelements import SVG, Path, Shape, Move, Line, Close, CubicBezier, QuadraticBezier, Arc, Color
 from shapely.geometry import Polygon, MultiPolygon, LineString, Point, box
+from shapely.geometry.polygon import orient
 from shapely import affinity
 try:
     from shapely import buffer as shapely_buffer
@@ -818,6 +819,686 @@ def _concatenate_meshes_fast(meshes):
     return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
 
 
+def _build_atomic_prism_mesh(
+    polygon: Polygon,
+    *,
+    z_start: float,
+    z_end: float,
+    scale_factor: float,
+) -> trimesh.Trimesh | None:
+    """Extrude one planar cell with deterministic shared-edge diagonals."""
+
+    base_meshes = VectorProcessor._extrude_geometry(
+        polygon,
+        height=z_end - z_start,
+        z_offset=z_start,
+        scale=scale_factor,
+    )
+    if not base_meshes:
+        return None
+    base = base_meshes[0]
+    base_vertices = np.asarray(base.vertices, dtype=np.float64)
+    base_faces = np.asarray(base.faces, dtype=np.int64)
+    face_z = base_vertices[base_faces, 2]
+    cap_mask = np.ptp(face_z, axis=1) <= 1e-9
+    parts = [
+        trimesh.Trimesh(
+            vertices=base_vertices.copy(),
+            faces=base_faces[cap_mask],
+            process=False,
+        )
+    ]
+
+    oriented = orient(polygon, sign=1.0)
+    rings = [oriented.exterior, *oriented.interiors]
+    side_vertices = []
+    side_faces = []
+    for ring in rings:
+        coordinates = list(ring.coords)
+        for start, end in zip(coordinates, coordinates[1:]):
+            start_xy = (float(start[0]) * scale_factor, float(start[1]) * scale_factor)
+            end_xy = (float(end[0]) * scale_factor, float(end[1]) * scale_factor)
+            if start_xy == end_xy:
+                continue
+            vertex_offset = len(side_vertices)
+            side_vertices.extend(
+                [
+                    (start_xy[0], start_xy[1], z_start),
+                    (end_xy[0], end_xy[1], z_start),
+                    (start_xy[0], start_xy[1], z_end),
+                    (end_xy[0], end_xy[1], z_end),
+                ]
+            )
+            start_bottom = vertex_offset
+            end_bottom = vertex_offset + 1
+            start_top = vertex_offset + 2
+            end_top = vertex_offset + 3
+            if start_xy < end_xy:
+                side_faces.extend(
+                    [
+                        (start_bottom, end_bottom, end_top),
+                        (start_bottom, end_top, start_top),
+                    ]
+                )
+            else:
+                side_faces.extend(
+                    [
+                        (start_top, start_bottom, end_bottom),
+                        (start_top, end_bottom, end_top),
+                    ]
+                )
+
+    if side_faces:
+        parts.append(
+            trimesh.Trimesh(
+                vertices=np.asarray(side_vertices, dtype=np.float64),
+                faces=np.asarray(side_faces, dtype=np.int64),
+                process=False,
+            )
+        )
+    return _concatenate_meshes_fast(parts)
+
+
+def _linework_node_coordinates(linework) -> np.ndarray:
+    """Collect unique XY nodes from noded Shapely boundary linework."""
+
+    coordinates = []
+    pending = [linework]
+    while pending:
+        geometry = pending.pop()
+        if geometry is None or geometry.is_empty:
+            continue
+        if hasattr(geometry, "geoms"):
+            pending.extend(geometry.geoms)
+        elif hasattr(geometry, "coords"):
+            coordinates.extend((float(x), float(y)) for x, y, *_ in geometry.coords)
+    if not coordinates:
+        return np.empty((0, 2), dtype=np.float64)
+    return np.unique(np.asarray(coordinates, dtype=np.float64), axis=0)
+
+
+def _densify_ring_with_nodes(ring, nodes: np.ndarray) -> list[tuple[float, float]]:
+    """Insert every nearly-collinear overlay node into one polygon ring."""
+
+    source = [(float(x), float(y)) for x, y, *_ in ring.coords]
+    if len(source) < 2 or len(nodes) == 0:
+        return source
+    tolerance = 1e-10
+    densified = [source[0]]
+    for start, end in zip(source, source[1:]):
+        start_arr = np.asarray(start, dtype=np.float64)
+        vector = np.asarray(end, dtype=np.float64) - start_arr
+        length_sq = float(np.dot(vector, vector))
+        if length_sq <= tolerance * tolerance:
+            continue
+        lower = np.minimum(start_arr, np.asarray(end)) - tolerance
+        upper = np.maximum(start_arr, np.asarray(end)) + tolerance
+        candidates = nodes[np.all((nodes >= lower) & (nodes <= upper), axis=1)]
+        if len(candidates):
+            offsets = candidates - start_arr
+            cross = np.abs(vector[0] * offsets[:, 1] - vector[1] * offsets[:, 0])
+            parameters = offsets @ vector / length_sq
+            interior = (
+                (cross <= tolerance * np.sqrt(length_sq))
+                & (parameters > tolerance)
+                & (parameters < 1.0 - tolerance)
+            )
+            if np.any(interior):
+                selected = candidates[interior]
+                selected_parameters = parameters[interior]
+                for point in selected[np.argsort(selected_parameters)]:
+                    coordinate = (float(point[0]), float(point[1]))
+                    if coordinate != densified[-1]:
+                        densified.append(coordinate)
+        if end != densified[-1]:
+            densified.append(end)
+    if densified[-1] != densified[0]:
+        densified.append(densified[0])
+    return densified
+
+
+def _densify_polygon_with_nodes(polygon: Polygon, nodes: np.ndarray) -> Polygon:
+    """Return ``polygon`` with matching vertex splits on every shared edge."""
+
+    densified = Polygon(
+        _densify_ring_with_nodes(polygon.exterior, nodes),
+        [_densify_ring_with_nodes(interior, nodes) for interior in polygon.interiors],
+    )
+    return densified if densified.is_valid and not densified.is_empty else polygon
+
+
+def _split_mesh_t_junctions(mesh: trimesh.Trimesh) -> None:
+    """Split boundary triangle edges at existing collinear mesh vertices."""
+
+    tolerance = 1e-9
+    for _ in range(1024):
+        edges = np.asarray(mesh.edges_sorted, dtype=np.int64)
+        if len(edges) == 0:
+            return
+        _, inverse, counts = np.unique(
+            edges,
+            axis=0,
+            return_inverse=True,
+            return_counts=True,
+        )
+        boundary_rows = np.flatnonzero(counts[inverse] == 1)
+        if len(boundary_rows) == 0:
+            return
+
+        vertices = np.asarray(mesh.vertices, dtype=np.float64)
+        faces = np.asarray(mesh.faces, dtype=np.int64)
+        split_applied = False
+        for edge_row in boundary_rows:
+            edge = edges[edge_row]
+            edge_start = vertices[edge[0]]
+            edge_vector = vertices[edge[1]] - edge_start
+            length_sq = float(np.dot(edge_vector, edge_vector))
+            if length_sq <= tolerance * tolerance:
+                continue
+            offsets = vertices - edge_start
+            parameters = offsets @ edge_vector / length_sq
+            projections = edge_start + parameters[:, None] * edge_vector
+            distances = np.linalg.norm(vertices - projections, axis=1)
+            candidate_mask = (
+                (distances <= tolerance)
+                & (parameters > tolerance)
+                & (parameters < 1.0 - tolerance)
+            )
+            candidate_indices = np.flatnonzero(candidate_mask)
+            if len(candidate_indices) == 0:
+                continue
+
+            face_index = int(mesh.edges_face[edge_row])
+            face = faces[face_index]
+            directed_start = None
+            directed_end = None
+            opposite = None
+            for index in range(3):
+                start_index = int(face[index])
+                end_index = int(face[(index + 1) % 3])
+                if {start_index, end_index} == {int(edge[0]), int(edge[1])}:
+                    directed_start = start_index
+                    directed_end = end_index
+                    opposite = int(face[(index + 2) % 3])
+                    break
+            if directed_start is None or directed_end is None or opposite is None:
+                continue
+
+            direction = vertices[directed_end] - vertices[directed_start]
+            direction_length_sq = float(np.dot(direction, direction))
+            directed_parameters = (
+                (vertices[candidate_indices] - vertices[directed_start]) @ direction
+                / direction_length_sq
+            )
+            ordered_candidates = candidate_indices[np.argsort(directed_parameters)]
+            edge_chain = [directed_start, *ordered_candidates.tolist(), directed_end]
+            replacement_faces = np.asarray(
+                [
+                    (edge_chain[index], edge_chain[index + 1], opposite)
+                    for index in range(len(edge_chain) - 1)
+                ],
+                dtype=np.int64,
+            )
+            mesh.faces = np.vstack(
+                (faces[:face_index], replacement_faces, faces[face_index + 1 :])
+            )
+            split_applied = True
+            break
+        if not split_applied:
+            return
+
+
+def _finalize_prism_meshes(
+    prism_parts: list[trimesh.Trimesh],
+) -> trimesh.Trimesh | None:
+    """Remove internal faces while preserving point-touching solid shells."""
+
+    if not prism_parts:
+        return None
+
+    parents = list(range(len(prism_parts)))
+
+    def find(part_index: int) -> int:
+        while parents[part_index] != part_index:
+            parents[part_index] = parents[parents[part_index]]
+            part_index = parents[part_index]
+        return part_index
+
+    def union(left_index: int, right_index: int) -> None:
+        left_root = find(left_index)
+        right_root = find(right_index)
+        if left_root != right_root:
+            parents[right_root] = left_root
+
+    face_owners: dict[tuple[tuple[float, float, float], ...], int] = {}
+    for part_index, prism in enumerate(prism_parts):
+        vertices = np.asarray(prism.vertices, dtype=np.float64)
+        for face in np.asarray(prism.faces, dtype=np.int64):
+            coordinates = np.round(vertices[face], decimals=9)
+            face_key = tuple(sorted(tuple(point) for point in coordinates))
+            owner = face_owners.setdefault(face_key, part_index)
+            if owner != part_index:
+                union(part_index, owner)
+
+    grouped_parts: dict[int, list[trimesh.Trimesh]] = {}
+    for part_index, prism in enumerate(prism_parts):
+        grouped_parts.setdefault(find(part_index), []).append(prism)
+
+    finalized_groups = []
+    for connected_parts in grouped_parts.values():
+        combined = _concatenate_meshes_fast(connected_parts)
+        combined.merge_vertices()
+        sorted_faces = np.sort(np.asarray(combined.faces, dtype=np.int64), axis=1)
+        _, inverse, counts = np.unique(
+            sorted_faces,
+            axis=0,
+            return_inverse=True,
+            return_counts=True,
+        )
+        combined.update_faces(counts[inverse] == 1)
+        _split_mesh_t_junctions(combined)
+        combined.remove_unreferenced_vertices()
+        finalized_groups.append(combined)
+
+    return _concatenate_meshes_fast(finalized_groups)
+
+
+def _build_stepped_volume_mesh(
+    slabs: list[dict],
+    *,
+    scale_factor: float,
+) -> trimesh.Trimesh | None:
+    """Build a watertight stepped volume, preferring the native union kernel."""
+
+    prepared = _prepare_stepped_volume_slabs(slabs)
+    if prepared is None:
+        return None
+    valid_slabs, component_slabs = prepared
+
+    if _load_relief_manifold3d() is not None:
+        try:
+            native_mesh = _build_stepped_volume_mesh_manifold_prepared(
+                component_slabs,
+                scale_factor=scale_factor,
+            )
+            if _validate_stepped_volume_mesh(
+                native_mesh,
+                valid_slabs=valid_slabs,
+                component_count=len(component_slabs),
+                scale_factor=scale_factor,
+            ):
+                return native_mesh
+            raise ValueError("native relief mesh failed topology validation")
+        except VECTOR_HANDLED_ERRORS as exc:
+            _log.warning(
+                "Native relief mesh union failed; rebuilding with exact Python fallback",
+                extra={
+                    "event": "vector_relief_native_union_fallback",
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                    "fallback_kernel": "python_atomic_prisms",
+                },
+            )
+
+    return _build_stepped_volume_mesh_python_prepared(
+        component_slabs,
+        scale_factor=scale_factor,
+    )
+
+
+def _load_relief_manifold3d():
+    """Return the optional manifold3d module, or ``None`` when unavailable."""
+
+    try:
+        import manifold3d as m3d
+    except (ImportError, OSError):
+        return None
+    return m3d
+
+
+def _prepare_stepped_volume_slabs(
+    slabs: list[dict],
+) -> tuple[
+    list[tuple[Polygon, float, float]],
+    list[list[tuple[Polygon, float, float]]],
+] | None:
+    """Validate slab records and group them by area-connected XY footprint."""
+
+    valid_slabs = []
+    slab_geometries = []
+    for slab in slabs:
+        geometry = slab.get("geometry")
+        z_offset = float(slab.get("z_offset", 0.0))
+        height = float(slab.get("height", 0.0))
+        if geometry is None or geometry.is_empty or height <= 1e-9:
+            continue
+        z_end = z_offset + height
+        polygon_parts = (
+            [geometry]
+            if geometry.geom_type == "Polygon"
+            else list(geometry.geoms)
+            if geometry.geom_type == "MultiPolygon"
+            else []
+        )
+        for polygon in polygon_parts:
+            if polygon.is_empty or polygon.area <= 1e-12:
+                continue
+            valid_slabs.append((polygon, z_offset, z_end))
+            slab_geometries.append(polygon)
+
+    if not valid_slabs:
+        return None
+    combined_footprint = _union_run_group_geometries(slab_geometries)
+    components = (
+        [combined_footprint]
+        if combined_footprint.geom_type == "Polygon"
+        else list(combined_footprint.geoms)
+        if combined_footprint.geom_type == "MultiPolygon"
+        else []
+    )
+    component_slabs: list[list[tuple[Polygon, float, float]]] = [
+        [] for _component in components
+    ]
+    for geometry, z_offset, z_end in valid_slabs:
+        representative_point = geometry.representative_point()
+        for component_index, component in enumerate(components):
+            if component.covers(representative_point):
+                component_slabs[component_index].append((geometry, z_offset, z_end))
+                break
+
+    populated_components = [group for group in component_slabs if group]
+    if not populated_components:
+        return None
+    return valid_slabs, populated_components
+
+
+def _stepped_volume_expected_metrics(
+    valid_slabs: list[tuple[Polygon, float, float]],
+    *,
+    scale_factor: float,
+) -> tuple[np.ndarray, float] | None:
+    """Return expected bounds and volume directly from the slab union."""
+
+    scale = float(scale_factor)
+    if not np.isfinite(scale) or scale <= 0.0:
+        return None
+    z_boundaries = sorted(
+        {
+            round(z_value, 9)
+            for _geometry, z_start, z_end in valid_slabs
+            for z_value in (z_start, z_end)
+        }
+    )
+    if len(z_boundaries) < 2:
+        return None
+
+    volume = 0.0
+    active_footprints = []
+    for z_start, z_end in zip(z_boundaries, z_boundaries[1:]):
+        z_mid = (z_start + z_end) * 0.5
+        active = [
+            geometry
+            for geometry, slab_start, slab_end in valid_slabs
+            if slab_start < z_mid < slab_end
+        ]
+        if not active:
+            continue
+        footprint = _union_run_group_geometries(active)
+        if footprint is None or footprint.is_empty:
+            continue
+        active_footprints.append(footprint)
+        volume += float(footprint.area) * (z_end - z_start) * scale * scale
+    if not active_footprints or volume <= 0.0:
+        return None
+
+    footprint_union = _union_run_group_geometries(active_footprints)
+    min_x, min_y, max_x, max_y = footprint_union.bounds
+    bounds = np.asarray(
+        [
+            [min_x * scale, min_y * scale, z_boundaries[0]],
+            [max_x * scale, max_y * scale, z_boundaries[-1]],
+        ],
+        dtype=np.float64,
+    )
+    return bounds, volume
+
+
+def _validate_stepped_volume_mesh(
+    mesh: trimesh.Trimesh | None,
+    *,
+    valid_slabs: list[tuple[Polygon, float, float]],
+    component_count: int,
+    scale_factor: float,
+) -> bool:
+    """Reject incomplete or semantically different native-kernel results."""
+
+    if mesh is None or len(mesh.vertices) == 0 or len(mesh.faces) == 0:
+        return False
+    vertices = np.asarray(mesh.vertices, dtype=np.float64)
+    if not np.all(np.isfinite(vertices)) or not mesh.is_watertight:
+        return False
+    expected = _stepped_volume_expected_metrics(
+        valid_slabs,
+        scale_factor=scale_factor,
+    )
+    if expected is None:
+        return False
+    expected_bounds, expected_volume = expected
+    if not np.allclose(mesh.bounds, expected_bounds, rtol=1e-7, atol=5e-6):
+        return False
+    if not np.isclose(
+        abs(float(mesh.volume)),
+        expected_volume,
+        rtol=1e-6,
+        atol=1e-6,
+    ):
+        return False
+    # Native construction is performed independently for each area-connected
+    # footprint, so point-touching bodies cannot be fused.  Do not compare
+    # ``mesh.split`` here: an enclosed cavity adds a separate *surface shell*
+    # even though it is still part of one connected solid volume.
+    return component_count > 0
+
+
+def _manifold_polygon_contours(
+    polygon: Polygon,
+    *,
+    scale_factor: float,
+) -> list[np.ndarray]:
+    """Convert one Shapely polygon to open, scaled manifold contours."""
+
+    contours = []
+    for ring in (polygon.exterior, *polygon.interiors):
+        coordinates = np.asarray(ring.coords, dtype=np.float64)
+        if coordinates.ndim != 2 or coordinates.shape[0] < 4:
+            continue
+        coordinates = coordinates[:-1, :2] * float(scale_factor)
+        if len(coordinates) >= 3 and np.all(np.isfinite(coordinates)):
+            contours.append(coordinates)
+    return contours
+
+
+def _build_stepped_volume_mesh_manifold_prepared(
+    component_slabs: list[list[tuple[Polygon, float, float]]],
+    *,
+    scale_factor: float,
+) -> trimesh.Trimesh | None:
+    """Union extruded slabs per area-connected component with manifold3d."""
+
+    m3d = _load_relief_manifold3d()
+    if m3d is None:
+        return None
+    component_meshes = []
+    for grouped_slabs in component_slabs:
+        solids = []
+        slabs_by_z: dict[tuple[float, float], list[Polygon]] = {}
+        for polygon, z_start, z_end in grouped_slabs:
+            slabs_by_z.setdefault((z_start, z_end), []).append(polygon)
+        for (z_start, z_end), polygons in slabs_by_z.items():
+            contours = [
+                contour
+                for polygon in polygons
+                for contour in _manifold_polygon_contours(
+                    polygon,
+                    scale_factor=scale_factor,
+                )
+            ]
+            if not contours:
+                continue
+            section = m3d.CrossSection(contours, m3d.FillRule.EvenOdd)
+            solid = section.extrude(z_end - z_start).translate((0.0, 0.0, z_start))
+            if not solid.is_empty():
+                solids.append(solid)
+        if not solids:
+            return None
+        unioned = m3d.Manifold.batch_boolean(solids, m3d.OpType.Add)
+        if unioned.is_empty() or unioned.status() != m3d.Error.NoError:
+            return None
+        mesh_data = unioned.to_mesh()
+        vertices = np.asarray(mesh_data.vert_properties, dtype=np.float64)
+        faces = np.asarray(mesh_data.tri_verts, dtype=np.int64)
+        if vertices.ndim != 2 or vertices.shape[1] < 3 or faces.size == 0:
+            return None
+        component_mesh = trimesh.Trimesh(
+            vertices=vertices[:, :3].copy(),
+            faces=faces.copy(),
+            process=False,
+        )
+        if not component_mesh.is_watertight:
+            return None
+        component_meshes.append(component_mesh)
+    if len(component_meshes) != len(component_slabs):
+        return None
+    return _concatenate_meshes_fast(component_meshes)
+
+
+def _build_stepped_volume_mesh_manifold(
+    slabs: list[dict],
+    *,
+    scale_factor: float,
+) -> trimesh.Trimesh | None:
+    """Build slabs with manifold3d without applying the Python fallback."""
+
+    prepared = _prepare_stepped_volume_slabs(slabs)
+    if prepared is None:
+        return None
+    valid_slabs, component_slabs = prepared
+    mesh = _build_stepped_volume_mesh_manifold_prepared(
+        component_slabs,
+        scale_factor=scale_factor,
+    )
+    return (
+        mesh
+        if _validate_stepped_volume_mesh(
+            mesh,
+            valid_slabs=valid_slabs,
+            component_count=len(component_slabs),
+            scale_factor=scale_factor,
+        )
+        else None
+    )
+
+
+def _build_stepped_volume_mesh_python_prepared(
+    component_slabs: list[list[tuple[Polygon, float, float]]],
+    *,
+    scale_factor: float,
+) -> trimesh.Trimesh | None:
+    """Build every component with the exact atomic-prism fallback."""
+
+    component_meshes = []
+    for grouped_slabs in component_slabs:
+        mesh = _build_connected_stepped_volume_mesh_python(
+            grouped_slabs,
+            scale_factor=scale_factor,
+        )
+        if mesh is None:
+            return None
+        component_meshes.append(mesh)
+    return _concatenate_meshes_fast(component_meshes) if component_meshes else None
+
+
+def _build_stepped_volume_mesh_python(
+    slabs: list[dict],
+    *,
+    scale_factor: float,
+) -> trimesh.Trimesh | None:
+    """Build slabs with the exact Python algorithm and no native kernel."""
+
+    prepared = _prepare_stepped_volume_slabs(slabs)
+    if prepared is None:
+        return None
+    _valid_slabs, component_slabs = prepared
+    return _build_stepped_volume_mesh_python_prepared(
+        component_slabs,
+        scale_factor=scale_factor,
+    )
+
+
+def _build_connected_stepped_volume_mesh_python(
+    valid_slabs: list[tuple[Polygon, float, float]],
+    *,
+    scale_factor: float,
+) -> trimesh.Trimesh | None:
+    """Build one edge-connected stepped volume using only its own Z levels."""
+
+    z_boundaries: set[float] = set()
+    for _geometry, z_offset, z_end in valid_slabs:
+        z_boundaries.add(round(z_offset, 9))
+        z_boundaries.add(round(z_end, 9))
+
+    ordered_z = sorted(z_boundaries)
+    if len(ordered_z) < 2:
+        return None
+
+    interval_footprints = []
+    for z_start, z_end in zip(ordered_z, ordered_z[1:]):
+        z_mid = (z_start + z_end) * 0.5
+        active_geometries = [
+            geometry
+            for geometry, slab_start, slab_end in valid_slabs
+            if slab_start < z_mid < slab_end
+        ]
+        footprint = (
+            _union_run_group_geometries(active_geometries)
+            if active_geometries
+            else None
+        )
+        interval_footprints.append((z_start, z_end, footprint))
+
+    footprints = [
+        footprint
+        for _z_start, _z_end, footprint in interval_footprints
+        if footprint is not None and not footprint.is_empty
+    ]
+    if not footprints:
+        return None
+    noded_boundaries = unary_union([footprint.boundary for footprint in footprints])
+    boundary_nodes = _linework_node_coordinates(noded_boundaries)
+    atomic_cells = [
+        _densify_polygon_with_nodes(cell, boundary_nodes)
+        for cell in polygonize(noded_boundaries)
+        if not cell.is_empty and cell.area > 1e-12
+    ]
+
+    prism_parts: list[trimesh.Trimesh] = []
+    for z_start, z_end, footprint in interval_footprints:
+        if footprint is None or footprint.is_empty:
+            continue
+        for cell in atomic_cells:
+            if not footprint.covers(cell.representative_point()):
+                continue
+            prism = _build_atomic_prism_mesh(
+                cell,
+                z_start=z_start,
+                z_end=z_end,
+                scale_factor=scale_factor,
+            )
+            if prism is not None and len(prism.faces) > 0:
+                prism_parts.append(prism)
+    return _finalize_prism_meshes(prism_parts)
+
+
 def _normalize_contours_cached(cache, geom, close_delta_mm=0.03):
     """Normalize contours with a per-call-site identity cache."""
 
@@ -1589,6 +2270,30 @@ class VectorAnalysis:
     image_vectorizer_bounds: object | None = None
 
 
+def _signed_dtype_for_int_range(min_value: int, max_value: int) -> np.dtype:
+    """Return the smallest signed dtype that can hold the integer range."""
+
+    for dtype in (np.int8, np.int16, np.int32, np.int64):
+        info = np.iinfo(dtype)
+        if min_value >= info.min and max_value <= info.max:
+            return np.dtype(dtype)
+    return np.dtype(np.int64)
+
+
+def _material_matrix_dtype_for_vector_analysis(analysis: "VectorAnalysis") -> np.dtype:
+    """Return the compact material-matrix dtype needed by an analysis."""
+
+    min_value = -1
+    max_value = max(0, int(getattr(analysis, "num_channels", 0) or 0) - 1)
+    num_layers = max(0, int(getattr(analysis, "num_layers", 0) or 0))
+    for shape in getattr(analysis, "matched_shapes", []) or []:
+        for raw_value in (shape.get("recipe") or [])[:num_layers]:
+            value = int(raw_value)
+            min_value = min(min_value, value)
+            max_value = max(max_value, value)
+    return _signed_dtype_for_int_range(min_value, max_value)
+
+
 def apply_recipe_overrides_to_analysis(
     analysis: "VectorAnalysis",
     *,
@@ -1616,9 +2321,9 @@ def apply_recipe_overrides_to_analysis(
     - Rasterises each ``analysis.matched_shapes`` entry onto the same grid
       used by :meth:`VectorProcessor.build_preview_cache` so the preview-time
       region masks line up pixel-for-pixel.
-    - Picks the dominant region (by mask overlap) for each shape; shapes
-      whose footprint sits mostly inside a region mask inherit that
-      region's recipe.
+    - Picks the dominant region (by mask overlap) for each connected polygon
+      component. Compound SVG paths are split only when their disconnected
+      components resolve to different recipes, preserving source metadata.
     - Translates each override recipe into the vector internal order
       (``Top2Bottom`` — recipe[0] is the visible face at z=0) and pads it
       up to the effective layer count with the base backing channel.
@@ -1788,13 +2493,16 @@ def apply_recipe_overrides_to_analysis(
         )
 
     # --- Rasterise every shape onto the preview grid ---
-    def _iter_polygons(geom):
+    def _iter_polygon_components(geom):
         if geom is None or geom.is_empty:
             return []
         if geom.geom_type == "Polygon":
             return [geom]
-        if geom.geom_type == "MultiPolygon":
-            return list(geom.geoms)
+        if geom.geom_type in ("MultiPolygon", "GeometryCollection"):
+            components = []
+            for child in geom.geoms:
+                components.extend(_iter_polygon_components(child))
+            return components
         return []
 
     def _coords_to_pts(coords):
@@ -1811,7 +2519,7 @@ def apply_recipe_overrides_to_analysis(
     def _shape_mask(geom):
         region = np.zeros((h_px, w_px), dtype=np.uint8)
         painted = False
-        for poly in _iter_polygons(geom):
+        for poly in _iter_polygon_components(geom):
             if poly.is_empty:
                 continue
             ext_pts = _coords_to_pts(np.array(poly.exterior.coords))
@@ -1827,11 +2535,7 @@ def apply_recipe_overrides_to_analysis(
             return None
         return region.astype(bool)
 
-    shape_masks: list = []
-    for shape in analysis.matched_shapes:
-        shape_masks.append(_shape_mask(shape.get("geometry")))
-
-    # --- Pick the dominant region for every shape (majority wins) ---
+    # --- Pick the dominant region for every connected component ---
     override_by_region: dict[str, dict] = {}
     for item in recipe_overrides:
         if not isinstance(item, dict):
@@ -1840,13 +2544,13 @@ def apply_recipe_overrides_to_analysis(
         if rid:
             override_by_region[rid] = item
 
-    shape_overrides: dict[int, dict] = {}
-    for shape_idx, mask in enumerate(shape_masks):
+    def _select_override(geometry) -> dict | None:
+        mask = _shape_mask(geometry)
         if mask is None:
-            continue
+            return None
         shape_px = int(mask.sum())
         if shape_px == 0:
-            continue
+            return None
         best_rid: str | None = None
         best_overlap = 0
         for rid, rmask in normalised_masks.items():
@@ -1855,17 +2559,12 @@ def apply_recipe_overrides_to_analysis(
                 best_overlap = overlap
                 best_rid = rid
         if best_rid is None:
-            continue
+            return None
         if best_overlap / shape_px < min_overlap_ratio:
-            continue
-        item = override_by_region.get(best_rid)
-        if item is not None:
-            shape_overrides[shape_idx] = item
+            return None
+        return override_by_region.get(best_rid)
 
-    # --- Apply recipes: overridden shapes use user recipe, others get padded ---
-    overridden_count = 0
-    for shape_idx, shape in enumerate(analysis.matched_shapes):
-        override = shape_overrides.get(shape_idx)
+    def _resolve_recipe(shape: dict, override: dict | None) -> tuple[list[int], bool]:
         if override is not None:
             raw_recipe = [int(v) for v in override.get("recipe", [])]
             rid = str(override.get("region_id", "")).strip()
@@ -1885,19 +2584,56 @@ def apply_recipe_overrides_to_analysis(
                 int(base_channel_idx),
                 "Top2Bottom",
             )
-            shape["recipe"] = padded
-            overridden_count += 1
+            return padded, True
+
+        existing = [int(v) for v in shape.get("recipe") or []]
+        if len(existing) < effective_target:
+            existing = pad_recipe_to_layer_count(
+                existing,
+                effective_target,
+                int(base_channel_idx),
+                "Top2Bottom",
+            )
+        elif len(existing) > effective_target:
+            existing = existing[:effective_target]
+        return existing, False
+
+    # --- Apply recipes per connected component and split only on divergence ---
+    overridden_count = 0
+    projected_shapes: list[dict] = []
+    for shape in analysis.matched_shapes:
+        geometry = shape.get("geometry")
+        components = _iter_polygon_components(geometry)
+        if len(components) <= 1:
+            override = _select_override(components[0] if components else geometry)
+            shape["recipe"], was_overridden = _resolve_recipe(shape, override)
+            overridden_count += int(was_overridden)
+            projected_shapes.append(shape)
+            continue
+
+        component_records: list[dict] = []
+        for component in components:
+            component_record = dict(shape)
+            component_record["geometry"] = component
+            override = _select_override(component)
+            component_record["recipe"], was_overridden = _resolve_recipe(
+                component_record,
+                override,
+            )
+            overridden_count += int(was_overridden)
+            component_records.append(component_record)
+
+        component_recipes = {
+            tuple(int(value) for value in record.get("recipe") or [])
+            for record in component_records
+        }
+        if len(component_recipes) <= 1:
+            shape["recipe"] = list(component_records[0].get("recipe") or [])
+            projected_shapes.append(shape)
         else:
-            existing = [int(v) for v in shape.get("recipe") or []]
-            if len(existing) < effective_target:
-                shape["recipe"] = pad_recipe_to_layer_count(
-                    existing,
-                    effective_target,
-                    int(base_channel_idx),
-                    "Top2Bottom",
-                )
-            elif len(existing) > effective_target:
-                shape["recipe"] = existing[:effective_target]
+            projected_shapes.extend(component_records)
+
+    analysis.matched_shapes = projected_shapes
 
     analysis.num_layers = int(effective_target)
 
@@ -1948,11 +2684,13 @@ def apply_matched_rgb_overrides_to_analysis(
     analysis: "VectorAnalysis",
     *,
     matched_rgb: np.ndarray,
+    height_identity_rgb: np.ndarray | None = None,
     material_matrix: np.ndarray | None = None,
     mask_solid: np.ndarray,
     img_processor,
     pixels_per_mm: float = 10.0,
     max_width_px: int = 1600,
+    strict: bool = False,
 ) -> int:
     """Propagate region-level ``matched_rgb`` edits into ``matched_shapes``.
     把 ``cache.matched_rgb`` 上的像素级改色回写到 ``analysis.matched_shapes``。
@@ -1967,15 +2705,18 @@ def apply_matched_rgb_overrides_to_analysis(
     1. Reproducing the same preview grid ``build_preview_cache`` uses
        so the ``matched_rgb`` / ``mask_solid`` arrays line up pixel-for-
        pixel with the analysis geometry.
-    2. Rasterising each ``analysis.matched_shapes`` entry into its own
-       boolean mask and intersecting it with ``mask_solid`` (background
-       pixels are ignored so a "carved out" hole cannot poison the
-       per-shape colour vote).
-    3. Picking the dominant RGB inside the effective mask. If it differs
-       from ``shape['matched_rgb']`` we re-run the same KDTree lookup
-       ``_match_colors`` uses so the new ``matched_rgb`` / ``recipe``
-       come from the LUT — guaranteeing the generated 3MF stays inside
-       the user's calibrated material set.
+    2. Rasterising every connected polygon component in
+       ``analysis.matched_shapes`` into its own boolean mask and
+       intersecting it with ``mask_solid`` (background pixels are ignored
+       so a "carved out" hole cannot poison the component colour vote).
+    3. Picking the dominant RGB and recipe inside each effective mask. If
+       disconnected components of one compound SVG shape resolve to
+       different assignments, that source record is split while preserving
+       its non-geometry metadata and source order. Uniform/no-op compound
+       shapes retain their original geometry.
+    4. Re-running the same KDTree lookup ``_match_colors`` uses so every new
+       ``matched_rgb`` / ``recipe`` stays inside the user's calibrated
+       material set.
 
     The helper preserves every public surface (the module exports it,
     nothing else changes) and is therefore opt-in for callers that have
@@ -1984,15 +2725,20 @@ def apply_matched_rgb_overrides_to_analysis(
     2D 预览 / GLB 走 ``cache.matched_rgb``，``/region-replace`` 之类
     端点会按 mask 改写它，但生成阶段的矢量分支以前只从 SVG fill 复算
     颜色，用户的空间改色被静默丢弃。本 helper 复现 ``build_preview_cache``
-    网格，逐 shape 求 mask，与 ``mask_solid`` 求交后取 dominant RGB，
-    若与原 ``matched_rgb`` 不一致则重新走 KDTree 查 LUT，把新颜色和配方
-    回写到 ``matched_shapes``，让 3MF 与 2D 预览保持一致。
+    网格，按连通 polygon component 求 mask，与 ``mask_solid`` 求交后取
+    dominant RGB/recipe。复合路径的各断开分量若结果不同才拆成独立记录，
+    再把新颜色和配方回写到 ``matched_shapes``，让 3MF 与 2D 预览保持一致。
 
     Args:
         analysis: ``VectorAnalysis`` from ``analyze_svg``; mutated in place.
             （``analyze_svg`` 返回的分析结果，就地修改）
         matched_rgb: ``(H, W, 3) uint8`` array taken from ``cache["matched_rgb"]``.
             （取自 ``cache["matched_rgb"]`` 的预览栅格）
+        height_identity_rgb: Optional pristine ``(H, W, 3) uint8`` height
+            identity grid. Display replacements never mutate this grid.
+            （可选的 pristine 高度身份栅格；显示替色不会修改它）
+        material_matrix: Optional ``(H, W, N)`` integer recipe grid.
+            （可选的 ``(H, W, N)`` 整数配方网格）
         mask_solid: ``(H, W) bool`` array taken from ``cache["mask_solid"]``.
             （取自 ``cache["mask_solid"]`` 的实体像素掩码）
         img_processor: Object exposing ``_rgb_to_lab``, ``kdtree``,
@@ -2004,16 +2750,21 @@ def apply_matched_rgb_overrides_to_analysis(
             （预览网格密度，需与 ``build_preview_cache`` 一致）
         max_width_px: Preview-grid width cap. Same constraint.
             （预览网格宽度上限，同上）
+        strict: Raise ``ValueError`` for invalid cache inputs or grid
+            mismatches instead of logging and returning zero. A valid cache
+            that changes no shapes still returns zero normally.
+            （缓存输入或网格无效时抛出 ``ValueError``；合法但无修改仍返回零）
 
     Returns:
-        int: Number of shapes whose ``matched_rgb`` was rewritten.
-            （颜色被改写的 shape 数量）
+        int: Number of connected components whose material assignment changed.
+            （材质分配被改写的连通分量数量）
     """
     if matched_rgb is None or mask_solid is None:
+        if strict:
+            raise ValueError("matched_rgb and mask_solid are required")
         return 0
-    if not analysis.matched_shapes:
+    if not analysis.matched_shapes and not strict:
         return 0
-
     real_w = float(analysis.bbox[2])
     real_h = float(analysis.bbox[3])
     sf = float(analysis.scale_factor)
@@ -2033,6 +2784,7 @@ def apply_matched_rgb_overrides_to_analysis(
     coord_scale = sf * ppm
 
     matched_arr = np.asarray(matched_rgb)
+    raw_mask_arr = np.asarray(mask_solid)
     mask_arr = np.asarray(mask_solid, dtype=bool)
     if matched_arr.ndim != 3 or matched_arr.shape[2] != 3 or matched_arr.dtype != np.uint8:
         error_message = (
@@ -2049,7 +2801,54 @@ def apply_matched_rgb_overrides_to_analysis(
                 "matched_rgb_dtype": str(matched_arr.dtype),
             },
         )
+        if strict:
+            raise ValueError(error_message)
         return 0
+
+    identity_arr = None
+    if height_identity_rgb is not None:
+        candidate_identity = np.asarray(height_identity_rgb)
+        identity_is_valid = (
+            candidate_identity.ndim == 3
+            and candidate_identity.shape == matched_arr.shape
+            and candidate_identity.dtype == np.uint8
+        )
+        if not identity_is_valid:
+            error_message = (
+                f"height_identity_rgb shape/dtype "
+                f"{candidate_identity.shape}/{candidate_identity.dtype} "
+                f"does not match matched_rgb {matched_arr.shape}/uint8"
+            )
+            _log.warning(
+                "Vector height identity projection skipped because input is invalid",
+                extra={
+                    "event": "vector_height_identity_input_invalid",
+                    "error_type": "ValueError",
+                    "error_message": error_message,
+                    "height_identity_rgb_shape": list(candidate_identity.shape),
+                    "height_identity_rgb_dtype": str(candidate_identity.dtype),
+                    "matched_rgb_shape": list(matched_arr.shape),
+                },
+            )
+            if strict:
+                raise ValueError(error_message)
+        else:
+            identity_arr = candidate_identity
+    if strict and raw_mask_arr.dtype != np.dtype(np.bool_):
+        error_message = (
+            f"mask_solid dtype {raw_mask_arr.dtype} is not bool"
+        )
+        _log.warning(
+            "Vector matched RGB overrides skipped because mask dtype is invalid",
+            extra={
+                "event": "vector_overrides_input_invalid",
+                "error_type": "ValueError",
+                "error_message": error_message,
+                "mask_solid_shape": list(raw_mask_arr.shape),
+                "mask_solid_dtype": str(raw_mask_arr.dtype),
+            },
+        )
+        raise ValueError(error_message)
     if matched_arr.shape[:2] != (h_px, w_px) or mask_arr.shape != (h_px, w_px):
         error_message = (
             f"matched_rgb/mask_solid shape {matched_arr.shape[:2]}/{mask_arr.shape} "
@@ -2066,15 +2865,20 @@ def apply_matched_rgb_overrides_to_analysis(
                 "expected_shape": [int(h_px), int(w_px)],
             },
         )
+        if strict:
+            raise ValueError(error_message)
         return 0
 
-    def _iter_polygons(geom):
+    def _iter_polygon_components(geom):
         if geom is None or geom.is_empty:
             return []
         if geom.geom_type == "Polygon":
             return [geom]
-        if geom.geom_type == "MultiPolygon":
-            return list(geom.geoms)
+        if geom.geom_type in ("MultiPolygon", "GeometryCollection"):
+            components = []
+            for child in geom.geoms:
+                components.extend(_iter_polygon_components(child))
+            return components
         return []
 
     def _coords_to_pts(coords):
@@ -2091,7 +2895,7 @@ def apply_matched_rgb_overrides_to_analysis(
     def _shape_mask(geom):
         region = np.zeros((h_px, w_px), dtype=np.uint8)
         painted = False
-        for poly in _iter_polygons(geom):
+        for poly in _iter_polygon_components(geom):
             if poly.is_empty:
                 continue
             ext_pts = _coords_to_pts(np.array(poly.exterior.coords))
@@ -2109,45 +2913,88 @@ def apply_matched_rgb_overrides_to_analysis(
 
     num_channels = int(getattr(analysis, "num_channels", 0) or 0)
     num_layers = int(getattr(analysis, "num_layers", 0) or 0)
-    if num_channels <= 0 or num_layers <= 0:
+    if (num_channels <= 0 or num_layers <= 0) and not strict:
         return 0
 
-    lut_rgb = img_processor.lut_rgb
-    ref_stacks = img_processor.ref_stacks
     matrix_arr = None
     if material_matrix is not None:
         candidate_matrix = np.asarray(material_matrix)
-        if candidate_matrix.ndim == 3 and candidate_matrix.shape[:2] == (h_px, w_px):
+        matrix_grid_is_valid = (
+            candidate_matrix.ndim == 3
+            and candidate_matrix.shape[:2] == (h_px, w_px)
+        )
+        matrix_dtype_is_valid = np.issubdtype(candidate_matrix.dtype, np.integer)
+        matrix_channels_are_valid = (
+            candidate_matrix.ndim == 3 and candidate_matrix.shape[2] > 0
+        )
+        if matrix_grid_is_valid and (
+            not strict or (matrix_dtype_is_valid and matrix_channels_are_valid)
+        ):
             matrix_arr = candidate_matrix
         else:
+            if strict:
+                error_message = (
+                    f"material_matrix shape/dtype "
+                    f"{candidate_matrix.shape}/{candidate_matrix.dtype} "
+                    f"does not match non-empty integer preview grid "
+                    f"{(h_px, w_px)}"
+                )
+            else:
+                error_message = (
+                    f"material_matrix shape {candidate_matrix.shape} "
+                    f"does not match preview grid {(h_px, w_px)}"
+                )
             _log.warning(
                 "Vector material matrix overrides skipped because cache grid mismatched analysis",
                 extra={
                     "event": "vector_material_matrix_grid_mismatch",
                     "error_type": "ValueError",
-                    "error_message": (
-                        f"material_matrix shape {candidate_matrix.shape} "
-                        f"does not match preview grid {(h_px, w_px)}"
-                    ),
+                    "error_message": error_message,
                     "material_matrix_shape": list(candidate_matrix.shape),
+                    **(
+                        {"material_matrix_dtype": str(candidate_matrix.dtype)}
+                        if strict
+                        else {}
+                    ),
                     "expected_shape": [int(h_px), int(w_px)],
                 },
             )
+            if strict:
+                raise ValueError(error_message)
+
+    if not analysis.matched_shapes:
+        return 0
+
+    if num_channels <= 0 or num_layers <= 0:
+        return 0
+
+    lut_rgb = img_processor.lut_rgb
+    ref_stacks = img_processor.ref_stacks
 
     changed = 0
     per_shape_diag: list[dict] = []
-    for shape_idx, shape in enumerate(analysis.matched_shapes):
-        geom = shape.get("geometry")
-        if geom is None or getattr(geom, "is_empty", False):
-            continue
-        shape_mask = _shape_mask(geom)
-        if shape_mask is None:
-            continue
-        effective_mask = np.logical_and(shape_mask, mask_arr)
-        if not np.any(effective_mask):
-            continue
 
-        pixels = matched_arr[effective_mask]
+    def _material_state(
+        shape: dict,
+    ) -> tuple[tuple[int, ...] | None, tuple[int, ...]]:
+        rgb = shape.get("matched_rgb")
+        try:
+            rgb_state = tuple(int(c) for c in rgb)
+        except (TypeError, ValueError):
+            rgb_state = None
+        recipe_state = tuple(int(v) for v in (shape.get("recipe") or []))
+        return rgb_state, recipe_state
+
+    def _height_identity_state(shape: dict) -> tuple[int, ...] | None:
+        rgb = shape.get("height_identity_rgb")
+        if rgb is None:
+            rgb = shape.get("matched_rgb") or shape.get("color")
+        try:
+            return tuple(int(c) for c in rgb)
+        except (TypeError, ValueError):
+            return None
+
+    def _dominant_rgb(pixels: np.ndarray) -> tuple[int, int, int]:
         codes = (
             pixels[:, 0].astype(np.uint32) * np.uint32(65536)
             + pixels[:, 1].astype(np.uint32) * np.uint32(256)
@@ -2155,18 +3002,42 @@ def apply_matched_rgb_overrides_to_analysis(
         )
         uniq, counts = np.unique(codes, return_counts=True)
         dominant_code = int(uniq[int(np.argmax(counts))])
-        dominant_rgb = (
+        return (
             (dominant_code >> 16) & 0xFF,
             (dominant_code >> 8) & 0xFF,
             dominant_code & 0xFF,
         )
+
+    def _project_component(
+        *,
+        shape_idx: int,
+        component_idx: int,
+        shape: dict,
+        geom,
+    ) -> dict | None:
+        shape_mask = _shape_mask(geom)
+        if shape_mask is None:
+            return None
+        effective_mask = np.logical_and(shape_mask, mask_arr)
+        if not np.any(effective_mask):
+            return None
+
+        dominant_rgb = _dominant_rgb(matched_arr[effective_mask])
+        if identity_arr is not None:
+            dominant_height_identity = _dominant_rgb(
+                identity_arr[effective_mask]
+            )
+        else:
+            dominant_height_identity = _height_identity_state(shape)
+            if dominant_height_identity is None:
+                dominant_height_identity = dominant_rgb
 
         query_lab = img_processor._rgb_to_lab(np.array([dominant_rgb], dtype=np.uint8))
         _, index = img_processor.kdtree.query(query_lab)
         try:
             lut_idx = int(np.atleast_1d(index)[0])
         except (TypeError, ValueError, IndexError):
-            continue
+            return None
         new_matched_rgb = tuple(int(c) for c in lut_rgb[lut_idx])
 
         stack_source = "ref_stacks_fallback"
@@ -2194,7 +3065,6 @@ def apply_matched_rgb_overrides_to_analysis(
             num_channels=num_channels,
         )
 
-        prev_rgb = shape.get("matched_rgb")
         prev_recipe = [int(v) for v in shape.get("recipe", [])]
 
         if len(per_shape_diag) < 24:
@@ -2205,6 +3075,7 @@ def apply_matched_rgb_overrides_to_analysis(
             per_shape_diag.append(
                 {
                     "shape_idx": int(shape_idx),
+                    "component_idx": int(component_idx),
                     "area": round(area, 3),
                     "effective_pixels": int(np.count_nonzero(effective_mask)),
                     "dominant_rgb": list(dominant_rgb),
@@ -2218,17 +3089,96 @@ def apply_matched_rgb_overrides_to_analysis(
                 }
             )
 
-        if (
-            isinstance(prev_rgb, tuple)
-            and tuple(int(c) for c in prev_rgb) == new_matched_rgb
-            and prev_recipe == new_recipe
-        ):
+        assignment_changed = _material_state(shape) != (
+            new_matched_rgb,
+            tuple(new_recipe),
+        )
+
+        identity_lab = img_processor._rgb_to_lab(
+            np.array([dominant_height_identity], dtype=np.uint8)
+        )
+        _, identity_index = img_processor.kdtree.query(identity_lab)
+        identity_lut_idx = int(np.atleast_1d(identity_index)[0])
+        original_recipe = _normalise_cached_stack_for_vector_recipe(
+            ref_stacks[identity_lut_idx],
+            target_layers=num_layers,
+            num_channels=num_channels,
+        )
+        return {
+            "matched_rgb": new_matched_rgb,
+            "lut_idx": lut_idx,
+            "recipe": new_recipe,
+            "height_identity_rgb": dominant_height_identity,
+            "original_recipe": original_recipe,
+            "changed": assignment_changed,
+        }
+
+    projected_shapes: list[dict] = []
+    for shape_idx, shape in enumerate(analysis.matched_shapes):
+        geom = shape.get("geometry")
+        if geom is None or getattr(geom, "is_empty", False):
+            projected_shapes.append(shape)
             continue
 
-        shape["matched_rgb"] = new_matched_rgb
-        shape["lut_idx"] = lut_idx
-        shape["recipe"] = new_recipe
-        changed += 1
+        components = _iter_polygon_components(geom)
+        if not components:
+            projected_shapes.append(shape)
+            continue
+
+        component_records: list[dict] = []
+        changed_components = 0
+        for component_idx, component in enumerate(components):
+            component_record = dict(shape)
+            component_record["geometry"] = component
+            projection = _project_component(
+                shape_idx=shape_idx,
+                component_idx=component_idx,
+                shape=shape,
+                geom=component,
+            )
+            if projection is not None:
+                component_record["matched_rgb"] = projection["matched_rgb"]
+                component_record["lut_idx"] = projection["lut_idx"]
+                component_record["recipe"] = projection["recipe"]
+                component_record["height_identity_rgb"] = projection[
+                    "height_identity_rgb"
+                ]
+                component_record["original_recipe"] = projection[
+                    "original_recipe"
+                ]
+                if projection["changed"]:
+                    changed_components += 1
+            component_records.append(component_record)
+
+        component_states = [
+            (_material_state(record), _height_identity_state(record))
+            for record in component_records
+        ]
+        if len(set(component_states)) <= 1:
+            # Preserve the original compound geometry whenever every connected
+            # component resolves to the same material assignment. This keeps
+            # zero-change and global-replacement exports structurally stable.
+            if component_records:
+                uniform_record = component_records[0]
+                if changed_components:
+                    shape["matched_rgb"] = uniform_record.get("matched_rgb")
+                    shape["lut_idx"] = uniform_record.get("lut_idx")
+                    shape["recipe"] = list(uniform_record.get("recipe") or [])
+                shape["height_identity_rgb"] = uniform_record.get(
+                    "height_identity_rgb"
+                )
+                shape["original_recipe"] = list(
+                    uniform_record.get("original_recipe") or []
+                )
+            projected_shapes.append(shape)
+        else:
+            # Downstream tiling and mesh construction consume records by value,
+            # not by list index. Shallow copies retain source identity, draw
+            # order, slot metadata, and any future non-geometry fields.
+            projected_shapes.extend(component_records)
+        changed += changed_components
+
+    analysis.matched_shapes = projected_shapes
 
     # Diagnostic: emit per-shape majority vote details.
     if per_shape_diag:
@@ -2264,18 +3214,20 @@ def _normalise_cached_stack_for_vector_recipe(
         return []
 
     flat = np.asarray(stack, dtype=np.int32).reshape(-1)
-    clamped_values = [
+    clamped_printable_values = [
         min(int(value), int(num_channels) - 1)
         for value in flat[:target_layers].tolist()
         if int(value) >= 0
     ]
-    filler = int(clamped_values[-1]) if clamped_values else 0
+    filler = int(clamped_printable_values[-1]) if clamped_printable_values else 0
+    unique_printable_values = set(clamped_printable_values)
+    fill_air_padding = len(unique_printable_values) == 1
 
     recipe: list[int] = []
     for raw_value in flat[:target_layers]:
         value = int(raw_value)
         if value < 0:
-            recipe.append(filler)
+            recipe.append(filler if fill_air_padding else value)
         else:
             recipe.append(min(value, int(num_channels) - 1))
 
@@ -2355,6 +3307,7 @@ class VectorProcessor:
         self.enable_outline = False
         self.outline_width_mm = 0.0
         self.expand_stroke_to_fill = False
+        self.layer_height_mm = float(PrinterConfig.LAYER_HEIGHT)
 
     @classmethod
     def from_img_processor(
@@ -3389,13 +4342,13 @@ class VectorProcessor:
         # engine uses the LUT's own color system instead of the stale UI
         # ``color_mode`` preset. Mirrors the raster pipeline logic in S01.
         #
-        # 当 LUT 自带调色板元数据（Merged JSON、反推 LUT 的 .json/.msgpack 等）
+        # 当 LUT 自带调色板元数据（Merged JSON/NPZ、反推 LUT 的 .json/.msgpack 等）
         # 时，用调色板真实条目覆盖 slot_names / preview_colors，避免继承上一次
         # UI 颜色模式（例如 4-Color CMYW）的预设槽位导致串色；同时沿用
         # ``build_palette_preview_colors`` 的规范颜色名兜底，保证 hex_color 缺省
         # 的 ColorDB 条目也能拿到正确 RGBA。
         lut_path = self.img_processor.lut_path
-        if lut_path.endswith((".json", ".msgpack")):
+        if lut_path.endswith((".json", ".msgpack", ".npz")):
             try:
                 from utils.lut_manager import LUTManager
                 from core.pipeline.preview_color_utils import build_palette_preview_colors
@@ -3474,7 +4427,13 @@ class VectorProcessor:
                 # 判断会误触发，把深色小碎片全部吸附到大面积锚点色。
 
         t0 = time.perf_counter()
-        matched_shapes = self._match_colors(clipped_shapes, replacement_manager, num_channels, num_layers=num_layers)
+        match_input_shapes = self._with_near_fill_match_queries(clipped_shapes)
+        matched_shapes = self._match_colors(
+            match_input_shapes,
+            replacement_manager,
+            num_channels,
+            num_layers=num_layers,
+        )
         min_hole_area_mm2 = float(getattr(VectorConfig, "MIN_COLOR_HOLE_AREA_MM2", 1.0))
         for idx, item in enumerate(clipped_shapes):
             filtered_geometry = VectorProcessor._filter_backing_holes(
@@ -3529,6 +4488,11 @@ class VectorProcessor:
         structure_mode: str = "Single-sided",
         progress_fn=None,
         backing_color_id: int = 0,
+        enable_relief: bool = False,
+        height_mode: str = "color",
+        color_height_map: dict[str, float] | None = None,
+        heightmap_path: str | None = None,
+        heightmap_max_height: float | None = None,
     ) -> trimesh.Scene:
         """Extrude analyzed vector shapes into a trimesh Scene.
         将分析后的矢量形状挤出为 trimesh Scene。
@@ -3546,6 +4510,16 @@ class VectorProcessor:
                 （底板几何体使用的材质槽索引，默认 0 以保持历史行为；
                 耗材档案或分离底板流程会传入用户选择的底板槽位，
                 预览/导出才能反映实际选中的耗材颜色。）
+            enable_relief: Build variable-height backing from existing SVG
+                regions.（是否按现有 SVG 色块生成可变高度底板。）
+            height_mode: ``color`` or ``heightmap`` height source.
+                （高度来源：按颜色或高度图。）
+            color_height_map: Matched RGB hex to absolute model height in mm.
+                （匹配色十六进制值到模型绝对高度的映射。）
+            heightmap_path: Optional grayscale heightmap path.
+                （可选灰度高度图路径。）
+            heightmap_max_height: Maximum heightmap model height in mm.
+                （高度图模型最大高度，单位毫米。）
 
         Returns:
             A ``trimesh.Scene`` with one geometry per material slot.
@@ -3572,12 +4546,24 @@ class VectorProcessor:
         structure_mode_value = str(getattr(structure_mode, "value", structure_mode))
 
         # === Stage 5: Run-length extrude per channel ===
-        layer_h = PrinterConfig.LAYER_HEIGHT
+        try:
+            layer_h = float(
+                getattr(self, "layer_height_mm", PrinterConfig.LAYER_HEIGHT)
+            )
+        except (TypeError, ValueError):
+            layer_h = float(PrinterConfig.LAYER_HEIGHT)
+        if not math.isfinite(layer_h) or layer_h <= 0:
+            layer_h = float(PrinterConfig.LAYER_HEIGHT)
         extrude_cache = {}
         is_5color = "5-Color Extended" in self.color_mode
         is_single_sided = "单面" in structure_mode_value or "Single" in structure_mode_value
+        if enable_relief and (is_5color or not is_single_sided):
+            raise ValueError(
+                "Native SVG relief supports only single-sided, non-5-Color "
+                "Extended models."
+            )
         mirror_transform = None
-        if is_single_sided and not is_5color:
+        if is_single_sided and not is_5color and not enable_relief:
             model_width_mm = bbox[2] * scale_factor
             mirror_transform = np.array(
                 [[-1.0, 0.0, 0.0, model_width_mm], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]
@@ -3623,7 +4609,26 @@ class VectorProcessor:
                 )
             return self._run_length_extrude(**kwargs)
 
-        if is_5color:
+        if enable_relief and is_single_sided and not is_5color:
+            meshes_by_slot = self._build_relief_meshes(
+                matched_shapes=matched_shapes,
+                num_layers=num_layers,
+                layer_h=layer_h,
+                num_channels=num_channels,
+                slot_names=slot_names,
+                scale_factor=scale_factor,
+                backing_color_id=backing_color_id,
+                default_height_mm=thickness_mm,
+                height_mode=height_mode,
+                color_height_map=color_height_map,
+                heightmap_path=heightmap_path,
+                heightmap_max_height=heightmap_max_height,
+                bbox=bbox,
+                extrude_cache=extrude_cache,
+                enable_fridge_magnet=enable_fridge_magnet,
+                fridge_magnets=fridge_magnets,
+            )
+        elif is_5color:
             meshes_by_slot = _run_length_extrude_with_optional_native(
                 matched_shapes=matched_shapes,
                 num_layers=num_layers,
@@ -3669,7 +4674,12 @@ class VectorProcessor:
             backing_z_start = num_layers * layer_h
 
         backing_sil = None
-        if thickness_mm > 0 and silhouette is not None and not silhouette.is_empty:
+        if (
+            not (enable_relief and is_single_sided and not is_5color)
+            and thickness_mm > 0
+            and silhouette is not None
+            and not silhouette.is_empty
+        ):
             _log.debug("Generating backing: %s layers (%smm)", backing_layer_count, thickness_mm)
             backing_sil = self._normalize_contours(silhouette, close_delta_mm=0.4)
             if backing_sil is None or backing_sil.is_empty:
@@ -3811,10 +4821,11 @@ class VectorProcessor:
             # ``_extrude_geometry`` calls so Three.js / exporters do not render
             # visible seams along shape boundaries. 对相邻 shape 独立 extrude
             # 后重合的边界顶点做焊接，避免下游 mesh 渲染/导出在形状边界出现缝隙。
-            try:
-                combined.merge_vertices()
-            except Exception:
-                pass
+            if not data.get("topology_finalized", False):
+                try:
+                    combined.merge_vertices()
+                except Exception:
+                    pass
             self._fix_coordinates(combined, svg_height_mm)
             if mirror_transform is not None:
                 combined.apply_transform(mirror_transform)
@@ -3844,6 +4855,238 @@ class VectorProcessor:
         _log.debug("Extrude cache entries: %s", stage_timings["extrude_cache_entries"])
         _log.debug("Scene complete: %s objects", len(scene.geometry))
         return scene
+
+    @staticmethod
+    def _build_relief_meshes(
+        *,
+        matched_shapes,
+        num_layers,
+        layer_h,
+        num_channels,
+        slot_names,
+        scale_factor,
+        backing_color_id,
+        default_height_mm,
+        height_mode,
+        color_height_map,
+        heightmap_path,
+        heightmap_max_height,
+        bbox,
+        extrude_cache,
+        enable_fridge_magnet=False,
+        fridge_magnets=None,
+    ):
+        """Extrude existing SVG regions at configured heights.
+
+        This deliberately reuses ``matched_shapes``. Relief changes only each
+        region's backing depth and optical Z offset; it never rasterizes SVG
+        colour geometry into voxels.
+
+        直接复用 ``matched_shapes``：浮雕只改变各色块的底板深度和光学层
+        Z 偏移，不把 SVG 色块重新栅格化成体素。
+        """
+        normalized_heights: dict[str, float] = {}
+        for raw_key, raw_height in (color_height_map or {}).items():
+            key = str(raw_key).strip().lower()
+            if not key.startswith("#"):
+                key = f"#{key}"
+            try:
+                height = float(raw_height)
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(height) and height > 0:
+                normalized_heights[key] = height
+
+        resolved_height_mode = str(height_mode or "color").lower()
+        sampled_height_matrix = None
+        if resolved_height_mode == "heightmap":
+            if not heightmap_path:
+                raise ValueError("Native SVG heightmap relief requires heightmap_path")
+            from core.heightmap_loader import HeightmapLoader
+
+            bbox_width = float(bbox[2])
+            bbox_height = float(bbox[3])
+            if bbox_width <= 0 or bbox_height <= 0:
+                raise ValueError("Native SVG relief requires a positive SVG bounding box")
+            sample_width = max(
+                2,
+                min(1600, int(round(bbox_width * float(scale_factor) * 4.0))),
+            )
+            sample_height = max(
+                2,
+                min(
+                    1600,
+                    int(round(sample_width * bbox_height / bbox_width)),
+                ),
+            )
+            heightmap_result = HeightmapLoader.load_and_process(
+                heightmap_path=str(heightmap_path),
+                target_w=sample_width,
+                target_h=sample_height,
+                max_relief_height=float(heightmap_max_height or default_height_mm),
+                base_thickness=float(default_height_mm),
+            )
+            if not heightmap_result.get("success"):
+                raise ValueError(
+                    str(heightmap_result.get("error") or "Heightmap processing failed")
+                )
+            sampled_height_matrix = np.asarray(
+                heightmap_result["height_matrix"], dtype=np.float32
+            )
+        elif resolved_height_mode != "color":
+            raise ValueError(f"Unsupported native SVG relief height mode: {height_mode}")
+
+        minimum_total_layers = max(1, int(num_layers)) + 1
+        default_backing_layers = max(
+            1,
+            int(round(max(float(default_height_mm), layer_h) / layer_h)),
+        )
+        default_total_layers = max(
+            minimum_total_layers,
+            default_backing_layers + int(num_layers),
+        )
+        optical_groups: dict[tuple[int, int, int, int], list] = {}
+        backing_groups: dict[int, list] = {}
+
+        for item in matched_shapes:
+            geometry = item.get("geometry")
+            recipe = [int(value) for value in (item.get("recipe") or [])]
+            if geometry is None or geometry.is_empty or not recipe:
+                continue
+            rgb = (
+                item.get("height_identity_rgb")
+                or item.get("matched_rgb")
+                or item.get("color")
+                or ()
+            )
+            try:
+                color_key = f"#{int(rgb[0]):02x}{int(rgb[1]):02x}{int(rgb[2]):02x}"
+            except (TypeError, ValueError, IndexError):
+                color_key = ""
+            if sampled_height_matrix is not None:
+                sample_point = geometry.representative_point()
+                x_ratio = (float(sample_point.x) - float(bbox[0])) / float(bbox[2])
+                y_ratio = (float(sample_point.y) - float(bbox[1])) / float(bbox[3])
+                sample_x = int(
+                    np.clip(
+                        round(x_ratio * (sampled_height_matrix.shape[1] - 1)),
+                        0,
+                        sampled_height_matrix.shape[1] - 1,
+                    )
+                )
+                sample_y = int(
+                    np.clip(
+                        round(y_ratio * (sampled_height_matrix.shape[0] - 1)),
+                        0,
+                        sampled_height_matrix.shape[0] - 1,
+                    )
+                )
+                requested_height = float(sampled_height_matrix[sample_y, sample_x])
+            else:
+                requested_height = normalized_heights.get(color_key)
+            if requested_height is None:
+                total_layers = default_total_layers
+            else:
+                total_layers = max(
+                    minimum_total_layers,
+                    int(np.ceil(requested_height / layer_h)),
+                )
+
+            backing_layers = total_layers - int(num_layers)
+            backing_groups.setdefault(backing_layers, []).append(geometry)
+            layers_to_use = min(int(num_layers), len(recipe))
+            for channel, runs in VectorProcessor._build_channel_runs(
+                recipe,
+                layers_to_use,
+                int(num_channels),
+            ).items():
+                if channel >= len(slot_names):
+                    continue
+                for run_start, run_end in runs:
+                    optical_groups.setdefault(
+                        (total_layers, channel, run_start, run_end), []
+                    ).append(geometry)
+
+        meshes_by_slot: dict[str, dict] = {}
+        for (total_layers, channel, run_start, run_end), geometries in optical_groups.items():
+            merged = _union_run_group_geometries(geometries)
+            inverted_start = (int(num_layers) - 1) - run_end
+            inverted_end = (int(num_layers) - 1) - run_start
+            z_offset = (total_layers - int(num_layers) + inverted_start) * layer_h
+            height = (inverted_end - inverted_start + 1) * layer_h
+            slot_name = slot_names[channel]
+            entry = meshes_by_slot.setdefault(
+                slot_name,
+                {"meshes": [], "mat_id": channel},
+            )
+            entry["meshes"].extend(
+                VectorProcessor._extrude_geometry(
+                    merged,
+                    height=height,
+                    z_offset=z_offset,
+                    scale=scale_factor,
+                    extrude_cache=extrude_cache,
+                )
+            )
+
+        board_entry = meshes_by_slot.setdefault(
+            "Board",
+            {
+                "meshes": [],
+                "mat_id": int(backing_color_id),
+                "topology_finalized": True,
+            },
+        )
+        board_entry["topology_finalized"] = True
+        backing_volume_slabs = []
+        full_backing_sil = _union_run_group_geometries(
+            [
+                geometry
+                for geometries in backing_groups.values()
+                for geometry in geometries
+            ]
+        )
+        cavity_specs = []
+        if enable_fridge_magnet and not full_backing_sil.is_empty:
+            maximum_backing_height = max(backing_groups, default=0) * layer_h
+            cavity_specs = VectorProcessor._build_vector_fridge_cavity_specs(
+                backing_sil=full_backing_sil,
+                fridge_magnets=fridge_magnets or [],
+                bbox=bbox,
+                scale_factor=scale_factor,
+                backing_height=maximum_backing_height,
+            )
+        for backing_layers, geometries in backing_groups.items():
+            merged = _union_run_group_geometries(geometries)
+            backing_height = backing_layers * layer_h
+            group_cavity_specs = []
+            for spec in cavity_specs:
+                clipped = VectorProcessor._extract_polygonal_geometry(
+                    make_valid(merged.intersection(spec["geometry"]))
+                )
+                if clipped is not None and not clipped.is_empty:
+                    group_cavity_specs.append(
+                        {
+                            "geometry": clipped,
+                            "depth_mm": spec["depth_mm"],
+                        }
+                    )
+            backing_slabs = VectorProcessor._build_backing_cavity_slabs(
+                backing_sil=merged,
+                backing_z_start=0.0,
+                backing_height=backing_height,
+                cavity_specs=group_cavity_specs,
+                outer_side="low",
+            )
+            for slab in backing_slabs:
+                backing_volume_slabs.append(slab)
+        board_mesh = _build_stepped_volume_mesh(
+            backing_volume_slabs,
+            scale_factor=scale_factor,
+        )
+        if board_mesh is not None and len(board_mesh.faces) > 0:
+            board_entry["meshes"].append(board_mesh)
+        return meshes_by_slot
 
     def svg_to_mesh(
         self,
@@ -4024,9 +5267,16 @@ class VectorProcessor:
         # displayed as default black when a caller previews ``matched_rgb``
         # without compositing alpha.
         matched_rgb = np.full((h_px, w_px, 3), 255, dtype=np.uint8)
+        height_identity_rgb = np.full((h_px, w_px, 3), 255, dtype=np.uint8)
         quantized_image = np.full((h_px, w_px, 3), 255, dtype=np.uint8)
         mask_solid = np.zeros((h_px, w_px), dtype=bool)
-        material_matrix = np.full((h_px, w_px, analysis.num_layers), -1, dtype=np.int16)
+        material_matrix_dtype = _material_matrix_dtype_for_vector_analysis(analysis)
+        material_matrix = np.full(
+            (h_px, w_px, analysis.num_layers),
+            -1,
+            dtype=material_matrix_dtype,
+        )
+        original_material_matrix = np.full_like(material_matrix, -1)
 
         ss = max(1, int(supersample_preview))
         ss_h = h_px * ss
@@ -4242,11 +5492,30 @@ class VectorProcessor:
                 shape.get("color") or shape.get("matched_rgb") or (0, 0, 0),
                 dtype=np.uint8,
             )
+            height_identity_color = np.array(
+                shape.get("height_identity_rgb")
+                or shape.get("matched_rgb")
+                or shape.get("color")
+                or (0, 0, 0),
+                dtype=np.uint8,
+            )
 
             recipe = shape.get("recipe") or []
-            recipe_full = np.full((analysis.num_layers,), -1, dtype=np.int16)
+            recipe_full = np.full(
+                (analysis.num_layers,),
+                -1,
+                dtype=material_matrix_dtype,
+            )
             for idx, value in enumerate(recipe[: analysis.num_layers]):
                 recipe_full[idx] = int(value)
+            original_recipe = shape.get("original_recipe") or recipe
+            original_recipe_full = np.full(
+                (analysis.num_layers,),
+                -1,
+                dtype=material_matrix_dtype,
+            )
+            for idx, value in enumerate(original_recipe[: analysis.num_layers]):
+                original_recipe_full[idx] = int(value)
 
             for poly in _iter_polygons(geom):
                 if poly.is_empty:
@@ -4256,9 +5525,19 @@ class VectorProcessor:
                     continue
 
                 _assign_local_mask(matched_rgb, region_mask, matched_color)
+                _assign_local_mask(
+                    height_identity_rgb,
+                    region_mask,
+                    height_identity_color,
+                )
                 _assign_local_mask(quantized_image, region_mask, source_color)
                 _assign_local_mask(mask_solid, region_mask, True)
                 _assign_local_mask(material_matrix, region_mask, recipe_full)
+                _assign_local_mask(
+                    original_material_matrix,
+                    region_mask,
+                    original_recipe_full,
+                )
 
                 if preview_rgba_ss is not None:
                     # preview_rgba is display-only and already supersampled +
@@ -4300,16 +5579,29 @@ class VectorProcessor:
             preview_rgba[mask_solid, :3] = matched_rgb[mask_solid]
             preview_rgba[mask_solid, 3] = 255
 
+        # Preserve object identity for pristine snapshots. The artifact
+        # externalizer deduplicates by ndarray identity, so an unmodified
+        # vector preview writes one RGB and one recipe grid rather than
+        # redundant current/original/height copies. Replaced outputs remain
+        # distinct while original_matched_rgb and height_identity_rgb alias.
+        if np.array_equal(matched_rgb, height_identity_rgb):
+            matched_rgb = height_identity_rgb
+        if np.array_equal(material_matrix, original_material_matrix):
+            material_matrix = original_material_matrix
+
         return {
             "target_w": w_px,
             "target_h": h_px,
             "target_width_mm": w_mm,
             "pixel_scale": (w_mm / w_px) if w_px > 0 else 0.0,
             "matched_rgb": matched_rgb,
+            "original_matched_rgb": height_identity_rgb,
+            "height_identity_rgb": height_identity_rgb,
             "quantized_image": quantized_image,
             "mask_solid": mask_solid,
             "backing_mask": backing_mask if np.any(backing_mask) else mask_solid.copy(),
             "material_matrix": material_matrix,
+            "original_material_matrix": original_material_matrix,
             "preview_rgba": preview_rgba,
         }
 
@@ -4460,6 +5752,107 @@ class VectorProcessor:
 
     # ── Stage 4: Color matching with per-color cache ─────────────────────
 
+    def _with_near_fill_match_queries(self, clipped_shapes):
+        """Return shallow-copied shapes with near-identical fills sharing a query."""
+        if getattr(self.img_processor, "solve_for_fills", None) is not None:
+            return clipped_shapes
+
+        threshold = float(
+            getattr(VectorConfig, "VECTOR_NEAR_FILL_QUERY_DELTA_E", 0.0)
+        )
+        if not clipped_shapes or threshold <= 0.0:
+            return clipped_shapes
+
+        stats_by_color = {}
+        for idx, item in enumerate(clipped_shapes):
+            if item.get("match_color") is not None:
+                continue
+            color = item.get("color")
+            try:
+                rgb = (int(color[0]), int(color[1]), int(color[2]))
+            except (TypeError, IndexError, ValueError):
+                continue
+            geom = item.get("geometry")
+            try:
+                area = max(0.0, float(geom.area)) if geom is not None else 0.0
+            except (AttributeError, TypeError, ValueError):
+                area = 0.0
+            stats = stats_by_color.setdefault(
+                rgb,
+                {"area": 0.0, "first_index": idx},
+            )
+            stats["area"] += area
+
+        if len(stats_by_color) < 2:
+            return clipped_shapes
+
+        source_colors = list(stats_by_color)
+        try:
+            source_lab = self.img_processor._rgb_to_lab(
+                np.array(source_colors, dtype=np.uint8)
+            ).reshape(-1, 3).astype(np.float64)
+        except VECTOR_HANDLED_ERRORS:
+            return clipped_shapes
+
+        lab_by_color = {
+            rgb: source_lab[idx]
+            for idx, rgb in enumerate(source_colors)
+        }
+        ordered_colors = sorted(
+            source_colors,
+            key=lambda rgb: (
+                -float(stats_by_color[rgb]["area"]),
+                int(stats_by_color[rgb]["first_index"]),
+                rgb,
+            ),
+        )
+
+        representatives = []
+        representative_members = []
+        representative_by_color = {}
+        for rgb in ordered_colors:
+            rgb_lab = lab_by_color[rgb]
+            chosen = None
+            for group_idx, representative in enumerate(representatives):
+                if all(
+                    float(np.linalg.norm(rgb_lab - lab_by_color[member]))
+                    <= threshold
+                    for member in representative_members[group_idx]
+                ):
+                    chosen = representative
+                    representative_members[group_idx].append(rgb)
+                    break
+            if chosen is None:
+                representatives.append(rgb)
+                representative_members.append([rgb])
+                chosen = rgb
+            representative_by_color[rgb] = chosen
+
+        if all(
+            representative_by_color.get(rgb, rgb) == rgb
+            for rgb in representative_by_color
+        ):
+            return clipped_shapes
+
+        updated_shapes = []
+        changed = False
+        for item in clipped_shapes:
+            color = item.get("color")
+            try:
+                rgb = (int(color[0]), int(color[1]), int(color[2]))
+            except (TypeError, IndexError, ValueError):
+                updated_shapes.append(item)
+                continue
+            representative = representative_by_color.get(rgb, rgb)
+            if representative != rgb and item.get("match_color") is None:
+                updated = dict(item)
+                updated["match_color"] = representative
+                updated_shapes.append(updated)
+                changed = True
+            else:
+                updated_shapes.append(item)
+        return updated_shapes if changed else clipped_shapes
+
     def _match_lut_index_for_rgb(self, query_rgb):
         """Return the LUT index and Lab distance for one RGB query.
 
@@ -4523,9 +5916,21 @@ class VectorProcessor:
                 recipe = cached["recipe"]
                 matched_rgb = cached["matched_rgb"]
                 lut_idx = cached["lut_idx"]
+                height_identity_rgb = cached["height_identity_rgb"]
+                original_recipe = cached["original_recipe"]
             else:
-                lut_idx, lab_dist = self._match_lut_index_for_rgb(query_rgb)
-                matched_rgb = tuple(int(c) for c in self.img_processor.lut_rgb[lut_idx])
+                identity_lut_idx, lab_dist = self._match_lut_index_for_rgb(query_rgb)
+                height_identity_rgb = tuple(
+                    int(c) for c in self.img_processor.lut_rgb[identity_lut_idx]
+                )
+                original_stack = self.img_processor.ref_stacks[identity_lut_idx]
+                original_recipe = _normalise_cached_stack_for_vector_recipe(
+                    original_stack,
+                    target_layers=min(int(num_layers), len(original_stack)),
+                    num_channels=num_channels,
+                )
+                lut_idx = identity_lut_idx
+                matched_rgb = height_identity_rgb
 
                 if replacement_manager is not None:
                     replacement = replacement_manager.get_replacement(matched_rgb)
@@ -4536,11 +5941,17 @@ class VectorProcessor:
                         matched_rgb = tuple(int(c) for c in self.img_processor.lut_rgb[lut_idx])
 
                 stack = self.img_processor.ref_stacks[lut_idx]
-                recipe = [min(int(stack[z]), num_channels - 1) for z in range(min(num_layers, len(stack)))]
+                recipe = _normalise_cached_stack_for_vector_recipe(
+                    stack,
+                    target_layers=min(int(num_layers), len(stack)),
+                    num_channels=num_channels,
+                )
                 color_cache[query_rgb] = {
                     "recipe": recipe,
                     "matched_rgb": matched_rgb,
                     "lut_idx": lut_idx,
+                    "height_identity_rgb": height_identity_rgb,
+                    "original_recipe": original_recipe,
                     "lab_dist": lab_dist,
                 }
 
@@ -4585,6 +5996,8 @@ class VectorProcessor:
                     "match_color": query_rgb,
                     "matched_rgb": matched_rgb,
                     "lut_idx": int(lut_idx),
+                    "height_identity_rgb": height_identity_rgb,
+                    "original_recipe": list(original_recipe),
                 }
             )
 

@@ -129,13 +129,17 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "请求缺少必填数据或包含无效值。",
     en: "The request is missing required data or contains invalid values.",
   },
+  api_error_vector_native_requires_svg: {
+    zh: "矢量建模模式仅支持 SVG 文件。请上传 SVG，或切换到“高保真”或“像素艺术”模式。",
+    en: "Vector Native mode requires an SVG file. Upload an SVG, or switch to High-Fidelity or Pixel Art mode.",
+  },
   api_error_http_429: {
     zh: "请求过于频繁，请稍后再试。",
     en: "Too many requests were sent. Please wait and try again.",
   },
   api_error_http_500: {
-    zh: "服务器发生内部错误。请使用请求 ID 查看日志。",
-    en: "The server hit an internal error. Check the log for the request ID.",
+    zh: "服务器发生内部错误。请稍后重试；如果问题持续，请提交反馈。",
+    en: "The server hit an internal error. Try again later, or submit feedback if it keeps happening.",
   },
   api_error_http_500_with_request_id: {
     zh: "服务器发生内部错误。请求 ID：{requestId}。",
@@ -154,20 +158,20 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "The server timed out waiting for a dependency.",
   },
   api_error_http_default: {
-    zh: "接口请求失败。请使用请求 ID 查看日志。",
-    en: "API request failed. Check the log for the request ID.",
+    zh: "接口请求失败。请重试；如果问题持续，请提交反馈。",
+    en: "The API request failed. Try again, or submit feedback if it keeps happening.",
   },
   api_error_http_client_default: {
     zh: "请求未被服务器接受。请检查当前输入、权限或资源是否仍然可用。",
     en: "The server did not accept the request. Check the current input, permissions, or resource availability.",
   },
   api_error_http_server_default: {
-    zh: "服务器处理请求时失败。请使用请求 ID 查看日志。",
-    en: "The server failed while handling the request. Check the log for the request ID.",
+    zh: "服务器处理请求时失败。请稍后重试；如果问题持续，请提交反馈。",
+    en: "The server failed while handling the request. Try again later, or submit feedback if it keeps happening.",
   },
   api_error_no_response: {
-    zh: "接口请求在服务器返回响应前失败。",
-    en: "API request failed before the server returned a response.",
+    zh: "请求没有收到服务器响应。请确认 Lumina 后端已启动、网络连接正常，然后重试。",
+    en: "The request did not receive a server response. Make sure the Lumina backend is running, check the network connection, and try again.",
   },
   api_error_with_request_id: {
     zh: "{message}请求 ID：{requestId}。",
@@ -1729,6 +1733,40 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "ℹ️ 3D preview simplified",
   },
 
+  // ==================== Browser Completion Notifications ====================
+  "completion_notification.preview.title": {
+    zh: "预览已完成",
+    en: "Preview complete",
+  },
+  "completion_notification.preview.body": {
+    zh: "预览已准备好，可以查看。",
+    en: "Your preview is ready to inspect.",
+  },
+  "completion_notification.generation.title": {
+    zh: "模型生成已完成",
+    en: "Model generation complete",
+  },
+  "completion_notification.generation.body": {
+    zh: "模型已准备好，可以下载或发送到切片软件。",
+    en: "Your model is ready to download or send to a slicer.",
+  },
+  "completion_notification.batch.title": {
+    zh: "批量生成已完成",
+    en: "Batch generation complete",
+  },
+  "completion_notification.batch.body": {
+    zh: "批量生成结果已准备好。",
+    en: "Your batch results are ready.",
+  },
+  "completion_notification.calibration.title": {
+    zh: "校准生成已完成",
+    en: "Calibration generation complete",
+  },
+  "completion_notification.calibration.body": {
+    zh: "校准文件已准备好。",
+    en: "Your calibration files are ready.",
+  },
+
   // ==================== Palette / Replacement ====================
   palette_empty: {
     zh: "暂无颜色，请先生成预览。",
@@ -2431,6 +2469,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "LUT 合并",
     en: "LUT Merge",
   },
+  "tab.lutLibrary": {
+    zh: "LUT库",
+    en: "LUT Library",
+  },
+  "tab.lutCloudSync": {
+    zh: "云端 LUT 库",
+    en: "Cloud LUT Library",
+  },
   "tab.lutDetails": {
     zh: "LUT 详情",
     en: "LUT Details",
@@ -2530,6 +2576,42 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   "settings.advanced": {
     zh: "高级",
     en: "Advanced",
+  },
+  "settings.completion_notifications_heading": {
+    zh: "完成通知",
+    en: "Completion notifications",
+  },
+  "settings.completion_notifications_description": {
+    zh: "浏览器通知会在 Windows 或 macOS 上，于预览、模型生成、批量生成和校准生成完成时提醒你。此设置仅保存在当前浏览器中。",
+    en: "Browser notifications alert you on Windows or macOS when preview, model generation, batch generation, or calibration generation finishes. This setting is stored only in this browser.",
+  },
+  "settings.completion_notifications_enable_label": {
+    zh: "启用浏览器完成通知",
+    en: "Enable browser completion notifications",
+  },
+  "settings.completion_notifications_hint": {
+    zh: "开启时浏览器会申请通知权限；允许后，完成提醒会显示在 Windows 通知中心或 macOS 通知中心。",
+    en: "Enabling this asks the browser for notification permission. Once allowed, completion alerts appear in Windows Notification Center or macOS Notification Center.",
+  },
+  "settings.completion_notifications_granted": {
+    zh: "浏览器已允许通知。开启后，此设备会收到完成提醒。",
+    en: "Browser permission is granted. When enabled, this device will receive completion alerts.",
+  },
+  "settings.completion_notifications_denied": {
+    zh: "浏览器已拒绝通知权限，功能保持关闭。请在浏览器的网站通知设置中允许；macOS 还需确认“系统设置 > 通知”未关闭浏览器通知。",
+    en: "The browser denied notification permission, so the feature remains off. Allow it in the browser's website notification settings; on macOS, also check that the browser is enabled under System Settings > Notifications.",
+  },
+  "settings.completion_notifications_default": {
+    zh: "尚未授予浏览器通知权限。开启时浏览器会询问；若关闭或忽略提示，功能会保持关闭。",
+    en: "Browser notification permission has not been granted. The browser will ask when you enable it; dismissing the prompt keeps the feature off.",
+  },
+  "settings.completion_notifications_unsupported": {
+    zh: "当前浏览器不支持通知，功能保持关闭。",
+    en: "This browser does not support notifications, so the feature remains off.",
+  },
+  "settings.completion_notifications_request_failed": {
+    zh: "请求浏览器通知权限失败，功能保持关闭。请稍后重试。",
+    en: "The notification permission request failed, so the feature remains off. Please try again later.",
   },
   "settings.solver_cache_density_heading": {
     zh: "穷举数量",
@@ -2662,8 +2744,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Base-plate layer-height modifier",
   },
   "settings.base_layer_height_modifier_desc": {
-    zh: "在 3MF 里写入 layer_config_ranges，让底板用喷嘴直径一半的粗层高打印（0.4 → 0.2 mm，0.2 → 0.1 mm），显著缩短底板耗时。仅对当前设置中选择的兼容切片软件生效，导出会使用该切片软件各自的机器配置；双面模型会自动跳过。",
-    en: "Writes layer_config_ranges so the base plate prints at half the nozzle diameter (0.4 → 0.2 mm, 0.2 → 0.1 mm), noticeably reducing base-plate time. Applies only to the compatible slicer selected in Settings, using that slicer's own machine profile; skipped for double-sided prints.",
+    zh: "生成 3MF 时会计入固定首层，并选择能准确落在底板边界、且符合当前机型限制的较粗层高，缩短底板耗时并避免余数导致少层。仅对当前设置中选择的兼容切片软件生效，并使用各自的机器配置；浮雕、双面模型或没有安全可选值时会自动跳过。",
+    en: "When generating a 3MF, this accounts for the fixed first layer and selects a compatible coarser height that lands exactly on the backing boundary and fits the selected printer. It applies only to the compatible slicer selected in Settings and uses that slicer's own machine profile; reliefs, double-sided prints, and cases where no safe value exists are skipped.",
   },
   "settings.custom_slicer_path": {
     zh: "手动切片软件路径",
@@ -4106,6 +4188,22 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "上传后裁剪",
     en: "Crop After Upload",
   },
+  basic_image_rotation_label: {
+    zh: "图像旋转",
+    en: "Image Rotation",
+  },
+  basic_image_rotation_apply: {
+    zh: "应用旋转",
+    en: "Apply Rotation",
+  },
+  basic_image_rotation_hint: {
+    zh: "旋转会直接更新当前图片；后续预览和导出都会使用旋转后的图像。",
+    en: "Rotation updates the current image; later previews and exports use the rotated image.",
+  },
+  basic_image_rotation_failed: {
+    zh: "图像旋转失败",
+    en: "Failed to rotate image",
+  },
   basic_lut_label: {
     zh: "LUT",
     en: "LUT",
@@ -4134,6 +4232,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "请先选择品牌",
     en: "Pick a brand first",
   },
+  basic_lut_multi_select: {
+    zh: "同组多选 LUT",
+    en: "Multi-select LUTs in this group",
+  },
+  basic_lut_selected_count: {
+    zh: "已选",
+    en: "Selected",
+  },
   basic_lut_color_mode_bw: {
     zh: "黑白",
     en: "BW",
@@ -4142,17 +4248,41 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "4 色",
     en: "4-Color",
   },
+  basic_lut_color_mode_4color_cmyw: {
+    zh: "4 色 CMYW",
+    en: "4-Color (CMYW)",
+  },
+  basic_lut_color_mode_4color_rybw: {
+    zh: "4 色 RYBW",
+    en: "4-Color (RYBW)",
+  },
   basic_lut_color_mode_5color_ext: {
     zh: "5 色扩展",
     en: "5-Color Extended",
+  },
+  basic_lut_color_mode_5color_ext_1444: {
+    zh: "5 色扩展 1444",
+    en: "5-Color Extended (1444)",
   },
   basic_lut_color_mode_6color: {
     zh: "6 色",
     en: "6-Color",
   },
+  basic_lut_color_mode_6color_cmywgk: {
+    zh: "6 色 CMYWGK",
+    en: "6-Color (CMYWGK 1296)",
+  },
+  basic_lut_color_mode_6color_rybwgk: {
+    zh: "6 色 RYBWGK",
+    en: "6-Color (RYBWGK 1296)",
+  },
   basic_lut_color_mode_8color: {
     zh: "8 色",
     en: "8-Color",
+  },
+  basic_lut_color_mode_8color_max: {
+    zh: "8 色 Max",
+    en: "8-Color Max",
   },
   basic_lut_color_mode_merged: {
     zh: "合并 LUT",
@@ -4720,6 +4850,26 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "自动切割为多片 3MF 压缩包",
     en: "Auto-tiled into a ZIP of 3MF files",
   },
+  large_format_warning_native_unavailable: {
+    zh: "此 SVG 暂不支持原生大画幅切片，已改用栅格切片。",
+    en: "This SVG is not supported by native large-format tiling, so raster tiling was used.",
+  },
+  large_format_warning_unsupported_features: {
+    zh: "此 SVG 含有原生大画幅暂不支持的特性（{features}），已改用栅格切片。",
+    en: "This SVG uses features unsupported by native large-format tiling ({features}), so raster tiling was used.",
+  },
+  large_format_warning_raster_fallback: {
+    zh: "本次大画幅 SVG 已改用栅格切片。",
+    en: "Raster tiling was used for this large-format SVG.",
+  },
+  large_format_warning_native_failure: {
+    zh: "原生矢量切片生成失败，已自动改用栅格切片。",
+    en: "Native vector tiling failed, so raster tiling was used automatically.",
+  },
+  large_format_warning_density_reduced: {
+    zh: "为避免超过像素预算，栅格切片清晰度已自动降低。",
+    en: "Raster tiling density was reduced automatically to stay within the pixel budget.",
+  },
   basic_tile_width: {
     zh: "切片宽度",
     en: "Tile Width",
@@ -4848,9 +4998,9 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "启用浮雕",
     en: "Enable Relief",
   },
-  relief_vector_unsupported: {
-    zh: "矢量模式暂不支持浮雕",
-    en: "Relief is not supported in Vector mode",
+  relief_vector_unsupported_mode: {
+    zh: "原生 SVG 浮雕目前仅支持非五色扩展的单面模式。",
+    en: "Native SVG relief currently supports only single-sided, non-5-Color Extended mode.",
   },
   relief_max_height: {
     zh: "最大高度",
@@ -4879,6 +5029,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   relief_heightmap_label: {
     zh: "高度图",
     en: "Heightmap",
+  },
+  relief_heightmap_generate_requires_upload: {
+    zh: "请先上传高度图并获取高度映射后再生成",
+    en: "Upload a heightmap and generate its height mapping before generating the model.",
   },
   relief_file_selected: {
     zh: "已选择",
@@ -6869,6 +7023,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "LUT 已降级匹配（名称相同但指纹不一致）",
     en: "LUT matched by name but fingerprint differs — colors may vary",
   },
+  recipe_import_warning_secondary_lut_missing: {
+    zh: "部分多选 LUT 在本机未找到，已从导入选择中移除。",
+    en: "Some selected LUTs were not found locally and were removed from the imported selection.",
+  },
   recipe_import_warning_fridge_conflict_puzzle: {
     zh: "导入的配方同时启用了冰箱贴模式和拼图模式。为保持状态有效，拼图模式已被禁用。",
     en: "The imported recipe enabled both fridge magnet mode and puzzle mode. Puzzle mode has been disabled to keep the state valid.",
@@ -6892,6 +7050,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   recipe_import_warning_back_labels_unavailable: {
     zh: "导入的配方启用了拼图背面标签。当前版本暂不支持背面标签，已自动关闭。",
     en: "The imported recipe enabled puzzle back labels. Back labels are not available in this version and have been disabled.",
+  },
+  recipe_import_warning_spatial_edits_not_serialized: {
+    zh: "连通区域的局部改色仅属于当前会话，未写入分享配方；导入后需要重新应用。",
+    en: "Connected-region color edits belong to the current session and were not saved in the shared recipe; reapply them after import.",
   },
   recipe_import_schema_newer: {
     zh: "配方版本较新，部分参数可能无法恢复",
@@ -7711,6 +7873,214 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "可一次选择多个 ZIP；导出文件也可再次批量导入。",
     en: "You can choose multiple ZIP files at once, and exported bundles can be imported again in bulk.",
   },
+  lut_library_title: {
+    zh: "LUT库",
+    en: "LUT Library",
+  },
+  lut_library_total_label: {
+    zh: "本地 LUT",
+    en: "Local LUTs",
+  },
+  lut_library_cloud_label: {
+    zh: "云端安装",
+    en: "Cloud Installed",
+  },
+  lut_library_custom_label: {
+    zh: "自定义",
+    en: "Custom",
+  },
+  lut_library_mode_count_label: {
+    zh: "颜色模式",
+    en: "Color Modes",
+  },
+  lut_library_refresh_btn: {
+    zh: "刷新本地库",
+    en: "Refresh Library",
+  },
+  lut_library_upload_btn: {
+    zh: "导入 LUT 文件",
+    en: "Import LUT File",
+  },
+  lut_library_search_placeholder: {
+    zh: "搜索名称、厂商、路径、颜色模式",
+    en: "Search name, maker, path, or color mode",
+  },
+  lut_library_loading: {
+    zh: "正在加载本地 LUT...",
+    en: "Loading local LUTs...",
+  },
+  lut_library_empty: {
+    zh: "没有匹配的本地 LUT。",
+    en: "No matching local LUTs.",
+  },
+  lut_library_load_failed: {
+    zh: "读取本地 LUT 库失败",
+    en: "Failed to load local LUT library",
+  },
+  lut_library_upload_success: {
+    zh: "LUT 已导入本地库。",
+    en: "LUT imported into the local library.",
+  },
+  lut_library_upload_failed: {
+    zh: "LUT 导入失败",
+    en: "LUT import failed",
+  },
+  lut_library_group_count: {
+    zh: "{count} 个 LUT",
+    en: "{count} LUTs",
+  },
+  lut_library_origin_cloud: {
+    zh: "云端",
+    en: "Cloud",
+  },
+  lut_library_origin_custom: {
+    zh: "自定义",
+    en: "Custom",
+  },
+  lut_library_origin_preset: {
+    zh: "预设",
+    en: "Preset",
+  },
+  lut_library_color_mode_label: {
+    zh: "颜色模式",
+    en: "Color Mode",
+  },
+  lut_library_source_kind_label: {
+    zh: "来源类型",
+    en: "Source Kind",
+  },
+  lut_library_path_label: {
+    zh: "路径",
+    en: "Path",
+  },
+  lut_library_fingerprint_label: {
+    zh: "指纹",
+    en: "Fingerprint",
+  },
+  lut_library_details_btn: {
+    zh: "查看详情",
+    en: "View Details",
+  },
+  lut_library_unknown: {
+    zh: "未知",
+    en: "Unknown",
+  },
+  lut_sync_title: {
+    zh: "云端 LUT 库",
+    en: "Cloud LUT Library",
+  },
+  lut_sync_catalog_count_label: {
+    zh: "云端条目",
+    en: "Cloud Items",
+  },
+  lut_sync_catalog_loaded_inline: {
+    zh: "已加载 {loaded} / {total} 个云端 LUT",
+    en: "Loaded {loaded} / {total} cloud LUTs",
+  },
+  lut_sync_installed_count_label: {
+    zh: "已安装",
+    en: "Installed",
+  },
+  lut_sync_config_label: {
+    zh: "远端配置",
+    en: "Remote",
+  },
+  lut_sync_configured: {
+    zh: "已配置",
+    en: "Configured",
+  },
+  lut_sync_not_configured: {
+    zh: "未配置",
+    en: "Not configured",
+  },
+  lut_sync_refresh_btn: {
+    zh: "刷新云端目录",
+    en: "Refresh Catalog",
+  },
+  lut_sync_load_more_btn: {
+    zh: "加载更多",
+    en: "Load More",
+  },
+  lut_sync_status_failed: {
+    zh: "读取云端 LUT 库失败",
+    en: "Failed to load cloud LUT library",
+  },
+  lut_sync_catalog_not_configured: {
+    zh: "尚未配置云端 LUT 库。本地 LUT 仍可离线使用；配置 LUMINA_LUT_REGISTRY_URL 后会显示云端 LUT。",
+    en: "Cloud LUT registry is not configured. Local LUTs remain available offline; configure LUMINA_LUT_REGISTRY_URL to show cloud LUTs.",
+  },
+  lut_sync_catalog_refresh_success: {
+    zh: "云端 LUT 目录已刷新。",
+    en: "Cloud LUT catalog refreshed.",
+  },
+  lut_sync_search_placeholder: {
+    zh: "搜索名称、厂商、路径或 ID",
+    en: "Search name, maker, path, or ID",
+  },
+  lut_sync_install_btn: {
+    zh: "下载到本地",
+    en: "Download",
+  },
+  lut_sync_installed_btn: {
+    zh: "已安装",
+    en: "Installed",
+  },
+  lut_sync_local_available_btn: {
+    zh: "已安装",
+    en: "Installed",
+  },
+  lut_sync_install_success: {
+    zh: "LUT 已下载并安装到本地。",
+    en: "LUT downloaded and installed locally.",
+  },
+  lut_sync_install_failed: {
+    zh: "LUT 下载失败",
+    en: "LUT download failed",
+  },
+  lut_sync_catalog_empty: {
+    zh: "没有匹配的云端 LUT。",
+    en: "No matching cloud LUTs.",
+  },
+  lut_sync_loading: {
+    zh: "正在加载云端 LUT...",
+    en: "Loading cloud LUTs...",
+  },
+  lut_sync_package_size_label: {
+    zh: "体积",
+    en: "Size",
+  },
+  lut_sync_content_fingerprint_label: {
+    zh: "内容指纹",
+    en: "Fingerprint",
+  },
+  lut_sync_color_mode_label: {
+    zh: "颜色模式",
+    en: "Color Mode",
+  },
+  lut_sync_catalog_state_label: {
+    zh: "状态",
+    en: "Status",
+  },
+  lut_sync_catalog_state_not_installed: {
+    zh: "未下载",
+    en: "Not Downloaded",
+  },
+  lut_sync_catalog_state_installed: {
+    zh: "已安装",
+    en: "Installed",
+  },
+  lut_sync_catalog_state_local_available: {
+    zh: "已安装",
+    en: "Installed",
+  },
+  lut_sync_local_path_label: {
+    zh: "本地路径",
+    en: "Local Path",
+  },
+  lut_sync_unknown: {
+    zh: "未知",
+    en: "Unknown",
+  },
   mat_sync_title: {
     zh: "云端耗材库",
     en: "Cloud Material Library",
@@ -8012,8 +8382,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "No saved material archives yet. Save one from Gradient Card Extract first.",
   },
   mat_gradient_library_updated_at_label: {
-    zh: "最近验证",
-    en: "Last Verified",
+    zh: "最近更新",
+    en: "Last Updated",
   },
   mat_gradient_library_created_at_label: {
     zh: "创建时间",
@@ -8123,9 +8493,17 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "删除耗材",
     en: "Delete Material",
   },
+  mat_gradient_library_duplicate_badge: {
+    zh: "同名 {count} 份",
+    en: "{count} copies",
+  },
+  mat_gradient_library_card_meta: {
+    zh: "目录：{directoryName} · 创建：{createdAt} · 最近更新：{updatedAt}",
+    en: "Directory: {directoryName} · Created: {createdAt} · Last updated: {updatedAt}",
+  },
   mat_gradient_library_delete_confirm: {
-    zh: "确认删除耗材「{materialName}」？此操作不可撤销。",
-    en: 'Delete material "{materialName}"? This action cannot be undone.',
+    zh: "确认删除这份耗材「{materialName}」？\n目录：{directoryName}\n最近更新：{updatedAt}\n此操作只删除当前服务器上的这份本地耗材档案，且不可撤销。",
+    en: 'Delete this material copy "{materialName}"?\nDirectory: {directoryName}\nLast updated: {updatedAt}\nThis only deletes this local material archive on the current server and cannot be undone.',
   },
   mat_gradient_library_delete_success: {
     zh: "耗材已删除。",

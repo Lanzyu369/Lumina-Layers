@@ -271,6 +271,64 @@ class TestHeightClamping:
 
         assert optical_layers == [4, 3, 2, 1, 0]
 
+    def test_relief_uses_stable_height_identity_when_two_sources_share_achieved_rgb(self):
+        """Display-colour collisions must not collapse distinct source heights."""
+        from core.converter import _build_relief_voxel_matrix
+
+        achieved_rgb = np.array([244, 100, 41], dtype=np.uint8)
+        source_low = np.array([190, 230, 248], dtype=np.uint8)
+        source_high = np.array([17, 34, 51], dtype=np.uint8)
+        matched_rgb = np.array([[achieved_rgb, achieved_rgb]], dtype=np.uint8)
+        height_identity_rgb = np.array(
+            [[source_low, source_high]],
+            dtype=np.uint8,
+        )
+        material_matrix = np.zeros((1, 2, 5), dtype=np.int32)
+        mask_solid = np.ones((1, 2), dtype=bool)
+
+        full_matrix, _metadata = _build_relief_voxel_matrix(
+            matched_rgb=matched_rgb,
+            height_identity_rgb=height_identity_rgb,
+            material_matrix=material_matrix,
+            mask_solid=mask_solid,
+            color_height_map={"bee6f8": 0.48, "112233": 2.0},
+            default_height=0.4,
+            structure_mode="Single-sided",
+            backing_color_id=9,
+            pixel_scale=0.5,
+        )
+
+        assert np.count_nonzero(full_matrix[:, 0, 0] != -1) == 6
+        assert np.count_nonzero(full_matrix[:, 0, 1] != -1) == 25
+
+    def test_relief_region_replace_keeps_source_identity_for_changed_and_unchanged_pixels(self):
+        """Replacing one region must leave both pixels on their original height."""
+        from core.converter import _build_relief_voxel_matrix
+
+        source_rgb = np.array([190, 230, 248], dtype=np.uint8)
+        achieved_rgb = np.array([244, 100, 41], dtype=np.uint8)
+        matched_rgb = np.array([[achieved_rgb, source_rgb]], dtype=np.uint8)
+        height_identity_rgb = np.array([[source_rgb, source_rgb]], dtype=np.uint8)
+        material_matrix = np.zeros((1, 2, 5), dtype=np.int32)
+        mask_solid = np.ones((1, 2), dtype=bool)
+
+        full_matrix, _metadata = _build_relief_voxel_matrix(
+            matched_rgb=matched_rgb,
+            height_identity_rgb=height_identity_rgb,
+            material_matrix=material_matrix,
+            mask_solid=mask_solid,
+            color_height_map={"bee6f8": 0.48},
+            default_height=0.4,
+            structure_mode="Single-sided",
+            backing_color_id=9,
+            pixel_scale=0.5,
+        )
+
+        filled_heights = [
+            np.count_nonzero(full_matrix[:, 0, x] != -1) for x in range(2)
+        ]
+        assert filled_heights == [6, 6]
+
 
 # ========== 9.5 错误处理 (需求 8.1, 8.2, 8.3) ==========
 

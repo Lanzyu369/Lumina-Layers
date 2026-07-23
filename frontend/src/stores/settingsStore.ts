@@ -98,6 +98,14 @@ export const SVG_PIXELS_PER_MM_MIN = 2.0;
 export const SVG_PIXELS_PER_MM_MAX = 50.0;
 export const SVG_PIXELS_PER_MM_STEP = 0.1;
 
+export type NozzleSize = "0.2" | "0.25" | "0.4";
+
+const NOZZLE_SIZES: readonly NozzleSize[] = ["0.2", "0.25", "0.4"];
+
+function isNozzleSize(value: unknown): value is NozzleSize {
+  return typeof value === "string" && NOZZLE_SIZES.includes(value as NozzleSize);
+}
+
 export interface SettingsState {
   language: "zh" | "en";
   theme: "light" | "dark";
@@ -110,13 +118,14 @@ export interface SettingsState {
   enableBlur: boolean;
   enableFancyLoading: boolean;
   enableWittyLoading: boolean;
+  enableCompletionNotifications: boolean;
   paletteMode: "swatch" | "card";
   printerModel: string;
   slicerSoftware: string;
   deviceProfileId: string;
   customSlicerPath: string;
   customSlicerId: string;
-  nozzleSize: "0.2" | "0.25" | "0.4";
+  nozzleSize: NozzleSize;
   enableBaseLayerHeightModifier: boolean;
   /**
    * When ``false`` (default) the exhaustive-cache dialog hides its
@@ -162,13 +171,14 @@ export interface SettingsActions {
   setEnableBlur: (enabled: boolean) => void;
   setEnableFancyLoading: (enabled: boolean) => void;
   setEnableWittyLoading: (enabled: boolean) => void;
+  setEnableCompletionNotifications: (enabled: boolean) => void;
   setPaletteMode: (mode: "swatch" | "card") => void;
   setPrinterModel: (id: string) => void;
   setSlicerSoftware: (id: string) => void;
   setDeviceProfileId: (id: string) => void;
   setCustomSlicerPath: (path: string) => void;
   setCustomSlicerId: (id: string) => void;
-  setNozzleSize: (size: "0.2" | "0.25" | "0.4") => void;
+  setNozzleSize: (size: NozzleSize) => void;
   setEnableBaseLayerHeightModifier: (enabled: boolean) => void;
   setEnableSolverCacheGridSelection: (enabled: boolean) => void;
   setSolverCacheGridResolution: (value: SolverCacheGridResolution) => void;
@@ -193,6 +203,7 @@ export const DEFAULT_SETTINGS: SettingsState = {
   enableBlur: true,
   enableFancyLoading: true,
   enableWittyLoading: true,
+  enableCompletionNotifications: false,
   paletteMode: "swatch",
   printerModel: "bambu-h2d",
   slicerSoftware: "BambuStudio",
@@ -348,9 +359,7 @@ export function deriveBackendDeviceSettingsPatch(
   }
 
   if (
-    (settings.nozzle_size === "0.2" ||
-      settings.nozzle_size === "0.25" ||
-      settings.nozzle_size === "0.4") &&
+    isNozzleSize(settings.nozzle_size) &&
     current.nozzleSize === DEFAULT_SETTINGS.nozzleSize &&
     !hasOwnSetting(persistedSnapshot, "nozzleSize")
   ) {
@@ -401,6 +410,9 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
       setEnableWittyLoading: (enabled: boolean) =>
         set({ enableWittyLoading: enabled }),
 
+      setEnableCompletionNotifications: (enabled: boolean) =>
+        set({ enableCompletionNotifications: enabled }),
+
       setPaletteMode: (mode: "swatch" | "card") => set({ paletteMode: mode }),
 
       setPrinterModel: (id: string) => {
@@ -439,7 +451,7 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
 
       setCustomSlicerId: (id: string) => set({ customSlicerId: id }),
 
-      setNozzleSize: (size: "0.2" | "0.25" | "0.4") => {
+      setNozzleSize: (size: NozzleSize) => {
         set((state) => ({
           nozzleSize: size,
           deviceProfileId:

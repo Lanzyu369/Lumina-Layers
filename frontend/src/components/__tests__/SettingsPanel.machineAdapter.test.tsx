@@ -24,6 +24,7 @@ import { translations } from "../../i18n/translations";
 const SLICERS: SlicerOption[] = [
   { id: "BambuStudio", display_name: "Bambu Studio" },
   { id: "OrcaSlicer", display_name: "OrcaSlicer" },
+  { id: "FlashStudio", display_name: "Flash Studio Desktop" },
 ];
 
 const PRINTERS: PrinterInfo[] = [
@@ -100,6 +101,25 @@ const PRINTERS: PrinterInfo[] = [
         supported: true,
       },
     ],
+  },
+  {
+    id: "flashforge-guider-3-ultra",
+    display_name: "Flashforge Guider 3 Ultra",
+    brand: "Flashforge",
+    bed_width: 300,
+    bed_depth: 330,
+    bed_height: 600,
+    supported_nozzle_sizes: ["0.4"],
+    supported_slicers: ["FlashStudio"],
+    thumbnail: "slicers/FlashStudio/02.01.01.00/assets/flashforge-guider-3-ultra_cover.png",
+    device_profiles: ["0.4"].map((nozzleSize) => ({
+      device_profile_id: `FlashStudio:flashforge:flashforge-guider-3-ultra:${nozzleSize}`,
+      slicer_id: "FlashStudio",
+      nozzle_size: nozzleSize,
+      source_profile_name: `Flashforge Guider 3 Ultra ${nozzleSize} Nozzle`,
+      revision: `sha256:flash-guider-${nozzleSize}`,
+      supported: true,
+    })),
   },
 ];
 
@@ -195,7 +215,7 @@ describe("SettingsPanel machine adapter registry UI", () => {
     expect(p1sCard).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("lets users pick supported nozzles inside machine cards without showing 0.6 or 0.8", async () => {
+  it("keeps wider nozzle sizes hidden for slicers that have not enabled them", async () => {
     renderPanel();
 
     await screen.findByTestId("machine-adapter-card-bambu-h2d");
@@ -249,6 +269,31 @@ describe("SettingsPanel machine adapter registry UI", () => {
       );
       expect(useSlicerStore.getState().selectedSlicerId).toBe("orca_slicer");
     });
+  });
+
+  it("shows only Flash Studio nozzles at or below 0.4 supported by the machine", async () => {
+    useSettingsStore.setState({
+      printerModel: "flashforge-guider-3-ultra",
+      slicerSoftware: "FlashStudio",
+      nozzleSize: "0.4",
+      deviceProfileId: "FlashStudio:flashforge:flashforge-guider-3-ultra:0.4",
+    });
+    renderPanel();
+
+    await screen.findByTestId("machine-adapter-card-flashforge-guider-3-ultra");
+    expect(
+      screen.queryByTestId("machine-adapter-nozzle-flashforge-guider-3-ultra-0_25"),
+    ).not.toBeInTheDocument();
+    const nozzle04 = await screen.findByTestId(
+      "machine-adapter-nozzle-flashforge-guider-3-ultra-0_4",
+    );
+    expect(nozzle04).toHaveTextContent(/0\.4\s*(mm|毫米)/);
+    expect(
+      screen.queryByTestId("machine-adapter-nozzle-flashforge-guider-3-ultra-0_6"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("machine-adapter-nozzle-flashforge-guider-3-ultra-0_8"),
+    ).not.toBeInTheDocument();
   });
 
   it("shows a visible error when printer options fail to load", async () => {

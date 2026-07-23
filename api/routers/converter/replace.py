@@ -92,6 +92,7 @@ from .common import (
     PREVIEW_CACHE_UNAVAILABLE_DETAIL,
     REGION_SELECTION_REQUIRED_DETAIL,
     ROUTER_HANDLED_ERRORS,
+    _ensure_material_matrix_signed_capacity,
     _handle_core_error,
     _image_to_png_bytes,
     _require_preview_cache,
@@ -3359,13 +3360,11 @@ def apply_recipe_override(
                         "re-run preview before applying recipe override."
                     ),
                 )
-            # uint dtypes would wrap ``-1`` into ``255`` and resurrect the
-            # exact same mesh-explosion bug, so promote to a signed dtype
-            # before padding.
-            # uint 类型会把 ``-1`` 绕回 255，把同一个 bug 换个编号再来一遍，
-            # 所以先升到 signed 类型再 pad。
-            if np.issubdtype(material_matrix.dtype, np.unsignedinteger):
-                material_matrix = material_matrix.astype(np.int32)
+            material_matrix = _ensure_material_matrix_signed_capacity(
+                material_matrix,
+                -1,
+                int(metadata.base_channel_idx),
+            )
             pad_slab = np.full(
                 (material_matrix.shape[0], material_matrix.shape[1], pad_count),
                 -1,
@@ -3385,6 +3384,11 @@ def apply_recipe_override(
                 request.layer_order,
             ),
             dtype=np.int32,
+        )
+        material_matrix = _ensure_material_matrix_signed_capacity(
+            material_matrix,
+            recipe_full,
+            int(metadata.base_channel_idx),
         )
 
         updated_rgb = matched_rgb.copy()
