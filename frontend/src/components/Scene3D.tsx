@@ -19,6 +19,7 @@ import InteractiveModelViewer, {
 import BedPlatform from "./BedPlatform";
 import KeychainRing3D from "./KeychainRing3D";
 import FridgeMagnet3D from "./FridgeMagnet3D";
+import ModelSurfaceSelector3D from "./ModelSurfaceSelector3D";
 import { useConverterStore } from "../stores/converter";
 import { useSettingsStore } from "../stores/settingsStore";
 import { computeScaleFactor } from "../utils/scaleUtils";
@@ -49,12 +50,74 @@ declare global {
       cameraPosition: { x: number; y: number; z: number };
       orbitTarget: { x: number; y: number; z: number };
       fov: number;
+      near: number;
+      far: number;
     };
   }
 }
 
 interface Scene3DProps {
   modelUrl?: string;
+}
+
+export interface PreviewModelBounds {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+  maxZ: number;
+}
+
+export interface ScaledPreviewBounds {
+  width: number;
+  height: number;
+  depth: number;
+  radius: number;
+}
+
+export interface PreviewCameraOrbitConfig {
+  near: number;
+  far: number;
+  minDistance: number;
+  maxDistance: number;
+}
+
+function finitePositiveScale(value: number): number {
+  return Number.isFinite(value) && value > 0 ? value : 1;
+}
+
+export function computeScaledPreviewBounds(
+  modelBounds: PreviewModelBounds,
+  scaleX: number,
+  scaleY: number,
+): ScaledPreviewBounds {
+  const safeScaleX = finitePositiveScale(scaleX);
+  const safeScaleY = finitePositiveScale(scaleY);
+  const width = Math.max(0, modelBounds.maxX - modelBounds.minX) * safeScaleX;
+  const height = Math.max(0, modelBounds.maxY - modelBounds.minY) * safeScaleY;
+  const depth = Math.max(0, modelBounds.maxZ);
+  return {
+    width,
+    height,
+    depth,
+    radius: Math.sqrt(width * width + height * height + depth * depth) / 2,
+  };
+}
+
+export function computePreviewCameraOrbitConfig(
+  modelBounds: PreviewModelBounds,
+  scaleX: number,
+  scaleY: number,
+): PreviewCameraOrbitConfig {
+  const bounds = computeScaledPreviewBounds(modelBounds, scaleX, scaleY);
+  const radius = Math.max(bounds.radius, 1);
+  const maxDistance = Math.max(2000, radius * 10);
+  return {
+    near: Math.max(0.1, Math.min(5, radius / 2000)),
+    far: Math.max(2000, maxDistance + radius * 4),
+    minDistance: Math.max(2, Math.min(10, radius / 50)),
+    maxDistance,
+  };
 }
 
 interface ActiveOrbitPanPointer {
@@ -267,6 +330,8 @@ function CameraDebugHelper() {
         cameraPosition: { x: +pos.x.toFixed(2), y: +pos.y.toFixed(2), z: +pos.z.toFixed(2) },
         orbitTarget: { x: +target.x.toFixed(2), y: +target.y.toFixed(2), z: +target.z.toFixed(2) },
         fov: (camera as THREE.PerspectiveCamera).fov,
+        near: (camera as THREE.PerspectiveCamera).near,
+        far: (camera as THREE.PerspectiveCamera).far,
       };
       console.log("📷 Camera Debug:", JSON.stringify(info, null, 2));
       return info;
@@ -275,6 +340,58 @@ function CameraDebugHelper() {
       delete window.__luminaCameraDebug;
     };
   }, [camera, controls]);
+  return null;
+}
+
+function PreviewCameraRangeBridge({
+  active,
+  modelBounds,
+  scaleX,
+  scaleY,
+}: {
+  active: boolean;
+  modelBounds: PreviewModelBounds | null;
+  scaleX: number;
+  scaleY: number;
+}) {
+  const { camera, controls, invalidate } = useThree();
+
+  useEffect(() => {
+    if (!active || !modelBounds) {
+      return;
+    }
+
+    const config = computePreviewCameraOrbitConfig(modelBounds, scaleX, scaleY);
+    const perspectiveCamera = camera as THREE.PerspectiveCamera;
+    if (perspectiveCamera.isPerspectiveCamera) {
+      const nextNear = config.near;
+      const nextFar = config.far;
+      if (
+        Math.abs(perspectiveCamera.near - nextNear) > 1e-6 ||
+        Math.abs(perspectiveCamera.far - nextFar) > 1e-6
+      ) {
+        perspectiveCamera.near = nextNear;
+        perspectiveCamera.far = nextFar;
+        perspectiveCamera.updateProjectionMatrix();
+      }
+    }
+
+    if (controls) {
+      const orbitControls = controls as unknown as {
+        minDistance?: number;
+        maxDistance?: number;
+        update?: () => void;
+      };
+      orbitControls.minDistance = Math.min(
+        orbitControls.minDistance ?? config.minDistance,
+        config.minDistance,
+      );
+      orbitControls.maxDistance = config.maxDistance;
+      orbitControls.update?.();
+    }
+    invalidate();
+  }, [active, modelBounds, scaleX, scaleY, camera, controls, invalidate]);
+
   return null;
 }
 
@@ -353,6 +470,50 @@ const ORBIT_DAMPING_SETTLE_MS = 500;
 const ORBIT_CHANGE_BURST_MS = 180;
 const ORBIT_PASSTHROUGH_MAX_MS = 10000;
 const ORBIT_PASSTHROUGH_CLASS = "lumina-canvas-orbiting";
+const ORBIT_CAMERA_MIN_FAR = 2000;
+const ORBIT_CAMERA_FAR_PADDING_RATIO = 0.25;
+const ORBIT_CAMERA_FAR_PADDING_MIN = 100;
+const ORBIT_CAMERA_MIN_NEAR = 0.1;
+const ORBIT_CAMERA_NEAR_DISTANCE_RATIO = 0.01;
+
+function syncOrbitCameraDepthClipping(
+  camera: THREE.Camera,
+  target: THREE.Vector3 | null | undefined,
+): boolean {
+  if (!target) {
+    return false;
+  }
+  const clippingCamera = camera as THREE.PerspectiveCamera | THREE.OrthographicCamera;
+  if (typeof clippingCamera.near !== "number" || typeof clippingCamera.far !== "number") {
+    return false;
+  }
+  const distance = camera.position.distanceTo(target);
+  if (!Number.isFinite(distance) || distance <= 0) {
+    return false;
+  }
+
+  const requiredFar = Math.max(
+    ORBIT_CAMERA_MIN_FAR,
+    distance * (1 + ORBIT_CAMERA_FAR_PADDING_RATIO) + ORBIT_CAMERA_FAR_PADDING_MIN,
+  );
+  const nextNear = Math.max(
+    ORBIT_CAMERA_MIN_NEAR,
+    distance * ORBIT_CAMERA_NEAR_DISTANCE_RATIO,
+  );
+  let changed = false;
+  if (requiredFar > clippingCamera.far) {
+    clippingCamera.far = requiredFar;
+    changed = true;
+  }
+  if (Math.abs(nextNear - clippingCamera.near) > 1e-6) {
+    clippingCamera.near = nextNear;
+    changed = true;
+  }
+  if (changed) {
+    clippingCamera.updateProjectionMatrix();
+  }
+  return changed;
+}
 
 function setWidgetPassthroughForCanvasInteraction(enabled: boolean): void {
   document.body.classList.toggle(ORBIT_PASSTHROUGH_CLASS, enabled);
@@ -371,10 +532,11 @@ function setWidgetPassthroughForCanvasInteraction(enabled: boolean): void {
 }
 
 function CanvasInteractionBridge() {
-  const { controls, invalidate } = useThree();
+  const { camera, controls, invalidate } = useThree();
   useEffect(() => {
     if (!controls) return;
     const controlsWithEvents = controls as {
+      target?: THREE.Vector3 | null;
       addEventListener: (type: "start" | "change" | "end", listener: () => void) => void;
       removeEventListener: (type: "start" | "change" | "end", listener: () => void) => void;
     };
@@ -437,6 +599,7 @@ function CanvasInteractionBridge() {
     };
 
     const onChange = () => {
+      syncOrbitCameraDepthClipping(camera, controlsWithEvents.target);
       if (!interacting) {
         keepRenderingUntil = Math.max(keepRenderingUntil, performance.now() + ORBIT_CHANGE_BURST_MS);
         ensureLoop();
@@ -464,7 +627,7 @@ function CanvasInteractionBridge() {
       stopPassthroughTimer();
       setWidgetPassthroughForCanvasInteraction(false);
     };
-  }, [controls, invalidate]);
+  }, [camera, controls, invalidate]);
   return null;
 }
 
@@ -611,6 +774,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const [diagnostics, setDiagnostics] = useState<SceneDiagnosticsSnapshot | null>(null);
   const [diagnosticsVisible, setDiagnosticsVisible] = useState(false);
   const [performanceVisible, setPerformanceVisible] = useState(false);
+  const [modelSurfaceBedGridVisible, setModelSurfaceBedGridVisible] = useState(true);
 
   const cancelOrbitPanPointer = useCallback((spaceOnly: boolean) => {
     const activePointer = activeOrbitPanPointerRef.current;
@@ -707,6 +871,20 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const effectiveModelUrl = modelUrl ?? storeModelUrl;
   const batchPreviewItems = useConverterStore((s) => s.batchPreviewItems);
   const previewGlbUrl = useConverterStore((s) => s.previewGlbUrl);
+  const modelSurfaceEnabled = useConverterStore((s) => s.modelSurfaceEnabled);
+  const modelSurfaceFile = useConverterStore((s) => s.modelSurfaceFile);
+  const modelSurfacePreviewUrl = useConverterStore((s) => s.modelSurfacePreviewUrl);
+  const modelSurfaceSelectionId = useConverterStore((s) => s.modelSurfaceSelectionId);
+  const modelSurfaceFootprint = useConverterStore((s) => s.modelSurfaceFootprint);
+  const modelSurfaceCandidates = useConverterStore((s) => s.modelSurfaceCandidates);
+  const modelSurfacePlacement = useConverterStore((s) => s.modelSurfacePlacement);
+  const modelSurfaceLoading = useConverterStore((s) => s.modelSurfaceLoading);
+  const modelSurfaceSelecting = useConverterStore((s) => s.modelSurfaceSelecting);
+  const imagePreviewUrl = useConverterStore((s) => s.imagePreviewUrl);
+  const selectModelSurfaceFace = useConverterStore((s) => s.selectModelSurfaceFace);
+  const updateModelSurfacePlacement = useConverterStore((s) => s.updateModelSurfacePlacement);
+  const updateModelSurfaceModelRotation = useConverterStore((s) => s.updateModelSurfaceModelRotation);
+  const fitModelSurfaceArtwork = useConverterStore((s) => s.fitModelSurfaceArtwork);
   const previewPerformanceTiming = useConverterStore((s) => s.previewPerformanceTiming);
   const generatePerformanceTiming = useConverterStore((s) => s.generatePerformanceTiming);
   const colorRemapMap = useConverterStore((s) => s.colorRemapMap);
@@ -758,6 +936,13 @@ function Scene3D({ modelUrl }: Scene3DProps) {
   const selectedFridgeMagnetId = useConverterStore((s) => s.selectedFridgeMagnetId);
   const selectFridgeMagnet = useConverterStore((s) => s.selectFridgeMagnet);
   const updateFridgeMagnetCenter = useConverterStore((s) => s.updateFridgeMagnetCenter);
+  const showModelSurfaceSelector =
+    modelSurfaceEnabled &&
+    Boolean(modelSurfacePreviewUrl) &&
+    Boolean(modelSurfaceFile) &&
+    batchPreviewItems.length === 0;
+  const modelSurfaceBusy =
+    showModelSurfaceSelector && (modelSurfaceLoading || modelSurfaceSelecting);
   const modelBounds = useConverterStore((s) => s.modelBounds);
   const diagnosticsSamplingEnabled = diagnosticsVisible || getThreePerfDebugConfig().enabled;
   const hasPerformanceTiming = Boolean(previewPerformanceTiming || generatePerformanceTiming);
@@ -902,14 +1087,14 @@ function Scene3D({ modelUrl }: Scene3DProps) {
       onPointerUp={finishViewportPointer}
       onPointerCancel={finishViewportPointer}
     >
-      {/* Floating action buttons — bottom-right with right-dock avoidance.
-       * 浮动按钮组：右下角悬浮，依赖 WidgetWorkspace 注入的
+      {/* Floating action buttons — top-right with right-dock avoidance.
+       * 浮动按钮组：右上角悬浮，依赖 WidgetWorkspace 注入的
        * `--lumina-right-dock-width` CSS 变量自动避开右侧坞内的 widget。
        */}
       <div
         className="absolute z-10 flex gap-1.5"
         style={{
-          bottom: "12px",
+          top: "12px",
           right: "calc(var(--lumina-right-dock-width, 0px) + 12px)",
         }}
       >
@@ -969,7 +1154,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
           aria-label={t("viewer_performance_title")}
           className="absolute z-10 w-[300px] rounded-xl border px-3 py-2 text-[11px] shadow-xl"
           style={{
-            bottom: "56px",
+            top: "56px",
             right: "calc(var(--lumina-right-dock-width, 0px) + 12px)",
             borderColor: "var(--surface-outline)",
             background: "color-mix(in srgb, var(--surface-panel-strong) 90%, transparent)",
@@ -1020,7 +1205,7 @@ function Scene3D({ modelUrl }: Scene3DProps) {
           aria-label={t("viewer_diagnostics_title")}
           className="absolute z-10 w-[260px] rounded-xl border px-3 py-2 text-[11px] shadow-xl"
           style={{
-            bottom: "56px",
+            top: "56px",
             right: "calc(var(--lumina-right-dock-width, 0px) + 12px)",
             borderColor: "var(--surface-outline)",
             background: "color-mix(in srgb, var(--surface-panel-strong) 90%, transparent)",
@@ -1144,6 +1329,16 @@ function Scene3D({ modelUrl }: Scene3DProps) {
           onSample={handleDiagnosticsSample}
         />
         <CameraDebugHelper />
+        <PreviewCameraRangeBridge
+          active={
+            !showModelSurfaceSelector &&
+            batchPreviewItems.length === 0 &&
+            Boolean(effectiveModelUrl || previewGlbUrl)
+          }
+          modelBounds={modelBounds}
+          scaleX={scaleX}
+          scaleY={scaleY}
+        />
         <CameraDepthPrecisionGuard />
         <ThemeUpdater />
         <CanvasInteractionBridge />
@@ -1167,8 +1362,29 @@ function Scene3D({ modelUrl }: Scene3DProps) {
           maxDistance={2000}
           mouseButtons={orbitMouseButtons}
         />
-        <BedPlatform />
-        {batchPreviewItems.length > 0 ? (
+        <BedPlatform
+          surfaceModelActive={showModelSurfaceSelector}
+          gridVisible={showModelSurfaceSelector ? modelSurfaceBedGridVisible : true}
+        />
+        {showModelSurfaceSelector && modelSurfacePreviewUrl && modelSurfaceFile ? (
+          <ModelSurfaceSelector3D
+            file={modelSurfaceFile}
+            artworkUrl={imagePreviewUrl}
+            footprint={modelSurfaceFootprint}
+            surfaceCandidates={modelSurfaceCandidates}
+            placement={modelSurfacePlacement}
+            bedGridVisible={modelSurfaceBedGridVisible}
+            selectionReady={Boolean(modelSurfaceSelectionId)}
+            selecting={modelSurfaceLoading || modelSurfaceSelecting}
+            onSelectFace={(faceIndex, candidateId) => {
+              void selectModelSurfaceFace(faceIndex, candidateId);
+            }}
+            onUpdatePlacement={updateModelSurfacePlacement}
+            onUpdateModelRotation={updateModelSurfaceModelRotation}
+            onFitArtwork={fitModelSurfaceArtwork}
+            onBedGridVisibleChange={setModelSurfaceBedGridVisible}
+          />
+        ) : batchPreviewItems.length > 0 ? (
           <Suspense fallback={null}>
             <BatchPreviewModels
               items={batchPreviewItems}
@@ -1289,6 +1505,35 @@ function Scene3D({ modelUrl }: Scene3DProps) {
           </Html>
         )}
       </Canvas>
+
+      {modelSurfaceBusy ? (
+        <div
+          role="status"
+          aria-live="polite"
+          aria-label={t(
+            modelSurfaceLoading
+              ? "model_surface_loading_analysis"
+              : "model_surface_status_selecting",
+          )}
+          aria-busy="true"
+          data-testid="model-surface-loading-overlay"
+          className="absolute inset-0 z-50 flex cursor-wait select-none items-center justify-center bg-slate-100/58 backdrop-blur-[1px] dark:bg-slate-950/58"
+        >
+          <div className="flex flex-col items-center gap-3">
+            <div className="relative flex h-16 w-16 items-center justify-center">
+              <div className="absolute inset-0 rgb-loader-ring" />
+              <div className="h-2.5 w-2.5 rounded-full bg-slate-700/90 dark:bg-slate-100/90" />
+            </div>
+            <span className="rounded-lg border border-slate-200/80 bg-slate-100/90 px-3 py-2 text-xs font-semibold text-slate-700 shadow-[var(--shadow-control)] dark:border-slate-700/80 dark:bg-slate-950/90 dark:text-slate-100">
+              {t(
+                modelSurfaceLoading
+                  ? "model_surface_loading_analysis"
+                  : "model_surface_status_selecting",
+              )}
+            </span>
+          </div>
+        </div>
+      ) : null}
 
     </div>
   );

@@ -8,14 +8,14 @@
  * internal codes, etc.), which then flow through 3MF metadata and the
  * ChromaPrint3D pipeline. Constraining the input to this curated list keeps
  * the downstream data clean and matches the filament naming conventions used
- * by Bambu-family slicers (BambuStudio / OrcaSlicer / SnapmakerOrca /
+ * by the supported slicer profiles (BambuStudio / OrcaSlicer / SnapmakerOrca /
  * ElegooSlicer / AnycubicSlicerNext).
  *
  * 单阶段/梯度卡标定流程使用的耗材预设列表。该值会写入套件 manifest 的
  * `material_default` 字段，并作为每个生成任务的默认耗材标签显示在 UI 中。
  * 此前是自由文本输入，用户可能输入拼写错误或内部编号等非标准值，这些数据
  * 会向下游流入 3MF 元数据和 ChromaPrint3D 管线。用预设列表限定输入可以保持
- * 下游数据整洁，并与 Bambu 家族切片软件（BambuStudio / OrcaSlicer /
+ * 下游数据整洁，并与受支持的切片软件配置（BambuStudio / OrcaSlicer /
  * SnapmakerOrca / ElegooSlicer / AnycubicSlicerNext）的耗材命名保持一致。
  *
  * When adding a new preset, keep the display label consistent with the

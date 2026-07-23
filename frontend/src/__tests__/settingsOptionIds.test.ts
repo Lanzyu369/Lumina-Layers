@@ -5,13 +5,13 @@ import {
   getDetectedSlicerIdForSoftware,
   getSlicerSoftwareDisplayName,
   getPrinterNozzleSizeOptions,
-  isBambuFamilySlicer,
   normalizePrinterOptionId,
   normalizeSlicerOptionId,
   resolveDeviceProfileOptionId,
   resolveNozzleSizeOption,
   resolvePrinterOptionId,
   resolveSlicerOptionId,
+  supportsLayerConfigRanges,
 } from "../utils/settingsOptionIds";
 import type { PrinterInfo, SlicerOption } from "../api/types";
 
@@ -335,26 +335,26 @@ describe("settingsOptionIds", () => {
     ).toBe("OrcaSlicer:elegoo:elegoo-centauri-carbon-2:0.4");
   });
 
-  describe("isBambuFamilySlicer", () => {
-    it("returns true for canonical Bambu-family slicers", () => {
-      expect(isBambuFamilySlicer("BambuStudio")).toBe(true);
-      expect(isBambuFamilySlicer("OrcaSlicer")).toBe(true);
-      expect(isBambuFamilySlicer("AnycubicSlicerNext")).toBe(true);
-      expect(isBambuFamilySlicer("FlashStudio")).toBe(true);
+  describe("supportsLayerConfigRanges", () => {
+    it("returns true for slicers that support layer_config_ranges metadata", () => {
+      expect(supportsLayerConfigRanges("BambuStudio")).toBe(true);
+      expect(supportsLayerConfigRanges("OrcaSlicer")).toBe(true);
+      expect(supportsLayerConfigRanges("AnycubicSlicerNext")).toBe(true);
+      expect(supportsLayerConfigRanges("FlashStudio")).toBe(true);
     });
 
     it("returns true for legacy aliases", () => {
-      expect(isBambuFamilySlicer("bambu")).toBe(true);
-      expect(isBambuFamilySlicer("orca_slicer")).toBe(true);
-      expect(isBambuFamilySlicer("snapmaker orca")).toBe(true);
-      expect(isBambuFamilySlicer("flashforge")).toBe(true);
+      expect(supportsLayerConfigRanges("bambu")).toBe(true);
+      expect(supportsLayerConfigRanges("orca_slicer")).toBe(true);
+      expect(supportsLayerConfigRanges("snapmaker orca")).toBe(true);
+      expect(supportsLayerConfigRanges("flashforge")).toBe(true);
     });
 
-    it("returns false for non-Bambu-family and empty values", () => {
-      expect(isBambuFamilySlicer("PrusaSlicer")).toBe(false);
-      expect(isBambuFamilySlicer("Cura")).toBe(false);
-      expect(isBambuFamilySlicer("")).toBe(false);
-      expect(isBambuFamilySlicer("UnknownSlicer")).toBe(false);
+    it("returns false for unsupported slicers and empty values", () => {
+      expect(supportsLayerConfigRanges("PrusaSlicer")).toBe(false);
+      expect(supportsLayerConfigRanges("Cura")).toBe(false);
+      expect(supportsLayerConfigRanges("")).toBe(false);
+      expect(supportsLayerConfigRanges("UnknownSlicer")).toBe(false);
     });
   });
 });

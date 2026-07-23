@@ -2173,6 +2173,19 @@ def _run_vector_branch(ctx: dict) -> dict:
             if isinstance(_mid, int) and _mid < len(vec_slot_list):
                 vec_preview_colors[vec_slot_list[_mid]] = _rgba
 
+        if ctx.get("stop_after_step") == "S08":
+            ctx["scene"] = scene
+            ctx["valid_slot_names"] = [
+                str(name)
+                for name in vec_slot_list
+                if scene.geometry.get(str(name)) is not None
+            ]
+            ctx["preview_colors"] = vec_preview_colors
+            ctx["vector_analysis"] = analysis
+            ctx["_pipeline_stopped_after"] = "S08"
+            ctx["vector_timing"] = dict(vector_timing)
+            return ctx
+
         # 1.5b separate_backing handling
         separate_backing = ctx.get("separate_backing", False)
         board_geom = scene.geometry.get("Board")

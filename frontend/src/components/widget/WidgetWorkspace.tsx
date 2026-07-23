@@ -326,14 +326,17 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
   const rightStackHeight = stackHeight('right');
   const rightDockOffset = Math.max(0, (containerWidth || window.innerWidth) - widgetWidth);
 
-  // Whether the right dock currently hosts at least one visible widget.
-  // Consumers (e.g. floating action buttons over the 3D scene) read this
-  // through the `--lumina-right-dock-width` CSS variable below to avoid being
-  // hidden behind dock widgets.
-  // 当前右侧坞是否承载可见 widget，用于让浮动按钮通过 CSS 变量避让。
+  // Whether the docks currently host visible widgets. Consumers (e.g.
+  // floating action buttons over the 3D scene) read these CSS variables to
+  // avoid being hidden behind dock widgets.
+  // 当前左右侧坞是否承载可见 widget，用于让 3D 场景浮动按钮通过 CSS 变量避让。
+  const hasVisibleLeftWidget = activeWidgets.some(
+    (w) => w.visible && w.snapEdge !== 'right',
+  );
   const hasVisibleRightWidget = activeWidgets.some(
     (w) => w.visible && w.snapEdge === 'right',
   );
+  const leftDockWidthVar = hasVisibleLeftWidget ? `${dockScrollWidth}px` : '0px';
   const rightDockWidthVar = hasVisibleRightWidget ? `${dockScrollWidth}px` : '0px';
 
   const getDockScrollTop = useCallback((edge: 'left' | 'right') => {
@@ -536,6 +539,7 @@ export function WidgetWorkspace({ children }: WidgetWorkspaceProps) {
           className="relative w-full h-full overflow-hidden"
           style={{
             pointerEvents: isDragging ? 'all' : undefined,
+            ['--lumina-left-dock-width' as string]: leftDockWidthVar,
             ['--lumina-right-dock-width' as string]: rightDockWidthVar,
           }}
         >

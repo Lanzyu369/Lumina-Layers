@@ -1,4 +1,10 @@
-import { useState } from "react";
+import {
+  cloneElement,
+  isValidElement,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import type { Placement } from "@floating-ui/react";
 import {
   useFloating,
@@ -17,7 +23,7 @@ import { useI18n } from "../../i18n/context";
 
 interface WikiTooltipProps {
   /** Trigger element to wrap */
-  children: React.ReactNode;
+  children: ReactNode;
   /** Tooltip title text */
   title: string;
   /** Tooltip description text */
@@ -31,6 +37,8 @@ interface WikiTooltipProps {
   /** Optional className for the trigger wrapper. Use this when the tooltip
    *  must wrap a block-level / flex child without collapsing its width. */
   className?: string;
+  /** Bind the tooltip directly to a single child element instead of adding a wrapper. */
+  asChild?: boolean;
 }
 
 export default function WikiTooltip({
@@ -41,6 +49,7 @@ export default function WikiTooltip({
   placement = "top",
   delay = 600,
   className,
+  asChild = false,
 }: WikiTooltipProps) {
   const { t } = useI18n();
   const [isOpen, setIsOpen] = useState(false);
@@ -77,9 +86,18 @@ export default function WikiTooltip({
     role,
   ]);
 
-  // 6. render
-  return (
-    <>
+  const referenceElement =
+    asChild && isValidElement(children) ? (
+      cloneElement(
+        children as ReactElement<Record<string, unknown>>,
+        {
+          ...getReferenceProps(
+            (children as ReactElement<Record<string, unknown>>).props,
+          ),
+          ref: refs.setReference,
+        } as Record<string, unknown>,
+      )
+    ) : (
       <span
         ref={refs.setReference}
         {...getReferenceProps()}
@@ -88,6 +106,12 @@ export default function WikiTooltip({
       >
         {children}
       </span>
+    );
+
+  // 6. render
+  return (
+    <>
+      {referenceElement}
 
       <FloatingPortal>
         <AnimatePresence>
@@ -96,7 +120,7 @@ export default function WikiTooltip({
               ref={refs.setFloating}
               style={floatingStyles}
               {...getFloatingProps()}
-              className="z-[9999]"
+              className={`z-[9999] ${wikiUrl ? "pointer-events-auto" : "pointer-events-none"}`}
             >
               <motion.div
                 initial={{ opacity: 0, y: 4 }}

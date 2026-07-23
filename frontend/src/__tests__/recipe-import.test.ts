@@ -214,6 +214,35 @@ describe("recipe/importRecipe", () => {
       expect(state.fridge_magnets).toEqual([]);
       expect(state.base_spacer_thick).toBe(0.6);
 
+      // Model-surface state is session-bound and must never leak into an
+      // imported recipe that cannot reproduce the uploaded model and face.
+      expect(state.modelSurfaceEnabled).toBe(false);
+      expect(state.modelSurfaceFile).toBeNull();
+      expect(state.modelSurfacePreviewUrl).toBeNull();
+      expect(state.modelSurfaceModelFileId).toBeNull();
+      expect(state.modelSurfaceSummary).toBeNull();
+      expect(state.modelSurfaceSelectionId).toBeNull();
+      expect(state.modelSurfaceSelection).toBeNull();
+      expect(state.modelSurfaceFootprint).toBeNull();
+      expect(state.modelSurfaceCandidates).toEqual([]);
+      expect(state.modelSurfacePlacement).toEqual({
+        mode: "edge_to_edge",
+        offset_x_mm: 0,
+        offset_y_mm: 0,
+        scale: 1,
+        rotation_deg: 0,
+        inset_mm: 0,
+      });
+      expect(state.modelSurfaceModelRotation).toEqual({
+        x_deg: 0,
+        y_deg: 0,
+        z_deg: 0,
+      });
+      expect(state.modelSurfaceLoading).toBe(false);
+      expect(state.modelSurfaceSelecting).toBe(false);
+      expect(state.modelSurfaceError).toBeNull();
+      expect(state.modelSurfaceWarnings).toEqual([]);
+
       // Asset
       expect(assetFile).toBeInstanceOf(File);
       expect(assetFile.name).toBe("photo.png");

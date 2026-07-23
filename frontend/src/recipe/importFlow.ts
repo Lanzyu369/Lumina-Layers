@@ -25,6 +25,9 @@ import {
 const SPATIAL_EDIT_DEGRADED_FIELD =
   "converter.color_ops.spatial_region_edits";
 
+export const MODEL_SURFACE_RECIPE_EXPORT_UNAVAILABLE_ERROR =
+  "Model surface recipes are not supported";
+
 /**
  * Mark a full recipe when session-scoped spatial edits were intentionally
  * omitted. The recipe section and schema stay unchanged; import surfaces the
@@ -228,12 +231,14 @@ export function applyImport(
  * 将当前 converter 状态导出为分享卡 PNG（触发下载）。
  */
 export async function exportShareCard(): Promise<void> {
+  const converterState = useConverterStore.getState();
+  assertRecipeExportSupported(converterState.modelSurfaceEnabled);
+
   const { exportConverterRecipe, buildFullRecipe, buildRecipeAssets, buildCoverImage } =
     await import("./exportRecipe");
   const { embedRecipeInPng } = await import("./pngMetadata");
   const { sha256String } = await import("./utils");
 
-  const converterState = useConverterStore.getState();
   const settingsState = useSettingsStore.getState();
 
   // Validate prerequisites
@@ -291,10 +296,12 @@ export async function exportShareCard(): Promise<void> {
  * 将当前 converter 状态导出为 .lumina.json sidecar 文件。
  */
 export async function exportSidecar(): Promise<void> {
+  const converterState = useConverterStore.getState();
+  assertRecipeExportSupported(converterState.modelSurfaceEnabled);
+
   const { exportConverterRecipe, buildFullRecipe, buildRecipeAssets, buildCoverImage } =
     await import("./exportRecipe");
 
-  const converterState = useConverterStore.getState();
   const settingsState = useSettingsStore.getState();
 
   if (!converterState.imageFile) {
@@ -333,6 +340,12 @@ export async function exportSidecar(): Promise<void> {
 }
 
 // ========== Helpers ==========
+
+function assertRecipeExportSupported(modelSurfaceEnabled: boolean): void {
+  if (modelSurfaceEnabled) {
+    throw new Error(MODEL_SURFACE_RECIPE_EXPORT_UNAVAILABLE_ERROR);
+  }
+}
 
 function triggerDownload(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);

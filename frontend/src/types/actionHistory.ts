@@ -257,6 +257,42 @@ export interface AdvancedParamsLargeFormat {
 }
 
 /**
+ * Bounded model-surface diagnostics used by bug-report reproduction.
+ * Bug 反馈复现使用的有界模型覆面诊断参数。
+ *
+ * Uploaded model bytes and full face-index/footprint geometry arrays are
+ * intentionally excluded. Only file metadata, scalar counts, dimensions,
+ * and placement transforms are captured.
+ * 不包含上传模型二进制、完整面索引或轮廓坐标，仅记录文件元信息、数量、
+ * 尺寸和摆放变换标量。
+ */
+export interface AdvancedParamsModelSurface {
+  enabled: boolean;
+  model_file: FileMetadata | null;
+  model_file_id: string | null;
+  selection_id: string | null;
+  selected_face_count: number | null;
+  footprint: {
+    width_mm: number | null;
+    height_mm: number | null;
+    hole_count: number | null;
+  } | null;
+  placement: {
+    mode: string;
+    offset_x_mm: number;
+    offset_y_mm: number;
+    scale: number;
+    rotation_deg: number;
+    inset_mm: number;
+  } | null;
+  model_rotation: {
+    x_deg: number;
+    y_deg: number;
+    z_deg: number;
+  } | null;
+}
+
+/**
  * Global color mappings and the scalar count of session-scoped spatial edits
  * captured for the generation. Spatial masks and coordinates are never stored.
  *
@@ -285,12 +321,12 @@ export interface AdvancedParamsColorReplacement {
  * history snapshots when `activeTab === "converter"`.
  * 当 Tab 为 converter 时，Bug 反馈与操作历史快照携带的完整高级参数分组对象。
  *
- * Contains exactly 11 feature groups plus two optional bookkeeping keys
+ * Contains exactly 12 feature groups plus two optional bookkeeping keys
  * (`_size_trimmed`, `_dropped_tiers`) added only when the shared builder
  * trimmed the object to fit within the per-call byte budget. The top level
- * never exceeds 13 keys.
- * 包含 11 个功能分组，外加两个可选的裁剪记录键（_size_trimmed、_dropped_tiers），
- * 仅当共享构建器进行了分层裁剪时才会出现；顶层 key 数量不会超过 13。
+ * never exceeds 14 keys.
+ * 包含 12 个功能分组，外加两个可选的裁剪记录键（_size_trimmed、_dropped_tiers），
+ * 仅当共享构建器进行了分层裁剪时才会出现；顶层 key 数量不会超过 14。
  */
 export interface AdvancedParamsFull {
   dimensions: AdvancedParamsDimensions;
@@ -303,6 +339,7 @@ export interface AdvancedParamsFull {
   fridge_magnet: AdvancedParamsFridgeMagnet;
   puzzle: AdvancedParamsPuzzle;
   large_format: AdvancedParamsLargeFormat;
+  model_surface: AdvancedParamsModelSurface;
   color_replacement: AdvancedParamsColorReplacement;
   /** Set to `true` when tiered trimming was applied. / 执行过分层裁剪时置 true。 */
   _size_trimmed?: boolean;

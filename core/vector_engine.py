@@ -23,6 +23,7 @@ import io
 import pickle
 import warnings
 import math
+from typing import Any
 import numpy as np
 import time
 import xml.etree.ElementTree as ET
@@ -7315,3 +7316,32 @@ class VectorProcessor:
         transform[1, 1] = -1
         mesh.apply_transform(transform)
         mesh.apply_translation([0, svg_height_mm, 0])
+
+
+def parse_svg_geometry(
+    svg_path: str | os.PathLike,
+    *,
+    target_width_mm: float,
+) -> tuple[list[dict[str, Any]], float, tuple[float, float, float, float]]:
+    """Parse native SVG shapes without constructing a LUT-backed processor.
+
+    在不构造 LUT 匹配器的情况下解析原生 SVG 几何。
+
+    Args:
+        svg_path: Source SVG path.
+            源 SVG 路径。
+        target_width_mm: Physical width used for parser precision.
+            用于确定解析精度的物理宽度。
+
+    Returns:
+        Shape data, parser scale factor, and source bounds.
+        图形数据、解析比例和源边界。
+    """
+
+    if float(target_width_mm) <= 0.0:
+        raise ValueError("target_width_mm must be positive.")
+    processor = VectorProcessor.__new__(VectorProcessor)
+    processor._init_runtime_defaults()
+    processor.expand_stroke_to_fill = False
+    processor._parse_expand_stroke_to_fill = False
+    return processor._parse_svg(str(svg_path), float(target_width_mm))

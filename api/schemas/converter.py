@@ -325,6 +325,11 @@ class ConvertPreviewRequest(LutSourceSelection):
     use_lut_constrained: bool = Field(False, description="启用高精度LUT约束颜色匹配（实验性）")
     auto_dynamic_range: bool = Field(False, description="启用自动动态范围压缩（实验性）")
     high_precision_3d_preview: bool = Field(False, description="启用3D高精度颜色预览")
+    surface_model_file_id: str | None = Field(None, description="Uploaded model file id for surface overlay")
+    surface_selection_json: str | None = Field(None, description="JSON surface selection payload")
+    surface_footprint_json: str | None = Field(None, description="JSON surface footprint payload")
+    surface_placement_json: str | None = Field(None, description="JSON surface placement payload")
+    surface_model_transform_json: str | None = Field(None, description="JSON surface model transform payload")
 
     @field_validator("color_mode", mode="before")
     @classmethod

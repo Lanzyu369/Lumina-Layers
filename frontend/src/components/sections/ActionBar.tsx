@@ -30,7 +30,11 @@ import { resolvePreviewHoverPixel } from "./actionBarHoverUtils"
 import { useI18n } from "../../i18n/context"
 import { useWorkspaceMode } from "../../hooks/useWorkspaceMode"
 import { apiErrorToVisibleMessage } from "../../api/client"
-import { exportShareCard, exportSidecar } from "../../recipe/importFlow"
+import {
+  exportShareCard,
+  exportSidecar,
+  MODEL_SURFACE_RECIPE_EXPORT_UNAVAILABLE_ERROR,
+} from "../../recipe/importFlow"
 
 const EMPTY_LAYER_IMAGES: { layer_index: number; name: string; url: string }[] = []
 const EXPORT_NO_IMAGE_MESSAGE = "No image file loaded"
@@ -61,6 +65,9 @@ function resolveRecipeExportError(error: unknown, t: (key: string) => string): s
     }
     if (error.message === EXPORT_PREVIEW_LOAD_MESSAGE) {
       return t("recipe_export_error_preview_load")
+    }
+    if (error.message === MODEL_SURFACE_RECIPE_EXPORT_UNAVAILABLE_ERROR) {
+      return t("recipe_export_model_surface_unavailable")
     }
   }
   if (shouldUseApiErrorLanguage(error)) {
@@ -123,6 +130,7 @@ export default function ActionBar() {
   const downloadUrl = useConverterStore((s) => s.downloadUrl)
   const sessionId = useConverterStore((s) => s.sessionId)
   const largeFormatEnabled = useConverterStore((s) => s.largeFormatEnabled)
+  const modelSurfaceEnabled = useConverterStore((s) => s.modelSurfaceEnabled)
 
   const batchMode = useConverterStore((s) => s.batchMode)
   const batchFiles = useConverterStore((s) => s.batchFiles)
@@ -175,6 +183,25 @@ export default function ActionBar() {
   const canSubmit = !!imageFile && sourceSelection.isReady
   const canGenerate = canSubmit && !!sessionId
   const canBatchSubmit = batchFiles.length > 0 && sourceSelection.isReady
+  const singleSourceHintKey =
+    sourceVersion === "material"
+      ? "action_select_material_hint"
+      : sourceVersion === "native"
+        ? "action_select_native_hint"
+        : "action_select_lut_hint"
+  const singleCombinedHintKey =
+    sourceVersion === "material"
+      ? "action_upload_hint_material"
+      : sourceVersion === "native"
+        ? "action_upload_hint_native"
+        : "action_upload_hint"
+  const singleSubmitHintKey = canSubmit
+    ? null
+    : imageFile
+      ? singleSourceHintKey
+      : sourceSelection.isReady
+        ? "action_upload_image_hint"
+        : singleCombinedHintKey
   const batchUploadHintKey =
     sourceVersion === "material"
       ? "action_batch_upload_hint_material"
@@ -717,7 +744,7 @@ export default function ActionBar() {
         <>
           {!canSubmit && (
             <p className="text-xs text-yellow-600 dark:text-yellow-400">
-              {t(sourceVersion === "material" ? "action_upload_hint_material" : "action_upload_hint")}
+              {singleSubmitHintKey ? t(singleSubmitHintKey) : null}
             </p>
           )}
 
@@ -769,8 +796,9 @@ export default function ActionBar() {
                       })
                       .finally(() => setIsExporting(false))
                   }}
-                  disabled={isExporting}
+                  disabled={isExporting || modelSurfaceEnabled}
                   loading={isExporting}
+                  title={modelSurfaceEnabled ? t("recipe_export_model_surface_unavailable") : undefined}
                   className="flex-1"
                 />
                 <Button
@@ -786,10 +814,16 @@ export default function ActionBar() {
                       })
                       .finally(() => setIsExporting(false))
                   }}
-                  disabled={isExporting}
+                  disabled={isExporting || modelSurfaceEnabled}
+                  title={modelSurfaceEnabled ? t("recipe_export_model_surface_unavailable") : undefined}
                   className="flex-1"
                 />
               </div>
+            )}
+            {hasPreview && modelSurfaceEnabled && (
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                {t("recipe_export_model_surface_unavailable")}
+              </p>
             )}
             {exportError && (
               <div className="text-xs text-red-500 dark:text-red-400">

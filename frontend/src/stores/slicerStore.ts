@@ -85,6 +85,9 @@ export function resolveSelectedSlicerId(
   if (configuredMatch) {
     return configuredMatch.id;
   }
+  if (preferredConfiguredId) {
+    return null;
+  }
 
   const restored = slicers.find((slicer) => slicer.id === lastSlicerId);
   return restored ? restored.id : (slicers[0]?.id ?? null);

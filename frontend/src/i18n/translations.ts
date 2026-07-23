@@ -221,6 +221,802 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "打开 QQ 邮箱",
     en: "Open QQ Mail",
   },
+  global_drop_import_aria: {
+    zh: "拖拽导入文件",
+    en: "Drag to import file",
+  },
+  global_drop_import_model: {
+    zh: "导入模型",
+    en: "Import model",
+  },
+  global_drop_import_image: {
+    zh: "导入图片",
+    en: "Import image",
+  },
+  global_drop_import_mixed: {
+    zh: "导入模型和图片",
+    en: "Import model and image",
+  },
+  global_drop_import_files: {
+    zh: "导入文件",
+    en: "Import files",
+  },
+  global_drop_import_release: {
+    zh: "松开鼠标放入当前流程",
+    en: "Release to add to this workflow",
+  },
+  model_surface_enable: {
+    zh: "模型覆面",
+    en: "Model surface overlay",
+  },
+  model_surface_enable_hint: {
+    zh: "将当前图片贴到上传模型的选中平面，最终导出保持原模型外形尺寸。",
+    en: "Place the current artwork on a selected flat model surface while preserving the source model dimensions.",
+  },
+  model_surface_upload_model: {
+    zh: "上传模型",
+    en: "Upload model",
+  },
+  model_surface_replace_model: {
+    zh: "更换模型",
+    en: "Replace model",
+  },
+  model_surface_drop_zone_upload: {
+    zh: "拖拽 STL/OBJ 模型到此处或点击上传",
+    en: "Drop an STL/OBJ model here or click to upload",
+  },
+  model_surface_drop_zone_replace: {
+    zh: "拖拽 STL/OBJ 模型到此处或点击更换",
+    en: "Drop an STL/OBJ model here or click to replace",
+  },
+  model_surface_drop_zone_hint: {
+    zh: "支持 STL / OBJ；导入后在 3D 预览里旋转模型并选择覆面平面。",
+    en: "Supports STL / OBJ. After import, rotate the model and pick the target face in the 3D preview.",
+  },
+  model_surface_clear_model: {
+    zh: "清除",
+    en: "Clear",
+  },
+  model_surface_model_file: {
+    zh: "模型",
+    en: "Model",
+  },
+  model_surface_model_size: {
+    zh: "尺寸",
+    en: "Size",
+  },
+  model_surface_status: {
+    zh: "状态",
+    en: "Status",
+  },
+  model_surface_status_uploading: {
+    zh: "上传中",
+    en: "Uploading",
+  },
+  model_surface_status_selecting: {
+    zh: "选面中",
+    en: "Selecting",
+  },
+  model_surface_status_analysis_failed: {
+    zh: "模型分析失败",
+    en: "Model analysis failed",
+  },
+  model_surface_status_selected: {
+    zh: "已选面",
+    en: "Surface selected",
+  },
+  model_surface_status_select_face: {
+    zh: "右侧点选面",
+    en: "Pick a face on the right",
+  },
+  model_surface_selected_size: {
+    zh: "选面",
+    en: "Surface",
+  },
+  model_surface_selected_faces: {
+    zh: "面片",
+    en: "Faces",
+  },
+  model_surface_fit: {
+    zh: "自适应",
+    en: "Fit",
+  },
+  model_surface_fit_hint: {
+    zh: "让图片按选中面的边界自适应覆盖，模型尺寸和厚度保持不变。",
+    en: "Fit the artwork to the selected surface bounds without changing model size or thickness.",
+  },
+  model_surface_mode_edge: {
+    zh: "铺满",
+    en: "Edge",
+  },
+  model_surface_mode_edge_hint: {
+    zh: "让贴图覆盖到选中面的外轮廓和孔洞边缘。",
+    en: "Extend the artwork to the selected surface outline and hole edges.",
+  },
+  model_surface_mode_inset: {
+    zh: "内缩",
+    en: "Inset",
+  },
+  model_surface_mode_inset_hint: {
+    zh: "按设定距离从选中面的边缘向内退让。",
+    en: "Keep the artwork inside the selected surface edges by the specified distance.",
+  },
+  model_surface_edge_mode: {
+    zh: "覆面边界模式",
+    en: "Overlay edge mode",
+  },
+  model_surface_scale: {
+    zh: "贴图缩放",
+    en: "Artwork scale",
+  },
+  model_surface_offset_x: {
+    zh: "水平偏移",
+    en: "Offset X",
+  },
+  model_surface_offset_y: {
+    zh: "垂直偏移",
+    en: "Offset Y",
+  },
+  model_surface_rotation: {
+    zh: "旋转",
+    en: "Rotation",
+  },
+  model_surface_inset: {
+    zh: "内缩距离",
+    en: "Inset",
+  },
+  model_surface_inset_hint: {
+    zh: "设置贴图与选中面边缘之间的退让距离，单位为毫米。",
+    en: "Set the clearance between the artwork and selected surface edges in millimetres.",
+  },
+  model_surface_error_select_first: {
+    zh: "请先上传模型并在右侧 3D 预览中选择一个平面。",
+    en: "Upload a model and select a flat surface in the 3D preview first.",
+  },
+  model_surface_error_upload_first: {
+    zh: "请先上传模型。",
+    en: "Upload a model first.",
+  },
+  model_surface_upload_failed: {
+    zh: "模型上传失败",
+    en: "Model upload failed",
+  },
+  model_surface_select_failed: {
+    zh: "选面失败",
+    en: "Surface selection failed",
+  },
+  model_surface_viewer_loading: {
+    zh: "模型加载中",
+    en: "Loading model",
+  },
+  model_surface_loading_analysis: {
+    zh: "模型上传与平面分析中",
+    en: "Uploading and analyzing model surfaces",
+  },
+  model_surface_viewer_load_failed: {
+    zh: "模型预览加载失败",
+    en: "Model preview failed to load",
+  },
+  model_surface_tool_select: {
+    zh: "选择平面",
+    en: "Select surface",
+  },
+  model_surface_tool_select_hint: {
+    zh: "在模型上点选要覆面的平面，默认按平面组选择并过滤小倒角。",
+    en: "Pick the model face for artwork, using grouped planes by default and filtering small bevels.",
+  },
+  model_surface_tool_reselect: {
+    zh: "重选面",
+    en: "Reselect",
+  },
+  model_surface_tool_reselect_hint: {
+    zh: "重新选择当前模型的覆面平面。",
+    en: "Choose a different overlay surface on the current model.",
+  },
+  model_surface_tool_orbit: {
+    zh: "旋转模型",
+    en: "Rotate model",
+  },
+  model_surface_tool_orbit_hint: {
+    zh: "围绕模型中心旋转，用 X/Y/Z 数值或彩色旋转环调整朝向。",
+    en: "Rotate around the model center with X/Y/Z inputs or colored rotation rings.",
+  },
+  model_surface_tool_move: {
+    zh: "移动贴图",
+    en: "Move artwork",
+  },
+  model_surface_tool_move_hint: {
+    zh: "在选中平面内拖动贴图位置。",
+    en: "Move the artwork across the selected surface.",
+  },
+  model_surface_tool_rotate: {
+    zh: "旋转贴图",
+    en: "Rotate artwork",
+  },
+  model_surface_tool_rotate_hint: {
+    zh: "围绕选中平面中心旋转贴图。",
+    en: "Rotate the artwork around the selected surface center.",
+  },
+  model_surface_tool_scale: {
+    zh: "缩放贴图",
+    en: "Scale artwork",
+  },
+  model_surface_tool_scale_hint: {
+    zh: "缩放贴图覆盖范围，不改变模型厚度和外形尺寸。",
+    en: "Scale the artwork coverage without changing model thickness or outer dimensions.",
+  },
+  model_surface_toolbar_group: {
+    zh: "模型覆面工具组",
+    en: "Model overlay tool groups",
+  },
+  model_surface_toolbar_title: {
+    zh: "覆面工具",
+    en: "Overlay tools",
+  },
+  model_surface_toolbar_drag: {
+    zh: "拖动覆面工具条",
+    en: "Drag overlay toolbar",
+  },
+  model_surface_toolbar_drag_hint: {
+    zh: "拖动后会吸附到视口边缘或角落，避免遮挡模型。",
+    en: "Drag to snap the toolbar to a viewport edge or corner so it does not cover the model.",
+  },
+  model_surface_toolbar_collapse: {
+    zh: "收起覆面工具条",
+    en: "Collapse overlay toolbar",
+  },
+  model_surface_toolbar_collapse_hint: {
+    zh: "收起二级工具，只保留一个可拖动入口。",
+    en: "Collapse the secondary tools and keep a small draggable entry.",
+  },
+  model_surface_toolbar_expand: {
+    zh: "展开覆面工具条",
+    en: "Expand overlay toolbar",
+  },
+  model_surface_toolbar_expand_hint: {
+    zh: "展开模型操作、覆面编辑和视图工具。",
+    en: "Expand model, artwork, and view tools.",
+  },
+  model_surface_toolbar_secondary: {
+    zh: "模型覆面二级工具栏",
+    en: "Model overlay secondary toolbar",
+  },
+  model_surface_toolbar_model: {
+    zh: "模型操作",
+    en: "Model",
+  },
+  model_surface_toolbar_artwork: {
+    zh: "覆面编辑",
+    en: "Artwork",
+  },
+  model_surface_toolbar_view: {
+    zh: "视图",
+    en: "View",
+  },
+  model_surface_view_reverse: {
+    zh: "反向查看",
+    en: "Reverse view",
+  },
+  model_surface_view_reverse_hint: {
+    zh: "从选中平面的背面正向查看，不加入额外透视倾斜。",
+    en: "View the selected surface from the opposite side without extra perspective tilt.",
+  },
+  model_surface_view_cube: {
+    zh: "视图立方体",
+    en: "View cube",
+  },
+  model_surface_view_cube_face_hint: {
+    zh: "切换到对应正交视图，只移动相机，不改变模型旋转。",
+    en: "Switch to the matching orthographic view. This moves the camera without changing model rotation.",
+  },
+  model_surface_view_cube_edge_hint: {
+    zh: "切换到两面之间的斜向视图，只移动相机。",
+    en: "Switch to the angled view between two faces. This only moves the camera.",
+  },
+  model_surface_view_cube_corner_hint: {
+    zh: "切换到等轴测视图，只移动相机。",
+    en: "Switch to an isometric view. This only moves the camera.",
+  },
+  model_surface_axis_gizmo: {
+    zh: "坐标轴指示器",
+    en: "Axis gizmo",
+  },
+  model_surface_view_default: {
+    zh: "默认视图",
+    en: "Default view",
+  },
+  model_surface_view_default_hint: {
+    zh: "回到适合查看模型和热床的默认视角。",
+    en: "Return to the default angle for viewing the model and build plate.",
+  },
+  model_surface_view_top: {
+    zh: "顶部视图",
+    en: "Top view",
+  },
+  model_surface_view_bottom: {
+    zh: "底部视图",
+    en: "Bottom view",
+  },
+  model_surface_view_front: {
+    zh: "前面视图",
+    en: "Front view",
+  },
+  model_surface_view_back: {
+    zh: "后面视图",
+    en: "Back view",
+  },
+  model_surface_view_left: {
+    zh: "左面视图",
+    en: "Left view",
+  },
+  model_surface_view_right: {
+    zh: "右面视图",
+    en: "Right view",
+  },
+  model_surface_view_edge_right_front: {
+    zh: "右前视图",
+    en: "Right front view",
+  },
+  model_surface_view_edge_left_front: {
+    zh: "左前视图",
+    en: "Left front view",
+  },
+  model_surface_view_edge_right_back: {
+    zh: "右后视图",
+    en: "Right back view",
+  },
+  model_surface_view_edge_left_back: {
+    zh: "左后视图",
+    en: "Left back view",
+  },
+  model_surface_view_edge_right_top: {
+    zh: "右上视图",
+    en: "Right top view",
+  },
+  model_surface_view_edge_right_bottom: {
+    zh: "右下视图",
+    en: "Right bottom view",
+  },
+  model_surface_view_edge_left_top: {
+    zh: "左上视图",
+    en: "Left top view",
+  },
+  model_surface_view_edge_left_bottom: {
+    zh: "左下视图",
+    en: "Left bottom view",
+  },
+  model_surface_view_edge_front_top: {
+    zh: "前上视图",
+    en: "Front top view",
+  },
+  model_surface_view_edge_front_bottom: {
+    zh: "前下视图",
+    en: "Front bottom view",
+  },
+  model_surface_view_edge_back_top: {
+    zh: "后上视图",
+    en: "Back top view",
+  },
+  model_surface_view_edge_back_bottom: {
+    zh: "后下视图",
+    en: "Back bottom view",
+  },
+  model_surface_view_corner_right_front_top: {
+    zh: "右前上等轴测视图",
+    en: "Right front top isometric view",
+  },
+  model_surface_view_corner_left_front_top: {
+    zh: "左前上等轴测视图",
+    en: "Left front top isometric view",
+  },
+  model_surface_view_corner_right_back_top: {
+    zh: "右后上等轴测视图",
+    en: "Right back top isometric view",
+  },
+  model_surface_view_corner_left_back_top: {
+    zh: "左后上等轴测视图",
+    en: "Left back top isometric view",
+  },
+  model_surface_view_corner_right_front_bottom: {
+    zh: "右前下等轴测视图",
+    en: "Right front bottom isometric view",
+  },
+  model_surface_view_corner_left_front_bottom: {
+    zh: "左前下等轴测视图",
+    en: "Left front bottom isometric view",
+  },
+  model_surface_view_corner_right_back_bottom: {
+    zh: "右后下等轴测视图",
+    en: "Right back bottom isometric view",
+  },
+  model_surface_view_corner_left_back_bottom: {
+    zh: "左后下等轴测视图",
+    en: "Left back bottom isometric view",
+  },
+  model_surface_face_top: {
+    zh: "顶部",
+    en: "Top",
+  },
+  model_surface_face_bottom: {
+    zh: "底部",
+    en: "Bottom",
+  },
+  model_surface_face_front: {
+    zh: "前面",
+    en: "Front",
+  },
+  model_surface_face_back: {
+    zh: "后面",
+    en: "Back",
+  },
+  model_surface_face_left: {
+    zh: "左面",
+    en: "Left",
+  },
+  model_surface_face_right: {
+    zh: "右面",
+    en: "Right",
+  },
+  model_surface_fit_view: {
+    zh: "适配视图",
+    en: "Fit view",
+  },
+  model_surface_fit_view_hint: {
+    zh: "让相机适配当前模型或选中区域。",
+    en: "Fit the camera to the current model or selected area.",
+  },
+  model_surface_display_options: {
+    zh: "显示选项",
+    en: "Display options",
+  },
+  model_surface_display_navigator: {
+    zh: "3D 导航器",
+    en: "3D navigator",
+  },
+  model_surface_display_navigator_hint: {
+    zh: "显示或隐藏左下角视图立方体和导航控件。",
+    en: "Show or hide the lower-left view cube and navigation controls.",
+  },
+  model_surface_display_zoom: {
+    zh: "缩放按钮",
+    en: "Zoom button",
+  },
+  model_surface_display_zoom_hint: {
+    zh: "显示或隐藏适配视图按钮。",
+    en: "Show or hide the fit-view button.",
+  },
+  model_surface_display_axes: {
+    zh: "坐标轴",
+    en: "Axes",
+  },
+  model_surface_display_axes_hint: {
+    zh: "显示或隐藏场景坐标轴指示。",
+    en: "Show or hide the scene axis indicator.",
+  },
+  model_surface_display_grid: {
+    zh: "网格线",
+    en: "Grid",
+  },
+  model_surface_display_grid_hint: {
+    zh: "显示或隐藏热床网格线。",
+    en: "Show or hide the build-plate grid.",
+  },
+  model_surface_display_labels: {
+    zh: "标签",
+    en: "Labels",
+  },
+  model_surface_display_labels_hint: {
+    zh: "显示或隐藏视图立方体和坐标轴标签。",
+    en: "Show or hide view cube and axis labels.",
+  },
+  model_surface_rotate_axis_x: {
+    zh: "X 轴旋转",
+    en: "Rotate around X",
+  },
+  model_surface_rotate_axis_y: {
+    zh: "Y 轴旋转",
+    en: "Rotate around Y",
+  },
+  model_surface_rotate_axis_z: {
+    zh: "Z 轴旋转",
+    en: "Rotate around Z",
+  },
+  model_surface_rotation_x: {
+    zh: "X 角度",
+    en: "X angle",
+  },
+  model_surface_rotation_y: {
+    zh: "Y 角度",
+    en: "Y angle",
+  },
+  model_surface_rotation_z: {
+    zh: "Z 角度",
+    en: "Z angle",
+  },
+  model_surface_world_coordinates: {
+    zh: "世界坐标",
+    en: "World coordinates",
+  },
+  model_surface_rotation_panel_drag: {
+    zh: "拖动旋转窗口",
+    en: "Drag rotation panel",
+  },
+  model_surface_rotation_panel_drag_hint: {
+    zh: "拖动后会吸附到视口边缘或角落，避开模型和贴图。",
+    en: "Drag to snap the rotation panel to a viewport edge or corner, away from the model and artwork.",
+  },
+  model_surface_rotation_relative: {
+    zh: "旋转（相对）",
+    en: "Rotate (relative)",
+  },
+  model_surface_rotation_absolute: {
+    zh: "旋转（绝对）",
+    en: "Rotate (absolute)",
+  },
+  model_surface_rotation_relative_input_hint: {
+    zh: "输入本次相对增量，适合临时微调当前模型朝向。",
+    en: "Enter a relative delta for this edit, useful for fine-tuning the current model orientation.",
+  },
+  model_surface_rotation_absolute_input_hint: {
+    zh: "输入模型绕对应轴的绝对角度，数值会直接更新 3D 模型朝向。",
+    en: "Enter the model's absolute angle around the selected axis; the 3D model updates directly.",
+  },
+  model_surface_rotation_relative_x: {
+    zh: "X 相对旋转",
+    en: "X relative rotation",
+  },
+  model_surface_rotation_relative_y: {
+    zh: "Y 相对旋转",
+    en: "Y relative rotation",
+  },
+  model_surface_rotation_relative_z: {
+    zh: "Z 相对旋转",
+    en: "Z relative rotation",
+  },
+  model_surface_rotation_absolute_x: {
+    zh: "X 绝对旋转",
+    en: "X absolute rotation",
+  },
+  model_surface_rotation_absolute_y: {
+    zh: "Y 绝对旋转",
+    en: "Y absolute rotation",
+  },
+  model_surface_rotation_absolute_z: {
+    zh: "Z 绝对旋转",
+    en: "Z absolute rotation",
+  },
+  model_surface_rotation_angle_readout: {
+    zh: "旋转角度读数",
+    en: "Rotation angle readout",
+  },
+  model_surface_rotate_90: {
+    zh: "90°",
+    en: "90°",
+  },
+  model_surface_rotation_reset: {
+    zh: "重置旋转",
+    en: "Reset rotation",
+  },
+  model_surface_rotation_reset_relative: {
+    zh: "回到打开时",
+    en: "Reset to open",
+  },
+  model_surface_rotation_reset_relative_hint: {
+    zh: "恢复到打开旋转窗口时的模型角度。",
+    en: "Restore the model angle from when this rotation panel was opened.",
+  },
+  model_surface_rotation_reset_zero: {
+    zh: "归零",
+    en: "Reset to zero",
+  },
+  model_surface_rotation_reset_zero_hint: {
+    zh: "清除所有模型旋转，让模型回到零度朝向。",
+    en: "Clear all model rotation and return the model to zero-degree orientation.",
+  },
+  model_surface_rotation_done: {
+    zh: "完成",
+    en: "Done",
+  },
+  model_surface_rotation_done_hint: {
+    zh: "关闭旋转窗口并保留当前模型朝向。",
+    en: "Close the rotation panel and keep the current model orientation.",
+  },
+  model_surface_rotation_quick: {
+    zh: "快捷旋转",
+    en: "Quick rotate",
+  },
+  model_surface_rotation_quick_hint: {
+    zh: "按 90° 增量快速旋转模型，适合像切片软件一样快速摆正朝向。",
+    en: "Rotate the model in 90° increments for slicer-style quick orientation changes.",
+  },
+  model_surface_rotation_step_90: {
+    zh: "+90°",
+    en: "+90°",
+  },
+  model_surface_rotation_step_minus_90: {
+    zh: "-90°",
+    en: "-90°",
+  },
+  model_surface_rotation_quick_x_positive: {
+    zh: "X 快速旋转 +90°",
+    en: "Quick rotate X +90°",
+  },
+  model_surface_rotation_quick_x_negative: {
+    zh: "X 快速旋转 -90°",
+    en: "Quick rotate X -90°",
+  },
+  model_surface_rotation_quick_y_positive: {
+    zh: "Y 快速旋转 +90°",
+    en: "Quick rotate Y +90°",
+  },
+  model_surface_rotation_quick_y_negative: {
+    zh: "Y 快速旋转 -90°",
+    en: "Quick rotate Y -90°",
+  },
+  model_surface_rotation_quick_z_positive: {
+    zh: "Z 快速旋转 +90°",
+    en: "Quick rotate Z +90°",
+  },
+  model_surface_rotation_quick_z_negative: {
+    zh: "Z 快速旋转 -90°",
+    en: "Quick rotate Z -90°",
+  },
+  model_surface_artwork_rotation_panel: {
+    zh: "贴图旋转",
+    en: "Artwork rotation",
+  },
+  model_surface_artwork_rotation_relative: {
+    zh: "贴图相对旋转",
+    en: "Artwork relative rotation",
+  },
+  model_surface_artwork_rotation_angle: {
+    zh: "贴图旋转角度",
+    en: "Artwork rotation angle",
+  },
+  model_surface_artwork_rotation_relative_hint: {
+    zh: "输入相对变化量，正数顺时针、负数逆时针。",
+    en: "Enter a relative delta; positive rotates clockwise and negative counterclockwise.",
+  },
+  model_surface_artwork_rotation_angle_hint: {
+    zh: "输入贴图在所选平面内的绝对旋转角度。",
+    en: "Enter the artwork's absolute rotation angle within the selected plane.",
+  },
+  model_surface_artwork_rotation_quick_hint: {
+    zh: "按 90° 增量快速旋转贴图。",
+    en: "Rotate the artwork in 90° increments.",
+  },
+  model_surface_artwork_rotation_minus_90: {
+    zh: "贴图逆时针旋转 90°",
+    en: "Rotate artwork 90° counterclockwise",
+  },
+  model_surface_artwork_rotation_plus_90: {
+    zh: "贴图顺时针旋转 90°",
+    en: "Rotate artwork 90° clockwise",
+  },
+  model_surface_artwork_rotation_reset_open: {
+    zh: "回到打开时",
+    en: "Reset to open",
+  },
+  model_surface_artwork_rotation_reset_open_hint: {
+    zh: "恢复到打开贴图旋转工具时的角度。",
+    en: "Restore the artwork angle from when the rotation tool was opened.",
+  },
+  model_surface_artwork_rotation_reset_zero: {
+    zh: "贴图旋转归零",
+    en: "Reset artwork rotation",
+  },
+  model_surface_artwork_rotation_reset_zero_hint: {
+    zh: "清除贴图旋转，让图片回到零度。",
+    en: "Clear artwork rotation and return the image to zero degrees.",
+  },
+  model_surface_artwork_rotation_done: {
+    zh: "完成贴图旋转",
+    en: "Finish artwork rotation",
+  },
+  model_surface_artwork_rotation_done_hint: {
+    zh: "关闭旋转辅助并保留当前贴图角度。",
+    en: "Close the rotation aids and keep the current artwork angle.",
+  },
+  model_surface_candidate_select: {
+    zh: "选择候选平面",
+    en: "Select candidate surface",
+  },
+  model_surface_candidate_readout: {
+    zh: "候选平面读数",
+    en: "Candidate surface readout",
+  },
+  model_surface_candidate_hover: {
+    zh: "候选平面",
+    en: "Candidate surface",
+  },
+  model_surface_selection_panel: {
+    zh: "选择覆面平面",
+    en: "Select overlay surface",
+  },
+  model_surface_selection_mode: {
+    zh: "模式",
+    en: "Mode",
+  },
+  model_surface_selection_mode_grouped: {
+    zh: "平面组",
+    en: "Plane groups",
+  },
+  model_surface_selection_mode_triangle: {
+    zh: "三角面",
+    en: "Triangular facet",
+  },
+  model_surface_selection_mode_grouped_action: {
+    zh: "选择平面组模式",
+    en: "Select plane group mode",
+  },
+  model_surface_selection_mode_grouped_hint: {
+    zh: "把共面的三角面作为一个平面组选择，适合洞洞板这种平面模型。",
+    en: "Select coplanar triangles as one plane group, which fits flat pegboard-style models.",
+  },
+  model_surface_selection_mode_triangle_action: {
+    zh: "选择三角面模式",
+    en: "Select triangular facet mode",
+  },
+  model_surface_selection_mode_triangle_hint: {
+    zh: "按单个三角面选择，用于检查细小面片或特殊模型。",
+    en: "Select individual triangles for inspecting tiny facets or unusual models.",
+  },
+  model_surface_selection_candidate_unit: {
+    zh: "候选平面",
+    en: "candidate surfaces",
+  },
+  model_surface_selection_bevel_filtered: {
+    zh: "已过滤小倒角",
+    en: "small bevels filtered",
+  },
+  model_surface_selected_panel: {
+    zh: "已选覆面平面",
+    en: "Overlay surface selected",
+  },
+  model_surface_selected_short: {
+    zh: "已选",
+    en: "Selected",
+  },
+  model_surface_selected_ready: {
+    zh: "贴图可调整",
+    en: "Artwork adjustable",
+  },
+  model_surface_artwork_readout: {
+    zh: "贴图位置读数",
+    en: "Artwork placement readout",
+  },
+  model_surface_artwork_readout_offset: {
+    zh: "偏移",
+    en: "Offset",
+  },
+  model_surface_artwork_readout_rotation: {
+    zh: "旋转",
+    en: "Rotation",
+  },
+  model_surface_artwork_readout_scale: {
+    zh: "缩放",
+    en: "Scale",
+  },
+  model_surface_selected_waiting_artwork: {
+    zh: "等待图片",
+    en: "Waiting for artwork",
+  },
+  model_surface_selected_tools: {
+    zh: "移动 / 旋转 / 缩放",
+    en: "Move / rotate / scale",
+  },
+  model_surface_selected_upload_hint: {
+    zh: "上传图片后可调整贴图",
+    en: "Upload artwork to adjust placement",
+  },
+  model_surface_edit_overlay: {
+    zh: "继续调整贴面",
+    en: "Adjust overlay",
+  },
+  model_surface_adjust_in_viewer: {
+    zh: "请在右侧 3D 预览中旋转模型、选择或重选面；选好后再移动、旋转或缩放贴图。",
+    en: "Rotate the model and select or reselect a surface in the 3D preview, then move, rotate, or scale the artwork.",
+  },
   bug_report_relay_prompt: {
     zh: "本机邮件未成功发送。是否同意将这份反馈转发到 Lumina Studio 官方问题收集服务？",
     en: "Local email delivery did not succeed. Do you agree to forward this report to the Lumina Studio official bug collection service?",
@@ -1964,8 +2760,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Base-plate layer-height modifier",
   },
   "settings.base_layer_height_modifier_desc": {
-    zh: "生成 3MF 时会计入固定首层，并选择能准确落在底板边界、且符合当前机型限制的较粗层高，缩短底板耗时并避免余数导致少层。浮雕、双面模型或没有安全可选值时会自动跳过；仅对 Bambu 系切片器生效。",
-    en: "When generating a 3MF, this accounts for the fixed first layer and selects a compatible coarser height that lands exactly on the backing boundary and fits the selected printer, reducing print time without losing a remainder layer. It is skipped for reliefs, double-sided prints, or when no safe value exists; Bambu-family slicers only.",
+    zh: "生成 3MF 时会计入固定首层，并选择能准确落在底板边界、且符合当前机型限制的较粗层高，缩短底板耗时并避免余数导致少层。仅对当前设置中选择的兼容切片软件生效，并使用各自的机器配置；浮雕、双面模型或没有安全可选值时会自动跳过。",
+    en: "When generating a 3MF, this accounts for the fixed first layer and selects a compatible coarser height that lands exactly on the backing boundary and fits the selected printer. It applies only to the compatible slicer selected in Settings and uses that slicer's own machine profile; reliefs, double-sided prints, and cases where no safe value exists are skipped.",
   },
   "settings.custom_slicer_path": {
     zh: "手动切片软件路径",
@@ -4414,9 +5210,29 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "请先上传图片并选择 LUT",
     en: "Please upload an image and select a LUT first",
   },
+  action_upload_image_hint: {
+    zh: "请先上传图片",
+    en: "Please upload an image first",
+  },
+  action_select_lut_hint: {
+    zh: "请先选择 LUT",
+    en: "Please select a LUT first",
+  },
   action_upload_hint_material: {
     zh: "请先上传图片并选择耗材",
     en: "Please upload an image and select materials first",
+  },
+  action_select_material_hint: {
+    zh: "请先选择耗材",
+    en: "Please select materials first",
+  },
+  action_upload_hint_native: {
+    zh: "请先上传图片并选择品牌和数据库",
+    en: "Please upload an image and select a brand and databases first",
+  },
+  action_select_native_hint: {
+    zh: "请先选择品牌和数据库",
+    en: "Please select a brand and databases first",
   },
   action_batch_upload_hint: {
     zh: "请先添加图片并选择 LUT",
@@ -5974,6 +6790,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   recipe_export_error_preview_load: {
     zh: "预览图已失效，请重新生成预览后再导出。",
     en: "The preview image is no longer available. Generate a new preview before exporting.",
+  },
+  recipe_export_model_surface_unavailable: {
+    zh: "模型覆面暂不支持配方导出，因为配方无法包含上传模型和选面。",
+    en: "Recipe export is unavailable for model surface overlays because the uploaded model and selected face cannot be included yet.",
   },
   recipe_export_error_unknown: {
     zh: "导出没有完成，请稍后重试。",

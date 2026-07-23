@@ -240,6 +240,37 @@ describe("SettingsPanel machine adapter registry UI", () => {
     expect(screen.queryByRole("combobox", { name: "喷嘴尺寸" })).not.toBeInTheDocument();
   });
 
+  it("keeps the detected slicer selection aligned with the settings slicer", async () => {
+    useSlicerStore.setState({
+      slicers: [
+        {
+          id: "bambu_studio",
+          display_name: "Bambu Studio",
+          exe_path: "/Applications/Bambu Studio.app",
+        },
+        {
+          id: "orca_slicer",
+          display_name: "OrcaSlicer",
+          exe_path: "/Applications/OrcaSlicer.app",
+        },
+      ],
+      selectedSlicerId: "bambu_studio",
+    });
+
+    renderPanel();
+
+    fireEvent.click(await screen.findByRole("combobox", { name: "切片软件" }));
+    fireEvent.click(await screen.findByRole("option", { name: "OrcaSlicer" }));
+
+    await waitFor(() => {
+      expect(useSettingsStore.getState().slicerSoftware).toBe("OrcaSlicer");
+      expect(useSettingsStore.getState().deviceProfileId).toBe(
+        "OrcaSlicer:bbl:bambu-lab-h2d:0.2",
+      );
+      expect(useSlicerStore.getState().selectedSlicerId).toBe("orca_slicer");
+    });
+  });
+
   it("shows only Flash Studio nozzles at or below 0.4 supported by the machine", async () => {
     useSettingsStore.setState({
       printerModel: "flashforge-guider-3-ultra",
