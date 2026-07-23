@@ -8,6 +8,7 @@ from threading import Lock
 import uuid
 from pathlib import Path
 
+import anyio
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from api.dependencies import get_file_registry
@@ -28,19 +29,24 @@ from core.model_surface.selection import (
     select_planar_component,
 )
 from core.model_surface.serialization import (
-    surface_footprint_from_payload,
     surface_placement_from_payload,
 )
 from core.model_surface.types import ModelSurfaceError
-from core.model_surface.types import SurfaceCandidate, SurfaceSelection
+from core.model_surface.types import SurfaceCandidate, SurfaceFootprint, SurfaceSelection
 
 router = APIRouter(prefix="/model-surface")
 log = get_logger(__name__)
 _SUPPORTED_MODEL_EXTENSIONS = {".stl", ".obj"}
 _MODEL_SURFACE_FILE_TTL_SECONDS = 3600
+_MODEL_SURFACE_UPLOAD_LIMIT_BYTES = 256 * 1024 * 1024
+_MODEL_SURFACE_UPLOAD_CHUNK_BYTES = 1024 * 1024
 _SURFACE_CANDIDATE_CACHE_LIMIT = 128
 _SURFACE_CANDIDATE_CACHE_LOCK = Lock()
 _SURFACE_CANDIDATE_CACHE: dict[str, tuple[str, tuple[SurfaceCandidate, ...]]] = {}
+_SURFACE_SELECTION_CACHE: dict[
+    tuple[str, tuple[int, ...]],
+    tuple[str, SurfaceFootprint],
+] = {}
 
 
 @router.post("/upload", response_model=ModelSurfaceUploadResponse)
@@ -64,10 +70,23 @@ async def upload_model_surface(
     os.close(fd)
     registered = False
     try:
+        total_bytes = 0
         with open(temp_path, "wb") as handle:
-            handle.write(await model.read())
-        loaded = load_model_surface_mesh(temp_path)
-        surface_candidates = list_planar_surface_candidates(loaded.mesh)
+            while True:
+                chunk = await model.read(_MODEL_SURFACE_UPLOAD_CHUNK_BYTES)
+                if not chunk:
+                    break
+                total_bytes += len(chunk)
+                if total_bytes > _MODEL_SURFACE_UPLOAD_LIMIT_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail="Model file exceeds the 256 MB upload limit.",
+                    )
+                handle.write(chunk)
+        loaded, surface_candidates = await anyio.to_thread.run_sync(
+            _analyze_uploaded_model_surface,
+            temp_path,
+        )
         file_id = registry.register_path(
             session_id=f"model-surface-{uuid.uuid4()}",
             path=temp_path,
@@ -107,6 +126,11 @@ async def upload_model_surface(
         ],
         warnings=warnings,
     )
+
+
+def _analyze_uploaded_model_surface(temp_path: str):
+    loaded = load_model_surface_mesh(temp_path)
+    return loaded, list_planar_surface_candidates(loaded.mesh)
 
 
 @router.post("/select", response_model=ModelSurfaceSelectResponse)
@@ -154,6 +178,12 @@ def select_model_surface(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     selection_id = str(uuid.uuid4())
+    _cache_surface_selection(
+        model_file_id=request.model_file_id,
+        model_path=model_path,
+        face_indices=selection.face_indices,
+        footprint=footprint,
+    )
     log.info(
         "Model surface selected",
         extra={
@@ -190,6 +220,25 @@ def _cache_surface_candidates(
         while len(_SURFACE_CANDIDATE_CACHE) > _SURFACE_CANDIDATE_CACHE_LIMIT:
             oldest_key = next(iter(_SURFACE_CANDIDATE_CACHE))
             _SURFACE_CANDIDATE_CACHE.pop(oldest_key, None)
+            stale_selection_keys = [
+                key for key in _SURFACE_SELECTION_CACHE if key[0] == oldest_key
+            ]
+            for key in stale_selection_keys:
+                _SURFACE_SELECTION_CACHE.pop(key, None)
+
+
+def _cache_surface_selection(
+    *,
+    model_file_id: str,
+    model_path: str,
+    face_indices: tuple[int, ...],
+    footprint: SurfaceFootprint,
+) -> None:
+    with _SURFACE_CANDIDATE_CACHE_LOCK:
+        _SURFACE_SELECTION_CACHE[(model_file_id, face_indices)] = (
+            str(model_path),
+            footprint,
+        )
 
 
 def _resolve_surface_candidate(
@@ -283,14 +332,18 @@ def resolve_surface_preview_config(
 
     try:
         selection_payload = _loads_object(selection_json)
-        footprint_payload = _loads_object(footprint_json)
+        _loads_object(footprint_json)
         placement_payload = _loads_object(placement_json)
         transform_payload = (
             _surface_model_transform_from_payload(_loads_object(transform_json))
             if transform_json
             else _default_surface_model_transform()
         )
-        footprint = surface_footprint_from_payload(footprint_payload)
+        footprint = _canonical_surface_footprint(
+            model_file_id=model_file_id,
+            model_path=model_path,
+            selection_payload=selection_payload,
+        )
         placement = surface_placement_from_payload(placement_payload)
         rendered = render_surface_artwork(
             source_path=source_path,
@@ -317,6 +370,33 @@ def resolve_surface_preview_config(
         "target_width_mm": rendered.target_width_mm,
         "target_height_mm": rendered.target_height_mm,
     }
+
+
+def _canonical_surface_footprint(
+    *,
+    model_file_id: str,
+    model_path: str,
+    selection_payload: dict,
+) -> SurfaceFootprint:
+    raw_face_indices = selection_payload.get("face_indices")
+    if not isinstance(raw_face_indices, list | tuple) or not raw_face_indices:
+        raise ModelSurfaceError("Surface selection must contain face_indices.")
+    if any(
+        not isinstance(index, int) or isinstance(index, bool)
+        for index in raw_face_indices
+    ):
+        raise ModelSurfaceError("Surface selection face_indices must be integers.")
+    face_indices = tuple(raw_face_indices)
+    if any(index < 0 for index in face_indices):
+        raise ModelSurfaceError("Surface selection face_indices must be non-negative.")
+
+    with _SURFACE_CANDIDATE_CACHE_LOCK:
+        cached = _SURFACE_SELECTION_CACHE.get((model_file_id, face_indices))
+    if cached is None or cached[0] != str(model_path):
+        raise ModelSurfaceError(
+            "Surface selection does not belong to the uploaded model."
+        )
+    return cached[1]
 
 
 def _loads_object(raw: str | None) -> dict:

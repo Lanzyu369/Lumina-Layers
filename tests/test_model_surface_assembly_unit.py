@@ -9,7 +9,7 @@ from core.model_surface.assembly import (
     apply_model_transform_to_overlay_scene,
     build_embedded_overlay_scene,
 )
-from core.model_surface.types import PlaneFrame, SurfaceFootprint
+from core.model_surface.types import ModelSurfaceError, PlaneFrame, SurfaceFootprint
 
 
 def test_build_embedded_overlay_scene_keeps_bounds_and_adds_base_slot():
@@ -89,6 +89,39 @@ def test_build_embedded_overlay_scene_embeds_full_pattern_depth():
 
     assert result.scene.bounds[0][2] == pytest.approx(base.bounds[0][2])
     assert result.scene.bounds[1][2] == pytest.approx(base.bounds[1][2])
+
+
+def test_build_embedded_overlay_scene_rejects_pattern_deeper_than_model():
+    base = trimesh.creation.box(extents=(20.0, 10.0, 0.3))
+    color = trimesh.creation.box(extents=(20.0, 10.0, 0.4))
+    color.apply_translation((0.0, 0.0, 0.2))
+    pattern = trimesh.Scene({"color_ff0000": color})
+    footprint = SurfaceFootprint(
+        frame=PlaneFrame(
+            origin=(0.0, 0.0, 0.15),
+            normal=(0.0, 0.0, 1.0),
+            u_axis=(1.0, 0.0, 0.0),
+            v_axis=(0.0, 1.0, 0.0),
+        ),
+        outer=((-10.0, -5.0), (10.0, -5.0), (10.0, 5.0), (-10.0, 5.0)),
+        holes=(),
+        bounds_min=(-10.0, -5.0),
+        bounds_max=(10.0, 5.0),
+        bounds_width_mm=20.0,
+        bounds_height_mm=10.0,
+        area_mm2=200.0,
+        hole_count=0,
+    )
+
+    with pytest.raises(ModelSurfaceError, match="available model thickness"):
+        build_embedded_overlay_scene(
+            base_mesh=base,
+            pattern_scene=pattern,
+            footprint=footprint,
+            pocket_depth_mm=0.4,
+            base_slot_name="surface_base",
+            base_color=(245, 245, 245),
+        )
 
 
 def test_build_embedded_overlay_scene_uses_logical_display_depth_for_air_layers(

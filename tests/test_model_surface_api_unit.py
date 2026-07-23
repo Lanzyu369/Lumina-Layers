@@ -57,6 +57,20 @@ def test_model_surface_upload_rejects_step_extension(tmp_path, client: TestClien
     assert response.status_code == 422
 
 
+def test_model_surface_upload_rejects_files_over_size_limit(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(model_surface_router, "_MODEL_SURFACE_UPLOAD_LIMIT_BYTES", 8)
+
+    response = client.post(
+        "/api/convert/model-surface/upload",
+        files={"model": ("large.stl", b"0123456789", "application/octet-stream")},
+    )
+
+    assert response.status_code == 413
+
+
 def test_model_surface_select_returns_footprint(tmp_path, client: TestClient):
     model_path = tmp_path / "plate.stl"
     trimesh.creation.box(extents=(20.0, 10.0, 2.0)).export(model_path)

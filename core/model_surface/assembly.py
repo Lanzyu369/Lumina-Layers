@@ -46,6 +46,12 @@ def build_embedded_overlay_scene(
 
     result_scene = trimesh.Scene()
     embed_depth_mm = _pattern_depth_mm(pattern_scene)
+    available_depth_mm = _available_surface_depth_mm(base_mesh, footprint)
+    if embed_depth_mm > available_depth_mm + 1e-6:
+        raise ModelSurfaceError(
+            "Overlay pattern depth exceeds the available model thickness "
+            f"({embed_depth_mm:.3f} mm > {available_depth_mm:.3f} mm)."
+        )
     display_layer_heights_mm = _pattern_layer_heights_mm(pattern_scene)
     base_copy = (
         base_mesh.copy()
@@ -234,6 +240,24 @@ def _rotation_matrix_about_anchor(
 def _pattern_depth_mm(pattern_scene: trimesh.Scene) -> float:
     min_z, max_z = _pattern_z_bounds_mm(pattern_scene)
     return max_z - min_z
+
+
+def _available_surface_depth_mm(
+    base_mesh: trimesh.Trimesh,
+    footprint: SurfaceFootprint,
+) -> float:
+    vertices = np.asarray(base_mesh.vertices, dtype=np.float64)
+    normal = np.asarray(footprint.frame.normal, dtype=np.float64)
+    origin = np.asarray(footprint.frame.origin, dtype=np.float64)
+    normal_length = float(np.linalg.norm(normal))
+    if vertices.size == 0 or normal_length <= 1e-9:
+        raise ModelSurfaceError("Selected surface has invalid model thickness.")
+    normal /= normal_length
+    surface_plane = float(np.dot(origin, normal))
+    inward_extent = surface_plane - float(np.min(vertices @ normal))
+    if inward_extent <= 1e-6:
+        raise ModelSurfaceError("Selected surface has no available model thickness.")
+    return inward_extent
 
 
 def _pattern_z_bounds_mm(pattern_scene: trimesh.Scene) -> tuple[float, float]:

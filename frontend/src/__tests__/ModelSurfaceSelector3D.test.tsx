@@ -75,6 +75,7 @@ import ModelSurfaceSelector3D, {
   getRotationPointerResultFromPointOrRay,
   getRotationTickSegmentRadii,
   getModelBodyRaycastProps,
+  applySurfaceMaterial,
   getSurfaceFocusRadius,
   computeArtworkPlacementDragUpdate,
   computeArtworkCoverDrawSize,
@@ -3971,8 +3972,36 @@ describe("ModelSurfaceSelector3D", () => {
       pivotY: 50,
       offsetX: 20,
       offsetY: 12,
+      drawCenterX: 120,
+      drawCenterY: 62,
       rotationRadians: Math.PI / 2,
     });
+  });
+
+  it("gives OBJ meshes owned material clones without disposing the shared source", () => {
+    const root = new THREE.Group();
+    const originalMaterial = new THREE.MeshStandardMaterial();
+    const sharedMaterial = new THREE.MeshStandardMaterial();
+    const originalDispose = vi.spyOn(originalMaterial, "dispose");
+    const sharedDispose = vi.spyOn(sharedMaterial, "dispose");
+    const first = new THREE.Mesh(new THREE.BoxGeometry(), originalMaterial);
+    const secondOriginal = new THREE.MeshStandardMaterial();
+    const second = new THREE.Mesh(new THREE.BoxGeometry(), secondOriginal);
+    root.add(first, second);
+
+    applySurfaceMaterial(root, sharedMaterial);
+
+    expect(originalDispose).toHaveBeenCalledOnce();
+    expect(first.material).not.toBe(sharedMaterial);
+    expect(second.material).not.toBe(sharedMaterial);
+    expect(first.material).not.toBe(second.material);
+    expect(sharedDispose).not.toHaveBeenCalled();
+
+    first.geometry.dispose();
+    second.geometry.dispose();
+    (first.material as THREE.Material).dispose();
+    (second.material as THREE.Material).dispose();
+    sharedMaterial.dispose();
   });
 
   it("maps through-hole clicks to grouped candidate planes", async () => {

@@ -15,7 +15,7 @@ import { useI18n } from "../i18n/context";
 import type { ModelSurfaceCandidate } from "../api/types";
 import { useSettingsStore } from "../stores/settingsStore";
 import type { ModelSurfaceModelRotation, ModelSurfacePlacement } from "../stores/converter";
-import { disposeObjectTree } from "../utils/threeDisposal";
+import { disposeMaterial, disposeObjectTree } from "../utils/threeDisposal";
 import { useThemeConfig } from "../hooks/useThemeConfig";
 import { computeFitDistance } from "./ModelViewer";
 import {
@@ -319,10 +319,11 @@ function disposeLoadedModel(model: LoadedSurfaceModel): void {
   disposeObjectTree(model.object);
 }
 
-function applySurfaceMaterial(root: THREE.Object3D, material: THREE.Material): void {
+export function applySurfaceMaterial(root: THREE.Object3D, material: THREE.Material): void {
   root.traverse((child) => {
     if (child instanceof THREE.Mesh) {
-      child.material = material;
+      disposeMaterial(child.material);
+      child.material = material.clone();
       child.castShadow = false;
       child.receiveShadow = true;
     }
@@ -1260,9 +1261,8 @@ function drawSurfaceArtworkCanvas(
 
   ctx.clearRect(0, 0, widthPx, heightPx);
   ctx.save();
-  ctx.translate(transform.pivotX, transform.pivotY);
+  ctx.translate(transform.drawCenterX, transform.drawCenterY);
   ctx.rotate(transform.rotationRadians);
-  ctx.translate(transform.offsetX, transform.offsetY);
   ctx.drawImage(image, -targetWidth / 2, -targetHeight / 2, targetWidth, targetHeight);
   ctx.restore();
 

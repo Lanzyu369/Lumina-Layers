@@ -48,6 +48,8 @@ export interface ArtworkCanvasTransform {
   pivotY: number;
   offsetX: number;
   offsetY: number;
+  drawCenterX: number;
+  drawCenterY: number;
   rotationRadians: number;
 }
 
@@ -235,11 +237,17 @@ export function computeArtworkCanvasTransform({
   pixelsPerMm,
   placement,
 }: ArtworkCanvasTransformInput): ArtworkCanvasTransform {
+  const pivotX = widthPx / 2;
+  const pivotY = heightPx / 2;
+  const offsetX = placement.offset_x_mm * pixelsPerMm;
+  const offsetY = -placement.offset_y_mm * pixelsPerMm;
   return {
-    pivotX: widthPx / 2,
-    pivotY: heightPx / 2,
-    offsetX: placement.offset_x_mm * pixelsPerMm,
-    offsetY: -placement.offset_y_mm * pixelsPerMm,
+    pivotX,
+    pivotY,
+    offsetX,
+    offsetY,
+    drawCenterX: pivotX + offsetX,
+    drawCenterY: pivotY + offsetY,
     rotationRadians: THREE.MathUtils.degToRad(placement.rotation_deg),
   };
 }

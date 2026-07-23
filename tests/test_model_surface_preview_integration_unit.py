@@ -11,11 +11,13 @@ import numpy as np
 import pytest
 import trimesh
 from fastapi.testclient import TestClient
+from fastapi import HTTPException
 from PIL import Image
 
 from api.app import app
 from api.dependencies import get_file_registry, get_session_store, get_worker_pool
 from api.file_registry import FileRegistry
+from api.routers.converter.model_surface import resolve_surface_preview_config
 from api.session_store import SessionStore
 
 
@@ -57,6 +59,13 @@ def test_preview_attaches_model_surface_config(monkeypatch, tmp_path, preview_st
             "/api/convert/model-surface/upload",
             files={"model": ("plate.stl", fh, "application/octet-stream")},
         ).json()
+    selected = client.post(
+        "/api/convert/model-surface/select",
+        json={
+            "model_file_id": upload["model_file_id"],
+            "hit": {"candidate_id": upload["surface_candidates"][0]["id"]},
+        },
+    ).json()
 
     async def fake_submit(fn, *args):
         return _fake_worker_result(tmp_path)
@@ -85,12 +94,12 @@ def test_preview_attaches_model_surface_config(monkeypatch, tmp_path, preview_st
                     "quantize_colors": "8",
                     "enable_cleanup": "true",
                     "surface_model_file_id": upload["model_file_id"],
-                    "surface_selection_json": json.dumps({"face_indices": [0, 1]}),
+                    "surface_selection_json": json.dumps(selected["selection"]),
                     "surface_footprint_json": json.dumps(
                         {
-                            "bounds_width_mm": 20,
-                            "bounds_height_mm": 10,
-                            "outer": [[-10, -5], [10, -5], [10, 5], [-10, 5], [-10, -5]],
+                            "bounds_width_mm": 2000,
+                            "bounds_height_mm": 1000,
+                            "outer": [[-1000, -500], [1000, -500], [1000, 500], [-1000, 500]],
                             "holes": [],
                             "frame": {
                                 "origin": [0, 0, 1],
@@ -143,12 +152,68 @@ def test_preview_attaches_model_surface_config(monkeypatch, tmp_path, preview_st
         "inset_mm": 0.0,
     }
     assert Path(session["surface_artwork_path"]).exists()
+    assert session["surface_footprint"]["bounds_width_mm"] == pytest.approx(
+        selected["footprint"]["bounds_width_mm"]
+    )
+    assert session["surface_footprint"]["bounds_height_mm"] == pytest.approx(
+        selected["footprint"]["bounds_height_mm"]
+    )
     assert session["image_path"] == session["surface_artwork_path"]
     with Image.open(session["surface_artwork_path"]) as rendered:
         assert rendered.mode == "RGBA"
         assert rendered.size == (120, 60)
         assert rendered.getpixel((10, 30))[3] == 0
         assert rendered.getpixel((90, 30))[3] == 255
+
+
+def test_preview_rejects_selection_from_a_different_uploaded_model(
+    tmp_path,
+    preview_state,
+):
+    _store, registry, _pool = preview_state
+    first_model = tmp_path / "first.stl"
+    second_model = tmp_path / "second.stl"
+    image_path = tmp_path / "art.png"
+    trimesh.creation.box(extents=(20.0, 10.0, 2.0)).export(first_model)
+    trimesh.creation.box(extents=(30.0, 12.0, 3.0)).export(second_model)
+    Image.new("RGB", (40, 20), (255, 0, 0)).save(image_path)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    def upload(path: Path) -> dict:
+        with path.open("rb") as handle:
+            return client.post(
+                "/api/convert/model-surface/upload",
+                files={"model": (path.name, handle, "application/octet-stream")},
+            ).json()
+
+    first = upload(first_model)
+    second = upload(second_model)
+    selected = client.post(
+        "/api/convert/model-surface/select",
+        json={
+            "model_file_id": first["model_file_id"],
+            "hit": {"candidate_id": first["surface_candidates"][0]["id"]},
+        },
+    ).json()
+
+    with pytest.raises(HTTPException, match="Invalid model surface preview"):
+        resolve_surface_preview_config(
+            registry=registry,
+            model_file_id=second["model_file_id"],
+            selection_json=json.dumps(selected["selection"]),
+            footprint_json=json.dumps(selected["footprint"]),
+            placement_json=json.dumps(
+                {
+                    "mode": "edge_to_edge",
+                    "offset_x_mm": 0,
+                    "offset_y_mm": 0,
+                    "scale": 1,
+                    "rotation_deg": 0,
+                    "inset_mm": 0,
+                }
+            ),
+            source_path=str(image_path),
+        )
 
 
 def _fake_worker_result(tmp_path) -> dict:
