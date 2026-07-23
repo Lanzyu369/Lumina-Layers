@@ -697,6 +697,66 @@ def test_run_import_flash_studio_keeps_current_multicolor_models_and_nozzles(tmp
     ]
 
 
+def test_run_import_flash_studio_defaults_native_project_identity(tmp_path):
+    source_root = tmp_path / "profiles"
+    machine_dir = source_root / "Flashforge" / "machine"
+    _write_machine_profile(
+        machine_dir,
+        "fdm_common.json",
+        {
+            "type": "machine",
+            "name": "fdm_common",
+            "instantiation": "false",
+            "printable_height": "220",
+            "printable_area": ["0x0", "220x0", "220x220", "0x220"],
+        },
+    )
+    profile_name = "Flashforge AD5X 0.4 nozzle"
+    _write_machine_profile(
+        machine_dir,
+        f"{profile_name}.json",
+        {
+            "type": "machine",
+            "name": profile_name,
+            "inherits": "fdm_common",
+            "instantiation": "true",
+            "printer_model": "Flashforge AD5X",
+            "printer_variant": "0.4",
+            "nozzle_diameter": ["0.4"],
+            "single_extruder_multi_material": "1",
+        },
+    )
+    (source_root / "Flashforge.json").write_text(
+        json.dumps(
+            {
+                "version": "02.01.01.00",
+                "machine_list": [
+                    {"name": profile_name, "sub_path": f"machine/{profile_name}.json"}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    output_root = tmp_path / "machine_registry"
+    result = run_import(
+        slicer_id="FlashStudio",
+        source_root=source_root,
+        source_version="02.01.01.00",
+        vendor_keys=("Flashforge",),
+        output_root=output_root,
+    )
+
+    assert result.device_count == 1
+    registry = json.loads((output_root / "registry.json").read_text(encoding="utf-8"))
+    slicer = registry["slicers"][0]
+    assert slicer["application_metadata"] == "BambuStudio-2.3.2"
+    assert slicer["client_version"] == ""
+    template_path = slicer["machines"][0]["nozzles"][0]["template"]
+    template = json.loads((output_root / template_path).read_text(encoding="utf-8"))
+    assert template["version"] == "2.3.2"
+
+
 def test_run_import_sources_reuses_cover_assets_from_other_sources(tmp_path):
     bambu_root = tmp_path / "bambu"
     orca_root = tmp_path / "orca"

@@ -183,6 +183,10 @@ python tools\machine_adapter\import_profiles.py `
   --output output\temp\flash_studio_registry_check
 ```
 
+`FlashStudio` provider 已内置上述 `application_metadata` 与空
+`client_version` 作为默认契约，因此直接省略这两个可选参数时也必须生成
+相同结果；示例显式写出它们，便于升级切片软件时人工核对或临时覆盖。
+
 这个命令会生成单切片器 registry。合并多切片器时推荐使用 `run_import_sources(...)` 的 Python 小脚本，而不是手工拼 JSON。
 
 ### 源版本和应用版本

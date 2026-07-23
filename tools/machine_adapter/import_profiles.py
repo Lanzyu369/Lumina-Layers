@@ -442,10 +442,20 @@ def _collect_import_payload(
             )
             templates.append((template_path, template))
 
-    application_metadata = source.application_metadata or (
-        f"ElegooSlicer-{source_version}"
-        if provider.slicer_id == "ElegooSlicer"
-        else f"{provider.slicer_id}-{source_version}"
+    if source.application_metadata is not None:
+        application_metadata = source.application_metadata
+    elif provider.default_application_metadata is not None:
+        application_metadata = provider.default_application_metadata
+    else:
+        application_metadata = (
+            f"ElegooSlicer-{source_version}"
+            if provider.slicer_id == "ElegooSlicer"
+            else f"{provider.slicer_id}-{source_version}"
+        )
+    client_version = (
+        source.client_version
+        if source.client_version is not None
+        else provider.default_client_version
     )
     slicer_payload = {
         "slicer_id": provider.slicer_id,
@@ -457,8 +467,8 @@ def _collect_import_payload(
         "sidecar_policy": provider.sidecar_policy,
         "machines": list(machines.values()),
     }
-    if source.client_version is not None:
-        slicer_payload["client_version"] = source.client_version
+    if client_version is not None:
+        slicer_payload["client_version"] = client_version
     device_count = sum(len(machine["nozzles"]) for machine in machines.values())
     return slicer_payload, templates, device_count
 

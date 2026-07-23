@@ -105,10 +105,10 @@ def _content_revision(settings: dict[str, Any], source_hashes: list[str], source
 
 
 def _application_metadata(provider: MachineAdapterProvider, source_version: str) -> str:
+    if provider.default_application_metadata is not None:
+        return provider.default_application_metadata
     if provider.slicer_id == "ElegooSlicer":
         return f"ElegooSlicer-{source_version}"
-    if provider.slicer_id == "FlashStudio":
-        return "BambuStudio-2.3.2"
     return f"BambuStudio-{source_version}"
 
 
