@@ -670,6 +670,7 @@ class TestBatchWorkerPoolSubmit:
                     "material_layer_height_mm": "0.06",
                     "material_grid_resolution": "33",
                     "material_backing_material_index": "1",
+                    "separate_backing": "true",
                 },
             )
 
@@ -684,6 +685,7 @@ class TestBatchWorkerPoolSubmit:
         assert call_args[0][31] == 0.06
         assert call_args[0][32] == 33
         assert call_args[0][33] == 1
+        assert call_args[0][38] is True
 
     def test_batch_submits_native_bundle_source_to_worker(self) -> None:
         """Batch endpoint resolves reverse-LUT native bundle params."""

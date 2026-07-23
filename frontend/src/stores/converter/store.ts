@@ -7166,6 +7166,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           chroma_gate: state.hue_enable ? state.chroma_gate : 0,
           use_lut_constrained: state.use_lut_constrained,
           auto_dynamic_range: state.auto_dynamic_range,
+          separate_backing: state.separate_backing,
           enable_relief: state.enable_relief,
           printer_id: settings.printerModel,
           slicer: settings.slicerSoftware,

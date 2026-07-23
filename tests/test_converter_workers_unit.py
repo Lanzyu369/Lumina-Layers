@@ -357,6 +357,7 @@ def test_worker_batch_convert_item_forwards_relief_params_intact() -> None:
             material_source="material_archive",
             selected_materials=["brand/red", "brand/white"],
             material_backing_material_index=1,
+            separate_backing=True,
             high_precision_3d_preview=True,
             device_profile_id="BambuStudio:bbl:bambu-lab-h2d:0.4",
         )
@@ -377,6 +378,7 @@ def test_worker_batch_convert_item_forwards_relief_params_intact() -> None:
     assert call_kwargs["material_source"] == "material_archive"
     assert call_kwargs["selected_materials"] == ["brand/red", "brand/white"]
     assert call_kwargs["material_backing_material_index"] == 1
+    assert call_kwargs["separate_backing"] is True
     assert call_kwargs["high_precision_3d_preview"] is True
     assert call_kwargs["device_profile_id"] == "BambuStudio:bbl:bambu-lab-h2d:0.4"
 

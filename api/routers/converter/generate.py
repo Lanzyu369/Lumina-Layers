@@ -3293,6 +3293,7 @@ async def convert_batch(
     material_backing_material_index: int | None = Form(None, ge=0, description="耗材档案底板耗材索引"),
     target_width_mm: float = Form(60.0, description="目标宽度 (mm)"),
     spacer_thick: float = Form(1.2, description="底板厚度 (mm)"),
+    separate_backing: bool = Form(False, description="底板作为独立对象"),
     structure_mode: str = Form("Double-sided", description="打印结构模式"),
     color_mode: str = Form("4-Color (RYBW)", description="颜色模式"),
     modeling_mode: str = Form("high-fidelity", description="建模模式"),
@@ -3533,6 +3534,7 @@ async def convert_batch(
                 auto_dynamic_range,
                 high_precision_3d_preview,
                 device_profile_id,
+                separate_backing,
             )
 
             # 3. Result processing (main thread)
