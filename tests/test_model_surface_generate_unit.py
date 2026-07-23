@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -345,6 +347,113 @@ def test_worker_generate_model_surface_overlay_exports_bambu_3mf(tmp_path):
     assert captured["enable_base_layer_height_modifier"] is False
     assert captured["device_profile_id"] == "OrcaSlicer:bbl:bambu-lab-p1s:0.4"
     Path(result["threemf_path"]).unlink(missing_ok=True)
+
+
+def test_worker_generates_native_vector_surface_3mf_without_board_or_margin_stretch(
+    tmp_path,
+):
+    """Real SVG worker path keeps native color meshes and logical canvas margins."""
+
+    image_path = tmp_path / "surface-art.svg"
+    model_path = tmp_path / "plate.stl"
+    image_path.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 10">'
+        '<path d="M2 2H5V8H2Z" fill="#ff0000"/>'
+        '<path d="M6 2H9V8H6Z" fill="#0000ff"/>'
+        "</svg>",
+        encoding="utf-8",
+    )
+    plate = trimesh.creation.box(extents=(20.0, 10.0, 2.0))
+    plate.export(model_path)
+    lut_path = (
+        Path(__file__).resolve().parents[1]
+        / "lut-preset"
+        / "赛纳"
+        / "赛纳&8色PLA-红-黄-蓝-品红-青-白-绿-黑.npy"
+    )
+
+    from api.workers.converter_workers import worker_generate_model_surface_overlay
+
+    result = worker_generate_model_surface_overlay(
+        str(image_path),
+        str(lut_path),
+        {
+            "surface_model_path": str(model_path),
+            "surface_footprint": {
+                "frame": {
+                    "origin": [0.0, 0.0, 1.0],
+                    "normal": [0.0, 0.0, 1.0],
+                    "u_axis": [1.0, 0.0, 0.0],
+                    "v_axis": [0.0, 1.0, 0.0],
+                },
+                "outer": [
+                    [-10.0, -5.0],
+                    [10.0, -5.0],
+                    [10.0, 5.0],
+                    [-10.0, 5.0],
+                    [-10.0, -5.0],
+                ],
+                "holes": [],
+                "bounds_width_mm": 20.0,
+                "bounds_height_mm": 10.0,
+            },
+            "surface_pocket_depth_mm": 0.4,
+            "converter_params": {
+                "target_width_mm": 20.0,
+                "spacer_thick": 1.2,
+                "structure_mode": "Single-sided",
+                "color_mode": "8-Color Max",
+                "modeling_mode": CoreModelingMode.VECTOR,
+                "material_source": "lut",
+                "color_layers": 7,
+                "layer_height_mm": 0.08,
+                "backing_color_id": 0,
+                "separate_backing": False,
+                "add_loop": False,
+                "enable_relief": False,
+                "enable_cloisonne": False,
+                "enable_coating": False,
+                "enable_outline": False,
+                "center_on_bed": False,
+            },
+            "printer_id": "flashforge-ad5x",
+            "slicer": "FlashStudio",
+            "nozzle_size": "0.4",
+        },
+    )
+
+    output_path = Path(result["threemf_path"])
+    try:
+        assert output_path.exists()
+        core_ns = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
+        with zipfile.ZipFile(output_path, "r") as archive:
+            object_model = ET.fromstring(
+                archive.read("3D/Objects/object_1.model")
+            )
+        objects = object_model.findall("m:resources/m:object", core_ns)
+        names = [str(node.attrib.get("name") or "") for node in objects]
+        assert names.count("surface_base") == 1
+        assert "Board" not in names
+        color_objects = [
+            node for node in objects if node.attrib.get("name") != "surface_base"
+        ]
+        assert len(color_objects) >= 2
+
+        color_vertices = [
+            (
+                float(vertex.attrib["x"]),
+                float(vertex.attrib["y"]),
+            )
+            for node in color_objects
+            for vertex in node.findall("m:mesh/m:vertices/m:vertex", core_ns)
+        ]
+        color_x = [vertex[0] for vertex in color_vertices]
+        color_y = [vertex[1] for vertex in color_vertices]
+        assert max(color_x) - min(color_x) == pytest.approx(7.0, abs=0.05)
+        assert max(color_y) - min(color_y) == pytest.approx(6.0, abs=0.05)
+        assert (min(color_x) + max(color_x)) / 2.0 != pytest.approx(0.0, abs=0.5)
+    finally:
+        output_path.unlink(missing_ok=True)
 
 
 def test_model_surface_layer_height_rejects_nonuniform_dynamic_schedule():

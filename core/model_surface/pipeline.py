@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import trimesh
 
 from config import PrinterConfig
 from core.converter import build_image_model_context
@@ -58,6 +59,9 @@ def build_surface_overlay_scene(
 
 
 def _build_pattern_scene(ctx: dict):
+    if ctx.get("is_svg_vector"):
+        return _build_vector_pattern_scene(ctx)
+
     full_matrix = ctx.get("full_matrix")
     slot_names = ctx.get("slot_names")
     preview_colors = ctx.get("preview_colors")
@@ -97,6 +101,82 @@ def _build_pattern_scene(ctx: dict):
         )
         return pattern_scene
     raise ModelSurfaceError("Converter did not produce a display voxel stack.")
+
+
+def _build_vector_pattern_scene(ctx: dict) -> trimesh.Scene:
+    """Extract native vector color layers for model-surface assembly."""
+
+    source_scene = ctx.get("scene")
+    analysis = ctx.get("vector_analysis")
+    if not isinstance(source_scene, trimesh.Scene) or analysis is None:
+        raise ModelSurfaceError(
+            "Converter did not produce a native vector pattern scene."
+        )
+
+    pattern_scene = trimesh.Scene()
+    for raw_name in getattr(analysis, "slot_names", ()) or ():
+        name = str(raw_name)
+        mesh = source_scene.geometry.get(name)
+        if not isinstance(mesh, trimesh.Trimesh) or len(mesh.faces) == 0:
+            continue
+        pattern_scene.add_geometry(
+            mesh.copy(),
+            node_name=name,
+            geom_name=name,
+        )
+    if len(pattern_scene.geometry) == 0:
+        raise ModelSurfaceError(
+            "Converter did not produce native vector color layers."
+        )
+
+    try:
+        bbox = tuple(float(value) for value in analysis.bbox)
+        scale_factor = float(analysis.scale_factor)
+        layer_count = int(analysis.num_layers)
+        layer_height_mm = float(
+            ctx.get("layer_height_mm") or PrinterConfig.LAYER_HEIGHT
+        )
+    except (TypeError, ValueError) as exc:
+        raise ModelSurfaceError(
+            "Converter produced invalid native vector pattern metadata."
+        ) from exc
+    if (
+        len(bbox) < 4
+        or not np.all(np.isfinite(bbox[:4]))
+        or not np.isfinite(scale_factor)
+        or scale_factor <= 0.0
+        or layer_count <= 0
+        or not np.isfinite(layer_height_mm)
+        or layer_height_mm <= 0.0
+    ):
+        raise ModelSurfaceError(
+            "Converter produced invalid native vector pattern metadata."
+        )
+
+    logical_width_mm = bbox[2] * scale_factor
+    logical_height_mm = bbox[3] * scale_factor
+    if logical_width_mm <= 0.0 or logical_height_mm <= 0.0:
+        raise ModelSurfaceError(
+            "Converter produced an invalid native vector canvas."
+        )
+
+    pattern_bounds = np.asarray(pattern_scene.bounds, dtype=np.float64)
+    logical_z_min = float(pattern_bounds[0, 2])
+    layer_heights_mm = (layer_height_mm,) * layer_count
+    pattern_scene.metadata[MODEL_SURFACE_DISPLAY_Z_BOUNDS_KEY] = (
+        logical_z_min,
+        logical_z_min + float(sum(layer_heights_mm)),
+    )
+    pattern_scene.metadata[MODEL_SURFACE_DISPLAY_LAYER_HEIGHTS_KEY] = (
+        layer_heights_mm
+    )
+    pattern_scene.metadata[MODEL_SURFACE_LOGICAL_XY_BOUNDS_KEY] = (
+        0.0,
+        0.0,
+        logical_width_mm,
+        logical_height_mm,
+    )
+    return pattern_scene
 
 
 def _resolve_surface_display_stack(
