@@ -124,6 +124,42 @@ def test_build_embedded_overlay_scene_rejects_pattern_deeper_than_model():
         )
 
 
+def test_build_embedded_overlay_scene_uses_local_wall_thickness_for_hollow_model():
+    outer = trimesh.creation.box(extents=(20.0, 10.0, 4.0))
+    cavity = trimesh.creation.box(extents=(18.0, 8.0, 3.6))
+    cavity.invert()
+    base = trimesh.util.concatenate([outer, cavity])
+    color = trimesh.creation.box(extents=(20.0, 10.0, 0.3))
+    color.apply_translation((0.0, 0.0, 0.15))
+    pattern = trimesh.Scene({"color_ff0000": color})
+    footprint = SurfaceFootprint(
+        frame=PlaneFrame(
+            origin=(0.0, 0.0, 2.0),
+            normal=(0.0, 0.0, 1.0),
+            u_axis=(1.0, 0.0, 0.0),
+            v_axis=(0.0, 1.0, 0.0),
+        ),
+        outer=((-9.0, -4.0), (9.0, -4.0), (9.0, 4.0), (-9.0, 4.0)),
+        holes=(),
+        bounds_min=(-9.0, -4.0),
+        bounds_max=(9.0, 4.0),
+        bounds_width_mm=18.0,
+        bounds_height_mm=8.0,
+        area_mm2=144.0,
+        hole_count=0,
+    )
+
+    with pytest.raises(ModelSurfaceError, match="available model thickness"):
+        build_embedded_overlay_scene(
+            base_mesh=base,
+            pattern_scene=pattern,
+            footprint=footprint,
+            pocket_depth_mm=0.3,
+            base_slot_name="surface_base",
+            base_color=(245, 245, 245),
+        )
+
+
 def test_build_embedded_overlay_scene_uses_logical_display_depth_for_air_layers(
     monkeypatch: pytest.MonkeyPatch,
 ):

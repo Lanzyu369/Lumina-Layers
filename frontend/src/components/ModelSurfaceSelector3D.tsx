@@ -330,6 +330,26 @@ export function applySurfaceMaterial(root: THREE.Object3D, material: THREE.Mater
   });
 }
 
+export function updateSurfaceMaterialColor(
+  root: THREE.Object3D,
+  color: THREE.Color,
+): void {
+  root.traverse((child) => {
+    if (!(child instanceof THREE.Mesh)) {
+      return;
+    }
+    const materials = Array.isArray(child.material)
+      ? child.material
+      : [child.material];
+    for (const ownedMaterial of materials) {
+      if ("color" in ownedMaterial && ownedMaterial.color instanceof THREE.Color) {
+        ownedMaterial.color.copy(color);
+        ownedMaterial.needsUpdate = true;
+      }
+    }
+  });
+}
+
 function centerGeometry(geometry: THREE.BufferGeometry): THREE.Vector3 {
   geometry.computeBoundingBox();
   const box = geometry.boundingBox;
@@ -3539,8 +3559,11 @@ export default function ModelSurfaceSelector3D({
   useEffect(() => {
     material.color.set(modelBodyColor);
     material.needsUpdate = true;
+    if (model?.kind === "object") {
+      updateSurfaceMaterialColor(model.object, material.color);
+    }
     invalidate();
-  }, [invalidate, material, modelBodyColor]);
+  }, [invalidate, material, model, modelBodyColor]);
 
   useEffect(() => {
     return () => {

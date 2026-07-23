@@ -253,11 +253,86 @@ def _available_surface_depth_mm(
     if vertices.size == 0 or normal_length <= 1e-9:
         raise ModelSurfaceError("Selected surface has invalid model thickness.")
     normal /= normal_length
-    surface_plane = float(np.dot(origin, normal))
-    inward_extent = surface_plane - float(np.min(vertices @ normal))
-    if inward_extent <= 1e-6:
-        raise ModelSurfaceError("Selected surface has no available model thickness.")
-    return inward_extent
+    u_axis = np.asarray(footprint.frame.u_axis, dtype=np.float64)
+    v_axis = np.asarray(footprint.frame.v_axis, dtype=np.float64)
+    polygon = sg.Polygon(footprint.outer, holes=list(footprint.holes))
+    if not polygon.is_valid:
+        polygon = polygon.buffer(0)
+    if polygon.is_empty:
+        raise ModelSurfaceError("Selected surface has invalid model thickness.")
+
+    min_x, min_y, max_x, max_y = polygon.bounds
+    sample_points = [polygon.representative_point(), polygon.centroid]
+    for x_value in np.linspace(min_x, max_x, num=6)[1:-1]:
+        for y_value in np.linspace(min_y, max_y, num=6)[1:-1]:
+            point = sg.Point(float(x_value), float(y_value))
+            if polygon.contains(point):
+                sample_points.append(point)
+
+    triangles = np.asarray(base_mesh.triangles, dtype=np.float64)
+    inward_direction = -normal
+    surface_epsilon = 1e-5
+    local_depths: list[float] = []
+    for point in sample_points:
+        surface_point = (
+            origin
+            + u_axis * float(point.x)
+            + v_axis * float(point.y)
+        )
+        ray_origin = surface_point + inward_direction * surface_epsilon
+        hit_distance = _first_triangle_hit_distance(
+            triangles,
+            ray_origin,
+            inward_direction,
+        )
+        if hit_distance is not None:
+            local_depths.append(hit_distance + surface_epsilon)
+
+    if not local_depths:
+        raise ModelSurfaceError(
+            "Unable to determine the available model thickness at the selected surface."
+        )
+    return min(local_depths)
+
+
+def _first_triangle_hit_distance(
+    triangles: np.ndarray,
+    ray_origin: np.ndarray,
+    ray_direction: np.ndarray,
+) -> float | None:
+    edge_a = triangles[:, 1] - triangles[:, 0]
+    edge_b = triangles[:, 2] - triangles[:, 0]
+    direction = np.broadcast_to(ray_direction, edge_b.shape)
+    cross_direction_edge_b = np.cross(direction, edge_b)
+    determinant = np.einsum("ij,ij->i", edge_a, cross_direction_edge_b)
+    valid = np.abs(determinant) > 1e-10
+    inverse_determinant = np.zeros_like(determinant)
+    inverse_determinant[valid] = 1.0 / determinant[valid]
+
+    origin_delta = ray_origin - triangles[:, 0]
+    barycentric_u = inverse_determinant * np.einsum(
+        "ij,ij->i",
+        origin_delta,
+        cross_direction_edge_b,
+    )
+    origin_cross_edge_a = np.cross(origin_delta, edge_a)
+    barycentric_v = inverse_determinant * np.einsum(
+        "ij,ij->i",
+        direction,
+        origin_cross_edge_a,
+    )
+    distance = inverse_determinant * np.einsum(
+        "ij,ij->i",
+        edge_b,
+        origin_cross_edge_a,
+    )
+    valid &= barycentric_u >= -1e-9
+    valid &= barycentric_v >= -1e-9
+    valid &= barycentric_u + barycentric_v <= 1.0 + 1e-9
+    valid &= distance > 1e-6
+    if not np.any(valid):
+        return None
+    return float(np.min(distance[valid]))
 
 
 def _pattern_z_bounds_mm(pattern_scene: trimesh.Scene) -> tuple[float, float]:

@@ -76,6 +76,7 @@ import ModelSurfaceSelector3D, {
   getRotationTickSegmentRadii,
   getModelBodyRaycastProps,
   applySurfaceMaterial,
+  updateSurfaceMaterialColor,
   getSurfaceFocusRadius,
   computeArtworkPlacementDragUpdate,
   computeArtworkCoverDrawSize,
@@ -3996,6 +3997,10 @@ describe("ModelSurfaceSelector3D", () => {
     expect(second.material).not.toBe(sharedMaterial);
     expect(first.material).not.toBe(second.material);
     expect(sharedDispose).not.toHaveBeenCalled();
+
+    updateSurfaceMaterialColor(root, new THREE.Color("#123456"));
+    expect((first.material as THREE.MeshStandardMaterial).color.getHexString()).toBe("123456");
+    expect((second.material as THREE.MeshStandardMaterial).color.getHexString()).toBe("123456");
 
     first.geometry.dispose();
     second.geometry.dispose();
