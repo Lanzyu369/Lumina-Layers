@@ -204,6 +204,19 @@ describe("WikiTooltip unit tests", () => {
     expect(link).toBeNull();
   });
 
+  it("does not let non-link tooltip bubbles intercept neighboring controls", async () => {
+    const { container } = await renderAndOpen({
+      title: "Passive",
+      description: "This tooltip only explains a control",
+    });
+
+    const bubble = container.querySelector('[data-testid="tooltip-bubble"]');
+    expect(bubble).not.toBeNull();
+    const positioningDiv = bubble!.parentElement;
+    expect(positioningDiv).not.toBeNull();
+    expect(positioningDiv).toHaveClass("pointer-events-none");
+  });
+
   /**
    * Requirement 6.2: Tooltip_Bubble SHALL have role="tooltip".
    *
@@ -244,6 +257,7 @@ describe("WikiTooltip unit tests", () => {
     const link = bubble!.querySelector("a");
     expect(link).not.toBeNull();
     expect(link!.getAttribute("href")).toBe("https://example.com/wiki");
+    expect(bubble!.parentElement).toHaveClass("pointer-events-auto");
 
     // <a> with href is natively focusable — verify it can receive focus
     link!.focus();

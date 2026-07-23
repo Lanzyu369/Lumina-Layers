@@ -30,6 +30,7 @@ import type {
   RegionRecipeResponse,
   AutoDetectColorsResponse,
   ModelSurfaceHitTriangle,
+  ModelSurfaceModelTransform,
   ModelSurfaceSelectResponse,
   ModelSurfaceUploadResponse,
 } from "./types";
@@ -94,14 +95,16 @@ export async function uploadModelSurface(
 /** 在已上传模型上选择一个平面区域。 */
 export async function selectModelSurface(
   modelFileId: string,
-  hit: ModelSurfaceHitTriangle,
+  hit: ModelSurfaceHitTriangle & { model_transform?: ModelSurfaceModelTransform },
 ): Promise<ModelSurfaceSelectResponse> {
+  const { model_transform, ...hitPayload } = hit;
   const response = await apiClient.post<ModelSurfaceSelectResponse>(
     "/convert/model-surface/select",
     {
       model_file_id: modelFileId,
-      hit,
+      hit: hitPayload,
       include_same_plane_disconnected: false,
+      ...(model_transform ? { model_transform } : {}),
     },
     { timeout: 3_600_000 },
   );

@@ -131,6 +131,40 @@ def _normalize_timeout(timeout: float | None) -> float | None:
     return value
 
 
+def _ensure_standard_streams_flushable() -> None:
+    """Replace broken stdio streams before spawning process-pool workers.
+
+    ``multiprocessing`` flushes ``sys.stdout`` and ``sys.stderr`` before
+    spawning a child process. If the API server was launched by a parent whose
+    pipe has already closed, that internal flush raises ``BrokenPipeError`` and
+    prevents every preview/generate worker from starting. Replacing only broken
+    streams with ``os.devnull`` keeps the process pool usable without changing
+    normal interactive output.
+    """
+
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        if stream is None:
+            continue
+        try:
+            stream.flush()
+            continue
+        except (BrokenPipeError, OSError) as exc:
+            encoding = getattr(stream, "encoding", None) or "utf-8"
+            errors = getattr(stream, "errors", None) or "replace"
+            replacement = open(os.devnull, "w", encoding=encoding, errors=errors)
+            setattr(sys, stream_name, replacement)
+            _log.warning(
+                "Replaced broken standard stream before worker spawn",
+                extra={
+                    "event": "worker_pool_stdio_replaced",
+                    "stream_name": stream_name,
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                },
+            )
+
+
 def _shutdown_executor(
     executor: ProcessPoolExecutor,
     *,
@@ -318,6 +352,7 @@ class WorkerPoolManager:
         effective_timeout = _normalize_timeout(
             timeout if timeout is not None else self._default_task_timeout
         )
+        _ensure_standard_streams_flushable()
         future = loop.run_in_executor(
             pool,
             _run_in_worker_with_context,

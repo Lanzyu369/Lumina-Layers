@@ -17,6 +17,8 @@ export type {
   SelectionMode,
   RegionData,
   PendingReplacement,
+  ModelSurfacePlacement,
+  ModelSurfaceModelRotation,
   ConverterState,
   ConverterActions,
 } from "./store";

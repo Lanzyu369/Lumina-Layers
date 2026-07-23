@@ -22,12 +22,13 @@ import { useSlicerStore } from "../stores/slicerStore";
 import type { PrinterInfo, SlicerOption } from "../api/types";
 import {
   filterCompatiblePrinters,
+  getDetectedSlicerIdForSoftware,
   getPrinterNozzleSizeOptions,
-  isBambuFamilySlicer,
   resolveDeviceProfileOptionId,
   resolveNozzleSizeOption,
   resolvePrinterOptionId,
   resolveSlicerOptionId,
+  supportsLayerConfigRanges,
 } from "../utils/settingsOptionIds";
 import { retryAsync } from "../utils/retryAsync";
 import Button from "./ui/Button";
@@ -123,6 +124,9 @@ export default function SettingsPanel() {
   const isValidatingCustomPath = useSlicerStore(
     (s) => s.isValidatingCustomPath,
   );
+  const detectedSlicers = useSlicerStore((s) => s.slicers);
+  const selectedDetectedSlicerId = useSlicerStore((s) => s.selectedSlicerId);
+  const setSelectedDetectedSlicerId = useSlicerStore((s) => s.setSelectedSlicerId);
   const customPathMessage = useSlicerStore((s) => s.customPathMessage);
   const customPathError = useSlicerStore((s) => s.customPathError);
   const validateAndSaveCustomSlicerPath = useSlicerStore(
@@ -312,6 +316,15 @@ export default function SettingsPanel() {
   // Handle slicer selection change — auto-select first compatible printer
   const handleSlicerChange = (id: string) => {
     setSlicerSoftware(id);
+    const preferredDetectedSlicerId = getDetectedSlicerIdForSoftware(id);
+    const nextDetectedSlicerId =
+      preferredDetectedSlicerId &&
+      detectedSlicers.some((slicer) => slicer.id === preferredDetectedSlicerId)
+        ? preferredDetectedSlicerId
+        : null;
+    if (nextDetectedSlicerId !== selectedDetectedSlicerId) {
+      setSelectedDetectedSlicerId(nextDetectedSlicerId);
+    }
     // If current printer doesn't support the new slicer, switch to first compatible
     const compatible = filterCompatiblePrinters(printers, id);
     const currentStillValid = compatible.some((p) => p.id === resolvedPrinterModel);
@@ -628,7 +641,7 @@ export default function SettingsPanel() {
             </p>
           )}
         </div>
-        {isBambuFamilySlicer(resolvedSlicerSoftware) && (
+        {supportsLayerConfigRanges(resolvedSlicerSoftware) && (
           <div
             data-testid="base-layer-height-modifier-row"
             className="flex items-center justify-between gap-3 border-t border-slate-200/60 pt-4 dark:border-slate-700/60"

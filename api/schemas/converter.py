@@ -329,6 +329,7 @@ class ConvertPreviewRequest(LutSourceSelection):
     surface_selection_json: str | None = Field(None, description="JSON surface selection payload")
     surface_footprint_json: str | None = Field(None, description="JSON surface footprint payload")
     surface_placement_json: str | None = Field(None, description="JSON surface placement payload")
+    surface_model_transform_json: str | None = Field(None, description="JSON surface model transform payload")
 
     @field_validator("color_mode", mode="before")
     @classmethod

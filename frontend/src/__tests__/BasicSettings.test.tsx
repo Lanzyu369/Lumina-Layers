@@ -31,6 +31,7 @@ vi.mock("../api/converter", async () => {
   return {
     ...actual,
     fetchLutList: vi.fn(),
+    uploadModelSurface: vi.fn(),
   };
 });
 
@@ -137,6 +138,23 @@ beforeEach(() => {
     color_mode: ColorModeEnum.FOUR_COLOR_RYBW,
     color_count: 4,
   });
+  vi.mocked(converterApi.uploadModelSurface).mockResolvedValue({
+    status: "ok",
+    model_file_id: "model-file-1",
+    summary: {
+      vertex_count: 8,
+      face_count: 12,
+      bounds_min_mm: [0, 0, 0],
+      bounds_max_mm: [20, 10, 2],
+      extents_mm: [20, 10, 2],
+      is_watertight: true,
+      is_winding_consistent: true,
+      body_count: 1,
+      unit_warning: null,
+    },
+    surface_candidates: [],
+    warnings: [],
+  });
   vi.mocked(extractorApi.listGradientCardMaterials).mockResolvedValue({
     status: "success",
     message: "ok",
@@ -194,6 +212,19 @@ beforeEach(() => {
     structure_mode: StructureModeEnum.SINGLE_SIDED,
     modeling_mode: ModelingModeEnum.HIGH_FIDELITY,
     enable_relief: false,
+    modelSurfaceEnabled: false,
+    modelSurfaceFile: null,
+    modelSurfacePreviewUrl: null,
+    modelSurfaceModelFileId: null,
+    modelSurfaceSummary: null,
+    modelSurfaceSelectionId: null,
+    modelSurfaceSelection: null,
+    modelSurfaceFootprint: null,
+    modelSurfaceCandidates: [],
+    modelSurfaceLoading: false,
+    modelSurfaceSelecting: false,
+    modelSurfaceError: null,
+    modelSurfaceWarnings: [],
     previewWarnings: [],
     largeFormatWarnings: [],
   });
@@ -399,6 +430,164 @@ describe("BasicSettings", () => {
     render(<BasicSettings />);
     // UnifiedUploader shows the translated upload hint in empty state
     expect(screen.getByText("拖拽图片或点击上传（支持多选）")).toBeInTheDocument();
+  });
+
+  it("routes a model file dropped anywhere in the converter to model surface upload", async () => {
+    const file = new File(["solid"], "pegboard.STL", {
+      type: "application/octet-stream",
+    });
+
+    render(<BasicSettings />);
+    fireEvent.drop(window, {
+      dataTransfer: {
+        files: [file],
+        types: ["Files"],
+      },
+    });
+
+    await waitFor(() => {
+      expect(converterApi.uploadModelSurface).toHaveBeenCalledWith(file);
+    });
+    const state = useConverterStore.getState();
+    expect(state.modelSurfaceEnabled).toBe(true);
+    expect(state.modelSurfaceFile).toBe(file);
+    expect(state.imageFile).toBeNull();
+  });
+
+  it("does not tell users to pick a face when model surface analysis fails", async () => {
+    vi.mocked(converterApi.uploadModelSurface).mockRejectedValueOnce(
+      new Error("backend unavailable"),
+    );
+    const file = new File(["solid"], "pegboard.stl", {
+      type: "application/octet-stream",
+    });
+
+    render(<BasicSettings />);
+    fireEvent.drop(window, {
+      dataTransfer: {
+        files: [file],
+        types: ["Files"],
+      },
+    });
+
+    expect(await screen.findByText("模型分析失败")).toBeInTheDocument();
+    expect(screen.queryByText("右侧点选面")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("请在右侧 3D 预览中旋转模型、选择或重选面；选好后再移动、旋转或缩放贴图。"),
+    ).not.toBeInTheDocument();
+    expect(useConverterStore.getState().modelSurfaceModelFileId).toBeNull();
+  });
+
+  it("routes an image file dropped anywhere in the converter to image upload", async () => {
+    const file = new File(["img"], "artwork.jpg", { type: "image/jpeg" });
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:artwork");
+
+    render(<BasicSettings />);
+    fireEvent.drop(window, {
+      dataTransfer: {
+        files: [file],
+        types: ["Files"],
+      },
+    });
+
+    await waitFor(() => {
+      expect(useConverterStore.getState().imageFile).toBe(file);
+    });
+    expect(converterApi.uploadModelSurface).not.toHaveBeenCalled();
+    expect(useConverterStore.getState().modelSurfaceFile).toBeNull();
+  });
+
+  it("routes model and image files dropped together from a folder into the full surface workflow", async () => {
+    const modelFile = new File(["solid"], "pegboard.obj", {
+      type: "application/octet-stream",
+    });
+    const imageFile = new File(["img"], "artwork.png", { type: "image/png" });
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:artwork");
+
+    render(<BasicSettings />);
+    fireEvent.drop(window, {
+      dataTransfer: {
+        files: [modelFile, imageFile],
+        types: ["Files"],
+      },
+    });
+
+    await waitFor(() => {
+      expect(converterApi.uploadModelSurface).toHaveBeenCalledWith(modelFile);
+      expect(useConverterStore.getState().imageFile).toBe(imageFile);
+    });
+    const state = useConverterStore.getState();
+    expect(state.modelSurfaceEnabled).toBe(true);
+    expect(state.modelSurfaceFile).toBe(modelFile);
+  });
+
+  it("lets users drop a model directly onto the model surface upload zone", async () => {
+    const file = new File(["solid"], "pegboard.stl", {
+      type: "application/octet-stream",
+    });
+
+    render(<BasicSettings />);
+    fireEvent.click(screen.getByText("模型覆面").closest("label")!);
+
+    const modelDropZone = await screen.findByRole("button", {
+      name: "拖拽 STL/OBJ 模型到此处或点击上传",
+    });
+    fireEvent.drop(modelDropZone, {
+      dataTransfer: {
+        files: [file],
+        types: ["Files"],
+      },
+    });
+
+    await waitFor(() => {
+      expect(converterApi.uploadModelSurface).toHaveBeenCalledWith(file);
+    });
+    const state = useConverterStore.getState();
+    expect(state.modelSurfaceEnabled).toBe(true);
+    expect(state.modelSurfaceFile).toBe(file);
+    expect(state.imageFile).toBeNull();
+  });
+
+  it("forces single-sided structure and hides the irrelevant selector in model surface mode", () => {
+    useConverterStore.setState({
+      structure_mode: StructureModeEnum.DOUBLE_SIDED,
+    } as never);
+
+    render(<BasicSettings />);
+    fireEvent.click(screen.getByText("模型覆面").closest("label")!);
+
+    expect(useConverterStore.getState().structure_mode).toBe(
+      StructureModeEnum.SINGLE_SIDED,
+    );
+    expect(screen.queryByText("结构模式")).not.toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: "双面" })).not.toBeInTheDocument();
+  });
+
+  it("shows a global drop hint while dragging model and image files over the converter", () => {
+    const modelFile = new File(["solid"], "pegboard.stl", {
+      type: "application/octet-stream",
+    });
+    const imageFile = new File(["img"], "artwork.png", { type: "image/png" });
+
+    render(<BasicSettings />);
+
+    fireEvent.dragOver(window, {
+      dataTransfer: {
+        files: [modelFile],
+        types: ["Files"],
+      },
+    });
+
+    expect(screen.getByRole("status", { name: "拖拽导入文件" })).toHaveTextContent("导入模型");
+
+    fireEvent.dragOver(window, {
+      dataTransfer: {
+        files: [imageFile],
+        types: ["Files"],
+      },
+    });
+
+    expect(screen.getByRole("status", { name: "拖拽导入文件" })).toHaveTextContent("导入图片");
   });
 
   it("lets users append one more image after a single image has a preview", async () => {

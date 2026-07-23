@@ -23,6 +23,7 @@ import type {
   LutDetailsCatalogGroup,
   LutColorsCard,
   PerformanceTiming,
+  ModelSurfaceCandidate,
   ModelSurfaceMeshSummary,
   ModelSurfaceSelectResponse,
 } from "../../api/types";
@@ -263,6 +264,12 @@ export interface ModelSurfacePlacement {
   inset_mm: number;
 }
 
+export interface ModelSurfaceModelRotation {
+  x_deg: number;
+  y_deg: number;
+  z_deg: number;
+}
+
 const DEFAULT_MODEL_SURFACE_PLACEMENT: ModelSurfacePlacement = {
   mode: "edge_to_edge",
   offset_x_mm: 0,
@@ -270,6 +277,12 @@ const DEFAULT_MODEL_SURFACE_PLACEMENT: ModelSurfacePlacement = {
   scale: 1,
   rotation_deg: 0,
   inset_mm: 0,
+};
+
+const DEFAULT_MODEL_SURFACE_MODEL_ROTATION: ModelSurfaceModelRotation = {
+  x_deg: 0,
+  y_deg: 0,
+  z_deg: 0,
 };
 
 // ========== Helpers ==========
@@ -1356,7 +1369,9 @@ export interface ConverterState {
   modelSurfaceSelectionId: string | null;
   modelSurfaceSelection: Record<string, unknown> | null;
   modelSurfaceFootprint: Record<string, unknown> | null;
+  modelSurfaceCandidates: ModelSurfaceCandidate[];
   modelSurfacePlacement: ModelSurfacePlacement;
+  modelSurfaceModelRotation: ModelSurfaceModelRotation;
   modelSurfaceLoading: boolean;
   modelSurfaceSelecting: boolean;
   modelSurfaceError: string | null;
@@ -1629,8 +1644,9 @@ export interface ConverterActions {
   setModelSurfaceEnabled: (enabled: boolean) => void;
   uploadModelSurfaceFile: (file: File) => Promise<void>;
   clearModelSurface: () => void;
-  selectModelSurfaceFace: (faceIndex: number) => Promise<void>;
+  selectModelSurfaceFace: (faceIndex: number, candidateId?: string) => Promise<void>;
   updateModelSurfacePlacement: (updates: Partial<ModelSurfacePlacement>) => void;
+  updateModelSurfaceModelRotation: (updates: Partial<ModelSurfaceModelRotation>) => void;
   fitModelSurfaceArtwork: () => void;
 
   // 参数 setter
@@ -2197,7 +2213,9 @@ export const DEFAULT_STATE: ConverterState = {
   modelSurfaceSelectionId: null,
   modelSurfaceSelection: null,
   modelSurfaceFootprint: null,
+  modelSurfaceCandidates: [],
   modelSurfacePlacement: { ...DEFAULT_MODEL_SURFACE_PLACEMENT },
+  modelSurfaceModelRotation: { ...DEFAULT_MODEL_SURFACE_MODEL_ROTATION },
   modelSurfaceLoading: false,
   modelSurfaceSelecting: false,
   modelSurfaceError: null,
@@ -2625,12 +2643,16 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       if (prev && prev.startsWith("blob:")) {
         URL.revokeObjectURL(prev);
       }
+      const modelSurfaceArtworkReset = _get().modelSurfaceEnabled
+        ? { modelSurfacePlacement: { ...DEFAULT_MODEL_SURFACE_PLACEMENT } }
+        : {};
 
       if (!file) {
         set({
           imageFile: null,
           imagePreviewUrl: null,
           aspectRatio: null,
+          ...modelSurfaceArtworkReset,
           ...buildPreviewSessionResetState(),
         });
         return;
@@ -2642,6 +2664,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           imageFile: file,
           imagePreviewUrl: null,
           aspectRatio: null,
+          ...modelSurfaceArtworkReset,
           ...buildPreviewSessionResetState(),
           cropModalOpen: shouldOpenCrop,
         });
@@ -2679,10 +2702,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       set({
         imageFile: file,
         imagePreviewUrl: previewUrl,
+        ...modelSurfaceArtworkReset,
         ...buildPreviewSessionResetState(),
         cropModalOpen: shouldOpenCrop,
       });
-      console.log("[DEBUG] setImageFile: cleared layerImages");
     },
 
     loadVectorizedSvgIntoConverter: (file: File) => {
@@ -2697,6 +2720,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       if (prev && prev.startsWith("blob:")) {
         URL.revokeObjectURL(prev);
       }
+      const modelSurfaceArtworkReset = _get().modelSurfaceEnabled
+        ? { modelSurfacePlacement: { ...DEFAULT_MODEL_SURFACE_PLACEMENT } }
+        : {};
 
       const previewUrl = URL.createObjectURL(file);
       const img = new Image();
@@ -2709,6 +2735,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         imageFile: file,
         imagePreviewUrl: previewUrl,
         aspectRatio: null,
+        ...modelSurfaceArtworkReset,
         ...buildPreviewSessionResetState(),
         modeling_mode: ModelingModeEnum.VECTOR,
         isLoading: false,
@@ -2731,11 +2758,14 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     },
 
     setModelSurfaceEnabled: (enabled: boolean) => {
-      set({
+      set((state) => ({
         modelSurfaceEnabled: enabled,
+        structure_mode: enabled
+          ? StructureModeEnum.SINGLE_SIDED
+          : state.structure_mode,
         modelSurfaceError: null,
         ...buildPreviewSessionResetState(),
-      });
+      }));
     },
 
     uploadModelSurfaceFile: async (file: File) => {
@@ -2746,6 +2776,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       const previewUrl = URL.createObjectURL(file);
       set({
         modelSurfaceEnabled: true,
+        structure_mode: StructureModeEnum.SINGLE_SIDED,
         modelSurfaceFile: file,
         modelSurfacePreviewUrl: previewUrl,
         modelSurfaceModelFileId: null,
@@ -2753,7 +2784,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         modelSurfaceSelectionId: null,
         modelSurfaceSelection: null,
         modelSurfaceFootprint: null,
+        modelSurfaceCandidates: [],
         modelSurfacePlacement: { ...DEFAULT_MODEL_SURFACE_PLACEMENT },
+        modelSurfaceModelRotation: { ...DEFAULT_MODEL_SURFACE_MODEL_ROTATION },
         modelSurfaceLoading: true,
         modelSurfaceSelecting: false,
         modelSurfaceError: null,
@@ -2769,6 +2802,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           modelSurfaceLoading: false,
           modelSurfaceModelFileId: response.model_file_id,
           modelSurfaceSummary: response.summary,
+          modelSurfaceCandidates: response.surface_candidates ?? [],
           modelSurfaceWarnings: response.warnings ?? [],
           modelSurfaceError: null,
         });
@@ -2801,7 +2835,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         modelSurfaceSelectionId: null,
         modelSurfaceSelection: null,
         modelSurfaceFootprint: null,
+        modelSurfaceCandidates: [],
         modelSurfacePlacement: { ...DEFAULT_MODEL_SURFACE_PLACEMENT },
+        modelSurfaceModelRotation: { ...DEFAULT_MODEL_SURFACE_MODEL_ROTATION },
         modelSurfaceLoading: false,
         modelSurfaceSelecting: false,
         modelSurfaceError: null,
@@ -2810,8 +2846,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       });
     },
 
-    selectModelSurfaceFace: async (faceIndex: number) => {
+    selectModelSurfaceFace: async (faceIndex: number, candidateId?: string) => {
       const state = _get();
+      if (state.modelSurfaceLoading || state.modelSurfaceSelecting) {
+        return;
+      }
       if (!state.modelSurfaceModelFileId || !Number.isFinite(faceIndex)) {
         set({ modelSurfaceError: tRuntime("model_surface_error_upload_first") });
         return;
@@ -2824,7 +2863,17 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       try {
         const response: ModelSurfaceSelectResponse = await apiSelectModelSurface(
           modelFileId,
-          { face_index: Math.max(0, Math.floor(faceIndex)) },
+          {
+            face_index: Math.max(0, Math.floor(faceIndex)),
+            ...(candidateId ? { candidate_id: candidateId } : {}),
+            model_transform: {
+              rotation_deg: {
+                x: state.modelSurfaceModelRotation.x_deg,
+                y: state.modelSurfaceModelRotation.y_deg,
+                z: state.modelSurfaceModelRotation.z_deg,
+              },
+            },
+          },
         );
         if (_get().modelSurfaceModelFileId !== modelFileId) {
           return;
@@ -2834,6 +2883,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           modelSurfaceSelectionId: response.selection_id,
           modelSurfaceSelection: response.selection,
           modelSurfaceFootprint: response.footprint,
+          modelSurfacePlacement: { ...DEFAULT_MODEL_SURFACE_PLACEMENT },
           modelSurfaceWarnings: response.warnings ?? [],
           modelSurfaceError: null,
           ...buildPreviewSessionResetState(),
@@ -2860,6 +2910,17 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           ...updates,
           scale: clampValue(updates.scale ?? current.scale, 0.1, 10),
           inset_mm: Math.max(0, updates.inset_mm ?? current.inset_mm),
+        },
+        ...buildPreviewSessionResetState(),
+      });
+    },
+
+    updateModelSurfaceModelRotation: (updates: Partial<ModelSurfaceModelRotation>) => {
+      const current = _get().modelSurfaceModelRotation;
+      set({
+        modelSurfaceModelRotation: {
+          ...current,
+          ...updates,
         },
         ...buildPreviewSessionResetState(),
       });
@@ -3260,7 +3321,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     setStructureMode: (mode: StructureMode) =>
       set((state) => ({
         structure_mode:
-          state.enable_fridge_magnet && mode !== StructureModeEnum.SINGLE_SIDED
+          (state.enable_fridge_magnet || state.modelSurfaceEnabled) &&
+          mode !== StructureModeEnum.SINGLE_SIDED
             ? StructureModeEnum.SINGLE_SIDED
             : mode,
         threemfDiskPath: null,
@@ -5770,6 +5832,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
                 surface_selection_json: JSON.stringify(state.modelSurfaceSelection),
                 surface_footprint_json: JSON.stringify(state.modelSurfaceFootprint),
                 surface_placement_json: JSON.stringify(state.modelSurfacePlacement),
+                surface_model_transform_json: JSON.stringify({
+                  rotation_deg: {
+                    x: state.modelSurfaceModelRotation.x_deg,
+                    y: state.modelSurfaceModelRotation.y_deg,
+                    z: state.modelSurfaceModelRotation.z_deg,
+                  },
+                }),
               }
             : {}),
         };
@@ -6186,6 +6255,24 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           enable_base_layer_height_modifier:
             useSettingsStore.getState().enableBaseLayerHeightModifier,
           use_cached_matched_rgb: state.regionReplacementCount > 0,
+          ...(state.modelSurfaceEnabled &&
+          state.modelSurfaceModelFileId &&
+          state.modelSurfaceSelection &&
+          state.modelSurfaceFootprint
+            ? {
+                surface_model_file_id: state.modelSurfaceModelFileId,
+                surface_selection_json: JSON.stringify(state.modelSurfaceSelection),
+                surface_footprint_json: JSON.stringify(state.modelSurfaceFootprint),
+                surface_placement_json: JSON.stringify(state.modelSurfacePlacement),
+                surface_model_transform_json: JSON.stringify({
+                  rotation_deg: {
+                    x: state.modelSurfaceModelRotation.x_deg,
+                    y: state.modelSurfaceModelRotation.y_deg,
+                    z: state.modelSurfaceModelRotation.z_deg,
+                  },
+                }),
+              }
+            : {}),
         } as const;
 
         _clientLog("generate: request prepared", {

@@ -132,9 +132,12 @@ def _place_source_on_canvas(
     inset_px = max(0, round(placement.inset_mm * pixels_per_mm)) if placement.mode == EdgeMode.INSET else 0
     available_width = max(1, width_px - inset_px * 2)
     available_height = max(1, height_px - inset_px * 2)
-    target_size = (
-        max(1, round(available_width * placement.scale)),
-        max(1, round(available_height * placement.scale)),
+    target_size = _cover_size(
+        source_width=source.width,
+        source_height=source.height,
+        available_width=available_width,
+        available_height=available_height,
+        scale=placement.scale,
     )
 
     artwork = source.resize(target_size, Image.Resampling.LANCZOS)
@@ -149,6 +152,26 @@ def _place_source_on_canvas(
     y_px = round((height_px - artwork.height) / 2.0 - placement.offset_y_mm * pixels_per_mm)
     _alpha_composite_clipped(canvas, artwork, x_px, y_px)
     return canvas
+
+
+def _cover_size(
+    *,
+    source_width: int,
+    source_height: int,
+    available_width: int,
+    available_height: int,
+    scale: float,
+) -> tuple[int, int]:
+    if source_width <= 0 or source_height <= 0:
+        raise ModelSurfaceError("Surface artwork source has invalid size.")
+    cover_ratio = max(
+        float(available_width) / float(source_width),
+        float(available_height) / float(source_height),
+    ) * float(scale)
+    return (
+        max(1, round(float(source_width) * cover_ratio)),
+        max(1, round(float(source_height) * cover_ratio)),
+    )
 
 
 def _alpha_composite_clipped(canvas: Image.Image, overlay: Image.Image, x_px: int, y_px: int) -> None:

@@ -29,7 +29,11 @@ from api.preview_cache_artifacts import (
     hydrate_preview_cache,
     is_preview_cache_artifact_ref,
 )
-from api.schemas.converter import ConvertGenerateRequest, LargeFormatGenerateRequest
+from api.schemas.converter import (
+    ConvertGenerateRequest,
+    LargeFormatGenerateRequest,
+    StructureMode,
+)
 from api.schemas.lut import LutSourceSelection
 from api.schemas.responses import (
     BatchItemResult,
@@ -170,6 +174,9 @@ def _prepare_model_surface_overlay_worker_params(
     worker_params = dict(params)
     worker_params["surface_model_path"] = model_path
     worker_params["surface_footprint"] = footprint
+    model_transform = session_data.get("surface_model_transform")
+    if isinstance(model_transform, dict):
+        worker_params["surface_model_transform"] = model_transform
     try:
         pocket_depth_mm = float(
             session_data.get(
@@ -200,6 +207,10 @@ def _prepare_model_surface_converter_params(
 
     converter_params = dict(params)
     _normalize_model_surface_artwork_mode(session_data, converter_params)
+    # A surface overlay has exactly one viewing side. Reusing the regular
+    # double-sided voxel layout would add a second colour stack behind the
+    # uploaded model and make it reappear in later slicer layers.
+    converter_params["structure_mode"] = StructureMode.SINGLE_SIDED.value
     target_width_mm = session_data.get("surface_target_width_mm")
     if target_width_mm is not None:
         try:
@@ -217,6 +228,9 @@ def _prepare_model_surface_converter_params(
     converter_params["loop_pos"] = None
     converter_params["enable_fridge_magnet"] = False
     converter_params["fridge_magnets"] = []
+    converter_params["enable_relief"] = False
+    converter_params["enable_cloisonne"] = False
+    converter_params["enable_coating"] = False
     converter_params["enable_base_layer_height_modifier"] = False
     return converter_params
 

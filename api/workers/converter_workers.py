@@ -1564,6 +1564,9 @@ def worker_generate_model_surface_overlay(
 
     from api.structured_logging import get_logger
     from config import TEMP_DIR
+    from core.model_surface.assembly import (
+        MODEL_SURFACE_DISPLAY_LAYER_HEIGHTS_KEY,
+    )
     from core.model_surface.pipeline import build_surface_overlay_scene
     from core.model_surface.serialization import surface_footprint_from_payload
     from utils.bambu_3mf_writer import export_scene_with_bambu_metadata
@@ -1577,6 +1580,13 @@ def worker_generate_model_surface_overlay(
             for key, value in normalized_params.items()
             if not str(key).startswith("surface_") and key != "converter_params"
         }
+    # Keep the worker entry point safe when called outside the HTTP router.
+    # A model surface has one display side; a second colour stack would be
+    # embedded behind the uploaded body and reappear in upper slicer layers.
+    converter_params["structure_mode"] = "Single-sided"
+    converter_params["enable_relief"] = False
+    converter_params["enable_cloisonne"] = False
+    converter_params["enable_coating"] = False
 
     footprint_payload = normalized_params.get("surface_footprint")
     if not isinstance(footprint_payload, dict):
@@ -1585,6 +1595,9 @@ def worker_generate_model_surface_overlay(
     footprint = surface_footprint_from_payload(footprint_payload)
     pocket_depth_mm = float(normalized_params.get("surface_pocket_depth_mm", 0.4))
     model_path = str(normalized_params["surface_model_path"])
+    model_transform = normalized_params.get("surface_model_transform")
+    if model_transform is not None and not isinstance(model_transform, dict):
+        raise ValueError("surface_model_transform must be a JSON object")
     _t_worker_start = _time.perf_counter()
     out_path: str | None = None
     export_ready = False
@@ -1607,6 +1620,13 @@ def worker_generate_model_surface_overlay(
             converter_params=converter_params,
             footprint=footprint,
             pocket_depth_mm=pocket_depth_mm,
+            model_transform=model_transform,
+        )
+        display_layer_height_mm = _resolve_model_surface_display_layer_height_mm(
+            converter_params,
+            actual_layer_heights_mm=overlay.scene.metadata.get(
+                MODEL_SURFACE_DISPLAY_LAYER_HEIGHTS_KEY
+            ),
         )
         fd, out_path = tempfile.mkstemp(suffix=".3mf", dir=TEMP_DIR)
         os.close(fd)
@@ -1616,6 +1636,7 @@ def worker_generate_model_surface_overlay(
             slot_names=overlay.slot_names,
             preview_colors=overlay.preview_colors,
             project_slot_names=overlay.slot_names,
+            settings={"layer_height": f"{display_layer_height_mm:g}"},
             color_mode=str(converter_params.get("color_mode", "4-Color")),
             printer_id=str(normalized_params.get("printer_id", "bambu-h2d")),
             slicer=str(normalized_params.get("slicer", "BambuStudio")),
@@ -1653,6 +1674,58 @@ def worker_generate_model_surface_overlay(
         "glb_path": None,
         "status_msg": "Surface overlay model generated",
     }
+
+
+def _resolve_model_surface_display_layer_height_mm(
+    converter_params: dict,
+    *,
+    actual_layer_heights_mm: object = None,
+) -> float:
+    """Resolve the uniform slicer layer height for a surface display stack.
+
+    解析模型覆面展示层栈当前使用的统一切片层高。
+    """
+
+    import math
+
+    from config import PrinterConfig
+
+    raw_schedule = actual_layer_heights_mm
+    if raw_schedule is None:
+        raw_schedule = converter_params.get("display_layer_heights_mm")
+    if raw_schedule is not None:
+        try:
+            schedule = tuple(float(value) for value in raw_schedule)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Model-surface display layer heights are invalid.") from exc
+        if not schedule or any(
+            not math.isfinite(value) or value <= 0.0 for value in schedule
+        ):
+            raise ValueError(
+                "Model-surface display layer heights must be positive and finite."
+            )
+        if any(abs(value - schedule[0]) > 1e-9 for value in schedule[1:]):
+            raise ValueError(
+                "Model-surface non-uniform display layer heights require "
+                "slicer range metadata support."
+            )
+        return schedule[0]
+
+    material_source = str(converter_params.get("material_source") or "lut")
+    raw_height = converter_params.get("layer_height_mm")
+    if material_source == "material_archive":
+        archive_height = converter_params.get("material_layer_height_mm")
+        if archive_height is not None:
+            raw_height = archive_height
+    if raw_height is None:
+        raw_height = PrinterConfig.LAYER_HEIGHT
+    try:
+        height_mm = float(raw_height)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Model-surface display layer height must be a number.") from exc
+    if not math.isfinite(height_mm) or height_mm <= 0.0:
+        raise ValueError("Model-surface display layer height must be positive and finite.")
+    return height_mm
 
 
 def worker_generate_large_format_svg_native(

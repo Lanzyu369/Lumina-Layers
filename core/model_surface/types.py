@@ -89,6 +89,23 @@ class SurfaceSelection:
 
 
 @dataclass(frozen=True)
+class SurfaceCandidate:
+    """Printable planar candidate surfaced for interactive selection.
+
+    可在交互界面中选择的可打印平面候选区域。
+    """
+
+    id: str
+    face_index: int
+    face_indices: tuple[int, ...]
+    normal: tuple[float, float, float]
+    plane_origin: tuple[float, float, float]
+    area_mm2: float
+    face_count: int
+    footprint: Any
+
+
+@dataclass(frozen=True)
 class SurfaceFootprint:
     """Projected 2D footprint of a selected model surface.
 

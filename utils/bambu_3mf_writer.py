@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import io
+import math
 import os
 import sys
 import tempfile
@@ -63,6 +64,10 @@ def _get_n3mf():
 _CONFIG_TEMPLATE_CACHE = None
 _PRINTER_TEMPLATE_CACHE: dict[str, dict] = {}
 _VALID_LAYER_CONFIG_FACES = frozenset({"up", "down", "double"})
+_ORCA_LIKE_SLICERS = frozenset({"OrcaSlicer", "SnapmakerOrca"})
+_PRIME_TOWER_EDGE_MARGIN_MM = 1.0
+_PRIME_TOWER_OBJECT_CLEARANCE_MM = 2.0
+_ORCA_PRIME_TOWER_INFILL_GAP_DEFAULT = 1.5
 _REGISTRY_PROJECT_TEMPLATE_OVERLAY_KEYS = frozenset(
     {
         "printer_settings_id",
@@ -184,6 +189,15 @@ class _MeshExportEntry:
 
 
 @dataclass(frozen=True)
+class _PlatePlacement:
+    translate_x: float
+    translate_y: float
+    translate_z: float
+    wipe_tower_x: float | None = None
+    wipe_tower_y: float | None = None
+
+
+@dataclass(frozen=True)
 class _FilamentProfile:
     family: str
     preset_label: str
@@ -299,6 +313,53 @@ def _is_snapmaker_u1_registry_profile(profile: Any) -> bool:
     )
 
 
+def _coerce_optional_float(value: object) -> float | None:
+    if isinstance(value, list):
+        if not value:
+            return None
+        value = value[0]
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_float(value: object, default: float) -> float:
+    parsed = _coerce_optional_float(value)
+    return default if parsed is None else parsed
+
+
+def _coerce_percent_scale(value: object, default: float) -> float:
+    raw = value[0] if isinstance(value, list) and value else value
+    text = str(raw).strip() if raw is not None else ""
+    parsed = _coerce_optional_float(raw)
+    if parsed is None:
+        return default
+    if "%" in text or parsed > 10.0:
+        return parsed / 100.0
+    return parsed
+
+
+def _config_value_count(value: object) -> int:
+    if isinstance(value, list):
+        return len(value)
+    if isinstance(value, str) and value.strip():
+        return 1
+    return 0
+
+
+def _orca_min_wipe_tower_depth_by_height(max_height_mm: float) -> float:
+    points = [(5.0, 5.0), (100.0, 20.0), (250.0, 40.0), (350.0, 60.0)]
+    for index, (height, depth) in enumerate(points):
+        if height >= max_height_mm:
+            if index == 0:
+                return depth
+            prev_height, prev_depth = points[index - 1]
+            ratio = (max_height_mm - prev_height) / (height - prev_height)
+            return prev_depth + ratio * (depth - prev_depth)
+    return points[-1][1]
+
+
 def _apply_snapmaker_u1_native_project_shape(
     settings: dict[str, Any],
     profile: Any,
@@ -307,6 +368,10 @@ def _apply_snapmaker_u1_native_project_shape(
         return
     settings.pop("inherits_group", None)
     settings.pop("different_settings_to_system", None)
+    tower_width = _coerce_optional_float(settings.get("prime_tower_width"))
+    if tower_width is not None and tower_width > 40:
+        slicer_id = str(getattr(profile, "slicer_id", "")).strip()
+        settings["prime_tower_width"] = "35" if slicer_id == "OrcaSlicer" else "30"
 
 
 def _replace_nozzle_label(value: object, old_label: str, new_label: str) -> object:
@@ -1766,8 +1831,12 @@ class BambuStudio3MFWriter:
         except ValueError:
             return None
 
-    def _get_printable_area_center(self) -> tuple[float, float] | None:
-        settings = self._get_base_config_template()
+    def _get_printable_area_bounds(
+        self,
+        settings: dict[str, Any] | None = None,
+    ) -> tuple[float, float, float, float] | None:
+        if settings is None:
+            settings = self._get_base_config_template()
         raw_area = settings.get("printable_area")
         if not isinstance(raw_area, list):
             return None
@@ -1782,7 +1851,17 @@ class BambuStudio3MFWriter:
             return None
         xs = [point[0] for point in points]
         ys = [point[1] for point in points]
-        return (min(xs) + max(xs)) / 2.0, (min(ys) + max(ys)) / 2.0
+        return min(xs), min(ys), max(xs), max(ys)
+
+    def _get_printable_area_center(
+        self,
+        settings: dict[str, Any] | None = None,
+    ) -> tuple[float, float] | None:
+        area_bounds = self._get_printable_area_bounds(settings)
+        if area_bounds is None:
+            return None
+        min_x, min_y, max_x, max_y = area_bounds
+        return (min_x + max_x) / 2.0, (min_y + max_y) / 2.0
 
     def _get_mesh_bounds(self) -> tuple[np.ndarray, np.ndarray]:
         bounds: list[np.ndarray] = []
@@ -1799,18 +1878,239 @@ class BambuStudio3MFWriter:
         stacked = np.stack(bounds, axis=0)
         return stacked[:, 0, :].min(axis=0), stacked[:, 1, :].max(axis=0)
 
-    def _get_build_item_translation(self) -> tuple[float, float, float]:
+    @staticmethod
+    def _is_truthy_config_value(value: object) -> bool:
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().casefold() not in {"", "0", "false", "no", "off"}
+
+    @staticmethod
+    def _format_float_list_first(value: float, existing: object) -> list[object]:
+        formatted = BambuStudio3MFWriter._format_number(value)
+        if isinstance(existing, list) and existing:
+            updated = list(existing)
+            updated[0] = formatted
+            return updated
+        return [formatted]
+
+    def _estimate_prime_tower_positive_extent(
+        self,
+        settings: dict[str, Any],
+        tower_width: float,
+        model_height: float,
+    ) -> float:
+        brim_width = max(0.0, _coerce_float(settings.get("prime_tower_brim_width"), 0.0))
+        if str(settings.get("wipe_tower_wall_type", "")).strip().casefold() != "rib":
+            return tower_width + brim_width
+
+        layer_height = _coerce_float(settings.get("layer_height"), 0.08)
+        if layer_height <= 0.0:
+            layer_height = 0.08
+        prime_volume = _coerce_float(settings.get("prime_volume"), 45.0)
+        infill_gap = _coerce_percent_scale(
+            settings.get("prime_tower_infill_gap"),
+            _ORCA_PRIME_TOWER_INFILL_GAP_DEFAULT,
+        )
+        filament_count = self._estimate_prime_tower_filament_count(settings)
+        nozzle_count = _config_value_count(settings.get("nozzle_diameter"))
+        filament_depth_count = (
+            filament_count
+            if nozzle_count == 2
+            else max(filament_count - 1, 1)
+        )
+        volume = prime_volume * filament_depth_count
+        rib_depth = math.sqrt(volume / layer_height * infill_gap)
+        rib_depth = max(rib_depth, _orca_min_wipe_tower_depth_by_height(model_height))
+        rib_depth += (
+            _coerce_float(settings.get("wipe_tower_rib_width"), 0.0) / math.sqrt(2.0)
+            + _coerce_float(settings.get("wipe_tower_extra_rib_length"), 0.0)
+        )
+        return max(tower_width, rib_depth) + brim_width
+
+    def _estimate_prime_tower_filament_count(self, settings: dict[str, Any]) -> int:
+        filament_count = _config_value_count(settings.get("filament_settings_id"))
+        exported_filament_count = max(1, len(self.objects) or len(self.meshes))
+        filament_count = max(filament_count, exported_filament_count)
+        if _is_snapmaker_u1_registry_profile(self._registry_device_profile):
+            template = _load_legacy_project_template_if_available(
+                self.printer_id,
+                self.slicer,
+                self.nozzle_size,
+            )
+            if template is not None:
+                template_settings, _ = template
+                filament_count = max(
+                    filament_count,
+                    _config_value_count(template_settings.get("filament_settings_id")),
+                )
+        return max(1, filament_count)
+
+    @staticmethod
+    def _estimate_prime_tower_negative_extent(settings: dict[str, Any]) -> float:
+        return max(0.0, _coerce_float(settings.get("prime_tower_brim_width"), 0.0))
+
+    def _resolve_plate_placement(
+        self,
+        settings: dict[str, Any] | None = None,
+    ) -> _PlatePlacement:
+        if settings is None:
+            settings = self._get_base_config_template()
+
         bounds_min, bounds_max = self._get_mesh_bounds()
-        model_center = (bounds_min + bounds_max) / 2.0
-        bed_center = self._get_printable_area_center()
-        if bed_center is None:
-            translate_x = 0.0
-            translate_y = 0.0
-        else:
-            translate_x = float(bed_center[0] - model_center[0])
-            translate_y = float(bed_center[1] - model_center[1])
         translate_z = float(-bounds_min[2])
-        return translate_x, translate_y, translate_z
+        model_size_x = float(bounds_max[0] - bounds_min[0])
+        model_size_y = float(bounds_max[1] - bounds_min[1])
+        bed_center = self._get_printable_area_center(settings)
+        if bed_center is None:
+            centered_x = 0.0
+            centered_y = 0.0
+        else:
+            model_center = (bounds_min + bounds_max) / 2.0
+            centered_x = float(bed_center[0] - model_center[0])
+            centered_y = float(bed_center[1] - model_center[1])
+
+        placement = _PlatePlacement(centered_x, centered_y, translate_z)
+        area_bounds = self._get_printable_area_bounds(settings)
+        if (
+            self.slicer not in _ORCA_LIKE_SLICERS
+            or area_bounds is None
+            or not self._is_truthy_config_value(settings.get("enable_prime_tower", "0"))
+        ):
+            return placement
+
+        tower_width = _coerce_optional_float(settings.get("prime_tower_width"))
+        if tower_width is None or tower_width <= 0:
+            return placement
+        min_x, min_y, max_x, max_y = area_bounds
+        bed_width = max_x - min_x
+        bed_depth = max_y - min_y
+        if model_size_x <= 0 or model_size_y <= 0 or bed_width <= 0 or bed_depth <= 0:
+            return placement
+
+        edge_margin = _PRIME_TOWER_EDGE_MARGIN_MM
+        clearance = _PRIME_TOWER_OBJECT_CLEARANCE_MM
+
+        def resolve_candidates() -> list[_PlatePlacement]:
+            tower_negative_extent = self._estimate_prime_tower_negative_extent(settings)
+            tower_positive_extent = self._estimate_prime_tower_positive_extent(
+                settings,
+                tower_width,
+                float(bounds_max[2] - bounds_min[2]),
+            )
+            candidates: list[_PlatePlacement] = []
+
+            def tower_origin_near_min(axis_min: float, axis_max: float) -> float | None:
+                origin = axis_min + edge_margin + tower_negative_extent
+                if origin + tower_positive_extent > axis_max - edge_margin:
+                    return None
+                return origin
+
+            def tower_origin_near_max(axis_min: float, axis_max: float) -> float | None:
+                origin = axis_max - edge_margin - tower_positive_extent
+                if origin - tower_negative_extent < axis_min + edge_margin:
+                    return None
+                return origin
+
+            def add_left_candidate() -> None:
+                tower_x = tower_origin_near_min(min_x, max_x)
+                tower_y = tower_origin_near_min(min_y, max_y)
+                if tower_x is None or tower_y is None:
+                    return
+                object_min_x = tower_x + tower_positive_extent + clearance
+                if object_min_x + model_size_x + edge_margin <= max_x:
+                    candidates.append(
+                        _PlatePlacement(
+                            float(object_min_x - bounds_min[0]),
+                            centered_y,
+                            translate_z,
+                            tower_x,
+                            tower_y,
+                        )
+                    )
+
+            def add_right_candidate() -> None:
+                tower_x = tower_origin_near_max(min_x, max_x)
+                tower_y = tower_origin_near_min(min_y, max_y)
+                if tower_x is None or tower_y is None:
+                    return
+                object_max_x = tower_x - tower_negative_extent - clearance
+                object_min_x = object_max_x - model_size_x
+                if object_min_x >= min_x + edge_margin:
+                    candidates.append(
+                        _PlatePlacement(
+                            float(object_min_x - bounds_min[0]),
+                            centered_y,
+                            translate_z,
+                            tower_x,
+                            tower_y,
+                        )
+                    )
+
+            def add_bottom_candidate() -> None:
+                tower_x = tower_origin_near_min(min_x, max_x)
+                tower_y = tower_origin_near_min(min_y, max_y)
+                if tower_x is None or tower_y is None:
+                    return
+                object_min_y = tower_y + tower_positive_extent + clearance
+                if object_min_y + model_size_y + edge_margin <= max_y:
+                    candidates.append(
+                        _PlatePlacement(
+                            centered_x,
+                            float(object_min_y - bounds_min[1]),
+                            translate_z,
+                            tower_x,
+                            tower_y,
+                        )
+                    )
+
+            def add_top_candidate() -> None:
+                tower_x = tower_origin_near_min(min_x, max_x)
+                tower_y = tower_origin_near_max(min_y, max_y)
+                if tower_x is None or tower_y is None:
+                    return
+                object_max_y = tower_y - tower_negative_extent - clearance
+                object_min_y = object_max_y - model_size_y
+                if object_min_y >= min_y + edge_margin:
+                    candidates.append(
+                        _PlatePlacement(
+                            centered_x,
+                            float(object_min_y - bounds_min[1]),
+                            translate_z,
+                            tower_x,
+                            tower_y,
+                        )
+                    )
+
+            add_left_candidate()
+            add_right_candidate()
+            add_bottom_candidate()
+            add_top_candidate()
+            return candidates
+
+        candidates = resolve_candidates()
+        if (
+            not candidates
+            and _is_snapmaker_u1_registry_profile(self._registry_device_profile)
+            and _coerce_float(settings.get("prime_tower_brim_width"), 0.0) > 0.0
+        ):
+            settings["prime_tower_brim_width"] = "0"
+            candidates = resolve_candidates()
+        if not candidates:
+            return placement
+
+        return min(
+            candidates,
+            key=lambda item: (
+                (item.translate_x - centered_x) ** 2
+                + (item.translate_y - centered_y) ** 2
+            ),
+        )
+
+    def _get_build_item_translation(self) -> tuple[float, float, float]:
+        settings = self._get_base_config_template()
+        _apply_snapmaker_u1_native_project_shape(settings, self._registry_device_profile)
+        placement = self._resolve_plate_placement(settings)
+        return placement.translate_x, placement.translate_y, placement.translate_z
 
     def _get_identify_id(self) -> str:
         """Return a slicer-specific plate identify_id value.
@@ -2449,6 +2749,23 @@ class BambuStudio3MFWriter:
             settings,
             self._registry_device_profile,
         )
+        placement = self._resolve_plate_placement(settings)
+        tower_position_keys: list[str] = []
+        if placement.wipe_tower_x is not None and placement.wipe_tower_y is not None:
+            settings["wipe_tower_x"] = self._format_float_list_first(
+                placement.wipe_tower_x,
+                settings.get("wipe_tower_x"),
+            )
+            settings["wipe_tower_y"] = self._format_float_list_first(
+                placement.wipe_tower_y,
+                settings.get("wipe_tower_y"),
+            )
+            tower_position_keys = ["wipe_tower_x", "wipe_tower_y"]
+        if tower_position_keys and "different_settings_to_system" in settings:
+            settings["different_settings_to_system"] = _normalize_difference_index(
+                settings.get("different_settings_to_system"),
+                tower_position_keys,
+            )
 
         return json.dumps(settings, indent=4, ensure_ascii=False).encode("utf-8")
 

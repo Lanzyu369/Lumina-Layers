@@ -69,6 +69,20 @@ export interface InteractiveModelViewerProps {
 /** Color layer thickness in mm (5 layers × 0.08mm). */
 const COLOR_LAYER_HEIGHT = 0.4;
 const PREVIEW_CANVAS_BOUNDS_NODE_NAME = "preview_canvas_bounds";
+const PREVIEW_LAYER_Z_EPSILON_MM = 0.002;
+
+export function computePreviewLayerZPositions(spacerThick: number): {
+  frontColorZ: number;
+  mirrorColorZ: number;
+} {
+  const safeSpacerThick = Number.isFinite(spacerThick)
+    ? Math.max(0, spacerThick)
+    : 0;
+  return {
+    frontColorZ: safeSpacerThick + PREVIEW_LAYER_Z_EPSILON_MM,
+    mirrorColorZ: -PREVIEW_LAYER_Z_EPSILON_MM,
+  };
+}
 
 export function computeOutlinePreviewHeight(
   spacerThick: number,
@@ -492,6 +506,8 @@ function InteractiveModelViewer({
 
   // Imperative Three.js mutations: color remap, relief scaling.
   useEffect(() => {
+    const layerZ = computePreviewLayerZPositions(spacerThick);
+
     // ---- Backing plate Z positioning and scaling (Requirements 3.1, 3.2, 3.3, 3.4) ----
     // XY scale is inherited from parent group via scaleX/scaleY (Requirement 3.4)
     if (backingMesh) {
@@ -529,6 +545,8 @@ function InteractiveModelViewer({
       mat.opacity = 1.0;
       mat.transparent = false;
       mat.side = THREE.DoubleSide;
+      mat.depthTest = true;
+      mat.depthWrite = true;
       mat.toneMapped = false;
       mat.needsUpdate = true;
 
@@ -549,7 +567,9 @@ function InteractiveModelViewer({
       }
 
       // Position color layer on top of the backing plate (top face at Z=spacerThick)
-      mesh.position.z = spacerThick;
+      // Keep a tiny preview-only gap so the color layer's bottom face does not
+      // fight with the backing plate's top face when the preview is scaled up.
+      mesh.position.z = layerZ.frontColorZ;
     }
 
     // Update mirror meshes for double-sided mode
@@ -558,7 +578,7 @@ function InteractiveModelViewer({
       const origMesh = colorMeshes.find((m) => m.name === origName);
       if (origMesh) {
         mirror.scale.z = -origMesh.scale.z; // flip Z direction
-        mirror.position.z = 0; // grow downward from bottom of backing plate
+        mirror.position.z = layerZ.mirrorColorZ; // grow downward from bottom of backing plate
       }
     }
   }, [colorMeshes, mirrorMeshes, colorRemapMap, colorHeightMap, enableRelief, baseHeight, modelBounds, sceneCenter, spacerThick, isDoubleSided, backingMesh, backingPlateMesh]);

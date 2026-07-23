@@ -862,6 +862,7 @@ async def convert_preview(
     surface_selection_json: str | None = Form(None, description="JSON surface selection payload"),
     surface_footprint_json: str | None = Form(None, description="JSON surface footprint payload"),
     surface_placement_json: str | None = Form(None, description="JSON surface placement payload"),
+    surface_model_transform_json: str | None = Form(None, description="JSON surface model transform payload"),
     store: SessionStore = Depends(get_session_store),
     registry: FileRegistry = Depends(get_file_registry),
     pool: WorkerPoolManager = Depends(get_worker_pool),
@@ -978,6 +979,7 @@ async def convert_preview(
             footprint_json=surface_footprint_json,
             placement_json=surface_placement_json,
             source_path=temp_path,
+            transform_json=surface_model_transform_json,
         )
         if surface_config is not None:
             surface_original_image_path = temp_path
@@ -1428,6 +1430,7 @@ async def convert_preview(
         store.put(session_id, "surface_selection", surface_config["surface_selection"])
         store.put(session_id, "surface_footprint", surface_config["surface_footprint"])
         store.put(session_id, "surface_placement", surface_config["surface_placement"])
+        store.put(session_id, "surface_model_transform", surface_config["surface_model_transform"])
         store.put(session_id, "surface_artwork_path", surface_config["surface_artwork_path"])
         store.put(session_id, "surface_target_width_mm", surface_config["target_width_mm"])
         store.put(session_id, "surface_target_height_mm", surface_config["target_height_mm"])

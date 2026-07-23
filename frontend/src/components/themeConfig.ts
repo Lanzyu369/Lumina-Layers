@@ -26,6 +26,8 @@ export interface ThemeColors {
   bedBoldGrid: string;
   /** Bed border color (热床边框色) */
   bedBorder: string;
+  /** Neutral model body color in the model-surface workflow (覆面模型本体中性色) */
+  modelSurfaceBody: string;
 }
 
 /**
@@ -43,6 +45,7 @@ export const THEME_CONFIG: Record<"light" | "dark", ThemeColors> = {
     bedFineGrid: "#d0d0d4",
     bedBoldGrid: "#b0b0b8",
     bedBorder: "#c0c0c8",
+    modelSurfaceBody: "#a8b4c4",
   },
   dark: {
     canvasClearColor: "#1e1e26",
@@ -54,5 +57,6 @@ export const THEME_CONFIG: Record<"light" | "dark", ThemeColors> = {
     bedFineGrid: "#2a2a30",
     bedBoldGrid: "#5a5a64",
     bedBorder: "#2d2d34",
+    modelSurfaceBody: "#64748b",
   },
 };

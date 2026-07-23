@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
 import {
+  computePreviewLayerZPositions,
   computeOutlinePreviewHeight,
   extractHexFromMeshName,
 } from "../components/InteractiveModelViewer";
@@ -47,6 +48,17 @@ describe("computeOutlinePreviewHeight", () => {
     expect(
       computeOutlinePreviewHeight(1.2, "Single-sided", true, { ff0000: 2.5, "00ff00": 1.5 }, 12),
     ).toBeCloseTo(3.7, 5);
+  });
+});
+
+describe("computePreviewLayerZPositions", () => {
+  it("separates color layers from the backing plate to avoid preview z-fighting", () => {
+    const z = computePreviewLayerZPositions(1.2);
+
+    expect(z.frontColorZ).toBeGreaterThan(1.2);
+    expect(z.mirrorColorZ).toBeLessThan(0);
+    expect(z.frontColorZ - 1.2).toBeLessThanOrEqual(0.01);
+    expect(Math.abs(z.mirrorColorZ)).toBeLessThanOrEqual(0.01);
   });
 });
 

@@ -100,7 +100,25 @@ def test_preview_attaches_model_surface_config(monkeypatch, tmp_path, preview_st
                             },
                         }
                     ),
-                    "surface_placement_json": json.dumps({"mode": "edge_to_edge"}),
+                    "surface_placement_json": json.dumps(
+                        {
+                            "mode": "edge_to_edge",
+                            "offset_x_mm": 5,
+                            "offset_y_mm": 0,
+                            "scale": 0.5,
+                            "rotation_deg": 0,
+                            "inset_mm": 0,
+                        }
+                    ),
+                    "surface_model_transform_json": json.dumps(
+                        {
+                            "rotation_deg": {
+                                "x": 10,
+                                "y": 20,
+                                "z": 30,
+                            }
+                        }
+                    ),
                 },
             )
 
@@ -109,8 +127,28 @@ def test_preview_attaches_model_surface_config(monkeypatch, tmp_path, preview_st
     assert session is not None
     assert session["surface_model_path"].endswith(".stl")
     assert session["surface_overlay_enabled"] is True
+    assert session["surface_model_transform"] == {
+        "rotation_deg": {
+            "x": 10,
+            "y": 20,
+            "z": 30,
+        }
+    }
+    assert session["surface_placement"] == {
+        "mode": "edge_to_edge",
+        "offset_x_mm": 5.0,
+        "offset_y_mm": 0.0,
+        "scale": 0.5,
+        "rotation_deg": 0.0,
+        "inset_mm": 0.0,
+    }
     assert Path(session["surface_artwork_path"]).exists()
     assert session["image_path"] == session["surface_artwork_path"]
+    with Image.open(session["surface_artwork_path"]) as rendered:
+        assert rendered.mode == "RGBA"
+        assert rendered.size == (120, 60)
+        assert rendered.getpixel((10, 30))[3] == 0
+        assert rendered.getpixel((90, 30))[3] == 255
 
 
 def _fake_worker_result(tmp_path) -> dict:

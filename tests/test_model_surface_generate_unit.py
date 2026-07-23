@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
+import numpy as np
 from PIL import Image
 import pytest
 import trimesh
@@ -16,8 +17,9 @@ from api.routers.converter.generate import (
     _should_use_model_surface_overlay,
 )
 from api.session_store import SessionStore
-from config import ModelingMode as CoreModelingMode
+from config import ModelingMode as CoreModelingMode, PrinterConfig
 from core.model_surface.assembly import OverlaySceneResult
+from core.pipeline.s06_voxel_building import _build_voxel_matrix
 
 
 @pytest.fixture()
@@ -56,10 +58,12 @@ def test_generate_routes_model_surface_session_to_overlay_worker(
     generate_state,
 ):
     store, _registry, pool = generate_state
-    image_path = tmp_path / "surface-art.png"
+    original_image_path = tmp_path / "uploaded-art.png"
+    rendered_surface_art_path = tmp_path / "surface-rendered-art.png"
     lut_path = tmp_path / "lut.npy"
     model_path = tmp_path / "plate.stl"
-    Image.new("RGB", (20, 10), (255, 0, 0)).save(image_path)
+    Image.new("RGB", (20, 10), (0, 0, 255)).save(original_image_path)
+    Image.new("RGBA", (20, 10), (255, 0, 0, 255)).save(rendered_surface_art_path)
     lut_path.write_bytes(b"lut")
     trimesh.creation.box(extents=(20.0, 10.0, 2.0)).export(model_path)
 
@@ -73,10 +77,16 @@ def test_generate_routes_model_surface_session_to_overlay_worker(
             "target_width_mm": 20.0,
         },
     )
-    store.put(sid, "image_path", str(image_path))
+    store.put(sid, "image_path", str(rendered_surface_art_path))
     store.put(sid, "lut_path", str(lut_path))
     store.put(sid, "surface_overlay_enabled", True)
     store.put(sid, "surface_model_path", str(model_path))
+    store.put(sid, "surface_artwork_path", str(rendered_surface_art_path))
+    store.put(
+        sid,
+        "surface_model_transform",
+        {"rotation_deg": {"x": 10, "y": 20, "z": 30}},
+    )
     store.put(
         sid,
         "surface_footprint",
@@ -120,12 +130,17 @@ def test_generate_routes_model_surface_session_to_overlay_worker(
 
     worker_fn, submitted_image, submitted_lut, submitted_params = pool.submit.call_args.args
     assert worker_fn is worker_generate_model_surface_overlay
-    assert submitted_image == str(image_path)
+    assert submitted_image == str(rendered_surface_art_path)
+    assert submitted_image != str(original_image_path)
     assert submitted_lut == str(lut_path)
     assert submitted_params["surface_model_path"] == str(model_path)
+    assert submitted_params["surface_model_transform"] == {
+        "rotation_deg": {"x": 10, "y": 20, "z": 30}
+    }
     assert submitted_params["surface_pocket_depth_mm"] == pytest.approx(0.4)
     assert submitted_params["surface_footprint"]["bounds_width_mm"] == 20.0
     assert submitted_params["converter_params"]["target_width_mm"] == 20.0
+    assert submitted_params["converter_params"]["structure_mode"] == "Single-sided"
     assert submitted_params["converter_params"]["add_loop"] is False
     assert submitted_params["converter_params"]["enable_fridge_magnet"] is False
     assert submitted_params["converter_params"]["model_enable"] is True
@@ -168,12 +183,32 @@ def test_model_surface_vector_request_uses_raster_mode_for_rendered_artwork(tmp_
             "structure_mode": "Double-sided",
             "color_mode": "4-Color (RYBW)",
             "modeling_mode": CoreModelingMode.VECTOR,
+            "enable_relief": True,
+            "enable_cloisonne": True,
+            "enable_coating": True,
             "add_loop": True,
             "loop_pos": "top",
         },
     )
 
     assert worker_params["converter_params"]["modeling_mode"] == CoreModelingMode.HIGH_FIDELITY
+    assert worker_params["converter_params"]["structure_mode"] == "Single-sided"
+    assert worker_params["converter_params"]["enable_relief"] is False
+    assert worker_params["converter_params"]["enable_cloisonne"] is False
+    assert worker_params["converter_params"]["enable_coating"] is False
+
+    optical_layers = 4
+    material_matrix = np.ones((2, 3, optical_layers), dtype=np.int16)
+    full_matrix, _backing = _build_voxel_matrix(
+        material_matrix,
+        np.ones((2, 3), dtype=bool),
+        1.2,
+        worker_params["converter_params"]["structure_mode"],
+        backing_color_id=0,
+    )
+    spacer_layers = max(1, round(1.2 / PrinterConfig.LAYER_HEIGHT))
+    assert full_matrix.shape[0] == optical_layers + spacer_layers
+    assert np.count_nonzero(full_matrix[optical_layers:] == 1) == 0
 
 
 def test_worker_generate_model_surface_overlay_exports_bambu_3mf(tmp_path):
@@ -190,6 +225,7 @@ def test_worker_generate_model_surface_overlay_exports_bambu_3mf(tmp_path):
         node_name="surface_base",
         geom_name="surface_base",
     )
+    scene.metadata["model_surface_display_layer_heights_mm"] = (0.04,) * 7
     overlay = OverlaySceneResult(
         scene=scene,
         slot_names=["surface_base", "red"],
@@ -207,8 +243,13 @@ def test_worker_generate_model_surface_overlay_exports_bambu_3mf(tmp_path):
         assert kwargs["artwork_image_path"] == str(image_path)
         assert kwargs["lut_path"] == str(lut_path)
         assert kwargs["pocket_depth_mm"] == pytest.approx(0.35)
+        assert kwargs["model_transform"] == {"rotation_deg": {"x": 0, "y": 0, "z": 90}}
         assert kwargs["footprint"].bounds_width_mm == pytest.approx(20.0)
         assert kwargs["converter_params"]["target_width_mm"] == 20.0
+        assert kwargs["converter_params"]["structure_mode"] == "Single-sided"
+        assert kwargs["converter_params"]["enable_relief"] is False
+        assert kwargs["converter_params"]["enable_cloisonne"] is False
+        assert kwargs["converter_params"]["enable_coating"] is False
         return overlay
 
     from api.workers.converter_workers import worker_generate_model_surface_overlay
@@ -246,19 +287,31 @@ def test_worker_generate_model_surface_overlay_exports_bambu_3mf(tmp_path):
                     "bounds_width_mm": 20.0,
                     "bounds_height_mm": 10.0,
                 },
+                "surface_model_transform": {
+                    "rotation_deg": {
+                        "x": 0,
+                        "y": 0,
+                        "z": 90,
+                    }
+                },
                 "surface_pocket_depth_mm": 0.35,
                 "converter_params": {
                     "target_width_mm": 20.0,
                     "spacer_thick": 1.2,
                     "structure_mode": "Double-sided",
                     "color_mode": "4-Color (RYBW)",
+                    "material_source": "material_archive",
+                    "material_layer_height_mm": 0.08,
+                    "enable_relief": True,
+                    "enable_cloisonne": True,
+                    "enable_coating": True,
                     "add_loop": False,
                     "loop_width": 4.0,
                     "loop_length": 8.0,
                     "loop_hole": 2.5,
                     "loop_pos": None,
                 },
-                "printer_id": "orca-p1s",
+                "printer_id": "bambu-p1s",
                 "slicer": "OrcaSlicer",
                 "nozzle_size": "0.4",
                 "device_profile_id": "OrcaSlicer:bbl:bambu-lab-p1s:0.4",
@@ -273,5 +326,36 @@ def test_worker_generate_model_surface_overlay_exports_bambu_3mf(tmp_path):
     assert captured["project_slot_names"] == ["surface_base", "red"]
     assert captured["preview_colors"] == overlay.preview_colors
     assert captured["cover_source"] == str(image_path)
+    assert captured["settings"] == {"layer_height": "0.04"}
     assert captured["enable_base_layer_height_modifier"] is False
     assert captured["device_profile_id"] == "OrcaSlicer:bbl:bambu-lab-p1s:0.4"
+    Path(result["threemf_path"]).unlink(missing_ok=True)
+
+
+def test_model_surface_layer_height_rejects_nonuniform_dynamic_schedule():
+    from api.workers.converter_workers import (
+        _resolve_model_surface_display_layer_height_mm,
+    )
+
+    with pytest.raises(ValueError, match="non-uniform display layer heights"):
+        _resolve_model_surface_display_layer_height_mm(
+            {
+                "material_source": "material_archive",
+                "material_layer_height_mm": 0.08,
+                "display_layer_heights_mm": [0.04, 0.08, 0.10],
+            }
+        )
+
+
+def test_model_surface_layer_height_rejects_invalid_archive_height():
+    from api.workers.converter_workers import (
+        _resolve_model_surface_display_layer_height_mm,
+    )
+
+    with pytest.raises(ValueError, match="positive and finite"):
+        _resolve_model_surface_display_layer_height_mm(
+            {
+                "material_source": "material_archive",
+                "material_layer_height_mm": 0.0,
+            }
+        )

@@ -166,6 +166,25 @@ export default function ActionBar() {
   const canSubmit = !!imageFile && sourceSelection.isReady
   const canGenerate = canSubmit && !!sessionId
   const canBatchSubmit = batchFiles.length > 0 && sourceSelection.isReady
+  const singleSourceHintKey =
+    sourceVersion === "material"
+      ? "action_select_material_hint"
+      : sourceVersion === "native"
+        ? "action_select_native_hint"
+        : "action_select_lut_hint"
+  const singleCombinedHintKey =
+    sourceVersion === "material"
+      ? "action_upload_hint_material"
+      : sourceVersion === "native"
+        ? "action_upload_hint_native"
+        : "action_upload_hint"
+  const singleSubmitHintKey = canSubmit
+    ? null
+    : imageFile
+      ? singleSourceHintKey
+      : sourceSelection.isReady
+        ? "action_upload_image_hint"
+        : singleCombinedHintKey
   const batchUploadHintKey =
     sourceVersion === "material"
       ? "action_batch_upload_hint_material"
@@ -708,7 +727,7 @@ export default function ActionBar() {
         <>
           {!canSubmit && (
             <p className="text-xs text-yellow-600 dark:text-yellow-400">
-              {t(sourceVersion === "material" ? "action_upload_hint_material" : "action_upload_hint")}
+              {singleSubmitHintKey ? t(singleSubmitHintKey) : null}
             </p>
           )}
 

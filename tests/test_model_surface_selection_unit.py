@@ -4,7 +4,10 @@ import pytest
 import trimesh
 
 from core.model_surface.footprint import build_surface_footprint
-from core.model_surface.selection import select_planar_component
+from core.model_surface.selection import (
+    list_planar_surface_candidates,
+    select_planar_component,
+)
 
 
 def test_select_planar_component_finds_top_box_face():
@@ -42,6 +45,15 @@ def test_surface_footprint_preserves_inner_hole():
     assert footprint.hole_count == 1
 
 
+def test_surface_candidates_keep_slicer_style_pick_limit():
+    mesh = _many_disconnected_plates_mesh(count=40)
+
+    candidates = list_planar_surface_candidates(mesh)
+
+    assert len(candidates) == 80
+    assert candidates[0].area_mm2 >= candidates[-1].area_mm2
+
+
 def _flat_square_frame_mesh() -> trimesh.Trimesh:
     rectangles = [
         (-10.0, -10.0, 10.0, -4.0),
@@ -63,3 +75,12 @@ def _flat_square_frame_mesh() -> trimesh.Trimesh:
         )
         faces.extend([(base, base + 1, base + 2), (base, base + 2, base + 3)])
     return trimesh.Trimesh(vertices=vertices, faces=faces, process=True)
+
+
+def _many_disconnected_plates_mesh(count: int) -> trimesh.Trimesh:
+    plates = []
+    for index in range(count):
+        plate = trimesh.creation.box(extents=(3.0, 3.0, 1.0))
+        plate.apply_translation((index * 6.0, 0.0, 0.0))
+        plates.append(plate)
+    return trimesh.util.concatenate(plates)

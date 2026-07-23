@@ -67,6 +67,43 @@ const GENERIC_HTTP_STATUS_ERROR_RE =
   /(?:Request failed with status code|HTTP(?:\s+error)?|status(?:\s+code)?)\s*\d{3}\b/i;
 const STARTUP_LUT_RETRY_DELAY_MS = 5_000;
 const STARTUP_LUT_ATTEMPT_LIMIT = 2;
+const MODEL_SURFACE_FILE_EXTENSIONS = [".stl", ".obj"] as const;
+type DropImportIntent = "model" | "image" | "mixed" | "files";
+
+function isSupportedModelSurfaceFile(file: File): boolean {
+  const name = file.name.toLowerCase();
+  return MODEL_SURFACE_FILE_EXTENSIONS.some((extension) => name.endsWith(extension));
+}
+
+function getDropImportIntent(files: File[]): DropImportIntent | null {
+  if (files.length === 0) {
+    return "files";
+  }
+  const hasModel = files.some(isSupportedModelSurfaceFile);
+  const hasImage = files.some((file) => isValidImageType(file.type, file.name));
+  if (hasModel && hasImage) {
+    return "mixed";
+  }
+  if (hasModel) {
+    return "model";
+  }
+  if (hasImage) {
+    return "image";
+  }
+  return null;
+}
+
+function hasDraggedFiles(event: DragEvent): boolean {
+  return Array.from(event.dataTransfer?.types ?? []).includes("Files");
+}
+
+function isInsideUnifiedUploaderDropZone(target: EventTarget | null): boolean {
+  return target instanceof Element && Boolean(target.closest("[data-unified-uploader-drop-zone='true']"));
+}
+
+function isInsideModelSurfaceDropZone(target: EventTarget | null): boolean {
+  return target instanceof Element && Boolean(target.closest("[data-model-surface-drop-zone='true']"));
+}
 
 function hasApiErrorResponse(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && "response" in error);
@@ -139,6 +176,7 @@ function ColorModeDots({ mode }: { mode: string }) {
 
 export default function BasicSettings() {
   const { t } = useI18n();
+  const [dropImportIntent, setDropImportIntent] = useState<DropImportIntent | null>(null);
   const workspace = useWorkspaceMode();
 
   const structureModeOptions = Object.values(StructureMode).map((v) => ({
@@ -196,11 +234,11 @@ export default function BasicSettings() {
     materialBackingMaterialDirName,
     modelSurfaceEnabled,
     modelSurfaceFile,
+    modelSurfaceModelFileId,
     modelSurfaceSummary,
     modelSurfaceSelectionId,
     modelSurfaceSelection,
     modelSurfaceFootprint,
-    modelSurfacePlacement,
     modelSurfaceLoading,
     modelSurfaceSelecting,
     modelSurfaceError,
@@ -265,11 +303,11 @@ export default function BasicSettings() {
     materialBackingMaterialDirName: s.materialBackingMaterialDirName,
     modelSurfaceEnabled: s.modelSurfaceEnabled,
     modelSurfaceFile: s.modelSurfaceFile,
+    modelSurfaceModelFileId: s.modelSurfaceModelFileId,
     modelSurfaceSummary: s.modelSurfaceSummary,
     modelSurfaceSelectionId: s.modelSurfaceSelectionId,
     modelSurfaceSelection: s.modelSurfaceSelection,
     modelSurfaceFootprint: s.modelSurfaceFootprint,
-    modelSurfacePlacement: s.modelSurfacePlacement,
     modelSurfaceLoading: s.modelSurfaceLoading,
     modelSurfaceSelecting: s.modelSurfaceSelecting,
     modelSurfaceError: s.modelSurfaceError,
@@ -320,6 +358,7 @@ export default function BasicSettings() {
   );
 
   const [uploaderExpanded, setUploaderExpanded] = useState(true);
+  const [modelSurfaceDropActive, setModelSurfaceDropActive] = useState(false);
   const modelSurfaceFileRef = useRef<HTMLInputElement>(null);
   const startupRetryMountedRef = useRef(false);
   const legacyCatalogRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -395,8 +434,6 @@ export default function BasicSettings() {
   const setModelSurfaceEnabled = useConverterStore((s) => s.setModelSurfaceEnabled);
   const uploadModelSurfaceFile = useConverterStore((s) => s.uploadModelSurfaceFile);
   const clearModelSurface = useConverterStore((s) => s.clearModelSurface);
-  const updateModelSurfacePlacement = useConverterStore((s) => s.updateModelSurfacePlacement);
-  const fitModelSurfaceArtwork = useConverterStore((s) => s.fitModelSurfaceArtwork);
 
   const handleFileReplace = useCallback(
     (file: File) => {
@@ -405,6 +442,77 @@ export default function BasicSettings() {
     },
     [setImageFile],
   );
+
+  const importDroppedFiles = useCallback(
+    (files: File[]): boolean => {
+      const modelFile = files.find(isSupportedModelSurfaceFile);
+      const imageFiles = files.filter((file) => isValidImageType(file.type, file.name));
+
+      if (!modelFile && imageFiles.length === 0) {
+        return false;
+      }
+
+      if (imageFiles.length > 0) {
+        handleFilesSelect(imageFiles);
+      }
+      if (modelFile) {
+        void uploadModelSurfaceFile(modelFile);
+      }
+      return true;
+    },
+    [handleFilesSelect, uploadModelSurfaceFile],
+  );
+
+  const handleDroppedFiles = useCallback(
+    (files: File[], target: EventTarget | null): boolean => {
+      const modelFile = files.find(isSupportedModelSurfaceFile);
+      const imageFiles = files.filter((file) => isValidImageType(file.type, file.name));
+
+      if (!modelFile && imageFiles.length === 0) {
+        return false;
+      }
+
+      if (!modelFile && imageFiles.length > 0 && isInsideUnifiedUploaderDropZone(target)) {
+        return false;
+      }
+
+      if (isInsideModelSurfaceDropZone(target)) {
+        return false;
+      }
+
+      return importDroppedFiles(files);
+    },
+    [importDroppedFiles],
+  );
+
+  useEffect(() => {
+    const handleWindowDragOver = (event: DragEvent) => {
+      if (!hasDraggedFiles(event)) return;
+      setDropImportIntent(getDropImportIntent(Array.from(event.dataTransfer?.files ?? [])));
+      event.preventDefault();
+    };
+    const handleWindowDragLeave = (event: DragEvent) => {
+      if (event.target === window || event.target === document || event.target === document.documentElement) {
+        setDropImportIntent(null);
+      }
+    };
+    const handleWindowDrop = (event: DragEvent) => {
+      const files = Array.from(event.dataTransfer?.files ?? []);
+      setDropImportIntent(null);
+      if (!handleDroppedFiles(files, event.target)) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+
+    window.addEventListener("dragover", handleWindowDragOver, true);
+    window.addEventListener("dragleave", handleWindowDragLeave, true);
+    window.addEventListener("drop", handleWindowDrop, true);
+    return () => {
+      window.removeEventListener("dragover", handleWindowDragOver, true);
+      window.removeEventListener("dragleave", handleWindowDragLeave, true);
+      window.removeEventListener("drop", handleWindowDrop, true);
+    };
+  }, [handleDroppedFiles]);
 
   const sourceVersionOptions = [
     { label: t("basic_source_version_legacy"), value: "legacy" },
@@ -699,7 +807,7 @@ export default function BasicSettings() {
 
   const lutFileRef = useRef<HTMLInputElement>(null);
 
-  // 5-Color Extended 模式下强制锁定为单面（浮雕）
+  // 5-Color Extended and model-surface workflows only support one viewing side.
   const isFiveColorExt = color_mode === ColorMode.FIVE_COLOR_EXT;
   const supportsDynamicLayers = !!selectedLutInfo?.supports_dynamic_layer_count;
   const supportedModes = useMemo(
@@ -724,10 +832,13 @@ export default function BasicSettings() {
     }));
   }, [layer_height_mm, selectedLutInfo?.layer_height_mm, supportedModes]);
   useEffect(() => {
-    if (isFiveColorExt && structure_mode === StructureMode.DOUBLE_SIDED) {
+    if (
+      (isFiveColorExt || modelSurfaceEnabled) &&
+      structure_mode === StructureMode.DOUBLE_SIDED
+    ) {
       setStructureMode(StructureMode.SINGLE_SIDED);
     }
-  }, [isFiveColorExt, structure_mode, setStructureMode]);
+  }, [isFiveColorExt, modelSurfaceEnabled, structure_mode, setStructureMode]);
 
   const handleLutUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -743,6 +854,41 @@ export default function BasicSettings() {
     await uploadModelSurfaceFile(file);
     if (modelSurfaceFileRef.current) modelSurfaceFileRef.current.value = "";
   };
+
+  const handleModelSurfaceDropZoneClick = useCallback(() => {
+    if (modelSurfaceLoading) {
+      return;
+    }
+    modelSurfaceFileRef.current?.click();
+  }, [modelSurfaceLoading]);
+
+  const handleModelSurfaceDropZoneDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    if (!Array.from(event.dataTransfer?.types ?? []).includes("Files")) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    setModelSurfaceDropActive(true);
+  }, []);
+
+  const handleModelSurfaceDropZoneDragLeave = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setModelSurfaceDropActive(false);
+  }, []);
+
+  const handleModelSurfaceDropZoneDrop = useCallback(
+    (event: React.DragEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setModelSurfaceDropActive(false);
+      if (modelSurfaceLoading) {
+        return;
+      }
+      importDroppedFiles(Array.from(event.dataTransfer?.files ?? []));
+    },
+    [importDroppedFiles, modelSurfaceLoading],
+  );
 
   const [isRefreshingLut, setIsRefreshingLut] = useState(false);
   const handleRefreshLut = useCallback(async () => {
@@ -815,9 +961,50 @@ export default function BasicSettings() {
     typeof modelSurfaceSelection?.face_count === "number"
       ? modelSurfaceSelection.face_count
       : null;
+  const modelSurfaceStatusLabel = modelSurfaceLoading
+    ? t("model_surface_status_uploading")
+    : modelSurfaceSelecting
+      ? t("model_surface_status_selecting")
+      : modelSurfaceError && !modelSurfaceModelFileId
+        ? t("model_surface_status_analysis_failed")
+        : modelSurfaceSelectionId
+          ? t("model_surface_status_selected")
+          : t("model_surface_status_select_face");
+  const dropImportLabel =
+    dropImportIntent === "model"
+      ? t("global_drop_import_model")
+      : dropImportIntent === "image"
+        ? t("global_drop_import_image")
+        : dropImportIntent === "mixed"
+          ? t("global_drop_import_mixed")
+          : t("global_drop_import_files");
+  const modelSurfaceDropZoneLabel = modelSurfaceFile
+    ? t("model_surface_drop_zone_replace")
+    : t("model_surface_drop_zone_upload");
+  const modelSurfaceDropZoneClass =
+    "flex min-h-[76px] cursor-pointer flex-col justify-center rounded-md border-2 border-dashed px-3 py-2 text-left transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] " +
+    (modelSurfaceDropActive
+      ? "border-blue-500 bg-blue-500/10"
+      : "border-slate-300/80 bg-slate-100/60 hover:bg-slate-100/90 dark:border-slate-700 dark:bg-slate-900/50 dark:hover:bg-slate-900/80") +
+    (modelSurfaceLoading ? " pointer-events-none opacity-60" : "");
 
   return (
     <div className="flex flex-col gap-4">
+      {dropImportIntent ? (
+        <div
+          role="status"
+          aria-label={t("global_drop_import_aria")}
+          className="pointer-events-none fixed inset-x-0 top-4 z-[80] flex justify-center px-4"
+        >
+          <div className="flex max-w-[min(32rem,calc(100vw-2rem))] items-center gap-3 rounded-md border border-blue-300/80 bg-slate-100/94 px-4 py-3 text-sm font-semibold text-slate-800 shadow-xl backdrop-blur-md dark:border-blue-500/50 dark:bg-slate-950/90 dark:text-slate-100">
+            <span className="inline-flex size-2.5 rounded-full bg-blue-500 shadow-[0_0_0_4px_rgba(59,130,246,0.16)]" />
+            <span>{dropImportLabel}</span>
+            <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+              {t("global_drop_import_release")}
+            </span>
+          </div>
+        </div>
+      ) : null}
       {uploaderExpanded ? (
         <UnifiedUploader
           singlePreview={imagePreviewUrl ?? undefined}
@@ -886,22 +1073,36 @@ export default function BasicSettings() {
               className="hidden"
               onChange={(e) => void handleModelSurfaceUpload(e)}
             />
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() => modelSurfaceFileRef.current?.click()}
-                disabled={modelSurfaceLoading}
-                className="rounded-full bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+            <div className="flex flex-col gap-2">
+              <div
+                data-model-surface-drop-zone="true"
+                role="button"
+                tabIndex={modelSurfaceLoading ? -1 : 0}
+                aria-disabled={modelSurfaceLoading ? "true" : undefined}
+                aria-label={modelSurfaceDropZoneLabel}
+                onClick={handleModelSurfaceDropZoneClick}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    handleModelSurfaceDropZoneClick();
+                  }
+                }}
+                onDragOver={handleModelSurfaceDropZoneDragOver}
+                onDragLeave={handleModelSurfaceDropZoneDragLeave}
+                onDrop={handleModelSurfaceDropZoneDrop}
+                className={modelSurfaceDropZoneClass}
               >
-                {modelSurfaceFile
-                  ? t("model_surface_replace_model")
-                  : t("model_surface_upload_model")}
-              </button>
+                <span className="text-xs font-semibold text-slate-700 dark:text-slate-200">
+                  {modelSurfaceDropZoneLabel}
+                </span>
+                <span className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+                  {t("model_surface_drop_zone_hint")}
+                </span>
+              </div>
               {modelSurfaceFile && (
                 <button
                   type="button"
                   onClick={clearModelSurface}
-                  className="rounded-full border border-slate-200/80 px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+                  className="self-start rounded-full border border-slate-200/80 px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
                 >
                   {t("model_surface_clear_model")}
                 </button>
@@ -927,13 +1128,7 @@ export default function BasicSettings() {
                 <div className="flex justify-between gap-3">
                   <span>{t("model_surface_status")}</span>
                   <span className="text-slate-700 dark:text-slate-200">
-                    {modelSurfaceLoading
-                      ? t("model_surface_status_uploading")
-                      : modelSurfaceSelecting
-                        ? t("model_surface_status_selecting")
-                        : modelSurfaceSelectionId
-                          ? t("model_surface_status_selected")
-                          : t("model_surface_status_select_face")}
+                    {modelSurfaceStatusLabel}
                   </span>
                 </div>
                 {modelSurfaceFootprintLabel && (
@@ -964,97 +1159,10 @@ export default function BasicSettings() {
               </StatusBanner>
             ))}
 
-            {modelSurfaceSelectionId && (
-              <div className="flex flex-col gap-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={fitModelSurfaceArtwork}
-                    className="rounded-full border border-slate-200/80 px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
-                  >
-                    {t("model_surface_fit")}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      updateModelSurfacePlacement({ mode: "edge_to_edge" })
-                    }
-                    className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
-                      modelSurfacePlacement.mode === "edge_to_edge"
-                        ? "bg-blue-600 text-white"
-                        : "border border-slate-200/80 text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
-                    }`}
-                  >
-                    {t("model_surface_mode_edge")}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => updateModelSurfacePlacement({ mode: "inset" })}
-                    className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
-                      modelSurfacePlacement.mode === "inset"
-                        ? "bg-blue-600 text-white"
-                        : "border border-slate-200/80 text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
-                    }`}
-                  >
-                    {t("model_surface_mode_inset")}
-                  </button>
-                </div>
-                <Slider
-                  label={t("model_surface_scale")}
-                  value={modelSurfacePlacement.scale}
-                  min={0.1}
-                  max={3}
-                  step={0.01}
-                  onChange={(scale) => updateModelSurfacePlacement({ scale })}
-                  displayDecimals={2}
-                />
-                <Slider
-                  label={t("model_surface_offset_x")}
-                  value={modelSurfacePlacement.offset_x_mm}
-                  min={-100}
-                  max={100}
-                  step={0.1}
-                  unit="mm"
-                  onChange={(offset_x_mm) =>
-                    updateModelSurfacePlacement({ offset_x_mm })
-                  }
-                />
-                <Slider
-                  label={t("model_surface_offset_y")}
-                  value={modelSurfacePlacement.offset_y_mm}
-                  min={-100}
-                  max={100}
-                  step={0.1}
-                  unit="mm"
-                  onChange={(offset_y_mm) =>
-                    updateModelSurfacePlacement({ offset_y_mm })
-                  }
-                />
-                <Slider
-                  label={t("model_surface_rotation")}
-                  value={modelSurfacePlacement.rotation_deg}
-                  min={-180}
-                  max={180}
-                  step={1}
-                  unit="°"
-                  onChange={(rotation_deg) =>
-                    updateModelSurfacePlacement({ rotation_deg })
-                  }
-                />
-                {modelSurfacePlacement.mode === "inset" && (
-                  <Slider
-                    label={t("model_surface_inset")}
-                    value={modelSurfacePlacement.inset_mm}
-                    min={0}
-                    max={20}
-                    step={0.1}
-                    unit="mm"
-                    onChange={(inset_mm) =>
-                      updateModelSurfacePlacement({ inset_mm })
-                    }
-                  />
-                )}
-              </div>
+            {modelSurfaceFile && modelSurfaceModelFileId && (
+              <StatusBanner tone="info">
+                {t("model_surface_adjust_in_viewer")}
+              </StatusBanner>
             )}
           </div>
         )}
@@ -1417,14 +1525,16 @@ export default function BasicSettings() {
         onChange={setSpacerThick}
       />
 
-      <RadioGroup
-        label={t("basic_structure_mode")}
-        value={structure_mode}
-        options={structureModeOptions}
-        onChange={(v) => setStructureMode(v as StructureMode)}
-        disabled={enable_relief || enable_fridge_magnet}
-        disabledValues={isFiveColorExt ? [StructureMode.DOUBLE_SIDED] : []}
-      />
+      {!modelSurfaceEnabled && (
+        <RadioGroup
+          label={t("basic_structure_mode")}
+          value={structure_mode}
+          options={structureModeOptions}
+          onChange={(v) => setStructureMode(v as StructureMode)}
+          disabled={enable_relief || enable_fridge_magnet}
+          disabledValues={isFiveColorExt ? [StructureMode.DOUBLE_SIDED] : []}
+        />
+      )}
 
       <RadioGroup
         label={t("basic_modeling_mode")}

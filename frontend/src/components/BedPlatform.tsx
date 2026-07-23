@@ -14,7 +14,8 @@ import type { ThemeColors } from "./themeConfig";
 function createBedTexture(
   widthMm: number,
   heightMm: number,
-  colors: Pick<ThemeColors, "bedBase" | "bedInner" | "bedFineGrid" | "bedBoldGrid" | "bedBorder">
+  colors: Pick<ThemeColors, "bedBase" | "bedInner" | "bedFineGrid" | "bedBoldGrid" | "bedBorder">,
+  gridVisible: boolean,
 ): THREE.CanvasTexture {
   const scale = 2; // pixels per mm for texture
   const texW = widthMm * scale;
@@ -37,38 +38,40 @@ function createBedTexture(
   ctx.roundRect(margin, margin, texW - margin * 2, texH - margin * 2, radius);
   ctx.fill();
 
-  // Fine grid (10mm)
-  ctx.strokeStyle = colors.bedFineGrid;
-  ctx.lineWidth = 1;
-  const step10 = 10 * scale;
-  for (let x = 0; x < texW; x += step10) {
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, texH);
-    ctx.stroke();
-  }
-  for (let y = 0; y < texH; y += step10) {
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(texW, y);
-    ctx.stroke();
-  }
+  if (gridVisible) {
+    // Fine grid (10mm)
+    ctx.strokeStyle = colors.bedFineGrid;
+    ctx.lineWidth = 1;
+    const step10 = 10 * scale;
+    for (let x = 0; x < texW; x += step10) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, texH);
+      ctx.stroke();
+    }
+    for (let y = 0; y < texH; y += step10) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(texW, y);
+      ctx.stroke();
+    }
 
-  // Bold grid (50mm)
-  ctx.strokeStyle = colors.bedBoldGrid;
-  ctx.lineWidth = 2;
-  const step50 = 50 * scale;
-  for (let x = 0; x < texW; x += step50) {
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, texH);
-    ctx.stroke();
-  }
-  for (let y = 0; y < texH; y += step50) {
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(texW, y);
-    ctx.stroke();
+    // Bold grid (50mm)
+    ctx.strokeStyle = colors.bedBoldGrid;
+    ctx.lineWidth = 2;
+    const step50 = 50 * scale;
+    for (let x = 0; x < texW; x += step50) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, texH);
+      ctx.stroke();
+    }
+    for (let y = 0; y < texH; y += step50) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(texW, y);
+      ctx.stroke();
+    }
   }
 
   // Border
@@ -122,7 +125,15 @@ function createRoundedBedGeometry(
   return geo;
 }
 
-export default function BedPlatform() {
+interface BedPlatformProps {
+  surfaceModelActive?: boolean;
+  gridVisible?: boolean;
+}
+
+export default function BedPlatform({
+  surfaceModelActive = false,
+  gridVisible = true,
+}: BedPlatformProps) {
   const bed_label = useConverterStore((s) => s.bed_label);
   const bedSizes = useConverterStore((s) => s.bedSizes);
   const modelUrl = useConverterStore((s) => s.modelUrl);
@@ -141,12 +152,14 @@ export default function BedPlatform() {
   // Create bed geometry + material
   const bedMesh = useMemo(() => {
     const geo = createRoundedBedGeometry(bedDims.w, bedDims.h, 8);
-    const texture = createBedTexture(bedDims.w, bedDims.h, themeColors);
+    const texture = createBedTexture(bedDims.w, bedDims.h, themeColors, gridVisible);
     const mat = new THREE.MeshStandardMaterial({ map: texture, roughness: 0.8 });
     const mesh = new THREE.Mesh(geo, mat);
+    mesh.name = "scene-build-plate";
+    mesh.userData.gridVisible = gridVisible;
     mesh.position.set(0, 0, -0.1);
     return mesh;
-  }, [bedDims, themeColors]);
+  }, [bedDims, gridVisible, themeColors]);
 
   useEffect(() => {
     return () => {
@@ -156,7 +169,9 @@ export default function BedPlatform() {
 
   // Auto-fit camera when bed changes and no model is loaded
   useEffect(() => {
-    if (modelUrl || previewGlbUrl || batchPreviewItems.length > 0) return; // Don't override camera when any model is present
+    if (modelUrl || previewGlbUrl || batchPreviewItems.length > 0 || surfaceModelActive) {
+      return;
+    }
 
     const radius = Math.max(bedDims.w, bedDims.h) / 2;
     const perspCam = camera as THREE.PerspectiveCamera;
@@ -178,7 +193,7 @@ export default function BedPlatform() {
       oc.minDistance = dist * 0.1;
       oc.update();
     }
-  }, [bedDims, modelUrl, previewGlbUrl, batchPreviewItems.length, camera, controls]);
+  }, [bedDims, modelUrl, previewGlbUrl, batchPreviewItems.length, surfaceModelActive, camera, controls]);
 
   return <primitive object={bedMesh} />;
 }

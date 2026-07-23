@@ -330,6 +330,71 @@ class TestWorkerPoolConfigEnvValidation:
 class TestSubmit:
     """Test async submit behavior."""
 
+    def test_replaces_broken_stdout_before_executor_spawn(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        class BrokenStdout:
+            encoding = "utf-8"
+            errors = "replace"
+
+            def flush(self) -> None:
+                raise BrokenPipeError("stdout pipe closed")
+
+        broken_stdout = BrokenStdout()
+        monkeypatch.setattr(worker_pool.sys, "stdout", broken_stdout)
+        target_logger = logging.getLogger("lumina.api.worker_pool")
+        target_logger.addHandler(caplog.handler)
+        caplog.set_level(logging.WARNING, logger=target_logger.name)
+
+        worker_pool._ensure_standard_streams_flushable()
+
+        assert worker_pool.sys.stdout is not broken_stdout
+        assert worker_pool.sys.stdout.write("ok") == 2
+        replacements = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "worker_pool_stdio_replaced"
+        ]
+        assert len(replacements) == 1
+        assert getattr(replacements[0], "stream_name", None) == "stdout"
+        assert getattr(replacements[0], "error_type", None) == "BrokenPipeError"
+
+    @pytest.mark.asyncio
+    async def test_submit_checks_standard_streams_before_executor_submit(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        real_loop = asyncio.get_running_loop()
+        guard_calls: list[str] = []
+        sentinel_pool = object()
+
+        class FakeLoop:
+            def run_in_executor(self, executor, submitted_fn, *args):
+                assert guard_calls == ["checked"]
+                assert executor is sentinel_pool
+                future = real_loop.create_future()
+                future.set_result(submitted_fn(*args))
+                return future
+
+        monkeypatch.setattr(
+            worker_pool,
+            "_ensure_standard_streams_flushable",
+            lambda: guard_calls.append("checked"),
+        )
+        monkeypatch.setattr(
+            worker_pool.asyncio,
+            "get_running_loop",
+            lambda: FakeLoop(),
+        )
+        pool = WorkerPoolManager(max_workers=1)
+        pool._pool = sentinel_pool  # type: ignore[assignment]
+
+        result = await pool.submit(_add, 2, 5)
+
+        assert result == 7
+
     @pytest.mark.asyncio
     async def test_submit_returns_result(self) -> None:
         pool = WorkerPoolManager(max_workers=2)

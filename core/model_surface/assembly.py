@@ -8,6 +8,11 @@ import trimesh
 
 from core.model_surface.types import ModelSurfaceError, SurfaceFootprint
 
+MODEL_SURFACE_DISPLAY_Z_BOUNDS_KEY = "model_surface_display_z_bounds_mm"
+MODEL_SURFACE_DISPLAY_LAYER_HEIGHTS_KEY = (
+    "model_surface_display_layer_heights_mm"
+)
+
 
 @dataclass(frozen=True)
 class OverlaySceneResult:
@@ -41,6 +46,7 @@ def build_embedded_overlay_scene(
 
     result_scene = trimesh.Scene()
     embed_depth_mm = _pattern_depth_mm(pattern_scene)
+    display_layer_heights_mm = _pattern_layer_heights_mm(pattern_scene)
     base_copy = (
         base_mesh.copy()
         if allow_uncut_base
@@ -65,7 +71,48 @@ def build_embedded_overlay_scene(
 
     if len(slot_names) == 1:
         raise ModelSurfaceError("Overlay pattern scene contains no printable color meshes.")
+    if display_layer_heights_mm:
+        result_scene.metadata[MODEL_SURFACE_DISPLAY_LAYER_HEIGHTS_KEY] = (
+            display_layer_heights_mm
+        )
+        result_scene.metadata[MODEL_SURFACE_DISPLAY_Z_BOUNDS_KEY] = (
+            _pattern_z_bounds_mm(pattern_scene)
+        )
     return OverlaySceneResult(result_scene, slot_names, preview_colors)
+
+
+def apply_model_transform_to_overlay_scene(
+    result: OverlaySceneResult,
+    model_transform: dict | None,
+) -> OverlaySceneResult:
+    """Apply the selected model object transform to the assembled overlay scene.
+
+    将用户在三维预览中设置的模型对象变换应用到已合成的覆面场景。
+    """
+
+    rotation_deg = _model_rotation_degrees(model_transform)
+    if all(abs(value) <= 1e-9 for value in rotation_deg):
+        return result
+
+    bounds = np.asarray(result.scene.bounds, dtype=np.float64)
+    if bounds.shape != (2, 3) or not np.all(np.isfinite(bounds)):
+        raise ModelSurfaceError("Overlay scene has invalid bounds.")
+    anchor = np.array(
+        [
+            (bounds[0, 0] + bounds[1, 0]) / 2.0,
+            (bounds[0, 1] + bounds[1, 1]) / 2.0,
+            bounds[0, 2],
+        ],
+        dtype=np.float64,
+    )
+    matrix = _rotation_matrix_about_anchor(rotation_deg, anchor)
+    transformed_scene = result.scene.copy()
+    transformed_scene.apply_transform(matrix)
+    return OverlaySceneResult(
+        scene=transformed_scene,
+        slot_names=list(result.slot_names),
+        preview_colors=dict(result.preview_colors),
+    )
 
 
 def cut_surface_pocket(
@@ -129,6 +176,7 @@ def _pattern_to_surface_transform(
         raise ModelSurfaceError("Overlay pattern scene has invalid bounds.")
 
     pattern_min, pattern_max = bounds
+    logical_z_min, _logical_z_max = _pattern_z_bounds_mm(pattern_scene)
     pattern_size = pattern_max - pattern_min
     if pattern_size[0] <= 0.0 or pattern_size[1] <= 0.0:
         raise ModelSurfaceError("Overlay pattern scene has invalid XY size.")
@@ -149,19 +197,88 @@ def _pattern_to_surface_transform(
         origin
         + u_axis * (float(min_x) - scale_x * float(pattern_min[0]))
         + v_axis * (float(min_y) - scale_y * float(pattern_min[1]))
-        - normal * (float(pocket_depth_mm) + float(pattern_min[2]))
+        - normal * (float(pocket_depth_mm) + logical_z_min)
     )
     return transform
 
 
+def _model_rotation_degrees(model_transform: dict | None) -> tuple[float, float, float]:
+    if not model_transform:
+        return (0.0, 0.0, 0.0)
+    rotation = model_transform.get("rotation_deg", {})
+    if not isinstance(rotation, dict):
+        raise ModelSurfaceError("surface_model_transform.rotation_deg must be an object.")
+    try:
+        return (
+            float(rotation.get("x", 0.0)),
+            float(rotation.get("y", 0.0)),
+            float(rotation.get("z", 0.0)),
+        )
+    except (TypeError, ValueError) as exc:
+        raise ModelSurfaceError("surface_model_transform rotation values must be numbers.") from exc
+
+
+def _rotation_matrix_about_anchor(
+    rotation_deg: tuple[float, float, float],
+    anchor: np.ndarray,
+) -> np.ndarray:
+    rx, ry, rz = (np.deg2rad(value) for value in rotation_deg)
+    rotation = trimesh.transformations.euler_matrix(rx, ry, rz, axes="sxyz")
+    to_origin = np.eye(4)
+    to_origin[:3, 3] = -anchor
+    from_origin = np.eye(4)
+    from_origin[:3, 3] = anchor
+    return from_origin @ rotation @ to_origin
+
+
 def _pattern_depth_mm(pattern_scene: trimesh.Scene) -> float:
+    min_z, max_z = _pattern_z_bounds_mm(pattern_scene)
+    return max_z - min_z
+
+
+def _pattern_z_bounds_mm(pattern_scene: trimesh.Scene) -> tuple[float, float]:
     bounds = np.asarray(pattern_scene.bounds, dtype=np.float64)
     if bounds.shape != (2, 3) or not np.all(np.isfinite(bounds)):
         raise ModelSurfaceError("Overlay pattern scene has invalid bounds.")
-    depth = float(bounds[1, 2] - bounds[0, 2])
-    if depth <= 0.0:
+    actual_min_z = float(bounds[0, 2])
+    actual_max_z = float(bounds[1, 2])
+    raw_bounds = pattern_scene.metadata.get(MODEL_SURFACE_DISPLAY_Z_BOUNDS_KEY)
+    if raw_bounds is None:
+        logical_min_z, logical_max_z = actual_min_z, actual_max_z
+    else:
+        try:
+            logical_min_z, logical_max_z = (float(value) for value in raw_bounds)
+        except (TypeError, ValueError) as exc:
+            raise ModelSurfaceError("Overlay pattern logical Z bounds are invalid.") from exc
+        if not np.all(np.isfinite([logical_min_z, logical_max_z])):
+            raise ModelSurfaceError("Overlay pattern logical Z bounds are invalid.")
+        if actual_min_z < logical_min_z - 1e-9 or actual_max_z > logical_max_z + 1e-9:
+            raise ModelSurfaceError("Overlay pattern geometry exceeds its logical Z bounds.")
+    if logical_max_z <= logical_min_z:
         raise ModelSurfaceError("Overlay pattern scene has invalid Z depth.")
-    return depth
+    return logical_min_z, logical_max_z
+
+
+def _pattern_layer_heights_mm(pattern_scene: trimesh.Scene) -> tuple[float, ...]:
+    raw_heights = pattern_scene.metadata.get(
+        MODEL_SURFACE_DISPLAY_LAYER_HEIGHTS_KEY
+    )
+    if raw_heights is None:
+        return ()
+    try:
+        layer_heights = tuple(float(value) for value in raw_heights)
+    except (TypeError, ValueError) as exc:
+        raise ModelSurfaceError("Overlay pattern layer heights are invalid.") from exc
+    if not layer_heights or not np.all(np.isfinite(layer_heights)):
+        raise ModelSurfaceError("Overlay pattern layer heights are invalid.")
+    if any(value <= 0.0 for value in layer_heights):
+        raise ModelSurfaceError("Overlay pattern layer heights must be positive.")
+    logical_min_z, logical_max_z = _pattern_z_bounds_mm(pattern_scene)
+    if abs(sum(layer_heights) - (logical_max_z - logical_min_z)) > 1e-9:
+        raise ModelSurfaceError(
+            "Overlay pattern layer heights do not match its logical Z depth."
+        )
+    return layer_heights
 
 
 def _footprint_prism_to_surface_transform(

@@ -160,6 +160,22 @@ describe("ActionBar — auto batch mode", () => {
     expect(btn).toBeDisabled();
   });
 
+  it("shows a source-only hint after an image is uploaded but legacy LUT is still missing", () => {
+    useConverterStore.setState({
+      batchMode: false,
+      batchFiles: [],
+      imageFile: makeFile("uploaded.png"),
+      source_version: "legacy",
+      lut_name: "",
+    });
+
+    render(<ActionBar />);
+
+    expect(screen.getByText("请先选择 LUT")).toBeInTheDocument();
+    expect(screen.queryByText("请先上传图片并选择 LUT")).not.toBeInTheDocument();
+    expect(screen.getByText("预览").closest("button")).toBeDisabled();
+  });
+
   // --- Enabled condition ---
 
   it("enables batch generate button when files exist and lut_name is set", () => {

@@ -1,6 +1,7 @@
 """Unit tests for slicer-specific 3MF metadata generation."""
 
 import json
+import math
 from pathlib import Path
 import zipfile
 import xml.etree.ElementTree as ET
@@ -1922,6 +1923,157 @@ class TestAnycubicWriterMetadata:
         assert project_settings["default_filament_profile"] == ["Snapmaker PLA"]
         assert "inherits_group" not in project_settings
         assert "different_settings_to_system" not in project_settings
+
+    def test_orca_registry_u1_large_overlay_keeps_prime_tower_off_object(
+        self, tmp_path
+    ) -> None:
+        writer = writer_module.BambuStudio3MFWriter(
+            output_path=str(tmp_path / "snapmaker-u1-orca-large-overlay.3mf"),
+            settings={},
+            color_mode="4-Color",
+            printer_id="snapmaker-u1",
+            slicer="OrcaSlicer",
+            nozzle_size="0.4",
+            device_profile_id="OrcaSlicer:snapmaker:snapmaker-u1:0.4",
+        )
+        large_overlay = trimesh.creation.box(extents=[200.0, 200.0, 1.0])
+        writer.add_mesh(large_overlay, "White", (255, 255, 255))
+        for offset, (name, rgb) in enumerate(
+            [
+                ("Red", (193, 46, 31)),
+                ("Yellow", (244, 238, 42)),
+                ("Blue", (10, 41, 137)),
+            ],
+            start=1,
+        ):
+            strip = trimesh.creation.box(extents=[20.0, 20.0, 1.0])
+            strip.apply_translation([-70.0 + offset * 35.0, 0.0, 0.0])
+            writer.add_mesh(strip, name, rgb)
+
+        out_path = writer.export()
+
+        with zipfile.ZipFile(out_path) as package:
+            model_root = ET.fromstring(package.read("3D/3dmodel.model"))
+            project_settings = json.loads(
+                package.read("Metadata/project_settings.config").decode("utf-8")
+            )
+
+        core_ns = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
+        model_metadata = {
+            node.attrib["name"]: (node.text or "")
+            for node in model_root.findall("m:metadata", core_ns)
+        }
+        build_item = model_root.find("m:build/m:item", core_ns)
+        assert model_metadata["Application"] == "OrcaSlicer-02.04.00.00"
+        assert build_item is not None
+        transform_values = [float(value) for value in build_item.attrib["transform"].split()]
+        translate_x = transform_values[9]
+        translate_y = transform_values[10]
+        object_min_x = -100.0 + translate_x
+        object_max_x = 100.0 + translate_x
+        object_min_y = -100.0 + translate_y
+        object_max_y = 100.0 + translate_y
+
+        tower_x = float(project_settings["wipe_tower_x"][0])
+        tower_y = float(project_settings["wipe_tower_y"][0])
+        tower_width = float(project_settings["prime_tower_width"])
+        layer_height = float(project_settings["layer_height"])
+        prime_volume = float(project_settings["prime_volume"])
+        template_settings = writer_module._load_legacy_project_template_if_available(
+            "snapmaker-u1",
+            "OrcaSlicer",
+            "0.4",
+        )
+        assert template_settings is not None
+        template_project_settings, _ = template_settings
+        filament_count = max(
+            len(project_settings["filament_settings_id"]),
+            len(template_project_settings["filament_settings_id"]),
+        )
+        nozzle_count = len(project_settings["nozzle_diameter"])
+        filament_depth_count = (
+            filament_count if nozzle_count == 2 else max(filament_count - 1, 1)
+        )
+        rib_depth = (
+            math.sqrt(prime_volume * filament_depth_count / layer_height * 1.5)
+            + float(project_settings["wipe_tower_rib_width"]) / math.sqrt(2.0)
+            + float(project_settings["wipe_tower_extra_rib_length"])
+        )
+        tower_positive_extent = max(tower_width, rib_depth) + float(
+            project_settings["prime_tower_brim_width"]
+        )
+        tower_min_x = tower_x
+        tower_max_x = tower_x + tower_positive_extent
+        tower_min_y = tower_y
+        tower_max_y = tower_y + tower_positive_extent
+
+        assert tower_width <= 40.0
+        assert project_settings["prime_tower_brim_width"] == "0"
+        assert (
+            tower_max_x <= object_min_x
+            or object_max_x <= tower_min_x
+            or tower_max_y <= object_min_y
+            or object_max_y <= tower_min_y
+        )
+
+    def test_bambu_u1_large_overlay_keeps_bambu_template_placement(
+        self, tmp_path
+    ) -> None:
+        writer = writer_module.BambuStudio3MFWriter(
+            output_path=str(tmp_path / "snapmaker-u1-bambu-large-overlay.3mf"),
+            settings={},
+            color_mode="4-Color",
+            printer_id="snapmaker-u1",
+            slicer="BambuStudio",
+            nozzle_size="0.4",
+        )
+        large_overlay = trimesh.creation.box(extents=[200.0, 200.0, 1.0])
+        writer.add_mesh(large_overlay, "White", (255, 255, 255))
+
+        out_path = writer.export()
+
+        with zipfile.ZipFile(out_path) as package:
+            model_root = ET.fromstring(package.read("3D/3dmodel.model"))
+            project_settings = json.loads(
+                package.read("Metadata/project_settings.config").decode("utf-8")
+            )
+
+        template_settings = writer_module._load_legacy_project_template_if_available(
+            "snapmaker-u1",
+            "BambuStudio",
+            "0.4",
+        )
+        assert template_settings is not None
+        template_project_settings, _ = template_settings
+
+        core_ns = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
+        model_metadata = {
+            node.attrib["name"]: (node.text or "")
+            for node in model_root.findall("m:metadata", core_ns)
+        }
+        build_item = model_root.find("m:build/m:item", core_ns)
+        assert model_metadata["Application"].startswith("BambuStudio-")
+        assert "OrcaSlicer" not in model_metadata
+        assert build_item is not None
+
+        transform_values = [float(value) for value in build_item.attrib["transform"].split()]
+        expected_center = writer._get_printable_area_center(project_settings)
+        assert expected_center is not None
+        expected_x, expected_y = expected_center
+        assert transform_values[9] == pytest.approx(expected_x)
+        assert transform_values[10] == pytest.approx(expected_y)
+        assert project_settings["prime_tower_width"] == template_project_settings[
+            "prime_tower_width"
+        ]
+        assert project_settings["prime_tower_brim_width"] == template_project_settings[
+            "prime_tower_brim_width"
+        ]
+        assert project_settings["wipe_tower_x"] == template_project_settings[
+            "wipe_tower_x"
+        ]
+        assert project_settings["wipe_tower_y"] == template_project_settings[
+            "wipe_tower_y"
+        ]
 
     def test_orca_registry_u1_preserves_native_metadata_for_8c_exports(
         self, tmp_path

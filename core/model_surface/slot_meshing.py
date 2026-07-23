@@ -5,7 +5,6 @@ from collections.abc import Mapping, Sequence
 import numpy as np
 import trimesh
 
-from config import PrinterConfig
 from core.mesh_generators import BaseMesher
 
 _BOX_FACE_TEMPLATE = np.array(
@@ -34,6 +33,7 @@ def build_slot_box_scene_from_voxels(
     preview_colors: Mapping[object, object],
     target_h: int,
     pixel_scale: float,
+    layer_heights_mm: Sequence[float],
 ) -> trimesh.Scene:
     """Build a model-surface-safe slot scene from material voxels.
 
@@ -49,15 +49,26 @@ def build_slot_box_scene_from_voxels(
         raise ValueError("full_matrix must be a 3D voxel matrix.")
     if target_h <= 0 or pixel_scale <= 0:
         raise ValueError("target_h and pixel_scale must be positive.")
+    layer_heights = np.asarray(layer_heights_mm, dtype=np.float64)
+    if layer_heights.shape != (full_matrix.shape[0],):
+        raise ValueError("layer_heights_mm must match the voxel matrix Z depth.")
+    if not np.all(np.isfinite(layer_heights)) or np.any(layer_heights <= 0.0):
+        raise ValueError("layer_heights_mm must contain positive finite values.")
+    layer_z_boundaries_mm = np.concatenate(
+        (np.zeros(1, dtype=np.float64), np.cumsum(layer_heights)),
+    )
 
     scene = trimesh.Scene()
     transform = np.eye(4)
     transform[0, 0] = float(pixel_scale)
     transform[1, 1] = float(pixel_scale)
-    transform[2, 2] = float(PrinterConfig.LAYER_HEIGHT)
 
     for mat_id, slot_name in enumerate(slot_names):
-        layer_rectangles = _material_layer_rectangles(full_matrix, mat_id)
+        layer_rectangles = _material_layer_rectangles(
+            full_matrix,
+            mat_id,
+            layer_z_boundaries_mm,
+        )
         mesh = _build_box_mesh_without_shared_vertices(layer_rectangles, target_h)
         if mesh is None:
             continue
@@ -72,12 +83,19 @@ def build_slot_box_scene_from_voxels(
 def _material_layer_rectangles(
     full_matrix: np.ndarray,
     mat_id: int,
+    layer_z_boundaries_mm: np.ndarray,
 ) -> list[tuple[float, float, np.ndarray]]:
     layer_rectangles: list[tuple[float, float, np.ndarray]] = []
     for start_z, end_z, mask in BaseMesher._merge_layers_no_dilation(full_matrix, mat_id):
         rects = BaseMesher._greedy_rect_merge(mask)
         if rects.shape[0] > 0:
-            layer_rectangles.append((float(start_z), float(end_z + 1), rects))
+            layer_rectangles.append(
+                (
+                    float(layer_z_boundaries_mm[int(start_z)]),
+                    float(layer_z_boundaries_mm[int(end_z) + 1]),
+                    rects,
+                )
+            )
     return layer_rectangles
 
 

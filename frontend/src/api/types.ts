@@ -104,6 +104,7 @@ export type ConvertPreviewRequest = ConvertSourceSelection & {
   surface_selection_json?: string;
   surface_footprint_json?: string;
   surface_placement_json?: string;
+  surface_model_transform_json?: string;
 };
 
 export type ConvertGenerateRequest = ConvertPreviewRequest & {
@@ -385,12 +386,14 @@ export interface ModelSurfaceUploadResponse {
   status: string;
   model_file_id: string;
   summary: ModelSurfaceMeshSummary;
+  surface_candidates: ModelSurfaceCandidate[];
   preview_glb_url?: string | null;
   warnings: string[];
 }
 
 export interface ModelSurfaceHitTriangle {
   face_index?: number | null;
+  candidate_id?: string | null;
   point?: [number, number, number] | null;
   normal?: [number, number, number] | null;
   vertices?: [
@@ -398,6 +401,24 @@ export interface ModelSurfaceHitTriangle {
     [number, number, number],
     [number, number, number],
   ] | null;
+}
+
+export interface ModelSurfaceModelTransform {
+  rotation_deg: {
+    x: number;
+    y: number;
+    z: number;
+  };
+}
+
+export interface ModelSurfaceCandidate {
+  id: string;
+  face_index: number;
+  face_count: number;
+  area_mm2: number;
+  normal: [number, number, number];
+  plane_origin?: [number, number, number];
+  footprint: Record<string, unknown>;
 }
 
 export interface ModelSurfaceSelectResponse {

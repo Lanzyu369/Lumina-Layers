@@ -4,6 +4,7 @@ from dataclasses import asdict
 import json
 import os
 import tempfile
+from threading import Lock
 import uuid
 from pathlib import Path
 
@@ -21,17 +22,25 @@ from config import TEMP_DIR
 from core.model_surface.artwork import render_surface_artwork
 from core.model_surface.footprint import build_surface_footprint
 from core.model_surface.loader import load_model_surface_mesh
-from core.model_surface.selection import select_planar_component
+from core.model_surface.selection import (
+    face_index_from_surface_candidate_id,
+    list_planar_surface_candidates,
+    select_planar_component,
+)
 from core.model_surface.serialization import (
     surface_footprint_from_payload,
     surface_placement_from_payload,
 )
 from core.model_surface.types import ModelSurfaceError
+from core.model_surface.types import SurfaceCandidate, SurfaceSelection
 
 router = APIRouter(prefix="/model-surface")
 log = get_logger(__name__)
 _SUPPORTED_MODEL_EXTENSIONS = {".stl", ".obj"}
 _MODEL_SURFACE_FILE_TTL_SECONDS = 3600
+_SURFACE_CANDIDATE_CACHE_LIMIT = 128
+_SURFACE_CANDIDATE_CACHE_LOCK = Lock()
+_SURFACE_CANDIDATE_CACHE: dict[str, tuple[str, tuple[SurfaceCandidate, ...]]] = {}
 
 
 @router.post("/upload", response_model=ModelSurfaceUploadResponse)
@@ -58,6 +67,7 @@ async def upload_model_surface(
         with open(temp_path, "wb") as handle:
             handle.write(await model.read())
         loaded = load_model_surface_mesh(temp_path)
+        surface_candidates = list_planar_surface_candidates(loaded.mesh)
         file_id = registry.register_path(
             session_id=f"model-surface-{uuid.uuid4()}",
             path=temp_path,
@@ -66,6 +76,7 @@ async def upload_model_surface(
             is_public=False,
             purpose="model_surface_source",
         )
+        _cache_surface_candidates(file_id, temp_path, surface_candidates)
         registered = True
     except ModelSurfaceError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -82,6 +93,7 @@ async def upload_model_surface(
             "upload_filename": model.filename or "",
             "vertex_count": loaded.summary.vertex_count,
             "face_count": loaded.summary.face_count,
+            "surface_candidate_count": len(surface_candidates),
             "warning_count": len(warnings),
         },
     )
@@ -89,6 +101,10 @@ async def upload_model_surface(
         status="ok",
         model_file_id=file_id,
         summary=loaded.summary.to_public_dict(),
+        surface_candidates=[
+            _surface_candidate_to_public_dict(candidate)
+            for candidate in surface_candidates
+        ],
         warnings=warnings,
     )
 
@@ -109,14 +125,31 @@ def select_model_surface(
     model_path, _filename = resolved
 
     try:
-        loaded = load_model_surface_mesh(model_path)
-        face_index = request.hit.face_index
-        if face_index is None:
-            raise ModelSurfaceError(
-                "A face_index is required for model-surface selection."
+        if request.hit.candidate_id:
+            candidate = _resolve_cached_surface_candidate(
+                model_file_id=request.model_file_id,
+                model_path=model_path,
+                candidate_id=request.hit.candidate_id,
             )
-        selection = select_planar_component(loaded.mesh, int(face_index))
-        footprint = build_surface_footprint(loaded.mesh, selection.face_indices)
+            if candidate is None:
+                loaded = load_model_surface_mesh(model_path)
+                candidate = _resolve_surface_candidate(
+                    model_file_id=request.model_file_id,
+                    model_path=model_path,
+                    candidate_id=request.hit.candidate_id,
+                    loaded_mesh=loaded.mesh,
+                )
+            selection = _selection_from_candidate(candidate)
+            footprint = candidate.footprint
+        else:
+            loaded = load_model_surface_mesh(model_path)
+            face_index = request.hit.face_index
+            if face_index is None:
+                raise ModelSurfaceError(
+                    "A face_index is required for model-surface selection."
+                )
+            selection = select_planar_component(loaded.mesh, int(face_index))
+            footprint = build_surface_footprint(loaded.mesh, selection.face_indices)
     except ModelSurfaceError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -141,6 +174,82 @@ def select_model_surface(
     )
 
 
+def _surface_candidate_to_public_dict(candidate) -> dict:
+    payload = asdict(candidate)
+    payload.pop("face_indices", None)
+    return payload
+
+
+def _cache_surface_candidates(
+    model_file_id: str,
+    model_path: str,
+    candidates: tuple[SurfaceCandidate, ...],
+) -> None:
+    with _SURFACE_CANDIDATE_CACHE_LOCK:
+        _SURFACE_CANDIDATE_CACHE[model_file_id] = (str(model_path), candidates)
+        while len(_SURFACE_CANDIDATE_CACHE) > _SURFACE_CANDIDATE_CACHE_LIMIT:
+            oldest_key = next(iter(_SURFACE_CANDIDATE_CACHE))
+            _SURFACE_CANDIDATE_CACHE.pop(oldest_key, None)
+
+
+def _resolve_surface_candidate(
+    *,
+    model_file_id: str,
+    model_path: str,
+    candidate_id: str,
+    loaded_mesh,
+) -> SurfaceCandidate:
+    face_index_from_surface_candidate_id(candidate_id)
+    candidates = _get_cached_surface_candidates(model_file_id, model_path)
+    if candidates is None:
+        candidates = list_planar_surface_candidates(loaded_mesh)
+        _cache_surface_candidates(model_file_id, model_path, candidates)
+    for candidate in candidates:
+        if candidate.id == candidate_id:
+            return candidate
+    raise ModelSurfaceError("Selected surface candidate is unavailable.")
+
+
+def _resolve_cached_surface_candidate(
+    *,
+    model_file_id: str,
+    model_path: str,
+    candidate_id: str,
+) -> SurfaceCandidate | None:
+    face_index_from_surface_candidate_id(candidate_id)
+    candidates = _get_cached_surface_candidates(model_file_id, model_path)
+    if candidates is None:
+        return None
+    for candidate in candidates:
+        if candidate.id == candidate_id:
+            return candidate
+    raise ModelSurfaceError("Selected surface candidate is unavailable.")
+
+
+def _get_cached_surface_candidates(
+    model_file_id: str,
+    model_path: str,
+) -> tuple[SurfaceCandidate, ...] | None:
+    with _SURFACE_CANDIDATE_CACHE_LOCK:
+        cached = _SURFACE_CANDIDATE_CACHE.get(model_file_id)
+    if cached is None:
+        return None
+    cached_path, candidates = cached
+    if cached_path != str(model_path):
+        return None
+    return candidates
+
+
+def _selection_from_candidate(candidate: SurfaceCandidate) -> SurfaceSelection:
+    return SurfaceSelection(
+        face_indices=candidate.face_indices,
+        normal=candidate.normal,
+        plane_origin=candidate.plane_origin,
+        area_mm2=candidate.area_mm2,
+        face_count=candidate.face_count,
+    )
+
+
 def resolve_surface_preview_config(
     *,
     registry: FileRegistry,
@@ -149,16 +258,18 @@ def resolve_surface_preview_config(
     footprint_json: str | None,
     placement_json: str | None,
     source_path: str,
+    transform_json: str | None = None,
 ) -> dict | None:
     """Resolve and render optional model-surface preview config.
 
     解析并渲染可选的模型覆面预览配置。
     """
 
-    supplied = [model_file_id, selection_json, footprint_json, placement_json]
+    required_supplied = [model_file_id, selection_json, footprint_json, placement_json]
+    supplied = [*required_supplied, transform_json]
     if not any(supplied):
         return None
-    if not all(supplied):
+    if not all(required_supplied):
         raise HTTPException(
             status_code=422,
             detail="Model surface preview requires model, selection, footprint, and placement.",
@@ -174,6 +285,11 @@ def resolve_surface_preview_config(
         selection_payload = _loads_object(selection_json)
         footprint_payload = _loads_object(footprint_json)
         placement_payload = _loads_object(placement_json)
+        transform_payload = (
+            _surface_model_transform_from_payload(_loads_object(transform_json))
+            if transform_json
+            else _default_surface_model_transform()
+        )
         footprint = surface_footprint_from_payload(footprint_payload)
         placement = surface_placement_from_payload(placement_payload)
         rendered = render_surface_artwork(
@@ -196,6 +312,7 @@ def resolve_surface_preview_config(
         "surface_selection": selection_payload,
         "surface_footprint": asdict(footprint),
         "surface_placement": placement_public,
+        "surface_model_transform": transform_payload,
         "surface_artwork_path": str(rendered.output_path),
         "target_width_mm": rendered.target_width_mm,
         "target_height_mm": rendered.target_height_mm,
@@ -209,3 +326,21 @@ def _loads_object(raw: str | None) -> dict:
     if not isinstance(payload, dict):
         raise ValueError("payload must be a JSON object")
     return payload
+
+
+def _default_surface_model_transform() -> dict:
+    return {"rotation_deg": {"x": 0.0, "y": 0.0, "z": 0.0}}
+
+
+def _surface_model_transform_from_payload(payload: dict) -> dict:
+    rotation = payload.get("rotation_deg", {})
+    if not isinstance(rotation, dict):
+        raise ValueError("rotation_deg must be a JSON object")
+    normalized: dict[str, float] = {}
+    for axis in ("x", "y", "z"):
+        raw_value = rotation.get(axis, 0.0)
+        try:
+            normalized[axis] = float(raw_value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"rotation_deg.{axis} must be a number") from exc
+    return {"rotation_deg": normalized}

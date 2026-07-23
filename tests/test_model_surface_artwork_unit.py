@@ -26,6 +26,28 @@ def test_render_surface_artwork_masks_to_surface_bounds(tmp_path):
     assert rendered.getpixel((40, 20)) == (255, 0, 0, 255)
 
 
+def test_render_surface_artwork_edge_to_edge_preserves_source_aspect_ratio(tmp_path):
+    source = tmp_path / "wide-source.png"
+    image = Image.new("RGB", (80, 40), (0, 192, 0))
+    for x in range(16):
+        for y in range(40):
+            image.putpixel((x, y), (255, 0, 0))
+            image.putpixel((79 - x, y), (0, 0, 255))
+    image.save(source)
+
+    result = render_surface_artwork(
+        source_path=source,
+        footprint=_square_footprint(),
+        placement=SurfacePlacement(mode=EdgeMode.EDGE_TO_EDGE),
+        pixels_per_mm=4,
+        output_dir=tmp_path,
+    )
+
+    rendered = Image.open(result.output_path).convert("RGBA")
+    assert rendered.getpixel((4, 40)) == (0, 192, 0, 255)
+    assert rendered.getpixel((75, 40)) == (0, 192, 0, 255)
+
+
 def test_render_surface_artwork_keeps_footprint_hole_transparent(tmp_path):
     source = tmp_path / "source.png"
     Image.new("RGB", (40, 40), (0, 128, 255)).save(source)
@@ -74,4 +96,19 @@ def _footprint_with_hole() -> SurfaceFootprint:
         bounds_height_mm=20.0,
         area_mm2=384.0,
         hole_count=1,
+    )
+
+
+def _square_footprint() -> SurfaceFootprint:
+    footprint = _footprint()
+    return SurfaceFootprint(
+        frame=footprint.frame,
+        outer=((-10.0, -10.0), (10.0, -10.0), (10.0, 10.0), (-10.0, 10.0), (-10.0, -10.0)),
+        holes=(),
+        bounds_min=(-10.0, -10.0),
+        bounds_max=(10.0, 10.0),
+        bounds_width_mm=20.0,
+        bounds_height_mm=20.0,
+        area_mm2=400.0,
+        hole_count=0,
     )
