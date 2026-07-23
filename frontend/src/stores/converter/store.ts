@@ -2636,11 +2636,9 @@ const GLB_POLL_MAX_MS = 5 * 60_000;
 // 变了就退出，避免多路 polling 互相覆盖 previewGlbUrl。
 let _glbPollSequence = 0;
 let _generateRequestSequence = 0;
-let _previewRequestSequence = 0;
 
 /** Cancel every async task owned by the current preview input. */
 function _cancelPreviewWork(): void {
-  _previewRequestSequence += 1;
   if (_previewAbortController) {
     _previewAbortController.abort();
     _previewAbortController = null;
@@ -3194,19 +3192,27 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       }),
 
     setSelectedMaterialDirNames: (names: string[]) => {
+      const state = _get();
+      const currentBacking = state.materialBackingMaterialDirName;
+      const nextBacking =
+        currentBacking && names.includes(currentBacking)
+          ? currentBacking
+          : inferDefaultMaterialBackingDirName(names);
+      const selectionUnchanged =
+        names.length === state.selectedMaterialDirNames.length &&
+        names.every(
+          (name, index) => name === state.selectedMaterialDirNames[index],
+        );
+      if (selectionUnchanged && nextBacking === currentBacking) {
+        return;
+      }
+
       persistSelectedMaterialDirNames(names);
-      set((state) => {
-        const currentBacking = state.materialBackingMaterialDirName;
-        const nextBacking =
-          currentBacking && names.includes(currentBacking)
-            ? currentBacking
-            : inferDefaultMaterialBackingDirName(names);
-        persistMaterialBackingMaterialDirName(nextBacking);
-        return {
-          selectedMaterialDirNames: names,
-          materialBackingMaterialDirName: nextBacking,
-          ...buildPreviewSessionResetState(state, true),
-        };
+      persistMaterialBackingMaterialDirName(nextBacking);
+      set({
+        selectedMaterialDirNames: names,
+        materialBackingMaterialDirName: nextBacking,
+        ...buildPreviewSessionResetState(state, true),
       });
     },
     setMaterialLayerCount: (count: number) =>
@@ -6039,24 +6045,19 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         return;
       }
 
-      // Cancel any in-flight preview request and claim a fresh ownership id.
+      // Cancel any in-flight preview request.
       if (_previewAbortController) {
         _previewAbortController.abort();
       }
       const requestController = new AbortController();
       _previewAbortController = requestController;
       const { signal } = requestController;
-      const previewRequestSequence = ++_previewRequestSequence;
       const previewRequestRevision = state.previewRequestRevision;
-      const previewImageFile = state.imageFile;
       const isStalePreviewRequest = (): boolean => {
         const latest = _get();
         return (
           signal.aborted ||
-          _previewAbortController !== requestController ||
-          _previewRequestSequence !== previewRequestSequence ||
-          latest.previewRequestRevision !== previewRequestRevision ||
-          latest.imageFile !== previewImageFile
+          latest.previewRequestRevision !== previewRequestRevision
         );
       };
 
@@ -6367,10 +6368,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           "error",
         );
       } finally {
-        if (
-          _previewRequestSequence === previewRequestSequence &&
-          _previewAbortController === requestController
-        ) {
+        if (_previewAbortController === requestController) {
           _previewAbortController = null;
           _endPreviewTimer();
         }

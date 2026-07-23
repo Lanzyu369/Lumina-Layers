@@ -288,12 +288,13 @@ describe("useAutoPreview", () => {
     expect(mockSubmitPreview).toHaveBeenCalledTimes(1);
   });
 
-  it("regenerates after confirming the unchanged material selection cleared the result", () => {
+  it("keeps the current preview when the material selection is unchanged", () => {
     renderHook(() => useAutoPreview());
 
     act(() => {
       establishMaterialPreviewBaseline();
     });
+    const stateBeforeConfirmation = useConverterStore.getState();
     act(() => {
       useConverterStore.getState().setSelectedMaterialDirNames([
         "profile/yellow",
@@ -304,8 +305,23 @@ describe("useAutoPreview", () => {
       vi.advanceTimersByTime(300);
     });
 
-    expect(useConverterStore.getState().previewImageUrl).toBeNull();
-    expect(mockSubmitPreview).toHaveBeenCalledTimes(1);
+    const stateAfterConfirmation = useConverterStore.getState();
+    expect(stateAfterConfirmation).toBe(stateBeforeConfirmation);
+    expect(stateAfterConfirmation.sessionId).toBe("material-session-old");
+    expect(stateAfterConfirmation.previewImageUrl).toBe(
+      "/api/files/preview-old.png",
+    );
+    expect(stateAfterConfirmation.previewGlbUrl).toBe(
+      "/api/files/preview-old.glb",
+    );
+    expect(stateAfterConfirmation.layerImages).toEqual([
+      {
+        layer_index: 0,
+        name: "layer-1",
+        url: "/api/files/layer-old.png",
+      },
+    ]);
+    expect(mockSubmitPreview).not.toHaveBeenCalled();
   });
 
   it("keeps a pending refresh across an actual hook unmount and remount", () => {
