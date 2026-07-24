@@ -53,7 +53,7 @@ def test_model_surface_pattern_turns_face_down_single_side_outward():
     assert scene.geometry["Red"].bounds[1, 2] > scene.geometry["White"].bounds[1, 2]
 
 
-def test_model_surface_face_down_pattern_keeps_print_mirror_on_x():
+def test_model_surface_face_down_pattern_defers_print_mirror_to_final_orientation():
     full_matrix = np.full((1, 1, 4), -1, dtype=np.int16)
     full_matrix[0, 0, 0] = 0
 
@@ -70,7 +70,7 @@ def test_model_surface_face_down_pattern_keeps_print_mirror_on_x():
         }
     )
 
-    assert scene.geometry["Artwork"].bounds[:, 0] == pytest.approx([3.0, 4.0])
+    assert scene.geometry["Artwork"].bounds[:, 0] == pytest.approx([0.0, 1.0])
 
 
 def test_model_surface_face_up_pattern_does_not_add_print_mirror():
@@ -269,7 +269,7 @@ def test_model_surface_pattern_preserves_short_per_pixel_display_stacks():
     )
 
     artwork = scene.geometry["Artwork"]
-    short_stack_vertices = artwork.vertices[artwork.vertices[:, 0] < 1.0]
+    short_stack_vertices = artwork.vertices[artwork.vertices[:, 0] > 1.0]
     assert short_stack_vertices[:, 2].min() == pytest.approx(0.18)
     assert short_stack_vertices[:, 2].max() == pytest.approx(0.22)
 

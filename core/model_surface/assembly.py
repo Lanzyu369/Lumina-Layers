@@ -114,12 +114,66 @@ def apply_model_transform_to_overlay_scene(
     )
     matrix = _rotation_matrix_about_anchor(rotation_deg, anchor)
     transformed_scene = result.scene.copy()
-    transformed_scene.apply_transform(matrix)
+    _apply_transform_to_scene_geometry(transformed_scene, matrix)
     return OverlaySceneResult(
         scene=transformed_scene,
         slot_names=list(result.slot_names),
         preview_colors=dict(result.preview_colors),
     )
+
+
+def orient_overlay_scene_for_print(
+    result: OverlaySceneResult,
+    face_orientation: str,
+) -> OverlaySceneResult:
+    """Orient the assembled display face for printing.
+
+    按打印朝向放置已装配场景；面朝下时将覆面转到底部。
+
+    Args:
+        result: Assembled model and embedded artwork.
+            已装配的模型与嵌入图案。
+        face_orientation: Canonical ``down`` or ``up`` orientation.
+            标准化后的 ``down`` 或 ``up`` 朝向。
+
+    Returns:
+        A scene whose decorated face follows the requested print orientation.
+        覆面符合所需打印朝向的场景。
+    """
+
+    normalized_orientation = str(face_orientation or "down").lower()
+    if normalized_orientation == "up":
+        return result
+    if normalized_orientation != "down":
+        raise ModelSurfaceError("Model-surface overlay requires a single display face.")
+
+    bounds = np.asarray(result.scene.bounds, dtype=np.float64)
+    if bounds.shape != (2, 3) or not np.all(np.isfinite(bounds)):
+        raise ModelSurfaceError("Overlay scene has invalid bounds.")
+    center = (bounds[0] + bounds[1]) / 2.0
+    face_down_rotation = trimesh.transformations.rotation_matrix(
+        np.pi,
+        [0.0, 1.0, 0.0],
+        point=center,
+    )
+    transformed_scene = result.scene.copy()
+    _apply_transform_to_scene_geometry(transformed_scene, face_down_rotation)
+    return OverlaySceneResult(
+        scene=transformed_scene,
+        slot_names=list(result.slot_names),
+        preview_colors=dict(result.preview_colors),
+    )
+
+
+def _apply_transform_to_scene_geometry(
+    scene: trimesh.Scene,
+    matrix: np.ndarray,
+) -> None:
+    """Apply a transform to raw meshes consumed by the 3MF writer."""
+
+    for geometry in scene.geometry.values():
+        if isinstance(geometry, trimesh.Trimesh):
+            geometry.apply_transform(matrix)
 
 
 def cut_surface_pocket(

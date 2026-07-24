@@ -12,6 +12,7 @@ from core.model_surface.assembly import (
     OverlaySceneResult,
     apply_model_transform_to_overlay_scene,
     build_embedded_overlay_scene,
+    orient_overlay_scene_for_print,
 )
 from core.model_surface.loader import load_model_surface_mesh
 from core.model_surface.slot_meshing import build_slot_box_scene_from_voxels
@@ -55,7 +56,14 @@ def build_surface_overlay_scene(
         base_slot_name="surface_base",
         base_color=(245, 245, 245),
     )
-    return apply_model_transform_to_overlay_scene(overlay, model_transform)
+    transformed_overlay = apply_model_transform_to_overlay_scene(
+        overlay,
+        model_transform,
+    )
+    return orient_overlay_scene_for_print(
+        transformed_overlay,
+        str(ctx.get("bambu_face_orientation", "down") or "down"),
+    )
 
 
 def _build_pattern_scene(ctx: dict):
@@ -161,6 +169,32 @@ def _build_vector_pattern_scene(ctx: dict) -> trimesh.Scene:
         )
 
     pattern_bounds = np.asarray(pattern_scene.bounds, dtype=np.float64)
+    face_orientation = str(
+        ctx.get("bambu_face_orientation", "down") or "down"
+    ).lower()
+    if face_orientation == "down":
+        # The native vector engine has already prepared its single-sided
+        # scene for direct face-down export. Normalize it back to a face-up
+        # local pattern before embedding; the assembled model receives the
+        # final rigid face-down rotation as one unit.
+        normalize_for_embedding = np.asarray(
+            [
+                [-1.0, 0.0, 0.0, logical_width_mm],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, -1.0, pattern_bounds[0, 2] + pattern_bounds[1, 2]],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+            dtype=np.float64,
+        )
+        for geometry in pattern_scene.geometry.values():
+            if isinstance(geometry, trimesh.Trimesh):
+                geometry.apply_transform(normalize_for_embedding)
+        pattern_bounds = np.asarray(pattern_scene.bounds, dtype=np.float64)
+    elif face_orientation != "up":
+        raise ModelSurfaceError(
+            "Model-surface overlay requires a single display face."
+        )
+
     logical_z_min = float(pattern_bounds[0, 2])
     layer_heights_mm = (layer_height_mm,) * layer_count
     pattern_scene.metadata[MODEL_SURFACE_DISPLAY_Z_BOUNDS_KEY] = (
@@ -232,13 +266,10 @@ def _resolve_surface_display_stack(
 
     face_orientation = str(ctx.get("bambu_face_orientation", "down") or "down").lower()
     if face_orientation == "down":
-        # Match the regular raster exporter: reverse the display stack so its
-        # viewing layer faces outward, and keep the X mirror required when the
-        # decorated face is printed against the build plate.
-        display_matrix = np.flip(
-            full_matrix[:display_layer_count],
-            axis=(0, 2),
-        )
+        # Reverse only the display stack so its viewing layer faces outward
+        # while the pattern is embedded. The final rigid rotation of the
+        # assembled model supplies the print-time X mirror.
+        display_matrix = np.flip(full_matrix[:display_layer_count], axis=0)
     elif face_orientation == "up":
         display_matrix = full_matrix[-display_layer_count:]
     else:
