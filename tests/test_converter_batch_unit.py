@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import inspect
 import json
 import os
 import tempfile
@@ -676,16 +677,21 @@ class TestBatchWorkerPoolSubmit:
 
         assert response.status_code == 200
         call_args = _mock_pool.submit.call_args
-        assert call_args[0][2] == "__material_archive__"
-        assert call_args[0][8] is None
-        assert call_args[0][9] is None
-        assert call_args[0][28] == "material_archive"
-        assert call_args[0][29] == ["brand/red", "brand/white"]
-        assert call_args[0][30] == 7
-        assert call_args[0][31] == 0.06
-        assert call_args[0][32] == 33
-        assert call_args[0][33] == 1
-        assert call_args[0][38] is True
+        from api.workers.converter_workers import worker_batch_convert_item
+
+        worker_args = inspect.signature(worker_batch_convert_item).bind(
+            *call_args.args[1:]
+        ).arguments
+        assert worker_args["lut_path"] == "__material_archive__"
+        assert worker_args["color_layers"] is None
+        assert worker_args["layer_height_mm"] is None
+        assert worker_args["material_source"] == "material_archive"
+        assert worker_args["selected_materials"] == ["brand/red", "brand/white"]
+        assert worker_args["material_layer_count"] == 7
+        assert worker_args["material_layer_height_mm"] == 0.06
+        assert worker_args["material_grid_resolution"] == 33
+        assert worker_args["material_backing_material_index"] == 1
+        assert worker_args["separate_backing"] is True
 
     def test_batch_submits_native_bundle_source_to_worker(self) -> None:
         """Batch endpoint resolves reverse-LUT native bundle params."""
