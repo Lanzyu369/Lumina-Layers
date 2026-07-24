@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 import trimesh
@@ -11,7 +13,10 @@ from core.model_surface.assembly import (
     apply_model_transform_to_overlay_scene,
     build_embedded_overlay_scene,
 )
-from core.model_surface.pipeline import _build_pattern_scene
+from core.model_surface.pipeline import (
+    _build_pattern_scene,
+    build_surface_overlay_scene,
+)
 from core.model_surface.types import ModelSurfaceError, PlaneFrame, SurfaceFootprint
 
 
@@ -58,7 +63,7 @@ def test_build_embedded_overlay_scene_keeps_bounds_and_adds_base_slot():
     assert result.scene.bounds[1][2] == pytest.approx(base.bounds[1][2])
 
 
-def test_build_embedded_overlay_scene_preserves_transparent_canvas_margins():
+def test_build_embedded_overlay_scene_preserves_source_orientation_and_canvas_margins():
     full_matrix = np.full((1, 10, 20), -1, dtype=np.int16)
     full_matrix[0, 1:3, 2:6] = 0
     pattern = _build_pattern_scene(
@@ -112,6 +117,114 @@ def test_build_embedded_overlay_scene_preserves_transparent_canvas_margins():
         [4.0, 2.0],
         atol=1e-6,
     )
+
+
+def test_native_vector_pattern_is_normalized_before_surface_assembly():
+    artwork = trimesh.creation.box(extents=(2.0, 6.0, 0.08))
+    artwork.apply_translation((3.0, 5.0, 0.04))
+    export_mirror = np.asarray(
+        [
+            [-1.0, 0.0, 0.0, 20.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ]
+    )
+    artwork.apply_transform(export_mirror)
+    source_scene = trimesh.Scene({"Black": artwork})
+
+    pattern = _build_pattern_scene(
+        {
+            "is_svg_vector": True,
+            "scene": source_scene,
+            "vector_analysis": SimpleNamespace(
+                slot_names=("Black",),
+                bbox=(0.0, 0.0, 20.0, 10.0),
+                scale_factor=1.0,
+                num_layers=1,
+            ),
+            "layer_height_mm": 0.08,
+        }
+    )
+
+    np.testing.assert_allclose(
+        source_scene.geometry["Black"].bounds[:, 0],
+        [16.0, 18.0],
+        atol=1e-6,
+    )
+    np.testing.assert_allclose(
+        pattern.geometry["Black"].bounds[:, 0],
+        [2.0, 4.0],
+        atol=1e-6,
+    )
+
+
+def test_build_surface_overlay_scene_orients_selected_face_toward_build_plate(
+    monkeypatch,
+):
+    base = trimesh.creation.box(extents=(20.0, 10.0, 2.0))
+    base.apply_translation((0.0, 0.0, 1.0))
+    artwork = trimesh.creation.box(extents=(2.0, 2.0, 0.4))
+    artwork.apply_translation((-8.0, 0.0, 1.8))
+    assembled = OverlaySceneResult(
+        scene=trimesh.Scene({"surface_base": base, "Artwork": artwork}),
+        slot_names=["surface_base", "Artwork"],
+        preview_colors={
+            "surface_base": (245, 245, 245),
+            "Artwork": (255, 0, 0),
+        },
+    )
+    footprint = SurfaceFootprint(
+        frame=PlaneFrame(
+            origin=(0.0, 0.0, 2.0),
+            normal=(0.0, 0.0, 1.0),
+            u_axis=(1.0, 0.0, 0.0),
+            v_axis=(0.0, 1.0, 0.0),
+        ),
+        outer=((-10.0, -5.0), (10.0, -5.0), (10.0, 5.0), (-10.0, 5.0)),
+        holes=(),
+        bounds_min=(-10.0, -5.0),
+        bounds_max=(10.0, 5.0),
+        bounds_width_mm=20.0,
+        bounds_height_mm=10.0,
+        area_mm2=200.0,
+        hole_count=0,
+    )
+    monkeypatch.setattr(
+        "core.model_surface.pipeline.load_model_surface_mesh",
+        lambda _path: SimpleNamespace(mesh=base),
+    )
+    monkeypatch.setattr(
+        "core.model_surface.pipeline.build_image_model_context",
+        lambda **_kwargs: {
+            "full_matrix": np.zeros((1, 1, 1), dtype=np.int16),
+            "slot_names": ["Artwork"],
+            "preview_colors": {0: [255, 0, 0, 255]},
+            "target_h": 1,
+            "pixel_scale": 1.0,
+            "color_layers": 1,
+            "layer_height_mm": 0.4,
+            "bambu_face_orientation": "down",
+        },
+    )
+    monkeypatch.setattr(
+        "core.model_surface.pipeline.build_embedded_overlay_scene",
+        lambda **_kwargs: assembled,
+    )
+
+    result = build_surface_overlay_scene(
+        model_path="plate.stl",
+        artwork_image_path="art.png",
+        lut_path="colors.npy",
+        converter_params={},
+        footprint=footprint,
+        pocket_depth_mm=0.4,
+    )
+
+    artwork_bounds = np.asarray(result.scene.geometry["Artwork"].bounds)
+    np.testing.assert_allclose(artwork_bounds[:, 0], [7.0, 9.0], atol=1e-6)
+    np.testing.assert_allclose(artwork_bounds[:, 2], [0.0, 0.4], atol=1e-6)
+    np.testing.assert_allclose(result.scene.bounds[:, 2], [0.0, 2.0], atol=1e-6)
 
 
 def test_pattern_logical_xy_bounds_reject_geometry_outside_canvas():

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 import zipfile
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -430,6 +431,16 @@ def test_worker_generates_native_vector_surface_3mf_without_board_or_margin_stre
             object_model = ET.fromstring(
                 archive.read("3D/Objects/object_1.model")
             )
+            cover_thumbnail = np.asarray(
+                Image.open(
+                    BytesIO(
+                        archive.read(
+                            "Auxiliaries/.thumbnails/thumbnail_middle.png"
+                        )
+                    )
+                ).convert("RGB")
+            )
+        assert np.any(cover_thumbnail < 250)
         objects = object_model.findall("m:resources/m:object", core_ns)
         names = [str(node.attrib.get("name") or "") for node in objects]
         assert names.count("surface_base") == 1
@@ -443,15 +454,32 @@ def test_worker_generates_native_vector_surface_3mf_without_board_or_margin_stre
             (
                 float(vertex.attrib["x"]),
                 float(vertex.attrib["y"]),
+                float(vertex.attrib["z"]),
             )
             for node in color_objects
             for vertex in node.findall("m:mesh/m:vertices/m:vertex", core_ns)
         ]
+        base_vertices = [
+            (
+                float(vertex.attrib["x"]),
+                float(vertex.attrib["y"]),
+                float(vertex.attrib["z"]),
+            )
+            for vertex in objects[0].findall(
+                "m:mesh/m:vertices/m:vertex",
+                core_ns,
+            )
+        ]
         color_x = [vertex[0] for vertex in color_vertices]
         color_y = [vertex[1] for vertex in color_vertices]
+        color_z = [vertex[2] for vertex in color_vertices]
+        base_z = [vertex[2] for vertex in base_vertices]
         assert max(color_x) - min(color_x) == pytest.approx(7.0, abs=0.05)
         assert max(color_y) - min(color_y) == pytest.approx(6.0, abs=0.05)
-        assert (min(color_x) + max(color_x)) / 2.0 != pytest.approx(0.0, abs=0.5)
+        assert (min(color_x) + max(color_x)) / 2.0 > 0.5
+        assert min(color_z) < min(base_z)
+        assert max(color_z) <= min(base_z) + 0.05
+        assert max(color_z) < max(base_z)
     finally:
         output_path.unlink(missing_ok=True)
 

@@ -5339,14 +5339,14 @@ describe("ModelSurfaceSelector3D", () => {
     });
   });
 
-  it("uses stable texture sampling for selected artwork during oblique camera movement", () => {
+  it("keeps the canvas top aligned with surface +V during texture sampling", () => {
     const canvas = document.createElement("canvas");
     const texture = new THREE.CanvasTexture(canvas);
 
     configureSurfaceArtworkTextureForPreview(texture);
 
     expect(texture.colorSpace).toBe(THREE.SRGBColorSpace);
-    expect(texture.flipY).toBe(false);
+    expect(texture.flipY).toBe(true);
     expect(texture.generateMipmaps).toBe(false);
     expect(texture.minFilter).toBe(THREE.LinearFilter);
     expect(texture.magFilter).toBe(THREE.LinearFilter);

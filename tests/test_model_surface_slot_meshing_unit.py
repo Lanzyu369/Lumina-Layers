@@ -53,6 +53,46 @@ def test_model_surface_pattern_turns_face_down_single_side_outward():
     assert scene.geometry["Red"].bounds[1, 2] > scene.geometry["White"].bounds[1, 2]
 
 
+def test_model_surface_face_down_pattern_defers_print_mirror_to_final_orientation():
+    full_matrix = np.full((1, 1, 4), -1, dtype=np.int16)
+    full_matrix[0, 0, 0] = 0
+
+    scene = _build_pattern_scene(
+        {
+            "full_matrix": full_matrix,
+            "slot_names": ["Artwork"],
+            "preview_colors": {0: [255, 0, 0, 255]},
+            "target_h": 1,
+            "pixel_scale": 1.0,
+            "color_layers": 1,
+            "layer_height_mm": 0.08,
+            "bambu_face_orientation": "down",
+        }
+    )
+
+    assert scene.geometry["Artwork"].bounds[:, 0] == pytest.approx([0.0, 1.0])
+
+
+def test_model_surface_face_up_pattern_does_not_add_print_mirror():
+    full_matrix = np.full((1, 1, 4), -1, dtype=np.int16)
+    full_matrix[0, 0, 0] = 0
+
+    scene = _build_pattern_scene(
+        {
+            "full_matrix": full_matrix,
+            "slot_names": ["Artwork"],
+            "preview_colors": {0: [255, 0, 0, 255]},
+            "target_h": 1,
+            "pixel_scale": 1.0,
+            "color_layers": 1,
+            "layer_height_mm": 0.08,
+            "bambu_face_orientation": "up",
+        }
+    )
+
+    assert scene.geometry["Artwork"].bounds[:, 0] == pytest.approx([0.0, 1.0])
+
+
 @pytest.mark.parametrize("layer_count", [7, 10])
 @pytest.mark.parametrize("layer_height_mm", [0.04, 0.08, 0.10])
 def test_model_surface_pattern_uses_only_display_stack_height(

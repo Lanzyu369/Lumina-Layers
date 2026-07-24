@@ -14,6 +14,8 @@ Design rules:
 - All imports of core modules are lazy (inside function body).
 """
 
+import logging
+
 from config import SVG_PIXELS_PER_MM_DEFAULT
 
 _HIGH_FIDELITY_PIXELS_PER_MM = 10.0
@@ -1645,6 +1647,13 @@ def worker_generate_model_surface_overlay(
         )
         fd, out_path = tempfile.mkstemp(suffix=".3mf", dir=TEMP_DIR)
         os.close(fd)
+        cover_source = _resolve_model_surface_cover_source(
+            image_path,
+            target_width_mm=float(
+                converter_params.get("target_width_mm", 60.0)
+            ),
+            log=log,
+        )
         export_scene_with_bambu_metadata(
             scene=overlay.scene,
             output_path=out_path,
@@ -1656,7 +1665,7 @@ def worker_generate_model_surface_overlay(
             printer_id=str(normalized_params.get("printer_id", "bambu-h2d")),
             slicer=str(normalized_params.get("slicer", "BambuStudio")),
             nozzle_size=str(normalized_params.get("nozzle_size", "0.4")),
-            cover_source=image_path,
+            cover_source=cover_source,
             device_profile_id=normalized_params.get("device_profile_id") or None,
             enable_base_layer_height_modifier=False,
         )
@@ -1689,6 +1698,53 @@ def worker_generate_model_surface_overlay(
         "glb_path": None,
         "status_msg": "Surface overlay model generated",
     }
+
+
+def _resolve_model_surface_cover_source(
+    image_path: str,
+    *,
+    target_width_mm: float,
+    log: logging.Logger,
+) -> str | bytes | None:
+    """Return a writer-compatible cover source for model-surface exports."""
+
+    from pathlib import Path
+
+    if Path(image_path).suffix.lower() != ".svg":
+        return image_path
+
+    from io import BytesIO
+
+    import numpy as np
+    from PIL import Image
+
+    from core.pipeline.processing_ops.svg_rasterizer import rasterize_svg
+
+    try:
+        cover_rgba = rasterize_svg(
+            image_path,
+            float(target_width_mm),
+            pixels_per_mm=2.0,
+            crop_to_content=False,
+        )
+        cover_image = Image.fromarray(
+            np.asarray(cover_rgba, dtype=np.uint8),
+            mode="RGBA",
+        )
+        cover_buffer = BytesIO()
+        cover_image.save(cover_buffer, format="PNG", optimize=False)
+        return cover_buffer.getvalue()
+    except (OSError, ValueError, RuntimeError, TimeoutError, ImportError) as exc:
+        log.warning(
+            "Model-surface SVG cover render failed; using placeholder",
+            extra={
+                "event": "model_surface_cover_render_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+                "path": image_path,
+            },
+        )
+        return None
 
 
 def _resolve_model_surface_display_layer_height_mm(
