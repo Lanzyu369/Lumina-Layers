@@ -3,6 +3,9 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 import numpy as np
+import shapely.geometry as sg
+from shapely.geometry.base import BaseGeometry
+from shapely.ops import unary_union
 import trimesh
 
 from core.mesh_generators import BaseMesher
@@ -24,6 +27,57 @@ _BOX_FACE_TEMPLATE = np.array(
     ],
     dtype=np.int64,
 )
+
+
+def build_printable_footprint_from_voxels(
+    *,
+    full_matrix: np.ndarray,
+    material_count: int,
+    target_h: int,
+    pixel_scale: float,
+) -> BaseGeometry:
+    """Build the exact XY footprint occupied by printable material voxels.
+
+    构建实际可打印材料体素占据的精确 XY 轮廓。
+
+    A pixel belongs to the footprint only when at least one displayed layer
+    references a valid material slot. The pixel-corner coordinates and Y-axis
+    flip intentionally match :func:`build_slot_box_scene_from_voxels`.
+
+    只有展示层中至少一层引用合法材料槽时，该像素才属于轮廓。像素角点坐标
+    和 Y 轴翻转规则与 :func:`build_slot_box_scene_from_voxels` 保持一致。
+    """
+
+    matrix = np.asarray(full_matrix)
+    if matrix.ndim != 3:
+        raise ValueError("full_matrix must be a 3D voxel matrix.")
+    if material_count <= 0:
+        raise ValueError("material_count must be positive.")
+    if target_h <= 0 or pixel_scale <= 0:
+        raise ValueError("target_h and pixel_scale must be positive.")
+
+    printable = np.any(
+        (matrix >= 0) & (matrix < int(material_count)),
+        axis=0,
+    )
+    rectangles = BaseMesher._greedy_rect_merge(printable)
+    if rectangles.shape[0] == 0:
+        return sg.GeometryCollection()
+
+    scale = float(pixel_scale)
+    boxes = []
+    for x0, y0, x1, y1 in rectangles:
+        world_y0 = float(target_h) - float(y1)
+        world_y1 = float(target_h) - float(y0)
+        boxes.append(
+            sg.box(
+                float(x0) * scale,
+                world_y0 * scale,
+                float(x1) * scale,
+                world_y1 * scale,
+            )
+        )
+    return unary_union(boxes)
 
 
 def build_slot_box_scene_from_voxels(

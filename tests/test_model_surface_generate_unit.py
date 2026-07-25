@@ -25,6 +25,52 @@ from core.model_surface.assembly import OverlaySceneResult
 from core.pipeline.s06_voxel_building import _build_voxel_matrix
 
 
+def _mesh_from_3mf_object(
+    node: ET.Element,
+    namespace: dict[str, str],
+) -> trimesh.Trimesh:
+    vertices = np.asarray(
+        [
+            (
+                float(vertex.attrib["x"]),
+                float(vertex.attrib["y"]),
+                float(vertex.attrib["z"]),
+            )
+            for vertex in node.findall(
+                "m:mesh/m:vertices/m:vertex",
+                namespace,
+            )
+        ],
+        dtype=np.float64,
+    )
+    faces = np.asarray(
+        [
+            (
+                int(triangle.attrib["v1"]),
+                int(triangle.attrib["v2"]),
+                int(triangle.attrib["v3"]),
+            )
+            for triangle in node.findall(
+                "m:mesh/m:triangles/m:triangle",
+                namespace,
+            )
+        ],
+        dtype=np.int64,
+    )
+    return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+
+
+def _coplanar_xy_area(mesh: trimesh.Trimesh, z_mm: float) -> float:
+    triangles = np.asarray(mesh.triangles, dtype=np.float64)
+    on_plane = np.all(np.isclose(triangles[:, :, 2], z_mm, atol=1e-6), axis=1)
+    edge_a = triangles[on_plane, 1, :2] - triangles[on_plane, 0, :2]
+    edge_b = triangles[on_plane, 2, :2] - triangles[on_plane, 0, :2]
+    return float(
+        np.abs(edge_a[:, 0] * edge_b[:, 1] - edge_a[:, 1] * edge_b[:, 0]).sum()
+        * 0.5
+    )
+
+
 @pytest.fixture()
 def generate_state():
     store = SessionStore(ttl=1800)
@@ -449,6 +495,12 @@ def test_worker_generates_native_vector_surface_3mf_without_board_or_margin_stre
             node for node in objects if node.attrib.get("name") != "surface_base"
         ]
         assert len(color_objects) >= 2
+        base_object = next(
+            node
+            for node in objects
+            if node.attrib.get("name") == "surface_base"
+        )
+        base_mesh = _mesh_from_3mf_object(base_object, core_ns)
 
         color_vertices = [
             (
@@ -477,9 +529,118 @@ def test_worker_generates_native_vector_surface_3mf_without_board_or_margin_stre
         assert max(color_x) - min(color_x) == pytest.approx(7.0, abs=0.05)
         assert max(color_y) - min(color_y) == pytest.approx(6.0, abs=0.05)
         assert (min(color_x) + max(color_x)) / 2.0 > 0.5
-        assert min(color_z) < min(base_z)
-        assert max(color_z) <= min(base_z) + 0.05
+        assert min(base_z) == pytest.approx(min(color_z), abs=1e-6)
+        assert _coplanar_xy_area(base_mesh, min(color_z)) == pytest.approx(
+            164.0,
+            abs=0.1,
+        )
         assert max(color_z) < max(base_z)
+    finally:
+        output_path.unlink(missing_ok=True)
+
+
+def test_worker_preserves_surface_under_transparent_png(tmp_path):
+    image_path = tmp_path / "surface-art.png"
+    model_path = tmp_path / "plate.stl"
+    rgba = np.zeros((10, 20, 4), dtype=np.uint8)
+    rgba[2:8, 2:5] = (255, 0, 0, 255)
+    rgba[2:8, 6:9] = (0, 0, 255, 255)
+    Image.fromarray(rgba, mode="RGBA").save(image_path)
+    trimesh.creation.box(extents=(20.0, 10.0, 2.0)).export(model_path)
+    lut_path = (
+        Path(__file__).resolve().parents[1]
+        / "lut-preset"
+        / "snapmaker"
+        / "快造&4色PLA&RYBW.npy"
+    )
+
+    from api.workers.converter_workers import worker_generate_model_surface_overlay
+
+    result = worker_generate_model_surface_overlay(
+        str(image_path),
+        str(lut_path),
+        {
+            "surface_model_path": str(model_path),
+            "surface_footprint": {
+                "frame": {
+                    "origin": [0.0, 0.0, 1.0],
+                    "normal": [0.0, 0.0, 1.0],
+                    "u_axis": [1.0, 0.0, 0.0],
+                    "v_axis": [0.0, 1.0, 0.0],
+                },
+                "outer": [
+                    [-10.0, -5.0],
+                    [10.0, -5.0],
+                    [10.0, 5.0],
+                    [-10.0, 5.0],
+                    [-10.0, -5.0],
+                ],
+                "holes": [],
+                "bounds_width_mm": 20.0,
+                "bounds_height_mm": 10.0,
+            },
+            "surface_pocket_depth_mm": 0.4,
+            "converter_params": {
+                "target_width_mm": 20.0,
+                "spacer_thick": 1.2,
+                "structure_mode": "Single-sided",
+                "color_mode": "4-Color (RYBW)",
+                "modeling_mode": CoreModelingMode.HIGH_FIDELITY,
+                "material_source": "lut",
+                "color_layers": 7,
+                "layer_height_mm": 0.08,
+                "backing_color_id": 0,
+                "separate_backing": False,
+                "add_loop": False,
+                "enable_relief": False,
+                "enable_cloisonne": False,
+                "enable_coating": False,
+                "enable_outline": False,
+                "center_on_bed": False,
+            },
+            "printer_id": "snapmaker-u1",
+            "slicer": "OrcaSlicer",
+            "nozzle_size": "0.4",
+        },
+    )
+
+    output_path = Path(result["threemf_path"])
+    try:
+        core_ns = {"m": "http://schemas.microsoft.com/3dmanufacturing/core/2015/02"}
+        with zipfile.ZipFile(output_path, "r") as archive:
+            object_model = ET.fromstring(archive.read("3D/Objects/object_1.model"))
+        objects = object_model.findall("m:resources/m:object", core_ns)
+        base_object = next(
+            node
+            for node in objects
+            if node.attrib.get("name") == "surface_base"
+        )
+        color_objects = [
+            node
+            for node in objects
+            if node.attrib.get("name") != "surface_base"
+        ]
+        base_mesh = _mesh_from_3mf_object(base_object, core_ns)
+        color_meshes = [
+            _mesh_from_3mf_object(node, core_ns)
+            for node in color_objects
+        ]
+        visible_z = min(
+            float(mesh.bounds[0, 2])
+            for mesh in color_meshes
+        )
+        base_surface_area = _coplanar_xy_area(base_mesh, visible_z)
+        artwork_surface_area = sum(
+            _coplanar_xy_area(mesh, visible_z)
+            for mesh in color_meshes
+        )
+
+        assert base_mesh.bounds[0, 2] == pytest.approx(visible_z, abs=1e-6)
+        assert base_surface_area > 100.0
+        assert base_surface_area + artwork_surface_area == pytest.approx(
+            200.0,
+            abs=0.2,
+        )
     finally:
         output_path.unlink(missing_ok=True)
 
