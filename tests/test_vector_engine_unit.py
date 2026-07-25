@@ -1040,7 +1040,7 @@ class TestVectorBackingColorIdRegression:
 class TestVectorPreviewBackingMaskRegression:
     """Preview cache must preserve the backing footprint used by build_mesh."""
 
-    def test_preview_cache_backing_mask_extends_past_visible_shapes(self):
+    def test_preview_cache_backing_mask_excludes_transparent_canvas(self):
         visible_shape = box(4, 4, 16, 16)
         full_backing = box(0, 0, 20, 20)
         analysis = VectorAnalysis(
@@ -1075,7 +1075,8 @@ class TestVectorPreviewBackingMaskRegression:
 
         assert "backing_mask" in cache
         assert cache["backing_mask"].shape == cache["mask_solid"].shape
-        assert np.count_nonzero(cache["backing_mask"] & ~cache["mask_solid"]) > 0
+        assert cache["backing_mask"][100, 100]
+        assert not cache["backing_mask"][10, 10]
 
     def test_preview_cache_rasterizes_shape_masks_without_full_canvas_allocations(self, monkeypatch):
         shape_a = box(2, 2, 8, 8)
@@ -1264,7 +1265,7 @@ class TestVectorCoatingBuildMeshRegression:
         assert coating.bounds[1][2] == pytest.approx(0.0)
         assert analysis.preview_colors["Coating"] == [200, 200, 200, 80]
 
-    def test_image_vectorizer_bounds_make_board_and_coating_complete(self):
+    def test_image_vectorizer_bounds_do_not_fill_transparent_board_or_coating(self):
         processor = _make_parse_only_processor()
         processor.color_mode = "4-Color"
         processor.enable_coating = True
@@ -1294,15 +1295,18 @@ class TestVectorCoatingBuildMeshRegression:
             image_vectorizer_bounds=full_bounds,
         )
 
-        scene = processor.build_mesh(analysis=analysis, thickness_mm=1.2, structure_mode="Single-sided")
+        scene = processor.build_mesh(
+            analysis=analysis,
+            thickness_mm=1.2,
+            structure_mode="Single-sided",
+        )
         board = scene.geometry["Board"]
         coating = scene.geometry["Coating"]
 
-        assert board.bounds[0][:2] == pytest.approx([-0.15, -0.15])
-        assert board.bounds[1][:2] == pytest.approx([20.15, 20.15])
-        assert coating.bounds[0][:2] == pytest.approx([-0.15, -0.15])
-        assert coating.bounds[1][:2] == pytest.approx([20.15, 20.15])
-        assert board.volume > 450
+        assert len(board.split(only_watertight=False)) == 2
+        assert len(coating.split(only_watertight=False)) == 2
+        assert board.volume < 250.0
+        assert coating.volume < 25.0
 
     def test_regular_svg_keeps_visible_silhouette_for_board(self):
         processor = _make_parse_only_processor()

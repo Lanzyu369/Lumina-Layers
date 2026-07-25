@@ -2271,6 +2271,25 @@ class VectorAnalysis:
     image_vectorizer_bounds: object | None = None
 
 
+def _physical_backing_geometry(analysis: object) -> object | None:
+    """Return visible geometry without coordinate-only canvas bounds.
+    返回可打印的可见几何，不包含仅用于坐标定位的完整画布边界。
+    """
+
+    silhouette = getattr(analysis, "silhouette", None)
+    if silhouette is not None and not getattr(silhouette, "is_empty", True):
+        return silhouette
+
+    clipped_geometries = [
+        item.get("geometry")
+        for item in (getattr(analysis, "clipped_shapes", None) or [])
+        if isinstance(item, dict)
+        and item.get("geometry") is not None
+        and not item.get("geometry").is_empty
+    ]
+    return unary_union(clipped_geometries) if clipped_geometries else None
+
+
 def _signed_dtype_for_int_range(min_value: int, max_value: int) -> np.dtype:
     """Return the smallest signed dtype that can hold the integer range."""
 
@@ -4530,8 +4549,7 @@ class VectorProcessor:
         t_total_start = time.perf_counter()
 
         matched_shapes = analysis.matched_shapes
-        clipped_shapes = analysis.clipped_shapes
-        silhouette = analysis.silhouette
+        silhouette = _physical_backing_geometry(analysis)
         scale_factor = analysis.scale_factor
         bbox = analysis.bbox
         slot_names = analysis.slot_names
@@ -4660,15 +4678,6 @@ class VectorProcessor:
 
         # === Stage 6: Backing layer from silhouette ===
         t0 = time.perf_counter()
-        image_vectorizer_bounds = getattr(analysis, "image_vectorizer_bounds", None)
-        if image_vectorizer_bounds is not None and not image_vectorizer_bounds.is_empty:
-            silhouette = image_vectorizer_bounds
-        elif silhouette is None and clipped_shapes:
-            all_geoms = [
-                s["geometry"] for s in clipped_shapes if s["geometry"] is not None and not s["geometry"].is_empty
-            ]
-            silhouette = unary_union(all_geoms) if all_geoms else None
-
         if is_5color:
             backing_z_start = 0
         else:
@@ -5440,18 +5449,7 @@ class VectorProcessor:
                 return None
             return slice(y0, y1), slice(x0, x1), local
 
-        backing_geom = getattr(analysis, "image_vectorizer_bounds", None)
-        if backing_geom is None or getattr(backing_geom, "is_empty", True):
-            backing_geom = analysis.silhouette
-        if backing_geom is None or getattr(backing_geom, "is_empty", True):
-            clipped_geoms = [
-                item.get("geometry")
-                for item in getattr(analysis, "clipped_shapes", []) or []
-                if item.get("geometry") is not None
-                and not item.get("geometry").is_empty
-            ]
-            if clipped_geoms:
-                backing_geom = unary_union(clipped_geoms)
+        backing_geom = _physical_backing_geometry(analysis)
 
         backing_mask = np.zeros((h_px, w_px), dtype=bool)
         if backing_geom is not None and not getattr(backing_geom, "is_empty", True):
