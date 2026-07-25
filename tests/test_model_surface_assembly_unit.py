@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import shapely.geometry as sg
 import trimesh
 
 from core.model_surface.assembly import (
@@ -18,6 +19,16 @@ from core.model_surface.pipeline import (
     build_surface_overlay_scene,
 )
 from core.model_surface.types import ModelSurfaceError, PlaneFrame, SurfaceFootprint
+
+
+def _upward_horizontal_area_at_z(
+    mesh: trimesh.Trimesh,
+    z_mm: float,
+) -> float:
+    triangle_z = np.asarray(mesh.vertices)[np.asarray(mesh.faces), 2]
+    on_plane = np.all(np.isclose(triangle_z, z_mm, atol=1e-6), axis=1)
+    upward = np.asarray(mesh.face_normals)[:, 2] > 1.0 - 1e-6
+    return float(np.asarray(mesh.area_faces)[on_plane & upward].sum())
 
 
 def test_build_embedded_overlay_scene_keeps_bounds_and_adds_base_slot():
@@ -61,6 +72,55 @@ def test_build_embedded_overlay_scene_keeps_bounds_and_adds_base_slot():
     )
     assert result.scene.bounds[0][2] == pytest.approx(base.bounds[0][2])
     assert result.scene.bounds[1][2] == pytest.approx(base.bounds[1][2])
+
+
+def test_build_embedded_overlay_scene_preserves_transparent_canvas_surface():
+    full_matrix = np.full((1, 10, 20), -1, dtype=np.int16)
+    full_matrix[0, 1:3, 2:6] = 0
+    pattern = _build_pattern_scene(
+        {
+            "full_matrix": full_matrix,
+            "slot_names": ["Artwork"],
+            "preview_colors": {0: [255, 0, 0, 255]},
+            "target_h": 10,
+            "pixel_scale": 1.0,
+            "color_layers": 1,
+            "layer_height_mm": 0.08,
+            "bambu_face_orientation": "down",
+        }
+    )
+    base = trimesh.creation.box(extents=(20.0, 10.0, 3.0))
+    footprint = SurfaceFootprint(
+        frame=PlaneFrame(
+            origin=(0.0, 0.0, 1.5),
+            normal=(0.0, 0.0, 1.0),
+            u_axis=(1.0, 0.0, 0.0),
+            v_axis=(0.0, 1.0, 0.0),
+        ),
+        outer=((-10.0, -5.0), (10.0, -5.0), (10.0, 5.0), (-10.0, 5.0)),
+        holes=(),
+        bounds_min=(-10.0, -5.0),
+        bounds_max=(10.0, 5.0),
+        bounds_width_mm=20.0,
+        bounds_height_mm=10.0,
+        area_mm2=200.0,
+        hole_count=0,
+    )
+
+    result = build_embedded_overlay_scene(
+        base_mesh=base,
+        pattern_scene=pattern,
+        footprint=footprint,
+        pocket_depth_mm=0.08,
+        base_slot_name="surface_base",
+        base_color=(245, 245, 245),
+    )
+
+    cut_base = result.scene.geometry["surface_base"]
+    assert _upward_horizontal_area_at_z(cut_base, 1.5) == pytest.approx(
+        192.0,
+        abs=1e-5,
+    )
 
 
 def test_build_embedded_overlay_scene_preserves_source_orientation_and_canvas_margins():
@@ -139,9 +199,16 @@ def test_native_vector_pattern_is_normalized_before_surface_assembly():
             "scene": source_scene,
             "vector_analysis": SimpleNamespace(
                 slot_names=("Black",),
+                num_channels=1,
                 bbox=(0.0, 0.0, 20.0, 10.0),
                 scale_factor=1.0,
                 num_layers=1,
+                matched_shapes=(
+                    {
+                        "geometry": sg.box(2.0, 2.0, 4.0, 8.0),
+                        "recipe": (0,),
+                    },
+                ),
             ),
             "layer_height_mm": 0.08,
         }
@@ -156,6 +223,37 @@ def test_native_vector_pattern_is_normalized_before_surface_assembly():
         pattern.geometry["Black"].bounds[:, 0],
         [2.0, 4.0],
         atol=1e-6,
+    )
+
+
+def test_native_vector_pattern_footprint_excludes_transparent_and_air_shapes():
+    artwork = trimesh.creation.box(extents=(2.25, 2.0, 0.08))
+    artwork.apply_translation((16.875, 8.0, 0.04))
+    source_scene = trimesh.Scene({"Black": artwork})
+
+    pattern = _build_pattern_scene(
+        {
+            "is_svg_vector": True,
+            "scene": source_scene,
+            "vector_analysis": SimpleNamespace(
+                slot_names=("Black",),
+                num_channels=1,
+                num_layers=1,
+                bbox=(0.0, 0.0, 20.0, 10.0),
+                scale_factor=1.0,
+                matched_shapes=(
+                    {"geometry": sg.box(2.0, 1.0, 4.0, 3.0), "recipe": (0,)},
+                    {"geometry": sg.box(10.0, 1.0, 12.0, 3.0), "recipe": (-1,)},
+                ),
+            ),
+            "layer_height_mm": 0.08,
+            "bambu_face_orientation": "down",
+        }
+    )
+
+    assert pattern.printable_footprint.area == pytest.approx(4.5)
+    assert pattern.printable_footprint.bounds == pytest.approx(
+        (2.0, 7.0, 4.25, 9.0)
     )
 
 
@@ -369,12 +467,18 @@ def test_build_embedded_overlay_scene_uses_logical_display_depth_for_air_layers(
     )
     captured: dict[str, float] = {}
 
-    def fake_cut_surface_pocket(base_mesh, _footprint, *, pocket_depth_mm):
+    def fake_cut_surface_pocket(
+        base_mesh,
+        _footprint,
+        _pattern,
+        *,
+        pocket_depth_mm,
+    ):
         captured["pocket_depth_mm"] = pocket_depth_mm
         return base_mesh.copy()
 
     monkeypatch.setattr(
-        "core.model_surface.assembly.cut_surface_pocket",
+        "core.model_surface.assembly.cut_pattern_surface_pocket",
         fake_cut_surface_pocket,
     )
 

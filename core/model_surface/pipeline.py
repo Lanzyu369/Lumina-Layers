@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import numpy as np
+import shapely
+from shapely.geometry.base import BaseGeometry
 import trimesh
 
 from config import PrinterConfig
@@ -10,12 +12,16 @@ from core.model_surface.assembly import (
     MODEL_SURFACE_DISPLAY_Z_BOUNDS_KEY,
     MODEL_SURFACE_LOGICAL_XY_BOUNDS_KEY,
     OverlaySceneResult,
+    PreparedSurfacePattern,
     apply_model_transform_to_overlay_scene,
     build_embedded_overlay_scene,
     orient_overlay_scene_for_print,
 )
 from core.model_surface.loader import load_model_surface_mesh
-from core.model_surface.slot_meshing import build_slot_box_scene_from_voxels
+from core.model_surface.slot_meshing import (
+    build_printable_footprint_from_voxels,
+    build_slot_box_scene_from_voxels,
+)
 from core.model_surface.types import ModelSurfaceError, SurfaceFootprint
 
 
@@ -66,7 +72,7 @@ def build_surface_overlay_scene(
     )
 
 
-def _build_pattern_scene(ctx: dict):
+def _build_pattern_scene(ctx: dict) -> PreparedSurfacePattern:
     if ctx.get("is_svg_vector"):
         return _build_vector_pattern_scene(ctx)
 
@@ -107,11 +113,20 @@ def _build_pattern_scene(ctx: dict):
             float(pattern_matrix.shape[2]) * float(pixel_scale),
             float(target_h) * float(pixel_scale),
         )
-        return pattern_scene
+        printable_footprint = build_printable_footprint_from_voxels(
+            full_matrix=pattern_matrix,
+            material_count=len(slot_names),
+            target_h=int(target_h),
+            pixel_scale=float(pixel_scale),
+        )
+        return PreparedSurfacePattern(
+            scene=pattern_scene,
+            printable_footprint=printable_footprint,
+        )
     raise ModelSurfaceError("Converter did not produce a display voxel stack.")
 
 
-def _build_vector_pattern_scene(ctx: dict) -> trimesh.Scene:
+def _build_vector_pattern_scene(ctx: dict) -> PreparedSurfacePattern:
     """Extract native vector color layers for model-surface assembly."""
 
     source_scene = ctx.get("scene")
@@ -210,7 +225,56 @@ def _build_vector_pattern_scene(ctx: dict) -> trimesh.Scene:
         logical_width_mm,
         logical_height_mm,
     )
-    return pattern_scene
+    printable_footprint = _build_scene_printable_footprint(pattern_scene)
+    return PreparedSurfacePattern(
+        scene=pattern_scene,
+        printable_footprint=printable_footprint,
+    )
+
+
+def _build_scene_printable_footprint(
+    pattern_scene: trimesh.Scene,
+) -> BaseGeometry:
+    """Project the final printable vector meshes into an exact XY footprint."""
+
+    slot_footprints = []
+    try:
+        for mesh in pattern_scene.geometry.values():
+            if not isinstance(mesh, trimesh.Trimesh) or len(mesh.faces) == 0:
+                continue
+            triangles = np.asarray(mesh.triangles, dtype=np.float64)
+            upward_caps = np.asarray(mesh.face_normals)[:, 2] > 1.0 - 1e-7
+            cap_triangles = triangles[upward_caps]
+            if len(cap_triangles) == 0:
+                continue
+            edge_a = cap_triangles[:, 1, :2] - cap_triangles[:, 0, :2]
+            edge_b = cap_triangles[:, 2, :2] - cap_triangles[:, 0, :2]
+            twice_area = (
+                edge_a[:, 0] * edge_b[:, 1]
+                - edge_a[:, 1] * edge_b[:, 0]
+            )
+            cap_triangles = cap_triangles[np.abs(twice_area) > 1e-12]
+            if len(cap_triangles) == 0:
+                continue
+            triangle_polygons = shapely.polygons(cap_triangles[:, :, :2])
+            slot_footprint = shapely.union_all(triangle_polygons)
+            if not slot_footprint.is_empty:
+                slot_footprints.append(slot_footprint)
+        footprint = shapely.union_all(slot_footprints)
+    except Exception as exc:
+        raise ModelSurfaceError(
+            "Converter produced an invalid native vector footprint."
+        ) from exc
+    if (
+        not slot_footprints
+        or footprint.is_empty
+        or not np.isfinite(float(footprint.area))
+        or footprint.area <= 0.0
+    ):
+        raise ModelSurfaceError(
+            "Converter did not produce a printable native vector footprint."
+        )
+    return footprint
 
 
 def _resolve_surface_display_stack(

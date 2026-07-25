@@ -5,7 +5,10 @@ import pytest
 import trimesh
 
 from core.model_surface.pipeline import _build_pattern_scene
-from core.model_surface.slot_meshing import build_slot_box_scene_from_voxels
+from core.model_surface.slot_meshing import (
+    build_printable_footprint_from_voxels,
+    build_slot_box_scene_from_voxels,
+)
 from core.model_surface.types import ModelSurfaceError
 
 
@@ -28,6 +31,23 @@ def test_slot_box_scene_keeps_adjacent_prisms_topologically_closed():
     open_edges, nonmanifold_edges = _edge_topology_counts(mesh)
     assert open_edges == 0
     assert nonmanifold_edges == 0
+
+
+def test_printable_footprint_uses_valid_voxels_and_preserves_single_pixel_width():
+    full_matrix = np.full((2, 3, 5), -1, dtype=np.int16)
+    full_matrix[0, 0, 1:4] = 0
+    full_matrix[1, 2, 4] = 1
+    full_matrix[:, 1, 0] = 2
+
+    footprint = build_printable_footprint_from_voxels(
+        full_matrix=full_matrix,
+        material_count=2,
+        target_h=3,
+        pixel_scale=0.5,
+    )
+
+    assert footprint.area == pytest.approx(1.0)
+    assert footprint.bounds == pytest.approx((0.5, 0.0, 2.5, 1.5))
 
 
 def test_model_surface_pattern_turns_face_down_single_side_outward():

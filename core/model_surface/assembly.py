@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
+import shapely.affinity as sa
 import shapely.geometry as sg
+from shapely.geometry.base import BaseGeometry
+from shapely.ops import unary_union
 import trimesh
 
 from core.model_surface.types import ModelSurfaceError, SurfaceFootprint
@@ -13,6 +18,44 @@ MODEL_SURFACE_DISPLAY_LAYER_HEIGHTS_KEY = (
     "model_surface_display_layer_heights_mm"
 )
 MODEL_SURFACE_LOGICAL_XY_BOUNDS_KEY = "model_surface_logical_xy_bounds_mm"
+
+
+@dataclass(frozen=True)
+class PreparedSurfacePattern:
+    """Printable pattern geometry paired with its exact local XY footprint.
+
+    将可打印图案几何与其精确局部 XY 轮廓绑定的中间产物。
+    """
+
+    scene: trimesh.Scene
+    printable_footprint: BaseGeometry
+
+    @property
+    def geometry(self) -> Mapping[str, trimesh.Trimesh]:
+        """Expose scene geometry for compatibility with existing callers.
+
+        暴露场景几何，兼容现有调用方。
+        """
+
+        return self.scene.geometry
+
+    @property
+    def metadata(self) -> dict[str, Any]:
+        """Expose scene metadata for compatibility with existing callers.
+
+        暴露场景元数据，兼容现有调用方。
+        """
+
+        return self.scene.metadata
+
+    @property
+    def bounds(self) -> np.ndarray:
+        """Expose scene bounds for compatibility with existing callers.
+
+        暴露场景包围盒，兼容现有调用方。
+        """
+
+        return self.scene.bounds
 
 
 @dataclass(frozen=True)
@@ -30,7 +73,7 @@ class OverlaySceneResult:
 def build_embedded_overlay_scene(
     *,
     base_mesh: trimesh.Trimesh,
-    pattern_scene: trimesh.Scene,
+    pattern_scene: PreparedSurfacePattern | trimesh.Scene,
     footprint: SurfaceFootprint,
     pocket_depth_mm: float,
     base_slot_name: str,
@@ -45,28 +88,39 @@ def build_embedded_overlay_scene(
     if pocket_depth_mm <= 0.0:
         raise ModelSurfaceError("Pocket depth must be positive.")
 
+    prepared_pattern = _coerce_prepared_surface_pattern(pattern_scene)
+    printable_scene = prepared_pattern.scene
     result_scene = trimesh.Scene()
-    embed_depth_mm = _pattern_depth_mm(pattern_scene)
+    embed_depth_mm = _pattern_depth_mm(printable_scene)
     available_depth_mm = _available_surface_depth_mm(base_mesh, footprint)
     if embed_depth_mm > available_depth_mm + 1e-6:
         raise ModelSurfaceError(
             "Overlay pattern depth exceeds the available model thickness "
             f"({embed_depth_mm:.3f} mm > {available_depth_mm:.3f} mm)."
         )
-    display_layer_heights_mm = _pattern_layer_heights_mm(pattern_scene)
+    display_layer_heights_mm = _pattern_layer_heights_mm(printable_scene)
     base_copy = (
         base_mesh.copy()
         if allow_uncut_base
-        else cut_surface_pocket(base_mesh, footprint, pocket_depth_mm=embed_depth_mm)
+        else cut_pattern_surface_pocket(
+            base_mesh,
+            footprint,
+            prepared_pattern,
+            pocket_depth_mm=embed_depth_mm,
+        )
     )
     base_copy.metadata["name"] = base_slot_name
     _apply_face_color(base_copy, base_color)
     result_scene.add_geometry(base_copy, node_name=base_slot_name, geom_name=base_slot_name)
 
-    transform = _pattern_to_surface_transform(pattern_scene, footprint, embed_depth_mm)
+    transform = _pattern_to_surface_transform(
+        printable_scene,
+        footprint,
+        embed_depth_mm,
+    )
     slot_names = [base_slot_name]
     preview_colors: dict[str, tuple[int, int, int]] = {base_slot_name: base_color}
-    for name, mesh in pattern_scene.geometry.items():
+    for name, mesh in printable_scene.geometry.items():
         if not isinstance(mesh, trimesh.Trimesh) or len(mesh.faces) == 0:
             continue
         mesh_copy = mesh.copy()
@@ -83,7 +137,7 @@ def build_embedded_overlay_scene(
             display_layer_heights_mm
         )
         result_scene.metadata[MODEL_SURFACE_DISPLAY_Z_BOUNDS_KEY] = (
-            _pattern_z_bounds_mm(pattern_scene)
+            _pattern_z_bounds_mm(printable_scene)
         )
     return OverlaySceneResult(result_scene, slot_names, preview_colors)
 
@@ -176,6 +230,30 @@ def _apply_transform_to_scene_geometry(
             geometry.apply_transform(matrix)
 
 
+def cut_pattern_surface_pocket(
+    base_mesh: trimesh.Trimesh,
+    footprint: SurfaceFootprint,
+    pattern: PreparedSurfacePattern,
+    *,
+    pocket_depth_mm: float,
+) -> trimesh.Trimesh:
+    """Cut a pocket only below the pattern's printable local XY footprint.
+
+    仅在图案的实际可打印局部 XY 轮廓下方开槽。
+    """
+
+    pocket_polygon = _pattern_footprint_in_surface_coordinates(
+        pattern,
+        footprint,
+    )
+    return _cut_surface_polygon_pocket(
+        base_mesh,
+        footprint,
+        pocket_polygon,
+        pocket_depth_mm=pocket_depth_mm,
+    )
+
+
 def cut_surface_pocket(
     base_mesh: trimesh.Trimesh,
     footprint: SurfaceFootprint,
@@ -191,30 +269,47 @@ def cut_surface_pocket(
         raise ModelSurfaceError("Pocket depth must be positive.")
 
     polygon = sg.Polygon(footprint.outer, holes=list(footprint.holes))
-    if not polygon.is_valid:
-        polygon = polygon.buffer(0)
-    if polygon.is_empty or polygon.area <= 0.0:
-        raise ModelSurfaceError("Selected surface footprint is empty.")
+    return _cut_surface_polygon_pocket(
+        base_mesh,
+        footprint,
+        polygon,
+        pocket_depth_mm=pocket_depth_mm,
+    )
 
+
+def _cut_surface_polygon_pocket(
+    base_mesh: trimesh.Trimesh,
+    footprint: SurfaceFootprint,
+    polygon: BaseGeometry,
+    *,
+    pocket_depth_mm: float,
+) -> trimesh.Trimesh:
+    if pocket_depth_mm <= 0.0:
+        raise ModelSurfaceError("Pocket depth must be positive.")
+
+    polygon = _coerce_polygonal_geometry(
+        polygon,
+        empty_error="Selected surface footprint is empty.",
+    )
     epsilon = min(0.02, max(0.002, pocket_depth_mm * 0.05))
     try:
-        cutter = trimesh.creation.extrude_polygon(
+        cutter_mesh = _build_polygon_prism_mesh(
             polygon,
-            height=float(pocket_depth_mm + epsilon * 2.0),
-            engine="earcut",
+            height_mm=float(pocket_depth_mm + epsilon * 2.0),
+        )
+        cutter_mesh.apply_transform(
+            _footprint_prism_to_surface_transform(
+                footprint,
+                z_offset_mm=-(float(pocket_depth_mm) + epsilon),
+            )
         )
     except Exception as exc:
         raise ModelSurfaceError("model_surface_boolean_failed") from exc
-
-    cutter.apply_transform(
-        _footprint_prism_to_surface_transform(
-            footprint,
-            z_offset_mm=-(float(pocket_depth_mm) + epsilon),
-        )
-    )
+    if not cutter_mesh.is_volume:
+        raise ModelSurfaceError("model_surface_boolean_failed")
     try:
         result = trimesh.boolean.difference(
-            [base_mesh.copy(), cutter],
+            [base_mesh.copy(), cutter_mesh],
             engine="manifold",
         )
     except Exception as exc:
@@ -225,6 +320,189 @@ def cut_surface_pocket(
         raise ModelSurfaceError("model_surface_boolean_failed")
     result_mesh.metadata.update(base_mesh.metadata or {})
     return result_mesh
+
+
+def _build_polygon_prism_mesh(
+    polygon: BaseGeometry,
+    *,
+    height_mm: float,
+) -> trimesh.Trimesh:
+    """Build a robust closed prism from polygonal geometry with Manifold."""
+
+    if not np.isfinite(height_mm) or height_mm <= 0.0:
+        raise ModelSurfaceError("Pocket depth must be positive.")
+    components = _iter_polygon_components(polygon)
+    contours = []
+    for component in components:
+        for ring in (component.exterior, *component.interiors):
+            coordinates = np.asarray(ring.coords, dtype=np.float64)
+            if coordinates.ndim != 2 or coordinates.shape[0] < 4:
+                continue
+            coordinates = coordinates[:-1, :2]
+            if len(coordinates) >= 3 and np.all(np.isfinite(coordinates)):
+                contours.append(coordinates)
+    if not contours:
+        raise ModelSurfaceError("Selected surface footprint is empty.")
+
+    try:
+        import manifold3d as m3d
+
+        section = m3d.CrossSection(contours, m3d.FillRule.EvenOdd)
+        solid = section.extrude(float(height_mm))
+        if solid.is_empty() or solid.status() != m3d.Error.NoError:
+            raise ModelSurfaceError("model_surface_boolean_failed")
+        mesh_data = solid.to_mesh()
+        vertices = np.asarray(
+            mesh_data.vert_properties,
+            dtype=np.float64,
+        )
+        faces = np.asarray(mesh_data.tri_verts, dtype=np.int64)
+    except ModelSurfaceError:
+        raise
+    except Exception as exc:
+        raise ModelSurfaceError("model_surface_boolean_failed") from exc
+
+    if (
+        vertices.ndim != 2
+        or vertices.shape[1] < 3
+        or faces.ndim != 2
+        or faces.shape[1] != 3
+        or len(faces) == 0
+    ):
+        raise ModelSurfaceError("model_surface_boolean_failed")
+    mesh = trimesh.Trimesh(
+        vertices=vertices[:, :3].copy(),
+        faces=faces.copy(),
+        process=False,
+    )
+    if not mesh.is_volume:
+        raise ModelSurfaceError("model_surface_boolean_failed")
+    return mesh
+
+
+def _coerce_prepared_surface_pattern(
+    pattern: PreparedSurfacePattern | trimesh.Scene,
+) -> PreparedSurfacePattern:
+    if isinstance(pattern, PreparedSurfacePattern):
+        printable_footprint = _coerce_polygonal_geometry(
+            pattern.printable_footprint,
+            empty_error="Overlay pattern printable footprint is empty.",
+        )
+        return PreparedSurfacePattern(pattern.scene, printable_footprint)
+    if isinstance(pattern, trimesh.Scene):
+        logical_bounds = _pattern_xy_bounds_mm(pattern)
+        return PreparedSurfacePattern(
+            pattern,
+            sg.box(*logical_bounds),
+        )
+    raise ModelSurfaceError("Overlay pattern scene is invalid.")
+
+
+def _pattern_footprint_in_surface_coordinates(
+    pattern: PreparedSurfacePattern,
+    footprint: SurfaceFootprint,
+) -> BaseGeometry:
+    logical_min_x, logical_min_y, logical_max_x, logical_max_y = (
+        _pattern_xy_bounds_mm(pattern.scene)
+    )
+    pattern_width = logical_max_x - logical_min_x
+    pattern_height = logical_max_y - logical_min_y
+    scale_x = float(footprint.bounds_width_mm) / pattern_width
+    scale_y = float(footprint.bounds_height_mm) / pattern_height
+    min_x, min_y = footprint.bounds_min
+
+    printable = _coerce_polygonal_geometry(
+        pattern.printable_footprint,
+        empty_error="Overlay pattern printable footprint is empty.",
+    )
+    printable_bounds = printable.bounds
+    if (
+        printable_bounds[0] < logical_min_x - 1e-9
+        or printable_bounds[1] < logical_min_y - 1e-9
+        or printable_bounds[2] > logical_max_x + 1e-9
+        or printable_bounds[3] > logical_max_y + 1e-9
+    ):
+        raise ModelSurfaceError(
+            "Overlay pattern printable footprint exceeds its logical XY bounds."
+        )
+
+    mapped = sa.affine_transform(
+        printable,
+        (
+            scale_x,
+            0.0,
+            0.0,
+            scale_y,
+            float(min_x) - scale_x * logical_min_x,
+            float(min_y) - scale_y * logical_min_y,
+        ),
+    )
+    surface_polygon = sg.Polygon(
+        footprint.outer,
+        holes=list(footprint.holes),
+    )
+    surface_polygon = _coerce_polygonal_geometry(
+        surface_polygon,
+        empty_error="Selected surface footprint is empty.",
+    )
+    try:
+        clipped = mapped.intersection(surface_polygon)
+    except Exception as exc:
+        raise ModelSurfaceError("model_surface_boolean_failed") from exc
+    return _coerce_polygonal_geometry(
+        clipped,
+        empty_error="Overlay pattern does not overlap the selected surface.",
+    )
+
+
+def _coerce_polygonal_geometry(
+    geometry: BaseGeometry,
+    *,
+    empty_error: str,
+) -> BaseGeometry:
+    if geometry is None:
+        raise ModelSurfaceError(empty_error)
+    candidate = geometry
+    try:
+        if not candidate.is_valid:
+            candidate = candidate.buffer(0)
+    except Exception as exc:
+        raise ModelSurfaceError(empty_error) from exc
+
+    components = _iter_polygon_components(candidate)
+    if not components:
+        raise ModelSurfaceError(empty_error)
+    try:
+        polygonal = (
+            components[0]
+            if len(components) == 1
+            else unary_union(components)
+        )
+    except Exception as exc:
+        raise ModelSurfaceError(empty_error) from exc
+    if (
+        polygonal is None
+        or polygonal.is_empty
+        or not np.isfinite(float(polygonal.area))
+        or polygonal.area <= 0.0
+    ):
+        raise ModelSurfaceError(empty_error)
+    return polygonal
+
+
+def _iter_polygon_components(
+    geometry: BaseGeometry,
+) -> list[sg.Polygon]:
+    if geometry is None or geometry.is_empty:
+        return []
+    if isinstance(geometry, sg.Polygon):
+        return [geometry] if geometry.area > 0.0 else []
+    if isinstance(geometry, (sg.MultiPolygon, sg.GeometryCollection)):
+        components: list[sg.Polygon] = []
+        for child in geometry.geoms:
+            components.extend(_iter_polygon_components(child))
+        return components
+    return []
 
 
 def _pattern_to_surface_transform(
