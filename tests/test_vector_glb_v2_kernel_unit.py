@@ -62,6 +62,19 @@ def _load_glb_json_and_bin(path: Path) -> tuple[dict, bytes]:
     return tree, data[bin_start : bin_start + bin_length]
 
 
+def _world_node_mesh(
+    scene: trimesh.Scene,
+    expected_name: str,
+) -> trimesh.Trimesh:
+    for node_name in scene.graph.nodes_geometry:
+        transform, geometry_name = scene.graph[node_name]
+        if expected_name in {str(node_name), str(geometry_name)}:
+            mesh = scene.geometry[geometry_name].copy()
+            mesh.apply_transform(transform)
+            return mesh
+    raise AssertionError(f"missing GLB node: {expected_name}")
+
+
 def _analysis_for_v2_test() -> SimpleNamespace:
     return SimpleNamespace(
         matched_shapes=[
@@ -318,6 +331,92 @@ def test_export_dispatch_defaults_to_v2_scene_reuse(
 
     assert result.endswith("preview.glb")
     assert calls == ["scene_reuse"]
+
+
+@pytest.mark.parametrize(
+    ("kernel", "exporter_name"),
+    [
+        ("trimesh_v1", "export_vector_glb_preview_v1"),
+        ("v2", "export_vector_glb_preview_v2_scene_reuse"),
+    ],
+)
+def test_export_dispatch_adds_transparent_preview_canvas_anchor(
+    monkeypatch,
+    tmp_path: Path,
+    kernel: str,
+    exporter_name: str,
+) -> None:
+    scene = trimesh.Scene()
+    scene.add_geometry(_box_mesh(), geom_name="Red")
+    analysis = _analysis_for_v2_test()
+    analysis.image_vectorizer_bounds = box(2, 3, 18, 11)
+    analysis.scale_factor = 2.0
+    captured: list[vector_glb_preview.VectorPreviewPart] = []
+
+    def capture(
+        parts: list[vector_glb_preview.VectorPreviewPart],
+        *,
+        output_path: str,
+    ) -> str:
+        captured.extend(parts)
+        Path(output_path).write_bytes(b"glb")
+        return output_path
+
+    monkeypatch.setenv("LUMINA_VECTOR_GLB_KERNEL", kernel)
+    monkeypatch.setattr(vector_glb_preview, exporter_name, capture)
+
+    vector_glb_preview.export_vector_glb_preview(
+        scene=scene,
+        output_path=str(tmp_path / "preview.glb"),
+        structure_mode="Single-sided",
+        color_mode="4-Color (RYBW)",
+        preview_colors={"Red": [255, 0, 0, 255]},
+        slot_list=["Red"],
+        analysis=analysis,
+        ctx={},
+    )
+
+    anchor = next(
+        part for part in captured if part.export_name == "preview_canvas_bounds"
+    )
+    assert anchor.role == "auxiliary"
+    assert anchor.rgba == (0, 0, 0, 0)
+    assert anchor.fallback_mesh is not None
+    np.testing.assert_allclose(
+        anchor.fallback_mesh.bounds,
+        np.asarray([[4.0, 6.0, 0.0], [36.0, 22.0, 0.0]]),
+    )
+
+
+def test_v2_preview_canvas_anchor_preserves_bounds_after_glb_roundtrip(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    scene = trimesh.Scene()
+    scene.add_geometry(_box_mesh(), geom_name="Red")
+    analysis = _analysis_for_v2_test()
+    analysis.image_vectorizer_bounds = box(2, 3, 18, 11)
+    analysis.scale_factor = 2.0
+    output_path = tmp_path / "preview.glb"
+
+    monkeypatch.setenv("LUMINA_VECTOR_GLB_KERNEL", "v2")
+    vector_glb_preview.export_vector_glb_preview(
+        scene=scene,
+        output_path=str(output_path),
+        structure_mode="Single-sided",
+        color_mode="4-Color (RYBW)",
+        preview_colors={"Red": [255, 0, 0, 255]},
+        slot_list=["Red"],
+        analysis=analysis,
+        ctx={},
+    )
+
+    loaded = trimesh.load(output_path, force="scene")
+    anchor = _world_node_mesh(loaded, "preview_canvas_bounds")
+    np.testing.assert_allclose(
+        anchor.bounds,
+        np.asarray([[4.0, 6.0, 0.0], [36.0, 22.0, 0.0]]),
+    )
 
 
 def test_export_dispatch_v2_uses_scene_reuse_exporter(monkeypatch, tmp_path: Path) -> None:

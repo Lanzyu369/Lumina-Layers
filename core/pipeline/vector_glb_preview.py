@@ -28,7 +28,11 @@ from trimesh.visual.material import PBRMaterial
 
 from api.structured_logging import get_logger
 from config import PrinterConfig
-from core.pipeline.s11_glb_preview import _build_color_extruded_mesh_v2
+from core.pipeline.s11_glb_preview import (
+    PREVIEW_CANVAS_BOUNDS_NODE_NAME,
+    _build_color_extruded_mesh_v2,
+    _build_preview_canvas_bounds_mesh,
+)
 
 
 log = get_logger(__name__)
@@ -512,6 +516,11 @@ def _quantize_v2_position_buffers_to_uint16(buffer_items: dict, tree: dict) -> N
 
     for mesh_index, mesh in enumerate(meshes):
         if not isinstance(mesh, dict):
+            continue
+        # Keep the zero-depth coordinate anchor in float form. Some CPU-side
+        # GLB readers do not apply normalized integer accessor transforms when
+        # calculating bounds, which would corrupt puzzle-overlay placement.
+        if mesh.get("name") == PREVIEW_CANVAS_BOUNDS_NODE_NAME:
             continue
         primitives = mesh.get("primitives") or []
         if len(primitives) != 1:
@@ -1003,6 +1012,42 @@ def build_vector_preview_parts_from_scene(
             )
         )
     return parts
+
+
+def _build_preview_canvas_anchor_part(
+    analysis: object | None,
+) -> VectorPreviewPart | None:
+    """Build coordinate-only canvas geometry for frontend overlay placement.
+    构建仅用于前端叠线定位的画布坐标几何。
+    """
+
+    if analysis is None:
+        return None
+    canvas = _valid_geometry(getattr(analysis, "image_vectorizer_bounds", None))
+    if canvas is None:
+        return None
+    try:
+        scale_factor = float(getattr(analysis, "scale_factor", 1.0) or 1.0)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(scale_factor) or scale_factor <= 0:
+        return None
+
+    min_x, min_y, max_x, max_y = (float(value) for value in canvas.bounds)
+    width = max_x - min_x
+    height = max_y - min_y
+    mesh = _build_preview_canvas_bounds_mesh(width, height, scale_factor)
+    if mesh is None:
+        return None
+    mesh.apply_translation((min_x * scale_factor, min_y * scale_factor, 0.0))
+    return VectorPreviewPart(
+        source_name=PREVIEW_CANVAS_BOUNDS_NODE_NAME,
+        export_name=PREVIEW_CANVAS_BOUNDS_NODE_NAME,
+        role="auxiliary",
+        rgba=(0, 0, 0, 0),
+        is_recolorable=False,
+        fallback_mesh=mesh,
+    )
 
 
 def export_vector_glb_preview_v1(
@@ -1588,6 +1633,15 @@ def export_vector_glb_preview(
         slot_list=list(slot_list),
         copy_fallback_mesh=(kernel == "trimesh_v1"),
     )
+    canvas_anchor = _build_preview_canvas_anchor_part(analysis)
+    if (
+        canvas_anchor is not None
+        and all(
+            part.export_name != PREVIEW_CANVAS_BOUNDS_NODE_NAME
+            for part in fallback_parts
+        )
+    ):
+        fallback_parts.append(canvas_anchor)
     if kernel == "trimesh_v1":
         return export_vector_glb_preview_v1(fallback_parts, output_path=output_path)
 

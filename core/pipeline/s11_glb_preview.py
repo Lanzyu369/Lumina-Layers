@@ -1283,8 +1283,8 @@ def _build_backing_plate_mesh(
 
 
 def _build_preview_canvas_bounds_mesh(
-    width: int,
-    height: int,
+    width: float,
+    height: float,
     pixel_scale: float,
 ) -> Optional[trimesh.Trimesh]:
     """Build an invisible full-canvas bounds anchor for frontend overlay placement.
