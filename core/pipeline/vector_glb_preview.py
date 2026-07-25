@@ -1201,16 +1201,12 @@ def _prepare_backing_footprint(
     return _scaled_geometry_mm(prepared, scale_factor)
 
 
-def _analysis_backing_footprint(
-    analysis: object,
+def _visible_backing_footprint(
+    silhouette: BaseGeometry | None,
     scale_factor: float,
-    fallback_silhouette: BaseGeometry | None,
 ) -> BaseGeometry | None:
-    backing = _valid_geometry(getattr(analysis, "image_vectorizer_bounds", None))
-    if backing is not None:
-        return _prepare_backing_footprint(backing, scale_factor)
-    if fallback_silhouette is not None:
-        return _prepare_backing_footprint(fallback_silhouette, scale_factor)
+    if silhouette is not None:
+        return _prepare_backing_footprint(silhouette, scale_factor)
     return None
 
 
@@ -1321,10 +1317,9 @@ def build_vector_preview_parts_from_analysis(
         if raw_silhouette is not None
         else None
     )
-    backing_footprint = _analysis_backing_footprint(
-        analysis,
-        scale_factor,
+    backing_footprint = _visible_backing_footprint(
         raw_silhouette,
+        scale_factor,
     )
     if include_backing and backing_footprint is not None:
         backing_height = max(float(thickness_mm or 0.0), layer_h)

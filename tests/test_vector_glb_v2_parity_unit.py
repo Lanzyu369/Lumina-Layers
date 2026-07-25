@@ -77,14 +77,8 @@ def test_v2_descriptor_bounds_are_finite_for_core_modes(
             assert all(value == value for value in extrusion.footprint.bounds)
 
 
-def test_v2_backing_uses_image_vectorizer_bounds_for_preview_canvas_alignment() -> None:
-    """V2 backing bounds must match the full preview canvas footprint.
-
-    SVG puzzle overlays are generated in preview-canvas coordinates. If V2 uses
-    only the visible silhouette for the backing plate, the frontend model bounds
-    become smaller than the overlay texture coordinate space and puzzle lines
-    render one ring too small.
-    """
+def test_v2_backing_uses_visible_silhouette_not_preview_canvas_bounds() -> None:
+    """V2 backing must stay physical while canvas metadata remains separate."""
 
     visible_shape = box(4, 4, 16, 16)
     full_backing = box(0, 0, 20, 20)
@@ -124,7 +118,7 @@ def test_v2_backing_uses_image_vectorizer_bounds_for_preview_canvas_alignment() 
     backing = next(part for part in parts if part.role == "backing")
 
     assert backing.extrusions[0].footprint.bounds == pytest.approx(
-        (-0.15, -0.15, 20.15, 20.15)
+        (3.85, 3.85, 16.15, 16.15)
     )
 
 
@@ -167,7 +161,7 @@ def test_v2_backing_expansion_matches_v1_scale_factor_order() -> None:
     backing = next(part for part in parts if part.role == "backing")
 
     assert backing.extrusions[0].footprint.bounds == pytest.approx(
-        (-0.3, -0.3, 20.3, 20.3)
+        (3.7, 3.7, 16.3, 16.3)
     )
 
 
