@@ -271,6 +271,30 @@ describe("SettingsPanel machine adapter registry UI", () => {
     });
   });
 
+  it("shows the selected and listed slicer logos in the settings dropdown", async () => {
+    renderPanel();
+
+    const slicerDropdown = await screen.findByRole("combobox", {
+      name: "切片软件",
+    });
+    expect(
+      within(slicerDropdown).getByTestId("slicer-logo-BambuStudio"),
+    ).toBeInTheDocument();
+
+    fireEvent.click(slicerDropdown);
+
+    expect(
+      within(screen.getByRole("option", { name: "OrcaSlicer" })).getByTestId(
+        "slicer-logo-OrcaSlicer",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(
+        screen.getByRole("option", { name: "Flash Studio Desktop" }),
+      ).getByTestId("slicer-logo-FlashStudio"),
+    ).toBeInTheDocument();
+  });
+
   it("shows only Flash Studio nozzles at or below 0.4 supported by the machine", async () => {
     useSettingsStore.setState({
       printerModel: "flashforge-guider-3-ultra",

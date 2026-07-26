@@ -5,6 +5,7 @@ import { cx, workstationFieldLabelClass, workstationInputClass } from "./panelPr
 interface DropdownOption {
   label: string;
   value: string;
+  leading?: ReactNode;
 }
 
 interface DropdownOptionGroup {
@@ -157,10 +158,15 @@ export default function Dropdown({
         onClick={handleToggle}
         className={cx(
           workstationInputClass,
-          "flex w-full min-w-0 items-center justify-between gap-3 overflow-hidden py-2.5 text-left",
+          "flex w-full min-w-0 items-center justify-between gap-3 overflow-hidden py-2 text-left",
           showPlaceholder && "text-slate-400 dark:text-slate-500",
         )}
       >
+        {selectedOption?.leading && (
+          <span className="flex shrink-0 items-center">
+            {selectedOption.leading}
+          </span>
+        )}
         <span className="block min-w-0 flex-1 truncate text-sm leading-6">{triggerLabel}</span>
         <span
           aria-hidden="true"
@@ -208,12 +214,17 @@ export default function Dropdown({
                       aria-selected={isSelected}
                       onClick={() => handleSelect(opt.value)}
                       className={cx(
-                        "flex w-full items-start rounded-[18px] px-3 py-2.5 text-left text-sm leading-6 transition-colors duration-150",
+                        "flex min-h-11 w-full items-center gap-2.5 rounded-[18px] px-3 py-2 text-left text-sm leading-6 transition-colors duration-150",
                         isSelected
                           ? "bg-blue-50 text-blue-700 dark:bg-blue-500/15 dark:text-blue-200"
                           : "text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-900"
                       )}
                     >
+                      {opt.leading && (
+                        <span className="flex shrink-0 items-center">
+                          {opt.leading}
+                        </span>
+                      )}
                       <span className="min-w-0 flex-1 break-all">{opt.label}</span>
                     </button>
                   );
