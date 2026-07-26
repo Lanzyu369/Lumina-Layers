@@ -43,6 +43,7 @@ import HelpDot from "./ui/HelpDot";
 import Slider from "./ui/Slider";
 import Switch from "./ui/Switch";
 import WikiTooltip from "./ui/WikiTooltip";
+import SlicerLogo from "./slicer/SlicerLogo";
 import {
   cx,
   PanelIntro,
@@ -546,6 +547,7 @@ export default function SettingsPanel() {
               options={slicers.map((s) => ({
                 label: s.display_name,
                 value: s.id,
+                leading: <SlicerLogo slicerId={s.id} />,
               }))}
             />
           </div>
