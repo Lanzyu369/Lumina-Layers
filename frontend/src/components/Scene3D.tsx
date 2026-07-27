@@ -364,8 +364,11 @@ function PreviewCameraRangeBridge({
     const config = computePreviewCameraOrbitConfig(modelBounds, scaleX, scaleY);
     const perspectiveCamera = camera as THREE.PerspectiveCamera;
     if (perspectiveCamera.isPerspectiveCamera) {
-      const nextNear = config.near;
-      const nextFar = config.far;
+      // Model bounds arrive after the depth guard on a fresh preview. Do not
+      // loosen its clipping range here; OrbitControls will resync it as the
+      // camera actually moves.
+      const nextNear = Math.max(perspectiveCamera.near, config.near);
+      const nextFar = Math.max(perspectiveCamera.far, config.far);
       if (
         Math.abs(perspectiveCamera.near - nextNear) > 1e-6 ||
         Math.abs(perspectiveCamera.far - nextFar) > 1e-6
