@@ -8,8 +8,10 @@ from config import ModelingMode
 from scripts.profile_converter_multicore import (
     MATERIAL_PALETTES,
     ProfileCase,
+    build_report,
     build_pipeline_context,
     semantic_snapshot,
+    summarize_runs,
 )
 
 
@@ -107,3 +109,41 @@ def test_semantic_snapshot_changes_when_geometry_or_layers_change() -> None:
     }
     assert semantic_snapshot(changed_layers) != baseline
     assert semantic_snapshot(changed_scene) != baseline
+
+
+def test_summarize_runs_reports_cold_warm_median_and_p90() -> None:
+    summary = summarize_runs(
+        [
+            {"total_s": 9.0, "peak_rss_mb": 100.0},
+            {"total_s": 5.0, "peak_rss_mb": 110.0},
+            {"total_s": 7.0, "peak_rss_mb": 120.0},
+        ]
+    )
+    assert summary["cold"]["total_s"] == 9.0
+    assert summary["warm_median"]["total_s"] == 6.0
+    assert summary["p90"]["total_s"] == pytest.approx(6.8)
+    assert summary["peak"]["peak_rss_mb"] == 120.0
+
+
+def test_build_report_omits_absolute_source_and_material_paths(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "private-user-image.jpg"
+    source.write_bytes(b"image")
+    case = ProfileCase(
+        name="raster-12",
+        kind="raster",
+        input_path=source,
+        target_width_mm=299.0,
+        material_count=12,
+    )
+    report = build_report(
+        case,
+        runs=[{"total_s": 1.0, "peak_rss_mb": 2.0}],
+    )
+    serialized = repr(report)
+    assert str(tmp_path) not in serialized
+    assert report["input"]["name"] == source.name
+    assert report["input"]["sha256"]
+    assert report["materials"]["count"] == 12
+    assert "directory_names" not in report["materials"]
