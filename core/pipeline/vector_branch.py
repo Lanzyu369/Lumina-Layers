@@ -1735,6 +1735,7 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
         ctx = p06_bed_rendering.run(ctx)
         preview_timing["bed_rendering_s"] = time.perf_counter() - t0
         preview_timing["vector_preview_total_s"] = time.perf_counter() - vector_preview_total_t0
+        ctx["vector_timing"] = dict(preview_timing)
         _log_vector_preview_timings(preview_timing, ctx, analysis, raster_cache)
         return ctx
     except Exception as exc:

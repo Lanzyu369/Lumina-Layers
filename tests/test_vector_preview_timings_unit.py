@@ -138,6 +138,7 @@ def test_vector_preview_branch_preserves_backing_mask_in_cache() -> None:
         result = _run_vector_preview_branch(ctx)
 
     assert "error" not in result
+    assert result["vector_timing"]["vector_preview_total_s"] >= 0.0
     assert "backing_mask" in result["cache"]
     assert result["cache"]["backing_mask"].shape == result["cache"]["mask_solid"].shape
     assert np.count_nonzero(
