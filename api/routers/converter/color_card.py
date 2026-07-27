@@ -133,14 +133,20 @@ async def generate_color_card(
     else:
         lut_path = "__material_archive__"
 
-    _resolve_session_dynamic_material_settings(
+    dynamic_material_settings = _resolve_session_dynamic_material_settings(
         session_data=session_data,
         request=body,
         material_source=str(session_material_source or "lut"),
-        # Color cards intentionally use the native SVG vector pipeline, which
-        # dynamic material matching does not support in v1.
-        native_svg_vector=True,
+        native_svg_vector=False,
     )
+    if dynamic_material_settings[0]:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Dynamic material layer count does not support generated "
+                "color-card SVGs. Use a native uploaded SVG instead."
+            ),
+        )
 
     # 2. Extract unique colours from preview cache
     color_palette = cache.get("color_palette")

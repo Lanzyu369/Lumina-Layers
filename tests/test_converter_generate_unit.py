@@ -2704,6 +2704,144 @@ class TestLargeFormatCachedAnalysisRouting:
                 if os.path.exists(path):
                     os.unlink(path)
 
+    def test_large_format_dynamic_native_svg_reuses_int32_matrix_without_quantized_asset(
+        self,
+    ) -> None:
+        """Native SVG keeps its three vector cache assets; P03 quantized data is raster-only."""
+
+        sid, svg_path, lut_path = _create_svg_session(
+            _test_store,
+            native_tiling_supported=True,
+        )
+        matched_rgb = np.zeros((8, 12, 3), dtype=np.uint8)
+        mask_solid = np.ones((8, 12), dtype=bool)
+        material_matrix = np.zeros((8, 12, 7), dtype=np.int32)
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {
+                "target_w": 12,
+                "target_h": 8,
+                **self._semantic_cache_metadata(
+                    modeling_mode=ModelingMode.VECTOR,
+                    material_source="material_archive",
+                ),
+                "color_layers": 7,
+                "matched_rgb": matched_rgb,
+                "mask_solid": mask_solid,
+                "material_matrix": material_matrix,
+                "material_dynamic_layer_info": {
+                    "enabled": True,
+                    "max_layer_count": 7,
+                },
+            },
+        )
+        _test_store.put(sid, "material_source", "material_archive")
+        _test_store.put(sid, "selected_materials", ["brand/base", "brand/red"])
+        _test_store.put(sid, "color_layers", 7)
+        _test_store.put(sid, "material_dynamic_layer_count_enabled", True)
+        _test_store.put(sid, "material_min_layer_count", 5)
+        _test_store.put(sid, "material_max_layer_count", 7)
+        _test_store.put(sid, "material_delta_e00_tolerance", 0.5)
+
+        try:
+            with patch(
+                "api.routers.converter.generate._generate_large_format_svg_native",
+                return_value=_large_format_success_response("native-dynamic"),
+            ) as native_helper:
+                response = client.post(
+                    "/api/convert/generate-large-format",
+                    json=_large_format_payload(
+                        sid,
+                        modeling_mode="vector",
+                        use_cached_matched_rgb=True,
+                        request_overrides={
+                            "lut_name": "__material_archive__",
+                            "color_layers": 7,
+                            "material_dynamic_layer_count_enabled": True,
+                            "material_min_layer_count": 5,
+                            "material_max_layer_count": 7,
+                            "material_delta_e00_tolerance": 0.5,
+                        },
+                    ),
+                )
+
+            assert response.status_code == 200, response.text
+            kwargs = native_helper.call_args.kwargs
+            assert kwargs["dynamic_material_settings"] == (True, 5, 7, 0.5)
+            for field_name in (
+                "matched_rgb_path",
+                "mask_solid_path",
+                "material_matrix_path",
+            ):
+                assert kwargs[field_name] is not None
+            assert "quantized_image_path" not in kwargs
+        finally:
+            _test_store.close(sid)
+            for path in (svg_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    def test_large_format_dynamic_native_svg_rejects_non_int32_matrix(self) -> None:
+        sid, svg_path, lut_path = _create_svg_session(
+            _test_store,
+            native_tiling_supported=True,
+        )
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {
+                "target_w": 12,
+                "target_h": 8,
+                **self._semantic_cache_metadata(
+                    modeling_mode=ModelingMode.VECTOR,
+                    material_source="material_archive",
+                ),
+                "color_layers": 7,
+                "matched_rgb": np.zeros((8, 12, 3), dtype=np.uint8),
+                "mask_solid": np.ones((8, 12), dtype=bool),
+                "material_matrix": np.zeros((8, 12, 7), dtype=np.int16),
+                "material_dynamic_layer_info": {"enabled": True},
+            },
+        )
+        _test_store.put(sid, "material_source", "material_archive")
+        _test_store.put(sid, "selected_materials", ["brand/base", "brand/red"])
+        _test_store.put(sid, "color_layers", 7)
+        _test_store.put(sid, "material_dynamic_layer_count_enabled", True)
+        _test_store.put(sid, "material_min_layer_count", 5)
+        _test_store.put(sid, "material_max_layer_count", 7)
+        _test_store.put(sid, "material_delta_e00_tolerance", 0.5)
+
+        try:
+            with patch(
+                "api.routers.converter.generate._generate_large_format_svg_native"
+            ) as native_helper:
+                response = client.post(
+                    "/api/convert/generate-large-format",
+                    json=_large_format_payload(
+                        sid,
+                        modeling_mode="vector",
+                        use_cached_matched_rgb=True,
+                        request_overrides={
+                            "lut_name": "__material_archive__",
+                            "color_layers": 7,
+                            "material_dynamic_layer_count_enabled": True,
+                            "material_min_layer_count": 5,
+                            "material_max_layer_count": 7,
+                            "material_delta_e00_tolerance": 0.5,
+                        },
+                    ),
+                )
+
+            assert response.status_code == 409, response.text
+            assert response.json()["detail"] == LARGE_FORMAT_CACHED_ANALYSIS_INVALID_DETAIL
+            native_helper.assert_not_called()
+        finally:
+            _test_store.close(sid)
+            for path in (svg_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
     def test_large_format_cached_native_worker_error_returns_sanitized_409(
         self,
     ) -> None:
@@ -3914,6 +4052,89 @@ class TestLargeFormatDimensionsAndRouting:
             == "converter_generate_large_format_done"
         )
         assert done_fields["fallback_reason"] == "unsupported_svg_feature"
+
+    def test_dynamic_large_format_svg_unsupported_native_tiling_returns_422_without_raster_fallback(
+        self,
+    ) -> None:
+        sid, svg_path, lut_path = _create_svg_session(
+            _test_store,
+            native_tiling_supported=False,
+            warnings=["Native vector large-format is unavailable because the SVG uses text elements."],
+        )
+        _test_store.put(sid, "material_source", "material_archive")
+        _test_store.put(sid, "selected_materials", ["brand/base", "brand/red"])
+        _test_store.put(sid, "material_dynamic_layer_count_enabled", True)
+        _test_store.put(sid, "material_min_layer_count", 5)
+        _test_store.put(sid, "material_max_layer_count", 7)
+        _test_store.put(sid, "material_delta_e00_tolerance", 0.5)
+
+        try:
+            with (
+                patch("api.routers.converter.generate._generate_large_format_svg_native") as native_helper,
+                patch("api.routers.converter.generate._generate_large_format_raster") as raster_helper,
+            ):
+                response = client.post(
+                    "/api/convert/generate-large-format",
+                    json=_large_format_payload(
+                        sid,
+                        modeling_mode="vector",
+                        use_cached_matched_rgb=False,
+                    ),
+                )
+
+            assert response.status_code == 422, response.text
+            assert "native svg large-format" in response.json()["detail"].lower()
+            native_helper.assert_not_called()
+            raster_helper.assert_not_called()
+        finally:
+            _test_store.close(sid)
+            for path in (svg_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    def test_dynamic_large_format_svg_native_failure_returns_422_without_raster_fallback(
+        self,
+    ) -> None:
+        sid, svg_path, lut_path = _create_svg_session(
+            _test_store,
+            native_tiling_supported=True,
+        )
+        _test_store.put(sid, "material_source", "material_archive")
+        _test_store.put(sid, "selected_materials", ["brand/base", "brand/red"])
+        _test_store.put(sid, "material_dynamic_layer_count_enabled", True)
+        _test_store.put(sid, "material_min_layer_count", 5)
+        _test_store.put(sid, "material_max_layer_count", 7)
+        _test_store.put(sid, "material_delta_e00_tolerance", 0.5)
+
+        try:
+            with (
+                patch(
+                    "api.routers.converter.generate._generate_large_format_svg_native",
+                    side_effect=HTTPException(
+                        status_code=500,
+                        detail=LARGE_FORMAT_GENERATION_FAILED_DETAIL,
+                    ),
+                ) as native_helper,
+                patch("api.routers.converter.generate._generate_large_format_raster") as raster_helper,
+            ):
+                response = client.post(
+                    "/api/convert/generate-large-format",
+                    json=_large_format_payload(
+                        sid,
+                        modeling_mode="vector",
+                        use_cached_matched_rgb=False,
+                    ),
+                )
+
+            assert response.status_code == 422, response.text
+            assert "native vector generation could not complete" in response.json()["detail"].lower()
+            native_helper.assert_called_once()
+            raster_helper.assert_not_called()
+        finally:
+            _test_store.close(sid)
+            for path in (svg_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
 
     def test_large_format_route_passes_recipe_override_artifacts_to_raster_helper(self) -> None:
         sid, image_path, lut_path = _create_raster_large_format_session(_test_store)
@@ -6813,6 +7034,99 @@ def test_generate_route_inherits_dynamic_settings_and_maps_typed_error(
     assert captured["material_min_layer_count"] == 6
     assert captured["material_max_layer_count"] == 8
     assert captured["material_delta_e00_tolerance"] == 0.4
+
+
+def test_generate_route_accepts_dynamic_native_svg_cached_analysis(tmp_path) -> None:
+    """Regular native SVG generation projects the authoritative vector cache."""
+
+    _test_store.clear_all()
+    svg_path = tmp_path / "native.svg"
+    svg_path.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4">'
+        '<path d="M0,0 L4,0 L4,4 Z" fill="#ff0000"/>'
+        "</svg>",
+        encoding="utf-8",
+    )
+    out_path = tmp_path / "native.3mf"
+    out_path.write_bytes(b"3mf")
+    sid = _test_store.create()
+    _test_store.put(sid, "image_path", str(svg_path))
+    _test_store.put(sid, "lut_path", "__material_archive__")
+    _test_store.put(sid, "material_source", "material_archive")
+    _test_store.put(sid, "selected_materials", ["brand/base", "brand/red"])
+    _test_store.put(sid, "color_layers", 7)
+    _test_store.put(sid, "layer_height_mm", 0.08)
+    _test_store.put(sid, "material_dynamic_layer_count_enabled", True)
+    _test_store.put(sid, "material_min_layer_count", 5)
+    _test_store.put(sid, "material_max_layer_count", 7)
+    _test_store.put(sid, "material_delta_e00_tolerance", 0.5)
+    _test_store.put(sid, "replacement_regions", [])
+    _test_store.put(sid, "free_color_set", set())
+    _test_store.put(
+        sid,
+        "preview_cache",
+        {
+            "target_w": 40,
+            "target_h": 40,
+            "target_width_mm": 40.0,
+            "color_mode": "4-Color (RYBW)",
+            "modeling_mode": "vector",
+            "color_layers": 7,
+            "layer_height_mm": 0.08,
+            "quantize_colors": 48,
+            "enable_cleanup": True,
+            "hue_weight": 0.0,
+            "chroma_gate": 15.0,
+            "use_lut_constrained": False,
+            "auto_dynamic_range": False,
+            "model_enable": False,
+            "model_only": False,
+            "model_threshold": None,
+            "model_margin": None,
+            "svg_pixels_per_mm": 10.0,
+            "material_source": "material_archive",
+            "matched_rgb": np.zeros((40, 40, 3), dtype=np.uint8),
+            "mask_solid": np.ones((40, 40), dtype=bool),
+            "material_matrix": np.zeros((40, 40, 7), dtype=np.int32),
+            "material_dynamic_layer_info": {
+                "enabled": True,
+                "max_layer_count": 7,
+                "colors": [],
+            },
+        },
+    )
+    _mock_pool.submit = AsyncMock(
+        return_value={
+            "threemf_path": str(out_path),
+            "glb_path": None,
+            "status_msg": "ok",
+        }
+    )
+
+    response = client.post(
+        "/api/convert/generate",
+        json={
+            "session_id": sid,
+            "params": {
+                "lut_name": "__material_archive__",
+                "modeling_mode": "vector",
+                "target_width_mm": 40.0,
+                "color_layers": 7,
+                "material_dynamic_layer_count_enabled": True,
+                "material_min_layer_count": 5,
+                "material_max_layer_count": 7,
+                "material_delta_e00_tolerance": 0.5,
+                "use_cached_matched_rgb": True,
+            },
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    submitted_params = _mock_pool.submit.call_args.args[3]
+    assert submitted_params["material_dynamic_layer_count_enabled"] is True
+    assert submitted_params["material_matrix_path"] is not None
+    assert submitted_params["quantized_image_path"] is None
+    assert submitted_params["reuse_preview_analysis"] == "required"
 
 
 def test_generate_route_rejects_material_archive_relief_color_height_below_optical_depth(tmp_path) -> None:

@@ -58,7 +58,9 @@ def normalize_dynamic_material_settings(
             损失。
         hue_weight: Effective hue-protection weight. 实际色相保护权重。
         native_svg_vector: Whether native SVG vector processing would be used.
-            是否将使用原生 SVG 矢量处理。
+            Retained for wire compatibility; native SVG now uses the same
+            dynamic material contract. 是否将使用原生 SVG 矢量处理；仅保留
+            传输层兼容性，原生 SVG 现在使用相同的动态耗材契约。
 
     Returns:
         tuple[bool, int, int, float]: Normalized enabled flag, minimum,
@@ -104,9 +106,4 @@ def normalize_dynamic_material_settings(
             raise ValueError(
                 "dynamic material layer count requires hue_weight to be 0"
             )
-        if native_svg_vector:
-            raise ValueError(
-                "dynamic material layer count does not support native SVG vector mode"
-            )
-
     return normalized_enabled, minimum, maximum, tolerance

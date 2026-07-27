@@ -299,6 +299,17 @@ class VectorAnalysisTiler:
             num_layers=self.analysis.num_layers,
             preview_colors=dict(self.analysis.preview_colors),
             stage_timings={},
+            image_vectorizer_bounds=self.analysis.image_vectorizer_bounds,
+            material_dynamic_layer_info=(
+                dict(self.analysis.material_dynamic_layer_info)
+                if isinstance(self.analysis.material_dynamic_layer_info, dict)
+                else None
+            ),
+            material_solver_info=(
+                dict(self.analysis.material_solver_info)
+                if isinstance(self.analysis.material_solver_info, dict)
+                else None
+            ),
         )
         return SlicedVectorTile(spec=spec, analysis=tile_analysis)
 

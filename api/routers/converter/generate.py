@@ -551,7 +551,7 @@ def _resolve_validated_large_format_cached_analysis_paths(
             raise ValueError(
                 "quantized_image must have shape (H, W, 3) and uint8 dtype"
             )
-        if require_quantized_image and material_dtype != np.dtype(np.int32):
+        if dynamic_max_layer_count is not None and material_dtype != np.dtype(np.int32):
             raise ValueError("dynamic material_matrix must use int32")
         if (
             dynamic_max_layer_count is not None
@@ -1703,8 +1703,8 @@ async def convert_generate(
         lut_path = "__material_archive__"
 
     # Resolve the preview-session contract before any generated SVG or temp
-    # artifact is created. Color-card mode is implemented by native SVG vector
-    # generation and is therefore unsupported for dynamic material matching.
+    # artifact is created. Native source SVGs retain their geometry and now
+    # use the dynamic material contract directly.
     core_modeling_mode = CoreModelingMode(request.modeling_mode.value)
     dynamic_material_settings = _resolve_session_dynamic_material_settings(
         session_data=session_data,
@@ -1718,6 +1718,14 @@ async def convert_generate(
             )
         ),
     )
+    if core_modeling_mode == CoreModelingMode.COLOR_CARD and dynamic_material_settings[0]:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Dynamic material layer count does not support generated "
+                "color-card SVGs. Use a native uploaded SVG instead."
+            ),
+        )
     if (
         session_material_source == "material_archive"
         and dynamic_material_settings[0]
@@ -1848,7 +1856,7 @@ async def convert_generate(
             require_quantized_image=requires_dynamic_quantized_analysis,
             dynamic_max_layer_count=(
                 dynamic_material_settings[2]
-                if requires_dynamic_quantized_analysis
+                if dynamic_material_settings[0]
                 else None
             ),
             invalid_detail=STANDARD_CACHED_ANALYSIS_INVALID_DETAIL,
@@ -3215,9 +3223,7 @@ async def convert_generate_large_format(
         session_data=session_data,
         request=request,
         material_source=str(session_material_source or "lut"),
-        # Material-archive SVG requests are rasterized before matching, so v1
-        # never enters native SVG dynamic matching from this route.
-        native_svg_vector=False,
+        native_svg_vector=is_svg_vector,
     )
     if (
         session_material_source == "material_archive"
@@ -3265,7 +3271,7 @@ async def convert_generate_large_format(
             require_quantized_image=requires_dynamic_quantized_analysis,
             dynamic_max_layer_count=(
                 dynamic_material_settings[2]
-                if requires_dynamic_quantized_analysis
+                if dynamic_material_settings[0]
                 else None
             ),
         )
@@ -3337,6 +3343,19 @@ async def convert_generate_large_format(
             store.put(sid, "svg_large_format_policy", policy)
         warnings.extend(list(policy.get("warnings", [])))
 
+        if (
+            dynamic_material_settings[0]
+            and not bool(policy.get("native_tiling_supported", False))
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Dynamic material layers require native SVG large-format "
+                    "tiling. This SVG cannot be tiled natively; simplify or "
+                    "re-export the SVG and preview it again."
+                ),
+            )
+
         result: dict | None = None
         if bool(policy.get("native_tiling_supported", False)):
             try:
@@ -3369,9 +3388,27 @@ async def convert_generate_large_format(
             except HTTPException as exc:
                 if exc.status_code not in {500, 504}:
                     raise
+                if dynamic_material_settings[0]:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            "Dynamic material layers require native SVG large-format "
+                            "tiling, but native vector generation could not complete. "
+                            "Re-preview the SVG or simplify unsupported geometry."
+                        ),
+                    ) from exc
                 native_fallback_error = exc
                 native_fallback_cause = exc
             except Exception as exc:  # noqa: BLE001 - endpoint recovery boundary
+                if dynamic_material_settings[0]:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            "Dynamic material layers require native SVG large-format "
+                            "tiling, but native vector generation could not complete. "
+                            "Re-preview the SVG or simplify unsupported geometry."
+                        ),
+                    ) from exc
                 native_fallback_error = HTTPException(
                     status_code=500,
                     detail=LARGE_FORMAT_GENERATION_FAILED_DETAIL,

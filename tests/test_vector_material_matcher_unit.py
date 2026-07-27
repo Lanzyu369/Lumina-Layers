@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from shapely.geometry import box
 
 from core.vector_matchers import (
     MATERIAL_ARCHIVE_LUT_SENTINEL,
@@ -246,6 +247,97 @@ class TestMaterialVectorMatcherSolveForFills:
             m.ref_stacks[0],
             np.asarray([0, 0, 1, 1, 2, 2], dtype=np.int32),
         )
+
+
+class TestMaterialVectorMatcherDynamicGeometry:
+    """Native SVG dynamic layers use clipped geometry, not raster fallback."""
+
+    def test_dynamic_solver_receives_relative_clipped_geometry_coverage(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        calls: dict[str, object] = {}
+
+        def fake_solve_dynamic_material_targets(**kwargs):
+            calls.update(kwargs)
+            unique_colors = kwargs["unique_colors"]
+            assert unique_colors.tolist() == [[10, 20, 30], [200, 210, 220]]
+            return (
+                np.asarray([[11, 21, 31], [201, 211, 221]], dtype=np.uint8),
+                np.asarray(
+                    [
+                        [1, 1, 1, 1, 0, 0, 0],
+                        [2, 2, 2, 2, 2, 2, 2],
+                    ],
+                    dtype=np.int32,
+                ),
+                np.asarray([0.1, 0.2], dtype=np.float64),
+                {
+                    "enabled": True,
+                    "min_layer_count": 5,
+                    "max_layer_count": 7,
+                    "colors": [
+                        {
+                            "target_srgb": [10, 20, 30],
+                            "matched_srgb": [11, 21, 31],
+                            "actual_layer_count": 4,
+                            "padding_layer_count": 3,
+                            "actual_recipe_top_to_bottom": [1, 1, 1, 1],
+                            "print_recipe_top_to_bottom": [1, 1, 1, 1, 0, 0, 0],
+                        },
+                        {
+                            "target_srgb": [200, 210, 220],
+                            "matched_srgb": [201, 211, 221],
+                            "actual_layer_count": 7,
+                            "padding_layer_count": 0,
+                            "actual_recipe_top_to_bottom": [2] * 7,
+                            "print_recipe_top_to_bottom": [2] * 7,
+                        },
+                    ],
+                    "benefit_curve": [],
+                },
+                {"dynamic_engine": "exact"},
+            )
+
+        monkeypatch.setattr(
+            "core.pipeline.material_dynamic_layers.solve_dynamic_material_targets",
+            fake_solve_dynamic_material_targets,
+        )
+        matcher = MaterialVectorMatcher(
+            materials=[object(), object(), object()],
+            layer_count=7,
+            layer_height_mm=0.08,
+            substrate="white",
+            slot_names=["Base", "Red", "Blue"],
+            preview_colors={},
+            color_conf={},
+            dynamic_layer_count_enabled=True,
+            dynamic_min_layer_count=5,
+            dynamic_max_layer_count=7,
+            dynamic_delta_e00_tolerance=0.5,
+            backing_material_index=0,
+        )
+
+        matcher.solve_for_clipped_shapes(
+            [
+                {"color": (10, 20, 30), "geometry": box(0, 0, 4, 2)},
+                {"color": (200, 210, 220), "geometry": box(0, 0, 1, 1)},
+            ],
+            scale_factor=1.0,
+        )
+
+        counts = np.asarray(calls["pixel_counts"], dtype=np.int64)
+        assert counts.tolist() == [8_000_000, 1_000_000]
+        assert matcher.layer_count == 7
+        assert matcher.ref_stacks.dtype == np.int32
+        np.testing.assert_array_equal(
+            matcher.ref_stacks[0],
+            np.asarray([1, 1, 1, 1, 0, 0, 0], dtype=np.int32),
+        )
+        dynamic_info = matcher.dynamic_layer_info
+        assert dynamic_info is not None
+        assert dynamic_info["coverage_source"] == "native_svg_geometry"
+        assert matcher.dynamic_metadata_for_fill((10, 20, 30))["actual_layer_count"] == 4
 
 
 class TestMaterialVectorMatcherIgnoresInvalidInput:

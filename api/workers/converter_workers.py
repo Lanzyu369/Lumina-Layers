@@ -1980,6 +1980,10 @@ def worker_generate_large_format_svg_native(
                 pixels_per_mm=cache_pixels_per_mm,
                 max_width_px=int(matched_rgb.shape[1]),
                 strict=True,
+                prefer_cached_material_state=bool(
+                    worker_ctx.get("material_dynamic_layer_count_enabled", False)
+                    and material_source == "material_archive"
+                ),
             )
         except (
             OSError,

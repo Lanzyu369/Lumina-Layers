@@ -79,7 +79,7 @@ def test_shared_dynamic_material_validator_rejects_invalid_ranges(
     assert exc_info.value.status_code == 422
 
 
-def test_shared_dynamic_material_validator_rejects_order_hue_and_native_vector() -> None:
+def test_shared_dynamic_material_validator_rejects_order_and_hue_but_allows_native_vector() -> None:
     from api.routers.converter.common import _validate_dynamic_material_settings
 
     base = {
@@ -93,11 +93,14 @@ def test_shared_dynamic_material_validator_rejects_order_hue_and_native_vector()
     for changes in (
         {"min_layer_count": 8, "max_layer_count": 7},
         {"hue_weight": 0.01},
-        {"native_svg_vector": True},
     ):
         with pytest.raises(HTTPException) as exc_info:
             _validate_dynamic_material_settings(**(base | changes))
         assert exc_info.value.status_code == 422
+
+    assert _validate_dynamic_material_settings(
+        **(base | {"native_svg_vector": True})
+    ) == (True, 5, 10, 0.5)
 
 
 def test_dynamic_candidate_error_is_pickle_safe_with_context() -> None:
@@ -340,7 +343,7 @@ def test_dynamic_material_selection_rejects_duplicate_cache_identities() -> None
     assert "duplicate" in str(exc_info.value.detail).lower()
 
 
-def test_generate_request_rejects_dynamic_native_svg_derived_flow() -> None:
+def test_generate_request_allows_dynamic_native_svg_derived_flow() -> None:
     from api.routers.converter.common import (
         _resolve_session_dynamic_material_settings,
     )
@@ -348,15 +351,12 @@ def test_generate_request_rejects_dynamic_native_svg_derived_flow() -> None:
 
     request = ConvertGenerateRequest.model_validate({"lut_name": "test-lut"})
 
-    with pytest.raises(HTTPException) as exc_info:
-        _resolve_session_dynamic_material_settings(
-            session_data={"material_dynamic_layer_count_enabled": True},
-            request=request,
-            material_source="material_archive",
-            native_svg_vector=True,
-        )
-
-    assert exc_info.value.status_code == 422
+    assert _resolve_session_dynamic_material_settings(
+        session_data={"material_dynamic_layer_count_enabled": True},
+        request=request,
+        material_source="material_archive",
+        native_svg_vector=True,
+    ) == (True, 5, 10, 0.5)
 
 
 def test_dynamic_relief_depth_ignores_legacy_fixed_layer_count() -> None:

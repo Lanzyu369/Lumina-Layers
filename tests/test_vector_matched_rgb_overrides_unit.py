@@ -287,6 +287,60 @@ class TestApplyMatchedRgbOverrides:
         assert bot_shape["matched_rgb"] == (0, 255, 0)
         assert bot_shape["recipe"] == [2, 2, 2, 2, 2]
 
+    def test_dynamic_cached_matrix_is_authoritative_for_native_svg_recipe(self):
+        """Dynamic vector generation must preserve cached display RGB + stack."""
+
+        analysis = _make_two_shape_analysis()
+        analysis.num_layers = 7
+        analysis.material_dynamic_layer_info = {
+            "enabled": True,
+            "min_layer_count": 5,
+            "max_layer_count": 7,
+            "colors": [
+                {
+                    "target_srgb": [255, 0, 0],
+                    "matched_srgb": [10, 20, 30],
+                    "actual_layer_count": 4,
+                    "padding_layer_count": 3,
+                    "actual_recipe_top_to_bottom": [1, 1, 1, 1],
+                    "print_recipe_top_to_bottom": [1, 1, 1, 1, 0, 0, 0],
+                }
+            ],
+        }
+        img_processor = _build_fake_img_processor()
+        matched_rgb, mask_solid, h_px, w_px = _build_grid_arrays(analysis)
+        matched_rgb[: h_px // 2, :, :] = (10, 20, 30)
+        material_matrix = np.empty((h_px, w_px, 7), dtype=np.int32)
+        material_matrix[: h_px // 2, :, :] = [1, 1, 1, 1, 0, 0, 0]
+        material_matrix[h_px // 2 :, :, :] = [2, 2, 2, 2, 2, 2, 2]
+
+        changed = apply_matched_rgb_overrides_to_analysis(
+            analysis,
+            matched_rgb=matched_rgb,
+            mask_solid=mask_solid,
+            material_matrix=material_matrix,
+            img_processor=img_processor,
+            strict=True,
+            prefer_cached_material_state=True,
+        )
+
+        assert changed >= 1
+        top_shape = analysis.matched_shapes[0]
+        assert top_shape["matched_rgb"] == (10, 20, 30)
+        assert top_shape["recipe"] == [1, 1, 1, 1, 0, 0, 0]
+        assert top_shape["material_dynamic_recipe"]["actual_layer_count"] == 4
+        assert top_shape["material_dynamic_recipe"]["padding_layer_count"] == 3
+
+        preview_cache = _ve.VectorProcessor.build_preview_cache(
+            analysis,
+            pixels_per_mm=10.0,
+        )
+        assert preview_cache["material_matrix"].dtype == np.int32
+        assert (1, 1, 1, 1, 0, 0, 0) in {
+            tuple(row.tolist())
+            for row in preview_cache["material_matrix"][preview_cache["mask_solid"]]
+        }
+
     def test_region_replace_logs_structured_success_event(self, caplog):
         """A successful helper rewrite must emit a structured DEBUG event."""
         analysis = _make_two_shape_analysis()

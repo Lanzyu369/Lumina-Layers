@@ -23,6 +23,7 @@ import io
 import pickle
 import warnings
 import math
+from copy import deepcopy
 from typing import Any
 import numpy as np
 import time
@@ -2269,6 +2270,8 @@ class VectorAnalysis:
     preview_colors: dict
     stage_timings: dict = field(default_factory=dict)
     image_vectorizer_bounds: object | None = None
+    material_dynamic_layer_info: dict | None = None
+    material_solver_info: dict | None = None
 
 
 def _physical_backing_geometry(analysis: object) -> object | None:
@@ -2302,6 +2305,13 @@ def _signed_dtype_for_int_range(min_value: int, max_value: int) -> np.dtype:
 
 def _material_matrix_dtype_for_vector_analysis(analysis: "VectorAnalysis") -> np.dtype:
     """Return the compact material-matrix dtype needed by an analysis."""
+
+    dynamic_info = getattr(analysis, "material_dynamic_layer_info", None)
+    if isinstance(dynamic_info, dict) and bool(dynamic_info.get("enabled")):
+        # Dynamic material matrices are a P03 authority artifact. Keep their
+        # explicit int32 contract even when the selected material indices
+        # would fit in a smaller signed type.
+        return np.dtype(np.int32)
 
     min_value = -1
     max_value = max(0, int(getattr(analysis, "num_channels", 0) or 0) - 1)
@@ -2711,6 +2721,7 @@ def apply_matched_rgb_overrides_to_analysis(
     pixels_per_mm: float = 10.0,
     max_width_px: int = 1600,
     strict: bool = False,
+    prefer_cached_material_state: bool = False,
 ) -> int:
     """Propagate region-level ``matched_rgb`` edits into ``matched_shapes``.
     把 ``cache.matched_rgb`` 上的像素级改色回写到 ``analysis.matched_shapes``。
@@ -2774,6 +2785,10 @@ def apply_matched_rgb_overrides_to_analysis(
             mismatches instead of logging and returning zero. A valid cache
             that changes no shapes still returns zero normally.
             （缓存输入或网格无效时抛出 ``ValueError``；合法但无修改仍返回零）
+        prefer_cached_material_state: Treat the cache RGB and recipe matrix as
+            authoritative instead of re-deriving the display RGB from the
+            current matcher. Dynamic material sessions use this so edited
+            vector 3MF stays on the same recipe contract as 2D/GLB.
 
     Returns:
         int: Number of connected components whose material assignment changed.
@@ -3014,6 +3029,53 @@ def apply_matched_rgb_overrides_to_analysis(
         except (TypeError, ValueError):
             return None
 
+    def _dynamic_metadata_for_cached_assignment(
+        shape: dict,
+        *,
+        matched_color: tuple[int, int, int],
+        recipe: list[int],
+    ) -> dict | None:
+        dynamic_info = getattr(analysis, "material_dynamic_layer_info", None)
+        if not isinstance(dynamic_info, dict) or not dynamic_info.get("enabled"):
+            return None
+        recipe_list = [int(value) for value in recipe]
+        for entry in dynamic_info.get("colors", []):
+            if not isinstance(entry, dict):
+                continue
+            try:
+                entry_matched = tuple(int(value) for value in entry["matched_srgb"])
+                entry_recipe = [
+                    int(value)
+                    for value in entry["print_recipe_top_to_bottom"]
+                ]
+            except (KeyError, TypeError, ValueError):
+                continue
+            if entry_matched == matched_color and entry_recipe == recipe_list:
+                return deepcopy(entry)
+        existing = shape.get("material_dynamic_recipe")
+        if isinstance(existing, dict):
+            try:
+                if [
+                    int(value)
+                    for value in existing.get("print_recipe_top_to_bottom", [])
+                ] == recipe_list:
+                    result = deepcopy(existing)
+                    result["matched_srgb"] = list(matched_color)
+                    return result
+            except (TypeError, ValueError):
+                pass
+        # Custom recipe edits may intentionally no longer correspond to an
+        # exact-solver candidate. Preserve their full physical stack without
+        # inventing a shorter effective depth.
+        return {
+            "matched_srgb": list(matched_color),
+            "actual_layer_count": len(recipe_list),
+            "padding_layer_count": 0,
+            "actual_recipe_top_to_bottom": recipe_list,
+            "print_recipe_top_to_bottom": recipe_list,
+            "source": "cached_material_matrix",
+        }
+
     def _dominant_rgb(pixels: np.ndarray) -> tuple[int, int, int]:
         codes = (
             pixels[:, 0].astype(np.uint32) * np.uint32(65536)
@@ -3058,7 +3120,11 @@ def apply_matched_rgb_overrides_to_analysis(
             lut_idx = int(np.atleast_1d(index)[0])
         except (TypeError, ValueError, IndexError):
             return None
-        new_matched_rgb = tuple(int(c) for c in lut_rgb[lut_idx])
+        new_matched_rgb = (
+            dominant_rgb
+            if prefer_cached_material_state and matrix_arr is not None
+            else tuple(int(c) for c in lut_rgb[lut_idx])
+        )
 
         stack_source = "ref_stacks_fallback"
         stack_top_alternatives: list[list[int]] = []
@@ -3083,6 +3149,11 @@ def apply_matched_rgb_overrides_to_analysis(
             stack,
             target_layers=num_layers,
             num_channels=num_channels,
+        )
+        dynamic_recipe = _dynamic_metadata_for_cached_assignment(
+            shape,
+            matched_color=new_matched_rgb,
+            recipe=new_recipe,
         )
 
         prev_recipe = [int(v) for v in shape.get("recipe", [])]
@@ -3130,6 +3201,7 @@ def apply_matched_rgb_overrides_to_analysis(
             "recipe": new_recipe,
             "height_identity_rgb": dominant_height_identity,
             "original_recipe": original_recipe,
+            "material_dynamic_recipe": dynamic_recipe,
             "changed": assignment_changed,
         }
 
@@ -3166,6 +3238,10 @@ def apply_matched_rgb_overrides_to_analysis(
                 component_record["original_recipe"] = projection[
                     "original_recipe"
                 ]
+                if projection["material_dynamic_recipe"] is not None:
+                    component_record["material_dynamic_recipe"] = projection[
+                        "material_dynamic_recipe"
+                    ]
                 if projection["changed"]:
                     changed_components += 1
             component_records.append(component_record)
@@ -3190,6 +3266,10 @@ def apply_matched_rgb_overrides_to_analysis(
                 shape["original_recipe"] = list(
                     uniform_record.get("original_recipe") or []
                 )
+                if uniform_record.get("material_dynamic_recipe") is not None:
+                    shape["material_dynamic_recipe"] = uniform_record[
+                        "material_dynamic_recipe"
+                    ]
             projected_shapes.append(shape)
         else:
             # Downstream tiling and mesh construction consume records by value,
@@ -4423,8 +4503,18 @@ class VectorProcessor:
         # 耗材档案 matcher 在 _match_colors 之前批量求解填充色，保证
         # KDTree / lut_rgb / ref_stacks 已就绪；LUT 模式没有该方法，
         # 透明跳过。
+        solve_for_clipped_shapes = getattr(
+            self.img_processor,
+            "solve_for_clipped_shapes",
+            None,
+        )
         solve_for_fills = getattr(self.img_processor, "solve_for_fills", None)
-        if solve_for_fills is not None and clipped_shapes:
+        if callable(solve_for_clipped_shapes) and clipped_shapes:
+            solve_for_clipped_shapes(
+                clipped_shapes,
+                scale_factor=scale_factor,
+            )
+        elif solve_for_fills is not None and clipped_shapes:
             unique_fills_set: set = set()
             for item in clipped_shapes:
                 color = item.get("color")
@@ -4499,6 +4589,16 @@ class VectorProcessor:
             preview_colors=preview_colors,
             stage_timings=stage_timings,
             image_vectorizer_bounds=image_vectorizer_bounds,
+            material_dynamic_layer_info=getattr(
+                self.img_processor,
+                "dynamic_layer_info",
+                None,
+            ),
+            material_solver_info=getattr(
+                self.img_processor,
+                "material_solver_info",
+                None,
+            ),
         )
 
     def build_mesh(
@@ -5897,6 +5997,11 @@ class VectorProcessor:
             num_layers = PrinterConfig.COLOR_LAYERS
         recipe_log_mode = os.getenv("LUMINA_VECTOR_RECIPE_LOG", "summary").strip().lower()
         color_cache = {}
+        dynamic_metadata_for_fill = getattr(
+            self.img_processor,
+            "dynamic_metadata_for_fill",
+            None,
+        )
         matched = []
         sample_logs = []
         large_distance_count = 0
@@ -5987,18 +6092,23 @@ class VectorProcessor:
                     else:
                         sample_logs.append(f"{hex_c} -> {matched_hex} -> {recipe} (dist={lab_dist:.1f})")
 
-            matched.append(
-                {
-                    "geometry": item["geometry"],
-                    "recipe": recipe,
-                    "color": rgb,
-                    "match_color": query_rgb,
-                    "matched_rgb": matched_rgb,
-                    "lut_idx": int(lut_idx),
-                    "height_identity_rgb": height_identity_rgb,
-                    "original_recipe": list(original_recipe),
-                }
-            )
+            matched_shape = {
+                "geometry": item["geometry"],
+                "recipe": recipe,
+                "color": rgb,
+                "match_color": query_rgb,
+                "matched_rgb": matched_rgb,
+                "lut_idx": int(lut_idx),
+                "height_identity_rgb": height_identity_rgb,
+                "original_recipe": list(original_recipe),
+            }
+            if callable(dynamic_metadata_for_fill):
+                dynamic_recipe = dynamic_metadata_for_fill(query_rgb)
+                if isinstance(dynamic_recipe, dict):
+                    # Retain each colour's effective-depth recipe next to the
+                    # padded physical recipe used by mesh extrusion.
+                    matched_shape["material_dynamic_recipe"] = dynamic_recipe
+            matched.append(matched_shape)
 
         if recipe_log_mode == "summary":
             _log.debug(
