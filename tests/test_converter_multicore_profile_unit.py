@@ -53,6 +53,7 @@ def test_build_pipeline_context_uses_quality_locked_profile_settings(
     assert ctx["selected_materials"] == MATERIAL_PALETTES[12]
     assert ctx["material_layer_count"] == 10
     assert ctx["material_layer_height_mm"] == 0.08
+    assert ctx["material_grid_resolution"] == 64
     assert ctx["quantize_colors"] == 64
     assert ctx["target_width_mm"] == 299.0
     assert ctx["structure_mode"] == "single-sided"

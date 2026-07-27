@@ -159,7 +159,7 @@ def build_pipeline_context(case: ProfileCase) -> dict[str, Any]:
         "selected_materials": list(MATERIAL_PALETTES[case.material_count]),
         "material_layer_count": 10,
         "material_layer_height_mm": 0.08,
-        "material_grid_resolution": 8,
+        "material_grid_resolution": 64,
         "material_backing_material_index": 0,
         "use_lut_constrained": False,
         "auto_dynamic_range": False,
