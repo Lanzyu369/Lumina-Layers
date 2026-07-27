@@ -6,10 +6,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
+
+import numpy as np
+import trimesh
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -139,4 +143,89 @@ def build_pipeline_context(case: ProfileCase) -> dict[str, Any]:
         "use_lut_constrained": False,
         "auto_dynamic_range": False,
         "high_precision_3d_preview": False,
+    }
+
+
+def _array_summary(value: object) -> dict[str, object] | None:
+    if value is None:
+        return None
+    array = np.ascontiguousarray(np.asarray(value))
+    digest = hashlib.sha256()
+    digest.update(array.dtype.str.encode("ascii"))
+    digest.update(repr(tuple(int(item) for item in array.shape)).encode("ascii"))
+    digest.update(memoryview(array).cast("B"))
+    return {
+        "shape": [int(item) for item in array.shape],
+        "dtype": array.dtype.str,
+        "sha256": digest.hexdigest(),
+    }
+
+
+def _canonical_triangle_sha256(mesh: trimesh.Trimesh) -> str:
+    vertices = np.round(np.asarray(mesh.vertices, dtype=np.float64), 9)
+    faces = np.asarray(mesh.faces, dtype=np.int64)
+    triangles = vertices[faces]
+    vertex_order = np.lexsort(
+        (triangles[:, :, 2], triangles[:, :, 1], triangles[:, :, 0]),
+        axis=1,
+    )
+    ordered_vertices = np.take_along_axis(
+        triangles,
+        vertex_order[:, :, np.newaxis],
+        axis=1,
+    )
+    flattened = np.ascontiguousarray(ordered_vertices.reshape((-1, 9)))
+    face_order = np.lexsort(
+        tuple(flattened[:, index] for index in range(8, -1, -1))
+    )
+    canonical = np.ascontiguousarray(flattened[face_order])
+    return hashlib.sha256(memoryview(canonical).cast("B")).hexdigest()
+
+
+def _mesh_summary(mesh: trimesh.Trimesh) -> dict[str, object]:
+    bounds = np.asarray(mesh.bounds, dtype=np.float64)
+    return {
+        "vertices": int(len(mesh.vertices)),
+        "faces": int(len(mesh.faces)),
+        "bounds": np.round(bounds, 9).tolist(),
+        "area": round(float(mesh.area), 9),
+        "volume": round(float(mesh.volume), 9),
+        "watertight": bool(mesh.is_watertight),
+        "euler_number": int(mesh.euler_number),
+        "degenerate_faces": int(
+            np.count_nonzero(np.asarray(mesh.area_faces) <= 1e-12)
+        ),
+        "canonical_triangle_sha256": _canonical_triangle_sha256(mesh),
+    }
+
+
+def semantic_snapshot(ctx: dict[str, Any]) -> dict[str, object]:
+    """Summarize output arrays and geometry using deterministic semantics.
+
+    以确定性语义摘要记录输出数组与几何结果。
+
+    Args:
+        ctx: Completed pipeline context. 已完成的流水线上下文。
+
+    Returns:
+        Order-independent semantic snapshot. 与顺序无关的语义快照。
+    """
+
+    cache = ctx.get("cache")
+    payload = cache if isinstance(cache, dict) else ctx
+    scene = ctx.get("scene")
+    if scene is None:
+        scene = payload.get("scene")
+    geometry: dict[str, object] = {}
+    if isinstance(scene, trimesh.Scene):
+        for name in sorted(scene.geometry):
+            raw = scene.geometry[name]
+            if isinstance(raw, trimesh.Trimesh):
+                geometry[str(name)] = _mesh_summary(raw)
+    return {
+        "matched_rgb": _array_summary(payload.get("matched_rgb")),
+        "material_matrix": _array_summary(payload.get("material_matrix")),
+        "mask_solid": _array_summary(payload.get("mask_solid")),
+        "slot_names": [str(item) for item in payload.get("slot_names") or []],
+        "geometry": geometry,
     }

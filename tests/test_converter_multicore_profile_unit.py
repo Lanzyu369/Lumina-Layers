@@ -1,12 +1,15 @@
 from pathlib import Path
 
+import numpy as np
 import pytest
+import trimesh
 
 from config import ModelingMode
 from scripts.profile_converter_multicore import (
     MATERIAL_PALETTES,
     ProfileCase,
     build_pipeline_context,
+    semantic_snapshot,
 )
 
 
@@ -51,3 +54,56 @@ def test_build_pipeline_context_uses_quality_locked_profile_settings(
     assert ctx["quantize_colors"] == 64
     assert ctx["target_width_mm"] == 299.0
     assert ctx["structure_mode"] == "single-sided"
+
+
+def _scene_with_geometry_order(order: tuple[str, ...]) -> trimesh.Scene:
+    scene = trimesh.Scene()
+    meshes = {
+        "red": trimesh.creation.box(extents=(2.0, 1.0, 0.4)),
+        "blue": trimesh.creation.box(extents=(1.0, 3.0, 0.8)),
+    }
+    for name in order:
+        scene.add_geometry(meshes[name].copy(), node_name=name, geom_name=name)
+    return scene
+
+
+def test_semantic_snapshot_is_stable_across_array_layout_and_scene_order() -> None:
+    rgb = np.arange(36, dtype=np.uint8).reshape(3, 4, 3)
+    matrix = np.arange(24, dtype=np.int32).reshape(3, 4, 2)
+    first = semantic_snapshot(
+        {
+            "matched_rgb": rgb,
+            "material_matrix": matrix,
+            "mask_solid": np.ones((3, 4), dtype=bool),
+            "scene": _scene_with_geometry_order(("red", "blue")),
+            "slot_names": ["white", "black"],
+        }
+    )
+    second = semantic_snapshot(
+        {
+            "matched_rgb": np.asfortranarray(rgb),
+            "material_matrix": np.asfortranarray(matrix),
+            "mask_solid": np.asfortranarray(np.ones((3, 4), dtype=bool)),
+            "scene": _scene_with_geometry_order(("blue", "red")),
+            "slot_names": ["white", "black"],
+        }
+    )
+    assert first == second
+
+
+def test_semantic_snapshot_changes_when_geometry_or_layers_change() -> None:
+    ctx = {
+        "matched_rgb": np.zeros((2, 2, 3), dtype=np.uint8),
+        "material_matrix": np.zeros((2, 2, 2), dtype=np.int32),
+        "mask_solid": np.ones((2, 2), dtype=bool),
+        "scene": _scene_with_geometry_order(("red", "blue")),
+        "slot_names": ["white", "black"],
+    }
+    baseline = semantic_snapshot(ctx)
+    changed_layers = {**ctx, "material_matrix": np.ones((2, 2, 2), dtype=np.int32)}
+    changed_scene = {
+        **ctx,
+        "scene": trimesh.Scene(trimesh.creation.box(extents=(9.0, 1.0, 0.4))),
+    }
+    assert semantic_snapshot(changed_layers) != baseline
+    assert semantic_snapshot(changed_scene) != baseline
