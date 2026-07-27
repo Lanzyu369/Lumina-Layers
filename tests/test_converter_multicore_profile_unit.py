@@ -1,16 +1,22 @@
 from pathlib import Path
 
 import numpy as np
+import psutil
 import pytest
 import trimesh
 
+import scripts.profile_converter_multicore as profile_module
 from config import ModelingMode
 from scripts.profile_converter_multicore import (
     MATERIAL_PALETTES,
     ProfileCase,
+    _ResourceSampler,
     _cleanup_result_files,
+    _extract_vector_timings,
+    _parse_args,
     build_report,
     build_pipeline_context,
+    execute_case,
     semantic_snapshot,
     summarize_runs,
 )
@@ -113,6 +119,22 @@ def test_semantic_snapshot_changes_when_geometry_or_layers_change() -> None:
     assert semantic_snapshot(changed_scene) != baseline
 
 
+def test_semantic_snapshot_loads_exported_scene_from_result_tuple(
+    tmp_path: Path,
+) -> None:
+    artifact = tmp_path / "model.glb"
+    _scene_with_geometry_order(("red", "blue")).export(artifact)
+
+    snapshot = semantic_snapshot(
+        {
+            "result_tuple": (str(artifact), None, None, "done", None),
+            "slot_names": ["white", "black"],
+        }
+    )
+
+    assert snapshot["geometry"]
+
+
 def test_summarize_runs_reports_cold_warm_median_and_p90() -> None:
     summary = summarize_runs(
         [
@@ -175,3 +197,64 @@ def test_cleanup_result_files_removes_pipeline_result_tuple_artifacts(
     assert not model.exists()
     assert not preview.exists()
     assert not recipe.exists()
+
+
+def test_extract_vector_timings_accepts_current_pipeline_key() -> None:
+    assert _extract_vector_timings(
+        {"vector_timing": {"parse_s": 1.25}}
+    ) == {"parse_s": 1.25}
+
+
+def test_resource_sampler_uses_low_overhead_default_interval() -> None:
+    sampler = _ResourceSampler(psutil.Process())
+    assert sampler._interval_s == pytest.approx(0.25)
+
+
+def test_parse_args_supports_external_sampling_without_cprofile(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "input.svg"
+    source.write_text("<svg/>", encoding="utf-8")
+
+    args = _parse_args(
+        [
+            "--kind",
+            "vector",
+            "--input",
+            str(source),
+            "--phase",
+            "preview",
+            "--no-cprofile",
+        ]
+    )
+
+    assert args.no_cprofile is True
+
+
+def test_execute_case_can_disable_cprofile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "input.jpg"
+    source.write_bytes(b"profile-stub")
+    case = ProfileCase(
+        name="raster-8",
+        kind="raster",
+        input_path=source,
+        target_width_mm=20.0,
+        material_count=8,
+    )
+    monkeypatch.setattr(
+        profile_module,
+        "run_preview_pipeline",
+        lambda ctx: {
+            **ctx,
+            "matched_rgb": np.zeros((1, 1, 3), dtype=np.uint8),
+            "material_matrix": np.zeros((1, 1, 1), dtype=np.int8),
+            "mask_solid": np.ones((1, 1), dtype=bool),
+        },
+    )
+
+    metrics = execute_case(case, "preview", enable_cprofile=False)
+
+    assert metrics["cprofile"] == ""

@@ -220,6 +220,29 @@ def _mesh_summary(mesh: trimesh.Trimesh) -> dict[str, object]:
     }
 
 
+def _load_exported_scene(
+    ctx: dict[str, Any],
+) -> tuple[trimesh.Scene | None, str | None]:
+    result_tuple = ctx.get("result_tuple")
+    if not isinstance(result_tuple, (list, tuple)):
+        return None, None
+    for index in (0, 1):
+        if index >= len(result_tuple) or not result_tuple[index]:
+            continue
+        artifact_path = Path(str(result_tuple[index]))
+        if not artifact_path.is_file():
+            continue
+        try:
+            scene = trimesh.load_scene(artifact_path, process=False)
+        except Exception:
+            # Optional profile boundary: one unreadable artifact must not hide
+            # array semantics from an otherwise successful pipeline run.
+            continue
+        if scene.geometry:
+            return scene, f"artifact:{artifact_path.suffix.lower()}"
+    return None, None
+
+
 def semantic_snapshot(ctx: dict[str, Any]) -> dict[str, object]:
     """Summarize output arrays and geometry using deterministic semantics.
 
@@ -237,6 +260,9 @@ def semantic_snapshot(ctx: dict[str, Any]) -> dict[str, object]:
     scene = ctx.get("scene")
     if scene is None:
         scene = payload.get("scene")
+    geometry_source = "context" if isinstance(scene, trimesh.Scene) else None
+    if not isinstance(scene, trimesh.Scene):
+        scene, geometry_source = _load_exported_scene(ctx)
     geometry: dict[str, object] = {}
     if isinstance(scene, trimesh.Scene):
         for name in sorted(scene.geometry):
@@ -248,6 +274,7 @@ def semantic_snapshot(ctx: dict[str, Any]) -> dict[str, object]:
         "material_matrix": _array_summary(payload.get("material_matrix")),
         "mask_solid": _array_summary(payload.get("mask_solid")),
         "slot_names": [str(item) for item in payload.get("slot_names") or []],
+        "geometry_source": geometry_source,
         "geometry": geometry,
     }
 
@@ -363,7 +390,7 @@ def build_report(
 
 
 class _ResourceSampler:
-    def __init__(self, process: psutil.Process, interval_s: float = 0.05) -> None:
+    def __init__(self, process: psutil.Process, interval_s: float = 0.25) -> None:
         self._process = process
         self._interval_s = interval_s
         self._stop = threading.Event()
@@ -432,9 +459,19 @@ def _cleanup_result_files(result: dict[str, Any]) -> None:
             continue
 
 
+def _extract_vector_timings(result: dict[str, Any]) -> dict[str, Any]:
+    return dict(
+        result.get("vector_timing")
+        or result.get("_vector_timings")
+        or {}
+    )
+
+
 def execute_case(
     case: ProfileCase,
     phase: Literal["preview", "generate"],
+    *,
+    enable_cprofile: bool = True,
 ) -> dict[str, object]:
     """Execute and profile one quality-locked conversion phase.
 
@@ -443,6 +480,7 @@ def execute_case(
     Args:
         case: Deterministic profile case. 确定性的性能分析案例。
         phase: Preview or generation phase. 预览或生成阶段。
+        enable_cprofile: Enable deterministic call profiling. 是否启用调用分析。
 
     Returns:
         Timings, resource peaks, semantic snapshot, and cProfile text.
@@ -458,7 +496,8 @@ def execute_case(
     cpu_before = process.cpu_times()
     started = time.perf_counter()
     with _ResourceSampler(process) as resources:
-        profile.enable()
+        if enable_cprofile:
+            profile.enable()
         try:
             result = (
                 run_preview_pipeline(ctx)
@@ -466,19 +505,23 @@ def execute_case(
                 else run_raster_pipeline(ctx)
             )
         finally:
-            profile.disable()
+            if enable_cprofile:
+                profile.disable()
     elapsed = time.perf_counter() - started
     cpu_after = process.cpu_times()
     if result.get("error"):
         _cleanup_result_files(result)
         raise RuntimeError(str(result["error"]))
-    stream = StringIO()
-    (
-        pstats.Stats(profile, stream=stream)
-        .strip_dirs()
-        .sort_stats("cumulative")
-        .print_stats(80)
-    )
+    cprofile_text = ""
+    if enable_cprofile:
+        stream = StringIO()
+        (
+            pstats.Stats(profile, stream=stream)
+            .strip_dirs()
+            .sort_stats("cumulative")
+            .print_stats(80)
+        )
+        cprofile_text = stream.getvalue()
     cpu_s = (
         cpu_after.user
         + cpu_after.system
@@ -500,9 +543,10 @@ def execute_case(
                 or {}
             ),
             "preview_timings": dict(result.get("_preview_timings") or {}),
-            "vector_timings": dict(result.get("_vector_timings") or {}),
+            "vector_timings": _extract_vector_timings(result),
             "semantic_snapshot": snapshot,
-            "cprofile": stream.getvalue(),
+            "cprofile_enabled": enable_cprofile,
+            "cprofile": cprofile_text,
         }
     finally:
         _cleanup_result_files(result)
@@ -527,6 +571,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=12,
     )
     parser.add_argument("--runs", type=int, default=1)
+    parser.add_argument(
+        "--no-cprofile",
+        action="store_true",
+        help="Disable cProfile when an external sampler such as py-spy is used.",
+    )
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -597,7 +646,11 @@ def main(argv: list[str] | None = None) -> int:
             f"[profile] {case.name} {args.phase} run {index}/{args.runs}",
             flush=True,
         )
-        run = execute_case(case, args.phase)
+        run = execute_case(
+            case,
+            args.phase,
+            enable_cprofile=not args.no_cprofile,
+        )
         runs.append(run)
         print(
             f"[profile] total={float(run['total_s']):.3f}s "
