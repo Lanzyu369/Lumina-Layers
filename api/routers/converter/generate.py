@@ -466,11 +466,14 @@ def _resolve_validated_large_format_cached_analysis_paths(
     cache_ref: dict | None,
     sid: str,
     store: SessionStore,
+    require_quantized_image: bool = False,
+    dynamic_max_layer_count: int | None = None,
     invalid_detail: str = LARGE_FORMAT_CACHED_ANALYSIS_INVALID_DETAIL,
-) -> tuple[str, str, str]:
-    """Resolve and validate all three spatial preview-cache arrays together.
+) -> tuple[str, str, str, str | None]:
+    """Resolve and validate the spatial preview-cache arrays together.
 
-    一次性解析并严格校验空间编辑所需的三个预览缓存数组，避免半套缓存被转发。
+    一次性解析并严格校验空间编辑所需的三个预览缓存数组；动态 P03
+    复用时还会校验量化 RGB，避免把半套缓存转发给 worker。
     """
 
     try:
@@ -495,8 +498,19 @@ def _resolve_validated_large_format_cached_analysis_paths(
             sid=sid,
             store=store,
         )
+        quantized_image_path: str | None = None
+        if require_quantized_image:
+            quantized_image_path = _cache_field_path_or_tempfile(
+                cache=cache,
+                cache_ref=cache_ref,
+                field_name="quantized_image",
+                sid=sid,
+                store=store,
+            )
         if not matched_rgb_path or not mask_solid_path or not material_matrix_path:
             raise ValueError("preview cache analysis fields are incomplete")
+        if require_quantized_image and not quantized_image_path:
+            raise ValueError("preview cache quantized_image is missing")
 
         matched_shape, matched_dtype = _load_large_format_cache_array_spec(
             matched_rgb_path
@@ -505,6 +519,12 @@ def _resolve_validated_large_format_cached_analysis_paths(
         material_shape, material_dtype = _load_large_format_cache_array_spec(
             material_matrix_path
         )
+        quantized_shape: tuple[int, ...] | None = None
+        quantized_dtype: np.dtype | None = None
+        if quantized_image_path is not None:
+            quantized_shape, quantized_dtype = _load_large_format_cache_array_spec(
+                quantized_image_path
+            )
 
         if len(matched_shape) != 3 or matched_shape[2] != 3:
             raise ValueError("matched_rgb must have shape (H, W, 3)")
@@ -520,10 +540,35 @@ def _resolve_validated_large_format_cached_analysis_paths(
             raise ValueError(
                 "material_matrix must have shape (H, W, N) and integer dtype"
             )
+        if (
+            quantized_shape is not None
+            and (
+                len(quantized_shape) != 3
+                or quantized_shape[2] != 3
+                or quantized_dtype != np.dtype(np.uint8)
+            )
+        ):
+            raise ValueError(
+                "quantized_image must have shape (H, W, 3) and uint8 dtype"
+            )
+        if require_quantized_image and material_dtype != np.dtype(np.int32):
+            raise ValueError("dynamic material_matrix must use int32")
+        if (
+            dynamic_max_layer_count is not None
+            and material_shape[2] != dynamic_max_layer_count
+        ):
+            raise ValueError(
+                "dynamic material_matrix depth does not match maximum layer count"
+            )
 
         spatial_shape = matched_shape[:2]
         if mask_shape != spatial_shape or material_shape[:2] != spatial_shape:
             raise ValueError("preview cache analysis fields use different grids")
+        if (
+            quantized_shape is not None
+            and quantized_shape[:2] != spatial_shape
+        ):
+            raise ValueError("preview cache quantized_image uses a different grid")
         target_h, target_w = spatial_shape
         if not _cache_grid_dimension_matches(cache.get("target_h"), target_h):
             raise ValueError("preview cache target_h does not match array grid")
@@ -542,7 +587,12 @@ def _resolve_validated_large_format_cached_analysis_paths(
             detail=invalid_detail,
         ) from exc
 
-    return matched_rgb_path, mask_solid_path, material_matrix_path
+    return (
+        matched_rgb_path,
+        mask_solid_path,
+        material_matrix_path,
+        quantized_image_path,
+    )
 
 
 def _require_loadable_material_archive_cache_path(
@@ -1763,6 +1813,15 @@ async def convert_generate(
     height_identity_rgb_path: str | None = None
     mask_solid_path: str | None = None
     material_matrix_path: str | None = None
+    quantized_image_path: str | None = None
+    requires_dynamic_quantized_analysis = bool(
+        dynamic_material_settings[0]
+        and core_modeling_mode
+        in {
+            CoreModelingMode.HIGH_FIDELITY,
+            CoreModelingMode.PIXEL,
+        }
+    )
     reuse_preview_analysis, reuse_preview_analysis_reason = _can_reuse_preview_analysis(
         cache=cache,
         cache_ref=cache_ref,
@@ -1780,11 +1839,18 @@ async def convert_generate(
             matched_rgb_path,
             mask_solid_path,
             material_matrix_path,
+            quantized_image_path,
         ) = _resolve_validated_large_format_cached_analysis_paths(
             cache=cache,
             cache_ref=cache_ref,
             sid=body.session_id,
             store=store,
+            require_quantized_image=requires_dynamic_quantized_analysis,
+            dynamic_max_layer_count=(
+                dynamic_material_settings[2]
+                if requires_dynamic_quantized_analysis
+                else None
+            ),
             invalid_detail=STANDARD_CACHED_ANALYSIS_INVALID_DETAIL,
         )
         _require_standard_cached_analysis_semantics(
@@ -1815,6 +1881,25 @@ async def convert_generate(
                 "color_layers": effective_color_layers,
                 "layer_height_mm": effective_layer_height_mm,
             }
+        )
+    if (
+        reuse_preview_analysis
+        and requires_dynamic_quantized_analysis
+        and not request.use_cached_matched_rgb
+    ):
+        (
+            matched_rgb_path,
+            mask_solid_path,
+            material_matrix_path,
+            quantized_image_path,
+        ) = _resolve_validated_large_format_cached_analysis_paths(
+            cache=cache,
+            cache_ref=cache_ref,
+            sid=body.session_id,
+            store=store,
+            require_quantized_image=True,
+            dynamic_max_layer_count=dynamic_material_settings[2],
+            invalid_detail=STANDARD_CACHED_ANALYSIS_INVALID_DETAIL,
         )
     should_forward_cached_analysis = (
         reuse_preview_analysis
@@ -2020,6 +2105,7 @@ async def convert_generate(
         "height_identity_rgb_path": height_identity_rgb_path,
         "mask_solid_path": mask_solid_path,
         "material_matrix_path": material_matrix_path,
+        "quantized_image_path": quantized_image_path,
         "reuse_preview_analysis": (
             REQUIRED_PREVIEW_ANALYSIS_REUSE
             if request.use_cached_matched_rgb
@@ -2278,6 +2364,7 @@ def _resolve_large_format_shared_params(
     matched_rgb_path: str | None = None,
     mask_solid_path: str | None = None,
     material_matrix_path: str | None = None,
+    quantized_image_path: str | None = None,
     cached_analysis_is_final: bool = False,
     final_material_matrix_is_authoritative: bool = False,
     final_material_matrix_authority_mask_path: str | None = None,
@@ -2350,6 +2437,7 @@ def _resolve_large_format_shared_params(
         "matched_rgb_path": matched_rgb_path,
         "mask_solid_path": mask_solid_path,
         "material_matrix_path": material_matrix_path,
+        "quantized_image_path": quantized_image_path,
         "final_material_matrix_is_authoritative": (
             final_material_matrix_is_authoritative
         ),
@@ -2577,6 +2665,7 @@ async def _generate_large_format_raster(
     material_matrix_path: str | None,
     matched_rgb_path: str | None = None,
     mask_solid_path: str | None = None,
+    quantized_image_path: str | None = None,
     final_material_matrix_is_authoritative: bool = False,
     total_width_mm: float,
     total_height_mm: float,
@@ -2610,17 +2699,31 @@ async def _generate_large_format_raster(
     full_matched_rgb: np.ndarray | None = None
     full_mask_solid: np.ndarray | None = None
     full_material_matrix: np.ndarray | None = None
+    full_quantized_image: np.ndarray | None = None
     full_authoritative_material_mask: np.ndarray | None = None
     spatial_target_w = 0
     spatial_target_h = 0
-    cached_analysis_requested = (
-        matched_rgb_path is not None or mask_solid_path is not None
+    cached_analysis_requested = any(
+        path is not None
+        for path in (
+            matched_rgb_path,
+            mask_solid_path,
+            quantized_image_path,
+        )
+    )
+    dynamic_cached_analysis_requested = (
+        cached_analysis_requested and dynamic_material_settings[0]
     )
     if cached_analysis_requested and not (
         matched_rgb_path is not None
         and mask_solid_path is not None
         and material_matrix_path is not None
     ):
+        raise HTTPException(
+            status_code=409,
+            detail=LARGE_FORMAT_CACHED_ANALYSIS_INVALID_DETAIL,
+        )
+    if dynamic_cached_analysis_requested and quantized_image_path is None:
         raise HTTPException(
             status_code=409,
             detail=LARGE_FORMAT_CACHED_ANALYSIS_INVALID_DETAIL,
@@ -2637,6 +2740,13 @@ async def _generate_large_format_raster(
                 loading_role = "mask_solid"
                 loading_path = mask_solid_path
                 full_mask_solid = np.load(mask_solid_path, allow_pickle=False)
+                if dynamic_cached_analysis_requested:
+                    loading_role = "quantized_image"
+                    loading_path = quantized_image_path
+                    full_quantized_image = np.load(
+                        quantized_image_path,
+                        allow_pickle=False,
+                    )
             loading_role = "material_matrix"
             loading_path = material_matrix_path
             full_material_matrix = np.load(material_matrix_path, allow_pickle=False)
@@ -2677,6 +2787,25 @@ async def _generate_large_format_raster(
                 and np.issubdtype(full_material_matrix.dtype, np.integer)
                 and full_matched_rgb.shape[:2] == full_mask_solid.shape
                 and full_material_matrix.shape[:2] == full_mask_solid.shape
+                and (
+                    not dynamic_cached_analysis_requested
+                    or (
+                        isinstance(full_quantized_image, np.ndarray)
+                        and full_quantized_image.ndim == 3
+                        and full_quantized_image.shape[2] == 3
+                        and full_quantized_image.dtype == np.uint8
+                        and full_quantized_image.shape[:2]
+                        == full_mask_solid.shape
+                    )
+                )
+                and (
+                    not dynamic_cached_analysis_requested
+                    or (
+                        full_material_matrix.dtype == np.int32
+                        and full_material_matrix.shape[2]
+                        == dynamic_material_settings[2]
+                    )
+                )
             )
             if not cached_analysis_valid:
                 raise HTTPException(
@@ -2775,6 +2904,7 @@ async def _generate_large_format_raster(
         matched_rgb_path=None,
         mask_solid_path=None,
         material_matrix_path=None,
+        quantized_image_path=None,
         cached_analysis_is_final=cached_analysis_requested,
         final_material_matrix_is_authoritative=(
             final_material_matrix_is_authoritative
@@ -2918,6 +3048,22 @@ async def _generate_large_format_raster(
                         np.save(mask_tile_path, mask_solid_tile)
                         tile_params["matched_rgb_path"] = rgb_tile_path
                         tile_params["mask_solid_path"] = mask_tile_path
+                        if full_quantized_image is not None:
+                            quantized_image_tile = full_quantized_image[
+                                spatial_y0:spatial_y1,
+                                spatial_x0:spatial_x1,
+                                :,
+                            ]
+                            fd_quantized, quantized_tile_path = tempfile.mkstemp(
+                                suffix=".npy",
+                                dir=TEMP_DIR,
+                            )
+                            os.close(fd_quantized)
+                            route_local_cleanup_paths.add(quantized_tile_path)
+                            np.save(quantized_tile_path, quantized_image_tile)
+                            tile_params["quantized_image_path"] = (
+                                quantized_tile_path
+                            )
                         tile_params["reuse_preview_analysis"] = True
 
                 label = format_large_format_tile_label(
@@ -3061,6 +3207,10 @@ async def convert_generate_large_format(
         lut_path = "__material_archive__"
     elif not lut_path or not os.path.exists(lut_path):
         raise HTTPException(status_code=409, detail=LUT_DATA_UNAVAILABLE_DETAIL)
+    is_svg_vector = (
+        str(image_path).lower().endswith(".svg")
+        and request.modeling_mode.value == "vector"
+    )
     dynamic_material_settings = _resolve_session_dynamic_material_settings(
         session_data=session_data,
         request=request,
@@ -3095,16 +3245,29 @@ async def convert_generate_large_format(
     matched_rgb_path: str | None = None
     mask_solid_path: str | None = None
     cached_material_matrix_path: str | None = None
+    quantized_image_path: str | None = None
+    requires_dynamic_quantized_analysis = bool(
+        request.use_cached_matched_rgb
+        and dynamic_material_settings[0]
+        and not is_svg_vector
+    )
     if request.use_cached_matched_rgb is True:
         (
             matched_rgb_path,
             mask_solid_path,
             cached_material_matrix_path,
+            quantized_image_path,
         ) = _resolve_validated_large_format_cached_analysis_paths(
             cache=cache,
             cache_ref=cache_ref,
             sid=sid,
             store=store,
+            require_quantized_image=requires_dynamic_quantized_analysis,
+            dynamic_max_layer_count=(
+                dynamic_material_settings[2]
+                if requires_dynamic_quantized_analysis
+                else None
+            ),
         )
     total_w_mm, total_h_mm = _resolve_large_format_dimensions(
         cache,
@@ -3160,7 +3323,6 @@ async def convert_generate_large_format(
     fallback_reason: str | None = None
     native_fallback_error: HTTPException | None = None
     native_fallback_cause: Exception | None = None
-    is_svg_vector = str(image_path).lower().endswith(".svg") and request.modeling_mode.value == "vector"
     if is_svg_vector:
         policy = session_data.get("svg_large_format_policy")
         if not isinstance(policy, dict) or policy.get("inspection_source") not in {
@@ -3266,6 +3428,7 @@ async def convert_generate_large_format(
                     matched_rgb_path=matched_rgb_path,
                     mask_solid_path=mask_solid_path,
                     material_matrix_path=material_matrix_path,
+                    quantized_image_path=quantized_image_path,
                     final_material_matrix_is_authoritative=(
                         final_material_matrix_is_authoritative
                     ),
@@ -3311,6 +3474,7 @@ async def convert_generate_large_format(
             matched_rgb_path=matched_rgb_path,
             mask_solid_path=mask_solid_path,
             material_matrix_path=material_matrix_path,
+            quantized_image_path=quantized_image_path,
             final_material_matrix_is_authoritative=(
                 final_material_matrix_is_authoritative
             ),

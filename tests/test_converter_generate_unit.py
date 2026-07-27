@@ -2205,6 +2205,7 @@ class TestStandardCachedAnalysisRouting:
         matched_rgb: object | None = None,
         mask_solid: object | None = None,
         material_matrix: object | None = None,
+        quantized_image: object | None = None,
         cache_overrides: dict[str, object] | None = None,
     ) -> tuple[str, dict[str, object]]:
         """Create one route-isolated standard cached-generation session."""
@@ -2259,6 +2260,11 @@ class TestStandardCachedAnalysisRouting:
                 np.zeros((4, 4, 5), dtype=np.int16)
                 if material_matrix is None
                 else material_matrix
+            ),
+            "quantized_image": (
+                np.zeros((4, 4, 3), dtype=np.uint8)
+                if quantized_image is None
+                else quantized_image
             ),
             **(cache_overrides or {}),
         }
@@ -2413,7 +2419,57 @@ class TestStandardCachedAnalysisRouting:
             assert submitted_params["matched_rgb_path"] is not None
             assert submitted_params["mask_solid_path"] is not None
             assert submitted_params["material_matrix_path"] is not None
-            assert "quantized_image_path" not in submitted_params
+            assert (
+                submitted_params["quantized_image_path"] is not None
+            ) is dynamic_enabled
+        finally:
+            _test_store.close(sid)
+
+    @pytest.mark.parametrize(
+        "quantized_image",
+        [
+            None,
+            np.zeros((4, 4, 3), dtype=np.int16),
+            np.zeros((3, 4, 3), dtype=np.uint8),
+        ],
+        ids=("missing", "wrong-dtype", "wrong-grid"),
+    )
+    def test_generate_dynamic_cached_analysis_requires_quantized_image(
+        self,
+        tmp_path,
+        quantized_image: np.ndarray | None,
+    ) -> None:
+        """Dynamic P03 reuse rejects an incomplete or invalid four-asset cache."""
+
+        max_layer_count = 6
+        sid, payload = self._create_session(
+            tmp_path,
+            modeling_mode=ModelingMode.HIGH_FIDELITY,
+            material_source="material_archive",
+            color_layers=max_layer_count,
+            material_matrix=np.zeros(
+                (4, 4, max_layer_count),
+                dtype=np.int32,
+            ),
+            cache_overrides={"quantized_image": quantized_image},
+        )
+        dynamic_settings = {
+            "material_dynamic_layer_count_enabled": True,
+            "material_min_layer_count": 5,
+            "material_max_layer_count": max_layer_count,
+            "material_delta_e00_tolerance": 0.5,
+        }
+        for key, value in dynamic_settings.items():
+            _test_store.put(sid, key, value)
+        _test_store.put(sid, "selected_materials", ["mat-a", "mat-b"])
+        payload["params"].update(dynamic_settings)
+
+        try:
+            response = client.post("/api/convert/generate", json=payload)
+
+            assert response.status_code == 409, response.text
+            assert response.json()["detail"] == self._INVALID_DETAIL
+            _mock_pool.submit.assert_not_called()
         finally:
             _test_store.close(sid)
 
@@ -2784,6 +2840,141 @@ class TestLargeFormatCachedAnalysisRouting:
             assert np.array_equal(np.load(kwargs["matched_rgb_path"]), matched_rgb)
             assert np.array_equal(np.load(kwargs["mask_solid_path"]), mask_solid)
             assert np.array_equal(np.load(kwargs["material_matrix_path"]), material_matrix)
+        finally:
+            _test_store.close(sid)
+            for path in (image_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    def test_large_format_dynamic_cached_raster_forwards_quantized_image(
+        self,
+    ) -> None:
+        """The dynamic large-format route passes the fourth P03 asset to tiling."""
+
+        sid, image_path, lut_path = _create_raster_large_format_session(_test_store)
+        matched_rgb = np.arange(8 * 12 * 3, dtype=np.uint8).reshape(8, 12, 3)
+        mask_solid = np.ones((8, 12), dtype=bool)
+        quantized_image = np.flip(matched_rgb, axis=2).copy()
+        material_matrix = np.zeros((8, 12, 6), dtype=np.int32)
+        cache = {
+            "target_w": 12,
+            "target_h": 8,
+            **self._semantic_cache_metadata(
+                modeling_mode=ModelingMode.HIGH_FIDELITY,
+                material_source="material_archive",
+            ),
+            "color_layers": 6,
+            "matched_rgb": matched_rgb,
+            "mask_solid": mask_solid,
+            "quantized_image": quantized_image,
+            "material_matrix": material_matrix,
+        }
+        _test_store.put(sid, "preview_cache", cache)
+        _test_store.put(sid, "material_source", "material_archive")
+        _test_store.put(sid, "selected_materials", ["mat-a", "mat-b"])
+        _test_store.put(sid, "material_layer_count", 6)
+        _test_store.put(sid, "material_dynamic_layer_count_enabled", True)
+        _test_store.put(sid, "material_min_layer_count", 5)
+        _test_store.put(sid, "material_max_layer_count", 6)
+        _test_store.put(sid, "material_delta_e00_tolerance", 0.5)
+        _test_store.put(sid, "recipe_overrides", [])
+        _test_store.put(sid, "selected_region_masks", {})
+
+        try:
+            with patch(
+                "api.routers.converter.generate._generate_large_format_raster",
+                return_value=_large_format_success_response("raster"),
+            ) as raster_helper:
+                response = client.post(
+                    "/api/convert/generate-large-format",
+                    json=_large_format_payload(
+                        sid,
+                        modeling_mode="high-fidelity",
+                        use_cached_matched_rgb=True,
+                        request_overrides={
+                            "lut_name": "__material_archive__",
+                            "color_layers": 6,
+                            "material_dynamic_layer_count_enabled": True,
+                            "material_min_layer_count": 5,
+                            "material_max_layer_count": 6,
+                            "material_delta_e00_tolerance": 0.5,
+                        },
+                    ),
+                )
+
+            assert response.status_code == 200, response.text
+            quantized_path = raster_helper.call_args.kwargs[
+                "quantized_image_path"
+            ]
+            assert quantized_path is not None
+            assert np.array_equal(np.load(quantized_path), quantized_image)
+        finally:
+            _test_store.close(sid)
+            for path in (image_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    def test_large_format_dynamic_cached_raster_rejects_missing_quantized_image(
+        self,
+    ) -> None:
+        """A stale dynamic cache must fail before the large-format helper runs."""
+
+        sid, image_path, lut_path = _create_raster_large_format_session(_test_store)
+        matched_rgb = np.zeros((8, 12, 3), dtype=np.uint8)
+        mask_solid = np.ones((8, 12), dtype=bool)
+        material_matrix = np.zeros((8, 12, 6), dtype=np.int32)
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {
+                "target_w": 12,
+                "target_h": 8,
+                **self._semantic_cache_metadata(
+                    modeling_mode=ModelingMode.HIGH_FIDELITY,
+                    material_source="material_archive",
+                ),
+                "color_layers": 6,
+                "matched_rgb": matched_rgb,
+                "mask_solid": mask_solid,
+                "material_matrix": material_matrix,
+            },
+        )
+        _test_store.put(sid, "material_source", "material_archive")
+        _test_store.put(sid, "selected_materials", ["mat-a", "mat-b"])
+        _test_store.put(sid, "material_layer_count", 6)
+        _test_store.put(sid, "material_dynamic_layer_count_enabled", True)
+        _test_store.put(sid, "material_min_layer_count", 5)
+        _test_store.put(sid, "material_max_layer_count", 6)
+        _test_store.put(sid, "material_delta_e00_tolerance", 0.5)
+
+        try:
+            with patch(
+                "api.routers.converter.generate._generate_large_format_raster",
+                return_value=_large_format_success_response("raster"),
+            ) as raster_helper:
+                response = client.post(
+                    "/api/convert/generate-large-format",
+                    json=_large_format_payload(
+                        sid,
+                        modeling_mode="high-fidelity",
+                        use_cached_matched_rgb=True,
+                        request_overrides={
+                            "lut_name": "__material_archive__",
+                            "color_layers": 6,
+                            "material_dynamic_layer_count_enabled": True,
+                            "material_min_layer_count": 5,
+                            "material_max_layer_count": 6,
+                            "material_delta_e00_tolerance": 0.5,
+                        },
+                    ),
+                )
+
+            assert response.status_code == 409, response.text
+            assert (
+                response.json()["detail"]
+                == LARGE_FORMAT_CACHED_ANALYSIS_INVALID_DETAIL
+            )
+            raster_helper.assert_not_called()
         finally:
             _test_store.close(sid)
             for path in (image_path, lut_path):
@@ -5198,12 +5389,15 @@ class TestLargeFormatDimensionsAndRouting:
         matched_rgb = np.arange(6 * 10 * 3, dtype=np.uint8).reshape(6, 10, 3)
         mask_solid = np.ones((6, 10), dtype=bool)
         material_matrix = np.arange(6 * 10 * 6, dtype=np.int32).reshape(6, 10, 6)
+        quantized_image = np.flip(matched_rgb, axis=2).copy()
         matched_path = tmp_path / "matched.npy"
         mask_path = tmp_path / "mask.npy"
         material_path = tmp_path / "material.npy"
+        quantized_path = tmp_path / "quantized.npy"
         np.save(matched_path, matched_rgb)
         np.save(mask_path, mask_solid)
         np.save(material_path, material_matrix)
+        np.save(quantized_path, quantized_image)
         captured: list[dict[str, object]] = []
 
         async def _submit(_fn, _tile_path, _lut_path, tile_params):
@@ -5212,8 +5406,14 @@ class TestLargeFormatDimensionsAndRouting:
                 np.load(tile_params["matched_rgb_path"]),
                 np.load(tile_params["mask_solid_path"]),
                 np.load(tile_params["material_matrix_path"]),
+                np.load(tile_params["quantized_image_path"]),
             ]
-            assert arrays[0].shape[:2] == arrays[1].shape == arrays[2].shape[:2]
+            assert (
+                arrays[0].shape[:2]
+                == arrays[1].shape
+                == arrays[2].shape[:2]
+                == arrays[3].shape[:2]
+            )
             captured.append(
                 {
                     "arrays": arrays,
@@ -5247,6 +5447,7 @@ class TestLargeFormatDimensionsAndRouting:
                 matched_rgb_path=str(matched_path),
                 mask_solid_path=str(mask_path),
                 material_matrix_path=str(material_path),
+                quantized_image_path=str(quantized_path),
                 total_width_mm=100.0,
                 total_height_mm=60.0,
                 tile_width_mm=50.0,
@@ -5273,9 +5474,78 @@ class TestLargeFormatDimensionsAndRouting:
             assert all(item["reuse"] is True for item in captured)
             assert all(item["dynamic_enabled"] is True for item in captured)
             assert all(item["dynamic_max"] == 6 for item in captured)
+            expected_quantized_tiles = [
+                quantized_image[:3, :5],
+                quantized_image[:3, 5:],
+                quantized_image[3:, :5],
+                quantized_image[3:, 5:],
+            ]
+            assert all(
+                np.array_equal(item["arrays"][3], expected)
+                for item, expected in zip(captured, expected_quantized_tiles)
+            )
         finally:
             if download_id is not None:
                 registry.cleanup_file(download_id)
+            store.clear_all()
+
+    @pytest.mark.asyncio
+    async def test_large_format_dynamic_cached_analysis_requires_quantized_image(
+        self,
+        tmp_path,
+    ) -> None:
+        """Dynamic raster tiling rejects an incomplete cache before submitting tiles."""
+
+        image_path = tmp_path / "source.png"
+        Image.fromarray(np.zeros((6, 10, 3), dtype=np.uint8)).save(image_path)
+        lut_path = tmp_path / "source.npy"
+        lut_path.write_bytes(b"lut")
+        matched_path = tmp_path / "matched.npy"
+        mask_path = tmp_path / "mask.npy"
+        material_path = tmp_path / "material.npy"
+        np.save(matched_path, np.zeros((6, 10, 3), dtype=np.uint8))
+        np.save(mask_path, np.ones((6, 10), dtype=bool))
+        np.save(material_path, np.zeros((6, 10, 6), dtype=np.int32))
+
+        store = SessionStore(ttl=1800)
+        registry = FileRegistry()
+        sid = store.create()
+        pool = SimpleNamespace(submit=AsyncMock())
+        request = LargeFormatConvertGenerateRequest(
+            lut_name="__material_archive__",
+            modeling_mode=ModelingMode.HIGH_FIDELITY,
+        )
+        try:
+            with pytest.raises(HTTPException) as exc_info:
+                await _generate_large_format_raster(
+                    image_path=str(image_path),
+                    lut_path="__material_archive__",
+                    source_basename="poster",
+                    recipe_overrides=None,
+                    recipe_override_masks_path=None,
+                    matched_rgb_path=str(matched_path),
+                    mask_solid_path=str(mask_path),
+                    material_matrix_path=str(material_path),
+                    total_width_mm=100.0,
+                    total_height_mm=60.0,
+                    tile_width_mm=50.0,
+                    tile_height_mm=30.0,
+                    request=request,
+                    session_data={"material_source": "material_archive"},
+                    sid=sid,
+                    store=store,
+                    registry=registry,
+                    pool=pool,
+                    dynamic_material_settings=(True, 5, 6, 0.5),
+                )
+
+            assert exc_info.value.status_code == 409
+            assert (
+                exc_info.value.detail
+                == LARGE_FORMAT_CACHED_ANALYSIS_INVALID_DETAIL
+            )
+            pool.submit.assert_not_called()
+        finally:
             store.clear_all()
 
     def test_large_format_raster_recipe_override_only_slices_final_matrix_once(self) -> None:
