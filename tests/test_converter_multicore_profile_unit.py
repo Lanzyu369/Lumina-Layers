@@ -8,6 +8,7 @@ from config import ModelingMode
 from scripts.profile_converter_multicore import (
     MATERIAL_PALETTES,
     ProfileCase,
+    _cleanup_result_files,
     build_report,
     build_pipeline_context,
     semantic_snapshot,
@@ -148,3 +149,29 @@ def test_build_report_omits_absolute_source_and_material_paths(
     assert report["input"]["sha256"]
     assert report["materials"]["count"] == 12
     assert "directory_names" not in report["materials"]
+
+
+def test_cleanup_result_files_removes_pipeline_result_tuple_artifacts(
+    tmp_path: Path,
+) -> None:
+    model = tmp_path / "model.3mf"
+    preview = tmp_path / "preview.glb"
+    recipe = tmp_path / "recipe.json"
+    for path in (model, preview, recipe):
+        path.write_bytes(b"temporary")
+
+    _cleanup_result_files(
+        {
+            "result_tuple": (
+                str(model),
+                str(preview),
+                None,
+                "done",
+                str(recipe),
+            )
+        }
+    )
+
+    assert not model.exists()
+    assert not preview.exists()
+    assert not recipe.exists()

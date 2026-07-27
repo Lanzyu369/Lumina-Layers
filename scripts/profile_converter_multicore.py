@@ -409,8 +409,19 @@ class _ResourceSampler:
 
 
 def _cleanup_result_files(result: dict[str, Any]) -> None:
-    for key in ("out_path", "glb_path", "color_recipe_path"):
-        raw_path = result.get(key)
+    raw_paths = [
+        result.get("out_path"),
+        result.get("glb_path"),
+        result.get("color_recipe_path"),
+    ]
+    result_tuple = result.get("result_tuple")
+    if isinstance(result_tuple, (list, tuple)):
+        raw_paths.extend(
+            result_tuple[index]
+            for index in (0, 1, 4)
+            if index < len(result_tuple)
+        )
+    for raw_path in raw_paths:
         if not raw_path:
             continue
         path = Path(str(raw_path))
