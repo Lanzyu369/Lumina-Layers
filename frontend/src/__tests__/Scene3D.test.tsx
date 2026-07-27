@@ -620,6 +620,40 @@ beforeEach(() => {
       expect(threeState.camera.updateProjectionMatrix).toHaveBeenCalled();
     });
 
+    it("keeps depth-precise clipping when preview bounds arrive after controls", () => {
+      const controls = createMockControls();
+      const threeState = getMockThreeState();
+      threeState.controls = controls;
+      useConverterStore.setState({
+        previewGlbUrl: "/api/files/material-preview.glb",
+        modelBounds: null,
+        target_width_mm: 223,
+        target_height_mm: 280,
+        preview_width_mm: 60,
+        preview_height_mm: 75,
+      });
+
+      render(<Scene3D />);
+      const initialNear = threeState.camera.near;
+      const initialFar = threeState.camera.far;
+      expect(initialNear).toBeCloseTo(4.75, 1);
+
+      act(() => {
+        useConverterStore.setState({
+          modelBounds: {
+            minX: -30,
+            maxX: 30,
+            minY: -37.5,
+            maxY: 37.5,
+            maxZ: 2,
+          },
+        });
+      });
+
+      expect(threeState.camera.near).toBe(initialNear);
+      expect(threeState.camera.far).toBeGreaterThanOrEqual(initialFar);
+    });
+
     it("does not rebuild the projection matrix for rotation-only changes", () => {
       const controls = createMockControls();
       const threeState = getMockThreeState();
