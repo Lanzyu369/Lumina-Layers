@@ -202,6 +202,28 @@ describe("Selection controls", () => {
     expect(listbox.parentElement).toHaveClass("overflow-hidden");
   });
 
+  it("renders optional leading content in the trigger and menu option", () => {
+    render(
+      <Dropdown
+        label="Mode"
+        value="a"
+        options={[
+          {
+            label: "Option A",
+            value: "a",
+            leading: <span data-testid="option-a-leading" />,
+          },
+          { label: "Option B", value: "b" },
+        ]}
+        onChange={() => {}}
+      />,
+    );
+
+    expect(screen.getAllByTestId("option-a-leading")).toHaveLength(1);
+    fireEvent.click(screen.getByRole("combobox"));
+    expect(screen.getAllByTestId("option-a-leading")).toHaveLength(2);
+  });
+
   it("renders radio options with the unified rounded selectable rows", () => {
     render(
       <RadioGroup

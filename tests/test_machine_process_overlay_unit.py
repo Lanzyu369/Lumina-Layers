@@ -67,6 +67,23 @@ def test_lumina_overlay_uses_safe_initial_line_width_for_0_2_nozzle():
     assert merged["initial_layer_line_width"] == "0.25"
 
 
+def test_lumina_overlay_preserves_native_quarter_nozzle_width():
+    native = {
+        "printer_model": "Flashforge AD5X",
+        "printer_settings_id": "",
+        "nozzle_diameter": ["0.25"],
+    }
+
+    merged = apply_lumina_process_overlay(
+        native,
+        source_profile_name="Flashforge AD5X 0.25 nozzle",
+        slicer_id="FlashStudio",
+    )
+
+    assert merged["line_width"] == "0.27"
+    assert merged["initial_layer_line_width"] == "0.25"
+
+
 def test_lumina_overlay_overrides_native_profile_process_conflicts():
     native = {
         "printer_settings_id": "Native Wrong P1S Profile",

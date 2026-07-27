@@ -172,6 +172,17 @@ describe("SettingsPanel base-layer-height modifier", () => {
     ).toBeInTheDocument();
   });
 
+  it("describes compatible slicers without merging Orca and Bambu settings", () => {
+    const description = translations["settings.base_layer_height_modifier_desc"];
+
+    expect(description.zh).not.toContain("Bambu 系");
+    expect(description.zh).toContain("当前设置中选择的兼容切片软件");
+    expect(description.zh).toContain("各自的机器配置");
+    expect(description.en).not.toContain("Bambu-family");
+    expect(description.en).toContain("compatible slicer selected in Settings");
+    expect(description.en).toContain("own machine profile");
+  });
+
   it("displays translated label in English locale", async () => {
     const useI18nSpy = vi.spyOn(i18nContext, "useI18n").mockReturnValue({
       lang: "en",

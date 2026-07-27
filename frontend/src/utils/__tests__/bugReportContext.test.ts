@@ -338,6 +338,31 @@ describe("collectBugReportContext", () => {
       largeFormatEnabled: true,
       tileWidthMm: 200,
       tileHeightMm: 180,
+      modelSurfaceEnabled: true,
+      modelSurfaceFile: new File(["mesh"], "plate.stl", {
+        type: "application/octet-stream",
+      }),
+      modelSurfaceModelFileId: "surface-model-file",
+      modelSurfaceSelectionId: "surface-selection",
+      modelSurfaceSelection: { face_count: 6513 },
+      modelSurfaceFootprint: {
+        bounds_width_mm: 197,
+        bounds_height_mm: 197,
+        hole_count: 85,
+      },
+      modelSurfacePlacement: {
+        mode: "edge_to_edge",
+        offset_x_mm: 2,
+        offset_y_mm: -3,
+        scale: 1.1,
+        rotation_deg: 15,
+        inset_mm: 0,
+      },
+      modelSurfaceModelRotation: {
+        x_deg: 180,
+        y_deg: 0,
+        z_deg: 0,
+      },
       colorRemapMap: { aabbcc: "ddeeff" },
       palette: [
         {
@@ -382,6 +407,35 @@ describe("collectBugReportContext", () => {
     expect(advanced.large_format.largeFormatEnabled).toBe(true);
     expect(advanced.large_format.tileWidthMm).toBe(200);
     expect(advanced.large_format.tileHeightMm).toBe(180);
+    expect(advanced.model_surface).toEqual({
+      enabled: true,
+      model_file: {
+        name: "plate.stl",
+        size: 4,
+        type: "application/octet-stream",
+      },
+      model_file_id: "surface-model-file",
+      selection_id: "surface-selection",
+      selected_face_count: 6513,
+      footprint: {
+        width_mm: 197,
+        height_mm: 197,
+        hole_count: 85,
+      },
+      placement: {
+        mode: "edge_to_edge",
+        offset_x_mm: 2,
+        offset_y_mm: -3,
+        scale: 1.1,
+        rotation_deg: 15,
+        inset_mm: 0,
+      },
+      model_rotation: {
+        x_deg: 180,
+        y_deg: 0,
+        z_deg: 0,
+      },
+    });
 
     expect(advanced.color_replacement.free_color_set).toEqual(["#ff0000"]);
     expect(advanced.color_replacement.spatial_edit_count).toBe(3);

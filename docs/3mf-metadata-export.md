@@ -3,11 +3,11 @@
 ## Purpose
 
 This document describes how Lumina Studio exports slicer-specific 3MF metadata,
-how `0.2` / `0.4` nozzle variants are selected, and how to verify that an
+how native nozzle variants are selected, and how to verify that an
 exported 3MF matches the intended template.
 
 本文说明 Lumina Studio 如何导出切片器相关的 3MF 元数据、如何选择
-`0.2` / `0.4` 喷嘴模板，以及如何验证导出的 3MF 是否与目标模板一致。
+原生喷嘴模板，以及如何验证导出的 3MF 是否与目标模板一致。
 
 ## Scope
 
@@ -18,9 +18,12 @@ The current export stack covers all printer/slicer combinations registered in
 
 At the time of writing:
 
-- 18 printer profiles are registered
-- 29 base metadata templates exist under `printer_profiles/`
-- 29 sibling `*_0_2.json` templates exist for `0.2` nozzle exports
+- 26 printer profiles are registered
+- 37 base metadata templates exist under `printer_profiles/`
+- 31 sibling `*_0_2.json` templates exist for `0.2` nozzle exports
+- Flashforge AD5X / Creator 5 / Creator 5 Pro / Guider4 / Guider4 Pro provide
+  native `0.25` / `0.4` templates for Flash Studio Desktop
+- Flashforge Guider 3 Ultra provides a native `0.4` template
 
 ## Core Files
 
@@ -70,6 +73,13 @@ Important:
 
 - `0.4` remains the base template truth.
 - `0.2` always uses a checked-in sibling `*_0_2.json`.
+- A slicer-native size explicitly declared by a printer profile is preserved;
+  Flashforge `0.25` therefore selects `*_0_25.json` instead of being rounded
+  into the legacy `0.2` slot.
+- Flash Studio profiles are selected from its formal vendor `machine_list`, not
+  by scanning every JSON left in the install directory. Only native presets at
+  or below Lumina's `0.4` mm boundary are bundled; same-diameter standard and HF
+  Guider4 presets are de-duplicated in favor of the standard preset.
 - `supported_nozzle_sizes` is exposed for every currently supported printer.
 
 ## Metadata Package Layout
@@ -97,6 +107,9 @@ Family-specific rules:
   Omits Bambu-only aux sidecars and uses the Elegoo client-name/version stamp.
 - `AnycubicSlicerNext`
   Uses `Metadata/custom_gcode_per_layer.xml` instead of Bambu aux sidecars.
+- `FlashStudio`
+  Omits Bambu-only aux sidecars, uses the native BBL client header, and does
+  not emit an `OrcaSlicer-Version` tag.
 
 ## Nozzle Variant Rules
 
@@ -160,6 +173,28 @@ Rules currently used by the writer:
 - Snapmaker: `SnapmakerOrca-02.02.49.02`
 - Elegoo: `ElegooSlicer-1.3.2.9`
 - Anycubic: `BambuStudio-1.3.9.4`
+- Flash Studio Desktop: `BambuStudio-2.3.2`
+
+Flash Studio keeps three versions separate:
+
+- desktop product version: `1.7.11` (installation detection/display only)
+- bundled Flashforge profile version: `02.01.01.00` (`source_version`)
+- native 3MF project/Application version: `2.3.2`
+- native `X-BBL-Client-Version`: empty string
+
+Its native 3MF identity is intentionally Bambu-compatible: `Application` is
+`BambuStudio-2.3.2`, `project_settings.version` is `2.3.2`, and
+`slice_info.config` keeps `X-BBL-Client-Version` empty. Do not rewrite these
+as `FlashStudio-*` or add Orca-only version tags. Native Flash Studio packages
+also contain `Metadata/plate_1.json`, a 128×128 `Metadata/plate_1_small.png`,
+and a 32-character UUID in the slice header. A manually configured and saved
+multi-material project additionally confirms that Lumina's three
+`Auxiliaries/.thumbnails/*.png` cover assets and their package relationships
+must be retained alongside the Flash-specific plate sidecars. Flash project
+filament arrays are contracted to the active project palette rather than a
+generic eight-slot template. These are format metadata only;
+Lumina remains authoritative for layer height, line widths, wall generation,
+temperatures, speeds, infill, support, and brim.
 
 The H2-family `0.2` branch intentionally uses the newer Bambu client stamp
 because those machine/process presets are aligned to the newer H2 system family.

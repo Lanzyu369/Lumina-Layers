@@ -1,5 +1,6 @@
 export {
   useConverterStore,
+  CONVERTER_ERROR_KEYS,
   clampValue,
   isValidImageType,
   ACCEPT_IMAGE_FORMATS,
@@ -20,6 +21,8 @@ export type {
   SelectionMode,
   RegionData,
   PendingReplacement,
+  ModelSurfacePlacement,
+  ModelSurfaceModelRotation,
   ConverterState,
   ConverterActions,
 } from "./store";

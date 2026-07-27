@@ -6,7 +6,7 @@
 
 机器适配 V2 的目标是：
 
-- 开发期读取 Bambu/Orca/Snapmaker/Elegoo/Anycubic 的原生 profile JSON。
+- 开发期读取 Bambu/Orca/Snapmaker/Elegoo/Anycubic/Flash Studio 的原生 profile JSON。
 - 生成 Lumina 内置 `machine_registry/`，随仓库发布。
 - 用户端只读取 Lumina 内置 registry，不扫描用户本机切片器安装目录。
 - 严格按 `切片软件 -> 机器型号 -> 喷嘴 -> revision` 区分 profile，避免同名机型串模板。
@@ -39,7 +39,7 @@
 - 不要提交本机安装路径、用户设置、临时 3MF/GLB、`output/`、`materials/*/usage_stats.json`。
 - `machine_registry/` 是生成结果，允许提交。
 - `materials/` 是用户耗材数据，本工作流默认不碰。
-- ElegooSlicer 和 AnycubicSlicerNext 虽然是换皮 Orca，但 3MF header、Application、sidecar 规则仍要按各自切片器处理。
+- ElegooSlicer、AnycubicSlicerNext 和 Flash Studio 虽然基于 Bambu/Orca 链路，但 3MF header、Application、sidecar 规则仍要按各自切片器处理。
 
 ## Registry 粒度
 
@@ -55,6 +55,7 @@ device_profile_id = <slicer_id>:<vendor_slug>:<machine_slug>:<nozzle_size>
 BambuStudio:bbl:bambu-lab-h2d:0.2
 ElegooSlicer:elegoo:elegoo-centauri-carbon-2:0.2
 AnycubicSlicerNext:anycubic:anycubic-kobra-x:0.25
+FlashStudio:flashforge:flashforge-ad5x:0.25
 ```
 
 注意：`device_profile_id` 的最后一段必须保留切片软件原生喷嘴值，而不是使用 Lumina 老模板的 0.1mm 归一化结果。Anycubic Kobra X 使用 `0.25`，如果被归并成 `0.2`，UI 文案和 3MF writer 的 registry 校验都会产生误导。
@@ -68,6 +69,7 @@ AnycubicSlicerNext:anycubic:anycubic-kobra-x:0.25
 - SnapmakerOrca
 - ElegooSlicer
 - AnycubicSlicerNext
+- FlashStudio
 
 当前已经人工验收过的代表机型：
 
@@ -77,6 +79,12 @@ AnycubicSlicerNext:anycubic:anycubic-kobra-x:0.25
 - Elegoo Centauri Carbon 2 `0.2` / `0.4`
 - Anycubic Kobra X `0.25` / `0.4`
 - Snapmaker U1 `0.4`
+- Flashforge AD5X `0.25` / `0.4`
+- Flashforge Creator 5 `0.25` / `0.4`
+- Flashforge Creator 5 Pro `0.25` / `0.4`
+- Flashforge Guider 3 Ultra `0.4`
+- Flashforge Guider4 `0.25` / `0.4`
+- Flashforge Guider4 Pro `0.25` / `0.4`
 
 ## 升级前准备
 
@@ -132,7 +140,20 @@ python tools\machine_adapter\sync_local_profiles.py --output machine_registry
 ```powershell
 python tools\machine_adapter\sync_local_profiles.py --slicer ElegooSlicer --output machine_registry
 python tools\machine_adapter\sync_local_profiles.py --slicer AnycubicSlicerNext --output machine_registry
+python tools\machine_adapter\sync_local_profiles.py --slicer FlashStudio --output machine_registry
 ```
+
+Flash Studio 的 `%APPDATA%\Orca-Flashforge\system` 通常只有 profile JSON，
+机器封面位于安装目录的 `resources\profiles\Flashforge\*_cover.png`。生成结果
+缺图时，从该目录补入对应 registry assets；文档和提交内容只保留相对路径，
+不要写入开发机的盘符或安装绝对路径。
+
+Flash Studio 必须以 `Flashforge.json` 的正式 `machine_list` 为导入边界，不能
+仅凭 `Flashforge/machine/` 下存在 JSON 就认定机型或喷嘴已在软件中开放。
+多色能力由正式机器预设中的 `single_extruder_multi_material`、喷嘴数组或
+`printer_extruder_id` 判断。仅导入不大于 `0.4` 的口径；Guider4 同口径
+普通/HF 预设优先普通版。未列入 `machine_list` 的 Creator 5S/5S Pro
+残留文件不得进入 registry。
 
 ### 单来源精确导入
 
@@ -149,6 +170,23 @@ python tools\machine_adapter\import_profiles.py `
   --output output\temp\anycubic_registry_check
 ```
 
+Flash Studio 必须同样显式区分 profile 与客户端版本：
+
+```powershell
+python tools\machine_adapter\import_profiles.py `
+  --slicer FlashStudio `
+  --source-root "$env:APPDATA\Orca-Flashforge\system" `
+  --source-version 02.01.01.00 `
+  --application-metadata BambuStudio-2.3.2 `
+  --client-version= `
+  --vendor Flashforge `
+  --output output\temp\flash_studio_registry_check
+```
+
+`FlashStudio` provider 已内置上述 `application_metadata` 与空
+`client_version` 作为默认契约，因此直接省略这两个可选参数时也必须生成
+相同结果；示例显式写出它们，便于升级切片软件时人工核对或临时覆盖。
+
 这个命令会生成单切片器 registry。合并多切片器时推荐使用 `run_import_sources(...)` 的 Python 小脚本，而不是手工拼 JSON。
 
 ### 源版本和应用版本
@@ -162,6 +200,21 @@ python tools\machine_adapter\import_profiles.py `
 | `client_version` | `slice_info.config` header 版本 | `1.4.1.2 20260604104233` |
 | `revision` | 原生 profile 源文件 hash | `sha256:...` |
 
+Flash Studio Desktop 1.7.11 的版本契约是：profile 包 `02.01.01.00`，
+项目格式与 `Application=BambuStudio-2.3.2`，`X-BBL-Client-Version` 为空。
+桌面版本 `1.7.11` 只用于安装识别，不应写进 3MF。Flash Studio 导出也不应
+写入 `OrcaSlicer` / `OrcaSlicer-Version` 字段。此契约来自 Flash Studio
+实际导出的 Creator 5 Pro 默认 3MF，不能用 profile 内部构建号代替项目版本。
+
+Flash Studio 原生包还包含 `Metadata/plate_1.json` 和 128×128 的
+`Metadata/plate_1_small.png`，且 `slice_info.config` header 带 32 位 UUID。
+手动完成机型、耗材配置并保存的多材料案例还表明：Lumina 的三份
+`Auxiliaries/.thumbnails/*.png` 封面和根关系必须保留，不能因为默认立方体
+样本较精简就删除；project 中的耗材数组应按当前实际调色板收敛，例如
+Creator 5 Pro 的四色项目输出 4 组耗材字段，而不是遗留 8 组通用槽位。
+这些属于包结构；层高、线宽、墙生成器、温度、速度、填充和支撑仍由
+Lumina 工艺覆盖层提供，不能从参考 3MF 的具体切片任务照抄。
+
 Anycubic 常见情况是 `source_version` 和应用版本不同，必须分开记录。
 
 `tools/machine_adapter/sync_local_profiles.py` 里有两个显式覆盖表：
@@ -169,7 +222,7 @@ Anycubic 常见情况是 `source_version` 和应用版本不同，必须分开�
 - `APPLICATION_METADATA_OVERRIDES`
 - `CLIENT_VERSION_OVERRIDES`
 
-目前 Anycubic Slicer Next 使用这些覆盖表固定为人工验收过的客户端版本。下次升级 Anycubic 时，必须先用真实切片器打开 3MF 验收，再更新这两个常量和 `tests/test_machine_registry_bundle_unit.py` 的期望值；不要只改 `Anycubic.json` 的 profile 包版本。
+目前 Anycubic Slicer Next 和 Flash Studio 使用这些覆盖表固定为人工验收过的项目格式契约。下次升级时，必须先用真实切片器打开 3MF 验收，再更新这些常量和 `tests/test_machine_registry_bundle_unit.py` 的期望值；不要只改 vendor profile 包版本。
 
 ## 生成后必须检查
 
@@ -272,6 +325,8 @@ python scripts\run_vitest.py run src\__tests__\settings-store-hydration.test.ts 
 - BambuStudio 打开 X2D/A2L 代表机型。
 - ElegooSlicer 打开 Elegoo CC2 `0.2`。
 - AnycubicSlicerNext 打开 AC KX `0.25`。
+- Flash Studio Desktop 打开 AD5X `0.25` / `0.4`、Guider 3 Ultra `0.4`、
+  Guider4 `0.25` / `0.4`，并抽查 Creator 5 / Creator 5 Pro / Guider4 Pro。
 
 生成示例使用 `core.converter.generate_final_model(...)`，输入图片可以用：
 
@@ -324,13 +379,16 @@ print("custom_gcode_per_layer", "Metadata/custom_gcode_per_layer.xml" in entries
 | SnapmakerOrca | no | no | no |
 | ElegooSlicer | no | no | no |
 | AnycubicSlicerNext | no | no | yes |
+| FlashStudio | no | no | no |
 
 ## 前端验收
 
 设置页必须满足：
 
 - 用户先看机器卡片和缩略图，再选择机器。
-- 喷嘴按钮在卡片内，当前只展示 Lumina 支持的 `0.2` / `0.4` 档。
+- 喷嘴按钮在卡片内，范围为 `0.2` / `0.25` / `0.4`，并且只展示 registry
+  对当前机型实际提供的口径；所有切片器都不展示大于 `0.4` 的喷嘴。
+  不能把某台机型的口径集合套用到其他机型。
 - 同名机器在不同 slicer 下不会复用旧 `device_profile_id`。
 - H2D、H2D Pro、X2D、A2L、Elegoo CC2、AC KX、Snapmaker U1 的缩略图能加载。
 - 切换 slicer 后，当前机器不兼容时自动切到该 slicer 的第一个兼容机型。

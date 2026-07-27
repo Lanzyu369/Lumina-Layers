@@ -27,6 +27,9 @@ import type {
   DynamicMaterialResultResponse,
   MaterialLayerBenefitPoint,
   MaterialLayerBenefitScope,
+  ModelSurfaceCandidate,
+  ModelSurfaceMeshSummary,
+  ModelSurfaceSelectResponse,
 } from "../../api/types";
 import {
   ColorMode as ColorModeEnum,
@@ -59,6 +62,8 @@ import {
   cleanupSessionFiles as apiCleanupSessionFiles,
   uploadLut as apiUploadLut,
   getGlbStatus as apiGetGlbStatus,
+  uploadModelSurface as apiUploadModelSurface,
+  selectModelSurface as apiSelectModelSurface,
 } from "../../api/converter";
 import {
   apiErrorToVisibleMessage,
@@ -113,11 +118,6 @@ import {
   buildLutCatalogIndex,
   findLutLocationByPath,
 } from "./legacyLutSelection";
-import {
-  beginPreviewRequest,
-  invalidatePreviewRequest,
-  isCurrentPreviewRequest,
-} from "../previewRequestCoordinator";
 import {
   isSvgImageFile,
   rotateImageFile,
@@ -233,6 +233,18 @@ function visibleConverterError(error: unknown, fallback: string): string {
   return apiErrorToVisibleMessage(error, fallback);
 }
 
+export const CONVERTER_ERROR_KEYS = {
+  heightmapUploadRequired: "relief_heightmap_generate_requires_upload",
+} as const;
+
+function clearedHeightmapUploadState() {
+  return {
+    heightmapThumbnailUrl: null,
+    color_height_map: {},
+    heightmapUploadSessionId: null,
+  };
+}
+
 function rawPreviewFailureMessage(error: unknown): string {
   const detail = visibleConverterError(error, tRuntime("api_error_http_default"));
   return tRuntime("converter_raw_preview_failed", { error: detail });
@@ -274,6 +286,38 @@ export interface PendingReplacement {
   sourceColors?: string[]; // select-all 批量模式下的多个源色
   sourceRegions?: RegionData[]; // multi-select 模式下的多个连通区域
 }
+
+export type ModelSurfacePlacementMode = "edge_to_edge" | "inset";
+
+export interface ModelSurfacePlacement {
+  mode: ModelSurfacePlacementMode;
+  offset_x_mm: number;
+  offset_y_mm: number;
+  scale: number;
+  rotation_deg: number;
+  inset_mm: number;
+}
+
+export interface ModelSurfaceModelRotation {
+  x_deg: number;
+  y_deg: number;
+  z_deg: number;
+}
+
+export const DEFAULT_MODEL_SURFACE_PLACEMENT: ModelSurfacePlacement = {
+  mode: "edge_to_edge",
+  offset_x_mm: 0,
+  offset_y_mm: 0,
+  scale: 1,
+  rotation_deg: 0,
+  inset_mm: 0,
+};
+
+export const DEFAULT_MODEL_SURFACE_MODEL_ROTATION: ModelSurfaceModelRotation = {
+  x_deg: 0,
+  y_deg: 0,
+  z_deg: 0,
+};
 
 // ========== Helpers ==========
 
@@ -1473,6 +1517,23 @@ export interface ConverterState {
   imagePreviewUrl: string | null;
   aspectRatio: number | null;
 
+  // 模型覆面
+  modelSurfaceEnabled: boolean;
+  modelSurfaceFile: File | null;
+  modelSurfacePreviewUrl: string | null;
+  modelSurfaceModelFileId: string | null;
+  modelSurfaceSummary: ModelSurfaceMeshSummary | null;
+  modelSurfaceSelectionId: string | null;
+  modelSurfaceSelection: Record<string, unknown> | null;
+  modelSurfaceFootprint: Record<string, unknown> | null;
+  modelSurfaceCandidates: ModelSurfaceCandidate[];
+  modelSurfacePlacement: ModelSurfacePlacement;
+  modelSurfaceModelRotation: ModelSurfaceModelRotation;
+  modelSurfaceLoading: boolean;
+  modelSurfaceSelecting: boolean;
+  modelSurfaceError: string | null;
+  modelSurfaceWarnings: string[];
+
   // 会话（预览后由后端返回）
   sessionId: string | null;
 
@@ -1599,6 +1660,7 @@ export interface ConverterState {
   autoHeightMode: AutoHeightMode;
   heightmapFile: File | null;
   heightmapThumbnailUrl: string | null;
+  heightmapUploadSessionId: string | null;
 
   // 3D 预览
   previewGlbUrl: string | null;
@@ -1737,6 +1799,23 @@ export interface ConverterState {
 
   // 当前图片是否已手动点击过预览按钮（自动预览的前置条件）
   hasManualPreview: boolean;
+
+  /**
+   * An established preview was invalidated and still needs one debounced
+   * refresh. Store-owned so the obligation survives hook unmount/remount.
+   * 已有预览失效后仍欠一次防抖刷新；由 store 持有以跨越 Hook 重挂载。
+   */
+  previewAutoRefreshPending: boolean;
+
+  /**
+   * Monotonic ownership revision for preview inputs/results. Any action that
+   * clears the preview increments it so an older response cannot bind later.
+   * 预览输入/结果所有权版本；清空预览时递增，拒绝旧响应回写。
+   */
+  previewRequestRevision: number;
+
+  /** Monotonic counter bumped whenever a valid preview request starts. */
+  previewSubmissionSequence: number;
 }
 
 // ========== Actions Interface ==========
@@ -1746,6 +1825,13 @@ export interface ConverterActions {
   setImageFile: (file: File | null) => void;
   rotateImageForExport: (degrees: ImageRotationDegrees) => Promise<void>;
   loadVectorizedSvgIntoConverter: (file: File) => void;
+  setModelSurfaceEnabled: (enabled: boolean) => void;
+  uploadModelSurfaceFile: (file: File) => Promise<void>;
+  clearModelSurface: () => void;
+  selectModelSurfaceFace: (faceIndex: number, candidateId?: string) => Promise<void>;
+  updateModelSurfacePlacement: (updates: Partial<ModelSurfacePlacement>) => void;
+  updateModelSurfaceModelRotation: (updates: Partial<ModelSurfaceModelRotation>) => void;
+  fitModelSurfaceArtwork: () => void;
 
   // 参数 setter
   setLutName: (name: string) => void;
@@ -2061,6 +2147,7 @@ export interface ConverterActions {
     layer_height_mm: number;
   }) => void;
   setNativeDbNames: (dbNames: string[]) => void;
+  invalidatePreviewForAutoRefresh: () => void;
   submitPreview: () => Promise<void>;
   submitGenerate: () => Promise<string | null>;
 
@@ -2174,7 +2261,15 @@ const DEFAULT_PUZZLE_PREVIEW_STATE = {
 
 const DEFAULT_PUZZLE_LAYOUT_SEED = 0;
 
-function buildPreviewSessionResetState(): Partial<ConverterState> {
+function buildPreviewSessionResetState(
+  current: Pick<
+    ConverterState,
+    "hasManualPreview" | "previewAutoRefreshPending" | "previewRequestRevision"
+  >,
+  preserveAutoRefreshEligibility = false,
+): Partial<ConverterState> {
+  const previewAutoRefreshPending = preserveAutoRefreshEligibility &&
+    (current.hasManualPreview || current.previewAutoRefreshPending);
   return {
     sessionId: null,
     isLoading: false,
@@ -2214,6 +2309,8 @@ function buildPreviewSessionResetState(): Partial<ConverterState> {
     previewPixelHeight: null,
     modelBounds: null,
     hasManualPreview: false,
+    previewAutoRefreshPending,
+    previewRequestRevision: current.previewRequestRevision + 1,
     ...EMPTY_LUT_MATCH_STATE,
     ...DEFAULT_LAYER_IMAGES_STATE,
     ...DEFAULT_PUZZLE_PREVIEW_STATE,
@@ -2405,6 +2502,21 @@ export const DEFAULT_STATE: ConverterState = {
   imageFile: null,
   imagePreviewUrl: null,
   aspectRatio: null,
+  modelSurfaceEnabled: false,
+  modelSurfaceFile: null,
+  modelSurfacePreviewUrl: null,
+  modelSurfaceModelFileId: null,
+  modelSurfaceSummary: null,
+  modelSurfaceSelectionId: null,
+  modelSurfaceSelection: null,
+  modelSurfaceFootprint: null,
+  modelSurfaceCandidates: [],
+  modelSurfacePlacement: { ...DEFAULT_MODEL_SURFACE_PLACEMENT },
+  modelSurfaceModelRotation: { ...DEFAULT_MODEL_SURFACE_MODEL_ROTATION },
+  modelSurfaceLoading: false,
+  modelSurfaceSelecting: false,
+  modelSurfaceError: null,
+  modelSurfaceWarnings: [],
   sessionId: null,
   source_version: "legacy",
   lut_name: DEFAULT_LUT_NAME,
@@ -2497,6 +2609,7 @@ export const DEFAULT_STATE: ConverterState = {
   autoHeightMode: "darker-higher" as AutoHeightMode,
   heightmapFile: null,
   heightmapThumbnailUrl: null,
+  heightmapUploadSessionId: null,
   previewGlbUrl: null,
   previewPerformanceTiming: null,
   generatePerformanceTiming: null,
@@ -2560,6 +2673,9 @@ export const DEFAULT_STATE: ConverterState = {
   pendingReplacement: null,
   regionReplacementCount: 0,
   hasManualPreview: false,
+  previewAutoRefreshPending: false,
+  previewRequestRevision: 0,
+  previewSubmissionSequence: 0,
 };
 
 // ========== Client-side timing log (writes to server log) ==========
@@ -2740,6 +2856,22 @@ const GLB_POLL_MAX_MS = 5 * 60_000;
 let _glbPollSequence = 0;
 let _generateRequestSequence = 0;
 
+// ========== Preview AbortController ==========
+
+let _previewAbortController: AbortController | null = null;
+
+/** Cancel every async task owned by the current preview input. */
+function _cancelPreviewWork(): void {
+  if (_previewAbortController) {
+    _previewAbortController.abort();
+    _previewAbortController = null;
+  }
+  _gradientGroupsAbortController?.abort();
+  _gradientGroupsAbortController = null;
+  _glbPollSequence += 1;
+  _endPreviewTimer();
+}
+
 function _isCurrentGenerateRequest(
   sequence: number,
   sessionId: string,
@@ -2827,42 +2959,53 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
     // --- 图片 ---
     setImageFile: (file: File | null) => {
+      _cancelPreviewWork();
+
       // Revoke previous blob URL to avoid memory leaks
-      const prev = _get().imagePreviewUrl;
+      const currentState = _get();
+      const prev = currentState.imagePreviewUrl;
       if (prev && prev.startsWith("blob:")) {
         URL.revokeObjectURL(prev);
       }
+      const modelSurfaceArtworkReset = _get().modelSurfaceEnabled
+        ? { modelSurfacePlacement: { ...DEFAULT_MODEL_SURFACE_PLACEMENT } }
+        : {};
 
       if (!file) {
-        const currentMode = _get().modeling_mode;
+        const currentMode = currentState.modeling_mode;
         set({
           imageFile: null,
           imagePreviewUrl: null,
           aspectRatio: null,
+          ...modelSurfaceArtworkReset,
           modeling_mode: currentMode === ModelingModeEnum.VECTOR
             ? ModelingModeEnum.HIGH_FIDELITY
             : currentMode,
-          ...buildPreviewSessionResetState(),
+          ...buildPreviewSessionResetState(currentState),
         });
         return;
       }
 
       if (isRawFileConverter(file)) {
-        const currentState = _get();
         const shouldOpenCrop = currentState.enableCrop;
+        const nextPreviewRevision = currentState.previewRequestRevision + 1;
         set({
           imageFile: file,
           imagePreviewUrl: null,
           aspectRatio: null,
+          ...modelSurfaceArtworkReset,
           modeling_mode: currentState.modeling_mode === ModelingModeEnum.VECTOR
             ? ModelingModeEnum.HIGH_FIDELITY
             : currentState.modeling_mode,
-          ...buildPreviewSessionResetState(),
+          ...buildPreviewSessionResetState(currentState),
           cropModalOpen: shouldOpenCrop,
         });
         uploadImagePreview(file)
           .then(({ preview_url, width, height }) => {
-            if (_get().imageFile !== file) {
+            if (
+              _get().imageFile !== file ||
+              _get().previewRequestRevision !== nextPreviewRevision
+            ) {
               return;
             }
             set({
@@ -2872,7 +3015,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             });
           })
           .catch((err) => {
-            if (_get().imageFile !== file) {
+            if (
+              _get().imageFile !== file ||
+              _get().previewRequestRevision !== nextPreviewRevision
+            ) {
               return;
             }
             set({ error: rawPreviewFailureMessage(err) });
@@ -2881,16 +3027,22 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       }
 
       const previewUrl = URL.createObjectURL(file);
+      const nextPreviewRevision = currentState.previewRequestRevision + 1;
 
       // Calculate aspect ratio from image dimensions
       const img = new Image();
       img.onload = () => {
+        if (
+          _get().imageFile !== file ||
+          _get().previewRequestRevision !== nextPreviewRevision
+        ) {
+          return;
+        }
         const ratio = img.naturalWidth / img.naturalHeight;
         set({ aspectRatio: ratio });
       };
       img.src = previewUrl;
 
-      const currentState = _get();
       const shouldOpenCrop = currentState.enableCrop;
       const modelingMode = currentState.modeling_mode === ModelingModeEnum.VECTOR && !isSvgImageFile(file)
         ? ModelingModeEnum.HIGH_FIDELITY
@@ -2898,11 +3050,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       set({
         imageFile: file,
         imagePreviewUrl: previewUrl,
+        ...modelSurfaceArtworkReset,
         modeling_mode: modelingMode,
-        ...buildPreviewSessionResetState(),
+        ...buildPreviewSessionResetState(currentState),
         cropModalOpen: shouldOpenCrop,
       });
-      console.log("[DEBUG] setImageFile: cleared layerImages");
     },
 
     rotateImageForExport: async (degrees: ImageRotationDegrees) => {
@@ -2930,18 +3082,27 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     },
 
     loadVectorizedSvgIntoConverter: (file: File) => {
-      invalidatePreviewRequest();
-      _gradientGroupsAbortController?.abort();
-      _gradientGroupsAbortController = null;
+      _cancelPreviewWork();
 
-      const prev = _get().imagePreviewUrl;
+      const currentState = _get();
+      const prev = currentState.imagePreviewUrl;
       if (prev && prev.startsWith("blob:")) {
         URL.revokeObjectURL(prev);
       }
+      const modelSurfaceArtworkReset = _get().modelSurfaceEnabled
+        ? { modelSurfacePlacement: { ...DEFAULT_MODEL_SURFACE_PLACEMENT } }
+        : {};
 
       const previewUrl = URL.createObjectURL(file);
+      const nextPreviewRevision = currentState.previewRequestRevision + 1;
       const img = new Image();
       img.onload = () => {
+        if (
+          _get().imageFile !== file ||
+          _get().previewRequestRevision !== nextPreviewRevision
+        ) {
+          return;
+        }
         set({ aspectRatio: img.naturalWidth / img.naturalHeight });
       };
       img.src = previewUrl;
@@ -2950,7 +3111,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         imageFile: file,
         imagePreviewUrl: previewUrl,
         aspectRatio: null,
-        ...buildPreviewSessionResetState(),
+        ...modelSurfaceArtworkReset,
+        ...buildPreviewSessionResetState(currentState),
         modeling_mode: ModelingModeEnum.VECTOR,
         isLoading: false,
         error: null,
@@ -2969,6 +3131,186 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         selectedGradientRegions: [],
         puzzleEnabled: false,
       });
+    },
+
+    setModelSurfaceEnabled: (enabled: boolean) => {
+      set((state) => ({
+        modelSurfaceEnabled: enabled,
+        structure_mode: enabled
+          ? StructureModeEnum.SINGLE_SIDED
+          : state.structure_mode,
+        modelSurfaceError: null,
+        ...buildPreviewSessionResetState(state),
+      }));
+    },
+
+    uploadModelSurfaceFile: async (file: File) => {
+      const currentState = _get();
+      const prev = currentState.modelSurfacePreviewUrl;
+      if (prev && prev.startsWith("blob:")) {
+        URL.revokeObjectURL(prev);
+      }
+      const previewUrl = URL.createObjectURL(file);
+      set({
+        modelSurfaceEnabled: true,
+        structure_mode: StructureModeEnum.SINGLE_SIDED,
+        modelSurfaceFile: file,
+        modelSurfacePreviewUrl: previewUrl,
+        modelSurfaceModelFileId: null,
+        modelSurfaceSummary: null,
+        modelSurfaceSelectionId: null,
+        modelSurfaceSelection: null,
+        modelSurfaceFootprint: null,
+        modelSurfaceCandidates: [],
+        modelSurfacePlacement: { ...DEFAULT_MODEL_SURFACE_PLACEMENT },
+        modelSurfaceModelRotation: { ...DEFAULT_MODEL_SURFACE_MODEL_ROTATION },
+        modelSurfaceLoading: true,
+        modelSurfaceSelecting: false,
+        modelSurfaceError: null,
+        modelSurfaceWarnings: [],
+        ...buildPreviewSessionResetState(currentState),
+      });
+      try {
+        const response = await apiUploadModelSurface(file);
+        if (_get().modelSurfaceFile !== file) {
+          return;
+        }
+        set({
+          modelSurfaceLoading: false,
+          modelSurfaceModelFileId: response.model_file_id,
+          modelSurfaceSummary: response.summary,
+          modelSurfaceCandidates: response.surface_candidates ?? [],
+          modelSurfaceWarnings: response.warnings ?? [],
+          modelSurfaceError: null,
+        });
+      } catch (err) {
+        if (_get().modelSurfaceFile !== file) {
+          return;
+        }
+        set({
+          modelSurfaceLoading: false,
+          modelSurfaceModelFileId: null,
+          modelSurfaceError: visibleConverterError(
+            err,
+            tRuntime("model_surface_upload_failed"),
+          ),
+        });
+      }
+    },
+
+    clearModelSurface: () => {
+      const currentState = _get();
+      const prev = currentState.modelSurfacePreviewUrl;
+      if (prev && prev.startsWith("blob:")) {
+        URL.revokeObjectURL(prev);
+      }
+      set({
+        modelSurfaceEnabled: false,
+        modelSurfaceFile: null,
+        modelSurfacePreviewUrl: null,
+        modelSurfaceModelFileId: null,
+        modelSurfaceSummary: null,
+        modelSurfaceSelectionId: null,
+        modelSurfaceSelection: null,
+        modelSurfaceFootprint: null,
+        modelSurfaceCandidates: [],
+        modelSurfacePlacement: { ...DEFAULT_MODEL_SURFACE_PLACEMENT },
+        modelSurfaceModelRotation: { ...DEFAULT_MODEL_SURFACE_MODEL_ROTATION },
+        modelSurfaceLoading: false,
+        modelSurfaceSelecting: false,
+        modelSurfaceError: null,
+        modelSurfaceWarnings: [],
+        ...buildPreviewSessionResetState(currentState),
+      });
+    },
+
+    selectModelSurfaceFace: async (faceIndex: number, candidateId?: string) => {
+      const state = _get();
+      if (state.modelSurfaceLoading || state.modelSurfaceSelecting) {
+        return;
+      }
+      if (!state.modelSurfaceModelFileId || !Number.isFinite(faceIndex)) {
+        set({ modelSurfaceError: tRuntime("model_surface_error_upload_first") });
+        return;
+      }
+      const modelFileId = state.modelSurfaceModelFileId;
+      set({
+        modelSurfaceSelecting: true,
+        modelSurfaceError: null,
+      });
+      try {
+        const response: ModelSurfaceSelectResponse = await apiSelectModelSurface(
+          modelFileId,
+          {
+            face_index: Math.max(0, Math.floor(faceIndex)),
+            ...(candidateId ? { candidate_id: candidateId } : {}),
+            model_transform: {
+              rotation_deg: {
+                x: state.modelSurfaceModelRotation.x_deg,
+                y: state.modelSurfaceModelRotation.y_deg,
+                z: state.modelSurfaceModelRotation.z_deg,
+              },
+            },
+          },
+        );
+        if (_get().modelSurfaceModelFileId !== modelFileId) {
+          return;
+        }
+        set((currentState) => ({
+          modelSurfaceSelecting: false,
+          modelSurfaceSelectionId: response.selection_id,
+          modelSurfaceSelection: response.selection,
+          modelSurfaceFootprint: response.footprint,
+          modelSurfacePlacement: { ...DEFAULT_MODEL_SURFACE_PLACEMENT },
+          modelSurfaceWarnings: response.warnings ?? [],
+          modelSurfaceError: null,
+          ...buildPreviewSessionResetState(currentState),
+        }));
+      } catch (err) {
+        if (_get().modelSurfaceModelFileId !== modelFileId) {
+          return;
+        }
+        set({
+          modelSurfaceSelecting: false,
+          modelSurfaceError: visibleConverterError(
+            err,
+            tRuntime("model_surface_select_failed"),
+          ),
+        });
+      }
+    },
+
+    updateModelSurfacePlacement: (updates: Partial<ModelSurfacePlacement>) => {
+      const currentState = _get();
+      const current = currentState.modelSurfacePlacement;
+      set({
+        modelSurfacePlacement: {
+          ...current,
+          ...updates,
+          scale: clampValue(updates.scale ?? current.scale, 0.1, 10),
+          inset_mm: Math.max(0, updates.inset_mm ?? current.inset_mm),
+        },
+        ...buildPreviewSessionResetState(currentState),
+      });
+    },
+
+    updateModelSurfaceModelRotation: (updates: Partial<ModelSurfaceModelRotation>) => {
+      const currentState = _get();
+      const current = currentState.modelSurfaceModelRotation;
+      set({
+        modelSurfaceModelRotation: {
+          ...current,
+          ...updates,
+        },
+        ...buildPreviewSessionResetState(currentState),
+      });
+    },
+
+    fitModelSurfaceArtwork: () => {
+      set((state) => ({
+        modelSurfacePlacement: { ...DEFAULT_MODEL_SURFACE_PLACEMENT },
+        ...buildPreviewSessionResetState(state),
+      }));
     },
 
     // --- 基础参数 ---
@@ -2994,7 +3336,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         model_only: false,
         model_threshold: null,
         model_margin: null,
-        ...buildPreviewSessionResetState(),
+        ...buildPreviewSessionResetState(state, true),
       };
       if (lutLocation) {
         updates.selectedLegacyManufacturer = lutLocation.manufacturer;
@@ -3095,7 +3437,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         model_only: false,
         model_threshold: null,
         model_margin: null,
-        ...buildPreviewSessionResetState(),
+        ...buildPreviewSessionResetState(state, true),
       };
       if (lutLocation) {
         updates.selectedLegacyManufacturer = lutLocation.manufacturer;
@@ -3197,7 +3539,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         updates.model_only = false;
         updates.model_threshold = null;
         updates.model_margin = null;
-        Object.assign(updates, buildPreviewSessionResetState());
+        Object.assign(updates, buildPreviewSessionResetState(state, true));
         try {
           localStorage.removeItem("lumina_lastLut");
         } catch {
@@ -3225,7 +3567,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             model_only: false,
             model_threshold: null,
             model_margin: null,
-            ...buildPreviewSessionResetState(),
+            ...buildPreviewSessionResetState(state, true),
           };
         }
 
@@ -3239,7 +3581,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             model_only: false,
             model_threshold: null,
             model_margin: null,
-            ...buildPreviewSessionResetState(),
+            ...buildPreviewSessionResetState(state, true),
           };
         }
 
@@ -3260,24 +3602,32 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           color_layers: preferredMode?.color_layers ?? null,
           layer_height_mm: preferredMode?.layer_height_mm ?? null,
           ...buildNativeModelState(selectedBrand, state),
-          ...buildPreviewSessionResetState(),
+          ...buildPreviewSessionResetState(state, true),
         };
       }),
 
     setSelectedMaterialDirNames: (names: string[]) => {
+      const state = _get();
+      const currentBacking = state.materialBackingMaterialDirName;
+      const nextBacking =
+        currentBacking && names.includes(currentBacking)
+          ? currentBacking
+          : inferDefaultMaterialBackingDirName(names);
+      const selectionUnchanged =
+        names.length === state.selectedMaterialDirNames.length &&
+        names.every(
+          (name, index) => name === state.selectedMaterialDirNames[index],
+        );
+      if (selectionUnchanged && nextBacking === currentBacking) {
+        return;
+      }
+
       persistSelectedMaterialDirNames(names);
-      set((state) => {
-        const currentBacking = state.materialBackingMaterialDirName;
-        const nextBacking =
-          currentBacking && names.includes(currentBacking)
-            ? currentBacking
-            : inferDefaultMaterialBackingDirName(names);
-        persistMaterialBackingMaterialDirName(nextBacking);
-        return {
-          selectedMaterialDirNames: names,
-          materialBackingMaterialDirName: nextBacking,
-          ...buildPreviewSessionResetState(),
-        };
+      persistMaterialBackingMaterialDirName(nextBacking);
+      set({
+        selectedMaterialDirNames: names,
+        materialBackingMaterialDirName: nextBacking,
+        ...buildPreviewSessionResetState(state, true),
       });
     },
     setMaterialLayerCount: (count: number) =>
@@ -3295,11 +3645,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
                 RELIEF_MAX_EXTRA_HEIGHT_MM,
               )
             : state.heightmap_max_height,
-          ...buildPreviewSessionResetState(),
+          ...buildPreviewSessionResetState(state, true),
         };
       }),
     setMaterialDynamicLayerCountEnabled: (enabled: boolean) => {
-      invalidatePreviewRequest();
+      _cancelPreviewWork();
       set((state) => ({
         materialDynamicLayerCountEnabled: enabled,
         hue_enable: enabled ? false : state.hue_enable,
@@ -3314,11 +3664,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
                 RELIEF_MAX_EXTRA_HEIGHT_MM,
               )
             : state.heightmap_max_height,
-        ...buildPreviewSessionResetState(),
+        ...buildPreviewSessionResetState(state),
       }));
     },
     setMaterialMinLayerCount: (count: number) => {
-      invalidatePreviewRequest();
+      _cancelPreviewWork();
       set((state) => {
         const materialMinLayerCount = normalizeDynamicMaterialLayerCount(
           count,
@@ -3344,12 +3694,12 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
                 RELIEF_MAX_EXTRA_HEIGHT_MM,
               )
             : state.heightmap_max_height,
-          ...buildPreviewSessionResetState(),
+          ...buildPreviewSessionResetState(state),
         };
       });
     },
     setMaterialMaxLayerCount: (count: number) => {
-      invalidatePreviewRequest();
+      _cancelPreviewWork();
       set((state) => {
         const materialMaxLayerCount = normalizeDynamicMaterialLayerCount(
           count,
@@ -3375,14 +3725,14 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
                 RELIEF_MAX_EXTRA_HEIGHT_MM,
               )
             : state.heightmap_max_height,
-          ...buildPreviewSessionResetState(),
+          ...buildPreviewSessionResetState(state),
         };
       });
     },
     setMaterialLayerHeightMm: (height: number) =>
-      set(() => ({
+      set((state) => ({
         materialLayerHeightMm: height,
-        ...buildPreviewSessionResetState(),
+        ...buildPreviewSessionResetState(state, true),
       })),
     setMaterialBackingMaterialDirName: (name: string | null) => {
       persistMaterialBackingMaterialDirName(name);
@@ -3414,7 +3764,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             color_layers: null,
             layer_height_mm: null,
             ...buildNativeModelDefaults(null),
-            ...buildPreviewSessionResetState(),
+            ...buildPreviewSessionResetState(state, true),
           };
         }
 
@@ -3430,7 +3780,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           color_layers: preferredMode?.color_layers ?? null,
           layer_height_mm: preferredMode?.layer_height_mm ?? null,
           ...buildNativeModelState(selectedBrand, state),
-          ...buildPreviewSessionResetState(),
+          ...buildPreviewSessionResetState(state, true),
         };
       }),
 
@@ -3445,7 +3795,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             source_version: "native",
             color_layers: mode.color_layers,
             layer_height_mm: mode.layer_height_mm,
-            ...buildPreviewSessionResetState(),
+            ...buildPreviewSessionResetState(state, true),
           };
         }
         const supported = getSupportedModeByPair(
@@ -3463,14 +3813,14 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             source_version: "native",
             color_layers: preferred?.color_layers ?? null,
             layer_height_mm: preferred?.layer_height_mm ?? null,
-            ...buildPreviewSessionResetState(),
+            ...buildPreviewSessionResetState(state, true),
           };
         }
         return {
           source_version: "native",
           color_layers: supported.color_layers,
           layer_height_mm: supported.layer_height_mm,
-          ...buildPreviewSessionResetState(),
+          ...buildPreviewSessionResetState(state, true),
         };
       }),
 
@@ -3486,7 +3836,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         return {
           source_version: "native",
           selectedNativeDbNames: normalized,
-          ...buildPreviewSessionResetState(),
+          ...buildPreviewSessionResetState(state, true),
         };
       }),
 
@@ -3556,6 +3906,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       set((state) => ({
         structure_mode:
           (state.enable_fridge_magnet ||
+            state.modelSurfaceEnabled ||
             (state.enable_relief &&
               state.modeling_mode === ModelingModeEnum.VECTOR)) &&
           mode !== StructureModeEnum.SINGLE_SIDED
@@ -5486,33 +5837,48 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       set({ color_height_map: heightMap });
     },
 
-    setAutoHeightMode: (mode: AutoHeightMode) => set({ autoHeightMode: mode }),
+    setAutoHeightMode: (mode: AutoHeightMode) =>
+      set((state) => ({
+        autoHeightMode: mode,
+        ...(mode === "use-heightmap" && state.autoHeightMode !== "use-heightmap"
+          ? clearedHeightmapUploadState()
+          : {}),
+      })),
 
     // --- 高度图 ---
-    setHeightmapFile: (file: File | null) => set({ heightmapFile: file }),
+    setHeightmapFile: (file: File | null) =>
+      set({
+        ...clearedHeightmapUploadState(),
+        heightmapFile: file,
+        isLoading: false,
+      }),
 
     uploadHeightmap: async () => {
       const state = _get();
-      const clearHeightmapUploadState = {
-        heightmapThumbnailUrl: null,
-        color_height_map: {},
-      };
       if (!state.heightmapFile || !state.sessionId) {
         set({
-          ...clearHeightmapUploadState,
+          ...clearedHeightmapUploadState(),
           error: "请先上传高度图文件并完成预览",
         });
         return;
       }
       const requestedSessionId = state.sessionId;
+      const requestedHeightmapFile = state.heightmapFile;
+      const isCurrentHeightmapUpload = () => {
+        const currentState = _get();
+        return (
+          currentState.sessionId === requestedSessionId &&
+          currentState.heightmapFile === requestedHeightmapFile
+        );
+      };
       set({ isLoading: true, error: null });
       try {
         const response = await apiUploadHeightmap(
-          state.heightmapFile,
+          requestedHeightmapFile,
           requestedSessionId,
           state.heightmap_max_height,
         );
-        if (_get().sessionId !== requestedSessionId) {
+        if (!isCurrentHeightmapUpload()) {
           return;
         }
         const thumbnailUrl = `${response.thumbnail_url}`;
@@ -5520,13 +5886,14 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           isLoading: false,
           heightmapThumbnailUrl: thumbnailUrl,
           color_height_map: response.color_height_map,
+          heightmapUploadSessionId: requestedSessionId,
         });
       } catch (err) {
-        if (_get().sessionId !== requestedSessionId) {
+        if (!isCurrentHeightmapUpload()) {
           return;
         }
         set({
-          ...clearHeightmapUploadState,
+          ...clearedHeightmapUploadState(),
           isLoading: false,
           error: visibleConverterError(err, "Heightmap upload failed"),
         });
@@ -6169,6 +6536,42 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       await _get().submitReplacePreview();
     },
 
+    invalidatePreviewForAutoRefresh: () => {
+      _cancelPreviewWork();
+
+      set((current) => ({
+        sessionId: null,
+        isLoading: false,
+        previewImageUrl: null,
+        originalPreviewUrl: null,
+        previewBaseImageUrl: null,
+        previewGlbUrl: null,
+        modelUrl: null,
+        previewPerformanceTiming: null,
+        generatePerformanceTiming: null,
+        batchPreviewItems: [],
+        threemfDiskPath: null,
+        downloadUrl: null,
+        replacePreviewLoading: false,
+        preview_width_mm: null,
+        preview_height_mm: null,
+        preview_spacer_thick: null,
+        previewPixelWidth: null,
+        previewPixelHeight: null,
+        modelBounds: null,
+        gradientGroups: null,
+        gradientGroupsLoading: false,
+        gradientGroupsError: null,
+        gradientGroupsSessionId: null,
+        gradientSelection: null,
+        selectedGradientRegions: [],
+        previewAutoRefreshPending: true,
+        previewRequestRevision: current.previewRequestRevision + 1,
+        ...DEFAULT_LAYER_IMAGES_STATE,
+        ...DEFAULT_PUZZLE_PREVIEW_STATE,
+      }));
+    },
+
     submitPreview: async () => {
       const state = _get();
       if (!state.imageFile) {
@@ -6187,9 +6590,33 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         });
         return;
       }
+      if (
+        state.modelSurfaceEnabled &&
+        (
+          !state.modelSurfaceModelFileId ||
+          !state.modelSurfaceSelection ||
+          !state.modelSurfaceFootprint
+        )
+      ) {
+        set({ error: tRuntime("model_surface_error_select_first") });
+        return;
+      }
 
-      const previewRequest = beginPreviewRequest();
-      const { signal } = previewRequest;
+      // Cancel any in-flight preview request.
+      if (_previewAbortController) {
+        _previewAbortController.abort();
+      }
+      const requestController = new AbortController();
+      _previewAbortController = requestController;
+      const { signal } = requestController;
+      const previewRequestRevision = state.previewRequestRevision;
+      const isStalePreviewRequest = (): boolean => {
+        const latest = _get();
+        return (
+          signal.aborted ||
+          latest.previewRequestRevision !== previewRequestRevision
+        );
+      };
 
       _previewStartTime = performance.now();
       (window as LuminaWindow).__luminaPreviewStart = _previewStartTime;
@@ -6216,7 +6643,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       set({
         isLoading: true,
         error: null,
-        hasManualPreview: false,
+        hasManualPreview: true,
+        previewAutoRefreshPending: false,
+        previewSubmissionSequence: state.previewSubmissionSequence + 1,
         previewWarnings: [],
         largeFormatWarnings: [],
         ...DEFAULT_LAYER_IMAGES_STATE,
@@ -6277,6 +6706,24 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           ...(shouldReplayGlobalReplacements
             ? { replacement_regions: previewReplacementRegions }
             : {}),
+          ...(state.modelSurfaceEnabled &&
+          state.modelSurfaceModelFileId &&
+          state.modelSurfaceSelection &&
+          state.modelSurfaceFootprint
+            ? {
+                surface_model_file_id: state.modelSurfaceModelFileId,
+                surface_selection_json: JSON.stringify(state.modelSurfaceSelection),
+                surface_footprint_json: JSON.stringify(state.modelSurfaceFootprint),
+                surface_placement_json: JSON.stringify(state.modelSurfacePlacement),
+                surface_model_transform_json: JSON.stringify({
+                  rotation_deg: {
+                    x: state.modelSurfaceModelRotation.x_deg,
+                    y: state.modelSurfaceModelRotation.y_deg,
+                    z: state.modelSurfaceModelRotation.z_deg,
+                  },
+                }),
+              }
+            : {}),
         };
         _logPreviewTimer("request sent");
         _previewClientLog("preview: request sent", {
@@ -6295,7 +6742,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           previewParams,
           signal,
         );
-        if (!isCurrentPreviewRequest(previewRequest)) {
+        if (isStalePreviewRequest()) {
           return;
         }
         _logPreviewTimer("response received");
@@ -6355,7 +6802,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           palette: normalizedPalette,
           ...dynamicMaterialResultState(response),
           ...(shouldResetHeightmapMapping
-            ? { color_height_map: {}, heightmapThumbnailUrl: null }
+            ? clearedHeightmapUploadState()
             : autoReliefHeightMap
               ? { color_height_map: autoReliefHeightMap }
               : {}),
@@ -6390,6 +6837,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           previewWarnings: response.warnings ?? [],
           largeFormatWarnings: [],
           hasManualPreview: true,
+          previewAutoRefreshPending: false,
           layerImages: [],
           layerImagesOpen: false,
           // Reset gradient-group cache so the panel shows loading while the
@@ -6410,7 +6858,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           await _get().uploadHeightmap();
           const latestState = _get();
           if (
-            !isCurrentPreviewRequest(previewRequest) ||
+            isStalePreviewRequest() ||
             latestState.sessionId !== response.session_id
           ) {
             return;
@@ -6466,7 +6914,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         // 非阻塞拉取渐变分组：后端已在预览流程中同步算完，这里只是读缓存。
         void _get().fetchGradientGroups(previewSessionId);
       } catch (err) {
-        if (!isCurrentPreviewRequest(previewRequest)) {
+        if (isStalePreviewRequest()) {
           return;
         }
         // Ignore aborted requests (user started a new preview)
@@ -6495,7 +6943,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           "error",
         );
       } finally {
-        if (isCurrentPreviewRequest(previewRequest)) {
+        if (_previewAbortController === requestController) {
+          _previewAbortController = null;
           _endPreviewTimer();
         }
       }
@@ -6525,6 +6974,17 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         set({ color_height_map: autoReliefHeightMap });
         state = _get();
       }
+      const hasCurrentHeightmapUpload =
+        state.heightmapUploadSessionId === sessionId &&
+        Object.keys(state.color_height_map).length > 0;
+      if (
+        state.enable_relief &&
+        state.autoHeightMode === "use-heightmap" &&
+        !hasCurrentHeightmapUpload
+      ) {
+        set({ error: CONVERTER_ERROR_KEYS.heightmapUploadRequired });
+        return null;
+      }
       // Requirement 10.4: enable_relief 为 true 且 color_height_map 为空时阻止生成
       if (
         state.enable_relief &&
@@ -6532,7 +6992,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       ) {
         // Requirement 10.3: 高度图模式时给出更具体的提示
         if (state.autoHeightMode === "use-heightmap") {
-          set({ error: "请先上传高度图并获取高度映射后再生成" });
+          set({ error: CONVERTER_ERROR_KEYS.heightmapUploadRequired });
         } else {
           set({ error: "请先设置颜色高度映射后再生成" });
         }
@@ -6712,6 +7172,24 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           enable_base_layer_height_modifier:
             useSettingsStore.getState().enableBaseLayerHeightModifier,
           use_cached_matched_rgb: state.regionReplacementCount > 0,
+          ...(state.modelSurfaceEnabled &&
+          state.modelSurfaceModelFileId &&
+          state.modelSurfaceSelection &&
+          state.modelSurfaceFootprint
+            ? {
+                surface_model_file_id: state.modelSurfaceModelFileId,
+                surface_selection_json: JSON.stringify(state.modelSurfaceSelection),
+                surface_footprint_json: JSON.stringify(state.modelSurfaceFootprint),
+                surface_placement_json: JSON.stringify(state.modelSurfacePlacement),
+                surface_model_transform_json: JSON.stringify({
+                  rotation_deg: {
+                    x: state.modelSurfaceModelRotation.x_deg,
+                    y: state.modelSurfaceModelRotation.y_deg,
+                    z: state.modelSurfaceModelRotation.z_deg,
+                  },
+                }),
+              }
+            : {}),
         } as const;
 
         _clientLog("generate: request prepared", {
@@ -6946,8 +7424,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           type: "image/png",
         });
 
+        const currentState = _get();
+        if (currentState.imageFile !== state.imageFile) {
+          set({ isCropping: false });
+          return;
+        }
+        _cancelPreviewWork();
+
         // Revoke previous preview URL
-        const prev = _get().imagePreviewUrl;
+        const prev = currentState.imagePreviewUrl;
         if (prev) URL.revokeObjectURL(prev);
 
         const newPreviewUrl = URL.createObjectURL(croppedFile);
@@ -6959,6 +7444,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           imageFile: croppedFile,
           imagePreviewUrl: newPreviewUrl,
           aspectRatio: ratio,
+          ...buildPreviewSessionResetState(currentState),
           cropModalOpen: false,
           isCropping: false,
         });
@@ -7011,6 +7497,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     removeBatchFile: (index: number) => {
       const state = _get();
       const remaining = state.batchFiles.filter((_, i) => i !== index);
+      _cancelPreviewWork();
+      const nextPreviewRevision = state.previewRequestRevision + 1;
 
       if (remaining.length === 1) {
         // Auto-downgrade: move last file to imageFile, exit BatchMode
@@ -7023,10 +7511,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             aspectRatio: null,
             batchMode: false,
             hasManualPreview: false,
+            previewAutoRefreshPending: false,
+            previewRequestRevision: nextPreviewRevision,
           });
           uploadImagePreview(lastFile)
             .then(({ preview_url, width, height }) => {
-              if (_get().imageFile !== lastFile) {
+              if (
+                _get().imageFile !== lastFile ||
+                _get().previewRequestRevision !== nextPreviewRevision
+              ) {
                 return;
               }
               set({
@@ -7036,7 +7529,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
               });
             })
             .catch((err) => {
-              if (_get().imageFile !== lastFile) {
+              if (
+                _get().imageFile !== lastFile ||
+                _get().previewRequestRevision !== nextPreviewRevision
+              ) {
                 return;
               }
               set({ error: rawPreviewFailureMessage(err) });
@@ -7045,6 +7541,12 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           const previewUrl = URL.createObjectURL(lastFile);
           const img = new Image();
           img.onload = () => {
+            if (
+              _get().imageFile !== lastFile ||
+              _get().previewRequestRevision !== nextPreviewRevision
+            ) {
+              return;
+            }
             set({ aspectRatio: img.naturalWidth / img.naturalHeight });
           };
           img.src = previewUrl;
@@ -7055,6 +7557,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             imagePreviewUrl: previewUrl,
             batchMode: false,
             hasManualPreview: false,
+            previewAutoRefreshPending: false,
+            previewRequestRevision: nextPreviewRevision,
           });
         }
       } else if (remaining.length === 0) {
@@ -7084,14 +7588,24 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           batchMode: false,
           batchResult: null,
           hasManualPreview: false,
+          previewAutoRefreshPending: false,
+          previewRequestRevision: nextPreviewRevision,
         });
       } else {
         // Still in BatchMode with multiple files
-        set({ batchFiles: remaining, batchResult: null });
+        set({
+          batchFiles: remaining,
+          batchResult: null,
+          hasManualPreview: false,
+          previewAutoRefreshPending: false,
+          previewRequestRevision: nextPreviewRevision,
+        });
       }
     },
 
-    clearBatchFiles: () =>
+    clearBatchFiles: () => {
+      const state = _get();
+      _cancelPreviewWork();
       set({
         batchFiles: [],
         batchResult: null,
@@ -7106,8 +7620,12 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         generatePerformanceTiming: null,
         previewWarnings: [],
         largeFormatWarnings: [],
+        hasManualPreview: false,
+        previewAutoRefreshPending: false,
+        previewRequestRevision: state.previewRequestRevision + 1,
         ...DEFAULT_PUZZLE_PREVIEW_STATE,
-      }),
+      });
+    },
 
     handleFilesSelect: (files: File[]) => {
       // Filter out falsy values and invalid formats
@@ -7117,6 +7635,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       if (validFiles.length === 0) return;
 
       const state = _get();
+      _cancelPreviewWork();
       const inBatchMode = state.batchFiles.length > 0;
       const selectedFiles = [
         ...state.batchFiles,
@@ -7136,6 +7655,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           modeling_mode: compatibleModelingMode,
           batchMode: true,
           batchResult: null,
+          hasManualPreview: false,
+          previewAutoRefreshPending: false,
+          previewRequestRevision: state.previewRequestRevision + 1,
         });
         return;
       }
@@ -7175,6 +7697,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             modeling_mode: compatibleModelingMode,
             batchMode: true,
             hasManualPreview: false,
+            previewAutoRefreshPending: false,
+            previewRequestRevision: state.previewRequestRevision + 1,
             layerImages: [],
             layerImagesOpen: false,
             batchResult: null,
@@ -7184,6 +7708,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
 
         if (isRawFileConverter(singleFile)) {
           const prev = state.imagePreviewUrl;
+          const nextPreviewRevision = state.previewRequestRevision + 1;
           if (prev && prev.startsWith("blob:")) URL.revokeObjectURL(prev);
           set({
             imageFile: singleFile,
@@ -7208,6 +7733,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             modeling_mode: compatibleModelingMode,
             batchMode: false,
             hasManualPreview: false,
+            previewAutoRefreshPending: false,
+            previewRequestRevision: nextPreviewRevision,
             cropModalOpen: state.enableCrop,
             layerImages: [],
             layerImagesOpen: false,
@@ -7215,7 +7742,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           });
           uploadImagePreview(singleFile)
             .then(({ preview_url, width, height }) => {
-              if (_get().imageFile !== singleFile) {
+              if (
+                _get().imageFile !== singleFile ||
+                _get().previewRequestRevision !== nextPreviewRevision
+              ) {
                 return;
               }
               set({
@@ -7225,7 +7755,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
               });
             })
             .catch((err) => {
-              if (_get().imageFile !== singleFile) {
+              if (
+                _get().imageFile !== singleFile ||
+                _get().previewRequestRevision !== nextPreviewRevision
+              ) {
                 return;
               }
               set({ error: rawPreviewFailureMessage(err) });
@@ -7234,8 +7767,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         }
 
         const previewUrl = URL.createObjectURL(singleFile);
+        const nextPreviewRevision = state.previewRequestRevision + 1;
         const img = new Image();
         img.onload = () => {
+          if (
+            _get().imageFile !== singleFile ||
+            _get().previewRequestRevision !== nextPreviewRevision
+          ) {
+            return;
+          }
           set({ aspectRatio: img.naturalWidth / img.naturalHeight });
         };
         img.src = previewUrl;
@@ -7261,6 +7801,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           ...DEFAULT_PUZZLE_PREVIEW_STATE,
           batchMode: false,
           hasManualPreview: false,
+          previewAutoRefreshPending: false,
+          previewRequestRevision: nextPreviewRevision,
           cropModalOpen: isSvg ? false : state.enableCrop,
           layerImages: [],
           layerImagesOpen: false,
@@ -7304,6 +7846,8 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         modeling_mode: compatibleModelingMode,
         batchMode: true,
         hasManualPreview: false,
+        previewAutoRefreshPending: false,
+        previewRequestRevision: state.previewRequestRevision + 1,
         layerImages: [],
         layerImagesOpen: false,
         batchResult: null,

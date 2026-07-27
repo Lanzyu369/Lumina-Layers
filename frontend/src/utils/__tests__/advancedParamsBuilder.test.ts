@@ -213,8 +213,35 @@ describe("buildAdvancedParams — groups populated when toggles enabled", () => 
     expect(generation.material_delta_e00_tolerance).toBe(0.4);
   });
 
-  it("populates all 11 groups with detail data when every toggle is on", () => {
+  it("populates all 12 groups with detail data when every toggle is on", () => {
     const state = makeState({
+      modelSurfaceEnabled: true,
+      modelSurfaceFile: new File(["mesh"], "plate.stl", {
+        type: "application/octet-stream",
+      }),
+      modelSurfaceModelFileId: "model-file-1",
+      modelSurfaceSelectionId: "surface-selection-1",
+      modelSurfaceSelection: {
+        face_indices: [1, 2, 3],
+      },
+      modelSurfaceFootprint: {
+        bounds_width_mm: 197,
+        bounds_height_mm: 197,
+        hole_count: 85,
+      },
+      modelSurfacePlacement: {
+        mode: "edge_to_edge",
+        offset_x_mm: 3,
+        offset_y_mm: -4,
+        scale: 1.25,
+        rotation_deg: 90,
+        inset_mm: 0,
+      },
+      modelSurfaceModelRotation: {
+        x_deg: 180,
+        y_deg: 0,
+        z_deg: 90,
+      },
       enable_fridge_magnet: true,
       fridge_magnets: [makeFridgeMagnet(0), makeFridgeMagnet(1)],
       selectedFridgeMagnetId: "fm-0",
@@ -249,7 +276,7 @@ describe("buildAdvancedParams — groups populated when toggles enabled", () => 
       maxBytes: 8192,
     }) as AdvancedParamsFull;
 
-    // Exactly the 11 functional groups (no trim flags when under budget).
+    // Exactly the 12 functional groups (no trim flags when under budget).
     expect(Object.keys(result).sort()).toEqual(
       [
         "cloisonne",
@@ -260,6 +287,7 @@ describe("buildAdvancedParams — groups populated when toggles enabled", () => 
         "generation",
         "large_format",
         "loop",
+        "model_surface",
         "outline",
         "puzzle",
         "relief",
@@ -269,6 +297,35 @@ describe("buildAdvancedParams — groups populated when toggles enabled", () => 
     // Dimensions / generation are always present and scalar-filled.
     expect(result.dimensions.target_width_mm).toBe(state.target_width_mm);
     expect(result.generation.structure_mode).toBe(state.structure_mode);
+    expect(result.model_surface).toEqual({
+      enabled: true,
+      model_file: {
+        name: "plate.stl",
+        size: 4,
+        type: "application/octet-stream",
+      },
+      model_file_id: "model-file-1",
+      selection_id: "surface-selection-1",
+      selected_face_count: 3,
+      footprint: {
+        width_mm: 197,
+        height_mm: 197,
+        hole_count: 85,
+      },
+      placement: {
+        mode: "edge_to_edge",
+        offset_x_mm: 3,
+        offset_y_mm: -4,
+        scale: 1.25,
+        rotation_deg: 90,
+        inset_mm: 0,
+      },
+      model_rotation: {
+        x_deg: 180,
+        y_deg: 0,
+        z_deg: 90,
+      },
+    });
 
     // Relief with enable=true keeps the details and the color_height_map.
     expect(result.relief.enable_relief).toBe(true);

@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from config import list_printer_profiles, normalize_nozzle_size
+from config import format_native_nozzle_size, list_printer_profiles
 
 
 PROTECTED_LUMINA_PROCESS_SETTINGS: dict[str, Any] = {
@@ -69,9 +69,9 @@ def _first_nozzle_mm(settings: dict[str, Any]) -> float:
     raw = settings.get("nozzle_diameter")
     if isinstance(raw, list) and raw:
         raw = raw[0]
-    normalized = normalize_nozzle_size(raw)
+    normalized = format_native_nozzle_size(raw)
     if normalized is None:
-        normalized = normalize_nozzle_size(settings.get("printer_variant"))
+        normalized = format_native_nozzle_size(settings.get("printer_variant"))
     return float(normalized or "0.4")
 
 
@@ -79,7 +79,11 @@ def _normalized_nozzle_size_from_settings(settings: dict[str, Any]) -> str:
     raw = settings.get("nozzle_diameter")
     if isinstance(raw, list) and raw:
         raw = raw[0]
-    return normalize_nozzle_size(raw) or normalize_nozzle_size(settings.get("printer_variant")) or "0.4"
+    return (
+        format_native_nozzle_size(raw)
+        or format_native_nozzle_size(settings.get("printer_variant"))
+        or "0.4"
+    )
 
 
 def _default_line_widths(settings: dict[str, Any]) -> tuple[str, str]:

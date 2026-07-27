@@ -70,6 +70,21 @@ export interface InteractiveModelViewerProps {
 /** Default color layer thickness in mm (5 layers x 0.08mm). */
 export const DEFAULT_COLOR_LAYER_HEIGHT_MM = 0.4;
 const PREVIEW_CANVAS_BOUNDS_NODE_NAME = "preview_canvas_bounds";
+const PREVIEW_LAYER_Z_EPSILON_MM = 0.002;
+
+export function computePreviewLayerZPositions(spacerThick: number): {
+  frontColorZ: number;
+  mirrorColorZ: number;
+} {
+  const safeSpacerThick = Number.isFinite(spacerThick)
+    ? Math.max(0, spacerThick)
+    : 0;
+  return {
+    frontColorZ: safeSpacerThick + PREVIEW_LAYER_Z_EPSILON_MM,
+    mirrorColorZ: -PREVIEW_LAYER_Z_EPSILON_MM,
+  };
+}
+
 const MATERIAL_LAYER_MESH_RE = /^color_([0-9a-fA-F]{6})_m(\d+)_l(\d+)$/;
 const BATCHED_MATERIAL_APPEARANCE_MESH_RE =
   /^color_layered_appearance_l000$/;
@@ -912,6 +927,8 @@ function InteractiveModelViewer({
 
   // Imperative Three.js mutations: color remap, relief scaling.
   useEffect(() => {
+    const layerZ = computePreviewLayerZPositions(spacerThick);
+
     // ---- Backing plate Z positioning and scaling (Requirements 3.1, 3.2, 3.3, 3.4) ----
     // XY scale is inherited from parent group via scaleX/scaleY (Requirement 3.4)
     if (backingMesh) {
@@ -947,6 +964,8 @@ function InteractiveModelViewer({
       mat.opacity = 1.0;
       mat.transparent = false;
       mat.side = THREE.DoubleSide;
+      mat.depthTest = true;
+      mat.depthWrite = true;
       mat.toneMapped = false;
       mat.needsUpdate = true;
 
@@ -1028,6 +1047,10 @@ function InteractiveModelViewer({
         mesh.scale.z = nativeH > 0 ? previewColorLayerHeightMm / nativeH : 1;
         mesh.position.z = spacerThick;
       }
+      // Position color layer on top of the backing plate (top face at Z=spacerThick)
+      // Keep a tiny preview-only gap so the color layer's bottom face does not
+      // fight with the backing plate's top face when the preview is scaled up.
+      mesh.position.z = layerZ.frontColorZ;
     }
 
     // Update mirror meshes for double-sided mode
@@ -1037,7 +1060,7 @@ function InteractiveModelViewer({
       if (origMesh) {
         mirror.visible = origMesh.visible;
         mirror.scale.z = -origMesh.scale.z; // flip Z direction
-        mirror.position.z = 0; // grow downward from bottom of backing plate
+        mirror.position.z = layerZ.mirrorColorZ; // grow downward from bottom of backing plate
       }
     }
   }, [colorMeshes, mirrorMeshes, colorRemapMap, colorHeightMap, enableRelief, baseHeight, modelBounds, sceneCenter, spacerThick, isDoubleSided, backingMesh, backingPlateMesh, previewColorLayerHeightMm]);

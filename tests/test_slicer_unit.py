@@ -33,6 +33,7 @@ from api.routers.slicer import (
 )
 from core.slicer import (
     DetectedSlicer,
+    _find_exe_in_directory,
     _match_slicer_id,
     detect_installed_slicers,
     launch_slicer,
@@ -165,6 +166,14 @@ class TestMacOSAppScanning:
                 },
                 "anycubic_slicer_next",
             ),
+            (
+                "Flash Studio.app",
+                {
+                    "CFBundleName": "Flash Studio",
+                    "CFBundleIdentifier": "com.flashforge.Orca-Flashforge",
+                },
+                "flash_studio",
+            ),
         ],
     )
     @patch("core.slicer.platform.system", return_value="Darwin")
@@ -296,6 +305,19 @@ class TestKnownSlicerMatches:
             "anycubic_slicer_next",
             "Anycubic Slicer Next",
         )
+
+    def test_flash_studio_desktop_matches_flash_studio(self):
+        assert _match_slicer_id("Flash Studio Desktop 1.7.11") == (
+            "flash_studio",
+            "Flash Studio Desktop",
+        )
+
+    def test_flash_studio_executable_hint_ignores_spaces(self, tmp_path):
+        executable = tmp_path / "flash studio.exe"
+        executable.write_bytes(b"exe")
+        (tmp_path / "helper.exe").write_bytes(b"exe")
+
+        assert _find_exe_in_directory(str(tmp_path), hint="flashstudio") == str(executable)
 
 
 # =========================================================================

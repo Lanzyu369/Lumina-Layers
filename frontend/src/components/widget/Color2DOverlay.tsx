@@ -25,6 +25,10 @@ export default function Color2DOverlay() {
   const imageFile = useConverterStore((s) => s.imageFile);
   const previewImageUrl = useConverterStore((s) => s.previewImageUrl);
   const isLoading = useConverterStore((s) => s.isLoading);
+  const hasManualPreview = useConverterStore((s) => s.hasManualPreview);
+  const autoRefreshPending = useConverterStore(
+    (s) => s.previewAutoRefreshPending,
+  );
   const submitPreview = useConverterStore((s) => s.submitPreview);
   const [showHoverMagnifier, setShowHoverMagnifier] = useState(true);
   const [showHoverLayerDetails, setShowHoverLayerDetails] = useState(true);
@@ -38,11 +42,27 @@ export default function Color2DOverlay() {
   // Auto-trigger preview when overlay opens with an image but no preview
   const didAutoPreview = useRef(false);
   useEffect(() => {
-    if (contentReady && imageFile && !previewImageUrl && !isLoading && !didAutoPreview.current) {
+    if (
+      contentReady &&
+      imageFile &&
+      !previewImageUrl &&
+      !isLoading &&
+      !hasManualPreview &&
+      !autoRefreshPending &&
+      !didAutoPreview.current
+    ) {
       didAutoPreview.current = true;
       void submitPreview();
     }
-  }, [contentReady, imageFile, previewImageUrl, isLoading, submitPreview]);
+  }, [
+    autoRefreshPending,
+    contentReady,
+    hasManualPreview,
+    imageFile,
+    previewImageUrl,
+    isLoading,
+    submitPreview,
+  ]);
 
   // ESC key to close (return to 3D view)
   const handleKeyDown = useCallback(

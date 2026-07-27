@@ -19,18 +19,20 @@ import {
   SVG_PIXELS_PER_MM_STEP,
   SOLVER_CACHE_GRID_RESOLUTIONS,
   useSettingsStore,
+  type NozzleSize,
   type SolverCacheGridResolution,
 } from "../stores/settingsStore";
 import { useSlicerStore } from "../stores/slicerStore";
 import type { PrinterInfo, SlicerOption } from "../api/types";
 import {
   filterCompatiblePrinters,
+  getDetectedSlicerIdForSoftware,
   getPrinterNozzleSizeOptions,
-  isBambuFamilySlicer,
   resolveDeviceProfileOptionId,
   resolveNozzleSizeOption,
   resolvePrinterOptionId,
   resolveSlicerOptionId,
+  supportsLayerConfigRanges,
 } from "../utils/settingsOptionIds";
 import {
   getBrowserNotificationPermission,
@@ -44,6 +46,7 @@ import HelpDot from "./ui/HelpDot";
 import Slider from "./ui/Slider";
 import Switch from "./ui/Switch";
 import WikiTooltip from "./ui/WikiTooltip";
+import SlicerLogo from "./slicer/SlicerLogo";
 import {
   cx,
   PanelIntro,
@@ -179,6 +182,9 @@ export default function SettingsPanel() {
   const isValidatingCustomPath = useSlicerStore(
     (s) => s.isValidatingCustomPath,
   );
+  const detectedSlicers = useSlicerStore((s) => s.slicers);
+  const selectedDetectedSlicerId = useSlicerStore((s) => s.selectedSlicerId);
+  const setSelectedDetectedSlicerId = useSlicerStore((s) => s.setSelectedSlicerId);
   const customPathMessage = useSlicerStore((s) => s.customPathMessage);
   const customPathError = useSlicerStore((s) => s.customPathError);
   const validateAndSaveCustomSlicerPath = useSlicerStore(
@@ -323,7 +329,7 @@ export default function SettingsPanel() {
     }
 
     if (nextNozzleSize !== nozzleSize) {
-      setNozzleSize(nextNozzleSize as "0.2" | "0.4");
+      setNozzleSize(nextNozzleSize as NozzleSize);
       didNormalize = true;
     }
 
@@ -363,7 +369,7 @@ export default function SettingsPanel() {
       setLastBedLabel(`${selected.bed_width}×${selected.bed_depth} mm`);
       const nextNozzleSize = resolveNozzleSizeOption(nozzleSize, selected, resolvedSlicerSoftware);
       if (nextNozzleSize !== nozzleSize) {
-        setNozzleSize(nextNozzleSize as "0.2" | "0.4");
+        setNozzleSize(nextNozzleSize as NozzleSize);
       }
       const nextDeviceProfileId = resolveDeviceProfileOptionId(
         deviceProfileId,
@@ -381,6 +387,15 @@ export default function SettingsPanel() {
   // Handle slicer selection change — auto-select first compatible printer
   const handleSlicerChange = (id: string) => {
     setSlicerSoftware(id);
+    const preferredDetectedSlicerId = getDetectedSlicerIdForSoftware(id);
+    const nextDetectedSlicerId =
+      preferredDetectedSlicerId &&
+      detectedSlicers.some((slicer) => slicer.id === preferredDetectedSlicerId)
+        ? preferredDetectedSlicerId
+        : null;
+    if (nextDetectedSlicerId !== selectedDetectedSlicerId) {
+      setSelectedDetectedSlicerId(nextDetectedSlicerId);
+    }
     // If current printer doesn't support the new slicer, switch to first compatible
     const compatible = filterCompatiblePrinters(printers, id);
     const currentStillValid = compatible.some((p) => p.id === resolvedPrinterModel);
@@ -395,7 +410,7 @@ export default function SettingsPanel() {
     }
     const nextNozzleSize = resolveNozzleSizeOption(nozzleSize, resolvedPrinter, id);
     if (nextNozzleSize !== nozzleSize) {
-      setNozzleSize(nextNozzleSize as "0.2" | "0.4");
+      setNozzleSize(nextNozzleSize as NozzleSize);
     }
     const nextDeviceProfileId = resolveDeviceProfileOptionId(
       deviceProfileId,
@@ -415,7 +430,7 @@ export default function SettingsPanel() {
       setLastBedLabel(`${printer.bed_width}×${printer.bed_depth} mm`);
     }
     if (value !== nozzleSize) {
-      setNozzleSize(value as "0.2" | "0.4");
+      setNozzleSize(value as NozzleSize);
     }
     const nextDeviceProfileId = resolveDeviceProfileOptionId(
       deviceProfileId,
@@ -541,6 +556,7 @@ export default function SettingsPanel() {
               options={slicers.map((s) => ({
                 label: s.display_name,
                 value: s.id,
+                leading: <SlicerLogo slicerId={s.id} />,
               }))}
             />
           </div>
@@ -713,7 +729,7 @@ export default function SettingsPanel() {
             </p>
           )}
         </div>
-        {isBambuFamilySlicer(resolvedSlicerSoftware) && (
+        {supportsLayerConfigRanges(resolvedSlicerSoftware) && (
           <div
             data-testid="base-layer-height-modifier-row"
             className="flex items-center justify-between gap-3 border-t border-slate-200/60 pt-4 dark:border-slate-700/60"

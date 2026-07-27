@@ -13,6 +13,7 @@ import {
   getSlicerSoftwareDisplayName,
 } from "../../utils/settingsOptionIds";
 import type { SlicerInfo } from "../../api/types";
+import SlicerLogo from "../slicer/SlicerLogo";
 
 /** Brand color style for a slicer button. 切片软件品牌配色样式。 */
 export interface SlicerBrandStyle {
@@ -37,6 +38,7 @@ export const SLICER_BRAND_COLORS: Record<string, SlicerBrandStyle> = {
   orca_slicer:   { bg: "bg-blue-600",   hover: "hover:bg-blue-700",   text: "text-white" },
   elegoo_slicer: { bg: "bg-sky-500",    hover: "hover:bg-sky-600",    text: "text-white" },
   anycubic_slicer_next: { bg: "bg-red-600", hover: "hover:bg-red-700", text: "text-white" },
+  flash_studio: { bg: "bg-indigo-600", hover: "hover:bg-indigo-700", text: "text-white" },
   prusa_slicer:  { bg: "bg-orange-500", hover: "hover:bg-orange-600", text: "text-white" },
   cura:          { bg: "bg-blue-400",   hover: "hover:bg-blue-500",   text: "text-white" },
 };
@@ -378,6 +380,8 @@ export default function SlicerSelector({
   };
 
   const isDisabled = !canSubmit || isDetecting || isLaunching || isAutoGenerating || isDownloading;
+  const actionBusy = isLaunching || isAutoGenerating || isDownloading;
+  const showActiveSlicerLogo = !largeFormat && activeSlicerId !== null;
 
   const mainButtonLabel = getButtonLabel(
     largeFormat ? hasSlicers : canOpenInSlicer,
@@ -398,9 +402,16 @@ export default function SlicerSelector({
               type="button"
               onClick={() => void handleMainClick()}
               disabled={isDisabled}
-              className={`flex flex-1 items-center justify-center gap-2 rounded-l-md px-4 py-2 text-sm font-medium transition-colors ${brandStyle.bg} ${brandStyle.hover} ${brandStyle.text} disabled:opacity-40 disabled:cursor-not-allowed`}
+              className={`flex min-h-10 flex-1 items-center justify-center gap-2 rounded-l-md px-4 py-1.5 text-sm font-medium transition-colors ${brandStyle.bg} ${brandStyle.hover} ${brandStyle.text} disabled:opacity-40 disabled:cursor-not-allowed`}
             >
-              {(isLaunching || isAutoGenerating || isDownloading) && (
+              {showActiveSlicerLogo && (
+                <SlicerLogo
+                  slicerId={activeSlicerId}
+                  variant="onBrand"
+                  loading={actionBusy}
+                />
+              )}
+              {!showActiveSlicerLogo && actionBusy && (
                 <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
@@ -439,7 +450,6 @@ export default function SlicerSelector({
               role="listbox"
             >
               {orderedSlicers.map((slicer) => {
-                const style = getSlicerBrandStyle(slicer.id);
                 const isSelected = slicer.id === activeSlicerId;
                 return (
                   <button
@@ -448,9 +458,9 @@ export default function SlicerSelector({
                     role="option"
                     aria-selected={isSelected}
                     onClick={() => handleSelectSlicer(slicer.id)}
-                    className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-slate-100 dark:hover:bg-slate-700 ${isSelected ? "bg-slate-100 dark:bg-slate-700" : ""}`}
+                    className={`flex min-h-11 w-full items-center gap-2.5 px-3 py-2 text-left text-sm transition-colors hover:bg-slate-100 dark:hover:bg-slate-700 ${isSelected ? "bg-slate-100 dark:bg-slate-700" : ""}`}
                   >
-                    <span className={`inline-block h-2.5 w-2.5 rounded-full ${style.bg}`} />
+                    <SlicerLogo slicerId={slicer.id} />
                     <span className="text-slate-700 dark:text-slate-200">{slicer.display_name}</span>
                     {isSelected && <span className="ml-auto text-xs text-slate-500 dark:text-slate-400">✓</span>}
                   </button>

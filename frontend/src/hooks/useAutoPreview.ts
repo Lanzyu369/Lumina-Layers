@@ -1,115 +1,188 @@
 import { useEffect, useRef } from "react";
-import { useConverterStore } from "../stores/converter";
+import {
+  resolveConverterSourceSelection,
+  useConverterStore,
+} from "../stores/converter";
+import { useSettingsStore } from "../stores/settingsStore";
+
+type AutoPreviewSnapshot = {
+  imageFile: File;
+  inputKey: string;
+  settingsKey: string;
+};
+
+function sameSnapshot(
+  left: AutoPreviewSnapshot,
+  right: AutoPreviewSnapshot,
+): boolean {
+  return (
+    left.imageFile === right.imageFile &&
+    left.inputKey === right.inputKey &&
+    left.settingsKey === right.settingsKey
+  );
+}
 
 /**
  * Auto-trigger preview when preconditions are met.
- * 当图片已上传、LUT 已选择、裁剪模态框已关闭、且当前图片已手动预览过时，
- * 后续参数变化自动触发预览（300ms 防抖）。
+ * 当图片已上传、颜色来源已就绪、裁剪模态框已关闭、且当前图片已手动预览过时，
+ * 后续所有会改变预览请求的参数变化都会先失效旧结果，再自动触发预览（300ms 防抖）。
  *
  * 新上传的图片必须先手动点击"预览"按钮，之后参数变化才会自动触发。
  */
 export function useAutoPreview(): void {
-  const imageFile = useConverterStore((s) => s.imageFile);
-  const source_version = useConverterStore((s) => s.source_version);
-  const lut_name = useConverterStore((s) => s.lut_name);
-  const lut_names = useConverterStore((s) => s.lut_names);
-  const selectedNativeBrandKey = useConverterStore((s) => s.selectedNativeBrandKey);
-  const selectedNativeDbNames = useConverterStore((s) => s.selectedNativeDbNames);
-  const color_layers = useConverterStore((s) => s.color_layers);
-  const layer_height_mm = useConverterStore((s) => s.layer_height_mm);
-  const cropModalOpen = useConverterStore((s) => s.cropModalOpen);
-  const hue_enable = useConverterStore((s) => s.hue_enable);
-  const chroma_gate = useConverterStore((s) => s.chroma_gate);
-  const hasManualPreview = useConverterStore((s) => s.hasManualPreview);
-  const submitPreview = useConverterStore((s) => s.submitPreview);
+  const imageFile = useConverterStore((state) => state.imageFile);
+  const cropModalOpen = useConverterStore((state) => state.cropModalOpen);
+  const hasManualPreview = useConverterStore((state) => state.hasManualPreview);
+  const isLoading = useConverterStore((state) => state.isLoading);
+  const refreshPending = useConverterStore(
+    (state) => state.previewAutoRefreshPending,
+  );
+  const submissionSequence = useConverterStore(
+    (state) => state.previewSubmissionSequence,
+  );
+  const submitPreview = useConverterStore((state) => state.submitPreview);
+  const invalidatePreview = useConverterStore(
+    (state) => state.invalidatePreviewForAutoRefresh,
+  );
+  const isSourceReady = useConverterStore(
+    (state) => resolveConverterSourceSelection(state).isReady,
+  );
+  const inputKey = useConverterStore((state) =>
+    JSON.stringify([
+      state.source_version,
+      state.lut_name,
+      state.lut_names,
+      state.selectedNativeBrandKey,
+      state.selectedNativeDbNames,
+      state.source_version === "material" ? null : state.color_layers,
+      state.source_version === "material" ? null : state.layer_height_mm,
+      state.model_enable,
+      state.model_only,
+      state.model_threshold,
+      state.model_margin,
+      state.selectedMaterialDirNames,
+      state.materialLayerCount,
+      state.materialLayerHeightMm,
+      state.materialBackingMaterialDirName,
+      state.target_width_mm,
+      state.color_mode,
+      state.modeling_mode,
+      state.quantize_colors,
+      state.high_precision_3d_preview,
+      state.enable_cleanup,
+      state.enable_outline,
+      state.outline_width,
+      state.hue_enable,
+      state.chroma_gate,
+      state.use_lut_constrained,
+      state.auto_dynamic_range,
+      state.largeFormatEnabled,
+    ]),
+  );
+  const settingsKey = useSettingsStore((state) =>
+    JSON.stringify([
+      state.svgPixelsPerMm,
+      state.theme,
+      state.enableSolverCacheGridSelection,
+      state.solverCacheGridResolution,
+    ]),
+  );
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastTriggeredRef = useRef<{
-    imageFile: File | null;
-    sourceKey: string;
-    hue_enable: boolean;
-    chroma_gate: number;
-  }>({
-    imageFile: null,
-    sourceKey: "",
-    hue_enable: false,
-    chroma_gate: 15,
-  });
-
-  const sourceKey = source_version === "native"
-    ? [
-        "native_bundle",
-        selectedNativeBrandKey,
-        selectedNativeDbNames.join("|"),
-        color_layers ?? "",
-        layer_height_mm ?? "",
-      ].join("::")
-    : [
-        lut_names.length > 1 ? "legacy_multi" : "legacy_single",
-        lut_name,
-        lut_names.join("|"),
-      ].join("::");
-
-  const isSourceReady = source_version === "native"
-    ? selectedNativeBrandKey.length > 0 && selectedNativeDbNames.length > 0
-    : (lut_names.length > 0 || lut_name.length > 0);
+  const lastTriggeredRef = useRef<AutoPreviewSnapshot | null>(null);
+  const lastSubmissionSequenceRef = useRef(submissionSequence);
 
   useEffect(() => {
-    // Clear any pending timer on every dependency change
     if (timerRef.current !== null) {
       clearTimeout(timerRef.current);
       timerRef.current = null;
     }
 
-    // Check preconditions: 必须有图片、源选择已就绪、裁剪弹窗关闭、且已手动预览过
-    if (!imageFile || !isSourceReady || cropModalOpen || !hasManualPreview) {
+    if (!imageFile || cropModalOpen) {
       return;
     }
 
-    // Skip if same combination was already triggered
-    const last = lastTriggeredRef.current;
-    if (
-      last.imageFile === imageFile &&
-      last.sourceKey === sourceKey &&
-      last.hue_enable === hue_enable &&
-      last.chroma_gate === chroma_gate
-    ) {
-      return;
-    }
-
-    // hasManualPreview just flipped to true (manual preview completed).
-    // Seed the ref so we don't re-trigger what was just manually run.
-    if (last.imageFile === null) {
-      lastTriggeredRef.current = { imageFile, sourceKey, hue_enable, chroma_gate };
-      return;
-    }
-
-    // Debounce 300ms then trigger preview
-    timerRef.current = setTimeout(() => {
-      lastTriggeredRef.current = {
-        imageFile,
-        sourceKey,
-        hue_enable,
-        chroma_gate,
-      };
-      submitPreview();
-    }, 300);
-
-    // Cleanup on unmount
-    return () => {
-      if (timerRef.current !== null) {
-        clearTimeout(timerRef.current);
-        timerRef.current = null;
-      }
+    const currentSnapshot: AutoPreviewSnapshot = {
+      imageFile,
+      inputKey,
+      settingsKey,
     };
+    const previousSnapshot = lastTriggeredRef.current;
+    const submissionStarted =
+      lastSubmissionSequenceRef.current !== submissionSequence;
+    lastSubmissionSequenceRef.current = submissionSequence;
+    const scheduleRefresh = () => {
+      timerRef.current = setTimeout(() => {
+        const latest = useConverterStore.getState();
+        if (!latest.previewAutoRefreshPending || latest.isLoading) {
+          return;
+        }
+        lastTriggeredRef.current = currentSnapshot;
+        void submitPreview();
+      }, 300);
+
+      return () => {
+        if (timerRef.current !== null) {
+          clearTimeout(timerRef.current);
+          timerRef.current = null;
+        }
+      };
+    };
+
+    // A manual click (or the auto timer itself) owns the current snapshot.
+    // Seed it even when a mocked/fast response finishes before this effect.
+    // 手动点击或自动定时器已认领当前参数；即使响应极快也不能再重复提交。
+    if (submissionStarted || isLoading) {
+      lastTriggeredRef.current = currentSnapshot;
+      return;
+    }
+
+    // A store-owned pending refresh survives A→B→A and hook remounts. It is
+    // intentionally checked before sameSnapshot: identical parameters do not
+    // make an already-cleared result valid again.
+    // pending 先于参数相等判断：参数改回 A，不代表被清空的 A 结果仍然有效。
+    if (refreshPending) {
+      if (!isSourceReady) {
+        return;
+      }
+      return scheduleRefresh();
+    }
+
+    if (!hasManualPreview) {
+      return;
+    }
+
+    // Seed an already-established result on initial mount without submitting.
+    if (previousSnapshot === null) {
+      lastTriggeredRef.current = currentSnapshot;
+      return;
+    }
+
+    if (sameSnapshot(previousSnapshot, currentSnapshot)) {
+      return;
+    }
+
+    // Do this before the debounce so an old 2D/3D/session can never appear
+    // to represent the newly-selected parameters while regeneration waits.
+    // 防抖等待期间立即隐藏旧 2D/3D/session，避免旧结果冒充新参数结果。
+    invalidatePreview();
+
+    if (!isSourceReady) {
+      return;
+    }
+
+    return scheduleRefresh();
   }, [
-    imageFile,
-    sourceKey,
-    isSourceReady,
     cropModalOpen,
-    hue_enable,
-    chroma_gate,
     hasManualPreview,
+    imageFile,
+    inputKey,
+    invalidatePreview,
+    isLoading,
+    isSourceReady,
+    refreshPending,
+    settingsKey,
+    submissionSequence,
     submitPreview,
   ]);
 }

@@ -205,6 +205,7 @@ export default function UnifiedUploader({
 
         {/* Add more area */}
         <div
+          data-unified-uploader-drop-zone="true"
           role="button"
           tabIndex={0}
           aria-label={t("upload_add_more")}
@@ -238,6 +239,7 @@ export default function UnifiedUploader({
     return (
       <div className="flex flex-col gap-2">
         <div
+          data-unified-uploader-drop-zone="true"
           role="button"
           tabIndex={0}
           aria-label={t("upload_replace_current")}
@@ -300,6 +302,7 @@ export default function UnifiedUploader({
   // Empty state or SingleMode: main drop zone
   return (
     <div
+      data-unified-uploader-drop-zone="true"
       role="button"
       tabIndex={0}
       aria-label={t("upload_unified_aria")}

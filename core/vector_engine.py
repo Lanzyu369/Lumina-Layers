@@ -23,6 +23,7 @@ import io
 import pickle
 import warnings
 import math
+from typing import Any
 import numpy as np
 import time
 import xml.etree.ElementTree as ET
@@ -2268,6 +2269,25 @@ class VectorAnalysis:
     preview_colors: dict
     stage_timings: dict = field(default_factory=dict)
     image_vectorizer_bounds: object | None = None
+
+
+def _physical_backing_geometry(analysis: object) -> object | None:
+    """Return visible geometry without coordinate-only canvas bounds.
+    返回可打印的可见几何，不包含仅用于坐标定位的完整画布边界。
+    """
+
+    silhouette = getattr(analysis, "silhouette", None)
+    if silhouette is not None and not getattr(silhouette, "is_empty", True):
+        return silhouette
+
+    clipped_geometries = [
+        item.get("geometry")
+        for item in (getattr(analysis, "clipped_shapes", None) or [])
+        if isinstance(item, dict)
+        and item.get("geometry") is not None
+        and not item.get("geometry").is_empty
+    ]
+    return unary_union(clipped_geometries) if clipped_geometries else None
 
 
 def _signed_dtype_for_int_range(min_value: int, max_value: int) -> np.dtype:
@@ -4529,8 +4549,7 @@ class VectorProcessor:
         t_total_start = time.perf_counter()
 
         matched_shapes = analysis.matched_shapes
-        clipped_shapes = analysis.clipped_shapes
-        silhouette = analysis.silhouette
+        silhouette = _physical_backing_geometry(analysis)
         scale_factor = analysis.scale_factor
         bbox = analysis.bbox
         slot_names = analysis.slot_names
@@ -4659,15 +4678,6 @@ class VectorProcessor:
 
         # === Stage 6: Backing layer from silhouette ===
         t0 = time.perf_counter()
-        image_vectorizer_bounds = getattr(analysis, "image_vectorizer_bounds", None)
-        if image_vectorizer_bounds is not None and not image_vectorizer_bounds.is_empty:
-            silhouette = image_vectorizer_bounds
-        elif silhouette is None and clipped_shapes:
-            all_geoms = [
-                s["geometry"] for s in clipped_shapes if s["geometry"] is not None and not s["geometry"].is_empty
-            ]
-            silhouette = unary_union(all_geoms) if all_geoms else None
-
         if is_5color:
             backing_z_start = 0
         else:
@@ -5439,18 +5449,7 @@ class VectorProcessor:
                 return None
             return slice(y0, y1), slice(x0, x1), local
 
-        backing_geom = getattr(analysis, "image_vectorizer_bounds", None)
-        if backing_geom is None or getattr(backing_geom, "is_empty", True):
-            backing_geom = analysis.silhouette
-        if backing_geom is None or getattr(backing_geom, "is_empty", True):
-            clipped_geoms = [
-                item.get("geometry")
-                for item in getattr(analysis, "clipped_shapes", []) or []
-                if item.get("geometry") is not None
-                and not item.get("geometry").is_empty
-            ]
-            if clipped_geoms:
-                backing_geom = unary_union(clipped_geoms)
+        backing_geom = _physical_backing_geometry(analysis)
 
         backing_mask = np.zeros((h_px, w_px), dtype=bool)
         if backing_geom is not None and not getattr(backing_geom, "is_empty", True):
@@ -7315,3 +7314,32 @@ class VectorProcessor:
         transform[1, 1] = -1
         mesh.apply_transform(transform)
         mesh.apply_translation([0, svg_height_mm, 0])
+
+
+def parse_svg_geometry(
+    svg_path: str | os.PathLike,
+    *,
+    target_width_mm: float,
+) -> tuple[list[dict[str, Any]], float, tuple[float, float, float, float]]:
+    """Parse native SVG shapes without constructing a LUT-backed processor.
+
+    在不构造 LUT 匹配器的情况下解析原生 SVG 几何。
+
+    Args:
+        svg_path: Source SVG path.
+            源 SVG 路径。
+        target_width_mm: Physical width used for parser precision.
+            用于确定解析精度的物理宽度。
+
+    Returns:
+        Shape data, parser scale factor, and source bounds.
+        图形数据、解析比例和源边界。
+    """
+
+    if float(target_width_mm) <= 0.0:
+        raise ValueError("target_width_mm must be positive.")
+    processor = VectorProcessor.__new__(VectorProcessor)
+    processor._init_runtime_defaults()
+    processor.expand_stroke_to_fill = False
+    processor._parse_expand_stroke_to_fill = False
+    return processor._parse_svg(str(svg_path), float(target_width_mm))

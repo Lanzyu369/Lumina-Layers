@@ -6,6 +6,8 @@
  */
 import { describe, it, beforeEach, expect } from "vitest";
 import * as fc from "fast-check";
+import { resolveSelectedSlicerId } from "../stores/slicerStore";
+import type { SlicerInfo } from "../api/types";
 
 // ========== Pure mapping logic extracted from ConverterStore.submitGenerate ==========
 
@@ -376,39 +378,13 @@ describe("Property 3: 参数变更使 threemfDiskPath 失效", () => {
 import { getDetectedSlicerIdForSoftware } from "../utils/settingsOptionIds";
 
 /**
- * Pure function extracted from slicerStore.detectSlicers preference restore logic.
- * Mirrors:
- *   const slicerSoftware = useSettingsStore.getState().slicerSoftware;
- *   const preferredConfiguredId = getDetectedSlicerIdForSoftware(slicerSoftware);
- *   const configuredMatch = preferredConfiguredId ? slicers.find(s => s.id === preferredConfiguredId) : null;
- *   if (configuredMatch) return configuredMatch.id;
- *   const lastId = useSettingsStore.getState().lastSlicerId;
- *   const restored = slicers.find(s => s.id === lastId);
- *   set({ selectedSlicerId: restored ? restored.id : (slicers[0]?.id ?? null) });
- */
-function resolveSelectedSlicerId(
-  slicers: Array<{ id: string }>,
-  lastSlicerId: string | null,
-  slicerSoftware: string,
-): string | null {
-  const preferredConfiguredId = getDetectedSlicerIdForSoftware(slicerSoftware);
-  const configuredMatch = preferredConfiguredId
-    ? slicers.find((s) => s.id === preferredConfiguredId)
-    : undefined;
-  if (configuredMatch) {
-    return configuredMatch.id;
-  }
-  const restored = slicers.find((s) => s.id === lastSlicerId);
-  return restored ? restored.id : (slicers[0]?.id ?? null);
-}
-
-/**
  * Feature: slicer-launch-integration, Property 5: 切片软件偏好恢复与回退
  * **Validates: Requirements 4.1, 4.2, 4.3**
  *
- * For any 已检测切片软件列表和 lastSlicerId 值：
- * - 若 lastSlicerId 存在于列表中，则 selectedSlicerId 应等于 lastSlicerId
- * - 若 lastSlicerId 不存在于列表中（或为空），则 selectedSlicerId 应等于列表第一项的 id
+ * For any 已检测切片软件列表、lastSlicerId 和设置里的 slicerSoftware：
+ * - 若设置的软件存在于列表中，则 selectedSlicerId 应等于设置的软件
+ * - 若设置的软件是已知软件但未检测到，则 selectedSlicerId 应为 null，不跨软件回退
+ * - 若设置的软件无法映射到检测 ID，才允许按 lastSlicerId/第一项做兼容回退
  * - 列表为空时为 null
  */
 describe("Property 5: 切片软件偏好恢复与回退", () => {
@@ -424,10 +400,15 @@ describe("Property 5: 切片软件偏好恢复与回退", () => {
     "Cura",
   );
 
+  const makeSlicerInfo = (id: string): SlicerInfo => ({
+    id,
+    display_name: id,
+  });
+
   /** Arbitrary: array of slicer objects with unique ids */
   const slicerListArb = fc
     .uniqueArray(slicerIdArb, { minLength: 0, maxLength: 20, comparator: (a, b) => a === b })
-    .map((ids) => ids.map((id) => ({ id })));
+    .map((ids) => ids.map(makeSlicerInfo));
 
   it("when the configured slicer exists in the list, result prefers that slicer", () => {
     fc.assert(
@@ -440,7 +421,7 @@ describe("Property 5: 切片软件偏好恢复与回退", () => {
           if (!preferredId) return true;
           const withConfigured = slicers.some((s) => s.id === preferredId)
             ? slicers
-            : [{ id: preferredId }, ...slicers];
+            : [makeSlicerInfo(preferredId), ...slicers];
           const result = resolveSelectedSlicerId(withConfigured, lastSlicerId, slicerSoftware);
           return result === preferredId;
         }
@@ -449,42 +430,52 @@ describe("Property 5: 切片软件偏好恢复与回退", () => {
     );
   });
 
-  it("when configured slicer is absent and lastSlicerId matches, result equals lastSlicerId", () => {
+  it("when known configured slicer is absent, result is null even if lastSlicerId matches", () => {
     fc.assert(
       fc.property(
         slicerListArb.filter((arr) => arr.length > 0),
         slicerSoftwareArb,
         fc.nat(),
         (slicers, slicerSoftware, indexSeed) => {
-          // Prefer the configured slicer when present; otherwise use the restored selection.
           const preferredId = getDetectedSlicerIdForSoftware(slicerSoftware);
           const isInList = !!preferredId && slicers.some((s) => s.id === preferredId);
           const lastSlicerId = slicers[indexSeed % slicers.length].id;
-          if (isInList) return true; // skip — covered by the other test
+          if (isInList) return true;
           const result = resolveSelectedSlicerId(slicers, lastSlicerId, slicerSoftware);
-          return result === lastSlicerId;
+          return result === null;
         }
       ),
       { numRuns: 100 }
     );
   });
 
-  it("when neither configured nor last slicer match, result equals first item's id (or null if empty)", () => {
+  it("when known configured slicer is absent, result is null instead of the first detected slicer", () => {
     fc.assert(
       fc.property(slicerListArb, slicerSoftwareArb, slicerIdArb, (slicers, slicerSoftware, lastSlicerId) => {
         const preferredId = getDetectedSlicerIdForSoftware(slicerSoftware);
         const hasConfigured = preferredId ? slicers.some((s) => s.id === preferredId) : false;
-        const hasLast = slicers.some((s) => s.id === lastSlicerId);
-        if (hasConfigured || hasLast) {
+        if (hasConfigured) {
           return true;
         }
         const result = resolveSelectedSlicerId(slicers, lastSlicerId, slicerSoftware);
-        if (slicers.length === 0) {
-          return result === null;
-        }
-        return result === slicers[0].id;
+        return result === null;
       }),
       { numRuns: 100 }
+    );
+  });
+
+  it("when slicerSoftware is unknown, result falls back to lastSlicerId or first detected slicer", () => {
+    fc.assert(
+      fc.property(
+        slicerListArb,
+        fc.option(slicerIdArb, { nil: null }),
+        (slicers, lastSlicerId) => {
+          const result = resolveSelectedSlicerId(slicers, lastSlicerId, "UnknownSlicer");
+          const restored = slicers.find((s) => s.id === lastSlicerId);
+          return result === (restored?.id ?? slicers[0]?.id ?? null);
+        },
+      ),
+      { numRuns: 100 },
     );
   });
 
@@ -511,7 +502,8 @@ describe("Property 5: 切片软件偏好恢复与回退", () => {
         (slicers, lastSlicerId, slicerSoftware) => {
           const result = resolveSelectedSlicerId(slicers, lastSlicerId, slicerSoftware);
           if (result === null) {
-            return slicers.length === 0;
+            const preferredId = getDetectedSlicerIdForSoftware(slicerSoftware);
+            return slicers.length === 0 || !!preferredId;
           }
           return slicers.some((s) => s.id === result);
         }
@@ -534,7 +526,7 @@ import {
  * Feature: slicer-launch-integration, Property 6: 品牌配色映射完整性
  * **Validates: Requirements 6.1, 6.2**
  *
- * For any 已知切片软件 ID（bambu_studio、orca_slicer、elegoo_slicer、prusa_slicer、cura），
+ * For any known slicer ID, the brand mapping returns complete Tailwind classes.
  * 品牌配色映射应返回包含 bg、hover、text 三个非空 Tailwind CSS 类名的对象。
  */
 describe("Property 6: 品牌配色映射完整性", () => {
@@ -542,6 +534,7 @@ describe("Property 6: 品牌配色映射完整性", () => {
     "bambu_studio",
     "orca_slicer",
     "anycubic_slicer_next",
+    "flash_studio",
     "elegoo_slicer",
     "prusa_slicer",
     "cura",
@@ -584,7 +577,7 @@ describe("Property 6: 品牌配色映射完整性", () => {
     );
   });
 
-  it("SLICER_BRAND_COLORS contains exactly the 6 known slicer IDs", () => {
+  it("SLICER_BRAND_COLORS contains exactly the 7 known slicer IDs", () => {
     const keys = Object.keys(SLICER_BRAND_COLORS).sort();
     const expected = [...KNOWN_SLICER_IDS].sort();
     expect(keys).toEqual(expected);

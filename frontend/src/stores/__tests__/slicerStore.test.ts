@@ -120,6 +120,40 @@ describe("detectSlicers", () => {
     expect(useSlicerStore.getState().selectedSlicerId).toBe("anycubic_slicer_next");
   });
 
+  it("当前导出软件为 OrcaSlicer 时不使用 Bambu Studio 作为替代", async () => {
+    useSettingsStore.setState({
+      ...DEFAULT_SETTINGS,
+      slicerSoftware: "OrcaSlicer",
+      lastSlicerId: "bambu_studio",
+    });
+    mockDetect.mockResolvedValue({ slicers: MOCK_SLICERS });
+
+    await useSlicerStore.getState().detectSlicers();
+
+    expect(useSlicerStore.getState().selectedSlicerId).toBe("orca_slicer");
+  });
+
+  it("当前设置的切片软件未检测到时不回退到其他切片软件", async () => {
+    useSettingsStore.setState({
+      ...DEFAULT_SETTINGS,
+      slicerSoftware: "OrcaSlicer",
+      lastSlicerId: "bambu_studio",
+    });
+    mockDetect.mockResolvedValue({
+      slicers: [
+        {
+          id: "bambu_studio",
+          display_name: "Bambu Studio",
+          exe_path: null,
+        },
+      ],
+    });
+
+    await useSlicerStore.getState().detectSlicers();
+
+    expect(useSlicerStore.getState().selectedSlicerId).toBeNull();
+  });
+
   it("合并已保存的手动切片软件路径", async () => {
     useSettingsStore.setState({
       ...DEFAULT_SETTINGS,

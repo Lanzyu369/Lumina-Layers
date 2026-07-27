@@ -71,6 +71,44 @@ const GENERIC_HTTP_STATUS_ERROR_RE =
   /(?:Request failed with status code|HTTP(?:\s+error)?|status(?:\s+code)?)\s*\d{3}\b/i;
 const STARTUP_LUT_RETRY_DELAY_MS = 5_000;
 const STARTUP_LUT_ATTEMPT_LIMIT = 2;
+const MODEL_SURFACE_FILE_EXTENSIONS = [".stl", ".obj"] as const;
+type DropImportIntent = "model" | "image" | "mixed" | "files";
+
+function isSupportedModelSurfaceFile(file: File): boolean {
+  const name = file.name.toLowerCase();
+  return MODEL_SURFACE_FILE_EXTENSIONS.some((extension) => name.endsWith(extension));
+}
+
+function getDropImportIntent(files: File[]): DropImportIntent | null {
+  if (files.length === 0) {
+    return "files";
+  }
+  const hasModel = files.some(isSupportedModelSurfaceFile);
+  const hasImage = files.some((file) => isValidImageType(file.type, file.name));
+  if (hasModel && hasImage) {
+    return "mixed";
+  }
+  if (hasModel) {
+    return "model";
+  }
+  if (hasImage) {
+    return "image";
+  }
+  return null;
+}
+
+function hasDraggedFiles(event: DragEvent): boolean {
+  return Array.from(event.dataTransfer?.types ?? []).includes("Files");
+}
+
+function isInsideUnifiedUploaderDropZone(target: EventTarget | null): boolean {
+  return target instanceof Element && Boolean(target.closest("[data-unified-uploader-drop-zone='true']"));
+}
+
+function isInsideModelSurfaceDropZone(target: EventTarget | null): boolean {
+  return target instanceof Element && Boolean(target.closest("[data-model-surface-drop-zone='true']"));
+}
+
 const LARGE_FORMAT_PREVIEW_FALLBACK_PREFIX =
   "Native vector large-format is unavailable for this SVG; large-format generation will fall back to raster tiling.";
 const LARGE_FORMAT_GENERATE_FALLBACK_WARNING =
@@ -104,6 +142,22 @@ function localizeLargeFormatWarning(
     return t("large_format_warning_density_reduced");
   }
   return warning;
+}
+
+function snapThicknessToLayerGrid(value: number): number {
+  const clamped = Math.min(
+    THICKNESS_SLIDER_MAX_MM,
+    Math.max(THICKNESS_SLIDER_MIN_MM, value),
+  );
+  const scaledLayerCount = clamped / THICKNESS_LAYER_STEP_MM;
+  const lowerLayerCount = Math.floor(scaledLayerCount);
+  // Match Python round() in the generation pipeline: exact half layers tie to even.
+  // 与生成管线的 Python round() 保持一致：正好半层时取最近的偶数层。
+  const isHalfLayer = scaledLayerCount - lowerLayerCount === 0.5;
+  const layerCount = isHalfLayer
+    ? lowerLayerCount + (lowerLayerCount % 2)
+    : Math.round(scaledLayerCount);
+  return Number((layerCount * THICKNESS_LAYER_STEP_MM).toFixed(2));
 }
 
 function hasApiErrorResponse(error: unknown): boolean {
@@ -194,6 +248,7 @@ function ColorModeDots({ mode }: { mode: string }) {
 
 export default function BasicSettings() {
   const { t } = useI18n();
+  const [dropImportIntent, setDropImportIntent] = useState<DropImportIntent | null>(null);
   const workspace = useWorkspaceMode();
 
   const structureModeOptions = Object.values(StructureMode).map((v) => ({
@@ -254,6 +309,17 @@ export default function BasicSettings() {
     materialMaxLayerCount,
     materialLayerHeightMm,
     materialBackingMaterialDirName,
+    modelSurfaceEnabled,
+    modelSurfaceFile,
+    modelSurfaceModelFileId,
+    modelSurfaceSummary,
+    modelSurfaceSelectionId,
+    modelSurfaceSelection,
+    modelSurfaceFootprint,
+    modelSurfaceLoading,
+    modelSurfaceSelecting,
+    modelSurfaceError,
+    modelSurfaceWarnings,
     setColorLayers,
     setLayerHeightMm,
     setModelEnable,
@@ -321,6 +387,17 @@ export default function BasicSettings() {
     materialMaxLayerCount: s.materialMaxLayerCount,
     materialLayerHeightMm: s.materialLayerHeightMm,
     materialBackingMaterialDirName: s.materialBackingMaterialDirName,
+    modelSurfaceEnabled: s.modelSurfaceEnabled,
+    modelSurfaceFile: s.modelSurfaceFile,
+    modelSurfaceModelFileId: s.modelSurfaceModelFileId,
+    modelSurfaceSummary: s.modelSurfaceSummary,
+    modelSurfaceSelectionId: s.modelSurfaceSelectionId,
+    modelSurfaceSelection: s.modelSurfaceSelection,
+    modelSurfaceFootprint: s.modelSurfaceFootprint,
+    modelSurfaceLoading: s.modelSurfaceLoading,
+    modelSurfaceSelecting: s.modelSurfaceSelecting,
+    modelSurfaceError: s.modelSurfaceError,
+    modelSurfaceWarnings: s.modelSurfaceWarnings,
     setColorLayers: s.setColorLayers,
     setLayerHeightMm: s.setLayerHeightMm,
     setModelEnable: s.setModelEnable,
@@ -377,6 +454,8 @@ export default function BasicSettings() {
   );
 
   const [uploaderExpanded, setUploaderExpanded] = useState(true);
+  const [modelSurfaceDropActive, setModelSurfaceDropActive] = useState(false);
+  const modelSurfaceFileRef = useRef<HTMLInputElement>(null);
   const startupRetryMountedRef = useRef(false);
   const legacyCatalogRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const legacyCatalogStartupAttemptRef = useRef(0);
@@ -448,6 +527,9 @@ export default function BasicSettings() {
   const setLargeFormatEnabled = useConverterStore((s) => s.setLargeFormatEnabled);
   const setTileWidthMm = useConverterStore((s) => s.setTileWidthMm);
   const setTileHeightMm = useConverterStore((s) => s.setTileHeightMm);
+  const setModelSurfaceEnabled = useConverterStore((s) => s.setModelSurfaceEnabled);
+  const uploadModelSurfaceFile = useConverterStore((s) => s.uploadModelSurfaceFile);
+  const clearModelSurface = useConverterStore((s) => s.clearModelSurface);
   const rotateImageForExport = useConverterStore((s) => s.rotateImageForExport);
   const [selectedImageRotation, setSelectedImageRotation] = useState<ImageRotationDegrees>(90);
   const isVectorModelingAvailable = isSvgImageFile(imageFile);
@@ -460,6 +542,77 @@ export default function BasicSettings() {
     },
     [setImageFile],
   );
+
+  const importDroppedFiles = useCallback(
+    (files: File[]): boolean => {
+      const modelFile = files.find(isSupportedModelSurfaceFile);
+      const imageFiles = files.filter((file) => isValidImageType(file.type, file.name));
+
+      if (!modelFile && imageFiles.length === 0) {
+        return false;
+      }
+
+      if (imageFiles.length > 0) {
+        handleFilesSelect(imageFiles);
+      }
+      if (modelFile) {
+        void uploadModelSurfaceFile(modelFile);
+      }
+      return true;
+    },
+    [handleFilesSelect, uploadModelSurfaceFile],
+  );
+
+  const handleDroppedFiles = useCallback(
+    (files: File[], target: EventTarget | null): boolean => {
+      const modelFile = files.find(isSupportedModelSurfaceFile);
+      const imageFiles = files.filter((file) => isValidImageType(file.type, file.name));
+
+      if (!modelFile && imageFiles.length === 0) {
+        return false;
+      }
+
+      if (!modelFile && imageFiles.length > 0 && isInsideUnifiedUploaderDropZone(target)) {
+        return false;
+      }
+
+      if (isInsideModelSurfaceDropZone(target)) {
+        return false;
+      }
+
+      return importDroppedFiles(files);
+    },
+    [importDroppedFiles],
+  );
+
+  useEffect(() => {
+    const handleWindowDragOver = (event: DragEvent) => {
+      if (!hasDraggedFiles(event)) return;
+      setDropImportIntent(getDropImportIntent(Array.from(event.dataTransfer?.files ?? [])));
+      event.preventDefault();
+    };
+    const handleWindowDragLeave = (event: DragEvent) => {
+      if (event.target === window || event.target === document || event.target === document.documentElement) {
+        setDropImportIntent(null);
+      }
+    };
+    const handleWindowDrop = (event: DragEvent) => {
+      const files = Array.from(event.dataTransfer?.files ?? []);
+      setDropImportIntent(null);
+      if (!handleDroppedFiles(files, event.target)) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+
+    window.addEventListener("dragover", handleWindowDragOver, true);
+    window.addEventListener("dragleave", handleWindowDragLeave, true);
+    window.addEventListener("drop", handleWindowDrop, true);
+    return () => {
+      window.removeEventListener("dragover", handleWindowDragOver, true);
+      window.removeEventListener("dragleave", handleWindowDragLeave, true);
+      window.removeEventListener("drop", handleWindowDrop, true);
+    };
+  }, [handleDroppedFiles]);
 
   const sourceVersionOptions = [
     { label: t("basic_source_version_legacy"), value: "legacy" },
@@ -820,7 +973,7 @@ export default function BasicSettings() {
 
   const lutFileRef = useRef<HTMLInputElement>(null);
 
-  // 5-Color Extended 模式下强制锁定为单面（浮雕）
+  // 5-Color Extended and model-surface workflows only support one viewing side.
   const isFiveColorExt = color_mode === ColorMode.FIVE_COLOR_EXT;
   const supportsDynamicLayers = !!selectedLutInfo?.supports_dynamic_layer_count;
   const supportedModes = useMemo(
@@ -845,10 +998,13 @@ export default function BasicSettings() {
     }));
   }, [layer_height_mm, selectedLutInfo?.layer_height_mm, supportedModes]);
   useEffect(() => {
-    if (isFiveColorExt && structure_mode === StructureMode.DOUBLE_SIDED) {
+    if (
+      (isFiveColorExt || modelSurfaceEnabled) &&
+      structure_mode === StructureMode.DOUBLE_SIDED
+    ) {
       setStructureMode(StructureMode.SINGLE_SIDED);
     }
-  }, [isFiveColorExt, structure_mode, setStructureMode]);
+  }, [isFiveColorExt, modelSurfaceEnabled, structure_mode, setStructureMode]);
 
   const handleLutUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -857,6 +1013,48 @@ export default function BasicSettings() {
     // Reset so same file can be re-uploaded
     if (lutFileRef.current) lutFileRef.current.value = "";
   };
+
+  const handleModelSurfaceUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    await uploadModelSurfaceFile(file);
+    if (modelSurfaceFileRef.current) modelSurfaceFileRef.current.value = "";
+  };
+
+  const handleModelSurfaceDropZoneClick = useCallback(() => {
+    if (modelSurfaceLoading) {
+      return;
+    }
+    modelSurfaceFileRef.current?.click();
+  }, [modelSurfaceLoading]);
+
+  const handleModelSurfaceDropZoneDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    if (!Array.from(event.dataTransfer?.types ?? []).includes("Files")) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    setModelSurfaceDropActive(true);
+  }, []);
+
+  const handleModelSurfaceDropZoneDragLeave = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setModelSurfaceDropActive(false);
+  }, []);
+
+  const handleModelSurfaceDropZoneDrop = useCallback(
+    (event: React.DragEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setModelSurfaceDropActive(false);
+      if (modelSurfaceLoading) {
+        return;
+      }
+      importDroppedFiles(Array.from(event.dataTransfer?.files ?? []));
+    },
+    [importDroppedFiles, modelSurfaceLoading],
+  );
 
   const [isRefreshingLut, setIsRefreshingLut] = useState(false);
   const handleRefreshLut = useCallback(async () => {
@@ -925,9 +1123,65 @@ export default function BasicSettings() {
       ),
     [previewWarnings, generatedLargeFormatWarnings, t],
   );
+  const modelSurfaceExtentsLabel = useMemo(() => {
+    const extents = modelSurfaceSummary?.extents_mm;
+    if (!extents) return null;
+    return extents.map((value) => `${value.toFixed(1)}`).join(" × ");
+  }, [modelSurfaceSummary?.extents_mm]);
+  const modelSurfaceFootprintLabel = useMemo(() => {
+    const width = modelSurfaceFootprint?.bounds_width_mm;
+    const height = modelSurfaceFootprint?.bounds_height_mm;
+    if (typeof width !== "number" || typeof height !== "number") return null;
+    return `${width.toFixed(1)} × ${height.toFixed(1)} mm`;
+  }, [modelSurfaceFootprint]);
+  const modelSurfaceFaceCount =
+    typeof modelSurfaceSelection?.face_count === "number"
+      ? modelSurfaceSelection.face_count
+      : null;
+  const modelSurfaceStatusLabel = modelSurfaceLoading
+    ? t("model_surface_status_uploading")
+    : modelSurfaceSelecting
+      ? t("model_surface_status_selecting")
+      : modelSurfaceError && !modelSurfaceModelFileId
+        ? t("model_surface_status_analysis_failed")
+        : modelSurfaceSelectionId
+          ? t("model_surface_status_selected")
+          : t("model_surface_status_select_face");
+  const dropImportLabel =
+    dropImportIntent === "model"
+      ? t("global_drop_import_model")
+      : dropImportIntent === "image"
+        ? t("global_drop_import_image")
+        : dropImportIntent === "mixed"
+          ? t("global_drop_import_mixed")
+          : t("global_drop_import_files");
+  const modelSurfaceDropZoneLabel = modelSurfaceFile
+    ? t("model_surface_drop_zone_replace")
+    : t("model_surface_drop_zone_upload");
+  const modelSurfaceDropZoneClass =
+    "flex min-h-[76px] cursor-pointer flex-col justify-center rounded-md border-2 border-dashed px-3 py-2 text-left transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--focus-ring)] " +
+    (modelSurfaceDropActive
+      ? "border-blue-500 bg-blue-500/10"
+      : "border-slate-300/80 bg-slate-100/60 hover:bg-slate-100/90 dark:border-slate-700 dark:bg-slate-900/50 dark:hover:bg-slate-900/80") +
+    (modelSurfaceLoading ? " pointer-events-none opacity-60" : "");
 
   return (
     <div className="flex flex-col gap-4">
+      {dropImportIntent ? (
+        <div
+          role="status"
+          aria-label={t("global_drop_import_aria")}
+          className="pointer-events-none fixed inset-x-0 top-4 z-[80] flex justify-center px-4"
+        >
+          <div className="flex max-w-[min(32rem,calc(100vw-2rem))] items-center gap-3 rounded-md border border-blue-300/80 bg-slate-100/94 px-4 py-3 text-sm font-semibold text-slate-800 shadow-xl backdrop-blur-md dark:border-blue-500/50 dark:bg-slate-950/90 dark:text-slate-100">
+            <span className="inline-flex size-2.5 rounded-full bg-blue-500 shadow-[0_0_0_4px_rgba(59,130,246,0.16)]" />
+            <span>{dropImportLabel}</span>
+            <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+              {t("global_drop_import_release")}
+            </span>
+          </div>
+        </div>
+      ) : null}
       {uploaderExpanded ? (
         <UnifiedUploader
           singlePreview={imagePreviewUrl ?? undefined}
@@ -1002,6 +1256,117 @@ export default function BasicSettings() {
           />
         </>
       )}
+
+      <div className="rounded-lg border border-slate-200/60 bg-slate-100/50 p-3 dark:border-slate-700/40 dark:bg-slate-900/40">
+        <Checkbox
+          label={t("model_surface_enable")}
+          tooltip={t("model_surface_enable_hint")}
+          checked={modelSurfaceEnabled}
+          onChange={setModelSurfaceEnabled}
+        />
+        {modelSurfaceEnabled && (
+          <div className="mt-3 flex flex-col gap-3">
+            <input
+              ref={modelSurfaceFileRef}
+              type="file"
+              accept=".stl,.obj"
+              className="hidden"
+              onChange={(e) => void handleModelSurfaceUpload(e)}
+            />
+            <div className="flex flex-col gap-2">
+              <div
+                data-model-surface-drop-zone="true"
+                role="button"
+                tabIndex={modelSurfaceLoading ? -1 : 0}
+                aria-disabled={modelSurfaceLoading ? "true" : undefined}
+                aria-label={modelSurfaceDropZoneLabel}
+                onClick={handleModelSurfaceDropZoneClick}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    handleModelSurfaceDropZoneClick();
+                  }
+                }}
+                onDragOver={handleModelSurfaceDropZoneDragOver}
+                onDragLeave={handleModelSurfaceDropZoneDragLeave}
+                onDrop={handleModelSurfaceDropZoneDrop}
+                className={modelSurfaceDropZoneClass}
+              >
+                <span className="text-xs font-semibold text-slate-700 dark:text-slate-200">
+                  {modelSurfaceDropZoneLabel}
+                </span>
+                <span className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+                  {t("model_surface_drop_zone_hint")}
+                </span>
+              </div>
+              {modelSurfaceFile && (
+                <button
+                  type="button"
+                  onClick={clearModelSurface}
+                  className="self-start rounded-full border border-slate-200/80 px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+                >
+                  {t("model_surface_clear_model")}
+                </button>
+              )}
+            </div>
+
+            {modelSurfaceFile && (
+              <div className="grid gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+                <div className="flex justify-between gap-3">
+                  <span>{t("model_surface_model_file")}</span>
+                  <span className="min-w-0 truncate text-right text-slate-700 dark:text-slate-200">
+                    {modelSurfaceFile.name}
+                  </span>
+                </div>
+                {modelSurfaceExtentsLabel && (
+                  <div className="flex justify-between gap-3">
+                    <span>{t("model_surface_model_size")}</span>
+                    <span className="text-slate-700 dark:text-slate-200">
+                      {modelSurfaceExtentsLabel} mm
+                    </span>
+                  </div>
+                )}
+                <div className="flex justify-between gap-3">
+                  <span>{t("model_surface_status")}</span>
+                  <span className="text-slate-700 dark:text-slate-200">
+                    {modelSurfaceStatusLabel}
+                  </span>
+                </div>
+                {modelSurfaceFootprintLabel && (
+                  <div className="flex justify-between gap-3">
+                    <span>{t("model_surface_selected_size")}</span>
+                    <span className="text-slate-700 dark:text-slate-200">
+                      {modelSurfaceFootprintLabel}
+                    </span>
+                  </div>
+                )}
+                {modelSurfaceFaceCount !== null && (
+                  <div className="flex justify-between gap-3">
+                    <span>{t("model_surface_selected_faces")}</span>
+                    <span className="text-slate-700 dark:text-slate-200">
+                      {modelSurfaceFaceCount}
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {modelSurfaceError && (
+              <StatusBanner tone="error">{modelSurfaceError}</StatusBanner>
+            )}
+            {modelSurfaceWarnings.map((warning) => (
+              <StatusBanner key={warning} tone="warning">
+                {warning}
+              </StatusBanner>
+            ))}
+
+            {modelSurfaceFile && modelSurfaceModelFileId && (
+              <StatusBanner tone="info">
+                {t("model_surface_adjust_in_viewer")}
+              </StatusBanner>
+            )}
+          </div>
+        )}
+      </div>
 
       <RadioGroup
         label={t("basic_source_version_label")}
@@ -1403,16 +1768,19 @@ export default function BasicSettings() {
         step={THICKNESS_LAYER_STEP_MM}
         unit="mm"
         onChange={setSpacerThick}
+        normalizeTextValue={snapThicknessToLayerGrid}
       />
 
-      <RadioGroup
-        label={t("basic_structure_mode")}
-        value={structure_mode}
-        options={structureModeOptions}
-        onChange={(v) => setStructureMode(v as StructureMode)}
-        disabled={enable_relief || enable_fridge_magnet}
-        disabledValues={isFiveColorExt ? [StructureMode.DOUBLE_SIDED] : []}
-      />
+      {!modelSurfaceEnabled && (
+        <RadioGroup
+          label={t("basic_structure_mode")}
+          value={structure_mode}
+          options={structureModeOptions}
+          onChange={(v) => setStructureMode(v as StructureMode)}
+          disabled={enable_relief || enable_fridge_magnet}
+          disabledValues={isFiveColorExt ? [StructureMode.DOUBLE_SIDED] : []}
+        />
+      )}
 
       <RadioGroup
         label={t("basic_modeling_mode")}

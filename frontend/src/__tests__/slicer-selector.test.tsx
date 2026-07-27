@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { launchSlicer } from "../api/slicer";
@@ -93,6 +93,66 @@ describe("SlicerSelector settings linkage", () => {
       name: "在 OrcaSlicer 中打开",
     });
     expect(openButton).toBeInTheDocument();
+  });
+
+  it("shows the active logo on the action and each detected logo in the menu", async () => {
+    render(
+      <I18nProvider>
+        <SlicerSelector
+          threemfDiskPath="/tmp/calibration.3mf"
+          downloadUrl="/api/files/calibration"
+          canSubmit
+          onAutoGenerate={async () => "/tmp/calibration.3mf"}
+        />
+      </I18nProvider>,
+    );
+
+    const openButton = screen.getByRole("button", {
+      name: "在 OrcaSlicer 中打开",
+    });
+    expect(
+      within(openButton).getByTestId("slicer-logo-OrcaSlicer"),
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "切换切片软件列表" }),
+    );
+
+    expect(
+      within(screen.getByRole("option", { name: "Bambu Studio" })).getByTestId(
+        "slicer-logo-BambuStudio",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("option", { name: /OrcaSlicer/ })).getByTestId(
+        "slicer-logo-OrcaSlicer",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("uses the logo slot for launch progress instead of adding a second icon", () => {
+    useSlicerStore.setState({ isLaunching: true });
+
+    render(
+      <I18nProvider>
+        <SlicerSelector
+          threemfDiskPath="/tmp/calibration.3mf"
+          downloadUrl="/api/files/calibration"
+          canSubmit
+          onAutoGenerate={async () => "/tmp/calibration.3mf"}
+        />
+      </I18nProvider>,
+    );
+
+    const openButton = screen.getByRole("button", {
+      name: "在 OrcaSlicer 中打开",
+    });
+    expect(
+      within(openButton).getByTestId("slicer-logo-spinner"),
+    ).toBeInTheDocument();
+    expect(
+      within(openButton).queryByTestId("slicer-logo-image"),
+    ).not.toBeInTheDocument();
   });
 
   it("does not fall back to Bambu Studio when the settings slicer is missing", async () => {

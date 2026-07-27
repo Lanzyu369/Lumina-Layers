@@ -23,6 +23,11 @@ const LEGACY_SLICER_ID_MAP: Record<string, string> = {
   "anycubic slicer next": "AnycubicSlicerNext",
   anycubicslicer: "AnycubicSlicerNext",
   anycubicslicernext: "AnycubicSlicerNext",
+  flashforge: "FlashStudio",
+  flash_studio: "FlashStudio",
+  "flash studio": "FlashStudio",
+  "flash studio desktop": "FlashStudio",
+  flashstudio: "FlashStudio",
   prusa: "PrusaSlicer",
   prusa_slicer: "PrusaSlicer",
   prusaslicer: "PrusaSlicer",
@@ -37,6 +42,7 @@ const DETECTED_SLICER_ID_MAP: Record<string, string> = {
   SnapmakerOrca: "snapmaker_orca",
   ElegooSlicer: "elegoo_slicer",
   AnycubicSlicerNext: "anycubic_slicer_next",
+  FlashStudio: "flash_studio",
   PrusaSlicer: "prusa_slicer",
   Cura: "cura",
 };
@@ -54,31 +60,39 @@ const SLICER_SOFTWARE_DISPLAY_NAME_MAP: Record<string, string> = {
   SnapmakerOrca: "Snapmaker Orca",
   ElegooSlicer: "ElegooSlicer",
   AnycubicSlicerNext: "Anycubic Slicer Next",
+  FlashStudio: "Flash Studio Desktop",
   PrusaSlicer: "PrusaSlicer",
   Cura: "Ultimaker Cura",
 };
 
-const BAMBU_FAMILY_SLICER_IDS: ReadonlySet<string> = new Set([
+const LAYER_CONFIG_RANGE_SLICER_IDS: ReadonlySet<string> = new Set([
   "BambuStudio",
   "OrcaSlicer",
   "SnapmakerOrca",
   "ElegooSlicer",
   "AnycubicSlicerNext",
+  "FlashStudio",
 ]);
 
 const DEFAULT_NOZZLE_SIZE = "0.4";
-const LUMINA_SUPPORTED_NOZZLE_SIZES = ["0.2", "0.25", DEFAULT_NOZZLE_SIZE] as const;
-const LUMINA_SUPPORTED_NOZZLE_SIZE_SET: ReadonlySet<string> = new Set(
-  LUMINA_SUPPORTED_NOZZLE_SIZES,
-);
+const DEFAULT_SUPPORTED_NOZZLE_SIZES = ["0.2", "0.25", DEFAULT_NOZZLE_SIZE] as const;
 
-function normalizeSupportedNozzleOptions(nozzleSizes: string[]): string[] {
+function supportedNozzleSizesForSlicer(_slicerId: string): readonly string[] {
+  return DEFAULT_SUPPORTED_NOZZLE_SIZES;
+}
+
+function normalizeSupportedNozzleOptions(
+  nozzleSizes: string[],
+  slicerId: string,
+): string[] {
+  const supported = supportedNozzleSizesForSlicer(slicerId);
+  const supportedSet = new Set(supported);
   const available = new Set(
     nozzleSizes
       .map((size) => size.trim())
-      .filter((size) => LUMINA_SUPPORTED_NOZZLE_SIZE_SET.has(size)),
+      .filter((size) => supportedSet.has(size)),
   );
-  return LUMINA_SUPPORTED_NOZZLE_SIZES.filter((size) => available.has(size));
+  return supported.filter((size) => available.has(size));
 }
 
 export function normalizeSlicerOptionId(value: string): string {
@@ -105,9 +119,9 @@ export function getSlicerSoftwareDisplayName(value: string): string {
   return SLICER_SOFTWARE_DISPLAY_NAME_MAP[canonicalId] ?? canonicalId;
 }
 
-export function isBambuFamilySlicer(value: string): boolean {
+export function supportsLayerConfigRanges(value: string): boolean {
   const canonicalId = normalizeSlicerOptionId(value);
-  return BAMBU_FAMILY_SLICER_IDS.has(canonicalId);
+  return LAYER_CONFIG_RANGE_SLICER_IDS.has(canonicalId);
 }
 
 export function normalizePrinterOptionId(value: string): string {
@@ -139,12 +153,13 @@ export function getPrinterNozzleSizeOptions(
     printer?.device_profiles
       ?.filter((profile) => profile.supported !== false && profile.slicer_id === slicerId)
       .map((profile) => profile.nozzle_size) ?? [];
-  const uniqueRegistryNozzles = normalizeSupportedNozzleOptions(registryNozzles);
+  const uniqueRegistryNozzles = normalizeSupportedNozzleOptions(registryNozzles, slicerId);
   if (uniqueRegistryNozzles.length > 0) {
     return uniqueRegistryNozzles;
   }
   const declaredNozzles = normalizeSupportedNozzleOptions(
-    printer?.supported_nozzle_sizes ?? [...LUMINA_SUPPORTED_NOZZLE_SIZES],
+    printer?.supported_nozzle_sizes ?? [...supportedNozzleSizesForSlicer(slicerId)],
+    slicerId,
   );
   return declaredNozzles.length > 0 ? declaredNozzles : [DEFAULT_NOZZLE_SIZE];
 }
@@ -155,12 +170,13 @@ export function resolveDeviceProfileOptionId(
   slicerId: string,
   nozzleSize: string,
 ): string {
+  const supportedNozzleSizes = new Set(supportedNozzleSizesForSlicer(slicerId));
   const profiles =
     printer?.device_profiles?.filter(
       (profile) =>
         profile.supported !== false &&
         profile.slicer_id === slicerId &&
-        LUMINA_SUPPORTED_NOZZLE_SIZE_SET.has(profile.nozzle_size.trim()),
+        supportedNozzleSizes.has(profile.nozzle_size.trim()),
     ) ?? [];
   if (profiles.length === 0) {
     return "";

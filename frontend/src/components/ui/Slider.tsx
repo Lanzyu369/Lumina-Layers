@@ -12,6 +12,9 @@ interface SliderProps {
   max: number;
   step: number;
   onChange: (value: number) => void;
+  /** Optional normalizer for committed text input before display and onChange. */
+  /** 可选的文本输入标准化函数，在显示和触发 onChange 前应用。 */
+  normalizeTextValue?: (value: number) => number;
   disabled?: boolean;
   unit?: string;
   tooltip?: string;
@@ -27,6 +30,7 @@ export default function Slider(props: SliderProps) {
   max,
   step,
   onChange,
+  normalizeTextValue,
   disabled = false,
   unit,
   tooltip,
@@ -81,10 +85,11 @@ export default function Slider(props: SliderProps) {
       const clamped = Math.min(max, Math.max(min, num));
       const decimals = getDisplayDecimals(step, displayDecimals);
       const final = parseFloat(clamped.toFixed(decimals));
-      onChange(final);
-      setInputText(formatValue(final, step, displayDecimals));
+      const normalized = normalizeTextValue?.(final) ?? final;
+      onChange(normalized);
+      setInputText(formatValue(normalized, step, displayDecimals));
     },
-    [value, step, min, max, onChange, displayDecimals],
+    [value, step, min, max, onChange, normalizeTextValue, displayDecimals],
   );
 
   const handleBlur = () => {

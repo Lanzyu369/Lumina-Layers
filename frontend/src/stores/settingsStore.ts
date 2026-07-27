@@ -106,6 +106,14 @@ export const MATERIAL_DELTA_E00_TOLERANCE_MIN = 0.0;
 export const MATERIAL_DELTA_E00_TOLERANCE_MAX = 5.0;
 export const MATERIAL_DELTA_E00_TOLERANCE_STEP = 0.1;
 
+export type NozzleSize = "0.2" | "0.25" | "0.4";
+
+const NOZZLE_SIZES: readonly NozzleSize[] = ["0.2", "0.25", "0.4"];
+
+function isNozzleSize(value: unknown): value is NozzleSize {
+  return typeof value === "string" && NOZZLE_SIZES.includes(value as NozzleSize);
+}
+
 export interface SettingsState {
   language: "zh" | "en";
   theme: "light" | "dark";
@@ -125,7 +133,7 @@ export interface SettingsState {
   deviceProfileId: string;
   customSlicerPath: string;
   customSlicerId: string;
-  nozzleSize: "0.2" | "0.25" | "0.4";
+  nozzleSize: NozzleSize;
   enableBaseLayerHeightModifier: boolean;
   /**
    * When ``false`` (default) the exhaustive-cache dialog hides its
@@ -183,7 +191,7 @@ export interface SettingsActions {
   setDeviceProfileId: (id: string) => void;
   setCustomSlicerPath: (path: string) => void;
   setCustomSlicerId: (id: string) => void;
-  setNozzleSize: (size: "0.2" | "0.25" | "0.4") => void;
+  setNozzleSize: (size: NozzleSize) => void;
   setEnableBaseLayerHeightModifier: (enabled: boolean) => void;
   setEnableSolverCacheGridSelection: (enabled: boolean) => void;
   setSolverCacheGridResolution: (value: SolverCacheGridResolution) => void;
@@ -377,9 +385,7 @@ export function deriveBackendDeviceSettingsPatch(
   }
 
   if (
-    (settings.nozzle_size === "0.2" ||
-      settings.nozzle_size === "0.25" ||
-      settings.nozzle_size === "0.4") &&
+    isNozzleSize(settings.nozzle_size) &&
     current.nozzleSize === DEFAULT_SETTINGS.nozzleSize &&
     !hasOwnSetting(persistedSnapshot, "nozzleSize")
   ) {
@@ -471,7 +477,7 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
 
       setCustomSlicerId: (id: string) => set({ customSlicerId: id }),
 
-      setNozzleSize: (size: "0.2" | "0.25" | "0.4") => {
+      setNozzleSize: (size: NozzleSize) => {
         set((state) => ({
           nozzleSize: size,
           deviceProfileId:

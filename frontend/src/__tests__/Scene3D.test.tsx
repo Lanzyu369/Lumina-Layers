@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, act, fireEvent } from "@testing-library/react";
-import type * as THREE from "three";
+import * as THREE from "three";
+import { MOUSE } from "three";
 import { useConverterStore } from "../stores/converter";
 
 // Mock i18n — return key as-is
@@ -22,8 +23,21 @@ vi.mock("../components/InteractiveModelViewer", () => ({
     return Number.isFinite(value) && value > 0 ? value : 0.4;
   },
 }));
-vi.mock("../components/BedPlatform", () => ({ default: () => null }));
+let capturedBedPlatformProps: Record<string, unknown> | null = null;
+vi.mock("../components/BedPlatform", () => ({
+  default: (props: Record<string, unknown>) => {
+    capturedBedPlatformProps = props;
+    return <div data-testid="mock-bed-platform" />;
+  },
+}));
 vi.mock("../components/KeychainRing3D", () => ({ default: () => null }));
+let capturedModelSurfaceSelectorProps: Record<string, unknown> | null = null;
+vi.mock("../components/ModelSurfaceSelector3D", () => ({
+  default: (props: Record<string, unknown>) => {
+    capturedModelSurfaceSelectorProps = props;
+    return <div data-testid="mock-model-surface-selector" />;
+  },
+}));
 let capturedFridgeMagnet3DProps: Record<string, unknown> | null = null;
 vi.mock("../components/FridgeMagnet3D", () => ({
   default: (props: Record<string, unknown>) => {
@@ -34,8 +48,12 @@ vi.mock("../components/FridgeMagnet3D", () => ({
 
 // Mock @react-three/drei — Environment renders a queryable DOM element
 // Boolean false is dropped by React DOM, so we explicitly map props to data-* attributes
+let capturedOrbitControlsProps: Record<string, unknown> = {};
 vi.mock("@react-three/drei", () => ({
-  OrbitControls: () => null,
+  OrbitControls: (props: Record<string, unknown>) => {
+    capturedOrbitControlsProps = props;
+    return null;
+  },
   Environment: (props: Record<string, unknown>) => (
     <div
       data-testid="mock-environment"
@@ -85,6 +103,7 @@ type MockVector3 = {
   z: number;
   set: (nextX: number, nextY: number, nextZ: number) => MockVector3;
   distanceTo: (other: MockVector3) => number;
+  length: () => number;
 };
 
 function createMockVector3(x: number, y: number, z: number): MockVector3 {
@@ -98,6 +117,7 @@ function createMockVector3(x: number, y: number, z: number): MockVector3 {
   vector.distanceTo = vi.fn((other: MockVector3) =>
     Math.hypot(vector.x - other.x, vector.y - other.y, vector.z - other.z),
   );
+  vector.length = vi.fn(() => Math.hypot(vector.x, vector.y, vector.z));
   return vector;
 }
 
@@ -187,12 +207,18 @@ vi.mock("@react-three/fiber", () => ({
 }));
 
 // Must import Scene3D after mocks are set up
-import Scene3D from "../components/Scene3D";
+import Scene3D, {
+  computePreviewCameraOrbitConfig,
+  computeScaledPreviewBounds,
+} from "../components/Scene3D";
 
 describe("Scene3D", () => {
 beforeEach(() => {
     capturedCanvasProps = {};
+    capturedOrbitControlsProps = {};
     capturedInteractiveViewerProps = null;
+    capturedBedPlatformProps = null;
+    capturedModelSurfaceSelectorProps = null;
     capturedFridgeMagnet3DProps = null;
     document.body.classList.remove("lumina-canvas-orbiting");
     // Reset the shared useThree state so each test gets a fresh renderer /
@@ -222,7 +248,39 @@ beforeEach(() => {
         fridge_magnets: [],
         selectedFridgeMagnetId: null,
         modelBounds: null,
+        modelSurfaceEnabled: false,
+        modelSurfaceFile: null,
+        modelSurfacePreviewUrl: null,
+        modelSurfaceSelectionId: null,
+        modelSurfaceSelection: null,
+        modelSurfaceFootprint: null,
       });
+  });
+
+  describe("preview camera sizing", () => {
+    const modelBounds = {
+      minX: -30,
+      maxX: 30,
+      minY: -20,
+      maxY: 20,
+      maxZ: 2,
+    };
+
+    it("computes scaled model bounds for large regular preview dimensions", () => {
+      const scaled = computeScaledPreviewBounds(modelBounds, 6.67, 6.67);
+
+      expect(scaled.width).toBeCloseTo(400.2, 1);
+      expect(scaled.height).toBeCloseTo(266.8, 1);
+      expect(scaled.radius).toBeGreaterThan(240);
+    });
+
+    it("expands orbit range for large regular previews instead of keeping the fixed 2000mm cap", () => {
+      const config = computePreviewCameraOrbitConfig(modelBounds, 100, 100);
+
+      expect(config.maxDistance).toBeGreaterThan(2000);
+      expect(config.far).toBeGreaterThan(config.maxDistance);
+      expect(config.near).toBeGreaterThanOrEqual(0.1);
+    });
   });
 
   describe("loading overlay (Req 1.4)", () => {
@@ -275,6 +333,7 @@ beforeEach(() => {
       fireEvent.click(screen.getByTestId("scene3d-diagnostics-toggle"));
 
       expect(screen.getByTestId("scene3d-diagnostics-panel")).toBeInTheDocument();
+      expect(screen.getByTestId("scene3d-diagnostics-panel")).toHaveStyle({ top: "56px" });
     });
   });
 
@@ -284,9 +343,14 @@ beforeEach(() => {
 
       expect(screen.queryByTestId("scene3d-performance-panel")).not.toBeInTheDocument();
 
+      expect(screen.getByTestId("scene3d-performance-toggle").parentElement).toHaveStyle({
+        top: "12px",
+      });
+
       fireEvent.click(screen.getByTestId("scene3d-performance-toggle"));
 
       expect(screen.getByTestId("scene3d-performance-panel")).toBeInTheDocument();
+      expect(screen.getByTestId("scene3d-performance-panel")).toHaveStyle({ top: "56px" });
       expect(screen.getByTestId("scene3d-performance-empty")).toHaveTextContent(
         "viewer_performance_empty",
       );
@@ -342,7 +406,126 @@ beforeEach(() => {
     });
   });
 
+  describe("viewport pan gestures", () => {
+    it("maps middle/right drag to pan and temporarily maps Space+left to pan", () => {
+      render(<Scene3D />);
+
+      const defaultButtons = capturedOrbitControlsProps.mouseButtons as {
+        LEFT: number;
+        MIDDLE: number;
+        RIGHT: number;
+      };
+      expect(defaultButtons).toEqual({
+        LEFT: MOUSE.ROTATE,
+        MIDDLE: MOUSE.PAN,
+        RIGHT: MOUSE.PAN,
+      });
+
+      const container = screen.getByTestId("scene3d-container");
+      const pointerCancel = vi.fn();
+      getMockThreeState().gl.domElement.addEventListener("pointercancel", pointerCancel);
+      fireEvent.pointerEnter(container);
+      const spaceDown = new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        code: "Space",
+        key: " ",
+      });
+      act(() => {
+        window.dispatchEvent(spaceDown);
+      });
+
+      expect(spaceDown.defaultPrevented).toBe(true);
+      expect(container).toHaveAttribute("data-space-pan-active", "true");
+      expect(capturedOrbitControlsProps.mouseButtons).toEqual({
+        LEFT: MOUSE.PAN,
+        MIDDLE: MOUSE.PAN,
+        RIGHT: MOUSE.PAN,
+      });
+
+      const pointerDownAllowed = fireEvent.pointerDown(container, {
+        pointerId: 31,
+        button: 0,
+      });
+      expect(pointerDownAllowed).toBe(false);
+
+      const spaceUp = new KeyboardEvent("keyup", {
+        bubbles: true,
+        cancelable: true,
+        code: "Space",
+        key: " ",
+      });
+      act(() => {
+        window.dispatchEvent(spaceUp);
+      });
+
+      expect(spaceUp.defaultPrevented).toBe(true);
+      expect(pointerCancel).toHaveBeenCalledTimes(1);
+      expect(container).not.toHaveAttribute("data-space-pan-active");
+      expect(capturedOrbitControlsProps.mouseButtons).toEqual({
+        LEFT: MOUSE.ROTATE,
+        MIDDLE: MOUSE.PAN,
+        RIGHT: MOUSE.PAN,
+      });
+    });
+
+    it("prevents middle-button auto-scroll and clears the Space modifier on blur", () => {
+      render(<Scene3D />);
+      const container = screen.getByTestId("scene3d-container");
+
+      expect(fireEvent.mouseDown(container, { button: 1 })).toBe(false);
+      const auxClick = new MouseEvent("auxclick", {
+        bubbles: true,
+        cancelable: true,
+        button: 1,
+      });
+      expect(container.dispatchEvent(auxClick)).toBe(false);
+
+      fireEvent.pointerEnter(container);
+      act(() => {
+        window.dispatchEvent(new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          code: "Space",
+          key: " ",
+        }));
+      });
+      expect(container).toHaveAttribute("data-space-pan-active", "true");
+
+      act(() => {
+        window.dispatchEvent(new Event("blur"));
+      });
+      expect(container).not.toHaveAttribute("data-space-pan-active");
+      expect(capturedOrbitControlsProps.mouseButtons).toEqual({
+        LEFT: MOUSE.ROTATE,
+        MIDDLE: MOUSE.PAN,
+        RIGHT: MOUSE.PAN,
+      });
+    });
+  });
+
   describe("orbit demand rendering", () => {
+    it("keeps a precise depth range when orbit zoom moves the camera beyond it", () => {
+      const controls = createMockControls();
+      const threeState = getMockThreeState();
+      threeState.controls = controls;
+      threeState.camera.fov = 2;
+      threeState.camera.near = 10;
+      threeState.camera.far = 9104;
+      threeState.camera.position.set(0, 0, 10265);
+      const updateProjectionMatrix = vi.spyOn(threeState.camera, "updateProjectionMatrix");
+
+      render(<Scene3D />);
+
+      act(() => {
+        controls.emit("change");
+      });
+
+      expect(threeState.camera.far).toBeGreaterThan(threeState.camera.position.length());
+      expect(threeState.camera.near).toBeGreaterThan(50);
+      expect(updateProjectionMatrix).toHaveBeenCalled();
+    });
+
     it("uses a temporary body class and invalidates frames during OrbitControls interaction", () => {
       const controls = createMockControls();
       const threeState = getMockThreeState();
@@ -484,6 +667,147 @@ beforeEach(() => {
       expect(capturedInteractiveViewerProps?.hoverEnabled).toBeUndefined();
     });
 
+  });
+
+  describe("model surface overlay staging", () => {
+    it("shows a blocking loading animation while the uploaded model is analyzed", () => {
+      const modelFile = new File(["solid"], "plate.stl");
+      useConverterStore.setState({
+        modelSurfaceEnabled: true,
+        modelSurfaceFile: modelFile,
+        modelSurfacePreviewUrl: "blob:model",
+        modelSurfaceLoading: true,
+      } as never);
+
+      render(<Scene3D />);
+
+      const overlay = screen.getByTestId("model-surface-loading-overlay");
+      expect(overlay).toHaveAttribute("role", "status");
+      expect(overlay).toHaveAttribute("aria-label", "model_surface_loading_analysis");
+      expect(overlay.querySelector(".rgb-loader-ring")).not.toBeNull();
+      expect(capturedModelSurfaceSelectorProps?.selecting).toBe(true);
+    });
+
+    it("renders the interactive surface selector before preview generation", () => {
+      const modelFile = new File(["solid"], "plate.stl");
+      const imageFile = new File(["art"], "art.png", { type: "image/png" });
+
+      useConverterStore.setState({
+        modelSurfaceEnabled: true,
+        modelSurfaceFile: modelFile,
+        modelSurfacePreviewUrl: "blob:model",
+        imageFile,
+        imagePreviewUrl: "blob:art",
+        modelSurfaceSelectionId: "selection-1",
+        modelSurfaceFootprint: {
+          bounds_width_mm: 20,
+          bounds_height_mm: 10,
+        },
+      } as never);
+
+      render(<Scene3D />);
+
+      expect(screen.getByTestId("mock-model-surface-selector")).toBeInTheDocument();
+      expect(capturedModelSurfaceSelectorProps).toMatchObject({
+        file: modelFile,
+        artworkUrl: "blob:art",
+        selectionReady: true,
+      });
+      expect(capturedModelSurfaceSelectorProps?.placement).toEqual(
+        useConverterStore.getState().modelSurfacePlacement,
+      );
+      expect(capturedModelSurfaceSelectorProps?.onUpdatePlacement).toBe(
+        useConverterStore.getState().updateModelSurfacePlacement,
+      );
+      expect(capturedModelSurfaceSelectorProps?.onFitArtwork).toBe(
+        useConverterStore.getState().fitModelSurfaceArtwork,
+      );
+      expect(capturedBedPlatformProps).toMatchObject({
+        surfaceModelActive: true,
+        gridVisible: true,
+      });
+      expect(capturedModelSurfaceSelectorProps?.bedGridVisible).toBe(true);
+      expect(capturedModelSurfaceSelectorProps?.onBedGridVisibleChange).toEqual(expect.any(Function));
+      expect(capturedInteractiveViewerProps).toBeNull();
+    });
+
+    it("reuses the scene bed platform while model surface rotate controls are active", () => {
+      const modelFile = new File(["solid"], "plate.stl");
+
+      useConverterStore.setState({
+        modelSurfaceEnabled: true,
+        modelSurfaceFile: modelFile,
+        modelSurfacePreviewUrl: "blob:model",
+        imagePreviewUrl: "blob:art",
+        modelSurfaceSelectionId: "selection-1",
+      } as never);
+
+      render(<Scene3D />);
+
+      expect(screen.getByTestId("mock-bed-platform")).toBeInTheDocument();
+      expect(screen.getAllByTestId("mock-bed-platform")).toHaveLength(1);
+      expect(capturedBedPlatformProps).toMatchObject({
+        surfaceModelActive: true,
+        gridVisible: true,
+      });
+
+      act(() => {
+        (capturedModelSurfaceSelectorProps?.onBedGridVisibleChange as (visible: boolean) => void)(
+          false,
+        );
+      });
+
+      expect(screen.getAllByTestId("mock-bed-platform")).toHaveLength(1);
+      expect(capturedBedPlatformProps).toMatchObject({
+        surfaceModelActive: true,
+        gridVisible: false,
+      });
+    });
+
+    it("keeps the model surface editor visible after preview so the covered model remains inspectable", () => {
+      const modelFile = new File(["solid"], "plate.stl");
+      useConverterStore.setState({
+        modelSurfaceEnabled: true,
+        modelSurfaceFile: modelFile,
+        modelSurfacePreviewUrl: "blob:model",
+        modelSurfaceSelectionId: "selection-1",
+        imagePreviewUrl: "blob:art",
+        previewGlbUrl: "/api/files/surface-preview.glb",
+      } as never);
+
+      render(<Scene3D />);
+
+      expect(screen.getByTestId("mock-model-surface-selector")).toBeInTheDocument();
+      expect(capturedModelSurfaceSelectorProps).toMatchObject({
+        file: modelFile,
+        artworkUrl: "blob:art",
+        selectionReady: true,
+      });
+      expect(capturedInteractiveViewerProps).toBeNull();
+    });
+
+    it("keeps the model surface editor visible after final generation returns a GLB", () => {
+      const modelFile = new File(["solid"], "plate.stl");
+      useConverterStore.setState({
+        modelSurfaceEnabled: true,
+        modelSurfaceFile: modelFile,
+        modelSurfacePreviewUrl: "blob:model",
+        modelSurfaceSelectionId: "selection-1",
+        imagePreviewUrl: "blob:art",
+        modelUrl: "/api/files/generated-surface.glb",
+        previewGlbUrl: null,
+      } as never);
+
+      render(<Scene3D />);
+
+      expect(screen.getByTestId("mock-model-surface-selector")).toBeInTheDocument();
+      expect(capturedModelSurfaceSelectorProps).toMatchObject({
+        file: modelFile,
+        artworkUrl: "blob:art",
+        selectionReady: true,
+      });
+      expect(capturedInteractiveViewerProps).toBeNull();
+    });
   });
 
   describe("fridge magnet proxy wiring", () => {

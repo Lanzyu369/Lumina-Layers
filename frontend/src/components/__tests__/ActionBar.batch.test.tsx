@@ -37,6 +37,8 @@ vi.mock("../ui/CanvasPreviewSurface", () => ({
 vi.mock("../../recipe/importFlow", () => ({
   exportShareCard: vi.fn(),
   exportSidecar: vi.fn(),
+  MODEL_SURFACE_RECIPE_EXPORT_UNAVAILABLE_ERROR:
+    "Model surface recipes are not supported",
 }));
 
 function makeFile(name: string, type = "image/png"): File {
@@ -45,6 +47,7 @@ function makeFile(name: string, type = "image/png"): File {
 
 describe("ActionBar — auto batch mode", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     capturedCanvasPreviewSurfaceProps = null;
     capturedSlicerSelectorProps = null;
     useConverterStore.setState({
@@ -53,6 +56,7 @@ describe("ActionBar — auto batch mode", () => {
       batchLoading: false,
       batchResult: null,
       imageFile: null,
+      modelSurfaceEnabled: false,
       source_version: "legacy",
       lut_name: "",
       nativeBrandGroups: [],
@@ -158,6 +162,22 @@ describe("ActionBar — auto batch mode", () => {
     render(<ActionBar />);
     const btn = screen.getByText("批量生成").closest("button")!;
     expect(btn).toBeDisabled();
+  });
+
+  it("shows a source-only hint after an image is uploaded but legacy LUT is still missing", () => {
+    useConverterStore.setState({
+      batchMode: false,
+      batchFiles: [],
+      imageFile: makeFile("uploaded.png"),
+      source_version: "legacy",
+      lut_name: "",
+    });
+
+    render(<ActionBar />);
+
+    expect(screen.getByText("请先选择 LUT")).toBeInTheDocument();
+    expect(screen.queryByText("请先上传图片并选择 LUT")).not.toBeInTheDocument();
+    expect(screen.getByText("预览").closest("button")).toBeDisabled();
   });
 
   // --- Enabled condition ---
@@ -533,6 +553,30 @@ describe("ActionBar — auto batch mode", () => {
       expect(screen.getByText(/导出失败：服务器发生内部错误。请稍后重试；如果问题持续，请提交反馈。/)).toBeInTheDocument();
     });
     expect(screen.queryByText(/Request failed with status code 500/)).not.toBeInTheDocument();
+  });
+
+  it("disables incomplete recipe exports while model surface overlay is active", () => {
+    useConverterStore.setState({
+      batchMode: false,
+      modelSurfaceEnabled: true,
+      imageFile: makeFile("preview.png"),
+      lut_name: "test_lut",
+      sessionId: "session-1",
+      previewImageUrl: "/api/files/preview.png",
+      previewBaseImageUrl: "/api/files/preview.png",
+      layerImages: [],
+      layerImagesLoading: false,
+    });
+
+    render(<ActionBar />);
+
+    expect(screen.getByRole("button", { name: "导出分享卡" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "导出 JSON" })).toBeDisabled();
+    expect(
+      screen.getByText("模型覆面暂不支持配方导出，因为配方无法包含上传模型和选面。"),
+    ).toBeInTheDocument();
+    expect(recipeImportFlow.exportShareCard).not.toHaveBeenCalled();
+    expect(recipeImportFlow.exportSidecar).not.toHaveBeenCalled();
   });
 
   it("shows a readable share-card export failure when PNG encoding fails", async () => {

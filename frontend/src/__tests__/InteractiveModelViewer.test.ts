@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import * as THREE from "three";
 import {
+  computePreviewLayerZPositions,
   applyPreviewMeshDisplayColor,
   buildBatchedPaletteUvEncoding,
   buildBatchedReliefPositionArray,
@@ -535,6 +536,17 @@ describe("applyPreviewMeshDisplayColor", () => {
     );
 
     expect(material.color.getHexString(THREE.SRGBColorSpace)).toBe("3188d6");
+  });
+});
+
+describe("computePreviewLayerZPositions", () => {
+  it("separates color layers from the backing plate to avoid preview z-fighting", () => {
+    const z = computePreviewLayerZPositions(1.2);
+
+    expect(z.frontColorZ).toBeGreaterThan(1.2);
+    expect(z.mirrorColorZ).toBeLessThan(0);
+    expect(z.frontColorZ - 1.2).toBeLessThanOrEqual(0.01);
+    expect(Math.abs(z.mirrorColorZ)).toBeLessThanOrEqual(0.01);
   });
 });
 

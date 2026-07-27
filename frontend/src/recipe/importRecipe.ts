@@ -9,10 +9,12 @@ import type {
   LuminaRecipe,
 } from "./types";
 import {
+  DEFAULT_MODEL_SURFACE_MODEL_ROTATION,
+  DEFAULT_MODEL_SURFACE_PLACEMENT,
   MATERIAL_DYNAMIC_LAYER_COUNT_MAX,
   MATERIAL_DYNAMIC_LAYER_COUNT_MIN,
+  type ConverterState,
 } from "../stores/converter/store";
-import type { ConverterState } from "../stores/converter/store";
 import type {
   ColorReplacementItem,
   FridgeMagnetItem,
@@ -516,6 +518,25 @@ export function restoreConverterRecipe(
 
   // --- Build partial state ---
   const state: Partial<ConverterState> = {
+    // Model-surface uploads and face selections are session-bound and are not
+    // represented by the current recipe schema. Clear every related field so
+    // an imported recipe cannot inherit a previously loaded model.
+    modelSurfaceEnabled: false,
+    modelSurfaceFile: null,
+    modelSurfacePreviewUrl: null,
+    modelSurfaceModelFileId: null,
+    modelSurfaceSummary: null,
+    modelSurfaceSelectionId: null,
+    modelSurfaceSelection: null,
+    modelSurfaceFootprint: null,
+    modelSurfaceCandidates: [],
+    modelSurfacePlacement: { ...DEFAULT_MODEL_SURFACE_PLACEMENT },
+    modelSurfaceModelRotation: { ...DEFAULT_MODEL_SURFACE_MODEL_ROTATION },
+    modelSurfaceLoading: false,
+    modelSurfaceSelecting: false,
+    modelSurfaceError: null,
+    modelSurfaceWarnings: [],
+
     // Base
     source_version: (source?.source_version ?? "legacy") as ConverterState["source_version"],
     lut_name: lutName,

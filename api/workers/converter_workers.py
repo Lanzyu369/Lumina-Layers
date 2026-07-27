@@ -14,6 +14,8 @@ Design rules:
 - All imports of core modules are lazy (inside function body).
 """
 
+import logging
+
 from config import SVG_PIXELS_PER_MM_DEFAULT
 
 _HIGH_FIDELITY_PIXELS_PER_MM = 10.0
@@ -1586,6 +1588,253 @@ def worker_generate_model(
         "glb_path": glb_path,
         "status_msg": status_msg,
     }
+
+
+def worker_generate_model_surface_overlay(
+    image_path: str,
+    lut_path: str,
+    params: dict,
+) -> dict:
+    """Generate a 3MF by embedding image-converter layers into a model surface.
+
+    使用图片转换器色层嵌入模型选中表面并生成 3MF。
+
+    Args:
+        image_path: Already rendered surface artwork path (PNG or SVG).
+            已渲染好的贴面画面路径（PNG 或 SVG）。
+        lut_path: LUT calibration path forwarded to the converter.
+            透传给转换器的 LUT 校准文件路径。
+        params: Picklable scalar dict containing model path, footprint payload,
+            pocket depth, and converter params.
+            可序列化参数，包含模型路径、表面轮廓、开槽深度与转换参数。
+
+    Returns:
+        Worker result dict compatible with ``convert_generate``.
+        与 ``convert_generate`` 兼容的 worker 结果字典。
+    """
+
+    import os
+    import tempfile
+    import time as _time
+
+    from api.structured_logging import get_logger
+    from config import TEMP_DIR
+    from core.model_surface.assembly import (
+        MODEL_SURFACE_DISPLAY_LAYER_HEIGHTS_KEY,
+    )
+    from core.model_surface.pipeline import build_surface_overlay_scene
+    from core.model_surface.serialization import surface_footprint_from_payload
+    from utils.bambu_3mf_writer import export_scene_with_bambu_metadata
+
+    log = get_logger(__name__)
+    normalized_params = _normalize_puzzle_piece_target_width(image_path, params)
+    converter_params = dict(normalized_params.get("converter_params") or {})
+    if not converter_params:
+        converter_params = {
+            key: value
+            for key, value in normalized_params.items()
+            if not str(key).startswith("surface_") and key != "converter_params"
+        }
+    # Keep the worker entry point safe when called outside the HTTP router.
+    # A model surface has one display side; a second colour stack would be
+    # embedded behind the uploaded body and reappear in upper slicer layers.
+    converter_params["structure_mode"] = "Single-sided"
+    converter_params["enable_relief"] = False
+    converter_params["enable_cloisonne"] = False
+    converter_params["enable_coating"] = False
+
+    footprint_payload = normalized_params.get("surface_footprint")
+    if not isinstance(footprint_payload, dict):
+        raise ValueError("surface_footprint must be a JSON object")
+
+    footprint = surface_footprint_from_payload(footprint_payload)
+    pocket_depth_mm = float(normalized_params.get("surface_pocket_depth_mm", 0.4))
+    model_path = str(normalized_params["surface_model_path"])
+    model_transform = normalized_params.get("surface_model_transform")
+    if model_transform is not None and not isinstance(model_transform, dict):
+        raise ValueError("surface_model_transform must be a JSON object")
+    _t_worker_start = _time.perf_counter()
+    out_path: str | None = None
+    export_ready = False
+    log.debug(
+        "Worker model-surface generation started",
+        extra={
+            "event": "worker_model_surface_started",
+            "image_name": os.path.basename(image_path),
+            "model_name": os.path.basename(model_path),
+            "target_width_mm": converter_params.get("target_width_mm"),
+            "color_mode": converter_params.get("color_mode"),
+            "pocket_depth_mm": pocket_depth_mm,
+        },
+    )
+    try:
+        overlay = build_surface_overlay_scene(
+            model_path=model_path,
+            artwork_image_path=image_path,
+            lut_path=lut_path,
+            converter_params=converter_params,
+            footprint=footprint,
+            pocket_depth_mm=pocket_depth_mm,
+            model_transform=model_transform,
+        )
+        display_layer_height_mm = _resolve_model_surface_display_layer_height_mm(
+            converter_params,
+            actual_layer_heights_mm=overlay.scene.metadata.get(
+                MODEL_SURFACE_DISPLAY_LAYER_HEIGHTS_KEY
+            ),
+        )
+        fd, out_path = tempfile.mkstemp(suffix=".3mf", dir=TEMP_DIR)
+        os.close(fd)
+        cover_source = _resolve_model_surface_cover_source(
+            image_path,
+            target_width_mm=float(
+                converter_params.get("target_width_mm", 60.0)
+            ),
+            log=log,
+        )
+        export_scene_with_bambu_metadata(
+            scene=overlay.scene,
+            output_path=out_path,
+            slot_names=overlay.slot_names,
+            preview_colors=overlay.preview_colors,
+            project_slot_names=overlay.slot_names,
+            settings={"layer_height": f"{display_layer_height_mm:g}"},
+            color_mode=str(converter_params.get("color_mode", "4-Color")),
+            printer_id=str(normalized_params.get("printer_id", "bambu-h2d")),
+            slicer=str(normalized_params.get("slicer", "BambuStudio")),
+            nozzle_size=str(normalized_params.get("nozzle_size", "0.4")),
+            cover_source=cover_source,
+            device_profile_id=normalized_params.get("device_profile_id") or None,
+            enable_base_layer_height_modifier=False,
+        )
+        export_ready = True
+    except (ValueError, TypeError, KeyError, OSError, RuntimeError) as exc:
+        if out_path and not export_ready:
+            _cleanup_worker_temp_paths(out_path)
+        log.exception(
+            "Worker model-surface generation failed",
+            extra={
+                "event": "worker_model_surface_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+        raise
+
+    log.debug(
+        "Worker model-surface generation complete",
+        extra={
+            "event": "worker_model_surface_done",
+            "duration_ms": round((_time.perf_counter() - _t_worker_start) * 1000, 3),
+            "threemf_path": out_path,
+            "threemf_bytes": os.path.getsize(out_path) if out_path and os.path.exists(out_path) else None,
+            "slot_count": len(overlay.slot_names),
+        },
+    )
+    return {
+        "threemf_path": out_path,
+        "glb_path": None,
+        "status_msg": "Surface overlay model generated",
+    }
+
+
+def _resolve_model_surface_cover_source(
+    image_path: str,
+    *,
+    target_width_mm: float,
+    log: logging.Logger,
+) -> str | bytes | None:
+    """Return a writer-compatible cover source for model-surface exports."""
+
+    from pathlib import Path
+
+    if Path(image_path).suffix.lower() != ".svg":
+        return image_path
+
+    from io import BytesIO
+
+    import numpy as np
+    from PIL import Image
+
+    from core.pipeline.processing_ops.svg_rasterizer import rasterize_svg
+
+    try:
+        cover_rgba = rasterize_svg(
+            image_path,
+            float(target_width_mm),
+            pixels_per_mm=2.0,
+            crop_to_content=False,
+        )
+        cover_image = Image.fromarray(
+            np.asarray(cover_rgba, dtype=np.uint8),
+            mode="RGBA",
+        )
+        cover_buffer = BytesIO()
+        cover_image.save(cover_buffer, format="PNG", optimize=False)
+        return cover_buffer.getvalue()
+    except (OSError, ValueError, RuntimeError, TimeoutError, ImportError) as exc:
+        log.warning(
+            "Model-surface SVG cover render failed; using placeholder",
+            extra={
+                "event": "model_surface_cover_render_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+                "path": image_path,
+            },
+        )
+        return None
+
+
+def _resolve_model_surface_display_layer_height_mm(
+    converter_params: dict,
+    *,
+    actual_layer_heights_mm: object = None,
+) -> float:
+    """Resolve the uniform slicer layer height for a surface display stack.
+
+    解析模型覆面展示层栈当前使用的统一切片层高。
+    """
+
+    import math
+
+    from config import PrinterConfig
+
+    raw_schedule = actual_layer_heights_mm
+    if raw_schedule is None:
+        raw_schedule = converter_params.get("display_layer_heights_mm")
+    if raw_schedule is not None:
+        try:
+            schedule = tuple(float(value) for value in raw_schedule)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Model-surface display layer heights are invalid.") from exc
+        if not schedule or any(
+            not math.isfinite(value) or value <= 0.0 for value in schedule
+        ):
+            raise ValueError(
+                "Model-surface display layer heights must be positive and finite."
+            )
+        if any(abs(value - schedule[0]) > 1e-9 for value in schedule[1:]):
+            raise ValueError(
+                "Model-surface non-uniform display layer heights require "
+                "slicer range metadata support."
+            )
+        return schedule[0]
+
+    material_source = str(converter_params.get("material_source") or "lut")
+    raw_height = converter_params.get("layer_height_mm")
+    if material_source == "material_archive":
+        archive_height = converter_params.get("material_layer_height_mm")
+        if archive_height is not None:
+            raw_height = archive_height
+    if raw_height is None:
+        raw_height = PrinterConfig.LAYER_HEIGHT
+    try:
+        height_mm = float(raw_height)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Model-surface display layer height must be a number.") from exc
+    if not math.isfinite(height_mm) or height_mm <= 0.0:
+        raise ValueError("Model-surface display layer height must be positive and finite.")
+    return height_mm
 
 
 def worker_generate_large_format_svg_native(

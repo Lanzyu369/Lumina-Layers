@@ -255,10 +255,12 @@ describe("KeychainRing3D", () => {
       act(() => {
         getReactProps<{
           onPointerDown: (event: {
+            button: number;
             stopPropagation: () => void;
             ray: { intersectPlane: (plane: THREE.Plane, target: THREE.Vector3) => THREE.Vector3 };
           }) => void;
         }>(ring as Element).onPointerDown({
+          button: 0,
           stopPropagation: () => {},
           ray: {
             intersectPlane: (_plane: THREE.Plane, target: THREE.Vector3) => target.set(0, 0, 0),
@@ -308,10 +310,12 @@ describe("KeychainRing3D", () => {
       act(() => {
         getReactProps<{
           onPointerDown: (event: {
+            button: number;
             stopPropagation: () => void;
             ray: { intersectPlane: (plane: THREE.Plane, target: THREE.Vector3) => THREE.Vector3 };
           }) => void;
         }>(ring as Element).onPointerDown({
+          button: 0,
           stopPropagation: () => {},
           ray: {
             intersectPlane: (_plane: THREE.Plane, target: THREE.Vector3) => target.set(0, 0, 0),
@@ -326,6 +330,64 @@ describe("KeychainRing3D", () => {
 
       expect(mockControls.enabled).toBe(true);
       expect(document.body.style.cursor).toBe("default");
+    });
+
+    it("leaves middle and Space-modified primary drags to camera panning", () => {
+      const { container, rerender } = render(
+        <KeychainRing3D
+          enabled={true}
+          width={4}
+          length={8}
+          hole={2}
+          angle={0}
+          offsetX={0}
+          offsetY={0}
+          positionPreset="top-center"
+          modelBounds={defaultBounds}
+        />,
+      );
+
+      const middleStopPropagation = vi.fn();
+      const intersectPlane = vi.fn();
+      const invokePointerDown = (button: number, stopPropagation: () => void) => {
+        const ring = container.querySelector("mesh");
+        getReactProps<{
+          onPointerDown: (event: {
+            button: number;
+            stopPropagation: () => void;
+            ray: { intersectPlane: typeof intersectPlane };
+          }) => void;
+        }>(ring as Element).onPointerDown({
+          button,
+          stopPropagation,
+          ray: { intersectPlane },
+        });
+      };
+
+      act(() => invokePointerDown(1, middleStopPropagation));
+      expect(middleStopPropagation).not.toHaveBeenCalled();
+      expect(intersectPlane).not.toHaveBeenCalled();
+      expect(mockControls.enabled).toBe(true);
+
+      rerender(
+        <KeychainRing3D
+          enabled={true}
+          cameraPanModifierActive={true}
+          width={4}
+          length={8}
+          hole={2}
+          angle={0}
+          offsetX={0}
+          offsetY={0}
+          positionPreset="top-center"
+          modelBounds={defaultBounds}
+        />,
+      );
+      const spaceStopPropagation = vi.fn();
+      act(() => invokePointerDown(0, spaceStopPropagation));
+      expect(spaceStopPropagation).not.toHaveBeenCalled();
+      expect(intersectPlane).not.toHaveBeenCalled();
+      expect(mockControls.enabled).toBe(true);
     });
   });
 });
