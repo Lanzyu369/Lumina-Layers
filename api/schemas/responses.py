@@ -343,6 +343,11 @@ class SavedMaterialLibraryItemResponse(BaseModel):
     material_name: str
     directory_name: str
     brand: str | None = None
+    material_type: str | None = None
+    material_type_source: Literal["archive", "legacy_name"] | None = None
+    material_product_id: str | None = None
+    material_profile_id: str | None = None
+    contributor_name: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
     material_file_url: str | None = None
