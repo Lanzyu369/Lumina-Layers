@@ -403,6 +403,72 @@ describe("MaterialPickerDialog", () => {
     expect(onConfirm).toHaveBeenCalledWith(["JAYO/pla-red-alice"]);
   });
 
+  it("keeps hidden sibling profiles mutually exclusive on the favorites tab", () => {
+    const onConfirm = vi.fn();
+    localStorage.setItem(
+      "lumina_material_profile_favorites_v1",
+      JSON.stringify(["profile:profile-bob"]),
+    );
+    renderPicker({
+      materials: PROFILE_MATERIALS,
+      initialSelected: ["JAYO/pla-red-alice"],
+      onConfirm,
+    });
+
+    fireEvent.click(screen.getByRole("tab", { name: "收藏" }));
+    const favoriteCard = screen.getByTestId("material-picker-product-card");
+    expect(within(favoriteCard).queryByText("Alice")).not.toBeInTheDocument();
+    expect(within(favoriteCard).getByText("Bob")).toBeInTheDocument();
+
+    fireEvent.click(
+      within(favoriteCard).getByRole("button", {
+        name: "选择 PLA Basic Red",
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "完成" }));
+
+    expect(onConfirm).toHaveBeenCalledWith(["JAYO/pla-red-bob"]);
+  });
+
+  it("replaces an author profile at its existing material slot", () => {
+    const onConfirm = vi.fn();
+    renderPicker({
+      materials: [
+        SINGLE_TYPE_MATERIALS[2],
+        PROFILE_MATERIALS[0],
+        PROFILE_MATERIALS[1],
+        SINGLE_TYPE_MATERIALS[1],
+      ],
+      initialSelected: [
+        "瑞贝思/blue-pla",
+        "JAYO/pla-red-alice",
+        "jayo/yellow-pla",
+      ],
+      onConfirm,
+    });
+
+    const redCard = screen
+      .getAllByTestId("material-picker-product-card")
+      .find((card) => card.textContent?.includes("PLA Basic Red"));
+    fireEvent.click(
+      within(redCard!).getByRole("button", {
+        name: "展开 PLA Basic Red 的档案",
+      }),
+    );
+    fireEvent.click(
+      within(redCard!).getByRole("radio", {
+        name: "选择 PLA Basic Red（Bob）档案",
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "完成" }));
+
+    expect(onConfirm).toHaveBeenCalledWith([
+      "瑞贝思/blue-pla",
+      "JAYO/pla-red-bob",
+      "jayo/yellow-pla",
+    ]);
+  });
+
   it("lets users favorite any number of author profiles independently", () => {
     renderPicker({ materials: PROFILE_MATERIALS });
 

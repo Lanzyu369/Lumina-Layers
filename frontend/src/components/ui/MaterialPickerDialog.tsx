@@ -88,8 +88,10 @@ function materialSwatchColor(item: SavedMaterialLibraryItem): string {
   return `rgb(${clampRgb(red)} ${clampRgb(green)} ${clampRgb(blue)})`;
 }
 
-function firstProfile(group: MaterialProductGroup): SavedMaterialLibraryItem {
-  return group.profiles[0];
+function profilesForDisplay(
+  group: MaterialProductGroup,
+): SavedMaterialLibraryItem[] {
+  return group.displayProfiles ?? group.profiles;
 }
 
 /**
@@ -270,10 +272,14 @@ export default function MaterialPickerDialog({
         const groupDirectoryNames = new Set(
           group.profiles.map((item) => item.directory_name),
         );
-        return [
-          ...previous.filter((name) => !groupDirectoryNames.has(name)),
-          profile.directory_name,
-        ];
+        let replaced = false;
+        const next = previous.flatMap((name) => {
+          if (!groupDirectoryNames.has(name)) return [name];
+          if (replaced) return [];
+          replaced = true;
+          return [profile.directory_name];
+        });
+        return replaced ? next : [...next, profile.directory_name];
       }
       return previous.includes(profile.directory_name)
         ? previous.filter((name) => name !== profile.directory_name)
@@ -352,8 +358,10 @@ export default function MaterialPickerDialog({
     );
   };
 
-  const renderSingleProfileCard = (group: MaterialProductGroup) => {
-    const profile = firstProfile(group);
+  const renderSingleProfileCard = (
+    group: MaterialProductGroup,
+    profile: SavedMaterialLibraryItem,
+  ) => {
     const selected = stagedSet.has(profile.directory_name);
     const materialName = profile.material_name;
     const materialType =
@@ -388,7 +396,12 @@ export default function MaterialPickerDialog({
             type="button"
             aria-label={selectLabel}
             aria-pressed={selected}
-            onClick={() => selectProfile(profile)}
+            onClick={() =>
+              selectProfile(
+                profile,
+                group.profiles.length > 1 ? group : undefined,
+              )
+            }
             className="flex min-w-0 flex-1 items-start gap-3 rounded-xl text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
           >
             <span
@@ -434,7 +447,8 @@ export default function MaterialPickerDialog({
   };
 
   const renderMultiProfileCard = (group: MaterialProductGroup) => {
-    const summaryProfile = firstProfile(group);
+    const displayProfiles = profilesForDisplay(group);
+    const summaryProfile = displayProfiles[0];
     const materialName = summaryProfile.material_name;
     const materialType =
       resolvedMaterialType(summaryProfile) ||
@@ -492,7 +506,7 @@ export default function MaterialPickerDialog({
             className="inline-flex min-h-9 items-center gap-1 rounded-xl px-2.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
           >
             {formatMessage(t("basic_material_picker_profile_count"), {
-              count: group.profiles.length,
+              count: displayProfiles.length,
             })}
             <ChevronDownIcon
               className={cx(
@@ -506,7 +520,7 @@ export default function MaterialPickerDialog({
 
         {expanded && (
           <div className="grid gap-2 border-t border-slate-200/80 pt-3 dark:border-slate-700/80">
-            {group.profiles.map((profile) => {
+            {displayProfiles.map((profile) => {
               const selected = stagedSet.has(profile.directory_name);
               const author =
                 profile.contributor_name?.trim() ||
@@ -851,11 +865,12 @@ export default function MaterialPickerDialog({
                     className="grid gap-3 md:grid-cols-2"
                     data-testid="material-picker-card-grid"
                   >
-                    {visibleGroups.map((group) =>
-                      group.profiles.length === 1
-                        ? renderSingleProfileCard(group)
-                        : renderMultiProfileCard(group),
-                    )}
+                    {visibleGroups.map((group) => {
+                      const displayProfiles = profilesForDisplay(group);
+                      return displayProfiles.length === 1
+                        ? renderSingleProfileCard(group, displayProfiles[0])
+                        : renderMultiProfileCard(group);
+                    })}
                   </div>
                 )}
               </div>

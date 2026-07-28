@@ -17,6 +17,7 @@ export type MaterialProductGroup = {
   brandKey: string;
   materialType: string | null;
   profiles: SavedMaterialLibraryItem[];
+  displayProfiles?: SavedMaterialLibraryItem[];
 };
 
 export type MaterialBrandOption = {
@@ -226,10 +227,10 @@ export function filterMaterialGroups(
 
     visible.push({
       ...group,
-      profiles:
+      displayProfiles:
         filters.type === "favorites"
           ? candidateProfiles
-          : group.profiles,
+          : undefined,
     });
   }
 
