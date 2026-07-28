@@ -4225,12 +4225,12 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "LUT",
   },
   basic_lut_manufacturer_label: {
-    zh: "品牌",
-    en: "Brand",
+    zh: "LUT 品牌",
+    en: "LUT Brand",
   },
   basic_lut_manufacturer_placeholder: {
-    zh: "选择品牌",
-    en: "Select a brand",
+    zh: "选择 LUT 品牌",
+    en: "Select a LUT brand",
   },
   basic_lut_unlabeled_brand: {
     zh: "个人",
@@ -4245,8 +4245,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Select a LUT",
   },
   basic_lut_no_brand_hint: {
-    zh: "请先选择品牌",
-    en: "Pick a brand first",
+    zh: "请先选择 LUT 品牌",
+    en: "Pick a LUT brand first",
   },
   basic_lut_multi_select: {
     zh: "同组多选 LUT",
@@ -5469,8 +5469,24 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
 
   // ==================== Bed Size Selector ====================
   bed_size_label: {
-    zh: "热床尺寸",
-    en: "Bed Size",
+    zh: "打印机热床",
+    en: "Printer Bed",
+  },
+  bed_size_hint: {
+    zh: "这里显示“设置”中的打印机型号和热床尺寸，与左侧选择的 LUT 品牌相互独立。",
+    en: "This shows the printer model and bed size from Settings. It is independent of the selected LUT brand.",
+  },
+  bed_size_hint_aria: {
+    zh: "查看打印机热床说明",
+    en: "Show printer bed help",
+  },
+  bed_size_change: {
+    zh: "更改",
+    en: "Change",
+  },
+  bed_size_change_aria: {
+    zh: "在设置中更改打印机",
+    en: "Change printer in Settings",
   },
   bed_size_loading: {
     zh: "加载中...",
