@@ -20,6 +20,7 @@ from shapely.geometry import Polygon
 
 from config import PrinterConfig
 from core.mesh_generators import get_mesher
+from core.task_parallelism import resolve_task_parallelism
 
 _log = get_logger(__name__)
 
@@ -122,8 +123,15 @@ def run(ctx: dict) -> dict:
         extra={"event": "s07_mesh_generation_started", "count": num_materials},
     )
 
-    max_workers = min(4, num_materials)
-    parallel_enabled = max_workers > 1 and os.getenv("LUMINA_DISABLE_PARALLEL_MESH", "0") != "1"
+    max_workers = resolve_task_parallelism(
+        "raster",
+        work_items=num_materials,
+        min_parallel_items=2,
+        hard_max_workers=4,
+    )
+    if os.getenv("LUMINA_DISABLE_PARALLEL_MESH", "0") == "1":
+        max_workers = 1
+    parallel_enabled = max_workers > 1
     mesh_results = {}
     mesh_errors = {}
     mat_timings = {}
@@ -204,6 +212,7 @@ def run(ctx: dict) -> dict:
         _hifi_timings["mesh_gen_s"] = _mesh_elapsed
         _hifi_timings["mesh_compute_s"] = mesh_compute_elapsed
         _hifi_timings["mesh_apply_transform_s"] = mesh_apply_elapsed
+        _hifi_timings["mesh_parallelism_workers"] = int(max_workers)
         _log.debug(
             "mesh_gen done: %.3fs",
             _mesh_elapsed,
@@ -214,6 +223,7 @@ def run(ctx: dict) -> dict:
                 "material_count": num_materials,
                 "error_count": len(mesh_errors),
                 "parallel_enabled": bool(parallel_enabled),
+                "worker_count": int(max_workers),
             },
         )
 
