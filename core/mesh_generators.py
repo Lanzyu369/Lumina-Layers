@@ -656,7 +656,12 @@ class HighFidelityMesher(BaseMesher):
 
         rect_mesh = self._build_mesh_from_layer_rects(layer_rects, height_px) if layer_rects else None
         polygon_mesh = self._build_mesh_from_layer_polygons(layer_polygons, height_px) if layer_polygons else None
-        mesh = _merge_mesh_list([rect_mesh, polygon_mesh])
+        if rect_mesh is None:
+            mesh = polygon_mesh
+        elif polygon_mesh is None:
+            mesh = rect_mesh
+        else:
+            mesh = _merge_mesh_list([rect_mesh, polygon_mesh])
         if mesh is not None:
             total_rects = sum(r.shape[0] for _, _, r in layer_rects)
             log.info(

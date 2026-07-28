@@ -4424,7 +4424,10 @@ class VectorProcessor:
         # KDTree / lut_rgb / ref_stacks 已就绪；LUT 模式没有该方法，
         # 透明跳过。
         solve_for_fills = getattr(self.img_processor, "solve_for_fills", None)
+        stage_timings["fill_dedup_s"] = 0.0
+        stage_timings["material_solve_s"] = 0.0
         if solve_for_fills is not None and clipped_shapes:
+            fill_dedup_t0 = time.perf_counter()
             unique_fills_set: set = set()
             for item in clipped_shapes:
                 color = item.get("color")
@@ -4436,8 +4439,15 @@ class VectorProcessor:
                     )
                 except (TypeError, IndexError, ValueError):
                     continue
+            stage_timings["fill_dedup_s"] = (
+                time.perf_counter() - fill_dedup_t0
+            )
             if unique_fills_set:
+                material_solve_t0 = time.perf_counter()
                 solve_for_fills(sorted(unique_fills_set))
+                stage_timings["material_solve_s"] = (
+                    time.perf_counter() - material_solve_t0
+                )
                 # NOTE: small-shape snap is disabled for material-archive mode.
                 # The delta_e heuristic incorrectly triggers when the material
                 # set cannot physically reproduce dark colours, causing

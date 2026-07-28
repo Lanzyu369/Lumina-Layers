@@ -745,6 +745,7 @@ def test_vector_generate_material_archive_passes_processor_export_color_mode(
         "enable_fridge_magnet": False,
         "fridge_magnets": [],
         "center_on_bed": False,
+        "retain_scene_for_profile": True,
         "need_2d_preview": False,
         "printer_id": "bambu-h2d",
         "slicer": "BambuStudio",
@@ -771,6 +772,7 @@ def test_vector_generate_material_archive_passes_processor_export_color_mode(
     assert "error" not in result_ctx
     mock_bambu_export.assert_called_once()
     exported_scene = mock_bambu_export.call_args.kwargs["scene"]
+    assert result_ctx["scene"] is exported_scene
     _assert_material_archive_outline_mirrored(exported_scene.geometry["Outline"])
 
 

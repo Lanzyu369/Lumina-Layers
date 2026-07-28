@@ -7,6 +7,7 @@ prefix/suffix tables; it never scans the full ``M ** N`` recipe space.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import numpy as np
@@ -20,6 +21,7 @@ from core.material_color_solver import (
     rgb_to_lab,
     srgb_to_linear,
 )
+from core.task_parallelism import task_parallelism_worker_scope
 
 
 @dataclass(frozen=True)
@@ -65,6 +67,31 @@ class MaterialInverseRefinementResult:
     recipes: np.ndarray
     delta_e: np.ndarray
     improved_mask: np.ndarray
+
+
+@dataclass(frozen=True)
+class _InverseRefinementWorkspaceKey:
+    """Stable identity for one deterministic inverse-refinement workspace."""
+
+    subset: tuple[int, ...]
+    bottom_depth: int
+    top_depth: int
+    bottom_budget: int
+    top_budget: int
+    bottom_seed: int
+    top_seed: int
+
+
+@dataclass(frozen=True)
+class _InverseRefinementWorkspace:
+    """Read-only candidate arrays shared by target rows in one subset group."""
+
+    bottom_recipes: np.ndarray
+    top_recipes: np.ndarray
+    bottom_linear: np.ndarray
+    top_alpha: np.ndarray
+    top_beta: np.ndarray
+    bottom_tree: cKDTree
 
 
 def compute_required_bottom_colors(
@@ -192,38 +219,49 @@ def _bounded_subset_recipes(
     return subset[generated.recipes.astype(np.int64)].astype(np.int32, copy=False)
 
 
-def _best_refined_row(
+def _workspace_key(
     *,
-    target_srgb: np.ndarray,
-    materials: list[MaterialParams],
+    subset: np.ndarray,
     layer_count: int,
-    layer_height_mm: float,
-    substrate: str,
-    baseline_recipe: np.ndarray,
-    baseline_delta_e: float,
     config: MaterialInverseRefinementConfig,
-) -> tuple[np.ndarray, np.ndarray, float, bool]:
-    subset = _select_material_subset(
-        target_srgb=target_srgb,
-        baseline_recipe=baseline_recipe,
-        materials=materials,
-        max_materials=min(int(config.max_refine_materials), len(materials)),
-    )
+) -> _InverseRefinementWorkspaceKey:
+    """Return the deterministic key for a row's candidate workspace."""
+
     bottom_depth = int(layer_count) // 2
     top_depth = int(layer_count) - bottom_depth
+    return _InverseRefinementWorkspaceKey(
+        subset=tuple(int(value) for value in subset),
+        bottom_depth=bottom_depth,
+        top_depth=top_depth,
+        bottom_budget=int(config.max_refine_bottom_prefixes),
+        top_budget=int(config.max_refine_top_suffixes),
+        bottom_seed=int(config.seed),
+        top_seed=int(config.seed) + 17,
+    )
+
+
+def _build_workspace(
+    *,
+    key: _InverseRefinementWorkspaceKey,
+    materials: list[MaterialParams],
+    layer_height_mm: float,
+    substrate: str,
+) -> _InverseRefinementWorkspace:
+    """Build one immutable candidate workspace for a material subset."""
+
+    subset = np.asarray(key.subset, dtype=np.int32)
     bottom_recipes = _bounded_subset_recipes(
         subset=subset,
-        depth=bottom_depth,
-        budget=int(config.max_refine_bottom_prefixes),
-        seed=int(config.seed),
+        depth=key.bottom_depth,
+        budget=key.bottom_budget,
+        seed=key.bottom_seed,
     )
     top_recipes = _bounded_subset_recipes(
         subset=subset,
-        depth=top_depth,
-        budget=int(config.max_refine_top_suffixes),
-        seed=int(config.seed) + 17,
+        depth=key.top_depth,
+        budget=key.top_budget,
+        seed=key.top_seed,
     )
-
     bottom_linear = _predict_linear_for_recipes(
         recipes=bottom_recipes,
         materials=materials,
@@ -235,6 +273,33 @@ def _best_refined_row(
         materials=materials,
         layer_height_mm=float(layer_height_mm),
     )
+    return _InverseRefinementWorkspace(
+        bottom_recipes=bottom_recipes,
+        top_recipes=top_recipes,
+        bottom_linear=bottom_linear,
+        top_alpha=top_alpha,
+        top_beta=top_beta,
+        bottom_tree=cKDTree(bottom_linear.astype(np.float64, copy=False)),
+    )
+
+
+def _best_refined_row_with_workspace(
+    *,
+    target_srgb: np.ndarray,
+    materials: list[MaterialParams],
+    layer_count: int,
+    layer_height_mm: float,
+    substrate: str,
+    baseline_recipe: np.ndarray,
+    baseline_delta_e: float,
+    config: MaterialInverseRefinementConfig,
+    workspace: _InverseRefinementWorkspace,
+) -> tuple[np.ndarray, np.ndarray, float, bool]:
+    bottom_recipes = workspace.bottom_recipes
+    top_recipes = workspace.top_recipes
+    bottom_linear = workspace.bottom_linear
+    top_alpha = workspace.top_alpha
+    top_beta = workspace.top_beta
 
     required = compute_required_bottom_colors(
         srgb_to_linear(target_srgb.reshape(1, 3))[0],
@@ -261,16 +326,17 @@ def _best_refined_row(
     valid_top_beta = top_beta[valid_top_mask]
     valid_top_recipes = top_recipes[valid_top_mask]
 
-    bottom_tree = cKDTree(bottom_linear.astype(np.float64, copy=False))
     neighbor_count = min(
         max(1, int(config.refine_bottom_neighbors)),
         bottom_linear.shape[0],
     )
-    _distances, bottom_indices = bottom_tree.query(valid_required, k=neighbor_count)
+    _distances, bottom_indices = workspace.bottom_tree.query(
+        valid_required,
+        k=neighbor_count,
+    )
     if neighbor_count == 1:
         bottom_indices = bottom_indices[:, None]
 
-    top_count = valid_top_alpha.shape[0]
     final_linear = (
         valid_top_alpha[:, None, :] * bottom_linear[bottom_indices]
         + valid_top_beta[:, None, :]
@@ -323,6 +389,110 @@ def _best_refined_row(
     return verified_srgb, recipe, verified_delta, True
 
 
+def _best_refined_row(
+    *,
+    target_srgb: np.ndarray,
+    materials: list[MaterialParams],
+    layer_count: int,
+    layer_height_mm: float,
+    substrate: str,
+    baseline_recipe: np.ndarray,
+    baseline_delta_e: float,
+    config: MaterialInverseRefinementConfig,
+) -> tuple[np.ndarray, np.ndarray, float, bool]:
+    """Refine one row with a freshly built workspace.
+
+    This compatibility helper intentionally retains the old one-row behavior;
+    batched callers use grouped workspaces through :func:`refine_material_matches`.
+    """
+
+    subset = _select_material_subset(
+        target_srgb=target_srgb,
+        baseline_recipe=baseline_recipe,
+        materials=materials,
+        max_materials=min(int(config.max_refine_materials), len(materials)),
+    )
+    key = _workspace_key(
+        subset=subset,
+        layer_count=int(layer_count),
+        config=config,
+    )
+    workspace = _build_workspace(
+        key=key,
+        materials=materials,
+        layer_height_mm=float(layer_height_mm),
+        substrate=substrate,
+    )
+    return _best_refined_row_with_workspace(
+        target_srgb=target_srgb,
+        materials=materials,
+        layer_count=int(layer_count),
+        layer_height_mm=float(layer_height_mm),
+        substrate=substrate,
+        baseline_recipe=baseline_recipe,
+        baseline_delta_e=float(baseline_delta_e),
+        config=config,
+        workspace=workspace,
+    )
+
+
+def _refine_workspace_group(
+    *,
+    key: _InverseRefinementWorkspaceKey,
+    row_indices: tuple[int, ...],
+    targets: np.ndarray,
+    baseline_recipes: np.ndarray,
+    baseline_delta_e: np.ndarray,
+    materials: list[MaterialParams],
+    layer_count: int,
+    layer_height_mm: float,
+    substrate: str,
+    config: MaterialInverseRefinementConfig,
+) -> list[tuple[int, np.ndarray, np.ndarray, float, bool]]:
+    """Build one workspace and refine its rows without mutating shared output."""
+
+    workspace = _build_workspace(
+        key=key,
+        materials=materials,
+        layer_height_mm=float(layer_height_mm),
+        substrate=substrate,
+    )
+    results: list[tuple[int, np.ndarray, np.ndarray, float, bool]] = []
+    for row_index in row_indices:
+        row_srgb, row_recipe, row_delta, did_improve = (
+            _best_refined_row_with_workspace(
+                target_srgb=targets[row_index],
+                materials=materials,
+                layer_count=int(layer_count),
+                layer_height_mm=float(layer_height_mm),
+                substrate=substrate,
+                baseline_recipe=baseline_recipes[row_index],
+                baseline_delta_e=float(baseline_delta_e[row_index]),
+                config=config,
+                workspace=workspace,
+            )
+        )
+        results.append(
+            (
+                row_index,
+                row_srgb,
+                row_recipe,
+                row_delta,
+                did_improve,
+            ),
+        )
+    return results
+
+
+def _refine_workspace_group_in_worker(
+    **kwargs,
+) -> list[tuple[int, np.ndarray, np.ndarray, float, bool]]:
+    """Run one refinement group inside the nested-parallelism guard."""
+
+    with task_parallelism_worker_scope():
+        return _refine_workspace_group(**kwargs)
+
+
 def refine_material_matches(
     *,
     target_srgb: np.ndarray,
@@ -334,6 +504,7 @@ def refine_material_matches(
     layer_height_mm: float,
     substrate: str,
     config: MaterialInverseRefinementConfig | None = None,
+    parallelism: int = 1,
 ) -> MaterialInverseRefinementResult:
     """Improve material matches with bounded affine inverse search.
     使用有预算的 affine 反向搜索改善耗材匹配。
@@ -348,6 +519,8 @@ def refine_material_matches(
         layer_height_mm: Layer thickness in mm. (层厚 mm)
         substrate: ``"white"`` or ``"black"`` substrate. (基底)
         config: Optional refinement config. (可选精修配置)
+        parallelism: Maximum independent subset groups to process at once.
+            (同时处理的独立耗材子集组上限)
 
     Returns:
         MaterialInverseRefinementResult: Baseline-or-better matches.
@@ -367,21 +540,78 @@ def refine_material_matches(
     if recipes.shape != (targets.shape[0], int(layer_count)):
         raise ValueError("baseline_recipes shape does not match targets/layer_count")
 
+    grouped_rows: dict[_InverseRefinementWorkspaceKey, list[int]] = {}
+    max_materials = min(int(cfg.max_refine_materials), len(materials))
     for row_index in range(targets.shape[0]):
-        row_srgb, row_recipe, row_delta, did_improve = _best_refined_row(
+        subset = _select_material_subset(
             target_srgb=targets[row_index],
-            materials=materials,
-            layer_count=int(layer_count),
-            layer_height_mm=float(layer_height_mm),
-            substrate=substrate,
             baseline_recipe=recipes[row_index],
-            baseline_delta_e=float(delta_e[row_index]),
+            materials=materials,
+            max_materials=max_materials,
+        )
+        key = _workspace_key(
+            subset=subset,
+            layer_count=int(layer_count),
             config=cfg,
         )
-        if did_improve:
-            matched[row_index] = row_srgb
-            recipes[row_index] = row_recipe
-            delta_e[row_index] = row_delta
-            improved[row_index] = True
+        grouped_rows.setdefault(key, []).append(row_index)
+
+    group_items = [
+        (key, tuple(row_indices))
+        for key, row_indices in grouped_rows.items()
+    ]
+    worker_count = min(
+        max(1, int(parallelism)),
+        len(group_items),
+    )
+    if worker_count > 1:
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = [
+                executor.submit(
+                    _refine_workspace_group_in_worker,
+                    key=key,
+                    row_indices=row_indices,
+                    targets=targets,
+                    baseline_recipes=recipes,
+                    baseline_delta_e=delta_e,
+                    materials=materials,
+                    layer_count=int(layer_count),
+                    layer_height_mm=float(layer_height_mm),
+                    substrate=substrate,
+                    config=cfg,
+                )
+                for key, row_indices in group_items
+            ]
+            grouped_results = [future.result() for future in futures]
+    else:
+        grouped_results = [
+            _refine_workspace_group(
+                key=key,
+                row_indices=row_indices,
+                targets=targets,
+                baseline_recipes=recipes,
+                baseline_delta_e=delta_e,
+                materials=materials,
+                layer_count=int(layer_count),
+                layer_height_mm=float(layer_height_mm),
+                substrate=substrate,
+                config=cfg,
+            )
+            for key, row_indices in group_items
+        ]
+
+    for group_results in grouped_results:
+        for (
+            row_index,
+            row_srgb,
+            row_recipe,
+            row_delta,
+            did_improve,
+        ) in group_results:
+            if did_improve:
+                matched[row_index] = row_srgb
+                recipes[row_index] = row_recipe
+                delta_e[row_index] = row_delta
+                improved[row_index] = True
 
     return MaterialInverseRefinementResult(matched, recipes, delta_e, improved)

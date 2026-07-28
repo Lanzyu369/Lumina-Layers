@@ -453,6 +453,66 @@ def test_candidate_runtime_neighbor_coherence_uses_local_candidate_pool(
     assert max(observed_pool_sizes) < runtime.valid_cell_count
 
 
+def test_candidate_runtime_forwards_parallelism_to_both_refinement_phases(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import core.material_candidate_cache as candidate_cache
+    from core.material_inverse_refinement import (
+        MaterialInverseRefinementResult,
+    )
+
+    runtime = build_material_candidate_runtime(
+        materials=MEDIUM_PALETTE,
+        layer_count=5,
+        layer_height_mm=0.08,
+        substrate="white",
+        config=MaterialCandidateCacheConfig(
+            candidate_budget=128,
+            seed=77,
+            enable_inverse_refinement=True,
+        ),
+    )
+    observed: dict[str, int] = {}
+
+    def _refinement_stub(**kwargs):
+        observed["inverse"] = int(kwargs["parallelism"])
+        row_count = kwargs["target_srgb"].shape[0]
+        return MaterialInverseRefinementResult(
+            matched_srgb=kwargs["baseline_matched_srgb"],
+            recipes=kwargs["baseline_recipes"],
+            delta_e=kwargs["baseline_delta_e"],
+            improved_mask=np.zeros(row_count, dtype=bool),
+        )
+
+    def _coherence_stub(**kwargs):
+        observed["coherence"] = int(kwargs["parallelism"])
+        return (
+            kwargs["matched_rgb"],
+            kwargs["recipes_user_order"],
+            kwargs["delta_e"],
+        )
+
+    monkeypatch.setattr(
+        candidate_cache,
+        "refine_material_matches",
+        _refinement_stub,
+    )
+    monkeypatch.setattr(
+        candidate_cache,
+        "_neighbor_coherence_refine",
+        _coherence_stub,
+    )
+
+    runtime.lookup(
+        np.asarray([[180, 80, 60], [185, 82, 62]], dtype=np.uint8),
+        MEDIUM_PALETTE,
+        neighbor_coherence=0.8,
+        parallelism=3,
+    )
+
+    assert observed == {"inverse": 3, "coherence": 3}
+
+
 def test_candidate_runtime_uses_candidate_pool_multiplier_for_coverage_selection(
     monkeypatch,
 ) -> None:

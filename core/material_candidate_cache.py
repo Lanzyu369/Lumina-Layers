@@ -964,6 +964,7 @@ class MaterialCandidateRuntime:
         *,
         hue_weight: float = 0.0,
         neighbor_coherence: float = 0.5,
+        parallelism: int = 1,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Return nearest candidate recipes using the solver-cache tuple shape.
         按旧求解缓存的返回形状返回最近候选配方。
@@ -973,6 +974,8 @@ class MaterialCandidateRuntime:
             user_materials: Materials in caller-visible order. (调用方耗材顺序)
             hue_weight: Accepted for API compatibility. (兼容旧接口)
             neighbor_coherence: Accepted for API compatibility. (兼容旧接口)
+            parallelism: Maximum independent refinement workers.
+                (独立精修 worker 上限)
 
         Returns:
             tuple[np.ndarray, np.ndarray, np.ndarray]: matched RGB, recipes in
@@ -1035,6 +1038,7 @@ class MaterialCandidateRuntime:
                 layer_height_mm=self.layer_height_mm,
                 substrate=self.substrate,
                 config=refinement_config,
+                parallelism=parallelism,
             )
             matched_rgb = refined.matched_srgb
             recipes_canonical = refined.recipes
@@ -1067,6 +1071,7 @@ class MaterialCandidateRuntime:
                 uniform_lab=None,
                 uniform_srgb=None,
                 uniform_recipes=None,
+                parallelism=parallelism,
             )
         return matched_rgb, recipes_user, best_delta
 

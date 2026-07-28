@@ -1480,6 +1480,28 @@ def _build_vector_processor(ctx: dict, *, fallback_color_mode: str):
     return processor
 
 
+def _record_material_parallelism(
+    timings: dict[str, float],
+    vector_processor: object,
+) -> None:
+    """Attach the effective material-matching worker count when available."""
+
+    matcher = getattr(vector_processor, "img_processor", None)
+    worker_count = getattr(
+        matcher,
+        "effective_parallelism_workers",
+        None,
+    )
+    if worker_count is None:
+        return
+    try:
+        timings["material_parallelism_workers"] = float(
+            max(1, int(worker_count)),
+        )
+    except (TypeError, ValueError):
+        return
+
+
 def _run_vector_preview_branch(ctx: dict) -> dict:
     """Execute SVG native preview processing for vector mode.
     \u4e3a SVG + vector \u6a21\u5f0f\u6784\u5efa\u4e0e native vector \u751f\u6210\u4e00\u81f4\u7684\u9884\u89c8\u7f13\u5b58\u3002
@@ -1523,6 +1545,7 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
                 for key, value in getattr(analysis, "stage_timings", {}).items()
             }
         )
+        _record_material_parallelism(preview_timing, vec_processor)
         preview_timing["analyze_svg_s"] = time.perf_counter() - t0
 
         t0 = time.perf_counter()
@@ -1735,6 +1758,7 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
         ctx = p06_bed_rendering.run(ctx)
         preview_timing["bed_rendering_s"] = time.perf_counter() - t0
         preview_timing["vector_preview_total_s"] = time.perf_counter() - vector_preview_total_t0
+        ctx["vector_timing"] = dict(preview_timing)
         _log_vector_preview_timings(preview_timing, ctx, analysis, raster_cache)
         return ctx
     except Exception as exc:
@@ -1862,6 +1886,8 @@ def _run_vector_branch(ctx: dict) -> dict:
             target_width_mm=target_width_mm,
             color_replacements=vector_replacements,
         )
+        vector_timing["analyze_svg_s"] = time.perf_counter() - mesh_t0
+        _record_material_parallelism(vector_timing, vec_processor)
 
         # 1.1 Project ColorWorkstation region edits (``/region-replace``,
         # ``/region-replace-batch``) back into ``analysis.matched_shapes``.
@@ -2211,7 +2237,14 @@ def _run_vector_branch(ctx: dict) -> dict:
                 import trimesh as _trimesh
 
                 merged = _trimesh.util.concatenate([target_geom, board_geom])
-                merged.visual.face_colors = target_geom.visual.face_colors
+                target_color = vec_preview_colors.get(target_slot)
+                if target_color is None:
+                    existing_colors = np.asarray(
+                        target_geom.visual.face_colors,
+                    )
+                    if existing_colors.ndim == 2 and len(existing_colors):
+                        target_color = existing_colors[0]
+                merged.visual.face_colors = _coerce_preview_rgba(target_color)
                 merged.metadata["name"] = target_slot
                 scene.geometry[target_slot] = merged
                 del scene.geometry["Board"]
@@ -2578,6 +2611,8 @@ def _run_vector_branch(ctx: dict) -> dict:
         Stats.increment("conversions")
         vector_timing["vector_branch_total_s"] = time.perf_counter() - vector_total_t0
         ctx["vector_timing"] = dict(vector_timing)
+        if bool(ctx.get("retain_scene_for_profile", False)):
+            ctx["scene"] = scene
         _log_vector_timings(vector_timing)
 
         msg = "Vector conversion complete! Objects merged by material."
