@@ -36,8 +36,6 @@ import {
 import {
   cx,
   StatusBanner,
-  workstationChoiceRowActiveClass,
-  workstationChoiceRowClass,
   workstationInputClass,
 } from "./panelPrimitives";
 
@@ -59,6 +57,18 @@ const FOCUSABLE_SELECTOR = [
   "[href]",
   "[tabindex]:not([tabindex='-1'])",
 ].join(",");
+
+const materialPickerCardClass =
+  "rounded-[22px] border px-3.5 py-3 transition-all duration-200";
+
+const materialPickerIdleCardClass =
+  "border-slate-200/80 bg-white/60 shadow-[var(--shadow-control)] " +
+  "dark:border-slate-700/80 dark:bg-slate-900/55";
+
+const materialPickerSelectedCardClass =
+  "border-blue-300/80 bg-blue-50/50 " +
+  "drop-shadow-[0_1px_2px_var(--focus-ring)] " +
+  "dark:border-blue-400/60 dark:bg-blue-500/10";
 
 function formatMessage(
   template: string,
@@ -357,9 +367,11 @@ export default function MaterialPickerDialog({
         key={group.key}
         data-testid="material-picker-product-card"
         className={cx(
-          workstationChoiceRowClass,
+          materialPickerCardClass,
           "flex min-w-0 flex-col gap-3 p-3.5",
-          selected && workstationChoiceRowActiveClass,
+          selected
+            ? materialPickerSelectedCardClass
+            : materialPickerIdleCardClass,
         )}
       >
         <div className="flex min-w-0 items-start gap-3">
@@ -451,9 +463,11 @@ export default function MaterialPickerDialog({
         key={group.key}
         data-testid="material-picker-product-card"
         className={cx(
-          workstationChoiceRowClass,
+          materialPickerCardClass,
           "flex min-w-0 flex-col gap-3 p-3.5",
-          selectedProfile && workstationChoiceRowActiveClass,
+          selectedProfile
+            ? materialPickerSelectedCardClass
+            : materialPickerIdleCardClass,
         )}
       >
         <div className="flex min-w-0 items-start gap-3">

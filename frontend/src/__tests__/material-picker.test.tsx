@@ -207,7 +207,7 @@ describe("MaterialPickerDialog", () => {
     expect(profileChoice).toHaveClass("focus-visible:ring-2");
   });
 
-  it("retains the selected card treatment outside the focus indicator", () => {
+  it("gives a selected material a subtle whole-card treatment", () => {
     renderPicker({
       initialSelected: ["JAYO/red-pla"],
     });
@@ -215,7 +215,47 @@ describe("MaterialPickerDialog", () => {
     const selectedCard = screen
       .getByText("Red PLA")
       .closest('[data-testid="material-picker-product-card"]');
-    expect(selectedCard).toHaveClass("border-blue-400");
+    const unselectedCard = screen
+      .getByText("Yellow PLA")
+      .closest('[data-testid="material-picker-product-card"]');
+
+    expect(selectedCard).toHaveClass(
+      "border-blue-300/80",
+      "bg-blue-50/50",
+      "drop-shadow-[0_1px_2px_var(--focus-ring)]",
+    );
+    expect(selectedCard).not.toHaveClass("bg-white/60");
+    expect(unselectedCard).not.toHaveClass(
+      "bg-blue-50/50",
+      "drop-shadow-[0_1px_2px_var(--focus-ring)]",
+    );
+    expect(unselectedCard).toHaveClass("bg-white/60");
+  });
+
+  it("uses the same whole-card treatment for a selected author profile", () => {
+    renderPicker({
+      materials: PROFILE_MATERIALS,
+      initialSelected: ["JAYO/pla-red-alice"],
+    });
+
+    const selectedCard = screen
+      .getAllByTestId("material-picker-product-card")
+      .find((card) => card.textContent?.includes("PLA Basic Red"));
+    const unselectedCard = screen
+      .getByText("Black PETG")
+      .closest('[data-testid="material-picker-product-card"]');
+
+    expect(selectedCard).toHaveClass(
+      "border-blue-300/80",
+      "bg-blue-50/50",
+      "drop-shadow-[0_1px_2px_var(--focus-ring)]",
+    );
+    expect(selectedCard).not.toHaveClass("bg-white/60");
+    expect(unselectedCard).not.toHaveClass(
+      "bg-blue-50/50",
+      "drop-shadow-[0_1px_2px_var(--focus-ring)]",
+    );
+    expect(unselectedCard).toHaveClass("bg-white/60");
   });
 
   it("cancels without committing pending changes", () => {

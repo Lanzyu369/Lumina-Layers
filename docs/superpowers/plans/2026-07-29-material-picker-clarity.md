@@ -841,18 +841,22 @@ class and has no picker-specific inset selected state.
 
 - [ ] **Step 3: Implement the approved subtle selected state**
 
-Define one local card-state class in `MaterialPickerDialog.tsx` and use it for
-both single-profile and multi-profile outer cards:
+Define local base, idle, and selected card variants in
+`MaterialPickerDialog.tsx` and use them for both single-profile and
+multi-profile outer cards. Keeping the idle surface out of selected cards avoids
+Tailwind utility order overriding the selected surface:
 
 ```typescript
 const materialPickerSelectedCardClass =
-  "border-blue-300/80 bg-blue-50/50 ring-1 ring-inset ring-blue-200/60 " +
-  "shadow-[var(--shadow-control-hover)] dark:border-blue-400/60 " +
-  "dark:bg-blue-500/10 dark:ring-blue-400/20";
+  "border-blue-300/80 bg-blue-50/50 " +
+  "drop-shadow-[0_1px_2px_var(--focus-ring)] " +
+  "dark:border-blue-400/60 dark:bg-blue-500/10";
 ```
 
-Keep the existing blue check and keyboard-only focus ring. Do not add scale,
-translation, pulse, or looping animation.
+The normal 1px card border remains inside the card box, while the token-based
+drop shadow supplies the restrained depth without reintroducing the former
+focus ring. Keep the existing blue check and keyboard-only focus ring. Do not
+add scale, translation, pulse, or looping animation.
 
 - [ ] **Step 4: Run tests and production build**
 
