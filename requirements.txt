@@ -22,6 +22,8 @@ uvicorn
 httpx
 numba
 msgpack
+# Runtime resource-aware task parallelism
+psutil>=5.9.8
 # Vectorizer (C++ image-to-SVG)
 neroued-vectorizer>=0.1.1
 # 3MF writer (C++ streaming 3MF with Production Extension)

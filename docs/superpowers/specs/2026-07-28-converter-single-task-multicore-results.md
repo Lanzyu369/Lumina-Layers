@@ -107,6 +107,14 @@ NumPy used Accelerate BLAS/LAPACK. The optional `clipper2_batch` extension was
 not available, so these results do not depend on it. Docker, Colima, and
 Rosetta were not used.
 
+`psutil>=5.9.8` is a required base runtime dependency, not a profiling-only
+package. Automatic worker selection uses its cross-platform available-memory
+sample whenever a stage supplies a per-worker memory estimate. The Docker
+image installs `requirements.txt`, so clean production builds retain the
+measured memory-aware raster/vector parallelism. The one-worker fail-closed
+path remains a defensive fallback for an unexpected import or sampling
+failure after installation.
+
 For complex cases, each `r1`/`r2`/`r3` measurement ran in a fresh Python
 process to avoid retained allocator state. The table's cold value is `r1`;
 warm median is the median of `r2` and `r3` after OS file caches had warmed; P90
@@ -255,9 +263,10 @@ failure or unbounded memory increase.
   `LUMINA_RASTER_PARALLELISM` and `LUMINA_VECTOR_PARALLELISM`.
 - `auto` is bounded by visible CPUs, the outer-worker fair share, independent
   work items, a stage hard cap of four, a small-work threshold, live available
-  memory, and 1 GiB reserved headroom.
+  memory sampled through the required `psutil` runtime dependency, and 1 GiB
+  reserved headroom.
 - If available-memory sampling is unavailable or fails while a stage has a
-  per-worker memory estimate, selection fails closed to one worker.
+  per-worker memory estimate, selection still fails closed to one worker.
 - A thread-local worker scope forces nested Lumina pool resolution to one.
 - Invalid settings emit one actionable structured warning, once per distinct
   value, and fall back to automatic selection.
@@ -288,6 +297,10 @@ of this work.
 
 ## Verification
 
+- Post-review runtime-dependency gate: **60 passed** across task parallelism,
+  raster mesh parallelism, vector material parallelism, and Docker deployment
+  contracts. A Python 3.12 binary-only pip dry run resolved the declared
+  `psutil>=5.9.8` requirement to psutil 7.2.2 for the reference platform.
 - Final post-fix focused multicore, material, vector-export, and profiler
   regression: **240 passed**. This supersedes the earlier 211-test focused run.
 - Backend full suite excluding the unavailable external performance-golden
