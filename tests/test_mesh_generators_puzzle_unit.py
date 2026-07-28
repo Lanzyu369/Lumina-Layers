@@ -22,6 +22,20 @@ def _make_split_voxel_matrix() -> np.ndarray:
     return voxel_matrix
 
 
+def _oriented_triangles(mesh) -> list[tuple[float, ...]]:
+    """Return face-order-independent triangles while retaining winding."""
+
+    oriented = []
+    for triangle in np.round(np.asarray(mesh.triangles), 9):
+        rotations = [
+            tuple(triangle[[0, 1, 2]].reshape(-1)),
+            tuple(triangle[[1, 2, 0]].reshape(-1)),
+            tuple(triangle[[2, 0, 1]].reshape(-1)),
+        ]
+        oriented.append(min(rotations))
+    return sorted(oriented)
+
+
 def test_high_fidelity_mesher_disable_material_dilation_keeps_shared_edge_exact() -> None:
     """No-dilation mode should preserve the exact shared material boundary."""
 
@@ -66,8 +80,17 @@ def test_high_fidelity_rect_only_path_skips_redundant_mesh_cleanup(
     mesh = mesher.generate_mesh(voxel_matrix, 0, height_px=6)
 
     assert mesh is not None
+    legacy_cleaned = original_merge([mesh.copy()])
+    assert legacy_cleaned is not None
     assert len(mesh.faces) > 0
     assert merge_calls == 0
+    assert len(mesh.vertices) == len(legacy_cleaned.vertices)
+    assert len(mesh.faces) == len(legacy_cleaned.faces)
+    np.testing.assert_allclose(mesh.bounds, legacy_cleaned.bounds)
+    assert mesh.is_watertight == legacy_cleaned.is_watertight
+    assert mesh.euler_number == legacy_cleaned.euler_number
+    assert mesh.volume == pytest.approx(legacy_cleaned.volume)
+    assert _oriented_triangles(mesh) == _oriented_triangles(legacy_cleaned)
 
 
 def test_s07_defaults_to_exact_material_boundaries_for_color_exports() -> None:

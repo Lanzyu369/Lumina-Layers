@@ -49,6 +49,7 @@ from typing import TYPE_CHECKING, Iterable
 import numpy as np
 
 from api.structured_logging import get_logger
+from core.task_parallelism import resolve_task_parallelism
 
 if TYPE_CHECKING:
     from core.material_color_solver import MaterialParams
@@ -56,6 +57,8 @@ if TYPE_CHECKING:
 _log = get_logger(__name__)
 
 MATERIAL_ARCHIVE_LUT_SENTINEL = "__material_archive__"
+_MIN_PARALLEL_VECTOR_FILL_COUNT = 32
+_ESTIMATED_VECTOR_WORKER_BYTES = 256 * 1024**2
 
 
 def _rgb_to_lab_static(rgb_array: np.ndarray) -> np.ndarray:
@@ -164,6 +167,7 @@ class MaterialVectorMatcher:
         self._matched_rgbs = np.zeros((0, 3), dtype=np.uint8)
         self._recipes = np.zeros((0, self.layer_count), dtype=np.int32)
         self._kdtree = None
+        self.effective_parallelism_workers = 1
 
     # ------------------------------------------------------------------
     # Construction helper
@@ -323,6 +327,19 @@ class MaterialVectorMatcher:
 
         if new_keys:
             new_arr = np.array(sorted(set(new_keys)), dtype=np.uint8)
+            effective_parallelism = resolve_task_parallelism(
+                "vector",
+                work_items=int(new_arr.shape[0]),
+                min_parallel_items=2,
+                hard_max_workers=4,
+                work_units=int(new_arr.shape[0]),
+                min_parallel_work_units=_MIN_PARALLEL_VECTOR_FILL_COUNT,
+                estimated_worker_bytes=_ESTIMATED_VECTOR_WORKER_BYTES,
+            )
+            self.effective_parallelism_workers = max(
+                int(self.effective_parallelism_workers),
+                int(effective_parallelism),
+            )
             _log.debug(
                 "solve_for_fills input: %d new colors (total cached before=%d)",
                 new_arr.shape[0],
@@ -336,11 +353,13 @@ class MaterialVectorMatcher:
                         for c in new_arr[:50]  # cap at 50 to avoid log explosion
                     ],
                     "truncated": new_arr.shape[0] > 50,
+                    "parallelism": int(effective_parallelism),
                 },
             )
             lookup_kwargs = {
                 "hue_weight": self.hue_weight,
                 "neighbor_coherence": self.neighbor_coherence,
+                "parallelism": effective_parallelism,
             }
             try:
                 import inspect

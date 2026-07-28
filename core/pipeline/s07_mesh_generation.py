@@ -20,16 +20,33 @@ from shapely.geometry import Polygon
 
 from config import PrinterConfig
 from core.mesh_generators import get_mesher
-from core.task_parallelism import resolve_task_parallelism
+from core.task_parallelism import (
+    resolve_task_parallelism,
+    task_parallelism_worker_scope,
+)
 
 _log = get_logger(__name__)
+_MIN_PARALLEL_MESH_WORK_UNITS = 100_000
+_MIN_ESTIMATED_MESH_WORKER_BYTES = 64 * 1024**2
+_ESTIMATED_MESH_WORKER_BYTES_PER_VOXEL = 8
 
 
 def _timed_generate_mesh(mesher, full_matrix, mat_id, target_h):
     """Wrapper that returns (mesh, elapsed_s) measured inside the worker thread."""
-    _t = time.perf_counter()
-    result = mesher.generate_mesh(full_matrix, mat_id, target_h)
-    return result, time.perf_counter() - _t
+    with task_parallelism_worker_scope():
+        _t = time.perf_counter()
+        result = mesher.generate_mesh(full_matrix, mat_id, target_h)
+        return result, time.perf_counter() - _t
+
+
+def _estimate_mesh_worker_bytes(full_matrix: np.ndarray) -> int:
+    """Estimate per-worker masks, rectangle arrays, and mesh build storage."""
+
+    return max(
+        _MIN_ESTIMATED_MESH_WORKER_BYTES,
+        int(np.asarray(full_matrix).size)
+        * _ESTIMATED_MESH_WORKER_BYTES_PER_VOXEL,
+    )
 
 
 def _load_boundary_geometry(boundary_path: str | None):
@@ -123,11 +140,21 @@ def run(ctx: dict) -> dict:
         extra={"event": "s07_mesh_generation_started", "count": num_materials},
     )
 
+    raw_parallelism_request = os.getenv("LUMINA_RASTER_PARALLELISM")
+    normalized_parallelism_request = (
+        raw_parallelism_request.strip().lower()
+        if raw_parallelism_request is not None
+        else ""
+    )
+    parallelism_requested = normalized_parallelism_request or "auto"
     max_workers = resolve_task_parallelism(
         "raster",
         work_items=num_materials,
         min_parallel_items=2,
         hard_max_workers=4,
+        work_units=int(np.asarray(full_matrix).size),
+        min_parallel_work_units=_MIN_PARALLEL_MESH_WORK_UNITS,
+        estimated_worker_bytes=_estimate_mesh_worker_bytes(full_matrix),
     )
     if os.getenv("LUMINA_DISABLE_PARALLEL_MESH", "0") == "1":
         max_workers = 1
@@ -140,7 +167,13 @@ def run(ctx: dict) -> dict:
     if parallel_enabled:
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             future_map = {
-                pool.submit(_timed_generate_mesh, mesher, full_matrix, mat_id, target_h): mat_id
+                pool.submit(
+                    _timed_generate_mesh,
+                    mesher,
+                    full_matrix,
+                    mat_id,
+                    target_h,
+                ): mat_id
                 for mat_id in range(num_materials)
             }
             for future in as_completed(future_map):
@@ -153,7 +186,12 @@ def run(ctx: dict) -> dict:
     else:
         for mat_id in range(num_materials):
             try:
-                mesh_results[mat_id], mat_timings[mat_id] = _timed_generate_mesh(mesher, full_matrix, mat_id, target_h)
+                mesh_results[mat_id], mat_timings[mat_id] = _timed_generate_mesh(
+                    mesher,
+                    full_matrix,
+                    mat_id,
+                    target_h,
+                )
                 mesh_compute_elapsed += mat_timings[mat_id]
             except (ValueError, TypeError, RuntimeError, OSError) as e:
                 mesh_errors[mat_id] = e
@@ -212,6 +250,7 @@ def run(ctx: dict) -> dict:
         _hifi_timings["mesh_gen_s"] = _mesh_elapsed
         _hifi_timings["mesh_compute_s"] = mesh_compute_elapsed
         _hifi_timings["mesh_apply_transform_s"] = mesh_apply_elapsed
+        _hifi_timings["mesh_parallelism_requested"] = parallelism_requested
         _hifi_timings["mesh_parallelism_workers"] = int(max_workers)
         _log.debug(
             "mesh_gen done: %.3fs",
@@ -223,6 +262,7 @@ def run(ctx: dict) -> dict:
                 "material_count": num_materials,
                 "error_count": len(mesh_errors),
                 "parallel_enabled": bool(parallel_enabled),
+                "parallelism_requested": parallelism_requested,
                 "worker_count": int(max_workers),
             },
         )

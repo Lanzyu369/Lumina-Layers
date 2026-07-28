@@ -85,7 +85,10 @@ def test_color_layer_hole_filter_removes_small_holes(tmp_path):
     processor.sampling_precision = 0.02
     processor.expand_stroke_to_fill = False
     processor.auto_dynamic_range = False
-    processor.img_processor = SimpleNamespace(lut_rgb=[(0, 0, 0)], lut_path="direct.npy")
+    processor.img_processor = SimpleNamespace(
+        lut_rgb=[(0, 0, 0)],
+        lut_path="direct.npy",
+    )
     processor._parse_svg = lambda *_: (
         [{"poly": geom, "color": (0, 128, 255)}],
         1.0,
@@ -183,7 +186,12 @@ def test_vector_parse_clip_artifact_skips_parse_and_clip(tmp_path):
     processor.expand_stroke_to_fill = False
     processor.auto_dynamic_range = False
     processor._parse_clip_cache_path = str(artifact_path)
-    processor.img_processor = SimpleNamespace(lut_rgb=[(0, 0, 0)], lut_path="direct.npy")
+    solve_calls = []
+    processor.img_processor = SimpleNamespace(
+        lut_rgb=[(0, 0, 0)],
+        lut_path="direct.npy",
+        solve_for_fills=lambda fills: solve_calls.append(tuple(fills)),
+    )
     processor._parse_svg = lambda *_args, **_kwargs: pytest.fail("parse should be skipped")
     processor._clip_occlusion = lambda *_args, **_kwargs: pytest.fail("clip should be skipped")
     processor._match_colors = lambda clipped, *_args, **_kwargs: [
@@ -195,6 +203,9 @@ def test_vector_parse_clip_artifact_skips_parse_and_clip(tmp_path):
 
     assert analysis.stage_timings["parse_s"] == 0.0
     assert analysis.stage_timings["occlusion_s"] == 0.0
+    assert analysis.stage_timings["fill_dedup_s"] >= 0.0
+    assert analysis.stage_timings["material_solve_s"] >= 0.0
+    assert solve_calls == [((0, 128, 255),)]
     assert len(analysis.matched_shapes) == 1
 
 

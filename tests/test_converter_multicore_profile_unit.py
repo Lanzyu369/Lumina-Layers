@@ -1,9 +1,11 @@
 from pathlib import Path
+import zipfile
 
 import numpy as np
 import psutil
 import pytest
 import trimesh
+from PIL import Image
 
 import scripts.profile_converter_multicore as profile_module
 from config import ModelingMode
@@ -11,6 +13,7 @@ from scripts.profile_converter_multicore import (
     MATERIAL_PALETTES,
     ProfileCase,
     _ResourceSampler,
+    _canonical_triangle_sha256,
     _cleanup_result_files,
     _extract_vector_timings,
     _parse_args,
@@ -120,6 +123,290 @@ def test_semantic_snapshot_changes_when_geometry_or_layers_change() -> None:
     assert semantic_snapshot(changed_scene) != baseline
 
 
+def test_semantic_snapshot_changes_when_face_colors_change() -> None:
+    baseline_mesh = trimesh.creation.box(extents=(2.0, 1.0, 0.4))
+    baseline_mesh.visual.face_colors = np.array([255, 0, 0, 255], dtype=np.uint8)
+    changed_mesh = baseline_mesh.copy()
+    changed_mesh.visual.face_colors = np.array([0, 0, 255, 255], dtype=np.uint8)
+
+    baseline = semantic_snapshot({"scene": trimesh.Scene(baseline_mesh)})
+    changed = semantic_snapshot({"scene": trimesh.Scene(changed_mesh)})
+
+    assert baseline["geometry"] != changed["geometry"]
+    baseline_visual = next(iter(baseline["geometry"].values()))["visual"]
+    changed_visual = next(iter(changed["geometry"].values()))["visual"]
+    assert baseline_visual["kind"] == "face"
+    assert baseline_visual["face_colors"] != changed_visual["face_colors"]
+
+
+def test_semantic_snapshot_binds_face_colors_across_face_reordering() -> None:
+    box = trimesh.creation.box(extents=(2.0, 1.0, 0.4))
+    vertices = np.asarray(box.vertices, dtype=np.float64)
+    faces = np.asarray(box.faces, dtype=np.int64)
+    colors = np.tile(
+        np.asarray(
+            [[255, 0, 0, 255], [0, 0, 255, 255]],
+            dtype=np.uint8,
+        ),
+        (faces.shape[0] // 2, 1),
+    )
+    first_mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+    first_mesh.visual.face_colors = colors
+    reordered_mesh = trimesh.Trimesh(
+        vertices=vertices,
+        faces=faces[::-1],
+        process=False,
+    )
+    reordered_mesh.visual.face_colors = colors[::-1]
+    first_scene = trimesh.Scene()
+    first_scene.add_geometry(first_mesh, node_name="part", geom_name="part")
+    reordered_scene = trimesh.Scene()
+    reordered_scene.add_geometry(
+        reordered_mesh,
+        node_name="part",
+        geom_name="part",
+    )
+
+    assert semantic_snapshot({"scene": first_scene}) == semantic_snapshot(
+        {"scene": reordered_scene}
+    )
+
+
+def test_semantic_snapshot_changes_when_texture_pixels_change() -> None:
+    box = trimesh.creation.box(extents=(2.0, 1.0, 0.4))
+    vertices = np.asarray(box.vertices, dtype=np.float64)
+    faces = np.asarray(box.faces, dtype=np.int64)
+    xy = vertices[:, :2]
+    uv = (xy - xy.min(axis=0)) / np.maximum(
+        xy.max(axis=0) - xy.min(axis=0),
+        1e-12,
+    )
+
+    def _textured_scene(rgb: tuple[int, int, int]) -> trimesh.Scene:
+        pixels = np.full((2, 2, 3), rgb, dtype=np.uint8)
+        visual = trimesh.visual.texture.TextureVisuals(
+            uv=uv,
+            image=Image.fromarray(pixels),
+        )
+        mesh = trimesh.Trimesh(
+            vertices=vertices,
+            faces=faces,
+            visual=visual,
+            process=False,
+        )
+        scene = trimesh.Scene()
+        scene.add_geometry(mesh, node_name="part", geom_name="part")
+        return scene
+
+    red = semantic_snapshot({"scene": _textured_scene((255, 0, 0))})
+    blue = semantic_snapshot({"scene": _textured_scene((0, 0, 255))})
+
+    assert red["geometry"] != blue["geometry"]
+
+
+def test_canonical_triangle_hash_preserves_face_winding() -> None:
+    vertices = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    forward = trimesh.Trimesh(
+        vertices=vertices,
+        faces=np.array([[0, 1, 2]], dtype=np.int64),
+        process=False,
+    )
+    cyclic = trimesh.Trimesh(
+        vertices=vertices,
+        faces=np.array([[1, 2, 0]], dtype=np.int64),
+        process=False,
+    )
+    reversed_winding = trimesh.Trimesh(
+        vertices=vertices,
+        faces=np.array([[0, 2, 1]], dtype=np.int64),
+        process=False,
+    )
+
+    assert _canonical_triangle_sha256(forward) == _canonical_triangle_sha256(cyclic)
+    assert (
+        _canonical_triangle_sha256(forward)
+        != _canonical_triangle_sha256(reversed_winding)
+    )
+
+
+def test_canonical_triangle_hash_is_stable_across_face_order_and_chunks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vertices = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [2.0, 1.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    first = trimesh.Trimesh(
+        vertices=vertices,
+        faces=np.array([[0, 1, 2], [1, 3, 2]], dtype=np.int64),
+        process=False,
+    )
+    reordered_cyclic = trimesh.Trimesh(
+        vertices=vertices,
+        faces=np.array([[3, 2, 1], [1, 2, 0]], dtype=np.int64),
+        process=False,
+    )
+    monkeypatch.setattr(
+        profile_module,
+        "_CANONICAL_TRIANGLE_CHUNK_FACES",
+        1,
+    )
+
+    assert _canonical_triangle_sha256(first) == _canonical_triangle_sha256(
+        reordered_cyclic,
+    )
+
+
+def test_semantic_snapshot_applies_scene_node_transforms() -> None:
+    mesh = trimesh.creation.box(extents=(2.0, 1.0, 0.4))
+    baseline_scene = trimesh.Scene()
+    baseline_scene.add_geometry(
+        mesh.copy(),
+        node_name="part",
+        geom_name="part",
+    )
+    translated_scene = trimesh.Scene()
+    translated_scene.add_geometry(
+        mesh.copy(),
+        node_name="part",
+        geom_name="part",
+        transform=trimesh.transformations.translation_matrix(
+            [100.0, 0.0, 0.0],
+        ),
+    )
+
+    baseline = semantic_snapshot({"scene": baseline_scene})
+    translated = semantic_snapshot({"scene": translated_scene})
+
+    assert baseline != translated
+    assert baseline["geometry"] == translated["geometry"]
+    assert baseline["scene_instances"] != translated["scene_instances"]
+    assert (
+        baseline["scene_instances"][0]["world"]["visual"]
+        == translated["scene_instances"][0]["world"]["visual"]
+    )
+
+
+def test_semantic_snapshot_preserves_multiple_scene_instances() -> None:
+    mesh = trimesh.creation.box(extents=(2.0, 1.0, 0.4))
+    single = trimesh.Scene()
+    single.add_geometry(mesh.copy(), node_name="first", geom_name="shared")
+    repeated = single.copy()
+    repeated.graph.update(
+        frame_from=repeated.graph.base_frame,
+        frame_to="second",
+        matrix=trimesh.transformations.translation_matrix([5.0, 0.0, 0.0]),
+        geometry="shared",
+    )
+
+    single_snapshot = semantic_snapshot({"scene": single})
+    repeated_snapshot = semantic_snapshot({"scene": repeated})
+
+    assert len(single_snapshot["scene_instances"]) == 1
+    assert len(repeated_snapshot["scene_instances"]) == 2
+    assert single_snapshot != repeated_snapshot
+
+
+def test_semantic_snapshot_preserves_geometry_identity_per_instance() -> None:
+    """Equal meshes swapping transforms must retain material assignment."""
+
+    shared_shape = trimesh.creation.box(extents=(2.0, 1.0, 0.4))
+    first = trimesh.Scene()
+    first.add_geometry(
+        shared_shape.copy(),
+        node_name="red-node",
+        geom_name="red-material",
+    )
+    first.add_geometry(
+        shared_shape.copy(),
+        node_name="blue-node",
+        geom_name="blue-material",
+        transform=trimesh.transformations.translation_matrix([5.0, 0.0, 0.0]),
+    )
+    swapped = trimesh.Scene()
+    swapped.add_geometry(
+        shared_shape.copy(),
+        node_name="red-node",
+        geom_name="red-material",
+        transform=trimesh.transformations.translation_matrix([5.0, 0.0, 0.0]),
+    )
+    swapped.add_geometry(
+        shared_shape.copy(),
+        node_name="blue-node",
+        geom_name="blue-material",
+    )
+
+    first_snapshot = semantic_snapshot({"scene": first})
+    swapped_snapshot = semantic_snapshot({"scene": swapped})
+
+    assert first_snapshot["geometry"] == swapped_snapshot["geometry"]
+    assert first_snapshot["scene_instances"] != swapped_snapshot["scene_instances"]
+
+
+def test_semantic_snapshot_does_not_copy_mesh_visuals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Broken preview-color caches must not block geometry verification."""
+
+    scene = trimesh.Scene()
+    scene.add_geometry(
+        trimesh.creation.box(extents=(2.0, 1.0, 0.4)),
+        node_name="part",
+        geom_name="part",
+    )
+    monkeypatch.setattr(
+        trimesh.Trimesh,
+        "copy",
+        lambda self: pytest.fail("semantic geometry must not copy visuals"),
+    )
+
+    snapshot = semantic_snapshot({"scene": scene})
+
+    assert len(snapshot["scene_instances"]) == 1
+
+
+def test_semantic_snapshot_reuses_identity_geometry_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scene = trimesh.Scene()
+    scene.add_geometry(
+        trimesh.creation.box(extents=(2.0, 1.0, 0.4)),
+        node_name="part",
+        geom_name="part",
+    )
+    original_summary = profile_module._mesh_summary
+    summarized_mesh_ids: list[int] = []
+
+    def _record_summary(
+        mesh: trimesh.Trimesh,
+        **kwargs: object,
+    ) -> dict[str, object]:
+        summarized_mesh_ids.append(id(mesh))
+        return original_summary(mesh, **kwargs)
+
+    monkeypatch.setattr(profile_module, "_mesh_summary", _record_summary)
+
+    snapshot = semantic_snapshot({"scene": scene})
+
+    assert len(summarized_mesh_ids) == 1
+    assert snapshot["scene_instances"][0] == {
+        "geometry": "part",
+        "world": snapshot["geometry"]["part"],
+    }
+
+
 def test_semantic_snapshot_loads_exported_scene_from_result_tuple(
     tmp_path: Path,
 ) -> None:
@@ -134,6 +421,139 @@ def test_semantic_snapshot_loads_exported_scene_from_result_tuple(
     )
 
     assert snapshot["geometry"]
+
+
+def test_semantic_snapshot_detects_export_artifact_change(
+    tmp_path: Path,
+) -> None:
+    scene = _scene_with_geometry_order(("red", "blue"))
+    first_artifact = tmp_path / "first.glb"
+    changed_artifact = tmp_path / "changed.glb"
+    scene.export(first_artifact)
+    changed_artifact.write_bytes(first_artifact.read_bytes() + b"changed")
+
+    first = semantic_snapshot(
+        {
+            "scene": scene,
+            "result_tuple": (None, str(first_artifact), None, "done", None),
+        }
+    )
+    changed = semantic_snapshot(
+        {
+            "scene": scene,
+            "result_tuple": (None, str(changed_artifact), None, "done", None),
+        }
+    )
+
+    assert first["geometry"] == changed["geometry"]
+    assert first["artifacts"] != changed["artifacts"]
+
+
+def test_archive_summary_ignores_member_order_and_zip_timestamp(
+    tmp_path: Path,
+) -> None:
+    first_archive = tmp_path / "first.3mf"
+    reordered_archive = tmp_path / "reordered.3mf"
+    changed_archive = tmp_path / "changed.3mf"
+
+    def _write_archive(
+        path: Path,
+        entries: list[tuple[str, bytes]],
+        date_time: tuple[int, int, int, int, int, int],
+    ) -> None:
+        with zipfile.ZipFile(path, "w") as archive:
+            for name, payload in entries:
+                info = zipfile.ZipInfo(name, date_time=date_time)
+                archive.writestr(info, payload)
+
+    entries = [
+        ("3D/3dmodel.model", b"<model material='red'/>"),
+        ("[Content_Types].xml", b"<Types/>"),
+    ]
+    _write_archive(first_archive, entries, (2025, 1, 1, 0, 0, 0))
+    _write_archive(
+        reordered_archive,
+        list(reversed(entries)),
+        (2026, 7, 28, 12, 0, 0),
+    )
+    _write_archive(
+        changed_archive,
+        [
+            ("3D/3dmodel.model", b"<model material='blue'/>"),
+            entries[1],
+        ],
+        (2026, 7, 28, 12, 0, 0),
+    )
+
+    first = semantic_snapshot(
+        {"result_tuple": (str(first_archive), None, None, "done", None)}
+    )
+    reordered = semantic_snapshot(
+        {"result_tuple": (str(reordered_archive), None, None, "done", None)}
+    )
+    changed = semantic_snapshot(
+        {"result_tuple": (str(changed_archive), None, None, "done", None)}
+    )
+
+    assert first["artifacts"] == reordered["artifacts"]
+    assert first["artifacts"] != changed["artifacts"]
+
+
+def test_archive_summary_streams_members_without_zipfile_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = tmp_path / "model.3mf"
+    with zipfile.ZipFile(artifact, "w") as archive:
+        archive.writestr("3D/3dmodel.model", b"<model/>" * 1024)
+    monkeypatch.setattr(
+        zipfile.ZipFile,
+        "read",
+        lambda *_args, **_kwargs: pytest.fail(
+            "artifact summaries must stream archive members"
+        ),
+    )
+
+    summary = profile_module._export_artifact_summaries(
+        {"result_tuple": (str(artifact), None, None, "done", None)}
+    )
+
+    assert summary["model"]["members"][0]["size_bytes"] == len(b"<model/>") * 1024
+
+
+def test_archive_summary_normalizes_generated_source_filename(
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "first.3mf"
+    second = tmp_path / "second.3mf"
+    changed = tmp_path / "changed.3mf"
+
+    def _write(path: Path, source_file: str, extruder: str) -> None:
+        xml = (
+            "<config><object><part>"
+            f'<metadata key="source_file" value="{source_file}"/>'
+            f'<metadata key="extruder" value="{extruder}"/>'
+            "</part></object></config>"
+        ).encode("utf-8")
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr("Metadata/model_settings.config", xml)
+
+    _write(first, "first_generated_name.3mf", "1")
+    _write(second, "second_generated_name.3mf", "1")
+    _write(changed, "third_generated_name.3mf", "2")
+
+    first_summary = profile_module._export_artifact_summaries(
+        {"result_tuple": (str(first), None, None, "done", None)}
+    )
+    second_summary = profile_module._export_artifact_summaries(
+        {"result_tuple": (str(second), None, None, "done", None)}
+    )
+    changed_summary = profile_module._export_artifact_summaries(
+        {"result_tuple": (str(changed), None, None, "done", None)}
+    )
+
+    assert first_summary == second_summary
+    assert first_summary != changed_summary
 
 
 def test_summarize_runs_reports_cold_warm_median_and_p90() -> None:
@@ -152,7 +572,10 @@ def test_summarize_runs_reports_cold_warm_median_and_p90() -> None:
 
 def test_build_report_omits_absolute_source_and_material_paths(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("OMP_NUM_THREADS", "1")
+    monkeypatch.setenv("VECLIB_MAXIMUM_THREADS", "1")
     source = tmp_path / "private-user-image.jpg"
     source.write_bytes(b"image")
     case = ProfileCase(
@@ -172,6 +595,162 @@ def test_build_report_omits_absolute_source_and_material_paths(
     assert report["input"]["sha256"]
     assert report["materials"]["count"] == 12
     assert "directory_names" not in report["materials"]
+    assert report["thread_environment"]["OMP_NUM_THREADS"] == "1"
+    assert report["thread_environment"]["VECLIB_MAXIMUM_THREADS"] == "1"
+
+
+def test_build_report_records_identical_semantic_snapshots(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "fixture.svg"
+    source.write_text("<svg/>", encoding="utf-8")
+    case = ProfileCase(
+        name="vector-8",
+        kind="vector",
+        input_path=source,
+        target_width_mm=20.0,
+        material_count=8,
+    )
+    snapshot = {"matched_rgb": {"sha256": "same"}}
+
+    report = build_report(
+        case,
+        runs=[
+            {
+                "total_s": 1.0,
+                "peak_rss_mb": 2.0,
+                "semantic_snapshot": snapshot,
+            },
+            {
+                "total_s": 1.1,
+                "peak_rss_mb": 2.1,
+                "semantic_snapshot": dict(snapshot),
+            },
+        ],
+    )
+
+    assert report["quality"]["semantic_snapshots_available"] is True
+    assert report["quality"]["semantic_snapshots_equal"] is True
+    assert report["quality"]["semantic_snapshot_count"] == 2
+    assert report["quality"]["reference_sha256"]
+
+
+def test_build_report_single_snapshot_is_captured_not_internally_compared(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "input.svg"
+    source.write_text("<svg/>", encoding="utf-8")
+    case = ProfileCase(
+        name="vector-8",
+        kind="vector",
+        input_path=source,
+        target_width_mm=20.0,
+        material_count=8,
+    )
+
+    report = build_report(
+        case,
+        [
+            {
+                "total_s": 1.0,
+                "peak_rss_mb": 2.0,
+                "semantic_snapshot": {"quality": "captured"},
+            },
+        ],
+    )
+
+    assert report["quality"]["semantic_snapshot_count"] == 1
+    assert report["quality"]["semantic_snapshots_available"] is True
+    assert report["quality"]["semantic_snapshots_equal"] is False
+    assert report["quality"]["reference_sha256"]
+
+
+def test_external_semantic_reference_requires_equal_hash(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "input.svg"
+    source.write_text("<svg/>", encoding="utf-8")
+    case = ProfileCase(
+        name="vector-8",
+        kind="vector",
+        input_path=source,
+        target_width_mm=20.0,
+        material_count=8,
+    )
+    reference = build_report(
+        case,
+        [
+            {
+                "total_s": 1.0,
+                "peak_rss_mb": 2.0,
+                "semantic_snapshot": {"quality": "reference"},
+            },
+        ],
+    )
+    matching = build_report(
+        case,
+        [
+            {
+                "total_s": 2.0,
+                "peak_rss_mb": 3.0,
+                "semantic_snapshot": {"quality": "reference"},
+            },
+        ],
+    )
+    changed = build_report(
+        case,
+        [
+            {
+                "total_s": 2.0,
+                "peak_rss_mb": 3.0,
+                "semantic_snapshot": {"quality": "changed"},
+            },
+        ],
+    )
+
+    assert profile_module._assert_semantic_reference(reference, matching)
+    with pytest.raises(ValueError, match="differs from reference"):
+        profile_module._assert_semantic_reference(reference, changed)
+
+    wrong_schema = {**matching, "schema": "legacy"}
+    with pytest.raises(ValueError, match="schema does not match"):
+        profile_module._assert_semantic_reference(reference, wrong_schema)
+
+    wrong_phase = {**matching, "phase": "generate"}
+    reference["phase"] = "preview"
+    with pytest.raises(ValueError, match="phase does not match"):
+        profile_module._assert_semantic_reference(reference, wrong_phase)
+
+
+def test_build_report_rejects_semantic_snapshot_mismatch(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "fixture.svg"
+    source.write_text("<svg/>", encoding="utf-8")
+    case = ProfileCase(
+        name="vector-8",
+        kind="vector",
+        input_path=source,
+        target_width_mm=20.0,
+        material_count=8,
+    )
+
+    with pytest.raises(ValueError, match="semantic snapshots differ"):
+        build_report(
+            case,
+            runs=[
+                {
+                    "total_s": 1.0,
+                    "peak_rss_mb": 2.0,
+                    "semantic_snapshot": {"sha256": "first"},
+                },
+                {
+                    "total_s": 1.1,
+                    "peak_rss_mb": 2.1,
+                    "semantic_snapshot": {"sha256": "changed"},
+                },
+            ],
+        )
 
 
 def test_cleanup_result_files_removes_pipeline_result_tuple_artifacts(
@@ -226,10 +805,12 @@ def test_parse_args_supports_external_sampling_without_cprofile(
             "--phase",
             "preview",
             "--no-cprofile",
+            "--timing-only",
         ]
     )
 
     assert args.no_cprofile is True
+    assert args.timing_only is True
 
 
 def test_execute_case_can_disable_cprofile(
@@ -253,9 +834,146 @@ def test_execute_case_can_disable_cprofile(
             "matched_rgb": np.zeros((1, 1, 3), dtype=np.uint8),
             "material_matrix": np.zeros((1, 1, 1), dtype=np.int8),
             "mask_solid": np.ones((1, 1), dtype=bool),
+            "_hifi_timings": {
+                "mesh_gen_s": 0.25,
+                "mesh_parallelism_workers": 2,
+            },
         },
     )
+    monkeypatch.setenv("LUMINA_RASTER_PARALLELISM", "4")
 
     metrics = execute_case(case, "preview", enable_cprofile=False)
 
     assert metrics["cprofile"] == ""
+    assert metrics["hifi_timings"]["mesh_gen_s"] == 0.25
+    assert metrics["parallelism"] == {
+        "env_var": "LUMINA_RASTER_PARALLELISM",
+        "requested": "4",
+        "effective_workers": 2,
+    }
+
+
+def test_execute_case_timing_only_skips_semantic_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "input.jpg"
+    source.write_bytes(b"profile-stub")
+    case = ProfileCase(
+        name="raster-8",
+        kind="raster",
+        input_path=source,
+        target_width_mm=20.0,
+        material_count=8,
+    )
+    monkeypatch.setattr(
+        profile_module,
+        "run_preview_pipeline",
+        lambda ctx: {
+            **ctx,
+            "matched_rgb": np.zeros((1, 1, 3), dtype=np.uint8),
+        },
+    )
+    monkeypatch.setattr(
+        profile_module,
+        "semantic_snapshot",
+        lambda result: pytest.fail("timing-only must skip semantic hashing"),
+    )
+
+    metrics = execute_case(
+        case,
+        "preview",
+        enable_cprofile=False,
+        capture_semantics=False,
+    )
+
+    assert "semantic_snapshot" not in metrics
+
+
+def test_render_markdown_labels_timing_only_quality(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "input.svg"
+    source.write_text("<svg/>", encoding="utf-8")
+    case = ProfileCase(
+        name="vector-8",
+        kind="vector",
+        input_path=source,
+        target_width_mm=20.0,
+        material_count=8,
+    )
+    report = build_report(
+        case,
+        [{"total_s": 1.0, "peak_rss_mb": 2.0}],
+    )
+    report["phase"] = "preview"
+
+    markdown = profile_module._render_markdown(report)
+
+    assert "Quality evidence: `timing only (no semantic evidence)`" in markdown
+
+
+def test_render_markdown_labels_exact_semantic_quality(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "input.svg"
+    source.write_text("<svg/>", encoding="utf-8")
+    case = ProfileCase(
+        name="vector-8",
+        kind="vector",
+        input_path=source,
+        target_width_mm=20.0,
+        material_count=8,
+    )
+    report = build_report(
+        case,
+        [
+            {
+                "total_s": 1.0,
+                "peak_rss_mb": 2.0,
+                "semantic_snapshot": {"quality": "exact"},
+            },
+            {
+                "total_s": 2.0,
+                "peak_rss_mb": 3.0,
+                "semantic_snapshot": {"quality": "exact"},
+            },
+        ],
+    )
+    report["phase"] = "preview"
+
+    markdown = profile_module._render_markdown(report)
+
+    assert "Quality evidence: `exact semantic snapshots`" in markdown
+
+
+def test_render_markdown_labels_single_captured_snapshot(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "input.svg"
+    source.write_text("<svg/>", encoding="utf-8")
+    case = ProfileCase(
+        name="vector-8",
+        kind="vector",
+        input_path=source,
+        target_width_mm=20.0,
+        material_count=8,
+    )
+    report = build_report(
+        case,
+        [
+            {
+                "total_s": 1.0,
+                "peak_rss_mb": 2.0,
+                "semantic_snapshot": {"quality": "captured"},
+            },
+        ],
+    )
+    report["phase"] = "preview"
+
+    markdown = profile_module._render_markdown(report)
+
+    assert (
+        "Quality evidence: `semantic snapshot captured "
+        "(not internally compared)`"
+    ) in markdown

@@ -78,6 +78,80 @@ def test_small_workload_stays_serial(
     )
 
 
+def test_tiny_work_units_stay_serial_even_with_multiple_items(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_cpu_count(monkeypatch, 10)
+    monkeypatch.setenv("LUMINA_RASTER_PARALLELISM", "8")
+    monkeypatch.setenv("LUMINA_MAX_WORKERS", "1")
+
+    assert (
+        resolve_task_parallelism(
+            "raster",
+            work_items=2,
+            work_units=2,
+            min_parallel_work_units=100,
+        )
+        == 1
+    )
+
+
+def test_available_memory_caps_worker_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gib = 1024**3
+    _set_cpu_count(monkeypatch, 16)
+    monkeypatch.setenv("LUMINA_RASTER_PARALLELISM", "8")
+    monkeypatch.setenv("LUMINA_MAX_WORKERS", "1")
+
+    resolved = resolve_task_parallelism(
+        "raster",
+        work_items=12,
+        estimated_worker_bytes=512 * 1024**2,
+        available_memory_bytes=2 * gib,
+        hard_max_workers=8,
+    )
+
+    assert resolved == 2
+
+
+def test_unknown_available_memory_fails_closed_to_serial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_cpu_count(monkeypatch, 16)
+    monkeypatch.setenv("LUMINA_RASTER_PARALLELISM", "8")
+    monkeypatch.setenv("LUMINA_MAX_WORKERS", "1")
+    monkeypatch.setattr(
+        task_parallelism,
+        "_available_memory_bytes",
+        lambda: None,
+    )
+
+    resolved = resolve_task_parallelism(
+        "raster",
+        work_items=12,
+        estimated_worker_bytes=512 * 1024**2,
+        hard_max_workers=8,
+    )
+
+    assert resolved == 1
+
+
+def test_nested_parallel_worker_scope_forces_serial_and_restores_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_cpu_count(monkeypatch, 8)
+    monkeypatch.setenv("LUMINA_VECTOR_PARALLELISM", "4")
+    monkeypatch.setenv("LUMINA_MAX_WORKERS", "1")
+
+    assert resolve_task_parallelism("vector", work_items=20) == 4
+    with task_parallelism.task_parallelism_worker_scope():
+        assert resolve_task_parallelism("vector", work_items=20) == 1
+        with task_parallelism.task_parallelism_worker_scope():
+            assert resolve_task_parallelism("vector", work_items=20) == 1
+    assert resolve_task_parallelism("vector", work_items=20) == 4
+
+
 def test_invalid_value_warns_once_and_falls_back_to_auto(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -106,14 +180,31 @@ def test_invalid_value_warns_once_and_falls_back_to_auto(
     assert records[0].raw_value == "not-a-count"
 
 
-@pytest.mark.parametrize("raw_value", ["0", "-3", " ", "AUTO", " auto "])
-def test_non_positive_and_auto_spellings_use_auto_policy(
+@pytest.mark.parametrize(
+    ("raw_value", "warns"),
+    [
+        ("0", True),
+        ("-3", True),
+        (" ", True),
+        ("AUTO", False),
+        (" auto ", False),
+    ],
+)
+def test_non_positive_whitespace_and_auto_spellings_use_auto_policy(
     monkeypatch: pytest.MonkeyPatch,
     raw_value: str,
+    warns: bool,
 ) -> None:
     _set_cpu_count(monkeypatch, 8)
     monkeypatch.setenv("LUMINA_RASTER_PARALLELISM", raw_value)
     monkeypatch.setenv("LUMINA_MAX_WORKERS", "2")
     task_parallelism._WARNED_INVALID_VALUES.clear()
+    observed_warnings: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        task_parallelism,
+        "_warn_invalid_once",
+        lambda env_var, value: observed_warnings.append((env_var, value)),
+    )
 
     assert resolve_task_parallelism("raster", work_items=20) == 4
+    assert bool(observed_warnings) is warns

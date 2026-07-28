@@ -18,6 +18,8 @@ import statistics
 import sys
 import threading
 import time
+import xml.etree.ElementTree as ET
+import zipfile
 from dataclasses import dataclass
 from io import StringIO
 from pathlib import Path
@@ -67,6 +69,15 @@ _NUMERIC_RUN_METRICS = (
     "peak_thread_count",
     "peak_child_process_count",
 )
+_THREAD_ENVIRONMENT_KEYS = (
+    "OMP_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+    "BLIS_NUM_THREADS",
+)
+_CANONICAL_TRIANGLE_CHUNK_FACES = 250_000
 
 
 @dataclass(frozen=True)
@@ -183,29 +194,225 @@ def _array_summary(value: object) -> dict[str, object] | None:
     }
 
 
-def _canonical_triangle_sha256(mesh: trimesh.Trimesh) -> str:
+def _canonical_oriented_triangle_rows(
+    mesh: trimesh.Trimesh,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return winding-preserving triangle rows and their cyclic rotations."""
+
     vertices = np.round(np.asarray(mesh.vertices, dtype=np.float64), 9)
+    vertices[vertices == 0.0] = 0.0
     faces = np.asarray(mesh.faces, dtype=np.int64)
-    triangles = vertices[faces]
-    vertex_order = np.lexsort(
-        (triangles[:, :, 2], triangles[:, :, 1], triangles[:, :, 0]),
-        axis=1,
+    flattened = np.empty((faces.shape[0], 9), dtype=np.float64)
+    rotations = np.zeros((faces.shape[0],), dtype=np.uint8)
+
+    # A triangle may start at any of its three vertices without changing its
+    # directed face. Only canonicalize over cyclic rotations: sorting all
+    # vertices would also erase winding and could hide flipped normals.
+    # Process bounded chunks so multi-million-face exports do not retain three
+    # full triangle tensors at once during post-run quality verification.
+    chunk_size = max(1, int(_CANONICAL_TRIANGLE_CHUNK_FACES))
+    for start in range(0, faces.shape[0], chunk_size):
+        end = min(start + chunk_size, faces.shape[0])
+        triangles = vertices[faces[start:end]]
+        canonical_chunk = np.ascontiguousarray(
+            triangles.reshape((-1, 9)),
+        ).copy()
+        for vertex_order in ((1, 2, 0), (2, 0, 1)):
+            candidate = np.ascontiguousarray(
+                triangles[:, vertex_order, :].reshape((-1, 9)),
+            )
+            candidate_is_less = np.zeros(
+                (candidate.shape[0],),
+                dtype=bool,
+            )
+            columns_are_equal = np.ones(
+                (candidate.shape[0],),
+                dtype=bool,
+            )
+            for column_index in range(candidate.shape[1]):
+                candidate_column = candidate[:, column_index]
+                current_column = canonical_chunk[:, column_index]
+                is_less = candidate_column < current_column
+                is_greater = candidate_column > current_column
+                candidate_is_less |= columns_are_equal & is_less
+                columns_are_equal &= ~(is_less | is_greater)
+            canonical_chunk[candidate_is_less] = candidate[
+                candidate_is_less
+            ]
+            rotations[start:end][candidate_is_less] = vertex_order[0]
+        flattened[start:end] = canonical_chunk
+    return flattened, rotations
+
+
+def _semantic_record_order(
+    triangle_rows: np.ndarray,
+    payload_rows: np.ndarray | None = None,
+) -> np.ndarray:
+    """Return stable lexicographic order for geometry-bound semantic rows."""
+
+    columns = [triangle_rows[:, index] for index in range(triangle_rows.shape[1])]
+    if payload_rows is not None:
+        payload = np.asarray(payload_rows)
+        if payload.ndim == 1:
+            payload = payload[:, None]
+        columns.extend(payload[:, index] for index in range(payload.shape[1]))
+    return np.lexsort(
+        tuple(reversed(columns)),
     )
-    ordered_vertices = np.take_along_axis(
-        triangles,
-        vertex_order[:, :, np.newaxis],
-        axis=1,
-    )
-    flattened = np.ascontiguousarray(ordered_vertices.reshape((-1, 9)))
-    face_order = np.lexsort(
-        tuple(flattened[:, index] for index in range(8, -1, -1))
-    )
-    canonical = np.ascontiguousarray(flattened[face_order])
+
+
+def _canonical_triangle_sha256(mesh: trimesh.Trimesh) -> str:
+    triangle_rows, _rotations = _canonical_oriented_triangle_rows(mesh)
+    face_order = _semantic_record_order(triangle_rows)
+    canonical = np.ascontiguousarray(triangle_rows[face_order])
     return hashlib.sha256(memoryview(canonical).cast("B")).hexdigest()
 
 
-def _mesh_summary(mesh: trimesh.Trimesh) -> dict[str, object]:
+def _semantic_payload_summary(
+    triangle_rows: np.ndarray,
+    payload_rows: np.ndarray,
+) -> dict[str, object]:
+    """Hash values jointly with the canonical geometry elements they affect."""
+
+    payload = np.asarray(payload_rows)
+    if payload.ndim == 1:
+        payload = payload[:, None]
+    if payload.shape[0] != triangle_rows.shape[0]:
+        raise ValueError("visual payload row count does not match mesh faces")
+    order = _semantic_record_order(triangle_rows, payload)
+    canonical_triangles = np.ascontiguousarray(triangle_rows[order])
+    canonical_payload = np.ascontiguousarray(payload[order])
+    digest = hashlib.sha256()
+    digest.update(canonical_triangles.dtype.str.encode("ascii"))
+    digest.update(memoryview(canonical_triangles).cast("B"))
+    digest.update(canonical_payload.dtype.str.encode("ascii"))
+    digest.update(repr(tuple(int(item) for item in canonical_payload.shape)).encode("ascii"))
+    digest.update(memoryview(canonical_payload).cast("B"))
+    return {
+        "shape": [int(item) for item in canonical_payload.shape],
+        "dtype": canonical_payload.dtype.str,
+        "canonical_sha256": digest.hexdigest(),
+    }
+
+
+def _canonical_corner_payload_rows(
+    mesh: trimesh.Trimesh,
+    vertex_values: np.ndarray,
+    rotations: np.ndarray,
+) -> np.ndarray:
+    """Bind vertex values to oriented triangle corners in canonical rotation."""
+
+    values = np.asarray(vertex_values)
+    faces = np.asarray(mesh.faces, dtype=np.int64)
+    if values.ndim == 1:
+        values = values[:, None]
+    if values.shape[0] != len(mesh.vertices):
+        raise ValueError("vertex visual row count does not match mesh vertices")
+    corners = values[faces]
+    rotated = corners.copy()
+    for rotation, vertex_order in (
+        (1, (1, 2, 0)),
+        (2, (2, 0, 1)),
+    ):
+        mask = rotations == rotation
+        if np.any(mask):
+            rotated[mask] = corners[mask][:, vertex_order, :]
+    return rotated.reshape((faces.shape[0], -1))
+
+
+def _texture_image_summary(value: object) -> dict[str, object] | None:
+    """Return exact texture pixels, failing closed for unsupported values."""
+
+    if value is None:
+        return None
+    image_array = np.asarray(value)
+    if image_array.dtype == object or image_array.ndim < 2:
+        raise ValueError("unsupported texture image payload")
+    return _array_summary(image_array)
+
+
+def _mesh_visual_summary(
+    mesh: trimesh.Trimesh,
+    *,
+    triangle_rows: np.ndarray,
+    rotations: np.ndarray,
+) -> dict[str, object]:
+    """Summarize visible colors bound to canonical geometry elements."""
+
+    visual = mesh.visual
+    kind = str(getattr(visual, "kind", None) or "none")
+    summary: dict[str, object] = {"kind": kind}
+    if kind == "face":
+        summary["face_colors"] = _semantic_payload_summary(
+            triangle_rows,
+            np.asarray(visual.face_colors),
+        )
+    elif kind == "vertex":
+        corner_colors = _canonical_corner_payload_rows(
+            mesh,
+            np.asarray(visual.vertex_colors),
+            rotations,
+        )
+        summary["vertex_colors"] = _semantic_payload_summary(
+            triangle_rows,
+            corner_colors,
+        )
+    elif kind == "texture":
+        uv = getattr(visual, "uv", None)
+        if uv is None:
+            raise ValueError("texture visual has no UV coordinates")
+        corner_uv = _canonical_corner_payload_rows(
+            mesh,
+            np.asarray(uv),
+            rotations,
+        )
+        summary["uv"] = _semantic_payload_summary(
+            triangle_rows,
+            corner_uv,
+        )
+        material = getattr(visual, "material", None)
+        if material is not None:
+            for attribute in (
+                "baseColorFactor",
+                "diffuse",
+                "main_color",
+                "name",
+            ):
+                value = getattr(material, attribute, None)
+                if value is None:
+                    continue
+                if isinstance(value, str):
+                    summary[f"material_{attribute}"] = value
+                    continue
+                try:
+                    summary[f"material_{attribute}"] = _array_summary(value)
+                except (TypeError, ValueError):
+                    summary[f"material_{attribute}"] = str(value)
+            for texture_attribute in (
+                "image",
+                "baseColorTexture",
+                "metallicRoughnessTexture",
+                "normalTexture",
+                "emissiveTexture",
+                "occlusionTexture",
+            ):
+                texture = getattr(material, texture_attribute, None)
+                texture_summary = _texture_image_summary(texture)
+                if texture_summary is not None:
+                    summary[f"material_{texture_attribute}"] = texture_summary
+    return summary
+
+
+def _mesh_summary(
+    mesh: trimesh.Trimesh,
+    *,
+    visual_source: trimesh.Trimesh | None = None,
+) -> dict[str, object]:
+    triangle_rows, rotations = _canonical_oriented_triangle_rows(mesh)
+    face_order = _semantic_record_order(triangle_rows)
+    canonical_triangles = np.ascontiguousarray(triangle_rows[face_order])
     bounds = np.asarray(mesh.bounds, dtype=np.float64)
+    source = visual_source if visual_source is not None else mesh
     return {
         "vertices": int(len(mesh.vertices)),
         "faces": int(len(mesh.faces)),
@@ -217,8 +424,69 @@ def _mesh_summary(mesh: trimesh.Trimesh) -> dict[str, object]:
         "degenerate_faces": int(
             np.count_nonzero(np.asarray(mesh.area_faces) <= 1e-12)
         ),
-        "canonical_triangle_sha256": _canonical_triangle_sha256(mesh),
+        "canonical_triangle_sha256": hashlib.sha256(
+            memoryview(canonical_triangles).cast("B"),
+        ).hexdigest(),
+        "visual": _mesh_visual_summary(
+            source,
+            triangle_rows=triangle_rows,
+            rotations=rotations,
+        ),
     }
+
+
+def _scene_instance_summaries(
+    scene: trimesh.Scene,
+    geometry_summaries: dict[str, object] | None = None,
+) -> list[dict[str, object]]:
+    """Summarize every named geometry instance in world coordinates."""
+
+    summaries: list[dict[str, object]] = []
+    reusable_summaries = geometry_summaries or {}
+    for node_name in sorted(scene.graph.nodes_geometry, key=str):
+        transform, geometry_name = scene.graph[node_name]
+        raw = scene.geometry.get(geometry_name)
+        if not isinstance(raw, trimesh.Trimesh):
+            continue
+        world_transform = np.asarray(transform, dtype=np.float64)
+        geometry_key = str(geometry_name)
+        if (
+            np.array_equal(world_transform, np.eye(4, dtype=np.float64))
+            and geometry_key in reusable_summaries
+        ):
+            summaries.append(
+                {
+                    "geometry": geometry_key,
+                    "world": reusable_summaries[geometry_key],
+                }
+            )
+            continue
+        if np.array_equal(world_transform, np.eye(4, dtype=np.float64)):
+            world_mesh = raw
+        else:
+            world_mesh = trimesh.Trimesh(
+                vertices=trimesh.transform_points(
+                    np.asarray(raw.vertices, dtype=np.float64),
+                    world_transform,
+                ),
+                faces=np.asarray(raw.faces, dtype=np.int64),
+                process=False,
+            )
+        world_summary = _mesh_summary(world_mesh, visual_source=raw)
+        summaries.append(
+            {
+                "geometry": geometry_key,
+                "world": world_summary,
+            }
+        )
+
+    # Node names and insertion order are serialization details. Geometry names
+    # carry stable material identity, so retain them while preserving duplicate
+    # entries for repeated instances.
+    return sorted(
+        summaries,
+        key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")),
+    )
 
 
 def _load_exported_scene(
@@ -244,6 +512,126 @@ def _load_exported_scene(
     return None, None
 
 
+def _export_artifact_summaries(
+    ctx: dict[str, Any],
+) -> dict[str, object]:
+    """Hash final artifacts while ignoring ZIP compression and timestamps."""
+
+    result_tuple = ctx.get("result_tuple")
+    tuple_values = (
+        list(result_tuple)
+        if isinstance(result_tuple, (list, tuple))
+        else []
+    )
+    candidates = (
+        (
+            "model",
+            tuple_values[0] if len(tuple_values) > 0 else ctx.get("out_path"),
+        ),
+        (
+            "preview",
+            tuple_values[1] if len(tuple_values) > 1 else ctx.get("glb_path"),
+        ),
+        (
+            "recipe",
+            tuple_values[4]
+            if len(tuple_values) > 4
+            else ctx.get("color_recipe_path"),
+        ),
+    )
+    summaries: dict[str, object] = {}
+    for role, raw_path in candidates:
+        if not raw_path:
+            continue
+        path = Path(str(raw_path))
+        if not path.is_file():
+            raise ValueError(f"profile output artifact is missing for role {role}")
+        suffix = path.suffix.lower()
+        if suffix in {".3mf", ".zip"}:
+            try:
+                with zipfile.ZipFile(path, "r") as archive:
+                    members = []
+                    for member_name in sorted(archive.namelist()):
+                        if member_name.endswith("/"):
+                            continue
+                        member_info = archive.getinfo(member_name)
+                        digest = hashlib.sha256()
+                        size_bytes = 0
+                        canonicalization = "raw_member"
+                        if (
+                            member_name == "Metadata/model_settings.config"
+                            and member_info.file_size <= 16 * 1024 * 1024
+                        ):
+                            with archive.open(member_name, "r") as member:
+                                payload = member.read()
+                            root = ET.fromstring(payload)
+                            for element in root.iter():
+                                if (
+                                    element.tag.rsplit("}", 1)[-1] == "metadata"
+                                    and element.attrib.get("key") == "source_file"
+                                ):
+                                    element.attrib["value"] = (
+                                        "<profile-source-file>"
+                                    )
+                                sorted_attributes = sorted(
+                                    element.attrib.items()
+                                )
+                                element.attrib.clear()
+                                element.attrib.update(sorted_attributes)
+                                if (
+                                    element.text is not None
+                                    and not element.text.strip()
+                                ):
+                                    element.text = None
+                                if (
+                                    element.tail is not None
+                                    and not element.tail.strip()
+                                ):
+                                    element.tail = None
+                            canonical_payload = ET.tostring(
+                                root,
+                                encoding="utf-8",
+                            )
+                            digest.update(canonical_payload)
+                            size_bytes = len(canonical_payload)
+                            canonicalization = (
+                                "xml_without_source_filename"
+                            )
+                        else:
+                            with archive.open(member_name, "r") as member:
+                                for chunk in iter(
+                                    lambda: member.read(1024 * 1024),
+                                    b"",
+                                ):
+                                    digest.update(chunk)
+                                    size_bytes += len(chunk)
+                        members.append(
+                            {
+                                "name": member_name,
+                                "size_bytes": size_bytes,
+                                "sha256": digest.hexdigest(),
+                                "canonicalization": canonicalization,
+                            }
+                        )
+            except (OSError, zipfile.BadZipFile, KeyError) as exc:
+                raise ValueError(
+                    f"profile output archive is unreadable for role {role}"
+                ) from exc
+            summaries[role] = {
+                "kind": "zip_members",
+                "suffix": suffix,
+                "members": members,
+            }
+        else:
+            summaries[role] = {
+                "kind": "file",
+                "suffix": suffix,
+                "size_bytes": path.stat().st_size,
+                "sha256": _sha256_file(path),
+            }
+    return summaries
+
+
 def semantic_snapshot(ctx: dict[str, Any]) -> dict[str, object]:
     """Summarize output arrays and geometry using deterministic semantics.
 
@@ -265,11 +653,13 @@ def semantic_snapshot(ctx: dict[str, Any]) -> dict[str, object]:
     if not isinstance(scene, trimesh.Scene):
         scene, geometry_source = _load_exported_scene(ctx)
     geometry: dict[str, object] = {}
+    scene_instances: list[dict[str, object]] = []
     if isinstance(scene, trimesh.Scene):
         for name in sorted(scene.geometry):
             raw = scene.geometry[name]
             if isinstance(raw, trimesh.Trimesh):
                 geometry[str(name)] = _mesh_summary(raw)
+        scene_instances = _scene_instance_summaries(scene, geometry)
     return {
         "matched_rgb": _array_summary(payload.get("matched_rgb")),
         "material_matrix": _array_summary(payload.get("material_matrix")),
@@ -277,6 +667,8 @@ def semantic_snapshot(ctx: dict[str, Any]) -> dict[str, object]:
         "slot_names": [str(item) for item in payload.get("slot_names") or []],
         "geometry_source": geometry_source,
         "geometry": geometry,
+        "scene_instances": scene_instances,
+        "artifacts": _export_artifact_summaries(ctx),
     }
 
 
@@ -363,15 +755,60 @@ def build_report(
 
     Returns:
         Sanitized, JSON-serializable report. 已脱敏且可序列化的报告。
+
+    Raises:
+        ValueError: If measured semantic snapshots differ between runs.
+            多轮测量的语义快照不一致时抛出。
     """
 
+    semantic_snapshots = [
+        run["semantic_snapshot"]
+        for run in runs
+        if "semantic_snapshot" in run
+    ]
+    semantic_snapshot_count = len(semantic_snapshots)
+    semantic_snapshots_available = (
+        bool(semantic_snapshots)
+        and semantic_snapshot_count == len(runs)
+    )
+    semantic_snapshots_consistent = (
+        semantic_snapshots_available
+        and all(
+            snapshot == semantic_snapshots[0]
+            for snapshot in semantic_snapshots[1:]
+        )
+    )
+    semantic_snapshots_equal = (
+        semantic_snapshot_count >= 2
+        and semantic_snapshots_consistent
+    )
+    if (
+        semantic_snapshots_available
+        and semantic_snapshot_count >= 2
+        and not semantic_snapshots_consistent
+    ):
+        raise ValueError("Profile run semantic snapshots differ")
+    reference_sha256 = None
+    if semantic_snapshots_consistent:
+        reference_payload = json.dumps(
+            semantic_snapshots[0],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        reference_sha256 = hashlib.sha256(reference_payload).hexdigest()
+
     return {
-        "schema": "lumina_converter_multicore_profile_v1",
+        "schema": "lumina_converter_multicore_profile_v2",
         "machine": {
             "platform": platform.platform(),
             "machine": platform.machine(),
             "python": sys.version.split()[0],
             "visible_cpu": os.cpu_count(),
+        },
+        "thread_environment": {
+            key: os.getenv(key)
+            for key in _THREAD_ENVIRONMENT_KEYS
         },
         "input": {
             "name": case.input_path.name,
@@ -385,9 +822,44 @@ def build_report(
                 "\n".join(MATERIAL_PALETTES[case.material_count]).encode("utf-8")
             ).hexdigest(),
         },
+        "quality": {
+            "semantic_snapshot_count": semantic_snapshot_count,
+            "semantic_snapshots_available": semantic_snapshots_available,
+            "semantic_snapshots_equal": semantic_snapshots_equal,
+            "reference_sha256": reference_sha256,
+        },
         "runs": runs,
         "summary": summarize_runs(runs),
     }
+
+
+def _assert_semantic_reference(
+    reference_report: dict[str, object],
+    candidate_report: dict[str, object],
+) -> str:
+    """Fail unless two reports carry the same complete semantic snapshot hash."""
+
+    if reference_report.get("schema") != candidate_report.get("schema"):
+        raise ValueError("Semantic reference schema does not match candidate")
+    for metadata_key in ("input", "materials", "phase"):
+        if reference_report.get(metadata_key) != candidate_report.get(metadata_key):
+            raise ValueError(
+                f"Semantic reference {metadata_key} does not match candidate"
+            )
+    reference_quality = reference_report.get("quality")
+    candidate_quality = candidate_report.get("quality")
+    if not isinstance(reference_quality, dict) or not isinstance(
+        candidate_quality,
+        dict,
+    ):
+        raise ValueError("Semantic reference report has no quality metadata")
+    reference_hash = reference_quality.get("reference_sha256")
+    candidate_hash = candidate_quality.get("reference_sha256")
+    if not isinstance(reference_hash, str) or not isinstance(candidate_hash, str):
+        raise ValueError("Semantic reference comparison requires captured snapshots")
+    if reference_hash != candidate_hash:
+        raise ValueError("Candidate semantic snapshot differs from reference")
+    return candidate_hash
 
 
 class _ResourceSampler:
@@ -468,11 +940,50 @@ def _extract_vector_timings(result: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def _parallelism_metadata(
+    kind: Literal["raster", "vector"],
+    *,
+    hifi_timings: dict[str, Any],
+    vector_timings: dict[str, Any],
+) -> dict[str, object]:
+    """Return requested and observed worker counts for one profile run."""
+
+    env_var = (
+        "LUMINA_RASTER_PARALLELISM"
+        if kind == "raster"
+        else "LUMINA_VECTOR_PARALLELISM"
+    )
+    raw_requested = os.getenv(env_var)
+    requested = "auto" if raw_requested is None else raw_requested.strip()
+    if requested == "":
+        requested = "<empty>"
+    raw_effective = (
+        hifi_timings.get("mesh_parallelism_workers")
+        if kind == "raster"
+        else vector_timings.get("material_parallelism_workers")
+    )
+    effective_workers: int | None
+    try:
+        effective_workers = (
+            None
+            if raw_effective is None
+            else max(1, int(float(raw_effective)))
+        )
+    except (TypeError, ValueError):
+        effective_workers = None
+    return {
+        "env_var": env_var,
+        "requested": requested,
+        "effective_workers": effective_workers,
+    }
+
+
 def execute_case(
     case: ProfileCase,
     phase: Literal["preview", "generate"],
     *,
     enable_cprofile: bool = True,
+    capture_semantics: bool = True,
 ) -> dict[str, object]:
     """Execute and profile one quality-locked conversion phase.
 
@@ -482,6 +993,8 @@ def execute_case(
         case: Deterministic profile case. 确定性的性能分析案例。
         phase: Preview or generation phase. 预览或生成阶段。
         enable_cprofile: Enable deterministic call profiling. 是否启用调用分析。
+        capture_semantics: Hash arrays and world-space geometry after timing.
+            计时后是否对数组及世界坐标几何执行哈希。
 
     Returns:
         Timings, resource peaks, semantic snapshot, and cProfile text.
@@ -530,8 +1043,10 @@ def execute_case(
         - cpu_before.system
     )
     try:
-        snapshot = semantic_snapshot(result)
-        return {
+        snapshot = semantic_snapshot(result) if capture_semantics else None
+        hifi_timings = dict(result.get("_hifi_timings") or {})
+        vector_timings = _extract_vector_timings(result)
+        metrics = {
             "total_s": elapsed,
             "cpu_s": cpu_s,
             "average_cpu_percent": (cpu_s / elapsed * 100.0) if elapsed else 0.0,
@@ -544,11 +1059,19 @@ def execute_case(
                 or {}
             ),
             "preview_timings": dict(result.get("_preview_timings") or {}),
-            "vector_timings": _extract_vector_timings(result),
-            "semantic_snapshot": snapshot,
+            "hifi_timings": hifi_timings,
+            "vector_timings": vector_timings,
+            "parallelism": _parallelism_metadata(
+                case.kind,
+                hifi_timings=hifi_timings,
+                vector_timings=vector_timings,
+            ),
             "cprofile_enabled": enable_cprofile,
             "cprofile": cprofile_text,
         }
+        if capture_semantics:
+            metrics["semantic_snapshot"] = snapshot
+        return metrics
     finally:
         _cleanup_result_files(result)
 
@@ -578,6 +1101,22 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Disable cProfile when an external sampler such as py-spy is used.",
     )
     parser.add_argument(
+        "--timing-only",
+        action="store_true",
+        help=(
+            "Skip post-run semantic hashing. Use only for supplemental timing "
+            "after a separate quality-locked reference has passed."
+        ),
+    )
+    parser.add_argument(
+        "--reference-report",
+        type=Path,
+        help=(
+            "Fail unless this run's semantic hash matches a prior profile.json "
+            "reference. Incompatible with --timing-only."
+        ),
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         default=Path(".scratch/converter-multicore"),
@@ -592,6 +1131,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     expected_suffix = ".svg" if args.kind == "vector" else None
     if expected_suffix and args.input.suffix.lower() != expected_suffix:
         parser.error("--kind vector requires an SVG input")
+    if args.reference_report is not None and not args.reference_report.is_file():
+        parser.error("--reference-report must name an existing profile.json")
+    if args.reference_report is not None and args.timing_only:
+        parser.error("--reference-report cannot be used with --timing-only")
     return args
 
 
@@ -599,11 +1142,24 @@ def _render_markdown(report: dict[str, object]) -> str:
     summary = report["summary"]
     input_meta = report["input"]
     materials = report["materials"]
+    quality = report["quality"]
     assert isinstance(summary, dict)
     assert isinstance(input_meta, dict)
     assert isinstance(materials, dict)
+    assert isinstance(quality, dict)
     cold = summary["cold"]
     assert isinstance(cold, dict)
+    if quality.get("external_reference_match") is True:
+        quality_label = "exact match to external semantic reference"
+    elif (
+        quality.get("semantic_snapshots_available") is True
+        and quality.get("semantic_snapshots_equal") is True
+    ):
+        quality_label = "exact semantic snapshots"
+    elif quality.get("semantic_snapshot_count") == 1:
+        quality_label = "semantic snapshot captured (not internally compared)"
+    else:
+        quality_label = "timing only (no semantic evidence)"
     return "\n".join(
         [
             "# Converter Multicore Profile",
@@ -614,6 +1170,7 @@ def _render_markdown(report: dict[str, object]) -> str:
             f"- Phase: `{report['phase']}`",
             f"- Materials: `{materials['count']}`",
             f"- Target width: `{input_meta['target_width_mm']} mm`",
+            f"- Quality evidence: `{quality_label}`",
             f"- Cold total: `{float(cold['total_s']):.3f} s`",
             f"- Cold peak RSS: `{float(cold['peak_rss_mb']):.2f} MiB`",
             "",
@@ -651,6 +1208,7 @@ def main(argv: list[str] | None = None) -> int:
             case,
             args.phase,
             enable_cprofile=not args.no_cprofile,
+            capture_semantics=not args.timing_only,
         )
         runs.append(run)
         print(
@@ -660,6 +1218,17 @@ def main(argv: list[str] | None = None) -> int:
         )
     report = build_report(case, runs)
     report["phase"] = args.phase
+    if args.reference_report is not None:
+        reference_report = json.loads(
+            args.reference_report.read_text(encoding="utf-8"),
+        )
+        if not isinstance(reference_report, dict):
+            raise ValueError("Semantic reference report must be a JSON object")
+        matched_hash = _assert_semantic_reference(reference_report, report)
+        quality = report["quality"]
+        assert isinstance(quality, dict)
+        quality["external_reference_match"] = True
+        quality["external_reference_sha256"] = matched_hash
     args.output_dir.mkdir(parents=True, exist_ok=True)
     json_path = args.output_dir / "profile.json"
     markdown_path = args.output_dir / "profile.md"
