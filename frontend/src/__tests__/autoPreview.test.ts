@@ -1,12 +1,56 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
+import {
+  fetchMaterialSolverCacheStatus,
+  type MaterialSolverCacheKey,
+} from "../api/materialCache";
 import { DEFAULT_STATE, useConverterStore } from "../stores/converter";
 import { useAutoPreview } from "../hooks/useAutoPreview";
-import { ModelingMode } from "../api/types";
+import {
+  ModelingMode,
+  type MaterialSolverCacheStatusResponse,
+} from "../api/types";
 import { DEFAULT_SETTINGS, useSettingsStore } from "../stores/settingsStore";
+
+vi.mock("../api/materialCache", () => ({
+  fetchMaterialSolverCacheStatus: vi.fn(),
+}));
 
 function fakeFile(name = "test.png"): File {
   return new File(["pixels"], name, { type: "image/png" });
+}
+
+function materialCacheStatus(
+  key: MaterialSolverCacheKey,
+  cached: boolean,
+): MaterialSolverCacheStatusResponse {
+  return {
+    status: "ok",
+    message: cached ? "Cache found" : "No cache found",
+    cached,
+    palette_hash: "material-palette",
+    layer_count: key.layerCount,
+    layer_height_mm: key.layerHeightMm,
+    substrate: key.substrate,
+    entry: cached
+      ? {
+          palette_hash: "material-palette",
+          material_directory_names: key.materialDirectoryNames,
+          layer_count: key.layerCount,
+          layer_height_mm: key.layerHeightMm,
+          substrate: key.substrate,
+          grid_resolution: 64,
+          total_combinations: 64,
+          valid_cell_count: 64,
+          total_cell_count: 64,
+          mean_delta_e: 0,
+          max_delta_e: 0,
+          build_time_seconds: 1,
+          built_at: "2026-07-28T15:00:00Z",
+          cache_file_size_bytes: 1024,
+        }
+      : null,
+  };
 }
 
 describe("useAutoPreview", () => {
@@ -57,6 +101,9 @@ describe("useAutoPreview", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
+    vi.mocked(fetchMaterialSolverCacheStatus).mockImplementation(
+      async (key) => materialCacheStatus(key, true),
+    );
     useConverterStore.setState({
       ...DEFAULT_STATE,
       imageFile: null,
@@ -434,8 +481,8 @@ describe("useAutoPreview", () => {
       () => useConverterStore.getState().setMaterialLayerHeightMm(0.08),
     ],
   ])(
-    "regenerates after the material %s setter resets the preview session",
-    (_label, change) => {
+    "regenerates after the material %s setter finds a persisted cache",
+    async (_label, change) => {
       renderHook(() => useAutoPreview());
 
       act(() => {
@@ -444,13 +491,72 @@ describe("useAutoPreview", () => {
       act(() => {
         change();
       });
-      act(() => {
-        vi.advanceTimersByTime(300);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300);
       });
 
+      expect(fetchMaterialSolverCacheStatus).toHaveBeenCalledTimes(1);
       expect(mockSubmitPreview).toHaveBeenCalledTimes(1);
     },
   );
+
+  it("waits for a manual preview when the new material layer count has no cache", async () => {
+    vi.mocked(fetchMaterialSolverCacheStatus).mockImplementationOnce(
+      async (key) => materialCacheStatus(key, false),
+    );
+    renderHook(() => useAutoPreview());
+
+    act(() => {
+      establishMaterialPreviewBaseline();
+    });
+    act(() => {
+      useConverterStore.getState().setMaterialLayerCount(8);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+
+    expect(fetchMaterialSolverCacheStatus).toHaveBeenCalledWith(
+      {
+        materialDirectoryNames: ["profile/yellow", "profile/black"],
+        layerCount: 8,
+        layerHeightMm: 0.04,
+        substrate: "white",
+      },
+      { gridResolution: undefined },
+    );
+    expect(mockSubmitPreview).not.toHaveBeenCalled();
+    expect(useConverterStore.getState().previewAutoRefreshPending).toBe(false);
+  });
+
+  it("keeps checking material cache keys after a miss", async () => {
+    vi.mocked(fetchMaterialSolverCacheStatus)
+      .mockImplementationOnce(async (key) => materialCacheStatus(key, false))
+      .mockImplementationOnce(async (key) => materialCacheStatus(key, true));
+    renderHook(() => useAutoPreview());
+
+    act(() => {
+      establishMaterialPreviewBaseline();
+    });
+    act(() => {
+      useConverterStore.getState().setMaterialLayerCount(8);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+
+    expect(mockSubmitPreview).not.toHaveBeenCalled();
+
+    act(() => {
+      useConverterStore.getState().setMaterialLayerCount(10);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+
+    expect(fetchMaterialSolverCacheStatus).toHaveBeenCalledTimes(2);
+    expect(mockSubmitPreview).toHaveBeenCalledTimes(1);
+  });
 
   it("clears stale output without regenerating when the source becomes incomplete", () => {
     renderHook(() => useAutoPreview());

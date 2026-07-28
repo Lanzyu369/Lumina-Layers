@@ -269,7 +269,7 @@ describe("MaterialSolverCacheStatusCard", () => {
     expect(screen.getByText("缓存未构建")).toBeInTheDocument();
     // Fallback hint should be visible when cache is missing.
     expect(
-      screen.getByText(/B&B 最优求解器/),
+      screen.getByText(/参数调整不会自动预览.*临时候选求解器/),
     ).toBeInTheDocument();
     const buildButton = screen.getByRole("button", { name: "立即构建缓存" });
     expect(buildButton).not.toBeDisabled();
