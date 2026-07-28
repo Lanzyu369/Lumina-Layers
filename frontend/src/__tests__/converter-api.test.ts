@@ -260,6 +260,7 @@ describe("convertBatch", () => {
       material_layer_height_mm: 0.06,
       material_grid_resolution: 33,
       material_backing_material_index: 1,
+      separate_backing: true,
       color_layers: 7,
       layer_height_mm: 0.06,
     });
@@ -275,6 +276,7 @@ describe("convertBatch", () => {
     expect(formData.get("material_layer_height_mm")).toBe("0.06");
     expect(formData.get("material_grid_resolution")).toBe("33");
     expect(formData.get("material_backing_material_index")).toBe("1");
+    expect(formData.get("separate_backing")).toBe("true");
   });
 
   it("serializes native reverse LUT batch fields into FormData", async () => {

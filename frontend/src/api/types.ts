@@ -1719,6 +1719,7 @@ export interface BatchConvertParams {
   material_layer_height_mm?: number;
   material_grid_resolution?: number;
   material_backing_material_index?: number;
+  separate_backing?: boolean;
   target_width_mm: number;
   spacer_thick: number;
   structure_mode: string;

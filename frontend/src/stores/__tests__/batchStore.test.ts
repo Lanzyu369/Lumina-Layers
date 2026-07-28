@@ -141,6 +141,7 @@ describe("submitBatch API 调用和状态管理", () => {
       chroma_gate: 0,
       use_lut_constrained: false,
       auto_dynamic_range: false,
+      separate_backing: false,
       enable_relief: false,
       printer_id: "bambu-p1s",
       slicer: "OrcaSlicer",
@@ -204,6 +205,26 @@ describe("submitBatch API 调用和状态管理", () => {
       material_backing_material_index: 1,
       color_layers: 7,
       layer_height_mm: 0.06,
+    });
+  });
+
+  it("submitBatch 会保留耗材档案的分离底板选择", async () => {
+    const files = [new File(["a"], "img1.png", { type: "image/png" })];
+    useConverterStore.setState({
+      batchFiles: files,
+      source_version: "material",
+      selectedMaterialDirNames: ["brand/yellow", "brand/white"],
+      materialBackingMaterialDirName: "brand/white",
+      separate_backing: true,
+    });
+    mockedConvertBatch.mockResolvedValueOnce(mockBatchResponse);
+
+    await useConverterStore.getState().submitBatch();
+
+    const [, calledParams] = mockedConvertBatch.mock.calls[0];
+    expect(calledParams).toMatchObject({
+      material_backing_material_index: 1,
+      separate_backing: true,
     });
   });
 

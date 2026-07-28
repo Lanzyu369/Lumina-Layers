@@ -3393,6 +3393,10 @@ async def convert_batch(
     material_backing_material_index: int | None = Form(None, ge=0, description="耗材档案底板耗材索引"),
     target_width_mm: float = Form(60.0, description="目标宽度 (mm)"),
     spacer_thick: float = Form(1.2, description="底板厚度 (mm)"),
+    separate_backing: bool = Form(
+        False,
+        description="Emit backing as a separate object / 将底板作为独立对象输出",
+    ),
     structure_mode: str = Form("Double-sided", description="打印结构模式"),
     color_mode: str = Form("4-Color (RYBW)", description="颜色模式"),
     modeling_mode: str = Form("high-fidelity", description="建模模式"),
@@ -3441,6 +3445,10 @@ async def convert_batch(
     to the worker pool, one at a time.
     文件上传和 FileRegistry 操作在主线程完成。
     每个批量项的 CPU 密集型转换逐个提交到工作进程池。
+
+    Args:
+        separate_backing: Emit the backing as a separate mesh object when true.
+            (为 true 时将底板作为独立网格对象输出。)
     """
     # Resolve color source (main thread). Batch must mirror the single-image
     # preview/generate source selection contract: traditional LUT, native
@@ -3633,6 +3641,7 @@ async def convert_batch(
                 auto_dynamic_range,
                 high_precision_3d_preview,
                 device_profile_id,
+                separate_backing,
             )
 
             # 3. Result processing (main thread)

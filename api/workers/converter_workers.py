@@ -1206,6 +1206,7 @@ def worker_batch_convert_item(
     auto_dynamic_range: bool = False,
     high_precision_3d_preview: bool = False,
     device_profile_id: str | None = None,
+    separate_backing: bool = False,
 ) -> dict:
     """Execute a single batch conversion item in a worker process.
     在工作进程中执行单个批量转换项。
@@ -1255,6 +1256,8 @@ def worker_batch_convert_item(
         enable_base_layer_height_modifier: Whether to keep the Bambu-family
             coarse base-layer setting from user settings. (是否沿用设置页
             的底板粗层高开关)
+        separate_backing: Whether the backing plate remains a separate mesh.
+            (是否将底板保留为独立网格)
 
     Returns:
         dict: Result dictionary with the following keys:
@@ -1320,6 +1323,7 @@ def worker_batch_convert_item(
         material_layer_height_mm=material_layer_height_mm,
         material_grid_resolution=material_grid_resolution,
         material_backing_material_index=material_backing_material_index,
+        separate_backing=separate_backing,
         use_lut_constrained=use_lut_constrained,
         auto_dynamic_range=auto_dynamic_range,
         high_precision_3d_preview=high_precision_3d_preview,
