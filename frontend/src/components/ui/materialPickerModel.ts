@@ -163,9 +163,15 @@ function profileMatchesQuery(
   return searchable.includes(query);
 }
 
+function groupDisplayProfiles(
+  group: MaterialProductGroup,
+): SavedMaterialLibraryItem[] {
+  return group.displayProfiles ?? group.profiles;
+}
+
 function groupMostRecentTimestamp(group: MaterialProductGroup): number {
   let latest = 0;
-  for (const profile of group.profiles) {
+  for (const profile of groupDisplayProfiles(group)) {
     const timestamp = Date.parse(profile.usage_last_used_at ?? "");
     if (Number.isFinite(timestamp)) latest = Math.max(latest, timestamp);
   }
@@ -173,7 +179,7 @@ function groupMostRecentTimestamp(group: MaterialProductGroup): number {
 }
 
 function groupName(group: MaterialProductGroup): string {
-  return group.profiles[0]?.material_name ?? group.key;
+  return groupDisplayProfiles(group)[0]?.material_name ?? group.key;
 }
 
 export function filterMaterialGroups(

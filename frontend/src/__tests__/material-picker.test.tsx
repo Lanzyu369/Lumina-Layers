@@ -442,6 +442,7 @@ describe("MaterialPickerDialog", () => {
       initialSelected: [
         "瑞贝思/blue-pla",
         "JAYO/pla-red-alice",
+        "JAYO/pla-red-bob",
         "jayo/yellow-pla",
       ],
       onConfirm,

@@ -202,6 +202,50 @@ describe("materialPickerModel", () => {
     ]);
   });
 
+  it("sorts favorite cards by the visible profiles' recent usage", () => {
+    const groups = buildMaterialProductGroups([
+      makeMaterial({
+        material_name: "Product A",
+        directory_name: "Brand/product-a-alice",
+        material_product_id: "product-a",
+        material_profile_id: "profile-a-alice",
+        contributor_name: "Alice",
+        usage_last_used_at: "2026-07-30T00:00:00Z",
+      }),
+      makeMaterial({
+        material_name: "Product A",
+        directory_name: "Brand/product-a-bob",
+        material_product_id: "product-a",
+        material_profile_id: "profile-a-bob",
+        contributor_name: "Bob",
+        usage_last_used_at: "2026-07-20T00:00:00Z",
+      }),
+      makeMaterial({
+        material_name: "Product B",
+        directory_name: "Brand/product-b",
+        material_product_id: "product-b",
+        material_profile_id: "profile-b",
+        contributor_name: "Carol",
+        usage_last_used_at: "2026-07-25T00:00:00Z",
+      }),
+    ]);
+
+    const filtered = filterMaterialGroups(groups, {
+      query: "",
+      type: "favorites",
+      brandKey: "all",
+      favoriteKeys: new Set(["profile:profile-a-bob", "profile:profile-b"]),
+      sort: "recent",
+    });
+
+    expect(
+      filtered.map(
+        (group) =>
+          (group.displayProfiles ?? group.profiles)[0].directory_name,
+      ),
+    ).toEqual(["Brand/product-b", "Brand/product-a-bob"]);
+  });
+
   it("summarizes mixed known types and unknown compatibility", () => {
     const materials = [
       makeMaterial({
