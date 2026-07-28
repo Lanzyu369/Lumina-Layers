@@ -230,6 +230,31 @@ describe("MaterialPickerDialog", () => {
       "drop-shadow-[0_1px_2px_var(--focus-ring)]",
     );
     expect(unselectedCard).toHaveClass("bg-white/60");
+    expect(selectedCard).not.toHaveClass(
+      "material-picker-card-select-effect",
+    );
+  });
+
+  it("uses one whole-card effect without a redundant check indicator", () => {
+    renderPicker();
+
+    const selectionButton = screen.getByRole("button", {
+      name: "选择 Red PLA",
+    });
+    const card = selectionButton.closest(
+      '[data-testid="material-picker-product-card"]',
+    );
+
+    expect(selectionButton.querySelector("span.rounded-full")).toBeNull();
+    expect(card).not.toHaveClass("material-picker-card-select-effect");
+
+    fireEvent.click(selectionButton);
+    expect(card).toHaveClass("material-picker-card-select-effect");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "取消选择 Red PLA" }),
+    );
+    expect(card).not.toHaveClass("material-picker-card-select-effect");
   });
 
   it("uses the same whole-card treatment for a selected author profile", () => {
@@ -256,6 +281,29 @@ describe("MaterialPickerDialog", () => {
       "drop-shadow-[0_1px_2px_var(--focus-ring)]",
     );
     expect(unselectedCard).toHaveClass("bg-white/60");
+    expect(selectedCard).not.toHaveClass(
+      "material-picker-card-select-effect",
+    );
+  });
+
+  it("plays the whole-card effect when a new author profile is selected", () => {
+    renderPicker({ materials: PROFILE_MATERIALS });
+
+    const redCard = screen
+      .getAllByTestId("material-picker-product-card")
+      .find((card) => card.textContent?.includes("PLA Basic Red"));
+    fireEvent.click(
+      within(redCard!).getByRole("button", {
+        name: "展开 PLA Basic Red 的档案",
+      }),
+    );
+    fireEvent.click(
+      within(redCard!).getByRole("radio", {
+        name: "选择 PLA Basic Red（Alice）档案",
+      }),
+    );
+
+    expect(redCard).toHaveClass("material-picker-card-select-effect");
   });
 
   it("cancels without committing pending changes", () => {

@@ -1,5 +1,4 @@
 import {
-  CheckIcon,
   ChevronDownIcon,
   MagnifyingGlassIcon,
   StarIcon as StarOutlineIcon,
@@ -130,6 +129,8 @@ export default function MaterialPickerDialog({
     () => new Set(),
   );
   const [showMixedConfirmation, setShowMixedConfirmation] = useState(false);
+  const [selectionEffectDirectory, setSelectionEffectDirectory] =
+    useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -146,6 +147,7 @@ export default function MaterialPickerDialog({
     setExpandedGroupKeys(new Set());
     setFavoriteKeys(loadMaterialProfileFavorites());
     setShowMixedConfirmation(false);
+    setSelectionEffectDirectory(null);
 
     const focusTimer = window.setTimeout(() => {
       searchInputRef.current?.focus();
@@ -259,6 +261,10 @@ export default function MaterialPickerDialog({
     profile: SavedMaterialLibraryItem,
     group?: MaterialProductGroup,
   ) => {
+    const isAlreadySelected = staged.includes(profile.directory_name);
+    setSelectionEffectDirectory(
+      isAlreadySelected ? null : profile.directory_name,
+    );
     setStaged((previous) => {
       if (group?.productId) {
         const groupDirectoryNames = new Set(
@@ -372,6 +378,9 @@ export default function MaterialPickerDialog({
           selected
             ? materialPickerSelectedCardClass
             : materialPickerIdleCardClass,
+          selected &&
+            selectionEffectDirectory === profile.directory_name &&
+            "material-picker-card-select-effect",
         )}
       >
         <div className="flex min-w-0 items-start gap-3">
@@ -396,19 +405,6 @@ export default function MaterialPickerDialog({
                   .filter(Boolean)
                   .join(" · ")}
               </span>
-            </span>
-            <span
-              aria-hidden="true"
-              className={cx(
-                "mt-2 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border",
-                selected
-                  ? "border-blue-600 bg-blue-600 text-white"
-                  : "border-slate-300 dark:border-slate-600",
-              )}
-            >
-              {selected && (
-                <CheckIcon className="h-3 w-3" aria-hidden="true" />
-              )}
             </span>
           </button>
           {renderFavoriteButton(profile, materialName)}
@@ -468,6 +464,8 @@ export default function MaterialPickerDialog({
           selectedProfile
             ? materialPickerSelectedCardClass
             : materialPickerIdleCardClass,
+          selectedProfile?.directory_name === selectionEffectDirectory &&
+            "material-picker-card-select-effect",
         )}
       >
         <div className="flex min-w-0 items-start gap-3">

@@ -855,8 +855,9 @@ const materialPickerSelectedCardClass =
 
 The normal 1px card border remains inside the card box, while the token-based
 drop shadow supplies the restrained depth without reintroducing the former
-focus ring. Keep the existing blue check and keyboard-only focus ring. Do not
-add scale, translation, pulse, or looping animation.
+focus ring. This first pass keeps the existing blue check and keyboard-only
+focus ring; Task 8 supersedes the check requirement after the user reviews the
+whole-card result. Do not add scale, translation, pulse, or looping animation.
 
 - [ ] **Step 4: Run tests and production build**
 
@@ -882,4 +883,163 @@ back to the user.
 git add frontend/src/__tests__/material-picker.test.tsx \
   frontend/src/components/ui/MaterialPickerDialog.tsx
 git commit -m "feat(frontend): emphasize selected material cards"
+```
+
+### Task 8: One-shot selection feedback without a redundant check
+
+**Files:**
+- Modify: `frontend/src/__tests__/material-picker.test.tsx`
+- Modify: `frontend/src/components/ui/MaterialPickerDialog.tsx`
+- Modify: `frontend/src/index.css`
+
+- [x] **Step 1: Write failing interaction tests**
+
+Add one regression proving that a single-profile card has no circular selection
+indicator and that only a new pointer selection receives the one-shot effect:
+
+```typescript
+it("uses one whole-card effect without a redundant check indicator", () => {
+  renderPicker();
+
+  const selectionButton = screen.getByRole("button", {
+    name: "选择 Red PLA",
+  });
+  const card = selectionButton.closest(
+    '[data-testid="material-picker-product-card"]',
+  );
+
+  expect(selectionButton.querySelector("span.rounded-full")).toBeNull();
+  expect(card).not.toHaveClass("material-picker-card-select-effect");
+
+  fireEvent.click(selectionButton);
+  expect(card).toHaveClass("material-picker-card-select-effect");
+
+  fireEvent.click(
+    screen.getByRole("button", { name: "取消选择 Red PLA" }),
+  );
+  expect(card).not.toHaveClass("material-picker-card-select-effect");
+});
+```
+
+Extend the existing initially selected test to assert that opening the dialog
+does not play the effect:
+
+```typescript
+expect(selectedCard).not.toHaveClass(
+  "material-picker-card-select-effect",
+);
+```
+
+Keep the existing multi-author radio test unchanged so author-profile choices
+continue to expose an explicit radio control.
+
+- [x] **Step 2: Run the focused tests and verify RED**
+
+```bash
+python scripts/run_vitest.py run \
+  src/__tests__/material-picker.test.tsx \
+  -t "whole-card effect|whole-card treatment"
+```
+
+Expected: the new test fails because the circular indicator is still rendered
+and newly selected cards have no `material-picker-card-select-effect` class.
+
+- [x] **Step 3: Track only the newly selected profile**
+
+In `MaterialPickerDialog.tsx`, add:
+
+```typescript
+const [selectionEffectDirectory, setSelectionEffectDirectory] =
+  useState<string | null>(null);
+```
+
+Reset it alongside the other dialog state when the picker opens. Update
+`selectProfile()` so selecting a previously unselected profile stores its
+directory name, while deselecting clears the effect:
+
+```typescript
+const isAlreadySelected = staged.includes(profile.directory_name);
+setSelectionEffectDirectory(
+  isAlreadySelected ? null : profile.directory_name,
+);
+```
+
+For product groups, compare the selected profile directory before replacement
+and apply the same rule. Use the effect class on the outer product card only
+when its selected directory matches `selectionEffectDirectory`.
+
+- [x] **Step 4: Remove the single-profile indicator**
+
+Delete the circular indicator `<span>` and its `CheckIcon` child from
+`renderSingleProfileCard()`, then remove the unused `CheckIcon` import. Preserve
+the main selection button's `aria-pressed`, localized select/deselect label,
+minimum hit area, and keyboard-only focus treatment. Do not remove the
+multi-author profile radio controls.
+
+- [x] **Step 5: Add the reduced-motion-safe one-shot effect**
+
+In `frontend/src/index.css`, add:
+
+```css
+@keyframes material-picker-card-select {
+  0% {
+    filter: drop-shadow(0 0 0 transparent);
+  }
+  55% {
+    filter: drop-shadow(0 0 6px var(--focus-ring));
+  }
+  100% {
+    filter: drop-shadow(0 1px 2px var(--focus-ring));
+  }
+}
+
+.material-picker-card-select-effect {
+  animation: material-picker-card-select 180ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .material-picker-card-select-effect {
+    animation: none;
+  }
+}
+```
+
+The keyframes change only filter intensity. They never scale, translate, loop,
+or alter layout.
+
+- [x] **Step 6: Run focused and full verification**
+
+```bash
+python scripts/run_vitest.py run \
+  src/__tests__/material-picker.test.tsx \
+  -t "whole-card effect|whole-card treatment"
+python scripts/run_vitest.py run src/__tests__/material-picker.test.tsx
+cd frontend
+pnpm build
+```
+
+Expected: focused tests pass, all material-picker tests pass, and the production
+build exits 0.
+
+- [x] **Step 7: Verify the real Chrome interaction**
+
+Open a two-card brand, then:
+
+1. Confirm neither card shows a circular indicator or check.
+2. Select the left card and verify the effect animation is about 180ms.
+3. Confirm the final pale-blue surface remains after the animation.
+4. Deselect and reselect it, confirming the effect plays only on selection.
+5. Confirm width, height, and transform match the unselected neighbor.
+6. Confirm pointer selection leaves no inner focus box.
+
+Leave the dialog open with the selected and unselected cards side by side.
+
+- [x] **Step 8: Commit**
+
+```bash
+git add docs/superpowers/plans/2026-07-29-material-picker-clarity.md \
+  frontend/src/__tests__/material-picker.test.tsx \
+  frontend/src/components/ui/MaterialPickerDialog.tsx \
+  frontend/src/index.css
+git commit -m "feat(frontend): streamline material selection feedback"
 ```
