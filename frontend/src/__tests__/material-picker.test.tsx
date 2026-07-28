@@ -177,7 +177,37 @@ describe("MaterialPickerDialog", () => {
     expect(onConfirm).toHaveBeenCalledWith(["jayo/yellow-pla"]);
   });
 
-  it("uses the check indicator without adding a blue frame to the selected card", () => {
+  it("keeps pointer selection free of a persistent inner focus ring", () => {
+    renderPicker({
+      initialSelected: ["JAYO/red-pla"],
+    });
+
+    const selectionButton = screen.getByRole("button", {
+      name: "取消选择 Red PLA",
+    });
+    expect(selectionButton).not.toHaveClass("focus:ring-4");
+    expect(selectionButton).toHaveClass("focus-visible:ring-2");
+  });
+
+  it("uses the same keyboard-only focus treatment for author profiles", () => {
+    renderPicker({ materials: PROFILE_MATERIALS });
+
+    const redCard = screen
+      .getAllByTestId("material-picker-product-card")
+      .find((card) => card.textContent?.includes("PLA Basic Red"));
+    fireEvent.click(
+      within(redCard!).getByRole("button", {
+        name: "展开 PLA Basic Red 的档案",
+      }),
+    );
+    const profileChoice = within(redCard!).getByRole("radio", {
+      name: "选择 PLA Basic Red（Alice）档案",
+    });
+    expect(profileChoice).not.toHaveClass("focus:ring-4");
+    expect(profileChoice).toHaveClass("focus-visible:ring-2");
+  });
+
+  it("retains the selected card treatment outside the focus indicator", () => {
     renderPicker({
       initialSelected: ["JAYO/red-pla"],
     });
@@ -185,12 +215,7 @@ describe("MaterialPickerDialog", () => {
     const selectedCard = screen
       .getByText("Red PLA")
       .closest('[data-testid="material-picker-product-card"]');
-    expect(selectedCard).not.toHaveClass("border-blue-400");
-    expect(
-      within(selectedCard as HTMLElement).getByRole("button", {
-        name: "取消选择 Red PLA",
-      }),
-    ).toHaveAttribute("aria-pressed", "true");
+    expect(selectedCard).toHaveClass("border-blue-400");
   });
 
   it("cancels without committing pending changes", () => {

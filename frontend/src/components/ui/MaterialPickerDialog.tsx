@@ -36,6 +36,7 @@ import {
 import {
   cx,
   StatusBanner,
+  workstationChoiceRowActiveClass,
   workstationChoiceRowClass,
   workstationInputClass,
 } from "./panelPrimitives";
@@ -358,6 +359,7 @@ export default function MaterialPickerDialog({
         className={cx(
           workstationChoiceRowClass,
           "flex min-w-0 flex-col gap-3 p-3.5",
+          selected && workstationChoiceRowActiveClass,
         )}
       >
         <div className="flex min-w-0 items-start gap-3">
@@ -366,7 +368,7 @@ export default function MaterialPickerDialog({
             aria-label={selectLabel}
             aria-pressed={selected}
             onClick={() => selectProfile(profile)}
-            className="flex min-w-0 flex-1 items-start gap-3 rounded-xl text-left focus:outline-none focus:ring-4 focus:ring-[var(--focus-ring)]"
+            className="flex min-w-0 flex-1 items-start gap-3 rounded-xl text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
           >
             <span
               aria-hidden="true"
@@ -429,6 +431,9 @@ export default function MaterialPickerDialog({
     const materialType =
       resolvedMaterialType(summaryProfile) ||
       t("basic_material_picker_unknown_type");
+    const selectedProfile = group.profiles.find((profile) =>
+      stagedSet.has(profile.directory_name),
+    );
     const forceExpanded =
       query.trim().length > 0 || typeFilter === "favorites";
     const expanded = forceExpanded || expandedGroupKeys.has(group.key);
@@ -448,6 +453,7 @@ export default function MaterialPickerDialog({
         className={cx(
           workstationChoiceRowClass,
           "flex min-w-0 flex-col gap-3 p-3.5",
+          selectedProfile && workstationChoiceRowActiveClass,
         )}
       >
         <div className="flex min-w-0 items-start gap-3">
@@ -513,7 +519,7 @@ export default function MaterialPickerDialog({
                     aria-checked={selected}
                     aria-label={radioLabel}
                     onClick={() => selectProfile(profile, group)}
-                    className="flex min-w-0 flex-1 items-center gap-2 rounded-lg text-left focus:outline-none focus:ring-4 focus:ring-[var(--focus-ring)]"
+                    className="flex min-w-0 flex-1 items-center gap-2 rounded-lg text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
                   >
                     <span
                       aria-hidden="true"

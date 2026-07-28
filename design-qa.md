@@ -1,37 +1,40 @@
-# Design QA — Material picker selected card
+# Design QA — Material picker pointer focus ring
 
 **Comparison target**
 
-- Source visual truth: user-provided `Google Chrome Appshot 2026-07-28T18-17-50.450Z.png` in this task.
-- Implementation screenshot: `/Users/min/.codex/worktrees/a1ad/Lumina-studio/.scratch/design-audit/material-picker-selected-card/selected-card-after.jpg`
-- Source pixels: `1055 × 768`; implementation pixels: `1316 × 871`.
-- CSS viewport and density: the implementation was captured from the user's existing Chrome window at `1316 × 871`; browser density was not changed. The source and implementation use different desktop viewport sizes, so the comparison is limited to the selected-card state rather than pixel-level modal geometry.
-- State: light theme, material archive picker open, all-materials tab, two-column card grid, multiple materials already selected.
+- Source visual truth: `/var/folders/gn/myfgtzws3fx2b0m2nn6w8h7r0000gn/T/codex-clipboard-18d509fb-5cdf-4270-9b87-6fb3067e119a.png`
+- Preserved source copy: `/Users/min/.codex/worktrees/a1ad/Lumina-studio/.scratch/design-audit/material-picker-focus-ring/user-reference.png`
+- Browser implementation: `/Users/min/.codex/worktrees/a1ad/Lumina-studio/.scratch/design-audit/material-picker-focus-ring/browser-after-matched.jpg`
+- Combined focused comparison: `/Users/min/.codex/worktrees/a1ad/Lumina-studio/.scratch/design-audit/material-picker-focus-ring/focused-comparison.png`
+- Source pixels: `1560 × 720`; browser screenshot pixels and CSS viewport: `1316 × 815`; browser density was unchanged.
+- State: light theme, material archive picker open, one single-profile material selected through a pointer click.
+- Normalization: the source is a camera crop with a handwritten annotation, so pixel-perfect full-modal comparison would be misleading. The selected-card regions were cropped and normalized to the same width for the combined focused comparison.
 
 **Findings**
 
-- No remaining P0, P1, or P2 visual mismatch in the requested selected-card state.
-- Fonts and typography: unchanged from the existing picker; selected and unselected cards retain the same hierarchy and wrapping behavior.
-- Spacing and layout rhythm: card padding, radius, grid spacing, and modal structure are unchanged.
-- Colors and visual tokens: selected cards now use the same neutral border and surface tokens as unselected cards; the blue checked circle remains the sole selection accent.
-- Image quality and asset fidelity: material swatches and Heroicons remain unchanged and render sharply.
+- No remaining actionable P0, P1, or P2 issue in the requested pointer-selection state.
+- Fonts and typography: unchanged; the fix does not alter type family, size, weight, line height, wrapping, or truncation.
+- Spacing and layout rhythm: card padding, radius, grid, metadata row, and favorite-button spacing remain unchanged.
+- Colors and visual tokens: the unintended four-pixel inner focus ring is absent after a pointer click. The intended selected-card border and blue checked indicator remain.
+- Image quality and asset fidelity: material swatches and existing Heroicons are unchanged and remain sharp.
 - Copy and content: unchanged.
 
 **Full-view comparison evidence**
 
-- The implementation screenshot preserves the existing desktop modal, brand sidebar, two-column grid, footer, and eight staged selections.
-- The source's extra pale-blue selected-card frame is no longer visible.
+- `browser-after-matched.jpg` confirms the modal layout, brand sidebar, card geometry, footer, and selection affordances remain intact.
+- The selected material still has its normal outer selected-card treatment, without the extra inner pale-blue rectangle.
 
 **Focused region comparison evidence**
 
-- The implementation view contains selected and unselected cards together. Their computed card border and background colors match, while selected cards retain the blue check indicator.
-- Browser inspection confirmed the selected card has no `border-blue-400` class.
+- `focused-comparison.png` places the annotated source crop and the post-fix selected-card crop in one comparison image.
+- Browser-computed evidence after the pointer click: the selection button remained the active element, `:focus-visible` was `false`, and `box-shadow` was `none`.
 
 **Comparison history**
 
-1. Earlier finding: `[P2]` selected material cards gained an extra pale-blue frame, adding a visually redundant second selection cue.
-2. Fix: removed the active card frame from both single-profile and grouped-profile material cards; kept the explicit checked/radio selection indicators.
-3. Post-fix evidence: `selected-card-after.jpg`; a real select/deselect interaction preserved the neutral card surface and restored the original selected count of eight.
+1. Initial finding: `[P2]` a pointer click triggered `focus:ring-4`, leaving a pale-blue inner rectangle even though the button did not match `:focus-visible`.
+2. Incorrect first iteration: the selected card's outer active style was removed, but the reported inner focus ring remained. This did not address the user's annotated target.
+3. Corrective fix: restored the outer selected-card treatment and changed material selection controls from `focus:ring-4` to `focus-visible:ring-2`.
+4. Post-fix evidence: a same-viewport pointer click produced `box-shadow: none`; selecting and deselecting returned the staged material count to eight.
 
 **Open Questions**
 
@@ -39,13 +42,14 @@
 
 **Implementation Checklist**
 
-- [x] Remove the selected-card blue frame.
-- [x] Preserve the blue checked selection indicator.
-- [x] Verify a real select/deselect cycle.
-- [x] Add regression coverage.
+- [x] Remove the persistent inner ring from pointer selection.
+- [x] Retain a keyboard-only focus indicator.
+- [x] Restore the intended outer selected-card treatment.
+- [x] Cover the pointer-focus class contract and selected-card treatment with regression tests.
+- [x] Verify the actual interaction in the user's Chrome page.
 
 **Follow-up Polish**
 
-- None required for this focused change.
+- None required for this focused correction.
 
 final result: passed
