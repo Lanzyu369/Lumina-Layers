@@ -4469,8 +4469,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Failed to query the cache status. Please try again later.",
   },
   basic_material_cache_fallback_hint: {
-    zh: "未构建缓存时，每张图将使用 B&B 最优求解器（耗时较长，保证最优）。",
-    en: "When no cache is available, every conversion runs the B&B optimal solver (slower, always optimal).",
+    zh: "未构建缓存时，参数调整不会自动预览；仍可手动预览，但会使用临时候选求解器，耗时较长，结果可能与持久缓存不同。",
+    en: "When no cache is available, parameter changes will not auto-preview. You can still preview manually with the temporary candidate solver; it may take longer and differ from a persisted-cache result.",
   },
   basic_material_cache_build_button: {
     zh: "立即构建缓存",
