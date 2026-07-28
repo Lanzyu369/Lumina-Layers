@@ -177,6 +177,22 @@ describe("MaterialPickerDialog", () => {
     expect(onConfirm).toHaveBeenCalledWith(["jayo/yellow-pla"]);
   });
 
+  it("uses the check indicator without adding a blue frame to the selected card", () => {
+    renderPicker({
+      initialSelected: ["JAYO/red-pla"],
+    });
+
+    const selectedCard = screen
+      .getByText("Red PLA")
+      .closest('[data-testid="material-picker-product-card"]');
+    expect(selectedCard).not.toHaveClass("border-blue-400");
+    expect(
+      within(selectedCard as HTMLElement).getByRole("button", {
+        name: "取消选择 Red PLA",
+      }),
+    ).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("cancels without committing pending changes", () => {
     const onConfirm = vi.fn();
     const onCancel = vi.fn();

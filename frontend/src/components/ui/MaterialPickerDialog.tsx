@@ -36,7 +36,6 @@ import {
 import {
   cx,
   StatusBanner,
-  workstationChoiceRowActiveClass,
   workstationChoiceRowClass,
   workstationInputClass,
 } from "./panelPrimitives";
@@ -359,7 +358,6 @@ export default function MaterialPickerDialog({
         className={cx(
           workstationChoiceRowClass,
           "flex min-w-0 flex-col gap-3 p-3.5",
-          selected && workstationChoiceRowActiveClass,
         )}
       >
         <div className="flex min-w-0 items-start gap-3">
@@ -431,9 +429,6 @@ export default function MaterialPickerDialog({
     const materialType =
       resolvedMaterialType(summaryProfile) ||
       t("basic_material_picker_unknown_type");
-    const selectedProfile = group.profiles.find((profile) =>
-      stagedSet.has(profile.directory_name),
-    );
     const forceExpanded =
       query.trim().length > 0 || typeFilter === "favorites";
     const expanded = forceExpanded || expandedGroupKeys.has(group.key);
@@ -453,7 +448,6 @@ export default function MaterialPickerDialog({
         className={cx(
           workstationChoiceRowClass,
           "flex min-w-0 flex-col gap-3 p-3.5",
-          selectedProfile && workstationChoiceRowActiveClass,
         )}
       >
         <div className="flex min-w-0 items-start gap-3">
