@@ -814,3 +814,68 @@ Confirm no launcher, backend, Vite, Vitest, esbuild, or project Node processes r
 git add design-qa.md
 git commit -m "test(frontend): verify material picker experience"
 ```
+
+### Task 7: Selected material whole-card feedback
+
+**Files:**
+- Modify: `frontend/src/__tests__/material-picker.test.tsx`
+- Modify: `frontend/src/components/ui/MaterialPickerDialog.tsx`
+
+- [ ] **Step 1: Write failing selected-card regressions**
+
+Replace the generic border-only assertion with tests proving that a selected
+single-profile card receives the picker-specific pale surface, inset outline,
+and light shadow while its unselected neighbor does not. Add the same assertion
+for a grouped product after one author profile is selected.
+
+- [ ] **Step 2: Run the focused tests and verify RED**
+
+```bash
+python scripts/run_vitest.py run \
+  src/__tests__/material-picker.test.tsx \
+  -t "whole-card treatment"
+```
+
+Expected: both tests fail because the picker still uses the shared active-row
+class and has no picker-specific inset selected state.
+
+- [ ] **Step 3: Implement the approved subtle selected state**
+
+Define one local card-state class in `MaterialPickerDialog.tsx` and use it for
+both single-profile and multi-profile outer cards:
+
+```typescript
+const materialPickerSelectedCardClass =
+  "border-blue-300/80 bg-blue-50/50 ring-1 ring-inset ring-blue-200/60 " +
+  "shadow-[var(--shadow-control-hover)] dark:border-blue-400/60 " +
+  "dark:bg-blue-500/10 dark:ring-blue-400/20";
+```
+
+Keep the existing blue check and keyboard-only focus ring. Do not add scale,
+translation, pulse, or looping animation.
+
+- [ ] **Step 4: Run tests and production build**
+
+```bash
+python scripts/run_vitest.py run src/__tests__/material-picker.test.tsx
+cd frontend
+pnpm build
+```
+
+Expected: all material-picker tests pass and the production build exits 0.
+
+- [ ] **Step 5: Compare selected and unselected cards in Chrome**
+
+Open a brand containing side-by-side selected and unselected cards. Verify the
+whole-card state is visible but subtle, the inset outline does not overlap a
+hovered neighbor, pointer clicks do not leave an inner focus ring, and the card
+does not move. Restore the original staged selection before handing the page
+back to the user.
+
+- [ ] **Step 6: Commit the refinement**
+
+```bash
+git add frontend/src/__tests__/material-picker.test.tsx \
+  frontend/src/components/ui/MaterialPickerDialog.tsx
+git commit -m "feat(frontend): emphasize selected material cards"
+```
