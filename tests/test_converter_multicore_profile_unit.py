@@ -64,6 +64,7 @@ def test_build_pipeline_context_uses_quality_locked_profile_settings(
     assert ctx["quantize_colors"] == 64
     assert ctx["target_width_mm"] == 299.0
     assert ctx["structure_mode"] == "single-sided"
+    assert ctx["retain_scene_for_profile"] is True
 
 
 def _scene_with_geometry_order(order: tuple[str, ...]) -> trimesh.Scene:

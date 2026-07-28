@@ -164,6 +164,7 @@ def build_pipeline_context(case: ProfileCase) -> dict[str, Any]:
         "use_lut_constrained": False,
         "auto_dynamic_range": False,
         "high_precision_3d_preview": False,
+        "retain_scene_for_profile": True,
     }
 
 

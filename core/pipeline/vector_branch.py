@@ -2579,6 +2579,8 @@ def _run_vector_branch(ctx: dict) -> dict:
         Stats.increment("conversions")
         vector_timing["vector_branch_total_s"] = time.perf_counter() - vector_total_t0
         ctx["vector_timing"] = dict(vector_timing)
+        if bool(ctx.get("retain_scene_for_profile", False)):
+            ctx["scene"] = scene
         _log_vector_timings(vector_timing)
 
         msg = "Vector conversion complete! Objects merged by material."
