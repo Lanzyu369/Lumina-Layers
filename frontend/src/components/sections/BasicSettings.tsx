@@ -840,14 +840,21 @@ export default function BasicSettings() {
   const [materialLibrary, setMaterialLibrary] = useState<SavedMaterialLibraryItem[]>([]);
   const [materialLibraryLoading, setMaterialLibraryLoading] = useState(false);
   const [materialLibraryLoaded, setMaterialLibraryLoaded] = useState(false);
+  const [materialLibraryLoadError, setMaterialLibraryLoadError] = useState(false);
+  const [materialLibraryLoadAttempt, setMaterialLibraryLoadAttempt] = useState(0);
+  const retryMaterialLibraryLoad = useCallback(() => {
+    setMaterialLibraryLoadAttempt((attempt) => attempt + 1);
+  }, []);
   useEffect(() => {
     if (source_version !== "material") {
       setMaterialLibraryLoaded(false);
+      setMaterialLibraryLoadError(false);
       return;
     }
     let cancelled = false;
     setMaterialLibraryLoading(true);
     setMaterialLibraryLoaded(false);
+    setMaterialLibraryLoadError(false);
     listGradientCardMaterials()
       .then((res) => {
         if (cancelled) return;
@@ -859,13 +866,14 @@ export default function BasicSettings() {
         if (!cancelled) {
           setMaterialLibrary([]);
           setMaterialLibraryLoaded(false);
+          setMaterialLibraryLoadError(true);
         }
       })
       .finally(() => {
         if (!cancelled) setMaterialLibraryLoading(false);
       });
     return () => { cancelled = true; };
-  }, [source_version]);
+  }, [materialLibraryLoadAttempt, source_version]);
 
   useEffect(() => {
     if (source_version !== "material" || !materialLibraryLoaded) return;
@@ -1405,9 +1413,11 @@ export default function BasicSettings() {
             open={materialPickerOpen}
             materials={materialLibrary}
             loading={materialLibraryLoading}
+            loadError={materialLibraryLoadError}
             initialSelected={selectedMaterialDirNames}
             onConfirm={handleMaterialPickerConfirm}
             onCancel={() => setMaterialPickerOpen(false)}
+            onRetry={retryMaterialLibraryLoad}
           />
 
           <Slider

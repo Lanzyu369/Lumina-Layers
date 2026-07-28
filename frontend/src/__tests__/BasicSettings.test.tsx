@@ -788,6 +788,38 @@ describe("BasicSettings", () => {
     });
   });
 
+  it("lets users retry a failed material-library load from the picker", async () => {
+    vi.mocked(extractorApi.listGradientCardMaterials)
+      .mockRejectedValueOnce(new Error("temporary failure"))
+      .mockResolvedValueOnce({
+        status: "success",
+        message: "ok",
+        materials: [makeMaterial("JAYO/red-pla", "Red PLA")],
+      });
+    useConverterStore.setState({
+      source_version: "material",
+      selectedMaterialDirNames: [],
+      materialBackingMaterialDirName: null,
+    });
+
+    render(<BasicSettings />);
+
+    await waitFor(() => {
+      expect(extractorApi.listGradientCardMaterials).toHaveBeenCalledOnce();
+    });
+    fireEvent.click(screen.getByTestId("material-picker-trigger"));
+    expect(
+      await screen.findByTestId("material-picker-load-error"),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+
+    await waitFor(() => {
+      expect(extractorApi.listGradientCardMaterials).toHaveBeenCalledTimes(2);
+    });
+    expect(await screen.findByText("Red PLA")).toBeInTheDocument();
+  });
+
   it("reconciles renamed material selections imported after the library loads", async () => {
     vi.mocked(extractorApi.listGradientCardMaterials).mockResolvedValueOnce({
       status: "success",
@@ -803,12 +835,6 @@ describe("BasicSettings", () => {
     render(<BasicSettings />);
 
     fireEvent.click(screen.getByTestId("material-picker-trigger"));
-    await waitFor(() => {
-      expect(
-        screen.getByTestId("material-picker-brand-group-toggle"),
-      ).toBeInTheDocument();
-    });
-    fireEvent.click(screen.getByTestId("material-picker-brand-group-toggle"));
     await screen.findByText("Karvax PLA 耀石黑");
 
     act(() => {

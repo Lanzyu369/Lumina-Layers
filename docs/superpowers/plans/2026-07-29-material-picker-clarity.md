@@ -394,8 +394,8 @@ Include malformed localStorage JSON and storage-write exception cases; both must
 
 ```bash
 python scripts/run_vitest.py run \
-  frontend/src/__tests__/material-picker-model.test.ts \
-  frontend/src/__tests__/material-picker-preferences.test.ts
+  src/__tests__/material-picker-model.test.ts \
+  src/__tests__/material-picker-preferences.test.ts
 ```
 
 Expected: module-resolution failures because the two production modules do not exist.
@@ -524,7 +524,7 @@ Add keyboard tests for initial search focus, Escape order, focus restoration, an
 - [ ] **Step 2: Run the dialog test and verify RED**
 
 ```bash
-python scripts/run_vitest.py run frontend/src/__tests__/material-picker.test.tsx
+python scripts/run_vitest.py run src/__tests__/material-picker.test.tsx
 ```
 
 Expected: failures reference missing tabs, sidebar, product cards, favorite controls, dialog semantics, and mixed confirmation.
@@ -639,7 +639,7 @@ Also retain the existing assertion that confirmation updates
 - [ ] **Step 2: Run the integration test and verify RED**
 
 ```bash
-python scripts/run_vitest.py run frontend/src/__tests__/BasicSettings.test.tsx \
+python scripts/run_vitest.py run src/__tests__/BasicSettings.test.tsx \
   -t "retries the material library"
 ```
 
@@ -663,8 +663,8 @@ Run the Step 2 command without `-t`, then run:
 
 ```bash
 python scripts/run_vitest.py run \
-  frontend/src/__tests__/material-picker.test.tsx \
-  frontend/src/__tests__/BasicSettings.test.tsx
+  src/__tests__/material-picker.test.tsx \
+  src/__tests__/BasicSettings.test.tsx
 ```
 
 Expected: both files pass.
@@ -697,11 +697,11 @@ Expected: zero failures.
 
 ```bash
 python scripts/run_vitest.py run \
-  frontend/src/__tests__/material-picker-model.test.ts \
-  frontend/src/__tests__/material-picker-preferences.test.ts \
-  frontend/src/__tests__/material-picker.test.tsx \
-  frontend/src/__tests__/BasicSettings.test.tsx \
-  frontend/src/__tests__/material-library-panel.test.tsx
+  src/__tests__/material-picker-model.test.ts \
+  src/__tests__/material-picker-preferences.test.ts \
+  src/__tests__/material-picker.test.tsx \
+  src/__tests__/BasicSettings.test.tsx \
+  src/__tests__/material-library-panel.test.tsx
 ```
 
 Expected: zero failures.
