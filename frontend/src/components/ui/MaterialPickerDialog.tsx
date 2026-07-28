@@ -742,7 +742,7 @@ export default function MaterialPickerDialog({
               <p className="px-4 pb-2 pt-4 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
                 {t("basic_material_picker_brand_filter_label")}
               </p>
-              <div className="dock-scrollbar min-h-0 overflow-y-auto px-2 pb-4">
+              <div className="dock-scrollbar min-h-0 space-y-1 overflow-y-auto px-2 pb-4">
                 {brandOptions.map((option) => {
                   const selected = brandKey === option.key;
                   return (
@@ -753,7 +753,7 @@ export default function MaterialPickerDialog({
                       aria-pressed={selected}
                       onClick={() => setBrandKey(option.key)}
                       className={cx(
-                        "flex min-h-10 w-full items-center justify-between gap-2 rounded-xl px-3 text-left text-xs transition-colors focus:outline-none focus:ring-4 focus:ring-[var(--focus-ring)]",
+                        "flex min-h-10 w-full items-center justify-between gap-2 rounded-xl px-3 text-left text-xs transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]",
                         selected
                           ? "bg-blue-50 font-semibold text-blue-700 dark:bg-blue-500/10 dark:text-blue-300"
                           : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800",

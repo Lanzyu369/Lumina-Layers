@@ -242,6 +242,26 @@ describe("MaterialPickerDialog", () => {
     expect(screen.queryByText("更多品牌")).not.toBeInTheDocument();
   });
 
+  it("leaves visible spacing between adjacent brand states", () => {
+    renderPicker();
+
+    const [firstBrandOption] = screen.getAllByTestId(
+      "material-picker-brand-option",
+    );
+    expect(firstBrandOption.parentElement).toHaveClass("space-y-1");
+  });
+
+  it("keeps brand focus feedback inside the row and keyboard-only", () => {
+    renderPicker();
+
+    const brandOption = screen.getByRole("button", { name: "JAYO2" });
+    expect(brandOption).not.toHaveClass("focus:ring-4");
+    expect(brandOption).toHaveClass(
+      "focus-visible:ring-2",
+      "focus-visible:ring-inset",
+    );
+  });
+
   it("filters by type and brand without clearing hidden staged selections", () => {
     const onConfirm = vi.fn();
     renderPicker({
