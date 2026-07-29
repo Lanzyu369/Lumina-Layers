@@ -403,6 +403,76 @@ describe("MaterialPickerDialog", () => {
     expect(onConfirm).toHaveBeenCalledWith(["JAYO/pla-red-alice"]);
   });
 
+  it("shows calibration layer height on single-profile cards and omits missing values", () => {
+    renderPicker({
+      materials: [
+        SINGLE_TYPE_MATERIALS[0],
+        makeMaterial({
+          material_name: "No Height PLA",
+          directory_name: "Other/no-height-pla",
+          brand: "Other",
+          material_type: "PLA",
+          material_profile_id: "profile-no-height",
+          layer_height_mm: null,
+        }),
+      ],
+    });
+
+    const cards = screen.getAllByTestId("material-picker-product-card");
+    const redCard = cards.find((card) => card.textContent?.includes("Red PLA"));
+    const noHeightCard = cards.find((card) =>
+      card.textContent?.includes("No Height PLA"),
+    );
+
+    expect(redCard).toHaveTextContent("JAYO · PLA · 0.08 mm");
+    expect(noHeightCard).toHaveTextContent("Other · PLA");
+    expect(noHeightCard).not.toHaveTextContent("mm");
+  });
+
+  it("shows grouped calibration layer heights in summaries and author rows", () => {
+    const groupedMaterials = [
+      { ...PROFILE_MATERIALS[0], layer_height_mm: 0.1 },
+      { ...PROFILE_MATERIALS[1], layer_height_mm: 0.04 },
+      {
+        ...PROFILE_MATERIALS[1],
+        directory_name: "JAYO/pla-red-carol",
+        material_profile_id: "profile-carol",
+        contributor_name: "Carol",
+        layer_height_mm: 0.04,
+      },
+    ];
+    renderPicker({ materials: groupedMaterials });
+
+    const redCard = screen.getByTestId("material-picker-product-card");
+    expect(redCard).toHaveTextContent("JAYO · PLA · 0.04 / 0.10 mm");
+
+    fireEvent.click(
+      within(redCard).getByRole("button", {
+        name: "展开 PLA Basic Red 的档案",
+      }),
+    );
+
+    const aliceRow = within(redCard)
+      .getByRole("radio", {
+        name: "选择 PLA Basic Red（Alice）档案",
+      })
+      .closest("div");
+    const bobRow = within(redCard)
+      .getByRole("radio", {
+        name: "选择 PLA Basic Red（Bob）档案",
+      })
+      .closest("div");
+    const carolRow = within(redCard)
+      .getByRole("radio", {
+        name: "选择 PLA Basic Red（Carol）档案",
+      })
+      .closest("div");
+
+    expect(aliceRow).toHaveTextContent("0.10 mm");
+    expect(bobRow).toHaveTextContent("0.04 mm");
+    expect(carolRow).toHaveTextContent("0.04 mm");
+  });
+
   it("keeps hidden sibling profiles mutually exclusive on the favorites tab", () => {
     const onConfirm = vi.fn();
     localStorage.setItem(
@@ -410,7 +480,11 @@ describe("MaterialPickerDialog", () => {
       JSON.stringify(["profile:profile-bob"]),
     );
     renderPicker({
-      materials: PROFILE_MATERIALS,
+      materials: [
+        { ...PROFILE_MATERIALS[0], layer_height_mm: 0.1 },
+        { ...PROFILE_MATERIALS[1], layer_height_mm: 0.04 },
+        ...PROFILE_MATERIALS.slice(2),
+      ],
       initialSelected: ["JAYO/pla-red-alice"],
       onConfirm,
     });
@@ -419,6 +493,8 @@ describe("MaterialPickerDialog", () => {
     const favoriteCard = screen.getByTestId("material-picker-product-card");
     expect(within(favoriteCard).queryByText("Alice")).not.toBeInTheDocument();
     expect(within(favoriteCard).getByText("Bob")).toBeInTheDocument();
+    expect(favoriteCard).toHaveTextContent("JAYO · PLA · 0.04 mm");
+    expect(favoriteCard).not.toHaveTextContent("0.10 mm");
 
     fireEvent.click(
       within(favoriteCard).getByRole("button", {
