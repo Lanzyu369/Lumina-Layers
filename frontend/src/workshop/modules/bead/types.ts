@@ -109,3 +109,44 @@ export interface RestoreBeadProjectOptions {
   projectId?: string;
   now?: string;
 }
+
+export interface BeadGridGeometry {
+  originX: number;
+  originY: number;
+  cellWidth: number;
+  cellHeight: number;
+}
+
+export interface PatternClassification {
+  mode: BeadInputMode | "ambiguous";
+  confidence: number;
+  scores: Record<BeadInputMode, number>;
+}
+
+export interface GridSuggestion {
+  rows: number;
+  columns: number;
+  geometry: BeadGridGeometry;
+  confidence: number;
+  validSquareGrid: boolean;
+}
+
+export interface RecognitionRequest {
+  source: import("../../types").WorkshopRaster;
+  mode: BeadInputMode;
+  rows: number;
+  columns: number;
+  geometry: BeadGridGeometry;
+  emptySelection: BeadEmptySelection;
+  transparentSupportSampleCellIndex: number | null;
+  orientation: BeadOrientation;
+}
+
+export interface RecognitionResult {
+  mode: BeadInputMode;
+  rows: number;
+  columns: number;
+  palette: RgbColor[];
+  cells: BeadCell[];
+  confidenceIssues: BeadConfidenceIssue[];
+}
