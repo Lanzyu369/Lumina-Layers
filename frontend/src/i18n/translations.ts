@@ -2509,9 +2509,121 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "图像转矢量",
     en: "Vectorizer",
   },
+  "tab.workshop": {
+    zh: "创意工坊",
+    en: "Creative Workshop",
+  },
   "tab.settings": {
     zh: "设置",
     en: "Settings",
+  },
+  "workshop.title": {
+    zh: "创意工坊",
+    en: "Creative Workshop",
+  },
+  "workshop.description": {
+    zh: "使用 Lumina 官方与受信任模块分析、编辑并准备特殊图像工作流。",
+    en: "Use official and trusted Lumina modules to analyze, edit, and prepare specialized image workflows.",
+  },
+  "workshop.official": {
+    zh: "官方",
+    en: "Official",
+  },
+  "workshop.moduleMeta": {
+    zh: "{author} · v{version}",
+    en: "{author} · v{version}",
+  },
+  "workshop.open": {
+    zh: "打开",
+    en: "Open",
+  },
+  "workshop.continue": {
+    zh: "继续",
+    en: "Continue",
+  },
+  "workshop.newProject": {
+    zh: "新建项目",
+    en: "New project",
+  },
+  "workshop.back": {
+    zh: "返回创意工坊",
+    en: "Back to Creative Workshop",
+  },
+  "workshop.localOnly": {
+    zh: "第一版仅加载随 Lumina 发布并列入白名单的模块，项目保存在本机。",
+    en: "This first release loads only modules shipped with and whitelisted by Lumina. Projects stay on this device.",
+  },
+  "workshop.capabilityManaged": {
+    zh: "模块权限由 Lumina 宿主管理。",
+    en: "Module capabilities are managed by the Lumina host.",
+  },
+  "workshop.persistenceUnavailable": {
+    zh: "浏览器无法使用持久化存储。本次项目仍可编辑，但关闭页面后不会保留。",
+    en: "Persistent browser storage is unavailable. You can keep editing this session, but the project will not survive closing the page.",
+  },
+  "workshop.moduleErrorTitle": {
+    zh: "模块暂时无法打开",
+    en: "The module could not open",
+  },
+  "workshop.moduleErrorDescription": {
+    zh: "项目数据仍然保留。请返回工坊后重试。",
+    en: "Your project data is still preserved. Return to the workshop and try again.",
+  },
+  "workshop.disabled.invalid-manifest": {
+    zh: "模块清单无效",
+    en: "Invalid module manifest",
+  },
+  "workshop.disabled.unsupported-manifest": {
+    zh: "模块清单版本不受支持",
+    en: "Unsupported manifest version",
+  },
+  "workshop.disabled.unknown-capability": {
+    zh: "模块请求了未知权限",
+    en: "The module requests an unknown capability",
+  },
+  "workshop.disabled.app-version-too-old": {
+    zh: "需要更新 Lumina",
+    en: "A newer Lumina version is required",
+  },
+  "workshop.disabled.not-whitelisted": {
+    zh: "模块未列入白名单",
+    en: "The module is not whitelisted",
+  },
+  "workshop.disabled.duplicate-id": {
+    zh: "模块 ID 冲突",
+    en: "Duplicate module ID",
+  },
+  "workshop.bead.name": {
+    zh: "拼豆模式",
+    en: "Bead Pattern",
+  },
+  "workshop.bead.description": {
+    zh: "读取清晰拼豆图纸或截图，校准格子并生成可继续编辑的拼豆矩阵。",
+    en: "Read a clear bead chart or screenshot, calibrate its grid, and create an editable bead matrix.",
+  },
+  "workshop.bead.intro": {
+    zh: "上传编号格图、硬边像素图或数字圆豆俯视图。下一步会让你确认网格和空格，不会自动猜测倾斜实拍。",
+    en: "Upload a numbered grid, hard-edged pixel chart, or digital top-down ring preview. You will confirm the grid and empty cells; oblique photos are not guessed.",
+  },
+  "workshop.bead.choosePattern": {
+    zh: "选择拼豆图纸",
+    en: "Choose bead pattern",
+  },
+  "workshop.bead.supportedInputs": {
+    zh: "支持 PNG、JPEG、WebP；请选择单个清晰、正视的图案。",
+    en: "PNG, JPEG, and WebP are supported. Choose one clear, front-facing pattern.",
+  },
+  "workshop.bead.localPrivacy": {
+    zh: "分析和项目保存都在本机完成。",
+    en: "Analysis and project storage stay on this device.",
+  },
+  "workshop.bead.selectedFile": {
+    zh: "已选择：{filename}",
+    en: "Selected: {filename}",
+  },
+  "workshop.bead.pickerError": {
+    zh: "无法读取这张图。请确认文件格式后重试。",
+    en: "This image could not be read. Check its format and try again.",
   },
   "tab.colorEditor": {
     zh: "颜色编辑",

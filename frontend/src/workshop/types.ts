@@ -116,6 +116,7 @@ export interface WorkshopFileServices {
 export interface WorkshopUiServices {
   getLocale(): "zh" | "en";
   getTheme(): "light" | "dark";
+  translate(key: string): string;
 }
 
 export interface WorkshopProgressUpdate {
