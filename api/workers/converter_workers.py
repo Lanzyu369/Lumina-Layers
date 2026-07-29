@@ -1232,6 +1232,7 @@ def worker_batch_convert_item(
     material_min_layer_count: int = 5,
     material_max_layer_count: int = 10,
     material_delta_e00_tolerance: float = 0.5,
+    separate_backing: bool = False,
 ) -> dict:
     """Execute a single batch conversion item in a worker process.
     在工作进程中执行单个批量转换项。
@@ -1289,6 +1290,8 @@ def worker_batch_convert_item(
             layers. (动态最大有效层数及物理模型层数)
         material_delta_e00_tolerance: Allowed CIEDE2000 loss for shorter
             recipes. (短配方允许的 CIEDE2000 损失)
+        separate_backing: Whether the backing plate remains a separate mesh.
+            (是否将底板保留为独立网格)
 
     Returns:
         dict: Result dictionary with the following keys:
@@ -1354,6 +1357,7 @@ def worker_batch_convert_item(
         material_layer_height_mm=material_layer_height_mm,
         material_grid_resolution=material_grid_resolution,
         material_backing_material_index=material_backing_material_index,
+        separate_backing=separate_backing,
         use_lut_constrained=use_lut_constrained,
         auto_dynamic_range=auto_dynamic_range,
         high_precision_3d_preview=high_precision_3d_preview,

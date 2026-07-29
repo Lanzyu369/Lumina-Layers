@@ -34,6 +34,23 @@ def test_local_docker_image_installs_glb_v2_dependencies() -> None:
     assert "pip install --no-cache-dir -r requirements.txt -r requirements-glb-v2.txt" in dockerfile
 
 
+def test_base_runtime_requirements_include_task_parallelism_memory_sampler() -> None:
+    base_requirements = _read_repo_text("requirements.txt")
+    declared_requirements = [
+        line.partition("#")[0].strip().casefold()
+        for line in base_requirements.splitlines()
+        if line.partition("#")[0].strip()
+    ]
+
+    assert any(
+        requirement == "psutil"
+        or requirement.startswith(
+            ("psutil<", "psutil>", "psutil=", "psutil!", "psutil~", "psutil[")
+        )
+        for requirement in declared_requirements
+    )
+
+
 def test_local_docker_deploy_enables_glb_kernel_v2_by_default_with_rollback() -> None:
     deploy_script = _read_repo_text("scripts/docker_local_deploy.ps1")
 

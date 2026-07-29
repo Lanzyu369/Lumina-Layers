@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import BasicSettings from "../components/sections/BasicSettings";
+import BedSizeSelector from "../components/sections/BedSizeSelector";
 import { useConverterStore } from "../stores/converter";
+import { DEFAULT_SETTINGS, useSettingsStore } from "../stores/settingsStore";
 import * as converterApi from "../api/converter";
 import * as lutApi from "../api/lut";
 import * as extractorApi from "../api/extractor";
@@ -255,6 +257,10 @@ beforeEach(() => {
     materialMaxLayerCount: 10,
     materialDynamicRecipes: [],
     materialLayerBenefitCurve: [],
+  });
+  useSettingsStore.setState({
+    ...DEFAULT_SETTINGS,
+    language: "zh",
   });
 });
 
@@ -684,8 +690,79 @@ describe("BasicSettings", () => {
     expect(screen.getByText("来源类型")).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "传统 LUT" })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "反推LUT" })).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "品牌" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "LUT 品牌" })).toBeInTheDocument();
     expect(screen.queryByRole("combobox", { name: "LUT" })).not.toBeInTheDocument();
+  });
+
+  it("keeps a Snapmaker LUT independent from the configured Bambu printer", async () => {
+    const snapmakerGroup: LutDetailsCatalogGroup = {
+      manufacturer: "snapmaker",
+      items: [
+        {
+          name: "快造&4色PLA&RYBW",
+          path: "lut-ref/snapmaker-rybw.npy",
+          fingerprint: "fp-snapmaker-rybw",
+          color_mode: ColorModeEnum.FOUR_COLOR_RYBW,
+          compatibility_key: "sig-snapmaker-rybw",
+          source_kind: "legacy_lookup",
+          manufacturer: "snapmaker",
+          material_type: "PLA",
+          manufacturer_source: "metadata",
+          material_source: "metadata",
+          search_tokens: ["snapmaker", "rybw"],
+        },
+      ],
+    };
+    vi.mocked(lutApi.fetchLutDetailsCatalog).mockResolvedValue({
+      groups: [snapmakerGroup],
+    });
+    vi.mocked(converterApi.fetchLutList).mockResolvedValue({
+      luts: [
+        {
+          name: "snapmaker - 快造&4色PLA&RYBW",
+          color_mode: ColorModeEnum.FOUR_COLOR_RYBW,
+          path: "lut-ref/snapmaker-rybw.npy",
+          fingerprint: "fp-snapmaker-rybw",
+        },
+      ],
+    });
+    useConverterStore.setState({
+      legacyCatalogGroups: [snapmakerGroup],
+      selectedLegacyManufacturer: "",
+      bed_label: "Bambu Lab P1S",
+      bedSizes: [
+        {
+          label: "Bambu Lab P1S",
+          width_mm: 256,
+          height_mm: 256,
+          is_default: false,
+          printer_id: "bambu-p1s",
+        },
+      ],
+    });
+    useSettingsStore.setState({ printerModel: "bambu-p1s" });
+
+    render(
+      <>
+        <BasicSettings />
+        <BedSizeSelector />
+      </>,
+    );
+
+    fireEvent.click(screen.getByRole("combobox", { name: "LUT 品牌" }));
+    fireEvent.click(screen.getByRole("option", { name: "snapmaker" }));
+
+    await waitFor(() => {
+      expect(useConverterStore.getState().selectedLegacyManufacturer)
+        .toBe("snapmaker");
+    });
+    expect(useSettingsStore.getState().printerModel).toBe("bambu-p1s");
+    expect(useConverterStore.getState().bed_label).toBe("Bambu Lab P1S");
+    expect(screen.getByText("LUT 品牌")).toBeInTheDocument();
+    expect(screen.getByText("打印机热床")).toBeInTheDocument();
+    expect(
+      screen.getByText("Bambu Lab P1S · 256×256 毫米"),
+    ).toBeInTheDocument();
   });
 
   it("shows the inferred white material as the base plate when no backing is persisted", async () => {
@@ -800,6 +877,38 @@ describe("BasicSettings", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("lets users retry a failed material-library load from the picker", async () => {
+    vi.mocked(extractorApi.listGradientCardMaterials)
+      .mockRejectedValueOnce(new Error("temporary failure"))
+      .mockResolvedValueOnce({
+        status: "success",
+        message: "ok",
+        materials: [makeMaterial("JAYO/red-pla", "Red PLA")],
+      });
+    useConverterStore.setState({
+      source_version: "material",
+      selectedMaterialDirNames: [],
+      materialBackingMaterialDirName: null,
+    });
+
+    render(<BasicSettings />);
+
+    await waitFor(() => {
+      expect(extractorApi.listGradientCardMaterials).toHaveBeenCalledOnce();
+    });
+    fireEvent.click(screen.getByTestId("material-picker-trigger"));
+    expect(
+      await screen.findByTestId("material-picker-load-error"),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "重试" }));
+
+    await waitFor(() => {
+      expect(extractorApi.listGradientCardMaterials).toHaveBeenCalledTimes(2);
+    });
+    expect(await screen.findByText("Red PLA")).toBeInTheDocument();
+  });
+
   it("reconciles renamed material selections imported after the library loads", async () => {
     vi.mocked(extractorApi.listGradientCardMaterials).mockResolvedValueOnce({
       status: "success",
@@ -815,12 +924,6 @@ describe("BasicSettings", () => {
     render(<BasicSettings />);
 
     fireEvent.click(screen.getByTestId("material-picker-trigger"));
-    await waitFor(() => {
-      expect(
-        screen.getByTestId("material-picker-brand-group-toggle"),
-      ).toBeInTheDocument();
-    });
-    fireEvent.click(screen.getByTestId("material-picker-brand-group-toggle"));
     await screen.findByText("Karvax PLA 耀石黑");
 
     act(() => {
@@ -847,7 +950,7 @@ describe("BasicSettings", () => {
   it("shows brand options from the loaded legacy details catalog", () => {
     render(<BasicSettings />);
 
-    fireEvent.click(screen.getByRole("combobox", { name: "品牌" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "LUT 品牌" }));
 
     expect(screen.getByRole("option", { name: "Brand A" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Brand B" })).toBeInTheDocument();
@@ -857,11 +960,11 @@ describe("BasicSettings", () => {
   it("enables grouped LUT choices after selecting a legacy brand", async () => {
     render(<BasicSettings />);
 
-    fireEvent.click(screen.getByRole("combobox", { name: "品牌" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "LUT 品牌" }));
     fireEvent.click(screen.getByRole("option", { name: "Brand A" }));
 
     await waitFor(() => {
-      expect(screen.getByRole("combobox", { name: "品牌" }))
+      expect(screen.getByRole("combobox", { name: "LUT 品牌" }))
         .toHaveTextContent("Brand A");
       expect(screen.getByText(/品牌信息/)).toBeInTheDocument();
     });
@@ -891,7 +994,7 @@ describe("BasicSettings", () => {
   it("submits the LUTManager name when a catalog LUT path maps to a shorter legacy LUT name", async () => {
     render(<BasicSettings />);
 
-    fireEvent.click(screen.getByRole("combobox", { name: "品牌" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "LUT 品牌" }));
     fireEvent.click(screen.getByRole("option", { name: "Brand A" }));
 
     await waitFor(() =>
@@ -929,7 +1032,7 @@ describe("BasicSettings", () => {
     render(<BasicSettings />);
 
     await waitFor(() => {
-      expect(screen.getByRole("combobox", { name: "品牌" }))
+      expect(screen.getByRole("combobox", { name: "LUT 品牌" }))
         .toHaveTextContent("Brand B");
     });
   });

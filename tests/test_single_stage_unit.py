@@ -3877,6 +3877,166 @@ def test_list_saved_stage_a_material_archives_reads_saved_material_directory(tmp
     assert results[0]["verification_history"][0]["white_detected_orientation"] == "identity"
 
 
+def test_list_saved_stage_a_material_archives_exposes_picker_metadata(
+    tmp_path: Path,
+) -> None:
+    materials_root = tmp_path / "materials"
+    material_dir = materials_root / "BrandA" / "PLA Red"
+    material_dir.mkdir(parents=True)
+    (material_dir / "stage_A_parameters.json").write_text(
+        json.dumps({"parameters": {}}),
+        encoding="utf-8",
+    )
+    (material_dir / "material.json").write_text(
+        json.dumps(
+            {
+                "material_name": "PLA Red",
+                "brand": "BrandA",
+                "material_type": "PLA",
+                "material_product_id": "product-brand-a-pla-red",
+                "material_profile_id": "profile-alice",
+                "contributor_name": "Alice",
+                "stage_a_params_file": "stage_A_parameters.json",
+                "material_summary": {"estimated_rgb": [220, 35, 45]},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    [item] = list_saved_stage_a_material_archives(
+        materials_dir=str(materials_root)
+    )
+
+    assert item["material_type"] == "PLA"
+    assert item["material_type_source"] == "archive"
+    assert item["material_product_id"] == "product-brand-a-pla-red"
+    assert item["material_profile_id"] == "profile-alice"
+    assert item["contributor_name"] == "Alice"
+
+
+@pytest.mark.parametrize(
+    ("material_name", "expected_type"),
+    [
+        ("拓竹PLA Basic 红色", "PLA"),
+        ("魔创PETG蓝色", "PETG"),
+        ("Plant Fiber Red", None),
+    ],
+)
+def test_saved_material_picker_metadata_classifies_only_exact_legacy_tokens(
+    tmp_path: Path,
+    material_name: str,
+    expected_type: str | None,
+) -> None:
+    materials_root = tmp_path / "materials"
+    material_dir = materials_root / "sample"
+    material_dir.mkdir(parents=True)
+    (material_dir / "stage_A_parameters.json").write_text(
+        json.dumps({"parameters": {}}),
+        encoding="utf-8",
+    )
+    (material_dir / "material.json").write_text(
+        json.dumps(
+            {
+                "material_name": material_name,
+                "stage_a_params_file": "stage_A_parameters.json",
+                "material_summary": {"estimated_rgb": [10, 20, 30]},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    [item] = list_saved_stage_a_material_archives(
+        materials_dir=str(materials_root)
+    )
+
+    assert item["material_type"] == expected_type
+    assert item["material_type_source"] == (
+        "legacy_name" if expected_type else None
+    )
+
+
+def test_save_stage_a_material_archive_preserves_picker_metadata(
+    tmp_path: Path,
+) -> None:
+    params_payload = {
+        "meta": {},
+        "parameters": {
+            "channels": [
+                {
+                    "color_name": "PLA Red",
+                    "E": [0.2, 0.3, 0.4],
+                    "k": [1.0, 1.1, 1.2],
+                }
+            ],
+            "substrates": [
+                {"substrate_id": "white", "C0": [0.9, 0.9, 0.9]},
+                {"substrate_id": "black", "C0": [0.1, 0.1, 0.1]},
+            ],
+        },
+        "fitted_substrates": {},
+        "validation": {"overall": {"mean_delta_e": 1.0}},
+    }
+    fit_summary = {
+        "overall_validation": {
+            "mean_delta_e": 1.0,
+            "rmse_linear": 0.1,
+            "channel_rmse": [0.1, 0.1, 0.1],
+        },
+        "warnings": [],
+    }
+    material_summary = {
+        "estimated_rgb": [220, 35, 45],
+        "estimated_k": [1.0, 1.1, 1.2],
+        "white_zero_rgb": [240, 240, 240],
+        "black_zero_rgb": [30, 30, 30],
+        "layer_height_mm": 0.04,
+        "sample_boxes": [],
+    }
+    materials_root = tmp_path / "materials"
+    first = save_stage_a_material_archive(
+        material_name="PLA Red",
+        params_payload=params_payload,
+        fit_summary=fit_summary,
+        source_summary={"capture": 1},
+        material_summary=material_summary,
+        materials_dir=str(materials_root),
+    )
+    first_payload = json.loads(
+        Path(first.archive_path).read_text(encoding="utf-8")
+    )
+    first_payload.update(
+        {
+            "material_type": "PLA",
+            "material_product_id": "product-red",
+            "contributor_name": "Alice",
+        }
+    )
+    Path(first.archive_path).write_text(
+        json.dumps(first_payload),
+        encoding="utf-8",
+    )
+
+    second = save_stage_a_material_archive(
+        material_name="Ignored replacement name",
+        params_payload=params_payload,
+        fit_summary=fit_summary,
+        source_summary={"capture": 2},
+        material_summary=material_summary,
+        materials_dir=str(materials_root),
+        existing_directory_name=first.material_summary["directory_name"],
+    )
+    second_payload = json.loads(
+        Path(second.archive_path).read_text(encoding="utf-8")
+    )
+
+    assert second_payload["material_profile_id"] == first_payload[
+        "material_profile_id"
+    ]
+    assert second_payload["material_type"] == "PLA"
+    assert second_payload["material_product_id"] == "product-red"
+    assert second_payload["contributor_name"] == "Alice"
+
+
 def test_list_saved_stage_a_material_archives_reuses_cached_scan(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -4016,6 +4176,11 @@ def test_gradient_card_material_library_rejects_untrusted_origin_by_default(
             {
                 "material_name": "PLA Basic",
                 "directory_name": "pla-basic",
+                "material_type": "PLA",
+                "material_type_source": "archive",
+                "material_product_id": "product-pla-basic",
+                "material_profile_id": "profile-alice",
+                "contributor_name": "Alice",
                 "created_at": "2026-04-16T10:00:00Z",
                 "updated_at": "2026-04-16T11:00:00Z",
                 "archive_path": str(archive_path),
@@ -4055,6 +4220,11 @@ def test_gradient_card_material_library_allows_untrusted_origin_for_public_gray_
             {
                 "material_name": "PLA Basic",
                 "directory_name": "pla-basic",
+                "material_type": "PLA",
+                "material_type_source": "archive",
+                "material_product_id": "product-pla-basic",
+                "material_profile_id": "profile-alice",
+                "contributor_name": "Alice",
                 "created_at": "2026-04-16T10:00:00Z",
                 "updated_at": "2026-04-16T11:00:00Z",
                 "archive_path": str(archive_path),
@@ -4393,6 +4563,11 @@ def test_gradient_card_material_library_route_lists_saved_materials(
             {
                 "material_name": "PLA Basic",
                 "directory_name": "pla-basic",
+                "material_type": "PLA",
+                "material_type_source": "archive",
+                "material_product_id": "product-pla-basic",
+                "material_profile_id": "profile-alice",
+                "contributor_name": "Alice",
                 "created_at": "2026-04-16T10:00:00Z",
                 "updated_at": "2026-04-16T11:00:00Z",
                 "archive_path": str(archive_path),
@@ -4429,6 +4604,11 @@ def test_gradient_card_material_library_route_lists_saved_materials(
     assert len(body["materials"]) == 1
     item = body["materials"][0]
     assert item["material_name"] == "PLA Basic"
+    assert item["material_type"] == "PLA"
+    assert item["material_type_source"] == "archive"
+    assert item["material_product_id"] == "product-pla-basic"
+    assert item["material_profile_id"] == "profile-alice"
+    assert item["contributor_name"] == "Alice"
     assert item["updated_at"] == "2026-04-16T11:00:00Z"
     assert item["verification_count"] == 3
     assert len(item["verification_history"]) == 1

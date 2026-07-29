@@ -55,6 +55,31 @@ class _StubSolverCache:
         return matched_rgb, recipes_b2t, delta_e
 
 
+class _ParallelSolverCache(_StubSolverCache):
+    """Solver stub that records the effective inner parallelism keyword."""
+
+    def __init__(self, layer_count: int):
+        super().__init__(layer_count)
+        self.observed_parallelism: list[int] = []
+
+    def lookup(
+        self,
+        unique_colors: np.ndarray,
+        materials,
+        *,
+        hue_weight: float = 0.0,
+        neighbor_coherence: float = 0.5,
+        parallelism: int = 1,
+    ):
+        del neighbor_coherence
+        self.observed_parallelism.append(int(parallelism))
+        return super().lookup(
+            unique_colors,
+            materials,
+            hue_weight=hue_weight,
+        )
+
+
 def _build_matcher(*, layer_count: int = 5, materials_count: int = 4) -> MaterialVectorMatcher:
     materials = [object() for _ in range(materials_count)]
     slot_names = [f"M{i}" for i in range(materials_count)]
@@ -194,6 +219,101 @@ class TestMaterialVectorMatcherSolveForFills:
             lab = MaterialVectorMatcher._rgb_to_lab(np.array([rgb], dtype=np.uint8))
             _dist, idx = m.kdtree.query(lab)
             assert int(idx[0]) == expected_idx
+
+    def test_resolves_and_forwards_vector_parallelism(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import core.vector_matchers as vector_matchers
+
+        matcher = _build_matcher(layer_count=4, materials_count=3)
+        runtime = _ParallelSolverCache(layer_count=4)
+        matcher._solver_cache = runtime  # noqa: SLF001
+        policy_calls: list[dict[str, int | str]] = []
+
+        def _resolve(
+            workload: str,
+            *,
+            work_items: int,
+            min_parallel_items: int,
+            hard_max_workers: int,
+            work_units: int,
+            min_parallel_work_units: int,
+            estimated_worker_bytes: int,
+        ) -> int:
+            policy_calls.append(
+                {
+                    "workload": workload,
+                    "work_items": work_items,
+                    "min_parallel_items": min_parallel_items,
+                    "hard_max_workers": hard_max_workers,
+                    "work_units": work_units,
+                    "min_parallel_work_units": min_parallel_work_units,
+                    "estimated_worker_bytes": estimated_worker_bytes,
+                },
+            )
+            return 3
+
+        monkeypatch.setattr(
+            vector_matchers,
+            "resolve_task_parallelism",
+            _resolve,
+        )
+
+        matcher.solve_for_fills(
+            [(10, 20, 30), (20, 30, 40), (30, 40, 50), (40, 50, 60)],
+        )
+
+        assert policy_calls == [
+            {
+                "workload": "vector",
+                "work_items": 4,
+                "min_parallel_items": 2,
+                "hard_max_workers": 4,
+                "work_units": 4,
+                "min_parallel_work_units": 32,
+                "estimated_worker_bytes": 256 * 1024**2,
+            }
+        ]
+        assert runtime.observed_parallelism == [3]
+        assert matcher.effective_parallelism_workers == 3
+
+    def test_parallelism_keyword_is_filtered_for_legacy_runtime(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import core.vector_matchers as vector_matchers
+
+        matcher = _build_matcher()
+        monkeypatch.setattr(
+            vector_matchers,
+            "resolve_task_parallelism",
+            lambda *args, **kwargs: 4,
+        )
+
+        matcher.solve_for_fills([(10, 20, 30), (20, 30, 40)])
+
+        assert matcher.lut_rgb.shape == (2, 3)
+
+    def test_invalid_vector_parallelism_uses_automatic_policy(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import core.task_parallelism as task_parallelism
+
+        matcher = _build_matcher(layer_count=4, materials_count=3)
+        runtime = _ParallelSolverCache(layer_count=4)
+        matcher._solver_cache = runtime  # noqa: SLF001
+        monkeypatch.setattr(task_parallelism.os, "cpu_count", lambda: 8)
+        monkeypatch.setenv("LUMINA_VECTOR_PARALLELISM", "invalid")
+        monkeypatch.setenv("LUMINA_MAX_WORKERS", "2")
+        task_parallelism._WARNED_INVALID_VALUES.clear()
+
+        matcher.solve_for_fills(
+            [(index, index + 1, index + 2) for index in range(40)],
+        )
+
+        assert runtime.observed_parallelism == [4]
 
     def test_full_coverage_runtime_applies_not_worse_fallback(
         self, monkeypatch: pytest.MonkeyPatch

@@ -1028,6 +1028,11 @@ export interface SavedMaterialLibraryItem {
   material_name: string;
   directory_name: string;
   brand?: string | null;
+  material_type?: string | null;
+  material_type_source?: "archive" | "legacy_name" | null;
+  material_product_id?: string | null;
+  material_profile_id?: string | null;
+  contributor_name?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
   material_file_url: string | null;
@@ -1774,6 +1779,7 @@ export interface BatchConvertParams {
   material_min_layer_count?: number;
   material_max_layer_count?: number;
   material_delta_e00_tolerance?: number;
+  separate_backing?: boolean;
   target_width_mm: number;
   spacer_thick: number;
   structure_mode: string;

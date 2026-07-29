@@ -3739,7 +3739,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       if (isDynamicMaterialActive(_get())) {
         set({
           materialBackingMaterialDirName: name,
-          ...buildPreviewSessionResetState(),
+          ...buildPreviewSessionResetState(_get()),
         });
         return;
       }
@@ -7960,6 +7960,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           ...resolveColorMatchingWeights(state),
           use_lut_constrained: state.use_lut_constrained,
           auto_dynamic_range: state.auto_dynamic_range,
+          separate_backing: state.separate_backing,
           enable_relief: state.enable_relief,
           printer_id: settings.printerModel,
           slicer: settings.slicerSoftware,
@@ -8280,5 +8281,7 @@ registerPreviewArtifactInvalidator(() => {
   if (!isDynamicMaterialActive(useConverterStore.getState())) {
     return;
   }
-  useConverterStore.setState(buildPreviewSessionResetState());
+  useConverterStore.setState(
+    buildPreviewSessionResetState(useConverterStore.getState()),
+  );
 });

@@ -4623,6 +4623,8 @@ class VectorProcessor:
             None,
         )
         solve_for_fills = getattr(self.img_processor, "solve_for_fills", None)
+        stage_timings["fill_dedup_s"] = 0.0
+        stage_timings["material_solve_s"] = 0.0
         t0 = time.perf_counter()
         targets_by_matched, legacy_replacements = _normalise_vector_replacement_input(
             color_replacements
@@ -4642,7 +4644,11 @@ class VectorProcessor:
         # The second solve therefore owns the metadata/KDTree consumed by
         # preview, GLB and 3MF generation.
         if dynamic_replacement_projection and clipped_shapes:
+            material_solve_t0 = time.perf_counter()
             solve_for_clipped_shapes(clipped_shapes, scale_factor=scale_factor)
+            stage_timings["material_solve_s"] += (
+                time.perf_counter() - material_solve_t0
+            )
             preflight_input_shapes = self._with_near_fill_match_queries(
                 clipped_shapes
             )
@@ -4658,9 +4664,13 @@ class VectorProcessor:
                 targets_by_matched,
             )
             if projected_count:
+                material_solve_t0 = time.perf_counter()
                 solve_for_clipped_shapes(
                     match_input_shapes,
                     scale_factor=scale_factor,
+                )
+                stage_timings["material_solve_s"] += (
+                    time.perf_counter() - material_solve_t0
                 )
                 # Do not apply the same palette remap after the final KDTree
                 # lookup: final ``match_color`` already is the exact target.
@@ -4693,11 +4703,16 @@ class VectorProcessor:
                     )
 
             if callable(solve_for_clipped_shapes) and clipped_shapes:
+                material_solve_t0 = time.perf_counter()
                 solve_for_clipped_shapes(
                     clipped_shapes,
                     scale_factor=scale_factor,
                 )
+                stage_timings["material_solve_s"] += (
+                    time.perf_counter() - material_solve_t0
+                )
             elif solve_for_fills is not None and clipped_shapes:
+                fill_dedup_t0 = time.perf_counter()
                 unique_fills_set: set = set()
                 for item in clipped_shapes:
                     color = item.get("color")
@@ -4709,8 +4724,15 @@ class VectorProcessor:
                         )
                     except (TypeError, IndexError, ValueError):
                         continue
+                stage_timings["fill_dedup_s"] += (
+                    time.perf_counter() - fill_dedup_t0
+                )
                 if unique_fills_set:
+                    material_solve_t0 = time.perf_counter()
                     solve_for_fills(sorted(unique_fills_set))
+                    stage_timings["material_solve_s"] += (
+                        time.perf_counter() - material_solve_t0
+                    )
                     # NOTE: small-shape snap is disabled for material-archive mode.
                     # The delta_e heuristic incorrectly triggers when the material
                     # set cannot physically reproduce dark colours, causing
@@ -4735,7 +4757,13 @@ class VectorProcessor:
             item["geometry"] = filtered_geometry
             if idx < len(matched_shapes):
                 matched_shapes[idx]["geometry"] = filtered_geometry
-        stage_timings["color_match_s"] = time.perf_counter() - t0
+        stage_timings["color_match_s"] = max(
+            0.0,
+            time.perf_counter()
+            - t0
+            - stage_timings["fill_dedup_s"]
+            - stage_timings["material_solve_s"],
+        )
         _log.debug("Matched %s shapes to LUT recipes", len(matched_shapes))
         legacy_stroke_only_shapes = sum(
             1 for item in shape_data if item.get("source_kind") == "stroke_only"

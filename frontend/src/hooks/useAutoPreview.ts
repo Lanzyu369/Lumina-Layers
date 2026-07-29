@@ -1,6 +1,11 @@
 import { useEffect, useRef } from "react";
 import {
+  fetchMaterialSolverCacheStatus,
+  type MaterialSolverCacheKey,
+} from "../api/materialCache";
+import {
   resolveConverterSourceSelection,
+  type ConverterState,
   useConverterStore,
 } from "../stores/converter";
 import { useSettingsStore } from "../stores/settingsStore";
@@ -10,6 +15,45 @@ type AutoPreviewSnapshot = {
   inputKey: string;
   settingsKey: string;
 };
+
+type MaterialCacheState = Pick<
+  ConverterState,
+  | "source_version"
+  | "selectedMaterialDirNames"
+  | "materialLayerCount"
+  | "materialLayerHeightMm"
+>;
+
+function resolveMaterialCacheIdentity(
+  state: MaterialCacheState,
+): string | null {
+  if (
+    state.source_version !== "material" ||
+    state.selectedMaterialDirNames.length === 0
+  ) {
+    return null;
+  }
+  return JSON.stringify([
+    state.selectedMaterialDirNames,
+    state.materialLayerCount,
+    state.materialLayerHeightMm,
+    "white",
+  ]);
+}
+
+function resolveMaterialCacheKey(
+  state: MaterialCacheState,
+): MaterialSolverCacheKey | null {
+  if (resolveMaterialCacheIdentity(state) === null) {
+    return null;
+  }
+  return {
+    materialDirectoryNames: state.selectedMaterialDirNames,
+    layerCount: state.materialLayerCount,
+    layerHeightMm: state.materialLayerHeightMm,
+    substrate: "white",
+  };
+}
 
 function sameSnapshot(
   left: AutoPreviewSnapshot,
@@ -26,6 +70,7 @@ function sameSnapshot(
  * Auto-trigger preview when preconditions are met.
  * 当图片已上传、颜色来源已就绪、裁剪模态框已关闭、且当前图片已手动预览过时，
  * 后续所有会改变预览请求的参数变化都会先失效旧结果，再自动触发预览（300ms 防抖）。
+ * 耗材组合、层数或层高变化后会先确认持久缓存存在；未命中时等待用户手动预览。
  *
  * 新上传的图片必须先手动点击"预览"按钮，之后参数变化才会自动触发。
  */
@@ -46,6 +91,9 @@ export function useAutoPreview(): void {
   );
   const isSourceReady = useConverterStore(
     (state) => resolveConverterSourceSelection(state).isReady,
+  );
+  const materialCacheIdentity = useConverterStore(
+    resolveMaterialCacheIdentity,
   );
   const inputKey = useConverterStore((state) =>
     JSON.stringify([
@@ -111,17 +159,84 @@ export function useAutoPreview(): void {
     const submissionStarted =
       lastSubmissionSequenceRef.current !== submissionSequence;
     lastSubmissionSequenceRef.current = submissionSequence;
-    const scheduleRefresh = () => {
+    const scheduleRefresh = (requiresMaterialCachePreflight = false) => {
+      let cancelled = false;
       timerRef.current = setTimeout(() => {
-        const latest = useConverterStore.getState();
-        if (!latest.previewAutoRefreshPending || latest.isLoading) {
-          return;
-        }
-        lastTriggeredRef.current = currentSnapshot;
-        void submitPreview();
+        timerRef.current = null;
+        void (async () => {
+          const scheduledState = useConverterStore.getState();
+          if (
+            !scheduledState.previewAutoRefreshPending ||
+            scheduledState.isLoading
+          ) {
+            return;
+          }
+          const scheduledRevision = scheduledState.previewRequestRevision;
+
+          if (requiresMaterialCachePreflight) {
+            const cacheKey = resolveMaterialCacheKey(scheduledState);
+            if (
+              cacheKey === null ||
+              resolveMaterialCacheIdentity(scheduledState) !==
+                materialCacheIdentity
+            ) {
+              return;
+            }
+            const settings = useSettingsStore.getState();
+            const gridResolution = settings.enableSolverCacheGridSelection
+              ? settings.solverCacheGridResolution
+              : undefined;
+            let cacheAvailable = false;
+            try {
+              const status = await fetchMaterialSolverCacheStatus(cacheKey, {
+                gridResolution,
+              });
+              cacheAvailable = status.cached;
+            } catch {
+              cacheAvailable = false;
+            }
+
+            const latest = useConverterStore.getState();
+            if (
+              cancelled ||
+              latest.imageFile !== currentSnapshot.imageFile ||
+              latest.previewRequestRevision !== scheduledRevision ||
+              latest.isLoading ||
+              !latest.previewAutoRefreshPending ||
+              resolveMaterialCacheIdentity(latest) !== materialCacheIdentity
+            ) {
+              return;
+            }
+            if (!cacheAvailable) {
+              // The new cache key has no persisted cache, so stop this
+              // refresh without discarding the preview baseline. Keeping the
+              // baseline lets a later cache-key change run its own preflight.
+              // 新缓存键未命中时只阻止本次刷新；保留预览基线，后续切换到
+              // 其他缓存键时仍会重新检查，而不是永久失去自动预览资格。
+              lastTriggeredRef.current = currentSnapshot;
+              useConverterStore.setState({
+                hasManualPreview: true,
+                previewAutoRefreshPending: false,
+              });
+              return;
+            }
+          }
+
+          const latest = useConverterStore.getState();
+          if (
+            cancelled ||
+            !latest.previewAutoRefreshPending ||
+            latest.isLoading
+          ) {
+            return;
+          }
+          lastTriggeredRef.current = currentSnapshot;
+          void submitPreview();
+        })();
       }, 300);
 
       return () => {
+        cancelled = true;
         if (timerRef.current !== null) {
           clearTimeout(timerRef.current);
           timerRef.current = null;
@@ -145,7 +260,13 @@ export function useAutoPreview(): void {
       if (!isSourceReady) {
         return;
       }
-      return scheduleRefresh();
+      // Material cache-key setters clear the manual baseline while preserving
+      // refresh ownership. Gate only that path; ordinary input changes keep
+      // the established baseline and retain the existing automatic behavior.
+      // 耗材缓存键 setter 会清除手动基线但保留刷新资格；仅该路径先查持久缓存。
+      return scheduleRefresh(
+        !hasManualPreview && materialCacheIdentity !== null,
+      );
     }
 
     if (!hasManualPreview) {
@@ -180,6 +301,7 @@ export function useAutoPreview(): void {
     invalidatePreview,
     isLoading,
     isSourceReady,
+    materialCacheIdentity,
     refreshPending,
     settingsKey,
     submissionSequence,

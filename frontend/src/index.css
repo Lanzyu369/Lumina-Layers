@@ -112,6 +112,28 @@ body.lumina-canvas-orbiting [data-widget-id] {
   box-shadow: none !important;
 }
 
+@keyframes material-picker-card-select {
+  0% {
+    filter: drop-shadow(0 0 0 transparent);
+  }
+  55% {
+    filter: drop-shadow(0 0 6px var(--focus-ring));
+  }
+  100% {
+    filter: drop-shadow(0 1px 2px var(--focus-ring));
+  }
+}
+
+.material-picker-card-select-effect {
+  animation: material-picker-card-select 180ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .material-picker-card-select-effect {
+    animation: none;
+  }
+}
+
 .panel-surface {
   background: var(--surface-panel);
   border: 0;

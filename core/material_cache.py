@@ -49,13 +49,16 @@ import logging
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from itertools import chain
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 import cv2
 import numpy as np
 from scipy.spatial import cKDTree
+from scipy.spatial.distance import cdist
 
 from config import MATERIALS_DIR
 from core.material_color_solver import (
@@ -74,6 +77,7 @@ from core.material_color_solver import (
     linear_to_srgb_uint8,
     rgb_to_lab,
 )
+from core.task_parallelism import task_parallelism_worker_scope
 
 _log = logging.getLogger(__name__)
 
@@ -725,6 +729,224 @@ _NEIGHBOR_COHERENCE_PROXIMITY_THRESHOLD: float = 20.0
 # 修正时每个目标色考察的候选数。
 _NEIGHBOR_COHERENCE_TOP_K: int = 8
 
+_NEIGHBOR_COHERENCE_DISTANCE_MEMORY_BYTES: int = 64 * 1024 * 1024
+"""Total temporary distance-matrix budget across coherence worker threads."""
+
+
+def _iter_neighbor_pairs(
+    target_lab: np.ndarray,
+    *,
+    threshold: float,
+) -> Iterator[tuple[int, int]]:
+    """Yield strict-threshold Lab pairs in legacy lexicographic order.
+
+    Querying one target row at a time bounds candidate-neighbour storage to
+    ``O(C)`` even when all colors are mutually close. 按目标行查询，避免
+    ``query_pairs`` 在稠密颜色集上一次物化 ``O(C²)`` 候选对。
+    """
+
+    targets = np.asarray(target_lab, dtype=np.float64)
+    if targets.shape[0] < 2 or float(threshold) <= 0.0:
+        return
+
+    query_radius = np.nextafter(float(threshold), np.inf)
+    tree = cKDTree(targets)
+    for row_index in range(targets.shape[0]):
+        neighbor_indices = np.asarray(
+            sorted(
+                int(index)
+                for index in tree.query_ball_point(
+                    targets[row_index],
+                    query_radius,
+                )
+                if int(index) > row_index
+            ),
+            dtype=np.intp,
+        )
+        if neighbor_indices.size == 0:
+            continue
+        differences = (
+            targets[row_index][None, :]
+            - targets[neighbor_indices]
+        )
+        exact_distances = np.sqrt(
+            np.sum(differences * differences, axis=1),
+        )
+        for column_index in neighbor_indices[
+            exact_distances < float(threshold)
+        ]:
+            yield row_index, int(column_index)
+
+
+def _find_neighbor_pairs(
+    target_lab: np.ndarray,
+    *,
+    threshold: float,
+) -> np.ndarray:
+    """Materialize neighbor pairs for diagnostics and exactness tests."""
+
+    return np.asarray(
+        list(_iter_neighbor_pairs(target_lab, threshold=threshold)),
+        dtype=np.intp,
+    ).reshape(-1, 2)
+
+
+def _top_k_candidate_block(
+    target_block: np.ndarray,
+    candidate_lab: np.ndarray,
+    top_k: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compute legacy top-K candidate rows for one target block."""
+
+    with task_parallelism_worker_scope():
+        distances = cdist(target_block, candidate_lab, metric="euclidean")
+        candidate_count = candidate_lab.shape[0]
+        if top_k >= candidate_count:
+            indices = np.broadcast_to(
+                np.arange(candidate_count, dtype=np.intp)[None, :],
+                (target_block.shape[0], candidate_count),
+            ).copy()
+        else:
+            indices = np.argpartition(
+                distances,
+                top_k,
+                axis=1,
+            )[:, :top_k]
+        selected_distances = np.take_along_axis(distances, indices, axis=1)
+        return indices, selected_distances
+
+
+def _top_k_candidate_rows_blockwise(
+    *,
+    target_lab: np.ndarray,
+    candidate_lab: np.ndarray,
+    top_k: int,
+    block_size: int | None = None,
+    parallelism: int = 1,
+    memory_budget_bytes: int = _NEIGHBOR_COHERENCE_DISTANCE_MEMORY_BYTES,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Compute exact legacy top-K rows without retaining a full ``C × K`` matrix.
+
+    按目标色分块计算与旧实现完全相同的 ``cdist`` 和 ``argpartition`` 结果。
+    并行时会将总临时矩阵预算均分给 worker，结果按原目标行切片写回。
+
+    Args:
+        target_lab: ``(C, 3)`` target Lab rows. (目标 Lab)
+        candidate_lab: ``(K, 3)`` candidate Lab rows. (候选 Lab)
+        top_k: Maximum candidates retained per target. (每个目标保留数)
+        block_size: Optional explicit target rows per block. (显式分块行数)
+        parallelism: Maximum independent blocks processed together. (并行块数)
+        memory_budget_bytes: Total temporary distance-matrix budget.
+            (临时距离矩阵总预算)
+
+    Returns:
+        ``(indices, distances)`` arrays with shape ``(C, min(top_k, K))``.
+        返回索引和对应距离数组。
+    """
+
+    targets = np.asarray(target_lab)
+    candidates = np.asarray(candidate_lab)
+    target_count = targets.shape[0]
+    candidate_count = candidates.shape[0]
+    effective_top_k = min(max(0, int(top_k)), candidate_count)
+    if target_count == 0 or candidate_count == 0:
+        return (
+            np.empty((target_count, effective_top_k), dtype=np.intp),
+            np.empty((target_count, effective_top_k), dtype=np.float64),
+        )
+
+    requested_workers = max(1, int(parallelism))
+    total_memory_budget = max(1, int(memory_budget_bytes))
+    bytes_per_target = max(
+        1,
+        candidate_count * np.dtype(np.float64).itemsize,
+    )
+    single_row_worker_cap = max(
+        1,
+        total_memory_budget // bytes_per_target,
+    )
+    provisional_workers = min(
+        requested_workers,
+        target_count,
+        single_row_worker_cap,
+    )
+    if block_size is None:
+        per_worker_budget = max(
+            bytes_per_target,
+            total_memory_budget // provisional_workers,
+        )
+        rows_per_worker = max(
+            1,
+            (target_count + provisional_workers - 1) // provisional_workers,
+        )
+        resolved_block_size = max(
+            1,
+            min(
+                target_count,
+                rows_per_worker,
+                per_worker_budget // bytes_per_target,
+            ),
+        )
+    else:
+        resolved_block_size = min(
+            max(1, int(block_size)),
+            max(1, total_memory_budget // bytes_per_target),
+        )
+
+    slices = [
+        (start, min(start + resolved_block_size, target_count))
+        for start in range(0, target_count, resolved_block_size)
+    ]
+    largest_block_rows = min(resolved_block_size, target_count)
+    bytes_per_block = max(1, largest_block_rows * bytes_per_target)
+    memory_worker_cap = max(
+        1,
+        total_memory_budget // bytes_per_block,
+    )
+    worker_count = min(
+        requested_workers,
+        len(slices),
+        memory_worker_cap,
+    )
+    if worker_count > 1:
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = [
+                executor.submit(
+                    _top_k_candidate_block,
+                    targets[start:end],
+                    candidates,
+                    effective_top_k,
+                )
+                for start, end in slices
+            ]
+            block_results = [future.result() for future in futures]
+    else:
+        block_results = [
+            _top_k_candidate_block(
+                targets[start:end],
+                candidates,
+                effective_top_k,
+            )
+            for start, end in slices
+        ]
+
+    selected_indices = np.empty(
+        (target_count, effective_top_k),
+        dtype=np.intp,
+    )
+    selected_distances = np.empty(
+        (target_count, effective_top_k),
+        dtype=np.float64,
+    )
+    for (start, end), (block_indices, block_distances) in zip(
+        slices,
+        block_results,
+        strict=True,
+    ):
+        selected_indices[start:end] = block_indices
+        selected_distances[start:end] = block_distances
+    return selected_indices, selected_distances
+
 
 def _neighbor_coherence_refine(
     *,
@@ -741,6 +963,8 @@ def _neighbor_coherence_refine(
     uniform_lab: np.ndarray | None,
     uniform_srgb: np.ndarray | None,
     uniform_recipes: np.ndarray | None,
+    candidate_block_size: int | None = None,
+    parallelism: int = 1,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Refine per-color best picks to preserve gradient coherence among neighbours.
     对初始逐色最优匹配做邻近色一致性修正，保持相邻色之间的梯度方向与间距比例。
@@ -762,37 +986,29 @@ def _neighbor_coherence_refine(
 
     Returns the (potentially refined) matched_rgb, recipes, delta_e arrays.
     """
-    from scipy.spatial.distance import cdist
-
     C_count = target_lab.shape[0]
     if C_count < 2:
         return matched_rgb, recipes_user_order, delta_e
 
     # 1. Find neighbor pairs
-    target_dist = cdist(target_lab, target_lab, metric="euclidean")
-    # Only upper triangle to avoid duplicates
-    pairs = []
-    for i in range(C_count):
-        for j in range(i + 1, C_count):
-            if target_dist[i, j] < _NEIGHBOR_COHERENCE_PROXIMITY_THRESHOLD:
-                pairs.append((i, j))
-
-    if not pairs:
+    pair_iterator = _iter_neighbor_pairs(
+        target_lab,
+        threshold=_NEIGHBOR_COHERENCE_PROXIMITY_THRESHOLD,
+    )
+    first_pair = next(pair_iterator, None)
+    if first_pair is None:
         return matched_rgb, recipes_user_order, delta_e
 
     # 2. Get top-K candidates for each target (computed once)
     K_total = all_lab.shape[0]
     top_k = min(_NEIGHBOR_COHERENCE_TOP_K, K_total)
-    # Full distance matrix (C, K)
-    full_dist = cdist(target_lab, all_lab, metric="euclidean")
-    # top-K indices per target
-    if top_k >= K_total:
-        # All candidates fit within top-K; no partial sort needed.
-        topk_indices = np.broadcast_to(
-            np.arange(K_total, dtype=np.intp)[None, :], (C_count, K_total)
-        ).copy()
-    else:
-        topk_indices = np.argpartition(full_dist, top_k, axis=1)[:, :top_k]  # (C, top_k)
+    topk_indices, topk_distances = _top_k_candidate_rows_blockwise(
+        target_lab=target_lab,
+        candidate_lab=all_lab,
+        top_k=top_k,
+        block_size=candidate_block_size,
+        parallelism=parallelism,
+    )
 
     # Current matched Lab (from matched_rgb)
     matched_lab = rgb_to_lab(matched_rgb).astype(np.float64)
@@ -803,9 +1019,11 @@ def _neighbor_coherence_refine(
     new_recipes = recipes_user_order.copy()
     new_de = delta_e.copy()
     refinement_count = 0
+    pair_count = 0
 
     # 3. For each pair, check coherence and refine if needed
-    for i, j in pairs:
+    for i, j in chain((first_pair,), pair_iterator):
+        pair_count += 1
         # Source direction vector
         d_src = target_lab[j] - target_lab[i]
         d_src_norm = np.linalg.norm(d_src)
@@ -862,7 +1080,7 @@ def _neighbor_coherence_refine(
         # Get top-K candidates for the adjust target
         cand_indices = topk_indices[adjust_idx]  # (top_k,)
         cand_labs = all_lab[cand_indices]  # (top_k, 3)
-        cand_des = full_dist[adjust_idx, cand_indices]  # (top_k,)
+        cand_des = topk_distances[adjust_idx]  # (top_k,)
 
         # Current anchor matched Lab
         anchor_lab = matched_lab[anchor_idx]
@@ -912,12 +1130,12 @@ def _neighbor_coherence_refine(
     if refinement_count > 0:
         _log.info(
             "Neighbor coherence refined %d/%d targets (pairs=%d, weight=%.2f)",
-            refinement_count, C_count, len(pairs), coherence_weight,
+            refinement_count, C_count, pair_count, coherence_weight,
             extra={
                 "event": "neighbor_coherence_refined",
                 "refined_count": refinement_count,
                 "total_targets": C_count,
-                "pair_count": len(pairs),
+                "pair_count": pair_count,
                 "coherence_weight": coherence_weight,
             },
         )

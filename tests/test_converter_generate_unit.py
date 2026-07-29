@@ -57,7 +57,10 @@ from api.session_store import SessionStore
 from api.worker_pool import WorkerPoolManager
 from api.workers.converter_workers import LargeFormatCachedAnalysisError
 from config import ModelingMode as CoreModelingMode
-from core.converter import _resolve_material_archive_backing_color_id
+from core.converter import (
+    _resolve_material_archive_backing_color_id,
+    convert_image_to_3d,
+)
 
 _test_store: SessionStore = SessionStore(ttl=1800)
 _test_registry: FileRegistry = FileRegistry()
@@ -6922,6 +6925,43 @@ def test_material_archive_backing_color_id_uses_requested_index() -> None:
     assert _resolve_material_archive_backing_color_id(["brand/PLA 绿", "brand/PLA 白"], None) == 1
     with pytest.raises(ValueError, match="outside selected_materials"):
         _resolve_material_archive_backing_color_id(["mat-a"], 1)
+
+
+def test_direct_converter_uses_requested_material_archive_backing_index() -> None:
+    captured_ctx: dict = {}
+
+    def _capture_pipeline_ctx(ctx: dict) -> dict:
+        captured_ctx.update(ctx)
+        return {
+            **ctx,
+            "result_tuple": (None, None, None, "captured", None),
+        }
+
+    with patch(
+        "core.converter.run_raster_pipeline",
+        side_effect=_capture_pipeline_ctx,
+    ):
+        convert_image_to_3d(
+            image_path="input.png",
+            lut_path="__material_archive__",
+            target_width_mm=70.0,
+            spacer_thick=1.2,
+            structure_mode="Single-sided",
+            color_mode="4-Color (RYBW)",
+            add_loop=False,
+            loop_width=4.0,
+            loop_length=8.0,
+            loop_hole=2.5,
+            loop_pos=None,
+            modeling_mode=CoreModelingMode.HIGH_FIDELITY,
+            material_source="material_archive",
+            selected_materials=["brand/yellow", "brand/white"],
+            material_backing_material_index=1,
+        )
+
+    assert captured_ctx["backing_color_id"] == 1
+    assert captured_ctx["separate_backing_color_id"] == 1
+    assert captured_ctx["separate_backing"] is False
 
 
 def test_generate_route_infers_material_archive_white_backing_when_unspecified(tmp_path) -> None:

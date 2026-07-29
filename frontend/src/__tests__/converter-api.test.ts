@@ -296,6 +296,7 @@ describe("convertBatch", () => {
       material_min_layer_count: 6,
       material_max_layer_count: 9,
       material_delta_e00_tolerance: 0.7,
+      separate_backing: true,
       color_layers: 7,
       layer_height_mm: 0.06,
     });
@@ -315,6 +316,7 @@ describe("convertBatch", () => {
     expect(formData.get("material_min_layer_count")).toBe("6");
     expect(formData.get("material_max_layer_count")).toBe("9");
     expect(formData.get("material_delta_e00_tolerance")).toBe("0.7");
+    expect(formData.get("separate_backing")).toBe("true");
   });
 
   it("serializes native reverse LUT batch fields into FormData", async () => {

@@ -1283,6 +1283,83 @@ def _saved_material_brand_from_archive_payload(
     return None
 
 
+_MATERIAL_PICKER_METADATA_KEYS = (
+    "material_type",
+    "material_product_id",
+    "material_profile_id",
+    "contributor_name",
+)
+
+
+def _clean_optional_archive_text(value: Any) -> str | None:
+    """Return a trimmed archive metadata string or ``None``.
+    返回去除首尾空白的档案元数据字符串，无有效内容时返回 ``None``。
+    """
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def _resolve_picker_material_type(
+    archive_payload: dict[str, Any],
+    *,
+    material_name: str,
+    relative_directory_name: str,
+) -> tuple[str | None, str | None]:
+    """Resolve a material type for picker filtering without mutating archives.
+    为选择器筛选解析材料类型，但不修改旧档案。
+
+    Explicit archive metadata is authoritative. Legacy fallback recognizes
+    only complete ASCII ``PLA`` or ``PETG`` tokens, even when adjacent to
+    Chinese characters. The fallback is display-only and must never be used
+    to group physical material products.
+    显式档案字段优先；旧档案仅识别完整的 ASCII ``PLA`` 或 ``PETG`` 标记。
+    兼容结果只用于展示，不得用于实体耗材归组。
+    """
+    explicit = _clean_optional_archive_text(
+        archive_payload.get("material_type")
+    )
+    if explicit:
+        return explicit.upper(), "archive"
+
+    haystack = f"{material_name} {relative_directory_name}"
+    for candidate in ("PETG", "PLA"):
+        if re.search(
+            rf"(?<![A-Za-z0-9]){candidate}(?![A-Za-z0-9])",
+            haystack,
+            flags=re.IGNORECASE,
+        ):
+            return candidate, "legacy_name"
+    return None, None
+
+
+def _picker_metadata_from_archive(
+    archive_payload: dict[str, Any],
+    *,
+    material_name: str,
+    relative_directory_name: str,
+) -> dict[str, str | None]:
+    material_type, material_type_source = _resolve_picker_material_type(
+        archive_payload,
+        material_name=material_name,
+        relative_directory_name=relative_directory_name,
+    )
+    return {
+        "material_type": material_type,
+        "material_type_source": material_type_source,
+        "material_product_id": _clean_optional_archive_text(
+            archive_payload.get("material_product_id")
+        ),
+        "material_profile_id": _clean_optional_archive_text(
+            archive_payload.get("material_profile_id")
+        ),
+        "contributor_name": _clean_optional_archive_text(
+            archive_payload.get("contributor_name")
+        ),
+    }
+
+
 def _material_summary_from_saved_archive(
     target_root: Path,
     material_dir: Path,
@@ -1312,6 +1389,12 @@ def _material_summary_from_saved_archive(
         payload,
         relative_directory_name,
     )
+    material_name = str(payload.get("material_name") or material_dir.name)
+    picker_metadata = _picker_metadata_from_archive(
+        payload,
+        material_name=material_name,
+        relative_directory_name=relative_directory_name,
+    )
     aggregation = payload.get("aggregation") if isinstance(payload.get("aggregation"), dict) else None
     aggregation_method: str | None = None
     aggregation_selection: dict[str, Any] | None = None
@@ -1324,9 +1407,10 @@ def _material_summary_from_saved_archive(
             aggregation_selection = _json_clone(selection_value)
     usage_payload = _load_usage_payload(material_dir)
     return {
-        "material_name": str(payload.get("material_name") or material_dir.name),
+        "material_name": material_name,
         "directory_name": relative_directory_name,
         "brand": brand_value,
+        **picker_metadata,
         "archive_path": str(archive_path),
         "stage_a_params_path": str(stage_a_params_path),
         "verification_count": verification_count,
@@ -1384,13 +1468,20 @@ def _saved_material_library_item_from_archive(
         archive_payload,
         relative_directory_name,
     )
+    material_name = str(
+        archive_payload.get("material_name") or material_dir.name
+    )
+    picker_metadata = _picker_metadata_from_archive(
+        archive_payload,
+        material_name=material_name,
+        relative_directory_name=relative_directory_name,
+    )
     usage_payload = _load_usage_payload(material_dir)
     return {
-        "material_name": str(
-            archive_payload.get("material_name") or material_dir.name
-        ),
+        "material_name": material_name,
         "directory_name": relative_directory_name,
         "brand": brand_value,
+        **picker_metadata,
         "created_at": archive_payload.get("created_at"),
         "updated_at": archive_payload.get("updated_at")
         or archive_payload.get("created_at"),
@@ -4812,6 +4903,7 @@ def save_stage_a_material_archive(
     created_at: str
     final_material_name = material_name
     final_brand: str | None = None
+    picker_metadata: dict[str, str] = {}
     verification_runs: list[dict[str, Any]] = []
     if existing_directory_name:
         material_dir = _resolve_material_dir(target_root, existing_directory_name)
@@ -4828,6 +4920,12 @@ def save_stage_a_material_archive(
             existing_archive_payload,
             _relative_directory_name(target_root, material_dir),
         )
+        for key in _MATERIAL_PICKER_METADATA_KEYS:
+            value = _clean_optional_archive_text(
+                existing_archive_payload.get(key)
+            )
+            if value is not None:
+                picker_metadata[key] = value
         if save_mode == "merge":
             verification_runs = _load_existing_verification_runs(material_dir, existing_archive_payload)
     else:
@@ -4841,6 +4939,8 @@ def save_stage_a_material_archive(
         material_dir.mkdir(parents=True, exist_ok=True)
         archive_path = material_dir / "material.json"
         created_at = _now_iso()
+    if "material_profile_id" not in picker_metadata:
+        picker_metadata["material_profile_id"] = f"profile_{uuid.uuid4().hex}"
 
     new_image_source = _coerce_image_source(source_summary.get("image_source"))
     if save_mode == "merge" and verification_runs:
@@ -4943,6 +5043,7 @@ def save_stage_a_material_archive(
         "kind": "lumina_stage_a_material",
         "material_name": final_material_name,
         "brand": final_brand,
+        **picker_metadata,
         "created_at": created_at,
         "updated_at": updated_at,
         "stage_a_params_file": stage_a_params_path.name,

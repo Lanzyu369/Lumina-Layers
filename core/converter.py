@@ -409,7 +409,20 @@ def convert_image_to_3d(
     Returns:
         Tuple of (3mf_path, glb_path, preview_image, status_message, recipe_path)
     """
-    separate_backing_color_id = _resolve_converter_separate_backing_color_id(material_source, selected_materials, material_backing_material_index, separate_backing_color_id)
+    if (
+        material_source == "material_archive"
+        and material_backing_material_index is not None
+    ):
+        backing_color_id = _resolve_material_archive_backing_color_id(
+            selected_materials,
+            material_backing_material_index,
+        )
+    separate_backing_color_id = _resolve_converter_separate_backing_color_id(
+        material_source,
+        selected_materials,
+        material_backing_material_index,
+        separate_backing_color_id,
+    )
 
     ctx = {k: v for k, v in locals().items() if k != "progress"}
     ctx = build_image_model_context(progress=progress, **ctx)

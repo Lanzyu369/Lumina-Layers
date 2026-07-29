@@ -4241,12 +4241,12 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "LUT",
   },
   basic_lut_manufacturer_label: {
-    zh: "品牌",
-    en: "Brand",
+    zh: "LUT 品牌",
+    en: "LUT Brand",
   },
   basic_lut_manufacturer_placeholder: {
-    zh: "选择品牌",
-    en: "Select a brand",
+    zh: "选择 LUT 品牌",
+    en: "Select a LUT brand",
   },
   basic_lut_unlabeled_brand: {
     zh: "个人",
@@ -4261,8 +4261,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Select a LUT",
   },
   basic_lut_no_brand_hint: {
-    zh: "请先选择品牌",
-    en: "Pick a brand first",
+    zh: "请先选择 LUT 品牌",
+    en: "Pick a LUT brand first",
   },
   basic_lut_multi_select: {
     zh: "同组多选 LUT",
@@ -4461,8 +4461,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Close",
   },
   basic_material_picker_search_placeholder: {
-    zh: "\u641c\u7d22\u8017\u6750\u540d\u79f0\u2026",
-    en: "Search materials\u2026",
+    zh: "搜索耗材、品牌或作者…",
+    en: "Search materials, brands, or authors…",
   },
   basic_material_picker_search_clear: {
     zh: "\u6e05\u9664\u641c\u7d22",
@@ -4471,6 +4471,130 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   basic_material_picker_no_match: {
     zh: "\u6ca1\u6709\u5339\u914d\u7684\u8017\u6750",
     en: "No materials match your search",
+  },
+  basic_material_picker_tab_favorites: {
+    zh: "收藏",
+    en: "Favorites",
+  },
+  basic_material_picker_tab_all: {
+    zh: "全部",
+    en: "All",
+  },
+  basic_material_picker_tab_pla: {
+    zh: "PLA",
+    en: "PLA",
+  },
+  basic_material_picker_tab_petg: {
+    zh: "PETG",
+    en: "PETG",
+  },
+  basic_material_picker_tab_other: {
+    zh: "其他",
+    en: "Other",
+  },
+  basic_material_picker_all_brands: {
+    zh: "全部品牌",
+    en: "All brands",
+  },
+  basic_material_picker_brand_filter_label: {
+    zh: "品牌",
+    en: "Brand",
+  },
+  basic_material_picker_sort_label: {
+    zh: "排序",
+    en: "Sort",
+  },
+  basic_material_picker_sort_name: {
+    zh: "按名称",
+    en: "Name",
+  },
+  basic_material_picker_sort_recent: {
+    zh: "最近使用",
+    en: "Recently used",
+  },
+  basic_material_picker_unknown_type: {
+    zh: "未分类",
+    en: "Unclassified",
+  },
+  basic_material_picker_unknown_author: {
+    zh: "未知作者",
+    en: "Unknown contributor",
+  },
+  basic_material_picker_profile_count: {
+    zh: "{count} 份档案",
+    en: "{count} profiles",
+  },
+  basic_material_picker_verification_count: {
+    zh: "验证 {count} 次",
+    en: "{count} verifications",
+  },
+  basic_material_picker_delta_e: {
+    zh: "ΔE {value}",
+    en: "ΔE {value}",
+  },
+  basic_material_picker_expand_profiles: {
+    zh: "展开 {material} 的档案",
+    en: "Expand profiles for {material}",
+  },
+  basic_material_picker_collapse_profiles: {
+    zh: "收起 {material} 的档案",
+    en: "Collapse profiles for {material}",
+  },
+  basic_material_picker_select_material: {
+    zh: "选择 {material}",
+    en: "Select {material}",
+  },
+  basic_material_picker_deselect_material: {
+    zh: "取消选择 {material}",
+    en: "Deselect {material}",
+  },
+  basic_material_picker_select_profile: {
+    zh: "选择 {material}（{author}）档案",
+    en: "Select the {material} profile by {author}",
+  },
+  basic_material_picker_favorite_profile: {
+    zh: "收藏 {material}（{author}）",
+    en: "Favorite {material} by {author}",
+  },
+  basic_material_picker_unfavorite_profile: {
+    zh: "取消收藏 {material}（{author}）",
+    en: "Remove {material} by {author} from favorites",
+  },
+  basic_material_picker_empty_favorites: {
+    zh: "还没有收藏耗材档案",
+    en: "No material profiles have been favorited yet",
+  },
+  basic_material_picker_mixed_status: {
+    zh: "当前选择包含 {types}。",
+    en: "The current selection contains {types}.",
+  },
+  basic_material_picker_type_count: {
+    zh: "{type} {count} 项",
+    en: "{type} {count}",
+  },
+  basic_material_picker_mixed_confirm_title: {
+    zh: "确认混合耗材类型？",
+    en: "Confirm mixed material types?",
+  },
+  basic_material_picker_mixed_confirm_body: {
+    zh: "当前选择包含 {types}。请确认喷嘴温度、热床温度和层间粘结符合你的打印方案。",
+    en: "The current selection contains {types}. Confirm that nozzle temperature, bed temperature, and inter-layer adhesion fit your print plan.",
+  },
+  basic_material_picker_mixed_back: {
+    zh: "返回调整",
+    en: "Go back",
+  },
+  basic_material_picker_mixed_continue: {
+    zh: "仍然使用",
+    en: "Use anyway",
+  },
+  basic_material_picker_load_error: {
+    zh: "耗材列表加载失败，请重试。",
+    en: "The material library could not be loaded. Try again.",
+  },
+  basic_material_picker_retry: {
+    zh: "重试",
+    en: "Retry",
   },
   basic_material_cache_section_title: {
     zh: "穷举缓存",
@@ -4513,8 +4637,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Failed to query the cache status. Please try again later.",
   },
   basic_material_cache_fallback_hint: {
-    zh: "未构建缓存时，每张图将使用 B&B 最优求解器（耗时较长，保证最优）。",
-    en: "When no cache is available, every conversion runs the B&B optimal solver (slower, always optimal).",
+    zh: "未构建缓存时，参数调整不会自动预览；仍可手动预览，但会使用临时候选求解器，耗时较长，结果可能与持久缓存不同。",
+    en: "When no cache is available, parameter changes will not auto-preview. You can still preview manually with the temporary candidate solver; it may take longer and differ from a persisted-cache result.",
   },
   basic_material_cache_build_button: {
     zh: "立即构建缓存",
@@ -5517,8 +5641,24 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
 
   // ==================== Bed Size Selector ====================
   bed_size_label: {
-    zh: "热床尺寸",
-    en: "Bed Size",
+    zh: "打印机热床",
+    en: "Printer Bed",
+  },
+  bed_size_hint: {
+    zh: "这里显示“设置”中的打印机型号和热床尺寸，与左侧选择的 LUT 品牌相互独立。",
+    en: "This shows the printer model and bed size from Settings. It is independent of the selected LUT brand.",
+  },
+  bed_size_hint_aria: {
+    zh: "查看打印机热床说明",
+    en: "Show printer bed help",
+  },
+  bed_size_change: {
+    zh: "更改",
+    en: "Change",
+  },
+  bed_size_change_aria: {
+    zh: "在设置中更改打印机",
+    en: "Change printer in Settings",
   },
   bed_size_loading: {
     zh: "加载中...",

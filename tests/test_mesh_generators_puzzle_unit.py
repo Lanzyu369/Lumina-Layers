@@ -9,6 +9,7 @@ import pytest
 from shapely.geometry import Polygon
 
 from config import ModelingMode
+from core import mesh_generators
 from core.pipeline import s07_mesh_generation
 from core.mesh_generators import HighFidelityMesher, get_mesher
 
@@ -19,6 +20,20 @@ def _make_split_voxel_matrix() -> np.ndarray:
     voxel_matrix[0, 1:4, 1:3] = 0
     voxel_matrix[0, 1:4, 3:5] = 1
     return voxel_matrix
+
+
+def _oriented_triangles(mesh) -> list[tuple[float, ...]]:
+    """Return face-order-independent triangles while retaining winding."""
+
+    oriented = []
+    for triangle in np.round(np.asarray(mesh.triangles), 9):
+        rotations = [
+            tuple(triangle[[0, 1, 2]].reshape(-1)),
+            tuple(triangle[[1, 2, 0]].reshape(-1)),
+            tuple(triangle[[2, 0, 1]].reshape(-1)),
+        ]
+        oriented.append(min(rotations))
+    return sorted(oriented)
 
 
 def test_high_fidelity_mesher_disable_material_dilation_keeps_shared_edge_exact() -> None:
@@ -42,6 +57,40 @@ def test_high_fidelity_mesher_disable_material_dilation_keeps_shared_edge_exact(
     assert no_dilation_right.bounds[0, 0] == pytest.approx(3.0)
     assert default_left.bounds[1, 0] > 3.0
     assert default_right.bounds[0, 0] < 3.0
+
+
+def test_high_fidelity_rect_only_path_skips_redundant_mesh_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A rect-only mesh is already cleaned and must not be merged a second time."""
+
+    voxel_matrix = np.full((2, 6, 6), -1, dtype=int)
+    voxel_matrix[:, 1:5, 1:5] = 0
+    mesher = HighFidelityMesher(disable_material_dilation=True)
+    original_merge = mesh_generators._merge_mesh_list
+    merge_calls = 0
+
+    def _record_merge(meshes):
+        nonlocal merge_calls
+        merge_calls += 1
+        return original_merge(meshes)
+
+    monkeypatch.setattr(mesh_generators, "_merge_mesh_list", _record_merge)
+
+    mesh = mesher.generate_mesh(voxel_matrix, 0, height_px=6)
+
+    assert mesh is not None
+    legacy_cleaned = original_merge([mesh.copy()])
+    assert legacy_cleaned is not None
+    assert len(mesh.faces) > 0
+    assert merge_calls == 0
+    assert len(mesh.vertices) == len(legacy_cleaned.vertices)
+    assert len(mesh.faces) == len(legacy_cleaned.faces)
+    np.testing.assert_allclose(mesh.bounds, legacy_cleaned.bounds)
+    assert mesh.is_watertight == legacy_cleaned.is_watertight
+    assert mesh.euler_number == legacy_cleaned.euler_number
+    assert mesh.volume == pytest.approx(legacy_cleaned.volume)
+    assert _oriented_triangles(mesh) == _oriented_triangles(legacy_cleaned)
 
 
 def test_s07_defaults_to_exact_material_boundaries_for_color_exports() -> None:

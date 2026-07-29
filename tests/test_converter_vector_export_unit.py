@@ -280,12 +280,15 @@ class TestVectorBranchExport:
         exported_scene = export_kwargs["scene"]
         assert export_kwargs["slot_names"] == ["White", "Cyan"]
         assert "Board" not in exported_scene.geometry
-        assert list(exported_scene.geometry["Cyan"].visual.face_colors[0]) == [
+        merged_cyan = exported_scene.geometry["Cyan"]
+        face_colors = np.asarray(merged_cyan.visual.face_colors)
+        assert face_colors.shape == (len(merged_cyan.faces), 4)
+        assert np.unique(face_colors, axis=0).tolist() == [[
             0,
             255,
             255,
             255,
-        ]
+        ]]
 
     @patch("utils.bambu_3mf_writer.export_scene_with_bambu_metadata")
     @patch("core.vector_engine.VectorProcessor")
