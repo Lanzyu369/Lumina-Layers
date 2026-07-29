@@ -16,6 +16,7 @@ import {
   mutedSectionCardClass,
 } from "../../../components/ui/panelPrimitives";
 import type {
+  WorkshopImageHandoff,
   WorkshopModuleProps,
   WorkshopPickedImage,
   WorkshopRaster,
@@ -32,6 +33,8 @@ import {
   type BeadEditorState,
 } from "./editorReducer";
 import {
+  calculatePhysicalSize,
+  createBeadRecipeSource,
   createBeadProject,
   restoreBeadProjectFromRecipeSource,
   validateBeadProject,
@@ -53,6 +56,7 @@ import {
   BeadWorkerClientError,
 } from "./workerClient";
 import type { BeadWorkerTask } from "./workerClient";
+import { BeadHandoffConfirmDialog } from "./BeadHandoffConfirmDialog";
 
 type BeadWorkflowStage = "upload" | "calibration" | "editor";
 
@@ -177,6 +181,9 @@ export function BeadWorkshopModule({
   const [renderResult, setRenderResult] =
     useState<BeadRenderResult | null>(null);
   const [renderBusy, setRenderBusy] = useState(false);
+  const [handoffBusy, setHandoffBusy] = useState(false);
+  const [pendingHandoff, setPendingHandoff] =
+    useState<WorkshopImageHandoff | null>(null);
   const [resumed, setResumed] = useState(false);
   const engineRef = useRef<BeadProcessingEngine | null>(null);
   const latestProjectRef = useRef<BeadProject | null>(null);
@@ -594,6 +601,93 @@ export function BeadWorkshopModule({
     }
   };
 
+  const reportHandoffError = () => {
+    const message = t("workshop.bead.handoffError");
+    setVisibleError(message);
+    host.status.reportError({
+      code: "bead-handoff-failed",
+      message,
+      retryable: true,
+    });
+  };
+
+  const handleHandoff = async () => {
+    const project = editorState?.present;
+    if (
+      !project ||
+      !project.cells.some((cell) => cell.kind === "color")
+    ) {
+      reportHandoffError();
+      return;
+    }
+
+    setHandoffBusy(true);
+    setVisibleError(null);
+    host.status.reportProgress({
+      phase: "render-handoff",
+      completed: 0,
+      total: 1,
+    });
+    try {
+      const engine = getEngine();
+      const task = engine.render(project, project.compression, 32);
+      engine.cancelBefore(task.id);
+      const raster = await task.promise;
+      const file = await host.files.encodePng(
+        raster,
+        `bead-${project.projectId}.png`,
+      );
+      const size = calculatePhysicalSize(
+        project,
+        project.beadPitchMm,
+      );
+      const handoff: WorkshopImageHandoff = {
+        moduleId: project.moduleId,
+        moduleVersion: project.moduleVersion,
+        projectId: project.projectId,
+        file,
+        pixelWidth: raster.width,
+        pixelHeight: raster.height,
+        recommendedWidthMm: size.widthMm,
+        recommendedHeightMm: size.heightMm,
+        rows: project.rows,
+        columns: project.columns,
+        beadPitchMm: project.beadPitchMm,
+        preserveCanvasBounds: true,
+        recipeSource: createBeadRecipeSource(project),
+      };
+      const result = await host.handoffImage(handoff);
+      setPendingHandoff(
+        result.status === "needs-confirmation" ? handoff : null,
+      );
+    } catch (error) {
+      if (!isCancellation(error)) {
+        reportHandoffError();
+      }
+    } finally {
+      setHandoffBusy(false);
+      host.status.reportProgress(null);
+    }
+  };
+
+  const confirmHandoff = async () => {
+    if (!pendingHandoff) {
+      return;
+    }
+    setHandoffBusy(true);
+    setVisibleError(null);
+    try {
+      await host.handoffImage(pendingHandoff, {
+        replaceExisting: true,
+      });
+      setPendingHandoff(null);
+    } catch {
+      reportHandoffError();
+    } finally {
+      setHandoffBusy(false);
+    }
+  };
+
   const handleNewProject = () => {
     const latest = latestProjectRef.current;
     if (latest) {
@@ -612,6 +706,8 @@ export function BeadWorkshopModule({
     setSourceMimeType("");
     setCrop(null);
     setRenderResult(null);
+    setPendingHandoff(null);
+    setHandoffBusy(false);
     setVisibleError(null);
     setResumed(false);
     latestProjectRef.current = null;
@@ -682,8 +778,18 @@ export function BeadWorkshopModule({
           translate={t}
           dispatch={dispatchEditor}
           onNewProject={handleNewProject}
+          onHandoff={handleHandoff}
+          handoffBusy={handoffBusy}
         />
       )}
+
+      <BeadHandoffConfirmDialog
+        open={pendingHandoff !== null}
+        busy={handoffBusy}
+        translate={t}
+        onCancel={() => setPendingHandoff(null)}
+        onConfirm={confirmHandoff}
+      />
 
       {sourceUrl && (
         <CropModal

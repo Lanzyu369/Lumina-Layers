@@ -159,4 +159,56 @@ describe("BeadEditorStep", () => {
     });
     expect(dispatch).not.toHaveBeenCalled();
   });
+
+  it("offers converter handoff only when at least one colored bead exists", () => {
+    const onHandoff = vi.fn();
+    const coloredState = createBeadEditorState(project());
+    const { rerender } = render(
+      <BeadEditorStep
+        state={coloredState}
+        renderResult={null}
+        renderBusy={false}
+        sourceRaster={null}
+        translate={t}
+        dispatch={vi.fn()}
+        onNewProject={vi.fn()}
+        onHandoff={onHandoff}
+        handoffBusy={false}
+      />,
+    );
+
+    const button = screen.getByRole("button", {
+      name: "交给 Lumina 转换",
+    });
+    expect(button).toBeEnabled();
+    fireEvent.click(button);
+    expect(onHandoff).toHaveBeenCalledTimes(1);
+
+    const empty = createBeadProject({
+      projectId: "empty-handoff",
+      moduleVersion: "1.0.0",
+      now: "2026-07-30T00:00:00.000Z",
+      rows: 1,
+      columns: 1,
+      palette: [[0, 0, 0]],
+    });
+    rerender(
+      <BeadEditorStep
+        state={createBeadEditorState(empty)}
+        renderResult={null}
+        renderBusy={false}
+        sourceRaster={null}
+        translate={t}
+        dispatch={vi.fn()}
+        onNewProject={vi.fn()}
+        onHandoff={onHandoff}
+        handoffBusy={false}
+      />,
+    );
+    expect(
+      screen.getByRole("button", {
+        name: "交给 Lumina 转换",
+      }),
+    ).toBeDisabled();
+  });
 });

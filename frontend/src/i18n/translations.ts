@@ -2889,6 +2889,34 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "新建图纸",
     en: "New pattern",
   },
+  "workshop.bead.handoff": {
+    zh: "交给 Lumina 转换",
+    en: "Send to Lumina Converter",
+  },
+  "workshop.bead.handoffEmpty": {
+    zh: "至少保留一颗有颜色的拼豆后才能转换",
+    en: "Keep at least one colored bead before converting",
+  },
+  "workshop.bead.replaceTitle": {
+    zh: "替换当前转换内容？",
+    en: "Replace the current converter content?",
+  },
+  "workshop.bead.replaceDescription": {
+    zh: "转换器里已有图片或批量任务。继续会用当前拼豆画布替换它，但不会删除已自动保存的拼豆项目。",
+    en: "The converter already contains an image or batch. Continuing replaces it with this bead canvas without deleting the autosaved bead project.",
+  },
+  "workshop.bead.replaceCancel": {
+    zh: "暂不替换",
+    en: "Keep current content",
+  },
+  "workshop.bead.replaceConfirm": {
+    zh: "替换并继续",
+    en: "Replace and continue",
+  },
+  "workshop.bead.handoffError": {
+    zh: "无法把当前拼豆画布交给转换器，请检查图案后重试。",
+    en: "The current bead canvas could not be sent to the converter. Check the pattern and try again.",
+  },
   "workshop.bead.processingError": {
     zh: "本地图像处理失败。项目仍在本机，请重试当前步骤。",
     en: "Local image processing failed. The project is still on this device; retry the current step.",

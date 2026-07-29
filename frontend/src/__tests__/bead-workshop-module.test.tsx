@@ -244,4 +244,85 @@ describe("BeadWorkshopModule", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("已恢复本机项目")).toBeInTheDocument();
   });
+
+  it("renders an exact handoff and confirms before replacing converter content", async () => {
+    const { host } = fakeHost();
+    const outputFile = new File(["rendered"], "bead.png", {
+      type: "image/png",
+    });
+    vi.mocked(host.files.encodePng).mockResolvedValue(outputFile);
+    vi.mocked(host.handoffImage)
+      .mockResolvedValueOnce({ status: "needs-confirmation" })
+      .mockResolvedValueOnce({ status: "completed" });
+
+    render(
+      <BeadWorkshopModule
+        manifest={BEAD_WORKSHOP_MANIFEST}
+        host={host}
+        pendingRecipeSource={null}
+        clearPendingRecipe={vi.fn()}
+        createEngine={() => new FakeEngine()}
+        autosaveDelayMs={0}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "选择拼豆图纸" }),
+    );
+    await screen.findByRole("heading", { name: "校准图纸" });
+    fireEvent.click(
+      screen.getByRole("button", { name: "图中没有空位" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "识别拼豆矩阵" }),
+    );
+    await screen.findByRole("heading", { name: "编辑拼豆矩阵" });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "交给 Lumina 转换" }),
+    );
+
+    expect(
+      await screen.findByRole("dialog", {
+        name: "替换当前转换内容？",
+      }),
+    ).toBeInTheDocument();
+    expect(host.files.encodePng).toHaveBeenCalledWith(
+      expect.objectContaining({
+        width: 64,
+        height: 64,
+        pixelsPerCell: 32,
+      }),
+      expect.stringMatching(/^bead-.+\.png$/),
+    );
+    expect(host.handoffImage).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        file: outputFile,
+        pixelWidth: 64,
+        pixelHeight: 64,
+        recommendedWidthMm: 5.2,
+        recommendedHeightMm: 5.2,
+        rows: 2,
+        columns: 2,
+        beadPitchMm: 2.6,
+        preserveCanvasBounds: true,
+        recipeSource: expect.objectContaining({
+          projectSchemaVersion: "bead-project/v1",
+          renderSchemaVersion: "bead-render/v1",
+        }),
+      }),
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "替换并继续" }),
+    );
+    await waitFor(() =>
+      expect(host.handoffImage).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ file: outputFile }),
+        { replaceExisting: true },
+      ),
+    );
+  });
 });

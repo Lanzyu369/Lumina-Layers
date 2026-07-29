@@ -12,6 +12,11 @@ import type {
   WorkshopVisibleError,
 } from "./types";
 
+const HANDOFF_PIXELS_PER_CELL = 32;
+const MAX_HANDOFF_GRID_SIZE = 128;
+const MIN_HANDOFF_SIZE_MM = 0.5;
+const MAX_HANDOFF_SIZE_MM = 400;
+
 export class WorkshopHostError extends Error {
   readonly code: string;
 
@@ -19,6 +24,144 @@ export class WorkshopHostError extends Error {
     super(message);
     this.name = "WorkshopHostError";
     this.code = code;
+  }
+}
+
+function failHandoff(code: string, message: string): never {
+  throw new WorkshopHostError(code, message);
+}
+
+function isFiniteInRange(
+  value: unknown,
+  minimum: number,
+  maximum: number,
+): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= minimum &&
+    value <= maximum
+  );
+}
+
+function nearlyEqual(left: number, right: number): boolean {
+  return (
+    Math.abs(left - right) <=
+    Number.EPSILON * 16 * Math.max(1, Math.abs(left), Math.abs(right))
+  );
+}
+
+async function validateImageHandoff(
+  manifest: WorkshopModuleManifest,
+  dependencies: WorkshopHostDependencies,
+  handoff: WorkshopImageHandoff,
+): Promise<void> {
+  if (
+    handoff.moduleId !== manifest.id ||
+    handoff.moduleVersion !== manifest.version ||
+    handoff.recipeSource.moduleId !== manifest.id ||
+    handoff.recipeSource.moduleVersion !== manifest.version
+  ) {
+    failHandoff(
+      "invalid-handoff-identity",
+      "Workshop handoff identity does not match the active module.",
+    );
+  }
+  if (
+    !(handoff.file instanceof File) ||
+    handoff.file.type.toLowerCase() !== "image/png"
+  ) {
+    failHandoff(
+      "invalid-handoff-image",
+      "Workshop handoff must contain a PNG file.",
+    );
+  }
+  if (
+    !Number.isInteger(handoff.rows) ||
+    !Number.isInteger(handoff.columns) ||
+    handoff.rows < 1 ||
+    handoff.columns < 1 ||
+    handoff.rows > MAX_HANDOFF_GRID_SIZE ||
+    handoff.columns > MAX_HANDOFF_GRID_SIZE
+  ) {
+    failHandoff(
+      "invalid-handoff-grid",
+      "Workshop handoff grid dimensions are invalid.",
+    );
+  }
+  if (
+    !Number.isInteger(handoff.pixelWidth) ||
+    !Number.isInteger(handoff.pixelHeight) ||
+    handoff.pixelWidth !==
+      handoff.columns * HANDOFF_PIXELS_PER_CELL ||
+    handoff.pixelHeight !== handoff.rows * HANDOFF_PIXELS_PER_CELL
+  ) {
+    failHandoff(
+      "invalid-handoff-pixels",
+      "Workshop handoff must contain exactly 32 pixels per grid cell.",
+    );
+  }
+  if (
+    !isFiniteInRange(handoff.beadPitchMm, 0.5, 10) ||
+    !isFiniteInRange(
+      handoff.recommendedWidthMm,
+      MIN_HANDOFF_SIZE_MM,
+      MAX_HANDOFF_SIZE_MM,
+    ) ||
+    !isFiniteInRange(
+      handoff.recommendedHeightMm,
+      MIN_HANDOFF_SIZE_MM,
+      MAX_HANDOFF_SIZE_MM,
+    ) ||
+    handoff.preserveCanvasBounds !== true ||
+    !nearlyEqual(
+      handoff.recommendedWidthMm,
+      handoff.columns * handoff.beadPitchMm,
+    ) ||
+    !nearlyEqual(
+      handoff.recommendedHeightMm,
+      handoff.rows * handoff.beadPitchMm,
+    )
+  ) {
+    failHandoff(
+      "invalid-handoff-size",
+      "Workshop handoff physical dimensions are invalid.",
+    );
+  }
+
+  let raster: Awaited<
+    ReturnType<WorkshopFileServices["decodeImage"]>
+  >;
+  try {
+    raster = await dependencies.files.decodeImage(handoff.file);
+  } catch {
+    failHandoff(
+      "invalid-handoff-image",
+      "Workshop handoff PNG could not be decoded.",
+    );
+  }
+  if (
+    raster.width !== handoff.pixelWidth ||
+    raster.height !== handoff.pixelHeight ||
+    raster.data.length !== raster.width * raster.height * 4
+  ) {
+    failHandoff(
+      "invalid-handoff-pixels",
+      "Workshop handoff PNG dimensions do not match its metadata.",
+    );
+  }
+  let hasVisiblePixel = false;
+  for (let index = 3; index < raster.data.length; index += 4) {
+    if (raster.data[index] !== 0) {
+      hasVisiblePixel = true;
+      break;
+    }
+  }
+  if (!hasVisiblePixel) {
+    failHandoff(
+      "empty-handoff-image",
+      "Workshop handoff PNG contains no visible colored beads.",
+    );
   }
 }
 
@@ -132,6 +275,7 @@ export function createWorkshopHostServices(
     },
     handoffImage: async (handoff, options) => {
       assertCapability(manifest, "handoff.image");
+      await validateImageHandoff(manifest, dependencies, handoff);
       return dependencies.handoffImage(handoff, options);
     },
   };

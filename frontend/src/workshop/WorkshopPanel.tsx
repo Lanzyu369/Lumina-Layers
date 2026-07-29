@@ -18,7 +18,8 @@ import { useI18n } from "../i18n/context";
 import { translations } from "../i18n/translations";
 import { useSettingsStore } from "../stores/settingsStore";
 import { createBrowserWorkshopFileServices } from "./browserFiles";
-import { WorkshopHostError, createWorkshopHostServices } from "./host";
+import { handoffWorkshopImageToConverter } from "./converterHandoff";
+import { createWorkshopHostServices } from "./host";
 import {
   OFFICIAL_WORKSHOP_MODULES,
   WORKSHOP_MODULE_WHITELIST,
@@ -96,12 +97,7 @@ function createDefaultHost(
         .getState()
         .rememberProject(moduleId, projectId);
     },
-    handoffImage: async () => {
-      throw new WorkshopHostError(
-        "handoff-unavailable",
-        "Workshop handoff is not configured yet.",
-      );
-    },
+    handoffImage: handoffWorkshopImageToConverter,
   });
 }
 

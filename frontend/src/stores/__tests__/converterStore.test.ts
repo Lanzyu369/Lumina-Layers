@@ -3,6 +3,7 @@ import { useConverterStore } from '../../stores/converter';
 import { CONVERTER_ERROR_KEYS, DEFAULT_STATE } from '../../stores/converter';
 import { ColorMode, ModelingMode, StructureMode } from '../../api/types';
 import { uploadImagePreview } from '../../api/system';
+import type { WorkshopRecipeSource } from '../../workshop/types';
 
 vi.mock('../../api/system', () => ({
   uploadImagePreview: vi.fn(),
@@ -104,6 +105,92 @@ describe('Converter_Store 默认值', () => {
   it('remapHistory 默认为空数组', () => {
     const state = useConverterStore.getState();
     expect(state.remapHistory).toEqual([]);
+  });
+});
+
+describe('workshop image ownership', () => {
+  const source: WorkshopRecipeSource = {
+    manifestSchemaVersion: 1,
+    moduleId: 'lumina.bead-pattern',
+    moduleVersion: '1.0.0',
+    projectSchemaVersion: 'bead-project/v1',
+    renderSchemaVersion: 'bead-render/v1',
+    payload: { payloadVersion: 'bead-recipe/v1' },
+  };
+
+  beforeEach(() => {
+    resetConverterState({
+      modeling_mode: ModelingMode.VECTOR,
+      enableCrop: true,
+      cropModalOpen: true,
+      batchMode: true,
+      batchFiles: [new File(['batch'], 'batch.png', { type: 'image/png' })],
+    });
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:workshop');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+  });
+
+  it('loads a complete workshop canvas and exact decimal dimensions atomically', () => {
+    const file = new File(['png'], 'bead.png', { type: 'image/png' });
+
+    useConverterStore.getState().loadWorkshopImageIntoConverter({
+      file,
+      pixelWidth: 1024,
+      pixelHeight: 768,
+      targetWidthMm: 83.2,
+      targetHeightMm: 62.4,
+      source,
+    });
+
+    const state = useConverterStore.getState();
+    expect(state.imageFile).toBe(file);
+    expect(state.imagePreviewUrl).toBe('blob:workshop');
+    expect(state.target_width_mm).toBe(83.2);
+    expect(state.target_height_mm).toBe(62.4);
+    expect(state.aspectRatio).toBeCloseTo(4 / 3);
+    expect(state.cropModalOpen).toBe(false);
+    expect(state.enableCrop).toBe(true);
+    expect(state.batchMode).toBe(false);
+    expect(state.batchFiles).toEqual([]);
+    expect(state.modeling_mode).toBe(ModelingMode.HIGH_FIDELITY);
+    expect(state.workshopSource).toEqual(source);
+  });
+
+  it('clears workshop source when ordinary image ownership replaces it', () => {
+    const beadFile = new File(['png'], 'bead.png', { type: 'image/png' });
+    useConverterStore.getState().loadWorkshopImageIntoConverter({
+      file: beadFile,
+      pixelWidth: 64,
+      pixelHeight: 32,
+      targetWidthMm: 5.2,
+      targetHeightMm: 2.6,
+      source,
+    });
+    expect(useConverterStore.getState().workshopSource).toEqual(source);
+
+    const ordinary = new File(['png'], 'ordinary.png', {
+      type: 'image/png',
+    });
+    useConverterStore.getState().setImageFile(ordinary);
+    expect(useConverterStore.getState().workshopSource).toBeNull();
+
+    useConverterStore.setState({ workshopSource: source });
+    useConverterStore
+      .getState()
+      .loadVectorizedSvgIntoConverter(
+        new File(['<svg/>'], 'vector.svg', {
+          type: 'image/svg+xml',
+        }),
+      );
+    expect(useConverterStore.getState().workshopSource).toBeNull();
+
+    useConverterStore.setState({ workshopSource: source });
+    useConverterStore
+      .getState()
+      .handleFilesSelect([
+        new File(['png'], 'batch-next.png', { type: 'image/png' }),
+      ]);
+    expect(useConverterStore.getState().workshopSource).toBeNull();
   });
 });
 

@@ -34,6 +34,8 @@ interface BeadEditorStepProps {
   translate(key: string): string;
   dispatch(action: BeadEditorAction): void;
   onNewProject(): void;
+  onHandoff?(): void;
+  handoffBusy?: boolean;
 }
 
 function interpolate(
@@ -87,6 +89,8 @@ export function BeadEditorStep({
   translate: t,
   dispatch,
   onNewProject,
+  onHandoff,
+  handoffBusy = false,
 }: BeadEditorStepProps) {
   const [view, setView] = useState<EditorView>("matrix");
   const [showGrid, setShowGrid] = useState(true);
@@ -104,6 +108,10 @@ export function BeadEditorStep({
   const size = calculatePhysicalSize(
     project,
     project.beadPitchMm,
+  );
+  const hasColoredBeads = useMemo(
+    () => project.cells.some((cell) => cell.kind === "color"),
+    [project.cells],
   );
 
   const selectIssue = (direction: -1 | 1) => {
@@ -354,6 +362,21 @@ export function BeadEditorStep({
               height: formatMillimeters(size.heightMm),
             })}
           </p>
+
+          {onHandoff && (
+            <Button
+              label={t("workshop.bead.handoff")}
+              onClick={onHandoff}
+              loading={handoffBusy}
+              disabled={!hasColoredBeads}
+              title={
+                hasColoredBeads
+                  ? t("workshop.bead.handoff")
+                  : t("workshop.bead.handoffEmpty")
+              }
+              className="w-full"
+            />
+          )}
 
           <Checkbox
             label={t("workshop.bead.showGrid")}
