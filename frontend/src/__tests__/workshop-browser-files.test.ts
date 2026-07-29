@@ -76,9 +76,9 @@ describe("browser workshop file services", () => {
       encodePng: vi.fn(),
     });
 
-    await expect(services.pickImage()).rejects.toMatchObject<
-      Partial<WorkshopFileError>
-    >({ code: "unsupported-image-type" });
+    await expect(services.pickImage()).rejects.toMatchObject({
+      code: "unsupported-image-type",
+    } satisfies Partial<WorkshopFileError>);
     expect(decode).not.toHaveBeenCalled();
   });
 

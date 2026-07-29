@@ -110,7 +110,19 @@ function fakeHost(
       encodePng: vi.fn(),
     },
     projects: {
-      save,
+      save: async <TProject,>(
+        record: Omit<
+          WorkshopProjectRecord<TProject>,
+          "moduleId"
+        >,
+      ) => {
+        await save(
+          record as Omit<
+            WorkshopProjectRecord<BeadProject>,
+            "moduleId"
+          >,
+        );
+      },
       load: vi.fn().mockResolvedValue(null),
       latest: vi.fn().mockResolvedValue(latest),
       remove: vi.fn(),

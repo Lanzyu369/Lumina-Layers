@@ -196,12 +196,8 @@ export class BeadWorkerClient {
     }
     const id = this.nextId;
     this.nextId += 1;
-    let rejectTask:
-      | ((error: BeadWorkerClientError) => void)
-      | null = null;
     const promise = new Promise<BeadWorkerResultMap[T]>(
       (resolve, reject) => {
-        rejectTask = reject;
         this.pending.set(id, {
           type,
           resolve,
@@ -212,8 +208,9 @@ export class BeadWorkerClient {
     try {
       this.worker.postMessage(createRequest(id), transfer);
     } catch (error) {
+      const task = this.pending.get(id);
       this.pending.delete(id);
-      rejectTask?.(
+      task?.reject(
         new BeadWorkerClientError(
           "worker-post-failed",
           error instanceof Error

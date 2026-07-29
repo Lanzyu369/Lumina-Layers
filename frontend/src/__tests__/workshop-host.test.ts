@@ -143,11 +143,9 @@ describe("createWorkshopHostServices", () => {
       dependencies(projectStorage(), files),
     );
 
-    await expect(host.files.pickImage()).rejects.toMatchObject<
-      Partial<WorkshopHostError>
-    >({
+    await expect(host.files.pickImage()).rejects.toMatchObject({
       code: "capability-denied",
-    });
+    } satisfies Partial<WorkshopHostError>);
     expect(files.pickImage).not.toHaveBeenCalled();
   });
 });

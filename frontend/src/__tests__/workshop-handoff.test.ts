@@ -130,14 +130,14 @@ describe("workshop image handoff", () => {
     );
     await expect(
       host.handoffImage(handoff({ pixelWidth: 63 })),
-    ).rejects.toMatchObject<Partial<WorkshopHostError>>({
+    ).rejects.toMatchObject({
       code: "invalid-handoff-pixels",
-    });
+    } satisfies Partial<WorkshopHostError>);
     await expect(
       host.handoffImage(handoff({ recommendedWidthMm: 5.3 })),
-    ).rejects.toMatchObject<Partial<WorkshopHostError>>({
+    ).rejects.toMatchObject({
       code: "invalid-handoff-size",
-    });
+    } satisfies Partial<WorkshopHostError>);
 
     const transparentHost = createWorkshopHostServices(
       MANIFEST,
@@ -145,9 +145,9 @@ describe("workshop image handoff", () => {
     );
     await expect(
       transparentHost.handoffImage(handoff()),
-    ).rejects.toMatchObject<Partial<WorkshopHostError>>({
+    ).rejects.toMatchObject({
       code: "empty-handoff-image",
-    });
+    } satisfies Partial<WorkshopHostError>);
   });
 
   it("does not mutate an occupied converter until replacement is explicit", async () => {
