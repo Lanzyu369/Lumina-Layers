@@ -2,6 +2,7 @@ import { validateBeadProject } from "./project";
 import type {
   BeadCell,
   BeadProject,
+  RgbColor,
 } from "./types";
 
 export type BeadEditorTool =
@@ -56,6 +57,21 @@ export type BeadEditorAction =
       type: "set-issue-resolved";
       issueIndex: number;
       resolved: boolean;
+      updatedAt?: string;
+    }
+  | {
+      type: "set-compression";
+      compression: number;
+      updatedAt?: string;
+    }
+  | {
+      type: "set-bead-pitch";
+      beadPitchMm: number;
+      updatedAt?: string;
+    }
+  | {
+      type: "add-palette-color";
+      color: RgbColor;
       updatedAt?: string;
     }
   | { type: "undo" }
@@ -280,6 +296,85 @@ export function beadEditorReducer(
           activeTool: "paint",
         }
       : state;
+  }
+  if (action.type === "set-compression") {
+    if (
+      !Number.isInteger(action.compression) ||
+      action.compression < 0 ||
+      action.compression > 100 ||
+      action.compression === state.present.compression
+    ) {
+      return state;
+    }
+    return {
+      ...state,
+      present: validateBeadProject({
+        ...state.present,
+        compression: action.compression,
+        updatedAt: action.updatedAt ?? state.present.updatedAt,
+      }),
+    };
+  }
+  if (action.type === "set-bead-pitch") {
+    if (
+      !Number.isFinite(action.beadPitchMm) ||
+      action.beadPitchMm < 0.5 ||
+      action.beadPitchMm > 10 ||
+      action.beadPitchMm === state.present.beadPitchMm
+    ) {
+      return state;
+    }
+    return {
+      ...state,
+      present: validateBeadProject({
+        ...state.present,
+        beadPitchMm: action.beadPitchMm,
+        updatedAt: action.updatedAt ?? state.present.updatedAt,
+      }),
+    };
+  }
+  if (action.type === "add-palette-color") {
+    if (
+      action.color.length !== 3 ||
+      action.color.some(
+        (channel) =>
+          !Number.isInteger(channel) ||
+          channel < 0 ||
+          channel > 255,
+      )
+    ) {
+      return state;
+    }
+    const existingIndex = state.present.palette.findIndex(
+      (color) =>
+        color[0] === action.color[0] &&
+        color[1] === action.color[1] &&
+        color[2] === action.color[2],
+    );
+    if (existingIndex >= 0) {
+      return {
+        ...state,
+        activeTool: "paint",
+        activePaletteIndex: existingIndex,
+      };
+    }
+    if (state.present.palette.length >= 256) {
+      return state;
+    }
+    const activePaletteIndex = state.present.palette.length;
+    return {
+      ...state,
+      activeTool: "paint",
+      activePaletteIndex,
+      present: validateBeadProject({
+        ...state.present,
+        palette: [
+          ...state.present.palette,
+          [...action.color] as RgbColor,
+        ],
+        updatedAt: action.updatedAt ?? state.present.updatedAt,
+      }),
+    };
   }
   if (action.type === "select-cell") {
     if (

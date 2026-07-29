@@ -35,6 +35,7 @@ export interface WorkshopHostDependencies {
     moduleVersion: string,
     summary: WorkshopDiagnosticSummary | null,
   ): void;
+  onProjectSaved?(moduleId: string, projectId: string): void;
   handoffImage(
     handoff: WorkshopImageHandoff,
     options?: WorkshopHandoffOptions,
@@ -75,10 +76,14 @@ export function createWorkshopHostServices(
     projects: {
       save: async (record) => {
         assertCapability(manifest, "project.read-write");
-        return dependencies.storage.save({
+        await dependencies.storage.save({
           ...record,
           moduleId: manifest.id,
         });
+        dependencies.onProjectSaved?.(
+          manifest.id,
+          record.projectId,
+        );
       },
       load: async (projectId) => {
         assertCapability(manifest, "project.read-write");

@@ -91,6 +91,11 @@ function createDefaultHost(
     onDiagnostics: (_moduleId, _moduleVersion, summary) => {
       useWorkshopStore.getState().setDiagnostics(summary);
     },
+    onProjectSaved: (moduleId, projectId) => {
+      useWorkshopStore
+        .getState()
+        .rememberProject(moduleId, projectId);
+    },
     handoffImage: async () => {
       throw new WorkshopHostError(
         "handoff-unavailable",

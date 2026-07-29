@@ -2625,6 +2625,278 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "无法读取这张图。请确认文件格式后重试。",
     en: "This image could not be read. Check its format and try again.",
   },
+  "workshop.bead.loadingProject": {
+    zh: "正在读取本机项目…",
+    en: "Loading the local project…",
+  },
+  "workshop.bead.resumeReady": {
+    zh: "已恢复本机项目",
+    en: "Local project restored",
+  },
+  "workshop.bead.calibrationTitle": {
+    zh: "校准图纸",
+    en: "Calibrate pattern",
+  },
+  "workshop.bead.calibrationDescription": {
+    zh: "确认图纸类型、正方形网格和空位样本。识别只读取你确认的格子。",
+    en: "Confirm the pattern type, square grid, and empty-cell sample. Recognition reads only the cells you confirm.",
+  },
+  "workshop.bead.cropPattern": {
+    zh: "裁剪图案",
+    en: "Crop pattern",
+  },
+  "workshop.bead.inputMode": {
+    zh: "图纸类型",
+    en: "Pattern type",
+  },
+  "workshop.bead.mode.numbered-grid": {
+    zh: "编号网格图",
+    en: "Numbered grid",
+  },
+  "workshop.bead.mode.hard-pixel": {
+    zh: "硬边像素图",
+    en: "Hard-edged pixel chart",
+  },
+  "workshop.bead.mode.ring-preview": {
+    zh: "圆豆俯视图",
+    en: "Top-down ring preview",
+  },
+  "workshop.bead.mode.ambiguous": {
+    zh: "需要手动确认",
+    en: "Needs manual confirmation",
+  },
+  "workshop.bead.classification": {
+    zh: "建议：{mode} · 置信度 {confidence}%",
+    en: "Suggested: {mode} · {confidence}% confidence",
+  },
+  "workshop.bead.classifying": {
+    zh: "正在分析图纸类型…",
+    en: "Analyzing the pattern type…",
+  },
+  "workshop.bead.rows": {
+    zh: "行数",
+    en: "Rows",
+  },
+  "workshop.bead.columns": {
+    zh: "列数",
+    en: "Columns",
+  },
+  "workshop.bead.originX": {
+    zh: "网格原点 X",
+    en: "Grid origin X",
+  },
+  "workshop.bead.originY": {
+    zh: "网格原点 Y",
+    en: "Grid origin Y",
+  },
+  "workshop.bead.gridInvalid": {
+    zh: "当前网格不是正方形，请调整行列或原点。",
+    en: "The current grid is not square. Adjust rows, columns, or the origin.",
+  },
+  "workshop.bead.emptyDecisionRequired": {
+    zh: "请先选择一个空位样本，或明确图中没有空位。",
+    en: "Choose an empty-cell sample or explicitly confirm that the pattern has no empty cells.",
+  },
+  "workshop.bead.pickEmpty": {
+    zh: "选择一个空位",
+    en: "Choose an empty cell",
+  },
+  "workshop.bead.noEmpty": {
+    zh: "图中没有空位",
+    en: "No empty cells",
+  },
+  "workshop.bead.pickSupport": {
+    zh: "选择透明支撑",
+    en: "Choose transparent support",
+  },
+  "workshop.bead.clearSupport": {
+    zh: "清除透明支撑样本",
+    en: "Clear support sample",
+  },
+  "workshop.bead.emptySample": {
+    zh: "空位样本：第 {index} 格",
+    en: "Empty sample: cell {index}",
+  },
+  "workshop.bead.noEmptySelected": {
+    zh: "已确认：图中没有空位",
+    en: "Confirmed: no empty cells",
+  },
+  "workshop.bead.supportSample": {
+    zh: "透明支撑样本：第 {index} 格",
+    en: "Transparent support sample: cell {index}",
+  },
+  "workshop.bead.rotate0": {
+    zh: "旋转 0°",
+    en: "Rotate 0°",
+  },
+  "workshop.bead.rotate90": {
+    zh: "旋转 90°",
+    en: "Rotate 90°",
+  },
+  "workshop.bead.rotate180": {
+    zh: "旋转 180°",
+    en: "Rotate 180°",
+  },
+  "workshop.bead.rotate270": {
+    zh: "旋转 270°",
+    en: "Rotate 270°",
+  },
+  "workshop.bead.flipHorizontal": {
+    zh: "水平翻转",
+    en: "Flip horizontally",
+  },
+  "workshop.bead.flipVertical": {
+    zh: "垂直翻转",
+    en: "Flip vertically",
+  },
+  "workshop.bead.recognize": {
+    zh: "识别拼豆矩阵",
+    en: "Recognize bead matrix",
+  },
+  "workshop.bead.recognizing": {
+    zh: "正在识别拼豆矩阵…",
+    en: "Recognizing bead matrix…",
+  },
+  "workshop.bead.calibrationCanvas": {
+    zh: "拼豆图纸网格校准",
+    en: "Bead pattern grid calibration",
+  },
+  "workshop.bead.editorTitle": {
+    zh: "编辑拼豆矩阵",
+    en: "Edit bead matrix",
+  },
+  "workshop.bead.editorDescription": {
+    zh: "修正识别结果，再调节压合程度。透明支撑参与挤压，但不会进入最终图像颜色。",
+    en: "Correct the recognized matrix, then adjust pressure. Transparent support affects contact geometry but adds no output color.",
+  },
+  "workshop.bead.tool.paint": {
+    zh: "画笔",
+    en: "Paint",
+  },
+  "workshop.bead.tool.erase": {
+    zh: "橡皮",
+    en: "Erase",
+  },
+  "workshop.bead.tool.eyedropper": {
+    zh: "吸管",
+    en: "Eyedropper",
+  },
+  "workshop.bead.tool.fill": {
+    zh: "填充",
+    en: "Fill",
+  },
+  "workshop.bead.tool.support": {
+    zh: "透明支撑",
+    en: "Transparent support",
+  },
+  "workshop.bead.undo": {
+    zh: "撤销",
+    en: "Undo",
+  },
+  "workshop.bead.redo": {
+    zh: "重做",
+    en: "Redo",
+  },
+  "workshop.bead.previousIssue": {
+    zh: "上一个待复核格",
+    en: "Previous review cell",
+  },
+  "workshop.bead.nextIssue": {
+    zh: "下一个待复核格",
+    en: "Next review cell",
+  },
+  "workshop.bead.reviewSummary": {
+    zh: "待复核 {pending} / 共 {total}",
+    en: "{pending} pending / {total} total",
+  },
+  "workshop.bead.view.original": {
+    zh: "原图",
+    en: "Original",
+  },
+  "workshop.bead.view.matrix": {
+    zh: "识别矩阵",
+    en: "Matrix",
+  },
+  "workshop.bead.view.pressure": {
+    zh: "压合预览",
+    en: "Pressure preview",
+  },
+  "workshop.bead.matrixCanvas": {
+    zh: "可编辑拼豆矩阵",
+    en: "Editable bead matrix",
+  },
+  "workshop.bead.pressureCanvas": {
+    zh: "拼豆压合预览",
+    en: "Bead pressure preview",
+  },
+  "workshop.bead.originalCanvas": {
+    zh: "拼豆图纸原图",
+    en: "Original bead pattern",
+  },
+  "workshop.bead.magnifier": {
+    zh: "选中格局部放大",
+    en: "Selected-cell magnifier",
+  },
+  "workshop.bead.showGrid": {
+    zh: "显示网格",
+    en: "Show grid",
+  },
+  "workshop.bead.paletteColor": {
+    zh: "颜色 {index}",
+    en: "Color {index}",
+  },
+  "workshop.bead.customColor": {
+    zh: "添加自定义颜色",
+    en: "Add custom color",
+  },
+  "workshop.bead.compression": {
+    zh: "压合程度",
+    en: "Pressure",
+  },
+  "workshop.bead.compressionHint": {
+    zh: "0 保留中心孔和豆间缝，50 保留细小十字或菱形凹点，100 完全压紧闭合。",
+    en: "0 preserves center holes and gaps, 50 keeps small cross or diamond reliefs, and 100 closes them completely.",
+  },
+  "workshop.bead.pressureLight": {
+    zh: "0 · 轻压有孔",
+    en: "0 · Light, open holes",
+  },
+  "workshop.bead.pressureStandard": {
+    zh: "50 · 标准",
+    en: "50 · Standard",
+  },
+  "workshop.bead.pressureTight": {
+    zh: "100 · 紧压无孔",
+    en: "100 · Tight, closed holes",
+  },
+  "workshop.bead.beadPitch": {
+    zh: "单豆节距",
+    en: "Bead pitch",
+  },
+  "workshop.bead.beadPitchHint": {
+    zh: "默认 2.6 mm，表示相邻豆子中心间距，并决定交给 Lumina 的真实画布尺寸。",
+    en: "The 2.6 mm default is the center-to-center bead pitch and determines the physical canvas size handed to Lumina.",
+  },
+  "workshop.bead.physicalSize": {
+    zh: "{width} × {height} mm",
+    en: "{width} × {height} mm",
+  },
+  "workshop.bead.rendering": {
+    zh: "正在计算高分辨率压合预览…",
+    en: "Rendering the high-resolution pressure preview…",
+  },
+  "workshop.bead.newProject": {
+    zh: "新建图纸",
+    en: "New pattern",
+  },
+  "workshop.bead.processingError": {
+    zh: "本地图像处理失败。项目仍在本机，请重试当前步骤。",
+    en: "Local image processing failed. The project is still on this device; retry the current step.",
+  },
+  "workshop.bead.saveError": {
+    zh: "自动保存暂时失败。当前页面中的编辑不会丢失。",
+    en: "Autosave temporarily failed. Edits in the current page are still intact.",
+  },
   "tab.colorEditor": {
     zh: "颜色编辑",
     en: "Color Editor",

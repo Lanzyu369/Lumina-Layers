@@ -70,9 +70,13 @@ function dependencies(
 describe("createWorkshopHostServices", () => {
   it("forces project writes and reads into the manifest module namespace", async () => {
     const storage = projectStorage();
+    const deps = {
+      ...dependencies(storage),
+      onProjectSaved: vi.fn(),
+    };
     const host = createWorkshopHostServices(
       MANIFEST,
-      dependencies(storage),
+      deps,
     );
     const record: Omit<WorkshopProjectRecord<{ value: number }>, "moduleId"> = {
       projectId: "project-1",
@@ -97,6 +101,10 @@ describe("createWorkshopHostServices", () => {
     );
     expect(storage.latest).toHaveBeenCalledWith("lumina.bead-pattern");
     expect(storage.remove).toHaveBeenCalledWith(
+      "lumina.bead-pattern",
+      "project-1",
+    );
+    expect(deps.onProjectSaved).toHaveBeenCalledWith(
       "lumina.bead-pattern",
       "project-1",
     );
