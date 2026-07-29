@@ -3,6 +3,7 @@ import type {
   WorkshopModuleDefinition,
   WorkshopModuleManifest,
 } from "../../types";
+import { restoreBeadProjectFromRecipeSource } from "./project";
 import { BEAD_MODULE_ID, BEAD_MODULE_VERSION } from "./types";
 import { BeadWorkshopModule } from "./BeadWorkshopModule";
 
@@ -31,6 +32,13 @@ export const BEAD_WORKSHOP_MANIFEST: WorkshopModuleManifest = {
 export const BEAD_WORKSHOP_DEFINITION: WorkshopModuleDefinition = {
   manifest: BEAD_WORKSHOP_MANIFEST,
   Component: BeadWorkshopModule,
+  validateRecipeSource: (source) => {
+    restoreBeadProjectFromRecipeSource(source, {
+      projectId: "recipe-validation",
+      now: "2000-01-01T00:00:00.000Z",
+    });
+    return true;
+  },
 };
 
 export const OFFICIAL_WORKSHOP_MODULES = [

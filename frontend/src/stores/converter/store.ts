@@ -8046,6 +8046,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     ) => {
       // 1. Apply restored parameters (without triggering crop modal)
       const prevEnableCrop = _get().enableCrop;
+      const restoredWorkshopSource = partial.workshopSource ?? null;
       const baseState = _get();
       const nextState = {
         ...baseState,
@@ -8069,7 +8070,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       _get().setImageFile(imageFile);
 
       // 3. Restore crop setting
-      set({ enableCrop: prevEnableCrop });
+      set({
+        enableCrop: prevEnableCrop,
+        workshopSource: restoredWorkshopSource,
+      });
 
       // 4. Set heightmap if present
       if (heightmapFile) {

@@ -166,4 +166,11 @@ export interface WorkshopModuleProps {
 export interface WorkshopModuleDefinition {
   manifest: WorkshopModuleManifest;
   Component: ComponentType<WorkshopModuleProps>;
+  /**
+   * Return true only when this module can restore the complete recipe source.
+   * 仅当模块能够完整恢复该配方来源时返回 true。
+   */
+  validateRecipeSource?(
+    source: WorkshopRecipeSource,
+  ): boolean;
 }

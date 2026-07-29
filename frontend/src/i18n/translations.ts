@@ -7395,6 +7395,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "确认恢复",
     en: "Confirm Restore",
   },
+  recipe_import_continue_workshop: {
+    zh: "导入并继续编辑",
+    en: "Import and Continue Editing",
+  },
   recipe_import_cancel: {
     zh: "取消",
     en: "Cancel",
@@ -7626,6 +7630,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   recipe_import_warning_spatial_edits_not_serialized: {
     zh: "连通区域的局部改色仅属于当前会话，未写入分享配方；导入后需要重新应用。",
     en: "Connected-region color edits belong to the current session and were not saved in the shared recipe; reapply them after import.",
+  },
+  recipe_import_workshop_degraded: {
+    zh: "分享卡中的创意工坊编辑数据已损坏或当前不可用；主图和转换参数仍可正常导入。",
+    en: "The workshop editing data in this share card is damaged or unavailable. The main image and converter settings can still be imported.",
   },
   recipe_import_schema_newer: {
     zh: "配方版本较新，部分参数可能无法恢复",

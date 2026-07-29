@@ -9,6 +9,7 @@ interface ImportConfirmDialogProps {
   preview: ImportPreview | null;
   source: RecipeFileSource;
   onConfirm: () => void;
+  onContinueEditing?: () => void;
   onCancel: () => void;
   isLoading?: boolean;
 }
@@ -18,6 +19,7 @@ export default function ImportConfirmDialog({
   preview,
   source,
   onConfirm,
+  onContinueEditing,
   onCancel,
   isLoading,
 }: ImportConfirmDialogProps) {
@@ -164,7 +166,7 @@ export default function ImportConfirmDialog({
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-end gap-2 border-t border-slate-200 px-5 py-3 dark:border-slate-700">
+        <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 px-5 py-3 dark:border-slate-700">
           <Button
             label={t("recipe_import_cancel")}
             variant="secondary"
@@ -172,6 +174,16 @@ export default function ImportConfirmDialog({
             disabled={isLoading}
             className="px-4"
           />
+          {restoreResult.state.workshopSource &&
+            onContinueEditing && (
+              <Button
+                label={t("recipe_import_continue_workshop")}
+                variant="secondary"
+                onClick={onContinueEditing}
+                disabled={isLoading}
+                className="px-4"
+              />
+            )}
           <Button
             label={t("recipe_import_confirm")}
             variant="primary"

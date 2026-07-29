@@ -12,11 +12,13 @@ import {
   RECIPE_IMPORT_WARNING_PUZZLE_CONFLICT_LARGE_FORMAT,
   RECIPE_IMPORT_WARNING_PUZZLE_CONFLICT_LOOP,
   RECIPE_IMPORT_WARNING_SECONDARY_LUT_MISSING,
+  RECIPE_IMPORT_WARNING_WORKSHOP_DEGRADED,
 } from "../recipe/importRecipe";
 import { migrateRecipe } from "../recipe/migration";
 import type { LuminaRecipe } from "../recipe/types";
 import type { LutInfo } from "../api/types";
 import { ColorMode } from "../api/types";
+import { createBeadRecipeSourceFixture } from "./fixtures/beadRecipeSource";
 
 // ========== Helpers ==========
 
@@ -510,6 +512,83 @@ describe("recipe/importRecipe", () => {
       expect(heightmapFile).toBeInstanceOf(File);
       expect(heightmapFile!.name).toBe("height.png");
     });
+
+    it("restores a valid bead workshop source without its original screenshot", () => {
+      const recipe = createTestRecipe({ schema_version: 3 });
+      const source = createBeadRecipeSourceFixture();
+      recipe.recipe.workshop = source;
+
+      const { state, warnings } = restoreConverterRecipe(
+        recipe,
+        LOCAL_LUTS,
+        LOCAL_FINGERPRINTS,
+      );
+
+      expect(state.workshopSource).toEqual(source);
+      expect(state.workshopSource?.payload).toMatchObject({
+        rows: 2,
+        columns: 3,
+        beadPitchMm: 2.6,
+        compression: 73,
+      });
+      expect(JSON.stringify(state.workshopSource)).not.toContain(
+        "share-card-bead",
+      );
+      expect(warnings).not.toContain(
+        RECIPE_IMPORT_WARNING_WORKSHOP_DEGRADED,
+      );
+    });
+
+    it("degrades malformed or unavailable workshop data without blocking converter restore", () => {
+      const malformed = createTestRecipe({ schema_version: 3 });
+      const malformedSource = createBeadRecipeSourceFixture();
+      malformedSource.payload.cellsRle = [[0, 999]];
+      malformed.recipe.workshop = malformedSource;
+
+      const malformedResult = restoreConverterRecipe(
+        malformed,
+        LOCAL_LUTS,
+        LOCAL_FINGERPRINTS,
+      );
+      expect(malformedResult.state.workshopSource).toBeNull();
+      expect(malformedResult.state.target_width_mm).toBe(80);
+      expect(malformedResult.assetFile.name).toBe("photo.png");
+      expect(malformedResult.warnings).toContain(
+        RECIPE_IMPORT_WARNING_WORKSHOP_DEGRADED,
+      );
+
+      const unavailable = createTestRecipe({ schema_version: 3 });
+      const unavailableSource = createBeadRecipeSourceFixture();
+      unavailableSource.moduleId = "third-party.unknown";
+      unavailable.recipe.workshop = unavailableSource;
+      const unavailableResult = restoreConverterRecipe(
+        unavailable,
+        LOCAL_LUTS,
+        LOCAL_FINGERPRINTS,
+      );
+      expect(unavailableResult.state.workshopSource).toBeNull();
+      expect(unavailableResult.warnings).toContain(
+        RECIPE_IMPORT_WARNING_WORKSHOP_DEGRADED,
+      );
+    });
+
+    it.each([1, 2])(
+      "imports legacy schema v%s without workshop degradation",
+      (schemaVersion) => {
+        const recipe = createTestRecipe({
+          schema_version: schemaVersion,
+        });
+        const result = restoreConverterRecipe(
+          recipe,
+          LOCAL_LUTS,
+          LOCAL_FINGERPRINTS,
+        );
+        expect(result.state.workshopSource).toBeNull();
+        expect(result.warnings).not.toContain(
+          RECIPE_IMPORT_WARNING_WORKSHOP_DEGRADED,
+        );
+      },
+    );
   });
 });
 
@@ -519,6 +598,13 @@ describe("recipe/migration", () => {
     const migrated = migrateRecipe(recipe);
     expect(migrated.schema_version).toBe(1);
     expect(migrated.recipe.converter).toEqual(recipe.recipe.converter);
+  });
+
+  it("passes through V2 recipes without inventing workshop data", () => {
+    const recipe = createTestRecipe({ schema_version: 2 });
+    const migrated = migrateRecipe(recipe);
+    expect(migrated.schema_version).toBe(2);
+    expect(migrated.recipe.workshop).toBeUndefined();
   });
 
   it("rejects invalid format", () => {

@@ -22,6 +22,8 @@ import {
   normalizeFridgeMagnetItems,
   resolveFridgeMagnetSpacerThick,
 } from "../constants/fridgeMagnets";
+import { OFFICIAL_WORKSHOP_MODULES } from "../workshop/modules/bead/manifest";
+import { resolveWorkshopRecipeSource } from "../workshop/registry";
 
 // ========== Hex normalization ==========
 
@@ -66,6 +68,8 @@ export const RECIPE_IMPORT_WARNING_BACK_LABELS_UNAVAILABLE =
   "recipe_import_warning_back_labels_unavailable";
 export const RECIPE_IMPORT_WARNING_SPATIAL_EDITS_NOT_SERIALIZED =
   "recipe_import_warning_spatial_edits_not_serialized";
+export const RECIPE_IMPORT_WARNING_WORKSHOP_DEGRADED =
+  "recipe_import_workshop_degraded";
 
 export const RECIPE_IMPORT_NOT_SHARE_CARD_ERROR =
   "PNG file does not contain Lumina recipe metadata";
@@ -302,6 +306,21 @@ export function restoreConverterRecipe(
 
   const conv = recipe.recipe.converter;
   const warnings: string[] = [...recipe.warnings];
+  const rawWorkshopSource = recipe.recipe.workshop;
+  const workshopSource =
+    rawWorkshopSource === undefined
+      ? null
+      : resolveWorkshopRecipeSource(
+          rawWorkshopSource,
+          OFFICIAL_WORKSHOP_MODULES,
+        );
+  if (
+    rawWorkshopSource !== undefined &&
+    !workshopSource &&
+    !warnings.includes(RECIPE_IMPORT_WARNING_WORKSHOP_DEGRADED)
+  ) {
+    warnings.push(RECIPE_IMPORT_WARNING_WORKSHOP_DEGRADED);
+  }
 
   // --- Restore primary asset ---
   const primaryAsset = recipe.asset.primary;
@@ -473,6 +492,8 @@ export function restoreConverterRecipe(
 
   // --- Build partial state ---
   const state: Partial<ConverterState> = {
+    workshopSource,
+
     // Model-surface uploads and face selections are session-bound and are not
     // represented by the current recipe schema. Clear every related field so
     // an imported recipe cannot inherit a previously loaded model.

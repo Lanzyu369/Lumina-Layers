@@ -473,13 +473,27 @@ export default function BasicSettings() {
     }
   }, [t]);
 
-  const handleImportConfirm = useCallback(() => {
+  const applyPreparedImport = useCallback((
+    destination: "converter" | "workshop",
+  ) => {
     if (!importPreview) return;
-    applyImport(importPreview.restoreResult, importPreview.printerOptions ?? []);
+    applyImport(
+      importPreview.restoreResult,
+      importPreview.printerOptions ?? [],
+      { destination },
+    );
     revokeImportCoverUrl(importPreview.coverUrl);
     setImportDialogOpen(false);
     setImportPreview(null);
   }, [importPreview]);
+
+  const handleImportConfirm = useCallback(() => {
+    applyPreparedImport("converter");
+  }, [applyPreparedImport]);
+
+  const handleImportContinueEditing = useCallback(() => {
+    applyPreparedImport("workshop");
+  }, [applyPreparedImport]);
 
   const handleImportCancel = useCallback(() => {
     revokeImportCoverUrl(importPreview?.coverUrl ?? null);
@@ -1758,6 +1772,7 @@ export default function BasicSettings() {
         preview={importPreview}
         source={importSource}
         onConfirm={handleImportConfirm}
+        onContinueEditing={handleImportContinueEditing}
         onCancel={handleImportCancel}
         isLoading={importLoading}
       />

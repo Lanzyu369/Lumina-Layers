@@ -3,6 +3,7 @@ import {
   type WorkshopCapability,
   type WorkshopModuleDefinition,
   type WorkshopModuleManifest,
+  type WorkshopRecipeSource,
 } from "./types";
 
 export const WORKSHOP_CAPABILITIES = [
@@ -40,6 +41,71 @@ export interface WorkshopRegistryOptions {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function isRecord(
+  value: unknown,
+): value is Record<string, unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value)
+  );
+}
+
+function hasValidRecipeEnvelope(
+  value: unknown,
+): value is WorkshopRecipeSource {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    value.manifestSchemaVersion ===
+      WORKSHOP_MANIFEST_SCHEMA_VERSION &&
+    isNonEmptyString(value.moduleId) &&
+    SEMVER_PATTERN.test(
+      typeof value.moduleVersion === "string"
+        ? value.moduleVersion
+        : "",
+    ) &&
+    isNonEmptyString(value.projectSchemaVersion) &&
+    isNonEmptyString(value.renderSchemaVersion) &&
+    isRecord(value.payload)
+  );
+}
+
+/**
+ * Resolve a generic recipe envelope through its installed module validator.
+ * 通过已安装模块的校验器解析通用工坊配方信封。
+ */
+export function resolveWorkshopRecipeSource(
+  value: unknown,
+  definitions: readonly WorkshopModuleDefinition[],
+): WorkshopRecipeSource | null {
+  if (!hasValidRecipeEnvelope(value)) {
+    return null;
+  }
+  const definition = definitions.find(
+    ({ manifest }) => manifest.id === value.moduleId,
+  );
+  if (
+    !definition ||
+    definition.manifest.manifestSchemaVersion !==
+      value.manifestSchemaVersion ||
+    !definition.validateRecipeSource
+  ) {
+    return null;
+  }
+  try {
+    if (!definition.validateRecipeSource(value)) {
+      return null;
+    }
+    return JSON.parse(
+      JSON.stringify(value),
+    ) as WorkshopRecipeSource;
+  } catch {
+    return null;
+  }
 }
 
 function isLocalizedText(value: unknown): boolean {

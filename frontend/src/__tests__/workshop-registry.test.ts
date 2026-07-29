@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  resolveWorkshopRecipeSource,
   validateWorkshopModules,
   type WorkshopModuleDisabledReason,
 } from "../workshop/registry";
+import { BEAD_WORKSHOP_DEFINITION } from "../workshop/modules/bead/manifest";
 import type {
   WorkshopCapability,
   WorkshopModuleDefinition,
   WorkshopModuleManifest,
 } from "../workshop/types";
+import { createBeadRecipeSourceFixture } from "./fixtures/beadRecipeSource";
 
 const validManifest: WorkshopModuleManifest = {
   manifestSchemaVersion: 1,
@@ -149,5 +152,36 @@ describe("validateWorkshopModules", () => {
     expectDisabled(validManifest, "not-whitelisted", {
       whitelist: new Set(),
     });
+  });
+});
+
+describe("resolveWorkshopRecipeSource", () => {
+  it("delegates payload validation to the matching module and returns a clone", () => {
+    const source = createBeadRecipeSourceFixture();
+    const resolved = resolveWorkshopRecipeSource(source, [
+      BEAD_WORKSHOP_DEFINITION,
+    ]);
+
+    expect(resolved).toEqual(source);
+    expect(resolved).not.toBe(source);
+    expect(resolved?.payload).not.toBe(source.payload);
+  });
+
+  it("fails closed for malformed payloads and unavailable modules", () => {
+    const malformed = createBeadRecipeSourceFixture();
+    malformed.payload.cellsRle = [[-2, 999]];
+    expect(
+      resolveWorkshopRecipeSource(malformed, [
+        BEAD_WORKSHOP_DEFINITION,
+      ]),
+    ).toBeNull();
+
+    const unavailable = createBeadRecipeSourceFixture();
+    unavailable.moduleId = "third-party.unknown";
+    expect(
+      resolveWorkshopRecipeSource(unavailable, [
+        BEAD_WORKSHOP_DEFINITION,
+      ]),
+    ).toBeNull();
   });
 });
