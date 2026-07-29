@@ -477,3 +477,203 @@ def test_dynamic_svg_edit_lifecycle_keeps_native_geometry_and_export_recipes(
         store.clear_all()
         registry.clear_all()
         app.dependency_overrides.clear()
+
+
+def test_dynamic_svg_global_replacement_rebuilds_exact_recipe_after_fresh_preview(
+    monkeypatch,
+) -> None:
+    """A replayed native SVG remap keeps its exact target through exports."""
+
+    target_srgb = (137, 181, 59)  # #89B53B, absent from the source SVG.
+    source_srgb = (249, 164, 180)  # #F9A4B4
+    svg_payload = b"""<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 120 80\">
+<path d=\"M0 0H120V80H0Z\" fill=\"#f9a4b4\"/>
+<path d=\"M42 12H78V68H42Z\" fill=\"#0a141e\"/>
+</svg>"""
+
+    app = create_app()
+    store = SessionStore(ttl=1800)
+    registry = FileRegistry()
+    pool = _InlineWorkerPool()
+    app.dependency_overrides[get_session_store] = lambda: store
+    app.dependency_overrides[get_file_registry] = lambda: registry
+    app.dependency_overrides[get_worker_pool] = lambda: pool
+    client = TestClient(app, raise_server_exceptions=False)
+
+    build_recipes: list[Counter[tuple[int, ...]]] = []
+    glb_recipes: list[Counter[tuple[int, ...]]] = []
+    threemf_recipes: list[Counter[tuple[int, ...]]] = []
+    recipe_by_scene_id: dict[int, Counter[tuple[int, ...]]] = {}
+    vector_engine = importlib.import_module("core.vector_engine")
+    vector_processor_class = vector_engine.VectorProcessor
+    real_build_mesh = vector_processor_class.build_mesh
+    real_glb_export = vector_glb_preview.export_vector_glb_preview
+    real_threemf_export = bambu_3mf_writer.export_scene_with_bambu_metadata
+
+    def capture_build_mesh(processor, *args, **kwargs):
+        analysis = kwargs.get("analysis")
+        if analysis is None and args:
+            analysis = args[0]
+        assert analysis is not None
+        scene = real_build_mesh(processor, *args, **kwargs)
+        recipe = _recipe_signature(analysis)
+        build_recipes.append(recipe)
+        recipe_by_scene_id[id(scene)] = recipe
+        return scene
+
+    capture_build_mesh.__signature__ = inspect.signature(real_build_mesh)
+
+    def capture_glb_export(*args, **kwargs):
+        recipe = _recipe_signature(kwargs["analysis"])
+        glb_recipes.append(recipe)
+        return real_glb_export(*args, **kwargs)
+
+    def capture_threemf_export(*args, **kwargs):
+        recipe = recipe_by_scene_id.get(id(kwargs["scene"]))
+        assert recipe is not None
+        threemf_recipes.append(recipe)
+        return real_threemf_export(*args, **kwargs)
+
+    def post_preview(form_data: dict[str, str]):
+        return client.post(
+            "/api/convert/preview",
+            files={
+                "image": (
+                    "dynamic_global_replacement.svg",
+                    io.BytesIO(svg_payload),
+                    "image/svg+xml",
+                )
+            },
+            data=form_data,
+        )
+
+    monkeypatch.setattr(
+        material_lut_synthesis,
+        "MATERIALS_DIR",
+        str(_FIXTURE_MATERIALS),
+    )
+    monkeypatch.setattr(vector_processor_class, "build_mesh", capture_build_mesh)
+    monkeypatch.setattr(
+        vector_glb_preview,
+        "export_vector_glb_preview",
+        capture_glb_export,
+    )
+    monkeypatch.setattr(
+        bambu_3mf_writer,
+        "export_scene_with_bambu_metadata",
+        capture_threemf_export,
+    )
+    monkeypatch.setattr(
+        generate_router,
+        "_record_material_archive_usage_safe",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        converter_workers,
+        "_rasterize_tile_for_cover",
+        lambda *_args, **_kwargs: None,
+    )
+
+    try:
+        initial_response = post_preview(_preview_form_data())
+        assert initial_response.status_code == 200, initial_response.text
+        initial_payload = initial_response.json()
+        source_entry = next(
+            entry
+            for entry in initial_payload["palette"]
+            if entry["quantized_hex"].lower() == "#f9a4b4"
+        )
+        replacement_regions = [
+            {
+                "quantized_hex": source_entry["quantized_hex"],
+                "matched_hex": source_entry["matched_hex"],
+                "replacement_hex": "#89b53b",
+            }
+        ]
+
+        replaced_form = _preview_form_data()
+        replaced_form["replacement_regions"] = json.dumps(replacement_regions)
+        replacement_response = post_preview(replaced_form)
+        assert replacement_response.status_code == 200, replacement_response.text
+        replacement_payload = replacement_response.json()
+
+        fresh_form = dict(replaced_form)
+        fresh_form["target_width_mm"] = "61"
+        fresh_response = post_preview(fresh_form)
+        assert fresh_response.status_code == 200, fresh_response.text
+        fresh_payload = fresh_response.json()
+        fresh_recipes = fresh_payload["material_dynamic_recipes"]
+        fresh_target = next(
+            recipe
+            for recipe in fresh_recipes
+            if recipe["target_srgb"] == list(target_srgb)
+        )
+        assert tuple(fresh_target["actual_recipe_top_to_bottom"])
+        assert len(fresh_target["print_recipe_top_to_bottom"]) == _EXPECTED_MAX_LAYERS
+        assert all(
+            recipe["target_srgb"] != list(source_srgb)
+            for recipe in fresh_recipes
+        )
+        replacement_target = next(
+            recipe
+            for recipe in replacement_payload["material_dynamic_recipes"]
+            if recipe["target_srgb"] == list(target_srgb)
+        )
+        expected_recipe = (
+            tuple(replacement_target["actual_recipe_top_to_bottom"]),
+            tuple(replacement_target["print_recipe_top_to_bottom"]),
+        )
+        assert expected_recipe == (
+            tuple(fresh_target["actual_recipe_top_to_bottom"]),
+            tuple(fresh_target["print_recipe_top_to_bottom"]),
+        )
+        expected_print_recipe = expected_recipe[1]
+
+        session_id = fresh_payload["session_id"]
+        normal_params = _generate_params()
+        normal_params["target_width_mm"] = 61
+        normal_response = client.post(
+            "/api/convert/generate",
+            json={"session_id": session_id, "params": normal_params},
+        )
+        assert normal_response.status_code == 200, normal_response.text
+        normal_payload = normal_response.json()
+        assert client.get(normal_payload["download_url"]).content.startswith(b"PK")
+        assert client.get(normal_payload["preview_3d_url"]).content.startswith(b"glTF")
+        assert len(build_recipes) == 1
+        assert expected_print_recipe in build_recipes[0]
+        assert glb_recipes == build_recipes
+        assert threemf_recipes == build_recipes
+
+        build_recipes.clear()
+        threemf_recipes.clear()
+        large_params = dict(normal_params)
+        large_params["use_cached_matched_rgb"] = False
+        large_response = client.post(
+            "/api/convert/generate-large-format",
+            json={
+                "session_id": session_id,
+                "params": {
+                    "target_height_mm": 40,
+                    "tile_width_mm": 40,
+                    "tile_height_mm": 40,
+                    "params": large_params,
+                },
+            },
+        )
+        assert large_response.status_code == 200, large_response.text
+        large_payload = large_response.json()
+        assert large_payload["tile_count"] >= 1
+        assert pool.calls.count("worker_generate_large_format_svg_native") == 1
+        large_download = client.get(large_payload["download_url"])
+        assert large_download.status_code == 200
+        assert large_download.content.startswith(b"PK")
+        assert build_recipes
+        assert threemf_recipes
+        assert all(expected_print_recipe in recipes for recipes in build_recipes)
+        assert threemf_recipes == build_recipes
+    finally:
+        client.close()
+        store.clear_all()
+        registry.clear_all()
+        app.dependency_overrides.clear()

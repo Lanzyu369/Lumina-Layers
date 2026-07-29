@@ -260,7 +260,7 @@ def test_vector_preview_replacements_keep_pristine_height_and_recipe() -> None:
         result = _run_vector_preview_branch(ctx)
 
     assert "error" not in result
-    assert captured["color_replacements"] == {"#ff0000": "#0000ff"}
+    assert captured["color_replacements"] == ctx["replacement_regions"]
     cache = result["cache"]
     solid = cache["mask_solid"]
     assert np.all(cache["matched_rgb"][solid] == [0, 0, 255])

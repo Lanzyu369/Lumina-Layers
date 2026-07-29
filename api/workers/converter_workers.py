@@ -1876,7 +1876,6 @@ def worker_generate_large_format_svg_native(
     from core.pipeline._input_validation_common import (
         _apply_material_archive_branch,
     )
-    from core.pipeline.s03_color_replacement import _normalize_color_replacements_input
     from core.pipeline.vector_branch import (
         _build_vector_processor,
         _resolve_vector_layer_height_mm,
@@ -1899,7 +1898,10 @@ def worker_generate_large_format_svg_native(
     tile_width_mm = float(params["tile_width_mm"])
     tile_height_mm = float(params["tile_height_mm"])
     replacement_regions = params.get("replacement_regions")
-    vector_replacements = _normalize_color_replacements_input(replacement_regions)
+    # Preserve ColorReplacementItem records through the native SVG analysis so
+    # dynamic material matching can project effective target colours before its
+    # final geometry-weighted solve.
+    vector_replacements = replacement_regions
 
     grid_cols = max(1, math.ceil(total_width_mm / tile_width_mm))
     grid_rows = max(1, math.ceil(total_height_mm / tile_height_mm))

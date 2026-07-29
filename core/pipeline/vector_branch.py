@@ -42,7 +42,6 @@ from core.errors import CachedPreviewAnalysisError
 from core.geometry_utils import create_keychain_loop
 from core.pipeline import p06_bed_rendering, s09_export_3mf, vector_glb_preview
 from core.pipeline.pipeline_utils import extract_color_palette
-from core.pipeline.s03_color_replacement import _normalize_color_replacements_input
 from core.pipeline.processing_ops.svg_rasterizer import rasterize_svg
 from core.pipeline.s08_auxiliary_meshes import (
     _coerce_preview_rgba,
@@ -1538,13 +1537,12 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
     lut_metadata = ctx.get("lut_metadata")
     preview_timing: dict[str, float] = {}
     vector_preview_total_t0 = time.perf_counter()
-    vector_replacements = _normalize_color_replacements_input(
-        ctx.get("replacement_regions")
-    )
+    # Native dynamic-material matching needs the structured replacement records
+    # so VectorProcessor can resolve all source fills behind one matched palette
+    # colour before its final exact solve. Legacy dict inputs remain supported.
+    vector_replacements = ctx.get("replacement_regions")
     if not vector_replacements:
-        vector_replacements = _normalize_color_replacements_input(
-            ctx.get("color_replacements")
-        )
+        vector_replacements = ctx.get("color_replacements")
 
     try:
         from core.vector_engine import VectorProcessor  # noqa: F401  -- re-imported for typing parity
@@ -1897,10 +1895,11 @@ def _run_vector_branch(ctx: dict) -> dict:
         },
     )
 
-    # ---- Normalize color replacements ----
-    vector_replacements = _normalize_color_replacements_input(replacement_regions)
+    # Retain structured replacement records for dynamic native SVG matching.
+    # VectorProcessor normalizes legacy dict inputs internally.
+    vector_replacements = replacement_regions
     if not vector_replacements:
-        vector_replacements = _normalize_color_replacements_input(color_replacements)
+        vector_replacements = color_replacements
 
     try:
         from core.vector_engine import (

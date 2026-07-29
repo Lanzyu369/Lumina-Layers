@@ -272,6 +272,136 @@ def _rgb_to_hex(rgb):
         return None
 
 
+def _replacement_hex_to_rgb(value: object) -> tuple[int, int, int] | None:
+    """Parse one API replacement hex value without importing pipeline code."""
+
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    if normalized.startswith("#"):
+        normalized = normalized[1:]
+    if len(normalized) != 6:
+        return None
+    try:
+        return (
+            int(normalized[0:2], 16),
+            int(normalized[2:4], 16),
+            int(normalized[4:6], 16),
+        )
+    except ValueError:
+        return None
+
+
+def _normalise_vector_replacement_input(
+    color_replacements: object,
+) -> tuple[dict[tuple[int, int, int], tuple[int, int, int]], dict[str, str]]:
+    """Split structured replacement records from the legacy replacement map.
+
+    ``replacement_regions`` is keyed by the colour a user sees in the palette
+    (``matched_hex``), not necessarily by the source SVG fill.  The structured
+    mapping is therefore retained for the native dynamic-material path, where
+    it is resolved after a preflight match.  The second return value keeps the
+    historical ``{matched_hex: replacement_hex}`` contract for all other
+    vector paths.
+    """
+
+    if isinstance(color_replacements, dict):
+        legacy_map: dict[str, str] = {}
+        for source, target in color_replacements.items():
+            if not isinstance(source, str) or not isinstance(target, str):
+                continue
+            source_value = source.strip().lower()
+            target_value = target.strip().lower()
+            if source_value and target_value:
+                legacy_map[source_value] = target_value
+        return {}, legacy_map
+
+    if not isinstance(color_replacements, list):
+        return {}, {}
+
+    targets_by_matched: dict[tuple[int, int, int], tuple[int, int, int]] = {}
+    legacy_map: dict[str, str] = {}
+    for item in color_replacements:
+        if not isinstance(item, dict):
+            continue
+        source = (
+            item.get("matched")
+            or item.get("matched_hex")
+            or item.get("source")
+            or item.get("quantized")
+            or item.get("quantized_hex")
+            or item.get("selected_color")
+        )
+        target = (
+            item.get("replacement_hex")
+            or item.get("replacement")
+            or item.get("replacement_color")
+        )
+        if not isinstance(source, str) or not isinstance(target, str):
+            continue
+        source_value = source.strip().lower()
+        target_value = target.strip().lower()
+        if not source_value or not target_value:
+            continue
+        legacy_map[source_value] = target_value
+        source_rgb = _replacement_hex_to_rgb(source_value)
+        target_rgb = _replacement_hex_to_rgb(target_value)
+        if source_rgb is not None and target_rgb is not None:
+            # Assignment intentionally retains the historic last-record-wins
+            # behaviour of ``_normalize_color_replacements_input``.
+            targets_by_matched[source_rgb] = target_rgb
+    return targets_by_matched, legacy_map
+
+
+def _normalise_rgb_tuple(value: object) -> tuple[int, int, int] | None:
+    """Return one bounded RGB tuple, or ``None`` for malformed metadata."""
+
+    try:
+        return (
+            max(0, min(255, int(value[0]))),
+            max(0, min(255, int(value[1]))),
+            max(0, min(255, int(value[2]))),
+        )
+    except (TypeError, IndexError, ValueError):
+        return None
+
+
+def _project_dynamic_replacement_targets(
+    match_input_shapes: list[dict],
+    preflight_matched_shapes: list[dict],
+    targets_by_matched: dict[tuple[int, int, int], tuple[int, int, int]],
+) -> tuple[list[dict], int]:
+    """Project palette replacements onto per-run SVG match inputs.
+
+    The preflight result tells us which visible palette colour each source
+    shape currently maps to.  A shallow copy is made only for affected shapes
+    so parse/clip cache entries retain original source colours and geometry.
+    """
+
+    projected_shapes: list[dict] = []
+    projected_count = 0
+    for index, item in enumerate(match_input_shapes):
+        matched_shape = (
+            preflight_matched_shapes[index]
+            if index < len(preflight_matched_shapes)
+            else None
+        )
+        matched_rgb = (
+            _normalise_rgb_tuple(matched_shape.get("matched_rgb"))
+            if isinstance(matched_shape, dict)
+            else None
+        )
+        replacement = targets_by_matched.get(matched_rgb)
+        if replacement is None:
+            projected_shapes.append(item)
+            continue
+        projected = dict(item)
+        projected["match_color"] = replacement
+        projected_shapes.append(projected)
+        projected_count += 1
+    return projected_shapes, projected_count
+
+
 def _flatten_cubic(
     x0,
     y0,
@@ -4239,7 +4369,7 @@ class VectorProcessor:
         self,
         svg_path: str,
         target_width_mm: float,
-        color_replacements: dict = None,
+        color_replacements: dict | list[dict] | None = None,
         progress_fn=None,
     ) -> VectorAnalysis:
         """Parse, clip, and color-match an SVG — shared by preview and mesh.
@@ -4248,7 +4378,9 @@ class VectorProcessor:
         Args:
             svg_path:         Path to SVG file.
             target_width_mm:  Physical width in mm for the output model.
-            color_replacements: Optional ``{hex: hex}`` replacement map.
+            color_replacements: Optional legacy ``{hex: hex}`` map or API
+                ``ColorReplacementItem`` records. Structured records retain
+                their ``matched_hex`` identity for native dynamic materials.
             progress_fn:      Optional progress callback.
 
         Returns:
@@ -4476,24 +4608,6 @@ class VectorProcessor:
                     },
                 )
 
-        # === Stage 4: Match fill colors to LUT recipes ===
-        replacement_manager = None
-        if color_replacements:
-            try:
-                from core.color_replacement import ColorReplacementManager
-
-                replacement_manager = ColorReplacementManager.from_dict(color_replacements)
-            except VECTOR_HANDLED_ERRORS as e:
-                _log.warning(
-                    "Failed to load vector color replacements",
-                    extra={
-                        "event": "vector_color_replacements_load_failed",
-                        "error_type": type(e).__name__,
-                        "error_message": str(e),
-                        "replacement_count": len(color_replacements or []),
-                    },
-                )
-
         # Material-archive matcher needs to pre-solve every unique fill
         # colour before ``_match_colors`` runs its KDTree query, so the
         # KDTree is populated and ``lut_rgb`` / ``ref_stacks`` carry the
@@ -4509,41 +4623,109 @@ class VectorProcessor:
             None,
         )
         solve_for_fills = getattr(self.img_processor, "solve_for_fills", None)
-        if callable(solve_for_clipped_shapes) and clipped_shapes:
-            solve_for_clipped_shapes(
-                clipped_shapes,
-                scale_factor=scale_factor,
-            )
-        elif solve_for_fills is not None and clipped_shapes:
-            unique_fills_set: set = set()
-            for item in clipped_shapes:
-                color = item.get("color")
-                if color is None:
-                    continue
-                try:
-                    unique_fills_set.add(
-                        (int(color[0]), int(color[1]), int(color[2]))
-                    )
-                except (TypeError, IndexError, ValueError):
-                    continue
-            if unique_fills_set:
-                solve_for_fills(sorted(unique_fills_set))
-                # NOTE: small-shape snap is disabled for material-archive mode.
-                # The delta_e heuristic incorrectly triggers when the material
-                # set cannot physically reproduce dark colours, causing
-                # unrelated small shapes to be snapped to the dominant anchor
-                # colour (e.g. black → skin tone). See PR #177 regression.
-                # 耗材档案模式禁用小 shape 吸附：材料集缺少深色时 delta_e
-                # 判断会误触发，把深色小碎片全部吸附到大面积锚点色。
-
         t0 = time.perf_counter()
-        match_input_shapes = self._with_near_fill_match_queries(clipped_shapes)
-        matched_shapes = self._match_colors(
-            match_input_shapes,
-            replacement_manager,
-            num_channels,
-            num_layers=num_layers,
+        targets_by_matched, legacy_replacements = _normalise_vector_replacement_input(
+            color_replacements
         )
+        dynamic_replacement_projection = bool(
+            targets_by_matched
+            and callable(solve_for_clipped_shapes)
+            and bool(
+                getattr(self.img_processor, "dynamic_layer_count_enabled", False)
+            )
+        )
+
+        # ``replacement_regions`` identifies a palette match, not always a
+        # single source SVG fill.  In dynamic material mode, first establish
+        # that palette identity from the original geometry, then project every
+        # matching shape to its user-selected target and solve the final table.
+        # The second solve therefore owns the metadata/KDTree consumed by
+        # preview, GLB and 3MF generation.
+        if dynamic_replacement_projection and clipped_shapes:
+            solve_for_clipped_shapes(clipped_shapes, scale_factor=scale_factor)
+            preflight_input_shapes = self._with_near_fill_match_queries(
+                clipped_shapes
+            )
+            preflight_matched_shapes = self._match_colors(
+                preflight_input_shapes,
+                None,
+                num_channels,
+                num_layers=num_layers,
+            )
+            match_input_shapes, projected_count = _project_dynamic_replacement_targets(
+                preflight_input_shapes,
+                preflight_matched_shapes,
+                targets_by_matched,
+            )
+            if projected_count:
+                solve_for_clipped_shapes(
+                    match_input_shapes,
+                    scale_factor=scale_factor,
+                )
+                # Do not apply the same palette remap after the final KDTree
+                # lookup: final ``match_color`` already is the exact target.
+                matched_shapes = self._match_colors(
+                    match_input_shapes,
+                    None,
+                    num_channels,
+                    num_layers=num_layers,
+                )
+            else:
+                matched_shapes = preflight_matched_shapes
+        else:
+            replacement_manager = None
+            if legacy_replacements:
+                try:
+                    from core.color_replacement import ColorReplacementManager
+
+                    replacement_manager = ColorReplacementManager.from_dict(
+                        legacy_replacements
+                    )
+                except VECTOR_HANDLED_ERRORS as e:
+                    _log.warning(
+                        "Failed to load vector color replacements",
+                        extra={
+                            "event": "vector_color_replacements_load_failed",
+                            "error_type": type(e).__name__,
+                            "error_message": str(e),
+                            "replacement_count": len(color_replacements or []),
+                        },
+                    )
+
+            if callable(solve_for_clipped_shapes) and clipped_shapes:
+                solve_for_clipped_shapes(
+                    clipped_shapes,
+                    scale_factor=scale_factor,
+                )
+            elif solve_for_fills is not None and clipped_shapes:
+                unique_fills_set: set = set()
+                for item in clipped_shapes:
+                    color = item.get("color")
+                    if color is None:
+                        continue
+                    try:
+                        unique_fills_set.add(
+                            (int(color[0]), int(color[1]), int(color[2]))
+                        )
+                    except (TypeError, IndexError, ValueError):
+                        continue
+                if unique_fills_set:
+                    solve_for_fills(sorted(unique_fills_set))
+                    # NOTE: small-shape snap is disabled for material-archive mode.
+                    # The delta_e heuristic incorrectly triggers when the material
+                    # set cannot physically reproduce dark colours, causing
+                    # unrelated small shapes to be snapped to the dominant anchor
+                    # colour (e.g. black → skin tone). See PR #177 regression.
+                    # 耗材档案模式禁用小 shape 吸附：材料集缺少深色时 delta_e
+                    # 判断会误触发，把深色小碎片全部吸附到大面积锚点色。
+
+            match_input_shapes = self._with_near_fill_match_queries(clipped_shapes)
+            matched_shapes = self._match_colors(
+                match_input_shapes,
+                replacement_manager,
+                num_channels,
+                num_layers=num_layers,
+            )
         min_hole_area_mm2 = float(getattr(VectorConfig, "MIN_COLOR_HOLE_AREA_MM2", 1.0))
         for idx, item in enumerate(clipped_shapes):
             filtered_geometry = VectorProcessor._filter_backing_holes(
@@ -5204,7 +5386,7 @@ class VectorProcessor:
         target_width_mm: float,
         thickness_mm: float,
         structure_mode: str = "Single-sided",
-        color_replacements: dict = None,
+        color_replacements: dict | list[dict] | None = None,
         progress_fn=None,
     ) -> trimesh.Scene:
         """Convert an SVG file to a trimesh Scene ready for 3MF export.
@@ -5217,7 +5399,8 @@ class VectorProcessor:
             target_width_mm:  Physical width in mm for the output model.
             thickness_mm:     Backing (spacer) thickness in mm.
             structure_mode:   "Single-sided" or "Double-sided".
-            color_replacements: Optional ``{hex: hex}`` replacement map.
+            color_replacements: Optional legacy replacement map or API
+                ``ColorReplacementItem`` records.
             progress_fn:      Optional progress callback.
 
         Returns:
