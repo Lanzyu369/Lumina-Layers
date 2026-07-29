@@ -94,6 +94,35 @@ function profilesForDisplay(
   return group.displayProfiles ?? group.profiles;
 }
 
+function validLayerHeightMm(
+  value: number | null | undefined,
+): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : null;
+}
+
+function formatLayerHeightMm(
+  value: number | null | undefined,
+): string | null {
+  const valid = validLayerHeightMm(value);
+  return valid === null ? null : `${valid.toFixed(2)} mm`;
+}
+
+function formatLayerHeightSummary(
+  profiles: SavedMaterialLibraryItem[],
+): string | null {
+  const heights = Array.from(
+    new Set(
+      profiles
+        .map((profile) => validLayerHeightMm(profile.layer_height_mm))
+        .filter((value): value is number => value !== null),
+    ),
+  ).sort((left, right) => left - right);
+  if (heights.length === 0) return null;
+  return `${heights.map((height) => height.toFixed(2)).join(" / ")} mm`;
+}
+
 /**
  * Material profile picker with type, brand, favorites, and contributor filters.
  * 支持类型、品牌、收藏和作者筛选的耗材档案选择弹窗。
@@ -414,7 +443,11 @@ export default function MaterialPickerDialog({
                 {materialName}
               </span>
               <span className="mt-1 block truncate text-xs text-slate-500 dark:text-slate-400">
-                {[profile.brand?.trim(), materialType]
+                {[
+                  profile.brand?.trim(),
+                  materialType,
+                  formatLayerHeightMm(profile.layer_height_mm),
+                ]
                   .filter(Boolean)
                   .join(" · ")}
               </span>
@@ -493,7 +526,11 @@ export default function MaterialPickerDialog({
               {materialName}
             </p>
             <p className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">
-              {[summaryProfile.brand?.trim(), materialType]
+              {[
+                summaryProfile.brand?.trim(),
+                materialType,
+                formatLayerHeightSummary(displayProfiles),
+              ]
                 .filter(Boolean)
                 .join(" · ")}
             </p>
@@ -529,6 +566,18 @@ export default function MaterialPickerDialog({
                 t("basic_material_picker_select_profile"),
                 { material: materialName, author },
               );
+              const detailParts = [
+                profile.mean_delta_e != null
+                  ? formatMessage(t("basic_material_picker_delta_e"), {
+                      value: profile.mean_delta_e.toFixed(1),
+                    })
+                  : null,
+                formatMessage(
+                  t("basic_material_picker_verification_count"),
+                  { count: profile.verification_count ?? 0 },
+                ),
+                formatLayerHeightMm(profile.layer_height_mm),
+              ].filter((value): value is string => Boolean(value));
               return (
                 <div
                   key={profile.directory_name}
@@ -565,16 +614,7 @@ export default function MaterialPickerDialog({
                         {author}
                       </span>
                       <span className="mt-0.5 block text-[11px] text-slate-500 dark:text-slate-400">
-                        {profile.mean_delta_e != null
-                          ? `${formatMessage(
-                              t("basic_material_picker_delta_e"),
-                              { value: profile.mean_delta_e.toFixed(1) },
-                            )} · `
-                          : ""}
-                        {formatMessage(
-                          t("basic_material_picker_verification_count"),
-                          { count: profile.verification_count ?? 0 },
-                        )}
+                        {detailParts.join(" · ")}
                       </span>
                     </span>
                   </button>
