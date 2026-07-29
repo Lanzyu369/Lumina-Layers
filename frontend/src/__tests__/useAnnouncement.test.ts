@@ -45,8 +45,8 @@ describe("useAnnouncement", () => {
   });
 
   it("announces Flash Studio Desktop and Flashforge multicolor support", () => {
-    expect(ANNOUNCEMENTS[0]?.version).toBe("2026-07-22");
-    const items = ANNOUNCEMENTS[0]?.sections.flatMap((section) => section.items) ?? [];
+    const entry = ANNOUNCEMENTS.find((item) => item.version === "2026-07-22");
+    const items = entry?.sections.flatMap((section) => section.items) ?? [];
 
     expect(
       items.some(
@@ -61,6 +61,25 @@ describe("useAnnouncement", () => {
           item.en.includes("0.4") &&
           item.en.includes("2.3.2") &&
           item.en.includes("Lumina process settings"),
+      ),
+    ).toBe(true);
+  });
+
+  it("announces the Creative Workshop bead-pattern workflow", () => {
+    expect(ANNOUNCEMENTS[0]?.version).toBe("2026-07-30");
+    const items = ANNOUNCEMENTS[0]?.sections.flatMap((section) => section.items) ?? [];
+
+    expect(
+      items.some(
+        (item) =>
+          item.zh.includes("创意工坊") &&
+          item.zh.includes("拼豆图纸") &&
+          item.zh.includes("压合") &&
+          item.zh.includes("Lumina") &&
+          item.en.includes("Creative Workshop") &&
+          item.en.includes("bead pattern") &&
+          item.en.includes("ironing pressure") &&
+          item.en.includes("Lumina"),
       ),
     ).toBe(true);
   });
@@ -262,8 +281,8 @@ describe("selectAnnouncementHistory", () => {
   });
 
   it("默认历史条数足够覆盖这次 5 月更新回顾", () => {
-    expect(ANNOUNCEMENT_HISTORY_LIMIT).toBeGreaterThanOrEqual(18);
-    expect(selectAnnouncementHistory(ANNOUNCEMENTS).length).toBeGreaterThanOrEqual(18);
+    expect(ANNOUNCEMENT_HISTORY_LIMIT).toBeGreaterThanOrEqual(19);
+    expect(selectAnnouncementHistory(ANNOUNCEMENTS).length).toBeGreaterThanOrEqual(19);
     expect(selectAnnouncementHistory(ANNOUNCEMENTS).map((e) => e.version)).toContain(
       "2026-05-05",
     );

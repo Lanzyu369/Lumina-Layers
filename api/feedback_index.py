@@ -433,6 +433,62 @@ def _render_advanced_params_summary_safe(context: dict[str, Any]) -> str:
         return _ADVANCED_PARAMS_FALLBACK_SUMMARY
 
 
+def _format_workshop_diagnostics_section(
+    context: dict[str, Any],
+) -> str:
+    """Render only the allowlisted Creative Workshop diagnostic fields.
+
+    仅渲染白名单内的创意工坊诊断字段。
+    """
+
+    workshop = context.get("workshop")
+    if not isinstance(workshop, dict):
+        return ""
+    module_id = _safe_str(workshop.get("module_id"))
+    module_version = _safe_str(workshop.get("module_version"))
+    rows = _safe_str(workshop.get("rows"))
+    columns = _safe_str(workshop.get("columns"))
+    lines = [
+        "## Creative Workshop Diagnostics",
+        "",
+        f"- module: {module_id}@{module_version}",
+        (
+            "- project_schema_version: "
+            f"{_safe_str(workshop.get('project_schema_version'))}"
+        ),
+        f"- input_mode: {_safe_str(workshop.get('input_mode'))}",
+        f"- grid: {rows} × {columns}",
+        f"- compression: {_safe_str(workshop.get('compression'))}",
+        f"- error_code: {_safe_str(workshop.get('error_code'))}",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _format_workshop_diagnostics_summary(
+    context: dict[str, Any],
+) -> str:
+    """Render a compact Chinese workshop diagnostic summary.
+
+    渲染简短的中文创意工坊诊断摘要。
+    """
+
+    workshop = context.get("workshop")
+    if not isinstance(workshop, dict):
+        return ""
+    module_id = _safe_str(workshop.get("module_id"))
+    module_version = _safe_str(workshop.get("module_version"))
+    rows = _safe_str(workshop.get("rows"))
+    columns = _safe_str(workshop.get("columns"))
+    return (
+        f"创意工坊：{module_id}@{module_version}，"
+        f"项目结构 {_safe_str(workshop.get('project_schema_version'))}，"
+        f"输入 {_safe_str(workshop.get('input_mode'))}，"
+        f"网格 {rows}×{columns}，"
+        f"压合 {_safe_str(workshop.get('compression'))}，"
+        f"错误 {_safe_str(workshop.get('error_code'))}。"
+    )
+
+
 def generate_index_markdown(
     ticket_id: str,
     ticket_dir: Path,
@@ -481,8 +537,9 @@ def generate_index_markdown(
 
     repro_tips = _reproduction_suggestion(ticket_id, context)
     repro_block = "\n".join(f"{i + 1}. {line}" for i, line in enumerate(repro_tips))
+    workshop_section = _format_workshop_diagnostics_section(context)
 
-    out = [
+    out: list[str] = [
         f"# Bug Ticket {ticket_id}",
         "",
         f"Received (Beijing): {received_cst}  ",
@@ -496,12 +553,18 @@ def generate_index_markdown(
         "",
         *snapshot_lines,
         "",
+    ]
+    if workshop_section:
+        out.extend([workshop_section.rstrip(), ""])
+    out.extend(
+        [
         _render_advanced_params_section_safe(context).rstrip(),
         "",
         "## Recent Actions (last 10)",
         "",
         _format_actions_table(context.get("action_history")).rstrip(),
-    ]
+        ]
+    )
     api_errors_section = _format_api_errors_table(context.get("action_history"))
     if api_errors_section:
         out.append(api_errors_section.rstrip())
@@ -586,12 +649,15 @@ def generate_summary_text(ticket_id: str, payload: dict[str, Any]) -> str:
         )
 
     advanced_line = _render_advanced_params_summary_safe(context)
+    workshop_line = _format_workshop_diagnostics_summary(context)
 
+    workshop_block = f"{workshop_line}\n\n" if workshop_line else ""
     summary = (
         f"工单 {ticket_id} 于 {received} 受理。用户描述：\n"
         f"\"{description}\"\n\n"
         f"提交时工作流：{active_tab} Tab / {source_version} 模式 / "
         f"颜色模式 {color_mode} / LUT {lut_name}。{material_block}\n\n"
+        f"{workshop_block}"
         f"{advanced_line}\n\n"
         f"最近操作：{' → '.join(action_lines) if action_lines else '(无记录)'}。\n\n"
         f"最近 API 错误：{' / '.join(error_lines) if error_lines else '(无)'}。\n\n"

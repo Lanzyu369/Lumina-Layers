@@ -19,7 +19,7 @@ from typing import Any, Literal
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from api.dependencies import get_file_registry, get_session_store
 from api.feedback_assembler import collect_sync_attachments, finalize_ticket_async
@@ -364,6 +364,31 @@ class BugReportOriginalImageRef(BaseModel):
     source: Literal["converter", "single_stage"] | None = None
 
 
+class BugReportWorkshopContext(BaseModel):
+    """Bounded Creative Workshop diagnostics for a bug report.
+
+    Bug 报告中有界的创意工坊诊断摘要。
+
+    Project pixels, palettes, file names, object URLs, and local paths are
+    intentionally outside this schema. Unknown keys are discarded before
+    the report is persisted or relayed.
+
+    项目像素、色板、文件名、对象 URL 和本地路径均不属于此结构；未知字段
+    会在工单持久化或转发前被丢弃。
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    module_id: str = Field(min_length=1, max_length=128)
+    module_version: str = Field(min_length=1, max_length=128)
+    project_schema_version: str = Field(min_length=1, max_length=128)
+    input_mode: str | None = Field(default=None, max_length=128)
+    rows: int | None = Field(default=None, ge=1, le=128)
+    columns: int | None = Field(default=None, ge=1, le=128)
+    compression: int | None = Field(default=None, ge=0, le=100)
+    error_code: str | None = Field(default=None, max_length=128)
+
+
 class BugReportContext(BaseModel):
     """Client runtime context attached to a bug report.
 
@@ -399,6 +424,7 @@ class BugReportContext(BaseModel):
     session_history: list[dict[str, Any]] = Field(default_factory=list)
     active_original_image_ref: BugReportOriginalImageRef | None = None
     active_final_artifact_ref: BugReportFinalArtifactRef | None = None
+    workshop: BugReportWorkshopContext | None = None
 
     # Grouped advanced generation parameters captured from the converter store.
     # Kept as a free-form dict here; the dedicated sanitizer in
@@ -1278,7 +1304,10 @@ async def relay_bug_report(
                 json={
                     "ticket_id": request.ticket_id,
                     "request_payload": _sanitize_bug_report_request_payload_for_export(
-                        request.request_payload.model_dump(mode="json")
+                        request.request_payload.model_dump(
+                            mode="json",
+                            exclude_unset=True,
+                        )
                     ),
                 },
                 headers=headers,

@@ -25,6 +25,17 @@ export interface OriginalImageRef {
   source: "converter" | "single_stage" | null;
 }
 
+export interface WorkshopBugReportContext {
+  module_id: string;
+  module_version: string;
+  project_schema_version: string;
+  input_mode: string | null;
+  rows: number | null;
+  columns: number | null;
+  compression: number | null;
+  error_code: string | null;
+}
+
 export interface BugReportContextPayload {
   url: string;
   user_agent: string;
@@ -81,6 +92,14 @@ export interface BugReportContextPayload {
    * 其它情况为 ``null``。为兼容旧客户端保留 optional 语义。
    */
   advanced_params?: AdvancedParams | null;
+  /**
+   * Bounded Creative Workshop diagnostics. This deliberately excludes the
+   * source image, project matrix, palette, object URLs, and file paths.
+   *
+   * 创意工坊的有界诊断摘要；刻意不包含原图、项目矩阵、色板、对象 URL
+   * 或任何文件路径。
+   */
+  workshop?: WorkshopBugReportContext | null;
 }
 
 export interface BugReportRequestPayload {

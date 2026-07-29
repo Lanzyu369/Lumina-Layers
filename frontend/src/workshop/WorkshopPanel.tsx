@@ -55,7 +55,13 @@ function translateFromSettings(key: string): string {
   return entry?.[language] ?? entry?.zh ?? key;
 }
 
-function reportHostError(error: WorkshopVisibleError | null): void {
+function reportHostError(
+  error: WorkshopVisibleError | null,
+  identity?: {
+    moduleId: string;
+    moduleVersion: string;
+  },
+): void {
   const current = useWorkshopStore.getState().diagnostics;
   if (!error && !current) {
     return;
@@ -74,6 +80,7 @@ function reportHostError(error: WorkshopVisibleError | null): void {
       : current
         ? { ...current, errorCode: null }
         : null,
+    identity,
   );
 }
 
@@ -88,9 +95,16 @@ function createDefaultHost(
     getTheme: () => useSettingsStore.getState().theme,
     translate: translateFromSettings,
     onProgress: () => undefined,
-    onError: reportHostError,
-    onDiagnostics: (_moduleId, _moduleVersion, summary) => {
-      useWorkshopStore.getState().setDiagnostics(summary);
+    onError: (error) =>
+      reportHostError(error, {
+        moduleId: manifest.id,
+        moduleVersion: manifest.version,
+      }),
+    onDiagnostics: (moduleId, moduleVersion, summary) => {
+      useWorkshopStore.getState().setDiagnostics(summary, {
+        moduleId,
+        moduleVersion,
+      });
     },
     onProjectSaved: (moduleId, projectId) => {
       useWorkshopStore

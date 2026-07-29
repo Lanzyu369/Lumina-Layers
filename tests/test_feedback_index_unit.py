@@ -31,6 +31,16 @@ def _sample_payload(**overrides):
             "material_layer_count": 10,
             "material_layer_height_mm": 0.16,
             "material_backing_material_dir_name": "BrandA",
+            "workshop": {
+                "module_id": "lumina.bead-pattern",
+                "module_version": "1.0.0",
+                "project_schema_version": "bead-project/v1",
+                "input_mode": "numbered-grid",
+                "rows": 52,
+                "columns": 52,
+                "compression": 50,
+                "error_code": None,
+            },
             "action_history": [
                 {
                     "timestamp": 1747000000000,
@@ -108,6 +118,10 @@ def test_basic_payload_renders_all_sections(tmp_path: Path) -> None:
     assert "# Bug Ticket LUM-20260511-001" in md
     assert "耗材档案8色10层高保真导出3MF是经典墙" in md
     assert "## Workflow Snapshot" in md
+    assert "## Creative Workshop Diagnostics" in md
+    assert "lumina.bead-pattern" in md
+    assert "52 × 52" in md
+    assert "compression: 50" in md
     assert "## Recent Actions (last 10)" in md
     assert "upload_image" in md
     assert "## Recent API Errors (last 5)" in md
@@ -140,6 +154,29 @@ def test_summary_text_is_concise() -> None:
     assert len(summary) < 2000, f"summary too long: {len(summary)} chars"
     assert "LUM-20260511-001" in summary
     assert "经典墙" in summary
+    assert "创意工坊：lumina.bead-pattern@1.0.0" in summary
+    assert "52×52" in summary
+
+
+def test_workshop_diagnostics_never_render_project_payload(
+    tmp_path: Path,
+) -> None:
+    payload = _sample_payload()
+    payload["context"]["workshop"] = {
+        **payload["context"]["workshop"],
+        "palette": [{"name": "private-red", "hex": "#ff0000"}],
+        "cellsRle": [[2704, 1]],
+        "sourcePath": "/Users/min/private-pattern.png",
+    }
+
+    md = generate_index_markdown("LUM-20260511-001", tmp_path, payload)
+    summary = generate_summary_text("LUM-20260511-001", payload)
+    rendered = f"{md}\n{summary}"
+
+    assert "private-red" not in rendered
+    assert "#ff0000" not in rendered
+    assert "cellsRle" not in rendered
+    assert "/Users/min" not in rendered
 
 
 def test_malformed_payload_no_exception(tmp_path: Path) -> None:

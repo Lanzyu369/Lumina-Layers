@@ -11,12 +11,20 @@ export interface WorkshopShellState {
   lastProjectIds: Record<string, string>;
   pendingRecipeSource: WorkshopRecipeSource | null;
   diagnostics: WorkshopDiagnosticSummary | null;
+  diagnosticsModuleId: string | null;
+  diagnosticsModuleVersion: string | null;
   openModule(moduleId: string): void;
   returnHome(): void;
   rememberProject(moduleId: string, projectId: string): void;
   openRecipe(source: WorkshopRecipeSource): void;
   clearPendingRecipe(): void;
-  setDiagnostics(summary: WorkshopDiagnosticSummary | null): void;
+  setDiagnostics(
+    summary: WorkshopDiagnosticSummary | null,
+    identity?: {
+      moduleId: string;
+      moduleVersion: string;
+    },
+  ): void;
 }
 
 type PersistedWorkshopShellState = Pick<
@@ -31,13 +39,22 @@ export const useWorkshopStore = create<WorkshopShellState>()(
       lastProjectIds: {},
       pendingRecipeSource: null,
       diagnostics: null,
+      diagnosticsModuleId: null,
+      diagnosticsModuleVersion: null,
       openModule: (moduleId) =>
-        set({ activeModuleId: moduleId, diagnostics: null }),
+        set({
+          activeModuleId: moduleId,
+          diagnostics: null,
+          diagnosticsModuleId: null,
+          diagnosticsModuleVersion: null,
+        }),
       returnHome: () =>
         set({
           activeModuleId: null,
           pendingRecipeSource: null,
           diagnostics: null,
+          diagnosticsModuleId: null,
+          diagnosticsModuleVersion: null,
         }),
       rememberProject: (moduleId, projectId) =>
         set((state) => ({
@@ -51,9 +68,27 @@ export const useWorkshopStore = create<WorkshopShellState>()(
           activeModuleId: source.moduleId,
           pendingRecipeSource: source,
           diagnostics: null,
+          diagnosticsModuleId: null,
+          diagnosticsModuleVersion: null,
         }),
       clearPendingRecipe: () => set({ pendingRecipeSource: null }),
-      setDiagnostics: (diagnostics) => set({ diagnostics }),
+      setDiagnostics: (diagnostics, identity) =>
+        set((state) =>
+          diagnostics
+            ? {
+                diagnostics,
+                diagnosticsModuleId:
+                  identity?.moduleId ?? state.diagnosticsModuleId,
+                diagnosticsModuleVersion:
+                  identity?.moduleVersion ??
+                  state.diagnosticsModuleVersion,
+              }
+            : {
+                diagnostics: null,
+                diagnosticsModuleId: null,
+                diagnosticsModuleVersion: null,
+              },
+        ),
     }),
     {
       name: "lumina-workshop-shell",
