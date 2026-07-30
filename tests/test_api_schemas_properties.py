@@ -33,6 +33,7 @@ from api.schemas import (
     ExtractorExtractRequest,
     FridgeMagnetItem,
     ExtractorManualFixRequest,
+    LargeFormatConvertGenerateRequest,
 )
 
 # ---------------------------------------------------------------------------
@@ -320,7 +321,8 @@ def test_valid_data_passes_validation(instance: BaseModel) -> None:
 
 # Table of (Model, field_name, min_val, max_val) for constrained numeric fields
 CONSTRAINED_FIELDS: List[Tuple[Type[BaseModel], str, float, float]] = [
-    (ConvertPreviewRequest, "target_width_mm", 10, 9999),
+    (ConvertPreviewRequest, "target_width_mm", 0.5, 9999),
+    (ConvertGenerateRequest, "target_width_mm", 0.5, 9999),
     (ConvertPreviewRequest, "quantize_colors", 8, 8192),
     (ConvertPreviewRequest, "svg_pixels_per_mm", 2.0, 50.0),
     (ConvertGenerateRequest, "spacer_thick", 0.2, 3.5),
@@ -343,6 +345,24 @@ CONSTRAINED_FIELDS: List[Tuple[Type[BaseModel], str, float, float]] = [
     (CalibrationGenerateRequest, "gap", 0.4, 2.0),
     (CalibrationGenerateRequest, "backing_thickness", 0.4, 3.5),
 ]
+
+
+@pytest.mark.parametrize(
+    "model_cls",
+    [
+        ConvertPreviewRequest,
+        ConvertGenerateRequest,
+        LargeFormatConvertGenerateRequest,
+    ],
+)
+def test_converter_target_width_accepts_workshop_boundary(
+    model_cls: Type[BaseModel],
+) -> None:
+    request = model_cls(lut_name="test_lut", target_width_mm=0.5)
+    assert request.target_width_mm == 0.5
+
+    with pytest.raises(ValidationError):
+        model_cls(lut_name="test_lut", target_width_mm=0.499999)
 
 
 def _build_minimal_valid_data(model_cls: Type[BaseModel]) -> Dict[str, Any]:

@@ -6,6 +6,7 @@
 import { useConverterStore } from "../stores/converter";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useWidgetStore } from "../stores/widgetStore";
+import { useWorkshopStore } from "../workshop/store";
 import { getPrinters } from "../api/system";
 import type { PrinterInfo } from "../api/types";
 import {
@@ -154,6 +155,10 @@ export function revokeImportCoverUrl(coverUrl: string | null): void {
   }
 }
 
+export interface ApplyImportOptions {
+  destination?: "converter" | "workshop";
+}
+
 /**
  * Apply a prepared import to the converter store.
  * 将准备好的导入应用到 converter store。
@@ -164,6 +169,7 @@ export function revokeImportCoverUrl(coverUrl: string | null): void {
 export function applyImport(
   restoreResult: RestoreResult,
   printerOptions: PrinterInfo[] = [],
+  options: ApplyImportOptions = {},
 ): void {
   const store = useConverterStore.getState();
 
@@ -222,7 +228,18 @@ export function applyImport(
     }
   }
 
-  // 3. Switch to converter tab
+  // 3. The converter is always restored first. A validated workshop source
+  // may then reopen its editor without losing the printable image state.
+  // 始终先恢复转换器；随后可用已验证的工坊来源重开编辑器，同时保留可打印图像。
+  const workshopSource = restoreResult.state.workshopSource ?? null;
+  if (
+    options.destination === "workshop" &&
+    workshopSource
+  ) {
+    useWorkshopStore.getState().openRecipe(workshopSource);
+    useWidgetStore.getState().setActiveTab("workshop");
+    return;
+  }
   useWidgetStore.getState().setActiveTab("converter");
 }
 
@@ -275,7 +292,12 @@ export async function exportShareCard(): Promise<void> {
 
   // 4. Build full recipe
   const fullRecipe = annotateSpatialEditCompatibility(
-    await buildFullRecipe(converterRecipe, cover, assets),
+    await buildFullRecipe(
+      converterRecipe,
+      cover,
+      assets,
+      converterState.workshopSource,
+    ),
     converterState.regionReplacementCount,
   );
 
@@ -329,7 +351,12 @@ export async function exportSidecar(): Promise<void> {
 
   const { cover } = await buildCoverImage(converterState.previewImageUrl);
   const fullRecipe = annotateSpatialEditCompatibility(
-    await buildFullRecipe(converterRecipe, cover, assets),
+    await buildFullRecipe(
+      converterRecipe,
+      cover,
+      assets,
+      converterState.workshopSource,
+    ),
     converterState.regionReplacementCount,
   );
 

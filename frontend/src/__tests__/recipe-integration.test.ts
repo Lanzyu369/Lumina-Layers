@@ -25,6 +25,7 @@ import type { LutInfo, ColorReplacementItem } from "../api/types";
 import { ColorMode } from "../api/types";
 import type { LuminaRecipe, RecipeCover } from "../recipe/types";
 import { translations } from "../i18n/translations";
+import { createBeadRecipeSourceFixture } from "./fixtures/beadRecipeSource";
 
 // ========== Helpers ==========
 
@@ -63,7 +64,12 @@ async function buildTestRecipe(stateOverrides: Partial<ConverterState> = {}, fin
   const imageFile = new File([new Uint8Array([1, 2, 3, 4])], "photo.png", { type: "image/png" });
   const assets = await buildRecipeAssets(imageFile, state.heightmapFile);
   const cover: RecipeCover = { width: 100, height: 75, mime_type: "image/png" };
-  const recipe = await buildFullRecipe(converterRecipe, cover, assets);
+  const recipe = await buildFullRecipe(
+    converterRecipe,
+    cover,
+    assets,
+    state.workshopSource,
+  );
   return { recipe, state };
 }
 
@@ -251,9 +257,9 @@ describe("recipe integration", () => {
       });
     });
 
-    it("exports schema_version 2 and imports legacy v1 without warnings", async () => {
+    it("exports schema_version 3 and imports legacy v1 without warnings", async () => {
       const { recipe } = await buildTestRecipe({ lut_name: "TestLUT" });
-      expect(recipe.schema_version).toBe(2);
+      expect(recipe.schema_version).toBe(3);
 
       const legacy = JSON.parse(JSON.stringify(recipe)) as LuminaRecipe;
       legacy.schema_version = 1;
@@ -295,10 +301,12 @@ describe("recipe integration", () => {
 
   describe("PNG embed → extract round-trip", () => {
     it("recipe survives PNG embedding and extraction", async () => {
+      const workshopSource = createBeadRecipeSourceFixture();
       const { recipe } = await buildTestRecipe({
         lut_name: "TestLUT",
         target_width_mm: 80,
         enable_relief: true,
+        workshopSource,
       });
 
       const png = createMinimalPng();
@@ -311,6 +319,7 @@ describe("recipe integration", () => {
       expect(extracted!.recipe.converter!.base.target_width_mm).toBe(80);
       expect(extracted!.recipe.converter!.relief.enable_relief).toBe(true);
       expect(extracted!.recipe.converter!.base.lut.name).toBe("TestLUT");
+      expect(extracted!.recipe.workshop).toEqual(workshopSource);
     });
 
     it("full flow: export → embed → file parse → import", async () => {
@@ -345,10 +354,12 @@ describe("recipe integration", () => {
 
   describe("JSON sidecar round-trip", () => {
     it("export → JSON file → parse → import", async () => {
+      const workshopSource = createBeadRecipeSourceFixture();
       const { recipe } = await buildTestRecipe({
         lut_name: "TestLUT",
         target_width_mm: 60,
         add_loop: true,
+        workshopSource,
       });
 
       const jsonStr = JSON.stringify(recipe, null, 2);
@@ -361,6 +372,7 @@ describe("recipe integration", () => {
       expect(restored.lut_name).toBe("TestLUT");
       expect(restored.target_width_mm).toBe(60);
       expect(restored.add_loop).toBe(true);
+      expect(restored.workshopSource).toEqual(workshopSource);
     });
   });
 

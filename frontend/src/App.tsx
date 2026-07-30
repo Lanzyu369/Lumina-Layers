@@ -40,6 +40,7 @@ import LutManagerPanel from "./components/LutManagerPanel";
 import FiveColorQueryPanel from "./components/FiveColorQueryPanel";
 import SettingsPanel from "./components/SettingsPanel";
 import VectorizerPanel from "./components/VectorizerPanel";
+import WorkshopPanel from "./workshop/WorkshopPanel";
 import { useSingleStageStore } from "./stores/singleStageStore";
 import { useExtractorStore } from "./stores/extractorStore";
 import { collectConverterKeepFileIds, useConverterStore } from "./stores/converter";
@@ -485,6 +486,7 @@ function AppContent() {
           </div>
         )}
         {activeTab === 'vectorizer' && <VectorizerPanel />}
+        {activeTab === 'workshop' && <WorkshopPanel />}
         {activeTab === 'settings' && <SettingsPanel />}
         </div>
       </main>

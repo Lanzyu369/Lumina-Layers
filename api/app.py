@@ -92,6 +92,7 @@ from api.routers import (
     single_stage_router,
     system_router,
     vectorizer_router,
+    workshop_router,
 )
 
 log = get_logger(__name__)
@@ -585,6 +586,7 @@ def create_app() -> FastAPI:
     app.include_router(single_stage_router)
     app.include_router(system_router)
     app.include_router(vectorizer_router)
+    app.include_router(workshop_router)
 
     @app.get("/api/files/{file_id}")
     def serve_file(

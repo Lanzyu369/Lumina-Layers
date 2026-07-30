@@ -619,6 +619,102 @@ def test_submit_bug_report_preserves_material_source_context(
     assert ticket_json["server"]["schema_version"] == 3
 
 
+def test_submit_bug_report_persists_only_safe_workshop_runtime_metadata(
+    client: TestClient,
+    feedback_root: Path,
+) -> None:
+    payload = _payload()
+    payload["context"]["active_tab"] = "workshop"
+    payload["context"]["workshop"] = {
+        "module_id": "lumina.bead-pattern",
+        "module_version": "1.0.0",
+        "install_source": "seed",
+        "audit_status": "official",
+        "runtime_mode": "desktop-secure",
+        "error_code": None,
+        "project_schema_version": "bead-project/v1",
+        "input_mode": "numbered-grid",
+        "rows": 52,
+        "columns": 52,
+        "compression": 50,
+        "palette": [{"name": "private-red", "hex": "#ff0000"}],
+        "cellsRle": [[2704, 1]],
+        "sourcePath": "/Users/min/private-pattern.png",
+        "imageBytes": "private-image-bytes",
+        "packagePath": "/Users/min/private-module.lumina-workshop",
+        "githubToken": "ghp_private-token",
+        "registrySignature": "private-registry-signature",
+        "desktopToken": "private-desktop-token",
+    }
+
+    response = client.post("/api/feedback/bug-report", json=payload)
+
+    assert response.status_code == 200
+    ticket_json = _read_ticket_json(
+        feedback_root,
+        response.json()["ticket_id"],
+    )
+    assert ticket_json["context"]["workshop"] == {
+        "module_id": "lumina.bead-pattern",
+        "module_version": "1.0.0",
+        "install_source": "seed",
+        "audit_status": "official",
+        "runtime_mode": "desktop-secure",
+        "error_code": None,
+    }
+
+
+@pytest.mark.parametrize(
+    ("field_name", "bad_value"),
+    [
+        ("module_id", "m" * 129),
+        ("module_version", "v" * 129),
+        ("install_source", "remote"),
+        ("audit_status", "trusted"),
+        ("runtime_mode", "browser"),
+        ("error_code", "e" * 129),
+    ],
+)
+def test_submit_bug_report_rejects_out_of_bounds_workshop_diagnostics(
+    client: TestClient,
+    feedback_root: Path,
+    field_name: str,
+    bad_value: object,
+) -> None:
+    payload = _payload()
+    payload["context"]["workshop"] = {
+        "module_id": "lumina.bead-pattern",
+        "module_version": "1.0.0",
+        "install_source": "seed",
+        "audit_status": "official",
+        "runtime_mode": "desktop-secure",
+        "error_code": None,
+        field_name: bad_value,
+    }
+
+    response = client.post("/api/feedback/bug-report", json=payload)
+
+    assert response.status_code == 422
+    assert list(feedback_root.rglob("ticket.json")) == []
+
+
+def test_submit_bug_report_accepts_older_client_without_workshop_context(
+    client: TestClient,
+    feedback_root: Path,
+) -> None:
+    payload = _payload()
+    payload["context"].pop("workshop", None)
+
+    response = client.post("/api/feedback/bug-report", json=payload)
+
+    assert response.status_code == 200
+    ticket_json = _read_ticket_json(
+        feedback_root,
+        response.json()["ticket_id"],
+    )
+    assert ticket_json["context"]["workshop"] is None
+
+
 def test_submit_bug_report_sanitizes_recent_client_logs(
     client: TestClient,
     feedback_root: Path,

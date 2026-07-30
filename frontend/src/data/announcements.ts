@@ -16,6 +16,24 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-07-30",
+    title: {
+      zh: "Lumina Layers — 创意工坊与拼豆模式",
+      en: "Lumina Layers — Creative Workshop and Bead Mode",
+    },
+    sections: [
+      {
+        category: { zh: "新功能", en: "New" },
+        items: [
+          {
+            zh: "7 月 30 日：设置左侧新增“创意工坊”，首个拼豆模式可读取清晰拼豆图纸，帮助校正网格和不确定色块，并实时预览不同压合程度下豆间缝隙与四豆交汇凹点的变化；确认后可将处理结果交回 Lumina，继续原有的叠色打印流程。",
+            en: "July 30: Creative Workshop is now available from the left side of Settings. Its first bead mode can read a clear bead pattern, help correct the grid and uncertain colours, and preview how bead gaps and four-bead junctions change with ironing pressure. The finished image can then return to Lumina for the existing layered-colour printing workflow.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-07-22",
     title: {
       zh: "Lumina Layers — 6 月下旬至 7 月更新速览",

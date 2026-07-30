@@ -22,6 +22,7 @@ TARGETS = [
     ROOT / "api" / "routers" / "slicer.py",
     ROOT / "api" / "routers" / "system.py",
     ROOT / "api" / "routers" / "vectorizer.py",
+    ROOT / "api" / "routers" / "workshop.py",
     ROOT / "api" / "workers" / "converter_workers.py",
     ROOT / "api" / "workers" / "vectorizer_workers.py",
     ROOT / "core" / "converter.py",
@@ -218,6 +219,15 @@ MATERIAL_REGISTRY_STRUCTURED_EVENTS = {
     "material_registry_package_upload_done",
     "material_registry_package_approve_done",
 }
+WORKSHOP_STRUCTURED_EVENTS = {
+    "workshop_catalog_refresh_done",
+    "workshop_module_install_done",
+    "workshop_module_activate_done",
+    "workshop_module_rollback_done",
+    "workshop_module_enabled_done",
+    "workshop_module_runtime_health_done",
+    "workshop_module_uninstall_done",
+}
 CONVERTER_STRUCTURED_EVENTS = {
     "converter_region_replace_timing",
     "converter_replace_color_done",
@@ -337,6 +347,7 @@ REQUIRED_STRUCTURED_EVENTS = (
     | EXTRACTOR_STRUCTURED_EVENTS
     | MATERIAL_SYNC_STRUCTURED_EVENTS
     | MATERIAL_REGISTRY_STRUCTURED_EVENTS
+    | WORKSHOP_STRUCTURED_EVENTS
     | CONVERTER_STRUCTURED_EVENTS
     | CALIBRATION_STRUCTURED_EVENTS
     | FIVE_COLOR_STRUCTURED_EVENTS

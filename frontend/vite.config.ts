@@ -34,6 +34,7 @@ export default defineConfig({
   // HTML 兜底 → 白屏。把每条 dep 列出可彻底消除这一不确定性。
   optimizeDeps: {
     include: [
+      "@lumina/workshop-sdk",
       "@dnd-kit/core",
       "@floating-ui/react",
       "@react-three/drei",

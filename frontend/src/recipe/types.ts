@@ -4,9 +4,14 @@
  *
  * V1: Full-site unified recipe schema, initially wired to converter only.
  * V1: 全站统一配方 schema，首批仅接入 converter。
+ * V2: Region recipe overrides and custom recipe history.
+ * V2: 区域配方覆盖与自定义配方历史。
+ * V3: Optional versioned Creative Workshop restore source.
+ * V3: 可选的版本化创意工坊恢复来源。
  */
 
 import type { FridgeMagnetItem } from "../api/types";
+import type { WorkshopRecipeSource } from "../workshop/types";
 
 // ========== Asset ==========
 
@@ -239,6 +244,7 @@ export interface LuminaRecipe {
   asset: RecipeAssets;
   recipe: {
     converter?: ConverterRecipe;
+    workshop?: WorkshopRecipeSource;
   };
   integrity: RecipeIntegrity;
   compat: RecipeCompat;
@@ -248,4 +254,5 @@ export interface LuminaRecipe {
 // ========== Constants ==========
 
 export const RECIPE_FORMAT = "lumina-recipe" as const;
-export const RECIPE_SCHEMA_VERSION = 2;
+export const RECIPE_SCHEMA_VERSION = 3;
+export const WORKSHOP_RECIPE_ENVELOPE_MAX_BYTES = 1024 * 1024;

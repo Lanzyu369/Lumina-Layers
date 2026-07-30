@@ -1,0 +1,439 @@
+"""Bounded GitHub Release downloads for Creative Workshop modules.
+创意工坊模块的有界 GitHub Release 下载边界。
+"""
+
+from __future__ import annotations
+
+import hashlib
+import hmac
+import json
+import os
+import re
+import tempfile
+from collections.abc import Callable
+from pathlib import Path
+from urllib.parse import quote, urljoin, urlsplit
+
+import httpx
+
+from config import TEMP_DIR
+
+from .constants import MAX_PACKAGE_BYTES
+from .errors import WorkshopPackageError, WorkshopReleaseError
+from .models import RegistryVersion, validate_semver
+from .package_validator import inspect_workshop_package
+
+
+_MAX_GITHUB_RELEASE_METADATA_BYTES = 1024 * 1024
+_MAX_REDIRECTS = 5
+_GITHUB_REPOSITORY_PART = re.compile(r"^[A-Za-z0-9_.-]+$")
+_GITHUB_ASSET_NAME = re.compile(
+    r"^(?P<module_id>[a-z0-9]+(?:[.-][a-z0-9]+"
+    r"(?:[a-z0-9-]*[a-z0-9])?)*)-"
+    r"(?P<version>[0-9A-Za-z.+-]+)\.lumina-workshop$"
+)
+_TRUSTED_DOWNLOAD_HOSTS = frozenset(
+    {
+        "github.com",
+        "api.github.com",
+        "objects.githubusercontent.com",
+        "github-releases.githubusercontent.com",
+        "release-assets.githubusercontent.com",
+    }
+)
+
+PackageDownloader = Callable[[str, int | None, str | None], Path]
+JsonFetcher = Callable[[str], dict[str, object]]
+
+
+def _http_timeout() -> httpx.Timeout:
+    return httpx.Timeout(
+        connect=15.0,
+        read=60.0,
+        write=60.0,
+        pool=15.0,
+    )
+
+
+def _new_http_client() -> httpx.Client:
+    return httpx.Client(
+        timeout=_http_timeout(),
+        follow_redirects=False,
+    )
+
+
+def _validated_remote_url(url: str) -> str:
+    parsed = urlsplit(url)
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname not in _TRUSTED_DOWNLOAD_HOSTS
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.port is not None
+        or parsed.fragment
+    ):
+        raise WorkshopReleaseError(
+            "remote URL left the trusted GitHub release boundary"
+        )
+    return url
+
+
+def _content_length_within_limit(
+    response: httpx.Response,
+    maximum: int,
+) -> None:
+    raw_length = response.headers.get("Content-Length")
+    if raw_length is None:
+        return
+    try:
+        declared = int(raw_length)
+    except ValueError as exc:
+        raise WorkshopReleaseError(
+            "remote response has invalid Content-Length"
+        ) from exc
+    if declared < 0 or declared > maximum:
+        raise WorkshopReleaseError(
+            "remote response exceeds the size limit"
+        )
+
+
+def _request_with_redirects(
+    client: httpx.Client,
+    url: str,
+    *,
+    accept: str,
+) -> httpx.Response:
+    current = _validated_remote_url(url)
+    for _redirect in range(_MAX_REDIRECTS + 1):
+        request = client.build_request(
+            "GET",
+            current,
+            headers={
+                "Accept": accept,
+                "User-Agent": "Lumina-Studio-Workshop/1",
+            },
+        )
+        response = client.send(request, stream=True)
+        if response.status_code not in {301, 302, 303, 307, 308}:
+            return response
+        location = response.headers.get("Location")
+        response.close()
+        if not location:
+            raise WorkshopReleaseError(
+                "remote redirect did not include a destination"
+            )
+        current = _validated_remote_url(urljoin(current, location))
+    raise WorkshopReleaseError("remote response exceeded redirect limit")
+
+
+def fetch_github_json(url: str) -> dict[str, object]:
+    """Fetch one bounded JSON document from a trusted GitHub URL.
+
+    从可信 GitHub URL 获取一份有界 JSON 文档。
+    """
+
+    chunks: list[bytes] = []
+    received = 0
+    with _new_http_client() as client:
+        response = _request_with_redirects(
+            client,
+            url,
+            accept="application/vnd.github+json",
+        )
+        try:
+            if response.status_code != 200:
+                raise WorkshopReleaseError(
+                    "GitHub release request failed with status "
+                    f"{response.status_code}"
+                )
+            _content_length_within_limit(
+                response,
+                _MAX_GITHUB_RELEASE_METADATA_BYTES,
+            )
+            for chunk in response.iter_bytes():
+                received += len(chunk)
+                if received > _MAX_GITHUB_RELEASE_METADATA_BYTES:
+                    raise WorkshopReleaseError(
+                        "GitHub release metadata exceeds the size limit"
+                    )
+                chunks.append(chunk)
+        finally:
+            response.close()
+    try:
+        decoded = b"".join(chunks).decode("utf-8", errors="strict")
+        payload = json.loads(decoded)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise WorkshopReleaseError(
+            "GitHub release metadata is not valid JSON"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise WorkshopReleaseError(
+            "GitHub release metadata root must be an object"
+        )
+    return payload
+
+
+def stream_package_download(
+    url: str,
+    expected_bytes: int | None = None,
+    expected_sha256: str | None = None,
+) -> Path:
+    """Stream one package into a bounded temporary file.
+
+    将一个模块包流式写入有界临时文件。
+    """
+
+    Path(TEMP_DIR).mkdir(parents=True, exist_ok=True)
+    fd, raw_path = tempfile.mkstemp(
+        suffix=".lumina-workshop",
+        prefix="workshop-download-",
+        dir=TEMP_DIR,
+    )
+    path = Path(raw_path)
+    received = 0
+    digest = hashlib.sha256()
+    try:
+        with os.fdopen(fd, "wb") as output:
+            with _new_http_client() as client:
+                response = _request_with_redirects(
+                    client,
+                    url,
+                    accept="application/octet-stream",
+                )
+                try:
+                    if response.status_code != 200:
+                        raise WorkshopReleaseError(
+                            "package download failed with status "
+                            f"{response.status_code}"
+                        )
+                    _content_length_within_limit(
+                        response,
+                        MAX_PACKAGE_BYTES,
+                    )
+                    for chunk in response.iter_bytes():
+                        received += len(chunk)
+                        if received > MAX_PACKAGE_BYTES:
+                            raise WorkshopReleaseError(
+                                "package download exceeds the size limit"
+                            )
+                        digest.update(chunk)
+                        output.write(chunk)
+                    output.flush()
+                    os.fsync(output.fileno())
+                finally:
+                    response.close()
+        if expected_bytes is not None and received != expected_bytes:
+            raise WorkshopReleaseError(
+                "downloaded package size does not match release metadata"
+            )
+        if (
+            expected_sha256 is not None
+            and not hmac.compare_digest(
+                digest.hexdigest(),
+                expected_sha256,
+            )
+        ):
+            raise WorkshopReleaseError(
+                "downloaded package digest does not match release metadata"
+            )
+        return path
+    except (OSError, httpx.HTTPError, WorkshopReleaseError):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
+def _inspect_remote_package(
+    path: Path,
+    *,
+    expected_module_id: str,
+    expected_version: str,
+    expected_manifest_sha256: str | None = None,
+) -> None:
+    try:
+        inspected = inspect_workshop_package(path)
+    except WorkshopPackageError as exc:
+        raise WorkshopReleaseError(
+            "remote package failed Workshop validation"
+        ) from exc
+    if (
+        inspected.manifest.id != expected_module_id
+        or inspected.manifest.version != expected_version
+    ):
+        raise WorkshopReleaseError(
+            "remote package identity does not match the selected release"
+        )
+    if (
+        expected_manifest_sha256 is not None
+        and not hmac.compare_digest(
+            inspected.manifest_sha256,
+            expected_manifest_sha256,
+        )
+    ):
+        raise WorkshopReleaseError(
+            "package manifest digest does not match Registry metadata"
+        )
+
+
+def _remove_rejected_download(path: Path) -> None:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def download_registry_package(
+    candidate: RegistryVersion,
+    *,
+    package_downloader: PackageDownloader | None = None,
+) -> Path:
+    """Download and re-verify one exact Registry candidate.
+
+    下载并再次校验 Registry 指定的精确候选版本。
+    """
+
+    downloader = package_downloader or stream_package_download
+    path = downloader(
+        candidate.download_url,
+        candidate.asset_bytes,
+        candidate.sha256,
+    )
+    asset_match = _GITHUB_ASSET_NAME.fullmatch(candidate.asset_name)
+    if asset_match is None:
+        _remove_rejected_download(path)
+        raise WorkshopReleaseError("Registry asset name is invalid")
+    try:
+        _inspect_remote_package(
+            path,
+            expected_module_id=asset_match.group("module_id"),
+            expected_version=candidate.version,
+            expected_manifest_sha256=candidate.manifest_sha256,
+        )
+    except WorkshopReleaseError:
+        _remove_rejected_download(path)
+        raise
+    return path
+
+
+def _repository_parts(repository_url: str) -> tuple[str, str]:
+    parsed = urlsplit(repository_url)
+    parts = tuple(part for part in parsed.path.split("/") if part)
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "github.com"
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.port is not None
+        or parsed.query
+        or parsed.fragment
+        or repository_url.endswith("/")
+        or len(parts) != 2
+        or any(
+            _GITHUB_REPOSITORY_PART.fullmatch(part) is None
+            for part in parts
+        )
+        or parts[1].endswith(".git")
+    ):
+        raise WorkshopReleaseError(
+            "repository must be an exact GitHub HTTPS URL"
+        )
+    return parts[0], parts[1]
+
+
+def resolve_github_release_package(
+    repository_url: str,
+    version: str,
+    *,
+    fetch_json: JsonFetcher | None = None,
+    package_downloader: PackageDownloader | None = None,
+) -> Path:
+    """Resolve one full public GitHub Release and its standard asset.
+
+    解析一个正式公开的 GitHub Release 及其标准安装包资源。
+    """
+
+    try:
+        validate_semver(version)
+    except ValueError as exc:
+        raise WorkshopReleaseError(
+            "GitHub release version must be valid SemVer"
+        ) from exc
+    owner, repository = _repository_parts(repository_url)
+    tag = f"v{version}"
+    metadata_url = (
+        "https://api.github.com/repos/"
+        f"{quote(owner, safe='')}/{quote(repository, safe='')}/"
+        f"releases/tags/{quote(tag, safe='')}"
+    )
+    metadata = (fetch_json or fetch_github_json)(metadata_url)
+    if (
+        metadata.get("tag_name") != tag
+        or metadata.get("draft") is not False
+        or metadata.get("prerelease") is not False
+    ):
+        raise WorkshopReleaseError(
+            "GitHub release must be full, public, and non-prerelease"
+        )
+    assets = metadata.get("assets")
+    if not isinstance(assets, list):
+        raise WorkshopReleaseError(
+            "GitHub release assets are unavailable"
+        )
+    matches: list[tuple[dict[str, object], re.Match[str]]] = []
+    for item in assets:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        if not isinstance(name, str):
+            continue
+        match = _GITHUB_ASSET_NAME.fullmatch(name)
+        if match is not None and match.group("version") == version:
+            matches.append((item, match))
+    if len(matches) != 1:
+        raise WorkshopReleaseError(
+            "GitHub release must contain exactly one standard package asset"
+        )
+    asset, name_match = matches[0]
+    asset_name = str(asset["name"])
+    expected_url = (
+        f"{repository_url}/releases/download/{tag}/{asset_name}"
+    )
+    if asset.get("browser_download_url") != expected_url:
+        raise WorkshopReleaseError(
+            "GitHub asset URL does not match the requested repository"
+        )
+    asset_size = asset.get("size")
+    if (
+        not isinstance(asset_size, int)
+        or isinstance(asset_size, bool)
+        or asset_size <= 0
+        or asset_size > MAX_PACKAGE_BYTES
+    ):
+        raise WorkshopReleaseError(
+            "GitHub package asset has an invalid size"
+        )
+    expected_digest = None
+    digest_value = asset.get("digest")
+    if isinstance(digest_value, str) and digest_value.startswith("sha256:"):
+        possible_digest = digest_value.removeprefix("sha256:")
+        if re.fullmatch(r"[0-9a-f]{64}", possible_digest):
+            expected_digest = possible_digest
+    downloader = package_downloader or stream_package_download
+    path = downloader(
+        expected_url,
+        asset_size,
+        expected_digest,
+    )
+    try:
+        _inspect_remote_package(
+            path,
+            expected_module_id=name_match.group("module_id"),
+            expected_version=version,
+        )
+    except WorkshopReleaseError:
+        _remove_rejected_download(path)
+        raise
+    return path
+

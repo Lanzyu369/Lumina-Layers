@@ -1,4 +1,11 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import {
   applyImport,
   exportShareCard,
@@ -10,6 +17,11 @@ import type { ConverterRecipeDevice, LuminaRecipe } from "../recipe/types";
 import type { PrinterInfo } from "../api/types";
 import { DEFAULT_STATE, useConverterStore } from "../stores/converter";
 import { DEFAULT_SETTINGS, useSettingsStore } from "../stores/settingsStore";
+import { useWidgetStore } from "../stores/widgetStore";
+import { useWorkshopStore } from "../workshop/store";
+import { createBeadRecipeSourceFixture } from "./fixtures/beadRecipeSource";
+import * as exportRecipeModule from "../recipe/exportRecipe";
+import * as pngMetadataModule from "../recipe/pngMetadata";
 
 const PRINTERS: PrinterInfo[] = [
   {
@@ -152,6 +164,15 @@ describe("recipe/importFlow", () => {
   beforeEach(() => {
     useConverterStore.setState({ ...DEFAULT_STATE });
     useSettingsStore.setState({ ...DEFAULT_SETTINGS });
+    useWidgetStore.setState({ activeTab: "settings" });
+    useWorkshopStore.setState({
+      activeModule: null,
+      pendingRecipeSource: null,
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("restores generated machine device profile into settings", () => {
@@ -197,6 +218,61 @@ describe("recipe/importFlow", () => {
     );
   });
 
+  it("restores converter state first and then opens a valid workshop source for editing", () => {
+    const source = createBeadRecipeSourceFixture();
+    const recipe = makeRecipe();
+    recipe.recipe.workshop = source;
+    const assetFile = new File(["test"], "bead.png", {
+      type: "image/png",
+    });
+    const restoreResult: RestoreResult = {
+      state: {
+        target_width_mm: 7.8,
+        target_height_mm: 5.2,
+        workshopSource: source,
+      },
+      assetFile,
+      heightmapFile: null,
+      warnings: [],
+      recipe,
+    };
+
+    applyImport(restoreResult, [], { destination: "workshop" });
+
+    expect(useConverterStore.getState().imageFile).toBe(assetFile);
+    expect(useConverterStore.getState().target_width_mm).toBe(7.8);
+    expect(useConverterStore.getState().workshopSource).toEqual(source);
+    expect(useWorkshopStore.getState().activeModule).toEqual({
+      moduleId: "lumina.bead-pattern",
+      version: "1.0.0",
+    });
+    expect(useWorkshopStore.getState().pendingRecipeSource).toEqual(
+      source,
+    );
+    expect(useWidgetStore.getState().activeTab).toBe("workshop");
+  });
+
+  it("keeps the normal import destination in converter even when editing data exists", () => {
+    const source = createBeadRecipeSourceFixture();
+    const recipe = makeRecipe();
+    recipe.recipe.workshop = source;
+    const restoreResult: RestoreResult = {
+      state: { workshopSource: source },
+      assetFile: new File(["test"], "bead.png", {
+        type: "image/png",
+      }),
+      heightmapFile: null,
+      warnings: [],
+      recipe,
+    };
+
+    applyImport(restoreResult);
+
+    expect(useConverterStore.getState().workshopSource).toEqual(source);
+    expect(useWorkshopStore.getState().pendingRecipeSource).toBeNull();
+    expect(useWidgetStore.getState().activeTab).toBe("converter");
+  });
+
   it.each([
     ["share card", exportShareCard],
     ["JSON sidecar", exportSidecar],
@@ -210,5 +286,44 @@ describe("recipe/importFlow", () => {
     await expect(exporter()).rejects.toThrow(
       MODEL_SURFACE_RECIPE_EXPORT_UNAVAILABLE_ERROR,
     );
+  });
+
+  it("passes workshop source to both PNG and JSON export builders", async () => {
+    const source = createBeadRecipeSourceFixture();
+    useConverterStore.setState({
+      ...DEFAULT_STATE,
+      imageFile: new File(["image"], "bead.png", {
+        type: "image/png",
+      }),
+      previewImageUrl: "blob:preview",
+      workshopSource: source,
+    });
+    const buildFullRecipe = vi.spyOn(
+      exportRecipeModule,
+      "buildFullRecipe",
+    );
+    vi.spyOn(exportRecipeModule, "buildCoverImage").mockResolvedValue({
+      blob: new Blob(["cover"], { type: "image/png" }),
+      cover: { width: 32, height: 32, mime_type: "image/png" },
+    });
+    vi.spyOn(
+      pngMetadataModule,
+      "embedRecipeInPng",
+    ).mockResolvedValue(
+      new Blob(["share"], { type: "image/png" }),
+    );
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:download");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    vi.spyOn(
+      HTMLAnchorElement.prototype,
+      "click",
+    ).mockImplementation(() => undefined);
+
+    await exportShareCard();
+    await exportSidecar();
+
+    expect(buildFullRecipe).toHaveBeenCalledTimes(2);
+    expect(buildFullRecipe.mock.calls[0]?.[3]).toEqual(source);
+    expect(buildFullRecipe.mock.calls[1]?.[3]).toEqual(source);
   });
 });

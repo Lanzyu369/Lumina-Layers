@@ -25,6 +25,10 @@ from config import (
 MAX_BACKING_THICKNESS_MM = 3.5
 MAX_RELIEF_EXTRA_HEIGHT_MM = 15.0
 MAX_RELIEF_TOTAL_HEIGHT_MM = MAX_BACKING_THICKNESS_MM + MAX_RELIEF_EXTRA_HEIGHT_MM
+# Minimum accepted by API handoff workflows; ordinary converter UI keeps its
+# existing 10 mm control limit. API 交接流程允许的最小宽度；普通转换器界面
+# 仍保留现有的 10 mm 控件下限。
+MIN_TARGET_WIDTH_MM = 0.5
 SVG_PIXELS_PER_MM_DESCRIPTION = (
     "高保真 SVG 采样密度（px/mm）；仅高保真模式处理 SVG 时生效，"
     "直接矢量模式不使用此参数"
@@ -296,7 +300,12 @@ class ConvertPreviewRequest(LutSourceSelection):
 
     model_config = ConfigDict(extra="ignore")
 
-    target_width_mm: float = Field(60.0, ge=10, le=9999, description="目标宽度 (mm)")
+    target_width_mm: float = Field(
+        60.0,
+        ge=MIN_TARGET_WIDTH_MM,
+        le=9999,
+        description="目标宽度 (mm)",
+    )
     color_mode: ColorMode = Field(ColorMode.FOUR_COLOR_RYBW, description="颜色模式")
     modeling_mode: ModelingMode = Field(ModelingMode.HIGH_FIDELITY, description="建模模式")
     color_layers: Optional[int] = Field(None, ge=1, le=20, description="叠色层数")
@@ -445,7 +454,12 @@ class ConvertGenerateRequest(LutSourceSelection):
 
     model_config = ConfigDict(extra="ignore")
 
-    target_width_mm: float = Field(60.0, ge=10, le=9999, description="目标宽度 (mm)")
+    target_width_mm: float = Field(
+        60.0,
+        ge=MIN_TARGET_WIDTH_MM,
+        le=9999,
+        description="目标宽度 (mm)",
+    )
     spacer_thick: float = Field(1.2, ge=0.2, le=MAX_BACKING_THICKNESS_MM, description="底板厚度 (mm)")
     structure_mode: StructureMode = Field(StructureMode.DOUBLE_SIDED, description="打印结构模式")
     color_mode: ColorMode = Field(ColorMode.FOUR_COLOR_RYBW, description="颜色模式")
@@ -569,7 +583,12 @@ class LargeFormatConvertGenerateRequest(ConvertGenerateRequest):
     大画幅生成参数：目标宽度可由目标高度和原图比例推导。
     """
 
-    target_width_mm: float | None = Field(None, ge=10, le=9999, description="目标宽度 (mm)")
+    target_width_mm: float | None = Field(
+        None,
+        ge=MIN_TARGET_WIDTH_MM,
+        le=9999,
+        description="目标宽度 (mm)",
+    )
 
 
 LargeFormatGenerateRequest.model_rebuild()

@@ -25,6 +25,24 @@ export interface OriginalImageRef {
   source: "converter" | "single_stage" | null;
 }
 
+export interface WorkshopBugReportContext {
+  module_id: string;
+  module_version: string;
+  install_source: "registry" | "github" | "local" | "seed" | "unknown";
+  audit_status:
+    | "official"
+    | "verified"
+    | "deprecated"
+    | "blocked"
+    | "unreviewed"
+    | "unknown";
+  runtime_mode:
+    | "desktop-secure"
+    | "browser-restricted"
+    | "unsafe-development";
+  error_code: string | null;
+}
+
 export interface BugReportContextPayload {
   url: string;
   user_agent: string;
@@ -81,6 +99,15 @@ export interface BugReportContextPayload {
    * 其它情况为 ``null``。为兼容旧客户端保留 optional 语义。
    */
   advanced_params?: AdvancedParams | null;
+  /**
+   * Host-bound Creative Workshop runtime metadata. This deliberately
+   * excludes the source image, project payload, matrix, palette, object
+   * URLs, package paths, credentials, and signing material.
+   *
+   * 创意工坊的宿主绑定运行信息；刻意不包含原图、工程载荷、矩阵、色板、
+   * 对象 URL、安装包路径、凭据或签名材料。
+   */
+  workshop?: WorkshopBugReportContext | null;
 }
 
 export interface BugReportRequestPayload {

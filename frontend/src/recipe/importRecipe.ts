@@ -4,6 +4,7 @@
  */
 
 import type { AssetEntry, LuminaRecipe } from "./types";
+import { WORKSHOP_RECIPE_ENVELOPE_MAX_BYTES } from "./types";
 import {
   DEFAULT_MODEL_SURFACE_MODEL_ROTATION,
   DEFAULT_MODEL_SURFACE_PLACEMENT,
@@ -22,6 +23,7 @@ import {
   normalizeFridgeMagnetItems,
   resolveFridgeMagnetSpacerThick,
 } from "../constants/fridgeMagnets";
+import type { WorkshopRecipeSource } from "../workshop/types";
 
 // ========== Hex normalization ==========
 
@@ -66,6 +68,8 @@ export const RECIPE_IMPORT_WARNING_BACK_LABELS_UNAVAILABLE =
   "recipe_import_warning_back_labels_unavailable";
 export const RECIPE_IMPORT_WARNING_SPATIAL_EDITS_NOT_SERIALIZED =
   "recipe_import_warning_spatial_edits_not_serialized";
+export const RECIPE_IMPORT_WARNING_WORKSHOP_DEGRADED =
+  "recipe_import_workshop_degraded";
 
 export const RECIPE_IMPORT_NOT_SHARE_CARD_ERROR =
   "PNG file does not contain Lumina recipe metadata";
@@ -73,6 +77,72 @@ export const RECIPE_INTEGRITY_ERROR =
   "Integrity check failed — recipe data may be corrupted";
 export const RECIPE_ASSET_CORRUPT_ERROR =
   "Asset data is corrupted — unable to restore original file";
+const WORKSHOP_MODULE_ID_PATTERN =
+  /^[a-z0-9]+(?:[.-][a-z0-9]+(?:[a-z0-9-]*[a-z0-9])?)*$/;
+const WORKSHOP_SEMVER_PATTERN =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+
+function isRecord(
+  value: unknown,
+): value is Record<string, unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value)
+  );
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function hasWorkshopRecipeEnvelopeShape(
+  value: unknown,
+): value is WorkshopRecipeSource {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    value.manifestSchemaVersion === 1 &&
+    typeof value.moduleId === "string" &&
+    WORKSHOP_MODULE_ID_PATTERN.test(value.moduleId) &&
+    typeof value.moduleVersion === "string" &&
+    WORKSHOP_SEMVER_PATTERN.test(value.moduleVersion) &&
+    isNonEmptyString(value.projectSchemaVersion) &&
+    isNonEmptyString(value.renderSchemaVersion) &&
+    isRecord(value.payload)
+  );
+}
+
+/**
+ * Validate a share-card envelope without loading or trusting module code.
+ * The installed sandboxed module owns payload validation and migration.
+ *
+ * 不加载、不信任模块代码地校验分享卡信封；payload 的完整校验和迁移由
+ * 已安装的沙箱模块负责。
+ */
+export function validateWorkshopRecipeEnvelope(
+  value: unknown,
+): WorkshopRecipeSource | null {
+  if (!hasWorkshopRecipeEnvelopeShape(value)) {
+    return null;
+  }
+  try {
+    const serialized = JSON.stringify(value);
+    if (
+      new TextEncoder().encode(serialized).byteLength >
+      WORKSHOP_RECIPE_ENVELOPE_MAX_BYTES
+    ) {
+      return null;
+    }
+    const cloned = JSON.parse(serialized) as unknown;
+    return hasWorkshopRecipeEnvelopeShape(cloned)
+      ? cloned
+      : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Detect whether a file is a Lumina share card PNG or a .lumina.json sidecar.
@@ -302,6 +372,18 @@ export function restoreConverterRecipe(
 
   const conv = recipe.recipe.converter;
   const warnings: string[] = [...recipe.warnings];
+  const rawWorkshopSource = recipe.recipe.workshop;
+  const workshopSource =
+    rawWorkshopSource === undefined
+      ? null
+      : validateWorkshopRecipeEnvelope(rawWorkshopSource);
+  if (
+    rawWorkshopSource !== undefined &&
+    !workshopSource &&
+    !warnings.includes(RECIPE_IMPORT_WARNING_WORKSHOP_DEGRADED)
+  ) {
+    warnings.push(RECIPE_IMPORT_WARNING_WORKSHOP_DEGRADED);
+  }
 
   // --- Restore primary asset ---
   const primaryAsset = recipe.asset.primary;
@@ -473,6 +555,8 @@ export function restoreConverterRecipe(
 
   // --- Build partial state ---
   const state: Partial<ConverterState> = {
+    workshopSource,
+
     // Model-surface uploads and face selections are session-bound and are not
     // represented by the current recipe schema. Clear every related field so
     // an imported recipe cannot inherit a previously loaded model.

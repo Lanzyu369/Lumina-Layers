@@ -2,12 +2,14 @@ import type {
   BugReportContextPayload,
   FinalArtifactRef,
   OriginalImageRef,
+  WorkshopBugReportContext,
 } from "../api/feedback";
 import { useActionHistoryStore } from "../stores/actionHistoryStore";
 import { useConverterStore } from "../stores/converter";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useSingleStageStore } from "../stores/singleStageStore";
 import { useWidgetStore } from "../stores/widgetStore";
+import { useWorkshopStore } from "../workshop/store";
 import { buildAdvancedParams } from "./advancedParamsBuilder";
 import { getRecentClientLogs } from "./clientLog";
 
@@ -67,6 +69,35 @@ function deriveOriginalImageRef(
   return null;
 }
 
+function deriveWorkshopContext(
+  isWorkshopActive: boolean,
+): WorkshopBugReportContext | null {
+  if (!isWorkshopActive) {
+    return null;
+  }
+  const workshop = useWorkshopStore.getState();
+  const diagnostics = workshop.diagnostics;
+  if (!workshop.activeModule) {
+    return null;
+  }
+  const rawErrorCode = diagnostics?.errorCode ?? null;
+  const errorCode =
+    rawErrorCode === null ||
+    /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(rawErrorCode)
+      ? rawErrorCode
+      : null;
+  return {
+    module_id: workshop.activeModule.moduleId,
+    module_version: workshop.activeModule.version,
+    install_source:
+      workshop.activeRuntimeContext?.installSource ?? "unknown",
+    audit_status:
+      workshop.activeRuntimeContext?.auditStatus ?? "unknown",
+    runtime_mode: workshop.runtimeMode,
+    error_code: errorCode,
+  };
+}
+
 export function collectBugReportContext(): BugReportContextPayload {
   const converter = useConverterStore.getState();
   const singleStage = useSingleStageStore.getState();
@@ -97,6 +128,7 @@ export function collectBugReportContext(): BugReportContextPayload {
   // "converter" 时直接读 converter store；单阶段工作流不维护这两个字段，
   // 回落到 settings 偏好以保持向后兼容。
   const isConverterActive = widget.activeTab === "converter";
+  const isWorkshopActive = widget.activeTab === "workshop";
   const sourceVersion = isConverterActive ? converter.source_version ?? null : null;
   const isMaterialSource = sourceVersion === "material";
   const isNativeSource = sourceVersion === "native";
@@ -147,5 +179,6 @@ export function collectBugReportContext(): BugReportContextPayload {
       maxBytes: 8192,
       svgPixelsPerMm: settings.svgPixelsPerMm,
     }),
+    workshop: deriveWorkshopContext(isWorkshopActive),
   };
 }

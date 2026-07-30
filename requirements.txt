@@ -20,6 +20,7 @@ mapbox-earcut
 fastapi
 uvicorn
 httpx
+cryptography>=44.0.0,<46.0.0
 numba
 msgpack
 # Runtime resource-aware task parallelism

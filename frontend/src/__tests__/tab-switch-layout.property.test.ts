@@ -19,6 +19,7 @@ import type { WidgetId, WidgetLayoutState, TabId } from "../types/widget";
 const ALL_TAB_IDS: TabId[] = [
   "converter",
   "vectorizer",
+  "workshop",
   "settings",
 ];
 

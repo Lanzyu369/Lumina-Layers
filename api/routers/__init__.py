@@ -23,6 +23,7 @@ from api.routers.slicer import router as slicer_router
 from api.routers.single_stage import router as single_stage_router
 from api.routers.system import router as system_router
 from api.routers.vectorizer import router as vectorizer_router
+from api.routers.workshop import router as workshop_router
 
 __all__ = [
     "converter_router",
@@ -40,4 +41,5 @@ __all__ = [
     "single_stage_router",
     "system_router",
     "vectorizer_router",
+    "workshop_router",
 ]
