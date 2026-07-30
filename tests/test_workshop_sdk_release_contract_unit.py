@@ -16,7 +16,7 @@ SDK_ROOT = REPO_ROOT / "workshop-sdk"
 SDK_TARBALL = (
     SDK_ROOT
     / "dist-package"
-    / "lumina-workshop-sdk-1.0.0.tgz"
+    / "lumina-workshop-sdk-1.0.1.tgz"
 )
 RELEASE_WORKFLOW = (
     REPO_ROOT / ".github" / "workflows" / "workshop-sdk-release.yml"
@@ -80,7 +80,7 @@ def test_sdk_release_identity_is_exact() -> None:
     )
 
     assert package["name"] == "@lumina/workshop-sdk"
-    assert package["version"] == "1.0.0"
+    assert package["version"] == "1.0.1"
     assert package["files"] == ["dist", "README.md", "LICENSE"]
     assert package["scripts"]["pack:release"] == (
         "pnpm run test && pnpm pack --pack-destination dist-package"

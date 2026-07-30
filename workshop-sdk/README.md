@@ -14,16 +14,16 @@ Lumina publishes the SDK only as a versioned GitHub Release asset. Verify the
 checksum before adding the exact tarball URL to a module:
 
 ```text
-https://github.com/lumina-layer-studio/Lumina-studio/releases/download/workshop-sdk-v1.0.0/lumina-workshop-sdk-1.0.0.tgz
+https://github.com/lumina-layer-studio/Lumina-studio/releases/download/workshop-sdk-v1.0.1/lumina-workshop-sdk-1.0.1.tgz
 ```
 
 ```bash
-gh release download workshop-sdk-v1.0.0 \
+gh release download workshop-sdk-v1.0.1 \
   --repo lumina-layer-studio/Lumina-studio \
-  --pattern "lumina-workshop-sdk-1.0.0.tgz*" \
+  --pattern "lumina-workshop-sdk-1.0.1.tgz*" \
   --dir .workshop-sdk-release
 cd .workshop-sdk-release
-shasum -a 256 -c lumina-workshop-sdk-1.0.0.tgz.sha256
+shasum -a 256 -c lumina-workshop-sdk-1.0.1.tgz.sha256
 ```
 
 Pin that exact immutable asset in `package.json`:
@@ -31,7 +31,7 @@ Pin that exact immutable asset in `package.json`:
 ```json
 {
   "dependencies": {
-    "@lumina/workshop-sdk": "https://github.com/lumina-layer-studio/Lumina-studio/releases/download/workshop-sdk-v1.0.0/lumina-workshop-sdk-1.0.0.tgz"
+    "@lumina/workshop-sdk": "https://github.com/lumina-layer-studio/Lumina-studio/releases/download/workshop-sdk-v1.0.1/lumina-workshop-sdk-1.0.1.tgz"
   }
 }
 ```

@@ -13,7 +13,9 @@ import {
 
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 10_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+const IMAGE_PICK_REQUEST_TIMEOUT_MS = 300_000;
 const HANDOFF_REQUEST_TIMEOUT_MS = 120_000;
+const MAX_LOCALLY_TIMED_OUT_REQUEST_IDS = 256;
 
 interface WorkshopParentWindowLike {
   postMessage(
@@ -151,6 +153,7 @@ class PortWorkshopClient implements WorkshopClient {
 
   private readonly port: MessagePort;
   private readonly pending = new Map<string, PendingRequest>();
+  private readonly locallyTimedOutRequestIds = new Set<string>();
   private requestSequence = 0;
   private closed = false;
 
@@ -170,7 +173,12 @@ class PortWorkshopClient implements WorkshopClient {
 
     this.image = {
       pick: () =>
-        this.request<WorkshopPickedImage | null>("image.pick", {}),
+        this.request<WorkshopPickedImage | null>(
+          "image.pick",
+          {},
+          [],
+          IMAGE_PICK_REQUEST_TIMEOUT_MS,
+        ),
     };
     this.projects = {
       save: <T>(record: WorkshopProjectRecord<T>) =>
@@ -260,6 +268,7 @@ class PortWorkshopClient implements WorkshopClient {
     return new Promise<T>((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.pending.delete(requestId);
+        this.rememberTimedOutRequestId(requestId);
         reject(
           new WorkshopClientError(
             "REQUEST_TIMEOUT",
@@ -306,6 +315,9 @@ class PortWorkshopClient implements WorkshopClient {
 
     const pending = this.pending.get(response.requestId);
     if (pending === undefined) {
+      if (this.locallyTimedOutRequestIds.delete(response.requestId)) {
+        return;
+      }
       this.failProtocol(
         new WorkshopClientError(
           "DUPLICATE_RESPONSE",
@@ -348,6 +360,23 @@ class PortWorkshopClient implements WorkshopClient {
       pending.reject(error);
     }
     this.pending.clear();
+    this.locallyTimedOutRequestIds.clear();
+  }
+
+  private rememberTimedOutRequestId(requestId: string): void {
+    this.locallyTimedOutRequestIds.add(requestId);
+    if (
+      this.locallyTimedOutRequestIds.size <=
+      MAX_LOCALLY_TIMED_OUT_REQUEST_IDS
+    ) {
+      return;
+    }
+    const oldestRequestId = this.locallyTimedOutRequestIds
+      .values()
+      .next().value;
+    if (oldestRequestId !== undefined) {
+      this.locallyTimedOutRequestIds.delete(oldestRequestId);
+    }
   }
 }
 

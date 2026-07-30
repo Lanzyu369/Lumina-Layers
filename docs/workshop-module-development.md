@@ -21,17 +21,17 @@ frame 拦截网络、WebSocket、跳转、弹窗、权限和下载。普通浏�
 公开 SDK 的稳定身份是：
 
 - npm 包名：`@lumina/workshop-sdk`
-- 版本：`1.0.0`
-- GitHub Release tag：`workshop-sdk-v1.0.0`
-- 资产：`lumina-workshop-sdk-1.0.0.tgz`
-- 校验文件：`lumina-workshop-sdk-1.0.0.tgz.sha256`
+- 版本：`1.0.1`
+- GitHub Release tag：`workshop-sdk-v1.0.1`
+- 资产：`lumina-workshop-sdk-1.0.1.tgz`
+- 校验文件：`lumina-workshop-sdk-1.0.1.tgz.sha256`
 
 SDK 只通过 Lumina Studio 的不可变 GitHub Release 分发，不发布可变 `latest` 资产，
 也不发布到 npm registry。把 tarball 和校验文件固定到模块仓库，再安装本地文件：
 
 ```bash
-sha256sum -c lumina-workshop-sdk-1.0.0.tgz.sha256
-pnpm add --save-exact ./vendor/lumina-workshop-sdk-1.0.0.tgz
+sha256sum -c lumina-workshop-sdk-1.0.1.tgz.sha256
+pnpm add --save-exact ./vendor/lumina-workshop-sdk-1.0.1.tgz
 ```
 
 macOS 也可用 `shasum -a 256` 对照校验文件中的小写摘要。模块仓库必须提交
@@ -53,7 +53,7 @@ my-workshop-module/
 ├── scripts/package.mjs
 ├── src/main.ts
 ├── test/
-└── vendor/lumina-workshop-sdk-1.0.0.tgz
+└── vendor/lumina-workshop-sdk-1.0.1.tgz
 ```
 
 构建产物必须收敛为一个自包含 `ui/index.html`。JavaScript、CSS、worker 和运行所需

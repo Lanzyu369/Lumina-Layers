@@ -117,6 +117,106 @@ test("maps valid responses and rejects pending requests when closed", async () =
   channel.port1.close();
 });
 
+test("allows five minutes for a native image picker request", async () => {
+  const channel = new MessageChannel();
+  const client = await connectWorkshop({
+    moduleId: "fixture.hello",
+    moduleVersion: "1.0.0",
+    windowObject: createConnectedWindow(channel, []),
+  });
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  let observedDelay = null;
+  globalThis.setTimeout = (_callback, delay) => {
+    observedDelay = delay;
+    return { fake: true };
+  };
+  globalThis.clearTimeout = () => {};
+
+  try {
+    const pending = client.image.pick();
+    const closed = assert.rejects(
+      pending,
+      (error) =>
+        error instanceof WorkshopClientError &&
+        error.code === "CLIENT_CLOSED",
+    );
+    assert.equal(observedDelay, 300_000);
+    client.close();
+    await closed;
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+    client.close();
+    channel.port1.close();
+  }
+});
+
+test("ignores one late response for a locally timed-out request", async () => {
+  const channel = new MessageChannel();
+  const client = await connectWorkshop({
+    moduleId: "fixture.hello",
+    moduleVersion: "1.0.0",
+    windowObject: createConnectedWindow(channel, []),
+  });
+  const originalSetTimeout = globalThis.setTimeout;
+  let observedDelay = null;
+  let resolveImageRequest;
+  const imageRequest = new Promise((resolve) => {
+    resolveImageRequest = resolve;
+  });
+  channel.port1.onmessage = ({ data }) => resolveImageRequest(data);
+  globalThis.setTimeout = (callback, delay, ...args) => {
+    observedDelay = delay;
+    return originalSetTimeout(callback, 0, ...args);
+  };
+
+  try {
+    const pending = client.image.pick();
+    const timedOut = assert.rejects(
+      pending,
+      (error) =>
+        error instanceof WorkshopClientError &&
+        error.code === "REQUEST_TIMEOUT",
+    );
+    const request = await imageRequest;
+    await timedOut;
+    assert.equal(observedDelay, 300_000);
+    globalThis.setTimeout = originalSetTimeout;
+
+    channel.port1.postMessage({
+      protocol: "lumina-workshop-rpc",
+      version: 1,
+      kind: "response",
+      requestId: request.requestId,
+      ok: true,
+      result: null,
+    });
+    await new Promise((resolve) => originalSetTimeout(resolve, 0));
+
+    channel.port1.onmessage = ({ data }) => {
+      channel.port1.postMessage({
+        protocol: "lumina-workshop-rpc",
+        version: 1,
+        kind: "response",
+        requestId: data.requestId,
+        ok: true,
+        result: {
+          locale: "zh-CN",
+          theme: "dark",
+          tokens: {},
+        },
+      });
+    };
+    const state = await client.ui.getState();
+    assert.equal(state.theme, "dark");
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+    client.close();
+    channel.port1.close();
+  }
+});
+
 test("times out a handshake that is not transferred by the parent", async () => {
   let removed = false;
   const parent = { postMessage() {} };
