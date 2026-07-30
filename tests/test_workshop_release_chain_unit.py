@@ -201,6 +201,7 @@ def test_release_chain_workflow_adopts_the_offline_verifier() -> None:
     assert "pull_request:" in workflow
     assert "pnpm/action-setup@" in workflow
     assert "version: 10.33.2" in workflow
+    assert '"hypothesis>=' in workflow
     assert "verify_workshop_release_chain.py" in workflow
     assert "--sdk-archive" in workflow
     assert "--sdk-checksum" in workflow
