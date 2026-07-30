@@ -619,7 +619,7 @@ def test_submit_bug_report_preserves_material_source_context(
     assert ticket_json["server"]["schema_version"] == 3
 
 
-def test_submit_bug_report_persists_only_bounded_workshop_diagnostics(
+def test_submit_bug_report_persists_only_safe_workshop_runtime_metadata(
     client: TestClient,
     feedback_root: Path,
 ) -> None:
@@ -628,15 +628,23 @@ def test_submit_bug_report_persists_only_bounded_workshop_diagnostics(
     payload["context"]["workshop"] = {
         "module_id": "lumina.bead-pattern",
         "module_version": "1.0.0",
+        "install_source": "seed",
+        "audit_status": "official",
+        "runtime_mode": "desktop-secure",
+        "error_code": None,
         "project_schema_version": "bead-project/v1",
         "input_mode": "numbered-grid",
         "rows": 52,
         "columns": 52,
         "compression": 50,
-        "error_code": None,
         "palette": [{"name": "private-red", "hex": "#ff0000"}],
         "cellsRle": [[2704, 1]],
         "sourcePath": "/Users/min/private-pattern.png",
+        "imageBytes": "private-image-bytes",
+        "packagePath": "/Users/min/private-module.lumina-workshop",
+        "githubToken": "ghp_private-token",
+        "registrySignature": "private-registry-signature",
+        "desktopToken": "private-desktop-token",
     }
 
     response = client.post("/api/feedback/bug-report", json=payload)
@@ -649,11 +657,9 @@ def test_submit_bug_report_persists_only_bounded_workshop_diagnostics(
     assert ticket_json["context"]["workshop"] == {
         "module_id": "lumina.bead-pattern",
         "module_version": "1.0.0",
-        "project_schema_version": "bead-project/v1",
-        "input_mode": "numbered-grid",
-        "rows": 52,
-        "columns": 52,
-        "compression": 50,
+        "install_source": "seed",
+        "audit_status": "official",
+        "runtime_mode": "desktop-secure",
         "error_code": None,
     }
 
@@ -663,13 +669,9 @@ def test_submit_bug_report_persists_only_bounded_workshop_diagnostics(
     [
         ("module_id", "m" * 129),
         ("module_version", "v" * 129),
-        ("project_schema_version", "s" * 129),
-        ("rows", 0),
-        ("rows", 129),
-        ("columns", 0),
-        ("columns", 129),
-        ("compression", -1),
-        ("compression", 101),
+        ("install_source", "remote"),
+        ("audit_status", "trusted"),
+        ("runtime_mode", "browser"),
         ("error_code", "e" * 129),
     ],
 )
@@ -683,11 +685,9 @@ def test_submit_bug_report_rejects_out_of_bounds_workshop_diagnostics(
     payload["context"]["workshop"] = {
         "module_id": "lumina.bead-pattern",
         "module_version": "1.0.0",
-        "project_schema_version": "bead-project/v1",
-        "input_mode": "numbered-grid",
-        "rows": 52,
-        "columns": 52,
-        "compression": 50,
+        "install_source": "seed",
+        "audit_status": "official",
+        "runtime_mode": "desktop-secure",
         "error_code": None,
         field_name: bad_value,
     }

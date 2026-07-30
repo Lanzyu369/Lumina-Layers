@@ -27,9 +27,30 @@ export interface ActiveWorkshopModule {
   version: string;
 }
 
+export type WorkshopDiagnosticInstallSource =
+  | "registry"
+  | "github"
+  | "local"
+  | "seed"
+  | "unknown";
+
+export type WorkshopAuditStatus =
+  | "official"
+  | "verified"
+  | "deprecated"
+  | "blocked"
+  | "unreviewed"
+  | "unknown";
+
+export interface ActiveWorkshopRuntimeContext {
+  installSource: WorkshopDiagnosticInstallSource;
+  auditStatus: WorkshopAuditStatus;
+}
+
 export interface WorkshopManagerState {
   view: WorkshopManagerView;
   activeModule: ActiveWorkshopModule | null;
+  activeRuntimeContext: ActiveWorkshopRuntimeContext | null;
   catalogStatus: WorkshopCatalogStatus;
   runtimeMode: WorkshopManagerRuntimeMode;
   pendingRecipeSource: WorkshopRecipeSource | null;
@@ -41,6 +62,9 @@ export interface WorkshopManagerState {
   clearPendingRecipe(): void;
   setCatalogStatus(status: WorkshopCatalogStatus): void;
   setRuntimeMode(mode: WorkshopManagerRuntimeMode): void;
+  setActiveRuntimeContext(
+    context: ActiveWorkshopRuntimeContext | null,
+  ): void;
   setDiagnostics(summary: WorkshopDiagnosticSummary | null): void;
 }
 
@@ -95,6 +119,7 @@ export const useWorkshopStore = create<WorkshopManagerState>()(
     (set) => ({
       view: "installed",
       activeModule: null,
+      activeRuntimeContext: null,
       catalogStatus: "idle",
       runtimeMode: "browser-restricted",
       pendingRecipeSource: null,
@@ -103,6 +128,7 @@ export const useWorkshopStore = create<WorkshopManagerState>()(
         set({
           view,
           activeModule: null,
+          activeRuntimeContext: null,
           catalogStatus:
             view === "discover" ? "loading" : "idle",
           diagnostics: null,
@@ -110,11 +136,13 @@ export const useWorkshopStore = create<WorkshopManagerState>()(
       openModule: (moduleId, version) =>
         set({
           activeModule: { moduleId, version },
+          activeRuntimeContext: null,
           diagnostics: null,
         }),
       returnHome: () =>
         set({
           activeModule: null,
+          activeRuntimeContext: null,
           pendingRecipeSource: null,
           diagnostics: null,
         }),
@@ -125,12 +153,15 @@ export const useWorkshopStore = create<WorkshopManagerState>()(
             moduleId: source.moduleId,
             version: source.moduleVersion,
           },
+          activeRuntimeContext: null,
           pendingRecipeSource: source,
           diagnostics: null,
         }),
       clearPendingRecipe: () => set({ pendingRecipeSource: null }),
       setCatalogStatus: (catalogStatus) => set({ catalogStatus }),
       setRuntimeMode: (runtimeMode) => set({ runtimeMode }),
+      setActiveRuntimeContext: (activeRuntimeContext) =>
+        set({ activeRuntimeContext }),
       setDiagnostics: (diagnostics) => set({ diagnostics }),
     }),
     {
@@ -140,7 +171,13 @@ export const useWorkshopStore = create<WorkshopManagerState>()(
       migrate: (persisted) => migratedState(persisted),
       partialize: (state): PersistedWorkshopManagerState => ({
         view: state.view,
-        activeModule: state.activeModule,
+        activeModule:
+          state.activeModule === null
+            ? null
+            : {
+                moduleId: state.activeModule.moduleId,
+                version: state.activeModule.version,
+              },
       }),
     },
   ),

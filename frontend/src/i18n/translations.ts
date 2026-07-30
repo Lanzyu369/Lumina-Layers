@@ -7859,6 +7859,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "无法把分享配方交给模块；转换器内容仍然可用。",
     en: "The shared recipe could not be handed to the module; converter content remains available.",
   },
+  "workshop.manager.recipeModuleMissing": {
+    zh: "主图和转换参数已恢复。若要继续编辑，请安装 {id} 的 {version} 版本。",
+    en: "The image and converter settings were restored. Install {id} version {version} to continue editing.",
+  },
+  "workshop.manager.recipeModuleDiscover": {
+    zh: "前往发现",
+    en: "Open Discover",
+  },
   "workshop.manager.localTitle": {
     zh: "安装本地模块包",
     en: "Install a local module package",

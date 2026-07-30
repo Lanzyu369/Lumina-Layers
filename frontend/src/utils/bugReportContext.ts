@@ -77,18 +77,24 @@ function deriveWorkshopContext(
   }
   const workshop = useWorkshopStore.getState();
   const diagnostics = workshop.diagnostics;
-  if (!diagnostics || !workshop.activeModule) {
+  if (!workshop.activeModule) {
     return null;
   }
+  const rawErrorCode = diagnostics?.errorCode ?? null;
+  const errorCode =
+    rawErrorCode === null ||
+    /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(rawErrorCode)
+      ? rawErrorCode
+      : null;
   return {
     module_id: workshop.activeModule.moduleId,
     module_version: workshop.activeModule.version,
-    project_schema_version: diagnostics.projectSchemaVersion,
-    input_mode: diagnostics.inputMode,
-    rows: diagnostics.rows,
-    columns: diagnostics.columns,
-    compression: diagnostics.compression,
-    error_code: diagnostics.errorCode,
+    install_source:
+      workshop.activeRuntimeContext?.installSource ?? "unknown",
+    audit_status:
+      workshop.activeRuntimeContext?.auditStatus ?? "unknown",
+    runtime_mode: workshop.runtimeMode,
+    error_code: errorCode,
   };
 }
 

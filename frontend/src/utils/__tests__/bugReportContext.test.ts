@@ -53,6 +53,7 @@ describe("collectBugReportContext", () => {
     });
     useWorkshopStore.setState({
       activeModule: null,
+      activeRuntimeContext: null,
       pendingRecipeSource: null,
       diagnostics: null,
     });
@@ -135,6 +136,26 @@ describe("collectBugReportContext", () => {
         moduleId: "lumina.bead-pattern",
         version: "1.0.0",
       },
+      activeRuntimeContext: {
+        installSource: "seed",
+        auditStatus: "official",
+      },
+      runtimeMode: "desktop-secure",
+      pendingRecipeSource: {
+        manifestSchemaVersion: 1,
+        moduleId: "lumina.bead-pattern",
+        moduleVersion: "1.0.0",
+        projectSchemaVersion: "bead-project/v1",
+        renderSchemaVersion: "bead-render/v1",
+        payload: {
+          matrix: [1, 2, 3],
+          imageBytes: "private-image-bytes",
+          packagePath: "/Users/min/private-module.lumina-workshop",
+          githubToken: "ghp_private-token",
+          registrySignature: "private-registry-signature",
+          desktopToken: "private-desktop-token",
+        },
+      },
       diagnostics: {
         projectSchemaVersion: "bead-project/v1",
         inputMode: "numbered-grid",
@@ -178,19 +199,31 @@ describe("collectBugReportContext", () => {
     expect(context.workshop).toEqual({
       module_id: "lumina.bead-pattern",
       module_version: "1.0.0",
-      project_schema_version: "bead-project/v1",
-      input_mode: "numbered-grid",
-      rows: 52,
-      columns: 52,
-      compression: 50,
+      install_source: "seed",
+      audit_status: "official",
+      runtime_mode: "desktop-secure",
       error_code: null,
     });
+    expect(Object.keys(context.workshop ?? {}).sort()).toEqual(
+      [
+        "audit_status",
+        "error_code",
+        "install_source",
+        "module_id",
+        "module_version",
+        "runtime_mode",
+      ].sort(),
+    );
     expect(serialized).not.toContain("cellsRle");
     expect(serialized).not.toContain("private-red");
     expect(serialized).not.toContain("#ff0000");
     expect(serialized).not.toContain("private-pattern.png");
     expect(serialized).not.toContain("blob:http");
     expect(serialized).not.toContain("/Users/min");
+    expect(serialized).not.toContain("private-image-bytes");
+    expect(serialized).not.toContain("ghp_private-token");
+    expect(serialized).not.toContain("private-registry-signature");
+    expect(serialized).not.toContain("private-desktop-token");
   });
 
   it("does not attach stale workshop diagnostics from another active tab", () => {

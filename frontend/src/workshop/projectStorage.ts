@@ -2,6 +2,7 @@ import type {
   WorkshopProjectRecord,
   WorkshopProjectStorage,
 } from "./types";
+import { WORKSHOP_RECIPE_ENVELOPE_MAX_BYTES } from "../recipe/types";
 
 const DEFAULT_DATABASE_NAME = "lumina-workshop";
 const DATABASE_VERSION = 2;
@@ -14,7 +15,8 @@ const MAX_ESTIMATE_DEPTH = 100;
 
 export const WORKSHOP_MODULE_QUOTA_BYTES = 256 * 1024 * 1024;
 export const WORKSHOP_RECORD_QUOTA_BYTES = 64 * 1024 * 1024;
-export const WORKSHOP_RECIPE_QUOTA_BYTES = 1 * 1024 * 1024;
+export const WORKSHOP_RECIPE_QUOTA_BYTES =
+  WORKSHOP_RECIPE_ENVELOPE_MAX_BYTES;
 
 export type WorkshopProjectStorageErrorCode =
   | "project-value-invalid"

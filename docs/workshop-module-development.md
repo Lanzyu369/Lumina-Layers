@@ -1,278 +1,270 @@
-# 创意工坊模块开发指南
+# 创意工坊模块开发与发布指南
 
-Creative Workshop module development guide
+Creative Workshop module development and release guide
 
-## 当前边界
+## 先理解边界
 
-创意工坊 v1 提供稳定的模块清单、能力声明、项目存储和图像交接接口。它允许 Lumina
-随应用发布官方模块，也为后续第三方模块保留一致的开发契约。
+创意工坊模块是独立发布、由用户安装的自包含网页应用。模块不能导入 Lumina Studio
+源码、React 组件、Zustand store、Electron preload 或私有接口；它只能通过公开
+`@lumina/workshop-sdk` 与宿主通信。
 
-v1 还不是可在线安装任意代码的 Steam 式市场。模块必须作为 Lumina 源码的一部分参与
-构建，并且模块 ID 必须进入发布白名单。应用不会下载、安装或执行远程 JavaScript。
-未来开放在线分发时，现有清单和宿主服务语义应保持兼容，但还必须补齐签名、权限确认、
-沙箱、审核、回滚和网络策略。
+正式模块运行在 `sandbox="allow-scripts"` 的 iframe 中。桌面版还会按已提交的模块
+frame 拦截网络、WebSocket、跳转、弹窗、权限和下载。普通浏览器无法提供同等级的
+请求防火墙，因此只运行预装官方 seed 和测试 fixture；社区模块需要桌面版，本地模块
+只有在显式不安全开发模式中才能用合成数据调试。
 
-Creative Workshop v1 defines stable manifest, capability, project-storage,
-and image-handoff contracts. Modules are currently source-integrated,
-build-time components whose IDs must be explicitly whitelisted. Lumina does
-not download or execute remote module code.
+这套边界对官方模块和第三方模块相同。不要尝试通过 `fetch`、CDN、动态 `import()`、
+`eval`、本地文件路径或父页面 DOM 绕过它。
+
+## 获取不可变 SDK
+
+公开 SDK 的稳定身份是：
+
+- npm 包名：`@lumina/workshop-sdk`
+- 版本：`1.0.0`
+- GitHub Release tag：`workshop-sdk-v1.0.0`
+- 资产：`lumina-workshop-sdk-1.0.0.tgz`
+- 校验文件：`lumina-workshop-sdk-1.0.0.tgz.sha256`
+
+SDK 只通过 Lumina Studio 的不可变 GitHub Release 分发，不发布可变 `latest` 资产，
+也不发布到 npm registry。把 tarball 和校验文件固定到模块仓库，再安装本地文件：
+
+```bash
+sha256sum -c lumina-workshop-sdk-1.0.0.tgz.sha256
+pnpm add --save-exact ./vendor/lumina-workshop-sdk-1.0.0.tgz
+```
+
+macOS 也可用 `shasum -a 256` 对照校验文件中的小写摘要。模块仓库必须提交
+`pnpm-lock.yaml`，CI 使用 `pnpm install --frozen-lockfile`。不要依赖 Lumina
+工作区中的 `workspace:*` 路径或未发布的 SDK 源码。
+
+## 最小仓库结构
+
+```text
+my-workshop-module/
+├── .github/workflows/ci.yml
+├── .github/workflows/release.yml
+├── LICENSE
+├── README.md
+├── manifest.json
+├── package.json
+├── pnpm-lock.yaml
+├── public/assets/icon.png
+├── scripts/package.mjs
+├── src/main.ts
+├── test/
+└── vendor/lumina-workshop-sdk-1.0.0.tgz
+```
+
+构建产物必须收敛为一个自包含 `ui/index.html`。JavaScript、CSS、worker 和运行所需
+图像都应内联为脚本、样式、`data:` 或 `blob:`；运行时不能引用包内其他文件或外部
+URL。
 
 ## Manifest v1
 
-模块导出只读、可序列化的 `WorkshopModuleManifest`。下面是官方拼豆模块的等价 JSON：
+`manifest.json` 使用关闭式结构，未知字段、未知权限、重复权限和不完整 SemVer 都会
+使安装失败：
 
 ```json
 {
-  "manifestSchemaVersion": 1,
-  "id": "lumina.bead-pattern",
+  "manifestVersion": 1,
+  "id": "example.pattern-editor",
+  "version": "1.0.0",
   "name": {
-    "zh": "拼豆模式",
-    "en": "Bead Mode"
+    "zh-CN": "图案编辑器",
+    "en-US": "Pattern Editor"
   },
   "description": {
-    "zh": "读取并校正拼豆图纸，预览熨烫压合效果。",
-    "en": "Read and correct bead patterns, then preview ironing pressure."
+    "zh-CN": "读取图纸、校正网格并向 Lumina 交接图像。",
+    "en-US": "Read a pattern, correct its grid, and hand an image to Lumina."
   },
-  "author": "Lumina Studio",
-  "version": "1.0.0",
-  "icon": "bead-grid",
-  "minLuminaVersion": "2.0.0",
-  "inputKinds": [
-    "image/png",
-    "image/jpeg",
-    "image/webp"
-  ],
-  "outputKinds": [
-    "image/png"
-  ],
-  "capabilities": [
-    "file.pick-image",
-    "project.read-write",
-    "handoff.image",
-    "ui.theme",
-    "ui.locale",
-    "status.progress",
-    "status.error"
+  "publisher": "Example Studio",
+  "workshopApi": {
+    "min": "1.0.0",
+    "maxExclusive": "2.0.0"
+  },
+  "luminaVersion": {
+    "min": "2.0.0"
+  },
+  "entrypoints": {
+    "ui": "ui/index.html"
+  },
+  "permissions": [
+    {
+      "name": "image.pick",
+      "reason": "由用户选择一张图纸并读取其像素"
+    },
+    {
+      "name": "project.storage",
+      "reason": "保存和恢复本模块的编辑工程"
+    },
+    {
+      "name": "handoff.image",
+      "reason": "把用户确认的 PNG 交给 Lumina 转换器"
+    }
   ]
 }
 ```
 
-字段规则：
+模块 ID 是永久的全局身份，应使用小写分段名。版本、Release tag、包名和 manifest
+版本必须精确一致。同一模块 ID 不能换仓库或改作另一种产品。
 
-- `manifestSchemaVersion` 在 v1 必须为 `1`。
-- `id` 是永久、全局唯一的模块身份，格式为小写分段名，例如
-  `vendor.feature-name`。发布后不可把同一 ID 改作另一种模块。
-- `version` 和 `minLuminaVersion` 必须是完整三段语义化版本
-  `major.minor.patch`。
-- `name`、`description` 是纯文本中文和英文，不接受 HTML。随应用发布的模块应从
-  `frontend/src/i18n/translations.ts` 取得文案。
-- `inputKinds`、`outputKinds` 必须为非空字符串数组。
-- `capabilities` 不可重复，未知能力会使模块停用。
+### v1 权限
 
-版本建议：
-
-- 修复实现而不改变持久化格式：增加 `patch`。
-- 增加向后兼容功能或可选字段：增加 `minor`。
-- 无法读取旧项目、改变交接语义或删除公开行为：增加 `major`，并提供显式迁移。
-- 项目结构版本独立于模块版本，例如 `bead-project/v1`；不要用模块版本代替项目迁移
-  标识。
-
-注册表会按关闭优先原则检查重复 ID、清单结构、清单版本、能力、最低 Lumina 版本和
-发布白名单。任何一项失败都会停用模块，不会以降级权限继续运行。
-
-## 七项宿主能力
-
-模块只能调用清单中已经申请的能力。未声明就调用会抛出
-`WorkshopHostError`，错误代码为 `capability-denied`。
-
-| 能力 | 可用接口 | 语义 |
+| 权限 | SDK 调用 | 宿主边界 |
 | --- | --- | --- |
-| `file.pick-image` | `files.pickImage`、`files.decodeImage` | 让用户选择受支持图片，或把已有 Blob 解码为 RGBA |
-| `project.read-write` | `projects.save/load/latest/remove` | 仅访问当前模块自己的项目命名空间 |
-| `handoff.image` | `files.encodePng`、`handoffImage` | 编码并向 Lumina 交接经过验证的 PNG |
-| `ui.theme` | `ui.getTheme` | 读取 `light` 或 `dark` |
-| `ui.locale` | `ui.getLocale`、`ui.translate` | 读取语言和宿主翻译 |
-| `status.progress` | `status.reportProgress` | 发布可清除的有界进度 |
-| `status.error` | `status.reportError`、`status.reportDiagnostics` | 发布可见错误和无内容数据的诊断摘要 |
+| `image.pick` | `client.image.pick()` | 用户主动选择；类型、文件头、尺寸和 64 MiB 上限由宿主校验 |
+| `project.storage` | `client.projects.*` | 只能访问本模块命名空间；单记录 64 MiB、模块总量 256 MiB |
+| `color-library.read` | `client.colorLibrary.read()` | 只返回规范化色库，不暴露 LUT、耗材档案路径或私有状态 |
+| `handoff.image` | `client.handoff.image()` | 重新校验 PNG、像素、物理尺寸、色库身份和 1 MiB 配方信封 |
 
-这些能力不提供 Zustand store、转换器组件、任意文件系统、用户设置、网络请求或
-HTML 注入。官方模块同样遵守这一限制。
+权限理由会显示给用户。更新新增权限时，宿主必须再次确认，拒绝后旧版本继续可用。
+v1 没有一般网络权限。
 
-## 宿主服务签名
+## 连接宿主
 
-公开接口以 `frontend/src/workshop/types.ts` 为准。v1 的核心形状如下：
+模块入口只使用 SDK：
 
 ```ts
-interface WorkshopHostServices {
-  files: {
-    pickImage(): Promise<WorkshopPickedImage | null>;
-    decodeImage(file: Blob): Promise<WorkshopRaster>;
-    encodePng(raster: WorkshopRaster, filename: string): Promise<File>;
-  };
-  projects: {
-    save<TProject>(
-      record: Omit<WorkshopProjectRecord<TProject>, "moduleId">,
-    ): Promise<void>;
-    load<TProject>(
-      projectId: string,
-    ): Promise<WorkshopProjectRecord<TProject> | null>;
-    latest<TProject>(): Promise<WorkshopProjectRecord<TProject> | null>;
-    remove(projectId: string): Promise<void>;
-  };
-  ui: {
-    getLocale(): "zh" | "en";
-    getTheme(): "light" | "dark";
-    translate(key: string): string;
-  };
-  status: {
-    reportProgress(update: WorkshopProgressUpdate | null): void;
-    reportError(error: WorkshopVisibleError | null): void;
-    reportDiagnostics(summary: WorkshopDiagnosticSummary | null): void;
-  };
-  handoffImage(
-    handoff: WorkshopImageHandoff,
-    options?: { replaceExisting?: boolean },
-  ): Promise<
-    { status: "needs-confirmation" } |
-    { status: "completed" }
-  >;
-}
+import {
+  applyWorkshopUiState,
+  connectWorkshop,
+} from "@lumina/workshop-sdk";
 
-interface WorkshopModuleProps {
-  manifest: WorkshopModuleManifest;
-  host: WorkshopHostServices;
-  pendingRecipeSource: WorkshopRecipeSource | null;
-  clearPendingRecipe(): void;
-}
+const moduleId = "example.pattern-editor";
+const moduleVersion = "1.0.0";
+
+const client = await connectWorkshop({
+  moduleId,
+  moduleVersion,
+});
+
+applyWorkshopUiState(await client.ui.getState());
+await client.lifecycle.ready();
 ```
 
-模块定义还可以实现 `validateRecipeSource(source)`。只有它能够完整、安全地恢复分享卡
-中的模块数据时才返回 `true`；异常和 `false` 都会使该来源按“不可继续编辑”处理，但
-主转换器配方仍可正常导入。
+握手必须在 iframe load 后 10 秒内完成。普通请求默认 30 秒，图片交接 120 秒；控制
+消息不超过 1 MiB，单次二进制不超过 64 MiB。错误应使用稳定的 kebab-case 代码，
+用户消息不能包含堆栈、路径、令牌或原始项目内容。
 
-## 生命周期
+## 项目、迁移与配方信封
 
-1. Lumina 在启动时验证所有模块清单，并保留注册顺序。
-2. 用户从创意工坊首页打开已启用模块。
-3. 宿主按清单创建有能力限制的 `WorkshopHostServices`。
-4. 模块优先消费 `pendingRecipeSource`，否则加载本模块最近项目或创建新项目。
-5. 模块通过宿主保存项目、报告状态，并在准备好时交接 PNG。
-6. 返回工坊首页时，临时配方和诊断摘要会清除；项目按模块命名空间保留。
-7. 模块卸载或渲染失败由独立错误边界隔离，不影响主导航和转换器。
+项目记录必须带独立的 `schemaVersion`。读取后先完整验证，再按已知版本逐步迁移；遇到
+未知新版本或迁移失败时保留原记录，不做部分写回。更新候选版本启动前，宿主会创建项目
+快照；启动或迁移失败时可回滚代码和项目指针。
 
-## 项目命名空间与迁移
-
-每条记录都包含：
+分享卡只保存重新编辑所需的 JSON：
 
 ```ts
-interface WorkshopProjectRecord<TProject> {
-  moduleId: string;
-  projectId: string;
-  schemaVersion: string;
-  createdAt: string;
-  updatedAt: string;
-  project: TProject;
-}
+const recipeSource = {
+  manifestSchemaVersion: 1 as const,
+  moduleId,
+  moduleVersion,
+  projectSchemaVersion: "example-project/v1",
+  renderSchemaVersion: "example-render/v1",
+  payload: {
+    rows: 24,
+    columns: 24,
+    edits: [],
+  },
+};
 ```
 
-宿主强制把记录写入当前清单 ID 的命名空间；模块不能把 `moduleId` 伪装成其他模块。
-项目保存在浏览器 IndexedDB，无法使用时会回退到本次会话内存。临时的工坊 shell 状态
-只持久化活动模块 ID 和各模块最近项目 ID，不持久化分享卡 payload 或诊断数据。
+信封总量不得超过 1 MiB。不要保存 `Blob`、图片字节、对象 URL、本机路径、GitHub
+token、Registry 签名或桌面令牌。Lumina 导入分享卡时只校验通用信封；安装好的模块
+负责验证和迁移自身 payload。模块缺失时，转换器图像和参数仍会恢复，并提示用户安装
+精确模块版本。
 
-模块必须在读取后、修改前验证 `schemaVersion`：
+## 图像交接
 
-- 当前版本：完整验证，再进入编辑器。
-- 已知旧版本：逐版迁移，校验迁移结果后另存为当前版本。
-- 未知新版本或迁移失败：报告稳定错误代码，保留原记录，不做部分写回。
-- 迁移函数应保持确定性，不读取网络或宿主外部状态。
+模块只能通过 `client.handoff.image()` 进入 Lumina 转换器。交接对象至少包含：
 
-包含 `Blob` 的项目使用 structured clone 保存；分享卡来源则必须是纯 JSON。分享卡应
-只保存重新编辑所需的最小数据，不保存原图字节、对象 URL 或本地路径。
+- 与当前 manifest 一致的模块 ID 和版本；
+- 标准 PNG 的 `ArrayBuffer`、像素宽高与非空内容；
+- 推荐物理宽高；
+- 可选但自洽的方形网格行列和节距；
+- 当前宿主色库 ID；
+- 1 MiB 以内的配方信封。
 
-## 图像交接与替换确认
+如果转换器已有工作，第一次交接返回 `needs-confirmation`，模块应显示清楚的替换确认，
+再由用户触发第二次交接。成功后仍走 Lumina 原有的 LUT/耗材档案、叠色预览和 3MF
+生成路径。不要把辅助网格、编号、水印、选中框或诊断覆盖层写入最终 PNG。
 
-`handoffImage` 是模块进入 Lumina 转换器的唯一入口。v1 宿主会验证：
+## 单文件包
 
-- 模块、模块版本和 `recipeSource` 身份必须与当前清单一致。
-- 文件必须是可解码、至少含一个非透明像素的 PNG。
-- 网格为 `1..128` 行和 `1..128` 列。
-- PNG 必须严格为每格 `32 × 32` 像素，即
-  `pixelWidth = columns × 32`、`pixelHeight = rows × 32`。
-- `beadPitchMm` 为 `0.5..10`；推荐宽高为 `0.5..400 mm`，并严格等于
-  `columns/rows × beadPitchMm`。
-- `preserveCanvasBounds` 必须为 `true`，透明格仍保留物理画布边界。
+标准资产名是：
 
-如果转换器已有用户工作，第一次调用返回 `{ status: "needs-confirmation" }`，不会替换
-任何内容。模块应显示明确确认界面；用户确认后以
-`{ replaceExisting: true }` 再次交接。成功返回 `{ status: "completed" }`，Lumina
-原子加载 PNG、推荐尺寸和模块来源，并切换回主转换流程。
-
-模块生成的 PNG 只能包含预期颜色与透明度。辅助网格、编号、水印、编辑高亮和诊断覆盖
-层不可写入交接文件。
-
-## 错误、进度和诊断
-
-可见错误结构：
-
-```ts
-interface WorkshopVisibleError {
-  code: string;
-  message: string;
-  retryable: boolean;
-}
+```text
+<module-id>-<version>.lumina-workshop
 ```
 
-错误代码应使用稳定的 kebab-case；`message` 是面向当前用户的安全说明，不放堆栈、
-文件路径或原图内容。可重试错误允许用户保留项目并重试；致命结构或迁移错误应提供返回
-工坊入口。
+它是一个 ZIP，但根目录只能包含：
 
-宿主自身会使用 `capability-denied`、`invalid-handoff-identity`、
-`invalid-handoff-image`、`invalid-handoff-grid`、`invalid-handoff-pixels`、
-`invalid-handoff-size` 和 `empty-handoff-image` 等代码拒绝非法调用。模块不可捕获后
-伪装成成功。
-
-`reportProgress` 使用 `{ phase, completed, total }`；完成或取消时传 `null`。
-`reportDiagnostics` 只用于有界诊断：
-
-```ts
-interface WorkshopDiagnosticSummary {
-  projectSchemaVersion: string;
-  inputMode: string | null;
-  rows: number | null;
-  columns: number | null;
-  compression: number | null;
-  errorCode: string | null;
-}
+```text
+manifest.json
+ui/index.html
+assets/icon.png
+assets/gallery/*     # 可选静态 PNG/JPEG/WebP，最多 20 张
+README.md
+LICENSE
 ```
 
-Bug 报告只在创意工坊标签处于活动状态时采集此摘要，再加上宿主绑定的模块 ID 和版本。
-它不会读取项目、矩阵、色板或转换器里的分享卡来源。
+不允许额外 JavaScript 文件、source map、符号链接、重复/大小写冲突路径、路径穿越、
+加密成员、动画图片或压缩炸弹。`ui/index.html` 必须在第一个 `<script>` 前出现
+`<head>`，不得使用 `eval`、动态 `import()` 或非内联资源。
 
-## v1 白名单与未来在线分发
+本地构建应可复现，并先用宿主检查器验证：
 
-v1 的 `OFFICIAL_WORKSHOP_MODULES` 和 `WORKSHOP_MODULE_WHITELIST` 都在源码中维护。
-新增模块需要在同一版本中提交模块定义、清单、白名单项、翻译、测试和一个实际采用点。
-仅创建“公共工具”而不带可运行模块不符合仓库的 lighthouse adoption 规则。
+```bash
+python -m core.workshop.package_validator \
+  dist/example.pattern-editor-1.0.0.lumina-workshop
+```
 
-不要把远程 URL、动态 `import()`、`eval`、下载脚本或第三方 CDN 作为绕过白名单的
-方式。在线工坊开放之前至少需要：
+## GitHub Release
 
-- 可验证的包签名和发布者身份；
-- 安装前权限说明与用户确认；
-- iframe、worker 或等价的代码沙箱；
-- 文件、网络、剪贴板和持久化配额策略；
-- 内容审核、恶意包撤销和版本回滚；
-- 兼容性、依赖锁定和自动更新策略。
+每个版本发布一个非 draft、非 prerelease 的不可变 Release：
 
-这些机制尚未实现，因此 v1 白名单不是安全沙箱的替代品。
+```text
+tag:        v1.0.0
+asset:      example.pattern-editor-1.0.0.lumina-workshop
+checksum:   example.pattern-editor-1.0.0.lumina-workshop.sha256
+```
 
-## 官方拼豆模块：lighthouse 实现
+Release workflow 应使用 Node 22、pnpm 10.33.2、冻结 lockfile，完整测试后只打包一次，
+从最终资产计算小写 SHA-256。不要重用 tag、替换既有资产或提供可变 `latest` 下载。
+Registry 收录时还会绑定 GitHub 仓库、Release tag、字节数、包摘要、manifest 摘要、
+权限、兼容范围和审核状态。
 
-`frontend/src/workshop/modules/bead/` 是公开契约的第一套完整采用点。它通过宿主选图，
-识别并校正三类清晰图纸，保存带原图 `Blob` 的版本化项目，以可逆矩阵编辑颜色和透明
-支撑，预览 0–100 的熨烫压合效果，然后输出每格 32 像素的 PNG 交接给 Lumina。
+## 本地测试 fixture
 
-它不直接导入转换器 store、不调用网络 API，也不自行访问 IndexedDB。分享卡恢复由
-模块的 `validateRecipeSource` 和单一恢复函数验证；交接后仍走 Lumina 原有的预览、
-叠色和 3MF 生成路径。开发新模块时，应把这一目录当作能力隔离、项目迁移、错误报告和
-交接确认的基准实现，而不是复制其拼豆专用算法。
+模块仓库测试不应启动真实 Lumina，也不应复制私有宿主代码。用实现
+`WorkshopParentWindowLike` 的小型 harness：
+
+1. 接收 `lumina.workshop.ready`；
+2. 核对模块 ID、版本和 API 版本；
+3. 通过 `MessageChannel` 发送 `lumina.workshop.connect`；
+4. 对每个 RPC 返回固定、合成、无隐私的数据；
+5. 覆盖握手超时、权限拒绝、超限 payload、保存/恢复、交接确认和稳定错误码。
+
+主仓库提供的最小 fixture 用于验证宿主契约；模块自己的识别、编辑、渲染和迁移测试
+仍留在独立仓库。
+
+## 发布前检查
+
+```bash
+pnpm install --frozen-lockfile
+pnpm test
+pnpm build
+pnpm run package
+```
+
+同时确认：
+
+- 包只含允许文件，且入口完全自包含；
+- manifest、tag、资产名和实际版本完全一致；
+- 权限理由准确，没有申请未使用权限；
+- 浅色/深色、中文/英文均可用；
+- 浏览器限制提示、桌面沙箱和离线已安装流程可复现；
+- 项目迁移、权限扩张拒绝、启动失败和回滚不丢数据；
+- 分享卡往返不保存图片字节、路径或凭据；
+- README、LICENSE、图标和图库不含外部活动内容。

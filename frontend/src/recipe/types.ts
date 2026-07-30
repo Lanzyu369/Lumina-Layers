@@ -255,3 +255,4 @@ export interface LuminaRecipe {
 
 export const RECIPE_FORMAT = "lumina-recipe" as const;
 export const RECIPE_SCHEMA_VERSION = 3;
+export const WORKSHOP_RECIPE_ENVELOPE_MAX_BYTES = 1024 * 1024;

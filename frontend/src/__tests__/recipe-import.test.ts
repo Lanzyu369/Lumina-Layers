@@ -1,8 +1,16 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+
+vi.mock("../workshop/modules/bead/manifest", () => {
+  throw new Error(
+    "The recipe importer must not load an in-process Workshop module.",
+  );
+});
+
 import {
   detectRecipeFileType,
   matchLut,
   restoreConverterRecipe,
+  validateWorkshopRecipeEnvelope,
   RECIPE_IMPORT_WARNING_BACK_LABELS_UNAVAILABLE,
   RECIPE_IMPORT_WARNING_FRIDGE_CONFLICT_LARGE_FORMAT,
   RECIPE_IMPORT_WARNING_FRIDGE_CONFLICT_LOOP,
@@ -539,10 +547,10 @@ describe("recipe/importRecipe", () => {
       );
     });
 
-    it("degrades malformed or unavailable workshop data without blocking converter restore", () => {
+    it("degrades a malformed workshop envelope without blocking converter restore", () => {
       const malformed = createTestRecipe({ schema_version: 3 });
       const malformedSource = createBeadRecipeSourceFixture();
-      malformedSource.payload.cellsRle = [[0, 999]];
+      malformedSource.moduleId = "Invalid Module ID";
       malformed.recipe.workshop = malformedSource;
 
       const malformedResult = restoreConverterRecipe(
@@ -556,7 +564,9 @@ describe("recipe/importRecipe", () => {
       expect(malformedResult.warnings).toContain(
         RECIPE_IMPORT_WARNING_WORKSHOP_DEGRADED,
       );
+    });
 
+    it("keeps a structurally valid source for a module that is not installed", () => {
       const unavailable = createTestRecipe({ schema_version: 3 });
       const unavailableSource = createBeadRecipeSourceFixture();
       unavailableSource.moduleId = "third-party.unknown";
@@ -566,10 +576,55 @@ describe("recipe/importRecipe", () => {
         LOCAL_LUTS,
         LOCAL_FINGERPRINTS,
       );
-      expect(unavailableResult.state.workshopSource).toBeNull();
-      expect(unavailableResult.warnings).toContain(
+      expect(unavailableResult.state.workshopSource).toEqual(
+        unavailableSource,
+      );
+      expect(unavailableResult.warnings).not.toContain(
         RECIPE_IMPORT_WARNING_WORKSHOP_DEGRADED,
       );
+    });
+
+    it("degrades an envelope above 1 MiB to converter-only import", () => {
+      const recipe = createTestRecipe({ schema_version: 3 });
+      const oversized = createBeadRecipeSourceFixture();
+      oversized.payload = {
+        privateProject: "x".repeat(1024 * 1024),
+      };
+      recipe.recipe.workshop = oversized;
+
+      const result = restoreConverterRecipe(
+        recipe,
+        LOCAL_LUTS,
+        LOCAL_FINGERPRINTS,
+      );
+
+      expect(result.state.workshopSource).toBeNull();
+      expect(result.state.target_width_mm).toBe(80);
+      expect(result.assetFile.name).toBe("photo.png");
+      expect(result.warnings).toContain(
+        RECIPE_IMPORT_WARNING_WORKSHOP_DEGRADED,
+      );
+    });
+
+    it("validates and deep-clones only a module-independent JSON envelope", () => {
+      const source = createBeadRecipeSourceFixture();
+      const validated = validateWorkshopRecipeEnvelope(source);
+
+      expect(validated).toEqual(source);
+      expect(validated).not.toBe(source);
+      expect(validated?.payload).not.toBe(source.payload);
+      expect(
+        validateWorkshopRecipeEnvelope({
+          ...source,
+          payload: [],
+        }),
+      ).toBeNull();
+      expect(
+        validateWorkshopRecipeEnvelope({
+          ...source,
+          moduleVersion: "1.0",
+        }),
+      ).toBeNull();
     });
 
     it.each([1, 2])(

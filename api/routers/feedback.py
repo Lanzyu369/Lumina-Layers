@@ -365,27 +365,40 @@ class BugReportOriginalImageRef(BaseModel):
 
 
 class BugReportWorkshopContext(BaseModel):
-    """Bounded Creative Workshop diagnostics for a bug report.
+    """Safe Creative Workshop runtime metadata for a bug report.
 
-    Bug 报告中有界的创意工坊诊断摘要。
+    Bug 报告中的安全创意工坊运行元数据。
 
-    Project pixels, palettes, file names, object URLs, and local paths are
-    intentionally outside this schema. Unknown keys are discarded before
-    the report is persisted or relayed.
+    Project payloads, pixels, palettes, image bytes, package paths,
+    credentials, signing material, and desktop tokens are intentionally
+    outside this schema. Unknown keys are discarded before the report is
+    persisted or relayed.
 
-    项目像素、色板、文件名、对象 URL 和本地路径均不属于此结构；未知字段
-    会在工单持久化或转发前被丢弃。
+    工程载荷、像素、色板、图像字节、安装包路径、凭据、签名材料和桌面令牌
+    均不属于此结构；未知字段会在工单持久化或转发前被丢弃。
     """
 
     model_config = ConfigDict(extra="ignore")
 
     module_id: str = Field(min_length=1, max_length=128)
     module_version: str = Field(min_length=1, max_length=128)
-    project_schema_version: str = Field(min_length=1, max_length=128)
-    input_mode: str | None = Field(default=None, max_length=128)
-    rows: int | None = Field(default=None, ge=1, le=128)
-    columns: int | None = Field(default=None, ge=1, le=128)
-    compression: int | None = Field(default=None, ge=0, le=100)
+    install_source: Literal[
+        "registry", "github", "local", "seed", "unknown"
+    ] = "unknown"
+    audit_status: Literal[
+        "official",
+        "verified",
+        "deprecated",
+        "blocked",
+        "unreviewed",
+        "unknown",
+    ] = "unknown"
+    runtime_mode: Literal[
+        "desktop-secure",
+        "browser-restricted",
+        "unsafe-development",
+        "unknown",
+    ] = "unknown"
     error_code: str | None = Field(default=None, max_length=128)
 
 

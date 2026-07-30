@@ -46,7 +46,10 @@ import {
   createSyntheticWorkshopHandlers,
   createWorkshopManagerHandlers,
 } from "./runtime/handlers";
-import { useWorkshopStore } from "./store";
+import {
+  type WorkshopAuditStatus,
+  useWorkshopStore,
+} from "./store";
 
 interface PermissionPrompt {
   module: InstalledWorkshopModule;
@@ -137,6 +140,38 @@ function sourceKey(
   return module.source === "registry"
     ? "community"
     : "unreviewed";
+}
+
+function moduleAuditStatus(
+  module: InstalledWorkshopModule,
+  catalog: WorkshopCatalog | null,
+  version: string,
+): WorkshopAuditStatus {
+  const catalogVersion = catalog?.verified
+    ? catalog.modules
+        .find((item) => item.module_id === module.module_id)
+        ?.versions.find((item) => item.version === version)
+    : undefined;
+  if (
+    catalogVersion?.state === "blocked" ||
+    (catalogVersion?.revocation !== null &&
+      catalogVersion?.revocation !== undefined)
+  ) {
+    return "blocked";
+  }
+  if (catalogVersion?.state === "deprecated") {
+    return "deprecated";
+  }
+  if (catalogVersion?.state === "active") {
+    return "verified";
+  }
+  if (module.source === "seed" && module.official) {
+    return "official";
+  }
+  if (module.source === "github" || module.source === "local") {
+    return "unreviewed";
+  }
+  return "unknown";
 }
 
 function frameRuntimeMode(
@@ -420,6 +455,9 @@ export function WorkshopPanel({
   const setRuntimeMode = useWorkshopStore(
     (state) => state.setRuntimeMode,
   );
+  const setActiveRuntimeContext = useWorkshopStore(
+    (state) => state.setActiveRuntimeContext,
+  );
   const clearPendingRecipe = useWorkshopStore(
     (state) => state.clearPendingRecipe,
   );
@@ -618,6 +656,31 @@ export function WorkshopPanel({
     selectedModule && activeModule
       ? moduleVersion(selectedModule, activeModule.version)
       : null;
+
+  useEffect(() => {
+    if (
+      activeModule === null ||
+      selectedModule === null ||
+      selectedVersion === null
+    ) {
+      setActiveRuntimeContext(null);
+      return;
+    }
+    setActiveRuntimeContext({
+      installSource: selectedModule.source,
+      auditStatus: moduleAuditStatus(
+        selectedModule,
+        catalog,
+        selectedVersion.version,
+      ),
+    });
+  }, [
+    activeModule,
+    catalog,
+    selectedModule,
+    selectedVersion,
+    setActiveRuntimeContext,
+  ]);
 
   const handlers = useMemo(
     () =>
@@ -983,6 +1046,27 @@ export function WorkshopPanel({
 
         {operationError ? (
           <StatusBanner tone="error">{operationError}</StatusBanner>
+        ) : null}
+
+        {!loadingModules &&
+        activeModule !== null &&
+        (selectedModule === null || selectedVersion === null) ? (
+          <StatusBanner tone="warning">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <span>
+                {t("workshop.manager.recipeModuleMissing")
+                  .replace("{id}", activeModule.moduleId)
+                  .replace("{version}", activeModule.version)}
+              </span>
+              <Button
+                label={t(
+                  "workshop.manager.recipeModuleDiscover",
+                )}
+                variant="secondary"
+                onClick={() => openView("discover")}
+              />
+            </div>
+          </StatusBanner>
         ) : null}
 
         {view === "installed" ? (

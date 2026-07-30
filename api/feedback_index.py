@@ -446,19 +446,13 @@ def _format_workshop_diagnostics_section(
         return ""
     module_id = _safe_str(workshop.get("module_id"))
     module_version = _safe_str(workshop.get("module_version"))
-    rows = _safe_str(workshop.get("rows"))
-    columns = _safe_str(workshop.get("columns"))
     lines = [
         "## Creative Workshop Diagnostics",
         "",
         f"- module: {module_id}@{module_version}",
-        (
-            "- project_schema_version: "
-            f"{_safe_str(workshop.get('project_schema_version'))}"
-        ),
-        f"- input_mode: {_safe_str(workshop.get('input_mode'))}",
-        f"- grid: {rows} × {columns}",
-        f"- compression: {_safe_str(workshop.get('compression'))}",
+        f"- install_source: {_safe_str(workshop.get('install_source'))}",
+        f"- audit_status: {_safe_str(workshop.get('audit_status'))}",
+        f"- runtime_mode: {_safe_str(workshop.get('runtime_mode'))}",
         f"- error_code: {_safe_str(workshop.get('error_code'))}",
     ]
     return "\n".join(lines) + "\n"
@@ -477,14 +471,11 @@ def _format_workshop_diagnostics_summary(
         return ""
     module_id = _safe_str(workshop.get("module_id"))
     module_version = _safe_str(workshop.get("module_version"))
-    rows = _safe_str(workshop.get("rows"))
-    columns = _safe_str(workshop.get("columns"))
     return (
         f"创意工坊：{module_id}@{module_version}，"
-        f"项目结构 {_safe_str(workshop.get('project_schema_version'))}，"
-        f"输入 {_safe_str(workshop.get('input_mode'))}，"
-        f"网格 {rows}×{columns}，"
-        f"压合 {_safe_str(workshop.get('compression'))}，"
+        f"来源 {_safe_str(workshop.get('install_source'))}，"
+        f"审核 {_safe_str(workshop.get('audit_status'))}，"
+        f"运行模式 {_safe_str(workshop.get('runtime_mode'))}，"
         f"错误 {_safe_str(workshop.get('error_code'))}。"
     )
 

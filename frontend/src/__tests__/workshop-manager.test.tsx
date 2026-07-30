@@ -130,7 +130,7 @@ function fakeStorage(
   retained = false,
 ): ManagedWorkshopProjectStorage {
   return {
-    save: vi.fn(),
+    save: vi.fn().mockResolvedValue(undefined),
     load: vi.fn(),
     latest: vi.fn().mockResolvedValue(
       retained
@@ -208,6 +208,7 @@ describe("Workshop installable module manager", () => {
     useWorkshopStore.setState({
       view: "installed",
       activeModule: null,
+      activeRuntimeContext: null,
       catalogStatus: "idle",
       runtimeMode: "browser-restricted",
       pendingRecipeSource: null,
@@ -262,6 +263,28 @@ describe("Workshop installable module manager", () => {
     vi.mocked(api.fetchCatalog).mockResolvedValue(catalog(true));
     fireEvent.click(screen.getByRole("button", { name: "重试" }));
     expect(await screen.findByText("测试模块")).toBeInTheDocument();
+  });
+
+  it("keeps converter recovery and explains how to install a missing recipe module", async () => {
+    useWorkshopStore.getState().openRecipe({
+      manifestSchemaVersion: 1,
+      moduleId: "third-party.missing",
+      moduleVersion: "2.3.4",
+      projectSchemaVersion: "missing/v1",
+      renderSchemaVersion: "missing-render/v1",
+      payload: { privateProject: [1, 2, 3] },
+    });
+
+    renderManager(fakeApi([]));
+
+    expect(
+      await screen.findByText(
+        "主图和转换参数已恢复。若要继续编辑，请安装 third-party.missing 的 2.3.4 版本。",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "前往发现" }),
+    ).toBeInTheDocument();
   });
 
   it("accepts only a package file or a canonical GitHub repository URL", async () => {

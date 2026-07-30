@@ -28,11 +28,18 @@ export interface OriginalImageRef {
 export interface WorkshopBugReportContext {
   module_id: string;
   module_version: string;
-  project_schema_version: string;
-  input_mode: string | null;
-  rows: number | null;
-  columns: number | null;
-  compression: number | null;
+  install_source: "registry" | "github" | "local" | "seed" | "unknown";
+  audit_status:
+    | "official"
+    | "verified"
+    | "deprecated"
+    | "blocked"
+    | "unreviewed"
+    | "unknown";
+  runtime_mode:
+    | "desktop-secure"
+    | "browser-restricted"
+    | "unsafe-development";
   error_code: string | null;
 }
 
@@ -93,11 +100,12 @@ export interface BugReportContextPayload {
    */
   advanced_params?: AdvancedParams | null;
   /**
-   * Bounded Creative Workshop diagnostics. This deliberately excludes the
-   * source image, project matrix, palette, object URLs, and file paths.
+   * Host-bound Creative Workshop runtime metadata. This deliberately
+   * excludes the source image, project payload, matrix, palette, object
+   * URLs, package paths, credentials, and signing material.
    *
-   * 创意工坊的有界诊断摘要；刻意不包含原图、项目矩阵、色板、对象 URL
-   * 或任何文件路径。
+   * 创意工坊的宿主绑定运行信息；刻意不包含原图、工程载荷、矩阵、色板、
+   * 对象 URL、安装包路径、凭据或签名材料。
    */
   workshop?: WorkshopBugReportContext | null;
 }
