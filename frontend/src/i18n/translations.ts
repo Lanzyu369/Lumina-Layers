@@ -7299,6 +7299,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "尚未选择可用色库",
     en: "No usable library selected",
   },
+  workshop_source_banner_library_changed: {
+    zh: "打印色库已变化；图纸原色不受影响，将按当前色库重新叠色。",
+    en: "The print library changed. Source colors are unchanged and will be remapped with the current library.",
+  },
   workshop_source_banner_guidance: {
     zh: "源色色块由创意工坊保留；下方 LUT 或耗材档案只负责叠色打印，不会覆盖源色。",
     en: "Source color blocks stay with the Workshop project. The LUT or material archive below controls layered printing without replacing those source colors.",

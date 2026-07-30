@@ -3,11 +3,11 @@ import { useWidgetStore } from "../stores/widgetStore";
 import type {
   WorkshopImageHandoff as SdkWorkshopImageHandoff,
 } from "./contracts";
-import { buildWorkshopColorLibrary } from "./colorLibrary";
 import {
   WorkshopProjectStorageError,
   assertWorkshopRecipeEnvelopeWithinQuota,
 } from "./projectStorage";
+import { rememberWorkshopHandoffColorLibraryId } from "./handoffMetadata";
 
 export const WORKSHOP_HANDOFF_MAX_BINARY_BYTES = 64 * 1024 * 1024;
 export const WORKSHOP_HANDOFF_MAX_EDGE = 16_384;
@@ -37,8 +37,7 @@ export type WorkshopHandoffValidationErrorCode =
   | "handoff-layout-invalid"
   | "handoff-physical-size-invalid"
   | "handoff-recipe-invalid"
-  | "handoff-recipe-too-large"
-  | "handoff-color-library-changed";
+  | "handoff-recipe-too-large";
 
 export class WorkshopHandoffValidationError extends Error {
   readonly code: WorkshopHandoffValidationErrorCode;
@@ -279,13 +278,6 @@ function validateColorLibraryIdentity(
       "Workshop color-library identity is invalid.",
     );
   }
-  const currentLibraryId = buildWorkshopColorLibrary()?.id ?? null;
-  if (handoff.colorLibraryId !== currentLibraryId) {
-    handoffError(
-      "handoff-color-library-changed",
-      "The selected print color library changed during editing.",
-    );
-  }
 }
 
 const defaultPngDecoder: WorkshopPngDecoder = {
@@ -436,6 +428,10 @@ export async function handoffWorkshopPngToConverter(
     [handoff.pngBytes],
     safeHandoffFilename(handoff),
     { type: "image/png" },
+  );
+  rememberWorkshopHandoffColorLibraryId(
+    handoff.recipeSource,
+    handoff.colorLibraryId,
   );
   converter.loadWorkshopImageIntoConverter({
     file,

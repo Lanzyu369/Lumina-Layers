@@ -3,6 +3,7 @@ import type {
   WorkshopColorLibrary,
   WorkshopRecipeSource,
 } from "./contracts";
+import { readWorkshopHandoffColorLibraryId } from "./handoffMetadata";
 
 interface WorkshopSourceBannerProps {
   source: WorkshopRecipeSource;
@@ -17,6 +18,11 @@ export default function WorkshopSourceBanner({
   const moduleLabel = t("workshop_source_banner_module_value")
     .replace("{id}", source.moduleId)
     .replace("{version}", source.moduleVersion);
+  const handoffColorLibraryId =
+    readWorkshopHandoffColorLibraryId(source);
+  const colorLibraryChanged =
+    handoffColorLibraryId !== undefined &&
+    handoffColorLibraryId !== (colorLibrary?.id ?? null);
 
   return (
     <section
@@ -48,6 +54,14 @@ export default function WorkshopSourceBanner({
           </span>
         </div>
       </div>
+      {colorLibraryChanged ? (
+        <p
+          role="status"
+          className="mt-2 text-xs leading-5 text-amber-700 dark:text-amber-300"
+        >
+          {t("workshop_source_banner_library_changed")}
+        </p>
+      ) : null}
       <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
         {t("workshop_source_banner_guidance")}
       </p>

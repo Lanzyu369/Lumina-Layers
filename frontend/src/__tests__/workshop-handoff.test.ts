@@ -7,6 +7,7 @@ import {
   WORKSHOP_HANDOFF_MAX_BINARY_BYTES,
   type WorkshopPngDecoder,
 } from "../workshop/converterHandoff";
+import { readWorkshopHandoffColorLibraryId } from "../workshop/handoffMetadata";
 import { buildWorkshopColorLibrary } from "../workshop/colorLibrary";
 import type {
   WorkshopImageHandoff as SdkWorkshopImageHandoff,
@@ -264,7 +265,7 @@ describe("sandbox Workshop PNG handoff", () => {
     expect(useConverterStore.getState().target_width_mm).toBe(25);
   });
 
-  it("rejects oversized recipe envelopes and a changed color library", async () => {
+  it("rejects oversized recipe envelopes", async () => {
     await expect(
       handoffWorkshopPngToConverter(
         sdkHandoff({
@@ -281,14 +282,42 @@ describe("sandbox Workshop PNG handoff", () => {
     ).rejects.toMatchObject({
       code: "handoff-recipe-too-large",
     });
+  });
+
+  it("accepts an unbound color library while preserving the current converter library", async () => {
+    const before = useConverterStore.getState();
+
+    await expect(
+      handoffWorkshopPngToConverter(
+        sdkHandoff({ colorLibraryId: null }),
+        undefined,
+        { decoder: decoder() },
+      ),
+    ).resolves.toEqual({ status: "completed" });
+
+    const after = useConverterStore.getState();
+    expect(after.workshopSource).toEqual(SDK_SOURCE);
+    expect(
+      readWorkshopHandoffColorLibraryId(after.workshopSource!),
+    ).toBeNull();
+    expect(after.source_version).toBe(before.source_version);
+    expect(after.lut_name).toBe(before.lut_name);
+    expect(after.lut_names).toEqual(before.lut_names);
+    expect(useWidgetStore.getState().activeTab).toBe("converter");
+  });
+
+  it("accepts a stale color library identity because the PNG keeps source colors", async () => {
     await expect(
       handoffWorkshopPngToConverter(
         sdkHandoff({ colorLibraryId: "lut:stale" }),
         undefined,
         { decoder: decoder() },
       ),
-    ).rejects.toMatchObject({
-      code: "handoff-color-library-changed",
-    });
+    ).resolves.toEqual({ status: "completed" });
+    expect(
+      readWorkshopHandoffColorLibraryId(
+        useConverterStore.getState().workshopSource!,
+      ),
+    ).toBe("lut:stale");
   });
 });
