@@ -237,7 +237,12 @@ def test_workshop_v1_routes_are_registered(api_bundle) -> None:
         "/api/workshop/v1/modules/{module_id}/activate",
         "/api/workshop/v1/modules/{module_id}/rollback",
         "/api/workshop/v1/modules/{module_id}/enabled",
+        "/api/workshop/v1/modules/{module_id}/runtime-success",
+        "/api/workshop/v1/modules/{module_id}/runtime-failure",
         "/api/workshop/v1/modules/{module_id}",
+        (
+            "/api/workshop/v1/modules/{module_id}/{version}/details"
+        ),
         (
             "/api/workshop/v1/modules/{module_id}/{version}/runtime"
         ),
@@ -246,6 +251,102 @@ def test_workshop_v1_routes_are_registered(api_bundle) -> None:
             "assets/{asset_path:path}"
         ),
     }.issubset(route_paths)
+
+
+def test_installed_modules_include_public_version_manifests(
+    api_bundle,
+) -> None:
+    client, installer, archive, _registry = api_bundle
+    install_direct(installer, archive)
+
+    response = client.get("/api/workshop/v1/modules")
+
+    assert response.status_code == 200
+    module = response.json()["modules"][0]
+    assert module["version_details"] == [
+        {
+            "version": "1.0.0",
+            "name": {
+                "zh_cn": "测试模块",
+                "en_us": "Fixture module",
+            },
+            "description": {
+                "zh_cn": "Workshop API 测试",
+                "en_us": "Workshop API tests",
+            },
+            "publisher": "Fixture Publisher",
+            "workshop_api_min": "1.0.0",
+            "workshop_api_max_exclusive": "2.0.0",
+            "lumina_version_min": "1.0.0",
+            "permissions": [
+                {
+                    "name": "project.storage",
+                    "reason": "Save fixture projects.",
+                }
+            ],
+            "runtime_url": (
+                "/api/workshop/v1/modules/"
+                "fixture.hello/1.0.0/runtime"
+            ),
+            "details_url": (
+                "/api/workshop/v1/modules/"
+                "fixture.hello/1.0.0/details"
+            ),
+            "icon_url": (
+                "/api/workshop/v1/modules/"
+                "fixture.hello/1.0.0/assets/icon.png"
+            ),
+            "asset_base_url": (
+                "/api/workshop/v1/modules/"
+                "fixture.hello/1.0.0/assets"
+            ),
+        }
+    ]
+    assert str(installer.data_dir) not in response.text
+
+
+def test_module_details_expose_only_bounded_public_documents(
+    api_bundle,
+) -> None:
+    client, installer, archive, _registry = api_bundle
+    install_direct(installer, archive)
+
+    response = client.get(
+        "/api/workshop/v1/modules/fixture.hello/1.0.0/details"
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "module_id": "fixture.hello",
+        "version": "1.0.0",
+        "readme_markdown": "# Fixture\n",
+        "license_text": "MIT\n",
+        "gallery_urls": [],
+    }
+    assert str(installer.data_dir) not in response.text
+
+
+def test_runtime_health_is_persisted_without_exposing_paths(
+    api_bundle,
+) -> None:
+    client, installer, archive, _registry = api_bundle
+    install_direct(installer, archive)
+
+    failed = client.post(
+        "/api/workshop/v1/modules/fixture.hello/runtime-failure"
+    )
+    succeeded = client.post(
+        "/api/workshop/v1/modules/fixture.hello/runtime-success"
+    )
+
+    assert failed.status_code == 200
+    assert failed.json()["module"]["consecutive_start_failures"] == 1
+    assert succeeded.status_code == 200
+    assert (
+        succeeded.json()["module"]["consecutive_start_failures"]
+        == 0
+    )
+    assert str(installer.data_dir) not in failed.text
 
 
 def test_catalog_returns_verified_public_metadata(api_bundle) -> None:

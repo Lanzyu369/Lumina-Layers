@@ -225,6 +225,7 @@ WORKSHOP_STRUCTURED_EVENTS = {
     "workshop_module_activate_done",
     "workshop_module_rollback_done",
     "workshop_module_enabled_done",
+    "workshop_module_runtime_health_done",
     "workshop_module_uninstall_done",
 }
 CONVERTER_STRUCTURED_EVENTS = {

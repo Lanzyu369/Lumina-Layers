@@ -132,6 +132,21 @@ class WorkshopCatalogResponse(WorkshopHttpModel):
     modules: tuple[WorkshopCatalogModuleResponse, ...]
 
 
+class InstalledWorkshopVersionResponse(WorkshopHttpModel):
+    version: str
+    name: LocalizedTextResponse
+    description: LocalizedTextResponse
+    publisher: str
+    workshop_api_min: str
+    workshop_api_max_exclusive: str
+    lumina_version_min: str
+    permissions: tuple[WorkshopPermissionResponse, ...]
+    runtime_url: str
+    details_url: str
+    icon_url: str
+    asset_base_url: str
+
+
 class InstalledWorkshopModuleResponse(WorkshopHttpModel):
     module_id: str
     source: Literal["registry", "github", "local", "seed"]
@@ -147,6 +162,15 @@ class InstalledWorkshopModuleResponse(WorkshopHttpModel):
     runtime_url: str | None
     icon_url: str | None
     asset_base_url: str | None
+    version_details: tuple[InstalledWorkshopVersionResponse, ...]
+
+
+class WorkshopModuleDetailsResponse(WorkshopHttpModel):
+    module_id: str
+    version: str
+    readme_markdown: str
+    license_text: str
+    gallery_urls: tuple[str, ...]
 
 
 class WorkshopModulesResponse(WorkshopHttpModel):

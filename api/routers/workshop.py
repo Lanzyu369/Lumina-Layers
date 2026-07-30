@@ -15,11 +15,13 @@ from urllib.parse import quote
 import httpx
 from fastapi import APIRouter, File, Header, HTTPException, UploadFile
 from fastapi.responses import Response
+from pydantic import ValidationError
 
 from api.file_bridge import UploadTooLargeError, upload_to_tempfile
 from api.schemas.workshop import (
     GithubInstallRequest,
     InstalledWorkshopModuleResponse,
+    InstalledWorkshopVersionResponse,
     LocalizedTextResponse,
     ModuleActivateRequest,
     ModuleEnabledRequest,
@@ -28,6 +30,7 @@ from api.schemas.workshop import (
     WorkshopCatalogModuleResponse,
     WorkshopCatalogResponse,
     WorkshopCatalogVersionResponse,
+    WorkshopModuleDetailsResponse,
     WorkshopModuleMutationResponse,
     WorkshopModulesResponse,
     WorkshopPermissionResponse,
@@ -48,13 +51,17 @@ from core.workshop import (
     resolve_github_release_package,
 )
 from core.workshop.constants import (
+    MAX_GALLERY_FILES,
+    MAX_MANIFEST_BYTES,
     MAX_PACKAGE_BYTES,
+    MAX_TEXT_DOCUMENT_BYTES,
     WORKSHOP_API_VERSION,
 )
 from core.workshop.models import (
     RegistryIndex,
     RegistryModule,
     RegistryRefreshResult,
+    WorkshopManifestV1,
 )
 from core.workshop.registry_client import select_install_candidate
 
@@ -68,12 +75,12 @@ _PUBLIC_ASSET_EXTENSIONS = frozenset(
 )
 _RUNTIME_CSP = (
     "default-src 'none'; "
-    "script-src 'unsafe-inline' blob:; "
+    "script-src 'unsafe-inline'; "
     "style-src 'unsafe-inline'; "
     "img-src data: blob:; "
     "font-src data:; "
     "media-src data: blob:; "
-    "worker-src blob:; "
+    "worker-src data: blob:; "
     "connect-src 'none'; "
     "object-src 'none'; "
     "frame-src 'none'; "
@@ -96,6 +103,8 @@ _PUBLIC_ASSET_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
 }
+
+
 def get_workshop_installer() -> WorkshopInstaller:
     """Build a filesystem-scoped Workshop installer.
 
@@ -177,9 +186,100 @@ def _module_version_for_assets(
     return None
 
 
+def _read_bounded_utf8(
+    root: Path,
+    relative_path: str,
+    *,
+    maximum_bytes: int,
+) -> str:
+    """Read one expected regular UTF-8 file without following symlinks."""
+
+    if maximum_bytes < 1:
+        raise ValueError("maximum_bytes must be positive")
+    if root.is_symlink() or not root.is_dir():
+        raise OSError("Workshop version root is unavailable")
+    path = root / relative_path
+    current = root
+    for part in Path(relative_path).parts:
+        if part in {"", ".", ".."}:
+            raise OSError("Workshop document path is invalid")
+        current = current / part
+        if current.is_symlink():
+            raise OSError("Workshop document cannot be a symlink")
+    if not path.is_file():
+        raise OSError("Workshop document is unavailable")
+    stat = path.stat()
+    if stat.st_size > maximum_bytes:
+        raise OSError("Workshop document exceeds its size limit")
+    content = path.read_bytes()
+    if len(content) > maximum_bytes:
+        raise OSError("Workshop document exceeds its size limit")
+    return content.decode("utf-8")
+
+
+def _installed_version_response(
+    installer: WorkshopInstaller,
+    state: InstalledModuleState,
+    version: str,
+) -> InstalledWorkshopVersionResponse | None:
+    root = installer.version_path(state.module_id, version)
+    try:
+        manifest_text = _read_bounded_utf8(
+            root,
+            "manifest.json",
+            maximum_bytes=MAX_MANIFEST_BYTES,
+        )
+        manifest = WorkshopManifestV1.model_validate_json(manifest_text)
+        if manifest.id != state.module_id or manifest.version != version:
+            raise ValueError("installed manifest identity mismatch")
+    except (OSError, UnicodeError, ValueError, ValidationError) as exc:
+        log.warning(
+            "Installed Workshop manifest could not be read",
+            extra={
+                "event": "workshop_module_manifest_read_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+                "module_id": state.module_id,
+                "version": version,
+            },
+        )
+        return None
+
+    module_id = quote(state.module_id, safe="")
+    encoded_version = quote(version, safe="")
+    version_base = (
+        f"/api/workshop/v1/modules/{module_id}/{encoded_version}"
+    )
+    asset_base_url = f"{version_base}/assets"
+    return InstalledWorkshopVersionResponse(
+        version=version,
+        name=_localized_response(manifest.name),
+        description=_localized_response(manifest.description),
+        publisher=manifest.publisher,
+        workshop_api_min=manifest.workshop_api.minimum,
+        workshop_api_max_exclusive=(
+            manifest.workshop_api.max_exclusive
+        ),
+        lumina_version_min=manifest.lumina_version.minimum,
+        permissions=tuple(
+            WorkshopPermissionResponse(
+                name=permission.name,
+                reason=permission.reason,
+            )
+            for permission in manifest.permissions
+        ),
+        runtime_url=f"{version_base}/runtime",
+        details_url=f"{version_base}/details",
+        icon_url=f"{asset_base_url}/icon.png",
+        asset_base_url=asset_base_url,
+    )
+
+
 def _state_response(
     state: InstalledModuleState,
+    installer: WorkshopInstaller | None = None,
 ) -> InstalledWorkshopModuleResponse:
+    installer = installer or get_workshop_installer()
     module_id = quote(state.module_id, safe="")
     asset_version = _module_version_for_assets(state)
     asset_base_url = None
@@ -213,6 +313,18 @@ def _state_response(
         runtime_url=runtime_url,
         icon_url=icon_url,
         asset_base_url=asset_base_url,
+        version_details=tuple(
+            detail
+            for version in state.versions
+            if (
+                detail := _installed_version_response(
+                    installer,
+                    state,
+                    version,
+                )
+            )
+            is not None
+        ),
     )
 
 
@@ -344,7 +456,10 @@ def workshop_modules() -> WorkshopModulesResponse:
 
     installer = get_workshop_installer()
     return WorkshopModulesResponse(
-        modules=tuple(_state_response(state) for state in installer.list())
+        modules=tuple(
+            _state_response(state, installer)
+            for state in installer.list()
+        )
     )
 
 
@@ -758,7 +873,11 @@ def workshop_uninstall_module(
         },
     )
     return WorkshopModuleMutationResponse(
-        module=_state_response(state) if state is not None else None
+        module=(
+            _state_response(state, installer)
+            if state is not None
+            else None
+        )
     )
 
 
@@ -847,6 +966,155 @@ def _verify_runtime_token(
             module_id=module_id,
             version=version,
         )
+
+
+@router.post(
+    "/modules/{module_id}/runtime-success",
+    response_model=WorkshopModuleMutationResponse,
+)
+def workshop_record_runtime_success(
+    module_id: str,
+) -> WorkshopModuleMutationResponse:
+    """Persist a successful sandbox start for one installed module."""
+
+    installer = get_workshop_installer()
+    state = _run_install_mutation(
+        event="workshop_module_runtime_health_failed",
+        module_id=module_id,
+        version=None,
+        operation=lambda: installer.record_start_success(module_id),
+    )
+    log.info(
+        "Creative Workshop runtime health changed",
+        extra={
+            "event": "workshop_module_runtime_health_done",
+            "module_id": module_id,
+            "version": state.active_version,
+            "runtime_outcome": "success",
+            "consecutive_start_failures": (
+                state.consecutive_start_failures
+            ),
+        },
+    )
+    return WorkshopModuleMutationResponse(
+        module=_state_response(state, installer)
+    )
+
+
+@router.post(
+    "/modules/{module_id}/runtime-failure",
+    response_model=WorkshopModuleMutationResponse,
+)
+def workshop_record_runtime_failure(
+    module_id: str,
+) -> WorkshopModuleMutationResponse:
+    """Persist a failed sandbox start and apply the rollback policy."""
+
+    installer = get_workshop_installer()
+    state = _run_install_mutation(
+        event="workshop_module_runtime_health_failed",
+        module_id=module_id,
+        version=None,
+        operation=lambda: installer.record_start_failure(module_id),
+    )
+    log.info(
+        "Creative Workshop runtime health changed",
+        extra={
+            "event": "workshop_module_runtime_health_done",
+            "module_id": module_id,
+            "version": state.active_version,
+            "runtime_outcome": "failure",
+            "consecutive_start_failures": (
+                state.consecutive_start_failures
+            ),
+        },
+    )
+    return WorkshopModuleMutationResponse(
+        module=_state_response(state, installer)
+    )
+
+
+@router.get(
+    "/modules/{module_id}/{version}/details",
+    response_model=WorkshopModuleDetailsResponse,
+)
+def workshop_module_details(
+    module_id: str,
+    version: str,
+) -> WorkshopModuleDetailsResponse:
+    """Return bounded public documentation for an installed version."""
+
+    installer = get_workshop_installer()
+    _require_runtime_state(
+        installer,
+        module_id,
+        version,
+        require_enabled=False,
+    )
+    try:
+        root = installer.version_path(module_id, version)
+        readme_markdown = _read_bounded_utf8(
+            root,
+            "README.md",
+            maximum_bytes=MAX_TEXT_DOCUMENT_BYTES,
+        )
+        license_text = _read_bounded_utf8(
+            root,
+            "LICENSE",
+            maximum_bytes=MAX_TEXT_DOCUMENT_BYTES,
+        )
+        gallery_root = root / "assets" / "gallery"
+        gallery_assets: list[str] = []
+        if gallery_root.is_dir() and not gallery_root.is_symlink():
+            for path in sorted(gallery_root.rglob("*")):
+                if not path.is_file():
+                    continue
+                relative = path.relative_to(root / "assets").as_posix()
+                if (
+                    _resolve_public_asset(
+                        installer,
+                        module_id,
+                        version,
+                        relative,
+                    )
+                    is None
+                ):
+                    continue
+                gallery_assets.append(relative)
+                if len(gallery_assets) > MAX_GALLERY_FILES:
+                    raise OSError(
+                        "Workshop gallery exceeds its file limit"
+                    )
+    except (WorkshopInstallError, OSError, UnicodeError) as exc:
+        _raise_workshop_http_error(
+            event="workshop_module_details_failed",
+            exc=exc,
+            status_code=503,
+            detail="The Workshop module details are unavailable.",
+            module_id=module_id,
+            version=version,
+        )
+
+    module_url = quote(module_id, safe="")
+    version_url = quote(version, safe="")
+    asset_base = (
+        f"/api/workshop/v1/modules/{module_url}/"
+        f"{version_url}/assets"
+    )
+    return WorkshopModuleDetailsResponse(
+        module_id=module_id,
+        version=version,
+        readme_markdown=readme_markdown,
+        license_text=license_text,
+        gallery_urls=tuple(
+            f"{asset_base}/"
+            + "/".join(
+                quote(part, safe="")
+                for part in relative.split("/")
+            )
+            for relative in gallery_assets
+        ),
+    )
 
 
 def _inject_runtime_csp(html: str) -> str:
