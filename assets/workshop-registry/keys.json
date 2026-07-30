@@ -1,4 +1,10 @@
 {
   "schemaVersion": 1,
-  "keys": []
+  "keys": [
+    {
+      "algorithm": "Ed25519",
+      "keyId": "registry-2026-01",
+      "publicKey": "IRifgasWrlmFxj3f27kVu+lVEfTT5uMJAzEZv4Zd2HI="
+    }
+  ]
 }
