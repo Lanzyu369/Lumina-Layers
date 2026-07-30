@@ -16,3 +16,9 @@ class WorkshopPackageError(WorkshopError):
     创意工坊安装包未通过安全校验时抛出。
     """
 
+
+class WorkshopRegistryError(WorkshopError):
+    """Raised when a Registry index or signature is not trustworthy.
+
+    创意工坊 Registry 索引或签名不可信时抛出。
+    """
