@@ -3,7 +3,7 @@ import type {
   WorkshopProjectRecord as SdkWorkshopProjectRecord,
 } from "../contracts";
 import { createBrowserWorkshopFileServices } from "../browserFiles";
-import { buildWorkshopColorLibrary } from "../colorLibrary";
+import { readWorkshopColorLibrary } from "../colorLibrary";
 import { handoffWorkshopPngToConverter } from "../converterHandoff";
 import type { ManagedWorkshopProjectStorage } from "../projectStorage";
 import type { WorkshopDiagnosticSummary } from "../types";
@@ -165,7 +165,8 @@ export function createWorkshopManagerHandlers(
       );
     },
 
-    "colorLibrary.read": () => buildWorkshopColorLibrary(),
+    "colorLibrary.read": (_payload, context) =>
+      readWorkshopColorLibrary({ signal: context.signal }),
 
     "handoff.image": async (payload, context) => {
       const handoff = payload as WorkshopImageHandoff;

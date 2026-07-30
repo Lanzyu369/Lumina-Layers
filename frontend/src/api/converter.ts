@@ -238,10 +238,14 @@ export async function uploadHeightmap(
 /** 获取 LUT 中所有可用颜色 */
 export async function fetchLutColors(
   lutName: string,
+  signal?: AbortSignal,
 ): Promise<LutColorsResponse> {
   const response = await apiClient.get<LutColorsResponse>(
     `/lut/${encodeURIComponent(lutName)}/colors`,
-    { timeout: 3_600_000 },
+    {
+      timeout: 3_600_000,
+      ...(signal ? { signal } : {}),
+    },
   );
   return response.data;
 }

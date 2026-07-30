@@ -3,6 +3,7 @@ import type {
   LutInfoResponse,
   SavedMaterialLibraryItem,
 } from "../api/types";
+import { listGradientCardMaterials } from "../api/extractor";
 import {
   resolveConverterSourceSelection,
   useConverterStore,
@@ -289,4 +290,199 @@ export function buildWorkshopColorLibrary(
     return nativeLibrary(state);
   }
   return legacyLibrary(state);
+}
+
+type WorkshopMaterialCatalogLoader = (
+  signal?: AbortSignal,
+) => Promise<{
+  materials?: SavedMaterialLibraryItem[];
+}>;
+
+interface ReadWorkshopColorLibraryOptions {
+  signal?: AbortSignal;
+  loadMaterialCatalog?: WorkshopMaterialCatalogLoader;
+}
+
+interface ColorLibraryFlight {
+  controller: AbortController;
+  promise: Promise<WorkshopColorLibrary | null>;
+  settled: boolean;
+  waiters: number;
+}
+
+const colorLibraryFlights = new Map<string, ColorLibraryFlight>();
+
+function selectionKey(state: WorkshopColorState): string {
+  if (state.source_version === "material") {
+    return JSON.stringify([
+      "material",
+      state.selectedMaterialDirNames,
+    ]);
+  }
+  if (state.source_version === "native") {
+    return JSON.stringify([
+      "native",
+      state.selectedNativeBrandKey,
+      state.selectedNativeDbNames,
+    ]);
+  }
+  return JSON.stringify(["legacy", state.lut_names, state.lut_name]);
+}
+
+function abortReason(signal: AbortSignal): unknown {
+  return (
+    signal.reason ??
+    new DOMException("Workshop color-library read aborted.", "AbortError")
+  );
+}
+
+function assertNotAborted(signal: AbortSignal): void {
+  if (signal.aborted) {
+    throw abortReason(signal);
+  }
+}
+
+async function hydrateWorkshopColorLibrary(
+  key: string,
+  signal: AbortSignal,
+  loadMaterialCatalog: WorkshopMaterialCatalogLoader,
+): Promise<WorkshopColorLibrary | null> {
+  assertNotAborted(signal);
+  let state = useConverterStore.getState();
+  if (selectionKey(state) !== key) {
+    return null;
+  }
+
+  if (state.source_version === "material") {
+    if (state.selectedMaterialDirNames.length === 0) {
+      return null;
+    }
+    try {
+      const response = await loadMaterialCatalog(signal);
+      assertNotAborted(signal);
+      state = useConverterStore.getState();
+      if (selectionKey(state) !== key) {
+        return null;
+      }
+      updateWorkshopMaterialCatalog(response.materials ?? []);
+      return buildWorkshopColorLibrary(state);
+    } catch (error) {
+      assertNotAborted(signal);
+      // The SDK read contract is nullable. Keep an unavailable library
+      // non-fatal so modules can continue editing with source colors.
+      void error;
+      return null;
+    }
+  }
+
+  const catalogMissing =
+    state.source_version === "legacy"
+      ? state.lutListFull.length === 0
+      : state.nativeBrandGroups.length === 0;
+  if (catalogMissing) {
+    await state.fetchLutCatalog(signal);
+    assertNotAborted(signal);
+    state = useConverterStore.getState();
+    if (selectionKey(state) !== key) {
+      return null;
+    }
+  }
+
+  const selection = resolveConverterSourceSelection(state);
+  const paletteSourceName =
+    state.source_version === "native"
+      ? selection.native.db_names[0] ?? ""
+      : selection.lut_name;
+  if (paletteSourceName) {
+    await state.fetchLutColors(paletteSourceName, signal);
+    assertNotAborted(signal);
+  }
+  state = useConverterStore.getState();
+  return selectionKey(state) === key
+    ? buildWorkshopColorLibrary(state)
+    : null;
+}
+
+function waitForColorLibraryFlight(
+  flight: ColorLibraryFlight,
+  signal?: AbortSignal,
+): Promise<WorkshopColorLibrary | null> {
+  flight.waiters += 1;
+  return new Promise((resolve, reject) => {
+    let finished = false;
+    const release = () => {
+      if (finished) return;
+      finished = true;
+      signal?.removeEventListener("abort", onAbort);
+      flight.waiters -= 1;
+      if (flight.waiters === 0 && !flight.settled) {
+        flight.controller.abort();
+      }
+    };
+    const onAbort = () => {
+      release();
+      reject(signal ? abortReason(signal) : undefined);
+    };
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+    void flight.promise.then(
+      (library) => {
+        release();
+        resolve(library);
+      },
+      (error) => {
+        release();
+        reject(error);
+      },
+    );
+  });
+}
+
+/**
+ * Return the active public print-color library, hydrating converter data when
+ * Workshop is the first page opened after startup.
+ *
+ * 返回当前公开打印色库；当创意工坊是启动后首个页面时，按需补齐转换器数据。
+ */
+export async function readWorkshopColorLibrary(
+  options: ReadWorkshopColorLibraryOptions = {},
+): Promise<WorkshopColorLibrary | null> {
+  if (options.signal?.aborted) {
+    throw abortReason(options.signal);
+  }
+  const ready = buildWorkshopColorLibrary();
+  if (ready !== null) {
+    return ready;
+  }
+
+  const key = selectionKey(useConverterStore.getState());
+  let flight = colorLibraryFlights.get(key);
+  if (!flight) {
+    const controller = new AbortController();
+    const loadMaterialCatalog =
+      options.loadMaterialCatalog ??
+      ((signal?: AbortSignal) =>
+        listGradientCardMaterials({ signal }));
+    flight = {
+      controller,
+      promise: Promise.resolve(null),
+      settled: false,
+      waiters: 0,
+    };
+    flight.promise = hydrateWorkshopColorLibrary(
+      key,
+      controller.signal,
+      loadMaterialCatalog,
+    ).finally(() => {
+      flight!.settled = true;
+      if (colorLibraryFlights.get(key) === flight) {
+        colorLibraryFlights.delete(key);
+      }
+    });
+    colorLibraryFlights.set(key, flight);
+  }
+  return waitForColorLibraryFlight(flight, options.signal);
 }
