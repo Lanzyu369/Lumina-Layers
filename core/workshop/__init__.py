@@ -23,6 +23,7 @@ from .release_client import (
     download_registry_package,
     resolve_github_release_package,
 )
+from .seed import WorkshopSeedLock, load_workshop_seed_lock
 
 __all__ = [
     "InspectedWorkshopPackage",
@@ -36,9 +37,11 @@ __all__ = [
     "WorkshopPackageError",
     "WorkshopRegistryError",
     "WorkshopReleaseError",
+    "WorkshopSeedLock",
+    "download_registry_package",
     "extract_inspected_package",
     "inspect_workshop_package",
     "load_registry_keys",
-    "download_registry_package",
+    "load_workshop_seed_lock",
     "resolve_github_release_package",
 ]
