@@ -17,6 +17,7 @@ const path = require("path");
 const {
   createWorkshopSessionToken,
   isAllowedWorkshopDownload,
+  isAllowedWorkshopIpcSender,
   isAllowedWorkshopPermission,
   isAllowedWorkshopPopup,
   isAllowedWorkshopRequest,
@@ -24,7 +25,11 @@ const {
   resolveWorkshopRuntimeRequest,
   shouldBlockWorkshopNavigation,
   shouldBlockWorkshopRedirect,
+  shouldRetryFrontendLoad,
 } = require("./workshop-security.cjs");
+const {
+  loadWorkshopImageFile,
+} = require("./workshop-file-picker.cjs");
 
 // ═══════════════════════════════════════════════════════════
 //  Constants
@@ -508,6 +513,7 @@ function installWorkshopSessionSecurity() {
       const allowed = isAllowedWorkshopRequest({
         frameUrl: details.frame?.url ?? null,
         initiator: details.referrer || null,
+        parentFrameUrl: details.frame?.parent?.url ?? null,
         resourceType: details.resourceType,
         trustedInternal,
         url: details.url,
@@ -727,14 +733,31 @@ function createWindow() {
   });
 
   if (isDev) {
-    win.webContents.on("did-fail-load", () => {
-      logErr("Frontend failed to load, retrying in 2s...");
-      setTimeout(() => {
-        if (win && !win.isDestroyed()) {
-          win.loadURL(FRONTEND_URL);
+    win.webContents.on(
+      "did-fail-load",
+      (
+        _event,
+        _errorCode,
+        _errorDescription,
+        validatedUrl,
+        isMainFrame,
+      ) => {
+        if (
+          !shouldRetryFrontendLoad({
+            isMainFrame,
+            validatedUrl,
+          })
+        ) {
+          return;
         }
-      }, 2000);
-    });
+        logErr("Frontend failed to load, retrying in 2s...");
+        setTimeout(() => {
+          if (win && !win.isDestroyed()) {
+            win.loadURL(FRONTEND_URL);
+          }
+        }, 2000);
+      },
+    );
   }
 }
 
@@ -757,6 +780,31 @@ ipcMain.handle("get-workshop-runtime-mode", () => ({
   mode: "desktop-secure",
   safeMode: workshopSafeMode,
 }));
+
+ipcMain.handle("pick-workshop-image", async (event) => {
+  const senderUrl = event.senderFrame?.url ?? null;
+  if (!isAllowedWorkshopIpcSender(senderUrl)) {
+    throw new Error("Workshop image picker denied for this frame.");
+  }
+  const options = {
+    title: "Select a Workshop image",
+    properties: ["openFile"],
+    filters: [
+      {
+        name: "Images",
+        extensions: ["png", "jpg", "jpeg", "webp"],
+      },
+    ],
+  };
+  const result =
+    win && !win.isDestroyed()
+      ? await dialog.showOpenDialog(win, options)
+      : await dialog.showOpenDialog(options);
+  if (result.canceled || result.filePaths.length !== 1) {
+    return null;
+  }
+  return loadWorkshopImageFile(result.filePaths[0]);
+});
 
 // ═══════════════════════════════════════════════════════════
 //  App lifecycle

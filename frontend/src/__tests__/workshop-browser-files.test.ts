@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   WorkshopFileError,
+  chooseWorkshopImageFile,
   createBrowserWorkshopFileServices,
   isSupportedWorkshopImage,
 } from "../workshop/browserFiles";
@@ -14,6 +15,28 @@ const RASTER: WorkshopRaster = {
 };
 
 describe("browser workshop file services", () => {
+  it("uses the narrow Electron picker without exposing a filesystem path", async () => {
+    const bytes = new Uint8Array([137, 80, 78, 71]);
+    const pickWorkshopImage = vi.fn().mockResolvedValue({
+      name: "pattern.png",
+      mimeType: "image/png",
+      bytes,
+    });
+
+    const file = await chooseWorkshopImageFile({
+      pickWorkshopImage,
+    });
+
+    expect(pickWorkshopImage).toHaveBeenCalledOnce();
+    expect(file).toBeInstanceOf(File);
+    expect(file).toMatchObject({
+      name: "pattern.png",
+      type: "image/png",
+      size: bytes.byteLength,
+    });
+    expect(file).not.toHaveProperty("path");
+  });
+
   it("accepts only PNG, JPEG, and WebP source images", () => {
     expect(
       isSupportedWorkshopImage(

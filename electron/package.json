@@ -59,6 +59,7 @@
     "files": [
       "main.cjs",
       "preload.cjs",
+      "workshop-file-picker.cjs",
       "workshop-security.cjs",
       "splash.html",
       "build/icon.png",

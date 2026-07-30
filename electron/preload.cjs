@@ -5,4 +5,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getAppVersion: () => ipcRenderer.invoke("get-app-version"),
   getWorkshopRuntimeMode: () =>
     ipcRenderer.invoke("get-workshop-runtime-mode"),
+  pickWorkshopImage: () =>
+    ipcRenderer.invoke("pick-workshop-image"),
 });

@@ -25,6 +25,7 @@ export {
 } from "./payloadValidation";
 
 const REQUEST_TIMEOUT_MS = 30_000;
+const IMAGE_PICK_TIMEOUT_MS = 300_000;
 const HANDOFF_TIMEOUT_MS = 120_000;
 const TOKEN_REFILL_PER_SECOND = 30;
 const TOKEN_BURST_CAPACITY = 60;
@@ -182,9 +183,14 @@ class TokenBucket {
 }
 
 function requestTimeout(method: WorkshopRpcMethod): number {
-  return method === "handoff.image"
-    ? HANDOFF_TIMEOUT_MS
-    : REQUEST_TIMEOUT_MS;
+  switch (method) {
+    case "image.pick":
+      return IMAGE_PICK_TIMEOUT_MS;
+    case "handoff.image":
+      return HANDOFF_TIMEOUT_MS;
+    default:
+      return REQUEST_TIMEOUT_MS;
+  }
 }
 
 class WorkshopRpcHostImpl implements WorkshopRpcHost {

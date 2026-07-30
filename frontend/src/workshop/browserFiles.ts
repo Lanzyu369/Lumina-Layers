@@ -27,11 +27,19 @@ export interface BrowserWorkshopFileAdapters {
   encodePng(raster: WorkshopRaster, filename: string): Promise<File>;
 }
 
+export interface WorkshopDesktopImagePicker {
+  pickWorkshopImage(): Promise<{
+    name: string;
+    mimeType: string;
+    bytes: ArrayBuffer | Uint8Array;
+  } | null>;
+}
+
 export function isSupportedWorkshopImage(file: File): boolean {
   return SUPPORTED_IMAGE_TYPES.has(file.type.toLowerCase());
 }
 
-function chooseImageFile(accept: string): Promise<File | null> {
+function chooseBrowserImageFile(accept: string): Promise<File | null> {
   return new Promise<File | null>((resolve) => {
     const input = document.createElement("input");
     input.type = "file";
@@ -57,6 +65,37 @@ function chooseImageFile(accept: string): Promise<File | null> {
     input.addEventListener("cancel", () => finish(null), { once: true });
     document.body.appendChild(input);
     input.click();
+  });
+}
+
+export async function chooseWorkshopImageFile(
+  desktopPicker:
+    | WorkshopDesktopImagePicker
+    | null
+    | undefined = undefined,
+  accept = WORKSHOP_IMAGE_ACCEPT,
+): Promise<File | null> {
+  const resolvedPicker =
+    desktopPicker === undefined
+      ? (
+          window as unknown as {
+            electronAPI?: WorkshopDesktopImagePicker;
+          }
+        ).electronAPI ?? null
+      : desktopPicker;
+  if (resolvedPicker === null) {
+    return chooseBrowserImageFile(accept);
+  }
+  const selected = await resolvedPicker.pickWorkshopImage();
+  if (selected === null) {
+    return null;
+  }
+  const bytes =
+    selected.bytes instanceof Uint8Array
+      ? Uint8Array.from(selected.bytes).buffer
+      : selected.bytes.slice(0);
+  return new File([bytes], selected.name, {
+    type: selected.mimeType,
   });
 }
 
@@ -200,7 +239,8 @@ async function encodePng(
 }
 
 const DEFAULT_ADAPTERS: BrowserWorkshopFileAdapters = {
-  chooseImageFile,
+  chooseImageFile: (accept) =>
+    chooseWorkshopImageFile(undefined, accept),
   decodeImage,
   encodePng,
 };

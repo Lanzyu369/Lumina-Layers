@@ -52,9 +52,9 @@ import {
 } from "./store";
 
 interface PermissionPrompt {
-  module: InstalledWorkshopModule;
-  version: WorkshopCatalogVersion;
-  added: WorkshopCatalogVersion["permissions"];
+  kind: "staged" | "update";
+  added: InstalledWorkshopVersion["permissions"];
+  confirm(): void;
 }
 
 interface UninstallPrompt {
@@ -252,6 +252,7 @@ interface InstalledCardProps {
     | "unsafe-development";
   busy: boolean;
   onOpen(version: string): void;
+  onOpenCandidate(): void;
   onDetails(url: string): void;
   onUpdate(version: WorkshopCatalogVersion): void;
   onRollback(): void;
@@ -267,6 +268,7 @@ function InstalledCard({
   runtimeMode,
   busy,
   onOpen,
+  onOpenCandidate,
   onDetails,
   onUpdate,
   onRollback,
@@ -326,6 +328,14 @@ function InstalledCard({
               )}
             </span>
           ) : null}
+          {module.candidate_version ? (
+            <span>
+              {t("workshop.manager.candidateVersion").replace(
+                "{version}",
+                module.candidate_version,
+              )}
+            </span>
+          ) : null}
           {update ? (
             <span>
               {t("workshop.manager.updateAvailable").replace(
@@ -365,6 +375,21 @@ function InstalledCard({
               }
               onClick={() => onOpen(module.active_version as string)}
               disabled={!module.enabled || !openAllowed}
+              className="flex-1"
+            />
+          ) : null}
+          {module.candidate_version ? (
+            <Button
+              label={
+                openAllowed
+                  ? t("workshop.manager.reviewCandidate")
+                  : t("workshop.manager.desktopOnly")
+              }
+              onClick={onOpenCandidate}
+              disabled={!module.enabled || !openAllowed}
+              variant={
+                module.active_version ? "secondary" : undefined
+              }
               className="flex-1"
             />
           ) : null}
@@ -754,6 +779,44 @@ export function WorkshopPanel({
     [api, openModule, runModuleMutation, runtimeMode],
   );
 
+  const requestStagedCandidate = useCallback(
+    (module: InstalledWorkshopModule) => {
+      const candidateVersion = module.candidate_version;
+      if (
+        candidateVersion === null ||
+        !canOpenModule(module, runtimeMode)
+      ) {
+        return;
+      }
+      const candidate = moduleVersion(module, candidateVersion);
+      if (candidate === null) {
+        setOperationError(t("workshop.manager.operationError"));
+        return;
+      }
+      const currentPermissions = new Set(
+        moduleVersion(
+          module,
+          module.active_version,
+        )?.permissions.map((permission) => permission.name) ?? [],
+      );
+      const added = candidate.permissions.filter(
+        (permission) => !currentPermissions.has(permission.name),
+      );
+      const confirm = () =>
+        openModule(module.module_id, candidateVersion);
+      if (added.length > 0) {
+        setPermissionPrompt({
+          kind: "staged",
+          added,
+          confirm,
+        });
+        return;
+      }
+      confirm();
+    },
+    [openModule, runtimeMode, t],
+  );
+
   const requestUpdate = useCallback(
     (
       module: InstalledWorkshopModule,
@@ -768,7 +831,13 @@ export function WorkshopPanel({
         (permission) => !currentPermissions.has(permission.name),
       );
       if (added.length > 0) {
-        setPermissionPrompt({ module, version, added });
+        setPermissionPrompt({
+          kind: "update",
+          added,
+          confirm: () => {
+            void installUpdate(module, version);
+          },
+        });
         return;
       }
       void installUpdate(module, version);
@@ -892,9 +961,11 @@ export function WorkshopPanel({
       const result = await runModuleMutation("local-install", () =>
         api.installLocal(file),
       );
-      void result;
+      if (result !== null) {
+        requestStagedCandidate(result);
+      }
     },
-    [api, runModuleMutation, t],
+    [api, requestStagedCandidate, runModuleMutation, t],
   );
 
   const installGithub = useCallback(async () => {
@@ -912,14 +983,29 @@ export function WorkshopPanel({
     const result = await runModuleMutation("github-install", () =>
       api.installGithub(githubRepository, githubVersion),
     );
-    void result;
+    if (result !== null) {
+      requestStagedCandidate(result);
+    }
   }, [
     api,
     githubRepository,
     githubVersion,
+    requestStagedCandidate,
     runModuleMutation,
     t,
   ]);
+
+  const installRegistry = useCallback(
+    async (moduleId: string, version: string) => {
+      const result = await runModuleMutation(moduleId, () =>
+        api.installRegistry(moduleId, version),
+      );
+      if (result !== null) {
+        requestStagedCandidate(result);
+      }
+    },
+    [api, requestStagedCandidate, runModuleMutation],
+  );
 
   if (selectedModule && selectedVersion && activeModule) {
     return (
@@ -1091,6 +1177,9 @@ export function WorkshopPanel({
                   onOpen={(version) =>
                     openModule(module.module_id, version)
                   }
+                  onOpenCandidate={() =>
+                    requestStagedCandidate(module)
+                  }
                   onDetails={setDetailsUrl}
                   onUpdate={(version) =>
                     requestUpdate(module, version)
@@ -1204,13 +1293,9 @@ export function WorkshopPanel({
                               candidate,
                             );
                           } else {
-                            void runModuleMutation(
+                            void installRegistry(
                               module.module_id,
-                              () =>
-                                api.installRegistry(
-                                  module.module_id,
-                                  candidate.version,
-                                ),
+                              candidate.version,
                             );
                           }
                         }}
@@ -1303,18 +1388,34 @@ export function WorkshopPanel({
         <div
           role="dialog"
           aria-modal="true"
-          aria-label={t("workshop.manager.permissionTitle")}
+          aria-label={t(
+            permissionPrompt.kind === "staged"
+              ? "workshop.manager.permissionInstallTitle"
+              : "workshop.manager.permissionTitle",
+          )}
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm"
         >
           <section className="panel-section w-full max-w-lg rounded-[28px] p-5 shadow-2xl">
             <h2 className="text-xl font-semibold tracking-tight text-slate-900 dark:text-slate-50">
-              {t("workshop.manager.permissionTitle")}
+              {t(
+                permissionPrompt.kind === "staged"
+                  ? "workshop.manager.permissionInstallTitle"
+                  : "workshop.manager.permissionTitle",
+              )}
             </h2>
             <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-              {t("workshop.manager.permissionDescription")}
+              {t(
+                permissionPrompt.kind === "staged"
+                  ? "workshop.manager.permissionInstallDescription"
+                  : "workshop.manager.permissionDescription",
+              )}
             </p>
             <h3 className="mt-5 text-sm font-semibold text-slate-900 dark:text-slate-50">
-              {t("workshop.manager.newPermissions")}
+              {t(
+                permissionPrompt.kind === "staged"
+                  ? "workshop.manager.requestedPermissions"
+                  : "workshop.manager.newPermissions",
+              )}
             </h3>
             <ul className="mt-2 flex flex-col gap-2">
               {permissionPrompt.added.map((permission) => (
@@ -1338,11 +1439,15 @@ export function WorkshopPanel({
                 onClick={() => setPermissionPrompt(null)}
               />
               <Button
-                label={t("workshop.manager.confirmPermissions")}
+                label={t(
+                  permissionPrompt.kind === "staged"
+                    ? "workshop.manager.confirmPermissionsAndOpen"
+                    : "workshop.manager.confirmPermissions",
+                )}
                 onClick={() => {
                   const prompt = permissionPrompt;
                   setPermissionPrompt(null);
-                  void installUpdate(prompt.module, prompt.version);
+                  prompt.confirm();
                 }}
               />
             </div>

@@ -81,6 +81,7 @@ function postReady(
 
 function rpcRequest(
   method:
+    | "image.pick"
     | "status.progress"
     | "lifecycle.ready"
     | "colorLibrary.read",
@@ -234,6 +235,57 @@ describe("WorkshopFrame", () => {
     view.unmount();
     expect(channel.port1.close).toHaveBeenCalledTimes(1);
     expect(channel.port1.onmessage).toBeNull();
+  });
+
+  it("keeps the active port across semantically identical module props", async () => {
+    const channel = channelFixture();
+    const imagePick = vi.fn().mockResolvedValue(null);
+    const handlers = {
+      "image.pick": imagePick,
+    };
+    const initialPrepareCandidate = vi.fn();
+    const moduleOverrides: Partial<WorkshopFrameModule> = {
+      permissions: ["image.pick"],
+    };
+    const view = render(
+      <WorkshopFrame
+        module={installedFixture(moduleOverrides)}
+        handlers={handlers}
+        createChannel={channel.createChannel}
+        prepareCandidate={initialPrepareCandidate}
+        disableVersion={vi.fn()}
+        onStartFailure={vi.fn()}
+      />,
+    );
+    const iframe = screen.getByTitle("Fixture Hello");
+    fireEvent.load(iframe);
+    act(() => {
+      postReady((iframe as HTMLIFrameElement).contentWindow);
+    });
+    await waitFor(() =>
+      expect(channel.port1.start).toHaveBeenCalledTimes(1),
+    );
+
+    view.rerender(
+      <WorkshopFrame
+        module={installedFixture(moduleOverrides)}
+        handlers={handlers}
+        createChannel={channel.createChannel}
+        prepareCandidate={vi.fn()}
+        disableVersion={vi.fn()}
+        onStartFailure={vi.fn()}
+      />,
+    );
+
+    expect(channel.port1.close).not.toHaveBeenCalled();
+    act(() => {
+      channel.port1.onmessage?.(
+        new MessageEvent("message", {
+          data: rpcRequest("image.pick", {}, "pick-after-rerender"),
+        }),
+      );
+    });
+    await waitFor(() => expect(imagePick).toHaveBeenCalledTimes(1));
   });
 
   it("snapshots a candidate, renders progress, and activates only after lifecycle.ready", async () => {

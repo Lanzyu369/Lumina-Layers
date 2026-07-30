@@ -7755,6 +7755,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "当前版本 {version}",
     en: "Current version {version}",
   },
+  "workshop.manager.candidateVersion": {
+    zh: "待激活版本 {version}",
+    en: "Candidate version {version}",
+  },
   "workshop.manager.activeMeta": {
     zh: "{name} · v{version}",
     en: "{name} · v{version}",
@@ -7778,6 +7782,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   "workshop.manager.open": {
     zh: "打开",
     en: "Open",
+  },
+  "workshop.manager.reviewCandidate": {
+    zh: "审查权限并打开候选版本",
+    en: "Review permissions and open candidate",
   },
   "workshop.manager.desktopOnly": {
     zh: "仅桌面版可打开",
@@ -7911,17 +7919,33 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "确认新增权限",
     en: "Confirm added permissions",
   },
+  "workshop.manager.permissionInstallTitle": {
+    zh: "确认模块权限",
+    en: "Confirm module permissions",
+  },
   "workshop.manager.permissionDescription": {
     zh: "这个更新请求了当前版本没有的权限。确认前不会安装或激活候选版本。",
     en: "This update requests permissions not used by the current version. The candidate will not be installed or activated before confirmation.",
+  },
+  "workshop.manager.permissionInstallDescription": {
+    zh: "安装包已通过校验并暂存。确认后才会在隔离环境中启动，并在成功就绪后激活。",
+    en: "The package has been validated and staged. It runs only after confirmation and activates only after becoming ready in the sandbox.",
   },
   "workshop.manager.newPermissions": {
     zh: "新增权限",
     en: "Added permissions",
   },
+  "workshop.manager.requestedPermissions": {
+    zh: "请求的权限",
+    en: "Requested permissions",
+  },
   "workshop.manager.confirmPermissions": {
     zh: "确认权限并更新",
     en: "Confirm permissions and update",
+  },
+  "workshop.manager.confirmPermissionsAndOpen": {
+    zh: "确认权限并打开",
+    en: "Confirm permissions and open",
   },
   "workshop.manager.cancel": {
     zh: "取消",
