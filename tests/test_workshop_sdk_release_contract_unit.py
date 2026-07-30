@@ -174,6 +174,7 @@ def test_release_workflow_is_immutable_and_tag_scoped() -> None:
         "LUMINA_WORKSHOP_SDK_USE_EXISTING_TARBALL=1"
         in workflow
     )
+    assert '"hypothesis==6.152.4"' in workflow
     assert "sha256sum" in workflow
     assert "gh release create" in workflow
     assert "workshop-sdk-v${SDK_VERSION}" in workflow
