@@ -14,6 +14,8 @@ Steps:
 """
 
 import argparse
+import hashlib
+import hmac
 import importlib
 import os
 import shutil
@@ -22,12 +24,25 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent.resolve()
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from core.workshop import (  # noqa: E402
+    WorkshopSeedLock,
+    inspect_workshop_package,
+    load_workshop_seed_lock,
+)
+
 FRONTEND_DIR = ROOT / "frontend"
 ELECTRON_DIR = ROOT / "electron"
 RESOURCES_DIR = ELECTRON_DIR / "resources"
 BACKEND_RES_DIR = RESOURCES_DIR / "backend"
 APP_DIST_RES_DIR = RESOURCES_DIR / "app" / "dist"
 MATERIALS_RES_DIR = RESOURCES_DIR / "materials"
+WORKSHOP_SEED_RES_DIR = RESOURCES_DIR / "workshop-seed"
+WORKSHOP_SEED_LOCK = (
+    ROOT / "assets" / "workshop-seed" / "seed-lock.json"
+)
 PYINSTALLER_DIST = ROOT / "dist"
 NATIVE_VECTOR_MESH_MARKER = "native-vector-mesh.enabled"
 GLB_V2_REQUIRED_MODULES = ("rasterio.features", "manifold3d")
@@ -115,6 +130,117 @@ def check_workshop_desktop_security_files() -> None:
         )
 
 
+def verify_workshop_seed(
+    seed_path: Path,
+    lock_path: Path,
+) -> WorkshopSeedLock:
+    """Verify one seed archive against the committed immutable lock.
+
+    对照已提交的不可变锁文件校验一个预装模块安装包。
+
+    Args:
+        seed_path: Exact `.lumina-workshop` package. 精确安装包。
+        lock_path: Committed seed-lock JSON. 已提交锁文件。
+
+    Returns:
+        Validated seed-lock identity. 已验证的锁定身份。
+
+    Raises:
+        ValueError: If size, hash, package, or manifest identity differs.
+            大小、摘要、安装包或清单身份不一致时抛出。
+    """
+
+    lock = load_workshop_seed_lock(lock_path)
+    if seed_path.is_symlink() or not seed_path.is_file():
+        raise ValueError("Workshop seed must be a regular file")
+    if seed_path.name != lock.release_asset:
+        raise ValueError("Workshop seed asset name does not match lock")
+    if seed_path.stat().st_size != lock.asset_bytes:
+        raise ValueError("Workshop seed byte count does not match lock")
+    digest = hashlib.sha256()
+    with seed_path.open("rb") as stream:
+        while chunk := stream.read(1024 * 1024):
+            digest.update(chunk)
+    if not hmac.compare_digest(digest.hexdigest(), lock.sha256):
+        raise ValueError("Workshop seed SHA-256 does not match lock")
+    inspected = inspect_workshop_package(seed_path)
+    if (
+        inspected.manifest.id != lock.module_id
+        or inspected.manifest.version != lock.version
+    ):
+        raise ValueError("Workshop seed package identity does not match lock")
+    if not hmac.compare_digest(
+        inspected.manifest_sha256,
+        lock.manifest_sha256,
+    ):
+        raise ValueError("Workshop seed manifest SHA-256 does not match lock")
+    return lock
+
+
+def _clear_workshop_seed_resources(resource_dir: Path) -> None:
+    if resource_dir.is_symlink():
+        raise ValueError("Workshop seed resource directory cannot be a symlink")
+    resource_dir.mkdir(parents=True, exist_ok=True)
+    for path in resource_dir.iterdir():
+        if path.name == ".gitignore":
+            continue
+        if (
+            path.is_file()
+            and (
+                path.name == "seed-lock.json"
+                or path.name.endswith(".lumina-workshop")
+                or path.name.endswith(".lumina-workshop.sha256")
+            )
+        ):
+            path.unlink()
+            continue
+        raise ValueError(
+            f"unexpected Workshop seed resource: {path.name}"
+        )
+
+
+def prepare_workshop_seed_resource(
+    *,
+    seed_path: Path | None,
+    lock_path: Path,
+    resource_dir: Path,
+    allow_missing: bool,
+) -> WorkshopSeedLock | None:
+    """Prepare only a verified seed and lock for Electron packaging.
+
+    仅将已验证的预装模块和锁文件准备给 Electron 打包。
+
+    Args:
+        seed_path: Explicit build input, or `None`. 明确构建输入或空值。
+        lock_path: Committed immutable lock. 已提交不可变锁。
+        resource_dir: Generated Electron resource directory.
+            Electron 生成资源目录。
+        allow_missing: Explicit development-only omission.
+            仅开发用途的显式省略开关。
+
+    Returns:
+        Verified lock, or `None` for an explicit development omission.
+            已验证锁；显式开发省略时返回空值。
+
+    Raises:
+        ValueError: If release packaging lacks or fails seed verification.
+            发布打包缺少预装模块或校验失败时抛出。
+    """
+
+    if seed_path is None:
+        if not allow_missing:
+            raise ValueError(
+                "Workshop seed is required for desktop release builds"
+            )
+        _clear_workshop_seed_resources(resource_dir)
+        return None
+    lock = verify_workshop_seed(seed_path, lock_path)
+    _clear_workshop_seed_resources(resource_dir)
+    shutil.copy2(seed_path, resource_dir / lock.release_asset)
+    shutil.copy2(lock_path, resource_dir / "seed-lock.json")
+    return lock
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Build Lumina Studio desktop installer.",
@@ -123,6 +249,16 @@ def parse_args():
         "--materials-seed-path",
         default=os.environ.get("MATERIALS_SEED_PATH", ""),
         help="Optional lumina-materials-seed.zip artifact to bundle.",
+    )
+    parser.add_argument(
+        "--workshop-seed-path",
+        default=os.environ.get("WORKSHOP_SEED_PATH", ""),
+        help="Required official .lumina-workshop seed for release builds.",
+    )
+    parser.add_argument(
+        "--allow-missing-workshop-seed",
+        action="store_true",
+        help="Development only: build without the official Workshop seed.",
     )
     return parser.parse_args()
 
@@ -136,6 +272,23 @@ def main():
     BACKEND_RES_DIR.mkdir(parents=True, exist_ok=True)
     APP_DIST_RES_DIR.mkdir(parents=True, exist_ok=True)
     MATERIALS_RES_DIR.mkdir(parents=True, exist_ok=True)
+    WORKSHOP_SEED_RES_DIR.mkdir(parents=True, exist_ok=True)
+
+    workshop_seed_path = (
+        Path(args.workshop_seed_path).expanduser()
+        if args.workshop_seed_path
+        else None
+    )
+    try:
+        prepare_workshop_seed_resource(
+            seed_path=workshop_seed_path,
+            lock_path=WORKSHOP_SEED_LOCK,
+            resource_dir=WORKSHOP_SEED_RES_DIR,
+            allow_missing=args.allow_missing_workshop_seed,
+        )
+    except ValueError as exc:
+        print(f"ERROR: {exc}")
+        return 1
 
     # ── Step 1: Build frontend ──
     print("\n[1/6] Building frontend...")
@@ -209,7 +362,8 @@ def main():
         if installers:
             print(f"  Installer: {installers[0]}")
     print("=" * 60)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

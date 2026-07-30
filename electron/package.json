@@ -38,6 +38,14 @@
       {
         "from": "resources/materials",
         "to": "materials"
+      },
+      {
+        "from": "resources/workshop-seed",
+        "to": "workshop-seed",
+        "filter": [
+          "**/*",
+          "!**/.gitignore"
+        ]
       }
     ],
     "win": {

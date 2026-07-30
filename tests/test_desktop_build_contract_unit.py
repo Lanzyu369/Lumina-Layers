@@ -24,6 +24,21 @@ def test_electron_build_packages_material_seed_resource_directory() -> None:
     assert ("resources/materials", "materials") in resource_pairs
 
 
+def test_electron_build_packages_workshop_seed_resource_directory() -> None:
+    package_json = json.loads(
+        (ROOT / "electron" / "package.json").read_text(encoding="utf-8")
+    )
+
+    extra_resources = package_json["build"]["extraResources"]
+    resource_pairs = {
+        (entry.get("from"), entry.get("to"))
+        for entry in extra_resources
+        if isinstance(entry, dict)
+    }
+
+    assert ("resources/workshop-seed", "workshop-seed") in resource_pairs
+
+
 def test_desktop_build_copies_material_seed_to_packaged_resource_directory() -> None:
     build_script = (ROOT / "scripts" / "build_desktop.py").read_text(encoding="utf-8")
 
@@ -61,6 +76,22 @@ def test_desktop_build_preflights_workshop_security_files() -> None:
     assert check_index < electron_build_index
 
 
+def test_desktop_build_requires_verified_workshop_seed_before_build() -> None:
+    build_script = (
+        ROOT / "scripts" / "build_desktop.py"
+    ).read_text(encoding="utf-8")
+
+    assert "--workshop-seed-path" in build_script
+    assert "verify_workshop_seed" in build_script
+    prepare_index = build_script.rindex(
+        "prepare_workshop_seed_resource("
+    )
+    frontend_build_index = build_script.index(
+        'run(\n        "pnpm run build"'
+    )
+    assert prepare_index < frontend_build_index
+
+
 def test_electron_main_owns_workshop_protocol_token_and_firewall() -> None:
     main = (ROOT / "electron" / "main.cjs").read_text(encoding="utf-8")
 
@@ -69,6 +100,7 @@ def test_electron_main_owns_workshop_protocol_token_and_firewall() -> None:
     assert "X-Lumina-Workshop-Desktop-Token" in main
     assert "LUMINA_WORKSHOP_DESKTOP_TOKEN" in main
     assert "LUMINA_WORKSHOP_DATA_DIR" in main
+    assert "LUMINA_WORKSHOP_SEED_DIR" in main
     assert "webRequest.onBeforeRequest" in main
     assert "isAllowedWorkshopRequest" in main
     assert "will-frame-navigate" in main
