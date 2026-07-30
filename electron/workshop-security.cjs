@@ -1,0 +1,263 @@
+"use strict";
+
+const crypto = require("crypto");
+
+const MODULE_ID_SOURCE =
+  "[a-z0-9]+(?:[.-][a-z0-9]+(?:[a-z0-9-]*[a-z0-9])?)*";
+const SEMVER_SOURCE =
+  "(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)" +
+  "(?:-(?:0|[1-9]\\d*|[A-Za-z-][0-9A-Za-z-]*)" +
+  "(?:\\.(?:0|[1-9]\\d*|[A-Za-z-][0-9A-Za-z-]*))*)?" +
+  "(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?";
+const RUNTIME_URL_PATTERN = new RegExp(
+  `^lumina-workshop://(${MODULE_ID_SOURCE})/(${SEMVER_SOURCE})/ui/index\\.html$`,
+);
+const BACKEND_RUNTIME_PATH_PATTERN = new RegExp(
+  `^/api/workshop/v1/modules/${MODULE_ID_SOURCE}/${SEMVER_SOURCE}/runtime$`,
+);
+const NON_NETWORK_RESOURCE_TYPES = new Set([
+  "font",
+  "image",
+  "media",
+  "worker",
+]);
+
+function parseUrl(value) {
+  if (typeof value !== "string" || value.length === 0) {
+    return null;
+  }
+  try {
+    return new URL(value);
+  } catch {
+    return null;
+  }
+}
+
+function isWorkshopRuntimeUrl(value) {
+  return (
+    typeof value === "string" &&
+    RUNTIME_URL_PATTERN.test(value)
+  );
+}
+
+function isTrustedHostUrl(value) {
+  const parsed = parseUrl(value);
+  if (parsed === null) {
+    return false;
+  }
+  if (parsed.protocol === "file:") {
+    return parsed.username === "" && parsed.password === "";
+  }
+  return (
+    parsed.protocol === "http:" &&
+    parsed.hostname === "127.0.0.1" &&
+    parsed.port === "4174"
+  );
+}
+
+function isOpaqueOrigin(value) {
+  return value === "null";
+}
+
+function isNonNetworkModuleResource(resourceType, targetUrl) {
+  if (!NON_NETWORK_RESOURCE_TYPES.has(resourceType)) {
+    return false;
+  }
+  const parsed = parseUrl(targetUrl);
+  return (
+    parsed !== null &&
+    (parsed.protocol === "blob:" || parsed.protocol === "data:")
+  );
+}
+
+function isTrustedInternalRuntimeRequest(details) {
+  if (details.trustedInternal !== true) {
+    return false;
+  }
+  const parsed = parseUrl(details.url);
+  return (
+    parsed !== null &&
+    parsed.protocol === "http:" &&
+    parsed.hostname === "127.0.0.1" &&
+    parsed.port === "8000" &&
+    parsed.username === "" &&
+    parsed.password === "" &&
+    parsed.search === "" &&
+    parsed.hash === "" &&
+    BACKEND_RUNTIME_PATH_PATTERN.test(parsed.pathname)
+  );
+}
+
+function createWorkshopSessionToken() {
+  return crypto.randomBytes(32).toString("base64url");
+}
+
+function resolveWorkshopRuntimeRequest(
+  value,
+  backendOrigin = "http://127.0.0.1:8000",
+) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const match = RUNTIME_URL_PATTERN.exec(value);
+  if (match === null) {
+    return null;
+  }
+  const origin = parseUrl(backendOrigin);
+  if (
+    origin === null ||
+    origin.protocol !== "http:" ||
+    origin.hostname !== "127.0.0.1" ||
+    origin.username !== "" ||
+    origin.password !== "" ||
+    origin.pathname !== "/" ||
+    origin.search !== "" ||
+    origin.hash !== ""
+  ) {
+    return null;
+  }
+  const moduleId = match[1];
+  const version = match[2];
+  return {
+    moduleId,
+    version,
+    backendUrl:
+      `${origin.origin}/api/workshop/v1/modules/` +
+      `${moduleId}/${version}/runtime`,
+  };
+}
+
+function isAllowedWorkshopRequest(details) {
+  if (isTrustedInternalRuntimeRequest(details)) {
+    return true;
+  }
+
+  const frameIsModule = isWorkshopRuntimeUrl(details.frameUrl);
+  const initiatorIsModule = isWorkshopRuntimeUrl(details.initiator);
+  const initiatorIsHost = isTrustedHostUrl(details.initiator);
+  if (
+    isWorkshopRuntimeUrl(details.url) &&
+    details.resourceType === "subFrame" &&
+    initiatorIsHost
+  ) {
+    return true;
+  }
+  if (
+    isTrustedHostUrl(details.url) &&
+    details.resourceType === "mainFrame" &&
+    !frameIsModule &&
+    !initiatorIsModule &&
+    !isOpaqueOrigin(details.initiator)
+  ) {
+    return true;
+  }
+  if (frameIsModule || initiatorIsModule) {
+    return isNonNetworkModuleResource(
+      details.resourceType,
+      details.url,
+    );
+  }
+
+  const frameIsHost = isTrustedHostUrl(details.frameUrl);
+  if (frameIsHost || initiatorIsHost) {
+    if (isWorkshopRuntimeUrl(details.url)) {
+      return details.resourceType === "subFrame";
+    }
+    return true;
+  }
+
+  // Opaque or missing renderer identity is never enough authority to reach
+  // the network or to create a module frame.
+  if (
+    isOpaqueOrigin(details.initiator) ||
+    details.frameUrl == null ||
+    details.initiator == null
+  ) {
+    return false;
+  }
+  return false;
+}
+
+function shouldBlockWorkshopNavigation(details) {
+  if (
+    isWorkshopRuntimeUrl(details.frameUrl) ||
+    isWorkshopRuntimeUrl(details.initiatorUrl) ||
+    isOpaqueOrigin(details.initiatorUrl)
+  ) {
+    return true;
+  }
+
+  if (isWorkshopRuntimeUrl(details.targetUrl)) {
+    return !(
+      details.isMainFrame === false &&
+      isTrustedHostUrl(details.initiatorUrl)
+    );
+  }
+  return false;
+}
+
+function shouldBlockWorkshopRedirect(details) {
+  if (
+    isWorkshopRuntimeUrl(details.frameUrl) ||
+    isWorkshopRuntimeUrl(details.initiatorUrl) ||
+    isOpaqueOrigin(details.initiatorUrl)
+  ) {
+    return true;
+  }
+  return isWorkshopRuntimeUrl(details.targetUrl);
+}
+
+function isAllowedWorkshopPopup(details) {
+  if (
+    !isTrustedHostUrl(details.openerUrl) ||
+    isWorkshopRuntimeUrl(details.targetUrl)
+  ) {
+    return false;
+  }
+  const target = parseUrl(details.targetUrl);
+  return (
+    target !== null &&
+    (target.protocol === "http:" || target.protocol === "https:")
+  );
+}
+
+function isAllowedWorkshopPermission(details) {
+  return (
+    isTrustedHostUrl(details.frameUrl) &&
+    !isOpaqueOrigin(details.requestingOrigin) &&
+    !isWorkshopRuntimeUrl(details.requestingOrigin)
+  );
+}
+
+function isAllowedWorkshopDownload(details) {
+  if (!isTrustedHostUrl(details.frameUrl)) {
+    return false;
+  }
+  const target = parseUrl(details.url);
+  return (
+    target !== null &&
+    (target.protocol === "http:" || target.protocol === "https:")
+  );
+}
+
+function isWorkshopFrameProcessIsolated(mainProcessId, moduleProcessId) {
+  return (
+    Number.isInteger(mainProcessId) &&
+    mainProcessId > 0 &&
+    Number.isInteger(moduleProcessId) &&
+    moduleProcessId > 0 &&
+    mainProcessId !== moduleProcessId
+  );
+}
+
+module.exports = {
+  createWorkshopSessionToken,
+  isAllowedWorkshopDownload,
+  isAllowedWorkshopPermission,
+  isAllowedWorkshopPopup,
+  isAllowedWorkshopRequest,
+  isWorkshopFrameProcessIsolated,
+  resolveWorkshopRuntimeRequest,
+  shouldBlockWorkshopNavigation,
+  shouldBlockWorkshopRedirect,
+};

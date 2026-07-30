@@ -45,7 +45,9 @@ for glb_v2_package in GLB_V2_PACKAGES:
     glb_v2_hiddenimports.extend(package_hiddenimports)
 
 backend_datas = [
-    ('assets', 'assets'),  # Bundle entire assets/ folder (8-color stacks etc.)
+    # Includes the app-owned Workshop Registry key set and offline snapshot in
+    # assets/workshop-registry/ alongside the existing runtime assets.
+    ('assets', 'assets'),
     *glb_v2_datas,
 ]
 backend_binaries = [

@@ -9,6 +9,7 @@ import { DEFAULT_SETTINGS } from "../stores/settingsStore";
 import type { ConverterState } from "../stores/converter/store";
 import type { LutInfo } from "../api/types";
 import { ColorMode } from "../api/types";
+import { createBeadRecipeSourceFixture } from "./fixtures/beadRecipeSource";
 
 // ========== Arbitraries ==========
 
@@ -322,6 +323,101 @@ describe("recipe round-trip properties", () => {
         expect(restored.free_color_set).toEqual(new Set(hexes));
       }),
       { numRuns: 30 },
+    );
+  });
+
+  it("valid bead workshop sources preserve pressure, pitch, support, and orientation", () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 0, max: 100 }),
+        fc.constantFrom(0.5, 1.3, 2.6, 5, 10),
+        fc.constantFrom(0, 90, 180, 270),
+        fc.boolean(),
+        (compression, beadPitchMm, rotation, flipVertical) => {
+          const source = createBeadRecipeSourceFixture();
+          const calibration = source.payload.calibration as {
+            inputMode: string;
+            orientation: {
+              rotation: number;
+              flipHorizontal: boolean;
+              flipVertical: boolean;
+            };
+          };
+          source.payload = {
+            ...source.payload,
+            compression,
+            beadPitchMm,
+            calibration: {
+              ...calibration,
+              orientation: {
+                ...calibration.orientation,
+                rotation,
+                flipVertical,
+              },
+            },
+          };
+          const converter = exportConverterRecipe(
+            { ...DEFAULT_STATE, lut_name: "LUT-A" } as ConverterState,
+            DEFAULT_SETTINGS,
+            "fpA",
+          );
+          const fullRecipe = {
+            format: "lumina-recipe" as const,
+            schema_version: 3,
+            app_version: "0.0.0",
+            created_at: "2026-07-30T00:00:00.000Z",
+            source: "converter" as const,
+            cover: {
+              width: 1,
+              height: 1,
+              mime_type: "image/png" as const,
+            },
+            asset: {
+              primary: {
+                filename: "bead.png",
+                mime_type: "image/png",
+                byte_size: 4,
+                sha256: "abcd",
+                encoding: "base64" as const,
+                payload_b64: "dGVzdA==",
+              },
+            },
+            recipe: { converter, workshop: source },
+            integrity: {
+              recipe_sha256: "0".repeat(64),
+              asset_checksums: { primary: "abcd" },
+            },
+            compat: { min_schema_version: 1 },
+            warnings: [] as string[],
+          };
+
+          const { state: restored, warnings } = restoreConverterRecipe(
+            fullRecipe,
+            [
+              {
+                name: "LUT-A",
+                color_mode: ColorMode.FOUR_COLOR_RYBW,
+                path: "/a",
+                fingerprint: "fpA",
+              },
+            ],
+            { "LUT-A": "fpA" },
+          );
+          expect(restored.workshopSource).toEqual(source);
+          expect(restored.workshopSource?.payload.cellsRle).toContainEqual([
+            -2,
+            1,
+          ]);
+          expect(restored.workshopSource?.payload.compression).toBe(
+            compression,
+          );
+          expect(restored.workshopSource?.payload.beadPitchMm).toBe(
+            beadPitchMm,
+          );
+          expect(warnings).toEqual([]);
+        },
+      ),
+      { numRuns: 40 },
     );
   });
 });

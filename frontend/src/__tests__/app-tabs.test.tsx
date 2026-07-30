@@ -75,6 +75,21 @@ describe("App Widget Toggles", () => {
     expect(screen.queryByTestId("widget-reset-layout")).not.toBeInTheDocument();
   });
 
+  it("opens Creative Workshop without exposing converter widget controls", async () => {
+    render(<App />);
+    await screen.findByTestId("health-badge-ok");
+
+    fireEvent.click(screen.getByTestId("tab-workshop"));
+
+    await screen.findByRole("heading", { name: "创意工坊" });
+    expect(
+      screen.getByTestId("panel-controls-toggle").parentElement,
+    ).toHaveClass("invisible");
+    expect(
+      screen.queryByTestId("widget-toggle-basic-settings"),
+    ).not.toBeInTheDocument();
+  });
+
   it("converter tab widgets are visible by default", () => {
     render(<App />);
     openWidgetMenu();

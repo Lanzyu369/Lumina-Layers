@@ -6,6 +6,7 @@ import { useSettingsStore } from "../../stores/settingsStore";
 import { useSingleStageStore } from "../../stores/singleStageStore";
 import { useWidgetStore } from "../../stores/widgetStore";
 import type { AdvancedParamsFull } from "../../types/actionHistory";
+import { useWorkshopStore } from "../../workshop/store";
 import { _clearClientLogBufferForTests, postClientLog } from "../clientLog";
 import { collectBugReportContext } from "../bugReportContext";
 
@@ -49,6 +50,12 @@ describe("collectBugReportContext", () => {
       stageAParamsUrl: null,
       materialFileUrl: null,
       savedStageAParamsUrl: null,
+    });
+    useWorkshopStore.setState({
+      activeModule: null,
+      activeRuntimeContext: null,
+      pendingRecipeSource: null,
+      diagnostics: null,
     });
     useWidgetStore.setState({ activeTab: "settings" });
     Object.defineProperty(window, "innerWidth", {
@@ -122,7 +129,125 @@ describe("collectBugReportContext", () => {
       active_original_image_ref: null,
       active_final_artifact_ref: null,
       advanced_params: null,
+      workshop: null,
     });
+  });
+
+  it("collects only bounded workshop diagnostics while the workshop tab is active", () => {
+    useWidgetStore.setState({ activeTab: "workshop" });
+    useWorkshopStore.setState({
+      activeModule: {
+        moduleId: "lumina.bead-pattern",
+        version: "1.0.0",
+      },
+      activeRuntimeContext: {
+        installSource: "seed",
+        auditStatus: "official",
+      },
+      runtimeMode: "desktop-secure",
+      pendingRecipeSource: {
+        manifestSchemaVersion: 1,
+        moduleId: "lumina.bead-pattern",
+        moduleVersion: "1.0.0",
+        projectSchemaVersion: "bead-project/v1",
+        renderSchemaVersion: "bead-render/v1",
+        payload: {
+          matrix: [1, 2, 3],
+          imageBytes: "private-image-bytes",
+          packagePath: "/Users/min/private-module.lumina-workshop",
+          githubToken: "ghp_private-token",
+          registrySignature: "private-registry-signature",
+          desktopToken: "private-desktop-token",
+        },
+      },
+      diagnostics: {
+        projectSchemaVersion: "bead-project/v1",
+        inputMode: "numbered-grid",
+        rows: 52,
+        columns: 52,
+        compression: 50,
+        errorCode: null,
+      },
+    });
+    useConverterStore.setState({
+      workshopSource: {
+        manifestSchemaVersion: 1,
+        moduleId: "lumina.bead-pattern",
+        moduleVersion: "1.0.0",
+        projectSchemaVersion: "bead-project/v1",
+        renderSchemaVersion: "bead-render/v1",
+        payload: {
+          inputMode: "numbered-grid",
+          rows: 52,
+          columns: 52,
+          beadPitchMm: 2.6,
+          compression: 50,
+          palette: [
+            {
+              index: 1,
+              name: "private-red",
+              hex: "#ff0000",
+            },
+          ],
+          cellsRle: [[2704, 1]],
+          sourceFilename: "private-pattern.png",
+          sourceUrl: "blob:http://localhost/private-source",
+          sourcePath: "/Users/min/private-pattern.png",
+        },
+      },
+    });
+
+    const context = collectBugReportContext();
+    const serialized = JSON.stringify(context);
+
+    expect(context.workshop).toEqual({
+      module_id: "lumina.bead-pattern",
+      module_version: "1.0.0",
+      install_source: "seed",
+      audit_status: "official",
+      runtime_mode: "desktop-secure",
+      error_code: null,
+    });
+    expect(Object.keys(context.workshop ?? {}).sort()).toEqual(
+      [
+        "audit_status",
+        "error_code",
+        "install_source",
+        "module_id",
+        "module_version",
+        "runtime_mode",
+      ].sort(),
+    );
+    expect(serialized).not.toContain("cellsRle");
+    expect(serialized).not.toContain("private-red");
+    expect(serialized).not.toContain("#ff0000");
+    expect(serialized).not.toContain("private-pattern.png");
+    expect(serialized).not.toContain("blob:http");
+    expect(serialized).not.toContain("/Users/min");
+    expect(serialized).not.toContain("private-image-bytes");
+    expect(serialized).not.toContain("ghp_private-token");
+    expect(serialized).not.toContain("private-registry-signature");
+    expect(serialized).not.toContain("private-desktop-token");
+  });
+
+  it("does not attach stale workshop diagnostics from another active tab", () => {
+    useWidgetStore.setState({ activeTab: "settings" });
+    useWorkshopStore.setState({
+      activeModule: {
+        moduleId: "lumina.bead-pattern",
+        version: "1.0.0",
+      },
+      diagnostics: {
+        projectSchemaVersion: "bead-project/v1",
+        inputMode: "hard-pixel",
+        rows: 24,
+        columns: 24,
+        compression: 85,
+        errorCode: "recognition-uncertain",
+      },
+    });
+
+    expect(collectBugReportContext().workshop).toBeNull();
   });
 
   it("prefers converter store color_mode and lut_name when activeTab is converter", () => {
@@ -595,6 +720,7 @@ describe("collectBugReportContext", () => {
       "active_original_image_ref",
       "active_final_artifact_ref",
       "advanced_params",
+      "workshop",
     ]) {
       expect(keys).toContain(key);
     }

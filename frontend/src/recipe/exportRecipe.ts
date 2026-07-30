@@ -16,6 +16,7 @@ import { colorRemapToReplacementRegions } from "../utils/colorUtils";
 import type { ConverterState } from "../stores/converter/store";
 import type { SettingsState } from "../stores/settingsStore";
 import type { ColorReplacementItem } from "../api/types";
+import type { WorkshopRecipeSource } from "../workshop/types";
 import {
   cloneDynamicMaterialRecipe,
   cloneMaterialLayerBenefitCurve,
@@ -66,6 +67,21 @@ function virtualMaterialsField(
 ): { virtual_materials?: Array<{ name: string; hex: string }> } {
   const cloned = cloneVirtualMaterials(materials);
   return cloned ? { virtual_materials: cloned } : {};
+}
+
+function cloneWorkshopRecipeSource(
+  source: WorkshopRecipeSource,
+): WorkshopRecipeSource {
+  return {
+    manifestSchemaVersion: source.manifestSchemaVersion,
+    moduleId: source.moduleId,
+    moduleVersion: source.moduleVersion,
+    projectSchemaVersion: source.projectSchemaVersion,
+    renderSchemaVersion: source.renderSchemaVersion,
+    payload: JSON.parse(
+      JSON.stringify(source.payload),
+    ) as Record<string, unknown>,
+  };
 }
 
 // ========== App version ==========
@@ -298,12 +314,14 @@ export function exportConverterRecipe(
  * @param converterRecipe - The converter recipe section.
  * @param cover - Cover image metadata.
  * @param assets - Primary and optional heightmap asset entries.
+ * @param workshopSource - Optional matrix-only workshop restore source.
  * @returns The complete LuminaRecipe with integrity hashes.
  */
 export async function buildFullRecipe(
   converterRecipe: ConverterRecipe,
   cover: RecipeCover,
   assets: RecipeAssets,
+  workshopSource?: WorkshopRecipeSource | null,
 ): Promise<LuminaRecipe> {
   // Compute asset checksums
   const assetChecksums: Record<string, string> = {
@@ -326,6 +344,9 @@ export async function buildFullRecipe(
     asset: assets,
     recipe: {
       converter: converterRecipe,
+      ...(workshopSource
+        ? { workshop: cloneWorkshopRecipeSource(workshopSource) }
+        : {}),
     },
     compat: {
       min_schema_version: 1,

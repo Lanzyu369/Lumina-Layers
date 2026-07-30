@@ -19,7 +19,7 @@ from typing import Any, Literal
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from api.dependencies import get_file_registry, get_session_store
 from api.feedback_assembler import collect_sync_attachments, finalize_ticket_async
@@ -364,6 +364,44 @@ class BugReportOriginalImageRef(BaseModel):
     source: Literal["converter", "single_stage"] | None = None
 
 
+class BugReportWorkshopContext(BaseModel):
+    """Safe Creative Workshop runtime metadata for a bug report.
+
+    Bug 报告中的安全创意工坊运行元数据。
+
+    Project payloads, pixels, palettes, image bytes, package paths,
+    credentials, signing material, and desktop tokens are intentionally
+    outside this schema. Unknown keys are discarded before the report is
+    persisted or relayed.
+
+    工程载荷、像素、色板、图像字节、安装包路径、凭据、签名材料和桌面令牌
+    均不属于此结构；未知字段会在工单持久化或转发前被丢弃。
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    module_id: str = Field(min_length=1, max_length=128)
+    module_version: str = Field(min_length=1, max_length=128)
+    install_source: Literal[
+        "registry", "github", "local", "seed", "unknown"
+    ] = "unknown"
+    audit_status: Literal[
+        "official",
+        "verified",
+        "deprecated",
+        "blocked",
+        "unreviewed",
+        "unknown",
+    ] = "unknown"
+    runtime_mode: Literal[
+        "desktop-secure",
+        "browser-restricted",
+        "unsafe-development",
+        "unknown",
+    ] = "unknown"
+    error_code: str | None = Field(default=None, max_length=128)
+
+
 class BugReportContext(BaseModel):
     """Client runtime context attached to a bug report.
 
@@ -407,6 +445,7 @@ class BugReportContext(BaseModel):
     session_history: list[dict[str, Any]] = Field(default_factory=list)
     active_original_image_ref: BugReportOriginalImageRef | None = None
     active_final_artifact_ref: BugReportFinalArtifactRef | None = None
+    workshop: BugReportWorkshopContext | None = None
 
     # Grouped advanced generation parameters captured from the converter store.
     # Kept as a free-form dict here; the dedicated sanitizer in

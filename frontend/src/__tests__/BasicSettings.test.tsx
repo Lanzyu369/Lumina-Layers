@@ -313,6 +313,42 @@ function isMultipleOfStep(value: number, step: number): boolean {
 }
 
 describe("BasicSettings", () => {
+  it("shows exact fractional workshop dimensions without changing integer defaults", () => {
+    useConverterStore.setState({
+      target_width_mm: 20.8,
+      target_height_mm: 62.4,
+    });
+
+    render(<BasicSettings />);
+
+    expect(
+      screen.getByRole("slider", { name: "宽度" }),
+    ).toHaveAttribute("step", "0.1");
+    expect(
+      screen.getByRole("textbox", { name: "宽度 value" }),
+    ).toHaveValue("20.8");
+    expect(
+      screen.getByRole("slider", { name: "高度" }),
+    ).toHaveAttribute("step", "0.1");
+    expect(
+      screen.getByRole("textbox", { name: "高度 value" }),
+    ).toHaveValue("62.4");
+
+    act(() => {
+      useConverterStore.setState({
+        target_width_mm: 80,
+        target_height_mm: 80,
+      });
+    });
+
+    expect(
+      screen.getByRole("slider", { name: "宽度" }),
+    ).toHaveAttribute("step", "1");
+    expect(
+      screen.getByRole("textbox", { name: "宽度 value" }),
+    ).toHaveValue("80");
+  });
+
   it("backs off failed startup LUT loads instead of retrying immediately", async () => {
     vi.useFakeTimers();
     vi.mocked(converterApi.fetchLutList)

@@ -2509,9 +2509,421 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "图像转矢量",
     en: "Vectorizer",
   },
+  "tab.workshop": {
+    zh: "创意工坊",
+    en: "Creative Workshop",
+  },
   "tab.settings": {
     zh: "设置",
     en: "Settings",
+  },
+  "workshop.title": {
+    zh: "创意工坊",
+    en: "Creative Workshop",
+  },
+  "workshop.description": {
+    zh: "使用 Lumina 官方与受信任模块分析、编辑并准备特殊图像工作流。",
+    en: "Use official and trusted Lumina modules to analyze, edit, and prepare specialized image workflows.",
+  },
+  "workshop.official": {
+    zh: "官方",
+    en: "Official",
+  },
+  "workshop.moduleMeta": {
+    zh: "{author} · v{version}",
+    en: "{author} · v{version}",
+  },
+  "workshop.open": {
+    zh: "打开",
+    en: "Open",
+  },
+  "workshop.continue": {
+    zh: "继续",
+    en: "Continue",
+  },
+  "workshop.newProject": {
+    zh: "新建项目",
+    en: "New project",
+  },
+  "workshop.back": {
+    zh: "返回创意工坊",
+    en: "Back to Creative Workshop",
+  },
+  "workshop.localOnly": {
+    zh: "第一版仅加载随 Lumina 发布并列入白名单的模块，项目保存在本机。",
+    en: "This first release loads only modules shipped with and whitelisted by Lumina. Projects stay on this device.",
+  },
+  "workshop.capabilityManaged": {
+    zh: "模块权限由 Lumina 宿主管理。",
+    en: "Module capabilities are managed by the Lumina host.",
+  },
+  "workshop.persistenceUnavailable": {
+    zh: "浏览器无法使用持久化存储。本次项目仍可编辑，但关闭页面后不会保留。",
+    en: "Persistent browser storage is unavailable. You can keep editing this session, but the project will not survive closing the page.",
+  },
+  "workshop.moduleErrorTitle": {
+    zh: "模块暂时无法打开",
+    en: "The module could not open",
+  },
+  "workshop.moduleErrorDescription": {
+    zh: "项目数据仍然保留。请返回工坊后重试。",
+    en: "Your project data is still preserved. Return to the workshop and try again.",
+  },
+  "workshop.disabled.invalid-manifest": {
+    zh: "模块清单无效",
+    en: "Invalid module manifest",
+  },
+  "workshop.disabled.unsupported-manifest": {
+    zh: "模块清单版本不受支持",
+    en: "Unsupported manifest version",
+  },
+  "workshop.disabled.unknown-capability": {
+    zh: "模块请求了未知权限",
+    en: "The module requests an unknown capability",
+  },
+  "workshop.disabled.app-version-too-old": {
+    zh: "需要更新 Lumina",
+    en: "A newer Lumina version is required",
+  },
+  "workshop.disabled.not-whitelisted": {
+    zh: "模块未列入白名单",
+    en: "The module is not whitelisted",
+  },
+  "workshop.disabled.duplicate-id": {
+    zh: "模块 ID 冲突",
+    en: "Duplicate module ID",
+  },
+  "workshop.bead.name": {
+    zh: "拼豆模式",
+    en: "Bead Pattern",
+  },
+  "workshop.bead.description": {
+    zh: "读取清晰拼豆图纸或截图，校准格子并生成可继续编辑的拼豆矩阵。",
+    en: "Read a clear bead chart or screenshot, calibrate its grid, and create an editable bead matrix.",
+  },
+  "workshop.bead.intro": {
+    zh: "上传编号格图、硬边像素图或数字圆豆俯视图。下一步会让你确认网格和空格，不会自动猜测倾斜实拍。",
+    en: "Upload a numbered grid, hard-edged pixel chart, or digital top-down ring preview. You will confirm the grid and empty cells; oblique photos are not guessed.",
+  },
+  "workshop.bead.choosePattern": {
+    zh: "选择拼豆图纸",
+    en: "Choose bead pattern",
+  },
+  "workshop.bead.supportedInputs": {
+    zh: "支持 PNG、JPEG、WebP；请选择单个清晰、正视的图案。",
+    en: "PNG, JPEG, and WebP are supported. Choose one clear, front-facing pattern.",
+  },
+  "workshop.bead.localPrivacy": {
+    zh: "分析和项目保存都在本机完成。",
+    en: "Analysis and project storage stay on this device.",
+  },
+  "workshop.bead.selectedFile": {
+    zh: "已选择：{filename}",
+    en: "Selected: {filename}",
+  },
+  "workshop.bead.pickerError": {
+    zh: "无法读取这张图。请确认文件格式后重试。",
+    en: "This image could not be read. Check its format and try again.",
+  },
+  "workshop.bead.loadingProject": {
+    zh: "正在读取本机项目…",
+    en: "Loading the local project…",
+  },
+  "workshop.bead.resumeReady": {
+    zh: "已恢复本机项目",
+    en: "Local project restored",
+  },
+  "workshop.bead.calibrationTitle": {
+    zh: "校准图纸",
+    en: "Calibrate pattern",
+  },
+  "workshop.bead.calibrationDescription": {
+    zh: "确认图纸类型、正方形网格和空位样本。识别只读取你确认的格子。",
+    en: "Confirm the pattern type, square grid, and empty-cell sample. Recognition reads only the cells you confirm.",
+  },
+  "workshop.bead.cropPattern": {
+    zh: "裁剪图案",
+    en: "Crop pattern",
+  },
+  "workshop.bead.inputMode": {
+    zh: "图纸类型",
+    en: "Pattern type",
+  },
+  "workshop.bead.mode.numbered-grid": {
+    zh: "编号网格图",
+    en: "Numbered grid",
+  },
+  "workshop.bead.mode.hard-pixel": {
+    zh: "硬边像素图",
+    en: "Hard-edged pixel chart",
+  },
+  "workshop.bead.mode.ring-preview": {
+    zh: "圆豆俯视图",
+    en: "Top-down ring preview",
+  },
+  "workshop.bead.mode.ambiguous": {
+    zh: "需要手动确认",
+    en: "Needs manual confirmation",
+  },
+  "workshop.bead.classification": {
+    zh: "建议：{mode} · 置信度 {confidence}%",
+    en: "Suggested: {mode} · {confidence}% confidence",
+  },
+  "workshop.bead.classifying": {
+    zh: "正在分析图纸类型…",
+    en: "Analyzing the pattern type…",
+  },
+  "workshop.bead.rows": {
+    zh: "行数",
+    en: "Rows",
+  },
+  "workshop.bead.columns": {
+    zh: "列数",
+    en: "Columns",
+  },
+  "workshop.bead.originX": {
+    zh: "网格原点 X",
+    en: "Grid origin X",
+  },
+  "workshop.bead.originY": {
+    zh: "网格原点 Y",
+    en: "Grid origin Y",
+  },
+  "workshop.bead.gridInvalid": {
+    zh: "当前网格不是正方形，请调整行列或原点。",
+    en: "The current grid is not square. Adjust rows, columns, or the origin.",
+  },
+  "workshop.bead.emptyDecisionRequired": {
+    zh: "请先选择一个空位样本，或明确图中没有空位。",
+    en: "Choose an empty-cell sample or explicitly confirm that the pattern has no empty cells.",
+  },
+  "workshop.bead.pickEmpty": {
+    zh: "选择一个空位",
+    en: "Choose an empty cell",
+  },
+  "workshop.bead.noEmpty": {
+    zh: "图中没有空位",
+    en: "No empty cells",
+  },
+  "workshop.bead.pickSupport": {
+    zh: "选择透明支撑",
+    en: "Choose transparent support",
+  },
+  "workshop.bead.clearSupport": {
+    zh: "清除透明支撑样本",
+    en: "Clear support sample",
+  },
+  "workshop.bead.emptySample": {
+    zh: "空位样本：第 {index} 格",
+    en: "Empty sample: cell {index}",
+  },
+  "workshop.bead.noEmptySelected": {
+    zh: "已确认：图中没有空位",
+    en: "Confirmed: no empty cells",
+  },
+  "workshop.bead.supportSample": {
+    zh: "透明支撑样本：第 {index} 格",
+    en: "Transparent support sample: cell {index}",
+  },
+  "workshop.bead.rotate0": {
+    zh: "旋转 0°",
+    en: "Rotate 0°",
+  },
+  "workshop.bead.rotate90": {
+    zh: "旋转 90°",
+    en: "Rotate 90°",
+  },
+  "workshop.bead.rotate180": {
+    zh: "旋转 180°",
+    en: "Rotate 180°",
+  },
+  "workshop.bead.rotate270": {
+    zh: "旋转 270°",
+    en: "Rotate 270°",
+  },
+  "workshop.bead.flipHorizontal": {
+    zh: "水平翻转",
+    en: "Flip horizontally",
+  },
+  "workshop.bead.flipVertical": {
+    zh: "垂直翻转",
+    en: "Flip vertically",
+  },
+  "workshop.bead.recognize": {
+    zh: "识别拼豆矩阵",
+    en: "Recognize bead matrix",
+  },
+  "workshop.bead.recognizing": {
+    zh: "正在识别拼豆矩阵…",
+    en: "Recognizing bead matrix…",
+  },
+  "workshop.bead.calibrationCanvas": {
+    zh: "拼豆图纸网格校准",
+    en: "Bead pattern grid calibration",
+  },
+  "workshop.bead.editorTitle": {
+    zh: "编辑拼豆矩阵",
+    en: "Edit bead matrix",
+  },
+  "workshop.bead.editorDescription": {
+    zh: "修正识别结果，再调节压合程度。透明支撑参与挤压，但不会进入最终图像颜色。",
+    en: "Correct the recognized matrix, then adjust pressure. Transparent support affects contact geometry but adds no output color.",
+  },
+  "workshop.bead.tool.paint": {
+    zh: "画笔",
+    en: "Paint",
+  },
+  "workshop.bead.tool.erase": {
+    zh: "橡皮",
+    en: "Erase",
+  },
+  "workshop.bead.tool.eyedropper": {
+    zh: "吸管",
+    en: "Eyedropper",
+  },
+  "workshop.bead.tool.fill": {
+    zh: "填充",
+    en: "Fill",
+  },
+  "workshop.bead.tool.support": {
+    zh: "透明支撑",
+    en: "Transparent support",
+  },
+  "workshop.bead.undo": {
+    zh: "撤销",
+    en: "Undo",
+  },
+  "workshop.bead.redo": {
+    zh: "重做",
+    en: "Redo",
+  },
+  "workshop.bead.previousIssue": {
+    zh: "上一个待复核格",
+    en: "Previous review cell",
+  },
+  "workshop.bead.nextIssue": {
+    zh: "下一个待复核格",
+    en: "Next review cell",
+  },
+  "workshop.bead.reviewSummary": {
+    zh: "待复核 {pending} / 共 {total}",
+    en: "{pending} pending / {total} total",
+  },
+  "workshop.bead.view.original": {
+    zh: "原图",
+    en: "Original",
+  },
+  "workshop.bead.view.matrix": {
+    zh: "识别矩阵",
+    en: "Matrix",
+  },
+  "workshop.bead.view.pressure": {
+    zh: "压合预览",
+    en: "Pressure preview",
+  },
+  "workshop.bead.matrixCanvas": {
+    zh: "可编辑拼豆矩阵",
+    en: "Editable bead matrix",
+  },
+  "workshop.bead.pressureCanvas": {
+    zh: "拼豆压合预览",
+    en: "Bead pressure preview",
+  },
+  "workshop.bead.originalCanvas": {
+    zh: "拼豆图纸原图",
+    en: "Original bead pattern",
+  },
+  "workshop.bead.magnifier": {
+    zh: "选中格局部放大",
+    en: "Selected-cell magnifier",
+  },
+  "workshop.bead.showGrid": {
+    zh: "显示网格",
+    en: "Show grid",
+  },
+  "workshop.bead.paletteColor": {
+    zh: "颜色 {index}",
+    en: "Color {index}",
+  },
+  "workshop.bead.customColor": {
+    zh: "添加自定义颜色",
+    en: "Add custom color",
+  },
+  "workshop.bead.compression": {
+    zh: "压合程度",
+    en: "Pressure",
+  },
+  "workshop.bead.compressionHint": {
+    zh: "0 保留中心孔和豆间缝，50 保留细小十字或菱形凹点，100 完全压紧闭合。",
+    en: "0 preserves center holes and gaps, 50 keeps small cross or diamond reliefs, and 100 closes them completely.",
+  },
+  "workshop.bead.pressureLight": {
+    zh: "0 · 轻压有孔",
+    en: "0 · Light, open holes",
+  },
+  "workshop.bead.pressureStandard": {
+    zh: "50 · 标准",
+    en: "50 · Standard",
+  },
+  "workshop.bead.pressureTight": {
+    zh: "100 · 紧压无孔",
+    en: "100 · Tight, closed holes",
+  },
+  "workshop.bead.beadPitch": {
+    zh: "单豆节距",
+    en: "Bead pitch",
+  },
+  "workshop.bead.beadPitchHint": {
+    zh: "默认 2.6 mm，表示相邻豆子中心间距，并决定交给 Lumina 的真实画布尺寸。",
+    en: "The 2.6 mm default is the center-to-center bead pitch and determines the physical canvas size handed to Lumina.",
+  },
+  "workshop.bead.physicalSize": {
+    zh: "{width} × {height} mm",
+    en: "{width} × {height} mm",
+  },
+  "workshop.bead.rendering": {
+    zh: "正在计算高分辨率压合预览…",
+    en: "Rendering the high-resolution pressure preview…",
+  },
+  "workshop.bead.newProject": {
+    zh: "新建图纸",
+    en: "New pattern",
+  },
+  "workshop.bead.handoff": {
+    zh: "交给 Lumina 转换",
+    en: "Send to Lumina Converter",
+  },
+  "workshop.bead.handoffEmpty": {
+    zh: "至少保留一颗有颜色的拼豆后才能转换",
+    en: "Keep at least one colored bead before converting",
+  },
+  "workshop.bead.replaceTitle": {
+    zh: "替换当前转换内容？",
+    en: "Replace the current converter content?",
+  },
+  "workshop.bead.replaceDescription": {
+    zh: "转换器里已有图片或批量任务。继续会用当前拼豆画布替换它，但不会删除已自动保存的拼豆项目。",
+    en: "The converter already contains an image or batch. Continuing replaces it with this bead canvas without deleting the autosaved bead project.",
+  },
+  "workshop.bead.replaceCancel": {
+    zh: "暂不替换",
+    en: "Keep current content",
+  },
+  "workshop.bead.replaceConfirm": {
+    zh: "替换并继续",
+    en: "Replace and continue",
+  },
+  "workshop.bead.handoffError": {
+    zh: "无法把当前拼豆画布交给转换器，请检查图案后重试。",
+    en: "The current bead canvas could not be sent to the converter. Check the pattern and try again.",
+  },
+  "workshop.bead.processingError": {
+    zh: "本地图像处理失败。项目仍在本机，请重试当前步骤。",
+    en: "Local image processing failed. The project is still on this device; retry the current step.",
+  },
+  "workshop.bead.saveError": {
+    zh: "自动保存暂时失败。当前页面中的编辑不会丢失。",
+    en: "Autosave temporarily failed. Edits in the current page are still intact.",
   },
   "tab.colorEditor": {
     zh: "颜色编辑",
@@ -7083,6 +7495,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "确认恢复",
     en: "Confirm Restore",
   },
+  recipe_import_continue_workshop: {
+    zh: "导入并继续编辑",
+    en: "Import and Continue Editing",
+  },
   recipe_import_cancel: {
     zh: "取消",
     en: "Cancel",
@@ -7314,6 +7730,346 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   recipe_import_warning_spatial_edits_not_serialized: {
     zh: "连通区域的局部改色仅属于当前会话，未写入分享配方；导入后需要重新应用。",
     en: "Connected-region color edits belong to the current session and were not saved in the shared recipe; reapply them after import.",
+  },
+  recipe_import_workshop_degraded: {
+    zh: "分享卡中的创意工坊编辑数据已损坏或当前不可用；主图和转换参数仍可正常导入。",
+    en: "The workshop editing data in this share card is damaged or unavailable. The main image and converter settings can still be imported.",
+  },
+  workshop_source_banner_title: {
+    zh: "创意工坊图像",
+    en: "Creative Workshop image",
+  },
+  workshop_source_banner_module: {
+    zh: "来源模块",
+    en: "Source module",
+  },
+  workshop_source_banner_module_value: {
+    zh: "{id} · v{version}",
+    en: "{id} · v{version}",
+  },
+  workshop_source_banner_print_library: {
+    zh: "当前打印色库",
+    en: "Current print library",
+  },
+  workshop_source_banner_library_unavailable: {
+    zh: "尚未选择可用色库",
+    en: "No usable library selected",
+  },
+  workshop_source_banner_guidance: {
+    zh: "源色色块由创意工坊保留；下方 LUT 或耗材档案只负责叠色打印，不会覆盖源色。",
+    en: "Source color blocks stay with the Workshop project. The LUT or material archive below controls layered printing without replacing those source colors.",
+  },
+  workshop_runtime_preparing: {
+    zh: "正在准备模块",
+    en: "Preparing module",
+  },
+  workshop_runtime_loading: {
+    zh: "正在加载模块",
+    en: "Loading module",
+  },
+  workshop_runtime_handshaking: {
+    zh: "正在建立安全连接",
+    en: "Establishing secure connection",
+  },
+  workshop_runtime_waiting_ready: {
+    zh: "正在等待模块就绪",
+    en: "Waiting for module readiness",
+  },
+  workshop_runtime_running: {
+    zh: "运行中",
+    en: "Running",
+  },
+  workshop_runtime_desktop_required: {
+    zh: "此模块需要 Lumina 桌面版才能运行",
+    en: "This module requires the Lumina desktop app",
+  },
+  workshop_runtime_disabled: {
+    zh: "此模块已被禁用",
+    en: "This module is disabled",
+  },
+  workshop_runtime_incompatible: {
+    zh: "此模块与当前创意工坊接口不兼容",
+    en: "This module is incompatible with the current Workshop API",
+  },
+  workshop_runtime_handshake_timeout: {
+    zh: "模块启动超时",
+    en: "Module startup timed out",
+  },
+  workshop_runtime_snapshot_failed: {
+    zh: "更新前项目快照失败，模块未启动",
+    en: "The pre-update project snapshot failed, so the module was not started",
+  },
+  workshop_runtime_activation_failed: {
+    zh: "候选版本未能安全激活",
+    en: "The candidate version could not be activated safely",
+  },
+  workshop_runtime_load_failed: {
+    zh: "模块加载失败",
+    en: "Module failed to load",
+  },
+  "workshop.manager.eyebrow": {
+    zh: "Lumina Studio",
+    en: "Lumina Studio",
+  },
+  "workshop.manager.description": {
+    zh: "安装、管理并在隔离环境中运行图像创作模块。",
+    en: "Install, manage, and run image-creation modules in an isolated environment.",
+  },
+  "workshop.manager.navigation": {
+    zh: "创意工坊页面",
+    en: "Creative Workshop views",
+  },
+  "workshop.manager.view.installed": {
+    zh: "已安装",
+    en: "Installed",
+  },
+  "workshop.manager.view.discover": {
+    zh: "发现",
+    en: "Discover",
+  },
+  "workshop.manager.view.developer": {
+    zh: "开发者",
+    en: "Developer",
+  },
+  "workshop.manager.source.official": {
+    zh: "官方",
+    en: "Official",
+  },
+  "workshop.manager.source.community": {
+    zh: "社区",
+    en: "Community",
+  },
+  "workshop.manager.source.unreviewed": {
+    zh: "未审核",
+    en: "Unreviewed",
+  },
+  "workshop.manager.enabled": {
+    zh: "已启用",
+    en: "Enabled",
+  },
+  "workshop.manager.disabled": {
+    zh: "已停用",
+    en: "Disabled",
+  },
+  "workshop.manager.currentVersion": {
+    zh: "当前版本 {version}",
+    en: "Current version {version}",
+  },
+  "workshop.manager.activeMeta": {
+    zh: "{name} · v{version}",
+    en: "{name} · v{version}",
+  },
+  "workshop.manager.updateAvailable": {
+    zh: "可更新至 {version}",
+    en: "Update available: {version}",
+  },
+  "workshop.manager.projectsRetained": {
+    zh: "保留了本地工程",
+    en: "Local projects retained",
+  },
+  "workshop.manager.officialUninstalled": {
+    zh: "官方模块已卸载",
+    en: "Official module is uninstalled",
+  },
+  "workshop.manager.restoreSeed": {
+    zh: "从离线种子恢复",
+    en: "Restore from offline seed",
+  },
+  "workshop.manager.open": {
+    zh: "打开",
+    en: "Open",
+  },
+  "workshop.manager.desktopOnly": {
+    zh: "仅桌面版可打开",
+    en: "Desktop app required",
+  },
+  "workshop.manager.details": {
+    zh: "详情",
+    en: "Details",
+  },
+  "workshop.manager.update": {
+    zh: "更新",
+    en: "Update",
+  },
+  "workshop.manager.rollback": {
+    zh: "回退",
+    en: "Roll back",
+  },
+  "workshop.manager.enable": {
+    zh: "启用",
+    en: "Enable",
+  },
+  "workshop.manager.disable": {
+    zh: "停用",
+    en: "Disable",
+  },
+  "workshop.manager.uninstall": {
+    zh: "卸载",
+    en: "Uninstall",
+  },
+  "workshop.manager.install": {
+    zh: "安装",
+    en: "Install",
+  },
+  "workshop.manager.installedCurrent": {
+    zh: "已安装最新兼容版本",
+    en: "Latest compatible version installed",
+  },
+  "workshop.manager.loading": {
+    zh: "正在读取已安装模块…",
+    en: "Loading installed modules…",
+  },
+  "workshop.manager.loadError": {
+    zh: "无法读取已安装模块。",
+    en: "Installed modules could not be loaded.",
+  },
+  "workshop.manager.noInstalled": {
+    zh: "尚未安装任何创意工坊模块。",
+    en: "No Creative Workshop modules are installed.",
+  },
+  "workshop.manager.catalogLoading": {
+    zh: "正在验证创意工坊目录…",
+    en: "Verifying the Workshop catalog…",
+  },
+  "workshop.manager.catalogInvalid": {
+    zh: "目录签名验证失败，未显示任何模块。",
+    en: "Catalog signature verification failed. No modules are shown.",
+  },
+  "workshop.manager.retry": {
+    zh: "重试",
+    en: "Retry",
+  },
+  "workshop.manager.runtime.desktop-secure": {
+    zh: "桌面安全模式：社区模块在独立沙箱中运行，无法访问网络或本机文件路径。",
+    en: "Desktop secure mode: community modules run in an isolated sandbox without network or filesystem-path access.",
+  },
+  "workshop.manager.runtime.browser-restricted": {
+    zh: "浏览器限制模式：只能运行随 Lumina 预装的官方模块；社区与未审核模块需要桌面版。",
+    en: "Browser restricted mode: only official modules bundled with Lumina can run; community and unreviewed modules require the desktop app.",
+  },
+  "workshop.manager.runtime.unsafe-development": {
+    zh: "不安全开发模式：仅本地模块可用合成数据调试，不会获得真实图片、工程或色库。",
+    en: "Unsafe development mode: local modules receive synthetic debug data instead of real images, projects, or color libraries.",
+  },
+  "workshop.manager.operationError": {
+    zh: "模块操作失败，现有安装和工程数据未被替换。",
+    en: "The module operation failed. Existing installation and project data were not replaced.",
+  },
+  "workshop.manager.recipeImportSaveError": {
+    zh: "无法把分享配方交给模块；转换器内容仍然可用。",
+    en: "The shared recipe could not be handed to the module; converter content remains available.",
+  },
+  "workshop.manager.recipeModuleMissing": {
+    zh: "主图和转换参数已恢复。若要继续编辑，请安装 {id} 的 {version} 版本。",
+    en: "The image and converter settings were restored. Install {id} version {version} to continue editing.",
+  },
+  "workshop.manager.recipeModuleDiscover": {
+    zh: "前往发现",
+    en: "Open Discover",
+  },
+  "workshop.manager.localTitle": {
+    zh: "安装本地模块包",
+    en: "Install a local module package",
+  },
+  "workshop.manager.localDescription": {
+    zh: "选择经过验证的 .lumina-workshop 单文件安装包。浏览器中不会向它提供真实数据。",
+    en: "Choose a validated single-file .lumina-workshop package. Browser mode does not provide it with real data.",
+  },
+  "workshop.manager.localPackage": {
+    zh: "本地模块包",
+    en: "Local module package",
+  },
+  "workshop.manager.localInvalid": {
+    zh: "请选择扩展名为 .lumina-workshop 的安装包。",
+    en: "Choose a package with the .lumina-workshop extension.",
+  },
+  "workshop.manager.githubTitle": {
+    zh: "从 GitHub Release 安装",
+    en: "Install from a GitHub Release",
+  },
+  "workshop.manager.githubRepository": {
+    zh: "GitHub 仓库",
+    en: "GitHub repository",
+  },
+  "workshop.manager.githubPlaceholder": {
+    zh: "https://github.com/所有者/仓库",
+    en: "https://github.com/owner/repository",
+  },
+  "workshop.manager.exactVersion": {
+    zh: "精确版本",
+    en: "Exact version",
+  },
+  "workshop.manager.installGithub": {
+    zh: "从 GitHub 安装",
+    en: "Install from GitHub",
+  },
+  "workshop.manager.githubInvalid": {
+    zh: "请输入规范的 GitHub 仓库地址和精确语义版本。",
+    en: "Enter a canonical GitHub repository URL and an exact semantic version.",
+  },
+  "workshop.manager.permissionTitle": {
+    zh: "确认新增权限",
+    en: "Confirm added permissions",
+  },
+  "workshop.manager.permissionDescription": {
+    zh: "这个更新请求了当前版本没有的权限。确认前不会安装或激活候选版本。",
+    en: "This update requests permissions not used by the current version. The candidate will not be installed or activated before confirmation.",
+  },
+  "workshop.manager.newPermissions": {
+    zh: "新增权限",
+    en: "Added permissions",
+  },
+  "workshop.manager.confirmPermissions": {
+    zh: "确认权限并更新",
+    en: "Confirm permissions and update",
+  },
+  "workshop.manager.cancel": {
+    zh: "取消",
+    en: "Cancel",
+  },
+  "workshop.manager.permission.image.pick": {
+    zh: "选择图片",
+    en: "Choose images",
+  },
+  "workshop.manager.permission.project.storage": {
+    zh: "读写模块工程",
+    en: "Read and write module projects",
+  },
+  "workshop.manager.permission.color-library.read": {
+    zh: "读取当前打印色库",
+    en: "Read the current print color library",
+  },
+  "workshop.manager.permission.handoff.image": {
+    zh: "将图像交给转换器",
+    en: "Hand images to the converter",
+  },
+  "workshop.manager.uninstallTitle": {
+    zh: "卸载模块",
+    en: "Uninstall module",
+  },
+  "workshop.manager.uninstallDescription": {
+    zh: "默认只删除模块代码并保留本地工程。删除工程需要单独确认。",
+    en: "By default, only module code is removed and local projects are retained. Deleting projects requires separate confirmation.",
+  },
+  "workshop.manager.deleteProjects": {
+    zh: "同时删除本地工程",
+    en: "Also delete local projects",
+  },
+  "workshop.manager.confirmUninstall": {
+    zh: "确认卸载",
+    en: "Confirm uninstall",
+  },
+  "workshop.manager.close": {
+    zh: "关闭",
+    en: "Close",
+  },
+  "workshop.manager.detailsError": {
+    zh: "无法读取此版本的公开说明。",
+    en: "Public details for this version could not be loaded.",
+  },
+  "workshop.manager.license": {
+    zh: "许可证",
+    en: "License",
   },
   recipe_import_schema_newer: {
     zh: "配方版本较新，部分参数可能无法恢复",

@@ -58,7 +58,26 @@ describe("Widget Workspace Layout", () => {
     expect(screen.getByTestId("tab-lut-management")).toBeInTheDocument();
     expect(screen.getByTestId("tab-material-management")).toBeInTheDocument();
     expect(screen.getByTestId("tab-vectorizer")).toBeInTheDocument();
+    expect(screen.getByTestId("tab-workshop")).toBeInTheDocument();
     expect(screen.getByTestId("tab-settings")).toBeInTheDocument();
+  });
+
+  it("places Creative Workshop between Vectorizer and Settings", () => {
+    render(<App />);
+
+    const primaryTabs = screen
+      .getAllByRole("button")
+      .map((button) => button.dataset.testid)
+      .filter((testId) => testId?.startsWith("tab-"));
+
+    expect(primaryTabs).toEqual([
+      "tab-converter",
+      "tab-lut-management",
+      "tab-material-management",
+      "tab-vectorizer",
+      "tab-workshop",
+      "tab-settings",
+    ]);
   });
 
   it("keeps the top-level navigation in the legacy centered header column", () => {

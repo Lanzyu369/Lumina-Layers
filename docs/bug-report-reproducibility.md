@@ -37,6 +37,20 @@ When adding or changing converter generation parameters, update bug-report repro
 
 Validate with a real local bug report and confirm `ticket.json`, `index.md`, and `summary.txt` contain the expected state without `File`/`Blob`/data URL payloads.
 
+## Creative Workshop Metadata
+
+When the Creative Workshop tab is active, feedback may include only the
+host-bound module ID, exact version, install source, audit status, runtime
+mode, and a stable error code. The frontend and backend schemas deliberately
+exclude module project payloads, matrices, palettes, source images, image
+bytes, object URLs, package or filesystem paths, GitHub tokens, Registry
+signatures, and the Electron desktop token.
+
+The backend ignores unknown Workshop fields before persistence and rendering.
+Update `BugReportWorkshopContext`, the frontend `WorkshopBugReportContext`,
+`api/feedback_index.py`, and both frontend/backend tests together whenever
+this allowlist changes.
+
 ## Materials And Email Attachments
 
 - `materials.zip` excludes `_solver_cache/` because developers can rebuild it locally

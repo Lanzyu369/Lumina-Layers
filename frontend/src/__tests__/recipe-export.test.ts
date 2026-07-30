@@ -1,10 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { exportConverterRecipe } from "../recipe/exportRecipe";
+import {
+  buildFullRecipe,
+  exportConverterRecipe,
+} from "../recipe/exportRecipe";
+import { sha256String } from "../recipe/utils";
 import type { ConverterState } from "../stores/converter/store";
 import { DEFAULT_STATE } from "../stores/converter";
 import type { SettingsState } from "../stores/settingsStore";
 import { DEFAULT_SETTINGS } from "../stores/settingsStore";
 import type { DynamicMaterialRecipe } from "../api/types";
+import { createBeadRecipeSourceFixture } from "./fixtures/beadRecipeSource";
 
 function makeState(overrides?: Partial<ConverterState>): ConverterState {
   return { ...DEFAULT_STATE, ...overrides } as ConverterState;
@@ -312,5 +317,41 @@ describe("recipe/exportRecipe", () => {
       expect(json).not.toContain("cropModalOpen");
       expect(json).not.toContain("base_spacer_thick");
     });
+  });
+
+  it("builds schema v3 with a deep-cloned workshop source inside integrity", async () => {
+    const converter = exportConverterRecipe(
+      makeState(),
+      makeSettings(),
+      "fp",
+    );
+    const source = createBeadRecipeSourceFixture();
+    const recipe = await buildFullRecipe(
+      converter,
+      { width: 64, height: 64, mime_type: "image/png" },
+      {
+        primary: {
+          filename: "bead.png",
+          mime_type: "image/png",
+          byte_size: 3,
+          sha256: "asset-sha",
+          encoding: "base64",
+          payload_b64: "cG5n",
+        },
+      },
+      source,
+    );
+
+    expect(recipe.schema_version).toBe(3);
+    expect(recipe.recipe.workshop).toEqual(source);
+    expect(recipe.recipe.workshop).not.toBe(source);
+    expect(recipe.recipe.workshop?.payload).not.toBe(source.payload);
+    expect(recipe.integrity.recipe_sha256).toBe(
+      await sha256String(JSON.stringify(recipe.recipe)),
+    );
+
+    source.payload.compression = 1;
+    expect(recipe.recipe.workshop?.payload.compression).toBe(73);
+    expect(JSON.stringify(recipe.recipe.workshop)).not.toContain("blob");
   });
 });

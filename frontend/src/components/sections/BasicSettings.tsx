@@ -49,6 +49,12 @@ import {
   normalizeLutPath,
   type ColorModeBucket,
 } from "../../stores/converter/legacyLutSelection";
+import WorkshopSourceBanner from "../../workshop/WorkshopSourceBanner";
+import {
+  buildWorkshopColorLibrary,
+  clearWorkshopMaterialCatalog,
+  updateWorkshopMaterialCatalog,
+} from "../../workshop/colorLibrary";
 
 const COLOR_MODE_DOTS: Record<string, string[]> = {
   [ColorMode.BW]: ["var(--palette-black)", "var(--palette-white)"],
@@ -73,6 +79,15 @@ const STARTUP_LUT_RETRY_DELAY_MS = 5_000;
 const STARTUP_LUT_ATTEMPT_LIMIT = 2;
 const MODEL_SURFACE_FILE_EXTENSIONS = [".stl", ".obj"] as const;
 type DropImportIntent = "model" | "image" | "mixed" | "files";
+
+function dimensionSliderStep(value: number): number {
+  const normalized = value
+    .toFixed(3)
+    .replace(/0+$/, "")
+    .replace(/\.$/, "");
+  const decimals = normalized.split(".")[1]?.length ?? 0;
+  return decimals === 0 ? 1 : 10 ** -decimals;
+}
 
 function isSupportedModelSurfaceFile(file: File): boolean {
   const name = file.name.toLowerCase();
@@ -282,6 +297,9 @@ export default function BasicSettings() {
     model_enable,
     model_only,
     selectedLutInfo,
+    lutColors,
+    lutColorsLutName,
+    workshopSource,
     target_width_mm,
     target_height_mm,
     spacer_thick,
@@ -360,6 +378,9 @@ export default function BasicSettings() {
     model_enable: s.model_enable,
     model_only: s.model_only,
     selectedLutInfo: s.selectedLutInfo,
+    lutColors: s.lutColors,
+    lutColorsLutName: s.lutColorsLutName,
+    workshopSource: s.workshopSource,
     target_width_mm: s.target_width_mm,
     target_height_mm: s.target_height_mm,
     spacer_thick: s.spacer_thick,
@@ -487,13 +508,27 @@ export default function BasicSettings() {
     }
   }, [t]);
 
-  const handleImportConfirm = useCallback(() => {
+  const applyPreparedImport = useCallback((
+    destination: "converter" | "workshop",
+  ) => {
     if (!importPreview) return;
-    applyImport(importPreview.restoreResult, importPreview.printerOptions ?? []);
+    applyImport(
+      importPreview.restoreResult,
+      importPreview.printerOptions ?? [],
+      { destination },
+    );
     revokeImportCoverUrl(importPreview.coverUrl);
     setImportDialogOpen(false);
     setImportPreview(null);
   }, [importPreview]);
+
+  const handleImportConfirm = useCallback(() => {
+    applyPreparedImport("converter");
+  }, [applyPreparedImport]);
+
+  const handleImportContinueEditing = useCallback(() => {
+    applyPreparedImport("workshop");
+  }, [applyPreparedImport]);
 
   const handleImportCancel = useCallback(() => {
     revokeImportCoverUrl(importPreview?.coverUrl ?? null);
@@ -861,6 +896,7 @@ export default function BasicSettings() {
   }, []);
   useEffect(() => {
     if (source_version !== "material") {
+      clearWorkshopMaterialCatalog();
       setMaterialLibraryLoaded(false);
       setMaterialLibraryLoadError(false);
       return;
@@ -873,11 +909,13 @@ export default function BasicSettings() {
       .then((res) => {
         if (cancelled) return;
         const materials = res.materials ?? [];
+        updateWorkshopMaterialCatalog(materials);
         setMaterialLibrary(materials);
         setMaterialLibraryLoaded(true);
       })
       .catch(() => {
         if (!cancelled) {
+          clearWorkshopMaterialCatalog();
           setMaterialLibrary([]);
           setMaterialLibraryLoaded(false);
           setMaterialLibraryLoadError(true);
@@ -960,6 +998,27 @@ export default function BasicSettings() {
     selectedMaterialDirNames.includes(materialBackingMaterialDirName)
       ? materialBackingMaterialDirName
       : (inferDefaultMaterialBackingDirName(selectedMaterialDirNames) ?? "");
+  const workshopColorLibrary =
+    workshopSource === null
+      ? null
+      : buildWorkshopColorLibrary({
+          source_version,
+          lut_name,
+          lut_names,
+          lutListFull,
+          legacyCatalogGroups,
+          selectedLutInfo,
+          lutColors,
+          lutColorsLutName,
+          nativeBrandGroups,
+          selectedNativeBrandKey,
+          selectedNativeDbNames,
+          color_layers,
+          layer_height_mm,
+          selectedMaterialDirNames,
+          materialLayerCount,
+          materialLayerHeightMm,
+        });
 
   const materialLayerHeightOptions = [
     { label: "0.04 mm", value: "0.04" },
@@ -1222,6 +1281,13 @@ export default function BasicSettings() {
           </span>
         </button>
       )}
+
+      {workshopSource ? (
+        <WorkshopSourceBanner
+          source={workshopSource}
+          colorLibrary={workshopColorLibrary}
+        />
+      ) : null}
 
       {batchFiles.length === 0 && imageFile !== null && (
         <>
@@ -1696,7 +1762,7 @@ export default function BasicSettings() {
         value={target_width_mm}
         min={10}
         max={dimMax}
-        step={1}
+        step={dimensionSliderStep(target_width_mm)}
         unit="mm"
         onChange={setTargetWidthMm}
       />
@@ -1707,7 +1773,7 @@ export default function BasicSettings() {
         value={target_height_mm}
         min={10}
         max={dimMax}
-        step={1}
+        step={dimensionSliderStep(target_height_mm)}
         unit="mm"
         onChange={setTargetHeightMm}
       />
@@ -1807,6 +1873,7 @@ export default function BasicSettings() {
         preview={importPreview}
         source={importSource}
         onConfirm={handleImportConfirm}
+        onContinueEditing={handleImportContinueEditing}
         onCancel={handleImportCancel}
         isLoading={importLoading}
       />

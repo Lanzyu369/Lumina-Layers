@@ -4,13 +4,27 @@ const {
   dialog,
   ipcMain,
   Menu,
+  net: electronNet,
+  protocol,
   session,
+  webFrameMain,
 } = require("electron");
 const { spawn, execSync } = require("child_process");
 const http = require("http");
-const net = require("net");
+const nodeNet = require("net");
 const fs = require("fs");
 const path = require("path");
+const {
+  createWorkshopSessionToken,
+  isAllowedWorkshopDownload,
+  isAllowedWorkshopPermission,
+  isAllowedWorkshopPopup,
+  isAllowedWorkshopRequest,
+  isWorkshopFrameProcessIsolated,
+  resolveWorkshopRuntimeRequest,
+  shouldBlockWorkshopNavigation,
+  shouldBlockWorkshopRedirect,
+} = require("./workshop-security.cjs");
 
 // ═══════════════════════════════════════════════════════════
 //  Constants
@@ -23,6 +37,15 @@ const FRONTEND_URL = `http://127.0.0.1:${FRONTEND_PORT}`;
 const HEALTH_TIMEOUT_MS = 30000;
 const PORT_TIMEOUT_MS = 30000;
 const POLL_INTERVAL_MS = 500;
+const WORKSHOP_SCHEME = "lumina-workshop";
+const WORKSHOP_RUNTIME_HEADER_NAMES = [
+  "cache-control",
+  "content-security-policy",
+  "content-type",
+  "permissions-policy",
+  "referrer-policy",
+  "x-content-type-options",
+];
 
 const isDev = !app.isPackaged;
 const ROOT_DIR = path.join(__dirname, "..");
@@ -34,6 +57,22 @@ const MATERIALS_SEED_RESOURCE = path.join(
   "lumina-materials-seed.zip",
 );
 const NATIVE_VECTOR_MESH_MARKER = "native-vector-mesh.enabled";
+const workshopSessionToken = createWorkshopSessionToken();
+let workshopSafeMode = false;
+
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: WORKSHOP_SCHEME,
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: false,
+      corsEnabled: false,
+      allowServiceWorkers: false,
+      codeCache: false,
+    },
+  },
+]);
 
 // Platform-aware icon paths.
 //   - Windows: 仍用仓库根目录的 icon.ico（任务栏 / 安装包用）
@@ -292,7 +331,7 @@ function waitForPort(port, timeoutMs) {
         reject(new Error(`Port ${port} timeout after ${timeoutMs}ms`));
         return;
       }
-      const sock = net.connect(port, "127.0.0.1", () => {
+      const sock = nodeNet.connect(port, "127.0.0.1", () => {
         sock.destroy();
         resolve();
       });
@@ -349,6 +388,11 @@ function findNode() {
 function backendRuntimeEnv() {
   const env = {
     LUMINA_MATERIALS_DIR: path.join(app.getPath("userData"), "materials"),
+    LUMINA_WORKSHOP_DATA_DIR: path.join(
+      app.getPath("userData"),
+      "workshop",
+    ),
+    LUMINA_WORKSHOP_DESKTOP_TOKEN: workshopSessionToken,
   };
   const nativeMarkerPath = path.join(
     process.resourcesPath,
@@ -388,6 +432,117 @@ if (!gotLock) {
 let win = null;
 let splashWin = null;
 let isQuitting = false;
+
+function fixedWorkshopResponse(status, message) {
+  return new Response(message, {
+    status,
+    headers: {
+      "Cache-Control": "no-store",
+      "Content-Security-Policy": "default-src 'none'",
+      "Content-Type": "text/plain; charset=utf-8",
+      "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+      "Referrer-Policy": "no-referrer",
+      "X-Content-Type-Options": "nosniff",
+    },
+  });
+}
+
+async function handleWorkshopProtocol(request) {
+  if (workshopSafeMode) {
+    return fixedWorkshopResponse(
+      503,
+      "Workshop runtime isolation unavailable.",
+    );
+  }
+  if (request.method !== "GET") {
+    return fixedWorkshopResponse(405, "Method not allowed.");
+  }
+  const runtime = resolveWorkshopRuntimeRequest(request.url);
+  if (runtime === null) {
+    return fixedWorkshopResponse(404, "Workshop runtime not found.");
+  }
+  try {
+    const upstream = await electronNet.fetch(runtime.backendUrl, {
+      headers: {
+        "X-Lumina-Workshop-Desktop-Token": workshopSessionToken,
+      },
+      redirect: "error",
+    });
+    if (!upstream.ok) {
+      const status =
+        upstream.status >= 400 && upstream.status <= 599
+          ? upstream.status
+          : 502;
+      return fixedWorkshopResponse(
+        status,
+        "Workshop runtime unavailable.",
+      );
+    }
+    const headers = new Headers();
+    for (const name of WORKSHOP_RUNTIME_HEADER_NAMES) {
+      const value = upstream.headers.get(name);
+      if (value !== null) {
+        headers.set(name, value);
+      }
+    }
+    return new Response(await upstream.arrayBuffer(), {
+      status: upstream.status,
+      headers,
+    });
+  } catch (err) {
+    logErr(`Workshop protocol proxy failed: ${err.name}`);
+    return fixedWorkshopResponse(502, "Workshop runtime unavailable.");
+  }
+}
+
+function installWorkshopSessionSecurity() {
+  protocol.handle("lumina-workshop", handleWorkshopProtocol);
+
+  session.defaultSession.webRequest.onBeforeRequest(
+    { urls: ["<all_urls>"] },
+    (details, callback) => {
+      const trustedInternal =
+        details.webContentsId === undefined &&
+        details.webContents === undefined &&
+        details.frame == null;
+      const allowed = isAllowedWorkshopRequest({
+        frameUrl: details.frame?.url ?? null,
+        initiator: details.referrer || null,
+        resourceType: details.resourceType,
+        trustedInternal,
+        url: details.url,
+      });
+      callback({ cancel: !allowed });
+    },
+  );
+
+  session.defaultSession.setPermissionRequestHandler(
+    (webContents, _permission, callback, details) => {
+      callback(
+        isAllowedWorkshopPermission({
+          frameUrl:
+            details?.requestingUrl ??
+            webContents?.getURL() ??
+            null,
+          requestingOrigin:
+            details?.securityOrigin ??
+            details?.requestingUrl ??
+            null,
+        }),
+      );
+    },
+  );
+  session.defaultSession.setPermissionCheckHandler(
+    (webContents, _permission, requestingOrigin, details) =>
+      isAllowedWorkshopPermission({
+        frameUrl:
+          details?.requestingUrl ??
+          webContents?.getURL() ??
+          null,
+        requestingOrigin,
+      }),
+  );
+}
 
 function createSplash() {
   splashWin = new BrowserWindow({
@@ -434,7 +589,11 @@ function createWindow() {
 
   Menu.setApplicationMenu(null);
 
-  win.webContents.setWindowOpenHandler(({ url }) => {
+  win.webContents.setWindowOpenHandler(({ url, referrer }) => {
+    const openerUrl = referrer?.url || null;
+    if (!isAllowedWorkshopPopup({ openerUrl, targetUrl: url })) {
+      return { action: "deny" };
+    }
     if (url.includes("/api/") || url.includes("/files/")) {
       win.webContents.downloadURL(url);
       return { action: "deny" };
@@ -442,8 +601,16 @@ function createWindow() {
     return { action: "allow" };
   });
 
-  session.defaultSession.on("will-download", (event, item) => {
-    event.preventDefault();
+  session.defaultSession.on("will-download", (event, item, webContents) => {
+    if (
+      !isAllowedWorkshopDownload({
+        frameUrl: webContents?.getURL() ?? null,
+        url: item.getURL(),
+      })
+    ) {
+      event.preventDefault();
+      return;
+    }
     const filename = item.getFilename();
     const savePath = dialog.showSaveDialogSync(win, {
       defaultPath: filename,
@@ -451,8 +618,73 @@ function createWindow() {
     });
     if (savePath) {
       item.setSavePath(savePath);
+    } else {
+      event.preventDefault();
     }
   });
+
+  win.webContents.on("will-frame-navigate", (details) => {
+    if (
+      shouldBlockWorkshopNavigation({
+        frameUrl: details.frame?.url ?? null,
+        initiatorUrl: details.initiator?.url ?? null,
+        isMainFrame: details.isMainFrame,
+        targetUrl: details.url,
+      })
+    ) {
+      details.preventDefault();
+    }
+  });
+
+  win.webContents.on("will-redirect", (details) => {
+    if (
+      shouldBlockWorkshopRedirect({
+        frameUrl: details.frame?.url ?? null,
+        initiatorUrl: details.initiator?.url ?? null,
+        targetUrl: details.url,
+      })
+    ) {
+      details.preventDefault();
+    }
+  });
+
+  win.webContents.on(
+    "did-frame-navigate",
+    (
+      _event,
+      url,
+      _httpResponseCode,
+      _httpStatusText,
+      isMainFrame,
+      frameProcessId,
+      frameRoutingId,
+    ) => {
+      if (isMainFrame || resolveWorkshopRuntimeRequest(url) === null) {
+        return;
+      }
+      if (
+        isWorkshopFrameProcessIsolated(
+          win.webContents.getProcessId(),
+          frameProcessId,
+        )
+      ) {
+        return;
+      }
+      workshopSafeMode = true;
+      logErr(
+        "runtime-isolation-unavailable: Workshop safe mode enabled",
+      );
+      const frame = webFrameMain.fromId(
+        frameProcessId,
+        frameRoutingId,
+      );
+      void frame
+        ?.executeJavaScript(
+          "window.stop();document.documentElement.replaceChildren();",
+        )
+        .catch(() => {});
+    },
+  );
 
   win.on("close", (e) => {
     if (isQuitting) return;
@@ -521,6 +753,11 @@ ipcMain.handle("get-app-version", () => {
   return app.getVersion();
 });
 
+ipcMain.handle("get-workshop-runtime-mode", () => ({
+  mode: "desktop-secure",
+  safeMode: workshopSafeMode,
+}));
+
 // ═══════════════════════════════════════════════════════════
 //  App lifecycle
 // ═══════════════════════════════════════════════════════════
@@ -540,6 +777,7 @@ app.whenReady().then(async () => {
   initLog();
   logSys("Lumina Studio Electron starting...");
   logSys(`Mode: ${isDev ? "development" : "production"}`);
+  installWorkshopSessionSecurity();
 
   // 让 about 面板 / app.getName() / 部分 macOS 系统提示显示正确的名字。
   // 注意:dev 模式下 macOS 顶部菜单栏左上角的加粗应用名由 Electron.app 的
@@ -577,7 +815,13 @@ app.whenReady().then(async () => {
     const apiServer = path.join(ROOT_DIR, "api_server.py");
     logSys(`Starting backend: ${python} ${apiServer}`);
     try {
-      backendProc = await spawnChild("Backend", python, [apiServer], ROOT_DIR);
+      backendProc = await spawnChild(
+        "Backend",
+        python,
+        [apiServer],
+        ROOT_DIR,
+        backendRuntimeEnv(),
+      );
     } catch (err) {
       dialog.showErrorBox(
         "Backend Start Failed",

@@ -43,8 +43,9 @@ export function migrateRecipe(raw: unknown): LuminaRecipe {
     );
     return recipe;
   }
-  // v1 → v2: optional fields (recipe_overrides, custom_recipe_history)
-  // default to undefined which importRecipe reads as empty arrays.
-  // 旧 v1 文件缺少可选字段时，importRecipe 会按空数组处理。
+  // v1 → v2 fields and the v3 workshop source are optional. Import adapters
+  // supply safe defaults, so old files remain byte-shape compatible here.
+  // v1 → v2 字段和 v3 工坊来源均为可选；导入适配器负责安全默认值，
+  // 因而旧文件在这里保持原始数据形状。
   return obj as unknown as LuminaRecipe;
 }

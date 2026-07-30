@@ -49,6 +49,7 @@ export const TAB_WIDGET_MAP: Record<TabId, WidgetId[]> = {
   "lut-compare": [],
   "five-color": [],
   vectorizer: [],
+  workshop: [],
   settings: [],
 };
 

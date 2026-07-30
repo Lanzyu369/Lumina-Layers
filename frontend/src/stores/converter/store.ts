@@ -105,6 +105,7 @@ import { uploadImagePreview } from "../../api/system";
 import { tRuntime } from "../../i18n/runtime";
 import { fetchMaterialColorSuggestions } from "../../api/materialCache";
 import { fetchGradientGroups as apiFetchGradientGroups } from "../../api/converter";
+import type { WorkshopRecipeSource } from "../../workshop/types";
 import {
   showBrowserCompletionNotification,
   type CompletionNotificationKind,
@@ -1509,6 +1510,15 @@ export function isValidImageType(mimeType: string, fileName?: string): boolean {
   return false;
 }
 
+export interface WorkshopConverterImageInput {
+  file: File;
+  pixelWidth: number;
+  pixelHeight: number;
+  targetWidthMm: number;
+  targetHeightMm: number;
+  source: WorkshopRecipeSource;
+}
+
 // ========== State Interface ==========
 
 export interface ConverterState {
@@ -1516,6 +1526,7 @@ export interface ConverterState {
   imageFile: File | null;
   imagePreviewUrl: string | null;
   aspectRatio: number | null;
+  workshopSource: WorkshopRecipeSource | null;
 
   // 模型覆面
   modelSurfaceEnabled: boolean;
@@ -1825,6 +1836,9 @@ export interface ConverterActions {
   setImageFile: (file: File | null) => void;
   rotateImageForExport: (degrees: ImageRotationDegrees) => Promise<void>;
   loadVectorizedSvgIntoConverter: (file: File) => void;
+  loadWorkshopImageIntoConverter: (
+    input: WorkshopConverterImageInput,
+  ) => void;
   setModelSurfaceEnabled: (enabled: boolean) => void;
   uploadModelSurfaceFile: (file: File) => Promise<void>;
   clearModelSurface: () => void;
@@ -2502,6 +2516,7 @@ export const DEFAULT_STATE: ConverterState = {
   imageFile: null,
   imagePreviewUrl: null,
   aspectRatio: null,
+  workshopSource: null,
   modelSurfaceEnabled: false,
   modelSurfaceFile: null,
   modelSurfacePreviewUrl: null,
@@ -2977,6 +2992,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           imageFile: null,
           imagePreviewUrl: null,
           aspectRatio: null,
+          workshopSource: null,
           ...modelSurfaceArtworkReset,
           modeling_mode: currentMode === ModelingModeEnum.VECTOR
             ? ModelingModeEnum.HIGH_FIDELITY
@@ -2993,6 +3009,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           imageFile: file,
           imagePreviewUrl: null,
           aspectRatio: null,
+          workshopSource: null,
           ...modelSurfaceArtworkReset,
           modeling_mode: currentState.modeling_mode === ModelingModeEnum.VECTOR
             ? ModelingModeEnum.HIGH_FIDELITY
@@ -3050,6 +3067,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       set({
         imageFile: file,
         imagePreviewUrl: previewUrl,
+        workshopSource: null,
         ...modelSurfaceArtworkReset,
         modeling_mode: modelingMode,
         ...buildPreviewSessionResetState(currentState),
@@ -3111,6 +3129,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         imageFile: file,
         imagePreviewUrl: previewUrl,
         aspectRatio: null,
+        workshopSource: null,
         ...modelSurfaceArtworkReset,
         ...buildPreviewSessionResetState(currentState),
         modeling_mode: ModelingModeEnum.VECTOR,
@@ -3130,6 +3149,61 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         gradientSelection: null,
         selectedGradientRegions: [],
         puzzleEnabled: false,
+      });
+    },
+
+    loadWorkshopImageIntoConverter: ({
+      file,
+      pixelWidth,
+      pixelHeight,
+      targetWidthMm,
+      targetHeightMm,
+      source,
+    }) => {
+      _cancelPreviewWork();
+
+      const currentState = _get();
+      const previousPreviewUrl = currentState.imagePreviewUrl;
+      if (
+        previousPreviewUrl &&
+        previousPreviewUrl.startsWith("blob:")
+      ) {
+        URL.revokeObjectURL(previousPreviewUrl);
+      }
+
+      const previewUrl = URL.createObjectURL(file);
+      const modelSurfaceArtworkReset = currentState.modelSurfaceEnabled
+        ? { modelSurfacePlacement: { ...DEFAULT_MODEL_SURFACE_PLACEMENT } }
+        : {};
+      set({
+        imageFile: file,
+        imagePreviewUrl: previewUrl,
+        aspectRatio: pixelWidth / pixelHeight,
+        workshopSource: source,
+        target_width_mm: targetWidthMm,
+        target_height_mm: targetHeightMm,
+        ...modelSurfaceArtworkReset,
+        ...buildPreviewSessionResetState(currentState),
+        modeling_mode:
+          currentState.modeling_mode === ModelingModeEnum.VECTOR
+            ? ModelingModeEnum.HIGH_FIDELITY
+            : currentState.modeling_mode,
+        cropModalOpen: false,
+        isCropping: false,
+        batchMode: false,
+        batchFiles: [],
+        batchResult: null,
+        batchLoading: false,
+        previewWarnings: [],
+        largeFormatWarnings: [],
+        gradientGroups: null,
+        gradientGroupsLoading: false,
+        gradientGroupsError: null,
+        gradientGroupsSessionId: null,
+        gradientSelection: null,
+        selectedGradientRegions: [],
+        puzzleEnabled: false,
+        error: null,
       });
     },
 
@@ -7444,6 +7518,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           imageFile: croppedFile,
           imagePreviewUrl: newPreviewUrl,
           aspectRatio: ratio,
+          workshopSource: null,
           ...buildPreviewSessionResetState(currentState),
           cropModalOpen: false,
           isCropping: false,
@@ -7491,7 +7566,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     addBatchFiles: (files: File[]) => {
       const valid = files.filter((f) => isValidImageType(f.type, f.name));
       if (valid.length === 0) return;
-      set((state) => ({ batchFiles: [...state.batchFiles, ...valid] }));
+      set((state) => ({
+        batchFiles: [...state.batchFiles, ...valid],
+        workshopSource: null,
+      }));
     },
 
     removeBatchFile: (index: number) => {
@@ -7509,6 +7587,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             imageFile: lastFile,
             imagePreviewUrl: null,
             aspectRatio: null,
+            workshopSource: null,
             batchMode: false,
             hasManualPreview: false,
             previewAutoRefreshPending: false,
@@ -7555,6 +7634,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             batchFiles: [],
             imageFile: lastFile,
             imagePreviewUrl: previewUrl,
+            workshopSource: null,
             batchMode: false,
             hasManualPreview: false,
             previewAutoRefreshPending: false,
@@ -7571,6 +7651,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           imageFile: null,
           imagePreviewUrl: null,
           aspectRatio: null,
+          workshopSource: null,
           previewImageUrl: null,
           originalPreviewUrl: null,
           previewBaseImageUrl: null,
@@ -7595,6 +7676,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         // Still in BatchMode with multiple files
         set({
           batchFiles: remaining,
+          workshopSource: null,
           batchResult: null,
           hasManualPreview: false,
           previewAutoRefreshPending: false,
@@ -7608,6 +7690,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       _cancelPreviewWork();
       set({
         batchFiles: [],
+        workshopSource: null,
         batchResult: null,
         ...EMPTY_LUT_MATCH_STATE,
         puzzleEnabled: false,
@@ -7652,6 +7735,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       if (inBatchMode) {
         set({
           batchFiles: [...state.batchFiles, ...validFiles],
+          workshopSource: null,
           modeling_mode: compatibleModelingMode,
           batchMode: true,
           batchResult: null,
@@ -7678,6 +7762,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             imageFile: null,
             imagePreviewUrl: null,
             aspectRatio: null,
+            workshopSource: null,
             previewImageUrl: null,
             previewBaseImageUrl: null,
             sessionId: null,
@@ -7714,6 +7799,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             imageFile: singleFile,
             imagePreviewUrl: null,
             aspectRatio: null,
+            workshopSource: null,
             previewImageUrl: null,
             previewBaseImageUrl: null,
             sessionId: null,
@@ -7783,6 +7869,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         set({
           imageFile: singleFile,
           imagePreviewUrl: previewUrl,
+          workshopSource: null,
           previewImageUrl: null,
           previewBaseImageUrl: null,
           sessionId: null,
@@ -7827,6 +7914,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         imageFile: null,
         imagePreviewUrl: null,
         aspectRatio: null,
+        workshopSource: null,
         previewImageUrl: null,
         previewBaseImageUrl: null,
         sessionId: null,
@@ -8212,6 +8300,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     ) => {
       // 1. Apply restored parameters (without triggering crop modal)
       const prevEnableCrop = _get().enableCrop;
+      const restoredWorkshopSource = partial.workshopSource ?? null;
       const baseState = _get();
       const nextState = {
         ...baseState,
@@ -8249,7 +8338,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       });
 
       // 3. Restore crop setting
-      set({ enableCrop: prevEnableCrop });
+      set({
+        enableCrop: prevEnableCrop,
+        workshopSource: restoredWorkshopSource,
+      });
 
       // 4. Set heightmap if present
       if (heightmapFile) {

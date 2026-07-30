@@ -4,8 +4,8 @@
  */
 
 // ===== TAB ID =====
-// The main app owns converter, Material/LUT, vectorizer, and settings tabs.
-// 主应用拥有 converter、耗材/LUT、vectorizer 和 settings 全部标签。
+// The main app owns converter, Material/LUT, vectorizer, workshop, and settings tabs.
+// 主应用拥有 converter、耗材/LUT、vectorizer、workshop 和 settings 全部标签。
 export type TabId =
   | "converter"
   | "calibration"
@@ -22,6 +22,7 @@ export type TabId =
   | "lut-compare"
   | "five-color"
   | "vectorizer"
+  | "workshop"
   | "settings";
 
 // ===== Converter 二级 sub-tab ID =====
