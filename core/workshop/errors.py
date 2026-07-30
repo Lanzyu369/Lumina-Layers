@@ -24,6 +24,13 @@ class WorkshopRegistryError(WorkshopError):
     """
 
 
+class WorkshopReleaseError(WorkshopError):
+    """Raised when a remote module release fails its trust boundary.
+
+    远程模块 Release 未通过信任边界校验时抛出。
+    """
+
+
 class WorkshopInstallError(WorkshopError):
     """Raised when an install-state transaction cannot converge safely.
 
