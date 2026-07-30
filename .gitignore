@@ -49,6 +49,8 @@ test.png
 *.rar
 *.zip
 *.7z
+/.pnpm-store/
+/workshop-sdk/dist-package/
 
 # Material Registry package collections live in the sibling Lumina-materials repo.
 material-registry-packages/
