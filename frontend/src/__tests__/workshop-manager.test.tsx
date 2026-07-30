@@ -505,6 +505,8 @@ describe("Workshop installable module manager", () => {
       module: installed({
         source: "seed",
         official: true,
+        active_version: null,
+        candidate_version: "1.0.0",
       }),
     });
     renderManager(api);
@@ -520,6 +522,8 @@ describe("Workshop installable module manager", () => {
         "fixture.hello",
       ),
     );
+    expect(await screen.findByText("确认模块权限")).toBeInTheDocument();
+    expect(screen.getByText("读写模块工程")).toBeInTheDocument();
   });
 
   it("preserves projects by default and requires an explicit destructive checkbox", async () => {

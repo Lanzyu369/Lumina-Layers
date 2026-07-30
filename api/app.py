@@ -76,6 +76,7 @@ from api.material_sync_scheduler import (
     cancel_material_sync_auto_refresh_tasks,
     start_material_sync_auto_refresh_tasks,
 )
+from api.workshop_seed import install_workshop_seed_if_needed
 from api.routers import (
     calibration_router,
     converter_router,
@@ -94,6 +95,7 @@ from api.routers import (
     vectorizer_router,
     workshop_router,
 )
+from core.workshop import WorkshopError
 
 log = get_logger(__name__)
 
@@ -390,6 +392,32 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 "event": "material_seed_install_failed",
                 "error_type": type(exc).__name__,
                 "error_message": str(exc),
+            },
+        )
+
+    try:
+        workshop_seed_result = install_workshop_seed_if_needed()
+        if workshop_seed_result is not None:
+            log.info(
+                "Creative Workshop seed converged",
+                extra={
+                    "event": "workshop_seed_converge_done",
+                    "module_id": workshop_seed_result.module_id,
+                    "version": workshop_seed_result.version,
+                    "seed_action": workshop_seed_result.action,
+                },
+            )
+    except (OSError, ValueError, WorkshopError) as exc:
+        log.error(
+            "Creative Workshop seed convergence failed",
+            extra={
+                "event": "workshop_seed_converge_failed",
+                "error_type": type(exc).__name__,
+                "error_message": (
+                    "configured Workshop seed could not be verified "
+                    "or installed"
+                ),
+                "seed_configured": True,
             },
         )
 

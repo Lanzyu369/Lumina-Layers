@@ -14,8 +14,6 @@ Steps:
 """
 
 import argparse
-import hashlib
-import hmac
 import importlib
 import os
 import shutil
@@ -29,8 +27,7 @@ if str(ROOT) not in sys.path:
 
 from core.workshop import (  # noqa: E402
     WorkshopSeedLock,
-    inspect_workshop_package,
-    load_workshop_seed_lock,
+    verify_workshop_seed as verify_seed_contract,
 )
 
 FRONTEND_DIR = ROOT / "frontend"
@@ -150,31 +147,7 @@ def verify_workshop_seed(
             大小、摘要、安装包或清单身份不一致时抛出。
     """
 
-    lock = load_workshop_seed_lock(lock_path)
-    if seed_path.is_symlink() or not seed_path.is_file():
-        raise ValueError("Workshop seed must be a regular file")
-    if seed_path.name != lock.release_asset:
-        raise ValueError("Workshop seed asset name does not match lock")
-    if seed_path.stat().st_size != lock.asset_bytes:
-        raise ValueError("Workshop seed byte count does not match lock")
-    digest = hashlib.sha256()
-    with seed_path.open("rb") as stream:
-        while chunk := stream.read(1024 * 1024):
-            digest.update(chunk)
-    if not hmac.compare_digest(digest.hexdigest(), lock.sha256):
-        raise ValueError("Workshop seed SHA-256 does not match lock")
-    inspected = inspect_workshop_package(seed_path)
-    if (
-        inspected.manifest.id != lock.module_id
-        or inspected.manifest.version != lock.version
-    ):
-        raise ValueError("Workshop seed package identity does not match lock")
-    if not hmac.compare_digest(
-        inspected.manifest_sha256,
-        lock.manifest_sha256,
-    ):
-        raise ValueError("Workshop seed manifest SHA-256 does not match lock")
-    return lock
+    return verify_seed_contract(seed_path, lock_path).lock
 
 
 def _clear_workshop_seed_resources(resource_dir: Path) -> None:

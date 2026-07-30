@@ -1007,6 +1007,18 @@ export function WorkshopPanel({
     [api, requestStagedCandidate, runModuleMutation],
   );
 
+  const restoreOfficialSeed = useCallback(
+    async (moduleId: string) => {
+      const result = await runModuleMutation(moduleId, () =>
+        api.restoreOfficialSeed(moduleId),
+      );
+      if (result !== null) {
+        requestStagedCandidate(result);
+      }
+    },
+    [api, requestStagedCandidate, runModuleMutation],
+  );
+
   if (selectedModule && selectedVersion && activeModule) {
     return (
       <div
@@ -1204,9 +1216,7 @@ export function WorkshopPanel({
                     })
                   }
                   onRestore={() =>
-                    void runModuleMutation(module.module_id, () =>
-                      api.restoreOfficialSeed(module.module_id),
-                    )
+                    void restoreOfficialSeed(module.module_id)
                   }
                 />
               ))}

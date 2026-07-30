@@ -221,12 +221,15 @@ MATERIAL_REGISTRY_STRUCTURED_EVENTS = {
 }
 WORKSHOP_STRUCTURED_EVENTS = {
     "workshop_catalog_refresh_done",
+    "workshop_seed_converge_done",
+    "workshop_seed_converge_failed",
     "workshop_module_install_done",
     "workshop_module_activate_done",
     "workshop_module_rollback_done",
     "workshop_module_enabled_done",
     "workshop_module_runtime_health_done",
     "workshop_module_uninstall_done",
+    "workshop_module_seed_restore_done",
 }
 CONVERTER_STRUCTURED_EVENTS = {
     "converter_region_replace_timing",
