@@ -61,6 +61,17 @@ def _desktop_user_data_dir() -> str:
     return os.path.join(root, "lumina-studio")
 
 
+def get_workshop_data_dir() -> str:
+    """Return the mutable Workshop package root.
+    返回创意工坊模块的可写数据目录。
+    """
+
+    override = os.environ.get("LUMINA_WORKSHOP_DATA_DIR", "").strip()
+    if override:
+        return os.path.abspath(os.path.expanduser(override))
+    return os.path.join(_desktop_user_data_dir(), "workshop")
+
+
 def _resolve_materials_dir() -> str:
     """Resolve the writable material library root.
     解析可写耗材库根目录。

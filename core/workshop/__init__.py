@@ -2,9 +2,12 @@
 
 from .errors import (
     WorkshopError,
+    WorkshopInstallError,
     WorkshopPackageError,
     WorkshopRegistryError,
 )
+from .install_store import InstalledModuleState
+from .installer import WorkshopInstaller
 from .models import InspectedWorkshopPackage, WorkshopManifestV1
 from .package_validator import (
     extract_inspected_package,
@@ -18,9 +21,12 @@ from .registry_client import (
 
 __all__ = [
     "InspectedWorkshopPackage",
+    "InstalledModuleState",
     "RegistryClient",
     "RegistryFetchResponse",
     "WorkshopError",
+    "WorkshopInstallError",
+    "WorkshopInstaller",
     "WorkshopManifestV1",
     "WorkshopPackageError",
     "WorkshopRegistryError",

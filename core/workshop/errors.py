@@ -22,3 +22,10 @@ class WorkshopRegistryError(WorkshopError):
 
     创意工坊 Registry 索引或签名不可信时抛出。
     """
+
+
+class WorkshopInstallError(WorkshopError):
+    """Raised when an install-state transaction cannot converge safely.
+
+    创意工坊安装状态事务无法安全收敛时抛出。
+    """
