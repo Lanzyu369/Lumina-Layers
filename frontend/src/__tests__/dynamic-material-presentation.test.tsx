@@ -192,4 +192,42 @@ describe("dynamic material palette presentation", () => {
     expect(screen.getByText("无改善")).toBeInTheDocument();
     expect(screen.getByText("边际改善 0.25")).toBeInTheDocument();
   });
+
+  it("keeps the benefit curve and palette in one scroll viewport at short heights", () => {
+    useConverterStore.setState({
+      materialDynamicRecipes: PERMUTED_RECIPES,
+      materialLayerBenefitCurve: [
+        {
+          max_effective_layer_count: 5,
+          weighted_mean_delta_e00: 3.4,
+          marginal_delta_e00_reduction: 0,
+        },
+        {
+          max_effective_layer_count: 6,
+          weighted_mean_delta_e00: 3.1,
+          marginal_delta_e00_reduction: 0.3,
+        },
+        {
+          max_effective_layer_count: 7,
+          weighted_mean_delta_e00: 2.9,
+          marginal_delta_e00_reduction: 0.2,
+        },
+      ],
+    } as never);
+
+    render(<PalettePanel />);
+
+    const scrollViewport = screen.getByTestId("palette-content-scroll");
+    const benefitCurve = screen.getByRole("region", {
+      name: "全图层数收益",
+    });
+    const paletteList = screen.getByRole("listbox", {
+      name: "调色板颜色列表",
+    });
+
+    expect(scrollViewport).toHaveClass("min-h-0", "flex-1", "overflow-y-auto");
+    expect(scrollViewport).toContainElement(benefitCurve);
+    expect(scrollViewport).toContainElement(paletteList);
+    expect(paletteList).not.toHaveClass("flex-1", "overflow-y-auto");
+  });
 });

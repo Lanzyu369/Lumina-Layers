@@ -439,7 +439,10 @@ export default function PalettePanel({
           {t("palette_no_data")}
         </p>
       ) : (
-        <div className="flex min-h-0 flex-1 flex-col gap-1.5">
+        <div
+          className="dock-scrollbar min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1"
+          data-testid="palette-content-scroll"
+        >
           {/* Toolbar: selected color detail + grouped action buttons */}
           <div className="shrink-0 flex flex-col gap-1.5">
             {/* Inline selected color swatches */}
@@ -645,7 +648,6 @@ export default function PalettePanel({
 
           {/* Palette items */}
           <div
-            className="dock-scrollbar min-h-0 flex-1 overflow-y-auto pr-1"
             role="listbox"
             aria-label={t("palette_list_label")}
           >
