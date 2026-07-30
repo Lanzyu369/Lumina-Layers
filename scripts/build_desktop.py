@@ -31,6 +31,10 @@ MATERIALS_RES_DIR = RESOURCES_DIR / "materials"
 PYINSTALLER_DIST = ROOT / "dist"
 NATIVE_VECTOR_MESH_MARKER = "native-vector-mesh.enabled"
 GLB_V2_REQUIRED_MODULES = ("rasterio.features", "manifold3d")
+WORKSHOP_DESKTOP_SECURITY_FILES = (
+    ELECTRON_DIR / "workshop-security.cjs",
+    ELECTRON_DIR / "preload.cjs",
+)
 
 
 def run(cmd, cwd=None, env_extra=None):
@@ -94,6 +98,21 @@ def check_glb_v2_dependencies_available() -> bool:
     for module_name, exc in missing:
         print(f"  - {module_name}: {exc}")
     return False
+
+
+def check_workshop_desktop_security_files() -> None:
+    """Fail packaging if the Workshop desktop trust boundary is incomplete."""
+
+    missing = [
+        path.relative_to(ROOT)
+        for path in WORKSHOP_DESKTOP_SECURITY_FILES
+        if not path.is_file()
+    ]
+    if missing:
+        rendered = ", ".join(str(path) for path in missing)
+        raise FileNotFoundError(
+            f"Workshop desktop security files are missing: {rendered}"
+        )
 
 
 def parse_args():
@@ -176,6 +195,7 @@ def main():
 
     # ── Step 4: Build Electron installer ──
     print("\n[6/6] Building Electron installer (electron-builder)...")
+    check_workshop_desktop_security_files()
     if not (ELECTRON_DIR / "node_modules").exists():
         print("  Installing Electron dependencies...")
         run("pnpm install", cwd=str(ELECTRON_DIR))

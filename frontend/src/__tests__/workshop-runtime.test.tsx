@@ -424,6 +424,11 @@ describe("Workshop runtime helpers", () => {
     ).toBe(
       "lumina-workshop://fixture.hello/1.0.0/ui/index.html",
     );
+    expect(
+      desktopModuleUrl("fixture.hello", "1.0.0+desktop.1"),
+    ).toBe(
+      "lumina-workshop://fixture.hello/1.0.0+desktop.1/ui/index.html",
+    );
   });
 
   it("accepts only host API versions inside the manifest range", () => {

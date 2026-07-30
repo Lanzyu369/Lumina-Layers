@@ -146,8 +146,18 @@ export function desktopModuleUrl(
   moduleId: string,
   version: string,
 ): string {
-  const host = encodeURIComponent(moduleId);
-  return `lumina-workshop://${host}/${encodeURIComponent(version)}/ui/index.html`;
+  const safeModuleId =
+    /^[a-z0-9]+(?:[.-][a-z0-9]+(?:[a-z0-9-]*[a-z0-9])?)*$/.test(
+      moduleId,
+    );
+  const safeVersion =
+    /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.test(
+      version,
+    );
+  if (!safeModuleId || !safeVersion) {
+    throw new Error("Workshop desktop URL identity is invalid.");
+  }
+  return `lumina-workshop://${moduleId}/${version}/ui/index.html`;
 }
 
 export function canRunWorkshopInBrowser(
