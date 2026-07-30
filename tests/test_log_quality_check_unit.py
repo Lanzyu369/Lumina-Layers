@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
+import uuid
 from pathlib import Path
 
 import pytest
@@ -343,6 +346,42 @@ def test_fast_mode_app_mounts_local_development_routes() -> None:
     assert "/api/extractor/extract-single-stage" in paths
     assert "/api/extractor/extract" in paths
     assert "/api/calibration/generate-single-stage-kit" in paths
+
+
+def test_fast_mode_preview_supports_timed_worker_submission() -> None:
+    """The fast gate must mirror the preview endpoint's timed pool contract."""
+
+    output_path = (
+        log_quality_check.REPO_ROOT
+        / ".scratch"
+        / f"log-quality-timed-{uuid.uuid4().hex}.json"
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "scripts/log_quality_check.py",
+                "--mode",
+                "fast",
+                "--workflow",
+                "lut_list,lut_colors,preview",
+                "--output",
+                str(output_path),
+            ],
+            cwd=log_quality_check.REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        report = json.loads(output_path.read_text(encoding="utf-8"))
+        assert report["overall_passed"] is True
+    finally:
+        output_path.unlink(missing_ok=True)
+        output_path.with_suffix(".log").unlink(missing_ok=True)
 
 
 def test_mock_preview_worker_contract_binds_current_worker_signature() -> None:

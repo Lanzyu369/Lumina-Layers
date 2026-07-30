@@ -12,10 +12,12 @@ import hashlib
 import json
 import math
 import os
+import pickle
 import platform
 import pstats
 import statistics
 import sys
+import tempfile
 import threading
 import time
 import xml.etree.ElementTree as ET
@@ -63,9 +65,13 @@ MATERIAL_PALETTES = {
 }
 _NUMERIC_RUN_METRICS = (
     "total_s",
+    "queue_wait_s",
+    "worker_execution_s",
     "cpu_s",
     "average_cpu_percent",
+    "rss_at_start_mb",
     "peak_rss_mb",
+    "peak_rss_increase_mb",
     "peak_thread_count",
     "peak_child_process_count",
 )
@@ -78,6 +84,7 @@ _THREAD_ENVIRONMENT_KEYS = (
     "BLIS_NUM_THREADS",
 )
 _CANONICAL_TRIANGLE_CHUNK_FACES = 250_000
+OverrideScenario = Literal["none", "matched-rgb", "recipe", "combined"]
 
 
 @dataclass(frozen=True)
@@ -99,6 +106,7 @@ class ProfileCase:
     input_path: Path
     target_width_mm: float
     material_count: Literal[8, 12, 15] = 12
+    override_scenario: OverrideScenario = "none"
 
 
 def build_pipeline_context(case: ProfileCase) -> dict[str, Any]:
@@ -177,6 +185,188 @@ def build_pipeline_context(case: ProfileCase) -> dict[str, Any]:
         "high_precision_3d_preview": False,
         "retain_scene_for_profile": True,
     }
+
+
+def _build_vector_override_context(
+    preview_result: dict[str, Any],
+    *,
+    output_dir: Path,
+    scenario: OverrideScenario,
+) -> dict[str, Any]:
+    """Persist a deterministic, private vector override fixture.
+
+    The returned paths are temporary inputs for one profiling session. No
+    source path, RGB payload, or material matrix is copied into the report.
+    为一次性能会话保存确定性的私有覆盖输入，报告中不写入颜色矩阵。
+    """
+    if scenario not in {"matched-rgb", "recipe", "combined"}:
+        raise ValueError("override scenario must require an override")
+    cache = preview_result.get("cache")
+    if not isinstance(cache, dict):
+        raise ValueError("vector preview result has no cache")
+
+    matched_rgb = np.asarray(cache.get("matched_rgb")).copy()
+    material_matrix = np.asarray(cache.get("material_matrix")).copy()
+    raw_mask = np.asarray(cache.get("mask_solid"))
+    mask_solid = raw_mask.astype(bool, copy=True)
+    raw_identity = cache.get(
+        "height_identity_rgb",
+        cache.get("original_matched_rgb", matched_rgb),
+    )
+    height_identity_rgb = np.asarray(raw_identity).copy()
+    if (
+        matched_rgb.ndim != 3
+        or matched_rgb.shape[2] != 3
+        or matched_rgb.dtype != np.uint8
+    ):
+        raise ValueError("vector preview matched_rgb is not (H,W,3) uint8")
+    if (
+        height_identity_rgb.shape != matched_rgb.shape
+        or height_identity_rgb.dtype != np.uint8
+    ):
+        raise ValueError("vector preview height identity grid is incompatible")
+    if (
+        mask_solid.shape != matched_rgb.shape[:2]
+        or raw_mask.dtype != np.dtype(np.bool_)
+    ):
+        raise ValueError("vector preview mask_solid is incompatible")
+    if (
+        material_matrix.ndim != 3
+        or material_matrix.shape[:2] != matched_rgb.shape[:2]
+        or material_matrix.shape[2] <= 0
+        or not np.issubdtype(material_matrix.dtype, np.integer)
+    ):
+        raise ValueError("vector preview material_matrix is incompatible")
+
+    solid_positions = np.argwhere(mask_solid)
+    if solid_positions.size == 0:
+        raise ValueError("vector preview has no solid pixels to override")
+    height, width = mask_solid.shape
+    yy, xx = np.indices((height, width), dtype=np.int32)
+    block_height = max(1, height // 9)
+    block_width = max(1, width // 9)
+    selected = mask_solid & (
+        ((yy // block_height) + (xx // block_width)) % 3 == 0
+    )
+    if not np.any(selected):
+        first_y, first_x = solid_positions[0]
+        selected[int(first_y), int(first_x)] = True
+
+    rgb_codes = (
+        matched_rgb[..., 0].astype(np.uint32) * np.uint32(65536)
+        + matched_rgb[..., 1].astype(np.uint32) * np.uint32(256)
+        + matched_rgb[..., 2].astype(np.uint32)
+    )
+    solid_codes = np.unique(rgb_codes[mask_solid])
+    selected_codes = rgb_codes[selected]
+    target_code = min(
+        (
+            int(np.count_nonzero(selected_codes == code)),
+            int(code),
+        )
+        for code in solid_codes
+    )[1]
+    target_positions = np.argwhere(mask_solid & (rgb_codes == target_code))
+    target_y, target_x = (int(value) for value in target_positions[0])
+    target_rgb = matched_rgb[target_y, target_x].copy()
+    target_stack = material_matrix[target_y, target_x].copy()
+
+    original_matched = matched_rgb.copy()
+    original_material = material_matrix.copy()
+    if scenario in {"matched-rgb", "combined"}:
+        matched_rgb[selected] = target_rgb
+        material_matrix[selected] = target_stack
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    array_paths = {
+        "matched_rgb_path": output_dir / "matched-rgb.npy",
+        "height_identity_rgb_path": output_dir / "height-identity-rgb.npy",
+        "material_matrix_path": output_dir / "material-matrix.npy",
+        "mask_solid_path": output_dir / "mask-solid.npy",
+    }
+    for key, array in (
+        ("matched_rgb_path", matched_rgb),
+        ("height_identity_rgb_path", height_identity_rgb),
+        ("material_matrix_path", material_matrix),
+        ("mask_solid_path", mask_solid),
+    ):
+        np.save(array_paths[key], array, allow_pickle=False)
+
+    parse_cache_blob = cache.get("vector_parse_clip_cache_blob")
+    if not isinstance(parse_cache_blob, (bytes, bytearray)):
+        raise ValueError("vector preview has no parse/clip cache artifact")
+    parse_cache_path = output_dir / "vector-parse-clip-cache.pkl"
+    parse_cache_path.write_bytes(bytes(parse_cache_blob))
+
+    recipe_overrides = None
+    recipe_override_masks_path = None
+    if scenario in {"recipe", "combined"}:
+        recipe_overrides = [
+            {
+                "region_id": "profile-override-region",
+                "recipe": [int(value) for value in target_stack.tolist()],
+                "layer_order": "Top2Bottom",
+            }
+        ]
+        recipe_override_masks_path = output_dir / "recipe-override-masks.pkl"
+        with recipe_override_masks_path.open("wb") as handle:
+            pickle.dump(
+                {"profile-override-region": selected},
+                handle,
+                protocol=pickle.HIGHEST_PROTOCOL,
+            )
+
+    from core.preview_analysis_cache import REQUIRED_PREVIEW_ANALYSIS_REUSE
+
+    return {
+        **{
+            key: str(path)
+            for key, path in array_paths.items()
+        },
+        "vector_parse_clip_cache_path": str(parse_cache_path),
+        "recipe_overrides": recipe_overrides,
+        "recipe_override_masks_path": (
+            str(recipe_override_masks_path)
+            if recipe_override_masks_path is not None
+            else None
+        ),
+        "reuse_preview_analysis": REQUIRED_PREVIEW_ANALYSIS_REUSE,
+        "profile_override_fixture": {
+            "scenario": scenario,
+            "grid_shape": [int(height), int(width)],
+            "selected_pixel_count": int(np.count_nonzero(selected)),
+            "matched_rgb_changed_pixel_count": int(
+                np.count_nonzero(
+                    np.any(matched_rgb != original_matched, axis=2)
+                )
+            ),
+            "material_changed_pixel_count": int(
+                np.count_nonzero(
+                    np.any(material_matrix != original_material, axis=2)
+                )
+            ),
+            "material_layer_count": int(material_matrix.shape[2]),
+        },
+    }
+
+
+def _prepare_vector_override_context(
+    case: ProfileCase,
+    *,
+    output_dir: Path,
+) -> dict[str, Any]:
+    """Build an untimed preview and persist its deterministic override inputs."""
+    preview_result = run_preview_pipeline(build_pipeline_context(case))
+    try:
+        if preview_result.get("error"):
+            raise RuntimeError(str(preview_result["error"]))
+        return _build_vector_override_context(
+            preview_result,
+            output_dir=output_dir,
+            scenario=case.override_scenario,
+        )
+    finally:
+        _cleanup_result_files(preview_result)
 
 
 def _array_summary(value: object) -> dict[str, object] | None:
@@ -359,18 +549,8 @@ def _mesh_visual_summary(
         )
     elif kind == "texture":
         uv = getattr(visual, "uv", None)
-        if uv is None:
-            raise ValueError("texture visual has no UV coordinates")
-        corner_uv = _canonical_corner_payload_rows(
-            mesh,
-            np.asarray(uv),
-            rotations,
-        )
-        summary["uv"] = _semantic_payload_summary(
-            triangle_rows,
-            corner_uv,
-        )
         material = getattr(visual, "material", None)
+        texture_summaries: dict[str, object] = {}
         if material is not None:
             for attribute in (
                 "baseColorFactor",
@@ -399,7 +579,26 @@ def _mesh_visual_summary(
                 texture = getattr(material, texture_attribute, None)
                 texture_summary = _texture_image_summary(texture)
                 if texture_summary is not None:
-                    summary[f"material_{texture_attribute}"] = texture_summary
+                    texture_summaries[
+                        f"material_{texture_attribute}"
+                    ] = texture_summary
+        if uv is None:
+            if texture_summaries:
+                raise ValueError(
+                    "textured material has image payloads but no UV coordinates"
+                )
+            summary["uv"] = None
+        else:
+            corner_uv = _canonical_corner_payload_rows(
+                mesh,
+                np.asarray(uv),
+                rotations,
+            )
+            summary["uv"] = _semantic_payload_summary(
+                triangle_rows,
+                corner_uv,
+            )
+        summary.update(texture_summaries)
     return summary
 
 
@@ -632,6 +831,28 @@ def _export_artifact_summaries(
     return summaries
 
 
+def _semantic_array_value(
+    ctx: dict[str, Any],
+    payload: dict[str, Any],
+    key: str,
+) -> object:
+    """Resolve an in-memory array or its private temporary ``.npy`` path."""
+    value = payload.get(key)
+    if value is None and payload is not ctx:
+        value = ctx.get(key)
+    if value is not None:
+        return value
+    raw_path = ctx.get(f"{key}_path")
+    if raw_path is None and payload is not ctx:
+        raw_path = payload.get(f"{key}_path")
+    if raw_path is None:
+        return None
+    path = Path(str(raw_path))
+    if not path.is_file():
+        raise ValueError(f"profile semantic array is missing: {key}")
+    return np.load(path, allow_pickle=False)
+
+
 def semantic_snapshot(ctx: dict[str, Any]) -> dict[str, object]:
     """Summarize output arrays and geometry using deterministic semantics.
 
@@ -661,9 +882,18 @@ def semantic_snapshot(ctx: dict[str, Any]) -> dict[str, object]:
                 geometry[str(name)] = _mesh_summary(raw)
         scene_instances = _scene_instance_summaries(scene, geometry)
     return {
-        "matched_rgb": _array_summary(payload.get("matched_rgb")),
-        "material_matrix": _array_summary(payload.get("material_matrix")),
-        "mask_solid": _array_summary(payload.get("mask_solid")),
+        "matched_rgb": _array_summary(
+            _semantic_array_value(ctx, payload, "matched_rgb")
+        ),
+        "height_identity_rgb": _array_summary(
+            _semantic_array_value(ctx, payload, "height_identity_rgb")
+        ),
+        "material_matrix": _array_summary(
+            _semantic_array_value(ctx, payload, "material_matrix")
+        ),
+        "mask_solid": _array_summary(
+            _semantic_array_value(ctx, payload, "mask_solid")
+        ),
         "slot_names": [str(item) for item in payload.get("slot_names") or []],
         "geometry_source": geometry_source,
         "geometry": geometry,
@@ -815,6 +1045,7 @@ def build_report(
             "sha256": _sha256_file(case.input_path),
             "kind": case.kind,
             "target_width_mm": case.target_width_mm,
+            "override_scenario": case.override_scenario,
         },
         "materials": {
             "count": case.material_count,
@@ -827,6 +1058,9 @@ def build_report(
             "semantic_snapshots_available": semantic_snapshots_available,
             "semantic_snapshots_equal": semantic_snapshots_equal,
             "reference_sha256": reference_sha256,
+        },
+        "override": {
+            "scenario": case.override_scenario,
         },
         "runs": runs,
         "summary": summarize_runs(runs),
@@ -868,11 +1102,12 @@ class _ResourceSampler:
         self._interval_s = interval_s
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
+        self.initial_rss_bytes = 0
         self.peak_rss_bytes = 0
         self.peak_thread_count = 0
         self.peak_child_process_count = 0
 
-    def _sample(self) -> None:
+    def _sample(self) -> int | None:
         try:
             children = self._process.children(recursive=True)
             processes = [self._process, *children]
@@ -890,15 +1125,18 @@ class _ResourceSampler:
                 self.peak_child_process_count,
                 len(children),
             )
+            return rss_bytes
         except (psutil.NoSuchProcess, psutil.AccessDenied):
-            return
+            return None
 
     def _run(self) -> None:
         while not self._stop.wait(self._interval_s):
             self._sample()
 
     def __enter__(self) -> "_ResourceSampler":
-        self._sample()
+        initial_rss_bytes = self._sample()
+        if initial_rss_bytes is not None:
+            self.initial_rss_bytes = initial_rss_bytes
         self._thread.start()
         return self
 
@@ -984,6 +1222,7 @@ def execute_case(
     *,
     enable_cprofile: bool = True,
     capture_semantics: bool = True,
+    context_overrides: dict[str, Any] | None = None,
 ) -> dict[str, object]:
     """Execute and profile one quality-locked conversion phase.
 
@@ -995,6 +1234,8 @@ def execute_case(
         enable_cprofile: Enable deterministic call profiling. 是否启用调用分析。
         capture_semantics: Hash arrays and world-space geometry after timing.
             计时后是否对数组及世界坐标几何执行哈希。
+        context_overrides: Prepared private override fixture paths.
+            已准备好的私有覆盖输入路径。
 
     Returns:
         Timings, resource peaks, semantic snapshot, and cProfile text.
@@ -1005,6 +1246,8 @@ def execute_case(
     """
 
     ctx = build_pipeline_context(case)
+    if context_overrides:
+        ctx.update(context_overrides)
     profile = cProfile.Profile()
     process = psutil.Process()
     cpu_before = process.cpu_times()
@@ -1048,9 +1291,17 @@ def execute_case(
         vector_timings = _extract_vector_timings(result)
         metrics = {
             "total_s": elapsed,
+            "queue_wait_s": 0.0,
+            "worker_execution_s": elapsed,
             "cpu_s": cpu_s,
             "average_cpu_percent": (cpu_s / elapsed * 100.0) if elapsed else 0.0,
+            "rss_at_start_mb": resources.initial_rss_bytes / (1024 * 1024),
             "peak_rss_mb": resources.peak_rss_bytes / (1024 * 1024),
+            "peak_rss_increase_mb": max(
+                0,
+                resources.peak_rss_bytes - resources.initial_rss_bytes,
+            )
+            / (1024 * 1024),
             "peak_thread_count": resources.peak_thread_count,
             "peak_child_process_count": resources.peak_child_process_count,
             "step_timings": dict(
@@ -1065,6 +1316,12 @@ def execute_case(
                 case.kind,
                 hifi_timings=hifi_timings,
                 vector_timings=vector_timings,
+            ),
+            "override_fixture": dict(
+                result.get("profile_override_fixture") or {}
+            ),
+            "override_metrics": dict(
+                result.get("matched_rgb_override_metrics") or {}
             ),
             "cprofile_enabled": enable_cprofile,
             "cprofile": cprofile_text,
@@ -1117,6 +1374,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--override-scenario",
+        choices=("none", "matched-rgb", "recipe", "combined"),
+        default="none",
+        help=(
+            "Prepare an untimed vector preview cache and profile generate with "
+            "a deterministic cached override."
+        ),
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         default=Path(".scratch/converter-multicore"),
@@ -1135,6 +1401,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--reference-report must name an existing profile.json")
     if args.reference_report is not None and args.timing_only:
         parser.error("--reference-report cannot be used with --timing-only")
+    if args.override_scenario != "none" and (
+        args.kind != "vector" or args.phase != "generate"
+    ):
+        parser.error(
+            "--override-scenario requires --kind vector --phase generate"
+        )
     return args
 
 
@@ -1170,9 +1442,23 @@ def _render_markdown(report: dict[str, object]) -> str:
             f"- Phase: `{report['phase']}`",
             f"- Materials: `{materials['count']}`",
             f"- Target width: `{input_meta['target_width_mm']} mm`",
+            f"- Override scenario: `{input_meta['override_scenario']}`",
             f"- Quality evidence: `{quality_label}`",
             f"- Cold total: `{float(cold['total_s']):.3f} s`",
+            f"- Queue wait: `{float(cold.get('queue_wait_s', 0.0)):.3f} s`",
+            (
+                "- Worker execution: "
+                f"`{float(cold.get('worker_execution_s', cold['total_s'])):.3f} s`"
+            ),
+            (
+                "- RSS at timing start: "
+                f"`{float(cold.get('rss_at_start_mb', 0.0)):.2f} MiB`"
+            ),
             f"- Cold peak RSS: `{float(cold['peak_rss_mb']):.2f} MiB`",
+            (
+                "- Cold peak RSS increase: "
+                f"`{float(cold.get('peak_rss_increase_mb', 0.0)):.2f} MiB`"
+            ),
             "",
         ]
     )
@@ -1197,25 +1483,41 @@ def main(argv: list[str] | None = None) -> int:
         input_path=args.input,
         target_width_mm=args.target_width_mm,
         material_count=args.material_count,
+        override_scenario=args.override_scenario,
     )
     runs: list[dict[str, Any]] = []
-    for index in range(1, args.runs + 1):
-        print(
-            f"[profile] {case.name} {args.phase} run {index}/{args.runs}",
-            flush=True,
-        )
-        run = execute_case(
-            case,
-            args.phase,
-            enable_cprofile=not args.no_cprofile,
-            capture_semantics=not args.timing_only,
-        )
-        runs.append(run)
-        print(
-            f"[profile] total={float(run['total_s']):.3f}s "
-            f"peak_rss={float(run['peak_rss_mb']):.2f}MiB",
-            flush=True,
-        )
+    with tempfile.TemporaryDirectory(
+        prefix="lumina-vector-override-profile-",
+    ) as temporary_root:
+        context_overrides = None
+        if case.override_scenario != "none":
+            print(
+                "[profile] preparing untimed vector override fixture",
+                flush=True,
+            )
+            context_overrides = _prepare_vector_override_context(
+                case,
+                output_dir=Path(temporary_root),
+            )
+        for index in range(1, args.runs + 1):
+            print(
+                f"[profile] {case.name} {args.phase} run "
+                f"{index}/{args.runs}",
+                flush=True,
+            )
+            run = execute_case(
+                case,
+                args.phase,
+                enable_cprofile=not args.no_cprofile,
+                capture_semantics=not args.timing_only,
+                context_overrides=context_overrides,
+            )
+            runs.append(run)
+            print(
+                f"[profile] total={float(run['total_s']):.3f}s "
+                f"peak_rss={float(run['peak_rss_mb']):.2f}MiB",
+                flush=True,
+            )
     report = build_report(case, runs)
     report["phase"] = args.phase
     if args.reference_report is not None:

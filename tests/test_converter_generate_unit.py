@@ -90,6 +90,26 @@ setup_module(None)
 client: TestClient = TestClient(app)
 
 
+async def _timed_submit_via_generate_mock(
+    *args: object,
+    **kwargs: object,
+) -> tuple[object, dict[str, float]]:
+    return await _mock_pool.submit(*args, **kwargs), {}
+
+
+@pytest.fixture(autouse=True)
+def _keep_generate_pool_timing_opt_in() -> object:
+    """Keep legacy submit assertions while the route uses submit_timed."""
+    previous = _mock_pool.submit_timed
+    _mock_pool.submit_timed = AsyncMock(
+        side_effect=_timed_submit_via_generate_mock,
+    )
+    try:
+        yield
+    finally:
+        _mock_pool.submit_timed = previous
+
+
 class _FailingRegistry(FileRegistry):
     """Registry stub that simulates registration backend failure."""
 
@@ -111,6 +131,43 @@ class _SecondRegistrationFailingRegistry(FileRegistry):
             raise RuntimeError("registry unavailable after first file")
         self.first_file_id = super().register_path(*args, **kwargs)
         return self.first_file_id
+
+
+def test_generate_response_exposes_worker_pool_timing() -> None:
+    sid = _create_session_with_preview_and_files(_test_store)
+    worker_result = {
+        "threemf_path": "/tmp/timed-out.3mf",
+        "glb_path": None,
+        "status_msg": "OK",
+    }
+    _mock_pool.submit_timed = AsyncMock(
+        return_value=(
+            worker_result,
+            {
+                "queue_wait_s": 0.2,
+                "worker_execution_s": 0.8,
+                "result_delivery_s": 0.03,
+                "pool_roundtrip_s": 1.03,
+            },
+        )
+    )
+    payload = {
+        "session_id": sid,
+        "params": {
+            "lut_name": "test_lut",
+            "modeling_mode": "high-fidelity",
+        },
+    }
+
+    with patch("os.path.exists", return_value=True):
+        response = client.post("/api/convert/generate", json=payload)
+
+    assert response.status_code == 200, response.text
+    performance = response.json()["performance_timing"]
+    assert performance["queue_wait_ms"] == 200.0
+    assert performance["worker_execution_ms"] == 800.0
+    assert performance["result_delivery_ms"] == 30.0
+    assert performance["endpoint_post_worker_ms"] >= 0.0
 
 
 def _create_session_with_preview_and_files(store: SessionStore) -> str:

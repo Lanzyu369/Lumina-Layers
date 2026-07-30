@@ -27,6 +27,7 @@ import inspect
 import math
 import os
 import time
+from types import SimpleNamespace
 
 import cv2  # noqa: F401  -- imported for side-effect parity with coordinator
 import numpy as np
@@ -1830,7 +1831,11 @@ def _run_vector_branch(ctx: dict) -> dict:
     except (TypeError, ValueError):
         backing_channel_idx = 0
 
-    vector_timing = {}
+    vector_timing = {
+        "matched_rgb_override_s": 0.0,
+        "recipe_override_s": 0.0,
+        "build_mesh_s": 0.0,
+    }
     vector_total_t0 = time.perf_counter()
     log.info(
         "Vector branch started",
@@ -1907,14 +1912,22 @@ def _run_vector_branch(ctx: dict) -> dict:
                 "Required vector preview analysis artifacts are incomplete"
             )
         if matched_rgb_path and mask_solid_path:
+            matched_rgb_override_t0 = time.perf_counter()
+            cached_matched_rgb = None
+            raw_mask_solid = None
+            cached_mask_solid = None
+            cached_material_matrix = None
+            cached_height_identity_rgb = None
             try:
                 cached_matched_rgb = np.load(
                     matched_rgb_path,
                     allow_pickle=False,
+                    mmap_mode="r",
                 )
                 raw_mask_solid = np.load(
                     mask_solid_path,
                     allow_pickle=False,
+                    mmap_mode="r",
                 )
                 cached_mask_solid = (
                     raw_mask_solid
@@ -1926,12 +1939,14 @@ def _run_vector_branch(ctx: dict) -> dict:
                     cached_material_matrix = np.load(
                         material_matrix_path,
                         allow_pickle=False,
+                        mmap_mode="r",
                     )
                 cached_height_identity_rgb = None
                 if height_identity_rgb_path:
                     cached_height_identity_rgb = np.load(
                         height_identity_rgb_path,
                         allow_pickle=False,
+                        mmap_mode="r",
                     )
 
                 # Diagnostic 2/4: material_matrix loaded from disk (post pad).
@@ -1961,6 +1976,30 @@ def _run_vector_branch(ctx: dict) -> dict:
                     pixels_per_mm=vector_preview_pixels_per_mm,
                     strict=cached_analysis_required,
                 )
+                matched_override_metrics = getattr(
+                    analysis,
+                    "matched_rgb_override_metrics",
+                    None,
+                )
+                if isinstance(matched_override_metrics, dict):
+                    ctx["matched_rgb_override_metrics"] = dict(
+                        matched_override_metrics
+                    )
+                    metric_types = {
+                        "component_count": int,
+                        "full_canvas_pixel_work": int,
+                        "roi_pixel_work": int,
+                        "max_roi_pixels": int,
+                        "effective_pixel_count": int,
+                        "pixel_work_reduction_ratio": float,
+                    }
+                    for metric_name, metric_type in metric_types.items():
+                        metric_value = matched_override_metrics.get(metric_name)
+                        if metric_value is None:
+                            continue
+                        vector_timing[
+                            f"matched_rgb_override_{metric_name}"
+                        ] = metric_type(metric_value)
                 # Diagnostic 3/4: shape recipe[0] distribution after
                 # apply_matched_rgb_overrides_to_analysis.
                 _emit_vector_diag(
@@ -2007,6 +2046,22 @@ def _run_vector_branch(ctx: dict) -> dict:
                         "mask_solid_path": str(mask_solid_path),
                     },
                 )
+            finally:
+                vector_timing["matched_rgb_override_s"] = (
+                    time.perf_counter() - matched_rgb_override_t0
+                )
+                # These cache arrays are only an input to the projection pass.
+                # Drop the references before mesh construction so a fast ROI
+                # pass does not overlap the preview-cache footprint with the
+                # mesh builder's own temporary allocations.
+                # 缓存数组只服务于覆盖投影；进入建模前释放，避免两段峰值叠加。
+                del (
+                    cached_matched_rgb,
+                    raw_mask_solid,
+                    cached_mask_solid,
+                    cached_material_matrix,
+                    cached_height_identity_rgb,
+                )
 
         # 1a. Apply per-region recipe overrides (custom recipe dialog +
         # appended layers) before meshing. Without this the 3MF is built
@@ -2020,6 +2075,7 @@ def _run_vector_branch(ctx: dict) -> dict:
         # \u5728 "\u81ea\u5b9a\u4e49\u914d\u65b9" \u91cc\u505a\u7684\u7f16\u8f91\uff08\u5305\u62ec\u52a0\u5c42\uff09\u4f1a\u88ab\u6084\u6084\u4e22\u5f03\uff0c\u53ea\u6709 2D
         # \u9884\u89c8\u548c\u5206\u6bb5 GLB \u80fd\u770b\u5230\u3002
         if recipe_overrides and recipe_override_masks_path:
+            recipe_override_t0 = time.perf_counter()
             import pickle as _pickle
 
             try:
@@ -2090,6 +2146,9 @@ def _run_vector_branch(ctx: dict) -> dict:
                             "override_count": len(recipe_overrides),
                         },
                     )
+            vector_timing["recipe_override_s"] = (
+                time.perf_counter() - recipe_override_t0
+            )
 
         # 1b. Build 3D mesh from analysis
         build_mesh_kwargs = {
@@ -2164,10 +2223,14 @@ def _run_vector_branch(ctx: dict) -> dict:
             },
         )
 
+        build_mesh_t0 = time.perf_counter()
         scene = vec_processor.build_mesh(**build_mesh_kwargs)
+        del build_mesh_kwargs
+        build_mesh_s = time.perf_counter() - build_mesh_t0
         vector_timing["mesh_total_s"] = time.perf_counter() - mesh_t0
         if isinstance(getattr(vec_processor, "last_stage_timings", None), dict):
             vector_timing.update(vec_processor.last_stage_timings)
+        vector_timing["build_mesh_s"] = build_mesh_s
 
         _update_bambu_base_layer_ctx_for_vector(
             ctx,
@@ -2194,6 +2257,9 @@ def _run_vector_branch(ctx: dict) -> dict:
         vec_color_mode = vec_processor.color_mode
         vec_preview_colors = dict(analysis.preview_colors)
         vec_slot_list = analysis.slot_names
+        vector_parse_warnings = list(
+            getattr(vec_processor, "parse_warnings", None) or []
+        )
 
         for _mid, _rgba in list(vec_preview_colors.items()):
             if isinstance(_mid, int) and _mid < len(vec_slot_list):
@@ -2365,6 +2431,27 @@ def _run_vector_branch(ctx: dict) -> dict:
                 # helper 已发 WARNING，这里把 enable_outline 规整成 False
                 # 防止下游误用。
                 ctx["enable_outline"] = False
+
+        need_2d_preview = bool(ctx.get("need_2d_preview", True))
+        skip_heavy_preview = (
+            os.getenv("LUMINA_VECTOR_SKIP_2D_PREVIEW", "0") == "1"
+        )
+        analysis_for_glb = analysis
+        if skip_heavy_preview or not need_2d_preview:
+            # GLB only needs the canvas anchor once mesh/outline work is done.
+            # Retaining the complete parse/match graph until GLB export makes
+            # its temporary meshes overlap with thousands of source shapes.
+            # 不需要 2D 预览时只保留 GLB 画布锚点，提前释放完整分析图。
+            analysis_for_glb = SimpleNamespace(
+                image_vectorizer_bounds=getattr(
+                    analysis,
+                    "image_vectorizer_bounds",
+                    None,
+                ),
+                scale_factor=getattr(analysis, "scale_factor", 1.0),
+            )
+            analysis = None
+        vec_processor = None
 
         # 2. Export 3MF
         _report_progress(ctx, 0.72, "\u5bfc\u51fa 3MF \u4e2d... | Exporting 3MF...")
@@ -2552,7 +2639,7 @@ def _run_vector_branch(ctx: dict) -> dict:
                 color_mode=vec_color_mode,
                 preview_colors=vec_preview_colors,
                 slot_list=list(vec_slot_list),
-                analysis=analysis,
+                analysis=analysis_for_glb,
                 ctx=ctx,
             )
             log.debug(
@@ -2578,8 +2665,6 @@ def _run_vector_branch(ctx: dict) -> dict:
         _report_progress(ctx, 0.90, "\u751f\u6210 2D \u9884\u89c8\u4e2d... | Generating 2D preview...")
         preview_img = None
         preview_t0 = time.perf_counter()
-        need_2d_preview = ctx.get("need_2d_preview", True)
-        skip_heavy_preview = os.getenv("LUMINA_VECTOR_SKIP_2D_PREVIEW", "0") == "1"
         if skip_heavy_preview or not need_2d_preview:
             reason = "env flag" if skip_heavy_preview else "caller does not need it"
             log.debug(
@@ -2616,8 +2701,8 @@ def _run_vector_branch(ctx: dict) -> dict:
         _log_vector_timings(vector_timing)
 
         msg = "Vector conversion complete! Objects merged by material."
-        if getattr(vec_processor, "parse_warnings", None):
-            msg += " \u26a0 " + "; ".join(vec_processor.parse_warnings)
+        if vector_parse_warnings:
+            msg += " \u26a0 " + "; ".join(vector_parse_warnings)
         ctx["result_tuple"] = (out_path, glb_path, preview_img, msg, None)
         log.info(
             "Vector branch completed",
@@ -2629,7 +2714,7 @@ def _run_vector_branch(ctx: dict) -> dict:
                 "slot_count": len(vec_slot_names),
                 "geometry_count": len(scene.geometry),
                 "preview_2d_generated": preview_img is not None,
-                "parse_warning_count": len(getattr(vec_processor, "parse_warnings", None) or []),
+                "parse_warning_count": len(vector_parse_warnings),
             },
         )
         return ctx
@@ -2687,6 +2772,9 @@ def _log_vector_timings(timings: dict) -> None:
         f"parse={timings.get('parse_s', 0.0):.3f}, "
         f"clip={timings.get('occlusion_s', 0.0):.3f}, "
         f"match={timings.get('color_match_s', 0.0):.3f}, "
+        f"matched_rgb_override={timings.get('matched_rgb_override_s', 0.0):.3f}, "
+        f"recipe_override={timings.get('recipe_override_s', 0.0):.3f}, "
+        f"build_mesh={timings.get('build_mesh_s', 0.0):.3f}, "
         f"extrude_bottom={timings.get('extrude_bottom_s', 0.0):.3f}, "
         f"backing={timings.get('backing_s', 0.0):.3f}, "
         f"extrude_top={timings.get('extrude_top_s', 0.0):.3f}, "

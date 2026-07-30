@@ -15,6 +15,7 @@ import io
 import os
 import sys
 import threading
+import time
 
 from api.structured_logging import get_logger
 
@@ -116,6 +117,24 @@ def _run_in_worker_with_context(
     if session_id is not None:
         set_session_id(session_id)
     return fn(*args)
+
+
+def _run_in_worker_with_context_timed(
+    fn: Callable[..., T],
+    request_id: str | None,
+    session_id: str | None,
+    *args: Any,
+) -> tuple[T, int, int]:
+    """Run one contextualized task and return worker-local timing bounds."""
+    worker_started_ns = time.perf_counter_ns()
+    result = _run_in_worker_with_context(
+        fn,
+        request_id,
+        session_id,
+        *args,
+    )
+    worker_finished_ns = time.perf_counter_ns()
+    return result, worker_started_ns, worker_finished_ns
 
 
 def _normalize_timeout(timeout: float | None) -> float | None:
@@ -307,6 +326,52 @@ class WorkerPoolManager:
         父进程当前的 request_id / session_id 会在调用时被快照，并在 worker
         子进程内重放，使得 worker 发出的日志可与 endpoint 的请求关联。
         """
+        result, _timing = await self._submit_internal(
+            fn,
+            args,
+            timeout=timeout,
+            include_timing=False,
+        )
+        return result
+
+    async def submit_timed(
+        self,
+        fn: Callable[..., T],
+        *args: Any,
+        timeout: float | None = None,
+    ) -> tuple[T, dict[str, float]]:
+        """Submit a CPU task and return separate pool timing metadata.
+
+        提交 CPU 任务，并将进程池计时作为独立元数据返回，不修改 worker
+        的原始返回值。
+
+        Args:
+            fn: Top-level picklable worker function. 顶层可序列化 worker 函数。
+            *args: Scalar arguments or file paths. 标量参数或文件路径。
+            timeout: Optional per-call timeout. 可选的单次调用超时。
+
+        Returns:
+            tuple: ``(worker_result, timing_seconds)``. worker 原始结果与秒级计时。
+        """
+        result, timing = await self._submit_internal(
+            fn,
+            args,
+            timeout=timeout,
+            include_timing=True,
+        )
+        if timing is None:  # Defensive invariant; timed submissions set it.
+            raise RuntimeError("Timed worker submission returned no timing")
+        return result, timing
+
+    async def _submit_internal(
+        self,
+        fn: Callable[..., T],
+        args: tuple[Any, ...],
+        *,
+        timeout: float | None,
+        include_timing: bool,
+    ) -> tuple[T, dict[str, float] | None]:
+        """Run one task while preserving the public ``submit`` return contract."""
         pool = self._pool
         if pool is None:
             raise RuntimeError("WorkerPool not started")
@@ -318,16 +383,62 @@ class WorkerPoolManager:
         effective_timeout = _normalize_timeout(
             timeout if timeout is not None else self._default_task_timeout
         )
+        submitted_ns = time.perf_counter_ns() if include_timing else None
+        worker_entry = (
+            _run_in_worker_with_context_timed
+            if include_timing
+            else _run_in_worker_with_context
+        )
         future = loop.run_in_executor(
             pool,
-            _run_in_worker_with_context,
+            worker_entry,
             fn,
             request_id,
             session_id,
             *args,
         )
         try:
-            return await asyncio.wait_for(future, timeout=effective_timeout)
+            raw_result = await asyncio.wait_for(
+                future,
+                timeout=effective_timeout,
+            )
+            if not include_timing:
+                return raw_result, None
+            (
+                result,
+                worker_started_ns,
+                worker_finished_ns,
+            ) = raw_result
+            received_ns = time.perf_counter_ns()
+            if submitted_ns is None:
+                raise RuntimeError("Timed worker submission has no start time")
+            timing = {
+                "queue_wait_s": max(
+                    0.0,
+                    (worker_started_ns - submitted_ns) / 1_000_000_000,
+                ),
+                "worker_execution_s": max(
+                    0.0,
+                    (worker_finished_ns - worker_started_ns) / 1_000_000_000,
+                ),
+                "result_delivery_s": max(
+                    0.0,
+                    (received_ns - worker_finished_ns) / 1_000_000_000,
+                ),
+                "pool_roundtrip_s": max(
+                    0.0,
+                    (received_ns - submitted_ns) / 1_000_000_000,
+                ),
+            }
+            _log.debug(
+                "Worker pool task timing",
+                extra={
+                    "event": "worker_pool_task_timing",
+                    "worker_name": getattr(fn, "__name__", type(fn).__name__),
+                    **timing,
+                },
+            )
+            return result, timing
         except asyncio.TimeoutError:
             future.cancel()
             self._restart_after_failed_pool(
