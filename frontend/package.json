@@ -13,7 +13,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@lumina/workshop-sdk": "file:../workshop-sdk",
+    "@lumina/workshop-sdk": "https://github.com/lumina-layer-studio/Lumina-Workshop-SDK/releases/download/v1.0.1/lumina-workshop-sdk-1.0.1.tgz",
     "@dnd-kit/core": "^6.3.1",
     "@floating-ui/react": "^0.27.19",
     "@heroicons/react": "^2.2.0",

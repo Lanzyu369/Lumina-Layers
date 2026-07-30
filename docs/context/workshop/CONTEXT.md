@@ -8,16 +8,18 @@ envelope, then hand that image into Lumina's existing LUT/material, layered
 color, preview, and 3MF workflow.
 
 The first official module is `lumina.bead-pattern`, maintained in the separate
-`Lumina-Fuse-Bead-Studio` repository. The host repository owns the public SDK,
-package trust, installation lifecycle, sandbox, storage, and converter handoff;
-it must not import the official module's React source.
+`Lumina-Fuse-Bead-Studio` repository. The standalone public
+`Lumina-Workshop-SDK` repository owns the SDK source and immutable releases.
+The host repository consumes an exact SDK release and owns package trust,
+installation lifecycle, sandbox, storage, and converter handoff; it must not
+import the official module's React source.
 
 ## Boundary map
 
 ```text
 independent module repository
   -> immutable @lumina/workshop-sdk tarball
-  -> one signed .lumina-workshop Release asset
+  -> one immutable .lumina-workshop Release asset + SHA-256
   -> signed GitHub Registry or official seed
   -> core/workshop package + release + install validation
   -> /api/workshop/v1 manager endpoints
@@ -29,11 +31,12 @@ independent module repository
 
 ### Public SDK
 
-- `workshop-sdk/src/contracts.ts`: manifest, permissions, RPC, project, color
-  library, UI state, handoff, and recipe types.
-- `workshop-sdk/src/client.ts`: 10-second handshake and bounded request client.
-- `workshop-sdk/src/theme.ts`: applies only allowlisted Lumina CSS tokens.
-- `.github/workflows/workshop-sdk-release.yml`: immutable SDK Release pipeline.
+- Public source: `https://github.com/lumina-layer-studio/Lumina-Workshop-SDK`.
+- Exact host dependency: public Release `v1.0.1`.
+- The SDK owns manifest, permission, RPC, project, color-library, UI-state,
+  handoff, and recipe contracts plus the bounded iframe client.
+- The public repository's protected `validate` and Release workflows are the
+  only SDK publication authority.
 
 The SDK has no dependency on React, Electron, Lumina source, or private host
 objects.
@@ -162,7 +165,6 @@ mode.
 Run from the repository root:
 
 ```bash
-CI=true pnpm --dir workshop-sdk test
 PYTHONPATH=/private/tmp/lumina-workshop-python-deps \
   .venv/bin/python -m pytest \
   tests/test_workshop_package_unit.py \

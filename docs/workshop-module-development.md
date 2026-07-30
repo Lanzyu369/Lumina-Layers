@@ -22,20 +22,23 @@ frame 拦截网络、WebSocket、跳转、弹窗、权限和下载。普通浏�
 
 - npm 包名：`@lumina/workshop-sdk`
 - 版本：`1.0.1`
-- GitHub Release tag：`workshop-sdk-v1.0.1`
+- 公开源码仓库：`https://github.com/lumina-layer-studio/Lumina-Workshop-SDK`
+- GitHub Release tag：`v1.0.1`
 - 资产：`lumina-workshop-sdk-1.0.1.tgz`
 - 校验文件：`lumina-workshop-sdk-1.0.1.tgz.sha256`
 
-SDK 只通过 Lumina Studio 的不可变 GitHub Release 分发，不发布可变 `latest` 资产，
-也不发布到 npm registry。把 tarball 和校验文件固定到模块仓库，再安装本地文件：
+SDK 只通过独立公开仓库的不可变 GitHub Release 分发，不发布可变 `latest` 资产，
+也不发布到 npm registry。依赖必须写成包含精确版本的 Release URL：
 
 ```bash
-sha256sum -c lumina-workshop-sdk-1.0.1.tgz.sha256
-pnpm add --save-exact ./vendor/lumina-workshop-sdk-1.0.1.tgz
+pnpm add --save-exact \
+  https://github.com/lumina-layer-studio/Lumina-Workshop-SDK/releases/download/v1.0.1/lumina-workshop-sdk-1.0.1.tgz
 ```
 
-macOS 也可用 `shasum -a 256` 对照校验文件中的小写摘要。模块仓库必须提交
-`pnpm-lock.yaml`，CI 使用 `pnpm install --frozen-lockfile`。不要依赖 Lumina
+发布资产的 SHA-256 是
+`76e6ffab8106b3bfb6a757307b864bff19734397c756afb63a6ac6cfc25dc420`；
+也可下载同一 Release 的校验文件独立核对。模块仓库必须提交 `pnpm-lock.yaml`，
+CI 使用 `pnpm install --frozen-lockfile`。不要依赖本机 vendor 文件、Lumina
 工作区中的 `workspace:*` 路径或未发布的 SDK 源码。
 
 ## 最小仓库结构
@@ -52,8 +55,7 @@ my-workshop-module/
 ├── public/assets/icon.png
 ├── scripts/package.mjs
 ├── src/main.ts
-├── test/
-└── vendor/lumina-workshop-sdk-1.0.1.tgz
+└── test/
 ```
 
 构建产物必须收敛为一个自包含 `ui/index.html`。JavaScript、CSS、worker 和运行所需
@@ -113,7 +115,7 @@ URL。
 
 | 权限 | SDK 调用 | 宿主边界 |
 | --- | --- | --- |
-| `image.pick` | `client.image.pick()` | 用户主动选择；类型、文件头、尺寸和 64 MiB 上限由宿主校验 |
+| `image.pick` | `client.image.pick()` | 用户主动选择；类型、解码尺寸和 64 MiB 上限由宿主校验 |
 | `project.storage` | `client.projects.*` | 只能访问本模块命名空间；单记录 64 MiB、模块总量 256 MiB |
 | `color-library.read` | `client.colorLibrary.read()` | 只返回规范化色库，不暴露 LUT、耗材档案路径或私有状态 |
 | `handoff.image` | `client.handoff.image()` | 重新校验 PNG、像素、物理尺寸、色库身份和 1 MiB 配方信封 |
@@ -143,9 +145,9 @@ applyWorkshopUiState(await client.ui.getState());
 await client.lifecycle.ready();
 ```
 
-握手必须在 iframe load 后 10 秒内完成。普通请求默认 30 秒，图片交接 120 秒；控制
-消息不超过 1 MiB，单次二进制不超过 64 MiB。错误应使用稳定的 kebab-case 代码，
-用户消息不能包含堆栈、路径、令牌或原始项目内容。
+握手必须在 iframe load 后 10 秒内完成。普通请求默认 30 秒，图片交接 120 秒，
+原生图片选择器最多等待 5 分钟；控制消息不超过 1 MiB，单次二进制不超过 64 MiB。
+错误应使用稳定的 kebab-case 代码，用户消息不能包含堆栈、路径、令牌或原始项目内容。
 
 ## 项目、迁移与配方信封
 

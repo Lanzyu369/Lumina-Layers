@@ -18,8 +18,8 @@ importers:
         specifier: ^2.2.0
         version: 2.2.0(react@19.2.6)
       '@lumina/workshop-sdk':
-        specifier: file:../workshop-sdk
-        version: file:../workshop-sdk
+        specifier: https://github.com/lumina-layer-studio/Lumina-Workshop-SDK/releases/download/v1.0.1/lumina-workshop-sdk-1.0.1.tgz
+        version: https://github.com/lumina-layer-studio/Lumina-Workshop-SDK/releases/download/v1.0.1/lumina-workshop-sdk-1.0.1.tgz
       '@react-three/drei':
         specifier: ^10.7.7
         version: 10.7.7(@react-three/fiber@9.6.1(@types/react@19.2.15)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)(three@0.183.2))(@types/react@19.2.15)(@types/three@0.183.1)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)(three@0.183.2)
@@ -564,8 +564,10 @@ packages:
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
 
-  '@lumina/workshop-sdk@file:../workshop-sdk':
-    resolution: {directory: ../workshop-sdk, type: directory}
+  '@lumina/workshop-sdk@https://github.com/lumina-layer-studio/Lumina-Workshop-SDK/releases/download/v1.0.1/lumina-workshop-sdk-1.0.1.tgz':
+    resolution: {integrity: sha512-liqxZUwMMrKcUjlvhz7P2jkQprP25J+tAmUWmutyNA3hh111gI6GeCEsMIInm6PExhidWzn2413S80qy0hvjCw==, tarball: https://github.com/lumina-layer-studio/Lumina-Workshop-SDK/releases/download/v1.0.1/lumina-workshop-sdk-1.0.1.tgz}
+    version: 1.0.1
+    engines: {node: '>=22'}
 
   '@mediapipe/tasks-vision@0.10.17':
     resolution: {integrity: sha512-CZWV/q6TTe8ta61cZXjfnnHsfWIdFhms03M9T7Cnd5y2mdpylJM0rF1qRq+wsQVRMLz1OYPVEBU9ph2Bx8cxrg==}
@@ -2757,7 +2759,7 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
 
-  '@lumina/workshop-sdk@file:../workshop-sdk': {}
+  '@lumina/workshop-sdk@https://github.com/lumina-layer-studio/Lumina-Workshop-SDK/releases/download/v1.0.1/lumina-workshop-sdk-1.0.1.tgz': {}
 
   '@mediapipe/tasks-vision@0.10.17': {}
 

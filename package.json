@@ -3,7 +3,6 @@
   "private": true,
   "packageManager": "pnpm@10.33.2",
   "scripts": {
-    "build:workshop-sdk": "pnpm --dir workshop-sdk run build",
     "dev:electron": "cd electron && pnpm start",
     "build:electron": "cd electron && pnpm run build"
   }
