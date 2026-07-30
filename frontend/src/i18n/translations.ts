@@ -7659,6 +7659,54 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "源色色块由创意工坊保留；下方 LUT 或耗材档案只负责叠色打印，不会覆盖源色。",
     en: "Source color blocks stay with the Workshop project. The LUT or material archive below controls layered printing without replacing those source colors.",
   },
+  workshop_runtime_preparing: {
+    zh: "正在准备模块",
+    en: "Preparing module",
+  },
+  workshop_runtime_loading: {
+    zh: "正在加载模块",
+    en: "Loading module",
+  },
+  workshop_runtime_handshaking: {
+    zh: "正在建立安全连接",
+    en: "Establishing secure connection",
+  },
+  workshop_runtime_waiting_ready: {
+    zh: "正在等待模块就绪",
+    en: "Waiting for module readiness",
+  },
+  workshop_runtime_running: {
+    zh: "运行中",
+    en: "Running",
+  },
+  workshop_runtime_desktop_required: {
+    zh: "此模块需要 Lumina 桌面版才能运行",
+    en: "This module requires the Lumina desktop app",
+  },
+  workshop_runtime_disabled: {
+    zh: "此模块已被禁用",
+    en: "This module is disabled",
+  },
+  workshop_runtime_incompatible: {
+    zh: "此模块与当前创意工坊接口不兼容",
+    en: "This module is incompatible with the current Workshop API",
+  },
+  workshop_runtime_handshake_timeout: {
+    zh: "模块启动超时",
+    en: "Module startup timed out",
+  },
+  workshop_runtime_snapshot_failed: {
+    zh: "更新前项目快照失败，模块未启动",
+    en: "The pre-update project snapshot failed, so the module was not started",
+  },
+  workshop_runtime_activation_failed: {
+    zh: "候选版本未能安全激活",
+    en: "The candidate version could not be activated safely",
+  },
+  workshop_runtime_load_failed: {
+    zh: "模块加载失败",
+    en: "Module failed to load",
+  },
   recipe_import_schema_newer: {
     zh: "配方版本较新，部分参数可能无法恢复",
     en: "Recipe uses a newer schema version — some parameters may not restore",
