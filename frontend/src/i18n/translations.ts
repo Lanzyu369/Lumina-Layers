@@ -7635,6 +7635,30 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "分享卡中的创意工坊编辑数据已损坏或当前不可用；主图和转换参数仍可正常导入。",
     en: "The workshop editing data in this share card is damaged or unavailable. The main image and converter settings can still be imported.",
   },
+  workshop_source_banner_title: {
+    zh: "创意工坊图像",
+    en: "Creative Workshop image",
+  },
+  workshop_source_banner_module: {
+    zh: "来源模块",
+    en: "Source module",
+  },
+  workshop_source_banner_module_value: {
+    zh: "{id} · v{version}",
+    en: "{id} · v{version}",
+  },
+  workshop_source_banner_print_library: {
+    zh: "当前打印色库",
+    en: "Current print library",
+  },
+  workshop_source_banner_library_unavailable: {
+    zh: "尚未选择可用色库",
+    en: "No usable library selected",
+  },
+  workshop_source_banner_guidance: {
+    zh: "源色色块由创意工坊保留；下方 LUT 或耗材档案只负责叠色打印，不会覆盖源色。",
+    en: "Source color blocks stay with the Workshop project. The LUT or material archive below controls layered printing without replacing those source colors.",
+  },
   recipe_import_schema_newer: {
     zh: "配方版本较新，部分参数可能无法恢复",
     en: "Recipe uses a newer schema version — some parameters may not restore",

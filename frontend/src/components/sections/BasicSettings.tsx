@@ -47,6 +47,12 @@ import {
   normalizeLutPath,
   type ColorModeBucket,
 } from "../../stores/converter/legacyLutSelection";
+import WorkshopSourceBanner from "../../workshop/WorkshopSourceBanner";
+import {
+  buildWorkshopColorLibrary,
+  clearWorkshopMaterialCatalog,
+  updateWorkshopMaterialCatalog,
+} from "../../workshop/colorLibrary";
 
 const COLOR_MODE_DOTS: Record<string, string[]> = {
   [ColorMode.BW]: ["var(--palette-black)", "var(--palette-white)"],
@@ -289,6 +295,9 @@ export default function BasicSettings() {
     model_enable,
     model_only,
     selectedLutInfo,
+    lutColors,
+    lutColorsLutName,
+    workshopSource,
     target_width_mm,
     target_height_mm,
     spacer_thick,
@@ -361,6 +370,9 @@ export default function BasicSettings() {
     model_enable: s.model_enable,
     model_only: s.model_only,
     selectedLutInfo: s.selectedLutInfo,
+    lutColors: s.lutColors,
+    lutColorsLutName: s.lutColorsLutName,
+    workshopSource: s.workshopSource,
     target_width_mm: s.target_width_mm,
     target_height_mm: s.target_height_mm,
     spacer_thick: s.spacer_thick,
@@ -870,6 +882,7 @@ export default function BasicSettings() {
   }, []);
   useEffect(() => {
     if (source_version !== "material") {
+      clearWorkshopMaterialCatalog();
       setMaterialLibraryLoaded(false);
       setMaterialLibraryLoadError(false);
       return;
@@ -882,11 +895,13 @@ export default function BasicSettings() {
       .then((res) => {
         if (cancelled) return;
         const materials = res.materials ?? [];
+        updateWorkshopMaterialCatalog(materials);
         setMaterialLibrary(materials);
         setMaterialLibraryLoaded(true);
       })
       .catch(() => {
         if (!cancelled) {
+          clearWorkshopMaterialCatalog();
           setMaterialLibrary([]);
           setMaterialLibraryLoaded(false);
           setMaterialLibraryLoadError(true);
@@ -969,6 +984,27 @@ export default function BasicSettings() {
     selectedMaterialDirNames.includes(materialBackingMaterialDirName)
       ? materialBackingMaterialDirName
       : (inferDefaultMaterialBackingDirName(selectedMaterialDirNames) ?? "");
+  const workshopColorLibrary =
+    workshopSource === null
+      ? null
+      : buildWorkshopColorLibrary({
+          source_version,
+          lut_name,
+          lut_names,
+          lutListFull,
+          legacyCatalogGroups,
+          selectedLutInfo,
+          lutColors,
+          lutColorsLutName,
+          nativeBrandGroups,
+          selectedNativeBrandKey,
+          selectedNativeDbNames,
+          color_layers,
+          layer_height_mm,
+          selectedMaterialDirNames,
+          materialLayerCount,
+          materialLayerHeightMm,
+        });
 
   const materialLayerHeightOptions = [
     { label: "0.04 mm", value: "0.04" },
@@ -1231,6 +1267,13 @@ export default function BasicSettings() {
           </span>
         </button>
       )}
+
+      {workshopSource ? (
+        <WorkshopSourceBanner
+          source={workshopSource}
+          colorLibrary={workshopColorLibrary}
+        />
+      ) : null}
 
       {batchFiles.length === 0 && imageFile !== null && (
         <>
