@@ -249,6 +249,25 @@ describe("Workshop installable module manager", () => {
     expect(screen.getAllByRole("button", { name: "更新" }).length).toBeGreaterThan(0);
   });
 
+  it("keeps the manager usable when the module-list response is malformed", async () => {
+    const api = fakeApi([]);
+    vi.mocked(api.listModules).mockResolvedValue({
+      modules: undefined,
+    } as unknown as Awaited<ReturnType<WorkshopManagerApi["listModules"]>>);
+
+    renderManager(api);
+
+    expect(
+      await screen.findByText("无法读取已安装模块。"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "创意工坊" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("尚未安装任何创意工坊模块。"),
+    ).toBeInTheDocument();
+  });
+
   it("shows Discover entries only from a verified catalog", async () => {
     const api = fakeApi([]);
     vi.mocked(api.fetchCatalog).mockResolvedValue(catalog(false));

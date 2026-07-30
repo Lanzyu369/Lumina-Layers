@@ -525,6 +525,9 @@ export function WorkshopPanel({
     setLoadingModules(true);
     try {
       const result = await api.listModules();
+      if (!Array.isArray(result.modules)) {
+        throw new Error("Invalid Workshop module-list response");
+      }
       setModules(result.modules);
       setOperationError(null);
     } catch {
