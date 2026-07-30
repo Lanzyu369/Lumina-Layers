@@ -6,97 +6,141 @@ import type {
   WorkshopRecipeSource,
 } from "./types";
 
-export interface WorkshopShellState {
-  activeModuleId: string | null;
-  lastProjectIds: Record<string, string>;
-  pendingRecipeSource: WorkshopRecipeSource | null;
-  diagnostics: WorkshopDiagnosticSummary | null;
-  diagnosticsModuleId: string | null;
-  diagnosticsModuleVersion: string | null;
-  openModule(moduleId: string): void;
-  returnHome(): void;
-  rememberProject(moduleId: string, projectId: string): void;
-  openRecipe(source: WorkshopRecipeSource): void;
-  clearPendingRecipe(): void;
-  setDiagnostics(
-    summary: WorkshopDiagnosticSummary | null,
-    identity?: {
-      moduleId: string;
-      moduleVersion: string;
-    },
-  ): void;
+export type WorkshopManagerView =
+  | "installed"
+  | "discover"
+  | "developer";
+
+export type WorkshopCatalogStatus =
+  | "idle"
+  | "loading"
+  | "ready"
+  | "error";
+
+export type WorkshopManagerRuntimeMode =
+  | "desktop-secure"
+  | "browser-restricted"
+  | "unsafe-development";
+
+export interface ActiveWorkshopModule {
+  moduleId: string;
+  version: string;
 }
 
-type PersistedWorkshopShellState = Pick<
-  WorkshopShellState,
-  "activeModuleId" | "lastProjectIds"
+export interface WorkshopManagerState {
+  view: WorkshopManagerView;
+  activeModule: ActiveWorkshopModule | null;
+  catalogStatus: WorkshopCatalogStatus;
+  runtimeMode: WorkshopManagerRuntimeMode;
+  pendingRecipeSource: WorkshopRecipeSource | null;
+  diagnostics: WorkshopDiagnosticSummary | null;
+  setView(view: WorkshopManagerView): void;
+  openModule(moduleId: string, version: string): void;
+  returnHome(): void;
+  openRecipe(source: WorkshopRecipeSource): void;
+  clearPendingRecipe(): void;
+  setCatalogStatus(status: WorkshopCatalogStatus): void;
+  setRuntimeMode(mode: WorkshopManagerRuntimeMode): void;
+  setDiagnostics(summary: WorkshopDiagnosticSummary | null): void;
+}
+
+type PersistedWorkshopManagerState = Pick<
+  WorkshopManagerState,
+  "view" | "activeModule"
 >;
 
-export const useWorkshopStore = create<WorkshopShellState>()(
+function isPersistedView(value: unknown): value is WorkshopManagerView {
+  return (
+    value === "installed" ||
+    value === "discover" ||
+    value === "developer"
+  );
+}
+
+function migratedState(
+  persisted: unknown,
+): PersistedWorkshopManagerState {
+  if (
+    typeof persisted !== "object" ||
+    persisted === null ||
+    Array.isArray(persisted)
+  ) {
+    return { view: "installed", activeModule: null };
+  }
+  const state = persisted as Record<string, unknown>;
+  const view = isPersistedView(state.view)
+    ? state.view
+    : "installed";
+  const active = state.activeModule;
+  if (
+    typeof active === "object" &&
+    active !== null &&
+    !Array.isArray(active) &&
+    typeof (active as Record<string, unknown>).moduleId === "string" &&
+    typeof (active as Record<string, unknown>).version === "string"
+  ) {
+    return {
+      view,
+      activeModule: {
+        moduleId: (active as Record<string, string>).moduleId,
+        version: (active as Record<string, string>).version,
+      },
+    };
+  }
+  return { view, activeModule: null };
+}
+
+export const useWorkshopStore = create<WorkshopManagerState>()(
   persist(
     (set) => ({
-      activeModuleId: null,
-      lastProjectIds: {},
+      view: "installed",
+      activeModule: null,
+      catalogStatus: "idle",
+      runtimeMode: "browser-restricted",
       pendingRecipeSource: null,
       diagnostics: null,
-      diagnosticsModuleId: null,
-      diagnosticsModuleVersion: null,
-      openModule: (moduleId) =>
+      setView: (view) =>
         set({
-          activeModuleId: moduleId,
+          view,
+          activeModule: null,
+          catalogStatus:
+            view === "discover" ? "loading" : "idle",
           diagnostics: null,
-          diagnosticsModuleId: null,
-          diagnosticsModuleVersion: null,
+        }),
+      openModule: (moduleId, version) =>
+        set({
+          activeModule: { moduleId, version },
+          diagnostics: null,
         }),
       returnHome: () =>
         set({
-          activeModuleId: null,
+          activeModule: null,
           pendingRecipeSource: null,
           diagnostics: null,
-          diagnosticsModuleId: null,
-          diagnosticsModuleVersion: null,
         }),
-      rememberProject: (moduleId, projectId) =>
-        set((state) => ({
-          lastProjectIds: {
-            ...state.lastProjectIds,
-            [moduleId]: projectId,
-          },
-        })),
       openRecipe: (source) =>
         set({
-          activeModuleId: source.moduleId,
+          view: "installed",
+          activeModule: {
+            moduleId: source.moduleId,
+            version: source.moduleVersion,
+          },
           pendingRecipeSource: source,
           diagnostics: null,
-          diagnosticsModuleId: null,
-          diagnosticsModuleVersion: null,
         }),
       clearPendingRecipe: () => set({ pendingRecipeSource: null }),
-      setDiagnostics: (diagnostics, identity) =>
-        set((state) =>
-          diagnostics
-            ? {
-                diagnostics,
-                diagnosticsModuleId:
-                  identity?.moduleId ?? state.diagnosticsModuleId,
-                diagnosticsModuleVersion:
-                  identity?.moduleVersion ??
-                  state.diagnosticsModuleVersion,
-              }
-            : {
-                diagnostics: null,
-                diagnosticsModuleId: null,
-                diagnosticsModuleVersion: null,
-              },
-        ),
+      setCatalogStatus: (catalogStatus) => set({ catalogStatus }),
+      setRuntimeMode: (runtimeMode) => set({ runtimeMode }),
+      setDiagnostics: (diagnostics) => set({ diagnostics }),
     }),
     {
       name: "lumina-workshop-shell",
-      version: 1,
+      version: 2,
       storage: createJSONStorage(() => localStorage),
-      partialize: (state): PersistedWorkshopShellState => ({
-        activeModuleId: state.activeModuleId,
-        lastProjectIds: state.lastProjectIds,
+      migrate: (persisted) => migratedState(persisted),
+      partialize: (state): PersistedWorkshopManagerState => ({
+        view: state.view,
+        activeModule: state.activeModule,
       }),
     },
   ),

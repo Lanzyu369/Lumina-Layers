@@ -166,7 +166,7 @@ describe("recipe/importFlow", () => {
     useSettingsStore.setState({ ...DEFAULT_SETTINGS });
     useWidgetStore.setState({ activeTab: "settings" });
     useWorkshopStore.setState({
-      activeModuleId: null,
+      activeModule: null,
       pendingRecipeSource: null,
     });
   });
@@ -242,9 +242,10 @@ describe("recipe/importFlow", () => {
     expect(useConverterStore.getState().imageFile).toBe(assetFile);
     expect(useConverterStore.getState().target_width_mm).toBe(7.8);
     expect(useConverterStore.getState().workshopSource).toEqual(source);
-    expect(useWorkshopStore.getState().activeModuleId).toBe(
-      "lumina.bead-pattern",
-    );
+    expect(useWorkshopStore.getState().activeModule).toEqual({
+      moduleId: "lumina.bead-pattern",
+      version: "1.0.0",
+    });
     expect(useWorkshopStore.getState().pendingRecipeSource).toEqual(
       source,
     );

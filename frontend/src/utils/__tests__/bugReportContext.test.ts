@@ -52,12 +52,9 @@ describe("collectBugReportContext", () => {
       savedStageAParamsUrl: null,
     });
     useWorkshopStore.setState({
-      activeModuleId: null,
-      lastProjectIds: {},
+      activeModule: null,
       pendingRecipeSource: null,
       diagnostics: null,
-      diagnosticsModuleId: null,
-      diagnosticsModuleVersion: null,
     });
     useWidgetStore.setState({ activeTab: "settings" });
     Object.defineProperty(window, "innerWidth", {
@@ -134,9 +131,10 @@ describe("collectBugReportContext", () => {
   it("collects only bounded workshop diagnostics while the workshop tab is active", () => {
     useWidgetStore.setState({ activeTab: "workshop" });
     useWorkshopStore.setState({
-      activeModuleId: "lumina.bead-pattern",
-      diagnosticsModuleId: "lumina.bead-pattern",
-      diagnosticsModuleVersion: "1.0.0",
+      activeModule: {
+        moduleId: "lumina.bead-pattern",
+        version: "1.0.0",
+      },
       diagnostics: {
         projectSchemaVersion: "bead-project/v1",
         inputMode: "numbered-grid",
@@ -198,9 +196,10 @@ describe("collectBugReportContext", () => {
   it("does not attach stale workshop diagnostics from another active tab", () => {
     useWidgetStore.setState({ activeTab: "settings" });
     useWorkshopStore.setState({
-      activeModuleId: "lumina.bead-pattern",
-      diagnosticsModuleId: "lumina.bead-pattern",
-      diagnosticsModuleVersion: "1.0.0",
+      activeModule: {
+        moduleId: "lumina.bead-pattern",
+        version: "1.0.0",
+      },
       diagnostics: {
         projectSchemaVersion: "bead-project/v1",
         inputMode: "hard-pixel",

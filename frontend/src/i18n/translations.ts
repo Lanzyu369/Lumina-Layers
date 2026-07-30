@@ -7707,6 +7707,262 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "模块加载失败",
     en: "Module failed to load",
   },
+  "workshop.manager.eyebrow": {
+    zh: "Lumina Studio",
+    en: "Lumina Studio",
+  },
+  "workshop.manager.description": {
+    zh: "安装、管理并在隔离环境中运行图像创作模块。",
+    en: "Install, manage, and run image-creation modules in an isolated environment.",
+  },
+  "workshop.manager.navigation": {
+    zh: "创意工坊页面",
+    en: "Creative Workshop views",
+  },
+  "workshop.manager.view.installed": {
+    zh: "已安装",
+    en: "Installed",
+  },
+  "workshop.manager.view.discover": {
+    zh: "发现",
+    en: "Discover",
+  },
+  "workshop.manager.view.developer": {
+    zh: "开发者",
+    en: "Developer",
+  },
+  "workshop.manager.source.official": {
+    zh: "官方",
+    en: "Official",
+  },
+  "workshop.manager.source.community": {
+    zh: "社区",
+    en: "Community",
+  },
+  "workshop.manager.source.unreviewed": {
+    zh: "未审核",
+    en: "Unreviewed",
+  },
+  "workshop.manager.enabled": {
+    zh: "已启用",
+    en: "Enabled",
+  },
+  "workshop.manager.disabled": {
+    zh: "已停用",
+    en: "Disabled",
+  },
+  "workshop.manager.currentVersion": {
+    zh: "当前版本 {version}",
+    en: "Current version {version}",
+  },
+  "workshop.manager.activeMeta": {
+    zh: "{name} · v{version}",
+    en: "{name} · v{version}",
+  },
+  "workshop.manager.updateAvailable": {
+    zh: "可更新至 {version}",
+    en: "Update available: {version}",
+  },
+  "workshop.manager.projectsRetained": {
+    zh: "保留了本地工程",
+    en: "Local projects retained",
+  },
+  "workshop.manager.officialUninstalled": {
+    zh: "官方模块已卸载",
+    en: "Official module is uninstalled",
+  },
+  "workshop.manager.restoreSeed": {
+    zh: "从离线种子恢复",
+    en: "Restore from offline seed",
+  },
+  "workshop.manager.open": {
+    zh: "打开",
+    en: "Open",
+  },
+  "workshop.manager.desktopOnly": {
+    zh: "仅桌面版可打开",
+    en: "Desktop app required",
+  },
+  "workshop.manager.details": {
+    zh: "详情",
+    en: "Details",
+  },
+  "workshop.manager.update": {
+    zh: "更新",
+    en: "Update",
+  },
+  "workshop.manager.rollback": {
+    zh: "回退",
+    en: "Roll back",
+  },
+  "workshop.manager.enable": {
+    zh: "启用",
+    en: "Enable",
+  },
+  "workshop.manager.disable": {
+    zh: "停用",
+    en: "Disable",
+  },
+  "workshop.manager.uninstall": {
+    zh: "卸载",
+    en: "Uninstall",
+  },
+  "workshop.manager.install": {
+    zh: "安装",
+    en: "Install",
+  },
+  "workshop.manager.installedCurrent": {
+    zh: "已安装最新兼容版本",
+    en: "Latest compatible version installed",
+  },
+  "workshop.manager.loading": {
+    zh: "正在读取已安装模块…",
+    en: "Loading installed modules…",
+  },
+  "workshop.manager.loadError": {
+    zh: "无法读取已安装模块。",
+    en: "Installed modules could not be loaded.",
+  },
+  "workshop.manager.noInstalled": {
+    zh: "尚未安装任何创意工坊模块。",
+    en: "No Creative Workshop modules are installed.",
+  },
+  "workshop.manager.catalogLoading": {
+    zh: "正在验证创意工坊目录…",
+    en: "Verifying the Workshop catalog…",
+  },
+  "workshop.manager.catalogInvalid": {
+    zh: "目录签名验证失败，未显示任何模块。",
+    en: "Catalog signature verification failed. No modules are shown.",
+  },
+  "workshop.manager.retry": {
+    zh: "重试",
+    en: "Retry",
+  },
+  "workshop.manager.runtime.desktop-secure": {
+    zh: "桌面安全模式：社区模块在独立沙箱中运行，无法访问网络或本机文件路径。",
+    en: "Desktop secure mode: community modules run in an isolated sandbox without network or filesystem-path access.",
+  },
+  "workshop.manager.runtime.browser-restricted": {
+    zh: "浏览器限制模式：只能运行随 Lumina 预装的官方模块；社区与未审核模块需要桌面版。",
+    en: "Browser restricted mode: only official modules bundled with Lumina can run; community and unreviewed modules require the desktop app.",
+  },
+  "workshop.manager.runtime.unsafe-development": {
+    zh: "不安全开发模式：仅本地模块可用合成数据调试，不会获得真实图片、工程或色库。",
+    en: "Unsafe development mode: local modules receive synthetic debug data instead of real images, projects, or color libraries.",
+  },
+  "workshop.manager.operationError": {
+    zh: "模块操作失败，现有安装和工程数据未被替换。",
+    en: "The module operation failed. Existing installation and project data were not replaced.",
+  },
+  "workshop.manager.recipeImportSaveError": {
+    zh: "无法把分享配方交给模块；转换器内容仍然可用。",
+    en: "The shared recipe could not be handed to the module; converter content remains available.",
+  },
+  "workshop.manager.localTitle": {
+    zh: "安装本地模块包",
+    en: "Install a local module package",
+  },
+  "workshop.manager.localDescription": {
+    zh: "选择经过验证的 .lumina-workshop 单文件安装包。浏览器中不会向它提供真实数据。",
+    en: "Choose a validated single-file .lumina-workshop package. Browser mode does not provide it with real data.",
+  },
+  "workshop.manager.localPackage": {
+    zh: "本地模块包",
+    en: "Local module package",
+  },
+  "workshop.manager.localInvalid": {
+    zh: "请选择扩展名为 .lumina-workshop 的安装包。",
+    en: "Choose a package with the .lumina-workshop extension.",
+  },
+  "workshop.manager.githubTitle": {
+    zh: "从 GitHub Release 安装",
+    en: "Install from a GitHub Release",
+  },
+  "workshop.manager.githubRepository": {
+    zh: "GitHub 仓库",
+    en: "GitHub repository",
+  },
+  "workshop.manager.githubPlaceholder": {
+    zh: "https://github.com/所有者/仓库",
+    en: "https://github.com/owner/repository",
+  },
+  "workshop.manager.exactVersion": {
+    zh: "精确版本",
+    en: "Exact version",
+  },
+  "workshop.manager.installGithub": {
+    zh: "从 GitHub 安装",
+    en: "Install from GitHub",
+  },
+  "workshop.manager.githubInvalid": {
+    zh: "请输入规范的 GitHub 仓库地址和精确语义版本。",
+    en: "Enter a canonical GitHub repository URL and an exact semantic version.",
+  },
+  "workshop.manager.permissionTitle": {
+    zh: "确认新增权限",
+    en: "Confirm added permissions",
+  },
+  "workshop.manager.permissionDescription": {
+    zh: "这个更新请求了当前版本没有的权限。确认前不会安装或激活候选版本。",
+    en: "This update requests permissions not used by the current version. The candidate will not be installed or activated before confirmation.",
+  },
+  "workshop.manager.newPermissions": {
+    zh: "新增权限",
+    en: "Added permissions",
+  },
+  "workshop.manager.confirmPermissions": {
+    zh: "确认权限并更新",
+    en: "Confirm permissions and update",
+  },
+  "workshop.manager.cancel": {
+    zh: "取消",
+    en: "Cancel",
+  },
+  "workshop.manager.permission.image.pick": {
+    zh: "选择图片",
+    en: "Choose images",
+  },
+  "workshop.manager.permission.project.storage": {
+    zh: "读写模块工程",
+    en: "Read and write module projects",
+  },
+  "workshop.manager.permission.color-library.read": {
+    zh: "读取当前打印色库",
+    en: "Read the current print color library",
+  },
+  "workshop.manager.permission.handoff.image": {
+    zh: "将图像交给转换器",
+    en: "Hand images to the converter",
+  },
+  "workshop.manager.uninstallTitle": {
+    zh: "卸载模块",
+    en: "Uninstall module",
+  },
+  "workshop.manager.uninstallDescription": {
+    zh: "默认只删除模块代码并保留本地工程。删除工程需要单独确认。",
+    en: "By default, only module code is removed and local projects are retained. Deleting projects requires separate confirmation.",
+  },
+  "workshop.manager.deleteProjects": {
+    zh: "同时删除本地工程",
+    en: "Also delete local projects",
+  },
+  "workshop.manager.confirmUninstall": {
+    zh: "确认卸载",
+    en: "Confirm uninstall",
+  },
+  "workshop.manager.close": {
+    zh: "关闭",
+    en: "Close",
+  },
+  "workshop.manager.detailsError": {
+    zh: "无法读取此版本的公开说明。",
+    en: "Public details for this version could not be loaded.",
+  },
+  "workshop.manager.license": {
+    zh: "许可证",
+    en: "License",
+  },
   recipe_import_schema_newer: {
     zh: "配方版本较新，部分参数可能无法恢复",
     en: "Recipe uses a newer schema version — some parameters may not restore",

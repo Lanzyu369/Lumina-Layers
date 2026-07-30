@@ -77,16 +77,12 @@ function deriveWorkshopContext(
   }
   const workshop = useWorkshopStore.getState();
   const diagnostics = workshop.diagnostics;
-  if (
-    !diagnostics ||
-    !workshop.diagnosticsModuleId ||
-    !workshop.diagnosticsModuleVersion
-  ) {
+  if (!diagnostics || !workshop.activeModule) {
     return null;
   }
   return {
-    module_id: workshop.diagnosticsModuleId,
-    module_version: workshop.diagnosticsModuleVersion,
+    module_id: workshop.activeModule.moduleId,
+    module_version: workshop.activeModule.version,
     project_schema_version: diagnostics.projectSchemaVersion,
     input_mode: diagnostics.inputMode,
     rows: diagnostics.rows,

@@ -1,10 +1,21 @@
 import {
-  Component,
+  useCallback,
+  useEffect,
   useMemo,
-  type ErrorInfo,
-  type ReactNode,
+  useRef,
+  useState,
+  type ComponentType,
 } from "react";
 
+import {
+  workshopApi,
+  type InstalledWorkshopModule,
+  type InstalledWorkshopVersion,
+  type WorkshopCatalog,
+  type WorkshopCatalogModule,
+  type WorkshopCatalogVersion,
+  type WorkshopManagerApi,
+} from "../api/workshop";
 import Button from "../components/ui/Button";
 import {
   PanelIntro,
@@ -12,279 +23,850 @@ import {
   cx,
   resolvePanelSurfaceClass,
   resolveSectionCardClass,
+  workstationInputClass,
 } from "../components/ui/panelPrimitives";
 import { useWorkspaceMode } from "../hooks/useWorkspaceMode";
 import { useI18n } from "../i18n/context";
-import { translations } from "../i18n/translations";
 import { useSettingsStore } from "../stores/settingsStore";
-import { createBrowserWorkshopFileServices } from "./browserFiles";
-import { handoffWorkshopImageToConverter } from "./converterHandoff";
-import { createWorkshopHostServices } from "./host";
-import {
-  OFFICIAL_WORKSHOP_MODULES,
-  WORKSHOP_MODULE_WHITELIST,
-} from "./modules/bead/manifest";
+import ModuleDetails from "./ModuleDetails";
 import {
   createWorkshopProjectStorage,
+  type ManagedWorkshopProjectStorage,
   type WorkshopProjectStorageResult,
 } from "./projectStorage";
 import {
-  validateWorkshopModules,
-  type RegisteredWorkshopModule,
-} from "./registry";
+  WorkshopFrame,
+  type WorkshopFrameProps,
+} from "./runtime/WorkshopFrame";
+import {
+  compareWorkshopSemver,
+  type WorkshopRuntimeMode,
+} from "./runtime/health";
+import {
+  createSyntheticWorkshopHandlers,
+  createWorkshopManagerHandlers,
+} from "./runtime/handlers";
 import { useWorkshopStore } from "./store";
-import type {
-  WorkshopHostServices,
-  WorkshopModuleManifest,
-  WorkshopVisibleError,
-} from "./types";
 
-declare const __LUMINA_VERSION__: string | undefined;
+interface PermissionPrompt {
+  module: InstalledWorkshopModule;
+  version: WorkshopCatalogVersion;
+  added: WorkshopCatalogVersion["permissions"];
+}
+
+interface UninstallPrompt {
+  module: InstalledWorkshopModule;
+  deleteProjects: boolean;
+}
+
+interface DesktopRuntimeInfo {
+  mode: "desktop-secure";
+  safeMode: boolean;
+}
 
 let defaultStorageResult: WorkshopProjectStorageResult | null = null;
-const defaultFileServices = createBrowserWorkshopFileServices();
 
-function getDefaultStorage(): WorkshopProjectStorageResult {
+function defaultProjectStorage(): ManagedWorkshopProjectStorage {
   defaultStorageResult ??= createWorkshopProjectStorage();
-  return defaultStorageResult;
+  return defaultStorageResult.storage;
 }
 
-function translateFromSettings(key: string): string {
-  const language = useSettingsStore.getState().language;
-  const entry = translations[key];
-  return entry?.[language] ?? entry?.zh ?? key;
-}
-
-function reportHostError(
-  error: WorkshopVisibleError | null,
-  identity?: {
-    moduleId: string;
-    moduleVersion: string;
-  },
-): void {
-  const current = useWorkshopStore.getState().diagnostics;
-  if (!error && !current) {
-    return;
-  }
-  useWorkshopStore.getState().setDiagnostics(
-    error
-      ? {
-          projectSchemaVersion:
-            current?.projectSchemaVersion ?? "unknown",
-          inputMode: current?.inputMode ?? null,
-          rows: current?.rows ?? null,
-          columns: current?.columns ?? null,
-          compression: current?.compression ?? null,
-          errorCode: error.code,
-        }
-      : current
-        ? { ...current, errorCode: null }
-        : null,
-    identity,
+function upsertModule(
+  modules: InstalledWorkshopModule[],
+  incoming: InstalledWorkshopModule,
+): InstalledWorkshopModule[] {
+  const next = modules.filter(
+    (module) => module.module_id !== incoming.module_id,
+  );
+  next.push(incoming);
+  return next.sort((left, right) =>
+    left.module_id.localeCompare(right.module_id),
   );
 }
 
-function createDefaultHost(
-  manifest: WorkshopModuleManifest,
-): WorkshopHostServices {
-  const storage = getDefaultStorage();
-  return createWorkshopHostServices(manifest, {
-    storage: storage.storage,
-    files: defaultFileServices,
-    getLocale: () => useSettingsStore.getState().language,
-    getTheme: () => useSettingsStore.getState().theme,
-    translate: translateFromSettings,
-    onProgress: () => undefined,
-    onError: (error) =>
-      reportHostError(error, {
-        moduleId: manifest.id,
-        moduleVersion: manifest.version,
-      }),
-    onDiagnostics: (moduleId, moduleVersion, summary) => {
-      useWorkshopStore.getState().setDiagnostics(summary, {
-        moduleId,
-        moduleVersion,
-      });
-    },
-    onProjectSaved: (moduleId, projectId) => {
-      useWorkshopStore
-        .getState()
-        .rememberProject(moduleId, projectId);
-    },
-    handoffImage: handoffWorkshopImageToConverter,
-  });
-}
-
-interface WorkshopBoundaryProps {
-  children: ReactNode;
-  fallback: ReactNode;
-}
-
-interface WorkshopBoundaryState {
-  failed: boolean;
-}
-
-class WorkshopModuleBoundary extends Component<
-  WorkshopBoundaryProps,
-  WorkshopBoundaryState
-> {
-  state: WorkshopBoundaryState = { failed: false };
-
-  static getDerivedStateFromError(): WorkshopBoundaryState {
-    return { failed: true };
-  }
-
-  componentDidCatch(_error: Error, _info: ErrorInfo): void {
-    reportHostError({
-      code: "module-render-failed",
-      message: "Workshop module render failed.",
-      retryable: true,
-    });
-  }
-
-  render() {
-    return this.state.failed ? this.props.fallback : this.props.children;
-  }
-}
-
-function BeadGridIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      className="h-8 w-8"
-      viewBox="0 0 32 32"
-      fill="currentColor"
-    >
-      {[6, 16, 26].flatMap((x) =>
-        [6, 16, 26].map((y) => (
-          <circle key={`${x}-${y}`} cx={x} cy={y} r="3.3" />
-        )),
-      )}
-    </svg>
-  );
-}
-
-function moduleMeta(
-  template: string,
-  author: string,
-  version: string,
+function localized(
+  value: { zh_cn: string; en_us: string },
+  language: "zh" | "en",
 ): string {
-  return template
-    .replace("{author}", author)
-    .replace("{version}", version);
+  return language === "zh" ? value.zh_cn : value.en_us;
 }
 
-function ModuleCard({
-  record,
-  onOpen,
-  hasProject,
+function moduleVersion(
+  module: InstalledWorkshopModule,
+  version: string | null,
+): InstalledWorkshopVersion | null {
+  if (version === null) {
+    return null;
+  }
+  return (
+    module.version_details.find(
+      (detail) => detail.version === version,
+    ) ?? null
+  );
+}
+
+function newestInstallableVersion(
+  module: WorkshopCatalogModule | undefined,
+  activeVersion: string | null,
+): WorkshopCatalogVersion | null {
+  if (module === undefined) {
+    return null;
+  }
+  const candidates = module.versions
+    .filter((version) => version.state === "active")
+    .filter((version) => {
+      if (activeVersion === null) {
+        return true;
+      }
+      return (
+        compareWorkshopSemver(version.version, activeVersion) === 1
+      );
+    })
+    .sort((left, right) =>
+      compareWorkshopSemver(right.version, left.version) ?? 0,
+    );
+  return candidates[0] ?? null;
+}
+
+function sourceKey(
+  module: InstalledWorkshopModule,
+): "official" | "community" | "unreviewed" {
+  if (module.official) {
+    return "official";
+  }
+  return module.source === "registry"
+    ? "community"
+    : "unreviewed";
+}
+
+function frameRuntimeMode(
+  value:
+    | "desktop-secure"
+    | "browser-restricted"
+    | "unsafe-development",
+): WorkshopRuntimeMode {
+  if (value === "desktop-secure") {
+    return "desktop-secure";
+  }
+  return value === "unsafe-development"
+    ? "browser-unsafe-development"
+    : "browser";
+}
+
+function canOpenModule(
+  module: InstalledWorkshopModule,
+  runtimeMode:
+    | "desktop-secure"
+    | "browser-restricted"
+    | "unsafe-development",
+): boolean {
+  if (runtimeMode === "desktop-secure") {
+    return true;
+  }
+  if (module.source === "seed" && module.official) {
+    return true;
+  }
+  return (
+    runtimeMode === "unsafe-development" &&
+    module.source === "local"
+  );
+}
+
+function permissionTranslationKey(name: string): string {
+  return `workshop.manager.permission.${name}`;
+}
+
+function ModuleIcon({
+  source,
+  iconUrl,
 }: {
-  record: RegisteredWorkshopModule;
-  onOpen(): void;
-  hasProject: boolean;
+  source: ReturnType<typeof sourceKey>;
+  iconUrl: string | null;
 }) {
+  if (iconUrl) {
+    return (
+      <img
+        src={iconUrl}
+        alt=""
+        className="h-14 w-14 rounded-[18px] border border-[color:var(--surface-outline)] object-cover"
+      />
+    );
+  }
+  return (
+    <div
+      aria-hidden="true"
+      className={cx(
+        "flex h-14 w-14 items-center justify-center rounded-[18px] text-xl font-semibold",
+        source === "official"
+          ? "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300"
+          : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300",
+      )}
+    >
+      ◫
+    </div>
+  );
+}
+
+interface InstalledCardProps {
+  module: InstalledWorkshopModule;
+  catalogModule: WorkshopCatalogModule | undefined;
+  retained: boolean;
+  runtimeMode:
+    | "desktop-secure"
+    | "browser-restricted"
+    | "unsafe-development";
+  busy: boolean;
+  onOpen(version: string): void;
+  onDetails(url: string): void;
+  onUpdate(version: WorkshopCatalogVersion): void;
+  onRollback(): void;
+  onToggle(): void;
+  onUninstall(): void;
+  onRestore(): void;
+}
+
+function InstalledCard({
+  module,
+  catalogModule,
+  retained,
+  runtimeMode,
+  busy,
+  onOpen,
+  onDetails,
+  onUpdate,
+  onRollback,
+  onToggle,
+  onUninstall,
+  onRestore,
+}: InstalledCardProps) {
   const { t, lang } = useI18n();
-  const { manifest } = record.definition;
+  const detail =
+    moduleVersion(module, module.active_version) ??
+    module.version_details.at(-1) ??
+    null;
+  const source = sourceKey(module);
+  const update = newestInstallableVersion(
+    catalogModule,
+    module.active_version,
+  );
+  const openAllowed = canOpenModule(module, runtimeMode);
+  const title = detail
+    ? localized(detail.name, lang)
+    : module.module_id;
 
   return (
     <article
       className={cx(
         resolveSectionCardClass("standard"),
-        "flex min-h-64 flex-col gap-4",
-        !record.enabled && "opacity-60",
+        "flex min-h-72 flex-col gap-4",
       )}
     >
       <div className="flex items-start justify-between gap-3">
-        <div className="flex h-14 w-14 items-center justify-center rounded-[20px] bg-blue-100 text-blue-700 dark:bg-blue-950/70 dark:text-blue-300">
-          <BeadGridIcon />
-        </div>
-        <span className="rounded-full border border-blue-200/80 bg-blue-50/80 px-2.5 py-1 text-[11px] font-semibold text-blue-700 dark:border-blue-800/80 dark:bg-blue-950/60 dark:text-blue-300">
-          {t("workshop.official")}
+        <ModuleIcon source={source} iconUrl={detail?.icon_url ?? module.icon_url} />
+        <span className="rounded-full border border-[color:var(--surface-outline)] bg-[color:var(--surface-section-muted)] px-2.5 py-1 text-[11px] font-semibold text-slate-700 dark:text-slate-200">
+          {t(`workshop.manager.source.${source}`)}
         </span>
       </div>
 
       <div className="min-w-0 flex-1">
         <h3 className="text-xl font-semibold tracking-tight text-slate-900 dark:text-slate-50">
-          {manifest.name[lang]}
+          {title}
         </h3>
-        <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
-          {manifest.description[lang]}
-        </p>
-        <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">
-          {moduleMeta(
-            t("workshop.moduleMeta"),
-            manifest.author,
-            manifest.version,
-          )}
-        </p>
+        {detail ? (
+          <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+            {localized(detail.description, lang)}
+          </p>
+        ) : null}
+        <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500 dark:text-slate-400">
+          <span>
+            {module.enabled
+              ? t("workshop.manager.enabled")
+              : t("workshop.manager.disabled")}
+          </span>
+          {module.active_version ? (
+            <span>
+              {t("workshop.manager.currentVersion").replace(
+                "{version}",
+                module.active_version,
+              )}
+            </span>
+          ) : null}
+          {update ? (
+            <span>
+              {t("workshop.manager.updateAvailable").replace(
+                "{version}",
+                update.version,
+              )}
+            </span>
+          ) : null}
+        </div>
+        {retained ? (
+          <p className="mt-3 text-xs font-medium text-slate-600 dark:text-slate-300">
+            {t("workshop.manager.projectsRetained")}
+          </p>
+        ) : null}
+        {module.official_uninstalled ? (
+          <StatusBanner tone="info" className="mt-3">
+            {t("workshop.manager.officialUninstalled")}
+          </StatusBanner>
+        ) : null}
       </div>
 
-      {record.enabled ? (
+      {module.official_uninstalled ? (
         <Button
-          label={t(hasProject ? "workshop.continue" : "workshop.open")}
-          onClick={onOpen}
+          label={t("workshop.manager.restoreSeed")}
+          onClick={onRestore}
+          loading={busy}
           className="w-full"
         />
       ) : (
-        <StatusBanner tone="warning">
-          {t(`workshop.disabled.${record.reason}`)}
-        </StatusBanner>
+        <div className="flex flex-wrap gap-2">
+          {module.active_version ? (
+            <Button
+              label={
+                openAllowed
+                  ? t("workshop.manager.open")
+                  : t("workshop.manager.desktopOnly")
+              }
+              onClick={() => onOpen(module.active_version as string)}
+              disabled={!module.enabled || !openAllowed}
+              className="flex-1"
+            />
+          ) : null}
+          {detail ? (
+            <Button
+              label={t("workshop.manager.details")}
+              variant="secondary"
+              onClick={() => onDetails(detail.details_url)}
+            />
+          ) : null}
+          {update ? (
+            <Button
+              label={t("workshop.manager.update")}
+              variant="secondary"
+              onClick={() => onUpdate(update)}
+              loading={busy}
+            />
+          ) : null}
+          {module.previous_version ? (
+            <Button
+              label={t("workshop.manager.rollback")}
+              variant="secondary"
+              onClick={onRollback}
+              loading={busy}
+            />
+          ) : null}
+          {module.active_version ? (
+            <Button
+              label={t(
+                module.enabled
+                  ? "workshop.manager.disable"
+                  : "workshop.manager.enable",
+              )}
+              variant="secondary"
+              onClick={onToggle}
+              loading={busy}
+            />
+          ) : null}
+          <Button
+            label={t("workshop.manager.uninstall")}
+            variant="secondary"
+            onClick={onUninstall}
+            disabled={busy}
+          />
+        </div>
       )}
     </article>
   );
 }
 
 export interface WorkshopPanelProps {
-  createHost?: (manifest: WorkshopModuleManifest) => WorkshopHostServices;
+  api?: WorkshopManagerApi;
+  projectStorage?: ManagedWorkshopProjectStorage;
+  runtimeMode?:
+    | "desktop-secure"
+    | "browser-restricted"
+    | "unsafe-development";
+  FrameComponent?: ComponentType<WorkshopFrameProps>;
 }
 
 export function WorkshopPanel({
-  createHost = createDefaultHost,
+  api = workshopApi,
+  projectStorage = defaultProjectStorage(),
+  runtimeMode: runtimeModeOverride,
+  FrameComponent = WorkshopFrame,
 }: WorkshopPanelProps) {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const workspace = useWorkspaceMode();
-  const activeModuleId = useWorkshopStore((state) => state.activeModuleId);
-  const lastProjectIds = useWorkshopStore((state) => state.lastProjectIds);
+  const view = useWorkshopStore((state) => state.view);
+  const activeModule = useWorkshopStore(
+    (state) => state.activeModule,
+  );
+  const catalogStatus = useWorkshopStore(
+    (state) => state.catalogStatus,
+  );
+  const runtimeMode = useWorkshopStore(
+    (state) => state.runtimeMode,
+  );
   const pendingRecipeSource = useWorkshopStore(
     (state) => state.pendingRecipeSource,
   );
+  const setView = useWorkshopStore((state) => state.setView);
   const openModule = useWorkshopStore((state) => state.openModule);
   const returnHome = useWorkshopStore((state) => state.returnHome);
+  const setCatalogStatus = useWorkshopStore(
+    (state) => state.setCatalogStatus,
+  );
+  const setRuntimeMode = useWorkshopStore(
+    (state) => state.setRuntimeMode,
+  );
   const clearPendingRecipe = useWorkshopStore(
     (state) => state.clearPendingRecipe,
   );
+  const setDiagnostics = useWorkshopStore(
+    (state) => state.setDiagnostics,
+  );
 
-  const registeredModules = useMemo(
-    () =>
-      validateWorkshopModules(OFFICIAL_WORKSHOP_MODULES, {
-        appVersion:
-          typeof __LUMINA_VERSION__ === "string"
-            ? __LUMINA_VERSION__
-            : "0.0.0",
-        whitelist: WORKSHOP_MODULE_WHITELIST,
-      }),
+  const [modules, setModules] = useState<InstalledWorkshopModule[]>([]);
+  const [catalog, setCatalog] = useState<WorkshopCatalog | null>(null);
+  const [retainedProjects, setRetainedProjects] = useState<
+    ReadonlySet<string>
+  >(new Set());
+  const [loadingModules, setLoadingModules] = useState(true);
+  const [operationError, setOperationError] = useState<string | null>(
+    null,
+  );
+  const [busyModuleId, setBusyModuleId] = useState<string | null>(
+    null,
+  );
+  const [detailsUrl, setDetailsUrl] = useState<string | null>(null);
+  const [permissionPrompt, setPermissionPrompt] =
+    useState<PermissionPrompt | null>(null);
+  const [uninstallPrompt, setUninstallPrompt] =
+    useState<UninstallPrompt | null>(null);
+  const [githubRepository, setGithubRepository] = useState("");
+  const [githubVersion, setGithubVersion] = useState("");
+  const snapshotIds = useRef(new Map<string, string>());
+
+  const applyMutation = useCallback(
+    (module: InstalledWorkshopModule | null) => {
+      if (module === null) {
+        return;
+      }
+      setModules((current) => upsertModule(current, module));
+    },
     [],
   );
-  const selected = registeredModules.find(
-    (record) =>
-      record.enabled && record.definition.manifest.id === activeModuleId,
-  );
-  const host = useMemo(
-    () => (selected ? createHost(selected.definition.manifest) : null),
-    [createHost, selected],
-  );
-  const persistent =
-    createHost === createDefaultHost ? getDefaultStorage().persistent : true;
 
-  return (
-    <div
-      className={cx(
-        resolvePanelSurfaceClass(workspace.mode),
-        "flex flex-col gap-5",
-      )}
-    >
-      {selected && host ? (
-        <div className="mx-auto flex w-full max-w-[96rem] flex-col gap-5">
+  const loadModules = useCallback(async () => {
+    setLoadingModules(true);
+    try {
+      const result = await api.listModules();
+      setModules(result.modules);
+      setOperationError(null);
+    } catch {
+      setOperationError(t("workshop.manager.loadError"));
+    } finally {
+      setLoadingModules(false);
+    }
+  }, [api, t]);
+
+  const loadCatalog = useCallback(async () => {
+    setCatalogStatus("loading");
+    try {
+      const result = await api.fetchCatalog();
+      setCatalog(result);
+      setCatalogStatus(result.verified ? "ready" : "error");
+    } catch {
+      setCatalog(null);
+      setCatalogStatus("error");
+    }
+  }, [api, setCatalogStatus]);
+
+  useEffect(() => {
+    void loadModules();
+    void loadCatalog();
+  }, [loadCatalog, loadModules]);
+
+  useEffect(() => {
+    if (runtimeModeOverride !== undefined) {
+      setRuntimeMode(runtimeModeOverride);
+      return;
+    }
+    const electronApi = (
+      window as unknown as {
+        electronAPI?: {
+          getWorkshopRuntimeMode?: () => Promise<DesktopRuntimeInfo>;
+        };
+      }
+    ).electronAPI;
+    if (electronApi?.getWorkshopRuntimeMode === undefined) {
+      setRuntimeMode("browser-restricted");
+      return;
+    }
+    let cancelled = false;
+    void electronApi
+      .getWorkshopRuntimeMode()
+      .then((result) => {
+        if (!cancelled) {
+          setRuntimeMode(
+            result.mode === "desktop-secure" && !result.safeMode
+              ? "desktop-secure"
+              : "browser-restricted",
+          );
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setRuntimeMode("browser-restricted");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [runtimeModeOverride, setRuntimeMode]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.all(
+      modules.map(async (module) => {
+        try {
+          const project = await projectStorage.latest(
+            module.module_id,
+          );
+          return project === null ? null : module.module_id;
+        } catch {
+          return null;
+        }
+      }),
+    ).then((ids) => {
+      if (!cancelled) {
+        setRetainedProjects(
+          new Set(ids.filter((id): id is string => id !== null)),
+        );
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [modules, projectStorage]);
+
+  useEffect(() => {
+    if (
+      activeModule === null ||
+      pendingRecipeSource === null ||
+      activeModule.moduleId !== pendingRecipeSource.moduleId
+    ) {
+      return;
+    }
+    let cancelled = false;
+    const timestamp = new Date().toISOString();
+    void projectStorage
+      .save({
+        moduleId: activeModule.moduleId,
+        projectId: `lumina-recipe-import-${Date.now()}`,
+        schemaVersion: "lumina-recipe-import/v1",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        project: {
+          kind: "lumina-recipe-import",
+          source: pendingRecipeSource,
+        },
+      })
+      .then(() => {
+        if (!cancelled) {
+          clearPendingRecipe();
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setOperationError(
+            t("workshop.manager.recipeImportSaveError"),
+          );
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeModule,
+    clearPendingRecipe,
+    pendingRecipeSource,
+    projectStorage,
+    t,
+  ]);
+
+  const catalogById = useMemo(
+    () =>
+      new Map(
+        catalog?.verified
+          ? catalog.modules.map((module) => [
+              module.module_id,
+              module,
+            ])
+          : [],
+      ),
+    [catalog],
+  );
+
+  const selectedModule = activeModule
+    ? modules.find(
+        (module) => module.module_id === activeModule.moduleId,
+      ) ?? null
+    : null;
+  const selectedVersion =
+    selectedModule && activeModule
+      ? moduleVersion(selectedModule, activeModule.version)
+      : null;
+
+  const handlers = useMemo(
+    () =>
+      createWorkshopManagerHandlers({
+        storage: projectStorage,
+        locale: () =>
+          useSettingsStore.getState().language === "zh"
+            ? "zh-CN"
+            : "en-US",
+        theme: () => useSettingsStore.getState().theme,
+        onDiagnostics: setDiagnostics,
+      }),
+    [projectStorage, setDiagnostics],
+  );
+  const syntheticHandlers = useMemo(
+    () => createSyntheticWorkshopHandlers(),
+    [],
+  );
+
+  const runModuleMutation = useCallback(
+    async (
+      moduleId: string,
+      operation: () => Promise<{
+        module: InstalledWorkshopModule | null;
+      }>,
+    ) => {
+      setBusyModuleId(moduleId);
+      setOperationError(null);
+      try {
+        const result = await operation();
+        if (result.module === null) {
+          setModules((current) =>
+            current.filter(
+              (module) => module.module_id !== moduleId,
+            ),
+          );
+        } else {
+          applyMutation(result.module);
+        }
+        return result.module;
+      } catch {
+        setOperationError(t("workshop.manager.operationError"));
+        return null;
+      } finally {
+        setBusyModuleId(null);
+      }
+    },
+    [applyMutation, t],
+  );
+
+  const installUpdate = useCallback(
+    async (
+      module: InstalledWorkshopModule,
+      version: WorkshopCatalogVersion,
+    ) => {
+      const installed = await runModuleMutation(
+        module.module_id,
+        () =>
+          api.installRegistry(module.module_id, version.version),
+      );
+      if (
+        installed?.candidate_version &&
+        canOpenModule(installed, runtimeMode)
+      ) {
+        openModule(
+          installed.module_id,
+          installed.candidate_version,
+        );
+      }
+    },
+    [api, openModule, runModuleMutation, runtimeMode],
+  );
+
+  const requestUpdate = useCallback(
+    (
+      module: InstalledWorkshopModule,
+      version: WorkshopCatalogVersion,
+    ) => {
+      const currentPermissions = new Set(
+        moduleVersion(module, module.active_version)?.permissions.map(
+          (permission) => permission.name,
+        ) ?? [],
+      );
+      const added = version.permissions.filter(
+        (permission) => !currentPermissions.has(permission.name),
+      );
+      if (added.length > 0) {
+        setPermissionPrompt({ module, version, added });
+        return;
+      }
+      void installUpdate(module, version);
+    },
+    [installUpdate],
+  );
+
+  const openView = useCallback(
+    (
+      next: "installed" | "discover" | "developer",
+    ) => {
+      setView(next);
+      if (next === "discover") {
+        void loadCatalog();
+      }
+    },
+    [loadCatalog, setView],
+  );
+
+  const prepareCandidate = useCallback(
+    async (moduleId: string, moduleVersionValue: string) => {
+      const module = modules.find(
+        (item) => item.module_id === moduleId,
+      );
+      const snapshotId = await projectStorage.snapshotModule(
+        moduleId,
+        module?.active_version ?? moduleVersionValue,
+      );
+      snapshotIds.current.set(moduleId, snapshotId);
+    },
+    [modules, projectStorage],
+  );
+
+  const activateCandidate = useCallback(
+    async (moduleId: string, version: string) => {
+      const result = await api.activateModule(moduleId, version);
+      if (result.module) {
+        applyMutation(result.module);
+      }
+      const snapshotId = snapshotIds.current.get(moduleId);
+      if (snapshotId) {
+        await projectStorage.deleteSnapshot(moduleId, snapshotId);
+        snapshotIds.current.delete(moduleId);
+      }
+    },
+    [api, applyMutation, projectStorage],
+  );
+
+  const handleRuntimeFailure = useCallback(
+    async (failure: { moduleId: string }) => {
+      const snapshotId = snapshotIds.current.get(failure.moduleId);
+      if (snapshotId) {
+        await projectStorage.restoreSnapshot(
+          failure.moduleId,
+          snapshotId,
+        );
+        await projectStorage.deleteSnapshot(
+          failure.moduleId,
+          snapshotId,
+        );
+        snapshotIds.current.delete(failure.moduleId);
+      }
+      const result = await api.recordRuntimeFailure(
+        failure.moduleId,
+      );
+      if (result.module) {
+        applyMutation(result.module);
+      }
+    },
+    [api, applyMutation, projectStorage],
+  );
+
+  const handleRuntimeSuccess = useCallback(
+    async (moduleId: string) => {
+      const result = await api.recordRuntimeSuccess(moduleId);
+      if (result.module) {
+        applyMutation(result.module);
+      }
+    },
+    [api, applyMutation],
+  );
+
+  const confirmUninstall = useCallback(async () => {
+    if (uninstallPrompt === null) {
+      return;
+    }
+    const { module, deleteProjects } = uninstallPrompt;
+    setUninstallPrompt(null);
+    const result = await runModuleMutation(
+      module.module_id,
+      () => api.uninstallModule(module.module_id, deleteProjects),
+    );
+    if (deleteProjects) {
+      await projectStorage.deleteModuleProjects(module.module_id);
+      setRetainedProjects((current) => {
+        const next = new Set(current);
+        next.delete(module.module_id);
+        return next;
+      });
+    }
+    if (result?.official_uninstalled) {
+      applyMutation(result);
+    }
+  }, [
+    api,
+    applyMutation,
+    projectStorage,
+    runModuleMutation,
+    uninstallPrompt,
+  ]);
+
+  const installLocal = useCallback(
+    async (file: File | undefined) => {
+      if (
+        file === undefined ||
+        !file.name.toLowerCase().endsWith(".lumina-workshop")
+      ) {
+        setOperationError(t("workshop.manager.localInvalid"));
+        return;
+      }
+      const result = await runModuleMutation("local-install", () =>
+        api.installLocal(file),
+      );
+      void result;
+    },
+    [api, runModuleMutation, t],
+  );
+
+  const installGithub = useCallback(async () => {
+    if (
+      !/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(
+        githubRepository,
+      ) ||
+      !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(
+        githubVersion,
+      )
+    ) {
+      setOperationError(t("workshop.manager.githubInvalid"));
+      return;
+    }
+    const result = await runModuleMutation("github-install", () =>
+      api.installGithub(githubRepository, githubVersion),
+    );
+    void result;
+  }, [
+    api,
+    githubRepository,
+    githubVersion,
+    runModuleMutation,
+    t,
+  ]);
+
+  if (selectedModule && selectedVersion && activeModule) {
+    return (
+      <div
+        className={cx(
+          resolvePanelSurfaceClass(workspace.mode),
+          "flex min-h-0 flex-col gap-4",
+        )}
+      >
+        <div className="mx-auto flex min-h-0 w-full max-w-[96rem] flex-1 flex-col gap-4">
           <div className="flex items-center justify-between gap-3">
             <button
               type="button"
@@ -295,72 +877,437 @@ export function WorkshopPanel({
               {t("workshop.back")}
             </button>
             <span className="text-xs text-slate-500 dark:text-slate-400">
-              {moduleMeta(
-                t("workshop.moduleMeta"),
-                selected.definition.manifest.author,
-                selected.definition.manifest.version,
-              )}
+              {t("workshop.manager.activeMeta")
+                .replace(
+                  "{name}",
+                  localized(selectedVersion.name, lang),
+                )
+                .replace("{version}", selectedVersion.version)}
             </span>
           </div>
-
-          <WorkshopModuleBoundary
-            fallback={
-              <StatusBanner
-                tone="error"
-                title={t("workshop.moduleErrorTitle")}
-                action={
-                  <Button
-                    label={t("workshop.back")}
-                    variant="secondary"
-                    size="sm"
-                    onClick={returnHome}
-                  />
-                }
-              >
-                {t("workshop.moduleErrorDescription")}
-              </StatusBanner>
+          <FrameComponent
+            module={{
+              moduleId: activeModule.moduleId,
+              moduleVersion: activeModule.version,
+              displayName: localized(selectedVersion.name, lang),
+              source: selectedModule.source,
+              official: selectedModule.official,
+              enabled: selectedModule.enabled,
+              runtimeUrl: selectedVersion.runtime_url,
+              workshopApi: {
+                min: selectedVersion.workshop_api_min,
+                maxExclusive:
+                  selectedVersion.workshop_api_max_exclusive,
+              },
+              permissions: selectedVersion.permissions.map(
+                (permission) => permission.name,
+              ),
+              candidate:
+                selectedModule.candidate_version ===
+                activeModule.version,
+              previousVersion: selectedModule.previous_version,
+              consecutiveStartFailures:
+                selectedModule.consecutive_start_failures,
+            }}
+            runtimeMode={frameRuntimeMode(runtimeMode)}
+            handlers={handlers}
+            syntheticHandlers={syntheticHandlers}
+            prepareCandidate={prepareCandidate}
+            activateCandidate={activateCandidate}
+            onStartSuccess={handleRuntimeSuccess}
+            onStartFailure={handleRuntimeFailure}
+            disableVersion={(moduleId) =>
+              api
+                .setModuleEnabled(moduleId, false)
+                .then((result) => {
+                  if (result.module) {
+                    applyMutation(result.module);
+                  }
+                })
             }
-          >
-            <selected.definition.Component
-              manifest={selected.definition.manifest}
-              host={host}
-              pendingRecipeSource={pendingRecipeSource}
-              clearPendingRecipe={clearPendingRecipe}
-            />
-          </WorkshopModuleBoundary>
-        </div>
-      ) : (
-        <div className="mx-auto flex w-full max-w-[96rem] flex-col gap-5">
-          <PanelIntro
-            eyebrow="Lumina Studio"
-            title={t("workshop.title")}
-            description={t("workshop.description")}
           />
-          <StatusBanner tone="info">{t("workshop.localOnly")}</StatusBanner>
-          {!persistent && (
-            <StatusBanner tone="warning">
-              {t("workshop.persistenceUnavailable")}
-            </StatusBanner>
-          )}
-          <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-            {registeredModules.map((record) => (
-              <ModuleCard
-                key={record.definition.manifest.id}
-                record={record}
-                hasProject={Boolean(
-                  lastProjectIds[record.definition.manifest.id],
-                )}
-                onOpen={() =>
-                  openModule(record.definition.manifest.id)
-                }
-              />
-            ))}
-          </div>
-          <p className="text-xs text-slate-500 dark:text-slate-400">
-            {t("workshop.capabilityManaged")}
-          </p>
         </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={cx(
+        resolvePanelSurfaceClass(workspace.mode),
+        "flex flex-col gap-5",
       )}
+    >
+      <div className="mx-auto flex w-full max-w-[96rem] flex-col gap-5">
+        <PanelIntro
+          eyebrow={t("workshop.manager.eyebrow")}
+          title={t("workshop.title")}
+          description={t("workshop.manager.description")}
+        />
+
+        <nav
+          aria-label={t("workshop.manager.navigation")}
+          className="inline-flex w-fit rounded-2xl border border-[color:var(--surface-outline)] bg-[color:var(--surface-section-muted)] p-1"
+        >
+          {(["installed", "discover", "developer"] as const).map(
+            (item) => (
+              <button
+                key={item}
+                type="button"
+                aria-current={view === item ? "page" : undefined}
+                onClick={() => openView(item)}
+                className={cx(
+                  "min-h-9 rounded-xl px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[var(--focus-ring)]",
+                  view === item
+                    ? "bg-white text-slate-900 shadow-[var(--shadow-control)] dark:bg-slate-800 dark:text-slate-50"
+                    : "text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-slate-50",
+                )}
+              >
+                {t(`workshop.manager.view.${item}`)}
+              </button>
+            ),
+          )}
+        </nav>
+
+        <StatusBanner
+          tone={
+            runtimeMode === "desktop-secure"
+              ? "success"
+              : runtimeMode === "unsafe-development"
+                ? "warning"
+                : "info"
+          }
+        >
+          {t(`workshop.manager.runtime.${runtimeMode}`)}
+        </StatusBanner>
+
+        {operationError ? (
+          <StatusBanner tone="error">{operationError}</StatusBanner>
+        ) : null}
+
+        {view === "installed" ? (
+          loadingModules ? (
+            <p role="status" className="text-sm text-slate-500 dark:text-slate-400">
+              {t("workshop.manager.loading")}
+            </p>
+          ) : modules.length === 0 ? (
+            <StatusBanner tone="info">
+              {t("workshop.manager.noInstalled")}
+            </StatusBanner>
+          ) : (
+            <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+              {modules.map((module) => (
+                <InstalledCard
+                  key={module.module_id}
+                  module={module}
+                  catalogModule={catalogById.get(module.module_id)}
+                  retained={retainedProjects.has(module.module_id)}
+                  runtimeMode={runtimeMode}
+                  busy={busyModuleId === module.module_id}
+                  onOpen={(version) =>
+                    openModule(module.module_id, version)
+                  }
+                  onDetails={setDetailsUrl}
+                  onUpdate={(version) =>
+                    requestUpdate(module, version)
+                  }
+                  onRollback={() =>
+                    void runModuleMutation(module.module_id, () =>
+                      api.rollbackModule(module.module_id),
+                    )
+                  }
+                  onToggle={() =>
+                    void runModuleMutation(module.module_id, () =>
+                      api.setModuleEnabled(
+                        module.module_id,
+                        !module.enabled,
+                      ),
+                    )
+                  }
+                  onUninstall={() =>
+                    setUninstallPrompt({
+                      module,
+                      deleteProjects: false,
+                    })
+                  }
+                  onRestore={() =>
+                    void runModuleMutation(module.module_id, () =>
+                      api.restoreOfficialSeed(module.module_id),
+                    )
+                  }
+                />
+              ))}
+            </div>
+          )
+        ) : null}
+
+        {view === "discover" ? (
+          catalogStatus === "loading" ? (
+            <p role="status" className="text-sm text-slate-500 dark:text-slate-400">
+              {t("workshop.manager.catalogLoading")}
+            </p>
+          ) : catalogStatus === "error" || !catalog?.verified ? (
+            <StatusBanner
+              tone="error"
+              action={
+                <Button
+                  label={t("workshop.manager.retry")}
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => void loadCatalog()}
+                />
+              }
+            >
+              {t("workshop.manager.catalogInvalid")}
+            </StatusBanner>
+          ) : (
+            <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+              {catalog.modules.map((module) => {
+                const candidate = newestInstallableVersion(
+                  module,
+                  modules.find(
+                    (installedModule) =>
+                      installedModule.module_id === module.module_id,
+                  )?.active_version ?? null,
+                );
+                return (
+                  <article
+                    key={module.module_id}
+                    className={cx(
+                      resolveSectionCardClass("standard"),
+                      "flex min-h-64 flex-col gap-4",
+                    )}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <ModuleIcon
+                        source={
+                          module.official ? "official" : "community"
+                        }
+                        iconUrl={null}
+                      />
+                      <span className="rounded-full border border-[color:var(--surface-outline)] px-2.5 py-1 text-[11px] font-semibold text-slate-600 dark:text-slate-300">
+                        {t(
+                          `workshop.manager.source.${
+                            module.official
+                              ? "official"
+                              : "community"
+                          }`,
+                        )}
+                      </span>
+                    </div>
+                    <div className="flex-1">
+                      <h3 className="text-xl font-semibold tracking-tight text-slate-900 dark:text-slate-50">
+                        {localized(module.name, lang)}
+                      </h3>
+                      <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                        {localized(module.description, lang)}
+                      </p>
+                      <p className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+                        {module.publisher}
+                      </p>
+                    </div>
+                    {candidate ? (
+                      <Button
+                        label={t("workshop.manager.install")}
+                        onClick={() => {
+                          const installedModule = modules.find(
+                            (item) =>
+                              item.module_id === module.module_id,
+                          );
+                          if (installedModule) {
+                            requestUpdate(
+                              installedModule,
+                              candidate,
+                            );
+                          } else {
+                            void runModuleMutation(
+                              module.module_id,
+                              () =>
+                                api.installRegistry(
+                                  module.module_id,
+                                  candidate.version,
+                                ),
+                            );
+                          }
+                        }}
+                      />
+                    ) : (
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        {t("workshop.manager.installedCurrent")}
+                      </p>
+                    )}
+                  </article>
+                );
+              })}
+            </div>
+          )
+        ) : null}
+
+        {view === "developer" ? (
+          <div className="grid gap-5 lg:grid-cols-2">
+            <section className={resolveSectionCardClass("standard")}>
+              <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-50">
+                {t("workshop.manager.localTitle")}
+              </h3>
+              <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                {t("workshop.manager.localDescription")}
+              </p>
+              <label className="mt-5 block text-sm font-medium text-slate-700 dark:text-slate-200">
+                <span>{t("workshop.manager.localPackage")}</span>
+                <input
+                  type="file"
+                  accept=".lumina-workshop"
+                  className="mt-2 block w-full text-sm text-slate-600 file:mr-3 file:rounded-xl file:border-0 file:bg-blue-600 file:px-3 file:py-2 file:text-white dark:text-slate-300"
+                  onChange={(event) =>
+                    void installLocal(event.target.files?.[0])
+                  }
+                />
+              </label>
+            </section>
+
+            <section className={resolveSectionCardClass("standard")}>
+              <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-50">
+                {t("workshop.manager.githubTitle")}
+              </h3>
+              <div className="mt-5 flex flex-col gap-4">
+                <label className="text-sm font-medium text-slate-700 dark:text-slate-200">
+                  <span>{t("workshop.manager.githubRepository")}</span>
+                  <input
+                    type="url"
+                    value={githubRepository}
+                    onChange={(event) =>
+                      setGithubRepository(event.target.value)
+                    }
+                    className={cx(workstationInputClass, "mt-2")}
+                    placeholder={t(
+                      "workshop.manager.githubPlaceholder",
+                    )}
+                  />
+                </label>
+                <label className="text-sm font-medium text-slate-700 dark:text-slate-200">
+                  <span>{t("workshop.manager.exactVersion")}</span>
+                  <input
+                    type="text"
+                    value={githubVersion}
+                    onChange={(event) =>
+                      setGithubVersion(event.target.value)
+                    }
+                    className={cx(workstationInputClass, "mt-2")}
+                    placeholder="1.0.0"
+                  />
+                </label>
+                <Button
+                  label={t("workshop.manager.installGithub")}
+                  onClick={() => void installGithub()}
+                  loading={busyModuleId === "github-install"}
+                />
+              </div>
+            </section>
+          </div>
+        ) : null}
+      </div>
+
+      {detailsUrl ? (
+        <ModuleDetails
+          detailsUrl={detailsUrl}
+          api={api}
+          onClose={() => setDetailsUrl(null)}
+        />
+      ) : null}
+
+      {permissionPrompt ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={t("workshop.manager.permissionTitle")}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm"
+        >
+          <section className="panel-section w-full max-w-lg rounded-[28px] p-5 shadow-2xl">
+            <h2 className="text-xl font-semibold tracking-tight text-slate-900 dark:text-slate-50">
+              {t("workshop.manager.permissionTitle")}
+            </h2>
+            <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+              {t("workshop.manager.permissionDescription")}
+            </p>
+            <h3 className="mt-5 text-sm font-semibold text-slate-900 dark:text-slate-50">
+              {t("workshop.manager.newPermissions")}
+            </h3>
+            <ul className="mt-2 flex flex-col gap-2">
+              {permissionPrompt.added.map((permission) => (
+                <li
+                  key={permission.name}
+                  className="rounded-2xl border border-[color:var(--surface-outline)] p-3"
+                >
+                  <p className="text-sm font-semibold text-slate-900 dark:text-slate-50">
+                    {t(permissionTranslationKey(permission.name))}
+                  </p>
+                  <p className="mt-1 text-xs leading-5 text-slate-600 dark:text-slate-300">
+                    {permission.reason}
+                  </p>
+                </li>
+              ))}
+            </ul>
+            <div className="mt-5 flex justify-end gap-2">
+              <Button
+                label={t("workshop.manager.cancel")}
+                variant="secondary"
+                onClick={() => setPermissionPrompt(null)}
+              />
+              <Button
+                label={t("workshop.manager.confirmPermissions")}
+                onClick={() => {
+                  const prompt = permissionPrompt;
+                  setPermissionPrompt(null);
+                  void installUpdate(prompt.module, prompt.version);
+                }}
+              />
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {uninstallPrompt ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={t("workshop.manager.uninstallTitle")}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-sm"
+        >
+          <section className="panel-section w-full max-w-lg rounded-[28px] p-5 shadow-2xl">
+            <h2 className="text-xl font-semibold tracking-tight text-slate-900 dark:text-slate-50">
+              {t("workshop.manager.uninstallTitle")}
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-300">
+              {t("workshop.manager.uninstallDescription")}
+            </p>
+            <label className="mt-5 flex items-start gap-3 rounded-2xl border border-[color:var(--surface-outline)] p-3 text-sm text-slate-700 dark:text-slate-200">
+              <input
+                type="checkbox"
+                checked={uninstallPrompt.deleteProjects}
+                onChange={(event) =>
+                  setUninstallPrompt({
+                    ...uninstallPrompt,
+                    deleteProjects: event.target.checked,
+                  })
+                }
+                className="mt-0.5 h-4 w-4"
+              />
+              <span>{t("workshop.manager.deleteProjects")}</span>
+            </label>
+            <div className="mt-5 flex justify-end gap-2">
+              <Button
+                label={t("workshop.manager.cancel")}
+                variant="secondary"
+                onClick={() => setUninstallPrompt(null)}
+              />
+              <Button
+                label={t("workshop.manager.confirmUninstall")}
+                onClick={() => void confirmUninstall()}
+              />
+            </div>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }
