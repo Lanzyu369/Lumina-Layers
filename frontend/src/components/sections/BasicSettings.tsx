@@ -72,6 +72,15 @@ const STARTUP_LUT_ATTEMPT_LIMIT = 2;
 const MODEL_SURFACE_FILE_EXTENSIONS = [".stl", ".obj"] as const;
 type DropImportIntent = "model" | "image" | "mixed" | "files";
 
+function dimensionSliderStep(value: number): number {
+  const normalized = value
+    .toFixed(3)
+    .replace(/0+$/, "")
+    .replace(/\.$/, "");
+  const decimals = normalized.split(".")[1]?.length ?? 0;
+  return decimals === 0 ? 1 : 10 ** -decimals;
+}
+
 function isSupportedModelSurfaceFile(file: File): boolean {
   const name = file.name.toLowerCase();
   return MODEL_SURFACE_FILE_EXTENSIONS.some((extension) => name.endsWith(extension));
@@ -1661,7 +1670,7 @@ export default function BasicSettings() {
         value={target_width_mm}
         min={10}
         max={dimMax}
-        step={1}
+        step={dimensionSliderStep(target_width_mm)}
         unit="mm"
         onChange={setTargetWidthMm}
       />
@@ -1672,7 +1681,7 @@ export default function BasicSettings() {
         value={target_height_mm}
         min={10}
         max={dimMax}
-        step={1}
+        step={dimensionSliderStep(target_height_mm)}
         unit="mm"
         onChange={setTargetHeightMm}
       />
