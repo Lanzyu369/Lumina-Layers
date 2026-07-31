@@ -58,19 +58,50 @@ export default function MachineSelectionDialog({
 }: MachineSelectionDialogProps) {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!open) return;
+    previousFocusRef.current = document.activeElement as HTMLElement | null;
     setQuery("");
     searchInputRef.current?.focus();
+
+    return () => {
+      previousFocusRef.current?.focus();
+    };
   }, [open]);
 
   useEffect(() => {
     if (!open) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        event.preventDefault();
         onClose();
+        return;
+      }
+
+      if (event.key === "Tab" && dialogRef.current) {
+        const focusableElements = dialogRef.current.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+        );
+        if (focusableElements.length === 0) return;
+
+        const firstFocusableElement = focusableElements[0];
+        const lastFocusableElement =
+          focusableElements[focusableElements.length - 1];
+
+        if (event.shiftKey && document.activeElement === firstFocusableElement) {
+          event.preventDefault();
+          lastFocusableElement.focus();
+        } else if (
+          !event.shiftKey &&
+          document.activeElement === lastFocusableElement
+        ) {
+          event.preventDefault();
+          firstFocusableElement.focus();
+        }
       }
     };
     document.addEventListener("keydown", handleKeyDown);
@@ -113,6 +144,7 @@ export default function MachineSelectionDialog({
       data-testid="machine-selection-dialog-overlay"
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="machine-selection-dialog-title"

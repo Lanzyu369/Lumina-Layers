@@ -291,6 +291,7 @@ describe("SettingsPanel information architecture", () => {
     await waitFor(() => {
       expect(changeDeviceButton).toBeEnabled();
     });
+    changeDeviceButton.focus();
     fireEvent.click(changeDeviceButton);
     expect(
       await screen.findByRole("dialog", { name: "选择打印设备" }),
@@ -303,5 +304,54 @@ describe("SettingsPanel information architecture", () => {
         screen.queryByRole("dialog", { name: "选择打印设备" }),
       ).not.toBeInTheDocument();
     });
+    expect(changeDeviceButton).toHaveFocus();
+  });
+
+  it("keeps Tab and Shift+Tab focus inside the machine chooser", async () => {
+    renderPanel();
+
+    const changeDeviceButton = screen.getByRole("button", { name: "更改设备" });
+    await waitFor(() => {
+      expect(changeDeviceButton).toBeEnabled();
+    });
+    changeDeviceButton.focus();
+    fireEvent.click(changeDeviceButton);
+
+    const dialog = await screen.findByRole("dialog", { name: "选择打印设备" });
+    const searchInput = within(dialog).getByRole("searchbox", {
+      name: "搜索打印机",
+    });
+    const closeButton = within(dialog).getByRole("button", { name: "关闭" });
+    const doneButton = within(dialog).getByRole("button", { name: "完成" });
+
+    expect(searchInput).toHaveFocus();
+
+    doneButton.focus();
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(closeButton).toHaveFocus();
+
+    closeButton.focus();
+    fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+    expect(doneButton).toHaveFocus();
+  });
+
+  it("restores focus after closing the machine chooser with its buttons", async () => {
+    renderPanel();
+
+    const changeDeviceButton = screen.getByRole("button", { name: "更改设备" });
+    await waitFor(() => {
+      expect(changeDeviceButton).toBeEnabled();
+    });
+    changeDeviceButton.focus();
+    fireEvent.click(changeDeviceButton);
+
+    let dialog = await screen.findByRole("dialog", { name: "选择打印设备" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "完成" }));
+    expect(changeDeviceButton).toHaveFocus();
+
+    fireEvent.click(changeDeviceButton);
+    dialog = await screen.findByRole("dialog", { name: "选择打印设备" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "关闭" }));
+    expect(changeDeviceButton).toHaveFocus();
   });
 });
