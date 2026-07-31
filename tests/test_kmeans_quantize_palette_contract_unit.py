@@ -72,3 +72,51 @@ def test_deprecated_skip_post_blur_kwarg_is_accepted_and_noop() -> None:
     # return byte-identical output; the kwarg is purely cosmetic now.
     # cache key 与 skip_post_blur 无关，两次调用应输出完全相同。
     assert np.array_equal(out_default, out_legacy_kwarg)
+
+
+def test_masked_quantization_ignores_and_preserves_unselected_pixels() -> None:
+    """Masked-out air must neither train K-Means nor leak through its cache."""
+    mask = np.zeros((6, 6), dtype=bool)
+    mask[5, 3:6] = True
+    visible = np.array(
+        [[255, 0, 0], [0, 255, 0], [0, 0, 255]],
+        dtype=np.uint8,
+    )
+
+    white_air = np.full((6, 6, 3), 255, dtype=np.uint8)
+    white_air[mask] = visible
+    white_result = quantize_colors(white_air, n_colors=2, seed=42, mask=mask)
+
+    black_air = np.zeros((6, 6, 3), dtype=np.uint8)
+    black_air[mask] = visible
+    black_result = quantize_colors(black_air, n_colors=2, seed=42, mask=mask)
+
+    assert np.unique(white_result[mask], axis=0).shape[0] == 2
+    np.testing.assert_array_equal(white_result[mask], black_result[mask])
+    np.testing.assert_array_equal(white_result[~mask], white_air[~mask])
+    np.testing.assert_array_equal(black_result[~mask], black_air[~mask])
+
+
+def test_masked_quantization_large_input_samples_only_selected_pixels(
+    monkeypatch,
+) -> None:
+    """The large-image path must stay mask-aware without a spatial resize."""
+    from core.pipeline.processing_ops import kmeans_quantizer
+
+    monkeypatch.setattr(kmeans_quantizer, "KMEANS_PIXEL_THRESHOLD", 8)
+    rng = np.random.default_rng(77)
+    image = np.full((5, 5, 3), 17, dtype=np.uint8)
+    mask = np.zeros((5, 5), dtype=bool)
+    mask[:4, :4] = True
+    image[mask] = rng.integers(0, 256, size=(16, 3), dtype=np.uint8)
+
+    result = kmeans_quantizer.quantize_colors(
+        image,
+        n_colors=4,
+        seed=42,
+        mask=mask,
+    )
+
+    assert result.shape == image.shape
+    assert np.unique(result[mask], axis=0).shape[0] <= 4
+    np.testing.assert_array_equal(result[~mask], image[~mask])

@@ -181,6 +181,26 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     alpha_arr = img_arr[:, :, 3]
     mask_transparent = alpha_arr < 10
     mask_solid = ~mask_transparent
+    modeling_mode_value = getattr(modeling_mode, "value", modeling_mode)
+    is_pixel_raster = (
+        not is_svg and modeling_mode_value == ModelingMode.PIXEL.value
+    )
+
+    if is_pixel_raster:
+        # Flatten partial alpha against the source/display white canvas before
+        # any RGB analysis. Converter solver substrate is a separate physical
+        # model input; changing it must not change the source target colour.
+        # The original alpha mask remains authoritative for air pixels.
+        alpha_u16 = alpha_arr[..., None].astype(np.uint16)
+        rgb_u16 = rgb_arr.astype(np.uint16)
+        rgb_arr = (
+            (
+                rgb_u16 * alpha_u16
+                + 255 * (255 - alpha_u16)
+                + 127
+            )
+            // 255
+        ).astype(np.uint8)
 
     # ---- Load persisted solver cache early for auto dynamic range L* targets ----
     # 自动动态范围只需要已有 legacy cache 的 ``lab_centers``；不要在量化前构建
@@ -227,8 +247,13 @@ def _run_material_archive_branch(ctx: dict) -> dict:
             target_lab = np.asarray(cache.lab_centers, dtype=np.float64)
         target_range = compute_target_l_range(target_lab) if target_lab is not None else None
         if target_range is not None:
+            dynamic_range_input = (
+                rgb_arr[mask_solid].reshape(1, -1, 3)
+                if is_pixel_raster
+                else rgb_arr
+            )
             rgb_arr_compressed, dr_info = apply_auto_dynamic_range(
-                rgb_arr, target_range[0], target_range[1]
+                dynamic_range_input, target_range[0], target_range[1]
             )
             if dr_info.get("applied"):
                 _log.info(
@@ -240,7 +265,11 @@ def _run_material_archive_branch(ctx: dict) -> dict:
                         "branch": "material_archive",
                     },
                 )
-                rgb_arr = rgb_arr_compressed
+                if is_pixel_raster:
+                    rgb_arr = rgb_arr.copy()
+                    rgb_arr[mask_solid] = rgb_arr_compressed.reshape(-1, 3)
+                else:
+                    rgb_arr = rgb_arr_compressed
             else:
                 _log.debug(
                     "Auto dynamic range skipped (material archive)",
@@ -295,21 +324,6 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     #    pixels directly instead of synthesizing boundary colours first.
     #    (高保真栅格仍先做边缘保持平滑再 K-Means；像素模式保留最近邻缩放后的
     #    原始色板，超出预算时也直接量化原始像素，避免先平滑出边界脏色。)
-    modeling_mode_value = getattr(modeling_mode, "value", modeling_mode)
-    if not is_svg and modeling_mode_value == ModelingMode.PIXEL.value:
-        # Match the visible PNG colour, not hidden RGB beneath partial alpha.
-        # Keep the original alpha-derived mask so transparent pixels stay air.
-        alpha_u16 = alpha_arr[..., None].astype(np.uint16)
-        substrate_value = 0 if substrate == "black" else 255
-        rgb_u16 = rgb_arr.astype(np.uint16)
-        rgb_arr = (
-            (
-                rgb_u16 * alpha_u16
-                + substrate_value * (255 - alpha_u16)
-                + 127
-            )
-            // 255
-        ).astype(np.uint8)
     if is_svg:
         quantized_image = _snap_svg_to_fill_palette(
             rgb_arr=rgb_arr,
@@ -327,9 +341,14 @@ def _run_material_archive_branch(ctx: dict) -> dict:
             else:
                 # Pixel mode must not blur hard-edged source art. If the
                 # visible palette exceeds the requested budget, quantize the
-                # nearest-resized pixels directly instead of synthesizing
-                # boundary colors through the high-fidelity smoothing path.
-                quantized_image = kmeans_quantize(rgb_arr, quantize_colors_n)
+                # nearest-resized visible pixels directly. Transparent air is
+                # excluded from K-Means fitting so it cannot consume a color
+                # cluster or bias a visible cluster toward the substrate.
+                quantized_image = kmeans_quantize(
+                    rgb_arr,
+                    quantize_colors_n,
+                    mask=mask_solid,
+                )
     else:
         rgb_processed = apply_bilateral_filter(rgb_arr, 10)
         rgb_processed = apply_median_filter(rgb_processed, 0)
