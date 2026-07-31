@@ -2927,7 +2927,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       };
       img.src = previewUrl;
 
-      const shouldOpenCrop = currentState.enableCrop;
+      const shouldOpenCrop = currentState.enableCrop && !isSvgImageFile(file);
       const modelingMode = currentState.modeling_mode === ModelingModeEnum.VECTOR && !isSvgImageFile(file)
         ? ModelingModeEnum.HIGH_FIDELITY
         : currentState.modeling_mode;

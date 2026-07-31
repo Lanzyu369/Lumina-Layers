@@ -319,21 +319,26 @@ describe('矢量化 SVG 导入', () => {
     expect(finalState.previewGlbUrl).toBeNull();
   });
 
-  it('setImageFile 保持通用入口原有裁剪行为', () => {
-    const svgFile = new File(['<svg/>'], 'manual.svg', {
+  it('setImageFile 替换当前 SVG 时保持裁剪弹窗关闭', () => {
+    const currentSvg = new File(['<svg/>'], 'current.svg', {
+      type: 'image/svg+xml',
+    });
+    const replacementSvg = new File(['<svg/>'], 'replacement.svg', {
       type: 'image/svg+xml',
     });
     useConverterStore.setState({
+      imageFile: currentSvg,
+      imagePreviewUrl: 'blob:current-svg',
       cropModalOpen: false,
       enableCrop: true,
-      modeling_mode: ModelingMode.HIGH_FIDELITY,
+      modeling_mode: ModelingMode.VECTOR,
     });
 
-    useConverterStore.getState().setImageFile(svgFile);
+    useConverterStore.getState().setImageFile(replacementSvg);
 
     const state = useConverterStore.getState();
-    expect(state.imageFile).toBe(svgFile);
-    expect(state.cropModalOpen).toBe(true);
-    expect(state.modeling_mode).toBe(ModelingMode.HIGH_FIDELITY);
+    expect(state.imageFile).toBe(replacementSvg);
+    expect(state.cropModalOpen).toBe(false);
+    expect(state.modeling_mode).toBe(ModelingMode.VECTOR);
   });
 });
