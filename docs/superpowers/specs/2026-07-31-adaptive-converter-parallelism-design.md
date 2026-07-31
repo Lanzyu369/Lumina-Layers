@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-31
 
-**Status:** `approved_for_spec_review`
+**Status:** `approved_for_implementation`
 
 **Branch:** `MOVIBALE/feat/adaptive-converter-parallelism`
 
