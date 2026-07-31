@@ -172,6 +172,59 @@ class TestCacheIsolation:
     模块级缓存必须根据 LUT 指纹和开关隔离条目。
     """
 
+    def test_full_image_rgb_changes_invalidate_cache(self) -> None:
+        """LUT cache identity must include every source RGB pixel."""
+        from core.image_processing import LuminaImageProcessor
+
+        lut_rgb = np.array(
+            [[255, 0, 0], [0, 0, 255], [0, 255, 0]],
+            dtype=np.uint8,
+        )
+        lut_lab = LuminaImageProcessor._rgb_to_lab(lut_rgb)
+        lut_tree = KDTree(lut_lab)
+        blue = np.full((100, 100, 3), [0, 0, 255], dtype=np.uint8)
+        green = np.full((100, 100, 3), [0, 255, 0], dtype=np.uint8)
+        blue[::3, ::3] = [255, 0, 0]
+        green[::3, ::3] = [255, 0, 0]
+        np.testing.assert_array_equal(blue[::3, ::3], green[::3, ::3])
+
+        kmeans_quantizer._kmeans_cache.clear()
+        first_result = quantize_colors(
+            blue,
+            n_colors=3,
+            seed=42,
+            lut_lab=lut_lab,
+            lut_rgb=lut_rgb,
+            lut_tree=lut_tree,
+            use_lut_constrained=True,
+            lut_fingerprint="full-rgb-cache-test",
+        )
+        cached_second = quantize_colors(
+            green,
+            n_colors=3,
+            seed=42,
+            lut_lab=lut_lab,
+            lut_rgb=lut_rgb,
+            lut_tree=lut_tree,
+            use_lut_constrained=True,
+            lut_fingerprint="full-rgb-cache-test",
+        )
+
+        kmeans_quantizer._kmeans_cache.clear()
+        fresh_second = quantize_colors(
+            green,
+            n_colors=3,
+            seed=42,
+            lut_lab=lut_lab,
+            lut_rgb=lut_rgb,
+            lut_tree=lut_tree,
+            use_lut_constrained=True,
+            lut_fingerprint="full-rgb-cache-test",
+        )
+
+        assert not np.array_equal(first_result, fresh_second)
+        np.testing.assert_array_equal(cached_second, fresh_second)
+
     def test_different_flag_different_cache(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Toggling ``use_lut_constrained`` must not serve stale cache entries.
         切换开关不应命中旧缓存条目。

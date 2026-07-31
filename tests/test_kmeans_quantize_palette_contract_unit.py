@@ -184,6 +184,47 @@ def test_all_true_mask_reuses_unmasked_large_image_behavior_and_cache(
     assert len(kmeans_quantizer._kmeans_cache) == 1
 
 
+@pytest.mark.parametrize("use_all_true_mask", [False, True])
+def test_full_image_cache_hashes_every_rgb_pixel(
+    use_all_true_mask: bool,
+) -> None:
+    """Sample-equal full images must not share a quantized cache result."""
+    from core.pipeline.processing_ops import kmeans_quantizer
+
+    blue = np.full((100, 100, 3), [0, 0, 255], dtype=np.uint8)
+    green = np.full((100, 100, 3), [0, 255, 0], dtype=np.uint8)
+    blue[::3, ::3] = [255, 0, 0]
+    green[::3, ::3] = [255, 0, 0]
+    np.testing.assert_array_equal(blue[::3, ::3], green[::3, ::3])
+    assert not np.array_equal(blue, green)
+
+    mask = np.ones((100, 100), dtype=bool) if use_all_true_mask else None
+    kmeans_quantizer._kmeans_cache.clear()
+    first_result = kmeans_quantizer.quantize_colors(
+        blue,
+        n_colors=1,
+        seed=42,
+        mask=mask,
+    )
+    cached_second = kmeans_quantizer.quantize_colors(
+        green,
+        n_colors=1,
+        seed=42,
+        mask=mask,
+    )
+
+    kmeans_quantizer._kmeans_cache.clear()
+    fresh_second = kmeans_quantizer.quantize_colors(
+        green,
+        n_colors=1,
+        seed=42,
+        mask=mask,
+    )
+
+    assert not np.array_equal(first_result, fresh_second)
+    np.testing.assert_array_equal(cached_second, fresh_second)
+
+
 def test_partial_mask_large_quantization_cache_keeps_current_air(
     monkeypatch,
 ) -> None:

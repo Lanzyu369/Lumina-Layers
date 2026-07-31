@@ -23,6 +23,13 @@ _kmeans_cache: dict = {}
 _KMEANS_CACHE_MAX = 4
 
 
+def _stable_array_digest(array: np.ndarray) -> str:
+    """Hash every array byte; contiguous inputs use a zero-copy buffer."""
+
+    contiguous = np.ascontiguousarray(array)
+    return hashlib.sha256(memoryview(contiguous).cast("B")).hexdigest()
+
+
 def _resolve_cluster_count(requested_colors: int, sample_count: int) -> int:
     """Clamp the cluster count to the available sample count.
 
@@ -150,9 +157,9 @@ def _lut_constrained_quantize(
     if effective_k <= 0:
         return rgb.copy()
 
-    _sample = rgb[:: max(1, rgb.shape[0] // 32), :: max(1, rgb.shape[1] // 32)].tobytes()
+    rgb_fingerprint = _stable_array_digest(rgb)
     _cache_key = (
-        f"{rgb.shape}_{len(_sample)}_{hash(_sample)}_"
+        f"{rgb.shape}_{rgb.dtype.str}_{rgb_fingerprint}_"
         f"{effective_k}_{seed}_"
         f"lc1_{lut_fingerprint or ''}"
     )
@@ -343,7 +350,7 @@ def quantize_colors(
             )
         if bool(mask_arr.all()):
             # All-selected input is semantically identical to no mask. Keep
-            # the historical INTER_AREA large-image path and cache key.
+            # the historical INTER_AREA algorithm and full-image cache identity.
             mask_arr = None
             total_pixels = h * w
         else:
@@ -393,24 +400,19 @@ def quantize_colors(
     if low_unique_result is not None:
         return low_unique_result if selected_rgb is None else rgb.copy()
 
-    # Unmasked calls retain the historical sampled fingerprint. Masked calls
-    # hash every selected RGB so unsampled visible changes cannot alias.
+    # Algorithm selection and cache identity are independent: all full-image
+    # and partial-mask calls hash every RGB byte they consume. This prevents
+    # same-shape requests with equal sparse samples from sharing old output.
     if selected_rgb is None:
-        _sample = rgb[
-            :: max(1, rgb.shape[0] // 32),
-            :: max(1, rgb.shape[1] // 32),
-        ].tobytes()
-        _rgb_fingerprint = f"{len(_sample)}_{hash(_sample)}"
+        _rgb_fingerprint = _stable_array_digest(rgb)
         _mask_fingerprint = ""
     else:
         # Masked results can be reused only when every selected RGB matches.
         # A sampled key can alias images whose unsampled visible pixels differ.
-        _rgb_fingerprint = hashlib.sha256(selected_rgb).hexdigest()[:16]
-        _mask_fingerprint = hashlib.sha256(
-            np.ascontiguousarray(mask_arr).view(np.uint8)
-        ).hexdigest()[:16]
+        _rgb_fingerprint = _stable_array_digest(selected_rgb)
+        _mask_fingerprint = _stable_array_digest(mask_arr)
     _cache_key = (
-        f"{rgb.shape}_{_rgb_fingerprint}_"
+        f"{rgb.shape}_{rgb.dtype.str}_{_rgb_fingerprint}_"
         f"{effective_n_colors}_{seed}_"
         f"lc{int(use_lut_constrained)}_{lut_fingerprint or ''}_"
         f"mask{_mask_fingerprint}"
