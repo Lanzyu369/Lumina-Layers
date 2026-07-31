@@ -459,6 +459,40 @@ def test_unbounded_stage_scales_to_thirty_two_workers(
     assert plan.stage_ceiling == 32
 
 
+def test_plan_keeps_windows_hybrid_topology_without_clamping_to_p_cores(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LUMINA_VECTOR_PARALLELISM", raising=False)
+    capacity = EffectiveCpuCapacity(
+        host_cpu_count=32,
+        affinity_cpu_count=32,
+        cgroup_quota_cpu_count=None,
+        apple_performance_cpu_count=None,
+        effective_cpu_count=32,
+        limiting_source="host_fallback",
+        windows_performance_cpu_count=16,
+        cpu_topology="heterogeneous",
+        scheduling_policy="os_core_type_scheduler",
+    )
+    monkeypatch.setattr(
+        task_parallelism,
+        "get_effective_cpu_capacity",
+        lambda: capacity,
+    )
+
+    plan = task_parallelism.resolve_task_parallelism_plan(
+        "vector",
+        work_items=32,
+        hard_max_workers=None,
+        outer_demand=1,
+    )
+
+    assert plan.workers == 32
+    assert plan.cpu_topology == "heterogeneous"
+    assert plan.cpu_scheduling_policy == "os_core_type_scheduler"
+    assert plan.performance_cpu_capacity == 16
+
+
 @pytest.mark.parametrize(
     ("overrides", "expected_workers", "expected_reason"),
     [

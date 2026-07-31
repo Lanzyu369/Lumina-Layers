@@ -62,6 +62,12 @@ class AdaptiveParallelismPlan:
             最终限制来源的稳定标签。
         demand_snapshot_fallback: Whether configured outer capacity was used.
             是否回退使用外层配置容量。
+        cpu_topology: Reliably detected CPU topology, or ``"unknown"``.
+            可靠探测到的 CPU 拓扑；无法确认时为 ``"unknown"``。
+        cpu_scheduling_policy: Platform policy used to derive CPU capacity.
+            用于计算 CPU 容量的平台调度策略。
+        performance_cpu_capacity: Fastest reported core-class capacity when
+            available. 可用时记录最高性能核心等级的容量。
     """
 
     workers: int
@@ -77,6 +83,9 @@ class AdaptiveParallelismPlan:
     estimated_worker_bytes: int
     limiting_reason: str
     demand_snapshot_fallback: bool
+    cpu_topology: str = "unknown"
+    cpu_scheduling_policy: str = "injected_or_unknown"
+    performance_cpu_capacity: int | None = None
 
 
 @contextmanager
@@ -260,12 +269,24 @@ def resolve_task_parallelism_plan(
     parallel_threshold = max(2, int(min_parallel_items))
 
     if effective_cpu_capacity is None:
+        discovered_capacity = get_effective_cpu_capacity()
         effective_cpu = max(
             1,
-            int(get_effective_cpu_capacity().effective_cpu_count),
+            int(discovered_capacity.effective_cpu_count),
+        )
+        cpu_topology = str(discovered_capacity.cpu_topology)
+        cpu_scheduling_policy = str(
+            discovered_capacity.scheduling_policy,
+        )
+        performance_cpu_capacity = (
+            discovered_capacity.apple_performance_cpu_count
+            or discovered_capacity.windows_performance_cpu_count
         )
     else:
         effective_cpu = _positive_int(effective_cpu_capacity)
+        cpu_topology = "unknown"
+        cpu_scheduling_policy = "injected_or_unknown"
+        performance_cpu_capacity = None
     stage_ceiling = (
         effective_cpu
         if hard_max_workers is None
@@ -393,6 +414,9 @@ def resolve_task_parallelism_plan(
         estimated_worker_bytes=worker_bytes,
         limiting_reason=limiting_reason,
         demand_snapshot_fallback=demand_snapshot_fallback,
+        cpu_topology=cpu_topology,
+        cpu_scheduling_policy=cpu_scheduling_policy,
+        performance_cpu_capacity=performance_cpu_capacity,
     )
 
 

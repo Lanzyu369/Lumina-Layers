@@ -58,6 +58,80 @@ def test_apple_performance_cores_are_preferred() -> None:
     assert result.apple_performance_cpu_count == 4
     assert result.effective_cpu_count == 4
     assert result.limiting_source == "apple_performance"
+    assert result.cpu_topology == "heterogeneous"
+    assert result.scheduling_policy == "apple_performance_budget"
+
+
+def test_uniform_or_unknown_thirty_two_cpu_host_keeps_full_capacity() -> None:
+    system_capacity = _capacity_module()
+
+    result = system_capacity.discover_effective_cpu_capacity(
+        host_cpu_count=32,
+        affinity_cpu_ids=set(range(32)),
+        cgroup_cpu_max=None,
+        apple_performance_cpu_count=None,
+        windows_efficiency_classes=None,
+        platform_name="linux",
+    )
+
+    assert result.effective_cpu_count == 32
+    assert result.windows_performance_cpu_count is None
+    assert result.cpu_topology == "unknown"
+    assert result.scheduling_policy == "os_capacity_scheduler"
+
+
+def test_windows_hybrid_cpu_uses_all_visible_cpus_under_os_scheduler() -> None:
+    system_capacity = _capacity_module()
+
+    result = system_capacity.discover_effective_cpu_capacity(
+        host_cpu_count=32,
+        affinity_cpu_ids=set(range(32)),
+        cgroup_cpu_max=None,
+        apple_performance_cpu_count=None,
+        windows_efficiency_classes=([1] * 16) + ([0] * 16),
+        platform_name="win32",
+    )
+
+    assert result.windows_performance_cpu_count == 16
+    assert result.cpu_topology == "heterogeneous"
+    assert result.scheduling_policy == "os_core_type_scheduler"
+    assert result.effective_cpu_count == 32
+
+
+def test_windows_uniform_cpu_is_not_misclassified_as_hybrid() -> None:
+    system_capacity = _capacity_module()
+
+    result = system_capacity.discover_effective_cpu_capacity(
+        host_cpu_count=32,
+        affinity_cpu_ids=set(range(32)),
+        cgroup_cpu_max=None,
+        apple_performance_cpu_count=None,
+        windows_efficiency_classes=[0] * 32,
+        platform_name="win32",
+    )
+
+    assert result.windows_performance_cpu_count == 32
+    assert result.cpu_topology == "homogeneous"
+    assert result.scheduling_policy == "all_visible_cpus"
+    assert result.effective_cpu_count == 32
+
+
+def test_windows_cpu_set_parser_reads_efficiency_classes() -> None:
+    system_capacity = _capacity_module()
+
+    def cpu_set_record(efficiency_class: int) -> bytes:
+        record = bytearray(32)
+        record[0:4] = (32).to_bytes(4, "little")
+        record[4:8] = (0).to_bytes(4, "little")
+        record[18] = efficiency_class
+        return bytes(record)
+
+    raw_records = cpu_set_record(1) + cpu_set_record(0)
+
+    assert system_capacity._parse_windows_efficiency_classes(raw_records) == (
+        1,
+        0,
+    )
 
 
 @pytest.mark.parametrize(
@@ -188,3 +262,21 @@ def test_cgroup_reader_uses_explicit_utf8_path(tmp_path: Path) -> None:
         system_capacity._read_cgroup_v2_cpu_max(cpu_max_path=cpu_max_path)
         == "150000 100000"
     )
+
+
+def test_process_affinity_falls_back_to_psutil_on_non_posix_platforms() -> None:
+    system_capacity = _capacity_module()
+
+    def unavailable_affinity_reader(_pid: int):
+        raise OSError("sched_getaffinity unavailable")
+
+    class FakeProcess:
+        def cpu_affinity(self) -> list[int]:
+            return [7, 3, 7]
+
+    result = system_capacity._read_process_affinity(
+        affinity_reader=unavailable_affinity_reader,
+        process_factory=FakeProcess,
+    )
+
+    assert result == frozenset({3, 7})
