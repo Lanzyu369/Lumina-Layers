@@ -73,6 +73,12 @@ def _write_pixel_art(path: Path) -> tuple[Path, set[tuple[int, int, int]]]:
     return path, {tuple(color) for color in colors}
 
 
+def _write_semitransparent_pixel(path: Path) -> Path:
+    rgba = np.array([[[13, 13, 13, 20]]], dtype=np.uint8)
+    Image.fromarray(rgba, mode="RGBA").save(path)
+    return path
+
+
 def test_material_archive_pixel_mode_preserves_exact_palette_when_budget_allows(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -174,3 +180,51 @@ def test_material_archive_pixel_mode_quantizes_raw_pixels_when_budget_exceeded(
     assert "error" not in result
     assert seen["n_colors"] == 4
     assert seen["input_palette"] == input_palette
+
+
+def test_material_archive_pixel_mode_matches_semitransparent_png_as_seen_on_white(
+    tmp_path: Path, monkeypatch
+) -> None:
+    image_path = _write_semitransparent_pixel(tmp_path / "semitransparent.png")
+    layer_count = 5
+    fake_cache = _EchoCache(layer_count=layer_count)
+
+    import core.material_lut_provider as provider
+
+    monkeypatch.setattr(
+        provider,
+        "load_solver_cache",
+        lambda *args, **kwargs: (fake_cache, 64),
+    )
+    monkeypatch.setattr(
+        provider,
+        "load_solver_runtime",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("runtime should not be needed when cache is present")
+        ),
+    )
+
+    ctx = {
+        "image_path": str(image_path),
+        "target_width_mm": 0.1,
+        "modeling_mode": ModelingMode.PIXEL,
+        "quantize_colors": 16,
+        "_material_params": [
+            _material("black", (0, 0, 0)),
+            _material("white", (255, 255, 255)),
+        ],
+        "color_layers": layer_count,
+        "layer_height_mm": 0.08,
+        "material_substrate": "white",
+        "material_source": "material_archive",
+        "enable_cleanup": False,
+    }
+
+    result = _run_material_archive_branch(ctx)
+
+    assert "error" not in result
+    assert result["mask_solid"].all()
+    assert np.array_equal(
+        result["quantized_image"][0, 0],
+        np.array([236, 236, 236], dtype=np.uint8),
+    )

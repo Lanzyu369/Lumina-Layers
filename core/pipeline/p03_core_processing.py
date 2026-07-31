@@ -296,6 +296,20 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     #    (高保真栅格仍先做边缘保持平滑再 K-Means；像素模式保留最近邻缩放后的
     #    原始色板，超出预算时也直接量化原始像素，避免先平滑出边界脏色。)
     modeling_mode_value = getattr(modeling_mode, "value", modeling_mode)
+    if not is_svg and modeling_mode_value == ModelingMode.PIXEL.value:
+        # Match the visible PNG colour, not hidden RGB beneath partial alpha.
+        # Keep the original alpha-derived mask so transparent pixels stay air.
+        alpha_u16 = alpha_arr[..., None].astype(np.uint16)
+        substrate_value = 0 if substrate == "black" else 255
+        rgb_u16 = rgb_arr.astype(np.uint16)
+        rgb_arr = (
+            (
+                rgb_u16 * alpha_u16
+                + substrate_value * (255 - alpha_u16)
+                + 127
+            )
+            // 255
+        ).astype(np.uint8)
     if is_svg:
         quantized_image = _snap_svg_to_fill_palette(
             rgb_arr=rgb_arr,
