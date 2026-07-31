@@ -7,6 +7,10 @@ back to the current Shapely/trimesh extrusion.
 
 from __future__ import annotations
 
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from types import SimpleNamespace
 
 import numpy as np
@@ -15,6 +19,7 @@ import trimesh
 from shapely.geometry import Polygon
 
 import core.vector_native_mesh as vector_native_mesh
+from core import task_parallelism
 from core.vector_engine import VectorAnalysis, VectorProcessor
 from core.vector_native_mesh import NativeVectorMeshResult, run_length_extrude_native_hybrid
 
@@ -119,6 +124,381 @@ def _guarded_module(**attrs):
     return SimpleNamespace(
         native_mesh_capabilities=lambda: {"triangulation_area_guard": True},
         **attrs,
+    )
+
+
+def _parallel_batch_shapes() -> list[dict]:
+    recipes = [
+        [0, 0, 0, 0, 0],
+        [1, 0, 0, 0, 0],
+        [0, 1, 0, 1, 0],
+        [1, 1, 0, 0, 1],
+    ]
+    return [
+        {"geometry": _square_at(float(index) * 4.0), "recipe": recipe}
+        for index, recipe in enumerate(recipes)
+    ]
+
+
+def _native_result_mesh_signature(result: NativeVectorMeshResult) -> tuple:
+    return tuple(
+        (
+            slot_name,
+            int(slot_data["mat_id"]),
+            tuple(
+                (
+                    np.asarray(mesh.vertices).tobytes(order="C"),
+                    np.asarray(mesh.faces).tobytes(order="C"),
+                )
+                for mesh in slot_data["meshes"]
+            ),
+        )
+        for slot_name, slot_data in result.meshes_by_slot.items()
+    )
+
+
+def test_native_batch_worker_policy_is_bounded_and_nested_safe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LUMINA_VECTOR_PARALLELISM", "4")
+    monkeypatch.setenv("LUMINA_MAX_WORKERS", "1")
+    monkeypatch.setattr(task_parallelism.os, "cpu_count", lambda: 8)
+    monkeypatch.setattr(
+        task_parallelism,
+        "_available_memory_bytes",
+        lambda: 8 * 1024**3,
+    )
+
+    assert vector_native_mesh._resolve_native_batch_workers(
+        batch_count=2,
+        group_count=20,
+    ) == 1
+    assert vector_native_mesh._resolve_native_batch_workers(
+        batch_count=15,
+        group_count=43,
+    ) == 2
+    with task_parallelism.task_parallelism_worker_scope():
+        assert vector_native_mesh._resolve_native_batch_workers(
+            batch_count=15,
+            group_count=43,
+        ) == 1
+
+
+def test_native_batches_commit_in_serial_order_after_parallel_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LUMINA_VECTOR_NATIVE_MESH_VALIDATE_SURFACE", raising=False)
+    monkeypatch.setenv("LUMINA_MAX_WORKERS", "1")
+    monkeypatch.setattr(task_parallelism.os, "cpu_count", lambda: 8)
+    monkeypatch.setattr(
+        task_parallelism,
+        "_available_memory_bytes",
+        lambda: 8 * 1024**3,
+    )
+    shapes = _parallel_batch_shapes()
+
+    def run(worker_count: int):
+        completion_order = []
+        thread_ids = set()
+
+        def merge(groups, **kwargs):
+            z_offset = float(kwargs["z_offset"])
+            time.sleep(0.02 if z_offset == 0.0 else 0.001)
+            thread_ids.add(threading.get_ident())
+            completion_order.append(z_offset)
+            return [
+                _box_mesh_buffers(
+                    height=float(kwargs["height"]),
+                    z_offset=z_offset,
+                )
+                for _group in groups
+            ]
+
+        monkeypatch.setenv("LUMINA_VECTOR_PARALLELISM", str(worker_count))
+        result = run_length_extrude_native_hybrid(
+            matched_shapes=shapes,
+            num_layers=5,
+            layer_h=0.08,
+            num_channels=2,
+            slot_names=["White", "Red"],
+            scale_factor=1.0,
+            native_module=_guarded_module(
+                merge_run_groups_to_meshes=merge,
+            ),
+        )
+        return result, completion_order, thread_ids
+
+    serial, serial_completion, serial_threads = run(1)
+    parallel, parallel_completion, parallel_threads = run(2)
+
+    assert _native_result_mesh_signature(parallel) == _native_result_mesh_signature(
+        serial
+    )
+    assert parallel.stats["native_meshes"] == serial.stats["native_meshes"]
+    assert parallel.stats["fallback_groups"] == serial.stats["fallback_groups"]
+    assert parallel.stats["native_output_meshes"] == serial.stats["native_output_meshes"]
+    assert parallel.stats["native_parallel_workers"] == 2
+    assert parallel.stats["native_parallel_batch_count"] >= 3
+    assert len(serial_threads) == 1
+    assert len(parallel_threads) == 2
+    assert parallel_completion != serial_completion
+
+
+def test_parallel_batches_keep_shapely_surface_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LUMINA_VECTOR_NATIVE_MESH_VALIDATE_SURFACE", "1")
+    monkeypatch.setenv("LUMINA_MAX_WORKERS", "1")
+    monkeypatch.setattr(task_parallelism.os, "cpu_count", lambda: 8)
+    monkeypatch.setattr(
+        task_parallelism,
+        "_available_memory_bytes",
+        lambda: 8 * 1024**3,
+    )
+    shapes = _parallel_batch_shapes()
+    fallback_caches = []
+    original_fallback = vector_native_mesh._fallback_extrude_group
+
+    def record_fallback_cache(geoms, **kwargs):
+        fallback_caches.append(kwargs["extrude_cache"])
+        return original_fallback(geoms, **kwargs)
+
+    monkeypatch.setattr(
+        vector_native_mesh,
+        "_fallback_extrude_group",
+        record_fallback_cache,
+    )
+
+    def merge(groups, **kwargs):
+        height = float(kwargs["height"])
+        z_offset = float(kwargs["z_offset"])
+        meshes = []
+        for _group in groups:
+            vertices, faces = _box_mesh_buffers(
+                height=height,
+                z_offset=z_offset,
+            )
+            stretched = np.asarray(vertices, dtype=np.float64)
+            stretched[stretched[:, 2] > z_offset, 2] = (
+                z_offset + height * 10.0
+            )
+            meshes.append((stretched, np.asarray(faces, dtype=np.int64)))
+        return meshes
+
+    def run(worker_count: int) -> NativeVectorMeshResult:
+        monkeypatch.setenv("LUMINA_VECTOR_PARALLELISM", str(worker_count))
+        return run_length_extrude_native_hybrid(
+            matched_shapes=shapes,
+            num_layers=5,
+            layer_h=0.08,
+            num_channels=2,
+            slot_names=["White", "Red"],
+            scale_factor=1.0,
+            native_module=_guarded_module(
+                merge_run_groups_to_meshes=merge,
+            ),
+        )
+
+    serial = run(1)
+    serial_fallback_caches = list(fallback_caches)
+    fallback_caches.clear()
+    parallel = run(2)
+    parallel_fallback_caches = list(fallback_caches)
+
+    assert parallel.stats["native_parallel_workers"] == 2
+    assert serial_fallback_caches
+    assert all(cache is None for cache in serial_fallback_caches)
+    assert parallel_fallback_caches
+    assert all(cache is None for cache in parallel_fallback_caches)
+    assert parallel.stats["native_surface_checked"] == serial.stats[
+        "native_surface_checked"
+    ]
+    assert parallel.stats["native_surface_rejects"] == serial.stats[
+        "native_surface_rejects"
+    ]
+    assert parallel.stats["native_meshes"] == 0
+    assert parallel.stats["fallback_groups"] == serial.stats["fallback_groups"]
+    assert _native_result_mesh_signature(parallel) == _native_result_mesh_signature(
+        serial
+    )
+
+
+def test_parallel_native_call_error_keeps_per_batch_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LUMINA_VECTOR_NATIVE_MESH_VALIDATE_SURFACE", raising=False)
+    monkeypatch.setenv("LUMINA_MAX_WORKERS", "1")
+    monkeypatch.setattr(task_parallelism.os, "cpu_count", lambda: 8)
+    monkeypatch.setattr(
+        task_parallelism,
+        "_available_memory_bytes",
+        lambda: 8 * 1024**3,
+    )
+    shapes = _parallel_batch_shapes()
+
+    def merge(groups, **kwargs):
+        height = float(kwargs["height"])
+        z_offset = float(kwargs["z_offset"])
+        if z_offset == pytest.approx(0.08):
+            raise RuntimeError("injected native batch failure")
+        return [
+            _box_mesh_buffers(height=height, z_offset=z_offset)
+            for _group in groups
+        ]
+
+    def run(worker_count: int) -> NativeVectorMeshResult:
+        monkeypatch.setenv("LUMINA_VECTOR_PARALLELISM", str(worker_count))
+        return run_length_extrude_native_hybrid(
+            matched_shapes=shapes,
+            num_layers=5,
+            layer_h=0.08,
+            num_channels=2,
+            slot_names=["White", "Red"],
+            scale_factor=1.0,
+            native_module=_guarded_module(
+                merge_run_groups_to_meshes=merge,
+            ),
+        )
+
+    serial = run(1)
+    parallel = run(2)
+
+    assert parallel.stats["native_parallel_workers"] == 2
+    assert parallel.stats["native_call_error"] == "RuntimeError"
+    assert parallel.stats["fallback_reason_native_call_error"] == serial.stats[
+        "fallback_reason_native_call_error"
+    ]
+    assert parallel.stats["fallback_groups"] == serial.stats["fallback_groups"]
+    assert _native_result_mesh_signature(parallel) == _native_result_mesh_signature(
+        serial
+    )
+
+
+def test_parallel_executor_failure_reruns_serial_without_partial_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LUMINA_VECTOR_NATIVE_MESH_VALIDATE_SURFACE", raising=False)
+    monkeypatch.setenv("LUMINA_MAX_WORKERS", "1")
+    monkeypatch.setattr(task_parallelism.os, "cpu_count", lambda: 8)
+    monkeypatch.setattr(
+        task_parallelism,
+        "_available_memory_bytes",
+        lambda: 8 * 1024**3,
+    )
+    shapes = _parallel_batch_shapes()
+
+    def merge(groups, **kwargs):
+        return [
+            _box_mesh_buffers(
+                height=float(kwargs["height"]),
+                z_offset=float(kwargs["z_offset"]),
+            )
+            for _group in groups
+        ]
+
+    module = _guarded_module(merge_run_groups_to_meshes=merge)
+    monkeypatch.setenv("LUMINA_VECTOR_PARALLELISM", "1")
+    serial = run_length_extrude_native_hybrid(
+        matched_shapes=shapes,
+        num_layers=5,
+        layer_h=0.08,
+        num_channels=2,
+        slot_names=["White", "Red"],
+        scale_factor=1.0,
+        native_module=module,
+    )
+
+    def fail_worker(*_args, **_kwargs):
+        raise RuntimeError("injected executor failure")
+
+    monkeypatch.setattr(
+        vector_native_mesh,
+        "_compute_native_batch",
+        fail_worker,
+    )
+    monkeypatch.setenv("LUMINA_VECTOR_PARALLELISM", "2")
+    recovered = run_length_extrude_native_hybrid(
+        matched_shapes=shapes,
+        num_layers=5,
+        layer_h=0.08,
+        num_channels=2,
+        slot_names=["White", "Red"],
+        scale_factor=1.0,
+        native_module=module,
+    )
+
+    assert recovered.stats["native_parallel_workers"] == 1
+    assert recovered.stats["native_parallel_requested_workers"] == 2
+    assert recovered.stats["native_parallel_error"] == "RuntimeError"
+    assert _native_result_mesh_signature(recovered) == _native_result_mesh_signature(
+        serial
+    )
+
+
+def test_parallel_outcome_count_mismatch_reruns_serial_without_missing_meshes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LUMINA_VECTOR_NATIVE_MESH_VALIDATE_SURFACE", raising=False)
+    monkeypatch.setenv("LUMINA_MAX_WORKERS", "1")
+    monkeypatch.setattr(task_parallelism.os, "cpu_count", lambda: 8)
+    monkeypatch.setattr(
+        task_parallelism,
+        "_available_memory_bytes",
+        lambda: 8 * 1024**3,
+    )
+    shapes = _parallel_batch_shapes()
+
+    def merge(groups, **kwargs):
+        return [
+            _box_mesh_buffers(
+                height=float(kwargs["height"]),
+                z_offset=float(kwargs["z_offset"]),
+            )
+            for _group in groups
+        ]
+
+    module = _guarded_module(merge_run_groups_to_meshes=merge)
+    monkeypatch.setenv("LUMINA_VECTOR_PARALLELISM", "1")
+    serial = run_length_extrude_native_hybrid(
+        matched_shapes=shapes,
+        num_layers=5,
+        layer_h=0.08,
+        num_channels=2,
+        slot_names=["White", "Red"],
+        scale_factor=1.0,
+        native_module=module,
+    )
+
+    original_compute = vector_native_mesh._compute_native_batch
+
+    def shorten_one_batch(*args, **kwargs):
+        batch = args[1]
+        computed = original_compute(*args, **kwargs)
+        if batch.index == 0 and computed.outcomes:
+            return replace(computed, outcomes=computed.outcomes[:-1])
+        return computed
+
+    monkeypatch.setattr(
+        vector_native_mesh,
+        "_compute_native_batch",
+        shorten_one_batch,
+    )
+    monkeypatch.setenv("LUMINA_VECTOR_PARALLELISM", "2")
+    recovered = run_length_extrude_native_hybrid(
+        matched_shapes=shapes,
+        num_layers=5,
+        layer_h=0.08,
+        num_channels=2,
+        slot_names=["White", "Red"],
+        scale_factor=1.0,
+        native_module=module,
+    )
+
+    assert recovered.stats["native_parallel_workers"] == 1
+    assert recovered.stats["native_parallel_requested_workers"] == 2
+    assert recovered.stats["native_parallel_error"] == "RuntimeError"
+    assert _native_result_mesh_signature(recovered) == _native_result_mesh_signature(
+        serial
     )
 
 
@@ -629,6 +1009,46 @@ def test_compiled_native_mesh_module_returns_numpy_arrays() -> None:
     assert faces.shape == (12, 3)
     assert vertices.flags.c_contiguous
     assert faces.flags.c_contiguous
+
+
+def test_compiled_native_mesh_batches_are_byte_exact_across_threads() -> None:
+    clipper2_batch = pytest.importorskip("clipper2_batch")
+    square = [(0.0, 0.0), (3.0, 0.0), (3.0, 2.0), (0.0, 2.0)]
+    outer = [(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)]
+    hole = [(1.0, 1.0), (1.0, 3.0), (3.0, 3.0), (3.0, 1.0)]
+    right_square = [
+        (5.0, 0.0),
+        (7.0, 0.0),
+        (7.0, 2.0),
+        (5.0, 2.0),
+    ]
+    batches = [
+        ([[square]], 0.08, 0.0),
+        ([[outer, hole]], 0.16, 0.08),
+        ([[square, right_square]], 0.24, 0.24),
+    ]
+
+    def run(batch):
+        groups, height, z_offset = batch
+        return clipper2_batch.merge_run_groups_to_meshes(
+            groups,
+            height=height,
+            z_offset=z_offset,
+            xy_scale=1.7,
+        )
+
+    serial = [run(batch) for batch in batches]
+    for worker_count in (2, 4):
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            parallel = list(executor.map(run, batches))
+        for serial_batch, parallel_batch in zip(serial, parallel):
+            assert len(parallel_batch) == len(serial_batch)
+            for serial_mesh, parallel_mesh in zip(
+                serial_batch,
+                parallel_batch,
+            ):
+                np.testing.assert_array_equal(parallel_mesh[0], serial_mesh[0])
+                np.testing.assert_array_equal(parallel_mesh[1], serial_mesh[1])
 
 
 def test_native_hybrid_coalesces_native_meshes_per_slot(monkeypatch: pytest.MonkeyPatch) -> None:

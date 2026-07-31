@@ -12,6 +12,7 @@ import importlib
 import os
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Iterable
 
@@ -22,11 +23,19 @@ from shapely.geometry import GeometryCollection, MultiPolygon, Polygon
 from shapely.geometry.polygon import orient
 from shapely.ops import unary_union
 
+from core.task_parallelism import (
+    resolve_task_parallelism,
+    task_parallelism_worker_scope,
+)
 from core.vector_engine import VectorProcessor, _union_run_group_geometries
 
 
 NATIVE_CLOSE_DELTA_MM = 0.03
 NATIVE_COORD_SCALE = 1_000_000
+NATIVE_BATCH_MIN_PARALLEL_ITEMS = 3
+NATIVE_BATCH_MIN_PARALLEL_GROUPS = 8
+NATIVE_BATCH_MAX_WORKERS = 2
+NATIVE_BATCH_ESTIMATED_WORKER_BYTES = 384 * 1024**2
 NATIVE_SURFACE_AREA_REL_TOL = 0.001
 NATIVE_SURFACE_AREA_ABS_TOL_MM2 = 0.01
 NATIVE_REQUIRED_GUARD_CAPABILITY = "triangulation_area_guard"
@@ -53,6 +62,230 @@ class NativeVectorMeshResult:
 
     meshes_by_slot: dict[str, dict[str, Any]]
     stats: dict[str, float | int | str]
+
+
+@dataclass(frozen=True)
+class _PreparedNativeGroup:
+    key: tuple[int, int, int]
+    geoms: list
+    paths: list
+    path_count: int
+
+
+@dataclass(frozen=True)
+class _PreparedNativeBatch:
+    index: int
+    height: float
+    z_bot: float
+    groups: tuple[_PreparedNativeGroup, ...]
+    no_path_jobs: tuple[tuple[tuple[int, int, int], list], ...]
+
+
+@dataclass(frozen=True)
+class _NativeGroupOutcome:
+    status: str
+    rejection_counter: str
+    mesh_arrays: tuple[np.ndarray, np.ndarray] | None
+    mesh: trimesh.Trimesh | None
+
+
+@dataclass(frozen=True)
+class _ComputedNativeBatch:
+    call_error: str
+    outcomes: tuple[_NativeGroupOutcome, ...]
+    extra_mesh_count: int
+    native_seconds: float
+    mesh_convert_seconds: float
+    surface_validation_seconds: float
+    surface_checked: int
+    surface_rejects: int
+
+
+def _resolve_native_batch_workers(*, batch_count: int, group_count: int) -> int:
+    """Resolve bounded workers for independent native mesh batches."""
+
+    return resolve_task_parallelism(
+        "vector",
+        work_items=batch_count,
+        min_parallel_items=NATIVE_BATCH_MIN_PARALLEL_ITEMS,
+        hard_max_workers=NATIVE_BATCH_MAX_WORKERS,
+        work_units=group_count,
+        min_parallel_work_units=NATIVE_BATCH_MIN_PARALLEL_GROUPS,
+        estimated_worker_bytes=NATIVE_BATCH_ESTIMATED_WORKER_BYTES,
+    )
+
+
+def _prepare_native_batch(
+    *,
+    index: int,
+    jobs: list[tuple[tuple[int, int, int], list]],
+    height: float,
+    z_bot: float,
+    stats: dict[str, float | int | str],
+    path_cache: dict[int, tuple[Any, list[list[tuple[float, float]]]]],
+) -> _PreparedNativeBatch:
+    """Pack one batch serially while preserving the shared path cache."""
+
+    started = time.perf_counter()
+    groups = []
+    no_path_jobs = []
+    for key, geoms in jobs:
+        paths = []
+        for geom in geoms:
+            paths.extend(_geometry_to_paths_cached(geom, path_cache, stats))
+        if not paths:
+            no_path_jobs.append((key, geoms))
+            continue
+        groups.append(
+            _PreparedNativeGroup(
+                key=key,
+                geoms=geoms,
+                paths=paths,
+                path_count=len(paths),
+            )
+        )
+        stats["native_input_paths"] = int(stats["native_input_paths"]) + len(
+            paths
+        )
+    stats["native_group_count"] = int(stats["native_group_count"]) + len(
+        groups
+    )
+    stats["pack_seconds"] = float(stats["pack_seconds"]) + (
+        time.perf_counter() - started
+    )
+    return _PreparedNativeBatch(
+        index=index,
+        height=float(height),
+        z_bot=float(z_bot),
+        groups=tuple(groups),
+        no_path_jobs=tuple(no_path_jobs),
+    )
+
+
+def _compute_native_batch(
+    module,
+    batch: _PreparedNativeBatch,
+    *,
+    scale_factor: float,
+    validate_surface: bool,
+) -> _ComputedNativeBatch:
+    """Run native extrusion and unchanged surface validation for one batch."""
+
+    with task_parallelism_worker_scope():
+        try:
+            native_started = time.perf_counter()
+            native_meshes = module.merge_run_groups_to_meshes(
+                [group.paths for group in batch.groups],
+                close_delta_mm=NATIVE_CLOSE_DELTA_MM,
+                scale=NATIVE_COORD_SCALE,
+                height=batch.height,
+                z_offset=batch.z_bot,
+                xy_scale=scale_factor,
+            )
+            native_seconds = time.perf_counter() - native_started
+        except Exception as exc:
+            return _ComputedNativeBatch(
+                call_error=type(exc).__name__,
+                outcomes=(),
+                extra_mesh_count=0,
+                native_seconds=0.0,
+                mesh_convert_seconds=0.0,
+                surface_validation_seconds=0.0,
+                surface_checked=0,
+                surface_rejects=0,
+            )
+
+        convert_started = time.perf_counter()
+        native_mesh_list = list(native_meshes or [])
+        outcomes = []
+        surface_validation_seconds = 0.0
+        surface_checked = 0
+        surface_rejects = 0
+        for index, group in enumerate(batch.groups):
+            if index >= len(native_mesh_list):
+                outcomes.append(
+                    _NativeGroupOutcome(
+                        status="missing_native_mesh",
+                        rejection_counter="native_invalid_meshes",
+                        mesh_arrays=None,
+                        mesh=None,
+                    )
+                )
+                continue
+
+            native_mesh = native_mesh_list[index]
+            mesh_arrays = _native_mesh_arrays(native_mesh)
+            if mesh_arrays is None:
+                outcomes.append(
+                    _NativeGroupOutcome(
+                        status="native_rejected",
+                        rejection_counter=_native_mesh_rejection_reason(
+                            native_mesh
+                        ),
+                        mesh_arrays=None,
+                        mesh=None,
+                    )
+                )
+                continue
+
+            mesh = None
+            if validate_surface:
+                mesh = _mesh_from_arrays(mesh_arrays)
+                if mesh is None:
+                    outcomes.append(
+                        _NativeGroupOutcome(
+                            status="invalid_native_mesh",
+                            rejection_counter="native_invalid_meshes",
+                            mesh_arrays=None,
+                            mesh=None,
+                        )
+                    )
+                    continue
+                validation_started = time.perf_counter()
+                surface_ok = _native_surface_area_matches(
+                    mesh,
+                    group.geoms,
+                    height=batch.height,
+                    scale_factor=scale_factor,
+                )
+                surface_validation_seconds += (
+                    time.perf_counter() - validation_started
+                )
+                surface_checked += 1
+                if not surface_ok:
+                    surface_rejects += 1
+                    outcomes.append(
+                        _NativeGroupOutcome(
+                            status="surface_reject",
+                            rejection_counter="",
+                            mesh_arrays=mesh_arrays,
+                            mesh=mesh,
+                        )
+                    )
+                    continue
+
+            outcomes.append(
+                _NativeGroupOutcome(
+                    status="accepted",
+                    rejection_counter="",
+                    mesh_arrays=mesh_arrays,
+                    mesh=mesh,
+                )
+            )
+
+        return _ComputedNativeBatch(
+            call_error="",
+            outcomes=tuple(outcomes),
+            extra_mesh_count=max(
+                0,
+                len(native_mesh_list) - len(batch.groups),
+            ),
+            native_seconds=native_seconds,
+            mesh_convert_seconds=time.perf_counter() - convert_started,
+            surface_validation_seconds=surface_validation_seconds,
+            surface_checked=surface_checked,
+            surface_rejects=surface_rejects,
+        )
 
 
 def is_native_vector_mesh_enabled(processor: Any | None = None) -> bool:
@@ -156,8 +389,31 @@ def run_length_extrude_native_hybrid(
         return NativeVectorMeshResult(meshes_by_slot=meshes_by_slot, stats=stats)
 
     stats["native_triangulation_area_guard"] = "present"
+    batch_items = list(jobs_by_height_z.items())
+    worker_count = _resolve_native_batch_workers(
+        batch_count=len(batch_items),
+        group_count=len(run_groups),
+    )
+    stats["native_parallel_workers"] = worker_count
+    stats["native_parallel_batch_count"] = len(batch_items)
+    if worker_count > 1:
+        parallel_result, parallel_error = _try_run_native_batches_parallel(
+            module=module,
+            batch_items=batch_items,
+            run_group_count=len(run_groups),
+            worker_count=worker_count,
+            scale_factor=float(scale_factor),
+            slot_names=slot_names,
+            extrude_cache=extrude_cache,
+        )
+        if parallel_result is not None:
+            return parallel_result
+        stats["native_parallel_error"] = parallel_error
+        stats["native_parallel_requested_workers"] = worker_count
+        stats["native_parallel_workers"] = 1
+
     path_cache: dict[int, tuple[Any, list[list[tuple[float, float]]]]] = {}
-    for (height, z_bot), jobs in jobs_by_height_z.items():
+    for (height, z_bot), jobs in batch_items:
         _run_native_job_batch(
             module=module,
             jobs=jobs,
@@ -208,6 +464,11 @@ def _empty_stats() -> dict[str, float | int | str]:
         "fallback_groups": 0,
         "native_capability_error": "",
         "native_triangulation_area_guard": "",
+        "native_parallel_workers": 1,
+        "native_parallel_batch_count": 0,
+        "native_parallel_wall_seconds": 0.0,
+        "native_parallel_error": "",
+        "native_parallel_requested_workers": 1,
     }
 
 
@@ -247,6 +508,288 @@ def _build_run_groups(*, matched_shapes, num_layers: int, num_channels: int, slo
             for run_start, run_end in runs:
                 run_groups.setdefault((int(ch), int(run_start), int(run_end)), []).append(geom)
     return run_groups
+
+
+def _empty_computed_native_batch(
+    batch: _PreparedNativeBatch,
+) -> _ComputedNativeBatch:
+    return _ComputedNativeBatch(
+        call_error="",
+        outcomes=(),
+        extra_mesh_count=0,
+        native_seconds=0.0,
+        mesh_convert_seconds=0.0,
+        surface_validation_seconds=0.0,
+        surface_checked=0,
+        surface_rejects=0,
+    )
+
+
+def _commit_computed_native_batch(
+    *,
+    module,
+    batch: _PreparedNativeBatch,
+    computed: _ComputedNativeBatch,
+    scale_factor: float,
+    slot_names,
+    meshes_by_slot: dict[str, dict[str, Any]],
+    extrude_cache,
+    stats: dict[str, float | int | str],
+    path_cache: dict[int, tuple[Any, list[list[tuple[float, float]]]]],
+) -> None:
+    """Commit a computed batch on the caller thread in original group order."""
+
+    if not computed.call_error and len(computed.outcomes) != len(batch.groups):
+        raise RuntimeError("native batch outcome count mismatch")
+
+    for key, geoms in batch.no_path_jobs:
+        _fallback_key(
+            key,
+            geoms,
+            height=batch.height,
+            z_bot=batch.z_bot,
+            scale_factor=scale_factor,
+            slot_names=slot_names,
+            meshes_by_slot=meshes_by_slot,
+            extrude_cache=extrude_cache,
+            stats=stats,
+            reason="no_paths",
+        )
+
+    stats["native_seconds"] = float(stats["native_seconds"]) + (
+        computed.native_seconds
+    )
+    stats["mesh_convert_seconds"] = float(stats["mesh_convert_seconds"]) + (
+        computed.mesh_convert_seconds
+    )
+    stats["surface_validation_seconds"] = float(
+        stats["surface_validation_seconds"]
+    ) + computed.surface_validation_seconds
+    stats["native_surface_checked"] = int(stats["native_surface_checked"]) + (
+        computed.surface_checked
+    )
+    stats["native_surface_rejects"] = int(stats["native_surface_rejects"]) + (
+        computed.surface_rejects
+    )
+
+    if computed.call_error:
+        stats["native_call_error"] = computed.call_error
+        for group in batch.groups:
+            _fallback_key(
+                group.key,
+                group.geoms,
+                height=batch.height,
+                z_bot=batch.z_bot,
+                scale_factor=scale_factor,
+                slot_names=slot_names,
+                meshes_by_slot=meshes_by_slot,
+                extrude_cache=extrude_cache,
+                stats=stats,
+                reason="native_call_error",
+            )
+        return
+
+    stats["native_extra_meshes"] = int(stats["native_extra_meshes"]) + (
+        computed.extra_mesh_count
+    )
+    for group, outcome in zip(batch.groups, computed.outcomes):
+        key = group.key
+        ch = key[0]
+        slot_name = slot_names[ch]
+        _ensure_slot(meshes_by_slot, slot_name, ch)
+
+        if outcome.status == "missing_native_mesh":
+            stats["native_invalid_meshes"] = int(
+                stats["native_invalid_meshes"]
+            ) + 1
+            _fallback_key(
+                key,
+                group.geoms,
+                height=batch.height,
+                z_bot=batch.z_bot,
+                scale_factor=scale_factor,
+                slot_names=slot_names,
+                meshes_by_slot=meshes_by_slot,
+                extrude_cache=extrude_cache,
+                stats=stats,
+                reason="missing_native_mesh",
+            )
+            continue
+
+        if outcome.status == "native_rejected":
+            counter_name = outcome.rejection_counter
+            stats[counter_name] = int(stats[counter_name]) + 1
+            if _retry_native_group_as_reference_polygons(
+                module=module,
+                key=key,
+                geoms=group.geoms,
+                original_path_count=group.path_count,
+                height=batch.height,
+                z_bot=batch.z_bot,
+                scale_factor=scale_factor,
+                slot_names=slot_names,
+                meshes_by_slot=meshes_by_slot,
+                extrude_cache=extrude_cache,
+                stats=stats,
+                path_cache=path_cache,
+            ):
+                continue
+            _fallback_key(
+                key,
+                group.geoms,
+                height=batch.height,
+                z_bot=batch.z_bot,
+                scale_factor=scale_factor,
+                slot_names=slot_names,
+                meshes_by_slot=meshes_by_slot,
+                extrude_cache=extrude_cache,
+                stats=stats,
+                reason=_fallback_reason_for_native_rejection(counter_name),
+                native_module=module,
+                path_cache=path_cache,
+                input_path_count=group.path_count,
+            )
+            continue
+
+        if outcome.status == "invalid_native_mesh":
+            stats["native_invalid_meshes"] = int(
+                stats["native_invalid_meshes"]
+            ) + 1
+            _fallback_key(
+                key,
+                group.geoms,
+                height=batch.height,
+                z_bot=batch.z_bot,
+                scale_factor=scale_factor,
+                slot_names=slot_names,
+                meshes_by_slot=meshes_by_slot,
+                extrude_cache=extrude_cache,
+                stats=stats,
+                reason="invalid_native_mesh",
+            )
+            continue
+
+        if outcome.status == "surface_reject":
+            _fallback_key(
+                key,
+                group.geoms,
+                height=batch.height,
+                z_bot=batch.z_bot,
+                scale_factor=scale_factor,
+                slot_names=slot_names,
+                meshes_by_slot=meshes_by_slot,
+                extrude_cache=extrude_cache,
+                stats=stats,
+                reason="surface_reject",
+            )
+            continue
+
+        mesh_arrays = outcome.mesh_arrays
+        if outcome.status != "accepted" or mesh_arrays is None:
+            raise RuntimeError("invalid computed native mesh outcome")
+        stats["native_meshes"] = int(stats["native_meshes"]) + 1
+        if outcome.mesh is not None:
+            meshes_by_slot[slot_name]["meshes"].append(outcome.mesh)
+            stats["native_output_meshes"] = int(
+                stats["native_output_meshes"]
+            ) + 1
+        else:
+            _append_native_buffer(
+                meshes_by_slot,
+                slot_name,
+                ch,
+                mesh_arrays,
+            )
+
+
+def _try_run_native_batches_parallel(
+    *,
+    module,
+    batch_items,
+    run_group_count: int,
+    worker_count: int,
+    scale_factor: float,
+    slot_names,
+    extrude_cache,
+) -> tuple[NativeVectorMeshResult | None, str]:
+    """Compute independent batches concurrently and commit them serially."""
+
+    stats = _empty_stats()
+    stats["run_group_count"] = run_group_count
+    stats["native_triangulation_area_guard"] = "present"
+    stats["native_parallel_workers"] = worker_count
+    stats["native_parallel_requested_workers"] = worker_count
+    stats["native_parallel_batch_count"] = len(batch_items)
+    meshes_by_slot: dict[str, dict[str, Any]] = {}
+    path_cache: dict[
+        int,
+        tuple[Any, list[list[tuple[float, float]]]],
+    ] = {}
+    local_extrude_cache = dict(extrude_cache) if extrude_cache is not None else None
+
+    try:
+        prepared_batches = [
+            _prepare_native_batch(
+                index=index,
+                jobs=jobs,
+                height=float(height),
+                z_bot=float(z_bot),
+                stats=stats,
+                path_cache=path_cache,
+            )
+            for index, ((height, z_bot), jobs) in enumerate(batch_items)
+        ]
+        validate_surface = _surface_validation_enabled()
+        parallel_started = time.perf_counter()
+        with ThreadPoolExecutor(
+            max_workers=worker_count,
+            thread_name_prefix="lumina-vector-native",
+        ) as executor:
+            futures = {
+                batch.index: executor.submit(
+                    _compute_native_batch,
+                    module,
+                    batch,
+                    scale_factor=scale_factor,
+                    validate_surface=validate_surface,
+                )
+                for batch in prepared_batches
+                if batch.groups
+            }
+            computed_batches = [
+                (
+                    futures[batch.index].result()
+                    if batch.groups
+                    else _empty_computed_native_batch(batch)
+                )
+                for batch in prepared_batches
+            ]
+        stats["native_parallel_wall_seconds"] = (
+            time.perf_counter() - parallel_started
+        )
+
+        for batch, computed in zip(prepared_batches, computed_batches):
+            _commit_computed_native_batch(
+                module=module,
+                batch=batch,
+                computed=computed,
+                scale_factor=scale_factor,
+                slot_names=slot_names,
+                meshes_by_slot=meshes_by_slot,
+                extrude_cache=local_extrude_cache,
+                stats=stats,
+                path_cache=path_cache,
+            )
+        _flush_native_buffers(meshes_by_slot, stats)
+        if extrude_cache is not None and local_extrude_cache is not None:
+            extrude_cache.update(local_extrude_cache)
+    except Exception as exc:
+        return None, type(exc).__name__
+
+    return NativeVectorMeshResult(
+        meshes_by_slot=meshes_by_slot,
+        stats=stats,
+    ), ""
 
 
 def _run_native_job_batch(
