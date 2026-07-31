@@ -40,24 +40,6 @@ def _stable_array_identity(array: np.ndarray) -> str:
     )
 
 
-def _stable_kdtree_identity(tree: KDTree) -> str:
-    """Hash stable KDTree state that controls exact query results."""
-
-    tree_type = type(tree)
-    digest = hashlib.sha256(
-        f"{tree_type.__module__}.{tree_type.__qualname__}".encode("utf-8")
-    )
-    digest.update(f"|data:{_stable_array_identity(tree.data)}".encode("utf-8"))
-    # SciPy documents the other constructor options as storage/performance
-    # controls; boxsize changes the metric by enabling toroidal topology.
-    if tree.boxsize is None:
-        boxsize_identity = "none"
-    else:
-        boxsize_identity = _stable_array_identity(np.asarray(tree.boxsize))
-    digest.update(f"|boxsize:{boxsize_identity}".encode("utf-8"))
-    return digest.hexdigest()
-
-
 def _resolve_cluster_count(requested_colors: int, sample_count: int) -> int:
     """Clamp the cluster count to the available sample count.
 
@@ -188,18 +170,21 @@ def _lut_constrained_quantize(
     rgb_identity = _stable_array_identity(rgb)
     lut_lab_identity = _stable_array_identity(lut_lab)
     lut_rgb_identity = _stable_array_identity(lut_rgb)
-    lut_tree_identity = _stable_kdtree_identity(lut_tree)
     _cache_key = (
         f"{rgb_identity}_"
         f"{effective_k}_{seed}_"
-        f"lc3_lab_{lut_lab_identity}_"
+        f"lc4_lab_{lut_lab_identity}_"
         f"rgb_{lut_rgb_identity}_"
-        f"tree_{lut_tree_identity}_"
         f"caller_{lut_fingerprint or ''}"
     )
     if _cache_key in _kmeans_cache:
         _log.debug("LUT-Constrained K-Means cache hit: %s", _cache_key)
         return _kmeans_cache[_cache_key].copy()
+
+    # ``lut_lab`` is the authoritative LUT geometry. Rebuild the default tree
+    # only on cache misses so externally supplied construction options or tree
+    # topology cannot change exact-query tie-breaking or cache semantics.
+    canonical_lut_tree = KDTree(lut_lab)
 
     if effective_k == lut_count:
         _log.info(
@@ -212,7 +197,11 @@ def _lut_constrained_quantize(
                 "lut_count": int(lut_count),
             },
         )
-        quantized_image = _map_rgb_to_lut_nearest(rgb, lut_rgb, lut_tree)
+        quantized_image = _map_rgb_to_lut_nearest(
+            rgb,
+            lut_rgb,
+            canonical_lut_tree,
+        )
         if len(_kmeans_cache) >= _KMEANS_CACHE_MAX:
             oldest = next(iter(_kmeans_cache))
             del _kmeans_cache[oldest]
@@ -239,7 +228,7 @@ def _lut_constrained_quantize(
     work_pixels_rgb = work_rgb.reshape(-1, 3).astype(np.float32)
     work_pixels_lab = _rgb_to_lab_quantize(work_pixels_rgb)
 
-    _, nearest_lut_indices = lut_tree.query(work_pixels_lab)
+    _, nearest_lut_indices = canonical_lut_tree.query(work_pixels_lab)
     lut_pixel_counts = np.bincount(nearest_lut_indices, minlength=lut_count).astype(np.float64)
     lut_pixel_counts[lut_pixel_counts == 0] = 1e-9
 
@@ -277,7 +266,7 @@ def _lut_constrained_quantize(
                     any_changed = True
                 else:
                     mean_lab = work_pixels_lab[mask].mean(axis=0)
-                    _, nearest_idx = lut_tree.query(mean_lab)
+                    _, nearest_idx = canonical_lut_tree.query(mean_lab)
                     new_centers_lab[ci] = lut_lab[nearest_idx]
 
             if not any_changed and np.allclose(cur_centers_lab, new_centers_lab):
@@ -295,7 +284,7 @@ def _lut_constrained_quantize(
         return rgb.copy()
 
     # Map best Lab centers to LUT RGB
-    _, best_center_indices = lut_tree.query(best_centers_lab)
+    _, best_center_indices = canonical_lut_tree.query(best_centers_lab)
     centers_rgb = lut_rgb[best_center_indices]
 
     if total_pixels > KMEANS_PIXEL_THRESHOLD:
@@ -362,7 +351,12 @@ def quantize_colors(
             空间降噪由上游 bilateral 和下游孤立像素清理共同完成。)
         lut_lab: (N, 3) float64 LUT Lab 颜色表，用于 LUT 约束量化。
         lut_rgb: (N, 3) uint8 LUT RGB 颜色表，用于映射 LUT 索引到 RGB。
-        lut_tree: 基于 lut_lab 构建的 KDTree，用于查找最近 LUT 条目。
+        lut_tree: 基于 ``lut_lab`` 构建的 KDTree。保留该参数用于兼容现有
+            调用方和确认 LUT 已加载；量化在缓存未命中时会从权威
+            ``lut_lab`` 重建默认 KDTree，以固定最近邻等距选择语义。
+            (KDTree built from ``lut_lab``. Retained for caller compatibility
+            and loaded-LUT validation; cache misses rebuild a default KDTree
+            from authoritative ``lut_lab`` for deterministic tie-breaking.)
         use_lut_constrained: 若为 True 且 LUT 数据有效，使用 LUT-Constrained K-Means。
         lut_fingerprint: LUT 指纹，用于缓存隔离。
 

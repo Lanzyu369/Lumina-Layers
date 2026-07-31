@@ -238,8 +238,8 @@ class TestCacheIsolation:
         assert not np.array_equal(first_result, fresh_second)
         np.testing.assert_array_equal(cached_second, fresh_second)
 
-    def test_tree_data_invalidates_cache_when_it_disagrees_with_lab(self) -> None:
-        """An independently supplied KDTree is part of cache identity."""
+    def test_external_tree_data_is_canonicalized_from_lut_lab(self) -> None:
+        """External tree data cannot override authoritative LUT Lab rows."""
         from core.image_processing import LuminaImageProcessor
 
         lut_rgb = np.array([[255, 0, 0], [0, 255, 0]], dtype=np.uint8)
@@ -261,11 +261,11 @@ class TestCacheIsolation:
             lut_fingerprint="same-lab-rgb-fingerprint",
         )
 
-        assert not np.array_equal(first_result, fresh_second)
+        np.testing.assert_array_equal(first_result, fresh_second)
         np.testing.assert_array_equal(cached_second, fresh_second)
 
-    def test_tree_query_state_invalidates_cache_with_identical_data(self) -> None:
-        """KDTree topology settings are part of its cache identity."""
+    def test_external_tree_metric_is_canonicalized_from_lut_lab(self) -> None:
+        """External periodic metrics cannot override default LUT distance."""
 
         lut_lab = np.array(
             [[250.0, 128.0, 128.0], [20.0, 128.0, 128.0]],
@@ -293,11 +293,91 @@ class TestCacheIsolation:
             first_result,
             np.array([[[0, 255, 0]]], dtype=np.uint8),
         )
-        np.testing.assert_array_equal(
-            fresh_second,
-            np.array([[[255, 0, 0]]], dtype=np.uint8),
-        )
+        np.testing.assert_array_equal(fresh_second, first_result)
         np.testing.assert_array_equal(cached_second, fresh_second)
+
+    def test_external_tree_tie_breaking_is_canonicalized_from_lut_lab(
+        self,
+    ) -> None:
+        """External tree layout cannot change equal-distance LUT mapping."""
+
+        rng = np.random.default_rng(1)
+        lut_lab = rng.integers(0, 256, size=(20, 3)).astype(np.float64)
+        lut_lab[7] = [127.0, 128.0, 128.0]
+        lut_lab[10] = [129.0, 128.0, 128.0]
+        lut_rgb = np.array(
+            [[index * 10, 0, 0] for index in range(20)],
+            dtype=np.uint8,
+        )
+        image = np.full((1, 1, 3), 119, dtype=np.uint8)
+        loose_tree = KDTree(
+            lut_lab,
+            leafsize=1,
+            balanced_tree=False,
+            compact_nodes=False,
+        )
+        compact_tree = KDTree(
+            lut_lab,
+            leafsize=1,
+            balanced_tree=False,
+            compact_nodes=True,
+        )
+        query_lab = np.array([128.0, 128.0, 128.0])
+        assert int(KDTree(lut_lab).query(query_lab)[1]) == 7
+        assert int(loose_tree.query(query_lab)[1]) == 7
+        assert int(compact_tree.query(query_lab)[1]) == 10
+
+        first_result, cached_second, fresh_second = _run_lut_cache_transition(
+            image,
+            n_colors=20,
+            first_lab=lut_lab,
+            first_rgb=lut_rgb,
+            first_tree=loose_tree,
+            second_lab=lut_lab,
+            second_rgb=lut_rgb,
+            second_tree=compact_tree,
+            lut_fingerprint="same-tie-topology-fingerprint",
+        )
+
+        canonical_result = np.array([[[70, 0, 0]]], dtype=np.uint8)
+        np.testing.assert_array_equal(first_result, canonical_result)
+        np.testing.assert_array_equal(cached_second, canonical_result)
+        np.testing.assert_array_equal(fresh_second, canonical_result)
+
+    def test_equivalent_default_trees_reuse_one_cache_entry(self) -> None:
+        """Equivalent default trees share the authoritative LUT cache key."""
+
+        lut_rgb, lut_lab, _ = _build_mini_lut(8)
+        image = _synthetic_image(lut_rgb, h=16, w=16, seed=8)
+        first_tree = KDTree(lut_lab)
+        second_tree = KDTree(lut_lab.copy())
+
+        kmeans_quantizer._kmeans_cache.clear()
+        first_result = quantize_colors(
+            image,
+            n_colors=4,
+            seed=42,
+            lut_lab=lut_lab,
+            lut_rgb=lut_rgb,
+            lut_tree=first_tree,
+            use_lut_constrained=True,
+            lut_fingerprint="same-default-tree-fingerprint",
+        )
+        assert len(kmeans_quantizer._kmeans_cache) == 1
+
+        second_result = quantize_colors(
+            image,
+            n_colors=4,
+            seed=42,
+            lut_lab=lut_lab,
+            lut_rgb=lut_rgb,
+            lut_tree=second_tree,
+            use_lut_constrained=True,
+            lut_fingerprint="same-default-tree-fingerprint",
+        )
+
+        np.testing.assert_array_equal(second_result, first_result)
+        assert len(kmeans_quantizer._kmeans_cache) == 1
 
     def test_lut_lab_invalidates_cache_independently(self) -> None:
         """Lab rows affect constrained clustering even when RGB/tree are fixed."""
