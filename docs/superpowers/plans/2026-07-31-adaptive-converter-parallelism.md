@@ -1030,10 +1030,12 @@ git commit -m "chore(perf): report adaptive parallelism decisions"
 
 **Files:**
 - Modify after measurement: `core/vector_native_mesh.py`
+- Modify after measurement: `core/vector_matchers.py`
+- Modify after measurement: `core/pipeline/s07_mesh_generation.py`
 - Create: `docs/superpowers/specs/2026-07-31-adaptive-converter-parallelism-results.md`
 - Runtime outputs only: `.scratch/adaptive-parallelism/`
 
-- [ ] **Step 1: Run the exact serial reference for the 12-color starry SVG**
+- [x] **Step 1: Run the exact serial reference for the 12-color starry SVG**
 
 Run:
 
@@ -1044,6 +1046,7 @@ env \
   MKL_NUM_THREADS=1 \
   VECLIB_MAXIMUM_THREADS=1 \
   NUMEXPR_NUM_THREADS=1 \
+  LUMINA_MAX_WORKERS=1 \
   LUMINA_VECTOR_NATIVE_MESH=1 \
   LUMINA_VECTOR_PARALLELISM=1 \
   .venv/bin/python scripts/profile_converter_multicore.py \
@@ -1060,7 +1063,7 @@ env \
 
 Expected: three internally equal semantic snapshots and a `profile.json` reference.
 
-- [ ] **Step 2: Run requested-two and requested-four against the external reference**
+- [x] **Step 2: Run requested-two and requested-four against the external reference**
 
 Run:
 
@@ -1072,6 +1075,7 @@ for adaptive_worker_count in 2 4; do
     MKL_NUM_THREADS=1 \
     VECLIB_MAXIMUM_THREADS=1 \
     NUMEXPR_NUM_THREADS=1 \
+    LUMINA_MAX_WORKERS=1 \
     LUMINA_VECTOR_NATIVE_MESH=1 \
     LUMINA_VECTOR_PARALLELISM="${adaptive_worker_count}" \
     .venv/bin/python scripts/profile_converter_multicore.py \
@@ -1092,7 +1096,7 @@ done
 
 Expected: both commands either report an exact external semantic match or the failing tier is rejected immediately.
 
-- [ ] **Step 3: Run 8/12/15-color vector archive cases**
+- [x] **Step 3: Run 8/12/15-color vector archive cases**
 
 Use the supplied `945695877_20260622_232544_vector.svg`, `mmexport1784271438721.svg`, and `梵高星空款式西森猫猫.svg` with these fixed pairs:
 
@@ -1118,6 +1122,7 @@ run_adaptive_vector_case() {
     MKL_NUM_THREADS=1 \
     VECLIB_MAXIMUM_THREADS=1 \
     NUMEXPR_NUM_THREADS=1 \
+    LUMINA_MAX_WORKERS=1 \
     LUMINA_VECTOR_NATIVE_MESH=1 \
     LUMINA_VECTOR_PARALLELISM=1 \
     .venv/bin/python scripts/profile_converter_multicore.py \
@@ -1139,6 +1144,7 @@ run_adaptive_vector_case() {
         MKL_NUM_THREADS=1 \
         VECLIB_MAXIMUM_THREADS=1 \
         NUMEXPR_NUM_THREADS=1 \
+        LUMINA_MAX_WORKERS=1 \
         LUMINA_VECTOR_NATIVE_MESH=1 \
         .venv/bin/python scripts/profile_converter_multicore.py \
           --kind vector \
@@ -1158,6 +1164,7 @@ run_adaptive_vector_case() {
         MKL_NUM_THREADS=1 \
         VECLIB_MAXIMUM_THREADS=1 \
         NUMEXPR_NUM_THREADS=1 \
+        LUMINA_MAX_WORKERS=1 \
         LUMINA_VECTOR_NATIVE_MESH=1 \
         LUMINA_VECTOR_PARALLELISM="${adaptive_worker_mode}" \
         .venv/bin/python scripts/profile_converter_multicore.py \
@@ -1196,7 +1203,7 @@ unset -f run_adaptive_vector_case
 Expected: every accepted report has the same complete semantic hash, artifact
 summaries, fallback count, and surface-rejection count as its serial reference.
 
-- [ ] **Step 4: Run supplied bitmap controls**
+- [x] **Step 4: Run supplied bitmap controls**
 
 Run:
 
@@ -1213,6 +1220,7 @@ run_adaptive_raster_case() {
     MKL_NUM_THREADS=1 \
     VECLIB_MAXIMUM_THREADS=1 \
     NUMEXPR_NUM_THREADS=1 \
+    LUMINA_MAX_WORKERS=1 \
     LUMINA_RASTER_PARALLELISM=1 \
     .venv/bin/python scripts/profile_converter_multicore.py \
       --kind raster \
@@ -1232,6 +1240,7 @@ run_adaptive_raster_case() {
         MKL_NUM_THREADS=1 \
         VECLIB_MAXIMUM_THREADS=1 \
         NUMEXPR_NUM_THREADS=1 \
+        LUMINA_MAX_WORKERS=1 \
         .venv/bin/python scripts/profile_converter_multicore.py \
           --kind raster \
           --input "${adaptive_input_path}" \
@@ -1249,6 +1258,7 @@ run_adaptive_raster_case() {
         MKL_NUM_THREADS=1 \
         VECLIB_MAXIMUM_THREADS=1 \
         NUMEXPR_NUM_THREADS=1 \
+        LUMINA_MAX_WORKERS=1 \
         LUMINA_RASTER_PARALLELISM="${adaptive_worker_mode}" \
         .venv/bin/python scripts/profile_converter_multicore.py \
           --kind raster \
@@ -1294,7 +1304,7 @@ unset -f run_adaptive_raster_case
 Expected: exact matched arrays, recipes, material matrix, geometry/artifact
 summaries, and no repeatable small-workload regression above 5%.
 
-- [ ] **Step 5: Run the native corpus guard**
+- [x] **Step 5: Run the native corpus guard**
 
 Run:
 
@@ -1305,6 +1315,7 @@ env \
   MKL_NUM_THREADS=1 \
   VECLIB_MAXIMUM_THREADS=1 \
   NUMEXPR_NUM_THREADS=1 \
+  LUMINA_MAX_WORKERS=1 \
   LUMINA_VECTOR_NATIVE_MESH=1 \
   .venv/bin/python scripts/profile_vector_native_mesh_corpus.py \
     "/Users/min/Downloads/梵高星空款式西森猫猫.svg" \
@@ -1317,7 +1328,7 @@ env \
 
 Expected: no geometry, bounds, area, volume, native/fallback, or surface-validation failure.
 
-- [ ] **Step 6: Apply the worker-tier decision**
+- [x] **Step 6: Apply the worker-tier decision**
 
 Keep `NATIVE_BATCH_MAX_WORKERS = 4` only when requested-four satisfies all of:
 
@@ -1331,7 +1342,7 @@ no repeatable small-case regression above 5%
 
 If any condition fails, set `NATIVE_BATCH_MAX_WORKERS = 2` and rerun the native unit suite. This decision changes only the stage ceiling; the adaptive planner and bounded window remain.
 
-- [ ] **Step 7: Write the evidence document**
+- [x] **Step 7: Write the evidence document**
 
 Write an English summary first and a Chinese summary second, then record the
 exact branch SHA, machine/library versions, each report path, median end-to-end
@@ -1340,11 +1351,11 @@ fallback/surface counters, and the final `2` or `4` native ceiling. State
 rejected candidates explicitly. Do not describe a tier as verified if any
 reference command failed or was skipped.
 
-- [ ] **Step 8: Commit measured policy and evidence**
+- [x] **Step 8: Commit measured policy and evidence**
 
 ```bash
 git add \
-  core/vector_native_mesh.py \
+  docs/superpowers/plans/2026-07-31-adaptive-converter-parallelism.md \
   docs/superpowers/specs/2026-07-31-adaptive-converter-parallelism-results.md
 git commit -m "docs(perf): record adaptive parallelism evidence"
 ```
