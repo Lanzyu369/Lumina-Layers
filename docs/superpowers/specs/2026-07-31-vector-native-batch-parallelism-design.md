@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-31
 
-**Status:** approved delegated direction; revised after semantic audit
+**Status:** approved delegated direction; revised after semantic and memory audits
 
 **Branch:** `MOVIBALE/feat/vector-native-mesh-throughput`
 
@@ -22,7 +22,7 @@ The implementation target is deliberately narrow:
 3. collect every batch result before mutating shared meshes, caches, or stats;
 4. commit results in the original insertion order, including all fallback
    decisions, then run the existing final buffer flush;
-5. resolve 1–4 workers through the existing CPU/fair-share/memory policy.
+5. resolve 1–2 workers through the existing CPU/fair-share/memory policy.
 
 The optimization changes scheduling, not geometry computation. A serial
 worker count continues through the current code path.
@@ -196,7 +196,7 @@ build run groups
 ```text
 build run groups
   -> prepare all batches sequentially with the current path cache
-  -> resolve bounded workers (CPU + fair share + memory + hard max 4)
+  -> resolve bounded workers (CPU + fair share + memory + hard max 2)
   -> one ThreadPoolExecutor
        -> batch 0: native + unchanged validation -> immutable result
        -> batch 1: native + unchanged validation -> immutable result
@@ -217,7 +217,7 @@ Use `resolve_task_parallelism("vector", ...)` with:
 
 - work items equal to prepared native batches;
 - a minimum batch/work threshold so tiny models stay serial;
-- hard maximum `4`;
+- hard maximum `2`;
 - conservative per-worker memory estimate, initially `384 MiB`;
 - existing `LUMINA_VECTOR_PARALLELISM` override and
   `LUMINA_MAX_WORKERS` fair-share cap;
@@ -225,6 +225,21 @@ Use `resolve_task_parallelism("vector", ...)` with:
 
 Missing memory telemetry already fails closed to one worker because `psutil`
 is a formal runtime dependency on the stacked base.
+
+An exact 8-color diagnostic with four effective workers reduced wall time
+further, but increased peak RSS from `731.14 MiB` to `849.12 MiB`
+(`+16.1%`). That exceeds the `15%` acceptance gate, so four effective workers
+are rejected even when explicitly requested. A request for four is clamped to
+the hard maximum of two.
+
+The supplied 13,970-source-geometry SVG exposed a second memory boundary.
+Although two workers remained exact and reduced wall time, whole-process peak
+RSS increased from `1,925.55 MiB` to `2,719.95 MiB` (`+41.3%`). Native batch
+parallelism therefore stays serial above `3,000` source geometries. This
+threshold is evaluated before any parallel batch preparation or executor
+creation. The timing payload records the source-geometry count and a numeric
+`0/1` limited flag; timing fields remain numeric so structured timing logging
+cannot fail while converting the payload to floats.
 
 ### Determinism
 
@@ -303,7 +318,10 @@ migration. Rollback is `LUMINA_VECTOR_PARALLELISM=1` or code rollback.
 5. Add exception and pool-failure tests proving no partial output is committed.
 6. Add compiled-extension concurrency coverage with exact output hashes.
 7. Implement isolated prepare/compute/commit and serial fallback.
-8. Run exact serial-versus-2/4 worker corpus checks.
+8. Run exact serial-versus-two-worker checks and prove that a four-worker
+   request is safely clamped to two.
+9. Disable native batch parallelism above 3,000 source geometries and record
+   the decision as numeric timing fields.
 
 ### Quality corpus
 

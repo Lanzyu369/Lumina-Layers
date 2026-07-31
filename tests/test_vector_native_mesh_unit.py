@@ -172,15 +172,23 @@ def test_native_batch_worker_policy_is_bounded_and_nested_safe(
     assert vector_native_mesh._resolve_native_batch_workers(
         batch_count=2,
         group_count=20,
+        source_geometry_count=20,
     ) == 1
     assert vector_native_mesh._resolve_native_batch_workers(
         batch_count=15,
         group_count=43,
+        source_geometry_count=43,
     ) == 2
+    assert vector_native_mesh._resolve_native_batch_workers(
+        batch_count=54,
+        group_count=314,
+        source_geometry_count=3_001,
+    ) == 1
     with task_parallelism.task_parallelism_worker_scope():
         assert vector_native_mesh._resolve_native_batch_workers(
             batch_count=15,
             group_count=43,
+            source_geometry_count=43,
         ) == 1
 
 
@@ -239,6 +247,7 @@ def test_native_batches_commit_in_serial_order_after_parallel_completion(
     assert parallel.stats["native_output_meshes"] == serial.stats["native_output_meshes"]
     assert parallel.stats["native_parallel_workers"] == 2
     assert parallel.stats["native_parallel_batch_count"] >= 3
+    assert parallel.stats["native_parallel_source_geometry_count"] == len(shapes)
     assert len(serial_threads) == 1
     assert len(parallel_threads) == 2
     assert parallel_completion != serial_completion

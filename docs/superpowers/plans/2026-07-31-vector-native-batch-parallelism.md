@@ -116,7 +116,7 @@ Expected: exit 0 with complete semantic, GLB, and decompressed 3MF summaries.
 Run the same profiler with:
 
 ```text
-input: /Users/min/Downloads/mmexport1784271438721.svg
+input: external benchmark asset mmexport1784271438721.svg
 target width: 200
 material count: 12
 override scenario: matched-rgb
@@ -130,7 +130,7 @@ Record total, build, extrusion, peak RSS, peak threads, and children.
 Run with:
 
 ```text
-input: /Users/min/Downloads/梵高星空款式西森猫猫.svg
+input: external benchmark asset 梵高星空款式西森猫猫.svg
 target width: 136
 material count: 8
 override scenario: none
@@ -258,8 +258,10 @@ git commit -m "perf(vector): expose native batch timing evidence"
 Add tests proving:
 
 - fewer than three useful batches resolve to one worker;
-- the existing resolver receives workload `vector`, hard maximum `4`, and a
+- the existing resolver receives workload `vector`, hard maximum `2`, and a
   nonzero per-worker memory estimate;
+- more than 3,000 source geometries resolve to one worker before parallel
+  batch preparation;
 - explicit/automatic resolver output is recorded in
   `native_parallel_workers`;
 - a nested `task_parallelism_worker_scope()` resolves serial through the
@@ -332,8 +334,9 @@ Resolve workers through `resolve_task_parallelism` with:
 ```text
 workload: vector
 min parallel batches: 3
-hard maximum workers: 4
+hard maximum workers: 2
 estimated worker memory: 384 MiB
+maximum parallel source geometries: 3,000
 ```
 
 When workers equal one, call the existing `_run_native_job_batch` loop.
@@ -367,7 +370,7 @@ git diff --cached --check
 git commit -m "perf(vector): parallelize deterministic native batches"
 ```
 
-### Task 4: Prove exact quality at 2/4 workers
+### Task 4: Prove exact quality at two workers and the four-worker request cap
 
 **Files:**
 - Read: `.scratch/vector-native-batch-parallelism/base-*/profile.json`
@@ -384,9 +387,11 @@ LUMINA_VECTOR_PARALLELISM=2
 --reference-report <matching base profile.json>
 ```
 
-Then repeat with `LUMINA_VECTOR_PARALLELISM=4`.
+Then repeat with `LUMINA_VECTOR_PARALLELISM=4` and verify that the hard
+memory-safe ceiling resolves to two effective workers.
 
-Expected: every command exits 0 with external exact match.
+Expected: every command exits 0 with external exact match; the four-worker
+request reports two effective native-batch workers.
 
 - [ ] **Step 2: Run large and no-override exact comparisons**
 
@@ -401,8 +406,9 @@ Expected: exact semantic, GLB, and 3MF matches.
 
 - [ ] **Step 3: Verify fallback parity**
 
-Run the corpus profiler/unit fixtures at 1, 2, and 4 workers. Compare all
-fallback counters and output hashes. Any difference is a release blocker.
+Run the corpus profiler/unit fixtures at 1, 2, and requested-4 workers.
+Compare all fallback counters and output hashes, and confirm requested-4 is
+clamped to two. Any difference is a release blocker.
 
 ### Task 5: Measure performance and memory
 
@@ -413,8 +419,14 @@ fallback counters and output hashes. Any difference is a release blocker.
 - [ ] **Step 1: Run fresh-process worker sweep**
 
 For the 200 mm / 12-color workload, run one cold and at least three warm
-fresh-process timing-only samples for worker counts 1, 2, and 4. Keep
+fresh-process timing-only samples for worker counts 1 and 2. Keep
 `LUMINA_MAX_WORKERS=1` for the single-task ceiling experiment.
+
+Retain the single pre-cap four-worker diagnostic as rejected evidence: it was
+exact but exceeded the peak-RSS gate, so it is not an accepted timing mode.
+Also retain the supplied 13,970-source-geometry two-worker diagnostic as
+rejected evidence and verify that the final source-complexity guard reports
+one native worker with an external exact match.
 
 Record:
 
@@ -459,9 +471,11 @@ Otherwise record `no_safe_gain` and leave production behavior serial.
 - [ ] **Step 1: Write the evidence document**
 
 Include base/head SHAs, PR #540 dependency, runtime/dependency versions,
-8/12/15 exact hashes, 1/2/4/auto distributions, native/fallback counters,
+8/12/15 exact hashes, 1/2/requested-4/auto distributions,
+native/fallback counters,
 RSS/threads/children, rejected C++ self-guard and factored-union experiments,
-remaining hotspots, and `ready_for_review` or `no_safe_gain`.
+the source-geometry serial guard, remaining hotspots, and
+`ready_for_review_stacked` or `no_safe_gain`.
 
 Do not commit user paths, SVGs, generated models, or profile artifacts.
 
@@ -518,7 +532,7 @@ rg -n '锟|鎷|鍙|涓' \
   tests/test_vector_branch_extraction_unit.py \
   docs/superpowers/specs/2026-07-31-vector-native-batch-parallelism-results.md
 ps -axo pid=,command= | \
-  rg '/Users/min/.codex/worktrees/5fe8/Lumina-studio/.+(api_server.py|start_all.py|vite|vitest|esbuild|profile_)' || true
+  rg '<worktree>/.+(api_server.py|start_all.py|vite|vitest|esbuild|profile_)' || true
 ```
 
 - [ ] **Step 5: Commit final evidence**

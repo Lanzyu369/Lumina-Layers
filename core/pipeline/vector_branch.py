@@ -1514,6 +1514,10 @@ _NATIVE_MESH_TIMING_FIELDS = {
     "fallback_seconds": "native_mesh_fallback_s",
     "native_parallel_workers": "native_mesh_parallel_workers",
     "native_parallel_batch_count": "native_mesh_parallel_batch_count",
+    "native_parallel_source_geometry_count":
+        "native_mesh_parallel_source_geometry_count",
+    "native_parallel_source_geometry_limited":
+        "native_mesh_parallel_source_geometry_limited",
     "native_parallel_wall_seconds": "native_mesh_parallel_wall_s",
     "fallback_reason_native_merged_empty_native_mesh":
         "native_mesh_fallback_native_merged_empty_count",
@@ -1522,17 +1526,17 @@ _NATIVE_MESH_TIMING_FIELDS = {
 
 def _native_mesh_timing_fields(
     stats,
-) -> dict[str, float | int | str]:
+) -> dict[str, float | int]:
     """Return the bounded scalar native-mesh timing view."""
 
     if not isinstance(stats, dict):
         return {}
-    result: dict[str, float | int | str] = {}
+    result: dict[str, float | int] = {}
     for source_name, output_name in _NATIVE_MESH_TIMING_FIELDS.items():
         value = stats.get(source_name)
         if isinstance(value, bool):
             result[output_name] = int(value)
-        elif isinstance(value, (int, float, str)):
+        elif isinstance(value, (int, float)):
             result[output_name] = value
     return result
 

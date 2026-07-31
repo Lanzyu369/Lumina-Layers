@@ -127,6 +127,8 @@ def test_native_mesh_timing_fields_are_bounded_and_prefixed() -> None:
             "fallback_seconds": 1.36,
             "native_parallel_workers": 3,
             "native_parallel_batch_count": 15,
+            "native_parallel_source_geometry_count": 2_251,
+            "native_parallel_source_geometry_limited": 1,
             "native_parallel_wall_seconds": 1.0,
             "fallback_reason_native_merged_empty_native_mesh": 3,
             "private_polygon_payload": [[1, 2], [3, 4]],
@@ -144,6 +146,9 @@ def test_native_mesh_timing_fields_are_bounded_and_prefixed() -> None:
         "native_mesh_fallback_s": 1.36,
         "native_mesh_parallel_workers": 3,
         "native_mesh_parallel_batch_count": 15,
+        "native_mesh_parallel_source_geometry_count": 2_251,
+        "native_mesh_parallel_source_geometry_limited": 1,
         "native_mesh_parallel_wall_s": 1.0,
         "native_mesh_fallback_native_merged_empty_count": 3,
     }
+    assert all(float(value) == value for value in fields.values())

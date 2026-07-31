@@ -35,6 +35,7 @@ NATIVE_COORD_SCALE = 1_000_000
 NATIVE_BATCH_MIN_PARALLEL_ITEMS = 3
 NATIVE_BATCH_MIN_PARALLEL_GROUPS = 8
 NATIVE_BATCH_MAX_WORKERS = 2
+NATIVE_BATCH_MAX_PARALLEL_SOURCE_GEOMETRIES = 3_000
 NATIVE_BATCH_ESTIMATED_WORKER_BYTES = 384 * 1024**2
 NATIVE_SURFACE_AREA_REL_TOL = 0.001
 NATIVE_SURFACE_AREA_ABS_TOL_MM2 = 0.01
@@ -101,9 +102,16 @@ class _ComputedNativeBatch:
     surface_rejects: int
 
 
-def _resolve_native_batch_workers(*, batch_count: int, group_count: int) -> int:
+def _resolve_native_batch_workers(
+    *,
+    batch_count: int,
+    group_count: int,
+    source_geometry_count: int,
+) -> int:
     """Resolve bounded workers for independent native mesh batches."""
 
+    if source_geometry_count > NATIVE_BATCH_MAX_PARALLEL_SOURCE_GEOMETRIES:
+        return 1
     return resolve_task_parallelism(
         "vector",
         work_items=batch_count,
@@ -354,6 +362,19 @@ def run_length_extrude_native_hybrid(
         slot_names=slot_names,
     )
     stats["run_group_count"] = len(run_groups)
+    try:
+        source_geometry_count = len(matched_shapes)
+    except TypeError:
+        source_geometry_count = len(
+            {
+                id(geom)
+                for geoms in run_groups.values()
+                for geom in geoms
+            }
+        )
+    stats["native_parallel_source_geometry_count"] = source_geometry_count
+    if source_geometry_count > NATIVE_BATCH_MAX_PARALLEL_SOURCE_GEOMETRIES:
+        stats["native_parallel_source_geometry_limited"] = 1
 
     jobs_by_height_z: dict[tuple[float, float], list[tuple[tuple[int, int, int], list]]] = defaultdict(list)
     for key, geoms in run_groups.items():
@@ -393,6 +414,7 @@ def run_length_extrude_native_hybrid(
     worker_count = _resolve_native_batch_workers(
         batch_count=len(batch_items),
         group_count=len(run_groups),
+        source_geometry_count=source_geometry_count,
     )
     stats["native_parallel_workers"] = worker_count
     stats["native_parallel_batch_count"] = len(batch_items)
@@ -401,6 +423,7 @@ def run_length_extrude_native_hybrid(
             module=module,
             batch_items=batch_items,
             run_group_count=len(run_groups),
+            source_geometry_count=source_geometry_count,
             worker_count=worker_count,
             scale_factor=float(scale_factor),
             slot_names=slot_names,
@@ -466,6 +489,8 @@ def _empty_stats() -> dict[str, float | int | str]:
         "native_triangulation_area_guard": "",
         "native_parallel_workers": 1,
         "native_parallel_batch_count": 0,
+        "native_parallel_source_geometry_count": 0,
+        "native_parallel_source_geometry_limited": 0,
         "native_parallel_wall_seconds": 0.0,
         "native_parallel_error": "",
         "native_parallel_requested_workers": 1,
@@ -707,6 +732,7 @@ def _try_run_native_batches_parallel(
     module,
     batch_items,
     run_group_count: int,
+    source_geometry_count: int,
     worker_count: int,
     scale_factor: float,
     slot_names,
@@ -716,6 +742,7 @@ def _try_run_native_batches_parallel(
 
     stats = _empty_stats()
     stats["run_group_count"] = run_group_count
+    stats["native_parallel_source_geometry_count"] = source_geometry_count
     stats["native_triangulation_area_guard"] = "present"
     stats["native_parallel_workers"] = worker_count
     stats["native_parallel_requested_workers"] = worker_count
