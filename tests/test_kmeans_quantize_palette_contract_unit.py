@@ -122,16 +122,132 @@ def test_masked_quantization_large_input_samples_only_selected_pixels(
     np.testing.assert_array_equal(result[~mask], image[~mask])
 
 
+def test_masked_large_quantization_does_not_alias_periodic_colors(
+    monkeypatch,
+) -> None:
+    """Large masked sampling must not lock onto one phase of a pattern."""
+    from core.pipeline.processing_ops import kmeans_quantizer
+
+    monkeypatch.setattr(kmeans_quantizer, "KMEANS_PIXEL_THRESHOLD", 8)
+    image = np.zeros((1, 17, 3), dtype=np.uint8)
+    image[0, :16:2] = [255, 0, 0]
+    image[0, 1:16:2] = [0, 255, 0]
+    image[0, 16] = [19, 23, 29]
+    mask = np.zeros((1, 17), dtype=bool)
+    mask[0, :16] = True
+
+    kmeans_quantizer._kmeans_cache.clear()
+    result = kmeans_quantizer.quantize_colors(
+        image,
+        n_colors=1,
+        seed=42,
+        mask=mask,
+    )
+    kmeans_quantizer._kmeans_cache.clear()
+    recomputed = kmeans_quantizer.quantize_colors(
+        image,
+        n_colors=1,
+        seed=42,
+        mask=mask,
+    )
+
+    np.testing.assert_array_equal(
+        np.unique(result[mask], axis=0),
+        [[127, 127, 0]],
+    )
+    np.testing.assert_array_equal(recomputed, result)
+    np.testing.assert_array_equal(result[~mask], image[~mask])
+
+
+def test_all_true_mask_reuses_unmasked_large_image_behavior_and_cache(
+    monkeypatch,
+) -> None:
+    """An all-selected mask is exactly equivalent to omitting the mask."""
+    from core.pipeline.processing_ops import kmeans_quantizer
+
+    monkeypatch.setattr(kmeans_quantizer, "KMEANS_PIXEL_THRESHOLD", 8)
+    image = np.empty((4, 4, 3), dtype=np.uint8)
+    image.reshape(-1, 3)[0::2] = [255, 0, 0]
+    image.reshape(-1, 3)[1::2] = [0, 255, 0]
+    mask = np.ones((4, 4), dtype=bool)
+
+    kmeans_quantizer._kmeans_cache.clear()
+    unmasked = kmeans_quantizer.quantize_colors(image, n_colors=1, seed=42)
+    masked = kmeans_quantizer.quantize_colors(
+        image,
+        n_colors=1,
+        seed=42,
+        mask=mask,
+    )
+
+    np.testing.assert_array_equal(masked, unmasked)
+    assert len(kmeans_quantizer._kmeans_cache) == 1
+
+
+def test_partial_mask_large_quantization_cache_keeps_current_air(
+    monkeypatch,
+) -> None:
+    """Partial-mask cache hits reuse visible results but not stale air RGB."""
+    from core.pipeline.processing_ops import kmeans_quantizer
+
+    monkeypatch.setattr(kmeans_quantizer, "KMEANS_PIXEL_THRESHOLD", 8)
+    mask = np.zeros((5, 5), dtype=bool)
+    mask[:4, :4] = True
+
+    first = np.full((5, 5, 3), 255, dtype=np.uint8)
+    first_visible = np.empty((16, 3), dtype=np.uint8)
+    first_visible[0::2] = [255, 0, 0]
+    first_visible[1::2] = [0, 255, 0]
+    first[mask] = first_visible
+
+    second = np.zeros((5, 5, 3), dtype=np.uint8)
+    second[mask] = first_visible
+
+    kmeans_quantizer._kmeans_cache.clear()
+    first_result = kmeans_quantizer.quantize_colors(
+        first,
+        n_colors=1,
+        seed=42,
+        mask=mask,
+    )
+    second_result = kmeans_quantizer.quantize_colors(
+        second,
+        n_colors=1,
+        seed=42,
+        mask=mask,
+    )
+
+    np.testing.assert_array_equal(
+        np.unique(first_result[mask], axis=0),
+        [[127, 127, 0]],
+    )
+    np.testing.assert_array_equal(second_result[mask], first_result[mask])
+    np.testing.assert_array_equal(first_result[~mask], first[~mask])
+    np.testing.assert_array_equal(second_result[~mask], second[~mask])
+    assert len(kmeans_quantizer._kmeans_cache) == 1
+
+
 def test_masked_quantization_cache_hashes_every_selected_pixel() -> None:
     """Unsampled selected RGB changes must not reuse another image's result."""
     from core.pipeline.processing_ops import kmeans_quantizer
 
-    mask = np.ones((100, 100), dtype=bool)
-    first = np.empty((100, 100, 3), dtype=np.uint8)
-    first.reshape(-1, 3)[0::2] = [255, 0, 0]
-    first.reshape(-1, 3)[1::2] = [0, 0, 255]
-    second = first.copy()
-    second.reshape(-1, 3)[1::2] = [0, 255, 0]
+    mask = np.ones((100, 101), dtype=bool)
+    mask[:, -1] = False
+    first_visible = np.empty((10_000, 3), dtype=np.uint8)
+    first_visible[0::2] = [255, 0, 0]
+    first_visible[1::2] = [0, 0, 255]
+    second_visible = first_visible.copy()
+    # The historical partial-mask key sampled selected_rgb[::2], so changing
+    # only odd visible positions must still invalidate the cache entry.
+    second_visible[1::2] = [0, 255, 0]
+
+    first = np.zeros((100, 101, 3), dtype=np.uint8)
+    first[mask] = first_visible
+    second = np.zeros((100, 101, 3), dtype=np.uint8)
+    second[mask] = second_visible
+
+    np.testing.assert_array_equal(first_visible[::2], second_visible[::2])
+    assert not np.array_equal(first_visible, second_visible)
 
     kmeans_quantizer._kmeans_cache.clear()
     kmeans_quantizer.quantize_colors(first, n_colors=1, seed=42, mask=mask)

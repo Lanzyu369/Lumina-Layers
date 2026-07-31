@@ -68,6 +68,26 @@ def _maybe_return_low_unique_input(
 KMEANS_PIXEL_THRESHOLD = 500_000
 
 
+def _stratified_sample_indices(
+    population_size: int,
+    sample_size: int,
+    seed: int,
+) -> np.ndarray:
+    """Return one reproducible random index from each contiguous stratum."""
+
+    boundaries = np.linspace(
+        0,
+        population_size,
+        num=sample_size + 1,
+        dtype=np.int64,
+    )
+    widths = np.diff(boundaries)
+    rng = np.random.default_rng(seed)
+    offsets = rng.integers(0, widths, dtype=np.int64)
+    boundaries[:-1] += offsets
+    return boundaries[:-1]
+
+
 def _nearest_center_sq(
     points_lab: np.ndarray,
     centers_lab: np.ndarray,
@@ -321,8 +341,14 @@ def quantize_colors(
             raise ValueError(
                 f"mask shape {mask_arr.shape} does not match RGB shape {(h, w)}"
             )
-        selected_rgb = np.ascontiguousarray(rgb[mask_arr], dtype=np.uint8)
-        total_pixels = int(selected_rgb.shape[0])
+        if bool(mask_arr.all()):
+            # All-selected input is semantically identical to no mask. Keep
+            # the historical INTER_AREA large-image path and cache key.
+            mask_arr = None
+            total_pixels = h * w
+        else:
+            selected_rgb = np.ascontiguousarray(rgb[mask_arr], dtype=np.uint8)
+            total_pixels = int(selected_rgb.shape[0])
     else:
         total_pixels = h * w
     if total_pixels == 0:
@@ -412,13 +438,14 @@ def quantize_colors(
             rgb_small = cv2.resize(rgb, (small_w, small_h), interpolation=cv2.INTER_AREA)
             pixels_small = rgb_small.reshape(-1, 3).astype(np.float32)
         else:
-            # A spatial resize would blend air into selected pixels. Sample
-            # only masked pixels while preserving scan-order distribution.
-            sample_indices = np.linspace(
-                0,
-                total_pixels - 1,
-                num=KMEANS_PIXEL_THRESHOLD,
-                dtype=np.intp,
+            # A spatial resize would blend air into selected pixels. Jittered
+            # stratified sampling covers the full selected sequence without
+            # phase-locking onto periodic pixel patterns. Its temporary index
+            # arrays are bounded by KMEANS_PIXEL_THRESHOLD, not image size.
+            sample_indices = _stratified_sample_indices(
+                total_pixels,
+                KMEANS_PIXEL_THRESHOLD,
+                seed,
             )
             pixels_small = selected_rgb[sample_indices].astype(np.float32)
 
