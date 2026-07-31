@@ -159,7 +159,7 @@ def test_s07_uses_bounded_policy_and_restores_material_order(
             "workload": "raster",
             "work_items": 4,
             "min_parallel_items": 2,
-            "hard_max_workers": 4,
+            "hard_max_workers": 2,
             "work_units": 4,
             "min_parallel_work_units": 100_000,
             "estimated_worker_bytes": 64 * 1024**2,

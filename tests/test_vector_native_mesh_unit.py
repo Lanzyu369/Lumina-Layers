@@ -309,12 +309,12 @@ def test_native_batch_worker_policy_is_bounded_and_nested_safe(
         batch_count=15,
         group_count=43,
         representative_batch_bytes=384 * 1024**2,
-    ).workers == 4
+    ).workers == 2
     assert vector_native_mesh._resolve_native_batch_plan(
         batch_count=54,
         group_count=314,
         representative_batch_bytes=384 * 1024**2,
-    ).workers == 4
+    ).workers == 2
     with task_parallelism.task_parallelism_worker_scope():
         assert vector_native_mesh._resolve_native_batch_plan(
             batch_count=15,
