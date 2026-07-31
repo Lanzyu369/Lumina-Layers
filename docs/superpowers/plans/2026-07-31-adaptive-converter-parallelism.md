@@ -1365,7 +1365,7 @@ git commit -m "docs(perf): record adaptive parallelism evidence"
 **Files:**
 - Verify: all files changed since `f01d3044`
 
-- [ ] **Step 1: Run focused backend coverage**
+- [x] **Step 1: Run focused backend coverage**
 
 Run:
 
@@ -1385,7 +1385,7 @@ Run:
 
 Expected: PASS.
 
-- [ ] **Step 2: Run logging governance and workflow smoke**
+- [x] **Step 2: Run logging governance and workflow smoke**
 
 Run:
 
@@ -1400,7 +1400,7 @@ Run:
 
 Expected: PASS without weakened thresholds.
 
-- [ ] **Step 3: Compile touched Python and check whitespace**
+- [x] **Step 3: Compile touched Python and check whitespace**
 
 Run:
 
@@ -1420,7 +1420,7 @@ git diff --check f01d3044...HEAD
 
 Expected: no output from compilation or `git diff --check`.
 
-- [ ] **Step 4: Inspect scope and accidental semantic changes**
+- [x] **Step 4: Inspect scope and accidental semantic changes**
 
 Run:
 
@@ -1435,7 +1435,7 @@ git diff f01d3044...HEAD -- \
 
 Expected: only scheduling, bounded diagnostics, tests, profiler support, and evidence changed; no geometry tolerance, recipe, material ordering, GLB, 3MF, or fallback algorithm changed.
 
-- [ ] **Step 5: Verify no project process remains**
+- [x] **Step 5: Verify no project process remains**
 
 Run:
 
@@ -1445,7 +1445,7 @@ ps -axo pid=,command= | rg 'api_server.py|start_all.py|vite|vitest|Lumina-studio
 
 Expected: no backend, frontend, watch test, or profiling child process started by this task remains.
 
-- [ ] **Step 6: Obtain final code review and address only in-scope findings**
+- [x] **Step 6: Obtain final code review and address only in-scope findings**
 
 Review the complete stacked diff against the approved design. Re-run the focused suite after every review fix. Classify any unverified environment-only gate as `partial` or `fix_not_verified`; do not convert it into a pass.
 

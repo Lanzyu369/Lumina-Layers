@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-31
 
-**Status:** `ready_for_final_gates`
+**Status:** `ready_for_stacked_review`
 
 **Branch:** `MOVIBALE/feat/adaptive-converter-parallelism`
 
@@ -224,16 +224,27 @@ Native corpus report:
 
 - `.scratch/adaptive-parallelism/native-corpus/vector_native_mesh_corpus.json`
 
-## Verification completed before repository gates
+## Verification
 
-- raster and native measured-tier regressions: `40 passed`;
-- final vector material and native regressions: `51 passed`;
+- final focused backend suite after review fixes: `241 passed`;
+- structured logging and exception-governance suite: `21 passed`;
+- fast log-quality workflow: `PASS`, 14 INFO records, zero warnings/errors,
+  and every budget/governance check passed;
+- smoke backend: `131 passed`, `5,056 deselected`;
+- smoke frontend: `150 passed` across 10 files;
+- ESLint: zero errors and 60 pre-existing warnings;
+- final vector material and native focused regression: `51 passed`;
 - native corpus: `1 PASS / 0 FAIL / 0 ERROR`;
 - every final raster/vector external reference: exact;
-- `git diff --check`: passed before each policy commit.
+- touched-file compilation and `git diff --check f01d3044...HEAD`: passed.
 
-Final focused, logging, smoke, and repository-wide gates are run separately
-after this evidence file is committed.
+The first smoke invocation inherited pnpm `11.9.0` from the desktop runtime
+instead of the repository-pinned `10.33.2`. It stopped before ESLint because
+pnpm 11 no longer reads the existing
+`package.json.pnpm.onlyBuiltDependencies` field. The same field exists on
+stacked base `f01d3044`. Re-running the complete smoke gate with cached pinned
+pnpm `10.33.2` passed; the pnpm 11 placeholder file was removed and no
+repository change was retained.
 
 ## 中文总结
 
