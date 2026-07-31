@@ -264,6 +264,41 @@ class TestCacheIsolation:
         assert not np.array_equal(first_result, fresh_second)
         np.testing.assert_array_equal(cached_second, fresh_second)
 
+    def test_tree_query_state_invalidates_cache_with_identical_data(self) -> None:
+        """KDTree topology settings are part of its cache identity."""
+
+        lut_lab = np.array(
+            [[250.0, 128.0, 128.0], [20.0, 128.0, 128.0]],
+            dtype=np.float64,
+        )
+        lut_rgb = np.array([[255, 0, 0], [0, 255, 0]], dtype=np.uint8)
+        image = np.zeros((1, 1, 3), dtype=np.uint8)
+        default_tree = KDTree(lut_lab)
+        periodic_tree = KDTree(lut_lab, boxsize=256)
+        np.testing.assert_array_equal(default_tree.data, periodic_tree.data)
+
+        first_result, cached_second, fresh_second = _run_lut_cache_transition(
+            image,
+            n_colors=2,
+            first_lab=lut_lab,
+            first_rgb=lut_rgb,
+            first_tree=default_tree,
+            second_lab=lut_lab,
+            second_rgb=lut_rgb,
+            second_tree=periodic_tree,
+            lut_fingerprint="same-tree-data-fingerprint",
+        )
+
+        np.testing.assert_array_equal(
+            first_result,
+            np.array([[[0, 255, 0]]], dtype=np.uint8),
+        )
+        np.testing.assert_array_equal(
+            fresh_second,
+            np.array([[[255, 0, 0]]], dtype=np.uint8),
+        )
+        np.testing.assert_array_equal(cached_second, fresh_second)
+
     def test_lut_lab_invalidates_cache_independently(self) -> None:
         """Lab rows affect constrained clustering even when RGB/tree are fixed."""
         from core.image_processing import LuminaImageProcessor

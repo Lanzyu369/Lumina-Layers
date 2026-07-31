@@ -40,6 +40,24 @@ def _stable_array_identity(array: np.ndarray) -> str:
     )
 
 
+def _stable_kdtree_identity(tree: KDTree) -> str:
+    """Hash stable KDTree state that controls exact query results."""
+
+    tree_type = type(tree)
+    digest = hashlib.sha256(
+        f"{tree_type.__module__}.{tree_type.__qualname__}".encode("utf-8")
+    )
+    digest.update(f"|data:{_stable_array_identity(tree.data)}".encode("utf-8"))
+    # SciPy documents the other constructor options as storage/performance
+    # controls; boxsize changes the metric by enabling toroidal topology.
+    if tree.boxsize is None:
+        boxsize_identity = "none"
+    else:
+        boxsize_identity = _stable_array_identity(np.asarray(tree.boxsize))
+    digest.update(f"|boxsize:{boxsize_identity}".encode("utf-8"))
+    return digest.hexdigest()
+
+
 def _resolve_cluster_count(requested_colors: int, sample_count: int) -> int:
     """Clamp the cluster count to the available sample count.
 
@@ -170,11 +188,11 @@ def _lut_constrained_quantize(
     rgb_identity = _stable_array_identity(rgb)
     lut_lab_identity = _stable_array_identity(lut_lab)
     lut_rgb_identity = _stable_array_identity(lut_rgb)
-    lut_tree_identity = _stable_array_identity(np.asarray(lut_tree.data))
+    lut_tree_identity = _stable_kdtree_identity(lut_tree)
     _cache_key = (
         f"{rgb_identity}_"
         f"{effective_k}_{seed}_"
-        f"lc2_lab_{lut_lab_identity}_"
+        f"lc3_lab_{lut_lab_identity}_"
         f"rgb_{lut_rgb_identity}_"
         f"tree_{lut_tree_identity}_"
         f"caller_{lut_fingerprint or ''}"
