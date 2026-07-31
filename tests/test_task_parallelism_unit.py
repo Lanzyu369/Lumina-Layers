@@ -434,3 +434,79 @@ def test_early_serial_plans_have_stable_reasons(
 
     assert plan.workers == 1
     assert plan.limiting_reason == expected_reason
+
+
+def test_unbounded_stage_scales_to_thirty_two_workers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LUMINA_VECTOR_PARALLELISM", raising=False)
+
+    plan = task_parallelism.resolve_task_parallelism_plan(
+        "vector",
+        work_items=512,
+        work_units=512,
+        min_parallel_work_units=32,
+        work_units_per_worker=16,
+        hard_max_workers=None,
+        estimated_worker_bytes=256 * 1024**2,
+        available_memory_bytes=64 * 1024**3,
+        effective_cpu_capacity=32,
+        outer_demand=1,
+    )
+
+    assert plan.workers == 32
+    assert plan.work_unit_ceiling == 32
+    assert plan.stage_ceiling == 32
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected_workers", "expected_reason"),
+    [
+        ({"outer_demand": 2}, 16, "cpu_fair_share"),
+        ({"work_items": 12}, 12, "work_items"),
+        ({"work_units": 128}, 8, "work_units"),
+        (
+            {
+                "estimated_worker_bytes": 1024**3,
+                "available_memory_bytes": 8 * 1024**3,
+            },
+            7,
+            "memory",
+        ),
+    ],
+)
+def test_unbounded_stage_uses_each_dynamic_resource_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+    overrides: dict[str, int],
+    expected_workers: int,
+    expected_reason: str,
+) -> None:
+    monkeypatch.delenv("LUMINA_VECTOR_PARALLELISM", raising=False)
+    inputs = {
+        "work_items": 512,
+        "work_units": 512,
+        "min_parallel_work_units": 32,
+        "work_units_per_worker": 16,
+        "hard_max_workers": None,
+        "effective_cpu_capacity": 32,
+        "outer_demand": 1,
+    }
+    inputs.update(overrides)
+
+    plan = task_parallelism.resolve_task_parallelism_plan(
+        "vector",
+        **inputs,
+    )
+
+    assert plan.workers == expected_workers
+    assert plan.limiting_reason == expected_reason
+
+
+def test_memory_headroom_is_dynamic_without_dropping_below_one_gib() -> None:
+    gib = 1024**3
+
+    assert task_parallelism.task_memory_headroom_bytes(2 * gib) == gib
+    assert (
+        task_parallelism.task_memory_headroom_bytes(64 * gib)
+        == (64 * gib) // 10
+    )
