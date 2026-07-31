@@ -777,7 +777,7 @@ Run:
 
 Expected: PASS with exact serial/parallel outputs.
 
-- [ ] **Step 7: Commit raster and vector material adoption**
+- [x] **Step 7: Commit raster and vector material adoption**
 
 ```bash
 git add \
@@ -796,7 +796,7 @@ git commit -m "feat(perf): adapt converter stage parallelism"
 - Modify: `core/vector_native_mesh.py`
 - Modify: `tests/test_vector_native_mesh_unit.py`
 
-- [ ] **Step 1: Write failing monotonic cost tests**
+- [x] **Step 1: Write failing monotonic cost tests**
 
 Add exact assertions:
 
@@ -821,7 +821,7 @@ def test_native_batch_cost_saturates_instead_of_overflowing() -> None:
 
 Verify Polygon, MultiPolygon, holes, empty geometries, and GeometryCollection counting without mutating geometries.
 
-- [ ] **Step 2: Write failing bounded-window and ordering tests**
+- [x] **Step 2: Write failing bounded-window and ordering tests**
 
 Instrument preparation, compute, and commit to assert:
 
@@ -833,7 +833,7 @@ Instrument preparation, compute, and commit to assert:
 - executor or commit inconsistency discards local output and reproduces the serial signature;
 - surface-rejection, native-error, fallback, path-cache, and output-mesh counters equal serial.
 
-- [ ] **Step 3: Run native tests and verify the red state**
+- [x] **Step 3: Run native tests and verify the red state**
 
 Run:
 
@@ -843,7 +843,7 @@ Run:
 
 Expected: FAIL on cost/window assertions and the old 3,000-geometry cliff.
 
-- [ ] **Step 4: Add immutable cost data to prepared batches**
+- [x] **Step 4: Add immutable cost data to prepared batches**
 
 Use:
 
@@ -872,7 +872,7 @@ class _PreparedNativeBatch:
 
 Count coordinates through Shapely geometry interfaces without unioning or changing precision. Compute byte terms with saturating add/multiply capped at `sys.maxsize`. Include fixed validation allowance in every non-empty batch. Refine path/ring/point counts after owner-thread packing.
 
-- [ ] **Step 5: Resolve workers from useful batches, not a global geometry count**
+- [x] **Step 5: Resolve workers from useful batches, not a global geometry count**
 
 Remove `NATIVE_BATCH_MAX_PARALLEL_SOURCE_GEOMETRIES` from worker selection and
 diagnostics. Build cheap per-batch estimates first. Set the local candidate
@@ -882,7 +882,7 @@ per-worker memory cost, so one oversized batch does not force all safe batches
 to serial. Pass that estimate to `resolve_task_parallelism_plan()`. Task 8 must
 restore the production ceiling to `2` unless every four-worker gate passes.
 
-- [ ] **Step 6: Replace all-batches-live execution with an ordered window**
+- [x] **Step 6: Replace all-batches-live execution with an ordered window**
 
 The loop must:
 
@@ -915,11 +915,11 @@ the owner thread, commit it, release references, then resume filling. Commit
 each future immediately when its original index is next; do not retain a
 completed-results list for all batches.
 
-- [ ] **Step 7: Preserve all-or-serial failure recovery**
+- [x] **Step 7: Preserve all-or-serial failure recovery**
 
 Keep local `meshes_by_slot`, stats, path cache, and copied extrusion cache inside the parallel attempt. Any executor, result-count, or commit invariant failure returns `(None, error_type)`; the caller then runs the unchanged serial `_run_native_job_batch()` loop from empty owner state.
 
-- [ ] **Step 8: Add bounded scalar native diagnostics**
+- [x] **Step 8: Add bounded scalar native diagnostics**
 
 Record:
 
@@ -937,7 +937,7 @@ native_parallel_oversized_serial_batches
 
 Remove `native_parallel_source_geometry_limited`. Keep source geometry count for profiling only.
 
-- [ ] **Step 9: Run native exactness and recovery tests**
+- [x] **Step 9: Run native exactness and recovery tests**
 
 Run:
 
