@@ -1482,10 +1482,10 @@ def _build_vector_processor(ctx: dict, *, fallback_color_mode: str):
 
 
 def _record_material_parallelism(
-    timings: dict[str, float],
+    timings: dict,
     vector_processor: object,
 ) -> None:
-    """Attach the effective material-matching worker count when available."""
+    """Attach bounded material-matching scheduling diagnostics when available."""
 
     matcher = getattr(vector_processor, "img_processor", None)
     worker_count = getattr(
@@ -1501,6 +1501,33 @@ def _record_material_parallelism(
         )
     except (TypeError, ValueError):
         return
+    plan = getattr(matcher, "effective_parallelism_plan", None)
+    if plan is None:
+        return
+    try:
+        plan_fields = {
+            "material_parallelism_limit": str(
+                plan.limiting_reason,
+            )[:64],
+            "material_parallelism_effective_cpu": float(
+                max(1, int(plan.effective_cpu_capacity)),
+            ),
+            "material_parallelism_outer_demand": float(
+                max(1, int(plan.outer_demand)),
+            ),
+            "material_parallelism_cpu_fair_share": float(
+                max(1, int(plan.cpu_fair_share_ceiling)),
+            ),
+            "material_parallelism_memory_ceiling": float(
+                max(1, int(plan.memory_ceiling)),
+            ),
+            "material_parallelism_demand_fallback": bool(
+                plan.demand_snapshot_fallback,
+            ),
+        }
+    except (AttributeError, TypeError, ValueError):
+        return
+    timings.update(plan_fields)
 
 
 _NATIVE_MESH_TIMING_FIELDS = {
@@ -2801,6 +2828,23 @@ def _run_vector_branch(ctx: dict) -> dict:
         return ctx
 
 
+def _structured_timing_payload(timings: dict) -> dict[str, float | str | bool]:
+    """Keep timing diagnostics JSON-safe without forcing labels to floats."""
+
+    payload: dict[str, float | str | bool] = {}
+    for key, value in timings.items():
+        if isinstance(value, bool):
+            payload[str(key)] = value
+        elif isinstance(value, str):
+            payload[str(key)] = value[:64]
+        else:
+            try:
+                payload[str(key)] = float(value)
+            except (TypeError, ValueError):
+                continue
+    return payload
+
+
 def _log_vector_timings(timings: dict) -> None:
     """Log vector branch timing breakdown.
     \u8f93\u51fa\u77e2\u91cf\u5206\u652f\u8ba1\u65f6\u660e\u7ec6\u3002
@@ -2810,6 +2854,7 @@ def _log_vector_timings(timings: dict) -> None:
     """
     if not timings:
         return
+    timing_payload = _structured_timing_payload(timings)
     log.debug(
         "Vector timings (s): "
         f"parse={timings.get('parse_s', 0.0):.3f}, "
@@ -2829,7 +2874,7 @@ def _log_vector_timings(timings: dict) -> None:
         f"total={timings.get('vector_branch_total_s', 0.0):.3f}",
         extra={
             "event": "vector_timings",
-            "timings": {str(key): float(value) for key, value in timings.items()},
+            "timings": timing_payload,
         },
     )
     log.info(
@@ -2837,6 +2882,6 @@ def _log_vector_timings(timings: dict) -> None:
         extra={
             "event": "vector_generate_timings",
             "duration_ms": round(float(timings.get("vector_branch_total_s", 0.0)) * 1000, 3),
-            "timings": {str(key): float(value) for key, value in timings.items()},
+            "timings": timing_payload,
         },
     )

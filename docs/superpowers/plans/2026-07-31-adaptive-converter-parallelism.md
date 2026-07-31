@@ -691,7 +691,7 @@ Run:
 
 Expected: PASS; `psutil` remains present in the release dependency list.
 
-- [ ] **Step 6: Commit the adaptive plan**
+- [x] **Step 6: Commit the adaptive plan**
 
 ```bash
 git add core/task_parallelism.py tests/test_task_parallelism_unit.py
@@ -708,7 +708,7 @@ git commit -m "feat(perf): resolve adaptive inner parallelism plans"
 - Modify: `tests/test_vector_material_matcher_unit.py`
 - Modify: `tests/test_vector_branch_extraction_unit.py`
 
-- [ ] **Step 1: Write failing raster adoption tests**
+- [x] **Step 1: Write failing raster adoption tests**
 
 Replace integer-resolver stubs with an `AdaptiveParallelismPlan` fixture and assert:
 
@@ -722,11 +722,11 @@ assert result["_hifi_timings"]["mesh_parallelism_memory_ceiling"] == 3
 
 Retain byte/array/mesh signatures between requested serial and requested parallel runs. Retain the test proving `LUMINA_DISABLE_PARALLEL_MESH=1` forces execution to one without changing outputs.
 
-- [ ] **Step 2: Write failing vector material adoption tests**
+- [x] **Step 2: Write failing vector material adoption tests**
 
 Assert the solver receives `plan.workers`, the matcher retains the diagnostics for the largest worker count it actually used, legacy lookup signatures still filter the `parallelism` keyword, and serial versus parallel produces identical `matched_rgb_unique`, `recipes_b2t`, and `delta_e`.
 
-- [ ] **Step 3: Verify the adoption tests fail**
+- [x] **Step 3: Verify the adoption tests fail**
 
 Run:
 
@@ -739,7 +739,7 @@ Run:
 
 Expected: FAIL because the sites still consume only an integer and do not expose plan fields.
 
-- [ ] **Step 4: Adopt the plan without changing executor work**
+- [x] **Step 4: Adopt the plan without changing executor work**
 
 In raster S07:
 
@@ -760,11 +760,11 @@ Keep the same material IDs, `_timed_generate_mesh`, `as_completed()` collection,
 
 In vector matching, retain the selected `AdaptiveParallelismPlan` next to `effective_parallelism_workers` and pass only `plan.workers` to `solver_cache.lookup()`. Do not change color sorting, cache keys, solver inputs, or returned arrays.
 
-- [ ] **Step 5: Map bounded diagnostics into existing timing payloads**
+- [x] **Step 5: Map bounded diagnostics into existing timing payloads**
 
 Add only scalar fields for workers, limiting reason, effective CPU, outer demand, CPU fair share, memory ceiling, and fallback flag. Keep the existing DEBUG events and add no new INFO event. `_record_material_parallelism()` must tolerate legacy processors with no plan.
 
-- [ ] **Step 6: Run focused adoption and exactness tests**
+- [x] **Step 6: Run focused adoption and exactness tests**
 
 Run:
 

@@ -17,6 +17,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from core.task_parallelism import AdaptiveParallelismPlan
 from core.vector_matchers import (
     MATERIAL_ARCHIVE_LUT_SENTINEL,
     MaterialVectorMatcher,
@@ -60,6 +61,9 @@ class _ParallelSolverCache(_StubSolverCache):
     def __init__(self, layer_count: int):
         super().__init__(layer_count)
         self.observed_parallelism: list[int] = []
+        self.returned_results: list[
+            tuple[np.ndarray, np.ndarray, np.ndarray]
+        ] = []
 
     def lookup(
         self,
@@ -72,11 +76,39 @@ class _ParallelSolverCache(_StubSolverCache):
     ):
         del neighbor_coherence
         self.observed_parallelism.append(int(parallelism))
-        return super().lookup(
+        result = super().lookup(
             unique_colors,
             materials,
             hue_weight=hue_weight,
         )
+        self.returned_results.append(tuple(value.copy() for value in result))
+        return result
+
+
+def _parallelism_plan(
+    workers: int,
+    *,
+    limiting_reason: str = "requested",
+    outer_demand: int = 1,
+) -> AdaptiveParallelismPlan:
+    """Build a deterministic plan for matcher adoption tests."""
+
+    effective_cpu = max(1, workers * outer_demand)
+    return AdaptiveParallelismPlan(
+        workers=workers,
+        requested_ceiling=max(1, workers),
+        effective_cpu_capacity=effective_cpu,
+        outer_demand=outer_demand,
+        cpu_fair_share_ceiling=max(1, effective_cpu // outer_demand),
+        work_item_ceiling=40,
+        work_unit_ceiling=4,
+        stage_ceiling=4,
+        memory_ceiling=max(1, workers),
+        available_memory_bytes=8 * 1024**3,
+        estimated_worker_bytes=256 * 1024**2,
+        limiting_reason=limiting_reason,
+        demand_snapshot_fallback=False,
+    )
 
 
 def _build_matcher(*, layer_count: int = 5, materials_count: int = 4) -> MaterialVectorMatcher:
@@ -239,7 +271,7 @@ class TestMaterialVectorMatcherSolveForFills:
             work_units: int,
             min_parallel_work_units: int,
             estimated_worker_bytes: int,
-        ) -> int:
+        ) -> AdaptiveParallelismPlan:
             policy_calls.append(
                 {
                     "workload": workload,
@@ -251,11 +283,14 @@ class TestMaterialVectorMatcherSolveForFills:
                     "estimated_worker_bytes": estimated_worker_bytes,
                 },
             )
-            return 3
+            return _parallelism_plan(
+                3,
+                limiting_reason="cpu_fair_share",
+            )
 
         monkeypatch.setattr(
             vector_matchers,
-            "resolve_task_parallelism",
+            "resolve_task_parallelism_plan",
             _resolve,
         )
 
@@ -276,6 +311,10 @@ class TestMaterialVectorMatcherSolveForFills:
         ]
         assert runtime.observed_parallelism == [3]
         assert matcher.effective_parallelism_workers == 3
+        assert matcher.effective_parallelism_plan == _parallelism_plan(
+            3,
+            limiting_reason="cpu_fair_share",
+        )
 
     def test_parallelism_keyword_is_filtered_for_legacy_runtime(
         self,
@@ -286,13 +325,59 @@ class TestMaterialVectorMatcherSolveForFills:
         matcher = _build_matcher()
         monkeypatch.setattr(
             vector_matchers,
-            "resolve_task_parallelism",
-            lambda *args, **kwargs: 4,
+            "resolve_task_parallelism_plan",
+            lambda *args, **kwargs: _parallelism_plan(4),
         )
 
         matcher.solve_for_fills([(10, 20, 30), (20, 30, 40)])
 
         assert matcher.lut_rgb.shape == (2, 3)
+
+    def test_serial_and_parallel_solver_outputs_are_byte_identical(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Worker allocation must not alter colors, recipes, or deltas."""
+
+        import core.vector_matchers as vector_matchers
+
+        fills = [
+            (10, 20, 30),
+            (20, 30, 40),
+            (30, 40, 50),
+            (40, 50, 60),
+        ]
+        serial = _build_matcher(layer_count=4, materials_count=3)
+        serial_runtime = _ParallelSolverCache(layer_count=4)
+        serial._solver_cache = serial_runtime  # noqa: SLF001
+        monkeypatch.setattr(
+            vector_matchers,
+            "resolve_task_parallelism_plan",
+            lambda *args, **kwargs: _parallelism_plan(1),
+        )
+        serial.solve_for_fills(fills)
+
+        parallel = _build_matcher(layer_count=4, materials_count=3)
+        parallel_runtime = _ParallelSolverCache(layer_count=4)
+        parallel._solver_cache = parallel_runtime  # noqa: SLF001
+        monkeypatch.setattr(
+            vector_matchers,
+            "resolve_task_parallelism_plan",
+            lambda *args, **kwargs: _parallelism_plan(3),
+        )
+        parallel.solve_for_fills(fills)
+
+        assert serial_runtime.observed_parallelism == [1]
+        assert parallel_runtime.observed_parallelism == [3]
+        for serial_value, parallel_value in zip(
+            serial_runtime.returned_results[0],
+            parallel_runtime.returned_results[0],
+            strict=True,
+        ):
+            assert serial_value.tobytes() == parallel_value.tobytes()
+        assert serial.lut_rgb.tobytes() == parallel.lut_rgb.tobytes()
+        assert serial.ref_stacks.tobytes() == parallel.ref_stacks.tobytes()
+        assert serial._fill_lab.tobytes() == parallel._fill_lab.tobytes()  # noqa: SLF001
 
     def test_invalid_vector_parallelism_uses_automatic_policy(
         self,
@@ -316,6 +401,11 @@ class TestMaterialVectorMatcherSolveForFills:
                 effective_cpu_count=8,
                 limiting_source="host_fallback",
             ),
+        )
+        monkeypatch.setattr(
+            task_parallelism,
+            "_available_memory_bytes",
+            lambda: 16 * 1024**3,
         )
         monkeypatch.setenv("LUMINA_VECTOR_PARALLELISM", "invalid")
         monkeypatch.setenv("LUMINA_MAX_WORKERS", "2")
