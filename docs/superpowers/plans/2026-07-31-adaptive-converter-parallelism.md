@@ -234,7 +234,7 @@ Run:
 
 Expected: PASS and no compiler output.
 
-- [ ] **Step 6: Commit the capacity probe**
+- [x] **Step 6: Commit the capacity probe**
 
 ```bash
 git add core/system_capacity.py tests/test_system_capacity_unit.py
@@ -247,7 +247,7 @@ git commit -m "feat(perf): detect effective CPU capacity"
 - Create: `core/task_parallelism_runtime.py`
 - Create: `tests/test_task_parallelism_runtime_unit.py`
 
-- [ ] **Step 1: Write failing snapshot and scope tests**
+- [x] **Step 1: Write failing snapshot and scope tests**
 
 Cover round-trip publication, queued demand above one, malformed JSON, wrong schema, negative and unreasonably large counts, missing files, concurrent reads during atomic updates, unique publisher paths, nested runtime scopes, and cleanup:
 
@@ -289,7 +289,7 @@ def test_runtime_scope_restores_the_previous_path(tmp_path: Path) -> None:
     assert current_demand_snapshot_path() is None
 ```
 
-- [ ] **Step 2: Verify the snapshot tests fail**
+- [x] **Step 2: Verify the snapshot tests fail**
 
 Run:
 
@@ -299,7 +299,7 @@ Run:
 
 Expected: FAIL because `core.task_parallelism_runtime` does not exist.
 
-- [ ] **Step 3: Implement typed state and atomic publisher**
+- [x] **Step 3: Implement typed state and atomic publisher**
 
 Use the exact public shapes:
 
@@ -385,20 +385,18 @@ class OuterDemandPublisher:
         try:
             with temporary_path.open("w", encoding="utf-8") as handle:
                 json.dump(payload, handle, separators=(",", ":"), sort_keys=True)
-                handle.flush()
-                os.fsync(handle.fileno())
             os.replace(temporary_path, self._snapshot_path)
         finally:
             temporary_path.unlink(missing_ok=True)
 ```
 
-Every update writes UTF-8 JSON containing only `version`, `generation`, `outstanding`, `outer_max_workers`, and `updated_monotonic_ns`. Write a unique temporary file in the publisher directory, flush and `os.fsync()`, then publish with `os.replace()`. Counter changes and generation changes occur under one `threading.Lock`. Clamp the demand used by readers to `max(1, min(outstanding, outer_max_workers))`; queued work is retained in the published `outstanding` field without creating impossible inner concurrency.
+Every update writes UTF-8 JSON containing only `version`, `generation`, `outstanding`, `outer_max_workers`, and `updated_monotonic_ns`. Close a unique temporary file in the publisher directory, then publish with `os.replace()`. This runtime-only control snapshot does not call `fsync`; it needs atomic visibility, not crash persistence. Counter changes and generation changes occur under one `threading.Lock`. Clamp the demand used by readers to `max(1, min(outstanding, outer_max_workers))`; queued work is retained in the published `outstanding` field without creating impossible inner concurrency.
 
-- [ ] **Step 4: Implement strict reader fallback and runtime scope**
+- [x] **Step 4: Implement strict reader fallback and runtime scope**
 
 `read_outer_demand()` accepts `str | os.PathLike[str] | None`. It returns fallback state when the file is absent, changes during a read, is not a JSON object, has a wrong version, or contains invalid integer bounds. The worker-local scope stores only a `Path` in `threading.local()` and restores nested state in `finally`.
 
-- [ ] **Step 5: Run snapshot tests and compile**
+- [x] **Step 5: Run snapshot tests and compile**
 
 Run:
 
