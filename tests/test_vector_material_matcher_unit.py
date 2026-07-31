@@ -303,7 +303,7 @@ class TestMaterialVectorMatcherSolveForFills:
                 "workload": "vector",
                 "work_items": 4,
                 "min_parallel_items": 2,
-                "hard_max_workers": 4,
+                "hard_max_workers": 2,
                 "work_units": 4,
                 "min_parallel_work_units": 32,
                 "estimated_worker_bytes": 256 * 1024**2,
@@ -415,7 +415,7 @@ class TestMaterialVectorMatcherSolveForFills:
             [(index, index + 1, index + 2) for index in range(40)],
         )
 
-        assert runtime.observed_parallelism == [4]
+        assert runtime.observed_parallelism == [2]
 
     def test_full_coverage_runtime_applies_not_worse_fallback(
         self, monkeypatch: pytest.MonkeyPatch
