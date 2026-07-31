@@ -8,6 +8,10 @@
 
 **Stacked base:** `MOVIBALE/feat/vector-native-mesh-throughput@f01d3044`
 
+**Merge gate:** stacked review only. Do not merge until Draft PR #540 lands
+and the parent native-mesh branch is rebased onto the resulting
+`origin/dev-refactor`.
+
 **Tested policy SHA:** `3d73eaaaaec723144fd7cda3e227f7641265b0f6`
 
 ## Verdict
@@ -265,3 +269,6 @@ repository change was retained.
 2 线程只有 0–2% 的不稳定收益，部分运行反而更慢且峰值更高，因此位图、
 矢量材质求解和矢量原生批次都拒绝 4 线程。这样得到的是可预测的 1/2
 线程动态策略，而不是为了偶尔更快而放大内存尾部。
+
+本分支只进入堆叠审核；Draft PR #540 合并、父层原生矢量分支完成变基前，
+不得合并本 PR。
