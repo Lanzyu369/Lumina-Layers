@@ -2,7 +2,12 @@
 
 **Date:** 2026-07-31
 
-**Status:** `ready_for_stacked_review`
+**Status:** `superseded_by_continuous_topology_aware_followup`
+
+**Superseded by:**
+`2026-08-01-high-core-adaptive-parallelism-results.md`. This document remains
+the historical evidence for the original one/two-worker policy on the
+development Mac; its fixed-two product decision is no longer current.
 
 **Branch:** `MOVIBALE/feat/adaptive-converter-parallelism`
 

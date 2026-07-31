@@ -141,13 +141,16 @@ and directly testable with injected CPU, demand, work, and memory values.
 `resolve_task_parallelism_plan()` keeps one compatibility parameter:
 
 ```python
-hard_max_workers: int | None = None
+hard_max_workers: int | None = 8
 ```
 
-`None` means that the stage adds no extra ceiling; the resolved stage ceiling
-is the effective process CPU count. A positive integer remains available for
-future stages that have a documented library or correctness constraint. The
-existing integer wrapper keeps the same return type.
+The legacy default remains eight for compatibility with existing callers.
+`None` is an explicit opt-in meaning that the stage adds no extra ceiling; the
+resolved stage ceiling is then the effective process CPU count. A positive
+integer remains available for future stages that have a documented library or
+correctness constraint. The existing integer wrapper keeps the same signature
+shape and return type. The three reviewed converter stages opt in with
+`hard_max_workers=None` at their call sites.
 
 The plan adds an optional useful-work density:
 

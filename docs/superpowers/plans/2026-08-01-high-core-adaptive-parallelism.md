@@ -49,7 +49,7 @@
 - Modify: `tests/test_task_parallelism_unit.py`
 - Modify: `core/task_parallelism.py`
 
-- [ ] **Step 1: Add failing high-core and proportional-work tests**
+- [x] **Step 1: Add failing high-core and proportional-work tests**
 
 Add deterministic tests equivalent to:
 
@@ -120,7 +120,7 @@ def test_memory_headroom_is_dynamic_without_dropping_below_one_gib() -> None:
     )
 ```
 
-- [ ] **Step 2: Run the new planner tests and confirm RED**
+- [x] **Step 2: Run the new planner tests and confirm RED**
 
 Run:
 
@@ -132,7 +132,7 @@ Run:
 Expected: failure because `work_units_per_worker` and dynamic memory headroom do
 not yet exist.
 
-- [ ] **Step 3: Implement optional caps, proportional work, and headroom**
+- [x] **Step 3: Implement optional caps, proportional work, and headroom**
 
 In `core/task_parallelism.py`, add:
 
@@ -163,9 +163,12 @@ def task_memory_headroom_bytes(available_memory_bytes: int) -> int:
 Change both resolver signatures to:
 
 ```python
-hard_max_workers: int | None = None,
+hard_max_workers: int | None = 8,
 work_units_per_worker: int | None = None,
 ```
+
+The shared default remains eight for compatibility. Reviewed converter stages
+explicitly pass `hard_max_workers=None` to opt into continuous CPU scaling.
 
 Resolve `stage_ceiling` after effective CPU:
 
@@ -197,7 +200,7 @@ Replace the fixed headroom subtraction with
 `task_memory_headroom_bytes(memory_available)`, pass the new keyword through
 the integer wrapper, and update both bilingual public docstrings.
 
-- [ ] **Step 4: Run the complete planner suite and confirm GREEN**
+- [x] **Step 4: Run the complete planner suite and confirm GREEN**
 
 Run:
 
@@ -208,7 +211,7 @@ Run:
 Expected: all planner tests pass, including existing explicit hard-cap and
 fail-closed behavior.
 
-- [ ] **Step 5: Commit the planner**
+- [x] **Step 5: Commit the planner**
 
 ```bash
 git add core/task_parallelism.py tests/test_task_parallelism_unit.py
@@ -223,7 +226,7 @@ git commit -m "feat(perf): scale task plans with available resources"
 - Modify: `core/pipeline/s07_mesh_generation.py`
 - Modify: `core/vector_matchers.py`
 
-- [ ] **Step 1: Change adoption tests to require no fixed stage cap**
+- [x] **Step 1: Change adoption tests to require no fixed stage cap**
 
 Update the raster policy-call expectation to contain:
 
@@ -252,7 +255,7 @@ Extend the exact-worker-limit raster test to include 12 workers and a
 Add a deterministic resolver test proving 512 useful colors on a 32-CPU,
 64-GiB-class input produces a 32-worker plan.
 
-- [ ] **Step 2: Run the adoption tests and confirm RED**
+- [x] **Step 2: Run the adoption tests and confirm RED**
 
 Run:
 
@@ -265,7 +268,7 @@ Run:
 Expected: policy-call assertions fail on the old fixed value `2` and the
 missing proportional-work keyword.
 
-- [ ] **Step 3: Remove both stage constants and pass continuous inputs**
+- [x] **Step 3: Remove both stage constants and pass continuous inputs**
 
 In raster S07, delete `_MESH_MAX_WORKERS` and call:
 
@@ -291,7 +294,7 @@ and call the planner with `hard_max_workers=None` plus
 `work_units_per_worker=_VECTOR_MATERIAL_WORK_UNITS_PER_WORKER`. Do not change
 cache lookup, result order, material recipes, or fallback behavior.
 
-- [ ] **Step 4: Run adoption and exact-output tests and confirm GREEN**
+- [x] **Step 4: Run adoption and exact-output tests and confirm GREEN**
 
 Run:
 
@@ -305,7 +308,7 @@ Run:
 
 Expected: all pass; serial/parallel byte-identity tests remain green.
 
-- [ ] **Step 5: Commit both adoption sites**
+- [x] **Step 5: Commit both adoption sites**
 
 ```bash
 git add core/pipeline/s07_mesh_generation.py core/vector_matchers.py \
@@ -320,7 +323,7 @@ git commit -m "feat(perf): lift fixed raster and material worker caps"
 - Modify: `tests/test_vector_native_mesh_unit.py`
 - Modify: `core/vector_native_mesh.py`
 
-- [ ] **Step 1: Add failing native high-core and cost tests**
+- [x] **Step 1: Add failing native high-core and cost tests**
 
 Replace the former fixed-two expectations with one/four behavior under an
 explicit four-worker ceiling, then add:
@@ -359,7 +362,7 @@ Add an upper-median test with estimated bytes `[10, 20, 30, 10_000]` expecting
 `30`, proving one outlier does not become the global estimate and a fixed
 worker count no longer chooses the sample.
 
-- [ ] **Step 2: Run the native tests and confirm RED**
+- [x] **Step 2: Run the native tests and confirm RED**
 
 Run:
 
@@ -370,7 +373,7 @@ Run:
 
 Expected: the old fixed-two cap and smallest-two representative logic fail.
 
-- [ ] **Step 3: Remove the native cap and align memory admission**
+- [x] **Step 3: Remove the native cap and align memory admission**
 
 Delete `NATIVE_BATCH_MAX_WORKERS` and
 `NATIVE_BATCH_MEMORY_HEADROOM_BYTES`. Import
@@ -407,7 +410,7 @@ usable_memory_bytes = max(
 Keep the existing owner-thread prepare/ordered-commit loop, actual live-byte
 check, oversized serial execution, and full serial retry unchanged.
 
-- [ ] **Step 4: Run native exactness and failure tests and confirm GREEN**
+- [x] **Step 4: Run native exactness and failure tests and confirm GREEN**
 
 Run:
 
@@ -418,7 +421,7 @@ Run:
 Expected: high-core plan reaches 32, window tests remain bounded, serial and
 parallel signatures remain identical, and every fallback test passes.
 
-- [ ] **Step 5: Commit native adoption**
+- [x] **Step 5: Commit native adoption**
 
 ```bash
 git add core/vector_native_mesh.py tests/test_vector_native_mesh_unit.py
@@ -432,7 +435,7 @@ git commit -m "feat(perf): scale native batches without a fixed cap"
 - Verify: supplied 8/12/15-color raster and vector assets
 - Modify: `docs/superpowers/specs/2026-07-31-adaptive-converter-parallelism-results.md`
 
-- [ ] **Step 1: Run all touched focused suites**
+- [x] **Step 1: Run all touched focused suites**
 
 Run:
 
@@ -451,7 +454,7 @@ Run:
 
 Expected: PASS with no changed quality assertions.
 
-- [ ] **Step 2: Run fresh serial and automatic semantic references**
+- [x] **Step 2: Run fresh serial and automatic semantic references**
 
 For each accepted representative, first run with the relevant
 `LUMINA_*_PARALLELISM=1`, then run automatic mode with the serial
@@ -491,7 +494,7 @@ Expected: every automatic report records
 repeatable end-to-end regression above 5%, retain the exact evidence and fix
 the work/memory model; do not restore a universal low cap.
 
-- [ ] **Step 3: Document measured versus simulated evidence**
+- [x] **Step 3: Document measured versus simulated evidence**
 
 Update the result document so it states:
 
@@ -505,7 +508,7 @@ Update the result document so it states:
 Include exact report paths and commands. Do not present simulated capacity as a
 high-end performance result.
 
-- [ ] **Step 4: Commit evidence documentation**
+- [x] **Step 4: Commit evidence documentation**
 
 ```bash
 git add docs/superpowers/specs/2026-07-31-adaptive-converter-parallelism-results.md \
@@ -520,7 +523,7 @@ git commit -m "docs(perf): record continuous high-core scheduling evidence"
 - Verify all changed files
 - Update Draft PR #544
 
-- [ ] **Step 1: Run repository safety gates**
+- [x] **Step 1: Run repository safety gates**
 
 Run:
 
@@ -540,7 +543,7 @@ git diff --check
 
 Expected: all commands pass; log-quality thresholds are unchanged.
 
-- [ ] **Step 2: Run the backend smoke gate**
+- [x] **Step 2: Run the backend smoke gate**
 
 Run:
 
@@ -551,7 +554,7 @@ Run:
 Expected: backend and frontend smoke checks pass with the repository-pinned
 pnpm runtime.
 
-- [ ] **Step 3: Perform verification-before-completion review**
+- [x] **Step 3: Perform verification-before-completion review**
 
 Compare `git diff <stacked-base>...HEAD` against every hard invariant in the
 design. Confirm there is no changed tolerance, geometry path, recipe behavior,
