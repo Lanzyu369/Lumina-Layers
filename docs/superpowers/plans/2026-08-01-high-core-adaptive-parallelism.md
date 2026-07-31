@@ -561,7 +561,7 @@ design. Confirm there is no changed tolerance, geometry path, recipe behavior,
 validation flag, or artifact construction. Check the working tree for generated
 profiles, source assets, logs, and caches; none may be committed.
 
-- [ ] **Step 4: Commit any review-only corrections and push**
+- [x] **Step 4: Commit any review-only corrections and push**
 
 ```bash
 git status --short
@@ -570,7 +570,7 @@ git push origin MOVIBALE/feat/adaptive-converter-parallelism
 
 Expected: push succeeds without force and the remote head matches local HEAD.
 
-- [ ] **Step 5: Update Draft PR #544**
+- [x] **Step 5: Update Draft PR #544**
 
 Add an English-first/Chinese-second PR section containing:
 
