@@ -61,7 +61,7 @@ _log = get_logger(__name__)
 
 MATERIAL_ARCHIVE_LUT_SENTINEL = "__material_archive__"
 _MIN_PARALLEL_VECTOR_FILL_COUNT = 32
-_VECTOR_MATERIAL_MAX_WORKERS = 2
+_VECTOR_MATERIAL_WORK_UNITS_PER_WORKER = 16
 _ESTIMATED_VECTOR_WORKER_BYTES = 256 * 1024**2
 
 
@@ -336,9 +336,12 @@ class MaterialVectorMatcher:
                 "vector",
                 work_items=int(new_arr.shape[0]),
                 min_parallel_items=2,
-                hard_max_workers=_VECTOR_MATERIAL_MAX_WORKERS,
+                hard_max_workers=None,
                 work_units=int(new_arr.shape[0]),
                 min_parallel_work_units=_MIN_PARALLEL_VECTOR_FILL_COUNT,
+                work_units_per_worker=(
+                    _VECTOR_MATERIAL_WORK_UNITS_PER_WORKER
+                ),
                 estimated_worker_bytes=_ESTIMATED_VECTOR_WORKER_BYTES,
             )
             effective_parallelism = parallelism_plan.workers

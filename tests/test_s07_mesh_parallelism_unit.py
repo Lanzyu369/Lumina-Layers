@@ -105,7 +105,7 @@ def test_s07_uses_bounded_policy_and_restores_material_order(
 ) -> None:
     """Thread completion order must not affect scene or material ordering."""
 
-    policy_calls: list[dict[str, int | str]] = []
+    policy_calls: list[dict[str, int | str | None]] = []
     pool_workers: list[int] = []
 
     def _resolve(
@@ -113,7 +113,7 @@ def test_s07_uses_bounded_policy_and_restores_material_order(
         *,
         work_items: int,
         min_parallel_items: int,
-        hard_max_workers: int,
+        hard_max_workers: int | None,
         work_units: int,
         min_parallel_work_units: int,
         estimated_worker_bytes: int,
@@ -159,7 +159,7 @@ def test_s07_uses_bounded_policy_and_restores_material_order(
             "workload": "raster",
             "work_items": 4,
             "min_parallel_items": 2,
-            "hard_max_workers": 2,
+            "hard_max_workers": None,
             "work_units": 4,
             "min_parallel_work_units": 100_000,
             "estimated_worker_bytes": 64 * 1024**2,
@@ -221,10 +221,14 @@ def test_s07_effective_one_executes_on_calling_thread(
     assert result["_hifi_timings"]["mesh_parallelism_workers"] == 1
 
 
-@pytest.mark.parametrize("worker_count", [2, 4])
+@pytest.mark.parametrize(
+    ("worker_count", "material_count"),
+    [(2, 4), (4, 4), (12, 12)],
+)
 def test_s07_uses_exact_effective_worker_limit(
     monkeypatch: pytest.MonkeyPatch,
     worker_count: int,
+    material_count: int,
 ) -> None:
     """The executor limit must equal the bounded policy decision."""
 
@@ -237,7 +241,7 @@ def test_s07_uses_exact_effective_worker_limit(
     monkeypatch.setattr(
         s07_mesh_generation,
         "get_mesher",
-        lambda *args, **kwargs: _DelayedBoxMesher(),
+        lambda *args, **kwargs: _RecordingMesher(),
     )
     monkeypatch.setattr(
         s07_mesh_generation,
@@ -251,7 +255,7 @@ def test_s07_uses_exact_effective_worker_limit(
     monkeypatch.setenv("LUMINA_RASTER_PARALLELISM", str(worker_count))
     monkeypatch.delenv("LUMINA_DISABLE_PARALLEL_MESH", raising=False)
 
-    result = s07_mesh_generation.run(_make_context(4))
+    result = s07_mesh_generation.run(_make_context(material_count))
 
     assert observed_workers == [worker_count]
     assert result["_hifi_timings"]["mesh_parallelism_requested"] == str(

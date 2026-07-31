@@ -26,7 +26,6 @@ from core.task_parallelism import (
 )
 
 _log = get_logger(__name__)
-_MESH_MAX_WORKERS = 2
 _MIN_PARALLEL_MESH_WORK_UNITS = 100_000
 _MIN_ESTIMATED_MESH_WORKER_BYTES = 64 * 1024**2
 _ESTIMATED_MESH_WORKER_BYTES_PER_VOXEL = 8
@@ -152,7 +151,7 @@ def run(ctx: dict) -> dict:
         "raster",
         work_items=num_materials,
         min_parallel_items=2,
-        hard_max_workers=_MESH_MAX_WORKERS,
+        hard_max_workers=None,
         work_units=int(np.asarray(full_matrix).size),
         min_parallel_work_units=_MIN_PARALLEL_MESH_WORK_UNITS,
         estimated_worker_bytes=_estimate_mesh_worker_bytes(full_matrix),

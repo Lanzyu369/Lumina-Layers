@@ -260,16 +260,17 @@ class TestMaterialVectorMatcherSolveForFills:
         matcher = _build_matcher(layer_count=4, materials_count=3)
         runtime = _ParallelSolverCache(layer_count=4)
         matcher._solver_cache = runtime  # noqa: SLF001
-        policy_calls: list[dict[str, int | str]] = []
+        policy_calls: list[dict[str, int | str | None]] = []
 
         def _resolve(
             workload: str,
             *,
             work_items: int,
             min_parallel_items: int,
-            hard_max_workers: int,
+            hard_max_workers: int | None,
             work_units: int,
             min_parallel_work_units: int,
+            work_units_per_worker: int,
             estimated_worker_bytes: int,
         ) -> AdaptiveParallelismPlan:
             policy_calls.append(
@@ -280,6 +281,7 @@ class TestMaterialVectorMatcherSolveForFills:
                     "hard_max_workers": hard_max_workers,
                     "work_units": work_units,
                     "min_parallel_work_units": min_parallel_work_units,
+                    "work_units_per_worker": work_units_per_worker,
                     "estimated_worker_bytes": estimated_worker_bytes,
                 },
             )
@@ -303,9 +305,10 @@ class TestMaterialVectorMatcherSolveForFills:
                 "workload": "vector",
                 "work_items": 4,
                 "min_parallel_items": 2,
-                "hard_max_workers": 2,
+                "hard_max_workers": None,
                 "work_units": 4,
                 "min_parallel_work_units": 32,
+                "work_units_per_worker": 16,
                 "estimated_worker_bytes": 256 * 1024**2,
             }
         ]
@@ -415,7 +418,7 @@ class TestMaterialVectorMatcherSolveForFills:
             [(index, index + 1, index + 2) for index in range(40)],
         )
 
-        assert runtime.observed_parallelism == [2]
+        assert runtime.observed_parallelism == [3]
 
     def test_full_coverage_runtime_applies_not_worse_fallback(
         self, monkeypatch: pytest.MonkeyPatch
