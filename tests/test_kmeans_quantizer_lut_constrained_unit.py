@@ -48,6 +48,40 @@ def _synthetic_image(palette_rgb: np.ndarray, h: int = 64, w: int = 64, seed: in
     return palette_rgb[labels]
 
 
+def _run_lut_cache_transition(
+    image: np.ndarray,
+    *,
+    n_colors: int,
+    first_lab: np.ndarray,
+    first_rgb: np.ndarray,
+    first_tree: KDTree,
+    second_lab: np.ndarray,
+    second_rgb: np.ndarray,
+    second_tree: KDTree,
+    lut_fingerprint: str | None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return first, cached-second, and fresh-second LUT results."""
+
+    def run(lab: np.ndarray, rgb: np.ndarray, tree: KDTree) -> np.ndarray:
+        return quantize_colors(
+            image,
+            n_colors=n_colors,
+            seed=42,
+            lut_lab=lab,
+            lut_rgb=rgb,
+            lut_tree=tree,
+            use_lut_constrained=True,
+            lut_fingerprint=lut_fingerprint,
+        )
+
+    kmeans_quantizer._kmeans_cache.clear()
+    first_result = run(first_lab, first_rgb, first_tree)
+    cached_second = run(second_lab, second_rgb, second_tree)
+    kmeans_quantizer._kmeans_cache.clear()
+    fresh_second = run(second_lab, second_rgb, second_tree)
+    return first_result, cached_second, fresh_second
+
+
 class TestRegressionContract:
     """Existing callers must get identical output when ``use_lut_constrained``
     is off or LUT data is absent — no silent behavioural change.
@@ -171,6 +205,119 @@ class TestCacheIsolation:
     """Module-level cache must partition entries by LUT fingerprint and flag.
     模块级缓存必须根据 LUT 指纹和开关隔离条目。
     """
+
+    @pytest.mark.parametrize("lut_fingerprint", [None, "reused-fingerprint"])
+    def test_actual_lut_data_invalidates_cache_when_fingerprint_is_untrusted(
+        self,
+        lut_fingerprint: str | None,
+    ) -> None:
+        """Missing or reused caller fingerprints cannot alias two LUTs."""
+        from core.image_processing import LuminaImageProcessor
+
+        image = np.array(
+            [[[255, 0, 0], [0, 0, 255]], [[0, 255, 0], [255, 255, 255]]],
+            dtype=np.uint8,
+        )
+        first_rgb = np.array([[255, 0, 0], [0, 0, 255]], dtype=np.uint8)
+        second_rgb = np.array([[0, 255, 0], [255, 255, 255]], dtype=np.uint8)
+        first_lab = LuminaImageProcessor._rgb_to_lab(first_rgb)
+        second_lab = LuminaImageProcessor._rgb_to_lab(second_rgb)
+
+        first_result, cached_second, fresh_second = _run_lut_cache_transition(
+            image,
+            n_colors=2,
+            first_lab=first_lab,
+            first_rgb=first_rgb,
+            first_tree=KDTree(first_lab),
+            second_lab=second_lab,
+            second_rgb=second_rgb,
+            second_tree=KDTree(second_lab),
+            lut_fingerprint=lut_fingerprint,
+        )
+
+        assert not np.array_equal(first_result, fresh_second)
+        np.testing.assert_array_equal(cached_second, fresh_second)
+
+    def test_tree_data_invalidates_cache_when_it_disagrees_with_lab(self) -> None:
+        """An independently supplied KDTree is part of cache identity."""
+        from core.image_processing import LuminaImageProcessor
+
+        lut_rgb = np.array([[255, 0, 0], [0, 255, 0]], dtype=np.uint8)
+        lut_lab = LuminaImageProcessor._rgb_to_lab(lut_rgb)
+        image = lut_rgb.reshape(1, 2, 3)
+        derived_tree = KDTree(lut_lab)
+        reversed_tree = KDTree(lut_lab[::-1].copy())
+        assert not np.array_equal(derived_tree.data, reversed_tree.data)
+
+        first_result, cached_second, fresh_second = _run_lut_cache_transition(
+            image,
+            n_colors=2,
+            first_lab=lut_lab,
+            first_rgb=lut_rgb,
+            first_tree=derived_tree,
+            second_lab=lut_lab,
+            second_rgb=lut_rgb,
+            second_tree=reversed_tree,
+            lut_fingerprint="same-lab-rgb-fingerprint",
+        )
+
+        assert not np.array_equal(first_result, fresh_second)
+        np.testing.assert_array_equal(cached_second, fresh_second)
+
+    def test_lut_lab_invalidates_cache_independently(self) -> None:
+        """Lab rows affect constrained clustering even when RGB/tree are fixed."""
+        from core.image_processing import LuminaImageProcessor
+
+        lut_rgb = np.array(
+            [[255, 0, 0], [0, 255, 0], [0, 0, 255]],
+            dtype=np.uint8,
+        )
+        lut_lab = LuminaImageProcessor._rgb_to_lab(lut_rgb)
+        lut_tree = KDTree(lut_lab)
+        image = np.array(
+            [[[255, 0, 0], [255, 0, 0], [0, 255, 0], [0, 0, 255]]],
+            dtype=np.uint8,
+        )
+
+        first_result, cached_second, fresh_second = _run_lut_cache_transition(
+            image,
+            n_colors=1,
+            first_lab=lut_lab,
+            first_rgb=lut_rgb,
+            first_tree=lut_tree,
+            second_lab=lut_lab[[1, 0, 2]],
+            second_rgb=lut_rgb,
+            second_tree=lut_tree,
+            lut_fingerprint="reused-fingerprint",
+        )
+
+        assert not np.array_equal(first_result, fresh_second)
+        np.testing.assert_array_equal(cached_second, fresh_second)
+
+    def test_lut_rgb_invalidates_cache_independently(self) -> None:
+        """RGB rows affect direct mapping even when Lab/tree are fixed."""
+        from core.image_processing import LuminaImageProcessor
+
+        first_rgb = np.array([[255, 0, 0], [0, 0, 255]], dtype=np.uint8)
+        second_rgb = np.array([[0, 255, 0], [255, 255, 255]], dtype=np.uint8)
+        lut_lab = LuminaImageProcessor._rgb_to_lab(first_rgb)
+        lut_tree = KDTree(lut_lab)
+        image = first_rgb.reshape(1, 2, 3)
+
+        first_result, cached_second, fresh_second = _run_lut_cache_transition(
+            image,
+            n_colors=2,
+            first_lab=lut_lab,
+            first_rgb=first_rgb,
+            first_tree=lut_tree,
+            second_lab=lut_lab,
+            second_rgb=second_rgb,
+            second_tree=lut_tree,
+            lut_fingerprint="reused-fingerprint",
+        )
+
+        assert not np.array_equal(first_result, fresh_second)
+        np.testing.assert_array_equal(cached_second, fresh_second)
 
     def test_full_image_rgb_changes_invalidate_cache(self) -> None:
         """LUT cache identity must include every source RGB pixel."""

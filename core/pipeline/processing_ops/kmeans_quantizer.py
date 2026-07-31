@@ -18,7 +18,7 @@ from scipy.spatial import KDTree
 _log = get_logger(__name__)
 
 
-# 模块级 K-Means 缓存：key = md5(rgb)[:16]_{n_colors}_{seed}
+# Module-level K-Means cache: SHA-256 identities cover output-affecting arrays.
 _kmeans_cache: dict = {}
 _KMEANS_CACHE_MAX = 4
 
@@ -28,6 +28,16 @@ def _stable_array_digest(array: np.ndarray) -> str:
 
     contiguous = np.ascontiguousarray(array)
     return hashlib.sha256(memoryview(contiguous).cast("B")).hexdigest()
+
+
+def _stable_array_identity(array: np.ndarray) -> str:
+    """Return a stable cache identity including array layout metadata."""
+
+    normalized = np.asarray(array)
+    return (
+        f"{normalized.shape}_{normalized.dtype.str}_"
+        f"{_stable_array_digest(normalized)}"
+    )
 
 
 def _resolve_cluster_count(requested_colors: int, sample_count: int) -> int:
@@ -157,11 +167,17 @@ def _lut_constrained_quantize(
     if effective_k <= 0:
         return rgb.copy()
 
-    rgb_fingerprint = _stable_array_digest(rgb)
+    rgb_identity = _stable_array_identity(rgb)
+    lut_lab_identity = _stable_array_identity(lut_lab)
+    lut_rgb_identity = _stable_array_identity(lut_rgb)
+    lut_tree_identity = _stable_array_identity(np.asarray(lut_tree.data))
     _cache_key = (
-        f"{rgb.shape}_{rgb.dtype.str}_{rgb_fingerprint}_"
+        f"{rgb_identity}_"
         f"{effective_k}_{seed}_"
-        f"lc1_{lut_fingerprint or ''}"
+        f"lc2_lab_{lut_lab_identity}_"
+        f"rgb_{lut_rgb_identity}_"
+        f"tree_{lut_tree_identity}_"
+        f"caller_{lut_fingerprint or ''}"
     )
     if _cache_key in _kmeans_cache:
         _log.debug("LUT-Constrained K-Means cache hit: %s", _cache_key)
