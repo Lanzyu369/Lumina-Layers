@@ -378,7 +378,7 @@ def _log_vector_preview_timings(
         extra={
             "event": "vector_preview_timings",
             "duration_ms": round(float(timings.get("vector_preview_total_s", 0.0)) * 1000, 3),
-            "timings": {str(key): float(value) for key, value in timings.items()},
+            "timings": _structured_timing_payload(timings),
             "image_path": str(ctx.get("image_path") or ""),
             "color_mode": str(ctx.get("color_mode") or ""),
             "target_width_mm": float(ctx.get("target_width_mm") or 0.0),
