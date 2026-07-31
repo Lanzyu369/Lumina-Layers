@@ -459,6 +459,23 @@ def test_unbounded_stage_scales_to_thirty_two_workers(
     assert plan.stage_ceiling == 32
 
 
+def test_omitted_stage_ceiling_preserves_legacy_eight_worker_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LUMINA_VECTOR_PARALLELISM", raising=False)
+
+    plan = task_parallelism.resolve_task_parallelism_plan(
+        "vector",
+        work_items=32,
+        available_memory_bytes=64 * 1024**3,
+        effective_cpu_capacity=32,
+        outer_demand=1,
+    )
+
+    assert plan.workers == 8
+    assert plan.stage_ceiling == 8
+
+
 def test_plan_keeps_windows_hybrid_topology_without_clamping_to_p_cores(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

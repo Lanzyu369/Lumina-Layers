@@ -217,7 +217,7 @@ def resolve_task_parallelism_plan(
     *,
     work_items: int,
     min_parallel_items: int = 2,
-    hard_max_workers: int | None = None,
+    hard_max_workers: int | None = 8,
     work_units: int | None = None,
     min_parallel_work_units: int = 0,
     work_units_per_worker: int | None = None,
@@ -238,9 +238,10 @@ def resolve_task_parallelism_plan(
             可独立执行的工作项数量。
         min_parallel_items: Minimum item count required before parallel work.
             启用并行所需的最少工作项数量。
-        hard_max_workers: Optional evidence-backed stage ceiling. ``None``
-            adds no ceiling below effective CPU capacity.
-            可选的阶段证据上限；``None`` 不低于有效 CPU 另设上限。
+        hard_max_workers: Evidence-backed stage ceiling, defaulting to the
+            legacy eight-worker limit. ``None`` adds no ceiling below
+            effective CPU capacity. 阶段证据上限，默认保留旧版八 worker
+            上限；``None`` 不低于有效 CPU 另设上限。
         work_units: Optional total amount of fine-grained work.
             可选的细粒度总工作量。
         min_parallel_work_units: Useful work represented by one worker tier.
@@ -425,7 +426,7 @@ def resolve_task_parallelism(
     *,
     work_items: int,
     min_parallel_items: int = 2,
-    hard_max_workers: int | None = None,
+    hard_max_workers: int | None = 8,
     work_units: int | None = None,
     min_parallel_work_units: int = 0,
     work_units_per_worker: int | None = None,
@@ -443,7 +444,9 @@ def resolve_task_parallelism(
         work_items: Independent item count. 独立工作项数量。
         min_parallel_items: Minimum items required for parallel work.
             启用并行所需的最少工作项。
-        hard_max_workers: Optional stage worker ceiling. 可选阶段 worker 上限。
+        hard_max_workers: Stage worker ceiling, defaulting to eight; ``None``
+            removes the stage-specific cap. 阶段 worker 上限，默认八；
+            ``None`` 表示不另设阶段上限。
         work_units: Optional fine-grained work amount. 可选细粒度工作量。
         min_parallel_work_units: Minimum useful work threshold.
             最小有效工作量阈值。
