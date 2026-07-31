@@ -133,6 +133,9 @@ describe("SettingsPanel base-layer-height modifier", () => {
   it("renders manual slicer app path controls", async () => {
     renderPanel();
 
+    fireEvent.click(
+      await screen.findByRole("button", { name: /手动设置/ }),
+    );
     expect(
       await screen.findByLabelText("手动切片软件路径"),
     ).toBeInTheDocument();
