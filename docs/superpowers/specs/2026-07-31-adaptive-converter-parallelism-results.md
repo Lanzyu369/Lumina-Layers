@@ -6,6 +6,8 @@
 
 **Branch:** `MOVIBALE/feat/adaptive-converter-parallelism`
 
+**Draft PR:** [#544](https://github.com/lumina-layer-studio/Lumina-studio/pull/544)
+
 **Stacked base:** `MOVIBALE/feat/vector-native-mesh-throughput@f01d3044`
 
 **Merge gate:** stacked review only. Do not merge until Draft PR #540 lands

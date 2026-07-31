@@ -1449,7 +1449,7 @@ Expected: no backend, frontend, watch test, or profiling child process started b
 
 Review the complete stacked diff against the approved design. Re-run the focused suite after every review fix. Classify any unverified environment-only gate as `partial` or `fix_not_verified`; do not convert it into a pass.
 
-- [ ] **Step 7: Push the topic branch and open a PR against the current stack**
+- [x] **Step 7: Push the topic branch and open a PR against the current stack**
 
 Run:
 
