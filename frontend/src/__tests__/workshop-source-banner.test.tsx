@@ -105,7 +105,7 @@ describe("WorkshopSourceBanner", () => {
 
   it("does not warn when the module and converter color libraries match", () => {
     const source = structuredClone(SOURCE);
-    rememberWorkshopHandoffColorLibraryId(source, LIBRARY.id);
+    rememberWorkshopHandoffColorLibraryId(source, LIBRARY.id, LIBRARY);
 
     render(
       <WorkshopSourceBanner
@@ -115,5 +115,74 @@ describe("WorkshopSourceBanner", () => {
     );
 
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("does not report a library change when the same selection finishes hydrating", () => {
+    const source = structuredClone(SOURCE);
+    const selectionKey =
+      '["legacy",["Bambu PLA RYBW"],"Bambu PLA RYBW"]';
+    rememberWorkshopHandoffColorLibraryId(
+      source,
+      LIBRARY.id,
+      LIBRARY,
+      selectionKey,
+    );
+
+    const { rerender } = render(
+      <WorkshopSourceBanner
+        source={source}
+        colorLibrary={LIBRARY}
+        colorLibrarySelectionKey={selectionKey}
+      />,
+    );
+
+    rerender(
+      <WorkshopSourceBanner
+        source={source}
+        colorLibrary={{
+          ...LIBRARY,
+          id: "lut:hydrated-palette",
+          colors: [
+            ...LIBRARY.colors,
+            {
+              id: "slot:1",
+              label: "Red",
+              hex: "#FF0000",
+              materialId: null,
+            },
+          ],
+        }}
+        colorLibrarySelectionKey={selectionKey}
+      />,
+    );
+
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("still reports a genuine print-library selection change", () => {
+    const source = structuredClone(SOURCE);
+    rememberWorkshopHandoffColorLibraryId(
+      source,
+      LIBRARY.id,
+      LIBRARY,
+      '["legacy",["Bambu PLA RYBW"],"Bambu PLA RYBW"]',
+    );
+
+    render(
+      <WorkshopSourceBanner
+        source={source}
+        colorLibrary={{
+          ...LIBRARY,
+          id: "lut:another-library",
+        }}
+        colorLibrarySelectionKey={
+          '["legacy",["Another LUT"],"Another LUT"]'
+        }
+      />,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "打印色库已变化；图纸原色不受影响，将按当前色库重新叠色。",
+    );
   });
 });

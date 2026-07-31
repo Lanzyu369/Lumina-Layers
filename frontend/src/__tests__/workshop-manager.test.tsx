@@ -1,11 +1,19 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
   waitFor,
   within,
 } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import type {
   InstalledWorkshopModule,
@@ -202,6 +210,10 @@ function renderManager(
 }
 
 describe("Workshop installable module manager", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   beforeEach(() => {
     localStorage.clear();
     useSettingsStore.setState({ language: "zh", theme: "light" });
@@ -247,6 +259,46 @@ describe("Workshop installable module manager", () => {
     ).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "回退" })).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "更新" }).length).toBeGreaterThan(0);
+  });
+
+  it("keeps the runtime mounted briefly when returning to the manager", async () => {
+    renderManager(
+      fakeApi([installed()]),
+      fakeStorage(true),
+      "desktop-secure",
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "打开" }),
+    );
+    expect(
+      screen.getByRole("region", { name: "候选模块沙箱" }),
+    ).toBeInTheDocument();
+
+    vi.useFakeTimers();
+    fireEvent.click(
+      screen.getByRole("button", { name: "返回创意工坊" }),
+    );
+
+    expect(
+      screen.getByRole("region", { name: "候选模块沙箱" }),
+    ).toBeInTheDocument();
+    expect(useWorkshopStore.getState().activeModule).not.toBeNull();
+
+    act(() => vi.advanceTimersByTime(349));
+    expect(
+      screen.getByRole("region", { name: "候选模块沙箱" }),
+    ).toBeInTheDocument();
+
+    act(() => vi.advanceTimersByTime(1));
+    expect(useWorkshopStore.getState().activeModule).toBeNull();
+    expect(
+      screen.getByRole("heading", { name: "创意工坊" }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "打开" }));
+    expect(
+      screen.getByRole("button", { name: "返回创意工坊" }),
+    ).toBeEnabled();
   });
 
   it("keeps the manager usable when the module-list response is malformed", async () => {

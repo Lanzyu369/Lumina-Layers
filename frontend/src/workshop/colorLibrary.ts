@@ -42,6 +42,16 @@ type WorkshopColorState = Pick<
   | "materialLayerHeightMm"
 >;
 
+export type WorkshopColorLibrarySelectionState = Pick<
+  ConverterState,
+  | "source_version"
+  | "lut_name"
+  | "lut_names"
+  | "selectedNativeBrandKey"
+  | "selectedNativeDbNames"
+  | "selectedMaterialDirNames"
+>;
+
 let materialCatalog = new Map<string, PublicMaterialSnapshot>();
 
 function stableHash(value: string): string {
@@ -312,7 +322,10 @@ interface ColorLibraryFlight {
 
 const colorLibraryFlights = new Map<string, ColorLibraryFlight>();
 
-function selectionKey(state: WorkshopColorState): string {
+export function getWorkshopColorLibrarySelectionKey(
+  state: WorkshopColorLibrarySelectionState =
+    useConverterStore.getState(),
+): string {
   if (state.source_version === "material") {
     return JSON.stringify([
       "material",
@@ -349,7 +362,7 @@ async function hydrateWorkshopColorLibrary(
 ): Promise<WorkshopColorLibrary | null> {
   assertNotAborted(signal);
   let state = useConverterStore.getState();
-  if (selectionKey(state) !== key) {
+  if (getWorkshopColorLibrarySelectionKey(state) !== key) {
     return null;
   }
 
@@ -361,7 +374,7 @@ async function hydrateWorkshopColorLibrary(
       const response = await loadMaterialCatalog(signal);
       assertNotAborted(signal);
       state = useConverterStore.getState();
-      if (selectionKey(state) !== key) {
+      if (getWorkshopColorLibrarySelectionKey(state) !== key) {
         return null;
       }
       updateWorkshopMaterialCatalog(response.materials ?? []);
@@ -383,7 +396,7 @@ async function hydrateWorkshopColorLibrary(
     await state.fetchLutCatalog(signal);
     assertNotAborted(signal);
     state = useConverterStore.getState();
-    if (selectionKey(state) !== key) {
+    if (getWorkshopColorLibrarySelectionKey(state) !== key) {
       return null;
     }
   }
@@ -398,7 +411,7 @@ async function hydrateWorkshopColorLibrary(
     assertNotAborted(signal);
   }
   state = useConverterStore.getState();
-  return selectionKey(state) === key
+  return getWorkshopColorLibrarySelectionKey(state) === key
     ? buildWorkshopColorLibrary(state)
     : null;
 }
@@ -458,7 +471,9 @@ export async function readWorkshopColorLibrary(
     return ready;
   }
 
-  const key = selectionKey(useConverterStore.getState());
+  const key = getWorkshopColorLibrarySelectionKey(
+    useConverterStore.getState(),
+  );
   let flight = colorLibraryFlights.get(key);
   if (!flight) {
     const controller = new AbortController();

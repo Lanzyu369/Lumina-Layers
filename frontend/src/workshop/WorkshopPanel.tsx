@@ -40,6 +40,7 @@ import {
 } from "./runtime/WorkshopFrame";
 import {
   compareWorkshopSemver,
+  WORKSHOP_RUNTIME_CLOSE_GRACE_MS,
   type WorkshopRuntimeMode,
 } from "./runtime/health";
 import {
@@ -509,7 +510,28 @@ export function WorkshopPanel({
     useState<UninstallPrompt | null>(null);
   const [githubRepository, setGithubRepository] = useState("");
   const [githubVersion, setGithubVersion] = useState("");
+  const [returningHome, setReturningHome] = useState(false);
+  const returnHomeTimerRef = useRef<number | null>(null);
   const snapshotIds = useRef(new Map<string, string>());
+
+  const handleReturnHome = useCallback(() => {
+    if (returnHomeTimerRef.current !== null) return;
+    setReturningHome(true);
+    returnHomeTimerRef.current = window.setTimeout(() => {
+      returnHomeTimerRef.current = null;
+      setReturningHome(false);
+      returnHome();
+    }, WORKSHOP_RUNTIME_CLOSE_GRACE_MS);
+  }, [returnHome]);
+
+  useEffect(
+    () => () => {
+      if (returnHomeTimerRef.current !== null) {
+        window.clearTimeout(returnHomeTimerRef.current);
+      }
+    },
+    [],
+  );
 
   const applyMutation = useCallback(
     (module: InstalledWorkshopModule | null) => {
@@ -1034,7 +1056,8 @@ export function WorkshopPanel({
           <div className="flex items-center justify-between gap-3">
             <button
               type="button"
-              onClick={returnHome}
+              onClick={handleReturnHome}
+              disabled={returningHome}
               className="inline-flex min-h-10 items-center gap-2 rounded-xl px-3 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-200/70 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[var(--focus-ring)] dark:text-slate-300 dark:hover:bg-slate-800/70 dark:hover:text-slate-50"
             >
               <span aria-hidden="true">←</span>

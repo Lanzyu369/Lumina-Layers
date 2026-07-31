@@ -3,26 +3,29 @@ import type {
   WorkshopColorLibrary,
   WorkshopRecipeSource,
 } from "./contracts";
-import { readWorkshopHandoffColorLibraryId } from "./handoffMetadata";
+import { hasWorkshopHandoffColorLibraryChanged } from "./handoffMetadata";
 
 interface WorkshopSourceBannerProps {
   source: WorkshopRecipeSource;
   colorLibrary: WorkshopColorLibrary | null;
+  colorLibrarySelectionKey?: string;
 }
 
 export default function WorkshopSourceBanner({
   source,
   colorLibrary,
+  colorLibrarySelectionKey,
 }: WorkshopSourceBannerProps) {
   const { t } = useI18n();
   const moduleLabel = t("workshop_source_banner_module_value")
     .replace("{id}", source.moduleId)
     .replace("{version}", source.moduleVersion);
-  const handoffColorLibraryId =
-    readWorkshopHandoffColorLibraryId(source);
   const colorLibraryChanged =
-    handoffColorLibraryId !== undefined &&
-    handoffColorLibraryId !== (colorLibrary?.id ?? null);
+    hasWorkshopHandoffColorLibraryChanged(
+      source,
+      colorLibrary,
+      colorLibrarySelectionKey,
+    );
 
   return (
     <section

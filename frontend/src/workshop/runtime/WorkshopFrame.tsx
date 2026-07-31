@@ -210,6 +210,9 @@ export function WorkshopFrame({
   const prepareCandidateRef = useRef(prepareCandidate);
   const onStartFailureRef = useRef(onStartFailure);
   const disableVersionRef = useRef(disableVersion);
+  const candidatePropRef = useRef(module.candidate);
+  // Activation updates the prop mid-connection; keep startup intent separate.
+  const sessionCandidateRef = useRef(module.candidate);
   const [runtimeDocument, setRuntimeDocument] =
     useState<RuntimeDocument | null>(null);
   const [phase, setPhase] = useState<RuntimePhase>("preparing");
@@ -221,13 +224,16 @@ export function WorkshopFrame({
     useState<RuntimeError | null>(null);
   const runtimeModuleId = module.moduleId;
   const runtimeModuleVersion = module.moduleVersion;
-  const runtimeModuleCandidate = module.candidate;
   const runtimeApiMin = module.workshopApi.min;
   const runtimeApiMaxExclusive =
     module.workshopApi.maxExclusive;
   const runtimePermissionsJson = JSON.stringify(
     module.permissions,
   );
+
+  useEffect(() => {
+    candidatePropRef.current = module.candidate;
+  }, [module.candidate]);
 
   useEffect(() => {
     prepareCandidateRef.current = prepareCandidate;
@@ -299,6 +305,8 @@ export function WorkshopFrame({
   );
 
   useEffect(() => {
+    const sessionCandidate = candidatePropRef.current;
+    sessionCandidateRef.current = sessionCandidate;
     mountedRef.current = true;
     handshakeAcceptedRef.current = false;
     frameLoadedRef.current = false;
@@ -334,7 +342,7 @@ export function WorkshopFrame({
         return;
       }
       setPhase("preparing");
-      if (module.candidate) {
+      if (sessionCandidate) {
         if (prepareCandidateRef.current === undefined) {
           failStartup("candidate-prepare-failed");
           return;
@@ -393,7 +401,6 @@ export function WorkshopFrame({
     failStartup,
     loadBrowserRuntime,
     module.browserRuntimeHtml,
-    module.candidate,
     module.enabled,
     module.moduleId,
     module.moduleVersion,
@@ -477,7 +484,7 @@ export function WorkshopFrame({
         "lifecycle.ready": async (payload, context) => {
           await upstreamReady?.(payload, context);
           try {
-            if (runtimeModuleCandidate) {
+            if (sessionCandidateRef.current) {
               if (activateCandidate === undefined) {
                 throw new Error(
                   "Candidate activation is unavailable.",
@@ -550,7 +557,6 @@ export function WorkshopFrame({
     onStartSuccess,
     runtimeApiMaxExclusive,
     runtimeApiMin,
-    runtimeModuleCandidate,
     runtimeModuleId,
     runtimeModuleVersion,
     runtimePermissionsJson,

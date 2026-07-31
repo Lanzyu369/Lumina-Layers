@@ -7,6 +7,10 @@ import {
   WorkshopProjectStorageError,
   assertWorkshopRecipeEnvelopeWithinQuota,
 } from "./projectStorage";
+import {
+  buildWorkshopColorLibrary,
+  getWorkshopColorLibrarySelectionKey,
+} from "./colorLibrary";
 import { rememberWorkshopHandoffColorLibraryId } from "./handoffMetadata";
 
 export const WORKSHOP_HANDOFF_MAX_BINARY_BYTES = 64 * 1024 * 1024;
@@ -432,6 +436,8 @@ export async function handoffWorkshopPngToConverter(
   rememberWorkshopHandoffColorLibraryId(
     handoff.recipeSource,
     handoff.colorLibraryId,
+    buildWorkshopColorLibrary(converter),
+    getWorkshopColorLibrarySelectionKey(converter),
   );
   converter.loadWorkshopImageIntoConverter({
     file,
