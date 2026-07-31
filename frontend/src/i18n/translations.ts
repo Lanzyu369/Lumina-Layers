@@ -2948,8 +2948,104 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "System Settings",
   },
   "settings.desc": {
-    zh: "管理缓存与运行时偏好设置，保持工作区轻量且稳定。",
-    en: "Manage cache and runtime preferences to keep the workspace light and stable.",
+    zh: "设置会自动保存在当前设备。",
+    en: "Settings are saved automatically on this device.",
+  },
+  "settings.category_nav_label": {
+    zh: "设置分类",
+    en: "Settings categories",
+  },
+  "settings.category_device": {
+    zh: "打印与切片",
+    en: "Printer & Slicer",
+  },
+  "settings.category_device_desc": {
+    zh: "默认打印机、喷嘴与切片软件",
+    en: "Default printer, nozzle, and slicer",
+  },
+  "settings.category_general": {
+    zh: "常规",
+    en: "General",
+  },
+  "settings.category_general_desc": {
+    zh: "通知与界面体验偏好",
+    en: "Notifications and interface preferences",
+  },
+  "settings.category_conversion": {
+    zh: "转换与精度",
+    en: "Conversion & Quality",
+  },
+  "settings.category_conversion_desc": {
+    zh: "颜色、SVG 与渐变处理",
+    en: "Color, SVG, and gradient handling",
+  },
+  "settings.category_maintenance": {
+    zh: "存储与维护",
+    en: "Storage & Maintenance",
+  },
+  "settings.category_maintenance_desc": {
+    zh: "清理临时文件与缓存",
+    en: "Clean temporary files and caches",
+  },
+  "settings.current_device_heading": {
+    zh: "当前设备",
+    en: "Current Device",
+  },
+  "settings.current_device_description": {
+    zh: "生成 3MF 时默认使用这组切片软件、打印机与喷嘴配置。",
+    en: "New 3MF exports use this slicer, printer, and nozzle configuration by default.",
+  },
+  "settings.change_device": {
+    zh: "更改设备",
+    en: "Change Device",
+  },
+  "settings.machine_dialog_title": {
+    zh: "选择打印设备",
+    en: "Choose Print Device",
+  },
+  "settings.machine_dialog_description": {
+    zh: "先选择切片软件，再搜索并选择兼容的打印机与喷嘴。",
+    en: "Choose a slicer, then search for a compatible printer and nozzle.",
+  },
+  "settings.machine_dialog_close": {
+    zh: "关闭",
+    en: "Close",
+  },
+  "settings.machine_dialog_done": {
+    zh: "完成",
+    en: "Done",
+  },
+  "settings.machine_search_label": {
+    zh: "搜索打印机",
+    en: "Search printers",
+  },
+  "settings.machine_search_placeholder": {
+    zh: "输入品牌或型号",
+    en: "Search by brand or model",
+  },
+  "settings.machine_search_empty": {
+    zh: "没有找到兼容的打印机",
+    en: "No compatible printers found",
+  },
+  "settings.machine_search_empty_hint": {
+    zh: "请尝试其他关键词，或切换上方的切片软件。",
+    en: "Try another search or change the slicer above.",
+  },
+  "settings.machine_options_loading": {
+    zh: "正在加载设备…",
+    en: "Loading devices…",
+  },
+  "settings.machine_thumbnail_fallback": {
+    zh: "设备",
+    en: "Device",
+  },
+  "settings.manual_setup_heading": {
+    zh: "手动设置切片软件",
+    en: "Manual Slicer Setup",
+  },
+  "settings.manual_setup_description": {
+    zh: "仅在自动检测不到本机切片软件时使用。",
+    en: "Use this only when the installed slicer cannot be detected automatically.",
   },
   "settings.maintenance": {
     zh: "维护",
@@ -2968,8 +3064,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Loading Witty Messages",
   },
   "settings.witty_loading_desc": {
-    zh: "在加载时显示趣味提示消息",
-    en: "Show witty messages during loading",
+    zh: "加载过程中显示轻松的提示语。",
+    en: "Show lighthearted messages while a task is loading.",
   },
   "settings.cache": {
     zh: "缓存管理",
@@ -3010,12 +3106,12 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Completion notifications",
   },
   "settings.completion_notifications_description": {
-    zh: "浏览器通知会在 Windows 或 macOS 上，于预览、模型生成、批量生成和校准生成完成时提醒你。此设置仅保存在当前浏览器中。",
-    en: "Browser notifications alert you on Windows or macOS when preview, model generation, batch generation, or calibration generation finishes. This setting is stored only in this browser.",
+    zh: "预览、模型、批量或校准生成完成时发送系统通知；此设置仅保存在当前浏览器。",
+    en: "Send a system notification when preview, model, batch, or calibration generation finishes. This setting is stored only in this browser.",
   },
   "settings.completion_notifications_enable_label": {
-    zh: "启用浏览器完成通知",
-    en: "Enable browser completion notifications",
+    zh: "完成通知",
+    en: "Completion notifications",
   },
   "settings.completion_notifications_hint": {
     zh: "开启时浏览器会申请通知权限；允许后，完成提醒会显示在 Windows 通知中心或 macOS 通知中心。",
@@ -3042,20 +3138,20 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "The notification permission request failed, so the feature remains off. Please try again later.",
   },
   "settings.solver_cache_density_heading": {
-    zh: "穷举数量",
-    en: "Exhaustive density",
+    zh: "颜色计算精度",
+    en: "Color calculation quality",
   },
   "settings.solver_cache_density_description": {
-    zh: "控制穷举缓存使用的 Lab 网格精度。默认走低档；开启后可选择更高档以保留更多可达配方、获得更低的色差。极高档把同一份耗材组合下所有物理可达的配方都各自保留，几乎不再因桶碰撞被丢弃。",
-    en: "Controls the Lab grid resolution used by the exhaustive cache. Defaults to low; opt in to higher tiers to keep more reachable recipes and get tighter color accuracy. The ultra tiers retain every physically reachable recipe in a given material × layer setup, virtually eliminating bucket-collision losses.",
+    zh: "允许选择更细的颜色搜索网格；精度越高，颜色匹配越细，查找时间也会略有增加。",
+    en: "Use a finer color-search grid for tighter matching, with a small increase in lookup time at higher tiers.",
   },
   "settings.solver_cache_density_enable_label": {
-    zh: "允许自定义穷举数量",
-    en: "Customise exhaustive density",
+    zh: "颜色计算精度",
+    en: "Color calculation quality",
   },
   "settings.solver_cache_density_default_hint": {
-    zh: "未开启时统一使用低档（64³），构建快、内存占用低。",
-    en: "When disabled, every build uses the low tier (64³) — fast to build, low memory.",
+    zh: "当前使用标准精度（64³）。",
+    en: "Currently using standard quality (64³).",
   },
   "settings.solver_cache_density_select_label": {
     zh: "穷举数量",
@@ -3090,16 +3186,16 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Builds use sparse storage, so memory grows with the number of physically reachable recipes (not with the tier) — even the ultra tiers stay lightweight. Per-lookup time grows mildly with tier but typically stays in the millisecond range. Existing caches are not overwritten — the first build at a new resolution produces a separate cache file.",
   },
   "settings.svg_pixels_per_mm_heading": {
-    zh: "高保真 SVG 采样密度",
-    en: "High-Fidelity SVG sampling density",
+    zh: "SVG 清晰度",
+    en: "SVG clarity",
   },
   "settings.svg_pixels_per_mm_description": {
-    zh: "控制 SVG 图片在高保真模式下先转成像素图时的清晰度。直接使用矢量模式处理 SVG 时不会使用这个设置。",
-    en: "Controls how sharply SVG images are rasterized before High-Fidelity processing. Native Vector mode does not use this setting.",
+    zh: "仅控制高保真模式下 SVG 转为像素图时的清晰度；矢量模式不受影响。",
+    en: "Controls SVG rasterization clarity only in High-Fidelity mode; Vector mode is unaffected.",
   },
   "settings.svg_pixels_per_mm_label": {
-    zh: "高保真 SVG 采样密度",
-    en: "High-Fidelity SVG sampling density",
+    zh: "采样密度",
+    en: "Sampling density",
   },
   "settings.svg_pixels_per_mm_tip": {
     zh: "仅在“高保真”模式处理 SVG 图片时生效；数值越大边缘越细，处理时间和内存占用也会增加。允许范围 2.0–50.0，步进 0.1。",
@@ -3110,20 +3206,20 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Reset default",
   },
   "settings.svg_pixels_per_mm_default_hint": {
-    zh: "默认值是 10.0 像素/毫米。这个设置不会改变直接矢量模式的 SVG 结果。",
-    en: "Default is 10.0 px/mm. This setting does not change SVG output in native Vector mode.",
+    zh: "默认值为 10.0 像素/毫米。",
+    en: "The default is 10.0 px/mm.",
   },
   "settings.auto_replace_gradient_heading": {
-    zh: "渐变自动换色",
-    en: "Auto replace gradient banding",
+    zh: "自动清理渐变条纹",
+    en: "Clean gradient banding automatically",
   },
   "settings.auto_replace_gradient_description": {
-    zh: "开启后，每次预览成功会自动把每一条海带纹渐变内的多个耗材色统一替换为组内代表色（组内像素最多的那一个），一键去掉渐变被量化切割出来的条纹。仍可在颜色工作站手动撤销或进一步调整。",
-    en: "When enabled, every successful preview automatically collapses each detected banding gradient to the group's representative colour (the material with the most pixels), erasing the stripes in one shot. You can still undo or fine-tune from the Color Workstation.",
+    zh: "预览完成后，将同一渐变中的近似耗材色合并为代表色；仍可在颜色工作站撤销或继续调整。",
+    en: "After preview, merge similar material colors in each gradient into one representative color. You can still undo or refine it in the Color Workstation.",
   },
   "settings.auto_replace_gradient_label": {
-    zh: "自动应用渐变换色",
-    en: "Auto-apply gradient replacement",
+    zh: "自动清理渐变条纹",
+    en: "Clean gradient banding automatically",
   },
   "settings.auto_replace_gradient_default_hint": {
     zh: "默认关闭：预览保留原始渐变，由你在颜色工作站里按需替换。",

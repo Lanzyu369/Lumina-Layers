@@ -131,6 +131,19 @@ function renderPanel() {
   );
 }
 
+async function openMachineDialog() {
+  const changeDeviceButton = await screen.findByRole("button", {
+    name: "更改设备",
+  });
+  await waitFor(() => {
+    expect(changeDeviceButton).toBeEnabled();
+  });
+  fireEvent.click(changeDeviceButton);
+  return screen.findByRole("dialog", {
+    name: "选择打印设备",
+  });
+}
+
 describe("SettingsPanel machine adapter registry UI", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -175,6 +188,7 @@ describe("SettingsPanel machine adapter registry UI", () => {
   it("renders registry thumbnail and normalizes selected device profile", async () => {
     renderPanel();
 
+    await openMachineDialog();
     const h2dCard = await screen.findByTestId("machine-adapter-card-bambu-h2d");
     const image = within(h2dCard).getByAltText("Bambu Lab H2D");
     expect(image).toHaveAttribute(
@@ -193,6 +207,10 @@ describe("SettingsPanel machine adapter registry UI", () => {
   it("renders visual printer cards and selecting one updates the active machine", async () => {
     renderPanel();
 
+    expect(
+      screen.queryByTestId("machine-adapter-card-bambu-h2d"),
+    ).not.toBeInTheDocument();
+    await openMachineDialog();
     const h2dCard = await screen.findByTestId("machine-adapter-card-bambu-h2d");
     const p1sCard = await screen.findByTestId("machine-adapter-card-bambu-p1s");
 
@@ -218,6 +236,7 @@ describe("SettingsPanel machine adapter registry UI", () => {
   it("keeps wider nozzle sizes hidden for slicers that have not enabled them", async () => {
     renderPanel();
 
+    await openMachineDialog();
     await screen.findByTestId("machine-adapter-card-bambu-h2d");
 
     const h2dNozzle02 = await screen.findByTestId("machine-adapter-nozzle-bambu-h2d-0_2");
@@ -259,6 +278,7 @@ describe("SettingsPanel machine adapter registry UI", () => {
 
     renderPanel();
 
+    await openMachineDialog();
     fireEvent.click(await screen.findByRole("combobox", { name: "切片软件" }));
     fireEvent.click(await screen.findByRole("option", { name: "OrcaSlicer" }));
 
@@ -274,6 +294,7 @@ describe("SettingsPanel machine adapter registry UI", () => {
   it("shows the selected and listed slicer logos in the settings dropdown", async () => {
     renderPanel();
 
+    await openMachineDialog();
     const slicerDropdown = await screen.findByRole("combobox", {
       name: "切片软件",
     });
@@ -304,6 +325,7 @@ describe("SettingsPanel machine adapter registry UI", () => {
     });
     renderPanel();
 
+    await openMachineDialog();
     await screen.findByTestId("machine-adapter-card-flashforge-guider-3-ultra");
     expect(
       screen.queryByTestId("machine-adapter-nozzle-flashforge-guider-3-ultra-0_25"),
@@ -349,10 +371,11 @@ describe("SettingsPanel machine adapter registry UI", () => {
 
     fireEvent.click(screen.getByRole("button", { name: translations.widget_retry.zh }));
 
-    expect(await screen.findByTestId("machine-adapter-card-bambu-h2d")).toBeInTheDocument();
     await waitFor(() => {
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     });
+    await openMachineDialog();
+    expect(await screen.findByTestId("machine-adapter-card-bambu-h2d")).toBeInTheDocument();
     expect(systemApi.getPrinters).toHaveBeenCalledTimes(2);
   });
 
@@ -369,6 +392,7 @@ describe("SettingsPanel machine adapter registry UI", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(
       "Slicer registry unavailable",
     );
+    await openMachineDialog();
     expect(await screen.findByTestId("machine-adapter-card-bambu-h2d")).toBeInTheDocument();
   });
 });
