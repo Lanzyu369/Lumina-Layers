@@ -120,3 +120,34 @@ def test_masked_quantization_large_input_samples_only_selected_pixels(
     assert result.shape == image.shape
     assert np.unique(result[mask], axis=0).shape[0] <= 4
     np.testing.assert_array_equal(result[~mask], image[~mask])
+
+
+def test_masked_quantization_cache_hashes_every_selected_pixel() -> None:
+    """Unsampled selected RGB changes must not reuse another image's result."""
+    from core.pipeline.processing_ops import kmeans_quantizer
+
+    mask = np.ones((100, 100), dtype=bool)
+    first = np.empty((100, 100, 3), dtype=np.uint8)
+    first.reshape(-1, 3)[0::2] = [255, 0, 0]
+    first.reshape(-1, 3)[1::2] = [0, 0, 255]
+    second = first.copy()
+    second.reshape(-1, 3)[1::2] = [0, 255, 0]
+
+    kmeans_quantizer._kmeans_cache.clear()
+    kmeans_quantizer.quantize_colors(first, n_colors=1, seed=42, mask=mask)
+    cached_second = kmeans_quantizer.quantize_colors(
+        second,
+        n_colors=1,
+        seed=42,
+        mask=mask,
+    )
+
+    kmeans_quantizer._kmeans_cache.clear()
+    recomputed_second = kmeans_quantizer.quantize_colors(
+        second,
+        n_colors=1,
+        seed=42,
+        mask=mask,
+    )
+
+    np.testing.assert_array_equal(cached_second, recomputed_second)

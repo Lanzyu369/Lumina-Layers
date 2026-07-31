@@ -367,21 +367,24 @@ def quantize_colors(
     if low_unique_result is not None:
         return low_unique_result if selected_rgb is None else rgb.copy()
 
-    # 缓存查找：用轻量指纹（shape + 采样像素 + 参数）避免全量 hash。
+    # Unmasked calls retain the historical sampled fingerprint. Masked calls
+    # hash every selected RGB so unsampled visible changes cannot alias.
     if selected_rgb is None:
         _sample = rgb[
             :: max(1, rgb.shape[0] // 32),
             :: max(1, rgb.shape[1] // 32),
         ].tobytes()
+        _rgb_fingerprint = f"{len(_sample)}_{hash(_sample)}"
         _mask_fingerprint = ""
     else:
-        _sample_step = max(1, total_pixels // 4096)
-        _sample = selected_rgb[::_sample_step].tobytes()
+        # Masked results can be reused only when every selected RGB matches.
+        # A sampled key can alias images whose unsampled visible pixels differ.
+        _rgb_fingerprint = hashlib.sha256(selected_rgb).hexdigest()[:16]
         _mask_fingerprint = hashlib.sha256(
             np.ascontiguousarray(mask_arr).view(np.uint8)
         ).hexdigest()[:16]
     _cache_key = (
-        f"{rgb.shape}_{len(_sample)}_{hash(_sample)}_"
+        f"{rgb.shape}_{_rgb_fingerprint}_"
         f"{effective_n_colors}_{seed}_"
         f"lc{int(use_lut_constrained)}_{lut_fingerprint or ''}_"
         f"mask{_mask_fingerprint}"
