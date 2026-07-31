@@ -27,6 +27,7 @@ from shapely.ops import unary_union
 from core.task_parallelism import (
     AdaptiveParallelismPlan,
     resolve_task_parallelism_plan,
+    task_memory_headroom_bytes,
     task_parallelism_worker_scope,
 )
 from core.vector_engine import VectorProcessor, _union_run_group_geometries
@@ -36,14 +37,12 @@ NATIVE_CLOSE_DELTA_MM = 0.03
 NATIVE_COORD_SCALE = 1_000_000
 NATIVE_BATCH_MIN_PARALLEL_ITEMS = 3
 NATIVE_BATCH_MIN_PARALLEL_GROUPS = 8
-NATIVE_BATCH_MAX_WORKERS = 2
 NATIVE_BATCH_FIXED_VALIDATION_BYTES = 384 * 1024**2
 NATIVE_BATCH_INPUT_BYTES_PER_POINT = 2 * np.dtype(np.float64).itemsize
 NATIVE_BATCH_MESH_BYTES_PER_POINT = 256
 NATIVE_BATCH_GROUP_OVERHEAD_BYTES = 64 * 1024
 NATIVE_BATCH_RING_OVERHEAD_BYTES = 4 * 1024
 NATIVE_BATCH_GEOMETRY_OVERHEAD_BYTES = 1024
-NATIVE_BATCH_MEMORY_HEADROOM_BYTES = 1024**3
 NATIVE_SURFACE_AREA_REL_TOL = 0.001
 NATIVE_SURFACE_AREA_ABS_TOL_MM2 = 0.01
 NATIVE_REQUIRED_GUARD_CAPABILITY = "triangulation_area_guard"
@@ -291,8 +290,7 @@ def _representative_batch_bytes(
     )
     if not estimates:
         return NATIVE_BATCH_FIXED_VALIDATION_BYTES
-    sample = estimates[:NATIVE_BATCH_MAX_WORKERS]
-    return max(sample)
+    return estimates[len(estimates) // 2]
 
 
 def _resolve_native_batch_plan(
@@ -307,7 +305,7 @@ def _resolve_native_batch_plan(
         "vector",
         work_items=batch_count,
         min_parallel_items=NATIVE_BATCH_MIN_PARALLEL_ITEMS,
-        hard_max_workers=NATIVE_BATCH_MAX_WORKERS,
+        hard_max_workers=None,
         work_units=group_count,
         min_parallel_work_units=NATIVE_BATCH_MIN_PARALLEL_GROUPS,
         estimated_worker_bytes=max(1, int(representative_batch_bytes)),
@@ -1000,10 +998,14 @@ def _try_run_native_batches_parallel(
     try:
         if len(cheap_batch_costs) != len(batch_items):
             raise RuntimeError("native batch estimate count mismatch")
+        available_memory_bytes = max(
+            0,
+            int(parallelism_plan.available_memory_bytes or 0),
+        )
         usable_memory_bytes = max(
             0,
-            int(parallelism_plan.available_memory_bytes or 0)
-            - NATIVE_BATCH_MEMORY_HEADROOM_BYTES,
+            available_memory_bytes
+            - task_memory_headroom_bytes(available_memory_bytes),
         )
         per_task_memory_budget_bytes = usable_memory_bytes // max(
             1,

@@ -276,7 +276,7 @@ def test_native_batch_cost_probe_failure_fails_closed() -> None:
     assert cost.estimated_bytes == sys.maxsize
 
 
-def test_native_batch_worker_policy_is_bounded_and_nested_safe(
+def test_native_batch_worker_policy_uses_requested_ceiling_and_nested_guard(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("LUMINA_VECTOR_PARALLELISM", "4")
@@ -309,18 +309,63 @@ def test_native_batch_worker_policy_is_bounded_and_nested_safe(
         batch_count=15,
         group_count=43,
         representative_batch_bytes=384 * 1024**2,
-    ).workers == 2
+    ).workers == 4
     assert vector_native_mesh._resolve_native_batch_plan(
         batch_count=54,
         group_count=314,
         representative_batch_bytes=384 * 1024**2,
-    ).workers == 2
+    ).workers == 4
     with task_parallelism.task_parallelism_worker_scope():
         assert vector_native_mesh._resolve_native_batch_plan(
             batch_count=15,
             group_count=43,
             representative_batch_bytes=384 * 1024**2,
         ).workers == 1
+
+
+def test_native_batch_plan_scales_to_thirty_two_workers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LUMINA_VECTOR_PARALLELISM", raising=False)
+    monkeypatch.setenv("LUMINA_MAX_WORKERS", "1")
+    monkeypatch.setattr(
+        task_parallelism,
+        "_available_memory_bytes",
+        lambda: 64 * 1024**3,
+    )
+    monkeypatch.setattr(
+        task_parallelism,
+        "get_effective_cpu_capacity",
+        lambda: EffectiveCpuCapacity(
+            host_cpu_count=32,
+            affinity_cpu_count=32,
+            cgroup_quota_cpu_count=None,
+            apple_performance_cpu_count=None,
+            effective_cpu_count=32,
+            limiting_source="affinity",
+        ),
+    )
+
+    plan = vector_native_mesh._resolve_native_batch_plan(
+        batch_count=44,
+        group_count=55,
+        representative_batch_bytes=384 * 1024**2,
+    )
+
+    assert plan.workers == 32
+    assert plan.stage_ceiling == 32
+
+
+def test_representative_batch_bytes_uses_upper_median_without_outlier_cap() -> None:
+    base_cost = vector_native_mesh._estimate_native_jobs_cost(
+        [((0, 0, 0), [_square()])],
+    )
+    costs = [
+        replace(base_cost, estimated_bytes=value)
+        for value in (10, 20, 30, 10_000)
+    ]
+
+    assert vector_native_mesh._representative_batch_bytes(costs) == 30
 
 
 def test_native_parallel_window_is_memory_bounded_and_commits_in_order(
