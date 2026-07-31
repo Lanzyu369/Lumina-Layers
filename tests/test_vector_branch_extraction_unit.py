@@ -130,7 +130,15 @@ def test_native_mesh_timing_fields_are_bounded_and_prefixed() -> None:
             "native_parallel_workers": 3,
             "native_parallel_batch_count": 15,
             "native_parallel_source_geometry_count": 2_251,
-            "native_parallel_source_geometry_limited": 1,
+            "native_parallel_limit_reason": "cpu_fair_share",
+            "native_parallel_effective_cpu": 8,
+            "native_parallel_outer_demand": 2,
+            "native_parallel_cpu_fair_share": 4,
+            "native_parallel_memory_ceiling": 3,
+            "native_parallel_demand_fallback": False,
+            "native_parallel_inflight_limit": 4,
+            "native_parallel_max_estimated_batch_bytes": 402_653_184,
+            "native_parallel_oversized_serial_batches": 1,
             "native_parallel_wall_seconds": 1.0,
             "fallback_reason_native_merged_empty_native_mesh": 3,
             "private_polygon_payload": [[1, 2], [3, 4]],
@@ -149,11 +157,19 @@ def test_native_mesh_timing_fields_are_bounded_and_prefixed() -> None:
         "native_mesh_parallel_workers": 3,
         "native_mesh_parallel_batch_count": 15,
         "native_mesh_parallel_source_geometry_count": 2_251,
-        "native_mesh_parallel_source_geometry_limited": 1,
+        "native_mesh_parallel_limit": "cpu_fair_share",
+        "native_mesh_parallel_effective_cpu": 8,
+        "native_mesh_parallel_outer_demand": 2,
+        "native_mesh_parallel_cpu_fair_share": 4,
+        "native_mesh_parallel_memory_ceiling": 3,
+        "native_mesh_parallel_demand_fallback": False,
+        "native_mesh_parallel_inflight_limit": 4,
+        "native_mesh_parallel_max_estimated_batch_bytes": 402_653_184,
+        "native_mesh_parallel_oversized_serial_batches": 1,
         "native_mesh_parallel_wall_s": 1.0,
         "native_mesh_fallback_native_merged_empty_count": 3,
     }
-    assert all(float(value) == value for value in fields.values())
+    assert "private_polygon_payload" not in fields
 
 
 def test_material_parallelism_plan_is_recorded_as_bounded_scalars() -> None:

@@ -1184,7 +1184,7 @@ def _parallelism_metadata(
     hifi_timings: dict[str, Any],
     vector_timings: dict[str, Any],
 ) -> dict[str, object]:
-    """Return requested and observed worker counts for one profile run."""
+    """Return bounded adaptive-scheduler metadata for one profile run."""
 
     env_var = (
         "LUMINA_RASTER_PARALLELISM"
@@ -1195,24 +1195,90 @@ def _parallelism_metadata(
     requested = "auto" if raw_requested is None else raw_requested.strip()
     if requested == "":
         requested = "<empty>"
-    raw_effective = (
-        hifi_timings.get("mesh_parallelism_workers")
-        if kind == "raster"
-        else vector_timings.get("material_parallelism_workers")
-    )
-    effective_workers: int | None
-    try:
-        effective_workers = (
-            None
-            if raw_effective is None
-            else max(1, int(float(raw_effective)))
+
+    def _first_value(*values):
+        return next((value for value in values if value is not None), None)
+
+    def _optional_int(value, *, minimum: int) -> int | None:
+        if isinstance(value, bool):
+            return None
+        try:
+            return max(minimum, int(float(value)))
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    def _optional_reason(value) -> str | None:
+        if value is None:
+            return None
+        reason = str(value).strip()
+        return reason[:64] if reason else None
+
+    def _optional_bool(value) -> bool | None:
+        if isinstance(value, bool):
+            return value
+        if value in (0, 1):
+            return bool(value)
+        return None
+
+    if kind == "raster":
+        stage_timings = hifi_timings
+        stage_prefix = "mesh_parallelism_"
+        native_timings: dict[str, Any] = {}
+    else:
+        stage_timings = vector_timings
+        stage_prefix = "material_parallelism_"
+        native_timings = vector_timings
+
+    def _stage_or_native(stage_suffix: str, native_suffix: str):
+        return _first_value(
+            stage_timings.get(f"{stage_prefix}{stage_suffix}"),
+            native_timings.get(f"native_mesh_parallel_{native_suffix}"),
         )
-    except (TypeError, ValueError):
-        effective_workers = None
+
     return {
-        "env_var": env_var,
         "requested": requested,
-        "effective_workers": effective_workers,
+        "observed_workers": _optional_int(
+            _stage_or_native("workers", "workers"),
+            minimum=1,
+        ),
+        "effective_cpu": _optional_int(
+            _stage_or_native("effective_cpu", "effective_cpu"),
+            minimum=1,
+        ),
+        "outer_demand": _optional_int(
+            _stage_or_native("outer_demand", "outer_demand"),
+            minimum=1,
+        ),
+        "cpu_fair_share": _optional_int(
+            _stage_or_native("cpu_fair_share", "cpu_fair_share"),
+            minimum=1,
+        ),
+        "memory_ceiling": _optional_int(
+            _stage_or_native("memory_ceiling", "memory_ceiling"),
+            minimum=1,
+        ),
+        "limiting_reason": _optional_reason(
+            _stage_or_native("limit", "limit"),
+        ),
+        "demand_snapshot_fallback": _optional_bool(
+            _stage_or_native("demand_fallback", "demand_fallback"),
+        ),
+        "native_inflight_limit": _optional_int(
+            native_timings.get("native_mesh_parallel_inflight_limit"),
+            minimum=1,
+        ),
+        "native_max_estimated_batch_bytes": _optional_int(
+            native_timings.get(
+                "native_mesh_parallel_max_estimated_batch_bytes",
+            ),
+            minimum=0,
+        ),
+        "native_oversized_serial_batches": _optional_int(
+            native_timings.get(
+                "native_mesh_parallel_oversized_serial_batches",
+            ),
+            minimum=0,
+        ),
     }
 
 

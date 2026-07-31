@@ -1543,8 +1543,23 @@ _NATIVE_MESH_TIMING_FIELDS = {
     "native_parallel_batch_count": "native_mesh_parallel_batch_count",
     "native_parallel_source_geometry_count":
         "native_mesh_parallel_source_geometry_count",
-    "native_parallel_source_geometry_limited":
-        "native_mesh_parallel_source_geometry_limited",
+    "native_parallel_limit_reason": "native_mesh_parallel_limit",
+    "native_parallel_effective_cpu":
+        "native_mesh_parallel_effective_cpu",
+    "native_parallel_outer_demand":
+        "native_mesh_parallel_outer_demand",
+    "native_parallel_cpu_fair_share":
+        "native_mesh_parallel_cpu_fair_share",
+    "native_parallel_memory_ceiling":
+        "native_mesh_parallel_memory_ceiling",
+    "native_parallel_demand_fallback":
+        "native_mesh_parallel_demand_fallback",
+    "native_parallel_inflight_limit":
+        "native_mesh_parallel_inflight_limit",
+    "native_parallel_max_estimated_batch_bytes":
+        "native_mesh_parallel_max_estimated_batch_bytes",
+    "native_parallel_oversized_serial_batches":
+        "native_mesh_parallel_oversized_serial_batches",
     "native_parallel_wall_seconds": "native_mesh_parallel_wall_s",
     "fallback_reason_native_merged_empty_native_mesh":
         "native_mesh_fallback_native_merged_empty_count",
@@ -1553,18 +1568,20 @@ _NATIVE_MESH_TIMING_FIELDS = {
 
 def _native_mesh_timing_fields(
     stats,
-) -> dict[str, float | int]:
+) -> dict[str, float | int | str | bool]:
     """Return the bounded scalar native-mesh timing view."""
 
     if not isinstance(stats, dict):
         return {}
-    result: dict[str, float | int] = {}
+    result: dict[str, float | int | str | bool] = {}
     for source_name, output_name in _NATIVE_MESH_TIMING_FIELDS.items():
         value = stats.get(source_name)
         if isinstance(value, bool):
-            result[output_name] = int(value)
+            result[output_name] = value
         elif isinstance(value, (int, float)):
             result[output_name] = value
+        elif isinstance(value, str):
+            result[output_name] = value[:64]
     return result
 
 

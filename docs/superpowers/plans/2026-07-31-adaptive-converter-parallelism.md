@@ -948,7 +948,7 @@ Run:
 
 Expected: PASS; serial and parallel signatures and all fallback/surface counters are equal.
 
-- [ ] **Step 10: Commit bounded native scheduling**
+- [x] **Step 10: Commit bounded native scheduling**
 
 ```bash
 git add core/vector_native_mesh.py tests/test_vector_native_mesh_unit.py
@@ -963,7 +963,7 @@ git commit -m "perf(vector): bound adaptive native batch execution"
 - Modify: `tests/test_vector_branch_extraction_unit.py`
 - Modify: `tests/test_converter_multicore_profile_unit.py`
 
-- [ ] **Step 1: Write failing report-contract tests**
+- [x] **Step 1: Write failing report-contract tests**
 
 Update the expected metadata object to contain:
 
@@ -985,7 +985,7 @@ assert metrics["parallelism"] == {
 
 Retain the legacy report test where new fields are absent; it must emit `None` for unavailable optional diagnostics rather than fail.
 
-- [ ] **Step 2: Verify report tests fail**
+- [x] **Step 2: Verify report tests fail**
 
 Run:
 
@@ -997,11 +997,11 @@ Run:
 
 Expected: FAIL because the mappings do not yet expose the new fields.
 
-- [ ] **Step 3: Map native stats and profiler metadata**
+- [x] **Step 3: Map native stats and profiler metadata**
 
 Add the new native timing-key mappings in `_NATIVE_MESH_TIMING_FIELDS`. Extend `_parallelism_metadata()` to read raster or vector plan fields and native window fields. Do not include filenames, colors, geometry data, recipes, or per-batch arrays.
 
-- [ ] **Step 4: Prove no new INFO event was introduced**
+- [x] **Step 4: Prove no new INFO event was introduced**
 
 Run:
 
