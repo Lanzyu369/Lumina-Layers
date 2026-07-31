@@ -720,6 +720,14 @@ def _record_native_parallelism_plan(
     stats["native_parallel_effective_cpu"] = int(
         plan.effective_cpu_capacity,
     )
+    stats["native_parallel_cpu_topology"] = str(plan.cpu_topology)[:64]
+    stats["native_parallel_cpu_scheduling_policy"] = str(
+        plan.cpu_scheduling_policy,
+    )[:64]
+    if plan.performance_cpu_capacity is not None:
+        stats["native_parallel_performance_cpu"] = int(
+            plan.performance_cpu_capacity,
+        )
     stats["native_parallel_outer_demand"] = int(plan.outer_demand)
     stats["native_parallel_cpu_fair_share"] = int(
         plan.cpu_fair_share_ceiling,

@@ -68,6 +68,9 @@ geometry applications:
 
 - oneTBB exposes `max_allowed_parallelism`; applications may apply an explicit
   maximum without replacing the scheduler's view of available concurrency;
+- oneTBB's hybrid-core guidance says the normal choice is to let the operating
+  system schedule work across all core types; core-type constraints are an
+  advanced exception, not a default worker-count formula;
 - PrusaSlicer uses the TBB task arena's available concurrency and clamps it
   only when the user provides a lower thread count;
 - Blender lets TBB choose the default and installs a global maximum only for
@@ -81,10 +84,15 @@ geometry applications:
   many top-level image operations;
 - GDAL supports all visible CPUs while treating memory/cache size as a separate
   resource budget.
+- Windows exposes `EfficiencyClass` in `SYSTEM_CPU_SET_INFORMATION`; larger
+  values identify faster, less energy-efficient CPU-set classes;
+- Linux capacity-aware scheduling represents unequal CPU capacities inside the
+  kernel and warns that one weight cannot characterize every workload equally.
 
 Primary references:
 
 - <https://github.com/uxlfoundation/oneTBB/blob/master/include/oneapi/tbb/global_control.h>
+- <https://uxlfoundation.github.io/oneTBB/main/reference/core_type_selector.html>
 - <https://github.com/prusa3d/PrusaSlicer/blob/b028299c770b8380ee81c921a2867d522f288123/src/libslic3r/Thread.cpp#L237-L246>
 - <https://github.com/blender/blender/blob/d13bbc114494f05716f60f9a5b63299c3ac63349/source/blender/blenlib/intern/task_scheduler.cc#L36-L54>
 - <https://github.com/libvips/libvips/blob/2ff898f0a1637c45d15db532a7fbe2d30cc99aac/libvips/iofuncs/thread.c#L160-L204>
@@ -92,6 +100,9 @@ Primary references:
 - <https://github.com/FFmpeg/FFmpeg/blob/5f832b7b3fd4cb8daf9bb64373230809c246bd84/libavcodec/pthread_slice.c#L112-L146>
 - <https://openimageio.readthedocs.io/en/v3.1.14.0/imageioapi.html#global-attributes>
 - <https://gdal.org/en/stable/user/configoptions.html#performance-and-caching>
+- <https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getsystemcpusetinformation>
+- <https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-system_cpu_set_information>
+- <https://docs.kernel.org/scheduler/sched-capacity.html>
 
 ## 4. Alternatives
 
@@ -170,10 +181,29 @@ The first equal minimum in that order supplies the diagnostic limiting reason.
 
 ## 6. CPU and outer-demand behavior
 
-Effective CPU discovery remains affinity/cgroup-aware and uses Apple
-performance logical CPUs when available. This prevents a container with a
-two-CPU quota from using the host's 32-CPU count and avoids treating Apple
-efficiency cores as mandatory heavy-compute capacity.
+Effective CPU discovery is topology-aware without inventing one cross-platform
+P-core/E-core conversion ratio:
+
+- an Apple machine with a reliable performance-level probe uses a
+  performance-core-sized heavy-worker budget; this controls concurrency but
+  does not pin Python threads to specific cores;
+- Windows reads the documented CPU-set `EfficiencyClass` values to distinguish
+  homogeneous and heterogeneous processors, then lets the Windows scheduler
+  place workers across every process-visible CPU instead of discarding the
+  lower class;
+- Linux lets the kernel's capacity-aware scheduler place work; Lumina does not
+  infer core classes from instantaneous frequency;
+- a machine without a reliable heterogeneous signal is not assumed to be a
+  hybrid machine and keeps its full process-visible capacity;
+- process affinity is read through POSIX APIs or `psutil`, and Linux cgroup v2
+  quotas remain hard upper bounds.
+
+This prevents a two-CPU container from using the host's 32-CPU count, while
+also preventing a homogeneous 32-CPU workstation from being reduced by an
+Apple-specific rule. The immutable plan records `cpu_topology`,
+`cpu_scheduling_policy`, and the fastest reported core-class count for
+diagnostics. Topology changes worker admission only; it never changes
+conversion semantics.
 
 Outer demand includes running and queued top-level Lumina conversions. Fair
 share uses integer division with a minimum of one:
@@ -191,6 +221,15 @@ Examples before work and memory limits:
 | 32 | 1 | 32 |
 | 32 | 2 | 16 |
 | 32 | 4 | 8 |
+
+Topology examples before work and memory limits:
+
+| Reported machine | Detected policy | Effective CPU ceiling |
+| --- | --- | ---: |
+| 32 equal/unknown CPUs | all visible / OS capacity scheduler | 32 |
+| Windows 16 fast-class + 16 other CPU sets | Windows core-type scheduler | 32 |
+| Apple 24 performance + 8 efficiency CPUs | Apple performance budget | 24 |
+| Any 32-CPU host with an 8-CPU affinity/quota | affinity/cgroup bound | 8 |
 
 If the demand snapshot is unavailable, Lumina retains the configured outer
 pool size as its fail-closed fallback rather than assuming it is alone.
@@ -275,7 +314,8 @@ These examples are deterministic planner expectations, not performance claims:
 | Machine/task state | Raster 12 materials | Vector 512 colors | Native 44 batches |
 | --- | ---: | ---: | ---: |
 | 8 CPU, one task, ample RAM | 8 | 8 | 8 |
-| 32 CPU, one task, 64 GiB class | 12 | 32 | 32 |
+| 32 homogeneous/OS-managed CPU, one task, 64 GiB class | 12 | 32 | 32 |
+| Apple 24P+8E, one task, 64 GiB class | 12 | 24 | 24 |
 | 32 CPU, two tasks, 64 GiB class | 12 | 16 | 16 |
 | 32 CPU, four tasks, 64 GiB class | 8 | 8 | 8 |
 | 32 CPU, one task, memory supports 7 | 7 | 7 | 7 |
@@ -307,6 +347,11 @@ work counts above and below the proportional threshold, and memory ceilings
 including seven workers. The tests must prove that no hidden stage cap truncates
 an otherwise valid 12-, 16-, or 32-worker plan.
 
+Topology tests separately prove that a homogeneous/unknown 32-CPU host retains
+32, a Windows heterogeneous 16+16 CPU-set layout remains OS-managed at 32,
+an Apple 4P+6E layout receives a four-worker heavy budget, malformed platform
+telemetry falls back safely, and process affinity can narrow the visible set.
+
 ### 11.2 Stage adoption tests
 
 - raster proves a 12-material plan reaches a 12-worker executor and preserves
@@ -329,8 +374,7 @@ The development Mac can verify regression safety and exactness but cannot prove
 32-core speedup. A high-core performance claim requires a real 24/32-core,
 64-GiB-class run of the existing profiler with:
 
-- three fresh-process serial runs;
-- three fresh-process automatic runs;
+- three fresh-process serial/automatic pairs with the order alternated;
 - BLAS/OpenMP/Accelerate helper pools fixed to one;
 - cProfile disabled for acceptance timing;
 - the serial report supplied as `--reference-report`;
@@ -339,6 +383,13 @@ The development Mac can verify regression safety and exactness but cannot prove
 Automatic mode is accepted only when semantics are exact. Any speed statement
 must name the measured machine; simulated capacity tests establish scheduling
 correctness only.
+
+The development-Mac follow-up also demonstrated why order must be alternated:
+one fresh serial/four-worker pair was `17.954 / 18.035 s`, while continued
+back-to-back load later slowed the serial control itself to `31.752 s`. The
+earlier apparent 18% automatic regression was therefore not a valid
+worker-count comparison. Stage-local measurements and alternated fresh
+processes remain the acceptance method.
 
 ## 12. Rollback
 

@@ -356,6 +356,36 @@ def test_native_batch_plan_scales_to_thirty_two_workers(
     assert plan.stage_ceiling == 32
 
 
+def test_native_parallelism_stats_record_cpu_topology() -> None:
+    plan = task_parallelism.AdaptiveParallelismPlan(
+        workers=16,
+        requested_ceiling=32,
+        effective_cpu_capacity=32,
+        outer_demand=1,
+        cpu_fair_share_ceiling=32,
+        work_item_ceiling=44,
+        work_unit_ceiling=16,
+        stage_ceiling=32,
+        memory_ceiling=20,
+        available_memory_bytes=64 * 1024**3,
+        estimated_worker_bytes=384 * 1024**2,
+        limiting_reason="work_units",
+        demand_snapshot_fallback=False,
+        cpu_topology="heterogeneous",
+        cpu_scheduling_policy="os_core_type_scheduler",
+        performance_cpu_capacity=16,
+    )
+    stats: dict[str, float | int | str] = {}
+
+    vector_native_mesh._record_native_parallelism_plan(stats, plan)
+
+    assert stats["native_parallel_cpu_topology"] == "heterogeneous"
+    assert stats["native_parallel_cpu_scheduling_policy"] == (
+        "os_core_type_scheduler"
+    )
+    assert stats["native_parallel_performance_cpu"] == 16
+
+
 def test_representative_batch_bytes_uses_upper_median_without_outlier_cap() -> None:
     base_cost = vector_native_mesh._estimate_native_jobs_cost(
         [((0, 0, 0), [_square()])],

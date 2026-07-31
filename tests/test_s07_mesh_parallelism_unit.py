@@ -58,6 +58,9 @@ def _parallelism_plan(
     memory_ceiling: int | None = None,
     limiting_reason: str = "requested",
     demand_snapshot_fallback: bool = False,
+    cpu_topology: str = "unknown",
+    cpu_scheduling_policy: str = "injected_or_unknown",
+    performance_cpu_capacity: int | None = None,
 ) -> AdaptiveParallelismPlan:
     """Build a coherent deterministic plan for stage-adoption tests."""
 
@@ -82,6 +85,9 @@ def _parallelism_plan(
         estimated_worker_bytes=64 * 1024**2,
         limiting_reason=limiting_reason,
         demand_snapshot_fallback=demand_snapshot_fallback,
+        cpu_topology=cpu_topology,
+        cpu_scheduling_policy=cpu_scheduling_policy,
+        performance_cpu_capacity=performance_cpu_capacity,
     )
 
 
@@ -137,6 +143,9 @@ def test_s07_uses_bounded_policy_and_restores_material_order(
             cpu_fair_share_ceiling=2,
             memory_ceiling=3,
             limiting_reason="cpu_fair_share",
+            cpu_topology="heterogeneous",
+            cpu_scheduling_policy="apple_performance_budget",
+            performance_cpu_capacity=4,
         )
 
     def _pool(*, max_workers: int) -> RealThreadPoolExecutor:
@@ -180,6 +189,13 @@ def test_s07_uses_bounded_policy_and_restores_material_order(
         == "cpu_fair_share"
     )
     assert result["_hifi_timings"]["mesh_parallelism_effective_cpu"] == 4
+    assert result["_hifi_timings"]["mesh_parallelism_cpu_topology"] == (
+        "heterogeneous"
+    )
+    assert result["_hifi_timings"][
+        "mesh_parallelism_cpu_scheduling_policy"
+    ] == "apple_performance_budget"
+    assert result["_hifi_timings"]["mesh_parallelism_performance_cpu"] == 4
     assert result["_hifi_timings"]["mesh_parallelism_outer_demand"] == 2
     assert result["_hifi_timings"]["mesh_parallelism_cpu_fair_share"] == 2
     assert result["_hifi_timings"]["mesh_parallelism_memory_ceiling"] == 3

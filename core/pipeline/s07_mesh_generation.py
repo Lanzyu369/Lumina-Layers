@@ -265,6 +265,16 @@ def run(ctx: dict) -> dict:
         _hifi_timings["mesh_parallelism_effective_cpu"] = int(
             parallelism_plan.effective_cpu_capacity,
         )
+        _hifi_timings["mesh_parallelism_cpu_topology"] = str(
+            parallelism_plan.cpu_topology,
+        )[:64]
+        _hifi_timings["mesh_parallelism_cpu_scheduling_policy"] = str(
+            parallelism_plan.cpu_scheduling_policy,
+        )[:64]
+        if parallelism_plan.performance_cpu_capacity is not None:
+            _hifi_timings["mesh_parallelism_performance_cpu"] = int(
+                parallelism_plan.performance_cpu_capacity,
+            )
         _hifi_timings["mesh_parallelism_outer_demand"] = int(
             parallelism_plan.outer_demand,
         )
@@ -292,6 +302,15 @@ def run(ctx: dict) -> dict:
                 "parallelism_limit": parallelism_limit,
                 "effective_cpu_capacity": int(
                     parallelism_plan.effective_cpu_capacity,
+                ),
+                "cpu_topology": str(parallelism_plan.cpu_topology)[:64],
+                "cpu_scheduling_policy": str(
+                    parallelism_plan.cpu_scheduling_policy,
+                )[:64],
+                "performance_cpu_capacity": (
+                    int(parallelism_plan.performance_cpu_capacity)
+                    if parallelism_plan.performance_cpu_capacity is not None
+                    else None
                 ),
                 "outer_demand": int(parallelism_plan.outer_demand),
                 "cpu_fair_share_ceiling": int(

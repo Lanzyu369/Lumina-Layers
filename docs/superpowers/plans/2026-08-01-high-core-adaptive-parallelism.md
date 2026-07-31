@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Remove arbitrary low production worker caps so raster and vector conversion can scale continuously with effective CPU, live outer demand, useful work, and available memory without changing output semantics.
+**Goal:** Remove arbitrary low production worker caps so raster and vector conversion can scale continuously with topology-aware effective CPU, live outer demand, useful work, and available memory without changing output semantics.
 
-**Architecture:** Extend the existing immutable stage-boundary planner with an optional stage cap and proportional useful-work ceiling. The raster, vector-material, and native-vector callers opt out of a fixed stage cap and retain their natural item, memory, ordering, validation, and serial-fallback boundaries.
+**Architecture:** Extend the existing immutable stage-boundary planner with an optional stage cap and proportional useful-work ceiling. CPU discovery distinguishes reliable Apple/Windows heterogeneous signals from homogeneous or unknown hosts, leaves Windows/Linux core placement to their OS schedulers, and retains affinity/cgroup bounds. The raster, vector-material, and native-vector callers opt out of a fixed stage cap and retain their natural item, memory, ordering, validation, and serial-fallback boundaries.
 
 **Tech Stack:** Python 3.12, `ThreadPoolExecutor`, NumPy, SciPy, Shapely, Trimesh, psutil, pytest, existing converter multicore profiler.
 
@@ -13,15 +13,35 @@
 ## File map
 
 - `core/task_parallelism.py`: continuous CPU/work/memory worker resolution and shared dynamic memory headroom.
+- `core/system_capacity.py`: process-visible CPU limits, Apple performance
+  capacity, Windows CPU-set efficiency classes, and topology diagnostics.
 - `core/pipeline/s07_mesh_generation.py`: raster adoption with material count as the natural maximum.
 - `core/vector_matchers.py`: vector-material adoption with 16 useful colors per planned worker.
 - `core/vector_native_mesh.py`: native adoption with batch count, upper-median planning cost, and dynamic memory admission.
 - `tests/test_task_parallelism_unit.py`: deterministic 8/32-CPU, outer-demand, work-density, and memory tests.
+- `tests/test_system_capacity_unit.py`: Apple, Windows hybrid/uniform, Linux
+  fallback, affinity, cgroup, and malformed-probe coverage.
 - `tests/test_s07_mesh_parallelism_unit.py`: verifies raster passes no fixed cap and accepts a 12-worker plan without changing order.
 - `tests/test_vector_material_matcher_unit.py`: verifies proportional work density and exact forwarding.
 - `tests/test_vector_native_mesh_unit.py`: verifies high-core scaling, representative cost, window bounds, ordering, and serial fallback.
 - `docs/superpowers/specs/2026-07-31-adaptive-converter-parallelism-results.md`: replaces the obsolete fixed-two production verdict with measured current-machine and pending high-core evidence.
 - `docs/superpowers/specs/2026-08-01-high-core-adaptive-parallelism-design.md`: approved design and source references.
+
+### Topology addendum: heterogeneous and homogeneous CPUs
+
+- [x] Confirm from primary sources that Windows exposes per-CPU-set
+  `EfficiencyClass`, Linux performs capacity-aware scheduling in the kernel,
+  and oneTBB normally recommends allowing the OS to use all core types.
+- [x] Add deterministic tests proving a 32-CPU homogeneous/unknown host keeps
+  32, a Windows 16+16 hybrid layout remains OS-managed at 32, and an Apple
+  4P+6E layout receives a four-worker heavy-compute budget.
+- [x] Add Windows CPU-set parsing and cross-platform process-affinity fallback
+  through the formal `psutil` dependency.
+- [x] Carry topology, scheduling policy, and performance-class capacity through
+  stage timing/profiler diagnostics.
+- [ ] Validate the probe on real Windows hybrid and homogeneous machines before
+  treating Windows topology telemetry as release evidence; unit fixtures prove
+  logic, not the foreign-platform API call.
 
 ### Task 1: Continuous resource planner
 

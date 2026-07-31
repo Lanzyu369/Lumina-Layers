@@ -132,6 +132,11 @@ def test_native_mesh_timing_fields_are_bounded_and_prefixed() -> None:
             "native_parallel_source_geometry_count": 2_251,
             "native_parallel_limit_reason": "cpu_fair_share",
             "native_parallel_effective_cpu": 8,
+            "native_parallel_cpu_topology": "heterogeneous",
+            "native_parallel_cpu_scheduling_policy": (
+                "os_core_type_scheduler"
+            ),
+            "native_parallel_performance_cpu": 4,
             "native_parallel_outer_demand": 2,
             "native_parallel_cpu_fair_share": 4,
             "native_parallel_memory_ceiling": 3,
@@ -159,6 +164,11 @@ def test_native_mesh_timing_fields_are_bounded_and_prefixed() -> None:
         "native_mesh_parallel_source_geometry_count": 2_251,
         "native_mesh_parallel_limit": "cpu_fair_share",
         "native_mesh_parallel_effective_cpu": 8,
+        "native_mesh_parallel_cpu_topology": "heterogeneous",
+        "native_mesh_parallel_cpu_scheduling_policy": (
+            "os_core_type_scheduler"
+        ),
+        "native_mesh_parallel_performance_cpu": 4,
         "native_mesh_parallel_outer_demand": 2,
         "native_mesh_parallel_cpu_fair_share": 4,
         "native_mesh_parallel_memory_ceiling": 3,
@@ -189,6 +199,9 @@ def test_material_parallelism_plan_is_recorded_as_bounded_scalars() -> None:
         estimated_worker_bytes=256 * 1024**2,
         limiting_reason="cpu_fair_share",
         demand_snapshot_fallback=False,
+        cpu_topology="heterogeneous",
+        cpu_scheduling_policy="os_core_type_scheduler",
+        performance_cpu_capacity=4,
     )
     processor = SimpleNamespace(
         img_processor=SimpleNamespace(
@@ -204,6 +217,11 @@ def test_material_parallelism_plan_is_recorded_as_bounded_scalars() -> None:
         "material_parallelism_workers": 2.0,
         "material_parallelism_limit": "cpu_fair_share",
         "material_parallelism_effective_cpu": 4.0,
+        "material_parallelism_cpu_topology": "heterogeneous",
+        "material_parallelism_cpu_scheduling_policy": (
+            "os_core_type_scheduler"
+        ),
+        "material_parallelism_performance_cpu": 4.0,
         "material_parallelism_outer_demand": 2.0,
         "material_parallelism_cpu_fair_share": 2.0,
         "material_parallelism_memory_ceiling": 3.0,

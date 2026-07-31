@@ -1512,6 +1512,12 @@ def _record_material_parallelism(
             "material_parallelism_effective_cpu": float(
                 max(1, int(plan.effective_cpu_capacity)),
             ),
+            "material_parallelism_cpu_topology": str(
+                plan.cpu_topology,
+            )[:64],
+            "material_parallelism_cpu_scheduling_policy": str(
+                plan.cpu_scheduling_policy,
+            )[:64],
             "material_parallelism_outer_demand": float(
                 max(1, int(plan.outer_demand)),
             ),
@@ -1527,6 +1533,10 @@ def _record_material_parallelism(
         }
     except (AttributeError, TypeError, ValueError):
         return
+    if plan.performance_cpu_capacity is not None:
+        plan_fields["material_parallelism_performance_cpu"] = float(
+            max(1, int(plan.performance_cpu_capacity)),
+        )
     timings.update(plan_fields)
 
 
@@ -1546,6 +1556,12 @@ _NATIVE_MESH_TIMING_FIELDS = {
     "native_parallel_limit_reason": "native_mesh_parallel_limit",
     "native_parallel_effective_cpu":
         "native_mesh_parallel_effective_cpu",
+    "native_parallel_cpu_topology":
+        "native_mesh_parallel_cpu_topology",
+    "native_parallel_cpu_scheduling_policy":
+        "native_mesh_parallel_cpu_scheduling_policy",
+    "native_parallel_performance_cpu":
+        "native_mesh_parallel_performance_cpu",
     "native_parallel_outer_demand":
         "native_mesh_parallel_outer_demand",
     "native_parallel_cpu_fair_share":

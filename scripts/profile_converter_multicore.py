@@ -1249,6 +1249,19 @@ def _parallelism_metadata(
             _stage_or_native("effective_cpu", "effective_cpu"),
             minimum=1,
         ),
+        "cpu_topology": _optional_reason(
+            _stage_or_native("cpu_topology", "cpu_topology"),
+        ),
+        "cpu_scheduling_policy": _optional_reason(
+            _stage_or_native(
+                "cpu_scheduling_policy",
+                "cpu_scheduling_policy",
+            ),
+        ),
+        "performance_cpu": _optional_int(
+            _stage_or_native("performance_cpu", "performance_cpu"),
+            minimum=1,
+        ),
         "outer_demand": _optional_int(
             _stage_or_native("outer_demand", "outer_demand"),
             minimum=1,
