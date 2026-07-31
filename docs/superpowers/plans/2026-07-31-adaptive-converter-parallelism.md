@@ -548,7 +548,7 @@ Run:
 
 Expected: PASS, including timeout/restart and context propagation tests.
 
-- [ ] **Step 7: Commit worker-pool integration**
+- [x] **Step 7: Commit worker-pool integration**
 
 ```bash
 git add api/worker_pool.py tests/test_worker_pool_unit.py
@@ -561,7 +561,7 @@ git commit -m "feat(perf): expose live worker demand to converters"
 - Modify: `core/task_parallelism.py`
 - Modify: `tests/test_task_parallelism_unit.py`
 
-- [ ] **Step 1: Write failing plan tests**
+- [x] **Step 1: Write failing plan tests**
 
 Keep every existing integer-API test, update CPU monkeypatches to inject `EffectiveCpuCapacity`, and add:
 
@@ -585,7 +585,7 @@ def test_plan_divides_cpu_and_memory_by_live_outer_demand(
     assert plan.outer_demand == 2
 
 
-def test_work_units_limit_workers_not_only_pool_creation(
+def test_work_unit_threshold_preserves_existing_parallel_tier(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("LUMINA_VECTOR_PARALLELISM", "4")
@@ -598,9 +598,9 @@ def test_work_units_limit_workers_not_only_pool_creation(
         effective_cpu_capacity=8,
         outer_demand=1,
     )
-    assert plan.work_unit_ceiling == 2
-    assert plan.workers == 2
-    assert plan.limiting_reason == "work_units"
+    assert plan.work_unit_ceiling == 4
+    assert plan.workers == 4
+    assert plan.limiting_reason == "requested"
 
 
 def test_integer_api_returns_plan_workers() -> None:
@@ -620,7 +620,7 @@ def test_integer_api_returns_plan_workers() -> None:
 
 Cover nested scope, `1/2/4` tiers, requested ceiling, live-demand fair share, configured fallback demand, item ceiling, unit threshold, memory headroom, memory divided by demand, unknown-memory serial fallback, malformed snapshot fallback, and stable tie-breaking.
 
-- [ ] **Step 2: Verify the plan tests fail**
+- [x] **Step 2: Verify the plan tests fail**
 
 Run:
 
@@ -630,7 +630,7 @@ Run:
 
 Expected: FAIL because `AdaptiveParallelismPlan` and `resolve_task_parallelism_plan()` do not exist.
 
-- [ ] **Step 3: Add the immutable result without removing the old API**
+- [x] **Step 3: Add the immutable result without removing the old API**
 
 Use:
 
@@ -654,7 +654,7 @@ class AdaptiveParallelismPlan:
 
 Add `resolve_task_parallelism_plan()` with the current parameters plus keyword-only deterministic inputs `effective_cpu_capacity: int | None = None` and `outer_demand: int | None = None`. Preserve `resolve_task_parallelism(...) -> int` and make it return `.workers`.
 
-- [ ] **Step 4: Implement all ceilings and stable reason selection**
+- [x] **Step 4: Implement all ceilings and stable reason selection**
 
 Resolution rules:
 
@@ -662,9 +662,11 @@ Resolution rules:
 cpu_fair_share = max(1, effective_cpu // demand)
 work_item_ceiling = max(1, item_count)
 work_unit_ceiling = (
-    max(1, unit_count // unit_threshold)
-    if work_units is not None and min_parallel_work_units > 0
-    else stage_ceiling
+    stage_ceiling
+    if work_units is None
+    or min_parallel_work_units <= 0
+    or unit_count >= unit_threshold
+    else 1
 )
 usable_for_all_tasks = max(0, memory_available - 1024**3)
 usable_for_this_task = usable_for_all_tasks // demand
@@ -673,7 +675,7 @@ memory_ceiling = max(1, usable_for_this_task // worker_bytes)
 
 Take the minimum in this stable reason order: `requested`, `cpu_fair_share`, `effective_cpu`, `work_items`, `work_units`, `stage`, `memory`. Early serial outcomes use `nested_worker`, `insufficient_items`, or `insufficient_work_units`. When explicit `outer_demand` is absent, read the installed snapshot; when no valid snapshot is installed, retain the configured `LUMINA_MAX_WORKERS` fair-share behavior and set `demand_snapshot_fallback=True`.
 
-- [ ] **Step 5: Run planner and dependency-contract tests**
+- [x] **Step 5: Run planner and dependency-contract tests**
 
 Run:
 

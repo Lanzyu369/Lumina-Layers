@@ -299,11 +299,24 @@ class TestMaterialVectorMatcherSolveForFills:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         import core.task_parallelism as task_parallelism
+        from core.system_capacity import EffectiveCpuCapacity
 
         matcher = _build_matcher(layer_count=4, materials_count=3)
         runtime = _ParallelSolverCache(layer_count=4)
         matcher._solver_cache = runtime  # noqa: SLF001
         monkeypatch.setattr(task_parallelism.os, "cpu_count", lambda: 8)
+        monkeypatch.setattr(
+            task_parallelism,
+            "get_effective_cpu_capacity",
+            lambda: EffectiveCpuCapacity(
+                host_cpu_count=8,
+                affinity_cpu_count=None,
+                cgroup_quota_cpu_count=None,
+                apple_performance_cpu_count=None,
+                effective_cpu_count=8,
+                limiting_source="host_fallback",
+            ),
+        )
         monkeypatch.setenv("LUMINA_VECTOR_PARALLELISM", "invalid")
         monkeypatch.setenv("LUMINA_MAX_WORKERS", "2")
         task_parallelism._WARNED_INVALID_VALUES.clear()
