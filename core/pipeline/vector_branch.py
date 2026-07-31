@@ -1503,6 +1503,40 @@ def _record_material_parallelism(
         return
 
 
+_NATIVE_MESH_TIMING_FIELDS = {
+    "native_group_count": "native_mesh_group_count",
+    "native_meshes": "native_mesh_output_count",
+    "fallback_groups": "native_mesh_fallback_count",
+    "pack_seconds": "native_mesh_pack_s",
+    "native_seconds": "native_mesh_compute_s",
+    "mesh_convert_seconds": "native_mesh_convert_s",
+    "surface_validation_seconds": "native_mesh_python_surface_validation_s",
+    "fallback_seconds": "native_mesh_fallback_s",
+    "native_parallel_workers": "native_mesh_parallel_workers",
+    "native_parallel_batch_count": "native_mesh_parallel_batch_count",
+    "native_parallel_wall_seconds": "native_mesh_parallel_wall_s",
+    "fallback_reason_native_merged_empty_native_mesh":
+        "native_mesh_fallback_native_merged_empty_count",
+}
+
+
+def _native_mesh_timing_fields(
+    stats,
+) -> dict[str, float | int | str]:
+    """Return the bounded scalar native-mesh timing view."""
+
+    if not isinstance(stats, dict):
+        return {}
+    result: dict[str, float | int | str] = {}
+    for source_name, output_name in _NATIVE_MESH_TIMING_FIELDS.items():
+        value = stats.get(source_name)
+        if isinstance(value, bool):
+            result[output_name] = int(value)
+        elif isinstance(value, (int, float, str)):
+            result[output_name] = value
+    return result
+
+
 def _run_vector_preview_branch(ctx: dict) -> dict:
     """Execute SVG native preview processing for vector mode.
     \u4e3a SVG + vector \u6a21\u5f0f\u6784\u5efa\u4e0e native vector \u751f\u6210\u4e00\u81f4\u7684\u9884\u89c8\u7f13\u5b58\u3002
@@ -2230,6 +2264,11 @@ def _run_vector_branch(ctx: dict) -> dict:
         vector_timing["mesh_total_s"] = time.perf_counter() - mesh_t0
         if isinstance(getattr(vec_processor, "last_stage_timings", None), dict):
             vector_timing.update(vec_processor.last_stage_timings)
+        vector_timing.update(
+            _native_mesh_timing_fields(
+                getattr(vec_processor, "last_native_vector_mesh_stats", None)
+            )
+        )
         vector_timing["build_mesh_s"] = build_mesh_s
 
         _update_bambu_base_layer_ctx_for_vector(
