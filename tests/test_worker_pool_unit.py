@@ -7,6 +7,7 @@ max_workers defaults, and RuntimeError when pool not started.
 """
 
 import asyncio
+import json
 import logging
 import os
 import subprocess
@@ -60,6 +61,23 @@ def _read_context_ids() -> tuple[str | None, str | None]:
     return (get_request_id(), get_session_id())
 
 
+def _read_runtime_demand() -> tuple[int, int, bool, bool]:
+    """Return the worker-visible adaptive-parallelism runtime state."""
+    from core.task_parallelism_runtime import (
+        current_demand_snapshot_path,
+        read_outer_demand,
+    )
+
+    snapshot_path = current_demand_snapshot_path()
+    state = read_outer_demand(snapshot_path, fallback_outer_workers=99)
+    return (
+        state.outer_demand,
+        state.outer_max_workers,
+        state.snapshot_fallback,
+        snapshot_path is not None,
+    )
+
+
 def _return_mapping() -> dict[str, str]:
     """Return a mutable worker result for timing metadata tests."""
     return {"status": "ok"}
@@ -82,7 +100,59 @@ class TestWorkerPoolLifecycle:
 
     def test_not_alive_before_start(self) -> None:
         pool = WorkerPoolManager(max_workers=2)
-        assert pool.is_alive is False
+        try:
+            assert pool.is_alive is False
+            assert pool.demand_snapshot_path.is_file()
+            assert pool.outstanding_tasks == 0
+        finally:
+            pool.shutdown(wait=True)
+
+    def test_demand_init_failure_keeps_optional_telemetry_unavailable(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        target_logger = logging.getLogger("lumina.api.worker_pool")
+        target_logger.addHandler(caplog.handler)
+        caplog.set_level(logging.WARNING, logger=target_logger.name)
+        with patch(
+            "api.worker_pool.OuterDemandPublisher",
+            side_effect=OSError("injected demand init failure"),
+        ):
+            pool = WorkerPoolManager(max_workers=2)
+
+        assert pool.demand_snapshot_path is None
+        assert pool.outstanding_tasks == 0
+        records = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None)
+            == "worker_pool_demand_init_failed"
+        ]
+        assert len(records) == 1
+        assert records[0].error_type == "OSError"
+        assert records[0].error_message
+        pool.shutdown(wait=True)
+
+    def test_manager_demand_paths_are_unique_and_shutdown_removes_them(
+        self,
+    ) -> None:
+        first = WorkerPoolManager(max_workers=2)
+        second = WorkerPoolManager(max_workers=2)
+        first_path = first.demand_snapshot_path
+        second_path = second.demand_snapshot_path
+
+        assert first_path != second_path
+        assert first_path.is_file()
+        assert second_path.is_file()
+
+        first.shutdown()
+        first.shutdown()
+        second.shutdown()
+
+        assert not first_path.exists()
+        assert not second_path.exists()
+        assert not first_path.parent.exists()
+        assert not second_path.parent.exists()
 
     def test_alive_after_start(self) -> None:
         pool = WorkerPoolManager(max_workers=2)
@@ -107,14 +177,18 @@ class TestWorkerPoolLifecycle:
 
     def test_not_alive_after_shutdown(self) -> None:
         pool = WorkerPoolManager(max_workers=2)
+        snapshot_path = pool.demand_snapshot_path
         pool.start()
         pool.shutdown(wait=True)
         assert pool.is_alive is False
+        assert not snapshot_path.exists()
 
     def test_shutdown_without_start_is_noop(self) -> None:
         pool = WorkerPoolManager(max_workers=2)
+        snapshot_path = pool.demand_snapshot_path
         pool.shutdown(wait=True)  # Should not raise
         assert pool.is_alive is False
+        assert not snapshot_path.exists()
 
     def test_double_shutdown_is_safe(self) -> None:
         pool = WorkerPoolManager(max_workers=2)
@@ -122,6 +196,51 @@ class TestWorkerPoolLifecycle:
         pool.shutdown(wait=True)
         pool.shutdown(wait=True)  # Should not raise
         assert pool.is_alive is False
+
+    def test_start_after_shutdown_creates_fresh_demand_state(self) -> None:
+        pool = WorkerPoolManager(max_workers=1)
+        first_path = pool.demand_snapshot_path
+        pool.shutdown(wait=True)
+
+        pool.start()
+        second_path = pool.demand_snapshot_path
+        try:
+            assert pool.is_alive is True
+            assert second_path != first_path
+            assert second_path.is_file()
+        finally:
+            pool.shutdown(wait=True)
+
+    def test_demand_cleanup_failure_is_logged_without_raising(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        target_logger = logging.getLogger("lumina.api.worker_pool")
+        target_logger.addHandler(caplog.handler)
+        caplog.set_level(logging.WARNING, logger=target_logger.name)
+        pool = WorkerPoolManager(max_workers=1)
+        publisher = pool._demand_publisher
+        original_cleanup = publisher.cleanup
+
+        def fail_cleanup() -> None:
+            raise OSError("injected cleanup failure")
+
+        monkeypatch.setattr(publisher, "cleanup", fail_cleanup)
+        try:
+            pool.shutdown(wait=True)
+            records = [
+                record
+                for record in caplog.records
+                if getattr(record, "event", None)
+                == "worker_pool_demand_cleanup_failed"
+            ]
+            assert len(records) == 1
+            assert records[0].error_type == "OSError"
+            assert records[0].error_message
+            assert records[0].path
+        finally:
+            original_cleanup()
 
 
 # ---------------------------------------------------------------------------
@@ -354,6 +473,40 @@ class TestSubmit:
             pool.shutdown(wait=True)
 
     @pytest.mark.asyncio
+    async def test_worker_receives_live_demand_snapshot_path(self) -> None:
+        pool = WorkerPoolManager(max_workers=1)
+        pool.start()
+        try:
+            assert await pool.submit(_read_runtime_demand) == (
+                1,
+                1,
+                False,
+                True,
+            )
+        finally:
+            pool.shutdown(wait=True)
+
+    @pytest.mark.asyncio
+    async def test_concurrent_submissions_publish_running_and_queued_demand(
+        self,
+    ) -> None:
+        pool = WorkerPoolManager(max_workers=2)
+        pool.start()
+        first = asyncio.create_task(pool.submit(_slow_task, 0.15))
+        second = asyncio.create_task(pool.submit(_slow_task, 0.15))
+        try:
+            await asyncio.sleep(0.04)
+            payload = json.loads(
+                pool.demand_snapshot_path.read_text(encoding="utf-8")
+            )
+            assert payload["outstanding"] == 2
+            assert pool.outstanding_tasks == 2
+            assert await asyncio.gather(first, second) == ["done", "done"]
+            assert pool.outstanding_tasks == 0
+        finally:
+            pool.shutdown(wait=True)
+
+    @pytest.mark.asyncio
     async def test_submit_does_not_mutate_or_overwrite_mapping_results(
         self,
     ) -> None:
@@ -416,6 +569,11 @@ class TestSubmit:
         try:
             with pytest.raises(ValueError, match="test error"):
                 await pool.submit(_raise_value_error, "test error")
+            assert pool.outstanding_tasks == 0
+            payload = json.loads(
+                pool.demand_snapshot_path.read_text(encoding="utf-8")
+            )
+            assert payload["outstanding"] == 0
         finally:
             pool.shutdown(wait=True)
 
@@ -427,6 +585,22 @@ class TestSubmit:
         try:
             with pytest.raises(asyncio.TimeoutError):
                 await pool.submit(_slow_task, 10.0, timeout=0.3)
+            assert pool.outstanding_tasks == 0
+        finally:
+            pool.shutdown(wait=False)
+
+    @pytest.mark.asyncio
+    async def test_cancelled_submission_decrements_demand(self) -> None:
+        pool = WorkerPoolManager(max_workers=1)
+        pool.start()
+        task = asyncio.create_task(pool.submit(_slow_task, 0.3))
+        try:
+            await asyncio.sleep(0.04)
+            assert pool.outstanding_tasks == 1
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert pool.outstanding_tasks == 0
         finally:
             pool.shutdown(wait=False)
 
@@ -441,12 +615,15 @@ class TestSubmit:
         caplog.set_level(logging.WARNING, logger=target_logger.name)
         pool = WorkerPoolManager(max_workers=1, default_task_timeout=0.2)
         pool.start()
+        demand_snapshot_path = pool.demand_snapshot_path
         try:
             with pytest.raises(asyncio.TimeoutError):
                 await pool.submit(_slow_task, 2.0)
 
             result = await pool.submit(_add, 4, 5, timeout=2.0)
             assert result == 9
+            assert pool.demand_snapshot_path == demand_snapshot_path
+            assert pool.outstanding_tasks == 0
 
             restarts = [
                 record
@@ -460,6 +637,76 @@ class TestSubmit:
             assert getattr(restarts[0], "terminated_workers", None) == 1
         finally:
             pool.shutdown(wait=False)
+
+    @pytest.mark.asyncio
+    async def test_demand_publish_failure_does_not_change_task_result(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        target_logger = logging.getLogger("lumina.api.worker_pool")
+        target_logger.addHandler(caplog.handler)
+        caplog.set_level(logging.WARNING, logger=target_logger.name)
+        pool = WorkerPoolManager(max_workers=1)
+        pool.start()
+
+        def fail_publish() -> None:
+            raise OSError("injected demand write failure")
+
+        monkeypatch.setattr(
+            pool._demand_publisher,
+            "_publish_locked",
+            fail_publish,
+        )
+        try:
+            assert await pool.submit(_add, 4, 5) == 9
+            records = [
+                record
+                for record in caplog.records
+                if getattr(record, "event", None)
+                == "worker_pool_demand_update_failed"
+            ]
+            assert len(records) == 2
+            assert {record.operation for record in records} == {
+                "increment",
+                "decrement",
+            }
+            assert all(record.error_type == "OSError" for record in records)
+            assert all(record.error_message for record in records)
+            assert all(record.path for record in records)
+        finally:
+            pool.shutdown(wait=True)
+
+    @pytest.mark.asyncio
+    async def test_broken_pool_decrements_demand_before_propagating(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        pool = WorkerPoolManager(max_workers=1)
+        failed_pool = object()
+        pool._pool = failed_pool
+        loop = asyncio.get_running_loop()
+        restart_reasons: list[str] = []
+
+        def fail_in_executor(*_args, **_kwargs):
+            future = loop.create_future()
+            future.set_exception(worker_pool.BrokenProcessPool("injected"))
+            return future
+
+        monkeypatch.setattr(loop, "run_in_executor", fail_in_executor)
+        monkeypatch.setattr(
+            pool,
+            "_restart_after_failed_pool",
+            lambda _pool, *, reason, timeout=None: restart_reasons.append(reason),
+        )
+        try:
+            with pytest.raises(worker_pool.BrokenProcessPool, match="injected"):
+                await pool.submit(_add, 1, 2)
+            assert pool.outstanding_tasks == 0
+            assert restart_reasons == ["broken_process_pool"]
+        finally:
+            pool._pool = None
+            pool.shutdown(wait=True)
 
 
 class TestContextvarPropagation:
@@ -545,7 +792,12 @@ class TestRunInWorkerWithContext:
             captured["request_id"] = get_request_id()
             captured["session_id"] = get_session_id()
 
-        _run_in_worker_with_context(_capture, "req-direct", "sess-direct")
+        _run_in_worker_with_context(
+            _capture,
+            "req-direct",
+            "sess-direct",
+            "/tmp/lumina-demand-test.json",
+        )
         assert captured == {"request_id": "req-direct", "session_id": "sess-direct"}
 
     def test_wrapper_skips_set_when_ids_are_none(self) -> None:
@@ -568,7 +820,12 @@ class TestRunInWorkerWithContext:
                 captured["request_id"] = get_request_id()
                 captured["session_id"] = get_session_id()
 
-            _run_in_worker_with_context(_capture, None, None)
+            _run_in_worker_with_context(
+                _capture,
+                None,
+                None,
+                "/tmp/lumina-demand-test.json",
+            )
             assert captured == {"request_id": "outer-req", "session_id": "outer-sess"}
         finally:
             reset_session_id(outer_session)
@@ -580,7 +837,37 @@ class TestRunInWorkerWithContext:
         def _add_local(a: int, b: int) -> int:
             return a + b
 
-        assert _run_in_worker_with_context(_add_local, "rid", "sid", 2, 3) == 5
+        assert (
+            _run_in_worker_with_context(
+                _add_local,
+                "rid",
+                "sid",
+                "/tmp/lumina-demand-test.json",
+                2,
+                3,
+            )
+            == 5
+        )
+
+    def test_wrapper_installs_and_restores_demand_path(self) -> None:
+        from api.worker_pool import _run_in_worker_with_context
+        from core.task_parallelism_runtime import current_demand_snapshot_path
+
+        observed: list[Path | None] = []
+
+        def capture_path() -> None:
+            observed.append(current_demand_snapshot_path())
+
+        assert current_demand_snapshot_path() is None
+        _run_in_worker_with_context(
+            capture_path,
+            None,
+            None,
+            "/tmp/lumina-demand-test.json",
+        )
+
+        assert observed == [Path("/tmp/lumina-demand-test.json")]
+        assert current_demand_snapshot_path() is None
 
 
 # ---------------------------------------------------------------------------

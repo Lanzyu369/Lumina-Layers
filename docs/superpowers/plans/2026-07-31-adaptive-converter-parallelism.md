@@ -407,7 +407,7 @@ Run:
 
 Expected: PASS and no compiler output.
 
-- [ ] **Step 6: Commit runtime demand state**
+- [x] **Step 6: Commit runtime demand state**
 
 ```bash
 git add core/task_parallelism_runtime.py tests/test_task_parallelism_runtime_unit.py
@@ -420,7 +420,7 @@ git commit -m "feat(perf): publish bounded outer task demand"
 - Modify: `api/worker_pool.py`
 - Modify: `tests/test_worker_pool_unit.py`
 
-- [ ] **Step 1: Write failing worker-pool lifecycle tests**
+- [x] **Step 1: Write failing worker-pool lifecycle tests**
 
 Add tests proving:
 
@@ -459,7 +459,7 @@ async def test_worker_receives_live_demand_snapshot_path() -> None:
 
 Also assert decrement after worker exception, timeout, cancellation, and `BrokenProcessPool`; two concurrent submissions report two outstanding tasks; restart retains the same snapshot path; manager instances use different paths; shutdown removes the snapshot directory.
 
-- [ ] **Step 2: Run the targeted tests and verify failure**
+- [x] **Step 2: Run the targeted tests and verify failure**
 
 Run:
 
@@ -471,7 +471,7 @@ Run:
 
 Expected: FAIL because the manager exposes no demand state and workers receive no runtime path.
 
-- [ ] **Step 3: Install the snapshot path in worker entry points**
+- [x] **Step 3: Install the snapshot path in worker entry points**
 
 Change both top-level picklable wrappers to accept `demand_snapshot_path: str` before `*args`, and run the target function inside:
 
@@ -482,7 +482,7 @@ with task_parallelism_runtime_scope(demand_snapshot_path):
 
 The timed wrapper delegates to the same contextualized wrapper so timing and non-timing submissions install identical runtime state.
 
-- [ ] **Step 4: Maintain outstanding demand across every exit path**
+- [x] **Step 4: Maintain outstanding demand across every exit path**
 
 Construct one `OuterDemandPublisher` in `WorkerPoolManager.__init__()`. Add a
 private manager helper that catches `OSError`, `RuntimeError`, and `ValueError`
@@ -534,11 +534,11 @@ shown `raw_result` assignment. Expose read-only `demand_snapshot_path` and
 `outstanding_tasks` properties for diagnostics/tests. Restart only replaces the
 executor; it does not replace the publisher.
 
-- [ ] **Step 5: Clean up demand state on shutdown**
+- [x] **Step 5: Clean up demand state on shutdown**
 
 After executor shutdown, call the publisher cleanup once. A cleanup failure logs one structured WARNING with `event="worker_pool_demand_cleanup_failed"`, `error_type`, `error_message`, and `path`; it must not change task results or raise from normal shutdown.
 
-- [ ] **Step 6: Run the complete worker-pool suite**
+- [x] **Step 6: Run the complete worker-pool suite**
 
 Run:
 
