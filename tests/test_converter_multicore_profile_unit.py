@@ -1065,6 +1065,7 @@ def test_execute_case_can_disable_cprofile(
     assert metrics["parallelism"] == {
         "requested": "auto",
         "observed_workers": 2,
+        "native_workers": None,
         "effective_cpu": 4,
         "outer_demand": 2,
         "cpu_fair_share": 2,
@@ -1086,13 +1087,14 @@ def test_parallelism_metadata_combines_vector_plan_and_native_window(
         "vector",
         hifi_timings={},
         vector_timings={
-            "material_parallelism_workers": 2,
+            "material_parallelism_workers": 1,
             "material_parallelism_limit": "cpu_fair_share",
             "material_parallelism_effective_cpu": 4,
             "material_parallelism_outer_demand": 2,
             "material_parallelism_cpu_fair_share": 2,
             "material_parallelism_memory_ceiling": 3,
             "material_parallelism_demand_fallback": False,
+            "native_mesh_parallel_workers": 2,
             "native_mesh_parallel_inflight_limit": 3,
             "native_mesh_parallel_max_estimated_batch_bytes": 402_653_184,
             "native_mesh_parallel_oversized_serial_batches": 0,
@@ -1101,7 +1103,8 @@ def test_parallelism_metadata_combines_vector_plan_and_native_window(
 
     assert metadata == {
         "requested": "auto",
-        "observed_workers": 2,
+        "observed_workers": 1,
+        "native_workers": 2,
         "effective_cpu": 4,
         "outer_demand": 2,
         "cpu_fair_share": 2,
@@ -1128,6 +1131,7 @@ def test_parallelism_metadata_keeps_legacy_reports_readable(
     assert metadata == {
         "requested": "auto",
         "observed_workers": 2,
+        "native_workers": None,
         "effective_cpu": None,
         "outer_demand": None,
         "cpu_fair_share": None,

@@ -1241,6 +1241,10 @@ def _parallelism_metadata(
             _stage_or_native("workers", "workers"),
             minimum=1,
         ),
+        "native_workers": _optional_int(
+            native_timings.get("native_mesh_parallel_workers"),
+            minimum=1,
+        ),
         "effective_cpu": _optional_int(
             _stage_or_native("effective_cpu", "effective_cpu"),
             minimum=1,
