@@ -4573,6 +4573,9 @@ class VectorProcessor:
         enable_outline = bool(getattr(self, "enable_outline", False))
         outline_width_mm = getattr(self, "outline_width_mm", 0.0)
         structure_mode_value = str(getattr(structure_mode, "value", structure_mode))
+        is_double_sided = (
+            "双面" in structure_mode_value or "Double" in structure_mode_value
+        )
 
         # === Stage 5: Run-length extrude per channel ===
         try:
@@ -4794,6 +4797,17 @@ class VectorProcessor:
                 scale=scale_factor,
                 extrude_cache=extrude_cache,
             )
+            if is_double_sided and not is_5color:
+                top_surface_z = (2 * num_layers + backing_layer_count) * layer_h
+                coating_meshes.extend(
+                    self._extrude_geometry(
+                        coating_sil,
+                        height=coating_height,
+                        z_offset=top_surface_z,
+                        scale=scale_factor,
+                        extrude_cache=extrude_cache,
+                    )
+                )
             if coating_meshes:
                 coating_name = "Coating"
                 meshes_by_slot[coating_name] = {
@@ -4805,7 +4819,6 @@ class VectorProcessor:
 
         # === Stage 7: Double-sided structure ===
         t0 = time.perf_counter()
-        is_double_sided = "双面" in structure_mode_value or "Double" in structure_mode_value
         if is_double_sided:
             _log.debug("Adding mirrored color layers (double-sided mode)...")
             top_z_start = backing_z_start + backing_layer_count * layer_h
