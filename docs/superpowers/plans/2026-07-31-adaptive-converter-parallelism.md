@@ -49,7 +49,7 @@
 - Test: `tests/test_vector_native_mesh_unit.py`
 - Test: `tests/test_converter_multicore_profile_unit.py`
 
-- [ ] **Step 1: Record the exact base and working-tree state**
+- [x] **Step 1: Record the exact base and working-tree state**
 
 Run:
 
@@ -61,7 +61,7 @@ git rev-parse MOVIBALE/feat/vector-native-mesh-throughput
 
 Expected: the topic branch is `MOVIBALE/feat/adaptive-converter-parallelism`, the tree contains no uncommitted product-code edits, and the stacked base resolves to `f01d3044`.
 
-- [ ] **Step 2: Run the focused pre-change suite**
+- [x] **Step 2: Run the focused pre-change suite**
 
 Run:
 
@@ -77,7 +77,7 @@ Run:
 
 Expected: PASS. Any failure must also reproduce at `f01d3044` before it is classified as a baseline failure.
 
-- [ ] **Step 3: Capture the current machine facts**
+- [x] **Step 3: Capture the current machine facts**
 
 Run:
 
@@ -93,7 +93,7 @@ Expected: one JSON object suitable for the results document; no repository file 
 - Create: `core/system_capacity.py`
 - Create: `tests/test_system_capacity_unit.py`
 
-- [ ] **Step 1: Write failing probe tests**
+- [x] **Step 1: Write failing probe tests**
 
 Add deterministic tests that inject the host count, affinity set, cgroup text, platform, and subprocess result:
 
@@ -145,7 +145,7 @@ def test_invalid_probes_fall_back_to_at_least_one_cpu() -> None:
 
 Also test that two calls to `get_effective_cpu_capacity()` invoke the live probe only once until `cache_clear()` is called.
 
-- [ ] **Step 2: Run the new tests and verify the red state**
+- [x] **Step 2: Run the new tests and verify the red state**
 
 Run:
 
@@ -155,7 +155,7 @@ Run:
 
 Expected: FAIL because `core.system_capacity` does not exist.
 
-- [ ] **Step 3: Implement the capacity value and pure resolver**
+- [x] **Step 3: Implement the capacity value and pure resolver**
 
 Create the immutable public value and pure decision function:
 
@@ -206,7 +206,7 @@ def discover_effective_cpu_capacity(
 
 Parse quota with `ceil(quota / period)`, treat `"max"` and invalid/non-positive values as unavailable, and clamp all returned counts to at least one.
 
-- [ ] **Step 4: Implement safe live probes and caching**
+- [x] **Step 4: Implement safe live probes and caching**
 
 Implement:
 
@@ -223,7 +223,7 @@ def get_effective_cpu_capacity() -> EffectiveCpuCapacity:
 
 `_read_process_affinity()` uses `os.sched_getaffinity(0)` when callable. `_read_cgroup_v2_cpu_max()` reads `/sys/fs/cgroup/cpu.max` as UTF-8. `_read_apple_performance_cpu_count()` runs `["sysctl", "-n", "hw.perflevel0.logicalcpu"]` only on Darwin with `shell=False`, `check=False`, `capture_output=True`, `text=True`, and a `0.5` second timeout. Probe errors return `None`.
 
-- [ ] **Step 5: Run capacity tests and compile the module**
+- [x] **Step 5: Run capacity tests and compile the module**
 
 Run:
 
