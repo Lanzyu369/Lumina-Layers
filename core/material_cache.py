@@ -948,6 +948,12 @@ def _top_k_candidate_rows_blockwise(
     return selected_indices, selected_distances
 
 
+def _real_vector_norm(vector: np.ndarray) -> np.floating:
+    """Return the exact NumPy real 1-D fast-path norm for a known vector."""
+
+    return np.sqrt(vector.dot(vector))
+
+
 def _neighbor_coherence_refine(
     *,
     target_lab: np.ndarray,
@@ -1026,13 +1032,13 @@ def _neighbor_coherence_refine(
         pair_count += 1
         # Source direction vector
         d_src = target_lab[j] - target_lab[i]
-        d_src_norm = np.linalg.norm(d_src)
+        d_src_norm = _real_vector_norm(d_src)
         if d_src_norm < 1e-6:
             continue  # identical colours, skip
 
         # Current matched direction
         d_matched = matched_lab[j] - matched_lab[i]
-        d_matched_norm = np.linalg.norm(d_matched)
+        d_matched_norm = _real_vector_norm(d_matched)
 
         # Cosine similarity between source and matched direction
         if d_matched_norm < 1e-6:
@@ -1074,7 +1080,7 @@ def _neighbor_coherence_refine(
             d_src_to_adjust = d_src  # i -> j
         else:
             d_src_to_adjust = -d_src  # j -> i
-        d_src_to_adjust_norm = np.linalg.norm(d_src_to_adjust)
+        d_src_to_adjust_norm = d_src_norm
         d_src_unit = d_src_to_adjust / d_src_to_adjust_norm
 
         # Get top-K candidates for the adjust target
@@ -1099,7 +1105,7 @@ def _neighbor_coherence_refine(
             cand_lab = cand_labs[k_pos]
             # Direction from anchor to this candidate
             d_cand = cand_lab - anchor_lab
-            d_cand_norm = np.linalg.norm(d_cand)
+            d_cand_norm = _real_vector_norm(d_cand)
             if d_cand_norm < 1e-6:
                 cand_cos = 0.0
             else:
