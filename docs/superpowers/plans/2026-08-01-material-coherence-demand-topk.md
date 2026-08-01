@@ -23,6 +23,15 @@ profile and semantic-snapshot harness.
 **Files:**
 - Modify: `tests/test_material_neighbor_coherence_unit.py`
 
+- [ ] **Step 0: Move the controlled serial candidate stub**
+
+In `test_neighbor_coherence_reuses_source_norm_for_reverse_direction`, move
+the one-row candidate result from `_top_k_candidate_rows_blockwise` to
+`_top_k_candidate_block`. This keeps the controlled distance at `1.0` when the
+serial implementation starts requesting exact rows on demand. Before the
+production change, this migration also contributes to RED because the old
+serial path ignores the new stub.
+
 - [ ] **Step 1: Write the failing serial-demand regression**
 
 Add a test that first records the eager reference from `_coherence_fixture`,
@@ -81,7 +90,7 @@ def test_parallel_coherence_keeps_eager_blockwise_top_k(
     real_blockwise = material_cache_module._top_k_candidate_rows_blockwise
     observed_parallelism: list[int] = []
 
-    def _recording_blockwise(**kwargs: object) -> tuple[np.ndarray, np.ndarray]:
+    def _recording_blockwise(**kwargs: Any) -> tuple[np.ndarray, np.ndarray]:
         observed_parallelism.append(int(kwargs["parallelism"]))
         return real_blockwise(**kwargs)
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 import numpy as np
 import pytest
@@ -124,10 +125,10 @@ def test_neighbor_coherence_reuses_source_norm_for_reverse_direction(
     )
     monkeypatch.setattr(
         material_cache_module,
-        "_top_k_candidate_rows_blockwise",
-        lambda **_kwargs: (
-            np.zeros((2, 1), dtype=np.intp),
-            np.asarray([[1.0], [0.0]], dtype=np.float64),
+        "_top_k_candidate_block",
+        lambda _target_block, _candidate_lab, _top_k: (
+            np.zeros((1, 1), dtype=np.intp),
+            np.asarray([[1.0]], dtype=np.float64),
         ),
     )
 
@@ -449,6 +450,83 @@ def _coherence_fixture() -> dict[str, np.ndarray | float | int | None]:
         "uniform_srgb": None,
         "uniform_recipes": None,
     }
+
+
+def test_serial_coherence_computes_top_k_rows_once_on_demand(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _coherence_fixture()
+    expected = _neighbor_coherence_refine(**fixture, parallelism=4)
+    real_block = material_cache_module._top_k_candidate_block
+    observed_targets: list[bytes] = []
+
+    def _recording_block(
+        target_block: np.ndarray,
+        candidate_lab: np.ndarray,
+        top_k: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        assert target_block.shape == (1, 3)
+        observed_targets.append(target_block.tobytes())
+        return real_block(target_block, candidate_lab, top_k)
+
+    monkeypatch.setattr(
+        material_cache_module,
+        "_top_k_candidate_rows_blockwise",
+        lambda **_kwargs: pytest.fail("serial path must not compute every row"),
+    )
+    monkeypatch.setattr(
+        material_cache_module,
+        "_top_k_candidate_block",
+        _recording_block,
+    )
+
+    actual = _neighbor_coherence_refine(**fixture, parallelism=1)
+
+    assert len(observed_targets) == 6
+    assert len(set(observed_targets)) == len(observed_targets)
+    for actual_array, expected_array in zip(actual, expected, strict=True):
+        np.testing.assert_array_equal(actual_array, expected_array)
+
+
+def test_parallel_coherence_keeps_eager_blockwise_top_k(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _coherence_fixture()
+    expected = _neighbor_coherence_refine(**fixture, parallelism=1)
+    real_blockwise = material_cache_module._top_k_candidate_rows_blockwise
+    observed_parallelism: list[int] = []
+
+    def _recording_blockwise(
+        **kwargs: Any,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        observed_parallelism.append(int(kwargs["parallelism"]))
+        return real_blockwise(**kwargs)
+
+    monkeypatch.setattr(
+        material_cache_module,
+        "_top_k_candidate_rows_blockwise",
+        _recording_blockwise,
+    )
+
+    actual = _neighbor_coherence_refine(**fixture, parallelism=4)
+
+    assert observed_parallelism == [4]
+    for actual_array, expected_array in zip(actual, expected, strict=True):
+        np.testing.assert_array_equal(actual_array, expected_array)
+
+
+def test_serial_coherence_preserves_duplicate_candidate_ties() -> None:
+    fixture = _coherence_fixture()
+    duplicated = dict(fixture)
+    for key in ("all_lab", "all_srgb", "all_recipes"):
+        values = np.asarray(fixture[key])
+        duplicated[key] = np.concatenate((values, values[:9]), axis=0)
+
+    expected = _neighbor_coherence_refine(**duplicated, parallelism=4)
+    actual = _neighbor_coherence_refine(**duplicated, parallelism=1)
+
+    for actual_array, expected_array in zip(actual, expected, strict=True):
+        np.testing.assert_array_equal(actual_array, expected_array)
 
 
 @pytest.mark.parametrize(
