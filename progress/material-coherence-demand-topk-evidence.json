@@ -19,7 +19,13 @@
     "focused_coherence": "34 passed",
     "related_suite": "233 passed",
     "py_compile": "passed",
-    "diff_check_before_profiles": "passed"
+    "diff_check_before_profiles": "passed",
+    "final_log_quality_fast": {
+      "result": "passed",
+      "info": 14,
+      "warning": 0,
+      "error": 0
+    }
   },
   "inputs": {
     "complex_svg": {

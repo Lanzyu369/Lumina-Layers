@@ -1,9 +1,9 @@
 # Material Coherence Demand Top-K Results
 
-**Date:** 2026-08-01  
-**Parent:** `b8cd20f96bf71ca5eba229e213c604c8388f30ff`  
-**Measured code:** `760e30e32c9f91e4bc43a3c8b55d0f8ed5a3a718`  
-**Decision:** Retain
+- **Date:** 2026-08-01
+- **Parent:** `b8cd20f96bf71ca5eba229e213c604c8388f30ff`
+- **Measured code:** `760e30e32c9f91e4bc43a3c8b55d0f8ed5a3a718`
+- **Decision:** Retain
 
 ## Result
 
@@ -30,10 +30,13 @@ members, and the GLB preview.
 - Four-worker regression proves the existing blockwise helper remains the
   selected implementation.
 - Python compilation and `git diff --check` passed before real profiling.
+- Final fast log-quality gate passed with 14 INFO, 0 WARNING, 0 ERROR, and all
+  governance checks passing.
 
 ## Complex SVG Timing
 
-Input: `梵高星空款式西森猫猫.svg`  
+Input: `梵高星空款式西森猫猫.svg`
+
 Input SHA-256:
 `ba6d44586c4c9903091ade81ed331c09308ec6a6f684c72f1b8cc15aad42f717`
 
@@ -60,7 +63,8 @@ All eight complex-SVG reports used semantic reference SHA-256
 
 ## Material Archive Matrix
 
-Input: `mmexport1784271438721.svg`  
+Input: `mmexport1784271438721.svg`
+
 Input SHA-256:
 `88f9a92690e765e48533b344ff1b313cf2168d7952ecb96253e036fb54a07788`
 

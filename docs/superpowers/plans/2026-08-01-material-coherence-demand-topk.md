@@ -343,7 +343,7 @@ the result document and compact JSON manifest.
 **Files:**
 - Verify all changed files
 
-- [ ] **Step 1: Run logging and final diff gates**
+- [x] **Step 1: Run logging and final diff gates**
 
 ```bash
 .venv/bin/python scripts/log_quality_check.py --mode fast
