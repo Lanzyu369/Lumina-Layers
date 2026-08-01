@@ -479,3 +479,54 @@ def test_workspace_row_block_retains_baseline_when_no_suffix_is_valid() -> None:
         np.testing.assert_array_equal(recipe, baseline_recipes[position])
         assert delta == baseline_delta[position]
         assert not improved
+
+
+def test_workspace_group_preserves_exact_rows_across_partial_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (
+        targets,
+        baseline_recipes,
+        _baseline_matched,
+        baseline_delta,
+        config,
+        _workspace,
+    ) = _shared_workspace_fixture()
+    observed_blocks: list[tuple[int, ...]] = []
+    original = inverse_refinement._refine_workspace_row_block
+
+    def _record_block(**kwargs):
+        observed_blocks.append(tuple(kwargs["row_indices"]))
+        return original(**kwargs)
+
+    monkeypatch.setattr(
+        inverse_refinement,
+        "_refinement_row_block_size",
+        lambda **_kwargs: 2,
+    )
+    monkeypatch.setattr(
+        inverse_refinement,
+        "_refine_workspace_row_block",
+        _record_block,
+    )
+
+    result = inverse_refinement._refine_workspace_group(
+        key=inverse_refinement._workspace_key(
+            subset=np.arange(4, dtype=np.int32),
+            layer_count=4,
+            config=config,
+        ),
+        row_indices=tuple(range(len(targets))),
+        targets=targets,
+        baseline_recipes=baseline_recipes,
+        baseline_delta_e=baseline_delta,
+        materials=PALETTE,
+        layer_count=4,
+        layer_height_mm=DEFAULT_LAYER_HEIGHT_MM,
+        substrate="white",
+        config=config,
+        query_workers=1,
+    )
+
+    assert observed_blocks == [(0, 1), (2, 3), (4,)]
+    assert [row[0] for row in result] == [0, 1, 2, 3, 4]

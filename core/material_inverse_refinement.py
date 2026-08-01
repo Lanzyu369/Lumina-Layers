@@ -24,6 +24,9 @@ from core.material_color_solver import (
 from core.task_parallelism import task_parallelism_worker_scope
 
 
+_REFINEMENT_TEMP_MEMORY_BUDGET_BYTES = 64 * 1024 * 1024
+
+
 @dataclass(frozen=True)
 class MaterialInverseRefinementConfig:
     """Bounded inverse-refinement settings.
@@ -620,6 +623,31 @@ def _refine_workspace_row_block(
     return results
 
 
+def _refinement_row_block_size(
+    *,
+    workspace: _InverseRefinementWorkspace,
+    config: MaterialInverseRefinementConfig,
+    row_count: int,
+    memory_budget_bytes: int = _REFINEMENT_TEMP_MEMORY_BUDGET_BYTES,
+) -> int:
+    """Derive a positive row count from the temporary-array budget."""
+
+    top_count = max(1, int(workspace.top_recipes.shape[0]))
+    top_depth = int(workspace.top_recipes.shape[1])
+    neighbors = min(
+        max(1, int(config.refine_bottom_neighbors)),
+        max(1, int(workspace.bottom_linear.shape[0])),
+    )
+    # Pessimistic per-top estimate for required RGB, masks, gathered affine
+    # rows/recipes, neighbour indices, predicted RGB/Lab, and distances.
+    bytes_per_top = 97 + 4 * top_depth + 67 * neighbors
+    estimated_row_bytes = max(1, top_count * bytes_per_top)
+    return min(
+        max(1, int(row_count)),
+        max(1, int(memory_budget_bytes) // estimated_row_bytes),
+    )
+
+
 def _refine_workspace_group(
     *,
     key: _InverseRefinementWorkspaceKey,
@@ -632,6 +660,7 @@ def _refine_workspace_group(
     layer_height_mm: float,
     substrate: str,
     config: MaterialInverseRefinementConfig,
+    query_workers: int = 1,
 ) -> list[tuple[int, np.ndarray, np.ndarray, float, bool]]:
     """Build one workspace and refine its rows without mutating shared output."""
 
@@ -641,28 +670,27 @@ def _refine_workspace_group(
         layer_height_mm=float(layer_height_mm),
         substrate=substrate,
     )
+    block_size = _refinement_row_block_size(
+        workspace=workspace,
+        config=config,
+        row_count=len(row_indices),
+    )
     results: list[tuple[int, np.ndarray, np.ndarray, float, bool]] = []
-    for row_index in row_indices:
-        row_srgb, row_recipe, row_delta, did_improve = (
-            _best_refined_row_with_workspace(
-                target_srgb=targets[row_index],
+    for start in range(0, len(row_indices), block_size):
+        block_indices = row_indices[start : start + block_size]
+        results.extend(
+            _refine_workspace_row_block(
+                row_indices=block_indices,
+                targets=targets,
+                baseline_recipes=baseline_recipes,
+                baseline_delta_e=baseline_delta_e,
                 materials=materials,
                 layer_count=int(layer_count),
                 layer_height_mm=float(layer_height_mm),
                 substrate=substrate,
-                baseline_recipe=baseline_recipes[row_index],
-                baseline_delta_e=float(baseline_delta_e[row_index]),
                 config=config,
                 workspace=workspace,
-            )
-        )
-        results.append(
-            (
-                row_index,
-                row_srgb,
-                row_recipe,
-                row_delta,
-                did_improve,
+                query_workers=max(1, int(query_workers)),
             ),
         )
     return results
