@@ -1,0 +1,189 @@
+{
+  "schema": 1,
+  "recorded_at": "2026-08-01",
+  "decision": "retain",
+  "provenance": {
+    "parent_commit": "b8cd20f96bf71ca5eba229e213c604c8388f30ff",
+    "measured_code_commit": "760e30e32c9f91e4bc43a3c8b55d0f8ed5a3a718",
+    "association": "operator-recorded because profile schema v2 does not embed git commit"
+  },
+  "environment": {
+    "platform": "macOS-26.5.2-arm64-arm-64bit",
+    "python": "3.12.13",
+    "numpy": "2.4.6",
+    "visible_cpu": 10,
+    "physical_memory_bytes": 17179869184,
+    "thread_overrides": null
+  },
+  "tests": {
+    "focused_coherence": "34 passed",
+    "related_suite": "233 passed",
+    "py_compile": "passed",
+    "diff_check_before_profiles": "passed"
+  },
+  "inputs": {
+    "complex_svg": {
+      "name": "梵高星空款式西森猫猫.svg",
+      "sha256": "ba6d44586c4c9903091ade81ed331c09308ec6a6f684c72f1b8cc15aad42f717"
+    },
+    "material_archive_svg": {
+      "name": "mmexport1784271438721.svg",
+      "sha256": "88f9a92690e765e48533b344ff1b313cf2168d7952ecb96253e036fb54a07788"
+    }
+  },
+  "cases": [
+    {
+      "id": "complex_serial_parent_then_head",
+      "workers": 1,
+      "materials": 12,
+      "semantic_sha256": "815072534bdddb985b652d685d92f61555591455f61ee4c909289615b8494f60",
+      "external_reference_match": true,
+      "parent": {
+        "total_s": 54.11646941700019,
+        "material_solve_s": 32.561259959009476,
+        "peak_rss_mb": 1520.46875,
+        "report_sha256": "edec4506eeec4fe6a4689d49e5c6bfef58c608cb790cf43a8778e4840dc65389"
+      },
+      "head": {
+        "total_s": 55.56319808308035,
+        "material_solve_s": 30.14261045900639,
+        "peak_rss_mb": 1177.890625,
+        "report_sha256": "6032db25455c5f4f025e684a66686ae02b45a8032ab0450748b640ce2856f52b"
+      }
+    },
+    {
+      "id": "complex_serial_head_then_parent",
+      "workers": 1,
+      "materials": 12,
+      "semantic_sha256": "815072534bdddb985b652d685d92f61555591455f61ee4c909289615b8494f60",
+      "external_reference_match": true,
+      "parent": {
+        "total_s": 68.12143887509592,
+        "material_solve_s": 41.521691708941944,
+        "peak_rss_mb": 1967.890625,
+        "report_sha256": "69e6dd4ef2849794f8fe5349dbfd7c97ce1358bcbe95b4b45016404741a7ab56"
+      },
+      "head": {
+        "total_s": 59.26827408303507,
+        "material_solve_s": 29.11276958300732,
+        "peak_rss_mb": 959.734375,
+        "report_sha256": "735be34e5800fc17fc6ecd44909ec764c022efd4680a1d6657ed155a0fefc8aa"
+      }
+    },
+    {
+      "id": "complex_parallel_parent_then_head",
+      "workers": 4,
+      "materials": 12,
+      "semantic_sha256": "815072534bdddb985b652d685d92f61555591455f61ee4c909289615b8494f60",
+      "external_reference_match": true,
+      "parent": {
+        "total_s": 47.528180290944874,
+        "material_solve_s": 25.700728999916464,
+        "peak_rss_mb": 4118.359375,
+        "report_sha256": "866b50f6f6ef19179fe5374a34d6b3ca46af9662ded9e48312d1dc782d27e4a8"
+      },
+      "head": {
+        "total_s": 47.42048070800956,
+        "material_solve_s": 25.380062667070888,
+        "peak_rss_mb": 4296.140625,
+        "report_sha256": "d41fb38a832009a9e1e4bfe89ad1f6cf8626dd5fcc8411364dea023058a45a2e"
+      }
+    },
+    {
+      "id": "complex_parallel_head_then_parent",
+      "workers": 4,
+      "materials": 12,
+      "semantic_sha256": "815072534bdddb985b652d685d92f61555591455f61ee4c909289615b8494f60",
+      "external_reference_match": true,
+      "parent": {
+        "total_s": 44.214174875058234,
+        "material_solve_s": 23.609135709004477,
+        "peak_rss_mb": 4300.21875,
+        "report_sha256": "a161da5b183043bb23afa9eddc2b3bbc541cb4580364e63ddad69668fa7745ed"
+      },
+      "head": {
+        "total_s": 43.20886808400974,
+        "material_solve_s": 22.80816270899959,
+        "peak_rss_mb": 2071.515625,
+        "report_sha256": "f427d6a2fae0bcfe2a7169458d3f1bcbbb9bb82294d3b20ed99d8654f1fd9dbf"
+      }
+    },
+    {
+      "id": "archive_preview_8",
+      "workers": 1,
+      "materials": 8,
+      "semantic_sha256": "5b4eeb256c7f683bf5be8c28389894d48b4b231e6b0b67ca6310b77b662da526",
+      "external_reference_match": true,
+      "parent": {
+        "total_s": 7.830847000004724,
+        "material_solve_s": 0.28555570798926055,
+        "report_sha256": "7532df939c08d937f564fb1492d06e61115668893e6b3583b593ab5f00b38851"
+      },
+      "head": {
+        "total_s": 8.649109916994348,
+        "material_solve_s": 0.2911289579933509,
+        "report_sha256": "c3cd98426fb1809101989c3275fd82847ac142b20f85b795ec0e797cb1359174"
+      }
+    },
+    {
+      "id": "archive_preview_12",
+      "workers": 1,
+      "materials": 12,
+      "semantic_sha256": "541caf418a339ee73031e89132b597d79e5d7b4147a14bbf62c0f17c99d10f3d",
+      "external_reference_match": true,
+      "parent": {
+        "total_s": 8.557673166971654,
+        "material_solve_s": 0.5049877499695867,
+        "report_sha256": "950536167cdf736f31a5463c39c8fddc3b3233fd0760064a413b04ba1a478c7f"
+      },
+      "head": {
+        "total_s": 8.368862624978647,
+        "material_solve_s": 0.573558083968237,
+        "report_sha256": "3adc9249b55313ecece13f51418d0e75e8a62373d65ea54e34a5427d4250bf71"
+      }
+    },
+    {
+      "id": "archive_preview_15",
+      "workers": 1,
+      "materials": 15,
+      "semantic_sha256": "1eeb065ca151fde598f5801ed45750846f2c179fbee9164ca3fd052cb19a873d",
+      "external_reference_match": true,
+      "parent": {
+        "total_s": 8.378694332903251,
+        "material_solve_s": 0.49100899999029934,
+        "report_sha256": "d46cd2abae96f1311b0e5dd75c43165484d69137f702f4a12814bec2bdcdeeb7"
+      },
+      "head": {
+        "total_s": 7.96746233291924,
+        "material_solve_s": 0.4575778330909088,
+        "report_sha256": "9feba4f5166ba84d9a5e742b66a4d84f634b2cac094722740640bf059553f33e"
+      }
+    },
+    {
+      "id": "archive_generate_12",
+      "workers": 1,
+      "materials": 12,
+      "semantic_sha256": "1bebb01962b610b522377f0de34215246a435b8dac6e73e98d2adb68cb970f7a",
+      "external_reference_match": true,
+      "geometry_records": 12,
+      "canonical_3mf_members": 18,
+      "glb_sha256": "525af466f6e9da534c6d2b1a8b115869f62e28ff61868f7447609b6b1ee27091",
+      "parent": {
+        "total_s": 17.85161904199049,
+        "material_solve_s": 0.4812480420805514,
+        "report_sha256": "d153313dfa54f1a11ac76f81a72abd5ff6a37513e7bb7ad404a0f6176b6e7167"
+      },
+      "head": {
+        "total_s": 17.644772083032876,
+        "material_solve_s": 0.46339379192795604,
+        "report_sha256": "a4dd5a13307c7a2caf545bc941329df549c9bfd21fda45f0dfb32fbb60e8572a"
+      }
+    }
+  ],
+  "claim_boundary": {
+    "stable_percentage_claim": false,
+    "real_24_or_32_core_host_verified": false,
+    "real_64_gib_host_verified": false,
+    "peak_rss_attribution": "inconclusive due fresh-process variability"
+  }
+}

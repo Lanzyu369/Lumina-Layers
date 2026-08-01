@@ -23,7 +23,7 @@ profile and semantic-snapshot harness.
 **Files:**
 - Modify: `tests/test_material_neighbor_coherence_unit.py`
 
-- [ ] **Step 0: Move the controlled serial candidate stub**
+- [x] **Step 0: Move the controlled serial candidate stub**
 
 In `test_neighbor_coherence_reuses_source_norm_for_reverse_direction`, move
 the one-row candidate result from `_top_k_candidate_rows_blockwise` to
@@ -32,7 +32,7 @@ serial implementation starts requesting exact rows on demand. Before the
 production change, this migration also contributes to RED because the old
 serial path ignores the new stub.
 
-- [ ] **Step 1: Write the failing serial-demand regression**
+- [x] **Step 1: Write the failing serial-demand regression**
 
 Add a test that first records the eager reference from `_coherence_fixture`,
 then rejects any call to `_top_k_candidate_rows_blockwise` during a serial run
@@ -75,7 +75,7 @@ def test_serial_coherence_computes_top_k_rows_once_on_demand(
         np.testing.assert_array_equal(actual_array, expected_array)
 ```
 
-- [ ] **Step 2: Add the eager parallel-path regression**
+- [x] **Step 2: Add the eager parallel-path regression**
 
 Wrap `_top_k_candidate_rows_blockwise`, run the same fixture with four workers,
 and require the wrapper to observe `parallelism=4` exactly once while the
@@ -107,7 +107,7 @@ def test_parallel_coherence_keeps_eager_blockwise_top_k(
         np.testing.assert_array_equal(actual_array, expected_array)
 ```
 
-- [ ] **Step 3: Add duplicate-candidate complete-output parity**
+- [x] **Step 3: Add duplicate-candidate complete-output parity**
 
 Copy `_coherence_fixture`, append duplicate candidate Lab, sRGB, and recipe
 rows in the same order to all three candidate arrays, then compare complete
@@ -128,7 +128,7 @@ def test_serial_coherence_preserves_duplicate_candidate_ties() -> None:
         np.testing.assert_array_equal(actual_array, expected_array)
 ```
 
-- [ ] **Step 4: Run RED and confirm the intended failure**
+- [x] **Step 4: Run RED and confirm the intended failure**
 
 Run:
 
@@ -141,7 +141,7 @@ Run:
 Expected: FAIL because the current serial implementation invokes
 `_top_k_candidate_rows_blockwise` before the pair loop.
 
-- [ ] **Step 5: Commit the failing tests**
+- [x] **Step 5: Commit the failing tests**
 
 ```bash
 git add tests/test_material_neighbor_coherence_unit.py
@@ -154,7 +154,7 @@ git commit -m "test(materials): lock demand-driven exact top-k"
 - Modify: `core/material_cache.py`
 - Test: `tests/test_material_neighbor_coherence_unit.py`
 
-- [ ] **Step 1: Add `_ExactTopKRowCache`**
+- [x] **Step 1: Add `_ExactTopKRowCache`**
 
 Add a private dataclass beside `_top_k_candidate_rows_blockwise`. It keeps
 preallocated `np.intp` indices, float64 distances, and a readiness vector. Its
@@ -211,7 +211,7 @@ class _ExactTopKRowCache:
         return self.indices[row_index], self.distances[row_index]
 ```
 
-- [ ] **Step 2: Select serial cache versus eager arrays once**
+- [x] **Step 2: Select serial cache versus eager arrays once**
 
 In `_neighbor_coherence_refine`, replace unconditional Top-K materialization
 with:
@@ -236,7 +236,7 @@ else:
     )
 ```
 
-- [ ] **Step 3: Retrieve both candidate rows without changing decisions**
+- [x] **Step 3: Retrieve both candidate rows without changing decisions**
 
 At the current `adjust_idx` access point, call `topk_row_cache.get(adjust_idx)`
 for serial execution; otherwise index the non-optional eager arrays. Keep the
@@ -253,7 +253,7 @@ else:
 cand_labs = all_lab[cand_indices]
 ```
 
-- [ ] **Step 4: Run GREEN**
+- [x] **Step 4: Run GREEN**
 
 Run:
 
@@ -264,7 +264,7 @@ Run:
 Expected: all coherence tests pass, including the new demand, parallel, and
 duplicate-tie regressions.
 
-- [ ] **Step 5: Commit the implementation**
+- [x] **Step 5: Commit the implementation**
 
 ```bash
 git add core/material_cache.py tests/test_material_neighbor_coherence_unit.py
@@ -277,7 +277,7 @@ git commit -m "perf(materials): compute serial coherence top-k on demand"
 - Verify: `core/material_cache.py`
 - Verify: `tests/test_material_neighbor_coherence_unit.py`
 
-- [ ] **Step 1: Run the related backend suite**
+- [x] **Step 1: Run the related backend suite**
 
 ```bash
 .venv/bin/python -m pytest \
@@ -294,7 +294,7 @@ git commit -m "perf(materials): compute serial coherence top-k on demand"
 
 Expected: PASS with no fixed test-count assumption.
 
-- [ ] **Step 2: Run syntax and whitespace checks**
+- [x] **Step 2: Run syntax and whitespace checks**
 
 ```bash
 .venv/bin/python -m py_compile \
@@ -310,29 +310,29 @@ Expected: both commands exit zero.
 - Create: `docs/superpowers/specs/2026-08-01-material-coherence-demand-topk-results.md`
 - Create: `progress/material-coherence-demand-topk-evidence.json`
 
-- [ ] **Step 1: Profile the 9,503-colour SVG in serial**
+- [x] **Step 1: Profile the 9,503-colour SVG in serial**
 
 Run immediate parent/head pairs with `LUMINA_VECTOR_PARALLELISM=1`, one run per
 fresh process, and require the head to accept the parent `profile.json` through
 `--reference-report`.
 
-- [ ] **Step 2: Profile the same SVG with four workers**
+- [x] **Step 2: Profile the same SVG with four workers**
 
 Repeat with `LUMINA_VECTOR_PARALLELISM=4` to prove the retained eager path and
 semantic reference. Reverse one pair's order if timings are close.
 
-- [ ] **Step 3: Verify the supplied 8/12/15-material archive cases**
+- [x] **Step 3: Verify the supplied 8/12/15-material archive cases**
 
 Run `mmexport1784271438721.svg` previews at 8, 12, and 15 materials against
 parent semantic reports.
 
-- [ ] **Step 4: Verify final generation**
+- [x] **Step 4: Verify final generation**
 
 Run one 12-material generate pair and compare the full canonical snapshot,
 including material arrays, all geometry and scene instances, decompressed 3MF
 members, and GLB.
 
-- [ ] **Step 5: Record evidence without overstating it**
+- [x] **Step 5: Record evidence without overstating it**
 
 Write exact commits, commands, timing distributions, memory observations,
 semantic hashes, dependency versions, and unsupported-machine limitations to
