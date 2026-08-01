@@ -98,11 +98,13 @@ samples also showed that resident versus swapped pages changed substantially
 between processes. In the `/usr/bin/time -l` pairs, peak memory footprint was
 slightly lower for the head even when maximum RSS was higher.
 
-The implementation adds only one masked float64 row while an iterator is
-suspended; it does not retain all pair distances. The available evidence shows
-large process-to-process residency variance and no stable peak-memory
-regression attributable to this change. Release gray testing should continue
-to treat peak RSS as a distribution rather than a single cold sample.
+While an iterator is suspended, the implementation retains one masked float64
+distance row and its boolean validity mask in addition to the existing
+row-bounded neighbor state. Both remain `O(C)` and it does not retain all pair
+distances. The available evidence shows large process-to-process residency
+variance and no stable peak-memory regression attributable to this change.
+Release gray testing should continue to treat peak RSS as a distribution
+rather than a single cold sample.
 
 ## Semantic Evidence
 
