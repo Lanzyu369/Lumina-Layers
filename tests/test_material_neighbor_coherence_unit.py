@@ -17,6 +17,108 @@ from core.material_cache import (
 from core.material_color_solver import rgb_to_lab
 
 
+def test_real_vector_norm_matches_numpy_bitwise() -> None:
+    rng = np.random.default_rng(20260801)
+    random_vectors = rng.normal(size=(512, 3)).astype(np.float64)
+    edge_vectors = np.asarray(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, -2.0, 3.5],
+            [-0.0, 0.0, -0.0],
+            [1.0e-150, -2.0e-150, 3.0e-150],
+            [1.0e150, -2.0e150, 3.0e150],
+        ],
+        dtype=np.float64,
+    )
+    vectors = np.concatenate((edge_vectors, random_vectors), axis=0)
+
+    expected_bits = np.asarray(
+        [np.linalg.norm(vector) for vector in vectors],
+        dtype=np.float64,
+    ).view(np.uint64)
+    actual_bits = np.asarray(
+        [
+            material_cache_module._real_vector_norm(vector)
+            for vector in vectors
+        ],
+        dtype=np.float64,
+    ).view(np.uint64)
+
+    np.testing.assert_array_equal(actual_bits, expected_bits)
+
+
+def test_neighbor_coherence_reuses_source_norm_for_reverse_direction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target_lab = np.asarray(
+        [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]],
+        dtype=np.float64,
+    )
+    matched_lab = np.asarray(
+        [[0.0, 0.0, 0.0], [-10.0, 0.0, 0.0]],
+        dtype=np.float64,
+    )
+    all_lab = np.asarray([[-20.0, 0.0, 0.0]], dtype=np.float64)
+
+    monkeypatch.setattr(
+        material_cache_module,
+        "rgb_to_lab",
+        lambda _rgb: matched_lab.copy(),
+    )
+    monkeypatch.setattr(
+        material_cache_module,
+        "_iter_neighbor_pairs",
+        lambda *_args, **_kwargs: iter(((0, 1),)),
+    )
+    monkeypatch.setattr(
+        material_cache_module,
+        "_top_k_candidate_rows_blockwise",
+        lambda **_kwargs: (
+            np.zeros((2, 1), dtype=np.intp),
+            np.asarray([[1.0], [0.0]], dtype=np.float64),
+        ),
+    )
+
+    real_norm = material_cache_module._real_vector_norm
+    observed_vectors: list[np.ndarray] = []
+
+    def _recording_norm(vector: np.ndarray) -> np.floating:
+        observed_vectors.append(vector.copy())
+        return real_norm(vector)
+
+    monkeypatch.setattr(
+        material_cache_module,
+        "_real_vector_norm",
+        _recording_norm,
+    )
+    monkeypatch.setattr(
+        material_cache_module.np.linalg,
+        "norm",
+        lambda *_args, **_kwargs: pytest.fail(
+            "coherence hot loop must not call generic norm"
+        ),
+    )
+
+    matched_rgb, _recipes, _delta_e = _neighbor_coherence_refine(
+        target_lab=target_lab,
+        matched_rgb=np.zeros((2, 3), dtype=np.uint8),
+        recipes_user_order=np.zeros((2, 1), dtype=np.int32),
+        delta_e=np.asarray([1.0, 0.0], dtype=np.float64),
+        all_lab=all_lab,
+        all_srgb=np.asarray([[1, 2, 3]], dtype=np.uint8),
+        all_recipes=np.zeros((1, 1), dtype=np.int32),
+        user_mapping=np.asarray([0], dtype=np.int32),
+        coherence_weight=0.8,
+        layer_count=1,
+        uniform_lab=None,
+        uniform_srgb=None,
+        uniform_recipes=None,
+    )
+
+    assert len(observed_vectors) == 3
+    np.testing.assert_array_equal(matched_rgb[0], np.asarray([1, 2, 3]))
+
+
 def _legacy_neighbor_pairs(
     target_lab: np.ndarray,
     threshold: float,
