@@ -422,6 +422,23 @@ def run_fast_mode(temp_log_path: Path, workflow: list[str]) -> dict[str, Any]:
                 *args,
             )
         )
+        mock_pool.submit_timed = AsyncMock(
+            side_effect=lambda worker_fn, *args: (
+                _build_mock_worker_result(
+                    worker_fn,
+                    created_paths,
+                    np,
+                    Image,
+                    *args,
+                ),
+                {
+                    "queue_wait_s": 0.0,
+                    "worker_execution_s": 0.001,
+                    "result_delivery_s": 0.0,
+                    "pool_roundtrip_s": 0.001,
+                },
+            )
+        )
 
         original_lifespan_pool = api_app_module.worker_pool
         app.dependency_overrides[get_session_store] = lambda: test_store

@@ -60,6 +60,19 @@ def _read_context_ids() -> tuple[str | None, str | None]:
     return (get_request_id(), get_session_id())
 
 
+def _return_mapping() -> dict[str, str]:
+    """Return a mutable worker result for timing metadata tests."""
+    return {"status": "ok"}
+
+
+def _return_mapping_with_reserved_key() -> dict[str, object]:
+    """Return a mapping that must remain byte-for-byte caller-owned."""
+    return {
+        "status": "ok",
+        "_worker_pool_timing": {"worker_owned": True},
+    }
+
+
 # ---------------------------------------------------------------------------
 # Lifecycle tests
 # ---------------------------------------------------------------------------
@@ -339,6 +352,55 @@ class TestSubmit:
             assert result == 10
         finally:
             pool.shutdown(wait=True)
+
+    @pytest.mark.asyncio
+    async def test_submit_does_not_mutate_or_overwrite_mapping_results(
+        self,
+    ) -> None:
+        pool = WorkerPoolManager(max_workers=1)
+        pool.start()
+        try:
+            result = await pool.submit(_return_mapping_with_reserved_key)
+        finally:
+            pool.shutdown(wait=True)
+
+        assert result == {
+            "status": "ok",
+            "_worker_pool_timing": {"worker_owned": True},
+        }
+
+    @pytest.mark.asyncio
+    async def test_submit_timed_returns_bounded_timing_without_info_log(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        target_logger = logging.getLogger("lumina.api.worker_pool")
+        target_logger.addHandler(caplog.handler)
+        caplog.set_level(logging.DEBUG, logger=target_logger.name)
+        pool = WorkerPoolManager(max_workers=1)
+        pool.start()
+        try:
+            result, timing = await pool.submit_timed(_return_mapping)
+        finally:
+            pool.shutdown(wait=True)
+
+        assert result == {"status": "ok"}
+        assert set(timing) == {
+            "queue_wait_s",
+            "worker_execution_s",
+            "result_delivery_s",
+            "pool_roundtrip_s",
+        }
+        assert all(float(value) >= 0.0 for value in timing.values())
+        assert timing["pool_roundtrip_s"] >= timing["worker_execution_s"]
+
+        records = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "worker_pool_task_timing"
+        ]
+        assert len(records) == 1
+        assert records[0].levelno == logging.DEBUG
 
     @pytest.mark.asyncio
     async def test_submit_raises_runtime_error_when_not_started(self) -> None:

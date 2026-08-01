@@ -25,6 +25,7 @@ import numpy as np
 from fastapi import UploadFile
 from fastapi.testclient import TestClient
 from PIL import Image
+import pytest
 
 from api.app import app
 from api.dependencies import get_session_store, get_file_registry, get_worker_pool
@@ -81,6 +82,27 @@ def teardown_module(module):
 setup_module(None)
 
 client: TestClient = TestClient(app)
+
+
+async def _timed_submit_via_preview_mock(
+    *args: object,
+    **kwargs: object,
+) -> tuple[object, dict[str, float]]:
+    return await _mock_pool.submit(*args, **kwargs), {}
+
+
+@pytest.fixture(autouse=True)
+def _keep_preview_pool_timing_opt_in() -> object:
+    """Keep legacy submit assertions while the route uses submit_timed."""
+    previous = _mock_pool.submit_timed
+    _mock_pool.submit_timed = AsyncMock(
+        side_effect=_timed_submit_via_preview_mock,
+    )
+    try:
+        yield
+    finally:
+        _mock_pool.submit_timed = previous
+
 
 # Mock cache_data returned by generate_preview_cached
 _mock_matched_rgb: np.ndarray = np.zeros((80, 120, 3), dtype=np.uint8)
@@ -262,6 +284,7 @@ def _run_preview_with_local_dependencies(
     registry: FileRegistry,
     cache: dict | None = None,
     externalize_side_effect=None,
+    worker_timing: dict[str, float] | None = None,
 ) -> tuple[object, _RecordingSessionStore]:
     """Run /api/convert/preview with isolated dependencies and temp dir."""
 
@@ -272,8 +295,10 @@ def _run_preview_with_local_dependencies(
 
     store = _RecordingSessionStore()
     pool = MagicMock(spec=WorkerPoolManager)
-    pool.submit = AsyncMock(
-        return_value=_create_worker_result_files_in_dir(tmp_path, cache=cache)
+    worker_result = _create_worker_result_files_in_dir(tmp_path, cache=cache)
+    pool.submit = AsyncMock(return_value=worker_result)
+    pool.submit_timed = AsyncMock(
+        return_value=(worker_result, dict(worker_timing or {}))
     )
     uploaded_path = tmp_path / "uploaded.png"
     Image.new("RGB", (10, 10), (0, 0, 0)).save(uploaded_path)
@@ -326,6 +351,37 @@ def _run_preview_with_local_dependencies(
                 app.dependency_overrides[dependency] = previous
 
     return response, store
+
+
+def test_preview_response_exposes_worker_pool_timing(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    timing = {
+        "queue_wait_s": 0.125,
+        "worker_execution_s": 0.75,
+        "result_delivery_s": 0.025,
+        "pool_roundtrip_s": 0.9,
+    }
+    registry = FileRegistry()
+
+    response, store = _run_preview_with_local_dependencies(
+        monkeypatch,
+        tmp_path,
+        registry=registry,
+        worker_timing=timing,
+    )
+
+    assert response.status_code == 200, response.text
+    performance = response.json()["performance_timing"]
+    assert performance["queue_wait_ms"] == 125.0
+    assert performance["worker_execution_ms"] == 750.0
+    assert performance["result_delivery_ms"] == 25.0
+    assert performance["endpoint_post_worker_ms"] >= 0.0
+
+    session_id = response.json()["session_id"]
+    store.close(session_id)
+    registry.cleanup_session(session_id)
 
 
 class TestPreviewRegistrationFailureRollback:
@@ -1697,6 +1753,7 @@ class TestSvgLargeFormatWarnings:
         worker_result = _create_worker_result_files()
         pool = MagicMock(spec=WorkerPoolManager)
         pool.submit = AsyncMock(return_value=worker_result)
+        pool.submit_timed = AsyncMock(return_value=(worker_result, {}))
 
         upload = UploadFile(filename="", file=_make_test_image_buf())
 

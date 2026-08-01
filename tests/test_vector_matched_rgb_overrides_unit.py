@@ -15,16 +15,28 @@ silently dropped from the generated 3MF.
 
 from __future__ import annotations
 
+import copy
+import gc
+import hashlib
+import inspect
 import importlib.util
+import json
 import logging
 import os
 import sys
 import types
+import weakref
 
 import numpy as np
 import pytest
 from scipy.spatial import cKDTree
-from shapely.geometry import GeometryCollection, MultiPolygon, box
+from shapely.geometry import (
+    GeometryCollection,
+    LineString,
+    MultiPolygon,
+    Polygon,
+    box,
+)
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
@@ -49,6 +61,18 @@ VectorAnalysis = _ve.VectorAnalysis
 apply_matched_rgb_overrides_to_analysis = getattr(
     _ve, "apply_matched_rgb_overrides_to_analysis", None
 )
+
+
+def test_runtime_candidate_does_not_share_a_full_canvas_oracle() -> None:
+    assert not hasattr(
+        _ve,
+        "_apply_matched_rgb_overrides_full_canvas_reference",
+    )
+    implementation = getattr(
+        _ve,
+        "_apply_matched_rgb_overrides_to_analysis_impl",
+    )
+    assert "use_roi" not in inspect.signature(implementation).parameters
 
 
 def _attach_caplog(caplog: pytest.LogCaptureFixture, logger_name: str, level: int) -> logging.Logger:
@@ -238,9 +262,811 @@ def _compound_cache_arrays() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return matched_rgb, mask_solid, material_matrix
 
 
+def _projection_reference_geometries() -> list[object]:
+    """Return geometry cases that exercise legacy OpenCV clipping semantics."""
+
+    polygon_with_hole = Polygon(
+        [
+            (0.25, 0.25),
+            (11.75, 0.4),
+            (11.45, 7.65),
+            (0.4, 7.7),
+            (0.25, 0.25),
+        ],
+        holes=[
+            [
+                (3.15, 2.2),
+                (8.65, 2.35),
+                (8.3, 5.8),
+                (3.4, 5.65),
+                (3.15, 2.2),
+            ]
+        ],
+    )
+    disconnected = MultiPolygon(
+        [
+            box(0.15, 0.2, 2.35, 2.8),
+            Polygon(
+                [
+                    (4.05, 1.1),
+                    (11.72, 0.55),
+                    (10.8, 7.45),
+                    (5.3, 6.9),
+                    (4.05, 1.1),
+                ]
+            ),
+        ]
+    )
+    mixed_collection = GeometryCollection(
+        [
+            box(0.5, 0.5, 4.25, 6.5),
+            box(7.1, 1.2, 11.5, 7.4),
+            LineString([(0.0, 7.9), (12.0, 7.9)]),
+        ]
+    )
+    clipped_outside_canvas = MultiPolygon(
+        [
+            box(-2.4, -1.6, 3.75, 4.55),
+            Polygon(
+                [
+                    (9.45, 5.9),
+                    (14.4, 5.5),
+                    (13.7, 9.6),
+                    (10.15, 8.8),
+                    (9.45, 5.9),
+                ]
+            ),
+        ]
+    )
+    subpixel_polygon = Polygon(
+        [
+            (0.049, 0.051),
+            (0.151, 6.949),
+            (6.051, 7.949),
+            (11.951, 3.051),
+            (11.849, 0.149),
+            (0.049, 0.051),
+        ]
+    )
+    fully_outside = MultiPolygon(
+        [
+            box(-8.0, -8.0, -4.0, -4.0),
+            box(20.0, 20.0, 25.0, 25.0),
+        ]
+    )
+    one_pixel_polygon = box(1.01, 1.01, 1.09, 1.09)
+    return [
+        polygon_with_hole,
+        disconnected,
+        mixed_collection,
+        clipped_outside_canvas,
+        subpixel_polygon,
+        fully_outside,
+        one_pixel_polygon,
+    ]
+
+
+def _make_projection_reference_analysis(geometry) -> "VectorAnalysis":
+    shape = {
+        "geometry": geometry,
+        "color": (255, 0, 0),
+        "matched_rgb": (255, 0, 0),
+        "height_identity_rgb": (0, 255, 0),
+        "lut_idx": 1,
+        "recipe": [1, 1, 1, 1, 1],
+        "original_recipe": [2, 2, 2, 2, 2],
+        "source_id": "reference-corpus",
+        "draw_order": 17,
+    }
+    return VectorAnalysis(
+        shape_data=[],
+        clipped_shapes=[dict(shape)],
+        matched_shapes=[shape],
+        silhouette=geometry,
+        scale_factor=1.0,
+        bbox=(0.0, 0.0, 12.0, 8.0),
+        color_conf={"slots": ["W", "R", "G", "B"], "preview": {}},
+        slot_names=["W", "R", "G", "B"],
+        num_channels=4,
+        num_layers=5,
+        preview_colors={
+            0: [255, 255, 255, 255],
+            1: [255, 0, 0, 255],
+            2: [0, 255, 0, 255],
+            3: [0, 0, 255, 255],
+        },
+    )
+
+
+def _projection_reference_arrays() -> tuple[
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+]:
+    """Build deterministic colors, identities, recipes, and background holes."""
+
+    yy, xx = np.indices((80, 120), dtype=np.int32)
+    color_indices = (xx + 2 * yy) % 4
+    palette = np.asarray(
+        [
+            [255, 255, 255],
+            [255, 0, 0],
+            [0, 255, 0],
+            [0, 0, 255],
+        ],
+        dtype=np.uint8,
+    )
+    matched_rgb = palette[color_indices]
+    height_identity_rgb = palette[(color_indices + 1) % 4]
+    material_matrix = np.stack(
+        [
+            color_indices,
+            (color_indices + 1) % 4,
+            (color_indices + 2) % 4,
+            (color_indices + 3) % 4,
+            color_indices,
+        ],
+        axis=-1,
+    ).astype(np.int16)
+    mask_solid = ((3 * xx + 5 * yy) % 11) != 0
+    return matched_rgb, height_identity_rgb, material_matrix, mask_solid
+
+
+def _normalise_projection_value(value):
+    if hasattr(value, "wkb_hex"):
+        return ("geometry_wkb_hex", value.wkb_hex)
+    if isinstance(value, np.ndarray):
+        return (
+            "ndarray",
+            str(value.dtype),
+            tuple(value.shape),
+            value.tobytes(),
+        )
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, dict):
+        return tuple(
+            (str(key), _normalise_projection_value(item))
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_normalise_projection_value(item) for item in value)
+    return value
+
+
+def _normalise_projection_shapes(analysis: "VectorAnalysis") -> tuple:
+    return tuple(
+        _normalise_projection_value(shape)
+        for shape in analysis.matched_shapes
+    )
+
+
+def _legacy_full_canvas_mask(
+    geometry,
+    *,
+    canvas_shape: tuple[int, int],
+    coord_scale: float,
+) -> np.ndarray | None:
+    """Frozen pre-ROI rasterizer copied from base SHA 8d26399b."""
+    import cv2
+
+    def iter_components(value):
+        if value is None or value.is_empty:
+            return []
+        if value.geom_type == "Polygon":
+            return [value]
+        if value.geom_type in ("MultiPolygon", "GeometryCollection"):
+            components = []
+            for child in value.geoms:
+                components.extend(iter_components(child))
+            return components
+        return []
+
+    def points(coords):
+        raster_points = np.column_stack(
+            [
+                coords[:, 0] * coord_scale,
+                coords[:, 1] * coord_scale,
+            ]
+        ).astype(np.int32)
+        return raster_points if len(raster_points) >= 3 else None
+
+    region = np.zeros(canvas_shape, dtype=np.uint8)
+    painted = False
+    for polygon in iter_components(geometry):
+        exterior = points(np.asarray(polygon.exterior.coords))
+        if exterior is None:
+            continue
+        cv2.fillPoly(region, [exterior], 255)
+        painted = True
+        for interior in polygon.interiors:
+            hole = points(np.asarray(interior.coords))
+            if hole is not None:
+                cv2.fillPoly(region, [hole], 0)
+    return region.astype(bool) if painted else None
+
+
+def _projection_snapshot_sha256(analysis: "VectorAnalysis") -> str:
+    payload = json.dumps(
+        _normalise_projection_shapes(analysis),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "geometry",
+    [
+        pytest.param(geometry, id=f"geometry-{index}")
+        for index, geometry in enumerate(_projection_reference_geometries())
+    ],
+)
+def test_roi_rasterizer_matches_full_canvas_mask_exactly(geometry) -> None:
+    """A cropped raster must reconstruct the legacy full-canvas mask exactly."""
+
+    roi_rasterizer = getattr(
+        _ve,
+        "_rasterize_geometry_roi_mask",
+        None,
+    )
+    assert callable(roi_rasterizer)
+
+    full_mask = _legacy_full_canvas_mask(
+        geometry,
+        canvas_shape=(80, 120),
+        coord_scale=10.0,
+    )
+    roi_result = roi_rasterizer(
+        geometry,
+        canvas_shape=(80, 120),
+        coord_scale=10.0,
+    )
+
+    if full_mask is None:
+        assert roi_result is None
+        return
+    assert roi_result is not None
+    y_slice, x_slice, roi_mask = roi_result
+    reconstructed = np.zeros_like(full_mask, dtype=bool)
+    reconstructed[y_slice, x_slice] = roi_mask
+    np.testing.assert_array_equal(reconstructed, full_mask)
+
+
+def test_roi_rasterizer_matches_seeded_polygon_corpus_exactly() -> None:
+    roi_rasterizer = _ve._rasterize_geometry_roi_mask
+    rng = np.random.default_rng(20260730)
+
+    for canvas_shape, coord_scale in (
+        ((7, 11), 0.75),
+        ((80, 120), 10.0),
+        ((211, 317), 25.3),
+    ):
+        for _index in range(64):
+            points = rng.uniform(
+                low=(-5.0, -4.0),
+                high=(17.0, 12.0),
+                size=(12, 2),
+            )
+            geometry = Polygon(points).convex_hull
+            full_mask = _legacy_full_canvas_mask(
+                geometry,
+                canvas_shape=canvas_shape,
+                coord_scale=coord_scale,
+            )
+            roi_result = roi_rasterizer(
+                geometry,
+                canvas_shape=canvas_shape,
+                coord_scale=coord_scale,
+            )
+            assert full_mask is not None
+            assert roi_result is not None
+            y_slice, x_slice, roi_mask = roi_result
+            reconstructed = np.zeros_like(full_mask, dtype=bool)
+            reconstructed[y_slice, x_slice] = roi_mask
+            np.testing.assert_array_equal(reconstructed, full_mask)
+
+
+def test_roi_rasterizer_explicit_fully_outside_and_one_pixel_cases() -> None:
+    fully_outside, one_pixel = _projection_reference_geometries()[-2:]
+
+    outside_mask = _legacy_full_canvas_mask(
+        fully_outside,
+        canvas_shape=(80, 120),
+        coord_scale=10.0,
+    )
+    one_pixel_mask = _legacy_full_canvas_mask(
+        one_pixel,
+        canvas_shape=(80, 120),
+        coord_scale=10.0,
+    )
+
+    assert outside_mask is not None
+    assert np.count_nonzero(outside_mask) == 0
+    assert one_pixel_mask is not None
+    assert np.count_nonzero(one_pixel_mask) == 1
+
+
+@pytest.mark.parametrize(
+    ("geometry", "expected_changed", "expected_sha256"),
+    [
+        pytest.param(
+            geometry,
+            expected_changed,
+            expected_sha256,
+            id=f"base-golden-{index}",
+        )
+        for index, (
+            geometry,
+            expected_changed,
+            expected_sha256,
+        ) in enumerate(
+            zip(
+                _projection_reference_geometries(),
+                [1, 2, 2, 2, 1, 0, 1],
+                [
+                    "f16c4675c94f499284775b2ad6b58d50fef14815b413bfd5b055776572c57e12",
+                    "0681b0aa801f7641a8520a4e2dcccaff9cd0a70f2681b25c4195288fc8538c0f",
+                    "72e8a0f88bf8a7c8c0b8c8aa922ab57f50d3a246290dd3956afd83cfd72c9b52",
+                    "3450b13c1917927aa279b2ed488a02fd6b6a6f972b6d2e23ab5011046afea13b",
+                    "37a81835872dfe1958661546a5cea103ae25e557e3928f87db1f564ec66f8d5b",
+                    "7d7bb8171b7e959890ad1af340338dd7acb3ee2ecefc9ab53ff0d8e10957d6e1",
+                    "8edbc7805e3114c1d1a12e8ec717f61b1a77d11bbfc5cd87963f1bee7cb04b69",
+                ],
+                strict=True,
+            )
+        )
+    ],
+)
+def test_roi_projection_matches_independent_base_shape_record_golden(
+    geometry,
+    expected_changed: int,
+    expected_sha256: str,
+) -> None:
+    """ROI records must match golden output captured from base SHA 8d26399b."""
+
+    candidate_analysis = _make_projection_reference_analysis(geometry)
+    (
+        matched_rgb,
+        height_identity_rgb,
+        material_matrix,
+        mask_solid,
+    ) = _projection_reference_arrays()
+    kwargs = {
+        "matched_rgb": matched_rgb,
+        "height_identity_rgb": height_identity_rgb,
+        "material_matrix": material_matrix,
+        "mask_solid": mask_solid,
+        "img_processor": _build_fake_img_processor(),
+        "strict": True,
+    }
+
+    candidate_changed = apply_matched_rgb_overrides_to_analysis(
+        candidate_analysis,
+        **kwargs,
+    )
+
+    assert candidate_changed == expected_changed
+    assert _projection_snapshot_sha256(candidate_analysis) == expected_sha256
+
+
+def test_roi_projection_records_bounded_pixel_work_metrics() -> None:
+    geometry = MultiPolygon(
+        [
+            box(0.5, 0.5, 1.5, 1.5),
+            box(9.0, 5.0, 11.5, 7.5),
+        ]
+    )
+    analysis = _make_projection_reference_analysis(geometry)
+    (
+        matched_rgb,
+        height_identity_rgb,
+        material_matrix,
+        mask_solid,
+    ) = _projection_reference_arrays()
+
+    apply_matched_rgb_overrides_to_analysis(
+        analysis,
+        matched_rgb=matched_rgb,
+        height_identity_rgb=height_identity_rgb,
+        material_matrix=material_matrix,
+        mask_solid=mask_solid,
+        img_processor=_build_fake_img_processor(),
+        strict=True,
+    )
+
+    metrics = analysis.matched_rgb_override_metrics
+    assert metrics["raster_strategy"] == "roi"
+    assert metrics["component_count"] == 2
+    assert metrics["full_canvas_pixel_work"] == 2 * 80 * 120
+    assert 0 < metrics["roi_pixel_work"] < metrics["full_canvas_pixel_work"]
+    assert 0 < metrics["max_roi_pixels"] < 80 * 120
+    assert metrics["effective_pixel_count"] > 0
+    assert metrics["pixel_work_reduction_ratio"] == pytest.approx(
+        metrics["full_canvas_pixel_work"] / metrics["roi_pixel_work"]
+    )
+
+
+def test_roi_projection_caches_repeated_rgb_lut_queries() -> None:
+    geometry = MultiPolygon(
+        [
+            box(0.5, 0.5, 2.0, 2.0),
+            box(4.0, 2.0, 6.0, 4.0),
+            box(8.0, 5.0, 11.0, 7.5),
+        ]
+    )
+    analysis = _make_projection_reference_analysis(geometry)
+    matched_rgb = np.full((80, 120, 3), [255, 0, 0], dtype=np.uint8)
+    identity_rgb = matched_rgb.copy()
+    material_matrix = np.ones((80, 120, 5), dtype=np.int16)
+    mask_solid = np.ones((80, 120), dtype=bool)
+    processor = _build_fake_img_processor()
+    original_rgb_to_lab = processor._rgb_to_lab
+    original_kdtree = processor.kdtree
+    calls = {"rgb_to_lab": 0, "query": 0}
+
+    def _counted_rgb_to_lab(values):
+        calls["rgb_to_lab"] += 1
+        return original_rgb_to_lab(values)
+
+    class _CountingTree:
+        def query(self, values):
+            calls["query"] += 1
+            return original_kdtree.query(values)
+
+    processor._rgb_to_lab = _counted_rgb_to_lab
+    processor.kdtree = _CountingTree()
+
+    apply_matched_rgb_overrides_to_analysis(
+        analysis,
+        matched_rgb=matched_rgb,
+        height_identity_rgb=identity_rgb,
+        material_matrix=material_matrix,
+        mask_solid=mask_solid,
+        img_processor=processor,
+        strict=True,
+    )
+
+    assert calls == {"rgb_to_lab": 1, "query": 1}
+
+
+@pytest.mark.parametrize(
+    ("row_count", "layer_count", "low", "high"),
+    [
+        (1, 1, 0, 1),
+        (257, 5, -1, 4),
+        (513, 10, -1, 16),
+        (129, 20, 0, 3),
+    ],
+)
+def test_packed_material_stack_vote_matches_numpy_unique_exactly(
+    row_count: int,
+    layer_count: int,
+    low: int,
+    high: int,
+) -> None:
+    rng = np.random.default_rng(
+        20260730 + row_count + layer_count
+    )
+    stacks = rng.integers(
+        low,
+        high,
+        size=(row_count, layer_count),
+        dtype=np.int32,
+    )
+    if row_count >= 4:
+        stacks[1] = stacks[0]
+        stacks[3] = stacks[2]
+
+    expected_rows, expected_counts = np.unique(
+        stacks,
+        axis=0,
+        return_counts=True,
+    )
+    actual_rows, actual_counts, _used_packed = (
+        _ve._unique_material_stacks_exact(stacks)
+    )
+
+    np.testing.assert_array_equal(actual_rows, expected_rows)
+    np.testing.assert_array_equal(actual_counts, expected_counts)
+
+
+def test_material_stack_uint64_encoding_matches_mixed_radix_reference() -> None:
+    stacks = np.asarray(
+        [
+            [-1, 0, 3, 2],
+            [3, 2, 1, -1],
+            [0, 0, 0, 0],
+        ],
+        dtype=np.int32,
+    )
+    min_value = -1
+    radix = 5
+    expected = np.asarray(
+        [
+            sum(
+                (int(value) - min_value)
+                * (radix ** (stacks.shape[1] - column - 1))
+                for column, value in enumerate(row)
+            )
+            for row in stacks
+        ],
+        dtype=np.uint64,
+    )
+
+    actual = _ve._pack_material_stacks_uint64(
+        stacks,
+        min_value=min_value,
+        radix=radix,
+    )
+
+    np.testing.assert_array_equal(actual, expected)
+
+
+def test_packed_material_stack_vote_preserves_legacy_int32_coercion() -> None:
+    stacks = np.asarray(
+        [
+            [-1, 0, 3, 2],
+            [3, 2, 1, -1],
+            [0, 0, 0, 0],
+        ],
+        dtype=np.int8,
+    )
+
+    rows, _counts, used_packed = _ve._unique_material_stacks_exact(stacks)
+
+    assert used_packed is True
+    assert rows.dtype == np.int32
+
+
+def test_material_stack_vote_keeps_safe_compact_rows_inside_packer(
+    monkeypatch,
+) -> None:
+    stacks = np.asarray(
+        [
+            [-1, 0, 3, 2],
+            [3, 2, 1, -1],
+            [0, 0, 0, 0],
+        ],
+        dtype=np.int16,
+    )
+    packed_input_dtypes: list[np.dtype] = []
+    original_pack = _ve._pack_material_stacks_uint64
+
+    def recording_pack(rows, *, min_value, radix):
+        packed_input_dtypes.append(rows.dtype)
+        return original_pack(
+            rows,
+            min_value=min_value,
+            radix=radix,
+        )
+
+    monkeypatch.setattr(
+        _ve,
+        "_pack_material_stacks_uint64",
+        recording_pack,
+    )
+
+    rows, _counts, used_packed = _ve._unique_material_stacks_exact(stacks)
+
+    assert used_packed is True
+    assert packed_input_dtypes == [np.dtype(np.int16)]
+    assert rows.dtype == np.int32
+
+
+def test_material_stack_vote_preserves_legacy_int32_wrap_and_tie_break() -> None:
+    stacks = np.asarray(
+        [
+            [0],
+            [2**31],
+        ],
+        dtype=np.int64,
+    )
+    legacy_rows, legacy_counts = np.unique(
+        stacks.astype(np.int32),
+        axis=0,
+        return_counts=True,
+    )
+
+    rows, counts, _used_packed = _ve._unique_material_stacks_exact(stacks)
+
+    np.testing.assert_array_equal(rows, legacy_rows)
+    np.testing.assert_array_equal(counts, legacy_counts)
+    assert rows[int(np.argmax(counts))].tolist() == [-(2**31)]
+
+
+def test_material_stack_vote_coerces_uint64_like_legacy_without_overflow() -> None:
+    stacks = np.asarray(
+        [
+            [0],
+            [np.iinfo(np.uint64).max],
+            [0],
+        ],
+        dtype=np.uint64,
+    )
+    legacy_rows, legacy_counts = np.unique(
+        stacks.astype(np.int32),
+        axis=0,
+        return_counts=True,
+    )
+
+    rows, counts, _used_packed = _ve._unique_material_stacks_exact(stacks)
+
+    np.testing.assert_array_equal(rows, legacy_rows)
+    np.testing.assert_array_equal(counts, legacy_counts)
+    assert rows[int(np.argmax(counts))].tolist() == [0]
+
+
+@pytest.mark.parametrize(
+    ("dtype", "wrapped_value"),
+    [
+        (np.int64, 2**31),
+        (np.uint64, np.iinfo(np.uint64).max),
+    ],
+)
+@pytest.mark.parametrize("strict", [False, True])
+def test_public_projection_preserves_legacy_integer_matrix_coercion(
+    dtype,
+    wrapped_value: int,
+    strict: bool,
+) -> None:
+    analysis = _make_projection_reference_analysis(box(0.0, 0.0, 12.0, 8.0))
+    matched_rgb = np.full((80, 120, 3), [255, 0, 0], dtype=np.uint8)
+    identity_rgb = matched_rgb.copy()
+    mask_solid = np.zeros((80, 120), dtype=bool)
+    mask_solid[10, 10:12] = True
+    material_matrix = np.zeros((80, 120, 5), dtype=dtype)
+    material_matrix[10, 10] = [0, 2, 2, 2, 2]
+    material_matrix[10, 11] = [wrapped_value, 3, 3, 3, 3]
+
+    changed = apply_matched_rgb_overrides_to_analysis(
+        analysis,
+        matched_rgb=matched_rgb,
+        height_identity_rgb=identity_rgb,
+        material_matrix=material_matrix,
+        mask_solid=mask_solid,
+        img_processor=_build_fake_img_processor(),
+        strict=strict,
+    )
+
+    assert changed == 1
+    assert analysis.matched_shapes[0]["recipe"] == [3, 3, 3, 3, 3]
+
+
+def test_packed_material_stack_vote_uses_one_numpy_code_buffer(
+    monkeypatch,
+) -> None:
+    stacks = np.asarray(
+        [
+            [2, 0, 0],
+            [1, 9, 9],
+            [2, 0, 0],
+            [3, 1, 4],
+            [1, 9, 9],
+        ],
+        dtype=np.int8,
+    )
+    chunk_sizes: list[int] = []
+    original_pack = _ve._pack_material_stacks_uint64
+
+    def _recording_pack(rows, *, min_value, radix):
+        chunk_sizes.append(int(rows.shape[0]))
+        return original_pack(
+            rows,
+            min_value=min_value,
+            radix=radix,
+        )
+
+    # A former implementation split the rows into tiny chunks and accumulated
+    # Python ``dict[int, int]`` entries. Across thousands of components those
+    # short-lived objects made the interpreter retain hundreds of MiB. Keep
+    # this stale knob present during the regression test to prove it is ignored.
+    monkeypatch.setattr(
+        _ve,
+        "_MATERIAL_STACK_PACK_CHUNK_ROWS",
+        2,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        _ve,
+        "_pack_material_stacks_uint64",
+        _recording_pack,
+    )
+
+    expected_rows, expected_counts = np.unique(
+        stacks,
+        axis=0,
+        return_counts=True,
+    )
+    actual_rows, actual_counts, used_packed = (
+        _ve._unique_material_stacks_exact(stacks)
+    )
+
+    assert chunk_sizes == [len(stacks)]
+    assert used_packed is True
+    np.testing.assert_array_equal(actual_rows, expected_rows)
+    np.testing.assert_array_equal(actual_counts, expected_counts)
+
+
+def test_packed_material_stack_vote_stays_numpy_on_high_cardinality(
+    monkeypatch,
+) -> None:
+    stacks = np.asarray(
+        [
+            [0, 0],
+            [0, 1],
+            [1, 0],
+            [1, 1],
+        ],
+        dtype=np.int8,
+    )
+    monkeypatch.setattr(
+        _ve,
+        "_MATERIAL_STACK_PACK_MAX_UNIQUE",
+        2,
+        raising=False,
+    )
+
+    expected_rows, expected_counts = np.unique(
+        stacks,
+        axis=0,
+        return_counts=True,
+    )
+    actual_rows, actual_counts, used_packed = (
+        _ve._unique_material_stacks_exact(stacks)
+    )
+
+    assert used_packed is True
+    np.testing.assert_array_equal(actual_rows, expected_rows)
+    np.testing.assert_array_equal(actual_counts, expected_counts)
+
+
+def test_packed_material_stack_vote_preserves_lexicographic_tie_break() -> None:
+    stacks = np.asarray(
+        [
+            [2, 0, 0],
+            [1, 9, 9],
+            [2, 0, 0],
+            [1, 9, 9],
+        ],
+        dtype=np.int32,
+    )
+
+    rows, counts, used_packed = _ve._unique_material_stacks_exact(stacks)
+    dominant = rows[int(np.argmax(counts))]
+
+    assert used_packed is True
+    assert dominant.tolist() == [1, 9, 9]
+
+
+def test_material_stack_vote_falls_back_exactly_when_uint64_would_overflow() -> None:
+    rng = np.random.default_rng(20260730)
+    stacks = rng.integers(
+        0,
+        16,
+        size=(128, 40),
+        dtype=np.int32,
+    )
+    expected_rows, expected_counts = np.unique(
+        stacks,
+        axis=0,
+        return_counts=True,
+    )
+
+    actual_rows, actual_counts, used_packed = (
+        _ve._unique_material_stacks_exact(stacks)
+    )
+
+    assert used_packed is False
+    np.testing.assert_array_equal(actual_rows, expected_rows)
+    np.testing.assert_array_equal(actual_counts, expected_counts)
 
 
 @pytest.mark.skipif(
@@ -791,6 +1617,10 @@ class TestRunVectorBranchWiring:
         helper_result: int = 0,
         helper_error: Exception | None = None,
         recipe_call_log: list[dict] | None = None,
+        helper_metrics: dict | None = None,
+        on_build_mesh=None,
+        on_export=None,
+        retain_helper_arguments: bool = True,
     ):
         """Build the patch context shared by both wiring tests.
 
@@ -804,6 +1634,9 @@ class TestRunVectorBranchWiring:
 
         from core.pipeline import coordinator
 
+        class _FakeAnalysis:
+            pass
+
         class _FakeVectorProcessor:
             parse_warnings: list[str] = []
             last_stage_timings: dict[str, float] = {}
@@ -816,19 +1649,25 @@ class TestRunVectorBranchWiring:
                 # got the same processor object the branch used.
                 # 非平凡哨兵；helper patch 用它确认收到的就是分支构造的处理器。
                 self.img_processor = SimpleNamespace(tag="fake-img-processor")
+                captured["processor_ref"] = weakref.ref(self)
 
             def analyze_svg(self, *, svg_path: str, target_width_mm: float, color_replacements=None):
                 del svg_path, target_width_mm, color_replacements
-                return SimpleNamespace(
-                    matched_shapes=[],
-                    num_layers=5,
-                    num_channels=4,
-                    preview_colors={0: [255, 0, 0, 255]},
-                    slot_names=["Slot 1"],
-                )
+                analysis = _FakeAnalysis()
+                analysis.matched_shapes = []
+                analysis.num_layers = 5
+                analysis.num_channels = 4
+                analysis.preview_colors = {0: [255, 0, 0, 255]}
+                analysis.slot_names = ["Slot 1"]
+                analysis.image_vectorizer_bounds = None
+                analysis.scale_factor = 1.0
+                captured["analysis_ref"] = weakref.ref(analysis)
+                return analysis
 
             def build_mesh(self, *, analysis, thickness_mm: float, structure_mode: str):
                 del analysis, thickness_mm, structure_mode
+                if on_build_mesh is not None:
+                    on_build_mesh()
                 scene = trimesh.Scene()
                 scene.add_geometry(trimesh.creation.box(extents=(1, 1, 1)), geom_name="Slot 1")
                 return scene
@@ -839,9 +1678,15 @@ class TestRunVectorBranchWiring:
                 return None
 
         def _fake_helper(*args, **kwargs):
-            helper_call_log.append({"args": args, "kwargs": kwargs})
+            helper_call_log.append(
+                {"args": args, "kwargs": kwargs}
+                if retain_helper_arguments
+                else {"called": True}
+            )
             if helper_error is not None:
                 raise helper_error
+            if helper_metrics is not None:
+                args[0].matched_rgb_override_metrics = dict(helper_metrics)
             return helper_result
 
         def _fake_recipe_helper(*args, **kwargs):
@@ -849,6 +1694,8 @@ class TestRunVectorBranchWiring:
                 recipe_call_log.append({"args": args, "kwargs": kwargs})
 
         def _fake_export_scene_with_bambu_metadata(**kwargs):
+            if on_export is not None:
+                on_export()
             captured.update(kwargs)
             return kwargs["output_path"]
 
@@ -894,7 +1741,22 @@ class TestRunVectorBranchWiring:
 
         captured: dict = {}
         helper_calls: list[dict] = []
-        cms = self._patch_dependencies(captured, helper_calls)
+        helper_metrics = {
+            "raster_strategy": "roi",
+            "component_count": 7,
+            "full_canvas_pixel_work": 11200,
+            "roi_pixel_work": 700,
+            "max_roi_pixels": 200,
+            "effective_pixel_count": 490,
+            "pixel_work_reduction_ratio": 16.0,
+            "rewritten_component_count": 0,
+            "output_shape_count": 7,
+        }
+        cms = self._patch_dependencies(
+            captured,
+            helper_calls,
+            helper_metrics=helper_metrics,
+        )
 
         with cms[0], cms[1], cms[2], cms[3], cms[4], cms[5], patch(
             "config.MODELS_DIR", str(tmp_path)
@@ -937,6 +1799,190 @@ class TestRunVectorBranchWiring:
         # img_processor 必须是分支构造的处理器持有的对象，否则 helper 会
         # 拿到错误的 KDTree，等于没修。
         assert kwargs["img_processor"].tag == "fake-img-processor"
+        timings = result["vector_timing"]
+        assert {
+            "analyze_svg_s",
+            "matched_rgb_override_s",
+            "recipe_override_s",
+            "build_mesh_s",
+            "mesh_total_s",
+            "export_3mf_s",
+            "export_glb_s",
+            "vector_branch_total_s",
+        }.issubset(timings)
+        assert timings["matched_rgb_override_s"] > 0.0
+        assert timings["recipe_override_s"] == 0.0
+        assert timings["build_mesh_s"] > 0.0
+        assert result["matched_rgb_override_metrics"] == helper_metrics
+        assert timings["matched_rgb_override_component_count"] == 7
+        assert timings["matched_rgb_override_full_canvas_pixel_work"] == 11200
+        assert timings["matched_rgb_override_roi_pixel_work"] == 700
+        assert timings["matched_rgb_override_max_roi_pixels"] == 200
+        assert timings["matched_rgb_override_effective_pixel_count"] == 490
+        assert timings["matched_rgb_override_pixel_work_reduction_ratio"] == 16.0
+
+    def test_cached_override_arrays_are_released_before_mesh_build(
+        self,
+        tmp_path,
+    ):
+        """Large preview arrays must not overlap the mesh-build memory peak."""
+        from unittest.mock import patch
+
+        from config import ModelingMode
+        from core.pipeline import coordinator
+        from core.preview_analysis_cache import REQUIRED_PREVIEW_ANALYSIS_REUSE
+
+        array_paths = {
+            "matched_rgb_path": tmp_path / "matched.npy",
+            "height_identity_rgb_path": tmp_path / "height-identity.npy",
+            "mask_solid_path": tmp_path / "mask.npy",
+            "material_matrix_path": tmp_path / "material.npy",
+        }
+        np.save(
+            array_paths["matched_rgb_path"],
+            np.zeros((4, 4, 3), dtype=np.uint8),
+        )
+        np.save(
+            array_paths["height_identity_rgb_path"],
+            np.zeros((4, 4, 3), dtype=np.uint8),
+        )
+        np.save(
+            array_paths["mask_solid_path"],
+            np.ones((4, 4), dtype=bool),
+        )
+        np.save(
+            array_paths["material_matrix_path"],
+            np.ones((4, 4, 5), dtype=np.int16),
+        )
+
+        original_load = np.load
+        loaded_array_refs: list[weakref.ReferenceType[np.ndarray]] = []
+        load_options: list[dict] = []
+
+        def _tracked_load(*args, **kwargs):
+            load_options.append(dict(kwargs))
+            loaded = original_load(*args, **kwargs)
+            loaded_array_refs.append(weakref.ref(loaded))
+            return loaded
+
+        def _assert_cache_arrays_released() -> None:
+            gc.collect()
+            assert len(loaded_array_refs) == 4
+            assert all(ref() is None for ref in loaded_array_refs)
+
+        captured: dict = {}
+        helper_calls: list[dict] = []
+        cms = self._patch_dependencies(
+            captured,
+            helper_calls,
+            on_build_mesh=_assert_cache_arrays_released,
+            retain_helper_arguments=False,
+        )
+        ctx = {
+            "image_path": str(tmp_path / "vector.svg"),
+            "actual_lut_path": str(tmp_path / "fake.json"),
+            "color_mode": "5-Color Extended",
+            "modeling_mode": ModelingMode.HIGH_FIDELITY,
+            "target_width_mm": 40.0,
+            "spacer_thick": 1.6,
+            "structure_mode": "单面",
+            "need_2d_preview": False,
+            "printer_id": "bambu-h2d",
+            "slicer": "BambuStudio",
+            "nozzle_size": "0.4",
+            "reuse_preview_analysis": REQUIRED_PREVIEW_ANALYSIS_REUSE,
+            **{key: str(path) for key, path in array_paths.items()},
+        }
+
+        with cms[0], cms[1], cms[2], cms[3], cms[4], cms[5], patch(
+            "config.MODELS_DIR",
+            str(tmp_path),
+        ), patch("config.OUTPUT_DIR", str(tmp_path)), patch(
+            "core.pipeline.vector_branch.np.load",
+            side_effect=_tracked_load,
+        ):
+            result = coordinator._run_vector_branch(ctx)
+
+        assert "error" not in result
+        assert helper_calls == [{"called": True}]
+        assert len(load_options) == 4
+        assert all(
+            options.get("mmap_mode") == "r"
+            for options in load_options
+        )
+
+    def test_analysis_is_released_before_export_without_2d_preview(
+        self,
+        tmp_path,
+    ):
+        """Completed mesh exports must not retain the full analysis graph."""
+        from unittest.mock import patch
+
+        from config import ModelingMode
+        from core.pipeline import coordinator
+        from core.preview_analysis_cache import REQUIRED_PREVIEW_ANALYSIS_REUSE
+
+        array_paths = {
+            "matched_rgb_path": tmp_path / "matched.npy",
+            "height_identity_rgb_path": tmp_path / "height-identity.npy",
+            "mask_solid_path": tmp_path / "mask.npy",
+            "material_matrix_path": tmp_path / "material.npy",
+        }
+        np.save(
+            array_paths["matched_rgb_path"],
+            np.zeros((4, 4, 3), dtype=np.uint8),
+        )
+        np.save(
+            array_paths["height_identity_rgb_path"],
+            np.zeros((4, 4, 3), dtype=np.uint8),
+        )
+        np.save(
+            array_paths["mask_solid_path"],
+            np.ones((4, 4), dtype=bool),
+        )
+        np.save(
+            array_paths["material_matrix_path"],
+            np.ones((4, 4, 5), dtype=np.int16),
+        )
+
+        captured: dict = {}
+        helper_calls: list[dict] = []
+
+        def _assert_heavy_objects_released() -> None:
+            gc.collect()
+            assert captured["analysis_ref"]() is None
+            assert captured["processor_ref"]() is None
+
+        cms = self._patch_dependencies(
+            captured,
+            helper_calls,
+            on_export=_assert_heavy_objects_released,
+            retain_helper_arguments=False,
+        )
+        ctx = {
+            "image_path": str(tmp_path / "vector.svg"),
+            "actual_lut_path": str(tmp_path / "fake.json"),
+            "color_mode": "5-Color Extended",
+            "modeling_mode": ModelingMode.HIGH_FIDELITY,
+            "target_width_mm": 40.0,
+            "spacer_thick": 1.6,
+            "structure_mode": "单面",
+            "need_2d_preview": False,
+            "printer_id": "bambu-h2d",
+            "slicer": "BambuStudio",
+            "nozzle_size": "0.4",
+            "reuse_preview_analysis": REQUIRED_PREVIEW_ANALYSIS_REUSE,
+            **{key: str(path) for key, path in array_paths.items()},
+        }
+
+        with cms[0], cms[1], cms[2], cms[3], cms[4], cms[5], patch(
+            "config.MODELS_DIR",
+            str(tmp_path),
+        ), patch("config.OUTPUT_DIR", str(tmp_path)):
+            result = coordinator._run_vector_branch(ctx)
+
+        assert "error" not in result
+        assert helper_calls == [{"called": True}]
 
     def test_helper_skipped_when_only_one_cache_path_present(self, tmp_path):
         """Either path missing (or both) must skip the helper to avoid a
@@ -1036,7 +2082,7 @@ class TestRunVectorBranchWiring:
 
         assert len(helper_calls) == 1
         assert helper_calls[0]["kwargs"]["strict"] is True
-        assert captured == {}
+        assert set(captured) == {"analysis_ref", "processor_ref"}
 
     def test_recipe_helper_uses_preview_cache_grid_when_svg_density_differs(self, tmp_path):
         """Recipe override masks are preview-cache artifacts, not generation rasters."""
@@ -1094,6 +2140,10 @@ class TestRunVectorBranchWiring:
         kwargs = recipe_calls[0]["kwargs"]
         assert kwargs["pixels_per_mm"] == 10.0
         assert kwargs["region_masks"]["region-A"].shape == (4, 4)
+        timings = result["vector_timing"]
+        assert timings["matched_rgb_override_s"] == 0.0
+        assert timings["recipe_override_s"] > 0.0
+        assert timings["build_mesh_s"] > 0.0
 
     def test_vector_branch_logs_structured_events(self, tmp_path, caplog):
         """The coordinator vector branch must emit explicit structured events."""
