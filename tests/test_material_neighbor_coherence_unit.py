@@ -47,6 +47,58 @@ def test_real_vector_norm_matches_numpy_bitwise() -> None:
     np.testing.assert_array_equal(actual_bits, expected_bits)
 
 
+def test_neighbor_pair_distances_match_source_norm_bitwise() -> None:
+    rng = np.random.default_rng(20260801)
+    lab_like_targets = rng.normal(
+        loc=np.asarray([50.0, 0.0, 0.0]),
+        scale=np.asarray([18.0, 35.0, 35.0]),
+        size=(41, 3),
+    ).astype(np.float64)
+    edge_targets = np.asarray(
+        [
+            [0.0, 0.0, 0.0],
+            [-0.0, 0.0, -0.0],
+            [1.0e-150, -2.0e-150, 3.0e-150],
+            [-1.0e-150, 2.0e-150, -3.0e-150],
+            [1.0e150, -2.0e150, 3.0e150],
+            [-1.0e150, 2.0e150, -3.0e150],
+        ],
+        dtype=np.float64,
+    )
+
+    for targets, threshold in (
+        (lab_like_targets, 20.0),
+        (edge_targets, 1.0e151),
+    ):
+        yielded = list(
+            material_cache_module._iter_neighbor_pairs_with_distances(
+                targets,
+                threshold=threshold,
+            )
+        )
+        actual_pairs = np.asarray(
+            [(row, column) for row, column, _distance in yielded],
+            dtype=np.intp,
+        ).reshape(-1, 2)
+        expected_pairs = _legacy_neighbor_pairs(targets, threshold)
+        actual_bits = np.asarray(
+            [distance for _row, _column, distance in yielded],
+            dtype=np.float64,
+        ).view(np.uint64)
+        expected_bits = np.asarray(
+            [
+                material_cache_module._real_vector_norm(
+                    targets[column] - targets[row]
+                )
+                for row, column in expected_pairs
+            ],
+            dtype=np.float64,
+        ).view(np.uint64)
+
+        np.testing.assert_array_equal(actual_pairs, expected_pairs)
+        np.testing.assert_array_equal(actual_bits, expected_bits)
+
+
 def test_neighbor_coherence_reuses_source_norm_for_reverse_direction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -67,8 +119,8 @@ def test_neighbor_coherence_reuses_source_norm_for_reverse_direction(
     )
     monkeypatch.setattr(
         material_cache_module,
-        "_iter_neighbor_pairs",
-        lambda *_args, **_kwargs: iter(((0, 1),)),
+        "_iter_neighbor_pairs_with_distances",
+        lambda *_args, **_kwargs: iter(((0, 1, np.float64(10.0)),)),
     )
     monkeypatch.setattr(
         material_cache_module,
@@ -115,7 +167,7 @@ def test_neighbor_coherence_reuses_source_norm_for_reverse_direction(
         uniform_recipes=None,
     )
 
-    assert len(observed_vectors) == 3
+    assert len(observed_vectors) == 2
     np.testing.assert_array_equal(matched_rgb[0], np.asarray([1, 2, 3]))
 
 
