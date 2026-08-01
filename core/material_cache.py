@@ -967,6 +967,69 @@ def _top_k_candidate_rows_blockwise(
     return selected_indices, selected_distances
 
 
+@dataclass
+class _ExactTopKRowCache:
+    """Request-local exact Top-K rows for serial coherence refinement.
+
+    串行邻近一致性修正使用的请求级精确 Top-K 行缓存。
+    """
+
+    target_lab: np.ndarray
+    candidate_lab: np.ndarray
+    top_k: int
+    indices: np.ndarray
+    distances: np.ndarray
+    ready: np.ndarray
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        target_lab: np.ndarray,
+        candidate_lab: np.ndarray,
+        top_k: int,
+    ) -> "_ExactTopKRowCache":
+        """Allocate an empty cache without computing candidate rows.
+
+        分配空缓存，不提前计算任何候选行。
+        """
+
+        targets = np.asarray(target_lab)
+        candidates = np.asarray(candidate_lab)
+        effective_top_k = min(max(0, int(top_k)), candidates.shape[0])
+        return cls(
+            target_lab=targets,
+            candidate_lab=candidates,
+            top_k=effective_top_k,
+            indices=np.empty(
+                (targets.shape[0], effective_top_k),
+                dtype=np.intp,
+            ),
+            distances=np.empty(
+                (targets.shape[0], effective_top_k),
+                dtype=np.float64,
+            ),
+            ready=np.zeros(targets.shape[0], dtype=bool),
+        )
+
+    def get(self, row_index: int) -> tuple[np.ndarray, np.ndarray]:
+        """Return one exact legacy Top-K row, computing it at most once.
+
+        返回一行与旧实现完全一致的 Top-K，每行最多计算一次。
+        """
+
+        if not self.ready[row_index]:
+            block_indices, block_distances = _top_k_candidate_block(
+                self.target_lab[row_index : row_index + 1],
+                self.candidate_lab,
+                self.top_k,
+            )
+            self.indices[row_index] = block_indices[0]
+            self.distances[row_index] = block_distances[0]
+            self.ready[row_index] = True
+        return self.indices[row_index], self.distances[row_index]
+
+
 def _real_vector_norm(vector: np.ndarray) -> np.floating:
     """Return the exact NumPy real 1-D fast-path norm for a known vector."""
 
@@ -1027,13 +1090,23 @@ def _neighbor_coherence_refine(
     # 2. Get top-K candidates for each target (computed once)
     K_total = all_lab.shape[0]
     top_k = min(_NEIGHBOR_COHERENCE_TOP_K, K_total)
-    topk_indices, topk_distances = _top_k_candidate_rows_blockwise(
-        target_lab=target_lab,
-        candidate_lab=all_lab,
-        top_k=top_k,
-        block_size=candidate_block_size,
-        parallelism=parallelism,
-    )
+    topk_row_cache: _ExactTopKRowCache | None = None
+    topk_indices: np.ndarray | None = None
+    topk_distances: np.ndarray | None = None
+    if int(parallelism) <= 1:
+        topk_row_cache = _ExactTopKRowCache.create(
+            target_lab=target_lab,
+            candidate_lab=all_lab,
+            top_k=top_k,
+        )
+    else:
+        topk_indices, topk_distances = _top_k_candidate_rows_blockwise(
+            target_lab=target_lab,
+            candidate_lab=all_lab,
+            top_k=top_k,
+            block_size=candidate_block_size,
+            parallelism=parallelism,
+        )
 
     # Current matched Lab (from matched_rgb)
     matched_lab = rgb_to_lab(matched_rgb).astype(np.float64)
@@ -1102,9 +1175,14 @@ def _neighbor_coherence_refine(
         d_src_unit = d_src_to_adjust / d_src_to_adjust_norm
 
         # Get top-K candidates for the adjust target
-        cand_indices = topk_indices[adjust_idx]  # (top_k,)
+        if topk_row_cache is not None:
+            cand_indices, cand_des = topk_row_cache.get(adjust_idx)
+        else:
+            assert topk_indices is not None
+            assert topk_distances is not None
+            cand_indices = topk_indices[adjust_idx]
+            cand_des = topk_distances[adjust_idx]
         cand_labs = all_lab[cand_indices]  # (top_k, 3)
-        cand_des = topk_distances[adjust_idx]  # (top_k,)
 
         # Current anchor matched Lab
         anchor_lab = matched_lab[anchor_idx]
