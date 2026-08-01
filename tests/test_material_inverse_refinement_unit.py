@@ -225,6 +225,7 @@ def test_refinement_reuses_one_workspace_for_shared_subset(
         "generate_candidate_recipes",
         _record_generation,
     )
+    inverse_refinement._candidate_recipe_index_template.cache_clear()
 
     batched = refine_material_matches(
         target_srgb=target_srgb,
@@ -250,6 +251,66 @@ def test_refinement_reuses_one_workspace_for_shared_subset(
         )
         assert batched.delta_e[index] == expected.delta_e[0]
         assert batched.improved_mask[index] == expected.improved_mask[0]
+    inverse_refinement._candidate_recipe_index_template.cache_clear()
+
+
+def test_bounded_subset_recipes_reuses_deterministic_index_template(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Different material subsets reuse one shape-equivalent recipe template."""
+
+    original_generate = inverse_refinement.generate_candidate_recipes
+    generation_calls: list[tuple[int, int, int, int]] = []
+
+    def _record_generation(
+        *,
+        material_count: int,
+        layer_count: int,
+        candidate_budget: int,
+        seed: int,
+    ):
+        generation_calls.append(
+            (material_count, layer_count, candidate_budget, seed),
+        )
+        return original_generate(
+            material_count=material_count,
+            layer_count=layer_count,
+            candidate_budget=candidate_budget,
+            seed=seed,
+        )
+
+    monkeypatch.setattr(
+        inverse_refinement,
+        "generate_candidate_recipes",
+        _record_generation,
+    )
+    inverse_refinement._candidate_recipe_index_template.cache_clear()
+
+    first = inverse_refinement._bounded_subset_recipes(
+        subset=np.asarray([0, 1, 2, 3], dtype=np.int32),
+        depth=3,
+        budget=16,
+        seed=7,
+    )
+    second = inverse_refinement._bounded_subset_recipes(
+        subset=np.asarray([4, 5, 6, 7], dtype=np.int32),
+        depth=3,
+        budget=16,
+        seed=7,
+    )
+    inverse_refinement._bounded_subset_recipes(
+        subset=np.asarray([4, 5, 6, 7], dtype=np.int32),
+        depth=3,
+        budget=16,
+        seed=8,
+    )
+
+    assert generation_calls == [
+        (4, 3, 16, 7),
+        (4, 3, 16, 8),
+    ]
+    np.testing.assert_array_equal(second, first + 4)
+    inverse_refinement._candidate_recipe_index_template.cache_clear()
 
 
 def test_refinement_builds_each_subset_once_and_parallel_results_stay_stable(
@@ -317,6 +378,7 @@ def test_refinement_builds_each_subset_once_and_parallel_results_stay_stable(
         "generate_candidate_recipes",
         _record_generation,
     )
+    inverse_refinement._candidate_recipe_index_template.cache_clear()
 
     parallel = refine_material_matches(
         target_srgb=target_srgb,
@@ -331,281 +393,9 @@ def test_refinement_builds_each_subset_once_and_parallel_results_stay_stable(
         parallelism=2,
     )
 
-    assert generation_calls == 4
+    assert generation_calls == 2
     np.testing.assert_array_equal(parallel.matched_srgb, serial.matched_srgb)
     np.testing.assert_array_equal(parallel.recipes, serial.recipes)
     np.testing.assert_array_equal(parallel.delta_e, serial.delta_e)
     np.testing.assert_array_equal(parallel.improved_mask, serial.improved_mask)
-
-
-def _shared_workspace_fixture():
-    target_recipes = np.asarray(
-        [
-            [0, 1, 1, 2],
-            [3, 1, 0, 2],
-            [1, 3, 2, 0],
-            [2, 2, 2, 2],
-            [0, 0, 0, 0],
-        ],
-        dtype=np.int32,
-    )
-    targets = np.vstack([_srgb_for_recipe(row) for row in target_recipes])
-    baseline_recipes = np.zeros((len(targets), 4), dtype=np.int32)
-    baseline_matched = np.vstack(
-        [_srgb_for_recipe(row) for row in baseline_recipes],
-    )
-    baseline_delta = np.asarray(
-        [
-            _delta_e(targets[index], baseline_matched[index])
-            for index in range(len(targets))
-        ],
-        dtype=np.float64,
-    )
-    config = MaterialInverseRefinementConfig(
-        max_refine_materials=4,
-        max_refine_bottom_prefixes=16,
-        max_refine_top_suffixes=16,
-        refine_bottom_neighbors=2,
-    )
-    key = inverse_refinement._workspace_key(
-        subset=np.arange(4, dtype=np.int32),
-        layer_count=4,
-        config=config,
-    )
-    workspace = inverse_refinement._build_workspace(
-        key=key,
-        materials=PALETTE,
-        layer_height_mm=DEFAULT_LAYER_HEIGHT_MM,
-        substrate="white",
-    )
-    return (
-        targets,
-        baseline_recipes,
-        baseline_matched,
-        baseline_delta,
-        config,
-        workspace,
-    )
-
-
-def test_workspace_row_block_matches_one_row_reference_exactly() -> None:
-    (
-        targets,
-        baseline_recipes,
-        _baseline_matched,
-        baseline_delta,
-        config,
-        workspace,
-    ) = _shared_workspace_fixture()
-    expected = [
-        inverse_refinement._best_refined_row_with_workspace(
-            target_srgb=targets[index],
-            materials=PALETTE,
-            layer_count=4,
-            layer_height_mm=DEFAULT_LAYER_HEIGHT_MM,
-            substrate="white",
-            baseline_recipe=baseline_recipes[index],
-            baseline_delta_e=float(baseline_delta[index]),
-            config=config,
-            workspace=workspace,
-        )
-        for index in range(len(targets))
-    ]
-
-    actual = inverse_refinement._refine_workspace_row_block(
-        row_indices=tuple(range(len(targets))),
-        targets=targets,
-        baseline_recipes=baseline_recipes,
-        baseline_delta_e=baseline_delta,
-        materials=PALETTE,
-        layer_count=4,
-        layer_height_mm=DEFAULT_LAYER_HEIGHT_MM,
-        substrate="white",
-        config=config,
-        workspace=workspace,
-        query_workers=1,
-    )
-
-    assert len(actual) == len(expected)
-    for row_index, expected_row in enumerate(expected):
-        (
-            actual_index,
-            actual_rgb,
-            actual_recipe,
-            actual_delta,
-            actual_improved,
-        ) = actual[row_index]
-        assert actual_index == row_index
-        np.testing.assert_array_equal(actual_rgb, expected_row[0])
-        np.testing.assert_array_equal(actual_recipe, expected_row[1])
-        assert actual_delta == expected_row[2]
-        assert actual_improved == expected_row[3]
-
-
-def test_workspace_row_block_retains_baseline_when_no_suffix_is_valid() -> None:
-    (
-        targets,
-        baseline_recipes,
-        baseline_matched,
-        baseline_delta,
-        config,
-        workspace,
-    ) = _shared_workspace_fixture()
-    invalid_workspace = inverse_refinement._InverseRefinementWorkspace(
-        bottom_recipes=workspace.bottom_recipes,
-        top_recipes=workspace.top_recipes,
-        bottom_linear=workspace.bottom_linear,
-        top_alpha=np.zeros_like(workspace.top_alpha),
-        top_beta=np.full_like(workspace.top_beta, 2.0),
-        bottom_tree=workspace.bottom_tree,
-    )
-
-    actual = inverse_refinement._refine_workspace_row_block(
-        row_indices=(0, 1),
-        targets=targets,
-        baseline_recipes=baseline_recipes,
-        baseline_delta_e=baseline_delta,
-        materials=PALETTE,
-        layer_count=4,
-        layer_height_mm=DEFAULT_LAYER_HEIGHT_MM,
-        substrate="white",
-        config=config,
-        workspace=invalid_workspace,
-        query_workers=1,
-    )
-
-    for position, (_row_index, rgb, recipe, delta, improved) in enumerate(actual):
-        np.testing.assert_array_equal(rgb, baseline_matched[position])
-        np.testing.assert_array_equal(recipe, baseline_recipes[position])
-        assert delta == baseline_delta[position]
-        assert not improved
-
-
-def test_workspace_group_preserves_exact_rows_across_partial_blocks(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    (
-        targets,
-        baseline_recipes,
-        _baseline_matched,
-        baseline_delta,
-        config,
-        _workspace,
-    ) = _shared_workspace_fixture()
-    observed_blocks: list[tuple[int, ...]] = []
-    original = inverse_refinement._refine_workspace_row_block
-
-    def _record_block(**kwargs):
-        observed_blocks.append(tuple(kwargs["row_indices"]))
-        return original(**kwargs)
-
-    monkeypatch.setattr(
-        inverse_refinement,
-        "_refinement_row_block_size",
-        lambda **_kwargs: 2,
-    )
-    monkeypatch.setattr(
-        inverse_refinement,
-        "_refine_workspace_row_block",
-        _record_block,
-    )
-
-    result = inverse_refinement._refine_workspace_group(
-        key=inverse_refinement._workspace_key(
-            subset=np.arange(4, dtype=np.int32),
-            layer_count=4,
-            config=config,
-        ),
-        row_indices=tuple(range(len(targets))),
-        targets=targets,
-        baseline_recipes=baseline_recipes,
-        baseline_delta_e=baseline_delta,
-        materials=PALETTE,
-        layer_count=4,
-        layer_height_mm=DEFAULT_LAYER_HEIGHT_MM,
-        substrate="white",
-        config=config,
-        query_workers=1,
-    )
-
-    assert observed_blocks == [(0, 1), (2, 3), (4,)]
-    assert [row[0] for row in result] == [0, 1, 2, 3, 4]
-
-
-@pytest.mark.parametrize(
-    ("parallelism", "group_count", "expected"),
-    [
-        (1, 1, (1, 1)),
-        (8, 1, (1, 8)),
-        (8, 2, (2, 4)),
-        (8, 3, (3, 2)),
-        (4, 8, (4, 1)),
-    ],
-)
-def test_refinement_worker_allocation_stays_within_budget(
-    parallelism: int,
-    group_count: int,
-    expected: tuple[int, int],
-) -> None:
-    allocation = inverse_refinement._refinement_worker_allocation(
-        parallelism=parallelism,
-        group_count=group_count,
-    )
-
-    assert allocation == expected
-    assert allocation[0] * allocation[1] <= max(1, parallelism)
-
-
-def test_single_workspace_query_workers_preserve_serial_results(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    (
-        targets,
-        baseline_recipes,
-        baseline_matched,
-        baseline_delta,
-        config,
-        _workspace,
-    ) = _shared_workspace_fixture()
-    serial = refine_material_matches(
-        target_srgb=targets,
-        baseline_matched_srgb=baseline_matched,
-        baseline_recipes=baseline_recipes,
-        baseline_delta_e=baseline_delta,
-        materials=PALETTE,
-        layer_count=4,
-        layer_height_mm=DEFAULT_LAYER_HEIGHT_MM,
-        substrate="white",
-        config=config,
-        parallelism=1,
-    )
-    observed_workers: list[int] = []
-    original_query = inverse_refinement._query_bottom_neighbors
-
-    def _record_query_workers(**kwargs):
-        observed_workers.append(int(kwargs["workers"]))
-        return original_query(**kwargs)
-
-    monkeypatch.setattr(
-        inverse_refinement,
-        "_query_bottom_neighbors",
-        _record_query_workers,
-    )
-    parallel = refine_material_matches(
-        target_srgb=targets,
-        baseline_matched_srgb=baseline_matched,
-        baseline_recipes=baseline_recipes,
-        baseline_delta_e=baseline_delta,
-        materials=PALETTE,
-        layer_count=4,
-        layer_height_mm=DEFAULT_LAYER_HEIGHT_MM,
-        substrate="white",
-        config=config,
-        parallelism=4,
-    )
-
-    assert observed_workers and set(observed_workers) == {4}
-    np.testing.assert_array_equal(parallel.matched_srgb, serial.matched_srgb)
-    np.testing.assert_array_equal(parallel.recipes, serial.recipes)
-    np.testing.assert_array_equal(parallel.delta_e, serial.delta_e)
-    np.testing.assert_array_equal(parallel.improved_mask, serial.improved_mask)
+    inverse_refinement._candidate_recipe_index_template.cache_clear()

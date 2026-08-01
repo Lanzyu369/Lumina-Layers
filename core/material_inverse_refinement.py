@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from functools import lru_cache
 
 import numpy as np
 from scipy.spatial import cKDTree
@@ -22,9 +23,6 @@ from core.material_color_solver import (
     srgb_to_linear,
 )
 from core.task_parallelism import task_parallelism_worker_scope
-
-
-_REFINEMENT_TEMP_MEMORY_BUDGET_BYTES = 64 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -213,13 +211,33 @@ def _bounded_subset_recipes(
 ) -> np.ndarray:
     if depth <= 0:
         return np.zeros((1, 0), dtype=np.int32)
+    template = _candidate_recipe_index_template(
+        int(subset.shape[0]),
+        int(depth),
+        max(1, int(budget)),
+        int(seed),
+    )
+    return subset[template].astype(np.int32, copy=False)
+
+
+@lru_cache(maxsize=16)
+def _candidate_recipe_index_template(
+    material_count: int,
+    layer_count: int,
+    candidate_budget: int,
+    seed: int,
+) -> np.ndarray:
+    """Return one immutable deterministic recipe-index template."""
+
     generated = generate_candidate_recipes(
-        material_count=int(subset.shape[0]),
-        layer_count=int(depth),
-        candidate_budget=max(1, int(budget)),
+        material_count=int(material_count),
+        layer_count=int(layer_count),
+        candidate_budget=int(candidate_budget),
         seed=int(seed),
     )
-    return subset[generated.recipes.astype(np.int64)].astype(np.int32, copy=False)
+    template = generated.recipes.astype(np.intp, copy=True)
+    template.setflags(write=False)
+    return template
 
 
 def _workspace_key(
@@ -439,228 +457,6 @@ def _best_refined_row(
     )
 
 
-def _query_bottom_neighbors(
-    *,
-    workspace: _InverseRefinementWorkspace,
-    required_bottom: np.ndarray,
-    neighbor_count: int,
-    workers: int,
-) -> np.ndarray:
-    """Query exact bottom neighbours, tolerating older SciPy releases."""
-
-    query_kwargs = {
-        "k": int(neighbor_count),
-        "eps": 0.0,
-        "workers": max(1, int(workers)),
-    }
-    try:
-        _distances, indices = workspace.bottom_tree.query(
-            required_bottom,
-            **query_kwargs,
-        )
-    except TypeError:
-        query_kwargs.pop("workers")
-        _distances, indices = workspace.bottom_tree.query(
-            required_bottom,
-            **query_kwargs,
-        )
-    result = np.asarray(indices, dtype=np.int64)
-    if int(neighbor_count) == 1:
-        result = result[:, None]
-    return result
-
-
-def _refine_workspace_row_block(
-    *,
-    row_indices: tuple[int, ...],
-    targets: np.ndarray,
-    baseline_recipes: np.ndarray,
-    baseline_delta_e: np.ndarray,
-    materials: list[MaterialParams],
-    layer_count: int,
-    layer_height_mm: float,
-    substrate: str,
-    config: MaterialInverseRefinementConfig,
-    workspace: _InverseRefinementWorkspace,
-    query_workers: int,
-) -> list[tuple[int, np.ndarray, np.ndarray, float, bool]]:
-    """Refine one memory-bounded block without changing row semantics."""
-
-    if not row_indices:
-        return []
-
-    block_indices = np.asarray(row_indices, dtype=np.intp)
-    block_targets = targets[block_indices]
-    block_baseline_recipes = baseline_recipes[block_indices]
-    block_baseline_delta = baseline_delta_e[block_indices]
-    baseline_linear = _predict_linear_for_recipes(
-        recipes=block_baseline_recipes,
-        materials=materials,
-        layer_height_mm=float(layer_height_mm),
-        substrate=substrate,
-    )
-    baseline_srgb = linear_to_srgb_uint8(baseline_linear)
-    results = [
-        (
-            int(row_index),
-            baseline_srgb[position],
-            block_baseline_recipes[position].copy(),
-            float(block_baseline_delta[position]),
-            False,
-        )
-        for position, row_index in enumerate(row_indices)
-    ]
-
-    target_linear = srgb_to_linear(block_targets)
-    target_lab = rgb_to_lab(block_targets).astype(np.float64)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        required = (
-            target_linear[:, None, :] - workspace.top_beta[None, :, :]
-        ) / workspace.top_alpha[None, :, :]
-    tolerance = float(config.required_color_tolerance)
-    valid_mask = (
-        np.isfinite(required).all(axis=2)
-        & (required >= -tolerance).all(axis=2)
-        & (required <= 1.0 + tolerance).all(axis=2)
-    )
-    valid_rows, valid_top_indices = np.nonzero(valid_mask)
-    if valid_rows.size == 0:
-        return results
-
-    neighbor_count = min(
-        max(1, int(config.refine_bottom_neighbors)),
-        workspace.bottom_linear.shape[0],
-    )
-    bottom_indices = _query_bottom_neighbors(
-        workspace=workspace,
-        required_bottom=required[valid_rows, valid_top_indices],
-        neighbor_count=neighbor_count,
-        workers=query_workers,
-    )
-    final_linear = (
-        workspace.top_alpha[valid_top_indices, None, :]
-        * workspace.bottom_linear[bottom_indices]
-        + workspace.top_beta[valid_top_indices, None, :]
-    )
-    flat_srgb = linear_to_srgb_uint8(final_linear.reshape(-1, 3))
-    flat_lab = rgb_to_lab(flat_srgb).astype(np.float64)
-    candidate_targets = np.repeat(
-        target_lab[valid_rows],
-        neighbor_count,
-        axis=0,
-    )
-    candidate_delta = np.linalg.norm(
-        flat_lab - candidate_targets,
-        axis=1,
-    )
-    valid_counts = np.bincount(
-        valid_rows,
-        minlength=len(row_indices),
-    )
-    candidate_offsets = np.concatenate(
-        [
-            np.zeros((1,), dtype=np.int64),
-            np.cumsum(valid_counts * neighbor_count, dtype=np.int64),
-        ],
-    )
-
-    provisional_positions: list[int] = []
-    provisional_recipes: list[np.ndarray] = []
-    for position in range(len(row_indices)):
-        start = int(candidate_offsets[position])
-        stop = int(candidate_offsets[position + 1])
-        if start == stop:
-            continue
-        best_flat = start + int(np.argmin(candidate_delta[start:stop]))
-        if (
-            float(candidate_delta[best_flat])
-            >= float(block_baseline_delta[position]) - 1e-12
-        ):
-            continue
-        query_index, neighbor_index = divmod(best_flat, neighbor_count)
-        bottom_index = int(bottom_indices[query_index, neighbor_index])
-        top_index = int(valid_top_indices[query_index])
-        provisional_positions.append(position)
-        provisional_recipes.append(
-            np.concatenate(
-                [
-                    workspace.bottom_recipes[bottom_index],
-                    workspace.top_recipes[top_index],
-                ],
-            ).astype(np.int32, copy=False),
-        )
-
-    if not provisional_recipes:
-        return results
-
-    recipe_batch = np.stack(provisional_recipes).astype(
-        np.int32,
-        copy=False,
-    )
-    verified_linear = _predict_linear_for_recipes(
-        recipes=recipe_batch,
-        materials=materials,
-        layer_height_mm=float(layer_height_mm),
-        substrate=substrate,
-    )
-    verified_srgb = linear_to_srgb_uint8(verified_linear)
-    verified_lab = rgb_to_lab(verified_srgb).astype(np.float64)
-    verified_delta = np.linalg.norm(
-        verified_lab - target_lab[provisional_positions],
-        axis=1,
-    )
-    for candidate_index, position in enumerate(provisional_positions):
-        row_delta = float(verified_delta[candidate_index])
-        if row_delta >= float(block_baseline_delta[position]) - 1e-12:
-            continue
-        results[position] = (
-            int(row_indices[position]),
-            verified_srgb[candidate_index],
-            recipe_batch[candidate_index],
-            row_delta,
-            True,
-        )
-    return results
-
-
-def _refinement_row_block_size(
-    *,
-    workspace: _InverseRefinementWorkspace,
-    config: MaterialInverseRefinementConfig,
-    row_count: int,
-    memory_budget_bytes: int = _REFINEMENT_TEMP_MEMORY_BUDGET_BYTES,
-) -> int:
-    """Derive a positive row count from the temporary-array budget."""
-
-    top_count = max(1, int(workspace.top_recipes.shape[0]))
-    top_depth = int(workspace.top_recipes.shape[1])
-    neighbors = min(
-        max(1, int(config.refine_bottom_neighbors)),
-        max(1, int(workspace.bottom_linear.shape[0])),
-    )
-    # Pessimistic per-top estimate for required RGB, masks, gathered affine
-    # rows/recipes, neighbour indices, predicted RGB/Lab, and distances.
-    bytes_per_top = 97 + 4 * top_depth + 67 * neighbors
-    estimated_row_bytes = max(1, top_count * bytes_per_top)
-    return min(
-        max(1, int(row_count)),
-        max(1, int(memory_budget_bytes) // estimated_row_bytes),
-    )
-
-
-def _refinement_worker_allocation(
-    *,
-    parallelism: int,
-    group_count: int,
-) -> tuple[int, int]:
-    """Split one admitted worker budget across groups and exact queries."""
-
-    budget = max(1, int(parallelism))
-    active_groups = min(budget, max(1, int(group_count)))
-    query_workers = max(1, budget // active_groups)
-    return active_groups, query_workers
-
-
 def _refine_workspace_group(
     *,
     key: _InverseRefinementWorkspaceKey,
@@ -673,7 +469,6 @@ def _refine_workspace_group(
     layer_height_mm: float,
     substrate: str,
     config: MaterialInverseRefinementConfig,
-    query_workers: int = 1,
 ) -> list[tuple[int, np.ndarray, np.ndarray, float, bool]]:
     """Build one workspace and refine its rows without mutating shared output."""
 
@@ -683,27 +478,28 @@ def _refine_workspace_group(
         layer_height_mm=float(layer_height_mm),
         substrate=substrate,
     )
-    block_size = _refinement_row_block_size(
-        workspace=workspace,
-        config=config,
-        row_count=len(row_indices),
-    )
     results: list[tuple[int, np.ndarray, np.ndarray, float, bool]] = []
-    for start in range(0, len(row_indices), block_size):
-        block_indices = row_indices[start : start + block_size]
-        results.extend(
-            _refine_workspace_row_block(
-                row_indices=block_indices,
-                targets=targets,
-                baseline_recipes=baseline_recipes,
-                baseline_delta_e=baseline_delta_e,
+    for row_index in row_indices:
+        row_srgb, row_recipe, row_delta, did_improve = (
+            _best_refined_row_with_workspace(
+                target_srgb=targets[row_index],
                 materials=materials,
                 layer_count=int(layer_count),
                 layer_height_mm=float(layer_height_mm),
                 substrate=substrate,
+                baseline_recipe=baseline_recipes[row_index],
+                baseline_delta_e=float(baseline_delta_e[row_index]),
                 config=config,
                 workspace=workspace,
-                query_workers=max(1, int(query_workers)),
+            )
+        )
+        results.append(
+            (
+                row_index,
+                row_srgb,
+                row_recipe,
+                row_delta,
+                did_improve,
             ),
         )
     return results
@@ -744,9 +540,8 @@ def refine_material_matches(
         layer_height_mm: Layer thickness in mm. (层厚 mm)
         substrate: ``"white"`` or ``"black"`` substrate. (基底)
         config: Optional refinement config. (可选精修配置)
-        parallelism: Total worker budget shared by independent subset groups
-            and exact KD-tree queries. (独立子集组和精确 KD-tree 查询共享的
-            worker 总预算)
+        parallelism: Maximum independent subset groups to process at once.
+            (同时处理的独立耗材子集组上限)
 
     Returns:
         MaterialInverseRefinementResult: Baseline-or-better matches.
@@ -786,9 +581,30 @@ def refine_material_matches(
         (key, tuple(row_indices))
         for key, row_indices in grouped_rows.items()
     ]
-    worker_count, query_workers = _refinement_worker_allocation(
-        parallelism=parallelism,
-        group_count=len(group_items),
+    template_keys = {
+        (
+            len(key.subset),
+            key.bottom_depth,
+            key.bottom_budget,
+            key.bottom_seed,
+        )
+        for key, _row_indices in group_items
+    }
+    template_keys.update(
+        (
+            len(key.subset),
+            key.top_depth,
+            key.top_budget,
+            key.top_seed,
+        )
+        for key, _row_indices in group_items
+    )
+    for template_key in sorted(template_keys):
+        _candidate_recipe_index_template(*template_key)
+
+    worker_count = min(
+        max(1, int(parallelism)),
+        len(group_items),
     )
     if worker_count > 1:
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
@@ -805,7 +621,6 @@ def refine_material_matches(
                     layer_height_mm=float(layer_height_mm),
                     substrate=substrate,
                     config=cfg,
-                    query_workers=query_workers,
                 )
                 for key, row_indices in group_items
             ]
@@ -823,7 +638,6 @@ def refine_material_matches(
                 layer_height_mm=float(layer_height_mm),
                 substrate=substrate,
                 config=cfg,
-                query_workers=query_workers,
             )
             for key, row_indices in group_items
         ]
