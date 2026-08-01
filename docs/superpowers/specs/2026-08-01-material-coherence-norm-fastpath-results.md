@@ -38,6 +38,7 @@ helper skips only those repeated checks.
 - Apple M5, 10 visible physical/logical CPUs, 16 GiB RAM
 - macOS 26.5.2 arm64
 - Python 3.12.13
+- NumPy 2.4.6
 - `LUMINA_MAX_WORKERS=1`
 - serial runs used `LUMINA_VECTOR_PARALLELISM=1`
 - parallel runs used `LUMINA_VECTOR_PARALLELISM=4`
@@ -61,6 +62,12 @@ LUMINA_VECTOR_PARALLELISM=1 LUMINA_MAX_WORKERS=1 \
 The four-worker parent was rerun from a detached worktree at `554e7e97`, then
 the head was rerun immediately with the same environment and reference. These
 are single-machine cold snapshots, not cross-platform guarantees.
+
+The v2 profile schema does not embed a Git commit. Commit-to-report association
+was recorded by the benchmark operator and is therefore not self-authenticating.
+The retained evidence manifest records the measured commits, report SHA-256
+values, exact input hashes, environment, metrics, and semantic snapshots so the
+association is reviewable instead of existing only in temporary directories.
 
 ## Complex SVG Performance
 
@@ -99,9 +106,10 @@ earlier high samples remain documented rather than being discarded silently.
 
 ## Exact Semantic Evidence
 
-The profiler snapshot hashes matched RGB, height-identity RGB, material
-matrix, solid mask, slot names, geometry metadata, scene instances, and
-artifacts together.
+The five preview pairs matched RGB, height-identity RGB, material matrix, solid
+mask, and slot names. Preview reports do not populate geometry, scene-instance,
+or artifact fields, so those five pairs are not presented as final model/export
+proof.
 
 | Input | Materials / workers | Parent and head semantic SHA-256 |
 |---|---:|---|
@@ -110,11 +118,24 @@ artifacts together.
 | 143-colour archive SVG | 8 / 1 | `5b4eeb256c7f683bf5be8c28389894d48b4b231e6b0b67ca6310b77b662da526` |
 | 143-colour archive SVG | 12 / 1 | `541caf418a339ee73031e89132b597d79e5d7b4147a14bbf62c0f17c99d10f3d` |
 | 143-colour archive SVG | 15 / 1 | `1eeb065ca151fde598f5801ed45750846f2c179fbee9164ca3fd052cb19a873d` |
+| 143-colour archive SVG, generate | 12 / 1 | `1bebb01962b610b522377f0de34215246a435b8dac6e73e98d2adb68cb970f7a` |
 
-All five head cases exited successfully with
-`external_reference_match=true`. Small 8/12/15-material timing changes ranged
+All six head cases exited successfully with `external_reference_match=true`,
+and direct canonical-JSON comparison found each parent/head semantic snapshot
+identical. Small 8/12/15-material preview timing changes ranged
 from minor regressions to minor improvements and are treated as noise; those
 cases exist to prove semantic coverage rather than claim speed.
+
+The separate 12-material generate pair populated and matched all 12 geometry
+records, all 12 scene instances, canonical triangle and visual hashes, world
+bounds/area/volume, every canonicalized 3MF member, and the generated GLB hash.
+Its parent/head total times were 20.112 s and 17.871 s respectively, but this
+small archive input is retained primarily as final-output semantic evidence.
+
+The complete retained evidence is in
+`progress/material-coherence-norm-fastpath-evidence.json`. It includes the full
+head semantic snapshot for every pair plus both report hashes and explicit
+parent/head equality results.
 
 ## TDD and Automated Verification
 
@@ -164,3 +185,7 @@ machine. They describe observed progress, not a release SLA.
   proof rather than being folded into this change.
 - Windows/Linux and real 24/32-core 64-GiB behavior remain separate gray-test
   work and are not claimed by these Apple Silicon samples.
+- NumPy is not currently pinned by the runtime requirements. Bitwise norm
+  equality was verified on NumPy 2.4.6; other supported NumPy versions still
+  require the regression test and end-to-end semantic checks rather than being
+  assumed equivalent.
