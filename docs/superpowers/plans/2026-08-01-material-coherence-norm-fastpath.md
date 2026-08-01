@@ -250,10 +250,10 @@ git commit -m "perf(material): streamline exact coherence norms"
 - Test: `tests/test_material_inverse_refinement_unit.py`
 - Test: `tests/test_material_cache_unit.py`
 - Test: `tests/test_vector_material_matcher_unit.py`
-- Test: `tests/test_material_archive_pipeline_unit.py`
+- Test: `tests/test_pipeline_vector_material_archive_unit.py`
 - Test: `tests/test_task_parallelism_unit.py`
 - Test: `tests/test_converter_multicore_profile_unit.py`
-- Test: `tests/test_timing_responses_unit.py`
+- Test: `tests/test_performance_timing_response_unit.py`
 
 ### Step 1: Run the related regression suite
 
@@ -264,10 +264,10 @@ git commit -m "perf(material): streamline exact coherence norms"
   tests/test_material_inverse_refinement_unit.py \
   tests/test_material_cache_unit.py \
   tests/test_vector_material_matcher_unit.py \
-  tests/test_material_archive_pipeline_unit.py \
+  tests/test_pipeline_vector_material_archive_unit.py \
   tests/test_task_parallelism_unit.py \
   tests/test_converter_multicore_profile_unit.py \
-  tests/test_timing_responses_unit.py -q
+  tests/test_performance_timing_response_unit.py -q
 ```
 
 Expected: PASS; do not rely on a fixed count because parameterized coverage may
