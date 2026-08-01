@@ -1,9 +1,10 @@
 # Material Coherence Exact Norm Fast Path Design
 
 **Date:** 2026-08-01
-**Status:** Approved for implementation
+**Status:** Verified and retained
 **Parent:** `MOVIBALE/feat/vector-material-template-cache` at `554e7e97`
 **Branch:** `MOVIBALE/feat/vector-material-coherence-fastpath`
+**Results:** `2026-08-01-material-coherence-norm-fastpath-results.md`
 
 ## Goal
 
