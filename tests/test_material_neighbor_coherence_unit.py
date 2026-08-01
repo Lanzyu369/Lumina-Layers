@@ -452,7 +452,7 @@ def _coherence_fixture() -> dict[str, np.ndarray | float | int | None]:
     }
 
 
-def test_serial_coherence_computes_top_k_rows_once_on_demand(
+def test_serial_coherence_computes_only_demanded_top_k_rows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fixture = _coherence_fixture()
@@ -483,9 +483,121 @@ def test_serial_coherence_computes_top_k_rows_once_on_demand(
     actual = _neighbor_coherence_refine(**fixture, parallelism=1)
 
     assert len(observed_targets) == 6
+    assert len(observed_targets) < np.asarray(fixture["target_lab"]).shape[0]
     assert len(set(observed_targets)) == len(observed_targets)
     for actual_array, expected_array in zip(actual, expected, strict=True):
         np.testing.assert_array_equal(actual_array, expected_array)
+
+
+def test_exact_top_k_row_cache_computes_same_row_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target_lab = np.asarray(
+        [[0.0, 0.0, 0.0], [4.0, 1.0, -2.0]],
+        dtype=np.float64,
+    )
+    candidate_lab = np.asarray(
+        [[0.0, 0.0, 0.0], [3.0, 1.0, -2.0], [8.0, 2.0, -4.0]],
+        dtype=np.float64,
+    )
+    real_block = material_cache_module._top_k_candidate_block
+    observed_targets: list[bytes] = []
+
+    def _recording_block(
+        target_block: np.ndarray,
+        candidates: np.ndarray,
+        top_k: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        observed_targets.append(target_block.tobytes())
+        return real_block(target_block, candidates, top_k)
+
+    monkeypatch.setattr(
+        material_cache_module,
+        "_top_k_candidate_block",
+        _recording_block,
+    )
+    cache = material_cache_module._ExactTopKRowCache.create(
+        target_lab=target_lab,
+        candidate_lab=candidate_lab,
+        top_k=2,
+    )
+
+    first_indices, first_distances = cache.get(1)
+    second_indices, second_distances = cache.get(1)
+
+    assert observed_targets == [target_lab[1:2].tobytes()]
+    np.testing.assert_array_equal(second_indices, first_indices)
+    np.testing.assert_array_equal(second_distances, first_distances)
+
+
+def test_exact_top_k_row_cache_preserves_k_boundary_tie_order() -> None:
+    target_lab = np.asarray(
+        [[20.0, 0.0, 0.0], [0.0, 0.0, 0.0], [-20.0, 0.0, 0.0]],
+        dtype=np.float64,
+    )
+    candidate_lab = np.asarray(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0],
+            [4.0, 0.0, 0.0],
+            [5.0, 0.0, 0.0],
+            [6.0, 0.0, 0.0],
+            [7.0, 0.0, 0.0],
+            [-7.0, 0.0, 0.0],
+            [30.0, 0.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    top_k = 8
+    eager_indices, eager_distances = _top_k_candidate_rows_blockwise(
+        target_lab=target_lab,
+        candidate_lab=candidate_lab,
+        top_k=top_k,
+        block_size=target_lab.shape[0],
+        parallelism=1,
+    )
+    cache = material_cache_module._ExactTopKRowCache.create(
+        target_lab=target_lab,
+        candidate_lab=candidate_lab,
+        top_k=top_k,
+    )
+
+    cached_indices, cached_distances = cache.get(1)
+
+    all_distances = cdist(target_lab[1:2], candidate_lab)[0]
+    assert np.count_nonzero(all_distances == 7.0) == 2
+    assert np.count_nonzero(cached_distances == 7.0) == 1
+    np.testing.assert_array_equal(cached_indices, eager_indices[1])
+    np.testing.assert_array_equal(cached_distances, eager_distances[1])
+
+
+def test_exact_top_k_row_cache_matches_eager_negative_index() -> None:
+    target_lab = np.asarray(
+        [[0.0, 0.0, 0.0], [4.0, 1.0, -2.0]],
+        dtype=np.float64,
+    )
+    candidate_lab = np.asarray(
+        [[0.0, 0.0, 0.0], [3.0, 1.0, -2.0], [8.0, 2.0, -4.0]],
+        dtype=np.float64,
+    )
+    eager_indices, eager_distances = _top_k_candidate_rows_blockwise(
+        target_lab=target_lab,
+        candidate_lab=candidate_lab,
+        top_k=2,
+        parallelism=1,
+    )
+    cache = material_cache_module._ExactTopKRowCache.create(
+        target_lab=target_lab,
+        candidate_lab=candidate_lab,
+        top_k=2,
+    )
+
+    cached_indices, cached_distances = cache.get(-1)
+
+    np.testing.assert_array_equal(cached_indices, eager_indices[-1])
+    np.testing.assert_array_equal(cached_distances, eager_distances[-1])
 
 
 def test_parallel_coherence_keeps_eager_blockwise_top_k(

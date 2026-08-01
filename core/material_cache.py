@@ -1018,9 +1018,10 @@ class _ExactTopKRowCache:
         返回一行与旧实现完全一致的 Top-K，每行最多计算一次。
         """
 
+        target_row = self.target_lab[row_index]
         if not self.ready[row_index]:
             block_indices, block_distances = _top_k_candidate_block(
-                self.target_lab[row_index : row_index + 1],
+                target_row[None, :],
                 self.candidate_lab,
                 self.top_k,
             )
