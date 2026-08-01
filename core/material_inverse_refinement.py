@@ -648,6 +648,19 @@ def _refinement_row_block_size(
     )
 
 
+def _refinement_worker_allocation(
+    *,
+    parallelism: int,
+    group_count: int,
+) -> tuple[int, int]:
+    """Split one admitted worker budget across groups and exact queries."""
+
+    budget = max(1, int(parallelism))
+    active_groups = min(budget, max(1, int(group_count)))
+    query_workers = max(1, budget // active_groups)
+    return active_groups, query_workers
+
+
 def _refine_workspace_group(
     *,
     key: _InverseRefinementWorkspaceKey,
@@ -731,8 +744,9 @@ def refine_material_matches(
         layer_height_mm: Layer thickness in mm. (层厚 mm)
         substrate: ``"white"`` or ``"black"`` substrate. (基底)
         config: Optional refinement config. (可选精修配置)
-        parallelism: Maximum independent subset groups to process at once.
-            (同时处理的独立耗材子集组上限)
+        parallelism: Total worker budget shared by independent subset groups
+            and exact KD-tree queries. (独立子集组和精确 KD-tree 查询共享的
+            worker 总预算)
 
     Returns:
         MaterialInverseRefinementResult: Baseline-or-better matches.
@@ -772,9 +786,9 @@ def refine_material_matches(
         (key, tuple(row_indices))
         for key, row_indices in grouped_rows.items()
     ]
-    worker_count = min(
-        max(1, int(parallelism)),
-        len(group_items),
+    worker_count, query_workers = _refinement_worker_allocation(
+        parallelism=parallelism,
+        group_count=len(group_items),
     )
     if worker_count > 1:
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
@@ -791,6 +805,7 @@ def refine_material_matches(
                     layer_height_mm=float(layer_height_mm),
                     substrate=substrate,
                     config=cfg,
+                    query_workers=query_workers,
                 )
                 for key, row_indices in group_items
             ]
@@ -808,6 +823,7 @@ def refine_material_matches(
                 layer_height_mm=float(layer_height_mm),
                 substrate=substrate,
                 config=cfg,
+                query_workers=query_workers,
             )
             for key, row_indices in group_items
         ]

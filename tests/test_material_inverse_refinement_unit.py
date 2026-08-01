@@ -530,3 +530,82 @@ def test_workspace_group_preserves_exact_rows_across_partial_blocks(
 
     assert observed_blocks == [(0, 1), (2, 3), (4,)]
     assert [row[0] for row in result] == [0, 1, 2, 3, 4]
+
+
+@pytest.mark.parametrize(
+    ("parallelism", "group_count", "expected"),
+    [
+        (1, 1, (1, 1)),
+        (8, 1, (1, 8)),
+        (8, 2, (2, 4)),
+        (8, 3, (3, 2)),
+        (4, 8, (4, 1)),
+    ],
+)
+def test_refinement_worker_allocation_stays_within_budget(
+    parallelism: int,
+    group_count: int,
+    expected: tuple[int, int],
+) -> None:
+    allocation = inverse_refinement._refinement_worker_allocation(
+        parallelism=parallelism,
+        group_count=group_count,
+    )
+
+    assert allocation == expected
+    assert allocation[0] * allocation[1] <= max(1, parallelism)
+
+
+def test_single_workspace_query_workers_preserve_serial_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (
+        targets,
+        baseline_recipes,
+        baseline_matched,
+        baseline_delta,
+        config,
+        _workspace,
+    ) = _shared_workspace_fixture()
+    serial = refine_material_matches(
+        target_srgb=targets,
+        baseline_matched_srgb=baseline_matched,
+        baseline_recipes=baseline_recipes,
+        baseline_delta_e=baseline_delta,
+        materials=PALETTE,
+        layer_count=4,
+        layer_height_mm=DEFAULT_LAYER_HEIGHT_MM,
+        substrate="white",
+        config=config,
+        parallelism=1,
+    )
+    observed_workers: list[int] = []
+    original_query = inverse_refinement._query_bottom_neighbors
+
+    def _record_query_workers(**kwargs):
+        observed_workers.append(int(kwargs["workers"]))
+        return original_query(**kwargs)
+
+    monkeypatch.setattr(
+        inverse_refinement,
+        "_query_bottom_neighbors",
+        _record_query_workers,
+    )
+    parallel = refine_material_matches(
+        target_srgb=targets,
+        baseline_matched_srgb=baseline_matched,
+        baseline_recipes=baseline_recipes,
+        baseline_delta_e=baseline_delta,
+        materials=PALETTE,
+        layer_count=4,
+        layer_height_mm=DEFAULT_LAYER_HEIGHT_MM,
+        substrate="white",
+        config=config,
+        parallelism=4,
+    )
+
+    assert observed_workers and set(observed_workers) == {4}
+    np.testing.assert_array_equal(parallel.matched_srgb, serial.matched_srgb)
+    np.testing.assert_array_equal(parallel.recipes, serial.recipes)
+    np.testing.assert_array_equal(parallel.delta_e, serial.delta_e)
+    np.testing.assert_array_equal(parallel.improved_mask, serial.improved_mask)
