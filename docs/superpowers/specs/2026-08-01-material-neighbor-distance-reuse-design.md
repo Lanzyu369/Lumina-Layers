@@ -109,4 +109,3 @@ Retain only if all of these hold:
 If timing is neutral, rerun one immediate parent/head pair. If semantics differ
 or the gain remains noise, remove the production/test experiment and retain
 only the research record.
-
