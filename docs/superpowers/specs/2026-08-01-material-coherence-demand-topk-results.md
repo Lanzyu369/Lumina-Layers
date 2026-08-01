@@ -3,6 +3,7 @@
 - **Date:** 2026-08-01
 - **Parent:** `b8cd20f96bf71ca5eba229e213c604c8388f30ff`
 - **Measured code:** `760e30e32c9f91e4bc43a3c8b55d0f8ed5a3a718`
+- **Final implementation:** `6ee47bd204103fa9995d9127b5aa59339ac8168c`
 - **Decision:** Retain
 
 ## Result
@@ -20,13 +21,16 @@ members, and the GLB preview.
 
 ## Quality Gates
 
-- Focused coherence suite: `34 passed`.
+- Focused coherence suite: `37 passed`.
 - Related material, vector, scheduler, profiling, and timing suite:
-  `233 passed`.
-- Serial demand regression rejects eager full-row calculation and proves every
-  requested row is calculated at most once.
-- Duplicate-candidate regression compares every returned output against the
-  eager path, including tie-sensitive candidate ordering.
+  `236 passed`.
+- Serial integration regression rejects eager full-row calculation and proves
+  that only dynamically demanded target rows are calculated.
+- A direct cache-hit regression requests the same row twice and proves the
+  exact candidate block is calculated once.
+- A direct K/K+1 boundary-tie regression compares the cached and eager indices
+  and distances element by element. Duplicate-candidate integration coverage
+  separately compares every returned coherence output.
 - Four-worker regression proves the existing blockwise helper remains the
   selected implementation.
 - Python compilation and `git diff --check` passed before real profiling.
@@ -60,6 +64,13 @@ they are not a 24/32-core performance claim.
 
 All eight complex-SVG reports used semantic reference SHA-256
 `815072534bdddb985b652d685d92f61555591455f61ee4c909289615b8494f60`.
+
+After independent review, the private row cache was also aligned with standard
+NumPy negative-index behavior. A fresh serial complex-SVG run at final
+implementation `6ee47bd2` again accepted the same parent semantic reference.
+It recorded 46.495 seconds total and 25.643 seconds for material solve. This
+non-paired run is semantic confirmation only and is not used for a new
+performance delta.
 
 ## Material Archive Matrix
 
@@ -110,10 +121,10 @@ LUMINA_VECTOR_PARALLELISM=<1-or-4> LUMINA_MAX_WORKERS=1 \
   --output-dir <output-directory>
 ```
 
-The parent command ran in a detached worktree at `b8cd20f9`; the head command
-ran at `760e30e3`. Profile schema v2 does not embed the Git commit, so this
-parent/head association is operator-recorded. SHA-256 hashes of every raw
-report are stored in
+The parent command ran in a detached worktree at `b8cd20f9`; the original head
+matrix ran at `760e30e3`; and the post-review semantic confirmation ran at
+`6ee47bd2`. Profile schema v2 does not embed the Git commit, so these
+associations are operator-recorded. SHA-256 hashes of every raw report are stored in
 `progress/material-coherence-demand-topk-evidence.json`.
 
 ## Environment and Claim Boundary

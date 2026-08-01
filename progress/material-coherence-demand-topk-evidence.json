@@ -5,6 +5,7 @@
   "provenance": {
     "parent_commit": "b8cd20f96bf71ca5eba229e213c604c8388f30ff",
     "measured_code_commit": "760e30e32c9f91e4bc43a3c8b55d0f8ed5a3a718",
+    "final_implementation_commit": "6ee47bd204103fa9995d9127b5aa59339ac8168c",
     "association": "operator-recorded because profile schema v2 does not embed git commit"
   },
   "environment": {
@@ -16,8 +17,8 @@
     "thread_overrides": null
   },
   "tests": {
-    "focused_coherence": "34 passed",
-    "related_suite": "233 passed",
+    "focused_coherence": "37 passed",
+    "related_suite": "236 passed",
     "py_compile": "passed",
     "diff_check_before_profiles": "passed",
     "final_log_quality_fast": {
@@ -184,6 +185,21 @@
         "material_solve_s": 0.46339379192795604,
         "report_sha256": "a4dd5a13307c7a2caf545bc941329df549c9bfd21fda45f0dfb32fbb60e8572a"
       }
+    },
+    {
+      "id": "complex_serial_post_review_semantic_confirmation",
+      "workers": 1,
+      "materials": 12,
+      "implementation_commit": "6ee47bd204103fa9995d9127b5aa59339ac8168c",
+      "semantic_sha256": "815072534bdddb985b652d685d92f61555591455f61ee4c909289615b8494f60",
+      "external_reference_match": true,
+      "reference_report_sha256": "edec4506eeec4fe6a4689d49e5c6bfef58c608cb790cf43a8778e4840dc65389",
+      "head": {
+        "total_s": 46.49539229099173,
+        "material_solve_s": 25.6431638749782,
+        "report_sha256": "352cacf31b6fbdfaa3660f0edd6e0b7cd6e0e93324f81281209d1b9b9e16b3c4"
+      },
+      "performance_use": "semantic confirmation only; not a paired timing claim"
     }
   ],
   "claim_boundary": {
