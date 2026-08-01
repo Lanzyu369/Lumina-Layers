@@ -436,6 +436,190 @@ def _best_refined_row(
     )
 
 
+def _query_bottom_neighbors(
+    *,
+    workspace: _InverseRefinementWorkspace,
+    required_bottom: np.ndarray,
+    neighbor_count: int,
+    workers: int,
+) -> np.ndarray:
+    """Query exact bottom neighbours, tolerating older SciPy releases."""
+
+    query_kwargs = {
+        "k": int(neighbor_count),
+        "eps": 0.0,
+        "workers": max(1, int(workers)),
+    }
+    try:
+        _distances, indices = workspace.bottom_tree.query(
+            required_bottom,
+            **query_kwargs,
+        )
+    except TypeError:
+        query_kwargs.pop("workers")
+        _distances, indices = workspace.bottom_tree.query(
+            required_bottom,
+            **query_kwargs,
+        )
+    result = np.asarray(indices, dtype=np.int64)
+    if int(neighbor_count) == 1:
+        result = result[:, None]
+    return result
+
+
+def _refine_workspace_row_block(
+    *,
+    row_indices: tuple[int, ...],
+    targets: np.ndarray,
+    baseline_recipes: np.ndarray,
+    baseline_delta_e: np.ndarray,
+    materials: list[MaterialParams],
+    layer_count: int,
+    layer_height_mm: float,
+    substrate: str,
+    config: MaterialInverseRefinementConfig,
+    workspace: _InverseRefinementWorkspace,
+    query_workers: int,
+) -> list[tuple[int, np.ndarray, np.ndarray, float, bool]]:
+    """Refine one memory-bounded block without changing row semantics."""
+
+    if not row_indices:
+        return []
+
+    block_indices = np.asarray(row_indices, dtype=np.intp)
+    block_targets = targets[block_indices]
+    block_baseline_recipes = baseline_recipes[block_indices]
+    block_baseline_delta = baseline_delta_e[block_indices]
+    baseline_linear = _predict_linear_for_recipes(
+        recipes=block_baseline_recipes,
+        materials=materials,
+        layer_height_mm=float(layer_height_mm),
+        substrate=substrate,
+    )
+    baseline_srgb = linear_to_srgb_uint8(baseline_linear)
+    results = [
+        (
+            int(row_index),
+            baseline_srgb[position],
+            block_baseline_recipes[position].copy(),
+            float(block_baseline_delta[position]),
+            False,
+        )
+        for position, row_index in enumerate(row_indices)
+    ]
+
+    target_linear = srgb_to_linear(block_targets)
+    target_lab = rgb_to_lab(block_targets).astype(np.float64)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        required = (
+            target_linear[:, None, :] - workspace.top_beta[None, :, :]
+        ) / workspace.top_alpha[None, :, :]
+    tolerance = float(config.required_color_tolerance)
+    valid_mask = (
+        np.isfinite(required).all(axis=2)
+        & (required >= -tolerance).all(axis=2)
+        & (required <= 1.0 + tolerance).all(axis=2)
+    )
+    valid_rows, valid_top_indices = np.nonzero(valid_mask)
+    if valid_rows.size == 0:
+        return results
+
+    neighbor_count = min(
+        max(1, int(config.refine_bottom_neighbors)),
+        workspace.bottom_linear.shape[0],
+    )
+    bottom_indices = _query_bottom_neighbors(
+        workspace=workspace,
+        required_bottom=required[valid_rows, valid_top_indices],
+        neighbor_count=neighbor_count,
+        workers=query_workers,
+    )
+    final_linear = (
+        workspace.top_alpha[valid_top_indices, None, :]
+        * workspace.bottom_linear[bottom_indices]
+        + workspace.top_beta[valid_top_indices, None, :]
+    )
+    flat_srgb = linear_to_srgb_uint8(final_linear.reshape(-1, 3))
+    flat_lab = rgb_to_lab(flat_srgb).astype(np.float64)
+    candidate_targets = np.repeat(
+        target_lab[valid_rows],
+        neighbor_count,
+        axis=0,
+    )
+    candidate_delta = np.linalg.norm(
+        flat_lab - candidate_targets,
+        axis=1,
+    )
+    valid_counts = np.bincount(
+        valid_rows,
+        minlength=len(row_indices),
+    )
+    candidate_offsets = np.concatenate(
+        [
+            np.zeros((1,), dtype=np.int64),
+            np.cumsum(valid_counts * neighbor_count, dtype=np.int64),
+        ],
+    )
+
+    provisional_positions: list[int] = []
+    provisional_recipes: list[np.ndarray] = []
+    for position in range(len(row_indices)):
+        start = int(candidate_offsets[position])
+        stop = int(candidate_offsets[position + 1])
+        if start == stop:
+            continue
+        best_flat = start + int(np.argmin(candidate_delta[start:stop]))
+        if (
+            float(candidate_delta[best_flat])
+            >= float(block_baseline_delta[position]) - 1e-12
+        ):
+            continue
+        query_index, neighbor_index = divmod(best_flat, neighbor_count)
+        bottom_index = int(bottom_indices[query_index, neighbor_index])
+        top_index = int(valid_top_indices[query_index])
+        provisional_positions.append(position)
+        provisional_recipes.append(
+            np.concatenate(
+                [
+                    workspace.bottom_recipes[bottom_index],
+                    workspace.top_recipes[top_index],
+                ],
+            ).astype(np.int32, copy=False),
+        )
+
+    if not provisional_recipes:
+        return results
+
+    recipe_batch = np.stack(provisional_recipes).astype(
+        np.int32,
+        copy=False,
+    )
+    verified_linear = _predict_linear_for_recipes(
+        recipes=recipe_batch,
+        materials=materials,
+        layer_height_mm=float(layer_height_mm),
+        substrate=substrate,
+    )
+    verified_srgb = linear_to_srgb_uint8(verified_linear)
+    verified_lab = rgb_to_lab(verified_srgb).astype(np.float64)
+    verified_delta = np.linalg.norm(
+        verified_lab - target_lab[provisional_positions],
+        axis=1,
+    )
+    for candidate_index, position in enumerate(provisional_positions):
+        row_delta = float(verified_delta[candidate_index])
+        if row_delta >= float(block_baseline_delta[position]) - 1e-12:
+            continue
+        results[position] = (
+            int(row_indices[position]),
+            verified_srgb[candidate_index],
+            recipe_batch[candidate_index],
+            row_delta,
+            True,
+        )
+    return results
+
+
 def _refine_workspace_group(
     *,
     key: _InverseRefinementWorkspaceKey,
