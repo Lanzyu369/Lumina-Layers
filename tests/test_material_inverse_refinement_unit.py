@@ -336,3 +336,146 @@ def test_refinement_builds_each_subset_once_and_parallel_results_stay_stable(
     np.testing.assert_array_equal(parallel.recipes, serial.recipes)
     np.testing.assert_array_equal(parallel.delta_e, serial.delta_e)
     np.testing.assert_array_equal(parallel.improved_mask, serial.improved_mask)
+
+
+def _shared_workspace_fixture():
+    target_recipes = np.asarray(
+        [
+            [0, 1, 1, 2],
+            [3, 1, 0, 2],
+            [1, 3, 2, 0],
+            [2, 2, 2, 2],
+            [0, 0, 0, 0],
+        ],
+        dtype=np.int32,
+    )
+    targets = np.vstack([_srgb_for_recipe(row) for row in target_recipes])
+    baseline_recipes = np.zeros((len(targets), 4), dtype=np.int32)
+    baseline_matched = np.vstack(
+        [_srgb_for_recipe(row) for row in baseline_recipes],
+    )
+    baseline_delta = np.asarray(
+        [
+            _delta_e(targets[index], baseline_matched[index])
+            for index in range(len(targets))
+        ],
+        dtype=np.float64,
+    )
+    config = MaterialInverseRefinementConfig(
+        max_refine_materials=4,
+        max_refine_bottom_prefixes=16,
+        max_refine_top_suffixes=16,
+        refine_bottom_neighbors=2,
+    )
+    key = inverse_refinement._workspace_key(
+        subset=np.arange(4, dtype=np.int32),
+        layer_count=4,
+        config=config,
+    )
+    workspace = inverse_refinement._build_workspace(
+        key=key,
+        materials=PALETTE,
+        layer_height_mm=DEFAULT_LAYER_HEIGHT_MM,
+        substrate="white",
+    )
+    return (
+        targets,
+        baseline_recipes,
+        baseline_matched,
+        baseline_delta,
+        config,
+        workspace,
+    )
+
+
+def test_workspace_row_block_matches_one_row_reference_exactly() -> None:
+    (
+        targets,
+        baseline_recipes,
+        _baseline_matched,
+        baseline_delta,
+        config,
+        workspace,
+    ) = _shared_workspace_fixture()
+    expected = [
+        inverse_refinement._best_refined_row_with_workspace(
+            target_srgb=targets[index],
+            materials=PALETTE,
+            layer_count=4,
+            layer_height_mm=DEFAULT_LAYER_HEIGHT_MM,
+            substrate="white",
+            baseline_recipe=baseline_recipes[index],
+            baseline_delta_e=float(baseline_delta[index]),
+            config=config,
+            workspace=workspace,
+        )
+        for index in range(len(targets))
+    ]
+
+    actual = inverse_refinement._refine_workspace_row_block(
+        row_indices=tuple(range(len(targets))),
+        targets=targets,
+        baseline_recipes=baseline_recipes,
+        baseline_delta_e=baseline_delta,
+        materials=PALETTE,
+        layer_count=4,
+        layer_height_mm=DEFAULT_LAYER_HEIGHT_MM,
+        substrate="white",
+        config=config,
+        workspace=workspace,
+        query_workers=1,
+    )
+
+    assert len(actual) == len(expected)
+    for row_index, expected_row in enumerate(expected):
+        (
+            actual_index,
+            actual_rgb,
+            actual_recipe,
+            actual_delta,
+            actual_improved,
+        ) = actual[row_index]
+        assert actual_index == row_index
+        np.testing.assert_array_equal(actual_rgb, expected_row[0])
+        np.testing.assert_array_equal(actual_recipe, expected_row[1])
+        assert actual_delta == expected_row[2]
+        assert actual_improved == expected_row[3]
+
+
+def test_workspace_row_block_retains_baseline_when_no_suffix_is_valid() -> None:
+    (
+        targets,
+        baseline_recipes,
+        baseline_matched,
+        baseline_delta,
+        config,
+        workspace,
+    ) = _shared_workspace_fixture()
+    invalid_workspace = inverse_refinement._InverseRefinementWorkspace(
+        bottom_recipes=workspace.bottom_recipes,
+        top_recipes=workspace.top_recipes,
+        bottom_linear=workspace.bottom_linear,
+        top_alpha=np.zeros_like(workspace.top_alpha),
+        top_beta=np.full_like(workspace.top_beta, 2.0),
+        bottom_tree=workspace.bottom_tree,
+    )
+
+    actual = inverse_refinement._refine_workspace_row_block(
+        row_indices=(0, 1),
+        targets=targets,
+        baseline_recipes=baseline_recipes,
+        baseline_delta_e=baseline_delta,
+        materials=PALETTE,
+        layer_count=4,
+        layer_height_mm=DEFAULT_LAYER_HEIGHT_MM,
+        substrate="white",
+        config=config,
+        workspace=invalid_workspace,
+        query_workers=1,
+    )
+
+    for position, (_row_index, rgb, recipe, delta, improved) in enumerate(actual):
+        np.testing.assert_array_equal(rgb, baseline_matched[position])
+        np.testing.assert_array_equal(recipe, baseline_recipes[position])
+        assert delta == baseline_delta[position]
+        assert not improved
