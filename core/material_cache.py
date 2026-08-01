@@ -733,12 +733,12 @@ _NEIGHBOR_COHERENCE_DISTANCE_MEMORY_BYTES: int = 64 * 1024 * 1024
 """Total temporary distance-matrix budget across coherence worker threads."""
 
 
-def _iter_neighbor_pairs(
+def _iter_neighbor_pairs_with_distances(
     target_lab: np.ndarray,
     *,
     threshold: float,
-) -> Iterator[tuple[int, int]]:
-    """Yield strict-threshold Lab pairs in legacy lexicographic order.
+) -> Iterator[tuple[int, int, np.floating]]:
+    """Yield strict-threshold Lab pairs and their exact discovery distance.
 
     Querying one target row at a time bounds candidate-neighbour storage to
     ``O(C)`` even when all colors are mutually close. 按目标行查询，避免
@@ -772,10 +772,29 @@ def _iter_neighbor_pairs(
         exact_distances = np.sqrt(
             np.sum(differences * differences, axis=1),
         )
-        for column_index in neighbor_indices[
-            exact_distances < float(threshold)
-        ]:
-            yield row_index, int(column_index)
+        valid_mask = exact_distances < float(threshold)
+        for column_index, distance in zip(
+            neighbor_indices[valid_mask],
+            exact_distances[valid_mask],
+            strict=True,
+        ):
+            yield row_index, int(column_index), distance
+
+
+def _iter_neighbor_pairs(
+    target_lab: np.ndarray,
+    *,
+    threshold: float,
+) -> Iterator[tuple[int, int]]:
+    """Yield strict-threshold Lab pairs in legacy lexicographic order."""
+
+    for row_index, column_index, _distance in (
+        _iter_neighbor_pairs_with_distances(
+            target_lab,
+            threshold=threshold,
+        )
+    ):
+        yield row_index, column_index
 
 
 def _find_neighbor_pairs(
@@ -997,7 +1016,7 @@ def _neighbor_coherence_refine(
         return matched_rgb, recipes_user_order, delta_e
 
     # 1. Find neighbor pairs
-    pair_iterator = _iter_neighbor_pairs(
+    pair_iterator = _iter_neighbor_pairs_with_distances(
         target_lab,
         threshold=_NEIGHBOR_COHERENCE_PROXIMITY_THRESHOLD,
     )
@@ -1028,11 +1047,10 @@ def _neighbor_coherence_refine(
     pair_count = 0
 
     # 3. For each pair, check coherence and refine if needed
-    for i, j in chain((first_pair,), pair_iterator):
+    for i, j, d_src_norm in chain((first_pair,), pair_iterator):
         pair_count += 1
         # Source direction vector
         d_src = target_lab[j] - target_lab[i]
-        d_src_norm = _real_vector_norm(d_src)
         if d_src_norm < 1e-6:
             continue  # identical colours, skip
 
