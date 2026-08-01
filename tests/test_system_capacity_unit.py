@@ -253,15 +253,154 @@ def test_apple_probe_failure_is_normal_fallback() -> None:
     )
 
 
-def test_cgroup_reader_uses_explicit_utf8_path(tmp_path: Path) -> None:
-    system_capacity = _capacity_module()
-    cpu_max_path = tmp_path / "cpu.max"
-    cpu_max_path.write_text("150000 100000\n", encoding="utf-8")
+def _write_cgroup_v2_probe(
+    tmp_path: Path,
+    *,
+    process_cgroup: str,
+    mount_root: str = "/",
+) -> tuple[Path, Path, Path]:
+    proc_self_path = tmp_path / "proc" / "self"
+    proc_self_path.mkdir(parents=True)
+    cgroup_path = proc_self_path / "cgroup"
+    cgroup_path.write_text(process_cgroup, encoding="utf-8")
 
-    assert (
-        system_capacity._read_cgroup_v2_cpu_max(cpu_max_path=cpu_max_path)
-        == "150000 100000"
+    mount_point = tmp_path / "sys" / "fs" / "cgroup"
+    mount_point.mkdir(parents=True)
+    mountinfo_path = proc_self_path / "mountinfo"
+    mountinfo_path.write_text(
+        (
+            f"36 29 0:32 {mount_root} {mount_point} "
+            "rw,nosuid,nodev,noexec,relatime - cgroup2 cgroup rw\n"
+        ),
+        encoding="utf-8",
     )
+    return cgroup_path, mountinfo_path, mount_point
+
+
+def test_cgroup_reader_resolves_root_cgroup_cpu_max(tmp_path: Path) -> None:
+    system_capacity = _capacity_module()
+    cgroup_path, mountinfo_path, mount_point = _write_cgroup_v2_probe(
+        tmp_path,
+        process_cgroup="0::/\n",
+    )
+    (mount_point / "cpu.max").write_text(
+        "150000 100000\n",
+        encoding="utf-8",
+    )
+
+    assert system_capacity._read_cgroup_v2_cpu_max(
+        proc_self_cgroup_path=cgroup_path,
+        proc_self_mountinfo_path=mountinfo_path,
+    ) == "150000 100000"
+
+
+def test_cgroup_reader_resolves_nested_systemd_cgroup(tmp_path: Path) -> None:
+    system_capacity = _capacity_module()
+    relative_path = Path("user.slice/user-1000.slice/session-2.scope")
+    cgroup_path, mountinfo_path, mount_point = _write_cgroup_v2_probe(
+        tmp_path,
+        process_cgroup=f"0::/{relative_path.as_posix()}\n",
+    )
+    cpu_max_path = mount_point / relative_path / "cpu.max"
+    cpu_max_path.parent.mkdir(parents=True)
+    cpu_max_path.write_text("250000 100000\n", encoding="utf-8")
+
+    assert system_capacity._read_cgroup_v2_cpu_max(
+        proc_self_cgroup_path=cgroup_path,
+        proc_self_mountinfo_path=mountinfo_path,
+    ) == "250000 100000"
+
+
+def test_cgroup_reader_maps_namespace_path_from_mount_root(
+    tmp_path: Path,
+) -> None:
+    system_capacity = _capacity_module()
+    cgroup_path, mountinfo_path, mount_point = _write_cgroup_v2_probe(
+        tmp_path,
+        process_cgroup="0::/workload.scope\n",
+        mount_root="/docker/container-id",
+    )
+    cpu_max_path = mount_point / "workload.scope" / "cpu.max"
+    cpu_max_path.parent.mkdir(parents=True)
+    cpu_max_path.write_text("300000 100000\n", encoding="utf-8")
+
+    assert system_capacity._read_cgroup_v2_cpu_max(
+        proc_self_cgroup_path=cgroup_path,
+        proc_self_mountinfo_path=mountinfo_path,
+    ) == "300000 100000"
+
+
+def test_cgroup_reader_strips_host_visible_mount_root(tmp_path: Path) -> None:
+    system_capacity = _capacity_module()
+    cgroup_path, mountinfo_path, mount_point = _write_cgroup_v2_probe(
+        tmp_path,
+        process_cgroup="0::/containers/container-id/workload.scope\n",
+        mount_root="/containers/container-id",
+    )
+    cpu_max_path = mount_point / "workload.scope" / "cpu.max"
+    cpu_max_path.parent.mkdir(parents=True)
+    cpu_max_path.write_text("400000 100000\n", encoding="utf-8")
+
+    assert system_capacity._read_cgroup_v2_cpu_max(
+        proc_self_cgroup_path=cgroup_path,
+        proc_self_mountinfo_path=mountinfo_path,
+    ) == "400000 100000"
+
+
+@pytest.mark.parametrize(
+    "process_cgroup",
+    [
+        "malformed\n",
+        "0:cpu:/legacy-only\n",
+        "0::/first\n0::/second\n",
+        "0::/removed.scope (deleted)\n",
+    ],
+)
+def test_cgroup_reader_rejects_malformed_process_cgroup(
+    tmp_path: Path,
+    process_cgroup: str,
+) -> None:
+    system_capacity = _capacity_module()
+    cgroup_path, mountinfo_path, _mount_point = _write_cgroup_v2_probe(
+        tmp_path,
+        process_cgroup=process_cgroup,
+    )
+
+    assert system_capacity._read_cgroup_v2_cpu_max(
+        proc_self_cgroup_path=cgroup_path,
+        proc_self_mountinfo_path=mountinfo_path,
+    ) is None
+
+
+def test_cgroup_reader_rejects_path_traversal(tmp_path: Path) -> None:
+    system_capacity = _capacity_module()
+    cgroup_path, mountinfo_path, mount_point = _write_cgroup_v2_probe(
+        tmp_path,
+        process_cgroup="0::/../../escape\n",
+    )
+    escaped_cpu_max = mount_point.parent.parent / "escape" / "cpu.max"
+    escaped_cpu_max.parent.mkdir(parents=True)
+    escaped_cpu_max.write_text("900000 100000\n", encoding="utf-8")
+
+    assert system_capacity._read_cgroup_v2_cpu_max(
+        proc_self_cgroup_path=cgroup_path,
+        proc_self_mountinfo_path=mountinfo_path,
+    ) is None
+
+
+def test_cgroup_reader_returns_none_when_current_cpu_max_is_missing(
+    tmp_path: Path,
+) -> None:
+    system_capacity = _capacity_module()
+    cgroup_path, mountinfo_path, _mount_point = _write_cgroup_v2_probe(
+        tmp_path,
+        process_cgroup="0::/missing.scope\n",
+    )
+
+    assert system_capacity._read_cgroup_v2_cpu_max(
+        proc_self_cgroup_path=cgroup_path,
+        proc_self_mountinfo_path=mountinfo_path,
+    ) is None
 
 
 def test_process_affinity_falls_back_to_psutil_on_non_posix_platforms() -> None:

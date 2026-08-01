@@ -13,8 +13,15 @@ import subprocess
 import sys
 from typing import Any, Literal
 
-_CGROUP_V2_CPU_MAX_PATH = Path("/sys/fs/cgroup/cpu.max")
+_PROC_SELF_CGROUP_PATH = Path("/proc/self/cgroup")
+_PROC_SELF_MOUNTINFO_PATH = Path("/proc/self/mountinfo")
 _APPLE_CPU_PROBE_TIMEOUT_SECONDS = 0.5
+_MOUNTINFO_PATH_ESCAPES = {
+    r"\040": " ",
+    r"\011": "\t",
+    r"\012": "\n",
+    r"\134": "\\",
+}
 
 CpuTopology = Literal["heterogeneous", "homogeneous", "unknown"]
 CpuSchedulingPolicy = Literal[
@@ -286,15 +293,123 @@ def _read_process_affinity(
     return affinity or None
 
 
+def _safe_absolute_path_parts(raw_path: str) -> tuple[str, ...] | None:
+    if not raw_path.startswith("/") or "\x00" in raw_path:
+        return None
+    if raw_path == "/":
+        return ()
+    parts = raw_path[1:].split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        return None
+    return tuple(parts)
+
+
+def _decode_mountinfo_path(raw_path: str) -> str | None:
+    decoded: list[str] = []
+    cursor = 0
+    while cursor < len(raw_path):
+        if raw_path[cursor] != "\\":
+            decoded.append(raw_path[cursor])
+            cursor += 1
+            continue
+        escaped = raw_path[cursor : cursor + 4]
+        replacement = _MOUNTINFO_PATH_ESCAPES.get(escaped)
+        if replacement is None:
+            return None
+        decoded.append(replacement)
+        cursor += 4
+    return "".join(decoded)
+
+
+def _parse_process_cgroup_v2_path(
+    raw_cgroup: str,
+) -> tuple[str, ...] | None:
+    current_path: tuple[str, ...] | None = None
+    for line in raw_cgroup.splitlines():
+        fields = line.split(":", 2)
+        if len(fields) != 3 or not fields[0].isdecimal():
+            return None
+        hierarchy_id, controllers, raw_path = fields
+        if hierarchy_id != "0" or controllers:
+            continue
+        if current_path is not None or raw_path.endswith(" (deleted)"):
+            return None
+        current_path = _safe_absolute_path_parts(raw_path)
+        if current_path is None:
+            return None
+    return current_path
+
+
+def _parse_cgroup2_mounts(
+    raw_mountinfo: str,
+) -> tuple[tuple[tuple[str, ...], Path], ...] | None:
+    mounts: list[tuple[tuple[str, ...], Path]] = []
+    for line in raw_mountinfo.splitlines():
+        left, separator, right = line.partition(" - ")
+        left_fields = left.split()
+        right_fields = right.split()
+        if not separator or len(left_fields) < 6 or len(right_fields) < 3:
+            return None
+        if right_fields[0] != "cgroup2":
+            continue
+        decoded_root = _decode_mountinfo_path(left_fields[3])
+        decoded_mount_point = _decode_mountinfo_path(left_fields[4])
+        if decoded_root is None or decoded_mount_point is None:
+            return None
+        root_parts = _safe_absolute_path_parts(decoded_root)
+        mount_point_parts = _safe_absolute_path_parts(decoded_mount_point)
+        if root_parts is None or mount_point_parts is None:
+            return None
+        mounts.append((root_parts, Path("/").joinpath(*mount_point_parts)))
+    return tuple(mounts) or None
+
+
+def _cgroup_cpu_max_candidates(
+    current_path: tuple[str, ...],
+    mounts: tuple[tuple[tuple[str, ...], Path], ...],
+) -> tuple[Path, ...]:
+    ranked: list[tuple[bool, int, Path]] = []
+    for mount_root, mount_point in mounts:
+        root_matches = current_path[: len(mount_root)] == mount_root
+        relative_path = (
+            current_path[len(mount_root) :]
+            if root_matches
+            else current_path
+        )
+        candidate = mount_point.joinpath(*relative_path, "cpu.max")
+        try:
+            resolved_mount = mount_point.resolve(strict=False)
+            resolved_candidate = candidate.resolve(strict=False)
+            resolved_candidate.relative_to(resolved_mount)
+        except (OSError, RuntimeError, ValueError):
+            continue
+        ranked.append((root_matches, len(mount_root), resolved_candidate))
+    ranked.sort(key=lambda entry: (entry[0], entry[1]), reverse=True)
+    return tuple(dict.fromkeys(entry[2] for entry in ranked))
+
+
 def _read_cgroup_v2_cpu_max(
     *,
-    cpu_max_path: Path = _CGROUP_V2_CPU_MAX_PATH,
+    proc_self_cgroup_path: Path = _PROC_SELF_CGROUP_PATH,
+    proc_self_mountinfo_path: Path = _PROC_SELF_MOUNTINFO_PATH,
 ) -> str | None:
     try:
-        value = cpu_max_path.read_text(encoding="utf-8").strip()
+        raw_cgroup = proc_self_cgroup_path.read_text(encoding="utf-8")
+        raw_mountinfo = proc_self_mountinfo_path.read_text(encoding="utf-8")
     except (OSError, RuntimeError, UnicodeError):
         return None
-    return value or None
+    current_path = _parse_process_cgroup_v2_path(raw_cgroup)
+    mounts = _parse_cgroup2_mounts(raw_mountinfo)
+    if current_path is None or mounts is None:
+        return None
+    for cpu_max_path in _cgroup_cpu_max_candidates(current_path, mounts):
+        try:
+            value = cpu_max_path.read_text(encoding="utf-8").strip()
+        except (OSError, RuntimeError, UnicodeError):
+            continue
+        if value:
+            return value
+    return None
 
 
 def _read_apple_performance_cpu_count(
