@@ -3,7 +3,7 @@
 **Date:** 2026-08-01
 **Parent:** `MOVIBALE/feat/vector-material-coherence-fastpath` at `51a4ac42`
 **Branch:** `MOVIBALE/feat/vector-material-pair-distance-reuse`
-**Status:** Approved for a guarded experiment
+**Status:** Retained after exact semantic and paired performance verification
 
 ## Outcome Sought
 
