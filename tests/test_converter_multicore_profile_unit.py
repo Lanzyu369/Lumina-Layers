@@ -927,8 +927,18 @@ def test_cleanup_result_files_removes_pipeline_result_tuple_artifacts(
 
 def test_extract_vector_timings_accepts_current_pipeline_key() -> None:
     assert _extract_vector_timings(
-        {"vector_timing": {"parse_s": 1.25}}
-    ) == {"parse_s": 1.25}
+        {
+            "vector_timing": {
+                "parse_s": 1.25,
+                "native_mesh_parallel_workers": 3,
+                "native_mesh_parallel_wall_s": 1.0,
+            }
+        }
+    ) == {
+        "parse_s": 1.25,
+        "native_mesh_parallel_workers": 3,
+        "native_mesh_parallel_wall_s": 1.0,
+    }
 
 
 def test_resource_sampler_uses_low_overhead_default_interval() -> None:
