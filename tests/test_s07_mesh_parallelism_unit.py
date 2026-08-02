@@ -13,6 +13,7 @@ import trimesh
 
 from config import ModelingMode
 from core.pipeline import s07_mesh_generation
+from core.task_parallelism import AdaptiveParallelismPlan
 
 
 class _DelayedBoxMesher:
@@ -47,6 +48,49 @@ class _RecordingMesher:
         return trimesh.creation.box(extents=(float(mat_id + 1), 1.0, 1.0))
 
 
+def _parallelism_plan(
+    workers: int,
+    *,
+    requested_ceiling: int | None = None,
+    effective_cpu_capacity: int | None = None,
+    outer_demand: int = 1,
+    cpu_fair_share_ceiling: int | None = None,
+    memory_ceiling: int | None = None,
+    limiting_reason: str = "requested",
+    demand_snapshot_fallback: bool = False,
+    cpu_topology: str = "unknown",
+    cpu_scheduling_policy: str = "injected_or_unknown",
+    performance_cpu_capacity: int | None = None,
+) -> AdaptiveParallelismPlan:
+    """Build a coherent deterministic plan for stage-adoption tests."""
+
+    requested = requested_ceiling or max(1, workers)
+    effective_cpu = effective_cpu_capacity or max(1, workers * outer_demand)
+    cpu_share = cpu_fair_share_ceiling or max(
+        1,
+        effective_cpu // max(1, outer_demand),
+    )
+    memory = memory_ceiling or max(1, workers)
+    return AdaptiveParallelismPlan(
+        workers=workers,
+        requested_ceiling=requested,
+        effective_cpu_capacity=effective_cpu,
+        outer_demand=outer_demand,
+        cpu_fair_share_ceiling=cpu_share,
+        work_item_ceiling=4,
+        work_unit_ceiling=4,
+        stage_ceiling=4,
+        memory_ceiling=memory,
+        available_memory_bytes=8 * 1024**3,
+        estimated_worker_bytes=64 * 1024**2,
+        limiting_reason=limiting_reason,
+        demand_snapshot_fallback=demand_snapshot_fallback,
+        cpu_topology=cpu_topology,
+        cpu_scheduling_policy=cpu_scheduling_policy,
+        performance_cpu_capacity=performance_cpu_capacity,
+    )
+
+
 def _make_context(material_count: int) -> dict:
     return {
         "full_matrix": np.zeros((1, 2, 2), dtype=np.int16),
@@ -67,7 +111,7 @@ def test_s07_uses_bounded_policy_and_restores_material_order(
 ) -> None:
     """Thread completion order must not affect scene or material ordering."""
 
-    policy_calls: list[dict[str, int | str]] = []
+    policy_calls: list[dict[str, int | str | None]] = []
     pool_workers: list[int] = []
 
     def _resolve(
@@ -75,11 +119,11 @@ def test_s07_uses_bounded_policy_and_restores_material_order(
         *,
         work_items: int,
         min_parallel_items: int,
-        hard_max_workers: int,
+        hard_max_workers: int | None,
         work_units: int,
         min_parallel_work_units: int,
         estimated_worker_bytes: int,
-    ) -> int:
+    ) -> AdaptiveParallelismPlan:
         policy_calls.append(
             {
                 "workload": workload,
@@ -91,14 +135,29 @@ def test_s07_uses_bounded_policy_and_restores_material_order(
                 "estimated_worker_bytes": estimated_worker_bytes,
             },
         )
-        return 3
+        return _parallelism_plan(
+            2,
+            requested_ceiling=4,
+            effective_cpu_capacity=4,
+            outer_demand=2,
+            cpu_fair_share_ceiling=2,
+            memory_ceiling=3,
+            limiting_reason="cpu_fair_share",
+            cpu_topology="heterogeneous",
+            cpu_scheduling_policy="apple_performance_budget",
+            performance_cpu_capacity=4,
+        )
 
     def _pool(*, max_workers: int) -> RealThreadPoolExecutor:
         pool_workers.append(max_workers)
         return RealThreadPoolExecutor(max_workers=max_workers)
 
     monkeypatch.setattr(s07_mesh_generation, "get_mesher", lambda *args, **kwargs: _DelayedBoxMesher())
-    monkeypatch.setattr(s07_mesh_generation, "resolve_task_parallelism", _resolve)
+    monkeypatch.setattr(
+        s07_mesh_generation,
+        "resolve_task_parallelism_plan",
+        _resolve,
+    )
     monkeypatch.setattr(s07_mesh_generation, "ThreadPoolExecutor", _pool)
     monkeypatch.delenv("LUMINA_DISABLE_PARALLEL_MESH", raising=False)
 
@@ -109,13 +168,13 @@ def test_s07_uses_bounded_policy_and_restores_material_order(
             "workload": "raster",
             "work_items": 4,
             "min_parallel_items": 2,
-            "hard_max_workers": 4,
+            "hard_max_workers": None,
             "work_units": 4,
             "min_parallel_work_units": 100_000,
             "estimated_worker_bytes": 64 * 1024**2,
         }
     ]
-    assert pool_workers == [3]
+    assert pool_workers == [2]
     assert result["valid_slot_names"] == [
         "Material 0",
         "Material 1",
@@ -124,7 +183,23 @@ def test_s07_uses_bounded_policy_and_restores_material_order(
     ]
     assert list(result["scene"].geometry) == result["valid_slot_names"]
     assert result["_hifi_timings"]["mesh_parallelism_requested"] == "auto"
-    assert result["_hifi_timings"]["mesh_parallelism_workers"] == 3
+    assert result["_hifi_timings"]["mesh_parallelism_workers"] == 2
+    assert (
+        result["_hifi_timings"]["mesh_parallelism_limit"]
+        == "cpu_fair_share"
+    )
+    assert result["_hifi_timings"]["mesh_parallelism_effective_cpu"] == 4
+    assert result["_hifi_timings"]["mesh_parallelism_cpu_topology"] == (
+        "heterogeneous"
+    )
+    assert result["_hifi_timings"][
+        "mesh_parallelism_cpu_scheduling_policy"
+    ] == "apple_performance_budget"
+    assert result["_hifi_timings"]["mesh_parallelism_performance_cpu"] == 4
+    assert result["_hifi_timings"]["mesh_parallelism_outer_demand"] == 2
+    assert result["_hifi_timings"]["mesh_parallelism_cpu_fair_share"] == 2
+    assert result["_hifi_timings"]["mesh_parallelism_memory_ceiling"] == 3
+    assert result["_hifi_timings"]["mesh_parallelism_demand_fallback"] is False
 
 
 def test_s07_effective_one_executes_on_calling_thread(
@@ -141,8 +216,11 @@ def test_s07_effective_one_executes_on_calling_thread(
     )
     monkeypatch.setattr(
         s07_mesh_generation,
-        "resolve_task_parallelism",
-        lambda *args, **kwargs: 1,
+        "resolve_task_parallelism_plan",
+        lambda *args, **kwargs: _parallelism_plan(
+            1,
+            limiting_reason="insufficient_work_units",
+        ),
     )
     monkeypatch.setattr(
         s07_mesh_generation,
@@ -159,10 +237,14 @@ def test_s07_effective_one_executes_on_calling_thread(
     assert result["_hifi_timings"]["mesh_parallelism_workers"] == 1
 
 
-@pytest.mark.parametrize("worker_count", [2, 4])
+@pytest.mark.parametrize(
+    ("worker_count", "material_count"),
+    [(2, 4), (4, 4), (12, 12)],
+)
 def test_s07_uses_exact_effective_worker_limit(
     monkeypatch: pytest.MonkeyPatch,
     worker_count: int,
+    material_count: int,
 ) -> None:
     """The executor limit must equal the bounded policy decision."""
 
@@ -175,18 +257,21 @@ def test_s07_uses_exact_effective_worker_limit(
     monkeypatch.setattr(
         s07_mesh_generation,
         "get_mesher",
-        lambda *args, **kwargs: _DelayedBoxMesher(),
+        lambda *args, **kwargs: _RecordingMesher(),
     )
     monkeypatch.setattr(
         s07_mesh_generation,
-        "resolve_task_parallelism",
-        lambda *args, **kwargs: worker_count,
+        "resolve_task_parallelism_plan",
+        lambda *args, **kwargs: _parallelism_plan(
+            worker_count,
+            requested_ceiling=worker_count,
+        ),
     )
     monkeypatch.setattr(s07_mesh_generation, "ThreadPoolExecutor", _pool)
     monkeypatch.setenv("LUMINA_RASTER_PARALLELISM", str(worker_count))
     monkeypatch.delenv("LUMINA_DISABLE_PARALLEL_MESH", raising=False)
 
-    result = s07_mesh_generation.run(_make_context(4))
+    result = s07_mesh_generation.run(_make_context(material_count))
 
     assert observed_workers == [worker_count]
     assert result["_hifi_timings"]["mesh_parallelism_requested"] == str(
@@ -209,8 +294,8 @@ def test_s07_worker_exception_stays_attached_to_original_material(
     )
     monkeypatch.setattr(
         s07_mesh_generation,
-        "resolve_task_parallelism",
-        lambda *args, **kwargs: 2,
+        "resolve_task_parallelism_plan",
+        lambda *args, **kwargs: _parallelism_plan(2),
     )
     monkeypatch.delenv("LUMINA_DISABLE_PARALLEL_MESH", raising=False)
     caplog.set_level(logging.WARNING)
@@ -299,8 +384,8 @@ def test_s07_legacy_disable_override_forces_serial_execution(
     monkeypatch.setattr(s07_mesh_generation, "get_mesher", lambda *args, **kwargs: _DelayedBoxMesher())
     monkeypatch.setattr(
         s07_mesh_generation,
-        "resolve_task_parallelism",
-        lambda *args, **kwargs: 4,
+        "resolve_task_parallelism_plan",
+        lambda *args, **kwargs: _parallelism_plan(4),
     )
     monkeypatch.setattr(
         s07_mesh_generation,
@@ -319,3 +404,53 @@ def test_s07_legacy_disable_override_forces_serial_execution(
     ]
     assert result["_hifi_timings"]["mesh_parallelism_requested"] == "4"
     assert result["_hifi_timings"]["mesh_parallelism_workers"] == 1
+    assert result["_hifi_timings"]["mesh_parallelism_limit"] == "legacy_disable"
+
+
+def test_s07_serial_and_parallel_mesh_outputs_are_byte_identical(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Scheduling must not change geometry, colors, names, or ordering."""
+
+    monkeypatch.setattr(
+        s07_mesh_generation,
+        "get_mesher",
+        lambda *args, **kwargs: _DelayedBoxMesher(),
+    )
+    monkeypatch.delenv("LUMINA_DISABLE_PARALLEL_MESH", raising=False)
+
+    monkeypatch.setattr(
+        s07_mesh_generation,
+        "resolve_task_parallelism_plan",
+        lambda *args, **kwargs: _parallelism_plan(
+            1,
+            limiting_reason="requested",
+        ),
+    )
+    serial_result = s07_mesh_generation.run(_make_context(4))
+
+    monkeypatch.setattr(
+        s07_mesh_generation,
+        "resolve_task_parallelism_plan",
+        lambda *args, **kwargs: _parallelism_plan(
+            4,
+            requested_ceiling=4,
+        ),
+    )
+    parallel_result = s07_mesh_generation.run(_make_context(4))
+
+    def _scene_signature(result: dict) -> tuple:
+        scene = result["scene"]
+        return tuple(
+            (
+                name,
+                scene.geometry[name].vertices.tobytes(),
+                scene.geometry[name].faces.tobytes(),
+                scene.geometry[name].visual.face_colors.tobytes(),
+                scene.geometry[name].metadata["name"],
+            )
+            for name in result["valid_slot_names"]
+        )
+
+    assert serial_result["valid_slot_names"] == parallel_result["valid_slot_names"]
+    assert _scene_signature(serial_result) == _scene_signature(parallel_result)

@@ -378,7 +378,7 @@ def _log_vector_preview_timings(
         extra={
             "event": "vector_preview_timings",
             "duration_ms": round(float(timings.get("vector_preview_total_s", 0.0)) * 1000, 3),
-            "timings": {str(key): float(value) for key, value in timings.items()},
+            "timings": _structured_timing_payload(timings),
             "image_path": str(ctx.get("image_path") or ""),
             "color_mode": str(ctx.get("color_mode") or ""),
             "target_width_mm": float(ctx.get("target_width_mm") or 0.0),
@@ -1482,10 +1482,10 @@ def _build_vector_processor(ctx: dict, *, fallback_color_mode: str):
 
 
 def _record_material_parallelism(
-    timings: dict[str, float],
+    timings: dict,
     vector_processor: object,
 ) -> None:
-    """Attach the effective material-matching worker count when available."""
+    """Attach bounded material-matching scheduling diagnostics when available."""
 
     matcher = getattr(vector_processor, "img_processor", None)
     worker_count = getattr(
@@ -1501,6 +1501,43 @@ def _record_material_parallelism(
         )
     except (TypeError, ValueError):
         return
+    plan = getattr(matcher, "effective_parallelism_plan", None)
+    if plan is None:
+        return
+    try:
+        plan_fields = {
+            "material_parallelism_limit": str(
+                plan.limiting_reason,
+            )[:64],
+            "material_parallelism_effective_cpu": float(
+                max(1, int(plan.effective_cpu_capacity)),
+            ),
+            "material_parallelism_cpu_topology": str(
+                plan.cpu_topology,
+            )[:64],
+            "material_parallelism_cpu_scheduling_policy": str(
+                plan.cpu_scheduling_policy,
+            )[:64],
+            "material_parallelism_outer_demand": float(
+                max(1, int(plan.outer_demand)),
+            ),
+            "material_parallelism_cpu_fair_share": float(
+                max(1, int(plan.cpu_fair_share_ceiling)),
+            ),
+            "material_parallelism_memory_ceiling": float(
+                max(1, int(plan.memory_ceiling)),
+            ),
+            "material_parallelism_demand_fallback": bool(
+                plan.demand_snapshot_fallback,
+            ),
+        }
+    except (AttributeError, TypeError, ValueError):
+        return
+    if plan.performance_cpu_capacity is not None:
+        plan_fields["material_parallelism_performance_cpu"] = float(
+            max(1, int(plan.performance_cpu_capacity)),
+        )
+    timings.update(plan_fields)
 
 
 _NATIVE_MESH_TIMING_FIELDS = {
@@ -1516,8 +1553,29 @@ _NATIVE_MESH_TIMING_FIELDS = {
     "native_parallel_batch_count": "native_mesh_parallel_batch_count",
     "native_parallel_source_geometry_count":
         "native_mesh_parallel_source_geometry_count",
-    "native_parallel_source_geometry_limited":
-        "native_mesh_parallel_source_geometry_limited",
+    "native_parallel_limit_reason": "native_mesh_parallel_limit",
+    "native_parallel_effective_cpu":
+        "native_mesh_parallel_effective_cpu",
+    "native_parallel_cpu_topology":
+        "native_mesh_parallel_cpu_topology",
+    "native_parallel_cpu_scheduling_policy":
+        "native_mesh_parallel_cpu_scheduling_policy",
+    "native_parallel_performance_cpu":
+        "native_mesh_parallel_performance_cpu",
+    "native_parallel_outer_demand":
+        "native_mesh_parallel_outer_demand",
+    "native_parallel_cpu_fair_share":
+        "native_mesh_parallel_cpu_fair_share",
+    "native_parallel_memory_ceiling":
+        "native_mesh_parallel_memory_ceiling",
+    "native_parallel_demand_fallback":
+        "native_mesh_parallel_demand_fallback",
+    "native_parallel_inflight_limit":
+        "native_mesh_parallel_inflight_limit",
+    "native_parallel_max_estimated_batch_bytes":
+        "native_mesh_parallel_max_estimated_batch_bytes",
+    "native_parallel_oversized_serial_batches":
+        "native_mesh_parallel_oversized_serial_batches",
     "native_parallel_wall_seconds": "native_mesh_parallel_wall_s",
     "fallback_reason_native_merged_empty_native_mesh":
         "native_mesh_fallback_native_merged_empty_count",
@@ -1526,18 +1584,20 @@ _NATIVE_MESH_TIMING_FIELDS = {
 
 def _native_mesh_timing_fields(
     stats,
-) -> dict[str, float | int]:
+) -> dict[str, float | int | str | bool]:
     """Return the bounded scalar native-mesh timing view."""
 
     if not isinstance(stats, dict):
         return {}
-    result: dict[str, float | int] = {}
+    result: dict[str, float | int | str | bool] = {}
     for source_name, output_name in _NATIVE_MESH_TIMING_FIELDS.items():
         value = stats.get(source_name)
         if isinstance(value, bool):
-            result[output_name] = int(value)
+            result[output_name] = value
         elif isinstance(value, (int, float)):
             result[output_name] = value
+        elif isinstance(value, str):
+            result[output_name] = value[:64]
     return result
 
 
@@ -2801,6 +2861,23 @@ def _run_vector_branch(ctx: dict) -> dict:
         return ctx
 
 
+def _structured_timing_payload(timings: dict) -> dict[str, float | str | bool]:
+    """Keep timing diagnostics JSON-safe without forcing labels to floats."""
+
+    payload: dict[str, float | str | bool] = {}
+    for key, value in timings.items():
+        if isinstance(value, bool):
+            payload[str(key)] = value
+        elif isinstance(value, str):
+            payload[str(key)] = value[:64]
+        else:
+            try:
+                payload[str(key)] = float(value)
+            except (TypeError, ValueError):
+                continue
+    return payload
+
+
 def _log_vector_timings(timings: dict) -> None:
     """Log vector branch timing breakdown.
     \u8f93\u51fa\u77e2\u91cf\u5206\u652f\u8ba1\u65f6\u660e\u7ec6\u3002
@@ -2810,6 +2887,7 @@ def _log_vector_timings(timings: dict) -> None:
     """
     if not timings:
         return
+    timing_payload = _structured_timing_payload(timings)
     log.debug(
         "Vector timings (s): "
         f"parse={timings.get('parse_s', 0.0):.3f}, "
@@ -2829,7 +2907,7 @@ def _log_vector_timings(timings: dict) -> None:
         f"total={timings.get('vector_branch_total_s', 0.0):.3f}",
         extra={
             "event": "vector_timings",
-            "timings": {str(key): float(value) for key, value in timings.items()},
+            "timings": timing_payload,
         },
     )
     log.info(
@@ -2837,6 +2915,6 @@ def _log_vector_timings(timings: dict) -> None:
         extra={
             "event": "vector_generate_timings",
             "duration_ms": round(float(timings.get("vector_branch_total_s", 0.0)) * 1000, 3),
-            "timings": {str(key): float(value) for key, value in timings.items()},
+            "timings": timing_payload,
         },
     )

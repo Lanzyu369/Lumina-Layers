@@ -49,7 +49,10 @@ from typing import TYPE_CHECKING, Iterable
 import numpy as np
 
 from api.structured_logging import get_logger
-from core.task_parallelism import resolve_task_parallelism
+from core.task_parallelism import (
+    AdaptiveParallelismPlan,
+    resolve_task_parallelism_plan,
+)
 
 if TYPE_CHECKING:
     from core.material_color_solver import MaterialParams
@@ -58,6 +61,7 @@ _log = get_logger(__name__)
 
 MATERIAL_ARCHIVE_LUT_SENTINEL = "__material_archive__"
 _MIN_PARALLEL_VECTOR_FILL_COUNT = 32
+_VECTOR_MATERIAL_WORK_UNITS_PER_WORKER = 16
 _ESTIMATED_VECTOR_WORKER_BYTES = 256 * 1024**2
 
 
@@ -168,6 +172,7 @@ class MaterialVectorMatcher:
         self._recipes = np.zeros((0, self.layer_count), dtype=np.int32)
         self._kdtree = None
         self.effective_parallelism_workers = 1
+        self.effective_parallelism_plan: AdaptiveParallelismPlan | None = None
 
     # ------------------------------------------------------------------
     # Construction helper
@@ -327,19 +332,29 @@ class MaterialVectorMatcher:
 
         if new_keys:
             new_arr = np.array(sorted(set(new_keys)), dtype=np.uint8)
-            effective_parallelism = resolve_task_parallelism(
+            parallelism_plan = resolve_task_parallelism_plan(
                 "vector",
                 work_items=int(new_arr.shape[0]),
                 min_parallel_items=2,
-                hard_max_workers=4,
+                hard_max_workers=None,
                 work_units=int(new_arr.shape[0]),
                 min_parallel_work_units=_MIN_PARALLEL_VECTOR_FILL_COUNT,
+                work_units_per_worker=(
+                    _VECTOR_MATERIAL_WORK_UNITS_PER_WORKER
+                ),
                 estimated_worker_bytes=_ESTIMATED_VECTOR_WORKER_BYTES,
             )
+            effective_parallelism = parallelism_plan.workers
             self.effective_parallelism_workers = max(
                 int(self.effective_parallelism_workers),
                 int(effective_parallelism),
             )
+            if (
+                self.effective_parallelism_plan is None
+                or parallelism_plan.workers
+                >= self.effective_parallelism_plan.workers
+            ):
+                self.effective_parallelism_plan = parallelism_plan
             _log.debug(
                 "solve_for_fills input: %d new colors (total cached before=%d)",
                 new_arr.shape[0],
@@ -354,6 +369,18 @@ class MaterialVectorMatcher:
                     ],
                     "truncated": new_arr.shape[0] > 50,
                     "parallelism": int(effective_parallelism),
+                    "parallelism_limit": parallelism_plan.limiting_reason,
+                    "effective_cpu_capacity": int(
+                        parallelism_plan.effective_cpu_capacity,
+                    ),
+                    "outer_demand": int(parallelism_plan.outer_demand),
+                    "cpu_fair_share_ceiling": int(
+                        parallelism_plan.cpu_fair_share_ceiling,
+                    ),
+                    "memory_ceiling": int(parallelism_plan.memory_ceiling),
+                    "demand_snapshot_fallback": bool(
+                        parallelism_plan.demand_snapshot_fallback,
+                    ),
                 },
             )
             lookup_kwargs = {
