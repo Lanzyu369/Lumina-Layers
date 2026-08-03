@@ -2829,6 +2829,22 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "构建采用稀疏存储，内存只随实际可达配方数增长（与档位无关），极致档也不会爆内存；查找时间会随档位略有增加，但通常仍是毫秒级。改动后旧缓存不会被覆盖，首次点击「构建」时会产生对应分辨率的新缓存文件。",
     en: "Builds use sparse storage, so memory grows with the number of physically reachable recipes (not with the tier) — even the ultra tiers stay lightweight. Per-lookup time grows mildly with tier but typically stays in the millisecond range. Existing caches are not overwritten — the first build at a new resolution produces a separate cache file.",
   },
+  "settings.material_delta_e00_tolerance_heading": {
+    zh: "动态叠层颜色容差",
+    en: "Dynamic-layer color tolerance",
+  },
+  "settings.material_delta_e00_tolerance_description": {
+    zh: "控制动态材料模式可用多少综合色差换取更短的有效配方。",
+    en: "Controls how much color difference dynamic material mode may trade for a shorter effective recipe.",
+  },
+  "settings.material_delta_e00_tolerance_label": {
+    zh: "动态叠层 ΔE00 容差",
+    en: "Dynamic-layer ΔE00 tolerance",
+  },
+  "settings.material_delta_e00_tolerance_hint": {
+    zh: "程序先求出范围内的精确 CIEDE2000 最佳值，再选择不超过最佳值加此容差的最短配方。允许范围 0.0–5.0，步进 0.1。",
+    en: "The solver first finds the exact CIEDE2000 optimum in range, then chooses the shortest recipe no worse than that optimum plus this tolerance. Allowed range: 0.0–5.0 in 0.1 steps.",
+  },
   "settings.svg_pixels_per_mm_heading": {
     zh: "SVG 清晰度",
     en: "SVG clarity",
@@ -4520,6 +4536,34 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "\u53c2\u4e0e\u53e0\u8272\u6df7\u5408\u7684\u8017\u6750\u79cd\u7c7b\u6570\u91cf\u3002\u5c42\u6570\u8d8a\u591a\u8272\u5f69\u8fc7\u6e21\u8d8a\u4e30\u5bcc\uff0c\u4f46\u6253\u5370\u65f6\u95f4\u8d8a\u957f\u3002",
     en: "Number of material types involved in color blending. More layers produce richer color transitions but increase print time.",
   },
+  basic_material_dynamic_layer_count_label: {
+    zh: "动态调整有效叠层数",
+    en: "Dynamic effective layer count",
+  },
+  basic_material_dynamic_layer_count_hint: {
+    zh: "为每种目标颜色在设定范围内选择综合色差最小的有效层数；色差相近时优先使用更短配方。",
+    en: "Choose the best effective layer count for each target color within the configured range, preferring shorter recipes when color differences are close.",
+  },
+  basic_material_min_layer_count_label: {
+    zh: "最小有效叠层数",
+    en: "Minimum effective layers",
+  },
+  basic_material_min_layer_count_hint: {
+    zh: "每种颜色配方允许使用的最少有效颜色层数。",
+    en: "Minimum number of effective color layers allowed for each recipe.",
+  },
+  basic_material_max_layer_count_label: {
+    zh: "最大有效叠层数",
+    en: "Maximum effective layers",
+  },
+  basic_material_max_layer_count_hint: {
+    zh: "每种颜色配方允许使用的最多有效颜色层数，也是最终模型的统一打印层数。",
+    en: "Maximum number of effective color layers allowed per recipe and the uniform printed layer count of the final model.",
+  },
+  basic_material_dynamic_range_hint: {
+    zh: "动态模式会在设定范围内自动加载并评估候选；单一层数的穷举缓存入口暂不显示。",
+    en: "Dynamic mode automatically loads and evaluates candidates across the configured range; the single-layer-count cache control is hidden.",
+  },
   basic_material_layer_height_label: {
     zh: "\u5c42\u9ad8",
     en: "Layer Height",
@@ -5268,6 +5312,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "高精度匹配开启时，色相保护已被接管，无需手动启用。",
     en: "Hue protection is automatically handled when high-precision matching is enabled; no need to enable manually.",
   },
+  adv_hue_protection_dynamic_hint: {
+    zh: "动态有效叠层模式由精确 CIEDE2000 统一评分，色相保护和暗色彩度修正不会参与计算。",
+    en: "Dynamic effective-layer mode is scored entirely by exact CIEDE2000; hue protection and dark-chroma adjustments are not applied.",
+  },
   adv_auto_dynamic_range: {
     zh: "自动动态范围（实验性功能）",
     en: "Auto Dynamic Range (Experimental)",
@@ -5789,6 +5837,58 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   palette_replaced_label: {
     zh: "替换色",
     en: "Replaced",
+  },
+  palette_dynamic_actual_layers: {
+    zh: "实际层数",
+    en: "Actual layers",
+  },
+  palette_dynamic_saved_layers: {
+    zh: "节省层数",
+    en: "Layers saved",
+  },
+  palette_dynamic_selected_delta_e00: {
+    zh: "当前 ΔE00",
+    en: "Selected ΔE00",
+  },
+  palette_dynamic_fixed_delta_e00: {
+    zh: "固定最大层数 ΔE00",
+    en: "Fixed-max ΔE00",
+  },
+  palette_dynamic_best_delta_e00: {
+    zh: "范围最佳 ΔE00",
+    en: "Range-best ΔE00",
+  },
+  palette_dynamic_sacrifice: {
+    zh: "容差损失",
+    en: "Tolerance loss",
+  },
+  palette_dynamic_benefit_title: {
+    zh: "全图层数收益",
+    en: "Whole-image layer benefit",
+  },
+  palette_dynamic_benefit_scope_automatic: {
+    zh: "仅自动求解区域（{count} 像素）",
+    en: "Automatic-solver region only ({count} pixels)",
+  },
+  palette_dynamic_benefit_layer: {
+    zh: "{count} 层",
+    en: "{count} layers",
+  },
+  palette_dynamic_benefit_mean: {
+    zh: "平均 ΔE00 {value}",
+    en: "Mean ΔE00 {value}",
+  },
+  palette_dynamic_benefit_baseline: {
+    zh: "起始层数",
+    en: "Starting layer count",
+  },
+  palette_dynamic_benefit_no_improvement: {
+    zh: "无改善",
+    en: "No improvement",
+  },
+  palette_dynamic_benefit_marginal: {
+    zh: "边际改善 {value}",
+    en: "Marginal gain {value}",
   },
   palette_undo: {
     zh: "撤销",

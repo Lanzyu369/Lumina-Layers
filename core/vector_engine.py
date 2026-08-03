@@ -23,6 +23,7 @@ import io
 import pickle
 import warnings
 import math
+from copy import deepcopy
 from typing import Any
 import numpy as np
 import time
@@ -269,6 +270,136 @@ def _rgb_to_hex(rgb):
         return f"#{int(rgb[0]) & 255:02x}{int(rgb[1]) & 255:02x}{int(rgb[2]) & 255:02x}"
     except (IndexError, TypeError, ValueError):
         return None
+
+
+def _replacement_hex_to_rgb(value: object) -> tuple[int, int, int] | None:
+    """Parse one API replacement hex value without importing pipeline code."""
+
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    if normalized.startswith("#"):
+        normalized = normalized[1:]
+    if len(normalized) != 6:
+        return None
+    try:
+        return (
+            int(normalized[0:2], 16),
+            int(normalized[2:4], 16),
+            int(normalized[4:6], 16),
+        )
+    except ValueError:
+        return None
+
+
+def _normalise_vector_replacement_input(
+    color_replacements: object,
+) -> tuple[dict[tuple[int, int, int], tuple[int, int, int]], dict[str, str]]:
+    """Split structured replacement records from the legacy replacement map.
+
+    ``replacement_regions`` is keyed by the colour a user sees in the palette
+    (``matched_hex``), not necessarily by the source SVG fill.  The structured
+    mapping is therefore retained for the native dynamic-material path, where
+    it is resolved after a preflight match.  The second return value keeps the
+    historical ``{matched_hex: replacement_hex}`` contract for all other
+    vector paths.
+    """
+
+    if isinstance(color_replacements, dict):
+        legacy_map: dict[str, str] = {}
+        for source, target in color_replacements.items():
+            if not isinstance(source, str) or not isinstance(target, str):
+                continue
+            source_value = source.strip().lower()
+            target_value = target.strip().lower()
+            if source_value and target_value:
+                legacy_map[source_value] = target_value
+        return {}, legacy_map
+
+    if not isinstance(color_replacements, list):
+        return {}, {}
+
+    targets_by_matched: dict[tuple[int, int, int], tuple[int, int, int]] = {}
+    legacy_map: dict[str, str] = {}
+    for item in color_replacements:
+        if not isinstance(item, dict):
+            continue
+        source = (
+            item.get("matched")
+            or item.get("matched_hex")
+            or item.get("source")
+            or item.get("quantized")
+            or item.get("quantized_hex")
+            or item.get("selected_color")
+        )
+        target = (
+            item.get("replacement_hex")
+            or item.get("replacement")
+            or item.get("replacement_color")
+        )
+        if not isinstance(source, str) or not isinstance(target, str):
+            continue
+        source_value = source.strip().lower()
+        target_value = target.strip().lower()
+        if not source_value or not target_value:
+            continue
+        legacy_map[source_value] = target_value
+        source_rgb = _replacement_hex_to_rgb(source_value)
+        target_rgb = _replacement_hex_to_rgb(target_value)
+        if source_rgb is not None and target_rgb is not None:
+            # Assignment intentionally retains the historic last-record-wins
+            # behaviour of ``_normalize_color_replacements_input``.
+            targets_by_matched[source_rgb] = target_rgb
+    return targets_by_matched, legacy_map
+
+
+def _normalise_rgb_tuple(value: object) -> tuple[int, int, int] | None:
+    """Return one bounded RGB tuple, or ``None`` for malformed metadata."""
+
+    try:
+        return (
+            max(0, min(255, int(value[0]))),
+            max(0, min(255, int(value[1]))),
+            max(0, min(255, int(value[2]))),
+        )
+    except (TypeError, IndexError, ValueError):
+        return None
+
+
+def _project_dynamic_replacement_targets(
+    match_input_shapes: list[dict],
+    preflight_matched_shapes: list[dict],
+    targets_by_matched: dict[tuple[int, int, int], tuple[int, int, int]],
+) -> tuple[list[dict], int]:
+    """Project palette replacements onto per-run SVG match inputs.
+
+    The preflight result tells us which visible palette colour each source
+    shape currently maps to.  A shallow copy is made only for affected shapes
+    so parse/clip cache entries retain original source colours and geometry.
+    """
+
+    projected_shapes: list[dict] = []
+    projected_count = 0
+    for index, item in enumerate(match_input_shapes):
+        matched_shape = (
+            preflight_matched_shapes[index]
+            if index < len(preflight_matched_shapes)
+            else None
+        )
+        matched_rgb = (
+            _normalise_rgb_tuple(matched_shape.get("matched_rgb"))
+            if isinstance(matched_shape, dict)
+            else None
+        )
+        replacement = targets_by_matched.get(matched_rgb)
+        if replacement is None:
+            projected_shapes.append(item)
+            continue
+        projected = dict(item)
+        projected["match_color"] = replacement
+        projected_shapes.append(projected)
+        projected_count += 1
+    return projected_shapes, projected_count
 
 
 def _flatten_cubic(
@@ -2270,6 +2401,8 @@ class VectorAnalysis:
     stage_timings: dict = field(default_factory=dict)
     image_vectorizer_bounds: object | None = None
     matched_rgb_override_metrics: dict = field(default_factory=dict)
+    material_dynamic_layer_info: dict | None = None
+    material_solver_info: dict | None = None
 
 
 def _physical_backing_geometry(analysis: object) -> object | None:
@@ -2303,6 +2436,13 @@ def _signed_dtype_for_int_range(min_value: int, max_value: int) -> np.dtype:
 
 def _material_matrix_dtype_for_vector_analysis(analysis: "VectorAnalysis") -> np.dtype:
     """Return the compact material-matrix dtype needed by an analysis."""
+
+    dynamic_info = getattr(analysis, "material_dynamic_layer_info", None)
+    if isinstance(dynamic_info, dict) and bool(dynamic_info.get("enabled")):
+        # Dynamic material matrices are a P03 authority artifact. Keep their
+        # explicit int32 contract even when the selected material indices
+        # would fit in a smaller signed type.
+        return np.dtype(np.int32)
 
     min_value = -1
     max_value = max(0, int(getattr(analysis, "num_channels", 0) or 0) - 1)
@@ -2952,6 +3092,7 @@ def _apply_matched_rgb_overrides_to_analysis_impl(
     max_width_px: int = 1600,
     strict: bool = False,
     metrics_out: dict[str, Any],
+    prefer_cached_material_state: bool = False,
 ) -> int:
     """Propagate region-level ``matched_rgb`` edits into ``matched_shapes``.
     把 ``cache.matched_rgb`` 上的像素级改色回写到 ``analysis.matched_shapes``。
@@ -3015,6 +3156,10 @@ def _apply_matched_rgb_overrides_to_analysis_impl(
             mismatches instead of logging and returning zero. A valid cache
             that changes no shapes still returns zero normally.
             （缓存输入或网格无效时抛出 ``ValueError``；合法但无修改仍返回零）
+        prefer_cached_material_state: Treat the cache RGB and recipe matrix as
+            authoritative instead of re-deriving the display RGB from the
+            current matcher. Dynamic material sessions use this so edited
+            vector 3MF stays on the same recipe contract as 2D/GLB.
 
     Returns:
         int: Number of connected components whose material assignment changed.
@@ -3244,6 +3389,53 @@ def _apply_matched_rgb_overrides_to_analysis_impl(
         except (TypeError, ValueError):
             return None
 
+    def _dynamic_metadata_for_cached_assignment(
+        shape: dict,
+        *,
+        matched_color: tuple[int, int, int],
+        recipe: list[int],
+    ) -> dict | None:
+        dynamic_info = getattr(analysis, "material_dynamic_layer_info", None)
+        if not isinstance(dynamic_info, dict) or not dynamic_info.get("enabled"):
+            return None
+        recipe_list = [int(value) for value in recipe]
+        for entry in dynamic_info.get("colors", []):
+            if not isinstance(entry, dict):
+                continue
+            try:
+                entry_matched = tuple(int(value) for value in entry["matched_srgb"])
+                entry_recipe = [
+                    int(value)
+                    for value in entry["print_recipe_top_to_bottom"]
+                ]
+            except (KeyError, TypeError, ValueError):
+                continue
+            if entry_matched == matched_color and entry_recipe == recipe_list:
+                return deepcopy(entry)
+        existing = shape.get("material_dynamic_recipe")
+        if isinstance(existing, dict):
+            try:
+                if [
+                    int(value)
+                    for value in existing.get("print_recipe_top_to_bottom", [])
+                ] == recipe_list:
+                    result = deepcopy(existing)
+                    result["matched_srgb"] = list(matched_color)
+                    return result
+            except (TypeError, ValueError):
+                pass
+        # Custom recipe edits may intentionally no longer correspond to an
+        # exact-solver candidate. Preserve their full physical stack without
+        # inventing a shorter effective depth.
+        return {
+            "matched_srgb": list(matched_color),
+            "actual_layer_count": len(recipe_list),
+            "padding_layer_count": 0,
+            "actual_recipe_top_to_bottom": recipe_list,
+            "print_recipe_top_to_bottom": recipe_list,
+            "source": "cached_material_matrix",
+        }
+
     def _dominant_rgb(pixels: np.ndarray) -> tuple[int, int, int]:
         codes = (
             pixels[:, 0].astype(np.uint32) * np.uint32(65536)
@@ -3306,7 +3498,11 @@ def _apply_matched_rgb_overrides_to_analysis_impl(
             lut_idx = _query_lut_index(dominant_rgb)
         except (TypeError, ValueError, IndexError):
             return None
-        new_matched_rgb = tuple(int(c) for c in lut_rgb[lut_idx])
+        new_matched_rgb = (
+            dominant_rgb
+            if prefer_cached_material_state and matrix_arr is not None
+            else tuple(int(c) for c in lut_rgb[lut_idx])
+        )
 
         stack_source = "ref_stacks_fallback"
         stack_top_alternatives: list[list[int]] = []
@@ -3342,6 +3538,11 @@ def _apply_matched_rgb_overrides_to_analysis_impl(
             stack,
             target_layers=num_layers,
             num_channels=num_channels,
+        )
+        dynamic_recipe = _dynamic_metadata_for_cached_assignment(
+            shape,
+            matched_color=new_matched_rgb,
+            recipe=new_recipe,
         )
 
         prev_recipe = [int(v) for v in shape.get("recipe", [])]
@@ -3389,6 +3590,7 @@ def _apply_matched_rgb_overrides_to_analysis_impl(
             "recipe": new_recipe,
             "height_identity_rgb": dominant_height_identity,
             "original_recipe": original_recipe,
+            "material_dynamic_recipe": dynamic_recipe,
             "changed": assignment_changed,
         }
 
@@ -3425,6 +3627,10 @@ def _apply_matched_rgb_overrides_to_analysis_impl(
                 component_record["original_recipe"] = projection[
                     "original_recipe"
                 ]
+                if projection["material_dynamic_recipe"] is not None:
+                    component_record["material_dynamic_recipe"] = projection[
+                        "material_dynamic_recipe"
+                    ]
                 if projection["changed"]:
                     changed_components += 1
             component_records.append(component_record)
@@ -3449,6 +3655,10 @@ def _apply_matched_rgb_overrides_to_analysis_impl(
                 shape["original_recipe"] = list(
                     uniform_record.get("original_recipe") or []
                 )
+                if uniform_record.get("material_dynamic_recipe") is not None:
+                    shape["material_dynamic_recipe"] = uniform_record[
+                        "material_dynamic_recipe"
+                    ]
             projected_shapes.append(shape)
         else:
             # Downstream tiling and mesh construction consume records by value,
@@ -3500,6 +3710,7 @@ def apply_matched_rgb_overrides_to_analysis(
     pixels_per_mm: float = 10.0,
     max_width_px: int = 1600,
     strict: bool = False,
+    prefer_cached_material_state: bool = False,
 ) -> int:
     """Project cached pixel edits into vector shapes with an exact local ROI.
 
@@ -3520,6 +3731,7 @@ def apply_matched_rgb_overrides_to_analysis(
             max_width_px=max_width_px,
             strict=strict,
             metrics_out=metrics,
+            prefer_cached_material_state=prefer_cached_material_state,
         )
     finally:
         analysis.matched_rgb_override_metrics = dict(metrics)
@@ -4461,7 +4673,7 @@ class VectorProcessor:
         self,
         svg_path: str,
         target_width_mm: float,
-        color_replacements: dict = None,
+        color_replacements: dict | list[dict] | None = None,
         progress_fn=None,
     ) -> VectorAnalysis:
         """Parse, clip, and color-match an SVG — shared by preview and mesh.
@@ -4470,7 +4682,9 @@ class VectorProcessor:
         Args:
             svg_path:         Path to SVG file.
             target_width_mm:  Physical width in mm for the output model.
-            color_replacements: Optional ``{hex: hex}`` replacement map.
+            color_replacements: Optional legacy ``{hex: hex}`` map or API
+                ``ColorReplacementItem`` records. Structured records retain
+                their ``matched_hex`` identity for native dynamic materials.
             progress_fn:      Optional progress callback.
 
         Returns:
@@ -4698,24 +4912,6 @@ class VectorProcessor:
                     },
                 )
 
-        # === Stage 4: Match fill colors to LUT recipes ===
-        replacement_manager = None
-        if color_replacements:
-            try:
-                from core.color_replacement import ColorReplacementManager
-
-                replacement_manager = ColorReplacementManager.from_dict(color_replacements)
-            except VECTOR_HANDLED_ERRORS as e:
-                _log.warning(
-                    "Failed to load vector color replacements",
-                    extra={
-                        "event": "vector_color_replacements_load_failed",
-                        "error_type": type(e).__name__,
-                        "error_message": str(e),
-                        "replacement_count": len(color_replacements or []),
-                    },
-                )
-
         # Material-archive matcher needs to pre-solve every unique fill
         # colour before ``_match_colors`` runs its KDTree query, so the
         # KDTree is populated and ``lut_rgb`` / ``ref_stacks`` carry the
@@ -4725,47 +4921,137 @@ class VectorProcessor:
         # 耗材档案 matcher 在 _match_colors 之前批量求解填充色，保证
         # KDTree / lut_rgb / ref_stacks 已就绪；LUT 模式没有该方法，
         # 透明跳过。
+        solve_for_clipped_shapes = getattr(
+            self.img_processor,
+            "solve_for_clipped_shapes",
+            None,
+        )
         solve_for_fills = getattr(self.img_processor, "solve_for_fills", None)
         stage_timings["fill_dedup_s"] = 0.0
         stage_timings["material_solve_s"] = 0.0
-        if solve_for_fills is not None and clipped_shapes:
-            fill_dedup_t0 = time.perf_counter()
-            unique_fills_set: set = set()
-            for item in clipped_shapes:
-                color = item.get("color")
-                if color is None:
-                    continue
-                try:
-                    unique_fills_set.add(
-                        (int(color[0]), int(color[1]), int(color[2]))
-                    )
-                except (TypeError, IndexError, ValueError):
-                    continue
-            stage_timings["fill_dedup_s"] = (
-                time.perf_counter() - fill_dedup_t0
+        t0 = time.perf_counter()
+        targets_by_matched, legacy_replacements = _normalise_vector_replacement_input(
+            color_replacements
+        )
+        dynamic_replacement_projection = bool(
+            targets_by_matched
+            and callable(solve_for_clipped_shapes)
+            and bool(
+                getattr(self.img_processor, "dynamic_layer_count_enabled", False)
             )
-            if unique_fills_set:
+        )
+
+        # ``replacement_regions`` identifies a palette match, not always a
+        # single source SVG fill.  In dynamic material mode, first establish
+        # that palette identity from the original geometry, then project every
+        # matching shape to its user-selected target and solve the final table.
+        # The second solve therefore owns the metadata/KDTree consumed by
+        # preview, GLB and 3MF generation.
+        if dynamic_replacement_projection and clipped_shapes:
+            material_solve_t0 = time.perf_counter()
+            solve_for_clipped_shapes(clipped_shapes, scale_factor=scale_factor)
+            stage_timings["material_solve_s"] += (
+                time.perf_counter() - material_solve_t0
+            )
+            preflight_input_shapes = self._with_near_fill_match_queries(
+                clipped_shapes
+            )
+            preflight_matched_shapes = self._match_colors(
+                preflight_input_shapes,
+                None,
+                num_channels,
+                num_layers=num_layers,
+            )
+            match_input_shapes, projected_count = _project_dynamic_replacement_targets(
+                preflight_input_shapes,
+                preflight_matched_shapes,
+                targets_by_matched,
+            )
+            if projected_count:
                 material_solve_t0 = time.perf_counter()
-                solve_for_fills(sorted(unique_fills_set))
-                stage_timings["material_solve_s"] = (
+                solve_for_clipped_shapes(
+                    match_input_shapes,
+                    scale_factor=scale_factor,
+                )
+                stage_timings["material_solve_s"] += (
                     time.perf_counter() - material_solve_t0
                 )
-                # NOTE: small-shape snap is disabled for material-archive mode.
-                # The delta_e heuristic incorrectly triggers when the material
-                # set cannot physically reproduce dark colours, causing
-                # unrelated small shapes to be snapped to the dominant anchor
-                # colour (e.g. black → skin tone). See PR #177 regression.
-                # 耗材档案模式禁用小 shape 吸附：材料集缺少深色时 delta_e
-                # 判断会误触发，把深色小碎片全部吸附到大面积锚点色。
+                # Do not apply the same palette remap after the final KDTree
+                # lookup: final ``match_color`` already is the exact target.
+                matched_shapes = self._match_colors(
+                    match_input_shapes,
+                    None,
+                    num_channels,
+                    num_layers=num_layers,
+                )
+            else:
+                matched_shapes = preflight_matched_shapes
+        else:
+            replacement_manager = None
+            if legacy_replacements:
+                try:
+                    from core.color_replacement import ColorReplacementManager
 
-        t0 = time.perf_counter()
-        match_input_shapes = self._with_near_fill_match_queries(clipped_shapes)
-        matched_shapes = self._match_colors(
-            match_input_shapes,
-            replacement_manager,
-            num_channels,
-            num_layers=num_layers,
-        )
+                    replacement_manager = ColorReplacementManager.from_dict(
+                        legacy_replacements
+                    )
+                except VECTOR_HANDLED_ERRORS as e:
+                    _log.warning(
+                        "Failed to load vector color replacements",
+                        extra={
+                            "event": "vector_color_replacements_load_failed",
+                            "error_type": type(e).__name__,
+                            "error_message": str(e),
+                            "replacement_count": len(color_replacements or []),
+                        },
+                    )
+
+            if callable(solve_for_clipped_shapes) and clipped_shapes:
+                material_solve_t0 = time.perf_counter()
+                solve_for_clipped_shapes(
+                    clipped_shapes,
+                    scale_factor=scale_factor,
+                )
+                stage_timings["material_solve_s"] += (
+                    time.perf_counter() - material_solve_t0
+                )
+            elif solve_for_fills is not None and clipped_shapes:
+                fill_dedup_t0 = time.perf_counter()
+                unique_fills_set: set = set()
+                for item in clipped_shapes:
+                    color = item.get("color")
+                    if color is None:
+                        continue
+                    try:
+                        unique_fills_set.add(
+                            (int(color[0]), int(color[1]), int(color[2]))
+                        )
+                    except (TypeError, IndexError, ValueError):
+                        continue
+                stage_timings["fill_dedup_s"] += (
+                    time.perf_counter() - fill_dedup_t0
+                )
+                if unique_fills_set:
+                    material_solve_t0 = time.perf_counter()
+                    solve_for_fills(sorted(unique_fills_set))
+                    stage_timings["material_solve_s"] += (
+                        time.perf_counter() - material_solve_t0
+                    )
+                    # NOTE: small-shape snap is disabled for material-archive mode.
+                    # The delta_e heuristic incorrectly triggers when the material
+                    # set cannot physically reproduce dark colours, causing
+                    # unrelated small shapes to be snapped to the dominant anchor
+                    # colour (e.g. black → skin tone). See PR #177 regression.
+                    # 耗材档案模式禁用小 shape 吸附：材料集缺少深色时 delta_e
+                    # 判断会误触发，把深色小碎片全部吸附到大面积锚点色。
+
+            match_input_shapes = self._with_near_fill_match_queries(clipped_shapes)
+            matched_shapes = self._match_colors(
+                match_input_shapes,
+                replacement_manager,
+                num_channels,
+                num_layers=num_layers,
+            )
         min_hole_area_mm2 = float(getattr(VectorConfig, "MIN_COLOR_HOLE_AREA_MM2", 1.0))
         for idx, item in enumerate(clipped_shapes):
             filtered_geometry = VectorProcessor._filter_backing_holes(
@@ -4775,7 +5061,13 @@ class VectorProcessor:
             item["geometry"] = filtered_geometry
             if idx < len(matched_shapes):
                 matched_shapes[idx]["geometry"] = filtered_geometry
-        stage_timings["color_match_s"] = time.perf_counter() - t0
+        stage_timings["color_match_s"] = max(
+            0.0,
+            time.perf_counter()
+            - t0
+            - stage_timings["fill_dedup_s"]
+            - stage_timings["material_solve_s"],
+        )
         _log.debug("Matched %s shapes to LUT recipes", len(matched_shapes))
         legacy_stroke_only_shapes = sum(
             1 for item in shape_data if item.get("source_kind") == "stroke_only"
@@ -4811,6 +5103,16 @@ class VectorProcessor:
             preview_colors=preview_colors,
             stage_timings=stage_timings,
             image_vectorizer_bounds=image_vectorizer_bounds,
+            material_dynamic_layer_info=getattr(
+                self.img_processor,
+                "dynamic_layer_info",
+                None,
+            ),
+            material_solver_info=getattr(
+                self.img_processor,
+                "material_solver_info",
+                None,
+            ),
         )
 
     def build_mesh(
@@ -5429,7 +5731,7 @@ class VectorProcessor:
         target_width_mm: float,
         thickness_mm: float,
         structure_mode: str = "Single-sided",
-        color_replacements: dict = None,
+        color_replacements: dict | list[dict] | None = None,
         progress_fn=None,
     ) -> trimesh.Scene:
         """Convert an SVG file to a trimesh Scene ready for 3MF export.
@@ -5442,7 +5744,8 @@ class VectorProcessor:
             target_width_mm:  Physical width in mm for the output model.
             thickness_mm:     Backing (spacer) thickness in mm.
             structure_mode:   "Single-sided" or "Double-sided".
-            color_replacements: Optional ``{hex: hex}`` replacement map.
+            color_replacements: Optional legacy replacement map or API
+                ``ColorReplacementItem`` records.
             progress_fn:      Optional progress callback.
 
         Returns:
@@ -6222,6 +6525,11 @@ class VectorProcessor:
             num_layers = PrinterConfig.COLOR_LAYERS
         recipe_log_mode = os.getenv("LUMINA_VECTOR_RECIPE_LOG", "summary").strip().lower()
         color_cache = {}
+        dynamic_metadata_for_fill = getattr(
+            self.img_processor,
+            "dynamic_metadata_for_fill",
+            None,
+        )
         matched = []
         sample_logs = []
         large_distance_count = 0
@@ -6312,18 +6620,23 @@ class VectorProcessor:
                     else:
                         sample_logs.append(f"{hex_c} -> {matched_hex} -> {recipe} (dist={lab_dist:.1f})")
 
-            matched.append(
-                {
-                    "geometry": item["geometry"],
-                    "recipe": recipe,
-                    "color": rgb,
-                    "match_color": query_rgb,
-                    "matched_rgb": matched_rgb,
-                    "lut_idx": int(lut_idx),
-                    "height_identity_rgb": height_identity_rgb,
-                    "original_recipe": list(original_recipe),
-                }
-            )
+            matched_shape = {
+                "geometry": item["geometry"],
+                "recipe": recipe,
+                "color": rgb,
+                "match_color": query_rgb,
+                "matched_rgb": matched_rgb,
+                "lut_idx": int(lut_idx),
+                "height_identity_rgb": height_identity_rgb,
+                "original_recipe": list(original_recipe),
+            }
+            if callable(dynamic_metadata_for_fill):
+                dynamic_recipe = dynamic_metadata_for_fill(query_rgb)
+                if isinstance(dynamic_recipe, dict):
+                    # Retain each colour's effective-depth recipe next to the
+                    # padded physical recipe used by mesh extrusion.
+                    matched_shape["material_dynamic_recipe"] = dynamic_recipe
+            matched.append(matched_shape)
 
         if recipe_log_mode == "summary":
             _log.debug(

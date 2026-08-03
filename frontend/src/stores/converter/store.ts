@@ -23,6 +23,10 @@ import type {
   LutDetailsCatalogGroup,
   LutColorsCard,
   PerformanceTiming,
+  DynamicMaterialRecipe,
+  DynamicMaterialResultResponse,
+  MaterialLayerBenefitPoint,
+  MaterialLayerBenefitScope,
   ModelSurfaceCandidate,
   ModelSurfaceMeshSummary,
   ModelSurfaceSelectResponse,
@@ -93,7 +97,10 @@ import {
   summarizeFileForLog,
 } from "../../utils/clientLog";
 import { trackLuminaEvent } from "../../analytics/umami";
-import { registerGeneratedArtifactInvalidator } from "../generatedArtifactInvalidation";
+import {
+  registerGeneratedArtifactInvalidator,
+  registerPreviewArtifactInvalidator,
+} from "../generatedArtifactInvalidation";
 import { uploadImagePreview } from "../../api/system";
 import { tRuntime } from "../../i18n/runtime";
 import { fetchMaterialColorSuggestions } from "../../api/materialCache";
@@ -328,12 +335,78 @@ export function clampValue(value: number, min: number, max: number): number {
 const RELIEF_MIN_EXTRA_HEIGHT_MM = 0.08;
 const RELIEF_MAX_EXTRA_HEIGHT_MM = 15.0;
 const MATERIAL_ARCHIVE_RELIEF_LAYER_HEIGHT_MM = 0.08;
+export const MATERIAL_DYNAMIC_LAYER_COUNT_MIN = 5;
+export const MATERIAL_DYNAMIC_LAYER_COUNT_MAX = 10;
+
+function normalizeDynamicMaterialLayerCount(
+  value: number,
+  fallback: number,
+): number {
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+  return clampValue(
+    Math.round(value),
+    MATERIAL_DYNAMIC_LAYER_COUNT_MIN,
+    MATERIAL_DYNAMIC_LAYER_COUNT_MAX,
+  );
+}
 
 type MaterialArchiveReliefMinimumState = {
   source_version: SourceVersion;
   materialLayerCount: number;
+  materialDynamicLayerCountEnabled?: boolean;
+  materialMaxLayerCount?: number;
   spacer_thick: number;
 };
+
+type DynamicMaterialActivationState = {
+  source_version: SourceVersion;
+  materialDynamicLayerCountEnabled: boolean;
+};
+
+type MaterialPrintLayerCountState = {
+  source_version: SourceVersion;
+  materialLayerCount: number;
+  materialDynamicLayerCountEnabled?: boolean;
+  materialMaxLayerCount?: number;
+};
+
+export function isDynamicMaterialActive(
+  state: DynamicMaterialActivationState,
+): boolean {
+  return (
+    state.source_version === "material" &&
+    state.materialDynamicLayerCountEnabled === true
+  );
+}
+
+function resolveMaterialPrintLayerCount(
+  state: MaterialPrintLayerCountState,
+): number {
+  return state.source_version === "material" &&
+    state.materialDynamicLayerCountEnabled === true
+    ? (state.materialMaxLayerCount ?? state.materialLayerCount)
+    : state.materialLayerCount;
+}
+
+function resolveColorMatchingWeights(
+  state: Pick<
+    ConverterState,
+    | "source_version"
+    | "materialDynamicLayerCountEnabled"
+    | "hue_enable"
+    | "chroma_gate"
+  >,
+): { hue_weight: number; chroma_gate: number } {
+  if (isDynamicMaterialActive(state)) {
+    return { hue_weight: 0, chroma_gate: 0 };
+  }
+  return {
+    hue_weight: state.hue_enable ? 0.5 : 0,
+    chroma_gate: state.hue_enable ? state.chroma_gate : 0,
+  };
+}
 
 export function getMaterialArchiveReliefMinimumTotalHeight(
   state: MaterialArchiveReliefMinimumState,
@@ -341,8 +414,11 @@ export function getMaterialArchiveReliefMinimumTotalHeight(
   if (state.source_version !== "material") {
     return RELIEF_MIN_EXTRA_HEIGHT_MM;
   }
+  const layerCount = state.materialDynamicLayerCountEnabled
+    ? (state.materialMaxLayerCount ?? state.materialLayerCount)
+    : state.materialLayerCount;
   return (
-    Math.max(1, Math.round(state.materialLayerCount)) *
+    Math.max(1, Math.round(layerCount)) *
     MATERIAL_ARCHIVE_RELIEF_LAYER_HEIGHT_MM
   );
 }
@@ -1194,7 +1270,15 @@ export function resolveConverterSourceSelection(
     | "materialLayerCount"
     | "materialLayerHeightMm"
   > &
-    Partial<Pick<ConverterState, "lutListFull" | "legacyCatalogGroups">>,
+    Partial<
+      Pick<
+        ConverterState,
+        | "lutListFull"
+        | "legacyCatalogGroups"
+        | "materialDynamicLayerCountEnabled"
+        | "materialMaxLayerCount"
+      >
+    >,
 ): {
   source_kind: "legacy_single" | "legacy_multi" | "native_bundle";
   isReady: boolean;
@@ -1222,7 +1306,7 @@ export function resolveConverterSourceSelection(
       lut_name: "",
       db_names: [],
       native: emptyNative,
-      color_layers: state.materialLayerCount ?? 5,
+      color_layers: resolveMaterialPrintLayerCount(state),
       layer_height_mm: state.materialLayerHeightMm ?? 0.08,
     };
   }
@@ -1276,9 +1360,13 @@ function buildMaterialSourceParams(
   state: Pick<
     ConverterState,
     | "selectedMaterialDirNames"
+    | "source_version"
     | "materialLayerCount"
     | "materialLayerHeightMm"
     | "materialBackingMaterialDirName"
+    | "materialDynamicLayerCountEnabled"
+    | "materialMinLayerCount"
+    | "materialMaxLayerCount"
   >,
 ) {
   const settingsState = useSettingsStore.getState();
@@ -1293,16 +1381,21 @@ function buildMaterialSourceParams(
   const backingMaterialIndex = resolvedBackingDirName
     ? state.selectedMaterialDirNames.indexOf(resolvedBackingDirName)
     : -1;
+  const printLayerCount = resolveMaterialPrintLayerCount(state);
   return {
     source_kind: "legacy_single" as const,
     lut_name: "__material_archive__",
     material_source: "material_archive" as const,
     selected_materials: state.selectedMaterialDirNames,
-    material_layer_count: state.materialLayerCount,
+    material_layer_count: printLayerCount,
     material_layer_height_mm: state.materialLayerHeightMm,
     material_grid_resolution: materialGridResolution,
     material_backing_material_index:
       backingMaterialIndex >= 0 ? backingMaterialIndex : 0,
+    material_dynamic_layer_count_enabled: isDynamicMaterialActive(state),
+    material_min_layer_count: state.materialMinLayerCount,
+    material_max_layer_count: state.materialMaxLayerCount,
+    material_delta_e00_tolerance: settingsState.materialDeltaE00Tolerance,
   };
 }
 
@@ -1488,6 +1581,13 @@ export interface ConverterState {
   materialLayerCount: number;
   materialLayerHeightMm: number;
   materialBackingMaterialDirName: string | null;
+  materialDynamicLayerCountEnabled: boolean;
+  materialMinLayerCount: number;
+  materialMaxLayerCount: number;
+  materialDynamicRecipes: DynamicMaterialRecipe[];
+  materialLayerBenefitCurve: MaterialLayerBenefitPoint[];
+  materialLayerBenefitScope: MaterialLayerBenefitScope;
+  materialLayerBenefitPixelCount: number;
 
   // 高级设置
   quantize_colors: number;
@@ -2059,6 +2159,9 @@ export interface ConverterActions {
   setSourceVersion: (version: SourceVersion) => void;
   setSelectedMaterialDirNames: (names: string[]) => void;
   setMaterialLayerCount: (count: number) => void;
+  setMaterialDynamicLayerCountEnabled: (enabled: boolean) => void;
+  setMaterialMinLayerCount: (count: number) => void;
+  setMaterialMaxLayerCount: (count: number) => void;
   setMaterialLayerHeightMm: (height: number) => void;
   setMaterialBackingMaterialDirName: (name: string | null) => void;
   setNativeBrandKey: (brandKey: string) => void;
@@ -2150,6 +2253,25 @@ const INVALIDATE_LAYER_IMAGES_AFTER_REPLACE = {
   layerImagesSourceKey: null as string | null,
 } as const;
 
+function dynamicMaterialResultState(
+  response: DynamicMaterialResultResponse,
+): Pick<
+  ConverterState,
+  | "materialDynamicRecipes"
+  | "materialLayerBenefitCurve"
+  | "materialLayerBenefitScope"
+  | "materialLayerBenefitPixelCount"
+> {
+  return {
+    materialDynamicRecipes: response.material_dynamic_recipes ?? [],
+    materialLayerBenefitCurve: response.material_layer_benefit_curve ?? [],
+    materialLayerBenefitScope:
+      response.material_layer_benefit_scope ?? "all_printable_pixels",
+    materialLayerBenefitPixelCount:
+      response.material_layer_benefit_pixel_count ?? 0,
+  };
+}
+
 const DEFAULT_PUZZLE_PREVIEW_STATE = {
   puzzleOverlayUrl: null,
   puzzleWarnings: [] as string[],
@@ -2185,6 +2307,10 @@ function buildPreviewSessionResetState(
     threemfDiskPath: null,
     downloadUrl: null,
     palette: [],
+    materialDynamicRecipes: [],
+    materialLayerBenefitCurve: [],
+    materialLayerBenefitScope: "all_printable_pixels",
+    materialLayerBenefitPixelCount: 0,
     colorContours: {},
     colorRemapMap: {},
     remapHistory: [],
@@ -2440,6 +2566,13 @@ export const DEFAULT_STATE: ConverterState = {
   materialLayerCount: 5,
   materialLayerHeightMm: 0.08,
   materialBackingMaterialDirName: loadMaterialBackingMaterialDirName(),
+  materialDynamicLayerCountEnabled: false,
+  materialMinLayerCount: MATERIAL_DYNAMIC_LAYER_COUNT_MIN,
+  materialMaxLayerCount: MATERIAL_DYNAMIC_LAYER_COUNT_MAX,
+  materialDynamicRecipes: [],
+  materialLayerBenefitCurve: [],
+  materialLayerBenefitScope: "all_printable_pixels",
+  materialLayerBenefitPixelCount: 0,
   quantize_colors: 48,
   quantize_colors_unlocked: false,
   high_precision_3d_preview: false,
@@ -2568,10 +2701,6 @@ export const DEFAULT_STATE: ConverterState = {
   previewRequestRevision: 0,
   previewSubmissionSequence: 0,
 };
-
-// ========== Preview AbortController ==========
-
-let _previewAbortController: AbortController | null = null;
 
 // ========== Client-side timing log (writes to server log) ==========
 let _previewStartTime: number | null = null;
@@ -2750,6 +2879,10 @@ const GLB_POLL_MAX_MS = 5 * 60_000;
 // 变了就退出，避免多路 polling 互相覆盖 previewGlbUrl。
 let _glbPollSequence = 0;
 let _generateRequestSequence = 0;
+
+// ========== Preview AbortController ==========
+
+let _previewAbortController: AbortController | null = null;
 
 /** Cancel every async task owned by the current preview input. */
 function _cancelPreviewWork(): void {
@@ -3524,6 +3657,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         if (version === "material") {
           return {
             source_version: "material",
+            hue_enable: state.materialDynamicLayerCountEnabled
+              ? false
+              : state.hue_enable,
             model_enable: false,
             model_only: false,
             model_threshold: null,
@@ -3595,6 +3731,87 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           ...buildPreviewSessionResetState(state, true),
         };
       }),
+    setMaterialDynamicLayerCountEnabled: (enabled: boolean) => {
+      _cancelPreviewWork();
+      set((state) => ({
+        materialDynamicLayerCountEnabled: enabled,
+        hue_enable: enabled ? false : state.hue_enable,
+        heightmap_max_height:
+          enabled && state.enable_relief
+            ? clampValue(
+                state.heightmap_max_height,
+                getMaterialArchiveReliefMinimumExtraHeight({
+                  ...state,
+                  materialDynamicLayerCountEnabled: true,
+                }),
+                RELIEF_MAX_EXTRA_HEIGHT_MM,
+              )
+            : state.heightmap_max_height,
+        ...buildPreviewSessionResetState(state),
+      }));
+    },
+    setMaterialMinLayerCount: (count: number) => {
+      _cancelPreviewWork();
+      set((state) => {
+        const materialMinLayerCount = normalizeDynamicMaterialLayerCount(
+          count,
+          state.materialMinLayerCount,
+        );
+        const materialMaxLayerCount = Math.max(
+          normalizeDynamicMaterialLayerCount(
+            state.materialMaxLayerCount,
+            MATERIAL_DYNAMIC_LAYER_COUNT_MAX,
+          ),
+          materialMinLayerCount,
+        );
+        return {
+          materialMinLayerCount,
+          materialMaxLayerCount,
+          heightmap_max_height: state.enable_relief
+            ? clampValue(
+                state.heightmap_max_height,
+                getMaterialArchiveReliefMinimumExtraHeight({
+                  ...state,
+                  materialMaxLayerCount,
+                }),
+                RELIEF_MAX_EXTRA_HEIGHT_MM,
+              )
+            : state.heightmap_max_height,
+          ...buildPreviewSessionResetState(state),
+        };
+      });
+    },
+    setMaterialMaxLayerCount: (count: number) => {
+      _cancelPreviewWork();
+      set((state) => {
+        const materialMaxLayerCount = normalizeDynamicMaterialLayerCount(
+          count,
+          state.materialMaxLayerCount,
+        );
+        const materialMinLayerCount = Math.min(
+          normalizeDynamicMaterialLayerCount(
+            state.materialMinLayerCount,
+            MATERIAL_DYNAMIC_LAYER_COUNT_MIN,
+          ),
+          materialMaxLayerCount,
+        );
+        return {
+          materialMinLayerCount,
+          materialMaxLayerCount,
+          heightmap_max_height: state.enable_relief
+            ? clampValue(
+                state.heightmap_max_height,
+                getMaterialArchiveReliefMinimumExtraHeight({
+                  ...state,
+                  materialMaxLayerCount,
+                }),
+                RELIEF_MAX_EXTRA_HEIGHT_MM,
+              )
+            : state.heightmap_max_height,
+          ...buildPreviewSessionResetState(state),
+        };
+      });
+    },
     setMaterialLayerHeightMm: (height: number) =>
       set((state) => ({
         materialLayerHeightMm: height,
@@ -3602,6 +3819,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       })),
     setMaterialBackingMaterialDirName: (name: string | null) => {
       persistMaterialBackingMaterialDirName(name);
+      if (isDynamicMaterialActive(_get())) {
+        set({
+          materialBackingMaterialDirName: name,
+          ...buildPreviewSessionResetState(_get()),
+        });
+        return;
+      }
       set({
         materialBackingMaterialDirName: name,
         modelUrl: null,
@@ -3875,11 +4099,12 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         downloadUrl: null,
       }),
     setHueEnable: (enabled: boolean) =>
-      set({
-        hue_enable: enabled,
+      set((state) => ({
+        hue_enable:
+          enabled && isDynamicMaterialActive(state) ? false : enabled,
         threemfDiskPath: null,
         downloadUrl: null,
-      }),
+      })),
     setUseLutConstrained: (enabled: boolean) =>
       set({ use_lut_constrained: enabled }),
     setAutoDynamicRange: (enabled: boolean) =>
@@ -4523,6 +4748,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           previewImageUrl: normalizeResourceUrl(response.preview_url),
           previewBaseImageUrl: normalizeResourceUrl(response.preview_url),
           ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
+          ...dynamicMaterialResultState(response),
         };
         if (response.preview_3d_url) {
           updates.previewGlbUrl = normalizeResourceUrl(response.preview_3d_url);
@@ -4769,6 +4995,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           threemfDiskPath: null,
           downloadUrl: null,
           ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
+          ...dynamicMaterialResultState(response),
         };
 
         // 更新 3D 预览 GLB URL（仅当后端返回非空 URL 时）
@@ -4847,6 +5074,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           // exactly like applyRegionReplace does.
           // 与 applyRegionReplace 一致：让 generate 走 use_cached_matched_rgb。
           ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
+          ...dynamicMaterialResultState(response),
         };
         if (response.preview_glb_url) {
           updates.previewGlbUrl = normalizeResourceUrl(
@@ -5024,6 +5252,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           selectedColor: null,
           regionData: null,
           ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
+          ...dynamicMaterialResultState(response),
         };
         if (response.preview_glb_url) {
           updates.previewGlbUrl = normalizeResourceUrl(
@@ -5108,6 +5337,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           selectedColor: null,
           regionData: null,
           ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
+          ...dynamicMaterialResultState(response),
         };
         if (!usingExplicitTargets) {
           updates.gradientSelection = null;
@@ -5188,6 +5418,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           selectedColor: null,
           regionData: null,
           ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
+          ...dynamicMaterialResultState(response),
         };
         if (response.preview_glb_url) {
           updates.previewGlbUrl = normalizeResourceUrl(
@@ -5230,10 +5461,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         set({ error: "请先选择区域" });
         return;
       }
-      const resolvedLayers = Math.max(
-        recipe.length,
-        state.color_layers ?? recipe.length,
-      );
+      // Dynamic sessions transport the user's actual recipe length. The
+      // preview's physical print depth remains in the session and the backend
+      // pads it with the configured backing material; sending the maximum
+      // depth here turns a valid short recipe into a 422 mismatch.
+      const resolvedLayers = isDynamicMaterialActive(state)
+        ? recipe.length
+        : Math.max(recipe.length, state.color_layers ?? recipe.length);
       const resolvedHeight =
         state.layer_height_mm ?? state.selectedLutInfo?.layer_height_mm ?? 0.08;
       // Deep-copy virtuals to isolate the payload / state from later
@@ -5269,6 +5503,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             ? normalizeResourceUrl(response.preview_glb_url)
             : current.previewGlbUrl,
           ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
+          ...dynamicMaterialResultState(response),
           color_layers: Math.max(current.color_layers ?? 0, resolvedLayers),
           layer_height_mm: resolvedHeight,
           recipe_overrides: [
@@ -5406,6 +5641,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
               regionData: null,
               selectedColor: null,
               ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
+              ...dynamicMaterialResultState(response),
             };
             if (response.preview_glb_url) {
               updates.previewGlbUrl = normalizeResourceUrl(
@@ -5512,6 +5748,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       let previewGlbUrl = resetResponse.preview_glb_url
         ? normalizeResourceUrl(resetResponse.preview_glb_url)
         : undefined;
+      let dynamicResult: DynamicMaterialResultResponse = resetResponse;
       const replayItems = Object.entries(previousMap).map(
         ([origHex, newHex]) => ({
           selectedColor: `#${origHex.replace(/^#/, "").toLowerCase()}`,
@@ -5522,6 +5759,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         try {
           const replayResponse = await apiReplaceColorsBatch(sid, replayItems);
           if (_get().sessionId !== sid) return;
+          dynamicResult = replayResponse;
           previewUrl = normalizeResourceUrl(replayResponse.preview_url);
           if (replayResponse.preview_3d_url) {
             previewGlbUrl = normalizeResourceUrl(
@@ -5535,6 +5773,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             colorRemapMap: {},
             remapHistory: [],
             replacement_regions: [],
+            recipe_overrides: [],
             threemfDiskPath: null,
             downloadUrl: null,
             regionReplacementCount: 0,
@@ -5553,6 +5792,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
               : null,
             replacePreviewLoading: false,
             error: visibleConverterError(err, "撤销颜色替换失败"),
+            ...dynamicMaterialResultState(resetResponse),
             ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
           };
           set(resetUpdates);
@@ -5569,6 +5809,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         previewImageUrl: previewUrl,
         previewBaseImageUrl: previewUrl,
         replacement_regions: [],
+        recipe_overrides: [],
         regionReplacementCount: 0,
         regionData: null,
         selectedRegions: [],
@@ -5578,6 +5819,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         selectedColor: null,
         pendingReplacement: null,
         replacePreviewLoading: false,
+        ...dynamicMaterialResultState(dynamicResult),
         ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
       };
       updates.previewGlbUrl = previewGlbUrl ?? null;
@@ -5597,6 +5839,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           colorRemapMap: {},
           remapHistory: [],
           replacement_regions: [],
+          recipe_overrides: [],
           threemfDiskPath: null,
           downloadUrl: null,
           regionData: null,
@@ -5607,6 +5850,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           selectedColor: null,
           pendingReplacement: null,
           regionReplacementCount: 0,
+          materialDynamicRecipes: [],
+          materialLayerBenefitCurve: [],
+          materialLayerBenefitScope: "all_printable_pixels",
+          materialLayerBenefitPixelCount: 0,
           previewImageUrl: originalUrl,
           previewBaseImageUrl: originalUrl,
           replacePreviewLoading: false,
@@ -5624,6 +5871,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           colorRemapMap: {},
           remapHistory: [],
           replacement_regions: [],
+          recipe_overrides: [],
           threemfDiskPath: null,
           downloadUrl: null,
           regionData: null,
@@ -5641,6 +5889,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             ? normalizeResourceUrl(response.preview_glb_url)
             : null,
           replacePreviewLoading: false,
+          ...dynamicMaterialResultState(response),
           ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
         };
         set(updates);
@@ -6357,6 +6606,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           selectedColor: null,
           regionData: null,
           ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
+          ...dynamicMaterialResultState(response),
         };
         if (response.preview_glb_url) {
           updates.previewGlbUrl = normalizeResourceUrl(
@@ -6559,7 +6809,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           ...sourceParams,
           color_layers:
             state.source_version === "material"
-              ? state.materialLayerCount
+              ? resolveMaterialPrintLayerCount(state)
               : sourceParams.source_kind === "native_bundle"
                 ? (sourceParams.color_layers ?? undefined)
                 : (state.color_layers ?? undefined),
@@ -6578,8 +6828,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           enable_outline: state.enable_outline,
           outline_width: state.outline_width,
           svg_pixels_per_mm: useSettingsStore.getState().svgPixelsPerMm,
-          hue_weight: state.hue_enable ? 0.5 : 0.0,
-          chroma_gate: state.hue_enable ? state.chroma_gate : 0,
+          ...resolveColorMatchingWeights(state),
           use_lut_constrained: state.use_lut_constrained,
           auto_dynamic_range: state.auto_dynamic_range,
           is_dark: useSettingsStore.getState().theme === "dark",
@@ -6644,7 +6893,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           normalizedPalette,
         );
         const resolvedColorLayers = sourceSelection.isMaterial
-          ? state.materialLayerCount
+          ? resolveMaterialPrintLayerCount(state)
           : sourceSelection.source_kind === "native_bundle"
             ? (sourceSelection.color_layers ?? null)
             : state.color_layers;
@@ -6681,6 +6930,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             match_mode: response.lut_match_mode ?? "legacy",
           },
           palette: normalizedPalette,
+          ...dynamicMaterialResultState(response),
           ...(shouldResetHeightmapMapping
             ? clearedHeightmapUploadState()
             : autoReliefHeightMap
@@ -6980,13 +7230,17 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         const baseParams = {
           ...sourceParams,
           color_layers:
-            sourceParams.source_kind === "native_bundle"
-              ? (sourceParams.color_layers ?? undefined)
-              : (state.color_layers ?? undefined),
+            state.source_version === "material"
+              ? resolveMaterialPrintLayerCount(state)
+              : sourceParams.source_kind === "native_bundle"
+                ? (sourceParams.color_layers ?? undefined)
+                : (state.color_layers ?? undefined),
           layer_height_mm:
-            sourceParams.source_kind === "native_bundle"
-              ? (sourceParams.layer_height_mm ?? undefined)
-              : (state.layer_height_mm ?? undefined),
+            state.source_version === "material"
+              ? state.materialLayerHeightMm
+              : sourceParams.source_kind === "native_bundle"
+                ? (sourceParams.layer_height_mm ?? undefined)
+                : (state.layer_height_mm ?? undefined),
           target_width_mm: state.target_width_mm,
           color_mode: colorMode,
           modeling_mode: state.modeling_mode,
@@ -6994,8 +7248,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           high_precision_3d_preview: state.high_precision_3d_preview,
           enable_cleanup: state.enable_cleanup,
           svg_pixels_per_mm: useSettingsStore.getState().svgPixelsPerMm,
-          hue_weight: state.hue_enable ? 0.5 : 0.0,
-          chroma_gate: state.hue_enable ? state.chroma_gate : 0,
+          ...resolveColorMatchingWeights(state),
           use_lut_constrained: state.use_lut_constrained,
           auto_dynamic_range: state.auto_dynamic_range,
           is_dark: useSettingsStore.getState().theme === "dark",
@@ -7834,7 +8087,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           modeling_mode: state.modeling_mode,
           color_layers:
             state.source_version === "material"
-              ? state.materialLayerCount
+              ? resolveMaterialPrintLayerCount(state)
               : sourceParams.source_kind === "native_bundle"
                 ? (sourceParams.color_layers ?? undefined)
                 : (state.color_layers ?? undefined),
@@ -7848,8 +8101,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           high_precision_3d_preview: state.high_precision_3d_preview,
           enable_cleanup: state.enable_cleanup,
           svg_pixels_per_mm: settings.svgPixelsPerMm,
-          hue_weight: state.hue_enable ? 0.5 : 0.0,
-          chroma_gate: state.hue_enable ? state.chroma_gate : 0,
+          ...resolveColorMatchingWeights(state),
           use_lut_constrained: state.use_lut_constrained,
           auto_dynamic_range: state.auto_dynamic_range,
           separate_backing: state.separate_backing,
@@ -7935,6 +8187,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           previewImageUrl: normalizeResourceUrl(response.preview_url),
           previewBaseImageUrl: normalizeResourceUrl(response.preview_url),
           ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
+          ...dynamicMaterialResultState(response),
         };
         if (response.preview_3d_url) {
           updates.previewGlbUrl = normalizeResourceUrl(response.preview_3d_url);
@@ -7991,6 +8244,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           previewImageUrl: normalizeResourceUrl(response.preview_url),
           previewBaseImageUrl: normalizeResourceUrl(response.preview_url),
           ...INVALIDATE_LAYER_IMAGES_AFTER_REPLACE,
+          ...dynamicMaterialResultState(response),
         };
         if (response.preview_3d_url) {
           updates.previewGlbUrl = normalizeResourceUrl(response.preview_3d_url);
@@ -8125,6 +8379,20 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       // 2. Set image file (creates blob URL, triggers preview flow)
       _get().setImageFile(imageFile);
 
+      // setImageFile invalidates preview-derived state. Restore only the
+      // validated dynamic metadata carried by the imported recipe so it
+      // remains available as historical export evidence until a fresh
+      // preview response replaces it.
+      set({
+        materialDynamicRecipes: partial.materialDynamicRecipes ?? [],
+        materialLayerBenefitCurve:
+          partial.materialLayerBenefitCurve ?? [],
+        materialLayerBenefitScope:
+          partial.materialLayerBenefitScope ?? "all_printable_pixels",
+        materialLayerBenefitPixelCount:
+          partial.materialLayerBenefitPixelCount ?? 0,
+      });
+
       // 3. Restore crop setting
       set({
         enableCrop: prevEnableCrop,
@@ -8155,4 +8423,13 @@ registerGeneratedArtifactInvalidator(() => {
     threemfDiskPath: null,
     downloadUrl: null,
   });
+});
+
+registerPreviewArtifactInvalidator(() => {
+  if (!isDynamicMaterialActive(useConverterStore.getState())) {
+    return;
+  }
+  useConverterStore.setState(
+    buildPreviewSessionResetState(useConverterStore.getState()),
+  );
 });

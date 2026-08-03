@@ -44,6 +44,7 @@ KDTree 建立在已求解填充色的 Lab 上；后续若再有新颜色（例�
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import TYPE_CHECKING, Iterable
 
 import numpy as np
@@ -120,10 +121,15 @@ class MaterialVectorMatcher:
         slot_names: list[str],
         preview_colors: dict,
         color_conf: dict,
-        solver_cache,
-        actual_grid_resolution: int,
+        solver_cache=None,
+        actual_grid_resolution: int = 0,
         hue_weight: float = 0.0,
         neighbor_coherence: float = 0.5,
+        dynamic_layer_count_enabled: bool = False,
+        dynamic_min_layer_count: int = 5,
+        dynamic_max_layer_count: int | None = None,
+        dynamic_delta_e00_tolerance: float = 0.5,
+        backing_material_index: int = 0,
     ):
         """Use :meth:`from_materials` for normal construction.
 
@@ -146,6 +152,16 @@ class MaterialVectorMatcher:
             actual_grid_resolution: Grid resolution actually used by
                 ``solver_cache`` (may differ from request when fallback
                 kicked in). Recorded for diagnostics.
+            dynamic_layer_count_enabled: Use the exact dynamic solver instead
+                of the fixed-depth material cache.
+            dynamic_min_layer_count: Lower bound for the effective recipe
+                depth when dynamic solving is enabled.
+            dynamic_max_layer_count: Physical printed depth for dynamic
+                recipes. Defaults to ``layer_count``.
+            dynamic_delta_e00_tolerance: Allowed exact-solver sacrifice when
+                reducing a colour's effective layer count.
+            backing_material_index: Material used to pad dynamic recipes to
+                the physical maximum depth.
         """
         self.materials = list(materials)
         self.layer_count = int(layer_count)
@@ -158,6 +174,20 @@ class MaterialVectorMatcher:
         self.actual_grid_resolution = int(actual_grid_resolution)
         self.hue_weight = float(hue_weight)
         self.neighbor_coherence = float(neighbor_coherence)
+        self.dynamic_layer_count_enabled = bool(dynamic_layer_count_enabled)
+        self.dynamic_min_layer_count = int(dynamic_min_layer_count)
+        self.dynamic_max_layer_count = int(
+            dynamic_max_layer_count
+            if dynamic_max_layer_count is not None
+            else layer_count
+        )
+        self.dynamic_delta_e00_tolerance = float(dynamic_delta_e00_tolerance)
+        self.backing_material_index = int(backing_material_index)
+        if self.dynamic_layer_count_enabled:
+            # The vector extrusion depth must be the common physical maximum;
+            # individual colours retain their shorter effective recipes in
+            # ``dynamic_layer_info`` and are padded by the exact solver.
+            self.layer_count = self.dynamic_max_layer_count
 
         # Duck-typed surface consumed by VectorProcessor
         self.lut_path = MATERIAL_ARCHIVE_LUT_SENTINEL
@@ -171,6 +201,10 @@ class MaterialVectorMatcher:
         self._matched_rgbs = np.zeros((0, 3), dtype=np.uint8)
         self._recipes = np.zeros((0, self.layer_count), dtype=np.int32)
         self._kdtree = None
+        self._coverage_by_fill: dict[tuple[int, int, int], int] = {}
+        self._dynamic_layer_info: dict | None = None
+        self._material_solver_info: dict | None = None
+        self._dynamic_metadata_by_fill: dict[tuple[int, int, int], dict] = {}
         self.effective_parallelism_workers = 1
         self.effective_parallelism_plan: AdaptiveParallelismPlan | None = None
 
@@ -192,6 +226,11 @@ class MaterialVectorMatcher:
         grid_resolution: int,
         hue_weight: float = 0.0,
         neighbor_coherence: float = 0.5,
+        dynamic_layer_count_enabled: bool = False,
+        dynamic_min_layer_count: int = 5,
+        dynamic_max_layer_count: int | None = None,
+        dynamic_delta_e00_tolerance: float = 0.5,
+        backing_material_index: int = 0,
     ) -> "MaterialVectorMatcher":
         """Resolve / build the solver cache, then return a ready matcher.
 
@@ -220,18 +259,21 @@ class MaterialVectorMatcher:
             already resolved. ``solve_for_fills`` must be called once
             before any ``kdtree.query`` is issued.
         """
-        from core.material_cache import DEFAULT_GRID_RESOLUTION
-        from core.material_lut_provider import load_solver_runtime
+        cache = None
+        actual_grid = 0
+        if not dynamic_layer_count_enabled:
+            from core.material_cache import DEFAULT_GRID_RESOLUTION
+            from core.material_lut_provider import load_solver_runtime
 
-        cache, actual_grid = load_solver_runtime(
-            materials=materials,
-            layer_count=int(layer_count),
-            layer_height_mm=float(layer_height_mm),
-            substrate=str(substrate),
-            grid_resolution=int(grid_resolution or DEFAULT_GRID_RESOLUTION),
-        )
-        if cache is None:
-            raise RuntimeError("No material solver runtime could be built")
+            cache, actual_grid = load_solver_runtime(
+                materials=materials,
+                layer_count=int(layer_count),
+                layer_height_mm=float(layer_height_mm),
+                substrate=str(substrate),
+                grid_resolution=int(grid_resolution or DEFAULT_GRID_RESOLUTION),
+            )
+            if cache is None:
+                raise RuntimeError("No material solver runtime could be built")
 
         return cls(
             materials=materials,
@@ -245,6 +287,11 @@ class MaterialVectorMatcher:
             actual_grid_resolution=int(actual_grid),
             hue_weight=hue_weight,
             neighbor_coherence=neighbor_coherence,
+            dynamic_layer_count_enabled=dynamic_layer_count_enabled,
+            dynamic_min_layer_count=dynamic_min_layer_count,
+            dynamic_max_layer_count=dynamic_max_layer_count,
+            dynamic_delta_e00_tolerance=dynamic_delta_e00_tolerance,
+            backing_material_index=backing_material_index,
         )
 
     # ------------------------------------------------------------------
@@ -295,6 +342,27 @@ class MaterialVectorMatcher:
         """
         return self._kdtree
 
+    @property
+    def dynamic_layer_info(self) -> dict | None:
+        """Return a serializable copy of the current exact dynamic result."""
+
+        return deepcopy(self._dynamic_layer_info)
+
+    @property
+    def material_solver_info(self) -> dict | None:
+        """Return dynamic solver diagnostics without exposing mutable state."""
+
+        return deepcopy(self._material_solver_info)
+
+    def dynamic_metadata_for_fill(self, rgb) -> dict | None:
+        """Return exact recipe metadata for one SVG fill, when available."""
+
+        key = self._normalize_rgb_key(rgb)
+        if key is None:
+            return None
+        metadata = self._dynamic_metadata_by_fill.get(key)
+        return deepcopy(metadata) if metadata is not None else None
+
     # ------------------------------------------------------------------
     # Solve API
     # ------------------------------------------------------------------
@@ -316,19 +384,19 @@ class MaterialVectorMatcher:
         """
         new_keys: list[tuple[int, int, int]] = []
         for rgb in rgbs:
-            try:
-                r = int(rgb[0])
-                g = int(rgb[1])
-                b = int(rgb[2])
-            except (TypeError, IndexError, ValueError):
+            key = self._normalize_rgb_key(rgb)
+            if key is None:
                 continue
-            r = max(0, min(255, r))
-            g = max(0, min(255, g))
-            b = max(0, min(255, b))
-            key = (r, g, b)
             if key in self._cached:
                 continue
             new_keys.append(key)
+
+        if self.dynamic_layer_count_enabled:
+            for key in new_keys:
+                self._coverage_by_fill.setdefault(key, 1)
+            if self._coverage_by_fill:
+                self._solve_dynamic_for_coverage()
+            return
 
         if new_keys:
             new_arr = np.array(sorted(set(new_keys)), dtype=np.uint8)
@@ -519,6 +587,149 @@ class MaterialVectorMatcher:
                 },
             )
 
+        self._rebuild_tables()
+
+    def solve_for_clipped_shapes(self, clipped_shapes, *, scale_factor: float) -> None:
+        """Solve SVG fills with exact geometry-coverage weights.
+
+        This is intentionally geometry-only: it aggregates the retained
+        Shapely areas after SVG parsing and occlusion clipping, then hands
+        those relative coverages to the existing exact dynamic solver. It
+        never rasterizes or substitutes a bitmap representation of the SVG.
+
+        根据 SVG 解析和遮挡裁剪后的 Shapely 几何面积聚合各颜色覆盖量，再交给
+        既有精确动态求解器；全过程不栅格化 SVG，也不改变原始路径/几何。
+        """
+
+        if not self.dynamic_layer_count_enabled:
+            self.solve_for_fills(
+                (
+                    item.get("match_color")
+                    if item.get("match_color") is not None
+                    else item.get("color")
+                )
+                for item in (clipped_shapes or [])
+                if isinstance(item, dict)
+            )
+            return
+
+        try:
+            scale_squared = max(0.0, float(scale_factor) ** 2)
+        except (TypeError, ValueError):
+            scale_squared = 1.0
+        coverage_by_fill: dict[tuple[int, int, int], float] = {}
+        for item in clipped_shapes or []:
+            if not isinstance(item, dict):
+                continue
+            match_color = item.get("match_color")
+            key = self._normalize_rgb_key(
+                match_color if match_color is not None else item.get("color")
+            )
+            if key is None:
+                continue
+            geometry = item.get("geometry")
+            try:
+                area_mm2 = max(0.0, float(geometry.area) * scale_squared)
+            except (AttributeError, TypeError, ValueError):
+                area_mm2 = 0.0
+            if area_mm2 <= 0.0:
+                continue
+            coverage_by_fill[key] = coverage_by_fill.get(key, 0.0) + area_mm2
+
+        # The exact solver only needs relative ownership counts for its
+        # weighted benefit curve. Use a stable high-resolution integer scale
+        # so sub-mm vector regions are retained without materializing pixels.
+        coverage_scale = 1_000_000
+        self._coverage_by_fill = {
+            key: max(1, int(round(area_mm2 * coverage_scale)))
+            for key, area_mm2 in sorted(coverage_by_fill.items())
+        }
+        if not self._coverage_by_fill:
+            # Keep the duck-typed matcher usable for retained degenerate
+            # vector records (for example a zero-area parser artefact). The
+            # normal path above always uses true geometry coverage.
+            for item in clipped_shapes or []:
+                if not isinstance(item, dict):
+                    continue
+                match_color = item.get("match_color")
+                key = self._normalize_rgb_key(
+                    match_color if match_color is not None else item.get("color")
+                )
+                if key is not None:
+                    self._coverage_by_fill.setdefault(key, 1)
+        if self._coverage_by_fill:
+            self._solve_dynamic_for_coverage()
+
+    @staticmethod
+    def _normalize_rgb_key(rgb) -> tuple[int, int, int] | None:
+        try:
+            r = int(rgb[0])
+            g = int(rgb[1])
+            b = int(rgb[2])
+        except (TypeError, IndexError, ValueError):
+            return None
+        return (
+            max(0, min(255, r)),
+            max(0, min(255, g)),
+            max(0, min(255, b)),
+        )
+
+    def _solve_dynamic_for_coverage(self) -> None:
+        """Refresh exact dynamic rows from the current vector coverage map."""
+
+        from core.pipeline.material_dynamic_layers import solve_dynamic_material_targets
+
+        ordered_keys = sorted(self._coverage_by_fill)
+        unique_colors = np.asarray(ordered_keys, dtype=np.uint8)
+        pixel_counts = np.asarray(
+            [self._coverage_by_fill[key] for key in ordered_keys],
+            dtype=np.int64,
+        )
+        (
+            matched_rgb,
+            recipes_top_to_bottom,
+            delta_e,
+            dynamic_info,
+            solver_meta,
+        ) = solve_dynamic_material_targets(
+            unique_colors=unique_colors,
+            pixel_counts=pixel_counts,
+            materials=self.materials,
+            backing_material_index=self.backing_material_index,
+            layer_height_mm=self.layer_height_mm,
+            substrate=self.substrate,
+            min_layer_count=self.dynamic_min_layer_count,
+            max_layer_count=self.dynamic_max_layer_count,
+            delta_e00_tolerance=self.dynamic_delta_e00_tolerance,
+        )
+        self._cached = {
+            key: (
+                matched_rgb[index].astype(np.uint8, copy=True),
+                recipes_top_to_bottom[index].astype(np.int32, copy=True),
+            )
+            for index, key in enumerate(ordered_keys)
+        }
+        dynamic_info = deepcopy(dynamic_info)
+        dynamic_info["coverage_source"] = "native_svg_geometry"
+        dynamic_info["coverage_unit"] = "square_millimeter_x_1000000"
+        dynamic_info["benefit_curve_scope"] = "visible_svg_geometry"
+        self._dynamic_layer_info = dynamic_info
+        self._material_solver_info = {
+            "path": "dynamic_exact_vector_geometry",
+            "layer_count": int(self.layer_count),
+            "layer_height_mm": float(self.layer_height_mm),
+            "substrate": str(self.substrate),
+            "unique_color_count": int(unique_colors.shape[0]),
+            "mean_delta_e": float(np.mean(delta_e)) if delta_e.size else 0.0,
+            "max_delta_e": float(np.max(delta_e)) if delta_e.size else 0.0,
+            **solver_meta,
+        }
+        self._dynamic_metadata_by_fill = {
+            tuple(int(value) for value in entry.get("target_srgb", ())): deepcopy(entry)
+            for entry in dynamic_info.get("colors", [])
+            if isinstance(entry, dict)
+            and len(entry.get("target_srgb", ())) == 3
+        }
         self._rebuild_tables()
 
     def _normalise_recipes(self, recipes_b2t: np.ndarray) -> np.ndarray:

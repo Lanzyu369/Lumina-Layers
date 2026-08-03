@@ -105,6 +105,10 @@ export type ConvertPreviewRequest = ConvertSourceSelection & {
   material_layer_height_mm?: number;
   material_grid_resolution?: number;
   material_backing_material_index?: number;
+  material_dynamic_layer_count_enabled?: boolean;
+  material_min_layer_count?: number;
+  material_max_layer_count?: number;
+  material_delta_e00_tolerance?: number;
   large_format_enabled?: boolean;
   replacement_regions?: ColorReplacementItem[];
   surface_model_file_id?: string;
@@ -242,7 +246,9 @@ export interface RecipeOverrideApplyRequest extends RecipePredictRequest {
   region_ids?: string[];
 }
 
-export interface RecipeOverrideApplyResponse extends RecipePredictResponse {
+export interface RecipeOverrideApplyResponse
+  extends RecipePredictResponse,
+    DynamicMaterialResultResponse {
   preview_url: string;
   preview_glb_url?: string | null;
   override_count: number;
@@ -290,6 +296,51 @@ export interface PaletteEntry {
   percentage: number; // 占比百分比
 }
 
+/** One exact cumulative dynamic-layer option for a target color. */
+export interface DynamicMaterialLayerCapOption {
+  max_effective_layer_count: number;
+  actual_layer_count: number;
+  matched_srgb: [number, number, number];
+  actual_recipe_top_to_bottom: number[];
+  print_recipe_top_to_bottom: number[];
+  delta_e00: number;
+}
+
+/** Exact dynamic material recipe metadata returned for one target color. */
+export interface DynamicMaterialRecipe {
+  target_srgb: [number, number, number];
+  matched_srgb: [number, number, number];
+  actual_layer_count: number;
+  padding_layer_count: number;
+  actual_recipe_top_to_bottom: number[];
+  print_recipe_top_to_bottom: number[];
+  selected_delta_e00: number;
+  best_range_delta_e00: number;
+  fixed_max_delta_e00: number;
+  delta_e00_sacrifice: number;
+  layer_cap_options: DynamicMaterialLayerCapOption[];
+}
+
+/** Pixel-weighted exact Delta-E00 result at one effective-layer cap. */
+export interface MaterialLayerBenefitPoint {
+  max_effective_layer_count: number;
+  weighted_mean_delta_e00: number;
+  marginal_delta_e00_reduction: number;
+}
+
+/** Pixel population represented by a dynamic layer benefit curve. */
+export type MaterialLayerBenefitScope =
+  | "all_printable_pixels"
+  | "automatic_pixels";
+
+/** Dynamic result fields shared by preview and post-edit responses. */
+export interface DynamicMaterialResultResponse {
+  material_dynamic_recipes?: DynamicMaterialRecipe[] | null;
+  material_layer_benefit_curve?: MaterialLayerBenefitPoint[] | null;
+  material_layer_benefit_scope?: MaterialLayerBenefitScope | null;
+  material_layer_benefit_pixel_count?: number | null;
+}
+
 /** 自动高度分配模式 */
 export type AutoHeightMode =
   | "darker-higher"
@@ -328,7 +379,7 @@ export interface PerformanceTiming {
 }
 
 /** 预览接口响应，包含 session_id 和预览图 URL */
-export interface PreviewResponse {
+export interface PreviewResponse extends DynamicMaterialResultResponse {
   session_id: string;
   status: string;
   message: string;
@@ -1724,6 +1775,10 @@ export interface BatchConvertParams {
   material_layer_height_mm?: number;
   material_grid_resolution?: number;
   material_backing_material_index?: number;
+  material_dynamic_layer_count_enabled?: boolean;
+  material_min_layer_count?: number;
+  material_max_layer_count?: number;
+  material_delta_e00_tolerance?: number;
   separate_backing?: boolean;
   target_width_mm: number;
   spacer_thick: number;
@@ -1903,7 +1958,7 @@ export interface MaterialRecipeSwatchResponse {
 
 // ========== Color Replace Models ==========
 
-export interface ColorReplaceResponse {
+export interface ColorReplaceResponse extends DynamicMaterialResultResponse {
   status: string;
   message: string;
   preview_url: string;
@@ -1936,7 +1991,7 @@ export interface RegionDetectResponse {
 }
 
 /** 区域替换响应 */
-export interface RegionReplaceResponse {
+export interface RegionReplaceResponse extends DynamicMaterialResultResponse {
   preview_url: string;
   preview_glb_url?: string | null;
   color_contours?: Record<string, number[][][]> | null;

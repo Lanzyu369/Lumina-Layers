@@ -172,6 +172,15 @@ export function applyImport(
   options: ApplyImportOptions = {},
 ): void {
   const store = useConverterStore.getState();
+  const conv = restoreResult.recipe.recipe.converter;
+
+  const importedTolerance =
+    conv?.source?.material_delta_e00_tolerance;
+  if (typeof importedTolerance === "number") {
+    useSettingsStore
+      .getState()
+      .setMaterialDeltaE00Tolerance(importedTolerance);
+  }
 
   // 1. Use the named importRecipeState action (handles crop suppression internally)
   store.importRecipeState(
@@ -181,7 +190,6 @@ export function applyImport(
   );
 
   // 2. Apply settings from recipe (printer/slicer) if present
-  const conv = restoreResult.recipe.recipe.converter;
   if (conv) {
     const settingsState = useSettingsStore.getState();
     const nextSlicer = conv.device.slicer

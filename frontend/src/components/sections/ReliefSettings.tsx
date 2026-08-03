@@ -34,6 +34,8 @@ export default function ReliefSettings() {
     heightmapThumbnailUrl,
     source_version,
     materialLayerCount,
+    materialDynamicLayerCountEnabled,
+    materialMaxLayerCount,
     spacer_thick,
     color_mode,
     modeling_mode,
@@ -46,6 +48,8 @@ export default function ReliefSettings() {
     heightmapThumbnailUrl: s.heightmapThumbnailUrl,
     source_version: s.source_version,
     materialLayerCount: s.materialLayerCount,
+    materialDynamicLayerCountEnabled: s.materialDynamicLayerCountEnabled,
+    materialMaxLayerCount: s.materialMaxLayerCount,
     spacer_thick: s.spacer_thick,
     color_mode: s.color_mode,
     modeling_mode: s.modeling_mode,
@@ -60,6 +64,8 @@ export default function ReliefSettings() {
   const minimumReliefHeight = getMaterialArchiveReliefMinimumExtraHeight({
     source_version,
     materialLayerCount,
+    materialDynamicLayerCountEnabled,
+    materialMaxLayerCount,
     spacer_thick,
   });
 

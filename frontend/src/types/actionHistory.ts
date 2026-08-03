@@ -123,6 +123,11 @@ export interface AdvancedParamsGeneration {
   use_lut_constrained: boolean;
   auto_dynamic_range: boolean;
   separate_backing: boolean;
+  material_dynamic_layer_count_enabled: boolean;
+  material_min_layer_count: number | null;
+  material_max_layer_count: number | null;
+  material_backing_material_dir_name: string | null;
+  material_delta_e00_tolerance: number | null;
 }
 
 /**

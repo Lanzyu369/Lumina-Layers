@@ -19,6 +19,7 @@ const converterStoreState = vi.hoisted(() => ({
   customRecipeHistory: [] as RecipeHistoryItem[],
   pushCustomRecipeHistory: vi.fn(),
   source_version: "legacy",
+  materialDynamicLayerCountEnabled: false,
   selectedMaterialDirNames: [] as string[],
   materialSuggestions: null,
   materialSuggestionsLoading: false,
@@ -118,6 +119,7 @@ describe("CustomRecipeDialog", () => {
     vi.clearAllMocks();
     converterStoreState.customRecipeHistory = [];
     converterStoreState.source_version = "legacy";
+    converterStoreState.materialDynamicLayerCountEnabled = false;
     converterStoreState.selectedMaterialDirNames = [];
     converterStoreState.materialSuggestions = null;
     converterStoreState.materialSuggestionsLoading = false;
@@ -704,6 +706,49 @@ describe("CustomRecipeDialog", () => {
     expect(screen.getByTestId("recipe-layer-swatch-1")).toHaveStyle({
       backgroundColor: "rgb(245, 245, 245)",
     });
+  });
+
+  it("keeps the fetched actual layer count in dynamic material mode", async () => {
+    converterStoreState.source_version = "material";
+    converterStoreState.materialDynamicLayerCountEnabled = true;
+    converterStoreState.selectedMaterialDirNames = ["white", "red"];
+    fetchRegionRecipeMock.mockResolvedValueOnce({
+      status: "ok",
+      message: "ok",
+      recipes: [
+        {
+          region_id: "region-1",
+          recipe: [1, 0, 1, 0, 1, 0],
+          color_layers: 6,
+          layer_height_mm: 0.08,
+          layer_order: "Top2Bottom",
+        },
+      ],
+    });
+    applyRecipeOverrideMock.mockResolvedValueOnce(applyResponse());
+
+    renderDialog({ palette: canonicalNamePalette, colorLayers: 9 });
+
+    await waitFor(() =>
+      expect(screen.getAllByTestId(/recipe-layer-swatch-/)).toHaveLength(6),
+    );
+    fireEvent.change(
+      screen.getByPlaceholderText("recipe_custom_pattern_placeholder"),
+      { target: { value: "RWRWRW" } },
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "recipe_custom_pattern_apply" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "recipe_custom_apply" }));
+
+    await waitFor(() => expect(applyRecipeOverrideMock).toHaveBeenCalledOnce());
+    expect(applyRecipeOverrideMock.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        recipe: expect.any(Array),
+        color_layers: 6,
+      }),
+    );
+    expect(applyRecipeOverrideMock.mock.calls[0]?.[0].recipe).toHaveLength(6);
   });
 
   it("falls back to the synchronous default recipe when the region-recipe fetch fails", async () => {

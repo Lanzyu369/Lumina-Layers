@@ -192,6 +192,27 @@ describe("buildAdvancedParams — active-tab guard", () => {
 // ---------------------------------------------------------------------------
 
 describe("buildAdvancedParams — groups populated when toggles enabled", () => {
+  it("captures dynamic material generation settings", () => {
+    const result = buildAdvancedParams(
+      makeState({
+        source_version: "material",
+        materialDynamicLayerCountEnabled: true,
+        materialMinLayerCount: 5,
+        materialMaxLayerCount: 9,
+        materialBackingMaterialDirName: "brand/white",
+      }),
+      "converter",
+      { maxBytes: 8192, materialDeltaE00Tolerance: 0.4 },
+    ) as AdvancedParamsFull;
+    const generation = result.generation as unknown as Record<string, unknown>;
+
+    expect(generation.material_dynamic_layer_count_enabled).toBe(true);
+    expect(generation.material_min_layer_count).toBe(5);
+    expect(generation.material_max_layer_count).toBe(9);
+    expect(generation.material_backing_material_dir_name).toBe("brand/white");
+    expect(generation.material_delta_e00_tolerance).toBe(0.4);
+  });
+
   it("populates all 12 groups with detail data when every toggle is on", () => {
     const state = makeState({
       modelSurfaceEnabled: true,

@@ -46,7 +46,20 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\docker_local_deploy.
   -MaterialRegistryChannels "official,community"
 ```
 
-配置后，Lumina 会从云端 catalog 读取耗材列表，并按用户选择下载 package 到本地耗材库。云端不会自动读取或上传用户本地耗材。
+脚本也会从当前进程环境或仓库根目录的 `.env.local` 转发以下可选配置：
+
+```text
+LUMINA_MATERIAL_REGISTRY_TOKEN
+LUMINA_MATERIAL_REGISTRY_TIMEOUT_S
+LUMINA_MATERIAL_SYNC_STARTUP_REFRESH
+LUMINA_MATERIAL_SYNC_REFRESH_INTERVAL_S
+```
+
+私有 `team` 频道所需 token 应放在本机 `.env.local` 或受控部署环境中，不要写进脚本、提交或命令历史。
+
+配置 URL 后，Lumina 默认在启动时刷新一次，之后每 6 小时刷新一次。需要仅手工安装时，可把 `LUMINA_MATERIAL_SYNC_STARTUP_REFRESH` 设为 `false`，并把 `LUMINA_MATERIAL_SYNC_REFRESH_INTERVAL_S` 设为 `0`。同步只会读取云端 catalog 和下载 package，不会读取或上传用户本地耗材。
+
+如果同一个 `material_id` 在 catalog 中同时出现多个 revision，批量刷新会以 `ambiguous_revision` 失败关闭，不会根据 revision 字符串或返回顺序猜测最新版。用户仍可在云端耗材面板中明确选择某个 revision 手工安装。
 
 ## 连接验证
 

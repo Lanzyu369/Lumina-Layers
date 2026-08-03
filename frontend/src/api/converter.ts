@@ -26,6 +26,7 @@ import type {
   RecipePredictResponse,
   RecipeOverrideApplyRequest,
   RecipeOverrideApplyResponse,
+  DynamicMaterialResultResponse,
   RegionRecipeRequest,
   RegionRecipeResponse,
   AutoDetectColorsResponse,
@@ -706,7 +707,7 @@ export async function predictRecipe(
 }
 
 /** 重置所有颜色替换响应 */
-export interface ResetReplacementsResponse {
+export interface ResetReplacementsResponse extends DynamicMaterialResultResponse {
   status: string;
   message: string;
   preview_url: string;

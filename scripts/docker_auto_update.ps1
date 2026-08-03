@@ -8,6 +8,8 @@ param(
     [string]$RuntimeRoot = "E:\Lumina-Layers\lumina-runtime",
     [string]$ImageName = "lumina-layers:local-latest",
     [string]$ContainerName = "lumina-layers-local",
+    [string]$MaterialRegistryUrl = "",
+    [string]$MaterialRegistryChannels = "",
     [string]$PublicHost = "localhost",
     [int]$PublicFrontendPort = 4174,
     [int]$PublicBackendPort = 8000,
@@ -72,7 +74,15 @@ function Invoke-Deploy {
         "-RepoRoot", $RepoRoot,
         "-RuntimeRoot", $RuntimeRoot,
         "-ImageName", $ImageName,
-        "-ContainerName", $ContainerName,
+        "-ContainerName", $ContainerName
+    )
+    if ($MaterialRegistryUrl.Trim()) {
+        $deployArgs += @("-MaterialRegistryUrl", $MaterialRegistryUrl)
+    }
+    if ($MaterialRegistryChannels.Trim()) {
+        $deployArgs += @("-MaterialRegistryChannels", $MaterialRegistryChannels)
+    }
+    $deployArgs += @(
         "-PublicHost", $PublicHost,
         "-PublicFrontendPort", $PublicFrontendPort,
         "-PublicBackendPort", $PublicBackendPort,

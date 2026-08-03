@@ -2,7 +2,11 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { saveSettings } from "../api/system";
 import type { UserSettings } from "../api/types";
-import { invalidateGeneratedArtifacts } from "./generatedArtifactInvalidation";
+import {
+  invalidateGeneratedArtifacts,
+  invalidatePreviewArtifacts,
+} from "./generatedArtifactInvalidation";
+import { invalidatePreviewRequest } from "./previewRequestCoordinator";
 
 // ========== State Interface ==========
 
@@ -97,6 +101,10 @@ export const SVG_PIXELS_PER_MM_DEFAULT = 10.0;
 export const SVG_PIXELS_PER_MM_MIN = 2.0;
 export const SVG_PIXELS_PER_MM_MAX = 50.0;
 export const SVG_PIXELS_PER_MM_STEP = 0.1;
+export const MATERIAL_DELTA_E00_TOLERANCE_DEFAULT = 0.5;
+export const MATERIAL_DELTA_E00_TOLERANCE_MIN = 0.0;
+export const MATERIAL_DELTA_E00_TOLERANCE_MAX = 5.0;
+export const MATERIAL_DELTA_E00_TOLERANCE_STEP = 0.1;
 
 export type NozzleSize = "0.2" | "0.25" | "0.4";
 
@@ -147,6 +155,11 @@ export interface SettingsState {
    */
   svgPixelsPerMm: number;
   /**
+   * Maximum accepted Delta-E00 loss when choosing a shorter dynamic material
+   * recipe. 动态材料配方选择更短层数时允许的最大 Delta-E00 损失。
+   */
+  materialDeltaE00Tolerance: number;
+  /**
    * Advanced: when true, successful previews automatically collapse every
    * gradient-banding group to its representative colour (the material with
    * the highest pixel count). Off by default so first-time users see the
@@ -184,6 +197,7 @@ export interface SettingsActions {
   setSolverCacheGridResolution: (value: SolverCacheGridResolution) => void;
   setSvgPixelsPerMm: (value: number) => void;
   resetSvgPixelsPerMm: () => void;
+  setMaterialDeltaE00Tolerance: (value: number) => void;
   setAutoReplaceGradientBanding: (enabled: boolean) => void;
   hydrateDeviceSettingsFromBackend: (settings: Partial<UserSettings>) => void;
   syncToBackend: () => Promise<void>;
@@ -218,6 +232,7 @@ export const DEFAULT_SETTINGS: SettingsState = {
   enableSolverCacheGridSelection: false,
   solverCacheGridResolution: 64,
   svgPixelsPerMm: SVG_PIXELS_PER_MM_DEFAULT,
+  materialDeltaE00Tolerance: MATERIAL_DELTA_E00_TOLERANCE_DEFAULT,
   autoReplaceGradientBanding: false,
 };
 
@@ -302,6 +317,17 @@ function normalizeSvgPixelsPerMm(value: number): number {
   const clamped = Math.min(
     SVG_PIXELS_PER_MM_MAX,
     Math.max(SVG_PIXELS_PER_MM_MIN, value),
+  );
+  return Number(clamped.toFixed(1));
+}
+
+function normalizeMaterialDeltaE00Tolerance(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return MATERIAL_DELTA_E00_TOLERANCE_DEFAULT;
+  }
+  const clamped = Math.min(
+    MATERIAL_DELTA_E00_TOLERANCE_MAX,
+    Math.max(MATERIAL_DELTA_E00_TOLERANCE_MIN, value),
   );
   return Number(clamped.toFixed(1));
 }
@@ -489,6 +515,15 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
         invalidateGeneratedArtifacts();
       },
 
+      setMaterialDeltaE00Tolerance: (value: number) => {
+        invalidatePreviewRequest();
+        set({
+          materialDeltaE00Tolerance:
+            normalizeMaterialDeltaE00Tolerance(value),
+        });
+        invalidatePreviewArtifacts();
+      },
+
       setAutoReplaceGradientBanding: (enabled: boolean) =>
         set({ autoReplaceGradientBanding: enabled }),
 
@@ -553,16 +588,23 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
       name: "lumina-settings",
       version: 1,
       migrate: migratePersistedSettings,
-      merge: (persistedState, currentState) => ({
-        ...currentState,
-        ...patchLegacyPersistedDeviceProfile(
+      merge: (persistedState, currentState) => {
+        const persistedSettings = patchLegacyPersistedDeviceProfile(
           stripRetiredClientOnlySettings(
             persistedState && typeof persistedState === "object"
               ? (persistedState as Record<string, unknown>)
               : {},
           ),
-        ),
-      }),
+        );
+        return {
+          ...currentState,
+          ...persistedSettings,
+          materialDeltaE00Tolerance: normalizeMaterialDeltaE00Tolerance(
+            persistedSettings.materialDeltaE00Tolerance ??
+              currentState.materialDeltaE00Tolerance,
+          ),
+        };
+      },
     },
   ),
 );

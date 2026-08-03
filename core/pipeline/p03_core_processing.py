@@ -10,6 +10,8 @@ P03 — 核心图像处理（量化 + LUT 匹配）。
 """
 
 
+from copy import deepcopy
+
 from api.structured_logging import get_logger
 import time
 
@@ -112,14 +114,101 @@ def _snap_svg_to_fill_palette(
     return quantized_image
 
 
+def _load_dynamic_preview_analysis(
+    ctx: dict,
+    *,
+    max_layer_count: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
+    """Load the complete dynamic preview analysis for a puzzle worker.
+    为拼图 worker 加载完整的动态预览分析资产。
+
+    This is deliberately narrower than the LUT preview reuse path. Dynamic
+    material matrices are authoritative solver output: recreating them from
+    ``matched_rgb`` would silently discard accepted recipe overrides or
+    virtual-material choices. Only callers that explicitly request reuse and
+    provide all four persisted arrays may take this path.
+    该分支比 LUT 预览复用更严格。动态耗材矩阵是权威求解结果；仅用
+    ``matched_rgb`` 重算会静默丢失已确认的配方覆盖或虚拟耗材选择。只有明确
+    请求复用且提供全部四个持久化数组的调用方才能进入该路径。
+
+    Args:
+        ctx: Pipeline context containing the four ``.npy`` asset paths.
+            (包含四个 ``.npy`` 资产路径的流水线上下文)
+        max_layer_count: Required physical matrix depth for dynamic mode.
+            (动态模式要求的物理矩阵层深)
+
+    Returns:
+        tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
+            ``matched_rgb``, ``mask_solid``, ``quantized_image``, and the
+            authoritative ``material_matrix``; ``None`` when reuse was not
+            requested. (依次为 ``matched_rgb``、``mask_solid``、
+            ``quantized_image`` 与权威 ``material_matrix``；未请求复用时
+            返回 ``None``)
+
+    Raises:
+        ValueError: If an asset is absent or its shape/dtype is inconsistent.
+            (资产缺失或其形状/数据类型不一致时抛出)
+        OSError: If a persisted asset cannot be read. (无法读取持久化资产时抛出)
+    """
+
+    if not (
+        bool(ctx.get("reuse_preview_analysis"))
+        and bool(ctx.get("material_dynamic_layer_count_enabled"))
+    ):
+        return None
+
+    paths = {
+        "matched_rgb": ctx.get("matched_rgb_path"),
+        "mask_solid": ctx.get("mask_solid_path"),
+        "quantized_image": ctx.get("quantized_image_path"),
+        "material_matrix": ctx.get("material_matrix_path"),
+    }
+    missing = [name for name, path in paths.items() if not isinstance(path, str) or not path]
+    if missing:
+        raise ValueError(
+            "dynamic preview-analysis reuse requires "
+            + ", ".join(sorted(missing))
+        )
+
+    matched_rgb = np.load(paths["matched_rgb"], allow_pickle=False)
+    mask_solid = np.load(paths["mask_solid"], allow_pickle=False)
+    quantized_image = np.load(paths["quantized_image"], allow_pickle=False)
+    material_matrix = np.load(paths["material_matrix"], allow_pickle=False)
+
+    if (
+        matched_rgb.dtype != np.uint8
+        or matched_rgb.ndim != 3
+        or matched_rgb.shape[2] != 3
+    ):
+        raise ValueError("dynamic preview matched_rgb must be HxWx3 uint8")
+    image_shape = matched_rgb.shape[:2]
+    if mask_solid.dtype != np.bool_ or mask_solid.shape != image_shape:
+        raise ValueError("dynamic preview mask_solid must be HxW bool")
+    if quantized_image.dtype != np.uint8 or quantized_image.shape != matched_rgb.shape:
+        raise ValueError("dynamic preview quantized_image must match matched_rgb")
+    if (
+        material_matrix.dtype != np.int32
+        or material_matrix.ndim != 3
+        or material_matrix.shape[:2] != image_shape
+        or material_matrix.shape[2] != int(max_layer_count)
+    ):
+        raise ValueError(
+            "dynamic preview material_matrix must be HxWxmax_layer_count int32"
+        )
+    return matched_rgb, mask_solid, quantized_image, material_matrix
+
+
 def _run_material_archive_branch(ctx: dict) -> dict:
     """Material-archive processing: quantize image, solve recipes via runtime.
     耗材档案模式处理：量化图像，通过求解运行时生成配方。
 
     Solver selection:
-      1. Try to load a persisted :class:`core.material_cache.MaterialSolverCache`.
-      2. When no persisted cache exists, build a bounded candidate runtime.
-      3. Resolve recipes through the shared ``lookup`` duck-typed contract.
+      1. Dynamic mode delegates all sorted targets to the exact CIEDE2000
+         dynamic solver and consumes fixed-width padded recipes.
+      2. Fixed mode tries a persisted
+         :class:`core.material_cache.MaterialSolverCache`.
+      3. When no persisted fixed cache exists, build a bounded runtime and
+         resolve recipes through the shared ``lookup`` contract.
     The choice is recorded in ``ctx["material_solver_info"]`` so the UI can
     show whether the cache was used.
     """
@@ -142,10 +231,94 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     modeling_mode = ctx["modeling_mode"]
     quantize_colors_n = ctx["quantize_colors"]
     materials = ctx["_material_params"]
-    layer_count = int(ctx.get("color_layers") or 5)
+    fixed_layer_count = int(ctx.get("color_layers") or 5)
+    dynamic_layer_count_enabled = bool(
+        ctx.get("material_dynamic_layer_count_enabled", False)
+    )
+    # Keep disabled-mode compatibility exact: stale or malformed dynamic-only
+    # values are ignored unless the feature is enabled. The solver config owns
+    # validation and normalization when dynamic mode is active.
+    dynamic_min_layer_count = ctx.get("material_min_layer_count", 5)
+    dynamic_max_layer_count = ctx.get("material_max_layer_count", 10)
+    dynamic_delta_e00_tolerance = ctx.get("material_delta_e00_tolerance", 0.5)
+    layer_count = fixed_layer_count
     layer_height_mm = float(ctx.get("layer_height_mm") or 0.08)
     substrate = str(ctx.get("material_substrate") or "white")
     requested_grid = int(ctx.get("grid_resolution") or DEFAULT_GRID_RESOLUTION)
+
+    reused_analysis = None
+    if dynamic_layer_count_enabled and bool(ctx.get("reuse_preview_analysis")):
+        try:
+            reused_analysis = _load_dynamic_preview_analysis(
+                ctx,
+                max_layer_count=int(dynamic_max_layer_count),
+            )
+        except (OSError, ValueError, TypeError) as exc:
+            ctx["error"] = (
+                "[P03] 动态拼图预览分析资产无效，请重新预览。"
+                " / Dynamic puzzle preview-analysis assets are invalid. Re-run preview."
+            )
+            _log.warning(
+                "Dynamic preview-analysis reuse rejected",
+                extra={
+                    "event": "p03_dynamic_preview_reuse_rejected",
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                },
+            )
+            return ctx
+    if reused_analysis is not None:
+        matched_rgb, mask_solid, quantized_image, material_matrix = reused_analysis
+        target_h, target_w = mask_solid.shape
+        layer_count = int(material_matrix.shape[2])
+        pixel_scale = float(target_width_mm) / float(max(1, target_w))
+        ctx["matched_rgb"] = matched_rgb
+        ctx["material_matrix"] = material_matrix
+        ctx["mask_solid"] = mask_solid
+        ctx["target_w"] = target_w
+        ctx["target_h"] = target_h
+        ctx["pixel_scale"] = pixel_scale
+        ctx["debug_data"] = None
+        ctx["quantized_image"] = quantized_image
+        ctx["lut_match_info"] = None
+        ctx["color_layers"] = layer_count
+        ctx["material_dynamic_layer_info"] = {
+            "enabled": True,
+            "min_layer_count": int(dynamic_min_layer_count),
+            "max_layer_count": layer_count,
+            "benefit_curve_scope": "all_printable_pixels",
+            "benefit_curve_pixel_count": int(np.count_nonzero(mask_solid)),
+            "preview_matrix_reuse": True,
+        }
+        ctx["material_solver_info"] = {
+            "path": "preview_matrix_reuse",
+            "layer_count": layer_count,
+            "layer_height_mm": layer_height_mm,
+            "substrate": substrate,
+            "unique_color_count": int(
+                np.unique(quantized_image[mask_solid].reshape(-1, 3), axis=0).shape[0]
+            )
+            if np.any(mask_solid)
+            else 0,
+        }
+        ctx["mode_info"] = {
+            "mode": ctx.get("modeling_mode"),
+            "lut_match_mode": "material_archive",
+        }
+        ctx["preview_matrix_reuse"] = True
+        elapsed = time.perf_counter() - _t0
+        ctx.setdefault("_preview_timings", {})["p03_s"] = elapsed
+        _log.debug(
+            "material_archive preview matrix reused: %.3fs",
+            elapsed,
+            extra={
+                "event": "p03_dynamic_preview_matrix_reused",
+                "target_width": target_w,
+                "target_height": target_h,
+                "layer_count": layer_count,
+            },
+        )
+        return ctx
 
     # ---- Load and resize ----
     PIXELS_PER_MM = SVG_PIXELS_PER_MM_DEFAULT
@@ -208,33 +381,36 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     # Auto dynamic range only benefits from a persisted legacy cache's
     # ``lab_centers``. Do not build a candidate runtime before quantization:
     # transparent/empty inputs should not allocate candidate arrays at all.
-    try:
-        cache, actual_grid = load_solver_cache(
-            materials=materials,
-            layer_count=layer_count,
-            layer_height_mm=layer_height_mm,
-            substrate=substrate,
-            grid_resolution=requested_grid,
-        )
-    except (MemoryError, RuntimeError, ValueError) as exc:
-        _log.error(
-            "Material solver cache load failed: %s",
-            exc,
-            extra={
-                "event": "material_solver_cache_load_failed",
-                "material_count": len(materials),
-                "layer_count": layer_count,
-                "layer_height_mm": layer_height_mm,
-                "substrate": substrate,
-                "error_type": type(exc).__name__,
-                "error_message": str(exc),
-            },
-        )
-        ctx["error"] = (
-            "[P03] 耗材求解缓存加载失败。"
-            " / Material solver cache load failed."
-        )
-        return ctx
+    cache = None
+    actual_grid = None
+    if not dynamic_layer_count_enabled:
+        try:
+            cache, actual_grid = load_solver_cache(
+                materials=materials,
+                layer_count=layer_count,
+                layer_height_mm=layer_height_mm,
+                substrate=substrate,
+                grid_resolution=requested_grid,
+            )
+        except (MemoryError, RuntimeError, ValueError) as exc:
+            _log.error(
+                "Material solver cache load failed: %s",
+                exc,
+                extra={
+                    "event": "material_solver_cache_load_failed",
+                    "material_count": len(materials),
+                    "layer_count": layer_count,
+                    "layer_height_mm": layer_height_mm,
+                    "substrate": substrate,
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                },
+            )
+            ctx["error"] = (
+                "[P03] 耗材求解缓存加载失败。"
+                " / Material solver cache load failed."
+            )
+            return ctx
 
     # ---- Auto dynamic range (optional) ----
     if ctx.get("auto_dynamic_range"):
@@ -370,7 +546,59 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     solver_t0 = time.perf_counter()
     solver_path: str
     solver_meta: dict = {}
-    if cache is None and unique_colors.shape[0] > 0:
+    dynamic_layer_info: dict | None = None
+    if dynamic_layer_count_enabled:
+        from core import material_dynamic_solver as dynamic_solver
+        from core.pipeline.material_dynamic_layers import (
+            _record_dynamic_material_error,
+            _solve_dynamic_material_targets,
+        )
+
+        backing_material_index = ctx.get("material_backing_material_index")
+        if backing_material_index is None:
+            backing_material_index = ctx.get("material_base_channel_idx")
+        if unique_colors.shape[0] > 0:
+            counted_colors, pixel_counts = np.unique(
+                quantized_image[mask_solid].reshape(-1, 3),
+                axis=0,
+                return_counts=True,
+            )
+        else:
+            pixel_counts = np.zeros((0,), dtype=np.int64)
+        try:
+            if unique_colors.shape[0] > 0 and not np.array_equal(
+                counted_colors, unique_colors
+            ):
+                raise ValueError(
+                    "pixel-count color order does not match sorted unique colors"
+                )
+            (
+                matched_rgb_unique,
+                recipes_unique,
+                delta_e,
+                dynamic_layer_info,
+                solver_meta,
+            ) = _solve_dynamic_material_targets(
+                unique_colors=unique_colors,
+                pixel_counts=pixel_counts,
+                materials=materials,
+                backing_material_index=backing_material_index,
+                layer_height_mm=layer_height_mm,
+                substrate=substrate,
+                min_layer_count=dynamic_min_layer_count,
+                max_layer_count=dynamic_max_layer_count,
+                delta_e00_tolerance=dynamic_delta_e00_tolerance,
+            )
+        except (
+            dynamic_solver.DynamicMaterialCandidateError,
+            dynamic_solver.DynamicMaterialSolverError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            return _record_dynamic_material_error(ctx, exc)
+        layer_count = int(dynamic_layer_info["max_layer_count"])
+        solver_path = "dynamic_exact"
+    elif cache is None and unique_colors.shape[0] > 0:
         try:
             cache, actual_grid = load_solver_runtime(
                 materials=materials,
@@ -399,7 +627,11 @@ def _run_material_archive_branch(ctx: dict) -> dict:
                 "or build a persisted cache first."
             )
             return ctx
-    if cache is not None and unique_colors.shape[0] > 0:
+    if (
+        not dynamic_layer_count_enabled
+        and cache is not None
+        and unique_colors.shape[0] > 0
+    ):
         cache_mode = str(getattr(cache, "mode", "bucketed"))
         cache_metadata = getattr(cache, "metadata", {}) or {}
         cache_layer_count = int(getattr(cache, "layer_count", layer_count))
@@ -435,7 +667,7 @@ def _run_material_archive_branch(ctx: dict) -> dict:
                 "unique_color_count": int(unique_colors.shape[0]),
             },
         )
-    elif unique_colors.shape[0] == 0:
+    elif not dynamic_layer_count_enabled and unique_colors.shape[0] == 0:
         matched_rgb_unique = np.zeros((0, 3), dtype=np.uint8)
         recipes_unique = np.zeros((0, layer_count), dtype=np.int32)
         delta_e = np.zeros((0,), dtype=np.float64)
@@ -459,7 +691,7 @@ def _run_material_archive_branch(ctx: dict) -> dict:
                 str(getattr(cache, "mode", "candidate_hybrid")) if cache else "none"
             ),
         }
-    else:
+    elif not dynamic_layer_count_enabled:
         ctx["error"] = (
             "[P03] 未能加载或构建耗材求解运行时。"
             " / No material solver runtime could be loaded or built."
@@ -481,13 +713,15 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     # skip this expensive pass, preserving the large-palette OOM guard.
     # 仅当 runtime 已完整覆盖 M**N 且组合数很小时才做跨 N 保底；近似候选
     # runtime 和分桶缓存仍跳过，避免回到大调色板 OOM 路径。
-    _run_cross_n = should_run_cross_n_fallback(
-        solver_path=solver_path,
-        runtime=cache,
-        unique_color_count=int(unique_colors.shape[0]),
-        material_count=len(materials),
-        layer_count=layer_count,
-    )
+    _run_cross_n = False
+    if not dynamic_layer_count_enabled:
+        _run_cross_n = should_run_cross_n_fallback(
+            solver_path=solver_path,
+            runtime=cache,
+            unique_color_count=int(unique_colors.shape[0]),
+            material_count=len(materials),
+            layer_count=layer_count,
+        )
     if _run_cross_n:
         fallback_t0 = time.perf_counter()
         matched_rgb_unique, recipes_unique, delta_e, fallback_stats = (
@@ -537,7 +771,7 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     # while the voxel builders in S06 assume ``Top2Bottom`` (index 0 =
     # viewing surface). Reverse the recipe columns once here so downstream
     # ``material_matrix`` matches the pipeline convention.
-    if recipes_unique.shape[1] > 1:
+    if not dynamic_layer_count_enabled and recipes_unique.shape[1] > 1:
         recipes_unique = np.ascontiguousarray(recipes_unique[:, ::-1])
 
     # ---- Map pixels ----
@@ -565,12 +799,37 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     # 清理属于 pristine 分析；重预览携带的替色必须在其后应用，确保 reset/undo
     # 精确回到未替色预览的同一份已清理网格。
     if ctx.get("enable_cleanup", True):
-        from core.isolated_pixel_cleanup import cleanup_isolated_pixels
+        if dynamic_layer_count_enabled:
+            from core.isolated_pixel_cleanup import (
+                cleanup_isolated_pixels_with_target_map,
+            )
+            from core.pipeline.material_dynamic_layers import (
+                recompute_dynamic_material_benefit_curve,
+            )
 
-        matched_rgb, material_matrix = cleanup_isolated_pixels(
-            material_matrix,
-            matched_rgb,
-        )
+            matched_rgb, material_matrix, quantized_image = (
+                cleanup_isolated_pixels_with_target_map(
+                    material_matrix,
+                    matched_rgb,
+                    quantized_image,
+                )
+            )
+            if isinstance(dynamic_layer_info, dict):
+                colors = dynamic_layer_info.get("colors")
+                dynamic_layer_info["benefit_curve"] = (
+                    recompute_dynamic_material_benefit_curve(
+                        colors if isinstance(colors, list) else [],
+                        quantized_image,
+                        mask_solid,
+                    )
+                )
+        else:
+            from core.isolated_pixel_cleanup import cleanup_isolated_pixels
+
+            matched_rgb, material_matrix = cleanup_isolated_pixels(
+                material_matrix,
+                matched_rgb,
+            )
 
     # Transparent pixels are air in both current and pristine recipes.
     material_matrix[mask_transparent] = -1
@@ -584,11 +843,29 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     # helper 才会分配 current 副本，避免普通预览无谓放大内存和落盘缓存。
     original_matched_rgb = np.asarray(matched_rgb, dtype=np.uint8)
     original_material_matrix = np.asarray(material_matrix)
+    original_quantized_image = np.asarray(quantized_image, dtype=np.uint8)
     height_identity_rgb = original_matched_rgb
+    original_dynamic_layer_info = (
+        deepcopy(dynamic_layer_info)
+        if isinstance(dynamic_layer_info, dict)
+        else None
+    )
+    original_material_solver_info = {
+        "path": solver_path,
+        "layer_count": layer_count,
+        "layer_height_mm": layer_height_mm,
+        "substrate": substrate,
+        "elapsed_seconds": solver_elapsed,
+        "unique_color_count": int(unique_colors.shape[0]),
+        "mean_delta_e": float(np.mean(delta_e)) if delta_e.size else 0.0,
+        "max_delta_e": float(np.max(delta_e)) if delta_e.size else 0.0,
+        **deepcopy(solver_meta),
+    }
 
     # Re-preview requests can carry global replacements already chosen by the
     # user. Apply them only to the current display/recipe arrays.
     from core.pipeline.s03_color_replacement import (
+        _apply_dynamic_material_archive_color_replacements,
         _apply_material_archive_color_replacements,
         _normalize_color_replacements_input,
     )
@@ -596,20 +873,55 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     effective_color_replacements = _normalize_color_replacements_input(
         ctx.get("replacement_regions")
     )
+    applied_replacements = 0
     if effective_color_replacements:
-        matched_rgb, material_matrix, applied_replacements = (
-            _apply_material_archive_color_replacements(
-                matched_rgb,
-                material_matrix,
-                mask_solid,
-                effective_color_replacements,
-                materials,
-                layer_count,
-                layer_height_mm,
-                substrate,
-                grid_resolution=actual_grid or requested_grid,
+        if dynamic_layer_count_enabled:
+            try:
+                (
+                    matched_rgb,
+                    material_matrix,
+                    applied_replacements,
+                    dynamic_layer_info,
+                    replacement_solver_meta,
+                    quantized_image,
+                ) = _apply_dynamic_material_archive_color_replacements(
+                    matched_rgb,
+                    material_matrix,
+                    mask_solid,
+                    quantized_image,
+                    effective_color_replacements,
+                    materials,
+                    backing_material_index=int(backing_material_index),
+                    min_layer_count=int(dynamic_min_layer_count),
+                    max_layer_count=int(dynamic_max_layer_count),
+                    delta_e00_tolerance=float(dynamic_delta_e00_tolerance),
+                    layer_height_mm=layer_height_mm,
+                    substrate=substrate,
+                    dynamic_layer_info=dynamic_layer_info,
+                    material_solver_info=original_material_solver_info,
+                )
+                solver_meta.update(replacement_solver_meta)
+            except (
+                dynamic_solver.DynamicMaterialCandidateError,
+                dynamic_solver.DynamicMaterialSolverError,
+                TypeError,
+                ValueError,
+            ) as exc:
+                return _record_dynamic_material_error(ctx, exc)
+        else:
+            matched_rgb, material_matrix, applied_replacements = (
+                _apply_material_archive_color_replacements(
+                    matched_rgb,
+                    material_matrix,
+                    mask_solid,
+                    effective_color_replacements,
+                    materials,
+                    layer_count,
+                    layer_height_mm,
+                    substrate,
+                    grid_resolution=actual_grid or requested_grid,
+                )
             )
-        )
         _log.debug(
             "Applied %d material-archive preview color replacements",
             applied_replacements,
@@ -632,7 +944,37 @@ def _run_material_archive_branch(ctx: dict) -> dict:
     ctx["pixel_scale"] = pixel_scale
     ctx["debug_data"] = None
     ctx["quantized_image"] = quantized_image
+    ctx["original_quantized_image"] = original_quantized_image
     ctx["lut_match_info"] = None
+    if dynamic_layer_count_enabled:
+        if isinstance(dynamic_layer_info, dict):
+            # Preview-time replacements and isolated-pixel cleanup can change
+            # target ownership after the solver constructs its initial curve.
+            # This path is still wholly automatic, so record the final
+            # coverage explicitly rather than leaving a stale denominator.
+            if applied_replacements > 0:
+                from core.pipeline.material_dynamic_layers import (
+                    recompute_dynamic_material_benefit_curve,
+                )
+
+                colors = dynamic_layer_info.get("colors")
+                dynamic_layer_info["benefit_curve"] = (
+                    recompute_dynamic_material_benefit_curve(
+                        colors if isinstance(colors, list) else [],
+                        quantized_image,
+                        mask_solid,
+                    )
+                )
+            dynamic_layer_info["benefit_curve_scope"] = "all_printable_pixels"
+            dynamic_layer_info["benefit_curve_pixel_count"] = int(
+                np.count_nonzero(mask_solid)
+            )
+        ctx["color_layers"] = layer_count
+        ctx["material_dynamic_layer_info"] = dynamic_layer_info
+        if original_dynamic_layer_info is not None:
+            ctx["original_material_dynamic_layer_info"] = (
+                original_dynamic_layer_info
+            )
     ctx["material_solver_info"] = {
         "path": solver_path,
         "layer_count": layer_count,
@@ -644,6 +986,8 @@ def _run_material_archive_branch(ctx: dict) -> dict:
         "max_delta_e": float(np.max(delta_e)) if delta_e.size else 0.0,
         **solver_meta,
     }
+    if dynamic_layer_count_enabled:
+        ctx["original_material_solver_info"] = original_material_solver_info
     # mode_info is consumed by S04 (debug preview) and S12 (result assembly).
     # Material-archive mode does not run a LUT-based color matcher, so we
     # populate a placeholder match mode so the contract stays consistent.

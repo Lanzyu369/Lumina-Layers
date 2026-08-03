@@ -27,6 +27,7 @@ import inspect
 import math
 import os
 import time
+from copy import deepcopy
 from types import SimpleNamespace
 
 import cv2  # noqa: F401  -- imported for side-effect parity with coordinator
@@ -42,7 +43,6 @@ from core.errors import CachedPreviewAnalysisError
 from core.geometry_utils import create_keychain_loop
 from core.pipeline import p06_bed_rendering, s09_export_3mf, vector_glb_preview
 from core.pipeline.pipeline_utils import extract_color_palette
-from core.pipeline.s03_color_replacement import _normalize_color_replacements_input
 from core.pipeline.processing_ops.svg_rasterizer import rasterize_svg
 from core.pipeline.s08_auxiliary_meshes import (
     _coerce_preview_rgba,
@@ -1444,7 +1444,41 @@ def _build_vector_processor(ctx: dict, *, fallback_color_mode: str):
                 "material_archive vector branch requires non-empty "
                 "_material_params; did P01 / S01 validation run?"
             )
-        layer_count = int(ctx.get("color_layers") or 5)
+        dynamic_layer_count_enabled = bool(
+            ctx.get("material_dynamic_layer_count_enabled", False)
+        )
+        try:
+            dynamic_max_layer_count = int(
+                ctx.get("material_max_layer_count") or ctx.get("color_layers") or 5
+            )
+        except (TypeError, ValueError):
+            dynamic_max_layer_count = int(ctx.get("color_layers") or 5)
+        try:
+            dynamic_min_layer_count = int(
+                ctx.get("material_min_layer_count") or 5
+            )
+        except (TypeError, ValueError):
+            dynamic_min_layer_count = 5
+        try:
+            dynamic_delta_e00_tolerance = float(
+                ctx.get("material_delta_e00_tolerance")
+                if ctx.get("material_delta_e00_tolerance") is not None
+                else 0.5
+            )
+        except (TypeError, ValueError):
+            dynamic_delta_e00_tolerance = 0.5
+        raw_backing_material_index = ctx.get("material_backing_material_index")
+        if raw_backing_material_index is None:
+            raw_backing_material_index = ctx.get("material_base_channel_idx", 0)
+        try:
+            backing_material_index = int(raw_backing_material_index or 0)
+        except (TypeError, ValueError):
+            backing_material_index = 0
+        layer_count = (
+            dynamic_max_layer_count
+            if dynamic_layer_count_enabled
+            else int(ctx.get("color_layers") or 5)
+        )
         substrate = str(ctx.get("material_substrate") or "white")
         slot_names = list(ctx.get("slot_names") or [])
         preview_colors = dict(ctx.get("preview_colors") or {})
@@ -1463,6 +1497,11 @@ def _build_vector_processor(ctx: dict, *, fallback_color_mode: str):
             color_conf=color_conf,
             grid_resolution=grid_resolution,
             hue_weight=hue_weight,
+            dynamic_layer_count_enabled=dynamic_layer_count_enabled,
+            dynamic_min_layer_count=dynamic_min_layer_count,
+            dynamic_max_layer_count=dynamic_max_layer_count,
+            dynamic_delta_e00_tolerance=dynamic_delta_e00_tolerance,
+            backing_material_index=backing_material_index,
         )
         _emit_vector_diag(
             extra={
@@ -1473,6 +1512,7 @@ def _build_vector_processor(ctx: dict, *, fallback_color_mode: str):
                 "slot_count": len(slot_names),
                 "material_count": len(materials),
                 "recipe_order": "top_to_bottom",
+                "dynamic_layer_count_enabled": dynamic_layer_count_enabled,
             },
         )
         processor = VectorProcessor.from_img_processor(matcher, "Material Archive")
@@ -1639,13 +1679,12 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
     lut_metadata = ctx.get("lut_metadata")
     preview_timing: dict[str, float] = {}
     vector_preview_total_t0 = time.perf_counter()
-    vector_replacements = _normalize_color_replacements_input(
-        ctx.get("replacement_regions")
-    )
+    # Native dynamic-material matching needs the structured replacement records
+    # so VectorProcessor can resolve all source fills behind one matched palette
+    # colour before its final exact solve. Legacy dict inputs remain supported.
+    vector_replacements = ctx.get("replacement_regions")
     if not vector_replacements:
-        vector_replacements = _normalize_color_replacements_input(
-            ctx.get("color_replacements")
-        )
+        vector_replacements = ctx.get("color_replacements")
 
     try:
         from core.vector_engine import VectorProcessor  # noqa: F401  -- re-imported for typing parity
@@ -1721,6 +1760,16 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
             raster_cache["material_matrix"],
         )
 
+        dynamic_layer_info = getattr(analysis, "material_dynamic_layer_info", None)
+        material_solver_info = getattr(analysis, "material_solver_info", None)
+        dynamic_layer_active = isinstance(dynamic_layer_info, dict) and bool(
+            dynamic_layer_info.get("enabled")
+        )
+        effective_color_layers = (
+            int(getattr(analysis, "num_layers", 0) or 0)
+            if dynamic_layer_active
+            else ctx.get("color_layers")
+        )
         cache = {
             "target_w": raster_cache["target_w"],
             "target_h": raster_cache["target_h"],
@@ -1736,7 +1785,7 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
             "preview_rgba": raster_cache["preview_rgba"].copy(),
             "color_conf": analysis.color_conf,
             "color_mode": color_mode,
-            "color_layers": ctx.get("color_layers"),
+            "color_layers": effective_color_layers or ctx.get("color_layers"),
             "layer_height_mm": ctx.get("layer_height_mm"),
             "model_enable": bool(ctx.get("model_enable", False)),
             "model_only": bool(ctx.get("model_only", False)),
@@ -1762,6 +1811,17 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
             "debug_data": None,
             "quantized_image": raster_cache["quantized_image"],
         }
+        if dynamic_layer_active:
+            cache["material_dynamic_layer_info"] = deepcopy(dynamic_layer_info)
+            cache["original_material_dynamic_layer_info"] = deepcopy(
+                dynamic_layer_info
+            )
+        if isinstance(material_solver_info, dict):
+            cache["material_solver_info"] = deepcopy(material_solver_info)
+            if dynamic_layer_active:
+                cache["original_material_solver_info"] = deepcopy(
+                    material_solver_info
+                )
         try:
             from core.vector_engine import (
                 _VECTOR_PARSE_CLIP_CACHE,
@@ -1818,6 +1878,21 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
         ctx["color_conf"] = analysis.color_conf
         ctx["preview_colors"] = dict(analysis.preview_colors)
         ctx["slot_names"] = list(analysis.slot_names)
+        if dynamic_layer_active and effective_color_layers:
+            ctx["color_layers"] = effective_color_layers
+        if "material_dynamic_layer_info" in cache:
+            ctx["material_dynamic_layer_info"] = cache[
+                "material_dynamic_layer_info"
+            ]
+            ctx["original_material_dynamic_layer_info"] = cache[
+                "original_material_dynamic_layer_info"
+            ]
+        if "material_solver_info" in cache:
+            ctx["material_solver_info"] = cache["material_solver_info"]
+        if "original_material_solver_info" in cache:
+            ctx["original_material_solver_info"] = cache[
+                "original_material_solver_info"
+            ]
 
         # Inject outline geometry into the preview cache. The SVG/vector shape
         # union stays the declared geometry source; S11 copies this mesh into
@@ -1971,10 +2046,11 @@ def _run_vector_branch(ctx: dict) -> dict:
         },
     )
 
-    # ---- Normalize color replacements ----
-    vector_replacements = _normalize_color_replacements_input(replacement_regions)
+    # Retain structured replacement records for dynamic native SVG matching.
+    # VectorProcessor normalizes legacy dict inputs internally.
+    vector_replacements = replacement_regions
     if not vector_replacements:
-        vector_replacements = _normalize_color_replacements_input(color_replacements)
+        vector_replacements = color_replacements
 
     try:
         from core.vector_engine import (
@@ -2094,6 +2170,11 @@ def _run_vector_branch(ctx: dict) -> dict:
                     img_processor=vec_processor.img_processor,
                     pixels_per_mm=vector_preview_pixels_per_mm,
                     strict=cached_analysis_required,
+                    prefer_cached_material_state=bool(
+                        ctx.get("material_dynamic_layer_count_enabled", False)
+                        and str(ctx.get("material_source") or "lut")
+                        == "material_archive"
+                    ),
                 )
                 matched_override_metrics = getattr(
                     analysis,

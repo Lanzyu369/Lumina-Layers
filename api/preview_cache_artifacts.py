@@ -55,12 +55,14 @@ class _PreviewCacheTransaction(MutableMapping[str, Any]):
         store: SessionStore,
         cache: dict[str, Any],
         start_ref: dict[str, Any] | None,
+        start_cache: dict[str, Any] | None,
         requested_fields: set[str],
     ) -> None:
         self._session_id = session_id
         self._store = store
         self._cache = cache
         self._start_ref = _copy_ref(start_ref) if start_ref is not None else None
+        self._start_cache = start_cache
         self._requested_fields = set(requested_fields)
         tracked_fields = set(self._requested_fields)
         if self._start_ref is not None:
@@ -96,7 +98,14 @@ class _PreviewCacheTransaction(MutableMapping[str, Any]):
         写回指定的脏数组字段。
         """
         if self._start_ref is None:
+            latest_session = self._store.get(self._session_id)
+            latest_cache = (latest_session or {}).get("preview_cache")
+            if latest_cache is not self._start_cache:
+                raise PreviewCacheRevisionConflict(
+                    "In-memory preview cache was replaced during transaction"
+                )
             self._store.put(self._session_id, "preview_cache", self._cache)
+            self._start_cache = self._cache
             return self._cache
 
         dirty_arrays: dict[str, np.ndarray] = {}
@@ -222,6 +231,7 @@ def preview_cache_transaction(
             store=store,
             cache=hydrate_preview_cache(cache_or_ref, fields=fields),
             start_ref=cache_or_ref,
+            start_cache=None,
             requested_fields=fields,
         )
     else:
@@ -230,8 +240,9 @@ def preview_cache_transaction(
         transaction = _PreviewCacheTransaction(
             session_id=session_id,
             store=store,
-            cache=cache_or_ref,
+            cache=deepcopy(cache_or_ref),
             start_ref=None,
+            start_cache=cache_or_ref,
             requested_fields=fields,
         )
 
@@ -355,10 +366,17 @@ def _compact_material_matrix_array(
     array: np.ndarray,
     metadata: dict[str, Any],
 ) -> np.ndarray:
-    """Return material-matrix arrays in the smallest signed integer dtype."""
+    """Return a compact fixed matrix or an int32 dynamic authority matrix.
+
+    动态耗材矩阵在拼图生成时会作为 P03 的权威预览分析资产重用。该协议要求
+    ``int32``，所以即使索引范围很小也不能按普通缓存规则降级。
+    """
 
     if not np.issubdtype(array.dtype, np.integer):
         return array
+    dynamic_info = metadata.get("material_dynamic_layer_info")
+    if isinstance(dynamic_info, dict) and bool(dynamic_info.get("enabled")):
+        return array.astype(np.int32, copy=False)
     if array.size:
         min_value = int(array.min())
         max_value = int(array.max())

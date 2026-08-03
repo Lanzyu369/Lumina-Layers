@@ -155,7 +155,7 @@ class TestParameterAnnotations:
     def test_preview_has_expected_param_count(self) -> None:
         """worker_generate_preview should expose the full preview parameter set."""
         sig = inspect.signature(worker_generate_preview)
-        assert len(sig.parameters) == 28
+        assert len(sig.parameters) == 33
 
     def test_model_has_expected_param_count(self) -> None:
         """worker_generate_model should have 3 parameters."""
@@ -180,7 +180,10 @@ class TestParameterAnnotations:
             "hue_weight", "chroma_gate", "use_lut_constrained",
             "material_source", "selected_materials",
             "material_layer_count", "material_layer_height_mm",
-            "material_grid_resolution", "auto_dynamic_range",
+            "material_grid_resolution", "material_backing_material_index",
+            "material_dynamic_layer_count_enabled",
+            "material_min_layer_count", "material_max_layer_count",
+            "material_delta_e00_tolerance", "auto_dynamic_range",
             "high_precision_3d_preview", "replacement_regions",
         }
         assert set(sig.parameters.keys()) == expected
