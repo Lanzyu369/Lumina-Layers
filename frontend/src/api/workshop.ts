@@ -133,6 +133,13 @@ function encoded(value: string): string {
   return encodeURIComponent(value);
 }
 
+function apiClientPath(value: string): string {
+  if (/^https?:\/\//i.test(value)) {
+    return value;
+  }
+  return value.startsWith("/api/") ? value.slice(4) : value;
+}
+
 export const workshopApi: WorkshopManagerApi = {
   async listModules() {
     const response = await apiClient.get<WorkshopModules>(
@@ -150,7 +157,9 @@ export const workshopApi: WorkshopManagerApi = {
   },
 
   async fetchDetails(url) {
-    const response = await apiClient.get<WorkshopModuleDetails>(url);
+    const response = await apiClient.get<WorkshopModuleDetails>(
+      apiClientPath(url),
+    );
     return response.data;
   },
 

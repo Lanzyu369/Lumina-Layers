@@ -51,6 +51,7 @@ import WorkshopSourceBanner from "../../workshop/WorkshopSourceBanner";
 import {
   buildWorkshopColorLibrary,
   clearWorkshopMaterialCatalog,
+  getWorkshopColorLibrarySelectionKey,
   updateWorkshopMaterialCatalog,
 } from "../../workshop/colorLibrary";
 
@@ -1005,6 +1006,15 @@ export default function BasicSettings() {
           materialLayerCount,
           materialLayerHeightMm,
         });
+  const workshopColorLibrarySelectionKey =
+    getWorkshopColorLibrarySelectionKey({
+      source_version,
+      lut_name,
+      lut_names,
+      selectedNativeBrandKey,
+      selectedNativeDbNames,
+      selectedMaterialDirNames,
+    });
 
   const materialLayerHeightOptions = [
     { label: "0.04 mm", value: "0.04" },
@@ -1272,6 +1282,9 @@ export default function BasicSettings() {
         <WorkshopSourceBanner
           source={workshopSource}
           colorLibrary={workshopColorLibrary}
+          colorLibrarySelectionKey={
+            workshopColorLibrarySelectionKey
+          }
         />
       ) : null}
 

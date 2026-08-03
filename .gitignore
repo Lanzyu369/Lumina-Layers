@@ -308,6 +308,8 @@ frontend/.eslint-report.json
 assets/temp_*.npy
 assets/temp_*.json
 assets/temp_*.svg
+assets/workshop-seed/*.lumina-workshop
+assets/workshop-seed/*.lumina-workshop.sha256
 
 # Application runtime logs (machine-local, regenerated each run)
 logs/

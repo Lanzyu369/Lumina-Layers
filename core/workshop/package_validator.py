@@ -12,6 +12,7 @@ import struct
 import sys
 import unicodedata
 from collections.abc import Iterable
+from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
 from typing import Any
 from zipfile import (
@@ -63,10 +64,6 @@ _RESERVED_DEVICE_NAMES = frozenset(
         *(f"com{index}" for index in range(1, 10)),
         *(f"lpt{index}" for index in range(1, 10)),
     }
-)
-_REFERENCE_ATTRIBUTE = re.compile(
-    r"""\b(?:src|href)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))""",
-    flags=re.IGNORECASE,
 )
 _CSS_URL = re.compile(r"url\s*\(\s*([^)]+?)\s*\)", flags=re.IGNORECASE)
 _HEAD_TAG = re.compile(r"<head(?:\s|>)", flags=re.IGNORECASE)
@@ -327,6 +324,63 @@ def _is_inline_resource(value: str) -> bool:
     )
 
 
+class _RuntimeHtmlResourceValidator(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._inside_style = False
+
+    @staticmethod
+    def _validate_css(value: str) -> None:
+        for match in _CSS_URL.finditer(value):
+            if not _is_inline_resource(match.group(1)):
+                raise WorkshopPackageError(
+                    "runtime HTML CSS must use only inline resources"
+                )
+
+    @classmethod
+    def _validate_attributes(
+        cls,
+        attributes: list[tuple[str, str | None]],
+    ) -> None:
+        for name, value in attributes:
+            if value is None:
+                continue
+            normalized_name = name.casefold()
+            if (
+                normalized_name in {"src", "href"}
+                and not _is_inline_resource(value)
+            ):
+                raise WorkshopPackageError(
+                    "runtime HTML must not reference package or network files"
+                )
+            if normalized_name == "style":
+                cls._validate_css(value)
+
+    def handle_starttag(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+    ) -> None:
+        self._validate_attributes(attrs)
+        if tag.casefold() == "style":
+            self._inside_style = True
+
+    def handle_startendtag(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+    ) -> None:
+        self._validate_attributes(attrs)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.casefold() == "style":
+            self._inside_style = False
+
+    def handle_data(self, data: str) -> None:
+        if self._inside_style:
+            self._validate_css(data)
+
+
 def _validate_runtime_html(value: bytes) -> None:
     try:
         html = value.decode("utf-8", errors="strict")
@@ -348,20 +402,9 @@ def _validate_runtime_html(value: bytes) -> None:
             "runtime HTML must not use eval or dynamic import"
         )
 
-    for match in _REFERENCE_ATTRIBUTE.finditer(html):
-        resource = next(
-            (group for group in match.groups() if group is not None),
-            "",
-        )
-        if not _is_inline_resource(resource):
-            raise WorkshopPackageError(
-                "runtime HTML must not reference package or network files"
-            )
-    for match in _CSS_URL.finditer(html):
-        if not _is_inline_resource(match.group(1)):
-            raise WorkshopPackageError(
-                "runtime HTML CSS must use only inline resources"
-            )
+    validator = _RuntimeHtmlResourceValidator()
+    validator.feed(html)
+    validator.close()
 
 
 def _png_dimensions(value: bytes) -> tuple[int, int] | None:

@@ -292,6 +292,67 @@ describe("createWorkshopRpcHost", () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
+  it("accepts the complete SDK image handoff emitted by an installed module", async () => {
+    const handler = vi.fn().mockResolvedValue({ status: "completed" });
+    const host = createWorkshopRpcHost(
+      hostOptions(
+        { "handoff.image": handler },
+        ["handoff.image"],
+      ),
+    );
+    const payload = {
+      moduleId: "fixture.hello",
+      moduleVersion: "1.0.0",
+      projectId: "bead-project-acceptance",
+      pngBytes: new ArrayBuffer(8),
+      pixelWidth: 184,
+      pixelHeight: 136,
+      recommendedWidthMm: 59.8,
+      recommendedHeightMm: 44.2,
+      preserveCanvasBounds: true as const,
+      layout: {
+        kind: "square-grid",
+        rows: 17,
+        columns: 23,
+        pitchMm: 2.6,
+      },
+      colorLibraryId: "lut:acceptance",
+      recipeSource: {
+        manifestSchemaVersion: 1,
+        moduleId: "fixture.hello",
+        moduleVersion: "1.0.0",
+        projectSchemaVersion: "bead-project/v1",
+        renderSchemaVersion: "bead-render/v1",
+        payload: {
+          payloadVersion: "bead-recipe/v1",
+          rows: 17,
+          columns: 23,
+          compression: 80,
+          palette: [[51, 126, 224]],
+        },
+      },
+    };
+
+    const response = await host.dispatch(
+      request("handoff.image", payload, "complete-handoff"),
+    );
+
+    expect(response).toMatchObject({
+      ok: true,
+      result: { status: "completed" },
+    });
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: "bead-project-acceptance",
+        layout: expect.objectContaining({ rows: 17, columns: 23 }),
+        recipeSource: expect.objectContaining({
+          projectSchemaVersion: "bead-project/v1",
+        }),
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("validates and reconstructs project payloads before calling handlers", async () => {
     const handler = vi.fn().mockResolvedValue(undefined);
     const host = createWorkshopRpcHost(
@@ -375,6 +436,33 @@ describe("createWorkshopRpcHost", () => {
     });
   });
 
+  it("keeps the native image picker alive for up to five minutes", async () => {
+    vi.useFakeTimers();
+    const handler = vi.fn(() => new Promise(() => undefined));
+    const host = createWorkshopRpcHost(
+      hostOptions(
+        { "image.pick": handler },
+        ["image.pick"],
+      ),
+    );
+    const pending = host.dispatch(
+      request("image.pick", {}, "slow-native-picker"),
+    );
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(30_001);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(270_000);
+
+    await expect(pending).resolves.toMatchObject({
+      ok: false,
+      error: { code: "rpc-timeout", retryable: true },
+    });
+  });
+
   it("allows handoff up to its 120 second timeout", async () => {
     vi.useFakeTimers();
     const handler = vi.fn(() => new Promise(() => undefined));
@@ -388,6 +476,7 @@ describe("createWorkshopRpcHost", () => {
       request("handoff.image", {
         moduleId: "fixture.hello",
         moduleVersion: "1.0.0",
+        projectId: "timeout-project",
         pngBytes: new ArrayBuffer(8),
         pixelWidth: 1,
         pixelHeight: 1,

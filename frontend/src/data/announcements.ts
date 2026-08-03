@@ -18,16 +18,16 @@ export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
     version: "2026-07-30",
     title: {
-      zh: "Lumina Layers — 创意工坊与拼豆模式",
-      en: "Lumina Layers — Creative Workshop and Bead Mode",
+      zh: "Lumina Layers — 创意工坊与拼豆工作台",
+      en: "Lumina Layers — Creative Workshop and Fuse Bead Studio",
     },
     sections: [
       {
         category: { zh: "新功能", en: "New" },
         items: [
           {
-            zh: "7 月 30 日：设置左侧新增“创意工坊”，首个拼豆模式可读取清晰拼豆图纸，帮助校正网格和不确定色块，并实时预览不同压合程度下豆间缝隙与四豆交汇凹点的变化；确认后可将处理结果交回 Lumina，继续原有的叠色打印流程。",
-            en: "July 30: Creative Workshop is now available from the left side of Settings. Its first bead mode can read a clear bead pattern, help correct the grid and uncertain colours, and preview how bead gaps and four-bead junctions change with ironing pressure. The finished image can then return to Lumina for the existing layered-colour printing workflow.",
+            zh: "7 月 30 日：主导航“图像转矢量”右侧新增“创意工坊”。首个官方工具“拼豆工作台”随软件预装，也可单独启用、停用、卸载或从离线预装内容恢复；它能读取清晰拼豆图纸或截图，帮助校正网格和不确定色块，实时预览不同压合程度下豆间缝隙与四豆交汇凹点的变化，并把完成的图像交回 Lumina 原有的叠色打印流程。",
+            en: "July 30: Creative Workshop now sits to the right of Vectorizer in the main navigation. Its first official tool, Fuse Bead Studio, is preinstalled and can be enabled, disabled, uninstalled, or restored offline. It reads a clear bead pattern or screenshot, helps correct the grid and uncertain colours, previews how bead gaps and four-bead junctions change with ironing pressure, and sends the finished image back to Lumina’s existing layered-colour printing flow.",
           },
         ],
       },

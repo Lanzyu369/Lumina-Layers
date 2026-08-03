@@ -73,12 +73,18 @@ describe("useAnnouncement", () => {
       items.some(
         (item) =>
           item.zh.includes("创意工坊") &&
+          item.zh.includes("图像转矢量") &&
           item.zh.includes("拼豆图纸") &&
           item.zh.includes("压合") &&
+          item.zh.includes("预装") &&
+          item.zh.includes("卸载") &&
           item.zh.includes("Lumina") &&
           item.en.includes("Creative Workshop") &&
+          item.en.includes("Vectorizer") &&
           item.en.includes("bead pattern") &&
           item.en.includes("ironing pressure") &&
+          item.en.includes("preinstalled") &&
+          item.en.includes("uninstalled") &&
           item.en.includes("Lumina"),
       ),
     ).toBe(true);

@@ -81,6 +81,7 @@ function postReady(
 
 function rpcRequest(
   method:
+    | "image.pick"
     | "status.progress"
     | "lifecycle.ready"
     | "colorLibrary.read",
@@ -236,6 +237,57 @@ describe("WorkshopFrame", () => {
     expect(channel.port1.onmessage).toBeNull();
   });
 
+  it("keeps the active port across semantically identical module props", async () => {
+    const channel = channelFixture();
+    const imagePick = vi.fn().mockResolvedValue(null);
+    const handlers = {
+      "image.pick": imagePick,
+    };
+    const initialPrepareCandidate = vi.fn();
+    const moduleOverrides: Partial<WorkshopFrameModule> = {
+      permissions: ["image.pick"],
+    };
+    const view = render(
+      <WorkshopFrame
+        module={installedFixture(moduleOverrides)}
+        handlers={handlers}
+        createChannel={channel.createChannel}
+        prepareCandidate={initialPrepareCandidate}
+        disableVersion={vi.fn()}
+        onStartFailure={vi.fn()}
+      />,
+    );
+    const iframe = screen.getByTitle("Fixture Hello");
+    fireEvent.load(iframe);
+    act(() => {
+      postReady((iframe as HTMLIFrameElement).contentWindow);
+    });
+    await waitFor(() =>
+      expect(channel.port1.start).toHaveBeenCalledTimes(1),
+    );
+
+    view.rerender(
+      <WorkshopFrame
+        module={installedFixture(moduleOverrides)}
+        handlers={handlers}
+        createChannel={channel.createChannel}
+        prepareCandidate={vi.fn()}
+        disableVersion={vi.fn()}
+        onStartFailure={vi.fn()}
+      />,
+    );
+
+    expect(channel.port1.close).not.toHaveBeenCalled();
+    act(() => {
+      channel.port1.onmessage?.(
+        new MessageEvent("message", {
+          data: rpcRequest("image.pick", {}, "pick-after-rerender"),
+        }),
+      );
+    });
+    await waitFor(() => expect(imagePick).toHaveBeenCalledTimes(1));
+  });
+
   it("snapshots a candidate, renders progress, and activates only after lifecycle.ready", async () => {
     const channel = channelFixture();
     const order: string[] = [];
@@ -306,6 +358,170 @@ describe("WorkshopFrame", () => {
     );
     expect(order).toEqual(["snapshot", "activate"]);
     expect(screen.getByText("运行中")).toBeInTheDocument();
+  });
+
+  it("keeps the active port when a candidate becomes the installed version", async () => {
+    const channel = channelFixture();
+    const activateCandidate = vi.fn().mockResolvedValue(undefined);
+    const progress = vi.fn().mockResolvedValue(undefined);
+    const candidateModule = installedFixture({
+      moduleVersion: "1.1.0",
+      candidate: true,
+    });
+    const view = render(
+      <WorkshopFrame
+        module={candidateModule}
+        handlers={{ "status.progress": progress }}
+        createChannel={channel.createChannel}
+        prepareCandidate={vi.fn().mockResolvedValue(undefined)}
+        activateCandidate={activateCandidate}
+      />,
+    );
+
+    const iframe = await screen.findByTitle("Fixture Hello");
+    fireEvent.load(iframe);
+    act(() => {
+      postReady((iframe as HTMLIFrameElement).contentWindow, {
+        moduleVersion: "1.1.0",
+      });
+    });
+    await waitFor(() =>
+      expect(channel.port1.start).toHaveBeenCalledTimes(1),
+    );
+
+    act(() => {
+      channel.port1.onmessage?.(
+        new MessageEvent("message", {
+          data: rpcRequest("lifecycle.ready", {}, "ready-1"),
+        }),
+      );
+    });
+    await waitFor(() =>
+      expect(activateCandidate).toHaveBeenCalledWith(
+        "fixture.hello",
+        "1.1.0",
+      ),
+    );
+
+    view.rerender(
+      <WorkshopFrame
+        module={{ ...candidateModule, candidate: false }}
+        handlers={{ "status.progress": progress }}
+        createChannel={channel.createChannel}
+        prepareCandidate={vi.fn()}
+        activateCandidate={activateCandidate}
+      />,
+    );
+
+    expect(channel.port1.close).not.toHaveBeenCalled();
+    act(() => {
+      channel.port1.onmessage?.(
+        new MessageEvent("message", {
+          data: rpcRequest(
+            "status.progress",
+            {
+              phase: "autosave",
+              completed: 1,
+              total: 1,
+            },
+            "progress-after-activation",
+          ),
+        }),
+      );
+    });
+    await waitFor(() => expect(progress).toHaveBeenCalledTimes(1));
+  });
+
+  it("does not repeat candidate activation when the installed runtime restarts", async () => {
+    const firstChannel = channelFixture();
+    const secondChannel = channelFixture();
+    const createChannel = vi
+      .fn()
+      .mockReturnValueOnce({
+        port1: firstChannel.port1,
+        port2: firstChannel.port2,
+      })
+      .mockReturnValueOnce({
+        port1: secondChannel.port1,
+        port2: secondChannel.port2,
+      });
+    const prepareCandidate = vi.fn().mockResolvedValue(undefined);
+    const activateCandidate = vi.fn().mockResolvedValue(undefined);
+    const candidateModule = installedFixture({
+      moduleVersion: "1.1.0",
+      candidate: true,
+    });
+    const view = render(
+      <WorkshopFrame
+        module={candidateModule}
+        createChannel={createChannel}
+        prepareCandidate={prepareCandidate}
+        activateCandidate={activateCandidate}
+      />,
+    );
+
+    const candidateFrame = await screen.findByTitle("Fixture Hello");
+    fireEvent.load(candidateFrame);
+    act(() => {
+      postReady((candidateFrame as HTMLIFrameElement).contentWindow, {
+        moduleVersion: "1.1.0",
+      });
+    });
+    await waitFor(() =>
+      expect(firstChannel.port1.start).toHaveBeenCalledTimes(1),
+    );
+    act(() => {
+      firstChannel.port1.onmessage?.(
+        new MessageEvent("message", {
+          data: rpcRequest("lifecycle.ready", {}, "ready-candidate"),
+        }),
+      );
+    });
+    await waitFor(() =>
+      expect(activateCandidate).toHaveBeenCalledTimes(1),
+    );
+
+    view.rerender(
+      <WorkshopFrame
+        module={{
+          ...candidateModule,
+          candidate: false,
+          browserRuntimeHtml:
+            "<html><head></head><body>installed restart</body></html>",
+        }}
+        createChannel={createChannel}
+        prepareCandidate={prepareCandidate}
+        activateCandidate={activateCandidate}
+      />,
+    );
+
+    const installedFrame = await screen.findByTitle("Fixture Hello");
+    await waitFor(() =>
+      expect(installedFrame.getAttribute("srcdoc")).toContain(
+        "installed restart",
+      ),
+    );
+    expect(prepareCandidate).toHaveBeenCalledTimes(1);
+    fireEvent.load(installedFrame);
+    act(() => {
+      postReady((installedFrame as HTMLIFrameElement).contentWindow, {
+        moduleVersion: "1.1.0",
+      });
+    });
+    await waitFor(() =>
+      expect(secondChannel.port1.start).toHaveBeenCalledTimes(1),
+    );
+    act(() => {
+      secondChannel.port1.onmessage?.(
+        new MessageEvent("message", {
+          data: rpcRequest("lifecycle.ready", {}, "ready-installed"),
+        }),
+      );
+    });
+    await waitFor(() =>
+      expect(screen.getByText("运行中")).toBeInTheDocument(),
+    );
+    expect(activateCandidate).toHaveBeenCalledTimes(1);
   });
 
   it("disables a version after its third consecutive startup failure", async () => {

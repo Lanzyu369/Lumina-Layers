@@ -133,12 +133,13 @@ function isAllowedWorkshopRequest(details) {
   }
 
   const frameIsModule = isWorkshopRuntimeUrl(details.frameUrl);
+  const parentFrameIsHost = isTrustedHostUrl(details.parentFrameUrl);
   const initiatorIsModule = isWorkshopRuntimeUrl(details.initiator);
   const initiatorIsHost = isTrustedHostUrl(details.initiator);
   if (
     isWorkshopRuntimeUrl(details.url) &&
     details.resourceType === "subFrame" &&
-    initiatorIsHost
+    (initiatorIsHost || parentFrameIsHost)
   ) {
     return true;
   }
@@ -207,6 +208,17 @@ function shouldBlockWorkshopRedirect(details) {
   return isWorkshopRuntimeUrl(details.targetUrl);
 }
 
+function shouldRetryFrontendLoad(details) {
+  return (
+    details.isMainFrame === true &&
+    isTrustedHostUrl(details.validatedUrl)
+  );
+}
+
+function isAllowedWorkshopIpcSender(frameUrl) {
+  return isTrustedHostUrl(frameUrl);
+}
+
 function isAllowedWorkshopPopup(details) {
   if (
     !isTrustedHostUrl(details.openerUrl) ||
@@ -253,6 +265,7 @@ function isWorkshopFrameProcessIsolated(mainProcessId, moduleProcessId) {
 module.exports = {
   createWorkshopSessionToken,
   isAllowedWorkshopDownload,
+  isAllowedWorkshopIpcSender,
   isAllowedWorkshopPermission,
   isAllowedWorkshopPopup,
   isAllowedWorkshopRequest,
@@ -260,4 +273,5 @@ module.exports = {
   resolveWorkshopRuntimeRequest,
   shouldBlockWorkshopNavigation,
   shouldBlockWorkshopRedirect,
+  shouldRetryFrontendLoad,
 };

@@ -1,10 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
-
-vi.mock("../workshop/modules/bead/manifest", () => {
-  throw new Error(
-    "The recipe importer must not load an in-process Workshop module.",
-  );
-});
+import { describe, it, expect } from "vitest";
 
 import {
   detectRecipeFileType,

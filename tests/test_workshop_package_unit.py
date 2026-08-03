@@ -315,6 +315,52 @@ def test_runtime_html_must_be_one_inline_self_contained_file(
         inspect_workshop_package(archive)
 
 
+def test_runtime_html_allows_resource_syntax_inside_inline_javascript(
+    tmp_path: Path,
+) -> None:
+    archive = write_workshop_zip(
+        tmp_path,
+        files={
+            "ui/index.html": b"""
+                <!doctype html>
+                <html>
+                  <head></head>
+                  <body>
+                    <script>
+                      const hrefIsString =
+                        typeof window.location.href == "string";
+                      const image = new Image();
+                      image.src = objectUrl;
+                      const workerUrl = URL.createObjectURL(workerBlob);
+                    </script>
+                  </body>
+                </html>
+            """,
+        },
+    )
+
+    inspected = inspect_workshop_package(archive)
+
+    assert inspected.entry_html == "ui/index.html"
+
+
+def test_runtime_html_rejects_external_url_in_style_attribute(
+    tmp_path: Path,
+) -> None:
+    archive = write_workshop_zip(
+        tmp_path,
+        files={
+            "ui/index.html": (
+                b"<html><head></head><body "
+                b"style='background:url(icon.png)'></body></html>"
+            ),
+        },
+    )
+
+    with pytest.raises(WorkshopPackageError, match="runtime HTML CSS"):
+        inspect_workshop_package(archive)
+
+
 @pytest.mark.parametrize(
     "name",
     [

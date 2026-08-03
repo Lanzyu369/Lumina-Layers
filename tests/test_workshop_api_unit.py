@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from api.app import create_app
 from api.routers import workshop as workshop_router
-from core.workshop import WorkshopInstaller
+from core.workshop import WorkshopInstaller, inspect_workshop_package
 from core.workshop.models import RegistryRefreshResult
 from core.workshop.registry_client import parse_registry_index
 
@@ -82,6 +82,44 @@ def write_package(
         output.writestr("README.md", b"# Fixture\n")
         output.writestr("LICENSE", b"MIT\n")
     return archive
+
+
+def write_seed_directory(
+    tmp_path: Path,
+    version: str = "1.0.0",
+    *,
+    module_id: str = "fixture.official",
+) -> tuple[Path, Path]:
+    seed_dir = tmp_path / f"seed-{module_id}-{version}"
+    seed_dir.mkdir()
+    archive = write_package(
+        seed_dir,
+        version,
+        module_id=module_id,
+    )
+    inspected = inspect_workshop_package(archive)
+    repository = (
+        "https://github.com/lumina-layer-studio/Fixture-Workshop"
+    )
+    lock = {
+        "schemaVersion": 1,
+        "moduleId": module_id,
+        "version": version,
+        "repository": repository,
+        "releaseTag": f"v{version}",
+        "releaseAsset": archive.name,
+        "downloadUrl": (
+            f"{repository}/releases/download/v{version}/{archive.name}"
+        ),
+        "assetBytes": archive.stat().st_size,
+        "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+        "manifestSha256": inspected.manifest_sha256,
+    }
+    (seed_dir / "seed-lock.json").write_text(
+        json.dumps(lock, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return seed_dir, archive
 
 
 def registry_index_for(
@@ -237,6 +275,7 @@ def test_workshop_v1_routes_are_registered(api_bundle) -> None:
         "/api/workshop/v1/modules/{module_id}/activate",
         "/api/workshop/v1/modules/{module_id}/rollback",
         "/api/workshop/v1/modules/{module_id}/enabled",
+        "/api/workshop/v1/modules/{module_id}/restore-seed",
         "/api/workshop/v1/modules/{module_id}/runtime-success",
         "/api/workshop/v1/modules/{module_id}/runtime-failure",
         "/api/workshop/v1/modules/{module_id}",
@@ -630,6 +669,65 @@ def test_activate_rollback_disable_and_uninstall_lifecycle(
     assert removed.status_code == 200
     assert removed.json()["module"] is None
     assert project.is_file()
+
+
+def test_official_tombstone_can_restore_only_from_verified_bundled_seed(
+    tmp_path: Path,
+    api_bundle,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, installer, _archive, _registry = api_bundle
+    seed_dir, official = write_seed_directory(tmp_path)
+    monkeypatch.setenv("LUMINA_WORKSHOP_SEED_DIR", str(seed_dir))
+    install_direct(
+        installer,
+        official,
+        source="seed",
+        official=True,
+    )
+    project = (
+        installer.project_data_path("fixture.official")
+        / "keep.json"
+    )
+    project.parent.mkdir(parents=True)
+    project.write_text("{}", encoding="utf-8")
+    installer.uninstall("fixture.official")
+
+    response = client.post(
+        "/api/workshop/v1/modules/fixture.official/restore-seed",
+    )
+
+    assert response.status_code == 200
+    module = response.json()["module"]
+    assert module["official_uninstalled"] is False
+    assert module["candidate_version"] == "1.0.0"
+    assert module["active_version"] is None
+    assert project.is_file()
+    assert str(seed_dir) not in response.text
+
+
+def test_official_seed_restore_is_unavailable_without_bundled_resource(
+    api_bundle,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, installer, archive, _registry = api_bundle
+    monkeypatch.delenv("LUMINA_WORKSHOP_SEED_DIR", raising=False)
+    install_direct(
+        installer,
+        archive,
+        source="seed",
+        official=True,
+    )
+    installer.uninstall("fixture.hello")
+
+    response = client.post(
+        "/api/workshop/v1/modules/fixture.hello/restore-seed",
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "The bundled official Workshop module is unavailable."
+    }
 
 
 def test_runtime_and_lifecycle_errors_are_deterministic(
