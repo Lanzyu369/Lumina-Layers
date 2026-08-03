@@ -38,6 +38,14 @@
       {
         "from": "resources/materials",
         "to": "materials"
+      },
+      {
+        "from": "resources/workshop-seed",
+        "to": "workshop-seed",
+        "filter": [
+          "**/*",
+          "!**/.gitignore"
+        ]
       }
     ],
     "win": {
@@ -59,6 +67,7 @@
     "files": [
       "main.cjs",
       "preload.cjs",
+      "workshop-file-picker.cjs",
       "workshop-security.cjs",
       "splash.html",
       "build/icon.png",

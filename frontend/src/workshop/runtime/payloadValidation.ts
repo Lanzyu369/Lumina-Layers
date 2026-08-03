@@ -387,6 +387,7 @@ function validateHandoff(
       [
         "moduleId",
         "moduleVersion",
+        "projectId",
         "pngBytes",
         "pixelWidth",
         "pixelHeight",
@@ -398,6 +399,7 @@ function validateHandoff(
       ],
       ["layout"],
     ) ||
+    !boundedString(payload.projectId, 256) ||
     !(payload.pngBytes instanceof ArrayBuffer) ||
     !Number.isInteger(payload.pixelWidth) ||
     !Number.isInteger(payload.pixelHeight) ||
@@ -419,6 +421,7 @@ function validateHandoff(
   return {
     moduleId: identity.moduleId,
     moduleVersion: identity.moduleVersion,
+    projectId: payload.projectId,
     pngBytes: payload.pngBytes,
     pixelWidth: payload.pixelWidth,
     pixelHeight: payload.pixelHeight,
@@ -530,4 +533,3 @@ export function validateMethodPayload(
       return validateDiagnostics(payload);
   }
 }
-

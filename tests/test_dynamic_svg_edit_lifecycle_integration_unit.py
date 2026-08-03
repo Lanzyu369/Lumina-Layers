@@ -51,6 +51,10 @@ class _InlineWorkerPool:
         self.calls.append(function.__name__)
         return function(*args)
 
+    async def submit_timed(self, function, *args, timeout=None):
+        self.calls.append(function.__name__)
+        return function(*args), {}
+
 
 def _recipe_signature(analysis: object) -> Counter[tuple[int, ...]]:
     """Return the recipe multiset that reaches one native vector consumer."""
@@ -73,6 +77,25 @@ def _scene_z_span(scene: object) -> float:
     bounds = np.asarray(getattr(scene, "bounds"), dtype=np.float64)
     assert bounds.shape == (2, 3)
     return float(bounds[1, 2] - bounds[0, 2])
+
+
+def _scene_xy_geometry_signature(scene: object) -> Counter[tuple[object, ...]]:
+    """Describe scene geometry while ignoring the preview-only Z mirror."""
+
+    signature: Counter[tuple[object, ...]] = Counter()
+    for name, geometry in getattr(scene, "geometry", {}).items():
+        vertices = np.asarray(getattr(geometry, "vertices"), dtype=np.float64)
+        faces = np.asarray(getattr(geometry, "faces"))
+        bounds = np.asarray(getattr(geometry, "bounds"), dtype=np.float64)
+        signature[
+            (
+                str(name),
+                int(len(vertices)),
+                int(len(faces)),
+                tuple(np.round(bounds[:, :2].reshape(-1), 6)),
+            )
+        ] += 1
+    return signature
 
 
 def _threemf_z_span(payload: bytes) -> float:
@@ -198,8 +221,8 @@ def test_dynamic_svg_edit_lifecycle_keeps_native_geometry_and_export_recipes(
         analysis = kwargs["analysis"]
         glb_snapshots.append(
             {
-                "recipes": _recipe_signature(analysis),
-                "num_layers": int(getattr(analysis, "num_layers", 0)),
+                "analysis_is_lightweight": not hasattr(analysis, "matched_shapes"),
+                "geometry_signature": _scene_xy_geometry_signature(kwargs["scene"]),
                 "z_span": _scene_z_span(kwargs["scene"]),
             }
         )
@@ -209,6 +232,7 @@ def test_dynamic_svg_edit_lifecycle_keeps_native_geometry_and_export_recipes(
         threemf_snapshots.append(
             {
                 "slot_names": tuple(str(name) for name in kwargs["slot_names"]),
+                "geometry_signature": _scene_xy_geometry_signature(kwargs["scene"]),
                 "z_span": _scene_z_span(kwargs["scene"]),
             }
         )
@@ -410,8 +434,11 @@ def test_dynamic_svg_edit_lifecycle_keeps_native_geometry_and_export_recipes(
         assert normal_build["dynamic_enabled"]
         assert normal_build["num_layers"] == _EXPECTED_MAX_LAYERS
         assert print_recipe in normal_build["recipes"]
-        assert normal_glb_snapshot["recipes"] == normal_build["recipes"]
-        assert normal_glb_snapshot["num_layers"] == _EXPECTED_MAX_LAYERS
+        assert normal_glb_snapshot["analysis_is_lightweight"]
+        assert (
+            normal_glb_snapshot["geometry_signature"]
+            == normal_threemf_snapshot["geometry_signature"]
+        )
         normal_z_span = _threemf_z_span(normal_threemf.content)
         assert normal_z_span == pytest.approx(
             normal_threemf_snapshot["z_span"],
@@ -501,7 +528,8 @@ def test_dynamic_svg_global_replacement_rebuilds_exact_recipe_after_fresh_previe
     client = TestClient(app, raise_server_exceptions=False)
 
     build_recipes: list[Counter[tuple[int, ...]]] = []
-    glb_recipes: list[Counter[tuple[int, ...]]] = []
+    glb_geometry_signatures: list[Counter[tuple[object, ...]]] = []
+    threemf_geometry_signatures: list[Counter[tuple[object, ...]]] = []
     threemf_recipes: list[Counter[tuple[int, ...]]] = []
     recipe_by_scene_id: dict[int, Counter[tuple[int, ...]]] = {}
     vector_engine = importlib.import_module("core.vector_engine")
@@ -524,14 +552,19 @@ def test_dynamic_svg_global_replacement_rebuilds_exact_recipe_after_fresh_previe
     capture_build_mesh.__signature__ = inspect.signature(real_build_mesh)
 
     def capture_glb_export(*args, **kwargs):
-        recipe = _recipe_signature(kwargs["analysis"])
-        glb_recipes.append(recipe)
+        assert not hasattr(kwargs["analysis"], "matched_shapes")
+        glb_geometry_signatures.append(
+            _scene_xy_geometry_signature(kwargs["scene"])
+        )
         return real_glb_export(*args, **kwargs)
 
     def capture_threemf_export(*args, **kwargs):
         recipe = recipe_by_scene_id.get(id(kwargs["scene"]))
         assert recipe is not None
         threemf_recipes.append(recipe)
+        threemf_geometry_signatures.append(
+            _scene_xy_geometry_signature(kwargs["scene"])
+        )
         return real_threemf_export(*args, **kwargs)
 
     def post_preview(form_data: dict[str, str]):
@@ -642,7 +675,7 @@ def test_dynamic_svg_global_replacement_rebuilds_exact_recipe_after_fresh_previe
         assert client.get(normal_payload["preview_3d_url"]).content.startswith(b"glTF")
         assert len(build_recipes) == 1
         assert expected_print_recipe in build_recipes[0]
-        assert glb_recipes == build_recipes
+        assert glb_geometry_signatures == threemf_geometry_signatures
         assert threemf_recipes == build_recipes
 
         build_recipes.clear()

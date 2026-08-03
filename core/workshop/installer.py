@@ -156,6 +156,7 @@ class WorkshopInstaller:
         source: InstallSource,
         source_repository: str,
         official: bool,
+        restore_official: bool,
     ) -> tuple[InstalledModuleState, set[str]]:
         version = inspected.manifest.version
         if existing is None:
@@ -181,7 +182,11 @@ class WorkshopInstaller:
             source_repository=source_repository,
             official=official,
         )
-        if existing.official_uninstalled and source == "seed":
+        if (
+            existing.official_uninstalled
+            and source == "seed"
+            and not restore_official
+        ):
             raise WorkshopInstallError(
                 "official module was uninstalled by the user"
             )
@@ -216,6 +221,7 @@ class WorkshopInstaller:
         source: InstallSource,
         source_repository: str,
         official: bool,
+        restore_official: bool = False,
     ) -> InstalledModuleState:
         """Inspect and atomically stage one non-active candidate version.
 
@@ -228,6 +234,10 @@ class WorkshopInstaller:
             raise WorkshopInstallError(
                 "only Registry or seed installs may be official"
             )
+        if restore_official and (source != "seed" or not official):
+            raise WorkshopInstallError(
+                "official restore requires an official seed package"
+            )
         if "\x00" in source_repository or len(source_repository) > 2048:
             raise WorkshopInstallError("invalid source repository")
 
@@ -236,10 +246,19 @@ class WorkshopInstaller:
         version = inspected.manifest.version
         with self._lock_for(module_id):
             existing = self._store.get(module_id)
+            if restore_official and (
+                existing is None
+                or not existing.official
+                or not existing.official_uninstalled
+            ):
+                raise WorkshopInstallError(
+                    "official module is not awaiting seed restore"
+                )
             if (
                 existing is not None
                 and existing.official_uninstalled
                 and source == "seed"
+                and not restore_official
             ):
                 raise WorkshopInstallError(
                     "official module was uninstalled by the user"
@@ -291,6 +310,7 @@ class WorkshopInstaller:
                     source=source,
                     source_repository=source_repository,
                     official=official,
+                    restore_official=restore_official,
                 )
                 self._store.upsert(candidate_state)
                 state_committed = True

@@ -2162,7 +2162,7 @@ async def convert_generate(
     # 3. CPU computation offloaded to process pool (only paths and scalars)
     worker_t0 = time.perf_counter()
     try:
-        result = await pool.submit(
+        result, worker_pool_timing = await pool.submit_timed(
             worker_fn,
             image_path,
             lut_path,
@@ -2248,9 +2248,31 @@ async def convert_generate(
             _remove_temp_path(glb_path)
 
     api_total = time.perf_counter() - api_t0
+    endpoint_to_enqueue_ms = round((worker_t0 - api_t0) * 1000, 3)
     performance_timing = {
         "total_ms": round(api_total * 1000, 3),
         "worker_ms": round(worker_elapsed * 1000, 3),
+        "endpoint_to_enqueue_ms": endpoint_to_enqueue_ms,
+        "queue_wait_ms": round(
+            float(worker_pool_timing.get("queue_wait_s", 0.0)) * 1000,
+            3,
+        ),
+        "worker_execution_ms": round(
+            float(worker_pool_timing.get("worker_execution_s", 0.0)) * 1000,
+            3,
+        ),
+        "result_delivery_ms": round(
+            float(worker_pool_timing.get("result_delivery_s", 0.0)) * 1000,
+            3,
+        ),
+        "endpoint_post_worker_ms": round(
+            max(
+                0.0,
+                api_total - (worker_t0 - api_t0) - worker_elapsed,
+            )
+            * 1000,
+            3,
+        ),
         "overhead_ms": round((api_total - worker_elapsed) * 1000, 3),
     }
     log.info(
@@ -2259,6 +2281,19 @@ async def convert_generate(
             "event": "converter_generate_timing",
             "duration_ms": performance_timing["total_ms"],
             "worker_ms": performance_timing["worker_ms"],
+            "endpoint_to_enqueue_ms": performance_timing[
+                "endpoint_to_enqueue_ms"
+            ],
+            "queue_wait_ms": performance_timing["queue_wait_ms"],
+            "worker_execution_ms": performance_timing[
+                "worker_execution_ms"
+            ],
+            "result_delivery_ms": performance_timing[
+                "result_delivery_ms"
+            ],
+            "endpoint_post_worker_ms": performance_timing[
+                "endpoint_post_worker_ms"
+            ],
             "overhead_ms": performance_timing["overhead_ms"],
         },
     )

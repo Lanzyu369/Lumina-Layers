@@ -419,6 +419,44 @@ def test_vector_outline_height_matches_structure_mode(
     assert float(outline_mesh.bounds[1, 2]) == pytest.approx(expected_height)
 
 
+def test_double_sided_vector_outline_spans_both_coating_faces() -> None:
+    """Material vector outlines must use export mode and effective layer height."""
+    from core.pipeline.vector_branch import _generate_vector_outline_mesh
+
+    analysis = MagicMock()
+    analysis.matched_shapes = _matched_shapes_for_fixture()
+    analysis.scale_factor = 1.0
+    analysis.num_layers = 4
+    layer_height = 0.10
+    coating_height = layer_height * 2
+    ctx = {
+        "spacer_thick": 1.6,
+        "structure_mode": "Double-sided",
+        "color_mode": "5-Color Extended",
+        "material_source": "material_archive",
+        "layer_height_mm": layer_height,
+        "enable_coating": True,
+        "coating_height_mm": coating_height,
+    }
+
+    outline_mesh = _generate_vector_outline_mesh(
+        analysis=analysis,
+        outline_width_mm=2.0,
+        base_aux_color=[255, 255, 255, 255],
+        base_aux_material_name="White",
+        ctx=ctx,
+        export_color_mode="Material Archive",
+    )
+
+    assert outline_mesh is not None
+    backing_height = max(1, int(round(1.6 / layer_height))) * layer_height
+    model_height = backing_height + 2 * analysis.num_layers * layer_height
+    assert float(outline_mesh.bounds[0, 2]) == pytest.approx(-coating_height)
+    assert float(outline_mesh.bounds[1, 2]) == pytest.approx(
+        model_height + coating_height
+    )
+
+
 def test_vector_outline_miter_spikes_stay_within_requested_width() -> None:
     """Acute SVG corners must not create outline tabs wider than requested.
 

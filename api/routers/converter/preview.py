@@ -1165,7 +1165,6 @@ async def convert_preview(
                 "replacement_count": len(parsed_replacement_regions or []),
             },
         )
-        _t = time.perf_counter()
         if material_source == "material_archive":
             log.debug(
                 "Material mode parsed: count=%d names=%s",
@@ -1177,7 +1176,8 @@ async def convert_preview(
                 },
             )
 
-        result = await pool.submit(
+        _worker_t0 = time.perf_counter()
+        result, worker_pool_timing = await pool.submit_timed(
             worker_generate_preview,
             temp_path,
             lut_path if material_source != "material_archive" else "__material_archive__",
@@ -1213,7 +1213,7 @@ async def convert_preview(
             material_max_layer_count,
             material_delta_e00_tolerance,
         )
-        _t_worker = time.perf_counter() - _t
+        _t_worker = time.perf_counter() - _worker_t0
         worker_completed = True
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="Preview generation timed out")
@@ -1748,10 +1748,32 @@ async def convert_preview(
     dynamic_result = dynamic_material_result_from_cache(cache_data)
 
     _t_api_total = time.perf_counter() - _api_t0
+    endpoint_to_enqueue_ms = round((_worker_t0 - _api_t0) * 1000, 3)
     performance_timing = {
         "total_ms": round(_t_api_total * 1000, 3),
         "upload_ms": round(_t_upload * 1000, 3),
         "worker_ms": round(_t_worker * 1000, 3),
+        "endpoint_to_enqueue_ms": endpoint_to_enqueue_ms,
+        "queue_wait_ms": round(
+            float(worker_pool_timing.get("queue_wait_s", 0.0)) * 1000,
+            3,
+        ),
+        "worker_execution_ms": round(
+            float(worker_pool_timing.get("worker_execution_s", 0.0)) * 1000,
+            3,
+        ),
+        "result_delivery_ms": round(
+            float(worker_pool_timing.get("result_delivery_s", 0.0)) * 1000,
+            3,
+        ),
+        "endpoint_post_worker_ms": round(
+            max(
+                0.0,
+                _t_api_total - (_worker_t0 - _api_t0) - _t_worker,
+            )
+            * 1000,
+            3,
+        ),
         "pickle_load_ms": round(_t_pickle_load * 1000, 3),
         "segmented_glb_ms": round(_t_glb * 1000, 3),
         "palette_ms": round(_t_palette * 1000, 3),
@@ -1763,6 +1785,19 @@ async def convert_preview(
             "duration_ms": performance_timing["total_ms"],
             "upload_ms": performance_timing["upload_ms"],
             "worker_ms": performance_timing["worker_ms"],
+            "endpoint_to_enqueue_ms": performance_timing[
+                "endpoint_to_enqueue_ms"
+            ],
+            "queue_wait_ms": performance_timing["queue_wait_ms"],
+            "worker_execution_ms": performance_timing[
+                "worker_execution_ms"
+            ],
+            "result_delivery_ms": performance_timing[
+                "result_delivery_ms"
+            ],
+            "endpoint_post_worker_ms": performance_timing[
+                "endpoint_post_worker_ms"
+            ],
             "pickle_load_ms": performance_timing["pickle_load_ms"],
             "segmented_glb_ms": performance_timing["segmented_glb_ms"],
             "palette_ms": performance_timing["palette_ms"],

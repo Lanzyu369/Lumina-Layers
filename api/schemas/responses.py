@@ -867,6 +867,11 @@ class PerformanceTimingResponse(BaseModel):
     total_ms: Optional[float] = None
     upload_ms: Optional[float] = None
     worker_ms: Optional[float] = None
+    endpoint_to_enqueue_ms: Optional[float] = None
+    queue_wait_ms: Optional[float] = None
+    worker_execution_ms: Optional[float] = None
+    result_delivery_ms: Optional[float] = None
+    endpoint_post_worker_ms: Optional[float] = None
     pickle_load_ms: Optional[float] = None
     segmented_glb_ms: Optional[float] = None
     palette_ms: Optional[float] = None

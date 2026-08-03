@@ -41,6 +41,10 @@ class _InlineWorkerPool:
         self.calls.append(function.__name__)
         return function(*args)
 
+    async def submit_timed(self, function, *args, timeout=None):
+        self.calls.append(function.__name__)
+        return function(*args), {}
+
 
 def _png_upload_from_fixture() -> tuple[str, io.BytesIO, str]:
     with Image.open(_FIXTURE_IMAGE) as fixture:

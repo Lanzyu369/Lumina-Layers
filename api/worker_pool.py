@@ -9,14 +9,20 @@ to a process pool, with timeout support and graceful shutdown.
 
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
-from typing import Any, Callable, TypeVar
+from pathlib import Path
+from typing import Any, Callable, Literal, TypeVar
 import asyncio
 import io
 import os
 import sys
 import threading
+import time
 
 from api.structured_logging import get_logger
+from core.task_parallelism_runtime import (
+    OuterDemandPublisher,
+    task_parallelism_runtime_scope,
+)
 
 T = TypeVar("T")
 
@@ -102,6 +108,7 @@ def _run_in_worker_with_context(
     fn: Callable[..., T],
     request_id: str | None,
     session_id: str | None,
+    demand_snapshot_path: str | None,
     *args: Any,
 ) -> T:
     """Replay parent-side contextvars inside the worker process before invoking fn.
@@ -115,7 +122,30 @@ def _run_in_worker_with_context(
         set_request_id(request_id)
     if session_id is not None:
         set_session_id(session_id)
-    return fn(*args)
+    if demand_snapshot_path is None:
+        return fn(*args)
+    with task_parallelism_runtime_scope(demand_snapshot_path):
+        return fn(*args)
+
+
+def _run_in_worker_with_context_timed(
+    fn: Callable[..., T],
+    request_id: str | None,
+    session_id: str | None,
+    demand_snapshot_path: str | None,
+    *args: Any,
+) -> tuple[T, int, int]:
+    """Run one contextualized task and return worker-local timing bounds."""
+    worker_started_ns = time.perf_counter_ns()
+    result = _run_in_worker_with_context(
+        fn,
+        request_id,
+        session_id,
+        demand_snapshot_path,
+        *args,
+    )
+    worker_finished_ns = time.perf_counter_ns()
+    return result, worker_started_ns, worker_finished_ns
 
 
 def _normalize_timeout(timeout: float | None) -> float | None:
@@ -228,6 +258,49 @@ class WorkerPoolManager:
         )
         self._pool: ProcessPoolExecutor | None = None
         self._pool_lock = threading.RLock()
+        self._demand_publisher: OuterDemandPublisher | None = (
+            self._create_demand_publisher()
+        )
+
+    def _create_demand_publisher(self) -> OuterDemandPublisher | None:
+        """Create isolated demand state without making it a startup dependency."""
+
+        try:
+            return OuterDemandPublisher(max_workers=self._max_workers)
+        except (OSError, RuntimeError, ValueError) as exc:
+            _log.warning(
+                "Failed to initialize worker-pool demand state",
+                extra={
+                    "event": "worker_pool_demand_init_failed",
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                    "max_workers": self._max_workers,
+                },
+            )
+            return None
+
+    def _update_demand(
+        self,
+        publisher: OuterDemandPublisher | None,
+        operation: Literal["increment", "decrement"],
+    ) -> None:
+        """Publish one demand transition without changing task outcomes."""
+
+        if publisher is None:
+            return
+        try:
+            getattr(publisher, operation)()
+        except (OSError, RuntimeError, ValueError) as exc:
+            _log.warning(
+                "Failed to publish worker-pool demand",
+                extra={
+                    "event": "worker_pool_demand_update_failed",
+                    "operation": operation,
+                    "path": str(publisher.snapshot_path),
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                },
+            )
 
     def start(self) -> None:
         """Initialize the process pool.
@@ -236,6 +309,8 @@ class WorkerPoolManager:
         with self._pool_lock:
             if self._pool is not None:
                 return
+            if self._demand_publisher is None:
+                self._demand_publisher = self._create_demand_publisher()
             self._pool = ProcessPoolExecutor(
                 max_workers=self._max_workers,
                 initializer=_worker_init,
@@ -307,6 +382,52 @@ class WorkerPoolManager:
         父进程当前的 request_id / session_id 会在调用时被快照，并在 worker
         子进程内重放，使得 worker 发出的日志可与 endpoint 的请求关联。
         """
+        result, _timing = await self._submit_internal(
+            fn,
+            args,
+            timeout=timeout,
+            include_timing=False,
+        )
+        return result
+
+    async def submit_timed(
+        self,
+        fn: Callable[..., T],
+        *args: Any,
+        timeout: float | None = None,
+    ) -> tuple[T, dict[str, float]]:
+        """Submit a CPU task and return separate pool timing metadata.
+
+        提交 CPU 任务，并将进程池计时作为独立元数据返回，不修改 worker
+        的原始返回值。
+
+        Args:
+            fn: Top-level picklable worker function. 顶层可序列化 worker 函数。
+            *args: Scalar arguments or file paths. 标量参数或文件路径。
+            timeout: Optional per-call timeout. 可选的单次调用超时。
+
+        Returns:
+            tuple: ``(worker_result, timing_seconds)``. worker 原始结果与秒级计时。
+        """
+        result, timing = await self._submit_internal(
+            fn,
+            args,
+            timeout=timeout,
+            include_timing=True,
+        )
+        if timing is None:  # Defensive invariant; timed submissions set it.
+            raise RuntimeError("Timed worker submission returned no timing")
+        return result, timing
+
+    async def _submit_internal(
+        self,
+        fn: Callable[..., T],
+        args: tuple[Any, ...],
+        *,
+        timeout: float | None,
+        include_timing: bool,
+    ) -> tuple[T, dict[str, float] | None]:
+        """Run one task while preserving the public ``submit`` return contract."""
         pool = self._pool
         if pool is None:
             raise RuntimeError("WorkerPool not started")
@@ -318,16 +439,70 @@ class WorkerPoolManager:
         effective_timeout = _normalize_timeout(
             timeout if timeout is not None else self._default_task_timeout
         )
-        future = loop.run_in_executor(
-            pool,
-            _run_in_worker_with_context,
-            fn,
-            request_id,
-            session_id,
-            *args,
+        worker_entry = (
+            _run_in_worker_with_context_timed
+            if include_timing
+            else _run_in_worker_with_context
         )
+        demand_publisher = self._demand_publisher
+        demand_snapshot_path = (
+            str(demand_publisher.snapshot_path)
+            if demand_publisher is not None
+            else None
+        )
+        self._update_demand(demand_publisher, "increment")
+        submitted_ns = time.perf_counter_ns() if include_timing else None
         try:
-            return await asyncio.wait_for(future, timeout=effective_timeout)
+            future = loop.run_in_executor(
+                pool,
+                worker_entry,
+                fn,
+                request_id,
+                session_id,
+                demand_snapshot_path,
+                *args,
+            )
+            raw_result = await asyncio.wait_for(
+                future,
+                timeout=effective_timeout,
+            )
+            if not include_timing:
+                return raw_result, None
+            (
+                result,
+                worker_started_ns,
+                worker_finished_ns,
+            ) = raw_result
+            received_ns = time.perf_counter_ns()
+            if submitted_ns is None:
+                raise RuntimeError("Timed worker submission has no start time")
+            timing = {
+                "queue_wait_s": max(
+                    0.0,
+                    (worker_started_ns - submitted_ns) / 1_000_000_000,
+                ),
+                "worker_execution_s": max(
+                    0.0,
+                    (worker_finished_ns - worker_started_ns) / 1_000_000_000,
+                ),
+                "result_delivery_s": max(
+                    0.0,
+                    (received_ns - worker_finished_ns) / 1_000_000_000,
+                ),
+                "pool_roundtrip_s": max(
+                    0.0,
+                    (received_ns - submitted_ns) / 1_000_000_000,
+                ),
+            }
+            _log.debug(
+                "Worker pool task timing",
+                extra={
+                    "event": "worker_pool_task_timing",
+                    "worker_name": getattr(fn, "__name__", type(fn).__name__),
+                    **timing,
+                },
+            )
+            return result, timing
         except asyncio.TimeoutError:
             future.cancel()
             self._restart_after_failed_pool(
@@ -339,6 +514,8 @@ class WorkerPoolManager:
         except BrokenProcessPool:
             self._restart_after_failed_pool(pool, reason="broken_process_pool")
             raise
+        finally:
+            self._update_demand(demand_publisher, "decrement")
 
     def shutdown(self, wait: bool = True) -> None:
         """Shutdown the pool gracefully.
@@ -356,6 +533,22 @@ class WorkerPoolManager:
                     cancel_futures=not wait,
                 )
                 self._pool = None
+            publisher = self._demand_publisher
+            if publisher is not None:
+                try:
+                    publisher.cleanup()
+                except (OSError, RuntimeError, ValueError) as exc:
+                    _log.warning(
+                        "Failed to clean up worker-pool demand state",
+                        extra={
+                            "event": "worker_pool_demand_cleanup_failed",
+                            "path": str(publisher.snapshot_path),
+                            "error_type": type(exc).__name__,
+                            "error_message": str(exc),
+                        },
+                    )
+                else:
+                    self._demand_publisher = None
 
     @property
     def is_alive(self) -> bool:
@@ -376,6 +569,34 @@ class WorkerPoolManager:
             int: Max workers count. (最大工作进程数)
         """
         return self._max_workers
+
+    @property
+    def demand_snapshot_path(self) -> Path | None:
+        """Get the current pool-owned demand snapshot path.
+
+        获取当前进程池拥有的负载快照路径。
+
+        Returns:
+            Path | None: Active path, or ``None`` when optional telemetry is
+                unavailable. 当前有效路径；可选遥测不可用时为 ``None``。
+        """
+
+        publisher = self._demand_publisher
+        return publisher.snapshot_path if publisher is not None else None
+
+    @property
+    def outstanding_tasks(self) -> int:
+        """Get submitted tasks whose result has not been delivered.
+
+        获取已提交但结果尚未交付的任务数。
+
+        Returns:
+            int: Current in-memory outstanding count.
+                当前内存中的未完成任务数。
+        """
+
+        publisher = self._demand_publisher
+        return publisher.outstanding if publisher is not None else 0
 
     @property
     def max_tasks_per_child(self) -> int | None:

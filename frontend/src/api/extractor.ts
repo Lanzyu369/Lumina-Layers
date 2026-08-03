@@ -608,12 +608,14 @@ export async function previewMaterialRecipe(
 
 export async function listGradientCardMaterials(options?: {
   includeFileUrls?: boolean;
+  signal?: AbortSignal;
 }): Promise<GradientCardMaterialLibraryResponse> {
   const response = await apiClient.get<GradientCardMaterialLibraryResponse>(
     "/extractor/gradient-card-materials",
     {
       params: options?.includeFileUrls ? { include_file_urls: true } : undefined,
       timeout: 3_600_000,
+      ...(options?.signal ? { signal: options.signal } : {}),
     },
   );
   return response.data;

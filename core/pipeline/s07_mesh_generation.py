@@ -21,7 +21,7 @@ from shapely.geometry import Polygon
 from config import PrinterConfig
 from core.mesh_generators import get_mesher
 from core.task_parallelism import (
-    resolve_task_parallelism,
+    resolve_task_parallelism_plan,
     task_parallelism_worker_scope,
 )
 
@@ -147,17 +147,26 @@ def run(ctx: dict) -> dict:
         else ""
     )
     parallelism_requested = normalized_parallelism_request or "auto"
-    max_workers = resolve_task_parallelism(
+    parallelism_plan = resolve_task_parallelism_plan(
         "raster",
         work_items=num_materials,
         min_parallel_items=2,
-        hard_max_workers=4,
+        hard_max_workers=None,
         work_units=int(np.asarray(full_matrix).size),
         min_parallel_work_units=_MIN_PARALLEL_MESH_WORK_UNITS,
         estimated_worker_bytes=_estimate_mesh_worker_bytes(full_matrix),
     )
-    if os.getenv("LUMINA_DISABLE_PARALLEL_MESH", "0") == "1":
+    max_workers = parallelism_plan.workers
+    legacy_parallelism_disabled = (
+        os.getenv("LUMINA_DISABLE_PARALLEL_MESH", "0") == "1"
+    )
+    if legacy_parallelism_disabled:
         max_workers = 1
+    parallelism_limit = (
+        "legacy_disable"
+        if legacy_parallelism_disabled
+        else parallelism_plan.limiting_reason
+    )
     parallel_enabled = max_workers > 1
     mesh_results = {}
     mesh_errors = {}
@@ -252,6 +261,32 @@ def run(ctx: dict) -> dict:
         _hifi_timings["mesh_apply_transform_s"] = mesh_apply_elapsed
         _hifi_timings["mesh_parallelism_requested"] = parallelism_requested
         _hifi_timings["mesh_parallelism_workers"] = int(max_workers)
+        _hifi_timings["mesh_parallelism_limit"] = parallelism_limit
+        _hifi_timings["mesh_parallelism_effective_cpu"] = int(
+            parallelism_plan.effective_cpu_capacity,
+        )
+        _hifi_timings["mesh_parallelism_cpu_topology"] = str(
+            parallelism_plan.cpu_topology,
+        )[:64]
+        _hifi_timings["mesh_parallelism_cpu_scheduling_policy"] = str(
+            parallelism_plan.cpu_scheduling_policy,
+        )[:64]
+        if parallelism_plan.performance_cpu_capacity is not None:
+            _hifi_timings["mesh_parallelism_performance_cpu"] = int(
+                parallelism_plan.performance_cpu_capacity,
+            )
+        _hifi_timings["mesh_parallelism_outer_demand"] = int(
+            parallelism_plan.outer_demand,
+        )
+        _hifi_timings["mesh_parallelism_cpu_fair_share"] = int(
+            parallelism_plan.cpu_fair_share_ceiling,
+        )
+        _hifi_timings["mesh_parallelism_memory_ceiling"] = int(
+            parallelism_plan.memory_ceiling,
+        )
+        _hifi_timings["mesh_parallelism_demand_fallback"] = bool(
+            parallelism_plan.demand_snapshot_fallback,
+        )
         _log.debug(
             "mesh_gen done: %.3fs",
             _mesh_elapsed,
@@ -264,6 +299,27 @@ def run(ctx: dict) -> dict:
                 "parallel_enabled": bool(parallel_enabled),
                 "parallelism_requested": parallelism_requested,
                 "worker_count": int(max_workers),
+                "parallelism_limit": parallelism_limit,
+                "effective_cpu_capacity": int(
+                    parallelism_plan.effective_cpu_capacity,
+                ),
+                "cpu_topology": str(parallelism_plan.cpu_topology)[:64],
+                "cpu_scheduling_policy": str(
+                    parallelism_plan.cpu_scheduling_policy,
+                )[:64],
+                "performance_cpu_capacity": (
+                    int(parallelism_plan.performance_cpu_capacity)
+                    if parallelism_plan.performance_cpu_capacity is not None
+                    else None
+                ),
+                "outer_demand": int(parallelism_plan.outer_demand),
+                "cpu_fair_share_ceiling": int(
+                    parallelism_plan.cpu_fair_share_ceiling,
+                ),
+                "memory_ceiling": int(parallelism_plan.memory_ceiling),
+                "demand_snapshot_fallback": bool(
+                    parallelism_plan.demand_snapshot_fallback,
+                ),
             },
         )
 

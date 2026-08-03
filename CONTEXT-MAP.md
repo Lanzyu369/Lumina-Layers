@@ -6,7 +6,7 @@ or unsupported.
 
 | Topic | Read first | Covers |
 | --- | --- | --- |
-| Creative Workshop, installable modules, SDK, package validation, Registry, sandbox, project storage, image handoff, official seed | [`docs/context/workshop/CONTEXT.md`](docs/context/workshop/CONTEXT.md) | `workshop-sdk/`, `core/workshop/`, `/api/workshop/v1`, `frontend/src/workshop/`, Electron runtime boundary, recipe and diagnostics integration |
+| Creative Workshop, installable modules, public SDK, package validation, Registry, sandbox, project storage, image handoff, official seed | [`docs/context/workshop/CONTEXT.md`](docs/context/workshop/CONTEXT.md) | public `Lumina-Workshop-SDK`, `core/workshop/`, `/api/workshop/v1`, `frontend/src/workshop/`, Electron runtime boundary, recipe and diagnostics integration |
 
 For system-wide decisions, also inspect `docs/adr/` when present. When a topic
 has no context document yet, use the real code, tests, and focused maintenance

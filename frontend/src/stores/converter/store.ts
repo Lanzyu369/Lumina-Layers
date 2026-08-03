@@ -192,6 +192,12 @@ let _materialSuggestAbortController: AbortController | null = null;
  */
 let _gradientGroupsAbortController: AbortController | null = null;
 
+// Latest-request tokens keep slower catalog/palette responses from
+// overwriting a newer converter selection.
+// 最新请求令牌用于阻止较慢的目录或调色板响应覆盖较新的转换选择。
+let _lutCatalogRequestToken = 0;
+let _lutColorsRequestToken = 0;
+
 /**
  * Build a deterministic cache key from a suggestion request's parameters.
  * ``directoryNames`` is joined (order-sensitive: we want the user palette
@@ -2002,10 +2008,13 @@ export interface ConverterActions {
   // API 操作
   uploadLut: (file: File) => Promise<void>;
   fetchLutList: (options?: ApiRequestOptions) => Promise<void>;
-  fetchLutCatalog: () => Promise<void>;
+  fetchLutCatalog: (signal?: AbortSignal) => Promise<void>;
   fetchLegacyCatalog: (options?: ApiRequestOptions) => Promise<void>;
   setLegacyManufacturer: (name: string) => void;
-  fetchLutColors: (lutName: string) => Promise<void>;
+  fetchLutColors: (
+    lutName: string,
+    signal?: AbortSignal,
+  ) => Promise<void>;
 
   // 材料档案模式下按目标色请求建议
   // Query achievable-color suggestions for a target hex (material-archive mode).
@@ -6100,10 +6109,20 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       }
     },
 
-    fetchLutCatalog: async () => {
+    fetchLutCatalog: async (signal?: AbortSignal) => {
+      const requestToken = ++_lutCatalogRequestToken;
       set({ nativeBrandGroupsLoading: true });
       try {
-        const response = await apiFetchLutCatalog();
+        const response = await apiFetchLutCatalog(signal);
+        if (
+          signal?.aborted ||
+          requestToken !== _lutCatalogRequestToken
+        ) {
+          if (requestToken === _lutCatalogRequestToken) {
+            set({ nativeBrandGroupsLoading: false });
+          }
+          return;
+        }
         const legacyGroups = normalizeLutGroups(response.legacy_groups ?? []);
         const groups = filterNativeBrandGroups(
           normalizeNativeBrandGroups(response.native_brand_groups ?? []),
@@ -6171,6 +6190,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             : {}),
         });
       } catch (err) {
+        if (
+          signal?.aborted ||
+          requestToken !== _lutCatalogRequestToken
+        ) {
+          if (requestToken === _lutCatalogRequestToken) {
+            set({ nativeBrandGroupsLoading: false });
+          }
+          return;
+        }
         set({
           nativeBrandGroupsLoading: false,
           error: visibleConverterError(err, "品牌目录加载失败"),
@@ -6210,18 +6238,37 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       }
     },
 
-    fetchLutColors: async (lutName: string) => {
+    fetchLutColors: async (
+      lutName: string,
+      signal?: AbortSignal,
+    ) => {
+      const requestToken = ++_lutColorsRequestToken;
       if (!lutName) {
-        set({ lutColors: [], lutColorCards: [], lutColorsLutName: "" });
+        set({
+          lutColors: [],
+          lutColorCards: [],
+          lutColorsLutName: "",
+          lutColorsLoading: false,
+        });
         return;
       }
       // 缓存命中检查：LUT 名称未变且已有数据时跳过请求
       if (lutName === _get().lutColorsLutName && _get().lutColors.length > 0) {
+        set({ lutColorsLoading: false });
         return;
       }
       set({ lutColorsLoading: true });
       try {
-        const response = await apiFetchLutColors(lutName);
+        const response = await apiFetchLutColors(lutName, signal);
+        if (
+          signal?.aborted ||
+          requestToken !== _lutColorsRequestToken
+        ) {
+          if (requestToken === _lutColorsRequestToken) {
+            set({ lutColorsLoading: false });
+          }
+          return;
+        }
         set({
           lutColors: response.colors,
           lutColorCards: response.cards ?? [],
@@ -6229,6 +6276,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           lutColorsLutName: lutName,
         });
       } catch (err) {
+        if (
+          signal?.aborted ||
+          requestToken !== _lutColorsRequestToken
+        ) {
+          if (requestToken === _lutColorsRequestToken) {
+            set({ lutColorsLoading: false });
+          }
+          return;
+        }
         set({
           lutColorsLoading: false,
           error: lutErrorToVisibleMessage(err, "LUT 颜色加载失败"),

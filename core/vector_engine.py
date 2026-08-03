@@ -2400,6 +2400,7 @@ class VectorAnalysis:
     preview_colors: dict
     stage_timings: dict = field(default_factory=dict)
     image_vectorizer_bounds: object | None = None
+    matched_rgb_override_metrics: dict = field(default_factory=dict)
     material_dynamic_layer_info: dict | None = None
     material_solver_info: dict | None = None
 
@@ -2840,7 +2841,246 @@ def apply_recipe_overrides_to_analysis(
     )
 
 
-def apply_matched_rgb_overrides_to_analysis(
+def _iter_raster_polygon_components(geom) -> list:
+    """Return polygon leaves in stable geometry order.
+
+    按原始 geometry 顺序返回所有 Polygon 叶节点。
+    """
+    if geom is None or geom.is_empty:
+        return []
+    if geom.geom_type == "Polygon":
+        return [geom]
+    if geom.geom_type in ("MultiPolygon", "GeometryCollection"):
+        components = []
+        for child in geom.geoms:
+            components.extend(_iter_raster_polygon_components(child))
+        return components
+    return []
+
+
+def _coords_to_raster_points(
+    coords: np.ndarray,
+    *,
+    coord_scale: float,
+) -> np.ndarray | None:
+    """Convert geometry coordinates exactly like the legacy raster path."""
+    pts = np.column_stack(
+        [
+            coords[:, 0] * coord_scale,
+            coords[:, 1] * coord_scale,
+        ]
+    ).astype(np.int32)
+    if len(pts) < 3:
+        return None
+    return pts
+
+
+def _geometry_raster_contours(
+    geom,
+    *,
+    coord_scale: float,
+) -> list[tuple[np.ndarray, list[np.ndarray]]]:
+    """Build integer exterior/hole contours once for OpenCV rasterization."""
+    contours: list[tuple[np.ndarray, list[np.ndarray]]] = []
+    for poly in _iter_raster_polygon_components(geom):
+        if poly.is_empty:
+            continue
+        exterior = _coords_to_raster_points(
+            np.asarray(poly.exterior.coords),
+            coord_scale=coord_scale,
+        )
+        if exterior is None:
+            continue
+        holes: list[np.ndarray] = []
+        for interior in poly.interiors:
+            hole = _coords_to_raster_points(
+                np.asarray(interior.coords),
+                coord_scale=coord_scale,
+            )
+            if hole is not None:
+                holes.append(hole)
+        contours.append((exterior, holes))
+    return contours
+
+
+def _paint_raster_contours(
+    contours: list[tuple[np.ndarray, list[np.ndarray]]],
+    *,
+    canvas_shape: tuple[int, int],
+    origin_xy: tuple[int, int] = (0, 0),
+) -> np.ndarray | None:
+    """Paint contours with the legacy exterior-then-holes OpenCV sequence."""
+    if not contours:
+        return None
+    height, width = (int(canvas_shape[0]), int(canvas_shape[1]))
+    region = np.zeros((height, width), dtype=np.uint8)
+    origin = np.asarray(origin_xy, dtype=np.int32)
+    for exterior, holes in contours:
+        cv2.fillPoly(region, [exterior - origin], 255)
+        for hole in holes:
+            cv2.fillPoly(region, [hole - origin], 0)
+    return region.astype(bool)
+
+
+def _rasterize_geometry_roi_mask(
+    geom,
+    *,
+    canvas_shape: tuple[int, int],
+    coord_scale: float,
+) -> tuple[slice, slice, np.ndarray] | None:
+    """Rasterize inside a conservative pixel ROI.
+
+    The integer contours are identical to the legacy path. The one-pixel
+    padding is deliberately conservative so OpenCV edge coverage remains
+    unchanged after translating contours into local coordinates.
+
+    整数轮廓与旧实现完全一致，只把画布裁到带一像素余量的包围盒。
+    """
+    contours = _geometry_raster_contours(
+        geom,
+        coord_scale=coord_scale,
+    )
+    if not contours:
+        return None
+
+    height, width = (int(canvas_shape[0]), int(canvas_shape[1]))
+    exterior_points = [exterior for exterior, _holes in contours]
+    min_x = min(int(points[:, 0].min()) for points in exterior_points)
+    min_y = min(int(points[:, 1].min()) for points in exterior_points)
+    max_x = max(int(points[:, 0].max()) for points in exterior_points)
+    max_y = max(int(points[:, 1].max()) for points in exterior_points)
+
+    x_start = max(0, min_x - 1)
+    y_start = max(0, min_y - 1)
+    x_stop = min(width, max_x + 2)
+    y_stop = min(height, max_y + 2)
+    if x_start >= x_stop or y_start >= y_stop:
+        empty = np.zeros((0, 0), dtype=bool)
+        return slice(0, 0), slice(0, 0), empty
+
+    roi_mask = _paint_raster_contours(
+        contours,
+        canvas_shape=(y_stop - y_start, x_stop - x_start),
+        origin_xy=(x_start, y_start),
+    )
+    if roi_mask is None:
+        return None
+    return (
+        slice(y_start, y_stop),
+        slice(x_start, x_stop),
+        roi_mask,
+    )
+
+
+def _material_stack_rows_for_legacy_vote(stacks: np.ndarray) -> np.ndarray:
+    """Keep compact rows only when conversion to legacy int32 is value-exact."""
+    rows = np.asarray(stacks)
+    if rows.size == 0 or not np.issubdtype(rows.dtype, np.integer):
+        return np.asarray(rows, dtype=np.int32)
+
+    dtype = rows.dtype
+    if np.issubdtype(dtype, np.signedinteger) and dtype.itemsize <= 4:
+        return rows
+    if np.issubdtype(dtype, np.unsignedinteger) and dtype.itemsize < 4:
+        return rows
+
+    int32_info = np.iinfo(np.int32)
+    min_value = int(rows.min())
+    max_value = int(rows.max())
+    if int32_info.min <= min_value and max_value <= int32_info.max:
+        return rows
+    return np.asarray(rows, dtype=np.int32)
+
+
+def _pack_material_stacks_uint64(
+    stacks: np.ndarray,
+    *,
+    min_value: int,
+    radix: int,
+) -> np.ndarray:
+    """Encode fixed-width signed rows without an ``N x columns`` temporary."""
+    rows = np.asarray(stacks)
+    if rows.ndim != 2:
+        raise ValueError("material stacks must be a two-dimensional array")
+
+    codes = np.zeros((rows.shape[0],), dtype=np.uint64)
+    column_digits = np.empty((rows.shape[0],), dtype=np.uint64)
+    radix_u64 = np.uint64(radix)
+    for column_index in range(rows.shape[1]):
+        np.multiply(codes, radix_u64, out=codes)
+        column_values = rows[:, column_index].astype(np.int64, copy=False)
+        np.subtract(
+            column_values,
+            np.int64(min_value),
+            out=column_digits,
+            casting="unsafe",
+        )
+        np.add(codes, column_digits, out=codes)
+    return codes
+
+
+def _unique_material_stacks_exact(
+    stacks: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, bool]:
+    """Return exact unique rows/counts with a compact uint64 fast path.
+
+    Fixed-width rows are encoded as one uint64 value per effective pixel only
+    when the entire code space fits in uint64. Keeping aggregation in NumPy
+    avoids retaining Python ``dict`` arenas across thousands of components.
+    The encoding preserves signed lexicographic row order, so
+    ``np.argmax(counts)`` keeps the legacy sorted-first tie break.
+    固定长度配方在无溢出时压成每像素一个 uint64，并保持旧版排序和平票规则。
+    """
+    # The pre-ROI implementation coerced every voted row to int32. Compact
+    # inputs may stay compact only when that conversion is provably value-
+    # preserving; wide/out-of-range inputs are wrapped before radix analysis.
+    rows = _material_stack_rows_for_legacy_vote(stacks)
+    if rows.ndim != 2:
+        raise ValueError("material stacks must be a two-dimensional array")
+    if rows.shape[0] == 0 or rows.shape[1] == 0:
+        unique_rows, counts = np.unique(
+            np.asarray(rows, dtype=np.int32),
+            axis=0,
+            return_counts=True,
+        )
+        return unique_rows, counts, False
+
+    min_value = int(rows.min())
+    max_value = int(rows.max())
+    radix = max_value - min_value + 1
+    if pow(radix, int(rows.shape[1])) > (1 << 64):
+        unique_rows, counts = np.unique(
+            np.asarray(rows, dtype=np.int32),
+            axis=0,
+            return_counts=True,
+        )
+        return unique_rows, counts, False
+
+    codes = _pack_material_stacks_uint64(
+        rows,
+        min_value=min_value,
+        radix=radix,
+    )
+    sorted_codes, counts = np.unique(
+        codes,
+        return_counts=True,
+    )
+    unique_rows = np.empty(
+        (len(sorted_codes), rows.shape[1]),
+        dtype=np.int32,
+    )
+    remaining = sorted_codes.copy()
+    radix_u64 = np.uint64(radix)
+    for column_index in range(rows.shape[1] - 1, -1, -1):
+        digit = np.remainder(remaining, radix_u64)
+        unique_rows[:, column_index] = (
+            digit.astype(np.int64) + min_value
+        )
+        np.floor_divide(remaining, radix_u64, out=remaining)
+    return unique_rows, counts, True
+
+
+def _apply_matched_rgb_overrides_to_analysis_impl(
     analysis: "VectorAnalysis",
     *,
     matched_rgb: np.ndarray,
@@ -2851,6 +3091,7 @@ def apply_matched_rgb_overrides_to_analysis(
     pixels_per_mm: float = 10.0,
     max_width_px: int = 1600,
     strict: bool = False,
+    metrics_out: dict[str, Any],
     prefer_cached_material_state: bool = False,
 ) -> int:
     """Propagate region-level ``matched_rgb`` edits into ``matched_shapes``.
@@ -2924,6 +3165,24 @@ def apply_matched_rgb_overrides_to_analysis(
         int: Number of connected components whose material assignment changed.
             （材质分配被改写的连通分量数量）
     """
+    metrics_out.clear()
+    metrics_out.update(
+        {
+            "raster_strategy": "roi",
+            "component_count": 0,
+            "full_canvas_pixel_work": 0,
+            "roi_pixel_work": 0,
+            "max_roi_pixels": 0,
+            "effective_pixel_count": 0,
+            "pixel_work_reduction_ratio": 0.0,
+            "packed_material_vote_count": 0,
+            "fallback_material_vote_count": 0,
+            "rewritten_component_count": 0,
+            "output_shape_count": len(
+                getattr(analysis, "matched_shapes", None) or []
+            ),
+        }
+    )
     if matched_rgb is None or mask_solid is None:
         if strict:
             raise ValueError("matched_rgb and mask_solid are required")
@@ -3034,48 +3293,6 @@ def apply_matched_rgb_overrides_to_analysis(
             raise ValueError(error_message)
         return 0
 
-    def _iter_polygon_components(geom):
-        if geom is None or geom.is_empty:
-            return []
-        if geom.geom_type == "Polygon":
-            return [geom]
-        if geom.geom_type in ("MultiPolygon", "GeometryCollection"):
-            components = []
-            for child in geom.geoms:
-                components.extend(_iter_polygon_components(child))
-            return components
-        return []
-
-    def _coords_to_pts(coords):
-        pts = np.column_stack(
-            [
-                coords[:, 0] * coord_scale,
-                coords[:, 1] * coord_scale,
-            ]
-        ).astype(np.int32)
-        if len(pts) < 3:
-            return None
-        return pts
-
-    def _shape_mask(geom):
-        region = np.zeros((h_px, w_px), dtype=np.uint8)
-        painted = False
-        for poly in _iter_polygon_components(geom):
-            if poly.is_empty:
-                continue
-            ext_pts = _coords_to_pts(np.array(poly.exterior.coords))
-            if ext_pts is None:
-                continue
-            cv2.fillPoly(region, [ext_pts], 255)
-            painted = True
-            for interior in poly.interiors:
-                hole_pts = _coords_to_pts(np.array(interior.coords))
-                if hole_pts is not None:
-                    cv2.fillPoly(region, [hole_pts], 0)
-        if not painted:
-            return None
-        return region.astype(bool)
-
     num_channels = int(getattr(analysis, "num_channels", 0) or 0)
     num_layers = int(getattr(analysis, "num_layers", 0) or 0)
     if (num_channels <= 0 or num_layers <= 0) and not strict:
@@ -3138,6 +3355,19 @@ def apply_matched_rgb_overrides_to_analysis(
 
     changed = 0
     per_shape_diag: list[dict] = []
+    lut_index_cache: dict[tuple[int, int, int], int] = {}
+
+    def _query_lut_index(rgb: tuple[int, int, int]) -> int:
+        cached_index = lut_index_cache.get(rgb)
+        if cached_index is not None:
+            return cached_index
+        query_lab = img_processor._rgb_to_lab(
+            np.array([rgb], dtype=np.uint8)
+        )
+        _, index = img_processor.kdtree.query(query_lab)
+        lut_index = int(np.atleast_1d(index)[0])
+        lut_index_cache[rgb] = lut_index
+        return lut_index
 
     def _material_state(
         shape: dict,
@@ -3227,27 +3457,45 @@ def apply_matched_rgb_overrides_to_analysis(
         shape: dict,
         geom,
     ) -> dict | None:
-        shape_mask = _shape_mask(geom)
-        if shape_mask is None:
+        metrics_out["component_count"] += 1
+        metrics_out["full_canvas_pixel_work"] += h_px * w_px
+        roi_result = _rasterize_geometry_roi_mask(
+            geom,
+            canvas_shape=(h_px, w_px),
+            coord_scale=coord_scale,
+        )
+        if roi_result is None:
             return None
-        effective_mask = np.logical_and(shape_mask, mask_arr)
+        y_slice, x_slice, shape_mask = roi_result
+
+        raster_pixel_work = int(shape_mask.size)
+        metrics_out["roi_pixel_work"] += raster_pixel_work
+        metrics_out["max_roi_pixels"] = max(
+            int(metrics_out["max_roi_pixels"]),
+            raster_pixel_work,
+        )
+        local_mask_solid = mask_arr[y_slice, x_slice]
+        effective_mask = np.logical_and(shape_mask, local_mask_solid)
         if not np.any(effective_mask):
             return None
+        metrics_out["effective_pixel_count"] += int(
+            np.count_nonzero(effective_mask)
+        )
 
-        dominant_rgb = _dominant_rgb(matched_arr[effective_mask])
+        local_matched_rgb = matched_arr[y_slice, x_slice]
+        dominant_rgb = _dominant_rgb(local_matched_rgb[effective_mask])
         if identity_arr is not None:
+            local_identity_rgb = identity_arr[y_slice, x_slice]
             dominant_height_identity = _dominant_rgb(
-                identity_arr[effective_mask]
+                local_identity_rgb[effective_mask]
             )
         else:
             dominant_height_identity = _height_identity_state(shape)
             if dominant_height_identity is None:
                 dominant_height_identity = dominant_rgb
 
-        query_lab = img_processor._rgb_to_lab(np.array([dominant_rgb], dtype=np.uint8))
-        _, index = img_processor.kdtree.query(query_lab)
         try:
-            lut_idx = int(np.atleast_1d(index)[0])
+            lut_idx = _query_lut_index(dominant_rgb)
         except (TypeError, ValueError, IndexError):
             return None
         new_matched_rgb = (
@@ -3259,9 +3507,20 @@ def apply_matched_rgb_overrides_to_analysis(
         stack_source = "ref_stacks_fallback"
         stack_top_alternatives: list[list[int]] = []
         if matrix_arr is not None:
-            stacks = np.asarray(matrix_arr[effective_mask], dtype=np.int32)
+            local_material_matrix = matrix_arr[y_slice, x_slice]
+            stacks = np.asarray(local_material_matrix[effective_mask])
             if stacks.ndim == 2 and stacks.shape[1] > 0:
-                uniq_stacks, stack_counts = np.unique(stacks, axis=0, return_counts=True)
+                (
+                    uniq_stacks,
+                    stack_counts,
+                    used_packed_vote,
+                ) = _unique_material_stacks_exact(stacks)
+                metric_name = (
+                    "packed_material_vote_count"
+                    if used_packed_vote
+                    else "fallback_material_vote_count"
+                )
+                metrics_out[metric_name] += 1
                 stack = uniq_stacks[int(np.argmax(stack_counts))]
                 stack_source = "material_matrix_majority"
                 top_n = min(3, len(stack_counts))
@@ -3303,7 +3562,11 @@ def apply_matched_rgb_overrides_to_analysis(
                     "lut_idx": int(lut_idx),
                     "matched_rgb": list(new_matched_rgb),
                     "stack_source": stack_source,
-                    "stack_first6": [int(c) for c in stack[:6].tolist()] if hasattr(stack, "tolist") else list(stack[:6]),
+                    "stack_first6": (
+                        [int(c) for c in stack[:6].tolist()]
+                        if hasattr(stack, "tolist")
+                        else list(stack[:6])
+                    ),
                     "stack_top_alternatives_first6_with_count": stack_top_alternatives,
                     "new_recipe_first6": new_recipe[:6],
                     "prev_recipe_first6": prev_recipe[:6],
@@ -3315,11 +3578,7 @@ def apply_matched_rgb_overrides_to_analysis(
             tuple(new_recipe),
         )
 
-        identity_lab = img_processor._rgb_to_lab(
-            np.array([dominant_height_identity], dtype=np.uint8)
-        )
-        _, identity_index = img_processor.kdtree.query(identity_lab)
-        identity_lut_idx = int(np.atleast_1d(identity_index)[0])
+        identity_lut_idx = _query_lut_index(dominant_height_identity)
         original_recipe = _normalise_cached_stack_for_vector_recipe(
             ref_stacks[identity_lut_idx],
             target_layers=num_layers,
@@ -3342,7 +3601,7 @@ def apply_matched_rgb_overrides_to_analysis(
             projected_shapes.append(shape)
             continue
 
-        components = _iter_polygon_components(geom)
+        components = _iter_raster_polygon_components(geom)
         if not components:
             projected_shapes.append(shape)
             continue
@@ -3409,6 +3668,13 @@ def apply_matched_rgb_overrides_to_analysis(
         changed += changed_components
 
     analysis.matched_shapes = projected_shapes
+    metrics_out["rewritten_component_count"] = int(changed)
+    metrics_out["output_shape_count"] = len(projected_shapes)
+    roi_pixel_work = int(metrics_out["roi_pixel_work"])
+    if roi_pixel_work > 0:
+        metrics_out["pixel_work_reduction_ratio"] = (
+            int(metrics_out["full_canvas_pixel_work"]) / roi_pixel_work
+        )
 
     # Diagnostic: emit per-shape majority vote details.
     if per_shape_diag:
@@ -3431,6 +3697,44 @@ def apply_matched_rgb_overrides_to_analysis(
             },
         )
     return changed
+
+
+def apply_matched_rgb_overrides_to_analysis(
+    analysis: "VectorAnalysis",
+    *,
+    matched_rgb: np.ndarray,
+    height_identity_rgb: np.ndarray | None = None,
+    material_matrix: np.ndarray | None = None,
+    mask_solid: np.ndarray,
+    img_processor,
+    pixels_per_mm: float = 10.0,
+    max_width_px: int = 1600,
+    strict: bool = False,
+    prefer_cached_material_state: bool = False,
+) -> int:
+    """Project cached pixel edits into vector shapes with an exact local ROI.
+
+    The public signature and projection semantics remain unchanged; only each
+    connected component's temporary raster workspace is cropped to its pixel
+    bounds. 缓存像素编辑仍按原规则回写，只把临时栅格裁到连通分量范围。
+    """
+    metrics: dict[str, Any] = {}
+    try:
+        return _apply_matched_rgb_overrides_to_analysis_impl(
+            analysis,
+            matched_rgb=matched_rgb,
+            height_identity_rgb=height_identity_rgb,
+            material_matrix=material_matrix,
+            mask_solid=mask_solid,
+            img_processor=img_processor,
+            pixels_per_mm=pixels_per_mm,
+            max_width_px=max_width_px,
+            strict=strict,
+            metrics_out=metrics,
+            prefer_cached_material_state=prefer_cached_material_state,
+        )
+    finally:
+        analysis.matched_rgb_override_metrics = dict(metrics)
 
 
 def _normalise_cached_stack_for_vector_recipe(
@@ -4873,6 +5177,9 @@ class VectorProcessor:
         enable_outline = bool(getattr(self, "enable_outline", False))
         outline_width_mm = getattr(self, "outline_width_mm", 0.0)
         structure_mode_value = str(getattr(structure_mode, "value", structure_mode))
+        is_double_sided = (
+            "双面" in structure_mode_value or "Double" in structure_mode_value
+        )
 
         # === Stage 5: Run-length extrude per channel ===
         try:
@@ -5094,6 +5401,17 @@ class VectorProcessor:
                 scale=scale_factor,
                 extrude_cache=extrude_cache,
             )
+            if is_double_sided and not is_5color:
+                top_surface_z = (2 * num_layers + backing_layer_count) * layer_h
+                coating_meshes.extend(
+                    self._extrude_geometry(
+                        coating_sil,
+                        height=coating_height,
+                        z_offset=top_surface_z,
+                        scale=scale_factor,
+                        extrude_cache=extrude_cache,
+                    )
+                )
             if coating_meshes:
                 coating_name = "Coating"
                 meshes_by_slot[coating_name] = {
@@ -5105,7 +5423,6 @@ class VectorProcessor:
 
         # === Stage 7: Double-sided structure ===
         t0 = time.perf_counter()
-        is_double_sided = "双面" in structure_mode_value or "Double" in structure_mode_value
         if is_double_sided:
             _log.debug("Adding mirrored color layers (double-sided mode)...")
             top_z_start = backing_z_start + backing_layer_count * layer_h

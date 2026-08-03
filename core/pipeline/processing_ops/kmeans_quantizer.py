@@ -18,9 +18,26 @@ from scipy.spatial import KDTree
 _log = get_logger(__name__)
 
 
-# 模块级 K-Means 缓存：key = md5(rgb)[:16]_{n_colors}_{seed}
+# Module-level K-Means cache: SHA-256 identities cover output-affecting arrays.
 _kmeans_cache: dict = {}
 _KMEANS_CACHE_MAX = 4
+
+
+def _stable_array_digest(array: np.ndarray) -> str:
+    """Hash every array byte; contiguous inputs use a zero-copy buffer."""
+
+    contiguous = np.ascontiguousarray(array)
+    return hashlib.sha256(memoryview(contiguous).cast("B")).hexdigest()
+
+
+def _stable_array_identity(array: np.ndarray) -> str:
+    """Return a stable cache identity including array layout metadata."""
+
+    normalized = np.asarray(array)
+    return (
+        f"{normalized.shape}_{normalized.dtype.str}_"
+        f"{_stable_array_digest(normalized)}"
+    )
 
 
 def _resolve_cluster_count(requested_colors: int, sample_count: int) -> int:
@@ -66,6 +83,26 @@ def _maybe_return_low_unique_input(
 
 
 KMEANS_PIXEL_THRESHOLD = 500_000
+
+
+def _stratified_sample_indices(
+    population_size: int,
+    sample_size: int,
+    seed: int,
+) -> np.ndarray:
+    """Return one reproducible random index from each contiguous stratum."""
+
+    boundaries = np.linspace(
+        0,
+        population_size,
+        num=sample_size + 1,
+        dtype=np.int64,
+    )
+    widths = np.diff(boundaries)
+    rng = np.random.default_rng(seed)
+    offsets = rng.integers(0, widths, dtype=np.int64)
+    boundaries[:-1] += offsets
+    return boundaries[:-1]
 
 
 def _nearest_center_sq(
@@ -130,15 +167,24 @@ def _lut_constrained_quantize(
     if effective_k <= 0:
         return rgb.copy()
 
-    _sample = rgb[:: max(1, rgb.shape[0] // 32), :: max(1, rgb.shape[1] // 32)].tobytes()
+    rgb_identity = _stable_array_identity(rgb)
+    lut_lab_identity = _stable_array_identity(lut_lab)
+    lut_rgb_identity = _stable_array_identity(lut_rgb)
     _cache_key = (
-        f"{rgb.shape}_{len(_sample)}_{hash(_sample)}_"
+        f"{rgb_identity}_"
         f"{effective_k}_{seed}_"
-        f"lc1_{lut_fingerprint or ''}"
+        f"lc4_lab_{lut_lab_identity}_"
+        f"rgb_{lut_rgb_identity}_"
+        f"caller_{lut_fingerprint or ''}"
     )
     if _cache_key in _kmeans_cache:
         _log.debug("LUT-Constrained K-Means cache hit: %s", _cache_key)
         return _kmeans_cache[_cache_key].copy()
+
+    # ``lut_lab`` is the authoritative LUT geometry. Rebuild the default tree
+    # only on cache misses so externally supplied construction options or tree
+    # topology cannot change exact-query tie-breaking or cache semantics.
+    canonical_lut_tree = KDTree(lut_lab)
 
     if effective_k == lut_count:
         _log.info(
@@ -151,7 +197,11 @@ def _lut_constrained_quantize(
                 "lut_count": int(lut_count),
             },
         )
-        quantized_image = _map_rgb_to_lut_nearest(rgb, lut_rgb, lut_tree)
+        quantized_image = _map_rgb_to_lut_nearest(
+            rgb,
+            lut_rgb,
+            canonical_lut_tree,
+        )
         if len(_kmeans_cache) >= _KMEANS_CACHE_MAX:
             oldest = next(iter(_kmeans_cache))
             del _kmeans_cache[oldest]
@@ -178,7 +228,7 @@ def _lut_constrained_quantize(
     work_pixels_rgb = work_rgb.reshape(-1, 3).astype(np.float32)
     work_pixels_lab = _rgb_to_lab_quantize(work_pixels_rgb)
 
-    _, nearest_lut_indices = lut_tree.query(work_pixels_lab)
+    _, nearest_lut_indices = canonical_lut_tree.query(work_pixels_lab)
     lut_pixel_counts = np.bincount(nearest_lut_indices, minlength=lut_count).astype(np.float64)
     lut_pixel_counts[lut_pixel_counts == 0] = 1e-9
 
@@ -216,7 +266,7 @@ def _lut_constrained_quantize(
                     any_changed = True
                 else:
                     mean_lab = work_pixels_lab[mask].mean(axis=0)
-                    _, nearest_idx = lut_tree.query(mean_lab)
+                    _, nearest_idx = canonical_lut_tree.query(mean_lab)
                     new_centers_lab[ci] = lut_lab[nearest_idx]
 
             if not any_changed and np.allclose(cur_centers_lab, new_centers_lab):
@@ -234,7 +284,7 @@ def _lut_constrained_quantize(
         return rgb.copy()
 
     # Map best Lab centers to LUT RGB
-    _, best_center_indices = lut_tree.query(best_centers_lab)
+    _, best_center_indices = canonical_lut_tree.query(best_centers_lab)
     centers_rgb = lut_rgb[best_center_indices]
 
     if total_pixels > KMEANS_PIXEL_THRESHOLD:
@@ -267,6 +317,7 @@ def quantize_colors(
     n_colors: int,
     seed: int = 42,
     *,
+    mask: np.ndarray | None = None,
     skip_post_blur: bool = False,
     lut_lab: np.ndarray | None = None,
     lut_rgb: np.ndarray | None = None,
@@ -281,6 +332,11 @@ def quantize_colors(
         rgb: (H, W, 3) uint8 RGB 图像数组
         n_colors: 量化目标颜色数
         seed: 随机种子，默认 42
+        mask: Optional ``(H, W)`` boolean quantization mask for unconstrained
+            K-Means. Pixels outside the mask do not train K-Means or consume
+            a cluster, and retain
+            their input RGB in the output. (可选量化掩码；掩码外像素不参与
+            K-Means、不占颜色簇，并在输出中保留原 RGB。)
         skip_post_blur: **Deprecated no-op**. Historical opt-out for a
             post-quantization ``cv2.medianBlur`` step that violated the
             ``unique RGB count <= n_colors`` contract by per-channel median
@@ -295,15 +351,41 @@ def quantize_colors(
             空间降噪由上游 bilateral 和下游孤立像素清理共同完成。)
         lut_lab: (N, 3) float64 LUT Lab 颜色表，用于 LUT 约束量化。
         lut_rgb: (N, 3) uint8 LUT RGB 颜色表，用于映射 LUT 索引到 RGB。
-        lut_tree: 基于 lut_lab 构建的 KDTree，用于查找最近 LUT 条目。
+        lut_tree: 基于 ``lut_lab`` 构建的 KDTree。保留该参数用于兼容现有
+            调用方和确认 LUT 已加载；量化在缓存未命中时会从权威
+            ``lut_lab`` 重建默认 KDTree，以固定最近邻等距选择语义。
+            (KDTree built from ``lut_lab``. Retained for caller compatibility
+            and loaded-LUT validation; cache misses rebuild a default KDTree
+            from authoritative ``lut_lab`` for deterministic tie-breaking.)
         use_lut_constrained: 若为 True 且 LUT 数据有效，使用 LUT-Constrained K-Means。
         lut_fingerprint: LUT 指纹，用于缓存隔离。
 
     Returns:
-        (H, W, 3) uint8 量化后的 RGB 图像数组，``unique RGB 数 <= n_colors``。
+        (H, W, 3) uint8 quantized RGB. Without ``mask``, the whole-image
+        unique RGB count is at most ``n_colors``; with ``mask``, that contract
+        applies to selected pixels while unselected RGB is preserved.
+        （量化后的 RGB；传入 ``mask`` 时颜色数上限仅约束掩码内像素，掩码外
+        RGB 原样保留。）
     """
     h, w = rgb.shape[:2]
-    total_pixels = h * w
+    mask_arr: np.ndarray | None = None
+    selected_rgb: np.ndarray | None = None
+    if mask is not None:
+        mask_arr = np.asarray(mask, dtype=bool)
+        if mask_arr.shape != (h, w):
+            raise ValueError(
+                f"mask shape {mask_arr.shape} does not match RGB shape {(h, w)}"
+            )
+        if bool(mask_arr.all()):
+            # All-selected input is semantically identical to no mask. Keep
+            # the historical INTER_AREA algorithm and full-image cache identity.
+            mask_arr = None
+            total_pixels = h * w
+        else:
+            selected_rgb = np.ascontiguousarray(rgb[mask_arr], dtype=np.uint8)
+            total_pixels = int(selected_rgb.shape[0])
+    else:
+        total_pixels = h * w
     if total_pixels == 0:
         return rgb.copy()
 
@@ -311,7 +393,15 @@ def quantize_colors(
     # removed). It is still accepted so legacy call sites keep working.
     del skip_post_blur  # silence unused-arg warnings; kwarg kept for API parity
 
-    if use_lut_constrained and lut_lab is not None and lut_lab.size > 0 and lut_tree is not None:
+    lut_constrained_active = (
+        use_lut_constrained
+        and lut_lab is not None
+        and lut_lab.size > 0
+        and lut_tree is not None
+    )
+    if mask_arr is not None and lut_constrained_active:
+        raise ValueError("mask is not supported with LUT-constrained K-Means")
+    if lut_constrained_active:
         return _lut_constrained_quantize(
             rgb, n_colors, seed,
             lut_lab=lut_lab, lut_rgb=lut_rgb, lut_tree=lut_tree,
@@ -326,37 +416,70 @@ def quantize_colors(
             effective_n_colors,
             total_pixels,
         )
-    low_unique_result = _maybe_return_low_unique_input(rgb, effective_n_colors)
+    unique_check_rgb = (
+        rgb
+        if selected_rgb is None
+        else selected_rgb.reshape(1, total_pixels, 3)
+    )
+    low_unique_result = _maybe_return_low_unique_input(
+        unique_check_rgb,
+        effective_n_colors,
+    )
     if low_unique_result is not None:
-        return low_unique_result
+        return low_unique_result if selected_rgb is None else rgb.copy()
 
-    # 缓存查找：用轻量指纹（shape + 采样像素 + 参数）避免全量 hash。
-    _sample = rgb[:: max(1, rgb.shape[0] // 32), :: max(1, rgb.shape[1] // 32)].tobytes()
+    # Algorithm selection and cache identity are independent: all full-image
+    # and partial-mask calls hash every RGB byte they consume. This prevents
+    # same-shape requests with equal sparse samples from sharing old output.
+    if selected_rgb is None:
+        _rgb_fingerprint = _stable_array_digest(rgb)
+        _mask_fingerprint = ""
+    else:
+        # Masked results can be reused only when every selected RGB matches.
+        # A sampled key can alias images whose unsampled visible pixels differ.
+        _rgb_fingerprint = _stable_array_digest(selected_rgb)
+        _mask_fingerprint = _stable_array_digest(mask_arr)
     _cache_key = (
-        f"{rgb.shape}_{len(_sample)}_{hash(_sample)}_"
+        f"{rgb.shape}_{rgb.dtype.str}_{_rgb_fingerprint}_"
         f"{effective_n_colors}_{seed}_"
-        f"lc{int(use_lut_constrained)}_{lut_fingerprint or ''}"
+        f"lc{int(use_lut_constrained)}_{lut_fingerprint or ''}_"
+        f"mask{_mask_fingerprint}"
     )
     if _cache_key in _kmeans_cache:
         _log.debug(f"K-Means cache hit: {_cache_key}")
-        return _kmeans_cache[_cache_key].copy()
+        cached_result = _kmeans_cache[_cache_key].copy()
+        if mask_arr is not None:
+            cached_result[~mask_arr] = rgb[~mask_arr]
+        return cached_result
 
     t0 = time.time()
     if total_pixels > KMEANS_PIXEL_THRESHOLD:
-        # 计算缩放比例，目标 50 万像素
-        scale_factor = np.sqrt(total_pixels / KMEANS_PIXEL_THRESHOLD)
-        small_h = int(h / scale_factor)
-        small_w = int(w / scale_factor)
+        if selected_rgb is None:
+            # 计算缩放比例，目标 50 万像素
+            scale_factor = np.sqrt(total_pixels / KMEANS_PIXEL_THRESHOLD)
+            small_h = int(h / scale_factor)
+            small_w = int(w / scale_factor)
 
-        _log.debug(
-            f"🚀 Pre-scaling optimization: {w}×{h} → {small_w}×{small_h} ({total_pixels:,} → {small_w*small_h:,} pixels)"
-        )
+            _log.debug(
+                f"🚀 Pre-scaling optimization: {w}×{h} → {small_w}×{small_h} ({total_pixels:,} → {small_w*small_h:,} pixels)"
+            )
 
-        # 缩小图片
-        rgb_small = cv2.resize(rgb, (small_w, small_h), interpolation=cv2.INTER_AREA)
+            # 缩小图片
+            rgb_small = cv2.resize(rgb, (small_w, small_h), interpolation=cv2.INTER_AREA)
+            pixels_small = rgb_small.reshape(-1, 3).astype(np.float32)
+        else:
+            # A spatial resize would blend air into selected pixels. Jittered
+            # stratified sampling covers the full selected sequence without
+            # phase-locking onto periodic pixel patterns. Its temporary index
+            # arrays are bounded by KMEANS_PIXEL_THRESHOLD, not image size.
+            sample_indices = _stratified_sample_indices(
+                total_pixels,
+                KMEANS_PIXEL_THRESHOLD,
+                seed,
+            )
+            pixels_small = selected_rgb[sample_indices].astype(np.float32)
 
-        # 在小图上做 K-Means（使用 K-Means++ 初始化）
-        pixels_small = rgb_small.reshape(-1, 3).astype(np.float32)
+        # 在降采样像素上做 K-Means（使用 K-Means++ 初始化）
         criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 50, 0.5)
         flags = cv2.KMEANS_PP_CENTERS  # K-Means++ 初始化
 
@@ -370,7 +493,11 @@ def quantize_colors(
         t_map = time.time()
         _log.debug(f"Mapping centers to full image...")
         centers = centers.astype(np.float32)
-        pixels_full = rgb.reshape(-1, 3).astype(np.float32)
+        pixels_full = (
+            rgb.reshape(-1, 3).astype(np.float32)
+            if selected_rgb is None
+            else selected_rgb.astype(np.float32)
+        )
 
         # 批量计算每个像素到所有 centers 的距离，找最近的
         # 使用 KDTree 加速
@@ -380,13 +507,21 @@ def quantize_colors(
 
         centers = centers.astype(np.uint8)
         quantized_pixels = centers[labels]
-        quantized_image = quantized_pixels.reshape(h, w, 3)
+        if mask_arr is None:
+            quantized_image = quantized_pixels.reshape(h, w, 3)
+        else:
+            quantized_image = rgb.copy()
+            quantized_image[mask_arr] = quantized_pixels
 
         _log.debug(f"✅ Pre-scaling optimization complete!")
     else:
         # 小图直接做 K-Means
         _log.debug(f"K-Means++ quantization to {effective_n_colors} colors...")
-        pixels = rgb.reshape(-1, 3).astype(np.float32)
+        pixels = (
+            rgb.reshape(-1, 3).astype(np.float32)
+            if selected_rgb is None
+            else selected_rgb.astype(np.float32)
+        )
         criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.2)
         flags = cv2.KMEANS_PP_CENTERS
 
@@ -395,7 +530,11 @@ def quantize_colors(
 
         centers = centers.astype(np.uint8)
         quantized_pixels = centers[labels.flatten()]
-        quantized_image = quantized_pixels.reshape(h, w, 3)
+        if mask_arr is None:
+            quantized_image = quantized_pixels.reshape(h, w, 3)
+        else:
+            quantized_image = rgb.copy()
+            quantized_image[mask_arr] = quantized_pixels
     _log.debug(f"⏱️ Total quantization: {time.time() - t0:.2f}s")
 
     # Post-quantization ``cv2.medianBlur`` has been removed. It used to run

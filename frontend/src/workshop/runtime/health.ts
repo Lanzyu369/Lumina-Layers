@@ -1,6 +1,7 @@
 import { WORKSHOP_API_VERSION } from "../contracts";
 
 export const WORKSHOP_HANDSHAKE_TIMEOUT_MS = 10_000;
+export const WORKSHOP_RUNTIME_CLOSE_GRACE_MS = 350;
 
 export const WORKSHOP_RUNTIME_CSP = [
   "default-src 'none'",

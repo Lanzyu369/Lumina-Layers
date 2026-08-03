@@ -64,8 +64,14 @@ export async function compareLuts(
 }
 
 /** 获取旧版 LUT 与新版品牌包目录 */
-export async function fetchLutCatalog(): Promise<LutCatalogResponse> {
-  const response = await apiClient.get<LutCatalogResponse>("/lut/catalog");
+export async function fetchLutCatalog(
+  signal?: AbortSignal,
+): Promise<LutCatalogResponse> {
+  const response = signal
+    ? await apiClient.get<LutCatalogResponse>("/lut/catalog", {
+        signal,
+      })
+    : await apiClient.get<LutCatalogResponse>("/lut/catalog");
   return response.data;
 }
 

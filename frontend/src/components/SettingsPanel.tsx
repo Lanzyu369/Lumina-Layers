@@ -27,7 +27,6 @@ import type { PrinterInfo, SlicerOption } from "../api/types";
 import {
   filterCompatiblePrinters,
   getDetectedSlicerIdForSoftware,
-  getPrinterNozzleSizeOptions,
   resolveDeviceProfileOptionId,
   resolveNozzleSizeOption,
   resolvePrinterOptionId,
@@ -47,8 +46,12 @@ import Slider from "./ui/Slider";
 import Switch from "./ui/Switch";
 import WikiTooltip from "./ui/WikiTooltip";
 import SlicerLogo from "./slicer/SlicerLogo";
+import MachineSelectionDialog from "./settings/MachineSelectionDialog";
+import SettingsCategoryNav, {
+  type SettingsCategory,
+  type SettingsCategoryId,
+} from "./settings/SettingsCategoryNav";
 import {
-  cx,
   PanelIntro,
   StatusBanner,
   resolvePanelSurfaceClass,
@@ -95,11 +98,6 @@ function formatSettingsOptionsLoadError(template: string, error: unknown): strin
   return template.replace("{error}", apiErrorToVisibleMessage(error));
 }
 
-function getMachinePlaceholderLabel(printer: PrinterInfo): string {
-  const compactBrand = printer.brand.replace(/\s+/g, "");
-  return (compactBrand || printer.display_name).slice(0, 2).toUpperCase();
-}
-
 export default function SettingsPanel() {
   const { t } = useI18n();
   const workspace = useWorkspaceMode();
@@ -113,6 +111,10 @@ export default function SettingsPanel() {
     );
   const [notificationPermissionLoading, setNotificationPermissionLoading] =
     useState(false);
+  const [activeCategory, setActiveCategory] =
+    useState<SettingsCategoryId>("device");
+  const [machineDialogOpen, setMachineDialogOpen] = useState(false);
+  const [manualSetupOpen, setManualSetupOpen] = useState(false);
 
   // Printer list state (task 5.2)
   const [printers, setPrinters] = useState<PrinterInfo[]>([]);
@@ -295,6 +297,8 @@ export default function SettingsPanel() {
     selectedPrinter?.device_profiles?.find(
       (profile) => profile.device_profile_id === resolvedDeviceProfileId,
     ) ?? null;
+  const selectedSlicer =
+    slicers.find((slicer) => slicer.id === resolvedSlicerSoftware) ?? null;
   const selectedPrinterThumbnailUrl = getMachineRegistryAssetUrl(selectedPrinter?.thumbnail);
 
   useEffect(() => {
@@ -489,6 +493,34 @@ export default function SettingsPanel() {
   const completionNotificationStatus =
     COMPLETION_NOTIFICATION_STATUS[notificationPermission];
 
+  const settingsCategories: SettingsCategory[] = [
+    {
+      id: "device",
+      label: t("settings.category_device"),
+      description: t("settings.category_device_desc"),
+    },
+    {
+      id: "general",
+      label: t("settings.category_general"),
+      description: t("settings.category_general_desc"),
+    },
+    {
+      id: "conversion",
+      label: t("settings.category_conversion"),
+      description: t("settings.category_conversion_desc"),
+    },
+    {
+      id: "maintenance",
+      label: t("settings.category_maintenance"),
+      description: t("settings.category_maintenance_desc"),
+    },
+  ];
+
+  const handleCategoryChange = (category: SettingsCategoryId) => {
+    setActiveCategory(category);
+    setMachineDialogOpen(false);
+  };
+
   return (
     <motion.aside
       initial={{ opacity: 0, y: 30 }}
@@ -498,523 +530,520 @@ export default function SettingsPanel() {
       className={`${resolvePanelSurfaceClass(workspace.mode)} flex flex-col gap-5`}
       >
       <PanelIntro
-        eyebrow={t("tab.settings")}
         title={t("settings.title")}
         description={t("settings.desc")}
       />
 
-      <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-4`}>
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">
-            {t("settings.slicer_settings")}
-          </p>
-          <h4 className="mt-1 text-base font-semibold text-slate-900 dark:text-slate-50">
-            {t("settings.printer_model")}
-          </h4>
-        </div>
-        {slicerOptionsError && (
-          <StatusBanner
-            role="alert"
-            tone="error"
-            action={(
-              <Button
-                label={t("widget_retry")}
-                variant="secondary"
-                size="sm"
-                loading={slicersLoading}
-                onClick={() => { void loadSlicerOptions(); }}
-              />
-            )}
-          >
-            {slicerOptionsError}
-          </StatusBanner>
-        )}
-        {printerOptionsError && (
-          <StatusBanner
-            role="alert"
-            tone="error"
-            action={(
-              <Button
-                label={t("widget_retry")}
-                variant="secondary"
-                size="sm"
-                loading={printersLoading}
-                onClick={() => { void loadPrinterOptions(); }}
-              />
-            )}
-          >
-            {printerOptionsError}
-          </StatusBanner>
-        )}
-        <div className="grid gap-4">
-          <div>
-            <Dropdown
-              label={t("settings.slicer_software")}
-              value={resolvedSlicerSoftware}
-              onChange={handleSlicerChange}
-              disabled={slicersLoading}
-              options={slicers.map((s) => ({
-                label: s.display_name,
-                value: s.id,
-                leading: <SlicerLogo slicerId={s.id} />,
-              }))}
-            />
-          </div>
-        </div>
-        <div className="flex min-w-0 flex-col gap-2">
-          <label className="text-sm font-medium text-slate-700 dark:text-slate-200">
-            {t("settings.printer_model")}
-          </label>
-          <div
-            data-testid="machine-adapter-grid"
-            className="grid max-h-[28rem] gap-3 overflow-y-auto pr-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4"
-          >
-            {filteredPrinters.map((printer) => {
-              const isSelected = printer.id === resolvedPrinterModel;
-              const thumbnailUrl = getMachineRegistryAssetUrl(printer.thumbnail);
-              const nozzleOptions = getPrinterNozzleSizeOptions(printer, resolvedSlicerSoftware);
+      <div className="grid min-h-0 items-start gap-5 lg:grid-cols-[14rem_minmax(0,1fr)]">
+        <SettingsCategoryNav
+          ariaLabel={t("settings.category_nav_label")}
+          categories={settingsCategories}
+          activeCategory={activeCategory}
+          onChange={handleCategoryChange}
+        />
 
-              return (
-                <div
-                  key={printer.id}
-                  className={cx(
-                    "group rounded-lg border bg-white/72 p-3 shadow-[var(--shadow-control)] transition-all duration-200 hover:border-blue-300 hover:bg-white/92 dark:bg-slate-900/60 dark:hover:bg-slate-900/82",
-                    isSelected
-                      ? "border-blue-400 ring-2 ring-blue-200/80 dark:border-blue-300 dark:ring-blue-500/20"
-                      : "border-slate-200/80 dark:border-slate-700/80",
+        <div
+          id={`settings-category-panel-${activeCategory}`}
+          role="region"
+          aria-labelledby={`settings-category-${activeCategory}`}
+          className="min-w-0"
+        >
+          {activeCategory === "device" && (
+            <section
+              className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-5`}
+            >
+              <div>
+                <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-50">
+                  {t("settings.current_device_heading")}
+                </h3>
+                <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
+                  {t("settings.current_device_description")}
+                </p>
+              </div>
+
+              {slicerOptionsError && (
+                <StatusBanner
+                  role="alert"
+                  tone="error"
+                  action={(
+                    <Button
+                      label={t("widget_retry")}
+                      variant="secondary"
+                      size="sm"
+                      loading={slicersLoading}
+                      onClick={() => { void loadSlicerOptions(); }}
+                    />
                   )}
                 >
-                  <button
-                    type="button"
-                    aria-pressed={isSelected}
-                    data-testid={`machine-adapter-card-${printer.id}`}
-                    onClick={() => handlePrinterChange(printer.id)}
-                    disabled={printersLoading}
-                    className="grid w-full min-h-[7.25rem] grid-cols-[5.5rem_minmax(0,1fr)] gap-3 text-left outline-none transition-opacity disabled:cursor-not-allowed disabled:opacity-45"
+                  {slicerOptionsError}
+                </StatusBanner>
+              )}
+              {printerOptionsError && (
+                <StatusBanner
+                  role="alert"
+                  tone="error"
+                  action={(
+                    <Button
+                      label={t("widget_retry")}
+                      variant="secondary"
+                      size="sm"
+                      loading={printersLoading}
+                      onClick={() => { void loadPrinterOptions(); }}
+                    />
+                  )}
+                >
+                  {printerOptionsError}
+                </StatusBanner>
+              )}
+
+              <div
+                data-testid="machine-adapter-summary"
+                className="grid gap-4 rounded-[24px] border border-slate-200/80 bg-[var(--surface-panel-strong)] p-4 shadow-[var(--shadow-control)] dark:border-slate-700/80 md:grid-cols-[minmax(0,1fr)_auto] md:items-center"
+              >
+                <div className="flex min-w-0 items-center gap-4">
+                  <div
+                    className={`flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden ${
+                      selectedPrinterThumbnailUrl
+                        ? "rounded-none bg-transparent"
+                        : "rounded-[20px] border border-slate-200/75 bg-slate-100/80 dark:border-slate-700/75 dark:bg-slate-800/70"
+                    }`}
                   >
-                    <span className="flex h-24 w-[5.5rem] items-center justify-center overflow-hidden rounded-md border border-slate-200/70 bg-slate-100/80 dark:border-slate-700/70 dark:bg-slate-800/70">
-                      {thumbnailUrl ? (
-                        <img
-                          src={thumbnailUrl}
-                          alt={printer.display_name}
-                          className="h-full w-full object-contain p-1.5"
-                          loading="lazy"
-                        />
-                      ) : (
-                        <span className="text-lg font-semibold text-slate-400 dark:text-slate-500">
-                          {getMachinePlaceholderLabel(printer)}
-                        </span>
+                    {selectedPrinterThumbnailUrl ? (
+                      <img
+                        src={selectedPrinterThumbnailUrl}
+                        alt={selectedPrinter?.display_name ?? ""}
+                        className="h-full w-full object-contain p-0"
+                        loading="lazy"
+                      />
+                    ) : (
+                      <span className="text-sm font-semibold text-slate-400 dark:text-slate-500">
+                        {printersLoading
+                          ? t("settings.machine_options_loading")
+                          : t("settings.machine_thumbnail_fallback")}
+                      </span>
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex min-w-0 items-center gap-2 text-xs font-medium text-slate-500 dark:text-slate-400">
+                      {selectedSlicer && (
+                        <SlicerLogo slicerId={selectedSlicer.id} />
                       )}
-                    </span>
-                    <span className="flex min-w-0 flex-col gap-1.5">
-                      <span className="truncate text-sm font-semibold text-slate-900 dark:text-slate-50">
-                        {printer.display_name}
+                      <span className="truncate">
+                        {selectedSlicer?.display_name ??
+                          resolvedSlicerSoftware ??
+                          t("settings.machine_options_loading")}
                       </span>
-                      <span className="text-xs text-slate-500 dark:text-slate-400">
-                        {printer.brand}
-                      </span>
-                      <span className="text-xs text-slate-500 dark:text-slate-400">
-                        {t("settings.bed_size")}: {printer.bed_width}&times;{printer.bed_depth} {t("common_unit_mm")}
-                      </span>
-                      <span className="text-xs text-slate-500 dark:text-slate-400">
-                        {t("settings.nozzle_size")}: {nozzleOptions.map((size) => `${size} ${t("common_unit_mm")}`).join(", ")}
-                      </span>
-                    </span>
-                  </button>
-                  <div className="mt-3 flex flex-wrap gap-1.5 border-t border-slate-200/70 pt-3 dark:border-slate-700/70">
-                    {nozzleOptions.map((size) => {
-                      const isNozzleSelected = isSelected && size === resolvedNozzleSize;
-                      return (
-                        <button
-                          key={size}
-                          type="button"
-                          aria-pressed={isNozzleSelected}
-                          aria-label={`${printer.display_name} ${size} ${t("common_unit_mm")}`}
-                          data-testid={`machine-adapter-nozzle-${printer.id}-${size.replace(/\./g, "_")}`}
-                          onClick={() => handlePrinterNozzleChange(printer, size)}
-                          disabled={printersLoading}
-                          className={cx(
-                            "min-h-8 rounded-md border px-2.5 text-xs font-medium transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-45",
-                            isNozzleSelected
-                              ? "border-blue-400 bg-blue-50 text-blue-700 dark:border-blue-300 dark:bg-blue-500/15 dark:text-blue-200"
-                              : "border-slate-200/80 bg-slate-50/80 text-slate-600 hover:border-blue-300 hover:text-blue-600 dark:border-slate-700/80 dark:bg-slate-800/72 dark:text-slate-300 dark:hover:border-blue-400 dark:hover:text-blue-200",
-                          )}
-                        >
-                          {size} {t("common_unit_mm")}
-                        </button>
-                      );
-                    })}
+                    </div>
+                    <h4 className="mt-1 truncate text-base font-semibold text-slate-900 dark:text-slate-50">
+                      {selectedPrinter?.display_name ??
+                        resolvedPrinterModel ??
+                        t("settings.machine_options_loading")}
+                    </h4>
+                    {selectedPrinter && (
+                      <div className="mt-2 flex flex-wrap gap-2 text-xs text-slate-600 dark:text-slate-300">
+                        <span className="rounded-full border border-slate-200/80 px-2.5 py-1 dark:border-slate-700/80">
+                          {t("settings.bed_size")}: {selectedPrinter.bed_width}
+                          &times;{selectedPrinter.bed_depth} {t("common_unit_mm")}
+                        </span>
+                        <span className="rounded-full border border-slate-200/80 px-2.5 py-1 dark:border-slate-700/80">
+                          {t("settings.nozzle_size")}: {resolvedNozzleSize}{" "}
+                          {t("common_unit_mm")}
+                        </span>
+                      </div>
+                    )}
+                    {selectedDeviceProfile && (
+                      <p className="mt-2 truncate text-xs text-slate-500 dark:text-slate-400">
+                        {t("settings.device_profile")}:{" "}
+                        {selectedDeviceProfile.source_profile_name}
+                      </p>
+                    )}
                   </div>
                 </div>
-              );
-            })}
-          </div>
-        </div>
-        {selectedPrinter && (
-          <div
-            data-testid="machine-adapter-summary"
-            className="flex min-w-0 items-center gap-3 text-xs text-slate-500 dark:text-slate-400"
-          >
-            {selectedPrinterThumbnailUrl && (
-              <img
-                src={selectedPrinterThumbnailUrl}
-                alt=""
-                className="h-16 w-16 shrink-0 object-contain"
-                loading="lazy"
-              />
-            )}
-            <div className="flex min-w-0 flex-col gap-1">
-              <div className="flex flex-wrap items-center gap-3">
-                <span className="font-medium text-slate-700 dark:text-slate-200">
-                  {selectedPrinter.display_name}
-                </span>
-                <span>
-                  {t("settings.bed_size")}: {selectedPrinter.bed_width}&times;{selectedPrinter.bed_depth} {t("common_unit_mm")}
-                </span>
-                <span>
-                  {t("settings.nozzle_size")}: {resolvedNozzleSize} {t("common_unit_mm")}
-                </span>
+                <Button
+                  label={t("settings.change_device")}
+                  onClick={() => setMachineDialogOpen(true)}
+                  disabled={
+                    printersLoading ||
+                    slicersLoading ||
+                    filteredPrinters.length === 0
+                  }
+                  className="w-full md:w-auto"
+                />
               </div>
-              {selectedDeviceProfile && (
-                <span className="truncate">
-                  {t("settings.device_profile")}: {selectedDeviceProfile.source_profile_name}
-                </span>
+
+              {supportsLayerConfigRanges(resolvedSlicerSoftware) && (
+                <div
+                  data-testid="base-layer-height-modifier-row"
+                  className="flex items-center justify-between gap-3 border-t border-slate-200/60 pt-5 dark:border-slate-700/60"
+                >
+                  <span className="text-sm font-medium text-slate-900 dark:text-slate-50">
+                    {t("settings.base_layer_height_modifier")}
+                  </span>
+                  <WikiTooltip
+                    title={t("settings.base_layer_height_modifier")}
+                    description={t("settings.base_layer_height_modifier_desc")}
+                    placement="left"
+                  >
+                    <Switch
+                      checked={enableBaseLayerHeightModifier}
+                      onChange={(enabled) => {
+                        setEnableBaseLayerHeightModifier(enabled);
+                        void syncToBackend();
+                      }}
+                      ariaLabel={t("settings.base_layer_height_modifier")}
+                    />
+                  </WikiTooltip>
+                </div>
               )}
-            </div>
-          </div>
-        )}
-        <div className="flex flex-col gap-3 border-t border-slate-200/60 pt-4 dark:border-slate-700/60">
-          <div>
-            <label
-              htmlFor="custom-slicer-path"
-              className="text-sm font-medium text-slate-900 dark:text-slate-50"
-            >
-              {t("settings.custom_slicer_path")}
-            </label>
-            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-              {t("settings.custom_slicer_path_help")}
-            </p>
-          </div>
-          <div className={`grid gap-3 ${workspace.isCompact ? "" : "lg:grid-cols-[minmax(0,1fr)_auto_auto]"}`}>
-            <input
-              id="custom-slicer-path"
-              value={customSlicerPathInput}
-              onChange={(event) => setCustomSlicerPathInput(event.target.value)}
-              placeholder={t("settings.custom_slicer_path_placeholder")}
-              className={workstationInputClass}
-            />
-            <Button
-              label={t("settings.custom_slicer_save")}
-              onClick={handleSaveCustomSlicerPath}
-              loading={isValidatingCustomPath}
-              disabled={!customSlicerPathInput.trim()}
-              className={workspace.isCompact ? "w-full" : ""}
-            />
-            <Button
-              label={t("settings.custom_slicer_clear")}
-              onClick={handleClearCustomSlicerPath}
-              variant="secondary"
-              disabled={!customSlicerPath && !customSlicerPathInput}
-              className={workspace.isCompact ? "w-full" : ""}
-            />
-          </div>
-          {customPathMessage && (
-            <p className="text-xs text-emerald-600 dark:text-emerald-400">
-              {customPathMessage}
-            </p>
+
+              <div className="border-t border-slate-200/60 pt-2 dark:border-slate-700/60">
+                <button
+                  type="button"
+                  aria-expanded={manualSetupOpen}
+                  aria-controls="settings-manual-slicer-setup"
+                  onClick={() => setManualSetupOpen((open) => !open)}
+                  className="flex min-h-11 w-full items-center justify-between gap-4 rounded-[18px] px-2 py-3 text-left outline-none transition-colors hover:bg-slate-100/70 focus:ring-4 focus:ring-[var(--focus-ring)] dark:hover:bg-slate-800/65"
+                >
+                  <span>
+                    <span className="block text-sm font-semibold text-slate-900 dark:text-slate-50">
+                      {t("settings.manual_setup_heading")}
+                    </span>
+                    <span className="mt-1 block text-xs leading-5 text-slate-500 dark:text-slate-400">
+                      {t("settings.manual_setup_description")}
+                    </span>
+                  </span>
+                  <span className="shrink-0 text-xs font-medium text-blue-600 dark:text-blue-300">
+                    {t(manualSetupOpen ? "widget_collapse" : "widget_expand")}
+                  </span>
+                </button>
+
+                {manualSetupOpen && (
+                  <div
+                    id="settings-manual-slicer-setup"
+                    className="mt-2 flex flex-col gap-3 rounded-[22px] border border-slate-200/75 bg-slate-100/55 p-4 dark:border-slate-700/75 dark:bg-slate-900/45"
+                  >
+                    <div>
+                      <label
+                        htmlFor="custom-slicer-path"
+                        className="text-sm font-medium text-slate-900 dark:text-slate-50"
+                      >
+                        {t("settings.custom_slicer_path")}
+                      </label>
+                      <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                        {t("settings.custom_slicer_path_help")}
+                      </p>
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto]">
+                      <input
+                        id="custom-slicer-path"
+                        value={customSlicerPathInput}
+                        onChange={(event) =>
+                          setCustomSlicerPathInput(event.target.value)
+                        }
+                        placeholder={t("settings.custom_slicer_path_placeholder")}
+                        className={workstationInputClass}
+                      />
+                      <Button
+                        label={t("settings.custom_slicer_save")}
+                        onClick={handleSaveCustomSlicerPath}
+                        loading={isValidatingCustomPath}
+                        disabled={!customSlicerPathInput.trim()}
+                      />
+                      <Button
+                        label={t("settings.custom_slicer_clear")}
+                        onClick={handleClearCustomSlicerPath}
+                        variant="secondary"
+                        disabled={!customSlicerPath && !customSlicerPathInput}
+                      />
+                    </div>
+                    {customPathMessage && (
+                      <p className="text-xs text-emerald-600 dark:text-emerald-400">
+                        {customPathMessage}
+                      </p>
+                    )}
+                    {customPathError && (
+                      <p className="text-xs text-red-500 dark:text-red-400">
+                        {customPathError}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            </section>
           )}
-          {customPathError && (
-            <p className="text-xs text-red-500 dark:text-red-400">
-              {customPathError}
-            </p>
+
+          {activeCategory === "general" && (
+            <section
+              className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-5`}
+            >
+              <div
+                data-testid="settings-completion-notifications-section"
+                className="flex flex-col gap-4"
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
+                        {t("settings.completion_notifications_heading")}
+                      </h3>
+                      <HelpDot
+                        title={t("settings.completion_notifications_heading")}
+                        description={t("settings.completion_notifications_hint")}
+                      />
+                    </div>
+                    <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
+                      {t("settings.completion_notifications_description")}
+                    </p>
+                  </div>
+                  <Switch
+                    checked={enableCompletionNotifications}
+                    onChange={(enabled) => {
+                      void handleCompletionNotificationsChange(enabled);
+                    }}
+                    disabled={
+                      notificationPermissionLoading ||
+                      notificationPermission === "unsupported"
+                    }
+                    ariaLabel={t("settings.completion_notifications_heading")}
+                  />
+                </div>
+                <StatusBanner
+                  tone={completionNotificationStatus.tone}
+                  role={
+                    completionNotificationStatus.tone === "error"
+                      ? "alert"
+                      : undefined
+                  }
+                >
+                  {t(completionNotificationStatus.translationKey)}
+                </StatusBanner>
+              </div>
+
+              <div className="flex items-start justify-between gap-4 border-t border-slate-200/60 pt-5 dark:border-slate-700/60">
+                <div className="min-w-0">
+                  <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
+                    {t("settings.witty_loading")}
+                  </h3>
+                  <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
+                    {t("settings.witty_loading_desc")}
+                  </p>
+                </div>
+                  <Switch
+                    checked={enableWittyLoading}
+                    onChange={setEnableWittyLoading}
+                    ariaLabel={t("settings.witty_loading")}
+                  />
+              </div>
+            </section>
+          )}
+
+          {activeCategory === "conversion" && (
+            <section
+              data-testid="settings-advanced-section"
+              className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-5`}
+            >
+              <div
+                data-testid="settings-solver-cache-density-section"
+                className="flex flex-col gap-4"
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
+                      {t("settings.solver_cache_density_heading")}
+                    </h3>
+                    <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
+                      {t("settings.solver_cache_density_description")}
+                    </p>
+                  </div>
+                  <WikiTooltip
+                    title={t("settings.solver_cache_density_heading")}
+                    description={t("settings.solver_cache_density_tip")}
+                    placement="left"
+                  >
+                    <Switch
+                      checked={enableSolverCacheGridSelection}
+                      onChange={setEnableSolverCacheGridSelection}
+                      ariaLabel={t("settings.solver_cache_density_heading")}
+                    />
+                  </WikiTooltip>
+                </div>
+                {enableSolverCacheGridSelection ? (
+                  <div
+                    data-testid="settings-solver-cache-density-dropdown-row"
+                    className="border-t border-slate-200/60 pt-4 dark:border-slate-700/60"
+                  >
+                    <Dropdown
+                      label={t("settings.solver_cache_density_select_label")}
+                      value={String(solverCacheGridResolution)}
+                      onChange={(value) =>
+                        setSolverCacheGridResolution(
+                          Number(value) as SolverCacheGridResolution,
+                        )
+                      }
+                      options={SOLVER_CACHE_GRID_RESOLUTIONS.map((grid) => ({
+                        value: String(grid),
+                        label: t(`settings.solver_cache_density_option_${grid}`),
+                      }))}
+                    />
+                    <StatusBanner tone="info">
+                      {t("settings.solver_cache_density_tip")}
+                    </StatusBanner>
+                  </div>
+                ) : (
+                  <p className="text-xs leading-5 text-slate-500 dark:text-slate-400">
+                    {t("settings.solver_cache_density_default_hint")}
+                  </p>
+                )}
+              </div>
+
+              <div
+                data-testid="settings-material-delta-e00-tolerance-section"
+                className="flex flex-col gap-4 border-t border-slate-200/60 pt-5 dark:border-slate-700/60"
+              >
+                <div>
+                  <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
+                    {t("settings.material_delta_e00_tolerance_heading")}
+                  </h3>
+                  <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
+                    {t("settings.material_delta_e00_tolerance_description")}
+                  </p>
+                </div>
+                <Slider
+                  label={t("settings.material_delta_e00_tolerance_label")}
+                  tooltip={t("settings.material_delta_e00_tolerance_hint")}
+                  value={materialDeltaE00Tolerance}
+                  min={MATERIAL_DELTA_E00_TOLERANCE_MIN}
+                  max={MATERIAL_DELTA_E00_TOLERANCE_MAX}
+                  step={MATERIAL_DELTA_E00_TOLERANCE_STEP}
+                  displayDecimals={1}
+                  minInputWidthCh={4}
+                  onChange={setMaterialDeltaE00Tolerance}
+                />
+              </div>
+
+              <div
+                data-testid="settings-svg-raster-density-section"
+                className="flex flex-col gap-4 border-t border-slate-200/60 pt-5 dark:border-slate-700/60"
+              >
+                <div>
+                  <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
+                    {t("settings.svg_pixels_per_mm_heading")}
+                  </h3>
+                  <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
+                    {t("settings.svg_pixels_per_mm_description")}
+                  </p>
+                </div>
+                <div className="grid gap-3 min-[960px]:grid-cols-[minmax(0,1fr)_max-content]">
+                  <Slider
+                    label={t("settings.svg_pixels_per_mm_label")}
+                    tooltip={t("settings.svg_pixels_per_mm_tip")}
+                    value={svgPixelsPerMm}
+                    min={SVG_PIXELS_PER_MM_MIN}
+                    max={SVG_PIXELS_PER_MM_MAX}
+                    step={SVG_PIXELS_PER_MM_STEP}
+                    displayDecimals={1}
+                    minInputWidthCh={4}
+                    unit={t("common_unit_px_per_mm")}
+                    onChange={setSvgPixelsPerMm}
+                  />
+                  <Button
+                    label={t("settings.svg_pixels_per_mm_reset")}
+                    onClick={resetSvgPixelsPerMm}
+                    variant="secondary"
+                    disabled={svgPixelsPerMm === SVG_PIXELS_PER_MM_DEFAULT}
+                    className="w-full min-[960px]:w-auto min-[960px]:min-w-max min-[960px]:self-end"
+                  />
+                </div>
+                <StatusBanner tone="info">
+                  {t("settings.svg_pixels_per_mm_default_hint")}
+                </StatusBanner>
+              </div>
+
+              <div
+                data-testid="settings-auto-replace-gradient-section"
+                className="flex flex-col gap-4 border-t border-slate-200/60 pt-5 dark:border-slate-700/60"
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
+                      {t("settings.auto_replace_gradient_heading")}
+                    </h3>
+                    <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
+                      {t("settings.auto_replace_gradient_description")}
+                    </p>
+                  </div>
+                  <WikiTooltip
+                    title={t("settings.auto_replace_gradient_heading")}
+                    description={t("settings.auto_replace_gradient_tip")}
+                    placement="left"
+                  >
+                    <Switch
+                      checked={autoReplaceGradientBanding}
+                      onChange={setAutoReplaceGradientBanding}
+                      ariaLabel={t("settings.auto_replace_gradient_heading")}
+                    />
+                  </WikiTooltip>
+                </div>
+              </div>
+            </section>
+          )}
+
+          {activeCategory === "maintenance" && (
+            <section
+              className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-5`}
+            >
+              <div className="flex flex-col gap-4">
+                <div>
+                  <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
+                    {t("settings.cache")}
+                  </h3>
+                  <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">
+                    {t("settings.cache_summary")}
+                  </p>
+                </div>
+                <div className="flex flex-col gap-3 rounded-[22px] border border-slate-200/75 bg-slate-100/55 p-4 dark:border-slate-700/75 dark:bg-slate-900/45 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-sm text-slate-600 dark:text-slate-300">
+                    {t("settings.clear_cache_desc")}
+                  </p>
+                  <Button
+                    label={t("settings.clear_cache")}
+                    onClick={handleClearCache}
+                    loading={clearing}
+                    variant="secondary"
+                    className="w-full sm:w-auto"
+                  />
+                </div>
+                {cacheResult && (
+                  <StatusBanner
+                    tone={
+                      cacheResult === t("settings.cache_clear_failed")
+                        ? "error"
+                        : "success"
+                    }
+                  >
+                    {cacheResult}
+                  </StatusBanner>
+                )}
+              </div>
+            </section>
           )}
         </div>
-        {supportsLayerConfigRanges(resolvedSlicerSoftware) && (
-          <div
-            data-testid="base-layer-height-modifier-row"
-            className="flex items-center justify-between gap-3 border-t border-slate-200/60 pt-4 dark:border-slate-700/60"
-          >
-            <span className="text-sm font-medium text-slate-900 dark:text-slate-50">
-              {t("settings.base_layer_height_modifier")}
-            </span>
-            <WikiTooltip
-              title={t("settings.base_layer_height_modifier")}
-              description={t("settings.base_layer_height_modifier_desc")}
-              placement="left"
-            >
-              <Switch
-                checked={enableBaseLayerHeightModifier}
-                onChange={(enabled) => {
-                  setEnableBaseLayerHeightModifier(enabled);
-                  void syncToBackend();
-                }}
-                ariaLabel={t("settings.base_layer_height_modifier")}
-              />
-            </WikiTooltip>
-          </div>
-        )}
-      </section>
+      </div>
 
-      <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-4`}>
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">
-            {t("settings.maintenance")}
-          </p>
-          <h4 className="mt-1 text-base font-semibold text-slate-900 dark:text-slate-50">
-            {t("settings.cache")}
-          </h4>
-        </div>
-        <p className="text-sm text-slate-500 dark:text-slate-400">
-          {t("settings.cache_summary")}
-        </p>
-        <StatusBanner tone="info">{t("settings.clear_cache_desc")}</StatusBanner>
-        <div className="flex items-center gap-3">
-          <Button
-            label={t("settings.clear_cache")}
-            onClick={handleClearCache}
-            loading={clearing}
-            variant="secondary"
-          />
-        </div>
-        {cacheResult && (
-          <StatusBanner tone={cacheResult === t("settings.cache_clear_failed") ? "error" : "success"}>
-            {cacheResult}
-          </StatusBanner>
-        )}
-      </section>
-
-      <section
-        data-testid="settings-advanced-section"
-        className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-5`}
-      >
-        <div>
-          <h4 className="text-base font-semibold text-slate-900 dark:text-slate-50">
-            {t("settings.advanced")}
-          </h4>
-        </div>
-
-        <div
-          data-testid="settings-completion-notifications-section"
-          className="flex flex-col gap-4"
-        >
-          <div>
-            <h5 className="text-sm font-semibold text-slate-900 dark:text-slate-50">
-              {t("settings.completion_notifications_heading")}
-            </h5>
-            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              {t("settings.completion_notifications_description")}
-            </p>
-          </div>
-          <div className="flex items-center justify-between gap-3">
-            <span className="flex items-center gap-1.5 text-sm font-medium text-slate-900 dark:text-slate-50">
-              {t("settings.completion_notifications_enable_label")}
-              <HelpDot
-                title={t("settings.completion_notifications_enable_label")}
-                description={t("settings.completion_notifications_hint")}
-              />
-            </span>
-            <Switch
-              checked={enableCompletionNotifications}
-              onChange={(enabled) => {
-                void handleCompletionNotificationsChange(enabled);
-              }}
-              disabled={
-                notificationPermissionLoading ||
-                notificationPermission === "unsupported"
-              }
-              ariaLabel={t(
-                "settings.completion_notifications_enable_label",
-              )}
-            />
-          </div>
-          <StatusBanner
-            tone={completionNotificationStatus.tone}
-            role={
-              completionNotificationStatus.tone === "error"
-                ? "alert"
-                : undefined
-            }
-          >
-            {t(completionNotificationStatus.translationKey)}
-          </StatusBanner>
-        </div>
-
-        <div
-          data-testid="settings-solver-cache-density-section"
-          className="flex flex-col gap-4 border-t border-slate-200/60 pt-5 dark:border-slate-700/60"
-        >
-          <div>
-            <h5 className="text-sm font-semibold text-slate-900 dark:text-slate-50">
-              {t("settings.solver_cache_density_heading")}
-            </h5>
-            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              {t("settings.solver_cache_density_description")}
-            </p>
-          </div>
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-sm font-medium text-slate-900 dark:text-slate-50">
-              {t("settings.solver_cache_density_enable_label")}
-            </span>
-            <WikiTooltip
-              title={t("settings.solver_cache_density_enable_label")}
-              description={t("settings.solver_cache_density_tip")}
-              placement="left"
-            >
-              <Switch
-                checked={enableSolverCacheGridSelection}
-                onChange={setEnableSolverCacheGridSelection}
-                ariaLabel={t("settings.solver_cache_density_enable_label")}
-              />
-            </WikiTooltip>
-          </div>
-          {enableSolverCacheGridSelection ? (
-            <div
-              data-testid="settings-solver-cache-density-dropdown-row"
-              className="border-t border-slate-200/60 pt-4 dark:border-slate-700/60"
-            >
-              <Dropdown
-                label={t("settings.solver_cache_density_select_label")}
-                value={String(solverCacheGridResolution)}
-                onChange={(value) =>
-                  setSolverCacheGridResolution(
-                    Number(value) as SolverCacheGridResolution,
-                  )
-                }
-                options={SOLVER_CACHE_GRID_RESOLUTIONS.map((grid) => ({
-                  value: String(grid),
-                  label: t(`settings.solver_cache_density_option_${grid}`),
-                }))}
-              />
-              <StatusBanner tone="info">
-                {t("settings.solver_cache_density_tip")}
-              </StatusBanner>
-            </div>
-          ) : (
-            <StatusBanner tone="info">
-              {t("settings.solver_cache_density_default_hint")}
-            </StatusBanner>
-          )}
-        </div>
-
-        <div
-          data-testid="settings-material-delta-e00-tolerance-section"
-          className="flex flex-col gap-4 border-t border-slate-200/60 pt-5 dark:border-slate-700/60"
-        >
-          <div>
-            <h5 className="text-sm font-semibold text-slate-900 dark:text-slate-50">
-              {t("settings.material_delta_e00_tolerance_heading")}
-            </h5>
-            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              {t("settings.material_delta_e00_tolerance_description")}
-            </p>
-          </div>
-          <Slider
-            label={t("settings.material_delta_e00_tolerance_label")}
-            tooltip={t("settings.material_delta_e00_tolerance_hint")}
-            value={materialDeltaE00Tolerance}
-            min={MATERIAL_DELTA_E00_TOLERANCE_MIN}
-            max={MATERIAL_DELTA_E00_TOLERANCE_MAX}
-            step={MATERIAL_DELTA_E00_TOLERANCE_STEP}
-            displayDecimals={1}
-            minInputWidthCh={4}
-            onChange={setMaterialDeltaE00Tolerance}
-          />
-        </div>
-
-        <div
-          data-testid="settings-svg-raster-density-section"
-          className="flex flex-col gap-4 border-t border-slate-200/60 pt-5 dark:border-slate-700/60"
-        >
-          <div>
-            <h5 className="text-sm font-semibold text-slate-900 dark:text-slate-50">
-              {t("settings.svg_pixels_per_mm_heading")}
-            </h5>
-            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              {t("settings.svg_pixels_per_mm_description")}
-            </p>
-          </div>
-          <div className="grid gap-3 min-[960px]:grid-cols-[minmax(0,1fr)_max-content]">
-            <Slider
-              label={t("settings.svg_pixels_per_mm_label")}
-              tooltip={t("settings.svg_pixels_per_mm_tip")}
-              value={svgPixelsPerMm}
-              min={SVG_PIXELS_PER_MM_MIN}
-              max={SVG_PIXELS_PER_MM_MAX}
-              step={SVG_PIXELS_PER_MM_STEP}
-              displayDecimals={1}
-              minInputWidthCh={4}
-              unit={t("common_unit_px_per_mm")}
-              onChange={setSvgPixelsPerMm}
-            />
-            <Button
-              label={t("settings.svg_pixels_per_mm_reset")}
-              onClick={resetSvgPixelsPerMm}
-              variant="secondary"
-              disabled={svgPixelsPerMm === SVG_PIXELS_PER_MM_DEFAULT}
-              className="w-full min-[960px]:w-auto min-[960px]:min-w-max min-[960px]:self-end"
-            />
-          </div>
-          <StatusBanner tone="info">
-            {t("settings.svg_pixels_per_mm_default_hint")}
-          </StatusBanner>
-        </div>
-
-        <div
-          data-testid="settings-auto-replace-gradient-section"
-          className="flex flex-col gap-4 border-t border-slate-200/60 pt-5 dark:border-slate-700/60"
-        >
-          <div>
-            <h5 className="text-sm font-semibold text-slate-900 dark:text-slate-50">
-              {t("settings.auto_replace_gradient_heading")}
-            </h5>
-            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              {t("settings.auto_replace_gradient_description")}
-            </p>
-          </div>
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-sm font-medium text-slate-900 dark:text-slate-50">
-              {t("settings.auto_replace_gradient_label")}
-            </span>
-            <WikiTooltip
-              title={t("settings.auto_replace_gradient_label")}
-              description={t("settings.auto_replace_gradient_tip")}
-              placement="left"
-            >
-              <Switch
-                checked={autoReplaceGradientBanding}
-                onChange={setAutoReplaceGradientBanding}
-                ariaLabel={t("settings.auto_replace_gradient_label")}
-              />
-            </WikiTooltip>
-          </div>
-          {!autoReplaceGradientBanding && (
-            <StatusBanner tone="info">
-              {t("settings.auto_replace_gradient_default_hint")}
-            </StatusBanner>
-          )}
-        </div>
-      </section>
-
-      <section className={`${resolveSectionCardClass(workspace.mode)} flex flex-col gap-4`}>
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">
-            {t("settings.maintenance")}
-          </p>
-          <h4 className="mt-1 text-base font-semibold text-slate-900 dark:text-slate-50">
-            {t("settings.witty_loading")}
-          </h4>
-        </div>
-        <p className="text-sm text-slate-500 dark:text-slate-400">
-          {t("settings.witty_loading_desc")}
-        </p>
-        <div className="flex items-center gap-3">
-          <Switch
-            checked={enableWittyLoading}
-            onChange={setEnableWittyLoading}
-            ariaLabel={t("settings.witty_loading")}
-          />
-        </div>
-      </section>
+      <MachineSelectionDialog
+        open={machineDialogOpen}
+        printers={filteredPrinters}
+        slicers={slicers}
+        printersLoading={printersLoading}
+        slicersLoading={slicersLoading}
+        slicerSoftware={resolvedSlicerSoftware}
+        printerModel={resolvedPrinterModel}
+        nozzleSize={resolvedNozzleSize}
+        onSlicerChange={handleSlicerChange}
+        onPrinterChange={handlePrinterChange}
+        onPrinterNozzleChange={handlePrinterNozzleChange}
+        onClose={() => setMachineDialogOpen(false)}
+      />
 
     </motion.aside>
   );

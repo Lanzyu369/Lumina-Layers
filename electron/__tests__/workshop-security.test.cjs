@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const {
   createWorkshopSessionToken,
   isAllowedWorkshopDownload,
+  isAllowedWorkshopIpcSender,
   isAllowedWorkshopPermission,
   isAllowedWorkshopPopup,
   isAllowedWorkshopRequest,
@@ -11,6 +12,7 @@ const {
   resolveWorkshopRuntimeRequest,
   shouldBlockWorkshopNavigation,
   shouldBlockWorkshopRedirect,
+  shouldRetryFrontendLoad,
 } = require("../workshop-security.cjs");
 
 const HOST_URL = "http://127.0.0.1:4174/";
@@ -87,6 +89,16 @@ describe("Workshop desktop runtime security", () => {
     );
     assert.equal(
       isAllowedWorkshopRequest({
+        initiator: null,
+        frameUrl: "about:blank",
+        parentFrameUrl: HOST_URL,
+        resourceType: "subFrame",
+        url: MODULE_URL,
+      }),
+      true,
+    );
+    assert.equal(
+      isAllowedWorkshopRequest({
         initiator: "null",
         frameUrl: MODULE_URL,
         resourceType: "subFrame",
@@ -100,6 +112,30 @@ describe("Workshop desktop runtime security", () => {
         frameUrl: MODULE_URL,
         resourceType: "subFrame",
         url: "lumina-workshop://other.module/1.0.0/ui/index.html",
+      }),
+      false,
+    );
+  });
+
+  it("retries only a failed top-level host frontend load", () => {
+    assert.equal(
+      shouldRetryFrontendLoad({
+        isMainFrame: true,
+        validatedUrl: HOST_URL,
+      }),
+      true,
+    );
+    assert.equal(
+      shouldRetryFrontendLoad({
+        isMainFrame: false,
+        validatedUrl: MODULE_URL,
+      }),
+      false,
+    );
+    assert.equal(
+      shouldRetryFrontendLoad({
+        isMainFrame: true,
+        validatedUrl: MODULE_URL,
       }),
       false,
     );
@@ -265,6 +301,16 @@ describe("Workshop desktop runtime security", () => {
         frameUrl: HOST_URL,
         url: "blob:null/download",
       }),
+      false,
+    );
+  });
+
+  it("allows Workshop IPC only from the trusted host frame", () => {
+    assert.equal(isAllowedWorkshopIpcSender(HOST_URL), true);
+    assert.equal(isAllowedWorkshopIpcSender(MODULE_URL), false);
+    assert.equal(isAllowedWorkshopIpcSender("null"), false);
+    assert.equal(
+      isAllowedWorkshopIpcSender("https://example.com/"),
       false,
     );
   });

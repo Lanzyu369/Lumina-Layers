@@ -78,11 +78,13 @@ class MockNotification {
 }
 
 function renderPanel() {
-  return render(
+  const result = render(
     <I18nProvider>
       <SettingsPanel />
     </I18nProvider>,
   );
+  fireEvent.click(screen.getByTestId("settings-category-general"));
+  return result;
 }
 
 describe("SettingsPanel completion notifications", () => {
