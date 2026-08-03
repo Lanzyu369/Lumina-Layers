@@ -3069,10 +3069,13 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       };
       img.src = previewUrl;
 
-      const shouldOpenCrop = currentState.enableCrop;
-      const modelingMode = currentState.modeling_mode === ModelingModeEnum.VECTOR && !isSvgImageFile(file)
-        ? ModelingModeEnum.HIGH_FIDELITY
-        : currentState.modeling_mode;
+      const isSvg = isSvgImageFile(file);
+      const shouldOpenCrop = currentState.enableCrop && !isSvg;
+      const modelingMode = isSvg
+        ? ModelingModeEnum.VECTOR
+        : currentState.modeling_mode === ModelingModeEnum.VECTOR
+          ? ModelingModeEnum.HIGH_FIDELITY
+          : currentState.modeling_mode;
       set({
         imageFile: file,
         imagePreviewUrl: previewUrl,

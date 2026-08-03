@@ -319,20 +319,71 @@ describe('矢量化 SVG 导入', () => {
     expect(finalState.previewGlbUrl).toBeNull();
   });
 
-  it('setImageFile 保持通用入口原有裁剪行为', () => {
-    const svgFile = new File(['<svg/>'], 'manual.svg', {
+  it('setImageFile 替换当前 SVG 时保持裁剪弹窗关闭', () => {
+    const currentSvg = new File(['<svg/>'], 'current.svg', {
+      type: 'image/svg+xml',
+    });
+    const replacementSvg = new File(['<svg/>'], 'replacement.svg', {
       type: 'image/svg+xml',
     });
     useConverterStore.setState({
+      imageFile: currentSvg,
+      imagePreviewUrl: 'blob:current-svg',
+      cropModalOpen: false,
+      enableCrop: true,
+      modeling_mode: ModelingMode.VECTOR,
+    });
+
+    useConverterStore.getState().setImageFile(replacementSvg);
+
+    const state = useConverterStore.getState();
+    expect(state.imageFile).toBe(replacementSvg);
+    expect(state.cropModalOpen).toBe(false);
+    expect(state.modeling_mode).toBe(ModelingMode.VECTOR);
+  });
+
+  it('setImageFile 用 SVG 替换栅格图时关闭裁剪并切换到矢量模式', () => {
+    const currentPng = new File(['png'], 'current.png', {
+      type: 'image/png',
+    });
+    const replacementSvg = new File(['<svg/>'], 'replacement.svg', {
+      type: 'image/svg+xml',
+    });
+    useConverterStore.setState({
+      imageFile: currentPng,
+      imagePreviewUrl: 'blob:current-png',
       cropModalOpen: false,
       enableCrop: true,
       modeling_mode: ModelingMode.HIGH_FIDELITY,
     });
 
-    useConverterStore.getState().setImageFile(svgFile);
+    useConverterStore.getState().setImageFile(replacementSvg);
 
     const state = useConverterStore.getState();
-    expect(state.imageFile).toBe(svgFile);
+    expect(state.imageFile).toBe(replacementSvg);
+    expect(state.cropModalOpen).toBe(false);
+    expect(state.modeling_mode).toBe(ModelingMode.VECTOR);
+  });
+
+  it('setImageFile 用栅格图替换 SVG 时打开裁剪并退出矢量模式', () => {
+    const currentSvg = new File(['<svg/>'], 'current.svg', {
+      type: 'image/svg+xml',
+    });
+    const replacementPng = new File(['png'], 'replacement.png', {
+      type: 'image/png',
+    });
+    useConverterStore.setState({
+      imageFile: currentSvg,
+      imagePreviewUrl: 'blob:current-svg',
+      cropModalOpen: false,
+      enableCrop: true,
+      modeling_mode: ModelingMode.VECTOR,
+    });
+
+    useConverterStore.getState().setImageFile(replacementPng);
+
+    const state = useConverterStore.getState();
+    expect(state.imageFile).toBe(replacementPng);
     expect(state.cropModalOpen).toBe(true);
     expect(state.modeling_mode).toBe(ModelingMode.HIGH_FIDELITY);
   });
