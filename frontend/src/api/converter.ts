@@ -26,6 +26,7 @@ import type {
   RecipePredictResponse,
   RecipeOverrideApplyRequest,
   RecipeOverrideApplyResponse,
+  DynamicMaterialResultResponse,
   RegionRecipeRequest,
   RegionRecipeResponse,
   AutoDetectColorsResponse,
@@ -238,10 +239,14 @@ export async function uploadHeightmap(
 /** 获取 LUT 中所有可用颜色 */
 export async function fetchLutColors(
   lutName: string,
+  signal?: AbortSignal,
 ): Promise<LutColorsResponse> {
   const response = await apiClient.get<LutColorsResponse>(
     `/lut/${encodeURIComponent(lutName)}/colors`,
-    { timeout: 3_600_000 },
+    {
+      timeout: 3_600_000,
+      ...(signal ? { signal } : {}),
+    },
   );
   return response.data;
 }
@@ -702,7 +707,7 @@ export async function predictRecipe(
 }
 
 /** 重置所有颜色替换响应 */
-export interface ResetReplacementsResponse {
+export interface ResetReplacementsResponse extends DynamicMaterialResultResponse {
   status: string;
   message: string;
   preview_url: string;

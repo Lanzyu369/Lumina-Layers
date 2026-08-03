@@ -225,6 +225,21 @@ def _reproduction_suggestion(
             )
     if (
         context.get("source_version") == "material"
+        and context.get("material_dynamic_layer_count_enabled") is True
+    ):
+        minimum = context.get("material_min_layer_count")
+        maximum = context.get("material_max_layer_count")
+        tolerance = context.get("material_delta_e00_tolerance")
+        lines.append(
+            "用户启用了耗材档案动态层数"
+            f"（{minimum}-{maximum} 层，ΔE00 容差 {tolerance}）；"
+            "复现时保持相同基板耗材和范围。"
+            " / Dynamic material layers were enabled "
+            f"({minimum}-{maximum}, ΔE00 tolerance {tolerance}); preserve the "
+            "backing material and range when reproducing."
+        )
+    elif (
+        context.get("source_version") == "material"
         and context.get("material_layer_count") is not None
     ):
         layers = context.get("material_layer_count")
@@ -510,6 +525,10 @@ def generate_index_markdown(
         "lut_name",
         "selected_material_dir_names",
         "material_layer_count",
+        "material_dynamic_layer_count_enabled",
+        "material_min_layer_count",
+        "material_max_layer_count",
+        "material_delta_e00_tolerance",
         "material_layer_height_mm",
         "material_backing_material_dir_name",
     ):
@@ -634,10 +653,23 @@ def generate_summary_text(ticket_id: str, payload: dict[str, Any]) -> str:
 
     material_block = ""
     if source_version == "material":
-        material_block = (
-            f"选中耗材：{', '.join(material_dirs) if material_dirs else '(未选择)'}；"
-            f"层数：{layer_count}；层高：{layer_height}mm；底板：{backing}。"
+        selected_materials = (
+            ", ".join(material_dirs) if material_dirs else "(未选择)"
         )
+        if context.get("material_dynamic_layer_count_enabled") is True:
+            minimum = context.get("material_min_layer_count")
+            maximum = context.get("material_max_layer_count")
+            tolerance = context.get("material_delta_e00_tolerance")
+            material_block = (
+                f"选中耗材：{selected_materials}；动态层数：开启；"
+                f"最小层数：{minimum}；最大层数：{maximum}；"
+                f"ΔE00 容差：{tolerance}；层高：{layer_height}mm；底板：{backing}。"
+            )
+        else:
+            material_block = (
+                f"选中耗材：{selected_materials}；"
+                f"层数：{layer_count}；层高：{layer_height}mm；底板：{backing}。"
+            )
 
     advanced_line = _render_advanced_params_summary_safe(context)
     workshop_line = _format_workshop_diagnostics_summary(context)

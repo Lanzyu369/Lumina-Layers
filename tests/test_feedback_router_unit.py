@@ -126,6 +126,28 @@ def _assert_description_diagnostics_redacted(text: str) -> None:
     assert "/api/files/output-model" in text
 
 
+def test_bug_report_context_preserves_dynamic_material_scalars() -> None:
+    from api.routers.feedback import BugReportContext
+
+    context = dict(_payload()["context"])
+    context.update(
+        {
+            "source_version": "material",
+            "material_dynamic_layer_count_enabled": True,
+            "material_min_layer_count": 5,
+            "material_max_layer_count": 9,
+            "material_delta_e00_tolerance": 0.4,
+        }
+    )
+
+    dumped = BugReportContext.model_validate(context).model_dump()
+
+    assert dumped["material_dynamic_layer_count_enabled"] is True
+    assert dumped["material_min_layer_count"] == 5
+    assert dumped["material_max_layer_count"] == 9
+    assert dumped["material_delta_e00_tolerance"] == pytest.approx(0.4)
+
+
 @pytest.fixture()
 def feedback_root(tmp_path: Path) -> Path:
     root = tmp_path / "feedback_root"

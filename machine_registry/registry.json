@@ -19,7 +19,7 @@
           "bed_width": 256,
           "bed_depth": 256,
           "bed_height": 256,
-          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-a1_cover.png",
+          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-a1_thumbnail.png",
           "nozzles": [
             {
               "device_profile_id": "BambuStudio:bbl:bambu-lab-a1:0.2",
@@ -63,7 +63,7 @@
           "bed_width": 180,
           "bed_depth": 180,
           "bed_height": 180,
-          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-a1-mini_cover.png",
+          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-a1-mini_thumbnail.png",
           "nozzles": [
             {
               "device_profile_id": "BambuStudio:bbl:bambu-lab-a1-mini:0.2",
@@ -107,7 +107,7 @@
           "bed_width": 330,
           "bed_depth": 320,
           "bed_height": 325,
-          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-a2l_cover.png",
+          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-a2l_thumbnail.png",
           "nozzles": [
             {
               "device_profile_id": "BambuStudio:bbl:bambu-lab-a2l:0.2",
@@ -151,7 +151,7 @@
           "bed_width": 330,
           "bed_depth": 320,
           "bed_height": 325,
-          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-h2c_cover.png",
+          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-h2c_thumbnail.png",
           "nozzles": [
             {
               "device_profile_id": "BambuStudio:bbl:bambu-lab-h2c:0.2",
@@ -195,7 +195,7 @@
           "bed_width": 350,
           "bed_depth": 320,
           "bed_height": 325,
-          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-h2d_cover.png",
+          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-h2d_thumbnail.png",
           "nozzles": [
             {
               "device_profile_id": "BambuStudio:bbl:bambu-lab-h2d:0.2",
@@ -239,7 +239,7 @@
           "bed_width": 350,
           "bed_depth": 320,
           "bed_height": 325,
-          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-h2d-pro_cover.png",
+          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-h2d-pro_thumbnail.png",
           "nozzles": [
             {
               "device_profile_id": "BambuStudio:bbl:bambu-lab-h2d-pro:0.2",
@@ -283,7 +283,7 @@
           "bed_width": 340,
           "bed_depth": 320,
           "bed_height": 340,
-          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-h2s_cover.png",
+          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-h2s_thumbnail.png",
           "nozzles": [
             {
               "device_profile_id": "BambuStudio:bbl:bambu-lab-h2s:0.2",
@@ -327,7 +327,7 @@
           "bed_width": 256,
           "bed_depth": 256,
           "bed_height": 250,
-          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-p1p_cover.png",
+          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-p1p_thumbnail.png",
           "nozzles": [
             {
               "device_profile_id": "BambuStudio:bbl:bambu-lab-p1p:0.2",
@@ -371,7 +371,7 @@
           "bed_width": 256,
           "bed_depth": 256,
           "bed_height": 250,
-          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-p1s_cover.png",
+          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-p1s_thumbnail.png",
           "nozzles": [
             {
               "device_profile_id": "BambuStudio:bbl:bambu-lab-p1s:0.2",
@@ -415,7 +415,7 @@
           "bed_width": 256,
           "bed_depth": 256,
           "bed_height": 256,
-          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-p2s_cover.png",
+          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-p2s_thumbnail.png",
           "nozzles": [
             {
               "device_profile_id": "BambuStudio:bbl:bambu-lab-p2s:0.2",
@@ -459,7 +459,7 @@
           "bed_width": 256,
           "bed_depth": 256,
           "bed_height": 250,
-          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-x1_cover.png",
+          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-x1_thumbnail.png",
           "nozzles": [
             {
               "device_profile_id": "BambuStudio:bbl:bambu-lab-x1:0.2",
@@ -503,7 +503,7 @@
           "bed_width": 256,
           "bed_depth": 256,
           "bed_height": 250,
-          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-x1-carbon_cover.png",
+          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-x1-carbon_thumbnail.png",
           "nozzles": [
             {
               "device_profile_id": "BambuStudio:bbl:bambu-lab-x1-carbon:0.2",
@@ -547,7 +547,7 @@
           "bed_width": 256,
           "bed_depth": 256,
           "bed_height": 250,
-          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-x1e_cover.png",
+          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-x1e_thumbnail.png",
           "nozzles": [
             {
               "device_profile_id": "BambuStudio:bbl:bambu-lab-x1e:0.2",
@@ -591,7 +591,7 @@
           "bed_width": 256,
           "bed_depth": 256,
           "bed_height": 261,
-          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-x2d_cover.png",
+          "thumbnail": "slicers/BambuStudio/02.07.00.07/assets/bambu-lab-x2d_thumbnail.png",
           "nozzles": [
             {
               "device_profile_id": "BambuStudio:bbl:bambu-lab-x2d:0.2",
@@ -646,7 +646,7 @@
           "bed_width": 256,
           "bed_depth": 256,
           "bed_height": 256,
-          "thumbnail": "slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-a1_cover.png",
+          "thumbnail": "slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-a1_thumbnail.png",
           "nozzles": [
             {
               "device_profile_id": "OrcaSlicer:bbl:bambu-lab-a1:0.2",
@@ -690,7 +690,7 @@
           "bed_width": 180,
           "bed_depth": 180,
           "bed_height": 180,
-          "thumbnail": "slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-a1-mini_cover.png",
+          "thumbnail": "slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-a1-mini_thumbnail.png",
           "nozzles": [
             {
               "device_profile_id": "OrcaSlicer:bbl:bambu-lab-a1-mini:0.2",
@@ -734,7 +734,7 @@
           "bed_width": 350,
           "bed_depth": 320,
           "bed_height": 325,
-          "thumbnail": "slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-h2d_cover.png",
+          "thumbnail": "slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-h2d_thumbnail.png",
           "nozzles": [
             {
               "device_profile_id": "OrcaSlicer:bbl:bambu-lab-h2d:0.2",
@@ -778,7 +778,7 @@
           "bed_width": 350,
           "bed_depth": 320,
           "bed_height": 325,
-          "thumbnail": "slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-h2d-pro_cover.png",
+          "thumbnail": "slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-h2d-pro_thumbnail.png",
           "nozzles": [
             {
               "device_profile_id": "OrcaSlicer:bbl:bambu-lab-h2d-pro:0.2",
@@ -822,7 +822,7 @@
           "bed_width": 340,
           "bed_depth": 320,
           "bed_height": 340,
-          "thumbnail": "slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-h2s_cover.png",
+          "thumbnail": "slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-h2s_thumbnail.png",
           "nozzles": [
             {
               "device_profile_id": "OrcaSlicer:bbl:bambu-lab-h2s:0.2",
@@ -866,7 +866,7 @@
           "bed_width": 256,
           "bed_depth": 256,
           "bed_height": 250,
-          "thumbnail": "slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-p1p_cover.png",
+          "thumbnail": "slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-p1p_thumbnail.png",
           "nozzles": [
             {
               "device_profile_id": "OrcaSlicer:bbl:bambu-lab-p1p:0.2",
@@ -910,7 +910,7 @@
           "bed_width": 256,
           "bed_depth": 256,
           "bed_height": 250,
-          "thumbnail": "slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-p1s_cover.png",
+          "thumbnail": "slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-p1s_thumbnail.png",
           "nozzles": [
             {
               "device_profile_id": "OrcaSlicer:bbl:bambu-lab-p1s:0.2",
@@ -954,7 +954,7 @@
           "bed_width": 256,
           "bed_depth": 256,
           "bed_height": 256,
-          "thumbnail": "slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-p2s_cover.png",
+          "thumbnail": "slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-p2s_thumbnail.png",
           "nozzles": [
             {
               "device_profile_id": "OrcaSlicer:bbl:bambu-lab-p2s:0.2",
@@ -998,7 +998,7 @@
           "bed_width": 256,
           "bed_depth": 256,
           "bed_height": 250,
-          "thumbnail": "slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-x1_cover.png",
+          "thumbnail": "slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-x1_thumbnail.png",
           "nozzles": [
             {
               "device_profile_id": "OrcaSlicer:bbl:bambu-lab-x1:0.2",
@@ -1042,7 +1042,7 @@
           "bed_width": 256,
           "bed_depth": 256,
           "bed_height": 250,
-          "thumbnail": "slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-x1-carbon_cover.png",
+          "thumbnail": "slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-x1-carbon_thumbnail.png",
           "nozzles": [
             {
               "device_profile_id": "OrcaSlicer:bbl:bambu-lab-x1-carbon:0.2",
@@ -1086,7 +1086,7 @@
           "bed_width": 256,
           "bed_depth": 256,
           "bed_height": 250,
-          "thumbnail": "slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-x1e_cover.png",
+          "thumbnail": "slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-x1e_thumbnail.png",
           "nozzles": [
             {
               "device_profile_id": "OrcaSlicer:bbl:bambu-lab-x1e:0.2",
@@ -1130,7 +1130,7 @@
           "bed_width": 256,
           "bed_depth": 256,
           "bed_height": 261,
-          "thumbnail": "slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-x2d_cover.png",
+          "thumbnail": "slicers/OrcaSlicer/02.01.00.14/assets/bambu-lab-x2d_thumbnail.png",
           "nozzles": [
             {
               "device_profile_id": "OrcaSlicer:bbl:bambu-lab-x2d:0.2",

@@ -8,16 +8,18 @@ envelope, then hand that image into Lumina's existing LUT/material, layered
 color, preview, and 3MF workflow.
 
 The first official module is `lumina.bead-pattern`, maintained in the separate
-`Lumina-Fuse-Bead-Studio` repository. The host repository owns the public SDK,
-package trust, installation lifecycle, sandbox, storage, and converter handoff;
-it must not import the official module's React source.
+`Lumina-Fuse-Bead-Studio` repository. The standalone public
+`Lumina-Workshop-SDK` repository owns the SDK source and immutable releases.
+The host repository consumes an exact SDK release and owns package trust,
+installation lifecycle, sandbox, storage, and converter handoff; it must not
+import the official module's React source.
 
 ## Boundary map
 
 ```text
 independent module repository
   -> immutable @lumina/workshop-sdk tarball
-  -> one signed .lumina-workshop Release asset
+  -> one immutable .lumina-workshop Release asset + SHA-256
   -> signed GitHub Registry or official seed
   -> core/workshop package + release + install validation
   -> /api/workshop/v1 manager endpoints
@@ -29,11 +31,12 @@ independent module repository
 
 ### Public SDK
 
-- `workshop-sdk/src/contracts.ts`: manifest, permissions, RPC, project, color
-  library, UI state, handoff, and recipe types.
-- `workshop-sdk/src/client.ts`: 10-second handshake and bounded request client.
-- `workshop-sdk/src/theme.ts`: applies only allowlisted Lumina CSS tokens.
-- `.github/workflows/workshop-sdk-release.yml`: immutable SDK Release pipeline.
+- Public source: `https://github.com/lumina-layer-studio/Lumina-Workshop-SDK`.
+- Exact host dependency: public Release `v1.0.1`.
+- The SDK owns manifest, permission, RPC, project, color-library, UI-state,
+  handoff, and recipe contracts plus the bounded iframe client.
+- The public repository's protected `validate` and Release workflows are the
+  only SDK publication authority.
 
 The SDK has no dependency on React, Electron, Lumina source, or private host
 objects.
@@ -50,9 +53,14 @@ objects.
 - `core/workshop/install_store.py`: atomic install-state document.
 - `core/workshop/installer.py`: candidate install, activation, rollback,
   disable, uninstall, tombstone, and runtime-health transitions.
+- `core/workshop/seed.py`: exact seed-lock verification and startup
+  convergence without downgrade or post-uninstall resurrection.
 - `assets/workshop-registry/keys.json`: application-owned public trust roots.
 - `assets/workshop-registry/registry-v1.json`: bundled verified/offline
   catalog snapshot.
+- `scripts/verify_workshop_release_chain.py`: one offline gate binding the
+  public SDK checksum and pnpm integrity to the signed Registry, module
+  Release bytes, reviewed manifest, and desktop seed lock.
 
 Python never executes module code. Routes validate requests and translate
 domain errors; installed bytes remain under `LUMINA_WORKSHOP_DATA_DIR`.
@@ -162,13 +170,15 @@ mode.
 Run from the repository root:
 
 ```bash
-CI=true pnpm --dir workshop-sdk test
 PYTHONPATH=/private/tmp/lumina-workshop-python-deps \
   .venv/bin/python -m pytest \
   tests/test_workshop_package_unit.py \
   tests/test_workshop_registry_unit.py \
   tests/test_workshop_installer_unit.py \
-  tests/test_workshop_api_unit.py -v
+  tests/test_workshop_api_unit.py \
+  tests/test_workshop_seed_lifecycle_unit.py \
+  tests/test_workshop_seed_startup_unit.py \
+  tests/test_workshop_release_chain_unit.py -v
 .venv/bin/python scripts/run_vitest.py run \
   src/__tests__/workshop-rpc-host.test.ts \
   src/__tests__/workshop-runtime.test.tsx \
@@ -180,6 +190,21 @@ PYTHONPATH=/private/tmp/lumina-workshop-python-deps \
 CI=true pnpm --dir electron test
 CI=true pnpm --dir frontend build
 ```
+
+Before a desktop release, download the exact SDK asset and checksum named by
+`frontend/package.json`, plus the exact module asset named by
+`assets/workshop-seed/seed-lock.json`, then run:
+
+```bash
+.venv/bin/python scripts/verify_workshop_release_chain.py \
+  --sdk-archive /path/to/lumina-workshop-sdk-1.0.1.tgz \
+  --sdk-checksum /path/to/lumina-workshop-sdk-1.0.1.tgz.sha256 \
+  --seed-archive /path/to/lumina.bead-pattern-1.0.1.lumina-workshop
+```
+
+This gate performs no network access and fails if any Release byte, checksum,
+pnpm integrity, Registry signature, reviewed manifest field, or seed identity
+has drifted.
 
 The repository may not have a local `.venv`; use the configured project Python
 environment without changing test semantics. Non-watch frontend tests must run

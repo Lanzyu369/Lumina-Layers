@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from functools import lru_cache
 
 import numpy as np
 from scipy.spatial import cKDTree
@@ -210,13 +211,33 @@ def _bounded_subset_recipes(
 ) -> np.ndarray:
     if depth <= 0:
         return np.zeros((1, 0), dtype=np.int32)
+    template = _candidate_recipe_index_template(
+        int(subset.shape[0]),
+        int(depth),
+        max(1, int(budget)),
+        int(seed),
+    )
+    return subset[template].astype(np.int32, copy=False)
+
+
+@lru_cache(maxsize=16)
+def _candidate_recipe_index_template(
+    material_count: int,
+    layer_count: int,
+    candidate_budget: int,
+    seed: int,
+) -> np.ndarray:
+    """Return one immutable deterministic recipe-index template."""
+
     generated = generate_candidate_recipes(
-        material_count=int(subset.shape[0]),
-        layer_count=int(depth),
-        candidate_budget=max(1, int(budget)),
+        material_count=int(material_count),
+        layer_count=int(layer_count),
+        candidate_budget=int(candidate_budget),
         seed=int(seed),
     )
-    return subset[generated.recipes.astype(np.int64)].astype(np.int32, copy=False)
+    template = generated.recipes.astype(np.intp, copy=True)
+    template.setflags(write=False)
+    return template
 
 
 def _workspace_key(
@@ -560,6 +581,27 @@ def refine_material_matches(
         (key, tuple(row_indices))
         for key, row_indices in grouped_rows.items()
     ]
+    template_keys = {
+        (
+            len(key.subset),
+            key.bottom_depth,
+            key.bottom_budget,
+            key.bottom_seed,
+        )
+        for key, _row_indices in group_items
+    }
+    template_keys.update(
+        (
+            len(key.subset),
+            key.top_depth,
+            key.top_budget,
+            key.top_seed,
+        )
+        for key, _row_indices in group_items
+    )
+    for template_key in sorted(template_keys):
+        _candidate_recipe_index_template(*template_key)
+
     worker_count = min(
         max(1, int(parallelism)),
         len(group_items),

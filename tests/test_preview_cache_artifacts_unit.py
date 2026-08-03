@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from api import preview_cache_artifacts
 from api.preview_cache_artifacts import (
@@ -758,3 +759,51 @@ def test_preview_cache_transaction_conflict_does_not_leak_nested_metadata(
 
     stored_metadata = store.get(session_id)["preview_cache"]["metadata"]
     assert stored_metadata["color_conf"]["slots"] == ["white", "black"]
+
+
+def test_in_memory_preview_cache_transactions_are_isolated_and_use_cas() -> None:
+    store = SessionStore()
+    session_id = store.create()
+    original = {
+        "matched_rgb": np.zeros((1, 1, 3), dtype=np.uint8),
+        "material_dynamic_layer_info": {"colors": [{"target_srgb": [1, 2, 3]}]},
+    }
+    store.put(session_id, "preview_cache", original)
+    session_data = store.get(session_id)
+    assert session_data is not None
+
+    first_context = preview_cache_transaction(
+        session_id,
+        store,
+        session_data,
+        fields={"matched_rgb"},
+    )
+    second_context = preview_cache_transaction(
+        session_id,
+        store,
+        session_data,
+        fields={"matched_rgb"},
+    )
+    first = first_context.__enter__()
+    second = second_context.__enter__()
+    try:
+        first["matched_rgb"][0, 0] = [10, 20, 30]
+        first["material_dynamic_layer_info"]["colors"][0]["target_srgb"] = [4, 5, 6]
+        assert original["matched_rgb"][0, 0].tolist() == [0, 0, 0]
+        assert original["material_dynamic_layer_info"]["colors"][0][
+            "target_srgb"
+        ] == [1, 2, 3]
+        first.commit({"matched_rgb"})
+
+        second["matched_rgb"][0, 0] = [99, 99, 99]
+        with pytest.raises(PreviewCacheRevisionConflict):
+            second.commit({"matched_rgb"})
+    finally:
+        first_context.__exit__(None, None, None)
+        second_context.__exit__(None, None, None)
+
+    committed = store.get(session_id)["preview_cache"]
+    assert committed["matched_rgb"][0, 0].tolist() == [10, 20, 30]
+    assert committed["material_dynamic_layer_info"]["colors"][0][
+        "target_srgb"
+    ] == [4, 5, 6]

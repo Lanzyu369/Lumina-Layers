@@ -14,9 +14,14 @@ S03 — 颜色替换（全局替换 + 区域替换 + matched_rgb 覆盖）。
 from api.structured_logging import get_logger
 import time
 from collections import deque
+from copy import deepcopy
 import pickle
 import numpy as np
 
+from core.pipeline.material_dynamic_layers import (
+    _record_dynamic_material_error,
+    _solve_dynamic_material_targets,
+)
 from core.pipeline.pipeline_utils import _hex_to_rgb_tuple
 
 _log = get_logger(__name__)
@@ -440,6 +445,201 @@ def _apply_material_archive_color_replacements(
     return new_matched_rgb, new_material_matrix, applied
 
 
+def _apply_dynamic_material_archive_color_replacements(
+    matched_rgb: np.ndarray,
+    material_matrix: np.ndarray,
+    mask_solid: np.ndarray,
+    target_rgb_map: np.ndarray,
+    color_replacements: dict[str, str],
+    materials: list,
+    *,
+    backing_material_index: int,
+    min_layer_count: int,
+    max_layer_count: int,
+    delta_e00_tolerance: float,
+    layer_height_mm: float,
+    substrate: str,
+    dynamic_layer_info: dict | None,
+    material_solver_info: dict | None,
+) -> tuple[np.ndarray, np.ndarray, int, dict, dict, np.ndarray]:
+    """Apply replacements through the exact dynamic material solver.
+
+    Re-solves the complete current target set because the fixed-maximum
+    comparison uses request-local target coherence. Every automatic target is
+    then rebuilt from the same solve, preserving the configured print width.
+
+    重新求解当前完整目标集合，因为固定最大层数基线使用请求内目标色一致性；
+    随后用同一次求解重建全部自动目标，并保持最大宽度打印矩阵。
+    """
+
+    from core.material_dynamic_solver import DynamicMaterialCandidateError
+
+    current_info = deepcopy(dynamic_layer_info or {})
+    current_solver_info = deepcopy(material_solver_info or {})
+    if not isinstance(target_rgb_map, np.ndarray):
+        raise DynamicMaterialCandidateError(
+            "dynamic target RGB map is unavailable or inconsistent",
+            layer_count=int(max_layer_count),
+            phase="target_map",
+        )
+    target_map = np.asarray(target_rgb_map, dtype=np.uint8)
+    if target_map.shape != np.asarray(matched_rgb).shape:
+        raise DynamicMaterialCandidateError(
+            "dynamic target RGB map is unavailable or inconsistent",
+            layer_count=int(max_layer_count),
+            phase="target_map",
+        )
+    if not color_replacements:
+        return (
+            matched_rgb,
+            material_matrix,
+            0,
+            current_info,
+            current_solver_info,
+            target_map,
+        )
+    if not materials:
+        raise DynamicMaterialCandidateError(
+            "selected material parameters are unavailable",
+            layer_count=int(max_layer_count),
+            phase="runtime_load",
+        )
+    matrix = np.asarray(material_matrix)
+    if matrix.ndim != 3 or matrix.shape[2] != int(max_layer_count):
+        raise DynamicMaterialCandidateError(
+            "dynamic material matrix width does not match configured maximum",
+            layer_count=int(max_layer_count),
+            phase="result_validation",
+        )
+
+    jobs: list[tuple[tuple[int, int, int], np.ndarray]] = []
+    solid_mask = np.asarray(mask_solid, dtype=bool)
+    updated_target_map = target_map.copy()
+    for orig_hex, replacement_hex in color_replacements.items():
+        try:
+            original = _hex_to_rgb_tuple(orig_hex)
+            target = _hex_to_rgb_tuple(replacement_hex)
+        except ValueError as exc:
+            _log.warning(
+                "Invalid dynamic material replacement skipped",
+                extra={
+                    "event": "dynamic_material_replacement_invalid_hex",
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                    "original_hex": str(orig_hex),
+                    "replacement_hex": str(replacement_hex),
+                },
+            )
+            continue
+        original_mask = (
+            np.all(
+                np.asarray(matched_rgb) == np.asarray(original, dtype=np.uint8),
+                axis=-1,
+            )
+            & solid_mask
+        )
+        if not np.any(original_mask):
+            continue
+        target_key = tuple(int(value) for value in target)
+        jobs.append((target_key, original_mask))
+        updated_target_map[original_mask] = np.asarray(
+            target_key,
+            dtype=np.uint8,
+        )
+
+    if not jobs:
+        return (
+            matched_rgb,
+            material_matrix,
+            0,
+            current_info,
+            current_solver_info,
+            target_map,
+        )
+
+    target_rows, target_counts = np.unique(
+        updated_target_map[solid_mask],
+        axis=0,
+        return_counts=True,
+    )
+    if target_rows.shape[0] == 0:
+        raise DynamicMaterialCandidateError(
+            "dynamic replacement target image contains no printable colours",
+            target_srgb=jobs[0][0],
+            layer_count=int(max_layer_count),
+            phase="target_map",
+        )
+    (
+        _resolved,
+        _recipes,
+        _delta_e00,
+        new_info,
+        new_solver_info,
+    ) = _solve_dynamic_material_targets(
+        unique_colors=np.asarray(target_rows, dtype=np.uint8),
+        pixel_counts=np.asarray(target_counts, dtype=np.int64),
+        materials=materials,
+        backing_material_index=int(backing_material_index),
+        layer_height_mm=float(layer_height_mm),
+        substrate=str(substrate),
+        min_layer_count=int(min_layer_count),
+        max_layer_count=int(max_layer_count),
+        delta_e00_tolerance=float(delta_e00_tolerance),
+    )
+    solved_colors = new_info.get("colors") if isinstance(new_info, dict) else None
+    entries_by_target: dict[tuple[int, int, int], dict] = {}
+    for entry in solved_colors if isinstance(solved_colors, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        target = entry.get("target_srgb")
+        if isinstance(target, (list, tuple)) and len(target) == 3:
+            entries_by_target[tuple(int(value) for value in target)] = entry
+
+    new_rgb = np.asarray(matched_rgb).copy()
+    new_matrix = matrix.copy()
+    for target_row in target_rows:
+        target = tuple(int(value) for value in target_row)
+        entry = entries_by_target.get(target)
+        if entry is None:
+            raise DynamicMaterialCandidateError(
+                "no dynamic metadata entry is available for a replacement target",
+                target_srgb=target,
+                layer_count=int(max_layer_count),
+                phase="exact_search",
+            )
+        achieved = entry.get("matched_srgb")
+        print_recipe = entry.get("print_recipe_top_to_bottom")
+        if (
+            not isinstance(achieved, (list, tuple))
+            or len(achieved) != 3
+            or not isinstance(print_recipe, (list, tuple))
+            or len(print_recipe) != int(max_layer_count)
+        ):
+            raise DynamicMaterialCandidateError(
+                "dynamic replacement metadata is inconsistent",
+                target_srgb=target,
+                layer_count=int(max_layer_count),
+                phase="result_validation",
+            )
+        target_mask = np.all(updated_target_map == target_row, axis=-1) & solid_mask
+        new_rgb[target_mask] = np.asarray(achieved, dtype=np.uint8)
+        new_matrix[target_mask] = np.asarray(
+            print_recipe,
+            dtype=new_matrix.dtype,
+        )
+
+    merged_solver_info = current_solver_info
+    merged_solver_info.update(new_solver_info)
+    return (
+        new_rgb,
+        new_matrix,
+        len(jobs),
+        new_info,
+        merged_solver_info,
+        updated_target_map,
+    )
+
+
 def _normalize_color_replacements_input(color_replacements):
     """Normalize color replacement input to unified {hex: hex} dict.
     兼容 dict / replacement_regions(list) 两种替换输入，统一为 {hex: hex}。
@@ -712,6 +912,9 @@ def run(ctx: dict) -> dict:
     lut_metadata = ctx.get("lut_metadata")
     requested_color_layers = ctx.get("color_layers")
     requested_layer_height_mm = ctx.get("layer_height_mm")
+    dynamic_material_enabled = bool(
+        ctx.get("material_dynamic_layer_count_enabled", False)
+    )
 
     # ---- Override matched_rgb with pre-computed array if provided ----
     if matched_rgb_path is not None:
@@ -883,17 +1086,70 @@ def run(ctx: dict) -> dict:
         layer_height_mat = float(ctx.get("layer_height_mm") or 0.08)
         substrate_mat = str(ctx.get("material_substrate") or "white")
         grid_res = ctx.get("grid_resolution")
-        matched_rgb, material_matrix, applied = _apply_material_archive_color_replacements(
-            matched_rgb,
-            material_matrix,
-            mask_solid,
-            effective_color_replacements,
-            mats,
-            layer_count_mat,
-            layer_height_mat,
-            substrate_mat,
-            grid_resolution=grid_res,
-        )
+        if bool(ctx.get("material_dynamic_layer_count_enabled", False)):
+            from core.material_dynamic_solver import (
+                DynamicMaterialCandidateError,
+                DynamicMaterialSolverError,
+            )
+
+            backing_index = ctx.get("material_backing_material_index")
+            if backing_index is None:
+                backing_index = ctx.get("material_base_channel_idx", 0)
+            try:
+                (
+                    matched_rgb,
+                    material_matrix,
+                    applied,
+                    dynamic_layer_info,
+                    material_solver_info,
+                    quantized_image,
+                ) = _apply_dynamic_material_archive_color_replacements(
+                    matched_rgb,
+                    material_matrix,
+                    mask_solid,
+                    ctx.get("quantized_image"),
+                    effective_color_replacements,
+                    mats,
+                    backing_material_index=int(backing_index),
+                    min_layer_count=int(
+                        ctx.get("material_min_layer_count") or 5
+                    ),
+                    max_layer_count=int(
+                        ctx.get("material_max_layer_count") or 10
+                    ),
+                    delta_e00_tolerance=float(
+                        ctx.get("material_delta_e00_tolerance", 0.5)
+                    ),
+                    layer_height_mm=layer_height_mat,
+                    substrate=substrate_mat,
+                    dynamic_layer_info=ctx.get("material_dynamic_layer_info"),
+                    material_solver_info=ctx.get("material_solver_info"),
+                )
+            except (
+                DynamicMaterialCandidateError,
+                DynamicMaterialSolverError,
+                TypeError,
+                ValueError,
+            ) as exc:
+                return _record_dynamic_material_error(ctx, exc)
+            ctx["material_dynamic_layer_info"] = dynamic_layer_info
+            ctx["material_solver_info"] = material_solver_info
+            ctx["quantized_image"] = quantized_image
+            ctx["color_layers"] = int(material_matrix.shape[2])
+        else:
+            matched_rgb, material_matrix, applied = (
+                _apply_material_archive_color_replacements(
+                    matched_rgb,
+                    material_matrix,
+                    mask_solid,
+                    effective_color_replacements,
+                    mats,
+                    layer_count_mat,
+                    layer_height_mat,
+                    substrate_mat,
+                    grid_resolution=grid_res,
+                )
+            )
         _log.debug("Applied %d material-archive color replacements", applied)
     elif effective_color_replacements:
         from core.color_replacement import ColorReplacementManager
@@ -940,19 +1196,34 @@ def run(ctx: dict) -> dict:
                 base_channel_idx = int(getattr(lut_metadata, "base_channel_idx", 0) or 0)
             else:
                 base_channel_idx = int(ctx.get("material_base_channel_idx", 0) or 0)
-            target_layers = max(
-                int(material_matrix.shape[2]),
-                max((len(item.get("recipe", [])) for item in recipe_overrides if isinstance(item, dict)), default=0),
-            )
-            if requested_color_layers is not None:
-                target_layers = max(target_layers, int(requested_color_layers))
-            material_matrix = _upgrade_material_matrix_layers(
-                material_matrix,
-                int(target_layers),
-                base_channel_idx,
-                target_order,
-                mask_solid=mask_solid,
-            )
+            if dynamic_material_enabled:
+                from core.material_dynamic_solver import (
+                    DynamicMaterialCandidateError,
+                )
+
+                target_layers = int(
+                    ctx.get("material_max_layer_count") or 10
+                )
+                if int(material_matrix.shape[2]) != target_layers:
+                    raise DynamicMaterialCandidateError(
+                        "dynamic material matrix width does not match configured maximum",
+                        layer_count=target_layers,
+                        phase="recipe_overrides",
+                    )
+            else:
+                target_layers = max(
+                    int(material_matrix.shape[2]),
+                    max((len(item.get("recipe", [])) for item in recipe_overrides if isinstance(item, dict)), default=0),
+                )
+                if requested_color_layers is not None:
+                    target_layers = max(target_layers, int(requested_color_layers))
+                material_matrix = _upgrade_material_matrix_layers(
+                    material_matrix,
+                    int(target_layers),
+                    base_channel_idx,
+                    target_order,
+                    mask_solid=mask_solid,
+                )
             try:
                 from core.predictive_lut import predict_recipe_color
                 from core.recipe_order import convert_recipe_between_orders
@@ -1019,6 +1290,47 @@ def run(ctx: dict) -> dict:
                     continue
 
                 recipe_raw = [int(v) for v in item.get("recipe", [])]
+                dynamic_print_recipe: list[int] | None = None
+                if dynamic_material_enabled:
+                    from core.material_dynamic_solver import (
+                        DynamicMaterialCandidateError,
+                    )
+
+                    actual = item.get("actual_recipe_top_to_bottom")
+                    saved_print = item.get("print_recipe_top_to_bottom")
+                    actual_count = item.get("actual_layer_count")
+                    padding_count = item.get("padding_layer_count")
+                    minimum_layers = int(
+                        ctx.get("material_min_layer_count") or 5
+                    )
+                    backing_index = ctx.get("material_backing_material_index")
+                    if backing_index is None:
+                        backing_index = ctx.get("material_base_channel_idx", 0)
+                    actual_length = len(actual) if isinstance(actual, list) else -1
+                    if (
+                        not isinstance(actual, list)
+                        or int(actual_count or -1) != actual_length
+                        or not minimum_layers <= actual_length <= int(target_layers)
+                        or not isinstance(saved_print, list)
+                        or len(saved_print) != int(target_layers)
+                        or int(padding_count or 0)
+                        != int(target_layers) - actual_length
+                        or [int(value) for value in saved_print[:actual_length]]
+                        != [int(value) for value in actual]
+                        or any(
+                            int(value) != int(backing_index)
+                            for value in saved_print[actual_length:]
+                        )
+                    ):
+                        raise DynamicMaterialCandidateError(
+                            "dynamic recipe override metadata is inconsistent",
+                            layer_count=int(target_layers),
+                            phase="recipe_overrides",
+                        )
+                    recipe_raw = [int(value) for value in actual]
+                    dynamic_print_recipe = [
+                        int(value) for value in saved_print
+                    ]
                 # Rewrite any local virtual indices into the deduped global
                 # registry so every region speaks the same channel vocabulary.
                 # 把本 region 的本地虚拟索引改写为全局虚拟索引。
@@ -1027,16 +1339,25 @@ def run(ctx: dict) -> dict:
                     recipe_raw = [
                         int(local_map.get(int(v), int(v))) for v in recipe_raw
                     ]
+                    if dynamic_print_recipe is not None:
+                        dynamic_print_recipe = [
+                            int(local_map.get(int(v), int(v)))
+                            for v in dynamic_print_recipe
+                        ]
                 recipe_order = str(item.get("layer_order", target_order))
-                normalized_recipe = recipe_raw
-                if convert_recipe_between_orders is not None:
-                    normalized_recipe = convert_recipe_between_orders(recipe_raw, recipe_order, target_order)
-                normalized_recipe = _pad_recipe_to_layers(
-                    normalized_recipe,
-                    int(material_matrix.shape[2]),
-                    base_channel_idx,
-                    target_order,
-                )
+                if dynamic_print_recipe is not None:
+                    normalized_recipe = dynamic_print_recipe
+                    recipe_order = "Top2Bottom"
+                else:
+                    normalized_recipe = recipe_raw
+                    if convert_recipe_between_orders is not None:
+                        normalized_recipe = convert_recipe_between_orders(recipe_raw, recipe_order, target_order)
+                    normalized_recipe = _pad_recipe_to_layers(
+                        normalized_recipe,
+                        int(material_matrix.shape[2]),
+                        base_channel_idx,
+                        target_order,
+                    )
                 # material_matrix dtype may be uint8 (capacity 256) which is
                 # plenty for LUT.N + a handful of virtuals; upgrade on demand
                 # if a virtual index would overflow.

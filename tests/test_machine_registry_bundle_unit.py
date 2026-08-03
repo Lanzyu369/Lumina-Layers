@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from PIL import Image
+
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
@@ -54,6 +56,32 @@ def test_bundled_machine_registry_assets_and_templates_exist() -> None:
                 template = json.loads(template_path.read_text(encoding="utf-8"))
                 assert template.get("printer_model") == machine["display_name"]
                 assert str(nozzle["nozzle_size"]) in str(template.get("printer_settings_id", ""))
+
+
+def test_bambu_machine_thumbnails_use_antialiased_transparent_artwork() -> None:
+    root = _registry_root()
+    data = _load_registry()
+
+    for slicer in data["slicers"]:
+        for machine in slicer["machines"]:
+            if machine["brand"] != "Bambu Lab":
+                continue
+
+            thumbnail = root / str(machine["thumbnail"])
+            with Image.open(thumbnail).convert("RGBA") as image:
+                width, height = image.size
+                alpha = image.getchannel("A")
+                corner_alpha = {
+                    image.getpixel((0, 0))[3],
+                    image.getpixel((width - 1, 0))[3],
+                    image.getpixel((0, height - 1))[3],
+                    image.getpixel((width - 1, height - 1))[3],
+                }
+                partial_alpha_pixels = sum(alpha.histogram()[1:255])
+
+            assert min(width, height) >= 240, str(machine["thumbnail"])
+            assert corner_alpha == {0}, str(machine["thumbnail"])
+            assert partial_alpha_pixels >= 256, str(machine["thumbnail"])
 
 
 def test_bundled_machine_registry_keeps_upgraded_ac_and_elegoo_versions() -> None:

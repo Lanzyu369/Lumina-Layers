@@ -40,6 +40,7 @@ from api.routers.converter.generate import LARGE_FORMAT_CACHED_ANALYSIS_INVALID_
 from api.routers.converter.generate import LARGE_FORMAT_GENERATION_FAILED_DETAIL
 from api.routers.converter.generate import MODEL_GENERATION_FAILED_DETAIL
 from api.routers.converter.generate import _recover_virtual_materials_from_preview_cache
+from api.routers.converter.generate import _normalize_recipe_overrides
 from api.routers.converter.generate import _resolve_large_format_shared_params
 from api.routers.converter.generate import _resolve_recipe_overrides
 from api.routers.converter.generate import _resolve_large_format_source_basename
@@ -90,6 +91,26 @@ setup_module(None)
 client: TestClient = TestClient(app)
 
 
+async def _timed_submit_via_generate_mock(
+    *args: object,
+    **kwargs: object,
+) -> tuple[object, dict[str, float]]:
+    return await _mock_pool.submit(*args, **kwargs), {}
+
+
+@pytest.fixture(autouse=True)
+def _keep_generate_pool_timing_opt_in() -> object:
+    """Keep legacy submit assertions while the route uses submit_timed."""
+    previous = _mock_pool.submit_timed
+    _mock_pool.submit_timed = AsyncMock(
+        side_effect=_timed_submit_via_generate_mock,
+    )
+    try:
+        yield
+    finally:
+        _mock_pool.submit_timed = previous
+
+
 class _FailingRegistry(FileRegistry):
     """Registry stub that simulates registration backend failure."""
 
@@ -111,6 +132,43 @@ class _SecondRegistrationFailingRegistry(FileRegistry):
             raise RuntimeError("registry unavailable after first file")
         self.first_file_id = super().register_path(*args, **kwargs)
         return self.first_file_id
+
+
+def test_generate_response_exposes_worker_pool_timing() -> None:
+    sid = _create_session_with_preview_and_files(_test_store)
+    worker_result = {
+        "threemf_path": "/tmp/timed-out.3mf",
+        "glb_path": None,
+        "status_msg": "OK",
+    }
+    _mock_pool.submit_timed = AsyncMock(
+        return_value=(
+            worker_result,
+            {
+                "queue_wait_s": 0.2,
+                "worker_execution_s": 0.8,
+                "result_delivery_s": 0.03,
+                "pool_roundtrip_s": 1.03,
+            },
+        )
+    )
+    payload = {
+        "session_id": sid,
+        "params": {
+            "lut_name": "test_lut",
+            "modeling_mode": "high-fidelity",
+        },
+    }
+
+    with patch("os.path.exists", return_value=True):
+        response = client.post("/api/convert/generate", json=payload)
+
+    assert response.status_code == 200, response.text
+    performance = response.json()["performance_timing"]
+    assert performance["queue_wait_ms"] == 200.0
+    assert performance["worker_execution_ms"] == 800.0
+    assert performance["result_delivery_ms"] == 30.0
+    assert performance["endpoint_post_worker_ms"] >= 0.0
 
 
 def _create_session_with_preview_and_files(store: SessionStore) -> str:
@@ -596,6 +654,95 @@ class TestGenerateParameterCompleteness:
         assert submitted_image_path == captured["svg_path"]
         assert submitted_params["modeling_mode"] == CoreModelingMode.VECTOR
         assert submitted_params["vector_parse_clip_cache_path"] is None
+
+    def test_dynamic_color_card_rejects_before_svg_or_session_mutation(
+        self,
+        tmp_path,
+    ) -> None:
+        _test_store.clear_all()
+        image_path = tmp_path / "input.png"
+        Image.fromarray(np.zeros((4, 4, 3), dtype=np.uint8)).save(image_path)
+        sid = _test_store.create()
+        _test_store.put(sid, "image_path", str(image_path))
+        _test_store.put(sid, "lut_path", "__material_archive__")
+        _test_store.put(sid, "material_source", "material_archive")
+        _test_store.put(sid, "selected_materials", ["mat-a", "mat-b"])
+        _test_store.put(sid, "material_dynamic_layer_count_enabled", True)
+        _test_store.put(sid, "material_min_layer_count", 5)
+        _test_store.put(sid, "material_max_layer_count", 8)
+        _test_store.put(sid, "material_delta_e00_tolerance", 0.5)
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {
+                "target_w": 4,
+                "target_h": 4,
+                "target_width_mm": 40.0,
+                "color_palette": [{"hex": "#ff0000"}],
+                "matched_rgb": np.zeros((4, 4, 3), dtype=np.uint8),
+                "mask_solid": np.ones((4, 4), dtype=bool),
+                "material_matrix": np.zeros((4, 4, 8), dtype=np.uint8),
+            },
+        )
+        _mock_pool.submit = AsyncMock()
+
+        with (
+            patch("core.color_card.generate_color_card_svg") as generate_svg,
+            patch.object(_test_store, "register_temp_file") as register_temp,
+        ):
+            generate_svg.return_value = str(tmp_path / "card.svg")
+            response = client.post(
+                "/api/convert/generate",
+                json={
+                    "session_id": sid,
+                    "params": {
+                        "lut_name": "__material_archive__",
+                        "modeling_mode": "color-card",
+                    },
+                },
+            )
+
+        assert response.status_code == 422
+        generate_svg.assert_not_called()
+        register_temp.assert_not_called()
+        _mock_pool.submit.assert_not_called()
+
+    def test_color_card_endpoint_rejects_dynamic_session_before_svg(
+        self,
+    ) -> None:
+        _test_store.clear_all()
+        sid = _test_store.create()
+        _test_store.put(sid, "lut_path", "__material_archive__")
+        _test_store.put(sid, "material_source", "material_archive")
+        _test_store.put(sid, "material_dynamic_layer_count_enabled", True)
+        _test_store.put(sid, "material_min_layer_count", 5)
+        _test_store.put(sid, "material_max_layer_count", 8)
+        _test_store.put(sid, "material_delta_e00_tolerance", 0.5)
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {
+                "target_w": 4,
+                "target_h": 4,
+                "target_width_mm": 40.0,
+                "color_palette": [{"hex": "#ff0000"}],
+            },
+        )
+        _mock_pool.submit = AsyncMock()
+
+        with (
+            patch("core.color_card.generate_color_card_svg") as generate_svg,
+            patch.object(_test_store, "register_temp_file") as register_temp,
+        ):
+            response = client.post(
+                "/api/convert/color-card",
+                json={"session_id": sid},
+            )
+
+        assert response.status_code == 422
+        generate_svg.assert_not_called()
+        register_temp.assert_not_called()
+        _mock_pool.submit.assert_not_called()
 
     def test_color_card_endpoint_reads_artifact_metadata_without_hydrating(
         self,
@@ -2118,6 +2265,7 @@ class TestStandardCachedAnalysisRouting:
         matched_rgb: object | None = None,
         mask_solid: object | None = None,
         material_matrix: object | None = None,
+        quantized_image: object | None = None,
         cache_overrides: dict[str, object] | None = None,
     ) -> tuple[str, dict[str, object]]:
         """Create one route-isolated standard cached-generation session."""
@@ -2172,6 +2320,11 @@ class TestStandardCachedAnalysisRouting:
                 np.zeros((4, 4, 5), dtype=np.int16)
                 if material_matrix is None
                 else material_matrix
+            ),
+            "quantized_image": (
+                np.zeros((4, 4, 3), dtype=np.uint8)
+                if quantized_image is None
+                else quantized_image
             ),
             **(cache_overrides or {}),
         }
@@ -2253,6 +2406,130 @@ class TestStandardCachedAnalysisRouting:
             )
             assert submitted_params["color_layers"] == 6
             assert submitted_params["layer_height_mm"] == pytest.approx(0.12)
+        finally:
+            _test_store.close(sid)
+
+    @pytest.mark.parametrize(
+        ("dynamic_enabled", "expect_replay"),
+        [(True, False), (False, True)],
+        ids=("dynamic-final-cache", "fixed-layer-legacy-replay"),
+    )
+    def test_generate_cached_analysis_only_skips_dynamic_replacement_replay(
+        self,
+        tmp_path,
+        dynamic_enabled: bool,
+        expect_replay: bool,
+    ) -> None:
+        """Only dynamic final caches suppress already-applied replacements."""
+
+        from core.preview_analysis_cache import REQUIRED_PREVIEW_ANALYSIS_REUSE
+
+        max_layer_count = 6
+        sid, payload = self._create_session(
+            tmp_path,
+            modeling_mode=ModelingMode.HIGH_FIDELITY,
+            material_source="material_archive",
+            color_layers=max_layer_count,
+            material_matrix=np.zeros(
+                (4, 4, max_layer_count),
+                dtype=np.int32,
+            ),
+        )
+        dynamic_settings = {
+            "material_dynamic_layer_count_enabled": dynamic_enabled,
+            "material_min_layer_count": 5,
+            "material_max_layer_count": max_layer_count,
+            "material_delta_e00_tolerance": 0.5,
+        }
+        for key, value in dynamic_settings.items():
+            _test_store.put(sid, key, value)
+        _test_store.put(sid, "selected_materials", ["mat-a", "mat-b"])
+        _test_store.put(
+            sid,
+            "replacement_regions",
+            [
+                {
+                    "selected_color": "#112233",
+                    "replacement_color": "#778899",
+                }
+            ],
+        )
+        payload["params"].update(dynamic_settings)
+        requested_replacements = [
+            {
+                "quantized_hex": "#112233",
+                "matched_hex": "#445566",
+                "replacement_hex": "#778899",
+            }
+        ]
+        payload["params"]["replacement_regions"] = requested_replacements
+
+        try:
+            response = client.post("/api/convert/generate", json=payload)
+
+            assert response.status_code == 200, response.text
+            submitted_params = _mock_pool.submit.call_args.args[3]
+            assert (
+                submitted_params["reuse_preview_analysis"]
+                == REQUIRED_PREVIEW_ANALYSIS_REUSE
+            )
+            assert submitted_params["replacement_regions"] == (
+                requested_replacements if expect_replay else None
+            )
+            assert submitted_params["matched_rgb_path"] is not None
+            assert submitted_params["mask_solid_path"] is not None
+            assert submitted_params["material_matrix_path"] is not None
+            assert (
+                submitted_params["quantized_image_path"] is not None
+            ) is dynamic_enabled
+        finally:
+            _test_store.close(sid)
+
+    @pytest.mark.parametrize(
+        "quantized_image",
+        [
+            None,
+            np.zeros((4, 4, 3), dtype=np.int16),
+            np.zeros((3, 4, 3), dtype=np.uint8),
+        ],
+        ids=("missing", "wrong-dtype", "wrong-grid"),
+    )
+    def test_generate_dynamic_cached_analysis_requires_quantized_image(
+        self,
+        tmp_path,
+        quantized_image: np.ndarray | None,
+    ) -> None:
+        """Dynamic P03 reuse rejects an incomplete or invalid four-asset cache."""
+
+        max_layer_count = 6
+        sid, payload = self._create_session(
+            tmp_path,
+            modeling_mode=ModelingMode.HIGH_FIDELITY,
+            material_source="material_archive",
+            color_layers=max_layer_count,
+            material_matrix=np.zeros(
+                (4, 4, max_layer_count),
+                dtype=np.int32,
+            ),
+            cache_overrides={"quantized_image": quantized_image},
+        )
+        dynamic_settings = {
+            "material_dynamic_layer_count_enabled": True,
+            "material_min_layer_count": 5,
+            "material_max_layer_count": max_layer_count,
+            "material_delta_e00_tolerance": 0.5,
+        }
+        for key, value in dynamic_settings.items():
+            _test_store.put(sid, key, value)
+        _test_store.put(sid, "selected_materials", ["mat-a", "mat-b"])
+        payload["params"].update(dynamic_settings)
+
+        try:
+            response = client.post("/api/convert/generate", json=payload)
+
+            assert response.status_code == 409, response.text
+            assert response.json()["detail"] == self._INVALID_DETAIL
+            _mock_pool.submit.assert_not_called()
         finally:
             _test_store.close(sid)
 
@@ -2487,6 +2764,144 @@ class TestLargeFormatCachedAnalysisRouting:
                 if os.path.exists(path):
                     os.unlink(path)
 
+    def test_large_format_dynamic_native_svg_reuses_int32_matrix_without_quantized_asset(
+        self,
+    ) -> None:
+        """Native SVG keeps its three vector cache assets; P03 quantized data is raster-only."""
+
+        sid, svg_path, lut_path = _create_svg_session(
+            _test_store,
+            native_tiling_supported=True,
+        )
+        matched_rgb = np.zeros((8, 12, 3), dtype=np.uint8)
+        mask_solid = np.ones((8, 12), dtype=bool)
+        material_matrix = np.zeros((8, 12, 7), dtype=np.int32)
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {
+                "target_w": 12,
+                "target_h": 8,
+                **self._semantic_cache_metadata(
+                    modeling_mode=ModelingMode.VECTOR,
+                    material_source="material_archive",
+                ),
+                "color_layers": 7,
+                "matched_rgb": matched_rgb,
+                "mask_solid": mask_solid,
+                "material_matrix": material_matrix,
+                "material_dynamic_layer_info": {
+                    "enabled": True,
+                    "max_layer_count": 7,
+                },
+            },
+        )
+        _test_store.put(sid, "material_source", "material_archive")
+        _test_store.put(sid, "selected_materials", ["brand/base", "brand/red"])
+        _test_store.put(sid, "color_layers", 7)
+        _test_store.put(sid, "material_dynamic_layer_count_enabled", True)
+        _test_store.put(sid, "material_min_layer_count", 5)
+        _test_store.put(sid, "material_max_layer_count", 7)
+        _test_store.put(sid, "material_delta_e00_tolerance", 0.5)
+
+        try:
+            with patch(
+                "api.routers.converter.generate._generate_large_format_svg_native",
+                return_value=_large_format_success_response("native-dynamic"),
+            ) as native_helper:
+                response = client.post(
+                    "/api/convert/generate-large-format",
+                    json=_large_format_payload(
+                        sid,
+                        modeling_mode="vector",
+                        use_cached_matched_rgb=True,
+                        request_overrides={
+                            "lut_name": "__material_archive__",
+                            "color_layers": 7,
+                            "material_dynamic_layer_count_enabled": True,
+                            "material_min_layer_count": 5,
+                            "material_max_layer_count": 7,
+                            "material_delta_e00_tolerance": 0.5,
+                        },
+                    ),
+                )
+
+            assert response.status_code == 200, response.text
+            kwargs = native_helper.call_args.kwargs
+            assert kwargs["dynamic_material_settings"] == (True, 5, 7, 0.5)
+            for field_name in (
+                "matched_rgb_path",
+                "mask_solid_path",
+                "material_matrix_path",
+            ):
+                assert kwargs[field_name] is not None
+            assert "quantized_image_path" not in kwargs
+        finally:
+            _test_store.close(sid)
+            for path in (svg_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    def test_large_format_dynamic_native_svg_rejects_non_int32_matrix(self) -> None:
+        sid, svg_path, lut_path = _create_svg_session(
+            _test_store,
+            native_tiling_supported=True,
+        )
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {
+                "target_w": 12,
+                "target_h": 8,
+                **self._semantic_cache_metadata(
+                    modeling_mode=ModelingMode.VECTOR,
+                    material_source="material_archive",
+                ),
+                "color_layers": 7,
+                "matched_rgb": np.zeros((8, 12, 3), dtype=np.uint8),
+                "mask_solid": np.ones((8, 12), dtype=bool),
+                "material_matrix": np.zeros((8, 12, 7), dtype=np.int16),
+                "material_dynamic_layer_info": {"enabled": True},
+            },
+        )
+        _test_store.put(sid, "material_source", "material_archive")
+        _test_store.put(sid, "selected_materials", ["brand/base", "brand/red"])
+        _test_store.put(sid, "color_layers", 7)
+        _test_store.put(sid, "material_dynamic_layer_count_enabled", True)
+        _test_store.put(sid, "material_min_layer_count", 5)
+        _test_store.put(sid, "material_max_layer_count", 7)
+        _test_store.put(sid, "material_delta_e00_tolerance", 0.5)
+
+        try:
+            with patch(
+                "api.routers.converter.generate._generate_large_format_svg_native"
+            ) as native_helper:
+                response = client.post(
+                    "/api/convert/generate-large-format",
+                    json=_large_format_payload(
+                        sid,
+                        modeling_mode="vector",
+                        use_cached_matched_rgb=True,
+                        request_overrides={
+                            "lut_name": "__material_archive__",
+                            "color_layers": 7,
+                            "material_dynamic_layer_count_enabled": True,
+                            "material_min_layer_count": 5,
+                            "material_max_layer_count": 7,
+                            "material_delta_e00_tolerance": 0.5,
+                        },
+                    ),
+                )
+
+            assert response.status_code == 409, response.text
+            assert response.json()["detail"] == LARGE_FORMAT_CACHED_ANALYSIS_INVALID_DETAIL
+            native_helper.assert_not_called()
+        finally:
+            _test_store.close(sid)
+            for path in (svg_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
     def test_large_format_cached_native_worker_error_returns_sanitized_409(
         self,
     ) -> None:
@@ -2623,6 +3038,141 @@ class TestLargeFormatCachedAnalysisRouting:
             assert np.array_equal(np.load(kwargs["matched_rgb_path"]), matched_rgb)
             assert np.array_equal(np.load(kwargs["mask_solid_path"]), mask_solid)
             assert np.array_equal(np.load(kwargs["material_matrix_path"]), material_matrix)
+        finally:
+            _test_store.close(sid)
+            for path in (image_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    def test_large_format_dynamic_cached_raster_forwards_quantized_image(
+        self,
+    ) -> None:
+        """The dynamic large-format route passes the fourth P03 asset to tiling."""
+
+        sid, image_path, lut_path = _create_raster_large_format_session(_test_store)
+        matched_rgb = np.arange(8 * 12 * 3, dtype=np.uint8).reshape(8, 12, 3)
+        mask_solid = np.ones((8, 12), dtype=bool)
+        quantized_image = np.flip(matched_rgb, axis=2).copy()
+        material_matrix = np.zeros((8, 12, 6), dtype=np.int32)
+        cache = {
+            "target_w": 12,
+            "target_h": 8,
+            **self._semantic_cache_metadata(
+                modeling_mode=ModelingMode.HIGH_FIDELITY,
+                material_source="material_archive",
+            ),
+            "color_layers": 6,
+            "matched_rgb": matched_rgb,
+            "mask_solid": mask_solid,
+            "quantized_image": quantized_image,
+            "material_matrix": material_matrix,
+        }
+        _test_store.put(sid, "preview_cache", cache)
+        _test_store.put(sid, "material_source", "material_archive")
+        _test_store.put(sid, "selected_materials", ["mat-a", "mat-b"])
+        _test_store.put(sid, "material_layer_count", 6)
+        _test_store.put(sid, "material_dynamic_layer_count_enabled", True)
+        _test_store.put(sid, "material_min_layer_count", 5)
+        _test_store.put(sid, "material_max_layer_count", 6)
+        _test_store.put(sid, "material_delta_e00_tolerance", 0.5)
+        _test_store.put(sid, "recipe_overrides", [])
+        _test_store.put(sid, "selected_region_masks", {})
+
+        try:
+            with patch(
+                "api.routers.converter.generate._generate_large_format_raster",
+                return_value=_large_format_success_response("raster"),
+            ) as raster_helper:
+                response = client.post(
+                    "/api/convert/generate-large-format",
+                    json=_large_format_payload(
+                        sid,
+                        modeling_mode="high-fidelity",
+                        use_cached_matched_rgb=True,
+                        request_overrides={
+                            "lut_name": "__material_archive__",
+                            "color_layers": 6,
+                            "material_dynamic_layer_count_enabled": True,
+                            "material_min_layer_count": 5,
+                            "material_max_layer_count": 6,
+                            "material_delta_e00_tolerance": 0.5,
+                        },
+                    ),
+                )
+
+            assert response.status_code == 200, response.text
+            quantized_path = raster_helper.call_args.kwargs[
+                "quantized_image_path"
+            ]
+            assert quantized_path is not None
+            assert np.array_equal(np.load(quantized_path), quantized_image)
+        finally:
+            _test_store.close(sid)
+            for path in (image_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    def test_large_format_dynamic_cached_raster_rejects_missing_quantized_image(
+        self,
+    ) -> None:
+        """A stale dynamic cache must fail before the large-format helper runs."""
+
+        sid, image_path, lut_path = _create_raster_large_format_session(_test_store)
+        matched_rgb = np.zeros((8, 12, 3), dtype=np.uint8)
+        mask_solid = np.ones((8, 12), dtype=bool)
+        material_matrix = np.zeros((8, 12, 6), dtype=np.int32)
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {
+                "target_w": 12,
+                "target_h": 8,
+                **self._semantic_cache_metadata(
+                    modeling_mode=ModelingMode.HIGH_FIDELITY,
+                    material_source="material_archive",
+                ),
+                "color_layers": 6,
+                "matched_rgb": matched_rgb,
+                "mask_solid": mask_solid,
+                "material_matrix": material_matrix,
+            },
+        )
+        _test_store.put(sid, "material_source", "material_archive")
+        _test_store.put(sid, "selected_materials", ["mat-a", "mat-b"])
+        _test_store.put(sid, "material_layer_count", 6)
+        _test_store.put(sid, "material_dynamic_layer_count_enabled", True)
+        _test_store.put(sid, "material_min_layer_count", 5)
+        _test_store.put(sid, "material_max_layer_count", 6)
+        _test_store.put(sid, "material_delta_e00_tolerance", 0.5)
+
+        try:
+            with patch(
+                "api.routers.converter.generate._generate_large_format_raster",
+                return_value=_large_format_success_response("raster"),
+            ) as raster_helper:
+                response = client.post(
+                    "/api/convert/generate-large-format",
+                    json=_large_format_payload(
+                        sid,
+                        modeling_mode="high-fidelity",
+                        use_cached_matched_rgb=True,
+                        request_overrides={
+                            "lut_name": "__material_archive__",
+                            "color_layers": 6,
+                            "material_dynamic_layer_count_enabled": True,
+                            "material_min_layer_count": 5,
+                            "material_max_layer_count": 6,
+                            "material_delta_e00_tolerance": 0.5,
+                        },
+                    ),
+                )
+
+            assert response.status_code == 409, response.text
+            assert (
+                response.json()["detail"]
+                == LARGE_FORMAT_CACHED_ANALYSIS_INVALID_DETAIL
+            )
+            raster_helper.assert_not_called()
         finally:
             _test_store.close(sid)
             for path in (image_path, lut_path):
@@ -3174,6 +3724,212 @@ class TestLargeFormatDimensionsAndRouting:
 
         assert resolved == "bad_name"
 
+    def test_large_format_inherits_dynamic_settings_before_helper(self) -> None:
+        sid, _image_path, _lut_path = _create_raster_large_format_session(
+            _test_store
+        )
+        _test_store.put(sid, "material_source", "material_archive")
+        _test_store.put(sid, "selected_materials", ["mat-a", "mat-b"])
+        _test_store.put(sid, "material_layer_count", 10)
+        _test_store.put(sid, "material_dynamic_layer_count_enabled", True)
+        _test_store.put(sid, "material_min_layer_count", 6)
+        _test_store.put(sid, "material_max_layer_count", 8)
+        _test_store.put(sid, "material_delta_e00_tolerance", 0.4)
+        _test_store.put(sid, "recipe_overrides", [])
+
+        payload = {
+            "session_id": sid,
+            "params": {
+                "target_height_mm": 60.0,
+                "tile_width_mm": 40.0,
+                "tile_height_mm": 40.0,
+                "params": {
+                    "lut_name": "__material_archive__",
+                    "modeling_mode": "high-fidelity",
+                    "target_width_mm": 90.0,
+                },
+            },
+        }
+        raster_response = {
+            "status": "ok",
+            "message": "raster",
+            "download_url": "/api/files/raster",
+            "tile_count": 4,
+            "grid_cols": 2,
+            "grid_rows": 2,
+            "warnings": [],
+        }
+
+        with patch(
+            "api.routers.converter.generate._generate_large_format_raster",
+            return_value=raster_response,
+        ) as raster_helper:
+            response = client.post(
+                "/api/convert/generate-large-format",
+                json=payload,
+            )
+
+        assert response.status_code == 200, response.text
+        assert raster_helper.call_args.kwargs["dynamic_material_settings"] == (
+            True,
+            6,
+            8,
+            0.4,
+        )
+
+    def test_large_format_dynamic_mismatch_rejects_before_temp_preparation(
+        self,
+    ) -> None:
+        from api.routers.converter.common import (
+            _resolve_session_dynamic_material_settings,
+        )
+
+        sid, _image_path, _lut_path = _create_raster_large_format_session(
+            _test_store
+        )
+        _test_store.put(sid, "material_source", "material_archive")
+        _test_store.put(sid, "selected_materials", ["mat-a", "mat-b"])
+        _test_store.put(sid, "material_dynamic_layer_count_enabled", True)
+        _test_store.put(sid, "material_min_layer_count", 5)
+        _test_store.put(sid, "material_max_layer_count", 8)
+        _test_store.put(sid, "material_delta_e00_tolerance", 0.5)
+
+        payload = {
+            "session_id": sid,
+            "params": {
+                "target_height_mm": 60.0,
+                "tile_width_mm": 40.0,
+                "tile_height_mm": 40.0,
+                "params": {
+                    "lut_name": "__material_archive__",
+                    "modeling_mode": "high-fidelity",
+                    "target_width_mm": 90.0,
+                    "material_max_layer_count": 9,
+                },
+            },
+        }
+
+        async def _late_validate(**kwargs):
+            _resolve_session_dynamic_material_settings(
+                session_data=kwargs["session_data"],
+                request=kwargs["request"],
+                material_source="material_archive",
+            )
+            raise AssertionError("mismatch validation did not run")
+
+        with (
+            patch(
+                "api.routers.converter.generate._prepare_recipe_override_worker_inputs",
+                return_value=(None, None),
+            ) as prepare_inputs,
+            patch(
+                "api.routers.converter.generate._generate_large_format_raster",
+                side_effect=_late_validate,
+            ) as raster_helper,
+        ):
+            response = client.post(
+                "/api/convert/generate-large-format",
+                json=payload,
+            )
+
+        assert response.status_code == 409
+        assert response.json()["detail"]["code"] == (
+            "dynamic_material_preview_mismatch"
+        )
+        prepare_inputs.assert_not_called()
+        raster_helper.assert_not_called()
+
+    def test_large_format_dynamic_mismatch_rejects_before_svg_rasterization(
+        self,
+    ) -> None:
+        sid, _svg_path, _lut_path = _create_svg_session(
+            _test_store,
+            native_tiling_supported=True,
+        )
+        _test_store.put(sid, "material_source", "material_archive")
+        _test_store.put(sid, "selected_materials", ["mat-a", "mat-b"])
+        _test_store.put(sid, "material_dynamic_layer_count_enabled", True)
+        _test_store.put(sid, "material_min_layer_count", 5)
+        _test_store.put(sid, "material_max_layer_count", 8)
+        _test_store.put(sid, "material_delta_e00_tolerance", 0.5)
+        payload = {
+            "session_id": sid,
+            "params": {
+                "target_height_mm": 60.0,
+                "tile_width_mm": 40.0,
+                "tile_height_mm": 40.0,
+                "params": {
+                    "lut_name": "__material_archive__",
+                    "modeling_mode": "vector",
+                    "target_width_mm": 90.0,
+                    "material_max_layer_count": 9,
+                },
+            },
+        }
+
+        with (
+            patch(
+                "api.routers.converter.generate._rasterize_svg_for_large_format_fallback"
+            ) as rasterize_svg,
+            patch.object(_test_store, "register_temp_file") as register_temp,
+            patch.object(_test_store, "put") as store_put,
+        ):
+            response = client.post(
+                "/api/convert/generate-large-format",
+                json=payload,
+            )
+
+        assert response.status_code == 409
+        rasterize_svg.assert_not_called()
+        register_temp.assert_not_called()
+        store_put.assert_not_called()
+
+    def test_large_format_maps_typed_dynamic_worker_error(self) -> None:
+        from core.material_dynamic_solver import DynamicMaterialCandidateError
+
+        sid, _image_path, _lut_path = _create_raster_large_format_session(
+            _test_store
+        )
+        _test_store.put(sid, "material_source", "material_archive")
+        _test_store.put(sid, "selected_materials", ["mat-a", "mat-b"])
+        _test_store.put(sid, "material_layer_count", 10)
+        _test_store.put(sid, "material_dynamic_layer_count_enabled", True)
+        _test_store.put(sid, "material_min_layer_count", 6)
+        _test_store.put(sid, "material_max_layer_count", 8)
+        _test_store.put(sid, "material_delta_e00_tolerance", 0.4)
+        _test_store.put(sid, "recipe_overrides", [])
+        _mock_pool.submit = AsyncMock(
+            side_effect=DynamicMaterialCandidateError(
+                "no candidate",
+                target_srgb=(12, 34, 56),
+                layer_count=6,
+                phase="exact_search",
+            )
+        )
+        payload = {
+            "session_id": sid,
+            "params": {
+                "target_height_mm": 60.0,
+                "tile_width_mm": 90.0,
+                "tile_height_mm": 60.0,
+                "params": {
+                    "lut_name": "__material_archive__",
+                    "modeling_mode": "high-fidelity",
+                    "target_width_mm": 90.0,
+                },
+            },
+        }
+
+        response = client.post(
+            "/api/convert/generate-large-format",
+            json=payload,
+        )
+
+        assert response.status_code == 409
+        assert response.json()["detail"]["code"] == (
+            "dynamic_material_no_candidate"
+        )
+
     def test_large_format_svg_width_only_derives_height_and_uses_native_path(self) -> None:
         sid, svg_path, lut_path = _create_svg_session(_test_store, native_tiling_supported=True)
 
@@ -3356,6 +4112,89 @@ class TestLargeFormatDimensionsAndRouting:
             == "converter_generate_large_format_done"
         )
         assert done_fields["fallback_reason"] == "unsupported_svg_feature"
+
+    def test_dynamic_large_format_svg_unsupported_native_tiling_returns_422_without_raster_fallback(
+        self,
+    ) -> None:
+        sid, svg_path, lut_path = _create_svg_session(
+            _test_store,
+            native_tiling_supported=False,
+            warnings=["Native vector large-format is unavailable because the SVG uses text elements."],
+        )
+        _test_store.put(sid, "material_source", "material_archive")
+        _test_store.put(sid, "selected_materials", ["brand/base", "brand/red"])
+        _test_store.put(sid, "material_dynamic_layer_count_enabled", True)
+        _test_store.put(sid, "material_min_layer_count", 5)
+        _test_store.put(sid, "material_max_layer_count", 7)
+        _test_store.put(sid, "material_delta_e00_tolerance", 0.5)
+
+        try:
+            with (
+                patch("api.routers.converter.generate._generate_large_format_svg_native") as native_helper,
+                patch("api.routers.converter.generate._generate_large_format_raster") as raster_helper,
+            ):
+                response = client.post(
+                    "/api/convert/generate-large-format",
+                    json=_large_format_payload(
+                        sid,
+                        modeling_mode="vector",
+                        use_cached_matched_rgb=False,
+                    ),
+                )
+
+            assert response.status_code == 422, response.text
+            assert "native svg large-format" in response.json()["detail"].lower()
+            native_helper.assert_not_called()
+            raster_helper.assert_not_called()
+        finally:
+            _test_store.close(sid)
+            for path in (svg_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
+
+    def test_dynamic_large_format_svg_native_failure_returns_422_without_raster_fallback(
+        self,
+    ) -> None:
+        sid, svg_path, lut_path = _create_svg_session(
+            _test_store,
+            native_tiling_supported=True,
+        )
+        _test_store.put(sid, "material_source", "material_archive")
+        _test_store.put(sid, "selected_materials", ["brand/base", "brand/red"])
+        _test_store.put(sid, "material_dynamic_layer_count_enabled", True)
+        _test_store.put(sid, "material_min_layer_count", 5)
+        _test_store.put(sid, "material_max_layer_count", 7)
+        _test_store.put(sid, "material_delta_e00_tolerance", 0.5)
+
+        try:
+            with (
+                patch(
+                    "api.routers.converter.generate._generate_large_format_svg_native",
+                    side_effect=HTTPException(
+                        status_code=500,
+                        detail=LARGE_FORMAT_GENERATION_FAILED_DETAIL,
+                    ),
+                ) as native_helper,
+                patch("api.routers.converter.generate._generate_large_format_raster") as raster_helper,
+            ):
+                response = client.post(
+                    "/api/convert/generate-large-format",
+                    json=_large_format_payload(
+                        sid,
+                        modeling_mode="vector",
+                        use_cached_matched_rgb=False,
+                    ),
+                )
+
+            assert response.status_code == 422, response.text
+            assert "native vector generation could not complete" in response.json()["detail"].lower()
+            native_helper.assert_called_once()
+            raster_helper.assert_not_called()
+        finally:
+            _test_store.close(sid)
+            for path in (svg_path, lut_path):
+                if os.path.exists(path):
+                    os.unlink(path)
 
     def test_large_format_route_passes_recipe_override_artifacts_to_raster_helper(self) -> None:
         sid, image_path, lut_path = _create_raster_large_format_session(_test_store)
@@ -4822,7 +5661,7 @@ class TestLargeFormatDimensionsAndRouting:
             store.clear_all()
 
     @pytest.mark.asyncio
-    async def test_large_format_cached_material_archive_raster_keeps_spatial_inputs(
+    async def test_large_format_cached_dynamic_material_raster_keeps_spatial_inputs(
         self,
         tmp_path,
     ) -> None:
@@ -4830,27 +5669,41 @@ class TestLargeFormatDimensionsAndRouting:
         Image.fromarray(np.zeros((15, 21, 4), dtype=np.uint8)).save(image_path)
         matched_rgb = np.arange(6 * 10 * 3, dtype=np.uint8).reshape(6, 10, 3)
         mask_solid = np.ones((6, 10), dtype=bool)
-        material_matrix = np.arange(6 * 10 * 4, dtype=np.int16).reshape(6, 10, 4)
+        material_matrix = np.arange(6 * 10 * 6, dtype=np.int32).reshape(6, 10, 6)
+        quantized_image = np.flip(matched_rgb, axis=2).copy()
         matched_path = tmp_path / "matched.npy"
         mask_path = tmp_path / "mask.npy"
         material_path = tmp_path / "material.npy"
+        quantized_path = tmp_path / "quantized.npy"
         np.save(matched_path, matched_rgb)
         np.save(mask_path, mask_solid)
         np.save(material_path, material_matrix)
+        np.save(quantized_path, quantized_image)
         captured: list[dict[str, object]] = []
 
         async def _submit(_fn, _tile_path, _lut_path, tile_params):
+            assert _fn.__name__ == "worker_generate_model"
             arrays = [
                 np.load(tile_params["matched_rgb_path"]),
                 np.load(tile_params["mask_solid_path"]),
                 np.load(tile_params["material_matrix_path"]),
+                np.load(tile_params["quantized_image_path"]),
             ]
-            assert arrays[0].shape[:2] == arrays[1].shape == arrays[2].shape[:2]
+            assert (
+                arrays[0].shape[:2]
+                == arrays[1].shape
+                == arrays[2].shape[:2]
+                == arrays[3].shape[:2]
+            )
             captured.append(
                 {
                     "arrays": arrays,
                     "material_source": tile_params["material_source"],
                     "reuse": tile_params["reuse_preview_analysis"],
+                    "dynamic_enabled": tile_params[
+                        "material_dynamic_layer_count_enabled"
+                    ],
+                    "dynamic_max": tile_params["material_max_layer_count"],
                 }
             )
             output_path = tmp_path / f"archive-tile-{len(captured)}.3mf"
@@ -4875,6 +5728,7 @@ class TestLargeFormatDimensionsAndRouting:
                 matched_rgb_path=str(matched_path),
                 mask_solid_path=str(mask_path),
                 material_matrix_path=str(material_path),
+                quantized_image_path=str(quantized_path),
                 total_width_mm=100.0,
                 total_height_mm=60.0,
                 tile_width_mm=50.0,
@@ -4883,7 +5737,7 @@ class TestLargeFormatDimensionsAndRouting:
                 session_data={
                     "material_source": "material_archive",
                     "selected_materials": ["mat-a", "mat-b"],
-                    "material_layer_count": 4,
+                    "material_layer_count": 6,
                     "material_layer_height_mm": 0.08,
                     "material_grid_resolution": 64,
                     "material_backing_material_index": 1,
@@ -4892,15 +5746,87 @@ class TestLargeFormatDimensionsAndRouting:
                 store=store,
                 registry=registry,
                 pool=SimpleNamespace(submit=AsyncMock(side_effect=_submit)),
+                dynamic_material_settings=(True, 5, 6, 0.5),
             )
 
             download_id = result["download_url"].rsplit("/", 1)[-1]
             assert len(captured) == 4
             assert all(item["material_source"] == "material_archive" for item in captured)
             assert all(item["reuse"] is True for item in captured)
+            assert all(item["dynamic_enabled"] is True for item in captured)
+            assert all(item["dynamic_max"] == 6 for item in captured)
+            expected_quantized_tiles = [
+                quantized_image[:3, :5],
+                quantized_image[:3, 5:],
+                quantized_image[3:, :5],
+                quantized_image[3:, 5:],
+            ]
+            assert all(
+                np.array_equal(item["arrays"][3], expected)
+                for item, expected in zip(captured, expected_quantized_tiles)
+            )
         finally:
             if download_id is not None:
                 registry.cleanup_file(download_id)
+            store.clear_all()
+
+    @pytest.mark.asyncio
+    async def test_large_format_dynamic_cached_analysis_requires_quantized_image(
+        self,
+        tmp_path,
+    ) -> None:
+        """Dynamic raster tiling rejects an incomplete cache before submitting tiles."""
+
+        image_path = tmp_path / "source.png"
+        Image.fromarray(np.zeros((6, 10, 3), dtype=np.uint8)).save(image_path)
+        lut_path = tmp_path / "source.npy"
+        lut_path.write_bytes(b"lut")
+        matched_path = tmp_path / "matched.npy"
+        mask_path = tmp_path / "mask.npy"
+        material_path = tmp_path / "material.npy"
+        np.save(matched_path, np.zeros((6, 10, 3), dtype=np.uint8))
+        np.save(mask_path, np.ones((6, 10), dtype=bool))
+        np.save(material_path, np.zeros((6, 10, 6), dtype=np.int32))
+
+        store = SessionStore(ttl=1800)
+        registry = FileRegistry()
+        sid = store.create()
+        pool = SimpleNamespace(submit=AsyncMock())
+        request = LargeFormatConvertGenerateRequest(
+            lut_name="__material_archive__",
+            modeling_mode=ModelingMode.HIGH_FIDELITY,
+        )
+        try:
+            with pytest.raises(HTTPException) as exc_info:
+                await _generate_large_format_raster(
+                    image_path=str(image_path),
+                    lut_path="__material_archive__",
+                    source_basename="poster",
+                    recipe_overrides=None,
+                    recipe_override_masks_path=None,
+                    matched_rgb_path=str(matched_path),
+                    mask_solid_path=str(mask_path),
+                    material_matrix_path=str(material_path),
+                    total_width_mm=100.0,
+                    total_height_mm=60.0,
+                    tile_width_mm=50.0,
+                    tile_height_mm=30.0,
+                    request=request,
+                    session_data={"material_source": "material_archive"},
+                    sid=sid,
+                    store=store,
+                    registry=registry,
+                    pool=pool,
+                    dynamic_material_settings=(True, 5, 6, 0.5),
+                )
+
+            assert exc_info.value.status_code == 409
+            assert (
+                exc_info.value.detail
+                == LARGE_FORMAT_CACHED_ANALYSIS_INVALID_DETAIL
+            )
+            pool.submit.assert_not_called()
+        finally:
             store.clear_all()
 
     def test_large_format_raster_recipe_override_only_slices_final_matrix_once(self) -> None:
@@ -6146,6 +7072,160 @@ def test_generate_route_infers_material_archive_white_backing_when_unspecified(t
     assert submitted_params["material_backing_material_index"] == 2
 
 
+def test_generate_route_inherits_dynamic_settings_and_maps_typed_error(
+    tmp_path,
+) -> None:
+    from core.material_dynamic_solver import DynamicMaterialCandidateError
+
+    _test_store.clear_all()
+    image_path = tmp_path / "input.png"
+    Image.fromarray(np.zeros((4, 4, 3), dtype=np.uint8)).save(image_path)
+    sid = _test_store.create()
+    _test_store.put(sid, "image_path", str(image_path))
+    _test_store.put(sid, "lut_path", "__material_archive__")
+    _test_store.put(sid, "material_source", "material_archive")
+    _test_store.put(sid, "selected_materials", ["mat-a", "mat-b"])
+    _test_store.put(sid, "material_layer_count", 10)
+    _test_store.put(sid, "material_dynamic_layer_count_enabled", True)
+    _test_store.put(sid, "material_min_layer_count", 6)
+    _test_store.put(sid, "material_max_layer_count", 8)
+    _test_store.put(sid, "material_delta_e00_tolerance", 0.4)
+    _test_store.put(sid, "replacement_regions", [])
+    _test_store.put(sid, "free_color_set", set())
+    _test_store.put(
+        sid,
+        "preview_cache",
+        {
+            "target_w": 4,
+            "target_h": 4,
+            "target_width_mm": 40.0,
+            "matched_rgb": np.zeros((4, 4, 3), dtype=np.uint8),
+            "mask_solid": np.ones((4, 4), dtype=bool),
+            "material_matrix": np.zeros((4, 4, 8), dtype=np.uint8),
+        },
+    )
+    captured: dict[str, object] = {}
+
+    async def _raise_typed(_worker, _image, _lut, params):
+        captured.update(params)
+        raise DynamicMaterialCandidateError(
+            "no candidate",
+            target_srgb=(12, 34, 56),
+            layer_count=6,
+            phase="exact_search",
+        )
+
+    _mock_pool.submit = AsyncMock(side_effect=_raise_typed)
+
+    response = client.post(
+        "/api/convert/generate",
+        json={
+            "session_id": sid,
+            "params": {"lut_name": "__material_archive__"},
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "dynamic_material_no_candidate"
+    assert captured["material_dynamic_layer_count_enabled"] is True
+    assert captured["material_min_layer_count"] == 6
+    assert captured["material_max_layer_count"] == 8
+    assert captured["material_delta_e00_tolerance"] == 0.4
+
+
+def test_generate_route_accepts_dynamic_native_svg_cached_analysis(tmp_path) -> None:
+    """Regular native SVG generation projects the authoritative vector cache."""
+
+    _test_store.clear_all()
+    svg_path = tmp_path / "native.svg"
+    svg_path.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4">'
+        '<path d="M0,0 L4,0 L4,4 Z" fill="#ff0000"/>'
+        "</svg>",
+        encoding="utf-8",
+    )
+    out_path = tmp_path / "native.3mf"
+    out_path.write_bytes(b"3mf")
+    sid = _test_store.create()
+    _test_store.put(sid, "image_path", str(svg_path))
+    _test_store.put(sid, "lut_path", "__material_archive__")
+    _test_store.put(sid, "material_source", "material_archive")
+    _test_store.put(sid, "selected_materials", ["brand/base", "brand/red"])
+    _test_store.put(sid, "color_layers", 7)
+    _test_store.put(sid, "layer_height_mm", 0.08)
+    _test_store.put(sid, "material_dynamic_layer_count_enabled", True)
+    _test_store.put(sid, "material_min_layer_count", 5)
+    _test_store.put(sid, "material_max_layer_count", 7)
+    _test_store.put(sid, "material_delta_e00_tolerance", 0.5)
+    _test_store.put(sid, "replacement_regions", [])
+    _test_store.put(sid, "free_color_set", set())
+    _test_store.put(
+        sid,
+        "preview_cache",
+        {
+            "target_w": 40,
+            "target_h": 40,
+            "target_width_mm": 40.0,
+            "color_mode": "4-Color (RYBW)",
+            "modeling_mode": "vector",
+            "color_layers": 7,
+            "layer_height_mm": 0.08,
+            "quantize_colors": 48,
+            "enable_cleanup": True,
+            "hue_weight": 0.0,
+            "chroma_gate": 15.0,
+            "use_lut_constrained": False,
+            "auto_dynamic_range": False,
+            "model_enable": False,
+            "model_only": False,
+            "model_threshold": None,
+            "model_margin": None,
+            "svg_pixels_per_mm": 10.0,
+            "material_source": "material_archive",
+            "matched_rgb": np.zeros((40, 40, 3), dtype=np.uint8),
+            "mask_solid": np.ones((40, 40), dtype=bool),
+            "material_matrix": np.zeros((40, 40, 7), dtype=np.int32),
+            "material_dynamic_layer_info": {
+                "enabled": True,
+                "max_layer_count": 7,
+                "colors": [],
+            },
+        },
+    )
+    _mock_pool.submit = AsyncMock(
+        return_value={
+            "threemf_path": str(out_path),
+            "glb_path": None,
+            "status_msg": "ok",
+        }
+    )
+
+    response = client.post(
+        "/api/convert/generate",
+        json={
+            "session_id": sid,
+            "params": {
+                "lut_name": "__material_archive__",
+                "modeling_mode": "vector",
+                "target_width_mm": 40.0,
+                "color_layers": 7,
+                "material_dynamic_layer_count_enabled": True,
+                "material_min_layer_count": 5,
+                "material_max_layer_count": 7,
+                "material_delta_e00_tolerance": 0.5,
+                "use_cached_matched_rgb": True,
+            },
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    submitted_params = _mock_pool.submit.call_args.args[3]
+    assert submitted_params["material_dynamic_layer_count_enabled"] is True
+    assert submitted_params["material_matrix_path"] is not None
+    assert submitted_params["quantized_image_path"] is None
+    assert submitted_params["reuse_preview_analysis"] == "required"
+
+
 def test_generate_route_rejects_material_archive_relief_color_height_below_optical_depth(tmp_path) -> None:
     _test_store.clear_all()
     image_path = tmp_path / "input.png"
@@ -6989,11 +8069,18 @@ def test_generate_route_preserves_session_recipe_overrides_when_request_is_empty
         [
             {
                 "region_id": "region-1",
-                "recipe": [1, 1, 1, 1, 1, 1, 1],
+                "recipe": [1, 1, 1, 1, 1],
                 "layer_order": "Top2Bottom",
+                "color_layers": 5,
+                "actual_recipe_top_to_bottom": [1, 1, 1, 1, 1],
+                "print_recipe_top_to_bottom": [1, 1, 1, 1, 1, 2, 2],
+                "actual_layer_count": 5,
+                "padding_layer_count": 2,
             }
         ],
     )
+    material_matrix = np.zeros((4, 4, 7), dtype=np.uint8)
+    material_matrix[mask] = np.asarray([1, 1, 1, 1, 1, 2, 2], dtype=np.uint8)
     _test_store.put(
         session_id,
         "preview_cache",
@@ -7003,7 +8090,7 @@ def test_generate_route_preserves_session_recipe_overrides_when_request_is_empty
             "target_width_mm": 40.0,
             "matched_rgb": np.zeros((4, 4, 3), dtype=np.uint8),
             "mask_solid": np.ones((4, 4), dtype=bool),
-            "material_matrix": np.zeros((4, 4, 5), dtype=np.uint8),
+            "material_matrix": material_matrix,
             "lut_metadata": SimpleNamespace(
                 layer_order="Top2Bottom",
                 base_channel_idx=0,
@@ -7037,12 +8124,46 @@ def test_generate_route_preserves_session_recipe_overrides_when_request_is_empty
     assert submitted_params["recipe_overrides"] == [
         {
             "region_id": "region-1",
-            "recipe": [1, 1, 1, 1, 1, 1, 1],
+            "recipe": [1, 1, 1, 1, 1],
             "layer_order": "Top2Bottom",
+            "color_layers": 5,
+            "actual_recipe_top_to_bottom": [1, 1, 1, 1, 1],
+            "print_recipe_top_to_bottom": [1, 1, 1, 1, 1, 2, 2],
+            "actual_layer_count": 5,
+            "padding_layer_count": 2,
         }
     ]
     material_matrix = np.load(submitted_params["material_matrix_path"])
-    assert np.all(material_matrix[mask] == np.array([1, 1, 1, 1, 1, 1, 1]))
+    assert material_matrix.shape == (4, 4, 7)
+
+
+def test_large_format_worker_params_preserve_normalized_dynamic_recipe_metadata() -> None:
+    raw_overrides = [
+        {
+            "region_id": "region-1",
+            "recipe": [1, 1, 1, 1, 1],
+            "layer_order": "Top2Bottom",
+            "color_layers": 5,
+            "actual_recipe_top_to_bottom": [1, 1, 1, 1, 1],
+            "print_recipe_top_to_bottom": [1, 1, 1, 1, 1, 2, 2],
+            "actual_layer_count": 5,
+            "padding_layer_count": 2,
+        }
+    ]
+    normalized = _normalize_recipe_overrides(raw_overrides)
+    request = LargeFormatConvertGenerateRequest(
+        lut_name="test_lut",
+        color_layers=7,
+    )
+
+    worker_params = _resolve_large_format_shared_params(
+        {"replacement_regions": [], "free_color_set": set()},
+        request,
+        None,
+        recipe_overrides=normalized,
+    )
+
+    assert worker_params["recipe_overrides"] == raw_overrides
 
 
 def test_resolve_recipe_overrides_prefers_request_virtual_materials_when_provided() -> None:

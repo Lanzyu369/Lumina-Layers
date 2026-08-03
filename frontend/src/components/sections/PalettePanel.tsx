@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { useConverterStore } from "../../stores/converter";
-import type { PaletteEntry } from "../../api/types";
+import type { DynamicMaterialRecipe, PaletteEntry } from "../../api/types";
 import Slider from "../ui/Slider";
 import Button from "../ui/Button";
 import Switch from "../ui/Switch";
@@ -8,6 +8,7 @@ import CustomRecipeDialog from "../ui/CustomRecipeDialog";
 import { useI18n } from "../../i18n/context";
 import { cx, workstationInsetCardClass, workstationPanelCardClass } from "../ui/panelPrimitives";
 import { normalizeResourceUrl } from "../../utils/resourceUrl";
+import MaterialLayerBenefitCurve from "./MaterialLayerBenefitCurve";
 
 // ========== ToolbarGroup ==========
 
@@ -73,6 +74,7 @@ function ToolbarGroup({ label, tint, children, contentClassName }: ToolbarGroupP
 
 interface PaletteItemProps {
   entry: PaletteEntry;
+  dynamicRecipe?: DynamicMaterialRecipe;
   isSelected: boolean;
   remappedHex: string | undefined;
   heightMm: number | undefined;
@@ -85,6 +87,7 @@ interface PaletteItemProps {
 
 function PaletteItem({
   entry,
+  dynamicRecipe,
   isSelected,
   remappedHex,
   heightMm,
@@ -97,6 +100,18 @@ function PaletteItem({
   const { t } = useI18n();
   const displayHex = remappedHex ?? entry.matched_hex;
   const isRemapped = !!remappedHex;
+  const dynamicAccessibleText = dynamicRecipe
+    ? [
+        `${t("palette_dynamic_actual_layers")} ${dynamicRecipe.actual_layer_count}`,
+        `${t("palette_dynamic_saved_layers")} ${dynamicRecipe.padding_layer_count}`,
+        `${t("palette_dynamic_selected_delta_e00")} ${dynamicRecipe.selected_delta_e00.toFixed(2)}`,
+        `${t("palette_dynamic_fixed_delta_e00")} ${dynamicRecipe.fixed_max_delta_e00.toFixed(2)}`,
+        `${t("palette_dynamic_best_delta_e00")} ${dynamicRecipe.best_range_delta_e00.toFixed(2)}`,
+        `${t("palette_dynamic_sacrifice")} ${dynamicRecipe.delta_e00_sacrifice.toFixed(2)}`,
+      ]
+        .join("，")
+    : "";
+  const accessibleLabel = `${t("lut_grid_color_label").replace("{hex}", entry.matched_hex)}，${entry.percentage.toFixed(1)}%${isRemapped ? `，${t("palette_replaced_label").replace("{hex}", `#${remappedHex}`)}` : ""}${dynamicAccessibleText ? `，${dynamicAccessibleText}` : ""}`;
 
   // Border priority: isFreeColor > isRemapped > default
   const borderClass = isFreeColor
@@ -111,7 +126,7 @@ function PaletteItem({
       <div
         role="button"
         tabIndex={0}
-        aria-label={`${t("lut_grid_color_label").replace("{hex}", entry.matched_hex)}，${entry.percentage.toFixed(1)}%${isRemapped ? `，${t("palette_replaced_label").replace("{hex}", `#${remappedHex}`)}` : ""}`}
+        aria-label={accessibleLabel}
         aria-pressed={isSelected}
         onClick={onSelect}
         onKeyDown={(e) => {
@@ -134,6 +149,9 @@ function PaletteItem({
         <span className="text-[clamp(0.55rem,0.75vw,0.625rem)] tabular-nums leading-none text-slate-500 dark:text-slate-400">
           {entry.percentage.toFixed(1)}%
         </span>
+        {dynamicRecipe && (
+          <DynamicMaterialRecipeMetrics recipe={dynamicRecipe} />
+        )}
       </div>
     );
   }
@@ -143,7 +161,7 @@ function PaletteItem({
     <div
       role="button"
       tabIndex={0}
-      aria-label={`${t("lut_grid_color_label").replace("{hex}", entry.matched_hex)}，${entry.percentage.toFixed(1)}%${isRemapped ? `，${t("palette_replaced_label").replace("{hex}", `#${remappedHex}`)}` : ""}`}
+      aria-label={accessibleLabel}
       aria-pressed={isSelected}
       onClick={onSelect}
       onKeyDown={(e) => {
@@ -169,6 +187,9 @@ function PaletteItem({
           {entry.percentage.toFixed(1)}%
         </span>
       </div>
+      {dynamicRecipe && (
+        <DynamicMaterialRecipeMetrics recipe={dynamicRecipe} />
+      )}
       {/* Height slider */}
       <div
         onClick={(e) => e.stopPropagation()}
@@ -186,6 +207,56 @@ function PaletteItem({
       </div>
     </div>
   );
+}
+
+function DynamicMaterialRecipeMetrics({
+  recipe,
+}: {
+  recipe: DynamicMaterialRecipe;
+}) {
+  const { t } = useI18n();
+  const metrics = [
+    [t("palette_dynamic_actual_layers"), String(recipe.actual_layer_count)],
+    [t("palette_dynamic_saved_layers"), String(recipe.padding_layer_count)],
+    [t("palette_dynamic_selected_delta_e00"), recipe.selected_delta_e00.toFixed(2)],
+    [t("palette_dynamic_fixed_delta_e00"), recipe.fixed_max_delta_e00.toFixed(2)],
+    [t("palette_dynamic_best_delta_e00"), recipe.best_range_delta_e00.toFixed(2)],
+    [t("palette_dynamic_sacrifice"), recipe.delta_e00_sacrifice.toFixed(2)],
+  ] as const;
+
+  return (
+    <dl className="mt-1 grid w-full grid-cols-[minmax(0,1fr)_auto] gap-x-1.5 gap-y-0.5 border-t border-slate-200/70 pt-1.5 text-[9px] leading-tight dark:border-slate-700/70">
+      {metrics.map(([label, value]) => (
+        <div key={label} className="contents">
+          <dt className="truncate text-left text-slate-500 dark:text-slate-400">
+            {label}
+          </dt>
+          <dd className="tabular-nums text-right font-medium text-slate-700 dark:text-slate-200">
+            {value}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function dynamicTargetHex(recipe: DynamicMaterialRecipe): string | null {
+  if (recipe.target_srgb.length !== 3) {
+    return null;
+  }
+  const channels: string[] = [];
+  for (const channel of recipe.target_srgb) {
+    if (!Number.isInteger(channel) || channel < 0 || channel > 255) {
+      return null;
+    }
+    channels.push(channel.toString(16).padStart(2, "0"));
+  }
+  return channels.join("");
+}
+
+function normalizedPaletteTargetHex(value: string): string | null {
+  const normalized = value.replace(/^#/, "").toLowerCase();
+  return /^[0-9a-f]{6}$/.test(normalized) ? normalized : null;
 }
 
 // ========== FreeColorSummary ==========
@@ -226,6 +297,18 @@ export default function PalettePanel({
   const { t } = useI18n();
   const [recipeDialogOpen, setRecipeDialogOpen] = useState(false);
   const palette = useConverterStore((s) => s.palette);
+  const materialDynamicRecipes = useConverterStore(
+    (s) => s.materialDynamicRecipes,
+  );
+  const materialLayerBenefitCurve = useConverterStore(
+    (s) => s.materialLayerBenefitCurve,
+  );
+  const materialLayerBenefitScope = useConverterStore(
+    (s) => s.materialLayerBenefitScope,
+  );
+  const materialLayerBenefitPixelCount = useConverterStore(
+    (s) => s.materialLayerBenefitPixelCount,
+  );
   const selectedLutInfo = useConverterStore((s) => s.selectedLutInfo);
   const sessionId = useConverterStore((s) => s.sessionId);
   const color_layers = useConverterStore((s) => s.color_layers);
@@ -284,6 +367,17 @@ export default function PalettePanel({
 
   const hasRemaps = Object.keys(colorRemapMap).length > 0 || regionReplacementCount > 0;
   const hasHistory = remapHistory.length > 0;
+  const dynamicRecipesByTarget = new Map<string, DynamicMaterialRecipe>();
+  for (const recipe of materialDynamicRecipes) {
+    const targetHex = dynamicTargetHex(recipe);
+    if (targetHex && !dynamicRecipesByTarget.has(targetHex)) {
+      dynamicRecipesByTarget.set(targetHex, recipe);
+    }
+  }
+  const hasDynamicRecipeData = palette.some((entry) => {
+    const targetHex = normalizedPaletteTargetHex(entry.quantized_hex);
+    return targetHex !== null && dynamicRecipesByTarget.has(targetHex);
+  });
 
   const handleSelect = (hex: string) => {
     switch (selectionMode) {
@@ -345,7 +439,10 @@ export default function PalettePanel({
           {t("palette_no_data")}
         </p>
       ) : (
-        <div className="flex min-h-0 flex-1 flex-col gap-1.5">
+        <div
+          className="dock-scrollbar min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1"
+          data-testid="palette-content-scroll"
+        >
           {/* Toolbar: selected color detail + grouped action buttons */}
           <div className="shrink-0 flex flex-col gap-1.5">
             {/* Inline selected color swatches */}
@@ -543,15 +640,22 @@ export default function PalettePanel({
             <FreeColorSummary freeColors={free_color_set} />
           </div>
 
+          <MaterialLayerBenefitCurve
+            points={materialLayerBenefitCurve}
+            scope={materialLayerBenefitScope}
+            pixelCount={materialLayerBenefitPixelCount}
+          />
+
           {/* Palette items */}
           <div
-            className="dock-scrollbar min-h-0 flex-1 overflow-y-auto pr-1"
             role="listbox"
             aria-label={t("palette_list_label")}
           >
             <div
               className={
-                enable_relief
+                hasDynamicRecipeData
+                  ? "grid grid-cols-[repeat(auto-fit,minmax(12rem,1fr))] gap-2"
+                  : enable_relief
                   ? "grid grid-cols-[repeat(auto-fit,minmax(7rem,1fr))] gap-2"
                   : "grid grid-cols-[repeat(auto-fit,minmax(3.4rem,1fr))] gap-2"
               }
@@ -560,6 +664,11 @@ export default function PalettePanel({
                 <PaletteItem
                   key={entry.matched_hex}
                   entry={entry}
+                  dynamicRecipe={
+                    dynamicRecipesByTarget.get(
+                      normalizedPaletteTargetHex(entry.quantized_hex) ?? "",
+                    )
+                  }
                   isSelected={getIsSelected(entry.matched_hex)}
                   remappedHex={colorRemapMap[entry.matched_hex]}
                   heightMm={color_height_map[entry.matched_hex]}
@@ -664,6 +773,14 @@ export default function PalettePanel({
             // 路径也必须保持一致。
             layerImages: [] as typeof state.layerImages,
             layerImagesSourceKey: null,
+            materialDynamicRecipes: response.material_dynamic_recipes ?? [],
+            materialLayerBenefitCurve:
+              response.material_layer_benefit_curve ?? [],
+            materialLayerBenefitScope:
+              response.material_layer_benefit_scope ??
+              "all_printable_pixels",
+            materialLayerBenefitPixelCount:
+              response.material_layer_benefit_pixel_count ?? 0,
           }));
           useConverterStore.getState()._pollAsyncGlb();
         }}

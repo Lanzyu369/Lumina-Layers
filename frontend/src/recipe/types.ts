@@ -10,7 +10,12 @@
  * V3: 可选的版本化创意工坊恢复来源。
  */
 
-import type { FridgeMagnetItem } from "../api/types";
+import type {
+  DynamicMaterialRecipe,
+  FridgeMagnetItem,
+  MaterialLayerBenefitPoint,
+  MaterialLayerBenefitScope,
+} from "../api/types";
 import type { WorkshopRecipeSource } from "../workshop/types";
 
 // ========== Asset ==========
@@ -186,6 +191,19 @@ export interface ConverterRecipeSource {
   material_layer_count: number;
   material_layer_height_mm: number;
   material_backing_material_dir_name: string | null;
+  material_dynamic_layer_count_enabled?: boolean;
+  material_min_layer_count?: number;
+  material_max_layer_count?: number;
+  material_delta_e00_tolerance?: number;
+}
+
+export interface ConverterRecipeMaterialDynamic {
+  recipes: DynamicMaterialRecipe[];
+  benefit_curve: MaterialLayerBenefitPoint[];
+  /** Missing on legacy cards; import treats it as all printable pixels. */
+  scope?: MaterialLayerBenefitScope;
+  /** Effective pixel count represented by ``benefit_curve``. */
+  pixel_count?: number;
 }
 
 // ========== Converter Recipe (combined) ==========
@@ -193,6 +211,7 @@ export interface ConverterRecipeSource {
 export interface ConverterRecipe {
   base: ConverterRecipeBase;
   source?: ConverterRecipeSource;
+  material_dynamic?: ConverterRecipeMaterialDynamic;
   geometry: ConverterRecipeGeometry;
   relief: ConverterRecipeRelief;
   outline: ConverterRecipeOutline;

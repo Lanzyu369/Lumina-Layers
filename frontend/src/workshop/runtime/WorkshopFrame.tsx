@@ -150,7 +150,8 @@ function createSessionId(): string {
 
 function readyMessage(
   value: unknown,
-  module: WorkshopFrameModule,
+  moduleId: string,
+  moduleVersion: string,
 ): boolean {
   if (
     typeof value !== "object" ||
@@ -162,8 +163,8 @@ function readyMessage(
   const message = value as Record<string, unknown>;
   return (
     message.type === "lumina.workshop.ready" &&
-    message.moduleId === module.moduleId &&
-    message.moduleVersion === module.moduleVersion &&
+    message.moduleId === moduleId &&
+    message.moduleVersion === moduleVersion &&
     message.apiVersion === WORKSHOP_API_VERSION
   );
 }
@@ -206,6 +207,12 @@ export function WorkshopFrame({
   const frameLoadedRef = useRef(false);
   const failureHandledRef = useRef(false);
   const mountedRef = useRef(true);
+  const prepareCandidateRef = useRef(prepareCandidate);
+  const onStartFailureRef = useRef(onStartFailure);
+  const disableVersionRef = useRef(disableVersion);
+  const candidatePropRef = useRef(module.candidate);
+  // Activation updates the prop mid-connection; keep startup intent separate.
+  const sessionCandidateRef = useRef(module.candidate);
   const [runtimeDocument, setRuntimeDocument] =
     useState<RuntimeDocument | null>(null);
   const [phase, setPhase] = useState<RuntimePhase>("preparing");
@@ -215,6 +222,27 @@ export function WorkshopFrame({
     useState<RuntimeProgress | null>(null);
   const [moduleError, setModuleError] =
     useState<RuntimeError | null>(null);
+  const runtimeModuleId = module.moduleId;
+  const runtimeModuleVersion = module.moduleVersion;
+  const runtimeApiMin = module.workshopApi.min;
+  const runtimeApiMaxExclusive =
+    module.workshopApi.maxExclusive;
+  const runtimePermissionsJson = JSON.stringify(
+    module.permissions,
+  );
+
+  useEffect(() => {
+    candidatePropRef.current = module.candidate;
+  }, [module.candidate]);
+
+  useEffect(() => {
+    prepareCandidateRef.current = prepareCandidate;
+  }, [prepareCandidate]);
+
+  useEffect(() => {
+    onStartFailureRef.current = onStartFailure;
+    disableVersionRef.current = disableVersion;
+  }, [disableVersion, onStartFailure]);
 
   const clearHandshakeTimer = useCallback(() => {
     if (handshakeTimerRef.current === null) {
@@ -253,12 +281,14 @@ export function WorkshopFrame({
         reason,
         consecutiveFailures,
       };
-      void Promise.resolve(onStartFailure?.(failure)).finally(() => {
+      void Promise.resolve(
+        onStartFailureRef.current?.(failure),
+      ).finally(() => {
         if (
           consecutiveFailures >= 3 &&
           module.previousVersion === null
         ) {
-          void disableVersion?.(
+          void disableVersionRef.current?.(
             module.moduleId,
             module.moduleVersion,
           );
@@ -267,16 +297,16 @@ export function WorkshopFrame({
     },
     [
       closeConnection,
-      disableVersion,
       module.consecutiveStartFailures,
       module.moduleId,
       module.moduleVersion,
       module.previousVersion,
-      onStartFailure,
     ],
   );
 
   useEffect(() => {
+    const sessionCandidate = candidatePropRef.current;
+    sessionCandidateRef.current = sessionCandidate;
     mountedRef.current = true;
     handshakeAcceptedRef.current = false;
     frameLoadedRef.current = false;
@@ -292,7 +322,12 @@ export function WorkshopFrame({
         setPhase("disabled");
         return;
       }
-      if (!isWorkshopApiCompatible(module.workshopApi)) {
+      if (
+        !isWorkshopApiCompatible({
+          min: runtimeApiMin,
+          maxExclusive: runtimeApiMaxExclusive,
+        })
+      ) {
         setPhase("incompatible");
         return;
       }
@@ -307,13 +342,13 @@ export function WorkshopFrame({
         return;
       }
       setPhase("preparing");
-      if (module.candidate) {
-        if (prepareCandidate === undefined) {
+      if (sessionCandidate) {
+        if (prepareCandidateRef.current === undefined) {
           failStartup("candidate-prepare-failed");
           return;
         }
         try {
-          await prepareCandidate(
+          await prepareCandidateRef.current(
             module.moduleId,
             module.moduleVersion,
           );
@@ -366,15 +401,14 @@ export function WorkshopFrame({
     failStartup,
     loadBrowserRuntime,
     module.browserRuntimeHtml,
-    module.candidate,
     module.enabled,
     module.moduleId,
     module.moduleVersion,
     module.official,
     module.runtimeUrl,
     module.source,
-    module.workshopApi,
-    prepareCandidate,
+    runtimeApiMaxExclusive,
+    runtimeApiMin,
     runtimeMode,
   ]);
 
@@ -405,8 +439,15 @@ export function WorkshopFrame({
         handshakeAcceptedRef.current ||
         failureHandledRef.current ||
         event.source !== iframeRef.current?.contentWindow ||
-        !readyMessage(event.data, module) ||
-        !isWorkshopApiCompatible(module.workshopApi)
+        !readyMessage(
+          event.data,
+          runtimeModuleId,
+          runtimeModuleVersion,
+        ) ||
+        !isWorkshopApiCompatible({
+          min: runtimeApiMin,
+          maxExclusive: runtimeApiMaxExclusive,
+        })
       ) {
         return;
       }
@@ -443,20 +484,20 @@ export function WorkshopFrame({
         "lifecycle.ready": async (payload, context) => {
           await upstreamReady?.(payload, context);
           try {
-            if (module.candidate) {
+            if (sessionCandidateRef.current) {
               if (activateCandidate === undefined) {
                 throw new Error(
                   "Candidate activation is unavailable.",
                 );
               }
               await activateCandidate(
-                module.moduleId,
-                module.moduleVersion,
+                runtimeModuleId,
+                runtimeModuleVersion,
               );
             }
             await onStartSuccess?.(
-              module.moduleId,
-              module.moduleVersion,
+              runtimeModuleId,
+              runtimeModuleVersion,
             );
           } catch (error) {
             failStartup("activation-failed");
@@ -474,10 +515,14 @@ export function WorkshopFrame({
       try {
         host = createWorkshopRpcHost({
           identity: {
-            moduleId: module.moduleId,
-            moduleVersion: module.moduleVersion,
+            moduleId: runtimeModuleId,
+            moduleVersion: runtimeModuleVersion,
           },
-          permissions: new Set(module.permissions),
+          permissions: new Set(
+            JSON.parse(
+              runtimePermissionsJson,
+            ) as WorkshopPermissionName[],
+          ),
           handlers: runtimeHandlers,
         });
         channel = createChannel();
@@ -509,8 +554,12 @@ export function WorkshopFrame({
     createChannel,
     failStartup,
     handlers,
-    module,
     onStartSuccess,
+    runtimeApiMaxExclusive,
+    runtimeApiMin,
+    runtimeModuleId,
+    runtimeModuleVersion,
+    runtimePermissionsJson,
     runtimeMode,
     syntheticHandlers,
   ]);

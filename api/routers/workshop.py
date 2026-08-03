@@ -37,6 +37,7 @@ from api.schemas.workshop import (
     WorkshopRevocationResponse,
 )
 from api.structured_logging import get_logger
+from api.workshop_seed import restore_official_workshop_seed
 from config import get_asset_path, get_workshop_data_dir
 from core.workshop import (
     InstalledModuleState,
@@ -140,6 +141,7 @@ def _raise_workshop_http_error(
     detail: str,
     module_id: str | None = None,
     version: str | None = None,
+    log_error_message: str | None = None,
 ) -> NoReturn:
     log.warning(
         "Creative Workshop request failed",
@@ -147,7 +149,7 @@ def _raise_workshop_http_error(
             "event": event,
             "status_code": status_code,
             "error_type": type(exc).__name__,
-            "error_message": str(exc),
+            "error_message": log_error_message or str(exc),
             "module_id": module_id,
             "version": version,
         },
@@ -878,6 +880,84 @@ def workshop_uninstall_module(
             if state is not None
             else None
         )
+    )
+
+
+@router.post(
+    "/modules/{module_id}/restore-seed",
+    response_model=WorkshopModuleMutationResponse,
+)
+def workshop_restore_official_seed(
+    module_id: str,
+) -> WorkshopModuleMutationResponse:
+    """Restore a user-uninstalled official module from bundled bytes.
+
+    使用应用内置且已校验的安装包恢复被用户卸载的官方模块。
+    """
+
+    installer = get_workshop_installer()
+    try:
+        result = restore_official_workshop_seed(
+            module_id,
+            installer=installer,
+        )
+    except FileNotFoundError as exc:
+        _raise_workshop_http_error(
+            event="workshop_module_seed_restore_failed",
+            exc=exc,
+            status_code=503,
+            detail="The bundled official Workshop module is unavailable.",
+            module_id=module_id,
+            log_error_message=(
+                "bundled official Workshop seed is not configured"
+            ),
+        )
+    except (WorkshopPackageError, ValueError) as exc:
+        _raise_workshop_http_error(
+            event="workshop_module_seed_restore_failed",
+            exc=exc,
+            status_code=503,
+            detail="The bundled official Workshop module failed validation.",
+            module_id=module_id,
+            log_error_message=(
+                "bundled official Workshop seed failed validation"
+            ),
+        )
+    except WorkshopInstallError as exc:
+        _raise_workshop_http_error(
+            event="workshop_module_seed_restore_failed",
+            exc=exc,
+            status_code=409,
+            detail=str(exc),
+            module_id=module_id,
+        )
+    except OSError as exc:
+        _raise_workshop_http_error(
+            event="workshop_module_seed_restore_failed",
+            exc=exc,
+            status_code=503,
+            detail="Creative Workshop storage is unavailable.",
+            module_id=module_id,
+            log_error_message=(
+                "Workshop seed restore storage transaction failed"
+            ),
+        )
+
+    state = result.state
+    if state is None:
+        raise RuntimeError("Workshop seed restore returned invalid state")
+    log.info(
+        "Creative Workshop official seed restored",
+        extra={
+            "event": "workshop_module_seed_restore_done",
+            "module_id": result.module_id,
+            "version": result.version,
+            "install_source": "seed",
+            "official": True,
+        },
+    )
+    return WorkshopModuleMutationResponse(
+        module=_state_response(state, installer)
     )
 
 

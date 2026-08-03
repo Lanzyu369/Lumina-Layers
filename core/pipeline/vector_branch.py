@@ -27,6 +27,8 @@ import inspect
 import math
 import os
 import time
+from copy import deepcopy
+from types import SimpleNamespace
 
 import cv2  # noqa: F401  -- imported for side-effect parity with coordinator
 import numpy as np
@@ -41,7 +43,6 @@ from core.errors import CachedPreviewAnalysisError
 from core.geometry_utils import create_keychain_loop
 from core.pipeline import p06_bed_rendering, s09_export_3mf, vector_glb_preview
 from core.pipeline.pipeline_utils import extract_color_palette
-from core.pipeline.s03_color_replacement import _normalize_color_replacements_input
 from core.pipeline.processing_ops.svg_rasterizer import rasterize_svg
 from core.pipeline.s08_auxiliary_meshes import (
     _coerce_preview_rgba,
@@ -377,7 +378,7 @@ def _log_vector_preview_timings(
         extra={
             "event": "vector_preview_timings",
             "duration_ms": round(float(timings.get("vector_preview_total_s", 0.0)) * 1000, 3),
-            "timings": {str(key): float(value) for key, value in timings.items()},
+            "timings": _structured_timing_payload(timings),
             "image_path": str(ctx.get("image_path") or ""),
             "color_mode": str(ctx.get("color_mode") or ""),
             "target_width_mm": float(ctx.get("target_width_mm") or 0.0),
@@ -725,7 +726,13 @@ def _vector_outline_union_geometry(matched_shapes):
     return union
 
 
-def _resolve_vector_outline_z_span(ctx: dict, analysis) -> tuple[float, float]:
+def _resolve_vector_outline_z_span(
+    ctx: dict,
+    analysis,
+    *,
+    export_color_mode: object | None = None,
+    layer_height_mm: float | None = None,
+) -> tuple[float, float]:
     """Return the Z span that a vector outline must cover.
     返回矢量 Outline 应覆盖的 Z 向范围。
 
@@ -739,7 +746,11 @@ def _resolve_vector_outline_z_span(ctx: dict, analysis) -> tuple[float, float]:
     矢量分支不经过 S08，没有 ``total_layers`` 可用；这里按
     ``VectorProcessor.build_mesh`` 的 Z 轴布局计算外轮廓高度。
     """
-    layer_h = float(PrinterConfig.LAYER_HEIGHT)
+    layer_h = (
+        _resolve_vector_layer_height_mm(ctx)
+        if layer_height_mm is None
+        else float(layer_height_mm)
+    )
     try:
         spacer_thick = float(ctx.get("spacer_thick", 1.6) or 1.6)
     except (TypeError, ValueError):
@@ -754,7 +765,11 @@ def _resolve_vector_outline_z_span(ctx: dict, analysis) -> tuple[float, float]:
     color_height_mm = num_layers * layer_h
 
     structure_mode_text = str(ctx.get("structure_mode", "") or "")
-    color_mode_text = str(ctx.get("color_mode", "") or "")
+    color_mode_text = str(
+        export_color_mode
+        if export_color_mode is not None
+        else ctx.get("color_mode", "")
+    )
     is_double = "双面" in structure_mode_text or "Double" in structure_mode_text
     is_5color = "5-Color Extended" in color_mode_text
 
@@ -775,6 +790,8 @@ def _resolve_vector_outline_z_span(ctx: dict, analysis) -> tuple[float, float]:
         if np.isfinite(coating_height_mm) and coating_height_mm > 0:
             coating_layers = max(1, int(round(coating_height_mm / layer_h)))
             z_min = -coating_layers * layer_h
+            if is_double and not is_5color:
+                z_max += coating_layers * layer_h
 
     if not np.isfinite(z_max) or z_max <= z_min:
         z_max = z_min + backing_height_mm
@@ -1060,8 +1077,13 @@ def _generate_vector_outline_mesh(
         )
         return None
 
-    layer_h = float(PrinterConfig.LAYER_HEIGHT)
-    z_min_mm, z_max_mm = _resolve_vector_outline_z_span(ctx, analysis)
+    layer_h = _resolve_vector_layer_height_mm(ctx)
+    z_min_mm, z_max_mm = _resolve_vector_outline_z_span(
+        ctx,
+        analysis,
+        export_color_mode=export_color_mode,
+        layer_height_mm=layer_h,
+    )
     thickness_mm = max(layer_h, z_max_mm - z_min_mm)
     outline_layers = max(1, int(round(thickness_mm / layer_h)))
     extrude_height_units = float(outline_layers)  # height in pre-scale units
@@ -1422,7 +1444,41 @@ def _build_vector_processor(ctx: dict, *, fallback_color_mode: str):
                 "material_archive vector branch requires non-empty "
                 "_material_params; did P01 / S01 validation run?"
             )
-        layer_count = int(ctx.get("color_layers") or 5)
+        dynamic_layer_count_enabled = bool(
+            ctx.get("material_dynamic_layer_count_enabled", False)
+        )
+        try:
+            dynamic_max_layer_count = int(
+                ctx.get("material_max_layer_count") or ctx.get("color_layers") or 5
+            )
+        except (TypeError, ValueError):
+            dynamic_max_layer_count = int(ctx.get("color_layers") or 5)
+        try:
+            dynamic_min_layer_count = int(
+                ctx.get("material_min_layer_count") or 5
+            )
+        except (TypeError, ValueError):
+            dynamic_min_layer_count = 5
+        try:
+            dynamic_delta_e00_tolerance = float(
+                ctx.get("material_delta_e00_tolerance")
+                if ctx.get("material_delta_e00_tolerance") is not None
+                else 0.5
+            )
+        except (TypeError, ValueError):
+            dynamic_delta_e00_tolerance = 0.5
+        raw_backing_material_index = ctx.get("material_backing_material_index")
+        if raw_backing_material_index is None:
+            raw_backing_material_index = ctx.get("material_base_channel_idx", 0)
+        try:
+            backing_material_index = int(raw_backing_material_index or 0)
+        except (TypeError, ValueError):
+            backing_material_index = 0
+        layer_count = (
+            dynamic_max_layer_count
+            if dynamic_layer_count_enabled
+            else int(ctx.get("color_layers") or 5)
+        )
         substrate = str(ctx.get("material_substrate") or "white")
         slot_names = list(ctx.get("slot_names") or [])
         preview_colors = dict(ctx.get("preview_colors") or {})
@@ -1441,6 +1497,11 @@ def _build_vector_processor(ctx: dict, *, fallback_color_mode: str):
             color_conf=color_conf,
             grid_resolution=grid_resolution,
             hue_weight=hue_weight,
+            dynamic_layer_count_enabled=dynamic_layer_count_enabled,
+            dynamic_min_layer_count=dynamic_min_layer_count,
+            dynamic_max_layer_count=dynamic_max_layer_count,
+            dynamic_delta_e00_tolerance=dynamic_delta_e00_tolerance,
+            backing_material_index=backing_material_index,
         )
         _emit_vector_diag(
             extra={
@@ -1451,6 +1512,7 @@ def _build_vector_processor(ctx: dict, *, fallback_color_mode: str):
                 "slot_count": len(slot_names),
                 "material_count": len(materials),
                 "recipe_order": "top_to_bottom",
+                "dynamic_layer_count_enabled": dynamic_layer_count_enabled,
             },
         )
         processor = VectorProcessor.from_img_processor(matcher, "Material Archive")
@@ -1481,10 +1543,10 @@ def _build_vector_processor(ctx: dict, *, fallback_color_mode: str):
 
 
 def _record_material_parallelism(
-    timings: dict[str, float],
+    timings: dict,
     vector_processor: object,
 ) -> None:
-    """Attach the effective material-matching worker count when available."""
+    """Attach bounded material-matching scheduling diagnostics when available."""
 
     matcher = getattr(vector_processor, "img_processor", None)
     worker_count = getattr(
@@ -1500,6 +1562,104 @@ def _record_material_parallelism(
         )
     except (TypeError, ValueError):
         return
+    plan = getattr(matcher, "effective_parallelism_plan", None)
+    if plan is None:
+        return
+    try:
+        plan_fields = {
+            "material_parallelism_limit": str(
+                plan.limiting_reason,
+            )[:64],
+            "material_parallelism_effective_cpu": float(
+                max(1, int(plan.effective_cpu_capacity)),
+            ),
+            "material_parallelism_cpu_topology": str(
+                plan.cpu_topology,
+            )[:64],
+            "material_parallelism_cpu_scheduling_policy": str(
+                plan.cpu_scheduling_policy,
+            )[:64],
+            "material_parallelism_outer_demand": float(
+                max(1, int(plan.outer_demand)),
+            ),
+            "material_parallelism_cpu_fair_share": float(
+                max(1, int(plan.cpu_fair_share_ceiling)),
+            ),
+            "material_parallelism_memory_ceiling": float(
+                max(1, int(plan.memory_ceiling)),
+            ),
+            "material_parallelism_demand_fallback": bool(
+                plan.demand_snapshot_fallback,
+            ),
+        }
+    except (AttributeError, TypeError, ValueError):
+        return
+    if plan.performance_cpu_capacity is not None:
+        plan_fields["material_parallelism_performance_cpu"] = float(
+            max(1, int(plan.performance_cpu_capacity)),
+        )
+    timings.update(plan_fields)
+
+
+_NATIVE_MESH_TIMING_FIELDS = {
+    "native_group_count": "native_mesh_group_count",
+    "native_meshes": "native_mesh_output_count",
+    "fallback_groups": "native_mesh_fallback_count",
+    "pack_seconds": "native_mesh_pack_s",
+    "native_seconds": "native_mesh_compute_s",
+    "mesh_convert_seconds": "native_mesh_convert_s",
+    "surface_validation_seconds": "native_mesh_python_surface_validation_s",
+    "fallback_seconds": "native_mesh_fallback_s",
+    "native_parallel_workers": "native_mesh_parallel_workers",
+    "native_parallel_batch_count": "native_mesh_parallel_batch_count",
+    "native_parallel_source_geometry_count":
+        "native_mesh_parallel_source_geometry_count",
+    "native_parallel_limit_reason": "native_mesh_parallel_limit",
+    "native_parallel_effective_cpu":
+        "native_mesh_parallel_effective_cpu",
+    "native_parallel_cpu_topology":
+        "native_mesh_parallel_cpu_topology",
+    "native_parallel_cpu_scheduling_policy":
+        "native_mesh_parallel_cpu_scheduling_policy",
+    "native_parallel_performance_cpu":
+        "native_mesh_parallel_performance_cpu",
+    "native_parallel_outer_demand":
+        "native_mesh_parallel_outer_demand",
+    "native_parallel_cpu_fair_share":
+        "native_mesh_parallel_cpu_fair_share",
+    "native_parallel_memory_ceiling":
+        "native_mesh_parallel_memory_ceiling",
+    "native_parallel_demand_fallback":
+        "native_mesh_parallel_demand_fallback",
+    "native_parallel_inflight_limit":
+        "native_mesh_parallel_inflight_limit",
+    "native_parallel_max_estimated_batch_bytes":
+        "native_mesh_parallel_max_estimated_batch_bytes",
+    "native_parallel_oversized_serial_batches":
+        "native_mesh_parallel_oversized_serial_batches",
+    "native_parallel_wall_seconds": "native_mesh_parallel_wall_s",
+    "fallback_reason_native_merged_empty_native_mesh":
+        "native_mesh_fallback_native_merged_empty_count",
+}
+
+
+def _native_mesh_timing_fields(
+    stats,
+) -> dict[str, float | int | str | bool]:
+    """Return the bounded scalar native-mesh timing view."""
+
+    if not isinstance(stats, dict):
+        return {}
+    result: dict[str, float | int | str | bool] = {}
+    for source_name, output_name in _NATIVE_MESH_TIMING_FIELDS.items():
+        value = stats.get(source_name)
+        if isinstance(value, bool):
+            result[output_name] = value
+        elif isinstance(value, (int, float)):
+            result[output_name] = value
+        elif isinstance(value, str):
+            result[output_name] = value[:64]
+    return result
 
 
 def _run_vector_preview_branch(ctx: dict) -> dict:
@@ -1519,13 +1679,12 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
     lut_metadata = ctx.get("lut_metadata")
     preview_timing: dict[str, float] = {}
     vector_preview_total_t0 = time.perf_counter()
-    vector_replacements = _normalize_color_replacements_input(
-        ctx.get("replacement_regions")
-    )
+    # Native dynamic-material matching needs the structured replacement records
+    # so VectorProcessor can resolve all source fills behind one matched palette
+    # colour before its final exact solve. Legacy dict inputs remain supported.
+    vector_replacements = ctx.get("replacement_regions")
     if not vector_replacements:
-        vector_replacements = _normalize_color_replacements_input(
-            ctx.get("color_replacements")
-        )
+        vector_replacements = ctx.get("color_replacements")
 
     try:
         from core.vector_engine import VectorProcessor  # noqa: F401  -- re-imported for typing parity
@@ -1601,6 +1760,16 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
             raster_cache["material_matrix"],
         )
 
+        dynamic_layer_info = getattr(analysis, "material_dynamic_layer_info", None)
+        material_solver_info = getattr(analysis, "material_solver_info", None)
+        dynamic_layer_active = isinstance(dynamic_layer_info, dict) and bool(
+            dynamic_layer_info.get("enabled")
+        )
+        effective_color_layers = (
+            int(getattr(analysis, "num_layers", 0) or 0)
+            if dynamic_layer_active
+            else ctx.get("color_layers")
+        )
         cache = {
             "target_w": raster_cache["target_w"],
             "target_h": raster_cache["target_h"],
@@ -1616,7 +1785,7 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
             "preview_rgba": raster_cache["preview_rgba"].copy(),
             "color_conf": analysis.color_conf,
             "color_mode": color_mode,
-            "color_layers": ctx.get("color_layers"),
+            "color_layers": effective_color_layers or ctx.get("color_layers"),
             "layer_height_mm": ctx.get("layer_height_mm"),
             "model_enable": bool(ctx.get("model_enable", False)),
             "model_only": bool(ctx.get("model_only", False)),
@@ -1642,6 +1811,17 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
             "debug_data": None,
             "quantized_image": raster_cache["quantized_image"],
         }
+        if dynamic_layer_active:
+            cache["material_dynamic_layer_info"] = deepcopy(dynamic_layer_info)
+            cache["original_material_dynamic_layer_info"] = deepcopy(
+                dynamic_layer_info
+            )
+        if isinstance(material_solver_info, dict):
+            cache["material_solver_info"] = deepcopy(material_solver_info)
+            if dynamic_layer_active:
+                cache["original_material_solver_info"] = deepcopy(
+                    material_solver_info
+                )
         try:
             from core.vector_engine import (
                 _VECTOR_PARSE_CLIP_CACHE,
@@ -1698,6 +1878,21 @@ def _run_vector_preview_branch(ctx: dict) -> dict:
         ctx["color_conf"] = analysis.color_conf
         ctx["preview_colors"] = dict(analysis.preview_colors)
         ctx["slot_names"] = list(analysis.slot_names)
+        if dynamic_layer_active and effective_color_layers:
+            ctx["color_layers"] = effective_color_layers
+        if "material_dynamic_layer_info" in cache:
+            ctx["material_dynamic_layer_info"] = cache[
+                "material_dynamic_layer_info"
+            ]
+            ctx["original_material_dynamic_layer_info"] = cache[
+                "original_material_dynamic_layer_info"
+            ]
+        if "material_solver_info" in cache:
+            ctx["material_solver_info"] = cache["material_solver_info"]
+        if "original_material_solver_info" in cache:
+            ctx["original_material_solver_info"] = cache[
+                "original_material_solver_info"
+            ]
 
         # Inject outline geometry into the preview cache. The SVG/vector shape
         # union stays the declared geometry source; S11 copies this mesh into
@@ -1830,7 +2025,11 @@ def _run_vector_branch(ctx: dict) -> dict:
     except (TypeError, ValueError):
         backing_channel_idx = 0
 
-    vector_timing = {}
+    vector_timing = {
+        "matched_rgb_override_s": 0.0,
+        "recipe_override_s": 0.0,
+        "build_mesh_s": 0.0,
+    }
     vector_total_t0 = time.perf_counter()
     log.info(
         "Vector branch started",
@@ -1847,10 +2046,11 @@ def _run_vector_branch(ctx: dict) -> dict:
         },
     )
 
-    # ---- Normalize color replacements ----
-    vector_replacements = _normalize_color_replacements_input(replacement_regions)
+    # Retain structured replacement records for dynamic native SVG matching.
+    # VectorProcessor normalizes legacy dict inputs internally.
+    vector_replacements = replacement_regions
     if not vector_replacements:
-        vector_replacements = _normalize_color_replacements_input(color_replacements)
+        vector_replacements = color_replacements
 
     try:
         from core.vector_engine import (
@@ -1907,14 +2107,22 @@ def _run_vector_branch(ctx: dict) -> dict:
                 "Required vector preview analysis artifacts are incomplete"
             )
         if matched_rgb_path and mask_solid_path:
+            matched_rgb_override_t0 = time.perf_counter()
+            cached_matched_rgb = None
+            raw_mask_solid = None
+            cached_mask_solid = None
+            cached_material_matrix = None
+            cached_height_identity_rgb = None
             try:
                 cached_matched_rgb = np.load(
                     matched_rgb_path,
                     allow_pickle=False,
+                    mmap_mode="r",
                 )
                 raw_mask_solid = np.load(
                     mask_solid_path,
                     allow_pickle=False,
+                    mmap_mode="r",
                 )
                 cached_mask_solid = (
                     raw_mask_solid
@@ -1926,12 +2134,14 @@ def _run_vector_branch(ctx: dict) -> dict:
                     cached_material_matrix = np.load(
                         material_matrix_path,
                         allow_pickle=False,
+                        mmap_mode="r",
                     )
                 cached_height_identity_rgb = None
                 if height_identity_rgb_path:
                     cached_height_identity_rgb = np.load(
                         height_identity_rgb_path,
                         allow_pickle=False,
+                        mmap_mode="r",
                     )
 
                 # Diagnostic 2/4: material_matrix loaded from disk (post pad).
@@ -1960,7 +2170,36 @@ def _run_vector_branch(ctx: dict) -> dict:
                     img_processor=vec_processor.img_processor,
                     pixels_per_mm=vector_preview_pixels_per_mm,
                     strict=cached_analysis_required,
+                    prefer_cached_material_state=bool(
+                        ctx.get("material_dynamic_layer_count_enabled", False)
+                        and str(ctx.get("material_source") or "lut")
+                        == "material_archive"
+                    ),
                 )
+                matched_override_metrics = getattr(
+                    analysis,
+                    "matched_rgb_override_metrics",
+                    None,
+                )
+                if isinstance(matched_override_metrics, dict):
+                    ctx["matched_rgb_override_metrics"] = dict(
+                        matched_override_metrics
+                    )
+                    metric_types = {
+                        "component_count": int,
+                        "full_canvas_pixel_work": int,
+                        "roi_pixel_work": int,
+                        "max_roi_pixels": int,
+                        "effective_pixel_count": int,
+                        "pixel_work_reduction_ratio": float,
+                    }
+                    for metric_name, metric_type in metric_types.items():
+                        metric_value = matched_override_metrics.get(metric_name)
+                        if metric_value is None:
+                            continue
+                        vector_timing[
+                            f"matched_rgb_override_{metric_name}"
+                        ] = metric_type(metric_value)
                 # Diagnostic 3/4: shape recipe[0] distribution after
                 # apply_matched_rgb_overrides_to_analysis.
                 _emit_vector_diag(
@@ -2007,6 +2246,22 @@ def _run_vector_branch(ctx: dict) -> dict:
                         "mask_solid_path": str(mask_solid_path),
                     },
                 )
+            finally:
+                vector_timing["matched_rgb_override_s"] = (
+                    time.perf_counter() - matched_rgb_override_t0
+                )
+                # These cache arrays are only an input to the projection pass.
+                # Drop the references before mesh construction so a fast ROI
+                # pass does not overlap the preview-cache footprint with the
+                # mesh builder's own temporary allocations.
+                # 缓存数组只服务于覆盖投影；进入建模前释放，避免两段峰值叠加。
+                del (
+                    cached_matched_rgb,
+                    raw_mask_solid,
+                    cached_mask_solid,
+                    cached_material_matrix,
+                    cached_height_identity_rgb,
+                )
 
         # 1a. Apply per-region recipe overrides (custom recipe dialog +
         # appended layers) before meshing. Without this the 3MF is built
@@ -2020,6 +2275,7 @@ def _run_vector_branch(ctx: dict) -> dict:
         # \u5728 "\u81ea\u5b9a\u4e49\u914d\u65b9" \u91cc\u505a\u7684\u7f16\u8f91\uff08\u5305\u62ec\u52a0\u5c42\uff09\u4f1a\u88ab\u6084\u6084\u4e22\u5f03\uff0c\u53ea\u6709 2D
         # \u9884\u89c8\u548c\u5206\u6bb5 GLB \u80fd\u770b\u5230\u3002
         if recipe_overrides and recipe_override_masks_path:
+            recipe_override_t0 = time.perf_counter()
             import pickle as _pickle
 
             try:
@@ -2090,6 +2346,9 @@ def _run_vector_branch(ctx: dict) -> dict:
                             "override_count": len(recipe_overrides),
                         },
                     )
+            vector_timing["recipe_override_s"] = (
+                time.perf_counter() - recipe_override_t0
+            )
 
         # 1b. Build 3D mesh from analysis
         build_mesh_kwargs = {
@@ -2164,10 +2423,19 @@ def _run_vector_branch(ctx: dict) -> dict:
             },
         )
 
+        build_mesh_t0 = time.perf_counter()
         scene = vec_processor.build_mesh(**build_mesh_kwargs)
+        del build_mesh_kwargs
+        build_mesh_s = time.perf_counter() - build_mesh_t0
         vector_timing["mesh_total_s"] = time.perf_counter() - mesh_t0
         if isinstance(getattr(vec_processor, "last_stage_timings", None), dict):
             vector_timing.update(vec_processor.last_stage_timings)
+        vector_timing.update(
+            _native_mesh_timing_fields(
+                getattr(vec_processor, "last_native_vector_mesh_stats", None)
+            )
+        )
+        vector_timing["build_mesh_s"] = build_mesh_s
 
         _update_bambu_base_layer_ctx_for_vector(
             ctx,
@@ -2194,6 +2462,9 @@ def _run_vector_branch(ctx: dict) -> dict:
         vec_color_mode = vec_processor.color_mode
         vec_preview_colors = dict(analysis.preview_colors)
         vec_slot_list = analysis.slot_names
+        vector_parse_warnings = list(
+            getattr(vec_processor, "parse_warnings", None) or []
+        )
 
         for _mid, _rgba in list(vec_preview_colors.items()):
             if isinstance(_mid, int) and _mid < len(vec_slot_list):
@@ -2365,6 +2636,27 @@ def _run_vector_branch(ctx: dict) -> dict:
                 # helper 已发 WARNING，这里把 enable_outline 规整成 False
                 # 防止下游误用。
                 ctx["enable_outline"] = False
+
+        need_2d_preview = bool(ctx.get("need_2d_preview", True))
+        skip_heavy_preview = (
+            os.getenv("LUMINA_VECTOR_SKIP_2D_PREVIEW", "0") == "1"
+        )
+        analysis_for_glb = analysis
+        if skip_heavy_preview or not need_2d_preview:
+            # GLB only needs the canvas anchor once mesh/outline work is done.
+            # Retaining the complete parse/match graph until GLB export makes
+            # its temporary meshes overlap with thousands of source shapes.
+            # 不需要 2D 预览时只保留 GLB 画布锚点，提前释放完整分析图。
+            analysis_for_glb = SimpleNamespace(
+                image_vectorizer_bounds=getattr(
+                    analysis,
+                    "image_vectorizer_bounds",
+                    None,
+                ),
+                scale_factor=getattr(analysis, "scale_factor", 1.0),
+            )
+            analysis = None
+        vec_processor = None
 
         # 2. Export 3MF
         _report_progress(ctx, 0.72, "\u5bfc\u51fa 3MF \u4e2d... | Exporting 3MF...")
@@ -2552,7 +2844,7 @@ def _run_vector_branch(ctx: dict) -> dict:
                 color_mode=vec_color_mode,
                 preview_colors=vec_preview_colors,
                 slot_list=list(vec_slot_list),
-                analysis=analysis,
+                analysis=analysis_for_glb,
                 ctx=ctx,
             )
             log.debug(
@@ -2578,8 +2870,6 @@ def _run_vector_branch(ctx: dict) -> dict:
         _report_progress(ctx, 0.90, "\u751f\u6210 2D \u9884\u89c8\u4e2d... | Generating 2D preview...")
         preview_img = None
         preview_t0 = time.perf_counter()
-        need_2d_preview = ctx.get("need_2d_preview", True)
-        skip_heavy_preview = os.getenv("LUMINA_VECTOR_SKIP_2D_PREVIEW", "0") == "1"
         if skip_heavy_preview or not need_2d_preview:
             reason = "env flag" if skip_heavy_preview else "caller does not need it"
             log.debug(
@@ -2616,8 +2906,8 @@ def _run_vector_branch(ctx: dict) -> dict:
         _log_vector_timings(vector_timing)
 
         msg = "Vector conversion complete! Objects merged by material."
-        if getattr(vec_processor, "parse_warnings", None):
-            msg += " \u26a0 " + "; ".join(vec_processor.parse_warnings)
+        if vector_parse_warnings:
+            msg += " \u26a0 " + "; ".join(vector_parse_warnings)
         ctx["result_tuple"] = (out_path, glb_path, preview_img, msg, None)
         log.info(
             "Vector branch completed",
@@ -2629,7 +2919,7 @@ def _run_vector_branch(ctx: dict) -> dict:
                 "slot_count": len(vec_slot_names),
                 "geometry_count": len(scene.geometry),
                 "preview_2d_generated": preview_img is not None,
-                "parse_warning_count": len(getattr(vec_processor, "parse_warnings", None) or []),
+                "parse_warning_count": len(vector_parse_warnings),
             },
         )
         return ctx
@@ -2673,6 +2963,23 @@ def _run_vector_branch(ctx: dict) -> dict:
         return ctx
 
 
+def _structured_timing_payload(timings: dict) -> dict[str, float | str | bool]:
+    """Keep timing diagnostics JSON-safe without forcing labels to floats."""
+
+    payload: dict[str, float | str | bool] = {}
+    for key, value in timings.items():
+        if isinstance(value, bool):
+            payload[str(key)] = value
+        elif isinstance(value, str):
+            payload[str(key)] = value[:64]
+        else:
+            try:
+                payload[str(key)] = float(value)
+            except (TypeError, ValueError):
+                continue
+    return payload
+
+
 def _log_vector_timings(timings: dict) -> None:
     """Log vector branch timing breakdown.
     \u8f93\u51fa\u77e2\u91cf\u5206\u652f\u8ba1\u65f6\u660e\u7ec6\u3002
@@ -2682,11 +2989,15 @@ def _log_vector_timings(timings: dict) -> None:
     """
     if not timings:
         return
+    timing_payload = _structured_timing_payload(timings)
     log.debug(
         "Vector timings (s): "
         f"parse={timings.get('parse_s', 0.0):.3f}, "
         f"clip={timings.get('occlusion_s', 0.0):.3f}, "
         f"match={timings.get('color_match_s', 0.0):.3f}, "
+        f"matched_rgb_override={timings.get('matched_rgb_override_s', 0.0):.3f}, "
+        f"recipe_override={timings.get('recipe_override_s', 0.0):.3f}, "
+        f"build_mesh={timings.get('build_mesh_s', 0.0):.3f}, "
         f"extrude_bottom={timings.get('extrude_bottom_s', 0.0):.3f}, "
         f"backing={timings.get('backing_s', 0.0):.3f}, "
         f"extrude_top={timings.get('extrude_top_s', 0.0):.3f}, "
@@ -2698,7 +3009,7 @@ def _log_vector_timings(timings: dict) -> None:
         f"total={timings.get('vector_branch_total_s', 0.0):.3f}",
         extra={
             "event": "vector_timings",
-            "timings": {str(key): float(value) for key, value in timings.items()},
+            "timings": timing_payload,
         },
     )
     log.info(
@@ -2706,6 +3017,6 @@ def _log_vector_timings(timings: dict) -> None:
         extra={
             "event": "vector_generate_timings",
             "duration_ms": round(float(timings.get("vector_branch_total_s", 0.0)) * 1000, 3),
-            "timings": {str(key): float(value) for key, value in timings.items()},
+            "timings": timing_payload,
         },
     )

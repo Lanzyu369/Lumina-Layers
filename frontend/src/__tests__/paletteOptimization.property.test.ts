@@ -6,9 +6,18 @@ import {
 } from '../utils/colorUtils';
 import type { LutColorEntry } from '../api/types';
 import { tRuntime } from '../i18n/runtime';
-const { mockApiFetchLutColors } = vi.hoisted(() => ({
+const { mockApiFetchLutCatalog, mockApiFetchLutColors } = vi.hoisted(() => ({
+  mockApiFetchLutCatalog: vi.fn(),
   mockApiFetchLutColors: vi.fn(),
 }));
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
 
 vi.mock('../api/converter', async () => {
   const original = await vi.importActual<typeof import('../api/converter')>('../api/converter');
@@ -16,6 +25,14 @@ vi.mock('../api/converter', async () => {
     ...original,
     fetchLutColors: (...args: unknown[]) => mockApiFetchLutColors(...args),
     replaceColor: vi.fn().mockResolvedValue({ preview_url: '/api/files/mock-preview' }),
+  };
+});
+
+vi.mock('../api/lut', async () => {
+  const original = await vi.importActual<typeof import('../api/lut')>('../api/lut');
+  return {
+    ...original,
+    fetchLutCatalog: (...args: unknown[]) => mockApiFetchLutCatalog(...args),
   };
 });
 
@@ -98,6 +115,7 @@ describe('Feature: palette-optimization, Property 1: LUT 颜色缓存命中跳�
   });
 
   beforeEach(() => {
+    mockApiFetchLutCatalog.mockClear();
     mockApiFetchLutColors.mockClear();
   });
 
@@ -160,6 +178,137 @@ describe('Feature: palette-optimization, Property 1: LUT 颜色缓存命中跳�
     expect(state.error).toBe(tRuntime('lut_error_missing_refresh'));
     expect(state.error).not.toMatch(/LUT not found/i);
     expect(state.lutColorsLoading).toBe(false);
+  });
+
+  it('fetchLutColors ignores an older response that arrives last', async () => {
+    const firstResponse = deferred<{
+      colors: LutColorEntry[];
+      cards: [];
+    }>();
+    const secondResponse = deferred<{
+      colors: LutColorEntry[];
+      cards: [];
+    }>();
+    mockApiFetchLutColors.mockImplementation((lutName: string) =>
+      lutName === 'first-lut'
+        ? firstResponse.promise
+        : secondResponse.promise,
+    );
+    useConverterStore.setState({
+      lutColors: [],
+      lutColorCards: [],
+      lutColorsLoading: false,
+      lutColorsLutName: '',
+      error: null,
+    });
+
+    const first = useConverterStore
+      .getState()
+      .fetchLutColors('first-lut');
+    const second = useConverterStore
+      .getState()
+      .fetchLutColors('second-lut');
+    const secondColors: LutColorEntry[] = [
+      { rgb: [2, 2, 2], hex: '#020202' },
+    ];
+    secondResponse.resolve({ colors: secondColors, cards: [] });
+    await second;
+    firstResponse.resolve({
+      colors: [{ rgb: [1, 1, 1], hex: '#010101' }],
+      cards: [],
+    });
+    await first;
+
+    expect(useConverterStore.getState()).toMatchObject({
+      lutColorsLutName: 'second-lut',
+      lutColors: secondColors,
+      lutColorsLoading: false,
+    });
+  });
+
+  it('fetchLutCatalog ignores an older response that arrives last', async () => {
+    const firstResponse = deferred<{
+      legacy_groups: Array<{
+        group_name: string;
+        items: Array<{
+          name: string;
+          path: string;
+          color_mode: string;
+          fingerprint: string;
+        }>;
+      }>;
+      native_brand_groups: [];
+    }>();
+    const secondResponse = deferred<{
+      legacy_groups: Array<{
+        group_name: string;
+        items: Array<{
+          name: string;
+          path: string;
+          color_mode: string;
+          fingerprint: string;
+        }>;
+      }>;
+      native_brand_groups: [];
+    }>();
+    mockApiFetchLutCatalog
+      .mockImplementationOnce(() => firstResponse.promise)
+      .mockImplementationOnce(() => secondResponse.promise);
+    useConverterStore.setState({
+      lutList: [],
+      lutListFull: [],
+      nativeBrandGroups: [],
+      nativeBrandGroupsLoading: false,
+      error: null,
+    });
+
+    const first = useConverterStore.getState().fetchLutCatalog();
+    const second = useConverterStore.getState().fetchLutCatalog();
+    secondResponse.resolve({
+      legacy_groups: [
+        {
+          group_name: 'new',
+          items: [
+            {
+              name: 'new-lut',
+              path: '/new.npy',
+              color_mode: '4-Color (RYBW)',
+              fingerprint: 'new-fingerprint',
+            },
+          ],
+        },
+      ],
+      native_brand_groups: [],
+    });
+    await second;
+    firstResponse.resolve({
+      legacy_groups: [
+        {
+          group_name: 'old',
+          items: [
+            {
+              name: 'old-lut',
+              path: '/old.npy',
+              color_mode: '4-Color (RYBW)',
+              fingerprint: 'old-fingerprint',
+            },
+          ],
+        },
+      ],
+      native_brand_groups: [],
+    });
+    await first;
+
+    expect(useConverterStore.getState()).toMatchObject({
+      lutList: ['new-lut'],
+      lutListFull: [
+        expect.objectContaining({
+          name: 'new-lut',
+          fingerprint: 'new-fingerprint',
+        }),
+      ],
+      nativeBrandGroupsLoading: false,
+    });
   });
 });
 

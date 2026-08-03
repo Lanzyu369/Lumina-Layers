@@ -20,6 +20,8 @@ def test_log_vector_preview_timings_emits_stage_breakdown(caplog) -> None:
         "build_preview_cache_s": 4.0,
         "bed_rendering_s": 0.5,
         "vector_preview_total_s": 10.0,
+        "material_parallelism_limit": "requested",
+        "material_parallelism_demand_fallback": False,
     }
     ctx = {
         "image_path": "example.svg",
@@ -57,6 +59,8 @@ def test_log_vector_preview_timings_emits_stage_breakdown(caplog) -> None:
     assert record.duration_ms == 10000.0
     assert record.timings["build_preview_cache_s"] == 4.0
     assert record.timings["occlusion_s"] == 2.0
+    assert record.timings["material_parallelism_limit"] == "requested"
+    assert record.timings["material_parallelism_demand_fallback"] is False
     assert record.is_material_archive is True
     assert record.grid_resolution == 2048
     assert record.shape_count == 2
@@ -261,7 +265,7 @@ def test_vector_preview_replacements_keep_pristine_height_and_recipe() -> None:
         result = _run_vector_preview_branch(ctx)
 
     assert "error" not in result
-    assert captured["color_replacements"] == {"#ff0000": "#0000ff"}
+    assert captured["color_replacements"] == ctx["replacement_regions"]
     cache = result["cache"]
     solid = cache["mask_solid"]
     assert np.all(cache["matched_rgb"][solid] == [0, 0, 255])

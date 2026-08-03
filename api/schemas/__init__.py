@@ -49,6 +49,12 @@ from api.schemas.lut import (
     MergeResponse,
     MergeStats,
 )
+from api.schemas.dynamic_material import (
+    DynamicMaterialLayerCapOptionResponse,
+    DynamicMaterialRecipeResponse,
+    DynamicMaterialResultResponse,
+    MaterialLayerBenefitPointResponse,
+)
 from api.schemas.system import (
     CacheCleanupDetails,
     ClearCacheResponse,
@@ -122,6 +128,10 @@ __all__ = [
     "LutSourceSelection",
     "LutInfoResponse",
     "LutInfoResponseV2",
+    "DynamicMaterialLayerCapOptionResponse",
+    "DynamicMaterialRecipeResponse",
+    "MaterialLayerBenefitPointResponse",
+    "DynamicMaterialResultResponse",
     # --- Slicer models ---
     "SlicerInfo",
     "SlicerDetectResponse",

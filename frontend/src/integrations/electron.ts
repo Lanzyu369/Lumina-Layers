@@ -4,6 +4,11 @@ import { useSettingsStore } from "../stores/settingsStore";
 interface ElectronAPI {
   setLanguage: (lang: string) => void;
   getAppVersion: () => Promise<string>;
+  pickWorkshopImage?: () => Promise<{
+    name: string;
+    mimeType: string;
+    bytes: ArrayBuffer | Uint8Array;
+  } | null>;
 }
 
 export const electronAPI: ElectronAPI | null =

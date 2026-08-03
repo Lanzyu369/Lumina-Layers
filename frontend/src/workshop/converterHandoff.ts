@@ -1,22 +1,29 @@
 import { useConverterStore } from "../stores/converter";
 import { useWidgetStore } from "../stores/widgetStore";
 import type {
-  WorkshopHandoffOptions,
-  WorkshopHandoffResult,
-  WorkshopImageHandoff,
-} from "./types";
-import type {
   WorkshopImageHandoff as SdkWorkshopImageHandoff,
 } from "./contracts";
-import { buildWorkshopColorLibrary } from "./colorLibrary";
 import {
   WorkshopProjectStorageError,
   assertWorkshopRecipeEnvelopeWithinQuota,
 } from "./projectStorage";
+import {
+  buildWorkshopColorLibrary,
+  getWorkshopColorLibrarySelectionKey,
+} from "./colorLibrary";
+import { rememberWorkshopHandoffColorLibraryId } from "./handoffMetadata";
 
 export const WORKSHOP_HANDOFF_MAX_BINARY_BYTES = 64 * 1024 * 1024;
 export const WORKSHOP_HANDOFF_MAX_EDGE = 16_384;
 export const WORKSHOP_HANDOFF_MAX_PIXELS = 64_000_000;
+
+export type WorkshopHandoffResult =
+  | { status: "needs-confirmation" }
+  | { status: "completed" };
+
+export interface WorkshopHandoffOptions {
+  replaceExisting?: boolean;
+}
 
 const WORKSHOP_HANDOFF_MIN_MM = 0.5;
 const WORKSHOP_HANDOFF_MAX_MM = 9_999;
@@ -34,8 +41,7 @@ export type WorkshopHandoffValidationErrorCode =
   | "handoff-layout-invalid"
   | "handoff-physical-size-invalid"
   | "handoff-recipe-invalid"
-  | "handoff-recipe-too-large"
-  | "handoff-color-library-changed";
+  | "handoff-recipe-too-large";
 
 export class WorkshopHandoffValidationError extends Error {
   readonly code: WorkshopHandoffValidationErrorCode;
@@ -276,13 +282,6 @@ function validateColorLibraryIdentity(
       "Workshop color-library identity is invalid.",
     );
   }
-  const currentLibraryId = buildWorkshopColorLibrary()?.id ?? null;
-  if (handoff.colorLibraryId !== currentLibraryId) {
-    handoffError(
-      "handoff-color-library-changed",
-      "The selected print color library changed during editing.",
-    );
-  }
 }
 
 const defaultPngDecoder: WorkshopPngDecoder = {
@@ -366,29 +365,6 @@ function safeHandoffFilename(
   return `${safeModule}-${safeProject}.png`;
 }
 
-export async function handoffWorkshopImageToConverter(
-  handoff: WorkshopImageHandoff,
-  options?: WorkshopHandoffOptions,
-): Promise<WorkshopHandoffResult> {
-  const converter = useConverterStore.getState();
-  const occupied =
-    converter.imageFile !== null || converter.batchFiles.length > 0;
-  if (occupied && !options?.replaceExisting) {
-    return { status: "needs-confirmation" };
-  }
-
-  converter.loadWorkshopImageIntoConverter({
-    file: handoff.file,
-    pixelWidth: handoff.pixelWidth,
-    pixelHeight: handoff.pixelHeight,
-    targetWidthMm: handoff.recommendedWidthMm,
-    targetHeightMm: handoff.recommendedHeightMm,
-    source: handoff.recipeSource,
-  });
-  useWidgetStore.getState().setActiveTab("converter");
-  return { status: "completed" };
-}
-
 export async function handoffWorkshopPngToConverter(
   handoff: SdkWorkshopImageHandoff,
   options?: WorkshopHandoffOptions,
@@ -456,6 +432,12 @@ export async function handoffWorkshopPngToConverter(
     [handoff.pngBytes],
     safeHandoffFilename(handoff),
     { type: "image/png" },
+  );
+  rememberWorkshopHandoffColorLibraryId(
+    handoff.recipeSource,
+    handoff.colorLibraryId,
+    buildWorkshopColorLibrary(converter),
+    getWorkshopColorLibrarySelectionKey(converter),
   );
   converter.loadWorkshopImageIntoConverter({
     file,

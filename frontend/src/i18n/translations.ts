@@ -2569,362 +2569,6 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "项目数据仍然保留。请返回工坊后重试。",
     en: "Your project data is still preserved. Return to the workshop and try again.",
   },
-  "workshop.disabled.invalid-manifest": {
-    zh: "模块清单无效",
-    en: "Invalid module manifest",
-  },
-  "workshop.disabled.unsupported-manifest": {
-    zh: "模块清单版本不受支持",
-    en: "Unsupported manifest version",
-  },
-  "workshop.disabled.unknown-capability": {
-    zh: "模块请求了未知权限",
-    en: "The module requests an unknown capability",
-  },
-  "workshop.disabled.app-version-too-old": {
-    zh: "需要更新 Lumina",
-    en: "A newer Lumina version is required",
-  },
-  "workshop.disabled.not-whitelisted": {
-    zh: "模块未列入白名单",
-    en: "The module is not whitelisted",
-  },
-  "workshop.disabled.duplicate-id": {
-    zh: "模块 ID 冲突",
-    en: "Duplicate module ID",
-  },
-  "workshop.bead.name": {
-    zh: "拼豆模式",
-    en: "Bead Pattern",
-  },
-  "workshop.bead.description": {
-    zh: "读取清晰拼豆图纸或截图，校准格子并生成可继续编辑的拼豆矩阵。",
-    en: "Read a clear bead chart or screenshot, calibrate its grid, and create an editable bead matrix.",
-  },
-  "workshop.bead.intro": {
-    zh: "上传编号格图、硬边像素图或数字圆豆俯视图。下一步会让你确认网格和空格，不会自动猜测倾斜实拍。",
-    en: "Upload a numbered grid, hard-edged pixel chart, or digital top-down ring preview. You will confirm the grid and empty cells; oblique photos are not guessed.",
-  },
-  "workshop.bead.choosePattern": {
-    zh: "选择拼豆图纸",
-    en: "Choose bead pattern",
-  },
-  "workshop.bead.supportedInputs": {
-    zh: "支持 PNG、JPEG、WebP；请选择单个清晰、正视的图案。",
-    en: "PNG, JPEG, and WebP are supported. Choose one clear, front-facing pattern.",
-  },
-  "workshop.bead.localPrivacy": {
-    zh: "分析和项目保存都在本机完成。",
-    en: "Analysis and project storage stay on this device.",
-  },
-  "workshop.bead.selectedFile": {
-    zh: "已选择：{filename}",
-    en: "Selected: {filename}",
-  },
-  "workshop.bead.pickerError": {
-    zh: "无法读取这张图。请确认文件格式后重试。",
-    en: "This image could not be read. Check its format and try again.",
-  },
-  "workshop.bead.loadingProject": {
-    zh: "正在读取本机项目…",
-    en: "Loading the local project…",
-  },
-  "workshop.bead.resumeReady": {
-    zh: "已恢复本机项目",
-    en: "Local project restored",
-  },
-  "workshop.bead.calibrationTitle": {
-    zh: "校准图纸",
-    en: "Calibrate pattern",
-  },
-  "workshop.bead.calibrationDescription": {
-    zh: "确认图纸类型、正方形网格和空位样本。识别只读取你确认的格子。",
-    en: "Confirm the pattern type, square grid, and empty-cell sample. Recognition reads only the cells you confirm.",
-  },
-  "workshop.bead.cropPattern": {
-    zh: "裁剪图案",
-    en: "Crop pattern",
-  },
-  "workshop.bead.inputMode": {
-    zh: "图纸类型",
-    en: "Pattern type",
-  },
-  "workshop.bead.mode.numbered-grid": {
-    zh: "编号网格图",
-    en: "Numbered grid",
-  },
-  "workshop.bead.mode.hard-pixel": {
-    zh: "硬边像素图",
-    en: "Hard-edged pixel chart",
-  },
-  "workshop.bead.mode.ring-preview": {
-    zh: "圆豆俯视图",
-    en: "Top-down ring preview",
-  },
-  "workshop.bead.mode.ambiguous": {
-    zh: "需要手动确认",
-    en: "Needs manual confirmation",
-  },
-  "workshop.bead.classification": {
-    zh: "建议：{mode} · 置信度 {confidence}%",
-    en: "Suggested: {mode} · {confidence}% confidence",
-  },
-  "workshop.bead.classifying": {
-    zh: "正在分析图纸类型…",
-    en: "Analyzing the pattern type…",
-  },
-  "workshop.bead.rows": {
-    zh: "行数",
-    en: "Rows",
-  },
-  "workshop.bead.columns": {
-    zh: "列数",
-    en: "Columns",
-  },
-  "workshop.bead.originX": {
-    zh: "网格原点 X",
-    en: "Grid origin X",
-  },
-  "workshop.bead.originY": {
-    zh: "网格原点 Y",
-    en: "Grid origin Y",
-  },
-  "workshop.bead.gridInvalid": {
-    zh: "当前网格不是正方形，请调整行列或原点。",
-    en: "The current grid is not square. Adjust rows, columns, or the origin.",
-  },
-  "workshop.bead.emptyDecisionRequired": {
-    zh: "请先选择一个空位样本，或明确图中没有空位。",
-    en: "Choose an empty-cell sample or explicitly confirm that the pattern has no empty cells.",
-  },
-  "workshop.bead.pickEmpty": {
-    zh: "选择一个空位",
-    en: "Choose an empty cell",
-  },
-  "workshop.bead.noEmpty": {
-    zh: "图中没有空位",
-    en: "No empty cells",
-  },
-  "workshop.bead.pickSupport": {
-    zh: "选择透明支撑",
-    en: "Choose transparent support",
-  },
-  "workshop.bead.clearSupport": {
-    zh: "清除透明支撑样本",
-    en: "Clear support sample",
-  },
-  "workshop.bead.emptySample": {
-    zh: "空位样本：第 {index} 格",
-    en: "Empty sample: cell {index}",
-  },
-  "workshop.bead.noEmptySelected": {
-    zh: "已确认：图中没有空位",
-    en: "Confirmed: no empty cells",
-  },
-  "workshop.bead.supportSample": {
-    zh: "透明支撑样本：第 {index} 格",
-    en: "Transparent support sample: cell {index}",
-  },
-  "workshop.bead.rotate0": {
-    zh: "旋转 0°",
-    en: "Rotate 0°",
-  },
-  "workshop.bead.rotate90": {
-    zh: "旋转 90°",
-    en: "Rotate 90°",
-  },
-  "workshop.bead.rotate180": {
-    zh: "旋转 180°",
-    en: "Rotate 180°",
-  },
-  "workshop.bead.rotate270": {
-    zh: "旋转 270°",
-    en: "Rotate 270°",
-  },
-  "workshop.bead.flipHorizontal": {
-    zh: "水平翻转",
-    en: "Flip horizontally",
-  },
-  "workshop.bead.flipVertical": {
-    zh: "垂直翻转",
-    en: "Flip vertically",
-  },
-  "workshop.bead.recognize": {
-    zh: "识别拼豆矩阵",
-    en: "Recognize bead matrix",
-  },
-  "workshop.bead.recognizing": {
-    zh: "正在识别拼豆矩阵…",
-    en: "Recognizing bead matrix…",
-  },
-  "workshop.bead.calibrationCanvas": {
-    zh: "拼豆图纸网格校准",
-    en: "Bead pattern grid calibration",
-  },
-  "workshop.bead.editorTitle": {
-    zh: "编辑拼豆矩阵",
-    en: "Edit bead matrix",
-  },
-  "workshop.bead.editorDescription": {
-    zh: "修正识别结果，再调节压合程度。透明支撑参与挤压，但不会进入最终图像颜色。",
-    en: "Correct the recognized matrix, then adjust pressure. Transparent support affects contact geometry but adds no output color.",
-  },
-  "workshop.bead.tool.paint": {
-    zh: "画笔",
-    en: "Paint",
-  },
-  "workshop.bead.tool.erase": {
-    zh: "橡皮",
-    en: "Erase",
-  },
-  "workshop.bead.tool.eyedropper": {
-    zh: "吸管",
-    en: "Eyedropper",
-  },
-  "workshop.bead.tool.fill": {
-    zh: "填充",
-    en: "Fill",
-  },
-  "workshop.bead.tool.support": {
-    zh: "透明支撑",
-    en: "Transparent support",
-  },
-  "workshop.bead.undo": {
-    zh: "撤销",
-    en: "Undo",
-  },
-  "workshop.bead.redo": {
-    zh: "重做",
-    en: "Redo",
-  },
-  "workshop.bead.previousIssue": {
-    zh: "上一个待复核格",
-    en: "Previous review cell",
-  },
-  "workshop.bead.nextIssue": {
-    zh: "下一个待复核格",
-    en: "Next review cell",
-  },
-  "workshop.bead.reviewSummary": {
-    zh: "待复核 {pending} / 共 {total}",
-    en: "{pending} pending / {total} total",
-  },
-  "workshop.bead.view.original": {
-    zh: "原图",
-    en: "Original",
-  },
-  "workshop.bead.view.matrix": {
-    zh: "识别矩阵",
-    en: "Matrix",
-  },
-  "workshop.bead.view.pressure": {
-    zh: "压合预览",
-    en: "Pressure preview",
-  },
-  "workshop.bead.matrixCanvas": {
-    zh: "可编辑拼豆矩阵",
-    en: "Editable bead matrix",
-  },
-  "workshop.bead.pressureCanvas": {
-    zh: "拼豆压合预览",
-    en: "Bead pressure preview",
-  },
-  "workshop.bead.originalCanvas": {
-    zh: "拼豆图纸原图",
-    en: "Original bead pattern",
-  },
-  "workshop.bead.magnifier": {
-    zh: "选中格局部放大",
-    en: "Selected-cell magnifier",
-  },
-  "workshop.bead.showGrid": {
-    zh: "显示网格",
-    en: "Show grid",
-  },
-  "workshop.bead.paletteColor": {
-    zh: "颜色 {index}",
-    en: "Color {index}",
-  },
-  "workshop.bead.customColor": {
-    zh: "添加自定义颜色",
-    en: "Add custom color",
-  },
-  "workshop.bead.compression": {
-    zh: "压合程度",
-    en: "Pressure",
-  },
-  "workshop.bead.compressionHint": {
-    zh: "0 保留中心孔和豆间缝，50 保留细小十字或菱形凹点，100 完全压紧闭合。",
-    en: "0 preserves center holes and gaps, 50 keeps small cross or diamond reliefs, and 100 closes them completely.",
-  },
-  "workshop.bead.pressureLight": {
-    zh: "0 · 轻压有孔",
-    en: "0 · Light, open holes",
-  },
-  "workshop.bead.pressureStandard": {
-    zh: "50 · 标准",
-    en: "50 · Standard",
-  },
-  "workshop.bead.pressureTight": {
-    zh: "100 · 紧压无孔",
-    en: "100 · Tight, closed holes",
-  },
-  "workshop.bead.beadPitch": {
-    zh: "单豆节距",
-    en: "Bead pitch",
-  },
-  "workshop.bead.beadPitchHint": {
-    zh: "默认 2.6 mm，表示相邻豆子中心间距，并决定交给 Lumina 的真实画布尺寸。",
-    en: "The 2.6 mm default is the center-to-center bead pitch and determines the physical canvas size handed to Lumina.",
-  },
-  "workshop.bead.physicalSize": {
-    zh: "{width} × {height} mm",
-    en: "{width} × {height} mm",
-  },
-  "workshop.bead.rendering": {
-    zh: "正在计算高分辨率压合预览…",
-    en: "Rendering the high-resolution pressure preview…",
-  },
-  "workshop.bead.newProject": {
-    zh: "新建图纸",
-    en: "New pattern",
-  },
-  "workshop.bead.handoff": {
-    zh: "交给 Lumina 转换",
-    en: "Send to Lumina Converter",
-  },
-  "workshop.bead.handoffEmpty": {
-    zh: "至少保留一颗有颜色的拼豆后才能转换",
-    en: "Keep at least one colored bead before converting",
-  },
-  "workshop.bead.replaceTitle": {
-    zh: "替换当前转换内容？",
-    en: "Replace the current converter content?",
-  },
-  "workshop.bead.replaceDescription": {
-    zh: "转换器里已有图片或批量任务。继续会用当前拼豆画布替换它，但不会删除已自动保存的拼豆项目。",
-    en: "The converter already contains an image or batch. Continuing replaces it with this bead canvas without deleting the autosaved bead project.",
-  },
-  "workshop.bead.replaceCancel": {
-    zh: "暂不替换",
-    en: "Keep current content",
-  },
-  "workshop.bead.replaceConfirm": {
-    zh: "替换并继续",
-    en: "Replace and continue",
-  },
-  "workshop.bead.handoffError": {
-    zh: "无法把当前拼豆画布交给转换器，请检查图案后重试。",
-    en: "The current bead canvas could not be sent to the converter. Check the pattern and try again.",
-  },
-  "workshop.bead.processingError": {
-    zh: "本地图像处理失败。项目仍在本机，请重试当前步骤。",
-    en: "Local image processing failed. The project is still on this device; retry the current step.",
-  },
-  "workshop.bead.saveError": {
-    zh: "自动保存暂时失败。当前页面中的编辑不会丢失。",
-    en: "Autosave temporarily failed. Edits in the current page are still intact.",
-  },
   "tab.colorEditor": {
     zh: "颜色编辑",
     en: "Color Editor",
@@ -2948,8 +2592,104 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "System Settings",
   },
   "settings.desc": {
-    zh: "管理缓存与运行时偏好设置，保持工作区轻量且稳定。",
-    en: "Manage cache and runtime preferences to keep the workspace light and stable.",
+    zh: "设置会自动保存在当前设备。",
+    en: "Settings are saved automatically on this device.",
+  },
+  "settings.category_nav_label": {
+    zh: "设置分类",
+    en: "Settings categories",
+  },
+  "settings.category_device": {
+    zh: "打印与切片",
+    en: "Printer & Slicer",
+  },
+  "settings.category_device_desc": {
+    zh: "默认打印机、喷嘴与切片软件",
+    en: "Default printer, nozzle, and slicer",
+  },
+  "settings.category_general": {
+    zh: "常规",
+    en: "General",
+  },
+  "settings.category_general_desc": {
+    zh: "通知与界面体验偏好",
+    en: "Notifications and interface preferences",
+  },
+  "settings.category_conversion": {
+    zh: "转换与精度",
+    en: "Conversion & Quality",
+  },
+  "settings.category_conversion_desc": {
+    zh: "颜色、SVG 与渐变处理",
+    en: "Color, SVG, and gradient handling",
+  },
+  "settings.category_maintenance": {
+    zh: "存储与维护",
+    en: "Storage & Maintenance",
+  },
+  "settings.category_maintenance_desc": {
+    zh: "清理临时文件与缓存",
+    en: "Clean temporary files and caches",
+  },
+  "settings.current_device_heading": {
+    zh: "当前设备",
+    en: "Current Device",
+  },
+  "settings.current_device_description": {
+    zh: "生成 3MF 时默认使用这组切片软件、打印机与喷嘴配置。",
+    en: "New 3MF exports use this slicer, printer, and nozzle configuration by default.",
+  },
+  "settings.change_device": {
+    zh: "更改设备",
+    en: "Change Device",
+  },
+  "settings.machine_dialog_title": {
+    zh: "选择打印设备",
+    en: "Choose Print Device",
+  },
+  "settings.machine_dialog_description": {
+    zh: "先选择切片软件，再搜索并选择兼容的打印机与喷嘴。",
+    en: "Choose a slicer, then search for a compatible printer and nozzle.",
+  },
+  "settings.machine_dialog_close": {
+    zh: "关闭",
+    en: "Close",
+  },
+  "settings.machine_dialog_done": {
+    zh: "完成",
+    en: "Done",
+  },
+  "settings.machine_search_label": {
+    zh: "搜索打印机",
+    en: "Search printers",
+  },
+  "settings.machine_search_placeholder": {
+    zh: "输入品牌或型号",
+    en: "Search by brand or model",
+  },
+  "settings.machine_search_empty": {
+    zh: "没有找到兼容的打印机",
+    en: "No compatible printers found",
+  },
+  "settings.machine_search_empty_hint": {
+    zh: "请尝试其他关键词，或切换上方的切片软件。",
+    en: "Try another search or change the slicer above.",
+  },
+  "settings.machine_options_loading": {
+    zh: "正在加载设备…",
+    en: "Loading devices…",
+  },
+  "settings.machine_thumbnail_fallback": {
+    zh: "设备",
+    en: "Device",
+  },
+  "settings.manual_setup_heading": {
+    zh: "手动设置切片软件",
+    en: "Manual Slicer Setup",
+  },
+  "settings.manual_setup_description": {
+    zh: "仅在自动检测不到本机切片软件时使用。",
+    en: "Use this only when the installed slicer cannot be detected automatically.",
   },
   "settings.maintenance": {
     zh: "维护",
@@ -2968,8 +2708,8 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Loading Witty Messages",
   },
   "settings.witty_loading_desc": {
-    zh: "在加载时显示趣味提示消息",
-    en: "Show witty messages during loading",
+    zh: "加载过程中显示轻松的提示语。",
+    en: "Show lighthearted messages while a task is loading.",
   },
   "settings.cache": {
     zh: "缓存管理",
@@ -3010,12 +2750,12 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Completion notifications",
   },
   "settings.completion_notifications_description": {
-    zh: "浏览器通知会在 Windows 或 macOS 上，于预览、模型生成、批量生成和校准生成完成时提醒你。此设置仅保存在当前浏览器中。",
-    en: "Browser notifications alert you on Windows or macOS when preview, model generation, batch generation, or calibration generation finishes. This setting is stored only in this browser.",
+    zh: "预览、模型、批量或校准生成完成时发送系统通知；此设置仅保存在当前浏览器。",
+    en: "Send a system notification when preview, model, batch, or calibration generation finishes. This setting is stored only in this browser.",
   },
   "settings.completion_notifications_enable_label": {
-    zh: "启用浏览器完成通知",
-    en: "Enable browser completion notifications",
+    zh: "完成通知",
+    en: "Completion notifications",
   },
   "settings.completion_notifications_hint": {
     zh: "开启时浏览器会申请通知权限；允许后，完成提醒会显示在 Windows 通知中心或 macOS 通知中心。",
@@ -3042,20 +2782,20 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "The notification permission request failed, so the feature remains off. Please try again later.",
   },
   "settings.solver_cache_density_heading": {
-    zh: "穷举数量",
-    en: "Exhaustive density",
+    zh: "颜色计算精度",
+    en: "Color calculation quality",
   },
   "settings.solver_cache_density_description": {
-    zh: "控制穷举缓存使用的 Lab 网格精度。默认走低档；开启后可选择更高档以保留更多可达配方、获得更低的色差。极高档把同一份耗材组合下所有物理可达的配方都各自保留，几乎不再因桶碰撞被丢弃。",
-    en: "Controls the Lab grid resolution used by the exhaustive cache. Defaults to low; opt in to higher tiers to keep more reachable recipes and get tighter color accuracy. The ultra tiers retain every physically reachable recipe in a given material × layer setup, virtually eliminating bucket-collision losses.",
+    zh: "允许选择更细的颜色搜索网格；精度越高，颜色匹配越细，查找时间也会略有增加。",
+    en: "Use a finer color-search grid for tighter matching, with a small increase in lookup time at higher tiers.",
   },
   "settings.solver_cache_density_enable_label": {
-    zh: "允许自定义穷举数量",
-    en: "Customise exhaustive density",
+    zh: "颜色计算精度",
+    en: "Color calculation quality",
   },
   "settings.solver_cache_density_default_hint": {
-    zh: "未开启时统一使用低档（64³），构建快、内存占用低。",
-    en: "When disabled, every build uses the low tier (64³) — fast to build, low memory.",
+    zh: "当前使用标准精度（64³）。",
+    en: "Currently using standard quality (64³).",
   },
   "settings.solver_cache_density_select_label": {
     zh: "穷举数量",
@@ -3089,17 +2829,33 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "构建采用稀疏存储，内存只随实际可达配方数增长（与档位无关），极致档也不会爆内存；查找时间会随档位略有增加，但通常仍是毫秒级。改动后旧缓存不会被覆盖，首次点击「构建」时会产生对应分辨率的新缓存文件。",
     en: "Builds use sparse storage, so memory grows with the number of physically reachable recipes (not with the tier) — even the ultra tiers stay lightweight. Per-lookup time grows mildly with tier but typically stays in the millisecond range. Existing caches are not overwritten — the first build at a new resolution produces a separate cache file.",
   },
+  "settings.material_delta_e00_tolerance_heading": {
+    zh: "动态叠层颜色容差",
+    en: "Dynamic-layer color tolerance",
+  },
+  "settings.material_delta_e00_tolerance_description": {
+    zh: "控制动态材料模式可用多少综合色差换取更短的有效配方。",
+    en: "Controls how much color difference dynamic material mode may trade for a shorter effective recipe.",
+  },
+  "settings.material_delta_e00_tolerance_label": {
+    zh: "动态叠层 ΔE00 容差",
+    en: "Dynamic-layer ΔE00 tolerance",
+  },
+  "settings.material_delta_e00_tolerance_hint": {
+    zh: "程序先求出范围内的精确 CIEDE2000 最佳值，再选择不超过最佳值加此容差的最短配方。允许范围 0.0–5.0，步进 0.1。",
+    en: "The solver first finds the exact CIEDE2000 optimum in range, then chooses the shortest recipe no worse than that optimum plus this tolerance. Allowed range: 0.0–5.0 in 0.1 steps.",
+  },
   "settings.svg_pixels_per_mm_heading": {
-    zh: "高保真 SVG 采样密度",
-    en: "High-Fidelity SVG sampling density",
+    zh: "SVG 清晰度",
+    en: "SVG clarity",
   },
   "settings.svg_pixels_per_mm_description": {
-    zh: "控制 SVG 图片在高保真模式下先转成像素图时的清晰度。直接使用矢量模式处理 SVG 时不会使用这个设置。",
-    en: "Controls how sharply SVG images are rasterized before High-Fidelity processing. Native Vector mode does not use this setting.",
+    zh: "仅控制高保真模式下 SVG 转为像素图时的清晰度；矢量模式不受影响。",
+    en: "Controls SVG rasterization clarity only in High-Fidelity mode; Vector mode is unaffected.",
   },
   "settings.svg_pixels_per_mm_label": {
-    zh: "高保真 SVG 采样密度",
-    en: "High-Fidelity SVG sampling density",
+    zh: "采样密度",
+    en: "Sampling density",
   },
   "settings.svg_pixels_per_mm_tip": {
     zh: "仅在“高保真”模式处理 SVG 图片时生效；数值越大边缘越细，处理时间和内存占用也会增加。允许范围 2.0–50.0，步进 0.1。",
@@ -3110,20 +2866,20 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     en: "Reset default",
   },
   "settings.svg_pixels_per_mm_default_hint": {
-    zh: "默认值是 10.0 像素/毫米。这个设置不会改变直接矢量模式的 SVG 结果。",
-    en: "Default is 10.0 px/mm. This setting does not change SVG output in native Vector mode.",
+    zh: "默认值为 10.0 像素/毫米。",
+    en: "The default is 10.0 px/mm.",
   },
   "settings.auto_replace_gradient_heading": {
-    zh: "渐变自动换色",
-    en: "Auto replace gradient banding",
+    zh: "自动清理渐变条纹",
+    en: "Clean gradient banding automatically",
   },
   "settings.auto_replace_gradient_description": {
-    zh: "开启后，每次预览成功会自动把每一条海带纹渐变内的多个耗材色统一替换为组内代表色（组内像素最多的那一个），一键去掉渐变被量化切割出来的条纹。仍可在颜色工作站手动撤销或进一步调整。",
-    en: "When enabled, every successful preview automatically collapses each detected banding gradient to the group's representative colour (the material with the most pixels), erasing the stripes in one shot. You can still undo or fine-tune from the Color Workstation.",
+    zh: "预览完成后，将同一渐变中的近似耗材色合并为代表色；仍可在颜色工作站撤销或继续调整。",
+    en: "After preview, merge similar material colors in each gradient into one representative color. You can still undo or refine it in the Color Workstation.",
   },
   "settings.auto_replace_gradient_label": {
-    zh: "自动应用渐变换色",
-    en: "Auto-apply gradient replacement",
+    zh: "自动清理渐变条纹",
+    en: "Clean gradient banding automatically",
   },
   "settings.auto_replace_gradient_default_hint": {
     zh: "默认关闭：预览保留原始渐变，由你在颜色工作站里按需替换。",
@@ -4780,6 +4536,34 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "\u53c2\u4e0e\u53e0\u8272\u6df7\u5408\u7684\u8017\u6750\u79cd\u7c7b\u6570\u91cf\u3002\u5c42\u6570\u8d8a\u591a\u8272\u5f69\u8fc7\u6e21\u8d8a\u4e30\u5bcc\uff0c\u4f46\u6253\u5370\u65f6\u95f4\u8d8a\u957f\u3002",
     en: "Number of material types involved in color blending. More layers produce richer color transitions but increase print time.",
   },
+  basic_material_dynamic_layer_count_label: {
+    zh: "动态调整有效叠层数",
+    en: "Dynamic effective layer count",
+  },
+  basic_material_dynamic_layer_count_hint: {
+    zh: "为每种目标颜色在设定范围内选择综合色差最小的有效层数；色差相近时优先使用更短配方。",
+    en: "Choose the best effective layer count for each target color within the configured range, preferring shorter recipes when color differences are close.",
+  },
+  basic_material_min_layer_count_label: {
+    zh: "最小有效叠层数",
+    en: "Minimum effective layers",
+  },
+  basic_material_min_layer_count_hint: {
+    zh: "每种颜色配方允许使用的最少有效颜色层数。",
+    en: "Minimum number of effective color layers allowed for each recipe.",
+  },
+  basic_material_max_layer_count_label: {
+    zh: "最大有效叠层数",
+    en: "Maximum effective layers",
+  },
+  basic_material_max_layer_count_hint: {
+    zh: "每种颜色配方允许使用的最多有效颜色层数，也是最终模型的统一打印层数。",
+    en: "Maximum number of effective color layers allowed per recipe and the uniform printed layer count of the final model.",
+  },
+  basic_material_dynamic_range_hint: {
+    zh: "动态模式会在设定范围内自动加载并评估候选；单一层数的穷举缓存入口暂不显示。",
+    en: "Dynamic mode automatically loads and evaluates candidates across the configured range; the single-layer-count cache control is hidden.",
+  },
   basic_material_layer_height_label: {
     zh: "\u5c42\u9ad8",
     en: "Layer Height",
@@ -5528,6 +5312,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "高精度匹配开启时，色相保护已被接管，无需手动启用。",
     en: "Hue protection is automatically handled when high-precision matching is enabled; no need to enable manually.",
   },
+  adv_hue_protection_dynamic_hint: {
+    zh: "动态有效叠层模式由精确 CIEDE2000 统一评分，色相保护和暗色彩度修正不会参与计算。",
+    en: "Dynamic effective-layer mode is scored entirely by exact CIEDE2000; hue protection and dark-chroma adjustments are not applied.",
+  },
   adv_auto_dynamic_range: {
     zh: "自动动态范围（实验性功能）",
     en: "Auto Dynamic Range (Experimental)",
@@ -6049,6 +5837,58 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   palette_replaced_label: {
     zh: "替换色",
     en: "Replaced",
+  },
+  palette_dynamic_actual_layers: {
+    zh: "实际层数",
+    en: "Actual layers",
+  },
+  palette_dynamic_saved_layers: {
+    zh: "节省层数",
+    en: "Layers saved",
+  },
+  palette_dynamic_selected_delta_e00: {
+    zh: "当前 ΔE00",
+    en: "Selected ΔE00",
+  },
+  palette_dynamic_fixed_delta_e00: {
+    zh: "固定最大层数 ΔE00",
+    en: "Fixed-max ΔE00",
+  },
+  palette_dynamic_best_delta_e00: {
+    zh: "范围最佳 ΔE00",
+    en: "Range-best ΔE00",
+  },
+  palette_dynamic_sacrifice: {
+    zh: "容差损失",
+    en: "Tolerance loss",
+  },
+  palette_dynamic_benefit_title: {
+    zh: "全图层数收益",
+    en: "Whole-image layer benefit",
+  },
+  palette_dynamic_benefit_scope_automatic: {
+    zh: "仅自动求解区域（{count} 像素）",
+    en: "Automatic-solver region only ({count} pixels)",
+  },
+  palette_dynamic_benefit_layer: {
+    zh: "{count} 层",
+    en: "{count} layers",
+  },
+  palette_dynamic_benefit_mean: {
+    zh: "平均 ΔE00 {value}",
+    en: "Mean ΔE00 {value}",
+  },
+  palette_dynamic_benefit_baseline: {
+    zh: "起始层数",
+    en: "Starting layer count",
+  },
+  palette_dynamic_benefit_no_improvement: {
+    zh: "无改善",
+    en: "No improvement",
+  },
+  palette_dynamic_benefit_marginal: {
+    zh: "边际改善 {value}",
+    en: "Marginal gain {value}",
   },
   palette_undo: {
     zh: "撤销",
@@ -7655,6 +7495,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "尚未选择可用色库",
     en: "No usable library selected",
   },
+  workshop_source_banner_library_changed: {
+    zh: "打印色库已变化；图纸原色不受影响，将按当前色库重新叠色。",
+    en: "The print library changed. Source colors are unchanged and will be remapped with the current library.",
+  },
   workshop_source_banner_guidance: {
     zh: "源色色块由创意工坊保留；下方 LUT 或耗材档案只负责叠色打印，不会覆盖源色。",
     en: "Source color blocks stay with the Workshop project. The LUT or material archive below controls layered printing without replacing those source colors.",
@@ -7755,6 +7599,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "当前版本 {version}",
     en: "Current version {version}",
   },
+  "workshop.manager.candidateVersion": {
+    zh: "待激活版本 {version}",
+    en: "Candidate version {version}",
+  },
   "workshop.manager.activeMeta": {
     zh: "{name} · v{version}",
     en: "{name} · v{version}",
@@ -7778,6 +7626,10 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
   "workshop.manager.open": {
     zh: "打开",
     en: "Open",
+  },
+  "workshop.manager.reviewCandidate": {
+    zh: "审查权限并打开候选版本",
+    en: "Review permissions and open candidate",
   },
   "workshop.manager.desktopOnly": {
     zh: "仅桌面版可打开",
@@ -7911,17 +7763,33 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "确认新增权限",
     en: "Confirm added permissions",
   },
+  "workshop.manager.permissionInstallTitle": {
+    zh: "确认模块权限",
+    en: "Confirm module permissions",
+  },
   "workshop.manager.permissionDescription": {
     zh: "这个更新请求了当前版本没有的权限。确认前不会安装或激活候选版本。",
     en: "This update requests permissions not used by the current version. The candidate will not be installed or activated before confirmation.",
+  },
+  "workshop.manager.permissionInstallDescription": {
+    zh: "安装包已通过校验并暂存。确认后才会在隔离环境中启动，并在成功就绪后激活。",
+    en: "The package has been validated and staged. It runs only after confirmation and activates only after becoming ready in the sandbox.",
   },
   "workshop.manager.newPermissions": {
     zh: "新增权限",
     en: "Added permissions",
   },
+  "workshop.manager.requestedPermissions": {
+    zh: "请求的权限",
+    en: "Requested permissions",
+  },
   "workshop.manager.confirmPermissions": {
     zh: "确认权限并更新",
     en: "Confirm permissions and update",
+  },
+  "workshop.manager.confirmPermissionsAndOpen": {
+    zh: "确认权限并打开",
+    en: "Confirm permissions and open",
   },
   "workshop.manager.cancel": {
     zh: "取消",

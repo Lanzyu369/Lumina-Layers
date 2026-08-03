@@ -426,6 +426,14 @@ class BugReportContext(BaseModel):
     selected_native_db_names: list[str] = Field(default_factory=list, max_length=128)
     selected_material_dir_names: list[str] = Field(default_factory=list, max_length=128)
     material_layer_count: int | None = Field(default=None, ge=0, le=1000)
+    material_dynamic_layer_count_enabled: bool | None = None
+    material_min_layer_count: int | None = Field(default=None, ge=5, le=10)
+    material_max_layer_count: int | None = Field(default=None, ge=5, le=10)
+    material_delta_e00_tolerance: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=5.0,
+    )
     material_layer_height_mm: float | None = Field(default=None, ge=0.0, le=10.0)
     material_backing_material_dir_name: str | None = Field(default=None, max_length=128)
     recent_client_logs: list[dict[str, Any]] = Field(default_factory=list)
@@ -656,6 +664,42 @@ class BugReportRequest(BaseModel):
         if len(value) > 320 or not _EMAIL_RE.match(value):
             raise ValueError("Invalid email address")
         return value
+
+
+_DYNAMIC_MATERIAL_CONTEXT_FIELDS = {
+    "material_dynamic_layer_count_enabled",
+    "material_min_layer_count",
+    "material_max_layer_count",
+    "material_delta_e00_tolerance",
+}
+
+
+def _dump_bug_report_request(
+    request: BugReportRequest,
+    *,
+    include_existing_defaults: bool = True,
+) -> dict[str, Any]:
+    """Serialize a report without inventing absent dynamic-material fields.
+
+    序列化报告时不为旧客户端凭空补入未提交的动态材料字段。
+
+    Args:
+        request: Validated bug-report request. / 已校验的 Bug 报告请求。
+        include_existing_defaults: Preserve the historical local ticket shape.
+            / 保留既有本地工单默认字段结构。
+
+    Returns:
+        JSON-compatible request payload. / JSON 兼容的请求载荷。
+    """
+
+    if not include_existing_defaults:
+        return request.model_dump(mode="json", exclude_unset=True)
+
+    absent_dynamic_fields = (
+        _DYNAMIC_MATERIAL_CONTEXT_FIELDS - request.context.model_fields_set
+    )
+    exclude = {"context": absent_dynamic_fields} if absent_dynamic_fields else None
+    return request.model_dump(mode="json", exclude=exclude)
 
 
 class BugReportResponse(BaseModel):
@@ -1030,7 +1074,7 @@ async def submit_bug_report(
 
     ticket_dir = ticket_dir_for(feedback_root, ticket_id, now)
 
-    request_dump = request.model_dump(mode="json")
+    request_dump = _dump_bug_report_request(request)
     attachment_context_dump = deepcopy(request_dump.get("context") or {})
     context_dump = _sanitize_bug_report_context_for_export(attachment_context_dump)
 
@@ -1317,9 +1361,9 @@ async def relay_bug_report(
                 json={
                     "ticket_id": request.ticket_id,
                     "request_payload": _sanitize_bug_report_request_payload_for_export(
-                        request.request_payload.model_dump(
-                            mode="json",
-                            exclude_unset=True,
+                        _dump_bug_report_request(
+                            request.request_payload,
+                            include_existing_defaults=False,
                         )
                     ),
                 },

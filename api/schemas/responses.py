@@ -9,6 +9,7 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
+from api.schemas.dynamic_material import DynamicMaterialResultResponse
 from api.schemas.lut import (
     LutCoverageStatsResponse,
     LutHullPoint,
@@ -815,7 +816,7 @@ class RecipePredictResponse(BaseModel):
     runtime_mode_key: str | None = None
 
 
-class RecipeOverrideApplyResponse(BaseModel):
+class RecipeOverrideApplyResponse(DynamicMaterialResultResponse):
     """Recipe override apply response."""
 
     status: str
@@ -866,13 +867,18 @@ class PerformanceTimingResponse(BaseModel):
     total_ms: Optional[float] = None
     upload_ms: Optional[float] = None
     worker_ms: Optional[float] = None
+    endpoint_to_enqueue_ms: Optional[float] = None
+    queue_wait_ms: Optional[float] = None
+    worker_execution_ms: Optional[float] = None
+    result_delivery_ms: Optional[float] = None
+    endpoint_post_worker_ms: Optional[float] = None
     pickle_load_ms: Optional[float] = None
     segmented_glb_ms: Optional[float] = None
     palette_ms: Optional[float] = None
     overhead_ms: Optional[float] = None
 
 
-class PreviewResponse(BaseModel):
+class PreviewResponse(DynamicMaterialResultResponse):
     """预览生成响应。"""
 
     session_id: str
@@ -889,7 +895,7 @@ class PreviewResponse(BaseModel):
     performance_timing: Optional[PerformanceTimingResponse] = None
 
 
-class ColorReplaceResponse(BaseModel):
+class ColorReplaceResponse(DynamicMaterialResultResponse):
     """颜色替换响应。"""
 
     status: str
@@ -1200,7 +1206,7 @@ class AutoDetectColorsResponse(BaseModel):
     complexity_score: int
 
 
-class ResetReplacementsResponse(BaseModel):
+class ResetReplacementsResponse(DynamicMaterialResultResponse):
     """颜色替换重置响应。"""
 
     status: str

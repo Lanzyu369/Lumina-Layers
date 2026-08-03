@@ -1,5 +1,1 @@
-{
-  "schemaVersion": 1,
-  "generatedAt": "2026-07-30T00:00:00Z",
-  "modules": []
-}
+{"generatedAt":"2026-07-30T20:31:29+08:00","modules":[{"description":{"en-US":"Recognize, correct, and render iron-fused bead patterns","zh-CN":"识别、校正并模拟熨烫融合后的拼豆图纸"},"moduleId":"lumina.bead-pattern","name":{"en-US":"Fuse Bead Studio","zh-CN":"拼豆工作台"},"official":true,"publisher":"Lumina Studio","repository":"https://github.com/lumina-layer-studio/Lumina-Fuse-Bead-Studio","versions":[{"assetBytes":117755,"assetName":"lumina.bead-pattern-1.0.1.lumina-workshop","downloadUrl":"https://github.com/lumina-layer-studio/Lumina-Fuse-Bead-Studio/releases/download/v1.0.1/lumina.bead-pattern-1.0.1.lumina-workshop","luminaVersion":{"min":"2.0.0"},"manifestSha256":"9b7e67267a78b29ea2f8f0e30adac5c343b047615933b132af19bf6b8f47b9a3","permissions":[{"name":"image.pick","reason":"选择并读取拼豆图纸或截图"},{"name":"project.storage","reason":"保存可继续编辑的拼豆工程"},{"name":"color-library.read","reason":"预览当前 LUT 或耗材档案色库"},{"name":"handoff.image","reason":"将确认后的源色 PNG 交给 Lumina 转换"}],"releaseTag":"v1.0.1","revocation":null,"sha256":"a67c39167c35bd0fb2a5e0144ae019d95bd2394963bedaf925abb5b02fbb9158","state":"active","version":"1.0.1","workshopApi":{"maxExclusive":"2.0.0","min":"1.0.0"}}]}],"schemaVersion":1}

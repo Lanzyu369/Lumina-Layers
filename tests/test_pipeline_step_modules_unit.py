@@ -1772,6 +1772,65 @@ class TestS08AuxiliaryMeshes:
         backing = result["scene"].geometry["Backing"]
         assert list(backing.visual.face_colors[0]) == [0, 255, 255, 255]
 
+    @pytest.mark.parametrize("enable_outline", [False, True])
+    def test_double_sided_raster_coating_covers_both_outer_faces(
+        self,
+        enable_outline,
+    ):
+        from core.mesh_generators import HighFidelityMesher
+        from core.pipeline.s08_auxiliary_meshes import run
+
+        total_layers = 8
+        coating_layers = 2
+        layer_height = PrinterConfig.LAYER_HEIGHT
+        mask_solid = np.ones((4, 4), dtype=bool)
+        ctx = {
+            "scene": trimesh.Scene(),
+            "valid_slot_names": [],
+            "full_matrix": np.zeros((total_layers, 4, 4), dtype=int),
+            "mask_solid": mask_solid,
+            "matched_rgb": np.zeros((4, 4, 3), dtype=np.uint8),
+            "target_h": 4,
+            "target_w": 4,
+            "pixel_scale": 1.0,
+            "total_layers": total_layers,
+            "preview_colors": {0: [255, 255, 255, 255]},
+            "transform": np.eye(4),
+            "mesher": HighFidelityMesher(disable_material_dilation=True),
+            "structure_mode": "Double-sided",
+            "separate_backing": False,
+            "backing_metadata": {},
+            "enable_coating": True,
+            "coating_height_mm": coating_layers * layer_height,
+            "enable_outline": enable_outline,
+            "outline_width": 1.0,
+            "free_color_set": None,
+            "add_loop": False,
+            "loop_info": None,
+            "boundary_geometry": None,
+        }
+
+        result = run(ctx)
+        coating = result["scene"].geometry["Coating"]
+
+        assert len(coating.split(only_watertight=False)) == 2
+        assert coating.bounds[0, 2] == pytest.approx(-coating_layers * layer_height)
+        assert coating.bounds[1, 2] == pytest.approx(
+            (total_layers + coating_layers) * layer_height
+        )
+        if enable_outline:
+            outline = result["scene"].geometry["Outline"]
+            assert outline.bounds[0, 2] == pytest.approx(
+                -coating_layers * layer_height
+            )
+            assert outline.bounds[1, 2] == pytest.approx(
+                (total_layers + coating_layers) * layer_height
+            )
+            assert coating.bounds[0, 0] <= outline.bounds[0, 0]
+            assert coating.bounds[0, 1] <= outline.bounds[0, 1]
+            assert coating.bounds[1, 0] >= outline.bounds[1, 0]
+            assert coating.bounds[1, 1] >= outline.bounds[1, 1]
+
 
 # ===========================================================================
 # S11 — s11_glb_preview 单元测试

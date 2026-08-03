@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 import numpy as np
 import pytest
@@ -15,6 +16,160 @@ from core.material_cache import (
     _top_k_candidate_rows_blockwise,
 )
 from core.material_color_solver import rgb_to_lab
+
+
+def test_real_vector_norm_matches_numpy_bitwise() -> None:
+    rng = np.random.default_rng(20260801)
+    random_vectors = rng.normal(size=(512, 3)).astype(np.float64)
+    edge_vectors = np.asarray(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, -2.0, 3.5],
+            [-0.0, 0.0, -0.0],
+            [1.0e-150, -2.0e-150, 3.0e-150],
+            [1.0e150, -2.0e150, 3.0e150],
+        ],
+        dtype=np.float64,
+    )
+    vectors = np.concatenate((edge_vectors, random_vectors), axis=0)
+
+    expected_bits = np.asarray(
+        [np.linalg.norm(vector) for vector in vectors],
+        dtype=np.float64,
+    ).view(np.uint64)
+    actual_bits = np.asarray(
+        [
+            material_cache_module._real_vector_norm(vector)
+            for vector in vectors
+        ],
+        dtype=np.float64,
+    ).view(np.uint64)
+
+    np.testing.assert_array_equal(actual_bits, expected_bits)
+
+
+def test_neighbor_pair_distances_match_source_norm_bitwise() -> None:
+    rng = np.random.default_rng(20260801)
+    lab_like_targets = rng.normal(
+        loc=np.asarray([50.0, 0.0, 0.0]),
+        scale=np.asarray([18.0, 35.0, 35.0]),
+        size=(41, 3),
+    ).astype(np.float64)
+    edge_targets = np.asarray(
+        [
+            [0.0, 0.0, 0.0],
+            [-0.0, 0.0, -0.0],
+            [1.0e-150, -2.0e-150, 3.0e-150],
+            [-1.0e-150, 2.0e-150, -3.0e-150],
+            [1.0e150, -2.0e150, 3.0e150],
+            [-1.0e150, 2.0e150, -3.0e150],
+        ],
+        dtype=np.float64,
+    )
+
+    for targets, threshold in (
+        (lab_like_targets, 20.0),
+        (edge_targets, 1.0e151),
+    ):
+        yielded = list(
+            material_cache_module._iter_neighbor_pairs_with_distances(
+                targets,
+                threshold=threshold,
+            )
+        )
+        actual_pairs = np.asarray(
+            [(row, column) for row, column, _distance in yielded],
+            dtype=np.intp,
+        ).reshape(-1, 2)
+        expected_pairs = _legacy_neighbor_pairs(targets, threshold)
+        actual_bits = np.asarray(
+            [distance for _row, _column, distance in yielded],
+            dtype=np.float64,
+        ).view(np.uint64)
+        expected_bits = np.asarray(
+            [
+                material_cache_module._real_vector_norm(
+                    targets[column] - targets[row]
+                )
+                for row, column in expected_pairs
+            ],
+            dtype=np.float64,
+        ).view(np.uint64)
+
+        np.testing.assert_array_equal(actual_pairs, expected_pairs)
+        np.testing.assert_array_equal(actual_bits, expected_bits)
+
+
+def test_neighbor_coherence_reuses_source_norm_for_reverse_direction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target_lab = np.asarray(
+        [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]],
+        dtype=np.float64,
+    )
+    matched_lab = np.asarray(
+        [[0.0, 0.0, 0.0], [-10.0, 0.0, 0.0]],
+        dtype=np.float64,
+    )
+    all_lab = np.asarray([[-20.0, 0.0, 0.0]], dtype=np.float64)
+
+    monkeypatch.setattr(
+        material_cache_module,
+        "rgb_to_lab",
+        lambda _rgb: matched_lab.copy(),
+    )
+    monkeypatch.setattr(
+        material_cache_module,
+        "_iter_neighbor_pairs_with_distances",
+        lambda *_args, **_kwargs: iter(((0, 1, np.float64(10.0)),)),
+    )
+    monkeypatch.setattr(
+        material_cache_module,
+        "_top_k_candidate_block",
+        lambda _target_block, _candidate_lab, _top_k: (
+            np.zeros((1, 1), dtype=np.intp),
+            np.asarray([[1.0]], dtype=np.float64),
+        ),
+    )
+
+    real_norm = material_cache_module._real_vector_norm
+    observed_vectors: list[np.ndarray] = []
+
+    def _recording_norm(vector: np.ndarray) -> np.floating:
+        observed_vectors.append(vector.copy())
+        return real_norm(vector)
+
+    monkeypatch.setattr(
+        material_cache_module,
+        "_real_vector_norm",
+        _recording_norm,
+    )
+    monkeypatch.setattr(
+        material_cache_module.np.linalg,
+        "norm",
+        lambda *_args, **_kwargs: pytest.fail(
+            "coherence hot loop must not call generic norm"
+        ),
+    )
+
+    matched_rgb, _recipes, _delta_e = _neighbor_coherence_refine(
+        target_lab=target_lab,
+        matched_rgb=np.zeros((2, 3), dtype=np.uint8),
+        recipes_user_order=np.zeros((2, 1), dtype=np.int32),
+        delta_e=np.asarray([1.0, 0.0], dtype=np.float64),
+        all_lab=all_lab,
+        all_srgb=np.asarray([[1, 2, 3]], dtype=np.uint8),
+        all_recipes=np.zeros((1, 1), dtype=np.int32),
+        user_mapping=np.asarray([0], dtype=np.int32),
+        coherence_weight=0.8,
+        layer_count=1,
+        uniform_lab=None,
+        uniform_srgb=None,
+        uniform_recipes=None,
+    )
+
+    assert len(observed_vectors) == 2
+    np.testing.assert_array_equal(matched_rgb[0], np.asarray([1, 2, 3]))
 
 
 def _legacy_neighbor_pairs(
@@ -295,6 +450,195 @@ def _coherence_fixture() -> dict[str, np.ndarray | float | int | None]:
         "uniform_srgb": None,
         "uniform_recipes": None,
     }
+
+
+def test_serial_coherence_computes_only_demanded_top_k_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _coherence_fixture()
+    expected = _neighbor_coherence_refine(**fixture, parallelism=4)
+    real_block = material_cache_module._top_k_candidate_block
+    observed_targets: list[bytes] = []
+
+    def _recording_block(
+        target_block: np.ndarray,
+        candidate_lab: np.ndarray,
+        top_k: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        assert target_block.shape == (1, 3)
+        observed_targets.append(target_block.tobytes())
+        return real_block(target_block, candidate_lab, top_k)
+
+    monkeypatch.setattr(
+        material_cache_module,
+        "_top_k_candidate_rows_blockwise",
+        lambda **_kwargs: pytest.fail("serial path must not compute every row"),
+    )
+    monkeypatch.setattr(
+        material_cache_module,
+        "_top_k_candidate_block",
+        _recording_block,
+    )
+
+    actual = _neighbor_coherence_refine(**fixture, parallelism=1)
+
+    assert len(observed_targets) == 6
+    assert len(observed_targets) < np.asarray(fixture["target_lab"]).shape[0]
+    assert len(set(observed_targets)) == len(observed_targets)
+    for actual_array, expected_array in zip(actual, expected, strict=True):
+        np.testing.assert_array_equal(actual_array, expected_array)
+
+
+def test_exact_top_k_row_cache_computes_same_row_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target_lab = np.asarray(
+        [[0.0, 0.0, 0.0], [4.0, 1.0, -2.0]],
+        dtype=np.float64,
+    )
+    candidate_lab = np.asarray(
+        [[0.0, 0.0, 0.0], [3.0, 1.0, -2.0], [8.0, 2.0, -4.0]],
+        dtype=np.float64,
+    )
+    real_block = material_cache_module._top_k_candidate_block
+    observed_targets: list[bytes] = []
+
+    def _recording_block(
+        target_block: np.ndarray,
+        candidates: np.ndarray,
+        top_k: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        observed_targets.append(target_block.tobytes())
+        return real_block(target_block, candidates, top_k)
+
+    monkeypatch.setattr(
+        material_cache_module,
+        "_top_k_candidate_block",
+        _recording_block,
+    )
+    cache = material_cache_module._ExactTopKRowCache.create(
+        target_lab=target_lab,
+        candidate_lab=candidate_lab,
+        top_k=2,
+    )
+
+    first_indices, first_distances = cache.get(1)
+    second_indices, second_distances = cache.get(1)
+
+    assert observed_targets == [target_lab[1:2].tobytes()]
+    np.testing.assert_array_equal(second_indices, first_indices)
+    np.testing.assert_array_equal(second_distances, first_distances)
+
+
+def test_exact_top_k_row_cache_preserves_k_boundary_tie_order() -> None:
+    target_lab = np.asarray(
+        [[20.0, 0.0, 0.0], [0.0, 0.0, 0.0], [-20.0, 0.0, 0.0]],
+        dtype=np.float64,
+    )
+    candidate_lab = np.asarray(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [3.0, 0.0, 0.0],
+            [4.0, 0.0, 0.0],
+            [5.0, 0.0, 0.0],
+            [6.0, 0.0, 0.0],
+            [7.0, 0.0, 0.0],
+            [-7.0, 0.0, 0.0],
+            [30.0, 0.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    top_k = 8
+    eager_indices, eager_distances = _top_k_candidate_rows_blockwise(
+        target_lab=target_lab,
+        candidate_lab=candidate_lab,
+        top_k=top_k,
+        block_size=target_lab.shape[0],
+        parallelism=1,
+    )
+    cache = material_cache_module._ExactTopKRowCache.create(
+        target_lab=target_lab,
+        candidate_lab=candidate_lab,
+        top_k=top_k,
+    )
+
+    cached_indices, cached_distances = cache.get(1)
+
+    all_distances = cdist(target_lab[1:2], candidate_lab)[0]
+    assert np.count_nonzero(all_distances == 7.0) == 2
+    assert np.count_nonzero(cached_distances == 7.0) == 1
+    np.testing.assert_array_equal(cached_indices, eager_indices[1])
+    np.testing.assert_array_equal(cached_distances, eager_distances[1])
+
+
+def test_exact_top_k_row_cache_matches_eager_negative_index() -> None:
+    target_lab = np.asarray(
+        [[0.0, 0.0, 0.0], [4.0, 1.0, -2.0]],
+        dtype=np.float64,
+    )
+    candidate_lab = np.asarray(
+        [[0.0, 0.0, 0.0], [3.0, 1.0, -2.0], [8.0, 2.0, -4.0]],
+        dtype=np.float64,
+    )
+    eager_indices, eager_distances = _top_k_candidate_rows_blockwise(
+        target_lab=target_lab,
+        candidate_lab=candidate_lab,
+        top_k=2,
+        parallelism=1,
+    )
+    cache = material_cache_module._ExactTopKRowCache.create(
+        target_lab=target_lab,
+        candidate_lab=candidate_lab,
+        top_k=2,
+    )
+
+    cached_indices, cached_distances = cache.get(-1)
+
+    np.testing.assert_array_equal(cached_indices, eager_indices[-1])
+    np.testing.assert_array_equal(cached_distances, eager_distances[-1])
+
+
+def test_parallel_coherence_keeps_eager_blockwise_top_k(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _coherence_fixture()
+    expected = _neighbor_coherence_refine(**fixture, parallelism=1)
+    real_blockwise = material_cache_module._top_k_candidate_rows_blockwise
+    observed_parallelism: list[int] = []
+
+    def _recording_blockwise(
+        **kwargs: Any,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        observed_parallelism.append(int(kwargs["parallelism"]))
+        return real_blockwise(**kwargs)
+
+    monkeypatch.setattr(
+        material_cache_module,
+        "_top_k_candidate_rows_blockwise",
+        _recording_blockwise,
+    )
+
+    actual = _neighbor_coherence_refine(**fixture, parallelism=4)
+
+    assert observed_parallelism == [4]
+    for actual_array, expected_array in zip(actual, expected, strict=True):
+        np.testing.assert_array_equal(actual_array, expected_array)
+
+
+def test_serial_coherence_preserves_duplicate_candidate_ties() -> None:
+    fixture = _coherence_fixture()
+    duplicated = dict(fixture)
+    for key in ("all_lab", "all_srgb", "all_recipes"):
+        values = np.asarray(fixture[key])
+        duplicated[key] = np.concatenate((values, values[:9]), axis=0)
+
+    expected = _neighbor_coherence_refine(**duplicated, parallelism=4)
+    actual = _neighbor_coherence_refine(**duplicated, parallelism=1)
+
+    for actual_array, expected_array in zip(actual, expected, strict=True):
+        np.testing.assert_array_equal(actual_array, expected_array)
 
 
 @pytest.mark.parametrize(

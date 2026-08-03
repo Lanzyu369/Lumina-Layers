@@ -8,6 +8,8 @@ vi.mock("../api/system", () => ({
 vi.mock("../stores/generatedArtifactInvalidation", () => ({
   invalidateGeneratedArtifacts: vi.fn(),
   registerGeneratedArtifactInvalidator: vi.fn(),
+  invalidatePreviewArtifacts: vi.fn(),
+  registerPreviewArtifactInvalidator: vi.fn(),
 }));
 
 vi.mock("../api/converter", () => ({
@@ -245,6 +247,73 @@ describe("settings store hydration and base-layer modifier wiring", () => {
       3,
     );
   });
+
+  it("material Delta-E00 tolerance defaults to 0.5 and normalizes finite setter input", async () => {
+    const { settingsStoreModule, artifactModule } = await loadStores();
+    const { useSettingsStore } = settingsStoreModule;
+
+    expect(settingsStoreModule.DEFAULT_SETTINGS.materialDeltaE00Tolerance).toBe(
+      0.5,
+    );
+
+    useSettingsStore.getState().setMaterialDeltaE00Tolerance(0.56);
+    expect(useSettingsStore.getState().materialDeltaE00Tolerance).toBe(0.6);
+
+    useSettingsStore.getState().setMaterialDeltaE00Tolerance(99);
+    expect(useSettingsStore.getState().materialDeltaE00Tolerance).toBe(5);
+
+    useSettingsStore.getState().setMaterialDeltaE00Tolerance(-1);
+    expect(useSettingsStore.getState().materialDeltaE00Tolerance).toBe(0);
+
+    useSettingsStore.getState().setMaterialDeltaE00Tolerance(Number.NaN);
+    expect(useSettingsStore.getState().materialDeltaE00Tolerance).toBe(0.5);
+
+    useSettingsStore.getState().setMaterialDeltaE00Tolerance(Number.POSITIVE_INFINITY);
+    expect(useSettingsStore.getState().materialDeltaE00Tolerance).toBe(0.5);
+    expect(artifactModule.invalidatePreviewArtifacts).toHaveBeenCalledTimes(5);
+  });
+
+  it("hydrates an old version-1 snapshot without tolerance at the new default", async () => {
+    localStorage.setItem(
+      "lumina-settings",
+      JSON.stringify({
+        state: { theme: "dark" },
+        version: 1,
+      }),
+    );
+
+    const settingsStoreModule = await import("../stores/settingsStore");
+
+    expect(settingsStoreModule.useSettingsStore.getState()).toMatchObject({
+      theme: "dark",
+      materialDeltaE00Tolerance: 0.5,
+    });
+  });
+
+  it.each([
+    [0.56, 0.6],
+    [99, 5],
+    [-1, 0],
+    ["not-a-number", 0.5],
+  ])(
+    "normalizes persisted material Delta-E00 tolerance %s to %s",
+    async (persistedValue, expectedValue) => {
+      localStorage.setItem(
+        "lumina-settings",
+        JSON.stringify({
+          state: { materialDeltaE00Tolerance: persistedValue },
+          version: 1,
+        }),
+      );
+
+      const settingsStoreModule = await import("../stores/settingsStore");
+
+      expect(
+        settingsStoreModule.useSettingsStore.getState()
+          .materialDeltaE00Tolerance,
+      ).toBe(expectedValue);
+    },
+  );
 
   it("syncToBackend includes device slicer payload fields", async () => {
     const { settingsStoreModule, systemApi } = await loadStores();

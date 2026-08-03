@@ -178,6 +178,43 @@ class TestBuildVectorProcessorRouting:
 
         assert vp.img_processor.hue_weight == pytest.approx(0.5)
 
+    def test_material_archive_dynamic_svg_uses_max_physical_depth_and_exact_matcher(
+        self,
+    ) -> None:
+        from core.pipeline.vector_branch import _build_vector_processor
+        from core.vector_matchers import MaterialVectorMatcher
+
+        ctx = _material_archive_ctx()
+        ctx.update(
+            {
+                "color_layers": 5,
+                "material_dynamic_layer_count_enabled": True,
+                "material_min_layer_count": 5,
+                "material_max_layer_count": 7,
+                "material_delta_e00_tolerance": 0.4,
+                "material_backing_material_index": 2,
+            }
+        )
+        sentinel_matcher = object()
+        with (
+            patch.object(
+                MaterialVectorMatcher,
+                "from_materials",
+                return_value=sentinel_matcher,
+            ) as factory,
+            patch("core.vector_engine.VectorProcessor.from_img_processor") as processor_factory,
+        ):
+            _build_vector_processor(ctx, fallback_color_mode="4-Color (RYBW)")
+
+        kwargs = factory.call_args.kwargs
+        assert kwargs["layer_count"] == 7
+        assert kwargs["dynamic_layer_count_enabled"] is True
+        assert kwargs["dynamic_min_layer_count"] == 5
+        assert kwargs["dynamic_max_layer_count"] == 7
+        assert kwargs["dynamic_delta_e00_tolerance"] == pytest.approx(0.4)
+        assert kwargs["backing_material_index"] == 2
+        processor_factory.assert_called_once_with(sentinel_matcher, "Material Archive")
+
     def test_material_archive_source_enables_gradient_color_bands(self):
         from core.pipeline.vector_branch import _build_vector_processor
 
@@ -240,6 +277,58 @@ class TestBuildVectorProcessorRouting:
         assert processor.layer_height_mm == pytest.approx(0.10)
         assert scene.bounds[0][2] == pytest.approx(0.0)
         assert scene.bounds[1][2] == pytest.approx(2.6)
+
+    def test_dynamic_vector_preview_cache_keeps_max_depth_and_int32_authority(self):
+        from core.vector_engine import VectorAnalysis, VectorProcessor
+
+        geometry = box(0, 0, 2, 1)
+        analysis = VectorAnalysis(
+            shape_data=[],
+            clipped_shapes=[
+                {"geometry": geometry, "color": (10, 20, 30), "draw_order": 0}
+            ],
+            matched_shapes=[
+                {
+                    "geometry": geometry,
+                    "color": (10, 20, 30),
+                    "matched_rgb": (11, 21, 31),
+                    "recipe": [1, 1, 1, 1, 0, 0, 0],
+                    "material_dynamic_recipe": {
+                        "actual_layer_count": 4,
+                        "padding_layer_count": 3,
+                        "print_recipe_top_to_bottom": [1, 1, 1, 1, 0, 0, 0],
+                    },
+                }
+            ],
+            silhouette=geometry,
+            scale_factor=1.0,
+            bbox=(0.0, 0.0, 2.0, 1.0),
+            color_conf={},
+            slot_names=["Base", "Red"],
+            num_channels=2,
+            num_layers=7,
+            preview_colors={0: (255, 255, 255, 255), 1: (255, 0, 0, 255)},
+            material_dynamic_layer_info={
+                "enabled": True,
+                "min_layer_count": 5,
+                "max_layer_count": 7,
+            },
+        )
+
+        cache = VectorProcessor.build_preview_cache(
+            analysis,
+            pixels_per_mm=2.0,
+            max_width_px=20,
+        )
+
+        assert cache["material_matrix"].dtype == np.int32
+        assert cache["material_matrix"].shape[2] == 7
+        solid_stacks = cache["material_matrix"][cache["mask_solid"]]
+        assert solid_stacks.size
+        np.testing.assert_array_equal(
+            solid_stacks[0],
+            np.asarray([1, 1, 1, 1, 0, 0, 0], dtype=np.int32),
+        )
 
     def test_material_archive_without_materials_raises(self):
         from core.pipeline.vector_branch import _build_vector_processor
@@ -338,6 +427,322 @@ class TestAnalyzeSvgConsumesMatcherColorConf:
         # num_layers must come from matcher.layer_count, NOT the
         # PrinterConfig default.
         assert analysis.num_layers == 7
+
+    def test_dynamic_matcher_is_solved_from_clipped_geometry_and_metadata_reaches_analysis(
+        self,
+    ) -> None:
+        from core.vector_engine import VectorProcessor
+
+        class _DynamicMatcher:
+            lut_path = MATERIAL_ARCHIVE_LUT_SENTINEL
+            color_mode = "Material Archive"
+            color_conf = {
+                "name": "Material",
+                "slots": ["Base", "Red"],
+                "preview": {0: (255, 255, 255, 255), 1: (255, 0, 0, 255)},
+                "map": {"Base": 0, "Red": 1},
+            }
+            slot_names = ["Base", "Red"]
+            preview_colors = color_conf["preview"]
+            layer_count = 7
+            lut_rgb = np.asarray([[255, 0, 0]], dtype=np.uint8)
+            ref_stacks = np.asarray([[1] * 7], dtype=np.int32)
+            kdtree = None
+            dynamic_layer_info = {
+                "enabled": True,
+                "min_layer_count": 5,
+                "max_layer_count": 7,
+                "colors": [],
+            }
+            material_solver_info = {"path": "dynamic_exact_vector_geometry"}
+
+            def __init__(self) -> None:
+                self.calls: list[tuple[object, float]] = []
+
+            @staticmethod
+            def _rgb_to_lab(arr):
+                from core.vector_matchers import _rgb_to_lab_static
+
+                return _rgb_to_lab_static(arr)
+
+            def solve_for_clipped_shapes(self, shapes, *, scale_factor: float) -> None:
+                self.calls.append((shapes, scale_factor))
+
+        matcher = _DynamicMatcher()
+        vp = VectorProcessor.from_img_processor(matcher, "Material Archive")
+        geometry = box(0, 0, 2, 1)
+        clipped = {"geometry": geometry, "color": (255, 0, 0), "draw_order": 0}
+        with (
+            patch.object(
+                vp,
+                "_parse_svg",
+                return_value=([{"poly": geometry, "color": (255, 0, 0)}], 1.0, (0, 0, 2, 1)),
+            ),
+            patch.object(vp, "_clip_occlusion", return_value=([clipped], geometry)),
+            patch("core.vector_engine._VECTOR_PARSE_CLIP_CACHE", new={}),
+            patch.object(
+                vp,
+                "_match_colors",
+                return_value=[
+                    {
+                        "geometry": geometry,
+                        "recipe": [1] * 7,
+                        "color": (255, 0, 0),
+                        "matched_rgb": (255, 0, 0),
+                        "lut_idx": 0,
+                    }
+                ],
+            ),
+        ):
+            analysis = vp.analyze_svg("/tmp/native.svg", target_width_mm=20.0)
+
+        assert len(matcher.calls) == 1
+        solved_shapes = matcher.calls[0][0]
+        assert len(solved_shapes) == 1
+        assert solved_shapes[0]["color"] == (255, 0, 0)
+        assert solved_shapes[0]["geometry"].area == pytest.approx(2.0)
+        assert matcher.calls[0][1] == pytest.approx(1.0)
+        assert analysis.num_layers == 7
+        assert analysis.material_dynamic_layer_info == matcher.dynamic_layer_info
+        assert analysis.material_solver_info == matcher.material_solver_info
+
+    def test_dynamic_replacement_projects_all_sources_for_one_palette_match(
+        self,
+    ) -> None:
+        """A palette remap must carry every matching SVG fill into final solve."""
+        from core.vector_engine import VectorProcessor
+
+        class _DynamicMatcher:
+            lut_path = MATERIAL_ARCHIVE_LUT_SENTINEL
+            color_mode = "Material Archive"
+            color_conf = {
+                "name": "Material",
+                "slots": ["Base", "Accent"],
+                "preview": {
+                    0: (255, 255, 255, 255),
+                    1: (20, 30, 40, 255),
+                },
+                "map": {"Base": 0, "Accent": 1},
+            }
+            slot_names = ["Base", "Accent"]
+            preview_colors = color_conf["preview"]
+            layer_count = 7
+            dynamic_layer_count_enabled = True
+            lut_rgb = np.asarray([[11, 21, 31]], dtype=np.uint8)
+            ref_stacks = np.asarray([[1] * 7], dtype=np.int32)
+            kdtree = None
+            material_solver_info = {"path": "dynamic_exact_vector_geometry"}
+
+            def __init__(self) -> None:
+                self.solve_calls: list[list[dict]] = []
+                self.coverage_by_call: list[dict[tuple[int, int, int], float]] = []
+                self.dynamic_layer_info: dict[str, object] = {
+                    "enabled": True,
+                    "colors": [],
+                }
+
+            @staticmethod
+            def _rgb_to_lab(arr):
+                from core.vector_matchers import _rgb_to_lab_static
+
+                return _rgb_to_lab_static(arr)
+
+            def solve_for_clipped_shapes(self, shapes, *, scale_factor: float) -> None:
+                copied = [dict(shape) for shape in shapes]
+                self.solve_calls.append(copied)
+                coverage: dict[tuple[int, int, int], float] = {}
+                for shape in copied:
+                    target = tuple(
+                        shape.get("match_color")
+                        if shape.get("match_color") is not None
+                        else shape["color"]
+                    )
+                    coverage[target] = coverage.get(target, 0.0) + float(
+                        shape["geometry"].area
+                    )
+                self.coverage_by_call.append(coverage)
+                target_colors = sorted(
+                    {
+                        tuple(
+                            shape.get("match_color")
+                            if shape.get("match_color") is not None
+                            else shape["color"]
+                        )
+                        for shape in copied
+                    }
+                )
+                self.dynamic_layer_info = {
+                    "enabled": True,
+                    "colors": [
+                        {"target_srgb": list(color), "actual_layer_count": 7}
+                        for color in target_colors
+                    ],
+                }
+
+        matcher = _DynamicMatcher()
+        vp = VectorProcessor.from_img_processor(matcher, "Material Archive")
+        first_source = (10, 20, 30)
+        second_source = (40, 50, 60)
+        replacement = (200, 210, 220)
+        clipped_shapes = [
+            {"geometry": box(0, 0, 2, 1), "color": first_source, "draw_order": 0},
+            {"geometry": box(3, 0, 4, 1), "color": second_source, "draw_order": 1},
+            # An SVG fill already at the target must share the same final
+            # dynamic row rather than retain a separate coverage entry.
+            {"geometry": box(5, 0, 6, 1), "color": replacement, "draw_order": 2},
+        ]
+        match_calls: list[tuple[list[dict], object]] = []
+
+        def fake_match(shapes, replacement_manager, _num_channels, *, num_layers):
+            match_calls.append((list(shapes), replacement_manager))
+            if len(match_calls) == 1:
+                # Both distinct source fills appear under one palette swatch.
+                return [
+                    {
+                        "geometry": shape["geometry"],
+                        "recipe": [1] * num_layers,
+                        "original_recipe": [1] * num_layers,
+                        "color": shape["color"],
+                        "match_color": shape.get("match_color", shape["color"]),
+                        "matched_rgb": (
+                            replacement
+                            if tuple(shape["color"]) == replacement
+                            else (11, 21, 31)
+                        ),
+                        "lut_idx": 0,
+                    }
+                    for shape in shapes
+                ]
+            return [
+                {
+                    "geometry": shape["geometry"],
+                    "recipe": [2] * num_layers,
+                    "original_recipe": [2] * num_layers,
+                    "color": shape["color"],
+                    "match_color": shape.get("match_color", shape["color"]),
+                    "matched_rgb": (201, 211, 221),
+                    "lut_idx": 0,
+                }
+                for shape in shapes
+            ]
+
+        with (
+            patch.object(
+                vp,
+                "_parse_svg",
+                return_value=(
+                    [
+                        {"poly": shape["geometry"], "color": shape["color"]}
+                        for shape in clipped_shapes
+                    ],
+                    1.0,
+                    (0, 0, 4, 1),
+                ),
+            ),
+            patch.object(vp, "_clip_occlusion", return_value=(clipped_shapes, None)),
+            patch("core.vector_engine._VECTOR_PARSE_CLIP_CACHE", new={}),
+            patch.object(vp, "_with_near_fill_match_queries", side_effect=lambda shapes: shapes),
+            patch.object(vp, "_match_colors", side_effect=fake_match),
+        ):
+            analysis = vp.analyze_svg(
+                "/tmp/native.svg",
+                target_width_mm=20.0,
+                color_replacements=[
+                    {
+                        "quantized_hex": "#0a141e",
+                        "matched_hex": "#0b151f",
+                        "replacement_hex": "#010203",
+                    },
+                    {
+                        "quantized_hex": "#0a141e",
+                        "matched_hex": "#0b151f",
+                        "replacement_hex": "#c8d2dc",
+                    }
+                ],
+            )
+
+        assert len(matcher.solve_calls) == 2
+        assert all(
+            "match_color" not in shape for shape in matcher.solve_calls[0]
+        )
+        assert {
+            tuple(shape.get("match_color", shape["color"]))
+            for shape in matcher.solve_calls[1]
+        } == {replacement}
+        assert all(
+            tuple(shape["match_color"]) == replacement
+            for shape in matcher.solve_calls[1]
+            if tuple(shape["color"]) in {first_source, second_source}
+        )
+        assert matcher.coverage_by_call[1] == {replacement: pytest.approx(4.0)}
+        assert all(manager is None for _shapes, manager in match_calls)
+        assert {tuple(item["target_srgb"]) for item in analysis.material_dynamic_layer_info["colors"]} == {
+            replacement
+        }
+        assert all(
+            tuple(shape["color"]) in {first_source, second_source, replacement}
+            and tuple(shape["match_color"]) == replacement
+            for shape in analysis.matched_shapes
+        )
+        assert all("match_color" not in shape for shape in clipped_shapes)
+
+    def test_legacy_replacement_dict_keeps_single_pass_matcher_flow(self) -> None:
+        """Legacy maps bypass dynamic projection and retain manager semantics."""
+        from core.color_replacement import ColorReplacementManager
+        from core.vector_engine import VectorProcessor
+
+        class _FixedMatcher:
+            lut_path = MATERIAL_ARCHIVE_LUT_SENTINEL
+            color_conf = {
+                "name": "Fixed",
+                "slots": ["Base", "Accent"],
+                "preview": {0: (255, 255, 255, 255), 1: (1, 2, 3, 255)},
+                "map": {"Base": 0, "Accent": 1},
+            }
+            slot_names = ["Base", "Accent"]
+            preview_colors = color_conf["preview"]
+            layer_count = 5
+            dynamic_layer_count_enabled = False
+
+        vp = VectorProcessor.from_img_processor(_FixedMatcher(), "Material Archive")
+        geometry = box(0, 0, 1, 1)
+        clipped = {"geometry": geometry, "color": (10, 20, 30), "draw_order": 0}
+        captured_managers: list[ColorReplacementManager | None] = []
+
+        def fake_match(shapes, replacement_manager, _num_channels, *, num_layers):
+            captured_managers.append(replacement_manager)
+            return [
+                {
+                    "geometry": shape["geometry"],
+                    "recipe": [1] * num_layers,
+                    "color": shape["color"],
+                    "matched_rgb": (11, 21, 31),
+                    "lut_idx": 0,
+                }
+                for shape in shapes
+            ]
+
+        with (
+            patch.object(
+                vp,
+                "_parse_svg",
+                return_value=([{"poly": geometry, "color": (10, 20, 30)}], 1.0, (0, 0, 1, 1)),
+            ),
+            patch.object(vp, "_clip_occlusion", return_value=([clipped], geometry)),
+            patch("core.vector_engine._VECTOR_PARSE_CLIP_CACHE", new={}),
+            patch.object(vp, "_with_near_fill_match_queries", side_effect=lambda shapes: shapes),
+            patch.object(vp, "_match_colors", side_effect=fake_match),
+        ):
+            vp.analyze_svg(
+                "/tmp/legacy.svg",
+                target_width_mm=20.0,
+                color_replacements={"#0b151f": "#c8d2dc"},
+            )
+
+        assert len(captured_managers) == 1
+        manager = captured_managers[0]
+        assert isinstance(manager, ColorReplacementManager)
+        assert manager.get_replacement((11, 21, 31)) == (200, 210, 220)
 
     def test_lut_path_still_consults_color_system(self):
         # When the img_processor does not expose ``color_conf`` (the LUT

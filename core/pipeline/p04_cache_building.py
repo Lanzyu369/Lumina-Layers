@@ -78,6 +78,7 @@ def run(ctx: dict) -> dict:
     lut_metadata = ctx.get('lut_metadata')
     debug_data = ctx.get('debug_data')
     quantized_image = ctx.get('quantized_image')
+    original_quantized_image = ctx.get('original_quantized_image')
     original_matched_rgb = np.asarray(
         ctx.get('original_matched_rgb', matched_rgb),
         dtype=np.uint8,
@@ -133,6 +134,19 @@ def run(ctx: dict) -> dict:
         'preview_colors': ctx.get('preview_colors'),
         'slot_names': ctx.get('slot_names'),
     }
+    # Preserve material solver diagnostics verbatim for preview response
+    # assembly and later generation/editing stages. Fixed/LUT flows that do
+    # not publish these keys retain their previous cache shape.
+    # 原样保留耗材求解诊断，供预览响应与后续生成/编辑阶段使用；未发布这些键的
+    # 固定层数或 LUT 流程保持原有缓存结构。
+    for metadata_key in (
+        "material_solver_info",
+        "material_dynamic_layer_info",
+        "original_material_solver_info",
+        "original_material_dynamic_layer_info",
+    ):
+        if metadata_key in ctx:
+            cache[metadata_key] = ctx[metadata_key]
     modeling_mode_value = getattr(modeling_mode, "value", modeling_mode)
     if (
         modeling_mode_value == "pixel"
@@ -152,6 +166,8 @@ def run(ctx: dict) -> dict:
     # 统一缓存契约：保证 quantized_image 始终可用
     cache['debug_data'] = debug_data
     cache['quantized_image'] = quantized_image
+    if original_quantized_image is not None:
+        cache['original_quantized_image'] = original_quantized_image
     _ensure_quantized_image_in_cache(cache)
 
     # ---- 写入输出 ----

@@ -18,6 +18,10 @@ import type { SettingsState } from "../stores/settingsStore";
 import type { ColorReplacementItem } from "../api/types";
 import type { WorkshopRecipeSource } from "../workshop/types";
 import {
+  cloneDynamicMaterialRecipe,
+  cloneMaterialLayerBenefitCurve,
+} from "./dynamicMaterialMetadata";
+import {
   MIN_COVER_WIDTH,
   computeFooterLayout,
   drawShareCardFooter,
@@ -137,6 +141,10 @@ export function exportConverterRecipe(
     normalizedHeightMap[ensureHash(hex)] = height;
   }
   const selectedLegacyLutNames = normalizeLegacyLutNames(state);
+  const isMaterialSource = state.source_version === "material";
+  const hasDynamicResult =
+    state.materialDynamicRecipes.length > 0 ||
+    state.materialLayerBenefitCurve.length > 0;
 
   const lutRef: LutReference = {
     name: state.lut_name,
@@ -175,7 +183,33 @@ export function exportConverterRecipe(
       material_layer_count: state.materialLayerCount,
       material_layer_height_mm: state.materialLayerHeightMm,
       material_backing_material_dir_name: state.materialBackingMaterialDirName,
+      ...(isMaterialSource
+        ? {
+            material_dynamic_layer_count_enabled:
+              state.materialDynamicLayerCountEnabled,
+            material_min_layer_count: state.materialMinLayerCount,
+            material_max_layer_count: state.materialMaxLayerCount,
+            material_delta_e00_tolerance:
+              settings.materialDeltaE00Tolerance,
+          }
+        : {}),
     },
+    ...(isMaterialSource &&
+    state.materialDynamicLayerCountEnabled &&
+    hasDynamicResult
+      ? {
+          material_dynamic: {
+            recipes: state.materialDynamicRecipes.map(
+              cloneDynamicMaterialRecipe,
+            ),
+            benefit_curve: cloneMaterialLayerBenefitCurve(
+              state.materialLayerBenefitCurve,
+            ),
+            scope: state.materialLayerBenefitScope,
+            pixel_count: state.materialLayerBenefitPixelCount,
+          },
+        }
+      : {}),
     geometry: {
       spacer_thick: state.enable_fridge_magnet
         ? state.base_spacer_thick

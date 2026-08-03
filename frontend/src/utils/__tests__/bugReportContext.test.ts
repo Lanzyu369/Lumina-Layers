@@ -117,6 +117,10 @@ describe("collectBugReportContext", () => {
       selected_native_db_names: [],
       selected_material_dir_names: [],
       material_layer_count: null,
+      material_dynamic_layer_count_enabled: null,
+      material_min_layer_count: null,
+      material_max_layer_count: null,
+      material_delta_e00_tolerance: null,
       material_layer_height_mm: null,
       material_backing_material_dir_name: null,
       recent_client_logs: [],
@@ -299,6 +303,27 @@ describe("collectBugReportContext", () => {
     expect(context.selected_material_dir_names).toEqual(["Aliz/red", "Wujing/white"]);
     expect(context.material_layer_count).toBe(10);
     expect(context.material_layer_height_mm).toBe(0.06);
+  });
+
+  it("captures dynamic material settings for backend reproduction", () => {
+    useConverterStore.setState({
+      source_version: "material",
+      selectedMaterialDirNames: ["brand/red", "brand/white"],
+      materialBackingMaterialDirName: "brand/white",
+      materialDynamicLayerCountEnabled: true,
+      materialMinLayerCount: 5,
+      materialMaxLayerCount: 9,
+    });
+    useSettingsStore.setState({ materialDeltaE00Tolerance: 0.4 });
+    useWidgetStore.setState({ activeTab: "converter" });
+
+    const context = collectBugReportContext() as unknown as Record<string, unknown>;
+
+    expect(context.material_dynamic_layer_count_enabled).toBe(true);
+    expect(context.material_min_layer_count).toBe(5);
+    expect(context.material_max_layer_count).toBe(9);
+    expect(context.material_delta_e00_tolerance).toBe(0.4);
+    expect(context.material_backing_material_dir_name).toBe("brand/white");
   });
 
   it("collects native LUT source details on converter tab", () => {
@@ -683,6 +708,10 @@ describe("collectBugReportContext", () => {
       "selected_native_db_names",
       "selected_material_dir_names",
       "material_layer_count",
+      "material_dynamic_layer_count_enabled",
+      "material_min_layer_count",
+      "material_max_layer_count",
+      "material_delta_e00_tolerance",
       "material_layer_height_mm",
       "material_backing_material_dir_name",
       "recent_client_logs",

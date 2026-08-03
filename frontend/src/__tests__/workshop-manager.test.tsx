@@ -1,11 +1,19 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
   waitFor,
   within,
 } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import type {
   InstalledWorkshopModule,
@@ -202,6 +210,10 @@ function renderManager(
 }
 
 describe("Workshop installable module manager", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   beforeEach(() => {
     localStorage.clear();
     useSettingsStore.setState({ language: "zh", theme: "light" });
@@ -247,6 +259,65 @@ describe("Workshop installable module manager", () => {
     ).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "回退" })).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "更新" }).length).toBeGreaterThan(0);
+  });
+
+  it("keeps the runtime mounted briefly when returning to the manager", async () => {
+    renderManager(
+      fakeApi([installed()]),
+      fakeStorage(true),
+      "desktop-secure",
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "打开" }),
+    );
+    expect(
+      screen.getByRole("region", { name: "候选模块沙箱" }),
+    ).toBeInTheDocument();
+
+    vi.useFakeTimers();
+    fireEvent.click(
+      screen.getByRole("button", { name: "返回创意工坊" }),
+    );
+
+    expect(
+      screen.getByRole("region", { name: "候选模块沙箱" }),
+    ).toBeInTheDocument();
+    expect(useWorkshopStore.getState().activeModule).not.toBeNull();
+
+    act(() => vi.advanceTimersByTime(349));
+    expect(
+      screen.getByRole("region", { name: "候选模块沙箱" }),
+    ).toBeInTheDocument();
+
+    act(() => vi.advanceTimersByTime(1));
+    expect(useWorkshopStore.getState().activeModule).toBeNull();
+    expect(
+      screen.getByRole("heading", { name: "创意工坊" }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "打开" }));
+    expect(
+      screen.getByRole("button", { name: "返回创意工坊" }),
+    ).toBeEnabled();
+  });
+
+  it("keeps the manager usable when the module-list response is malformed", async () => {
+    const api = fakeApi([]);
+    vi.mocked(api.listModules).mockResolvedValue({
+      modules: undefined,
+    } as unknown as Awaited<ReturnType<WorkshopManagerApi["listModules"]>>);
+
+    renderManager(api);
+
+    expect(
+      await screen.findByText("无法读取已安装模块。"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "创意工坊" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("尚未安装任何创意工坊模块。"),
+    ).toBeInTheDocument();
   });
 
   it("shows Discover entries only from a verified catalog", async () => {
@@ -325,6 +396,120 @@ describe("Workshop installable module manager", () => {
     );
   });
 
+  it("reviews every first-install permission before opening and activating a local candidate", async () => {
+    const candidate = installed({
+      source: "local",
+      active_version: null,
+      candidate_version: "1.0.0",
+      runtime_url: null,
+      version_details: [
+        version("1.0.0", [
+          "image.pick",
+          "project.storage",
+          "color-library.read",
+          "handoff.image",
+        ]),
+      ],
+    });
+    const activated = {
+      ...candidate,
+      active_version: "1.0.0",
+      candidate_version: null,
+    };
+    const api = fakeApi([]);
+    vi.mocked(api.installLocal).mockResolvedValue({
+      module: candidate,
+    });
+    vi.mocked(api.activateModule).mockResolvedValue({
+      module: activated,
+    });
+    vi.mocked(api.recordRuntimeSuccess).mockResolvedValue({
+      module: activated,
+    });
+    renderManager(api, fakeStorage(), "desktop-secure");
+
+    fireEvent.click(screen.getByRole("button", { name: "开发者" }));
+    fireEvent.change(screen.getByLabelText("本地模块包"), {
+      target: {
+        files: [
+          new File(["package"], "fixture.lumina-workshop", {
+            type: "application/zip",
+          }),
+        ],
+      },
+    });
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "确认模块权限",
+    });
+    expect(within(dialog).getByText("选择图片")).toBeInTheDocument();
+    expect(within(dialog).getByText("读写模块工程")).toBeInTheDocument();
+    expect(
+      within(dialog).getByText("读取当前打印色库"),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByText("将图像交给转换器"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByLabelText("候选模块沙箱"),
+    ).not.toBeInTheDocument();
+    expect(api.activateModule).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      within(dialog).getByRole("button", {
+        name: "确认权限并打开",
+      }),
+    );
+    expect(
+      await screen.findByLabelText("候选模块沙箱"),
+    ).toBeInTheDocument();
+    expect(api.activateModule).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "模拟模块就绪" }),
+    );
+    await waitFor(() =>
+      expect(api.activateModule).toHaveBeenCalledWith(
+        "fixture.hello",
+        "1.0.0",
+      ),
+    );
+  });
+
+  it("can resume permission review for an already staged first-install candidate", async () => {
+    const candidate = installed({
+      source: "local",
+      active_version: null,
+      candidate_version: "1.0.0",
+      runtime_url: null,
+      version_details: [
+        version("1.0.0", [
+          "image.pick",
+          "project.storage",
+          "color-library.read",
+          "handoff.image",
+        ]),
+      ],
+    });
+    renderManager(
+      fakeApi([candidate]),
+      fakeStorage(),
+      "desktop-secure",
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "审查权限并打开候选版本",
+      }),
+    );
+
+    expect(
+      await screen.findByRole("dialog", {
+        name: "确认模块权限",
+      }),
+    ).toBeInTheDocument();
+  });
+
   it("requires permission-expansion confirmation and candidate readiness before activation", async () => {
     const current = installed();
     const expandedCatalog = catalog();
@@ -391,6 +576,8 @@ describe("Workshop installable module manager", () => {
       module: installed({
         source: "seed",
         official: true,
+        active_version: null,
+        candidate_version: "1.0.0",
       }),
     });
     renderManager(api);
@@ -406,6 +593,8 @@ describe("Workshop installable module manager", () => {
         "fixture.hello",
       ),
     );
+    expect(await screen.findByText("确认模块权限")).toBeInTheDocument();
+    expect(screen.getByText("读写模块工程")).toBeInTheDocument();
   });
 
   it("preserves projects by default and requires an explicit destructive checkbox", async () => {

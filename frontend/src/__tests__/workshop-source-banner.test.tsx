@@ -6,6 +6,7 @@ import type {
   WorkshopColorLibrary,
   WorkshopRecipeSource,
 } from "../workshop/contracts";
+import { rememberWorkshopHandoffColorLibraryId } from "../workshop/handoffMetadata";
 
 const SOURCE: WorkshopRecipeSource = {
   manifestSchemaVersion: 1,
@@ -67,5 +68,121 @@ describe("WorkshopSourceBanner", () => {
       screen.getByText("尚未选择可用色库"),
     ).toBeInTheDocument();
     expect(screen.queryByText("must-not-render")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    {
+      handoffColorLibraryId: null,
+      caseName: "an unbound module handoff",
+    },
+    {
+      handoffColorLibraryId: "lut:stale",
+      caseName: "a stale module color library",
+    },
+  ])(
+    "shows a non-blocking notice for $caseName",
+    ({ handoffColorLibraryId }) => {
+      const source = structuredClone(SOURCE);
+      rememberWorkshopHandoffColorLibraryId(
+        source,
+        handoffColorLibraryId,
+      );
+
+      render(
+        <WorkshopSourceBanner
+          source={source}
+          colorLibrary={LIBRARY}
+        />,
+      );
+
+      expect(
+        screen.getByRole("status"),
+      ).toHaveTextContent(
+        "打印色库已变化；图纸原色不受影响，将按当前色库重新叠色。",
+      );
+    },
+  );
+
+  it("does not warn when the module and converter color libraries match", () => {
+    const source = structuredClone(SOURCE);
+    rememberWorkshopHandoffColorLibraryId(source, LIBRARY.id, LIBRARY);
+
+    render(
+      <WorkshopSourceBanner
+        source={source}
+        colorLibrary={LIBRARY}
+      />,
+    );
+
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("does not report a library change when the same selection finishes hydrating", () => {
+    const source = structuredClone(SOURCE);
+    const selectionKey =
+      '["legacy",["Bambu PLA RYBW"],"Bambu PLA RYBW"]';
+    rememberWorkshopHandoffColorLibraryId(
+      source,
+      LIBRARY.id,
+      LIBRARY,
+      selectionKey,
+    );
+
+    const { rerender } = render(
+      <WorkshopSourceBanner
+        source={source}
+        colorLibrary={LIBRARY}
+        colorLibrarySelectionKey={selectionKey}
+      />,
+    );
+
+    rerender(
+      <WorkshopSourceBanner
+        source={source}
+        colorLibrary={{
+          ...LIBRARY,
+          id: "lut:hydrated-palette",
+          colors: [
+            ...LIBRARY.colors,
+            {
+              id: "slot:1",
+              label: "Red",
+              hex: "#FF0000",
+              materialId: null,
+            },
+          ],
+        }}
+        colorLibrarySelectionKey={selectionKey}
+      />,
+    );
+
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("still reports a genuine print-library selection change", () => {
+    const source = structuredClone(SOURCE);
+    rememberWorkshopHandoffColorLibraryId(
+      source,
+      LIBRARY.id,
+      LIBRARY,
+      '["legacy",["Bambu PLA RYBW"],"Bambu PLA RYBW"]',
+    );
+
+    render(
+      <WorkshopSourceBanner
+        source={source}
+        colorLibrary={{
+          ...LIBRARY,
+          id: "lut:another-library",
+        }}
+        colorLibrarySelectionKey={
+          '["legacy",["Another LUT"],"Another LUT"]'
+        }
+      />,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "打印色库已变化；图纸原色不受影响，将按当前色库重新叠色。",
+    );
   });
 });

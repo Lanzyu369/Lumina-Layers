@@ -469,6 +469,9 @@ export default function CustomRecipeDialog({
     (state) => state.pushCustomRecipeHistory,
   );
   const sourceVersion = useConverterStore((state) => state.source_version);
+  const dynamicMaterialEnabled = useConverterStore(
+    (state) => state.materialDynamicLayerCountEnabled,
+  );
   const selectedMaterialDirNames = useConverterStore(
     (state) => state.selectedMaterialDirNames,
   );
@@ -691,7 +694,15 @@ export default function CustomRecipeDialog({
         // 把 recipe 调整到对话框期望的 colorLayers 长度：Top2Bottom 在末
         // 尾补 / 从末尾裁，Bottom2Top 在开头补 / 从开头裁，跟后端 pad
         // 语义一致，保证可见的顶层不被截掉。
-        const targetLen = colorLayers;
+        // Dynamic material responses already carry the authoritative actual
+        // recipe length. Do not expand it back to the maximum print width;
+        // the backend adds substrate-side backing material after submission.
+        // 动态耗材返回的是权威实际层数，不能在编辑器里重新扩成最大打印宽度；
+        // 提交后由后端在非观赏面补齐基板耗材。
+        const targetLen =
+          sourceVersion === "material" && dynamicMaterialEnabled
+            ? firstEntry.recipe.length
+            : colorLayers;
         const defaultRecipe = buildDefaultRecipe(
           targetLen,
           displayPalette,
@@ -727,7 +738,9 @@ export default function CustomRecipeDialog({
     sessionId,
     layerOrder,
     displayPalette,
+    dynamicMaterialEnabled,
     stableRegionIds,
+    sourceVersion,
   ]);
 
   const snapshotBeforeEdit = () => {

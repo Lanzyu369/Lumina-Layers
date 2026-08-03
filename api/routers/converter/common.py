@@ -9,9 +9,11 @@ from typing import NoReturn
 import cv2
 import numpy as np
 from fastapi import HTTPException
+from fastapi.params import Form as FormParameter
 from PIL import Image
 
 from api.errors import to_http_exception
+from api.dynamic_material_settings import normalize_dynamic_material_settings
 from api.file_bridge import ndarray_to_png_bytes, pil_to_png_bytes
 from api.gradient_group_payload import compute_gradient_group_payload
 from api.preview_cache_artifacts import (
@@ -67,6 +69,12 @@ MATERIAL_SOLVER_CACHE_UNAVAILABLE_DETAIL = (
 log = get_logger(__name__)
 _VALID_MATERIAL_SOURCES = {"lut", "material_archive"}
 _RELIEF_HEIGHT_EPSILON_MM = 1e-9
+_DYNAMIC_MATERIAL_SETTING_FIELDS = (
+    "material_dynamic_layer_count_enabled",
+    "material_min_layer_count",
+    "material_max_layer_count",
+    "material_delta_e00_tolerance",
+)
 
 # Shared error tuples for except clauses across converter router modules.
 # replace.py extends ROUTER_HANDLED_ERRORS with IndexError for array-index
@@ -175,6 +183,156 @@ def _validate_material_source(material_source: str) -> str:
     return material_source
 
 
+def _validate_dynamic_material_settings(
+    *,
+    material_source: str,
+    enabled: object,
+    min_layer_count: object,
+    max_layer_count: object,
+    delta_e00_tolerance: object,
+    hue_weight: object,
+    native_svg_vector: bool = False,
+) -> tuple[bool, int, int, float]:
+    """Validate dynamic material settings and map failures to HTTP 422.
+
+    校验动态耗材设置，并将失败映射为 HTTP 422。
+
+    Args:
+        material_source: Converter material source selector. 转换器耗材来源。
+        enabled: Whether dynamic effective layers are enabled. 是否启用动态
+            有效层数。
+        min_layer_count: Minimum effective layer count. 最小有效层数。
+        max_layer_count: Maximum effective layer count. 最大有效层数。
+        delta_e00_tolerance: Allowed CIEDE2000 sacrifice. 允许的 CIEDE2000
+            损失。
+        hue_weight: Effective hue-protection weight. 实际色相保护权重。
+        native_svg_vector: Whether native SVG vector processing would be used.
+            是否将使用原生 SVG 矢量处理。
+
+    Returns:
+        tuple[bool, int, int, float]: Normalized dynamic settings. 归一化后的
+            动态设置。
+
+    Raises:
+        HTTPException: With status 422 when validation fails. 校验失败时抛出
+            422。
+    """
+    def _unwrap_form_default(value: object) -> object:
+        return value.default if isinstance(value, FormParameter) else value
+
+    try:
+        return normalize_dynamic_material_settings(
+            material_source=material_source,
+            enabled=_unwrap_form_default(enabled),
+            min_layer_count=_unwrap_form_default(min_layer_count),
+            max_layer_count=_unwrap_form_default(max_layer_count),
+            delta_e00_tolerance=_unwrap_form_default(delta_e00_tolerance),
+            hue_weight=hue_weight,
+            native_svg_vector=native_svg_vector,
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _resolve_session_dynamic_material_settings(
+    *,
+    session_data: dict,
+    request: object,
+    material_source: str,
+    native_svg_vector: bool = False,
+) -> tuple[bool, int, int, float]:
+    """Resolve canonical preview-session dynamic settings for generation.
+
+    为生成流程解析以预览 Session 为准的动态设置。
+
+    Omitted request fields inherit the preview session. Explicit fields must
+    match it so a stale preview matrix is never reused with another range.
+    请求省略的字段继承预览 Session；显式字段必须一致，避免旧预览矩阵与新范围
+    混用。
+
+    Args:
+        session_data: Existing preview session state. 已有预览 Session 状态。
+        request: Pydantic request carrying ``model_fields_set``. 携带
+            ``model_fields_set`` 的 Pydantic 请求。
+        material_source: Canonical session material source. Session 的标准化
+            耗材来源。
+        native_svg_vector: Whether the derived flow would use native SVG
+            vector processing. 派生流程是否会使用原生 SVG 矢量处理。
+
+    Returns:
+        tuple[bool, int, int, float]: Canonical dynamic settings. 标准化动态设置。
+
+    Raises:
+        HTTPException: 409 for explicit preview mismatch or 422 for invalid
+            compatibility. 显式配置与预览不一致时抛出 409，兼容性无效时抛出 422。
+    """
+    session_values = {
+        "material_dynamic_layer_count_enabled": bool(
+            session_data.get("material_dynamic_layer_count_enabled", False)
+        ),
+        "material_min_layer_count": session_data.get("material_min_layer_count", 5),
+        "material_max_layer_count": session_data.get("material_max_layer_count", 10),
+        "material_delta_e00_tolerance": session_data.get(
+            "material_delta_e00_tolerance",
+            0.5,
+        ),
+    }
+    fields_set = set(getattr(request, "model_fields_set", set()))
+    mismatches: list[str] = []
+    for field_name in _DYNAMIC_MATERIAL_SETTING_FIELDS:
+        if field_name not in fields_set:
+            continue
+        request_value = getattr(request, field_name)
+        session_value = session_values[field_name]
+        if field_name == "material_delta_e00_tolerance":
+            try:
+                matches = abs(float(request_value) - float(session_value)) <= 1e-12
+            except (TypeError, ValueError):
+                matches = False
+        else:
+            matches = request_value == session_value
+        if not matches:
+            mismatches.append(field_name)
+    if (
+        material_source == "material_archive"
+        and session_values["material_dynamic_layer_count_enabled"]
+        and "material_backing_material_index" in fields_set
+    ):
+        selected_materials = session_data.get("selected_materials") or []
+        session_backing_index = _resolve_material_backing_index(
+            selected_materials,
+            session_data.get("material_backing_material_index"),
+        )
+        requested_backing_index = _resolve_material_backing_index(
+            selected_materials,
+            getattr(request, "material_backing_material_index", None),
+        )
+        if requested_backing_index != session_backing_index:
+            mismatches.append("material_backing_material_index")
+    if mismatches:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "dynamic_material_preview_mismatch",
+                "message": (
+                    "Dynamic material settings differ from the preview. "
+                    "Re-run preview before generating."
+                ),
+                "fields": mismatches,
+            },
+        )
+
+    return _validate_dynamic_material_settings(
+        material_source=material_source,
+        enabled=session_values["material_dynamic_layer_count_enabled"],
+        min_layer_count=session_values["material_min_layer_count"],
+        max_layer_count=session_values["material_max_layer_count"],
+        delta_e00_tolerance=session_values["material_delta_e00_tolerance"],
+        hue_weight=getattr(request, "hue_weight", 0.0),
+        native_svg_vector=native_svg_vector,
+    )
+
+
 def _material_matrix_depth_from_shape(shape: object | None) -> int | None:
     if shape is None:
         return None
@@ -248,6 +406,14 @@ def _resolve_material_archive_optical_layer_count(
     requested_color_layers: object | None = None,
     recipe_overrides: list[dict[str, object]] | None = None,
 ) -> int | None:
+    if session_data and bool(
+        session_data.get("material_dynamic_layer_count_enabled", False)
+    ):
+        dynamic_maximum = _positive_int(
+            session_data.get("material_max_layer_count", 10)
+        )
+        return dynamic_maximum if dynamic_maximum is not None else 10
+
     candidates: list[int] = []
 
     cache_ref_depth = _cache_material_matrix_depth(cache_ref)
@@ -407,6 +573,27 @@ def _resolve_material_backing_index(
             detail="material_backing_material_index requires selected_materials.",
         )
     return index
+
+
+def _validate_unique_dynamic_material_selection(
+    selected_materials: object,
+) -> None:
+    """Reject ambiguous duplicate material identities before exact solving.
+
+    动态精确求解前拒绝含义不明确的重复耗材身份。
+    """
+
+    if not isinstance(selected_materials, (list, tuple)):
+        return
+    identities = [str(item).strip().casefold() for item in selected_materials]
+    if len(identities) != len(set(identities)):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Dynamic material mode does not allow duplicate "
+                "selected_materials identities."
+            ),
+        )
 
 
 def _image_to_png_bytes(img: object) -> bytes:

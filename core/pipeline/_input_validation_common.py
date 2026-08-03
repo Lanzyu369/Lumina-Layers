@@ -201,7 +201,14 @@ def _apply_material_archive_branch(
         "preview": preview_colors,
         "map": {name: idx for idx, name in enumerate(slot_names)},
     }
-    material_layer_count = int(ctx.get("material_layer_count") or default_layer_count)
+    fixed_material_layer_count = int(
+        ctx.get("material_layer_count") or default_layer_count
+    )
+    material_layer_count = (
+        int(ctx.get("material_max_layer_count") or 10)
+        if bool(ctx.get("material_dynamic_layer_count_enabled", False))
+        else fixed_material_layer_count
+    )
     material_layer_height = float(ctx.get("material_layer_height_mm") or default_layer_height_mm)
 
     ctx["actual_lut_path"] = "__material_archive__"

@@ -12,8 +12,8 @@ import uuid
 import cv2
 import numpy as np
 from fastapi import APIRouter, Depends, HTTPException
-
 from api.dependencies import get_file_registry, get_session_store
+from api.dynamic_material_response import dynamic_material_result_from_cache
 from api.file_registry import FileRegistry
 from api.schemas.converter import (
     ColorHighlightRequest,
@@ -64,6 +64,13 @@ from core.material_lut_synthesis import (
     solve_image_colors_optimal,
 )
 from core.material_color_solver import forward_model, linear_to_srgb_float
+from core.material_dynamic_replacement import (
+    rebuild_dynamic_material_after_replacement,
+)
+from core.pipeline.material_dynamic_layers import (
+    recompute_dynamic_material_benefit_curve,
+    solve_dynamic_material_targets,
+)
 from core.pipeline.processing_ops.lut_loader import load_lut
 from core.predictive_lut import predict_recipe_color
 from core.recipe_order import (
@@ -97,12 +104,16 @@ from .common import (
     _image_to_png_bytes,
     _require_preview_cache,
     _require_session,
+    _resolve_material_backing_index,
     recompute_gradient_groups_into_session,
 )
 from .async_glb import schedule_glb_build
 
 router = APIRouter()
 log = get_logger(__name__)
+# Compatibility seam for focused tests of the synchronous core adapter. Product
+# routes call the public solver through ``core.material_dynamic_replacement``.
+_solve_dynamic_material_targets = solve_dynamic_material_targets
 _DEFAULT_GENERATE_SEGMENTED_GLB = generate_segmented_glb
 _SELECT_ALL_COLOR_REGION_PREFIX = "__select_all_color__:"
 _PREVIEW_CACHE_TRANSACTION_ENTER_ERRORS = (
@@ -139,6 +150,15 @@ REGION_REQUANTIZE_CACHE_CONFLICT_DETAIL = (
 RECIPE_OVERRIDE_APPLY_FAILED_DETAIL = (
     "Recipe override could not be applied. Check the server log for details."
 )
+_REPLACEMENT_CACHE_METADATA_FIELDS = {
+    "color_palette",
+    "color_layers",
+    "layer_height_mm",
+    "material_dynamic_layer_info",
+    "original_material_dynamic_layer_info",
+    "material_solver_info",
+    "original_material_solver_info",
+}
 
 
 def _require_preview_cache_fields(
@@ -265,9 +285,32 @@ def _preview_cache_transaction(
             detail=_PREVIEW_CACHE_TRANSACTION_UNAVAILABLE_DETAIL,
         ) from exc
 
+    rollback_fields = set(fields) | {
+        "color_palette",
+        "color_layers",
+        "layer_height_mm",
+        "material_dynamic_layer_info",
+        "material_solver_info",
+    }
+    missing_value = object()
+    rollback_snapshot: dict[str, object] = {}
+    for field_name in rollback_fields:
+        if field_name not in cache_view:
+            rollback_snapshot[field_name] = missing_value
+            continue
+        value = cache_view[field_name]
+        rollback_snapshot[field_name] = (
+            value.copy() if isinstance(value, np.ndarray) else deepcopy(value)
+        )
+
     try:
         yield cache_view
     except BaseException:
+        for field_name, value in rollback_snapshot.items():
+            if value is missing_value:
+                cache_view.pop(field_name, None)
+            else:
+                cache_view[field_name] = value
         if not inner.__exit__(*sys.exc_info()):
             raise
     else:
@@ -594,13 +637,32 @@ def _sync_material_archive_matrix_for_diff(
     material_matrix = cache.get("material_matrix")
     if material_matrix is None:
         return
+    dynamic_enabled = bool(
+        session_data.get("material_dynamic_layer_count_enabled", False)
+    )
     selected_materials = session_data.get("selected_materials") or []
     if not isinstance(selected_materials, list) or len(selected_materials) == 0:
+        if dynamic_enabled:
+            from core.material_dynamic_solver import DynamicMaterialCandidateError
+
+            raise DynamicMaterialCandidateError(
+                "selected material archives are unavailable",
+                layer_count=int(session_data.get("material_max_layer_count") or 10),
+                phase="runtime_load",
+            )
         return
 
     try:
         materials = load_multiple_materials(selected_materials)
     except (FileNotFoundError, OSError, TypeError, ValueError) as exc:
+        if dynamic_enabled:
+            from core.material_dynamic_solver import DynamicMaterialCandidateError
+
+            raise DynamicMaterialCandidateError(
+                "selected material archives could not be loaded",
+                layer_count=int(session_data.get("material_max_layer_count") or 10),
+                phase="runtime_load",
+            ) from exc
         log.warning(
             "Material-archive replacement stack sync failed during material load",
             extra={
@@ -628,6 +690,53 @@ def _sync_material_archive_matrix_for_diff(
         or "white"
     )
     target_rgbs = np.unique(updated_rgb[diff_mask], axis=0).astype(np.uint8, copy=False)
+
+    if dynamic_enabled:
+        from core.material_dynamic_solver import DynamicMaterialCandidateError
+
+        max_layer_count = int(session_data.get("material_max_layer_count") or 10)
+        target_rgb_map = cache.get("quantized_image")
+        if (
+            not isinstance(target_rgb_map, np.ndarray)
+            or target_rgb_map.shape != updated_rgb.shape
+        ):
+            raise DynamicMaterialCandidateError(
+                "dynamic target RGB map is unavailable or inconsistent",
+                layer_count=max_layer_count,
+                phase="target_map",
+            )
+        backing_index = _resolve_material_backing_index(
+            selected_materials,
+            session_data.get("material_backing_material_index"),
+        )
+        min_layer_count = int(session_data.get("material_min_layer_count") or 5)
+        tolerance = float(session_data.get("material_delta_e00_tolerance", 0.5))
+        result = rebuild_dynamic_material_after_replacement(
+            updated_rgb=np.asarray(updated_rgb, dtype=np.uint8),
+            diff_mask=np.asarray(diff_mask, dtype=bool),
+            target_rgb_map=target_rgb_map,
+            solid_mask=np.asarray(cache.get("mask_solid"), dtype=bool),
+            material_matrix=np.asarray(material_matrix),
+            materials=materials,
+            backing_material_index=backing_index,
+            layer_height_mm=layer_height_mm,
+            substrate=substrate,
+            min_layer_count=min_layer_count,
+            max_layer_count=max_layer_count,
+            delta_e00_tolerance=tolerance,
+            region_masks=session_data.get("selected_region_masks"),
+            recipe_overrides=session_data.get("recipe_overrides"),
+            existing_solver_info=cache.get("material_solver_info"),
+            solver=_solve_dynamic_material_targets,
+        )
+        updated_rgb[...] = result.matched_rgb
+        cache["material_matrix"] = result.material_matrix
+        cache["quantized_image"] = result.target_rgb_map
+        cache["color_layers"] = max_layer_count
+        cache["layer_height_mm"] = float(layer_height_mm)
+        cache["material_dynamic_layer_info"] = result.dynamic_layer_info
+        cache["material_solver_info"] = result.solver_info
+        return
 
     grid_resolution = int(
         session_data.get("material_grid_resolution")
@@ -736,8 +845,8 @@ def _sync_material_matrix_after_rgb_change(
         _sync_material_archive_matrix_for_diff(session_data, cache, diff_mask, updated_rgb)
     else:
         _sync_lut_material_matrix_for_diff(session_data, cache, diff_mask, updated_rgb)
-
     cache["color_palette"] = extract_color_palette(cache)
+
 
 # Extend base tuple with IndexError for array-index operations
 # in region-detect / region-replace endpoints.
@@ -758,18 +867,8 @@ def replace_color(
     store: SessionStore = Depends(get_session_store),
     registry: FileRegistry = Depends(get_file_registry),
 ) -> ColorReplaceResponse:
-    """Replace a single color in the current session preview (synchronous).
-    替换当前 session 预览中的单个颜色（同步执行）。
-
-    This endpoint is intentionally kept synchronous (no process pool offload)
-    because the computation is lightweight: it operates on the cached
-    matched_rgb array (small preview image) with simple NumPy mask operations
-    over a small number of user-driven color replacements (typically 1-10).
-    The heavy image processing was already completed in the /preview step.
-    此端点有意保持同步执行（不卸载到进程池），因为计算量很小：
-    仅对缓存的 matched_rgb 数组（小尺寸预览图）执行简单的 NumPy 掩码操作，
-    颜色替换数量由用户驱动（通常 1-10 个）。
-    繁重的图像处理已在 /preview 步骤中完成。
+    """Replace one colour and keep the dynamic matrix/cache coherent.
+    替换一个颜色，并保持动态矩阵与缓存一致。
 
     Args:
         request (ColorReplaceRequest): Color replacement parameters. (颜色替换参数)
@@ -790,7 +889,12 @@ def replace_color(
             request.session_id,
             store,
             session_data,
-            fields={"matched_rgb", "material_matrix", "mask_solid"},
+            fields={
+                "matched_rgb",
+                "material_matrix",
+                "mask_solid",
+                "quantized_image",
+            },
         ) as cache:
             # Parse hex colors to RGB tuples
             selected_rgb = ColorReplacementManager._hex_to_color(request.selected_color)
@@ -832,10 +936,7 @@ def replace_color(
             # Update cache so 3D preview reflects replacements
             cache["matched_rgb"] = replaced_rgb
             _sync_material_matrix_after_rgb_change(
-                session_data,
-                cache,
-                previous_rgb,
-                replaced_rgb,
+                session_data, cache, previous_rgb, replaced_rgb
             )
 
             # Generate styled preview PNG (with bed grid and transparency)
@@ -846,9 +947,10 @@ def replace_color(
                     cache,
                     "matched_rgb",
                     "material_matrix",
+                    "quantized_image",
                     "preview_rgba",
                 ),
-                metadata_fields={"color_palette", "color_layers", "layer_height_mm"},
+                metadata_fields=_REPLACEMENT_CACHE_METADATA_FIELDS,
             )
 
         # Schedule async segmented-GLB rebuild so this response returns
@@ -902,6 +1004,7 @@ def replace_color(
         preview_url=f"/api/files/{preview_id}",
         preview_3d_url=glb_url,
         replacement_count=len(current_regions),
+        **dynamic_material_result_from_cache(cache).model_dump(),
     )
 
 
@@ -914,10 +1017,14 @@ def reset_replacements(
     """Reset all color replacements and restore original preview.
     重置所有颜色替换并恢复原始预览。
 
-    Clears replacement_regions and replacement_history from the session,
-    then regenerates the preview from the original matched_rgb cache.
-    清空 session 中的 replacement_regions 和 replacement_history，
-    然后从原始 matched_rgb 缓存重新生成预览。
+    Clears replacement and manual-recipe state from the session, then
+    regenerates the preview from the original matched_rgb cache. A manual
+    override cannot remain active after its matrix has been restored to the
+    preview snapshot, otherwise a later generate request would silently
+    re-apply it.
+    清空 session 中的替换和手工配方状态，然后从原始 matched_rgb 缓存重新生成
+    预览。矩阵已恢复到预览快照后，手工覆盖不能继续保留，否则后续 generate
+    会静默把它重新应用。
 
     Args:
         request (ResetReplacementsRequest): Reset request with session_id. (重置请求)
@@ -943,13 +1050,20 @@ def reset_replacements(
                 "material_matrix",
                 "original_matched_rgb",
                 "original_material_matrix",
+                "quantized_image",
+                "original_quantized_image",
                 "mask_solid",
             },
         ) as cache:
             regions_cleared = len(session_data.get("replacement_regions", []))
+            recipe_overrides_cleared = len(
+                session_data.get("recipe_overrides") or []
+            )
             # Clear replacement state
             store.put(request.session_id, "replacement_regions", [])
             store.put(request.session_id, "replacement_history", [])
+            store.put(request.session_id, "recipe_overrides", [])
+            store.put(request.session_id, "recipe_override_count", 0)
             history_truncated = 0
             previous_rgb = np.asarray(cache.get("matched_rgb")).copy()
 
@@ -983,10 +1097,46 @@ def reset_replacements(
                     previous_rgb,
                     cache["matched_rgb"],
                 )
+            original_quantized_image: np.ndarray | None = session_data.get(
+                "original_quantized_image"
+            )
+            if original_quantized_image is None:
+                original_quantized_image = cache.get(
+                    "original_quantized_image"
+                )
+            if original_quantized_image is not None:
+                cache["quantized_image"] = original_quantized_image.copy()
+            original_dynamic_info = cache.get(
+                "original_material_dynamic_layer_info"
+            )
+            original_solver_info = cache.get("original_material_solver_info")
+            if isinstance(original_dynamic_info, dict):
+                cache["material_dynamic_layer_info"] = deepcopy(
+                    original_dynamic_info
+                )
+            elif bool(
+                session_data.get("material_dynamic_layer_count_enabled", False)
+            ):
+                # Legacy sessions did not snapshot the original dynamic
+                # metadata. Returning the post-edit curve after restoring the
+                # original RGB/matrix would be incorrect, so make absence
+                # explicit and let the next preview rebuild authoritative data.
+                cache.pop("material_dynamic_layer_info", None)
+            if isinstance(original_solver_info, dict):
+                cache["material_solver_info"] = deepcopy(original_solver_info)
+            elif bool(
+                session_data.get("material_dynamic_layer_count_enabled", False)
+            ):
+                cache.pop("material_solver_info", None)
             cache["color_palette"] = extract_color_palette(cache)
             persisted_cache = cache.commit(
-                _dirty_array_fields(cache, "matched_rgb", "material_matrix"),
-                metadata_fields={"color_palette", "color_layers", "layer_height_mm"},
+                _dirty_array_fields(
+                    cache,
+                    "matched_rgb",
+                    "material_matrix",
+                    "quantized_image",
+                ),
+                metadata_fields=_REPLACEMENT_CACHE_METADATA_FIELDS,
             )
 
         # Regenerate preview from original matched_rgb (no replacements applied)
@@ -1015,6 +1165,7 @@ def reset_replacements(
             "event": "converter_reset_replacements_done",
             "session_id": request.session_id,
             "regions_cleared": regions_cleared,
+            "recipe_overrides_cleared": recipe_overrides_cleared,
             "history_truncated": history_truncated,
         },
     )
@@ -1023,6 +1174,7 @@ def reset_replacements(
         message="All replacements cleared",
         preview_url=f"/api/files/{preview_id}",
         preview_glb_url=glb_url,
+        **dynamic_material_result_from_cache(cache).model_dump(),
     )
 
 
@@ -1520,9 +1672,9 @@ def region_replace(
     """Replace color only within the previously detected connected region.
     仅替换先前检测到的连通区域内的颜色。
 
-    This endpoint is synchronous because it performs a simple masked
-    pixel assignment on the cached matched_rgb array (small preview image).
-    此端点同步执行，因为仅对缓存的 matched_rgb 数组执行简单的掩码像素赋值。
+    Fixed-layer edits perform a simple masked assignment. Dynamic material
+    edits re-solve the complete automatic target map before committing.
+    固定层数编辑只执行简单掩码赋值；动态耗材编辑会在提交前重求解完整自动目标图。
 
     Args:
         request (RegionReplaceRequest): Region replacement parameters. (区域替换参数)
@@ -1542,7 +1694,12 @@ def region_replace(
         request.session_id,
         store,
         session_data,
-        fields={"matched_rgb", "material_matrix", "mask_solid"},
+        fields={
+            "matched_rgb",
+            "material_matrix",
+            "mask_solid",
+            "quantized_image",
+        },
     )
     cache = cache_context.__enter__()
 
@@ -1660,10 +1817,7 @@ def region_replace(
         cache["matched_rgb"] = replaced_rgb
         _t_sync = _time.perf_counter()
         _sync_material_matrix_after_rgb_change(
-            session_data,
-            cache,
-            matched_rgb,
-            replaced_rgb,
+            session_data, cache, matched_rgb, replaced_rgb
         )
         _sync_ms = (_time.perf_counter() - _t_sync) * 1000
 
@@ -1688,9 +1842,10 @@ def region_replace(
                 cache,
                 "matched_rgb",
                 "material_matrix",
+                "quantized_image",
                 "preview_rgba",
             ),
-            metadata_fields={"color_palette", "color_layers", "layer_height_mm"},
+            metadata_fields=_REPLACEMENT_CACHE_METADATA_FIELDS,
         )
 
         # Async GLB rebuild: /region-replace previously spent ~77% of its
@@ -1755,6 +1910,7 @@ def region_replace(
         preview_glb_url=glb_url,
         color_contours=contours_data,
         message="Region color replaced successfully",
+        **dynamic_material_result_from_cache(cache).model_dump(),
     )
 
 
@@ -1807,7 +1963,12 @@ def region_requantize(
         request.session_id,
         store,
         session_data,
-        fields={"matched_rgb", "material_matrix", "mask_solid"},
+        fields={
+            "matched_rgb",
+            "material_matrix",
+            "mask_solid",
+            "quantized_image",
+        },
     )
     cache = cache_context.__enter__()
 
@@ -2092,12 +2253,11 @@ def region_requantize(
                 cache,
                 "matched_rgb",
                 "material_matrix",
+                "quantized_image",
                 "preview_rgba",
             ),
             metadata_fields={
-                "color_palette",
-                "color_layers",
-                "layer_height_mm",
+                *_REPLACEMENT_CACHE_METADATA_FIELDS,
                 "glb_max_meshes",
             },
         )
@@ -2155,6 +2315,7 @@ def region_requantize(
             f"{request.local_quantize_colors} colours; rewrote {rewritten_px} pixels."
         ),
         gradient_groups=refreshed_groups,
+        **dynamic_material_result_from_cache(cache).model_dump(),
     )
 
 
@@ -2306,7 +2467,12 @@ def replace_colors_batch(
         request.session_id,
         store,
         session_data,
-        fields={"matched_rgb", "material_matrix", "mask_solid"},
+        fields={
+            "matched_rgb",
+            "material_matrix",
+            "mask_solid",
+            "quantized_image",
+        },
     )
     cache = cache_context.__enter__()
 
@@ -2357,9 +2523,10 @@ def replace_colors_batch(
                 cache,
                 "matched_rgb",
                 "material_matrix",
+                "quantized_image",
                 "preview_rgba",
             ),
-            metadata_fields={"color_palette", "color_layers", "layer_height_mm"},
+            metadata_fields=_REPLACEMENT_CACHE_METADATA_FIELDS,
         )
 
         # Async GLB rebuild for the entire batch. Matches the single-pair
@@ -2414,6 +2581,7 @@ def replace_colors_batch(
         preview_url=f"/api/files/{preview_id}",
         preview_3d_url=glb_url,
         replacement_count=len(request.replacements),
+        **dynamic_material_result_from_cache(cache).model_dump(),
     )
 
 
@@ -2490,9 +2658,10 @@ def region_replace_batch(
                 cache,
                 "matched_rgb",
                 "material_matrix",
+                "quantized_image",
                 "preview_rgba",
             ),
-            metadata_fields={"color_palette", "color_layers", "layer_height_mm"},
+            metadata_fields=_REPLACEMENT_CACHE_METADATA_FIELDS,
         )
 
         # Async GLB rebuild for the whole batch of region edits. See
@@ -2551,6 +2720,7 @@ def region_replace_batch(
         preview_glb_url=glb_url,
         color_contours=contours_data,
         message=f"Batch replaced {len(request.items)} regions successfully",
+        **dynamic_material_result_from_cache(cache).model_dump(),
     )
 
 
@@ -2727,7 +2897,23 @@ def predict_recipe(
             selected_materials = session_data.get("selected_materials") or []
             try:
                 materials = load_multiple_materials(selected_materials)
-                recipe_np = np.asarray(request.recipe, dtype=np.int32)
+                recipe_top_to_bottom: list[int] = list(request.recipe)
+                if bool(
+                    session_data.get(
+                        "material_dynamic_layer_count_enabled",
+                        False,
+                    )
+                ):
+                    prepared = _prepare_dynamic_manual_recipe(
+                        session_data=session_data,
+                        recipe=list(request.recipe),
+                        layer_order=request.layer_order,
+                        color_layers=request.color_layers,
+                    )
+                    recipe_top_to_bottom = list(
+                        prepared["print_recipe_top_to_bottom"]
+                    )
+                recipe_np = np.asarray(recipe_top_to_bottom, dtype=np.int32)
                 # 前端发来 Top2Bottom（[0]=顶层），forward_model 期望 Bottom2Top（[0]=底层）
                 predicted_linear = forward_model(
                     recipe_np[::-1],
@@ -3000,6 +3186,184 @@ def _top_layer_channel(recipe: list[int], layer_order: str) -> int | None:
     return int(recipe[0] if layer_order == "Top2Bottom" else recipe[-1])
 
 
+def _prepare_dynamic_manual_recipe(
+    *,
+    session_data: dict,
+    recipe: list[int],
+    layer_order: str,
+    color_layers: int | None,
+) -> dict[str, object]:
+    """Validate and pad an authoritative dynamic manual recipe.
+
+    校验动态手工实际配方，并用显式基板耗材补齐打印配方。
+
+    Args:
+        session_data: Canonical preview session settings. / 标准预览会话设置。
+        recipe: User-submitted actual recipe. / 用户提交的实际配方。
+        layer_order: Submitted recipe order. / 提交配方的层序。
+        color_layers: Explicit submitted actual count. / 显式提交的实际层数。
+
+    Returns:
+        Actual and padded print recipe metadata in Top-to-Bottom order.
+        / Top-to-Bottom 实际与补齐打印配方元数据。
+
+    Raises:
+        HTTPException: With 422 for invalid length, order, or material indices.
+            / 长度、层序或耗材索引无效时返回 422。
+    """
+    normalized_order = normalize_layer_order(layer_order)
+    actual_input = [int(value) for value in recipe]
+    if color_layers is not None and int(color_layers) != len(actual_input):
+        raise HTTPException(
+            status_code=422,
+            detail="color_layers must equal the submitted dynamic recipe length.",
+        )
+    minimum = int(session_data.get("material_min_layer_count") or 5)
+    maximum = int(session_data.get("material_max_layer_count") or 10)
+    if not minimum <= len(actual_input) <= maximum:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Dynamic actual recipe length must be within the preview "
+                f"range {minimum}-{maximum}."
+            ),
+        )
+    selected_materials = session_data.get("selected_materials") or []
+    backing_index = _resolve_material_backing_index(
+        selected_materials,
+        session_data.get("material_backing_material_index"),
+    )
+    if any(
+        value < 0 or value >= len(selected_materials) for value in actual_input
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Dynamic recipe contains a material index outside selected_materials.",
+        )
+    actual_top_to_bottom = convert_recipe_between_orders(
+        actual_input,
+        normalized_order,
+        "Top2Bottom",
+    )
+    print_top_to_bottom = pad_recipe_to_layer_count(
+        actual_top_to_bottom,
+        maximum,
+        backing_index,
+        "Top2Bottom",
+    )
+    return {
+        "actual_recipe_top_to_bottom": actual_top_to_bottom,
+        "print_recipe_top_to_bottom": print_top_to_bottom,
+        "actual_layer_count": len(actual_top_to_bottom),
+        "padding_layer_count": maximum - len(actual_top_to_bottom),
+        "backing_material_index": backing_index,
+    }
+
+
+def _resolve_dynamic_region_actual_recipe(
+    *,
+    session_data: dict,
+    cache: dict,
+    region_id: str,
+    print_recipe_top_to_bottom: list[int],
+) -> list[int]:
+    """Resolve an actual recipe only from authoritative dynamic metadata.
+
+    仅从权威动态元数据解析区域实际配方，绝不裁剪基板尾层推断深度。
+
+    Args:
+        session_data: Current session state. / 当前会话状态。
+        cache: Preview cache metadata. / 预览缓存元数据。
+        region_id: Region identifier. / 区域标识。
+        print_recipe_top_to_bottom: Sampled full print stack. / 采样的完整打印栈。
+
+    Returns:
+        Saved actual Top-to-Bottom recipe. / 保存的 Top-to-Bottom 实际配方。
+
+    Raises:
+        HTTPException: With 409 when metadata is absent or inconsistent.
+            / 元数据缺失或不一致时返回 409。
+    """
+    def metadata_conflict(detail: str) -> NoReturn:
+        raise HTTPException(status_code=409, detail=detail)
+
+    try:
+        minimum = int(session_data.get("material_min_layer_count") or 5)
+        maximum = int(session_data.get("material_max_layer_count") or 10)
+    except (TypeError, ValueError):
+        metadata_conflict(
+            "Dynamic layer range metadata is inconsistent. Re-run preview."
+        )
+    selected_materials = session_data.get("selected_materials") or []
+    if not isinstance(selected_materials, list) or not selected_materials:
+        metadata_conflict(
+            "Dynamic backing material metadata is unavailable. Re-run preview."
+        )
+    try:
+        backing_index = _resolve_material_backing_index(
+            selected_materials,
+            session_data.get("material_backing_material_index"),
+        )
+    except HTTPException:
+        metadata_conflict(
+            "Dynamic backing material metadata is inconsistent. Re-run preview."
+        )
+
+    sampled_print = [int(value) for value in print_recipe_top_to_bottom]
+
+    def validate_entry(item: dict) -> list[int]:
+        actual = item.get("actual_recipe_top_to_bottom")
+        saved_print = item.get("print_recipe_top_to_bottom")
+        actual_count = item.get("actual_layer_count")
+        padding_count = item.get("padding_layer_count")
+        try:
+            actual_values = [int(value) for value in actual]
+            print_values = [int(value) for value in saved_print]
+            actual_count_value = int(actual_count)
+            padding_count_value = int(padding_count)
+        except (TypeError, ValueError):
+            metadata_conflict(
+                "Dynamic region recipe metadata is inconsistent. Re-run preview."
+            )
+        if (
+            not minimum <= actual_count_value <= maximum
+            or actual_count_value != len(actual_values)
+            or len(print_values) != maximum
+            or padding_count_value != maximum - actual_count_value
+            or print_values[:actual_count_value] != actual_values
+            or any(
+                value != backing_index
+                for value in print_values[actual_count_value:]
+            )
+            or print_values != sampled_print
+        ):
+            metadata_conflict(
+                "Dynamic region recipe metadata is inconsistent. Re-run preview."
+            )
+        return actual_values
+
+    for item in reversed(list(session_data.get("recipe_overrides") or [])):
+        if not isinstance(item, dict) or str(item.get("region_id")) != region_id:
+            continue
+        return validate_entry(item)
+
+    dynamic_info = cache.get("material_dynamic_layer_info")
+    colors = dynamic_info.get("colors") if isinstance(dynamic_info, dict) else None
+    for item in colors if isinstance(colors, list) else []:
+        if not isinstance(item, dict):
+            continue
+        saved_print = item.get("print_recipe_top_to_bottom")
+        if not isinstance(saved_print, list) or [int(value) for value in saved_print] != [
+            int(value) for value in print_recipe_top_to_bottom
+        ]:
+            continue
+        return validate_entry(item)
+    raise HTTPException(
+        status_code=409,
+        detail="Dynamic actual recipe metadata is unavailable. Re-run preview.",
+    )
+
+
 def _pure_stack_rgb(
     rgb: np.ndarray | None,
     stacks: np.ndarray | None,
@@ -3069,7 +3433,12 @@ def apply_recipe_override(
         request.session_id,
         store,
         session_data,
-        fields={"matched_rgb", "material_matrix", "mask_solid"},
+        fields={
+            "matched_rgb",
+            "material_matrix",
+            "mask_solid",
+            "quantized_image",
+        },
     )
     cache = cache_context.__enter__()
 
@@ -3099,6 +3468,24 @@ def apply_recipe_override(
         lut_palette_length = len(metadata.palette)
         virtual_materials = list(request.virtual_materials or [])
         allowed_upper = lut_palette_length + len(virtual_materials)
+        dynamic_manual_recipe: dict[str, object] | None = None
+        if is_material_archive and bool(
+            session_data.get("material_dynamic_layer_count_enabled", False)
+        ):
+            if virtual_materials:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "Dynamic material recipes may only reference the "
+                        "selected material archives."
+                    ),
+                )
+            dynamic_manual_recipe = _prepare_dynamic_manual_recipe(
+                session_data=session_data,
+                recipe=list(request.recipe),
+                layer_order=request.layer_order,
+                color_layers=request.color_layers,
+            )
 
         # Validate recipe indices only when the caller opts into the new
         # virtual-material path: legacy callers (tests, older clients) may
@@ -3208,7 +3595,15 @@ def apply_recipe_override(
                     selected_materials = session_data.get("selected_materials") or []
                     try:
                         materials = load_multiple_materials(selected_materials)
-                        recipe_np = np.asarray(request.recipe, dtype=np.int32)
+                        recipe_top_to_bottom = (
+                            dynamic_manual_recipe["print_recipe_top_to_bottom"]
+                            if dynamic_manual_recipe is not None
+                            else request.recipe
+                        )
+                        recipe_np = np.asarray(
+                            recipe_top_to_bottom,
+                            dtype=np.int32,
+                        )
                         # 前端发来 Top2Bottom（[0]=顶层），forward_model 期望 Bottom2Top（[0]=底层）
                         predicted_linear = forward_model(
                             recipe_np[::-1], materials,
@@ -3312,6 +3707,19 @@ def apply_recipe_override(
 
         current_layers = int(material_matrix.shape[2])
         target_layers = int(request.color_layers)
+        if dynamic_manual_recipe is not None:
+            configured_maximum = int(
+                session_data.get("material_max_layer_count") or 10
+            )
+            if current_layers != configured_maximum:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Dynamic material matrix width does not match the "
+                        "preview maximum. Re-run preview."
+                    ),
+                )
+            target_layers = configured_maximum
         if target_layers > current_layers:
             pad_count = target_layers - current_layers
             # Growing ``material_matrix`` beyond its current depth has two
@@ -3376,15 +3784,21 @@ def apply_recipe_override(
             else:
                 material_matrix = np.concatenate([material_matrix, pad_slab], axis=2)
 
-        recipe_full = np.asarray(
-            pad_recipe_to_layer_count(
-                request.recipe,
-                int(material_matrix.shape[2]),
-                int(metadata.base_channel_idx),
-                request.layer_order,
-            ),
-            dtype=np.int32,
-        )
+        if dynamic_manual_recipe is not None:
+            recipe_full = np.asarray(
+                dynamic_manual_recipe["print_recipe_top_to_bottom"],
+                dtype=np.int32,
+            )
+        else:
+            recipe_full = np.asarray(
+                pad_recipe_to_layer_count(
+                    request.recipe,
+                    int(material_matrix.shape[2]),
+                    int(metadata.base_channel_idx),
+                    request.layer_order,
+                ),
+                dtype=np.int32,
+            )
         material_matrix = _ensure_material_matrix_signed_capacity(
             material_matrix,
             recipe_full,
@@ -3429,6 +3843,67 @@ def apply_recipe_override(
                     layer_height_mm=float(request.layer_height_mm),
                 )
 
+        if dynamic_manual_recipe is not None:
+            target_rgb_map = cache.get("quantized_image")
+            if (
+                not isinstance(target_rgb_map, np.ndarray)
+                or target_rgb_map.shape != updated_rgb.shape
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Dynamic target RGB map is unavailable. "
+                        "Re-run preview."
+                    ),
+                )
+            updated_target_map = np.asarray(
+                target_rgb_map,
+                dtype=np.uint8,
+            ).copy()
+            updated_target_map[combined_override_mask] = predicted_rgb
+            cache["quantized_image"] = updated_target_map
+            dynamic_info = cache.get("material_dynamic_layer_info")
+            if isinstance(dynamic_info, dict):
+                dynamic_info = deepcopy(dynamic_info)
+                colors = dynamic_info.get("colors")
+                solid_mask = np.asarray(cache.get("mask_solid"), dtype=bool)
+                if solid_mask.shape != updated_target_map.shape[:2]:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "Dynamic printable mask is inconsistent. "
+                            "Re-run preview."
+                        ),
+                    )
+                manual_mask = np.zeros(solid_mask.shape, dtype=bool)
+                region_masks = session_data.get("selected_region_masks") or {}
+                if isinstance(region_masks, dict):
+                    for override in session_data.get("recipe_overrides") or []:
+                        if not isinstance(override, dict):
+                            continue
+                        region_mask = region_masks.get(
+                            str(override.get("region_id") or "")
+                        )
+                        if (
+                            isinstance(region_mask, np.ndarray)
+                            and region_mask.shape == solid_mask.shape
+                        ):
+                            manual_mask |= np.asarray(region_mask, dtype=bool)
+                manual_mask |= combined_override_mask & solid_mask
+                automatic_mask = solid_mask & ~manual_mask
+                dynamic_info["benefit_curve"] = (
+                    recompute_dynamic_material_benefit_curve(
+                        colors if isinstance(colors, list) else [],
+                        updated_target_map,
+                        automatic_mask,
+                    )
+                )
+                dynamic_info["benefit_curve_scope"] = "automatic_pixels"
+                dynamic_info["benefit_curve_pixel_count"] = int(
+                    np.count_nonzero(automatic_mask)
+                )
+                cache["material_dynamic_layer_info"] = dynamic_info
+
         cache["matched_rgb"] = updated_rgb
         cache["material_matrix"] = material_matrix
         cache["color_layers"] = int(material_matrix.shape[2])
@@ -3461,8 +3936,34 @@ def apply_recipe_override(
                 "region_id": region_id,
                 "recipe": list(request.recipe),
                 "layer_order": request.layer_order,
-                "color_layers": int(material_matrix.shape[2]),
+                "color_layers": (
+                    int(dynamic_manual_recipe["actual_layer_count"])
+                    if dynamic_manual_recipe is not None
+                    else int(material_matrix.shape[2])
+                ),
                 "layer_height_mm": float(request.layer_height_mm),
+                **(
+                    {
+                        "actual_recipe_top_to_bottom": list(
+                            dynamic_manual_recipe[
+                                "actual_recipe_top_to_bottom"
+                            ]
+                        ),
+                        "print_recipe_top_to_bottom": list(
+                            dynamic_manual_recipe[
+                                "print_recipe_top_to_bottom"
+                            ]
+                        ),
+                        "actual_layer_count": int(
+                            dynamic_manual_recipe["actual_layer_count"]
+                        ),
+                        "padding_layer_count": int(
+                            dynamic_manual_recipe["padding_layer_count"]
+                        ),
+                    }
+                    if dynamic_manual_recipe is not None
+                    else {}
+                ),
                 **(
                     {"virtual_materials": virtual_materials_payload}
                     if virtual_materials_payload
@@ -3483,6 +3984,7 @@ def apply_recipe_override(
                 cache,
                 "matched_rgb",
                 "material_matrix",
+                "quantized_image",
                 "preview_rgba",
             ),
             metadata_fields={
@@ -3493,6 +3995,7 @@ def apply_recipe_override(
                 "preview_colors",
                 "slot_names",
                 "color_conf",
+                "material_dynamic_layer_info",
             },
         )
         store.put(request.session_id, "recipe_overrides", existing_overrides)
@@ -3554,6 +4057,7 @@ def apply_recipe_override(
             str(runtime_mode_key) if runtime_mode_key is not None else None
         ),
         override_count=len(existing_overrides),
+        **dynamic_material_result_from_cache(cache).model_dump(),
     )
 
 
@@ -3647,6 +4151,9 @@ def region_recipe(
         )
 
     target_order = normalize_layer_order(request.layer_order)
+    dynamic_enabled = bool(
+        session_data.get("material_dynamic_layer_count_enabled", False)
+    )
     layer_height_mm = float(
         cache.get("layer_height_mm") or session_data.get("material_layer_height_mm") or 0.08
     )
@@ -3662,6 +4169,14 @@ def region_recipe(
         # 序；空样本退化为空 recipe，让前端能安全回退到默认配方。
         recipe_t2b = _sample_region_recipe_top2bottom(material_matrix, region_mask)
         if recipe_t2b is None:
+            if dynamic_enabled:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Dynamic region print recipe is unavailable. "
+                        "Re-run preview."
+                    ),
+                )
             entries.append(
                 RegionRecipeEntry(
                     region_id=region_id,
@@ -3672,6 +4187,13 @@ def region_recipe(
                 )
             )
             continue
+        if dynamic_enabled:
+            recipe_t2b = _resolve_dynamic_region_actual_recipe(
+                session_data=session_data,
+                cache=cache,
+                region_id=region_id,
+                print_recipe_top_to_bottom=recipe_t2b,
+            )
         recipe_out = convert_recipe_between_orders(recipe_t2b, "Top2Bottom", target_order)
         entries.append(
             RegionRecipeEntry(

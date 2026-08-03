@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import importlib
 import os
+import sys
 import time
 from collections import defaultdict
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Iterable
 
@@ -22,11 +24,25 @@ from shapely.geometry import GeometryCollection, MultiPolygon, Polygon
 from shapely.geometry.polygon import orient
 from shapely.ops import unary_union
 
+from core.task_parallelism import (
+    AdaptiveParallelismPlan,
+    resolve_task_parallelism_plan,
+    task_memory_headroom_bytes,
+    task_parallelism_worker_scope,
+)
 from core.vector_engine import VectorProcessor, _union_run_group_geometries
 
 
 NATIVE_CLOSE_DELTA_MM = 0.03
 NATIVE_COORD_SCALE = 1_000_000
+NATIVE_BATCH_MIN_PARALLEL_ITEMS = 3
+NATIVE_BATCH_MIN_PARALLEL_GROUPS = 8
+NATIVE_BATCH_FIXED_VALIDATION_BYTES = 384 * 1024**2
+NATIVE_BATCH_INPUT_BYTES_PER_POINT = 2 * np.dtype(np.float64).itemsize
+NATIVE_BATCH_MESH_BYTES_PER_POINT = 256
+NATIVE_BATCH_GROUP_OVERHEAD_BYTES = 64 * 1024
+NATIVE_BATCH_RING_OVERHEAD_BYTES = 4 * 1024
+NATIVE_BATCH_GEOMETRY_OVERHEAD_BYTES = 1024
 NATIVE_SURFACE_AREA_REL_TOL = 0.001
 NATIVE_SURFACE_AREA_ABS_TOL_MM2 = 0.01
 NATIVE_REQUIRED_GUARD_CAPABILITY = "triangulation_area_guard"
@@ -53,6 +69,423 @@ class NativeVectorMeshResult:
 
     meshes_by_slot: dict[str, dict[str, Any]]
     stats: dict[str, float | int | str]
+
+
+@dataclass(frozen=True)
+class _PreparedNativeGroup:
+    key: tuple[int, int, int]
+    geoms: list
+    paths: list
+    path_count: int
+
+
+@dataclass(frozen=True)
+class NativeBatchCost:
+    """Monotonic, overflow-safe memory signal for one semantic batch.
+    单个语义批次的单调、溢出安全内存估算信号。
+
+    Args:
+        source_geometry_count: Top-level source geometry references.
+            顶层源几何引用数量。
+        point_count: Coordinate points counted without geometry mutation.
+            不修改几何前提下统计的坐标点数量。
+        ring_count: Exterior and interior ring count. 外环与内环总数。
+        hole_count: Interior ring count. 洞环数量。
+        group_count: Semantic run-group count. 语义 run-group 数量。
+        input_coordinate_bytes: Estimated packed coordinate bytes.
+            估算的打包坐标字节数。
+        expected_mesh_buffer_bytes: Estimated native mesh/result bytes.
+            估算的原生网格及结果缓冲字节数。
+        estimated_bytes: Saturated total admission estimate.
+            饱和运算后的总准入估算字节数。
+    """
+
+    source_geometry_count: int
+    point_count: int
+    ring_count: int
+    hole_count: int
+    group_count: int
+    input_coordinate_bytes: int
+    expected_mesh_buffer_bytes: int
+    estimated_bytes: int
+
+
+@dataclass(frozen=True)
+class _PreparedNativeBatch:
+    index: int
+    height: float
+    z_bot: float
+    groups: tuple[_PreparedNativeGroup, ...]
+    no_path_jobs: tuple[tuple[tuple[int, int, int], list], ...]
+    cost: NativeBatchCost
+
+
+@dataclass(frozen=True)
+class _NativeGroupOutcome:
+    status: str
+    rejection_counter: str
+    mesh_arrays: tuple[np.ndarray, np.ndarray] | None
+    mesh: trimesh.Trimesh | None
+
+
+@dataclass(frozen=True)
+class _ComputedNativeBatch:
+    call_error: str
+    outcomes: tuple[_NativeGroupOutcome, ...]
+    extra_mesh_count: int
+    native_seconds: float
+    mesh_convert_seconds: float
+    surface_validation_seconds: float
+    surface_checked: int
+    surface_rejects: int
+
+
+def _saturating_add_bytes(left: int, right: int) -> int:
+    """Add non-negative byte counts while capping at ``sys.maxsize``."""
+
+    left_value = max(0, min(sys.maxsize, int(left)))
+    right_value = max(0, min(sys.maxsize, int(right)))
+    if left_value >= sys.maxsize - right_value:
+        return sys.maxsize
+    return left_value + right_value
+
+
+def _saturating_multiply_bytes(value: int, factor: int) -> int:
+    """Multiply non-negative byte counts while capping at ``sys.maxsize``."""
+
+    value_int = max(0, min(sys.maxsize, int(value)))
+    factor_int = max(0, min(sys.maxsize, int(factor)))
+    if value_int == 0 or factor_int == 0:
+        return 0
+    if value_int > sys.maxsize // factor_int:
+        return sys.maxsize
+    return value_int * factor_int
+
+
+def _native_batch_cost_from_counts(
+    *,
+    source_geometry_count: int,
+    point_count: int,
+    ring_count: int,
+    hole_count: int,
+    group_count: int,
+) -> NativeBatchCost:
+    """Build one cost record from already-counted immutable topology."""
+
+    input_coordinate_bytes = _saturating_multiply_bytes(
+        point_count,
+        NATIVE_BATCH_INPUT_BYTES_PER_POINT,
+    )
+    expected_mesh_buffer_bytes = _saturating_add_bytes(
+        _saturating_multiply_bytes(
+            point_count,
+            NATIVE_BATCH_MESH_BYTES_PER_POINT,
+        ),
+        _saturating_add_bytes(
+            _saturating_multiply_bytes(
+                group_count,
+                NATIVE_BATCH_GROUP_OVERHEAD_BYTES,
+            ),
+            _saturating_add_bytes(
+                _saturating_multiply_bytes(
+                    ring_count,
+                    NATIVE_BATCH_RING_OVERHEAD_BYTES,
+                ),
+                _saturating_multiply_bytes(
+                    source_geometry_count,
+                    NATIVE_BATCH_GEOMETRY_OVERHEAD_BYTES,
+                ),
+            ),
+        ),
+    )
+    dynamic_bytes = _saturating_add_bytes(
+        input_coordinate_bytes,
+        expected_mesh_buffer_bytes,
+    )
+    estimated_bytes = (
+        _saturating_add_bytes(
+            NATIVE_BATCH_FIXED_VALIDATION_BYTES,
+            dynamic_bytes,
+        )
+        if group_count > 0
+        else 0
+    )
+    return NativeBatchCost(
+        source_geometry_count=max(0, int(source_geometry_count)),
+        point_count=max(0, int(point_count)),
+        ring_count=max(0, int(ring_count)),
+        hole_count=max(0, int(hole_count)),
+        group_count=max(0, int(group_count)),
+        input_coordinate_bytes=input_coordinate_bytes,
+        expected_mesh_buffer_bytes=expected_mesh_buffer_bytes,
+        estimated_bytes=estimated_bytes,
+    )
+
+
+def _estimate_native_jobs_cost(
+    jobs: list[tuple[tuple[int, int, int], list]],
+) -> NativeBatchCost:
+    """Count Shapely topology without unioning or mutating source geometry."""
+
+    source_geometry_count = 0
+    point_count = 0
+    ring_count = 0
+    hole_count = 0
+    estimation_failed = False
+    for _key, geoms in jobs:
+        source_geometry_count += len(geoms)
+        for geom in geoms:
+            try:
+                for polygon in _iter_polygons(geom):
+                    exterior_points = len(polygon.exterior.coords)
+                    point_count += exterior_points
+                    ring_count += 1
+                    for interior in polygon.interiors:
+                        point_count += len(interior.coords)
+                        ring_count += 1
+                        hole_count += 1
+            except (AttributeError, TypeError, RuntimeError, ValueError):
+                estimation_failed = True
+    if estimation_failed:
+        point_count = sys.maxsize
+    return _native_batch_cost_from_counts(
+        source_geometry_count=source_geometry_count,
+        point_count=point_count,
+        ring_count=ring_count,
+        hole_count=hole_count,
+        group_count=len(jobs),
+    )
+
+
+def _refine_native_batch_cost(
+    estimated_cost: NativeBatchCost,
+    groups: list[_PreparedNativeGroup],
+) -> NativeBatchCost:
+    """Replace cheap coordinate counts with the packed path counts."""
+
+    point_count = sum(
+        len(path)
+        for group in groups
+        for path in group.paths
+    )
+    ring_count = sum(len(group.paths) for group in groups)
+    return _native_batch_cost_from_counts(
+        source_geometry_count=estimated_cost.source_geometry_count,
+        point_count=point_count,
+        ring_count=ring_count,
+        hole_count=estimated_cost.hole_count,
+        group_count=estimated_cost.group_count,
+    )
+
+
+def _representative_batch_bytes(
+    costs: list[NativeBatchCost],
+) -> int:
+    """Ignore isolated outliers while retaining a conservative worker cost."""
+
+    estimates = sorted(
+        max(1, int(cost.estimated_bytes))
+        for cost in costs
+        if cost.group_count > 0
+    )
+    if not estimates:
+        return NATIVE_BATCH_FIXED_VALIDATION_BYTES
+    return estimates[len(estimates) // 2]
+
+
+def _resolve_native_batch_plan(
+    *,
+    batch_count: int,
+    group_count: int,
+    representative_batch_bytes: int,
+) -> AdaptiveParallelismPlan:
+    """Resolve a bounded plan for independent native mesh batches."""
+
+    return resolve_task_parallelism_plan(
+        "vector",
+        work_items=batch_count,
+        min_parallel_items=NATIVE_BATCH_MIN_PARALLEL_ITEMS,
+        hard_max_workers=None,
+        work_units=group_count,
+        min_parallel_work_units=NATIVE_BATCH_MIN_PARALLEL_GROUPS,
+        estimated_worker_bytes=max(1, int(representative_batch_bytes)),
+    )
+
+
+def _prepare_native_batch(
+    *,
+    index: int,
+    jobs: list[tuple[tuple[int, int, int], list]],
+    height: float,
+    z_bot: float,
+    stats: dict[str, float | int | str],
+    path_cache: dict[int, tuple[Any, list[list[tuple[float, float]]]]],
+    estimated_cost: NativeBatchCost | None = None,
+) -> _PreparedNativeBatch:
+    """Pack one batch serially while preserving the shared path cache."""
+
+    started = time.perf_counter()
+    cheap_cost = estimated_cost or _estimate_native_jobs_cost(jobs)
+    groups = []
+    no_path_jobs = []
+    for key, geoms in jobs:
+        paths = []
+        for geom in geoms:
+            paths.extend(_geometry_to_paths_cached(geom, path_cache, stats))
+        if not paths:
+            no_path_jobs.append((key, geoms))
+            continue
+        groups.append(
+            _PreparedNativeGroup(
+                key=key,
+                geoms=geoms,
+                paths=paths,
+                path_count=len(paths),
+            )
+        )
+        stats["native_input_paths"] = int(stats["native_input_paths"]) + len(
+            paths
+        )
+    stats["native_group_count"] = int(stats["native_group_count"]) + len(
+        groups
+    )
+    stats["pack_seconds"] = float(stats["pack_seconds"]) + (
+        time.perf_counter() - started
+    )
+    return _PreparedNativeBatch(
+        index=index,
+        height=float(height),
+        z_bot=float(z_bot),
+        groups=tuple(groups),
+        no_path_jobs=tuple(no_path_jobs),
+        cost=_refine_native_batch_cost(cheap_cost, groups),
+    )
+
+
+def _compute_native_batch(
+    module,
+    batch: _PreparedNativeBatch,
+    *,
+    scale_factor: float,
+    validate_surface: bool,
+) -> _ComputedNativeBatch:
+    """Run native extrusion and unchanged surface validation for one batch."""
+
+    with task_parallelism_worker_scope():
+        try:
+            native_started = time.perf_counter()
+            native_meshes = module.merge_run_groups_to_meshes(
+                [group.paths for group in batch.groups],
+                close_delta_mm=NATIVE_CLOSE_DELTA_MM,
+                scale=NATIVE_COORD_SCALE,
+                height=batch.height,
+                z_offset=batch.z_bot,
+                xy_scale=scale_factor,
+            )
+            native_seconds = time.perf_counter() - native_started
+        except Exception as exc:
+            return _ComputedNativeBatch(
+                call_error=type(exc).__name__,
+                outcomes=(),
+                extra_mesh_count=0,
+                native_seconds=0.0,
+                mesh_convert_seconds=0.0,
+                surface_validation_seconds=0.0,
+                surface_checked=0,
+                surface_rejects=0,
+            )
+
+        convert_started = time.perf_counter()
+        native_mesh_list = list(native_meshes or [])
+        outcomes = []
+        surface_validation_seconds = 0.0
+        surface_checked = 0
+        surface_rejects = 0
+        for index, group in enumerate(batch.groups):
+            if index >= len(native_mesh_list):
+                outcomes.append(
+                    _NativeGroupOutcome(
+                        status="missing_native_mesh",
+                        rejection_counter="native_invalid_meshes",
+                        mesh_arrays=None,
+                        mesh=None,
+                    )
+                )
+                continue
+
+            native_mesh = native_mesh_list[index]
+            mesh_arrays = _native_mesh_arrays(native_mesh)
+            if mesh_arrays is None:
+                outcomes.append(
+                    _NativeGroupOutcome(
+                        status="native_rejected",
+                        rejection_counter=_native_mesh_rejection_reason(
+                            native_mesh
+                        ),
+                        mesh_arrays=None,
+                        mesh=None,
+                    )
+                )
+                continue
+
+            mesh = None
+            if validate_surface:
+                mesh = _mesh_from_arrays(mesh_arrays)
+                if mesh is None:
+                    outcomes.append(
+                        _NativeGroupOutcome(
+                            status="invalid_native_mesh",
+                            rejection_counter="native_invalid_meshes",
+                            mesh_arrays=None,
+                            mesh=None,
+                        )
+                    )
+                    continue
+                validation_started = time.perf_counter()
+                surface_ok = _native_surface_area_matches(
+                    mesh,
+                    group.geoms,
+                    height=batch.height,
+                    scale_factor=scale_factor,
+                )
+                surface_validation_seconds += (
+                    time.perf_counter() - validation_started
+                )
+                surface_checked += 1
+                if not surface_ok:
+                    surface_rejects += 1
+                    outcomes.append(
+                        _NativeGroupOutcome(
+                            status="surface_reject",
+                            rejection_counter="",
+                            mesh_arrays=mesh_arrays,
+                            mesh=mesh,
+                        )
+                    )
+                    continue
+
+            outcomes.append(
+                _NativeGroupOutcome(
+                    status="accepted",
+                    rejection_counter="",
+                    mesh_arrays=mesh_arrays,
+                    mesh=mesh,
+                )
+            )
+
+        return _ComputedNativeBatch(
+            call_error="",
+            outcomes=tuple(outcomes),
+            extra_mesh_count=max(
+                0,
+                len(native_mesh_list) - len(batch.groups),
+            ),
+            native_seconds=native_seconds,
+            mesh_convert_seconds=time.perf_counter() - convert_started,
+            surface_validation_seconds=surface_validation_seconds,
+            surface_checked=surface_checked,
+            surface_rejects=surface_rejects,
+        )
 
 
 def is_native_vector_mesh_enabled(processor: Any | None = None) -> bool:
@@ -121,6 +554,17 @@ def run_length_extrude_native_hybrid(
         slot_names=slot_names,
     )
     stats["run_group_count"] = len(run_groups)
+    try:
+        source_geometry_count = len(matched_shapes)
+    except TypeError:
+        source_geometry_count = len(
+            {
+                id(geom)
+                for geoms in run_groups.values()
+                for geom in geoms
+            }
+        )
+    stats["native_parallel_source_geometry_count"] = source_geometry_count
 
     jobs_by_height_z: dict[tuple[float, float], list[tuple[tuple[int, int, int], list]]] = defaultdict(list)
     for key, geoms in run_groups.items():
@@ -156,8 +600,48 @@ def run_length_extrude_native_hybrid(
         return NativeVectorMeshResult(meshes_by_slot=meshes_by_slot, stats=stats)
 
     stats["native_triangulation_area_guard"] = "present"
+    batch_items = list(jobs_by_height_z.items())
+    cheap_batch_costs = [
+        _estimate_native_jobs_cost(jobs)
+        for (_height_z, jobs) in batch_items
+    ]
+    representative_batch_bytes = _representative_batch_bytes(
+        cheap_batch_costs,
+    )
+    parallelism_plan = _resolve_native_batch_plan(
+        batch_count=len(batch_items),
+        group_count=len(run_groups),
+        representative_batch_bytes=representative_batch_bytes,
+    )
+    worker_count = parallelism_plan.workers
+    _record_native_parallelism_plan(stats, parallelism_plan)
+    stats["native_parallel_workers"] = worker_count
+    stats["native_parallel_batch_count"] = len(batch_items)
+    stats["native_parallel_max_estimated_batch_bytes"] = max(
+        (cost.estimated_bytes for cost in cheap_batch_costs),
+        default=0,
+    )
+    if worker_count > 1:
+        parallel_result, parallel_error = _try_run_native_batches_parallel(
+            module=module,
+            batch_items=batch_items,
+            run_group_count=len(run_groups),
+            source_geometry_count=source_geometry_count,
+            parallelism_plan=parallelism_plan,
+            cheap_batch_costs=cheap_batch_costs,
+            representative_batch_bytes=representative_batch_bytes,
+            scale_factor=float(scale_factor),
+            slot_names=slot_names,
+            extrude_cache=extrude_cache,
+        )
+        if parallel_result is not None:
+            return parallel_result
+        stats["native_parallel_error"] = parallel_error
+        stats["native_parallel_requested_workers"] = worker_count
+        stats["native_parallel_workers"] = 1
+
     path_cache: dict[int, tuple[Any, list[list[tuple[float, float]]]]] = {}
-    for (height, z_bot), jobs in jobs_by_height_z.items():
+    for (height, z_bot), jobs in batch_items:
         _run_native_job_batch(
             module=module,
             jobs=jobs,
@@ -208,7 +692,50 @@ def _empty_stats() -> dict[str, float | int | str]:
         "fallback_groups": 0,
         "native_capability_error": "",
         "native_triangulation_area_guard": "",
+        "native_parallel_workers": 1,
+        "native_parallel_batch_count": 0,
+        "native_parallel_source_geometry_count": 0,
+        "native_parallel_limit_reason": "",
+        "native_parallel_effective_cpu": 1,
+        "native_parallel_outer_demand": 1,
+        "native_parallel_cpu_fair_share": 1,
+        "native_parallel_memory_ceiling": 1,
+        "native_parallel_demand_fallback": False,
+        "native_parallel_inflight_limit": 1,
+        "native_parallel_max_estimated_batch_bytes": 0,
+        "native_parallel_oversized_serial_batches": 0,
+        "native_parallel_wall_seconds": 0.0,
+        "native_parallel_error": "",
+        "native_parallel_requested_workers": 1,
     }
+
+
+def _record_native_parallelism_plan(
+    stats: dict[str, float | int | str],
+    plan: AdaptiveParallelismPlan,
+) -> None:
+    """Store only bounded scalar scheduler diagnostics."""
+
+    stats["native_parallel_limit_reason"] = str(plan.limiting_reason)[:64]
+    stats["native_parallel_effective_cpu"] = int(
+        plan.effective_cpu_capacity,
+    )
+    stats["native_parallel_cpu_topology"] = str(plan.cpu_topology)[:64]
+    stats["native_parallel_cpu_scheduling_policy"] = str(
+        plan.cpu_scheduling_policy,
+    )[:64]
+    if plan.performance_cpu_capacity is not None:
+        stats["native_parallel_performance_cpu"] = int(
+            plan.performance_cpu_capacity,
+        )
+    stats["native_parallel_outer_demand"] = int(plan.outer_demand)
+    stats["native_parallel_cpu_fair_share"] = int(
+        plan.cpu_fair_share_ceiling,
+    )
+    stats["native_parallel_memory_ceiling"] = int(plan.memory_ceiling)
+    stats["native_parallel_demand_fallback"] = bool(
+        plan.demand_snapshot_fallback,
+    )
 
 
 def _load_native_module(stats: dict[str, float | int | str]):
@@ -247,6 +774,408 @@ def _build_run_groups(*, matched_shapes, num_layers: int, num_channels: int, slo
             for run_start, run_end in runs:
                 run_groups.setdefault((int(ch), int(run_start), int(run_end)), []).append(geom)
     return run_groups
+
+
+def _empty_computed_native_batch(
+    batch: _PreparedNativeBatch,
+) -> _ComputedNativeBatch:
+    return _ComputedNativeBatch(
+        call_error="",
+        outcomes=(),
+        extra_mesh_count=0,
+        native_seconds=0.0,
+        mesh_convert_seconds=0.0,
+        surface_validation_seconds=0.0,
+        surface_checked=0,
+        surface_rejects=0,
+    )
+
+
+def _commit_computed_native_batch(
+    *,
+    module,
+    batch: _PreparedNativeBatch,
+    computed: _ComputedNativeBatch,
+    scale_factor: float,
+    slot_names,
+    meshes_by_slot: dict[str, dict[str, Any]],
+    extrude_cache,
+    stats: dict[str, float | int | str],
+    path_cache: dict[int, tuple[Any, list[list[tuple[float, float]]]]],
+) -> None:
+    """Commit a computed batch on the caller thread in original group order."""
+
+    if not computed.call_error and len(computed.outcomes) != len(batch.groups):
+        raise RuntimeError("native batch outcome count mismatch")
+
+    for key, geoms in batch.no_path_jobs:
+        _fallback_key(
+            key,
+            geoms,
+            height=batch.height,
+            z_bot=batch.z_bot,
+            scale_factor=scale_factor,
+            slot_names=slot_names,
+            meshes_by_slot=meshes_by_slot,
+            extrude_cache=extrude_cache,
+            stats=stats,
+            reason="no_paths",
+        )
+
+    stats["native_seconds"] = float(stats["native_seconds"]) + (
+        computed.native_seconds
+    )
+    stats["mesh_convert_seconds"] = float(stats["mesh_convert_seconds"]) + (
+        computed.mesh_convert_seconds
+    )
+    stats["surface_validation_seconds"] = float(
+        stats["surface_validation_seconds"]
+    ) + computed.surface_validation_seconds
+    stats["native_surface_checked"] = int(stats["native_surface_checked"]) + (
+        computed.surface_checked
+    )
+    stats["native_surface_rejects"] = int(stats["native_surface_rejects"]) + (
+        computed.surface_rejects
+    )
+
+    if computed.call_error:
+        stats["native_call_error"] = computed.call_error
+        for group in batch.groups:
+            _fallback_key(
+                group.key,
+                group.geoms,
+                height=batch.height,
+                z_bot=batch.z_bot,
+                scale_factor=scale_factor,
+                slot_names=slot_names,
+                meshes_by_slot=meshes_by_slot,
+                extrude_cache=extrude_cache,
+                stats=stats,
+                reason="native_call_error",
+            )
+        return
+
+    stats["native_extra_meshes"] = int(stats["native_extra_meshes"]) + (
+        computed.extra_mesh_count
+    )
+    for group, outcome in zip(batch.groups, computed.outcomes):
+        key = group.key
+        ch = key[0]
+        slot_name = slot_names[ch]
+        _ensure_slot(meshes_by_slot, slot_name, ch)
+
+        if outcome.status == "missing_native_mesh":
+            stats["native_invalid_meshes"] = int(
+                stats["native_invalid_meshes"]
+            ) + 1
+            _fallback_key(
+                key,
+                group.geoms,
+                height=batch.height,
+                z_bot=batch.z_bot,
+                scale_factor=scale_factor,
+                slot_names=slot_names,
+                meshes_by_slot=meshes_by_slot,
+                extrude_cache=extrude_cache,
+                stats=stats,
+                reason="missing_native_mesh",
+            )
+            continue
+
+        if outcome.status == "native_rejected":
+            counter_name = outcome.rejection_counter
+            stats[counter_name] = int(stats[counter_name]) + 1
+            if _retry_native_group_as_reference_polygons(
+                module=module,
+                key=key,
+                geoms=group.geoms,
+                original_path_count=group.path_count,
+                height=batch.height,
+                z_bot=batch.z_bot,
+                scale_factor=scale_factor,
+                slot_names=slot_names,
+                meshes_by_slot=meshes_by_slot,
+                extrude_cache=extrude_cache,
+                stats=stats,
+                path_cache=path_cache,
+            ):
+                continue
+            _fallback_key(
+                key,
+                group.geoms,
+                height=batch.height,
+                z_bot=batch.z_bot,
+                scale_factor=scale_factor,
+                slot_names=slot_names,
+                meshes_by_slot=meshes_by_slot,
+                extrude_cache=extrude_cache,
+                stats=stats,
+                reason=_fallback_reason_for_native_rejection(counter_name),
+                native_module=module,
+                path_cache=path_cache,
+                input_path_count=group.path_count,
+            )
+            continue
+
+        if outcome.status == "invalid_native_mesh":
+            stats["native_invalid_meshes"] = int(
+                stats["native_invalid_meshes"]
+            ) + 1
+            _fallback_key(
+                key,
+                group.geoms,
+                height=batch.height,
+                z_bot=batch.z_bot,
+                scale_factor=scale_factor,
+                slot_names=slot_names,
+                meshes_by_slot=meshes_by_slot,
+                extrude_cache=extrude_cache,
+                stats=stats,
+                reason="invalid_native_mesh",
+            )
+            continue
+
+        if outcome.status == "surface_reject":
+            _fallback_key(
+                key,
+                group.geoms,
+                height=batch.height,
+                z_bot=batch.z_bot,
+                scale_factor=scale_factor,
+                slot_names=slot_names,
+                meshes_by_slot=meshes_by_slot,
+                extrude_cache=extrude_cache,
+                stats=stats,
+                reason="surface_reject",
+            )
+            continue
+
+        mesh_arrays = outcome.mesh_arrays
+        if outcome.status != "accepted" or mesh_arrays is None:
+            raise RuntimeError("invalid computed native mesh outcome")
+        stats["native_meshes"] = int(stats["native_meshes"]) + 1
+        if outcome.mesh is not None:
+            meshes_by_slot[slot_name]["meshes"].append(outcome.mesh)
+            stats["native_output_meshes"] = int(
+                stats["native_output_meshes"]
+            ) + 1
+        else:
+            _append_native_buffer(
+                meshes_by_slot,
+                slot_name,
+                ch,
+                mesh_arrays,
+            )
+
+
+def _try_run_native_batches_parallel(
+    *,
+    module,
+    batch_items,
+    run_group_count: int,
+    source_geometry_count: int,
+    parallelism_plan: AdaptiveParallelismPlan,
+    cheap_batch_costs: list[NativeBatchCost],
+    representative_batch_bytes: int,
+    scale_factor: float,
+    slot_names,
+    extrude_cache,
+) -> tuple[NativeVectorMeshResult | None, str]:
+    """Run a memory-bounded preparation window with ordered owner commits."""
+
+    stats = _empty_stats()
+    worker_count = parallelism_plan.workers
+    stats["run_group_count"] = run_group_count
+    stats["native_parallel_source_geometry_count"] = source_geometry_count
+    stats["native_triangulation_area_guard"] = "present"
+    stats["native_parallel_workers"] = worker_count
+    stats["native_parallel_requested_workers"] = worker_count
+    stats["native_parallel_batch_count"] = len(batch_items)
+    _record_native_parallelism_plan(stats, parallelism_plan)
+    stats["native_parallel_max_estimated_batch_bytes"] = max(
+        (cost.estimated_bytes for cost in cheap_batch_costs),
+        default=0,
+    )
+    meshes_by_slot: dict[str, dict[str, Any]] = {}
+    path_cache: dict[
+        int,
+        tuple[Any, list[list[tuple[float, float]]]],
+    ] = {}
+    local_extrude_cache = dict(extrude_cache) if extrude_cache is not None else None
+
+    try:
+        if len(cheap_batch_costs) != len(batch_items):
+            raise RuntimeError("native batch estimate count mismatch")
+        available_memory_bytes = max(
+            0,
+            int(parallelism_plan.available_memory_bytes or 0),
+        )
+        usable_memory_bytes = max(
+            0,
+            available_memory_bytes
+            - task_memory_headroom_bytes(available_memory_bytes),
+        )
+        per_task_memory_budget_bytes = usable_memory_bytes // max(
+            1,
+            parallelism_plan.outer_demand,
+        )
+        memory_window_limit = max(
+            1,
+            per_task_memory_budget_bytes
+            // max(1, int(representative_batch_bytes)),
+        )
+        window_limit = min(
+            len(batch_items),
+            worker_count + 1,
+            memory_window_limit,
+        )
+        stats["native_parallel_inflight_limit"] = max(1, window_limit)
+        validate_surface = _surface_validation_enabled()
+        parallel_started = time.perf_counter()
+        with ThreadPoolExecutor(
+            max_workers=worker_count,
+            thread_name_prefix="lumina-vector-native",
+        ) as executor:
+            next_prepare_index = 0
+            next_commit_index = 0
+            in_flight: dict[
+                int,
+                tuple[_PreparedNativeBatch, Future | None, str],
+            ] = {}
+            live_estimated_bytes = 0
+
+            while next_commit_index < len(batch_items):
+                while (
+                    next_prepare_index < len(batch_items)
+                    and len(in_flight) < max(1, window_limit)
+                ):
+                    cheap_cost = cheap_batch_costs[next_prepare_index]
+                    projected_cheap_bytes = _saturating_add_bytes(
+                        live_estimated_bytes,
+                        cheap_cost.estimated_bytes,
+                    )
+                    if (
+                        in_flight
+                        and projected_cheap_bytes
+                        > per_task_memory_budget_bytes
+                    ):
+                        break
+
+                    (height, z_bot), jobs = batch_items[next_prepare_index]
+                    batch = _prepare_native_batch(
+                        index=next_prepare_index,
+                        jobs=jobs,
+                        height=float(height),
+                        z_bot=float(z_bot),
+                        stats=stats,
+                        path_cache=path_cache,
+                        estimated_cost=cheap_cost,
+                    )
+                    stats["native_parallel_max_estimated_batch_bytes"] = max(
+                        int(
+                            stats[
+                                "native_parallel_max_estimated_batch_bytes"
+                            ]
+                        ),
+                        batch.cost.estimated_bytes,
+                    )
+                    projected_refined_bytes = _saturating_add_bytes(
+                        live_estimated_bytes,
+                        batch.cost.estimated_bytes,
+                    )
+                    individually_oversized = (
+                        batch.cost.estimated_bytes
+                        > per_task_memory_budget_bytes
+                    )
+                    future: Future | None = None
+                    mode = "empty"
+                    if batch.groups and individually_oversized:
+                        mode = "oversized"
+                    elif batch.groups and (
+                        in_flight
+                        and projected_refined_bytes
+                        > per_task_memory_budget_bytes
+                    ):
+                        mode = "deferred"
+                    elif batch.groups:
+                        mode = "future"
+                        future = executor.submit(
+                            _compute_native_batch,
+                            module,
+                            batch,
+                            scale_factor=scale_factor,
+                            validate_surface=validate_surface,
+                        )
+                    in_flight[batch.index] = (batch, future, mode)
+                    live_estimated_bytes = projected_refined_bytes
+                    next_prepare_index += 1
+                    if mode in {"oversized", "deferred"}:
+                        break
+
+                entry = in_flight.get(next_commit_index)
+                if entry is None:
+                    raise RuntimeError("native batch commit window stalled")
+                batch, future, mode = entry
+                if mode == "oversized":
+                    stats["native_parallel_oversized_serial_batches"] = int(
+                        stats["native_parallel_oversized_serial_batches"]
+                    ) + 1
+                    computed = _compute_native_batch(
+                        module,
+                        batch,
+                        scale_factor=scale_factor,
+                        validate_surface=validate_surface,
+                    )
+                elif mode == "deferred":
+                    future = executor.submit(
+                        _compute_native_batch,
+                        module,
+                        batch,
+                        scale_factor=scale_factor,
+                        validate_surface=validate_surface,
+                    )
+                    computed = future.result()
+                elif mode == "future" and future is not None:
+                    computed = future.result()
+                elif mode == "empty":
+                    computed = _empty_computed_native_batch(batch)
+                else:
+                    raise RuntimeError("invalid native batch execution mode")
+
+                _commit_computed_native_batch(
+                    module=module,
+                    batch=batch,
+                    computed=computed,
+                    scale_factor=scale_factor,
+                    slot_names=slot_names,
+                    meshes_by_slot=meshes_by_slot,
+                    extrude_cache=local_extrude_cache,
+                    stats=stats,
+                    path_cache=path_cache,
+                )
+                del in_flight[next_commit_index]
+                live_estimated_bytes = 0
+                for live_batch, _live_future, _live_mode in in_flight.values():
+                    live_estimated_bytes = _saturating_add_bytes(
+                        live_estimated_bytes,
+                        live_batch.cost.estimated_bytes,
+                    )
+                next_commit_index += 1
+                del batch, computed, entry, future, mode
+        stats["native_parallel_wall_seconds"] = (
+            time.perf_counter() - parallel_started
+        )
+
+        _flush_native_buffers(meshes_by_slot, stats)
+        if extrude_cache is not None and local_extrude_cache is not None:
+            extrude_cache.update(local_extrude_cache)
+    except Exception as exc:
+        return None, type(exc).__name__
+
+    return NativeVectorMeshResult(
+        meshes_by_slot=meshes_by_slot,
+        stats=stats,
+    ), ""
 
 
 def _run_native_job_batch(

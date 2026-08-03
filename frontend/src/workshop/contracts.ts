@@ -27,6 +27,7 @@ export type {
   WorkshopPermissionName,
   WorkshopPickedImage,
   WorkshopProjectRecord,
+  WorkshopRaster,
   WorkshopRecipeSource,
   WorkshopRpcMethod,
   WorkshopRpcRequest,

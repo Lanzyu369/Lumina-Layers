@@ -25,6 +25,7 @@ import numpy as np
 from fastapi import UploadFile
 from fastapi.testclient import TestClient
 from PIL import Image
+import pytest
 
 from api.app import app
 from api.dependencies import get_session_store, get_file_registry, get_worker_pool
@@ -81,6 +82,27 @@ def teardown_module(module):
 setup_module(None)
 
 client: TestClient = TestClient(app)
+
+
+async def _timed_submit_via_preview_mock(
+    *args: object,
+    **kwargs: object,
+) -> tuple[object, dict[str, float]]:
+    return await _mock_pool.submit(*args, **kwargs), {}
+
+
+@pytest.fixture(autouse=True)
+def _keep_preview_pool_timing_opt_in() -> object:
+    """Keep legacy submit assertions while the route uses submit_timed."""
+    previous = _mock_pool.submit_timed
+    _mock_pool.submit_timed = AsyncMock(
+        side_effect=_timed_submit_via_preview_mock,
+    )
+    try:
+        yield
+    finally:
+        _mock_pool.submit_timed = previous
+
 
 # Mock cache_data returned by generate_preview_cached
 _mock_matched_rgb: np.ndarray = np.zeros((80, 120, 3), dtype=np.uint8)
@@ -262,6 +284,7 @@ def _run_preview_with_local_dependencies(
     registry: FileRegistry,
     cache: dict | None = None,
     externalize_side_effect=None,
+    worker_timing: dict[str, float] | None = None,
 ) -> tuple[object, _RecordingSessionStore]:
     """Run /api/convert/preview with isolated dependencies and temp dir."""
 
@@ -272,8 +295,10 @@ def _run_preview_with_local_dependencies(
 
     store = _RecordingSessionStore()
     pool = MagicMock(spec=WorkerPoolManager)
-    pool.submit = AsyncMock(
-        return_value=_create_worker_result_files_in_dir(tmp_path, cache=cache)
+    worker_result = _create_worker_result_files_in_dir(tmp_path, cache=cache)
+    pool.submit = AsyncMock(return_value=worker_result)
+    pool.submit_timed = AsyncMock(
+        return_value=(worker_result, dict(worker_timing or {}))
     )
     uploaded_path = tmp_path / "uploaded.png"
     Image.new("RGB", (10, 10), (0, 0, 0)).save(uploaded_path)
@@ -326,6 +351,37 @@ def _run_preview_with_local_dependencies(
                 app.dependency_overrides[dependency] = previous
 
     return response, store
+
+
+def test_preview_response_exposes_worker_pool_timing(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    timing = {
+        "queue_wait_s": 0.125,
+        "worker_execution_s": 0.75,
+        "result_delivery_s": 0.025,
+        "pool_roundtrip_s": 0.9,
+    }
+    registry = FileRegistry()
+
+    response, store = _run_preview_with_local_dependencies(
+        monkeypatch,
+        tmp_path,
+        registry=registry,
+        worker_timing=timing,
+    )
+
+    assert response.status_code == 200, response.text
+    performance = response.json()["performance_timing"]
+    assert performance["queue_wait_ms"] == 125.0
+    assert performance["worker_execution_ms"] == 750.0
+    assert performance["result_delivery_ms"] == 25.0
+    assert performance["endpoint_post_worker_ms"] >= 0.0
+
+    session_id = response.json()["session_id"]
+    store.close(session_id)
+    registry.cleanup_session(session_id)
 
 
 class TestPreviewRegistrationFailureRollback:
@@ -545,6 +601,49 @@ class TestPreviewMaterialSourceValidation:
         ensure_png.assert_not_called()
         _mock_pool.submit.assert_not_called()
 
+    def test_dynamic_material_replacements_reach_exact_worker_path(self) -> None:
+        """Task 3B replays dynamic replacements in the exact worker path."""
+        buf = _make_test_image_buf()
+        _mock_pool.submit = AsyncMock(return_value=_create_worker_result_files())
+
+        with patch(
+            "api.routers.converter.preview.ensure_png_tempfile",
+            new=AsyncMock(return_value="/tmp/uploaded.png"),
+        ) as ensure_png:
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": ("test.png", buf, "image/png")},
+                data={
+                    "material_source": "material_archive",
+                    "selected_materials": json.dumps(["mat-a", "mat-b"]),
+                    "material_dynamic_layer_count_enabled": "true",
+                    "replacement_regions": json.dumps(
+                        [
+                            {
+                                "quantized_hex": "#111111",
+                                "matched_hex": "#222222",
+                                "replacement_hex": "#333333",
+                            }
+                        ]
+                    ),
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        ensure_png.assert_awaited_once()
+        call_args = _mock_pool.submit.call_args.args
+        submitted = dict(
+            zip(inspect.signature(worker_generate_preview).parameters, call_args[1:])
+        )
+        assert submitted["material_dynamic_layer_count_enabled"] is True
+        assert submitted["replacement_regions"] == [
+            {
+                "quantized_hex": "#111111",
+                "matched_hex": "#222222",
+                "replacement_hex": "#333333",
+            }
+        ]
+
 
 # =========================================================================
 # 2. Session contains preview_cache - Requirement 5.2
@@ -685,12 +784,30 @@ class TestSessionContainsPreviewCache:
                         [f"material-{i}" for i in range(18)]
                     ),
                     "material_layer_count": "9",
+                    "material_dynamic_layer_count_enabled": "true",
+                    "material_min_layer_count": "6",
+                    "material_max_layer_count": "9",
+                    "material_delta_e00_tolerance": "0.4",
+                    "material_backing_material_index": "1",
                 },
             )
 
         assert response.status_code == 200
+        call_args = _mock_pool.submit.call_args.args
+        submitted = dict(
+            zip(inspect.signature(worker_generate_preview).parameters, call_args[1:])
+        )
+        assert submitted["material_backing_material_index"] == 1
+        assert submitted["material_dynamic_layer_count_enabled"] is True
+        assert submitted["material_min_layer_count"] == 6
+        assert submitted["material_max_layer_count"] == 9
+        assert submitted["material_delta_e00_tolerance"] == 0.4
         session_data = _test_store.get(response.json()["session_id"])
         assert session_data is not None
+        assert session_data["material_dynamic_layer_count_enabled"] is True
+        assert session_data["material_min_layer_count"] == 6
+        assert session_data["material_max_layer_count"] == 9
+        assert session_data["material_delta_e00_tolerance"] == 0.4
         cache_ref = session_data["preview_cache"]
         assert cache_ref["fields"]["material_matrix"]["dtype"] == "int8"
         assert cache_ref["fields"]["original_material_matrix"]["dtype"] == "int8"
@@ -709,6 +826,75 @@ class TestSessionContainsPreviewCache:
             loaded_cache["original_material_matrix"],
             material_matrix.astype(np.int8),
         )
+
+    def test_preview_copies_dynamic_recipes_and_benefit_curve(self) -> None:
+        recipes = [
+            {
+                "target_srgb": [240, 220, 200],
+                "matched_srgb": [238, 218, 198],
+                "actual_layer_count": 6,
+                "padding_layer_count": 0,
+                "actual_recipe_top_to_bottom": [0, 1, 0, 1, 0, 1],
+                "print_recipe_top_to_bottom": [0, 1, 0, 1, 0, 1],
+                "selected_delta_e00": 0.3,
+                "best_range_delta_e00": 0.2,
+                "fixed_max_delta_e00": 0.4,
+                "delta_e00_sacrifice": 0.1,
+                "layer_cap_options": [
+                    {
+                        "max_effective_layer_count": 6,
+                        "actual_layer_count": 6,
+                        "matched_srgb": [238, 218, 198],
+                        "actual_recipe_top_to_bottom": [0, 1, 0, 1, 0, 1],
+                        "print_recipe_top_to_bottom": [0, 1, 0, 1, 0, 1],
+                        "delta_e00": 0.3,
+                    }
+                ],
+            }
+        ]
+        benefit_curve = [
+            {
+                "max_effective_layer_count": 6,
+                "weighted_mean_delta_e00": 0.3,
+                "marginal_delta_e00_reduction": 0.2,
+            }
+        ]
+        worker_result = _create_worker_result_files(
+            {
+                **_mock_cache,
+                "material_dynamic_layer_info": {
+                    "colors": recipes,
+                    "benefit_curve": benefit_curve,
+                },
+            }
+        )
+        _mock_pool.submit = AsyncMock(return_value=worker_result)
+
+        with (
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+            patch(
+                "api.routers.converter.preview.generate_segmented_glb",
+                return_value=None,
+            ),
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={
+                    "image": ("test.png", _make_test_image_buf(), "image/png")
+                },
+                data={
+                    "material_source": "material_archive",
+                    "selected_materials": json.dumps(["mat-a", "mat-b"]),
+                    "material_dynamic_layer_count_enabled": "true",
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["material_dynamic_recipes"] == recipes
+        assert response.json()["material_layer_benefit_curve"] == benefit_curve
 
     def test_preview_adopts_worker_cache_artifact_ref(self) -> None:
         """Worker-side cache artifacts should become the session preview cache."""
@@ -1697,6 +1883,7 @@ class TestSvgLargeFormatWarnings:
         worker_result = _create_worker_result_files()
         pool = MagicMock(spec=WorkerPoolManager)
         pool.submit = AsyncMock(return_value=worker_result)
+        pool.submit_timed = AsyncMock(return_value=(worker_result, {}))
 
         upload = UploadFile(filename="", file=_make_test_image_buf())
 

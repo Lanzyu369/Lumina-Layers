@@ -652,7 +652,7 @@ def test_native_worker_keeps_pure_global_replacement_flow(tmp_path) -> None:
         width_mm=10.0,
         height_mm=10.0,
     )
-    received_replacements: list[dict[str, str]] = []
+    received_replacements: list[dict[str, str] | list[dict[str, str]]] = []
     tile_colors: list[tuple[int, int, int]] = []
 
     class _FakeVectorProcessor(_SlicerCompatibleProcessor):
@@ -663,10 +663,10 @@ def test_native_worker_keeps_pure_global_replacement_flow(tmp_path) -> None:
         def analyze_svg(
             self,
             *,
-            color_replacements: dict[str, str],
+            color_replacements: dict[str, str] | list[dict[str, str]],
             **_kwargs: object,
         ) -> VectorAnalysis:
-            received_replacements.append(dict(color_replacements))
+            received_replacements.append(color_replacements)
             analysis.matched_shapes[0]["matched_rgb"] = (0, 255, 0)
             analysis.matched_shapes[0]["recipe"] = [2, 2, 2, 2, 2]
             return analysis
@@ -700,7 +700,9 @@ def test_native_worker_keeps_pure_global_replacement_flow(tmp_path) -> None:
         result = worker_generate_large_format_svg_native("image.svg", "lut.npy", params)
 
     try:
-        assert received_replacements == [{"#ff0000": "#00ff00"}]
+        assert received_replacements == [
+            [{"matched_hex": "#ff0000", "replacement_hex": "#00ff00"}]
+        ]
         assert tile_colors == [(0, 255, 0)]
         assert result["tile_count"] == 1
     finally:

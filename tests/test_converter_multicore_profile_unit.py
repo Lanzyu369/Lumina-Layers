@@ -13,6 +13,7 @@ from scripts.profile_converter_multicore import (
     MATERIAL_PALETTES,
     ProfileCase,
     _ResourceSampler,
+    _build_vector_override_context,
     _canonical_triangle_sha256,
     _cleanup_result_files,
     _extract_vector_timings,
@@ -68,6 +69,102 @@ def test_build_pipeline_context_uses_quality_locked_profile_settings(
     assert ctx["target_width_mm"] == 299.0
     assert ctx["structure_mode"] == "single-sided"
     assert ctx["retain_scene_for_profile"] is True
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    ["matched-rgb", "recipe", "combined"],
+)
+def test_build_vector_override_context_writes_deterministic_private_artifacts(
+    tmp_path: Path,
+    scenario: str,
+) -> None:
+    from core.preview_analysis_cache import REQUIRED_PREVIEW_ANALYSIS_REUSE
+
+    matched_rgb = np.zeros((6, 8, 3), dtype=np.uint8)
+    matched_rgb[:, :4] = [255, 0, 0]
+    matched_rgb[:, 4:] = [0, 0, 255]
+    material_matrix = np.ones((6, 8, 5), dtype=np.int16)
+    material_matrix[:, 4:] = 3
+    mask_solid = np.ones((6, 8), dtype=bool)
+    mask_solid[0, 0] = False
+    preview_result = {
+        "cache": {
+            "matched_rgb": matched_rgb,
+            "height_identity_rgb": matched_rgb.copy(),
+            "material_matrix": material_matrix,
+            "mask_solid": mask_solid,
+            "vector_parse_clip_cache_blob": b"parse-clip-reference",
+        }
+    }
+
+    overrides = _build_vector_override_context(
+        preview_result,
+        output_dir=tmp_path,
+        scenario=scenario,
+    )
+
+    saved_matched = np.load(overrides["matched_rgb_path"])
+    saved_identity = np.load(overrides["height_identity_rgb_path"])
+    saved_material = np.load(overrides["material_matrix_path"])
+    saved_mask = np.load(overrides["mask_solid_path"])
+    assert np.array_equal(saved_identity, matched_rgb)
+    assert np.array_equal(saved_mask, mask_solid)
+    assert overrides["reuse_preview_analysis"] == REQUIRED_PREVIEW_ANALYSIS_REUSE
+    assert Path(overrides["vector_parse_clip_cache_path"]).read_bytes() == (
+        b"parse-clip-reference"
+    )
+    fixture = overrides["profile_override_fixture"]
+    assert fixture["scenario"] == scenario
+    assert fixture["grid_shape"] == [6, 8]
+    assert fixture["selected_pixel_count"] > 0
+    assert "target_rgb" not in fixture
+
+    if scenario in {"matched-rgb", "combined"}:
+        assert not np.array_equal(saved_matched, matched_rgb)
+        assert not np.array_equal(saved_material, material_matrix)
+    else:
+        assert np.array_equal(saved_matched, matched_rgb)
+        assert np.array_equal(saved_material, material_matrix)
+
+    if scenario in {"recipe", "combined"}:
+        assert overrides["recipe_overrides"][0]["region_id"] == (
+            "profile-override-region"
+        )
+        assert Path(overrides["recipe_override_masks_path"]).is_file()
+    else:
+        assert overrides["recipe_overrides"] is None
+        assert overrides["recipe_override_masks_path"] is None
+
+
+def test_semantic_snapshot_hashes_override_arrays_from_paths(
+    tmp_path: Path,
+) -> None:
+    matched_rgb = np.arange(36, dtype=np.uint8).reshape(3, 4, 3)
+    identity_rgb = np.flip(matched_rgb, axis=1).copy()
+    material_matrix = np.arange(24, dtype=np.int16).reshape(3, 4, 2)
+    mask_solid = np.ones((3, 4), dtype=bool)
+    paths = {}
+    for name, array in (
+        ("matched_rgb", matched_rgb),
+        ("height_identity_rgb", identity_rgb),
+        ("material_matrix", material_matrix),
+        ("mask_solid", mask_solid),
+    ):
+        path = tmp_path / f"{name}.npy"
+        np.save(path, array)
+        paths[f"{name}_path"] = str(path)
+
+    snapshot = semantic_snapshot(paths)
+
+    assert snapshot["matched_rgb"] == profile_module._array_summary(matched_rgb)
+    assert snapshot["height_identity_rgb"] == profile_module._array_summary(
+        identity_rgb
+    )
+    assert snapshot["material_matrix"] == profile_module._array_summary(
+        material_matrix
+    )
+    assert snapshot["mask_solid"] == profile_module._array_summary(mask_solid)
 
 
 def _scene_with_geometry_order(order: tuple[str, ...]) -> trimesh.Scene:
@@ -202,6 +299,39 @@ def test_semantic_snapshot_changes_when_texture_pixels_change() -> None:
     blue = semantic_snapshot({"scene": _textured_scene((0, 0, 255))})
 
     assert red["geometry"] != blue["geometry"]
+
+
+def test_semantic_snapshot_supports_solid_pbr_material_without_uv() -> None:
+    def _solid_material_scene(
+        color: tuple[int, int, int, int],
+    ) -> trimesh.Scene:
+        source = trimesh.creation.box(extents=(2.0, 1.0, 0.4))
+        material = trimesh.visual.material.PBRMaterial(
+            baseColorFactor=np.asarray(color, dtype=np.uint8),
+        )
+        visual = trimesh.visual.texture.TextureVisuals(material=material)
+        mesh = trimesh.Trimesh(
+            vertices=np.asarray(source.vertices),
+            faces=np.asarray(source.faces),
+            visual=visual,
+            process=False,
+        )
+        return trimesh.Scene(mesh)
+
+    red = semantic_snapshot(
+        {"scene": _solid_material_scene((255, 0, 0, 255))}
+    )
+    blue = semantic_snapshot(
+        {"scene": _solid_material_scene((0, 0, 255, 255))}
+    )
+
+    red_visual = next(iter(red["geometry"].values()))["visual"]
+    blue_visual = next(iter(blue["geometry"].values()))["visual"]
+    assert red_visual["kind"] == "texture"
+    assert red_visual["uv"] is None
+    assert red_visual["material_baseColorFactor"] != (
+        blue_visual["material_baseColorFactor"]
+    )
 
 
 def test_canonical_triangle_hash_preserves_face_winding() -> None:
@@ -559,15 +689,31 @@ def test_archive_summary_normalizes_generated_source_filename(
 def test_summarize_runs_reports_cold_warm_median_and_p90() -> None:
     summary = summarize_runs(
         [
-            {"total_s": 9.0, "peak_rss_mb": 100.0},
-            {"total_s": 5.0, "peak_rss_mb": 110.0},
-            {"total_s": 7.0, "peak_rss_mb": 120.0},
+            {
+                "total_s": 9.0,
+                "rss_at_start_mb": 90.0,
+                "peak_rss_mb": 100.0,
+                "peak_rss_increase_mb": 10.0,
+            },
+            {
+                "total_s": 5.0,
+                "rss_at_start_mb": 95.0,
+                "peak_rss_mb": 110.0,
+                "peak_rss_increase_mb": 15.0,
+            },
+            {
+                "total_s": 7.0,
+                "rss_at_start_mb": 100.0,
+                "peak_rss_mb": 120.0,
+                "peak_rss_increase_mb": 20.0,
+            },
         ]
     )
     assert summary["cold"]["total_s"] == 9.0
     assert summary["warm_median"]["total_s"] == 6.0
     assert summary["p90"]["total_s"] == pytest.approx(6.8)
     assert summary["peak"]["peak_rss_mb"] == 120.0
+    assert summary["peak"]["peak_rss_increase_mb"] == 20.0
 
 
 def test_build_report_omits_absolute_source_and_material_paths(
@@ -781,8 +927,18 @@ def test_cleanup_result_files_removes_pipeline_result_tuple_artifacts(
 
 def test_extract_vector_timings_accepts_current_pipeline_key() -> None:
     assert _extract_vector_timings(
-        {"vector_timing": {"parse_s": 1.25}}
-    ) == {"parse_s": 1.25}
+        {
+            "vector_timing": {
+                "parse_s": 1.25,
+                "native_mesh_parallel_workers": 3,
+                "native_mesh_parallel_wall_s": 1.0,
+            }
+        }
+    ) == {
+        "parse_s": 1.25,
+        "native_mesh_parallel_workers": 3,
+        "native_mesh_parallel_wall_s": 1.0,
+    }
 
 
 def test_resource_sampler_uses_low_overhead_default_interval() -> None:
@@ -813,6 +969,51 @@ def test_parse_args_supports_external_sampling_without_cprofile(
     assert args.timing_only is True
 
 
+def test_parse_args_supports_vector_override_scenario(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "input.svg"
+    source.write_text("<svg/>", encoding="utf-8")
+
+    args = _parse_args(
+        [
+            "--kind",
+            "vector",
+            "--input",
+            str(source),
+            "--phase",
+            "generate",
+            "--override-scenario",
+            "combined",
+        ]
+    )
+
+    assert args.override_scenario == "combined"
+
+
+def test_parse_args_rejects_removed_in_process_reference_strategy(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "input.svg"
+    source.write_text("<svg/>", encoding="utf-8")
+
+    with pytest.raises(SystemExit):
+        _parse_args(
+            [
+                "--kind",
+                "vector",
+                "--input",
+                str(source),
+                "--phase",
+                "generate",
+                "--override-scenario",
+                "combined",
+                "--override-strategy",
+                "full-canvas-reference",
+            ]
+        )
+
+
 def test_execute_case_can_disable_cprofile(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -837,19 +1038,123 @@ def test_execute_case_can_disable_cprofile(
             "_hifi_timings": {
                 "mesh_gen_s": 0.25,
                 "mesh_parallelism_workers": 2,
+                "mesh_parallelism_limit": "cpu_fair_share",
+                "mesh_parallelism_effective_cpu": 4,
+                "mesh_parallelism_outer_demand": 2,
+                "mesh_parallelism_cpu_fair_share": 2,
+                "mesh_parallelism_memory_ceiling": 3,
+                "mesh_parallelism_demand_fallback": False,
             },
         },
     )
-    monkeypatch.setenv("LUMINA_RASTER_PARALLELISM", "4")
+    monkeypatch.delenv("LUMINA_RASTER_PARALLELISM", raising=False)
 
     metrics = execute_case(case, "preview", enable_cprofile=False)
 
     assert metrics["cprofile"] == ""
+    assert metrics["queue_wait_s"] == 0.0
+    assert metrics["worker_execution_s"] == pytest.approx(
+        metrics["total_s"]
+    )
+    assert metrics["rss_at_start_mb"] > 0.0
+    assert metrics["peak_rss_mb"] >= metrics["rss_at_start_mb"]
+    assert metrics["peak_rss_increase_mb"] == pytest.approx(
+        metrics["peak_rss_mb"] - metrics["rss_at_start_mb"]
+    )
     assert metrics["hifi_timings"]["mesh_gen_s"] == 0.25
     assert metrics["parallelism"] == {
-        "env_var": "LUMINA_RASTER_PARALLELISM",
-        "requested": "4",
-        "effective_workers": 2,
+        "requested": "auto",
+        "observed_workers": 2,
+        "native_workers": None,
+        "effective_cpu": 4,
+        "cpu_topology": None,
+        "cpu_scheduling_policy": None,
+        "performance_cpu": None,
+        "outer_demand": 2,
+        "cpu_fair_share": 2,
+        "memory_ceiling": 3,
+        "limiting_reason": "cpu_fair_share",
+        "demand_snapshot_fallback": False,
+        "native_inflight_limit": None,
+        "native_max_estimated_batch_bytes": None,
+        "native_oversized_serial_batches": None,
+    }
+
+
+def test_parallelism_metadata_combines_vector_plan_and_native_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LUMINA_VECTOR_PARALLELISM", raising=False)
+
+    metadata = profile_module._parallelism_metadata(
+        "vector",
+        hifi_timings={},
+        vector_timings={
+            "material_parallelism_workers": 1,
+            "material_parallelism_limit": "cpu_fair_share",
+            "material_parallelism_effective_cpu": 4,
+            "material_parallelism_cpu_topology": "heterogeneous",
+            "material_parallelism_cpu_scheduling_policy": (
+                "os_core_type_scheduler"
+            ),
+            "material_parallelism_performance_cpu": 2,
+            "material_parallelism_outer_demand": 2,
+            "material_parallelism_cpu_fair_share": 2,
+            "material_parallelism_memory_ceiling": 3,
+            "material_parallelism_demand_fallback": False,
+            "native_mesh_parallel_workers": 2,
+            "native_mesh_parallel_inflight_limit": 3,
+            "native_mesh_parallel_max_estimated_batch_bytes": 402_653_184,
+            "native_mesh_parallel_oversized_serial_batches": 0,
+        },
+    )
+
+    assert metadata == {
+        "requested": "auto",
+        "observed_workers": 1,
+        "native_workers": 2,
+        "effective_cpu": 4,
+        "cpu_topology": "heterogeneous",
+        "cpu_scheduling_policy": "os_core_type_scheduler",
+        "performance_cpu": 2,
+        "outer_demand": 2,
+        "cpu_fair_share": 2,
+        "memory_ceiling": 3,
+        "limiting_reason": "cpu_fair_share",
+        "demand_snapshot_fallback": False,
+        "native_inflight_limit": 3,
+        "native_max_estimated_batch_bytes": 402_653_184,
+        "native_oversized_serial_batches": 0,
+    }
+
+
+def test_parallelism_metadata_keeps_legacy_reports_readable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LUMINA_RASTER_PARALLELISM", raising=False)
+
+    metadata = profile_module._parallelism_metadata(
+        "raster",
+        hifi_timings={"mesh_parallelism_workers": 2},
+        vector_timings={},
+    )
+
+    assert metadata == {
+        "requested": "auto",
+        "observed_workers": 2,
+        "native_workers": None,
+        "effective_cpu": None,
+        "cpu_topology": None,
+        "cpu_scheduling_policy": None,
+        "performance_cpu": None,
+        "outer_demand": None,
+        "cpu_fair_share": None,
+        "memory_ceiling": None,
+        "limiting_reason": None,
+        "demand_snapshot_fallback": None,
+        "native_inflight_limit": None,
+        "native_max_estimated_batch_bytes": None,
+        "native_oversized_serial_batches": None,
     }
 
 
