@@ -726,7 +726,13 @@ def _vector_outline_union_geometry(matched_shapes):
     return union
 
 
-def _resolve_vector_outline_z_span(ctx: dict, analysis) -> tuple[float, float]:
+def _resolve_vector_outline_z_span(
+    ctx: dict,
+    analysis,
+    *,
+    export_color_mode: object | None = None,
+    layer_height_mm: float | None = None,
+) -> tuple[float, float]:
     """Return the Z span that a vector outline must cover.
     返回矢量 Outline 应覆盖的 Z 向范围。
 
@@ -740,7 +746,11 @@ def _resolve_vector_outline_z_span(ctx: dict, analysis) -> tuple[float, float]:
     矢量分支不经过 S08，没有 ``total_layers`` 可用；这里按
     ``VectorProcessor.build_mesh`` 的 Z 轴布局计算外轮廓高度。
     """
-    layer_h = float(PrinterConfig.LAYER_HEIGHT)
+    layer_h = (
+        _resolve_vector_layer_height_mm(ctx)
+        if layer_height_mm is None
+        else float(layer_height_mm)
+    )
     try:
         spacer_thick = float(ctx.get("spacer_thick", 1.6) or 1.6)
     except (TypeError, ValueError):
@@ -755,7 +765,11 @@ def _resolve_vector_outline_z_span(ctx: dict, analysis) -> tuple[float, float]:
     color_height_mm = num_layers * layer_h
 
     structure_mode_text = str(ctx.get("structure_mode", "") or "")
-    color_mode_text = str(ctx.get("color_mode", "") or "")
+    color_mode_text = str(
+        export_color_mode
+        if export_color_mode is not None
+        else ctx.get("color_mode", "")
+    )
     is_double = "双面" in structure_mode_text or "Double" in structure_mode_text
     is_5color = "5-Color Extended" in color_mode_text
 
@@ -776,6 +790,8 @@ def _resolve_vector_outline_z_span(ctx: dict, analysis) -> tuple[float, float]:
         if np.isfinite(coating_height_mm) and coating_height_mm > 0:
             coating_layers = max(1, int(round(coating_height_mm / layer_h)))
             z_min = -coating_layers * layer_h
+            if is_double and not is_5color:
+                z_max += coating_layers * layer_h
 
     if not np.isfinite(z_max) or z_max <= z_min:
         z_max = z_min + backing_height_mm
@@ -1061,8 +1077,13 @@ def _generate_vector_outline_mesh(
         )
         return None
 
-    layer_h = float(PrinterConfig.LAYER_HEIGHT)
-    z_min_mm, z_max_mm = _resolve_vector_outline_z_span(ctx, analysis)
+    layer_h = _resolve_vector_layer_height_mm(ctx)
+    z_min_mm, z_max_mm = _resolve_vector_outline_z_span(
+        ctx,
+        analysis,
+        export_color_mode=export_color_mode,
+        layer_height_mm=layer_h,
+    )
     thickness_mm = max(layer_h, z_max_mm - z_min_mm)
     outline_layers = max(1, int(round(thickness_mm / layer_h)))
     extrude_height_units = float(outline_layers)  # height in pre-scale units

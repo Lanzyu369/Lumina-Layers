@@ -58,6 +58,33 @@ def _parse_outline_slot(slot_str: str, num_materials: int) -> int:
         return 0
 
 
+def _dilate_mask_with_outline_padding(
+    mask_solid: np.ndarray,
+    outline_width_px: int,
+) -> tuple[np.ndarray, int]:
+    """Dilate a mask without clipping expansion at image boundaries.
+    对掩码加边后膨胀，避免图像边界裁掉外扩区域。
+    """
+    pad = outline_width_px + 1
+    mask_uint8 = mask_solid.astype(np.uint8) * 255
+    padded_mask = cv2.copyMakeBorder(
+        mask_uint8,
+        pad,
+        pad,
+        pad,
+        pad,
+        cv2.BORDER_CONSTANT,
+        value=0,
+    )
+    kernel = np.ones((3, 3), np.uint8)
+    dilated_mask = cv2.dilate(
+        padded_mask,
+        kernel,
+        iterations=outline_width_px,
+    )
+    return dilated_mask > 0, pad
+
+
 def _generate_outline_mesh(
     mask_solid: np.ndarray,
     pixel_scale: float,
@@ -95,21 +122,18 @@ def _generate_outline_mesh(
         f"Thickness: {outline_thickness_mm}mm = {outline_layers} layers"
     )
 
-    # Pad the mask before dilation so edges touching image boundaries
-    # can still expand outward.
-    pad = outline_width_px + 1
-    mask_uint8 = mask_solid.astype(np.uint8) * 255
-    padded_mask = cv2.copyMakeBorder(mask_uint8, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=0)
-
-    # Dilate the padded mask outward
-    kernel = np.ones((3, 3), np.uint8)
-    dilated = cv2.dilate(padded_mask, kernel, iterations=outline_width_px)
+    # Pad before dilation so edge-touching geometry can expand outward.
+    dilated_mask, pad = _dilate_mask_with_outline_padding(
+        mask_solid,
+        outline_width_px,
+    )
 
     # Also pad the original mask for subtraction
+    mask_uint8 = mask_solid.astype(np.uint8) * 255
     padded_original = cv2.copyMakeBorder(mask_uint8, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=0)
 
     # Ring = dilated minus original (in padded space)
-    ring_mask = (dilated > 0) & ~(padded_original > 0)
+    ring_mask = dilated_mask & ~(padded_original > 0)
 
     # Use padded dimensions for mesh generation
     h, w = ring_mask.shape
@@ -290,6 +314,7 @@ def run(ctx: dict) -> dict:
         - coating_height_mm (float): 涂层高度
         - enable_outline (bool): 启用描边
         - outline_width (float): 描边宽度
+        - structure_mode (str): 单面或双面结构模式
         - free_color_set (set | None): 自由颜色集合
         - add_loop (bool): 添加挂件环
         - loop_info (dict | None): 挂件环信息
@@ -325,10 +350,27 @@ def run(ctx: dict) -> dict:
     coating_height_mm = ctx.get("coating_height_mm", 0.08)
     enable_outline = ctx.get("enable_outline", False)
     outline_width = ctx.get("outline_width", 2.0)
+    structure_mode_text = str(ctx.get("structure_mode", "") or "")
+    is_double_sided = "双面" in structure_mode_text or "Double" in structure_mode_text
     free_color_set = ctx.get("free_color_set")
     add_loop = ctx.get("add_loop", False)
     loop_info = ctx.get("loop_info")
     boundary_geometry = ctx.get("boundary_geometry")
+    boundary_coating_geometry = boundary_geometry
+    boundary_outline_geometry = None
+    boundary_pad_pixels = 0
+    if boundary_geometry is not None and enable_outline:
+        boundary_outline_width_px = max(
+            1,
+            int(round(outline_width / max(pixel_scale, 1e-9))),
+        )
+        boundary_coating_geometry = boundary_geometry.buffer(
+            float(boundary_outline_width_px)
+        )
+        boundary_outline_geometry = boundary_coating_geometry.difference(
+            boundary_geometry
+        )
+        boundary_pad_pixels = boundary_outline_width_px + 1
 
     loop_added = False
     outline_added = False
@@ -493,13 +535,15 @@ def run(ctx: dict) -> dict:
         try:
             coating_layers = max(1, int(round(coating_height_mm / PrinterConfig.LAYER_HEIGHT)))
             _log.debug(f"Generating coating: height={coating_height_mm}mm ({coating_layers} layers), bottom side")
+            coating_pad_px = 0
             if boundary_geometry is not None:
                 coating_mesh = _generate_boundary_fill_mesh(
                     mesher=mesher,
-                    boundary_geometry=boundary_geometry,
+                    boundary_geometry=boundary_coating_geometry,
                     target_h=target_h,
                     target_w=target_w,
                     num_layers=coating_layers,
+                    pad_pixels=boundary_pad_pixels,
                 )
             else:
                 # Determine coating coverage area
@@ -509,26 +553,48 @@ def run(ctx: dict) -> dict:
                 if enable_outline:
                     _log.debug(f"Extending coating to cover outline area (width={outline_width}mm)")
                     outline_width_px = max(1, int(round(outline_width / pixel_scale)))
-                    kernel = np.ones((3, 3), np.uint8)
-                    mask_uint8 = mask_solid.astype(np.uint8) * 255
-                    dilated_mask = cv2.dilate(mask_uint8, kernel, iterations=outline_width_px)
-                    coating_mask = dilated_mask > 0
+                    coating_mask, coating_pad_px = _dilate_mask_with_outline_padding(
+                        mask_solid,
+                        outline_width_px,
+                    )
 
                 # Build a small voxel matrix for the coating
-                coating_matrix = np.full((coating_layers, target_h, target_w), -1, dtype=int)
+                coating_matrix = np.full(
+                    (coating_layers, *coating_mask.shape),
+                    -1,
+                    dtype=int,
+                )
                 coating_slice = np.where(coating_mask, 0, -1).astype(int)
                 coating_matrix[:] = coating_slice[np.newaxis, :, :]
 
-                coating_mesh = mesher.generate_mesh(coating_matrix, 0, target_h)
+                coating_mesh = mesher.generate_mesh(
+                    coating_matrix,
+                    0,
+                    coating_mask.shape[0],
+                )
             if coating_mesh and len(coating_mesh.vertices) > 0:
                 # Transform XY same as model, Z same layer height
                 coat_transform = np.eye(4)
                 coat_transform[0, 0] = pixel_scale
                 coat_transform[1, 1] = pixel_scale
                 coat_transform[2, 2] = PrinterConfig.LAYER_HEIGHT
+                coat_transform[0, 3] = -coating_pad_px * pixel_scale
+                coat_transform[1, 3] = -coating_pad_px * pixel_scale
                 # Shift down so coating sits below the model (Z < 0)
                 coat_transform[2, 3] = -coating_layers * PrinterConfig.LAYER_HEIGHT
                 coating_mesh.apply_transform(coat_transform)
+                if is_double_sided:
+                    top_coating_mesh = coating_mesh.copy()
+                    top_coating_mesh.apply_translation(
+                        [
+                            0.0,
+                            0.0,
+                            (total_layers + coating_layers) * PrinterConfig.LAYER_HEIGHT,
+                        ]
+                    )
+                    coating_mesh = trimesh.util.concatenate(
+                        [coating_mesh, top_coating_mesh]
+                    )
                 coating_mesh.visual.face_colors = [200, 200, 200, 80]  # Semi-transparent grey
                 coating_name = "Coating"
                 coating_mesh.metadata["name"] = coating_name
@@ -552,6 +618,8 @@ def run(ctx: dict) -> dict:
                 coating_mm = coating_layers * PrinterConfig.LAYER_HEIGHT
                 outline_thickness_mm += coating_mm
                 outline_z_offset = -coating_mm
+                if is_double_sided:
+                    outline_thickness_mm += coating_mm
                 _log.debug(f"Outline extended to cover coating: total_thickness={outline_thickness_mm}mm")
 
             _log.debug(
@@ -559,16 +627,14 @@ def run(ctx: dict) -> dict:
                 f"thickness={outline_thickness_mm}mm (z_offset={outline_z_offset}mm)"
             )
             if boundary_geometry is not None:
-                outline_width_px = max(1, int(round(outline_width / max(pixel_scale, 1e-9))))
-                ring_geometry = boundary_geometry.buffer(float(outline_width_px)).difference(boundary_geometry)
                 outline_layers = max(1, int(round(outline_thickness_mm / PrinterConfig.LAYER_HEIGHT)))
                 outline_mesh = _generate_boundary_fill_mesh(
                     mesher=mesher,
-                    boundary_geometry=ring_geometry,
+                    boundary_geometry=boundary_outline_geometry,
                     target_h=target_h,
                     target_w=target_w,
                     num_layers=outline_layers,
-                    pad_pixels=outline_width_px + 1,
+                    pad_pixels=boundary_pad_pixels,
                 )
             else:
                 outline_mesh = _generate_outline_mesh(
