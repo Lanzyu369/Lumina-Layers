@@ -225,6 +225,7 @@ def test_refinement_reuses_one_workspace_for_shared_subset(
         "generate_candidate_recipes",
         _record_generation,
     )
+    inverse_refinement._candidate_recipe_index_template.cache_clear()
 
     batched = refine_material_matches(
         target_srgb=target_srgb,
@@ -250,6 +251,66 @@ def test_refinement_reuses_one_workspace_for_shared_subset(
         )
         assert batched.delta_e[index] == expected.delta_e[0]
         assert batched.improved_mask[index] == expected.improved_mask[0]
+    inverse_refinement._candidate_recipe_index_template.cache_clear()
+
+
+def test_bounded_subset_recipes_reuses_deterministic_index_template(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Different material subsets reuse one shape-equivalent recipe template."""
+
+    original_generate = inverse_refinement.generate_candidate_recipes
+    generation_calls: list[tuple[int, int, int, int]] = []
+
+    def _record_generation(
+        *,
+        material_count: int,
+        layer_count: int,
+        candidate_budget: int,
+        seed: int,
+    ):
+        generation_calls.append(
+            (material_count, layer_count, candidate_budget, seed),
+        )
+        return original_generate(
+            material_count=material_count,
+            layer_count=layer_count,
+            candidate_budget=candidate_budget,
+            seed=seed,
+        )
+
+    monkeypatch.setattr(
+        inverse_refinement,
+        "generate_candidate_recipes",
+        _record_generation,
+    )
+    inverse_refinement._candidate_recipe_index_template.cache_clear()
+
+    first = inverse_refinement._bounded_subset_recipes(
+        subset=np.asarray([0, 1, 2, 3], dtype=np.int32),
+        depth=3,
+        budget=16,
+        seed=7,
+    )
+    second = inverse_refinement._bounded_subset_recipes(
+        subset=np.asarray([4, 5, 6, 7], dtype=np.int32),
+        depth=3,
+        budget=16,
+        seed=7,
+    )
+    inverse_refinement._bounded_subset_recipes(
+        subset=np.asarray([4, 5, 6, 7], dtype=np.int32),
+        depth=3,
+        budget=16,
+        seed=8,
+    )
+
+    assert generation_calls == [
+        (4, 3, 16, 7),
+        (4, 3, 16, 8),
+    ]
+    np.testing.assert_array_equal(second, first + 4)
+    inverse_refinement._candidate_recipe_index_template.cache_clear()
 
 
 def test_refinement_builds_each_subset_once_and_parallel_results_stay_stable(
@@ -317,6 +378,7 @@ def test_refinement_builds_each_subset_once_and_parallel_results_stay_stable(
         "generate_candidate_recipes",
         _record_generation,
     )
+    inverse_refinement._candidate_recipe_index_template.cache_clear()
 
     parallel = refine_material_matches(
         target_srgb=target_srgb,
@@ -331,8 +393,9 @@ def test_refinement_builds_each_subset_once_and_parallel_results_stay_stable(
         parallelism=2,
     )
 
-    assert generation_calls == 4
+    assert generation_calls == 2
     np.testing.assert_array_equal(parallel.matched_srgb, serial.matched_srgb)
     np.testing.assert_array_equal(parallel.recipes, serial.recipes)
     np.testing.assert_array_equal(parallel.delta_e, serial.delta_e)
     np.testing.assert_array_equal(parallel.improved_mask, serial.improved_mask)
+    inverse_refinement._candidate_recipe_index_template.cache_clear()
