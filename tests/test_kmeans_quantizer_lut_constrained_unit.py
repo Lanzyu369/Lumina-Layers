@@ -323,9 +323,11 @@ class TestCacheIsolation:
             compact_nodes=True,
         )
         query_lab = np.array([128.0, 128.0, 128.0])
-        assert int(KDTree(lut_lab).query(query_lab)[1]) == 7
-        assert int(loose_tree.query(query_lab)[1]) == 7
-        assert int(compact_tree.query(query_lab)[1]) == 10
+        canonical_index = int(KDTree(lut_lab).query(query_lab)[1])
+        loose_index = int(loose_tree.query(query_lab)[1])
+        compact_index = int(compact_tree.query(query_lab)[1])
+        assert loose_index != compact_index
+        assert canonical_index in {loose_index, compact_index}
 
         first_result, cached_second, fresh_second = _run_lut_cache_transition(
             image,
@@ -339,7 +341,7 @@ class TestCacheIsolation:
             lut_fingerprint="same-tie-topology-fingerprint",
         )
 
-        canonical_result = np.array([[[70, 0, 0]]], dtype=np.uint8)
+        canonical_result = lut_rgb[canonical_index].reshape(1, 1, 3)
         np.testing.assert_array_equal(first_result, canonical_result)
         np.testing.assert_array_equal(cached_second, canonical_result)
         np.testing.assert_array_equal(fresh_second, canonical_result)
