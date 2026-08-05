@@ -5995,10 +5995,14 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       _startGlbStatusPolling(
         sid,
         (url, colorContours) =>
-          set({
+          set((state) => ({
             previewGlbUrl: url,
+            modelUrl:
+              state.enable_relief && state.autoHeightMode === "use-heightmap"
+                ? state.modelUrl
+                : null,
             ...(colorContours ? { colorContours } : {}),
-          }),
+          })),
         () => _get().sessionId,
       );
     },

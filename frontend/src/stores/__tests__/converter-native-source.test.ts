@@ -1604,7 +1604,7 @@ describe("native bundle converter flow", () => {
     ]);
   });
 
-  it("polls async preview GLB after preview returns no GLB URL", async () => {
+  it("switches from a generated GLB to an async preview GLB that arrives later", async () => {
     vi.useFakeTimers();
     try {
       mocks.convertPreview.mockResolvedValueOnce({
@@ -1626,6 +1626,12 @@ describe("native bundle converter flow", () => {
           ff0000: [[[0, 0], [1, 0], [1, 1]]],
         },
       });
+      mocks.convertGenerate.mockResolvedValueOnce({
+        status: "ok",
+        message: "Model generated",
+        download_url: "/api/files/native-model.3mf",
+        preview_3d_url: "/api/files/generated-material-model.glb",
+      });
 
       useConverterStore.setState({
         imageFile: new File(["png"], "native.png", { type: "image/png" }),
@@ -1645,6 +1651,12 @@ describe("native bundle converter flow", () => {
       } as never);
 
       await useConverterStore.getState().submitPreview();
+      await useConverterStore.getState().submitGenerate();
+
+      expect(useConverterStore.getState().modelUrl).toBe(
+        "/api/files/generated-material-model.glb",
+      );
+
       await flushGlbPoll();
       await flushGlbPoll(0);
 
@@ -1652,9 +1664,44 @@ describe("native bundle converter flow", () => {
       expect(useConverterStore.getState().previewGlbUrl).toBe(
         "/api/files/preview-ready.glb",
       );
+      expect(useConverterStore.getState().modelUrl).toBeNull();
       expect(useConverterStore.getState().colorContours).toEqual({
         ff0000: [[[0, 0], [1, 0], [1, 1]]],
       });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the generated heightmap GLB when an async flat preview arrives", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.getGlbStatus.mockResolvedValueOnce({
+        session_id: "session-heightmap-async",
+        status: "ready",
+        glb_url: "/api/files/flat-preview.glb",
+        job_token: "token-heightmap",
+        error: null,
+        color_contours: null,
+      });
+      useConverterStore.setState({
+        sessionId: "session-heightmap-async",
+        previewGlbUrl: null,
+        modelUrl: "/api/files/generated-heightmap.glb",
+        enable_relief: true,
+        autoHeightMode: "use-heightmap",
+      } as never);
+
+      useConverterStore.getState()._pollAsyncGlb();
+      await flushGlbPoll();
+      await flushGlbPoll(0);
+
+      expect(useConverterStore.getState().previewGlbUrl).toBe(
+        "/api/files/flat-preview.glb",
+      );
+      expect(useConverterStore.getState().modelUrl).toBe(
+        "/api/files/generated-heightmap.glb",
+      );
     } finally {
       vi.useRealTimers();
     }
