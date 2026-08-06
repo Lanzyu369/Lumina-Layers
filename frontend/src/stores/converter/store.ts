@@ -5995,14 +5995,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       _startGlbStatusPolling(
         sid,
         (url, colorContours) =>
-          set((state) => ({
+          set({
             previewGlbUrl: url,
-            modelUrl:
-              state.enable_relief && state.autoHeightMode === "use-heightmap"
-                ? state.modelUrl
-                : null,
+            modelUrl: null,
             ...(colorContours ? { colorContours } : {}),
-          })),
+          }),
         () => _get().sessionId,
       );
     },
@@ -7094,6 +7091,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         return null;
       }
       const sessionId = state.sessionId;
+      const glbPollSequenceAtGenerateStart = _glbPollSequence;
       const sourceSelection = resolveConverterSourceSelection(state);
       if (!sourceSelection.isReady) {
         set({
@@ -7458,8 +7456,19 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         });
         const modelUrl = normalizeStoreResourceUrl(response.preview_3d_url);
         const downloadUrl = normalizeStoreResourceUrl(response.download_url);
-        const shouldShowGeneratedHeightmapModel =
+        const latestState = useConverterStore.getState();
+        const requestedHeightmapModel =
           state.enable_relief && state.autoHeightMode === "use-heightmap";
+        const shouldShowGeneratedHeightmapModel =
+          requestedHeightmapModel &&
+          latestState.enable_relief &&
+          latestState.autoHeightMode === "use-heightmap" &&
+          _glbPollSequence === glbPollSequenceAtGenerateStart;
+        if (shouldShowGeneratedHeightmapModel) {
+          // A successful heightmap generation owns modelUrl. Cancel preview
+          // polls that started before it; any later poll may replace it.
+          _glbPollSequence += 1;
+        }
         set({
           isGenerating: false,
           // Keep previewGlbUrl as the 3D viewer source: it renders the
@@ -7474,7 +7483,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           // 高度图浮雕例外：生成 GLB 才保留逐像素高度图几何。
           modelUrl: shouldShowGeneratedHeightmapModel
             ? modelUrl
-            : useConverterStore.getState().previewGlbUrl
+            : requestedHeightmapModel || latestState.previewGlbUrl
               ? null
               : modelUrl,
           batchPreviewItems: [],

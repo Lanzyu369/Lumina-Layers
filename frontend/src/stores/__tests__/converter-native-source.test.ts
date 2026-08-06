@@ -1673,7 +1673,47 @@ describe("native bundle converter flow", () => {
     }
   });
 
-  it("keeps the generated heightmap GLB when an async flat preview arrives", async () => {
+  it("clears a normal generated GLB after switching to heightmap before polling completes", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.getGlbStatus.mockResolvedValueOnce({
+        session_id: "session-mode-switch",
+        status: "ready",
+        glb_url: "/api/files/flat-preview.glb",
+        job_token: "token-mode-switch",
+        error: null,
+        color_contours: null,
+      });
+      mocks.convertGenerate.mockResolvedValueOnce({
+        status: "ok",
+        message: "Model generated",
+        download_url: "/api/files/model.3mf",
+        preview_3d_url: "/api/files/generated-normal.glb",
+      });
+      seedLegacyGenerateState("session-mode-switch");
+
+      useConverterStore.getState()._pollAsyncGlb();
+      await useConverterStore.getState().submitGenerate();
+
+      expect(useConverterStore.getState().modelUrl).toBe(
+        "/api/files/generated-normal.glb",
+      );
+
+      useConverterStore.getState().setEnableRelief(true);
+      useConverterStore.getState().setAutoHeightMode("use-heightmap");
+      await flushGlbPoll();
+      await flushGlbPoll(0);
+
+      expect(useConverterStore.getState().previewGlbUrl).toBe(
+        "/api/files/flat-preview.glb",
+      );
+      expect(useConverterStore.getState().modelUrl).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a generated heightmap GLB by cancelling an older preview poll", async () => {
     vi.useFakeTimers();
     try {
       mocks.getGlbStatus.mockResolvedValueOnce({
@@ -1684,24 +1724,93 @@ describe("native bundle converter flow", () => {
         error: null,
         color_contours: null,
       });
-      useConverterStore.setState({
-        sessionId: "session-heightmap-async",
-        previewGlbUrl: null,
-        modelUrl: "/api/files/generated-heightmap.glb",
+      mocks.convertGenerate.mockResolvedValueOnce({
+        status: "ok",
+        message: "Model generated",
+        download_url: "/api/files/model.3mf",
+        preview_3d_url: "/api/files/generated-heightmap.glb",
+      });
+      seedLegacyGenerateState("session-heightmap-async", {
         enable_relief: true,
         autoHeightMode: "use-heightmap",
-      } as never);
+        color_height_map: { "111111": 0.5 },
+        heightmapUploadSessionId: "session-heightmap-async",
+      });
+
+      useConverterStore.getState()._pollAsyncGlb();
+      await useConverterStore.getState().submitGenerate();
+
+      expect(mocks.convertGenerate.mock.calls[0]?.[1]).toMatchObject({
+        height_mode: "heightmap",
+      });
+      expect(useConverterStore.getState().modelUrl).toBe(
+        "/api/files/generated-heightmap.glb",
+      );
+
+      await flushGlbPoll();
+      await flushGlbPoll(0);
+
+      expect(mocks.getGlbStatus).not.toHaveBeenCalled();
+      expect(useConverterStore.getState().previewGlbUrl).toBeNull();
+      expect(useConverterStore.getState().modelUrl).toBe(
+        "/api/files/generated-heightmap.glb",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a newer preview authoritative when it resolves during heightmap generation", async () => {
+    vi.useFakeTimers();
+    try {
+      const generation = deferred<{
+        status: string;
+        message: string;
+        download_url: string;
+        preview_3d_url: string;
+      }>();
+      mocks.convertGenerate.mockReturnValueOnce(generation.promise);
+      mocks.getGlbStatus.mockResolvedValueOnce({
+        session_id: "session-heightmap-newer-poll",
+        status: "ready",
+        glb_url: "/api/files/newer-preview.glb",
+        job_token: "token-newer-preview",
+        error: null,
+        color_contours: null,
+      });
+      seedLegacyGenerateState("session-heightmap-newer-poll", {
+        enable_relief: true,
+        autoHeightMode: "use-heightmap",
+        color_height_map: { "111111": 0.5 },
+        heightmapUploadSessionId: "session-heightmap-newer-poll",
+      });
+
+      const submitGenerate = useConverterStore.getState().submitGenerate();
+      expect(mocks.convertGenerate).toHaveBeenCalledOnce();
 
       useConverterStore.getState()._pollAsyncGlb();
       await flushGlbPoll();
       await flushGlbPoll(0);
 
+      expect(mocks.getGlbStatus).toHaveBeenCalledWith(
+        "session-heightmap-newer-poll",
+      );
       expect(useConverterStore.getState().previewGlbUrl).toBe(
-        "/api/files/flat-preview.glb",
+        "/api/files/newer-preview.glb",
       );
-      expect(useConverterStore.getState().modelUrl).toBe(
-        "/api/files/generated-heightmap.glb",
+
+      generation.resolve({
+        status: "ok",
+        message: "Model generated",
+        download_url: "/api/files/model.3mf",
+        preview_3d_url: "/api/files/generated-heightmap.glb",
+      });
+      await submitGenerate;
+
+      expect(useConverterStore.getState().previewGlbUrl).toBe(
+        "/api/files/newer-preview.glb",
       );
+      expect(useConverterStore.getState().modelUrl).toBeNull();
     } finally {
       vi.useRealTimers();
     }
