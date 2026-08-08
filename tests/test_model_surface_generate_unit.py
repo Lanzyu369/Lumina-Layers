@@ -180,7 +180,7 @@ def test_generate_routes_model_surface_session_to_overlay_worker(
     tmp_path,
     generate_state,
 ):
-    store, _registry, pool = generate_state
+    store, registry, pool = generate_state
     original_image_path = tmp_path / "uploaded-art.png"
     rendered_surface_art_path = tmp_path / "surface-rendered-art.svg"
     lut_path = tmp_path / "lut.npy"
@@ -250,7 +250,8 @@ def test_generate_routes_model_surface_session_to_overlay_worker(
 
     pool.submit_timed = AsyncMock(side_effect=fake_submit)
 
-    response = TestClient(app).post(
+    client = TestClient(app)
+    response = client.post(
         "/api/convert/generate",
         json={
             "session_id": sid,
@@ -292,6 +293,23 @@ def test_generate_routes_model_surface_session_to_overlay_worker(
     assert submitted_params["converter_params"]["model_enable"] is True
     assert "surface_model_path" not in submitted_params["converter_params"]
     assert response.json()["preview_3d_url"] is None
+
+    download_url = response.json()["download_url"]
+    download_file_id = download_url.rsplit("/", 1)[-1]
+    entry = registry.get_entry(download_file_id)
+    assert entry is not None
+    assert entry["lifecycle"] == "ephemeral"
+    assert entry["session_id"] != sid
+
+    close_response = client.post(
+        "/api/session/close",
+        json={"session_id": sid},
+    )
+    assert close_response.status_code == 200
+
+    download_response = client.get(download_url)
+    assert download_response.status_code == 200
+    assert download_response.content == b"3mf"
 
 
 def test_generate_maps_model_surface_known_error_to_422(
