@@ -397,7 +397,7 @@ Expected Chinese:
 Run:
 
 ```bash
-.venv/bin/python scripts/run_vitest.py run frontend/src/api/__tests__/client.test.ts
+.venv/bin/python scripts/run_vitest.py run src/api/__tests__/client.test.ts
 ```
 
 Expected: FAIL because the error code is not in `STRUCTURED_DETAIL_TRANSLATION_KEYS`.
@@ -418,7 +418,7 @@ server codes. Do not change generic 500 redaction or unknown-code fallback behav
 Run:
 
 ```bash
-.venv/bin/python scripts/run_vitest.py run frontend/src/api/__tests__/client.test.ts frontend/src/stores/__tests__/modelSurfaceStore.test.ts frontend/src/__tests__/BasicSettings.test.tsx
+.venv/bin/python scripts/run_vitest.py run src/api/__tests__/client.test.ts src/stores/__tests__/modelSurfaceStore.test.ts src/__tests__/BasicSettings.test.tsx
 ```
 
 Expected: all selected Vitest tests pass and the wrapper reports no orphan workers.
@@ -454,7 +454,7 @@ Expected: all tests pass; no whitelist or structured-field regression.
 - [ ] **Step 3: Run frontend tests and build**
 
 ```bash
-.venv/bin/python scripts/run_vitest.py run frontend/src/api/__tests__/client.test.ts frontend/src/stores/__tests__/modelSurfaceStore.test.ts frontend/src/__tests__/BasicSettings.test.tsx
+.venv/bin/python scripts/run_vitest.py run src/api/__tests__/client.test.ts src/stores/__tests__/modelSurfaceStore.test.ts src/__tests__/BasicSettings.test.tsx
 ```
 
 ```bash
