@@ -71,6 +71,9 @@ except ImportError:  # Shapely < 2.1; keep the old union path available.
 
 from api.structured_logging import get_logger
 from config import PrinterConfig, ColorSystem, VectorConfig
+from core.vector_diagnostics import (
+    SVG_INTERSECTING_COMPOUND_COMPLEXITY_DIAGNOSTIC,
+)
 
 _log = get_logger(__name__)
 
@@ -7286,6 +7289,21 @@ class VectorProcessor:
                 return None
             if len(subpath_items) == 1:
                 return subpath_items[0]["poly"]
+
+            polygon_items = [
+                item["poly"]
+                for item in subpath_items
+                if item.get("poly") is not None and not item["poly"].is_empty
+            ]
+            if (
+                polygon_items
+                and not _geometries_have_pairwise_intersections(polygon_items)
+            ):
+                return _polygonal_union_for_disjoint_items(polygon_items)
+            if len(polygon_items) > int(VectorConfig.MAX_POLYGONS):
+                raise ValueError(
+                    SVG_INTERSECTING_COMPOUND_COMPLEXITY_DIAGNOSTIC
+                )
 
             try:
                 boundaries = [

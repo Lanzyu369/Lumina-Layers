@@ -25,6 +25,7 @@ def test_log_vector_preview_timings_emits_stage_breakdown(caplog) -> None:
     }
     ctx = {
         "image_path": "example.svg",
+        "modeling_mode": "vector",
         "color_mode": "Material Archive",
         "target_width_mm": 60.0,
         "material_source": "material_archive",
@@ -32,9 +33,9 @@ def test_log_vector_preview_timings_emits_stage_breakdown(caplog) -> None:
         "grid_resolution": 2048,
     }
     analysis = SimpleNamespace(
-        shape_data=[object(), object()],
-        clipped_shapes=[object()],
-        matched_shapes=[object()],
+        shape_data=[{"color": (255, 0, 0)}, {"color": (0, 0, 255)}],
+        clipped_shapes=[{"color": (255, 0, 0)}],
+        matched_shapes=[{"color": (255, 0, 0)}],
         num_layers=5,
         num_channels=8,
     )
@@ -62,6 +63,11 @@ def test_log_vector_preview_timings_emits_stage_breakdown(caplog) -> None:
     assert record.timings["material_parallelism_limit"] == "requested"
     assert record.timings["material_parallelism_demand_fallback"] is False
     assert record.is_material_archive is True
+    assert record.modeling_mode == "vector"
+    assert record.material_source == "material_archive"
+    assert record.material_count == 8
+    assert record.layer_count == 5
+    assert record.unique_fill_count == 1
     assert record.grid_resolution == 2048
     assert record.shape_count == 2
     assert record.clipped_shape_count == 1
@@ -70,6 +76,8 @@ def test_log_vector_preview_timings_emits_stage_breakdown(caplog) -> None:
     assert record.preview_height_px == 50
     assert record.solid_pixel_count == 3
     assert record.material_matrix_shape == [2, 2, 5]
+    assert not hasattr(record, "image_path")
+    assert not hasattr(record, "actual_lut_path")
 
 
 def test_vector_preview_branch_preserves_backing_mask_in_cache() -> None:

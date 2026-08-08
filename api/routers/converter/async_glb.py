@@ -29,6 +29,7 @@ Job-token guard / 任务令牌保护:
 
 from __future__ import annotations
 
+import math
 import os
 import time
 import uuid
@@ -192,8 +193,14 @@ def schedule_glb_build(
     )
     store.put(session_id, "preview_cache", cache)
 
+    scheduled_perf_counter = time.perf_counter()
     _GLB_EXECUTOR.submit(
-        _run_glb_build_job, session_id, job_token, store, registry
+        _run_glb_build_job,
+        session_id,
+        job_token,
+        store,
+        registry,
+        scheduled_perf_counter,
     )
     log.debug(
         "GLB build scheduled",
@@ -211,6 +218,7 @@ def _run_glb_build_job(
     job_token: str,
     store: SessionStore,
     registry: FileRegistry,
+    scheduled_perf_counter: float | None = None,
 ) -> None:
     """Worker body: regenerate the segmented GLB and write it back to cache.
 
@@ -225,6 +233,11 @@ def _run_glb_build_job(
     """
 
     t_start = time.perf_counter()
+    queue_wait_ms = (
+        max(0.0, (t_start - scheduled_perf_counter) * 1000.0)
+        if scheduled_perf_counter is not None
+        else 0.0
+    )
     glb_path: str | None = None
     try:
         session_data = store.get(session_id)
@@ -339,13 +352,39 @@ def _run_glb_build_job(
         cache_updates["glb_completed_at"] = time.time()
         latest_cache = _with_cache_metadata(latest_cache, cache_updates)
         store.put(session_id, "preview_cache", latest_cache)
+        completed_at = time.perf_counter()
+        execution_ms = max(0.0, (completed_at - t_start) * 1000.0)
+        segmented_glb_timings = {}
+        raw_segmented_timings = build_cache.get("_segmented_glb_timings")
+        if isinstance(raw_segmented_timings, dict):
+            for timing_name in (
+                "downsample_s",
+                "unique_s",
+                "merge_s",
+                "mask_build_s",
+                "mesh_loop_s",
+                "backing_s",
+                "outline_s",
+                "canvas_bounds_s",
+                "export_s",
+                "total_s",
+            ):
+                try:
+                    timing_value = float(raw_segmented_timings.get(timing_name))
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(timing_value) and timing_value >= 0.0:
+                    segmented_glb_timings[timing_name] = round(timing_value, 6)
         log.info(
             "GLB build completed",
             extra={
                 "event": "converter_glb_completed",
                 "session_id": session_id,
                 "job_token": job_token,
-                "duration_ms": round((time.perf_counter() - t_start) * 1000, 1),
+                "duration_ms": round(execution_ms, 1),
+                "queue_wait_ms": round(queue_wait_ms, 3),
+                "execution_ms": round(execution_ms, 3),
+                "segmented_glb_timings": segmented_glb_timings,
                 "glb_url_set": cache_updates.get("glb_url") is not None,
             },
         )

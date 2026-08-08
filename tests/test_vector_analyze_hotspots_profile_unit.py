@@ -3,12 +3,32 @@
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
 
 from scripts.profile_vector_analyze_hotspots import (
     _build_report,
     _profile_rows_from_raw_stats,
     _render_markdown,
+    _write_synthetic_compound_fixture,
 )
+
+
+def test_write_synthetic_compound_fixture_is_reproducible(tmp_path: Path) -> None:
+    fixture_path = tmp_path / "compound-49-to-35587.svg"
+
+    metadata = _write_synthetic_compound_fixture(fixture_path)
+    payload = fixture_path.read_bytes()
+
+    assert metadata == {
+        "grid_size": 189,
+        "total_cells": 35587,
+        "path_groups": 49,
+        "viewbox_size": 160.0,
+        "sha256": "c4f7d322ca179553aeed5abf71aaa51eadbe1865bcfff060c30effc08a05f8cb",
+    }
+    assert hashlib.sha256(payload).hexdigest() == metadata["sha256"]
+    assert payload.count(b"<path ") == 49
+    assert payload.count(b"M") == 35587
 
 
 def test_profile_rows_from_raw_stats_selects_vector_hotspots() -> None:

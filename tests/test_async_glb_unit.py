@@ -416,6 +416,73 @@ class TestGlbStatusLifecycle:
         assert status["error"] == _GLB_STATUS_SAFE_ERROR
         assert "generate_segmented_glb" not in status["error"]
 
+    def test_completion_log_separates_queue_execution_and_stage_timings(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        sid = _seed_session(tmp_path)
+        job_token = "timed-job"
+        _test_store.put(
+            sid,
+            "preview_cache",
+            {
+                **_test_store.get(sid)["preview_cache"],
+                "glb_job_token": job_token,
+                "glb_url": None,
+                "glb_error": None,
+            },
+        )
+        glb_path = tmp_path / "timed.glb"
+
+        def builder(cache: dict, *, output_path: str) -> str:
+            del output_path
+            glb_path.write_bytes(b"timed-glb")
+            cache["_segmented_glb_timings"] = {
+                "mesh_loop_s": 1.25,
+                "export_s": 0.5,
+                "total_s": 1.75,
+            }
+            return str(glb_path)
+
+        monkeypatch.setattr(async_glb_module, "generate_segmented_glb", builder)
+        perf_values = iter([10.0, 12.0])
+        monkeypatch.setattr(
+            async_glb_module.time,
+            "perf_counter",
+            lambda: next(perf_values),
+        )
+        target_logger = logging.getLogger("lumina.api.routers.converter.async_glb")
+        target_logger.addHandler(caplog.handler)
+        caplog.set_level(logging.INFO, logger=target_logger.name)
+        try:
+            async_glb_module._run_glb_build_job(
+                sid,
+                job_token,
+                _test_store,
+                _test_registry,
+                scheduled_perf_counter=9.0,
+            )
+        finally:
+            target_logger.removeHandler(caplog.handler)
+
+        records = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "converter_glb_completed"
+        ]
+        assert len(records) == 1
+        record = records[0]
+        assert record.queue_wait_ms == 1000.0
+        assert record.execution_ms == 2000.0
+        assert record.segmented_glb_timings == {
+            "mesh_loop_s": 1.25,
+            "export_s": 0.5,
+            "total_s": 1.75,
+        }
+        assert str(glb_path) not in record.getMessage()
+
     def test_superseded_job_cleans_abandoned_glb(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
