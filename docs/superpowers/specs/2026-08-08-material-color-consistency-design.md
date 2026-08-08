@@ -1,7 +1,7 @@
 # Material Color Consistency Design
 
 **Date:** 2026-08-08
-**Status:** Approved direction; pending written-spec review
+**Status:** Approved for implementation
 **Scope:** LUM-20260805-001 color-calculation mismatch report only
 
 ## Goal
