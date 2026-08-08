@@ -27,6 +27,21 @@ function makeEntry(version: string): AnnouncementEntry {
 }
 
 describe("useAnnouncement", () => {
+  it("announces consistent material recipe colours", () => {
+    expect(ANNOUNCEMENTS[0]?.version).toBe("2026-08-08");
+    const items = ANNOUNCEMENTS[0]?.sections.flatMap((section) => section.items) ?? [];
+
+    expect(
+      items.some(
+        (item) =>
+          item.zh.includes("相同的耗材叠层") &&
+          item.zh.includes("动态 5–8 层") &&
+          item.en.includes("consistent simulated colour") &&
+          item.en.includes("full printable eight-layer range"),
+      ),
+    ).toBe(true);
+  });
+
   it("keeps the material-profile 3D preview fix in announcement history", () => {
     const entry = ANNOUNCEMENTS.find((item) => item.version === "2026-07-19");
     const items = entry?.sections.flatMap((section) => section.items) ?? [];
@@ -66,8 +81,8 @@ describe("useAnnouncement", () => {
   });
 
   it("announces the Creative Workshop bead-pattern workflow", () => {
-    expect(ANNOUNCEMENTS[0]?.version).toBe("2026-07-30");
-    const items = ANNOUNCEMENTS[0]?.sections.flatMap((section) => section.items) ?? [];
+    const entry = ANNOUNCEMENTS.find((item) => item.version === "2026-07-30");
+    const items = entry?.sections.flatMap((section) => section.items) ?? [];
 
     expect(
       items.some(
@@ -287,8 +302,8 @@ describe("selectAnnouncementHistory", () => {
   });
 
   it("默认历史条数足够覆盖这次 5 月更新回顾", () => {
-    expect(ANNOUNCEMENT_HISTORY_LIMIT).toBeGreaterThanOrEqual(19);
-    expect(selectAnnouncementHistory(ANNOUNCEMENTS).length).toBeGreaterThanOrEqual(19);
+    expect(ANNOUNCEMENT_HISTORY_LIMIT).toBeGreaterThanOrEqual(20);
+    expect(selectAnnouncementHistory(ANNOUNCEMENTS).length).toBeGreaterThanOrEqual(20);
     expect(selectAnnouncementHistory(ANNOUNCEMENTS).map((e) => e.version)).toContain(
       "2026-05-05",
     );

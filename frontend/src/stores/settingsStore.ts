@@ -407,6 +407,12 @@ export function deriveBackendDeviceSettingsPatch(
 
 // ========== Store ==========
 
+function clearMaterialSuggestionsForGridChange(): void {
+  void import("./converter").then(({ useConverterStore }) => {
+    useConverterStore.getState().clearMaterialSuggestions();
+  });
+}
+
 export const useSettingsStore = create<SettingsState & SettingsActions>()(
   persist(
     (set, get) => ({
@@ -491,8 +497,13 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
         invalidateGeneratedArtifacts();
       },
 
-      setEnableSolverCacheGridSelection: (enabled: boolean) =>
-        set({ enableSolverCacheGridSelection: enabled }),
+      setEnableSolverCacheGridSelection: (enabled: boolean) => {
+        if (get().enableSolverCacheGridSelection === enabled) {
+          return;
+        }
+        set({ enableSolverCacheGridSelection: enabled });
+        clearMaterialSuggestionsForGridChange();
+      },
 
       setSolverCacheGridResolution: (value: SolverCacheGridResolution) => {
         if (!SOLVER_CACHE_GRID_RESOLUTIONS.includes(value)) {
@@ -502,7 +513,14 @@ export const useSettingsStore = create<SettingsState & SettingsActions>()(
           // than corrupting the store.
           return;
         }
+        const current = get();
+        if (current.solverCacheGridResolution === value) {
+          return;
+        }
         set({ solverCacheGridResolution: value });
+        if (current.enableSolverCacheGridSelection) {
+          clearMaterialSuggestionsForGridChange();
+        }
       },
 
       setSvgPixelsPerMm: (value: number) => {

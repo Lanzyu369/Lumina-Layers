@@ -14,6 +14,7 @@ Public API
 ----------
 - ``MaterialParams``   — dataclass holding Beer-Lambert parameters for one material
 - ``forward_model``    — predict linear RGB for a full N-layer recipe
+- ``predict_material_recipe_srgb`` — predict canonical rounded sRGB for a recipe
 - ``forward_batch_model`` — vectorised per-recipe forward simulation
 - ``solve_image_colors`` — solve optimal recipes for a batch of unique colors
 - ``solve_image_colors_optimal`` — strict-optimal MITM B&B solver
@@ -170,6 +171,46 @@ def forward_model(
         mat = materials[mat_id]
         C = beer_lambert_layer(C, mat.E, mat.k, layer_height_mm)
     return C
+
+
+def predict_material_recipe_srgb(
+    recipe: np.ndarray,
+    materials: list[MaterialParams],
+    layer_height_mm: float,
+    substrate: str = "white",
+) -> np.ndarray:
+    """Predict the canonical rounded sRGB colour for a material recipe.
+    预测耗材配方的统一取整 sRGB 颜色。
+
+    Args:
+        recipe: Material indices in bottom-to-top print order.
+            (按从基底到观赏面的打印顺序排列的耗材索引)
+        materials: Available material parameters. (可用耗材参数)
+        layer_height_mm: Thickness of each layer in millimetres. (每层厚度，毫米)
+        substrate: Physical substrate colour, ``"white"`` or ``"black"``.
+            (物理基底颜色，仅支持 ``"white"`` 或 ``"black"``)
+
+    Returns:
+        A ``(3,)`` uint8 array containing rounded sRGB values.
+        (包含取整后 sRGB 值的 ``(3,)`` uint8 数组)
+
+    Raises:
+        ValueError: If ``substrate`` is unsupported. (基底类型不受支持)
+    """
+    if substrate == "white":
+        substrate_linear = np.ones(3, dtype=np.float64)
+    elif substrate == "black":
+        substrate_linear = np.zeros(3, dtype=np.float64)
+    else:
+        raise ValueError(f"Unsupported substrate: {substrate}")
+
+    predicted_linear = forward_model(
+        np.asarray(recipe, dtype=np.int32),
+        materials,
+        layer_height_mm,
+        substrate_linear,
+    )
+    return linear_to_srgb_uint8(predicted_linear).reshape(3)
 
 
 # ---------------------------------------------------------------------------

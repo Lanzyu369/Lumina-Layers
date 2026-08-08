@@ -185,6 +185,19 @@ const _materialSuggestCache = new Map<
  * 持有当前未完成请求，便于后续请求取消前者、避免状态竞态。
  */
 let _materialSuggestAbortController: AbortController | null = null;
+let _materialSuggestRequestToken = 0;
+
+function _cancelMaterialSuggestionWork() {
+  _materialSuggestRequestToken += 1;
+  _materialSuggestAbortController?.abort();
+  _materialSuggestAbortController = null;
+  return {
+    materialSuggestions: null,
+    materialSuggestionsLoading: false,
+    materialSuggestionsTargetHex: null,
+    materialSuggestionsError: null,
+  };
+}
 
 /**
  * In-flight gradient-groups request controller.
@@ -210,11 +223,13 @@ function _materialSuggestCacheKey(params: {
   layerCount: number;
   layerHeightMm: number;
   substrate: string;
+  gridResolution?: number;
   targetHex: string;
 }): string {
   const dirs = params.directoryNames.join(",");
   const hex = params.targetHex.replace(/^#/, "").toLowerCase();
-  return `${dirs}|${params.layerCount}|${params.layerHeightMm}|${params.substrate}|${hex}`;
+  const gridResolution = params.gridResolution ?? "default";
+  return `${dirs}|${params.layerCount}|${params.layerHeightMm}|${params.substrate}|${gridResolution}|${hex}`;
 }
 
 export const RAW_EXTENSIONS_CONVERTER = new Set([
@@ -3713,14 +3728,17 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       set({
         selectedMaterialDirNames: names,
         materialBackingMaterialDirName: nextBacking,
+        ..._cancelMaterialSuggestionWork(),
         ...buildPreviewSessionResetState(state, true),
       });
     },
-    setMaterialLayerCount: (count: number) =>
+    setMaterialLayerCount: (count: number) => {
+      const materialSuggestionReset = _cancelMaterialSuggestionWork();
       set((state) => {
         const materialLayerCount = clampValue(Math.round(count), 1, 20);
         return {
           materialLayerCount,
+          ...materialSuggestionReset,
           heightmap_max_height: state.enable_relief
             ? clampValue(
                 state.heightmap_max_height,
@@ -3733,11 +3751,14 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
             : state.heightmap_max_height,
           ...buildPreviewSessionResetState(state, true),
         };
-      }),
+      });
+    },
     setMaterialDynamicLayerCountEnabled: (enabled: boolean) => {
       _cancelPreviewWork();
+      const materialSuggestionReset = _cancelMaterialSuggestionWork();
       set((state) => ({
         materialDynamicLayerCountEnabled: enabled,
+        ...materialSuggestionReset,
         hue_enable: enabled ? false : state.hue_enable,
         heightmap_max_height:
           enabled && state.enable_relief
@@ -3755,6 +3776,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     },
     setMaterialMinLayerCount: (count: number) => {
       _cancelPreviewWork();
+      const materialSuggestionReset = _cancelMaterialSuggestionWork();
       set((state) => {
         const materialMinLayerCount = normalizeDynamicMaterialLayerCount(
           count,
@@ -3770,6 +3792,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         return {
           materialMinLayerCount,
           materialMaxLayerCount,
+          ...materialSuggestionReset,
           heightmap_max_height: state.enable_relief
             ? clampValue(
                 state.heightmap_max_height,
@@ -3786,6 +3809,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     },
     setMaterialMaxLayerCount: (count: number) => {
       _cancelPreviewWork();
+      const materialSuggestionReset = _cancelMaterialSuggestionWork();
       set((state) => {
         const materialMaxLayerCount = normalizeDynamicMaterialLayerCount(
           count,
@@ -3801,6 +3825,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         return {
           materialMinLayerCount,
           materialMaxLayerCount,
+          ...materialSuggestionReset,
           heightmap_max_height: state.enable_relief
             ? clampValue(
                 state.heightmap_max_height,
@@ -3815,11 +3840,14 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         };
       });
     },
-    setMaterialLayerHeightMm: (height: number) =>
+    setMaterialLayerHeightMm: (height: number) => {
+      const materialSuggestionReset = _cancelMaterialSuggestionWork();
       set((state) => ({
         materialLayerHeightMm: height,
+        ...materialSuggestionReset,
         ...buildPreviewSessionResetState(state, true),
-      })),
+      }));
+    },
     setMaterialBackingMaterialDirName: (name: string | null) => {
       persistMaterialBackingMaterialDirName(name);
       if (isDynamicMaterialActive(_get())) {
@@ -6333,12 +6361,20 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       _materialSuggestAbortController?.abort();
       _materialSuggestAbortController = new AbortController();
       const { signal } = _materialSuggestAbortController;
+      const requestToken = ++_materialSuggestRequestToken;
+      const suggestionLayerCount = resolveMaterialPrintLayerCount(state);
+      const settingsState = useSettingsStore.getState();
+      const gridResolutionOverride =
+        settingsState.enableSolverCacheGridSelection
+          ? settingsState.solverCacheGridResolution
+          : undefined;
 
       const cacheKey = _materialSuggestCacheKey({
         directoryNames: dirNames,
-        layerCount: state.materialLayerCount,
+        layerCount: suggestionLayerCount,
         layerHeightMm: state.materialLayerHeightMm,
         substrate: "white",
+        gridResolution: gridResolutionOverride,
         targetHex: cleaned,
       });
       const cached = _materialSuggestCache.get(cacheKey);
@@ -6363,22 +6399,29 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       // Forward the opt-in grid resolution so the suggest-colors lookup
       // hits the same on-disk cache the user built through the dialog;
       // otherwise we would silently fall back to a slower MITM run.
-      const settingsState = useSettingsStore.getState();
-      const gridResolutionOverride =
-        settingsState.enableSolverCacheGridSelection
-          ? settingsState.solverCacheGridResolution
-          : undefined;
       try {
         const response = await fetchMaterialColorSuggestions(
           {
             materialDirectoryNames: dirNames,
-            layerCount: state.materialLayerCount,
+            layerCount: suggestionLayerCount,
             layerHeightMm: state.materialLayerHeightMm,
             substrate: "white",
           },
           cleaned,
           { signal, gridResolution: gridResolutionOverride },
         );
+        const currentSettingsState = useSettingsStore.getState();
+        const currentGridResolution =
+          currentSettingsState.enableSolverCacheGridSelection
+            ? currentSettingsState.solverCacheGridResolution
+            : undefined;
+        if (
+          signal.aborted ||
+          requestToken !== _materialSuggestRequestToken ||
+          currentGridResolution !== gridResolutionOverride
+        ) {
+          return;
+        }
         // Stash into LRU, evicting oldest when over limit.
         // 写入 LRU，超额时淘汰最早项。
         _materialSuggestCache.set(cacheKey, response);
@@ -6394,7 +6437,10 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           materialSuggestionsError: null,
         });
       } catch (err) {
-        if (signal.aborted) {
+        if (
+          signal.aborted ||
+          requestToken !== _materialSuggestRequestToken
+        ) {
           return; // Superseded by a newer request.
         }
         set({
@@ -6410,14 +6456,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
     },
 
     clearMaterialSuggestions: () => {
-      _materialSuggestAbortController?.abort();
-      _materialSuggestAbortController = null;
-      set({
-        materialSuggestions: null,
-        materialSuggestionsLoading: false,
-        materialSuggestionsTargetHex: null,
-        materialSuggestionsError: null,
-      });
+      set(_cancelMaterialSuggestionWork());
     },
 
     fetchGradientGroups: async (sessionId: string) => {

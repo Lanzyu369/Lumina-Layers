@@ -26,6 +26,7 @@ from core.material_color_solver import (
     MaterialParams,
     forward_model,
     linear_to_srgb_uint8,
+    predict_material_recipe_srgb,
 )
 
 
@@ -134,6 +135,52 @@ class TestMaterialRecipePreviewHappyPath:
         )
         assert response.status_code == 200, response.text
         assert response.json()["substrate"] == "black"
+
+    def test_white_substrate_ignores_first_archive_c0(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        first = MaterialParams(
+            name="Non-white C0",
+            directory_name="non-white-c0",
+            E=np.asarray((0.7, 0.3, 0.2), dtype=np.float64),
+            k=np.asarray((1.4, 1.2, 1.0), dtype=np.float64),
+            C0_white=np.asarray((0.35, 0.45, 0.55), dtype=np.float64),
+            estimated_rgb=np.asarray((190, 100, 80), dtype=np.uint8),
+        )
+        materials = [first, _SYNTHETIC_PALETTE[1]]
+        monkeypatch.setattr(
+            "api.routers.single_stage.load_multiple_materials",
+            lambda _directory_names: materials,
+        )
+        recipe = np.arange(len(materials), dtype=np.int32)
+        expected_rgb = predict_material_recipe_srgb(
+            recipe,
+            materials,
+            layer_height_mm=0.08,
+            substrate="white",
+        ).tolist()
+        legacy_rgb = linear_to_srgb_uint8(
+            forward_model(
+                recipe,
+                materials,
+                0.08,
+                np.asarray(first.C0_white, dtype=np.float64),
+            )
+        ).tolist()
+
+        response = _client().post(
+            "/api/extractor/material-recipe-preview",
+            json={
+                "directory_names": ["non-white-c0", "blue"],
+                "layer_height_mm": 0.08,
+                "substrate": "white",
+            },
+        )
+
+        assert expected_rgb != legacy_rgb
+        assert response.status_code == 200, response.text
+        assert response.json()["predicted_rgb"] == expected_rgb
 
 
 class TestMaterialRecipePreviewValidation:

@@ -63,7 +63,7 @@ from core.material_lut_synthesis import (
     load_multiple_materials,
     solve_image_colors_optimal,
 )
-from core.material_color_solver import forward_model, linear_to_srgb_float
+from core.material_color_solver import predict_material_recipe_srgb
 from core.material_dynamic_replacement import (
     rebuild_dynamic_material_after_replacement,
 )
@@ -324,8 +324,8 @@ def _recalc_matched_rgb_for_padded_pixels(
     non_override_mask,
     session_data: dict,
     layer_height_mm: float,
+    substrate: str,
 ) -> None:
-    from core.material_color_solver import forward_model, linear_to_srgb_float
     import numpy as np
     selected_materials = session_data.get('selected_materials') or []
     try:
@@ -347,10 +347,13 @@ def _recalc_matched_rgb_for_padded_pixels(
         if np.any(recipe_row < 0):
             continue
         try:
-            # material_matrix Top2Bottom（[0]=顶层），forward_model 期望 Bottom2Top（[0]=底层）
-            pred_linear = forward_model(recipe_row[::-1], materials, layer_height_mm=layer_height_mm)
-            pred_srgb = linear_to_srgb_float(pred_linear)
-            pred_u8 = np.clip(pred_srgb * 255, 0, 255).astype(np.uint8)
+            # material_matrix Top2Bottom（[0]=顶层），统一预测器接收 Bottom2Top。
+            pred_u8 = predict_material_recipe_srgb(
+                recipe_row[::-1],
+                materials,
+                layer_height_mm=layer_height_mm,
+                substrate=substrate,
+            )
         except Exception:
             continue
         cached[u_idx] = pred_u8
@@ -2897,7 +2900,8 @@ def predict_recipe(
             selected_materials = session_data.get("selected_materials") or []
             try:
                 materials = load_multiple_materials(selected_materials)
-                recipe_top_to_bottom: list[int] = list(request.recipe)
+                prediction_recipe = list(request.recipe)
+                prediction_recipe_order = request.layer_order
                 if bool(
                     session_data.get(
                         "material_dynamic_layer_count_enabled",
@@ -2910,20 +2914,26 @@ def predict_recipe(
                         layer_order=request.layer_order,
                         color_layers=request.color_layers,
                     )
-                    recipe_top_to_bottom = list(
+                    prediction_recipe = list(
                         prepared["print_recipe_top_to_bottom"]
                     )
-                recipe_np = np.asarray(recipe_top_to_bottom, dtype=np.int32)
-                # 前端发来 Top2Bottom（[0]=顶层），forward_model 期望 Bottom2Top（[0]=底层）
-                predicted_linear = forward_model(
-                    recipe_np[::-1],
+                    prediction_recipe_order = "Top2Bottom"
+                recipe_bottom_to_top = convert_recipe_between_orders(
+                    prediction_recipe,
+                    prediction_recipe_order,
+                    "Bottom2Top",
+                )
+                substrate = str(
+                    cache.get("material_substrate")
+                    or session_data.get("material_substrate")
+                    or "white"
+                )
+                predicted_rgb_uint8 = predict_material_recipe_srgb(
+                    np.asarray(recipe_bottom_to_top, dtype=np.int32),
                     materials,
                     layer_height_mm=request.layer_height_mm,
+                    substrate=substrate,
                 )
-                predicted_srgb = linear_to_srgb_float(predicted_linear)
-                predicted_rgb_uint8 = np.clip(
-                    predicted_srgb * 255, 0, 255
-                ).astype(np.uint8)
                 prediction = {
                     "rgb": [int(v) for v in predicted_rgb_uint8.tolist()],
                     "lab": [
@@ -3595,24 +3605,32 @@ def apply_recipe_override(
                     selected_materials = session_data.get("selected_materials") or []
                     try:
                         materials = load_multiple_materials(selected_materials)
-                        recipe_top_to_bottom = (
+                        prediction_recipe = (
                             dynamic_manual_recipe["print_recipe_top_to_bottom"]
                             if dynamic_manual_recipe is not None
                             else request.recipe
                         )
-                        recipe_np = np.asarray(
-                            recipe_top_to_bottom,
-                            dtype=np.int32,
+                        prediction_recipe_order = (
+                            "Top2Bottom"
+                            if dynamic_manual_recipe is not None
+                            else request.layer_order
                         )
-                        # 前端发来 Top2Bottom（[0]=顶层），forward_model 期望 Bottom2Top（[0]=底层）
-                        predicted_linear = forward_model(
-                            recipe_np[::-1], materials,
+                        recipe_bottom_to_top = convert_recipe_between_orders(
+                            prediction_recipe,
+                            prediction_recipe_order,
+                            "Bottom2Top",
+                        )
+                        substrate = str(
+                            cache.get("material_substrate")
+                            or session_data.get("material_substrate")
+                            or "white"
+                        )
+                        predicted_rgb = predict_material_recipe_srgb(
+                            np.asarray(recipe_bottom_to_top, dtype=np.int32),
+                            materials,
                             layer_height_mm=request.layer_height_mm,
+                            substrate=substrate,
                         )
-                        predicted_srgb = linear_to_srgb_float(predicted_linear)
-                        predicted_rgb = np.clip(
-                            predicted_srgb * 255, 0, 255
-                        ).astype(np.uint8)
                         predicted_lab = [
                             float(v)
                             for v in _rgb_to_lab(
@@ -3790,12 +3808,17 @@ def apply_recipe_override(
                 dtype=np.int32,
             )
         else:
+            recipe_top_to_bottom = convert_recipe_between_orders(
+                request.recipe,
+                request.layer_order,
+                "Top2Bottom",
+            )
             recipe_full = np.asarray(
                 pad_recipe_to_layer_count(
-                    request.recipe,
+                    recipe_top_to_bottom,
                     int(material_matrix.shape[2]),
                     int(metadata.base_channel_idx),
-                    request.layer_order,
+                    "Top2Bottom",
                 ),
                 dtype=np.int32,
             )
@@ -3841,6 +3864,11 @@ def apply_recipe_override(
                     non_override_mask=non_override,
                     session_data=session_data,
                     layer_height_mm=float(request.layer_height_mm),
+                    substrate=str(
+                        cache.get("material_substrate")
+                        or session_data.get("material_substrate")
+                        or "white"
+                    ),
                 )
 
         if dynamic_manual_recipe is not None:
