@@ -63,6 +63,68 @@ describe("useSessionLease", () => {
     expect(heartbeatSessionMock).toHaveBeenNthCalledWith(2, "session-a");
   });
 
+  it("stops heartbeat after the backend reports a missing session", async () => {
+    heartbeatSessionMock.mockRejectedValue({ response: { status: 404 } });
+
+    renderHook(({ sessionId }) => useSessionLease(sessionId), {
+      initialProps: { sessionId: "session-a" },
+      wrapper: StrictModeWrapper,
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(120_000);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(240_000);
+      await Promise.resolve();
+    });
+
+    expect(heartbeatSessionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps heartbeat active after a transient server error", async () => {
+    heartbeatSessionMock.mockRejectedValue({ response: { status: 503 } });
+
+    renderHook(({ sessionId }) => useSessionLease(sessionId), {
+      initialProps: { sessionId: "session-a" },
+      wrapper: StrictModeWrapper,
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(240_000);
+      await Promise.resolve();
+    });
+
+    expect(heartbeatSessionMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("starts heartbeat again when a new session replaces a missing one", async () => {
+    heartbeatSessionMock.mockRejectedValueOnce({ response: { status: 404 } });
+    const { rerender } = renderHook(
+      ({ sessionId }) => useSessionLease(sessionId),
+      {
+        initialProps: { sessionId: "session-a" },
+        wrapper: StrictModeWrapper,
+      },
+    );
+
+    await act(async () => {
+      vi.advanceTimersByTime(120_000);
+      await Promise.resolve();
+    });
+    heartbeatSessionMock.mockResolvedValue(undefined);
+    rerender({ sessionId: "session-b" });
+    await act(async () => {
+      vi.advanceTimersByTime(120_000);
+      await Promise.resolve();
+    });
+
+    expect(heartbeatSessionMock).toHaveBeenCalledTimes(2);
+    expect(heartbeatSessionMock).toHaveBeenNthCalledWith(1, "session-a");
+    expect(heartbeatSessionMock).toHaveBeenNthCalledWith(2, "session-b");
+  });
+
   it("does not close the current session during StrictMode initial mount", async () => {
     renderHook(({ sessionId }) => useSessionLease(sessionId), {
       initialProps: { sessionId: "session-a" },

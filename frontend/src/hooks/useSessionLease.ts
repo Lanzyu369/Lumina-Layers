@@ -28,6 +28,14 @@ function normalizeKeepFileIds(keepFileIds: readonly string[]): string[] {
   return Array.from(new Set(keepFileIds));
 }
 
+function isMissingSessionHeartbeat(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+  const response = (error as { response?: { status?: unknown } }).response;
+  return response?.status === 404;
+}
+
 function scheduleSessionClose(
   sessionId: string,
   keepFileIds: readonly string[] = EMPTY_KEEP_FILE_IDS,
@@ -73,8 +81,10 @@ export function useSessionLease(
     useActionHistoryStore.getState().observeSession(workstream, sessionId);
 
     const intervalId = window.setInterval(() => {
-      void heartbeatSession(sessionId).catch(() => {
-        /* best-effort keepalive */
+      void heartbeatSession(sessionId).catch((error: unknown) => {
+        if (isMissingSessionHeartbeat(error)) {
+          window.clearInterval(intervalId);
+        }
       });
     }, HEARTBEAT_INTERVAL_MS);
 

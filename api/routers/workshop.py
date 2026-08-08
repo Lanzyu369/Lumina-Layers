@@ -8,6 +8,7 @@ import hmac
 import mimetypes
 import os
 import re
+import time
 from pathlib import Path
 from typing import Annotated, NoReturn
 from urllib.parse import quote
@@ -62,6 +63,7 @@ from core.workshop.models import (
     RegistryIndex,
     RegistryModule,
     RegistryRefreshResult,
+    RegistryVersion,
     WorkshopManifestV1,
 )
 from core.workshop.registry_client import select_install_candidate
@@ -543,6 +545,46 @@ async def workshop_install_local(
     return WorkshopModuleMutationResponse(module=_state_response(state))
 
 
+_REGISTRY_DOWNLOAD_MAX_ATTEMPTS = 2
+_REGISTRY_DOWNLOAD_RETRY_DELAY_SECONDS = 0.25
+
+
+def _download_registry_package_with_retry(
+    candidate: RegistryVersion,
+    *,
+    module_id: str,
+) -> Path:
+    """Retry one idempotent Registry download after a read timeout.
+
+    Registry 下载仅在读取超时时重试一次；连接、校验及安装错误保持原样。
+    """
+
+    for attempt in range(1, _REGISTRY_DOWNLOAD_MAX_ATTEMPTS + 1):
+        try:
+            return download_registry_package(candidate)
+        except httpx.ReadTimeout:
+            if attempt >= _REGISTRY_DOWNLOAD_MAX_ATTEMPTS:
+                raise
+            log.warning(
+                "Creative Workshop Registry download timed out; retrying",
+                extra={
+                    "event": "workshop_registry_download_retry",
+                    "error_type": "ReadTimeout",
+                    "error_message": "Registry package download timed out",
+                    "module_id": module_id,
+                    "version": candidate.version,
+                    "attempt": attempt,
+                    "max_attempts": _REGISTRY_DOWNLOAD_MAX_ATTEMPTS,
+                    "delay_ms": int(
+                        _REGISTRY_DOWNLOAD_RETRY_DELAY_SECONDS * 1000
+                    ),
+                },
+            )
+            time.sleep(_REGISTRY_DOWNLOAD_RETRY_DELAY_SECONDS)
+
+    raise RuntimeError("Registry download retry loop exhausted")
+
+
 @router.post(
     "/install/registry",
     response_model=WorkshopModuleMutationResponse,
@@ -577,7 +619,10 @@ def workshop_install_registry(
             raise WorkshopInstallError(
                 "No compatible installable Workshop version is available"
             )
-        archive_path = download_registry_package(candidate)
+        archive_path = _download_registry_package_with_retry(
+            candidate,
+            module_id=payload.module_id,
+        )
         state = get_workshop_installer().install_candidate(
             archive_path,
             source="registry",
