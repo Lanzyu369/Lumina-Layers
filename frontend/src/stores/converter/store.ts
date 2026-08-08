@@ -6333,10 +6333,11 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       _materialSuggestAbortController?.abort();
       _materialSuggestAbortController = new AbortController();
       const { signal } = _materialSuggestAbortController;
+      const suggestionLayerCount = resolveMaterialPrintLayerCount(state);
 
       const cacheKey = _materialSuggestCacheKey({
         directoryNames: dirNames,
-        layerCount: state.materialLayerCount,
+        layerCount: suggestionLayerCount,
         layerHeightMm: state.materialLayerHeightMm,
         substrate: "white",
         targetHex: cleaned,
@@ -6372,7 +6373,7 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         const response = await fetchMaterialColorSuggestions(
           {
             materialDirectoryNames: dirNames,
-            layerCount: state.materialLayerCount,
+            layerCount: suggestionLayerCount,
             layerHeightMm: state.materialLayerHeightMm,
             substrate: "white",
           },

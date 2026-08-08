@@ -197,6 +197,31 @@ describe("converter store — fetchMaterialSuggestions", () => {
     expect(s.materialSuggestionsLoading).toBe(false);
   });
 
+  it("uses the dynamic printable maximum in the request and LRU key", async () => {
+    const useConverterStore = await loadStore();
+    resetStore(useConverterStore);
+    useConverterStore.setState({
+      materialDynamicLayerCountEnabled: true,
+      materialMinLayerCount: 5,
+      materialMaxLayerCount: 8,
+    });
+    fetchMaterialColorSuggestionsMock
+      .mockResolvedValueOnce(stubResponse({ layer_count: 8 }))
+      .mockResolvedValueOnce(stubResponse({ layer_count: 7 }));
+
+    await useConverterStore.getState().fetchMaterialSuggestions("#C86432");
+    useConverterStore.setState({ materialMaxLayerCount: 7 });
+    await useConverterStore.getState().fetchMaterialSuggestions("#C86432");
+
+    expect(fetchMaterialColorSuggestionsMock).toHaveBeenCalledTimes(2);
+    expect(fetchMaterialColorSuggestionsMock.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ layerCount: 8 }),
+    );
+    expect(fetchMaterialColorSuggestionsMock.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({ layerCount: 7 }),
+    );
+  });
+
   it("does not share cache between palettes with different ordering", async () => {
     const useConverterStore = await loadStore();
     resetStore(useConverterStore);
