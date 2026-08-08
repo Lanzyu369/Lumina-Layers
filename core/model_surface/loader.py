@@ -7,6 +7,7 @@ import numpy as np
 import trimesh
 
 from core.model_surface.types import LoadedSurfaceMesh, MeshSummary, ModelSurfaceError
+from core.model_surface.validation import MODEL_SURFACE_EMPTY_GEOMETRY
 
 SUPPORTED_MODEL_EXTENSIONS = {".stl", ".obj"}
 
@@ -44,7 +45,7 @@ def load_model_surface_mesh(path: str | Path) -> LoadedSurfaceMesh:
 
     mesh = _coerce_trimesh(loaded)
     if mesh.vertices.size == 0 or mesh.faces.size == 0:
-        raise ModelSurfaceError("Model file does not contain triangle geometry.")
+        raise ModelSurfaceError(MODEL_SURFACE_EMPTY_GEOMETRY)
 
     bounds = np.asarray(mesh.bounds, dtype=float)
     extents = np.asarray(mesh.extents, dtype=float)
@@ -76,7 +77,7 @@ def _coerce_trimesh(loaded: Any) -> trimesh.Trimesh:
         ]
         if meshes:
             return trimesh.util.concatenate(meshes)
-    raise ModelSurfaceError("Model file does not contain triangle geometry.")
+    raise ModelSurfaceError(MODEL_SURFACE_EMPTY_GEOMETRY)
 
 
 def _count_mesh_bodies(mesh: trimesh.Trimesh) -> int:

@@ -12,6 +12,11 @@ from shapely.ops import unary_union
 import trimesh
 
 from core.model_surface.types import ModelSurfaceError, SurfaceFootprint
+from core.model_surface.validation import (
+    MODEL_SURFACE_INSUFFICIENT_THICKNESS,
+    MODEL_SURFACE_THICKNESS_UNKNOWN,
+    prepare_model_surface_mesh_for_boolean,
+)
 
 MODEL_SURFACE_DISPLAY_Z_BOUNDS_KEY = "model_surface_display_z_bounds_mm"
 MODEL_SURFACE_DISPLAY_LAYER_HEIGHTS_KEY = (
@@ -95,8 +100,9 @@ def build_embedded_overlay_scene(
     available_depth_mm = _available_surface_depth_mm(base_mesh, footprint)
     if embed_depth_mm > available_depth_mm + 1e-6:
         raise ModelSurfaceError(
-            "Overlay pattern depth exceeds the available model thickness "
-            f"({embed_depth_mm:.3f} mm > {available_depth_mm:.3f} mm)."
+            f"{MODEL_SURFACE_INSUFFICIENT_THICKNESS}: "
+            f"pattern={embed_depth_mm:.6f}, "
+            f"available={available_depth_mm:.6f}"
         )
     display_layer_heights_mm = _pattern_layer_heights_mm(printable_scene)
     base_copy = (
@@ -307,9 +313,10 @@ def _cut_surface_polygon_pocket(
         raise ModelSurfaceError("model_surface_boolean_failed") from exc
     if not cutter_mesh.is_volume:
         raise ModelSurfaceError("model_surface_boolean_failed")
+    prepared_base_mesh = prepare_model_surface_mesh_for_boolean(base_mesh)
     try:
         result = trimesh.boolean.difference(
-            [base_mesh.copy(), cutter_mesh],
+            [prepared_base_mesh, cutter_mesh],
             engine="manifold",
         )
     except Exception as exc:
@@ -581,7 +588,7 @@ def _available_surface_depth_mm(
     origin = np.asarray(footprint.frame.origin, dtype=np.float64)
     normal_length = float(np.linalg.norm(normal))
     if vertices.size == 0 or normal_length <= 1e-9:
-        raise ModelSurfaceError("Selected surface has invalid model thickness.")
+        raise ModelSurfaceError(MODEL_SURFACE_THICKNESS_UNKNOWN)
     normal /= normal_length
     u_axis = np.asarray(footprint.frame.u_axis, dtype=np.float64)
     v_axis = np.asarray(footprint.frame.v_axis, dtype=np.float64)
@@ -589,7 +596,7 @@ def _available_surface_depth_mm(
     if not polygon.is_valid:
         polygon = polygon.buffer(0)
     if polygon.is_empty:
-        raise ModelSurfaceError("Selected surface has invalid model thickness.")
+        raise ModelSurfaceError(MODEL_SURFACE_THICKNESS_UNKNOWN)
 
     min_x, min_y, max_x, max_y = polygon.bounds
     sample_points = [polygon.representative_point(), polygon.centroid]
@@ -619,9 +626,7 @@ def _available_surface_depth_mm(
             local_depths.append(hit_distance + surface_epsilon)
 
     if not local_depths:
-        raise ModelSurfaceError(
-            "Unable to determine the available model thickness at the selected surface."
-        )
+        raise ModelSurfaceError(MODEL_SURFACE_THICKNESS_UNKNOWN)
     return min(local_depths)
 
 

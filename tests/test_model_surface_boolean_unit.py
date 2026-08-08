@@ -38,6 +38,43 @@ def test_cut_surface_pocket_preserves_outer_extents():
     assert len(cut.faces) > 0
 
 
+def test_cut_surface_pocket_preserves_reversed_inner_cavity() -> None:
+    outer = trimesh.creation.box(extents=(20.0, 10.0, 4.0))
+    cavity = trimesh.creation.box(extents=(18.0, 8.0, 3.6))
+    cavity.invert()
+    base = trimesh.util.concatenate((outer, cavity))
+    assert base.is_volume
+    assert len(base.split(only_watertight=True)) == 2
+    footprint = SurfaceFootprint(
+        frame=PlaneFrame(
+            (0.0, 0.0, 2.0),
+            (0.0, 0.0, 1.0),
+            (1.0, 0.0, 0.0),
+            (0.0, 1.0, 0.0),
+        ),
+        outer=(
+            (-1.0, -1.0),
+            (1.0, -1.0),
+            (1.0, 1.0),
+            (-1.0, 1.0),
+            (-1.0, -1.0),
+        ),
+        holes=(),
+        bounds_min=(-1.0, -1.0),
+        bounds_max=(1.0, 1.0),
+        bounds_width_mm=2.0,
+        bounds_height_mm=2.0,
+        area_mm2=4.0,
+        hole_count=0,
+    )
+
+    cut = cut_surface_pocket(base, footprint, pocket_depth_mm=0.1)
+
+    assert cut.is_volume
+    assert cut.volume < base.volume
+    assert cut.volume == pytest.approx(base.volume, abs=1.0)
+
+
 def test_polygon_prism_is_volume_with_nearly_duplicate_boundary_vertices():
     polygon = sg.Polygon(
         (

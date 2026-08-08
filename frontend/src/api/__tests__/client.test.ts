@@ -231,6 +231,40 @@ describe("apiClient", () => {
   );
 
   it.each([
+    {
+      language: "en" as const,
+      expected:
+        "The model is not a closed solid and cannot be cut safely. Repair the mesh and upload it again.",
+    },
+    {
+      language: "zh" as const,
+      expected: "模型不是闭合实体，无法安全开槽。请先修复网格后重新上传。",
+    },
+  ])(
+    "translates the model-surface closed-solid error in $language",
+    async ({ language, expected }) => {
+      useSettingsStore.setState({ language });
+      const detail = {
+        error: "model_surface_mesh_not_watertight",
+        message: "The model is not a closed solid and cannot be cut safely.",
+      };
+      const error = new Error("Request failed with status code 422");
+      Object.assign(error, {
+        config: { method: "post", url: "/convert/model-surface/upload" },
+        response: { status: 422, data: { detail } },
+      });
+      apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+      const rejected = await apiClient
+        .post("/convert/model-surface/upload", {})
+        .catch((err) => err);
+
+      expect(rejected).toMatchObject({ message: expected });
+      expect(rejected.response?.data?.detail).toEqual(detail);
+    },
+  );
+
+  it.each([
     "future_validation_code",
     "constructor",
     "toString",

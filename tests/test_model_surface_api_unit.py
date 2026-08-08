@@ -44,6 +44,80 @@ def test_model_surface_upload_returns_summary(tmp_path, client: TestClient):
     assert candidates[0]["footprint"]["area_mm2"] > 0
 
 
+def test_model_surface_upload_rejects_open_mesh(
+    tmp_path,
+    client: TestClient,
+) -> None:
+    model_path = tmp_path / "open-plate.stl"
+    mesh = trimesh.creation.box(extents=(20.0, 10.0, 2.0))
+    mesh.update_faces(mesh.face_normals[:, 2] < 0.9)
+    mesh.remove_unreferenced_vertices()
+    mesh.export(model_path)
+
+    with model_path.open("rb") as handle:
+        response = client.post(
+            "/api/convert/model-surface/upload",
+            files={
+                "model": (
+                    "open-plate.stl",
+                    handle,
+                    "application/octet-stream",
+                )
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == {
+        "error": "model_surface_mesh_not_watertight",
+        "message": (
+            "The model is not a closed solid and cannot be cut safely. "
+            "Repair the mesh and upload it again."
+        ),
+    }
+
+
+def test_model_surface_upload_rejects_empty_stl_with_public_code(
+    client: TestClient,
+) -> None:
+    response = client.post(
+        "/api/convert/model-surface/upload",
+        files={"model": ("empty.stl", b"", "application/octet-stream")},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == {
+        "error": "model_surface_empty_geometry",
+        "message": (
+            "The model file does not contain triangle geometry. "
+            "Export a non-empty STL or OBJ and upload it again."
+        ),
+    }
+
+
+def test_model_surface_upload_hides_malformed_obj_parser_detail(
+    client: TestClient,
+) -> None:
+    response = client.post(
+        "/api/convert/model-surface/upload",
+        files={
+            "model": (
+                "malformed.obj",
+                b"v 0 0 nope\nf 1 2 3\n",
+                "application/octet-stream",
+            )
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == {
+        "error": "model_surface_invalid_file",
+        "message": (
+            "The model file could not be read. "
+            "Check that it is a valid STL or OBJ and upload it again."
+        ),
+    }
+
+
 def test_model_surface_upload_rejects_step_extension(tmp_path, client: TestClient):
     path = tmp_path / "plate.step"
     path.write_text("bad", encoding="utf-8")

@@ -393,7 +393,10 @@ def test_build_embedded_overlay_scene_rejects_pattern_deeper_than_model():
         hole_count=0,
     )
 
-    with pytest.raises(ModelSurfaceError, match="available model thickness"):
+    with pytest.raises(
+        ModelSurfaceError,
+        match=r"^model_surface_insufficient_thickness:",
+    ):
         build_embedded_overlay_scene(
             base_mesh=base,
             pattern_scene=pattern,
@@ -429,7 +432,10 @@ def test_build_embedded_overlay_scene_uses_local_wall_thickness_for_hollow_model
         hole_count=0,
     )
 
-    with pytest.raises(ModelSurfaceError, match="available model thickness"):
+    with pytest.raises(
+        ModelSurfaceError,
+        match=r"^model_surface_insufficient_thickness:",
+    ):
         build_embedded_overlay_scene(
             base_mesh=base,
             pattern_scene=pattern,

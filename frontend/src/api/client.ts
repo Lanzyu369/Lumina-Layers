@@ -202,6 +202,22 @@ function formatValidationDetails(details: unknown[]): string | null {
 
 const STRUCTURED_DETAIL_TRANSLATION_KEYS: ReadonlyMap<string, string> = new Map([
   ["vector_native_requires_svg", "api_error_vector_native_requires_svg"],
+  ["model_surface_empty_geometry", "api_error_model_surface_empty_geometry"],
+  ["model_surface_invalid_file", "api_error_model_surface_invalid_file"],
+  [
+    "model_surface_mesh_not_watertight",
+    "api_error_model_surface_mesh_not_watertight",
+  ],
+  ["model_surface_mesh_not_volume", "api_error_model_surface_mesh_not_volume"],
+  [
+    "model_surface_thickness_unknown",
+    "api_error_model_surface_thickness_unknown",
+  ],
+  [
+    "model_surface_insufficient_thickness",
+    "api_error_model_surface_insufficient_thickness",
+  ],
+  ["model_surface_boolean_failed", "api_error_model_surface_boolean_failed"],
 ]);
 
 function extractReadableDetail(data: unknown): string | null {

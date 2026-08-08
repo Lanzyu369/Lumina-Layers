@@ -59,6 +59,7 @@ from api.workers.converter_workers import (
 )
 from core.batch_layout import LayoutResult, XYBBox, layout_shelf_by_row
 from core.errors import CachedPreviewAnalysisError
+from core.model_surface.types import ModelSurfaceError
 from core.preview_analysis_cache import REQUIRED_PREVIEW_ANALYSIS_REUSE
 from utils.merged_bambu_3mf_writer import (
     MergedBambu3MFWriter,
@@ -106,6 +107,7 @@ from .common import (
     SOURCE_IMAGE_UNAVAILABLE_DETAIL,
     _ensure_material_matrix_signed_capacity,
     _public_pipeline_validation_detail,
+    public_model_surface_error_detail,
     _require_session,
     _resolve_session_dynamic_material_settings,
     _resolve_material_backing_index,
@@ -2170,6 +2172,14 @@ async def convert_generate(
         )
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="3MF generation timed out")
+    except ModelSurfaceError as exc:
+        detail = public_model_surface_error_detail(exc)
+        if detail is None:
+            raise HTTPException(
+                status_code=500,
+                detail=MODEL_GENERATION_FAILED_DETAIL,
+            ) from exc
+        raise HTTPException(status_code=422, detail=detail) from exc
     except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as exc:
         _handle_core_error(exc, "3MF generation")
     except CachedPreviewAnalysisError as exc:
