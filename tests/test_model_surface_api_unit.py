@@ -76,6 +76,48 @@ def test_model_surface_upload_rejects_open_mesh(
     }
 
 
+def test_model_surface_upload_rejects_empty_stl_with_public_code(
+    client: TestClient,
+) -> None:
+    response = client.post(
+        "/api/convert/model-surface/upload",
+        files={"model": ("empty.stl", b"", "application/octet-stream")},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == {
+        "error": "model_surface_empty_geometry",
+        "message": (
+            "The model file does not contain triangle geometry. "
+            "Export a non-empty STL or OBJ and upload it again."
+        ),
+    }
+
+
+def test_model_surface_upload_hides_malformed_obj_parser_detail(
+    client: TestClient,
+) -> None:
+    response = client.post(
+        "/api/convert/model-surface/upload",
+        files={
+            "model": (
+                "malformed.obj",
+                b"v 0 0 nope\nf 1 2 3\n",
+                "application/octet-stream",
+            )
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == {
+        "error": "model_surface_invalid_file",
+        "message": (
+            "The model file could not be read. "
+            "Check that it is a valid STL or OBJ and upload it again."
+        ),
+    }
+
+
 def test_model_surface_upload_rejects_step_extension(tmp_path, client: TestClient):
     path = tmp_path / "plate.step"
     path.write_text("bad", encoding="utf-8")

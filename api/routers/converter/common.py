@@ -26,7 +26,9 @@ from config import PrinterConfig
 from core.material_lut_synthesis import infer_material_archive_base_channel_idx
 from core.model_surface.validation import (
     MODEL_SURFACE_BOOLEAN_FAILED,
+    MODEL_SURFACE_EMPTY_GEOMETRY,
     MODEL_SURFACE_INSUFFICIENT_THICKNESS,
+    MODEL_SURFACE_INVALID_FILE,
     MODEL_SURFACE_MESH_NOT_VOLUME,
     MODEL_SURFACE_MESH_NOT_WATERTIGHT,
     MODEL_SURFACE_THICKNESS_UNKNOWN,
@@ -39,6 +41,14 @@ EPHEMERAL_PREVIEW_TTL_SECONDS = 600
 BATCH_DOWNLOAD_TTL_SECONDS = 3600
 VECTOR_NATIVE_REQUIRES_SVG_ERROR = "vector_native_requires_svg"
 MODEL_SURFACE_PUBLIC_ERROR_MESSAGES: dict[str, str] = {
+    MODEL_SURFACE_EMPTY_GEOMETRY: (
+        "The model file does not contain triangle geometry. "
+        "Export a non-empty STL or OBJ and upload it again."
+    ),
+    MODEL_SURFACE_INVALID_FILE: (
+        "The model file could not be read. "
+        "Check that it is a valid STL or OBJ and upload it again."
+    ),
     MODEL_SURFACE_MESH_NOT_WATERTIGHT: (
         "The model is not a closed solid and cannot be cut safely. "
         "Repair the mesh and upload it again."

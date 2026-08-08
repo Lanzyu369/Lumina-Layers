@@ -6,6 +6,8 @@ from core.model_surface.types import ModelSurfaceError
 
 MODEL_SURFACE_MESH_NOT_WATERTIGHT = "model_surface_mesh_not_watertight"
 MODEL_SURFACE_MESH_NOT_VOLUME = "model_surface_mesh_not_volume"
+MODEL_SURFACE_EMPTY_GEOMETRY = "model_surface_empty_geometry"
+MODEL_SURFACE_INVALID_FILE = "model_surface_invalid_file"
 MODEL_SURFACE_THICKNESS_UNKNOWN = "model_surface_thickness_unknown"
 MODEL_SURFACE_INSUFFICIENT_THICKNESS = "model_surface_insufficient_thickness"
 MODEL_SURFACE_BOOLEAN_FAILED = "model_surface_boolean_failed"
@@ -42,8 +44,9 @@ def prepare_model_surface_mesh_for_boolean(
     返回经验证、可用于模型覆面布尔运算的单实体网格。
 
     Args:
-        mesh: Source triangle mesh. Valid multiple bodies are unioned.
-            源三角网格；有效的多实体会先合并。
+        mesh: Source triangle mesh. Independent positive volumes are unioned;
+            reversed inner shells are preserved as cavity geometry.
+            源三角网格；独立正体积会合并，反向内壳则保留为空腔几何。
 
     Returns:
         A copied or unioned volume mesh with source metadata preserved.
@@ -57,6 +60,8 @@ def prepare_model_surface_mesh_for_boolean(
     validate_model_surface_mesh_for_boolean(mesh)
     parts = list(mesh.split(only_watertight=True))
     if len(parts) <= 1:
+        return mesh.copy()
+    if not all(part.is_volume for part in parts):
         return mesh.copy()
 
     try:

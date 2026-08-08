@@ -34,7 +34,10 @@ from core.model_surface.serialization import (
 )
 from core.model_surface.types import ModelSurfaceError
 from core.model_surface.types import SurfaceCandidate, SurfaceFootprint, SurfaceSelection
-from core.model_surface.validation import validate_model_surface_mesh_for_boolean
+from core.model_surface.validation import (
+    MODEL_SURFACE_INVALID_FILE,
+    validate_model_surface_mesh_for_boolean,
+)
 
 router = APIRouter(prefix="/model-surface")
 log = get_logger(__name__)
@@ -102,9 +105,11 @@ async def upload_model_surface(
         registered = True
     except ModelSurfaceError as exc:
         detail = public_model_surface_error_detail(exc)
+        if detail is None:
+            detail = public_model_surface_error_detail(MODEL_SURFACE_INVALID_FILE)
         raise HTTPException(
             status_code=422,
-            detail=detail if detail is not None else str(exc),
+            detail=detail,
         ) from exc
     finally:
         if not registered:

@@ -133,6 +133,14 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "矢量建模模式仅支持 SVG 文件。请上传 SVG，或切换到“高保真”或“像素艺术”模式。",
     en: "Vector Native mode requires an SVG file. Upload an SVG, or switch to High-Fidelity or Pixel Art mode.",
   },
+  api_error_model_surface_empty_geometry: {
+    zh: "模型文件不包含三角形几何体。请导出非空的 STL 或 OBJ 后重新上传。",
+    en: "The model file does not contain triangle geometry. Export a non-empty STL or OBJ and upload it again.",
+  },
+  api_error_model_surface_invalid_file: {
+    zh: "无法读取模型文件。请确认文件是有效的 STL 或 OBJ 后重新上传。",
+    en: "The model file could not be read. Check that it is a valid STL or OBJ and upload it again.",
+  },
   api_error_model_surface_mesh_not_watertight: {
     zh: "模型不是闭合实体，无法安全开槽。请先修复网格后重新上传。",
     en: "The model is not a closed solid and cannot be cut safely. Repair the mesh and upload it again.",
