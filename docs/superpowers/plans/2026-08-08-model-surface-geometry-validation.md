@@ -275,12 +275,14 @@ git commit -m "fix(model-surface): reject unsafe upload geometry"
 **Files:**
 - Modify: `api/routers/converter/generate.py`
 - Modify: `core/model_surface/assembly.py`
+- Modify: `tests/test_model_surface_preview_integration_unit.py`
 - Modify: `tests/test_model_surface_generate_unit.py`
 - Test: `tests/test_model_surface_assembly_unit.py`
 
-- [ ] **Step 1: Repair the production-shaped worker-pool test fixture**
+- [ ] **Step 1: Repair the production-shaped worker-pool test fixtures**
 
-Change the successful fake from `pool.submit` to `pool.submit_timed` and return:
+The baseline has three stale successful fakes: two preview cases and one generate case. Change
+each from `pool.submit` to `pool.submit_timed` and return:
 
 ```python
 return (
@@ -289,8 +291,8 @@ return (
 )
 ```
 
-Assert against `pool.submit_timed.call_args.args`. This restores the test's intended contract
-without modifying production behavior.
+Assert against `pool.submit_timed.call_args.args` where the submitted arguments are inspected.
+This restores the tests' intended contract without modifying production behavior.
 
 - [ ] **Step 2: Add failing route tests for known and unknown domain errors**
 
@@ -356,7 +358,7 @@ Expected: all tests pass, including local-depth rejection and the production-sha
 - [ ] **Step 7: Commit generation error mapping**
 
 ```bash
-git add api/routers/converter/generate.py core/model_surface/assembly.py tests/test_model_surface_generate_unit.py tests/test_model_surface_assembly_unit.py
+git add api/routers/converter/generate.py core/model_surface/assembly.py tests/test_model_surface_preview_integration_unit.py tests/test_model_surface_generate_unit.py tests/test_model_surface_assembly_unit.py
 git commit -m "fix(model-surface): expose actionable generation errors"
 ```
 
