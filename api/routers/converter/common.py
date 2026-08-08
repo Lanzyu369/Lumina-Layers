@@ -24,6 +24,11 @@ from api.session_store import SessionStore
 from api.structured_logging import bind_session_id, get_logger
 from config import PrinterConfig
 from core.material_lut_synthesis import infer_material_archive_base_channel_idx
+from core.model_surface.validation import (
+    MODEL_SURFACE_BOOLEAN_FAILED,
+    MODEL_SURFACE_MESH_NOT_VOLUME,
+    MODEL_SURFACE_MESH_NOT_WATERTIGHT,
+)
 from core.pipeline._input_validation_common import (
     VECTOR_NATIVE_REQUIRES_SVG_DETAIL,
 )
@@ -31,6 +36,28 @@ from core.pipeline._input_validation_common import (
 EPHEMERAL_PREVIEW_TTL_SECONDS = 600
 BATCH_DOWNLOAD_TTL_SECONDS = 3600
 VECTOR_NATIVE_REQUIRES_SVG_ERROR = "vector_native_requires_svg"
+MODEL_SURFACE_PUBLIC_ERROR_MESSAGES: dict[str, str] = {
+    MODEL_SURFACE_MESH_NOT_WATERTIGHT: (
+        "The model is not a closed solid and cannot be cut safely. "
+        "Repair the mesh and upload it again."
+    ),
+    MODEL_SURFACE_MESH_NOT_VOLUME: (
+        "The model has invalid solid orientation. "
+        "Repair its normals and upload it again."
+    ),
+    "model_surface_thickness_unknown": (
+        "The selected surface thickness could not be determined. "
+        "Choose another surface or repair the model."
+    ),
+    "model_surface_insufficient_thickness": (
+        "The selected surface is too thin for the current colour stack. "
+        "Use fewer layers, a smaller layer height, or a thicker surface."
+    ),
+    MODEL_SURFACE_BOOLEAN_FAILED: (
+        "The selected surface could not be cut safely. "
+        "Repair the model or choose a simpler surface."
+    ),
+}
 PREVIEW_CACHE_UNAVAILABLE_DETAIL = (
     "Preview data is unavailable. Re-run preview and try again."
 )
@@ -108,6 +135,29 @@ def _public_pipeline_validation_detail(status_msg: object) -> dict[str, str] | N
             "message": VECTOR_NATIVE_REQUIRES_SVG_DETAIL,
         }
     return None
+
+
+def public_model_surface_error_detail(
+    error: object,
+) -> dict[str, str] | None:
+    """Return a public detail for an allowlisted model-surface error.
+
+    为白名单内的模型覆面错误返回可公开详情。
+
+    Args:
+        error: Domain error or diagnostic string with a stable code prefix.
+            带稳定错误码前缀的领域错误或诊断字符串。
+
+    Returns:
+        Public error code and message, or ``None`` for unknown diagnostics.
+        公开错误码和提示；未知诊断则返回 ``None``。
+    """
+
+    code = str(error or "").partition(":")[0].strip()
+    message = MODEL_SURFACE_PUBLIC_ERROR_MESSAGES.get(code)
+    if message is None:
+        return None
+    return {"error": code, "message": message}
 
 
 def _integer_value_bounds(value: object) -> tuple[int, int] | None:

@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from api.dependencies import get_file_registry
 from api.file_registry import FileRegistry
+from api.routers.converter.common import public_model_surface_error_detail
 from api.schemas.model_surface import (
     ModelSurfaceSelectRequest,
     ModelSurfaceSelectResponse,
@@ -33,6 +34,7 @@ from core.model_surface.serialization import (
 )
 from core.model_surface.types import ModelSurfaceError
 from core.model_surface.types import SurfaceCandidate, SurfaceFootprint, SurfaceSelection
+from core.model_surface.validation import validate_model_surface_mesh_for_boolean
 
 router = APIRouter(prefix="/model-surface")
 log = get_logger(__name__)
@@ -87,6 +89,7 @@ async def upload_model_surface(
             _analyze_uploaded_model_surface,
             temp_path,
         )
+        validate_model_surface_mesh_for_boolean(loaded.mesh)
         file_id = registry.register_path(
             session_id=f"model-surface-{uuid.uuid4()}",
             path=temp_path,
@@ -98,7 +101,11 @@ async def upload_model_surface(
         _cache_surface_candidates(file_id, temp_path, surface_candidates)
         registered = True
     except ModelSurfaceError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        detail = public_model_surface_error_detail(exc)
+        raise HTTPException(
+            status_code=422,
+            detail=detail if detail is not None else str(exc),
+        ) from exc
     finally:
         if not registered:
             Path(temp_path).unlink(missing_ok=True)
