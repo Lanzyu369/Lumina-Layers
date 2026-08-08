@@ -14,6 +14,10 @@ from PIL import Image, ImageDraw
 from typing import Optional, Dict, Tuple
 
 from api.structured_logging import get_logger
+from core.pipeline.preview_color_utils import (
+    build_material_preview_warning_extra,
+    resolve_material_preview,
+)
 
 _log = get_logger(__name__)
 
@@ -248,7 +252,20 @@ def _draw_loop_on_preview(preview_rgba, loop_info, color_conf, pixel_scale):
     preview_pil = Image.fromarray(preview_rgba, mode='RGBA')
     draw = ImageDraw.Draw(preview_pil)
 
-    loop_color_rgba = tuple(color_conf['preview'][loop_info['color_id']][:3]) + (255,)
+    resolved_rgba = loop_info.get("color_rgba")
+    if resolved_rgba is None:
+        compatibility_resolution = resolve_material_preview(
+            material_id=loop_info["color_id"],
+            slot_names=color_conf.get("slots"),
+            preview_colors=color_conf.get("preview"),
+            color_conf=color_conf,
+        )
+        if not compatibility_resolution.is_resolved:
+            raise ValueError(
+                "Loop material preview color is unavailable for drawing"
+            )
+        resolved_rgba = compatibility_resolution.rgba
+    loop_color_rgba = tuple(resolved_rgba)
 
     attach_col = int(loop_info['attach_x_mm'] / pixel_scale)
     attach_row = int((preview_rgba.shape[0] - 1) - loop_info['attach_y_mm'] / pixel_scale)
@@ -311,6 +328,8 @@ def run(ctx: dict) -> dict:
         - loop_position_preset (str | None): 位置预设
         - material_matrix (np.ndarray): 材料矩阵
         - color_conf (dict): 颜色系统配置
+        - slot_names (list[str]): 与材料 ID 对齐的权威材料名称
+        - preview_colors (dict): 与材料 ID 对齐的权威预览颜色
 
     PipelineContext 输出键 / Output keys:
         - preview_rgba (np.ndarray): (H, W, 4) uint8 RGBA 预览图
@@ -350,6 +369,31 @@ def run(ctx: dict) -> dict:
         )
 
         if loop_info:
+            slot_names = ctx.get("slot_names")
+            preview_colors = ctx.get("preview_colors")
+            resolution = resolve_material_preview(
+                material_id=loop_info["color_id"],
+                slot_names=slot_names,
+                preview_colors=preview_colors,
+                color_conf=color_conf,
+            )
+            if not resolution.is_resolved:
+                _log.warning(
+                    "Loop material preview metadata is unresolved",
+                    extra=build_material_preview_warning_extra(
+                        resolution,
+                        slot_names=slot_names,
+                        preview_colors=preview_colors,
+                        color_conf=color_conf,
+                        material_source=ctx.get("material_source", "lut"),
+                    ),
+                )
+                raise ValueError(
+                    "Loop material identity or preview color is unavailable"
+                )
+            loop_info["material_name"] = resolution.material_name
+            loop_info["color_rgba"] = list(resolution.rgba)
+            loop_info["color_source"] = resolution.source
             preview_rgba = _draw_loop_on_preview(
                 preview_rgba, loop_info, color_conf, pixel_scale
             )

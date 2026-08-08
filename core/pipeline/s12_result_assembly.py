@@ -16,6 +16,23 @@ from utils import Stats
 _log = get_logger(__name__)
 
 
+def _loop_material_label(loop_info: dict, slot_names: list[str]) -> str:
+    """Return a bounds-safe material label for the result message."""
+
+    resolved_name = str(loop_info.get("material_name") or "").strip()
+    if resolved_name:
+        return resolved_name
+
+    raw_material_id = loop_info.get("color_id", "unknown")
+    try:
+        material_id = int(raw_material_id)
+    except (TypeError, ValueError):
+        return f"Material {raw_material_id}"
+    if 0 <= material_id < len(slot_names):
+        return str(slot_names[material_id])
+    return f"Material {material_id}"
+
+
 def run(ctx: dict) -> dict:
     """Assemble final result tuple from pipeline context.
     从管道上下文组装最终结果元组。
@@ -95,7 +112,7 @@ def run(ctx: dict) -> dict:
                 f"{heightmap_stats['max_mm']:.1f}mm (avg {heightmap_stats['avg_mm']:.1f}mm)")
 
     if loop_added and loop_info:
-        msg += f" | Loop: {slot_names[loop_info['color_id']]}"
+        msg += f" | Loop: {_loop_material_label(loop_info, slot_names)}"
 
     total_pixels = target_w * target_h
     if glb_path and total_pixels > 500_000:
