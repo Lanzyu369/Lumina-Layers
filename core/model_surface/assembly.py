@@ -12,6 +12,9 @@ from shapely.ops import unary_union
 import trimesh
 
 from core.model_surface.types import ModelSurfaceError, SurfaceFootprint
+from core.model_surface.validation import (
+    prepare_model_surface_mesh_for_boolean,
+)
 
 MODEL_SURFACE_DISPLAY_Z_BOUNDS_KEY = "model_surface_display_z_bounds_mm"
 MODEL_SURFACE_DISPLAY_LAYER_HEIGHTS_KEY = (
@@ -307,9 +310,10 @@ def _cut_surface_polygon_pocket(
         raise ModelSurfaceError("model_surface_boolean_failed") from exc
     if not cutter_mesh.is_volume:
         raise ModelSurfaceError("model_surface_boolean_failed")
+    prepared_base_mesh = prepare_model_surface_mesh_for_boolean(base_mesh)
     try:
         result = trimesh.boolean.difference(
-            [base_mesh.copy(), cutter_mesh],
+            [prepared_base_mesh, cutter_mesh],
             engine="manifold",
         )
     except Exception as exc:
