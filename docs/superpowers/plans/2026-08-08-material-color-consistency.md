@@ -468,35 +468,32 @@ Change the module import in `api/routers/converter/replace.py` to:
 from core.material_color_solver import predict_material_recipe_srgb
 ```
 
-In `_recalc_matched_rgb_for_padded_pixels`, remove the local solver imports and replace the forward/float/cast block with:
+At every material-archive call site, resolve the canonical substrate from the
+preview cache/session and pass it to the shared helper. Normalize the declared
+recipe order explicitly instead of unconditionally reversing it:
 
 ```python
-            pred_u8 = predict_material_recipe_srgb(
-                recipe_row[::-1],
-                materials,
-                layer_height_mm,
-            )
+recipe_bottom_to_top = convert_recipe_between_orders(
+    recipe,
+    source_order,
+    "Bottom2Top",
+)
+predicted_rgb = predict_material_recipe_srgb(
+    np.asarray(recipe_bottom_to_top, dtype=np.int32),
+    materials,
+    layer_height_mm=layer_height_mm,
+    substrate=substrate,
+)
 ```
 
-In `/predict-recipe`, replace the material-archive forward/float/cast block with:
+For fixed recipe application, independently convert the submitted recipe to
+`Top2Bottom` before writing `material_matrix`. Dynamic prepared recipes are
+already explicitly `Top2Bottom`.
 
-```python
-                predicted_rgb_uint8 = predict_material_recipe_srgb(
-                    recipe_np[::-1],
-                    materials,
-                    request.layer_height_mm,
-                )
-```
-
-In `/apply-recipe-override`, replace the same duplicated calculation with:
-
-```python
-                        predicted_rgb = predict_material_recipe_srgb(
-                            recipe_np[::-1],
-                            materials,
-                            request.layer_height_mm,
-                        )
-```
+Add a two-material `Bottom2Top` + black-substrate regression that asserts the
+predict/apply calls receive the submitted bottom-to-top order unchanged, the
+padded-pixel recalculation also receives black, and the cache stores the
+equivalent top-to-bottom recipe.
 
 - [ ] **Step 4: Update dynamic tests to patch the new boundary**
 
@@ -596,6 +593,16 @@ In `fetchMaterialSuggestions`, add:
 ```
 
 Use `suggestionLayerCount` as `layerCount` in `_materialSuggestCacheKey` and `fetchMaterialColorSuggestions`.
+
+Because the dynamic maximum is now a request/cache dependency, changes to any
+suggestion input must also cancel the current request and clear the visible
+suggestion state. Advance a latest-request token when cancelling and verify it
+after the request resolves; this prevents a mocked or non-cooperative
+transport from restoring a stale result after `AbortController.abort()`.
+
+Add a regression that starts an eight-layer request, changes the maximum to
+seven, resolves the old request despite its aborted signal, and asserts that
+the store remains cleared.
 
 - [ ] **Step 4: Run frontend behavior tests and build**
 

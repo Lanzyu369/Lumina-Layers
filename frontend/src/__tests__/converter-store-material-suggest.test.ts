@@ -222,6 +222,47 @@ describe("converter store — fetchMaterialSuggestions", () => {
     );
   });
 
+  it("clears and rejects an in-flight result when the dynamic maximum changes", async () => {
+    const useConverterStore = await loadStore();
+    resetStore(useConverterStore);
+    useConverterStore.setState({
+      materialDynamicLayerCountEnabled: true,
+      materialMinLayerCount: 5,
+      materialMaxLayerCount: 8,
+    });
+
+    let requestSignal: AbortSignal | undefined;
+    let resolveRequest: (value: MaterialColorSuggestionsResponse) => void =
+      () => {};
+    const pendingResponse = new Promise<MaterialColorSuggestionsResponse>(
+      (resolve) => {
+        resolveRequest = resolve;
+      },
+    );
+    fetchMaterialColorSuggestionsMock.mockImplementationOnce(
+      async (_key: unknown, _hex: string, options: { signal?: AbortSignal }) => {
+        requestSignal = options.signal;
+        return pendingResponse;
+      },
+    );
+
+    const pending = useConverterStore
+      .getState()
+      .fetchMaterialSuggestions("#C86432");
+    expect(useConverterStore.getState().materialSuggestionsLoading).toBe(true);
+
+    useConverterStore.getState().setMaterialMaxLayerCount(7);
+    expect(requestSignal?.aborted).toBe(true);
+    expect(useConverterStore.getState().materialSuggestions).toBeNull();
+    expect(useConverterStore.getState().materialSuggestionsLoading).toBe(false);
+
+    resolveRequest(stubResponse({ layer_count: 8 }));
+    await pending;
+
+    expect(useConverterStore.getState().materialSuggestions).toBeNull();
+    expect(useConverterStore.getState().materialSuggestionsTargetHex).toBeNull();
+  });
+
   it("does not share cache between palettes with different ordering", async () => {
     const useConverterStore = await loadStore();
     resetStore(useConverterStore);

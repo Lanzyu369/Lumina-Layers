@@ -102,9 +102,13 @@ In `api/routers/converter/replace.py`, replace the duplicated
 - `/api/convert/apply-recipe-override` material-archive application;
 - `_recalc_matched_rgb_for_padded_pixels` after a recipe grows in depth.
 
-Each caller preserves its existing `Top2Bottom` API contract and reverses the
-recipe before calling the helper. Existing fallback behavior for missing
-material archives remains unchanged.
+Each caller honors the request's declared `layer_order`, converts it exactly
+once to the helper's `Bottom2Top` contract, and passes through the preview
+session's canonical white/black substrate. Dynamic prepared recipes already
+use `Top2Bottom` and are normalized from that explicit order. Applied recipes
+are separately normalized to the cache's `Top2Bottom` material-matrix storage
+contract. Existing fallback behavior for missing material archives remains
+unchanged.
 
 ### Material Library recipe prediction
 
@@ -124,7 +128,9 @@ mode query the printable eight-layer space.
 The backend suggestion API remains a fixed-layer solver. A new multi-depth
 API is intentionally out of scope because dynamic recipes are padded to the
 maximum print width and the reported failure is caused by querying the wrong
-existing key.
+existing key. Changes to any suggestion input cancel the in-flight request,
+clear its visible result, and advance a latest-request token so a transport
+that ignores cancellation cannot restore a stale answer.
 
 ### Gradient-banding behavior
 
@@ -170,6 +176,11 @@ that fail on the current base for the exact reasons below:
    material `C0_white` and matches pure-white converter prediction.
 6. Dynamic 5-8 mode requests and caches eight-layer suggestions, while fixed
    mode remains unchanged.
+7. Converter prediction and application respect `Bottom2Top` requests, pass
+   black substrate state through all three prediction sites, and retain
+   `Top2Bottom` cache storage.
+8. Changing the dynamic maximum clears and invalidates an in-flight result so
+   an old eight-layer response cannot overwrite the new seven-layer state.
 
 Focused gates:
 

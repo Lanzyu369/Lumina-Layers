@@ -2114,6 +2114,78 @@ def test_predict_material_archive_uses_canonical_rounded_rgb(
     assert response.json()["source"] == "material_archive_forward_model"
 
 
+def test_material_archive_bottom2top_uses_declared_order_and_black_substrate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, store, _registry = _client_with_state()
+    session_id, region_mask = _seed_material_archive_session(
+        store,
+        preview_colors={
+            0: [255, 255, 255, 255],
+            1: [0, 0, 255, 255],
+        },
+        slot_names=["White", "Blue"],
+        layer_count=2,
+    )
+    store.put(session_id, "material_substrate", "black")
+    monkeypatch.setattr(
+        "api.routers.converter.replace.load_multiple_materials",
+        lambda _paths: [object(), object()],
+    )
+    monkeypatch.setattr(
+        "api.routers.converter.replace.schedule_glb_build",
+        lambda *_args, **_kwargs: None,
+    )
+
+    seen_predictions: list[tuple[list[int], str]] = []
+
+    def fake_prediction(
+        recipe,
+        _materials,
+        layer_height_mm,
+        substrate="white",
+    ):
+        assert layer_height_mm == 0.08
+        seen_predictions.append(
+            ([int(value) for value in recipe], str(substrate))
+        )
+        return np.asarray([11, 22, 33], dtype=np.uint8)
+
+    monkeypatch.setattr(
+        "api.routers.converter.replace.predict_material_recipe_srgb",
+        fake_prediction,
+    )
+
+    payload = {
+        "session_id": session_id,
+        "recipe": [0, 1],
+        "layer_order": "Bottom2Top",
+        "color_layers": 3,
+        "layer_height_mm": 0.08,
+    }
+    predict_response = client.post(
+        "/api/convert/predict-recipe",
+        json=payload,
+    )
+    apply_response = client.post(
+        "/api/convert/apply-recipe-override",
+        json={**payload, "region_ids": ["region-1"]},
+    )
+
+    assert predict_response.status_code == 200, predict_response.text
+    assert apply_response.status_code == 200, apply_response.text
+    assert seen_predictions == [
+        ([0, 1], "black"),
+        ([0, 1], "black"),
+        ([0, 0, 0], "black"),
+    ]
+
+    session_data = store.get(session_id)
+    assert session_data is not None
+    material_matrix = session_data["preview_cache"]["material_matrix"]
+    assert np.all(material_matrix[region_mask] == [1, 0, 0])
+
+
 def test_apply_material_archive_rounds_override_and_padded_pixels(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
