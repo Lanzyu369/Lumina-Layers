@@ -60,6 +60,13 @@ _test_registry: FileRegistry = FileRegistry()
 _mock_pool = MagicMock(spec=WorkerPoolManager)
 
 
+class _InlineRealWorkerPool:
+    """Execute the submitted top-level worker in the endpoint call."""
+
+    async def submit_timed(self, fn, *args, timeout=None):
+        return fn(*args), {}
+
+
 def setup_module(module):
     """Re-apply dependency overrides before this module's tests run.
     在本模块测试运行前重新设置依赖覆盖，确保跨文件测试隔离。
@@ -382,6 +389,86 @@ def test_preview_response_exposes_worker_pool_timing(
     session_id = response.json()["session_id"]
     store.close(session_id)
     registry.cleanup_session(session_id)
+
+
+def test_preview_lut_constrained_positive_hue_weight_succeeds_through_worker(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "input.png"
+    lut_path = tmp_path / "lut.npz"
+    Image.new("RGB", (8, 8), (220, 20, 60)).save(image_path)
+    np.savez(
+        lut_path,
+        rgb=np.array([[255, 255, 255], [220, 20, 60]], dtype=np.uint8),
+        stacks=np.array(
+            [[0, 0, 0, 0, 0], [1, 1, 1, 1, 1]],
+            dtype=np.int32,
+        ),
+    )
+
+    store = SessionStore(ttl=1800)
+    registry = FileRegistry()
+    previous_overrides = {
+        get_session_store: app.dependency_overrides.get(get_session_store),
+        get_file_registry: app.dependency_overrides.get(get_file_registry),
+        get_worker_pool: app.dependency_overrides.get(get_worker_pool),
+    }
+    app.dependency_overrides[get_session_store] = lambda: store
+    app.dependency_overrides[get_file_registry] = lambda: registry
+    app.dependency_overrides[get_worker_pool] = lambda: _InlineRealWorkerPool()
+
+    session_id = None
+    try:
+        local_client = TestClient(app, raise_server_exceptions=False)
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.resolve_source_selection",
+                return_value=(str(lut_path), "Temporary LUT"),
+            ),
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value=str(image_path)),
+            ),
+            patch(
+                "api.routers.converter.preview.generate_segmented_glb",
+                return_value=None,
+            ),
+            patch("config.TEMP_DIR", str(tmp_path)),
+            patch("api.preview_cache_artifacts.TEMP_DIR", str(tmp_path)),
+            patch("api.routers.converter.preview.TEMP_DIR", str(tmp_path)),
+        ):
+            response = local_client.post(
+                "/api/convert/preview",
+                files={
+                    "image": (
+                        "input.png",
+                        image_path.read_bytes(),
+                        "image/png",
+                    )
+                },
+                data={
+                    "lut_name": "temporary_lut",
+                    "color_mode": "4-Color (RYBW)",
+                    "target_width_mm": "10",
+                    "quantize_colors": "8",
+                    "use_lut_constrained": "true",
+                    "hue_weight": "0.5",
+                },
+            )
+            assert response.status_code == 200, response.text
+            payload = response.json()
+            session_id = payload["session_id"]
+            assert payload["preview_url"].startswith("/api/files/")
+            assert local_client.get(payload["preview_url"]).status_code == 200
+    finally:
+        if session_id is not None:
+            store.close(session_id)
+            registry.cleanup_session(session_id)
+        for dependency, previous in previous_overrides.items():
+            if previous is None:
+                app.dependency_overrides.pop(dependency, None)
+            else:
+                app.dependency_overrides[dependency] = previous
 
 
 class TestPreviewRegistrationFailureRollback:

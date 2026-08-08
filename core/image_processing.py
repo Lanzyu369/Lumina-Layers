@@ -140,10 +140,14 @@ class LuminaImageProcessor:
         self._apply_lut_data(lut_data)
         self.last_match_info = self._build_initial_match_info()
         if self.use_lut_constrained and self.hue_weight > 0:
-            _log.info(
-                "Hue protection ignored (use_lut_constrained=True). "
-                "hue_weight forced from %.2f to 0.0.",
-                self.hue_weight,
+            requested_hue_weight = self.hue_weight
+            log.info(
+                "Hue protection ignored for LUT-constrained matching",
+                extra={
+                    "event": "image_processor_hue_protection_disabled",
+                    "requested_hue_weight": requested_hue_weight,
+                    "reason": "lut_constrained",
+                },
             )
             self.hue_weight = 0.0
         self._init_hue_matcher()
