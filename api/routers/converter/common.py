@@ -36,6 +36,15 @@ from core.model_surface.validation import (
 from core.pipeline._input_validation_common import (
     VECTOR_NATIVE_REQUIRES_SVG_DETAIL,
 )
+from core.vector_diagnostics import (
+    SVG_INTERSECTING_COMPOUND_COMPLEXITY_DIAGNOSTIC,
+)
+from .source_validation import (
+    SOURCE_SVG_NO_RENDERABLE_GEOMETRY_DETAIL,
+    SOURCE_SVG_NO_RENDERABLE_GEOMETRY_ERROR,
+    SOURCE_SVG_TOO_COMPLEX_DETAIL,
+    SOURCE_SVG_TOO_COMPLEX_ERROR,
+)
 
 EPHEMERAL_PREVIEW_TTL_SECONDS = 600
 BATCH_DOWNLOAD_TTL_SECONDS = 3600
@@ -136,15 +145,84 @@ NON_FATAL_GLB_ERRORS = (
 )
 
 
-def _public_pipeline_validation_detail(status_msg: object) -> dict[str, str] | None:
+_SVG_NO_GEOMETRY_STATUS_LINES = frozenset(
+    {
+        "[VECTOR_PREVIEW] No valid shapes found in SVG",
+        "[VECTOR_PREVIEW] No valid filled shapes found in SVG.",
+        "Vector processing failed: No valid shapes found in SVG",
+        "Vector processing failed: No valid filled shapes found in SVG.",
+    }
+)
+_VECTOR_NATIVE_REQUIRES_SVG_STATUS_LINES = frozenset(
+    {"⚠️ Vector Native mode requires SVG files!"}
+)
+_SVG_COMPLEXITY_STATUS_LINES = frozenset(
+    {
+        (
+            "[VECTOR_PREVIEW] "
+            f"{SVG_INTERSECTING_COMPOUND_COMPLEXITY_DIAGNOSTIC}"
+        ),
+        (
+            "Vector processing failed: "
+            f"{SVG_INTERSECTING_COMPOUND_COMPLEXITY_DIAGNOSTIC}"
+        ),
+    }
+)
+
+
+def _public_pipeline_validation_detail(
+    status_msg: object,
+    *,
+    source_is_user_upload: bool = False,
+    modeling_mode: object = None,
+    source_path: object = None,
+    surface_overlay: bool = False,
+) -> dict[str, str] | None:
     """Return a public detail for known pipeline validation failures.
     为已知管线校验错误返回可公开的错误详情。
     """
     raw_status = str(status_msg or "").strip()
-    if "Vector Native mode requires SVG files" in raw_status:
+    first_line = next(
+        (line.strip() for line in raw_status.splitlines() if line.strip()),
+        "",
+    )
+    normalized_mode = str(modeling_mode or "").strip().lower()
+    normalized_source = str(source_path or "").strip().lower()
+    if (
+        source_is_user_upload
+        and not surface_overlay
+        and normalized_mode == "vector"
+        and bool(normalized_source)
+        and not normalized_source.endswith(".svg")
+        and first_line in _VECTOR_NATIVE_REQUIRES_SVG_STATUS_LINES
+    ):
         return {
             "error": VECTOR_NATIVE_REQUIRES_SVG_ERROR,
             "message": VECTOR_NATIVE_REQUIRES_SVG_DETAIL,
+        }
+
+    if (
+        source_is_user_upload
+        and not surface_overlay
+        and normalized_mode == "vector"
+        and normalized_source.endswith(".svg")
+        and first_line in _SVG_COMPLEXITY_STATUS_LINES
+    ):
+        return {
+            "error": SOURCE_SVG_TOO_COMPLEX_ERROR,
+            "message": SOURCE_SVG_TOO_COMPLEX_DETAIL,
+        }
+
+    if (
+        source_is_user_upload
+        and not surface_overlay
+        and normalized_mode == "vector"
+        and normalized_source.endswith(".svg")
+        and first_line in _SVG_NO_GEOMETRY_STATUS_LINES
+    ):
+        return {
+            "error": SOURCE_SVG_NO_RENDERABLE_GEOMETRY_ERROR,
+            "message": SOURCE_SVG_NO_RENDERABLE_GEOMETRY_DETAIL,
         }
     return None
 

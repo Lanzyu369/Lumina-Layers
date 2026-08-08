@@ -24,16 +24,21 @@ sys.path.insert(0, _ROOT)
 
 from config import PrinterConfig
 
-# Load core.vector_engine directly from its file to avoid the heavy
-# core.__init__ import chain.
-_spec = importlib.util.spec_from_file_location("core.vector_engine", os.path.join(_ROOT, "core", "vector_engine.py"))
+# Load vector_engine under a private test-only name to avoid the heavy
+# core.__init__ import chain without replacing the canonical module used by
+# other test files during collection.
+_TEST_VECTOR_ENGINE_MODULE = "_lumina_test_vector_engine"
+_spec = importlib.util.spec_from_file_location(
+    _TEST_VECTOR_ENGINE_MODULE,
+    os.path.join(_ROOT, "core", "vector_engine.py"),
+)
 _ve = importlib.util.module_from_spec(_spec)
 # Provide a minimal 'core' parent package so relative imports resolve
 if "core" not in sys.modules:
     _pkg = types.ModuleType("core")
     _pkg.__path__ = [os.path.join(_ROOT, "core")]
     sys.modules["core"] = _pkg
-sys.modules["core.vector_engine"] = _ve
+sys.modules[_TEST_VECTOR_ENGINE_MODULE] = _ve
 _spec.loader.exec_module(_ve)
 VectorProcessor = _ve.VectorProcessor
 VectorAnalysis = _ve.VectorAnalysis

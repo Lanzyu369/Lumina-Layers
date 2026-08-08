@@ -14,6 +14,7 @@ import asyncio
 import inspect
 import io
 import json
+import logging
 import os
 import pickle
 import tempfile
@@ -42,6 +43,7 @@ from api.routers.converter.preview import (
     _resolve_upload_source_basename,
     convert_preview,
 )
+from api.routers.converter.source_validation import validate_converter_source
 from api.session_store import SessionStore
 from api.file_registry import FileRegistry
 from api.worker_pool import WorkerPoolManager
@@ -105,10 +107,14 @@ def _keep_preview_pool_timing_opt_in() -> object:
     _mock_pool.submit_timed = AsyncMock(
         side_effect=_timed_submit_via_preview_mock,
     )
-    try:
-        yield
-    finally:
-        _mock_pool.submit_timed = previous
+    with patch(
+        "api.routers.converter.preview.validate_converter_source",
+        return_value=None,
+    ):
+        try:
+            yield
+        finally:
+            _mock_pool.submit_timed = previous
 
 
 # Mock cache_data returned by generate_preview_cached
@@ -464,6 +470,78 @@ def test_preview_lut_constrained_positive_hue_weight_succeeds_through_worker(
         if session_id is not None:
             store.close(session_id)
             registry.cleanup_session(session_id)
+        for dependency, previous in previous_overrides.items():
+            if previous is None:
+                app.dependency_overrides.pop(dependency, None)
+            else:
+                app.dependency_overrides[dependency] = previous
+
+
+def test_empty_svg_real_worker_returns_actionable_422(tmp_path: Path) -> None:
+    """Exercise the real vector wrapper that prefixes the stable diagnostic."""
+
+    image_path = tmp_path / "empty.svg"
+    image_path.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">'
+        '<rect width="10" height="10" fill="none"/></svg>',
+        encoding="utf-8",
+    )
+    upload_bytes = image_path.read_bytes()
+    lut_path = Path(
+        "lut-preset/Custom/Bambulab&PLA&RYBW&红-黄-蓝-白.npy"
+    ).resolve()
+    assert lut_path.exists()
+
+    store = SessionStore(ttl=1800)
+    registry = FileRegistry()
+    previous_overrides = {
+        get_session_store: app.dependency_overrides.get(get_session_store),
+        get_file_registry: app.dependency_overrides.get(get_file_registry),
+        get_worker_pool: app.dependency_overrides.get(get_worker_pool),
+    }
+    app.dependency_overrides[get_session_store] = lambda: store
+    app.dependency_overrides[get_file_registry] = lambda: registry
+    app.dependency_overrides[get_worker_pool] = lambda: _InlineRealWorkerPool()
+
+    try:
+        local_client = TestClient(app, raise_server_exceptions=False)
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.resolve_source_selection",
+                return_value=(str(lut_path), "Temporary LUT"),
+            ),
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value=str(image_path)),
+            ),
+            patch(
+                "api.routers.converter.preview.validate_converter_source",
+                wraps=validate_converter_source,
+            ),
+            patch("config.TEMP_DIR", str(tmp_path)),
+            patch("api.preview_cache_artifacts.TEMP_DIR", str(tmp_path)),
+            patch("api.routers.converter.preview.TEMP_DIR", str(tmp_path)),
+        ):
+            response = local_client.post(
+                "/api/convert/preview",
+                files={"image": ("empty.svg", upload_bytes, "image/svg+xml")},
+                data={
+                    "lut_name": "temporary_lut",
+                    "color_mode": "4-Color (RYBW)",
+                    "modeling_mode": "vector",
+                    "target_width_mm": "10",
+                },
+            )
+
+        assert response.status_code == 422, response.text
+        assert response.json()["detail"]["error"] == (
+            "source_svg_no_renderable_geometry"
+        )
+        assert "No valid shapes" not in response.text
+        assert not image_path.exists()
+    finally:
+        registry.clear_all()
+        store.clear_all()
         for dependency, previous in previous_overrides.items():
             if previous is None:
                 app.dependency_overrides.pop(dependency, None)
@@ -2182,6 +2260,236 @@ class TestGeneralExceptionReturns500:
             "message": VECTOR_NATIVE_REQUIRES_SVG_DETAIL,
         }
 
+    @pytest.mark.parametrize(
+        ("diagnostic", "modeling_mode"),
+        [
+            (
+                "⚠️ Vector Native mode requires SVG files! near match",
+                "vector",
+            ),
+            (VECTOR_NATIVE_REQUIRES_SVG_DETAIL, "high-fidelity"),
+        ],
+    )
+    def test_preview_vector_source_mismatch_allowlist_keeps_other_failures_internal(
+        self,
+        diagnostic: str,
+        modeling_mode: str,
+    ) -> None:
+        buf = _make_test_image_buf()
+        _mock_pool.submit = AsyncMock(side_effect=RuntimeError(diagnostic))
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.get_lut_path",
+                return_value="/tmp/fake.npy",
+            ),
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value="/tmp/uploaded.png"),
+            ),
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": ("test.png", buf, "image/png")},
+                data={
+                    "lut_name": "test_lut",
+                    "color_mode": "4-Color",
+                    "modeling_mode": modeling_mode,
+                },
+            )
+
+        assert response.status_code == 500
+        assert response.json()["detail"] == (
+            "Preview generation failed. Re-run preview and try again."
+        )
+
+    @pytest.mark.parametrize(
+        ("diagnostic", "expected_error"),
+        [
+            (
+                "[VECTOR_PREVIEW] No valid shapes found in SVG",
+                "source_svg_no_renderable_geometry",
+            ),
+            (
+                "[VECTOR_PREVIEW] No valid filled shapes found in SVG.",
+                "source_svg_no_renderable_geometry",
+            ),
+            (
+                "[VECTOR_PREVIEW] SVG compound path exceeds supported "
+                "intersecting subpath complexity",
+                "source_svg_too_complex",
+            ),
+        ],
+    )
+    def test_preview_known_svg_validation_returns_actionable_422(
+        self,
+        tmp_path: Path,
+        diagnostic: str,
+        expected_error: str,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        source = tmp_path / "source.svg"
+        source.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"/>',
+            encoding="utf-8",
+        )
+        _mock_pool.submit = AsyncMock(side_effect=RuntimeError(diagnostic))
+        preview_logger = logging.getLogger("lumina.api.routers.converter.preview")
+        preview_logger.addHandler(caplog.handler)
+        caplog.set_level(
+            logging.WARNING,
+            logger="lumina.api.routers.converter.preview",
+        )
+
+        try:
+            with (
+                patch(
+                    "api.routers.converter.preview.LUTManager.resolve_source_selection",
+                    return_value=("/tmp/fake.npy", "Fake LUT"),
+                ),
+                patch(
+                    "api.routers.converter.preview.ensure_png_tempfile",
+                    new=AsyncMock(return_value=str(source)),
+                ),
+            ):
+                response = client.post(
+                    "/api/convert/preview",
+                    files={"image": ("source.svg", source.read_bytes(), "image/svg+xml")},
+                    data={
+                        "lut_name": "test_lut",
+                        "color_mode": "4-Color",
+                        "modeling_mode": "vector",
+                    },
+                )
+        finally:
+            preview_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 422
+        assert response.json()["detail"]["error"] == expected_error
+        assert diagnostic not in response.text
+        records = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "converter_preview_input_rejected"
+        ]
+        assert len(records) == 1
+        record_fields = records[0].__dict__
+        assert record_fields["reason"] == expected_error
+        assert diagnostic not in repr(record_fields)
+
+    @pytest.mark.parametrize(
+        ("diagnostic", "suffix", "modeling_mode"),
+        [
+            (
+                "[VECTOR_PREVIEW] No valid shapes found in SVG: near match",
+                ".svg",
+                "vector",
+            ),
+            (
+                "[VECTOR_PREVIEW] No valid shapes found in SVG",
+                ".png",
+                "vector",
+            ),
+            (
+                "[VECTOR_PREVIEW] No valid shapes found in SVG",
+                ".svg",
+                "high-fidelity",
+            ),
+        ],
+    )
+    def test_preview_svg_diagnostic_allowlist_does_not_reclassify_other_failures(
+        self,
+        tmp_path: Path,
+        diagnostic: str,
+        suffix: str,
+        modeling_mode: str,
+    ) -> None:
+        source = tmp_path / f"source{suffix}"
+        if suffix == ".svg":
+            source.write_text(
+                '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"/>',
+                encoding="utf-8",
+            )
+        else:
+            Image.new("RGB", (4, 4), (0, 0, 0)).save(source)
+        _mock_pool.submit = AsyncMock(side_effect=RuntimeError(diagnostic))
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.resolve_source_selection",
+                return_value=("/tmp/fake.npy", "Fake LUT"),
+            ),
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value=str(source)),
+            ),
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": (source.name, source.read_bytes(), "application/octet-stream")},
+                data={
+                    "lut_name": "test_lut",
+                    "color_mode": "4-Color",
+                    "modeling_mode": modeling_mode,
+                },
+            )
+
+        assert response.status_code == 500
+        assert response.json()["detail"] == (
+            "Preview generation failed. Re-run preview and try again."
+        )
+
+    @pytest.mark.parametrize(
+        "diagnostic",
+        [
+            "[VECTOR_PREVIEW] No valid shapes found in SVG",
+            VECTOR_NATIVE_REQUIRES_SVG_DETAIL,
+        ],
+    )
+    def test_preview_surface_artwork_svg_diagnostic_stays_internal_500(
+        self,
+        tmp_path: Path,
+        diagnostic: str,
+    ) -> None:
+        upload = tmp_path / "upload.svg"
+        surface_artwork = tmp_path / "surface-artwork.svg"
+        svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"/>'
+        upload.write_text(svg, encoding="utf-8")
+        surface_artwork.write_text(svg, encoding="utf-8")
+        _mock_pool.submit = AsyncMock(side_effect=RuntimeError(diagnostic))
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.resolve_source_selection",
+                return_value=("/tmp/fake.npy", "Fake LUT"),
+            ),
+            patch(
+                "api.routers.converter.preview.ensure_png_tempfile",
+                new=AsyncMock(return_value=str(upload)),
+            ),
+            patch(
+                "api.routers.converter.preview.resolve_surface_preview_config",
+                return_value={
+                    "surface_artwork_path": str(surface_artwork),
+                    "target_width_mm": 10.0,
+                },
+            ),
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={"image": ("upload.svg", upload.read_bytes(), "image/svg+xml")},
+                data={
+                    "lut_name": "test_lut",
+                    "color_mode": "4-Color",
+                    "modeling_mode": "vector",
+                },
+            )
+
+        assert response.status_code == 500
+        assert response.json()["detail"] == (
+            "Preview generation failed. Re-run preview and try again."
+        )
+
     def test_preview_missing_worker_output_uses_public_error_language(self) -> None:
         """Worker status_msg should not leak local paths when no PNG is returned."""
         buf = _make_test_image_buf()
@@ -2219,6 +2527,245 @@ class TestGeneralExceptionReturns500:
         )
         assert private_path not in response.text
         assert "permission denied" not in response.text
+
+
+class TestConverterSourceUploadValidation:
+    """Only definite failures in newly uploaded artwork become public 4xx."""
+
+    @staticmethod
+    def _post_with_persisted_source(
+        source_path: Path,
+        *,
+        upload_name: str,
+        content_type: str,
+    ) -> tuple[object, MagicMock]:
+        pool = MagicMock(spec=WorkerPoolManager)
+        pool.submit_timed = AsyncMock(
+            side_effect=RuntimeError("unexpected worker submission")
+        )
+        previous_pool = app.dependency_overrides.get(get_worker_pool)
+        app.dependency_overrides[get_worker_pool] = lambda: pool
+
+        try:
+            with (
+                patch(
+                    "api.routers.converter.preview.LUTManager.resolve_source_selection",
+                    return_value=("/tmp/fake.npy", "Fake LUT"),
+                ),
+                patch(
+                    "api.routers.converter.preview.ensure_png_tempfile",
+                    new=AsyncMock(return_value=str(source_path)),
+                ),
+                patch(
+                    "api.routers.converter.preview.validate_converter_source",
+                    wraps=validate_converter_source,
+                ),
+                patch(
+                    "api.routers.converter.preview.generate_segmented_glb",
+                    return_value=None,
+                ),
+            ):
+                response = client.post(
+                    "/api/convert/preview",
+                    files={"image": (upload_name, b"request-body", content_type)},
+                    data={
+                        "lut_name": "test_lut",
+                        "color_mode": "4-Color",
+                        "modeling_mode": "vector" if upload_name.endswith(".svg") else "high-fidelity",
+                    },
+                )
+        finally:
+            if previous_pool is None:
+                app.dependency_overrides.pop(get_worker_pool, None)
+            else:
+                app.dependency_overrides[get_worker_pool] = previous_pool
+
+        if response.status_code == 200:
+            session_id = response.json()["session_id"]
+            _test_store.close(session_id)
+            _test_registry.cleanup_session(session_id)
+        return response, pool
+
+    def test_corrupt_raster_returns_structured_422_before_worker(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        source = tmp_path / "private-upload-name.png"
+        source.write_bytes(b"not-a-real-png")
+        preview_logger = logging.getLogger("lumina.api.routers.converter.preview")
+        preview_logger.addHandler(caplog.handler)
+        caplog.set_level(
+            logging.WARNING,
+            logger="lumina.api.routers.converter.preview",
+        )
+
+        try:
+            response, pool = self._post_with_persisted_source(
+                source,
+                upload_name="private-upload-name.png",
+                content_type="image/png",
+            )
+        finally:
+            preview_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 422
+        assert response.json()["detail"]["error"] == "source_image_unreadable"
+        assert "private-upload-name" not in response.text
+        pool.submit_timed.assert_not_awaited()
+        assert not source.exists()
+        records = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "converter_source_upload_rejected"
+        ]
+        assert len(records) == 1
+        record_fields = records[0].__dict__
+        assert record_fields["reason"] == "source_image_unreadable"
+        assert record_fields["error_message"] == response.json()["detail"]["message"]
+        assert "private-upload-name" not in repr(record_fields)
+        assert "not-a-real-png" not in repr(record_fields)
+
+    def test_truncated_jpeg_returns_structured_422_before_worker(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        buffer = io.BytesIO()
+        Image.new("RGB", (100, 100), (12, 34, 56)).save(buffer, format="JPEG")
+        source = tmp_path / "truncated.jpg"
+        source.write_bytes(buffer.getvalue()[:-10])
+
+        response, pool = self._post_with_persisted_source(
+            source,
+            upload_name="truncated.jpg",
+            content_type="image/jpeg",
+        )
+
+        assert response.status_code == 422
+        assert response.json()["detail"]["error"] == "source_image_unreadable"
+        pool.submit_timed.assert_not_awaited()
+        assert not source.exists()
+
+    def test_generic_mime_and_raster_extension_mismatch_remain_accepted(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        worker_result = _create_worker_result_files()
+        _mock_pool.submit = AsyncMock(return_value=worker_result)
+        image_bytes = _make_test_image_buf().getvalue()
+        session_id = None
+
+        with (
+            patch(
+                "api.routers.converter.preview.LUTManager.resolve_source_selection",
+                return_value=("/tmp/fake.npy", "Fake LUT"),
+            ),
+            patch(
+                "api.routers.converter.preview.validate_converter_source",
+                wraps=validate_converter_source,
+            ),
+            patch(
+                "api.routers.converter.preview.generate_segmented_glb",
+                return_value=None,
+            ),
+            patch("config.TEMP_DIR", str(tmp_path)),
+            patch("api.routers.converter.preview.TEMP_DIR", str(tmp_path)),
+        ):
+            response = client.post(
+                "/api/convert/preview",
+                files={
+                    "image": (
+                        "png-content.jpg",
+                        image_bytes,
+                        "application/octet-stream",
+                    )
+                },
+                data={"lut_name": "test_lut", "color_mode": "4-Color"},
+            )
+
+        try:
+            assert response.status_code == 200, response.text
+            session_id = response.json()["session_id"]
+        finally:
+            if session_id is not None:
+                _test_store.close(session_id)
+                _test_registry.cleanup_session(session_id)
+
+    def test_malformed_svg_returns_structured_422_before_worker(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        source = tmp_path / "source.svg"
+        source.write_text("<svg><path></svg>", encoding="utf-8")
+        preview_logger = logging.getLogger("lumina.api.routers.converter.preview")
+        preview_logger.addHandler(caplog.handler)
+        caplog.set_level(
+            logging.WARNING,
+            logger="lumina.api.routers.converter.preview",
+        )
+
+        try:
+            response, pool = self._post_with_persisted_source(
+                source,
+                upload_name="source.svg",
+                content_type="image/svg+xml",
+            )
+        finally:
+            preview_logger.removeHandler(caplog.handler)
+
+        assert response.status_code == 422
+        assert response.json()["detail"]["error"] == "source_svg_invalid"
+        pool.submit_timed.assert_not_awaited()
+        assert not source.exists()
+        records = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "converter_source_upload_rejected"
+        ]
+        assert len(records) == 1
+        record_fields = records[0].__dict__
+        assert record_fields["reason"] == "source_svg_invalid"
+        assert str(source) not in repr(record_fields)
+        assert "<svg><path>" not in repr(record_fields)
+
+    def test_file_open_failure_stays_internal_500(self, tmp_path: Path) -> None:
+        missing = tmp_path / "missing.png"
+
+        response, pool = self._post_with_persisted_source(
+            missing,
+            upload_name="missing.png",
+            content_type="image/png",
+        )
+
+        assert response.status_code == 500
+        assert response.json()["detail"] == (
+            "Preview generation failed. Re-run preview and try again."
+        )
+        pool.submit_timed.assert_not_awaited()
+
+    def test_decompression_bomb_returns_structured_413(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        source = tmp_path / "source.png"
+        source.write_bytes(b"opened-before-pillow")
+
+        with patch(
+            "api.routers.converter.source_validation.Image.open",
+            side_effect=Image.DecompressionBombError("private diagnostic"),
+        ):
+            response, pool = self._post_with_persisted_source(
+                source,
+                upload_name="source.png",
+                content_type="image/png",
+            )
+
+        assert response.status_code == 413
+        assert response.json()["detail"]["error"] == "source_image_too_large"
+        assert "private diagnostic" not in response.text
+        pool.submit_timed.assert_not_awaited()
+        assert not source.exists()
 
 
 class TestNativeBundleValidation:
