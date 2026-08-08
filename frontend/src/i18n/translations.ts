@@ -133,6 +133,26 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "矢量建模模式仅支持 SVG 文件。请上传 SVG，或切换到“高保真”或“像素艺术”模式。",
     en: "Vector Native mode requires an SVG file. Upload an SVG, or switch to High-Fidelity or Pixel Art mode.",
   },
+  api_error_model_surface_mesh_not_watertight: {
+    zh: "模型不是闭合实体，无法安全开槽。请先修复网格后重新上传。",
+    en: "The model is not a closed solid and cannot be cut safely. Repair the mesh and upload it again.",
+  },
+  api_error_model_surface_mesh_not_volume: {
+    zh: "模型实体方向无效。请修复网格法线后重新上传。",
+    en: "The model has invalid solid orientation. Repair its normals and upload it again.",
+  },
+  api_error_model_surface_thickness_unknown: {
+    zh: "无法确定所选表面的厚度。请选择其他表面或修复模型。",
+    en: "The selected surface thickness could not be determined. Choose another surface or repair the model.",
+  },
+  api_error_model_surface_insufficient_thickness: {
+    zh: "所选表面太薄，无法容纳当前颜色叠层。请减少层数、降低层高，或选择更厚的表面。",
+    en: "The selected surface is too thin for the current colour stack. Use fewer layers, a smaller layer height, or a thicker surface.",
+  },
+  api_error_model_surface_boolean_failed: {
+    zh: "无法在所选表面安全开槽。请修复模型，或选择更简单的表面。",
+    en: "The selected surface could not be cut safely. Repair the model or choose a simpler surface.",
+  },
   api_error_http_429: {
     zh: "请求过于频繁，请稍后再试。",
     en: "Too many requests were sent. Please wait and try again.",
