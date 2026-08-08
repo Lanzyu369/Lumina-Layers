@@ -130,7 +130,9 @@ API is intentionally out of scope because dynamic recipes are padded to the
 maximum print width and the reported failure is caused by querying the wrong
 existing key. Changes to any suggestion input cancel the in-flight request,
 clear its visible result, and advance a latest-request token so a transport
-that ignores cancellation cannot restore a stale answer.
+that ignores cancellation cannot restore a stale answer. The effective solver
+grid resolution is part of the LRU key; toggling grid selection or changing
+its selected tier invalidates visible and in-flight suggestions.
 
 ### Gradient-banding behavior
 
@@ -181,6 +183,8 @@ that fail on the current base for the exact reasons below:
    `Top2Bottom` cache storage.
 8. Changing the dynamic maximum clears and invalidates an in-flight result so
    an old eight-layer response cannot overwrite the new seven-layer state.
+9. Default-grid, 64-grid, and 128-grid suggestion requests do not share LRU
+   entries, and a response from the previous grid cannot restore stale state.
 
 Focused gates:
 

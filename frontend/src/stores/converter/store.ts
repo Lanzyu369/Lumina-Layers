@@ -223,11 +223,13 @@ function _materialSuggestCacheKey(params: {
   layerCount: number;
   layerHeightMm: number;
   substrate: string;
+  gridResolution?: number;
   targetHex: string;
 }): string {
   const dirs = params.directoryNames.join(",");
   const hex = params.targetHex.replace(/^#/, "").toLowerCase();
-  return `${dirs}|${params.layerCount}|${params.layerHeightMm}|${params.substrate}|${hex}`;
+  const gridResolution = params.gridResolution ?? "default";
+  return `${dirs}|${params.layerCount}|${params.layerHeightMm}|${params.substrate}|${gridResolution}|${hex}`;
 }
 
 export const RAW_EXTENSIONS_CONVERTER = new Set([
@@ -6361,12 +6363,18 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       const { signal } = _materialSuggestAbortController;
       const requestToken = ++_materialSuggestRequestToken;
       const suggestionLayerCount = resolveMaterialPrintLayerCount(state);
+      const settingsState = useSettingsStore.getState();
+      const gridResolutionOverride =
+        settingsState.enableSolverCacheGridSelection
+          ? settingsState.solverCacheGridResolution
+          : undefined;
 
       const cacheKey = _materialSuggestCacheKey({
         directoryNames: dirNames,
         layerCount: suggestionLayerCount,
         layerHeightMm: state.materialLayerHeightMm,
         substrate: "white",
+        gridResolution: gridResolutionOverride,
         targetHex: cleaned,
       });
       const cached = _materialSuggestCache.get(cacheKey);
@@ -6391,11 +6399,6 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
       // Forward the opt-in grid resolution so the suggest-colors lookup
       // hits the same on-disk cache the user built through the dialog;
       // otherwise we would silently fall back to a slower MITM run.
-      const settingsState = useSettingsStore.getState();
-      const gridResolutionOverride =
-        settingsState.enableSolverCacheGridSelection
-          ? settingsState.solverCacheGridResolution
-          : undefined;
       try {
         const response = await fetchMaterialColorSuggestions(
           {
@@ -6407,9 +6410,15 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
           cleaned,
           { signal, gridResolution: gridResolutionOverride },
         );
+        const currentSettingsState = useSettingsStore.getState();
+        const currentGridResolution =
+          currentSettingsState.enableSolverCacheGridSelection
+            ? currentSettingsState.solverCacheGridResolution
+            : undefined;
         if (
           signal.aborted ||
-          requestToken !== _materialSuggestRequestToken
+          requestToken !== _materialSuggestRequestToken ||
+          currentGridResolution !== gridResolutionOverride
         ) {
           return;
         }

@@ -594,6 +594,11 @@ In `fetchMaterialSuggestions`, add:
 
 Use `suggestionLayerCount` as `layerCount` in `_materialSuggestCacheKey` and `fetchMaterialColorSuggestions`.
 
+Resolve the effective optional solver grid before the cache lookup and include
+it in both the LRU key and API options. The default grid and an explicit 64
+grid may use separate entries; correctness takes priority over that harmless
+duplicate because their request contracts are distinct.
+
 Because the dynamic maximum is now a request/cache dependency, changes to any
 suggestion input must also cancel the current request and clear the visible
 suggestion state. Advance a latest-request token when cancelling and verify it
@@ -603,6 +608,10 @@ transport from restoring a stale result after `AbortController.abort()`.
 Add a regression that starts an eight-layer request, changes the maximum to
 seven, resolves the old request despite its aborted signal, and asserts that
 the store remains cleared.
+
+Add grid regressions proving that default/64/128 requests do not reuse one
+another and that both the grid opt-in toggle and selected tier invalidate
+visible and in-flight suggestions.
 
 - [ ] **Step 4: Run frontend behavior tests and build**
 

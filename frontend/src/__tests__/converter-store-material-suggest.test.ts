@@ -263,6 +263,99 @@ describe("converter store — fetchMaterialSuggestions", () => {
     expect(useConverterStore.getState().materialSuggestionsTargetHex).toBeNull();
   });
 
+  it("separates grid-resolution caches and rejects a result from the old grid", async () => {
+    const useConverterStore = await loadStore();
+    const { useSettingsStore } = await import("../stores/settingsStore");
+    resetStore(useConverterStore);
+    useSettingsStore.setState({
+      enableSolverCacheGridSelection: true,
+      solverCacheGridResolution: 64,
+    });
+    fetchMaterialColorSuggestionsMock.mockResolvedValueOnce(
+      stubResponse({ palette_hash: "grid-64" }),
+    );
+
+    await useConverterStore.getState().fetchMaterialSuggestions("#C86432");
+    expect(fetchMaterialColorSuggestionsMock).toHaveBeenCalledTimes(1);
+    expect(fetchMaterialColorSuggestionsMock.mock.calls[0]?.[2]).toEqual(
+      expect.objectContaining({ gridResolution: 64 }),
+    );
+
+    useSettingsStore.getState().setSolverCacheGridResolution(128);
+    await vi.waitFor(() => {
+      expect(useConverterStore.getState().materialSuggestions).toBeNull();
+    });
+
+    let requestSignal: AbortSignal | undefined;
+    let resolveRequest: (value: MaterialColorSuggestionsResponse) => void =
+      () => {};
+    fetchMaterialColorSuggestionsMock.mockImplementationOnce(
+      async (_key: unknown, _hex: string, options: { signal?: AbortSignal }) => {
+        requestSignal = options.signal;
+        return new Promise<MaterialColorSuggestionsResponse>((resolve) => {
+          resolveRequest = resolve;
+        });
+      },
+    );
+
+    const pending = useConverterStore
+      .getState()
+      .fetchMaterialSuggestions("#C86432");
+    expect(fetchMaterialColorSuggestionsMock).toHaveBeenCalledTimes(2);
+    expect(fetchMaterialColorSuggestionsMock.mock.calls[1]?.[2]).toEqual(
+      expect.objectContaining({ gridResolution: 128 }),
+    );
+
+    useSettingsStore.getState().setSolverCacheGridResolution(256);
+    await vi.waitFor(() => {
+      expect(requestSignal?.aborted).toBe(true);
+    });
+    resolveRequest(stubResponse({ palette_hash: "grid-128" }));
+    await pending;
+
+    expect(useConverterStore.getState().materialSuggestions).toBeNull();
+    expect(useConverterStore.getState().materialSuggestionsTargetHex).toBeNull();
+
+    useSettingsStore.setState({
+      enableSolverCacheGridSelection: false,
+      solverCacheGridResolution: 64,
+    });
+  });
+
+  it("invalidates default-grid suggestions when grid selection is enabled", async () => {
+    const useConverterStore = await loadStore();
+    const { useSettingsStore } = await import("../stores/settingsStore");
+    resetStore(useConverterStore);
+    useSettingsStore.setState({
+      enableSolverCacheGridSelection: false,
+      solverCacheGridResolution: 64,
+    });
+    fetchMaterialColorSuggestionsMock
+      .mockResolvedValueOnce(stubResponse({ palette_hash: "grid-default" }))
+      .mockResolvedValueOnce(stubResponse({ palette_hash: "grid-opt-in" }));
+
+    await useConverterStore.getState().fetchMaterialSuggestions("#C86432");
+    expect(fetchMaterialColorSuggestionsMock.mock.calls[0]?.[2]).toEqual(
+      expect.objectContaining({ gridResolution: undefined }),
+    );
+
+    useSettingsStore.getState().setEnableSolverCacheGridSelection(true);
+    await vi.waitFor(() => {
+      expect(useConverterStore.getState().materialSuggestions).toBeNull();
+    });
+    await useConverterStore.getState().fetchMaterialSuggestions("#C86432");
+
+    expect(fetchMaterialColorSuggestionsMock).toHaveBeenCalledTimes(2);
+    expect(fetchMaterialColorSuggestionsMock.mock.calls[1]?.[2]).toEqual(
+      expect.objectContaining({ gridResolution: 64 }),
+    );
+
+    useSettingsStore.setState({
+      enableSolverCacheGridSelection: false,
+      solverCacheGridResolution: 64,
+    });
+  });
+
   it("does not share cache between palettes with different ordering", async () => {
     const useConverterStore = await loadStore();
     resetStore(useConverterStore);
