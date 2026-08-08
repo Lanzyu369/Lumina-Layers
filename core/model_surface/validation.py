@@ -6,6 +6,8 @@ from core.model_surface.types import ModelSurfaceError
 
 MODEL_SURFACE_MESH_NOT_WATERTIGHT = "model_surface_mesh_not_watertight"
 MODEL_SURFACE_MESH_NOT_VOLUME = "model_surface_mesh_not_volume"
+MODEL_SURFACE_THICKNESS_UNKNOWN = "model_surface_thickness_unknown"
+MODEL_SURFACE_INSUFFICIENT_THICKNESS = "model_surface_insufficient_thickness"
 MODEL_SURFACE_BOOLEAN_FAILED = "model_surface_boolean_failed"
 
 

@@ -26,8 +26,10 @@ from config import PrinterConfig
 from core.material_lut_synthesis import infer_material_archive_base_channel_idx
 from core.model_surface.validation import (
     MODEL_SURFACE_BOOLEAN_FAILED,
+    MODEL_SURFACE_INSUFFICIENT_THICKNESS,
     MODEL_SURFACE_MESH_NOT_VOLUME,
     MODEL_SURFACE_MESH_NOT_WATERTIGHT,
+    MODEL_SURFACE_THICKNESS_UNKNOWN,
 )
 from core.pipeline._input_validation_common import (
     VECTOR_NATIVE_REQUIRES_SVG_DETAIL,
@@ -45,11 +47,11 @@ MODEL_SURFACE_PUBLIC_ERROR_MESSAGES: dict[str, str] = {
         "The model has invalid solid orientation. "
         "Repair its normals and upload it again."
     ),
-    "model_surface_thickness_unknown": (
+    MODEL_SURFACE_THICKNESS_UNKNOWN: (
         "The selected surface thickness could not be determined. "
         "Choose another surface or repair the model."
     ),
-    "model_surface_insufficient_thickness": (
+    MODEL_SURFACE_INSUFFICIENT_THICKNESS: (
         "The selected surface is too thin for the current colour stack. "
         "Use fewer layers, a smaller layer height, or a thicker surface."
     ),

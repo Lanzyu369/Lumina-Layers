@@ -68,9 +68,9 @@ def test_preview_attaches_model_surface_config(monkeypatch, tmp_path, preview_st
     ).json()
 
     async def fake_submit(fn, *args):
-        return _fake_worker_result(tmp_path)
+        return _fake_worker_result(tmp_path), _fake_worker_pool_timing()
 
-    pool.submit = AsyncMock(side_effect=fake_submit)
+    pool.submit_timed = AsyncMock(side_effect=fake_submit)
 
     with (
         patch(
@@ -199,9 +199,9 @@ def test_vector_preview_keeps_model_surface_svg_native(tmp_path, preview_state):
 
     async def fake_submit(_fn, *args):
         submitted_paths.append(str(args[0]))
-        return _fake_worker_result(tmp_path)
+        return _fake_worker_result(tmp_path), _fake_worker_pool_timing()
 
-    pool.submit = AsyncMock(side_effect=fake_submit)
+    pool.submit_timed = AsyncMock(side_effect=fake_submit)
 
     with (
         patch(
@@ -327,4 +327,12 @@ def _fake_worker_result(tmp_path) -> dict:
         "preview_png_path": str(preview_path),
         "cache_data_path": str(cache_path),
         "status_msg": "ok",
+    }
+
+
+def _fake_worker_pool_timing() -> dict[str, float]:
+    return {
+        "queue_wait_s": 0.0,
+        "worker_execution_s": 0.0,
+        "result_delivery_s": 0.0,
     }

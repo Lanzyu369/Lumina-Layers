@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
+from httpx import Response
 import numpy as np
 from PIL import Image
 import pytest
@@ -16,12 +17,14 @@ from api.app import app
 from api.dependencies import get_file_registry, get_session_store, get_worker_pool
 from api.file_registry import FileRegistry
 from api.routers.converter.generate import (
+    MODEL_GENERATION_FAILED_DETAIL,
     _prepare_model_surface_overlay_worker_params,
     _should_use_model_surface_overlay,
 )
 from api.session_store import SessionStore
 from config import ModelingMode as CoreModelingMode, PrinterConfig
 from core.model_surface.assembly import OverlaySceneResult
+from core.model_surface.types import ModelSurfaceError
 from core.pipeline.s06_voxel_building import _build_voxel_matrix
 
 
@@ -96,6 +99,77 @@ def generate_state():
                 app.dependency_overrides[dependency] = old_override
 
 
+def _seed_model_surface_generate_session(
+    tmp_path: Path,
+    store: SessionStore,
+) -> str:
+    rendered_surface_art_path = tmp_path / "surface-error-art.svg"
+    lut_path = tmp_path / "surface-error-lut.npy"
+    model_path = tmp_path / "surface-error-plate.stl"
+    rendered_surface_art_path.write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 10">'
+        '<path d="M0 0H20V10H0Z" fill="#ff0000"/>'
+        "</svg>",
+        encoding="utf-8",
+    )
+    lut_path.write_bytes(b"lut")
+    trimesh.creation.box(extents=(20.0, 10.0, 2.0)).export(model_path)
+
+    session_id = store.create()
+    store.put(
+        session_id,
+        "preview_cache",
+        {"target_w": 20, "target_h": 10, "target_width_mm": 20.0},
+    )
+    store.put(session_id, "image_path", str(rendered_surface_art_path))
+    store.put(session_id, "lut_path", str(lut_path))
+    store.put(session_id, "surface_overlay_enabled", True)
+    store.put(session_id, "surface_model_path", str(model_path))
+    store.put(
+        session_id,
+        "surface_artwork_path",
+        str(rendered_surface_art_path),
+    )
+    store.put(
+        session_id,
+        "surface_footprint",
+        {
+            "frame": {
+                "origin": [0.0, 0.0, 1.0],
+                "normal": [0.0, 0.0, 1.0],
+                "u_axis": [1.0, 0.0, 0.0],
+                "v_axis": [0.0, 1.0, 0.0],
+            },
+            "outer": [
+                [-10.0, -5.0],
+                [10.0, -5.0],
+                [10.0, 5.0],
+                [-10.0, 5.0],
+                [-10.0, -5.0],
+            ],
+            "holes": [],
+            "bounds_width_mm": 20.0,
+            "bounds_height_mm": 10.0,
+        },
+    )
+    return session_id
+
+
+def _post_model_surface_generate(session_id: str) -> Response:
+    return TestClient(app, raise_server_exceptions=False).post(
+        "/api/convert/generate",
+        json={
+            "session_id": session_id,
+            "params": {
+                "target_width_mm": 20.0,
+                "lut_name": "default",
+                "modeling_mode": CoreModelingMode.VECTOR.value,
+                "model_enable": True,
+            },
+        },
+    )
+
+
 def test_should_use_model_surface_overlay_requires_session_flag():
     assert _should_use_model_surface_overlay({"surface_overlay_enabled": True}) is True
     assert _should_use_model_surface_overlay({"surface_overlay_enabled": False}) is False
@@ -161,9 +235,20 @@ def test_generate_routes_model_surface_session_to_overlay_worker(
     async def fake_submit(_fn, *_args):
         out_path = tmp_path / "surface.3mf"
         out_path.write_bytes(b"3mf")
-        return {"threemf_path": str(out_path), "glb_path": None, "status_msg": "Surface OK"}
+        return (
+            {
+                "threemf_path": str(out_path),
+                "glb_path": None,
+                "status_msg": "Surface OK",
+            },
+            {
+                "queue_wait_s": 0.0,
+                "worker_execution_s": 0.0,
+                "result_delivery_s": 0.0,
+            },
+        )
 
-    pool.submit = AsyncMock(side_effect=fake_submit)
+    pool.submit_timed = AsyncMock(side_effect=fake_submit)
 
     response = TestClient(app).post(
         "/api/convert/generate",
@@ -183,7 +268,9 @@ def test_generate_routes_model_surface_session_to_overlay_worker(
     assert response.status_code == 200, response.text
     from api.workers.converter_workers import worker_generate_model_surface_overlay
 
-    worker_fn, submitted_image, submitted_lut, submitted_params = pool.submit.call_args.args
+    worker_fn, submitted_image, submitted_lut, submitted_params = (
+        pool.submit_timed.call_args.args
+    )
     assert worker_fn is worker_generate_model_surface_overlay
     assert submitted_image == str(rendered_surface_art_path)
     assert submitted_image != str(original_image_path)
@@ -205,6 +292,47 @@ def test_generate_routes_model_surface_session_to_overlay_worker(
     assert submitted_params["converter_params"]["model_enable"] is True
     assert "surface_model_path" not in submitted_params["converter_params"]
     assert response.json()["preview_3d_url"] is None
+
+
+def test_generate_maps_model_surface_known_error_to_422(
+    tmp_path: Path,
+    generate_state,
+) -> None:
+    store, _registry, pool = generate_state
+    session_id = _seed_model_surface_generate_session(tmp_path, store)
+    pool.submit_timed = AsyncMock(
+        side_effect=ModelSurfaceError(
+            "model_surface_insufficient_thickness: "
+            "pattern=0.400000, available=0.200000"
+        )
+    )
+
+    response = _post_model_surface_generate(session_id)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == {
+        "error": "model_surface_insufficient_thickness",
+        "message": (
+            "The selected surface is too thin for the current colour stack. "
+            "Use fewer layers, a smaller layer height, or a thicker surface."
+        ),
+    }
+
+
+def test_generate_maps_model_surface_unknown_error_to_generic_500(
+    tmp_path: Path,
+    generate_state,
+) -> None:
+    store, _registry, pool = generate_state
+    session_id = _seed_model_surface_generate_session(tmp_path, store)
+    pool.submit_timed = AsyncMock(
+        side_effect=ModelSurfaceError("private_unclassified_surface_error")
+    )
+
+    response = _post_model_surface_generate(session_id)
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == MODEL_GENERATION_FAILED_DETAIL
 
 
 def test_model_surface_vector_request_is_never_silently_downgraded(tmp_path):
