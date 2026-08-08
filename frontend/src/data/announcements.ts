@@ -16,6 +16,24 @@ export interface AnnouncementEntry {
 
 export const ANNOUNCEMENTS: ReadonlyArray<AnnouncementEntry> = [
   {
+    version: "2026-08-08",
+    title: {
+      zh: "Lumina Layers — 材料配方颜色一致性",
+      en: "Lumina Layers — Consistent material recipe colours",
+    },
+    sections: [
+      {
+        category: { zh: "校准 & 材料", en: "Calibration & Materials" },
+        items: [
+          {
+            zh: "相同的耗材叠层现在会在转换预览、自定义配方、可实现颜色推荐和材料库配方查询里显示一致的模拟颜色；动态 5–8 层模式也会按实际八层范围寻找配方。",
+            en: "The same filament stack now shows one consistent simulated colour in conversion previews, custom recipes, achievable-colour suggestions, and Material Library recipe queries. Dynamic 5–8 layer mode also searches the full printable eight-layer range.",
+          },
+        ],
+      },
+    ],
+  },
+  {
     version: "2026-07-30",
     title: {
       zh: "Lumina Layers — 创意工坊与拼豆工作台",
