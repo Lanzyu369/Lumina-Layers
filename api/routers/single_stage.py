@@ -106,8 +106,7 @@ from core.material_color_solver import (
     MAX_LAYER_COUNT as _SOLVER_MAX_LAYER_COUNT,  # noqa: N811
     MIN_LAYER_COUNT as _SOLVER_MIN_LAYER_COUNT,  # noqa: N811
     ColorSuggestion,
-    forward_model,
-    linear_to_srgb_uint8,
+    predict_material_recipe_srgb,
     suggest_colors_for_target,
 )
 from core.material_lut_synthesis import load_multiple_materials
@@ -2043,26 +2042,6 @@ def _rollback_swatch_registration(
     _remove_generated_path(generated_path)
 
 
-def _resolve_substrate_linear(materials, substrate: str) -> np.ndarray:
-    """Resolve the substrate color in linear RGB for the forward model.
-    解析正向模型所需的基底线性 RGB。
-
-    The white substrate is fully modelled (every material archive carries
-    ``C0_white``). For black we fall back to a near-zero linear color because
-    Stage A archives currently only persist the white substrate parameter.
-    The fallback is conservative — any change here must keep
-    ``forward_model`` numerically stable for subsequent Beer-Lambert layers.
-
-    白基底由 ``C0_white`` 直接给出；黑基底退化为近似零线性色（当前 Stage A
-    存档只持久化白基底参数）。
-    """
-    if substrate == "white" and materials:
-        return np.asarray(materials[0].C0_white, dtype=np.float64).reshape(3)
-    if substrate == "black":
-        return np.full(3, 0.01, dtype=np.float64)
-    return np.ones(3, dtype=np.float64)
-
-
 @router.post("/material-recipe-preview")
 async def material_recipe_preview(
     payload: MaterialRecipePreviewRequest,
@@ -2078,16 +2057,13 @@ async def material_recipe_preview(
     层数仅受 schema 上限限制；求解器的 5 层下限不约束本接口。
     """
     materials = _load_palette_or_raise(payload.directory_names)
-    substrate_linear = _resolve_substrate_linear(materials, payload.substrate)
-
     recipe = np.arange(len(materials), dtype=np.int32)
-    predicted_linear = forward_model(
+    predicted_srgb = predict_material_recipe_srgb(
         recipe=recipe,
         materials=materials,
         layer_height_mm=float(payload.layer_height_mm),
-        substrate_linear=substrate_linear,
+        substrate=payload.substrate,
     )
-    predicted_srgb = linear_to_srgb_uint8(predicted_linear.reshape(1, 3))[0]
     predicted_rgb = [int(c) for c in predicted_srgb.tolist()]
     predicted_hex = "#{:02X}{:02X}{:02X}".format(*predicted_rgb)
 
