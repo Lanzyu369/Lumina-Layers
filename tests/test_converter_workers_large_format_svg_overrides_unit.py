@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import io
 import os
 import pickle
 import tempfile
+import xml.etree.ElementTree as ET
+import zipfile
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -148,6 +151,124 @@ def _scene_for_slots(slot_names: set[str]) -> SimpleNamespace:
 def _write_export(*, output_path: str, **_kwargs: object) -> None:
     with open(output_path, "wb") as handle:
         handle.write(b"3mf")
+
+
+@pytest.mark.parametrize("layer_height_mm", [0.08, 0.12])
+def test_native_worker_emits_base_layer_modifier_for_single_sided_tile(
+    layer_height_mm: float,
+) -> None:
+    color_height_mm = 5 * layer_height_mm
+    analysis = _analysis(
+        [_red_shape(1.0, 1.0, 9.0, 9.0)],
+        width_mm=10.0,
+        height_mm=10.0,
+    )
+
+    class _FlatVectorProcessor(_SlicerCompatibleProcessor):
+        color_mode = "4-Color"
+        img_processor = _fake_img_processor()
+
+        @staticmethod
+        def analyze_svg(**_kwargs: object) -> VectorAnalysis:
+            return analysis
+
+        @staticmethod
+        def build_mesh(**_kwargs: object) -> trimesh.Scene:
+            scene = trimesh.Scene()
+            color_mesh = trimesh.creation.box(
+                extents=(8.0, 8.0, color_height_mm)
+            )
+            color_mesh.visual.face_colors = [255, 0, 0, 255]
+            scene.add_geometry(color_mesh, geom_name="Red")
+            board_mesh = trimesh.creation.box(extents=(10.0, 10.0, 1.2))
+            board_mesh.visual.face_colors = [255, 255, 255, 255]
+            scene.add_geometry(board_mesh, geom_name="Board")
+            return scene
+
+    params = _params(
+        total_width_mm=10.0,
+        total_height_mm=10.0,
+        tile_width_mm=10.0,
+        tile_height_mm=10.0,
+    )
+    params.update(
+        layer_height_mm=layer_height_mm,
+        color_layers=5,
+        printer_id="bambu-h2d",
+        slicer="BambuStudio",
+        nozzle_size="0.4",
+        enable_base_layer_height_modifier=True,
+        enable_relief=False,
+    )
+
+    result = None
+    with (
+        patch(
+            "core.pipeline.vector_branch._build_vector_processor",
+            return_value=_FlatVectorProcessor(),
+        ),
+        patch(
+            "api.workers.converter_workers._rasterize_tile_for_cover",
+            return_value=None,
+        ),
+    ):
+        result = worker_generate_large_format_svg_native(
+            "image.svg",
+            "lut.npy",
+            params,
+        )
+
+    try:
+        with zipfile.ZipFile(result["zip_path"]) as package:
+            [tile_name] = package.namelist()
+            tile_bytes = package.read(tile_name)
+        with zipfile.ZipFile(io.BytesIO(tile_bytes)) as tile_package:
+            modifier_xml = tile_package.read(
+                "Metadata/layer_config_ranges.xml"
+            )
+
+        root = ET.fromstring(modifier_xml)
+        range_element = root.find("./object/range")
+        assert range_element is not None
+        assert float(range_element.attrib["min_z"]) == pytest.approx(
+            color_height_mm
+        )
+        assert float(range_element.attrib["max_z"]) == pytest.approx(
+            color_height_mm + 1.2
+        )
+        layer_height = range_element.find("./option[@opt_key='layer_height']")
+        assert layer_height is not None
+        assert float(layer_height.text or "nan") == pytest.approx(0.2)
+    finally:
+        if result is not None and os.path.exists(result["zip_path"]):
+            os.unlink(result["zip_path"])
+
+
+def test_native_worker_rejects_analysis_without_num_layers() -> None:
+    class _MissingLayerAnalysisProcessor:
+        color_mode = "4-Color"
+
+        @staticmethod
+        def analyze_svg(**_kwargs: object) -> object:
+            return SimpleNamespace()
+
+    params = _params(
+        total_width_mm=10.0,
+        total_height_mm=10.0,
+        tile_width_mm=10.0,
+        tile_height_mm=10.0,
+    )
+
+    with patch(
+        "core.pipeline.vector_branch._build_vector_processor",
+        return_value=_MissingLayerAnalysisProcessor(),
+    ):
+        with pytest.raises(ValueError, match="num_layers"):
+            worker_generate_large_format_svg_native(
+                "image.svg",
+                "lut.npy",
+                params,
+            )
 
 
 def _save_cache_paths(
