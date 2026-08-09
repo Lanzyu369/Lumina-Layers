@@ -124,6 +124,35 @@ that peak.
 | 3 | 3.698161 s | identical |
 | Median | **3.698161 s** | stock normalized hash matched |
 
+### Product-integrated contour normalization
+
+The product path was then measured with the full existing morphological close:
+the positive `+0.03 mm` buffer followed by the negative `-0.03 mm` buffer and
+the normal post-buffer checks. This is the operation that previously dominated
+the user's first 300 mm calculation, rather than the isolated positive-buffer
+kernel above.
+
+| Field | Stock product path | Integrated product path |
+| --- | ---: | ---: |
+| Positive buffer | 85.838012 s | 4.120775–4.184201 s |
+| Negative buffer | 90.383294 s | 0.552837–0.558664 s |
+| Total | **176.221310 s** | **4.767808–4.815761 s** |
+| Three-run median | — | **4.812965 s** |
+
+All three integrated runs produced the same valid `MultiPolygon` as stock:
+72,045 components, zero holes, identical bounds, and normalized-WKB SHA-256
+`0eeaa95c1511f39b474a953284098a60b541c11f99835febc948ef461989df33`.
+The earlier full stock/candidate comparison also produced an empty symmetric
+difference with area `0.0`. The `1e-12` difference in the separately aggregated
+floating-point area is only component summation order; the canonical geometry
+bytes and topology are identical.
+
+One immediately preceding measurement series under transient machine load had
+a 5.824936 s median. The repository's documented performance decision uses
+warm repeat runs, for which the integrated path passes the 5-second target, but
+the observed load sensitivity remains recorded rather than being treated as a
+hard wall-clock SLA.
+
 ## Second supplied sample, 300 mm
 
 `person_bd9869970839c02b0d0ac82e3756ccf1_20260725_074417_vector.svg` does not
