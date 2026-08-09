@@ -16,6 +16,7 @@ import math
 import tempfile
 import os
 import io
+import threading
 import warnings
 import xml.etree.ElementTree as ET
 from types import SimpleNamespace
@@ -742,6 +743,48 @@ class TestNormalizeContours:
 
         bottom = next(item for item in result if item["draw_order"] == 0)
         assert bottom["geometry"].area == pytest.approx(82.0)
+
+    def test_dense_clip_occlusion_preserves_exact_results_across_workers(self, monkeypatch):
+        shape_data = [
+            {
+                "poly": box(index * 0.05, 0.0, 10.0 + index * 0.05, 10.0),
+                "color": (index % 256, (index * 3) % 256, (index * 7) % 256),
+            }
+            for index in range(72)
+        ]
+        baseline = VectorProcessor._clip_occlusion(shape_data)
+        worker_threads = set()
+        thread_lock = threading.Lock()
+        original_union = vector_engine._union_occluder_geometries
+
+        def recording_union(items):
+            with thread_lock:
+                worker_threads.add(threading.get_ident())
+            return original_union(items)
+
+        monkeypatch.setattr(
+            vector_engine,
+            "resolve_task_parallelism_plan",
+            lambda *_args, **_kwargs: SimpleNamespace(workers=4),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            vector_engine,
+            "_union_occluder_geometries",
+            recording_union,
+        )
+
+        candidate = VectorProcessor._clip_occlusion(shape_data)
+
+        assert len(worker_threads) > 1
+        assert len(candidate) == len(baseline)
+        for stock_item, candidate_item in zip(baseline, candidate):
+            assert candidate_item["draw_order"] == stock_item["draw_order"]
+            assert candidate_item["color"] == stock_item["color"]
+            assert (
+                candidate_item["geometry"].normalize().wkb
+                == stock_item["geometry"].normalize().wkb
+            )
 
     def test_postprocess_clipped_shapes_skips_known_normalized_geometry(self, monkeypatch):
         normalized = Polygon([(0, 0), (5, 0), (5, 5), (0, 5)])

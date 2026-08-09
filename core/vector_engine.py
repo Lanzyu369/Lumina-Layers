@@ -23,6 +23,7 @@ import io
 import pickle
 import warnings
 import math
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from typing import Any
 import numpy as np
@@ -60,6 +61,10 @@ except ImportError:  # Shapely < 2.1; keep the old union path available.
 from api.structured_logging import get_logger
 from config import PrinterConfig, ColorSystem, VectorConfig
 from core import geos_buffer_fast
+from core.task_parallelism import (
+    resolve_task_parallelism_plan,
+    task_parallelism_worker_scope,
+)
 
 _log = get_logger(__name__)
 
@@ -589,6 +594,126 @@ VECTOR_HANDLED_ERRORS = (
     ArithmeticError,
     ShapelyError,
 )
+
+_OCCLUSION_PARALLEL_MIN_SHAPES = 64
+_OCCLUSION_QUERY_CHUNKS_PER_WORKER = 8
+_OCCLUSION_WORK_UNITS_PER_WORKER = 512
+_OCCLUSION_ESTIMATED_WORKER_BYTES = 256 * 1024**2
+
+
+def _clip_occlusion_result_item(item, index, geom, occluders):
+    """Build one clipped shape while retaining the serial fallback semantics."""
+
+    geometry_normalized = False
+    if not occluders:
+        clipped = geom
+        geometry_normalized = bool(item.get("geometry_normalized"))
+    else:
+        occ = (
+            occluders[0]
+            if len(occluders) == 1
+            else _union_occluder_geometries(occluders)
+        )
+        try:
+            clipped = geom.difference(occ)
+        except VECTOR_HANDLED_ERRORS:
+            try:
+                fixed_geom = geom if geom.is_valid else geom.buffer(0)
+                fixed_occ = occ if occ.is_valid else occ.buffer(0)
+                clipped = fixed_geom.difference(fixed_occ)
+            except VECTOR_HANDLED_ERRORS:
+                clipped = None
+
+    if clipped is None or clipped.is_empty:
+        return None
+    if not clipped.is_valid:
+        clipped = make_valid(clipped)
+    if clipped.is_empty:
+        return None
+    return {
+        "geometry": clipped,
+        "color": item["color"],
+        "draw_order": index,
+        "geometry_normalized": geometry_normalized,
+    }
+
+
+def _try_parallel_clip_occlusion(shape_data, orders, geoms, tree):
+    """Return exact independently clipped results, or ``None`` for serial use."""
+
+    parallelism_plan = resolve_task_parallelism_plan(
+        "vector",
+        work_items=len(orders),
+        min_parallel_items=_OCCLUSION_PARALLEL_MIN_SHAPES,
+        hard_max_workers=8,
+        work_units=len(orders),
+        min_parallel_work_units=_OCCLUSION_PARALLEL_MIN_SHAPES,
+        work_units_per_worker=_OCCLUSION_WORK_UNITS_PER_WORKER,
+        estimated_worker_bytes=_OCCLUSION_ESTIMATED_WORKER_BYTES,
+    )
+    worker_count = int(parallelism_plan.workers)
+    if worker_count <= 1:
+        return None
+
+    geom_array = np.asarray(geoms, dtype=object)
+    candidate_indices = [[] for _item in shape_data]
+    chunk_count = min(len(geoms), worker_count * _OCCLUSION_QUERY_CHUNKS_PER_WORKER)
+    chunk_size = max(1, (len(geoms) + chunk_count - 1) // chunk_count)
+    chunk_bounds = [
+        (start, min(len(geoms), start + chunk_size))
+        for start in range(0, len(geoms), chunk_size)
+    ]
+
+    def query_chunk(bounds):
+        start, end = bounds
+        with task_parallelism_worker_scope():
+            pairs = tree.query(
+                geom_array[start:end],
+                predicate="intersects",
+            )
+        if (
+            not isinstance(pairs, np.ndarray)
+            or pairs.ndim != 2
+            or pairs.shape[0] != 2
+        ):
+            raise TypeError("vector STRtree query returned an unexpected result")
+        return start, pairs
+
+    def clip_one(index):
+        item = shape_data[index]
+        geom = item["poly"]
+        if geom is None or geom.is_empty:
+            return None
+        occluders = [geoms[candidate] for candidate in candidate_indices[index]]
+        with task_parallelism_worker_scope():
+            return _clip_occlusion_result_item(item, index, geom, occluders)
+
+    try:
+        with ThreadPoolExecutor(
+            max_workers=worker_count,
+            thread_name_prefix="lumina-vector-occlusion",
+        ) as executor:
+            for start, query_pairs in executor.map(query_chunk, chunk_bounds):
+                for input_index, tree_index in zip(query_pairs[0], query_pairs[1]):
+                    shape_index = orders[start + int(input_index)]
+                    candidate_index = int(tree_index)
+                    if orders[candidate_index] > shape_index:
+                        candidate_indices[shape_index].append(candidate_index)
+            possible_results = list(executor.map(clip_one, range(len(shape_data))))
+    except Exception as exc:
+        _log.warning(
+            "Parallel vector occlusion unavailable; using serial clipping",
+            extra={
+                "event": "vector_occlusion_parallel_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+                "shape_count": len(shape_data),
+                "worker_count": worker_count,
+            },
+        )
+        return None
+
+    return [item for item in possible_results if item is not None]
 
 
 def _tag_local_name(elem):
@@ -6341,82 +6466,61 @@ class VectorProcessor:
         geoms = [v[1] for v in valid]
         tree = STRtree(geoms)
         geom_id_to_idx = {id(g): idx for idx, g in enumerate(geoms)}
-        result = []
+        result = _try_parallel_clip_occlusion(shape_data, orders, geoms, tree)
 
-        for i in range(n - 1, -1, -1):
-            item = shape_data[i]
-            geom = item["poly"]
-            if geom is None or geom.is_empty:
-                continue
-
-            occluders = []
-            predicate_filtered = False
-            try:
-                candidate_refs = tree.query(geom, predicate="intersects")
-                predicate_filtered = True
-            except TypeError:
-                try:
-                    candidate_refs = tree.query(geom)
-                except VECTOR_HANDLED_ERRORS:
-                    candidate_refs = []
-            except VECTOR_HANDLED_ERRORS:
-                try:
-                    candidate_refs = tree.query(geom)
-                except VECTOR_HANDLED_ERRORS:
-                    candidate_refs = []
-
-            for ref in candidate_refs:
-                if isinstance(ref, (int, np.integer)):
-                    idx = int(ref)
-                else:
-                    idx = geom_id_to_idx.get(id(ref), -1)
-                if idx < 0:
-                    continue
-                if orders[idx] <= i:
-                    continue
-                cand = geoms[idx]
-                if predicate_filtered:
-                    occluders.append(cand)
-                    continue
-                try:
-                    if cand.intersects(geom):
-                        occluders.append(cand)
-                except VECTOR_HANDLED_ERRORS:
+        if result is None:
+            result = []
+            for i in range(n - 1, -1, -1):
+                item = shape_data[i]
+                geom = item["poly"]
+                if geom is None or geom.is_empty:
                     continue
 
-            geometry_normalized = False
-            if not occluders:
-                clipped = geom
-                geometry_normalized = bool(item.get("geometry_normalized"))
-            else:
-                occ = occluders[0] if len(occluders) == 1 else _union_occluder_geometries(occluders)
+                occluders = []
+                predicate_filtered = False
                 try:
-                    clipped = geom.difference(occ)
-                except VECTOR_HANDLED_ERRORS:
-                    # First attempt failed — repair both geometries and retry.
+                    candidate_refs = tree.query(geom, predicate="intersects")
+                    predicate_filtered = True
+                except TypeError:
                     try:
-                        fixed_geom = geom if geom.is_valid else geom.buffer(0)
-                        fixed_occ = occ if occ.is_valid else occ.buffer(0)
-                        clipped = fixed_geom.difference(fixed_occ)
+                        candidate_refs = tree.query(geom)
                     except VECTOR_HANDLED_ERRORS:
-                        # Cannot compute difference — drop shape to avoid
-                        # overlapping geometry that breaks the mesh.
-                        clipped = None
+                        candidate_refs = []
+                except VECTOR_HANDLED_ERRORS:
+                    try:
+                        candidate_refs = tree.query(geom)
+                    except VECTOR_HANDLED_ERRORS:
+                        candidate_refs = []
 
-            if clipped is not None and not clipped.is_empty:
-                if not clipped.is_valid:
-                    clipped = make_valid(clipped)
-                if not clipped.is_empty:
-                    result.append(
-                        {
-                            "geometry": clipped,
-                            "color": item["color"],
-                            "draw_order": i,
-                            "geometry_normalized": geometry_normalized,
-                        }
-                    )
+                for ref in candidate_refs:
+                    if isinstance(ref, (int, np.integer)):
+                        idx = int(ref)
+                    else:
+                        idx = geom_id_to_idx.get(id(ref), -1)
+                    if idx < 0:
+                        continue
+                    if orders[idx] <= i:
+                        continue
+                    cand = geoms[idx]
+                    if predicate_filtered:
+                        occluders.append(cand)
+                        continue
+                    try:
+                        if cand.intersects(geom):
+                            occluders.append(cand)
+                    except VECTOR_HANDLED_ERRORS:
+                        continue
 
-        result.reverse()
+                clipped_item = _clip_occlusion_result_item(
+                    item,
+                    i,
+                    geom,
+                    occluders,
+                )
+                if clipped_item is not None:
+                    result.append(clipped_item)
+
+            result.reverse()
         if return_silhouette:
             try:
                 silhouette = unary_union(geoms)
