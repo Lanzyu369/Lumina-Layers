@@ -131,6 +131,7 @@ def test_proof_builder_commands_are_argument_lists() -> None:
     assert "-DBUILD_TESTING=OFF" in configure
     assert "-DBUILD_DOCUMENTATION=OFF" in configure
     assert "-DBUILD_GEOSOP=OFF" in configure
+    assert "-DGEOS_BUILD_DEVELOPER=OFF" in configure
     assert build == [
         "cmake",
         "--build",
@@ -490,3 +491,46 @@ def test_profiler_cli_defaults_to_300mm_acceptance_mode(tmp_path: Path) -> None:
     assert args.library is None
     assert args.skip_stock_timing is False
     assert args.out_dir.name == "results"
+
+
+def test_synthetic_cases_cover_dense_and_topology_edges() -> None:
+    from scripts.profile_geos_buffer_fast_proof import build_synthetic_cases
+
+    cases = build_synthetic_cases()
+
+    assert set(cases) == {
+        "disjoint_4096",
+        "interacting_square_chain",
+        "holes_and_nested_shells",
+        "sharp_mitres",
+        "tiny_valid_components",
+        "positive_buffer_merges_inputs",
+    }
+    assert len(cases["disjoint_4096"].geoms) == 4096
+    assert all(geometry.is_valid for geometry in cases.values())
+
+
+def test_profiler_cli_accepts_synthetic_mode_without_svg() -> None:
+    from scripts.profile_geos_buffer_fast_proof import parse_args
+
+    args = parse_args(["--synthetic"])
+
+    assert args.synthetic is True
+    assert args.input is None
+    assert args.lut is None
+
+
+def test_profiler_cli_can_mark_second_sample_as_non_dense() -> None:
+    from scripts.profile_geos_buffer_fast_proof import parse_args
+
+    args = parse_args(
+        [
+            "--input",
+            "/tmp/small.svg",
+            "--lut",
+            "/tmp/lut.npy",
+            "--allow-small-real-case",
+        ]
+    )
+
+    assert args.allow_small_real_case is True

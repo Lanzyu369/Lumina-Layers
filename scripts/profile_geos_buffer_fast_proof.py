@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Callable, Protocol
 
 from shapely import from_wkb, get_num_coordinates, normalize
+from shapely.geometry import MultiPolygon, Polygon, box
 from shapely.geometry.base import BaseGeometry
 
 
@@ -23,6 +24,8 @@ MAX_PEAK_RSS_RATIO = 1.20
 MIN_REAL_COMPONENTS = 2_048
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUT_DIR = ROOT / ".scratch" / "geos_buffer_fast_proof" / "results"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 
 class ProofLibraryError(RuntimeError):
@@ -288,6 +291,44 @@ def extract_dense_geometry(
     return dense_geometry, metadata
 
 
+def build_synthetic_cases() -> dict[str, BaseGeometry]:
+    """Build deterministic cases that stress buffer topology and lookup paths."""
+
+    disjoint = MultiPolygon(
+        [
+            box(column * 2.0, row * 2.0, column * 2.0 + 0.8, row * 2.0 + 0.8)
+            for row in range(64)
+            for column in range(64)
+        ]
+    )
+    interacting_chain = MultiPolygon(
+        [box(index * 1.04, 0.0, index * 1.04 + 1.0, 1.0) for index in range(128)]
+    )
+    shell_with_hole = Polygon(
+        [(0, 0), (20, 0), (20, 20), (0, 20)],
+        holes=[[(4, 4), (16, 4), (16, 16), (4, 16)]],
+    )
+    holes_and_nested = MultiPolygon([shell_with_hole, box(8, 8, 12, 12)])
+    sharp_mitres = Polygon(
+        [(0, 0), (10, 0), (5, 0.02), (10, 5), (0, 5), (5, 4.98)]
+    )
+    tiny_components = MultiPolygon(
+        [
+            box(index * 0.0001, 0, index * 0.0001 + 0.000001, 0.000001)
+            for index in range(64)
+        ]
+    )
+    merging_inputs = MultiPolygon([box(0, 0, 1, 1), box(1.04, 0, 2.04, 1)])
+    return {
+        "disjoint_4096": disjoint,
+        "interacting_square_chain": interacting_chain,
+        "holes_and_nested_shells": holes_and_nested,
+        "sharp_mitres": sharp_mitres,
+        "tiny_valid_components": tiny_components,
+        "positive_buffer_merges_inputs": merging_inputs,
+    }
+
+
 def geometry_fingerprint(geometry: BaseGeometry) -> dict[str, object]:
     """Return product-semantic geometry evidence.
 
@@ -506,6 +547,82 @@ def write_report(
     return json_path, markdown_path
 
 
+def run_synthetic_suite(
+    stock_backend: BufferBackend,
+    candidate_backend: BufferBackend,
+    *,
+    repeats: int = 2,
+    settings: BufferSettings | None = None,
+) -> dict[str, object]:
+    """Run differential buffer checks across deterministic topology cases."""
+
+    if repeats < 2:
+        raise ValueError("synthetic proof requires at least two candidate repeats")
+    settings = settings or BufferSettings()
+    case_reports: dict[str, object] = {}
+    for name, geometry in build_synthetic_cases().items():
+        stock = measure_backend(stock_backend, geometry.wkb, settings)
+        candidate_runs = [
+            measure_backend(candidate_backend, geometry.wkb, settings)
+            for _ in range(repeats)
+        ]
+        stock_geometry = from_wkb(stock.result_wkb)
+        candidate_geometries = [from_wkb(run.result_wkb) for run in candidate_runs]
+        comparisons = [
+            compare_geometry(stock_geometry, candidate_geometry)
+            for candidate_geometry in candidate_geometries
+        ]
+        fingerprints = [
+            geometry_fingerprint(candidate_geometry)
+            for candidate_geometry in candidate_geometries
+        ]
+        deterministic = all(fingerprint == fingerprints[0] for fingerprint in fingerprints)
+        valid_polygonal = bool(
+            stock_geometry.is_valid
+            and stock_geometry.geom_type in ("Polygon", "MultiPolygon")
+            and all(
+                geometry.is_valid
+                and geometry.geom_type in ("Polygon", "MultiPolygon")
+                for geometry in candidate_geometries
+            )
+        )
+        case_pass = bool(
+            valid_polygonal
+            and deterministic
+            and all(comparison["pass"] for comparison in comparisons)
+        )
+        case_reports[name] = {
+            "input": geometry_fingerprint(geometry),
+            "stock_seconds": stock.seconds,
+            "candidate_seconds": [run.seconds for run in candidate_runs],
+            "comparisons": comparisons,
+            "candidate_fingerprints": fingerprints,
+            "deterministic": deterministic,
+            "valid_polygonal": valid_polygonal,
+            "pass": case_pass,
+        }
+    return {
+        "schema_version": 1,
+        "settings": asdict(settings),
+        "repeats": repeats,
+        "cases": case_reports,
+        "pass": all(case["pass"] for case in case_reports.values()),
+    }
+
+
+def render_synthetic_markdown(report: dict[str, object]) -> str:
+    status = "PASS" if report["pass"] else "FAIL"
+    lines = [f"# Synthetic dense GEOS proof: {status}", ""]
+    for name, case in report["cases"].items():
+        case_status = "PASS" if case["pass"] else "FAIL"
+        timings = ", ".join(f"{value:.6f}" for value in case["candidate_seconds"])
+        lines.append(
+            f"- {case_status} `{name}`: stock {case['stock_seconds']:.6f} s; "
+            f"candidate [{timings}] s"
+        )
+    return "\n".join(lines) + "\n"
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -519,6 +636,8 @@ def prepare_real_geometry(
     lut_path: Path,
     color_mode: str,
     target_width_mm: float,
+    *,
+    require_real_density: bool = True,
 ) -> tuple[BaseGeometry, dict[str, object]]:
     """Construct the production processor and extract the proof geometry."""
 
@@ -529,7 +648,7 @@ def prepare_real_geometry(
         processor,
         svg_path,
         target_width_mm,
-        require_real_density=True,
+        require_real_density=require_real_density,
     )
 
 
@@ -548,18 +667,44 @@ def _load_build_manifest() -> dict[str, object]:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", type=Path, required=True)
+    parser.add_argument("--input", type=Path)
     parser.add_argument("--target-width-mm", type=float, default=300.0)
-    parser.add_argument("--lut", type=Path, required=True)
+    parser.add_argument("--lut", type=Path)
     parser.add_argument("--color-mode", default="4-Color RYBW")
     parser.add_argument("--library", type=Path)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument("--skip-stock-timing", action="store_true")
+    parser.add_argument("--synthetic", action="store_true")
+    parser.add_argument("--allow-small-real-case", action="store_true")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    manifest = _load_build_manifest()
+    library_path = (
+        args.library.resolve()
+        if args.library is not None
+        else Path(str(manifest["library_path"])).resolve()
+    )
+    candidate_backend = GEOSCBufferBackend(library_path)
+    stock_backend = ShapelyBufferBackend()
+    out_dir = args.out_dir.resolve()
+    if args.synthetic:
+        report = run_synthetic_suite(stock_backend, candidate_backend)
+        report["build"] = manifest
+        out_dir.mkdir(parents=True, exist_ok=True)
+        json_path = out_dir / "synthetic.json"
+        markdown_path = out_dir / "synthetic.md"
+        json_path.write_text(render_report_json(report), encoding="utf-8")
+        markdown_path.write_text(render_synthetic_markdown(report), encoding="utf-8")
+        print(render_report_json(report), end="")
+        print(f"JSON report: {json_path}")
+        print(f"Markdown report: {markdown_path}")
+        return 0 if report["pass"] else 1
+
+    if args.input is None or args.lut is None:
+        raise ValueError("--input and --lut are required outside --synthetic mode")
     svg_path = args.input.resolve()
     lut_path = args.lut.resolve()
     if not svg_path.is_file():
@@ -567,22 +712,15 @@ def main(argv: list[str] | None = None) -> int:
     if not lut_path.is_file():
         raise FileNotFoundError(f"LUT does not exist: {lut_path}")
 
-    manifest = _load_build_manifest()
-    library_path = (
-        args.library.resolve()
-        if args.library is not None
-        else Path(str(manifest["library_path"])).resolve()
-    )
     geometry, input_metadata = prepare_real_geometry(
         svg_path,
         lut_path,
         args.color_mode,
         args.target_width_mm,
+        require_real_density=not args.allow_small_real_case,
     )
     input_wkb = geometry.wkb
     settings = BufferSettings()
-    stock_backend = ShapelyBufferBackend()
-    candidate_backend = GEOSCBufferBackend(library_path)
     common = {
         "input_sha256": _sha256_file(svg_path),
         "build_manifest": manifest,
@@ -590,6 +728,7 @@ def main(argv: list[str] | None = None) -> int:
         "input_metadata": {
             "path": str(svg_path),
             "target_width_mm": args.target_width_mm,
+            "dense_gate_enforced": not args.allow_small_real_case,
             **input_metadata,
         },
     }
@@ -611,7 +750,7 @@ def main(argv: list[str] | None = None) -> int:
         report["acceptance_mode"] = True
 
     stem = f"{svg_path.stem}-{args.target_width_mm:g}mm"
-    json_path, markdown_path = write_report(report, args.out_dir.resolve(), stem)
+    json_path, markdown_path = write_report(report, out_dir, stem)
     print(render_report_json(report), end="")
     print(f"JSON report: {json_path}")
     print(f"Markdown report: {markdown_path}")

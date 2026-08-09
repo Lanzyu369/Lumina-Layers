@@ -65,6 +65,7 @@ def configure_command() -> list[str]:
         "-DBUILD_TESTING=OFF",
         "-DBUILD_DOCUMENTATION=OFF",
         "-DBUILD_GEOSOP=OFF",
+        "-DGEOS_BUILD_DEVELOPER=OFF",
     ]
 
 
