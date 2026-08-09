@@ -1728,6 +1728,7 @@ def _normalize_contours_many(geometries, close_delta_mm=0.03):
     negative_settings = geos_buffer_fast.BufferSettings(distance=-close_delta_mm)
     try:
         inflated = [None] * len(active_geoms)
+        inflated_already_validated = [False] * len(active_geoms)
         stock_positive_indices = []
         stock_positive_geometries = []
         for local_idx, geom in enumerate(active_geoms):
@@ -1742,6 +1743,7 @@ def _normalize_contours_many(geometries, close_delta_mm=0.03):
                 stock_positive_geometries.append(geom)
             else:
                 inflated[local_idx] = candidate
+                inflated_already_validated[local_idx] = True
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
@@ -1763,6 +1765,7 @@ def _normalize_contours_many(geometries, close_delta_mm=0.03):
                 inward = geos_buffer_fast.try_disconnected_inward_buffer(
                     candidate,
                     negative_settings,
+                    _input_already_validated=inflated_already_validated[local_idx],
                 )
             if inward is None:
                 stock_negative_indices.append(local_idx)
@@ -4084,11 +4087,13 @@ class VectorProcessor:
                 distance=close_delta_mm
             )
             inflated = None
+            inflated_already_validated = False
             if _is_dense_normalization_geometry(geom, close_delta_mm):
                 inflated = geos_buffer_fast.try_dense_positive_buffer(
                     geom,
                     positive_settings,
                 )
+                inflated_already_validated = inflated is not None
             if inflated is None:
                 inflated = geom.buffer(
                     close_delta_mm,
@@ -4105,6 +4110,7 @@ class VectorProcessor:
                 deflated = geos_buffer_fast.try_disconnected_inward_buffer(
                     inflated,
                     negative_settings,
+                    _input_already_validated=inflated_already_validated,
                 )
             if deflated is None:
                 deflated = inflated.buffer(

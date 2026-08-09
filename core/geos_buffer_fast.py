@@ -12,6 +12,7 @@ from typing import cast
 
 from shapely import buffer as shapely_buffer
 from shapely import from_wkb
+from shapely import GeometryType, get_parts, get_type_id, is_empty, multipolygons
 from shapely.geometry import MultiPolygon, Polygon
 from shapely.geometry.base import BaseGeometry
 
@@ -381,6 +382,8 @@ def try_dense_positive_buffer(
 def try_disconnected_inward_buffer(
     geometry: BaseGeometry,
     settings: BufferSettings | None = None,
+    *,
+    _input_already_validated: bool = False,
 ) -> BaseGeometry | None:
     """Shrink disjoint polygons independently. / 独立回缩互不相交的多边形。"""
 
@@ -390,14 +393,12 @@ def try_disconnected_inward_buffer(
         return None
     if not isinstance(geometry, (Polygon, MultiPolygon)):
         return None
-    if geometry.is_empty or not geometry.is_valid:
+    if geometry.is_empty or (
+        not _input_already_validated and not geometry.is_valid
+    ):
         return None
 
-    source_parts = (
-        [geometry]
-        if isinstance(geometry, Polygon)
-        else list(geometry.geoms)
-    )
+    source_parts = get_parts(geometry)
     try:
         buffered_parts = shapely_buffer(
             source_parts,
@@ -406,27 +407,21 @@ def try_disconnected_inward_buffer(
             join_style=resolved_settings.join_style,
             mitre_limit=resolved_settings.mitre_limit,
         )
-        result_parts: list[Polygon] = []
-        for buffered in buffered_parts:
-            if buffered is None:
-                raise ProofLibraryError("inward buffer returned a null geometry")
-            if buffered.is_empty:
-                continue
-            if isinstance(buffered, Polygon):
-                result_parts.append(buffered)
-            elif isinstance(buffered, MultiPolygon):
-                result_parts.extend(buffered.geoms)
-            else:
-                raise ProofLibraryError(
-                    f"inward buffer returned non-polygon output: {buffered.geom_type}"
-                )
+        type_ids = get_type_id(buffered_parts)
+        polygonal = (type_ids == GeometryType.POLYGON) | (
+            type_ids == GeometryType.MULTIPOLYGON
+        )
+        if not bool(polygonal.all()):
+            raise ProofLibraryError("inward buffer returned non-polygon output")
+        nonempty_parts = buffered_parts[~is_empty(buffered_parts)]
+        result_parts = get_parts(nonempty_parts)
 
-        if not result_parts:
+        if len(result_parts) == 0:
             candidate: BaseGeometry = Polygon()
         elif len(result_parts) == 1:
             candidate = result_parts[0]
         else:
-            candidate = MultiPolygon(result_parts)
+            candidate = multipolygons(result_parts)
         if not candidate.is_valid:
             raise ProofLibraryError("inward buffer returned invalid output")
     except Exception as exc:

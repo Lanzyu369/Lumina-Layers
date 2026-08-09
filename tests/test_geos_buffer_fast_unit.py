@@ -483,6 +483,17 @@ def test_disconnected_inward_buffer_matches_stock_when_tiny_parts_disappear() ->
     _assert_matches_stock_inward_buffer(geometry)
 
 
+def test_disconnected_inward_buffer_drops_only_tiny_disappearing_parts() -> None:
+    geometry = MultiPolygon(
+        [
+            box(0.0, 0.0, 0.02, 0.02),
+            box(1.0, 0.0, 2.0, 1.0),
+        ]
+    )
+
+    _assert_matches_stock_inward_buffer(geometry)
+
+
 @pytest.mark.parametrize(
     "geometry",
     [

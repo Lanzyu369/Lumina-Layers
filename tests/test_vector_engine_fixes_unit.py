@@ -830,7 +830,9 @@ class TestNormalizeContours:
         monkeypatch.setattr(
             vector_engine.geos_buffer_fast,
             "try_disconnected_inward_buffer",
-            lambda geometry, settings: calls.append(("inward", geometry, settings))
+            lambda geometry, settings, **_kwargs: calls.append(
+                ("inward", geometry, settings)
+            )
             or deflated,
         )
 
@@ -885,7 +887,7 @@ class TestNormalizeContours:
         monkeypatch.setattr(
             vector_engine.geos_buffer_fast,
             "try_disconnected_inward_buffer",
-            lambda geometry, _settings: geometry.buffer(
+            lambda geometry, _settings, **_kwargs: geometry.buffer(
                 -0.03,
                 quad_segs=1,
                 join_style="mitre",
@@ -924,7 +926,7 @@ class TestNormalizeContours:
         monkeypatch.setattr(
             vector_engine.geos_buffer_fast,
             "try_disconnected_inward_buffer",
-            lambda _geometry, _settings: None,
+            lambda _geometry, _settings, **_kwargs: None,
         )
         monkeypatch.setattr(vector_engine, "shapely_buffer", stock_buffer)
 
@@ -948,7 +950,9 @@ class TestNormalizeContours:
         monkeypatch.setattr(
             vector_engine.geos_buffer_fast,
             "try_disconnected_inward_buffer",
-            lambda geometry, settings: calls.append(("inward", geometry, settings))
+            lambda geometry, settings, **_kwargs: calls.append(
+                ("inward", geometry, settings)
+            )
             or deflated,
         )
 
