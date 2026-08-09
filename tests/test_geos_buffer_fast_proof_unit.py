@@ -148,3 +148,33 @@ def test_geos_fast_buffer_readme_documents_proof_boundary() -> None:
     assert ".scratch/geos_buffer_fast_proof" in readme
     assert "must not replace Shapely" in readme
     assert "production" in readme.lower()
+
+
+def test_geos_patch_changes_lookup_cost_only() -> None:
+    from scripts.build_geos_buffer_fast_proof import PATCH_PATH
+
+    patch = PATCH_PATH.read_text(encoding="utf-8")
+    changed_paths = {
+        line.removeprefix("+++ b/")
+        for line in patch.splitlines()
+        if line.startswith("+++ b/")
+    }
+
+    assert changed_paths == {
+        "src/operation/buffer/BufferBuilder.cpp",
+        "src/operation/buffer/PolygonBuilder.cpp",
+    }
+    assert "freeHoleList.empty()" in patch
+    assert "index::bintree::Bintree" in patch
+    assert "index::bintree::Interval" in patch
+    assert "processedOrder" in patch
+    assert "std::sort(candidates.begin(), candidates.end()" in patch
+
+    forbidden = (
+        "OffsetCurveBuilder.cpp",
+        "computeNodedEdges(",
+        "PrecisionModel.cpp",
+        "BufferParameters.cpp",
+        "CoordinateSequence.cpp",
+    )
+    assert all(token not in patch for token in forbidden)
