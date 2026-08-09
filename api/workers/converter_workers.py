@@ -1883,6 +1883,7 @@ def worker_generate_large_format_svg_native(
     from core.pipeline.vector_branch import (
         _build_vector_processor,
         _resolve_vector_layer_height_mm,
+        _update_bambu_base_layer_ctx_for_vector,
     )
     from core.vector_engine import (
         apply_matched_rgb_overrides_to_analysis,
@@ -2097,6 +2098,25 @@ def worker_generate_large_format_svg_native(
             pickle.PickleError,
         ) as exc:
             raise LargeFormatCachedAnalysisError(str(exc)) from exc
+
+    try:
+        analysis_num_layers = int(analysis.num_layers)
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ValueError(
+            "Native SVG analysis must provide a valid num_layers value"
+        ) from exc
+    if analysis_num_layers < 0:
+        raise ValueError(
+            "Native SVG analysis num_layers must not be negative"
+        )
+    _update_bambu_base_layer_ctx_for_vector(
+        worker_ctx,
+        color_mode=vector_processor.color_mode,
+        structure_mode=str(params["structure_mode"]),
+        num_layers=analysis_num_layers,
+        thickness_mm=float(params["spacer_thick"]),
+        layer_height_mm=layer_height_mm,
+    )
 
     tile_analyses = slice_vector_analysis_into_tiles(
         analysis=analysis,
@@ -2337,6 +2357,19 @@ def worker_generate_large_format_svg_native(
                 slicer=params.get("slicer", "BambuStudio"),
                 nozzle_size=params.get("nozzle_size", "0.4"),
                 project_slot_names=slot_names,
+                enable_base_layer_height_modifier=bool(
+                    worker_ctx.get("enable_base_layer_height_modifier", True)
+                ),
+                enable_relief=bool(worker_ctx.get("enable_relief", False)),
+                base_height_mm=float(
+                    worker_ctx.get("bambu_base_height_mm", 0.0)
+                ),
+                color_height_mm=float(
+                    worker_ctx.get("bambu_color_height_mm", 0.0)
+                ),
+                face_orientation=str(
+                    worker_ctx.get("bambu_face_orientation", "down")
+                ),
                 cover_source=tile_cover,
                 device_profile_id=params.get("device_profile_id") or None,
                 preserve_template_filament_slots=(

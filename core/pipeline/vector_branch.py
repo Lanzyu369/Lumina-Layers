@@ -1172,6 +1172,7 @@ def _update_bambu_base_layer_ctx_for_vector(
     structure_mode: str,
     num_layers: int,
     thickness_mm: float,
+    layer_height_mm: float | None = None,
 ) -> None:
     """Populate Bambu base-layer modifier values for the vector export branch.
     \u4e3a\u77e2\u91cf\u5bfc\u51fa\u5206\u652f\u586b\u5145 Bambu \u5e95\u677f\u7c97\u5c42\u9ad8\u76f8\u5173\u4e0a\u4e0b\u6587\u503c\u3002
@@ -1187,10 +1188,22 @@ def _update_bambu_base_layer_ctx_for_vector(
             \uff08\u77e2\u91cf\u5206\u6790\u5f97\u5230\u7684\u5f69\u8272\u5149\u5b66\u5c42\u5c42\u6570\uff09
         thickness_mm (float): Requested backing thickness in millimetres.
             \uff08\u8bf7\u6c42\u7684\u5e95\u677f\u539a\u5ea6\uff0c\u5355\u4f4d\u6beb\u7c73\uff09
+        layer_height_mm (float | None): Effective vector layer height. ``None``
+            preserves the historical printer default.\uff08\u5b9e\u9645\u77e2\u91cf\u5c42\u9ad8\uff1b``None``
+            \u65f6\u6cbf\u7528\u5386\u53f2\u6253\u5370\u673a\u9ed8\u8ba4\u503c\u3002\uff09
     """
     from config import PrinterConfig
 
-    layer_h = PrinterConfig.LAYER_HEIGHT
+    try:
+        layer_h = float(
+            PrinterConfig.LAYER_HEIGHT
+            if layer_height_mm is None
+            else layer_height_mm
+        )
+    except (TypeError, ValueError):
+        layer_h = float(PrinterConfig.LAYER_HEIGHT)
+    if not np.isfinite(layer_h) or layer_h <= 0:
+        layer_h = float(PrinterConfig.LAYER_HEIGHT)
     backing_layer_count = max(1, int(round(float(thickness_mm) / layer_h)))
     base_height_mm = backing_layer_count * layer_h
     coating_layers = 0
@@ -2443,6 +2456,7 @@ def _run_vector_branch(ctx: dict) -> dict:
             structure_mode=structure_mode,
             num_layers=analysis.num_layers,
             thickness_mm=spacer_thick,
+            layer_height_mm=_resolve_vector_layer_height_mm(ctx),
         )
 
         if len(scene.geometry) == 0:
