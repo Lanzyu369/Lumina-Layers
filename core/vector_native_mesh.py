@@ -46,10 +46,20 @@ NATIVE_BATCH_GEOMETRY_OVERHEAD_BYTES = 1024
 NATIVE_SURFACE_AREA_REL_TOL = 0.001
 NATIVE_SURFACE_AREA_ABS_TOL_MM2 = 0.01
 NATIVE_REQUIRED_GUARD_CAPABILITY = "triangulation_area_guard"
+NATIVE_REJECTED_GROUP_REUSE_CAPABILITY = "rejected_group_reuse"
+NATIVE_REJECTED_MESH_RETRY_CAPABILITY = "rejected_mesh_retry"
+NATIVE_SURFACE_VALIDATION_CAPABILITY = "native_surface_validation"
 NATIVE_SPLIT_RETRY_MIN_ORIGINAL_PATHS = 300
 NATIVE_SPLIT_RETRY_MAX_ORIGINAL_PATHS_PER_GEOM = 1.15
 NATIVE_SPLIT_RETRY_MIN_POLYGONS = 240
 NATIVE_SPLIT_RETRY_MAX_PATH_RATIO = 1.2
+NATIVE_SPLIT_PARALLEL_MIN_GROUPS = 8_192
+NATIVE_SPLIT_PARALLEL_CHUNKS_PER_WORKER = 4
+NATIVE_SPLIT_PARALLEL_GROUPS_PER_WORKER = 4_096
+NATIVE_SPLIT_PARALLEL_ESTIMATED_WORKER_BYTES = 256 * 1024**2
+NATIVE_RETRY_MESH_ACCEPTED = 0
+NATIVE_RETRY_MESH_SURFACE_REJECT = 1
+NATIVE_RETRY_MESH_EMPTY = 2
 NATIVE_MERGED_FALLBACK_MIN_PATHS = 64
 NATIVE_MERGED_FALLBACK_MAX_HOLE_RATIO = 0.5
 
@@ -125,7 +135,9 @@ class _NativeGroupOutcome:
     status: str
     rejection_counter: str
     mesh_arrays: tuple[np.ndarray, np.ndarray] | None
-    mesh: trimesh.Trimesh | None
+    mesh: trimesh.Trimesh | tuple[np.ndarray, np.ndarray] | None
+    retry_groups: list | None = None
+    retry_record: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -374,13 +386,17 @@ def _compute_native_batch(
     with task_parallelism_worker_scope():
         try:
             native_started = time.perf_counter()
-            native_meshes = module.merge_run_groups_to_meshes(
-                [group.paths for group in batch.groups],
-                close_delta_mm=NATIVE_CLOSE_DELTA_MM,
-                scale=NATIVE_COORD_SCALE,
+            (
+                native_meshes,
+                rejected_groups,
+                retry_records,
+                primary_statuses,
+            ) = _run_native_mesh_call(
+                module=module,
+                groups=[group.paths for group in batch.groups],
                 height=batch.height,
-                z_offset=batch.z_bot,
-                xy_scale=scale_factor,
+                z_bot=batch.z_bot,
+                scale_factor=scale_factor,
             )
             native_seconds = time.perf_counter() - native_started
         except Exception as exc:
@@ -415,7 +431,35 @@ def _compute_native_batch(
 
             native_mesh = native_mesh_list[index]
             mesh_arrays = _native_mesh_arrays(native_mesh)
+            primary_status = (
+                int(primary_statuses[index])
+                if index < len(primary_statuses)
+                else NATIVE_RETRY_MESH_ACCEPTED
+            )
             if mesh_arrays is None:
+                if primary_status == NATIVE_RETRY_MESH_SURFACE_REJECT:
+                    surface_checked += 1
+                    surface_rejects += 1
+                    outcomes.append(
+                        _NativeGroupOutcome(
+                            status="surface_reject",
+                            rejection_counter="",
+                            mesh_arrays=None,
+                            mesh=None,
+                        )
+                    )
+                    continue
+                retry_groups = (
+                    rejected_groups[index]
+                    if index < len(rejected_groups)
+                    and rejected_groups[index]
+                    else None
+                )
+                retry_record = (
+                    retry_records[index]
+                    if index < len(retry_records)
+                    else None
+                )
                 outcomes.append(
                     _NativeGroupOutcome(
                         status="native_rejected",
@@ -424,34 +468,29 @@ def _compute_native_batch(
                         ),
                         mesh_arrays=None,
                         mesh=None,
+                        retry_groups=retry_groups,
+                        retry_record=retry_record,
                     )
                 )
                 continue
 
             mesh = None
             if validate_surface:
-                mesh = _mesh_from_arrays(mesh_arrays)
-                if mesh is None:
-                    outcomes.append(
-                        _NativeGroupOutcome(
-                            status="invalid_native_mesh",
-                            rejection_counter="native_invalid_meshes",
-                            mesh_arrays=None,
-                            mesh=None,
-                        )
+                if len(primary_statuses) > 0:
+                    surface_ok = True
+                    surface_checked += 1
+                else:
+                    validation_started = time.perf_counter()
+                    surface_ok = _native_surface_area_matches_arrays(
+                        mesh_arrays,
+                        group.geoms,
+                        height=batch.height,
+                        scale_factor=scale_factor,
                     )
-                    continue
-                validation_started = time.perf_counter()
-                surface_ok = _native_surface_area_matches(
-                    mesh,
-                    group.geoms,
-                    height=batch.height,
-                    scale_factor=scale_factor,
-                )
-                surface_validation_seconds += (
-                    time.perf_counter() - validation_started
-                )
-                surface_checked += 1
+                    surface_validation_seconds += (
+                        time.perf_counter() - validation_started
+                    )
+                    surface_checked += 1
                 if not surface_ok:
                     surface_rejects += 1
                     outcomes.append(
@@ -463,6 +502,7 @@ def _compute_native_batch(
                         )
                     )
                     continue
+                mesh = mesh_arrays
 
             outcomes.append(
                 _NativeGroupOutcome(
@@ -486,6 +526,73 @@ def _compute_native_batch(
             surface_checked=surface_checked,
             surface_rejects=surface_rejects,
         )
+
+
+def _run_native_mesh_call(
+    *,
+    module,
+    groups,
+    height: float,
+    z_bot: float,
+    scale_factor: float,
+):
+    """Run one native mesh call and optionally retain rejected merged groups."""
+
+    reuse_rejected_meshes = _native_module_has_capability(
+        module,
+        NATIVE_REJECTED_MESH_RETRY_CAPABILITY,
+    )
+    reuse_rejected_groups = _native_module_has_capability(
+        module,
+        NATIVE_REJECTED_GROUP_REUSE_CAPABILITY,
+    )
+    native_surface_validation = _native_module_has_capability(
+        module,
+        NATIVE_SURFACE_VALIDATION_CAPABILITY,
+    )
+    validate_surfaces = _surface_validation_enabled()
+    native_result = module.merge_run_groups_to_meshes(
+        groups,
+        close_delta_mm=NATIVE_CLOSE_DELTA_MM,
+        scale=NATIVE_COORD_SCALE,
+        height=height,
+        z_offset=z_bot,
+        xy_scale=scale_factor,
+        **(
+            {
+                "return_rejected_meshes": True,
+                "validate_retry_surfaces": (
+                    validate_surfaces and native_surface_validation
+                ),
+                "validate_primary_surfaces": (
+                    validate_surfaces and native_surface_validation
+                ),
+                "surface_rel_tol": _surface_area_rel_tolerance(),
+                "surface_abs_tol": NATIVE_SURFACE_AREA_ABS_TOL_MM2,
+            }
+            if reuse_rejected_meshes
+            else (
+                {"return_rejected_groups": True}
+                if reuse_rejected_groups
+                else {}
+            )
+        ),
+    )
+    if not reuse_rejected_meshes and not reuse_rejected_groups:
+        return native_result, (), (), ()
+    if reuse_rejected_meshes:
+        if not isinstance(native_result, tuple) or len(native_result) != 3:
+            raise TypeError("native rejected-mesh retry returned an invalid result")
+        native_meshes, primary_statuses, retry_records = native_result
+        if validate_surfaces and not native_surface_validation:
+            retry_records = ()
+        if not (validate_surfaces and native_surface_validation):
+            primary_statuses = ()
+        return native_meshes, (), retry_records, primary_statuses
+    if not isinstance(native_result, tuple) or len(native_result) != 2:
+        raise TypeError("native rejected-group reuse returned an invalid result")
+    native_meshes, rejected_groups = native_result
+    return native_meshes, rejected_groups, (), ()
 
 
 def is_native_vector_mesh_enabled(processor: Any | None = None) -> bool:
@@ -684,6 +791,11 @@ def _empty_stats() -> dict[str, float | int | str]:
         "native_split_group_count": 0,
         "native_split_meshes": 0,
         "native_split_fallback_groups": 0,
+        "native_rejected_groups_reused": 0,
+        "native_rejected_mesh_retries_reused": 0,
+        "native_split_parallel_workers": 1,
+        "native_split_parallel_batch_count": 0,
+        "native_split_parallel_seconds": 0.0,
         "native_merged_fallback_groups": 0,
         "native_merged_fallback_polygons": 0,
         "native_merged_fallback_input_paths": 0,
@@ -746,17 +858,28 @@ def _load_native_module(stats: dict[str, float | int | str]):
         return None
 
 
-def _native_module_has_triangulation_area_guard(module) -> bool:
+def _native_module_capabilities(module) -> dict:
     capabilities_fn = getattr(module, "native_mesh_capabilities", None)
     if not callable(capabilities_fn):
-        return False
+        return {}
     try:
         capabilities = capabilities_fn()
     except Exception:
-        return False
+        return {}
     if not isinstance(capabilities, dict):
-        return False
-    return bool(capabilities.get(NATIVE_REQUIRED_GUARD_CAPABILITY))
+        return {}
+    return capabilities
+
+
+def _native_module_has_capability(module, capability: str) -> bool:
+    return bool(_native_module_capabilities(module).get(capability))
+
+
+def _native_module_has_triangulation_area_guard(module) -> bool:
+    return _native_module_has_capability(
+        module,
+        NATIVE_REQUIRED_GUARD_CAPABILITY,
+    )
 
 
 def _build_run_groups(*, matched_shapes, num_layers: int, num_channels: int, slot_names) -> dict[tuple[int, int, int], list]:
@@ -898,6 +1021,8 @@ def _commit_computed_native_batch(
                 extrude_cache=extrude_cache,
                 stats=stats,
                 path_cache=path_cache,
+                prepared_retry_groups=outcome.retry_groups,
+                prepared_retry_record=outcome.retry_record,
             ):
                 continue
             _fallback_key(
@@ -1226,13 +1351,17 @@ def _run_native_job_batch(
 
     try:
         t0 = time.perf_counter()
-        native_meshes = module.merge_run_groups_to_meshes(
-            native_groups,
-            close_delta_mm=NATIVE_CLOSE_DELTA_MM,
-            scale=NATIVE_COORD_SCALE,
+        (
+            native_meshes,
+            rejected_groups,
+            retry_records,
+            primary_statuses,
+        ) = _run_native_mesh_call(
+            module=module,
+            groups=native_groups,
             height=height,
-            z_offset=z_bot,
-            xy_scale=scale_factor,
+            z_bot=z_bot,
+            scale_factor=scale_factor,
         )
         stats["native_seconds"] = float(stats["native_seconds"]) + (time.perf_counter() - t0)
     except Exception as exc:
@@ -1279,7 +1408,32 @@ def _run_native_job_batch(
             continue
         native_mesh = native_mesh_list[index]
         mesh_arrays = _native_mesh_arrays(native_mesh)
+        primary_status = (
+            int(primary_statuses[index])
+            if index < len(primary_statuses)
+            else NATIVE_RETRY_MESH_ACCEPTED
+        )
         if mesh_arrays is None:
+            if primary_status == NATIVE_RETRY_MESH_SURFACE_REJECT:
+                stats["native_surface_checked"] = int(
+                    stats["native_surface_checked"]
+                ) + 1
+                stats["native_surface_rejects"] = int(
+                    stats["native_surface_rejects"]
+                ) + 1
+                _fallback_key(
+                    key,
+                    geoms_by_key[key],
+                    height=height,
+                    z_bot=z_bot,
+                    scale_factor=scale_factor,
+                    slot_names=slot_names,
+                    meshes_by_slot=meshes_by_slot,
+                    extrude_cache=extrude_cache,
+                    stats=stats,
+                    reason="surface_reject",
+                )
+                continue
             reason = _native_mesh_rejection_reason(native_mesh)
             stats[reason] = int(stats[reason]) + 1
             if _retry_native_group_as_reference_polygons(
@@ -1295,6 +1449,17 @@ def _run_native_job_batch(
                 extrude_cache=extrude_cache,
                 stats=stats,
                 path_cache=path_cache,
+                prepared_retry_groups=(
+                    rejected_groups[index]
+                    if index < len(rejected_groups)
+                    and rejected_groups[index]
+                    else None
+                ),
+                prepared_retry_record=(
+                    retry_records[index]
+                    if index < len(retry_records)
+                    else None
+                ),
             ):
                 continue
             _fallback_key(
@@ -1315,33 +1480,25 @@ def _run_native_job_batch(
             continue
         mesh = None
         if _surface_validation_enabled():
-            mesh = _mesh_from_arrays(mesh_arrays)
-            if mesh is None:
-                stats["native_invalid_meshes"] = int(stats["native_invalid_meshes"]) + 1
-                _fallback_key(
-                    key,
+            if len(primary_statuses) > 0:
+                surface_ok = True
+                stats["native_surface_checked"] = int(
+                    stats["native_surface_checked"]
+                ) + 1
+            else:
+                t_validate = time.perf_counter()
+                surface_ok = _native_surface_area_matches_arrays(
+                    mesh_arrays,
                     geoms_by_key[key],
                     height=height,
-                    z_bot=z_bot,
                     scale_factor=scale_factor,
-                    slot_names=slot_names,
-                    meshes_by_slot=meshes_by_slot,
-                    extrude_cache=extrude_cache,
-                    stats=stats,
-                    reason="invalid_native_mesh",
                 )
-                continue
-            t_validate = time.perf_counter()
-            surface_ok = _native_surface_area_matches(
-                mesh,
-                geoms_by_key[key],
-                height=height,
-                scale_factor=scale_factor,
-            )
-            stats["surface_validation_seconds"] = float(stats["surface_validation_seconds"]) + (
-                time.perf_counter() - t_validate
-            )
-            stats["native_surface_checked"] = int(stats["native_surface_checked"]) + 1
+                stats["surface_validation_seconds"] = float(
+                    stats["surface_validation_seconds"]
+                ) + (time.perf_counter() - t_validate)
+                stats["native_surface_checked"] = int(
+                    stats["native_surface_checked"]
+                ) + 1
             if not surface_ok:
                 stats["native_surface_rejects"] = int(stats["native_surface_rejects"]) + 1
                 _fallback_key(
@@ -1357,6 +1514,7 @@ def _run_native_job_batch(
                     reason="surface_reject",
                 )
                 continue
+            mesh = mesh_arrays
         stats["native_meshes"] = int(stats["native_meshes"]) + 1
         if mesh is not None:
             meshes_by_slot[slot_name]["meshes"].append(mesh)
@@ -1380,6 +1538,8 @@ def _retry_native_group_as_reference_polygons(
     extrude_cache,
     stats: dict[str, float | int | str],
     path_cache: dict[int, tuple[Any, list[list[tuple[float, float]]]]] | None,
+    prepared_retry_groups=None,
+    prepared_retry_record=None,
 ) -> bool:
     if not _should_consider_native_split(
         original_geometry_count=len(geoms),
@@ -1387,13 +1547,35 @@ def _retry_native_group_as_reference_polygons(
     ):
         return False
 
+    if prepared_retry_record is not None:
+        precomputed_result = _commit_precomputed_native_split_retry(
+            key=key,
+            original_path_count=original_path_count,
+            retry_record=prepared_retry_record,
+            height=height,
+            z_bot=z_bot,
+            scale_factor=scale_factor,
+            slot_names=slot_names,
+            meshes_by_slot=meshes_by_slot,
+            extrude_cache=extrude_cache,
+            stats=stats,
+        )
+        if precomputed_result is not None:
+            return precomputed_result
+
     retry_polygons = None
-    retry_groups = _native_retry_groups_for_native_retry(
-        module=module,
-        geoms=geoms,
-        path_cache=path_cache,
-        stats=stats,
-    )
+    retry_groups = prepared_retry_groups
+    if retry_groups is not None:
+        stats["native_rejected_groups_reused"] = int(
+            stats["native_rejected_groups_reused"]
+        ) + 1
+    else:
+        retry_groups = _native_retry_groups_for_native_retry(
+            module=module,
+            geoms=geoms,
+            path_cache=path_cache,
+            stats=stats,
+        )
     if retry_groups is None:
         polygons = _reference_polygons_for_native_retry(geoms)
         if len(polygons) <= 1:
@@ -1422,15 +1604,17 @@ def _retry_native_group_as_reference_polygons(
 
     try:
         t0 = time.perf_counter()
-        native_meshes = module.merge_run_groups_to_meshes(
-            retry_groups,
-            close_delta_mm=0.0,
-            scale=NATIVE_COORD_SCALE,
+        native_meshes = _merge_native_split_retry_groups_to_meshes(
+            module=module,
+            retry_groups=retry_groups,
             height=height,
-            z_offset=z_bot,
-            xy_scale=scale_factor,
+            z_bot=z_bot,
+            scale_factor=scale_factor,
+            stats=stats,
         )
-        stats["native_seconds"] = float(stats["native_seconds"]) + (time.perf_counter() - t0)
+        stats["native_seconds"] = float(stats["native_seconds"]) + (
+            time.perf_counter() - t0
+        )
     except Exception:
         return False
 
@@ -1449,14 +1633,15 @@ def _retry_native_group_as_reference_polygons(
                 poly = _retry_polygon_for_group(retry_polygons, retry_group, index)
                 if poly is None:
                     return bool(any_output)
-                mesh = _mesh_from_arrays(mesh_arrays)
-                surface_ok = mesh is not None and _native_mesh_surface_is_acceptable(
-                    mesh,
+                surface_ok = _native_mesh_surface_is_acceptable(
+                    mesh_arrays,
                     [poly],
                     height=height,
                     scale_factor=scale_factor,
                     stats=stats,
                 )
+                if surface_ok:
+                    mesh = mesh_arrays
             if surface_ok:
                 stats["native_meshes"] = int(stats["native_meshes"]) + 1
                 stats["native_split_meshes"] = int(stats["native_split_meshes"]) + 1
@@ -1508,6 +1693,235 @@ def _retry_native_group_as_reference_polygons(
         stats["native_split_fallback_groups"] = int(stats["native_split_fallback_groups"]) + 1
         any_output = True
     return any_output
+
+
+def _commit_precomputed_native_split_retry(
+    *,
+    key: tuple[int, int, int],
+    original_path_count: int,
+    retry_record,
+    height: float,
+    z_bot: float,
+    scale_factor: float,
+    slot_names,
+    meshes_by_slot: dict[str, dict[str, Any]],
+    extrude_cache,
+    stats: dict[str, float | int | str],
+) -> bool | None:
+    """Commit one native-side split retry, or decline malformed records safely."""
+
+    if not isinstance(retry_record, tuple) or len(retry_record) != 4:
+        return None
+    (
+        raw_meshes,
+        raw_statuses,
+        raw_fallbacks,
+        raw_path_count,
+    ) = retry_record
+    try:
+        native_meshes = list(raw_meshes)
+        native_statuses = np.asarray(raw_statuses, dtype=np.uint8)
+        retry_path_count = int(raw_path_count)
+    except (TypeError, ValueError):
+        return None
+    retry_group_count = len(native_meshes)
+    if (
+        retry_group_count <= 1
+        or retry_path_count < 0
+        or native_statuses.ndim != 1
+        or len(native_statuses) != retry_group_count
+        or not isinstance(raw_fallbacks, dict)
+    ):
+        return None
+    if not _should_retry_native_split(
+        original_path_count=original_path_count,
+        retry_group_count=retry_group_count,
+        retry_path_count=retry_path_count,
+    ):
+        return None
+
+    fallback_groups = {}
+    for raw_index, fallback_group in raw_fallbacks.items():
+        try:
+            index = int(raw_index)
+        except (TypeError, ValueError):
+            return None
+        if index < 0 or index >= retry_group_count or index in fallback_groups:
+            return None
+        if not isinstance(fallback_group, list) or len(fallback_group) != 1:
+            return None
+        polygon = _polygon_from_native_rings(fallback_group[0])
+        if polygon is None:
+            return None
+        fallback_groups[index] = polygon
+
+    mesh_arrays_by_index = [None] * retry_group_count
+    accepted_count = 0
+    surface_rejects = 0
+    for index, native_mesh in enumerate(native_meshes):
+        status = int(native_statuses[index])
+        if status == NATIVE_RETRY_MESH_ACCEPTED:
+            mesh_arrays = _native_mesh_arrays(native_mesh)
+            if mesh_arrays is None or index in fallback_groups:
+                return None
+            mesh_arrays_by_index[index] = mesh_arrays
+            accepted_count += 1
+            continue
+        if status not in {
+            NATIVE_RETRY_MESH_SURFACE_REJECT,
+            NATIVE_RETRY_MESH_EMPTY,
+        }:
+            return None
+        if _native_mesh_arrays(native_mesh) is not None or index not in fallback_groups:
+            return None
+        if status == NATIVE_RETRY_MESH_SURFACE_REJECT:
+            surface_rejects += 1
+    if accepted_count + len(fallback_groups) != retry_group_count:
+        return None
+
+    validate_surface = _surface_validation_enabled()
+    surface_checked = accepted_count + surface_rejects if validate_surface else 0
+
+    stats["native_split_retries"] = int(stats["native_split_retries"]) + 1
+    stats["native_split_group_count"] = int(
+        stats["native_split_group_count"]
+    ) + retry_group_count
+    stats["native_input_paths"] = int(stats["native_input_paths"]) + (
+        retry_path_count
+    )
+    stats["native_rejected_mesh_retries_reused"] = int(
+        stats["native_rejected_mesh_retries_reused"]
+    ) + 1
+    stats["native_meshes"] = int(stats["native_meshes"]) + accepted_count
+    stats["native_split_meshes"] = int(stats["native_split_meshes"]) + (
+        accepted_count
+    )
+    stats["native_surface_checked"] = int(
+        stats["native_surface_checked"]
+    ) + surface_checked
+    stats["native_surface_rejects"] = int(
+        stats["native_surface_rejects"]
+    ) + surface_rejects
+
+    ch = key[0]
+    slot_name = slot_names[ch]
+    _ensure_slot(meshes_by_slot, slot_name, ch)
+    for index, mesh_arrays in enumerate(mesh_arrays_by_index):
+        if mesh_arrays is not None:
+            if validate_surface:
+                meshes_by_slot[slot_name]["meshes"].append(mesh_arrays)
+                stats["native_output_meshes"] = int(
+                    stats["native_output_meshes"]
+                ) + 1
+            else:
+                _append_native_buffer(
+                    meshes_by_slot,
+                    slot_name,
+                    ch,
+                    mesh_arrays,
+                )
+            continue
+
+        status = int(native_statuses[index])
+        polygon = fallback_groups[index]
+        if status == NATIVE_RETRY_MESH_SURFACE_REJECT:
+            reason = "split_surface_reject"
+        else:
+            stats["native_empty_meshes"] = int(
+                stats["native_empty_meshes"]
+            ) + 1
+            reason = "split_empty_native_mesh"
+        _fallback_key(
+            key,
+            [polygon],
+            height=height,
+            z_bot=z_bot,
+            scale_factor=scale_factor,
+            slot_names=slot_names,
+            meshes_by_slot=meshes_by_slot,
+            extrude_cache=extrude_cache,
+            stats=stats,
+            reason=reason,
+        )
+        stats["native_split_fallback_groups"] = int(
+            stats["native_split_fallback_groups"]
+        ) + 1
+    return True
+
+
+def _merge_native_split_retry_groups_to_meshes(
+    *,
+    module,
+    retry_groups,
+    height: float,
+    z_bot: float,
+    scale_factor: float,
+    stats: dict[str, float | int | str],
+):
+    """Extrude independent retry groups concurrently without reordering them."""
+
+    parallelism_plan = resolve_task_parallelism_plan(
+        "vector",
+        work_items=len(retry_groups),
+        min_parallel_items=NATIVE_SPLIT_PARALLEL_MIN_GROUPS,
+        hard_max_workers=4,
+        work_units=len(retry_groups),
+        min_parallel_work_units=NATIVE_SPLIT_PARALLEL_MIN_GROUPS,
+        work_units_per_worker=NATIVE_SPLIT_PARALLEL_GROUPS_PER_WORKER,
+        estimated_worker_bytes=NATIVE_SPLIT_PARALLEL_ESTIMATED_WORKER_BYTES,
+    )
+    worker_count = int(parallelism_plan.workers)
+    stats["native_split_parallel_workers"] = max(
+        int(stats["native_split_parallel_workers"]),
+        worker_count,
+    )
+
+    def run_chunk(bounds):
+        start, end = bounds
+        with task_parallelism_worker_scope():
+            meshes = module.merge_run_groups_to_meshes(
+                retry_groups[start:end],
+                close_delta_mm=0.0,
+                scale=NATIVE_COORD_SCALE,
+                height=height,
+                z_offset=z_bot,
+                xy_scale=scale_factor,
+            )
+        mesh_list = list(meshes or [])
+        expected_count = end - start
+        if len(mesh_list) < expected_count:
+            mesh_list.extend([None] * (expected_count - len(mesh_list)))
+        return mesh_list[:expected_count]
+
+    if worker_count <= 1:
+        return run_chunk((0, len(retry_groups)))
+
+    chunk_count = min(
+        len(retry_groups),
+        worker_count * NATIVE_SPLIT_PARALLEL_CHUNKS_PER_WORKER,
+    )
+    chunk_size = max(
+        1,
+        (len(retry_groups) + chunk_count - 1) // chunk_count,
+    )
+    chunk_bounds = [
+        (start, min(len(retry_groups), start + chunk_size))
+        for start in range(0, len(retry_groups), chunk_size)
+    ]
+    stats["native_split_parallel_batch_count"] = int(
+        stats["native_split_parallel_batch_count"]
+    ) + len(chunk_bounds)
+
+    parallel_started = time.perf_counter()
+    with ThreadPoolExecutor(
+        max_workers=worker_count,
+        thread_name_prefix="lumina-vector-native-split",
+    ) as executor:
+        ordered_chunks = list(executor.map(run_chunk, chunk_bounds))
+    stats["native_split_parallel_seconds"] = float(
+        stats["native_split_parallel_seconds"]
+    ) + (time.perf_counter() - parallel_started)
+    return [mesh for chunk in ordered_chunks for mesh in chunk]
 
 
 def _should_consider_native_split(
@@ -1607,7 +2021,7 @@ def _polygon_from_native_rings(rings) -> Polygon | None:
 
 
 def _native_mesh_surface_is_acceptable(
-    mesh: trimesh.Trimesh,
+    mesh_arrays: tuple[np.ndarray, np.ndarray],
     geoms,
     *,
     height: float,
@@ -1617,8 +2031,8 @@ def _native_mesh_surface_is_acceptable(
     if not _surface_validation_enabled():
         return True
     t_validate = time.perf_counter()
-    surface_ok = _native_surface_area_matches(
-        mesh,
+    surface_ok = _native_surface_area_matches_arrays(
+        mesh_arrays,
         geoms,
         height=height,
         scale_factor=scale_factor,
@@ -1996,6 +2410,32 @@ def _native_surface_area_matches(
     if expected_area <= NATIVE_SURFACE_AREA_ABS_TOL_MM2:
         return True
     delta = abs(float(mesh.area) - expected_area)
+    if delta <= NATIVE_SURFACE_AREA_ABS_TOL_MM2:
+        return True
+    return delta / expected_area <= _surface_area_rel_tolerance()
+
+
+def _native_surface_area_matches_arrays(
+    mesh_arrays: tuple[np.ndarray, np.ndarray],
+    geoms,
+    *,
+    height: float,
+    scale_factor: float,
+) -> bool:
+    """Apply the unchanged surface-area gate without allocating a Trimesh."""
+
+    vertices, faces = mesh_arrays
+    triangles = vertices[faces]
+    crosses = trimesh.triangles.cross(triangles)
+    mesh_area = float(trimesh.triangles.area(crosses=crosses).sum())
+    expected_area = _expected_extruded_surface_area(
+        geoms,
+        height=height,
+        scale_factor=scale_factor,
+    )
+    if expected_area <= NATIVE_SURFACE_AREA_ABS_TOL_MM2:
+        return True
+    delta = abs(mesh_area - expected_area)
     if delta <= NATIVE_SURFACE_AREA_ABS_TOL_MM2:
         return True
     return delta / expected_area <= _surface_area_rel_tolerance()
