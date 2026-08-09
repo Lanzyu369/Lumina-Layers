@@ -79,6 +79,7 @@ def test_compare_geometry_accepts_component_order_only_difference() -> None:
 
 def test_proof_builder_is_pinned_and_scratch_only() -> None:
     from scripts.build_geos_buffer_fast_proof import (
+        GEOS_COMMIT,
         GEOS_REF,
         GEOS_REPOSITORY,
         PATCH_PATH,
@@ -87,6 +88,7 @@ def test_proof_builder_is_pinned_and_scratch_only() -> None:
     )
 
     assert GEOS_REF == "3.13.1"
+    assert GEOS_COMMIT == "431568d6e311e0bbfb057b4ec3d44d0d3ba3335f"
     assert GEOS_REPOSITORY == "https://github.com/libgeos/geos.git"
     assert PROOF_ROOT == ROOT / ".scratch" / "geos_buffer_fast_proof"
     assert PATCH_PATH == (
@@ -108,12 +110,14 @@ def test_proof_builder_commands_are_argument_lists() -> None:
         build_command,
         clone_command,
         configure_command,
+        revision_command,
     )
 
     clone = clone_command()
     apply = apply_command()
     configure = configure_command()
     build = build_command(parallel=3)
+    revision = revision_command()
 
     assert clone == [
         "git",
@@ -126,6 +130,7 @@ def test_proof_builder_commands_are_argument_lists() -> None:
         str(SOURCE_ROOT),
     ]
     assert apply == ["git", "-C", str(SOURCE_ROOT), "apply", str(PATCH_PATH)]
+    assert revision == ["git", "-C", str(SOURCE_ROOT), "rev-parse", "HEAD"]
     assert configure[:5] == ["cmake", "-S", str(SOURCE_ROOT), "-B", str(BUILD_ROOT)]
     assert "-DCMAKE_BUILD_TYPE=Release" in configure
     assert "-DBUILD_TESTING=OFF" in configure
@@ -141,7 +146,88 @@ def test_proof_builder_commands_are_argument_lists() -> None:
         "--parallel",
         "3",
     ]
-    assert all(isinstance(command, list) for command in (clone, apply, configure, build))
+    assert all(
+        isinstance(command, list)
+        for command in (clone, revision, apply, configure, build)
+    )
+
+
+def test_proof_build_verifies_commit_before_patch_and_records_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts import build_geos_buffer_fast_proof as builder
+
+    proof_root = tmp_path / "proof"
+    source_root = proof_root / "geos"
+    build_root = proof_root / "build"
+    manifest_path = proof_root / "build_manifest.json"
+    patch_path = tmp_path / "fast.patch"
+    marker_path = source_root / ".lumina_patch_sha256"
+    source_root.mkdir(parents=True)
+    build_root.mkdir(parents=True)
+    patch_path.write_text("proof patch", encoding="utf-8")
+    library_path = build_root / "libgeos_c.so"
+    library_path.touch()
+    for name, value in (
+        ("PROOF_ROOT", proof_root),
+        ("SOURCE_ROOT", source_root),
+        ("BUILD_ROOT", build_root),
+        ("MANIFEST_PATH", manifest_path),
+        ("PATCH_PATH", patch_path),
+        ("PATCH_MARKER_PATH", marker_path),
+    ):
+        monkeypatch.setattr(builder, name, value)
+
+    actions: list[tuple[str, list[str]]] = []
+
+    def read_command(command: list[str]) -> str:
+        actions.append(("verify", command))
+        return builder.GEOS_COMMIT
+
+    monkeypatch.setattr(builder, "_read_command_output", read_command)
+    monkeypatch.setattr(
+        builder,
+        "_run",
+        lambda command: actions.append(("run", command)),
+    )
+    monkeypatch.setattr(builder, "resolve_built_library", lambda: library_path)
+
+    manifest = builder.build_proof()
+
+    verify_index = actions.index(("verify", builder.revision_command()))
+    apply_index = actions.index(("run", builder.apply_command()))
+    assert verify_index < apply_index
+    assert manifest["geos_commit"] == builder.GEOS_COMMIT
+
+
+def test_proof_build_rejects_wrong_commit_before_applying_patch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts import build_geos_buffer_fast_proof as builder
+
+    proof_root = tmp_path / "proof"
+    source_root = proof_root / "geos"
+    patch_path = tmp_path / "fast.patch"
+    source_root.mkdir(parents=True)
+    patch_path.write_text("proof patch", encoding="utf-8")
+    monkeypatch.setattr(builder, "PROOF_ROOT", proof_root)
+    monkeypatch.setattr(builder, "SOURCE_ROOT", source_root)
+    monkeypatch.setattr(builder, "PATCH_PATH", patch_path)
+    monkeypatch.setattr(
+        builder,
+        "PATCH_MARKER_PATH",
+        source_root / ".lumina_patch_sha256",
+    )
+    monkeypatch.setattr(builder, "_read_command_output", lambda _command: "0" * 40)
+    run_calls: list[list[str]] = []
+    monkeypatch.setattr(builder, "_run", run_calls.append)
+
+    with pytest.raises(RuntimeError, match="unexpected GEOS commit"):
+        builder.build_proof()
+
+    assert builder.apply_command() not in run_calls
 
 
 def test_proof_builder_refuses_broad_rebuild_targets() -> None:
@@ -156,17 +242,44 @@ def test_proof_builder_refuses_broad_rebuild_targets() -> None:
         validate_rebuild_target(ROOT / ".scratch")
 
 
-def test_geos_fast_buffer_readme_documents_proof_boundary() -> None:
+def test_geos_fast_buffer_docs_cover_server_runtime_and_lgpl_boundary() -> None:
     from scripts.build_geos_buffer_fast_proof import ROOT
 
     readme = (
         ROOT / "native" / "geos_buffer_fast" / "README.md"
     ).read_text(encoding="utf-8")
+    notice = (
+        ROOT / "native" / "geos_buffer_fast" / "NOTICE.md"
+    ).read_text(encoding="utf-8")
 
     assert "LGPL-2.1-or-later" in readme
     assert ".scratch/geos_buffer_fast_proof" in readme
     assert "must not replace Shapely" in readme
-    assert "production" in readme.lower()
+    assert "Docker" in readme
+    assert "fallback" in readme.lower()
+    assert "desktop" in readme.lower()
+    assert "https://libgeos.org/" in readme
+    assert "https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html" in notice
+    assert "geos-3.13.1-buffer-subgraph-index.patch" in notice
+
+
+def test_docker_builds_and_enables_verified_dense_geos_runtime() -> None:
+    from scripts.build_geos_buffer_fast_proof import ROOT
+
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
+
+    assert "    cmake \\\n" in dockerfile
+    copy_index = dockerfile.index("COPY . /app/")
+    build_index = dockerfile.index(
+        "python scripts/build_geos_buffer_fast_proof.py --rebuild"
+    )
+    assert copy_index < build_index
+    assert (
+        "LUMINA_GEOS_BUFFER_FAST_MANIFEST="
+        "/app/.scratch/geos_buffer_fast_proof/build_manifest.json"
+    ) in dockerfile
+    assert ".scratch/" in dockerignore
 
 
 def test_geos_patch_changes_lookup_cost_only() -> None:

@@ -29,6 +29,7 @@ PATCH_PATH = (
 )
 GEOS_REPOSITORY = "https://github.com/libgeos/geos.git"
 GEOS_REF = "3.13.1"
+GEOS_COMMIT = "431568d6e311e0bbfb057b4ec3d44d0d3ba3335f"
 
 
 def clone_command() -> list[str]:
@@ -50,6 +51,12 @@ def apply_command() -> list[str]:
     """Return the patch command. / 返回补丁应用命令。"""
 
     return ["git", "-C", str(SOURCE_ROOT), "apply", str(PATCH_PATH)]
+
+
+def revision_command() -> list[str]:
+    """Return the source revision verification command. / 返回源码版本核对命令。"""
+
+    return ["git", "-C", str(SOURCE_ROOT), "rev-parse", "HEAD"]
 
 
 def configure_command() -> list[str]:
@@ -120,6 +127,17 @@ def _run(command: list[str]) -> None:
     subprocess.run(command, cwd=ROOT, check=True)
 
 
+def _read_command_output(command: list[str]) -> str:
+    completed = subprocess.run(
+        command,
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout.strip()
+
+
 def resolve_built_library() -> Path:
     """Locate the proof GEOS C library. / 定位证明构建的 GEOS C 动态库。"""
 
@@ -158,6 +176,13 @@ def build_proof(*, rebuild: bool = False) -> dict[str, object]:
     if not SOURCE_ROOT.exists():
         _run(clone_command())
 
+    source_commit = _read_command_output(revision_command())
+    if source_commit != GEOS_COMMIT:
+        raise RuntimeError(
+            "unexpected GEOS commit: "
+            f"expected {GEOS_COMMIT}, found {source_commit or '<empty>'}"
+        )
+
     if not PATCH_PATH.is_file():
         raise FileNotFoundError(f"GEOS proof patch is missing: {PATCH_PATH}")
     patch_sha256 = _sha256_file(PATCH_PATH)
@@ -178,6 +203,7 @@ def build_proof(*, rebuild: bool = False) -> dict[str, object]:
     manifest: dict[str, object] = {
         "geos_repository": GEOS_REPOSITORY,
         "geos_ref": GEOS_REF,
+        "geos_commit": source_commit,
         "patch_sha256": patch_sha256,
         "library_path": str(library_path),
         "build_seconds": round(time.perf_counter() - started, 6),
@@ -201,6 +227,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.print_only:
         for command in (
             clone_command(),
+            revision_command(),
             apply_command(),
             configure_command(),
             build_command(),
