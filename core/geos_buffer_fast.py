@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from shapely import buffer as shapely_buffer
 from shapely import from_wkb
 from shapely.geometry import MultiPolygon, Polygon
 from shapely.geometry.base import BaseGeometry
@@ -372,6 +373,80 @@ def try_dense_positive_buffer(
         extra={
             "event": "dense_geos_buffer_done",
             "component_count": component_count,
+        },
+    )
+    return candidate
+
+
+def try_disconnected_inward_buffer(
+    geometry: BaseGeometry,
+    settings: BufferSettings | None = None,
+) -> BaseGeometry | None:
+    """Shrink disjoint polygons independently. / 独立回缩互不相交的多边形。"""
+
+    expected_settings = BufferSettings(distance=-0.03)
+    resolved_settings = settings or expected_settings
+    if resolved_settings != expected_settings:
+        return None
+    if not isinstance(geometry, (Polygon, MultiPolygon)):
+        return None
+    if geometry.is_empty or not geometry.is_valid:
+        return None
+
+    source_parts = (
+        [geometry]
+        if isinstance(geometry, Polygon)
+        else list(geometry.geoms)
+    )
+    try:
+        buffered_parts = shapely_buffer(
+            source_parts,
+            resolved_settings.distance,
+            quad_segs=resolved_settings.quadrant_segments,
+            join_style=resolved_settings.join_style,
+            mitre_limit=resolved_settings.mitre_limit,
+        )
+        result_parts: list[Polygon] = []
+        for buffered in buffered_parts:
+            if buffered is None:
+                raise ProofLibraryError("inward buffer returned a null geometry")
+            if buffered.is_empty:
+                continue
+            if isinstance(buffered, Polygon):
+                result_parts.append(buffered)
+            elif isinstance(buffered, MultiPolygon):
+                result_parts.extend(buffered.geoms)
+            else:
+                raise ProofLibraryError(
+                    f"inward buffer returned non-polygon output: {buffered.geom_type}"
+                )
+
+        if not result_parts:
+            candidate: BaseGeometry = Polygon()
+        elif len(result_parts) == 1:
+            candidate = result_parts[0]
+        else:
+            candidate = MultiPolygon(result_parts)
+        if not candidate.is_valid:
+            raise ProofLibraryError("inward buffer returned invalid output")
+    except Exception as exc:
+        log.warning(
+            "Disconnected inward buffer failed; using the stock buffer path",
+            extra={
+                "event": "dense_geos_inward_buffer_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+                "component_count": len(source_parts),
+            },
+        )
+        return None
+
+    log.debug(
+        "Disconnected inward buffer completed",
+        extra={
+            "event": "dense_geos_inward_buffer_done",
+            "component_count": len(source_parts),
+            "output_component_count": len(result_parts),
         },
     )
     return candidate

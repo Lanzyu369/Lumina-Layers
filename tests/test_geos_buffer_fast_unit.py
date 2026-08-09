@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from shapely.geometry import MultiPolygon, Point, Polygon, box
+from shapely.ops import unary_union
 
 
 class _FakeFunction:
@@ -407,3 +408,106 @@ def test_positive_fast_path_returns_none_when_runtime_call_fails(
     )
 
     assert geos_buffer_fast.try_dense_positive_buffer(_dense_geometry()) is None
+
+
+def _top_level_polygons(geometry: object) -> list[Polygon]:
+    if isinstance(geometry, Polygon):
+        return [] if geometry.is_empty else [geometry]
+    if isinstance(geometry, MultiPolygon):
+        return list(geometry.geoms)
+    return []
+
+
+def _hole_count(geometry: object) -> int:
+    return sum(len(polygon.interiors) for polygon in _top_level_polygons(geometry))
+
+
+def _assert_matches_stock_inward_buffer(geometry: Polygon | MultiPolygon) -> None:
+    from core import geos_buffer_fast
+
+    settings = geos_buffer_fast.BufferSettings(distance=-0.03)
+    stock = geometry.buffer(
+        settings.distance,
+        quad_segs=settings.quadrant_segments,
+        join_style=settings.join_style,
+        mitre_limit=settings.mitre_limit,
+    )
+    candidate = geos_buffer_fast.try_disconnected_inward_buffer(geometry)
+
+    assert candidate is not None
+    assert candidate.geom_type == stock.geom_type
+    assert len(_top_level_polygons(candidate)) == len(_top_level_polygons(stock))
+    assert _hole_count(candidate) == _hole_count(stock)
+    assert candidate.symmetric_difference(stock).is_empty
+    assert candidate.area == pytest.approx(stock.area, rel=0.0, abs=1e-9)
+    if stock.is_empty:
+        assert candidate.is_empty
+    else:
+        assert candidate.bounds == pytest.approx(stock.bounds, rel=0.0, abs=1e-12)
+
+
+def test_disconnected_inward_buffer_matches_stock_for_thousands_of_polygons() -> None:
+    _assert_matches_stock_inward_buffer(_dense_geometry())
+
+
+def test_disconnected_inward_buffer_matches_stock_for_polygon_with_holes() -> None:
+    geometry = Polygon(
+        [(0, 0), (5, 0), (5, 5), (0, 5)],
+        holes=[[(1, 1), (2, 1), (2, 2), (1, 2)]],
+    )
+
+    _assert_matches_stock_inward_buffer(geometry)
+
+
+def test_disconnected_inward_buffer_matches_stock_when_polygon_splits() -> None:
+    geometry = unary_union(
+        [
+            box(0.0, 0.0, 1.0, 1.0),
+            box(2.0, 0.0, 3.0, 1.0),
+            box(1.0, 0.49, 2.0, 0.51),
+        ]
+    )
+    assert isinstance(geometry, Polygon)
+
+    _assert_matches_stock_inward_buffer(geometry)
+
+
+def test_disconnected_inward_buffer_matches_stock_when_tiny_parts_disappear() -> None:
+    geometry = MultiPolygon(
+        [
+            box(0.0, 0.0, 0.02, 0.02),
+            box(0.1, 0.0, 0.12, 0.02),
+        ]
+    )
+
+    _assert_matches_stock_inward_buffer(geometry)
+
+
+@pytest.mark.parametrize(
+    "geometry",
+    [
+        Point(0.0, 0.0),
+        Polygon([(0, 0), (2, 2), (0, 2), (2, 0), (0, 0)]),
+    ],
+)
+def test_disconnected_inward_buffer_rejects_non_polygon_or_invalid_input(
+    geometry: object,
+) -> None:
+    from core import geos_buffer_fast
+
+    assert geos_buffer_fast.try_disconnected_inward_buffer(geometry) is None
+
+
+def test_disconnected_inward_buffer_returns_none_when_vector_buffer_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from core import geos_buffer_fast
+
+    monkeypatch.setattr(
+        geos_buffer_fast,
+        "shapely_buffer",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("forced")),
+        raising=False,
+    )
+
+    assert geos_buffer_fast.try_disconnected_inward_buffer(_dense_geometry(2)) is None
