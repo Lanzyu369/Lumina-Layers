@@ -1878,6 +1878,104 @@ class TestVectorNearFillConsistency:
         assert "match_color" not in shapes[0]
         assert "match_color" not in shapes[2]
 
+    def test_many_distinct_fills_do_not_scan_every_prior_group(self, monkeypatch):
+        processor = self._processor()
+        colors = [
+            (red, green, blue)
+            for red in range(0, 241, 20)
+            for green in range(0, 241, 20)
+            for blue in range(0, 241, 20)
+        ][:216]
+        shapes = [
+            {"color": color, "geometry": box(0, 0, 1, 1)}
+            for color in colors
+        ]
+        norm_calls = 0
+        original_norm = vector_engine.np.linalg.norm
+
+        def counted_norm(*args, **kwargs):
+            nonlocal norm_calls
+            norm_calls += 1
+            return original_norm(*args, **kwargs)
+
+        monkeypatch.setattr(vector_engine.np.linalg, "norm", counted_norm)
+
+        updated = processor._with_near_fill_match_queries(shapes)
+
+        assert updated is shapes
+        assert norm_calls <= len(colors) * 4
+
+    def test_spatial_grouping_matches_scalar_complete_link_reference(self):
+        processor = self._processor()
+        rng = np.random.default_rng(20260810)
+        random_colors = [
+            tuple(int(value) for value in row)
+            for row in rng.integers(0, 256, size=(80, 3), dtype=np.uint8)
+        ]
+        colors = random_colors + [
+            (100, 100, 100),
+            (101, 100, 100),
+            (102, 100, 100),
+            (104, 100, 100),
+            (200, 200, 200),
+            (201, 201, 200),
+        ]
+        shapes = [
+            {
+                "color": color,
+                "geometry": box(0, 0, 1 + (idx % 7), 1 + (idx % 5)),
+            }
+            for idx, color in enumerate(colors)
+        ]
+
+        stats_by_color = {}
+        for idx, item in enumerate(shapes):
+            rgb = tuple(item["color"])
+            stats = stats_by_color.setdefault(
+                rgb,
+                {"area": 0.0, "first_index": idx},
+            )
+            stats["area"] += float(item["geometry"].area)
+        ordered_colors = sorted(
+            stats_by_color,
+            key=lambda rgb: (
+                -float(stats_by_color[rgb]["area"]),
+                int(stats_by_color[rgb]["first_index"]),
+                rgb,
+            ),
+        )
+        representatives = []
+        members = []
+        expected_by_color = {}
+        for rgb in ordered_colors:
+            rgb_lab = np.asarray(rgb, dtype=np.float64)
+            chosen = None
+            for group_idx, representative in enumerate(representatives):
+                if all(
+                    float(
+                        np.linalg.norm(
+                            rgb_lab - np.asarray(member, dtype=np.float64)
+                        )
+                    )
+                    <= 2.0
+                    for member in members[group_idx]
+                ):
+                    chosen = representative
+                    members[group_idx].append(rgb)
+                    break
+            if chosen is None:
+                representatives.append(rgb)
+                members.append([rgb])
+                chosen = rgb
+            expected_by_color[rgb] = chosen
+
+        updated = processor._with_near_fill_match_queries(shapes)
+
+        assert [
+            tuple(item.get("match_color", item["color"]))
+            for item in updated
+        ] == [expected_by_color[tuple(item["color"])] for item in shapes]
+
 
 class TestVectorColorDistanceLogging:
     """Verify large-distance diagnostics stay bounded for many SVG colours."""

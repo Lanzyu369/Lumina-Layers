@@ -6516,10 +6516,38 @@ class VectorProcessor:
         representatives = []
         representative_members = []
         representative_by_color = {}
+        representative_groups_by_bucket = {}
+
+        def spatial_bucket(lab):
+            if not bool(np.isfinite(lab).all()):
+                return None
+            return tuple(math.floor(float(value) / threshold) for value in lab)
+
         for rgb in ordered_colors:
             rgb_lab = lab_by_color[rgb]
             chosen = None
-            for group_idx, representative in enumerate(representatives):
+            bucket = spatial_bucket(rgb_lab)
+            if bucket is None:
+                candidate_group_indices = range(len(representatives))
+            else:
+                nearby_groups = set()
+                for red_offset in range(-2, 3):
+                    for green_offset in range(-2, 3):
+                        for blue_offset in range(-2, 3):
+                            nearby_groups.update(
+                                representative_groups_by_bucket.get(
+                                    (
+                                        bucket[0] + red_offset,
+                                        bucket[1] + green_offset,
+                                        bucket[2] + blue_offset,
+                                    ),
+                                    (),
+                                )
+                            )
+                candidate_group_indices = sorted(nearby_groups)
+
+            for group_idx in candidate_group_indices:
+                representative = representatives[group_idx]
                 if all(
                     float(np.linalg.norm(rgb_lab - lab_by_color[member]))
                     <= threshold
@@ -6532,6 +6560,11 @@ class VectorProcessor:
                 representatives.append(rgb)
                 representative_members.append([rgb])
                 chosen = rgb
+                group_idx = len(representatives) - 1
+                if bucket is not None:
+                    representative_groups_by_bucket.setdefault(bucket, []).append(
+                        group_idx
+                    )
             representative_by_color[rgb] = chosen
 
         if all(
