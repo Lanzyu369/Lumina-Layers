@@ -812,6 +812,151 @@ class TestNormalizeContours:
         assert result == [geom]
         assert not [item for item in caught if issubclass(item.category, RuntimeWarning)]
 
+    def test_dense_batch_uses_isolated_positive_and_disconnected_inward_helpers(
+        self,
+        monkeypatch,
+    ):
+        source = MultiPolygon([box(0, 0, 1, 1), box(3, 0, 4, 1)])
+        inflated = source.buffer(0.03, quad_segs=1, join_style="mitre", mitre_limit=2.0)
+        deflated = inflated.buffer(-0.03, quad_segs=1, join_style="mitre", mitre_limit=2.0)
+        calls = []
+        monkeypatch.setattr(vector_engine.geos_buffer_fast, "MIN_DENSE_COMPONENTS", 2)
+        monkeypatch.setattr(
+            vector_engine.geos_buffer_fast,
+            "try_dense_positive_buffer",
+            lambda geometry, settings: calls.append(("positive", geometry, settings))
+            or inflated,
+        )
+        monkeypatch.setattr(
+            vector_engine.geos_buffer_fast,
+            "try_disconnected_inward_buffer",
+            lambda geometry, settings: calls.append(("inward", geometry, settings))
+            or deflated,
+        )
+
+        result = vector_engine._normalize_contours_many([source])
+
+        assert [call[0] for call in calls] == ["positive", "inward"]
+        assert result[0].symmetric_difference(deflated).is_empty
+
+    def test_small_batch_does_not_call_dense_helpers(self, monkeypatch):
+        source = Polygon([(0, 0), (5, 0), (5, 5), (0, 5)])
+
+        def unexpected(*_args, **_kwargs):
+            raise AssertionError("ordinary geometry must stay on the stock batch path")
+
+        monkeypatch.setattr(
+            vector_engine.geos_buffer_fast,
+            "try_dense_positive_buffer",
+            unexpected,
+        )
+        monkeypatch.setattr(
+            vector_engine.geos_buffer_fast,
+            "try_disconnected_inward_buffer",
+            unexpected,
+        )
+
+        result = vector_engine._normalize_contours_many([source])
+
+        assert result[0].is_valid
+        assert result[0].area == pytest.approx(source.area)
+
+    def test_dense_batch_uses_stock_positive_when_accelerator_unavailable(
+        self,
+        monkeypatch,
+    ):
+        source = MultiPolygon([box(0, 0, 1, 1), box(3, 0, 4, 1)])
+        buffer_calls = []
+
+        def stock_buffer(geometries, distance, **kwargs):
+            items = list(geometries)
+            buffer_calls.append((distance, items))
+            return np.asarray(
+                [geometry.buffer(distance, **kwargs) for geometry in items],
+                dtype=object,
+            )
+
+        monkeypatch.setattr(vector_engine.geos_buffer_fast, "MIN_DENSE_COMPONENTS", 2)
+        monkeypatch.setattr(
+            vector_engine.geos_buffer_fast,
+            "try_dense_positive_buffer",
+            lambda _geometry, _settings: None,
+        )
+        monkeypatch.setattr(
+            vector_engine.geos_buffer_fast,
+            "try_disconnected_inward_buffer",
+            lambda geometry, _settings: geometry.buffer(
+                -0.03,
+                quad_segs=1,
+                join_style="mitre",
+                mitre_limit=2.0,
+            ),
+        )
+        monkeypatch.setattr(vector_engine, "shapely_buffer", stock_buffer)
+
+        result = vector_engine._normalize_contours_many([source])
+
+        assert [call[0] for call in buffer_calls] == [0.03]
+        assert result[0] is not None
+
+    def test_dense_batch_uses_stock_negative_when_inward_helper_fails(
+        self,
+        monkeypatch,
+    ):
+        source = MultiPolygon([box(0, 0, 1, 1), box(3, 0, 4, 1)])
+        inflated = source.buffer(0.03, quad_segs=1, join_style="mitre", mitre_limit=2.0)
+        buffer_calls = []
+
+        def stock_buffer(geometries, distance, **kwargs):
+            items = list(geometries)
+            buffer_calls.append((distance, items))
+            return np.asarray(
+                [geometry.buffer(distance, **kwargs) for geometry in items],
+                dtype=object,
+            )
+
+        monkeypatch.setattr(vector_engine.geos_buffer_fast, "MIN_DENSE_COMPONENTS", 2)
+        monkeypatch.setattr(
+            vector_engine.geos_buffer_fast,
+            "try_dense_positive_buffer",
+            lambda _geometry, _settings: inflated,
+        )
+        monkeypatch.setattr(
+            vector_engine.geos_buffer_fast,
+            "try_disconnected_inward_buffer",
+            lambda _geometry, _settings: None,
+        )
+        monkeypatch.setattr(vector_engine, "shapely_buffer", stock_buffer)
+
+        result = vector_engine._normalize_contours_many([source])
+
+        assert [call[0] for call in buffer_calls] == [-0.03]
+        assert result[0].symmetric_difference(source).is_empty
+
+    def test_dense_scalar_uses_both_helpers(self, monkeypatch):
+        source = MultiPolygon([box(0, 0, 1, 1), box(3, 0, 4, 1)])
+        inflated = source.buffer(0.03, quad_segs=1, join_style="mitre", mitre_limit=2.0)
+        deflated = inflated.buffer(-0.03, quad_segs=1, join_style="mitre", mitre_limit=2.0)
+        calls = []
+        monkeypatch.setattr(vector_engine.geos_buffer_fast, "MIN_DENSE_COMPONENTS", 2)
+        monkeypatch.setattr(
+            vector_engine.geos_buffer_fast,
+            "try_dense_positive_buffer",
+            lambda geometry, settings: calls.append(("positive", geometry, settings))
+            or inflated,
+        )
+        monkeypatch.setattr(
+            vector_engine.geos_buffer_fast,
+            "try_disconnected_inward_buffer",
+            lambda geometry, settings: calls.append(("inward", geometry, settings))
+            or deflated,
+        )
+
+        result = VectorProcessor._normalize_contours(source, close_delta_mm=0.03)
+
+        assert [call[0] for call in calls] == ["positive", "inward"]
+        assert result.symmetric_difference(deflated).is_empty
+
     def test_parse_svg_preserves_normalized_marker_on_final_shapes(self):
         svg = (
             '<?xml version="1.0" encoding="UTF-8"?>'
@@ -1661,6 +1806,8 @@ class TestVectorNearFillConsistency:
         svg_path = self._write_svg(tmp_path, ["#646464", "#656464"])
         analysis = self._processor().analyze_svg(str(svg_path), target_width_mm=30.0)
 
+        assert analysis.stage_timings["contour_normalize_s"] >= 0.0
+        assert analysis.stage_timings["occlusion_s"] >= analysis.stage_timings["contour_normalize_s"]
         matched_shapes = analysis.matched_shapes
         assert {tuple(item["color"]) for item in matched_shapes} == {
             (100, 100, 100),

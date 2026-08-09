@@ -59,6 +59,7 @@ except ImportError:  # Shapely < 2.1; keep the old union path available.
 
 from api.structured_logging import get_logger
 from config import PrinterConfig, ColorSystem, VectorConfig
+from core import geos_buffer_fast
 
 _log = get_logger(__name__)
 
@@ -1670,6 +1671,33 @@ def _finish_normalized_contour(geom, inflated, deflated):
     return result
 
 
+def _is_dense_normalization_geometry(geom, close_delta_mm):
+    """Return whether one geometry qualifies for the proven dense path."""
+
+    return (
+        float(close_delta_mm) == 0.03
+        and isinstance(geom, MultiPolygon)
+        and len(geom.geoms) >= geos_buffer_fast.MIN_DENSE_COMPONENTS
+    )
+
+
+def _stock_buffer_many(geometries, distance):
+    """Run the existing Shapely vector-buffer operation for one subset."""
+
+    if not geometries:
+        return []
+    geom_array = np.asarray(geometries, dtype=object)
+    return list(
+        shapely_buffer(
+            geom_array,
+            distance,
+            quad_segs=1,
+            join_style="mitre",
+            mitre_limit=2.0,
+        )
+    )
+
+
 def _normalize_contours_many(geometries, close_delta_mm=0.03):
     """Normalize a batch of contours with scalar-compatible semantics."""
 
@@ -1696,24 +1724,62 @@ def _normalize_contours_many(geometries, close_delta_mm=0.03):
     if not active_geoms:
         return results
 
+    positive_settings = geos_buffer_fast.BufferSettings(distance=close_delta_mm)
+    negative_settings = geos_buffer_fast.BufferSettings(distance=-close_delta_mm)
     try:
-        geom_array = np.asarray(active_geoms, dtype=object)
+        inflated = [None] * len(active_geoms)
+        stock_positive_indices = []
+        stock_positive_geometries = []
+        for local_idx, geom in enumerate(active_geoms):
+            candidate = None
+            if _is_dense_normalization_geometry(geom, close_delta_mm):
+                candidate = geos_buffer_fast.try_dense_positive_buffer(
+                    geom,
+                    positive_settings,
+                )
+            if candidate is None:
+                stock_positive_indices.append(local_idx)
+                stock_positive_geometries.append(geom)
+            else:
+                inflated[local_idx] = candidate
+
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
-            inflated = shapely_buffer(
-                geom_array,
+            stock_inflated = _stock_buffer_many(
+                stock_positive_geometries,
                 close_delta_mm,
-                quad_segs=1,
-                join_style="mitre",
-                mitre_limit=2.0,
             )
-            deflated = shapely_buffer(
-                inflated,
+        if len(stock_inflated) != len(stock_positive_indices):
+            raise ValueError("stock positive buffer returned an unexpected result count")
+        for local_idx, candidate in zip(stock_positive_indices, stock_inflated):
+            inflated[local_idx] = candidate
+
+        deflated = [None] * len(active_geoms)
+        stock_negative_indices = []
+        stock_negative_geometries = []
+        for local_idx, candidate in enumerate(inflated):
+            inward = None
+            if _is_dense_normalization_geometry(candidate, close_delta_mm):
+                inward = geos_buffer_fast.try_disconnected_inward_buffer(
+                    candidate,
+                    negative_settings,
+                )
+            if inward is None:
+                stock_negative_indices.append(local_idx)
+                stock_negative_geometries.append(candidate)
+            else:
+                deflated[local_idx] = inward
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            stock_deflated = _stock_buffer_many(
+                stock_negative_geometries,
                 -close_delta_mm,
-                quad_segs=1,
-                join_style="mitre",
-                mitre_limit=2.0,
             )
+        if len(stock_deflated) != len(stock_negative_indices):
+            raise ValueError("stock negative buffer returned an unexpected result count")
+        for local_idx, candidate in zip(stock_negative_indices, stock_deflated):
+            deflated[local_idx] = candidate
     except VECTOR_HANDLED_ERRORS:
         cache = {}
         return [
@@ -4014,38 +4080,40 @@ class VectorProcessor:
         if geom is None or geom.is_empty:
             return geom
         try:
-            inflated = geom.buffer(
-                close_delta_mm,
-                quad_segs=1,
-                join_style="mitre",
-                mitre_limit=2.0,
+            positive_settings = geos_buffer_fast.BufferSettings(
+                distance=close_delta_mm
             )
-            if inflated.is_empty:
-                return geom
-            deflated = inflated.buffer(
-                -close_delta_mm,
-                quad_segs=1,
-                join_style="mitre",
-                mitre_limit=2.0,
-            )
-            if deflated.is_empty:
-                return geom
-            if deflated.is_valid and deflated.geom_type in ("Polygon", "MultiPolygon"):
-                return deflated
+            inflated = None
+            if _is_dense_normalization_geometry(geom, close_delta_mm):
+                inflated = geos_buffer_fast.try_dense_positive_buffer(
+                    geom,
+                    positive_settings,
+                )
+            if inflated is None:
+                inflated = geom.buffer(
+                    close_delta_mm,
+                    quad_segs=1,
+                    join_style="mitre",
+                    mitre_limit=2.0,
+                )
 
-            result = make_valid(deflated)
-            # If make_valid returned GeometryCollection with non-polygon
-            # elements only (e.g. LineString, Point from degenerate geometry),
-            # fall back to pre-make_valid state to avoid downstream errors.
-            # 若 make_valid 返回含非多边形退化元素的 GeometryCollection，
-            # 退回 make_valid 之前的状态，避免下游类型错误。
-            if result is not None and result.geom_type == "GeometryCollection":
-                polys = [g for g in result.geoms if g.geom_type in ("Polygon", "MultiPolygon")]
-                if polys:
-                    result = MultiPolygon(polys) if len(polys) > 1 else polys[0]
-                else:
-                    return deflated
-            return result
+            negative_settings = geos_buffer_fast.BufferSettings(
+                distance=-close_delta_mm
+            )
+            deflated = None
+            if _is_dense_normalization_geometry(inflated, close_delta_mm):
+                deflated = geos_buffer_fast.try_disconnected_inward_buffer(
+                    inflated,
+                    negative_settings,
+                )
+            if deflated is None:
+                deflated = inflated.buffer(
+                    -close_delta_mm,
+                    quad_segs=1,
+                    join_style="mitre",
+                    mitre_limit=2.0,
+                )
+            return _finish_normalized_contour(geom, inflated, deflated)
         except Exception:
             return geom
 
@@ -4734,6 +4802,7 @@ class VectorProcessor:
             bbox = cached_entry["bbox"]
             stage_timings["parse_s"] = 0.0
             stage_timings["occlusion_s"] = 0.0
+            stage_timings["contour_normalize_s"] = 0.0
             _log.debug("Parse/clip cache hit: %s", os.path.basename(svg_path))
             _log.debug("Parsed %s shapes. Scale: %.4f", len(shape_data), scale_factor)
             _log.debug("After occlusion clip: %s non-overlapping shapes", len(clipped_shapes))
@@ -4768,7 +4837,11 @@ class VectorProcessor:
                 (_clip_area / _pre_area * 100) if _pre_area > 0 else 0.0,
             )
 
+            normalize_started = time.perf_counter()
             post_clip = VectorProcessor._postprocess_clipped_shapes(clipped_shapes)
+            stage_timings["contour_normalize_s"] = (
+                time.perf_counter() - normalize_started
+            )
             _norm_area = sum(it["geometry"].area for it in post_clip if it["geometry"] is not None)
             _log.debug(
                 "post-clip normalize: %s -> %s shapes, area %.1f -> %.1f",
