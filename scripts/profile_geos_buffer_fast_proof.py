@@ -3,10 +3,231 @@
 
 from __future__ import annotations
 
+import argparse
+import ctypes
 import hashlib
+import json
+import resource
+import sys
+import time
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Callable, Protocol
 
-from shapely import normalize
+from shapely import from_wkb, get_num_coordinates, normalize
 from shapely.geometry.base import BaseGeometry
+
+
+MAX_CANDIDATE_SECONDS = 4.0
+MAX_PEAK_RSS_RATIO = 1.20
+MIN_REAL_COMPONENTS = 2_048
+ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_OUT_DIR = ROOT / ".scratch" / "geos_buffer_fast_proof" / "results"
+
+
+class ProofLibraryError(RuntimeError):
+    """Raised when the isolated proof GEOS library cannot complete a call."""
+
+
+@dataclass(frozen=True)
+class BufferSettings:
+    """Production contour-normalization positive-buffer parameters."""
+
+    distance: float = 0.03
+    quadrant_segments: int = 1
+    join_style: int = 2
+    mitre_limit: float = 2.0
+
+
+@dataclass(frozen=True)
+class BufferMeasurement:
+    """One backend result plus acceptance measurements."""
+
+    result_wkb: bytes
+    seconds: float
+    peak_rss_bytes: int
+
+
+class BufferBackend(Protocol):
+    def buffer_wkb(self, input_wkb: bytes, settings: BufferSettings) -> bytes:
+        """Return a positive-buffer result encoded as WKB."""
+
+
+class ShapelyBufferBackend:
+    """Current production GEOS path used as the proof oracle."""
+
+    def buffer_wkb(self, input_wkb: bytes, settings: BufferSettings) -> bytes:
+        geometry = from_wkb(input_wkb)
+        result = geometry.buffer(
+            settings.distance,
+            quad_segs=settings.quadrant_segments,
+            join_style=settings.join_style,
+            mitre_limit=settings.mitre_limit,
+        )
+        return result.wkb
+
+
+class GEOSCBufferBackend:
+    """WKB-only adapter for an isolated proof ``libgeos_c``."""
+
+    def __init__(self, library_path: Path) -> None:
+        if not library_path.is_absolute():
+            raise ProofLibraryError("proof GEOS library path must be absolute")
+        if not library_path.is_file():
+            raise ProofLibraryError(f"proof GEOS library does not exist: {library_path}")
+        try:
+            self._library = ctypes.CDLL(
+                str(library_path),
+                mode=getattr(ctypes, "RTLD_LOCAL", 0),
+            )
+        except OSError as exc:
+            raise ProofLibraryError(
+                f"failed to load proof GEOS library: {library_path}"
+            ) from exc
+        self._bind_reentrant_api()
+
+    def _declare(self, name: str, argtypes: list[object], restype: object) -> None:
+        try:
+            function = getattr(self._library, name)
+        except AttributeError as exc:
+            raise ProofLibraryError(f"proof GEOS symbol is missing: {name}") from exc
+        function.argtypes = argtypes
+        function.restype = restype
+
+    def _bind_reentrant_api(self) -> None:
+        pointer = ctypes.c_void_p
+        byte_pointer = ctypes.POINTER(ctypes.c_ubyte)
+        size_pointer = ctypes.POINTER(ctypes.c_size_t)
+        declarations = {
+            "GEOS_init_r": ([], pointer),
+            "GEOS_finish_r": ([pointer], None),
+            "GEOSWKBReader_create_r": ([pointer], pointer),
+            "GEOSWKBReader_destroy_r": ([pointer, pointer], None),
+            "GEOSWKBReader_read_r": (
+                [pointer, pointer, byte_pointer, ctypes.c_size_t],
+                pointer,
+            ),
+            "GEOSWKBWriter_create_r": ([pointer], pointer),
+            "GEOSWKBWriter_destroy_r": ([pointer, pointer], None),
+            "GEOSWKBWriter_write_r": (
+                [pointer, pointer, pointer, size_pointer],
+                pointer,
+            ),
+            "GEOSBufferParams_create_r": ([pointer], pointer),
+            "GEOSBufferParams_destroy_r": ([pointer, pointer], None),
+            "GEOSBufferParams_setJoinStyle_r": (
+                [pointer, pointer, ctypes.c_int],
+                ctypes.c_int,
+            ),
+            "GEOSBufferParams_setMitreLimit_r": (
+                [pointer, pointer, ctypes.c_double],
+                ctypes.c_int,
+            ),
+            "GEOSBufferParams_setQuadrantSegments_r": (
+                [pointer, pointer, ctypes.c_int],
+                ctypes.c_int,
+            ),
+            "GEOSBufferWithParams_r": (
+                [pointer, pointer, pointer, ctypes.c_double],
+                pointer,
+            ),
+            "GEOSGeom_destroy_r": ([pointer, pointer], None),
+            "GEOSFree_r": ([pointer, pointer], None),
+        }
+        for name, (argtypes, restype) in declarations.items():
+            self._declare(name, argtypes, restype)
+
+    @staticmethod
+    def _require_pointer(value: object, operation: str) -> object:
+        if not value:
+            raise ProofLibraryError(f"proof GEOS returned null during {operation}")
+        return value
+
+    def buffer_wkb(self, input_wkb: bytes, settings: BufferSettings) -> bytes:
+        library = self._library
+        context = reader = writer = parameters = input_geometry = None
+        result_geometry = output_buffer = None
+        try:
+            context = self._require_pointer(library.GEOS_init_r(), "context creation")
+            reader = self._require_pointer(
+                library.GEOSWKBReader_create_r(context),
+                "WKB reader creation",
+            )
+            writer = self._require_pointer(
+                library.GEOSWKBWriter_create_r(context),
+                "WKB writer creation",
+            )
+            parameters = self._require_pointer(
+                library.GEOSBufferParams_create_r(context),
+                "buffer parameter creation",
+            )
+            source_buffer = (ctypes.c_ubyte * len(input_wkb)).from_buffer_copy(input_wkb)
+            input_geometry = self._require_pointer(
+                library.GEOSWKBReader_read_r(
+                    context,
+                    reader,
+                    source_buffer,
+                    len(input_wkb),
+                ),
+                "WKB read",
+            )
+            setters = (
+                (
+                    library.GEOSBufferParams_setQuadrantSegments_r,
+                    settings.quadrant_segments,
+                    "quadrant segments",
+                ),
+                (
+                    library.GEOSBufferParams_setJoinStyle_r,
+                    settings.join_style,
+                    "join style",
+                ),
+                (
+                    library.GEOSBufferParams_setMitreLimit_r,
+                    settings.mitre_limit,
+                    "mitre limit",
+                ),
+            )
+            for setter, value, label in setters:
+                if setter(context, parameters, value) != 1:
+                    raise ProofLibraryError(
+                        f"proof GEOS rejected buffer parameter: {label}"
+                    )
+            result_geometry = self._require_pointer(
+                library.GEOSBufferWithParams_r(
+                    context,
+                    input_geometry,
+                    parameters,
+                    settings.distance,
+                ),
+                "positive buffer",
+            )
+            output_size = ctypes.c_size_t()
+            output_buffer = self._require_pointer(
+                library.GEOSWKBWriter_write_r(
+                    context,
+                    writer,
+                    result_geometry,
+                    ctypes.byref(output_size),
+                ),
+                "WKB write",
+            )
+            return ctypes.string_at(output_buffer, output_size.value)
+        finally:
+            if context:
+                if output_buffer:
+                    library.GEOSFree_r(context, output_buffer)
+                if result_geometry:
+                    library.GEOSGeom_destroy_r(context, result_geometry)
+                if input_geometry:
+                    library.GEOSGeom_destroy_r(context, input_geometry)
+                if parameters:
+                    library.GEOSBufferParams_destroy_r(context, parameters)
+                if writer:
+                    library.GEOSWKBWriter_destroy_r(context, writer)
+                if reader:
+                    library.GEOSWKBReader_destroy_r(context, reader)
+                library.GEOS_finish_r(context)
 
 
 def _polygon_parts(geometry: BaseGeometry) -> list[BaseGeometry]:
@@ -15,6 +236,56 @@ def _polygon_parts(geometry: BaseGeometry) -> list[BaseGeometry]:
     if geometry.geom_type == "MultiPolygon":
         return list(geometry.geoms)
     return []
+
+
+def dense_geometry_metadata(
+    geometry: BaseGeometry,
+    *,
+    require_real_density: bool = False,
+) -> dict[str, object]:
+    """Return density evidence and enforce the real-sample proof floor."""
+
+    component_count = len(_polygon_parts(geometry))
+    if require_real_density and component_count < MIN_REAL_COMPONENTS:
+        raise ValueError(
+            "real proof requires at least 2,048 polygon components; "
+            f"found {component_count}"
+        )
+    return {
+        "dense_component_count": component_count,
+        "dense_coordinate_count": int(get_num_coordinates(geometry)),
+    }
+
+
+def extract_dense_geometry(
+    processor: object,
+    svg_path: Path,
+    target_width_mm: float,
+    *,
+    require_real_density: bool = True,
+) -> tuple[BaseGeometry, dict[str, object]]:
+    """Run the production parse/clip policy and select the densest color region."""
+
+    processor._parse_expand_stroke_to_fill = False
+    shape_data, _, _ = processor._parse_svg(str(svg_path), target_width_mm)
+    clipped, _ = processor._clip_occlusion(shape_data, return_silhouette=True)
+    geometries = [
+        item.get("geometry")
+        for item in clipped
+        if item.get("geometry") is not None and not item["geometry"].is_empty
+    ]
+    if not geometries:
+        raise ValueError(f"SVG produced no clipped polygon geometry: {svg_path}")
+    dense_geometry = max(geometries, key=lambda geometry: len(_polygon_parts(geometry)))
+    metadata = {
+        "source_shape_count": len(shape_data),
+        "clipped_shape_count": len(clipped),
+        **dense_geometry_metadata(
+            dense_geometry,
+            require_real_density=require_real_density,
+        ),
+    }
+    return dense_geometry, metadata
 
 
 def geometry_fingerprint(geometry: BaseGeometry) -> dict[str, object]:
@@ -79,3 +350,273 @@ def compare_geometry(
         "stock": stock_fingerprint,
         "candidate": candidate_fingerprint,
     }
+
+
+def _peak_rss_bytes() -> int:
+    peak = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    return peak if sys.platform == "darwin" else peak * 1024
+
+
+def measure_backend(
+    backend: BufferBackend,
+    input_wkb: bytes,
+    settings: BufferSettings,
+    *,
+    clock: Callable[[], float] = time.perf_counter,
+    peak_rss_reader: Callable[[], int] = _peak_rss_bytes,
+) -> BufferMeasurement:
+    """Measure one backend without including report comparison work."""
+
+    started = float(clock())
+    result_wkb = backend.buffer_wkb(input_wkb, settings)
+    seconds = float(clock()) - started
+    if not isinstance(result_wkb, bytes):
+        raise TypeError("buffer backend must return bytes")
+    return BufferMeasurement(
+        result_wkb=result_wkb,
+        seconds=seconds,
+        peak_rss_bytes=int(peak_rss_reader()),
+    )
+
+
+def evaluate_measurements(
+    *,
+    input_sha256: str,
+    build_manifest: dict[str, object],
+    stock: BufferMeasurement,
+    candidate: BufferMeasurement,
+    settings: BufferSettings | None = None,
+    input_metadata: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Compare measurements against every proof acceptance gate."""
+
+    settings = settings or BufferSettings()
+    stock_geometry = from_wkb(stock.result_wkb)
+    candidate_geometry = from_wkb(candidate.result_wkb)
+    comparison = compare_geometry(stock_geometry, candidate_geometry)
+    memory_limit = float(stock.peak_rss_bytes) * MAX_PEAK_RSS_RATIO
+    memory_pass = (
+        candidate.peak_rss_bytes <= memory_limit
+        if stock.peak_rss_bytes > 0
+        else candidate.peak_rss_bytes == 0
+    )
+    gates = {
+        "geometry_exact": bool(comparison["pass"]),
+        "candidate_seconds_at_most_4": candidate.seconds <= MAX_CANDIDATE_SECONDS,
+        "candidate_peak_rss_at_most_1_20x_stock": bool(memory_pass),
+    }
+    report_input: dict[str, object] = {"sha256": input_sha256}
+    if input_metadata:
+        report_input.update(input_metadata)
+    return {
+        "schema_version": 1,
+        "input": report_input,
+        "build": dict(build_manifest),
+        "settings": asdict(settings),
+        "stock": {
+            "seconds": stock.seconds,
+            "peak_rss_bytes": stock.peak_rss_bytes,
+        },
+        "candidate": {
+            "seconds": candidate.seconds,
+            "peak_rss_bytes": candidate.peak_rss_bytes,
+        },
+        "comparison": comparison,
+        "gates": gates,
+        "pass": all(gates.values()),
+    }
+
+
+def run_proof(
+    *,
+    input_wkb: bytes,
+    input_sha256: str,
+    build_manifest: dict[str, object],
+    stock_backend: BufferBackend,
+    candidate_backend: BufferBackend,
+    settings: BufferSettings | None = None,
+    clock: Callable[[], float] = time.perf_counter,
+    peak_rss_reader: Callable[[], int] = _peak_rss_bytes,
+    input_metadata: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Time stock then candidate and return a deterministic proof report."""
+
+    settings = settings or BufferSettings()
+    stock = measure_backend(
+        stock_backend,
+        input_wkb,
+        settings,
+        clock=clock,
+        peak_rss_reader=peak_rss_reader,
+    )
+    candidate = measure_backend(
+        candidate_backend,
+        input_wkb,
+        settings,
+        clock=clock,
+        peak_rss_reader=peak_rss_reader,
+    )
+    return evaluate_measurements(
+        input_sha256=input_sha256,
+        build_manifest=build_manifest,
+        stock=stock,
+        candidate=candidate,
+        settings=settings,
+        input_metadata=input_metadata,
+    )
+
+
+def render_report_json(report: dict[str, object]) -> str:
+    return json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+
+
+def render_report_markdown(report: dict[str, object]) -> str:
+    status = "PASS" if report["pass"] else "FAIL"
+    stock = report["stock"]
+    candidate = report["candidate"]
+    comparison = report["comparison"]
+    gates = report["gates"]
+    gate_lines = "\n".join(
+        f"- {'PASS' if passed else 'FAIL'}: `{name}`"
+        for name, passed in gates.items()
+    )
+    return (
+        f"# Dense GEOS buffer proof: {status}\n\n"
+        f"- Stock: {stock['seconds']:.6f} s, {stock['peak_rss_bytes']} peak RSS bytes\n"
+        f"- Candidate: {candidate['seconds']:.6f} s, "
+        f"{candidate['peak_rss_bytes']} peak RSS bytes\n"
+        f"- Symmetric difference empty: "
+        f"{comparison['symmetric_difference_empty']}\n"
+        f"- Symmetric difference area: "
+        f"{comparison['symmetric_difference_area']:.17g}\n\n"
+        f"## Gates\n\n{gate_lines}\n"
+    )
+
+
+def write_report(
+    report: dict[str, object],
+    out_dir: Path,
+    stem: str,
+) -> tuple[Path, Path]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    json_path = out_dir / f"{stem}.json"
+    markdown_path = out_dir / f"{stem}.md"
+    json_path.write_text(render_report_json(report), encoding="utf-8")
+    markdown_path.write_text(render_report_markdown(report), encoding="utf-8")
+    return json_path, markdown_path
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def prepare_real_geometry(
+    svg_path: Path,
+    lut_path: Path,
+    color_mode: str,
+    target_width_mm: float,
+) -> tuple[BaseGeometry, dict[str, object]]:
+    """Construct the production processor and extract the proof geometry."""
+
+    from core.vector_engine import VectorProcessor
+
+    processor = VectorProcessor(str(lut_path), color_mode)
+    return extract_dense_geometry(
+        processor,
+        svg_path,
+        target_width_mm,
+        require_real_density=True,
+    )
+
+
+def _load_build_manifest() -> dict[str, object]:
+    from scripts.build_geos_buffer_fast_proof import MANIFEST_PATH
+
+    if not MANIFEST_PATH.is_file():
+        raise FileNotFoundError(
+            "proof build manifest is missing; run build_geos_buffer_fast_proof.py"
+        )
+    data = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"invalid proof build manifest: {MANIFEST_PATH}")
+    return data
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input", type=Path, required=True)
+    parser.add_argument("--target-width-mm", type=float, default=300.0)
+    parser.add_argument("--lut", type=Path, required=True)
+    parser.add_argument("--color-mode", default="4-Color RYBW")
+    parser.add_argument("--library", type=Path)
+    parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
+    parser.add_argument("--skip-stock-timing", action="store_true")
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    svg_path = args.input.resolve()
+    lut_path = args.lut.resolve()
+    if not svg_path.is_file():
+        raise FileNotFoundError(f"SVG input does not exist: {svg_path}")
+    if not lut_path.is_file():
+        raise FileNotFoundError(f"LUT does not exist: {lut_path}")
+
+    manifest = _load_build_manifest()
+    library_path = (
+        args.library.resolve()
+        if args.library is not None
+        else Path(str(manifest["library_path"])).resolve()
+    )
+    geometry, input_metadata = prepare_real_geometry(
+        svg_path,
+        lut_path,
+        args.color_mode,
+        args.target_width_mm,
+    )
+    input_wkb = geometry.wkb
+    settings = BufferSettings()
+    stock_backend = ShapelyBufferBackend()
+    candidate_backend = GEOSCBufferBackend(library_path)
+    common = {
+        "input_sha256": _sha256_file(svg_path),
+        "build_manifest": manifest,
+        "settings": settings,
+        "input_metadata": {
+            "path": str(svg_path),
+            "target_width_mm": args.target_width_mm,
+            **input_metadata,
+        },
+    }
+    if args.skip_stock_timing:
+        stock_wkb = stock_backend.buffer_wkb(input_wkb, settings)
+        stock = BufferMeasurement(stock_wkb, -1.0, _peak_rss_bytes())
+        candidate = measure_backend(candidate_backend, input_wkb, settings)
+        report = evaluate_measurements(stock=stock, candidate=candidate, **common)
+        report["acceptance_mode"] = False
+        report["gates"]["stock_timing_present"] = False
+        report["pass"] = False
+    else:
+        report = run_proof(
+            input_wkb=input_wkb,
+            stock_backend=stock_backend,
+            candidate_backend=candidate_backend,
+            **common,
+        )
+        report["acceptance_mode"] = True
+
+    stem = f"{svg_path.stem}-{args.target_width_mm:g}mm"
+    json_path, markdown_path = write_report(report, args.out_dir.resolve(), stem)
+    print(render_report_json(report), end="")
+    print(f"JSON report: {json_path}")
+    print(f"Markdown report: {markdown_path}")
+    return 0 if report["pass"] or args.skip_stock_timing else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
