@@ -786,6 +786,62 @@ class TestNormalizeContours:
                 == stock_item["geometry"].normalize().wkb
             )
 
+    def test_dense_clip_occlusion_builds_silhouette_while_clipping(self, monkeypatch):
+        shape_data = [
+            {
+                "poly": box(float(index), 0.0, float(index) + 0.5, 0.5),
+                "color": (index % 256, 0, 0),
+            }
+            for index in range(64)
+        ]
+        union_started = threading.Event()
+        clipping_started = threading.Event()
+        union_threads = []
+        reservations = []
+        original_union = vector_engine.unary_union
+
+        def recording_union(geometries):
+            union_threads.append(threading.get_ident())
+            union_started.set()
+            assert clipping_started.wait(timeout=0.5)
+            return original_union(geometries)
+
+        def fake_parallel_clip(
+            _shape_data,
+            _orders,
+            _geoms,
+            _tree,
+            *,
+            reserved_workers=0,
+        ):
+            reservations.append(reserved_workers)
+            assert union_started.wait(timeout=0.5)
+            clipping_started.set()
+            return []
+
+        monkeypatch.setattr(vector_engine, "unary_union", recording_union)
+        monkeypatch.setattr(
+            vector_engine,
+            "resolve_task_parallelism_plan",
+            lambda *_args, **_kwargs: SimpleNamespace(workers=4),
+        )
+        monkeypatch.setattr(
+            vector_engine,
+            "_try_parallel_clip_occlusion",
+            fake_parallel_clip,
+        )
+
+        result, silhouette = VectorProcessor._clip_occlusion(
+            shape_data,
+            return_silhouette=True,
+        )
+
+        assert result == []
+        assert silhouette.area == pytest.approx(16.0)
+        assert len(union_threads) == 1
+        assert union_threads[0] != threading.get_ident()
+        assert reservations == [1]
+
     def test_postprocess_clipped_shapes_skips_known_normalized_geometry(self, monkeypatch):
         normalized = Polygon([(0, 0), (5, 0), (5, 5), (0, 5)])
         clipped = Polygon([(10, 0), (15, 0), (15, 5), (10, 5)])

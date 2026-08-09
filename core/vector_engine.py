@@ -638,20 +638,36 @@ def _clip_occlusion_result_item(item, index, geom, occluders):
     }
 
 
-def _try_parallel_clip_occlusion(shape_data, orders, geoms, tree):
-    """Return exact independently clipped results, or ``None`` for serial use."""
+def _occlusion_parallel_worker_count(shape_count: int) -> int:
+    """Resolve the shared CPU/memory budget for one occlusion pass."""
 
     parallelism_plan = resolve_task_parallelism_plan(
         "vector",
-        work_items=len(orders),
+        work_items=shape_count,
         min_parallel_items=_OCCLUSION_PARALLEL_MIN_SHAPES,
         hard_max_workers=8,
-        work_units=len(orders),
+        work_units=shape_count,
         min_parallel_work_units=_OCCLUSION_PARALLEL_MIN_SHAPES,
         work_units_per_worker=_OCCLUSION_WORK_UNITS_PER_WORKER,
         estimated_worker_bytes=_OCCLUSION_ESTIMATED_WORKER_BYTES,
     )
-    worker_count = int(parallelism_plan.workers)
+    return max(1, int(parallelism_plan.workers))
+
+
+def _try_parallel_clip_occlusion(
+    shape_data,
+    orders,
+    geoms,
+    tree,
+    *,
+    reserved_workers: int = 0,
+):
+    """Return exact independently clipped results, or ``None`` for serial use."""
+
+    worker_count = max(
+        1,
+        _occlusion_parallel_worker_count(len(orders)) - max(0, reserved_workers),
+    )
     if worker_count <= 1:
         return None
 
@@ -6466,7 +6482,38 @@ class VectorProcessor:
         geoms = [v[1] for v in valid]
         tree = STRtree(geoms)
         geom_id_to_idx = {id(g): idx for idx, g in enumerate(geoms)}
-        result = _try_parallel_clip_occlusion(shape_data, orders, geoms, tree)
+        silhouette = None
+        silhouette_computed = False
+        build_silhouette_concurrently = (
+            return_silhouette
+            and len(geoms) >= _OCCLUSION_PARALLEL_MIN_SHAPES
+            and _occlusion_parallel_worker_count(len(orders)) >= 3
+        )
+        if build_silhouette_concurrently:
+            with ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="lumina-vector-silhouette",
+            ) as executor:
+                silhouette_future = executor.submit(unary_union, geoms)
+                result = _try_parallel_clip_occlusion(
+                    shape_data,
+                    orders,
+                    geoms,
+                    tree,
+                    reserved_workers=1,
+                )
+                try:
+                    silhouette = silhouette_future.result()
+                except VECTOR_HANDLED_ERRORS:
+                    silhouette = None
+                silhouette_computed = True
+        else:
+            result = _try_parallel_clip_occlusion(
+                shape_data,
+                orders,
+                geoms,
+                tree,
+            )
 
         if result is None:
             result = []
@@ -6521,11 +6568,12 @@ class VectorProcessor:
                     result.append(clipped_item)
 
             result.reverse()
-        if return_silhouette:
+        if return_silhouette and not silhouette_computed:
             try:
                 silhouette = unary_union(geoms)
             except VECTOR_HANDLED_ERRORS:
                 silhouette = None
+        if return_silhouette:
             return result, silhouette
         return result
 
