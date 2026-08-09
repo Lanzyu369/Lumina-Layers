@@ -325,6 +325,7 @@ def test_geos_c_backend_uses_only_wkb_and_reentrant_api(
 ) -> None:
     import ctypes
 
+    from core import geos_buffer_fast
     from scripts import profile_geos_buffer_fast_proof as proof
 
     class FakeFunction:
@@ -375,7 +376,11 @@ def test_geos_c_backend_uses_only_wkb_and_reentrant_api(
 
     library_path = tmp_path / "libgeos_c.dylib"
     library_path.touch()
-    monkeypatch.setattr(proof.ctypes, "CDLL", lambda *_args, **_kwargs: fake)
+    monkeypatch.setattr(
+        geos_buffer_fast.ctypes,
+        "CDLL",
+        lambda *_args, **_kwargs: fake,
+    )
 
     backend = proof.GEOSCBufferBackend(library_path)
     result = backend.buffer_wkb(b"input-wkb", proof.BufferSettings())
