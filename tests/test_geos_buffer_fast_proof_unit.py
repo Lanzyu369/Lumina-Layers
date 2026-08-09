@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
 from shapely.geometry import MultiPolygon, Polygon
 
 
@@ -54,3 +57,94 @@ def test_compare_geometry_accepts_component_order_only_difference() -> None:
 
     assert result["pass"] is True
     assert result["symmetric_difference_empty"] is True
+
+
+def test_proof_builder_is_pinned_and_scratch_only() -> None:
+    from scripts.build_geos_buffer_fast_proof import (
+        GEOS_REF,
+        GEOS_REPOSITORY,
+        PATCH_PATH,
+        PROOF_ROOT,
+        ROOT,
+    )
+
+    assert GEOS_REF == "3.13.1"
+    assert GEOS_REPOSITORY == "https://github.com/libgeos/geos.git"
+    assert PROOF_ROOT == ROOT / ".scratch" / "geos_buffer_fast_proof"
+    assert PATCH_PATH == (
+        ROOT
+        / "native"
+        / "geos_buffer_fast"
+        / "patches"
+        / "geos-3.13.1-buffer-subgraph-index.patch"
+    )
+
+
+def test_proof_builder_commands_are_argument_lists() -> None:
+    from scripts.build_geos_buffer_fast_proof import (
+        BUILD_ROOT,
+        GEOS_REF,
+        PATCH_PATH,
+        SOURCE_ROOT,
+        apply_command,
+        build_command,
+        clone_command,
+        configure_command,
+    )
+
+    clone = clone_command()
+    apply = apply_command()
+    configure = configure_command()
+    build = build_command(parallel=3)
+
+    assert clone == [
+        "git",
+        "clone",
+        "--depth",
+        "1",
+        "--branch",
+        GEOS_REF,
+        "https://github.com/libgeos/geos.git",
+        str(SOURCE_ROOT),
+    ]
+    assert apply == ["git", "-C", str(SOURCE_ROOT), "apply", str(PATCH_PATH)]
+    assert configure[:5] == ["cmake", "-S", str(SOURCE_ROOT), "-B", str(BUILD_ROOT)]
+    assert "-DCMAKE_BUILD_TYPE=Release" in configure
+    assert "-DBUILD_TESTING=OFF" in configure
+    assert "-DBUILD_DOCUMENTATION=OFF" in configure
+    assert "-DBUILD_GEOSOP=OFF" in configure
+    assert build == [
+        "cmake",
+        "--build",
+        str(BUILD_ROOT),
+        "--config",
+        "Release",
+        "--parallel",
+        "3",
+    ]
+    assert all(isinstance(command, list) for command in (clone, apply, configure, build))
+
+
+def test_proof_builder_refuses_broad_rebuild_targets() -> None:
+    from scripts.build_geos_buffer_fast_proof import PROOF_ROOT, ROOT, validate_rebuild_target
+
+    assert validate_rebuild_target(PROOF_ROOT) == PROOF_ROOT.resolve()
+    with pytest.raises(ValueError):
+        validate_rebuild_target(Path("/"))
+    with pytest.raises(ValueError):
+        validate_rebuild_target(ROOT)
+    with pytest.raises(ValueError):
+        validate_rebuild_target(ROOT / ".scratch")
+
+
+def test_geos_fast_buffer_readme_documents_proof_boundary() -> None:
+    from scripts.build_geos_buffer_fast_proof import ROOT
+
+    readme = (
+        ROOT / "native" / "geos_buffer_fast" / "README.md"
+    ).read_text(encoding="utf-8")
+
+    assert "LGPL-2.1-or-later" in readme
+    assert ".scratch/geos_buffer_fast_proof" in readme
+    assert "must not replace Shapely" in readme
+    assert "production" in readme.lower()
