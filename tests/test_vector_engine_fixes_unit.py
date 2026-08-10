@@ -467,6 +467,62 @@ class TestFillRuleSubpathMerging:
         merged = outer.union(inner)
         assert merged.area == pytest.approx(outer.area, rel=0.01)
 
+    def test_disjoint_nonzero_compound_path_skips_polygonize(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        svg_path = tmp_path / "disjoint-nonzero.svg"
+        svg_path.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+            '<path fill="#f00" fill-rule="nonzero" '
+            'd="M0 0 H10 V10 H0 Z M20 0 H30 V10 H20 Z"/></svg>',
+            encoding="utf-8",
+        )
+
+        def fail_polygonize(_boundaries):
+            raise AssertionError(
+                "disjoint nonzero subpaths must use the sparse fast path"
+            )
+
+        monkeypatch.setattr(vector_engine, "polygonize", fail_polygonize)
+        processor = VectorProcessor.__new__(VectorProcessor)
+        processor.sampling_precision = 0.02
+        processor._parse_expand_stroke_to_fill = False
+        processor._parse_direct_top_level_paths_fast_path = False
+        shapes, _scale, _bbox = processor._parse_svg(
+            str(svg_path),
+            target_width_mm=100.0,
+        )
+
+        geometry = shapely_unary_union([shape["poly"] for shape in shapes])
+        assert geometry.bounds == pytest.approx((0.0, 0.0, 30.0, 10.0), abs=0.1)
+        assert geometry.area == pytest.approx(200.0, rel=0.01)
+
+    def test_intersecting_nonzero_compound_path_has_complexity_guardrail(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        svg_path = tmp_path / "intersecting-nonzero.svg"
+        svg_path.write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
+            '<path fill="#f00" fill-rule="nonzero" '
+            'd="M0 0 H20 V20 H0 Z M10 0 H30 V20 H10 Z"/></svg>',
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(vector_engine.VectorConfig, "MAX_POLYGONS", 1)
+        processor = VectorProcessor.__new__(VectorProcessor)
+        processor.sampling_precision = 0.02
+        processor._parse_expand_stroke_to_fill = False
+        processor._parse_direct_top_level_paths_fast_path = False
+
+        with pytest.raises(
+            ValueError,
+            match="SVG compound path exceeds supported intersecting subpath complexity",
+        ):
+            processor._parse_svg(str(svg_path), target_width_mm=100.0)
+
     def test_evenodd_symmetric_difference_creates_hole(self):
         """evenodd rule: overlapping subpaths create a hole in the overlap region."""
         outer, inner = self._make_concentric_squares()

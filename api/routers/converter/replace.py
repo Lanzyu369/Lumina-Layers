@@ -3497,18 +3497,17 @@ def apply_recipe_override(
                 color_layers=request.color_layers,
             )
 
-        # Validate recipe indices only when the caller opts into the new
-        # virtual-material path: legacy callers (tests, older clients) may
-        # pass ``metadata.palette`` == empty + raw LUT channel indices that
-        # downstream code still resolves correctly, so we leave their contract
-        # untouched. When ``virtual_materials`` is supplied we do enforce that
-        # the provided virtual-tail count is sufficient so the user's intent
-        # round-trips cleanly into the cache's extended palette.
-        # 仅在调用方使用新的虚拟耗材功能时校验 recipe 索引：旧调用方
-        # （测试 / 老前端）传空 palette + 原始 LUT 通道索引的路径依然走老逻辑，
-        # 保持契约不变；一旦带上 virtual_materials，就严格保证索引落在
-        # LUT.N + 虚拟耗材数 的范围内。
-        if virtual_materials:
+        # A non-empty runtime palette is the authoritative material-ID range,
+        # whether or not the caller declares virtual materials. Letting an
+        # index past this boundary into ``material_matrix`` defers the failure
+        # to S05/S08 and can break loop material identity. Legacy callers whose
+        # LUT metadata exposes no palette retain their raw-index compatibility
+        # unless they explicitly opt into virtual materials.
+        # 只要运行时调色板非空，它就是材料 ID 的权威范围，无论调用方是否
+        # 声明虚拟耗材。越界值若进入 material_matrix，会延迟到 S05/S08 才
+        # 失败并破坏挂环材料身份。仅 metadata.palette 为空的旧调用方保留
+        # 原始索引兼容；一旦显式使用虚拟耗材仍严格校验。
+        if lut_palette_length > 0 or virtual_materials:
             for idx, channel in enumerate(request.recipe):
                 if channel < 0 or channel >= allowed_upper:
                     raise HTTPException(

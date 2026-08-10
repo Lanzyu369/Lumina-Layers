@@ -23,6 +23,10 @@ from shapely.affinity import translate
 
 from config import PrinterConfig
 from core.geometry_utils import create_keychain_loop
+from core.pipeline.preview_color_utils import (
+    build_material_preview_warning_extra,
+    resolve_material_preview,
+)
 
 S08_HANDLED_ERRORS = (
     ValueError,
@@ -290,6 +294,75 @@ def _resolve_material_archive_base_aux_style(ctx: dict, preview_colors: dict) ->
     return _coerce_preview_rgba(color), material_name
 
 
+def _resolve_loop_material_style(
+    ctx: dict,
+    loop_info: dict,
+) -> tuple[list[int], str]:
+    """Resolve the loop style while preserving S05 material identity.
+    解析挂环样式，同时保留 S05 已确定的材料身份。
+
+    Args:
+        ctx: Pipeline context containing authoritative palette metadata.
+            包含权威调色板元数据的管线上下文。
+        loop_info: Loop metadata produced by S05 or a legacy direct caller.
+            由 S05 或旧式直接调用方生成的挂环元数据。
+
+    Returns:
+        tuple[list[int], str]: Resolved RGBA and authoritative material name.
+            解析后的 RGBA 与权威材料名。
+
+    Raises:
+        ValueError: If material identity or preview color cannot be resolved.
+            材料身份或预览颜色无法解析时抛出。
+    """
+
+    material_id = loop_info.get("color_id")
+    slot_names = ctx.get("slot_names")
+    color_conf = ctx.get("color_conf") or {}
+
+    carried_rgba = loop_info.get("color_rgba")
+    carried_name = loop_info.get("material_name")
+    if carried_rgba is not None and carried_name is not None:
+        carried_resolution = resolve_material_preview(
+            material_id=material_id,
+            slot_names=slot_names,
+            preview_colors={material_id: carried_rgba},
+            color_conf={},
+        )
+        if (
+            carried_resolution.is_resolved
+            and carried_resolution.material_name == str(carried_name)
+        ):
+            return list(carried_resolution.rgba), carried_resolution.material_name
+
+    preview_colors = ctx.get("preview_colors")
+    resolution = resolve_material_preview(
+        material_id=material_id,
+        slot_names=slot_names,
+        preview_colors=preview_colors,
+        color_conf=color_conf,
+    )
+    if not resolution.is_resolved:
+        _log.warning(
+            "Loop material preview metadata is unresolved",
+            extra=build_material_preview_warning_extra(
+                resolution,
+                slot_names=slot_names,
+                preview_colors=preview_colors,
+                color_conf=color_conf,
+                material_source=ctx.get("material_source", "lut"),
+            ),
+        )
+        raise ValueError(
+            "Loop material identity or preview color is unavailable"
+        )
+
+    loop_info["material_name"] = resolution.material_name
+    loop_info["color_rgba"] = list(resolution.rgba)
+    loop_info["color_source"] = resolution.source
+    return list(resolution.rgba), resolution.material_name
+
+
 def run(ctx: dict) -> dict:
     """Generate auxiliary meshes: backing, wire, free color, loop, coating, outline.
     生成附加网格：底板、掐丝、自由颜色、挂件环、涂层、描边。
@@ -502,6 +575,11 @@ def run(ctx: dict) -> dict:
     # ========== Keychain Loop ==========
     if add_loop and loop_info is not None:
         _s08_t_loop = time.perf_counter()
+        loop_color_rgba, loop_material_name = _resolve_loop_material_style(
+            ctx,
+            loop_info,
+        )
+        loop_preview_color_added = False
         try:
             loop_thickness = total_layers * PrinterConfig.LAYER_HEIGHT
             loop_mesh = create_keychain_loop(
@@ -514,19 +592,35 @@ def run(ctx: dict) -> dict:
                 angle_deg=loop_info.get("angle_deg", 0.0),
             )
 
-            if loop_mesh is not None:
-                loop_mesh.visual.face_colors = preview_colors[loop_info["color_id"]]
-                loop_mesh.metadata["name"] = "Keychain_Loop"
-                loop_color_id = int(loop_info.get("color_id", -1))
-                slot_names = ctx.get("slot_names") or []
-                if 0 <= loop_color_id < len(slot_names):
-                    loop_mesh.metadata["bambu_material_name"] = str(slot_names[loop_color_id])
-                scene.add_geometry(loop_mesh, node_name="Keychain_Loop", geom_name="Keychain_Loop")
-                valid_slot_names.append("Keychain_Loop")
-                loop_added = True
-                _log.debug(f"Loop added successfully")
-        except S08_HANDLED_ERRORS as e:
-            _log.warning(f"Loop creation failed: {e}")
+            if loop_mesh is None or len(loop_mesh.vertices) == 0:
+                raise RuntimeError("Keychain loop geometry is empty")
+
+            loop_mesh.visual.face_colors = loop_color_rgba
+            loop_mesh.metadata["name"] = "Keychain_Loop"
+            loop_mesh.metadata["bambu_material_name"] = loop_material_name
+            if "Keychain_Loop" not in preview_colors:
+                preview_colors["Keychain_Loop"] = list(loop_color_rgba)
+                loop_preview_color_added = True
+            scene.add_geometry(
+                loop_mesh,
+                node_name="Keychain_Loop",
+                geom_name="Keychain_Loop",
+            )
+            valid_slot_names.append("Keychain_Loop")
+            loop_added = True
+            _log.debug("Loop added successfully")
+        except S08_HANDLED_ERRORS as exc:
+            if loop_preview_color_added:
+                preview_colors.pop("Keychain_Loop", None)
+            _log.warning(
+                "Loop creation failed; continuing without loop",
+                extra={
+                    "event": "s08_keychain_loop_creation_failed",
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                    "material_id": int(loop_info.get("color_id", -1)),
+                },
+            )
         _log.debug(f"loop: {time.perf_counter() - _s08_t_loop:.3f}s")
 
     # ========== Coating Mesh ==========

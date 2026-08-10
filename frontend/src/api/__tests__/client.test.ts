@@ -232,6 +232,98 @@ describe("apiClient", () => {
 
   it.each([
     {
+      code: "source_image_unreadable",
+      status: 422,
+      language: "en" as const,
+      expected:
+        "The image could not be read. Check that the file is not damaged, then re-export it as PNG, JPEG, or WebP and upload it again.",
+    },
+    {
+      code: "source_image_unreadable",
+      status: 422,
+      language: "zh" as const,
+      expected:
+        "无法读取这张图片。请确认文件未损坏，并重新导出为 PNG、JPEG 或 WebP 后再上传。",
+    },
+    {
+      code: "source_image_too_large",
+      status: 413,
+      language: "en" as const,
+      expected:
+        "The image dimensions are too large to process safely. Reduce the image resolution and upload it again.",
+    },
+    {
+      code: "source_image_too_large",
+      status: 413,
+      language: "zh" as const,
+      expected: "图片像素尺寸过大，无法安全处理。请缩小图片分辨率后重新上传。",
+    },
+    {
+      code: "source_svg_invalid",
+      status: 422,
+      language: "en" as const,
+      expected:
+        "The SVG could not be parsed. Re-export a valid SVG from your design application and upload it again.",
+    },
+    {
+      code: "source_svg_invalid",
+      status: 422,
+      language: "zh" as const,
+      expected: "无法解析 SVG 文件。请在设计软件中重新导出有效的 SVG 后再上传。",
+    },
+    {
+      code: "source_svg_no_renderable_geometry",
+      status: 422,
+      language: "en" as const,
+      expected:
+        "The SVG has no visible filled geometry supported by Vector mode. Make the artwork visible, convert strokes and text to filled paths, or switch to High-Fidelity mode.",
+    },
+    {
+      code: "source_svg_no_renderable_geometry",
+      status: 422,
+      language: "zh" as const,
+      expected:
+        "SVG 中没有矢量模式可用的可见填充几何。请显示图稿，将描边和文字转换为填充路径，或切换到“高保真”模式。",
+    },
+    {
+      code: "source_svg_too_complex",
+      status: 422,
+      language: "en" as const,
+      expected:
+        "The SVG contains too many intersecting compound subpaths to process safely. Simplify or flatten the artwork, then upload it again.",
+    },
+    {
+      code: "source_svg_too_complex",
+      status: 422,
+      language: "zh" as const,
+      expected: "SVG 包含过多相交的复合子路径，无法安全处理。请简化或展平图稿后重新上传。",
+    },
+  ])(
+    "translates converter source error $code in $language",
+    async ({ code, status, language, expected }) => {
+      useSettingsStore.setState({ language });
+      const detail = {
+        error: code,
+        message: "Safe server fallback for older clients.",
+      };
+      const error = new Error(`Request failed with status code ${status}`);
+      Object.assign(error, {
+        config: { method: "post", url: "/convert/preview" },
+        response: { status, data: { detail } },
+      });
+      apiClient.defaults.adapter = vi.fn().mockRejectedValueOnce(error);
+
+      const rejected = await apiClient
+        .post("/convert/preview", {})
+        .catch((err) => err);
+
+      expect(rejected).toMatchObject({ message: expected });
+      expect(rejected.response?.data?.detail).toEqual(detail);
+    },
+  );
+
+  it.each([
+    {
       language: "en" as const,
       expected:
         "The model is not a closed solid and cannot be cut safely. Repair the mesh and upload it again.",

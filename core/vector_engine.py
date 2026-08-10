@@ -31,7 +31,19 @@ import xml.etree.ElementTree as ET
 import trimesh
 import cv2
 from dataclasses import dataclass, field
-from svgelements import SVG, Path, Shape, Move, Line, Close, CubicBezier, QuadraticBezier, Arc, Color
+from svgelements import (
+    SVG,
+    Path,
+    Shape,
+    Move,
+    Line,
+    Close,
+    CubicBezier,
+    QuadraticBezier,
+    Arc,
+    Color,
+    Length,
+)
 from shapely.geometry import Polygon, MultiPolygon, LineString, Point, box
 from shapely.geometry.polygon import orient
 from shapely import affinity
@@ -59,6 +71,9 @@ except ImportError:  # Shapely < 2.1; keep the old union path available.
 
 from api.structured_logging import get_logger
 from config import PrinterConfig, ColorSystem, VectorConfig
+from core.vector_diagnostics import (
+    SVG_INTERSECTING_COMPOUND_COMPLEXITY_DIAGNOSTIC,
+)
 
 _log = get_logger(__name__)
 
@@ -731,8 +746,116 @@ def _filtered_svg_source_for_vector_parse(svg_path, parse_expand_stroke_to_fill)
     except VECTOR_HANDLED_ERRORS:
         return None, None
 
+    def _view_box_user_size(element, fallback_size):
+        raw_view_box = str(element.get("viewBox", "") or "").strip()
+        try:
+            values = [
+                float(token)
+                for token in re.split(r"[\s,]+", raw_view_box)
+                if token
+            ]
+        except (TypeError, ValueError):
+            values = []
+        if (
+            len(values) == 4
+            and all(math.isfinite(value) for value in values)
+            and values[2] > 0.0
+            and values[3] > 0.0
+        ):
+            return values[2], values[3]
+        return fallback_size
+
+    def _resolved_length(raw_value, reference, default):
+        if raw_value is None:
+            return default
+        try:
+            value = Length(str(raw_value).strip()).value(
+                ppi=96.0,
+                relative_length=reference,
+            )
+            parsed = float(value)
+        except (TypeError, ValueError, AttributeError):
+            return default
+        return parsed if math.isfinite(parsed) else default
+
+    resolved_use_percentage_count = 0
+
+    def _resolve_use_percentages(element, current_user_size):
+        nonlocal resolved_use_percentage_count
+        tag = _tag_local_name(element)
+        if tag == "clipPath":
+            return
+
+        if tag == "svg" and element is not root:
+            parent_width, parent_height = current_user_size
+            for attribute_name, reference in (
+                ("x", parent_width),
+                ("width", parent_width),
+                ("y", parent_height),
+                ("height", parent_height),
+            ):
+                raw_value = str(element.get(attribute_name, "") or "").strip()
+                if not raw_value.endswith("%"):
+                    continue
+                resolved = _resolved_length(raw_value, reference, None)
+                if resolved is None:
+                    continue
+                element.set(attribute_name, format(resolved, ".12g"))
+                resolved_use_percentage_count += 1
+
+        child_user_size = current_user_size
+        if tag in {"svg", "symbol"}:
+            child_user_size = _view_box_user_size(element, None)
+            if child_user_size is None:
+                parent_width, parent_height = current_user_size
+                child_user_size = (
+                    _resolved_length(
+                        element.get("width"),
+                        parent_width,
+                        parent_width,
+                    ),
+                    _resolved_length(
+                        element.get("height"),
+                        parent_height,
+                        parent_height,
+                    ),
+                )
+
+        if tag == "use":
+            width, height = current_user_size
+            for attribute_name, reference in (
+                ("x", width),
+                ("width", width),
+                ("y", height),
+                ("height", height),
+            ):
+                raw_value = str(element.get(attribute_name, "") or "").strip()
+                if not raw_value.endswith("%"):
+                    continue
+                resolved = _resolved_length(raw_value, reference, None)
+                if resolved is None:
+                    continue
+                element.set(attribute_name, format(resolved, ".12g"))
+                resolved_use_percentage_count += 1
+
+        for child in list(element):
+            _resolve_use_percentages(child, child_user_size)
+
+    root_size = _view_box_user_size(root, None)
+    if root_size is None:
+        root_size = (
+            _resolved_length(root.get("width"), 100.0, 100.0),
+            _resolved_length(root.get("height"), 100.0, 100.0),
+        )
+    _resolve_use_percentages(root, root_size)
+    resolved_use_source = (
+        io.BytesIO(ET.tostring(root, encoding="utf-8"))
+        if resolved_use_percentage_count
+        else None
+    )
+
     if parse_expand_stroke_to_fill:
-        return root, None
+        return root, resolved_use_source
 
     reference_tags = {
         "defs",
@@ -746,7 +869,7 @@ def _filtered_svg_source_for_vector_parse(svg_path, parse_expand_stroke_to_fill)
         "use",
     }
     if any(_tag_local_name(elem) in reference_tags for elem in root.iter()):
-        return root, None
+        return root, resolved_use_source
 
     removed_count = 0
 
@@ -765,7 +888,7 @@ def _filtered_svg_source_for_vector_parse(svg_path, parse_expand_stroke_to_fill)
 
     _remove_ignored_paths(root)
     if removed_count <= 0:
-        return root, None
+        return root, resolved_use_source
 
     return root, io.BytesIO(ET.tostring(root, encoding="utf-8"))
 
@@ -7062,6 +7185,20 @@ class VectorProcessor:
             if filtered_without_xml_root
             else VectorProcessor._parse_gradient_defs(svg_path, root=root)
         )
+        clip_path_defs = {}
+        document_elements_by_id = {}
+        if root is not None:
+            def _index_document_element(candidate):
+                candidate_tag = _tag_local_name(candidate)
+                clip_id = str(candidate.get("id", "") or "").strip()
+                if clip_id:
+                    document_elements_by_id.setdefault(clip_id, candidate)
+                if clip_id and candidate_tag == "clipPath":
+                    clip_path_defs[clip_id] = candidate
+                for child in list(candidate):
+                    _index_document_element(child)
+
+            _index_document_element(root)
         _url_re = re.compile(r"url\(#([^)]+)\)")
 
         tol_svg = self.sampling_precision / max(target_width_mm / 100.0, 0.01)
@@ -7152,6 +7289,21 @@ class VectorProcessor:
                 return None
             if len(subpath_items) == 1:
                 return subpath_items[0]["poly"]
+
+            polygon_items = [
+                item["poly"]
+                for item in subpath_items
+                if item.get("poly") is not None and not item["poly"].is_empty
+            ]
+            if (
+                polygon_items
+                and not _geometries_have_pairwise_intersections(polygon_items)
+            ):
+                return _polygonal_union_for_disjoint_items(polygon_items)
+            if len(polygon_items) > int(VectorConfig.MAX_POLYGONS):
+                raise ValueError(
+                    SVG_INTERSECTING_COMPOUND_COMPLEXITY_DIAGNOSTIC
+                )
 
             try:
                 boundaries = [
@@ -7353,6 +7505,1041 @@ class VectorProcessor:
             pts = [path_obj.point(t) for t in t_vals]
             return [(p.x, p.y) for p in pts]
 
+        clip_path_geometry_cache = {}
+
+        def _matrix_to_shapely_params(matrix):
+            return [
+                matrix[0, 0],
+                matrix[0, 1],
+                matrix[1, 0],
+                matrix[1, 1],
+                matrix[0, 2],
+                matrix[1, 2],
+            ]
+
+        def _style_property(style_value, property_name):
+            resolved = None
+            for declaration in str(style_value or "").split(";"):
+                name, separator, value = declaration.partition(":")
+                if separator and name.strip().lower() == property_name:
+                    resolved = _normalize_svg_css_token(value)
+            return resolved
+
+        def _clip_rule_from_definition(definition):
+            clip_rule = _normalize_svg_css_token(
+                definition.get("clip-rule", "nonzero")
+            )
+            style_clip_rule = _style_property(
+                definition.get("style", ""),
+                "clip-rule",
+            )
+            if style_clip_rule is not None:
+                clip_rule = style_clip_rule
+            return clip_rule if clip_rule in {"evenodd", "nonzero"} else "nonzero"
+
+        def _clip_rule_from_element_values(values, inherited_rule):
+            if not isinstance(values, dict):
+                return inherited_rule
+            clip_rule = values.get("clip-rule")
+            attributes = values.get("attributes")
+            if isinstance(attributes, dict):
+                if attributes.get("clip-rule") is not None:
+                    clip_rule = attributes.get("clip-rule")
+                style_clip_rule = _style_property(
+                    attributes.get("style", ""),
+                    "clip-rule",
+                )
+                if style_clip_rule is not None:
+                    clip_rule = style_clip_rule
+            normalized = _normalize_svg_css_token(clip_rule)
+            return (
+                normalized
+                if normalized in {"evenodd", "nonzero"}
+                else inherited_rule
+            )
+
+        def _referenced_document_ids(element):
+            references = []
+            href_keys = (
+                "href",
+                "{http://www.w3.org/1999/xlink}href",
+            )
+            for candidate in element.iter():
+                for key in href_keys:
+                    raw_reference = str(candidate.get(key, "") or "").strip()
+                    if raw_reference.startswith("#") and len(raw_reference) > 1:
+                        references.append(raw_reference[1:])
+            return references
+
+        def _append_clip_reference_definitions(fragment, definition):
+            ordered_dependencies = []
+            seen_ids = {str(definition.get("id", "") or "").strip()}
+
+            def _collect_dependency(reference_id):
+                if not reference_id or reference_id in seen_ids:
+                    return
+                seen_ids.add(reference_id)
+                dependency = document_elements_by_id.get(reference_id)
+                if dependency is None:
+                    return
+                for nested_id in _referenced_document_ids(dependency):
+                    _collect_dependency(nested_id)
+                ordered_dependencies.append(dependency)
+
+            for reference_id in _referenced_document_ids(definition):
+                _collect_dependency(reference_id)
+            if not ordered_dependencies:
+                return
+
+            svg_ns = "http://www.w3.org/2000/svg"
+            dependency_defs = ET.SubElement(fragment, f"{{{svg_ns}}}defs")
+            for dependency in ordered_dependencies:
+                dependency_defs.append(deepcopy(dependency))
+
+        def _resolve_clip_fragment_percentages(fragment, viewport):
+            viewport_width, viewport_height = viewport
+            diagonal = math.hypot(viewport_width, viewport_height) / math.sqrt(2.0)
+            references = {
+                "x": viewport_width,
+                "x1": viewport_width,
+                "x2": viewport_width,
+                "cx": viewport_width,
+                "rx": viewport_width,
+                "width": viewport_width,
+                "y": viewport_height,
+                "y1": viewport_height,
+                "y2": viewport_height,
+                "cy": viewport_height,
+                "ry": viewport_height,
+                "height": viewport_height,
+                "r": diagonal,
+            }
+            for candidate in fragment.iter():
+                for attribute_name, reference in references.items():
+                    raw_value = str(
+                        candidate.get(attribute_name, "") or ""
+                    ).strip()
+                    if not raw_value.endswith("%"):
+                        continue
+                    try:
+                        resolved = Length(raw_value).value(
+                            ppi=96.0,
+                            relative_length=reference,
+                        )
+                        parsed = float(resolved)
+                    except (TypeError, ValueError, AttributeError):
+                        continue
+                    if math.isfinite(parsed):
+                        candidate.set(attribute_name, format(parsed, ".12g"))
+
+        def _clip_path_base_geometry(clip_id, reference_viewport=None):
+            definition = clip_path_defs.get(clip_id)
+            if definition is None:
+                return None
+
+            clip_units = str(
+                definition.get("clipPathUnits", "userSpaceOnUse")
+                or "userSpaceOnUse"
+            ).strip()
+            resolved_viewport = reference_viewport or (
+                root_user_width,
+                root_user_height,
+            )
+            cache_key = (
+                clip_id,
+                float(resolved_viewport[0]),
+                float(resolved_viewport[1]),
+            )
+            if cache_key in clip_path_geometry_cache:
+                return clip_path_geometry_cache[cache_key]
+
+            svg_ns = "http://www.w3.org/2000/svg"
+            fragment = ET.Element(f"{{{svg_ns}}}svg")
+            fragment.set("width", str(resolved_viewport[0]))
+            fragment.set("height", str(resolved_viewport[1]))
+            _append_clip_reference_definitions(fragment, definition)
+            for child in list(definition):
+                fragment.append(deepcopy(child))
+            _resolve_clip_fragment_percentages(fragment, resolved_viewport)
+
+            try:
+                clip_svg = SVG.parse(
+                    io.BytesIO(ET.tostring(fragment, encoding="utf-8"))
+                )
+            except VECTOR_HANDLED_ERRORS as exc:
+                raise ValueError("Failed to resolve SVG clip path") from exc
+            clip_polys = []
+            definition_clip_rule = _clip_rule_from_definition(definition)
+            for clip_element in clip_svg.elements():
+                if not isinstance(clip_element, (Path, Shape)):
+                    continue
+                if _svg_element_hidden_by_visibility(clip_element):
+                    continue
+                if isinstance(clip_element, Shape) and not isinstance(clip_element, Path):
+                    try:
+                        clip_element = Path(clip_element)
+                    except VECTOR_HANDLED_ERRORS:
+                        continue
+
+                subpath_items = []
+                try:
+                    subpaths = list(clip_element.as_subpaths())
+                except VECTOR_HANDLED_ERRORS:
+                    subpaths = []
+                for subpath in subpaths:
+                    try:
+                        sub_path = subpath if isinstance(subpath, Path) else Path(subpath)
+                        coords = _sample_path_coords(sub_path)
+                        poly = _polygon_from_coords(coords)
+                    except VECTOR_HANDLED_ERRORS:
+                        continue
+                    if poly is not None and not poly.is_empty:
+                        subpath_items.append(
+                            {
+                                "poly": poly,
+                                "signed_area": _signed_ring_area(coords),
+                            }
+                        )
+
+                if not subpath_items:
+                    fallback_poly = _sample_path_to_polygon(clip_element)
+                    if fallback_poly is not None and not fallback_poly.is_empty:
+                        clip_polys.append(fallback_poly)
+                    continue
+
+                values = getattr(clip_element, "values", None)
+                clip_rule = _clip_rule_from_element_values(
+                    values,
+                    definition_clip_rule,
+                )
+                subpath_polys = [item["poly"] for item in subpath_items]
+                if len(subpath_items) == 1:
+                    combined = subpath_items[0]["poly"]
+                elif clip_rule == "evenodd":
+                    combined = _combine_evenodd_polygons(subpath_polys)
+                else:
+                    combined = _combine_nonzero_subpaths(subpath_items)
+                if combined is not None and not combined.is_empty:
+                    clip_polys.append(combined)
+
+            if clip_polys:
+                geometry = VectorProcessor._extract_polygonal_geometry(
+                    make_valid(unary_union(clip_polys))
+                )
+            else:
+                geometry = Polygon()
+            clip_path_geometry_cache[cache_key] = geometry
+            return geometry
+
+        group_clip_contexts_by_element = {}
+        element_geometry_corrections = {}
+        element_geometry_viewport_clips = {}
+        element_clip_reference_viewports = {}
+        clip_target_transform_overrides = {}
+
+        def _finite_float(value, default=None):
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                return default
+            return parsed if math.isfinite(parsed) else default
+
+        def _element_value(element, name, default=None):
+            if element is None:
+                return default
+            if isinstance(element, dict):
+                value = element.get(name)
+                attributes = element.get("attributes")
+                if value is None and isinstance(attributes, dict):
+                    value = attributes.get(name)
+                return default if value is None else value
+            getter = getattr(element, "get", None)
+            if callable(getter):
+                value = getter(name)
+                return default if value is None else value
+            values = getattr(element, "values", None)
+            return _element_value(values, name, default)
+
+        def _view_box_values(element):
+            if element is None:
+                return None
+            values = [
+                _finite_float(token)
+                for token in re.split(
+                    r"[\s,]+",
+                    str(_element_value(element, "viewBox", "") or "").strip(),
+                )
+                if token
+            ]
+            if len(values) != 4 or any(value is None for value in values):
+                return None
+            min_x, min_y, width, height = values
+            if width <= 0.0 or height <= 0.0:
+                return None
+            return min_x, min_y, width, height
+
+        def _viewport_length(value, reference, default):
+            if value is None:
+                return default
+            raw_value = str(value).strip()
+            try:
+                resolved = Length(raw_value).value(
+                    ppi=96.0,
+                    relative_length=reference,
+                )
+            except (TypeError, ValueError, AttributeError):
+                return default
+            return _finite_float(resolved, default)
+
+        def _view_box_viewport_matrix(
+            view_box,
+            viewport_x,
+            viewport_y,
+            viewport_width,
+            viewport_height,
+            preserve_aspect_ratio,
+        ):
+            if view_box is None:
+                return np.array(
+                    [
+                        [1.0, 0.0, viewport_x],
+                        [0.0, 1.0, viewport_y],
+                        [0.0, 0.0, 1.0],
+                    ],
+                    dtype=np.float64,
+                )
+            min_x, min_y, view_width, view_height = view_box
+            if viewport_width <= 0.0 or viewport_height <= 0.0:
+                return None
+
+            aspect_tokens = [
+                token
+                for token in str(
+                    preserve_aspect_ratio or "xMidYMid meet"
+                ).replace(",", " ").split()
+                if token.lower() != "defer"
+            ]
+            alignment = aspect_tokens[0] if aspect_tokens else "xMidYMid"
+            meet_or_slice = (
+                aspect_tokens[1].lower()
+                if len(aspect_tokens) > 1
+                else "meet"
+            )
+
+            scale_x = viewport_width / view_width
+            scale_y = viewport_height / view_height
+            if alignment.lower() == "none":
+                return np.array(
+                    [
+                        [scale_x, 0.0, viewport_x - min_x * scale_x],
+                        [0.0, scale_y, viewport_y - min_y * scale_y],
+                        [0.0, 0.0, 1.0],
+                    ],
+                    dtype=np.float64,
+                )
+
+            scale = (
+                max(scale_x, scale_y)
+                if meet_or_slice == "slice"
+                else min(scale_x, scale_y)
+            )
+            normalized_alignment = alignment.lower()
+            x_factor = (
+                0.0
+                if normalized_alignment.startswith("xmin")
+                else 1.0
+                if normalized_alignment.startswith("xmax")
+                else 0.5
+            )
+            y_factor = (
+                0.0
+                if normalized_alignment.endswith("ymin")
+                else 1.0
+                if normalized_alignment.endswith("ymax")
+                else 0.5
+            )
+            offset_x = viewport_x + (viewport_width - view_width * scale) * x_factor
+            offset_y = viewport_y + (viewport_height - view_height * scale) * y_factor
+            return np.array(
+                [
+                    [scale, 0.0, offset_x - min_x * scale],
+                    [0.0, scale, offset_y - min_y * scale],
+                    [0.0, 0.0, 1.0],
+                ],
+                dtype=np.float64,
+            )
+
+        root_view_box = _view_box_values(root)
+        root_user_width = (
+            root_view_box[2]
+            if root_view_box is not None
+            else _finite_float(getattr(svg, "width", None), 100.0)
+        )
+        root_user_height = (
+            root_view_box[3]
+            if root_view_box is not None
+            else _finite_float(getattr(svg, "height", None), 100.0)
+        )
+        root_output_width = _finite_float(getattr(svg, "width", None), root_user_width)
+        root_output_height = _finite_float(getattr(svg, "height", None), root_user_height)
+        root_output_viewport_clip = (
+            box(0.0, 0.0, root_output_width, root_output_height)
+            if root_output_width > 0.0 and root_output_height > 0.0
+            else None
+        )
+
+        def _symbol_use_viewport_matrix(container, parent_user_size):
+            values = getattr(container, "values", None)
+            if not isinstance(values, dict) or values.get("tag") != "use":
+                return None
+            attributes = values.get("attributes")
+            attributes = attributes if isinstance(attributes, dict) else {}
+            href = str(
+                attributes.get("href")
+                or attributes.get("{http://www.w3.org/1999/xlink}href")
+                or values.get("href", "")
+                or ""
+            ).strip()
+            if not href.startswith("#"):
+                return None
+            symbol = document_elements_by_id.get(href[1:])
+            if symbol is None or _tag_local_name(symbol) != "symbol":
+                return None
+
+            view_box = _view_box_values(symbol)
+            if view_box is None:
+                return None
+
+            parent_user_width, parent_user_height = parent_user_size
+            viewport_x = _viewport_length(
+                attributes.get("x"),
+                parent_user_width,
+                0.0,
+            )
+            viewport_y = _viewport_length(
+                attributes.get("y"),
+                parent_user_height,
+                0.0,
+            )
+            viewport_width = _viewport_length(
+                attributes.get("width"),
+                parent_user_width,
+                parent_user_width,
+            )
+            viewport_height = _viewport_length(
+                attributes.get("height"),
+                parent_user_height,
+                parent_user_height,
+            )
+            if viewport_width <= 0.0 or viewport_height <= 0.0:
+                return None
+
+            raw_aspect_ratio = str(
+                symbol.get("preserveAspectRatio")
+                or "xMidYMid meet"
+            ).strip()
+            viewport_matrix = _view_box_viewport_matrix(
+                view_box,
+                viewport_x,
+                viewport_y,
+                viewport_width,
+                viewport_height,
+                raw_aspect_ratio,
+            )
+            if viewport_matrix is None:
+                return None
+            overflow = _normalize_svg_css_token(symbol.get("overflow", ""))
+            style_overflow = _style_property(symbol.get("style", ""), "overflow")
+            if style_overflow is not None:
+                overflow = style_overflow
+            return viewport_matrix, (
+                viewport_x,
+                viewport_y,
+                viewport_width,
+                viewport_height,
+            ), overflow != "visible", (view_box[2], view_box[3])
+
+        def _use_viewport_context(container, parent_user_size):
+            viewport = _symbol_use_viewport_matrix(
+                container,
+                parent_user_size,
+            )
+            if viewport is None:
+                return None
+            (
+                viewport_matrix,
+                viewport_bounds,
+                clips_to_viewport,
+                child_user_size,
+            ) = viewport
+            values = getattr(container, "values", None)
+            current_transform = _parse_svg_transform(values.get("transform", ""))
+            parsed_position = np.eye(3, dtype=np.float64)
+            parsed_position[0, 2] = _viewport_length(
+                values.get("x"),
+                parent_user_size[0],
+                0.0,
+            )
+            parsed_position[1, 2] = _viewport_length(
+                values.get("y"),
+                parent_user_size[1],
+                0.0,
+            )
+            try:
+                target_transform = current_transform @ np.linalg.inv(parsed_position)
+                mapped_viewport_transform = target_transform @ viewport_matrix
+                correction = (
+                    mapped_viewport_transform @ np.linalg.inv(current_transform)
+                )
+            except np.linalg.LinAlgError:
+                return None
+            viewport_x, viewport_y, viewport_width, viewport_height = viewport_bounds
+            viewport_clip = (
+                affinity.affine_transform(
+                    box(
+                        viewport_x,
+                        viewport_y,
+                        viewport_x + viewport_width,
+                        viewport_y + viewport_height,
+                    ),
+                    _matrix_to_shapely_params(target_transform),
+                )
+                if clips_to_viewport
+                else None
+            )
+            return correction, target_transform, viewport_clip, child_user_size
+
+        def _nested_svg_viewport_context(container, parent_user_size):
+            values = getattr(container, "values", None)
+            if (
+                container is svg
+                or not isinstance(values, dict)
+                or values.get("tag") != "svg"
+            ):
+                return None
+
+            parent_user_width, parent_user_height = parent_user_size
+            attributes = values.get("attributes")
+            attributes = attributes if isinstance(attributes, dict) else {}
+            view_box = _view_box_values(attributes)
+            viewport_x = _viewport_length(
+                attributes.get("x"),
+                parent_user_width,
+                0.0,
+            )
+            viewport_y = _viewport_length(
+                attributes.get("y"),
+                parent_user_height,
+                0.0,
+            )
+            viewport_width = _viewport_length(
+                attributes.get("width"),
+                parent_user_width,
+                parent_user_width,
+            )
+            viewport_height = _viewport_length(
+                attributes.get("height"),
+                parent_user_height,
+                parent_user_height,
+            )
+            if viewport_width <= 0.0 or viewport_height <= 0.0:
+                return None
+
+            viewport_matrix = _view_box_viewport_matrix(
+                view_box,
+                viewport_x,
+                viewport_y,
+                viewport_width,
+                viewport_height,
+                attributes.get("preserveAspectRatio"),
+            )
+            if viewport_matrix is None:
+                return None
+            parent_transform = _parse_svg_transform(values.get("transform", ""))
+            target_transform = parent_transform @ viewport_matrix
+            geometry_correction = None
+            if view_box is None:
+                try:
+                    geometry_correction = (
+                        parent_transform
+                        @ viewport_matrix
+                        @ np.linalg.inv(parent_transform)
+                    )
+                except np.linalg.LinAlgError:
+                    return None
+
+            overflow = _normalize_svg_css_token(
+                attributes.get("overflow", "")
+            )
+            style_overflow = _style_property(
+                attributes.get("style", ""),
+                "overflow",
+            )
+            if style_overflow is not None:
+                overflow = style_overflow
+            viewport_clip = (
+                affinity.affine_transform(
+                    box(
+                        viewport_x,
+                        viewport_y,
+                        viewport_x + viewport_width,
+                        viewport_y + viewport_height,
+                    ),
+                    _matrix_to_shapely_params(parent_transform),
+                )
+                if overflow != "visible"
+                else None
+            )
+            child_user_size = (
+                (view_box[2], view_box[3])
+                if view_box is not None
+                else (viewport_width, viewport_height)
+            )
+            inherited_coordinate_offset = (
+                _viewport_length(
+                    attributes.get("x"),
+                    child_user_size[0],
+                    0.0,
+                ),
+                _viewport_length(
+                    attributes.get("y"),
+                    child_user_size[1],
+                    0.0,
+                ),
+            )
+            return (
+                target_transform,
+                viewport_clip,
+                inherited_coordinate_offset,
+                child_user_size,
+                geometry_correction,
+            )
+
+        def _coordinate_offsets_for_use_children(
+            container,
+            coordinate_offsets,
+            position_resolved_by_viewport=False,
+        ):
+            if not coordinate_offsets:
+                return coordinate_offsets
+            values = getattr(container, "values", None)
+            if not isinstance(values, dict) or values.get("tag") != "use":
+                return coordinate_offsets
+            attributes = values.get("attributes")
+            attributes = attributes if isinstance(attributes, dict) else {}
+            if (
+                not position_resolved_by_viewport
+                and "x" not in attributes
+                and "y" not in attributes
+            ):
+                return coordinate_offsets
+            offset_x, offset_y = coordinate_offsets[-1]
+            return (
+                *coordinate_offsets[:-1],
+                (
+                    0.0
+                    if position_resolved_by_viewport or "x" in attributes
+                    else offset_x,
+                    0.0
+                    if position_resolved_by_viewport or "y" in attributes
+                    else offset_y,
+                ),
+            )
+
+        def _geometry_correction_for_element(
+            element,
+            fixed_correction,
+            coordinate_offsets,
+        ):
+            correction = fixed_correction
+            if not coordinate_offsets:
+                return correction
+            values = getattr(element, "values", None)
+            if not isinstance(values, dict):
+                return correction
+            element_tag = str(values.get("tag", "") or "").strip()
+            if element_tag not in {"rect", "image", "use", "svg"}:
+                return correction
+            attributes = values.get("attributes")
+            attributes = attributes if isinstance(attributes, dict) else {}
+            current_transform = _parse_svg_transform(
+                values.get("transform", "")
+            )
+            try:
+                inverse = np.linalg.inv(current_transform)
+            except np.linalg.LinAlgError:
+                return correction
+            offset_x, offset_y = coordinate_offsets[-1]
+            resolved_offset_x = offset_x if "x" not in attributes else 0.0
+            resolved_offset_y = offset_y if "y" not in attributes else 0.0
+            if resolved_offset_x == 0.0 and resolved_offset_y == 0.0:
+                return correction
+            local_offset = np.eye(3, dtype=np.float64)
+            local_offset[0, 2] = -resolved_offset_x
+            local_offset[1, 2] = -resolved_offset_y
+            offset_correction = current_transform @ local_offset @ inverse
+            correction = (
+                offset_correction
+                if correction is None
+                else correction @ offset_correction
+            )
+            return correction
+
+        def _index_group_clip_contexts(
+            container,
+            inherited_contexts=(),
+            inherited_geometry_correction=None,
+            inherited_viewport_clip=None,
+            inherited_coordinate_offsets=(),
+            parent_user_size=None,
+        ):
+            if isinstance(container, (Path, Shape)):
+                return
+            contexts = inherited_contexts
+            values = getattr(container, "values", None)
+            raw_reference = (
+                str(values.get("clip-path", "") or "").strip()
+                if isinstance(values, dict)
+                else ""
+            )
+            match = _url_re.fullmatch(raw_reference)
+            if match is not None:
+                contexts = (*contexts, (match.group(1), container))
+
+            geometry_correction = inherited_geometry_correction
+            viewport_clip = inherited_viewport_clip
+            coordinate_offsets = inherited_coordinate_offsets
+            child_user_size = parent_user_size or (
+                root_user_width,
+                root_user_height,
+            )
+            if geometry_correction is not None and isinstance(values, dict):
+                clip_target_transform_overrides[id(container)] = (
+                    geometry_correction
+                    @ _parse_svg_transform(values.get("transform", ""))
+                )
+            viewport_context = _use_viewport_context(
+                container,
+                child_user_size,
+            )
+            if viewport_context is not None:
+                (
+                    viewport_correction,
+                    target_transform,
+                    own_viewport_clip,
+                    child_user_size,
+                ) = viewport_context
+                clip_target_transform_overrides[id(container)] = (
+                    target_transform
+                    if inherited_geometry_correction is None
+                    else inherited_geometry_correction @ target_transform
+                )
+                if (
+                    own_viewport_clip is not None
+                    and inherited_geometry_correction is not None
+                ):
+                    own_viewport_clip = affinity.affine_transform(
+                        own_viewport_clip,
+                        _matrix_to_shapely_params(inherited_geometry_correction),
+                    )
+                geometry_correction = (
+                    viewport_correction
+                    if geometry_correction is None
+                    else geometry_correction @ viewport_correction
+                )
+                if own_viewport_clip is not None:
+                    viewport_clip = (
+                        own_viewport_clip
+                        if viewport_clip is None
+                        else viewport_clip.intersection(own_viewport_clip)
+                    )
+                if root_output_viewport_clip is not None:
+                    viewport_clip = (
+                        root_output_viewport_clip
+                        if viewport_clip is None
+                        else viewport_clip.intersection(root_output_viewport_clip)
+                    )
+
+            nested_viewport_context = _nested_svg_viewport_context(
+                container,
+                child_user_size,
+            )
+            if nested_viewport_context is not None:
+                (
+                    nested_target_transform,
+                    own_viewport_clip,
+                    coordinate_offset,
+                    child_user_size,
+                    nested_geometry_correction,
+                ) = nested_viewport_context
+                element_clip_reference_viewports[id(container)] = child_user_size
+                clip_target_transform_overrides[id(container)] = (
+                    nested_target_transform
+                    if geometry_correction is None
+                    else geometry_correction @ nested_target_transform
+                )
+                if (
+                    own_viewport_clip is not None
+                    and geometry_correction is not None
+                ):
+                    own_viewport_clip = affinity.affine_transform(
+                        own_viewport_clip,
+                        _matrix_to_shapely_params(geometry_correction),
+                    )
+                if own_viewport_clip is not None:
+                    viewport_clip = (
+                        own_viewport_clip
+                        if viewport_clip is None
+                        else viewport_clip.intersection(own_viewport_clip)
+                    )
+                if root_output_viewport_clip is not None:
+                    viewport_clip = (
+                        root_output_viewport_clip
+                        if viewport_clip is None
+                        else viewport_clip.intersection(root_output_viewport_clip)
+                    )
+                if nested_geometry_correction is not None:
+                    geometry_correction = (
+                        nested_geometry_correction
+                        if geometry_correction is None
+                        else geometry_correction @ nested_geometry_correction
+                    )
+                coordinate_offsets = (*coordinate_offsets, coordinate_offset)
+
+            coordinate_offsets = _coordinate_offsets_for_use_children(
+                container,
+                coordinate_offsets,
+                position_resolved_by_viewport=viewport_context is not None,
+            )
+
+            try:
+                for child in container:
+                    group_clip_contexts_by_element[id(child)] = contexts
+                    element_clip_reference_viewports[id(child)] = child_user_size
+                    child_correction = _geometry_correction_for_element(
+                        child,
+                        geometry_correction,
+                        coordinate_offsets,
+                    )
+                    if child_correction is not None:
+                        element_geometry_corrections[id(child)] = child_correction
+                    child_values = getattr(child, "values", None)
+                    if (
+                        geometry_correction is not None
+                        and isinstance(child_values, dict)
+                    ):
+                        clip_target_transform_overrides[id(child)] = (
+                            geometry_correction
+                            @ _parse_svg_transform(
+                                child_values.get("transform", "")
+                            )
+                        )
+                    if viewport_clip is not None:
+                        element_geometry_viewport_clips[id(child)] = viewport_clip
+                    if not isinstance(child, (Path, Shape)):
+                        _index_group_clip_contexts(
+                            child,
+                            contexts,
+                            geometry_correction,
+                            viewport_clip,
+                            coordinate_offsets,
+                            child_user_size,
+                        )
+            except TypeError:
+                return
+
+        _index_group_clip_contexts(svg)
+        clip_target_local_bounds_cache = {}
+
+        def _iter_clip_target_shapes(target):
+            if isinstance(target, (Path, Shape)):
+                yield target
+                return
+            try:
+                for child in target:
+                    yield from _iter_clip_target_shapes(child)
+            except TypeError:
+                return
+
+        def _clip_bbox_shape_is_display_none(element):
+            values = getattr(element, "values", None)
+            display_values = []
+            style_values = []
+            if isinstance(values, dict):
+                display_values.append(values.get("display"))
+                style_values.append(values.get("style"))
+                attributes = values.get("attributes")
+                if isinstance(attributes, dict):
+                    display_values.append(attributes.get("display"))
+                    style_values.append(attributes.get("style"))
+            display_values.append(getattr(element, "display", None))
+            style_values.append(getattr(element, "style", None))
+            if any(
+                _normalize_svg_css_token(value) == "none"
+                for value in display_values
+            ):
+                return True
+            return any(
+                _style_property(style, "display") == "none"
+                for style in style_values
+            )
+
+        def _clip_target_local_bounds(target):
+            cache_key = id(target)
+            if cache_key in clip_target_local_bounds_cache:
+                return clip_target_local_bounds_cache[cache_key]
+
+            values = getattr(target, "values", None)
+            transform = clip_target_transform_overrides.get(
+                id(target),
+                _parse_svg_transform(
+                    values.get("transform", "") if isinstance(values, dict) else ""
+                ),
+            )
+            try:
+                inverse = np.linalg.inv(transform)
+            except np.linalg.LinAlgError as exc:
+                raise ValueError("Invalid transform for SVG clip target") from exc
+
+            local_points = []
+            for target_shape in _iter_clip_target_shapes(target):
+                if _clip_bbox_shape_is_display_none(target_shape):
+                    continue
+                try:
+                    target_path = (
+                        target_shape
+                        if isinstance(target_shape, Path)
+                        else Path(target_shape)
+                    )
+                    subpaths = list(target_path.as_subpaths())
+                except VECTOR_HANDLED_ERRORS:
+                    continue
+                for subpath in subpaths:
+                    try:
+                        path = subpath if isinstance(subpath, Path) else Path(subpath)
+                        coords = _sample_path_coords(path)
+                    except VECTOR_HANDLED_ERRORS:
+                        continue
+                    if not coords:
+                        continue
+                    points = np.asarray(coords, dtype=np.float64)
+                    homogeneous = np.column_stack(
+                        (points, np.ones(points.shape[0], dtype=np.float64))
+                    )
+                    correction = element_geometry_corrections.get(id(target_shape))
+                    if correction is not None:
+                        homogeneous = (correction @ homogeneous.T).T
+                    local_points.append((inverse @ homogeneous.T).T[:, :2])
+
+            if not local_points:
+                raise ValueError("Failed to resolve SVG clip target bounds")
+            all_points = np.concatenate(local_points, axis=0)
+            bounds = (
+                float(np.min(all_points[:, 0])),
+                float(np.min(all_points[:, 1])),
+                float(np.max(all_points[:, 0])),
+                float(np.max(all_points[:, 1])),
+            )
+            clip_target_local_bounds_cache[cache_key] = bounds
+            return bounds
+
+        def _apply_clip_reference(geometry, clip_id, target):
+            definition = clip_path_defs.get(clip_id)
+            if definition is None:
+                return geometry
+            units = str(
+                definition.get("clipPathUnits", "userSpaceOnUse")
+                or "userSpaceOnUse"
+            ).strip()
+            reference_viewport = element_clip_reference_viewports.get(
+                id(target),
+                (root_user_width, root_user_height),
+            )
+            clip_geometry = _clip_path_base_geometry(
+                clip_id,
+                reference_viewport,
+            )
+            if clip_geometry is None:
+                return geometry
+            if clip_geometry.is_empty:
+                return clip_geometry
+
+            target_values = getattr(target, "values", None)
+            target_transform = clip_target_transform_overrides.get(
+                id(target),
+                _parse_svg_transform(
+                    target_values.get("transform", "")
+                    if isinstance(target_values, dict)
+                    else ""
+                ),
+            )
+            definition_transform = _parse_svg_transform(
+                definition.get("transform", "")
+            )
+            if units == "objectBoundingBox":
+                min_x, min_y, max_x, max_y = _clip_target_local_bounds(target)
+                bbox_transform = np.array(
+                    [
+                        [max_x - min_x, 0.0, min_x],
+                        [0.0, max_y - min_y, min_y],
+                        [0.0, 0.0, 1.0],
+                    ],
+                    dtype=np.float64,
+                )
+                clip_transform = (
+                    target_transform @ definition_transform @ bbox_transform
+                )
+            else:
+                clip_transform = target_transform @ definition_transform
+            resolved_clip = affinity.affine_transform(
+                clip_geometry,
+                _matrix_to_shapely_params(clip_transform),
+            )
+
+            clipped = geometry.intersection(resolved_clip)
+            if clipped.is_empty:
+                return clipped
+            return VectorProcessor._extract_polygonal_geometry(make_valid(clipped))
+
+        def _apply_element_geometry_correction(geometry, source_element):
+            if geometry is None or geometry.is_empty:
+                return geometry
+            correction = element_geometry_corrections.get(id(source_element))
+            if correction is not None:
+                geometry = affinity.affine_transform(
+                    geometry,
+                    _matrix_to_shapely_params(correction),
+                )
+            viewport_clip = element_geometry_viewport_clips.get(id(source_element))
+            if viewport_clip is None:
+                return geometry
+            clipped = geometry.intersection(viewport_clip)
+            if clipped.is_empty:
+                return clipped
+            return VectorProcessor._extract_polygonal_geometry(make_valid(clipped))
+
+        def _apply_element_clip_path(
+            geometry,
+            element,
+            group_clip_contexts=(),
+        ):
+            if geometry is None or geometry.is_empty:
+                return geometry
+            for clip_id, clip_target in group_clip_contexts:
+                geometry = _apply_clip_reference(geometry, clip_id, clip_target)
+                if geometry is None or geometry.is_empty:
+                    return geometry
+
+            values = getattr(element, "values", None)
+            if not isinstance(values, dict):
+                return geometry
+            raw_reference = str(values.get("clip-path", "") or "").strip()
+            match = _url_re.fullmatch(raw_reference)
+            if match is None:
+                return geometry
+
+            return _apply_clip_reference(geometry, match.group(1), element)
+
         raw_shapes = []
         needs_normalize_key = "_needs_contour_normalize"
         skipped_types = {}
@@ -7391,6 +8578,12 @@ class VectorProcessor:
                 type_name = type(element).__name__
                 skipped_types[type_name] = skipped_types.get(type_name, 0) + 1
                 continue
+
+            clip_source_element = element
+            group_clip_contexts = group_clip_contexts_by_element.get(
+                id(element),
+                (),
+            )
 
             if (
                 _svg_element_hidden_by_visibility(element)
@@ -7446,6 +8639,15 @@ class VectorProcessor:
                             stroke_width,
                             cap_style_name=cap_style,
                             join_style_name=join_style,
+                        )
+                        stroke_geom = _apply_element_geometry_correction(
+                            stroke_geom,
+                            clip_source_element,
+                        )
+                        stroke_geom = _apply_element_clip_path(
+                            stroke_geom,
+                            clip_source_element,
+                            group_clip_contexts,
                         )
                         if stroke_geom is not None and not stroke_geom.is_empty:
                             raw_shapes.append(
@@ -7517,6 +8719,15 @@ class VectorProcessor:
                         cap_style_name=cap_style,
                         join_style_name=join_style,
                     )
+                    stroke_geom = _apply_element_geometry_correction(
+                        stroke_geom,
+                        clip_source_element,
+                    )
+                    stroke_geom = _apply_element_clip_path(
+                        stroke_geom,
+                        clip_source_element,
+                        group_clip_contexts,
+                    )
                     if stroke_geom is not None and not stroke_geom.is_empty:
                         raw_shapes.append(
                             {
@@ -7575,7 +8786,16 @@ class VectorProcessor:
                 for gs in grad_shapes:
                     p = gs["poly"]
                     if p is not None and not p.is_empty:
+                        p = _apply_element_geometry_correction(
+                            p,
+                            clip_source_element,
+                        )
                         p = VectorProcessor._normalize_contours(p)
+                        p = _apply_element_clip_path(
+                            p,
+                            clip_source_element,
+                            group_clip_contexts,
+                        )
                         if p is not None and not p.is_empty:
                             raw_shapes.append(
                                 {
@@ -7667,6 +8887,19 @@ class VectorProcessor:
                             same_color_stroke_double_buffer = True
                     except VECTOR_HANDLED_ERRORS:
                         pass
+
+            result_poly = _apply_element_geometry_correction(
+                result_poly,
+                clip_source_element,
+            )
+            result_poly = _apply_element_clip_path(
+                result_poly,
+                clip_source_element,
+                group_clip_contexts,
+            )
+            if result_poly is None or result_poly.is_empty:
+                skipped_polygon_count += 1
+                continue
 
             raw_shapes.append(
                 {

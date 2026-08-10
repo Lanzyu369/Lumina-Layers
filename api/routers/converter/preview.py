@@ -92,6 +92,10 @@ from .common import (
     recompute_gradient_groups_into_session,
 )
 from .model_surface import resolve_surface_preview_config
+from .source_validation import (
+    ConverterSourceValidationError,
+    validate_converter_source,
+)
 
 router = APIRouter()
 log = get_logger(__name__)
@@ -1098,6 +1102,23 @@ async def convert_preview(
         # 1. File upload (I/O, main thread)
         _t = time.perf_counter()
         temp_path = await ensure_png_tempfile(image)
+        try:
+            await asyncio.to_thread(validate_converter_source, temp_path)
+        except ConverterSourceValidationError as exc:
+            log.warning(
+                "Converter source upload rejected",
+                extra={
+                    "event": "converter_source_upload_rejected",
+                    "error_type": type(exc).__name__,
+                    "error_message": exc.public_message,
+                    "reason": exc.error_code,
+                    "status_code": exc.status_code,
+                },
+            )
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail=exc.detail,
+            ) from exc
         surface_config = resolve_surface_preview_config(
             registry=registry,
             model_file_id=surface_model_file_id,
@@ -1220,8 +1241,23 @@ async def convert_preview(
     except (DynamicMaterialCandidateError, DynamicMaterialSolverError) as e:
         _handle_core_error(e, "preview generation")
     except ROUTER_HANDLED_ERRORS as e:
-        public_detail = _public_pipeline_validation_detail(e)
+        public_detail = _public_pipeline_validation_detail(
+            e,
+            source_is_user_upload=surface_config is None,
+            modeling_mode=modeling_mode,
+            source_path=surface_original_image_path or temp_path,
+            surface_overlay=surface_config is not None,
+        )
         if public_detail is not None:
+            log.warning(
+                "Converter preview input rejected",
+                extra={
+                    "event": "converter_preview_input_rejected",
+                    "error_type": type(e).__name__,
+                    "error_message": public_detail["message"],
+                    "reason": public_detail["error"],
+                },
+            )
             raise HTTPException(status_code=422, detail=public_detail) from e
         log.exception(
             "Preview generation failed",

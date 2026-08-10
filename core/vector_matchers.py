@@ -554,21 +554,11 @@ class MaterialVectorMatcher:
                     },
                 )
 
-            # Aggregate INFO line so a single grep gives the user a
-            # readable summary of every unique fill solved this run.
-            # 汇总行用 INFO 级别写一次，便于一行 grep 看完整表。
-            summary_pairs = []
-            for i in range(new_arr.shape[0]):
-                src = new_arr[i]
-                matched = matched_rgb_unique[i]
-                summary_pairs.append(
-                    f"#{int(src[0]):02X}{int(src[1]):02X}{int(src[2]):02X}"
-                    f"->#{int(matched[0]):02X}{int(matched[1]):02X}{int(matched[2]):02X}"
-                )
+            # Keep the INFO event bounded for artwork with thousands of
+            # unique fills. Per-colour details remain available at DEBUG.
             _log.info(
-                "material vector solve summary: %d colors -> %s",
+                "material vector solve summary: %d colors",
                 new_arr.shape[0],
-                ", ".join(summary_pairs),
                 extra={
                     "event": "material_vector_solve_summary",
                     "color_count": int(new_arr.shape[0]),

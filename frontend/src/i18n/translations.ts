@@ -133,6 +133,26 @@ export const translations: Record<string, Record<"zh" | "en", string>> = {
     zh: "矢量建模模式仅支持 SVG 文件。请上传 SVG，或切换到“高保真”或“像素艺术”模式。",
     en: "Vector Native mode requires an SVG file. Upload an SVG, or switch to High-Fidelity or Pixel Art mode.",
   },
+  api_error_source_image_unreadable: {
+    zh: "无法读取这张图片。请确认文件未损坏，并重新导出为 PNG、JPEG 或 WebP 后再上传。",
+    en: "The image could not be read. Check that the file is not damaged, then re-export it as PNG, JPEG, or WebP and upload it again.",
+  },
+  api_error_source_image_too_large: {
+    zh: "图片像素尺寸过大，无法安全处理。请缩小图片分辨率后重新上传。",
+    en: "The image dimensions are too large to process safely. Reduce the image resolution and upload it again.",
+  },
+  api_error_source_svg_invalid: {
+    zh: "无法解析 SVG 文件。请在设计软件中重新导出有效的 SVG 后再上传。",
+    en: "The SVG could not be parsed. Re-export a valid SVG from your design application and upload it again.",
+  },
+  api_error_source_svg_too_complex: {
+    zh: "SVG 包含过多相交的复合子路径，无法安全处理。请简化或展平图稿后重新上传。",
+    en: "The SVG contains too many intersecting compound subpaths to process safely. Simplify or flatten the artwork, then upload it again.",
+  },
+  api_error_source_svg_no_renderable_geometry: {
+    zh: "SVG 中没有矢量模式可用的可见填充几何。请显示图稿，将描边和文字转换为填充路径，或切换到“高保真”模式。",
+    en: "The SVG has no visible filled geometry supported by Vector mode. Make the artwork visible, convert strokes and text to filled paths, or switch to High-Fidelity mode.",
+  },
   api_error_model_surface_empty_geometry: {
     zh: "模型文件不包含三角形几何体。请导出非空的 STL 或 OBJ 后重新上传。",
     en: "The model file does not contain triangle geometry. Export a non-empty STL or OBJ and upload it again.",

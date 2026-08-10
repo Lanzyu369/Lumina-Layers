@@ -3,9 +3,11 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -262,9 +264,7 @@ def install_direct(
 
 def test_workshop_v1_routes_are_registered(api_bundle) -> None:
     client, _installer, _archive, _registry = api_bundle
-    route_paths = {
-        route.path for route in client.app.routes
-    }
+    route_paths = set(client.app.openapi()["paths"])
 
     assert {
         "/api/workshop/v1/catalog",
@@ -285,10 +285,10 @@ def test_workshop_v1_routes_are_registered(api_bundle) -> None:
         (
             "/api/workshop/v1/modules/{module_id}/{version}/runtime"
         ),
-        (
-            "/api/workshop/v1/modules/{module_id}/{version}/"
-            "assets/{asset_path:path}"
-        ),
+            (
+                "/api/workshop/v1/modules/{module_id}/{version}/"
+                "assets/{asset_path}"
+            ),
     }.issubset(route_paths)
 
 
@@ -470,6 +470,84 @@ def test_registry_install_uses_exact_verified_candidate(
     assert response.status_code == 200
     assert response.json()["module"]["source"] == "registry"
     assert response.json()["module"]["candidate_version"] == "1.0.0"
+
+
+def test_registry_install_retries_one_transient_read_timeout(
+    api_bundle,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client, _installer, archive, _registry = api_bundle
+    attempts = 0
+    delays: list[float] = []
+
+    def flaky_download(_candidate):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise httpx.ReadTimeout("temporary timeout")
+        return archive
+
+    monkeypatch.setattr(
+        workshop_router,
+        "download_registry_package",
+        flaky_download,
+    )
+    monkeypatch.setattr(workshop_router.time, "sleep", delays.append)
+    target_logger = logging.getLogger("lumina.api.routers.workshop")
+    target_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.WARNING, logger=target_logger.name)
+    try:
+        response = client.post(
+            "/api/workshop/v1/install/registry",
+            json={"module_id": "fixture.hello", "version": "1.0.0"},
+        )
+    finally:
+        target_logger.removeHandler(caplog.handler)
+
+    assert response.status_code == 200
+    assert attempts == 2
+    assert delays == [0.25]
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "workshop_registry_download_retry"
+    ]
+    assert len(records) == 1
+    assert records[0].attempt == 1
+    assert records[0].max_attempts == 2
+    assert records[0].delay_ms == 250
+    assert "https://" not in records[0].getMessage()
+
+
+def test_registry_install_does_not_retry_non_timeout_http_errors(
+    api_bundle,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _installer, _archive, _registry = api_bundle
+    attempts = 0
+    delays: list[float] = []
+
+    def failed_download(_candidate):
+        nonlocal attempts
+        attempts += 1
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(
+        workshop_router,
+        "download_registry_package",
+        failed_download,
+    )
+    monkeypatch.setattr(workshop_router.time, "sleep", delays.append)
+
+    response = client.post(
+        "/api/workshop/v1/install/registry",
+        json={"module_id": "fixture.hello", "version": "1.0.0"},
+    )
+
+    assert response.status_code == 502
+    assert attempts == 1
+    assert delays == []
 
 
 def test_github_install_accepts_only_exact_repository_release(

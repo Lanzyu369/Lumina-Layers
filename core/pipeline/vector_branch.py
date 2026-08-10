@@ -373,18 +373,35 @@ def _log_vector_preview_timings(
         if mask_solid is not None
         else None
     )
+    unique_fills = set()
+    for shape in getattr(analysis, "clipped_shapes", []) or []:
+        if not isinstance(shape, dict):
+            continue
+        color = shape.get("color")
+        try:
+            unique_fills.add(tuple(int(channel) for channel in color[:3]))
+        except (TypeError, ValueError, IndexError):
+            continue
+    material_source = (
+        "material_archive"
+        if str(ctx.get("material_source") or "lut") == "material_archive"
+        else "lut"
+    )
     log.info(
         "Vector preview timing breakdown",
         extra={
             "event": "vector_preview_timings",
             "duration_ms": round(float(timings.get("vector_preview_total_s", 0.0)) * 1000, 3),
             "timings": _structured_timing_payload(timings),
-            "image_path": str(ctx.get("image_path") or ""),
+            "modeling_mode": str(ctx.get("modeling_mode") or "vector"),
+            "material_source": material_source,
             "color_mode": str(ctx.get("color_mode") or ""),
             "target_width_mm": float(ctx.get("target_width_mm") or 0.0),
-            "is_material_archive": str(ctx.get("material_source") or "lut") == "material_archive",
-            "actual_lut_path": str(ctx.get("actual_lut_path") or ""),
+            "is_material_archive": material_source == "material_archive",
             "grid_resolution": int(ctx.get("grid_resolution") or 0),
+            "material_count": int(getattr(analysis, "num_channels", 0) or 0),
+            "layer_count": int(getattr(analysis, "num_layers", 0) or 0),
+            "unique_fill_count": len(unique_fills),
             "shape_count": len(getattr(analysis, "shape_data", []) or []),
             "clipped_shape_count": len(getattr(analysis, "clipped_shapes", []) or []),
             "matched_shape_count": len(getattr(analysis, "matched_shapes", []) or []),

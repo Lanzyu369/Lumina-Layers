@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+import math
 import re
 from typing import Any
 
@@ -19,6 +22,279 @@ _PREFIX_RE = re.compile(r"^(?:slot|channel|material)\s*\d+\s*[:\-]?\s*", re.IGNO
 # 过旧（例如用户从传统 CMYW LUT 切换到反推 LUT 时 color_mode 未同步）
 # 的情况下，保证每个常见颜色名都能解析到稳定且互不冲突的颜色。
 _CANONICAL_COLOR_LOOKUP: dict[str, list[int]] | None = None
+
+
+@dataclass(frozen=True)
+class MaterialPreviewResolution:
+    """Resolved preview style for one authoritative material ID.
+    单个权威材料 ID 的预览样式解析结果。
+
+    Attributes:
+        material_id: Original material ID, never clamped or renumbered.
+            原始材料 ID，不做截断或重编号。
+        material_name: Exact name from ``slot_names[material_id]``.
+            来自 ``slot_names[material_id]`` 的精确材料名。
+        rgba: Resolved RGBA tuple, or ``None`` when no exact color is usable.
+            解析后的 RGBA；无可用精确颜色时为 ``None``。
+        source: Fixed machine-readable resolution source.
+            固定、机器可读的解析来源。
+        attempts: Fixed source labels attempted in order; never contains
+            material names or mapping keys.（按顺序尝试的固定来源标签，不含
+            材料名或映射键。）
+    """
+
+    material_id: int
+    material_name: str | None
+    rgba: tuple[int, int, int, int] | None
+    source: str
+    attempts: tuple[str, ...]
+
+    @property
+    def is_resolved(self) -> bool:
+        """Return whether both material identity and preview color resolved.
+        返回材料身份与预览颜色是否均已解析。
+        """
+
+        return self.material_name is not None and self.rgba is not None
+
+
+def _coerce_material_rgba(value: Any) -> tuple[int, int, int, int] | None:
+    """Coerce supported preview metadata to a validated RGBA tuple."""
+
+    if isinstance(value, str):
+        stripped = value.strip()
+        if _HEX_COLOR_RE.match(stripped):
+            return tuple(_hex_to_rgba(stripped))
+        return None
+
+    if hasattr(value, "tolist"):
+        value = value.tolist()
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return None
+    if len(value) < 3:
+        return None
+
+    raw_channels = list(value[:4])
+    if len(raw_channels) == 3:
+        raw_channels.append(255)
+
+    channels: list[int] = []
+    for channel in raw_channels:
+        try:
+            numeric = float(channel)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(numeric) or numeric < 0 or numeric > 255:
+            return None
+        channels.append(int(round(numeric)))
+    return tuple(channels)  # type: ignore[return-value]
+
+
+def resolve_material_preview(
+    *,
+    material_id: int,
+    slot_names: Sequence[object] | None,
+    preview_colors: Mapping[object, object] | None,
+    color_conf: Mapping[str, Any] | None,
+) -> MaterialPreviewResolution:
+    """Resolve one material ID without changing its filament identity.
+    在不改变耗材身份的前提下解析一个材料 ID。
+
+    ``slot_names`` is the sole source of material identity. Preview colors are
+    resolved by integer ID, string ID, and exact material-name key before the
+    compatible ``color_conf.preview`` and canonical-name fallbacks are tried.
+    Missing or invalid metadata returns an unresolved result; callers decide
+    whether a display-only fallback is acceptable or model generation must
+    stop.
+
+    ``slot_names`` 是材料身份的唯一来源。颜色依次按整数 ID、字符串 ID、
+    精确材料名键解析，再尝试兼容的 ``color_conf.preview`` 与规范颜色名。
+    元数据缺失或非法时返回未解析结果，由调用方决定仅显示降级还是停止生成。
+
+    Args:
+        material_id: Material ID selected from ``material_matrix``.
+            从 ``material_matrix`` 选出的材料 ID。
+        slot_names: Authoritative ordered material names.
+            权威的有序材料名称。
+        preview_colors: Runtime preview-color mapping aligned to ``slot_names``.
+            与 ``slot_names`` 对齐的运行时预览颜色映射。
+        color_conf: Compatibility color-system configuration.
+            兼容用颜色系统配置。
+
+    Returns:
+        MaterialPreviewResolution: Identity, color, source, and fixed attempt
+            labels.（材料身份、颜色、来源及固定尝试标签。）
+    """
+
+    try:
+        resolved_id = int(material_id)
+    except (TypeError, ValueError):
+        return MaterialPreviewResolution(
+            material_id=-1,
+            material_name=None,
+            rgba=None,
+            source="invalid_material_id",
+            attempts=(),
+        )
+
+    material_name: str | None = None
+    if (
+        resolved_id >= 0
+        and isinstance(slot_names, Sequence)
+        and not isinstance(slot_names, (str, bytes))
+        and resolved_id < len(slot_names)
+    ):
+        candidate_name = str(slot_names[resolved_id]).strip()
+        if candidate_name:
+            material_name = candidate_name
+
+    if material_name is None:
+        return MaterialPreviewResolution(
+            material_id=resolved_id,
+            material_name=None,
+            rgba=None,
+            source="invalid_material_id",
+            attempts=(),
+        )
+
+    attempts: list[str] = []
+
+    def _try(mapping: object, key: object, label: str) -> tuple[int, int, int, int] | None:
+        attempts.append(label)
+        if not isinstance(mapping, Mapping) or key not in mapping:
+            return None
+        return _coerce_material_rgba(mapping[key])
+
+    for mapping, key, label in (
+        (preview_colors, resolved_id, "preview_int"),
+        (preview_colors, str(resolved_id), "preview_str"),
+        (preview_colors, material_name, "preview_name"),
+    ):
+        rgba = _try(mapping, key, label)
+        if rgba is not None:
+            return MaterialPreviewResolution(
+                material_id=resolved_id,
+                material_name=material_name,
+                rgba=rgba,
+                source=label,
+                attempts=tuple(attempts),
+            )
+
+    conf_preview = color_conf.get("preview") if isinstance(color_conf, Mapping) else None
+    conf_slots = color_conf.get("slots") if isinstance(color_conf, Mapping) else None
+    conf_slot_aligned = (
+        isinstance(conf_slots, Sequence)
+        and not isinstance(conf_slots, (str, bytes))
+        and 0 <= resolved_id < len(conf_slots)
+        and str(conf_slots[resolved_id]).strip() == material_name
+    )
+    conf_candidates: list[tuple[object, str]] = []
+    if conf_slot_aligned:
+        conf_candidates.extend(
+            (
+                (resolved_id, "color_conf_int"),
+                (str(resolved_id), "color_conf_str"),
+            )
+        )
+    conf_candidates.append((material_name, "color_conf_name"))
+    for key, label in conf_candidates:
+        rgba = _try(conf_preview, key, label)
+        if rgba is not None:
+            return MaterialPreviewResolution(
+                material_id=resolved_id,
+                material_name=material_name,
+                rgba=rgba,
+                source=label,
+                attempts=tuple(attempts),
+            )
+
+    attempts.append("canonical_name")
+    canonical = _get_canonical_color_lookup().get(
+        _normalize_color_label(material_name)
+    )
+    rgba = _coerce_material_rgba(canonical)
+    if rgba is not None:
+        return MaterialPreviewResolution(
+            material_id=resolved_id,
+            material_name=material_name,
+            rgba=rgba,
+            source="canonical_name",
+            attempts=tuple(attempts),
+        )
+
+    return MaterialPreviewResolution(
+        material_id=resolved_id,
+        material_name=material_name,
+        rgba=None,
+        source="unresolved_color",
+        attempts=tuple(attempts),
+    )
+
+
+def build_material_preview_warning_extra(
+    resolution: MaterialPreviewResolution,
+    *,
+    slot_names: Sequence[object] | None,
+    preview_colors: Mapping[object, object] | None,
+    color_conf: Mapping[str, Any] | None,
+    material_source: object,
+) -> dict[str, Any]:
+    """Build privacy-safe structured fields for an unresolved material.
+    为未解析材料构建不泄露隐私的结构化日志字段。
+
+    Args:
+        resolution: Failed material preview resolution.
+            未成功的材料预览解析结果。
+        slot_names: Authoritative slot sequence; names are counted but never
+            logged.（权威槽位序列；仅计数，不记录名称。）
+        preview_colors: Runtime preview mapping; only numeric IDs and count are
+            logged.（运行时预览映射；仅记录数字 ID 与数量。）
+        color_conf: Compatibility color configuration; only preview count is
+            logged.（兼容颜色配置；仅记录预览映射数量。）
+        material_source: Fixed source family such as ``lut`` or
+            ``material_archive``.（固定来源类型。）
+
+    Returns:
+        dict[str, Any]: Structured WARNING fields with no path or material
+            name.（不含路径或材料名称的结构化 WARNING 字段。）
+    """
+
+    available_material_ids: set[int] = set()
+    if isinstance(preview_colors, Mapping):
+        for key in preview_colors:
+            try:
+                candidate_id = int(key)
+            except (TypeError, ValueError):
+                continue
+            if candidate_id >= 0 and str(candidate_id) == str(key):
+                available_material_ids.add(candidate_id)
+
+    conf_preview = color_conf.get("preview") if isinstance(color_conf, Mapping) else None
+    slot_count = (
+        len(slot_names)
+        if isinstance(slot_names, Sequence)
+        and not isinstance(slot_names, (str, bytes))
+        else 0
+    )
+    return {
+        "event": "loop_material_preview_unresolved",
+        "error_type": "LoopMaterialResolutionError",
+        "error_message": (
+            "Loop material identity or preview color could not be resolved"
+        ),
+        "reason": resolution.source,
+        "material_id": resolution.material_id,
+        "material_source": str(material_source or "lut"),
+        "slot_count": slot_count,
+        "preview_color_count": (
+            len(preview_colors) if isinstance(preview_colors, Mapping) else 0
+        ),
+        "color_conf_preview_count": (
+            len(conf_preview) if isinstance(conf_preview, Mapping) else 0
+        ),
+        "available_material_ids": sorted(available_material_ids),
+        "resolution_attempts": list(resolution.attempts),
+    }
 
 
 def _get_canonical_color_lookup() -> dict[str, list[int]]:
