@@ -786,6 +786,44 @@ class TestNormalizeContours:
                 == stock_item["geometry"].normalize().wkb
             )
 
+    def test_parallel_clip_does_not_hide_programmer_errors(self, monkeypatch):
+        shape_data = [
+            {
+                "poly": box(float(index), 0.0, float(index) + 0.5, 0.5),
+                "color": (index % 256, 0, 0),
+            }
+            for index in range(64)
+        ]
+        geoms = [item["poly"] for item in shape_data]
+
+        class ExplodingExecutor:
+            def __init__(self, **_kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def map(self, *_args, **_kwargs):
+                raise AssertionError("programmer defect")
+
+        monkeypatch.setattr(vector_engine, "ThreadPoolExecutor", ExplodingExecutor)
+        monkeypatch.setattr(
+            vector_engine,
+            "resolve_task_parallelism_plan",
+            lambda *_args, **_kwargs: SimpleNamespace(workers=4),
+        )
+
+        with pytest.raises(AssertionError, match="programmer defect"):
+            vector_engine._try_parallel_clip_occlusion(
+                shape_data,
+                list(range(len(shape_data))),
+                geoms,
+                vector_engine.STRtree(geoms),
+            )
+
     def test_dense_clip_occlusion_builds_silhouette_while_clipping(self, monkeypatch):
         shape_data = [
             {

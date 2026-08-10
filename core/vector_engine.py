@@ -716,7 +716,7 @@ def _try_parallel_clip_occlusion(
                     if orders[candidate_index] > shape_index:
                         candidate_indices[shape_index].append(candidate_index)
             possible_results = list(executor.map(clip_one, range(len(shape_data))))
-    except Exception as exc:
+    except VECTOR_HANDLED_ERRORS as exc:
         _log.warning(
             "Parallel vector occlusion unavailable; using serial clipping",
             extra={
