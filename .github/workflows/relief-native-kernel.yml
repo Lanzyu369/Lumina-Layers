@@ -26,3 +26,38 @@ jobs:
 
       - name: Exercise native and forced-fallback relief kernels
         run: python -m pytest tests/test_vector_engine_mesh_weld_unit.py -q
+
+  ubuntu-docker-native-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build the production Docker image
+        run: docker build --tag lumina-native-contract:${{ github.sha }} .
+
+      - name: Prove the compiled Linux extension is loaded
+        run: >-
+          docker run --rm lumina-native-contract:${{ github.sha }}
+          python -c "import clipper2_batch; print(clipper2_batch.__file__)"
+
+      - name: Exercise the validated native-buffer contract
+        run: >-
+          docker run --rm
+          --env LUMINA_VECTOR_NATIVE_MESH_VALIDATE_SURFACE=1
+          lumina-native-contract:${{ github.sha }}
+          python -m pytest
+          tests/test_geos_buffer_fast_unit.py
+          tests/test_vector_engine_fixes_unit.py
+          tests/test_vector_native_mesh_unit.py -q
+
+      - name: Exercise the unvalidated coalesced-buffer contract
+        run: >-
+          docker run --rm
+          --env LUMINA_VECTOR_NATIVE_MESH_VALIDATE_SURFACE=0
+          lumina-native-contract:${{ github.sha }}
+          python -m pytest
+          tests/test_geos_buffer_fast_unit.py
+          tests/test_vector_engine_fixes_unit.py
+          tests/test_vector_native_mesh_unit.py -q

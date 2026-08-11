@@ -160,6 +160,20 @@ def _native_result_mesh_signature(result: NativeVectorMeshResult) -> tuple:
     )
 
 
+def _assert_public_mesh_contract(result: NativeVectorMeshResult) -> None:
+    """Final slot meshes must never expose internal native buffer tuples."""
+
+    assert result.meshes_by_slot
+    for slot_data in result.meshes_by_slot.values():
+        assert "_native_buffers" not in slot_data
+        assert slot_data["meshes"]
+        for mesh in slot_data["meshes"]:
+            assert isinstance(mesh, trimesh.Trimesh)
+            assert len(mesh.vertices) > 0
+            assert len(mesh.faces) > 0
+            assert np.all(np.isfinite(mesh.bounds))
+
+
 def _native_plan(
     workers: int,
     *,
@@ -401,6 +415,7 @@ def test_representative_batch_bytes_uses_upper_median_without_outlier_cap() -> N
 def test_native_parallel_window_is_memory_bounded_and_commits_in_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("LUMINA_VECTOR_NATIVE_MESH_VALIDATE_SURFACE", "1")
     batch_items = _native_batch_items(5)
     cheap_costs = [
         vector_native_mesh._estimate_native_jobs_cost(jobs)
@@ -486,6 +501,10 @@ def test_native_parallel_window_is_memory_bounded_and_commits_in_order(
     )
     assert commit_indices == [0, 1, 2, 3, 4]
     assert completion_indices != commit_indices
+    _assert_public_mesh_contract(result)
+    assert result.stats["native_meshes"] == 5
+    assert result.stats["native_coalesced_meshes"] == 5
+    assert result.stats["native_output_meshes"] == 1
 
 
 def test_oversized_middle_batch_drains_then_safe_batches_resume_parallel(
@@ -974,7 +993,11 @@ def test_native_hybrid_falls_back_when_native_module_lacks_area_guard() -> None:
     assert len(result.meshes_by_slot["White"]["meshes"][0].vertices) > 0
 
 
-def test_native_hybrid_uses_valid_native_mesh() -> None:
+def test_native_hybrid_uses_valid_native_mesh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LUMINA_VECTOR_NATIVE_MESH_VALIDATE_SURFACE", "1")
+
     def fake_merge_run_groups_to_meshes(
         groups,
         *,
@@ -1032,9 +1055,11 @@ def test_native_hybrid_uses_valid_native_mesh() -> None:
 
     assert result.stats["native_meshes"] == 1
     assert result.stats["fallback_groups"] == 0
+    _assert_public_mesh_contract(result)
     mesh = result.meshes_by_slot["White"]["meshes"][0]
     assert len(mesh.vertices) == 8
     assert len(mesh.faces) == 12
+    np.testing.assert_allclose(mesh.bounds, [[0.0, 0.0, 0.0], [4.0, 4.0, 0.08]])
 
 
 def test_native_hybrid_reuses_geometry_paths_across_run_groups(
@@ -1253,7 +1278,7 @@ def test_native_split_retry_requires_large_non_expanding_reference_groups() -> N
 
 
 def test_native_hybrid_retries_empty_group_as_reference_polygons(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("LUMINA_VECTOR_NATIVE_MESH_VALIDATE_SURFACE", raising=False)
+    monkeypatch.setenv("LUMINA_VECTOR_NATIVE_MESH_VALIDATE_SURFACE", "1")
     monkeypatch.setattr(vector_native_mesh, "NATIVE_SPLIT_RETRY_MIN_ORIGINAL_PATHS", 1)
     monkeypatch.setattr(vector_native_mesh, "NATIVE_SPLIT_RETRY_MIN_POLYGONS", 2)
     native_box = _box_mesh()
@@ -1292,6 +1317,7 @@ def test_native_hybrid_retries_empty_group_as_reference_polygons(monkeypatch: py
     assert result.stats["native_coalesced_meshes"] == 2
     assert result.stats["native_output_meshes"] == 1
     assert len(result.meshes_by_slot["White"]["meshes"]) == 1
+    _assert_public_mesh_contract(result)
 
 
 def test_native_split_retry_prefers_native_merged_polygons(
@@ -1464,6 +1490,9 @@ def test_native_split_retry_uses_precomputed_native_mesh_record(
     assert result.stats["native_surface_checked"] == 2
     assert result.stats["native_split_meshes"] == 2
     assert result.stats["fallback_groups"] == 0
+    assert result.stats["native_coalesced_meshes"] == 2
+    assert result.stats["native_output_meshes"] == 1
+    _assert_public_mesh_contract(result)
 
 
 def test_unvalidated_native_retry_records_are_not_reused(
@@ -1584,7 +1613,11 @@ def test_native_hybrid_falls_back_when_native_returns_too_few_meshes() -> None:
     assert len(result.meshes_by_slot["Red"]["meshes"][0].vertices) > 0
 
 
-def test_native_hybrid_accepts_numpy_native_buffers() -> None:
+def test_native_hybrid_accepts_numpy_native_buffers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LUMINA_VECTOR_NATIVE_MESH_VALIDATE_SURFACE", "1")
+
     native_mesh = _box_mesh()
     fake_module = _guarded_module(
         merge_run_groups_to_meshes=lambda *args, **kwargs: [
@@ -1603,6 +1636,7 @@ def test_native_hybrid_accepts_numpy_native_buffers() -> None:
 
     assert result.stats["native_meshes"] == 1
     assert result.stats["fallback_groups"] == 0
+    _assert_public_mesh_contract(result)
     assert len(result.meshes_by_slot["White"]["meshes"][0].vertices) == 8
 
 
@@ -1802,8 +1836,11 @@ def test_native_hybrid_coalesces_native_meshes_per_slot(monkeypatch: pytest.Monk
     assert result.stats["native_meshes"] == 3
     assert result.stats["native_coalesced_meshes"] == 3
     assert result.stats["native_output_meshes"] == 2
+    assert list(result.meshes_by_slot) == ["White", "Red"]
+    assert [slot["mat_id"] for slot in result.meshes_by_slot.values()] == [0, 1]
     assert len(result.meshes_by_slot["White"]["meshes"]) == 1
     assert len(result.meshes_by_slot["Red"]["meshes"]) == 1
+    _assert_public_mesh_contract(result)
 
 
 def test_native_hybrid_surface_validation_rejects_area_drift(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1830,6 +1867,7 @@ def test_native_hybrid_surface_validation_rejects_area_drift(monkeypatch: pytest
     assert result.stats["native_surface_rejects"] == 1
     assert result.stats["fallback_groups"] == 1
     assert result.stats["native_meshes"] == 0
+    _assert_public_mesh_contract(result)
     mesh = result.meshes_by_slot["White"]["meshes"][0]
     assert mesh.bounds[1][2] == pytest.approx(0.08)
 

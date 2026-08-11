@@ -135,7 +135,6 @@ class _NativeGroupOutcome:
     status: str
     rejection_counter: str
     mesh_arrays: tuple[np.ndarray, np.ndarray] | None
-    mesh: trimesh.Trimesh | tuple[np.ndarray, np.ndarray] | None
     retry_groups: list | None = None
     retry_record: Any | None = None
 
@@ -424,7 +423,6 @@ def _compute_native_batch(
                         status="missing_native_mesh",
                         rejection_counter="native_invalid_meshes",
                         mesh_arrays=None,
-                        mesh=None,
                     )
                 )
                 continue
@@ -445,7 +443,6 @@ def _compute_native_batch(
                             status="surface_reject",
                             rejection_counter="",
                             mesh_arrays=None,
-                            mesh=None,
                         )
                     )
                     continue
@@ -467,14 +464,12 @@ def _compute_native_batch(
                             native_mesh
                         ),
                         mesh_arrays=None,
-                        mesh=None,
                         retry_groups=retry_groups,
                         retry_record=retry_record,
                     )
                 )
                 continue
 
-            mesh = None
             if validate_surface:
                 if len(primary_statuses) > 0:
                     surface_ok = True
@@ -498,18 +493,15 @@ def _compute_native_batch(
                             status="surface_reject",
                             rejection_counter="",
                             mesh_arrays=mesh_arrays,
-                            mesh=mesh,
                         )
                     )
                     continue
-                mesh = mesh_arrays
 
             outcomes.append(
                 _NativeGroupOutcome(
                     status="accepted",
                     rejection_counter="",
                     mesh_arrays=mesh_arrays,
-                    mesh=mesh,
                 )
             )
 
@@ -1079,18 +1071,12 @@ def _commit_computed_native_batch(
         if outcome.status != "accepted" or mesh_arrays is None:
             raise RuntimeError("invalid computed native mesh outcome")
         stats["native_meshes"] = int(stats["native_meshes"]) + 1
-        if outcome.mesh is not None:
-            meshes_by_slot[slot_name]["meshes"].append(outcome.mesh)
-            stats["native_output_meshes"] = int(
-                stats["native_output_meshes"]
-            ) + 1
-        else:
-            _append_native_buffer(
-                meshes_by_slot,
-                slot_name,
-                ch,
-                mesh_arrays,
-            )
+        _append_native_buffer(
+            meshes_by_slot,
+            slot_name,
+            ch,
+            mesh_arrays,
+        )
 
 
 def _try_run_native_batches_parallel(
@@ -1478,7 +1464,6 @@ def _run_native_job_batch(
                 input_path_count=path_counts_by_key.get(key),
             )
             continue
-        mesh = None
         if _surface_validation_enabled():
             if len(primary_statuses) > 0:
                 surface_ok = True
@@ -1514,13 +1499,8 @@ def _run_native_job_batch(
                     reason="surface_reject",
                 )
                 continue
-            mesh = mesh_arrays
         stats["native_meshes"] = int(stats["native_meshes"]) + 1
-        if mesh is not None:
-            meshes_by_slot[slot_name]["meshes"].append(mesh)
-            stats["native_output_meshes"] = int(stats["native_output_meshes"]) + 1
-        else:
-            _append_native_buffer(meshes_by_slot, slot_name, ch, mesh_arrays)
+        _append_native_buffer(meshes_by_slot, slot_name, ch, mesh_arrays)
     stats["mesh_convert_seconds"] = float(stats["mesh_convert_seconds"]) + (time.perf_counter() - t0)
 
 
@@ -1627,7 +1607,6 @@ def _retry_native_group_as_reference_polygons(
         native_mesh = native_mesh_list[index] if index < len(native_mesh_list) else None
         mesh_arrays = _native_mesh_arrays(native_mesh)
         if mesh_arrays is not None:
-            mesh = None
             surface_ok = True
             if _surface_validation_enabled():
                 poly = _retry_polygon_for_group(retry_polygons, retry_group, index)
@@ -1640,16 +1619,15 @@ def _retry_native_group_as_reference_polygons(
                     scale_factor=scale_factor,
                     stats=stats,
                 )
-                if surface_ok:
-                    mesh = mesh_arrays
             if surface_ok:
                 stats["native_meshes"] = int(stats["native_meshes"]) + 1
                 stats["native_split_meshes"] = int(stats["native_split_meshes"]) + 1
-                if mesh is not None:
-                    meshes_by_slot[slot_name]["meshes"].append(mesh)
-                    stats["native_output_meshes"] = int(stats["native_output_meshes"]) + 1
-                else:
-                    _append_native_buffer(meshes_by_slot, slot_name, ch, mesh_arrays)
+                _append_native_buffer(
+                    meshes_by_slot,
+                    slot_name,
+                    ch,
+                    mesh_arrays,
+                )
                 any_output = True
                 continue
             _fallback_key(
@@ -1808,18 +1786,12 @@ def _commit_precomputed_native_split_retry(
     _ensure_slot(meshes_by_slot, slot_name, ch)
     for index, mesh_arrays in enumerate(mesh_arrays_by_index):
         if mesh_arrays is not None:
-            if validate_surface:
-                meshes_by_slot[slot_name]["meshes"].append(mesh_arrays)
-                stats["native_output_meshes"] = int(
-                    stats["native_output_meshes"]
-                ) + 1
-            else:
-                _append_native_buffer(
-                    meshes_by_slot,
-                    slot_name,
-                    ch,
-                    mesh_arrays,
-                )
+            _append_native_buffer(
+                meshes_by_slot,
+                slot_name,
+                ch,
+                mesh_arrays,
+            )
             continue
 
         status = int(native_statuses[index])
