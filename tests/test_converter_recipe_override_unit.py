@@ -824,12 +824,15 @@ def test_apply_recipe_override_handoff_to_generate_uses_session_persisted_region
     out_3mf.write_bytes(b"3mf")
     out_glb = tmp_path / "generated.glb"
     out_glb.write_bytes(b"glb")
-    mock_pool.submit = AsyncMock(
-        return_value={
-            "threemf_path": str(out_3mf),
-            "glb_path": str(out_glb),
-            "status_msg": "OK",
-        }
+    mock_pool.submit_timed = AsyncMock(
+        return_value=(
+            {
+                "threemf_path": str(out_3mf),
+                "glb_path": str(out_glb),
+                "status_msg": "OK",
+            },
+            {},
+        )
     )
 
     generate_response = client.post(
@@ -844,7 +847,7 @@ def test_apply_recipe_override_handoff_to_generate_uses_session_persisted_region
     )
 
     assert generate_response.status_code == 200
-    submitted_params = mock_pool.submit.call_args.args[3]
+    submitted_params = mock_pool.submit_timed.call_args.args[3]
     assert submitted_params["recipe_overrides"] == [
         {
             "region_id": "region-1",
@@ -2349,6 +2352,53 @@ def test_apply_recipe_override_endpoint_supports_material_archive_session(
             "layer_height_mm": 0.08,
         }
     ]
+
+
+def test_apply_recipe_override_rejects_out_of_range_native_material_id(
+    monkeypatch,
+) -> None:
+    """A native recipe cannot reference a material outside its active palette.
+    原生配方不得引用活动调色板之外的材料 ID。
+    """
+
+    client, store, _registry = _client_with_state()
+    session_id, _mask = _seed_material_archive_session(
+        store,
+        preview_colors={
+            0: [255, 0, 0, 255],
+            1: [0, 255, 0, 255],
+            2: [0, 0, 255, 255],
+        },
+        slot_names=["PLA Red", "PLA Green", "PLA Blue"],
+    )
+    original_matrix = store.get(session_id)["preview_cache"][
+        "material_matrix"
+    ].copy()
+    monkeypatch.setattr(
+        "api.routers.converter.replace.schedule_glb_build",
+        lambda *_args, **_kwargs: None,
+    )
+
+    response = client.post(
+        "/api/convert/apply-recipe-override",
+        json={
+            "session_id": session_id,
+            "region_ids": ["region-1"],
+            "recipe": [3, 3, 3, 3, 3],
+            "layer_order": "Top2Bottom",
+            "color_layers": 5,
+            "layer_height_mm": 0.08,
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    assert "out of range" in response.json()["detail"]
+    session_data = store.get(session_id)
+    np.testing.assert_array_equal(
+        session_data["preview_cache"]["material_matrix"],
+        original_matrix,
+    )
+    assert not session_data.get("recipe_overrides")
 
 
 def test_dynamic_material_override_pads_backing_and_persists_actual_recipe(

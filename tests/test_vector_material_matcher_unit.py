@@ -14,6 +14,8 @@ solver cache.
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import pytest
 from shapely.geometry import box
@@ -171,6 +173,26 @@ class TestMaterialVectorMatcherSolveForFills:
         assert m.lut_rgb.shape == (2, 3)
         assert m.ref_stacks.shape == (2, 4)
         assert m.kdtree is not None
+
+    def test_info_summary_is_bounded_and_excludes_source_colors(self, caplog):
+        m = _build_matcher(layer_count=4, materials_count=3)
+        target_logger = logging.getLogger("lumina.core.vector_matchers")
+        target_logger.addHandler(caplog.handler)
+        caplog.set_level(logging.INFO, logger=target_logger.name)
+        try:
+            m.solve_for_fills([(1, 2, 3), (4, 5, 6)])
+        finally:
+            target_logger.removeHandler(caplog.handler)
+
+        records = [
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "material_vector_solve_summary"
+        ]
+        assert len(records) == 1
+        assert records[0].color_count == 2
+        assert records[0].getMessage() == "material vector solve summary: 2 colors"
+        assert "#010203" not in records[0].getMessage()
 
     def test_recipes_are_top2bottom_after_reversal(self):
         # Stub returns Bottom2Top recipes ``[i, i+1, i+2, ...]``;

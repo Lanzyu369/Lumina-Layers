@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import cProfile
+import hashlib
 import io
 import json
 import pstats
@@ -46,6 +47,60 @@ PROFILE_NEEDLES = (
     "buffer",
     "make_valid",
 )
+
+
+def _write_synthetic_compound_fixture(
+    output_path: Path,
+    *,
+    grid_size: int = 189,
+    total_cells: int = 35_587,
+    path_groups: int = 49,
+    viewbox_size: float = 160.0,
+) -> dict[str, int | float | str]:
+    """Write the deterministic fragmented-shape tail-latency fixture."""
+
+    if grid_size <= 0 or total_cells <= 0 or path_groups <= 0:
+        raise ValueError("fixture dimensions must be positive")
+    if total_cells > grid_size * grid_size:
+        raise ValueError("total_cells exceeds the synthetic grid capacity")
+    if path_groups > total_cells:
+        raise ValueError("path_groups cannot exceed total_cells")
+    if viewbox_size <= 0.0:
+        raise ValueError("viewbox_size must be positive")
+
+    cell_size = viewbox_size / grid_size
+    side = cell_size * 0.82
+    colors = ("#ff0000", "#ffff00", "#0000ff", "#ffffff")
+    chunks = [
+        '<svg xmlns="http://www.w3.org/2000/svg" '
+        f'viewBox="0 0 {viewbox_size:g} {viewbox_size:g}">'
+    ]
+    for group_index in range(path_groups):
+        commands = []
+        for flat_index in range(group_index, total_cells, path_groups):
+            row, column = divmod(flat_index, grid_size)
+            x_value = column * cell_size
+            y_value = row * cell_size
+            commands.append(
+                f"M{x_value:.8f},{y_value:.8f}"
+                f"h{side:.8f}v{side:.8f}h-{side:.8f}z"
+            )
+        chunks.append(
+            f'<path d="{"".join(commands)}" '
+            f'fill="{colors[group_index % len(colors)]}" '
+            'fill-rule="nonzero"/>'
+        )
+    chunks.append("</svg>")
+    payload = "".join(chunks).encode("utf-8")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(payload)
+    return {
+        "grid_size": grid_size,
+        "total_cells": total_cells,
+        "path_groups": path_groups,
+        "viewbox_size": viewbox_size,
+        "sha256": hashlib.sha256(payload).hexdigest(),
+    }
 
 
 def _profile_rows_from_raw_stats(
@@ -214,6 +269,15 @@ def _write_outputs(report: dict[str, Any], out_dir: Path) -> dict[str, str]:
 
 def run(args: argparse.Namespace) -> int:
     input_path = Path(args.input)
+    if args.generate_compound_tail_fixture:
+        metadata = _write_synthetic_compound_fixture(
+            input_path,
+            grid_size=args.fixture_grid_size,
+            total_cells=args.fixture_total_cells,
+            path_groups=args.fixture_path_groups,
+            viewbox_size=args.fixture_viewbox_size,
+        )
+        print(json.dumps({"generated_fixture": metadata}, sort_keys=True))
     svg_files = discover_svg_files(input_path)
     if args.max_samples > 0:
         svg_files = svg_files[: args.max_samples]
@@ -250,6 +314,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--max-samples", type=int, default=0)
     parser.add_argument("--profile-limit", type=int, default=60)
     parser.add_argument("--out-dir", type=Path, default=REPO_ROOT / ".scratch" / "vector_analyze_hotspots")
+    parser.add_argument("--generate-compound-tail-fixture", action="store_true")
+    parser.add_argument("--fixture-grid-size", type=int, default=189)
+    parser.add_argument("--fixture-total-cells", type=int, default=35_587)
+    parser.add_argument("--fixture-path-groups", type=int, default=49)
+    parser.add_argument("--fixture-viewbox-size", type=float, default=160.0)
     return parser.parse_args(argv)
 
 

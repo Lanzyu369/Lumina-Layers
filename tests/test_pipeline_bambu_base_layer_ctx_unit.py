@@ -11,7 +11,7 @@ import pytest
 import trimesh
 from PIL import Image
 
-from config import ModelingMode, PrinterConfig
+from config import ModelingMode
 from core.pipeline import coordinator, s06_voxel_building
 from utils.bambu_3mf_writer import build_layer_config_ranges_xml
 
@@ -344,6 +344,7 @@ def test_vector_branch_passes_bambu_modifier_kwargs_to_exporter(tmp_path) -> Non
             "printer_id": "bambu-h2d",
             "slicer": "BambuStudio",
             "nozzle_size": "0.4",
+            "layer_height_mm": 0.12,
             "enable_coating": True,
             "coating_height_mm": 0.08,
         }
@@ -352,8 +353,8 @@ def test_vector_branch_passes_bambu_modifier_kwargs_to_exporter(tmp_path) -> Non
 
     assert "error" not in result
     assert captured["enable_base_layer_height_modifier"] is True
-    assert captured["base_height_mm"] == 1.6
-    assert captured["color_height_mm"] == 16 * PrinterConfig.LAYER_HEIGHT
+    assert captured["base_height_mm"] == pytest.approx(1.56)
+    assert captured["color_height_mm"] == pytest.approx(1.92)
     assert captured["face_orientation"] == "up"
 
 

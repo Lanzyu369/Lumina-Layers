@@ -139,15 +139,25 @@ class LuminaImageProcessor:
         lut_data = self._load_lut_data()
         self._apply_lut_data(lut_data)
         self.last_match_info = self._build_initial_match_info()
-        if self.use_lut_constrained and self.hue_weight > 0:
-            _log.info(
-                "Hue protection ignored (use_lut_constrained=True). "
-                "hue_weight forced from %.2f to 0.0.",
-                self.hue_weight,
-            )
-            self.hue_weight = 0.0
+        self._disable_hue_protection_for_lut_matching()
         self._init_hue_matcher()
         self._log_init_summary()
+
+    def _disable_hue_protection_for_lut_matching(self) -> None:
+        """Disable incompatible hue protection and record the requested value."""
+
+        if not self.use_lut_constrained or self.hue_weight <= 0:
+            return
+        requested_hue_weight = self.hue_weight
+        self.hue_weight = 0.0
+        log.info(
+            "Hue protection ignored for LUT-constrained matching",
+            extra={
+                "event": "image_processor_hue_protection_disabled",
+                "requested_hue_weight": requested_hue_weight,
+                "reason": "lut_constrained",
+            },
+        )
 
     def _load_lut_data(self):
         return load_lut(

@@ -174,11 +174,24 @@ _MODEL_SURFACE_DEFAULT_POCKET_DEPTH_MM: float = 0.4
 _SELECT_ALL_COLOR_REGION_PREFIX = "__select_all_color__:"
 
 
-def _model_generation_failure_exception(status_msg: object) -> HTTPException:
+def _model_generation_failure_exception(
+    status_msg: object,
+    *,
+    source_is_user_upload: bool = False,
+    modeling_mode: object = None,
+    source_path: object = None,
+    surface_overlay: bool = False,
+) -> HTTPException:
     """Map known public validation failures without exposing internal errors.
     映射已知且可公开的校验错误，同时避免泄露内部错误信息。
     """
-    public_detail = _public_pipeline_validation_detail(status_msg)
+    public_detail = _public_pipeline_validation_detail(
+        status_msg,
+        source_is_user_upload=source_is_user_upload,
+        modeling_mode=modeling_mode,
+        source_path=source_path,
+        surface_overlay=surface_overlay,
+    )
     if public_detail is not None:
         return HTTPException(
             status_code=422,
@@ -2200,7 +2213,16 @@ async def convert_generate(
     status_msg: str = result.get("status_msg", "")
 
     if not threemf_path or not os.path.exists(threemf_path):
-        raise _model_generation_failure_exception(status_msg)
+        uses_surface_overlay = _should_use_model_surface_overlay(session_data)
+        raise _model_generation_failure_exception(
+            status_msg,
+            source_is_user_upload=(
+                not uses_surface_overlay and not generated_color_card_svg
+            ),
+            modeling_mode=request.modeling_mode.value,
+            source_path=image_path,
+            surface_overlay=uses_surface_overlay,
+        )
 
     # Register output files via FileRegistry
     sid = body.session_id
