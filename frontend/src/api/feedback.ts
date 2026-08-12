@@ -84,9 +84,8 @@ export interface BugReportContextPayload {
    */
   session_history?: ReadonlyArray<SessionRingEntry>;
   /**
-   * Reference to the user's original uploaded image (Req 2.x). No file bytes
-   * — the backend retrieves the image through the FileRegistry by
-   * ``session_id``.
+   * JSON-only reference to the user's original image (Req 2.x). Exact bytes
+   * may travel separately as multipart; ``session_id`` remains the fallback.
    */
   active_original_image_ref?: OriginalImageRef | null;
   /**
@@ -153,15 +152,39 @@ export interface BugReportResponse {
    * 或 ``partial_failed``。为旧客户端/测试 mock 兼容留 optional。
    */
   assembly_status?: "in_progress" | "done" | "partial_failed" | null;
+  /** Exact-source capture result; optional for older backend compatibility. */
+  original_image_status?:
+    | "attached"
+    | "session_fallback"
+    | "not_applicable"
+    | "too_large"
+    | "failed";
 }
 
 export interface BugReportRelayResponse {
   forwarded: boolean;
 }
 
+export const MAX_BUG_REPORT_ORIGINAL_IMAGE_BYTES = 100 * 1024 * 1024;
+
 export async function submitBugReport(
   payload: BugReportRequestPayload,
+  originalImage: File | null = null,
 ): Promise<BugReportResponse> {
+  if (originalImage) {
+    const form = new FormData();
+    form.append("request_payload", JSON.stringify(payload));
+    if (originalImage.size <= MAX_BUG_REPORT_ORIGINAL_IMAGE_BYTES) {
+      form.append("original_image", originalImage, originalImage.name);
+    } else {
+      form.append("original_image_omission_reason", "too_large");
+    }
+    const { data } = await apiClient.post<BugReportResponse>(
+      "/feedback/bug-report",
+      form,
+    );
+    return data;
+  }
   const { data } = await apiClient.post<BugReportResponse>(
     "/feedback/bug-report",
     payload,

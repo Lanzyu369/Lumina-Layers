@@ -15,14 +15,20 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from math import isfinite
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, AsyncIterator, Literal
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from starlette.datastructures import UploadFile
 
 from api.dependencies import get_file_registry, get_session_store
-from api.feedback_assembler import collect_sync_attachments, finalize_ticket_async
+from api.feedback_assembler import (
+    collect_direct_original_upload,
+    collect_sync_attachments,
+    finalize_ticket_async,
+)
 from api.feedback_email import is_email_configured, send_bug_report_email_async
 from api.feedback_store import dump_bug_report, to_dump_path_string
 from api.feedback_ticket import generate_ticket_id, ticket_dir_for
@@ -702,6 +708,123 @@ def _dump_bug_report_request(
     return request.model_dump(mode="json", exclude=exclude)
 
 
+async def _parse_bug_report_submission(
+    http_request: Request,
+) -> tuple[BugReportRequest, UploadFile | None, str | None]:
+    """Parse either the legacy JSON body or the multipart attachment body.
+
+    解析兼容旧客户端的 JSON 请求，或包含原图的 multipart 请求。
+
+    Args:
+        http_request: Incoming Starlette request. / 收到的 Starlette 请求。
+
+    Returns:
+        tuple: Validated payload, optional original image, and omission reason.
+            / 已校验载荷、可选原图与省略原因。
+    """
+    content_type = http_request.headers.get("content-type", "").lower()
+    is_multipart = content_type.startswith("multipart/form-data")
+    try:
+        if is_multipart:
+            form = await http_request.form(
+                max_files=1,
+                max_fields=2,
+                max_part_size=_MAX_SCREENSHOT_DATA_URL_LENGTH + 1_000_000,
+            )
+            raw_payload = form.get("request_payload")
+            upload_value = form.get("original_image")
+            omission_value = form.get("original_image_omission_reason")
+            if not isinstance(raw_payload, str):
+                raise ValueError("request_payload must be a JSON string")
+            payload_value = json.loads(raw_payload)
+            original_upload = (
+                upload_value if isinstance(upload_value, UploadFile) else None
+            )
+            if omission_value is not None and omission_value != "too_large":
+                raise ValueError(
+                    "original_image_omission_reason must be 'too_large'"
+                )
+            omission_reason = (
+                omission_value if isinstance(omission_value, str) else None
+            )
+            if original_upload is not None and omission_reason is not None:
+                raise ValueError(
+                    "original_image and original_image_omission_reason are exclusive"
+                )
+            request_model = BugReportRequest.model_validate(payload_value)
+            return request_model, original_upload, omission_reason
+
+        payload_value = await http_request.json()
+        return BugReportRequest.model_validate(payload_value), None, None
+    except ValidationError as exc:
+        errors: list[dict[str, Any]] = []
+        for error in exc.errors():
+            normalized = dict(error)
+            location = tuple(normalized.get("loc") or ())
+            if not location or location[0] != "body":
+                location = ("body", *location)
+            normalized["loc"] = location
+            errors.append(normalized)
+        raise RequestValidationError(errors, body=payload_value) from exc
+    except json.JSONDecodeError as exc:
+        location: tuple[str | int, ...] = (
+            ("body", "request_payload", exc.pos)
+            if is_multipart
+            else ("body", exc.pos)
+        )
+        raise RequestValidationError(
+            [{
+                "type": "json_invalid",
+                "loc": location,
+                "msg": "JSON decode error",
+                "input": {},
+                "ctx": {"error": exc.msg},
+            }],
+            body=exc.doc,
+        ) from exc
+    except (ValueError, TypeError) as exc:
+        raise RequestValidationError(
+            [{
+                "type": "value_error",
+                "loc": ("body",),
+                "msg": str(exc),
+                "input": None,
+                "ctx": {"error": str(exc)},
+            }]
+        ) from exc
+
+
+async def _bug_report_submission_dependency(
+    http_request: Request,
+) -> AsyncIterator[tuple[BugReportRequest, UploadFile | None, str | None]]:
+    """Parse a submission and close any multipart temp file on every exit.
+
+    解析提交，并在成功、校验失败或后续处理失败时统一关闭 multipart 临时文件。
+
+    Args:
+        http_request: Incoming Starlette request. / 收到的 Starlette 请求。
+
+    Yields:
+        tuple: Validated payload, optional source image, and omission reason.
+            / 已校验载荷、可选原图与省略原因。
+    """
+    try:
+        yield await _parse_bug_report_submission(http_request)
+    finally:
+        try:
+            await http_request.close()
+        except OSError as exc:
+            log.warning(
+                "Bug-report multipart cleanup failed.",
+                extra={
+                    "event": "feedback_attachment_collection_failed",
+                    "attachment_kind": "original_image",
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                },
+            )
+
+
 class BugReportResponse(BaseModel):
     """Bug report submission response payload.
 
@@ -714,6 +837,44 @@ class BugReportResponse(BaseModel):
     email_status: Literal["sent", "unconfigured", "failed", "pending"]
     relay_available: bool
     assembly_status: Literal["in_progress", "done", "partial_failed"] | None = None
+    original_image_status: Literal[
+        "attached",
+        "session_fallback",
+        "not_applicable",
+        "too_large",
+        "failed",
+    ] = "not_applicable"
+
+
+def _original_image_response_status(
+    attachment: Any,
+    *,
+    expected: bool,
+) -> Literal[
+    "attached",
+    "session_fallback",
+    "not_applicable",
+    "too_large",
+    "failed",
+]:
+    """Map the detailed manifest to the compact frontend response state.
+
+    将详细附件清单映射为前端使用的简洁状态。
+    """
+    if not isinstance(attachment, dict):
+        return "failed" if expected else "not_applicable"
+    status_value = attachment.get("status")
+    if status_value == "attached":
+        return (
+            "attached"
+            if attachment.get("capture_source") == "browser_upload"
+            else "session_fallback"
+        )
+    if status_value == "too_large":
+        return "too_large"
+    if status_value == "not_applicable" and not expected:
+        return "not_applicable"
+    return "failed"
 
 
 class BugReportRelayRequest(BaseModel):
@@ -996,11 +1157,49 @@ def _sanitize_bug_report_request_payload_for_export(
     "/bug-report",
     response_model=BugReportResponse,
     dependencies=[Depends(require_local_app_origin)],
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {
+                        "$ref": "#/components/schemas/BugReportRequest",
+                    },
+                },
+                "multipart/form-data": {
+                    "schema": {
+                        "type": "object",
+                        "required": ["request_payload"],
+                        "properties": {
+                            "request_payload": {
+                                "type": "string",
+                                "description": (
+                                    "JSON-encoded BugReportRequest payload."
+                                ),
+                            },
+                            "original_image": {
+                                "type": "string",
+                                "format": "binary",
+                            },
+                            "original_image_omission_reason": {
+                                "type": "string",
+                                "enum": ["too_large"],
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    },
 )
 async def submit_bug_report(
-    request: BugReportRequest,
     http_request: Request,
     background_tasks: BackgroundTasks,
+    submission: tuple[
+        BugReportRequest,
+        UploadFile | None,
+        str | None,
+    ] = Depends(_bug_report_submission_dependency),
 ) -> BugReportResponse:
     """Receive a manual user-triggered bug report.
 
@@ -1019,18 +1218,19 @@ async def submit_bug_report(
     邮件）由 :class:`fastapi.BackgroundTasks` 调度，保证 HTTP 响应 p95 ≤ 2s。
 
     Args:
-        request: Validated request payload.
-            已校验的请求载荷。
         http_request: Raw Starlette request (used for rate-limit client key).
             原始 Starlette request（用于限流取客户端 key）。
         background_tasks: FastAPI background scheduler.
             FastAPI 后台任务调度器。
+        submission: Parsed JSON or multipart submission.
+            已解析的 JSON 或 multipart 提交。
 
     Returns:
         BugReportResponse: Ticket id, email / assembly status, and dump path.
             工单号、邮件与装配状态、以及落盘路径。
     """
 
+    request, original_upload, original_omission_reason = submission
     _enforce_feedback_rate_limit(http_request)
     _raise_if_screenshot_too_large(request)
 
@@ -1137,6 +1337,8 @@ async def submit_bug_report(
                 "size_bytes": None,
                 "mime_type": None,
                 "source_session_id": None,
+                "capture_source": None,
+                "direct_upload_status": "not_provided",
             },
             "final_artifact": {
                 "status": "not_applicable",
@@ -1233,6 +1435,26 @@ async def submit_bug_report(
     file_registry = get_file_registry()
     session_store = get_session_store()
     try:
+        original_ref = request.context.active_original_image_ref
+        direct_upload_allowed = (
+            request.context.active_tab == "converter"
+            and original_ref is not None
+            and original_ref.source == "converter"
+            and bool(original_ref.filename and original_ref.filename.strip())
+        )
+        direct_original = await collect_direct_original_upload(
+            ticket_dir,
+            original_upload if direct_upload_allowed else None,
+            session_id=(
+                original_ref.session_id
+                if direct_upload_allowed and original_ref is not None
+                else None
+            ),
+            omission_reason=(
+                original_omission_reason if direct_upload_allowed else None
+            ),
+        )
+        payload["attachments"]["original_image"] = direct_original
         attachment_payload = {**payload, "context": attachment_context_dump}
         sync_result = collect_sync_attachments(
             ticket_dir=ticket_dir,
@@ -1282,6 +1504,17 @@ async def submit_bug_report(
     email_status = "pending" if email_configured else "unconfigured"
 
     relay_available = _is_feedback_relay_configured()
+    response_original_ref = request.context.active_original_image_ref
+    original_image_expected = (
+        request.context.active_tab == "converter"
+        and response_original_ref is not None
+        and response_original_ref.source == "converter"
+        and bool(response_original_ref.session_id or response_original_ref.filename)
+    )
+    original_image_status = _original_image_response_status(
+        payload.get("attachments", {}).get("original_image"),
+        expected=original_image_expected,
+    )
 
     log.info(
         "Bug report submitted.",
@@ -1300,6 +1533,7 @@ async def submit_bug_report(
             "lut_name": request.context.lut_name,
             "email_status": email_status,
             "relay_available": relay_available,
+            "original_image_status": original_image_status,
             "recent_client_log_count": len(request.context.recent_client_logs),
         },
     )
@@ -1311,6 +1545,7 @@ async def submit_bug_report(
         email_status=email_status,
         relay_available=relay_available,
         assembly_status="in_progress",
+        original_image_status=original_image_status,
     )
 
 

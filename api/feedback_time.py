@@ -73,11 +73,11 @@ def format_ticket_date(dt: datetime) -> str:
 
     将 ``dt`` 格式化为北京时间下的 ``YYYYMMDD`` 字符串。
 
-    Used to build the date component of bug-report ticket IDs such as
-    ``LUM-YYYYMMDD-NNN``. The datetime is normalized to :data:`BEIJING_TZ`
+    Used to build Beijing month/date components for bug-report storage and
+    ticket IDs. The datetime is normalized to :data:`BEIJING_TZ`
     before formatting so the date always reflects the Beijing calendar day.
 
-    用于构造 Bug 报告工单号 ``LUM-YYYYMMDD-NNN`` 的日期部分。格式化前会把
+    用于构造 Bug 报告工单的北京时间月份/日期部分。格式化前会把
     datetime 归一化到 :data:`BEIJING_TZ`，确保得到的是北京日历日期。
 
     Args:

@@ -22,6 +22,7 @@ Design (`.kiro/specs/reproducible-bug-reports/design.md` §Components §5):
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -32,6 +33,8 @@ from pathlib import PurePath, PureWindowsPath
 from typing import Any, Iterable
 from urllib.parse import urlparse
 
+from starlette.datastructures import UploadFile
+
 from api.feedback_config import (
     materials_bundle_timeout_s,
     ticket_attachment_ttl_days,
@@ -40,12 +43,15 @@ from api.feedback_fingerprint import file_sha256, guess_mime
 from api.feedback_index import generate_index_markdown, generate_summary_text
 from api.feedback_materials_bundle import pack_materials
 from api.feedback_time import now_beijing
+from api.file_bridge import SUPPORTED_UPLOAD_IMAGE_EXTENSIONS
 from api.structured_logging import get_logger
 from config import TEMP_DIR
 from utils.lut_manager import LUTManager
 
 __all__ = [
+    "MAX_DIRECT_ORIGINAL_IMAGE_BYTES",
     "SyncCollectionResult",
+    "collect_direct_original_upload",
     "collect_sync_attachments",
     "finalize_ticket_async",
     "run_startup_cleanup",
@@ -69,9 +75,15 @@ log = get_logger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-_IMAGE_EXTENSIONS = frozenset(
-    (".png", ".jpg", ".jpeg", ".webp", ".tiff", ".tif", ".bmp"),
-)
+MAX_DIRECT_ORIGINAL_IMAGE_BYTES = 100 * 1024 * 1024
+"""Maximum exact browser-source attachment size: 100 MiB.
+
+浏览器直接附带原图的最大尺寸：100 MiB。
+"""
+
+_DIRECT_UPLOAD_CHUNK_BYTES = 1024 * 1024
+
+_IMAGE_EXTENSIONS = SUPPORTED_UPLOAD_IMAGE_EXTENSIONS
 _FINAL_ARTIFACT_EXTENSIONS = frozenset((".3mf", ".zip"))
 _LUT_EXTENSIONS = (".npy", ".json", ".npz", ".msgpack")
 _PREVIEW_STOPWORDS = ("preview", "layer", "swatch", "overlay", "warp")
@@ -95,10 +107,164 @@ def _is_non_empty_string(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
 
+def _direct_original_result(
+    *,
+    status: str,
+    session_id: str | None,
+    direct_upload_status: str,
+    error_type: str | None = None,
+    error_message: str | None = None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "status": status,
+        "filename": None,
+        "sha256": None,
+        "size_bytes": None,
+        "mime_type": None,
+        "source_session_id": session_id,
+        "capture_source": None,
+        "direct_upload_status": direct_upload_status,
+    }
+    if error_type is not None:
+        result["error_type"] = error_type
+    if error_message is not None:
+        result["error_message"] = error_message
+    return result
+
+
+def _direct_upload_suffix(filename: str | None) -> str | None:
+    if not filename:
+        return None
+    suffix = (
+        PureWindowsPath(filename).suffix
+        if "\\" in filename
+        else PurePath(filename).suffix
+    ).lower()
+    return suffix if suffix in SUPPORTED_UPLOAD_IMAGE_EXTENSIONS else None
+
+
+async def collect_direct_original_upload(
+    ticket_dir: Path,
+    upload: UploadFile | None,
+    *,
+    session_id: str | None,
+    omission_reason: str | None = None,
+) -> dict[str, Any]:
+    """Persist an exact browser-provided converter source image.
+
+    保存浏览器直接提供的 Converter 原始输入文件，保持字节不变。
+
+    Args:
+        ticket_dir: Reserved ticket directory. / 已预留的工单目录。
+        upload: Optional multipart upload. / 可选 multipart 文件。
+        session_id: Related converter session when available. / 可用的会话 ID。
+        omission_reason: Client-declared omission reason, currently
+            ``"too_large"`` only. / 客户端声明的省略原因，目前仅支持超限。
+
+    Returns:
+        dict[str, Any]: Attachment manifest fragment. / 附件清单片段。
+    """
+    if omission_reason == "too_large":
+        return _direct_original_result(
+            status="too_large",
+            session_id=session_id,
+            direct_upload_status="too_large",
+            error_type="OriginalImageTooLarge",
+            error_message="Original image exceeds the 100 MiB direct-upload limit.",
+        )
+    if upload is None:
+        return _direct_original_result(
+            status="not_provided",
+            session_id=session_id,
+            direct_upload_status="not_provided",
+        )
+
+    suffix = _direct_upload_suffix(upload.filename)
+    if suffix is None:
+        return _direct_original_result(
+            status="failed",
+            session_id=session_id,
+            direct_upload_status="failed",
+            error_type="UnsupportedOriginalImageType",
+            error_message="Original image type is not supported.",
+        )
+    if upload.size is not None and upload.size > MAX_DIRECT_ORIGINAL_IMAGE_BYTES:
+        return _direct_original_result(
+            status="too_large",
+            session_id=session_id,
+            direct_upload_status="too_large",
+            error_type="OriginalImageTooLarge",
+            error_message="Original image exceeds the 100 MiB direct-upload limit.",
+        )
+
+    destination = ticket_dir / f"original{suffix}"
+    digest = hashlib.sha256()
+    total_bytes = 0
+    destination_created = False
+    try:
+        await upload.seek(0)
+        with destination.open("xb") as output:
+            destination_created = True
+            while True:
+                chunk = await upload.read(_DIRECT_UPLOAD_CHUNK_BYTES)
+                if not chunk:
+                    break
+                total_bytes += len(chunk)
+                if total_bytes > MAX_DIRECT_ORIGINAL_IMAGE_BYTES:
+                    raise ValueError("OriginalImageTooLarge")
+                written = output.write(chunk)
+                if written != len(chunk):
+                    raise OSError(
+                        "Short write while saving the direct original image."
+                    )
+                digest.update(chunk)
+    except Exception as exc:  # noqa: BLE001 - attachment boundary must not abort report.
+        if destination_created:
+            try:
+                destination.unlink(missing_ok=True)
+            except OSError:
+                pass
+        too_large = isinstance(exc, ValueError) and str(exc) == "OriginalImageTooLarge"
+        log.warning(
+            "Direct original-image upload failed.",
+            extra={
+                "event": "feedback_attachment_collection_failed",
+                "attachment_kind": "original_image",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+                "ticket_id": ticket_dir.name,
+            },
+        )
+        return _direct_original_result(
+            status="too_large" if too_large else "failed",
+            session_id=session_id,
+            direct_upload_status="too_large" if too_large else "failed",
+            error_type="OriginalImageTooLarge" if too_large else type(exc).__name__,
+            error_message=(
+                "Original image exceeds the 100 MiB direct-upload limit."
+                if too_large
+                else "Original image could not be saved."
+            ),
+        )
+
+    return {
+        "status": "attached",
+        "filename": destination.name,
+        "sha256": digest.hexdigest(),
+        "size_bytes": total_bytes,
+        "mime_type": guess_mime(destination),
+        "source_session_id": session_id,
+        "capture_source": "browser_upload",
+        "direct_upload_status": "attached",
+    }
+
+
 def _failed_original_image(
     session_id: str | None,
     error_type: str,
     error_message: str,
+    *,
+    direct_upload_status: str = "not_provided",
 ) -> dict[str, Any]:
     return {
         "status": "failed",
@@ -107,6 +273,8 @@ def _failed_original_image(
         "size_bytes": None,
         "mime_type": None,
         "source_session_id": session_id,
+        "capture_source": None,
+        "direct_upload_status": direct_upload_status,
         "error_type": error_type,
         "error_message": error_message,
     }
@@ -176,7 +344,13 @@ def _empty_lut_attachment() -> dict[str, Any]:
 
 def _original_image_expected(context: dict[str, Any]) -> bool:
     ref = context.get("active_original_image_ref")
-    return isinstance(ref, dict) and _is_non_empty_string(ref.get("session_id"))
+    return isinstance(ref, dict) and (
+        _is_non_empty_string(ref.get("session_id"))
+        or (
+            ref.get("source") == "converter"
+            and _is_non_empty_string(ref.get("filename"))
+        )
+    )
 
 
 def _final_artifact_expected(context: dict[str, Any]) -> bool:
@@ -527,6 +701,8 @@ def collect_sync_attachments(
         "size_bytes": None,
         "mime_type": None,
         "source_session_id": None,
+        "capture_source": None,
+        "direct_upload_status": "not_provided",
     }
     default_final = {
         "status": "not_applicable",
@@ -557,15 +733,64 @@ def collect_sync_attachments(
     try:
         ref = context.get("active_original_image_ref") or {}
         session_id = ref.get("session_id") if isinstance(ref, dict) else None
-        original = _collect_original_image(
-            ticket_dir, file_registry, session_id, session_store=session_store,
+        attachment_manifest = payload.get("attachments")
+        manifest_original = (
+            attachment_manifest.get("original_image")
+            if isinstance(attachment_manifest, dict)
+            else None
         )
+        direct_candidate = (
+            manifest_original
+            if isinstance(manifest_original, dict)
+            and manifest_original.get("direct_upload_status")
+            in {"attached", "too_large", "failed"}
+            else _direct_original_result(
+                status="not_provided",
+                session_id=session_id,
+                direct_upload_status="not_provided",
+            )
+        )
+        if direct_candidate.get("status") == "attached":
+            original = direct_candidate
+        else:
+            fallback = _collect_original_image(
+                ticket_dir,
+                file_registry,
+                session_id,
+                session_store=session_store,
+            )
+            if (
+                fallback.get("status") == "not_applicable"
+                and _original_image_expected(context)
+            ):
+                fallback = {**fallback, "status": "unavailable_after_cleanup"}
+            if fallback.get("status") == "attached":
+                original = {
+                    **fallback,
+                    "direct_upload_status": direct_candidate.get(
+                        "direct_upload_status", "not_provided"
+                    ),
+                }
+            elif direct_candidate.get("status") in {"too_large", "failed"}:
+                original = {
+                    **direct_candidate,
+                    "source_session_id": session_id,
+                }
+            else:
+                original = {
+                    **fallback,
+                    "direct_upload_status": direct_candidate.get(
+                        "direct_upload_status", "not_provided"
+                    ),
+                }
         log.info(
             "Attachment collected.",
             extra={
                 "event": "feedback_attachment_collected",
                 "attachment_kind": "original_image",
                 "status": original["status"],
+                "capture_source": original.get("capture_source"),
+                "direct_upload_status": original.get("direct_upload_status"),
                 "ticket_id": ticket_id,
             },
         )
@@ -686,6 +911,8 @@ def _collect_original_image(
         "size_bytes": None,
         "mime_type": None,
         "source_session_id": session_id,
+        "capture_source": None,
+        "direct_upload_status": "not_provided",
     }
     if not session_id:
         return default_missing
@@ -697,6 +924,8 @@ def _collect_original_image(
         "size_bytes": None,
         "mime_type": None,
         "source_session_id": session_id,
+        "capture_source": None,
+        "direct_upload_status": "not_provided",
     }
 
     entries = _file_registry_entries_for(file_registry, session_id)
@@ -705,7 +934,10 @@ def _collect_original_image(
         if picked is not None:
             _, entry = picked
             attached = _copy_original_image_path(
-                ticket_dir, Path(entry["path"]), session_id,
+                ticket_dir,
+                Path(entry["path"]),
+                session_id,
+                capture_source="file_registry",
             )
             if attached is not None:
                 return attached
@@ -723,6 +955,8 @@ def _copy_original_image_path(
     ticket_dir: Path,
     src_path: Path,
     session_id: str | None,
+    *,
+    capture_source: str,
 ) -> dict[str, Any] | None:
     suffix = src_path.suffix.lower() or ".png"
     if suffix not in _IMAGE_EXTENSIONS:
@@ -753,6 +987,8 @@ def _copy_original_image_path(
         "size_bytes": size,
         "mime_type": guess_mime(dst),
         "source_session_id": session_id,
+        "capture_source": capture_source,
+        "direct_upload_status": "not_provided",
     }
 
 
@@ -787,7 +1023,12 @@ def _try_session_image_path_fallback(
         src.resolve().relative_to(allowed_root)
     except ValueError:
         return None
-    return _copy_original_image_path(ticket_dir, src, session_id)
+    return _copy_original_image_path(
+        ticket_dir,
+        src,
+        session_id,
+        capture_source="session_store",
+    )
 
 
 def _collect_final_artifact(

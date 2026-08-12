@@ -3,7 +3,7 @@
 
 从 Bug 工单目录重建本地复现 session。
 
-Given a ticket id like ``LUM-20260511-001``, this CLI:
+Given a ticket id like ``LUM-202605-deadbeef``, this CLI:
 
 1. Locates ``feedback/<YYYY-MM>/<ticket_id>/`` under the repo root.
 2. Copies ``original.*``, ``final.*``, ``lut.*``, ``materials.zip``,
@@ -20,7 +20,7 @@ The script is **read-only** with respect to the repo's canonical
 Missing attachments never abort execution; the manifest records what was
 and was not available so partial tickets are still usable.
 
-给定工单号（如 ``LUM-20260511-001``），CLI 会把工单目录下的原图 / 生成
+给定工单号（如 ``LUM-202605-deadbeef``），CLI 会把工单目录下的原图 / 生成
 产物 / LUT / 耗材 zip / 截图复制到 ``repro_sessions/<ticket_id>/``，同时
 把 materials.zip 解压到该目录下，便于在本地运行的前端中使用。脚本以只读
 方式访问仓库内的 ``materials/`` 与 ``lut-preset/``，绝不在主目录写入。
@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import sys
 import zipfile
@@ -43,6 +44,11 @@ from typing import Any, Iterable
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+_NEW_TICKET_ID_PATTERN = re.compile(r"^LUM-(\d{6})-[0-9a-f]{8}$")
+_HISTORICAL_TICKET_ID_PATTERN = re.compile(
+    r"^LUM-(\d{8})-(?:\d{3}|[0-9a-f]{8})$"
+)
 
 
 @dataclass(frozen=True)
@@ -62,22 +68,35 @@ class LoadReproResult:
 
 def _find_ticket_dir(feedback_root: Path, ticket_id: str) -> Path | None:
     """Locate ``feedback/<YYYY-MM>/<ticket_id>/`` via the ticket id's date."""
-    # Ticket ids are LUM-YYYYMMDD-NNN; we can derive the month partition
-    # from the date component. Fallback: walk month dirs if the direct path
-    # is missing (handles manually moved tickets).
-    parts = ticket_id.split("-")
-    if len(parts) >= 2 and len(parts[1]) == 8:
-        yyyymmdd = parts[1]
-        month = f"{yyyymmdd[:4]}-{yyyymmdd[4:6]}"
-        direct = feedback_root / month / ticket_id
-        if direct.is_dir():
-            return direct
+    # New ids are LUM-YYYYMM-xxxxxxxx; historical ids are
+    # LUM-YYYYMMDD-NNN. Derive the month from either date component, then
+    # walk month dirs as a fallback for manually moved tickets.
+    match = _NEW_TICKET_ID_PATTERN.fullmatch(ticket_id)
+    if match is None:
+        match = _HISTORICAL_TICKET_ID_PATTERN.fullmatch(ticket_id)
+    if match is None:
+        return None
+
+    date_component = match.group(1)
+    feedback_root_resolved = feedback_root.resolve()
+    month = f"{date_component[:4]}-{date_component[4:6]}"
+    direct = feedback_root / month / ticket_id
+    try:
+        direct.resolve().relative_to(feedback_root_resolved)
+    except ValueError:
+        return None
+    if direct.is_dir():
+        return direct
     if not feedback_root.is_dir():
         return None
     for month_dir in feedback_root.iterdir():
         if not month_dir.is_dir():
             continue
         candidate = month_dir / ticket_id
+        try:
+            candidate.resolve().relative_to(feedback_root_resolved)
+        except ValueError:
+            continue
         if candidate.is_dir():
             return candidate
     return None
@@ -275,7 +294,7 @@ def load_bug_repro(
     为 ``ticket_id`` 重建复现 session 目录。
 
     Args:
-        ticket_id: Ticket id, e.g. ``LUM-20260511-001``.
+        ticket_id: Ticket id, e.g. ``LUM-202605-deadbeef``.
         feedback_root: Optional custom feedback root directory.
             (可选的工单根目录，覆盖默认 ``<repo>/feedback``。)
         repro_root: Optional custom reproduction-session parent directory.
@@ -296,7 +315,14 @@ def load_bug_repro(
             f"ticket {ticket_id} not found under {feedback_root}",
         )
 
+    repro_root_resolved = repro_root.resolve()
     repro_dir = repro_root / ticket_id
+    try:
+        repro_dir.resolve().relative_to(repro_root_resolved)
+    except ValueError as exc:
+        raise FileNotFoundError(
+            f"ticket {ticket_id} has an invalid reproduction path",
+        ) from exc
     repro_dir.mkdir(parents=True, exist_ok=True)
 
     copied, missing = _copy_attachments(source_dir, repro_dir)
@@ -327,7 +353,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Rebuild a reproducible session from a bug-report ticket.",
     )
-    parser.add_argument("ticket_id", help="Ticket id, e.g. LUM-20260511-001")
+    parser.add_argument("ticket_id", help="Ticket id, e.g. LUM-202605-deadbeef")
     parser.add_argument(
         "--feedback-root",
         type=Path,
