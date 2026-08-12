@@ -89,18 +89,17 @@ def _flip_geometry_to_world(geometry, height_px):
 
 
 def _merge_mesh_list(meshes):
-    """Concatenate meshes while retaining independent closed shells.
-    合并 mesh，同时保留各自独立的闭合壳体。
+    """Concatenate and lightly clean a list of meshes.
+    合并并轻度清理 mesh 列表。
     """
     clean_meshes = [mesh for mesh in meshes if mesh is not None and len(mesh.faces) > 0]
     if not clean_meshes:
         return None
 
-    # Adjacent prisms intentionally keep separate vertex indices. Welding
-    # their coincident coordinates without removing both internal walls first
-    # creates edges referenced by more than two triangles (non-manifold in
-    # Bambu Studio and OrcaSlicer).
-    return trimesh.util.concatenate(clean_meshes) if len(clean_meshes) > 1 else clean_meshes[0]
+    combined = trimesh.util.concatenate(clean_meshes) if len(clean_meshes) > 1 else clean_meshes[0]
+    combined.merge_vertices()
+    combined.update_faces(combined.unique_faces())
+    return combined
 
 
 def _extrude_polygon_geometry(geometry, height, z_offset, extrude_cache=None):
@@ -409,10 +408,23 @@ class BaseMesher(ABC):
             raw_faces[f_start : f_start + n * 12] = faces.reshape(-1, 3)
             rect_idx += n
 
-        # Each rectangle is already a closed prism. Keep its indices separate
-        # from adjacent rectangles: coordinate-level deduplication would weld
-        # their internal walls into multi-face edges.
-        return trimesh.Trimesh(vertices=raw_verts, faces=raw_faces, process=False)
+        # Fast vertex dedup via integer coordinate unique (collision-free)
+        int_verts = np.stack(
+            [
+                np.round(raw_verts[:, 0]).astype(np.int64),
+                np.round(raw_verts[:, 1]).astype(np.int64),
+                np.round(raw_verts[:, 2]).astype(np.int64),
+            ],
+            axis=1,
+        )
+        _, first_idx, inverse = np.unique(int_verts, axis=0, return_index=True, return_inverse=True)
+
+        unique_verts = raw_verts[first_idx]
+        deduped_faces = inverse[raw_faces]
+
+        mesh = trimesh.Trimesh(vertices=unique_verts, faces=deduped_faces, process=False)
+        mesh.update_faces(mesh.unique_faces())
+        return mesh
 
     def _build_mesh_from_layer_polygons(self, layer_polygons, height_px):
         """Build trimesh from list of (z_bottom, z_top, geometry) tuples.
