@@ -58,6 +58,17 @@ struct MeshOutput {
   std::vector<Face3> faces;
 };
 
+constexpr uint8_t kRetryMeshAccepted = 0;
+constexpr uint8_t kRetryMeshSurfaceReject = 1;
+constexpr uint8_t kRetryMeshEmpty = 2;
+
+struct RejectedMeshRetryOutput {
+  std::vector<MeshOutput> meshes;
+  std::vector<uint8_t> statuses;
+  std::vector<GroupOutput> fallback_groups;
+  size_t path_count = 0;
+};
+
 struct PointKey {
   int64_t x;
   int64_t y;
@@ -509,6 +520,156 @@ MeshOutput ExtrudePolygonsToMesh(
   return mesh;
 }
 
+double MeshSurfaceArea(const MeshOutput& mesh) {
+  double total = 0.0;
+  for (const Face3& face : mesh.faces) {
+    const Vertex3& a = mesh.vertices[static_cast<size_t>(face.a)];
+    const Vertex3& b = mesh.vertices[static_cast<size_t>(face.b)];
+    const Vertex3& c = mesh.vertices[static_cast<size_t>(face.c)];
+    const double ab_x = b.x - a.x;
+    const double ab_y = b.y - a.y;
+    const double ab_z = b.z - a.z;
+    const double ac_x = c.x - a.x;
+    const double ac_y = c.y - a.y;
+    const double ac_z = c.z - a.z;
+    const double cross_x = ab_y * ac_z - ab_z * ac_y;
+    const double cross_y = ab_z * ac_x - ab_x * ac_z;
+    const double cross_z = ab_x * ac_y - ab_y * ac_x;
+    total += std::sqrt(
+                 cross_x * cross_x + cross_y * cross_y + cross_z * cross_z) /
+             2.0;
+  }
+  return total;
+}
+
+double RetryExpectedSurfaceArea(
+    const PolyWithHoles& polygon,
+    int64_t scale,
+    double height,
+    double xy_scale) {
+  if (polygon.rings.empty()) {
+    return 0.0;
+  }
+  long double area_units = std::fabs(SignedArea(polygon.rings.front()));
+  long double perimeter_units = 0.0L;
+  for (size_t ring_index = 0; ring_index < polygon.rings.size(); ++ring_index) {
+    const Path64& ring = polygon.rings[ring_index];
+    if (ring_index > 0) {
+      area_units -= std::fabs(SignedArea(ring));
+    }
+    for (size_t point_index = 0; point_index < ring.size(); ++point_index) {
+      const Point64& p0 = ring[point_index];
+      const Point64& p1 = ring[(point_index + 1U) % ring.size()];
+      const long double dx = static_cast<long double>(p1.x) - p0.x;
+      const long double dy = static_cast<long double>(p1.y) - p0.y;
+      perimeter_units += std::sqrt(dx * dx + dy * dy);
+    }
+  }
+  const long double unit_scale =
+      static_cast<long double>(xy_scale) / static_cast<long double>(scale);
+  const long double area_mm2 = std::max(0.0L, area_units) * unit_scale * unit_scale;
+  const long double perimeter_mm = perimeter_units * unit_scale;
+  return static_cast<double>(
+      2.0L * area_mm2 + perimeter_mm * static_cast<long double>(height));
+}
+
+bool RetrySurfaceAreaMatches(
+    const MeshOutput& mesh,
+    const PolyWithHoles& polygon,
+    int64_t scale,
+    double height,
+    double xy_scale,
+    double relative_tolerance,
+    double absolute_tolerance) {
+  const double expected = RetryExpectedSurfaceArea(
+      polygon, scale, height, xy_scale);
+  if (expected <= absolute_tolerance) {
+    return true;
+  }
+  const double delta = std::fabs(MeshSurfaceArea(mesh) - expected);
+  if (delta <= absolute_tolerance) {
+    return true;
+  }
+  return delta / expected <= relative_tolerance;
+}
+
+double GroupExpectedSurfaceArea(
+    const GroupOutput& polygons,
+    int64_t scale,
+    double height,
+    double xy_scale) {
+  double total = 0.0;
+  for (const PolyWithHoles& polygon : polygons) {
+    total += RetryExpectedSurfaceArea(polygon, scale, height, xy_scale);
+  }
+  return total;
+}
+
+bool GroupSurfaceAreaMatches(
+    const MeshOutput& mesh,
+    const GroupOutput& polygons,
+    int64_t scale,
+    double height,
+    double xy_scale,
+    double relative_tolerance,
+    double absolute_tolerance) {
+  const double expected = GroupExpectedSurfaceArea(
+      polygons, scale, height, xy_scale);
+  if (expected <= absolute_tolerance) {
+    return true;
+  }
+  const double delta = std::fabs(MeshSurfaceArea(mesh) - expected);
+  if (delta <= absolute_tolerance) {
+    return true;
+  }
+  return delta / expected <= relative_tolerance;
+}
+
+RejectedMeshRetryOutput RetryRejectedPolygonsToMeshes(
+    const GroupOutput& polygons,
+    int64_t scale,
+    double height,
+    double z_offset,
+    double xy_scale,
+    bool validate_surfaces,
+    double relative_tolerance,
+    double absolute_tolerance) {
+  RejectedMeshRetryOutput output;
+  output.meshes.reserve(polygons.size());
+  output.statuses.reserve(polygons.size());
+  output.fallback_groups.resize(polygons.size());
+  for (size_t index = 0; index < polygons.size(); ++index) {
+    const PolyWithHoles& polygon = polygons[index];
+    GroupInput retry_input = polygon.rings;
+    output.path_count += retry_input.size();
+    GroupOutput retry_polygons = ProcessGroup(retry_input, 0);
+    MeshOutput retry_mesh = ExtrudePolygonsToMesh(
+        retry_polygons, scale, height, z_offset, xy_scale);
+    uint8_t status = kRetryMeshAccepted;
+    if (retry_mesh.vertices.empty() || retry_mesh.faces.empty()) {
+      status = kRetryMeshEmpty;
+    } else if (validate_surfaces) {
+      if (!RetrySurfaceAreaMatches(
+              retry_mesh,
+              polygon,
+              scale,
+              height,
+              xy_scale,
+              relative_tolerance,
+              absolute_tolerance)) {
+        retry_mesh = MeshOutput{};
+        status = kRetryMeshSurfaceReject;
+      }
+    }
+    if (status != kRetryMeshAccepted) {
+      output.fallback_groups[index].push_back(polygon);
+    }
+    output.meshes.push_back(std::move(retry_mesh));
+    output.statuses.push_back(status);
+  }
+  return output;
+}
+
 PyObject* BuildPoint(const Point64& point, int64_t scale) {
   return Py_BuildValue("(dd)", static_cast<double>(point.x) / scale,
                        static_cast<double>(point.y) / scale);
@@ -599,6 +760,112 @@ PyObject* BuildMesh(const MeshOutput& mesh) {
   return tuple;
 }
 
+PyObject* BuildRejectedMeshRetryRecords(
+    const std::vector<RejectedMeshRetryOutput>& retry_outputs,
+    int64_t scale) {
+  PyObject* records = PyList_New(
+      static_cast<Py_ssize_t>(retry_outputs.size()));
+  if (!records) {
+    return nullptr;
+  }
+  for (Py_ssize_t index = 0;
+       index < static_cast<Py_ssize_t>(retry_outputs.size()); ++index) {
+    const RejectedMeshRetryOutput& retry =
+        retry_outputs[static_cast<size_t>(index)];
+    if (retry.meshes.empty()) {
+      Py_INCREF(Py_None);
+      PyList_SET_ITEM(records, index, Py_None);
+      continue;
+    }
+
+    PyObject* meshes = PyList_New(
+        static_cast<Py_ssize_t>(retry.meshes.size()));
+    if (!meshes) {
+      Py_DECREF(records);
+      return nullptr;
+    }
+    for (Py_ssize_t mesh_index = 0;
+         mesh_index < static_cast<Py_ssize_t>(retry.meshes.size());
+         ++mesh_index) {
+      PyObject* mesh = BuildMesh(
+          retry.meshes[static_cast<size_t>(mesh_index)]);
+      if (!mesh) {
+        Py_DECREF(meshes);
+        Py_DECREF(records);
+        return nullptr;
+      }
+      PyList_SET_ITEM(meshes, mesh_index, mesh);
+    }
+
+    npy_intp status_dims[1] = {
+        static_cast<npy_intp>(retry.statuses.size())};
+    PyObject* statuses = PyArray_SimpleNew(1, status_dims, NPY_UINT8);
+    if (!statuses) {
+      Py_DECREF(meshes);
+      Py_DECREF(records);
+      return nullptr;
+    }
+    auto* status_data = static_cast<uint8_t*>(
+        PyArray_DATA(reinterpret_cast<PyArrayObject*>(statuses)));
+    std::copy(retry.statuses.begin(), retry.statuses.end(), status_data);
+
+    PyObject* fallbacks = PyDict_New();
+    if (!fallbacks) {
+      Py_DECREF(statuses);
+      Py_DECREF(meshes);
+      Py_DECREF(records);
+      return nullptr;
+    }
+    for (size_t fallback_index = 0;
+         fallback_index < retry.fallback_groups.size(); ++fallback_index) {
+      const GroupOutput& fallback = retry.fallback_groups[fallback_index];
+      if (fallback.empty()) {
+        continue;
+      }
+      PyObject* key = PyLong_FromSize_t(fallback_index);
+      PyObject* group = BuildGroup(fallback, scale);
+      if (!key || !group) {
+        Py_XDECREF(group);
+        Py_XDECREF(key);
+        Py_DECREF(fallbacks);
+        Py_DECREF(statuses);
+        Py_DECREF(meshes);
+        Py_DECREF(records);
+        return nullptr;
+      }
+      if (PyDict_SetItem(fallbacks, key, group) < 0) {
+        Py_DECREF(group);
+        Py_DECREF(key);
+        Py_DECREF(fallbacks);
+        Py_DECREF(statuses);
+        Py_DECREF(meshes);
+        Py_DECREF(records);
+        return nullptr;
+      }
+      Py_DECREF(group);
+      Py_DECREF(key);
+    }
+
+    PyObject* path_count = PyLong_FromSize_t(retry.path_count);
+    PyObject* record = PyTuple_New(4);
+    if (!path_count || !record) {
+      Py_XDECREF(record);
+      Py_XDECREF(path_count);
+      Py_DECREF(fallbacks);
+      Py_DECREF(statuses);
+      Py_DECREF(meshes);
+      Py_DECREF(records);
+      return nullptr;
+    }
+    PyTuple_SET_ITEM(record, 0, meshes);
+    PyTuple_SET_ITEM(record, 1, statuses);
+    PyTuple_SET_ITEM(record, 2, fallbacks);
+    PyTuple_SET_ITEM(record, 3, path_count);
+    PyList_SET_ITEM(records, index, record);
+  }
+  return records;
+}
+
 PyObject* NativeMeshCapabilities(PyObject*, PyObject*) {
   PyObject* result = PyDict_New();
   if (!result) {
@@ -611,6 +878,28 @@ PyObject* NativeMeshCapabilities(PyObject*, PyObject*) {
   }
   PyDict_SetItemString(result, "triangulation_area_guard", area_guard);
   Py_DECREF(area_guard);
+  PyObject* rejected_group_reuse = PyBool_FromLong(1);
+  if (!rejected_group_reuse) {
+    Py_DECREF(result);
+    return nullptr;
+  }
+  PyDict_SetItemString(result, "rejected_group_reuse", rejected_group_reuse);
+  Py_DECREF(rejected_group_reuse);
+  PyObject* rejected_mesh_retry = PyBool_FromLong(1);
+  if (!rejected_mesh_retry) {
+    Py_DECREF(result);
+    return nullptr;
+  }
+  PyDict_SetItemString(result, "rejected_mesh_retry", rejected_mesh_retry);
+  Py_DECREF(rejected_mesh_retry);
+  PyObject* native_surface_validation = PyBool_FromLong(1);
+  if (!native_surface_validation) {
+    Py_DECREF(result);
+    return nullptr;
+  }
+  PyDict_SetItemString(
+      result, "native_surface_validation", native_surface_validation);
+  Py_DECREF(native_surface_validation);
   return result;
 }
 
@@ -672,12 +961,33 @@ PyObject* MergeRunGroupsToMeshes(PyObject*, PyObject* args, PyObject* kwargs) {
   double height = 1.0;
   double z_offset = 0.0;
   double xy_scale = 1.0;
+  int return_rejected_groups = 0;
+  int return_rejected_meshes = 0;
+  int validate_retry_surfaces = 0;
+  int validate_primary_surfaces = 0;
+  double surface_rel_tol = 0.001;
+  double surface_abs_tol = 0.01;
   static const char* kwlist[] = {
-      "groups", "close_delta_mm", "scale", "height", "z_offset", "xy_scale", nullptr};
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|dLddd",
+      "groups", "close_delta_mm", "scale", "height", "z_offset", "xy_scale",
+      "return_rejected_groups", "return_rejected_meshes",
+      "validate_retry_surfaces", "validate_primary_surfaces",
+      "surface_rel_tol", "surface_abs_tol", nullptr};
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O|dLdddppppdd",
                                    const_cast<char**>(kwlist),
                                    &groups_obj, &close_delta_mm, &scale_arg,
-                                   &height, &z_offset, &xy_scale)) {
+                                   &height, &z_offset, &xy_scale,
+                                   &return_rejected_groups,
+                                   &return_rejected_meshes,
+                                   &validate_retry_surfaces,
+                                   &validate_primary_surfaces,
+                                   &surface_rel_tol,
+                                   &surface_abs_tol)) {
+    return nullptr;
+  }
+  if (return_rejected_groups && return_rejected_meshes) {
+    PyErr_SetString(
+        PyExc_ValueError,
+        "return_rejected_groups and return_rejected_meshes are mutually exclusive");
     return nullptr;
   }
   if (scale_arg <= 0) {
@@ -708,25 +1018,128 @@ PyObject* MergeRunGroupsToMeshes(PyObject*, PyObject* args, PyObject* kwargs) {
   }
 
   std::vector<MeshOutput> outputs(groups.size());
+  std::vector<GroupOutput> rejected_groups;
+  if (return_rejected_groups) {
+    rejected_groups.resize(groups.size());
+  }
+  std::vector<RejectedMeshRetryOutput> rejected_mesh_retries;
+  std::vector<uint8_t> primary_statuses;
+  if (return_rejected_meshes) {
+    rejected_mesh_retries.resize(groups.size());
+    primary_statuses.resize(groups.size(), kRetryMeshAccepted);
+  }
   Py_BEGIN_ALLOW_THREADS
   for (size_t i = 0; i < groups.size(); ++i) {
     GroupOutput polygons = ProcessGroup(groups[i], close_delta);
     outputs[i] = ExtrudePolygonsToMesh(polygons, scale, height, z_offset, xy_scale);
+    const bool primary_empty =
+        outputs[i].vertices.empty() || outputs[i].faces.empty();
+    if (return_rejected_meshes && primary_empty) {
+      primary_statuses[i] = kRetryMeshEmpty;
+    } else if (return_rejected_meshes && validate_primary_surfaces &&
+               !GroupSurfaceAreaMatches(
+                   outputs[i],
+                   polygons,
+                   scale,
+                   height,
+                   xy_scale,
+                   std::max(0.0, surface_rel_tol),
+                   std::max(0.0, surface_abs_tol))) {
+      outputs[i] = MeshOutput{};
+      primary_statuses[i] = kRetryMeshSurfaceReject;
+    }
+    if (primary_empty) {
+      if (return_rejected_meshes) {
+        rejected_mesh_retries[i] = RetryRejectedPolygonsToMeshes(
+            polygons,
+            scale,
+            height,
+            z_offset,
+            xy_scale,
+            validate_retry_surfaces != 0,
+            std::max(0.0, surface_rel_tol),
+            std::max(0.0, surface_abs_tol));
+      } else if (return_rejected_groups) {
+        rejected_groups[i] = std::move(polygons);
+      }
+    }
   }
   Py_END_ALLOW_THREADS
 
-  PyObject* result = PyList_New(static_cast<Py_ssize_t>(outputs.size()));
-  if (!result) {
+  PyObject* mesh_result = PyList_New(static_cast<Py_ssize_t>(outputs.size()));
+  if (!mesh_result) {
     return nullptr;
   }
   for (Py_ssize_t i = 0; i < static_cast<Py_ssize_t>(outputs.size()); ++i) {
     PyObject* py_mesh = BuildMesh(outputs[static_cast<size_t>(i)]);
     if (!py_mesh) {
-      Py_DECREF(result);
+      Py_DECREF(mesh_result);
       return nullptr;
     }
-    PyList_SET_ITEM(result, i, py_mesh);
+    PyList_SET_ITEM(mesh_result, i, py_mesh);
   }
+  if (return_rejected_meshes) {
+    PyObject* retry_records = BuildRejectedMeshRetryRecords(
+        rejected_mesh_retries, scale);
+    if (!retry_records) {
+      Py_DECREF(mesh_result);
+      return nullptr;
+    }
+    npy_intp status_dims[1] = {
+        static_cast<npy_intp>(primary_statuses.size())};
+    PyObject* primary_status_result = PyArray_SimpleNew(
+        1, status_dims, NPY_UINT8);
+    if (!primary_status_result) {
+      Py_DECREF(retry_records);
+      Py_DECREF(mesh_result);
+      return nullptr;
+    }
+    auto* primary_status_data = static_cast<uint8_t*>(
+        PyArray_DATA(reinterpret_cast<PyArrayObject*>(primary_status_result)));
+    std::copy(
+        primary_statuses.begin(), primary_statuses.end(), primary_status_data);
+    PyObject* result = PyTuple_New(3);
+    if (!result) {
+      Py_DECREF(primary_status_result);
+      Py_DECREF(retry_records);
+      Py_DECREF(mesh_result);
+      return nullptr;
+    }
+    PyTuple_SET_ITEM(result, 0, mesh_result);
+    PyTuple_SET_ITEM(result, 1, primary_status_result);
+    PyTuple_SET_ITEM(result, 2, retry_records);
+    return result;
+  }
+  if (!return_rejected_groups) {
+    return mesh_result;
+  }
+
+  PyObject* rejected_result = PyList_New(
+      static_cast<Py_ssize_t>(rejected_groups.size()));
+  if (!rejected_result) {
+    Py_DECREF(mesh_result);
+    return nullptr;
+  }
+  for (Py_ssize_t i = 0;
+       i < static_cast<Py_ssize_t>(rejected_groups.size()); ++i) {
+    PyObject* py_group = BuildGroup(
+        rejected_groups[static_cast<size_t>(i)], scale);
+    if (!py_group) {
+      Py_DECREF(rejected_result);
+      Py_DECREF(mesh_result);
+      return nullptr;
+    }
+    PyList_SET_ITEM(rejected_result, i, py_group);
+  }
+
+  PyObject* result = PyTuple_New(2);
+  if (!result) {
+    Py_DECREF(rejected_result);
+    Py_DECREF(mesh_result);
+    return nullptr;
+  }
+  PyTuple_SET_ITEM(result, 0, mesh_result);
+  PyTuple_SET_ITEM(result, 1, rejected_result);
   return result;
 }
 

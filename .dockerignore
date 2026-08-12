@@ -12,6 +12,7 @@ pip-delete-this-directory.txt
 .coverage
 .coverage.*
 .cache
+.scratch/
 nosetests.xml
 coverage.xml
 *.cover

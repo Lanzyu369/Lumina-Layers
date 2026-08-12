@@ -23,6 +23,7 @@ import io
 import pickle
 import warnings
 import math
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from typing import Any
 import numpy as np
@@ -71,6 +72,11 @@ except ImportError:  # Shapely < 2.1; keep the old union path available.
 
 from api.structured_logging import get_logger
 from config import PrinterConfig, ColorSystem, VectorConfig
+from core import geos_buffer_fast
+from core.task_parallelism import (
+    resolve_task_parallelism_plan,
+    task_parallelism_worker_scope,
+)
 from core.vector_diagnostics import (
     SVG_INTERSECTING_COMPOUND_COMPLEXITY_DIAGNOSTIC,
 )
@@ -660,6 +666,142 @@ VECTOR_HANDLED_ERRORS = (
     ArithmeticError,
     ShapelyError,
 )
+
+_OCCLUSION_PARALLEL_MIN_SHAPES = 64
+_OCCLUSION_QUERY_CHUNKS_PER_WORKER = 8
+_OCCLUSION_WORK_UNITS_PER_WORKER = 512
+_OCCLUSION_ESTIMATED_WORKER_BYTES = 256 * 1024**2
+
+
+def _clip_occlusion_result_item(item, index, geom, occluders):
+    """Build one clipped shape while retaining the serial fallback semantics."""
+
+    geometry_normalized = False
+    if not occluders:
+        clipped = geom
+        geometry_normalized = bool(item.get("geometry_normalized"))
+    else:
+        occ = (
+            occluders[0]
+            if len(occluders) == 1
+            else _union_occluder_geometries(occluders)
+        )
+        try:
+            clipped = geom.difference(occ)
+        except VECTOR_HANDLED_ERRORS:
+            try:
+                fixed_geom = geom if geom.is_valid else geom.buffer(0)
+                fixed_occ = occ if occ.is_valid else occ.buffer(0)
+                clipped = fixed_geom.difference(fixed_occ)
+            except VECTOR_HANDLED_ERRORS:
+                clipped = None
+
+    if clipped is None or clipped.is_empty:
+        return None
+    if not clipped.is_valid:
+        clipped = make_valid(clipped)
+    if clipped.is_empty:
+        return None
+    return {
+        "geometry": clipped,
+        "color": item["color"],
+        "draw_order": index,
+        "geometry_normalized": geometry_normalized,
+    }
+
+
+def _occlusion_parallel_worker_count(shape_count: int) -> int:
+    """Resolve the shared CPU/memory budget for one occlusion pass."""
+
+    parallelism_plan = resolve_task_parallelism_plan(
+        "vector",
+        work_items=shape_count,
+        min_parallel_items=_OCCLUSION_PARALLEL_MIN_SHAPES,
+        hard_max_workers=8,
+        work_units=shape_count,
+        min_parallel_work_units=_OCCLUSION_PARALLEL_MIN_SHAPES,
+        work_units_per_worker=_OCCLUSION_WORK_UNITS_PER_WORKER,
+        estimated_worker_bytes=_OCCLUSION_ESTIMATED_WORKER_BYTES,
+    )
+    return max(1, int(parallelism_plan.workers))
+
+
+def _try_parallel_clip_occlusion(
+    shape_data,
+    orders,
+    geoms,
+    tree,
+    *,
+    reserved_workers: int = 0,
+):
+    """Return exact independently clipped results, or ``None`` for serial use."""
+
+    worker_count = max(
+        1,
+        _occlusion_parallel_worker_count(len(orders)) - max(0, reserved_workers),
+    )
+    if worker_count <= 1:
+        return None
+
+    geom_array = np.asarray(geoms, dtype=object)
+    candidate_indices = [[] for _item in shape_data]
+    chunk_count = min(len(geoms), worker_count * _OCCLUSION_QUERY_CHUNKS_PER_WORKER)
+    chunk_size = max(1, (len(geoms) + chunk_count - 1) // chunk_count)
+    chunk_bounds = [
+        (start, min(len(geoms), start + chunk_size))
+        for start in range(0, len(geoms), chunk_size)
+    ]
+
+    def query_chunk(bounds):
+        start, end = bounds
+        with task_parallelism_worker_scope():
+            pairs = tree.query(
+                geom_array[start:end],
+                predicate="intersects",
+            )
+        if (
+            not isinstance(pairs, np.ndarray)
+            or pairs.ndim != 2
+            or pairs.shape[0] != 2
+        ):
+            raise TypeError("vector STRtree query returned an unexpected result")
+        return start, pairs
+
+    def clip_one(index):
+        item = shape_data[index]
+        geom = item["poly"]
+        if geom is None or geom.is_empty:
+            return None
+        occluders = [geoms[candidate] for candidate in candidate_indices[index]]
+        with task_parallelism_worker_scope():
+            return _clip_occlusion_result_item(item, index, geom, occluders)
+
+    try:
+        with ThreadPoolExecutor(
+            max_workers=worker_count,
+            thread_name_prefix="lumina-vector-occlusion",
+        ) as executor:
+            for start, query_pairs in executor.map(query_chunk, chunk_bounds):
+                for input_index, tree_index in zip(query_pairs[0], query_pairs[1]):
+                    shape_index = orders[start + int(input_index)]
+                    candidate_index = int(tree_index)
+                    if orders[candidate_index] > shape_index:
+                        candidate_indices[shape_index].append(candidate_index)
+            possible_results = list(executor.map(clip_one, range(len(shape_data))))
+    except VECTOR_HANDLED_ERRORS as exc:
+        _log.warning(
+            "Parallel vector occlusion unavailable; using serial clipping",
+            extra={
+                "event": "vector_occlusion_parallel_failed",
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+                "shape_count": len(shape_data),
+                "worker_count": worker_count,
+            },
+        )
+        return None
+
+    return [item for item in possible_results if item is not None]
 
 
 def _tag_local_name(elem):
@@ -2062,6 +2204,33 @@ def _finish_normalized_contour(geom, inflated, deflated):
     return result
 
 
+def _is_dense_normalization_geometry(geom, close_delta_mm):
+    """Return whether one geometry qualifies for the proven dense path."""
+
+    return (
+        float(close_delta_mm) == 0.03
+        and isinstance(geom, MultiPolygon)
+        and len(geom.geoms) >= geos_buffer_fast.MIN_DENSE_COMPONENTS
+    )
+
+
+def _stock_buffer_many(geometries, distance):
+    """Run the existing Shapely vector-buffer operation for one subset."""
+
+    if not geometries:
+        return []
+    geom_array = np.asarray(geometries, dtype=object)
+    return list(
+        shapely_buffer(
+            geom_array,
+            distance,
+            quad_segs=1,
+            join_style="mitre",
+            mitre_limit=2.0,
+        )
+    )
+
+
 def _normalize_contours_many(geometries, close_delta_mm=0.03):
     """Normalize a batch of contours with scalar-compatible semantics."""
 
@@ -2088,24 +2257,65 @@ def _normalize_contours_many(geometries, close_delta_mm=0.03):
     if not active_geoms:
         return results
 
+    positive_settings = geos_buffer_fast.BufferSettings(distance=close_delta_mm)
+    negative_settings = geos_buffer_fast.BufferSettings(distance=-close_delta_mm)
     try:
-        geom_array = np.asarray(active_geoms, dtype=object)
+        inflated = [None] * len(active_geoms)
+        inflated_already_validated = [False] * len(active_geoms)
+        stock_positive_indices = []
+        stock_positive_geometries = []
+        for local_idx, geom in enumerate(active_geoms):
+            candidate = None
+            if _is_dense_normalization_geometry(geom, close_delta_mm):
+                candidate = geos_buffer_fast.try_dense_positive_buffer(
+                    geom,
+                    positive_settings,
+                )
+            if candidate is None:
+                stock_positive_indices.append(local_idx)
+                stock_positive_geometries.append(geom)
+            else:
+                inflated[local_idx] = candidate
+                inflated_already_validated[local_idx] = True
+
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
-            inflated = shapely_buffer(
-                geom_array,
+            stock_inflated = _stock_buffer_many(
+                stock_positive_geometries,
                 close_delta_mm,
-                quad_segs=1,
-                join_style="mitre",
-                mitre_limit=2.0,
             )
-            deflated = shapely_buffer(
-                inflated,
+        if len(stock_inflated) != len(stock_positive_indices):
+            raise ValueError("stock positive buffer returned an unexpected result count")
+        for local_idx, candidate in zip(stock_positive_indices, stock_inflated):
+            inflated[local_idx] = candidate
+
+        deflated = [None] * len(active_geoms)
+        stock_negative_indices = []
+        stock_negative_geometries = []
+        for local_idx, candidate in enumerate(inflated):
+            inward = None
+            if _is_dense_normalization_geometry(candidate, close_delta_mm):
+                inward = geos_buffer_fast.try_disconnected_inward_buffer(
+                    candidate,
+                    negative_settings,
+                    _input_already_validated=inflated_already_validated[local_idx],
+                )
+            if inward is None:
+                stock_negative_indices.append(local_idx)
+                stock_negative_geometries.append(candidate)
+            else:
+                deflated[local_idx] = inward
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            stock_deflated = _stock_buffer_many(
+                stock_negative_geometries,
                 -close_delta_mm,
-                quad_segs=1,
-                join_style="mitre",
-                mitre_limit=2.0,
             )
+        if len(stock_deflated) != len(stock_negative_indices):
+            raise ValueError("stock negative buffer returned an unexpected result count")
+        for local_idx, candidate in zip(stock_negative_indices, stock_deflated):
+            deflated[local_idx] = candidate
     except VECTOR_HANDLED_ERRORS:
         cache = {}
         return [
@@ -4406,38 +4616,43 @@ class VectorProcessor:
         if geom is None or geom.is_empty:
             return geom
         try:
-            inflated = geom.buffer(
-                close_delta_mm,
-                quad_segs=1,
-                join_style="mitre",
-                mitre_limit=2.0,
+            positive_settings = geos_buffer_fast.BufferSettings(
+                distance=close_delta_mm
             )
-            if inflated.is_empty:
-                return geom
-            deflated = inflated.buffer(
-                -close_delta_mm,
-                quad_segs=1,
-                join_style="mitre",
-                mitre_limit=2.0,
-            )
-            if deflated.is_empty:
-                return geom
-            if deflated.is_valid and deflated.geom_type in ("Polygon", "MultiPolygon"):
-                return deflated
+            inflated = None
+            inflated_already_validated = False
+            if _is_dense_normalization_geometry(geom, close_delta_mm):
+                inflated = geos_buffer_fast.try_dense_positive_buffer(
+                    geom,
+                    positive_settings,
+                )
+                inflated_already_validated = inflated is not None
+            if inflated is None:
+                inflated = geom.buffer(
+                    close_delta_mm,
+                    quad_segs=1,
+                    join_style="mitre",
+                    mitre_limit=2.0,
+                )
 
-            result = make_valid(deflated)
-            # If make_valid returned GeometryCollection with non-polygon
-            # elements only (e.g. LineString, Point from degenerate geometry),
-            # fall back to pre-make_valid state to avoid downstream errors.
-            # 若 make_valid 返回含非多边形退化元素的 GeometryCollection，
-            # 退回 make_valid 之前的状态，避免下游类型错误。
-            if result is not None and result.geom_type == "GeometryCollection":
-                polys = [g for g in result.geoms if g.geom_type in ("Polygon", "MultiPolygon")]
-                if polys:
-                    result = MultiPolygon(polys) if len(polys) > 1 else polys[0]
-                else:
-                    return deflated
-            return result
+            negative_settings = geos_buffer_fast.BufferSettings(
+                distance=-close_delta_mm
+            )
+            deflated = None
+            if _is_dense_normalization_geometry(inflated, close_delta_mm):
+                deflated = geos_buffer_fast.try_disconnected_inward_buffer(
+                    inflated,
+                    negative_settings,
+                    _input_already_validated=inflated_already_validated,
+                )
+            if deflated is None:
+                deflated = inflated.buffer(
+                    -close_delta_mm,
+                    quad_segs=1,
+                    join_style="mitre",
+                    mitre_limit=2.0,
+                )
+            return _finish_normalized_contour(geom, inflated, deflated)
         except Exception:
             return geom
 
@@ -5126,6 +5341,7 @@ class VectorProcessor:
             bbox = cached_entry["bbox"]
             stage_timings["parse_s"] = 0.0
             stage_timings["occlusion_s"] = 0.0
+            stage_timings["contour_normalize_s"] = 0.0
             _log.debug("Parse/clip cache hit: %s", os.path.basename(svg_path))
             _log.debug("Parsed %s shapes. Scale: %.4f", len(shape_data), scale_factor)
             _log.debug("After occlusion clip: %s non-overlapping shapes", len(clipped_shapes))
@@ -5160,7 +5376,11 @@ class VectorProcessor:
                 (_clip_area / _pre_area * 100) if _pre_area > 0 else 0.0,
             )
 
+            normalize_started = time.perf_counter()
             post_clip = VectorProcessor._postprocess_clipped_shapes(clipped_shapes)
+            stage_timings["contour_normalize_s"] = (
+                time.perf_counter() - normalize_started
+            )
             _norm_area = sum(it["geometry"].area for it in post_clip if it["geometry"] is not None)
             _log.debug(
                 "post-clip normalize: %s -> %s shapes, area %.1f -> %.1f",
@@ -6649,87 +6869,98 @@ class VectorProcessor:
         geoms = [v[1] for v in valid]
         tree = STRtree(geoms)
         geom_id_to_idx = {id(g): idx for idx, g in enumerate(geoms)}
-        result = []
-
-        for i in range(n - 1, -1, -1):
-            item = shape_data[i]
-            geom = item["poly"]
-            if geom is None or geom.is_empty:
-                continue
-
-            occluders = []
-            predicate_filtered = False
-            try:
-                candidate_refs = tree.query(geom, predicate="intersects")
-                predicate_filtered = True
-            except TypeError:
+        silhouette = None
+        silhouette_computed = False
+        build_silhouette_concurrently = (
+            return_silhouette
+            and len(geoms) >= _OCCLUSION_PARALLEL_MIN_SHAPES
+            and _occlusion_parallel_worker_count(len(orders)) >= 3
+        )
+        if build_silhouette_concurrently:
+            with ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="lumina-vector-silhouette",
+            ) as executor:
+                silhouette_future = executor.submit(unary_union, geoms)
+                result = _try_parallel_clip_occlusion(
+                    shape_data,
+                    orders,
+                    geoms,
+                    tree,
+                    reserved_workers=1,
+                )
                 try:
-                    candidate_refs = tree.query(geom)
+                    silhouette = silhouette_future.result()
                 except VECTOR_HANDLED_ERRORS:
-                    candidate_refs = []
-            except VECTOR_HANDLED_ERRORS:
-                try:
-                    candidate_refs = tree.query(geom)
-                except VECTOR_HANDLED_ERRORS:
-                    candidate_refs = []
+                    silhouette = None
+                silhouette_computed = True
+        else:
+            result = _try_parallel_clip_occlusion(
+                shape_data,
+                orders,
+                geoms,
+                tree,
+            )
 
-            for ref in candidate_refs:
-                if isinstance(ref, (int, np.integer)):
-                    idx = int(ref)
-                else:
-                    idx = geom_id_to_idx.get(id(ref), -1)
-                if idx < 0:
-                    continue
-                if orders[idx] <= i:
-                    continue
-                cand = geoms[idx]
-                if predicate_filtered:
-                    occluders.append(cand)
-                    continue
-                try:
-                    if cand.intersects(geom):
-                        occluders.append(cand)
-                except VECTOR_HANDLED_ERRORS:
+        if result is None:
+            result = []
+            for i in range(n - 1, -1, -1):
+                item = shape_data[i]
+                geom = item["poly"]
+                if geom is None or geom.is_empty:
                     continue
 
-            geometry_normalized = False
-            if not occluders:
-                clipped = geom
-                geometry_normalized = bool(item.get("geometry_normalized"))
-            else:
-                occ = occluders[0] if len(occluders) == 1 else _union_occluder_geometries(occluders)
+                occluders = []
+                predicate_filtered = False
                 try:
-                    clipped = geom.difference(occ)
-                except VECTOR_HANDLED_ERRORS:
-                    # First attempt failed — repair both geometries and retry.
+                    candidate_refs = tree.query(geom, predicate="intersects")
+                    predicate_filtered = True
+                except TypeError:
                     try:
-                        fixed_geom = geom if geom.is_valid else geom.buffer(0)
-                        fixed_occ = occ if occ.is_valid else occ.buffer(0)
-                        clipped = fixed_geom.difference(fixed_occ)
+                        candidate_refs = tree.query(geom)
                     except VECTOR_HANDLED_ERRORS:
-                        # Cannot compute difference — drop shape to avoid
-                        # overlapping geometry that breaks the mesh.
-                        clipped = None
+                        candidate_refs = []
+                except VECTOR_HANDLED_ERRORS:
+                    try:
+                        candidate_refs = tree.query(geom)
+                    except VECTOR_HANDLED_ERRORS:
+                        candidate_refs = []
 
-            if clipped is not None and not clipped.is_empty:
-                if not clipped.is_valid:
-                    clipped = make_valid(clipped)
-                if not clipped.is_empty:
-                    result.append(
-                        {
-                            "geometry": clipped,
-                            "color": item["color"],
-                            "draw_order": i,
-                            "geometry_normalized": geometry_normalized,
-                        }
-                    )
+                for ref in candidate_refs:
+                    if isinstance(ref, (int, np.integer)):
+                        idx = int(ref)
+                    else:
+                        idx = geom_id_to_idx.get(id(ref), -1)
+                    if idx < 0:
+                        continue
+                    if orders[idx] <= i:
+                        continue
+                    cand = geoms[idx]
+                    if predicate_filtered:
+                        occluders.append(cand)
+                        continue
+                    try:
+                        if cand.intersects(geom):
+                            occluders.append(cand)
+                    except VECTOR_HANDLED_ERRORS:
+                        continue
 
-        result.reverse()
-        if return_silhouette:
+                clipped_item = _clip_occlusion_result_item(
+                    item,
+                    i,
+                    geom,
+                    occluders,
+                )
+                if clipped_item is not None:
+                    result.append(clipped_item)
+
+            result.reverse()
+        if return_silhouette and not silhouette_computed:
             try:
                 silhouette = unary_union(geoms)
             except VECTOR_HANDLED_ERRORS:
                 silhouette = None
+        if return_silhouette:
             return result, silhouette
         return result
 
@@ -6824,10 +7055,38 @@ class VectorProcessor:
         representatives = []
         representative_members = []
         representative_by_color = {}
+        representative_groups_by_bucket = {}
+
+        def spatial_bucket(lab):
+            if not bool(np.isfinite(lab).all()):
+                return None
+            return tuple(math.floor(float(value) / threshold) for value in lab)
+
         for rgb in ordered_colors:
             rgb_lab = lab_by_color[rgb]
             chosen = None
-            for group_idx, representative in enumerate(representatives):
+            bucket = spatial_bucket(rgb_lab)
+            if bucket is None:
+                candidate_group_indices = range(len(representatives))
+            else:
+                nearby_groups = set()
+                for red_offset in range(-2, 3):
+                    for green_offset in range(-2, 3):
+                        for blue_offset in range(-2, 3):
+                            nearby_groups.update(
+                                representative_groups_by_bucket.get(
+                                    (
+                                        bucket[0] + red_offset,
+                                        bucket[1] + green_offset,
+                                        bucket[2] + blue_offset,
+                                    ),
+                                    (),
+                                )
+                            )
+                candidate_group_indices = sorted(nearby_groups)
+
+            for group_idx in candidate_group_indices:
+                representative = representatives[group_idx]
                 if all(
                     float(np.linalg.norm(rgb_lab - lab_by_color[member]))
                     <= threshold
@@ -6840,6 +7099,11 @@ class VectorProcessor:
                 representatives.append(rgb)
                 representative_members.append([rgb])
                 chosen = rgb
+                group_idx = len(representatives) - 1
+                if bucket is not None:
+                    representative_groups_by_bucket.setdefault(bucket, []).append(
+                        group_idx
+                    )
             representative_by_color[rgb] = chosen
 
         if all(

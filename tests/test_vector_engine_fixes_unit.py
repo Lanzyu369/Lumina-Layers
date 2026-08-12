@@ -16,6 +16,7 @@ import math
 import tempfile
 import os
 import io
+import threading
 import warnings
 import xml.etree.ElementTree as ET
 from types import SimpleNamespace
@@ -799,6 +800,142 @@ class TestNormalizeContours:
         bottom = next(item for item in result if item["draw_order"] == 0)
         assert bottom["geometry"].area == pytest.approx(82.0)
 
+    def test_dense_clip_occlusion_preserves_exact_results_across_workers(self, monkeypatch):
+        shape_data = [
+            {
+                "poly": box(index * 0.05, 0.0, 10.0 + index * 0.05, 10.0),
+                "color": (index % 256, (index * 3) % 256, (index * 7) % 256),
+            }
+            for index in range(72)
+        ]
+        baseline = VectorProcessor._clip_occlusion(shape_data)
+        worker_threads = set()
+        thread_lock = threading.Lock()
+        original_union = vector_engine._union_occluder_geometries
+
+        def recording_union(items):
+            with thread_lock:
+                worker_threads.add(threading.get_ident())
+            return original_union(items)
+
+        monkeypatch.setattr(
+            vector_engine,
+            "resolve_task_parallelism_plan",
+            lambda *_args, **_kwargs: SimpleNamespace(workers=4),
+            raising=False,
+        )
+        monkeypatch.setattr(
+            vector_engine,
+            "_union_occluder_geometries",
+            recording_union,
+        )
+
+        candidate = VectorProcessor._clip_occlusion(shape_data)
+
+        assert len(worker_threads) > 1
+        assert len(candidate) == len(baseline)
+        for stock_item, candidate_item in zip(baseline, candidate):
+            assert candidate_item["draw_order"] == stock_item["draw_order"]
+            assert candidate_item["color"] == stock_item["color"]
+            assert (
+                candidate_item["geometry"].normalize().wkb
+                == stock_item["geometry"].normalize().wkb
+            )
+
+    def test_parallel_clip_does_not_hide_programmer_errors(self, monkeypatch):
+        shape_data = [
+            {
+                "poly": box(float(index), 0.0, float(index) + 0.5, 0.5),
+                "color": (index % 256, 0, 0),
+            }
+            for index in range(64)
+        ]
+        geoms = [item["poly"] for item in shape_data]
+
+        class ExplodingExecutor:
+            def __init__(self, **_kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def map(self, *_args, **_kwargs):
+                raise AssertionError("programmer defect")
+
+        monkeypatch.setattr(vector_engine, "ThreadPoolExecutor", ExplodingExecutor)
+        monkeypatch.setattr(
+            vector_engine,
+            "resolve_task_parallelism_plan",
+            lambda *_args, **_kwargs: SimpleNamespace(workers=4),
+        )
+
+        with pytest.raises(AssertionError, match="programmer defect"):
+            vector_engine._try_parallel_clip_occlusion(
+                shape_data,
+                list(range(len(shape_data))),
+                geoms,
+                vector_engine.STRtree(geoms),
+            )
+
+    def test_dense_clip_occlusion_builds_silhouette_while_clipping(self, monkeypatch):
+        shape_data = [
+            {
+                "poly": box(float(index), 0.0, float(index) + 0.5, 0.5),
+                "color": (index % 256, 0, 0),
+            }
+            for index in range(64)
+        ]
+        union_started = threading.Event()
+        clipping_started = threading.Event()
+        union_threads = []
+        reservations = []
+        original_union = vector_engine.unary_union
+
+        def recording_union(geometries):
+            union_threads.append(threading.get_ident())
+            union_started.set()
+            assert clipping_started.wait(timeout=0.5)
+            return original_union(geometries)
+
+        def fake_parallel_clip(
+            _shape_data,
+            _orders,
+            _geoms,
+            _tree,
+            *,
+            reserved_workers=0,
+        ):
+            reservations.append(reserved_workers)
+            assert union_started.wait(timeout=0.5)
+            clipping_started.set()
+            return []
+
+        monkeypatch.setattr(vector_engine, "unary_union", recording_union)
+        monkeypatch.setattr(
+            vector_engine,
+            "resolve_task_parallelism_plan",
+            lambda *_args, **_kwargs: SimpleNamespace(workers=4),
+        )
+        monkeypatch.setattr(
+            vector_engine,
+            "_try_parallel_clip_occlusion",
+            fake_parallel_clip,
+        )
+
+        result, silhouette = VectorProcessor._clip_occlusion(
+            shape_data,
+            return_silhouette=True,
+        )
+
+        assert result == []
+        assert silhouette.area == pytest.approx(16.0)
+        assert len(union_threads) == 1
+        assert union_threads[0] != threading.get_ident()
+        assert reservations == [1]
+
     def test_postprocess_clipped_shapes_skips_known_normalized_geometry(self, monkeypatch):
         normalized = Polygon([(0, 0), (5, 0), (5, 5), (0, 5)])
         clipped = Polygon([(10, 0), (15, 0), (15, 5), (10, 5)])
@@ -867,6 +1004,155 @@ class TestNormalizeContours:
 
         assert result == [geom]
         assert not [item for item in caught if issubclass(item.category, RuntimeWarning)]
+
+    def test_dense_batch_uses_isolated_positive_and_disconnected_inward_helpers(
+        self,
+        monkeypatch,
+    ):
+        source = MultiPolygon([box(0, 0, 1, 1), box(3, 0, 4, 1)])
+        inflated = source.buffer(0.03, quad_segs=1, join_style="mitre", mitre_limit=2.0)
+        deflated = inflated.buffer(-0.03, quad_segs=1, join_style="mitre", mitre_limit=2.0)
+        calls = []
+        monkeypatch.setattr(vector_engine.geos_buffer_fast, "MIN_DENSE_COMPONENTS", 2)
+        monkeypatch.setattr(
+            vector_engine.geos_buffer_fast,
+            "try_dense_positive_buffer",
+            lambda geometry, settings: calls.append(("positive", geometry, settings))
+            or inflated,
+        )
+        monkeypatch.setattr(
+            vector_engine.geos_buffer_fast,
+            "try_disconnected_inward_buffer",
+            lambda geometry, settings, **_kwargs: calls.append(
+                ("inward", geometry, settings)
+            )
+            or deflated,
+        )
+
+        result = vector_engine._normalize_contours_many([source])
+
+        assert [call[0] for call in calls] == ["positive", "inward"]
+        assert result[0].symmetric_difference(deflated).is_empty
+
+    def test_small_batch_does_not_call_dense_helpers(self, monkeypatch):
+        source = Polygon([(0, 0), (5, 0), (5, 5), (0, 5)])
+
+        def unexpected(*_args, **_kwargs):
+            raise AssertionError("ordinary geometry must stay on the stock batch path")
+
+        monkeypatch.setattr(
+            vector_engine.geos_buffer_fast,
+            "try_dense_positive_buffer",
+            unexpected,
+        )
+        monkeypatch.setattr(
+            vector_engine.geos_buffer_fast,
+            "try_disconnected_inward_buffer",
+            unexpected,
+        )
+
+        result = vector_engine._normalize_contours_many([source])
+
+        assert result[0].is_valid
+        assert result[0].area == pytest.approx(source.area)
+
+    def test_dense_batch_uses_stock_positive_when_accelerator_unavailable(
+        self,
+        monkeypatch,
+    ):
+        source = MultiPolygon([box(0, 0, 1, 1), box(3, 0, 4, 1)])
+        buffer_calls = []
+
+        def stock_buffer(geometries, distance, **kwargs):
+            items = list(geometries)
+            buffer_calls.append((distance, items))
+            return np.asarray(
+                [geometry.buffer(distance, **kwargs) for geometry in items],
+                dtype=object,
+            )
+
+        monkeypatch.setattr(vector_engine.geos_buffer_fast, "MIN_DENSE_COMPONENTS", 2)
+        monkeypatch.setattr(
+            vector_engine.geos_buffer_fast,
+            "try_dense_positive_buffer",
+            lambda _geometry, _settings: None,
+        )
+        monkeypatch.setattr(
+            vector_engine.geos_buffer_fast,
+            "try_disconnected_inward_buffer",
+            lambda geometry, _settings, **_kwargs: geometry.buffer(
+                -0.03,
+                quad_segs=1,
+                join_style="mitre",
+                mitre_limit=2.0,
+            ),
+        )
+        monkeypatch.setattr(vector_engine, "shapely_buffer", stock_buffer)
+
+        result = vector_engine._normalize_contours_many([source])
+
+        assert [call[0] for call in buffer_calls] == [0.03]
+        assert result[0] is not None
+
+    def test_dense_batch_uses_stock_negative_when_inward_helper_fails(
+        self,
+        monkeypatch,
+    ):
+        source = MultiPolygon([box(0, 0, 1, 1), box(3, 0, 4, 1)])
+        inflated = source.buffer(0.03, quad_segs=1, join_style="mitre", mitre_limit=2.0)
+        buffer_calls = []
+
+        def stock_buffer(geometries, distance, **kwargs):
+            items = list(geometries)
+            buffer_calls.append((distance, items))
+            return np.asarray(
+                [geometry.buffer(distance, **kwargs) for geometry in items],
+                dtype=object,
+            )
+
+        monkeypatch.setattr(vector_engine.geos_buffer_fast, "MIN_DENSE_COMPONENTS", 2)
+        monkeypatch.setattr(
+            vector_engine.geos_buffer_fast,
+            "try_dense_positive_buffer",
+            lambda _geometry, _settings: inflated,
+        )
+        monkeypatch.setattr(
+            vector_engine.geos_buffer_fast,
+            "try_disconnected_inward_buffer",
+            lambda _geometry, _settings, **_kwargs: None,
+        )
+        monkeypatch.setattr(vector_engine, "shapely_buffer", stock_buffer)
+
+        result = vector_engine._normalize_contours_many([source])
+
+        assert [call[0] for call in buffer_calls] == [-0.03]
+        assert result[0].symmetric_difference(source).is_empty
+
+    def test_dense_scalar_uses_both_helpers(self, monkeypatch):
+        source = MultiPolygon([box(0, 0, 1, 1), box(3, 0, 4, 1)])
+        inflated = source.buffer(0.03, quad_segs=1, join_style="mitre", mitre_limit=2.0)
+        deflated = inflated.buffer(-0.03, quad_segs=1, join_style="mitre", mitre_limit=2.0)
+        calls = []
+        monkeypatch.setattr(vector_engine.geos_buffer_fast, "MIN_DENSE_COMPONENTS", 2)
+        monkeypatch.setattr(
+            vector_engine.geos_buffer_fast,
+            "try_dense_positive_buffer",
+            lambda geometry, settings: calls.append(("positive", geometry, settings))
+            or inflated,
+        )
+        monkeypatch.setattr(
+            vector_engine.geos_buffer_fast,
+            "try_disconnected_inward_buffer",
+            lambda geometry, settings, **_kwargs: calls.append(
+                ("inward", geometry, settings)
+            )
+            or deflated,
+        )
+
+        result = VectorProcessor._normalize_contours(source, close_delta_mm=0.03)
+
+        assert [call[0] for call in calls] == ["positive", "inward"]
+        assert result.symmetric_difference(deflated).is_empty
 
     def test_parse_svg_preserves_normalized_marker_on_final_shapes(self):
         svg = (
@@ -1717,6 +2003,8 @@ class TestVectorNearFillConsistency:
         svg_path = self._write_svg(tmp_path, ["#646464", "#656464"])
         analysis = self._processor().analyze_svg(str(svg_path), target_width_mm=30.0)
 
+        assert analysis.stage_timings["contour_normalize_s"] >= 0.0
+        assert analysis.stage_timings["occlusion_s"] >= analysis.stage_timings["contour_normalize_s"]
         matched_shapes = analysis.matched_shapes
         assert {tuple(item["color"]) for item in matched_shapes} == {
             (100, 100, 100),
@@ -1782,6 +2070,104 @@ class TestVectorNearFillConsistency:
         ]
         assert "match_color" not in shapes[0]
         assert "match_color" not in shapes[2]
+
+    def test_many_distinct_fills_do_not_scan_every_prior_group(self, monkeypatch):
+        processor = self._processor()
+        colors = [
+            (red, green, blue)
+            for red in range(0, 241, 20)
+            for green in range(0, 241, 20)
+            for blue in range(0, 241, 20)
+        ][:216]
+        shapes = [
+            {"color": color, "geometry": box(0, 0, 1, 1)}
+            for color in colors
+        ]
+        norm_calls = 0
+        original_norm = vector_engine.np.linalg.norm
+
+        def counted_norm(*args, **kwargs):
+            nonlocal norm_calls
+            norm_calls += 1
+            return original_norm(*args, **kwargs)
+
+        monkeypatch.setattr(vector_engine.np.linalg, "norm", counted_norm)
+
+        updated = processor._with_near_fill_match_queries(shapes)
+
+        assert updated is shapes
+        assert norm_calls <= len(colors) * 4
+
+    def test_spatial_grouping_matches_scalar_complete_link_reference(self):
+        processor = self._processor()
+        rng = np.random.default_rng(20260810)
+        random_colors = [
+            tuple(int(value) for value in row)
+            for row in rng.integers(0, 256, size=(80, 3), dtype=np.uint8)
+        ]
+        colors = random_colors + [
+            (100, 100, 100),
+            (101, 100, 100),
+            (102, 100, 100),
+            (104, 100, 100),
+            (200, 200, 200),
+            (201, 201, 200),
+        ]
+        shapes = [
+            {
+                "color": color,
+                "geometry": box(0, 0, 1 + (idx % 7), 1 + (idx % 5)),
+            }
+            for idx, color in enumerate(colors)
+        ]
+
+        stats_by_color = {}
+        for idx, item in enumerate(shapes):
+            rgb = tuple(item["color"])
+            stats = stats_by_color.setdefault(
+                rgb,
+                {"area": 0.0, "first_index": idx},
+            )
+            stats["area"] += float(item["geometry"].area)
+        ordered_colors = sorted(
+            stats_by_color,
+            key=lambda rgb: (
+                -float(stats_by_color[rgb]["area"]),
+                int(stats_by_color[rgb]["first_index"]),
+                rgb,
+            ),
+        )
+        representatives = []
+        members = []
+        expected_by_color = {}
+        for rgb in ordered_colors:
+            rgb_lab = np.asarray(rgb, dtype=np.float64)
+            chosen = None
+            for group_idx, representative in enumerate(representatives):
+                if all(
+                    float(
+                        np.linalg.norm(
+                            rgb_lab - np.asarray(member, dtype=np.float64)
+                        )
+                    )
+                    <= 2.0
+                    for member in members[group_idx]
+                ):
+                    chosen = representative
+                    members[group_idx].append(rgb)
+                    break
+            if chosen is None:
+                representatives.append(rgb)
+                members.append([rgb])
+                chosen = rgb
+            expected_by_color[rgb] = chosen
+
+        updated = processor._with_near_fill_match_queries(shapes)
+
+        assert [
+            tuple(item.get("match_color", item["color"]))
+            for item in updated
+        ] == [expected_by_color[tuple(item["color"])] for item in shapes]
 
 
 class TestVectorColorDistanceLogging:

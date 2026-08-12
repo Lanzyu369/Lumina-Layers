@@ -10,6 +10,7 @@ ENV PYTHONUNBUFFERED=1 \
     LUMINA_MATERIALS_DIR=/app/materials \
     LUMINA_LOG_DIR=/app/logs \
     LUMINA_FEEDBACK_DUMP_DIR=/app/feedback \
+    LUMINA_GEOS_BUFFER_FAST_MANIFEST=/app/.scratch/geos_buffer_fast_proof/build_manifest.json \
     LUMINA_VECTOR_NATIVE_MESH=1 \
     LUMINA_VECTOR_NATIVE_MESH_VALIDATE_SURFACE=1 \
     OMP_NUM_THREADS=1 \
@@ -23,6 +24,7 @@ ENV PYTHONUNBUFFERED=1 \
 # - node/npm/pnpm are required to build the frontend dist during image build.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    cmake \
     curl \
     gcc \
     g++ \
@@ -44,6 +46,7 @@ COPY frontend/package.json frontend/pnpm-lock.yaml /app/frontend/
 RUN cd frontend && pnpm install --frozen-lockfile
 
 COPY . /app/
+RUN python scripts/build_geos_buffer_fast_proof.py --rebuild
 RUN python scripts/build_native_extensions.py
 RUN cd frontend && pnpm build
 
