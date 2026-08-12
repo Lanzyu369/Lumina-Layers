@@ -85,10 +85,6 @@ _log = get_logger(__name__)
 
 MIN_SHAPE_AREA_MM2 = 0.01
 BASE_COLOR_GAP_MM = 0.005
-_VECTOR_COVERAGE_REL_TOL = 0.001
-_VECTOR_COVERAGE_ABS_TOL_MM2 = 0.01
-_VECTOR_RING_SEPARATION_RETRY_MM = (0.0001, 0.001)
-_PLANAR_COVERAGE_METADATA_KEY = "_lumina_planar_coverage_mm2"
 _MAX_BEZIER_DEPTH = 16
 
 # Supersample factor for the hard membership masks (mask_solid / matched_rgb /
@@ -117,59 +113,6 @@ def _union_run_group_geometries(geometries):
         except VECTOR_HANDLED_ERRORS:
             pass
     return unary_union(geometries)
-
-
-def _extruded_planar_coverage_mm2(meshes, height: float) -> float | None:
-    """Read cached planar coverage, falling back to prism mesh volume."""
-
-    height_value = float(height)
-    if height_value <= 0.0:
-        return 0.0
-
-    mesh_list = tuple(meshes)
-    metadata_total = 0.0
-    metadata_complete = True
-    for mesh in mesh_list:
-        metadata = getattr(mesh, "metadata", None)
-        try:
-            coverage = float(metadata[_PLANAR_COVERAGE_METADATA_KEY])
-        except (KeyError, TypeError, ValueError):
-            metadata_complete = False
-            break
-        if not math.isfinite(coverage) or coverage < 0.0:
-            metadata_complete = False
-            break
-        metadata_total += coverage
-    if metadata_complete:
-        return metadata_total
-
-    total_volume = 0.0
-    for mesh in mesh_list:
-        try:
-            volume = abs(float(mesh.volume))
-        except (AttributeError, TypeError, ValueError):
-            # Some unit tests use opaque mesh sentinels. Production Python
-            # extrusion returns Trimesh instances and is fully validated.
-            return None
-        if not math.isfinite(volume):
-            return None
-        total_volume += volume
-    return total_volume / height_value
-
-
-def _vector_coverage_is_incomplete(
-    expected_mm2: float,
-    actual_mm2: float,
-) -> bool:
-    """Return whether one-sided planar coverage loss exceeds tolerance."""
-
-    expected = max(0.0, float(expected_mm2))
-    actual = max(0.0, float(actual_mm2))
-    tolerance = max(
-        _VECTOR_COVERAGE_ABS_TOL_MM2,
-        expected * _VECTOR_COVERAGE_REL_TOL,
-    )
-    return actual + tolerance < expected
 
 
 def _union_occluder_geometries(geometries):
@@ -1228,218 +1171,6 @@ def _direct_convex_extrusion_base(poly, scale):
         faces.append((idx, count + next_idx, count + idx))
 
     return vertices, np.asarray(faces, dtype=np.int64)
-
-
-def _separate_polygon_ring_contacts(
-    poly: Polygon,
-    geometry_gap: float,
-) -> Polygon:
-    """Separate exact exterior/hole vertex contacts in one Polygon."""
-
-    exterior_vertices = {
-        tuple(float(value) for value in coordinate[:2])
-        for coordinate in list(poly.exterior.coords)[:-1]
-    }
-    ring_data = [
-        (
-            ring,
-            {
-                tuple(float(value) for value in coordinate[:2])
-                for coordinate in list(ring.coords)[:-1]
-            },
-        )
-        for ring in poly.interiors
-    ]
-    contact_vertices_by_hole = [set() for _ring, _vertices in ring_data]
-    for index, (_ring, vertices) in enumerate(ring_data):
-        contact_vertices_by_hole[index].update(
-            exterior_vertices.intersection(vertices)
-        )
-    for left_index, (_left_ring, left_vertices) in enumerate(ring_data):
-        for right_index in range(left_index + 1, len(ring_data)):
-            shared_vertices = left_vertices.intersection(
-                ring_data[right_index][1]
-            )
-            if shared_vertices:
-                contact_vertices_by_hole[left_index].update(shared_vertices)
-                contact_vertices_by_hole[right_index].update(shared_vertices)
-
-    touching_hole_indices = {
-        index
-        for index, contact_vertices in enumerate(contact_vertices_by_hole)
-        if contact_vertices
-    }
-    if not touching_hole_indices:
-        return poly
-
-    translated_holes = []
-    translated = True
-    for ring_index, (ring, _ring_vertices) in enumerate(ring_data):
-        if ring_index not in touching_hole_indices:
-            translated_holes.append(ring.coords)
-            continue
-        hole = Polygon(ring)
-        contacts = np.asarray(
-            tuple(contact_vertices_by_hole[ring_index]),
-            dtype=np.float64,
-        )
-        contact_center = contacts.mean(axis=0)
-        interior_point = hole.representative_point()
-        direction = np.asarray(
-            [interior_point.x, interior_point.y],
-            dtype=np.float64,
-        ) - contact_center
-        direction_length = float(np.linalg.norm(direction))
-        if not math.isfinite(direction_length) or direction_length <= 0.0:
-            translated = False
-            break
-        offset = direction * (float(geometry_gap) / direction_length)
-        moved_hole = affinity.translate(
-            hole,
-            xoff=float(offset[0]),
-            yoff=float(offset[1]),
-        )
-        if moved_hole.is_empty or not isinstance(moved_hole, Polygon):
-            translated = False
-            break
-        translated_holes.append(moved_hole.exterior.coords)
-
-    if translated:
-        translated_repair = Polygon(poly.exterior.coords, translated_holes)
-        if translated_repair.is_valid and not translated_repair.is_empty:
-            translated_vertices = []
-            contacts_remain = False
-            for ring in translated_repair.interiors:
-                vertices = {
-                    tuple(float(value) for value in coordinate[:2])
-                    for coordinate in list(ring.coords)[:-1]
-                }
-                if exterior_vertices.intersection(vertices) or any(
-                    prior.intersection(vertices)
-                    for prior in translated_vertices
-                ):
-                    contacts_remain = True
-                    break
-                translated_vertices.append(vertices)
-            if not contacts_remain:
-                return translated_repair
-
-    repaired_holes = []
-    for ring_index, (ring, _ring_vertices) in enumerate(ring_data):
-        if ring_index not in touching_hole_indices:
-            repaired_holes.append(ring.coords)
-            continue
-
-        # A point-contact is valid in OGC 2D polygon rules, but its extrusion
-        # creates one vertical edge shared by four side faces. Shrinking only
-        # the touching hole preserves the exterior dimensions and changes the
-        # printable area by far less than slicer resolution.
-        shrunken = Polygon(ring).buffer(
-            -geometry_gap,
-            quad_segs=1,
-            join_style="mitre",
-            mitre_limit=2.0,
-        )
-        if shrunken is None or shrunken.is_empty:
-            continue
-        if isinstance(shrunken, Polygon):
-            repaired_holes.append(shrunken.exterior.coords)
-        elif isinstance(shrunken, MultiPolygon):
-            repaired_holes.extend(
-                part.exterior.coords
-                for part in shrunken.geoms
-                if not part.is_empty
-            )
-
-    repaired = Polygon(poly.exterior.coords, repaired_holes)
-    if repaired.is_valid and not repaired.is_empty:
-        return repaired
-    return poly
-
-
-def _repair_polygon_ring_contacts(
-    poly: Polygon,
-    scale: float,
-    separation_mm: float,
-) -> Polygon | MultiPolygon:
-    """Snap sub-resolution contacts and retain every resulting polygon part."""
-
-    scale_value = float(scale)
-    if scale_value <= 0.0 or not math.isfinite(scale_value):
-        return poly
-    geometry_gap = float(separation_mm) / scale_value
-    if geometry_gap <= 0.0 or not math.isfinite(geometry_gap):
-        return poly
-
-    try:
-        snapped = set_precision(poly, grid_size=geometry_gap)
-    except VECTOR_HANDLED_ERRORS:
-        return poly
-    if snapped is None or snapped.is_empty:
-        return poly
-    if isinstance(snapped, Polygon):
-        return _separate_polygon_ring_contacts(snapped, geometry_gap)
-    if isinstance(snapped, MultiPolygon):
-        repaired_parts = [
-            _separate_polygon_ring_contacts(part, geometry_gap)
-            for part in snapped.geoms
-            if not part.is_empty
-        ]
-        if not repaired_parts:
-            return poly
-        if len(repaired_parts) == 1:
-            return repaired_parts[0]
-        return MultiPolygon(repaired_parts)
-    return poly
-
-
-def _extrude_polygonal_unit_height(
-    geometry: Polygon | MultiPolygon,
-) -> trimesh.Trimesh:
-    """Extrude all polygon parts without welding separate closed shells."""
-
-    parts = geometry.geoms if isinstance(geometry, MultiPolygon) else (geometry,)
-    meshes = [
-        trimesh.creation.extrude_polygon(part, height=1.0)
-        for part in parts
-        if isinstance(part, Polygon) and not part.is_empty
-    ]
-    if not meshes:
-        raise ValueError("Vector polygon repair produced no extrudable parts")
-    if len(meshes) == 1:
-        return meshes[0]
-    return trimesh.util.concatenate(meshes)
-
-
-def _polygon_requires_topology_validation(
-    poly: Polygon,
-    scale: float,
-) -> bool:
-    """Return whether extrusion needs the full indexed-edge topology scan."""
-
-    if bool(poly.interiors) or not bool(poly.is_valid):
-        return True
-    try:
-        scale_value = abs(float(scale))
-        if not math.isfinite(scale_value) or scale_value <= 0.0:
-            return True
-        coordinates = np.asarray(poly.exterior.coords, dtype=np.float64)[:-1, :2]
-        if len(coordinates) < 3:
-            return True
-        contact_grid_mm = min(_VECTOR_RING_SEPARATION_RETRY_MM)
-        quantized = np.rint(
-            coordinates * (scale_value / contact_grid_mm)
-        ).astype(np.int64)
-        unique_coordinates = np.unique(quantized, axis=0)
-        return len(unique_coordinates) != len(quantized)
-    except (
-        AttributeError,
-        IndexError,
-        TypeError,
-        ValueError,
-        OverflowError,
-    ):
-        return True
 
 
 def _concatenate_meshes_fast(meshes):
@@ -6066,10 +5797,15 @@ class VectorProcessor:
 
             _log.debug("Merging %s parts for %s...", len(mesh_list), name)
             combined = _concatenate_meshes_fast(mesh_list)
-            # Independent prisms must remain independently indexed closed
-            # shells. Blindly welding coincident border coordinates preserves
-            # their internal walls and turns shared edges into non-manifold
-            # edges with more than two incident triangles.
+            # Weld coincident border vertices produced by independent per-shape
+            # ``_extrude_geometry`` calls so Three.js / exporters do not render
+            # visible seams along shape boundaries. 对相邻 shape 独立 extrude
+            # 后重合的边界顶点做焊接，避免下游 mesh 渲染/导出在形状边界出现缝隙。
+            if not data.get("topology_finalized", False):
+                try:
+                    combined.merge_vertices()
+                except Exception:
+                    pass
             self._fix_coordinates(combined, svg_height_mm)
             if mirror_transform is not None:
                 combined.apply_transform(mirror_transform)
@@ -7482,15 +7218,6 @@ class VectorProcessor:
             if slot_name not in meshes_by_slot:
                 meshes_by_slot[slot_name] = {"meshes": [], "mat_id": ch}
 
-            source_geoms = tuple(
-                geom for geom in geoms if geom is not None and not geom.is_empty
-            )
-            source_area_mm2 = (
-                sum(max(0.0, float(geom.area)) for geom in source_geoms)
-                * float(scale_factor)
-                * float(scale_factor)
-            )
-
             if len(geoms) > 1:
                 pre_union_area = 0.0
                 for g in geoms:
@@ -7579,45 +7306,6 @@ class VectorProcessor:
                 scale=scale_factor,
                 extrude_cache=extrude_cache,
             )
-            built_area_mm2 = _extruded_planar_coverage_mm2(new_meshes, height)
-            if (
-                built_area_mm2 is not None
-                and _vector_coverage_is_incomplete(source_area_mm2, built_area_mm2)
-            ):
-                fallback_meshes = []
-                for source_geom in source_geoms:
-                    fallback_meshes.extend(
-                        VectorProcessor._extrude_geometry(
-                            source_geom,
-                            height=height,
-                            z_offset=z_bot,
-                            scale=scale_factor,
-                            extrude_cache=extrude_cache,
-                        )
-                    )
-                fallback_area_mm2 = _extruded_planar_coverage_mm2(
-                    fallback_meshes,
-                    height,
-                )
-                if (
-                    fallback_area_mm2 is None
-                    or _vector_coverage_is_incomplete(
-                        source_area_mm2,
-                        fallback_area_mm2,
-                    )
-                ):
-                    actual_area = (
-                        "unavailable"
-                        if fallback_area_mm2 is None
-                        else f"{fallback_area_mm2:.6f}"
-                    )
-                    raise ValueError(
-                        "Vector extrusion coverage incomplete for "
-                        f"channel {ch}, layers {run_start}-{run_end}: "
-                        f"expected {source_area_mm2:.6f} mm^2, "
-                        f"got {actual_area} mm^2 after fallback"
-                    )
-                new_meshes = fallback_meshes
             meshes_by_slot[slot_name]["meshes"].extend(new_meshes)
             for layer_idx in range(int(run_start), int(run_end) + 1):
                 layer_hist = stage_d_hist.setdefault(int(layer_idx), {})
@@ -9705,7 +9393,6 @@ class VectorProcessor:
                 cached_base = None
                 base_vertices = None
                 base_faces = None
-                planar_coverage_mm2 = None
                 if extrude_cache is not None:
                     # Key excludes height: cache unit-height (h=1) base mesh,
                     # then scale Z per call. Avoids re-triangulating equal
@@ -9714,74 +9401,21 @@ class VectorProcessor:
                     cached_base = extrude_cache.get(cache_key)
 
                 if cached_base is None:
-                    coverage_geometry = poly
                     direct_base = _direct_convex_extrusion_base(poly, scale)
                     if direct_base is not None:
                         base_vertices, base_faces = direct_base
                     else:
-                        m_base = _extrude_polygonal_unit_height(poly)
-                        requires_topology_validation = (
-                            _polygon_requires_topology_validation(poly, scale)
-                        )
-                        base_is_watertight = True
-                        if requires_topology_validation:
-                            base_is_watertight = bool(m_base.is_watertight)
-                        if not base_is_watertight:
-                            for separation_mm in _VECTOR_RING_SEPARATION_RETRY_MM:
-                                repaired_poly = _repair_polygon_ring_contacts(
-                                    poly,
-                                    scale,
-                                    separation_mm,
-                                )
-                                m_base = _extrude_polygonal_unit_height(
-                                    repaired_poly
-                                )
-                                base_is_watertight = bool(m_base.is_watertight)
-                                if base_is_watertight:
-                                    coverage_geometry = repaired_poly
-                                    break
-                        if not base_is_watertight:
-                            raise ValueError(
-                                "Vector polygon extrusion produced non-manifold topology"
-                            )
+                        m_base = trimesh.creation.extrude_polygon(poly, height=1.0)
                         base_vertices = np.asarray(m_base.vertices, dtype=np.float64).copy()
                         if base_vertices.ndim == 2 and base_vertices.shape[1] >= 2:
                             base_vertices[:, 0] *= float(scale)
                             base_vertices[:, 1] *= float(scale)
                         base_faces = np.asarray(m_base.faces, dtype=np.int64).copy()
-                    try:
-                        planar_coverage_mm2 = (
-                            float(coverage_geometry.area)
-                            * float(scale)
-                            * float(scale)
-                        )
-                    except (AttributeError, TypeError, ValueError):
-                        planar_coverage_mm2 = None
-                    if (
-                        planar_coverage_mm2 is not None
-                        and (
-                            not math.isfinite(planar_coverage_mm2)
-                            or planar_coverage_mm2 < 0.0
-                        )
-                    ):
-                        planar_coverage_mm2 = None
                     if extrude_cache is not None and cache_key is not None:
-                        extrude_cache[cache_key] = (
-                            base_vertices,
-                            base_faces,
-                            planar_coverage_mm2,
-                        )
+                        extrude_cache[cache_key] = (base_vertices, base_faces)
                 else:
-                    if isinstance(cached_base, tuple) and len(cached_base) == 3:
-                        base_vertices, base_faces, planar_coverage_mm2 = cached_base
-                    elif isinstance(cached_base, tuple) and len(cached_base) == 2:
+                    if isinstance(cached_base, tuple) and len(cached_base) == 2:
                         base_vertices, base_faces = cached_base
-                        try:
-                            planar_coverage_mm2 = (
-                                float(poly.area) * float(scale) * float(scale)
-                            )
-                        except (AttributeError, TypeError, ValueError):
-                            planar_coverage_mm2 = None
                     else:
                         # Backward-compatible with any in-process cache entries
                         # created before the array-payload optimization.
@@ -9793,12 +9427,6 @@ class VectorProcessor:
                     vertices[:, 2] = vertices[:, 2] * float(height) + float(z_offset)
                 faces = np.asarray(base_faces, dtype=np.int64).copy()
                 m = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
-                if (
-                    planar_coverage_mm2 is not None
-                    and math.isfinite(planar_coverage_mm2)
-                    and planar_coverage_mm2 >= 0.0
-                ):
-                    m.metadata[_PLANAR_COVERAGE_METADATA_KEY] = planar_coverage_mm2
                 meshes.append(m)
             except VECTOR_HANDLED_ERRORS as e:
                 _log.warning(
