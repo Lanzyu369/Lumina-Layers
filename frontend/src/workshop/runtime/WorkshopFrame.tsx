@@ -8,7 +8,10 @@ import {
 import { useI18n } from "../../i18n/context";
 import {
   WORKSHOP_API_VERSION,
+  WORKSHOP_RPC_EVENT_NAMES,
   type WorkshopPermissionName,
+  type WorkshopRpcEventName,
+  type WorkshopUiState,
 } from "../contracts";
 import {
   canRunWorkshopInBrowser,
@@ -55,6 +58,7 @@ export interface WorkshopFrameProps {
   module: WorkshopFrameModule;
   runtimeMode?: WorkshopRuntimeMode;
   handlers?: WorkshopRpcHandlers;
+  uiState?: WorkshopUiState;
   syntheticHandlers?: WorkshopRpcHandlers;
   createChannel?: () => WorkshopFrameChannel;
   loadBrowserRuntime?: (url: string) => Promise<string>;
@@ -148,24 +152,36 @@ function createSessionId(): string {
   ).join("");
 }
 
-function readyMessage(
+function readyEvents(
   value: unknown,
   moduleId: string,
   moduleVersion: string,
-): boolean {
+): ReadonlySet<WorkshopRpcEventName> | null {
   if (
     typeof value !== "object" ||
     value === null ||
     Array.isArray(value)
   ) {
-    return false;
+    return null;
   }
   const message = value as Record<string, unknown>;
-  return (
-    message.type === "lumina.workshop.ready" &&
-    message.moduleId === moduleId &&
-    message.moduleVersion === moduleVersion &&
-    message.apiVersion === WORKSHOP_API_VERSION
+  if (
+    message.type !== "lumina.workshop.ready" ||
+    message.moduleId !== moduleId ||
+    message.moduleVersion !== moduleVersion ||
+    message.apiVersion !== WORKSHOP_API_VERSION
+  ) {
+    return null;
+  }
+  if (!Array.isArray(message.events)) {
+    return new Set();
+  }
+  const knownEvents = new Set<string>(WORKSHOP_RPC_EVENT_NAMES);
+  return new Set(
+    message.events.filter(
+      (event): event is WorkshopRpcEventName =>
+        typeof event === "string" && knownEvents.has(event),
+    ),
   );
 }
 
@@ -187,6 +203,7 @@ export function WorkshopFrame({
   module,
   runtimeMode = "browser",
   handlers = EMPTY_HANDLERS,
+  uiState,
   syntheticHandlers = EMPTY_HANDLERS,
   createChannel = defaultCreateChannel,
   loadBrowserRuntime = defaultLoadBrowserRuntime,
@@ -260,6 +277,12 @@ export function WorkshopFrame({
     hostRef.current?.close();
     hostRef.current = null;
   }, [clearHandshakeTimer]);
+
+  useEffect(() => {
+    if (uiState !== undefined) {
+      hostRef.current?.emit("ui.stateChanged", uiState);
+    }
+  }, [uiState]);
 
   const failStartup = useCallback(
     (reason: WorkshopStartupFailureReason) => {
@@ -434,16 +457,17 @@ export function WorkshopFrame({
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
+      const supportedEvents = readyEvents(
+        event.data,
+        runtimeModuleId,
+        runtimeModuleVersion,
+      );
       if (
         !frameLoadedRef.current ||
         handshakeAcceptedRef.current ||
         failureHandledRef.current ||
         event.source !== iframeRef.current?.contentWindow ||
-        !readyMessage(
-          event.data,
-          runtimeModuleId,
-          runtimeModuleVersion,
-        ) ||
+        supportedEvents === null ||
         !isWorkshopApiCompatible({
           min: runtimeApiMin,
           maxExclusive: runtimeApiMaxExclusive,
@@ -504,6 +528,7 @@ export function WorkshopFrame({
             throw error;
           }
           if (mountedRef.current) {
+            setProgress(null);
             setPhase("ready");
           }
           return undefined;
@@ -524,6 +549,7 @@ export function WorkshopFrame({
             ) as WorkshopPermissionName[],
           ),
           handlers: runtimeHandlers,
+          supportedEvents,
         });
         channel = createChannel();
         detachPortRef.current = host.attach(channel.port1);
@@ -574,24 +600,26 @@ export function WorkshopFrame({
           : phase === "loading"
             ? t("workshop_runtime_loading")
             : t("workshop_runtime_preparing");
+  const terminalStatusClassName =
+    "m-3 mt-16 rounded-lg border border-[color:var(--surface-outline)] bg-[color:var(--surface-section-muted)] p-4 text-sm text-slate-600 dark:text-slate-300";
 
   if (phase === "desktop-required") {
     return (
-      <div role="status" className="rounded-lg border border-[color:var(--surface-outline)] bg-[color:var(--surface-section-muted)] p-4 text-sm text-slate-600 dark:text-slate-300">
+      <div role="status" className={terminalStatusClassName}>
         {t("workshop_runtime_desktop_required")}
       </div>
     );
   }
   if (phase === "disabled") {
     return (
-      <div role="status" className="rounded-lg border border-[color:var(--surface-outline)] bg-[color:var(--surface-section-muted)] p-4 text-sm text-slate-600 dark:text-slate-300">
+      <div role="status" className={terminalStatusClassName}>
         {t("workshop_runtime_disabled")}
       </div>
     );
   }
   if (phase === "incompatible") {
     return (
-      <div role="alert" className="rounded-lg border border-[color:var(--surface-outline)] bg-[color:var(--surface-section-muted)] p-4 text-sm text-slate-600 dark:text-slate-300">
+      <div role="alert" className={terminalStatusClassName}>
         {t("workshop_runtime_incompatible")}
       </div>
     );
@@ -606,36 +634,40 @@ export function WorkshopFrame({
             ? t("workshop_runtime_activation_failed")
             : t("workshop_runtime_load_failed");
     return (
-      <div role="alert" className="rounded-lg border border-[color:var(--surface-outline)] bg-[color:var(--surface-section-muted)] p-4 text-sm text-slate-600 dark:text-slate-300">
+      <div role="alert" className={terminalStatusClassName}>
         {failureLabel}
       </div>
     );
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-2">
-      <div className="flex min-h-7 items-center justify-between gap-3 text-xs text-slate-500 dark:text-slate-400">
-        <span>{statusLabel}</span>
-        {progress ? (
-          <span
-            role="status"
-            className="flex min-w-0 items-center gap-2"
+    <div className="relative flex h-full min-h-0 flex-1 overflow-hidden">
+      <div className="pointer-events-none absolute right-3 top-3 z-10 flex max-w-[20rem] flex-col items-end gap-2">
+        {phase !== "ready" || progress ? (
+          <div className="flex min-h-7 items-center gap-3 rounded-xl border border-[color:var(--surface-outline)] bg-[color:var(--surface-section-muted)] px-3 py-2 text-xs text-slate-500 shadow-[var(--shadow-control)] dark:text-slate-400">
+            <span>{statusLabel}</span>
+            {progress ? (
+              <span
+                role="status"
+                className="flex min-w-0 items-center gap-2"
+              >
+                <span className="max-w-48 truncate">{progress.phase}</span>
+                <span>
+                  {progress.completed} / {progress.total}
+                </span>
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+        {moduleError ? (
+          <div
+            role="alert"
+            className="rounded-lg border border-[color:var(--surface-outline)] bg-[color:var(--surface-section-muted)] px-3 py-2 text-xs text-slate-600 shadow-[var(--shadow-control)] dark:text-slate-300"
           >
-            <span className="max-w-48 truncate">{progress.phase}</span>
-            <span>
-              {progress.completed} / {progress.total}
-            </span>
-          </span>
+            {moduleError.message}
+          </div>
         ) : null}
       </div>
-      {moduleError ? (
-        <div
-          role="alert"
-          className="rounded-lg border border-[color:var(--surface-outline)] bg-[color:var(--surface-section-muted)] px-3 py-2 text-xs text-slate-600 dark:text-slate-300"
-        >
-          {moduleError.message}
-        </div>
-      ) : null}
       {runtimeDocument ? (
         <iframe
           ref={iframeRef}
@@ -647,7 +679,7 @@ export function WorkshopFrame({
           referrerPolicy="no-referrer"
           loading="eager"
           onLoad={handleFrameLoad}
-          className="min-h-[560px] w-full flex-1 rounded-lg border border-[color:var(--surface-outline)] bg-[color:var(--surface-panel)]"
+          className="h-full min-h-0 w-full flex-1 rounded-none border-0 bg-[color:var(--surface-panel)]"
         />
       ) : null}
     </div>

@@ -162,7 +162,11 @@ function fakeStorage(
 
 function ReadyFrame(props: WorkshopFrameProps) {
   return (
-    <section aria-label="候选模块沙箱">
+    <section aria-label="普通模块上传与校准页">
+      <header>LUMINA</header>
+      <output data-testid="module-ui-state">
+        {`${props.uiState?.locale}/${props.uiState?.theme}`}
+      </output>
       <p>{`${props.module.moduleId}@${props.module.moduleVersion}`}</p>
       <button
         type="button"
@@ -261,6 +265,84 @@ describe("Workshop installable module manager", () => {
     expect(screen.getAllByRole("button", { name: "更新" }).length).toBeGreaterThan(0);
   });
 
+  it("keeps host navigation in a dedicated safe rail beside ordinary module content", async () => {
+    useWorkshopStore
+      .getState()
+      .openModule("fixture.hello", "1.0.0");
+
+    const result = renderManager(
+      fakeApi([installed()]),
+      fakeStorage(),
+      "desktop-secure",
+    );
+
+    const runtimeShell = await screen.findByTestId(
+      "workshop-runtime-shell",
+    );
+    expect(runtimeShell).toHaveClass(
+      "flex",
+      "h-full",
+      "min-h-0",
+      "w-full",
+      "overflow-hidden",
+    );
+    expect(runtimeShell).not.toHaveClass(
+      "panel-surface",
+      "overflow-auto",
+    );
+    const backButton = screen.getByRole("button", {
+      name: "返回创意工坊",
+    });
+    expect(backButton).toHaveClass("size-8");
+    const hostNavigation = screen.getByRole("navigation", {
+      name: "创意工坊",
+    });
+    const moduleViewport = screen.getByTestId(
+      "workshop-module-viewport",
+    );
+    const ordinaryModule = screen.getByRole("region", {
+      name: "普通模块上传与校准页",
+    });
+    expect(hostNavigation).toContainElement(backButton);
+    expect(hostNavigation).not.toContainElement(ordinaryModule);
+    expect(moduleViewport).toContainElement(ordinaryModule);
+    expect(runtimeShell).toContainElement(hostNavigation);
+    expect(runtimeShell).toContainElement(moduleViewport);
+    expect(hostNavigation.parentElement).toBe(runtimeShell);
+    expect(moduleViewport.parentElement).toBe(runtimeShell);
+    expect(hostNavigation).not.toHaveClass("absolute", "fixed");
+    expect(result.container.querySelector(".max-w-\\[96rem\\]")).toBeNull();
+    expect(
+      screen.queryByText(/测试模块 · v1\.0\.0/),
+    ).not.toBeInTheDocument();
+    expect(
+      ordinaryModule.parentElement,
+    ).toHaveClass("h-full", "min-h-0", "overflow-hidden");
+  });
+
+  it("passes live language and theme state to the open runtime", async () => {
+    useWorkshopStore
+      .getState()
+      .openModule("fixture.hello", "1.0.0");
+    renderManager(
+      fakeApi([installed()]),
+      fakeStorage(),
+      "desktop-secure",
+    );
+
+    expect(await screen.findByTestId("module-ui-state")).toHaveTextContent(
+      "zh-CN/light",
+    );
+    act(() => {
+      useSettingsStore.setState({ language: "en", theme: "dark" });
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("module-ui-state")).toHaveTextContent(
+        "en-US/dark",
+      ),
+    );
+  });
+
   it("keeps the runtime mounted briefly when returning to the manager", async () => {
     renderManager(
       fakeApi([installed()]),
@@ -271,7 +353,7 @@ describe("Workshop installable module manager", () => {
       await screen.findByRole("button", { name: "打开" }),
     );
     expect(
-      screen.getByRole("region", { name: "候选模块沙箱" }),
+      screen.getByRole("region", { name: "普通模块上传与校准页" }),
     ).toBeInTheDocument();
 
     vi.useFakeTimers();
@@ -280,13 +362,13 @@ describe("Workshop installable module manager", () => {
     );
 
     expect(
-      screen.getByRole("region", { name: "候选模块沙箱" }),
+      screen.getByRole("region", { name: "普通模块上传与校准页" }),
     ).toBeInTheDocument();
     expect(useWorkshopStore.getState().activeModule).not.toBeNull();
 
     act(() => vi.advanceTimersByTime(349));
     expect(
-      screen.getByRole("region", { name: "候选模块沙箱" }),
+      screen.getByRole("region", { name: "普通模块上传与校准页" }),
     ).toBeInTheDocument();
 
     act(() => vi.advanceTimersByTime(1));
@@ -451,7 +533,7 @@ describe("Workshop installable module manager", () => {
       within(dialog).getByText("将图像交给转换器"),
     ).toBeInTheDocument();
     expect(
-      screen.queryByLabelText("候选模块沙箱"),
+      screen.queryByLabelText("普通模块上传与校准页"),
     ).not.toBeInTheDocument();
     expect(api.activateModule).not.toHaveBeenCalled();
 
@@ -461,7 +543,7 @@ describe("Workshop installable module manager", () => {
       }),
     );
     expect(
-      await screen.findByLabelText("候选模块沙箱"),
+      await screen.findByLabelText("普通模块上传与校准页"),
     ).toBeInTheDocument();
     expect(api.activateModule).not.toHaveBeenCalled();
 
@@ -548,7 +630,9 @@ describe("Workshop installable module manager", () => {
     expect(api.installRegistry).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "确认权限并更新" }));
-    expect(await screen.findByLabelText("候选模块沙箱")).toBeInTheDocument();
+    expect(
+      await screen.findByLabelText("普通模块上传与校准页"),
+    ).toBeInTheDocument();
     expect(api.activateModule).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "模拟模块就绪" }));

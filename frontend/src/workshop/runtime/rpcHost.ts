@@ -1,13 +1,16 @@
 import {
   WORKSHOP_RPC_VERSION,
   errorResponseEnvelope,
+  eventEnvelope,
   isRpcEnvelopeShape,
   isWorkshopRpcMethod,
   responseEnvelope,
   type WorkshopModuleIdentity,
   type WorkshopPermissionName,
+  type WorkshopRpcEventName,
   type WorkshopRpcMethod,
   type WorkshopRpcResponse,
+  type WorkshopUiState,
 } from "../contracts";
 import {
   hasMethodPermission,
@@ -62,6 +65,7 @@ export interface CreateWorkshopRpcHostOptions {
   identity: WorkshopModuleIdentity;
   permissions: ReadonlySet<string>;
   handlers: WorkshopRpcHandlers;
+  supportedEvents?: ReadonlySet<string>;
   now?: () => number;
   scheduler?: WorkshopRpcScheduler;
 }
@@ -70,6 +74,7 @@ export interface WorkshopRpcHost {
   readonly identity: WorkshopModuleIdentity;
   readonly permissions: ReadonlySet<WorkshopPermissionName>;
   dispatch(value: unknown): Promise<WorkshopRpcResponse>;
+  emit(event: WorkshopRpcEventName, payload: WorkshopUiState): boolean;
   attach(port: WorkshopMessagePort): () => void;
   close(): void;
 }
@@ -198,6 +203,7 @@ class WorkshopRpcHostImpl implements WorkshopRpcHost {
   readonly permissions: ReadonlySet<WorkshopPermissionName>;
 
   private readonly handlers: WorkshopRpcHandlers;
+  private readonly supportedEvents: ReadonlySet<string>;
   private readonly scheduler: WorkshopRpcScheduler;
   private readonly bucket: TokenBucket;
   private readonly seenRequestIds = new Set<string>();
@@ -211,6 +217,7 @@ class WorkshopRpcHostImpl implements WorkshopRpcHost {
       options.permissions,
     );
     this.handlers = Object.freeze({ ...options.handlers });
+    this.supportedEvents = new Set(options.supportedEvents ?? []);
     this.scheduler = options.scheduler ?? DEFAULT_SCHEDULER;
     this.bucket = new TokenBucket(options.now ?? defaultNow);
   }
@@ -354,6 +361,27 @@ class WorkshopRpcHostImpl implements WorkshopRpcHost {
       port.close();
       this.activePort = null;
     };
+  }
+
+  emit(
+    event: WorkshopRpcEventName,
+    payload: WorkshopUiState,
+  ): boolean {
+    const port = this.activePort;
+    if (
+      this.closed ||
+      port === null ||
+      !this.supportedEvents.has(event)
+    ) {
+      return false;
+    }
+    try {
+      port.postMessage(eventEnvelope(event, payload));
+      return true;
+    } catch {
+      this.close();
+      return false;
+    }
   }
 
   close(): void {

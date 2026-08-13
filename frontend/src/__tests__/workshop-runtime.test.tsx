@@ -64,6 +64,7 @@ function postReady(
     moduleId: string;
     moduleVersion: string;
     apiVersion: string;
+    events: string[];
   }> = {},
 ): void {
   const event = new MessageEvent("message", {
@@ -117,6 +118,114 @@ afterEach(() => {
 });
 
 describe("WorkshopFrame", () => {
+  it("pushes live UI state only to capable modules without reloading their frame", async () => {
+    const capableChannel = channelFixture();
+    const initialState = {
+      locale: "zh-CN" as const,
+      theme: "dark" as const,
+      tokens: { "--lumina-surface": "#111827" },
+    };
+    const nextState = {
+      locale: "en-US" as const,
+      theme: "light" as const,
+      tokens: { "--lumina-surface": "#ffffff" },
+    };
+    const view = render(
+      <WorkshopFrame
+        module={installedFixture()}
+        uiState={initialState}
+        createChannel={capableChannel.createChannel}
+      />,
+    );
+    const iframe = screen.getByTitle("Fixture Hello");
+    fireEvent.load(iframe);
+    act(() => {
+      postReady((iframe as HTMLIFrameElement).contentWindow, {
+        events: ["ui.stateChanged"],
+      });
+    });
+    await waitFor(() =>
+      expect(capableChannel.port1.start).toHaveBeenCalledTimes(1),
+    );
+    capableChannel.port1.postMessage.mockClear();
+
+    view.rerender(
+      <WorkshopFrame
+        module={installedFixture()}
+        uiState={nextState}
+        createChannel={capableChannel.createChannel}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(capableChannel.port1.postMessage).toHaveBeenCalledWith({
+        protocol: "lumina-workshop-rpc",
+        version: 1,
+        kind: "event",
+        event: "ui.stateChanged",
+        payload: nextState,
+      }),
+    );
+    expect(screen.getByTitle("Fixture Hello")).toBe(iframe);
+    expect(capableChannel.createChannel).toHaveBeenCalledTimes(1);
+    expect(capableChannel.port1.close).not.toHaveBeenCalled();
+  });
+
+  it("does not push UI state events to legacy modules", async () => {
+    const channel = channelFixture();
+    const module = installedFixture();
+    const view = render(
+      <WorkshopFrame
+        module={module}
+        uiState={{ locale: "zh-CN", theme: "dark", tokens: {} }}
+        createChannel={channel.createChannel}
+      />,
+    );
+    const iframe = screen.getByTitle("Fixture Hello");
+    fireEvent.load(iframe);
+    act(() => {
+      postReady((iframe as HTMLIFrameElement).contentWindow);
+    });
+    await waitFor(() =>
+      expect(channel.port1.start).toHaveBeenCalledTimes(1),
+    );
+    channel.port1.postMessage.mockClear();
+
+    view.rerender(
+      <WorkshopFrame
+        module={module}
+        uiState={{ locale: "en-US", theme: "light", tokens: {} }}
+        createChannel={channel.createChannel}
+      />,
+    );
+
+    await act(async () => Promise.resolve());
+    expect(channel.port1.postMessage).not.toHaveBeenCalled();
+    expect(screen.getByTitle("Fixture Hello")).toBe(iframe);
+  });
+
+  it("fills the host without a fixed iframe height or framed chrome", async () => {
+    render(<WorkshopFrame module={installedFixture()} />);
+
+    const iframe = await screen.findByTitle("Fixture Hello");
+    const runtimeShell = iframe.parentElement as HTMLElement;
+    expect(runtimeShell).toHaveClass(
+      "relative",
+      "h-full",
+      "min-h-0",
+      "overflow-hidden",
+    );
+    expect(iframe).toHaveClass(
+      "h-full",
+      "min-h-0",
+      "w-full",
+      "flex-1",
+      "border-0",
+      "rounded-none",
+    );
+    expect(iframe).not.toHaveClass("min-h-[560px]", "rounded-lg");
+  });
+
   it("accepts ready only from the current iframe window and matching identity", async () => {
     const channel = channelFixture();
     window.localStorage.setItem("outside-frame", "kept");
@@ -357,7 +466,9 @@ describe("WorkshopFrame", () => {
       ),
     );
     expect(order).toEqual(["snapshot", "activate"]);
-    expect(screen.getByText("运行中")).toBeInTheDocument();
+    expect(screen.queryByText("1 / 4")).not.toBeInTheDocument();
+    expect(screen.queryByText("运行中")).not.toBeInTheDocument();
+    expect(iframe).toBeInTheDocument();
   });
 
   it("keeps the active port when a candidate becomes the installed version", async () => {
@@ -519,8 +630,11 @@ describe("WorkshopFrame", () => {
       );
     });
     await waitFor(() =>
-      expect(screen.getByText("运行中")).toBeInTheDocument(),
+      expect(
+        screen.queryByText("正在等待模块就绪"),
+      ).not.toBeInTheDocument(),
     );
+    expect(installedFrame).toBeInTheDocument();
     expect(activateCandidate).toHaveBeenCalledTimes(1);
   });
 
@@ -563,6 +677,7 @@ describe("WorkshopFrame", () => {
     expect(
       screen.getByText("此模块需要 Lumina 桌面版才能运行"),
     ).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveClass("m-3", "mt-16");
     expect(screen.queryByTitle("Fixture Hello")).not.toBeInTheDocument();
   });
 

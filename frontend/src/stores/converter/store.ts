@@ -3212,7 +3212,9 @@ export const useConverterStore = create<ConverterState & ConverterActions>()(
         ...modelSurfaceArtworkReset,
         ...buildPreviewSessionResetState(currentState),
         modeling_mode:
-          currentState.modeling_mode === ModelingModeEnum.VECTOR
+          isSvgImageFile(file)
+            ? ModelingModeEnum.VECTOR
+            : currentState.modeling_mode === ModelingModeEnum.VECTOR
             ? ModelingModeEnum.HIGH_FIDELITY
             : currentState.modeling_mode,
         cropModalOpen: false,

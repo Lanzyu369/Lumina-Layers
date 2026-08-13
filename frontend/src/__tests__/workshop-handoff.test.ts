@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { ModelingMode, StructureMode } from "../api/types";
 import { DEFAULT_STATE, useConverterStore } from "../stores/converter";
 import { useWidgetStore } from "../stores/widgetStore";
 import {
+  handoffWorkshopPayloadToConverter,
   handoffWorkshopPngToConverter,
   WORKSHOP_HANDOFF_MAX_BINARY_BYTES,
   type WorkshopPngDecoder,
@@ -34,6 +36,16 @@ function pngHeader(width: number, height: number): ArrayBuffer {
   return bytes.buffer;
 }
 
+function encodeSvg(source: string): ArrayBuffer {
+  return Uint8Array.from(new TextEncoder().encode(source)).buffer;
+}
+
+function svgPayload(width: number, height: number): ArrayBuffer {
+  return encodeSvg(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}"><path d="M0 0L${width} 0L${width} ${height}Z" fill="#ff0000"/></svg>`,
+  );
+}
+
 function sdkHandoff(
   overrides: Partial<SdkWorkshopImageHandoff> = {},
 ): SdkWorkshopImageHandoff {
@@ -46,6 +58,7 @@ function sdkHandoff(
     pixelHeight: 32,
     recommendedWidthMm: 5.2,
     recommendedHeightMm: 2.6,
+    recommendedTotalThicknessMm: 1.85,
     preserveCanvasBounds: true,
     layout: {
       kind: "square-grid",
@@ -128,11 +141,69 @@ describe("sandbox Workshop PNG handoff", () => {
     });
     expect(after.target_width_mm).toBe(5.2);
     expect(after.target_height_mm).toBe(2.6);
+    expect(after.base_spacer_thick).toBe(1.04);
+    expect(after.spacer_thick).toBe(1.04);
     expect(after.workshopSource).toEqual(SDK_SOURCE);
     expect(after.source_version).toBe(before.source_version);
     expect(after.lut_name).toBe(before.lut_name);
     expect(after.lut_names).toEqual(before.lut_names);
     expect(useWidgetStore.getState().activeTab).toBe("converter");
+  });
+
+  it("prefers a validated native SVG and opens the converter in vector mode", async () => {
+    const input = sdkHandoff({ svgBytes: svgPayload(2, 1) });
+
+    await expect(
+      handoffWorkshopPayloadToConverter(input, undefined, {
+        decoder: decoder(),
+      }),
+    ).resolves.toEqual({ status: "completed" });
+
+    const after = useConverterStore.getState();
+    expect(after.imageFile).toMatchObject({
+      name: "fixture.hello-project-1.svg",
+      type: "image/svg+xml",
+    });
+    expect(await after.imageFile?.text()).toContain('width="5.2mm"');
+    expect(await after.imageFile?.text()).toContain('height="2.6mm"');
+    expect(after.modeling_mode).toBe(ModelingMode.VECTOR);
+    expect(after.target_width_mm).toBe(5.2);
+    expect(after.target_height_mm).toBe(2.6);
+    expect(after.workshopSource).toEqual(SDK_SOURCE);
+  });
+
+  it.each([
+    {
+      svgBytes: encodeSvg(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2 1"><script>alert(1)</script><path d="M0 0L2 0L2 1Z"/></svg>',
+      ),
+      code: "handoff-invalid-svg",
+    },
+    {
+      svgBytes: encodeSvg(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2 1"><defs><path d="M0 0L2 0L2 1Z"/></defs></svg>',
+      ),
+      code: "handoff-image-empty",
+    },
+    {
+      svgBytes: encodeSvg(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2 1"><defs><mask id="cut"><rect width="2" height="1" fill="white"/></mask></defs><path mask="url(#cut)" d="M0 0L2 0L2 1Z"/></svg>',
+      ),
+      code: "handoff-invalid-svg",
+    },
+    {
+      svgBytes: svgPayload(1, 1),
+      code: "handoff-dimensions-invalid",
+    },
+  ])("rejects unsafe, empty, or dimensionally inconsistent SVG sources", async ({ svgBytes, code }) => {
+    await expect(
+      handoffWorkshopPayloadToConverter(
+        sdkHandoff({ svgBytes }),
+        undefined,
+        { decoder: decoder() },
+      ),
+    ).rejects.toMatchObject({ code });
+    expect(useConverterStore.getState().imageFile).toBeNull();
   });
 
   it("rejects bytes above 64 MiB and malformed PNG signatures", async () => {
@@ -263,6 +334,43 @@ describe("sandbox Workshop PNG handoff", () => {
       }),
     ).resolves.toEqual({ status: "completed" });
     expect(useConverterStore.getState().target_width_mm).toBe(25);
+  });
+
+  it("rejects a non-physical recommended total thickness", async () => {
+    await expect(
+      handoffWorkshopPngToConverter(
+        sdkHandoff({ recommendedTotalThicknessMm: 0.1 }),
+        undefined,
+        { decoder: decoder() },
+      ),
+    ).rejects.toMatchObject({
+      code: "handoff-physical-size-invalid",
+    });
+  });
+
+  it("subtracts one color stack for a single-sided model", async () => {
+    useConverterStore.setState({
+      structure_mode: StructureMode.SINGLE_SIDED,
+      color_layers: 5,
+      layer_height_mm: 0.08,
+    });
+
+    await handoffWorkshopPngToConverter(sdkHandoff(), undefined, {
+      decoder: decoder(),
+    });
+
+    expect(useConverterStore.getState().base_spacer_thick).toBe(1.44);
+    expect(useConverterStore.getState().spacer_thick).toBe(1.44);
+  });
+
+  it("keeps the current backing for an older handoff without thickness", async () => {
+    await handoffWorkshopPngToConverter(
+      sdkHandoff({ recommendedTotalThicknessMm: undefined }),
+      undefined,
+      { decoder: decoder() },
+    );
+
+    expect(useConverterStore.getState().base_spacer_thick).toBe(1.2);
   });
 
   it("rejects oversized recipe envelopes", async () => {
